@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["Lab UI <dev@lab.pics>"]
+authors = ["Lab Pics <dev@lab.pics>"]
 license = "MIT"
-repository = "https://github.com/lemone112/lab-ui"
+repository = "https://github.com/lemone112/lab-colors"
 rust-version = "1.85"
