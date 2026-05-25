@@ -284,4 +284,56 @@ mod tests {
         let neutral = default_neutral();
         assert!(AccentCurve::new("#GGGGGG", &neutral).is_err());
     }
+
+    // ── Dark-theme (dim-surround) accent tests ────────────────
+
+    fn dim_neutral() -> NeutralCurve {
+        use crate::neutral::CurveParams;
+        use crate::spaces::vc::ViewingConditions;
+        let vc = ViewingConditions::dim_surround();
+        NeutralCurve::with_vc("#FFFFFF", "#787880", "#101012", &CurveParams::default(), &vc).unwrap()
+    }
+
+    #[test]
+    fn dim_accent_jp_monotonically_decreasing() {
+        let neutral = dim_neutral();
+        let curve = AccentCurve::new("#007AFF", &neutral).unwrap();
+        let steps = curve.sample(50);
+        for w in steps.windows(2) {
+            assert!(
+                w[0].jp >= w[1].jp - 0.5,
+                "dim accent jp increased: {} -> {}",
+                w[0].jp,
+                w[1].jp,
+            );
+        }
+    }
+
+    #[test]
+    fn dim_accent_all_in_gamut() {
+        let neutral = dim_neutral();
+        let curve = AccentCurve::new("#007AFF", &neutral).unwrap();
+        for i in 0..=50 {
+            let color = curve.at(i as f64 / 50.0);
+            let hex = color.to_hex_with_vc(&curve.vc);
+            let rgb = srgb_from_hex(&hex).unwrap();
+            assert!(
+                rgb.iter().all(|&c| c >= -0.01 && c <= 1.01),
+                "dim accent out of gamut at t={}: {:?}",
+                i as f64 / 50.0,
+                rgb
+            );
+        }
+    }
+
+    #[test]
+    fn dim_accent_inherits_vc_from_neutral() {
+        let neutral = dim_neutral();
+        let curve = AccentCurve::new("#FF0000", &neutral).unwrap();
+        assert!(
+            (curve.vc().c - 0.59).abs() < 1e-10,
+            "accent vc.c should match dim neutral: {}",
+            curve.vc().c,
+        );
+    }
 }

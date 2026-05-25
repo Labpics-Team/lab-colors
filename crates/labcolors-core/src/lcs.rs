@@ -181,4 +181,42 @@ mod tests {
             lcs2.h_ok
         );
     }
+
+    #[test]
+    fn roundtrip_dim_surround_midgrey() {
+        let vc = ViewingConditions::dim_surround();
+        let original = "#787880";
+        let lcs = LcsColor::from_hex_with_vc(original, &vc).unwrap();
+        let back = lcs.to_hex_with_vc(&vc);
+        assert!(
+            back.eq_ignore_ascii_case(original),
+            "dim roundtrip drift: expected {original}, got {back}"
+        );
+    }
+
+    #[test]
+    fn dim_jp_differs_from_srgb() {
+        let vc = ViewingConditions::dim_surround();
+        let avg = LcsColor::from_hex("#787880").unwrap();
+        let dim = LcsColor::from_hex_with_vc("#787880", &vc).unwrap();
+        assert!(
+            (avg.jp - dim.jp).abs() > 0.1,
+            "same stimulus should produce different J' across VCs: avg={} dim={}",
+            avg.jp, dim.jp,
+        );
+    }
+
+    #[test]
+    fn wrong_vc_roundtrip_drifts() {
+        // Construct with dim VC, convert with srgb VC → should drift
+        let dim_vc = ViewingConditions::dim_surround();
+        let lcs = LcsColor::from_hex_with_vc("#787880", &dim_vc).unwrap();
+        let wrong_hex = lcs.to_hex(); // uses srgb VC — mismatch!
+        // The hex will still be valid sRGB, just not matching the original
+        assert!(
+            !wrong_hex.eq_ignore_ascii_case("#787880"),
+            "VC mismatch should cause drift, got {}",
+            wrong_hex,
+        );
+    }
 }
