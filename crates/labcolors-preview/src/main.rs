@@ -49,21 +49,16 @@ fn main() {
     let row_h = BAR_H + 26;
     let total_h = MARGIN + 4 + curves.len() as u32 * row_h;
 
-    let dark_x = MARGIN + BAR_W + COL_GAP;
-    let dark_bg = "#18181a";
-
     let mut s = String::new();
     s.push_str(&format!(
         r##"<svg xmlns='http://www.w3.org/2000/svg' width='{}' height='{}'>
 <style>text{{font-family:system-ui,-apple-system,sans-serif}}</style>
-<rect x='{}' y='0' width='{}' height='{}' fill='{}'/>
 <text x='{}' y='{}' font-size='11' fill='{}'>Light theme</text>
 <text x='{}' y='{}' font-size='11' fill='{}'>Dark theme</text>
 "##,
         total_w, total_h,
-        dark_x, total_w - dark_x, total_h, dark_bg,
         MARGIN, MARGIN, "#999",
-        dark_x, MARGIN, "#bbb",
+        MARGIN + BAR_W + COL_GAP, MARGIN, "#999",
     ));
 
     for (i, (name, light_c, dim_c)) in curves.iter().enumerate() {
@@ -88,10 +83,10 @@ fn main() {
         }
 
         // Dark bar
-        let bx2 = dark_x;
+        let bx2 = MARGIN + BAR_W + COL_GAP;
         s.push_str(&format!(
             "<rect x='{}' y='{}' width='{}' height='{}' fill='none' stroke='{}' stroke-width='0.5'/>\n",
-            bx2, y, BAR_W, BAR_H, "#444"
+            bx2, y, BAR_W, BAR_H, "#ddd"
         ));
         for (ci, col) in dim_c.iter().enumerate() {
             s.push_str(&format!(

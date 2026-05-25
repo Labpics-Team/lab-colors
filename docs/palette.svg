@@ -1,8 +1,7 @@
 <svg xmlns='http://www.w3.org/2000/svg' width='928' height='308'>
 <style>text{font-family:system-ui,-apple-system,sans-serif}</style>
-<rect x='488' y='0' width='440' height='308' fill='#18181a'/>
 <text x='40' y='40' font-size='11' fill='#999'>Light theme</text>
-<text x='488' y='40' font-size='11' fill='#bbb'>Dark theme</text>
+<text x='488' y='40' font-size='11' fill='#999'>Dark theme</text>
 <text x='40' y='49' font-size='11' fill='#666'>Neutral</text>
 <rect x='40' y='52' width='400' height='40' fill='none' stroke='#ddd' stroke-width='0.5'/>
 <rect x='40' y='52' width='1' height='40' fill='#FFFFFF'/>
@@ -405,7 +404,7 @@
 <rect x='437' y='52' width='1' height='40' fill='#121214'/>
 <rect x='438' y='52' width='1' height='40' fill='#111113'/>
 <rect x='439' y='52' width='1' height='40' fill='#101012'/>
-<rect x='488' y='52' width='400' height='40' fill='none' stroke='#444' stroke-width='0.5'/>
+<rect x='488' y='52' width='400' height='40' fill='none' stroke='#ddd' stroke-width='0.5'/>
 <rect x='488' y='52' width='1' height='40' fill='#FDFFFF'/>
 <rect x='489' y='52' width='1' height='40' fill='#FEFFFF'/>
 <rect x='490' y='52' width='1' height='40' fill='#FEFFFF'/>
@@ -1208,7 +1207,7 @@
 <rect x='437' y='118' width='1' height='40' fill='#00102E'/>
 <rect x='438' y='118' width='1' height='40' fill='#00102C'/>
 <rect x='439' y='118' width='1' height='40' fill='#000F2B'/>
-<rect x='488' y='118' width='400' height='40' fill='none' stroke='#444' stroke-width='0.5'/>
+<rect x='488' y='118' width='400' height='40' fill='none' stroke='#ddd' stroke-width='0.5'/>
 <rect x='488' y='118' width='1' height='40' fill='#FDFFFF'/>
 <rect x='489' y='118' width='1' height='40' fill='#FDFFFF'/>
 <rect x='490' y='118' width='1' height='40' fill='#FDFFFF'/>
@@ -2011,7 +2010,7 @@
 <rect x='437' y='184' width='1' height='40' fill='#021705'/>
 <rect x='438' y='184' width='1' height='40' fill='#021605'/>
 <rect x='439' y='184' width='1' height='40' fill='#021504'/>
-<rect x='488' y='184' width='400' height='40' fill='none' stroke='#444' stroke-width='0.5'/>
+<rect x='488' y='184' width='400' height='40' fill='none' stroke='#ddd' stroke-width='0.5'/>
 <rect x='488' y='184' width='1' height='40' fill='#FDFFFF'/>
 <rect x='489' y='184' width='1' height='40' fill='#FDFFFF'/>
 <rect x='490' y='184' width='1' height='40' fill='#FDFFFF'/>
@@ -2814,7 +2813,7 @@
 <rect x='437' y='250' width='1' height='40' fill='#1F0D00'/>
 <rect x='438' y='250' width='1' height='40' fill='#1D0C00'/>
 <rect x='439' y='250' width='1' height='40' fill='#1C0C00'/>
-<rect x='488' y='250' width='400' height='40' fill='none' stroke='#444' stroke-width='0.5'/>
+<rect x='488' y='250' width='400' height='40' fill='none' stroke='#ddd' stroke-width='0.5'/>
 <rect x='488' y='250' width='1' height='40' fill='#FDFFFF'/>
 <rect x='489' y='250' width='1' height='40' fill='#FDFFFF'/>
 <rect x='490' y='250' width='1' height='40' fill='#FDFFFF'/>
