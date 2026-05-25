@@ -1,61 +1,194 @@
-# lab-ui
+# Lab Colors
 
-Enterprise design-system token generator. Rust core, zero runtime dependencies.
+Генератор цветов для дизайн-систем. На входе — три якорных цвета, на выходе — перцептуально ровная шкала от светлого к тёмному.
 
-## Quick start
+Ядро написано на Rust, без внешних зависимостей. Математика основана на CIECAM16 и APCA.
 
-```bash
-# 1. Edit your anchors and semantic aliases
-$EDITOR config.yaml
+## Проблема
 
-# 2. Generate tokens
-cargo run -p labui-cli
+Обычные шкалы (HSL lightness, Oklab L) не учитывают, как видит глаз:
 
-# 3. Output appears in dist/
-#    dist/tokens.scss  — CSS custom properties
-#    dist/tokens.json  — token map for JS bundlers
+- Серый `#808080` не выглядит «половиной» между чёрным и белым — он кажется светлее 50%
+- Синий и жёлтый одинаковой яркости воспринимаются по-разному (эффект Гельмгольца-Кольрауша)
+- В тёмной теме тот же цвет выглядит иначе (адаптация зрения к окружению)
+
+Lab Colors решает это через три слоя модели.
+
+## Три слоя
+
+```mermaid
+graph TD
+    A["Якоря (hex)"] --> B["CIECAM16"]
+    B --> C["J' — яркость\nh_ok — оттенок (Oklab)\nM' — цветность\ns — насыщенность"]
+    C --> D["Кривая"]
+    D --> E["13 шагов шкалы"]
+    E --> F["LPC — контраст"]
+    F --> G["Семантика"]
+    
+    style A fill:#f0f0f0
+    style B fill:#e8f4fd
+    style D fill:#e8fde8
+    style F fill:#fdf4e8
+    style G fill:#fde8e8
 ```
 
-## Example config
+### 1. Цветовое пространство — CIECAM16
 
-```yaml
-primitives:
-  neutral:
-    light: "#FFFFFF"
-    base:  "#787880"
-    dark:  "#101012"
-    # Optional: tune the perceptual curve.
-    # Omit to use defaults tuned for sRGB average surround.
-    # curve:
-    #   lightness_ease: 1.7   # power ease exponent for J'
-    #   hue_ease: 0.6         # how fast white's hue snaps to base
-    #   chroma_peak: 0.35     # sinusoid peak position (0..1)
-    #   chroma_boost: 1.2     # overshoot above base chroma
+`sRGB → XYZ → CIECAM16 JCh` — модель цветового восприятия CIE. Учитывает:
 
-semantic:
-  bg-surface:       "neutral-0"
-  bg-surface-hover: "neutral-1"
-  text-primary:     "neutral-12"
-  text-secondary:   "neutral-8"
+| Параметр | Что моделирует |
+|----------|---------------|
+| `J'` | Воспринимаемая яркость (не линейная — через адаптацию) |
+| `M'` | Цветность (насколько «цветной») |
+| `h_cam` | Оттенок по CAM16 |
+| `h_ok` | Оттенок по Oklab (для интерполяции) |
+| `s` | Насыщенность = M' / (J' + 1) |
 
-output:
-  scss: "dist/tokens.scss"
-  json: "dist/tokens.json"
+** ViewingConditions** — условия просмотра. Тот же стимул в светлой и тёмной среде даёт разные J':
+
+```rust
+// Светлая тема — стандартные условия sRGB
+let avg_vc = ViewingConditions::srgb();        // c = 0.69
+
+// Тёмная тема — приглушённое окружение
+let dim_vc = ViewingConditions::dim_surround(); // c = 0.59
+
+// #787880 в светлой теме: J' ≈ 53.5
+// #787880 в тёмной теме: J' ≈ 59.2  ←mid-grey кажется светлее
 ```
 
-## Project layout
+### 2. Кривая — NeutralCurve
+
+Три якоря (светлый, базовый, тёмный) соединяются кривой в пространстве J'.
+
+```mermaid
+graph LR
+    L["light\n#FFFFFF\nJ' ≈ 100"] -->|"γ_light = 1.75"| B["base\n#787880\nJ' ≈ 54"]
+    B -->|"γ_dark = 1.5"| D["dark\n#101012\nJ' ≈ 4"]
+```
+
+**Степенная интерполяция** — J' не линейный, а через `u^γ`. Это даёт больше шагов в середине шкалы (где глаз различает лучше) и меньше на краях.
+
+**Hue-purity кривая** — эффект Эбни: серые якоря имеют неопределённый оттенок (atan2 от шума). Вместо жёсткого порога используется плавная функция:
 
 ```
-crates/
-  labui-core/     — CAM16-UCS engine + primitive generators (Rust lib)
-  labui-cli/      — CLI: reads config.yaml → dist/* (Rust bin)
-schemas/
-  tokens.schema.json — JSON Schema validating config.yaml
-config.yaml       — Client DS input (primitives + semantic aliases)
+purity = (mp / mp_ref)^0.6
 ```
 
-## Tests
+При `purity → 0` (серый): оттенок принудительно к базовому. При `purity → 1` (насыщенный): оттенок якоря остаётся как есть.
 
-```bash
-cargo test          # Rust unit tests (roundtrip + semantic invariants)
+**Chroma envelope** — цветность проходит через синусоиду с пиком около t=0.35, что даёт лёгкий хроматический горб в средних тонах и спад к чёрному.
+
+### 3. Контраст — LPC
+
+LPC (Lab Pics Contrast) = APCA формула + коррекция Гельмгольца-Кольрауша.
+
+```mermaid
+graph LR
+    FG["fg цвет"] --> HK1["J + HK_boost"]
+    BG["bg цвет"] --> HK2["J + HK_boost"]
+    HK1 --> Y1["Y_hk (luminance)"]
+    HK2 --> Y2["Y_hk (luminance)"]
+    Y1 --> APCA["APCA формула\n(Y_bg^0.56 - Y_fg^0.57) × 1.14"]
+    Y2 --> APCA
+    APCA --> Lc["Lc — контраст (−108…+108)"]
 ```
+
+**HK-boost** — насыщенные цвета воспринимаются ярче. Для синего на белом контраст поднимается, для серого — нет.
+
+**APCA** — асимметричная формула: светлое на тёмном и тёмное на светлом считаются по-разному (разные экспоненты).
+
+**LPC ≠ WCAG.** WCAG считает `|L1 - L2|`, что симметрично и не учитывает HK. LPC точнее: серый на белом ≈ Lc 89, синий на белом ≈ Lc 70 — хотя WCAG даст им одинаковый контраст.
+
+## AccentCurve
+
+Акцентный цвет (например `#007AFF`) протягивается через нейтральную шкалу:
+
+```mermaid
+graph TD
+    NC["NeutralCurve"] --> |"J' на каждом шаге"| AC["AccentCurve"]
+    CH["canonical hue\n#007AFF"] --> |"hue fixation"| AC
+    AC --> OUT["13 цветов с тем же оттенком,\nнасыщенность = sat_ratio × max_chroma"]
+```
+
+На каждом шаге:
+1. Берём J' из нейтральной шкалы
+2. Переводим в Oklab L через бинарный поиск
+3. Находим максимальную хроматику для этого L и hue
+4. Умножаем на `sat_ratio` (насколько насыщен исходный цвет от максимума)
+5. При необходимости сдвигаем hue для попадания в гамут sRGB
+
+## API
+
+```rust
+use labcolors_core::{LcsColor, ViewingConditions, ColorCurve};
+use labcolors_core::neutral::{NeutralCurve, CurveParams};
+use labcolors_core::scale::AccentCurve;
+
+// Нейтральная шкала — светлая тема
+let light = NeutralCurve::new("#FFFFFF", "#787880", "#101012")?;
+let steps: Vec<String> = light.sample_hex(13);
+// ["#FFFFFF", "#F0F0F5", "#E1E1E9", ..., "#101012"]
+
+// Нейтральная шкала — тёмная тема
+let dim_vc = ViewingConditions::dim_surround();
+let dark = NeutralCurve::with_vc(
+    "#FFFFFF", "#787880", "#101012",
+    &CurveParams::default(), &dim_vc
+)?;
+
+// Акцент
+let blue = AccentCurve::new("#007AFF", &light)?;
+let blue_steps: Vec<String> = blue.sample_hex(13);
+
+// Контраст между двумя цветами
+let lc = labcolors_core::lpc::lpc("#000000", "#ffffff");
+// lc ≈ 108.7
+
+// Generic trait
+fn print_curve(curve: &dyn ColorCurve) {
+    for i in 0..=12 {
+        let c = curve.at(i as f64 / 12.0);
+        println!("t={:.2}  J'={:.1}", i as f64 / 12.0, c.jp);
+    }
+}
+```
+
+## Структура проекта
+
+```
+crates/labcolors-core/src/
+├── lib.rs           — реэкспорты
+├── lcs.rs           — LcsColor: хранение и конвертация (hex ↔ CAM16)
+├── neutral.rs       — NeutralCurve: нейтральная шкала
+├── scale.rs         — AccentCurve: акцентная шкала
+├── curve.rs         — ColorCurve trait
+├── lpc.rs           — LPC контраст (APCA + HK)
+├── sentiment.rs     — sentiment-цвета (brand displacement)
+└── spaces/
+    ├── cam16.rs     — CIECAM16 forward/inverse
+    ├── cat16.rs     — CAT16 cone transform
+    ├── oklab.rs     — Oklab hue
+    ├── srgb.rs      — sRGB ↔ XYZ
+    ├── vc.rs        — ViewingConditions (srgb, dim_surround)
+    └── mod.rs
+```
+
+## Тесты
+
+```
+61 тест, 0_failures:
+  lcs.rs      9  — roundtrip, dim VC, wrong-VC drift
+  neutral.rs  14  — monotonicity, hue drift, bounds, dim ×5
+  scale.rs    11  — accent monotonicity, gamut, dim ×3
+  vc.rs        5  — surround params, aw ordering
+  lpc.rs       6  — HK contrast, polarity, surface
+  oklab.rs     6  — hue, roundtrip, gamut
+  sentiment    8  — displacement, warning floor
+```
+
+## Что дальше
+
+- **semantic.rs** — семантические токены (text-primary, border-base, bg-surface) через LPC контраст и visual weight
+- **labcolors-preview** — визуализатор: HTML с реальными цветами, ползунками, side-by-side light/dark
+- **Dark theme** — VC-параметризованные кривые готовы, нужна семантика с другими порогами
