@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "ru-RU"
+early_access: false
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "master"
+  path_instructions:
+    - path: "crates/labcolors-core/**/*.rs"
+      instructions: |
+        Это ядро библиотеки — критически важный код для цветовых преобразований.
+        Проверяй:
+        - Математическую корректность (CIE Lab, CAM16-UCS, Oklab, LPC, HK-эффект)
+        - Float-точность и интерполяции (lerp, rem_euclid вместо % на f64)
+        - Viewing conditions propagation (не использовать to_hex() если кривая с dim_surround)
+        - Error handling (unwrap_or/expect — только с явным обоснованием)
+        - Отсутствие магических констант без комментариев
+    - path: "crates/labcolors-preview/**/*.rs"
+      instructions: |
+        Генератор SVG-превью. Проверяй:
+        - Соответствие визуала математической модели
+        - Чистоту SVG-вывода (без мусора, валидный XML)
+    - path: "docs/**"
+      instructions: |
+        Документация на русском проверяется на:
+        - Терминологию (LPC, LCS, HK, VC — без англицизмов)
+        - Согласованность ASCII-диаграмм с кодом
+  tools:
+    shellcheck:
+      enabled: true
+    markdownlint:
+      enabled: true
+    github-checks:
+      enabled: true
+      annotations: true
+  abort_on_close: true
+chat:
+  auto_reply: true
