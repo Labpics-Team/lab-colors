@@ -181,11 +181,6 @@ pub(crate) fn max_chroma(l_ok: f64, h_ok_deg: f64) -> f64 {
     (lo + hi) * 0.5
 }
 
-pub(crate) fn is_in_srgb_gamut(lab: [f64; 3]) -> bool {
-    let rgb = oklab_to_srgb_linear(lab);
-    rgb.iter().all(|&c| c >= -1e-6 && c <= 1.0 + 1e-6)
-}
-
 impl crate::curve::ColorCurve for AccentCurve {
     fn at(&self, t: f64) -> LcsColor {
         self.at(t)
@@ -238,7 +233,7 @@ mod tests {
             let hex = color.to_hex();
             let rgb = srgb_from_hex(&hex).unwrap();
             assert!(
-                rgb.iter().all(|&c| c >= -0.01 && c <= 1.01),
+                rgb.iter().all(|&c| (-0.01..=1.01).contains(&c)),
                 "out of gamut at t={}: {:?}",
                 i as f64 / 50.0,
                 rgb
@@ -322,7 +317,7 @@ mod tests {
             let hex = color.to_hex_with_vc(&curve.vc);
             let rgb = srgb_from_hex(&hex).unwrap();
             assert!(
-                rgb.iter().all(|&c| c >= -0.01 && c <= 1.01),
+                rgb.iter().all(|&c| (-0.01..=1.01).contains(&c)),
                 "dim accent out of gamut at t={}: {:?}",
                 i as f64 / 50.0,
                 rgb

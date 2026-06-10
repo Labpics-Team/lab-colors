@@ -95,7 +95,7 @@ impl LcsColor {
         Self { jp, h_ok, s, h_cam: h }
     }
 
-    pub(crate) fn to_xyz(&self, vc: &ViewingConditions) -> [f64; 3] {
+    pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
         let j = self.jp / (1.7 - 0.007 * self.jp);
         let mp = self.mp();
         let m = (0.0228 * mp).exp_m1() / 0.0228;
