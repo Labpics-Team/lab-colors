@@ -1,6 +1,9 @@
 use crate::spaces::{cam16, cat16, vc::ViewingConditions};
 use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz, D65_WHITE};
 
+/// CIECAM16 correlates `(J, M, h)` for an XYZ stimulus.
+///
+/// `h` is the CAM16 hue angle in **degrees** `[0, 360)`.
 pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
 
@@ -33,10 +36,12 @@ pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64,
         * (1.64 - 0.29_f64.powf(vc.n)).powf(0.73)
         * vc.fl.powf(0.25);
 
-    (j, m, hr)
+    (j, m, h)
 }
 
-fn hk_coeff(h_cam: f64) -> f64 {
+/// Hue-dependent Helmholtz-Kohlrausch coefficient. `h_cam_deg` in degrees.
+fn hk_coeff(h_cam_deg: f64) -> f64 {
+    let h_cam = h_cam_deg.to_radians();
     -0.160 * h_cam.cos()
         + 0.132 * (2.0 * h_cam).cos()
         - 0.405 * h_cam.sin()
@@ -81,8 +86,8 @@ fn apca(y_fg: f64, y_bg: f64) -> f64 {
 fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
     let rgb = srgb_from_hex(hex).unwrap_or([0.0, 0.0, 0.0]);
     let xyz = srgb_to_xyz(rgb);
-    let (j, m, hr) = cam16_jch_from_xyz(xyz, vc);
-    let j_hk = j + hk_coeff(hr) * m.powf(0.587);
+    let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
+    let j_hk = j + hk_coeff(h) * m.powf(0.587);
     y_hk(j_hk.max(0.0), vc)
 }
 
@@ -99,8 +104,10 @@ pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
     let dj = c1.jp - c2.jp;
     let m1 = c1.s * (c1.jp + 1.0);
     let m2 = c2.s * (c2.jp + 1.0);
-    let da = m1 * c1.h_ok.cos() - m2 * c2.h_ok.cos();
-    let db = m1 * c1.h_ok.sin() - m2 * c2.h_ok.sin();
+    let h1 = c1.h_ok.to_radians();
+    let h2 = c2.h_ok.to_radians();
+    let da = m1 * h1.cos() - m2 * h2.cos();
+    let db = m1 * h1.sin() - m2 * h2.sin();
     (dj * dj + da * da + db * db).sqrt()
 }
 
@@ -166,5 +173,25 @@ mod tests {
     fn neutral_hk_boost_is_zero() {
         let lc = lpc("#444444", "#ffffff");
         assert!((lc - 89.0).abs() < 5.0, "achromatic LPC: {}", lc);
+    }
+
+    #[test]
+    fn surface_same_color_is_zero() {
+        let de = lpc_surface("#3478F6", "#3478F6");
+        assert!(de.abs() < 1e-9, "self-distance must be zero: {}", de);
+    }
+
+    #[test]
+    fn surface_hue_distance_ordering() {
+        // Opposite hues must be further apart than near-identical reds.
+        // Guards the degrees-as-radians regression in the chroma vector.
+        let far = lpc_surface("#FF0000", "#00B050");
+        let near = lpc_surface("#FF0000", "#F51111");
+        assert!(
+            far > near,
+            "red↔green ({}) should exceed red↔red' ({})",
+            far,
+            near
+        );
     }
 }
