@@ -1,6 +1,6 @@
+use labcolors_core::ViewingConditions;
 use labcolors_core::neutral::{CurveParams, NeutralCurve};
 use labcolors_core::scale::AccentCurve;
-use labcolors_core::ViewingConditions;
 use std::fs;
 
 const BAR_W: u32 = 400;
@@ -54,9 +54,14 @@ fn main() {
 <text x='{}' y='{}' font-size='11' fill='{}'>Light theme</text>
 <text x='{}' y='{}' font-size='11' fill='{}'>Dark theme</text>
 "##,
-        total_w, total_h,
-        MARGIN, MARGIN, "#999",
-        MARGIN + BAR_W + COL_GAP, MARGIN, "#999",
+        total_w,
+        total_h,
+        MARGIN,
+        MARGIN,
+        "#999",
+        MARGIN + BAR_W + COL_GAP,
+        MARGIN,
+        "#999",
     ));
 
     for (i, (name, light_c, dim_c)) in curves.iter().enumerate() {
@@ -64,7 +69,10 @@ fn main() {
 
         s.push_str(&format!(
             "<text x='{}' y='{}' font-size='11' fill='{}'>{}</text>\n",
-            MARGIN, y - 3, "#666", name
+            MARGIN,
+            y - 3,
+            "#666",
+            name
         ));
 
         // Light bar
@@ -76,7 +84,10 @@ fn main() {
         for (ci, col) in light_c.iter().enumerate() {
             s.push_str(&format!(
                 "<rect x='{}' y='{}' width='1' height='{}' fill='{}'/>\n",
-                bx + ci as u32, y, BAR_H, col
+                bx + ci as u32,
+                y,
+                BAR_H,
+                col
             ));
         }
 
@@ -89,7 +100,10 @@ fn main() {
         for (ci, col) in dim_c.iter().enumerate() {
             s.push_str(&format!(
                 "<rect x='{}' y='{}' width='1' height='{}' fill='{}'/>\n",
-                bx2 + ci as u32, y, BAR_H, col
+                bx2 + ci as u32,
+                y,
+                BAR_H,
+                col
             ));
         }
     }

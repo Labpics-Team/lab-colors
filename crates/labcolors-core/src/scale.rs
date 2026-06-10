@@ -25,7 +25,11 @@ impl AccentCurve {
 
         let c_canonical = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
         let c_max = max_chroma(l_ok, h_canonical);
-        let sat_ratio = if c_max > 1e-6 { c_canonical / c_max } else { 0.0 };
+        let sat_ratio = if c_max > 1e-6 {
+            c_canonical / c_max
+        } else {
+            0.0
+        };
 
         Ok(Self {
             neutral: neutral.clone(),
@@ -139,7 +143,11 @@ fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
 
     for _ in 0..64 {
         let mid = (lo + hi) * 0.5;
-        let xyz = [mid * crate::spaces::srgb::D65_WHITE[0], mid, mid * crate::spaces::srgb::D65_WHITE[2]];
+        let xyz = [
+            mid * crate::spaces::srgb::D65_WHITE[0],
+            mid,
+            mid * crate::spaces::srgb::D65_WHITE[2],
+        ];
         let (j, _, _) = crate::lpc::cam16_jch_from_xyz(xyz, vc);
         let jp_mid = 1.7 * j / (1.0 + 0.007 * j);
         if jp_mid < jp {
@@ -168,9 +176,12 @@ pub(crate) fn max_chroma(l_ok: f64, h_ok_deg: f64) -> f64 {
         let b = mid * sin_h;
         let rgb = oklab_to_srgb_linear([l_ok, a, b]);
 
-        if rgb[0] >= -1e-6 && rgb[0] <= 1.0 + 1e-6
-            && rgb[1] >= -1e-6 && rgb[1] <= 1.0 + 1e-6
-            && rgb[2] >= -1e-6 && rgb[2] <= 1.0 + 1e-6
+        if rgb[0] >= -1e-6
+            && rgb[0] <= 1.0 + 1e-6
+            && rgb[1] >= -1e-6
+            && rgb[1] <= 1.0 + 1e-6
+            && rgb[2] >= -1e-6
+            && rgb[2] <= 1.0 + 1e-6
         {
             lo = mid;
         } else {
@@ -257,14 +268,22 @@ mod tests {
     fn sat_ratio_for_saturated_color() {
         let neutral = default_neutral();
         let curve = AccentCurve::new("#FF0000", &neutral).unwrap();
-        assert!(curve.sat_ratio() > 0.5, "red should have high sat_ratio: {}", curve.sat_ratio());
+        assert!(
+            curve.sat_ratio() > 0.5,
+            "red should have high sat_ratio: {}",
+            curve.sat_ratio()
+        );
     }
 
     #[test]
     fn sat_ratio_for_desaturated_color() {
         let neutral = default_neutral();
         let curve = AccentCurve::new("#CC8888", &neutral).unwrap();
-        assert!(curve.sat_ratio() < 0.5, "desaturated should have low sat_ratio: {}", curve.sat_ratio());
+        assert!(
+            curve.sat_ratio() < 0.5,
+            "desaturated should have low sat_ratio: {}",
+            curve.sat_ratio()
+        );
     }
 
     #[test]
@@ -290,7 +309,14 @@ mod tests {
         use crate::neutral::CurveParams;
         use crate::spaces::vc::ViewingConditions;
         let vc = ViewingConditions::dim_surround();
-        NeutralCurve::with_vc("#FFFFFF", "#787880", "#101012", &CurveParams::default(), &vc).unwrap()
+        NeutralCurve::with_vc(
+            "#FFFFFF",
+            "#787880",
+            "#101012",
+            &CurveParams::default(),
+            &vc,
+        )
+        .unwrap()
     }
 
     #[test]

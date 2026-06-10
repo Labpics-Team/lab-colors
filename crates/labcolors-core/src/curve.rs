@@ -27,9 +27,7 @@ pub trait ColorCurve {
         if n == 1 {
             return vec![self.at(0.5)];
         }
-        (0..n)
-            .map(|i| self.at(i as f64 / (n - 1) as f64))
-            .collect()
+        (0..n).map(|i| self.at(i as f64 / (n - 1) as f64)).collect()
     }
 
     /// `n` hex strings sampled through this curve's own viewing conditions.

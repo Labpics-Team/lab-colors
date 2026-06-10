@@ -82,7 +82,8 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     if hex.len() != 6 {
         return Err(format!("expected #RRGGBB, got #{}", hex));
     }
-    let parse = |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
+    let parse =
+        |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
     let r = parse(&hex[0..2])? as f64 / 255.0;
     let g = parse(&hex[2..4])? as f64 / 255.0;
     let b = parse(&hex[4..6])? as f64 / 255.0;

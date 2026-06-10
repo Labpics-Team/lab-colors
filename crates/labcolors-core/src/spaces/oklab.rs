@@ -113,11 +113,23 @@ mod tests {
         }
 
         // Red quadrant (≈29°)
-        assert!((h_r - 29.2).abs() < 1.0, "red hue = {}°, expected ≈29.2°", h_r);
+        assert!(
+            (h_r - 29.2).abs() < 1.0,
+            "red hue = {}°, expected ≈29.2°",
+            h_r
+        );
         // Green quadrant (≈142°)
-        assert!((h_g - 142.0).abs() < 3.0, "green hue = {}°, expected ≈142°", h_g);
+        assert!(
+            (h_g - 142.0).abs() < 3.0,
+            "green hue = {}°, expected ≈142°",
+            h_g
+        );
         // Blue quadrant (≈264°)
-        assert!((h_b - 264.0).abs() < 3.0, "blue hue = {}°, expected ≈264°", h_b);
+        assert!(
+            (h_b - 264.0).abs() < 3.0,
+            "blue hue = {}°, expected ≈264°",
+            h_b
+        );
     }
 
     #[test]

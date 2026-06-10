@@ -1,8 +1,8 @@
+use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{AccentCurve, max_chroma};
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::hex_from_srgb;
-use crate::lcs::LcsColor;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Sentiment {
@@ -76,8 +76,8 @@ impl SentimentCurve {
         let displacement = angular_distance(resolved_hue, prototype);
 
         let canonical_hex = build_hex_from_hue(resolved_hue, sat_ratio, neutral);
-        let accent = AccentCurve::new(&canonical_hex, neutral)
-            .expect("generated hex must be valid");
+        let accent =
+            AccentCurve::new(&canonical_hex, neutral).expect("generated hex must be valid");
 
         Ok(Self {
             resolved_hue,
@@ -139,8 +139,7 @@ fn angular_distance(a: f64, b: f64) -> f64 {
 
 fn build_hex_from_hue(h_ok: f64, sat_ratio: f64, neutral: &NeutralCurve) -> String {
     let base = neutral.base_anchor();
-    let base_rgb = crate::spaces::srgb::srgb_from_hex(&base.to_hex())
-        .unwrap_or([0.5, 0.5, 0.5]);
+    let base_rgb = crate::spaces::srgb::srgb_from_hex(&base.to_hex()).unwrap_or([0.5, 0.5, 0.5]);
     let lab = crate::spaces::oklab::srgb_linear_to_oklab(base_rgb);
     let l_ok = lab[0];
 
@@ -181,7 +180,10 @@ mod tests {
     fn no_displacement_when_brand_far() {
         let neutral = default_neutral();
         let curve = SentimentCurve::new(Sentiment::Danger, 240.0, "#FF3B30", &neutral).unwrap();
-        assert!(!curve.was_displaced, "danger prototype=18, brand=240 — no conflict");
+        assert!(
+            !curve.was_displaced,
+            "danger prototype=18, brand=240 — no conflict"
+        );
         assert!((curve.resolved_hue - 18.0).abs() < 1.0);
     }
 
@@ -189,7 +191,10 @@ mod tests {
     fn displacement_when_brand_near_prototype() {
         let neutral = default_neutral();
         let curve = SentimentCurve::new(Sentiment::Danger, 20.0, "#FF3B30", &neutral).unwrap();
-        assert!(curve.was_displaced, "danger prototype=18, brand=20 — conflict");
+        assert!(
+            curve.was_displaced,
+            "danger prototype=18, brand=20 — conflict"
+        );
     }
 
     #[test]
@@ -209,7 +214,8 @@ mod tests {
     fn warning_floor_enforced() {
         let neutral = default_neutral();
         for brand in (0..360).step_by(30) {
-            let curve = SentimentCurve::new(Sentiment::Warning, brand as f64, "#FF9500", &neutral).unwrap();
+            let curve =
+                SentimentCurve::new(Sentiment::Warning, brand as f64, "#FF9500", &neutral).unwrap();
             assert!(
                 curve.resolved_hue >= 45.0,
                 "warning resolved_hue={} below floor at brand={}",
@@ -264,12 +270,18 @@ mod tests {
     #[test]
     fn all_sentiments_valid_with_various_brands() {
         let neutral = default_neutral();
-        let sentiments = [Sentiment::Danger, Sentiment::Warning, Sentiment::Success, Sentiment::Info];
+        let sentiments = [
+            Sentiment::Danger,
+            Sentiment::Warning,
+            Sentiment::Success,
+            Sentiment::Info,
+        ];
         let brands = [0.0, 30.0, 60.0, 120.0, 200.0, 300.0];
 
         for &sent in &sentiments {
             for &brand in &brands {
-                let curve = SentimentCurve::new(sent, brand, prototype_hex(sent), &neutral).unwrap();
+                let curve =
+                    SentimentCurve::new(sent, brand, prototype_hex(sent), &neutral).unwrap();
                 let hex = curve.at(0.5).to_hex();
                 assert!(
                     LcsColor::from_hex(&hex).is_ok(),
