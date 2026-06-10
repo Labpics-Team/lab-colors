@@ -501,7 +501,8 @@ mod tests {
         let eps = 1e-6;
         for (t, anchor, name) in [
             (eps, curve.light_anchor(), "light"),
-            (0.5 + eps, curve.base_anchor(), "base"),
+            (0.5 - eps, curve.base_anchor(), "base (plateau end)"),
+            (0.5 + eps, curve.base_anchor(), "base (fall start)"),
             (1.0 - eps, curve.dark_anchor(), "dark"),
         ] {
             let got = curve.at(t).mp();
