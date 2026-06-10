@@ -56,7 +56,7 @@ mod tests {
             &CurveParams::default(),
             &vc,
         )
-        .unwrap();
+        .expect("NeutralCurve::with_vc should succeed for valid dim-surround anchors");
         let curve: &dyn ColorCurve = &curve;
 
         let hexes = curve.sample_hex(13);
