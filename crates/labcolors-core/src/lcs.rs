@@ -92,10 +92,15 @@ impl LcsColor {
         let mp = (1.0 + 0.0228 * m).ln() / 0.0228;
         let s = mp / (jp + 1.0);
 
-        Self { jp, h_ok, s, h_cam: h }
+        Self {
+            jp,
+            h_ok,
+            s,
+            h_cam: h,
+        }
     }
 
-    pub(crate) fn to_xyz(&self, vc: &ViewingConditions) -> [f64; 3] {
+    pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
         let j = self.jp / (1.7 - 0.007 * self.jp);
         let mp = self.mp();
         let m = (0.0228 * mp).exp_m1() / 0.0228;
@@ -107,8 +112,8 @@ impl LcsColor {
 
         let p1 = e_hue * (50000.0 / 13.0) * vc.nc * vc.nbb;
         let p2 = (vc.aw * (j / 100.0).powf(1.0 / (vc.c * vc.z))) / vc.nbb;
-        let gamma = 23.0 * (p2 + 0.305) * t
-            / (23.0 * p1 + 11.0 * t * hr.cos() + 108.0 * t * hr.sin());
+        let gamma =
+            23.0 * (p2 + 0.305) * t / (23.0 * p1 + 11.0 * t * hr.cos() + 108.0 * t * hr.sin());
 
         let a = gamma * hr.cos();
         let b = gamma * hr.sin();
@@ -204,7 +209,8 @@ mod tests {
         assert!(
             (avg.jp - dim.jp).abs() > 0.1,
             "same stimulus should produce different J' across VCs: avg={} dim={}",
-            avg.jp, dim.jp,
+            avg.jp,
+            dim.jp,
         );
     }
 
@@ -226,8 +232,7 @@ mod tests {
     fn h_cam_stored_in_degrees() {
         // CAM16 hue of sRGB red is tens of degrees; a value below 2π would
         // mean radians leaked into storage.
-        let red = LcsColor::from_hex("#FF0000")
-            .expect("#FF0000 is a valid hex colour");
+        let red = LcsColor::from_hex("#FF0000").expect("#FF0000 is a valid hex colour");
         let h = red.h_cam();
         assert!((0.0..360.0).contains(&h), "h_cam out of range: {}", h);
         assert!(

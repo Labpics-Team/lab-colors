@@ -32,7 +32,13 @@ pub struct NeutralCurve {
 impl NeutralCurve {
     /// Build a neutral curve using standard sRGB viewing conditions (average surround).
     pub fn new(light: &str, base: &str, dark: &str) -> Result<Self, String> {
-        Self::with_vc(light, base, dark, &CurveParams::default(), &ViewingConditions::srgb())
+        Self::with_vc(
+            light,
+            base,
+            dark,
+            &CurveParams::default(),
+            &ViewingConditions::srgb(),
+        )
     }
 
     pub fn with_params(
@@ -401,7 +407,12 @@ mod tests {
         let curve = default_curve();
         for i in 0..=100 {
             let c = curve.at(i as f64 / 100.0);
-            assert!(c.s >= -1e-9, "negative s at t={}: {}", i as f64 / 100.0, c.s);
+            assert!(
+                c.s >= -1e-9,
+                "negative s at t={}: {}",
+                i as f64 / 100.0,
+                c.s
+            );
         }
     }
 
@@ -409,7 +420,14 @@ mod tests {
 
     fn dim_curve() -> NeutralCurve {
         let vc = ViewingConditions::dim_surround();
-        NeutralCurve::with_vc("#FFFFFF", "#787880", "#101012", &CurveParams::default(), &vc).unwrap()
+        NeutralCurve::with_vc(
+            "#FFFFFF",
+            "#787880",
+            "#101012",
+            &CurveParams::default(),
+            &vc,
+        )
+        .unwrap()
     }
 
     #[test]

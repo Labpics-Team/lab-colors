@@ -1,15 +1,13 @@
-/**
- * sRGB ↔ XYZ(D65) colour space transforms.
- *
- * These are the official IEC 61966-2-1:1999 matrices as used by
- * W3C CSS Color Module Level 4 and published in
- * <https://github.com/w3c/csswg-drafts/issues/5922>.
- *
- * They are physical constants — they never change — so inlining them
- * avoids a heavy colour-management dependency (`palette` pulls ~20
- * transitive crates) and guarantees exact reproducibility with other
- * CSS-based pipelines.
- */
+//! sRGB ↔ XYZ(D65) colour space transforms.
+//!
+//! These are the official IEC 61966-2-1:1999 matrices as used by
+//! W3C CSS Color Module Level 4 and published in
+//! <https://github.com/w3c/csswg-drafts/issues/5922>.
+//!
+//! They are physical constants — they never change — so inlining them
+//! avoids a heavy colour-management dependency (`palette` pulls ~20
+//! transitive crates) and guarantees exact reproducibility with other
+//! CSS-based pipelines.
 
 /// CIE D65 standard illuminant (normalized to Y = 1.0).
 ///
@@ -25,8 +23,8 @@ pub const D65_WHITE: [f64; 3] = [
 // ------------------------------------------------------------------
 #[rustfmt::skip]
 const SRGB_TO_XYZ_D65: [[f64; 3]; 3] = [
-    [ 0.412_390_799_265_959_34,  0.357_584_339_383_878_0,   0.180_480_788_401_834_3  ],
-    [ 0.212_639_005_871_510_27,  0.715_168_678_767_756_0,   0.072_192_315_360_733_71 ],
+    [ 0.412_390_799_265_959_34,  0.357_584_339_383_878,     0.180_480_788_401_834_3  ],
+    [ 0.212_639_005_871_510_27,  0.715_168_678_767_756,     0.072_192_315_360_733_71 ],
     [ 0.019_330_818_715_591_82,  0.119_194_779_794_625_98,  0.950_532_152_249_660_7  ],
 ];
 
@@ -35,7 +33,7 @@ const SRGB_TO_XYZ_D65: [[f64; 3]; 3] = [
 // ------------------------------------------------------------------
 #[rustfmt::skip]
 const XYZ_D65_TO_SRGB: [[f64; 3]; 3] = [
-    [ 3.240_969_941_904_522_6,  -1.537_383_177_570_094_0,  -0.498_610_760_293_003_4  ],
+    [ 3.240_969_941_904_522_6,  -1.537_383_177_570_094,    -0.498_610_760_293_003_4  ],
     [-0.969_243_636_280_879_6,   1.875_967_501_507_720_2,   0.041_555_057_407_175_59 ],
     [ 0.055_630_079_696_993_66, -0.203_976_958_888_976_52,  1.056_971_514_242_878_6  ],
 ];
@@ -84,7 +82,8 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     if hex.len() != 6 {
         return Err(format!("expected #RRGGBB, got #{}", hex));
     }
-    let parse = |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
+    let parse =
+        |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
     let r = parse(&hex[0..2])? as f64 / 255.0;
     let g = parse(&hex[2..4])? as f64 / 255.0;
     let b = parse(&hex[4..6])? as f64 / 255.0;

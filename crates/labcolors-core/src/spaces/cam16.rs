@@ -1,9 +1,7 @@
-/**
- * Core CIECAM16 nonlinear adaptation functions.
- *
- * These are the forward and inverse compressive transforms applied
- * to cone responses after chromatic adaptation.
- */
+//! Core CIECAM16 nonlinear adaptation functions.
+//!
+//! These are the forward and inverse compressive transforms applied
+//! to cone responses after chromatic adaptation.
 
 /// Forward nonlinear adaptation.
 ///

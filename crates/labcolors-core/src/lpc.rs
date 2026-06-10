@@ -1,5 +1,5 @@
+use crate::spaces::srgb::{D65_WHITE, srgb_from_hex, srgb_to_xyz};
 use crate::spaces::{cam16, cat16, vc::ViewingConditions};
-use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz, D65_WHITE};
 
 /// CIECAM16 correlates `(J, M, h)` for an XYZ stimulus.
 ///
@@ -42,9 +42,7 @@ pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64,
 /// Hue-dependent Helmholtz-Kohlrausch coefficient. `h_cam_deg` in degrees.
 fn hk_coeff(h_cam_deg: f64) -> f64 {
     let h_cam = h_cam_deg.to_radians();
-    -0.160 * h_cam.cos()
-        + 0.132 * (2.0 * h_cam).cos()
-        - 0.405 * h_cam.sin()
+    -0.160 * h_cam.cos() + 0.132 * (2.0 * h_cam).cos() - 0.405 * h_cam.sin()
         + 0.080 * (2.0 * h_cam).sin()
         + 0.792
 }

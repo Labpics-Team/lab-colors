@@ -85,9 +85,7 @@ impl ViewingConditions {
             D65_WHITE[2] * 100.0,
         ];
         let rgb_w = xyz_to_cone(xyz_w);
-        let d = (f * (1.0 - (1.0 / 3.6) * ((-la - 42.0) / 92.0).exp()))
-            .max(0.0)
-            .min(1.0);
+        let d = (f * (1.0 - (1.0 / 3.6) * ((-la - 42.0) / 92.0).exp())).clamp(0.0, 1.0);
         let rgb_d = [
             d * (100.0 / rgb_w[0]) + 1.0 - d,
             d * (100.0 / rgb_w[1]) + 1.0 - d,

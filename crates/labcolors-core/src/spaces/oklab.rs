@@ -109,15 +109,27 @@ mod tests {
 
         // All hues in [0, 360)
         for &h in &[h_r, h_g, h_b] {
-            assert!(h >= 0.0 && h < 360.0, "hue {} not in [0, 360)", h);
+            assert!((0.0..360.0).contains(&h), "hue {} not in [0, 360)", h);
         }
 
         // Red quadrant (≈29°)
-        assert!((h_r - 29.2).abs() < 1.0, "red hue = {}°, expected ≈29.2°", h_r);
+        assert!(
+            (h_r - 29.2).abs() < 1.0,
+            "red hue = {}°, expected ≈29.2°",
+            h_r
+        );
         // Green quadrant (≈142°)
-        assert!((h_g - 142.0).abs() < 3.0, "green hue = {}°, expected ≈142°", h_g);
+        assert!(
+            (h_g - 142.0).abs() < 3.0,
+            "green hue = {}°, expected ≈142°",
+            h_g
+        );
         // Blue quadrant (≈264°)
-        assert!((h_b - 264.0).abs() < 3.0, "blue hue = {}°, expected ≈264°", h_b);
+        assert!(
+            (h_b - 264.0).abs() < 3.0,
+            "blue hue = {}°, expected ≈264°",
+            h_b
+        );
     }
 
     #[test]
@@ -128,7 +140,7 @@ mod tests {
         let h_k = oklab_hue(lin_k);
         assert!(!h_w.is_nan(), "white hue should not be NaN");
         assert!(!h_k.is_nan(), "black hue should not be NaN");
-        assert!(h_w >= 0.0 && h_w < 360.0, "white hue in range");
-        assert!(h_k >= 0.0 && h_k < 360.0, "black hue in range");
+        assert!((0.0..360.0).contains(&h_w), "white hue in range");
+        assert!((0.0..360.0).contains(&h_k), "black hue in range");
     }
 }

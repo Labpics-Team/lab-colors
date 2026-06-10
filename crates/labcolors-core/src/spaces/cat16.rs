@@ -1,8 +1,6 @@
-/**
- * Chromatic Adaptation Transform 16 (CAT16).
- *
- * Matrices from CIE 170-2:2015 §6.3.1.
- */
+//! Chromatic Adaptation Transform 16 (CAT16).
+//!
+//! Matrices from CIE 170-2:2015 §6.3.1.
 
 /// CAT16: CIE XYZ → cone responses (LMS).
 #[rustfmt::skip]
