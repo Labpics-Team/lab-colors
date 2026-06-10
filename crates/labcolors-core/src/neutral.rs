@@ -258,6 +258,10 @@ impl crate::curve::ColorCurve for NeutralCurve {
     fn at(&self, t: f64) -> LcsColor {
         self.at(t)
     }
+
+    fn vc(&self) -> &ViewingConditions {
+        &self.vc
+    }
 }
 
 #[cfg(test)]

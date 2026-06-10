@@ -10,9 +10,7 @@ const COL_GAP: u32 = 48;
 const SAMPLES: u32 = 400;
 
 fn sample_steps(curve: &impl labcolors_core::ColorCurve) -> Vec<String> {
-    (0..SAMPLES)
-        .map(|i| curve.at(i as f64 / (SAMPLES - 1) as f64).to_hex())
-        .collect()
+    curve.sample_hex(SAMPLES as usize)
 }
 
 fn main() {
