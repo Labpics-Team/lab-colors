@@ -228,9 +228,10 @@ fn sine_env(t: f64, t_peak: f64) -> f64 {
     }
 }
 
+/// Interpolate between two angles **in degrees** along the shortest arc.
 fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
     let diff = b - a;
-    let shortest = ((diff + 180.0) % 360.0) - 180.0;
+    let shortest = (diff + 180.0).rem_euclid(360.0) - 180.0;
     a + shortest * t
 }
 
@@ -447,5 +448,36 @@ mod tests {
         for hex in &hexes {
             assert!(seen.insert(hex.to_uppercase()), "dim duplicate: {}", hex);
         }
+    }
+
+    // ── lerp_angle: кратчайшая дуга через границу 0°/360° ──────
+
+    #[test]
+    fn lerp_angle_crosses_zero_forward() {
+        // 350° → 10°: shortest arc is +20° through 0°, midpoint 0° (mod 360).
+        // The old `%`-based formula returned 180° here (long way round).
+        let mid = lerp_angle(350.0, 10.0, 0.5).rem_euclid(360.0);
+        assert!(
+            mid < 1e-9 || (mid - 360.0).abs() < 1e-9,
+            "midpoint of 350°→10° must be 0°, got {}",
+            mid
+        );
+    }
+
+    #[test]
+    fn lerp_angle_crosses_zero_backward() {
+        // 10° → 350°: shortest arc is −20°, midpoint 0° (mod 360).
+        let mid = lerp_angle(10.0, 350.0, 0.5).rem_euclid(360.0);
+        assert!(
+            mid < 1e-9 || (mid - 360.0).abs() < 1e-9,
+            "midpoint of 10°→350° must be 0°, got {}",
+            mid
+        );
+    }
+
+    #[test]
+    fn lerp_angle_endpoints_exact() {
+        assert!((lerp_angle(350.0, 10.0, 0.0) - 350.0).abs() < 1e-9);
+        assert!((lerp_angle(350.0, 10.0, 1.0).rem_euclid(360.0) - 10.0).abs() < 1e-9);
     }
 }

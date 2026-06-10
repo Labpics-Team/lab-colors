@@ -1,6 +1,8 @@
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz, xyz_to_srgb};
 use crate::spaces::{cam16, cat16, oklab, vc::ViewingConditions};
 
+/// All hue fields (`h_ok`, `h_cam`) are stored in **degrees** `[0, 360)`.
+/// Convert to radians only at trigonometric call sites — never store radians.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LcsColor {
     pub jp: f64,
@@ -90,14 +92,14 @@ impl LcsColor {
         let mp = (1.0 + 0.0228 * m).ln() / 0.0228;
         let s = mp / (jp + 1.0);
 
-        Self { jp, h_ok, s, h_cam: hr }
+        Self { jp, h_ok, s, h_cam: h }
     }
 
     pub(crate) fn to_xyz(&self, vc: &ViewingConditions) -> [f64; 3] {
         let j = self.jp / (1.7 - 0.007 * self.jp);
         let mp = self.mp();
         let m = (0.0228 * mp).exp_m1() / 0.0228;
-        let hr = self.h_cam;
+        let hr = self.h_cam.to_radians();
 
         let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
         let t_inner = (1.64 - 0.29_f64.powf(vc.n)).powf(0.73);
@@ -217,6 +219,21 @@ mod tests {
             !wrong_hex.eq_ignore_ascii_case("#787880"),
             "VC mismatch should cause drift, got {}",
             wrong_hex,
+        );
+    }
+
+    #[test]
+    fn h_cam_stored_in_degrees() {
+        // CAM16 hue of sRGB red is tens of degrees; a value below 2π would
+        // mean radians leaked into storage.
+        let red = LcsColor::from_hex("#FF0000")
+            .expect("#FF0000 is a valid hex colour");
+        let h = red.h_cam();
+        assert!((0.0..360.0).contains(&h), "h_cam out of range: {}", h);
+        assert!(
+            h > 7.0,
+            "red CAM16 hue should be tens of degrees, got {} — radians leak?",
+            h
         );
     }
 }
