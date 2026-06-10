@@ -123,10 +123,13 @@ impl NeutralCurve {
             j6 + (j12 - j6) * u.powf(self.params.gamma_dark)
         };
 
-        let mp_base = self.a_base.mp();
-        let mp_dark = self.a_dark.mp();
-        let env = sine_env(t, self.params.chroma_peak_t);
-        let mp = mp_dark + (mp_base - mp_dark) * env;
+        let mp = chroma_envelope(
+            t,
+            self.a_light.mp(),
+            self.a_base.mp(),
+            self.a_dark.mp(),
+            self.params.chroma_peak_t,
+        );
         let s = mp / (jp + 1.0);
 
         let h_ok = self.interpolate_hue_ok(t);
@@ -220,11 +223,26 @@ impl NeutralCurve {
     }
 }
 
-fn sine_env(t: f64, t_peak: f64) -> f64 {
+/// C1-continuous chroma envelope through the chromas of all three anchors.
+///
+/// Rises from the light anchor's M' to the base anchor's M' at `t_peak`
+/// (half-cosine ease), holds the base level until the base anchor at
+/// `t = 0.5`, then falls to the dark anchor's M' (half-cosine ease).
+/// All three anchors are reproduced exactly and every junction has zero
+/// slope, so M' is C1 on `[0, 1]` — the predecessor (`sine_env`) pinned
+/// both ends to the dark anchor's chroma, jumping at `t = 0` and `t = 0.5`.
+///
+/// `t_peak` is clamped to `(0, 0.5]`; at `0.5` the plateau is empty and the
+/// envelope is a plain ease light→base→dark.
+fn chroma_envelope(t: f64, mp_light: f64, mp_base: f64, mp_dark: f64, t_peak: f64) -> f64 {
+    let t_peak = t_peak.clamp(f64::EPSILON, 0.5);
+    let ease = |u: f64| 0.5 - 0.5 * (std::f64::consts::PI * u).cos();
     if t <= t_peak {
-        ((std::f64::consts::PI * t) / (2.0 * t_peak)).sin()
+        mp_light + (mp_base - mp_light) * ease(t / t_peak)
+    } else if t <= 0.5 {
+        mp_base
     } else {
-        ((std::f64::consts::PI * (1.0 - t)) / (2.0 * (1.0 - t_peak))).sin()
+        mp_base + (mp_dark - mp_base) * ease((t - 0.5) / 0.5)
     }
 }
 
@@ -451,6 +469,52 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for hex in &hexes {
             assert!(seen.insert(hex.to_uppercase()), "dim duplicate: {}", hex);
+        }
+    }
+
+    // ── Непрерывность: инвариант непрерывной растяжки ──────────
+
+    #[test]
+    fn curve_continuous_everywhere() {
+        // «Непрерывная растяжка» — продуктовый инвариант: jp, M' и hue
+        // не имеют скачков ни в якорях, ни между ними.
+        for curve in [default_curve(), dim_curve()] {
+            let n = 2000;
+            let mut prev = curve.at(0.0);
+            for i in 1..=n {
+                let t = i as f64 / n as f64;
+                let c = curve.at(t);
+                let dmp = (c.mp() - prev.mp()).abs();
+                let djp = (c.jp - prev.jp).abs();
+                let dh = ((c.h_ok - prev.h_ok + 180.0).rem_euclid(360.0) - 180.0).abs();
+                assert!(dmp < 0.05, "M' jump at t={}: {}", t, dmp);
+                assert!(djp < 0.35, "J' jump at t={}: {}", t, djp);
+                assert!(dh < 1.0, "hue jump at t={}: {}°", t, dh);
+                prev = c;
+            }
+        }
+    }
+
+    #[test]
+    fn envelope_passes_through_all_anchor_chromas() {
+        let curve = default_curve();
+        let eps = 1e-6;
+        for (t, anchor, name) in [
+            (eps, curve.light_anchor(), "light"),
+            (0.5 - eps, curve.base_anchor(), "base (plateau end)"),
+            (0.5 + eps, curve.base_anchor(), "base (fall start)"),
+            (1.0 - eps, curve.dark_anchor(), "dark"),
+        ] {
+            let got = curve.at(t).mp();
+            let want = anchor.mp();
+            assert!(
+                (got - want).abs() < 0.01,
+                "{} anchor chroma: at({})={}, anchor={}",
+                name,
+                t,
+                got,
+                want
+            );
         }
     }
 
