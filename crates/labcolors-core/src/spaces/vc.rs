@@ -36,11 +36,15 @@ impl Default for ViewingConditions {
 impl ViewingConditions {
     /// Standard sRGB viewing conditions (average surround).
     ///
-    /// Matches the defaults used by colorjs.io:
-    /// `environment(white, (64/π)*0.2, 20, "average", false)`.
-    ///
     /// Parameters: D65 illuminant, L_A = 64 cd/m², Y_b = 20 %,
     /// average surround (F = 1.0, c = 0.69, N_c = 1.0).
+    ///
+    /// The surround triplet matches colorjs.io `surroundMap["average"]`,
+    /// but the adapting luminance does NOT match colorjs.io, whose default
+    /// is `(64/π)·0.2 ≈ 4.07 cd/m²` — lab-colors deliberately uses 64
+    /// (L_A policy: docs/decisions/theme-invariant.md). The forward path
+    /// at these exact parameters is cross-validated against colour-science
+    /// in `golden_tests`.
     pub fn srgb() -> Self {
         // colour-science / colorjs.io surroundMap["average"] = [1.0, 0.69, 1.0]
         Self::build(64.0, 20.0, 1.0, 0.69, 1.0)
