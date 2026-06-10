@@ -39,6 +39,10 @@ pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64,
     (j, m, h)
 }
 
+/// Chroma exponent in the Hellwig 2022 H-K lightness term
+/// `J_HK = J + f(h) * C^0.587` (source: see [`hk_coeff`]).
+const HK_CHROMA_EXPONENT: f64 = 0.587;
+
 /// Hue-dependent Helmholtz-Kohlrausch coefficient `f(h)`, `h_cam_deg` in degrees.
 ///
 /// Source: Hellwig, Stolitzka & Fairchild (2022), "Extending CIECAM02 and
@@ -76,9 +80,21 @@ fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
 /// Constants are from the published generic perceptual-contrast formula;
 /// naming policy and attribution: docs/decisions/apca-license.md.
 fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
+    // Soft black clamp: luminance below the threshold is lifted so the
+    // curve stays monotonic near black.
+    const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
+    const SOFT_CLAMP_EXP: f64 = 1.414;
+    // Polarity-dependent power-curve exponents (bg >= fg is dark-on-light).
+    const EXP_BG_LIGHT: f64 = 0.56;
+    const EXP_FG_LIGHT: f64 = 0.57;
+    const EXP_BG_DARK: f64 = 0.65;
+    const EXP_FG_DARK: f64 = 0.62;
+    // Maps the raw power-curve delta to the ~[-110, 110] output range.
+    const CONTRAST_SCALE: f64 = 1.14 * 100.0;
+
     let clamp = |y: f64| -> f64 {
-        if y < 0.022 {
-            y + (0.022 - y).powf(1.414)
+        if y < SOFT_CLAMP_THRESHOLD {
+            y + (SOFT_CLAMP_THRESHOLD - y).powf(SOFT_CLAMP_EXP)
         } else {
             y
         }
@@ -87,9 +103,9 @@ fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
     let bg = clamp(y_bg);
 
     if bg >= fg {
-        (bg.powf(0.56) - fg.powf(0.57)) * 1.14 * 100.0
+        (bg.powf(EXP_BG_LIGHT) - fg.powf(EXP_FG_LIGHT)) * CONTRAST_SCALE
     } else {
-        (bg.powf(0.65) - fg.powf(0.62)) * 1.14 * 100.0
+        (bg.powf(EXP_BG_DARK) - fg.powf(EXP_FG_DARK)) * CONTRAST_SCALE
     }
 }
 
@@ -98,7 +114,7 @@ fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
 pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
     let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
     let chroma = m / vc.fl.powf(0.25);
-    j + hk_coeff(h) * chroma.powf(0.587)
+    j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }
 
 fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
@@ -130,8 +146,8 @@ pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
 /// LPC contrast between two [`LcsColor`] values.
 ///
 /// Uses the pre-computed CAM16 J' and Oklab hue stored in each colour,
-/// avoiding re-parsing hex strings. Delegates to the same APCA normalised
-/// luminance contrast as [`lpc`].
+/// avoiding re-parsing hex strings. Delegates to the same
+/// perceptual-contrast core curve as [`lpc`].
 pub fn lpc_lcs(fg: &crate::lcs::LcsColor, bg: &crate::lcs::LcsColor) -> f64 {
     let vc = ViewingConditions::srgb();
     let y_fg = y_hk_from_lcs(fg, &vc);
@@ -149,7 +165,7 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
     let j = c.jp / (1.7 - 0.007 * c.jp);
     let m = (0.0228 * c.mp()).exp_m1() / 0.0228;
     let chroma = m / vc.fl.powf(0.25);
-    let j_hk = j + hk_coeff(c.h_cam()) * chroma.powf(0.587);
+    let j_hk = j + hk_coeff(c.h_cam()) * chroma.powf(HK_CHROMA_EXPONENT);
     y_hk(j_hk.max(0.0), vc)
 }
 
