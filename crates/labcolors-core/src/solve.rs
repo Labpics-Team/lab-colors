@@ -35,8 +35,9 @@ use crate::lpc::{
 };
 use crate::scale::max_chroma;
 use crate::spaces::oklab::oklab_to_srgb_linear;
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz};
+use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
+use crate::wcag;
 
 /// Oklab hue angle in degrees, normalised to `[0, 360)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -93,6 +94,38 @@ pub struct TypographicContext {
     pub weight: u16,
 }
 
+/// The WCAG 2.1 AA legal contrast floor a contract must clear.
+///
+/// EAA / EN 301 549 mandate WCAG 2.1 level AA: a relative-luminance contrast
+/// ratio of 4.5:1 for normal text (success criterion 1.4.3) and 3:1 for
+/// user-interface components and graphical objects (1.4.11). The floor is the
+/// legal minimum *beneath* the perceptual LPC target: if the LPC solution does
+/// not clear it, [`solve`] pushes the colour until it does and flags the result
+/// via [`Solved::floor_override`], so the caller can see where law overrode
+/// perception. Decorative / just-noticeable-difference contracts (shadows,
+/// separators) carry [`None`](Floor::None) — readability law does not apply to
+/// them, and `solve` leaves them on their perceptual target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Floor {
+    /// WCAG 2.1 AA normal text — contrast ratio ≥ 4.5:1.
+    AaText,
+    /// WCAG 2.1 AA UI components / graphical objects — contrast ratio ≥ 3:1.
+    AaUi,
+    /// No legal floor (decorative / JND contracts).
+    None,
+}
+
+impl Floor {
+    /// The minimum WCAG 2.1 contrast ratio this floor enforces, if any.
+    fn min_ratio(self) -> Option<f64> {
+        match self {
+            Floor::AaText => Some(wcag::AA_TEXT_RATIO),
+            Floor::AaUi => Some(wcag::AA_UI_RATIO),
+            Floor::None => Option::None,
+        }
+    }
+}
+
 /// A contrast contract: the band of acceptable contrast against the background.
 ///
 /// Expressed as a signed `Lc` range `[floor, ceiling]`, where the sign encodes
@@ -101,35 +134,72 @@ pub struct TypographicContext {
 /// reserved for future just-noticeable-difference contracts (shadows,
 /// separators, borders) where a band — "visible enough to be felt, no more" —
 /// matters. `solve` targets `floor`.
+///
+/// Every contract also carries a WCAG 2.1 [`Floor`]: text and UI contracts get
+/// the AA legal minimum by default (4.5:1 / 3:1); range (decorative / JND)
+/// contracts get [`Floor::None`]. Disable or change it explicitly with
+/// [`with_conformance`](Contract::with_conformance).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Contract {
     floor: f64,
     ceiling: f64,
     typography: Option<TypographicContext>,
+    conformance: Floor,
 }
 
 impl Contract {
     /// A text contract for an explicit signed target `Lc` (degenerate range).
+    ///
+    /// Carries the WCAG 2.1 AA *normal-text* floor ([`Floor::AaText`], 4.5:1) by
+    /// default — disable it explicitly with [`with_conformance`](Self::with_conformance).
     pub fn text(target_lc: f64) -> Self {
         Self {
             floor: target_lc,
             ceiling: target_lc,
             typography: None,
+            conformance: Floor::AaText,
+        }
+    }
+
+    /// A UI-component contract for an explicit signed target `Lc` (degenerate
+    /// range).
+    ///
+    /// Carries the WCAG 2.1 AA *non-text* floor ([`Floor::AaUi`], 3:1) by
+    /// default — for icons, controls, focus rings and graphical objects.
+    pub fn ui(target_lc: f64) -> Self {
+        Self {
+            floor: target_lc,
+            ceiling: target_lc,
+            typography: None,
+            conformance: Floor::AaUi,
         }
     }
 
     /// A range contract `[floor, ceiling]` of signed `Lc`. `solve` targets `floor`.
+    ///
+    /// Reserved for decorative / just-noticeable-difference contracts, so it
+    /// carries [`Floor::None`]: no legal readability floor applies.
     pub fn range(floor: f64, ceiling: f64) -> Self {
         Self {
             floor,
             ceiling,
             typography: None,
+            conformance: Floor::None,
         }
     }
 
     /// Attach a reserved [`TypographicContext`]. Not consulted by `solve` in v1.
     pub fn with_typography(mut self, ctx: TypographicContext) -> Self {
         self.typography = Some(ctx);
+        self
+    }
+
+    /// Override the WCAG 2.1 conformance [`Floor`]. The default depends on the
+    /// constructor ([`text`](Self::text) → AA text, [`ui`](Self::ui) → AA UI,
+    /// [`range`](Self::range) → none); pass [`Floor::None`] to disable the legal
+    /// floor explicitly.
+    pub fn with_conformance(mut self, conformance: Floor) -> Self {
+        self.conformance = conformance;
         self
     }
 
@@ -146,6 +216,11 @@ impl Contract {
     /// The reserved typographic context, if any (unused by `solve` in v1).
     pub fn typography(self) -> Option<TypographicContext> {
         self.typography
+    }
+
+    /// The WCAG 2.1 conformance floor this contract enforces.
+    pub fn conformance(self) -> Floor {
+        self.conformance
     }
 }
 
@@ -186,6 +261,17 @@ impl BgInput {
             }
         }
     }
+
+    /// Gamma-encoded (8-bit-quantised) sRGB of the endpoint the WCAG floor is
+    /// checked against — the background colour with the least luminance contrast
+    /// for the target's polarity. For a [`Solid`](BgInput::Solid) background this
+    /// is just the colour. Future interval backgrounds resolve their worst-case
+    /// endpoint here, keeping `solve` free of variant matching (SEAM a).
+    fn governing_display(&self, _target: f64) -> [f64; 3] {
+        match self {
+            BgInput::Solid(rgb) => quantised_display(*rgb),
+        }
+    }
 }
 
 /// A background luminance interval in `Y_hk` space (H-K-corrected luminance).
@@ -211,12 +297,18 @@ impl LumaInterval {
     }
 }
 
-/// A solved foreground colour and the contrast it actually achieves.
+/// A solved foreground colour and the two contrasts it actually achieves.
+///
+/// The perceptual [`lc`](Solved::lc) (signed LPC) and the legal
+/// [`wcag_ratio`](Solved::wcag_ratio) (symmetric WCAG 2.1) are reported as
+/// separate numbers — they measure different things and are never conflated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Solved {
     color: LcsColor,
     hex: String,
     lc: f64,
+    wcag_ratio: f64,
+    floor_override: bool,
 }
 
 impl Solved {
@@ -230,10 +322,28 @@ impl Solved {
         &self.hex
     }
 
-    /// The signed contrast `Lc` the resolved colour achieves against the
-    /// background, measured on the quantised hex — what the caller actually gets.
+    /// The signed perceptual contrast `Lc` the resolved colour achieves against
+    /// the background, measured on the quantised hex — what the caller actually
+    /// gets. This is the LPC metric, not WCAG; see [`wcag_ratio`](Self::wcag_ratio).
     pub fn lc(&self) -> f64 {
         self.lc
+    }
+
+    /// The WCAG 2.1 relative-luminance contrast ratio (1–21) of the resolved
+    /// colour against the background, measured on the quantised hex. For a
+    /// text/UI contract this is guaranteed to meet the contract's [`Floor`]
+    /// (≥ 4.5 or ≥ 3.0); for a [`Floor::None`] contract it is reported for
+    /// transparency but not enforced.
+    pub fn wcag_ratio(&self) -> f64 {
+        self.wcag_ratio
+    }
+
+    /// `true` when the WCAG legal floor overrode the perceptual target: the LPC
+    /// solution did not clear the floor, so the colour was pushed (darker for
+    /// dark-on-light, lighter for light-on-dark) until it did. Lets the caller
+    /// surface where the law won over perception.
+    pub fn floor_override(&self) -> bool {
+        self.floor_override
     }
 }
 
@@ -247,6 +357,11 @@ pub enum Unreachable {
     /// The background cannot supply the target even at the luminance extreme
     /// (pure black for dark-on-light, pure white for light-on-dark).
     ExceedsRange { target: f64, max_achievable: f64 },
+    /// The WCAG legal floor cannot be met on this background even at the
+    /// achromatic extreme (pure black for dark-on-light, pure white for
+    /// light-on-dark). `max_ratio` is the most contrast this background can
+    /// supply in that polarity; `floor` is the ratio the contract required.
+    FloorUnreachable { floor: f64, max_ratio: f64 },
     /// The target's polarity disagrees with the background's luminance, e.g. a
     /// dark-on-light target against a background that is already dark.
     ///
@@ -275,6 +390,10 @@ impl core::fmt::Display for Unreachable {
             } => write!(
                 f,
                 "target Lc {target:.2} exceeds the most this background can supply ({max_achievable:.2})"
+            ),
+            Self::FloorUnreachable { floor, max_ratio } => write!(
+                f,
+                "WCAG floor {floor:.1}:1 is unreachable on this background (max {max_ratio:.2}:1)"
             ),
             Self::PolarityMismatch { target } => write!(
                 f,
@@ -343,29 +462,108 @@ pub fn solve(
     }
 
     let interval = bg.luma_interval(vc)?;
+    let y_gov = interval.governing(target);
 
-    // Solve against the governing endpoint, then confirm the contract holds at
-    // both ends of the interval. For Solid the ends coincide, so the check is
-    // trivially satisfied; the loop is the seam genuine intervals reuse.
-    let solved = solve_against(interval.governing(target), target, hue, chroma_policy, vc)?;
+    // Stage 1 — perceptual target. Invert the LPC core for the Oklab lightness
+    // that reproduces the contract's target against the governing endpoint.
+    let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy, vc)?;
+
+    // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
+    // perceptual solution falls short of it, push the colour until it clears the
+    // floor and flag the override. Decorative ([`Floor::None`]) contracts skip
+    // this entirely and keep their perceptual target.
+    let bg_disp = bg.governing_display(target);
+    let (rgb_final, floor_override) = match contract.conformance().min_ratio() {
+        Some(floor_ratio) => apply_floor(l_lpc, floor_ratio, target, hue, chroma_policy, bg_disp)?,
+        Option::None => (build_color(l_lpc, hue, chroma_policy), false),
+    };
+
+    // Quantise and measure both metrics on the emitted hex, then confirm the
+    // perceptual floor still holds at both ends of the interval. For Solid the
+    // ends coincide, so the check is trivial; the loop is the seam genuine
+    // intervals reuse.
+    let solved = finish(rgb_final, y_gov, bg_disp, floor_override, vc)?;
     for y_end in interval.endpoints() {
         verify_meets_floor(&solved, y_end, target, vc)?;
     }
     Ok(solved)
 }
 
-/// Solve for a foreground against a single background luminance.
-fn solve_against(
+/// Stage 1: invert the LPC core to the Oklab lightness reproducing `target`
+/// against a single background luminance.
+fn solve_lpc_lightness(
     y_bg: f64,
     target: f64,
     hue: Hue,
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
-) -> Result<Solved, Unreachable> {
+) -> Result<f64, Unreachable> {
     let y_fg = invert_contrast(y_bg, target)?;
     let target_j_hk = lpc::grey_j(y_fg, vc);
-    let rgb = match_lightness(target_j_hk, hue, chroma_policy, vc);
-    finish(rgb, y_bg, vc)
+    Ok(match_lightness(target_j_hk, hue, chroma_policy, vc))
+}
+
+/// Stage 2: enforce the WCAG legal floor on the quantised colour.
+///
+/// If the perceptual solution already clears `floor_ratio`, perception governs
+/// and the colour is returned unchanged (no override). Otherwise the lightness
+/// is pushed toward the achromatic extreme in the contract's polarity — darker
+/// for dark-on-light (`target ≥ 0`), lighter for light-on-dark — where WCAG
+/// contrast is greatest, by the smallest amount that still clears the floor on
+/// the quantised hex. If even the extreme cannot reach the floor, the contract
+/// is [`Unreachable::FloorUnreachable`].
+fn apply_floor(
+    l_lpc: f64,
+    floor_ratio: f64,
+    target: f64,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    bg_disp: [f64; 3],
+) -> Result<([f64; 3], bool), Unreachable> {
+    let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
+    if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
+        return Ok((rgb_lpc, false));
+    }
+
+    let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
+    let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
+    if max_ratio < floor_ratio {
+        return Err(Unreachable::FloorUnreachable {
+            floor: floor_ratio,
+            max_ratio,
+        });
+    }
+
+    // Bisect the lightness path from the perceptual solution (`t = 0`, below the
+    // floor) to the achromatic extreme (`t = 1`, clears it). Invariant: `hi`
+    // always names a colour that clears the floor, `lo` one that does not, so the
+    // returned colour is guaranteed to meet the floor even after quantisation.
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    for _ in 0..48 {
+        let mid = (lo + hi) * 0.5;
+        let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
+        if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let l_final = l_lpc + (l_extreme - l_lpc) * hi;
+    Ok((build_color(l_final, hue, chroma_policy), true))
+}
+
+/// WCAG 2.1 contrast ratio of a linear-sRGB foreground (quantised to the hex it
+/// will be emitted as) against the gamma-encoded background.
+fn floor_ratio_of(rgb_linear: [f64; 3], bg_disp: [f64; 3]) -> f64 {
+    wcag::contrast_ratio(quantised_display(rgb_linear), bg_disp)
+}
+
+/// Gamma-encoded sRGB of a linear stimulus, quantised to 8-bit — the display
+/// values WCAG 2.1 measures, matching the emitted `#RRGGBB` hex exactly.
+fn quantised_display(rgb_linear: [f64; 3]) -> [f64; 3] {
+    let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
+    [q(rgb_linear[0]), q(rgb_linear[1]), q(rgb_linear[2])]
 }
 
 /// The largest `Lc` magnitude this background can supply in the polarity of
@@ -446,43 +644,25 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
 /// equals `target_j_hk`, applying `chroma_policy` at `hue`.
 ///
 /// `J_HK` runs from ~0 at black to ~100 at white, so the target is bracketed by
-/// the lightness endpoints; bisection on the continuous curve converges to a
-/// colour that reproduces it. Chroma is capped at [`max_chroma`], so the result
-/// is always inside the sRGB gamut.
+/// the lightness endpoints; bisection on the continuous curve converges to the
+/// lightness that reproduces it. Returns the Oklab lightness; the colour itself
+/// is built from it via [`build_color`].
 fn match_lightness(
     target_j_hk: f64,
     hue: Hue,
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
-) -> [f64; 3] {
-    let h = hue.degrees();
-    let (cos_h, sin_h) = {
-        let hr = h.to_radians();
-        (hr.cos(), hr.sin())
-    };
-
-    let build = |l_ok: f64| -> [f64; 3] {
-        let chroma = match chroma_policy {
-            ChromaPolicy::Neutral => 0.0,
-            ChromaPolicy::Relative(ratio) => ratio.clamp(0.0, 1.0) * max_chroma(l_ok, h),
-        };
-        let lab = [l_ok, chroma * cos_h, chroma * sin_h];
-        let rgb = oklab_to_srgb_linear(lab);
-        [
-            rgb[0].clamp(0.0, 1.0),
-            rgb[1].clamp(0.0, 1.0),
-            rgb[2].clamp(0.0, 1.0),
-        ]
-    };
-    let j_hk_of = |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build(l_ok)), vc);
+) -> f64 {
+    let j_hk_of =
+        |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
 
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     if target_j_hk <= j_hk_of(lo) {
-        return build(lo);
+        return lo;
     }
     if target_j_hk >= j_hk_of(hi) {
-        return build(hi);
+        return hi;
     }
     for _ in 0..64 {
         let mid = (lo + hi) * 0.5;
@@ -492,18 +672,52 @@ fn match_lightness(
             hi = mid;
         }
     }
-    build((lo + hi) * 0.5)
+    (lo + hi) * 0.5
 }
 
-/// Quantise the ideal colour to hex and report the contrast it actually
-/// achieves — what the caller gets, not the pre-quantisation ideal.
-fn finish(rgb_ideal: [f64; 3], y_bg: f64, vc: &ViewingConditions) -> Result<Solved, Unreachable> {
+/// Build the in-gamut linear-sRGB colour at Oklab lightness `l_ok`, applying
+/// `chroma_policy` at `hue`. Chroma is capped at [`max_chroma`], so the result
+/// is always inside the sRGB gamut.
+fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
+    let h = hue.degrees();
+    let hr = h.to_radians();
+    let chroma = match chroma_policy {
+        ChromaPolicy::Neutral => 0.0,
+        ChromaPolicy::Relative(ratio) => ratio.clamp(0.0, 1.0) * max_chroma(l_ok, h),
+    };
+    let lab = [l_ok, chroma * hr.cos(), chroma * hr.sin()];
+    let rgb = oklab_to_srgb_linear(lab);
+    [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+    ]
+}
+
+/// Quantise the ideal colour to hex and report both contrasts it actually
+/// achieves — what the caller gets, not the pre-quantisation ideal. The
+/// perceptual `lc` is measured in `Y_hk` space against `y_bg`; the legal
+/// `wcag_ratio` on the quantised display colour against `bg_disp`.
+fn finish(
+    rgb_ideal: [f64; 3],
+    y_bg: f64,
+    bg_disp: [f64; 3],
+    floor_override: bool,
+    vc: &ViewingConditions,
+) -> Result<Solved, Unreachable> {
     let hex = hex_from_srgb(rgb_ideal);
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
     let color = LcsColor::from_hex_with_vc(&hex, vc).map_err(Unreachable::InvalidInput)?;
     let y_fg = bg_luma(rgb_quantised, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    Ok(Solved { color, hex, lc })
+    let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
+    Ok(Solved {
+        color,
+        hex,
+        lc,
+        wcag_ratio,
+        floor_override,
+    })
 }
 
 /// Confirm the solved colour still meets the (signed) floor at one interval
@@ -562,9 +776,11 @@ mod tests {
         vc: &ViewingConditions,
     ) -> Result<(Solved, f64), Unreachable> {
         let bg = BgInput::solid(bg_hex)?;
+        // Floor::None: these helpers exercise the pure perceptual inversion;
+        // the WCAG floor (on by default for text) is tested separately.
         let solved = solve(
             bg,
-            Contract::text(target),
+            Contract::text(target).with_conformance(Floor::None),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
             vc,
@@ -758,7 +974,7 @@ mod tests {
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let from_text = solve(
             bg.clone(),
-            Contract::text(60.0),
+            Contract::text(60.0).with_conformance(Floor::None),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
             &vc,
@@ -816,7 +1032,7 @@ mod tests {
         let target = 45.0;
         let solved = solve(
             bg,
-            Contract::text(target),
+            Contract::text(target).with_conformance(Floor::None),
             Hue::deg(264.0), // Oklab blue
             ChromaPolicy::Relative(0.8),
             &vc,
@@ -858,6 +1074,163 @@ mod tests {
     fn invalid_hex_background_is_rejected() {
         let err = BgInput::solid("#xyz").unwrap_err();
         assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+    }
+
+    #[test]
+    fn aa_text_floor_holds_across_grid() {
+        // Dual gate: every solvable text contract with the default AA floor
+        // emits a colour whose WCAG 2.1 ratio — recomputed from the hex via the
+        // spec formula — clears 4.5:1, and the reported ratio matches it.
+        for (vc, vc_name) in vcs() {
+            for bg_hex in ["#FFFFFF", "#E8E8E8", "#101012", "#0A3D62"] {
+                for target in [15.0, 30.0, 45.0, 60.0, 75.0, 90.0, -15.0, -45.0, -75.0] {
+                    let bg = BgInput::solid(bg_hex).unwrap();
+                    let res = solve(
+                        bg,
+                        Contract::text(target),
+                        Hue::deg(0.0),
+                        ChromaPolicy::Neutral,
+                        &vc,
+                        Gamut::Srgb,
+                    );
+                    if let Ok(solved) = res {
+                        let fg = srgb_from_hex(solved.hex()).unwrap();
+                        let bgc = srgb_from_hex(bg_hex).unwrap();
+                        let ratio = crate::wcag::contrast_ratio(
+                            quantised_display(fg),
+                            quantised_display(bgc),
+                        );
+                        assert!(
+                            ratio >= crate::wcag::AA_TEXT_RATIO - 1e-9,
+                            "{vc_name} {bg_hex} t={target}: ratio {ratio}, hex {}",
+                            solved.hex()
+                        );
+                        assert!(
+                            (solved.wcag_ratio() - ratio).abs() < 1e-9,
+                            "reported ratio {} vs recomputed {ratio}",
+                            solved.wcag_ratio()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn floor_overrides_a_weak_perceptual_target() {
+        // Conflict case: Lc 15 text on white is far below 4.5:1 — the law wins,
+        // the colour is pushed darker and the override is flagged.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let solved = solve(
+            bg,
+            Contract::text(15.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(solved.floor_override(), "floor must override Lc 15");
+        assert!(solved.wcag_ratio() >= 4.5 - 1e-9);
+        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        assert!(
+            measured > 15.0,
+            "pushed darker means more contrast, got {measured}"
+        );
+    }
+
+    #[test]
+    fn ui_floor_is_three_to_one() {
+        // The UI floor (3:1) is laxer than the text floor (4.5:1): both push a
+        // weak target, but the UI colour keeps a lower ratio.
+        let vc = ViewingConditions::srgb();
+        let ui = solve(
+            BgInput::solid("#FFFFFF").unwrap(),
+            Contract::ui(15.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(ui.floor_override());
+        assert!(ui.wcag_ratio() >= 3.0 - 1e-9);
+        let text = solve(
+            BgInput::solid("#FFFFFF").unwrap(),
+            Contract::text(15.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(ui.wcag_ratio() < text.wcag_ratio());
+    }
+
+    #[test]
+    fn decorative_contracts_skip_the_floor() {
+        // JND/decorative: range carries Floor::None — perception governs, no
+        // flag, and the (sub-AA) ratio is still reported for transparency.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let solved = solve(
+            bg,
+            Contract::range(15.0, 15.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(!solved.floor_override());
+        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        assert!((measured - 15.0).abs() <= TOL);
+        assert!(solved.wcag_ratio() < 4.5);
+    }
+
+    #[test]
+    fn satisfied_floor_leaves_perception_in_charge() {
+        // Lc 90 on white clears 4.5:1 on its own — no override flag, target met.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let solved = solve(
+            bg,
+            Contract::text(90.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(!solved.floor_override());
+        assert!(solved.wcag_ratio() >= 4.5);
+        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        assert!((measured - 90.0).abs() <= TOL);
+    }
+
+    #[test]
+    fn unreachable_floor_is_a_principled_error() {
+        // On a mid-dark background even pure black cannot reach 4.5:1, so a
+        // dark-on-light text contract fails loudly rather than under-delivering.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#6E6E6E").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(30.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        match err {
+            Unreachable::FloorUnreachable { floor, max_ratio } => {
+                assert!((floor - 4.5).abs() < 1e-9, "floor {floor}");
+                assert!(max_ratio < 4.5, "max_ratio {max_ratio}");
+            }
+            other => panic!("expected FloorUnreachable, got {other:?}"),
+        }
     }
 
     #[test]
