@@ -75,20 +75,45 @@ fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
 
 /// Perceptual-contrast core curve (asymmetric power contrast on luminance).
 ///
-/// Constants are from the published generic perceptual-contrast formula;
-/// naming policy and attribution: docs/decisions/apca-license.md.
-fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
+/// Faithful port of the published generic perceptual-contrast math — soft
+/// black clamp, polarity-dependent power exponents, the minimum-luminance
+/// gate, the low-contrast clip, and the polarity offsets — so that
+/// achromatic inputs reproduce the canonical reference numbers (e.g. black
+/// on white ≈ `106.04`). The luminance fed here is the H-K-corrected
+/// `Y_hk`, which is what makes LPC diverge from the reference metric on
+/// chromatic colours.
+///
+/// Constant values, source version, naming policy and attribution:
+/// docs/decisions/apca-license.md. The achromatic alignment is locked by
+/// `golden_tests::contrast_core_matches_reference_on_grey_axis`.
+pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
+    // Constants from the published formula, version 0.0.98G-4g (SAPC-8 "4g"
+    // constant set). Names in comments mirror the source identifiers so the
+    // mapping is auditable; see docs/decisions/apca-license.md.
+
     // Soft black clamp: luminance below the threshold is lifted so the
-    // curve stays monotonic near black.
+    // curve stays monotonic near black (`blkThrs`, `blkClmp`).
     const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
     const SOFT_CLAMP_EXP: f64 = 1.414;
-    // Polarity-dependent power-curve exponents (bg >= fg is dark-on-light).
-    const EXP_BG_LIGHT: f64 = 0.56;
-    const EXP_FG_LIGHT: f64 = 0.57;
-    const EXP_BG_DARK: f64 = 0.65;
-    const EXP_FG_DARK: f64 = 0.62;
-    // Maps the raw power-curve delta to the ~[-110, 110] output range.
-    const CONTRAST_SCALE: f64 = 1.14 * 100.0;
+    // Polarity-dependent power-curve exponents (bg > fg is dark-on-light).
+    const EXP_BG_LIGHT: f64 = 0.56; // normBG
+    const EXP_FG_LIGHT: f64 = 0.57; // normTXT
+    const EXP_BG_DARK: f64 = 0.65; // revBG
+    const EXP_FG_DARK: f64 = 0.62; // revTXT
+    // Raw power-curve delta scale, shared by both polarities
+    // (`scaleBoW` == `scaleWoB`).
+    const CONTRAST_SCALE: f64 = 1.14;
+    // Minimum luminance delta: below this the pair reports no contrast
+    // (`deltaYmin`), evaluated on the clamped luminances.
+    const DELTA_Y_MIN: f64 = 0.0005;
+    // Low-contrast clip: scaled deltas inside ±`loClip` collapse to zero.
+    const LO_CLIP: f64 = 0.1;
+    // Polarity offsets subtracted toward zero once past the clip
+    // (`loBoWoffset`, `loWoBoffset` — equal in this constant set).
+    const LO_BOW_OFFSET: f64 = 0.027;
+    const LO_WOB_OFFSET: f64 = 0.027;
+    // Maps the offset contrast to the ~[-108, 108] Lc output range.
+    const LC_SCALE: f64 = 100.0;
 
     let clamp = |y: f64| -> f64 {
         if y < SOFT_CLAMP_THRESHOLD {
@@ -100,10 +125,26 @@ fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
     let fg = clamp(y_fg);
     let bg = clamp(y_bg);
 
-    if bg >= fg {
-        (bg.powf(EXP_BG_LIGHT) - fg.powf(EXP_FG_LIGHT)) * CONTRAST_SCALE
+    if (bg - fg).abs() < DELTA_Y_MIN {
+        return 0.0;
+    }
+
+    if bg > fg {
+        // Dark-on-light (normal polarity).
+        let sapc = (bg.powf(EXP_BG_LIGHT) - fg.powf(EXP_FG_LIGHT)) * CONTRAST_SCALE;
+        if sapc < LO_CLIP {
+            0.0
+        } else {
+            (sapc - LO_BOW_OFFSET) * LC_SCALE
+        }
     } else {
-        (bg.powf(EXP_BG_DARK) - fg.powf(EXP_FG_DARK)) * CONTRAST_SCALE
+        // Light-on-dark (reverse polarity).
+        let sapc = (bg.powf(EXP_BG_DARK) - fg.powf(EXP_FG_DARK)) * CONTRAST_SCALE;
+        if sapc > -LO_CLIP {
+            0.0
+        } else {
+            (sapc + LO_WOB_OFFSET) * LC_SCALE
+        }
     }
 }
 
@@ -172,26 +213,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn black_on_white_near_apca() {
+    fn black_on_white_matches_reference() {
+        // Black and white are the exact luminance endpoints (Y_hk = 0 and 1),
+        // so the H-K layer cannot shift them: LPC reproduces the canonical
+        // achromatic reference (106.0407) bit-for-bit after the offset
+        // alignment. Source/attribution: docs/decisions/apca-license.md.
         let lc = lpc("#000000", "#ffffff");
-        assert!((lc - 108.7).abs() < 1.0, "LPC for black on white: {}", lc);
+        assert!((lc - 106.04).abs() < 0.5, "LPC for black on white: {}", lc);
     }
 
     #[test]
-    fn gray_on_white_near_60() {
+    fn gray_on_white_mid_range() {
         let lc = lpc("#888888", "#ffffff");
-        assert!((lc - 60.0).abs() < 5.0, "LPC for gray on white: {}", lc);
+        assert!((lc - 58.4).abs() < 1.0, "LPC for gray on white: {}", lc);
     }
 
     #[test]
-    fn blue_on_white_less_than_apca() {
+    fn blue_on_white_below_achromatic() {
+        // The H-K term lifts a saturated blue's perceived lightness, so its
+        // contrast on white lands below a same-luminance grey would (≈ 68.7).
         let lc = lpc("#0000ff", "#ffffff");
-        assert!(lc < 80.0, "LPC for blue on white should be < 80: {}", lc);
-        assert!(lc > 50.0, "LPC for blue on white should be > 50: {}", lc);
+        assert!(lc < 75.0, "LPC for blue on white should be < 75: {}", lc);
+        assert!(lc > 60.0, "LPC for blue on white should be > 60: {}", lc);
     }
 
     #[test]
     fn polarity_swap_negates() {
+        // The polarity offsets are symmetric (both pull toward zero), so the
+        // residual asymmetry comes only from the exponent split.
         let lc1 = lpc("#000000", "#ffffff");
         let lc2 = lpc("#ffffff", "#000000");
         assert!((lc1 + lc2).abs() < 3.0, "polarity swap: {} vs {}", lc1, lc2);
@@ -204,9 +253,13 @@ mod tests {
     }
 
     #[test]
-    fn neutral_hk_boost_is_zero() {
+    fn neutral_hk_boost_is_small() {
+        // A near-neutral grey carries a tiny residual CAM16 colourfulness
+        // (incomplete chromatic adaptation), so the H-K term shifts Y_hk
+        // only slightly: LPC ≈ 87.6, within ~1.5 Lc of the canonical
+        // achromatic number for this luminance.
         let lc = lpc("#444444", "#ffffff");
-        assert!((lc - 89.0).abs() < 5.0, "achromatic LPC: {}", lc);
+        assert!((lc - 87.6).abs() < 1.0, "achromatic LPC: {}", lc);
     }
 
     #[test]

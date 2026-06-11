@@ -1,5 +1,9 @@
-//! Golden cross-validation of the CIECAM16 forward path against an
-//! external reference implementation.
+//! Golden cross-validation of the colour pipeline against external
+//! reference implementations:
+//!
+//! * the CIECAM16 forward path against colour-science (Python), and
+//! * the perceptual-contrast curve against the published reference math
+//!   on the achromatic axis (see [`contrast_core_matches_reference_on_grey_axis`]).
 //!
 //! Reference values generated 2026-06-10 with colour-science (Python):
 //! `colour.appearance.XYZ_to_CIECAM16` at D65, `L_A = 64`, `Y_b = 20`,
@@ -14,7 +18,7 @@
 //! surround, units mix-up, matrix typo) blows these bounds by orders of
 //! magnitude.
 
-use crate::lpc::cam16_jch_from_xyz;
+use crate::lpc::{cam16_jch_from_xyz, contrast_core};
 use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 
@@ -200,4 +204,58 @@ fn cam16_matches_colour_science_average_surround() {
 #[test]
 fn cam16_matches_colour_science_dim_surround() {
     check_table(&ViewingConditions::dim_surround(), &DIM);
+}
+
+/// (Y_fg, Y_bg, Lc) reference for the perceptual-contrast curve on the
+/// achromatic axis.
+///
+/// `Y` is the relative luminance of an 8-bit grey swatch under the IEC
+/// 61966-2-1 sRGB EOTF (CSS Color 4 luminance row); each value is shared
+/// verbatim with the reference call. Reference `Lc` generated 2026-06-11
+/// with the official `apca-w3` npm package v0.1.9 (`APCAcontrast(txtY, bgY)`,
+/// SAPC-8 constants 0.0.98G-4g):
+///
+/// ```text
+/// node -e "const {APCAcontrast}=require('apca-w3');
+///   const e=v=>v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);
+///   const y=b=>{const l=e(b/255);return 0.21263900587151027*l+0.715168678767756*l+0.07219231536073371*l;};
+///   console.log(APCAcontrast(y(0),y(255)));"   // 106.04066682868873
+/// ```
+///
+/// Grey-on-grey isolates the Helmholtz-Kohlrausch term out of the metric
+/// (luminance is fed directly), so this validates the curve alone. Naming
+/// and attribution policy: docs/decisions/apca-license.md.
+type ContrastGolden = (f64, f64, f64);
+const ACHROMATIC_CONTRAST: [ContrastGolden; 13] = [
+    (0.0, 1.0, 106.04066682868873), // #000000 on #ffffff (BoW max)
+    (1.0, 0.0, -107.8847261150986), // #ffffff on #000000 (WoB max)
+    (0.05126945837404324, 1.0, 90.33357779023173), // #404040 on #ffffff
+    (0.21586050011389923, 1.0, 63.72447786396962), // #808080 on #ffffff
+    (1.0, 0.21586050011389923, -69.21596068658343), // #ffffff on #808080
+    (0.014443843596092546, 0.5271151257058131, 66.36729437039027), // #202020 on #c0c0c0
+    (0.35153259950043936, 0.029556834437808797, -45.3649219981398), // #a0a0a0 on #303030
+    (0.11697066775851085, 0.7454042095403874, 60.45271381565166), // #606060 on #e0e0e0
+    (
+        0.21586050011389923,
+        0.05126945837404324,
+        -24.833313426389232,
+    ), // #808080 on #404040
+    (0.5775804404296506, 0.11697066775851085, -50.15676197758523), // #c8c8c8 on #606060
+    (0.2788942634768104, 0.4341536361747489, 13.691098332113055), // #909090 on #b0b0b0 (just above clip)
+    (0.21586050011389923, 0.23074004852434915, 0.0),              // #808080 on #848484 (loClip → 0)
+    (0.21586050011389923, 0.21586050011389923, 0.0), // #808080 on #808080 (deltaYmin → 0)
+];
+
+#[test]
+fn contrast_core_matches_reference_on_grey_axis() {
+    // Tolerance 0.1 Lc: `contrast_core` is an independent Rust port of the
+    // same published math, so agreement is to floating-point noise.
+    const TOL_LC: f64 = 0.1;
+    for &(y_fg, y_bg, lc_ref) in &ACHROMATIC_CONTRAST {
+        let got = contrast_core(y_fg, y_bg);
+        assert!(
+            (got - lc_ref).abs() <= TOL_LC,
+            "contrast_core({y_fg}, {y_bg}) = {got}, reference {lc_ref}"
+        );
+    }
 }
