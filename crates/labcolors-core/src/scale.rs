@@ -69,6 +69,7 @@ impl AccentCurve {
 
         let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(xyz, &self.vc);
 
+        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131); see lcs.rs.
         let jp_actual = 1.7 * j / (1.0 + 0.007 * j);
         let mp = (1.0 + 0.0228 * m).ln() / 0.0228;
         let s = if jp_actual + 1.0 > 1e-9 {

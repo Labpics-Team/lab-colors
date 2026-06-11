@@ -259,12 +259,17 @@ fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
     a + shortest * t
 }
 
-/// Abney-effect hue-purity weight.
+/// Hue-purity weight: suppresses the noisy hue of near-achromatic anchors.
 ///
-/// Returns a value in `[0, 1]` indicating how much of the anchor's own hue
-/// to retain. Low `mp` (near-achromatic) → low purity → strong correction
-/// toward the base hue. The power exponent 0.6 gives aggressive correction
-/// for very desaturated colours while releasing smoothly as chroma increases.
+/// `atan2(b, a)` returns a meaningless angle for a near-grey colour (its hue
+/// is built from noise). Returns a value in `[0, 1]` indicating how much of
+/// the anchor's own hue to retain. Low `mp` (near-achromatic) → low purity →
+/// strong correction toward the base hue. The power exponent 0.6 gives
+/// aggressive correction for very desaturated colours while releasing smoothly
+/// as chroma increases.
+///
+/// This is not the Abney effect (curvature of constant-hue lines as purity
+/// changes); Abney correction is tracked separately (issue #27, `abney_correct`).
 ///
 /// ```text
 /// mp/mp_ref = 0.1 → purity ≈ 0.25  (75 % corrected)
