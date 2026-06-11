@@ -158,7 +158,9 @@ impl Contract {
 /// backgrounds (a later chapter) add variants that widen the interval;
 /// `#[non_exhaustive]` keeps that purely additive, so `solve`'s signature never
 /// changes. Their interval derivation is intentionally not invented here.
-#[derive(Debug, Clone, Copy, PartialEq)]
+// No `Copy`: future variants (translucent composites, area distributions)
+// carry heap data, and removing `Copy` later would be a breaking change.
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BgInput {
     /// A single opaque background colour, stored as a linear-sRGB stimulus so
@@ -176,10 +178,10 @@ impl BgInput {
     /// Reduce the descriptor to its `Y_hk` luminance interval under `vc`.
     ///
     /// New variants plug in here without touching `solve`'s signature (SEAM a).
-    fn luma_interval(self, vc: &ViewingConditions) -> Result<LumaInterval, Unreachable> {
+    fn luma_interval(&self, vc: &ViewingConditions) -> Result<LumaInterval, Unreachable> {
         match self {
             BgInput::Solid(rgb) => {
-                let y = bg_luma(rgb, vc);
+                let y = bg_luma(*rgb, vc);
                 Ok(LumaInterval { lo: y, hi: y })
             }
         }
@@ -247,6 +249,10 @@ pub enum Unreachable {
     ExceedsRange { target: f64, max_achievable: f64 },
     /// The target's polarity disagrees with the background's luminance, e.g. a
     /// dark-on-light target against a background that is already dark.
+    ///
+    /// Defensive guard: with the canonical constant set the low-contrast floor
+    /// rejects such targets first (they surface as [`Self::BelowContrastFloor`]
+    /// or [`Self::ExceedsRange`]), so this variant is not produced in practice.
     PolarityMismatch { target: f64 },
     /// The requested gamut is not supported yet (Display P3 arrives later).
     GamutUnsupported,
@@ -322,6 +328,20 @@ pub fn solve(
         )));
     }
 
+    let hue_deg = hue.degrees();
+    if !hue_deg.is_finite() {
+        return Err(Unreachable::InvalidInput(format!(
+            "hue is not finite: {hue_deg}"
+        )));
+    }
+    if let ChromaPolicy::Relative(ratio) = chroma_policy
+        && !ratio.is_finite()
+    {
+        return Err(Unreachable::InvalidInput(format!(
+            "chroma ratio is not finite: {ratio}"
+        )));
+    }
+
     let interval = bg.luma_interval(vc)?;
 
     // Solve against the governing endpoint, then confirm the contract holds at
@@ -348,12 +368,26 @@ fn solve_against(
     finish(rgb, y_bg, vc)
 }
 
+/// The largest `Lc` magnitude this background can supply in the polarity of
+/// `target`, measured through the forward curve with the extreme foreground
+/// (pure black for dark-on-light, pure white for light-on-dark) — the same
+/// single source of truth the inversion is derived from.
+fn max_lc(y_bg: f64, target: f64) -> f64 {
+    let extreme_fg = if target > 0.0 { 0.0 } else { 1.0 };
+    lpc::contrast_core(extreme_fg, y_bg)
+}
+
 /// Analytic inverse of [`contrast_core`](crate::lpc): the clamp-inverted
 /// foreground luminance `Y_hk` that yields `target` against `y_bg`.
 fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
     // Past the offset and clip, the smallest representable |Lc| is this floor;
     // targets inside the dead zone collapse to zero in the forward curve.
-    let lc_floor = (LO_CLIP - LO_BOW_OFFSET) * LC_SCALE;
+    let offset = if target > 0.0 {
+        LO_BOW_OFFSET
+    } else {
+        LO_WOB_OFFSET
+    };
+    let lc_floor = (LO_CLIP - offset) * LC_SCALE;
     if target.abs() < lc_floor {
         return Err(Unreachable::BelowContrastFloor { target });
     }
@@ -365,7 +399,7 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
         // Lc = (sapc − offset)·100. Solve for the clamped foreground fg_c.
         let sapc = target / LC_SCALE + LO_BOW_OFFSET;
         let base = bg_c.powf(EXP_BG_LIGHT);
-        let max_achievable = (base * CONTRAST_SCALE - LO_BOW_OFFSET) * LC_SCALE;
+        let max_achievable = max_lc(y_bg, target);
         let fg_pow = base - sapc / CONTRAST_SCALE; // = fg_c^EXP_FG_LIGHT
         if fg_pow < 0.0 {
             // Even a pure-black foreground cannot reach the target.
@@ -387,7 +421,7 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
         // Reverse polarity (light-on-dark): Lc = (sapc + offset)·100, sapc < 0.
         let sapc = target / LC_SCALE - LO_WOB_OFFSET;
         let base = bg_c.powf(EXP_BG_DARK);
-        let max_achievable = ((base - 1.0) * CONTRAST_SCALE + LO_WOB_OFFSET) * LC_SCALE;
+        let max_achievable = max_lc(y_bg, target);
         let fg_pow = base - sapc / CONTRAST_SCALE; // = fg_c^EXP_FG_DARK, > base
         let fg_c = fg_pow.powf(1.0 / EXP_FG_DARK);
         if fg_c > 1.0 {
@@ -494,7 +528,7 @@ fn verify_meets_floor(
     } else {
         Err(Unreachable::ExceedsRange {
             target,
-            max_achievable: lc,
+            max_achievable: max_lc(y_bg, target),
         })
     }
 }
@@ -723,7 +757,7 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let from_text = solve(
-            bg,
+            bg.clone(),
             Contract::text(60.0),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
@@ -750,7 +784,7 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let plain = solve(
-            bg,
+            bg.clone(),
             Contract::text(60.0),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
@@ -824,5 +858,92 @@ mod tests {
     fn invalid_hex_background_is_rejected() {
         let err = BgInput::solid("#xyz").unwrap_err();
         assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+    }
+
+    #[test]
+    fn non_finite_hue_is_rejected() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = solve(
+                bg.clone(),
+                Contract::text(60.0),
+                Hue::deg(bad),
+                ChromaPolicy::Relative(1.0),
+                &vc,
+                Gamut::Srgb,
+            )
+            .unwrap_err();
+            assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn non_finite_chroma_ratio_is_rejected() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = solve(
+                bg.clone(),
+                Contract::text(60.0),
+                Hue::deg(250.0),
+                ChromaPolicy::Relative(bad),
+                &vc,
+                Gamut::Srgb,
+            )
+            .unwrap_err();
+            assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn exceeds_range_reports_the_true_forward_curve_maximum() {
+        // Normal polarity on white: the most the background can supply is the
+        // canonical black-on-white value, not the un-clamped analytic bound.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(120.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        match err {
+            Unreachable::ExceedsRange { max_achievable, .. } => {
+                let black_on_white = crate::lpc::lpc_with_vc("#000000", "#FFFFFF", &vc);
+                assert!(
+                    (max_achievable - black_on_white).abs() < 0.5,
+                    "max_achievable {max_achievable} should match the forward                      curve extreme {black_on_white}"
+                );
+            }
+            other => panic!("expected ExceedsRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_polarity_max_on_a_light_background_is_not_positive() {
+        // Light-on-light has no reverse headroom: the diagnostic must not
+        // advertise a positive "maximum" for a negative-polarity target.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(-50.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        match err {
+            Unreachable::ExceedsRange { max_achievable, .. } => assert!(
+                max_achievable <= 0.0,
+                "reverse-polarity max on white must be <= 0, got {max_achievable}"
+            ),
+            other => panic!("expected ExceedsRange, got {other:?}"),
+        }
     }
 }
