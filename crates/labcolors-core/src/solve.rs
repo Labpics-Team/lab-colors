@@ -510,8 +510,11 @@ fn solve_lpc_lightness(
 /// and the colour is returned unchanged (no override). Otherwise the lightness
 /// is pushed toward the achromatic extreme in the contract's polarity — darker
 /// for dark-on-light (`target ≥ 0`), lighter for light-on-dark — where WCAG
-/// contrast is greatest, by the smallest amount that still clears the floor on
-/// the quantised hex. If even the extreme cannot reach the floor, the contract
+/// contrast is greatest, by the smallest amount the lightness bisection finds
+/// that still clears the floor on the quantised hex. (For chromatic policies
+/// the ratio along the path is not formally proven monotonic, so "smallest" is
+/// up to the bisection's resolution; the floor guarantee itself never depends
+/// on monotonicity — the returned colour is always a verified passing point.) If even the extreme cannot reach the floor, the contract
 /// is [`Unreachable::FloorUnreachable`].
 fn apply_floor(
     l_lpc: f64,
@@ -1085,32 +1088,37 @@ mod tests {
         for (vc, vc_name) in vcs() {
             for bg_hex in ["#FFFFFF", "#E8E8E8", "#101012", "#0A3D62"] {
                 for target in [15.0, 30.0, 45.0, 60.0, 75.0, 90.0, -15.0, -45.0, -75.0] {
-                    let bg = BgInput::solid(bg_hex).unwrap();
-                    let res = solve(
-                        bg,
-                        Contract::text(target),
-                        Hue::deg(0.0),
-                        ChromaPolicy::Neutral,
-                        &vc,
-                        Gamut::Srgb,
-                    );
-                    if let Ok(solved) = res {
-                        let fg = srgb_from_hex(solved.hex()).unwrap();
-                        let bgc = srgb_from_hex(bg_hex).unwrap();
-                        let ratio = crate::wcag::contrast_ratio(
-                            quantised_display(fg),
-                            quantised_display(bgc),
+                    for (contract, min_ratio) in [
+                        (Contract::text(target), crate::wcag::AA_TEXT_RATIO),
+                        (Contract::ui(target), crate::wcag::AA_UI_RATIO),
+                    ] {
+                        let bg = BgInput::solid(bg_hex).unwrap();
+                        let res = solve(
+                            bg,
+                            contract,
+                            Hue::deg(0.0),
+                            ChromaPolicy::Neutral,
+                            &vc,
+                            Gamut::Srgb,
                         );
-                        assert!(
-                            ratio >= crate::wcag::AA_TEXT_RATIO - 1e-9,
-                            "{vc_name} {bg_hex} t={target}: ratio {ratio}, hex {}",
-                            solved.hex()
-                        );
-                        assert!(
-                            (solved.wcag_ratio() - ratio).abs() < 1e-9,
-                            "reported ratio {} vs recomputed {ratio}",
-                            solved.wcag_ratio()
-                        );
+                        if let Ok(solved) = res {
+                            let fg = srgb_from_hex(solved.hex()).unwrap();
+                            let bgc = srgb_from_hex(bg_hex).unwrap();
+                            let ratio = crate::wcag::contrast_ratio(
+                                quantised_display(fg),
+                                quantised_display(bgc),
+                            );
+                            assert!(
+                                ratio >= min_ratio - 1e-9,
+                                "{vc_name} {bg_hex} t={target} floor {min_ratio}: ratio {ratio}, hex {}",
+                                solved.hex()
+                            );
+                            assert!(
+                                (solved.wcag_ratio() - ratio).abs() < 1e-9,
+                                "reported ratio {} vs recomputed {ratio}",
+                                solved.wcag_ratio()
+                            );
+                        }
                     }
                 }
             }

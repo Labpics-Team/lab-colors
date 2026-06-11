@@ -92,4 +92,20 @@ mod tests {
             "#767676 on white should be ~4.54:1, got {r}"
         );
     }
+
+    /// One quantisation step lighter — `#777777` on white — falls below 4.5:1
+    /// (~4.48): pins the AA boundary from below.
+    #[test]
+    fn next_grey_step_falls_below_aa() {
+        let g = 0x77 as f64 / 255.0;
+        let r = contrast_ratio([1.0, 1.0, 1.0], [g, g, g]);
+        assert!(
+            r < AA_TEXT_RATIO,
+            "#777777 on white must be < 4.5:1, got {r}"
+        );
+        assert!(
+            (r - 4.48).abs() < 0.05,
+            "#777777 on white should be ~4.48:1, got {r}"
+        );
+    }
 }
