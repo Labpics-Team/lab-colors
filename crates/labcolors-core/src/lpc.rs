@@ -162,16 +162,54 @@ fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
     y_hk(j_hk_from_xyz(xyz, vc).max(0.0), vc)
 }
 
+/// Perceptual-contrast (LPC) between a foreground and background hex colour
+/// under standard sRGB viewing conditions (light-theme average surround).
+///
+/// Shortcut for [`lpc_with_vc`] with [`ViewingConditions::srgb`]. Use this for
+/// light themes; for dark themes call [`lpc_with_vc`] with
+/// [`ViewingConditions::dim_surround`]. See `docs/decisions/theme-invariant.md`.
 pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
-    let vc = ViewingConditions::srgb();
-    let y_fg = hex_to_y_hk(fg_hex, &vc);
-    let y_bg = hex_to_y_hk(bg_hex, &vc);
+    lpc_with_vc(fg_hex, bg_hex, &ViewingConditions::srgb())
+}
+
+/// Perceptual-contrast (LPC) between a foreground and background hex colour
+/// under the given viewing conditions.
+///
+/// Contrast is resolved in the perceptual space of `vc`, so the same hex pair
+/// yields different `Lc` under light and dark themes — that divergence is the
+/// point: a dark theme must reach the same contrast *contract* in a
+/// dim-surround space (Bartleson–Breneman compensation), not reuse the light
+/// numbers. Pick the VC for the theme: [`ViewingConditions::srgb`] for light
+/// themes (average surround), [`ViewingConditions::dim_surround`] for dark
+/// themes (dim surround). See `docs/decisions/theme-invariant.md`.
+pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
+    let y_fg = hex_to_y_hk(fg_hex, vc);
+    let y_bg = hex_to_y_hk(bg_hex, vc);
     contrast_core(y_fg, y_bg)
 }
 
+/// LPC surface distance between two hex colours under standard sRGB viewing
+/// conditions (light-theme average surround).
+///
+/// Shortcut for [`lpc_surface_with_vc`] with [`ViewingConditions::srgb`]; use
+/// [`ViewingConditions::dim_surround`] for dark themes. See
+/// `docs/decisions/theme-invariant.md`.
 pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
-    let c1 = crate::lcs::LcsColor::from_hex(c1_hex).expect("invalid hex");
-    let c2 = crate::lcs::LcsColor::from_hex(c2_hex).expect("invalid hex");
+    lpc_surface_with_vc(c1_hex, c2_hex, &ViewingConditions::srgb())
+}
+
+/// LPC surface distance between two hex colours under the given viewing
+/// conditions.
+///
+/// Both colours are decoded under `vc`, so dark-theme surfaces are compared in
+/// the dim-surround space. Use [`ViewingConditions::srgb`] for light themes and
+/// [`ViewingConditions::dim_surround`] for dark themes; see
+/// `docs/decisions/theme-invariant.md`.
+pub fn lpc_surface_with_vc(c1_hex: &str, c2_hex: &str, vc: &ViewingConditions) -> f64 {
+    // `.expect()` on the parse is intentionally left in place here: the
+    // fallible-public-API redesign is tracked separately (issue #41).
+    let c1 = crate::lcs::LcsColor::from_hex_with_vc(c1_hex, vc).expect("invalid hex");
+    let c2 = crate::lcs::LcsColor::from_hex_with_vc(c2_hex, vc).expect("invalid hex");
     let dj = c1.jp - c2.jp;
     let m1 = c1.s * (c1.jp + 1.0);
     let m2 = c2.s * (c2.jp + 1.0);
@@ -182,15 +220,32 @@ pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
     (dj * dj + da * da + db * db).sqrt()
 }
 
-/// LPC contrast between two [`LcsColor`] values.
+/// LPC contrast between two [`crate::lcs::LcsColor`] values under standard sRGB
+/// viewing conditions (light-theme average surround).
 ///
-/// Uses the pre-computed CAM16 J' and Oklab hue stored in each colour,
-/// avoiding re-parsing hex strings. Delegates to the same
-/// perceptual-contrast core curve as [`lpc`].
+/// Shortcut for [`lpc_lcs_with_vc`] with [`ViewingConditions::srgb`]. Uses the
+/// pre-computed CAM16 J' and Oklab hue stored in each colour, avoiding
+/// re-parsing hex strings. Delegates to the same perceptual-contrast core
+/// curve as [`lpc`].
 pub fn lpc_lcs(fg: &crate::lcs::LcsColor, bg: &crate::lcs::LcsColor) -> f64 {
-    let vc = ViewingConditions::srgb();
-    let y_fg = y_hk_from_lcs(fg, &vc);
-    let y_bg = y_hk_from_lcs(bg, &vc);
+    lpc_lcs_with_vc(fg, bg, &ViewingConditions::srgb())
+}
+
+/// LPC contrast between two [`crate::lcs::LcsColor`] values under the given
+/// viewing conditions.
+///
+/// `vc` must be the same viewing conditions the colours were constructed under
+/// (e.g. via [`crate::lcs::LcsColor::from_hex_with_vc`]): the H-K chroma term
+/// and the luminance resolution both read it. Use [`ViewingConditions::srgb`]
+/// for light themes and [`ViewingConditions::dim_surround`] for dark themes;
+/// see `docs/decisions/theme-invariant.md`.
+pub fn lpc_lcs_with_vc(
+    fg: &crate::lcs::LcsColor,
+    bg: &crate::lcs::LcsColor,
+    vc: &ViewingConditions,
+) -> f64 {
+    let y_fg = y_hk_from_lcs(fg, vc);
+    let y_bg = y_hk_from_lcs(bg, vc);
     contrast_core(y_fg, y_bg)
 }
 
@@ -321,5 +376,93 @@ mod tests {
             far,
             near
         );
+    }
+
+    #[test]
+    fn shortcuts_match_srgb_with_vc() {
+        // The srgb shortcuts must be bit-identical to the explicit srgb VC
+        // path — this is what keeps every legacy value (e.g. black-on-white
+        // 106.0407) unchanged after the refactor.
+        let srgb = ViewingConditions::srgb();
+        assert_eq!(
+            lpc("#0000FF", "#FFFFFF"),
+            lpc_with_vc("#0000FF", "#FFFFFF", &srgb)
+        );
+        assert_eq!(
+            lpc_surface("#FFFFFF", "#f6f7fa"),
+            lpc_surface_with_vc("#FFFFFF", "#f6f7fa", &srgb)
+        );
+        let f = crate::lcs::LcsColor::from_hex("#0000FF").expect("valid fg hex");
+        let b = crate::lcs::LcsColor::from_hex("#FFFFFF").expect("valid bg hex");
+        assert_eq!(lpc_lcs(&f, &b), lpc_lcs_with_vc(&f, &b, &srgb));
+    }
+
+    #[test]
+    fn dim_diverges_from_srgb() {
+        // (a) The same chromatic pair resolved under dim surround must land on
+        // a different Lc than under average surround: dark themes compute in
+        // their own perceptual space (Bartleson–Breneman). A saturated green
+        // carries the largest H-K term — the only VC-sensitive part when the
+        // background is a luminance endpoint — so the gap clears the 1-Lc
+        // contract tolerance, which is precisely why light colours cannot be
+        // reused verbatim in a dark theme (issue #15).
+        let srgb = ViewingConditions::srgb();
+        let dim = ViewingConditions::dim_surround();
+        let lc_srgb = lpc_with_vc("#00FF00", "#FFFFFF", &srgb);
+        let lc_dim = lpc_with_vc("#00FF00", "#FFFFFF", &dim);
+        assert!(
+            (lc_srgb - lc_dim).abs() > 1.0,
+            "dim VC should shift Lc meaningfully: srgb={lc_srgb} dim={lc_dim}"
+        );
+    }
+
+    #[test]
+    fn monotonic_in_fg_luminance_under_both_vcs() {
+        // (b) On a fixed light background, darker foreground text yields higher
+        // (more positive) contrast; this ordering must hold in every
+        // perceptual space. Greys keep the H-K hue term out of the comparison.
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let bg = "#FFFFFF";
+            let dark = lpc_with_vc("#000000", bg, &vc);
+            let mid = lpc_with_vc("#888888", bg, &vc);
+            let light = lpc_with_vc("#CCCCCC", bg, &vc);
+            assert!(
+                dark > mid && mid > light,
+                "monotonicity broken: dark={dark} mid={mid} light={light}"
+            );
+        }
+    }
+
+    #[test]
+    fn polarity_swap_negates_under_both_vcs() {
+        // (c) Swapping foreground and background flips the sign of the contrast
+        // (near-symmetric magnitude) under both viewing conditions.
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let lc1 = lpc_with_vc("#000000", "#FFFFFF", &vc);
+            let lc2 = lpc_with_vc("#FFFFFF", "#000000", &vc);
+            assert!(lc1 > 0.0 && lc2 < 0.0, "polarity signs: {lc1} vs {lc2}");
+            assert!(
+                (lc1 + lc2).abs() < 3.0,
+                "polarity swap should near-negate: {lc1} vs {lc2}"
+            );
+        }
+    }
+
+    #[test]
+    fn lpc_and_lpc_lcs_agree_under_dim() {
+        // The hex and LcsColor entry points must compute the identical metric
+        // under dim surround too — provided the colour is constructed under the
+        // same VC that is passed to lpc_lcs_with_vc.
+        let dim = ViewingConditions::dim_surround();
+        for (fg, bg) in [("#0000FF", "#FFFFFF"), ("#34C759", "#101012")] {
+            let via_hex = lpc_with_vc(fg, bg, &dim);
+            let f = crate::lcs::LcsColor::from_hex_with_vc(fg, &dim).expect("valid fg hex");
+            let b = crate::lcs::LcsColor::from_hex_with_vc(bg, &dim).expect("valid bg hex");
+            let via_lcs = lpc_lcs_with_vc(&f, &b, &dim);
+            assert!(
+                (via_hex - via_lcs).abs() < 1e-6,
+                "{fg}/{bg} under dim: lpc={via_hex} lpc_lcs={via_lcs}"
+            );
+        }
     }
 }
