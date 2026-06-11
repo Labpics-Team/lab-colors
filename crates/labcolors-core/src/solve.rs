@@ -106,6 +106,7 @@ pub struct TypographicContext {
 /// separators) carry [`None`](Floor::None) — readability law does not apply to
 /// them, and `solve` leaves them on their perceptual target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Floor {
     /// WCAG 2.1 AA normal text — contrast ratio ≥ 4.5:1.
     AaText,

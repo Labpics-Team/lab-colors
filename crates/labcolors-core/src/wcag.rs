@@ -12,7 +12,9 @@
 //! W3C definitions, deliberately independent of the CAM16/LPC pipeline so it can
 //! be audited line-by-line against the spec:
 //! <https://www.w3.org/TR/WCAG21/#dfn-relative-luminance> and
-//! <https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio>.
+//! <https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio>. EN 301 549 (the harmonised
+//! standard invoking WCAG 2.1 AA):
+//! <https://www.etsi.org/deliver/etsi_en/301500_301599/301549/03.02.01_60/en_301549v030201p.pdf>.
 
 /// WCAG 2.1 AA minimum contrast ratio for normal text (success criterion 1.4.3).
 pub(crate) const AA_TEXT_RATIO: f64 = 4.5;
