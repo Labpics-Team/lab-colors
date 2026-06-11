@@ -88,6 +88,10 @@ impl LcsColor {
             * (1.64 - 0.29_f64.powf(vc.n)).powf(0.73)
             * vc.fl.powf(0.25);
 
+        // CAM16-UCS rescaling — Li et al. 2017, DOI 10.1002/col.22131:
+        //   J' = 1.7·J / (1 + 0.007·J),  M' = ln(1 + 0.0228·M) / 0.0228.
+        // Maps raw CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads
+        // as half-lightness). Inverse in `to_xyz`.
         let jp = 1.7 * j / (1.0 + 0.007 * j);
         let mp = (1.0 + 0.0228 * m).ln() / 0.0228;
         let s = mp / (jp + 1.0);
@@ -101,6 +105,8 @@ impl LcsColor {
     }
 
     pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
+        // Inverse CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131):
+        //   J = J' / (1.7 - 0.007·J'),  M = (e^(0.0228·M') - 1) / 0.0228.
         let j = self.jp / (1.7 - 0.007 * self.jp);
         let mp = self.mp();
         let m = (0.0228 * mp).exp_m1() / 0.0228;
