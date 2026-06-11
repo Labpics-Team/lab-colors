@@ -229,16 +229,18 @@ crates/labcolors-core/src/
 
 ## Тесты
 
-```
-61 тест, 0_failures:
-  lcs.rs      9  — roundtrip, dim VC, wrong-VC drift
-  neutral.rs  14  — monotonicity, hue drift, bounds, dim ×5
-  scale.rs    11  — accent monotonicity, gamut, dim ×3
-  vc.rs        5  — surround params, aw ordering
-  lpc.rs       6  — HK contrast, polarity, surface
-  oklab.rs     6  — hue, roundtrip, gamut
-  sentiment    8  — displacement, warning floor
-```
+`cargo test` — актуальное число и статус; CI гоняет тесты, clippy и rustfmt на каждом PR.
+
+Что покрыто:
+
+- **lcs** — roundtrip XYZ ↔ LCS под обеими VC, hue в градусах, дрейф при чужой VC
+- **neutral** — монотонность J', непрерывность кривой, точность якорей, chroma envelope через все три якоря, hue-дрейф, интерполяция угла через 0°, dim-тема, валидация входа
+- **scale** — акцентная кривая: монотонность, попадание в гамут, max_chroma, sat_ratio, dim-тема
+- **sentiment** — смещение сентиментов от брендового цвета, warning floor
+- **lpc** — полярность контраста, H-K буст со сверкой против Hellwig 2022, surface-метрика
+- **golden_tests** — кросс-валидация CIECAM16 против colour-science с задокументированными допусками
+- **spaces** (oklab, vc) — Oklab hue и roundtrip, параметры окружения
+- **curve** — превью рендерит кривую через её собственную VC
 
 ## Что дальше
 
