@@ -15,6 +15,6 @@ mod golden_tests;
 pub use curve::ColorCurve;
 pub use lcs::LcsColor;
 pub use solve::{
-    solve, BgInput, ChromaPolicy, Contract, Gamut, Hue, Solved, TypographicContext, Unreachable,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, Solved, TypographicContext, Unreachable, solve,
 };
 pub use spaces::vc::ViewingConditions;

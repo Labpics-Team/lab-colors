@@ -275,7 +275,10 @@ impl core::fmt::Display for Unreachable {
                 "target Lc {target:.2} has the wrong polarity for this background's luminance"
             ),
             Self::GamutUnsupported => {
-                write!(f, "requested gamut is not supported yet (Display P3 is future work)")
+                write!(
+                    f,
+                    "requested gamut is not supported yet (Display P3 is future work)"
+                )
             }
             Self::UnsupportedBackground => {
                 write!(f, "this background descriptor cannot be resolved yet")
@@ -500,4 +503,326 @@ fn verify_meets_floor(
 fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
     lpc::y_hk(j_hk, vc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lpc::lpc_with_vc;
+
+    const TOL: f64 = 1.0;
+    const MAGNITUDES: [f64; 6] = [15.0, 30.0, 45.0, 60.0, 75.0, 90.0];
+
+    fn vcs() -> [(ViewingConditions, &'static str); 2] {
+        [
+            (ViewingConditions::srgb(), "srgb"),
+            (ViewingConditions::dim_surround(), "dim"),
+        ]
+    }
+
+    /// Solve and return both the solved value and the contrast measured
+    /// independently through the public `lpc_with_vc` on the resolved hex.
+    fn solve_and_measure(
+        bg_hex: &str,
+        target: f64,
+        vc: &ViewingConditions,
+    ) -> Result<(Solved, f64), Unreachable> {
+        let bg = BgInput::solid(bg_hex)?;
+        let solved = solve(
+            bg,
+            Contract::text(target),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            vc,
+            Gamut::Srgb,
+        )?;
+        let measured = lpc_with_vc(solved.hex(), bg_hex, vc);
+        Ok((solved, measured))
+    }
+
+    #[test]
+    fn round_trip_normal_polarity_on_white() {
+        // Dark-on-light: positive target against white, both viewing conditions.
+        for (vc, vc_name) in vcs() {
+            for target in MAGNITUDES {
+                let (solved, measured) =
+                    solve_and_measure("#FFFFFF", target, &vc).expect("white must support +Lc");
+                assert!(
+                    (measured - target).abs() <= TOL,
+                    "{vc_name}: target {target}, measured {measured}, hex {}",
+                    solved.hex()
+                );
+                assert!(
+                    measured > 0.0,
+                    "normal polarity must be positive: {measured}"
+                );
+                // The reported lc must match an independent measurement.
+                assert!(
+                    (solved.lc() - measured).abs() < 1e-9,
+                    "reported lc {} vs measured {measured}",
+                    solved.lc()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn round_trip_reverse_polarity_on_dark() {
+        // Light-on-dark: negative target against a near-black background.
+        for (vc, vc_name) in vcs() {
+            for magnitude in MAGNITUDES {
+                let target = -magnitude;
+                let (solved, measured) =
+                    solve_and_measure("#101012", target, &vc).expect("dark bg must support -Lc");
+                assert!(
+                    (measured - target).abs() <= TOL,
+                    "{vc_name}: target {target}, measured {measured}, hex {}",
+                    solved.hex()
+                );
+                assert!(
+                    measured < 0.0,
+                    "reverse polarity must be negative: {measured}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn property_grid_neutral_and_chromatic_backgrounds() {
+        // Grid: neutral + chromatic backgrounds × both polarities × both VCs ×
+        // the full magnitude grid. Every reachable target lands within 1 Lc;
+        // every unreachable one returns a principled reason, never a clip.
+        let backgrounds = [
+            "#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012", // neutrals
+            "#3478F6", "#1E7D32", "#F2B8C6", "#0A3D62", // chromatic light + dark
+        ];
+        let mut ok_count = 0_usize;
+        let mut max_err = 0.0_f64;
+        for (vc, vc_name) in vcs() {
+            for bg_hex in backgrounds {
+                for magnitude in MAGNITUDES {
+                    for target in [magnitude, -magnitude] {
+                        match solve_and_measure(bg_hex, target, &vc) {
+                            Ok((solved, measured)) => {
+                                ok_count += 1;
+                                let err = (measured - target).abs();
+                                max_err = max_err.max(err);
+                                assert!(
+                                    err <= TOL,
+                                    "{vc_name} {bg_hex}: target {target}, measured {measured}, hex {}",
+                                    solved.hex()
+                                );
+                                assert_eq!(
+                                    target > 0.0,
+                                    measured > 0.0,
+                                    "polarity sign mismatch: target {target}, measured {measured}"
+                                );
+                            }
+                            Err(Unreachable::InvalidInput(msg)) => {
+                                panic!("unexpected invalid input for {bg_hex}/{target}: {msg}")
+                            }
+                            // Out-of-range / wrong-polarity / dead-zone targets are
+                            // legitimately unreachable for some bg+polarity pairs.
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("property grid: {ok_count} reachable, max |Lc - target| = {max_err:.4}");
+        assert!(max_err <= TOL, "max error {max_err} exceeds {TOL}");
+        assert!(
+            ok_count >= 60,
+            "grid exercised too few reachable combos: {ok_count}"
+        );
+    }
+
+    #[test]
+    fn below_contrast_floor_is_unreachable() {
+        // Inside the loClip dead zone: the forward curve reports zero, so no
+        // colour can reproduce it.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(3.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Unreachable::BelowContrastFloor { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn beyond_gamut_is_unreachable_not_clipped() {
+        // White can supply at most ~106 Lc (black foreground); 120 is impossible.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(120.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Unreachable::ExceedsRange { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn high_positive_target_on_dark_background_is_unreachable() {
+        // A dark background cannot host a strong dark-on-light contrast: the
+        // foreground would have to be darker than black.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#101012").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(60.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Unreachable::ExceedsRange { .. } | Unreachable::PolarityMismatch { .. }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn display_p3_gamut_is_reserved_not_implemented() {
+        // SEAM (c): the P3 variant exists in the type but returns a real error,
+        // never a panic and never a silent sRGB fallback.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let err = solve(
+            bg,
+            Contract::text(60.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::DisplayP3,
+        )
+        .unwrap_err();
+        assert_eq!(err, Unreachable::GamutUnsupported);
+    }
+
+    #[test]
+    fn degenerate_range_matches_explicit_target() {
+        // SEAM (b): a degenerate range [t, t] solves identically to text(t).
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let from_text = solve(
+            bg,
+            Contract::text(60.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        let from_range = solve(
+            bg,
+            Contract::range(60.0, 60.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert_eq!(from_text, from_range);
+    }
+
+    #[test]
+    fn reserved_typography_does_not_change_the_result() {
+        // SEAM (c): the typographic context is reserved; the v1 solver ignores
+        // it and the caller's explicit target governs.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let plain = solve(
+            bg,
+            Contract::text(60.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        let with_ctx = solve(
+            bg,
+            Contract::text(60.0).with_typography(TypographicContext {
+                size_px: 32.0,
+                weight: 700,
+            }),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert_eq!(plain, with_ctx);
+    }
+
+    #[test]
+    fn chromatic_foreground_hits_target_and_carries_chroma() {
+        // A saturated foreground policy still lands on the contrast target,
+        // because the H-K boost is compensated by lowering lightness.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let target = 45.0;
+        let solved = solve(
+            bg,
+            Contract::text(target),
+            Hue::deg(264.0), // Oklab blue
+            ChromaPolicy::Relative(0.8),
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        assert!(
+            (measured - target).abs() <= TOL,
+            "chromatic target {target}, measured {measured}, hex {}",
+            solved.hex()
+        );
+        assert!(
+            solved.color().s > 0.01,
+            "chromatic policy should carry chroma, s = {}",
+            solved.color().s
+        );
+    }
+
+    #[test]
+    fn solid_background_reduces_to_a_degenerate_interval() {
+        // SEAM (a): every background reduces to a Y_hk interval; a Solid colour
+        // is the degenerate interval [Y, Y]. `solve` only ever consumes the
+        // interval (never matches BgInput variants), so future composite /
+        // distribution variants — enabled by `#[non_exhaustive]` — extend
+        // `luma_interval` alone, leaving `solve`'s signature untouched.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        assert_eq!(
+            interval.lo, interval.hi,
+            "a solid background must be a single-point luminance interval"
+        );
+        // The contract is checked at both (here identical) endpoints.
+        assert_eq!(interval.endpoints(), [interval.lo, interval.hi]);
+    }
+
+    #[test]
+    fn invalid_hex_background_is_rejected() {
+        let err = BgInput::solid("#xyz").unwrap_err();
+        assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+    }
 }
