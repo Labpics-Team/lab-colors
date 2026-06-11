@@ -57,20 +57,102 @@ fn hk_coeff(h_cam_deg: f64) -> f64 {
         + 0.792
 }
 
-fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
+/// CAM16 lightness `J` of the achromatic stimulus at luminance `y`.
+///
+/// This is the exact inverse of [`y_hk`]: `y_hk` finds the grey luminance whose
+/// `J` equals a target `J_HK`, so given that luminance back, `grey_j` returns
+/// the same `J_HK`. The inverse solver uses it to turn a target H-K-corrected
+/// luminance into the `J_HK` a foreground colour must reproduce.
+pub(crate) fn grey_j(y: f64, vc: &ViewingConditions) -> f64 {
+    let xyz = [y * D65_WHITE[0], y, y * D65_WHITE[2]];
+    cam16_jch_from_xyz(xyz, vc).0
+}
+
+/// Grey luminance whose CAM16 lightness equals `j_hk` (inverse of [`grey_j`]).
+///
+/// `J` is monotonic in luminance for the achromatic axis, so a fixed-iteration
+/// bisection converges to full `f64` precision.
+pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     for _ in 0..64 {
         let mid = (lo + hi) * 0.5;
-        let xyz = [mid * D65_WHITE[0], mid, mid * D65_WHITE[2]];
-        let (j, _, _) = cam16_jch_from_xyz(xyz, vc);
-        if j < j_hk {
+        if grey_j(mid, vc) < j_hk {
             lo = mid;
         } else {
             hi = mid;
         }
     }
     (lo + hi) * 0.5
+}
+
+// Canonical perceptual-contrast constants, from the published formula version
+// 0.0.98G-4g (SAPC-8 "4g" constant set). Names in comments mirror the source
+// identifiers so the mapping is auditable; see docs/decisions/apca-license.md.
+//
+// These are the SINGLE SOURCE OF TRUTH for the contrast curve: both the forward
+// `contrast_core` and the inverse solver (`crate::solve`) read them here.
+// Do not re-declare these literals anywhere else.
+
+/// Soft black-clamp threshold (`blkThrs`): luminance below this is lifted.
+pub(crate) const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
+/// Soft black-clamp exponent (`blkClmp`).
+pub(crate) const SOFT_CLAMP_EXP: f64 = 1.414;
+/// Background power-curve exponent, normal polarity (`normBG`, bg > fg).
+pub(crate) const EXP_BG_LIGHT: f64 = 0.56;
+/// Foreground power-curve exponent, normal polarity (`normTXT`).
+pub(crate) const EXP_FG_LIGHT: f64 = 0.57;
+/// Background power-curve exponent, reverse polarity (`revBG`).
+pub(crate) const EXP_BG_DARK: f64 = 0.65;
+/// Foreground power-curve exponent, reverse polarity (`revTXT`).
+pub(crate) const EXP_FG_DARK: f64 = 0.62;
+/// Raw power-curve delta scale, shared by both polarities (`scaleBoW` == `scaleWoB`).
+pub(crate) const CONTRAST_SCALE: f64 = 1.14;
+/// Minimum luminance delta below which the pair reports no contrast (`deltaYmin`).
+pub(crate) const DELTA_Y_MIN: f64 = 0.0005;
+/// Low-contrast clip: scaled deltas inside ±`loClip` collapse to zero.
+pub(crate) const LO_CLIP: f64 = 0.1;
+/// Polarity offset pulled toward zero past the clip, normal polarity (`loBoWoffset`).
+pub(crate) const LO_BOW_OFFSET: f64 = 0.027;
+/// Polarity offset pulled toward zero past the clip, reverse polarity (`loWoBoffset`).
+pub(crate) const LO_WOB_OFFSET: f64 = 0.027;
+/// Maps the offset contrast to the ~[-108, 108] Lc output range.
+pub(crate) const LC_SCALE: f64 = 100.0;
+
+/// Soft black clamp: lifts luminance below [`SOFT_CLAMP_THRESHOLD`] so the
+/// contrast curve stays monotonic near black. Strictly increasing on `[0, T]`
+/// and the identity above `T`, hence invertible — see [`soft_clamp_inv`].
+pub(crate) fn soft_clamp(y: f64) -> f64 {
+    if y < SOFT_CLAMP_THRESHOLD {
+        y + (SOFT_CLAMP_THRESHOLD - y).powf(SOFT_CLAMP_EXP)
+    } else {
+        y
+    }
+}
+
+/// Inverse of [`soft_clamp`]: recover the raw luminance from a clamped value.
+///
+/// Returns `None` when `clamped` is below `soft_clamp(0.0)` — reproducing it
+/// would require a luminance darker than pure black, so the contrast that
+/// implied it is physically unreachable.
+pub(crate) fn soft_clamp_inv(clamped: f64) -> Option<f64> {
+    if clamped >= SOFT_CLAMP_THRESHOLD {
+        return Some(clamped);
+    }
+    if clamped < soft_clamp(0.0) {
+        return None;
+    }
+    let mut lo = 0.0_f64;
+    let mut hi = SOFT_CLAMP_THRESHOLD;
+    for _ in 0..64 {
+        let mid = (lo + hi) * 0.5;
+        if soft_clamp(mid) < clamped {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some((lo + hi) * 0.5)
 }
 
 /// Perceptual-contrast core curve (asymmetric power contrast on luminance).
@@ -85,45 +167,11 @@ fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
 ///
 /// Constant values, source version, naming policy and attribution:
 /// docs/decisions/apca-license.md. The achromatic alignment is locked by
-/// `golden_tests::contrast_core_matches_reference_on_grey_axis`.
+/// `golden_tests::contrast_core_matches_reference_on_grey_axis`. The curve is
+/// inverted by `crate::solve` to recover a foreground luminance from a target.
 pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
-    // Constants from the published formula, version 0.0.98G-4g (SAPC-8 "4g"
-    // constant set). Names in comments mirror the source identifiers so the
-    // mapping is auditable; see docs/decisions/apca-license.md.
-
-    // Soft black clamp: luminance below the threshold is lifted so the
-    // curve stays monotonic near black (`blkThrs`, `blkClmp`).
-    const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
-    const SOFT_CLAMP_EXP: f64 = 1.414;
-    // Polarity-dependent power-curve exponents (bg > fg is dark-on-light).
-    const EXP_BG_LIGHT: f64 = 0.56; // normBG
-    const EXP_FG_LIGHT: f64 = 0.57; // normTXT
-    const EXP_BG_DARK: f64 = 0.65; // revBG
-    const EXP_FG_DARK: f64 = 0.62; // revTXT
-    // Raw power-curve delta scale, shared by both polarities
-    // (`scaleBoW` == `scaleWoB`).
-    const CONTRAST_SCALE: f64 = 1.14;
-    // Minimum luminance delta: below this the pair reports no contrast
-    // (`deltaYmin`), evaluated on the clamped luminances.
-    const DELTA_Y_MIN: f64 = 0.0005;
-    // Low-contrast clip: scaled deltas inside ±`loClip` collapse to zero.
-    const LO_CLIP: f64 = 0.1;
-    // Polarity offsets subtracted toward zero once past the clip
-    // (`loBoWoffset`, `loWoBoffset` — equal in this constant set).
-    const LO_BOW_OFFSET: f64 = 0.027;
-    const LO_WOB_OFFSET: f64 = 0.027;
-    // Maps the offset contrast to the ~[-108, 108] Lc output range.
-    const LC_SCALE: f64 = 100.0;
-
-    let clamp = |y: f64| -> f64 {
-        if y < SOFT_CLAMP_THRESHOLD {
-            y + (SOFT_CLAMP_THRESHOLD - y).powf(SOFT_CLAMP_EXP)
-        } else {
-            y
-        }
-    };
-    let fg = clamp(y_fg);
-    let bg = clamp(y_bg);
+    let fg = soft_clamp(y_fg);
+    let bg = soft_clamp(y_bg);
 
     if (bg - fg).abs() < DELTA_Y_MIN {
         return 0.0;
