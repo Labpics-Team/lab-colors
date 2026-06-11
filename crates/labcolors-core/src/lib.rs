@@ -5,6 +5,7 @@ pub mod lpc;
 pub mod neutral;
 pub mod scale;
 pub mod sentiment;
+pub mod solve;
 
 pub mod curve;
 
@@ -13,4 +14,7 @@ mod golden_tests;
 
 pub use curve::ColorCurve;
 pub use lcs::LcsColor;
+pub use solve::{
+    solve, BgInput, ChromaPolicy, Contract, Gamut, Hue, Solved, TypographicContext, Unreachable,
+};
 pub use spaces::vc::ViewingConditions;
