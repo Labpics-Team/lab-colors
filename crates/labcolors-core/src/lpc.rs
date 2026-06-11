@@ -39,7 +39,17 @@ pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64,
     (j, m, h)
 }
 
-/// Hue-dependent Helmholtz-Kohlrausch coefficient. `h_cam_deg` in degrees.
+/// Chroma exponent in the Hellwig 2022 H-K lightness term
+/// `J_HK = J + f(h) * C^0.587` (source: see [`hk_coeff`]).
+const HK_CHROMA_EXPONENT: f64 = 0.587;
+
+/// Hue-dependent Helmholtz-Kohlrausch coefficient `f(h)`, `h_cam_deg` in degrees.
+///
+/// Source: Hellwig, Stolitzka & Fairchild (2022), "Extending CIECAM02 and
+/// CAM16 for the Helmholtz-Kohlrausch effect", Color Research & Application
+/// 47(5), DOI 10.1002/col.22793: `J_HK = J + f(h) * C^0.587` where `C` is the
+/// CAM16 chroma correlate. Coefficients verified against the colour-science
+/// reference implementation (`hue_angle_dependency_Hellwig2022`).
 fn hk_coeff(h_cam_deg: f64) -> f64 {
     let h_cam = h_cam_deg.to_radians();
     -0.160 * h_cam.cos() + 0.132 * (2.0 * h_cam).cos() - 0.405 * h_cam.sin()
@@ -63,10 +73,26 @@ fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
     (lo + hi) * 0.5
 }
 
-fn apca(y_fg: f64, y_bg: f64) -> f64 {
+/// Perceptual-contrast core curve (asymmetric power contrast on luminance).
+///
+/// Constants are from the published generic perceptual-contrast formula;
+/// naming policy and attribution: docs/decisions/apca-license.md.
+fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
+    // Soft black clamp: luminance below the threshold is lifted so the
+    // curve stays monotonic near black.
+    const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
+    const SOFT_CLAMP_EXP: f64 = 1.414;
+    // Polarity-dependent power-curve exponents (bg >= fg is dark-on-light).
+    const EXP_BG_LIGHT: f64 = 0.56;
+    const EXP_FG_LIGHT: f64 = 0.57;
+    const EXP_BG_DARK: f64 = 0.65;
+    const EXP_FG_DARK: f64 = 0.62;
+    // Maps the raw power-curve delta to the ~[-110, 110] output range.
+    const CONTRAST_SCALE: f64 = 1.14 * 100.0;
+
     let clamp = |y: f64| -> f64 {
-        if y < 0.022 {
-            y + (0.022 - y).powf(1.414)
+        if y < SOFT_CLAMP_THRESHOLD {
+            y + (SOFT_CLAMP_THRESHOLD - y).powf(SOFT_CLAMP_EXP)
         } else {
             y
         }
@@ -75,25 +101,31 @@ fn apca(y_fg: f64, y_bg: f64) -> f64 {
     let bg = clamp(y_bg);
 
     if bg >= fg {
-        (bg.powf(0.56) - fg.powf(0.57)) * 1.14 * 100.0
+        (bg.powf(EXP_BG_LIGHT) - fg.powf(EXP_FG_LIGHT)) * CONTRAST_SCALE
     } else {
-        (bg.powf(0.65) - fg.powf(0.62)) * 1.14 * 100.0
+        (bg.powf(EXP_BG_DARK) - fg.powf(EXP_FG_DARK)) * CONTRAST_SCALE
     }
+}
+
+/// Hellwig 2022 H-K-corrected lightness for an XYZ stimulus:
+/// `J_HK = J + f(h) * C^0.587`, with the chroma correlate `C = M / F_L^0.25`.
+pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
+    let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
+    let chroma = m / vc.fl.powf(0.25);
+    j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }
 
 fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
     let rgb = srgb_from_hex(hex).unwrap_or([0.0, 0.0, 0.0]);
     let xyz = srgb_to_xyz(rgb);
-    let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
-    let j_hk = j + hk_coeff(h) * m.powf(0.587);
-    y_hk(j_hk.max(0.0), vc)
+    y_hk(j_hk_from_xyz(xyz, vc).max(0.0), vc)
 }
 
 pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
     let vc = ViewingConditions::srgb();
     let y_fg = hex_to_y_hk(fg_hex, &vc);
     let y_bg = hex_to_y_hk(bg_hex, &vc);
-    apca(y_fg, y_bg)
+    contrast_core(y_fg, y_bg)
 }
 
 pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
@@ -112,22 +144,26 @@ pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
 /// LPC contrast between two [`LcsColor`] values.
 ///
 /// Uses the pre-computed CAM16 J' and Oklab hue stored in each colour,
-/// avoiding re-parsing hex strings. Delegates to the same APCA normalised
-/// luminance contrast as [`lpc`].
+/// avoiding re-parsing hex strings. Delegates to the same
+/// perceptual-contrast core curve as [`lpc`].
 pub fn lpc_lcs(fg: &crate::lcs::LcsColor, bg: &crate::lcs::LcsColor) -> f64 {
     let vc = ViewingConditions::srgb();
     let y_fg = y_hk_from_lcs(fg, &vc);
     let y_bg = y_hk_from_lcs(bg, &vc);
-    apca(y_fg, y_bg)
+    contrast_core(y_fg, y_bg)
 }
 
 /// Derive hk-adjusted luminance from an existing [`LcsColor`].
 ///
-/// Reconstructs the J_hk value from the stored J' and hue, then
-/// binary-searches for Y (same as `y_hk` but skips XYZ→CAM16).
+/// Decompresses the stored UCS correlates back to raw CAM16 (J' → J,
+/// M' → M → C) so the result is bit-identical to the hex path
+/// ([`lpc`]); previously this used J'/M' directly, so `lpc` and
+/// `lpc_lcs` disagreed for chromatic colours.
 fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
-    let hk = hk_coeff(c.h_cam());
-    let j_hk = c.jp + hk * c.mp().powf(0.587);
+    let j = c.jp / (1.7 - 0.007 * c.jp);
+    let m = (0.0228 * c.mp()).exp_m1() / 0.0228;
+    let chroma = m / vc.fl.powf(0.25);
+    let j_hk = j + hk_coeff(c.h_cam()) * chroma.powf(HK_CHROMA_EXPONENT);
     y_hk(j_hk.max(0.0), vc)
 }
 
@@ -171,6 +207,47 @@ mod tests {
     fn neutral_hk_boost_is_zero() {
         let lc = lpc("#444444", "#ffffff");
         assert!((lc - 89.0).abs() < 5.0, "achromatic LPC: {}", lc);
+    }
+
+    #[test]
+    fn j_hk_matches_hellwig_reference() {
+        // Reference J_HK from colour-science: XYZ_to_CIECAM16 (L_A=64,
+        // Y_b=20, Average surround, D65) + hue_angle_dependency_Hellwig2022,
+        // J_HK = J + f(h)·C^0.587. Tolerance covers the known sRGB-matrix
+        // micro-deltas between implementations (|dJ|<0.004, |dC|<0.05).
+        let vc = ViewingConditions::srgb();
+        for (hex, want) in [
+            ("#0000FF", 38.954587),
+            ("#FF0000", 56.018245),
+            ("#FFD700", 85.092749),
+        ] {
+            let rgb = srgb_from_hex(hex).expect("reference hex is valid");
+            let got = j_hk_from_xyz(srgb_to_xyz(rgb), &vc);
+            assert!(
+                (got - want).abs() < 0.05,
+                "{hex}: J_HK={got}, reference={want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lpc_and_lpc_lcs_agree() {
+        // Both entry points must compute the identical metric: the LcsColor
+        // path decompresses J'/M' back to raw J/M before the H-K term.
+        for (fg, bg) in [
+            ("#0000FF", "#FFFFFF"),
+            ("#FF0000", "#101012"),
+            ("#34C759", "#FFFFFF"),
+        ] {
+            let via_hex = lpc(fg, bg);
+            let f = crate::lcs::LcsColor::from_hex(fg).expect("valid fg hex");
+            let b = crate::lcs::LcsColor::from_hex(bg).expect("valid bg hex");
+            let via_lcs = lpc_lcs(&f, &b);
+            assert!(
+                (via_hex - via_lcs).abs() < 1e-6,
+                "{fg}/{bg}: lpc={via_hex} lpc_lcs={via_lcs}"
+            );
+        }
     }
 
     #[test]
