@@ -144,6 +144,9 @@ impl SentimentCurve {
 /// This monotonicity is what lets [`resolve_displaced_hue`] evaluate a handful
 /// of analytic candidates instead of scanning 721 sampled hues.
 fn placement_cost(slope: f64, dh: f64) -> f64 {
+    // Clamp the denominator at 0.01 (the value carried over from the original
+    // sampling search) so the cost at dh≈180° stays finite yet large enough to
+    // strongly discourage placing the hue on the far side of the circle.
     slope / (1.0 - dh / 180.0).max(0.01)
 }
 
@@ -246,11 +249,11 @@ fn signed_delta(h: f64, from: f64) -> f64 {
 }
 
 fn normalize_hue(h: f64) -> f64 {
-    ((h % 360.0) + 360.0) % 360.0
+    h.rem_euclid(360.0)
 }
 
 fn angular_distance(a: f64, b: f64) -> f64 {
-    let diff = ((a - b) % 360.0 + 360.0) % 360.0;
+    let diff = (a - b).rem_euclid(360.0);
     if diff > 180.0 { 360.0 - diff } else { diff }
 }
 
