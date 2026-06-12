@@ -358,6 +358,14 @@ pub enum Unreachable {
     /// The background cannot supply the target even at the luminance extreme
     /// (pure black for dark-on-light, pure white for light-on-dark).
     ExceedsRange { target: f64, max_achievable: f64 },
+    /// The target falls in an 8-bit quantisation gap: the analytic foreground is
+    /// reachable in principle, but every hex colour the solver can emit near it
+    /// lands either short of the target or inside the low-contrast dead zone, so
+    /// no on-grid colour reproduces it within the ±1 Lc budget. Distinct from
+    /// [`Self::ExceedsRange`] (where the *background* is the limit): here the
+    /// background can supply the target, the discrete sRGB grid cannot.
+    /// `nearest` is the closest |Lc| an adjacent hex step actually achieves.
+    QuantizationGap { target: f64, nearest: f64 },
     /// The WCAG legal floor cannot be met on this background even at the
     /// achromatic extreme (pure black for dark-on-light, pure white for
     /// light-on-dark). `max_ratio` is the most contrast this background can
@@ -391,6 +399,10 @@ impl core::fmt::Display for Unreachable {
             } => write!(
                 f,
                 "target Lc {target:.2} exceeds the most this background can supply ({max_achievable:.2})"
+            ),
+            Self::QuantizationGap { target, nearest } => write!(
+                f,
+                "target Lc {target:.2} falls in an 8-bit quantisation gap; the nearest on-grid colour reaches only {nearest:.2}"
             ),
             Self::FloorUnreachable { floor, max_ratio } => write!(
                 f,
@@ -472,22 +484,154 @@ pub fn solve(
     // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
     // perceptual solution falls short of it, push the colour until it clears the
     // floor and flag the override. Decorative ([`Floor::None`]) contracts skip
-    // this entirely and keep their perceptual target.
+    // this entirely and keep their perceptual target. The resolved Oklab
+    // lightness (not just the colour) is returned so the quantisation-gap search
+    // below can step to neighbouring hex grid points from it.
     let bg_disp = bg.governing_display(target);
-    let (rgb_final, floor_override) = match contract.conformance().min_ratio() {
+    let (l_final, floor_override) = match contract.conformance().min_ratio() {
         Some(floor_ratio) => apply_floor(l_lpc, floor_ratio, target, hue, chroma_policy, bg_disp)?,
-        Option::None => (build_color(l_lpc, hue, chroma_policy), false),
+        Option::None => (l_lpc, false),
     };
 
-    // Quantise and measure both metrics on the emitted hex, then confirm the
-    // perceptual floor still holds at both ends of the interval. For Solid the
-    // ends coincide, so the check is trivial; the loop is the seam genuine
-    // intervals reuse.
-    let solved = finish(rgb_final, y_gov, bg_disp, floor_override, vc)?;
-    for y_end in interval.endpoints() {
-        verify_meets_floor(&solved, y_end, target, vc)?;
+    // Stage 3 — quantise, measure, verify. Build the colour at the resolved
+    // lightness, emit its hex, and confirm the dual gate (perceptual floor at
+    // both interval ends, plus the legal WCAG floor for text/UI) still holds on
+    // the *quantised* colour. If it does not, the analytic solution may have
+    // fallen into an 8-bit quantisation gap — the emitted hex lands inside the
+    // low-contrast dead zone even though the background can supply the target —
+    // so walk a bounded number of neighbouring hex steps toward larger `|Lc|`
+    // before giving up. Every candidate is re-measured honestly: no silent clip.
+    let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
+        let rgb = build_color(l_ok, hue, chroma_policy);
+        let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
+        let perceptual_ok = interval
+            .endpoints()
+            .into_iter()
+            .all(|y_end| meets_floor(&solved, y_end, target, vc));
+        // The walk only moves toward the achromatic extreme, which raises (never
+        // lowers) WCAG contrast, but re-verify the legal floor explicitly rather
+        // than lean on an unproven monotonicity assumption.
+        let legal_ok = contract
+            .conformance()
+            .min_ratio()
+            .is_none_or(|floor_ratio| solved.wcag_ratio() + 1e-9 >= floor_ratio);
+        Ok(Candidate {
+            passes: perceptual_ok && legal_ok,
+            lc: solved.lc(),
+            solved,
+        })
+    };
+
+    let primary = evaluate(l_final)?;
+    if primary.passes {
+        return Ok(primary.solved);
     }
-    Ok(solved)
+    solve_quantization_neighbor(l_final, target, hue, chroma_policy, primary.lc, evaluate)
+}
+
+/// The quantisation budget: a solved colour is accepted only when its measured
+/// `Lc` lands within this *symmetric* distance of the target. The analytic
+/// primary path lands close by construction; the neighbour walk below moves
+/// *away* from the target toward larger `|Lc|`, so without the upper bound a
+/// step could overshoot — this constant makes the `±1` contract explicit and
+/// symmetric for the neighbour search (mirrors the test tolerance `TOL`).
+const QUANT_BUDGET: f64 = 1.0;
+
+/// One on-grid candidate the quantisation-gap search evaluates: the solved
+/// colour, the perceptual `Lc` it actually achieves on the quantised hex, and
+/// whether it clears the dual gate (perceptual floor at both interval ends +
+/// legal WCAG floor). `passes` is the *lower*-bound floor check the primary
+/// solution uses; the neighbour walk additionally enforces the upper bound so a
+/// step can never overshoot the `±1` budget.
+struct Candidate {
+    solved: Solved,
+    lc: f64,
+    passes: bool,
+}
+
+impl Candidate {
+    /// Distance of the achieved `Lc` from the target — the symmetric error the
+    /// `±1` budget bounds and the neighbour search minimises for its near-miss.
+    fn error(&self, target: f64) -> f64 {
+        (self.lc - target).abs()
+    }
+}
+
+/// Maximum distinct hex steps the quantisation-gap search explores from the
+/// analytic solution. Two steps is enough to cross the single dead-zone band the
+/// 8-bit grid opens just above the low-contrast clip; this is a gap-bridge, not
+/// an optimiser, so the reach is deliberately tiny (issue #44).
+const NEIGHBOR_STEPS: u32 = 2;
+
+/// Walk up to [`NEIGHBOR_STEPS`] *distinct* hex grid points toward larger `|Lc|`
+/// — darker for dark-on-light (`target ≥ 0`), lighter for light-on-dark — and
+/// return the first that clears the dual gate **and** lands within the symmetric
+/// [`QUANT_BUDGET`] of the target.
+///
+/// Two honesty guarantees:
+/// * *Distinct* — a step counts only when the emitted hex actually changes, so
+///   the search can never silently re-clip to the colour it started from.
+/// * *Bounded both ways* — `evaluate.passes` rejects steps that fall short of
+///   the floor; the `±QUANT_BUDGET` check here rejects steps that overshoot it.
+///   A neighbour is returned only when it is genuinely within budget.
+///
+/// If no neighbour qualifies, the target sits in a real quantisation gap and
+/// [`Unreachable::QuantizationGap`] is returned, reporting the `|Lc|` of the
+/// *closest* colour explored (the start plus every neighbour) — the true
+/// near-miss, never a fabricated bound.
+fn solve_quantization_neighbor(
+    l_start: f64,
+    target: f64,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    start_lc: f64,
+    evaluate: impl Fn(f64) -> Result<Candidate, Unreachable>,
+) -> Result<Solved, Unreachable> {
+    // Toward larger contrast: dark-on-light needs a darker foreground (lower
+    // Oklab lightness), light-on-dark a lighter one. The probe increment is well
+    // below one 8-bit grid step so neighbours are visited in order, not skipped.
+    // For a `Relative` chroma policy `build_color` also moves chroma with
+    // lightness, so a single probe can in principle cross more than one
+    // `#RRGGBB`; correctness does not rely on perfect grid-adjacency, because a
+    // step is *accepted* only when it lands within the symmetric `QUANT_BUDGET`
+    // below — an over-jump that overshoots the target is rejected, not clipped.
+    let direction = if target >= 0.0 { -1.0 } else { 1.0 };
+    const PROBE: f64 = 0.001;
+
+    let mut last_hex = hex_from_srgb(build_color(l_start, hue, chroma_policy));
+    let mut steps_taken = 0_u32;
+    let mut l_probe = l_start;
+    // Track the colour closest to the target across the start and every
+    // neighbour, so the gap error reports the true near-miss (not a max).
+    let mut nearest_lc = start_lc;
+    let mut nearest_err = (start_lc - target).abs();
+
+    while steps_taken < NEIGHBOR_STEPS && (0.0..=1.0).contains(&l_probe) {
+        l_probe += direction * PROBE;
+        let hex = hex_from_srgb(build_color(l_probe, hue, chroma_policy));
+        if hex == last_hex {
+            continue; // same grid point — not yet a distinct neighbour step
+        }
+        last_hex = hex;
+        steps_taken += 1;
+
+        let candidate = evaluate(l_probe)?;
+        let err = candidate.error(target);
+        if err < nearest_err {
+            nearest_err = err;
+            nearest_lc = candidate.lc;
+        }
+        // Accept only when the floor holds AND the step has not overshot the
+        // symmetric budget — an honest neighbour, in band on both sides.
+        if candidate.passes && err <= QUANT_BUDGET {
+            return Ok(candidate.solved);
+        }
+    }
+
+    Err(Unreachable::QuantizationGap {
+        target,
+        nearest: nearest_lc.abs(),
+    })
 }
 
 /// Stage 1: invert the LPC core to the Oklab lightness reproducing `target`
@@ -523,10 +667,10 @@ fn apply_floor(
     hue: Hue,
     chroma_policy: ChromaPolicy,
     bg_disp: [f64; 3],
-) -> Result<([f64; 3], bool), Unreachable> {
+) -> Result<(f64, bool), Unreachable> {
     let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
     if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
-        return Ok((rgb_lpc, false));
+        return Ok((l_lpc, false));
     }
 
     let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
@@ -541,7 +685,7 @@ fn apply_floor(
     // Bisect the lightness path from the perceptual solution (`t = 0`, below the
     // floor) to the achromatic extreme (`t = 1`, clears it). Invariant: `hi`
     // always names a colour that clears the floor, `lo` one that does not, so the
-    // returned colour is guaranteed to meet the floor even after quantisation.
+    // returned lightness is guaranteed to meet the floor even after quantisation.
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     for _ in 0..48 {
@@ -554,7 +698,7 @@ fn apply_floor(
         }
     }
     let l_final = l_lpc + (l_extreme - l_lpc) * hi;
-    Ok((build_color(l_final, hue, chroma_policy), true))
+    Ok((l_final, true))
 }
 
 /// WCAG 2.1 contrast ratio of a linear-sRGB foreground (quantised to the hex it
@@ -724,30 +868,24 @@ fn finish(
     })
 }
 
-/// Confirm the solved colour still meets the (signed) floor at one interval
-/// endpoint, within the 1-Lc quantisation budget. Trivial for a Solid
-/// background; the real guard for genuine luminance intervals.
-fn verify_meets_floor(
-    solved: &Solved,
-    y_bg: f64,
-    target: f64,
-    vc: &ViewingConditions,
-) -> Result<(), Unreachable> {
-    let rgb = srgb_from_hex(solved.hex()).map_err(Unreachable::InvalidInput)?;
+/// Whether the solved colour still meets the (signed) perceptual floor at one
+/// interval endpoint, within the 1-Lc quantisation budget. Trivial for a Solid
+/// background (its endpoints coincide); the real guard for genuine luminance
+/// intervals. Re-measures the contrast on the *quantised* hex — the value the
+/// caller actually gets — so the gate reflects the emitted colour, not the
+/// pre-quantisation ideal.
+fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) -> bool {
+    let Ok(rgb) = srgb_from_hex(solved.hex()) else {
+        // `solved.hex()` is produced by `hex_from_srgb`, so it always parses;
+        // an unparsable hex here is a contradiction — treat it as not meeting.
+        return false;
+    };
     let y_fg = bg_luma(rgb, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    let met = if target >= 0.0 {
+    if target >= 0.0 {
         lc >= target - 1.0
     } else {
         lc <= target + 1.0
-    };
-    if met {
-        Ok(())
-    } else {
-        Err(Unreachable::ExceedsRange {
-            target,
-            max_achievable: max_lc(y_bg, target),
-        })
     }
 }
 
@@ -1327,5 +1465,171 @@ mod tests {
             ),
             other => panic!("expected ExceedsRange, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn quantization_gap_target_resolves_via_neighbor_step() {
+        // Issue #44: target Lc 7.31 on white. The analytic foreground quantises
+        // to a hex inside the low-contrast dead zone (Lc 0), but the next darker
+        // grid step (#E9E9E9, Lc ≈ 7.85) is within the ±1 budget. The neighbour
+        // walk must find it instead of returning a (lying) ExceedsRange.
+        let vc = ViewingConditions::srgb();
+        let (solved, measured) =
+            solve_and_measure("#FFFFFF", 7.31, &vc).expect("7.31 on white is on-grid reachable");
+        assert!(
+            (measured - 7.31).abs() <= TOL,
+            "target 7.31, measured {measured}, hex {}",
+            solved.hex()
+        );
+        assert_eq!(
+            solved.hex(),
+            "#E9E9E9",
+            "expected the first darker on-grid step, got {}",
+            solved.hex()
+        );
+        // The reported lc must match an independent re-measurement on the hex.
+        assert!(
+            (solved.lc() - measured).abs() < 1e-9,
+            "reported lc {} vs measured {measured}",
+            solved.lc()
+        );
+    }
+
+    #[test]
+    fn quantization_band_is_fully_resolvable_or_honestly_unreachable() {
+        // Scan the JND band (7.3, 7.6) at 0.05 on white (dark-on-light, +Lc) and
+        // black (light-on-dark, −Lc). The analytic low-contrast floor sits at
+        // exactly 7.3 Lc ((LO_CLIP − offset)·100), so |target| == 7.3 is the
+        // honest BelowContrastFloor dead zone; the quantisation gap lives just
+        // above it. Inside the band every target must either resolve within ±1
+        // Lc, or fail with a *principled* variant — BelowContrastFloor (analytic
+        // dead zone) or QuantizationGap (on-grid near-miss) — but NEVER the
+        // misleading ExceedsRange, and never a silent clip. Prints a before/after
+        // table for the PR.
+        let vc = ViewingConditions::srgb();
+        let mut t = 7.30_f64;
+        let mut resolved = 0_usize;
+        let mut gapped = 0_usize;
+        let mut below = 0_usize;
+        eprintln!("band scan (7.3, 7.6) step 0.05:");
+        eprintln!("  target |  white +Lc                 |  black -Lc");
+        while t <= 7.60 + 1e-9 {
+            let pos = solve_and_measure("#FFFFFF", t, &vc);
+            let neg = solve_and_measure("#000000", -t, &vc);
+
+            let describe = |r: &Result<(Solved, f64), Unreachable>| match r {
+                Ok((s, m)) => format!("Ok {} Lc {m:+.3}", s.hex()),
+                Err(Unreachable::QuantizationGap { nearest, .. }) => {
+                    format!("Gap (nearest {nearest:.3})")
+                }
+                Err(Unreachable::BelowContrastFloor { .. }) => "BelowFloor".to_string(),
+                Err(e) => format!("ERR {e:?}"),
+            };
+            eprintln!("  {t:>6.2} |  {:<26}|  {}", describe(&pos), describe(&neg));
+
+            for (sign, r) in [(1.0_f64, &pos), (-1.0_f64, &neg)] {
+                let target = sign * t;
+                match r {
+                    Ok((solved, measured)) => {
+                        resolved += 1;
+                        assert!(
+                            (measured - target).abs() <= TOL,
+                            "band target {target}: measured {measured}, hex {}",
+                            solved.hex()
+                        );
+                        assert_eq!(
+                            target > 0.0,
+                            *measured > 0.0,
+                            "band polarity mismatch: target {target}, measured {measured}"
+                        );
+                    }
+                    Err(Unreachable::QuantizationGap {
+                        target: et,
+                        nearest,
+                    }) => {
+                        gapped += 1;
+                        assert!((et - target).abs() < 1e-9, "echoed target {et} vs {target}");
+                        assert!(
+                            nearest.is_finite() && *nearest >= 0.0,
+                            "gap near-miss must be a real magnitude, got {nearest}"
+                        );
+                    }
+                    // Honest analytic dead zone at |Lc| <= 7.3 — a different
+                    // mechanism from the quantisation gap, and not a clip.
+                    Err(Unreachable::BelowContrastFloor { target: et }) => {
+                        below += 1;
+                        assert!((et - target).abs() < 1e-9, "echoed target {et} vs {target}");
+                    }
+                    // No other outcome is acceptable inside this band: ExceedsRange
+                    // here would be the very semantic lie issue #44 is about.
+                    Err(other) => panic!("band target {target}: unexpected {other:?}"),
+                }
+            }
+            t += 0.05;
+        }
+        eprintln!(
+            "band scan: {resolved} resolved, {gapped} honest quant gaps, {below} below-floor"
+        );
+        // The whole point of the fix: the issue-#44 white case is now resolvable.
+        assert!(
+            resolved >= 1,
+            "expected at least one band target to resolve"
+        );
+    }
+
+    #[test]
+    fn neighbor_acceptance_respects_the_symmetric_budget() {
+        // The neighbour walk moves *away* from the target toward larger |Lc|, so
+        // a returned colour must still land within ±1 on BOTH sides — never an
+        // overshoot that satisfies only the lower floor. Sweep the whole gap band
+        // densely on white and black; every resolved colour must be symmetric-in
+        // budget, and its reported lc must match an independent measurement.
+        let vc = ViewingConditions::srgb();
+        let mut t = 7.31_f64;
+        let mut checked = 0_usize;
+        while t <= 7.59 + 1e-9 {
+            for (bg, target) in [("#FFFFFF", t), ("#000000", -t)] {
+                if let Ok((solved, measured)) = solve_and_measure(bg, target, &vc) {
+                    checked += 1;
+                    // Symmetric budget — this is the guard CodeRabbit flagged: a
+                    // one-sided "not below floor" check would let an overshoot in.
+                    assert!(
+                        (measured - target).abs() <= TOL,
+                        "{bg} t={target}: measured {measured} outside ±{TOL}, hex {}",
+                        solved.hex()
+                    );
+                    assert!(
+                        (solved.lc() - measured).abs() < 1e-9,
+                        "{bg} t={target}: reported lc {} vs measured {measured}",
+                        solved.lc()
+                    );
+                }
+            }
+            t += 0.01;
+        }
+        assert!(checked >= 1, "expected at least one resolvable target");
+    }
+
+    #[test]
+    fn quantization_gap_error_is_honest_not_exceeds_range() {
+        // The QuantizationGap variant must report a real near-miss magnitude and
+        // render a message that names the gap — distinct from ExceedsRange, which
+        // would falsely blame the background. Construct one directly to lock the
+        // contract (the scan above exercises the live path).
+        let err = Unreachable::QuantizationGap {
+            target: 7.45,
+            nearest: 7.85,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("quantisation gap"), "message: {msg}");
+        assert!(msg.contains("7.45"), "message must echo the target: {msg}");
+        assert_ne!(
+            err,
+            Unreachable::ExceedsRange {
+                target: 7.45,
+                max_achievable: 7.85,
+            },
+            "the two variants must be distinguishable"
+        );
     }
 }
