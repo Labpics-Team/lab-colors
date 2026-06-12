@@ -2,6 +2,7 @@ pub(crate) mod spaces;
 
 pub mod lcs;
 pub mod lpc;
+pub(crate) mod lut;
 pub mod neutral;
 pub mod scale;
 pub mod semantic;
