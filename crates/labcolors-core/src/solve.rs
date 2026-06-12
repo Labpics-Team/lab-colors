@@ -1030,23 +1030,74 @@ mod tests {
         // DETERMINISTIC PERF METRIC (issue #19 / discrete-exactness). Wall-time on
         // a loaded machine is too noisy to measure a few-percent change, so the
         // honest before/after number is the count of CIECAM16 forward passes a
-        // default `resolve_set` runs. The `finish` dedup — one shared forward
-        // feeds both the LcsColor and the J_HK instead of two passes on the same
-        // candidate XYZ — cut this from 406 to 397 per set, bit-identically. This
-        // guard pins it: a future change that re-introduces a duplicate forward,
-        // or one that legitimately removes more, fails here until the expected
-        // count is updated with intent.
+        // default `resolve_set` runs. This guard pins that count so a change that
+        // re-introduces a duplicate forward — or legitimately removes one — fails
+        // here until the table below is updated with intent.
+        //
+        // WHY TWO PINS PER (vc, bg). Post-#52 (undertone v2) a default set no
+        // longer costs a single uniform number. v2 added a per-role curve plan:
+        // for each role `curve_plan_cached` runs a cusp-attracted-hue scan
+        // (Oklab-only — `max_chroma`, ZERO forwards) and a chroma-ratio bisection
+        // `ratio_for_target_mp` (each `mp_at` probe is one `cam16::forward` via
+        // `mp_of_linear_srgb` → `from_xyz_with_hok`). That bisection is the only
+        // forward-heavy work the curve plan does, and it is the ONLY work the
+        // thread-local `CURVE_PLAN_CACHE` memoises. So a set has two honest costs:
+        //
+        //   WARM — the runtime-dominant path. Curve plans already cached (a tool
+        //          re-resolving as an unrelated setting is tweaked, or the same
+        //          theme served repeatedly). The count is the IRREDUCIBLE per-role
+        //          probe/finish + ResolveContext polarity/max work that is never
+        //          cached. This is the number that governs steady-state cost; it
+        //          gets the hard, low pin.
+        //   COLD — the first resolve of a theme on a fresh cache. WARM plus every
+        //          distinct curve-plan key's ratio bisection. The COLD−WARM delta
+        //          (~520–560 forwards) is exactly the bisection work the cache
+        //          elides on the second pass.
+        //
+        // The cache is reset before each COLD measurement so COLD is deterministic
+        // regardless of test/iteration order; WARM is the immediate re-resolve of
+        // the same theme, a verified fixed point. Counts measured on the merged
+        // tree (main@#52 + perf/discrete-tables), 2026-06-12. They vary by
+        // (vc, bg) because each surface reaches a different role mix with different
+        // probe-sweep depths — real product behaviour, not noise.
         use crate::spaces::cam16::FORWARD_CALLS;
-        const EXPECTED: u64 = 397;
+        let tbl = crate::RoleTable::default();
+
+        // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
+        let expected = [
+            (("srgb", "#FFFFFF"), (2023u64, 1465u64)),
+            (("srgb", "#7F7F7F"), (1235, 832)),
+            (("srgb", "#101012"), (1424, 989)),
+            (("dim", "#FFFFFF"), (1804, 1277)),
+            (("dim", "#7F7F7F"), (1185, 782)),
+            (("dim", "#101012"), (1454, 989)),
+        ];
+
         for (vc, name) in vcs() {
             for bg in ["#FFFFFF", "#7F7F7F", "#101012"] {
-                FORWARD_CALLS.with(|c| c.set(0));
+                let &(_, (cold_exp, warm_exp)) = expected
+                    .iter()
+                    .find(|((n, b), _)| *n == name && *b == bg)
+                    .expect("every (vc, bg) pair has a pinned expectation");
                 let bgi = crate::BgInput::solid(bg).unwrap();
-                let _ = crate::resolve_set(&bgi, &crate::RoleTable::default(), &vc);
-                let n = FORWARD_CALLS.with(|c| c.get());
+
+                // COLD: fresh cache, first resolve of this theme.
+                crate::semantic::reset_curve_plan_cache();
+                FORWARD_CALLS.with(|c| c.set(0));
+                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let cold = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
-                    n, EXPECTED,
-                    "{name}/{bg}: CAM16 forwards/set = {n}, expected {EXPECTED}"
+                    cold, cold_exp,
+                    "{name}/{bg}: COLD CAM16 forwards/set = {cold}, expected {cold_exp}"
+                );
+
+                // WARM: same theme re-resolved, curve plans now cached.
+                FORWARD_CALLS.with(|c| c.set(0));
+                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let warm = FORWARD_CALLS.with(|c| c.get());
+                assert_eq!(
+                    warm, warm_exp,
+                    "{name}/{bg}: WARM CAM16 forwards/set = {warm}, expected {warm_exp}"
                 );
             }
         }
