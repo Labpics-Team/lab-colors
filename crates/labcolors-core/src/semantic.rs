@@ -461,7 +461,7 @@ impl ResolveContext {
     /// Derive the shared context for `bg` under `vc`: pick the polarity, then read
     /// the maximum contrast in it back from the solver.
     fn new(bg: &BgInput, vc: &ViewingConditions) -> Self {
-        let polarity = choose_polarity(bg, vc);
+        let polarity = choose_polarity(bg);
         let max_contrast = max_contrast(bg, polarity, vc).ok();
         Self {
             polarity,
@@ -575,8 +575,8 @@ pub fn resolve_set(
 /// junior text role that did not come out strictly weaker than the senior above
 /// it, try to demote it by the smallest number of quantisation steps that makes
 /// it strictly weaker *while it still clears its own WCAG floor*; if none does,
-/// leave it equal to the senior. Either way, flag it [`Resolved::compressed`] so
-/// the squeeze is visible rather than silent.
+/// the junior becomes a copy of the senior (equality — never stronger). Either
+/// way, flag it [`Resolved::compressed`] so the squeeze is visible, not silent.
 fn enforce_text_hierarchy(
     set: &mut [(Role, Resolved)],
     bg: &BgInput,
@@ -606,28 +606,38 @@ fn enforce_text_hierarchy(
             _ => Floor::None,
         };
         let demoted = demote_below(senior_mag, ctx, hue, chroma, floor, bg, vc);
+        // The senior's colour is the legal ceiling for the junior: when no
+        // distinguishable step below exists, the junior becomes a *copy* of the
+        // senior — never a stronger colour. (The floor can lift the junior onto
+        // a grid point above the senior; copying restores `senior ≥ junior`.)
+        let senior_solved = set.iter().find_map(|(r, res)| match res {
+            Resolved::Color { solved, .. } if *r == senior_role => Some(solved.clone()),
+            _ => None,
+        });
         let Some(entry) = set.iter_mut().find(|(r, _)| *r == junior_role) else {
             continue;
         };
-        entry.1 = match (demoted, &entry.1) {
+        entry.1 = match (demoted, senior_solved, &entry.1) {
             // A distinguishable, still-legal step below the senior.
-            (Some(solved), _) => Resolved::Color {
+            (Some(solved), _, _) => Resolved::Color {
                 solved,
                 compressed: true,
             },
-            // No room to separate: keep the floored colour but flag the squeeze.
-            (None, Resolved::Color { solved, .. }) => Resolved::Color {
-                solved: solved.clone(),
+            // No room to separate: equal to the senior by copy, flagged.
+            (None, Some(solved), Resolved::Color { .. }) => Resolved::Color {
+                solved,
                 compressed: true,
             },
-            (None, other) => other.clone(),
+            (None, _, other) => other.clone(),
         };
     }
 }
 
-/// The smallest separation in `|Lc|` that counts as "strictly weaker" — one
-/// quantisation step is well above this, so any genuinely distinct grid colour
-/// clears it while floating-point equality noise does not.
+/// The smallest separation in `|Lc|` that counts as "strictly weaker". Note:
+/// near the extremes a single quantisation step can be worth only ~0.2–0.3 Lc,
+/// so a demotion may need several grid steps to clear it — and when even the
+/// laxest legal target cannot, the junior is set equal to its senior instead.
+/// The 0.5 threshold separates real visual distinction from float noise.
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still
@@ -722,10 +732,11 @@ fn max_contrast(
 /// them the LPC rule chose the side that could not reach 4.5:1.
 ///
 /// Stage 2 — *tie-break*: when both sides clear the floor, the larger WCAG margin
-/// wins (then larger LPC headroom if that is level too). When neither clears it,
-/// the side that comes *closest* wins, so the role's [`Unreachable`] reports the
-/// honest best-case `max_ratio`.
-fn choose_polarity(bg: &BgInput, vc: &ViewingConditions) -> Polarity {
+/// wins; an exact margin tie prefers dark-on-light (fixed convention), keeping
+/// the whole decision VC-independent. When neither clears it, the side that
+/// comes *closest* wins, so the role's [`Unreachable`] reports the honest
+/// best-case `max_ratio`.
+fn choose_polarity(bg: &BgInput) -> Polarity {
     let bg_disp = bg_display(bg);
     // Dark-on-light is hosted by a black foreground; light-on-dark by white.
     let ratio_dark_on_light = wcag::contrast_ratio([0.0, 0.0, 0.0], bg_disp);
@@ -739,7 +750,7 @@ fn choose_polarity(bg: &BgInput, vc: &ViewingConditions) -> Polarity {
         (true, false) => Polarity::DarkOnLight,
         (false, true) => Polarity::LightOnDark,
         // Both legal (near the flip) — larger WCAG margin, then LPC headroom.
-        (true, true) => break_tie(bg, vc, ratio_dark_on_light, ratio_light_on_dark),
+        (true, true) => break_tie(ratio_dark_on_light, ratio_light_on_dark),
         // Neither legal — the closest side, so the diagnostic is the honest best.
         (false, false) => {
             if ratio_dark_on_light >= ratio_light_on_dark {
@@ -752,25 +763,14 @@ fn choose_polarity(bg: &BgInput, vc: &ViewingConditions) -> Polarity {
 }
 
 /// Break a polarity tie when both sides clear the legal floor: larger WCAG margin
-/// first, then larger LPC headroom (read from the solver) if the margins are level.
-fn break_tie(
-    bg: &BgInput,
-    vc: &ViewingConditions,
-    ratio_dark_on_light: f64,
-    ratio_light_on_dark: f64,
-) -> Polarity {
+/// wins; at an exact margin tie (the knife-edge background near L ≈ 0.179)
+/// dark-on-light is preferred — a fixed, documented convention. Every input to
+/// this decision is a property of the background bytes alone, so the choice is
+/// VC-independent by construction (no LPC fallback: LPC reads the viewing
+/// conditions and would re-open the theme-flip seam this module promises away).
+fn break_tie(ratio_dark_on_light: f64, ratio_light_on_dark: f64) -> Polarity {
     const RATIO_EPS: f64 = 1e-6;
-    if (ratio_dark_on_light - ratio_light_on_dark).abs() > RATIO_EPS {
-        return if ratio_dark_on_light > ratio_light_on_dark {
-            Polarity::DarkOnLight
-        } else {
-            Polarity::LightOnDark
-        };
-    }
-    // WCAG margins level — fall back to perceptual headroom.
-    let lpc_dol = max_contrast(bg, Polarity::DarkOnLight, vc).unwrap_or(0.0);
-    let lpc_lod = max_contrast(bg, Polarity::LightOnDark, vc).unwrap_or(0.0);
-    if lpc_lod > lpc_dol {
+    if (ratio_light_on_dark - ratio_dark_on_light) > RATIO_EPS {
         Polarity::LightOnDark
     } else {
         Polarity::DarkOnLight
@@ -824,8 +824,47 @@ mod tests {
     /// LPC-flip rule (~#999999) chose an unreachable polarity — the stripe
     /// BLOCKER 1 was about. Stepped one 8-bit quantum at a time, plus the two
     /// off-neutral cases (#93939C, #3478F6) from the diagnosis.
+    #[test]
+    fn hierarchy_never_inverts_on_found_counterexamples() {
+        // Verification counterexamples: the floor used to lift the junior onto a
+        // grid point ABOVE its senior (#727272/srgb, #0066FF/dim). The senior-copy
+        // rule must keep `primary >= secondary` (equality allowed, flagged).
+        for (bg_hex, vc) in [
+            ("#727272", ViewingConditions::srgb()),
+            ("#0066FF", ViewingConditions::dim_surround()),
+            ("#6666CC", ViewingConditions::dim_surround()),
+        ] {
+            let bg = BgInput::solid(bg_hex).unwrap();
+            let set = resolve_set(&bg, &RoleTable::default(), &vc);
+            let mag = |role: Role| -> Option<f64> {
+                set.iter().find_map(|(r, res)| match res {
+                    Resolved::Color { solved, .. } if *r == role => Some(solved.lc().abs()),
+                    _ => None,
+                })
+            };
+            if let (Some(p), Some(sec)) = (mag(Role::TextPrimary), mag(Role::TextSecondary)) {
+                assert!(
+                    p + 1e-9 >= sec,
+                    "{bg_hex}: primary {p} must not be weaker than secondary {sec}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polarity_tie_break_is_vc_independent_at_the_seam() {
+        // #757575/#767676 straddle the equal-ratio crossover; the chosen
+        // polarity must be identical under both viewing conditions.
+        for bg_hex in ["#757575", "#767676", "#747474"] {
+            let bg = BgInput::solid(bg_hex).unwrap();
+            let srgb = ResolveContext::new(&bg, &ViewingConditions::srgb()).polarity;
+            let dim = ResolveContext::new(&bg, &ViewingConditions::dim_surround()).polarity;
+            assert_eq!(srgb, dim, "{bg_hex}: polarity must not depend on VC");
+        }
+    }
+
     fn band_hexes() -> Vec<String> {
-        let mut v: Vec<String> = (0x74u32..=0x9F)
+        let mut v: Vec<String> = (0x70u32..=0x9F)
             .map(|g| format!("#{g:02X}{g:02X}{g:02X}"))
             .collect();
         v.push("#93939C".to_string());
