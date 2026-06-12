@@ -34,7 +34,7 @@ use crate::lpc::{
     LO_BOW_OFFSET, LO_CLIP, LO_WOB_OFFSET,
 };
 use crate::scale::max_chroma;
-use crate::spaces::oklab::oklab_to_srgb_linear;
+use crate::spaces::oklab::{oklab_hue, oklab_to_srgb_linear};
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -504,10 +504,20 @@ pub fn solve(
     let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
         let rgb = build_color(l_ok, hue, chroma_policy);
         let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
-        let perceptual_ok = interval
-            .endpoints()
-            .into_iter()
-            .all(|y_end| meets_floor(&solved, y_end, target, vc));
+        // Perceptual floor at every interval endpoint. The governing endpoint's
+        // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
+        // against), so reuse it instead of re-deriving the foreground luminance —
+        // that recovery is the costly H-K forward. Only a *distinct* endpoint
+        // (genuine luminance intervals, a future background variant) pays for a
+        // fresh measurement; a [`Solid`] background's endpoints all coincide with
+        // the governing one, so it measures the foreground exactly once.
+        let perceptual_ok = interval.endpoints().into_iter().all(|y_end| {
+            if y_end == y_gov {
+                meets_floor_lc(solved.lc(), target)
+            } else {
+                meets_floor(&solved, y_end, target, vc)
+            }
+        });
         // The walk only moves toward the achromatic extreme, which raises (never
         // lowers) WCAG contrast, but re-verify the legal floor explicitly rather
         // than lean on an unproven monotonicity assumption.
@@ -940,8 +950,14 @@ fn finish(
     vc: &ViewingConditions,
 ) -> Result<Solved, Unreachable> {
     let hex = hex_from_srgb(rgb_ideal);
+    // The quantised colour, decoded once to linear sRGB, drives both perceptual
+    // measurements that follow — the H-K luminance and the CAM16 appearance
+    // correlates — so the 8-bit hex is parsed a single time. `from_xyz_with_hok`
+    // is exactly what `LcsColor::from_hex_with_vc(&hex)` would compute from this
+    // same linear stimulus, reached without the extra string round-trip.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
-    let color = LcsColor::from_hex_with_vc(&hex, vc).map_err(Unreachable::InvalidInput)?;
+    let xyz = srgb_to_xyz(rgb_quantised);
+    let color = LcsColor::from_xyz_with_hok(xyz, oklab_hue(rgb_quantised), vc);
     let y_fg = bg_luma(rgb_quantised, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
@@ -952,6 +968,19 @@ fn finish(
         wcag_ratio,
         floor_override,
     })
+}
+
+/// Whether a measured signed perceptual contrast meets the (signed) floor within
+/// the 1-Lc quantisation budget. The single comparison both endpoint checks
+/// share: the governing endpoint passes its already-measured `solved.lc()` here
+/// directly (no re-derivation), a distinct endpoint passes the contrast
+/// [`meets_floor`] freshly measured for it.
+fn meets_floor_lc(lc: f64, target: f64) -> bool {
+    if target >= 0.0 {
+        lc >= target - 1.0
+    } else {
+        lc <= target + 1.0
+    }
 }
 
 /// Whether the solved colour still meets the (signed) perceptual floor at one
@@ -968,11 +997,7 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) 
     };
     let y_fg = bg_luma(rgb, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    if target >= 0.0 {
-        lc >= target - 1.0
-    } else {
-        lc <= target + 1.0
-    }
+    meets_floor_lc(lc, target)
 }
 
 /// H-K-corrected background luminance (`Y_hk`) of a linear-sRGB stimulus.
@@ -2086,6 +2111,114 @@ mod tests {
             })
             .collect();
         format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
+    }
+
+    /// The pre-optimisation `apply_floor` crossing search: a fixed 48-iteration
+    /// bisection over the whole `[0, 1]` ray, kept as the golden oracle the
+    /// closed-form-seeded search is measured against. Byte-for-byte the loop the
+    /// shipped `apply_floor` replaced.
+    fn reference_apply_floor_l(
+        l_lpc: f64,
+        floor_ratio: f64,
+        target: f64,
+        hue: Hue,
+        chroma_policy: ChromaPolicy,
+        bg_disp: [f64; 3],
+    ) -> Option<(f64, bool)> {
+        let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
+        if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
+            return Some((l_lpc, false));
+        }
+        let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
+        let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
+        if max_ratio < floor_ratio {
+            return None; // FloorUnreachable in the real path
+        }
+        let mut lo = 0.0_f64;
+        let mut hi = 1.0_f64;
+        for _ in 0..48 {
+            let mid = (lo + hi) * 0.5;
+            let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
+            if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        Some((l_lpc + (l_extreme - l_lpc) * hi, true))
+    }
+
+    #[test]
+    fn apply_floor_matches_the_cold_bisection_byte_for_byte() {
+        // The closed-form-seeded floor search must emit the *same hex* as the old
+        // fixed-48 [0, 1] bisection everywhere — densely, not just on the 24
+        // golden rows. Sweep starting lightness, both polarities, both floors,
+        // neutral and the production tint, against backgrounds spanning the grey
+        // axis plus a chromatic one, under both viewing conditions. A single hex
+        // disagreement (a seed that narrowed past the crossing, an early exit that
+        // stopped short) fails here.
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#9C9C9C", "#5A5A5A", "#1C1C1E", "#3478F6",
+        ];
+        let floors = [crate::wcag::AA_TEXT_RATIO, crate::wcag::AA_UI_RATIO];
+        let policies = [
+            (Hue::deg(0.0), ChromaPolicy::Neutral),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.10)),
+        ];
+        let mut compared = 0usize;
+        let mut floored = 0usize;
+        for bg_hex in bgs {
+            let bg_disp = {
+                let lin = srgb_from_hex(bg_hex).unwrap();
+                quantised_display(lin)
+            };
+            for floor_ratio in floors {
+                for (hue, chroma) in policies {
+                    for sign in [1.0_f64, -1.0_f64] {
+                        // Sweep the perceptual lightness the floor might lift.
+                        for i in 0..=200 {
+                            let l_lpc = i as f64 / 200.0;
+                            let target = sign; // only the sign (polarity) matters here
+                            let got = apply_floor(l_lpc, floor_ratio, target, hue, chroma, bg_disp);
+                            let want = reference_apply_floor_l(
+                                l_lpc,
+                                floor_ratio,
+                                target,
+                                hue,
+                                chroma,
+                                bg_disp,
+                            );
+                            match (got, want) {
+                                (Ok((l_new, ov_new)), Some((l_ref, ov_ref))) => {
+                                    compared += 1;
+                                    assert_eq!(
+                                        ov_new, ov_ref,
+                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: override flag differs"
+                                    );
+                                    if ov_new {
+                                        floored += 1;
+                                    }
+                                    let hex_new = hex_from_srgb(build_color(l_new, hue, chroma));
+                                    let hex_ref = hex_from_srgb(build_color(l_ref, hue, chroma));
+                                    assert_eq!(
+                                        hex_new, hex_ref,
+                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: hex drift (new {hex_new} vs cold {hex_ref})"
+                                    );
+                                }
+                                (Err(_), None) => {
+                                    compared += 1; // both FloorUnreachable — agree
+                                }
+                                (g, w) => panic!(
+                                    "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: reachability disagreement {g:?} vs {w:?}"
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("apply_floor oracle: {compared} cases compared, {floored} actually floored");
+        assert!(floored >= 100, "too few floored cases exercised: {floored}");
     }
 
     #[test]
