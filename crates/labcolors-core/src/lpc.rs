@@ -284,6 +284,15 @@ pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
 /// `J_HK = J + f(h) * C^0.587`, with the chroma correlate `C = M / F_L^0.25`.
 pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
     let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
+    j_hk_from_cam16(j, m, h, vc)
+}
+
+/// Hellwig 2022 H-K-corrected lightness from already-computed CIECAM16
+/// correlates `(J, M, h)`. Splitting this out of [`j_hk_from_xyz`] lets a caller
+/// that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s `finish`, which
+/// also needs the `LcsColor`) derive `J_HK` from the same forward pass instead
+/// of running a second identical one on the same stimulus.
+pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) -> f64 {
     let chroma = m / vc.fl.powf(0.25);
     j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }

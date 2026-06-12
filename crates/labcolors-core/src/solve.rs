@@ -952,13 +952,17 @@ fn finish(
     let hex = hex_from_srgb(rgb_ideal);
     // The quantised colour, decoded once to linear sRGB, drives both perceptual
     // measurements that follow — the H-K luminance and the CAM16 appearance
-    // correlates — so the 8-bit hex is parsed a single time. `from_xyz_with_hok`
-    // is exactly what `LcsColor::from_hex_with_vc(&hex)` would compute from this
-    // same linear stimulus, reached without the extra string round-trip.
+    // correlates. Both previously ran the CIECAM16 forward on this *same* XYZ
+    // independently (`from_xyz_with_hok` and `bg_luma` → `j_hk_from_xyz`),
+    // doubling the hottest pass on every candidate. Run the forward once and feed
+    // both: `LcsColor::from_cam16` is exactly what `from_xyz_with_hok` builds, and
+    // `j_hk_from_cam16` is the same `J_HK` `bg_luma` derives — bit-identical, one
+    // forward instead of two.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
     let xyz = srgb_to_xyz(rgb_quantised);
-    let color = LcsColor::from_xyz_with_hok(xyz, oklab_hue(rgb_quantised), vc);
-    let y_fg = bg_luma(rgb_quantised, vc);
+    let (j, m, h) = crate::spaces::cam16::forward(xyz, vc);
+    let color = LcsColor::from_cam16(j, m, h, oklab_hue(rgb_quantised));
+    let y_fg = lpc::y_hk(lpc::j_hk_from_cam16(j, m, h, vc).max(0.0), vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
     Ok(Solved {
@@ -1001,9 +1005,19 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) 
 }
 
 /// H-K-corrected background luminance (`Y_hk`) of a linear-sRGB stimulus.
+///
+/// For an exact 8-bit grey under a precompiled VC the `J_HK` is a table lookup
+/// ([`grey_j_hk`](crate::lut::grey_j_hk)) — bit-identical to the forward, since
+/// the table samples the real `j_hk_from_xyz` at those greys — which serves a
+/// grey background's luminance (re-measured once per role across a set) and any
+/// neutral-policy candidate without a CIECAM16 forward. Every other stimulus
+/// (the v1 default's tinted candidates) takes the full forward.
 fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
-    let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
-    lpc::y_hk(j_hk, vc)
+    let j_hk = match crate::lut::grey_j_hk(rgb, vc) {
+        Some(j) => j,
+        None => lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc),
+    };
+    lpc::y_hk(j_hk.max(0.0), vc)
 }
 
 #[cfg(test)]
@@ -1022,27 +1036,35 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn _count_cam16_forwards_per_set() {
+    fn cam16_forwards_per_set_regression_guard() {
+        // DETERMINISTIC PERF METRIC (issue #19 / discrete-exactness). Wall-time on
+        // a loaded machine is too noisy to measure a few-percent change, so the
+        // honest before/after number is the count of CIECAM16 forward passes a
+        // default `resolve_set` runs. Two reductions land here, both bit-identical:
+        //   * `finish` dedup — one shared forward feeds both the LcsColor and the
+        //     J_HK instead of two on the same XYZ: 406 → 397.
+        //   * grey-background J_HK lookup — the set re-measures the same grey bg
+        //     once per role; those now hit GREY_J_HK: 397 → 387.
+        // This guard pins it: a future change that re-introduces a duplicate
+        // forward — or one that legitimately removes more — fails here until the
+        // expected count is updated with intent. (On the v1 default *tinted* table
+        // the candidates are not grey, so the grey table serves only the bg's own
+        // luminance — a small share; its larger win is on the achromatic policy.)
         use crate::spaces::cam16::FORWARD_CALLS;
-        use crate::{RoleChroma, RoleTable};
-        use std::sync::atomic::Ordering;
-        let tables = [
-            ("tinted(default)", RoleTable::default()),
-            (
-                "neutral",
-                RoleTable::default().with_chroma(RoleChroma::Neutral),
-            ),
-        ];
+        // Pure greys (#FFFFFF, #7F7F7F) hit the grey-bg J_HK lookup on every role,
+        // landing at 387. `#101012` is NOT a pure grey (b=0x12 ≠ r=g=0x10), so its
+        // background luminance still takes the forward — it stays at 397, the
+        // post-finish-dedup figure. Per-bg expectations make that explicit.
         for (vc, name) in vcs() {
-            for (tname, table) in &tables {
-                for bg in ["#FFFFFF", "#101012", "#7F7F7F"] {
-                    FORWARD_CALLS.store(0, Ordering::Relaxed);
-                    let bgi = crate::BgInput::solid(bg).unwrap();
-                    let _ = crate::resolve_set(&bgi, table, &vc);
-                    let n = FORWARD_CALLS.load(Ordering::Relaxed);
-                    eprintln!("CAM16 forwards: {name}/{tname}/{bg} = {n}");
-                }
+            for (bg, expected) in [("#FFFFFF", 387u64), ("#7F7F7F", 387), ("#101012", 397)] {
+                FORWARD_CALLS.with(|c| c.set(0));
+                let bgi = crate::BgInput::solid(bg).unwrap();
+                let _ = crate::resolve_set(&bgi, &crate::RoleTable::default(), &vc);
+                let n = FORWARD_CALLS.with(|c| c.get());
+                assert_eq!(
+                    n, expected,
+                    "{name}/{bg}: CAM16 forwards/set = {n}, expected {expected}"
+                );
             }
         }
     }

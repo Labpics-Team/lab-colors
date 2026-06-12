@@ -8,11 +8,17 @@
 use crate::spaces::cat16;
 use crate::spaces::vc::ViewingConditions;
 
-/// Test-only counter of [`forward`] invocations, used by the instrumentation
-/// test that reports CAM16 forwards per `resolve_set` (issue #19 / perf bench).
 #[cfg(test)]
-pub(crate) static FORWARD_CALLS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    /// Test-only per-thread counter of [`forward`] invocations. Powers the
+    /// deterministic `cam16_forwards_per_set_regression_guard` test, which pins
+    /// the count of CIECAM16 forward passes a default `resolve_set` runs — the
+    /// honest, noise-free "before/after" metric for the discrete-exactness perf
+    /// work (wall-time on a loaded box is too variable to measure a few-percent
+    /// delta). Thread-local, not a global atomic, so the test runner's parallel
+    /// tests cannot pollute the count.
+    pub(crate) static FORWARD_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// Forward nonlinear adaptation.
 ///
@@ -39,7 +45,7 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
 /// a CAM16 matrix or surround change land in exactly one place (issue #19).
 pub(crate) fn forward(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     #[cfg(test)]
-    FORWARD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    FORWARD_CALLS.with(|c| c.set(c.get() + 1));
     let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
 
     let lms = cat16::xyz_to_cone(xyz);

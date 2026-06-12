@@ -57,10 +57,63 @@
 
 use crate::lpc::j_hk_from_xyz;
 use crate::solve::{ChromaPolicy, Hue, build_color_for_lut};
-use crate::spaces::srgb::srgb_to_xyz;
+use crate::spaces::srgb::{grey_decode_index, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 
 mod lut_data;
+
+/// Exact `J_HK` of an 8-bit grey background, if the stimulus is one.
+///
+/// A solid grey background (`r == g == b` in 8-bit) is a finite-domain input:
+/// there are only 256 grey codes, so its H-K-corrected lightness `J_HK` is one
+/// of 256 exact values per viewing condition — `GREY_J_HK_*[b]` tabulates them
+/// from the live forward path. `resolve_set` evaluates `bg_luma` of the *same*
+/// background once per role (~13×), and the achromatic-policy override resolves
+/// neutral candidates that are also 8-bit greys, so serving those from the table
+/// replaces a full CIECAM16 forward with a lookup — bit-identically, because the
+/// table samples the real `j_hk_from_xyz` at exactly those greys.
+///
+/// Returns `None` when the stimulus is not an exact 8-bit grey or the VC is not
+/// one of the two precompiled presets, so the caller keeps the full forward —
+/// the lookup is never silently approximate. Honest scope: on the v1 *default*
+/// (tinted) role table the candidates are not grey, so this only serves the grey
+/// background's own luminance; its set-wide win shows on the achromatic-policy
+/// path. See the PR analysis for the measured contribution.
+pub(crate) fn grey_j_hk(rgb: [f64; 3], vc: &ViewingConditions) -> Option<f64> {
+    if rgb[0].to_bits() != rgb[1].to_bits() || rgb[1].to_bits() != rgb[2].to_bits() {
+        return None;
+    }
+    let b = grey_decode_index(rgb[0])?;
+    let table = grey_j_hk_table_for_vc(vc)?;
+    Some(table[b])
+}
+
+/// The 256-entry grey `J_HK` table for `vc`, if `vc` is a precompiled preset.
+fn grey_j_hk_table_for_vc(vc: &ViewingConditions) -> Option<&'static [f64; 256]> {
+    const EPS: f64 = 1e-9;
+    let srgb = ViewingConditions::srgb();
+    let dim = ViewingConditions::dim_surround();
+    if (vc.c - srgb.c).abs() < EPS && (vc.nc - srgb.nc).abs() < EPS {
+        Some(&lut_data::GREY_J_HK_SRGB)
+    } else if (vc.c - dim.c).abs() < EPS && (vc.nc - dim.nc).abs() < EPS {
+        Some(&lut_data::GREY_J_HK_DIM)
+    } else {
+        None
+    }
+}
+
+/// Recompute the 256-entry grey `J_HK` table for `vc` from the live forward path.
+#[cfg(test)]
+pub(crate) fn generate_grey_j_hk(vc: &ViewingConditions) -> [f64; 256] {
+    use crate::spaces::srgb::srgb_from_hex;
+    let mut table = [0.0_f64; 256];
+    for (b, slot) in table.iter_mut().enumerate() {
+        let hex = format!("#{b:02X}{b:02X}{b:02X}");
+        let rgb = srgb_from_hex(&hex).expect("grey hex is valid");
+        *slot = j_hk_from_xyz(srgb_to_xyz(rgb), vc);
+    }
+    table
+}
 
 /// Number of uniformly-spaced `l_ok` nodes per table.
 ///
@@ -310,20 +363,30 @@ mod tests {
         use std::fmt::Write as _;
         let srgb = generate_table(&ViewingConditions::srgb());
         let dim = generate_table(&ViewingConditions::dim_surround());
+        let grey_srgb = generate_grey_j_hk(&ViewingConditions::srgb());
+        let grey_dim = generate_grey_j_hk(&ViewingConditions::dim_surround());
         let mut out = String::new();
         out.push_str("//! Precompiled grey-axis J_HK tables — DO NOT EDIT BY HAND.\n");
         out.push_str("//!\n");
         out.push_str(
             "//! `j_hk[i] = J_HK(i / (LUT_NODES - 1))` for a neutral sRGB stimulus, one\n",
         );
-        out.push_str("//! table per supported viewing condition. Generated from the crate's own\n");
-        out.push_str("//! forward path by `lut::tests::_emit_lut_data`; regenerate with\n");
+        out.push_str(
+            "//! table per supported viewing condition, plus `GREY_J_HK_*[b]` = the exact\n",
+        );
+        out.push_str(
+            "//! J_HK of each 8-bit grey code. Generated from the crate's own forward path\n",
+        );
+        out.push_str("//! by `lut::tests::_emit_lut_data`; regenerate with\n");
         out.push_str("//! `cargo test -p labcolors-core _emit_lut_data -- --ignored`. The\n");
-        out.push_str("//! `lut_data_matches_live_math` test fails if this drifts from the math.\n");
+        out.push_str(
+            "//! `lut_data_matches_live_math` / `grey_j_hk_data_matches_live_math` tests\n",
+        );
+        out.push_str("//! fail if these drift from the math.\n");
         out.push_str("use super::LUT_NODES;\n\n");
-        let emit = |out: &mut String, name: &str, t: &[f64; LUT_NODES]| {
+        let emit = |out: &mut String, decl: &str, t: &[f64]| {
             writeln!(out, "#[rustfmt::skip]").ok();
-            writeln!(out, "pub(crate) static {name}: [f64; LUT_NODES] = [").ok();
+            writeln!(out, "pub(crate) static {decl} = [").ok();
             for chunk in t.chunks(4) {
                 out.push_str("    ");
                 // {:?} on f64 emits the shortest round-tripping decimal.
@@ -337,8 +400,10 @@ mod tests {
             }
             out.push_str("];\n\n");
         };
-        emit(&mut out, "GREY_AXIS_SRGB", &srgb);
-        emit(&mut out, "GREY_AXIS_DIM", &dim);
+        emit(&mut out, "GREY_AXIS_SRGB: [f64; LUT_NODES]", &srgb);
+        emit(&mut out, "GREY_AXIS_DIM: [f64; LUT_NODES]", &dim);
+        emit(&mut out, "GREY_J_HK_SRGB: [f64; 256]", &grey_srgb);
+        emit(&mut out, "GREY_J_HK_DIM: [f64; 256]", &grey_dim);
         // Single trailing newline; no blank line at EOF (rustfmt-clean).
         while out.ends_with("\n\n") {
             out.pop();
@@ -391,6 +456,67 @@ mod tests {
             }
             eprintln!("[{name}] committed-vs-live LUT max ΔJ_HK = {max_delta:.2e}");
         }
+    }
+
+    #[test]
+    fn grey_j_hk_data_matches_live_math() {
+        // Anti-drift gate for the 8-bit grey J_HK tables: each committed entry
+        // must reproduce a fresh `j_hk_from_xyz` on that grey. Same DRIFT_TOL
+        // rationale as the grey-axis LUT (cross-platform libm last-ULP noise, not
+        // a genuine drift). A wrong CAM16 path or VC moves whole J_HK units.
+        for (live, committed, name) in [
+            (
+                generate_grey_j_hk(&ViewingConditions::srgb()),
+                &lut_data::GREY_J_HK_SRGB,
+                "sRGB",
+            ),
+            (
+                generate_grey_j_hk(&ViewingConditions::dim_surround()),
+                &lut_data::GREY_J_HK_DIM,
+                "dim",
+            ),
+        ] {
+            let mut max_delta = 0.0_f64;
+            for (b, (&l, &c)) in live.iter().zip(committed.iter()).enumerate() {
+                let delta = (l - c).abs();
+                max_delta = max_delta.max(delta);
+                assert!(
+                    delta < DRIFT_TOL,
+                    "{name} grey J_HK[{b}] diverged from live math by {delta} (> {DRIFT_TOL}) — regenerate lut_data.rs"
+                );
+            }
+            eprintln!("[{name}] committed-vs-live GREY_J_HK max ΔJ_HK = {max_delta:.2e}");
+        }
+    }
+
+    #[test]
+    fn grey_j_hk_lookup_is_bit_identical_to_forward() {
+        // The lookup must equal the full forward bit-for-bit for every 8-bit grey
+        // under both presets (the table samples that exact forward), so swapping
+        // `bg_luma` onto it cannot move any resolved colour. Also pins that a
+        // non-grey or unsupported-VC stimulus is declined (None), keeping the
+        // forward path for everything the table does not exactly cover.
+        use crate::lpc::j_hk_from_xyz;
+        use crate::spaces::srgb::srgb_from_hex;
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for b in 0u16..=255 {
+                let hex = format!("#{b:02X}{b:02X}{b:02X}", b = b as u8);
+                let rgb = srgb_from_hex(&hex).expect("grey hex valid");
+                let looked_up = grey_j_hk(rgb, &vc).expect("8-bit grey under preset VC");
+                let forward = j_hk_from_xyz(srgb_to_xyz(rgb), &vc);
+                assert_eq!(
+                    looked_up.to_bits(),
+                    forward.to_bits(),
+                    "grey {hex}: lookup {looked_up} != forward {forward}"
+                );
+            }
+        }
+        // A tinted (non-grey) stimulus is declined.
+        let tinted = srgb_from_hex("#3478F6").unwrap();
+        assert!(grey_j_hk(tinted, &ViewingConditions::srgb()).is_none());
+        // An unsupported VC is declined even for a grey.
+        let grey = srgb_from_hex("#7F7F7F").unwrap();
+        assert!(grey_j_hk(grey, &ViewingConditions::dark_surround()).is_none());
     }
 
     #[test]

@@ -60,7 +60,14 @@ impl LcsColor {
         // Single shared CIECAM16 forward pass (issue #19); the UCS rescale is the
         // only step `lcs` adds on top of it.
         let (j, m, h) = cam16::forward(xyz, vc);
+        Self::from_cam16(j, m, h, h_ok)
+    }
 
+    /// Build from already-computed CIECAM16 correlates `(J, M, h_cam)` plus the
+    /// Oklab hue. The UCS rescale is the only work here — no forward pass — so a
+    /// caller that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s
+    /// `finish`) reuses that result instead of recomputing it.
+    pub(crate) fn from_cam16(j: f64, m: f64, h_cam: f64, h_ok: f64) -> Self {
         // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131): maps raw
         // CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads as
         // half-lightness). Inverse in `to_xyz` via the same helpers.
@@ -68,12 +75,7 @@ impl LcsColor {
         let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
 
-        Self {
-            jp,
-            h_ok,
-            s,
-            h_cam: h,
-        }
+        Self { jp, h_ok, s, h_cam }
     }
 
     pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
