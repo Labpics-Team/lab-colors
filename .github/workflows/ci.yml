@@ -58,7 +58,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
-        run: cargo install cargo-audit --version 0.21.2 --locked
+        # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
+        # CVSS v4.0 and fail to load the advisory database entirely.
+        run: cargo install cargo-audit --version 0.22.2 --locked
       # Hard-fail on actively-exploitable advisories AND on yanked crates.
       # Rationale: a known-vulnerable or yanked dependency is a supply-chain
       # liability we will not knowingly merge. cargo-audit exits non-zero on any
