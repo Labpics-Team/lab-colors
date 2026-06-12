@@ -71,3 +71,36 @@ jobs:
       # with a comment — never by disabling the whole gate.
       - name: cargo audit
         run: cargo audit --deny warnings
+
+  wasm:
+    name: wasm build + headless test + size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # The WASM compile target; the bindings are built and tested against it.
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install wasm-pack
+        # Pinned for reproducibility; --locked respects the tool's own lockfile.
+        # wasm-pack vendors a matching wasm-opt and downloads a matching
+        # chromedriver for the headless run below.
+        run: cargo install wasm-pack --version 0.13.1 --locked
+      - name: wasm-pack build (release)
+        # The release bundle: panic=abort, no panic hook, wasm-opt -Oz. This is
+        # the artifact @labpics/colors ships, so the size measured below is real.
+        run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors
+      - name: wasm-pack test (headless chrome)
+        # ubuntu-latest ships Chrome; the parity smoke runs against native
+        # resolve_set inside the same wasm runtime. D1 default from the chapter.
+        run: wasm-pack test --headless --chrome crates/labcolors-wasm
+      - name: report bundle size (gzip)
+        # Size is part of the perf story (perf-bench). Not a hard gate yet — a
+        # budget gate lands with perf-bench; here we surface the number in logs.
+        run: |
+          wasm="packages/colors/pkg/labcolors_bg.wasm"
+          glue="packages/colors/pkg/labcolors.js"
+          echo "wasm: raw=$(wc -c <"$wasm")B gzip=$(gzip -9 -c "$wasm" | wc -c)B"
+          echo "glue: raw=$(wc -c <"$glue")B gzip=$(gzip -9 -c "$glue" | wc -c)B"

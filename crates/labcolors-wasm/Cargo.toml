@@ -1,0 +1,43 @@
+[package]
+name = "labcolors-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM bindings for the labcolors-core contrast engine, packaged as @labpics/colors."
+
+[lib]
+# `cdylib` is the WASM artifact wasm-pack consumes; `rlib` keeps the crate
+# unit-testable with a native `cargo test`.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+labcolors-core = { path = "../labcolors-core" }
+wasm-bindgen = { workspace = true }
+# js-sys ships with the wasm-bindgen toolchain (no new third-party tree); used
+# to build the result object at the boundary without a serde dependency.
+js-sys = "0.3"
+# Derive-only: thiserror is a proc-macro with no runtime code, so it adds
+# nothing to the WASM bundle while giving matchable, well-described errors.
+thiserror = "2"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# wasm-pack invokes wasm-opt with these flags. `-Oz` optimises hard for size;
+# the feature-enable flags match what modern Rust emits and 2023+ browsers run
+# (the epic's target), so the optimiser does not reject the toolchain's output.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+
+[features]
+default = []
+# Opt-in dev aid: routes Rust panics to the browser console with a readable
+# stack. OFF by default and never enabled in the release bundle — production
+# errors are returned as structured values, never panics (task requirement).
+console_panic = ["dep:console_error_panic_hook"]
+
+[dependencies.console_error_panic_hook]
+version = "0.1"
+optional = true
