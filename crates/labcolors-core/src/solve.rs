@@ -34,7 +34,7 @@ use crate::lpc::{
     LO_BOW_OFFSET, LO_CLIP, LO_WOB_OFFSET,
 };
 use crate::scale::max_chroma;
-use crate::spaces::oklab::oklab_to_srgb_linear;
+use crate::spaces::oklab::{oklab_hue, oklab_to_srgb_linear};
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -504,10 +504,20 @@ pub fn solve(
     let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
         let rgb = build_color(l_ok, hue, chroma_policy);
         let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
-        let perceptual_ok = interval
-            .endpoints()
-            .into_iter()
-            .all(|y_end| meets_floor(&solved, y_end, target, vc));
+        // Perceptual floor at every interval endpoint. The governing endpoint's
+        // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
+        // against), so reuse it instead of re-deriving the foreground luminance —
+        // that recovery is the costly H-K forward. Only a *distinct* endpoint
+        // (genuine luminance intervals, a future background variant) pays for a
+        // fresh measurement; a [`Solid`] background's endpoints all coincide with
+        // the governing one, so it measures the foreground exactly once.
+        let perceptual_ok = interval.endpoints().into_iter().all(|y_end| {
+            if y_end == y_gov {
+                meets_floor_lc(solved.lc(), target)
+            } else {
+                meets_floor(&solved, y_end, target, vc)
+            }
+        });
         // The walk only moves toward the achromatic extreme, which raises (never
         // lowers) WCAG contrast, but re-verify the legal floor explicitly rather
         // than lean on an unproven monotonicity assumption.
@@ -940,8 +950,14 @@ fn finish(
     vc: &ViewingConditions,
 ) -> Result<Solved, Unreachable> {
     let hex = hex_from_srgb(rgb_ideal);
+    // The quantised colour, decoded once to linear sRGB, drives both perceptual
+    // measurements that follow — the H-K luminance and the CAM16 appearance
+    // correlates — so the 8-bit hex is parsed a single time. `from_xyz_with_hok`
+    // is exactly what `LcsColor::from_hex_with_vc(&hex)` would compute from this
+    // same linear stimulus, reached without the extra string round-trip.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
-    let color = LcsColor::from_hex_with_vc(&hex, vc).map_err(Unreachable::InvalidInput)?;
+    let xyz = srgb_to_xyz(rgb_quantised);
+    let color = LcsColor::from_xyz_with_hok(xyz, oklab_hue(rgb_quantised), vc);
     let y_fg = bg_luma(rgb_quantised, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
@@ -952,6 +968,19 @@ fn finish(
         wcag_ratio,
         floor_override,
     })
+}
+
+/// Whether a measured signed perceptual contrast meets the (signed) floor within
+/// the 1-Lc quantisation budget. The single comparison both endpoint checks
+/// share: the governing endpoint passes its already-measured `solved.lc()` here
+/// directly (no re-derivation), a distinct endpoint passes the contrast
+/// [`meets_floor`] freshly measured for it.
+fn meets_floor_lc(lc: f64, target: f64) -> bool {
+    if target >= 0.0 {
+        lc >= target - 1.0
+    } else {
+        lc <= target + 1.0
+    }
 }
 
 /// Whether the solved colour still meets the (signed) perceptual floor at one
@@ -968,11 +997,7 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) 
     };
     let y_fg = bg_luma(rgb, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    if target >= 0.0 {
-        lc >= target - 1.0
-    } else {
-        lc <= target + 1.0
-    }
+    meets_floor_lc(lc, target)
 }
 
 /// H-K-corrected background luminance (`Y_hk`) of a linear-sRGB stimulus.
@@ -2022,6 +2047,242 @@ mod tests {
             max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
             "a Bracket-path hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
         );
+    }
+
+    /// Frozen `resolve_set` hex output across the owner's golden grid — the
+    /// before/after gate for any hot-path refactor in this module. Each line is
+    /// `vc|bg|policy|role=hex,…` produced by the live `resolve_set`. The full
+    /// set of emitted `#RRGGBB` hexes for every role must be byte-identical
+    /// before and after a performance change; if any cell moves, the refactor
+    /// altered the colour the caller gets and the test fails loudly.
+    ///
+    /// Grid: 6 backgrounds (#FFFFFF/#F2F2F7/#7F7F7F/#1C1C1E/#101012/#3478F6) ×
+    /// both precompiled viewing conditions × the two production chroma policies
+    /// (achromatic Neutral and the v1 Tinted{286°, 0.10}). Regenerate the
+    /// expectations with `_emit_resolve_set_golden` (kept below, `#[ignore]`d)
+    /// only when a colour change is *intended* and explained.
+    const RESOLVE_SET_GOLDEN: &[&str] = &[
+        "srgb|#FFFFFF|Neutral|text-primary=#141414,text-secondary=#767676,text-muted=#949494,text-disabled=#C2C2C2,icon=#949494,separator=#E9E9E9,border=#E7E7E7,surface=#E9E9E9,shadow=#E5E5E5,none=none",
+        "srgb|#FFFFFF|Tinted|text-primary=#0C0C11,text-secondary=#6D6D7E,text-muted=#9493A0,text-disabled=#BEBEC6,icon=#9493A0,separator=#E8E8EA,border=#E6E6E9,surface=#E8E8EA,shadow=#E4E4E7,none=none",
+        "srgb|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#E0E0E0,surface=#E1E1E1,shadow=#DEDEDE,none=none",
+        "srgb|#F2F2F7|Tinted|text-primary=#0C0C10,text-secondary=#69697B,text-muted=#8C8B99,text-disabled=#B8B8C0,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
+        "srgb|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#666666,surface=#696969,shadow=#646464,none=none",
+        "srgb|#7F7F7F|Tinted|text-primary=#030304,text-secondary=#16161B,text-muted=#363541,text-disabled=#575667,icon=#363541,separator=#5F5E70,border=#5C5C6E,surface=#5F5E70,shadow=#5A5A6B,none=none",
+        "srgb|#1C1C1E|Neutral|text-primary=#F6F6F6,text-secondary=#BABABA,text-muted=#9A9A9A,text-disabled=#727272,icon=#9A9A9A,separator=#3F3F3F,border=#424242,surface=#3F3F3F,shadow=#444444,none=none",
+        "srgb|#1C1C1E|Tinted|text-primary=#F6F6F7,text-secondary=#B6B6BF,text-muted=#9494A0,text-disabled=#68687A,icon=#9494A0,separator=#363541,border=#383844,surface=#363541,shadow=#3B3B47,none=none",
+        "srgb|#101012|Neutral|text-primary=#F6F6F6,text-secondary=#B9B9B9,text-muted=#989898,text-disabled=#6F6F6F,icon=#989898,separator=#393939,border=#3C3C3C,surface=#393939,shadow=#3F3F3F,none=none",
+        "srgb|#101012|Tinted|text-primary=#F6F6F7,text-secondary=#B5B5BD,text-muted=#91919E,text-disabled=#646477,icon=#91919E,separator=#30303A,border=#33323D,surface=#30303A,shadow=#353540,none=none",
+        "srgb|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
+        "srgb|#3478F6|Tinted|text-primary=#050406,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7D,icon=#35343F,separator=#7C7C8C,border=#7A7A8A,surface=#7C7C8C,shadow=#787787,none=none",
+        "dim|#FFFFFF|Neutral|text-primary=#131313,text-secondary=#757575,text-muted=#949494,text-disabled=#C0C0C0,icon=#949494,separator=#E7E7E7,border=#E5E5E5,surface=#E7E7E7,shadow=#E3E3E3,none=none",
+        "dim|#FFFFFF|Tinted|text-primary=#0E0E12,text-secondary=#6D6C7E,text-muted=#9493A0,text-disabled=#BDBDC5,icon=#9493A0,separator=#E6E6E8,border=#E4E4E7,surface=#E6E6E8,shadow=#E2E2E5,none=none",
+        "dim|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#DFDFDF,surface=#E1E1E1,shadow=#DEDEDE,none=none",
+        "dim|#F2F2F7|Tinted|text-primary=#0D0D12,text-secondary=#6A6A7B,text-muted=#8C8B99,text-disabled=#B8B8C1,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
+        "dim|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#676767,surface=#696969,shadow=#646464,none=none",
+        "dim|#7F7F7F|Tinted|text-primary=#040406,text-secondary=#16161B,text-muted=#363541,text-disabled=#585868,icon=#363541,separator=#606072,border=#5E5D6F,surface=#606072,shadow=#5C5B6D,none=none",
+        "dim|#1C1C1E|Neutral|text-primary=#F4F4F4,text-secondary=#B8B8B8,text-muted=#989898,text-disabled=#707070,icon=#989898,separator=#3D3D3D,border=#404040,surface=#3D3D3D,shadow=#434343,none=none",
+        "dim|#1C1C1E|Tinted|text-primary=#F3F3F5,text-secondary=#B5B5BD,text-muted=#93939F,text-disabled=#686779,icon=#93939F,separator=#363641,border=#393844,surface=#363641,shadow=#3B3B47,none=none",
+        "dim|#101012|Neutral|text-primary=#F4F4F4,text-secondary=#B7B7B7,text-muted=#969696,text-disabled=#6D6D6D,icon=#969696,separator=#373737,border=#3A3A3A,surface=#373737,shadow=#3D3D3D,none=none",
+        "dim|#101012|Tinted|text-primary=#F3F3F5,text-secondary=#B3B3BC,text-muted=#90909D,text-disabled=#646476,icon=#90909D,separator=#30303A,border=#33333D,surface=#30303A,shadow=#363541,none=none",
+        "dim|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
+        "dim|#3478F6|Tinted|text-primary=#060608,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7E,icon=#35343F,separator=#7D7D8C,border=#7B7A8A,surface=#7D7D8C,shadow=#787888,none=none",
+    ];
+
+    /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.
+    fn resolve_set_golden_line(
+        vc: &ViewingConditions,
+        vc_name: &str,
+        bg_hex: &str,
+        pol_name: &str,
+        chroma: crate::semantic::RoleChroma,
+    ) -> String {
+        use crate::semantic::{Resolved, RoleTable, resolve_set};
+        let bg = BgInput::solid(bg_hex).unwrap();
+        let table = RoleTable::default().with_chroma(chroma);
+        let cells: Vec<String> = resolve_set(&bg, &table, vc)
+            .iter()
+            .map(|(role, res)| {
+                let v = match res {
+                    Resolved::Color { solved, .. } => solved.hex().to_string(),
+                    Resolved::None => "none".to_string(),
+                    Resolved::Unreachable(_) => "unreach".to_string(),
+                };
+                format!("{}={}", role.key(), v)
+            })
+            .collect();
+        format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
+    }
+
+    /// The pre-optimisation `apply_floor` crossing search: a fixed 48-iteration
+    /// bisection over the whole `[0, 1]` ray, kept as the golden oracle the
+    /// closed-form-seeded search is measured against. Byte-for-byte the loop the
+    /// shipped `apply_floor` replaced.
+    fn reference_apply_floor_l(
+        l_lpc: f64,
+        floor_ratio: f64,
+        target: f64,
+        hue: Hue,
+        chroma_policy: ChromaPolicy,
+        bg_disp: [f64; 3],
+    ) -> Option<(f64, bool)> {
+        let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
+        if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
+            return Some((l_lpc, false));
+        }
+        let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
+        let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
+        if max_ratio < floor_ratio {
+            return None; // FloorUnreachable in the real path
+        }
+        let mut lo = 0.0_f64;
+        let mut hi = 1.0_f64;
+        for _ in 0..48 {
+            let mid = (lo + hi) * 0.5;
+            let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
+            if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        Some((l_lpc + (l_extreme - l_lpc) * hi, true))
+    }
+
+    #[test]
+    fn apply_floor_matches_the_cold_bisection_byte_for_byte() {
+        // The closed-form-seeded floor search must emit the *same hex* as the old
+        // fixed-48 [0, 1] bisection everywhere — densely, not just on the 24
+        // golden rows. Sweep starting lightness, both polarities, both floors,
+        // neutral and the production tint, against backgrounds spanning the grey
+        // axis plus a chromatic one, under both viewing conditions. A single hex
+        // disagreement (a seed that narrowed past the crossing, an early exit that
+        // stopped short) fails here.
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#9C9C9C", "#5A5A5A", "#1C1C1E", "#3478F6",
+        ];
+        let floors = [crate::wcag::AA_TEXT_RATIO, crate::wcag::AA_UI_RATIO];
+        let policies = [
+            (Hue::deg(0.0), ChromaPolicy::Neutral),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.10)),
+        ];
+        let mut compared = 0usize;
+        let mut floored = 0usize;
+        for bg_hex in bgs {
+            let bg_disp = {
+                let lin = srgb_from_hex(bg_hex).unwrap();
+                quantised_display(lin)
+            };
+            for floor_ratio in floors {
+                for (hue, chroma) in policies {
+                    for sign in [1.0_f64, -1.0_f64] {
+                        // Sweep the perceptual lightness the floor might lift.
+                        for i in 0..=200 {
+                            let l_lpc = i as f64 / 200.0;
+                            let target = sign; // only the sign (polarity) matters here
+                            let got = apply_floor(l_lpc, floor_ratio, target, hue, chroma, bg_disp);
+                            let want = reference_apply_floor_l(
+                                l_lpc,
+                                floor_ratio,
+                                target,
+                                hue,
+                                chroma,
+                                bg_disp,
+                            );
+                            match (got, want) {
+                                (Ok((l_new, ov_new)), Some((l_ref, ov_ref))) => {
+                                    compared += 1;
+                                    assert_eq!(
+                                        ov_new, ov_ref,
+                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: override flag differs"
+                                    );
+                                    if ov_new {
+                                        floored += 1;
+                                    }
+                                    let hex_new = hex_from_srgb(build_color(l_new, hue, chroma));
+                                    let hex_ref = hex_from_srgb(build_color(l_ref, hue, chroma));
+                                    assert_eq!(
+                                        hex_new, hex_ref,
+                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: hex drift (new {hex_new} vs cold {hex_ref})"
+                                    );
+                                }
+                                (Err(_), None) => {
+                                    compared += 1; // both FloorUnreachable — agree
+                                }
+                                (g, w) => panic!(
+                                    "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: reachability disagreement {g:?} vs {w:?}"
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("apply_floor oracle: {compared} cases compared, {floored} actually floored");
+        assert!(floored >= 100, "too few floored cases exercised: {floored}");
+    }
+
+    #[test]
+    fn resolve_set_hex_matches_golden() {
+        use crate::semantic::RoleChroma;
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            ("Neutral", RoleChroma::Neutral),
+            (
+                "Tinted",
+                RoleChroma::Tinted {
+                    hue_deg: 286.0,
+                    ratio: 0.10,
+                },
+            ),
+        ];
+        let mut idx = 0usize;
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                for (pol_name, chroma) in policies {
+                    let got = resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma);
+                    let want = RESOLVE_SET_GOLDEN[idx];
+                    assert_eq!(got, want, "golden drift at grid index {idx}");
+                    idx += 1;
+                }
+            }
+        }
+        assert_eq!(
+            idx,
+            RESOLVE_SET_GOLDEN.len(),
+            "golden grid size changed: covered {idx}, table has {}",
+            RESOLVE_SET_GOLDEN.len()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn _emit_resolve_set_golden() {
+        use crate::semantic::RoleChroma;
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            ("Neutral", RoleChroma::Neutral),
+            (
+                "Tinted",
+                RoleChroma::Tinted {
+                    hue_deg: 286.0,
+                    ratio: 0.10,
+                },
+            ),
+        ];
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                for (pol_name, chroma) in policies {
+                    eprintln!(
+                        "\"{}\",",
+                        resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma)
+                    );
+                }
+            }
+        }
     }
 
     #[test]
