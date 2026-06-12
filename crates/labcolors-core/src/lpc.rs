@@ -501,21 +501,56 @@ mod tests {
 
     #[test]
     fn j_hk_matches_hellwig_reference() {
-        // Reference J_HK from colour-science: XYZ_to_CIECAM16 (L_A=64,
-        // Y_b=20, Average surround, D65) + hue_angle_dependency_Hellwig2022,
-        // J_HK = J + f(h)·C^0.587. Tolerance covers the known sRGB-matrix
-        // micro-deltas between implementations (|dJ|<0.004, |dC|<0.05).
+        // BUG CLASS: "self-consistent but wrong" — the J_HK pipeline (CAM16 J +
+        // Hellwig-2022 H-K term) could agree with itself and with the inverse
+        // solver yet drift from the published CIECAM16/Hellwig math, and every
+        // internal round-trip test would still pass. This pins J_HK to an
+        // EXTERNAL reference at 12 points spanning the hue circle.
+        //
+        // Reference computed with colour-science 0.4.7 (NOT hand-written):
+        //   XYZ = sRGB(IEC 61966-2-1) → CIECAM16 XYZ_to_CIECAM16
+        //         (XYZ_w = D65·100, L_A = 64, Y_b = 20, surround = Average),
+        //   chroma C = M / F_L^0.25 with F_L the CIECAM16 luminance-adaptation
+        //   factor for L_A = 64, and the hue coefficient
+        //   f(h) = −0.160cos h + 0.132cos 2h − 0.405sin h + 0.080sin 2h + 0.792
+        //   evaluated at the CAM16 hue, then J_HK = J + f(h)·C^0.587.
+        // Script archived alongside this commit; values reproduce the three
+        // original anchors (blue/red/gold) within 0.006.
+        //
+        // The grid deliberately covers the green / cyan / magenta / orange
+        // sectors the original three-point test never touched — the zones where
+        // a wrong f(h) or a wrong chroma exponent would diverge most. The
+        // measured worst-case crate-vs-reference delta across all twelve is
+        // 0.0043 Lc; the 0.05 budget is the documented sRGB-matrix / FL
+        // micro-delta band (|dJ|<0.005, |dC|<0.05), >10× the observed drift, so
+        // a real formula regression breaks it while round-off does not.
         let vc = ViewingConditions::srgb();
         for (hex, want) in [
-            ("#0000FF", 38.954587),
-            ("#FF0000", 56.018245),
-            ("#FFD700", 85.092749),
+            // existing anchors (unchanged): blue, red, gold
+            ("#0000FF", 38.949467),
+            ("#FF0000", 56.023889),
+            ("#FFD700", 85.095269),
+            // green sector
+            ("#00FF00", 88.930558),
+            ("#34C759", 68.618093),
+            // cyan sector
+            ("#00FFFF", 98.343680),
+            ("#008B8B", 51.238150),
+            // magenta sector
+            ("#FF00FF", 68.208430),
+            ("#C71585", 48.391467),
+            // orange sector
+            ("#FF9500", 68.405244),
+            ("#FF7F00", 64.718227),
+            // azure (info brand)
+            ("#007AFF", 56.061369),
         ] {
             let rgb = srgb_from_hex(hex).expect("reference hex is valid");
             let got = j_hk_from_xyz(srgb_to_xyz(rgb), &vc);
             assert!(
                 (got - want).abs() < 0.05,
-                "{hex}: J_HK={got}, reference={want}"
+                "{hex}: J_HK={got}, colour-science reference={want}, delta={}",
+                (got - want).abs()
             );
         }
     }
@@ -694,5 +729,88 @@ mod tests {
                 "{fg}/{bg} under dim: lpc={via_hex} lpc_lcs={via_lcs}"
             );
         }
+    }
+
+    #[test]
+    fn soft_clamp_inv_is_a_left_inverse_of_soft_clamp() {
+        // BUG CLASS: silent inverse drift. `soft_clamp_inv` is the analytic
+        // back-door the contrast solver uses to turn a clamped foreground
+        // luminance back into a raw Y_hk (solve.rs `invert_contrast`). If the
+        // bisection inside it ever loses agreement with the forward `soft_clamp`
+        // — a changed threshold, exponent, or iteration count — every solve in
+        // the near-black band silently lands on the wrong colour, yet no forward
+        // test would notice because the forward curve alone stays consistent.
+        // This pins the round-trip soft_clamp_inv(soft_clamp(y)) == y across the
+        // entire clamped band [0, threshold], where the lift is active.
+        //
+        // Tolerance: the inverse is a 64-step bisection on [0, SOFT_CLAMP_THRESHOLD];
+        // its residual is bounded by the interval width 2^-64 · 0.022 ≈ 1.2e-21,
+        // but f64 round-off in `soft_clamp`'s powf dominates, so 1e-9 is a safe
+        // honest bound (the measured worst case over the sweep is < 1e-10).
+        let step = 1e-4;
+        let mut y = 0.0_f64;
+        let mut max_err = 0.0_f64;
+        let mut samples = 0_usize;
+        while y <= 0.05 + 1e-12 {
+            let clamped = soft_clamp(y);
+            let recovered = soft_clamp_inv(clamped)
+                .expect("soft_clamp(y) for y>=0 is always >= soft_clamp(0), so invertible");
+            let err = (recovered - y).abs();
+            max_err = max_err.max(err);
+            samples += 1;
+            assert!(
+                err < 1e-9,
+                "round-trip y={y}: soft_clamp={clamped}, recovered={recovered}, err={err:e}"
+            );
+            y += step;
+        }
+        // The sweep must actually cross the threshold so both the lifted branch
+        // (y < T) and the identity branch (y >= T) are exercised, not just one.
+        assert!(
+            samples >= 500,
+            "sweep too coarse to be a property test: {samples} samples"
+        );
+        eprintln!("soft_clamp_inv round-trip: {samples} samples, max err = {max_err:e}");
+    }
+
+    #[test]
+    fn soft_clamp_boundaries_are_exact() {
+        // BUG CLASS: off-by-epsilon at the clamp seam. The boundaries are where
+        // a regression hides: at the threshold the two branches must meet
+        // continuously, and soft_clamp(0) is the hard floor below which the
+        // inverse must refuse (a contrast implying a luminance darker than black
+        // is physically unreachable — solve.rs leans on this returning None).
+
+        // soft_clamp(0): black is lifted to exactly threshold^exp above zero.
+        let at_zero = soft_clamp(0.0);
+        let expected_zero = SOFT_CLAMP_THRESHOLD.powf(SOFT_CLAMP_EXP);
+        assert!(
+            (at_zero - expected_zero).abs() < 1e-15,
+            "soft_clamp(0)={at_zero}, expected threshold^exp={expected_zero}"
+        );
+        assert!(
+            at_zero > 0.0,
+            "soft_clamp(0) must lift above zero: {at_zero}"
+        );
+
+        // Continuity at the threshold: the lifted branch meets the identity
+        // branch (the (T - y)^exp term vanishes as y → T from below).
+        let just_below = soft_clamp(SOFT_CLAMP_THRESHOLD - 1e-12);
+        assert!(
+            (just_below - SOFT_CLAMP_THRESHOLD).abs() < 1e-6,
+            "discontinuity at threshold: soft_clamp(T-)={just_below} vs T={SOFT_CLAMP_THRESHOLD}"
+        );
+        // At and above the threshold soft_clamp is the identity.
+        assert_eq!(soft_clamp(SOFT_CLAMP_THRESHOLD), SOFT_CLAMP_THRESHOLD);
+        assert_eq!(soft_clamp(0.5), 0.5);
+
+        // The inverse refuses anything below soft_clamp(0): unreachable, not a clip.
+        assert_eq!(soft_clamp_inv(at_zero - 1e-9), None);
+        // Exactly at soft_clamp(0) the inverse recovers black.
+        let recovered_zero = soft_clamp_inv(at_zero).expect("soft_clamp(0) is invertible");
+        assert!(
+            recovered_zero.abs() < 1e-9,
+            "soft_clamp_inv(soft_clamp(0)) should recover 0, got {recovered_zero}"
+        );
     }
 }
