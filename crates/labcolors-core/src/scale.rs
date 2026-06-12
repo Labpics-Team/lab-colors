@@ -675,7 +675,10 @@ mod tests {
             // that equals the forward grey L for that same luminance.
             for &y in &[0.02_f64, 0.18, 0.5, 0.9, 1.0] {
                 let j = crate::lpc::grey_j(y, &vc);
-                let jp = 1.7 * j / (1.0 + 0.007 * j);
+                // J' through the shared helper — the same J'-generation production
+                // uses; the equivalence is still anchored by the independent
+                // `srgb_linear_to_oklab` reference below, not by `ucs_j`.
+                let jp = cam16::ucs_j(j);
                 let l = jp_to_oklab_l(jp, &vc);
                 let l_ref = srgb_linear_to_oklab([y, y, y])[0];
                 assert!(
