@@ -63,6 +63,14 @@ impl ViewingConditions {
         Self::build(64.0, 20.0, 0.9, 0.59, 0.9)
     }
 
+    /// Dark surround viewing conditions (CIECAM16 Table 1: F = 0.8, c = 0.525,
+    /// N_c = 0.8). Not a precompiled LUT target — used in tests to exercise the
+    /// grey-axis LUT's fall-back-to-bisection path for an unsupported VC.
+    #[cfg(test)]
+    pub(crate) fn dark_surround() -> Self {
+        Self::build(64.0, 20.0, 0.8, 0.525, 0.8)
+    }
+
     /// Core constructor shared by all surround presets.
     ///
     /// * `la`  — adapting field luminance (cd/m²), typically 64.
