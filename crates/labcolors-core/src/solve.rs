@@ -2024,6 +2024,134 @@ mod tests {
         );
     }
 
+    /// Frozen `resolve_set` hex output across the owner's golden grid — the
+    /// before/after gate for any hot-path refactor in this module. Each line is
+    /// `vc|bg|policy|role=hex,…` produced by the live `resolve_set`. The full
+    /// set of emitted `#RRGGBB` hexes for every role must be byte-identical
+    /// before and after a performance change; if any cell moves, the refactor
+    /// altered the colour the caller gets and the test fails loudly.
+    ///
+    /// Grid: 6 backgrounds (#FFFFFF/#F2F2F7/#7F7F7F/#1C1C1E/#101012/#3478F6) ×
+    /// both precompiled viewing conditions × the two production chroma policies
+    /// (achromatic Neutral and the v1 Tinted{286°, 0.10}). Regenerate the
+    /// expectations with `_emit_resolve_set_golden` (kept below, `#[ignore]`d)
+    /// only when a colour change is *intended* and explained.
+    const RESOLVE_SET_GOLDEN: &[&str] = &[
+        "srgb|#FFFFFF|Neutral|text-primary=#141414,text-secondary=#767676,text-muted=#949494,text-disabled=#C2C2C2,icon=#949494,separator=#E9E9E9,border=#E7E7E7,surface=#E9E9E9,shadow=#E5E5E5,none=none",
+        "srgb|#FFFFFF|Tinted|text-primary=#0C0C11,text-secondary=#6D6D7E,text-muted=#9493A0,text-disabled=#BEBEC6,icon=#9493A0,separator=#E8E8EA,border=#E6E6E9,surface=#E8E8EA,shadow=#E4E4E7,none=none",
+        "srgb|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#E0E0E0,surface=#E1E1E1,shadow=#DEDEDE,none=none",
+        "srgb|#F2F2F7|Tinted|text-primary=#0C0C10,text-secondary=#69697B,text-muted=#8C8B99,text-disabled=#B8B8C0,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
+        "srgb|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#666666,surface=#696969,shadow=#646464,none=none",
+        "srgb|#7F7F7F|Tinted|text-primary=#030304,text-secondary=#16161B,text-muted=#363541,text-disabled=#575667,icon=#363541,separator=#5F5E70,border=#5C5C6E,surface=#5F5E70,shadow=#5A5A6B,none=none",
+        "srgb|#1C1C1E|Neutral|text-primary=#F6F6F6,text-secondary=#BABABA,text-muted=#9A9A9A,text-disabled=#727272,icon=#9A9A9A,separator=#3F3F3F,border=#424242,surface=#3F3F3F,shadow=#444444,none=none",
+        "srgb|#1C1C1E|Tinted|text-primary=#F6F6F7,text-secondary=#B6B6BF,text-muted=#9494A0,text-disabled=#68687A,icon=#9494A0,separator=#363541,border=#383844,surface=#363541,shadow=#3B3B47,none=none",
+        "srgb|#101012|Neutral|text-primary=#F6F6F6,text-secondary=#B9B9B9,text-muted=#989898,text-disabled=#6F6F6F,icon=#989898,separator=#393939,border=#3C3C3C,surface=#393939,shadow=#3F3F3F,none=none",
+        "srgb|#101012|Tinted|text-primary=#F6F6F7,text-secondary=#B5B5BD,text-muted=#91919E,text-disabled=#646477,icon=#91919E,separator=#30303A,border=#33323D,surface=#30303A,shadow=#353540,none=none",
+        "srgb|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
+        "srgb|#3478F6|Tinted|text-primary=#050406,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7D,icon=#35343F,separator=#7C7C8C,border=#7A7A8A,surface=#7C7C8C,shadow=#787787,none=none",
+        "dim|#FFFFFF|Neutral|text-primary=#131313,text-secondary=#757575,text-muted=#949494,text-disabled=#C0C0C0,icon=#949494,separator=#E7E7E7,border=#E5E5E5,surface=#E7E7E7,shadow=#E3E3E3,none=none",
+        "dim|#FFFFFF|Tinted|text-primary=#0E0E12,text-secondary=#6D6C7E,text-muted=#9493A0,text-disabled=#BDBDC5,icon=#9493A0,separator=#E6E6E8,border=#E4E4E7,surface=#E6E6E8,shadow=#E2E2E5,none=none",
+        "dim|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#DFDFDF,surface=#E1E1E1,shadow=#DEDEDE,none=none",
+        "dim|#F2F2F7|Tinted|text-primary=#0D0D12,text-secondary=#6A6A7B,text-muted=#8C8B99,text-disabled=#B8B8C1,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
+        "dim|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#676767,surface=#696969,shadow=#646464,none=none",
+        "dim|#7F7F7F|Tinted|text-primary=#040406,text-secondary=#16161B,text-muted=#363541,text-disabled=#585868,icon=#363541,separator=#606072,border=#5E5D6F,surface=#606072,shadow=#5C5B6D,none=none",
+        "dim|#1C1C1E|Neutral|text-primary=#F4F4F4,text-secondary=#B8B8B8,text-muted=#989898,text-disabled=#707070,icon=#989898,separator=#3D3D3D,border=#404040,surface=#3D3D3D,shadow=#434343,none=none",
+        "dim|#1C1C1E|Tinted|text-primary=#F3F3F5,text-secondary=#B5B5BD,text-muted=#93939F,text-disabled=#686779,icon=#93939F,separator=#363641,border=#393844,surface=#363641,shadow=#3B3B47,none=none",
+        "dim|#101012|Neutral|text-primary=#F4F4F4,text-secondary=#B7B7B7,text-muted=#969696,text-disabled=#6D6D6D,icon=#969696,separator=#373737,border=#3A3A3A,surface=#373737,shadow=#3D3D3D,none=none",
+        "dim|#101012|Tinted|text-primary=#F3F3F5,text-secondary=#B3B3BC,text-muted=#90909D,text-disabled=#646476,icon=#90909D,separator=#30303A,border=#33333D,surface=#30303A,shadow=#363541,none=none",
+        "dim|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
+        "dim|#3478F6|Tinted|text-primary=#060608,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7E,icon=#35343F,separator=#7D7D8C,border=#7B7A8A,surface=#7D7D8C,shadow=#787888,none=none",
+    ];
+
+    /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.
+    fn resolve_set_golden_line(
+        vc: &ViewingConditions,
+        vc_name: &str,
+        bg_hex: &str,
+        pol_name: &str,
+        chroma: crate::semantic::RoleChroma,
+    ) -> String {
+        use crate::semantic::{Resolved, RoleTable, resolve_set};
+        let bg = BgInput::solid(bg_hex).unwrap();
+        let table = RoleTable::default().with_chroma(chroma);
+        let cells: Vec<String> = resolve_set(&bg, &table, vc)
+            .iter()
+            .map(|(role, res)| {
+                let v = match res {
+                    Resolved::Color { solved, .. } => solved.hex().to_string(),
+                    Resolved::None => "none".to_string(),
+                    Resolved::Unreachable(_) => "unreach".to_string(),
+                };
+                format!("{}={}", role.key(), v)
+            })
+            .collect();
+        format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
+    }
+
+    #[test]
+    fn resolve_set_hex_matches_golden() {
+        use crate::semantic::RoleChroma;
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            ("Neutral", RoleChroma::Neutral),
+            (
+                "Tinted",
+                RoleChroma::Tinted {
+                    hue_deg: 286.0,
+                    ratio: 0.10,
+                },
+            ),
+        ];
+        let mut idx = 0usize;
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                for (pol_name, chroma) in policies {
+                    let got = resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma);
+                    let want = RESOLVE_SET_GOLDEN[idx];
+                    assert_eq!(got, want, "golden drift at grid index {idx}");
+                    idx += 1;
+                }
+            }
+        }
+        assert_eq!(
+            idx,
+            RESOLVE_SET_GOLDEN.len(),
+            "golden grid size changed: covered {idx}, table has {}",
+            RESOLVE_SET_GOLDEN.len()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn _emit_resolve_set_golden() {
+        use crate::semantic::RoleChroma;
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            ("Neutral", RoleChroma::Neutral),
+            (
+                "Tinted",
+                RoleChroma::Tinted {
+                    hue_deg: 286.0,
+                    ratio: 0.10,
+                },
+            ),
+        ];
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                for (pol_name, chroma) in policies {
+                    eprintln!(
+                        "\"{}\",",
+                        resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma)
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn unsupported_vc_takes_the_cold_path_unchanged() {
         // A third surround (neither srgb nor dim) has no table, so the LUT must
