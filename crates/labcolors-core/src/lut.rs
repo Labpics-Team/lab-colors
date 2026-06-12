@@ -88,6 +88,13 @@ pub(crate) const MAX_LUT_CHROMA: f64 = 0.10;
 /// `~0.12` — comfortably past [`MAX_LUT_CHROMA`].
 pub(crate) const CHROMA_PAD_NODES: usize = 12;
 
+/// Guard against dividing by a degenerate node interval during inverse
+/// interpolation. The tables are strictly increasing (asserted by
+/// `tables_are_strictly_monotone`), so adjacent nodes never actually coincide;
+/// this only protects the division from a hypothetical zero gap, in which case
+/// the lower node is returned unchanged.
+const MIN_NODE_GAP: f64 = 1e-15;
+
 /// A precompiled grey-axis table for one viewing condition: `J_HK` sampled at
 /// `LUT_NODES` uniformly-spaced `l_ok` nodes, strictly increasing.
 pub(crate) struct GreyAxisLut {
@@ -154,7 +161,7 @@ impl GreyAxisLut {
         let i = self.lower_node(target);
         let (y0, y1) = (self.j_hk[i], self.j_hk[i + 1]);
         let (l0, l1) = (Self::node_l(i), Self::node_l(i + 1));
-        if (y1 - y0).abs() > 1e-15 {
+        if (y1 - y0).abs() > MIN_NODE_GAP {
             l0 + (target - y0) / (y1 - y0) * (l1 - l0)
         } else {
             l0
@@ -398,13 +405,14 @@ mod tests {
 
     #[test]
     fn unsupported_vc_has_no_table() {
-        // A third surround (dark, c = 0.525) is not precompiled — the caller
-        // must fall back to bisection, never silently use the wrong table.
-        let dark = ViewingConditions::srgb(); // start from a known one…
-        // …and confirm only the two real presets resolve.
+        // The two precompiled presets resolve to a table…
         assert!(lut_for_vc(&ViewingConditions::srgb()).is_some());
         assert!(lut_for_vc(&ViewingConditions::dim_surround()).is_some());
-        // sanity: the helper distinguishes the two
-        let _ = dark;
+        // …and a third surround (dark, c = 0.525) does NOT: the caller must fall
+        // back to bisection, never silently borrow the wrong table.
+        assert!(
+            lut_for_vc(&ViewingConditions::dark_surround()).is_none(),
+            "an unsupported VC must have no table so the solver takes the cold path"
+        );
     }
 }
