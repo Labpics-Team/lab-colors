@@ -103,16 +103,35 @@
 //!
 //! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
 //! not a pure grey. A role table resolved with zero chroma threw that identity
-//! away: `text-primary` on white came out the sterile `#141414`. The default
-//! table instead carries the neutral's Oklab hue ([`NEUTRAL_HUE_DEG`]) at a
-//! small relative chroma ([`NEUTRAL_TINT_RATIO`]), so every resolved role is a
-//! *relative* of the neutral family — `text-primary` on white lands as a cool
-//! near-black in the `#101012` family. The chroma is small enough that the WCAG
-//! floors, the strict hierarchy, and the near-black/near-white primary all hold
-//! exactly as before (the solver re-solves lightness to the same target with the
-//! tint applied). A caller who wants pure grey overrides it with
-//! [`RoleTable::with_chroma`]`(`[`RoleChroma::Neutral`]`)`.
+//! away: `text-primary` on white came out the sterile `#141414`. So every
+//! resolved role carries the neutral's undertone and lands as a *relative* of the
+//! neutral family — `text-primary` on white as a cool near-black in the `#101012`
+//! family. The undertone is small enough that the WCAG floors, the strict
+//! hierarchy, and the near-black/near-white primary all hold exactly as before
+//! (the solver re-solves lightness to the same target with the tint applied).
+//!
+//! The default undertone policy is [`RoleChroma::Curve`] (v2), derived from three
+//! computable mechanisms rather than a flat ratio of the gamut:
+//!
+//! 1. **Constant perceptual colorfulness** — the chroma at each role's resolved
+//!    lightness is solved to a *constant* CAM16-UCS `M'` ([`TINT_TARGET_MP`]), not
+//!    a fixed fraction of the gamut maximum. Because UCS is perceptually uniform,
+//!    one constant holds the chroma in the lights and moderates it in the middle —
+//!    fixing v1's inverted envelope (over-saturated middle, starved light end).
+//! 2. **Cusp-attracted hue** — the hue at each lightness is pulled toward the
+//!    local chroma cusp of the sRGB gamut, penalised for leaving the canonical
+//!    286° ([`cusp_attracted_hue`]). The drift emerges from geometry; it is *not*
+//!    a set of hard-coded hue nodes. (Honest limit: the gamut's cusp near 286°
+//!    does not drift to the reference's light-end azure — see that function.)
+//! 3. **Perceptibility floor** — where the gamut cannot host the target
+//!    colorfulness, the curve takes the gamut maximum and is allowed to fall
+//!    toward [`TINT_PERCEPTIBLE_MP_FLOOR`] rather than fake chroma it cannot reach.
+//!
+//! A caller who wants the v1 flat-ratio undertone opts back into it with
+//! [`RoleChroma::flat_neutral_tint`]; pure grey with [`RoleChroma::Neutral`];
+//! either via [`RoleTable::with_chroma`].
 
+use crate::scale;
 use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Solved, Unreachable};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
@@ -308,13 +327,76 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// resolves to a cool near-black in the `#101012` family, not pure grey.
 const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
+/// The default target perceptual colorfulness (CAM16-UCS `M'`) the v2 undertone
+/// curve holds across the lightness ladder — the "strength" parameter.
+///
+/// This is the heart of mechanism 1 (*constant perceptual chroma*). The owner's
+/// reference ramp, measured in CAM16-UCS, does **not** hold a constant fraction
+/// of the gamut maximum; it holds a roughly constant *colorfulness* `M'` across
+/// the body of the ladder, tapering only at the very ends where the gamut
+/// pinches shut:
+///
+/// | ref hex | L_ok | M' |
+/// |---------|------|----|
+/// | #303136 | 0.31 | 4.6 |
+/// | #5B5C64 | 0.48 | 6.0 |
+/// | #787881 | 0.58 | 6.2 |
+/// | #9698A2 | 0.68 | 6.8 |
+/// | #B3B5BF | 0.78 | 6.6 |
+/// | #CDD0D9 | 0.86 | 6.2 |
+///
+/// `M'` sits on a ~6.3 plateau from L≈0.48 to L≈0.86 — the band where most UI
+/// roles live — and only the near-black / near-white extremes fall away. A flat
+/// `ratio · max_chroma` (v1) instead tracks the gamut envelope: it over-saturates
+/// the middle (secondary M' hit 10.3, ~60 % above the reference) and starves the
+/// light end (primary-on-dark M' 1.8, ~40 % of the reference). Targeting a
+/// constant `M'` reproduces the reference's "holds chroma in the lights, moderate
+/// in the middle" envelope *because UCS is perceptually uniform* — equal `M'`
+/// reads as equal colourfulness regardless of lightness.
+///
+/// `6.1` is the calibrated default: it minimises the RMS colourfulness residual
+/// against the reference's plateau nodes (L ≥ 0.45), at RMS ≈ 0.90 `M'` — the
+/// best fit of this single strength scalar to the owner's reference (sweep in the
+/// `validate_against_reference` diagnostic, 2026-06-12). This is calibration of
+/// one scalar, not a fit of a curve to ramp nodes.
+const TINT_TARGET_MP: f64 = 6.1;
+
+/// The default hue-pull stiffness for the v2 curve — the second (and last) free
+/// scalar. Higher keeps the hue pinned near the canonical [`NEUTRAL_HUE_DEG`];
+/// lower lets it drift toward the local chroma cusp of the sRGB gamut.
+///
+/// Measured behaviour (2026-06-12): the local cusp near 286° offers only a small
+/// chroma gain (~0.02 Oklab) over the canonical hue, so any stiffness above
+/// ~0.5 pins the hue at 286° across the whole ladder — which matches the
+/// reference on its dark and mid nodes (all ~286°). The reference's *azure*
+/// light-end drift (264°→248°) is **not** a cusp gain — that direction is
+/// chroma-poorer in the gamut — so no positive stiffness reproduces it (see the
+/// honest-limit note on [`cusp_attracted_hue`]). `9.0` sits comfortably in the
+/// pinned regime, robust against float flutter that could otherwise nudge a
+/// near-white role toward the magenta cusp the reference never visits.
+const TINT_HUE_STIFFNESS: f64 = 9.0;
+
+/// The perceptibility threshold (mechanism 3), in CAM16-UCS `M'` units. Below
+/// roughly this colorfulness the undertone is the "dead grey zone" the owner
+/// objects to. Where the gamut cannot supply [`TINT_TARGET_MP`] the curve does
+/// not chase it past the gamut wall; it takes the most the gamut allows and is
+/// honestly free to fall toward this floor at the very extremes (near-black /
+/// near-white), where even the reference's own `M'` drops to ~2.3–3.0.
+const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
+
+/// Half-width (degrees) of the hue window the cusp search explores around the
+/// canonical hue. The undertone may drift inside a blue-violet band; it may not
+/// wander into unrelated quadrants (red, cyan), so the search is bounded.
+const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
+
 /// The chroma policy a role table carries.
 ///
-/// The v1 default is [`Tinted`](RoleChroma::Tinted) with the neutral's cool
-/// undertone (see [`NEUTRAL_HUE_DEG`]). [`Neutral`](RoleChroma::Neutral) is the
-/// achromatic override: a caller who wants the old pure-grey behaviour (or any
-/// other policy) replaces the table's chroma wholesale via
-/// [`RoleTable::with_chroma`]. The enum is the seam a later chapter extends for
+/// The v1 default was [`Tinted`](RoleChroma::Tinted) (a flat ratio of the gamut
+/// maximum); the v2 default is [`Curve`](RoleChroma::Curve), the science-derived
+/// undertone (constant perceptual colorfulness + cusp-attracted hue + a
+/// perceptibility floor). [`Neutral`](RoleChroma::Neutral) is the achromatic
+/// override. A caller replaces the table's chroma wholesale via
+/// [`RoleTable::with_chroma`]; the enum is the seam later chapters extend for
 /// brand/sentiment-tinted roles without reshaping this type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -323,33 +405,200 @@ pub enum RoleChroma {
     /// reproduces the pre-tint behaviour.
     Neutral,
     /// A small undertone at a fixed Oklab `hue_deg`, carried as `ratio` of the
-    /// in-gamut maximum chroma at each role's resolved lightness. The envelope
-    /// (less tint at the extremes, more in the middle) emerges from the
-    /// lightness-dependence of that maximum — see [`NEUTRAL_TINT_RATIO`].
+    /// in-gamut maximum chroma at each role's resolved lightness. The flat-ratio
+    /// v1 policy: kept as an opt-in because its envelope follows `max_chroma(L)`,
+    /// which over-saturates the middle and starves the light end relative to the
+    /// reference. Prefer [`Curve`](RoleChroma::Curve).
     Tinted { hue_deg: f64, ratio: f64 },
+    /// The v2 undertone, derived from three computable mechanisms rather than
+    /// hard-coded ramp nodes:
+    ///
+    /// 1. **Constant perceptual colorfulness** — the chroma at each role's
+    ///    resolved lightness is solved so the colour carries `target_mp`
+    ///    CAM16-UCS `M'` (not a fixed fraction of the gamut). UCS uniformity is
+    ///    what makes one constant hold chroma in the lights and moderate it in
+    ///    the middle. See [`TINT_TARGET_MP`].
+    /// 2. **Cusp-attracted hue** — the hue at each lightness is pulled toward the
+    ///    local chroma cusp of the sRGB gamut (computed from `max_chroma(L, h)`),
+    ///    penalised by `hue_stiffness` for leaving `canonical_hue_deg`. See
+    ///    [`cusp_attracted_hue`].
+    /// 3. **Perceptibility floor** — where the gamut cannot supply `target_mp`,
+    ///    the curve takes the gamut maximum and is allowed to fall toward
+    ///    [`TINT_PERCEPTIBLE_MP_FLOOR`] at the extremes rather than fake chroma.
+    ///
+    /// `canonical_hue_deg` is the dark-anchor hue (286°); `target_mp` is the
+    /// "strength" scalar; `hue_stiffness` is the "hue hold" scalar. These two are
+    /// the only free knobs — everything else is geometry.
+    Curve {
+        canonical_hue_deg: f64,
+        target_mp: f64,
+        hue_stiffness: f64,
+    },
 }
 
 impl RoleChroma {
-    /// The v1 default: the neutral's cool undertone at a small flat ratio.
-    fn neutral_tint() -> Self {
+    /// The v1 flat-ratio neutral undertone, kept as an explicit opt-in.
+    ///
+    /// The default table moved to [`Curve`](RoleChroma::Curve); a caller who
+    /// prefers the older flat-ratio behaviour (the neutral's cool hue at a fixed
+    /// fraction of the gamut maximum, [`NEUTRAL_TINT_RATIO`]) opts back into it
+    /// with `RoleTable::default().with_chroma(RoleChroma::flat_neutral_tint())`.
+    /// This is the additive seam the task requires: the v1 policy stays a
+    /// first-class, named choice even though it is no longer the default.
+    pub fn flat_neutral_tint() -> Self {
         RoleChroma::Tinted {
             hue_deg: NEUTRAL_HUE_DEG,
             ratio: NEUTRAL_TINT_RATIO,
         }
     }
 
-    /// Translate to the solver's `(hue, chroma)` inputs. For the achromatic
-    /// override the hue is irrelevant (the solver ignores it at zero chroma); a
-    /// tinted policy passes its own hue and a relative chroma the solver caps at
-    /// the in-gamut maximum.
-    fn to_solve(self) -> (Hue, ChromaPolicy) {
+    /// The v2 default: the science-derived undertone curve at its calibrated
+    /// scalars.
+    fn neutral_curve() -> Self {
+        RoleChroma::Curve {
+            canonical_hue_deg: NEUTRAL_HUE_DEG,
+            target_mp: TINT_TARGET_MP,
+            hue_stiffness: TINT_HUE_STIFFNESS,
+        }
+    }
+
+    /// Plan the solver's `(hue, chroma)` inputs for a role whose contrast-solved
+    /// Oklab lightness is `l_ok`.
+    ///
+    /// For the lightness-independent policies ([`Neutral`](RoleChroma::Neutral),
+    /// [`Tinted`](RoleChroma::Tinted)) the plan ignores `l_ok` and reproduces the
+    /// v1 behaviour exactly. For [`Curve`](RoleChroma::Curve) the hue is the
+    /// cusp-attracted hue at `l_ok` and the chroma ratio is the one that lands the
+    /// colour on the target perceptual colorfulness at that lightness and hue —
+    /// the per-lightness derivation that makes the undertone a curve, not a
+    /// constant.
+    fn plan_for_lightness(self, l_ok: f64, vc: &ViewingConditions) -> (Hue, ChromaPolicy) {
         match self {
             RoleChroma::Neutral => (Hue::deg(0.0), ChromaPolicy::Neutral),
             RoleChroma::Tinted { hue_deg, ratio } => {
                 (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
             }
+            RoleChroma::Curve {
+                canonical_hue_deg,
+                target_mp,
+                hue_stiffness,
+            } => {
+                let hue_deg = cusp_attracted_hue(l_ok, canonical_hue_deg, hue_stiffness);
+                let ratio = ratio_for_target_mp(l_ok, hue_deg, target_mp, vc);
+                (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
+            }
         }
     }
+
+    /// A lightness-independent plan for the achromatic probe pass (pass A), used
+    /// only to discover a role's contrast-solved lightness before the real
+    /// per-lightness plan is built. Always achromatic so the probe is fast and
+    /// the discovered lightness is the role's true contrast lightness.
+    fn probe_plan() -> (Hue, ChromaPolicy) {
+        (Hue::deg(0.0), ChromaPolicy::Neutral)
+    }
+}
+
+/// The hue (degrees) the undertone takes at Oklab lightness `l_ok` — mechanism 2.
+///
+/// Cusp attraction: scan a bounded blue-violet window around `canonical_deg` and
+/// pick the hue maximising achievable purity minus a stiffness penalty for
+/// leaving the canonical hue:
+///
+/// ```text
+/// score(h) = max_chroma(l_ok, h) − (stiffness / 100) · |h − canonical|
+/// ```
+///
+/// The chroma term rewards hues where the sRGB gamut reaches further at this
+/// lightness; the penalty, scaled by the "hue hold" stiffness, keeps the drift
+/// anchored to the canonical 286°. The drift therefore *emerges from gamut
+/// geometry* — no hue nodes are hard-coded.
+///
+/// HONEST LIMIT (measured 2026-06-12). The sRGB gamut's local chroma cusp near
+/// 286° drifts toward **azure (~264°) at LOW lightness** and toward
+/// **magenta (~326°) at HIGH lightness**. The owner's reference ramp does the
+/// opposite — it holds ~286° in the dark and drifts to azure (~248–271°) in the
+/// *lights*. So geometry-driven cusp attraction reproduces the dark-end hue but
+/// **cannot** produce the reference's light-end azure drift; left unchecked it
+/// would pull the lights toward magenta. The stiffness is therefore calibrated
+/// high enough to keep the hue close to canonical (a faithful, undramatic
+/// blue-violet across the ladder) rather than chase a magenta cusp the reference
+/// never visits. The azure light-end drift is a property of the owner's hand
+/// calibration, not of the sRGB gamut, and is flagged as out of reach here.
+fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
+    let penalty_scale = stiffness / 100.0;
+    let mut best_h = canonical_deg;
+    let mut best_score = f64::NEG_INFINITY;
+    // Step the window in 1° increments — finer than the cusp moves between roles.
+    let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
+    for i in 0..=steps {
+        let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
+        let chroma = scale::max_chroma(l_ok, h);
+        let drift = (h - canonical_deg).abs();
+        let score = chroma - penalty_scale * drift;
+        if score > best_score {
+            best_score = score;
+            best_h = h;
+        }
+    }
+    best_h
+}
+
+/// The chroma ratio (for [`ChromaPolicy::Relative`]) that lands a colour of Oklab
+/// lightness `l_ok` and hue `hue_deg` on perceptual colorfulness `target_mp`
+/// (CAM16-UCS `M'`) — mechanism 1, with the mechanism-3 floor at the gamut wall.
+///
+/// `M'` rises monotonically with chroma at fixed lightness and hue, so the ratio
+/// is found by bisection: build the colour at a trial ratio, measure its `M'`
+/// through the same CAM16-UCS path the engine uses ([`LcsColor::mp`]), and
+/// narrow. If even `ratio = 1` (the gamut maximum) cannot reach `target_mp`, the
+/// gamut is the limit — return `1.0` and let the colourfulness sit at the most
+/// the gamut allows (honestly below target, toward
+/// [`TINT_PERCEPTIBLE_MP_FLOOR`] at the pinched extremes) rather than fake it.
+fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
+    let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
+    let mp_at = |ratio: f64| -> f64 {
+        let rgb = build_curve_color(l_ok, hue_deg, ratio);
+        let hex = crate::spaces::srgb::hex_from_srgb(rgb);
+        match crate::lcs::LcsColor::from_hex_with_vc(&hex, vc) {
+            Ok(c) => c.mp(),
+            Err(_) => 0.0,
+        }
+    };
+
+    // The gamut maximum cannot reach the target — take all the gamut offers.
+    if mp_at(1.0) <= target {
+        return 1.0;
+    }
+    // Bisect ratio in [0, 1] for the one that hits target_mp.
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    for _ in 0..48 {
+        let mid = (lo + hi) * 0.5;
+        if mp_at(mid) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) * 0.5
+}
+
+/// Build the in-gamut linear-sRGB colour at Oklab lightness `l_ok`, hue
+/// `hue_deg`, carrying `ratio` of the in-gamut maximum chroma — the same
+/// construction [`solve::solve`] applies internally, mirrored here so the curve
+/// can measure the `M'` a candidate ratio would yield before committing to it.
+fn build_curve_color(l_ok: f64, hue_deg: f64, ratio: f64) -> [f64; 3] {
+    use crate::spaces::oklab::oklab_to_srgb_linear;
+    let hr = hue_deg.to_radians();
+    let chroma = ratio.clamp(0.0, 1.0) * scale::max_chroma(l_ok, hue_deg);
+    let lab = [l_ok, chroma * hr.cos(), chroma * hr.sin()];
+    let rgb = oklab_to_srgb_linear(lab);
+    [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+    ]
 }
 
 /// The default, overridable recipe set mapping every [`Role`] to a [`RoleSpec`].
@@ -392,11 +641,12 @@ impl RoleTable {
 
     /// Return a copy with the chroma policy replaced wholesale.
     ///
-    /// The default table carries the neutral's cool undertone
-    /// ([`RoleChroma::Tinted`]); this is the seam that overrides it completely —
-    /// pass [`RoleChroma::Neutral`] for the achromatic pure-grey behaviour, or a
-    /// different [`RoleChroma::Tinted`] hue/ratio for another undertone. The
-    /// override is total: it replaces the policy for *every* role, including
+    /// The default table carries the v2 undertone curve ([`RoleChroma::Curve`]);
+    /// this is the seam that overrides it completely — pass
+    /// [`RoleChroma::Neutral`] for the achromatic pure-grey behaviour,
+    /// [`RoleChroma::flat_neutral_tint`] for the v1 flat-ratio undertone, or a
+    /// custom [`RoleChroma::Tinted`] / [`RoleChroma::Curve`] for another policy.
+    /// The override is total: it replaces the policy for *every* role, including
     /// dropping the tint to zero.
     pub fn with_chroma(mut self, chroma: RoleChroma) -> Self {
         self.chroma = chroma;
@@ -447,7 +697,7 @@ impl Default for RoleTable {
                 (Role::Shadow, decorative(10.0)),
                 (Role::None, RoleSpec::Zero),
             ],
-            chroma: RoleChroma::neutral_tint(),
+            chroma: RoleChroma::neutral_curve(),
         }
     }
 }
@@ -601,7 +851,6 @@ fn resolve_in(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> Resolved {
-    let (hue, chroma) = table.chroma().to_solve();
     let contract = match table.spec(role) {
         RoleSpec::Zero => return Resolved::None,
         RoleSpec::Anchor(anchor) => match ctx.anchored_contract(anchor) {
@@ -611,9 +860,86 @@ fn resolve_in(
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
     };
 
-    match solve::solve(bg.clone(), contract, hue, chroma, vc, Gamut::Srgb) {
+    match solve_with_chroma(bg, contract, table.chroma(), vc) {
         Ok(solved) => Resolved::color(solved),
         Err(reason) => Resolved::Unreachable(reason),
+    }
+}
+
+/// Solve `contract` against `bg` under `chroma`, building the undertone the
+/// policy prescribes.
+///
+/// For a lightness-independent policy ([`RoleChroma::Neutral`] /
+/// [`RoleChroma::Tinted`]) this is a single solve at the fixed plan — the v1
+/// path, unchanged. For the lightness-dependent [`RoleChroma::Curve`] it is a
+/// short fixed-point: a probe solve discovers the role's contrast lightness, the
+/// curve is planned *at that lightness* (cusp-attracted hue + the ratio that hits
+/// the target colorfulness there), and that plan is re-solved. Because the curve
+/// applies the ratio to `max_chroma` at the solve's *own* resolved lightness —
+/// which can differ slightly from the lightness the plan was built for, and near
+/// the white/black wall a small lightness shift moves `M'` sharply — the plan is
+/// re-derived from the new lightness and re-solved until the lightness settles
+/// (or a small iteration cap is hit). Every iteration is a real `solve`, so the
+/// contrast contract is always honoured on the returned colour; the loop only
+/// refines *which* lightness the colorfulness target is planned against.
+fn solve_with_chroma(
+    bg: &BgInput,
+    contract: Contract,
+    chroma: RoleChroma,
+    vc: &ViewingConditions,
+) -> Result<Solved, Unreachable> {
+    if let RoleChroma::Curve { .. } = chroma {
+        // Probe — discover the contrast-solved lightness achromatically.
+        let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
+        let probe = solve::solve(
+            bg.clone(),
+            contract,
+            probe_hue,
+            probe_chroma,
+            vc,
+            Gamut::Srgb,
+        )?;
+        let mut l_plan = solved_oklab_lightness(&probe);
+        let mut solved = probe;
+        // Fixed-point: re-plan at the lightness the last solve actually produced.
+        // Two refinements suffice — the undertone shifts lightness by well under
+        // one 8-bit step except at the gamut wall, where the second pass settles
+        // it. `LIGHTNESS_SETTLE` stops as soon as the move is perceptually nil.
+        for _ in 0..CURVE_REFINE_STEPS {
+            let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
+            solved = solve::solve(bg.clone(), contract, hue, policy, vc, Gamut::Srgb)?;
+            let l_new = solved_oklab_lightness(&solved);
+            if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
+                break;
+            }
+            l_plan = l_new;
+        }
+        Ok(solved)
+    } else {
+        let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
+        solve::solve(bg.clone(), contract, hue, policy, vc, Gamut::Srgb)
+    }
+}
+
+/// Maximum curve-plan refinements after the achromatic probe. The undertone moves
+/// lightness by well under one 8-bit step except against the white/black wall;
+/// two refinements settle even that case (issue: near-white primary on a dark bg).
+const CURVE_REFINE_STEPS: u32 = 3;
+
+/// The fixed-point stops once a re-plan moves the solved Oklab lightness by less
+/// than this — comfortably below one 8-bit grid step, so further passes cannot
+/// change the emitted hex.
+const LIGHTNESS_SETTLE: f64 = 0.002;
+
+/// The Oklab lightness of a solved colour, read back from its emitted hex.
+fn solved_oklab_lightness(solved: &Solved) -> f64 {
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::srgb_from_hex;
+    match srgb_from_hex(solved.hex()) {
+        Ok(rgb) => srgb_linear_to_oklab(rgb)[0],
+        // `solved.hex()` is engine-emitted and always parses; on the impossible
+        // failure fall back to mid lightness so the curve still produces a colour.
+        Err(_) => 0.5,
     }
 }
 
@@ -660,7 +986,7 @@ fn enforce_text_hierarchy(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) {
-    let (hue, chroma) = table.chroma().to_solve();
+    let chroma = table.chroma();
 
     // Strongest-first text order; each junior is compared against its senior.
     for window in TEXT_HIERARCHY.windows(2) {
@@ -681,7 +1007,7 @@ fn enforce_text_hierarchy(
             RoleSpec::Anchor(a) => a.conformance(),
             _ => Floor::None,
         };
-        let demoted = demote_below(senior_mag, ctx, hue, chroma, floor, bg, vc);
+        let demoted = demote_below(senior_mag, ctx, chroma, floor, bg, vc);
         // The senior's colour is the legal ceiling for the junior: when no
         // distinguishable step below exists, the junior becomes a *copy* of the
         // senior — never a stronger colour. (The floor can lift the junior onto
@@ -724,8 +1050,7 @@ const STRICT_STEP: f64 = 0.5;
 fn demote_below(
     senior_mag: f64,
     ctx: &ResolveContext,
-    hue: Hue,
-    chroma: ChromaPolicy,
+    chroma: RoleChroma,
     floor: Floor,
     bg: &BgInput,
     vc: &ViewingConditions,
@@ -735,7 +1060,7 @@ fn demote_below(
     // no room to distinguish — detected by re-measuring the result below.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
     let contract = Contract::text(target).with_conformance(floor);
-    let solved = solve::solve(bg.clone(), contract, hue, chroma, vc, Gamut::Srgb).ok()?;
+    let solved = solve_with_chroma(bg, contract, chroma, vc).ok()?;
     if solved.lc().abs() + STRICT_STEP <= senior_mag {
         Some(solved)
     } else {
@@ -872,6 +1197,111 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 12 mid-to-light nodes of the owner's reference neutral ramp (pure
+    /// #FFFFFF dropped — it is achromatic). The VALIDATION set, never an input.
+    const REFERENCE_NODES: [&str; 12] = [
+        "#101012", "#151518", "#212125", "#303136", "#44444B", "#5B5C64", "#787881", "#9698A2",
+        "#B3B5BF", "#CDD0D9", "#E4E7ED", "#F6F8FA",
+    ];
+
+    /// One reference node measured in the engine's spaces: Oklab lightness and
+    /// hue, plus CAM16-UCS colourfulness `M'`.
+    fn node_measure(hex: &str, vc: &ViewingConditions) -> (f64, f64, f64) {
+        use crate::spaces::oklab::{oklab_hue, srgb_linear_to_oklab};
+        use crate::spaces::srgb::srgb_from_hex;
+        let rgb = srgb_from_hex(hex).unwrap();
+        let l = srgb_linear_to_oklab(rgb)[0];
+        let hue = oklab_hue(rgb);
+        let mp = crate::lcs::LcsColor::from_hex_with_vc(hex, vc)
+            .unwrap()
+            .mp();
+        (l, hue, mp)
+    }
+
+    /// What the v2 curve produces at a given lightness: hue and `M'`.
+    fn curve_measure(l: f64, vc: &ViewingConditions) -> (f64, f64) {
+        use crate::spaces::oklab::oklab_hue;
+        use crate::spaces::srgb::hex_from_srgb;
+        let h = cusp_attracted_hue(l, NEUTRAL_HUE_DEG, TINT_HUE_STIFFNESS);
+        let r = ratio_for_target_mp(l, h, TINT_TARGET_MP, vc);
+        let rgb = build_curve_color(l, h, r);
+        let curve_hue = oklab_hue(rgb);
+        let curve_mp = crate::lcs::LcsColor::from_hex_with_vc(&hex_from_srgb(rgb), vc)
+            .unwrap()
+            .mp();
+        (curve_hue, curve_mp)
+    }
+
+    #[test]
+    fn curve_fits_reference_plateau_colorfulness() {
+        // VALIDATION (owner reference, tint-identity-curve). On the reference's
+        // colourfulness PLATEAU (L in [0.45, 0.90], where the ramp holds ~constant
+        // M' and the gamut has room) the curve's constant-M' policy must track it
+        // tightly. This is the quality metric the PR body reports — the reference is
+        // never an input, only the yardstick. The two ENDS are deliberately not
+        // asserted to match: the dark end (L < 0.45) and the near-white end
+        // (L > 0.90) both release colourfulness by hand in the reference, while the
+        // UCS-constant policy holds it — an honest, documented divergence (the
+        // mechanism-3 release happens only where the gamut wall forces it).
+        let vc = ViewingConditions::srgb();
+        let mut max_resid = 0.0_f64;
+        for hex in REFERENCE_NODES {
+            let (l, _ref_hue, ref_mp) = node_measure(hex, &vc);
+            if !(0.45..=0.90).contains(&l) {
+                continue;
+            }
+            let (_curve_hue, curve_mp) = curve_measure(l, &vc);
+            let resid = (curve_mp - ref_mp).abs();
+            max_resid = max_resid.max(resid);
+            assert!(
+                resid <= 1.0,
+                "{hex} (L {l:.3}): curve M' {curve_mp:.2} strays from reference {ref_mp:.2}"
+            );
+        }
+        // The plateau fit is tight — well inside one M' unit of colourfulness.
+        assert!(
+            max_resid <= 1.0,
+            "plateau colourfulness residual {max_resid:.2} too large"
+        );
+    }
+
+    #[test]
+    fn curve_holds_canonical_hue_where_geometry_allows() {
+        // VALIDATION (hue path). The reference holds ~286 on its dark and mid nodes
+        // and only drifts to azure (264->248) at the two lightest nodes — a drift
+        // the sRGB gamut geometry does NOT offer (the local chroma cusp moves the
+        // OTHER way, toward magenta, at high L; measured 2026-06-12). So the honest,
+        // geometry-derived result is a hue pinned near canonical 286 across the
+        // ladder: it matches the reference everywhere the reference itself stays
+        // canonical, and is explicitly allowed to diverge at the two azure-drifting
+        // light nodes. This test asserts the match on the canonical-hue nodes and
+        // documents the divergence at the azure nodes rather than faking the drift.
+        let vc = ViewingConditions::srgb();
+        for hex in REFERENCE_NODES {
+            let (l, ref_hue, ref_mp) = node_measure(hex, &vc);
+            if ref_mp <= 3.0 {
+                continue; // faint node — hue is float-fragile, skip
+            }
+            let (curve_hue, _curve_mp) = curve_measure(l, &vc);
+            let ref_drift = ((ref_hue - NEUTRAL_HUE_DEG + 180.0).rem_euclid(360.0)) - 180.0;
+            let to_ref = ((curve_hue - ref_hue + 180.0).rem_euclid(360.0)) - 180.0;
+            if ref_drift.abs() <= 12.0 {
+                // The reference is near-canonical here — the curve must match it.
+                assert!(
+                    to_ref.abs() <= 12.0,
+                    "{hex} (L {l:.3}): curve hue {curve_hue:.1} off reference {ref_hue:.1}"
+                );
+            }
+            // Where the reference drifts to azure (|ref_drift| > 12), the curve
+            // honestly stays near canonical — no assertion forces a drift the
+            // geometry cannot produce.
+            assert!(
+                ((curve_hue - NEUTRAL_HUE_DEG + 180.0).rem_euclid(360.0) - 180.0).abs() <= 12.0,
+                "{hex}: curve hue {curve_hue:.1} left the canonical blue-violet band"
+            );
+        }
+    }
 
     fn vcs() -> [(ViewingConditions, &'static str); 2] {
         [
@@ -1531,33 +1961,20 @@ mod tests {
     }
 
     #[test]
-    fn role_chroma_follows_the_envelope_toward_the_middle() {
-        // The envelope spirit (neutral.rs): chroma is least at the dark/light
-        // *edges of the lightness stretch* and greatest toward the middle. The
-        // absolute chroma is `ratio · max_chroma(L)`, so this is the shape of
-        // `max_chroma` itself — peaked at some interior lightness `L_peak`,
-        // tapering to ~0 at L→0 and L→1. The faithful invariant is therefore on
-        // *lightness*, not on role index: a role nearer `L_peak` carries more
-        // chroma than one further from it. (On black the text ladder happens to
-        // sit entirely on the light side of the peak, so its roles are monotone —
-        // an end role legitimately holds the most chroma there; the lightness
-        // formulation captures both cases without a false "interior role" claim.)
-        use crate::scale::max_chroma;
-        // Locate L_peak of the tint hue's chroma envelope (coarse scan is plenty).
-        let l_peak = (1..100)
-            .map(|i| i as f64 / 100.0)
-            .max_by(|&a, &b| {
-                max_chroma(a, NEUTRAL_HUE_DEG)
-                    .partial_cmp(&max_chroma(b, NEUTRAL_HUE_DEG))
-                    .unwrap()
-            })
-            .unwrap();
+    fn role_chroma_holds_constant_perceptual_colorfulness() {
+        // CONTRACT CHANGE (tint-identity-curve, owner decision 2026-06-12). The v1
+        // envelope tied chroma to `ratio · max_chroma(L)`, so colourfulness tracked
+        // the gamut shape: over-saturated in the middle (secondary M' ~10) and
+        // starved at the light end (primary-on-dark M' ~1.8) — the "inverted
+        // envelope" the owner objected to. The v2 curve instead holds a *constant
+        // perceptual colourfulness* (CAM16-UCS M') across the ladder. The faithful
+        // invariant is therefore on M', not on a gamut envelope: every reachable
+        // text role carries M' within a tight band of the target, and the middle
+        // is no longer richer than the reference's plateau.
         let vc = ViewingConditions::srgb();
-        for bg_hex in ["#FFFFFF", "#101012"] {
+        for bg_hex in ["#FFFFFF", "#101012", "#1C1C1E"] {
             let bg = BgInput::solid(bg_hex).unwrap();
-            // (distance of the role's resolved lightness from the envelope peak,
-            //  the chroma it carries) for every text role.
-            let mut samples: Vec<(f64, f64)> = TEXT_ORDER
+            let mps: Vec<(Role, f64, f64)> = TEXT_ORDER
                 .iter()
                 .map(|&r| {
                     let solved = match resolve(&bg, r, &RoleTable::default(), &vc) {
@@ -1565,26 +1982,51 @@ mod tests {
                         other => panic!("{other:?}"),
                     };
                     let rgb = crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap();
-                    let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
-                    let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
-                    ((lab[0] - l_peak).abs(), chroma)
+                    let l = crate::spaces::oklab::srgb_linear_to_oklab(rgb)[0];
+                    let mp = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
+                        .unwrap()
+                        .mp();
+                    (r, l, mp)
                 })
                 .collect();
-            // Sort by distance from the envelope peak; chroma must not increase as
-            // we move away from it — the envelope tapers outward, monotonically.
-            samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            for pair in samples.windows(2) {
+
+            // The tint is genuinely present — never a flat zero.
+            for (role, _l, mp) in &mps {
                 assert!(
-                    pair[0].1 + 1e-4 >= pair[1].1,
-                    "{bg_hex}: chroma rose away from envelope peak (L_peak {l_peak}): {samples:?}"
+                    *mp > TINT_PERCEPTIBLE_MP_FLOOR - 1e-6,
+                    "{bg_hex} {}: M' {mp} fell below the perceptibility floor",
+                    role.key()
                 );
             }
-            // And the tint is genuinely present in the middle of the band, not a
-            // flat zero everywhere.
-            let peak = samples.iter().map(|&(_, c)| c).fold(0.0_f64, f64::max);
+
+            // Constant colourfulness: every role whose lightness leaves the gamut
+            // room to host the target sits within a tight band of it. Roles pinned
+            // against the white/black wall (L very near 0 or 1) are allowed to fall
+            // *below* target — the honest mechanism-3 release, never above it.
+            for (role, l, mp) in &mps {
+                let near_wall = *l < 0.18 || *l > 0.95;
+                if near_wall {
+                    assert!(
+                        *mp <= TINT_TARGET_MP + 1.5,
+                        "{bg_hex} {}: wall role over target (M' {mp}, L {l})",
+                        role.key()
+                    );
+                } else {
+                    assert!(
+                        (*mp - TINT_TARGET_MP).abs() <= 1.5,
+                        "{bg_hex} {}: M' {mp} strays from target {TINT_TARGET_MP} (L {l})",
+                        role.key()
+                    );
+                }
+            }
+
+            // The middle is no longer over-saturated past the reference plateau:
+            // no role exceeds the reference's own peak colourfulness (M' ~6.8 at
+            // #9698A2) by more than the quantisation slack.
+            let max_mp = mps.iter().map(|&(_, _, m)| m).fold(0.0_f64, f64::max);
             assert!(
-                peak > 1e-3,
-                "{bg_hex}: envelope carries no measurable tint, chromas {samples:?}"
+                max_mp <= 8.5,
+                "{bg_hex}: a role exceeds the reference colourfulness ceiling: {mps:?}"
             );
         }
     }
@@ -1616,6 +2058,57 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(grey, "#141414", "neutral override must restore pure grey");
+    }
+
+    #[test]
+    fn v1_flat_tint_remains_a_valid_opt_in_policy() {
+        // The v1 flat-ratio undertone is a decision the owner can still opt into:
+        // `RoleChroma::Tinted { hue, ratio }` must keep resolving roles around its
+        // fixed hue at a flat fraction of the gamut maximum — lightness-independent,
+        // unchanged by the v2 curve default. This pins the additive-API promise: the
+        // existing variant stays valid even though the default moved to `Curve`.
+        let vc = ViewingConditions::srgb();
+        let flat = RoleTable::default().with_chroma(RoleChroma::flat_neutral_tint());
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        // Secondary under the flat policy lands cool, around the canonical hue, and
+        // carries a flat ratio of the gamut max — its chroma is `RATIO * max_chroma`.
+        let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::TextSecondary, &flat, &vc);
+        assert!(b < 0.0, "flat tint must stay cool (b={b})");
+        let solved = match resolve(&bg, Role::TextSecondary, &flat, &vc) {
+            Resolved::Color { solved, .. } => solved,
+            other => panic!("{other:?}"),
+        };
+        let l = crate::spaces::oklab::srgb_linear_to_oklab(
+            crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap(),
+        )[0];
+        let expected = NEUTRAL_TINT_RATIO * scale::max_chroma(l, NEUTRAL_HUE_DEG);
+        assert!(
+            (chroma - expected).abs() <= 2e-3,
+            "flat tint chroma {chroma:.4} should be ratio*max_chroma {expected:.4}"
+        );
+    }
+
+    #[test]
+    fn curve_text_roles_share_the_canonical_hue_on_white_and_dark() {
+        // The v2 curve's hue path: every text role with enough chroma to carry a
+        // reliable hue resolves near the canonical 286 on white and on a dark bg —
+        // the geometry-pinned blue-violet undertone, not a magenta or azure wander.
+        let vc = ViewingConditions::srgb();
+        let table = RoleTable::default();
+        for bg_hex in ["#FFFFFF", "#1C1C1E"] {
+            let bg = BgInput::solid(bg_hex).unwrap();
+            for &role in &TEXT_ORDER {
+                let [_a, _b, chroma, hue] = resolved_oklab(&bg, role, &table, &vc);
+                if chroma > 4e-3 {
+                    let dh = (hue - NEUTRAL_HUE_DEG + 180.0).rem_euclid(360.0) - 180.0;
+                    assert!(
+                        dh.abs() <= 14.0,
+                        "{bg_hex} {}: curve hue {hue:.1} off canonical {NEUTRAL_HUE_DEG} by {dh:.1}",
+                        role.key()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
