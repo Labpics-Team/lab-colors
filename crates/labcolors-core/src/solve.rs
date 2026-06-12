@@ -807,7 +807,9 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
 /// per-`solve` cost from ~64 CAM16 forward passes to a few. The result is
 /// bit-compatible with the cold bisection: the seed is only a starting bracket,
 /// the refinement converges the same root, and the empirical final-`Lc` delta
-/// over the solver grid is `0.00000` (well inside the `< 0.1 Lc` budget).
+/// over the solver grid is `0.00000` — gated `< 0.01 Lc` by the LUT golden
+/// tests (`lut_adds_…`, `lut_bracket_path_…`), ten times tighter than the
+/// solver's `0.1 Lc` budget.
 ///
 /// ## Slow path: cold bisection
 ///
@@ -1738,12 +1740,17 @@ mod tests {
         // Golden: across a dense l_ok grid under both precompiled VCs, the LUT
         // `match_lightness` (neutral → direct interp; the fast path) reproduces
         // the cold bisection's lightness to within the interpolation bound, and
-        // wherever the 8-bit hex differs the perceptual Lc cost stays far under
-        // the 0.1 budget. (A handful of grid points sit exactly on an 8-bit
-        // rounding boundary, where the sub-3e-4 lightness difference flips one
-        // hex step either way — both colours are within budget; the boundary
-        // assignment is not a regression.)
+        // wherever the 8-bit hex differs the perceptual Lc cost stays under the
+        // tightened `MAX_LC_AT_MISMATCH` gate. (A handful of grid points sit
+        // exactly on an 8-bit rounding boundary, where the sub-3e-4 lightness
+        // difference flips one hex step either way — both colours are within
+        // budget; the boundary assignment is not a regression.)
         const MAX_L_INTERP: f64 = 5e-4; // K=257 inverse-interp bound, with margin
+        // Measured worst case is 0.0003 Lc at one of those boundary flips; gate
+        // at 0.01 — ~33× the fact, 10× tighter than the old 0.1 budget — so a
+        // regression that crept the cost toward 0.1 fails instead of passing
+        // green. The eprintln still reports the exact measured number.
+        const MAX_LC_AT_MISMATCH: f64 = 0.01;
         for (vc, vc_name) in vcs() {
             let mut max_l_err = 0.0_f64;
             let mut max_lc_at_mismatch = 0.0_f64;
@@ -1786,8 +1793,8 @@ mod tests {
                 "{vc_name}: LUT lightness drifted {max_l_err} from bisection (> {MAX_L_INTERP})"
             );
             assert!(
-                max_lc_at_mismatch < 0.1,
-                "{vc_name}: a hex boundary flip cost {max_lc_at_mismatch} Lc (> 0.1 budget)"
+                max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
+                "{vc_name}: a hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
             );
         }
     }
@@ -1798,7 +1805,11 @@ mod tests {
         // solver's error budget. Run the REAL solve path and compare the final
         // `Solved.lc()` against a run that forces the cold bisection, over the
         // full neutral background × magnitude × polarity × VC grid. The added
-        // error must be far under 0.1 Lc (empirically 0.0).
+        // error is empirically 0.00000 Lc; the gate is pinned at 0.01 — 10×
+        // tighter than the old 0.1 budget — so any nonzero regression in the
+        // emitted hex fails here instead of passing under 0.1. The exact
+        // measured add is still reported via eprintln below.
+        const MAX_ADD: f64 = 0.01;
         let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
         let mut max_add = 0.0_f64;
         let mut compared = 0usize;
@@ -1843,8 +1854,8 @@ mod tests {
                             max_add = max_add.max(add);
                             compared += 1;
                             assert!(
-                                add < 0.1,
-                                "{vc_name} {bg_hex} t={target}: LUT added {add} Lc (> 0.1 budget)"
+                                add < MAX_ADD,
+                                "{vc_name} {bg_hex} t={target}: LUT added {add} Lc (> {MAX_ADD} gate)"
                             );
                         }
                     }
@@ -1853,6 +1864,164 @@ mod tests {
         }
         eprintln!("LUT final-Lc add over {compared} solver cases: max={max_add:.5}");
         assert!(compared >= 30, "grid exercised too few cases: {compared}");
+    }
+
+    #[test]
+    fn lut_bracket_path_matches_bisection_at_small_chroma() {
+        // Golden for the small-chroma SEED path (`LutSeed::Bracket` →
+        // `refine_in_bracket`), the branch the neutral tests above never reach:
+        // both `lut_adds…` and `lut_match_lightness…` run `ChromaPolicy::Neutral`
+        // (ratio = 0), which only exercises the direct-interp `Exact` arm. The
+        // main default role policy is tinted (hue 286°, ratio 0.10), so the
+        // Bracket arm is the production hot path — and until now it was checked
+        // only indirectly. Two arms drive it directly:
+        //   1. UNIT: a dense l_ok grid × {srgb, dim} × {Relative(0.05),
+        //      Relative(0.10)} at hue 286° asserts the LUT-seeded
+        //      `match_lightness` reproduces the cold bisection bit-for-bit on the
+        //      emitted hex wherever it can, any 8-bit flip costing under gate.
+        //   2. END-TO-END: the real `solve` with BOTH polarities (+mag, -mag)
+        //      across the background grid, final `Solved.lc()` vs the
+        //      cold-bisection oracle — the same shape as `lut_adds_…`, for the
+        //      Bracket arm.
+        //
+        // Both paths bisect the SAME real tinted curve to `L_OK_EPSILON` (1e-12);
+        // the seed only changes the starting bracket, not the root. So the
+        // measured agreement is far tighter than the neutral `Exact` path's
+        // interp bound: max|Δl_ok| ≈ 5e-13 (a couple of bisection ULPs), with
+        // ZERO 8-bit hex mismatches over the grid — hence max ΔLc at mismatch is
+        // a hard 0.0000. The two gates are pinned just above those measured
+        // facts so a real seed regression (a mis-padded bracket, a refine that
+        // stops short, a bracket that excludes the root) fails them, instead of
+        // sliding under the old 0.1 budget:
+        //   * MAX_L_BRACKET = 1e-9: ~2000× the measured 5e-13, still 5e5× under
+        //     the `Exact` interp bound — a bracket off by even one node would
+        //     blow past it.
+        //   * MAX_LC_AT_MISMATCH = 0.01: 10× tighter than the old 0.1; with zero
+        //     mismatches today, any future hex flip is gated hard.
+        const MAX_L_BRACKET: f64 = 1e-9;
+        const MAX_LC_AT_MISMATCH: f64 = 0.01;
+        let hue = Hue::deg(286.0);
+        let policies = [ChromaPolicy::Relative(0.05), ChromaPolicy::Relative(0.10)];
+        let mut max_l_err = 0.0_f64;
+        let mut max_lc_at_mismatch = 0.0_f64;
+        let mut hex_mismatches = 0usize;
+        let mut compared = 0usize;
+        let n = 1024usize;
+        for (vc, vc_name) in vcs() {
+            for policy in policies {
+                let mut took_bracket = false;
+                for i in 0..=n {
+                    let l = i as f64 / n as f64;
+                    // Build the target J_HK on the *tinted* curve so the root the
+                    // solver must invert genuinely sits on the small-chroma path,
+                    // not the neutral axis. This grid is the unit check on
+                    // `match_lightness`; the end-to-end both-polarity arm below
+                    // drives the same Bracket path through the real `solve`.
+                    let target_j_hk =
+                        lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l, hue, policy)), &vc);
+
+                    // Confirm this case actually takes the Bracket arm — otherwise
+                    // the test would silently pass on the cold path and prove
+                    // nothing about the seed. (Endpoints can fall through to the
+                    // cold bisection via the bracket-widening guard; interior
+                    // targets must seed.)
+                    if matches!(
+                        crate::lut::seed_bracket(target_j_hk, hue, policy, &vc),
+                        Some(crate::lut::LutSeed::Bracket(_))
+                    ) {
+                        took_bracket = true;
+                    }
+
+                    let l_lut = match_lightness(target_j_hk, hue, policy, &vc);
+                    let l_ref = reference_match_lightness(target_j_hk, hue, policy, &vc);
+                    max_l_err = max_l_err.max((l_lut - l_ref).abs());
+                    compared += 1;
+
+                    let rgb_lut = build_color(l_lut, hue, policy);
+                    let rgb_ref = build_color(l_ref, hue, policy);
+                    if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
+                        hex_mismatches += 1;
+                        let y_lut = bg_luma(rgb_lut, &vc);
+                        let y_ref = bg_luma(rgb_ref, &vc);
+                        let lc_lut = lpc::contrast_core(y_lut, 1.0);
+                        let lc_ref = lpc::contrast_core(y_ref, 1.0);
+                        max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
+                    }
+                }
+                assert!(
+                    took_bracket,
+                    "{vc_name} {policy:?}: no grid point took the Bracket seed — the test is not exercising the small-chroma path it claims to"
+                );
+            }
+        }
+
+        // End-to-end arm: drive the SAME Bracket path through the real `solve`
+        // with BOTH polarities (+mag light-on-dark, -mag dark-on-light) at the
+        // tinted policies, and compare the final `Solved.lc()` against the
+        // cold-bisection oracle finished through the identical quantise/measure
+        // path — exactly the comparison `lut_adds_…` makes for the neutral arm,
+        // here for the small-chroma Bracket arm the production default uses.
+        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
+        let mut max_add = 0.0_f64;
+        let mut e2e_compared = 0usize;
+        for (vc, vc_name) in vcs() {
+            for policy in policies {
+                for bg_hex in backgrounds {
+                    let bg = BgInput::solid(bg_hex).unwrap();
+                    for magnitude in MAGNITUDES {
+                        for target in [magnitude, -magnitude] {
+                            let lut = solve(
+                                bg.clone(),
+                                Contract::text(target).with_conformance(Floor::None),
+                                hue,
+                                policy,
+                                &vc,
+                                Gamut::Srgb,
+                            );
+                            let interval = bg.luma_interval(&vc).unwrap();
+                            let y_gov = interval.governing(target);
+                            let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
+                                let tj = lpc::grey_j(y_fg, &vc);
+                                let l = reference_match_lightness(tj, hue, policy, &vc);
+                                finish(
+                                    build_color(l, hue, policy),
+                                    y_gov,
+                                    bg.governing_display(target),
+                                    false,
+                                    &vc,
+                                )
+                                .map(|s| s.lc())
+                            });
+                            if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
+                                let add = (s_lut.lc() - lc_ref).abs();
+                                max_add = max_add.max(add);
+                                e2e_compared += 1;
+                                assert!(
+                                    add < MAX_LC_AT_MISMATCH,
+                                    "{vc_name} {bg_hex} {policy:?} t={target}: Bracket-path solve added {add} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            e2e_compared >= 60,
+            "end-to-end Bracket arm exercised too few cases: {e2e_compared}"
+        );
+
+        eprintln!(
+            "Bracket-path LUT vs bisection: max|Δl_ok|={max_l_err:.2e} over {compared} cases, hex mismatches={hex_mismatches} (max ΔLc at mismatch {max_lc_at_mismatch:.4}); end-to-end both-polarity max add={max_add:.5} over {e2e_compared} solve cases"
+        );
+        assert!(
+            max_l_err < MAX_L_BRACKET,
+            "Bracket-path lightness drifted {max_l_err} from bisection (> {MAX_L_BRACKET})"
+        );
+        assert!(
+            max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
+            "a Bracket-path hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+        );
     }
 
     #[test]
