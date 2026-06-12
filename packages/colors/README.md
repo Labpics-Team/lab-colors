@@ -82,7 +82,9 @@ Whole-call rejections carry one of these stable codes (in `Error.message`, as
 
 Writes every reachable role from `result.vars` onto `element.style` via
 `setProperty`. Roles absent from `vars` (unreachable or the zero token) are not
-written, leaving the caller's CSS fallbacks in effect.
+written, leaving the caller's CSS fallbacks in effect — including across
+theme re-application: stale `--lab-*` inline properties from a previous call
+are cleared first, so a role that lost reachability does not linger.
 
 ## Bundle size
 
