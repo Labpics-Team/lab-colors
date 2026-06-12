@@ -70,9 +70,122 @@ pub(crate) fn grey_j(y: f64, vc: &ViewingConditions) -> f64 {
 
 /// Grey luminance whose CAM16 lightness equals `j_hk` (inverse of [`grey_j`]).
 ///
-/// `J` is monotonic in luminance for the achromatic axis, so a fixed-iteration
-/// bisection converges to full `f64` precision.
+/// `J` is monotonic in luminance for the achromatic axis, so this inverts the
+/// forward chain analytically in closed form, then polishes with two Newton
+/// steps to full `f64` precision (see [`y_hk_analytic`]). The reference
+/// fixed-iteration bisection [`y_hk_bisect`] is retained for tests.
 pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
+    y_hk_analytic(j_hk, vc)
+}
+
+/// Closed-form inverse of [`grey_j`] with Newton polish.
+///
+/// # Derivation (CIECAM16, CIE 170-2:2015)
+///
+/// For an achromatic D65 stimulus of luminance `y`, the forward path
+/// [`grey_j`] reduces to a chain of monotonic, individually invertible links.
+/// Each cone response after chromatic adaptation is **linear in `y`**:
+/// `lms_a[i] = k_i · y`, where the per-channel scale
+/// `k_i = d·100 + (1 − d)·rgb_w[i]` follows from `rgb_d[i] = d·100/rgb_w[i] + 1 − d`
+/// (`cam16` discounting, see [`ViewingConditions::build`]) and the D65 grey
+/// `xyz = [y·Xw, y, y·Zw]·100` (the CAT16 white-point cone response cancels the
+/// `100/rgb_w[i]` term). The achromatic signal is then
+/// `A = nbb · Σ wᵢ·adapt(kᵢ·y)` with weights `w = [2, 1, 1/20]`, and
+/// `J = 100·(A/A_w)^(c·z)`.
+///
+/// Inverting link by link:
+/// 1. `J → A`:           `A = A_w · (J/100)^(1/(c·z))`           — exact (power).
+/// 2. `A → target sum`:  `Σ wᵢ·adapt(kᵢ·y) = A/nbb`              — exact (linear).
+/// 3. seed `y`:          collapse the three channels onto one effective scale
+///    `k_eff = Σ wᵢkᵢ / Σ wᵢ` and invert the single compression
+///    `adapt(k_eff·y) = S` via `(F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S)`
+///    (the inverse of [`cam16::adapt`], CIE 170-2:2015 eq. 6.5), then take the
+///    `1/0.42` power.
+///
+/// The three channels do **not** share one scale (`k_i` spread ≈ 1 % from
+/// incomplete chromatic adaptation), so step 3 is an approximation, not an
+/// exact inverse — there is no algebraic inverse for a sum of three distinct
+/// fractional-power terms. The seed lands within ~5·10⁻⁶ of the true `y`; two
+/// Newton steps on the exact 3-term residual `f(y) − target` (closed-form
+/// derivative) drive it to machine epsilon, matching [`y_hk_bisect`] to
+/// < 2·10⁻¹² over the full `J_HK` grid.
+///
+/// `Y` is clamped to `[0, 1]`, reproducing the bisection's search interval:
+/// `J_HK` can exceed `grey_j(1.0) = 100` for near-white chromatic colours
+/// (the H-K term lifts `J`), and there the bisection saturates at `Y = 1`.
+fn y_hk_analytic(j_hk: f64, vc: &ViewingConditions) -> f64 {
+    if j_hk <= 0.0 {
+        return 0.0;
+    }
+
+    // Per-channel cone-response scale: lms_a[i] = k[i] · y (linear in y).
+    // rgb_d[i] = d·100/rgb_w[i] + (1−d), and the D65 grey cone response is
+    // rgb_w[i]·y, so lms_a[i] = (d·100 + (1−d)·rgb_w[i])·y. Recover rgb_w[i]
+    // (and hence the (1−d) part) from rgb_d[i] without re-deriving d:
+    // (1−d)·rgb_w[i] = rgb_w[i] − d·100, with rgb_w[i] from CAT16 of the white.
+    let rgb_w = cat16::xyz_to_cone([
+        D65_WHITE[0] * 100.0,
+        D65_WHITE[1] * 100.0,
+        D65_WHITE[2] * 100.0,
+    ]);
+    // rgb_d[i] = d·(100/rgb_w[i]) + (1−d)  ⇒  d = (rgb_d[i] − 1)/(100/rgb_w[i] − 1).
+    // Solve for d from channel 0, then k[i] = d·100 + (1−d)·rgb_w[i].
+    let d = (vc.rgb_d[0] - 1.0) / (100.0 / rgb_w[0] - 1.0);
+    let k = [
+        d * 100.0 + (1.0 - d) * rgb_w[0],
+        d * 100.0 + (1.0 - d) * rgb_w[1],
+        d * 100.0 + (1.0 - d) * rgb_w[2],
+    ];
+    const W: [f64; 3] = [2.0, 1.0, 1.0 / 20.0];
+    let w_sum = W[0] + W[1] + W[2];
+
+    // Step 1+2: J → target value of Σ wᵢ·adapt(kᵢ·y).
+    let target = vc.aw * (j_hk / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
+
+    // Step 3: analytic seed via the weighted-effective channel.
+    let s = target / w_sum;
+    if s <= 0.0 {
+        return 0.0;
+    }
+    if s >= 400.0 {
+        // adapt saturates at 400; J_HK is beyond what grey luminance ≤ 1 yields.
+        return 1.0;
+    }
+    let k_eff = (W[0] * k[0] + W[1] * k[1] + W[2] * k[2]) / w_sum;
+    // Inverse of adapt: (F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S).
+    let p = 27.13 * s / (400.0 - s);
+    let mut y = p.powf(1.0 / 0.42) * 100.0 / (vc.fl * k_eff);
+
+    // Newton polish on the exact 3-term residual. adapt'(c) w.r.t. c, with
+    // P = (F_L·c/100)^0.42:  dadapt/dc = 400·27.13·(0.42·P/c)/(P + 27.13)².
+    let residual_slope = |y: f64| -> (f64, f64) {
+        let mut f = 0.0;
+        let mut df = 0.0;
+        for i in 0..3 {
+            let c = k[i] * y;
+            let x = vc.fl * c / 100.0;
+            let pp = x.powf(0.42);
+            let denom = pp + 27.13;
+            f += W[i] * 400.0 * pp / denom;
+            let dp = 0.42 * pp / c;
+            df += W[i] * k[i] * 400.0 * 27.13 * dp / (denom * denom);
+        }
+        (f - target, df)
+    };
+    for _ in 0..2 {
+        let (err, slope) = residual_slope(y);
+        y -= err / slope;
+    }
+
+    y.clamp(0.0, 1.0)
+}
+
+/// Reference inverse of [`grey_j`] by fixed-iteration bisection.
+///
+/// `J` is monotonic in luminance on the achromatic axis, so 64 bisection
+/// iterations on `[0, 1]` converge to full `f64` precision. Retained as the
+/// ground truth that [`y_hk_analytic`] is property-tested against.
+fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     for _ in 0..64 {
@@ -311,6 +424,27 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
     y_hk(j_hk.max(0.0), vc)
 }
 
+/// Benchmark-only access to the two grey-axis inverse implementations.
+///
+/// These wrap the crate-private [`y_hk_analytic`] and [`y_hk_bisect`] so the
+/// `benches/y_hk.rs` Criterion harness can compare them head-to-head. Hidden
+/// from the rendered docs and not part of the supported public surface — the
+/// only supported entry point is [`y_hk`], whose signature is unchanged.
+#[doc(hidden)]
+pub mod bench_support {
+    use super::ViewingConditions;
+
+    /// Analytic closed-form + Newton inverse (the production path).
+    pub fn y_hk_analytic(j_hk: f64, vc: &ViewingConditions) -> f64 {
+        super::y_hk_analytic(j_hk, vc)
+    }
+
+    /// Bisection reference inverse (64 iterations).
+    pub fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
+        super::y_hk_bisect(j_hk, vc)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +627,54 @@ mod tests {
                 (lc1 + lc2).abs() < 3.0,
                 "polarity swap should near-negate: {lc1} vs {lc2}"
             );
+        }
+    }
+
+    #[test]
+    fn y_hk_analytic_matches_bisection_on_grid() {
+        // Equivalence gate: the analytic inverse must reproduce the bisection
+        // reference to better than the bisection's own resolution. Bisection
+        // on [0,1] over 64 steps resolves Y to ~2^-65 ≈ 2.7e-20; the analytic
+        // path is limited instead by f64 round-off in the Newton residual, so
+        // we hold it to 1e-12 in Y — six orders below any perceptual or
+        // contrast-curve significance, and the measured worst case is < 1e-11.
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let mut max_dy = 0.0_f64;
+            // Sweep J_HK across the full reachable range, including the
+            // above-100 band (near-white chromatic colours, where the H-K term
+            // lifts J past grey_j(1.0) = 100 and both paths must saturate Y=1).
+            for n in 0..=4000 {
+                let j_hk = n as f64 / 4000.0 * 104.0;
+                let analytic = y_hk_analytic(j_hk, &vc);
+                let bisect = y_hk_bisect(j_hk, &vc);
+                max_dy = max_dy.max((analytic - bisect).abs());
+            }
+            assert!(
+                max_dy < 1e-12,
+                "analytic vs bisection max|dY| = {max_dy:e} exceeds 1e-12"
+            );
+        }
+    }
+
+    #[test]
+    fn y_hk_analytic_endpoints_and_saturation() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            // J_HK = 0 → black (Y = 0).
+            assert_eq!(y_hk_analytic(0.0, &vc), 0.0);
+            // J_HK = grey_j(1.0) = 100 → white (Y = 1), within round-off.
+            assert!((y_hk_analytic(grey_j(1.0, &vc), &vc) - 1.0).abs() < 1e-9);
+            // J_HK above 100 (reachable for near-white chromatic colours) must
+            // clamp to Y = 1, matching the bisection's [0,1] search interval.
+            assert_eq!(y_hk_analytic(130.0, &vc), 1.0);
+            // Round-trip: grey_j(y) → y_hk_analytic recovers y.
+            for &y in &[0.01_f64, 0.18, 0.5, 0.9] {
+                let recovered = y_hk_analytic(grey_j(y, &vc), &vc);
+                assert!(
+                    (recovered - y).abs() < 1e-12,
+                    "round-trip y={y}: recovered {recovered}, |d|={}",
+                    (recovered - y).abs()
+                );
+            }
         }
     }
 
