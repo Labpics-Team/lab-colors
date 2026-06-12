@@ -88,13 +88,16 @@
 //!
 //! # Out of scope for v1 (extension seams, not implementations)
 //!
-//! - **Decorative JND values are provisional.** `separator`, the `border-base` /
-//!   `border-soft` ladder, the `fill-primary..quaternary` ladder, and the
-//!   `shadow-minor..major` stack carry placeholder magnitudes held above the
-//!   solver's reliable floor; only their *relative order* is a real contract.
-//!   Their just-noticeable-difference calibration is the `surface-jnd` chapter
-//!   (blocked on the quantisation gap, issue #44). `border-strong` is the lone
-//!   non-provisional border: it shares the `label-primary` anchor contract.
+//! - **Decorative contracts split by physics.** The `border-base` / `border-soft`
+//!   ladder and the `fill-primary..quaternary` ladder are *dJ'* roles
+//!   ([`RoleSpec::DecorativeDj`]): each holds the owner's literal perceived-
+//!   lightness step (a `J'` offset) against its surface, per theme, solved
+//!   analytically with no readability floor. The `shadow-minor..major` stack and
+//!   `separator` stay legacy Lc [`RoleSpec::Decorative`] placeholders (the shadow
+//!   owner anchors are alpha opacities, not dJ' steps); only their relative order
+//!   is a contract. The final eye-calibration of every decorative role is the
+//!   `surface-jnd` chapter. `border-strong` is not decorative at all — it shares
+//!   the `label-primary` readability anchor.
 //! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
 //!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
 //!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
@@ -148,42 +151,51 @@ use crate::wcag;
 /// is held strictly above this until the real JND calibration lands.
 const DECORATIVE_FLOOR_MIN: f64 = 7.6;
 
-// ── PROVISIONAL decorative JND magnitudes (surface-jnd recalibrates after #44) ──
+// ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
-// These are placeholders, NOT calibrated JND values. Two hard constraints shape
-// them:
+// The fill and border ladders carry the owner's *literal* dJ' anchors — the
+// perceived-lightness-difference each decorative step holds against its surface,
+// computed by the owner from the LabUI Figma stretches ("Вычисленные якоря",
+// reference/labui-figma-structure.md). This is the right unit (a J' step, not an
+// Lc contrast) and the right type ([`RoleSpec::DecorativeDj`], solved with no
+// readability floor and no low-contrast clip — distinguishability, not legibility).
 //
-// 1. Each must sit strictly above [`DECORATIVE_FLOOR_MIN`] (7.6 Lc): below it the
-//    solver hits its quantisation cliff and reports zero contrast, so a magnitude
-//    under the floor would resolve [`Unreachable::BelowContrastFloor`].
-// 2. Within a ladder the steps must stay strictly ordered by visibility with a
-//    gap wide enough that 8-bit quantisation cannot collapse two adjacent steps
-//    onto the same hex. Empirically (the v1 separator/border/shadow golden) ~1 Lc
-//    maps to ~2 emitted bytes on the light end, so a ≥1.0 Lc step is safe.
+// PROVISIONAL only in the sense that the *final* JND calibration is by the owner's
+// eye (chapter surface-jnd); the values, the unit, and the source are all honest.
+// This is NOT the old block-lift placeholder — it is the owner's number, used as
+// the owner wrote it.
 //
-// The literal owner-reference dJ' anchors — fills (light) 7.93/6.41/4.63/3.15,
-// borders base 6.41 / soft 3.15 — live mostly *below* the 7.6 floor, so they
-// cannot be used verbatim without collapsing the ladders. We therefore preserve
-// their *relative spacing* (their "spirit") while lifting each ladder as a block
-// into a band above the floor with safe inter-step gaps. surface-jnd replaces all
-// of these with the real calibration once the quantisation gap (#44) is closed.
+// Per-theme: the owner measured the anchors separately under each theme, because
+// perceived-lightness perception differs by surround. The dark anchors are ~2.2×
+// the light ones — the owner's measured over-compensation for dark surrounds —
+// so they are NOT derived from the light set; they are the owner's own dark
+// measurements, selected at resolve time by the viewing conditions' theme.
 
-/// Fill ladder, strictly descending in visibility (primary most visible). Echoes
-/// the light dJ' anchors 7.93/6.41/4.63/3.15 in relative spacing, lifted above
-/// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
-const FILL_PRIMARY_JND: f64 = 13.0;
-const FILL_SECONDARY_JND: f64 = 11.0;
-const FILL_TERTIARY_JND: f64 = 9.5;
-const FILL_QUATERNARY_JND: f64 = 8.0;
+/// Fill ladder dJ' anchors (`fill-primary` … `fill-quaternary`), strictly
+/// descending in visibility. Owner's literal values; light/dark per theme.
+const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
-/// Border base/soft, base stronger than soft. Echoes light dJ' anchors 6.41/3.15
-/// in spirit; both held above [`DECORATIVE_FLOOR_MIN`] with a safe gap. (Strong is
-/// an anchored role, not here.)
-const BORDER_BASE_JND: f64 = 9.5;
-const BORDER_SOFT_JND: f64 = 8.0;
+/// Border base/soft dJ' anchors. Owner's literal values; base stronger than soft.
+/// (`border-strong` is an anchored readability role, not a dJ' step — not here.)
+const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
+
+// ── PROVISIONAL shadow magnitudes (Lc decorative stub — see note) ───────────────
+//
+// The shadow stack is NOT migrated to dJ'. The owner's shadow anchors are *alpha*
+// values (@1/@2/@4/@12 opacities of a progressive shadow stack), not dJ' steps —
+// a different quantity again (the perceptibility of a translucent gradient over
+// variable content, the bridge to composite-backgrounds). Inventing dJ' numbers
+// for them would be exactly the kind of substitute the owner's iron rule forbids.
+// So shadows keep the honest Lc [`RoleSpec::Decorative`] stub: PROVISIONAL
+// magnitudes above [`DECORATIVE_FLOOR_MIN`], strictly ascending order as the only
+// contract, until surface-jnd derives real shadow contracts from the alphas.
 
 /// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
-/// strongest) — the progressive FX/Shadow ramp. Held above
+/// strongest) — the progressive FX/Shadow ramp. Lc placeholder, held above
 /// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
 const SHADOW_MINOR_JND: f64 = 8.0;
 const SHADOW_AMBIENT_JND: f64 = 9.5;
@@ -264,25 +276,24 @@ pub enum Role {
     /// contract (0.968 of max, AA-text floor), giving a crisp `N12`-weight edge.
     BorderStrong,
     /// Base container outline — the default border weight. HIG "Border/Base". A
-    /// PROVISIONAL JND placeholder (dJ' anchor 6.41, light) until `surface-jnd`.
+    /// dJ' step at the owner's literal anchor (light 6.41 / dark 10.12).
     BorderBase,
     /// Soft container outline — the faintest visible border. HIG "Border/Soft". A
-    /// PROVISIONAL JND placeholder (dJ' anchor 3.15, light) until `surface-jnd`.
+    /// dJ' step at the owner's literal anchor (light 3.15 / dark 5.83).
     BorderSoft,
     /// The explicit-zero border: "no edge here". HIG "Border/Ghost" (`@0`).
     /// Resolves to [`Resolved::None`], the honest zero of the border ramp.
     BorderGhost,
-    /// Strongest fill tint over the background. HIG "Fills/Primary". A PROVISIONAL
-    /// JND placeholder in the spirit of the light dJ' anchor 7.93 until
-    /// `surface-jnd`; its place at the top of the strictly-ordered fill ladder is
-    /// the contract, the magnitude is a working seam.
+    /// Strongest fill tint over the background. HIG "Fills/Primary". A dJ' step at
+    /// the owner's literal anchor (light 7.93 / dark 17.67); top of the
+    /// strictly-descending fill ladder.
     FillPrimary,
-    /// Secondary fill tint. HIG "Fills/Secondary". PROVISIONAL (dJ' spirit 6.41).
+    /// Secondary fill tint. HIG "Fills/Secondary". dJ' anchor (light 6.41 / dark 15.78).
     FillSecondary,
-    /// Tertiary fill tint. HIG "Fills/Tertiary". PROVISIONAL (dJ' spirit 4.63).
+    /// Tertiary fill tint. HIG "Fills/Tertiary". dJ' anchor (light 4.63 / dark 12.01).
     FillTertiary,
     /// Quaternary fill tint — the faintest visible fill. HIG "Fills/Quaternary".
-    /// PROVISIONAL (dJ' spirit 3.15).
+    /// dJ' anchor (light 3.15 / dark 8.22).
     FillQuaternary,
     /// The explicit-zero fill: "no fill here". HIG "Fills/None" (`@0`). Resolves
     /// to [`Resolved::None`], the honest zero of the fill ladder — the mirror of
@@ -402,23 +413,85 @@ impl TextAnchor {
     }
 }
 
+/// A decorative perceived-lightness-difference (dJ') magnitude, with the owner's
+/// per-theme calibration.
+///
+/// The owner measured the perceived-lightness step a decorative element should
+/// hold against its surface separately for each theme — perception of a lightness
+/// difference is not theme-invariant, and the owner's dark anchors run ~2.2× the
+/// light ones (a measured over-compensation for dark surrounds). So the magnitude
+/// is a `(light, dark)` pair, and the solver picks the side that matches the
+/// viewing conditions it resolves under via [`for_vc`](DjMagnitude::for_vc). This
+/// keeps the role table a single VC-agnostic instance (it serves both themes) and
+/// localises the per-theme choice to the one place that knows the VC — the resolve
+/// step — rather than forcing two tables or a theme parameter through every caller.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DjMagnitude {
+    light: f64,
+    dark: f64,
+}
+
+impl DjMagnitude {
+    /// A dJ' magnitude from its per-theme anchors (light surround, dark surround).
+    pub const fn new(light: f64, dark: f64) -> Self {
+        Self { light, dark }
+    }
+
+    /// The anchor for these viewing conditions: the dark value under a dimmed
+    /// surround (dark theme), the light value otherwise.
+    pub fn for_vc(self, vc: &ViewingConditions) -> f64 {
+        if vc.is_dark_theme() {
+            self.dark
+        } else {
+            self.light
+        }
+    }
+
+    /// The light-surround anchor.
+    pub fn light(self) -> f64 {
+        self.light
+    }
+
+    /// The dark-surround anchor.
+    pub fn dark(self) -> f64 {
+        self.dark
+    }
+}
+
 /// The contrast recipe behind a role — the shape this module solves.
 ///
 /// Text/UI roles ([`Anchor`](RoleSpec::Anchor)) target a fraction of the
-/// background's maximum; decorative roles ([`Decorative`](RoleSpec::Decorative))
-/// target a provisional JND magnitude with no readability floor; the zero token
-/// ([`Zero`](RoleSpec::Zero)) resolves to nothing. Construct these through
-/// [`RoleTable`]; they are exposed so a caller can read or override a recipe.
+/// background's maximum; dJ' decorative roles
+/// ([`DecorativeDj`](RoleSpec::DecorativeDj)) target a perceived-lightness step on
+/// the CAM16-UCS J' axis with no readability floor; legacy Lc decorative roles
+/// ([`Decorative`](RoleSpec::Decorative)) target a provisional `Lc` magnitude; the
+/// zero token ([`Zero`](RoleSpec::Zero)) resolves to nothing. Construct these
+/// through [`RoleTable`]; they are exposed so a caller can read or override a recipe.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleSpec {
     /// Anchored text/UI contrast: a fraction of the background's maximum.
     Anchor(TextAnchor),
+    /// Decorative perceived-lightness difference (dJ'): the solved colour sits
+    /// `magnitude_dj` away from the background on the CAM16-UCS lightness (`J'`)
+    /// axis, toward the larger headroom (the set polarity). No readability floor
+    /// and no low-contrast clip — this is distinguishability of a decorative
+    /// element (a fill tint, a hairline border), a different physics from the
+    /// legibility the [`Anchor`](RoleSpec::Anchor) / [`Decorative`] roles solve.
+    ///
+    /// The magnitude carries the owner's literal Figma-computed anchors per theme
+    /// (see [`DjMagnitude`]); the solve is analytic (J' offset → grey-axis Oklab L
+    /// → undertone build → quantise → honest dJ' measurement on the emitted hex).
+    /// Final eye-calibration is `surface-jnd`, but the unit, type, and source are
+    /// the owner's — not a substitute.
+    DecorativeDj { magnitude_dj: DjMagnitude },
     /// Decorative just-noticeable-difference contrast: a provisional `Lc`
     /// magnitude, held above [`DECORATIVE_FLOOR_MIN`], with [`Floor::None`].
     ///
-    /// PROVISIONAL: calibrated in `surface-jnd` against Figma after #44. The
-    /// magnitude here is a working seam, not a design decision.
+    /// Retained for the shadow stack, whose owner anchors are alpha opacities,
+    /// not dJ' steps — migrating them would require inventing numbers. PROVISIONAL:
+    /// the relative order is the only contract; `surface-jnd` derives real shadow
+    /// contracts from the alphas.
     Decorative { magnitude: f64 },
     /// The zero token: resolves to [`Resolved::None`].
     Zero,
@@ -904,9 +977,11 @@ impl Default for RoleTable {
     fn default() -> Self {
         let anchor =
             |fraction, conformance| RoleSpec::Anchor(TextAnchor::new(fraction, conformance));
-        // PROVISIONAL decorative magnitudes — working seam above the reliable
-        // floor, not final JND values. Calibrated in surface-jnd after #44.
+        // PROVISIONAL Lc decorative magnitudes — the shadow stack only (its owner
+        // anchors are alpha opacities, not dJ' steps). Calibrated in surface-jnd.
         let decorative = |magnitude| RoleSpec::Decorative { magnitude };
+        // dJ' decorative steps carry the owner's LITERAL per-theme anchors.
+        let dj = |magnitude_dj| RoleSpec::DecorativeDj { magnitude_dj };
         Self {
             specs: [
                 // Labels — the text ladder, renamed from text-* to the owner's HIG
@@ -919,29 +994,26 @@ impl Default for RoleTable {
                 (Role::LabelQuaternary, anchor(0.276, Floor::None)),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
-                // Separator — unchanged PROVISIONAL decorative magnitude.
+                // Separator — PROVISIONAL Lc decorative (no owner dJ' anchor yet).
                 (Role::Separator, decorative(8.0)),
                 // Border ladder. Strong is an ANCHOR at the label-primary contract
                 // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
-                // N12-weight edge — not a JND placeholder. Base/Soft are PROVISIONAL
-                // JND placeholders held above DECORATIVE_FLOOR_MIN; their relative
-                // order (base stronger than soft) is the contract, the magnitudes
-                // echo the light dJ' anchors 6.41 / 3.15 in spirit only.
+                // N12-weight edge — a readability role, not a dJ' step. Base/Soft
+                // are dJ' steps carrying the owner's LITERAL anchors (light/dark per
+                // theme); base stronger than soft is the order contract.
                 (Role::BorderStrong, anchor(0.968, Floor::AaText)),
-                (Role::BorderBase, decorative(BORDER_BASE_JND)),
-                (Role::BorderSoft, decorative(BORDER_SOFT_JND)),
+                (Role::BorderBase, dj(BORDER_BASE_DJ)),
+                (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
                 (Role::BorderGhost, RoleSpec::Zero),
-                // Fill ladder — PROVISIONAL JND placeholders, strictly descending in
-                // visibility (primary most visible → quaternary faintest). The
-                // magnitudes echo the light dJ' anchors 7.93 / 6.41 / 4.63 / 3.15 in
-                // *spirit* (their relative spacing), lifted as a block above
-                // DECORATIVE_FLOOR_MIN so the quantisation floor cannot collapse the
-                // lower steps. The strict order is the contract; surface-jnd
-                // recalibrates the magnitudes against Figma after #44.
-                (Role::FillPrimary, decorative(FILL_PRIMARY_JND)),
-                (Role::FillSecondary, decorative(FILL_SECONDARY_JND)),
-                (Role::FillTertiary, decorative(FILL_TERTIARY_JND)),
-                (Role::FillQuaternary, decorative(FILL_QUATERNARY_JND)),
+                // Fill ladder — dJ' steps with the owner's LITERAL Figma-computed
+                // anchors (light 7.93/6.41/4.63/3.15, dark 17.67/15.78/12.01/8.22),
+                // strictly descending in visibility (primary most visible →
+                // quaternary faintest). The anchors are the contract; surface-jnd
+                // does the final eye-calibration.
+                (Role::FillPrimary, dj(FILL_PRIMARY_DJ)),
+                (Role::FillSecondary, dj(FILL_SECONDARY_DJ)),
+                (Role::FillTertiary, dj(FILL_TERTIARY_DJ)),
+                (Role::FillQuaternary, dj(FILL_QUATERNARY_DJ)),
                 (Role::FillNone, RoleSpec::Zero),
                 // Shadow stack — PROVISIONAL, strictly ascending in visibility
                 // (minor subtlest → major strongest), the progressive stack the
@@ -1114,6 +1186,21 @@ fn resolve_in(
             Ok(c) => c,
             Err(reason) => return Resolved::Unreachable(reason),
         },
+        RoleSpec::DecorativeDj { magnitude_dj } => {
+            // dJ' has its own analytic solver (J' offset, not an Lc contract); it
+            // builds the undertone itself, so it does not route through
+            // `solve_with_chroma`.
+            return match resolve_dj(
+                bg,
+                magnitude_dj.for_vc(vc),
+                ctx.polarity,
+                table.chroma(),
+                vc,
+            ) {
+                Ok(solved) => Resolved::color(solved),
+                Err(reason) => Resolved::Unreachable(reason),
+            };
+        }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
     };
 
@@ -1175,6 +1262,46 @@ fn solve_with_chroma(
     } else {
         let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
         solve::solve(bg.clone(), contract, hue, policy, vc, Gamut::Srgb)
+    }
+}
+
+/// Solve a dJ' decorative role under `chroma`, applying the same undertone policy
+/// every other role uses (the identity-curve v2 by default).
+///
+/// Mirrors [`solve_with_chroma`] but drives [`solve::solve_dj`] instead of the
+/// contrast solver: the target is a perceived-lightness offset on the J' axis, not
+/// an Lc contract. For the lightness-dependent [`RoleChroma::Curve`] the same short
+/// fixed-point runs — an achromatic probe discovers the dJ'-solved lightness, the
+/// curve is planned at that lightness, and the plan is re-solved until the
+/// lightness settles. Every iteration is a real `solve_dj`, so the dJ' contract is
+/// always honoured on the returned colour; the loop only refines which lightness
+/// the undertone is planned against.
+fn resolve_dj(
+    bg: &BgInput,
+    magnitude_dj: f64,
+    polarity: Polarity,
+    chroma: RoleChroma,
+    vc: &ViewingConditions,
+) -> Result<Solved, Unreachable> {
+    let sign = polarity.sign();
+    if let RoleChroma::Curve { .. } = chroma {
+        let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
+        let probe = solve::solve_dj(bg, magnitude_dj, sign, probe_hue, probe_chroma, vc)?;
+        let mut l_plan = solved_oklab_lightness(&probe);
+        let mut solved = probe;
+        for _ in 0..CURVE_REFINE_STEPS {
+            let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
+            solved = solve::solve_dj(bg, magnitude_dj, sign, hue, policy, vc)?;
+            let l_new = solved_oklab_lightness(&solved);
+            if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
+                break;
+            }
+            l_plan = l_new;
+        }
+        Ok(solved)
+    } else {
+        let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
+        solve::solve_dj(bg, magnitude_dj, sign, hue, policy, vc)
     }
 }
 
@@ -1855,9 +1982,9 @@ mod tests {
     }
 
     #[test]
-    fn decorative_roles_use_provisional_floor_and_no_override() {
-        // Decorative roles solve through a range contract (no WCAG floor): their
-        // magnitude sits above the reliable floor, floor_override is never set.
+    fn decorative_roles_carry_no_wcag_override() {
+        // No decorative role (dJ' or legacy Lc) trips the WCAG legal floor — they
+        // are distinguishability contracts, not readability ones.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let table = RoleTable::default();
@@ -1883,9 +2010,26 @@ mod tests {
                 "{}: decorative role must not trip the WCAG floor",
                 role.key()
             );
+        }
+
+        // The legacy Lc decorative roles (shadow stack + separator) still sit above
+        // the solver's reliable Lc floor; the dJ' roles deliberately do NOT (their
+        // J' separation can be smaller than the Lc clip threshold — that is the
+        // whole point of the different unit).
+        for role in [
+            Role::Separator,
+            Role::ShadowMinor,
+            Role::ShadowAmbient,
+            Role::ShadowPenumbra,
+            Role::ShadowMajor,
+        ] {
+            let solved = match resolve(&bg, role, &table, &vc) {
+                Resolved::Color { solved, .. } => solved,
+                other => panic!("{other:?}"),
+            };
             assert!(
                 solved.lc().abs() >= DECORATIVE_FLOOR_MIN - 1.0,
-                "{}: decorative |Lc| {} below reliable floor",
+                "{}: Lc decorative |Lc| {} below reliable floor",
                 role.key(),
                 solved.lc().abs()
             );
@@ -1907,6 +2051,121 @@ mod tests {
         let bumped = resolve(&bg, Role::Separator, &stronger, &vc);
         let (b, s) = (base.lc().unwrap().abs(), bumped.lc().unwrap().abs());
         assert!(s > b, "bumped magnitude must raise |Lc|: {b} -> {s}");
+    }
+
+    /// Achieved `|dJ'|` of a single resolved role against `bg_hex` under `vc`.
+    fn resolved_dj(bg_hex: &str, role: Role, table: &RoleTable, vc: &ViewingConditions) -> f64 {
+        let bg = BgInput::solid(bg_hex).unwrap();
+        let solved = match resolve(&bg, role, table, vc) {
+            Resolved::Color { solved, .. } => solved,
+            other => panic!("{} expected a colour, got {other:?}", role.key()),
+        };
+        let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), vc)
+            .unwrap()
+            .jp;
+        let jp_bg = crate::lcs::LcsColor::from_hex_with_vc(bg_hex, vc)
+            .unwrap()
+            .jp;
+        (jp_fg - jp_bg).abs()
+    }
+
+    #[test]
+    fn dj_roles_land_on_the_owner_anchor_within_a_grid_step() {
+        // The dJ' contract is honest: the emitted colour's measured |dJ'| against
+        // the surface lands within one 8-bit grid step (~0.6 J') of the owner's
+        // literal anchor — the right unit reproduced, not a substitute. Checked on
+        // light and dark backgrounds, under the matching theme VC.
+        let table = RoleTable::default();
+        let light = ViewingConditions::srgb();
+        let dark = ViewingConditions::dim_surround();
+        // (role, light anchor, dark anchor)
+        let cases = [
+            (Role::FillPrimary, 7.93, 17.67),
+            (Role::FillSecondary, 6.41, 15.78),
+            (Role::FillTertiary, 4.63, 12.01),
+            (Role::FillQuaternary, 3.15, 8.22),
+            (Role::BorderBase, 6.41, 10.12),
+            (Role::BorderSoft, 3.15, 5.83),
+        ];
+        for bg_hex in ["#FFFFFF", "#7F7F7F", "#101012"] {
+            for (role, light_anchor, dark_anchor) in cases {
+                let got_light = resolved_dj(bg_hex, role, &table, &light);
+                assert!(
+                    (got_light - light_anchor).abs() <= 0.7,
+                    "{bg_hex} {} light: |dJ'| {got_light:.3} off anchor {light_anchor}",
+                    role.key()
+                );
+                let got_dark = resolved_dj(bg_hex, role, &table, &dark);
+                assert!(
+                    (got_dark - dark_anchor).abs() <= 0.7,
+                    "{bg_hex} {} dark: |dJ'| {got_dark:.3} off anchor {dark_anchor}",
+                    role.key()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dj_magnitude_selects_per_theme() {
+        // The same role under the dark-theme VC must hold a larger perceived
+        // separation than under the light VC — the per-VC anchor selection is real,
+        // not a constant. (The owner's dark anchors run ~2.2x the light ones.)
+        let table = RoleTable::default();
+        let light = ViewingConditions::srgb();
+        let dark = ViewingConditions::dim_surround();
+        for bg_hex in ["#FFFFFF", "#7F7F7F", "#101012"] {
+            for role in [Role::FillPrimary, Role::BorderBase] {
+                let l = resolved_dj(bg_hex, role, &table, &light);
+                let d = resolved_dj(bg_hex, role, &table, &dark);
+                assert!(
+                    d > l + 1.0,
+                    "{bg_hex} {}: dark dJ' {d:.3} must exceed light {l:.3}",
+                    role.key()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dj_magnitude_drives_the_result() {
+        // The dJ' result follows the table's magnitude: a larger anchor yields a
+        // larger achieved separation. Proves the value is wired through, not hard-coded.
+        let vc = ViewingConditions::srgb();
+        let table = RoleTable::default();
+        let stronger = table.clone().with(
+            Role::FillTertiary,
+            RoleSpec::DecorativeDj {
+                magnitude_dj: DjMagnitude::new(20.0, 20.0),
+            },
+        );
+        let base = resolved_dj("#FFFFFF", Role::FillTertiary, &table, &vc);
+        let bumped = resolved_dj("#FFFFFF", Role::FillTertiary, &stronger, &vc);
+        assert!(
+            bumped > base + 5.0,
+            "bumped dJ' must rise: {base:.3} -> {bumped:.3}"
+        );
+    }
+
+    #[test]
+    fn dj_off_axis_target_is_honestly_unreachable() {
+        // A dJ' larger than the axis can supply (a big positive step requested on a
+        // near-white surface, where the foreground would need J' > 100) surfaces
+        // Unreachable::DjUnreachable — never a silent clip to white.
+        let vc = ViewingConditions::srgb();
+        // Force light-on-dark polarity by overriding a fill to a huge dark-theme-
+        // style step on a near-white bg is still dark-on-light; instead request a
+        // separation past the dark wall on near-black.
+        let table = RoleTable::default().with(
+            Role::FillPrimary,
+            RoleSpec::DecorativeDj {
+                magnitude_dj: DjMagnitude::new(300.0, 300.0),
+            },
+        );
+        let bg = BgInput::solid("#101012").unwrap();
+        match resolve(&bg, Role::FillPrimary, &table, &vc) {
+            Resolved::Unreachable(Unreachable::DjUnreachable { .. }) => {}
+            other => panic!("expected DjUnreachable for an off-axis dJ', got {other:?}"),
+        }
     }
 
     #[test]
@@ -2110,23 +2369,42 @@ mod tests {
 
     #[test]
     fn no_silent_clip_anywhere_on_the_band() {
-        // Every resolved colour carries real contrast; the only legitimate zeros
-        // are the explicit zero-token roles (Role::None and the family zeros
-        // border-ghost / fill-none, all spec'd RoleSpec::Zero); an unreachable role
-        // surfaces a reason. Nothing clips.
+        // Every resolved colour carries a real separation from its background; the
+        // only legitimate zeros are the explicit zero-token roles (Role::None and
+        // the family zeros border-ghost / fill-none, all spec'd RoleSpec::Zero); an
+        // unreachable role surfaces a reason. Nothing clips silently.
+        //
+        // The honest "carries separation" metric depends on the contract's PHYSICS:
+        // an Lc role (labels, icon, separator, shadows) must have |Lc| ≥ 1; a dJ'
+        // role (fills, base/soft borders) must have a real perceived-lightness
+        // difference |dJ'| ≥ 1 — its |Lc| can sit at zero inside the low-contrast
+        // clip while its J' separation is genuine, which is exactly why it uses a
+        // different unit. Checking |Lc| on a dJ' role would be the wrong ruler.
         let table = table_default();
         for (vc, _) in vcs() {
             for bg_hex in band_hexes() {
                 let bg = BgInput::solid(&bg_hex).unwrap();
+                let jp_bg = crate::lcs::LcsColor::from_hex_with_vc(&bg_hex, &vc)
+                    .unwrap()
+                    .jp;
                 let set = resolve_set(&bg, &table, &vc);
                 let no_silent_clip = set.iter().all(|(role, r)| match r {
-                    Resolved::Color { solved, .. } => solved.lc().abs() >= 1.0,
+                    Resolved::Color { solved, .. } => {
+                        if matches!(table.spec(*role), RoleSpec::DecorativeDj { .. }) {
+                            let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
+                                .unwrap()
+                                .jp;
+                            (jp_fg - jp_bg).abs() >= 1.0
+                        } else {
+                            solved.lc().abs() >= 1.0
+                        }
+                    }
                     Resolved::None => matches!(table.spec(*role), RoleSpec::Zero),
                     Resolved::Unreachable(_) => true,
                 });
                 assert!(
                     no_silent_clip,
-                    "{bg_hex}: a role resolved to a zero-contrast clip"
+                    "{bg_hex}: a role resolved to a zero-separation clip"
                 );
             }
         }
@@ -2238,12 +2516,38 @@ mod tests {
             .unwrap_or_else(|| panic!("{} did not resolve to a colour", role.key()))
     }
 
+    /// The achieved perceived-lightness difference `|dJ'|` of a role's resolved
+    /// hex against `bg_hex`, measured on the emitted colour under `vc` — the
+    /// honest metric for the dJ' ladders (the fill/border steps the low-contrast
+    /// LPC clip can report as zero `Lc` while their J' separation is real).
+    fn ladder_dj(
+        set: &[(Role, Resolved)],
+        role: Role,
+        bg_hex: &str,
+        vc: &ViewingConditions,
+    ) -> f64 {
+        let solved = set
+            .iter()
+            .find(|(r, _)| *r == role)
+            .and_then(|(_, res)| res.solved())
+            .unwrap_or_else(|| panic!("{} did not resolve to a colour", role.key()));
+        let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), vc)
+            .unwrap()
+            .jp;
+        let jp_bg = crate::lcs::LcsColor::from_hex_with_vc(bg_hex, vc)
+            .unwrap()
+            .jp;
+        (jp_fg - jp_bg).abs()
+    }
+
     #[test]
     fn fill_ladder_is_strictly_descending_in_visibility() {
         // The fill ladder is a strict order contract: primary is the most visible
-        // fill, quaternary the faintest. PROVISIONAL magnitudes, but the ORDER is
-        // the contract surface-jnd inherits — assert it on every background, both
-        // VCs, with a real gap (no two steps collapsing onto one |Lc|).
+        // fill, quaternary the faintest. The fills are dJ' roles, so visibility is
+        // the achieved perceived-lightness difference |dJ'| — NOT |Lc|, which the
+        // low-contrast LPC clip can flatten to zero on the faint steps even though
+        // their J' separation is real. Assert the strict order in J' on every
+        // background, both VCs, with a real gap (no two steps collapsing).
         let table = RoleTable::default();
         for (vc, vc_name) in vcs() {
             for bg_hex in [
@@ -2257,11 +2561,14 @@ mod tests {
                     Role::FillTertiary,
                     Role::FillQuaternary,
                 ];
-                let mags: Vec<f64> = ladder.iter().map(|&r| ladder_mag(&set, r)).collect();
-                for pair in mags.windows(2) {
+                let djs: Vec<f64> = ladder
+                    .iter()
+                    .map(|&r| ladder_dj(&set, r, bg_hex, &vc))
+                    .collect();
+                for pair in djs.windows(2) {
                     assert!(
                         pair[0] > pair[1],
-                        "{vc_name} {bg_hex}: fill ladder not strictly descending, |Lc| {mags:?}"
+                        "{vc_name} {bg_hex}: fill ladder not strictly descending, |dJ'| {djs:?}"
                     );
                 }
             }
@@ -2298,15 +2605,16 @@ mod tests {
 
     #[test]
     fn border_base_is_stronger_than_border_soft() {
-        // The border JND ladder (base > soft); strong is anchored and tested
-        // separately. Strict order is the contract; magnitudes PROVISIONAL.
+        // The border dJ' ladder (base > soft); strong is anchored and tested
+        // separately. Strict order in J' is the contract (measured as |dJ'|, not
+        // |Lc|, for the same reason as the fills).
         let table = RoleTable::default();
         for (vc, vc_name) in vcs() {
             for bg_hex in ["#FFFFFF", "#7F7F7F", "#101012", "#3478F6"] {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 let set = resolve_set(&bg, &table, &vc);
-                let base = ladder_mag(&set, Role::BorderBase);
-                let soft = ladder_mag(&set, Role::BorderSoft);
+                let base = ladder_dj(&set, Role::BorderBase, bg_hex, &vc);
+                let soft = ladder_dj(&set, Role::BorderSoft, bg_hex, &vc);
                 assert!(
                     base > soft,
                     "{vc_name} {bg_hex}: border-base {base} must exceed border-soft {soft}"
@@ -2595,11 +2903,16 @@ mod tests {
         //     reuses the label-primary contract, so it too matches label-primary.
         //     These rows are the control that proves the rename was pure.
         //
-        //   * The new `border-base/soft`, `fill-*`, and `shadow-*` rows are a
-        //     CONSCIOUS new block — PROVISIONAL decorative magnitudes whose colours
-        //     have not been eye-approved by the owner. They are frozen here only so
-        //     a hot-path refactor cannot move them silently; surface-jnd will
-        //     recalibrate the magnitudes (and re-approve the colours) after #44.
+        //   * The `border-base/soft` and `fill-*` rows are dJ' decorative roles
+        //     carrying the owner's LITERAL Figma-computed perceived-lightness
+        //     anchors (per theme). They changed type from the earlier Lc block-lift
+        //     placeholder to dJ' (role-taxonomy-hig doraботка, owner's iron rule:
+        //     no substitute units) — so their colours moved here ON PURPOSE, with
+        //     this comment, the change of unit being the reason. They are still
+        //     PROVISIONAL only in that the final eye-calibration is surface-jnd; the
+        //     unit, type, and source are the owner's. The `shadow-*` rows stay Lc
+        //     `Decorative` placeholders (the owner's shadow anchors are alpha
+        //     opacities, not dJ' steps); frozen so a refactor cannot move them.
         const GOLDEN: [(&str, &str, &str, &str); 240] = [
             ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
             ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
@@ -2608,13 +2921,13 @@ mod tests {
             ("srgb", "#FFFFFF", "icon", "#94949E"),
             ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
             ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
-            ("srgb", "#FFFFFF", "border-base", "#E2E2EC"),
-            ("srgb", "#FFFFFF", "border-soft", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
+            ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
             ("srgb", "#FFFFFF", "border-ghost", "none"),
-            ("srgb", "#FFFFFF", "fill-primary", "#DCDCE5"),
-            ("srgb", "#FFFFFF", "fill-secondary", "#DFDFE9"),
-            ("srgb", "#FFFFFF", "fill-tertiary", "#E2E2EC"),
-            ("srgb", "#FFFFFF", "fill-quaternary", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "fill-primary", "#E3E3ED"),
+            ("srgb", "#FFFFFF", "fill-secondary", "#E8E8F3"),
+            ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
+            ("srgb", "#FFFFFF", "fill-quaternary", "#F3F3FE"),
             ("srgb", "#FFFFFF", "fill-none", "none"),
             ("srgb", "#FFFFFF", "shadow-minor", "#E5E5EE"),
             ("srgb", "#FFFFFF", "shadow-ambient", "#E2E2EC"),
@@ -2628,13 +2941,13 @@ mod tests {
             ("srgb", "#F2F2F7", "icon", "#8B8B95"),
             ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
             ("srgb", "#F2F2F7", "border-strong", "#09090F"),
-            ("srgb", "#F2F2F7", "border-base", "#DADAE4"),
-            ("srgb", "#F2F2F7", "border-soft", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
+            ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
             ("srgb", "#F2F2F7", "border-ghost", "none"),
-            ("srgb", "#F2F2F7", "fill-primary", "#D4D4DE"),
-            ("srgb", "#F2F2F7", "fill-secondary", "#D8D8E1"),
-            ("srgb", "#F2F2F7", "fill-tertiary", "#DADAE4"),
-            ("srgb", "#F2F2F7", "fill-quaternary", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "fill-primary", "#D8D8E1"),
+            ("srgb", "#F2F2F7", "fill-secondary", "#DCDDE6"),
+            ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
+            ("srgb", "#F2F2F7", "fill-quaternary", "#E7E7F0"),
             ("srgb", "#F2F2F7", "fill-none", "none"),
             ("srgb", "#F2F2F7", "shadow-minor", "#DDDDE7"),
             ("srgb", "#F2F2F7", "shadow-ambient", "#DADAE4"),
@@ -2648,13 +2961,13 @@ mod tests {
             ("srgb", "#7F7F7F", "icon", "#36353D"),
             ("srgb", "#7F7F7F", "separator", "#63636B"),
             ("srgb", "#7F7F7F", "border-strong", "#010103"),
-            ("srgb", "#7F7F7F", "border-base", "#5F5F68"),
-            ("srgb", "#7F7F7F", "border-soft", "#63636B"),
+            ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
+            ("srgb", "#7F7F7F", "border-soft", "#76767F"),
             ("srgb", "#7F7F7F", "border-ghost", "none"),
-            ("srgb", "#7F7F7F", "fill-primary", "#57575F"),
-            ("srgb", "#7F7F7F", "fill-secondary", "#5C5C64"),
-            ("srgb", "#7F7F7F", "fill-tertiary", "#5F5F68"),
-            ("srgb", "#7F7F7F", "fill-quaternary", "#63636B"),
+            ("srgb", "#7F7F7F", "fill-primary", "#6B6B73"),
+            ("srgb", "#7F7F7F", "fill-secondary", "#6F6F77"),
+            ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
+            ("srgb", "#7F7F7F", "fill-quaternary", "#76767F"),
             ("srgb", "#7F7F7F", "fill-none", "none"),
             ("srgb", "#7F7F7F", "shadow-minor", "#63636B"),
             ("srgb", "#7F7F7F", "shadow-ambient", "#5F5F68"),
@@ -2668,13 +2981,13 @@ mod tests {
             ("srgb", "#1C1C1E", "icon", "#95959E"),
             ("srgb", "#1C1C1E", "separator", "#38383F"),
             ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
-            ("srgb", "#1C1C1E", "border-base", "#3C3C44"),
-            ("srgb", "#1C1C1E", "border-soft", "#38383F"),
+            ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
+            ("srgb", "#1C1C1E", "border-soft", "#23232A"),
             ("srgb", "#1C1C1E", "border-ghost", "none"),
-            ("srgb", "#1C1C1E", "fill-primary", "#46464E"),
-            ("srgb", "#1C1C1E", "fill-secondary", "#414148"),
-            ("srgb", "#1C1C1E", "fill-tertiary", "#3C3C44"),
-            ("srgb", "#1C1C1E", "fill-quaternary", "#38383F"),
+            ("srgb", "#1C1C1E", "fill-primary", "#2E2E35"),
+            ("srgb", "#1C1C1E", "fill-secondary", "#2B2B32"),
+            ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
+            ("srgb", "#1C1C1E", "fill-quaternary", "#23232A"),
             ("srgb", "#1C1C1E", "fill-none", "none"),
             ("srgb", "#1C1C1E", "shadow-minor", "#38383F"),
             ("srgb", "#1C1C1E", "shadow-ambient", "#3C3C44"),
@@ -2688,13 +3001,13 @@ mod tests {
             ("srgb", "#101012", "icon", "#93939C"),
             ("srgb", "#101012", "separator", "#323239"),
             ("srgb", "#101012", "border-strong", "#F2F2FC"),
-            ("srgb", "#101012", "border-base", "#36363E"),
-            ("srgb", "#101012", "border-soft", "#323239"),
+            ("srgb", "#101012", "border-base", "#1F1F27"),
+            ("srgb", "#101012", "border-soft", "#18171E"),
             ("srgb", "#101012", "border-ghost", "none"),
-            ("srgb", "#101012", "fill-primary", "#414148"),
-            ("srgb", "#101012", "fill-secondary", "#3B3B42"),
-            ("srgb", "#101012", "fill-tertiary", "#36363E"),
-            ("srgb", "#101012", "fill-quaternary", "#323239"),
+            ("srgb", "#101012", "fill-primary", "#23232A"),
+            ("srgb", "#101012", "fill-secondary", "#1F1F27"),
+            ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
+            ("srgb", "#101012", "fill-quaternary", "#18171E"),
             ("srgb", "#101012", "fill-none", "none"),
             ("srgb", "#101012", "shadow-minor", "#323239"),
             ("srgb", "#101012", "shadow-ambient", "#36363E"),
@@ -2708,13 +3021,13 @@ mod tests {
             ("srgb", "#3478F6", "icon", "#35343C"),
             ("srgb", "#3478F6", "separator", "#7F7F88"),
             ("srgb", "#3478F6", "border-strong", "#020205"),
-            ("srgb", "#3478F6", "border-base", "#7C7C85"),
-            ("srgb", "#3478F6", "border-soft", "#7F7F88"),
+            ("srgb", "#3478F6", "border-base", "#6E6E76"),
+            ("srgb", "#3478F6", "border-soft", "#76767E"),
             ("srgb", "#3478F6", "border-ghost", "none"),
-            ("srgb", "#3478F6", "fill-primary", "#74747D"),
-            ("srgb", "#3478F6", "fill-secondary", "#797981"),
-            ("srgb", "#3478F6", "fill-tertiary", "#7C7C85"),
-            ("srgb", "#3478F6", "fill-quaternary", "#7F7F88"),
+            ("srgb", "#3478F6", "fill-primary", "#6A6A73"),
+            ("srgb", "#3478F6", "fill-secondary", "#6E6E76"),
+            ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
+            ("srgb", "#3478F6", "fill-quaternary", "#76767E"),
             ("srgb", "#3478F6", "fill-none", "none"),
             ("srgb", "#3478F6", "shadow-minor", "#7F7F88"),
             ("srgb", "#3478F6", "shadow-ambient", "#7C7C85"),
@@ -2728,13 +3041,13 @@ mod tests {
             ("dim", "#FFFFFF", "icon", "#94949D"),
             ("dim", "#FFFFFF", "separator", "#E3E3ED"),
             ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
-            ("dim", "#FFFFFF", "border-base", "#E0E0EA"),
-            ("dim", "#FFFFFF", "border-soft", "#E3E3ED"),
+            ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
+            ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
             ("dim", "#FFFFFF", "border-ghost", "none"),
-            ("dim", "#FFFFFF", "fill-primary", "#DADAE4"),
-            ("dim", "#FFFFFF", "fill-secondary", "#DEDEE7"),
-            ("dim", "#FFFFFF", "fill-tertiary", "#E0E0EA"),
-            ("dim", "#FFFFFF", "fill-quaternary", "#E3E3ED"),
+            ("dim", "#FFFFFF", "fill-primary", "#BDBDC6"),
+            ("dim", "#FFFFFF", "fill-secondary", "#C3C3CC"),
+            ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
+            ("dim", "#FFFFFF", "fill-quaternary", "#DEDEE7"),
             ("dim", "#FFFFFF", "fill-none", "none"),
             ("dim", "#FFFFFF", "shadow-minor", "#E3E3ED"),
             ("dim", "#FFFFFF", "shadow-ambient", "#E0E0EA"),
@@ -2748,13 +3061,13 @@ mod tests {
             ("dim", "#F2F2F7", "icon", "#8B8B94"),
             ("dim", "#F2F2F7", "separator", "#DEDEE7"),
             ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
-            ("dim", "#F2F2F7", "border-base", "#DBDBE4"),
-            ("dim", "#F2F2F7", "border-soft", "#DEDEE7"),
+            ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
+            ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
             ("dim", "#F2F2F7", "border-ghost", "none"),
-            ("dim", "#F2F2F7", "fill-primary", "#D4D5DE"),
-            ("dim", "#F2F2F7", "fill-secondary", "#D8D8E2"),
-            ("dim", "#F2F2F7", "fill-tertiary", "#DBDBE4"),
-            ("dim", "#F2F2F7", "fill-quaternary", "#DEDEE7"),
+            ("dim", "#F2F2F7", "fill-primary", "#B2B2BC"),
+            ("dim", "#F2F2F7", "fill-secondary", "#B9B9C2"),
+            ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
+            ("dim", "#F2F2F7", "fill-quaternary", "#D3D3DC"),
             ("dim", "#F2F2F7", "fill-none", "none"),
             ("dim", "#F2F2F7", "shadow-minor", "#DEDEE7"),
             ("dim", "#F2F2F7", "shadow-ambient", "#DBDBE4"),
@@ -2768,13 +3081,13 @@ mod tests {
             ("dim", "#7F7F7F", "icon", "#36353D"),
             ("dim", "#7F7F7F", "separator", "#64646D"),
             ("dim", "#7F7F7F", "border-strong", "#030305"),
-            ("dim", "#7F7F7F", "border-base", "#616169"),
-            ("dim", "#7F7F7F", "border-soft", "#64646D"),
+            ("dim", "#7F7F7F", "border-base", "#64646C"),
+            ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
             ("dim", "#7F7F7F", "border-ghost", "none"),
-            ("dim", "#7F7F7F", "fill-primary", "#595960"),
-            ("dim", "#7F7F7F", "fill-secondary", "#5D5D66"),
-            ("dim", "#7F7F7F", "fill-tertiary", "#616169"),
-            ("dim", "#7F7F7F", "fill-quaternary", "#64646D"),
+            ("dim", "#7F7F7F", "fill-primary", "#525259"),
+            ("dim", "#7F7F7F", "fill-secondary", "#56565D"),
+            ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
+            ("dim", "#7F7F7F", "fill-quaternary", "#696971"),
             ("dim", "#7F7F7F", "fill-none", "none"),
             ("dim", "#7F7F7F", "shadow-minor", "#64646D"),
             ("dim", "#7F7F7F", "shadow-ambient", "#616169"),
@@ -2788,13 +3101,13 @@ mod tests {
             ("dim", "#1C1C1E", "icon", "#94949D"),
             ("dim", "#1C1C1E", "separator", "#38383F"),
             ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
-            ("dim", "#1C1C1E", "border-base", "#3C3C44"),
-            ("dim", "#1C1C1E", "border-soft", "#38383F"),
+            ("dim", "#1C1C1E", "border-base", "#313137"),
+            ("dim", "#1C1C1E", "border-soft", "#28282E"),
             ("dim", "#1C1C1E", "border-ghost", "none"),
-            ("dim", "#1C1C1E", "fill-primary", "#46464E"),
-            ("dim", "#1C1C1E", "fill-secondary", "#414148"),
-            ("dim", "#1C1C1E", "fill-tertiary", "#3C3C44"),
-            ("dim", "#1C1C1E", "fill-quaternary", "#38383F"),
+            ("dim", "#1C1C1E", "fill-primary", "#424249"),
+            ("dim", "#1C1C1E", "fill-secondary", "#3D3D45"),
+            ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
+            ("dim", "#1C1C1E", "fill-quaternary", "#2D2D33"),
             ("dim", "#1C1C1E", "fill-none", "none"),
             ("dim", "#1C1C1E", "shadow-minor", "#38383F"),
             ("dim", "#1C1C1E", "shadow-ambient", "#3C3C44"),
@@ -2808,13 +3121,13 @@ mod tests {
             ("dim", "#101012", "icon", "#92929B"),
             ("dim", "#101012", "separator", "#323239"),
             ("dim", "#101012", "border-strong", "#F0F0FA"),
-            ("dim", "#101012", "border-base", "#36363E"),
-            ("dim", "#101012", "border-soft", "#323239"),
+            ("dim", "#101012", "border-base", "#25252B"),
+            ("dim", "#101012", "border-soft", "#1C1C22"),
             ("dim", "#101012", "border-ghost", "none"),
-            ("dim", "#101012", "fill-primary", "#404048"),
-            ("dim", "#101012", "fill-secondary", "#3B3B42"),
-            ("dim", "#101012", "fill-tertiary", "#36363E"),
-            ("dim", "#101012", "fill-quaternary", "#323239"),
+            ("dim", "#101012", "fill-primary", "#35353C"),
+            ("dim", "#101012", "fill-secondary", "#313137"),
+            ("dim", "#101012", "fill-tertiary", "#29292F"),
+            ("dim", "#101012", "fill-quaternary", "#212127"),
             ("dim", "#101012", "fill-none", "none"),
             ("dim", "#101012", "shadow-minor", "#323239"),
             ("dim", "#101012", "shadow-ambient", "#36363E"),
@@ -2828,13 +3141,13 @@ mod tests {
             ("dim", "#3478F6", "icon", "#35343B"),
             ("dim", "#3478F6", "separator", "#808088"),
             ("dim", "#3478F6", "border-strong", "#040408"),
-            ("dim", "#3478F6", "border-base", "#7D7D85"),
-            ("dim", "#3478F6", "border-soft", "#808088"),
+            ("dim", "#3478F6", "border-base", "#63636C"),
+            ("dim", "#3478F6", "border-soft", "#6E6E76"),
             ("dim", "#3478F6", "border-ghost", "none"),
-            ("dim", "#3478F6", "fill-primary", "#75757D"),
-            ("dim", "#3478F6", "fill-secondary", "#797982"),
-            ("dim", "#3478F6", "fill-tertiary", "#7D7D85"),
-            ("dim", "#3478F6", "fill-quaternary", "#808088"),
+            ("dim", "#3478F6", "fill-primary", "#515158"),
+            ("dim", "#3478F6", "fill-secondary", "#56565D"),
+            ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),
+            ("dim", "#3478F6", "fill-quaternary", "#686870"),
             ("dim", "#3478F6", "fill-none", "none"),
             ("dim", "#3478F6", "shadow-minor", "#808088"),
             ("dim", "#3478F6", "shadow-ambient", "#7D7D85"),

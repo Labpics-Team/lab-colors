@@ -124,6 +124,24 @@ impl ViewingConditions {
             rgb_d,
         }
     }
+
+    /// Whether these conditions describe a dimmed/darkened viewing environment —
+    /// the surround a dark theme resolves under, as opposed to the bright
+    /// average surround a light theme uses.
+    ///
+    /// The discriminator is the surround chromatic-induction factor `c`: the
+    /// average (light) preset fixes it at `0.69`; every dimmer preset (`dim`
+    /// 0.59, `dark` 0.525) sits below it. A single midpoint threshold (`0.64`)
+    /// separates them with float headroom on both sides, so the classification is
+    /// stable against rounding. This keeps the viewing conditions the single
+    /// source of truth for theme-ness: a role contract that calibrates per theme
+    /// (the dJ' decorative anchors, which the owner measured separately for light
+    /// and dark) reads the theme from the VC it is resolved under, never from a
+    /// flag duplicated elsewhere.
+    pub fn is_dark_theme(&self) -> bool {
+        const AVERAGE_DIM_MIDPOINT_C: f64 = 0.64;
+        self.c < AVERAGE_DIM_MIDPOINT_C
+    }
 }
 
 #[cfg(test)]
