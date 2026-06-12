@@ -88,10 +88,13 @@
 //!
 //! # Out of scope for v1 (extension seams, not implementations)
 //!
-//! - **Decorative JND values are provisional.** `separator` / `border` /
-//!   `surface` / `shadow` carry placeholder ranges held above the solver's
-//!   reliable floor; their real just-noticeable-difference calibration is the
-//!   `surface-jnd` chapter (blocked on the quantisation gap, issue #44).
+//! - **Decorative JND values are provisional.** `separator`, the `border-base` /
+//!   `border-soft` ladder, the `fill-primary..quaternary` ladder, and the
+//!   `shadow-minor..major` stack carry placeholder magnitudes held above the
+//!   solver's reliable floor; only their *relative order* is a real contract.
+//!   Their just-noticeable-difference calibration is the `surface-jnd` chapter
+//!   (blocked on the quantisation gap, issue #44). `border-strong` is the lone
+//!   non-provisional border: it shares the `label-primary` anchor contract.
 //! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
 //!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
 //!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
@@ -145,6 +148,48 @@ use crate::wcag;
 /// is held strictly above this until the real JND calibration lands.
 const DECORATIVE_FLOOR_MIN: f64 = 7.6;
 
+// ── PROVISIONAL decorative JND magnitudes (surface-jnd recalibrates after #44) ──
+//
+// These are placeholders, NOT calibrated JND values. Two hard constraints shape
+// them:
+//
+// 1. Each must sit strictly above [`DECORATIVE_FLOOR_MIN`] (7.6 Lc): below it the
+//    solver hits its quantisation cliff and reports zero contrast, so a magnitude
+//    under the floor would resolve [`Unreachable::BelowContrastFloor`].
+// 2. Within a ladder the steps must stay strictly ordered by visibility with a
+//    gap wide enough that 8-bit quantisation cannot collapse two adjacent steps
+//    onto the same hex. Empirically (the v1 separator/border/shadow golden) ~1 Lc
+//    maps to ~2 emitted bytes on the light end, so a ≥1.0 Lc step is safe.
+//
+// The literal owner-reference dJ' anchors — fills (light) 7.93/6.41/4.63/3.15,
+// borders base 6.41 / soft 3.15 — live mostly *below* the 7.6 floor, so they
+// cannot be used verbatim without collapsing the ladders. We therefore preserve
+// their *relative spacing* (their "spirit") while lifting each ladder as a block
+// into a band above the floor with safe inter-step gaps. surface-jnd replaces all
+// of these with the real calibration once the quantisation gap (#44) is closed.
+
+/// Fill ladder, strictly descending in visibility (primary most visible). Echoes
+/// the light dJ' anchors 7.93/6.41/4.63/3.15 in relative spacing, lifted above
+/// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
+const FILL_PRIMARY_JND: f64 = 13.0;
+const FILL_SECONDARY_JND: f64 = 11.0;
+const FILL_TERTIARY_JND: f64 = 9.5;
+const FILL_QUATERNARY_JND: f64 = 8.0;
+
+/// Border base/soft, base stronger than soft. Echoes light dJ' anchors 6.41/3.15
+/// in spirit; both held above [`DECORATIVE_FLOOR_MIN`] with a safe gap. (Strong is
+/// an anchored role, not here.)
+const BORDER_BASE_JND: f64 = 9.5;
+const BORDER_SOFT_JND: f64 = 8.0;
+
+/// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
+/// strongest) — the progressive FX/Shadow ramp. Held above
+/// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
+const SHADOW_MINOR_JND: f64 = 8.0;
+const SHADOW_AMBIENT_JND: f64 = 9.5;
+const SHADOW_PENUMBRA_JND: f64 = 11.5;
+const SHADOW_MAJOR_JND: f64 = 14.0;
+
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
 /// Selecting against the strictest floor keeps a single polarity for the whole
@@ -186,62 +231,139 @@ impl Polarity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Role {
-    /// Body / primary text — anchored near the strongest contrast the
-    /// background allows, so it reads black-on-light or white-on-dark.
-    TextPrimary,
-    /// Secondary text — clearly subordinate to primary, still comfortably
-    /// readable.
-    TextSecondary,
-    /// Muted / tertiary text — the weakest text still meant to be read.
-    TextMuted,
-    /// Disabled text — deliberately low contrast; not for reading, so it
-    /// carries no readability floor (WCAG excludes inactive controls).
-    TextDisabled,
+    /// Body / primary label text — anchored near the strongest contrast the
+    /// background allows, so it reads black-on-light or white-on-dark. HIG
+    /// "Labels/Primary" (`N12`-strength). Was `text-primary` before the HIG
+    /// taxonomy rename; the contract (0.968 of max, AA-text floor) is unchanged.
+    LabelPrimary,
+    /// Secondary label text — clearly subordinate to primary, still comfortably
+    /// readable. HIG "Labels/Secondary". Was `text-secondary`.
+    LabelSecondary,
+    /// Tertiary label text — the weakest label still meant to be read. HIG
+    /// "Labels/Tertiary". Was `text-muted`; same 0.461 / AA-UI contract.
+    LabelTertiary,
+    /// Quaternary label text — deliberately low contrast; not for reading, so it
+    /// carries no readability floor (WCAG excludes inactive controls). HIG
+    /// "Labels/Quaternary". Was `text-disabled`.
+    LabelQuaternary,
     /// Meaningful icons and graphical UI objects — non-text 3:1 floor.
+    ///
+    /// DEPARTURE FROM HIG (documented choice): in Apple's HIG glyphs live inside
+    /// the Labels ramp and carry no separate contrast rule. We keep `icon` as a
+    /// distinct functional role because our contract gives it a *legal floor* of
+    /// 3:1 (`Floor::AaUi`) — meaningful non-text UI objects must clear WCAG 1.4.11.
+    /// That legal floor is ours, not HIG's, so the role stays explicit rather than
+    /// folding into `label-*`.
     Icon,
-    /// Hairline separator between content — a decorative JND contract.
+    /// Hairline separator between content — a decorative JND contract. Kept as a
+    /// first-class role (HIG carries it under separators / hairlines).
     Separator,
-    /// Container outline — a decorative JND contract.
-    Border,
-    /// Elevation step between surfaces — a decorative JND contract.
-    Surface,
-    /// Shadow against its surface — a decorative JND contract.
-    Shadow,
+    /// Strong container outline — the strongest border. HIG "Border/Strong" =
+    /// `N12`, the same strength as [`LabelPrimary`](Role::LabelPrimary), so it is
+    /// an *anchored* role (not a JND placeholder): it carries the label-primary
+    /// contract (0.968 of max, AA-text floor), giving a crisp `N12`-weight edge.
+    BorderStrong,
+    /// Base container outline — the default border weight. HIG "Border/Base". A
+    /// PROVISIONAL JND placeholder (dJ' anchor 6.41, light) until `surface-jnd`.
+    BorderBase,
+    /// Soft container outline — the faintest visible border. HIG "Border/Soft". A
+    /// PROVISIONAL JND placeholder (dJ' anchor 3.15, light) until `surface-jnd`.
+    BorderSoft,
+    /// The explicit-zero border: "no edge here". HIG "Border/Ghost" (`@0`).
+    /// Resolves to [`Resolved::None`], the honest zero of the border ramp.
+    BorderGhost,
+    /// Strongest fill tint over the background. HIG "Fills/Primary". A PROVISIONAL
+    /// JND placeholder in the spirit of the light dJ' anchor 7.93 until
+    /// `surface-jnd`; its place at the top of the strictly-ordered fill ladder is
+    /// the contract, the magnitude is a working seam.
+    FillPrimary,
+    /// Secondary fill tint. HIG "Fills/Secondary". PROVISIONAL (dJ' spirit 6.41).
+    FillSecondary,
+    /// Tertiary fill tint. HIG "Fills/Tertiary". PROVISIONAL (dJ' spirit 4.63).
+    FillTertiary,
+    /// Quaternary fill tint — the faintest visible fill. HIG "Fills/Quaternary".
+    /// PROVISIONAL (dJ' spirit 3.15).
+    FillQuaternary,
+    /// The explicit-zero fill: "no fill here". HIG "Fills/None" (`@0`). Resolves
+    /// to [`Resolved::None`], the honest zero of the fill ladder — the mirror of
+    /// [`Role::None`] for the fills family.
+    FillNone,
+    /// The subtlest shadow step. HIG "FX/Shadow/Minor". A PROVISIONAL JND
+    /// placeholder; bottom of the progressive shadow stack (minor < ambient <
+    /// penumbra < major in visibility).
+    ShadowMinor,
+    /// Ambient shadow step. HIG "FX/Shadow/Ambient". PROVISIONAL.
+    ShadowAmbient,
+    /// Penumbra shadow step. HIG "FX/Shadow/Penumbra". PROVISIONAL.
+    ShadowPenumbra,
+    /// The strongest shadow step. HIG "FX/Shadow/Major". PROVISIONAL; top of the
+    /// progressive shadow stack.
+    ShadowMajor,
     /// The explicit zero token: "no colour here". Resolves to
     /// [`Resolved::None`], an honest zero, never a skipped key.
     None,
 }
 
 impl Role {
-    /// Every v1 role, in strict visual-weight order (strongest text first), so a
-    /// resolved set iterates deterministically and ordering invariants read off
-    /// the sequence directly.
-    pub const ALL: [Role; 10] = [
-        Role::TextPrimary,
-        Role::TextSecondary,
-        Role::TextMuted,
-        Role::TextDisabled,
+    /// Every role, grouped by family and ordered within each family by visual
+    /// weight (strongest first, except the progressive shadow stack which runs
+    /// subtlest→strongest), so a resolved set iterates deterministically and the
+    /// ladder ordering invariants read off the sequence directly.
+    pub const ALL: [Role; 20] = [
+        // Labels — strongest text first.
+        Role::LabelPrimary,
+        Role::LabelSecondary,
+        Role::LabelTertiary,
+        Role::LabelQuaternary,
+        // Icon — functional, between labels and decorative.
         Role::Icon,
+        // Separator.
         Role::Separator,
-        Role::Border,
-        Role::Surface,
-        Role::Shadow,
+        // Border ladder — strong → soft, then the explicit zero.
+        Role::BorderStrong,
+        Role::BorderBase,
+        Role::BorderSoft,
+        Role::BorderGhost,
+        // Fill ladder — primary (most visible) → quaternary, then the zero.
+        Role::FillPrimary,
+        Role::FillSecondary,
+        Role::FillTertiary,
+        Role::FillQuaternary,
+        Role::FillNone,
+        // Shadow stack — minor (subtlest) → major (strongest), progressive.
+        Role::ShadowMinor,
+        Role::ShadowAmbient,
+        Role::ShadowPenumbra,
+        Role::ShadowMajor,
+        // The universal zero token.
         Role::None,
     ];
 
     /// The stable string key for this role — the contract with CSS custom
-    /// properties downstream. These never change without a versioned migration.
+    /// properties downstream (kebab-case, matching the owner's HIG token names,
+    /// e.g. `--lab-label-primary`). These never change without a versioned
+    /// migration.
     pub fn key(self) -> &'static str {
         match self {
-            Role::TextPrimary => "text-primary",
-            Role::TextSecondary => "text-secondary",
-            Role::TextMuted => "text-muted",
-            Role::TextDisabled => "text-disabled",
+            Role::LabelPrimary => "label-primary",
+            Role::LabelSecondary => "label-secondary",
+            Role::LabelTertiary => "label-tertiary",
+            Role::LabelQuaternary => "label-quaternary",
             Role::Icon => "icon",
             Role::Separator => "separator",
-            Role::Border => "border",
-            Role::Surface => "surface",
-            Role::Shadow => "shadow",
+            Role::BorderStrong => "border-strong",
+            Role::BorderBase => "border-base",
+            Role::BorderSoft => "border-soft",
+            Role::BorderGhost => "border-ghost",
+            Role::FillPrimary => "fill-primary",
+            Role::FillSecondary => "fill-secondary",
+            Role::FillTertiary => "fill-tertiary",
+            Role::FillQuaternary => "fill-quaternary",
+            Role::FillNone => "fill-none",
+            Role::ShadowMinor => "shadow-minor",
+            Role::ShadowAmbient => "shadow-ambient",
+            Role::ShadowPenumbra => "shadow-penumbra",
+            Role::ShadowMajor => "shadow-major",
             Role::None => "none",
         }
     }
@@ -710,7 +832,7 @@ fn build_curve_color(l_ok: f64, hue_deg: f64, ratio: f64) -> [f64; 3] {
 /// touching the others.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoleTable {
-    specs: [(Role, RoleSpec); 10],
+    specs: [(Role, RoleSpec); 20],
     chroma: RoleChroma,
 }
 
@@ -787,15 +909,49 @@ impl Default for RoleTable {
         let decorative = |magnitude| RoleSpec::Decorative { magnitude };
         Self {
             specs: [
-                (Role::TextPrimary, anchor(0.968, Floor::AaText)),
-                (Role::TextSecondary, anchor(0.627, Floor::AaText)),
-                (Role::TextMuted, anchor(0.461, Floor::AaUi)),
-                (Role::TextDisabled, anchor(0.276, Floor::None)),
+                // Labels — the text ladder, renamed from text-* to the owner's HIG
+                // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
+                // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
+                // emitted colours are byte-identical to the old text-* roles.
+                (Role::LabelPrimary, anchor(0.968, Floor::AaText)),
+                (Role::LabelSecondary, anchor(0.627, Floor::AaText)),
+                (Role::LabelTertiary, anchor(0.461, Floor::AaUi)),
+                (Role::LabelQuaternary, anchor(0.276, Floor::None)),
+                // Icon — unchanged functional role (legal 3:1 floor, our contract).
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
+                // Separator — unchanged PROVISIONAL decorative magnitude.
                 (Role::Separator, decorative(8.0)),
-                (Role::Border, decorative(9.0)),
-                (Role::Surface, decorative(8.0)),
-                (Role::Shadow, decorative(10.0)),
+                // Border ladder. Strong is an ANCHOR at the label-primary contract
+                // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
+                // N12-weight edge — not a JND placeholder. Base/Soft are PROVISIONAL
+                // JND placeholders held above DECORATIVE_FLOOR_MIN; their relative
+                // order (base stronger than soft) is the contract, the magnitudes
+                // echo the light dJ' anchors 6.41 / 3.15 in spirit only.
+                (Role::BorderStrong, anchor(0.968, Floor::AaText)),
+                (Role::BorderBase, decorative(BORDER_BASE_JND)),
+                (Role::BorderSoft, decorative(BORDER_SOFT_JND)),
+                (Role::BorderGhost, RoleSpec::Zero),
+                // Fill ladder — PROVISIONAL JND placeholders, strictly descending in
+                // visibility (primary most visible → quaternary faintest). The
+                // magnitudes echo the light dJ' anchors 7.93 / 6.41 / 4.63 / 3.15 in
+                // *spirit* (their relative spacing), lifted as a block above
+                // DECORATIVE_FLOOR_MIN so the quantisation floor cannot collapse the
+                // lower steps. The strict order is the contract; surface-jnd
+                // recalibrates the magnitudes against Figma after #44.
+                (Role::FillPrimary, decorative(FILL_PRIMARY_JND)),
+                (Role::FillSecondary, decorative(FILL_SECONDARY_JND)),
+                (Role::FillTertiary, decorative(FILL_TERTIARY_JND)),
+                (Role::FillQuaternary, decorative(FILL_QUATERNARY_JND)),
+                (Role::FillNone, RoleSpec::Zero),
+                // Shadow stack — PROVISIONAL, strictly ascending in visibility
+                // (minor subtlest → major strongest), the progressive stack the
+                // owner's FX/Shadow ramp describes (Minor < Ambient < Penumbra <
+                // Major). Magnitudes are a working seam above the reliable floor.
+                (Role::ShadowMinor, decorative(SHADOW_MINOR_JND)),
+                (Role::ShadowAmbient, decorative(SHADOW_AMBIENT_JND)),
+                (Role::ShadowPenumbra, decorative(SHADOW_PENUMBRA_JND)),
+                (Role::ShadowMajor, decorative(SHADOW_MAJOR_JND)),
+                // The universal zero token.
                 (Role::None, RoleSpec::Zero),
             ],
             chroma: RoleChroma::neutral_curve(),
@@ -1181,10 +1337,10 @@ fn solved_magnitude(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
 /// invariant and the compression pass walk. Disabled is included: it is still
 /// part of the order even though it carries no floor.
 const TEXT_HIERARCHY: [Role; 4] = [
-    Role::TextPrimary,
-    Role::TextSecondary,
-    Role::TextMuted,
-    Role::TextDisabled,
+    Role::LabelPrimary,
+    Role::LabelSecondary,
+    Role::LabelTertiary,
+    Role::LabelQuaternary,
 ];
 
 /// The maximum contrast magnitude the background can supply in `polarity`, read
@@ -1421,10 +1577,10 @@ mod tests {
     /// The four text roles, strongest first — the visual-weight order the
     /// hierarchy invariant asserts on.
     const TEXT_ORDER: [Role; 4] = [
-        Role::TextPrimary,
-        Role::TextSecondary,
-        Role::TextMuted,
-        Role::TextDisabled,
+        Role::LabelPrimary,
+        Role::LabelSecondary,
+        Role::LabelTertiary,
+        Role::LabelQuaternary,
     ];
 
     /// The neutral band where the WCAG flip lives (~#747474) and where the old
@@ -1449,7 +1605,7 @@ mod tests {
                     _ => None,
                 })
             };
-            if let (Some(p), Some(sec)) = (mag(Role::TextPrimary), mag(Role::TextSecondary)) {
+            if let (Some(p), Some(sec)) = (mag(Role::LabelPrimary), mag(Role::LabelSecondary)) {
                 assert!(
                     p + 1e-9 >= sec,
                     "{bg_hex}: primary {p} must not be weaker than secondary {sec}"
@@ -1541,7 +1697,7 @@ mod tests {
         for (vc, vc_name) in vcs() {
             for bg_hex in ["#FFFFFF", "#101012"] {
                 let bg = BgInput::solid(bg_hex).unwrap();
-                let lc = solved_lc(&bg, Role::TextPrimary, &vc).abs();
+                let lc = solved_lc(&bg, Role::LabelPrimary, &vc).abs();
                 assert!(
                     lc >= 95.0,
                     "{vc_name} {bg_hex}: primary |Lc| {lc} < 95 — reads grey, not black/white"
@@ -1578,7 +1734,7 @@ mod tests {
         // quantisation and the max-probe.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
-        let lc = solved_lc(&bg, Role::TextPrimary, &vc);
+        let lc = solved_lc(&bg, Role::LabelPrimary, &vc);
         assert!(
             (lc - 102.6).abs() <= 2.5,
             "primary on white {lc} should match Figma anchor 102.6 within 2.5"
@@ -1595,10 +1751,10 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let white = BgInput::solid("#FFFFFF").unwrap();
         let anchors = [
-            (Role::TextPrimary, 102.6, 2.5),
-            (Role::TextSecondary, 66.5, 1.0),
-            (Role::TextMuted, 48.9, 4.5), // floored up to ~52.7 to clear 3:1
-            (Role::TextDisabled, 29.3, 1.0),
+            (Role::LabelPrimary, 102.6, 2.5),
+            (Role::LabelSecondary, 66.5, 1.0),
+            (Role::LabelTertiary, 48.9, 4.5), // floored up to ~52.7 to clear 3:1
+            (Role::LabelQuaternary, 29.3, 1.0),
         ];
         for (role, anchor, tol) in anchors {
             let lc = solved_lc(&white, role, &vc);
@@ -1678,9 +1834,9 @@ mod tests {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 let table = RoleTable::default();
                 for (role, min_ratio) in [
-                    (Role::TextPrimary, 4.5),
-                    (Role::TextSecondary, 4.5),
-                    (Role::TextMuted, 3.0),
+                    (Role::LabelPrimary, 4.5),
+                    (Role::LabelSecondary, 4.5),
+                    (Role::LabelTertiary, 3.0),
                     (Role::Icon, 3.0),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
@@ -1705,7 +1861,19 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let table = RoleTable::default();
-        for role in [Role::Separator, Role::Border, Role::Surface, Role::Shadow] {
+        for role in [
+            Role::Separator,
+            Role::BorderBase,
+            Role::BorderSoft,
+            Role::FillPrimary,
+            Role::FillSecondary,
+            Role::FillTertiary,
+            Role::FillQuaternary,
+            Role::ShadowMinor,
+            Role::ShadowAmbient,
+            Role::ShadowPenumbra,
+            Role::ShadowMajor,
+        ] {
             let solved = match resolve(&bg, role, &table, &vc) {
                 Resolved::Color { solved, .. } => solved,
                 other => panic!("{} expected colour, got {other:?}", role.key()),
@@ -1749,13 +1917,13 @@ mod tests {
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let default_table = RoleTable::default();
         let custom = default_table.clone().with(
-            Role::TextPrimary,
+            Role::LabelPrimary,
             RoleSpec::Anchor(TextAnchor::new(0.5, Floor::AaText)),
         );
 
         // Primary changed.
-        let p_default = solved_lc(&bg, Role::TextPrimary, &vc);
-        let p_custom = match resolve(&bg, Role::TextPrimary, &custom, &vc) {
+        let p_default = solved_lc(&bg, Role::LabelPrimary, &vc);
+        let p_custom = match resolve(&bg, Role::LabelPrimary, &custom, &vc) {
             Resolved::Color { solved, .. } => solved.lc(),
             other => panic!("{other:?}"),
         };
@@ -1764,8 +1932,8 @@ mod tests {
             "override should move primary: {p_default} vs {p_custom}"
         );
         // Secondary unchanged.
-        let s_default = solved_lc(&bg, Role::TextSecondary, &vc);
-        let s_custom = match resolve(&bg, Role::TextSecondary, &custom, &vc) {
+        let s_default = solved_lc(&bg, Role::LabelSecondary, &vc);
+        let s_custom = match resolve(&bg, Role::LabelSecondary, &custom, &vc) {
             Resolved::Color { solved, .. } => solved.lc(),
             other => panic!("{other:?}"),
         };
@@ -1807,9 +1975,9 @@ mod tests {
                 let bg = BgInput::solid(&bg_hex).unwrap();
                 let set = resolve_set(&bg, &table_default(), &vc);
                 for role in [
-                    Role::TextPrimary,
-                    Role::TextSecondary,
-                    Role::TextMuted,
+                    Role::LabelPrimary,
+                    Role::LabelSecondary,
+                    Role::LabelTertiary,
                     Role::Icon,
                 ] {
                     let r = &set.iter().find(|(rr, _)| *rr == role).unwrap().1;
@@ -1942,15 +2110,18 @@ mod tests {
 
     #[test]
     fn no_silent_clip_anywhere_on_the_band() {
-        // Every resolved colour carries real contrast; the zero token is the only
-        // legitimate zero; an unreachable role surfaces a reason. Nothing clips.
+        // Every resolved colour carries real contrast; the only legitimate zeros
+        // are the explicit zero-token roles (Role::None and the family zeros
+        // border-ghost / fill-none, all spec'd RoleSpec::Zero); an unreachable role
+        // surfaces a reason. Nothing clips.
+        let table = table_default();
         for (vc, _) in vcs() {
             for bg_hex in band_hexes() {
                 let bg = BgInput::solid(&bg_hex).unwrap();
-                let set = resolve_set(&bg, &table_default(), &vc);
+                let set = resolve_set(&bg, &table, &vc);
                 let no_silent_clip = set.iter().all(|(role, r)| match r {
                     Resolved::Color { solved, .. } => solved.lc().abs() >= 1.0,
-                    Resolved::None => *role == Role::None,
+                    Resolved::None => matches!(table.spec(*role), RoleSpec::Zero),
                     Resolved::Unreachable(_) => true,
                 });
                 assert!(
@@ -1968,6 +2139,196 @@ mod tests {
         for role in Role::ALL {
             assert!(seen.insert(role.key()), "duplicate key {}", role.key());
         }
+    }
+
+    #[test]
+    fn role_keys_follow_the_hig_kebab_taxonomy() {
+        // The CSS keys are the stable contract with labui (`--lab-label-primary`,
+        // …). Pin the exact HIG-pattern kebab-case spelling so a rename never slips
+        // through silently. labui already consumes these names.
+        use std::collections::HashSet;
+        let keys: HashSet<&str> = Role::ALL.iter().map(|r| r.key()).collect();
+        for expected in [
+            "label-primary",
+            "label-secondary",
+            "label-tertiary",
+            "label-quaternary",
+            "icon",
+            "separator",
+            "border-strong",
+            "border-base",
+            "border-soft",
+            "border-ghost",
+            "fill-primary",
+            "fill-secondary",
+            "fill-tertiary",
+            "fill-quaternary",
+            "fill-none",
+            "shadow-minor",
+            "shadow-ambient",
+            "shadow-penumbra",
+            "shadow-major",
+            "none",
+        ] {
+            assert!(keys.contains(expected), "missing HIG role key {expected}");
+        }
+        assert_eq!(
+            keys.len(),
+            20,
+            "the HIG taxonomy is exactly 20 roles, found {}",
+            keys.len()
+        );
+        // No legacy text-* key may survive the rename.
+        for legacy in [
+            "text-primary",
+            "text-secondary",
+            "text-muted",
+            "text-disabled",
+            "surface",
+        ] {
+            assert!(!keys.contains(legacy), "legacy key {legacy} still present");
+        }
+    }
+
+    #[test]
+    fn border_strong_mirrors_label_primary_exactly() {
+        // border-strong is HIG Border/Strong = N12 = Labels/Primary strength: it is
+        // an ANCHORED role carrying the label-primary contract, not a JND
+        // placeholder. So its emitted colour must equal label-primary's on every
+        // background, both VCs — a crisp N12-weight edge.
+        for (vc, vc_name) in vcs() {
+            for bg_hex in ["#FFFFFF", "#101012", "#7F7F7F", "#3478F6"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let prim = solved_lc(&bg, Role::LabelPrimary, &vc);
+                let strong = solved_lc(&bg, Role::BorderStrong, &vc);
+                assert!(
+                    (prim - strong).abs() < 1e-9,
+                    "{vc_name} {bg_hex}: border-strong {strong} != label-primary {prim}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_zero_roles_resolve_to_honest_zero() {
+        // Both family zeros — border-ghost and fill-none — are values, not missing
+        // keys: they resolve to Resolved::None with zero contrast, like Role::None.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let table = RoleTable::default();
+        for role in [Role::BorderGhost, Role::FillNone, Role::None] {
+            let resolved = resolve(&bg, role, &table, &vc);
+            assert_eq!(
+                resolved,
+                Resolved::None,
+                "{} must be an honest zero",
+                role.key()
+            );
+            assert_eq!(resolved.lc(), Some(0.0), "{}: zero contrast", role.key());
+        }
+    }
+
+    /// The signed |Lc| of a role in a set, panicking if it did not resolve to a
+    /// colour — used by the ladder-ordering invariants.
+    fn ladder_mag(set: &[(Role, Resolved)], role: Role) -> f64 {
+        set.iter()
+            .find(|(r, _)| *r == role)
+            .and_then(|(_, res)| res.solved())
+            .map(|s| s.lc().abs())
+            .unwrap_or_else(|| panic!("{} did not resolve to a colour", role.key()))
+    }
+
+    #[test]
+    fn fill_ladder_is_strictly_descending_in_visibility() {
+        // The fill ladder is a strict order contract: primary is the most visible
+        // fill, quaternary the faintest. PROVISIONAL magnitudes, but the ORDER is
+        // the contract surface-jnd inherits — assert it on every background, both
+        // VCs, with a real gap (no two steps collapsing onto one |Lc|).
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let ladder = [
+                    Role::FillPrimary,
+                    Role::FillSecondary,
+                    Role::FillTertiary,
+                    Role::FillQuaternary,
+                ];
+                let mags: Vec<f64> = ladder.iter().map(|&r| ladder_mag(&set, r)).collect();
+                for pair in mags.windows(2) {
+                    assert!(
+                        pair[0] > pair[1],
+                        "{vc_name} {bg_hex}: fill ladder not strictly descending, |Lc| {mags:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shadow_stack_is_strictly_ascending_in_visibility() {
+        // The shadow stack is progressive: minor (subtlest) < ambient < penumbra <
+        // major (strongest). Strict order is the contract; magnitudes PROVISIONAL.
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let stack = [
+                    Role::ShadowMinor,
+                    Role::ShadowAmbient,
+                    Role::ShadowPenumbra,
+                    Role::ShadowMajor,
+                ];
+                let mags: Vec<f64> = stack.iter().map(|&r| ladder_mag(&set, r)).collect();
+                for pair in mags.windows(2) {
+                    assert!(
+                        pair[0] < pair[1],
+                        "{vc_name} {bg_hex}: shadow stack not strictly ascending, |Lc| {mags:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn border_base_is_stronger_than_border_soft() {
+        // The border JND ladder (base > soft); strong is anchored and tested
+        // separately. Strict order is the contract; magnitudes PROVISIONAL.
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            for bg_hex in ["#FFFFFF", "#7F7F7F", "#101012", "#3478F6"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let base = ladder_mag(&set, Role::BorderBase);
+                let soft = ladder_mag(&set, Role::BorderSoft);
+                assert!(
+                    base > soft,
+                    "{vc_name} {bg_hex}: border-base {base} must exceed border-soft {soft}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_set_returns_all_twenty_roles() {
+        // The full sweep returns 20 roles (the HIG taxonomy) including both family
+        // zeros and the universal zero, in Role::ALL order.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let set = resolve_set(&bg, &RoleTable::default(), &vc);
+        assert_eq!(set.len(), 20, "resolve_set must return all 20 roles");
+        let roles: Vec<Role> = set.iter().map(|(r, _)| *r).collect();
+        assert_eq!(
+            roles,
+            Role::ALL.to_vec(),
+            "set must cover Role::ALL in order"
+        );
     }
 
     // ── Neutral undertone: identity, not sterile grey ─────────────────────────
@@ -2003,7 +2364,7 @@ mod tests {
         let table = RoleTable::default();
         for (vc, vc_name) in vcs() {
             let bg = BgInput::solid("#FFFFFF").unwrap();
-            let solved = match resolve(&bg, Role::TextPrimary, &table, &vc) {
+            let solved = match resolve(&bg, Role::LabelPrimary, &table, &vc) {
                 Resolved::Color { solved, .. } => solved,
                 other => panic!("{other:?}"),
             };
@@ -2012,7 +2373,7 @@ mod tests {
                 "#141414",
                 "{vc_name}: primary on white is the sterile grey — undertone lost"
             );
-            let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::TextPrimary, &table, &vc);
+            let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::LabelPrimary, &table, &vc);
             assert!(
                 chroma > 1e-3,
                 "{vc_name}: primary on white carries no chroma ({chroma}) — pure grey"
@@ -2154,7 +2515,7 @@ mod tests {
         }
         // And the achromatic override reproduces the historic sterile grey exactly.
         let bg = BgInput::solid("#FFFFFF").unwrap();
-        let grey = match resolve(&bg, Role::TextPrimary, &table, &ViewingConditions::srgb()) {
+        let grey = match resolve(&bg, Role::LabelPrimary, &table, &ViewingConditions::srgb()) {
             Resolved::Color { solved, .. } => solved.hex().to_uppercase(),
             other => panic!("{other:?}"),
         };
@@ -2173,9 +2534,9 @@ mod tests {
         let bg = BgInput::solid("#FFFFFF").unwrap();
         // Secondary under the flat policy lands cool, around the canonical hue, and
         // carries a flat ratio of the gamut max — its chroma is `RATIO * max_chroma`.
-        let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::TextSecondary, &flat, &vc);
+        let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::LabelSecondary, &flat, &vc);
         assert!(b < 0.0, "flat tint must stay cool (b={b})");
-        let solved = match resolve(&bg, Role::TextSecondary, &flat, &vc) {
+        let solved = match resolve(&bg, Role::LabelSecondary, &flat, &vc) {
             Resolved::Color { solved, .. } => solved,
             other => panic!("{other:?}"),
         };
@@ -2222,126 +2583,263 @@ mod tests {
         // frozen here: every role's hex must match exactly. A change to any value
         // means the approved visual output drifted — re-approval by the owner is
         // required, never a silent edit of this table.
-        const GOLDEN: [(&str, &str, &str, &str); 120] = [
-            ("srgb", "#FFFFFF", "text-primary", "#0A0A10"),
-            ("srgb", "#FFFFFF", "text-secondary", "#71717A"),
-            ("srgb", "#FFFFFF", "text-muted", "#94949E"),
-            ("srgb", "#FFFFFF", "text-disabled", "#BDBDC7"),
+        //
+        // EXPANDED for the HIG role taxonomy (role-taxonomy-hig). Two distinct
+        // kinds of row live here, on purpose:
+        //
+        //   * The `label-*` rows (and `icon` / `separator` / `none`) are the OLD,
+        //     owner-approved colours under their new HIG keys. Renaming text-* to
+        //     label-* moved keys, never colours: each `label-primary/secondary/
+        //     tertiary/quaternary` hex is byte-identical to the prior `text-primary/
+        //     secondary/muted/disabled` hex on the same (vc, bg). `border-strong`
+        //     reuses the label-primary contract, so it too matches label-primary.
+        //     These rows are the control that proves the rename was pure.
+        //
+        //   * The new `border-base/soft`, `fill-*`, and `shadow-*` rows are a
+        //     CONSCIOUS new block — PROVISIONAL decorative magnitudes whose colours
+        //     have not been eye-approved by the owner. They are frozen here only so
+        //     a hot-path refactor cannot move them silently; surface-jnd will
+        //     recalibrate the magnitudes (and re-approve the colours) after #44.
+        const GOLDEN: [(&str, &str, &str, &str); 240] = [
+            ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
+            ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
+            ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
+            ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
             ("srgb", "#FFFFFF", "icon", "#94949E"),
             ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "border", "#E3E3EC"),
-            ("srgb", "#FFFFFF", "surface", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "shadow", "#E1E1EB"),
+            ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
+            ("srgb", "#FFFFFF", "border-base", "#E2E2EC"),
+            ("srgb", "#FFFFFF", "border-soft", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "border-ghost", "none"),
+            ("srgb", "#FFFFFF", "fill-primary", "#DCDCE5"),
+            ("srgb", "#FFFFFF", "fill-secondary", "#DFDFE9"),
+            ("srgb", "#FFFFFF", "fill-tertiary", "#E2E2EC"),
+            ("srgb", "#FFFFFF", "fill-quaternary", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "fill-none", "none"),
+            ("srgb", "#FFFFFF", "shadow-minor", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "shadow-ambient", "#E2E2EC"),
+            ("srgb", "#FFFFFF", "shadow-penumbra", "#DEDEE8"),
+            ("srgb", "#FFFFFF", "shadow-major", "#DADAE3"),
             ("srgb", "#FFFFFF", "none", "none"),
-            ("srgb", "#F2F2F7", "text-primary", "#09090F"),
-            ("srgb", "#F2F2F7", "text-secondary", "#6E6E76"),
-            ("srgb", "#F2F2F7", "text-muted", "#8B8B95"),
-            ("srgb", "#F2F2F7", "text-disabled", "#B8B8C1"),
+            ("srgb", "#F2F2F7", "label-primary", "#09090F"),
+            ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
+            ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
             ("srgb", "#F2F2F7", "icon", "#8B8B95"),
             ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "border", "#DBDBE5"),
-            ("srgb", "#F2F2F7", "surface", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "shadow", "#DADAE3"),
+            ("srgb", "#F2F2F7", "border-strong", "#09090F"),
+            ("srgb", "#F2F2F7", "border-base", "#DADAE4"),
+            ("srgb", "#F2F2F7", "border-soft", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "border-ghost", "none"),
+            ("srgb", "#F2F2F7", "fill-primary", "#D4D4DE"),
+            ("srgb", "#F2F2F7", "fill-secondary", "#D8D8E1"),
+            ("srgb", "#F2F2F7", "fill-tertiary", "#DADAE4"),
+            ("srgb", "#F2F2F7", "fill-quaternary", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "fill-none", "none"),
+            ("srgb", "#F2F2F7", "shadow-minor", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "shadow-ambient", "#DADAE4"),
+            ("srgb", "#F2F2F7", "shadow-penumbra", "#D7D7E0"),
+            ("srgb", "#F2F2F7", "shadow-major", "#D2D2DC"),
             ("srgb", "#F2F2F7", "none", "none"),
-            ("srgb", "#7F7F7F", "text-primary", "#010103"),
-            ("srgb", "#7F7F7F", "text-secondary", "#16151C"),
-            ("srgb", "#7F7F7F", "text-muted", "#36353D"),
-            ("srgb", "#7F7F7F", "text-disabled", "#5B5B63"),
+            ("srgb", "#7F7F7F", "label-primary", "#010103"),
+            ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
+            ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
+            ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
             ("srgb", "#7F7F7F", "icon", "#36353D"),
             ("srgb", "#7F7F7F", "separator", "#63636B"),
-            ("srgb", "#7F7F7F", "border", "#616169"),
-            ("srgb", "#7F7F7F", "surface", "#63636B"),
-            ("srgb", "#7F7F7F", "shadow", "#5E5E67"),
+            ("srgb", "#7F7F7F", "border-strong", "#010103"),
+            ("srgb", "#7F7F7F", "border-base", "#5F5F68"),
+            ("srgb", "#7F7F7F", "border-soft", "#63636B"),
+            ("srgb", "#7F7F7F", "border-ghost", "none"),
+            ("srgb", "#7F7F7F", "fill-primary", "#57575F"),
+            ("srgb", "#7F7F7F", "fill-secondary", "#5C5C64"),
+            ("srgb", "#7F7F7F", "fill-tertiary", "#5F5F68"),
+            ("srgb", "#7F7F7F", "fill-quaternary", "#63636B"),
+            ("srgb", "#7F7F7F", "fill-none", "none"),
+            ("srgb", "#7F7F7F", "shadow-minor", "#63636B"),
+            ("srgb", "#7F7F7F", "shadow-ambient", "#5F5F68"),
+            ("srgb", "#7F7F7F", "shadow-penumbra", "#5B5B63"),
+            ("srgb", "#7F7F7F", "shadow-major", "#54545D"),
             ("srgb", "#7F7F7F", "none", "none"),
-            ("srgb", "#1C1C1E", "text-primary", "#F1F1FD"),
-            ("srgb", "#1C1C1E", "text-secondary", "#B6B6BF"),
-            ("srgb", "#1C1C1E", "text-muted", "#95959E"),
-            ("srgb", "#1C1C1E", "text-disabled", "#6D6C75"),
+            ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
+            ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
+            ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
             ("srgb", "#1C1C1E", "icon", "#95959E"),
             ("srgb", "#1C1C1E", "separator", "#38383F"),
-            ("srgb", "#1C1C1E", "border", "#3B3B42"),
-            ("srgb", "#1C1C1E", "surface", "#38383F"),
-            ("srgb", "#1C1C1E", "shadow", "#3E3E45"),
+            ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "border-base", "#3C3C44"),
+            ("srgb", "#1C1C1E", "border-soft", "#38383F"),
+            ("srgb", "#1C1C1E", "border-ghost", "none"),
+            ("srgb", "#1C1C1E", "fill-primary", "#46464E"),
+            ("srgb", "#1C1C1E", "fill-secondary", "#414148"),
+            ("srgb", "#1C1C1E", "fill-tertiary", "#3C3C44"),
+            ("srgb", "#1C1C1E", "fill-quaternary", "#38383F"),
+            ("srgb", "#1C1C1E", "fill-none", "none"),
+            ("srgb", "#1C1C1E", "shadow-minor", "#38383F"),
+            ("srgb", "#1C1C1E", "shadow-ambient", "#3C3C44"),
+            ("srgb", "#1C1C1E", "shadow-penumbra", "#42424A"),
+            ("srgb", "#1C1C1E", "shadow-major", "#494950"),
             ("srgb", "#1C1C1E", "none", "none"),
-            ("srgb", "#101012", "text-primary", "#F2F2FC"),
-            ("srgb", "#101012", "text-secondary", "#B4B4BE"),
-            ("srgb", "#101012", "text-muted", "#93939C"),
-            ("srgb", "#101012", "text-disabled", "#696972"),
+            ("srgb", "#101012", "label-primary", "#F2F2FC"),
+            ("srgb", "#101012", "label-secondary", "#B4B4BE"),
+            ("srgb", "#101012", "label-tertiary", "#93939C"),
+            ("srgb", "#101012", "label-quaternary", "#696972"),
             ("srgb", "#101012", "icon", "#93939C"),
             ("srgb", "#101012", "separator", "#323239"),
-            ("srgb", "#101012", "border", "#35353C"),
-            ("srgb", "#101012", "surface", "#323239"),
-            ("srgb", "#101012", "shadow", "#38383F"),
+            ("srgb", "#101012", "border-strong", "#F2F2FC"),
+            ("srgb", "#101012", "border-base", "#36363E"),
+            ("srgb", "#101012", "border-soft", "#323239"),
+            ("srgb", "#101012", "border-ghost", "none"),
+            ("srgb", "#101012", "fill-primary", "#414148"),
+            ("srgb", "#101012", "fill-secondary", "#3B3B42"),
+            ("srgb", "#101012", "fill-tertiary", "#36363E"),
+            ("srgb", "#101012", "fill-quaternary", "#323239"),
+            ("srgb", "#101012", "fill-none", "none"),
+            ("srgb", "#101012", "shadow-minor", "#323239"),
+            ("srgb", "#101012", "shadow-ambient", "#36363E"),
+            ("srgb", "#101012", "shadow-penumbra", "#3C3C44"),
+            ("srgb", "#101012", "shadow-major", "#43434B"),
             ("srgb", "#101012", "none", "none"),
-            ("srgb", "#3478F6", "text-primary", "#020205"),
-            ("srgb", "#3478F6", "text-secondary", "#14141B"),
-            ("srgb", "#3478F6", "text-muted", "#35343C"),
-            ("srgb", "#3478F6", "text-disabled", "#707078"),
+            ("srgb", "#3478F6", "label-primary", "#020205"),
+            ("srgb", "#3478F6", "label-secondary", "#14141B"),
+            ("srgb", "#3478F6", "label-tertiary", "#35343C"),
+            ("srgb", "#3478F6", "label-quaternary", "#707078"),
             ("srgb", "#3478F6", "icon", "#35343C"),
             ("srgb", "#3478F6", "separator", "#7F7F88"),
-            ("srgb", "#3478F6", "border", "#7D7D86"),
-            ("srgb", "#3478F6", "surface", "#7F7F88"),
-            ("srgb", "#3478F6", "shadow", "#7B7B83"),
+            ("srgb", "#3478F6", "border-strong", "#020205"),
+            ("srgb", "#3478F6", "border-base", "#7C7C85"),
+            ("srgb", "#3478F6", "border-soft", "#7F7F88"),
+            ("srgb", "#3478F6", "border-ghost", "none"),
+            ("srgb", "#3478F6", "fill-primary", "#74747D"),
+            ("srgb", "#3478F6", "fill-secondary", "#797981"),
+            ("srgb", "#3478F6", "fill-tertiary", "#7C7C85"),
+            ("srgb", "#3478F6", "fill-quaternary", "#7F7F88"),
+            ("srgb", "#3478F6", "fill-none", "none"),
+            ("srgb", "#3478F6", "shadow-minor", "#7F7F88"),
+            ("srgb", "#3478F6", "shadow-ambient", "#7C7C85"),
+            ("srgb", "#3478F6", "shadow-penumbra", "#787880"),
+            ("srgb", "#3478F6", "shadow-major", "#72727A"),
             ("srgb", "#3478F6", "none", "none"),
-            ("dim", "#FFFFFF", "text-primary", "#0D0D12"),
-            ("dim", "#FFFFFF", "text-secondary", "#707079"),
-            ("dim", "#FFFFFF", "text-muted", "#94949D"),
-            ("dim", "#FFFFFF", "text-disabled", "#BCBCC6"),
+            ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
+            ("dim", "#FFFFFF", "label-secondary", "#707079"),
+            ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
+            ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
             ("dim", "#FFFFFF", "icon", "#94949D"),
             ("dim", "#FFFFFF", "separator", "#E3E3ED"),
-            ("dim", "#FFFFFF", "border", "#E1E2EB"),
-            ("dim", "#FFFFFF", "surface", "#E3E3ED"),
-            ("dim", "#FFFFFF", "shadow", "#E0E0E9"),
+            ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
+            ("dim", "#FFFFFF", "border-base", "#E0E0EA"),
+            ("dim", "#FFFFFF", "border-soft", "#E3E3ED"),
+            ("dim", "#FFFFFF", "border-ghost", "none"),
+            ("dim", "#FFFFFF", "fill-primary", "#DADAE4"),
+            ("dim", "#FFFFFF", "fill-secondary", "#DEDEE7"),
+            ("dim", "#FFFFFF", "fill-tertiary", "#E0E0EA"),
+            ("dim", "#FFFFFF", "fill-quaternary", "#E3E3ED"),
+            ("dim", "#FFFFFF", "fill-none", "none"),
+            ("dim", "#FFFFFF", "shadow-minor", "#E3E3ED"),
+            ("dim", "#FFFFFF", "shadow-ambient", "#E0E0EA"),
+            ("dim", "#FFFFFF", "shadow-penumbra", "#DDDDE6"),
+            ("dim", "#FFFFFF", "shadow-major", "#D8D9E2"),
             ("dim", "#FFFFFF", "none", "none"),
-            ("dim", "#F2F2F7", "text-primary", "#0C0C12"),
-            ("dim", "#F2F2F7", "text-secondary", "#6E6E76"),
-            ("dim", "#F2F2F7", "text-muted", "#8B8B94"),
-            ("dim", "#F2F2F7", "text-disabled", "#B8B8C1"),
+            ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
+            ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
+            ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
             ("dim", "#F2F2F7", "icon", "#8B8B94"),
             ("dim", "#F2F2F7", "separator", "#DEDEE7"),
-            ("dim", "#F2F2F7", "border", "#DCDCE5"),
-            ("dim", "#F2F2F7", "surface", "#DEDEE7"),
-            ("dim", "#F2F2F7", "shadow", "#DADAE3"),
+            ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
+            ("dim", "#F2F2F7", "border-base", "#DBDBE4"),
+            ("dim", "#F2F2F7", "border-soft", "#DEDEE7"),
+            ("dim", "#F2F2F7", "border-ghost", "none"),
+            ("dim", "#F2F2F7", "fill-primary", "#D4D5DE"),
+            ("dim", "#F2F2F7", "fill-secondary", "#D8D8E2"),
+            ("dim", "#F2F2F7", "fill-tertiary", "#DBDBE4"),
+            ("dim", "#F2F2F7", "fill-quaternary", "#DEDEE7"),
+            ("dim", "#F2F2F7", "fill-none", "none"),
+            ("dim", "#F2F2F7", "shadow-minor", "#DEDEE7"),
+            ("dim", "#F2F2F7", "shadow-ambient", "#DBDBE4"),
+            ("dim", "#F2F2F7", "shadow-penumbra", "#D7D7E1"),
+            ("dim", "#F2F2F7", "shadow-major", "#D3D3DC"),
             ("dim", "#F2F2F7", "none", "none"),
-            ("dim", "#7F7F7F", "text-primary", "#030305"),
-            ("dim", "#7F7F7F", "text-secondary", "#16161B"),
-            ("dim", "#7F7F7F", "text-muted", "#36353D"),
-            ("dim", "#7F7F7F", "text-disabled", "#5C5C64"),
+            ("dim", "#7F7F7F", "label-primary", "#030305"),
+            ("dim", "#7F7F7F", "label-secondary", "#16161B"),
+            ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
+            ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
             ("dim", "#7F7F7F", "icon", "#36353D"),
             ("dim", "#7F7F7F", "separator", "#64646D"),
-            ("dim", "#7F7F7F", "border", "#62626A"),
-            ("dim", "#7F7F7F", "surface", "#64646D"),
-            ("dim", "#7F7F7F", "shadow", "#606068"),
+            ("dim", "#7F7F7F", "border-strong", "#030305"),
+            ("dim", "#7F7F7F", "border-base", "#616169"),
+            ("dim", "#7F7F7F", "border-soft", "#64646D"),
+            ("dim", "#7F7F7F", "border-ghost", "none"),
+            ("dim", "#7F7F7F", "fill-primary", "#595960"),
+            ("dim", "#7F7F7F", "fill-secondary", "#5D5D66"),
+            ("dim", "#7F7F7F", "fill-tertiary", "#616169"),
+            ("dim", "#7F7F7F", "fill-quaternary", "#64646D"),
+            ("dim", "#7F7F7F", "fill-none", "none"),
+            ("dim", "#7F7F7F", "shadow-minor", "#64646D"),
+            ("dim", "#7F7F7F", "shadow-ambient", "#616169"),
+            ("dim", "#7F7F7F", "shadow-penumbra", "#5D5D64"),
+            ("dim", "#7F7F7F", "shadow-major", "#57575E"),
             ("dim", "#7F7F7F", "none", "none"),
-            ("dim", "#1C1C1E", "text-primary", "#F0F1FA"),
-            ("dim", "#1C1C1E", "text-secondary", "#B5B5BE"),
-            ("dim", "#1C1C1E", "text-muted", "#94949D"),
-            ("dim", "#1C1C1E", "text-disabled", "#6C6C74"),
+            ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
+            ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
+            ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
+            ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
             ("dim", "#1C1C1E", "icon", "#94949D"),
             ("dim", "#1C1C1E", "separator", "#38383F"),
-            ("dim", "#1C1C1E", "border", "#3B3B42"),
-            ("dim", "#1C1C1E", "surface", "#38383F"),
-            ("dim", "#1C1C1E", "shadow", "#3E3E45"),
+            ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
+            ("dim", "#1C1C1E", "border-base", "#3C3C44"),
+            ("dim", "#1C1C1E", "border-soft", "#38383F"),
+            ("dim", "#1C1C1E", "border-ghost", "none"),
+            ("dim", "#1C1C1E", "fill-primary", "#46464E"),
+            ("dim", "#1C1C1E", "fill-secondary", "#414148"),
+            ("dim", "#1C1C1E", "fill-tertiary", "#3C3C44"),
+            ("dim", "#1C1C1E", "fill-quaternary", "#38383F"),
+            ("dim", "#1C1C1E", "fill-none", "none"),
+            ("dim", "#1C1C1E", "shadow-minor", "#38383F"),
+            ("dim", "#1C1C1E", "shadow-ambient", "#3C3C44"),
+            ("dim", "#1C1C1E", "shadow-penumbra", "#424249"),
+            ("dim", "#1C1C1E", "shadow-major", "#494950"),
             ("dim", "#1C1C1E", "none", "none"),
-            ("dim", "#101012", "text-primary", "#F0F0FA"),
-            ("dim", "#101012", "text-secondary", "#B3B3BD"),
-            ("dim", "#101012", "text-muted", "#92929B"),
-            ("dim", "#101012", "text-disabled", "#686871"),
+            ("dim", "#101012", "label-primary", "#F0F0FA"),
+            ("dim", "#101012", "label-secondary", "#B3B3BD"),
+            ("dim", "#101012", "label-tertiary", "#92929B"),
+            ("dim", "#101012", "label-quaternary", "#686871"),
             ("dim", "#101012", "icon", "#92929B"),
             ("dim", "#101012", "separator", "#323239"),
-            ("dim", "#101012", "border", "#35353C"),
-            ("dim", "#101012", "surface", "#323239"),
-            ("dim", "#101012", "shadow", "#38383F"),
+            ("dim", "#101012", "border-strong", "#F0F0FA"),
+            ("dim", "#101012", "border-base", "#36363E"),
+            ("dim", "#101012", "border-soft", "#323239"),
+            ("dim", "#101012", "border-ghost", "none"),
+            ("dim", "#101012", "fill-primary", "#404048"),
+            ("dim", "#101012", "fill-secondary", "#3B3B42"),
+            ("dim", "#101012", "fill-tertiary", "#36363E"),
+            ("dim", "#101012", "fill-quaternary", "#323239"),
+            ("dim", "#101012", "fill-none", "none"),
+            ("dim", "#101012", "shadow-minor", "#323239"),
+            ("dim", "#101012", "shadow-ambient", "#36363E"),
+            ("dim", "#101012", "shadow-penumbra", "#3C3C44"),
+            ("dim", "#101012", "shadow-major", "#43434B"),
             ("dim", "#101012", "none", "none"),
-            ("dim", "#3478F6", "text-primary", "#040408"),
-            ("dim", "#3478F6", "text-secondary", "#15141A"),
-            ("dim", "#3478F6", "text-muted", "#35343B"),
-            ("dim", "#3478F6", "text-disabled", "#707079"),
+            ("dim", "#3478F6", "label-primary", "#040408"),
+            ("dim", "#3478F6", "label-secondary", "#15141A"),
+            ("dim", "#3478F6", "label-tertiary", "#35343B"),
+            ("dim", "#3478F6", "label-quaternary", "#707079"),
             ("dim", "#3478F6", "icon", "#35343B"),
             ("dim", "#3478F6", "separator", "#808088"),
-            ("dim", "#3478F6", "border", "#7E7E86"),
-            ("dim", "#3478F6", "surface", "#808088"),
-            ("dim", "#3478F6", "shadow", "#7C7C84"),
+            ("dim", "#3478F6", "border-strong", "#040408"),
+            ("dim", "#3478F6", "border-base", "#7D7D85"),
+            ("dim", "#3478F6", "border-soft", "#808088"),
+            ("dim", "#3478F6", "border-ghost", "none"),
+            ("dim", "#3478F6", "fill-primary", "#75757D"),
+            ("dim", "#3478F6", "fill-secondary", "#797982"),
+            ("dim", "#3478F6", "fill-tertiary", "#7D7D85"),
+            ("dim", "#3478F6", "fill-quaternary", "#808088"),
+            ("dim", "#3478F6", "fill-none", "none"),
+            ("dim", "#3478F6", "shadow-minor", "#808088"),
+            ("dim", "#3478F6", "shadow-ambient", "#7D7D85"),
+            ("dim", "#3478F6", "shadow-penumbra", "#787881"),
+            ("dim", "#3478F6", "shadow-major", "#73737B"),
             ("dim", "#3478F6", "none", "none"),
         ];
 
@@ -2388,7 +2886,7 @@ mod tests {
             ratio: 0.10,
         });
         let bg = BgInput::solid("#FFFFFF").unwrap();
-        let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::TextSecondary, &warm, &vc);
+        let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::LabelSecondary, &warm, &vc);
         assert!(chroma > 1e-3, "warm tint carries chroma");
         assert!(b > 0.0, "warm 30° undertone must be warm (b={b}), not cool");
     }
@@ -2405,9 +2903,9 @@ mod tests {
         for bg_hex in ["#FFFFFF", "#101012"] {
             let bg = BgInput::solid(bg_hex).unwrap();
             for (role, min_ratio) in [
-                (Role::TextPrimary, 4.5),
-                (Role::TextSecondary, 4.5),
-                (Role::TextMuted, 3.0),
+                (Role::LabelPrimary, 4.5),
+                (Role::LabelSecondary, 4.5),
+                (Role::LabelTertiary, 3.0),
             ] {
                 let t = match resolve(&bg, role, &tinted, &vc) {
                     Resolved::Color { solved, .. } => solved,
