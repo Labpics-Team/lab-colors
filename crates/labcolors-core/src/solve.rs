@@ -1005,19 +1005,9 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) 
 }
 
 /// H-K-corrected background luminance (`Y_hk`) of a linear-sRGB stimulus.
-///
-/// For an exact 8-bit grey under a precompiled VC the `J_HK` is a table lookup
-/// ([`grey_j_hk`](crate::lut::grey_j_hk)) — bit-identical to the forward, since
-/// the table samples the real `j_hk_from_xyz` at those greys — which serves a
-/// grey background's luminance (re-measured once per role across a set) and any
-/// neutral-policy candidate without a CIECAM16 forward. Every other stimulus
-/// (the v1 default's tinted candidates) takes the full forward.
 fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
-    let j_hk = match crate::lut::grey_j_hk(rgb, vc) {
-        Some(j) => j,
-        None => lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc),
-    };
-    lpc::y_hk(j_hk.max(0.0), vc)
+    let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
+    lpc::y_hk(j_hk, vc)
 }
 
 #[cfg(test)]
@@ -1040,30 +1030,23 @@ mod tests {
         // DETERMINISTIC PERF METRIC (issue #19 / discrete-exactness). Wall-time on
         // a loaded machine is too noisy to measure a few-percent change, so the
         // honest before/after number is the count of CIECAM16 forward passes a
-        // default `resolve_set` runs. Two reductions land here, both bit-identical:
-        //   * `finish` dedup — one shared forward feeds both the LcsColor and the
-        //     J_HK instead of two on the same XYZ: 406 → 397.
-        //   * grey-background J_HK lookup — the set re-measures the same grey bg
-        //     once per role; those now hit GREY_J_HK: 397 → 387.
-        // This guard pins it: a future change that re-introduces a duplicate
-        // forward — or one that legitimately removes more — fails here until the
-        // expected count is updated with intent. (On the v1 default *tinted* table
-        // the candidates are not grey, so the grey table serves only the bg's own
-        // luminance — a small share; its larger win is on the achromatic policy.)
+        // default `resolve_set` runs. The `finish` dedup — one shared forward
+        // feeds both the LcsColor and the J_HK instead of two passes on the same
+        // candidate XYZ — cut this from 406 to 397 per set, bit-identically. This
+        // guard pins it: a future change that re-introduces a duplicate forward,
+        // or one that legitimately removes more, fails here until the expected
+        // count is updated with intent.
         use crate::spaces::cam16::FORWARD_CALLS;
-        // Pure greys (#FFFFFF, #7F7F7F) hit the grey-bg J_HK lookup on every role,
-        // landing at 387. `#101012` is NOT a pure grey (b=0x12 ≠ r=g=0x10), so its
-        // background luminance still takes the forward — it stays at 397, the
-        // post-finish-dedup figure. Per-bg expectations make that explicit.
+        const EXPECTED: u64 = 397;
         for (vc, name) in vcs() {
-            for (bg, expected) in [("#FFFFFF", 387u64), ("#7F7F7F", 387), ("#101012", 397)] {
+            for bg in ["#FFFFFF", "#7F7F7F", "#101012"] {
                 FORWARD_CALLS.with(|c| c.set(0));
                 let bgi = crate::BgInput::solid(bg).unwrap();
                 let _ = crate::resolve_set(&bgi, &crate::RoleTable::default(), &vc);
                 let n = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
-                    n, expected,
-                    "{name}/{bg}: CAM16 forwards/set = {n}, expected {expected}"
+                    n, EXPECTED,
+                    "{name}/{bg}: CAM16 forwards/set = {n}, expected {EXPECTED}"
                 );
             }
         }

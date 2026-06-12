@@ -102,19 +102,6 @@ fn decode_8bit(byte: u8) -> f64 {
     gamma_data::DECODE_8BIT[byte as usize]
 }
 
-/// The 8-bit code whose decoded linear value equals `linear` bit-for-bit, if any.
-///
-/// [`DECODE_8BIT`](gamma_data::DECODE_8BIT) is strictly increasing, so a binary
-/// search finds the matching code. Used to recognise an exact 8-bit grey
-/// stimulus (a finite-domain input) so its CIECAM16 forward can be served from a
-/// table instead of recomputed — returns `None` for any linear value that is not
-/// exactly one of the 256 decoded greys, so the caller keeps the full forward.
-pub(crate) fn grey_decode_index(linear: f64) -> Option<usize> {
-    gamma_data::DECODE_8BIT
-        .binary_search_by(|probe| probe.partial_cmp(&linear).expect("decode table is finite"))
-        .ok()
-}
-
 // NOTE on the encode (quantisation) side — deliberately NOT tabulated.
 //
 // `hex_from_srgb` takes a *continuous* linear value (matrix / Oklab output), so
