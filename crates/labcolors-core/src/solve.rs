@@ -952,13 +952,17 @@ fn finish(
     let hex = hex_from_srgb(rgb_ideal);
     // The quantised colour, decoded once to linear sRGB, drives both perceptual
     // measurements that follow — the H-K luminance and the CAM16 appearance
-    // correlates — so the 8-bit hex is parsed a single time. `from_xyz_with_hok`
-    // is exactly what `LcsColor::from_hex_with_vc(&hex)` would compute from this
-    // same linear stimulus, reached without the extra string round-trip.
+    // correlates. Both previously ran the CIECAM16 forward on this *same* XYZ
+    // independently (`from_xyz_with_hok` and `bg_luma` → `j_hk_from_xyz`),
+    // doubling the hottest pass on every candidate. Run the forward once and feed
+    // both: `LcsColor::from_cam16` is exactly what `from_xyz_with_hok` builds, and
+    // `j_hk_from_cam16` is the same `J_HK` `bg_luma` derives — bit-identical, one
+    // forward instead of two.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
     let xyz = srgb_to_xyz(rgb_quantised);
-    let color = LcsColor::from_xyz_with_hok(xyz, oklab_hue(rgb_quantised), vc);
-    let y_fg = bg_luma(rgb_quantised, vc);
+    let (j, m, h) = crate::spaces::cam16::forward(xyz, vc);
+    let color = LcsColor::from_cam16(j, m, h, oklab_hue(rgb_quantised));
+    let y_fg = lpc::y_hk(lpc::j_hk_from_cam16(j, m, h, vc).max(0.0), vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
     Ok(Solved {
@@ -1019,6 +1023,84 @@ mod tests {
             (ViewingConditions::srgb(), "srgb"),
             (ViewingConditions::dim_surround(), "dim"),
         ]
+    }
+
+    #[test]
+    fn cam16_forwards_per_set_regression_guard() {
+        // DETERMINISTIC PERF METRIC (issue #19 / discrete-exactness). Wall-time on
+        // a loaded machine is too noisy to measure a few-percent change, so the
+        // honest before/after number is the count of CIECAM16 forward passes a
+        // default `resolve_set` runs. This guard pins that count so a change that
+        // re-introduces a duplicate forward — or legitimately removes one — fails
+        // here until the table below is updated with intent.
+        //
+        // WHY TWO PINS PER (vc, bg). Post-#52 (undertone v2) a default set no
+        // longer costs a single uniform number. v2 added a per-role curve plan:
+        // for each role `curve_plan_cached` runs a cusp-attracted-hue scan
+        // (Oklab-only — `max_chroma`, ZERO forwards) and a chroma-ratio bisection
+        // `ratio_for_target_mp` (each `mp_at` probe is one `cam16::forward` via
+        // `mp_of_linear_srgb` → `from_xyz_with_hok`). That bisection is the only
+        // forward-heavy work the curve plan does, and it is the ONLY work the
+        // thread-local `CURVE_PLAN_CACHE` memoises. So a set has two honest costs:
+        //
+        //   WARM — the runtime-dominant path. Curve plans already cached (a tool
+        //          re-resolving as an unrelated setting is tweaked, or the same
+        //          theme served repeatedly). The count is the IRREDUCIBLE per-role
+        //          probe/finish + ResolveContext polarity/max work that is never
+        //          cached. This is the number that governs steady-state cost; it
+        //          gets the hard, low pin.
+        //   COLD — the first resolve of a theme on a fresh cache. WARM plus every
+        //          distinct curve-plan key's ratio bisection. The COLD−WARM delta
+        //          (~520–560 forwards) is exactly the bisection work the cache
+        //          elides on the second pass.
+        //
+        // The cache is reset before each COLD measurement so COLD is deterministic
+        // regardless of test/iteration order; WARM is the immediate re-resolve of
+        // the same theme, a verified fixed point. Counts measured on the merged
+        // tree (main@#52 + perf/discrete-tables), 2026-06-12. They vary by
+        // (vc, bg) because each surface reaches a different role mix with different
+        // probe-sweep depths — real product behaviour, not noise.
+        use crate::spaces::cam16::FORWARD_CALLS;
+        let tbl = crate::RoleTable::default();
+
+        // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
+        let expected = [
+            (("srgb", "#FFFFFF"), (2023u64, 1465u64)),
+            (("srgb", "#7F7F7F"), (1235, 832)),
+            (("srgb", "#101012"), (1424, 989)),
+            (("dim", "#FFFFFF"), (1804, 1277)),
+            (("dim", "#7F7F7F"), (1185, 782)),
+            (("dim", "#101012"), (1454, 989)),
+        ];
+
+        for (vc, name) in vcs() {
+            for bg in ["#FFFFFF", "#7F7F7F", "#101012"] {
+                let &(_, (cold_exp, warm_exp)) = expected
+                    .iter()
+                    .find(|((n, b), _)| *n == name && *b == bg)
+                    .expect("every (vc, bg) pair has a pinned expectation");
+                let bgi = crate::BgInput::solid(bg).unwrap();
+
+                // COLD: fresh cache, first resolve of this theme.
+                crate::semantic::reset_curve_plan_cache();
+                FORWARD_CALLS.with(|c| c.set(0));
+                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let cold = FORWARD_CALLS.with(|c| c.get());
+                assert_eq!(
+                    cold, cold_exp,
+                    "{name}/{bg}: COLD CAM16 forwards/set = {cold}, expected {cold_exp}"
+                );
+
+                // WARM: same theme re-resolved, curve plans now cached.
+                FORWARD_CALLS.with(|c| c.set(0));
+                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let warm = FORWARD_CALLS.with(|c| c.get());
+                assert_eq!(
+                    warm, warm_exp,
+                    "{name}/{bg}: WARM CAM16 forwards/set = {warm}, expected {warm_exp}"
+                );
+            }
+        }
     }
 
     /// Solve and return both the solved value and the contrast measured

@@ -62,6 +62,18 @@ use crate::spaces::vc::ViewingConditions;
 
 mod lut_data;
 
+// A grey-background J_HK table (one exact J_HK per 8-bit grey code × VC) was
+// prototyped here to serve `bg_luma` of solid grey backgrounds from a lookup
+// instead of a CIECAM16 forward. It was MEASURED and dropped: on the v1 default
+// (tinted) role table the candidates are not grey, so it only served the grey
+// background's own luminance (~10 of 397 forwards/set), and the grey-detection +
+// 256-entry binary search it added to the hot `bg_luma` path cost ~8% MORE
+// wall-time than the few forwards it removed (base #7F7F7F 297µs → 322µs with the
+// lookup, 293µs without). The owner's prediction held: the grey-finish table is
+// below the 10% bar on the default path — here, net-negative — so it is not
+// shipped. The win that did pay off (the `finish` double-forward dedup) lives in
+// `crate::solve`. See the PR analysis.
+
 /// Number of uniformly-spaced `l_ok` nodes per table.
 ///
 /// `257 = 2^8 + 1` gives node intervals of width `1/256 ≈ 3.9e-3` — one per
@@ -321,9 +333,9 @@ mod tests {
         out.push_str("//! `cargo test -p labcolors-core _emit_lut_data -- --ignored`. The\n");
         out.push_str("//! `lut_data_matches_live_math` test fails if this drifts from the math.\n");
         out.push_str("use super::LUT_NODES;\n\n");
-        let emit = |out: &mut String, name: &str, t: &[f64; LUT_NODES]| {
+        let emit = |out: &mut String, decl: &str, t: &[f64]| {
             writeln!(out, "#[rustfmt::skip]").ok();
-            writeln!(out, "pub(crate) static {name}: [f64; LUT_NODES] = [").ok();
+            writeln!(out, "pub(crate) static {decl} = [").ok();
             for chunk in t.chunks(4) {
                 out.push_str("    ");
                 // {:?} on f64 emits the shortest round-tripping decimal.
@@ -337,8 +349,8 @@ mod tests {
             }
             out.push_str("];\n\n");
         };
-        emit(&mut out, "GREY_AXIS_SRGB", &srgb);
-        emit(&mut out, "GREY_AXIS_DIM", &dim);
+        emit(&mut out, "GREY_AXIS_SRGB: [f64; LUT_NODES]", &srgb);
+        emit(&mut out, "GREY_AXIS_DIM: [f64; LUT_NODES]", &dim);
         // Single trailing newline; no blank line at EOF (rustfmt-clean).
         while out.ends_with("\n\n") {
             out.pop();
