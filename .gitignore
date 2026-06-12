@@ -6,3 +6,4 @@ dist/
 # Rust
 target/
 Cargo.lock
+.git-pr-body.md
