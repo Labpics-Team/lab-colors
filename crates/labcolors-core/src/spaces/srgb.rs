@@ -90,6 +90,21 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     Ok([srgb_gamma_inv(r), srgb_gamma_inv(g), srgb_gamma_inv(b)])
 }
 
+/// Quantise linear sRGB to the 8-bit display grid and back to linear, exactly as
+/// `srgb_from_hex(hex_from_srgb(rgb))` would — same gamma encode, same per-channel
+/// round to `[0, 255]`, same gamma decode — but without allocating the hex string.
+///
+/// This is the numeric identity of the hex round-trip: a caller that only needs
+/// the quantised linear colour (e.g. to measure its `M'`) gets the byte-for-byte
+/// same result the hex path produces, with no `format!`/parse on the hot path.
+pub(crate) fn quantise_srgb(rgb: [f64; 3]) -> [f64; 3] {
+    let q = |c: f64| {
+        let byte = (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
+        srgb_gamma_inv(byte)
+    };
+    [q(rgb[0]), q(rgb[1]), q(rgb[2])]
+}
+
 /// Linear sRGB `[r, g, b]` in `[0, 1]` → `#RRGGBB` (clamped & rounded).
 pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
     let r = (srgb_gamma(rgb[0]).clamp(0.0, 1.0) * 255.0).round() as u8;

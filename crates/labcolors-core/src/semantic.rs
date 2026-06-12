@@ -426,9 +426,15 @@ pub enum RoleChroma {
     ///    the curve takes the gamut maximum and is allowed to fall toward
     ///    [`TINT_PERCEPTIBLE_MP_FLOOR`] at the extremes rather than fake chroma.
     ///
-    /// `canonical_hue_deg` is the dark-anchor hue (286°); `target_mp` is the
-    /// "strength" scalar; `hue_stiffness` is the "hue hold" scalar. These two are
-    /// the only free knobs — everything else is geometry.
+    /// `target_mp` ("strength") and `hue_stiffness` ("hue hold") are the two
+    /// **calibrated** scalars — fitted to the owner's reference, the only knobs
+    /// tuned by eye. The rest of the curve rests on three **measured / geometric**
+    /// constants, not free parameters: the dark-anchor hue `canonical_hue_deg`
+    /// (286°, measured off the neutral ladder), the perceptibility floor
+    /// ([`TINT_PERCEPTIBLE_MP_FLOOR`], 1.5 `M'`), and the cusp search window
+    /// ([`CUSP_HALF_WINDOW_DEG`], ±40°). So the policy is "two calibrated scalars +
+    /// three measured/geometric constants", not "two scalars" — everything beyond
+    /// the two calibrated knobs is fixed geometry.
     Curve {
         canonical_hue_deg: f64,
         target_mp: f64,
@@ -483,9 +489,13 @@ impl RoleChroma {
                 target_mp,
                 hue_stiffness,
             } => {
-                let hue_deg = cusp_attracted_hue(l_ok, canonical_hue_deg, hue_stiffness);
-                let ratio = ratio_for_target_mp(l_ok, hue_deg, target_mp, vc);
-                (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
+                // The Curve plan is a pure function of `(l_ok, policy scalars, vc)`:
+                // an 81-step cusp-hue scan plus a CAM16 ratio bisection. Within one
+                // resolve sweep the same lightness recurs across roles and across a
+                // role's fixed-point refinements, so a sweep-scoped exact-key memo
+                // returns the byte-identical `(hue, ratio)` without redoing either
+                // scan. See [`curve_plan_cached`].
+                curve_plan_cached(l_ok, canonical_hue_deg, target_mp, hue_stiffness, vc)
             }
         }
     }
@@ -497,6 +507,76 @@ impl RoleChroma {
     fn probe_plan() -> (Hue, ChromaPolicy) {
         (Hue::deg(0.0), ChromaPolicy::Neutral)
     }
+}
+
+thread_local! {
+    /// Process-lived memo for the [`RoleChroma::Curve`] plan, keyed on the bit
+    /// patterns of `(l_ok, canonical, target_mp, stiffness, vc)` so a hit returns
+    /// the byte-identical `(hue, ratio)` the 81-step cusp scan + CAM16 ratio
+    /// bisection would. The plan is a deterministic function of the key, so the
+    /// cache is always correct — a repeat of any of these means re-resolving the
+    /// same theme (the common case: a tool re-resolving as a background is tweaked,
+    /// or the same neutral resolved against many surfaces), where the cusp scan is
+    /// pure recomputation. Bounded by [`CURVE_PLAN_CACHE_CAP`]: the bisected `l_ok`
+    /// is effectively arbitrary across unrelated backgrounds, so without a cap the
+    /// map could grow without bound — at the cap it is cleared wholesale (a cold
+    /// rebuild, never incorrectness).
+    static CURVE_PLAN_CACHE: std::cell::RefCell<
+        std::collections::HashMap<[u64; 5], (f64, f64)>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Upper bound on live curve-plan cache entries. One resolve sweep visits at most
+/// a few dozen distinct lightnesses; this holds thousands of sweeps' worth of
+/// distinct themes (~56 bytes/entry → well under 1 MB at the cap) before a
+/// wholesale clear. The cap turns an otherwise unbounded thread-local into a
+/// fixed-footprint cache — bounded memory is a correctness property here, not a
+/// nicety (ZERO SURPRISES under sustained load).
+const CURVE_PLAN_CACHE_CAP: usize = 16_384;
+
+/// The [`RoleChroma::Curve`] `(hue, ratio)` plan at `l_ok`, memoised per sweep.
+///
+/// The plan is a deterministic function of its inputs, so the cache holds the
+/// exact value the uncached scans produce — no tolerance, no hex drift. The key
+/// includes the VC so the light and dim sweeps never alias.
+fn curve_plan_cached(
+    l_ok: f64,
+    canonical_hue_deg: f64,
+    target_mp: f64,
+    hue_stiffness: f64,
+    vc: &ViewingConditions,
+) -> (Hue, ChromaPolicy) {
+    let key = [
+        l_ok.to_bits(),
+        canonical_hue_deg.to_bits(),
+        target_mp.to_bits(),
+        hue_stiffness.to_bits(),
+        vc_fingerprint(vc),
+    ];
+    if let Some((hue_deg, ratio)) = CURVE_PLAN_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio));
+    }
+    let hue_deg = cusp_attracted_hue(l_ok, canonical_hue_deg, hue_stiffness);
+    let ratio = ratio_for_target_mp(l_ok, hue_deg, target_mp, vc);
+    CURVE_PLAN_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= CURVE_PLAN_CACHE_CAP {
+            m.clear(); // bounded footprint: wholesale cold rebuild, never wrong
+        }
+        m.insert(key, (hue_deg, ratio));
+    });
+    (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
+}
+
+/// A cheap, collision-resistant fingerprint of the viewing conditions for the
+/// curve-plan memo key — the same fields the achromatic CAM16 path reads.
+fn vc_fingerprint(vc: &ViewingConditions) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for f in [vc.aw, vc.c, vc.z, vc.nbb, vc.fl, vc.n] {
+        h ^= f.to_bits();
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 /// The hue (degrees) the undertone takes at Oklab lightness `l_ok` — mechanism 2.
@@ -558,22 +638,28 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
     let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
     let mp_at = |ratio: f64| -> f64 {
-        let rgb = build_curve_color(l_ok, hue_deg, ratio);
-        let hex = crate::spaces::srgb::hex_from_srgb(rgb);
-        match crate::lcs::LcsColor::from_hex_with_vc(&hex, vc) {
-            Ok(c) => c.mp(),
-            Err(_) => 0.0,
-        }
+        // `build_curve_color` returns clamped linear sRGB; quantise it to the
+        // display grid (the byte-for-byte identity of the old hex round-trip) and
+        // measure M' directly — no `format!`/parse on the bisection's hot path.
+        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color(l_ok, hue_deg, ratio));
+        crate::lcs::LcsColor::mp_of_linear_srgb(rgb, vc)
     };
 
     // The gamut maximum cannot reach the target — take all the gamut offers.
     if mp_at(1.0) <= target {
         return 1.0;
     }
-    // Bisect ratio in [0, 1] for the one that hits target_mp.
+    // Bisect ratio in [0, 1] for the one that hits target_mp. The ratio scales a
+    // chroma that is then quantised to the 8-bit hex grid, so once the bracket is
+    // narrower than `RATIO_BISECT_EPS` the emitted colour can no longer move and
+    // the remaining halvings are wasted CAM16 evaluations. The early exit is
+    // exact — the same value the full 48-step loop converged to.
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     for _ in 0..48 {
+        if hi - lo < RATIO_BISECT_EPS {
+            break;
+        }
         let mid = (lo + hi) * 0.5;
         if mp_at(mid) < target {
             lo = mid;
@@ -583,6 +669,13 @@ fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingCond
     }
     (lo + hi) * 0.5
 }
+
+/// The chroma-ratio bracket width below which the ratio bisection has pinned the
+/// undertone chroma finely enough that the emitted 8-bit hex cannot change. At
+/// ~1e-9 it is far tighter than the chroma step one hex byte spans, so the early
+/// exit is provably hex-preserving while cutting the bisection from 48 steps to
+/// ~30.
+const RATIO_BISECT_EPS: f64 = 1e-9;
 
 /// Build the in-gamut linear-sRGB colour at Oklab lightness `l_ok`, hue
 /// `hue_deg`, carrying `ratio` of the in-gamut maximum chroma — the same
@@ -838,8 +931,10 @@ impl ResolveContext {
 /// * `vc` — viewing conditions (light vs dim/dark); pass the same VC the theme
 ///   resolves under.
 pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditions) -> Resolved {
-    let ctx = ResolveContext::new(bg, vc);
-    resolve_in(bg, role, table, vc, &ctx)
+    crate::lpc::with_yhk_cache(|| {
+        let ctx = ResolveContext::new(bg, vc);
+        resolve_in(bg, role, table, vc, &ctx)
+    })
 }
 
 /// Resolve one role through an already-derived [`ResolveContext`], so a whole set
@@ -960,13 +1055,20 @@ pub fn resolve_set(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    let ctx = ResolveContext::new(bg, vc);
-    let mut set: Vec<(Role, Resolved)> = Role::ALL
-        .iter()
-        .map(|&role| (role, resolve_in(bg, role, table, vc, &ctx)))
-        .collect();
-    enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
-    set
+    // One memo for the whole sweep: every role's solves share the same background
+    // luminance and re-measure neighbouring foregrounds, so the achromatic `y_hk`
+    // inversions repeat heavily across the set. The cache makes a repeat a map
+    // lookup; the emitted hexes are unchanged (exact-key memo of a deterministic
+    // function). See [`crate::lpc::with_yhk_cache`].
+    crate::lpc::with_yhk_cache(|| {
+        let ctx = ResolveContext::new(bg, vc);
+        let mut set: Vec<(Role, Resolved)> = Role::ALL
+            .iter()
+            .map(|&role| (role, resolve_in(bg, role, table, vc, &ctx)))
+            .collect();
+        enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
+        set
+    })
 }
 
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
@@ -2104,6 +2206,170 @@ mod tests {
                     assert!(
                         dh.abs() <= 14.0,
                         "{bg_hex} {}: curve hue {hue:.1} off canonical {NEUTRAL_HUE_DEG} by {dh:.1}",
+                        role.key()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_set_golden_hex_is_byte_for_byte_stable() {
+        // GOLDEN LOCK (tint-identity-curve perf fix, 2026-06-12). The owner has
+        // signed off the v2 undertone's *visual* result; the perf work (analytic
+        // max_chroma, allocation-free cubic solver, early-exit bisections, and the
+        // y_hk / curve-plan memos) must not move a single emitted byte. This is the
+        // verifier's 6-background × 2-VC grid, captured BEFORE the perf fix and
+        // frozen here: every role's hex must match exactly. A change to any value
+        // means the approved visual output drifted — re-approval by the owner is
+        // required, never a silent edit of this table.
+        const GOLDEN: [(&str, &str, &str, &str); 120] = [
+            ("srgb", "#FFFFFF", "text-primary", "#0A0A10"),
+            ("srgb", "#FFFFFF", "text-secondary", "#71717A"),
+            ("srgb", "#FFFFFF", "text-muted", "#94949E"),
+            ("srgb", "#FFFFFF", "text-disabled", "#BDBDC7"),
+            ("srgb", "#FFFFFF", "icon", "#94949E"),
+            ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "border", "#E3E3EC"),
+            ("srgb", "#FFFFFF", "surface", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "shadow", "#E1E1EB"),
+            ("srgb", "#FFFFFF", "none", "none"),
+            ("srgb", "#F2F2F7", "text-primary", "#09090F"),
+            ("srgb", "#F2F2F7", "text-secondary", "#6E6E76"),
+            ("srgb", "#F2F2F7", "text-muted", "#8B8B95"),
+            ("srgb", "#F2F2F7", "text-disabled", "#B8B8C1"),
+            ("srgb", "#F2F2F7", "icon", "#8B8B95"),
+            ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "border", "#DBDBE5"),
+            ("srgb", "#F2F2F7", "surface", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "shadow", "#DADAE3"),
+            ("srgb", "#F2F2F7", "none", "none"),
+            ("srgb", "#7F7F7F", "text-primary", "#010103"),
+            ("srgb", "#7F7F7F", "text-secondary", "#16151C"),
+            ("srgb", "#7F7F7F", "text-muted", "#36353D"),
+            ("srgb", "#7F7F7F", "text-disabled", "#5B5B63"),
+            ("srgb", "#7F7F7F", "icon", "#36353D"),
+            ("srgb", "#7F7F7F", "separator", "#63636B"),
+            ("srgb", "#7F7F7F", "border", "#616169"),
+            ("srgb", "#7F7F7F", "surface", "#63636B"),
+            ("srgb", "#7F7F7F", "shadow", "#5E5E67"),
+            ("srgb", "#7F7F7F", "none", "none"),
+            ("srgb", "#1C1C1E", "text-primary", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "text-secondary", "#B6B6BF"),
+            ("srgb", "#1C1C1E", "text-muted", "#95959E"),
+            ("srgb", "#1C1C1E", "text-disabled", "#6D6C75"),
+            ("srgb", "#1C1C1E", "icon", "#95959E"),
+            ("srgb", "#1C1C1E", "separator", "#38383F"),
+            ("srgb", "#1C1C1E", "border", "#3B3B42"),
+            ("srgb", "#1C1C1E", "surface", "#38383F"),
+            ("srgb", "#1C1C1E", "shadow", "#3E3E45"),
+            ("srgb", "#1C1C1E", "none", "none"),
+            ("srgb", "#101012", "text-primary", "#F2F2FC"),
+            ("srgb", "#101012", "text-secondary", "#B4B4BE"),
+            ("srgb", "#101012", "text-muted", "#93939C"),
+            ("srgb", "#101012", "text-disabled", "#696972"),
+            ("srgb", "#101012", "icon", "#93939C"),
+            ("srgb", "#101012", "separator", "#323239"),
+            ("srgb", "#101012", "border", "#35353C"),
+            ("srgb", "#101012", "surface", "#323239"),
+            ("srgb", "#101012", "shadow", "#38383F"),
+            ("srgb", "#101012", "none", "none"),
+            ("srgb", "#3478F6", "text-primary", "#020205"),
+            ("srgb", "#3478F6", "text-secondary", "#14141B"),
+            ("srgb", "#3478F6", "text-muted", "#35343C"),
+            ("srgb", "#3478F6", "text-disabled", "#707078"),
+            ("srgb", "#3478F6", "icon", "#35343C"),
+            ("srgb", "#3478F6", "separator", "#7F7F88"),
+            ("srgb", "#3478F6", "border", "#7D7D86"),
+            ("srgb", "#3478F6", "surface", "#7F7F88"),
+            ("srgb", "#3478F6", "shadow", "#7B7B83"),
+            ("srgb", "#3478F6", "none", "none"),
+            ("dim", "#FFFFFF", "text-primary", "#0D0D12"),
+            ("dim", "#FFFFFF", "text-secondary", "#707079"),
+            ("dim", "#FFFFFF", "text-muted", "#94949D"),
+            ("dim", "#FFFFFF", "text-disabled", "#BCBCC6"),
+            ("dim", "#FFFFFF", "icon", "#94949D"),
+            ("dim", "#FFFFFF", "separator", "#E3E3ED"),
+            ("dim", "#FFFFFF", "border", "#E1E2EB"),
+            ("dim", "#FFFFFF", "surface", "#E3E3ED"),
+            ("dim", "#FFFFFF", "shadow", "#E0E0E9"),
+            ("dim", "#FFFFFF", "none", "none"),
+            ("dim", "#F2F2F7", "text-primary", "#0C0C12"),
+            ("dim", "#F2F2F7", "text-secondary", "#6E6E76"),
+            ("dim", "#F2F2F7", "text-muted", "#8B8B94"),
+            ("dim", "#F2F2F7", "text-disabled", "#B8B8C1"),
+            ("dim", "#F2F2F7", "icon", "#8B8B94"),
+            ("dim", "#F2F2F7", "separator", "#DEDEE7"),
+            ("dim", "#F2F2F7", "border", "#DCDCE5"),
+            ("dim", "#F2F2F7", "surface", "#DEDEE7"),
+            ("dim", "#F2F2F7", "shadow", "#DADAE3"),
+            ("dim", "#F2F2F7", "none", "none"),
+            ("dim", "#7F7F7F", "text-primary", "#030305"),
+            ("dim", "#7F7F7F", "text-secondary", "#16161B"),
+            ("dim", "#7F7F7F", "text-muted", "#36353D"),
+            ("dim", "#7F7F7F", "text-disabled", "#5C5C64"),
+            ("dim", "#7F7F7F", "icon", "#36353D"),
+            ("dim", "#7F7F7F", "separator", "#64646D"),
+            ("dim", "#7F7F7F", "border", "#62626A"),
+            ("dim", "#7F7F7F", "surface", "#64646D"),
+            ("dim", "#7F7F7F", "shadow", "#606068"),
+            ("dim", "#7F7F7F", "none", "none"),
+            ("dim", "#1C1C1E", "text-primary", "#F0F1FA"),
+            ("dim", "#1C1C1E", "text-secondary", "#B5B5BE"),
+            ("dim", "#1C1C1E", "text-muted", "#94949D"),
+            ("dim", "#1C1C1E", "text-disabled", "#6C6C74"),
+            ("dim", "#1C1C1E", "icon", "#94949D"),
+            ("dim", "#1C1C1E", "separator", "#38383F"),
+            ("dim", "#1C1C1E", "border", "#3B3B42"),
+            ("dim", "#1C1C1E", "surface", "#38383F"),
+            ("dim", "#1C1C1E", "shadow", "#3E3E45"),
+            ("dim", "#1C1C1E", "none", "none"),
+            ("dim", "#101012", "text-primary", "#F0F0FA"),
+            ("dim", "#101012", "text-secondary", "#B3B3BD"),
+            ("dim", "#101012", "text-muted", "#92929B"),
+            ("dim", "#101012", "text-disabled", "#686871"),
+            ("dim", "#101012", "icon", "#92929B"),
+            ("dim", "#101012", "separator", "#323239"),
+            ("dim", "#101012", "border", "#35353C"),
+            ("dim", "#101012", "surface", "#323239"),
+            ("dim", "#101012", "shadow", "#38383F"),
+            ("dim", "#101012", "none", "none"),
+            ("dim", "#3478F6", "text-primary", "#040408"),
+            ("dim", "#3478F6", "text-secondary", "#15141A"),
+            ("dim", "#3478F6", "text-muted", "#35343B"),
+            ("dim", "#3478F6", "text-disabled", "#707079"),
+            ("dim", "#3478F6", "icon", "#35343B"),
+            ("dim", "#3478F6", "separator", "#808088"),
+            ("dim", "#3478F6", "border", "#7E7E86"),
+            ("dim", "#3478F6", "surface", "#808088"),
+            ("dim", "#3478F6", "shadow", "#7C7C84"),
+            ("dim", "#3478F6", "none", "none"),
+        ];
+
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                for (role, res) in &set {
+                    let got = match res {
+                        Resolved::Color { solved, .. } => solved.hex().to_string(),
+                        Resolved::None => "none".to_string(),
+                        Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
+                    };
+                    let want = GOLDEN
+                        .iter()
+                        .find(|(v, b, r, _)| *v == vc_name && *b == bg_hex && *r == role.key())
+                        .map(|(_, _, _, hex)| *hex)
+                        .unwrap_or_else(|| {
+                            panic!("no golden row for {vc_name} {bg_hex} {}", role.key())
+                        });
+                    assert_eq!(
+                        got,
+                        want,
+                        "GOLDEN DRIFT {vc_name} {bg_hex} {}: got {got}, approved {want}",
                         role.key()
                     );
                 }

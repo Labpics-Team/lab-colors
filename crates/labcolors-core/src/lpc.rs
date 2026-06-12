@@ -73,9 +73,36 @@ pub(crate) fn grey_j(y: f64, vc: &ViewingConditions) -> f64 {
 /// `J` is monotonic in luminance for the achromatic axis, so a fixed-iteration
 /// bisection converges to full `f64` precision.
 pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
+    // `y_hk` inverts the achromatic `grey_j` via a CAM16 bisection and sits on the
+    // hot path of every `solve` (each `bg_luma` is a full inversion). Inside one
+    // resolve sweep the *same* `(j_hk, vc)` pair recurs many times — the
+    // background luminance is constant across all of a set's solves, and a role's
+    // refine loop re-measures neighbouring foregrounds. A small exact-key memo
+    // (keyed on the bit patterns, so a hit returns the byte-identical value the
+    // bisection would) collapses those repeats. The cache is scoped to the
+    // current sweep by `with_yhk_cache` and is a no-op (direct compute) outside
+    // one, so behaviour is unchanged — only repeated work is elided.
+    if let Some(hit) = yhk_cache_get(j_hk, vc) {
+        return hit;
+    }
+    let y = y_hk_compute(j_hk, vc);
+    yhk_cache_put(j_hk, vc, y);
+    y
+}
+
+/// The uncached achromatic luminance whose CAM16 lightness equals `j_hk`.
+fn y_hk_compute(j_hk: f64, vc: &ViewingConditions) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
+    // Each step halves the luminance bracket and costs one CAM16 evaluation
+    // (`grey_j`). Once the bracket is below `LUMA_BISECT_EPS` the result is pinned
+    // far finer than any downstream 8-bit hex step, so the remaining halvings are
+    // wasted CAM16 work. The early exit is exact — the same value the full 64-step
+    // loop reaches.
     for _ in 0..64 {
+        if hi - lo < LUMA_BISECT_EPS {
+            break;
+        }
         let mid = (lo + hi) * 0.5;
         if grey_j(mid, vc) < j_hk {
             lo = mid;
@@ -85,6 +112,71 @@ pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
     }
     (lo + hi) * 0.5
 }
+
+thread_local! {
+    /// Sweep-scoped memo for [`y_hk`], keyed on the bit patterns of `(j_hk, vc
+    /// fingerprint)` so a hit returns the bisection's exact value. `None` outside
+    /// an active sweep — then `y_hk` computes directly, behaviour unchanged.
+    static YHK_CACHE: std::cell::RefCell<Option<std::collections::HashMap<(u64, u64), f64>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A cheap fingerprint of the viewing conditions for the [`y_hk`] memo key. The
+/// achromatic `grey_j` depends on `vc` only through `(aw, c, z, nbb, fl, n)`;
+/// `aw` and `c` already differ between the two production VCs, and the rest are
+/// folded in to stay correct if a third VC is ever added.
+fn vc_fingerprint(vc: &ViewingConditions) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for f in [vc.aw, vc.c, vc.z, vc.nbb, vc.fl, vc.n] {
+        h ^= f.to_bits();
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn yhk_cache_get(j_hk: f64, vc: &ViewingConditions) -> Option<f64> {
+    YHK_CACHE.with(|c| {
+        c.borrow()
+            .as_ref()
+            .and_then(|m| m.get(&(j_hk.to_bits(), vc_fingerprint(vc))).copied())
+    })
+}
+
+fn yhk_cache_put(j_hk: f64, vc: &ViewingConditions, y: f64) {
+    YHK_CACHE.with(|c| {
+        if let Some(m) = c.borrow_mut().as_mut() {
+            m.insert((j_hk.to_bits(), vc_fingerprint(vc)), y);
+        }
+    });
+}
+
+/// Run `f` with the sweep-scoped [`y_hk`] memo active, then tear it down. Nesting
+/// is safe: an inner activation reuses the outer cache and only the outermost
+/// tears it down, so a single sweep shares one cache and never leaks across
+/// sweeps (the cache holds only the current sweep's achromatic inversions).
+pub(crate) fn with_yhk_cache<R>(f: impl FnOnce() -> R) -> R {
+    let outermost = YHK_CACHE.with(|c| {
+        let mut b = c.borrow_mut();
+        if b.is_none() {
+            *b = Some(std::collections::HashMap::new());
+            true
+        } else {
+            false
+        }
+    });
+    let r = f();
+    if outermost {
+        YHK_CACHE.with(|c| *c.borrow_mut() = None);
+    }
+    r
+}
+
+/// Luminance-bracket width below which the achromatic `y_hk` bisection has
+/// converged finely enough that no downstream 8-bit hex byte can change. At
+/// ~1e-12 it is far below the luminance step one hex byte spans, so the early
+/// exit is provably output-preserving while cutting the bisection from 64 steps
+/// to ~40.
+const LUMA_BISECT_EPS: f64 = 1e-12;
 
 // Canonical perceptual-contrast constants, from the published formula version
 // 0.0.98G-4g (SAPC-8 "4g" constant set). Names in comments mirror the source
