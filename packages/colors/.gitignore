@@ -1,0 +1,6 @@
+# Generated wasm-pack artifact. Rebuilt by `npm run build` (and in CI) from
+# crates/labcolors-wasm; never hand-edited, never committed.
+pkg/
+
+# Local tooling
+node_modules/

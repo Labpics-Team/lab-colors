@@ -9,3 +9,21 @@ authors = ["Lab Pics <dev@lab.pics>"]
 license = "MIT"
 repository = "https://github.com/lemone112/lab-colors"
 rust-version = "1.85"
+
+# Centralised dependency pins. `labcolors-core` stays zero-deps (issue #29):
+# wasm-bindgen lives ONLY in `labcolors-wasm`, which references it from here.
+[workspace.dependencies]
+wasm-bindgen = "0.2"
+
+# Release profile tuned for a small WASM bundle. `opt-level = "z"` and LTO trade
+# a little speed for size; `panic = "abort"` removes the unwinding tables and
+# the formatting machinery a panic would pull in — there are no panic pages in
+# release, errors are returned as structured values (see the wasm crate). This
+# applies to every crate, but only the WASM bundle is size-sensitive; the native
+# crates are unaffected in any way that matters.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
