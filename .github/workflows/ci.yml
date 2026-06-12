@@ -5,19 +5,31 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: CI only reads the repo. Override per-job if a job needs more.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  # Deterministic toolchain. Bump in lockstep with the team's supported Rust.
+  # To update: pick the new stable from https://forge.rust-lang.org/ and change
+  # this single value — every job below consumes it via the `toolchain` input.
+  RUST_TOOLCHAIN: 1.96.0
 
 jobs:
   lint:
     name: clippy + rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
+      # The toolchain VERSION is pinned via the explicit input below, not @stable,
+      # so a new stable release cannot silently change CI behavior.
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo fmt --check
         run: cargo fmt --all --check
       - name: cargo clippy
@@ -27,8 +39,35 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace
+
+  audit:
+    name: cargo audit (rustsec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install cargo-audit
+        # Version pinned for reproducibility; --locked respects the tool's own lockfile.
+        # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
+        # CVSS v4.0 and fail to load the advisory database entirely.
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      # Hard-fail on actively-exploitable advisories AND on yanked crates.
+      # Rationale: a known-vulnerable or yanked dependency is a supply-chain
+      # liability we will not knowingly merge. cargo-audit exits non-zero on any
+      # advisory; --deny warnings additionally promotes yanked/unmaintained
+      # warnings to failures. continue-on-error is intentionally absent (false)
+      # so the gate actually blocks. If a finding is a false positive or accepted
+      # risk, ignore it explicitly per-advisory via `--ignore RUSTSEC-XXXX-NNNN`
+      # with a comment — never by disabling the whole gate.
+      - name: cargo audit
+        run: cargo audit --deny warnings
