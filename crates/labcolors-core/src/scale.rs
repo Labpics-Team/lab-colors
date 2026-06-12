@@ -138,7 +138,70 @@ impl AccentCurve {
     }
 }
 
+/// Oklab L of the grey whose CAM16-UCS lightness J' equals `jp`, in closed form.
+///
+/// # Derivation (mirror of `lpc::y_hk_analytic`)
+///
+/// `AccentCurve::at` calls this once per stretch point to anchor the accent's
+/// lightness on the same grey axis the neutral curve defines. The forward map it
+/// inverts is the achromatic chain
+///
+/// ```text
+///   y  ──grey_j──▶  J  ──UCS──▶  J' = 1.7·J / (1 + 0.007·J)
+/// ```
+///
+/// followed by `L_ok = srgb_linear_to_oklab([y, y, y])[0]`. Every link is a
+/// strictly increasing bijection, so the whole map is invertible:
+///
+/// 1. **J' → J** — the CAM16-UCS lightness rescale (Li et al. 2017,
+///    DOI 10.1002/col.22131) inverts in closed form:
+///    `jp·(1 + 0.007·J) = 1.7·J  ⇒  J = jp / (1.7 − 0.007·jp)`. This is the same
+///    inverse `lpc::y_hk_from_lcs` already uses for the LcsColor contrast path.
+/// 2. **J → y** — on the achromatic D65 ray, chroma is zero, so the Hellwig H-K
+///    term vanishes and `J_HK ≡ J`. Recovering the grey luminance from `J` is
+///    therefore *exactly* `lpc::y_hk(J, vc)` — the analytic CAM16 grey-axis
+///    inverse (closed-form seed + two Newton steps) that replaced an identical
+///    64-step bisection in PR #51. Reused verbatim here, no second copy of the
+///    cone-response algebra.
+/// 3. **y → L_ok** — for a grey `[y, y, y]` linear-sRGB triple,
+///    `srgb_linear_to_oklab` collapses to a single cube root scaled by the
+///    near-unity matrix row sums (`SRGB_TO_LMS` rows ≈ 1, `LMS_TO_OKLAB` row 0 ≈
+///    1 but **not exactly** — 0.9999999935). The closed form is still evaluated
+///    through the very same `srgb_linear_to_oklab([y, y, y])` call the bisection
+///    used, so the emitted L carries byte-identical rounding and the accent
+///    golden snapshot does not drift.
+///
+/// Replacing the 64 forward CAM16 passes with one analytic `y_hk` is the only
+/// behavioural change; everything downstream of `y` is unchanged.
 fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
+    // Step 1: invert the CAM16-UCS lightness rescale J' → J.
+    // J' is bounded above by 1.7/0.007 ≈ 242.86 (the rescale's horizontal
+    // asymptote); at or past it the denominator is non-positive and there is no
+    // finite J, so the grey saturates at white, exactly as the bisection's
+    // hi = 1.0 cap did.
+    let denom = 1.7 - 0.007 * jp;
+    if jp <= 0.0 {
+        return srgb_linear_to_oklab([0.0, 0.0, 0.0])[0];
+    }
+    if denom <= 0.0 {
+        return srgb_linear_to_oklab([1.0, 1.0, 1.0])[0];
+    }
+    let j = jp / denom;
+
+    // Step 2: invert the achromatic CAM16 chain J → y. On the grey axis chroma
+    // is zero, so J_HK ≡ J and the H-K-corrected grey inverse is the plain one.
+    let y = crate::lpc::y_hk(j, vc);
+
+    // Step 3: grey Oklab L through the identical forward function the bisection
+    // used — keeps the emitted lightness bit-for-bit, so the accent golden holds.
+    srgb_linear_to_oklab([y, y, y])[0]
+}
+
+/// The 64-step bisection that [`jp_to_oklab_l`] replaced, kept as the reference
+/// oracle the analytic inverse is proven against on a dense J' grid (tests) and
+/// timed against (the `jp_inv` Criterion bench). Reached only through
+/// [`bench_support`] and the test module — never on the production path.
+fn jp_to_oklab_l_bisect(jp: f64, vc: &ViewingConditions) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
 
@@ -161,6 +224,27 @@ fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
     let y = (lo + hi) * 0.5;
     let lab = srgb_linear_to_oklab([y, y, y]);
     lab[0]
+}
+
+/// Benchmark-only access to the two grey-axis J' → Oklab L implementations.
+///
+/// Wraps the module-private analytic [`jp_to_oklab_l`] and the bisection oracle
+/// so the `benches/jp_inv.rs` Criterion harness can compare them head-to-head.
+/// Hidden from the rendered docs and not part of the supported public surface —
+/// production callers reach this only through [`AccentCurve::at`].
+#[doc(hidden)]
+pub mod bench_support {
+    use super::ViewingConditions;
+
+    /// Analytic closed-form + Newton inverse (the production path).
+    pub fn jp_to_oklab_l_analytic(jp: f64, vc: &ViewingConditions) -> f64 {
+        super::jp_to_oklab_l(jp, vc)
+    }
+
+    /// Bisection reference (64 iterations, full CAM16 pass per step).
+    pub fn jp_to_oklab_l_bisect(jp: f64, vc: &ViewingConditions) -> f64 {
+        super::jp_to_oklab_l_bisect(jp, vc)
+    }
 }
 
 /// The half-width the bisection used to add/subtract around each channel's
@@ -520,6 +604,83 @@ mod tests {
                         "C*={c} at (L {l}, h {h}) puts channel {ch} out of gamut: {v}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn jp_to_oklab_l_analytic_matches_bisection_on_grid() {
+        // Equivalence gate: the analytic J' → Oklab L inverse must reproduce the
+        // 64-step bisection oracle to better than the bisection's own resolution.
+        // Both paths feed the identical `srgb_linear_to_oklab([y,y,y])`, so the
+        // only divergence is in the recovered grey luminance `y`; that inherits
+        // the < 1e-12 bound `lpc::y_hk` is held to (see y_hk_analytic tests), and
+        // the cube root only contracts it. We assert max|dL| < 1e-12 and report
+        // the measured worst case.
+        //
+        // Domain: J' > 0, the values an accent actually feeds here (the neutral
+        // curve's J' is a lightness, never negative). The J' = 0 endpoint and the
+        // negative / above-asymptote tails are *not* an equivalence region: there
+        // the analytic path returns exact black / white by definition, while the
+        // bisection only *converges toward* black — its `y` floor is 2^-65, and
+        // the cube root blows that up to L ≈ 3e-7, never exact 0, so the analytic
+        // answer is the more correct one. Those exact endpoints are pinned
+        // separately in `jp_to_oklab_l_endpoints_and_saturation`. For any J' > 0
+        // the true grey luminance sits far above the bisection floor and the two
+        // agree to f64 round-off.
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let mut max_dl = 0.0_f64;
+            let mut worst_jp = 0.0_f64;
+            // grey_j(1.0) ≈ 100; sweep (0, 104] to a hair past white, mirroring
+            // the y_hk grid test's reachable-range coverage. Start at n = 1 so the
+            // exact-black J' = 0 endpoint (pinned elsewhere) is excluded.
+            for n in 1..=6000 {
+                let jp = (n as f64 / 6000.0) * 104.0;
+                let analytic = jp_to_oklab_l(jp, &vc);
+                let bisect = jp_to_oklab_l_bisect(jp, &vc);
+                let dl = (analytic - bisect).abs();
+                if dl > max_dl {
+                    max_dl = dl;
+                    worst_jp = jp;
+                }
+            }
+            assert!(
+                max_dl < 1e-12,
+                "analytic vs bisection max|dL| = {max_dl:e} at J'={worst_jp} exceeds 1e-12"
+            );
+            eprintln!("jp_to_oklab_l max|dL| = {max_dl:e} (worst J'={worst_jp})");
+        }
+    }
+
+    #[test]
+    fn jp_to_oklab_l_endpoints_and_saturation() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            // J' = 0 → black grey; matches srgb_linear_to_oklab([0,0,0])[0].
+            assert_eq!(
+                jp_to_oklab_l(0.0, &vc),
+                srgb_linear_to_oklab([0.0, 0.0, 0.0])[0]
+            );
+            // Negative J' is below black and clamps to the black grey too.
+            assert_eq!(
+                jp_to_oklab_l(-3.0, &vc),
+                srgb_linear_to_oklab([0.0, 0.0, 0.0])[0]
+            );
+            // At/above the UCS asymptote (1.7/0.007 ≈ 242.86) there is no finite
+            // J: saturate at the white grey, as the bisection's hi = 1.0 did.
+            let white_l = srgb_linear_to_oklab([1.0, 1.0, 1.0])[0];
+            assert_eq!(jp_to_oklab_l(250.0, &vc), white_l);
+            // Round-trip: the J' produced by a known grey luminance recovers an L
+            // that equals the forward grey L for that same luminance.
+            for &y in &[0.02_f64, 0.18, 0.5, 0.9, 1.0] {
+                let j = crate::lpc::grey_j(y, &vc);
+                let jp = 1.7 * j / (1.0 + 0.007 * j);
+                let l = jp_to_oklab_l(jp, &vc);
+                let l_ref = srgb_linear_to_oklab([y, y, y])[0];
+                assert!(
+                    (l - l_ref).abs() < 1e-9,
+                    "round-trip y={y}: L={l}, forward grey L={l_ref}, |d|={}",
+                    (l - l_ref).abs()
+                );
             }
         }
     }
