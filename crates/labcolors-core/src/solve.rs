@@ -529,13 +529,32 @@ pub fn solve(
     solve_quantization_neighbor(l_final, target, hue, chroma_policy, primary.lc, evaluate)
 }
 
+/// The quantisation budget: a solved colour is accepted only when its measured
+/// `Lc` lands within this *symmetric* distance of the target. The analytic
+/// primary path lands close by construction; the neighbour walk below moves
+/// *away* from the target toward larger `|Lc|`, so without the upper bound a
+/// step could overshoot — this constant makes the `±1` contract explicit and
+/// symmetric for the neighbour search (mirrors the test tolerance `TOL`).
+const QUANT_BUDGET: f64 = 1.0;
+
 /// One on-grid candidate the quantisation-gap search evaluates: the solved
 /// colour, the perceptual `Lc` it actually achieves on the quantised hex, and
-/// whether it clears the dual gate (perceptual + legal floor).
+/// whether it clears the dual gate (perceptual floor at both interval ends +
+/// legal WCAG floor). `passes` is the *lower*-bound floor check the primary
+/// solution uses; the neighbour walk additionally enforces the upper bound so a
+/// step can never overshoot the `±1` budget.
 struct Candidate {
     solved: Solved,
     lc: f64,
     passes: bool,
+}
+
+impl Candidate {
+    /// Distance of the achieved `Lc` from the target — the symmetric error the
+    /// `±1` budget bounds and the neighbour search minimises for its near-miss.
+    fn error(&self, target: f64) -> f64 {
+        (self.lc - target).abs()
+    }
 }
 
 /// Maximum distinct hex steps the quantisation-gap search explores from the
@@ -546,14 +565,20 @@ const NEIGHBOR_STEPS: u32 = 2;
 
 /// Walk up to [`NEIGHBOR_STEPS`] *distinct* hex grid points toward larger `|Lc|`
 /// — darker for dark-on-light (`target ≥ 0`), lighter for light-on-dark — and
-/// return the first that clears the dual gate `evaluate` enforces.
+/// return the first that clears the dual gate **and** lands within the symmetric
+/// [`QUANT_BUDGET`] of the target.
 ///
-/// "Distinct" is the honesty guarantee: a step counts only when the emitted hex
-/// actually changes, so the search can never silently re-clip to the colour it
-/// started from. If no neighbour passes, the target sits in a genuine
-/// quantisation gap and [`Unreachable::QuantizationGap`] is returned, reporting
-/// the closest `|Lc|` any colour explored (the start plus every neighbour)
-/// actually reached — an honest near-miss, never a fabricated bound.
+/// Two honesty guarantees:
+/// * *Distinct* — a step counts only when the emitted hex actually changes, so
+///   the search can never silently re-clip to the colour it started from.
+/// * *Bounded both ways* — `evaluate.passes` rejects steps that fall short of
+///   the floor; the `±QUANT_BUDGET` check here rejects steps that overshoot it.
+///   A neighbour is returned only when it is genuinely within budget.
+///
+/// If no neighbour qualifies, the target sits in a real quantisation gap and
+/// [`Unreachable::QuantizationGap`] is returned, reporting the `|Lc|` of the
+/// *closest* colour explored (the start plus every neighbour) — the true
+/// near-miss, never a fabricated bound.
 fn solve_quantization_neighbor(
     l_start: f64,
     target: f64,
@@ -564,15 +589,22 @@ fn solve_quantization_neighbor(
 ) -> Result<Solved, Unreachable> {
     // Toward larger contrast: dark-on-light needs a darker foreground (lower
     // Oklab lightness), light-on-dark a lighter one. The probe increment is well
-    // below one 8-bit grid step so no grid point between start and a neighbour is
-    // skipped; the loop accepts a probe only when its hex differs from the last.
+    // below one 8-bit grid step so neighbours are visited in order, not skipped.
+    // For a `Relative` chroma policy `build_color` also moves chroma with
+    // lightness, so a single probe can in principle cross more than one
+    // `#RRGGBB`; correctness does not rely on perfect grid-adjacency, because a
+    // step is *accepted* only when it lands within the symmetric `QUANT_BUDGET`
+    // below — an over-jump that overshoots the target is rejected, not clipped.
     let direction = if target >= 0.0 { -1.0 } else { 1.0 };
     const PROBE: f64 = 0.001;
 
     let mut last_hex = hex_from_srgb(build_color(l_start, hue, chroma_policy));
     let mut steps_taken = 0_u32;
     let mut l_probe = l_start;
-    let mut nearest = start_lc.abs();
+    // Track the colour closest to the target across the start and every
+    // neighbour, so the gap error reports the true near-miss (not a max).
+    let mut nearest_lc = start_lc;
+    let mut nearest_err = (start_lc - target).abs();
 
     while steps_taken < NEIGHBOR_STEPS && (0.0..=1.0).contains(&l_probe) {
         l_probe += direction * PROBE;
@@ -584,13 +616,22 @@ fn solve_quantization_neighbor(
         steps_taken += 1;
 
         let candidate = evaluate(l_probe)?;
-        nearest = nearest.max(candidate.lc.abs());
-        if candidate.passes {
+        let err = candidate.error(target);
+        if err < nearest_err {
+            nearest_err = err;
+            nearest_lc = candidate.lc;
+        }
+        // Accept only when the floor holds AND the step has not overshot the
+        // symmetric budget — an honest neighbour, in band on both sides.
+        if candidate.passes && err <= QUANT_BUDGET {
             return Ok(candidate.solved);
         }
     }
 
-    Err(Unreachable::QuantizationGap { target, nearest })
+    Err(Unreachable::QuantizationGap {
+        target,
+        nearest: nearest_lc.abs(),
+    })
 }
 
 /// Stage 1: invert the LPC core to the Oklab lightness reproducing `target`
@@ -1534,6 +1575,39 @@ mod tests {
             resolved >= 1,
             "expected at least one band target to resolve"
         );
+    }
+
+    #[test]
+    fn neighbor_acceptance_respects_the_symmetric_budget() {
+        // The neighbour walk moves *away* from the target toward larger |Lc|, so
+        // a returned colour must still land within ±1 on BOTH sides — never an
+        // overshoot that satisfies only the lower floor. Sweep the whole gap band
+        // densely on white and black; every resolved colour must be symmetric-in
+        // budget, and its reported lc must match an independent measurement.
+        let vc = ViewingConditions::srgb();
+        let mut t = 7.31_f64;
+        let mut checked = 0_usize;
+        while t <= 7.59 + 1e-9 {
+            for (bg, target) in [("#FFFFFF", t), ("#000000", -t)] {
+                if let Ok((solved, measured)) = solve_and_measure(bg, target, &vc) {
+                    checked += 1;
+                    // Symmetric budget — this is the guard CodeRabbit flagged: a
+                    // one-sided "not below floor" check would let an overshoot in.
+                    assert!(
+                        (measured - target).abs() <= TOL,
+                        "{bg} t={target}: measured {measured} outside ±{TOL}, hex {}",
+                        solved.hex()
+                    );
+                    assert!(
+                        (solved.lc() - measured).abs() < 1e-9,
+                        "{bg} t={target}: reported lc {} vs measured {measured}",
+                        solved.lc()
+                    );
+                }
+            }
+            t += 0.01;
+        }
+        assert!(checked >= 1, "expected at least one resolvable target");
     }
 
     #[test]
