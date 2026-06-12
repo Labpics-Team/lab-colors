@@ -8,6 +8,12 @@
 use crate::spaces::cat16;
 use crate::spaces::vc::ViewingConditions;
 
+/// Test-only counter of [`forward`] invocations, used by the instrumentation
+/// test that reports CAM16 forwards per `resolve_set` (issue #19 / perf bench).
+#[cfg(test)]
+pub(crate) static FORWARD_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Forward nonlinear adaptation.
 ///
 /// Source: CIE 170-2:2015 eq. (6.5).
@@ -32,6 +38,8 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
 /// [`crate::lpc::cam16_jch_from_xyz`] is a thin re-export. Keeping one copy makes
 /// a CAM16 matrix or surround change land in exactly one place (issue #19).
 pub(crate) fn forward(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
+    #[cfg(test)]
+    FORWARD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
 
     let lms = cat16::xyz_to_cone(xyz);

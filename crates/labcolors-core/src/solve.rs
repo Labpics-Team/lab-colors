@@ -1021,6 +1021,32 @@ mod tests {
         ]
     }
 
+    #[test]
+    #[ignore]
+    fn _count_cam16_forwards_per_set() {
+        use crate::spaces::cam16::FORWARD_CALLS;
+        use crate::{RoleChroma, RoleTable};
+        use std::sync::atomic::Ordering;
+        let tables = [
+            ("tinted(default)", RoleTable::default()),
+            (
+                "neutral",
+                RoleTable::default().with_chroma(RoleChroma::Neutral),
+            ),
+        ];
+        for (vc, name) in vcs() {
+            for (tname, table) in &tables {
+                for bg in ["#FFFFFF", "#101012", "#7F7F7F"] {
+                    FORWARD_CALLS.store(0, Ordering::Relaxed);
+                    let bgi = crate::BgInput::solid(bg).unwrap();
+                    let _ = crate::resolve_set(&bgi, table, &vc);
+                    let n = FORWARD_CALLS.load(Ordering::Relaxed);
+                    eprintln!("CAM16 forwards: {name}/{tname}/{bg} = {n}");
+                }
+            }
+        }
+    }
+
     /// Solve and return both the solved value and the contrast measured
     /// independently through the public `lpc_with_vc` on the resolved hex.
     fn solve_and_measure(
