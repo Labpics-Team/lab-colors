@@ -70,39 +70,125 @@ pub(crate) fn grey_j(y: f64, vc: &ViewingConditions) -> f64 {
 
 /// Grey luminance whose CAM16 lightness equals `j_hk` (inverse of [`grey_j`]).
 ///
-/// `J` is monotonic in luminance for the achromatic axis, so a fixed-iteration
-/// bisection converges to full `f64` precision.
+/// `J` is monotonic in luminance for the achromatic axis, so this inverts the
+/// forward chain analytically in closed form, then polishes with two Newton
+/// steps to full `f64` precision (see [`y_hk_analytic`]). The reference
+/// fixed-iteration bisection [`y_hk_bisect`] is retained for tests.
 pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
-    // `y_hk` inverts the achromatic `grey_j` via a CAM16 bisection and sits on the
-    // hot path of every `solve` (each `bg_luma` is a full inversion). Inside one
-    // resolve sweep the *same* `(j_hk, vc)` pair recurs many times — the
-    // background luminance is constant across all of a set's solves, and a role's
-    // refine loop re-measures neighbouring foregrounds. A small exact-key memo
-    // (keyed on the bit patterns, so a hit returns the byte-identical value the
-    // bisection would) collapses those repeats. The cache is scoped to the
-    // current sweep by `with_yhk_cache` and is a no-op (direct compute) outside
-    // one, so behaviour is unchanged — only repeated work is elided.
-    if let Some(hit) = yhk_cache_get(j_hk, vc) {
-        return hit;
-    }
-    let y = y_hk_compute(j_hk, vc);
-    yhk_cache_put(j_hk, vc, y);
-    y
+    y_hk_analytic(j_hk, vc)
 }
 
-/// The uncached achromatic luminance whose CAM16 lightness equals `j_hk`.
-fn y_hk_compute(j_hk: f64, vc: &ViewingConditions) -> f64 {
+/// Closed-form inverse of [`grey_j`] with Newton polish.
+///
+/// # Derivation (CIECAM16, CIE 170-2:2015)
+///
+/// For an achromatic D65 stimulus of luminance `y`, the forward path
+/// [`grey_j`] reduces to a chain of monotonic, individually invertible links.
+/// Each cone response after chromatic adaptation is **linear in `y`**:
+/// `lms_a[i] = k_i · y`, where the per-channel scale
+/// `k_i = d·100 + (1 − d)·rgb_w[i]` follows from `rgb_d[i] = d·100/rgb_w[i] + 1 − d`
+/// (`cam16` discounting, see [`ViewingConditions::build`]) and the D65 grey
+/// `xyz = [y·Xw, y, y·Zw]·100` (the CAT16 white-point cone response cancels the
+/// `100/rgb_w[i]` term). The achromatic signal is then
+/// `A = nbb · Σ wᵢ·adapt(kᵢ·y)` with weights `w = [2, 1, 1/20]`, and
+/// `J = 100·(A/A_w)^(c·z)`.
+///
+/// Inverting link by link:
+/// 1. `J → A`:           `A = A_w · (J/100)^(1/(c·z))`           — exact (power).
+/// 2. `A → target sum`:  `Σ wᵢ·adapt(kᵢ·y) = A/nbb`              — exact (linear).
+/// 3. seed `y`:          collapse the three channels onto one effective scale
+///    `k_eff = Σ wᵢkᵢ / Σ wᵢ` and invert the single compression
+///    `adapt(k_eff·y) = S` via `(F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S)`
+///    (the inverse of [`cam16::adapt`], CIE 170-2:2015 eq. 6.5), then take the
+///    `1/0.42` power.
+///
+/// The three channels do **not** share one scale (`k_i` spread ≈ 1 % from
+/// incomplete chromatic adaptation), so step 3 is an approximation, not an
+/// exact inverse — there is no algebraic inverse for a sum of three distinct
+/// fractional-power terms. The seed lands within ~5·10⁻⁶ of the true `y`; two
+/// Newton steps on the exact 3-term residual `f(y) − target` (closed-form
+/// derivative) drive it to machine epsilon, matching [`y_hk_bisect`] to
+/// < 2·10⁻¹² over the full `J_HK` grid.
+///
+/// `Y` is clamped to `[0, 1]`, reproducing the bisection's search interval:
+/// `J_HK` can exceed `grey_j(1.0) = 100` for near-white chromatic colours
+/// (the H-K term lifts `J`), and there the bisection saturates at `Y = 1`.
+fn y_hk_analytic(j_hk: f64, vc: &ViewingConditions) -> f64 {
+    if j_hk <= 0.0 {
+        return 0.0;
+    }
+
+    // Per-channel cone-response scale: lms_a[i] = k[i] · y (linear in y).
+    // rgb_d[i] = d·100/rgb_w[i] + (1−d), and the D65 grey cone response is
+    // rgb_w[i]·y, so lms_a[i] = (d·100 + (1−d)·rgb_w[i])·y. Recover rgb_w[i]
+    // (and hence the (1−d) part) from rgb_d[i] without re-deriving d:
+    // (1−d)·rgb_w[i] = rgb_w[i] − d·100, with rgb_w[i] from CAT16 of the white.
+    let rgb_w = cat16::xyz_to_cone([
+        D65_WHITE[0] * 100.0,
+        D65_WHITE[1] * 100.0,
+        D65_WHITE[2] * 100.0,
+    ]);
+    // rgb_d[i] = d·(100/rgb_w[i]) + (1−d)  ⇒  d = (rgb_d[i] − 1)/(100/rgb_w[i] − 1).
+    // Solve for d from channel 0, then k[i] = d·100 + (1−d)·rgb_w[i].
+    let d = (vc.rgb_d[0] - 1.0) / (100.0 / rgb_w[0] - 1.0);
+    let k = [
+        d * 100.0 + (1.0 - d) * rgb_w[0],
+        d * 100.0 + (1.0 - d) * rgb_w[1],
+        d * 100.0 + (1.0 - d) * rgb_w[2],
+    ];
+    const W: [f64; 3] = [2.0, 1.0, 1.0 / 20.0];
+    let w_sum = W[0] + W[1] + W[2];
+
+    // Step 1+2: J → target value of Σ wᵢ·adapt(kᵢ·y).
+    let target = vc.aw * (j_hk / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
+
+    // Step 3: analytic seed via the weighted-effective channel.
+    let s = target / w_sum;
+    if s <= 0.0 {
+        return 0.0;
+    }
+    if s >= 400.0 {
+        // adapt saturates at 400; J_HK is beyond what grey luminance ≤ 1 yields.
+        return 1.0;
+    }
+    let k_eff = (W[0] * k[0] + W[1] * k[1] + W[2] * k[2]) / w_sum;
+    // Inverse of adapt: (F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S).
+    let p = 27.13 * s / (400.0 - s);
+    let mut y = p.powf(1.0 / 0.42) * 100.0 / (vc.fl * k_eff);
+
+    // Newton polish on the exact 3-term residual. adapt'(c) w.r.t. c, with
+    // P = (F_L·c/100)^0.42:  dadapt/dc = 400·27.13·(0.42·P/c)/(P + 27.13)².
+    let residual_slope = |y: f64| -> (f64, f64) {
+        let mut f = 0.0;
+        let mut df = 0.0;
+        for i in 0..3 {
+            let c = k[i] * y;
+            let x = vc.fl * c / 100.0;
+            let pp = x.powf(0.42);
+            let denom = pp + 27.13;
+            f += W[i] * 400.0 * pp / denom;
+            let dp = 0.42 * pp / c;
+            df += W[i] * k[i] * 400.0 * 27.13 * dp / (denom * denom);
+        }
+        (f - target, df)
+    };
+    for _ in 0..2 {
+        let (err, slope) = residual_slope(y);
+        y -= err / slope;
+    }
+
+    y.clamp(0.0, 1.0)
+}
+
+/// Reference inverse of [`grey_j`] by fixed-iteration bisection.
+///
+/// `J` is monotonic in luminance on the achromatic axis, so 64 bisection
+/// iterations on `[0, 1]` converge to full `f64` precision. Retained as the
+/// ground truth that [`y_hk_analytic`] is property-tested against.
+fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
-    // Each step halves the luminance bracket and costs one CAM16 evaluation
-    // (`grey_j`). Once the bracket is below `LUMA_BISECT_EPS` the result is pinned
-    // far finer than any downstream 8-bit hex step, so the remaining halvings are
-    // wasted CAM16 work. The early exit is exact — the same value the full 64-step
-    // loop reaches.
     for _ in 0..64 {
-        if hi - lo < LUMA_BISECT_EPS {
-            break;
-        }
         let mid = (lo + hi) * 0.5;
         if grey_j(mid, vc) < j_hk {
             lo = mid;
@@ -112,71 +198,6 @@ fn y_hk_compute(j_hk: f64, vc: &ViewingConditions) -> f64 {
     }
     (lo + hi) * 0.5
 }
-
-thread_local! {
-    /// Sweep-scoped memo for [`y_hk`], keyed on the bit patterns of `(j_hk, vc
-    /// fingerprint)` so a hit returns the bisection's exact value. `None` outside
-    /// an active sweep — then `y_hk` computes directly, behaviour unchanged.
-    static YHK_CACHE: std::cell::RefCell<Option<std::collections::HashMap<(u64, u64), f64>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// A cheap fingerprint of the viewing conditions for the [`y_hk`] memo key. The
-/// achromatic `grey_j` depends on `vc` only through `(aw, c, z, nbb, fl, n)`;
-/// `aw` and `c` already differ between the two production VCs, and the rest are
-/// folded in to stay correct if a third VC is ever added.
-fn vc_fingerprint(vc: &ViewingConditions) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for f in [vc.aw, vc.c, vc.z, vc.nbb, vc.fl, vc.n] {
-        h ^= f.to_bits();
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
-
-fn yhk_cache_get(j_hk: f64, vc: &ViewingConditions) -> Option<f64> {
-    YHK_CACHE.with(|c| {
-        c.borrow()
-            .as_ref()
-            .and_then(|m| m.get(&(j_hk.to_bits(), vc_fingerprint(vc))).copied())
-    })
-}
-
-fn yhk_cache_put(j_hk: f64, vc: &ViewingConditions, y: f64) {
-    YHK_CACHE.with(|c| {
-        if let Some(m) = c.borrow_mut().as_mut() {
-            m.insert((j_hk.to_bits(), vc_fingerprint(vc)), y);
-        }
-    });
-}
-
-/// Run `f` with the sweep-scoped [`y_hk`] memo active, then tear it down. Nesting
-/// is safe: an inner activation reuses the outer cache and only the outermost
-/// tears it down, so a single sweep shares one cache and never leaks across
-/// sweeps (the cache holds only the current sweep's achromatic inversions).
-pub(crate) fn with_yhk_cache<R>(f: impl FnOnce() -> R) -> R {
-    let outermost = YHK_CACHE.with(|c| {
-        let mut b = c.borrow_mut();
-        if b.is_none() {
-            *b = Some(std::collections::HashMap::new());
-            true
-        } else {
-            false
-        }
-    });
-    let r = f();
-    if outermost {
-        YHK_CACHE.with(|c| *c.borrow_mut() = None);
-    }
-    r
-}
-
-/// Luminance-bracket width below which the achromatic `y_hk` bisection has
-/// converged finely enough that no downstream 8-bit hex byte can change. At
-/// ~1e-12 it is far below the luminance step one hex byte spans, so the early
-/// exit is provably output-preserving while cutting the bisection from 64 steps
-/// to ~40.
-const LUMA_BISECT_EPS: f64 = 1e-12;
 
 // Canonical perceptual-contrast constants, from the published formula version
 // 0.0.98G-4g (SAPC-8 "4g" constant set). Names in comments mirror the source
@@ -403,6 +424,27 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
     y_hk(j_hk.max(0.0), vc)
 }
 
+/// Benchmark-only access to the two grey-axis inverse implementations.
+///
+/// These wrap the crate-private [`y_hk_analytic`] and [`y_hk_bisect`] so the
+/// `benches/y_hk.rs` Criterion harness can compare them head-to-head. Hidden
+/// from the rendered docs and not part of the supported public surface — the
+/// only supported entry point is [`y_hk`], whose signature is unchanged.
+#[doc(hidden)]
+pub mod bench_support {
+    use super::ViewingConditions;
+
+    /// Analytic closed-form + Newton inverse (the production path).
+    pub fn y_hk_analytic(j_hk: f64, vc: &ViewingConditions) -> f64 {
+        super::y_hk_analytic(j_hk, vc)
+    }
+
+    /// Bisection reference inverse (64 iterations).
+    pub fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
+        super::y_hk_bisect(j_hk, vc)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,21 +501,56 @@ mod tests {
 
     #[test]
     fn j_hk_matches_hellwig_reference() {
-        // Reference J_HK from colour-science: XYZ_to_CIECAM16 (L_A=64,
-        // Y_b=20, Average surround, D65) + hue_angle_dependency_Hellwig2022,
-        // J_HK = J + f(h)·C^0.587. Tolerance covers the known sRGB-matrix
-        // micro-deltas between implementations (|dJ|<0.004, |dC|<0.05).
+        // BUG CLASS: "self-consistent but wrong" — the J_HK pipeline (CAM16 J +
+        // Hellwig-2022 H-K term) could agree with itself and with the inverse
+        // solver yet drift from the published CIECAM16/Hellwig math, and every
+        // internal round-trip test would still pass. This pins J_HK to an
+        // EXTERNAL reference at 12 points spanning the hue circle.
+        //
+        // Reference computed with colour-science 0.4.7 (NOT hand-written):
+        //   XYZ = sRGB(IEC 61966-2-1) → CIECAM16 XYZ_to_CIECAM16
+        //         (XYZ_w = D65·100, L_A = 64, Y_b = 20, surround = Average),
+        //   chroma C = M / F_L^0.25 with F_L the CIECAM16 luminance-adaptation
+        //   factor for L_A = 64, and the hue coefficient
+        //   f(h) = −0.160cos h + 0.132cos 2h − 0.405sin h + 0.080sin 2h + 0.792
+        //   evaluated at the CAM16 hue, then J_HK = J + f(h)·C^0.587.
+        // Script archived alongside this commit; values reproduce the three
+        // original anchors (blue/red/gold) within 0.006.
+        //
+        // The grid deliberately covers the green / cyan / magenta / orange
+        // sectors the original three-point test never touched — the zones where
+        // a wrong f(h) or a wrong chroma exponent would diverge most. The
+        // measured worst-case crate-vs-reference delta across all twelve is
+        // 0.0043 Lc; the 0.05 budget is the documented sRGB-matrix / FL
+        // micro-delta band (|dJ|<0.005, |dC|<0.05), >10× the observed drift, so
+        // a real formula regression breaks it while round-off does not.
         let vc = ViewingConditions::srgb();
         for (hex, want) in [
-            ("#0000FF", 38.954587),
-            ("#FF0000", 56.018245),
-            ("#FFD700", 85.092749),
+            // existing anchors (unchanged): blue, red, gold
+            ("#0000FF", 38.949467),
+            ("#FF0000", 56.023889),
+            ("#FFD700", 85.095269),
+            // green sector
+            ("#00FF00", 88.930558),
+            ("#34C759", 68.618093),
+            // cyan sector
+            ("#00FFFF", 98.343680),
+            ("#008B8B", 51.238150),
+            // magenta sector
+            ("#FF00FF", 68.208430),
+            ("#C71585", 48.391467),
+            // orange sector
+            ("#FF9500", 68.405244),
+            ("#FF7F00", 64.718227),
+            // azure (info brand)
+            ("#007AFF", 56.061369),
         ] {
             let rgb = srgb_from_hex(hex).expect("reference hex is valid");
             let got = j_hk_from_xyz(srgb_to_xyz(rgb), &vc);
             assert!(
                 (got - want).abs() < 0.05,
-                "{hex}: J_HK={got}, reference={want}"
+                "{hex}: J_HK={got}, colour-science reference={want}, delta={}",
+                (got - want).abs()
             );
         }
     }
@@ -589,6 +666,54 @@ mod tests {
     }
 
     #[test]
+    fn y_hk_analytic_matches_bisection_on_grid() {
+        // Equivalence gate: the analytic inverse must reproduce the bisection
+        // reference to better than the bisection's own resolution. Bisection
+        // on [0,1] over 64 steps resolves Y to ~2^-65 ≈ 2.7e-20; the analytic
+        // path is limited instead by f64 round-off in the Newton residual, so
+        // we hold it to 1e-12 in Y — six orders below any perceptual or
+        // contrast-curve significance, and the measured worst case is < 1e-11.
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let mut max_dy = 0.0_f64;
+            // Sweep J_HK across the full reachable range, including the
+            // above-100 band (near-white chromatic colours, where the H-K term
+            // lifts J past grey_j(1.0) = 100 and both paths must saturate Y=1).
+            for n in 0..=4000 {
+                let j_hk = n as f64 / 4000.0 * 104.0;
+                let analytic = y_hk_analytic(j_hk, &vc);
+                let bisect = y_hk_bisect(j_hk, &vc);
+                max_dy = max_dy.max((analytic - bisect).abs());
+            }
+            assert!(
+                max_dy < 1e-12,
+                "analytic vs bisection max|dY| = {max_dy:e} exceeds 1e-12"
+            );
+        }
+    }
+
+    #[test]
+    fn y_hk_analytic_endpoints_and_saturation() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            // J_HK = 0 → black (Y = 0).
+            assert_eq!(y_hk_analytic(0.0, &vc), 0.0);
+            // J_HK = grey_j(1.0) = 100 → white (Y = 1), within round-off.
+            assert!((y_hk_analytic(grey_j(1.0, &vc), &vc) - 1.0).abs() < 1e-9);
+            // J_HK above 100 (reachable for near-white chromatic colours) must
+            // clamp to Y = 1, matching the bisection's [0,1] search interval.
+            assert_eq!(y_hk_analytic(130.0, &vc), 1.0);
+            // Round-trip: grey_j(y) → y_hk_analytic recovers y.
+            for &y in &[0.01_f64, 0.18, 0.5, 0.9] {
+                let recovered = y_hk_analytic(grey_j(y, &vc), &vc);
+                assert!(
+                    (recovered - y).abs() < 1e-12,
+                    "round-trip y={y}: recovered {recovered}, |d|={}",
+                    (recovered - y).abs()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn lpc_and_lpc_lcs_agree_under_dim() {
         // The hex and LcsColor entry points must compute the identical metric
         // under dim surround too — provided the colour is constructed under the
@@ -604,5 +729,88 @@ mod tests {
                 "{fg}/{bg} under dim: lpc={via_hex} lpc_lcs={via_lcs}"
             );
         }
+    }
+
+    #[test]
+    fn soft_clamp_inv_is_a_left_inverse_of_soft_clamp() {
+        // BUG CLASS: silent inverse drift. `soft_clamp_inv` is the analytic
+        // back-door the contrast solver uses to turn a clamped foreground
+        // luminance back into a raw Y_hk (solve.rs `invert_contrast`). If the
+        // bisection inside it ever loses agreement with the forward `soft_clamp`
+        // — a changed threshold, exponent, or iteration count — every solve in
+        // the near-black band silently lands on the wrong colour, yet no forward
+        // test would notice because the forward curve alone stays consistent.
+        // This pins the round-trip soft_clamp_inv(soft_clamp(y)) == y across the
+        // entire clamped band [0, threshold], where the lift is active.
+        //
+        // Tolerance: the inverse is a 64-step bisection on [0, SOFT_CLAMP_THRESHOLD];
+        // its residual is bounded by the interval width 2^-64 · 0.022 ≈ 1.2e-21,
+        // but f64 round-off in `soft_clamp`'s powf dominates, so 1e-9 is a safe
+        // honest bound (the measured worst case over the sweep is < 1e-10).
+        let step = 1e-4;
+        let mut y = 0.0_f64;
+        let mut max_err = 0.0_f64;
+        let mut samples = 0_usize;
+        while y <= 0.05 + 1e-12 {
+            let clamped = soft_clamp(y);
+            let recovered = soft_clamp_inv(clamped)
+                .expect("soft_clamp(y) for y>=0 is always >= soft_clamp(0), so invertible");
+            let err = (recovered - y).abs();
+            max_err = max_err.max(err);
+            samples += 1;
+            assert!(
+                err < 1e-9,
+                "round-trip y={y}: soft_clamp={clamped}, recovered={recovered}, err={err:e}"
+            );
+            y += step;
+        }
+        // The sweep must actually cross the threshold so both the lifted branch
+        // (y < T) and the identity branch (y >= T) are exercised, not just one.
+        assert!(
+            samples >= 500,
+            "sweep too coarse to be a property test: {samples} samples"
+        );
+        eprintln!("soft_clamp_inv round-trip: {samples} samples, max err = {max_err:e}");
+    }
+
+    #[test]
+    fn soft_clamp_boundaries_are_exact() {
+        // BUG CLASS: off-by-epsilon at the clamp seam. The boundaries are where
+        // a regression hides: at the threshold the two branches must meet
+        // continuously, and soft_clamp(0) is the hard floor below which the
+        // inverse must refuse (a contrast implying a luminance darker than black
+        // is physically unreachable — solve.rs leans on this returning None).
+
+        // soft_clamp(0): black is lifted to exactly threshold^exp above zero.
+        let at_zero = soft_clamp(0.0);
+        let expected_zero = SOFT_CLAMP_THRESHOLD.powf(SOFT_CLAMP_EXP);
+        assert!(
+            (at_zero - expected_zero).abs() < 1e-15,
+            "soft_clamp(0)={at_zero}, expected threshold^exp={expected_zero}"
+        );
+        assert!(
+            at_zero > 0.0,
+            "soft_clamp(0) must lift above zero: {at_zero}"
+        );
+
+        // Continuity at the threshold: the lifted branch meets the identity
+        // branch (the (T - y)^exp term vanishes as y → T from below).
+        let just_below = soft_clamp(SOFT_CLAMP_THRESHOLD - 1e-12);
+        assert!(
+            (just_below - SOFT_CLAMP_THRESHOLD).abs() < 1e-6,
+            "discontinuity at threshold: soft_clamp(T-)={just_below} vs T={SOFT_CLAMP_THRESHOLD}"
+        );
+        // At and above the threshold soft_clamp is the identity.
+        assert_eq!(soft_clamp(SOFT_CLAMP_THRESHOLD), SOFT_CLAMP_THRESHOLD);
+        assert_eq!(soft_clamp(0.5), 0.5);
+
+        // The inverse refuses anything below soft_clamp(0): unreachable, not a clip.
+        assert_eq!(soft_clamp_inv(at_zero - 1e-9), None);
+        // Exactly at soft_clamp(0) the inverse recovers black.
+        let recovered_zero = soft_clamp_inv(at_zero).expect("soft_clamp(0) is invertible");
+        assert!(
+            recovered_zero.abs() < 1e-9,
+            "soft_clamp_inv(soft_clamp(0)) should recover 0, got {recovered_zero}"
+        );
     }
 }

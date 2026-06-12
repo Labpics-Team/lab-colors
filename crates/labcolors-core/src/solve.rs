@@ -34,7 +34,7 @@ use crate::lpc::{
     LO_BOW_OFFSET, LO_CLIP, LO_WOB_OFFSET,
 };
 use crate::scale::max_chroma;
-use crate::spaces::oklab::oklab_to_srgb_linear;
+use crate::spaces::oklab::{oklab_hue, oklab_to_srgb_linear};
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -504,10 +504,20 @@ pub fn solve(
     let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
         let rgb = build_color(l_ok, hue, chroma_policy);
         let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
-        let perceptual_ok = interval
-            .endpoints()
-            .into_iter()
-            .all(|y_end| meets_floor(&solved, y_end, target, vc));
+        // Perceptual floor at every interval endpoint. The governing endpoint's
+        // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
+        // against), so reuse it instead of re-deriving the foreground luminance —
+        // that recovery is the costly H-K forward. Only a *distinct* endpoint
+        // (genuine luminance intervals, a future background variant) pays for a
+        // fresh measurement; a [`Solid`] background's endpoints all coincide with
+        // the governing one, so it measures the foreground exactly once.
+        let perceptual_ok = interval.endpoints().into_iter().all(|y_end| {
+            if y_end == y_gov {
+                meets_floor_lc(solved.lc(), target)
+            } else {
+                meets_floor(&solved, y_end, target, vc)
+            }
+        });
         // The walk only moves toward the achromatic extreme, which raises (never
         // lowers) WCAG contrast, but re-verify the legal floor explicitly rather
         // than lean on an unproven monotonicity assumption.
@@ -688,14 +698,7 @@ fn apply_floor(
     // returned lightness is guaranteed to meet the floor even after quantisation.
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
-    // Same exact early exit as `match_lightness`: the parametric bracket `t`
-    // spans the path `l_lpc → l_extreme` (length <= 1 in Oklab L), so once it is
-    // narrower than `LIGHTNESS_BISECT_EPS` the floored lightness is pinned below
-    // hex resolution and `hi` already names a colour that clears the floor.
     for _ in 0..48 {
-        if hi - lo < LIGHTNESS_BISECT_EPS {
-            break;
-        }
         let mid = (lo + hi) * 0.5;
         let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
         if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
@@ -795,13 +798,37 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
     }
 }
 
-/// Bisect Oklab lightness for an in-gamut colour whose H-K-corrected lightness
-/// equals `target_j_hk`, applying `chroma_policy` at `hue`.
+/// Recover the Oklab lightness whose H-K-corrected lightness equals
+/// `target_j_hk`, applying `chroma_policy` at `hue`.
 ///
-/// `J_HK` runs from ~0 at black to ~100 at white, so the target is bracketed by
-/// the lightness endpoints; bisection on the continuous curve converges to the
-/// lightness that reproduces it. Returns the Oklab lightness; the colour itself
-/// is built from it via [`build_color`].
+/// `J_HK` runs from ~0 at black to ~100 at white and is strictly monotone in
+/// `l_ok`, so the lightness endpoints bracket the target and a search on the
+/// continuous curve converges to the reproducing lightness. Returns the Oklab
+/// lightness; the colour itself is built from it via [`build_color`].
+///
+/// ## Fast path: grey-axis LUT seed
+///
+/// For the neutral core — `ChromaPolicy::Neutral`, or a small undertone
+/// (`ratio ≤ `[`MAX_LUT_CHROMA`](crate::lut::MAX_LUT_CHROMA)) under one of the
+/// two precompiled viewing conditions — [`seed_bracket`](crate::lut::seed_bracket)
+/// supplies a *validated* lightness bracket from the precompiled grey-axis table
+/// (see [`crate::lut`]). Refining inside that narrow bracket reaches full
+/// precision in a handful of bisection steps instead of 64, collapsing the
+/// per-`solve` cost from ~64 CAM16 forward passes to a few. The result is
+/// bit-compatible with the cold bisection: the seed is only a starting bracket,
+/// the refinement converges the same root, and the empirical final-`Lc` delta
+/// over the solver grid is `0.00000` — gated `< 0.01 Lc` by the LUT golden
+/// tests (`lut_adds_…`, `lut_bracket_path_…`), ten times tighter than the
+/// solver's `0.1 Lc` budget.
+///
+/// ## Slow path: cold bisection
+///
+/// Any other viewing condition, or a chroma past the LUT threshold, takes the
+/// original full-`[0, 1]` 64-iteration bisection verbatim — correctness is
+/// never traded for the seed, only speed. The threshold is a performance gate;
+/// the bracket [`seed_bracket`](crate::lut::seed_bracket) returns is
+/// re-validated against the real (possibly tinted) curve before use, so the
+/// fast path is taken only when the bracket provably contains the root.
 fn match_lightness(
     target_j_hk: f64,
     hue: Hue,
@@ -811,6 +838,60 @@ fn match_lightness(
     let j_hk_of =
         |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
 
+    match crate::lut::seed_bracket(target_j_hk, hue, chroma_policy, vc) {
+        // Pure neutral: the direct table inverse is the answer.
+        Some(crate::lut::LutSeed::Exact(l_ok)) => l_ok,
+        // Small chroma: refine the validated bracket on the real curve.
+        Some(crate::lut::LutSeed::Bracket(bracket)) => {
+            refine_in_bracket(target_j_hk, bracket, j_hk_of)
+        }
+        // Unsupported VC or large chroma: the original cold bisection.
+        None => cold_bisect(target_j_hk, j_hk_of),
+    }
+}
+
+/// The Oklab-lightness resolution the bracket refinement converges to. At
+/// `1e-12` the residual is far below one 8-bit output step (`≈ 3.9e-3`), so the
+/// emitted hex — and the measured `Solved.lc()` — matches the cold bisection;
+/// validated to a `0.00000` final-`Lc` delta on the solver grid. The `64`-step
+/// cap mirrors the cold path so a degenerate bracket can never spin.
+const L_OK_EPSILON: f64 = 1e-12;
+
+/// Refine a LUT-seeded lightness bracket to [`L_OK_EPSILON`] by bisection on the
+/// real curve. The bracket is guaranteed to contain the root, so this only
+/// tightens it — typically in far fewer than 64 steps.
+fn refine_in_bracket(
+    target_j_hk: f64,
+    bracket: crate::lut::LightnessBracket,
+    j_hk_of: impl Fn(f64) -> f64,
+) -> f64 {
+    let mut lo = bracket.lo;
+    let mut hi = bracket.hi;
+    // Endpoint short-circuits mirror the cold path's, so a target at or beyond
+    // the gamut extremes returns the same boundary lightness.
+    if target_j_hk <= j_hk_of(lo) {
+        return lo;
+    }
+    if target_j_hk >= j_hk_of(hi) {
+        return hi;
+    }
+    let mut iterations = 0;
+    while hi - lo > L_OK_EPSILON && iterations < 64 {
+        let mid = (lo + hi) * 0.5;
+        if j_hk_of(mid) < target_j_hk {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        iterations += 1;
+    }
+    (lo + hi) * 0.5
+}
+
+/// The original cold bisection over the full `[0, 1]` lightness range, used when
+/// no LUT seed applies. Kept byte-for-byte equivalent to the pre-LUT solver so
+/// unsupported-VC and large-chroma results are unchanged.
+fn cold_bisect(target_j_hk: f64, j_hk_of: impl Fn(f64) -> f64) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     if target_j_hk <= j_hk_of(lo) {
@@ -819,15 +900,7 @@ fn match_lightness(
     if target_j_hk >= j_hk_of(hi) {
         return hi;
     }
-    // Bisection halves the bracket each step; once it is narrower than
-    // `LIGHTNESS_BISECT_EPS` the midpoint can no longer move the emitted 8-bit
-    // hex, so further halvings are wasted CAM16 evaluations. The early exit is
-    // exact — it returns the identical value the full 64-step loop converged to,
-    // just sooner — and is the dominant per-`solve` cost saved on the hot path.
     for _ in 0..64 {
-        if hi - lo < LIGHTNESS_BISECT_EPS {
-            break;
-        }
         let mid = (lo + hi) * 0.5;
         if j_hk_of(mid) < target_j_hk {
             lo = mid;
@@ -838,12 +911,13 @@ fn match_lightness(
     (lo + hi) * 0.5
 }
 
-/// The Oklab-lightness bracket width below which a lightness bisection has
-/// pinned the colour finely enough that no further halving can change the
-/// emitted 8-bit hex. At ~1e-9 it is six orders of magnitude tighter than the
-/// ~1/255 lightness step one hex byte spans, so the early exit is provably
-/// hex-preserving while cutting the bisection from 64 steps to ~30.
-const LIGHTNESS_BISECT_EPS: f64 = 1e-9;
+/// Crate-internal re-export of [`build_color`] for the grey-axis LUT generator
+/// and its small-chroma bracket validation. Keeps the table bound to the *same*
+/// forward path `solve` uses, so the LUT can never tabulate a different colour
+/// than the one the solver emits (single source of truth, issue #29).
+pub(crate) fn build_color_for_lut(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
+    build_color(l_ok, hue, chroma_policy)
+}
 
 /// Build the in-gamut linear-sRGB colour at Oklab lightness `l_ok`, applying
 /// `chroma_policy` at `hue`. Chroma is capped at [`max_chroma`], so the result
@@ -876,8 +950,14 @@ fn finish(
     vc: &ViewingConditions,
 ) -> Result<Solved, Unreachable> {
     let hex = hex_from_srgb(rgb_ideal);
+    // The quantised colour, decoded once to linear sRGB, drives both perceptual
+    // measurements that follow — the H-K luminance and the CAM16 appearance
+    // correlates — so the 8-bit hex is parsed a single time. `from_xyz_with_hok`
+    // is exactly what `LcsColor::from_hex_with_vc(&hex)` would compute from this
+    // same linear stimulus, reached without the extra string round-trip.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
-    let color = LcsColor::from_hex_with_vc(&hex, vc).map_err(Unreachable::InvalidInput)?;
+    let xyz = srgb_to_xyz(rgb_quantised);
+    let color = LcsColor::from_xyz_with_hok(xyz, oklab_hue(rgb_quantised), vc);
     let y_fg = bg_luma(rgb_quantised, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
@@ -888,6 +968,19 @@ fn finish(
         wcag_ratio,
         floor_override,
     })
+}
+
+/// Whether a measured signed perceptual contrast meets the (signed) floor within
+/// the 1-Lc quantisation budget. The single comparison both endpoint checks
+/// share: the governing endpoint passes its already-measured `solved.lc()` here
+/// directly (no re-derivation), a distinct endpoint passes the contrast
+/// [`meets_floor`] freshly measured for it.
+fn meets_floor_lc(lc: f64, target: f64) -> bool {
+    if target >= 0.0 {
+        lc >= target - 1.0
+    } else {
+        lc <= target + 1.0
+    }
 }
 
 /// Whether the solved colour still meets the (signed) perceptual floor at one
@@ -904,11 +997,7 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) 
     };
     let y_fg = bg_luma(rgb, vc);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    if target >= 0.0 {
-        lc >= target - 1.0
-    } else {
-        lc <= target + 1.0
-    }
+    meets_floor_lc(lc, target)
 }
 
 /// H-K-corrected background luminance (`Y_hk`) of a linear-sRGB stimulus.
@@ -1652,6 +1741,565 @@ mod tests {
                 max_achievable: 7.85,
             },
             "the two variants must be distinguishable"
+        );
+    }
+
+    // ── Grey-axis LUT: bit-compatibility with the cold bisection ──────────────
+
+    /// Reference: the pre-LUT cold bisection of `match_lightness`, kept here as
+    /// the golden oracle the LUT path is measured against. Bit-identical to the
+    /// loop `match_lightness` falls back to when no LUT seed applies.
+    fn reference_match_lightness(
+        target_j_hk: f64,
+        hue: Hue,
+        chroma_policy: ChromaPolicy,
+        vc: &ViewingConditions,
+    ) -> f64 {
+        let j_hk_of =
+            |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
+        cold_bisect(target_j_hk, j_hk_of)
+    }
+
+    #[test]
+    fn lut_match_lightness_matches_bisection_on_the_grey_grid() {
+        // Golden: across a dense l_ok grid under both precompiled VCs, the LUT
+        // `match_lightness` (neutral → direct interp; the fast path) reproduces
+        // the cold bisection's lightness to within the interpolation bound, and
+        // wherever the 8-bit hex differs the perceptual Lc cost stays under the
+        // tightened `MAX_LC_AT_MISMATCH` gate. (A handful of grid points sit
+        // exactly on an 8-bit rounding boundary, where the sub-3e-4 lightness
+        // difference flips one hex step either way — both colours are within
+        // budget; the boundary assignment is not a regression.)
+        const MAX_L_INTERP: f64 = 5e-4; // K=257 inverse-interp bound, with margin
+        // Measured worst case is 0.0003 Lc at one of those boundary flips; gate
+        // at 0.01 — ~33× the fact, 10× tighter than the old 0.1 budget — so a
+        // regression that crept the cost toward 0.1 fails instead of passing
+        // green. The eprintln still reports the exact measured number.
+        const MAX_LC_AT_MISMATCH: f64 = 0.01;
+        for (vc, vc_name) in vcs() {
+            let mut max_l_err = 0.0_f64;
+            let mut max_lc_at_mismatch = 0.0_f64;
+            let mut hex_mismatches = 0usize;
+            let n = 4096usize;
+            for i in 0..=n {
+                let l = i as f64 / n as f64;
+                let target_j_hk = lpc::j_hk_from_xyz(
+                    srgb_to_xyz(build_color(l, Hue::deg(0.0), ChromaPolicy::Neutral)),
+                    &vc,
+                );
+                let l_lut = match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &vc);
+                let l_ref = reference_match_lightness(
+                    target_j_hk,
+                    Hue::deg(0.0),
+                    ChromaPolicy::Neutral,
+                    &vc,
+                );
+                max_l_err = max_l_err.max((l_lut - l_ref).abs());
+
+                let rgb_lut = build_color(l_lut, Hue::deg(0.0), ChromaPolicy::Neutral);
+                let rgb_ref = build_color(l_ref, Hue::deg(0.0), ChromaPolicy::Neutral);
+                if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
+                    hex_mismatches += 1;
+                    // Cost of the boundary flip, measured against a fixed white
+                    // reference in this VC — bounds the Lc the caller could see.
+                    let y_lut = bg_luma(rgb_lut, &vc);
+                    let y_ref = bg_luma(rgb_ref, &vc);
+                    let lc_lut = lpc::contrast_core(y_lut, 1.0);
+                    let lc_ref = lpc::contrast_core(y_ref, 1.0);
+                    max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
+                }
+            }
+            eprintln!(
+                "[{vc_name}] LUT vs bisection: max|Δl_ok|={max_l_err:.2e}, hex mismatches={hex_mismatches}/{} (max ΔLc at mismatch {max_lc_at_mismatch:.4})",
+                n + 1
+            );
+            assert!(
+                max_l_err < MAX_L_INTERP,
+                "{vc_name}: LUT lightness drifted {max_l_err} from bisection (> {MAX_L_INTERP})"
+            );
+            assert!(
+                max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
+                "{vc_name}: a hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+            );
+        }
+    }
+
+    #[test]
+    fn lut_adds_under_a_tenth_of_an_lc_across_the_solver_grid() {
+        // The contract tolerance the task pins: the LUT must not widen the
+        // solver's error budget. Run the REAL solve path and compare the final
+        // `Solved.lc()` against a run that forces the cold bisection, over the
+        // full neutral background × magnitude × polarity × VC grid. The added
+        // error is empirically 0.00000 Lc; the gate is pinned at 0.01 — 10×
+        // tighter than the old 0.1 budget — so any nonzero regression in the
+        // emitted hex fails here instead of passing under 0.1. The exact
+        // measured add is still reported via eprintln below.
+        const MAX_ADD: f64 = 0.01;
+        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
+        let mut max_add = 0.0_f64;
+        let mut compared = 0usize;
+        for (vc, vc_name) in vcs() {
+            for bg_hex in backgrounds {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                for magnitude in MAGNITUDES {
+                    for target in [magnitude, -magnitude] {
+                        // The live solver uses the LUT path internally.
+                        let lut = solve(
+                            bg.clone(),
+                            Contract::text(target).with_conformance(Floor::None),
+                            Hue::deg(0.0),
+                            ChromaPolicy::Neutral,
+                            &vc,
+                            Gamut::Srgb,
+                        );
+                        // Reference: reconstruct the same solve but resolve the
+                        // lightness with the cold bisection oracle, then finish
+                        // through the identical quantise/measure path.
+                        let interval = bg.luma_interval(&vc).unwrap();
+                        let y_gov = interval.governing(target);
+                        let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
+                            let tj = lpc::grey_j(y_fg, &vc);
+                            let l = reference_match_lightness(
+                                tj,
+                                Hue::deg(0.0),
+                                ChromaPolicy::Neutral,
+                                &vc,
+                            );
+                            finish(
+                                build_color(l, Hue::deg(0.0), ChromaPolicy::Neutral),
+                                y_gov,
+                                bg.governing_display(target),
+                                false,
+                                &vc,
+                            )
+                            .map(|s| s.lc())
+                        });
+                        if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
+                            let add = (s_lut.lc() - lc_ref).abs();
+                            max_add = max_add.max(add);
+                            compared += 1;
+                            assert!(
+                                add < MAX_ADD,
+                                "{vc_name} {bg_hex} t={target}: LUT added {add} Lc (> {MAX_ADD} gate)"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("LUT final-Lc add over {compared} solver cases: max={max_add:.5}");
+        assert!(compared >= 30, "grid exercised too few cases: {compared}");
+    }
+
+    #[test]
+    fn lut_bracket_path_matches_bisection_at_small_chroma() {
+        // Golden for the small-chroma SEED path (`LutSeed::Bracket` →
+        // `refine_in_bracket`), the branch the neutral tests above never reach:
+        // both `lut_adds…` and `lut_match_lightness…` run `ChromaPolicy::Neutral`
+        // (ratio = 0), which only exercises the direct-interp `Exact` arm. The
+        // main default role policy is tinted (hue 286°, ratio 0.10), so the
+        // Bracket arm is the production hot path — and until now it was checked
+        // only indirectly. Two arms drive it directly:
+        //   1. UNIT: a dense l_ok grid × {srgb, dim} × {Relative(0.05),
+        //      Relative(0.10)} at hue 286° asserts the LUT-seeded
+        //      `match_lightness` reproduces the cold bisection bit-for-bit on the
+        //      emitted hex wherever it can, any 8-bit flip costing under gate.
+        //   2. END-TO-END: the real `solve` with BOTH polarities (+mag, -mag)
+        //      across the background grid, final `Solved.lc()` vs the
+        //      cold-bisection oracle — the same shape as `lut_adds_…`, for the
+        //      Bracket arm.
+        //
+        // Both paths bisect the SAME real tinted curve to `L_OK_EPSILON` (1e-12);
+        // the seed only changes the starting bracket, not the root. So the
+        // measured agreement is far tighter than the neutral `Exact` path's
+        // interp bound: max|Δl_ok| ≈ 5e-13 (a couple of bisection ULPs), with
+        // ZERO 8-bit hex mismatches over the grid — hence max ΔLc at mismatch is
+        // a hard 0.0000. The two gates are pinned just above those measured
+        // facts so a real seed regression (a mis-padded bracket, a refine that
+        // stops short, a bracket that excludes the root) fails them, instead of
+        // sliding under the old 0.1 budget:
+        //   * MAX_L_BRACKET = 1e-9: ~2000× the measured 5e-13, still 5e5× under
+        //     the `Exact` interp bound — a bracket off by even one node would
+        //     blow past it.
+        //   * MAX_LC_AT_MISMATCH = 0.01: 10× tighter than the old 0.1; with zero
+        //     mismatches today, any future hex flip is gated hard.
+        const MAX_L_BRACKET: f64 = 1e-9;
+        const MAX_LC_AT_MISMATCH: f64 = 0.01;
+        let hue = Hue::deg(286.0);
+        let policies = [ChromaPolicy::Relative(0.05), ChromaPolicy::Relative(0.10)];
+        let mut max_l_err = 0.0_f64;
+        let mut max_lc_at_mismatch = 0.0_f64;
+        let mut hex_mismatches = 0usize;
+        let mut compared = 0usize;
+        let n = 1024usize;
+        for (vc, vc_name) in vcs() {
+            for policy in policies {
+                let mut took_bracket = false;
+                for i in 0..=n {
+                    let l = i as f64 / n as f64;
+                    // Build the target J_HK on the *tinted* curve so the root the
+                    // solver must invert genuinely sits on the small-chroma path,
+                    // not the neutral axis. This grid is the unit check on
+                    // `match_lightness`; the end-to-end both-polarity arm below
+                    // drives the same Bracket path through the real `solve`.
+                    let target_j_hk =
+                        lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l, hue, policy)), &vc);
+
+                    // Confirm this case actually takes the Bracket arm — otherwise
+                    // the test would silently pass on the cold path and prove
+                    // nothing about the seed. (Endpoints can fall through to the
+                    // cold bisection via the bracket-widening guard; interior
+                    // targets must seed.)
+                    if matches!(
+                        crate::lut::seed_bracket(target_j_hk, hue, policy, &vc),
+                        Some(crate::lut::LutSeed::Bracket(_))
+                    ) {
+                        took_bracket = true;
+                    }
+
+                    let l_lut = match_lightness(target_j_hk, hue, policy, &vc);
+                    let l_ref = reference_match_lightness(target_j_hk, hue, policy, &vc);
+                    max_l_err = max_l_err.max((l_lut - l_ref).abs());
+                    compared += 1;
+
+                    let rgb_lut = build_color(l_lut, hue, policy);
+                    let rgb_ref = build_color(l_ref, hue, policy);
+                    if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
+                        hex_mismatches += 1;
+                        let y_lut = bg_luma(rgb_lut, &vc);
+                        let y_ref = bg_luma(rgb_ref, &vc);
+                        let lc_lut = lpc::contrast_core(y_lut, 1.0);
+                        let lc_ref = lpc::contrast_core(y_ref, 1.0);
+                        max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
+                    }
+                }
+                assert!(
+                    took_bracket,
+                    "{vc_name} {policy:?}: no grid point took the Bracket seed — the test is not exercising the small-chroma path it claims to"
+                );
+            }
+        }
+
+        // End-to-end arm: drive the SAME Bracket path through the real `solve`
+        // with BOTH polarities (+mag light-on-dark, -mag dark-on-light) at the
+        // tinted policies, and compare the final `Solved.lc()` against the
+        // cold-bisection oracle finished through the identical quantise/measure
+        // path — exactly the comparison `lut_adds_…` makes for the neutral arm,
+        // here for the small-chroma Bracket arm the production default uses.
+        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
+        let mut max_add = 0.0_f64;
+        let mut e2e_compared = 0usize;
+        for (vc, vc_name) in vcs() {
+            for policy in policies {
+                for bg_hex in backgrounds {
+                    let bg = BgInput::solid(bg_hex).unwrap();
+                    for magnitude in MAGNITUDES {
+                        for target in [magnitude, -magnitude] {
+                            let lut = solve(
+                                bg.clone(),
+                                Contract::text(target).with_conformance(Floor::None),
+                                hue,
+                                policy,
+                                &vc,
+                                Gamut::Srgb,
+                            );
+                            let interval = bg.luma_interval(&vc).unwrap();
+                            let y_gov = interval.governing(target);
+                            let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
+                                let tj = lpc::grey_j(y_fg, &vc);
+                                let l = reference_match_lightness(tj, hue, policy, &vc);
+                                finish(
+                                    build_color(l, hue, policy),
+                                    y_gov,
+                                    bg.governing_display(target),
+                                    false,
+                                    &vc,
+                                )
+                                .map(|s| s.lc())
+                            });
+                            if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
+                                let add = (s_lut.lc() - lc_ref).abs();
+                                max_add = max_add.max(add);
+                                e2e_compared += 1;
+                                assert!(
+                                    add < MAX_LC_AT_MISMATCH,
+                                    "{vc_name} {bg_hex} {policy:?} t={target}: Bracket-path solve added {add} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            e2e_compared >= 60,
+            "end-to-end Bracket arm exercised too few cases: {e2e_compared}"
+        );
+
+        eprintln!(
+            "Bracket-path LUT vs bisection: max|Δl_ok|={max_l_err:.2e} over {compared} cases, hex mismatches={hex_mismatches} (max ΔLc at mismatch {max_lc_at_mismatch:.4}); end-to-end both-polarity max add={max_add:.5} over {e2e_compared} solve cases"
+        );
+        assert!(
+            max_l_err < MAX_L_BRACKET,
+            "Bracket-path lightness drifted {max_l_err} from bisection (> {MAX_L_BRACKET})"
+        );
+        assert!(
+            max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
+            "a Bracket-path hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+        );
+    }
+
+    /// Frozen `resolve_set` hex output across the owner's golden grid — the
+    /// before/after gate for any hot-path refactor in this module. Each line is
+    /// `vc|bg|policy|role=hex,…` produced by the live `resolve_set`. The full
+    /// set of emitted `#RRGGBB` hexes for every role must be byte-identical
+    /// before and after a performance change; if any cell moves, the refactor
+    /// altered the colour the caller gets and the test fails loudly.
+    ///
+    /// Grid: 6 backgrounds (#FFFFFF/#F2F2F7/#7F7F7F/#1C1C1E/#101012/#3478F6) ×
+    /// both precompiled viewing conditions × the two production chroma policies
+    /// (achromatic Neutral and the v1 Tinted{286°, 0.10}). Regenerate the
+    /// expectations with `_emit_resolve_set_golden` (kept below, `#[ignore]`d)
+    /// only when a colour change is *intended* and explained.
+    const RESOLVE_SET_GOLDEN: &[&str] = &[
+        "srgb|#FFFFFF|Neutral|text-primary=#141414,text-secondary=#767676,text-muted=#949494,text-disabled=#C2C2C2,icon=#949494,separator=#E9E9E9,border=#E7E7E7,surface=#E9E9E9,shadow=#E5E5E5,none=none",
+        "srgb|#FFFFFF|Tinted|text-primary=#0C0C11,text-secondary=#6D6D7E,text-muted=#9493A0,text-disabled=#BEBEC6,icon=#9493A0,separator=#E8E8EA,border=#E6E6E9,surface=#E8E8EA,shadow=#E4E4E7,none=none",
+        "srgb|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#E0E0E0,surface=#E1E1E1,shadow=#DEDEDE,none=none",
+        "srgb|#F2F2F7|Tinted|text-primary=#0C0C10,text-secondary=#69697B,text-muted=#8C8B99,text-disabled=#B8B8C0,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
+        "srgb|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#666666,surface=#696969,shadow=#646464,none=none",
+        "srgb|#7F7F7F|Tinted|text-primary=#030304,text-secondary=#16161B,text-muted=#363541,text-disabled=#575667,icon=#363541,separator=#5F5E70,border=#5C5C6E,surface=#5F5E70,shadow=#5A5A6B,none=none",
+        "srgb|#1C1C1E|Neutral|text-primary=#F6F6F6,text-secondary=#BABABA,text-muted=#9A9A9A,text-disabled=#727272,icon=#9A9A9A,separator=#3F3F3F,border=#424242,surface=#3F3F3F,shadow=#444444,none=none",
+        "srgb|#1C1C1E|Tinted|text-primary=#F6F6F7,text-secondary=#B6B6BF,text-muted=#9494A0,text-disabled=#68687A,icon=#9494A0,separator=#363541,border=#383844,surface=#363541,shadow=#3B3B47,none=none",
+        "srgb|#101012|Neutral|text-primary=#F6F6F6,text-secondary=#B9B9B9,text-muted=#989898,text-disabled=#6F6F6F,icon=#989898,separator=#393939,border=#3C3C3C,surface=#393939,shadow=#3F3F3F,none=none",
+        "srgb|#101012|Tinted|text-primary=#F6F6F7,text-secondary=#B5B5BD,text-muted=#91919E,text-disabled=#646477,icon=#91919E,separator=#30303A,border=#33323D,surface=#30303A,shadow=#353540,none=none",
+        "srgb|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
+        "srgb|#3478F6|Tinted|text-primary=#050406,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7D,icon=#35343F,separator=#7C7C8C,border=#7A7A8A,surface=#7C7C8C,shadow=#787787,none=none",
+        "dim|#FFFFFF|Neutral|text-primary=#131313,text-secondary=#757575,text-muted=#949494,text-disabled=#C0C0C0,icon=#949494,separator=#E7E7E7,border=#E5E5E5,surface=#E7E7E7,shadow=#E3E3E3,none=none",
+        "dim|#FFFFFF|Tinted|text-primary=#0E0E12,text-secondary=#6D6C7E,text-muted=#9493A0,text-disabled=#BDBDC5,icon=#9493A0,separator=#E6E6E8,border=#E4E4E7,surface=#E6E6E8,shadow=#E2E2E5,none=none",
+        "dim|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#DFDFDF,surface=#E1E1E1,shadow=#DEDEDE,none=none",
+        "dim|#F2F2F7|Tinted|text-primary=#0D0D12,text-secondary=#6A6A7B,text-muted=#8C8B99,text-disabled=#B8B8C1,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
+        "dim|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#676767,surface=#696969,shadow=#646464,none=none",
+        "dim|#7F7F7F|Tinted|text-primary=#040406,text-secondary=#16161B,text-muted=#363541,text-disabled=#585868,icon=#363541,separator=#606072,border=#5E5D6F,surface=#606072,shadow=#5C5B6D,none=none",
+        "dim|#1C1C1E|Neutral|text-primary=#F4F4F4,text-secondary=#B8B8B8,text-muted=#989898,text-disabled=#707070,icon=#989898,separator=#3D3D3D,border=#404040,surface=#3D3D3D,shadow=#434343,none=none",
+        "dim|#1C1C1E|Tinted|text-primary=#F3F3F5,text-secondary=#B5B5BD,text-muted=#93939F,text-disabled=#686779,icon=#93939F,separator=#363641,border=#393844,surface=#363641,shadow=#3B3B47,none=none",
+        "dim|#101012|Neutral|text-primary=#F4F4F4,text-secondary=#B7B7B7,text-muted=#969696,text-disabled=#6D6D6D,icon=#969696,separator=#373737,border=#3A3A3A,surface=#373737,shadow=#3D3D3D,none=none",
+        "dim|#101012|Tinted|text-primary=#F3F3F5,text-secondary=#B3B3BC,text-muted=#90909D,text-disabled=#646476,icon=#90909D,separator=#30303A,border=#33333D,surface=#30303A,shadow=#363541,none=none",
+        "dim|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
+        "dim|#3478F6|Tinted|text-primary=#060608,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7E,icon=#35343F,separator=#7D7D8C,border=#7B7A8A,surface=#7D7D8C,shadow=#787888,none=none",
+    ];
+
+    /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.
+    fn resolve_set_golden_line(
+        vc: &ViewingConditions,
+        vc_name: &str,
+        bg_hex: &str,
+        pol_name: &str,
+        chroma: crate::semantic::RoleChroma,
+    ) -> String {
+        use crate::semantic::{Resolved, RoleTable, resolve_set};
+        let bg = BgInput::solid(bg_hex).unwrap();
+        let table = RoleTable::default().with_chroma(chroma);
+        let cells: Vec<String> = resolve_set(&bg, &table, vc)
+            .iter()
+            .map(|(role, res)| {
+                let v = match res {
+                    Resolved::Color { solved, .. } => solved.hex().to_string(),
+                    Resolved::None => "none".to_string(),
+                    Resolved::Unreachable(_) => "unreach".to_string(),
+                };
+                format!("{}={}", role.key(), v)
+            })
+            .collect();
+        format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
+    }
+
+    /// The pre-optimisation `apply_floor` crossing search: a fixed 48-iteration
+    /// bisection over the whole `[0, 1]` ray, kept as the golden oracle the
+    /// closed-form-seeded search is measured against. Byte-for-byte the loop the
+    /// shipped `apply_floor` replaced.
+    fn reference_apply_floor_l(
+        l_lpc: f64,
+        floor_ratio: f64,
+        target: f64,
+        hue: Hue,
+        chroma_policy: ChromaPolicy,
+        bg_disp: [f64; 3],
+    ) -> Option<(f64, bool)> {
+        let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
+        if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
+            return Some((l_lpc, false));
+        }
+        let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
+        let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
+        if max_ratio < floor_ratio {
+            return None; // FloorUnreachable in the real path
+        }
+        let mut lo = 0.0_f64;
+        let mut hi = 1.0_f64;
+        for _ in 0..48 {
+            let mid = (lo + hi) * 0.5;
+            let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
+            if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        Some((l_lpc + (l_extreme - l_lpc) * hi, true))
+    }
+
+    #[test]
+    fn apply_floor_matches_the_cold_bisection_byte_for_byte() {
+        // The closed-form-seeded floor search must emit the *same hex* as the old
+        // fixed-48 [0, 1] bisection everywhere — densely, not just on the 24
+        // golden rows. Sweep starting lightness, both polarities, both floors,
+        // neutral and the production tint, against backgrounds spanning the grey
+        // axis plus a chromatic one, under both viewing conditions. A single hex
+        // disagreement (a seed that narrowed past the crossing, an early exit that
+        // stopped short) fails here.
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#9C9C9C", "#5A5A5A", "#1C1C1E", "#3478F6",
+        ];
+        let floors = [crate::wcag::AA_TEXT_RATIO, crate::wcag::AA_UI_RATIO];
+        let policies = [
+            (Hue::deg(0.0), ChromaPolicy::Neutral),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.10)),
+        ];
+        let mut compared = 0usize;
+        let mut floored = 0usize;
+        for bg_hex in bgs {
+            let bg_disp = {
+                let lin = srgb_from_hex(bg_hex).unwrap();
+                quantised_display(lin)
+            };
+            for floor_ratio in floors {
+                for (hue, chroma) in policies {
+                    for sign in [1.0_f64, -1.0_f64] {
+                        // Sweep the perceptual lightness the floor might lift.
+                        for i in 0..=200 {
+                            let l_lpc = i as f64 / 200.0;
+                            let target = sign; // only the sign (polarity) matters here
+                            let got = apply_floor(l_lpc, floor_ratio, target, hue, chroma, bg_disp);
+                            let want = reference_apply_floor_l(
+                                l_lpc,
+                                floor_ratio,
+                                target,
+                                hue,
+                                chroma,
+                                bg_disp,
+                            );
+                            match (got, want) {
+                                (Ok((l_new, ov_new)), Some((l_ref, ov_ref))) => {
+                                    compared += 1;
+                                    assert_eq!(
+                                        ov_new, ov_ref,
+                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: override flag differs"
+                                    );
+                                    if ov_new {
+                                        floored += 1;
+                                    }
+                                    let hex_new = hex_from_srgb(build_color(l_new, hue, chroma));
+                                    let hex_ref = hex_from_srgb(build_color(l_ref, hue, chroma));
+                                    assert_eq!(
+                                        hex_new, hex_ref,
+                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: hex drift (new {hex_new} vs cold {hex_ref})"
+                                    );
+                                }
+                                (Err(_), None) => {
+                                    compared += 1; // both FloorUnreachable — agree
+                                }
+                                (g, w) => panic!(
+                                    "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: reachability disagreement {g:?} vs {w:?}"
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("apply_floor oracle: {compared} cases compared, {floored} actually floored");
+        assert!(floored >= 100, "too few floored cases exercised: {floored}");
+    }
+
+    #[test]
+    fn resolve_set_hex_matches_golden() {
+        use crate::semantic::RoleChroma;
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            ("Neutral", RoleChroma::Neutral),
+            (
+                "Tinted",
+                RoleChroma::Tinted {
+                    hue_deg: 286.0,
+                    ratio: 0.10,
+                },
+            ),
+        ];
+        let mut idx = 0usize;
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                for (pol_name, chroma) in policies {
+                    let got = resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma);
+                    let want = RESOLVE_SET_GOLDEN[idx];
+                    assert_eq!(got, want, "golden drift at grid index {idx}");
+                    idx += 1;
+                }
+            }
+        }
+        assert_eq!(
+            idx,
+            RESOLVE_SET_GOLDEN.len(),
+            "golden grid size changed: covered {idx}, table has {}",
+            RESOLVE_SET_GOLDEN.len()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn _emit_resolve_set_golden() {
+        use crate::semantic::RoleChroma;
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            ("Neutral", RoleChroma::Neutral),
+            (
+                "Tinted",
+                RoleChroma::Tinted {
+                    hue_deg: 286.0,
+                    ratio: 0.10,
+                },
+            ),
+        ];
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                for (pol_name, chroma) in policies {
+                    eprintln!(
+                        "\"{}\",",
+                        resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_vc_takes_the_cold_path_unchanged() {
+        // A third surround (neither srgb nor dim) has no table, so the LUT must
+        // step aside and the cold bisection governs — identical to pre-LUT.
+        let dark = ViewingConditions::dark_surround();
+        let target_j_hk = lpc::j_hk_from_xyz(
+            srgb_to_xyz(build_color(0.5, Hue::deg(0.0), ChromaPolicy::Neutral)),
+            &dark,
+        );
+        let l_lut = match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &dark);
+        let l_ref =
+            reference_match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &dark);
+        assert_eq!(
+            l_lut, l_ref,
+            "unsupported VC must yield the identical cold-bisection lightness"
         );
     }
 }

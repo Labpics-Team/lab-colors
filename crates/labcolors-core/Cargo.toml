@@ -10,3 +10,18 @@ repository.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[features]
+# Bench-only: disable the grey-axis LUT seed so a criterion run measures the
+# pre-LUT cold bisection through the same `resolve_set` call site. Never enabled
+# in production builds; the gate compiles out to nothing when off.
+bench-cold-bisection = []
+
+[[bench]]
+name = "y_hk"
+harness = false
+
+[[bench]]
+name = "resolve_set"
+harness = false

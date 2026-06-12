@@ -931,10 +931,8 @@ impl ResolveContext {
 /// * `vc` — viewing conditions (light vs dim/dark); pass the same VC the theme
 ///   resolves under.
 pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditions) -> Resolved {
-    crate::lpc::with_yhk_cache(|| {
-        let ctx = ResolveContext::new(bg, vc);
-        resolve_in(bg, role, table, vc, &ctx)
-    })
+    let ctx = ResolveContext::new(bg, vc);
+    resolve_in(bg, role, table, vc, &ctx)
 }
 
 /// Resolve one role through an already-derived [`ResolveContext`], so a whole set
@@ -1055,20 +1053,13 @@ pub fn resolve_set(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    // One memo for the whole sweep: every role's solves share the same background
-    // luminance and re-measure neighbouring foregrounds, so the achromatic `y_hk`
-    // inversions repeat heavily across the set. The cache makes a repeat a map
-    // lookup; the emitted hexes are unchanged (exact-key memo of a deterministic
-    // function). See [`crate::lpc::with_yhk_cache`].
-    crate::lpc::with_yhk_cache(|| {
-        let ctx = ResolveContext::new(bg, vc);
-        let mut set: Vec<(Role, Resolved)> = Role::ALL
-            .iter()
-            .map(|&role| (role, resolve_in(bg, role, table, vc, &ctx)))
-            .collect();
-        enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
-        set
-    })
+    let ctx = ResolveContext::new(bg, vc);
+    let mut set: Vec<(Role, Resolved)> = Role::ALL
+        .iter()
+        .map(|&role| (role, resolve_in(bg, role, table, vc, &ctx)))
+        .collect();
+    enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
+    set
 }
 
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
