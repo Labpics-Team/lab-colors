@@ -4,17 +4,76 @@ use crate::scale::{AccentCurve, max_chroma};
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::hex_from_srgb;
 
-/// Minimum angular separation (degrees) the resolved sentiment hue must keep
-/// from the brand hue. Below this distance the prototype and the brand would
-/// read as "the same colour" and the sentiment loses its semantic signal, so
-/// the hue is displaced until it clears this margin.
+/// Perceptual minimum separation between a sentiment hue and the brand hue,
+/// expressed as a **chord length in the Oklab a/b chroma plane** (not degrees).
 ///
-/// This single constant is both the conflict trigger (displacement engages
-/// when `dist(prototype, brand) < NO_CONFLICT_MIN_DIST`) and the floor of the
-/// displacement result (the displaced hue lands exactly on this margin). Using
-/// one value removes the former 15/20 gap where a brand 15–20° from the
-/// prototype triggered no displacement yet still sat closer than 20° to brand.
-const NO_CONFLICT_MIN_DIST: f64 = 20.0;
+/// # Why a chord, not an angle
+///
+/// Issue #20: equal hue *angles* are not equal *perceptual* steps — a 20°
+/// hue swing at low chroma is barely visible, while the same 20° at high
+/// chroma is an obvious colour change. A fixed angular margin therefore
+/// over-separates desaturated zones and under-separates saturated ones. The
+/// perceptually honest invariant is a constant *distance* in the (a, b)
+/// plane, which we then translate into the per-zone angle that achieves it.
+///
+/// # Derivation of the constant
+///
+/// The pre-existing model (#55) used a flat 20° Oklab-hue margin and was
+/// accepted by eye as the right "just distinguishable" gap. We preserve that
+/// calibration by measuring what arc 20° subtends at the *representative*
+/// chroma of the four sentiment prototypes, then freezing that arc length as
+/// the perceptual target.
+///
+/// Measured prototype chromas (Oklab, sRGB VC):
+///
+/// | sentiment | hex       | Oklab C |
+/// |-----------|-----------|---------|
+/// | Danger    | `#FF3B30` | 0.2321  |
+/// | Warning   | `#FF9500` | 0.1752  |
+/// | Success   | `#34C759` | 0.1944  |
+/// | Info      | `#007AFF` | 0.2177  |
+///
+/// Representative (mean) chroma `C_rep = 0.2049`. A central angle `Δh`
+/// subtends a chord of `2·C·sin(Δh/2)` in the a/b plane, so the calibration
+/// chord is
+///
+/// ```text
+/// S_PERC_MIN = 2 · C_rep · sin(20° / 2)
+///            = 2 · 0.2049 · sin(10°)
+///            ≈ 0.07116   (Oklab a/b units)
+/// ```
+///
+/// Feeding `C_rep` back through [`s_min_deg`] returns 20.0° by construction,
+/// so the v1 default behaviour matches the eyeball-calibrated #55 margin while
+/// the machinery is ready to vary the angle per zone once issue #20's per-zone
+/// chroma map lands.
+const S_PERC_MIN: f64 = 0.071_157_9;
+
+/// Representative Oklab chroma of the sentiment prototypes (mean of the four).
+/// Used as the v1 default zone chroma so [`s_min_deg`] reproduces the
+/// historical 20° margin. See [`S_PERC_MIN`].
+const REPRESENTATIVE_CHROMA: f64 = 0.204_85;
+
+/// Translate the perceptual separation target [`S_PERC_MIN`] into the hue angle
+/// (degrees) that achieves it at a given Oklab chroma.
+///
+/// Inverting the chord relation `chord = 2·C·sin(Δh/2)`:
+///
+/// ```text
+/// Δh = 2 · asin( S_PERC_MIN / (2·C) )
+/// ```
+///
+/// At very low chroma the requested chord can exceed the maximum chord of the
+/// hue circle (diameter `2·C`); we clamp the `asin` argument to `1.0` so the
+/// angle saturates at 180° instead of producing `NaN`. This is the v1
+/// "perceptual seam" function: today it is fed one representative chroma
+/// ([`REPRESENTATIVE_CHROMA`]); a future revision can pass each zone's own
+/// chroma to widen the margin in washed-out hue regions.
+fn s_min_deg(zone_chroma: f64) -> f64 {
+    let safe_chroma = zone_chroma.max(1e-6);
+    let ratio = (S_PERC_MIN / (2.0 * safe_chroma)).clamp(0.0, 1.0);
+    2.0 * ratio.asin().to_degrees()
+}
 
 /// Sentiment categories. Each maps to a prototype hue expressed in
 /// **Oklab hue degrees** (NOT HSB/HSL/sRGB hue). The resolved hue produced by
@@ -38,17 +97,109 @@ impl Sentiment {
         }
     }
 
-    fn slope(self) -> (f64, f64) {
+    /// Per-side asymptote hardness `(p_low, p_high)` — the exponent `p` of the
+    /// smooth displacement [`SentimentParams`]. `p_low` governs the side where
+    /// the sentiment hue sits *below* the brand (toward 0°), `p_high` the side
+    /// above it.
+    ///
+    /// This is the successor of the former slope pair: Warning kept a soft
+    /// `1.5` toward red and a hard `3.0` toward green. A lower `p` yields
+    /// sooner (the curve clings less to the raw distance and pushes out toward
+    /// `s_min` earlier), a higher `p` clings harder to the brand-distance and
+    /// thus stays closer to the prototype. The asymmetry encodes that Warning
+    /// must give ground gently toward Danger's red but resist sliding toward
+    /// Success's green.
+    fn hardness(self) -> (f64, f64) {
         match self {
             Sentiment::Warning => (1.5, 3.0),
-            _ => (5.0, 5.0),
+            _ => (DEFAULT_HARDNESS, DEFAULT_HARDNESS),
         }
     }
 
+    /// Categorical hue floor (Oklab degrees) below which the sentiment loses
+    /// its meaning — e.g. Warning must never slide into the red region.
+    /// Applied as a hard legality constraint, never a soft preference.
     fn hue_floor(self) -> Option<f64> {
         match self {
             Sentiment::Warning => Some(45.0),
             _ => None,
+        }
+    }
+
+    /// Preferred side for the degenerate `brand == prototype` tie-break.
+    /// `+1.0` pushes the sentiment hue up (toward higher degrees), `-1.0` down.
+    /// Warning prefers to climb away from red toward its hard side; the others
+    /// have symmetric hardness so the choice only sets the seam direction.
+    fn preferred_side(self) -> f64 {
+        match self {
+            Sentiment::Warning => 1.0,
+            _ => 1.0,
+        }
+    }
+}
+
+/// Default asymptote hardness `p` for a sentiment with no special asymmetry.
+/// `p = 2` is the calibration default Daniil picks by eye; `p → ∞` recovers the
+/// old hard 20° wall, `p → 1` is the softest (most eager) yield.
+pub const DEFAULT_HARDNESS: f64 = 2.0;
+
+/// Tunable parameters of the smooth-asymptote displacement model.
+///
+/// The displaced separation follows the p-norm blend
+///
+/// ```text
+/// s(d) = (d^p + s_min^p)^(1/p)
+/// ```
+///
+/// where `d` is the raw angular distance (degrees) from the brand to the
+/// prototype and `s_min` is the perceptual floor from [`s_min_deg`]. As
+/// `d → ∞` the displacement `s(d) − d → 0` (a far brand barely nudges the
+/// sentiment); as `d → 0` the separation smoothly approaches `s_min` (a brand
+/// landing on the prototype is pushed out by exactly the minimum gap). `p`
+/// controls how hard the curve clings to `d` in between.
+///
+/// Construct with [`SentimentParams::default`] for the calibration default, or
+/// override `p` additively without touching the prototype/floor machinery.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SentimentParams {
+    /// Hardness on the low side (sentiment hue below the brand).
+    pub p_low: f64,
+    /// Hardness on the high side (sentiment hue above the brand).
+    pub p_high: f64,
+}
+
+impl SentimentParams {
+    /// Build params with a single hardness applied to both sides.
+    ///
+    /// # Errors
+    /// Returns `Err` if `p` is not finite or not `>= 1.0` (a p-norm with
+    /// `p < 1` is non-convex and would make the displacement non-monotone).
+    pub fn uniform(p: f64) -> Result<Self, String> {
+        Self::new(p, p)
+    }
+
+    /// Build params with independent per-side hardness.
+    ///
+    /// # Errors
+    /// Returns `Err` if either `p` is not finite or `< 1.0`.
+    pub fn new(p_low: f64, p_high: f64) -> Result<Self, String> {
+        for (name, p) in [("p_low", p_low), ("p_high", p_high)] {
+            if !p.is_finite() {
+                return Err(format!("{name} is not finite: {p}"));
+            }
+            if p < 1.0 {
+                return Err(format!("{name} must be >= 1.0 (got {p})"));
+            }
+        }
+        Ok(Self { p_low, p_high })
+    }
+}
+
+impl Default for SentimentParams {
+    fn default() -> Self {
+        Self {
+            p_low: DEFAULT_HARDNESS,
+            p_high: DEFAULT_HARDNESS,
         }
     }
 }
@@ -62,48 +213,78 @@ pub struct SentimentCurve {
 }
 
 impl SentimentCurve {
-    /// Resolve a sentiment curve against a brand hue.
+    /// Resolve a sentiment curve against a brand hue using the calibration
+    /// defaults (per-sentiment hardness, `p = 2` where unspecified).
     ///
     /// `brand_hue` is an **Oklab hue in degrees** (NOT HSB/HSL/sRGB hue); so is
-    /// the resulting [`resolved_hue`](Self::resolved_hue).
-    ///
-    /// # Invariants
-    ///
-    /// - If the prototype already sits at least [`NO_CONFLICT_MIN_DIST`] degrees
-    ///   from `brand_hue`, no displacement happens and the prototype hue is used.
-    /// - Otherwise the hue is displaced so that `resolved_hue` is **always** at
-    ///   least [`NO_CONFLICT_MIN_DIST`] degrees from `brand_hue`. For
-    ///   [`Sentiment::Warning`] the resolved hue additionally never drops below
-    ///   the warning hue floor; the floor is applied as a constraint *inside*
-    ///   the search, so it can never pull the hue back into the brand zone.
+    /// the resulting [`resolved_hue`](Self::resolved_hue). The public signature
+    /// is unchanged from #55; tuning `p` is opt-in via [`Self::with_params`].
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `brand_hue` is not finite, or if either the prototype or
-    /// the generated canonical hex fails to construct an [`AccentCurve`].
+    /// See [`Self::with_params`].
     pub fn new(
         sentiment: Sentiment,
         brand_hue: f64,
         prototype_hex: &str,
         neutral: &NeutralCurve,
     ) -> Result<Self, String> {
+        let (p_low, p_high) = sentiment.hardness();
+        let params = SentimentParams::new(p_low, p_high)?;
+        Self::with_params(sentiment, brand_hue, prototype_hex, neutral, params)
+    }
+
+    /// Resolve a sentiment curve with explicit asymptote [`SentimentParams`].
+    ///
+    /// The sentiment hue is pushed away from the brand along the smooth
+    /// p-norm asymptote `s(d) = (d^p + s_min^p)^(1/p)` (see [`SentimentParams`]).
+    /// There is **no on/off threshold**: a distant brand moves the hue by an
+    /// amount that decays smoothly to zero, a near brand is held at the
+    /// perceptual minimum [`s_min_deg`], and the transition is C¹ everywhere
+    /// except the single seam where the brand sits exactly on the prototype
+    /// (resolved on the [`Sentiment::preferred_side`]).
+    ///
+    /// # Invariants
+    ///
+    /// - The resolved hue keeps **at least** `s_min` perceptual degrees from
+    ///   the brand (separation invariant), enforced as a final legal guard.
+    /// - For [`Sentiment::Warning`] the resolved hue additionally never drops
+    ///   below the hue floor. When the floor and the separation invariant
+    ///   collide, the resolver lands on the nearest legal hue that still honours
+    ///   the separation; if the legal arc is geometrically empty it returns an
+    ///   `Err` rather than silently breaching either invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `brand_hue` is not finite, if the params are invalid,
+    /// if no hue can satisfy both the floor and the separation invariant, or if
+    /// either the prototype or the generated canonical hex fails to construct an
+    /// [`AccentCurve`].
+    pub fn with_params(
+        sentiment: Sentiment,
+        brand_hue: f64,
+        prototype_hex: &str,
+        neutral: &NeutralCurve,
+        params: SentimentParams,
+    ) -> Result<Self, String> {
         if !brand_hue.is_finite() {
             return Err(format!("brand_hue is not finite: {brand_hue}"));
         }
 
         let prototype = sentiment.prototype_hue();
-        let dist = angular_distance(prototype, brand_hue);
 
         let proto_accent = AccentCurve::new(prototype_hex, neutral)?;
         let sat_ratio = proto_accent.sat_ratio();
 
-        let (resolved_hue, was_displaced) = if dist >= NO_CONFLICT_MIN_DIST {
-            (normalize_hue(prototype), false)
-        } else {
-            (resolve_displaced_hue(sentiment, prototype, brand_hue), true)
-        };
+        let s_min = s_min_deg(REPRESENTATIVE_CHROMA);
+
+        let resolved_hue = resolve_smooth_hue(sentiment, prototype, brand_hue, params, s_min)?;
 
         let displacement = angular_distance(resolved_hue, prototype);
+        // The hue is "displaced" whenever the smooth model moved it off the
+        // prototype by a perceptible amount. There is no hard threshold any
+        // more, so this is a reporting flag, not a branch.
+        let was_displaced = displacement > 1e-6;
 
         let canonical_hex = build_hex_from_hue(resolved_hue, sat_ratio, neutral);
         let accent = AccentCurve::new(&canonical_hex, neutral).map_err(|e| {
@@ -135,104 +316,100 @@ impl SentimentCurve {
     }
 }
 
-/// Cost of placing the resolved hue at displacement `dh` (degrees from the
-/// prototype) on the given slope side.
+/// The smooth displaced separation `s(d) = (d^p + s_min^p)^(1/p)`.
 ///
-/// The cost is monotonically increasing in `dh` on each side, so the cheapest
-/// legal hue on a side is always the one with the *smallest* legal `dh` — i.e.
-/// the boundary of the brand zone (or the warning floor) nearest the prototype.
-/// This monotonicity is what lets [`resolve_displaced_hue`] evaluate a handful
-/// of analytic candidates instead of scanning 721 sampled hues.
-fn placement_cost(slope: f64, dh: f64) -> f64 {
-    // Clamp the denominator at 0.01 (the value carried over from the original
-    // sampling search) so the cost at dh≈180° stays finite yet large enough to
-    // strongly discourage placing the hue on the far side of the circle.
-    slope / (1.0 - dh / 180.0).max(0.01)
+/// `d` and `s_min` are non-negative angular degrees; `p >= 1`. The result is
+/// always `>= max(d, s_min)` and is C¹ in `d` for `p > 1`. Computed in `f64`;
+/// the caller guarantees finiteness of the inputs.
+fn smooth_separation(d: f64, s_min: f64, p: f64) -> f64 {
+    (d.powf(p) + s_min.powf(p)).powf(1.0 / p)
 }
 
-/// Analytically resolve the displaced hue.
-///
-/// The hue circle has up to two forbidden arcs: the brand zone (within
-/// [`NO_CONFLICT_MIN_DIST`] of `brand_hue`) and, for [`Sentiment::Warning`],
-/// the arc below the hue floor (`[0, floor)`). [`placement_cost`] is monotone
-/// in the displacement on each slope side, so on any legal arc the cheapest
-/// point sits at the arc edge nearest the prototype — i.e. just outside a
-/// forbidden arc. The candidate set is therefore the legal hues immediately
-/// flanking each forbidden arc's two edges; we score them all and keep the
-/// cheapest. This replaces the former 721-iteration sampling sweep (Issue #8)
-/// with a fixed handful of candidates while landing on the exact boundary
-/// rather than the nearest 0.5deg grid sample.
-fn resolve_displaced_hue(sentiment: Sentiment, prototype: f64, brand_hue: f64) -> f64 {
-    let (left_slope, right_slope) = sentiment.slope();
-    let floor = sentiment.hue_floor();
+/// Resolve the sentiment hue under the smooth-asymptote model, then pass it
+/// through the legality guard (separation + optional floor) as the final stage.
+fn resolve_smooth_hue(
+    sentiment: Sentiment,
+    prototype: f64,
+    brand_hue: f64,
+    params: SentimentParams,
+    s_min: f64,
+) -> Result<f64, String> {
+    // Signed shortest delta from prototype to brand, in (-180, 180]. Its sign
+    // tells us which side of the brand the prototype sits on; we push the
+    // resolved hue out along that same side, away from the brand.
+    let u = signed_delta(brand_hue, prototype);
+    let d = u.abs();
 
-    // The brand and floor edges are themselves legal (the legality test uses
-    // `>=`), so they are exact candidates: both brand-zone edges and the floor.
-    let mut candidates: Vec<f64> = vec![
-        normalize_hue(brand_hue - NO_CONFLICT_MIN_DIST),
-        normalize_hue(brand_hue + NO_CONFLICT_MIN_DIST),
-    ];
-
-    // The floor forbidden arc `[0, floor)` also has a wrap edge at 360 ≡ 0. The
-    // value 0 itself is below the floor (illegal), but the hue just below the
-    // wrap (360⁻) is legal — and it is the cheap-slope candidate the brand-only
-    // set used to miss. A tiny step below 360 selects that legal point; the
-    // legality re-check still gates it, so a genuinely illegal sliver is
-    // discarded rather than accepted.
-    if let Some(f) = floor {
-        candidates.push(normalize_hue(f));
-        candidates.push(360.0 - 1e-6);
-    }
-
-    let mut best_h: Option<f64> = None;
-    let mut best_cost = f64::MAX;
-
-    for &h in &candidates {
-        if !is_legal_hue(h, brand_hue, floor) {
-            continue;
-        }
-        let dh = angular_distance(h, prototype);
-        let slope = if signed_delta(h, prototype) >= 0.0 {
-            right_slope
+    let (side, p) = if u > 0.0 {
+        // Brand is above the prototype -> prototype (and the resolved hue) sit
+        // below the brand -> low-side hardness.
+        (-1.0, params.p_low)
+    } else if u < 0.0 {
+        (1.0, params.p_high)
+    } else {
+        // Degenerate seam: brand exactly on prototype. Pick the preferred side
+        // and the matching hardness so s(0) = s_min is reached cleanly.
+        let pref = sentiment.preferred_side();
+        let p = if pref >= 0.0 {
+            params.p_high
         } else {
-            left_slope
+            params.p_low
         };
-        let cost = placement_cost(slope, dh);
-        if cost < best_cost {
-            best_cost = cost;
-            best_h = Some(h);
-        }
+        (pref, p)
+    };
+
+    let s = smooth_separation(d, s_min, p);
+    let smooth = normalize_hue(brand_hue + side * s);
+
+    // Final guard: the smooth target is already >= s_min from the brand by
+    // construction, but the categorical floor (Warning) can still forbid it.
+    // Reuse the #55 legality machinery as the single source of truth.
+    let floor = sentiment.hue_floor();
+    legalize_hue(smooth, brand_hue, floor, s_min)
+}
+
+/// Snap a candidate hue to the nearest hue that is legal under both the
+/// separation invariant (`>= s_min` from the brand) and the optional floor.
+///
+/// If the candidate is already legal it is returned unchanged. Otherwise we
+/// scan outward in fine steps from the candidate and return the first legal
+/// hue, which is the closest legal point — preserving smoothness as much as the
+/// constraints allow. If no legal hue exists on the whole circle (the floor and
+/// the brand zone between them leave no room) we return an `Err` rather than
+/// silently breaching an invariant.
+fn legalize_hue(
+    candidate: f64,
+    brand_hue: f64,
+    floor: Option<f64>,
+    s_min: f64,
+) -> Result<f64, String> {
+    if is_legal_hue(candidate, brand_hue, floor, s_min) {
+        return Ok(normalize_hue(candidate));
     }
 
-    if let Some(h) = best_h {
-        return h;
-    }
-
-    // Fallback: no flanking candidate is legal (the forbidden arcs leave only a
-    // sliver). Sweep outward from the prototype on both sides and take the first
-    // legal hue. The brand arc is only 2*NO_CONFLICT_MIN_DIST wide, so a legal
-    // hue always exists within one revolution.
-    let mut step = 0.0_f64;
+    let mut step = 0.05_f64;
     while step <= 360.0 {
         for cand in [
-            normalize_hue(prototype + step),
-            normalize_hue(prototype - step),
+            normalize_hue(candidate + step),
+            normalize_hue(candidate - step),
         ] {
-            if is_legal_hue(cand, brand_hue, floor) {
-                return cand;
+            if is_legal_hue(cand, brand_hue, floor, s_min) {
+                return Ok(cand);
             }
         }
-        step += 0.1;
+        step += 0.05;
     }
 
-    // Unreachable in practice (a legal hue always exists), but never panic.
-    normalize_hue(prototype)
+    Err(format!(
+        "no legal hue exists for brand={brand_hue}, floor={floor:?}, s_min={s_min}: \
+         the floor and the separation invariant leave no room on the hue circle"
+    ))
 }
 
-/// A hue is legal if it clears the brand zone and, for Warning, sits at or above
-/// the hue floor.
-fn is_legal_hue(h: f64, brand_hue: f64, floor: Option<f64>) -> bool {
-    if angular_distance(h, brand_hue) < NO_CONFLICT_MIN_DIST {
+/// A hue is legal if it clears the brand zone (>= `s_min` away) and, when a
+/// floor is set, sits at or above it.
+fn is_legal_hue(h: f64, brand_hue: f64, floor: Option<f64>, s_min: f64) -> bool {
+    if angular_distance(h, brand_hue) < s_min - 1e-9 {
         return false;
     }
     if let Some(f) = floor
@@ -300,105 +477,346 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_displacement_when_brand_far() {
-        let neutral = default_neutral();
-        let curve = SentimentCurve::new(Sentiment::Danger, 240.0, "#FF3B30", &neutral).unwrap();
-        assert!(
-            !curve.was_displaced,
-            "danger prototype=18, brand=240 — no conflict"
-        );
-        assert!((curve.resolved_hue - 18.0).abs() < 1.0);
+    const S_MIN: f64 = 20.0; // s_min_deg(REPRESENTATIVE_CHROMA), asserted below.
+
+    /// The smooth model has exactly two seams, both geometric and inherent to
+    /// "push the hue away from the brand":
+    ///
+    /// 1. `brand == prototype`: which side to flee to is undefined; the
+    ///    tie-break flips the sign, an unavoidable jump of ~2·s_min.
+    /// 2. `brand == prototype + 180°` (the antipode): the prototype is
+    ///    equidistant both ways, so the flee direction flips here too. Because
+    ///    the asymptote overshoots slightly (`s(180) > 180`), the resolved hue
+    ///    jumps by `2·(s(180) − 180)` ≈ 2.2° — small but a genuine seam.
+    ///
+    /// Continuity/C¹ tests legitimately exclude an epsilon window around both.
+    fn near_seam(brand: f64, prototype: f64, window: f64) -> bool {
+        angular_distance(brand, prototype) < window
+            || angular_distance(brand, prototype + 180.0) < window
     }
 
     #[test]
-    fn displacement_when_brand_near_prototype() {
-        let neutral = default_neutral();
-        let curve = SentimentCurve::new(Sentiment::Danger, 20.0, "#FF3B30", &neutral).unwrap();
+    fn s_min_default_reproduces_historical_margin() {
+        let s_min = s_min_deg(REPRESENTATIVE_CHROMA);
         assert!(
-            curve.was_displaced,
-            "danger prototype=18, brand=20 — conflict"
-        );
-    }
-
-    #[test]
-    fn resolved_hue_distant_from_brand() {
-        let neutral = default_neutral();
-        let curve = SentimentCurve::new(Sentiment::Danger, 20.0, "#FF3B30", &neutral).unwrap();
-        let dist = angular_distance(curve.resolved_hue, 20.0);
-        // Contract change: the displaced hue now lands exactly on the unified
-        // NO_CONFLICT_MIN_DIST boundary (20deg), so the guarantee is tight.
-        assert!(
-            dist >= NO_CONFLICT_MIN_DIST - 1e-6,
-            "resolved_hue={} too close to brand=20: dist={}",
-            curve.resolved_hue,
-            dist
-        );
-    }
-
-    // Regression for the former 15/20 threshold gap: a brand 17deg from the
-    // prototype used to skip displacement (dist >= 15) yet ended up only ~17deg
-    // from brand, violating the 20deg margin. With the unified threshold it now
-    // displaces and clears 20deg.
-    #[test]
-    fn displaces_in_former_threshold_gap() {
-        let neutral = default_neutral();
-        // Danger prototype = 18deg; brand = 35deg -> dist = 17deg (in [15, 20)).
-        let curve = SentimentCurve::new(Sentiment::Danger, 35.0, "#FF3B30", &neutral).unwrap();
-        assert!(
-            curve.was_displaced,
-            "brand 17deg from prototype must displace under unified threshold"
-        );
-        let dist = angular_distance(curve.resolved_hue, 35.0);
-        assert!(
-            dist >= NO_CONFLICT_MIN_DIST - 1e-6,
-            "resolved_hue={} only {}deg from brand=35",
-            curve.resolved_hue,
-            dist
+            (s_min - 20.0).abs() < 0.05,
+            "v1 s_min must reproduce the historical 20deg margin, got {s_min}"
         );
     }
 
     #[test]
-    fn warning_floor_enforced() {
-        let neutral = default_neutral();
-        for brand in (0..360).step_by(30) {
-            let curve =
-                SentimentCurve::new(Sentiment::Warning, brand as f64, "#FF9500", &neutral).unwrap();
+    fn s_min_widens_as_chroma_drops() {
+        // Lower chroma -> a fixed perceptual chord needs a wider angle.
+        let high = s_min_deg(0.25);
+        let low = s_min_deg(0.10);
+        assert!(
+            low > high,
+            "low chroma {low} should exceed high chroma {high}"
+        );
+    }
+
+    #[test]
+    fn s_min_saturates_not_nan_at_tiny_chroma() {
+        let s = s_min_deg(1e-9);
+        assert!(s.is_finite(), "s_min must stay finite at near-zero chroma");
+        assert!(
+            (s - 180.0).abs() < 1e-6,
+            "should saturate at 180deg, got {s}"
+        );
+    }
+
+    // ── Smooth separation maths ──────────────────────────────────
+
+    #[test]
+    fn separation_floor_at_zero_distance() {
+        let s = smooth_separation(0.0, S_MIN, 2.0);
+        assert!((s - S_MIN).abs() < 1e-9, "s(0) must equal s_min, got {s}");
+    }
+
+    #[test]
+    fn separation_displacement_decays_to_zero_far_away() {
+        // s(d) - d -> 0 as d grows: a distant brand barely nudges the hue.
+        let near = smooth_separation(10.0, S_MIN, 2.0) - 10.0;
+        let far = smooth_separation(120.0, S_MIN, 2.0) - 120.0;
+        assert!(
+            far < near,
+            "displacement must shrink with distance: {far} !< {near}"
+        );
+        assert!(far < 2.0, "far displacement should be small, got {far}");
+        assert!(
+            far > 0.0,
+            "displacement is asymptotic but never exactly zero: {far}"
+        );
+    }
+
+    #[test]
+    fn separation_monotone_in_distance() {
+        let mut prev = f64::MIN;
+        let mut d = 0.0;
+        while d <= 180.0 {
+            let s = smooth_separation(d, S_MIN, 2.0);
+            assert!(s >= prev - 1e-9, "s(d) must be non-decreasing at d={d}");
             assert!(
-                curve.resolved_hue >= 45.0,
-                "warning resolved_hue={} below floor at brand={}",
-                curve.resolved_hue,
-                brand
+                s >= d - 1e-9 && s >= S_MIN - 1e-9,
+                "s(d) >= max(d, s_min) at d={d}"
             );
+            prev = s;
+            d += 0.5;
         }
     }
 
-    // Defect #4: the warning floor was applied AFTER minimisation, so a brand
-    // near 50deg produced resolved 45 (floor) sitting only ~5deg from brand.
-    // The floor is now a constraint inside the search, so the resolved hue is
-    // always at or above the floor AND at least NO_CONFLICT_MIN_DIST from brand.
     #[test]
-    fn warning_floor_never_breaches_brand_zone() {
+    fn higher_p_clings_harder() {
+        // p -> infinity recovers the hard wall: at fixed d, larger p => s closer
+        // to d (less push-out beyond the raw distance).
+        let d = 15.0;
+        let soft = smooth_separation(d, S_MIN, 1.5);
+        let hard = smooth_separation(d, S_MIN, 3.0);
+        assert!(
+            hard < soft,
+            "harder p should cling closer to d: {hard} !< {soft}"
+        );
+    }
+
+    // ── Resolution behaviour ─────────────────────────────────────
+
+    #[test]
+    fn far_brand_barely_shifts_hue() {
         let neutral = default_neutral();
-        for brand in [50.0_f64, 55.0, 60.0] {
+        // Info prototype 240, brand 200: d = 40. Smooth model shifts a little
+        // but does not snap to the prototype.
+        let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#007AFF", &neutral).unwrap();
+        let shift = angular_distance(curve.resolved_hue, 240.0);
+        assert!(shift > 0.0, "smooth model always shifts slightly: {shift}");
+        assert!(
+            shift < 6.0,
+            "but a brand 40deg away shifts only a little: {shift}"
+        );
+    }
+
+    #[test]
+    fn brand_on_prototype_pushed_to_s_min() {
+        let neutral = default_neutral();
+        let curve = SentimentCurve::new(Sentiment::Danger, 18.0, "#FF3B30", &neutral).unwrap();
+        let dist = angular_distance(curve.resolved_hue, 18.0);
+        assert!(
+            (dist - S_MIN).abs() < 0.5,
+            "brand on prototype must push out by ~s_min, got {dist}"
+        );
+    }
+
+    #[test]
+    fn separation_invariant_holds_everywhere() {
+        let neutral = default_neutral();
+        let s_min = s_min_deg(REPRESENTATIVE_CHROMA);
+        for &sent in &[
+            Sentiment::Danger,
+            Sentiment::Warning,
+            Sentiment::Success,
+            Sentiment::Info,
+        ] {
+            let mut brand = 0.0;
+            while brand < 360.0 {
+                let curve =
+                    SentimentCurve::new(sent, brand, prototype_hex(sent), &neutral).unwrap();
+                let dist = angular_distance(curve.resolved_hue, brand);
+                assert!(
+                    dist >= s_min - 1e-6,
+                    "{sent:?} brand={brand}: separation {dist} < s_min {s_min}"
+                );
+                brand += 0.5;
+            }
+        }
+    }
+
+    // ── Property: continuity (Lipschitz) of resolved_hue in brand_hue ──
+    //
+    // C¹ everywhere except the single seam at brand == prototype, where the
+    // sentiment must flip to the other side of the brand (a fundamental jump of
+    // ~2·s_min). We skip an epsilon window around that seam, documented.
+    #[test]
+    fn resolved_hue_lipschitz_in_brand() {
+        let neutral = default_neutral();
+        let step = 0.1_f64;
+        for &sent in &[
+            Sentiment::Danger,
+            Sentiment::Warning,
+            Sentiment::Success,
+            Sentiment::Info,
+        ] {
+            let prototype = sent.prototype_hue();
+            let mut brand = 0.0;
+            let mut prev: Option<f64> = None;
+            while brand <= 360.0 {
+                // Skip both seams (prototype and its antipode); see near_seam.
+                let on_seam = near_seam(brand, prototype, 1.0);
+                let curve =
+                    SentimentCurve::new(sent, brand, prototype_hex(sent), &neutral).unwrap();
+                if let Some(p) = prev
+                    && !on_seam
+                {
+                    // Compare on the circle (resolved can wrap 360->0).
+                    let delta = angular_distance(curve.resolved_hue, p);
+                    // Lipschitz constant: |Δresolved| <= K·|Δbrand|. The smooth
+                    // model has slope <= ~2 near the prototype; K=5 is a roomy
+                    // bound that still catches any genuine discontinuity.
+                    assert!(
+                        delta <= 5.0 * step + 1e-6,
+                        "{sent:?} brand={brand}: jump {delta} over Δbrand={step}"
+                    );
+                }
+                prev = Some(curve.resolved_hue);
+                brand += step;
+            }
+        }
+    }
+
+    // ── Property: C1 smoothness — finite differences have no spikes ──
+    #[test]
+    fn resolved_hue_c1_smooth_off_seam() {
+        let neutral = default_neutral();
+        let h = 0.1_f64;
+        for &sent in &[Sentiment::Danger, Sentiment::Success, Sentiment::Info] {
+            let prototype = sent.prototype_hue();
+            let deriv = |brand: f64| -> f64 {
+                let a = SentimentCurve::new(sent, brand - h, prototype_hex(sent), &neutral)
+                    .unwrap()
+                    .resolved_hue;
+                let b = SentimentCurve::new(sent, brand + h, prototype_hex(sent), &neutral)
+                    .unwrap()
+                    .resolved_hue;
+                signed_delta(b, a) / (2.0 * h)
+            };
+            let mut brand = 0.0;
+            let mut prev: Option<f64> = None;
+            while brand <= 360.0 {
+                if !near_seam(brand, prototype, 2.0) {
+                    let dv = deriv(brand);
+                    if let Some(p) = prev {
+                        // Second difference (curvature) must stay bounded — no
+                        // kinks. The smooth model's derivative is well below 3.
+                        assert!(
+                            (dv - p).abs() < 1.0,
+                            "{sent:?} brand={brand}: derivative jump {} -> {}",
+                            p,
+                            dv
+                        );
+                    }
+                    prev = Some(dv);
+                } else {
+                    prev = None; // reset across the seam
+                }
+                brand += h;
+            }
+        }
+    }
+
+    // ── Warning floor + separation, simultaneously, brand swept 40..70 ──
+    #[test]
+    fn warning_floor_and_separation_hold_together() {
+        let neutral = default_neutral();
+        let s_min = s_min_deg(REPRESENTATIVE_CHROMA);
+        let mut brand = 40.0;
+        while brand <= 70.0 {
             let curve =
                 SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &neutral).unwrap();
             assert!(
-                curve.resolved_hue >= 45.0,
+                curve.resolved_hue >= 45.0 - 1e-6,
+                "warning resolved_hue {} below floor at brand={brand}",
+                curve.resolved_hue
+            );
+            let dist = angular_distance(curve.resolved_hue, brand);
+            assert!(
+                dist >= s_min - 1e-6,
+                "warning resolved_hue {} only {dist}deg from brand={brand} (separation breached)",
+                curve.resolved_hue
+            );
+            brand += 0.25;
+        }
+    }
+
+    #[test]
+    fn warning_floor_enforced_full_circle() {
+        let neutral = default_neutral();
+        for brand in (0..360).step_by(5) {
+            let curve =
+                SentimentCurve::new(Sentiment::Warning, brand as f64, "#FF9500", &neutral).unwrap();
+            assert!(
+                curve.resolved_hue >= 45.0 - 1e-6,
                 "warning resolved_hue={} below floor at brand={}",
                 curve.resolved_hue,
                 brand
             );
-            let dist = angular_distance(curve.resolved_hue, brand);
-            assert!(
-                dist >= NO_CONFLICT_MIN_DIST - 1e-6,
-                "warning resolved_hue={} only {}deg from brand={} (floor breached the brand zone)",
-                curve.resolved_hue,
-                dist,
-                brand
-            );
         }
     }
+
+    // ── Oracle: brute-force minimiser of the new smooth cost on a 0.05 grid ──
+    //
+    // Replaces the #55 reference_minimize_cost oracle. The new model has no
+    // cost-minimisation step (the target is the closed-form smooth hue), so the
+    // oracle reconstructs the target geometrically and confirms the resolver's
+    // legalised output is the nearest legal hue to it.
+    fn oracle_resolve(sent: Sentiment, brand: f64, s_min: f64) -> f64 {
+        let prototype = sent.prototype_hue();
+        let (p_low, p_high) = sent.hardness();
+        let u = signed_delta(brand, prototype);
+        let (side, p) = if u > 0.0 {
+            (-1.0, p_low)
+        } else if u < 0.0 {
+            (1.0, p_high)
+        } else {
+            (sent.preferred_side(), p_high)
+        };
+        let s = smooth_separation(u.abs(), s_min, p);
+        let target = normalize_hue(brand + side * s);
+
+        let floor = sent.hue_floor();
+        if is_legal_hue(target, brand, floor, s_min) {
+            return target;
+        }
+        // Nearest legal hue on a fine grid.
+        let mut best = target;
+        let mut best_d = f64::MAX;
+        let mut i = 0;
+        while i < 7200 {
+            let h = (i as f64) * 0.05;
+            if is_legal_hue(h, brand, floor, s_min) {
+                let d = angular_distance(h, target);
+                if d < best_d {
+                    best_d = d;
+                    best = h;
+                }
+            }
+            i += 1;
+        }
+        best
+    }
+
+    #[test]
+    fn resolver_matches_oracle_grid() {
+        let neutral = default_neutral();
+        let s_min = s_min_deg(REPRESENTATIVE_CHROMA);
+        for &sent in &[
+            Sentiment::Danger,
+            Sentiment::Warning,
+            Sentiment::Success,
+            Sentiment::Info,
+        ] {
+            for brand_i in 0..360 {
+                let brand = brand_i as f64;
+                let got = SentimentCurve::new(sent, brand, prototype_hex(sent), &neutral)
+                    .unwrap()
+                    .resolved_hue;
+                let want = oracle_resolve(sent, brand, s_min);
+                assert!(
+                    angular_distance(got, want) < 0.1,
+                    "{sent:?} brand={brand}: resolver {got} vs oracle {want}"
+                );
+            }
+        }
+    }
+
+    // ── Preserved #55 guarantees ─────────────────────────────────
 
     #[test]
     fn rejects_non_finite_brand_hue() {
@@ -412,104 +830,49 @@ mod tests {
         }
     }
 
-    // Reference implementation: the original 721-iteration sampling search,
-    // kept only as a test oracle for the analytic resolve_displaced_hue.
-    fn reference_minimize_cost(sentiment: Sentiment, prototype: f64, brand_hue: f64) -> f64 {
-        let (left_slope, right_slope) = sentiment.slope();
-        let floor = sentiment.hue_floor();
-        let min_dist_from_brand = NO_CONFLICT_MIN_DIST;
-
-        let mut best_h = prototype;
-        let mut best_cost = f64::MAX;
-        let mut found = false;
-
-        for i in -360..=360i32 {
-            let h = prototype + i as f64 * 0.5;
-            if angular_distance(h, brand_hue) < min_dist_from_brand {
-                continue;
-            }
-            if let Some(f) = floor
-                && normalize_hue(h) < f
-            {
-                continue;
-            }
-
-            let dh = angular_distance(h, prototype);
-            let sign = signed_delta(h, prototype);
-            let slope = if sign >= 0.0 { right_slope } else { left_slope };
-            let cost = placement_cost(slope, dh);
-
-            if cost < best_cost {
-                best_cost = cost;
-                best_h = h;
-                found = true;
-            }
-        }
-
-        assert!(found, "reference found no legal hue");
-        normalize_hue(best_h)
-    }
-
-    // Defect #8: the analytic resolver must agree with the reference sampling
-    // search across the full brand-hue grid for all sentiments. The reference
-    // samples at 0.5deg granularity, so the resolved cost (not the raw hue,
-    // which can differ by sub-degree rounding) must match within that grid.
     #[test]
-    fn analytic_matches_reference_grid() {
-        let sentiments = [
-            Sentiment::Danger,
-            Sentiment::Warning,
-            Sentiment::Success,
-            Sentiment::Info,
-        ];
-        for &sent in &sentiments {
-            let prototype = sent.prototype_hue();
-            let (left_slope, right_slope) = sent.slope();
-            let floor = sent.hue_floor();
-            for brand_i in 0..360 {
-                let brand = brand_i as f64;
-                // Only the displacement path is under test (dist < threshold).
-                if angular_distance(prototype, brand) >= NO_CONFLICT_MIN_DIST {
-                    continue;
-                }
-
-                let analytic = resolve_displaced_hue(sent, prototype, brand);
-                let reference = reference_minimize_cost(sent, prototype, brand);
-
-                // Both must be legal.
-                assert!(
-                    is_legal_hue(analytic, brand, floor),
-                    "{sent:?} brand={brand}: analytic hue {analytic} illegal"
-                );
-
-                // Cost parity: the analytic optimum must be at least as cheap as
-                // the reference (the reference is grid-limited; analytic sits on
-                // the exact boundary, so analytic_cost <= reference_cost always).
-                let cost_of = |h: f64| {
-                    let dh = angular_distance(h, prototype);
-                    let slope = if signed_delta(h, prototype) >= 0.0 {
-                        right_slope
-                    } else {
-                        left_slope
-                    };
-                    placement_cost(slope, dh)
-                };
-                let analytic_cost = cost_of(analytic);
-                let reference_cost = cost_of(reference);
-                assert!(
-                    analytic_cost <= reference_cost + 1e-6,
-                    "{sent:?} brand={brand}: analytic cost {analytic_cost} worse than reference {reference_cost} (analytic={analytic}, reference={reference})"
-                );
-            }
-        }
+    fn rejects_invalid_params() {
+        assert!(
+            SentimentParams::uniform(0.5).is_err(),
+            "p < 1 must be rejected"
+        );
+        assert!(
+            SentimentParams::uniform(f64::NAN).is_err(),
+            "NaN p must be rejected"
+        );
+        assert!(
+            SentimentParams::uniform(f64::INFINITY).is_err(),
+            "inf p must be rejected"
+        );
+        assert!(SentimentParams::uniform(2.0).is_ok());
     }
 
     #[test]
-    fn warning_no_floor_when_far() {
+    fn with_params_overrides_hardness() {
         let neutral = default_neutral();
-        let curve = SentimentCurve::new(Sentiment::Warning, 300.0, "#FF9500", &neutral).unwrap();
-        assert!(!curve.was_displaced);
-        assert!((curve.resolved_hue - 67.0).abs() < 1.0);
+        // Softer p yields more push-out for a near brand than a harder p.
+        let soft = SentimentCurve::with_params(
+            Sentiment::Danger,
+            25.0,
+            "#FF3B30",
+            &neutral,
+            SentimentParams::uniform(1.2).unwrap(),
+        )
+        .unwrap();
+        let hard = SentimentCurve::with_params(
+            Sentiment::Danger,
+            25.0,
+            "#FF3B30",
+            &neutral,
+            SentimentParams::uniform(8.0).unwrap(),
+        )
+        .unwrap();
+        let soft_sep = angular_distance(soft.resolved_hue, 25.0);
+        let hard_sep = angular_distance(hard.resolved_hue, 25.0);
+        assert!(
+            soft_sep > hard_sep,
+            "soft p should separate more than hard p: {soft_sep} !> {hard_sep}"
+        );
     }
 
     #[test]
@@ -541,9 +904,8 @@ mod tests {
     fn displacement_value_positive_when_displaced() {
         let neutral = default_neutral();
         let curve = SentimentCurve::new(Sentiment::Danger, 20.0, "#FF3B30", &neutral).unwrap();
-        if curve.was_displaced {
-            assert!(curve.displacement > 0.0, "displacement should be positive");
-        }
+        assert!(curve.was_displaced, "a near brand displaces");
+        assert!(curve.displacement > 0.0, "displacement should be positive");
     }
 
     #[test]

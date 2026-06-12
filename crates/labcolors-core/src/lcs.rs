@@ -52,6 +52,19 @@ impl LcsColor {
         self.s * (self.jp + 1.0)
     }
 
+    /// The CAM16-UCS colourfulness `M'` of an in-gamut **linear** sRGB colour,
+    /// computed straight through the forward CAM16 path with no hex round-trip.
+    ///
+    /// `M'` does not depend on the Oklab hue carried alongside it, so this skips
+    /// the `oklab_hue` step too: it is purely `rgb → XYZ → CAM16 → M'`. It is the
+    /// allocation-free equivalent of `from_hex_with_vc(hex_from_srgb(rgb))?.mp()`
+    /// for callers that have already quantised `rgb` to the display grid.
+    pub(crate) fn mp_of_linear_srgb(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
+        let xyz = srgb_to_xyz(rgb);
+        // h_ok is irrelevant to M'; pass 0.0 to avoid the oklab_hue computation.
+        Self::from_xyz_with_hok(xyz, 0.0, vc).mp()
+    }
+
     pub(crate) fn h_cam(&self) -> f64 {
         self.h_cam
     }
