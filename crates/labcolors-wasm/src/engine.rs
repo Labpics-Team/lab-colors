@@ -186,7 +186,7 @@ mod tests {
         // keyed by Role::key(). We assert the keys exist, not their count, so
         // issue #59's growth does not break this test.
         let keys: Vec<_> = result.roles.iter().map(|r| r.role_key).collect();
-        assert!(keys.contains(&"text-primary"));
+        assert!(keys.contains(&"label-primary"));
         assert!(keys.contains(&"none"));
     }
 
@@ -199,13 +199,13 @@ mod tests {
     }
 
     #[test]
-    fn text_primary_on_white_is_a_dark_colour() {
+    fn label_primary_on_white_is_a_dark_colour() {
         let engine = Engine::new();
         let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         let tp = result
             .roles
             .iter()
-            .find(|r| r.role_key == "text-primary")
+            .find(|r| r.role_key == "label-primary")
             .unwrap();
         match &tp.outcome {
             RoleOutcome::Color(c) => {
