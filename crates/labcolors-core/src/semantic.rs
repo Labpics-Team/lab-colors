@@ -92,10 +92,26 @@
 //!   `surface` / `shadow` carry placeholder ranges held above the solver's
 //!   reliable floor; their real just-noticeable-difference calibration is the
 //!   `surface-jnd` chapter (blocked on the quantisation gap, issue #44).
-//! - **Brand / sentiment roles are not here.** v1 is `ChromaPolicy::Neutral`
-//!   only. The chroma seam ([`RoleTable::chroma`]) is left open so a later
-//!   chapter can add accent-tinted roles over the existing sentiment machinery
-//!   without reshaping this table.
+//! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
+//!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
+//!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
+//!   chroma seam ([`RoleTable::with_chroma`]) is left open so that chapter can
+//!   swap the policy over the existing sentiment machinery without reshaping
+//!   this table.
+//!
+//! # The neutral undertone: identity, not sterile grey
+//!
+//! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
+//! not a pure grey. A role table resolved with zero chroma threw that identity
+//! away: `text-primary` on white came out the sterile `#141414`. The default
+//! table instead carries the neutral's Oklab hue ([`NEUTRAL_HUE_DEG`]) at a
+//! small relative chroma ([`NEUTRAL_TINT_RATIO`]), so every resolved role is a
+//! *relative* of the neutral family — `text-primary` on white lands as a cool
+//! near-black in the `#101012` family. The chroma is small enough that the WCAG
+//! floors, the strict hierarchy, and the near-black/near-white primary all hold
+//! exactly as before (the solver re-solves lightness to the same target with the
+//! tint applied). A caller who wants pure grey overrides it with
+//! [`RoleTable::with_chroma`]`(`[`RoleChroma::Neutral`]`)`.
 
 use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Solved, Unreachable};
 use crate::spaces::srgb::srgb_gamma;
@@ -267,24 +283,71 @@ pub enum RoleSpec {
     Zero,
 }
 
-/// The chroma policy a role carries.
+/// The Oklab hue (degrees) the system neutral is tinted with.
 ///
-/// v1 is [`Neutral`](RoleChroma::Neutral) throughout: the table is achromatic.
-/// The variant exists so a later chapter can introduce brand/sentiment-tinted
-/// roles without changing this type's shape — see the module docs.
+/// Daniel's neutral ladder is not a pure grey: it carries a cool blue-violet
+/// undertone. Measured in Oklab on the owner's anchors, the hue is stable across
+/// the whole ladder — `#101012` → 285.97°, `#3C3C43` (Figma secondary) → 285.78°,
+/// `#787880` (mid) → 286.01° — so a single constant captures it. Resolved roles
+/// inherit this hue, which is what makes `text-primary` on white land as a
+/// relative of `#101012` (a cool near-black) rather than the sterile grey
+/// `#141414`.
+const NEUTRAL_HUE_DEG: f64 = 286.0;
+
+/// The fraction of the in-gamut maximum chroma a tinted role carries.
+///
+/// Deliberately small: the undertone must be *felt*, never *seen* as colour. The
+/// absolute chroma the solver applies is `ratio · max_chroma(L)`
+/// ([`build_color`](crate::solve)), and `max_chroma` peaks at mid lightness and
+/// falls to ~0 at both the dark and the light extreme. So a single flat ratio
+/// reproduces the neutral curve's envelope spirit *for free*: the strongest tint
+/// lands on the mid-weight roles, the faintest on the near-black / near-white
+/// ends of the text ladder — "меньше у тёмных/светлых краёв, больше к середине".
+/// `0.10` is the owner's calibrated optimum (picked by eye from engine-resolved
+/// swatches over `0.04 / 0.08 / 0.12`, 2026-06-12): on white, `text-primary`
+/// resolves to a cool near-black in the `#101012` family, not pure grey.
+const NEUTRAL_TINT_RATIO: f64 = 0.10;
+
+/// The chroma policy a role table carries.
+///
+/// The v1 default is [`Tinted`](RoleChroma::Tinted) with the neutral's cool
+/// undertone (see [`NEUTRAL_HUE_DEG`]). [`Neutral`](RoleChroma::Neutral) is the
+/// achromatic override: a caller who wants the old pure-grey behaviour (or any
+/// other policy) replaces the table's chroma wholesale via
+/// [`RoleTable::with_chroma`]. The enum is the seam a later chapter extends for
+/// brand/sentiment-tinted roles without reshaping this type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleChroma {
-    /// Achromatic (grey). The only v1 policy.
+    /// Achromatic (grey): zero chroma, hue ignored. The explicit override that
+    /// reproduces the pre-tint behaviour.
     Neutral,
+    /// A small undertone at a fixed Oklab `hue_deg`, carried as `ratio` of the
+    /// in-gamut maximum chroma at each role's resolved lightness. The envelope
+    /// (less tint at the extremes, more in the middle) emerges from the
+    /// lightness-dependence of that maximum — see [`NEUTRAL_TINT_RATIO`].
+    Tinted { hue_deg: f64, ratio: f64 },
 }
 
 impl RoleChroma {
-    /// Translate to the solver's [`ChromaPolicy`]. Hue is irrelevant while every
-    /// role is neutral; a future tinted variant resolves its own hue here.
+    /// The v1 default: the neutral's cool undertone at a small flat ratio.
+    fn neutral_tint() -> Self {
+        RoleChroma::Tinted {
+            hue_deg: NEUTRAL_HUE_DEG,
+            ratio: NEUTRAL_TINT_RATIO,
+        }
+    }
+
+    /// Translate to the solver's `(hue, chroma)` inputs. For the achromatic
+    /// override the hue is irrelevant (the solver ignores it at zero chroma); a
+    /// tinted policy passes its own hue and a relative chroma the solver caps at
+    /// the in-gamut maximum.
     fn to_solve(self) -> (Hue, ChromaPolicy) {
         match self {
             RoleChroma::Neutral => (Hue::deg(0.0), ChromaPolicy::Neutral),
+            RoleChroma::Tinted { hue_deg, ratio } => {
+                (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
+            }
         }
     }
 }
@@ -324,6 +387,19 @@ impl RoleTable {
         if let Some(entry) = self.specs.iter_mut().find(|(r, _)| *r == role) {
             entry.1 = spec;
         }
+        self
+    }
+
+    /// Return a copy with the chroma policy replaced wholesale.
+    ///
+    /// The default table carries the neutral's cool undertone
+    /// ([`RoleChroma::Tinted`]); this is the seam that overrides it completely —
+    /// pass [`RoleChroma::Neutral`] for the achromatic pure-grey behaviour, or a
+    /// different [`RoleChroma::Tinted`] hue/ratio for another undertone. The
+    /// override is total: it replaces the policy for *every* role, including
+    /// dropping the tint to zero.
+    pub fn with_chroma(mut self, chroma: RoleChroma) -> Self {
+        self.chroma = chroma;
         self
     }
 }
@@ -371,7 +447,7 @@ impl Default for RoleTable {
                 (Role::Shadow, decorative(10.0)),
                 (Role::None, RoleSpec::Zero),
             ],
-            chroma: RoleChroma::Neutral,
+            chroma: RoleChroma::neutral_tint(),
         }
     }
 }
@@ -1360,6 +1436,252 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for role in Role::ALL {
             assert!(seen.insert(role.key()), "duplicate key {}", role.key());
+        }
+    }
+
+    // ── Neutral undertone: identity, not sterile grey ─────────────────────────
+
+    /// The Oklab `(a, b, chroma, hue°)` of a role's resolved hex — measured on
+    /// the emitted colour, the value the caller actually gets.
+    fn resolved_oklab(
+        bg: &BgInput,
+        role: Role,
+        table: &RoleTable,
+        vc: &ViewingConditions,
+    ) -> [f64; 4] {
+        use crate::spaces::oklab::{oklab_hue, srgb_linear_to_oklab};
+        use crate::spaces::srgb::srgb_from_hex;
+        let solved = match resolve(bg, role, table, vc) {
+            Resolved::Color { solved, .. } => solved,
+            other => panic!("{} expected a colour, got {other:?}", role.key()),
+        };
+        let rgb = srgb_from_hex(solved.hex()).unwrap();
+        let lab = srgb_linear_to_oklab(rgb);
+        let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
+        [lab[1], lab[2], chroma, oklab_hue(rgb)]
+    }
+
+    #[test]
+    fn primary_on_white_is_a_relative_of_the_neutral_not_pure_grey() {
+        // The headline sanity: text-primary on white must be a cool near-black in
+        // the #101012 family — undertone preserved — NOT the sterile grey #141414
+        // a zero-chroma policy produced. Measured on the emitted hex: it carries
+        // real chroma, and the tint direction is cool (Oklab b < 0, like #101012),
+        // i.e. the blue channel exceeds the red.
+        use crate::spaces::srgb::srgb_from_hex;
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            let bg = BgInput::solid("#FFFFFF").unwrap();
+            let solved = match resolve(&bg, Role::TextPrimary, &table, &vc) {
+                Resolved::Color { solved, .. } => solved,
+                other => panic!("{other:?}"),
+            };
+            assert_ne!(
+                solved.hex().to_uppercase(),
+                "#141414",
+                "{vc_name}: primary on white is the sterile grey — undertone lost"
+            );
+            let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::TextPrimary, &table, &vc);
+            assert!(
+                chroma > 1e-3,
+                "{vc_name}: primary on white carries no chroma ({chroma}) — pure grey"
+            );
+            // Cool undertone: Oklab b is negative for the #101012 family, and the
+            // emitted blue byte sits above the red byte.
+            assert!(b < 0.0, "{vc_name}: primary undertone is not cool (b={b})");
+            let rgb_q = srgb_from_hex(solved.hex()).unwrap();
+            assert!(
+                rgb_q[2] >= rgb_q[0],
+                "{vc_name}: primary blue channel must lead red for a cool tint, hex {}",
+                solved.hex()
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_text_roles_share_the_neutral_hue() {
+        // Every text role with enough chroma to carry a reliable hue resolves
+        // near the neutral's Oklab hue (~286°) on white and black — the undertone
+        // is the neutral's, not an arbitrary tint. Near-black / near-white roles
+        // whose chroma is below the quantisation-reliable threshold are checked
+        // for cool *direction* (b < 0) instead, since their hue is float-fragile.
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            for bg_hex in ["#FFFFFF", "#101012"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                for &role in &TEXT_ORDER {
+                    let [_a, b, chroma, hue] = resolved_oklab(&bg, role, &table, &vc);
+                    if chroma > 4e-3 {
+                        let dh = (hue - NEUTRAL_HUE_DEG + 180.0).rem_euclid(360.0) - 180.0;
+                        assert!(
+                            dh.abs() <= 12.0,
+                            "{vc_name} {bg_hex} {}: hue {hue}° off neutral {NEUTRAL_HUE_DEG}° by {dh}°",
+                            role.key()
+                        );
+                    } else {
+                        assert!(
+                            b <= 1e-6,
+                            "{vc_name} {bg_hex} {}: faint tint must still be cool (b={b})",
+                            role.key()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn role_chroma_follows_the_envelope_toward_the_middle() {
+        // The envelope spirit (neutral.rs): chroma is least at the dark/light
+        // *edges of the lightness stretch* and greatest toward the middle. The
+        // absolute chroma is `ratio · max_chroma(L)`, so this is the shape of
+        // `max_chroma` itself — peaked at some interior lightness `L_peak`,
+        // tapering to ~0 at L→0 and L→1. The faithful invariant is therefore on
+        // *lightness*, not on role index: a role nearer `L_peak` carries more
+        // chroma than one further from it. (On black the text ladder happens to
+        // sit entirely on the light side of the peak, so its roles are monotone —
+        // an end role legitimately holds the most chroma there; the lightness
+        // formulation captures both cases without a false "interior role" claim.)
+        use crate::scale::max_chroma;
+        // Locate L_peak of the tint hue's chroma envelope (coarse scan is plenty).
+        let l_peak = (1..100)
+            .map(|i| i as f64 / 100.0)
+            .max_by(|&a, &b| {
+                max_chroma(a, NEUTRAL_HUE_DEG)
+                    .partial_cmp(&max_chroma(b, NEUTRAL_HUE_DEG))
+                    .unwrap()
+            })
+            .unwrap();
+        let vc = ViewingConditions::srgb();
+        for bg_hex in ["#FFFFFF", "#101012"] {
+            let bg = BgInput::solid(bg_hex).unwrap();
+            // (distance of the role's resolved lightness from the envelope peak,
+            //  the chroma it carries) for every text role.
+            let mut samples: Vec<(f64, f64)> = TEXT_ORDER
+                .iter()
+                .map(|&r| {
+                    let solved = match resolve(&bg, r, &RoleTable::default(), &vc) {
+                        Resolved::Color { solved, .. } => solved,
+                        other => panic!("{other:?}"),
+                    };
+                    let rgb = crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap();
+                    let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
+                    let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
+                    ((lab[0] - l_peak).abs(), chroma)
+                })
+                .collect();
+            // Sort by distance from the envelope peak; chroma must not increase as
+            // we move away from it — the envelope tapers outward, monotonically.
+            samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for pair in samples.windows(2) {
+                assert!(
+                    pair[0].1 + 1e-4 >= pair[1].1,
+                    "{bg_hex}: chroma rose away from envelope peak (L_peak {l_peak}): {samples:?}"
+                );
+            }
+            // And the tint is genuinely present in the middle of the band, not a
+            // flat zero everywhere.
+            let peak = samples.iter().map(|&(_, c)| c).fold(0.0_f64, f64::max);
+            assert!(
+                peak > 1e-3,
+                "{bg_hex}: envelope carries no measurable tint, chromas {samples:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_neutral_chroma_overrides_the_tint_to_pure_grey() {
+        // The override seam: a table whose chroma policy is set to Neutral resolves
+        // every role as a pure grey again — the default tint is replaced wholesale,
+        // including dropping the undertone to exactly zero. This is the configurable
+        // policy the task requires: a custom RoleChroma beats the default fully.
+        let table = RoleTable::default().with_chroma(RoleChroma::Neutral);
+        for (vc, vc_name) in vcs() {
+            for bg_hex in ["#FFFFFF", "#101012"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                for &role in &TEXT_ORDER {
+                    let [a, b, chroma, _hue] = resolved_oklab(&bg, role, &table, &vc);
+                    assert!(
+                        chroma < 1e-3,
+                        "{vc_name} {bg_hex} {}: neutral override still tinted (a={a}, b={b})",
+                        role.key()
+                    );
+                }
+            }
+        }
+        // And the achromatic override reproduces the historic sterile grey exactly.
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let grey = match resolve(&bg, Role::TextPrimary, &table, &ViewingConditions::srgb()) {
+            Resolved::Color { solved, .. } => solved.hex().to_uppercase(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(grey, "#141414", "neutral override must restore pure grey");
+    }
+
+    #[test]
+    fn custom_tint_overrides_hue_and_ratio() {
+        // The override is not limited to dropping the tint: a different Tinted
+        // policy resolves roles around its own hue. A warm 30° undertone must land
+        // the roles warm (Oklab b > 0), not at the cool default — proving the whole
+        // policy, hue and ratio, is configurable.
+        let vc = ViewingConditions::srgb();
+        let warm = RoleTable::default().with_chroma(RoleChroma::Tinted {
+            hue_deg: 30.0,
+            ratio: 0.10,
+        });
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::TextSecondary, &warm, &vc);
+        assert!(chroma > 1e-3, "warm tint carries chroma");
+        assert!(b > 0.0, "warm 30° undertone must be warm (b={b}), not cool");
+    }
+
+    #[test]
+    fn tint_preserves_the_contrast_target_and_floor() {
+        // The undertone must not move the contrast: the tinted default and the
+        // achromatic override land within the 1-Lc quantisation budget of each
+        // other on the same role, and both clear the WCAG floor. Identity is added
+        // without surprising the contrast contract.
+        let vc = ViewingConditions::srgb();
+        let tinted = RoleTable::default();
+        let grey = RoleTable::default().with_chroma(RoleChroma::Neutral);
+        for bg_hex in ["#FFFFFF", "#101012"] {
+            let bg = BgInput::solid(bg_hex).unwrap();
+            for (role, min_ratio) in [
+                (Role::TextPrimary, 4.5),
+                (Role::TextSecondary, 4.5),
+                (Role::TextMuted, 3.0),
+            ] {
+                let t = match resolve(&bg, role, &tinted, &vc) {
+                    Resolved::Color { solved, .. } => solved,
+                    other => panic!("{other:?}"),
+                };
+                let g = match resolve(&bg, role, &grey, &vc) {
+                    Resolved::Color { solved, .. } => solved,
+                    other => panic!("{other:?}"),
+                };
+                // Where perception governs, the tinted and grey roles target the
+                // same Lc and must land within the 1-Lc quantisation budget. Where
+                // the WCAG floor drives the result (an AA-floored role), the legal
+                // gate — not the perceptual target — sets the colour, and the tint
+                // can land on a neighbouring on-grid point that still clears the
+                // floor; there the only honest invariant is that both clear it.
+                let floor_driven = t.floor_override() || g.floor_override();
+                if !floor_driven {
+                    assert!(
+                        (t.lc().abs() - g.lc().abs()).abs() <= 1.0,
+                        "{bg_hex} {}: tint moved a perceptual target (tinted {} vs grey {})",
+                        role.key(),
+                        t.lc(),
+                        g.lc()
+                    );
+                }
+                assert!(
+                    t.wcag_ratio() >= min_ratio - 1e-9,
+                    "{bg_hex} {}: tinted role fails WCAG floor {min_ratio} ({})",
+                    role.key(),
+                    t.wcag_ratio()
+                );
+            }
         }
     }
 }
