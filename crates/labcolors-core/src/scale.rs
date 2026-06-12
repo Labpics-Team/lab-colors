@@ -1,5 +1,6 @@
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
+use crate::spaces::cam16;
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
 use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
@@ -69,9 +70,10 @@ impl AccentCurve {
 
         let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(xyz, &self.vc);
 
-        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131); see lcs.rs.
-        let jp_actual = 1.7 * j / (1.0 + 0.007 * j);
-        let mp = (1.0 + 0.0228 * m).ln() / 0.0228;
+        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131) through the
+        // shared single-source helpers (#19/#60); never re-type the constants here.
+        let jp_actual = cam16::ucs_j(j);
+        let mp = cam16::ucs_m(m);
         let s = if jp_actual + 1.0 > 1e-9 {
             mp / (jp_actual + 1.0)
         } else {
@@ -174,19 +176,19 @@ impl AccentCurve {
 /// Replacing the 64 forward CAM16 passes with one analytic `y_hk` is the only
 /// behavioural change; everything downstream of `y` is unchanged.
 fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
-    // Step 1: invert the CAM16-UCS lightness rescale J' → J.
-    // J' is bounded above by 1.7/0.007 ≈ 242.86 (the rescale's horizontal
-    // asymptote); at or past it the denominator is non-positive and there is no
-    // finite J, so the grey saturates at white, exactly as the bisection's
-    // hi = 1.0 cap did.
-    let denom = 1.7 - 0.007 * jp;
+    // Step 1: invert the CAM16-UCS lightness rescale J' → J through the shared
+    // single-source helper (#19/#60) — never re-type the rescale constants here.
+    // J' is bounded above by the rescale's horizontal asymptote (1.7/0.007 ≈
+    // 242.86); at or past it `ucs_j_inv` has a non-positive denominator and
+    // returns a non-finite or non-positive J, so the grey saturates at white,
+    // exactly as the bisection's hi = 1.0 cap did.
     if jp <= 0.0 {
         return srgb_linear_to_oklab([0.0, 0.0, 0.0])[0];
     }
-    if denom <= 0.0 {
+    let j = cam16::ucs_j_inv(jp);
+    if !j.is_finite() || j <= 0.0 {
         return srgb_linear_to_oklab([1.0, 1.0, 1.0])[0];
     }
-    let j = jp / denom;
 
     // Step 2: invert the achromatic CAM16 chain J → y. On the grey axis chroma
     // is zero, so J_HK ≡ J and the H-K-corrected grey inverse is the plain one.
