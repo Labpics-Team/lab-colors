@@ -37,11 +37,21 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
 ];
 
 /// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
-/// — frozen. brand 200° is far enough from the Info prototype hue (240°) that
-/// no displacement occurs, so this also pins the un-displaced sentiment path.
+/// — frozen.
+///
+/// CONSCIOUS SNAPSHOT CHANGE — smooth-asymptote model, by owner decision
+/// (sentiment-asymptote, 2026-06-12). The previous model used a hard 20°
+/// conflict threshold: brand 200° is 40° from the Info prototype (240°), beyond
+/// the threshold, so the resolved hue snapped exactly to 240° and was *not*
+/// displaced. The new model has NO on/off threshold — the displacement decays
+/// asymptotically toward (but never reaches) zero. At d = 40° the smooth
+/// separation is s(40) = (40² + 20²)^(1/2) ≈ 44.72°, so the resolved hue is
+/// 200° + 44.72° = 244.72° (a deliberate +4.72° nudge), and `was_displaced` is
+/// now `true`. The ladder below is regenerated from that resolved hue. This is
+/// an intentional contract change, not silent drift.
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F2F9FF", "#D3ECFF", "#A5D9FF", "#63C1FF", "#00A3EF", "#0081BE", "#0079B3",
-    "#006B9F", "#005A86", "#004568", "#002D47", "#001220",
+    "#FFFFFF", "#F2F9FF", "#D5EBFF", "#AAD8FF", "#6FBFFF", "#00A1FA", "#007FC7", "#0077BB",
+    "#0069A6", "#00588C", "#00446D", "#002D4A", "#001222",
 ];
 
 #[test]
@@ -62,15 +72,17 @@ fn sentiment_info_curve_sample_hex_13_matches_golden() {
     let neutral = neutral();
     let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#007AFF", &neutral)
         .expect("Info sentiment with a far brand hue resolves");
-    // Pin the resolution decision too: brand 200° is > 15° from the 240°
-    // prototype, so the curve must NOT be displaced and must resolve to 240°.
+    // Pin the resolution decision under the smooth-asymptote model: brand 200°
+    // is 40° from the 240° prototype, so the hue is displaced by the asymptotic
+    // nudge s(40) − 40 ≈ 4.72°, landing at ≈244.72°. (Conscious change from the
+    // old hard-threshold behaviour, which left it un-displaced at 240°.)
     assert!(
-        !curve.was_displaced,
-        "Info brand 200° is far from prototype 240°; displacement signals a changed conflict rule"
+        curve.was_displaced,
+        "smooth model has no threshold: a 40° brand still nudges the hue"
     );
     assert!(
-        (curve.resolved_hue - 240.0).abs() < 1.0,
-        "Info resolved hue drifted from prototype 240°: {}",
+        (curve.resolved_hue - 244.72).abs() < 0.1,
+        "Info resolved hue should be the smooth-asymptote 244.72°: {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);
