@@ -303,9 +303,10 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// reproduces the neutral curve's envelope spirit *for free*: the strongest tint
 /// lands on the mid-weight roles, the faintest on the near-black / near-white
 /// ends of the text ladder — "меньше у тёмных/светлых краёв, больше к середине".
-/// At `0.08` on white, `text-primary` resolves to `#141418` (a cool near-black in
-/// the `#101012` family), not pure grey.
-const NEUTRAL_TINT_RATIO: f64 = 0.08;
+/// `0.10` is the owner's calibrated optimum (picked by eye from engine-resolved
+/// swatches over `0.04 / 0.08 / 0.12`, 2026-06-12): on white, `text-primary`
+/// resolves to a cool near-black in the `#101012` family, not pure grey.
+const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// The chroma policy a role table carries.
 ///
