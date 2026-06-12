@@ -15,9 +15,33 @@
 //!
 //! [`solve`] takes a *signed* `Lc` (positive = dark-on-light, negative =
 //! light-on-dark). A role stores only the *magnitude* of the contrast it wants;
-//! this module picks the sign from the background's luminance, so the same role
-//! table resolves correctly on a light or a dark background without the caller
+//! this module picks the sign from the background, so the same role table
+//! resolves correctly on a light or a dark background without the caller
 //! choosing a theme. That is what "resolved from any background" means.
+//!
+//! The sign is chosen in two stages, and — crucially — from the *WCAG* gate the
+//! text roles actually have to clear, not from the perceptual maximum:
+//!
+//! 1. **WCAG reachability first.** A text role floors at the legal AA ratio
+//!    (4.5:1 for text). Which polarity can reach that floor is a property of the
+//!    background alone — `contrast_ratio(black, bg)` vs `contrast_ratio(white,
+//!    bg)` — and is independent of the viewing conditions, because the WCAG
+//!    formula is. So the polarity that clears the strict 4.5:1 floor wins. This
+//!    is what stops a light-grey background (`#808080`, `#999999`) from reporting
+//!    every text role unreachable while *black* text on it passes AA with room to
+//!    spare: the old "pick the larger LPC maximum" rule flipped polarity near
+//!    `#999999`, far from the WCAG flip near `#747474`, and chose the side the
+//!    legal floor could not reach.
+//! 2. **Tie-break on headroom.** When both polarities clear the strict floor
+//!    (near the flip, e.g. `#767676`), the side with the larger WCAG margin wins;
+//!    if that too is level, the larger LPC headroom breaks it. When *neither*
+//!    polarity can clear the floor (a true mid-grey with no readable side), the
+//!    side that comes *closest* is chosen, so the [`Unreachable`] a role surfaces
+//!    carries the honest best-case `max_ratio`, not a worse one.
+//!
+//! Because the criterion is VC-independent, a role's polarity never flips between
+//! the light and dim viewing conditions for the same background — no per-theme
+//! coin-flip on a near-tie like `#3478F6`.
 //!
 //! # Sanity over arithmetic: the anchor principle
 //!
@@ -33,11 +57,26 @@
 //! stay marked "calibrates" until his eye signs off.
 //!
 //! Because every text role is a fraction of the *same* per-background maximum,
-//! the hierarchy primary > secondary > muted > disabled holds on every
-//! background, in both polarities — symmetric by construction. This is the
-//! deliberate fix for the asymmetry baked into the hand-tuned Figma tokens,
-//! where equal opacity steps produced a dark-theme hierarchy ~40 % weaker than
-//! the light one (see the module tests).
+//! the hierarchy primary > secondary > muted > disabled is **strict wherever the
+//! background physically allows it** — symmetric by construction across both
+//! polarities. This is the deliberate fix for the asymmetry baked into the
+//! hand-tuned Figma tokens, where equal opacity steps produced a dark-theme
+//! hierarchy ~40 % weaker than the light one (see the module tests).
+//!
+//! # Hierarchy compression is flagged, never silent
+//!
+//! On a background whose readable window is *narrower than the hierarchy's own
+//! steps* — a near-AA mid-grey such as `#747474`, where the only readable
+//! polarity has barely any room above 4.5:1 — two adjacent text roles can be
+//! forced by the legal floor onto the same point. The old code let primary and
+//! secondary collapse to an identical hex silently, falsifying the "strict
+//! hierarchy by construction" claim. This module instead degrades *honestly*:
+//! the order is kept non-strict (primary ≥ secondary ≥ muted ≥ disabled), a
+//! subordinate role is nudged to the smallest distinguishable quantisation step
+//! below its senior **only while it still clears its own floor**, and any role
+//! whose target was lifted by the floor into this squeeze is marked
+//! [`Resolved::compressed`]. A consumer can read the flag and know the hierarchy
+//! is compressed here, rather than discovering two roles share a colour.
 //!
 //! # The zero token
 //!
@@ -54,12 +93,14 @@
 //!   reliable floor; their real just-noticeable-difference calibration is the
 //!   `surface-jnd` chapter (blocked on the quantisation gap, issue #44).
 //! - **Brand / sentiment roles are not here.** v1 is `ChromaPolicy::Neutral`
-//!   only. The chroma seam ([`Role::chroma`]) is left open so a later chapter
-//!   can add accent-tinted roles over the existing sentiment machinery without
-//!   reshaping this table.
+//!   only. The chroma seam ([`RoleTable::chroma`]) is left open so a later
+//!   chapter can add accent-tinted roles over the existing sentiment machinery
+//!   without reshaping this table.
 
 use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Solved, Unreachable};
+use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
+use crate::wcag;
 
 /// The reliable lower bound on a decorative role's contrast magnitude.
 ///
@@ -68,6 +109,38 @@ use crate::spaces::vc::ViewingConditions;
 /// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
 /// is held strictly above this until the real JND calibration lands.
 const DECORATIVE_FLOOR_MIN: f64 = 7.6;
+
+/// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
+/// role in the table imposes, and therefore the one polarity is chosen against.
+/// Selecting against the strictest floor keeps a single polarity for the whole
+/// set: a side that clears 4.5:1 trivially clears the laxer 3:1 UI floor too.
+const POLARITY_FLOOR_RATIO: f64 = wcag::AA_TEXT_RATIO;
+
+/// The contrast polarity a background hosts: dark foreground on a light
+/// background, or light foreground on a dark one.
+///
+/// Replaces the old bare `f64` sign (`+1.0` / `-1.0`): the two valid states are
+/// named, illegal ones (a zero or non-unit sign) are unrepresentable, and the
+/// `sign()` accessor is the single place the enum becomes the signed `Lc` the
+/// solver consumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Polarity {
+    /// Dark foreground on a light background — positive signed `Lc`.
+    DarkOnLight,
+    /// Light foreground on a dark background — negative signed `Lc`.
+    LightOnDark,
+}
+
+impl Polarity {
+    /// The signed multiplier this polarity applies to a contrast magnitude:
+    /// `+1` for dark-on-light, `-1` for light-on-dark.
+    fn sign(self) -> f64 {
+        match self {
+            Polarity::DarkOnLight => 1.0,
+            Polarity::LightOnDark => -1.0,
+        }
+    }
+}
 
 /// One semantic colour slot: a stable key plus the recipe for its contract.
 ///
@@ -311,8 +384,12 @@ impl Default for RoleTable {
 /// returns [`Unreachable`], it is not silently clipped to a wrong colour.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Resolved {
-    /// A solved colour for a text/UI or decorative role.
-    Color(Solved),
+    /// A solved colour for a text/UI or decorative role. `compressed` is `true`
+    /// when the legal floor squeezed this role's target against its senior's so
+    /// the strict hierarchy could not hold and the role was demoted to the
+    /// smallest distinguishable step below — an honest, flagged degradation
+    /// rather than a silent two-roles-one-colour collapse. See the module docs.
+    Color { solved: Solved, compressed: bool },
     /// The honest zero of the [`Role::None`] token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
@@ -320,34 +397,114 @@ pub enum Resolved {
 }
 
 impl Resolved {
+    /// A non-compressed solved colour — the common case where the hierarchy holds
+    /// strictly and no floor squeeze was needed.
+    fn color(solved: Solved) -> Self {
+        Resolved::Color {
+            solved,
+            compressed: false,
+        }
+    }
+
     /// The solved colour, if this role resolved to one.
     pub fn solved(&self) -> Option<&Solved> {
         match self {
-            Resolved::Color(s) => Some(s),
+            Resolved::Color { solved, .. } => Some(solved),
             _ => None,
         }
+    }
+
+    /// Whether the hierarchy was compressed at this role: the legal floor forced
+    /// it onto (or just below) its senior, so its place in the order is
+    /// non-strict. `false` for the zero token and unreachable roles.
+    pub fn compressed(&self) -> bool {
+        matches!(
+            self,
+            Resolved::Color {
+                compressed: true,
+                ..
+            }
+        )
     }
 
     /// The signed perceptual contrast `Lc` of a resolved colour, if any. The
     /// zero token reports `0.0`; an unreachable role reports `None`.
     pub fn lc(&self) -> Option<f64> {
         match self {
-            Resolved::Color(s) => Some(s.lc()),
+            Resolved::Color { solved, .. } => Some(solved.lc()),
             Resolved::None => Some(0.0),
             Resolved::Unreachable(_) => Option::None,
         }
     }
 }
 
+/// Everything about a `(background, viewing-conditions)` pair that every role in
+/// a set shares: the one polarity the whole table resolves in, and the maximum
+/// contrast magnitude that polarity can supply.
+///
+/// Computing this once is what makes [`resolve_set`] solve the table in a single
+/// sweep instead of re-deriving polarity (two probe solves) and the maximum (one
+/// more) per role — 32 `solve` calls collapse to 12. It also *guarantees* a
+/// uniform polarity across the set: every role reads its sign from the same
+/// `polarity` field, so they cannot disagree.
+#[derive(Debug, Clone, Copy)]
+struct ResolveContext {
+    /// The single polarity the whole set resolves in (chosen WCAG-first).
+    polarity: Polarity,
+    /// The maximum contrast magnitude the background supplies in `polarity`, or
+    /// `None` if the background has no headroom in it at all (a pathological
+    /// extreme). Anchored roles need this to take their fraction of it.
+    max_contrast: Option<f64>,
+}
+
+impl ResolveContext {
+    /// Derive the shared context for `bg` under `vc`: pick the polarity, then read
+    /// the maximum contrast in it back from the solver.
+    fn new(bg: &BgInput, vc: &ViewingConditions) -> Self {
+        let polarity = choose_polarity(bg, vc);
+        let max_contrast = max_contrast(bg, polarity, vc).ok();
+        Self {
+            polarity,
+            max_contrast,
+        }
+    }
+
+    /// The signed `Lc` target for an anchored text/UI role: the chosen polarity's
+    /// sign times `fraction` of the background's maximum contrast. `Err` when the
+    /// background has no headroom in the chosen polarity (the honest max-ratio is
+    /// reported by the role's solve).
+    fn anchored_contract(&self, anchor: TextAnchor) -> Result<Contract, Unreachable> {
+        let max = self.max_contrast.ok_or(Unreachable::FloorUnreachable {
+            floor: POLARITY_FLOOR_RATIO,
+            max_ratio: 0.0,
+        })?;
+        let target = self.polarity.sign() * anchor.fraction() * max;
+        Ok(Contract::text(target).with_conformance(anchor.conformance()))
+    }
+
+    /// The signed range contract for a decorative JND role: the chosen polarity's
+    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`], no readability
+    /// floor.
+    fn decorative_contract(&self, magnitude: f64) -> Contract {
+        let target = self.polarity.sign() * magnitude.abs().max(DECORATIVE_FLOOR_MIN);
+        // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
+        Contract::range(target, target)
+    }
+}
+
 /// Resolve one [`Role`] against `bg` under `vc`, using `table`'s recipe.
 ///
-/// Polarity is chosen from the background's luminance, so the same role resolves
-/// on light or dark backgrounds. Returns:
+/// Polarity is chosen from the background (WCAG-first, see the module docs), so
+/// the same role resolves on light or dark backgrounds. Returns:
 ///
 /// * [`Resolved::Color`] — the solved colour for a text/UI or decorative role;
 /// * [`Resolved::None`] — for the [`Role::None`] zero token;
 /// * [`Resolved::Unreachable`] — when no colour can meet the role's contract on
 ///   this background (an extreme background, never a silent clip).
+///
+/// This solves the single role in isolation; the hierarchy-compression flag is a
+/// *set* property and is only raised by [`resolve_set`], which sees a role's
+/// seniors. A role resolved here therefore always reports `compressed == false`.
 ///
 /// * `bg` — the background to resolve against.
 /// * `role` — which semantic slot to solve.
@@ -355,20 +512,31 @@ impl Resolved {
 /// * `vc` — viewing conditions (light vs dim/dark); pass the same VC the theme
 ///   resolves under.
 pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditions) -> Resolved {
-    let spec = table.spec(role);
-    let (hue, chroma) = table.chroma().to_solve();
+    let ctx = ResolveContext::new(bg, vc);
+    resolve_in(bg, role, table, vc, &ctx)
+}
 
-    let contract = match spec {
+/// Resolve one role through an already-derived [`ResolveContext`], so a whole set
+/// shares one polarity and one maximum-contrast computation.
+fn resolve_in(
+    bg: &BgInput,
+    role: Role,
+    table: &RoleTable,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Resolved {
+    let (hue, chroma) = table.chroma().to_solve();
+    let contract = match table.spec(role) {
         RoleSpec::Zero => return Resolved::None,
-        RoleSpec::Anchor(anchor) => match anchored_contract(bg, anchor, vc) {
+        RoleSpec::Anchor(anchor) => match ctx.anchored_contract(anchor) {
             Ok(c) => c,
             Err(reason) => return Resolved::Unreachable(reason),
         },
-        RoleSpec::Decorative { magnitude } => decorative_contract(bg, magnitude, vc),
+        RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
     };
 
     match solve::solve(bg.clone(), contract, hue, chroma, vc, Gamut::Srgb) {
-        Ok(solved) => Resolved::Color(solved),
+        Ok(solved) => Resolved::color(solved),
         Err(reason) => Resolved::Unreachable(reason),
     }
 }
@@ -377,57 +545,149 @@ pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditio
 /// visual-weight order (strongest text first, then decorative, then the zero
 /// token). The returned pairs preserve that order, so a consumer can read the
 /// hierarchy off the sequence and a serialiser emits stable output.
+///
+/// Polarity and maximum contrast are computed once for the whole set (see
+/// [`ResolveContext`]); every role shares them. After the per-role solve a
+/// hierarchy pass walks the text roles strongest-first and, where the legal floor
+/// squeezed a role onto its senior, demotes it to the smallest distinguishable
+/// step below if one still clears its floor, flagging it [`Resolved::compressed`]
+/// — an honest, visible degradation rather than a silent identical-colour
+/// collapse.
 pub fn resolve_set(
     bg: &BgInput,
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    Role::ALL
+    let ctx = ResolveContext::new(bg, vc);
+    let mut set: Vec<(Role, Resolved)> = Role::ALL
         .iter()
-        .map(|&role| (role, resolve(bg, role, table, vc)))
-        .collect()
+        .map(|&role| (role, resolve_in(bg, role, table, vc, &ctx)))
+        .collect();
+    enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
+    set
 }
 
-/// Build the signed text/UI contract for an anchor: the polarity-correct target
-/// at `anchor.fraction()` of the background's maximum achievable contrast.
+/// Walk the text roles strongest-first and keep the order non-strict but honest.
 ///
-/// The maximum is read from the solver itself — the single source of truth — by
-/// probing an unreachable extreme and taking the [`max_achievable`] it reports,
-/// so this module never re-derives the contrast curve. If even the extreme is
-/// unreachable (a mid background with no headroom in that polarity) the reason
-/// propagates out.
-///
-/// [`max_achievable`]: Unreachable::ExceedsRange
-fn anchored_contract(
+/// The anchor principle already orders the *targets* strictly, but the legal
+/// floor can lift two adjacent roles onto the same colour where the readable
+/// window is narrower than the hierarchy steps (a near-AA mid-grey). For each
+/// junior text role that did not come out strictly weaker than the senior above
+/// it, try to demote it by the smallest number of quantisation steps that makes
+/// it strictly weaker *while it still clears its own WCAG floor*; if none does,
+/// leave it equal to the senior. Either way, flag it [`Resolved::compressed`] so
+/// the squeeze is visible rather than silent.
+fn enforce_text_hierarchy(
+    set: &mut [(Role, Resolved)],
     bg: &BgInput,
-    anchor: TextAnchor,
+    table: &RoleTable,
     vc: &ViewingConditions,
-) -> Result<Contract, Unreachable> {
-    let sign = background_polarity(bg, vc);
-    // `max_contrast` returns the magnitude; reapply the background's polarity so
-    // the signed target points the right way (dark-on-light vs light-on-dark).
-    let max = max_contrast(bg, sign, vc)?;
-    let target = sign * anchor.fraction() * max;
-    Ok(Contract::text(target).with_conformance(anchor.conformance()))
+    ctx: &ResolveContext,
+) {
+    let (hue, chroma) = table.chroma().to_solve();
+
+    // Strongest-first text order; each junior is compared against its senior.
+    for window in TEXT_HIERARCHY.windows(2) {
+        let [senior_role, junior_role] = [window[0], window[1]];
+        let Some(senior_mag) = solved_magnitude(set, senior_role) else {
+            continue; // senior unreachable — nothing to compress against
+        };
+        let Some(junior_mag) = solved_magnitude(set, junior_role) else {
+            continue; // junior unreachable — surfaced honestly already
+        };
+        if junior_mag + STRICT_STEP <= senior_mag {
+            continue; // strictly weaker already — hierarchy holds here
+        }
+
+        // The floor squeezed this junior onto (or above) its senior. The junior's
+        // own conformance governs how far down it may move and still be legal.
+        let floor = match table.spec(junior_role) {
+            RoleSpec::Anchor(a) => a.conformance(),
+            _ => Floor::None,
+        };
+        let demoted = demote_below(senior_mag, ctx, hue, chroma, floor, bg, vc);
+        let Some(entry) = set.iter_mut().find(|(r, _)| *r == junior_role) else {
+            continue;
+        };
+        entry.1 = match (demoted, &entry.1) {
+            // A distinguishable, still-legal step below the senior.
+            (Some(solved), _) => Resolved::Color {
+                solved,
+                compressed: true,
+            },
+            // No room to separate: keep the floored colour but flag the squeeze.
+            (None, Resolved::Color { solved, .. }) => Resolved::Color {
+                solved: solved.clone(),
+                compressed: true,
+            },
+            (None, other) => other.clone(),
+        };
+    }
 }
 
-/// Build the decorative JND contract for a provisional magnitude: a degenerate
-/// signed range with no readability floor, polarity chosen from the background.
-fn decorative_contract(bg: &BgInput, magnitude: f64, vc: &ViewingConditions) -> Contract {
-    let sign = background_polarity(bg, vc);
-    let target = sign * magnitude.abs().max(DECORATIVE_FLOOR_MIN);
-    // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
-    Contract::range(target, target)
+/// The smallest separation in `|Lc|` that counts as "strictly weaker" — one
+/// quantisation step is well above this, so any genuinely distinct grid colour
+/// clears it while floating-point equality noise does not.
+const STRICT_STEP: f64 = 0.5;
+
+/// Try to solve a junior text role at the strongest target that is still
+/// *strictly weaker* than its senior (`senior_mag − STRICT_STEP`) and still
+/// clears `floor`. Returns the demoted colour, or `None` if even the laxest
+/// distinguishable target cannot stay legal — in which case the caller keeps the
+/// floored colour and only flags the compression.
+fn demote_below(
+    senior_mag: f64,
+    ctx: &ResolveContext,
+    hue: Hue,
+    chroma: ChromaPolicy,
+    floor: Floor,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+) -> Option<Solved> {
+    // Target just under the senior. The solve still applies the junior's own legal
+    // floor, so if that floor lifts the colour right back onto the senior there is
+    // no room to distinguish — detected by re-measuring the result below.
+    let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
+    let contract = Contract::text(target).with_conformance(floor);
+    let solved = solve::solve(bg.clone(), contract, hue, chroma, vc, Gamut::Srgb).ok()?;
+    if solved.lc().abs() + STRICT_STEP <= senior_mag {
+        Some(solved)
+    } else {
+        None
+    }
 }
 
-/// The maximum contrast magnitude the background can supply in `sign`'s
-/// polarity, read back from the solver's own [`Unreachable::ExceedsRange`].
+/// The `|Lc|` of a role's solved colour in `set`, if it resolved to one.
+fn solved_magnitude(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
+    set.iter()
+        .find(|(r, _)| *r == role)
+        .and_then(|(_, res)| res.solved())
+        .map(|s| s.lc().abs())
+}
+
+/// The text roles in strict visual-weight order — the sequence the hierarchy
+/// invariant and the compression pass walk. Disabled is included: it is still
+/// part of the order even though it carries no floor.
+const TEXT_HIERARCHY: [Role; 4] = [
+    Role::TextPrimary,
+    Role::TextSecondary,
+    Role::TextMuted,
+    Role::TextDisabled,
+];
+
+/// The maximum contrast magnitude the background can supply in `polarity`, read
+/// back from the solver's own [`Unreachable::ExceedsRange`].
 ///
 /// Probing a deliberately unreachable target makes `solve` report the true
-/// forward-curve maximum, so the anchor fraction is taken against the same
-/// number the solver would clip at — no duplicated contrast constants. A
-/// background with genuinely zero headroom in this polarity returns its reason.
-fn max_contrast(bg: &BgInput, sign: f64, vc: &ViewingConditions) -> Result<f64, Unreachable> {
+/// forward-curve maximum, so the anchor fraction is taken against the same number
+/// the solver would clip at — no duplicated contrast constants. A background with
+/// genuinely zero headroom in this polarity returns its reason.
+fn max_contrast(
+    bg: &BgInput,
+    polarity: Polarity,
+    vc: &ViewingConditions,
+) -> Result<f64, Unreachable> {
+    let sign = polarity.sign();
     // 300 Lc is comfortably past the ~106 ceiling of any sRGB background.
     let probe = Contract::text(sign * 300.0).with_conformance(Floor::None);
     match solve::solve(
@@ -450,20 +710,86 @@ fn max_contrast(bg: &BgInput, sign: f64, vc: &ViewingConditions) -> Result<f64, 
     }
 }
 
-/// The contrast polarity a background calls for: `+1` for a light background
-/// (dark-on-light text) and `-1` for a dark one (light-on-dark), decided by
-/// which polarity the background can actually supply more contrast in.
+/// Choose the polarity the whole set resolves in, WCAG-first and VC-independent.
 ///
-/// Reading polarity from the solver (rather than a luminance threshold) keeps a
-/// single source of truth: the background hosts whichever polarity it has the
-/// most headroom for, which is exactly the polarity `solve` would accept.
-fn background_polarity(bg: &BgInput, vc: &ViewingConditions) -> f64 {
-    let dark_on_light = max_contrast(bg, 1.0, vc).unwrap_or(0.0);
-    let light_on_dark = max_contrast(bg, -1.0, vc).unwrap_or(0.0);
-    if light_on_dark > dark_on_light {
-        -1.0
+/// Stage 1 — *legal reachability*: a text role floors at [`POLARITY_FLOOR_RATIO`]
+/// (4.5:1), so the polarity that clears that floor wins. The reachability of each
+/// polarity is `contrast_ratio(extreme_fg, bg)` — black for dark-on-light, white
+/// for light-on-dark — which is a property of the background alone and does not
+/// depend on `vc`, because the WCAG formula does not. This is the fix for the
+/// false-unreachable stripe: the old "larger LPC maximum" rule flipped near
+/// `#999999`, but the legal floor flips near `#747474`, and on the band between
+/// them the LPC rule chose the side that could not reach 4.5:1.
+///
+/// Stage 2 — *tie-break*: when both sides clear the floor, the larger WCAG margin
+/// wins (then larger LPC headroom if that is level too). When neither clears it,
+/// the side that comes *closest* wins, so the role's [`Unreachable`] reports the
+/// honest best-case `max_ratio`.
+fn choose_polarity(bg: &BgInput, vc: &ViewingConditions) -> Polarity {
+    let bg_disp = bg_display(bg);
+    // Dark-on-light is hosted by a black foreground; light-on-dark by white.
+    let ratio_dark_on_light = wcag::contrast_ratio([0.0, 0.0, 0.0], bg_disp);
+    let ratio_light_on_dark = wcag::contrast_ratio([1.0, 1.0, 1.0], bg_disp);
+
+    let dol_clears = ratio_dark_on_light + 1e-9 >= POLARITY_FLOOR_RATIO;
+    let lod_clears = ratio_light_on_dark + 1e-9 >= POLARITY_FLOOR_RATIO;
+
+    match (dol_clears, lod_clears) {
+        // Exactly one side is legal — take it.
+        (true, false) => Polarity::DarkOnLight,
+        (false, true) => Polarity::LightOnDark,
+        // Both legal (near the flip) — larger WCAG margin, then LPC headroom.
+        (true, true) => break_tie(bg, vc, ratio_dark_on_light, ratio_light_on_dark),
+        // Neither legal — the closest side, so the diagnostic is the honest best.
+        (false, false) => {
+            if ratio_dark_on_light >= ratio_light_on_dark {
+                Polarity::DarkOnLight
+            } else {
+                Polarity::LightOnDark
+            }
+        }
+    }
+}
+
+/// Break a polarity tie when both sides clear the legal floor: larger WCAG margin
+/// first, then larger LPC headroom (read from the solver) if the margins are level.
+fn break_tie(
+    bg: &BgInput,
+    vc: &ViewingConditions,
+    ratio_dark_on_light: f64,
+    ratio_light_on_dark: f64,
+) -> Polarity {
+    const RATIO_EPS: f64 = 1e-6;
+    if (ratio_dark_on_light - ratio_light_on_dark).abs() > RATIO_EPS {
+        return if ratio_dark_on_light > ratio_light_on_dark {
+            Polarity::DarkOnLight
+        } else {
+            Polarity::LightOnDark
+        };
+    }
+    // WCAG margins level — fall back to perceptual headroom.
+    let lpc_dol = max_contrast(bg, Polarity::DarkOnLight, vc).unwrap_or(0.0);
+    let lpc_lod = max_contrast(bg, Polarity::LightOnDark, vc).unwrap_or(0.0);
+    if lpc_lod > lpc_dol {
+        Polarity::LightOnDark
     } else {
-        1.0
+        Polarity::DarkOnLight
+    }
+}
+
+/// The quantised 8-bit *display* sRGB the WCAG formula is measured against — the
+/// exact bytes of the background's hex.
+///
+/// [`BgInput::Solid`] stores *linear*-light sRGB (from `srgb_from_hex`), so it is
+/// gamma-encoded back to display space and rounded to the 8-bit grid, matching
+/// the quantisation `solve` uses internally so both sides of the WCAG comparison
+/// are on the same grid.
+fn bg_display(bg: &BgInput) -> [f64; 3] {
+    match bg {
+        BgInput::Solid(rgb_linear) => {
+            let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
+            [q(rgb_linear[0]), q(rgb_linear[1]), q(rgb_linear[2])]
+        }
     }
 }
 
@@ -494,12 +820,50 @@ mod tests {
         Role::TextDisabled,
     ];
 
+    /// The neutral band where the WCAG flip lives (~#747474) and where the old
+    /// LPC-flip rule (~#999999) chose an unreachable polarity — the stripe
+    /// BLOCKER 1 was about. Stepped one 8-bit quantum at a time, plus the two
+    /// off-neutral cases (#93939C, #3478F6) from the diagnosis.
+    fn band_hexes() -> Vec<String> {
+        let mut v: Vec<String> = (0x74u32..=0x9F)
+            .map(|g| format!("#{g:02X}{g:02X}{g:02X}"))
+            .collect();
+        v.push("#93939C".to_string());
+        v.push("#3478F6".to_string());
+        v
+    }
+
     fn solved_lc(bg: &BgInput, role: Role, vc: &ViewingConditions) -> f64 {
         let table = RoleTable::default();
         match resolve(bg, role, &table, vc) {
-            Resolved::Color(s) => s.lc(),
+            Resolved::Color { solved, .. } => solved.lc(),
             other => panic!("{} expected a colour, got {other:?}", role.key()),
         }
+    }
+
+    fn table_default() -> RoleTable {
+        RoleTable::default()
+    }
+
+    /// The signed `lc` of `role` in a set, if it resolved to a colour.
+    fn set_lc_opt(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
+        set.iter()
+            .find(|(r, _)| *r == role)
+            .and_then(|(_, res)| res.solved())
+            .map(|s| s.lc())
+    }
+
+    /// The emitted hex and the compression flag of `role` in a set, if it
+    /// resolved to a colour.
+    fn set_hex_and_flag(set: &[(Role, Resolved)], role: Role) -> Option<(String, bool)> {
+        set.iter()
+            .find(|(r, _)| *r == role)
+            .and_then(|(_, res)| match res {
+                Resolved::Color { solved, compressed } => {
+                    Some((solved.hex().to_string(), *compressed))
+                }
+                _ => None,
+            })
     }
 
     #[test]
@@ -617,11 +981,11 @@ mod tests {
 
         for (i, role) in TEXT_ORDER.iter().enumerate() {
             let light = match resolve(&white, *role, &table, &vc) {
-                Resolved::Color(s) => s,
+                Resolved::Color { solved, .. } => solved,
                 other => panic!("{}: {other:?}", role.key()),
             };
             let dark = match resolve(&black, *role, &table, &vc) {
-                Resolved::Color(s) => s,
+                Resolved::Color { solved, .. } => solved,
                 other => panic!("{}: {other:?}", role.key()),
             };
             let (light_lc, dark_lc) = (light.lc().abs(), dark.lc().abs());
@@ -674,7 +1038,7 @@ mod tests {
                     (Role::Icon, 3.0),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
-                        Resolved::Color(s) => s,
+                        Resolved::Color { solved, .. } => solved,
                         other => panic!("{} {bg_hex}: {other:?}", role.key()),
                     };
                     assert!(
@@ -697,7 +1061,7 @@ mod tests {
         let table = RoleTable::default();
         for role in [Role::Separator, Role::Border, Role::Surface, Role::Shadow] {
             let solved = match resolve(&bg, role, &table, &vc) {
-                Resolved::Color(s) => s,
+                Resolved::Color { solved, .. } => solved,
                 other => panic!("{} expected colour, got {other:?}", role.key()),
             };
             assert!(
@@ -746,7 +1110,7 @@ mod tests {
         // Primary changed.
         let p_default = solved_lc(&bg, Role::TextPrimary, &vc);
         let p_custom = match resolve(&bg, Role::TextPrimary, &custom, &vc) {
-            Resolved::Color(s) => s.lc(),
+            Resolved::Color { solved, .. } => solved.lc(),
             other => panic!("{other:?}"),
         };
         assert!(
@@ -756,7 +1120,7 @@ mod tests {
         // Secondary unchanged.
         let s_default = solved_lc(&bg, Role::TextSecondary, &vc);
         let s_custom = match resolve(&bg, Role::TextSecondary, &custom, &vc) {
-            Resolved::Color(s) => s.lc(),
+            Resolved::Color { solved, .. } => solved.lc(),
             other => panic!("{other:?}"),
         };
         assert!(
@@ -784,35 +1148,171 @@ mod tests {
     }
 
     #[test]
-    fn unreachable_role_surfaces_a_reason_not_a_clip() {
-        // A true mid-grey (#808080) can supply at most ~3.95:1 in either
-        // polarity, so the AA *text* floor (4.5:1) is genuinely unreachable for
-        // primary and secondary. The role returns `Unreachable::FloorUnreachable`
-        // with the reason — never a silently clipped, sub-floor colour.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#808080").unwrap();
-        let table = RoleTable::default();
-        let set = resolve_set(&bg, &table, &vc);
+    fn light_grey_band_has_a_readable_text_polarity_not_a_false_unreachable() {
+        // BLOCKER 1 regression: the light-grey band (#777777..#999999, incl.
+        // #93939C and #3478F6) must NOT report text roles unreachable. Black text
+        // on these backgrounds clears AA with room (#999999: 7.37:1; #808080:
+        // 5.32:1; #3478F6: 5.16:1) — the old "larger LPC maximum" polarity rule
+        // chose the white side, which cannot reach 4.5:1, and floored every text
+        // role. With the WCAG-first polarity the readable side is chosen, so
+        // primary/secondary/muted/icon all resolve on the whole band, both VCs.
+        for (vc, vc_name) in vcs() {
+            for bg_hex in band_hexes() {
+                let bg = BgInput::solid(&bg_hex).unwrap();
+                let set = resolve_set(&bg, &table_default(), &vc);
+                for role in [
+                    Role::TextPrimary,
+                    Role::TextSecondary,
+                    Role::TextMuted,
+                    Role::Icon,
+                ] {
+                    let r = &set.iter().find(|(rr, _)| *rr == role).unwrap().1;
+                    assert!(
+                        matches!(r, Resolved::Color { .. }),
+                        "{vc_name} {bg_hex} {}: must resolve, got {r:?}",
+                        role.key()
+                    );
+                }
+            }
+        }
+    }
 
-        let primary = &set.iter().find(|(r, _)| *r == Role::TextPrimary).unwrap().1;
-        assert!(
-            matches!(
-                primary,
-                Resolved::Unreachable(Unreachable::FloorUnreachable { .. })
-            ),
-            "primary on #808080 must be FloorUnreachable, got {primary:?}"
-        );
-        // Nothing is silently clipped: every resolved colour carries real
-        // contrast, and the zero token is the only legitimate zero.
-        let no_silent_clip = set.iter().all(|(role, r)| match r {
-            Resolved::Color(s) => s.lc().abs() >= 1.0,
-            Resolved::None => *role == Role::None,
-            Resolved::Unreachable(_) => true,
-        });
-        assert!(
-            no_silent_clip,
-            "no role may resolve to a zero-contrast clip"
-        );
+    #[test]
+    fn no_false_unreachable_when_the_opposite_polarity_is_reachable() {
+        // The core invariant of the two-stage polarity: on the whole band, no
+        // text/UI role is FloorUnreachable, because the polarity is chosen to be
+        // the one that clears the floor. (On solid sRGB the AA floor is always
+        // reachable in *some* polarity — there is no background where both black
+        // and white text fall below 4.5:1 — so a FloorUnreachable here would be a
+        // false negative by construction.)
+        for (vc, vc_name) in vcs() {
+            for bg_hex in band_hexes() {
+                let bg = BgInput::solid(&bg_hex).unwrap();
+                let set = resolve_set(&bg, &table_default(), &vc);
+                for (role, r) in &set {
+                    if let Resolved::Unreachable(Unreachable::FloorUnreachable {
+                        floor,
+                        max_ratio,
+                    }) = r
+                    {
+                        panic!(
+                            "{vc_name} {bg_hex} {}: false FloorUnreachable (floor {floor}, max {max_ratio})",
+                            role.key()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn polarity_is_vc_independent_across_the_band() {
+        // The WCAG-first criterion is the VC-independent relative-luminance
+        // formula, so a role's polarity (sign of lc) must be identical under the
+        // light and dim viewing conditions for the same background — no per-theme
+        // coin-flip on a near-tie like #3478F6.
+        let srgb = ViewingConditions::srgb();
+        let dim = ViewingConditions::dim_surround();
+        for bg_hex in band_hexes() {
+            let bg = BgInput::solid(&bg_hex).unwrap();
+            let s = resolve_set(&bg, &table_default(), &srgb);
+            let d = resolve_set(&bg, &table_default(), &dim);
+            for role in TEXT_ORDER {
+                let (Some(ls), Some(ld)) = (set_lc_opt(&s, role), set_lc_opt(&d, role)) else {
+                    continue;
+                };
+                assert_eq!(
+                    ls > 0.0,
+                    ld > 0.0,
+                    "{bg_hex} {}: polarity flipped between VCs (srgb {ls}, dim {ld})",
+                    role.key()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hierarchy_is_non_strict_and_compression_is_flagged_on_the_band() {
+        // BLOCKER 2: where the readable window is narrower than the hierarchy
+        // steps (#747474: the only readable polarity barely clears 4.5:1),
+        // primary and secondary used to collapse to an identical hex silently.
+        // Now: the order stays non-strict (|Lc| primary >= secondary >= muted >=
+        // disabled) everywhere on the band, and any role squeezed onto its senior
+        // is flagged compressed — never a silent two-roles-one-colour identity.
+        for (vc, vc_name) in vcs() {
+            for bg_hex in band_hexes() {
+                let bg = BgInput::solid(&bg_hex).unwrap();
+                let set = resolve_set(&bg, &table_default(), &vc);
+                let mags: Vec<f64> = TEXT_ORDER
+                    .iter()
+                    .filter_map(|&r| set_lc_opt(&set, r).map(f64::abs))
+                    .collect();
+                for pair in mags.windows(2) {
+                    assert!(
+                        pair[0] + 1e-9 >= pair[1],
+                        "{vc_name} {bg_hex}: order broken (junior stronger), |Lc| {mags:?}"
+                    );
+                }
+                // No two adjacent *distinct* roles may share an identical hex
+                // without the junior being flagged compressed.
+                for window in TEXT_ORDER.windows(2) {
+                    let [senior, junior] = [window[0], window[1]];
+                    let (Some((sh, _)), Some((jh, jc))) = (
+                        set_hex_and_flag(&set, senior),
+                        set_hex_and_flag(&set, junior),
+                    ) else {
+                        continue;
+                    };
+                    if sh == jh {
+                        assert!(
+                            jc,
+                            "{vc_name} {bg_hex}: {} == {} ({sh}) but not flagged compressed",
+                            senior.key(),
+                            junior.key()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hierarchy_holds_strictly_on_white_with_no_compression_flag() {
+        // On a background with full headroom the hierarchy is strict and nothing
+        // is compressed — the flag is reserved for genuine squeezes.
+        for (vc, _) in vcs() {
+            let bg = BgInput::solid("#FFFFFF").unwrap();
+            let set = resolve_set(&bg, &table_default(), &vc);
+            for role in TEXT_ORDER {
+                let r = &set.iter().find(|(rr, _)| *rr == role).unwrap().1;
+                assert!(
+                    !r.compressed(),
+                    "{}: must not be compressed on white",
+                    role.key()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_silent_clip_anywhere_on_the_band() {
+        // Every resolved colour carries real contrast; the zero token is the only
+        // legitimate zero; an unreachable role surfaces a reason. Nothing clips.
+        for (vc, _) in vcs() {
+            for bg_hex in band_hexes() {
+                let bg = BgInput::solid(&bg_hex).unwrap();
+                let set = resolve_set(&bg, &table_default(), &vc);
+                let no_silent_clip = set.iter().all(|(role, r)| match r {
+                    Resolved::Color { solved, .. } => solved.lc().abs() >= 1.0,
+                    Resolved::None => *role == Role::None,
+                    Resolved::Unreachable(_) => true,
+                });
+                assert!(
+                    no_silent_clip,
+                    "{bg_hex}: a role resolved to a zero-contrast clip"
+                );
+            }
+        }
     }
 
     #[test]
