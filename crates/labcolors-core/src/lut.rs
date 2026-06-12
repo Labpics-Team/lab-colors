@@ -230,6 +230,13 @@ pub(crate) fn seed_bracket(
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
 ) -> Option<LutSeed> {
+    // Bench-only: with the `bench-cold-bisection` feature the seed is disabled
+    // so a criterion run measures the pre-LUT cold path through the identical
+    // `resolve_set` call site. Compiled out entirely by default — zero cost in
+    // production builds, which never enable this feature.
+    if cfg!(feature = "bench-cold-bisection") {
+        return None;
+    }
     let ratio = match chroma_policy {
         ChromaPolicy::Neutral => 0.0,
         ChromaPolicy::Relative(r) => r.clamp(0.0, 1.0),
