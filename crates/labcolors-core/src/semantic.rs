@@ -526,6 +526,14 @@ thread_local! {
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// Empty the per-thread curve-plan cache. Test-only: lets the forwards regression
+/// guard pin the COLD path (cache empty) separately from the WARM path (cache
+/// primed) deterministically, instead of depending on iteration order.
+#[cfg(test)]
+pub(crate) fn reset_curve_plan_cache() {
+    CURVE_PLAN_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 /// Upper bound on live curve-plan cache entries. One resolve sweep visits at most
 /// a few dozen distinct lightnesses; this holds thousands of sweeps' worth of
 /// distinct themes (~56 bytes/entry → well under 1 MB at the cap) before a

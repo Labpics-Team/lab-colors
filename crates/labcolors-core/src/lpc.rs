@@ -3,40 +3,11 @@ use crate::spaces::{cam16, cat16, vc::ViewingConditions};
 
 /// CIECAM16 correlates `(J, M, h)` for an XYZ stimulus.
 ///
-/// `h` is the CAM16 hue angle in **degrees** `[0, 360)`.
+/// `h` is the CAM16 hue angle in **degrees** `[0, 360)`. Thin re-export of the
+/// shared [`cam16::forward`] pass — the single copy both `lcs` and `lpc` build on
+/// (issue #19).
 pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
-    let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
-
-    let lms = cat16::xyz_to_cone(xyz);
-    let lms_a = [
-        lms[0] * vc.rgb_d[0],
-        lms[1] * vc.rgb_d[1],
-        lms[2] * vc.rgb_d[2],
-    ];
-    let lms_aa = [
-        cam16::adapt(lms_a[0], vc.fl),
-        cam16::adapt(lms_a[1], vc.fl),
-        cam16::adapt(lms_a[2], vc.fl),
-    ];
-
-    let a = lms_aa[0] - 12.0 * lms_aa[1] / 11.0 + lms_aa[2] / 11.0;
-    let b = (lms_aa[0] + lms_aa[1] - 2.0 * lms_aa[2]) / 9.0;
-    let h = b.atan2(a).to_degrees().rem_euclid(360.0);
-    let hr = h.to_radians();
-
-    let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
-    let a_achrom = (2.0 * lms_aa[0] + lms_aa[1] + lms_aa[2] / 20.0) * vc.nbb;
-    let j = 100.0 * (a_achrom / vc.aw).powf(vc.c * vc.z);
-
-    let u = (a * a + b * b).sqrt();
-    let t = (50000.0 / 13.0) * e_hue * vc.nc * vc.nbb * u
-        / (lms_aa[0] + lms_aa[1] + 1.05 * lms_aa[2] + 0.305);
-    let m = t.powf(0.9)
-        * (j / 100.0).sqrt()
-        * (1.64 - 0.29_f64.powf(vc.n)).powf(0.73)
-        * vc.fl.powf(0.25);
-
-    (j, m, h)
+    cam16::forward(xyz, vc)
 }
 
 /// Chroma exponent in the Hellwig 2022 H-K lightness term
@@ -313,6 +284,15 @@ pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
 /// `J_HK = J + f(h) * C^0.587`, with the chroma correlate `C = M / F_L^0.25`.
 pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
     let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
+    j_hk_from_cam16(j, m, h, vc)
+}
+
+/// Hellwig 2022 H-K-corrected lightness from already-computed CIECAM16
+/// correlates `(J, M, h)`. Splitting this out of [`j_hk_from_xyz`] lets a caller
+/// that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s `finish`, which
+/// also needs the `LcsColor`) derive `J_HK` from the same forward pass instead
+/// of running a second identical one on the same stimulus.
+pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) -> f64 {
     let chroma = m / vc.fl.powf(0.25);
     j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }
@@ -417,8 +397,8 @@ pub fn lpc_lcs_with_vc(
 /// ([`lpc`]); previously this used J'/M' directly, so `lpc` and
 /// `lpc_lcs` disagreed for chromatic colours.
 fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
-    let j = c.jp / (1.7 - 0.007 * c.jp);
-    let m = (0.0228 * c.mp()).exp_m1() / 0.0228;
+    let j = cam16::ucs_j_inv(c.jp);
+    let m = cam16::ucs_m_inv(c.mp());
     let chroma = m / vc.fl.powf(0.25);
     let j_hk = j + hk_coeff(c.h_cam()) * chroma.powf(HK_CHROMA_EXPONENT);
     y_hk(j_hk.max(0.0), vc)
