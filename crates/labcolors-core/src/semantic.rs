@@ -92,10 +92,26 @@
 //!   `surface` / `shadow` carry placeholder ranges held above the solver's
 //!   reliable floor; their real just-noticeable-difference calibration is the
 //!   `surface-jnd` chapter (blocked on the quantisation gap, issue #44).
-//! - **Brand / sentiment roles are not here.** v1 is `ChromaPolicy::Neutral`
-//!   only. The chroma seam ([`RoleTable::chroma`]) is left open so a later
-//!   chapter can add accent-tinted roles over the existing sentiment machinery
-//!   without reshaping this table.
+//! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
+//!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
+//!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
+//!   chroma seam ([`RoleTable::with_chroma`]) is left open so that chapter can
+//!   swap the policy over the existing sentiment machinery without reshaping
+//!   this table.
+//!
+//! # The neutral undertone: identity, not sterile grey
+//!
+//! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
+//! not a pure grey. A role table resolved with zero chroma threw that identity
+//! away: `text-primary` on white came out the sterile `#141414`. The default
+//! table instead carries the neutral's Oklab hue ([`NEUTRAL_HUE_DEG`]) at a
+//! small relative chroma ([`NEUTRAL_TINT_RATIO`]), so every resolved role is a
+//! *relative* of the neutral family — `text-primary` on white lands as a cool
+//! near-black in the `#101012` family. The chroma is small enough that the WCAG
+//! floors, the strict hierarchy, and the near-black/near-white primary all hold
+//! exactly as before (the solver re-solves lightness to the same target with the
+//! tint applied). A caller who wants pure grey overrides it with
+//! [`RoleTable::with_chroma`]`(`[`RoleChroma::Neutral`]`)`.
 
 use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Solved, Unreachable};
 use crate::spaces::srgb::srgb_gamma;
@@ -267,24 +283,70 @@ pub enum RoleSpec {
     Zero,
 }
 
-/// The chroma policy a role carries.
+/// The Oklab hue (degrees) the system neutral is tinted with.
 ///
-/// v1 is [`Neutral`](RoleChroma::Neutral) throughout: the table is achromatic.
-/// The variant exists so a later chapter can introduce brand/sentiment-tinted
-/// roles without changing this type's shape — see the module docs.
+/// Daniel's neutral ladder is not a pure grey: it carries a cool blue-violet
+/// undertone. Measured in Oklab on the owner's anchors, the hue is stable across
+/// the whole ladder — `#101012` → 285.97°, `#3C3C43` (Figma secondary) → 285.78°,
+/// `#787880` (mid) → 286.01° — so a single constant captures it. Resolved roles
+/// inherit this hue, which is what makes `text-primary` on white land as a
+/// relative of `#101012` (a cool near-black) rather than the sterile grey
+/// `#141414`.
+const NEUTRAL_HUE_DEG: f64 = 286.0;
+
+/// The fraction of the in-gamut maximum chroma a tinted role carries.
+///
+/// Deliberately small: the undertone must be *felt*, never *seen* as colour. The
+/// absolute chroma the solver applies is `ratio · max_chroma(L)`
+/// ([`build_color`](crate::solve)), and `max_chroma` peaks at mid lightness and
+/// falls to ~0 at both the dark and the light extreme. So a single flat ratio
+/// reproduces the neutral curve's envelope spirit *for free*: the strongest tint
+/// lands on the mid-weight roles, the faintest on the near-black / near-white
+/// ends of the text ladder — "меньше у тёмных/светлых краёв, больше к середине".
+/// At `0.08` on white, `text-primary` resolves to `#141418` (a cool near-black in
+/// the `#101012` family), not pure grey.
+const NEUTRAL_TINT_RATIO: f64 = 0.08;
+
+/// The chroma policy a role table carries.
+///
+/// The v1 default is [`Tinted`](RoleChroma::Tinted) with the neutral's cool
+/// undertone (see [`NEUTRAL_HUE_DEG`]). [`Neutral`](RoleChroma::Neutral) is the
+/// achromatic override: a caller who wants the old pure-grey behaviour (or any
+/// other policy) replaces the table's chroma wholesale via
+/// [`RoleTable::with_chroma`]. The enum is the seam a later chapter extends for
+/// brand/sentiment-tinted roles without reshaping this type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleChroma {
-    /// Achromatic (grey). The only v1 policy.
+    /// Achromatic (grey): zero chroma, hue ignored. The explicit override that
+    /// reproduces the pre-tint behaviour.
     Neutral,
+    /// A small undertone at a fixed Oklab `hue_deg`, carried as `ratio` of the
+    /// in-gamut maximum chroma at each role's resolved lightness. The envelope
+    /// (less tint at the extremes, more in the middle) emerges from the
+    /// lightness-dependence of that maximum — see [`NEUTRAL_TINT_RATIO`].
+    Tinted { hue_deg: f64, ratio: f64 },
 }
 
 impl RoleChroma {
-    /// Translate to the solver's [`ChromaPolicy`]. Hue is irrelevant while every
-    /// role is neutral; a future tinted variant resolves its own hue here.
+    /// The v1 default: the neutral's cool undertone at a small flat ratio.
+    fn neutral_tint() -> Self {
+        RoleChroma::Tinted {
+            hue_deg: NEUTRAL_HUE_DEG,
+            ratio: NEUTRAL_TINT_RATIO,
+        }
+    }
+
+    /// Translate to the solver's `(hue, chroma)` inputs. For the achromatic
+    /// override the hue is irrelevant (the solver ignores it at zero chroma); a
+    /// tinted policy passes its own hue and a relative chroma the solver caps at
+    /// the in-gamut maximum.
     fn to_solve(self) -> (Hue, ChromaPolicy) {
         match self {
             RoleChroma::Neutral => (Hue::deg(0.0), ChromaPolicy::Neutral),
+            RoleChroma::Tinted { hue_deg, ratio } => {
+                (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
+            }
         }
     }
 }
@@ -324,6 +386,19 @@ impl RoleTable {
         if let Some(entry) = self.specs.iter_mut().find(|(r, _)| *r == role) {
             entry.1 = spec;
         }
+        self
+    }
+
+    /// Return a copy with the chroma policy replaced wholesale.
+    ///
+    /// The default table carries the neutral's cool undertone
+    /// ([`RoleChroma::Tinted`]); this is the seam that overrides it completely —
+    /// pass [`RoleChroma::Neutral`] for the achromatic pure-grey behaviour, or a
+    /// different [`RoleChroma::Tinted`] hue/ratio for another undertone. The
+    /// override is total: it replaces the policy for *every* role, including
+    /// dropping the tint to zero.
+    pub fn with_chroma(mut self, chroma: RoleChroma) -> Self {
+        self.chroma = chroma;
         self
     }
 }
@@ -371,7 +446,7 @@ impl Default for RoleTable {
                 (Role::Shadow, decorative(10.0)),
                 (Role::None, RoleSpec::Zero),
             ],
-            chroma: RoleChroma::Neutral,
+            chroma: RoleChroma::neutral_tint(),
         }
     }
 }
