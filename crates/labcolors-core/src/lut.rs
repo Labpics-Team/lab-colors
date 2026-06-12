@@ -348,24 +348,49 @@ mod tests {
         eprintln!("wrote {path}");
     }
 
+    /// Anti-drift tolerance for the committed table vs a fresh live generation.
+    ///
+    /// The comparison is NOT bit-exact: `powf`/`atan2`/`cbrt` differ by a few
+    /// ULPs between platform libm implementations (the table is generated on one
+    /// OS, CI runs on another), which shows up as `J_HK` deltas around `1e-13`.
+    /// A real drift — wrong surround, a CAM16 matrix typo, a units mix-up —
+    /// moves values by whole `J_HK` units, blowing past this bound by ten-plus
+    /// orders of magnitude. `1e-6` is comfortably above libm noise and far below
+    /// any genuine regression; it is also `< 0.01 J_HK`, the tolerance the
+    /// crate's own `golden_tests` use for the same cross-implementation reason.
+    const DRIFT_TOL: f64 = 1e-6;
+
     #[test]
     fn lut_data_matches_live_math() {
-        // The committed tables must equal a fresh generation from the crate's
-        // own forward math, bit-for-bit. This is the anti-drift gate: change the
-        // CAM16 path or the VC constants and this fails until the tables are
-        // regenerated — so the LUT can never silently diverge from `solve`.
-        let srgb = generate_table(&ViewingConditions::srgb());
-        let dim = generate_table(&ViewingConditions::dim_surround());
-        assert_eq!(
-            srgb,
-            lut_data::GREY_AXIS_SRGB,
-            "committed sRGB LUT diverged from live math — regenerate lut_data.rs"
-        );
-        assert_eq!(
-            dim,
-            lut_data::GREY_AXIS_DIM,
-            "committed dim LUT diverged from live math — regenerate lut_data.rs"
-        );
+        // Anti-drift gate: the committed tables must reproduce a fresh
+        // generation from the crate's own forward math. Change the CAM16 path or
+        // the VC constants and this fails until the tables are regenerated — so
+        // the LUT can never silently diverge from `solve`. Compared within
+        // `DRIFT_TOL` (not bit-exact) so cross-platform libm last-ULP noise does
+        // not flake the gate; a genuine drift dwarfs the tolerance.
+        for (live, committed, name) in [
+            (
+                generate_table(&ViewingConditions::srgb()),
+                &lut_data::GREY_AXIS_SRGB,
+                "sRGB",
+            ),
+            (
+                generate_table(&ViewingConditions::dim_surround()),
+                &lut_data::GREY_AXIS_DIM,
+                "dim",
+            ),
+        ] {
+            let mut max_delta = 0.0_f64;
+            for (i, (&l, &c)) in live.iter().zip(committed.iter()).enumerate() {
+                let delta = (l - c).abs();
+                max_delta = max_delta.max(delta);
+                assert!(
+                    delta < DRIFT_TOL,
+                    "{name} LUT node {i} diverged from live math by {delta} (> {DRIFT_TOL}) — regenerate lut_data.rs"
+                );
+            }
+            eprintln!("[{name}] committed-vs-live LUT max ΔJ_HK = {max_delta:.2e}");
+        }
     }
 
     #[test]
