@@ -69,6 +69,15 @@ theme) reject, as an `Error` whose message is `"<code>: <reason>"`.
 The `-ic` (increased-contrast) themes are reserved in the type but **not yet
 calibrated**: requesting one rejects with code `theme_not_calibrated`.
 
+Whole-call rejections carry one of these stable codes (in `Error.message`, as
+`"<code>: <reason>"`):
+
+| Code | Cause |
+|------|-------|
+| `invalid_background` | `bgHex` is not `#RGB` or `#RRGGBB`. |
+| `unknown_theme` | `theme` is not one of the four accepted names. |
+| `theme_not_calibrated` | An `-ic` theme was requested before calibration. |
+
 ### `applyTheme(element, result): void`
 
 Writes every reachable role from `result.vars` onto `element.style` via

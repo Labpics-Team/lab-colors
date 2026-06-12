@@ -33,6 +33,7 @@
   ],
   "sideEffects": false,
   "scripts": {
+    "//build": "wasm-pack resolves --out-dir relative to the CRATE dir (crates/labcolors-wasm), not the cwd, so the ../../packages path is correct and unambiguous regardless of where npm runs it.",
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

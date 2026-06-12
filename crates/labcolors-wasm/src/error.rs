@@ -74,5 +74,9 @@ mod tests {
                 "theme_not_calibrated"
             ]
         );
+        // Distinctness, asserted directly so the test earns its name: a future
+        // variant must not reuse an existing code.
+        let unique: std::collections::HashSet<_> = codes.iter().collect();
+        assert_eq!(unique.len(), codes.len(), "error codes must be distinct");
     }
 }

@@ -32,7 +32,9 @@ fn get_obj(obj: &JsValue, key: &str) -> JsValue {
 /// `.message` property, not the value's own string form.
 fn error_message(err: wasm_bindgen::JsError) -> String {
     let value: JsValue = err.into();
-    get_str(&value, "message").unwrap_or_default()
+    // A missing `.message` is itself a failure — the boundary contract is that
+    // every rejected call carries one. Panic rather than mask it with "".
+    get_str(&value, "message").expect("JsError must carry a .message property")
 }
 
 /// The binding's `resolveTheme("#FFFFFF","light")` must reproduce the native

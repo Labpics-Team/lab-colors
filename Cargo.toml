@@ -23,7 +23,7 @@ wasm-bindgen = "0.2"
 # crates are unaffected in any way that matters.
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true

@@ -66,7 +66,12 @@ pub struct ContractCache<V> {
 
 impl<V: Clone> ContractCache<V> {
     /// A cache holding up to `capacity` distinct keys before a wholesale clear.
+    ///
+    /// `capacity` must be at least 1; a zero-capacity cache is a configuration
+    /// error (it could never hold the entry it just built), so it is rejected
+    /// up front rather than degrading silently.
     pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "ContractCache capacity must be at least 1");
         Self {
             entries: RefCell::new(HashMap::new()),
             capacity,
@@ -75,6 +80,13 @@ impl<V: Clone> ContractCache<V> {
 
     /// Return the cached value for `key`, computing and storing it with `build`
     /// on a miss. `build` runs at most once per distinct key between clears.
+    ///
+    /// # Reentrancy
+    /// `build` must not call `get_or_insert_with` on this same cache with the
+    /// same `key` — the entry is not inserted until `build` returns, so a
+    /// same-key re-entry would recurse without end. A different key is safe.
+    /// In this crate `build` only calls `core::resolve_set`, which never
+    /// re-enters the cache, so the constraint holds by construction.
     pub fn get_or_insert_with(&self, key: CacheKey, build: impl FnOnce() -> V) -> V {
         if let Some(hit) = self.entries.borrow().get(&key) {
             return hit.clone();
