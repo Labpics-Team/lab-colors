@@ -57,43 +57,15 @@ impl LcsColor {
     }
 
     pub(crate) fn from_xyz_with_hok(xyz: [f64; 3], h_ok: f64, vc: &ViewingConditions) -> Self {
-        let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
+        // Single shared CIECAM16 forward pass (issue #19); the UCS rescale is the
+        // only step `lcs` adds on top of it.
+        let (j, m, h) = cam16::forward(xyz, vc);
 
-        let lms = cat16::xyz_to_cone(xyz);
-        let lms_a = [
-            lms[0] * vc.rgb_d[0],
-            lms[1] * vc.rgb_d[1],
-            lms[2] * vc.rgb_d[2],
-        ];
-        let lms_aa = [
-            cam16::adapt(lms_a[0], vc.fl),
-            cam16::adapt(lms_a[1], vc.fl),
-            cam16::adapt(lms_a[2], vc.fl),
-        ];
-
-        let a = lms_aa[0] - 12.0 * lms_aa[1] / 11.0 + lms_aa[2] / 11.0;
-        let b = (lms_aa[0] + lms_aa[1] - 2.0 * lms_aa[2]) / 9.0;
-        let h = b.atan2(a).to_degrees().rem_euclid(360.0);
-        let hr = h.to_radians();
-
-        let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
-        let a_achrom = (2.0 * lms_aa[0] + lms_aa[1] + lms_aa[2] / 20.0) * vc.nbb;
-        let j = 100.0 * (a_achrom / vc.aw).powf(vc.c * vc.z);
-
-        let u = (a * a + b * b).sqrt();
-        let t = (50000.0 / 13.0) * e_hue * vc.nc * vc.nbb * u
-            / (lms_aa[0] + lms_aa[1] + 1.05 * lms_aa[2] + 0.305);
-        let m = t.powf(0.9)
-            * (j / 100.0).sqrt()
-            * (1.64 - 0.29_f64.powf(vc.n)).powf(0.73)
-            * vc.fl.powf(0.25);
-
-        // CAM16-UCS rescaling — Li et al. 2017, DOI 10.1002/col.22131:
-        //   J' = 1.7·J / (1 + 0.007·J),  M' = ln(1 + 0.0228·M) / 0.0228.
-        // Maps raw CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads
-        // as half-lightness). Inverse in `to_xyz`.
-        let jp = 1.7 * j / (1.0 + 0.007 * j);
-        let mp = (1.0 + 0.0228 * m).ln() / 0.0228;
+        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131): maps raw
+        // CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads as
+        // half-lightness). Inverse in `to_xyz` via the same helpers.
+        let jp = cam16::ucs_j(j);
+        let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
 
         Self {
@@ -105,11 +77,10 @@ impl LcsColor {
     }
 
     pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
-        // Inverse CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131):
-        //   J = J' / (1.7 - 0.007·J'),  M = (e^(0.0228·M') - 1) / 0.0228.
-        let j = self.jp / (1.7 - 0.007 * self.jp);
-        let mp = self.mp();
-        let m = (0.0228 * mp).exp_m1() / 0.0228;
+        // Inverse CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131),
+        // single source of truth in `cam16`.
+        let j = cam16::ucs_j_inv(self.jp);
+        let m = cam16::ucs_m_inv(self.mp());
         let hr = self.h_cam.to_radians();
 
         let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
