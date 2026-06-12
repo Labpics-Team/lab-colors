@@ -10,3 +10,8 @@ repository.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+criterion = "0.5"
+
+[[bench]]
+name = "y_hk"
+harness = false
