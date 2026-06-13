@@ -200,4 +200,22 @@ mod tests {
             "different surround → different discounting factors"
         );
     }
+
+    #[test]
+    fn is_dark_theme_classifies_presets() {
+        // The 0.64 midpoint must land the average (light) surround above it and
+        // both dimmed surrounds below it — the contract role resolution relies on.
+        assert!(
+            !ViewingConditions::srgb().is_dark_theme(),
+            "srgb (average surround, c≈0.69) is a light theme"
+        );
+        assert!(
+            ViewingConditions::dim_surround().is_dark_theme(),
+            "dim_surround (c≈0.59) is a dark theme"
+        );
+        assert!(
+            ViewingConditions::dark_surround().is_dark_theme(),
+            "dark_surround (c≈0.525) is a dark theme"
+        );
+    }
 }

@@ -619,6 +619,10 @@ fn solve_quantization_neighbor(
     // step is *accepted* only when it lands within the symmetric `QUANT_BUDGET`
     // below — an over-jump that overshoots the target is rejected, not clipped.
     let direction = if target >= 0.0 { -1.0 } else { 1.0 };
+    // Oklab-lightness step per probe. 0.001 is ~¼ of one 8-bit sRGB grid step
+    // near mid-tones, so consecutive `#RRGGBB` values are visited in order
+    // (never skipped) while keeping the walk bounded — the loop below caps it at
+    // `NEIGHBOR_STEPS` probes and accepts a step only inside `QUANT_BUDGET`.
     const PROBE: f64 = 0.001;
 
     let mut last_hex = hex_from_srgb(build_color(l_start, hue, chroma_policy));
