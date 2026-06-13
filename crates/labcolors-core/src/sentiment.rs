@@ -193,7 +193,7 @@ pub const DEFAULT_HARDNESS: f64 = 2.0;
 /// ceiling is far higher for green than for red/orange, green came out visibly
 /// brighter. The consistency law (sentiment-category-fields): align by perceived
 /// `M'`, not by a fraction of each hue's own ceiling.
-const SENTIMENT_TARGET_MP: f64 = 38.0;
+const SENTIMENT_TARGET_MP: f64 = 43.0;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
 ///
