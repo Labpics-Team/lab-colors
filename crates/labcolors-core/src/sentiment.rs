@@ -1,8 +1,9 @@
 use crate::lcs::LcsColor;
+use crate::lpc::j_hk_from_xyz;
 use crate::neutral::NeutralCurve;
 use crate::scale::{AccentCurve, max_chroma};
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex};
+use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz};
 
 /// Perceptual minimum separation between a sentiment hue and the brand hue,
 /// expressed as a **chord length in the Oklab a/b chroma plane** (not degrees).
@@ -195,6 +196,15 @@ pub const DEFAULT_HARDNESS: f64 = 2.0;
 /// `M'`, not by a fraction of each hue's own ceiling.
 const SENTIMENT_TARGET_MP: f64 = 43.0;
 
+/// Common target **H-K-corrected lightness `J_HK`** every sentiment is built to,
+/// so the four read at the **same perceived brightness**. PROVISIONAL (Daniil's
+/// eye). Equalising plain `J'` was not enough: `J'` excludes the
+/// Helmholtz–Kohlrausch lift, which is what actually makes a saturated green look
+/// bright. Targeting `J_HK` lets each hue land at its own `J'` — green and red
+/// (large H-K lift) sit *darker*, amber (small lift) stays *light* — so all four
+/// match in perceived brightness while each keeps its natural character.
+const SENTIMENT_TARGET_JHK: f64 = 72.0;
+
 /// Tunable parameters of the smooth-asymptote displacement model.
 ///
 /// The displaced separation follows the p-norm blend
@@ -349,7 +359,12 @@ impl SentimentCurve {
         // own (very different) gamut ceiling — otherwise green reads brighter than
         // red/orange (consistency law). The caller's `prototype_hex` no longer
         // sets the chroma; it only informs the perceptual separation floor above.
-        let canonical_hex = build_hex_at_mp(resolved_hue, SENTIMENT_TARGET_MP, neutral);
+        let canonical_hex = build_hex_at(
+            SENTIMENT_TARGET_JHK,
+            SENTIMENT_TARGET_MP,
+            resolved_hue,
+            neutral,
+        );
         let accent = AccentCurve::new(&canonical_hex, neutral).map_err(|e| {
             format!("failed to build accent from generated hex {canonical_hex}: {e}")
         })?;
@@ -464,21 +479,21 @@ fn angular_distance(a: f64, b: f64) -> f64 {
     if diff > 180.0 { 360.0 - diff } else { diff }
 }
 
-/// Build the canonical sentiment hex at Oklab hue `h_ok`, choosing chroma so the
-/// colour carries `target_mp` CAM16-UCS colourfulness — **constant across
-/// sentiments** — at the neutral curve's base lightness. `M'` is monotone in
-/// chroma, so a bisection lands it; if the gamut cannot reach `target_mp` at this
-/// hue the chroma saturates at the gamut edge (the rare desaturated-hue case).
-fn build_hex_at_mp(h_ok: f64, target_mp: f64, neutral: &NeutralCurve) -> String {
-    let base = neutral.base_anchor();
-    // Issue #26: the base anchor was built under the neutral curve's own viewing
-    // conditions, so it must round-trip through the same VC.
-    let base_hex = base.to_hex_with_vc(neutral.vc());
-    let base_rgb = srgb_from_hex(&base_hex).unwrap_or([0.5, 0.5, 0.5]);
-    let l_ok = srgb_linear_to_oklab(base_rgb)[0];
-    let c_max = max_chroma(l_ok, h_ok);
-
-    let hex_at = |c: f64| -> String {
+/// Build the canonical sentiment hex at Oklab hue `h_ok`, solving Oklab lightness
+/// and chroma so the colour carries a **constant CAM16 lightness `J'`** *and* a
+/// **constant CAM16-UCS colourfulness `M'`** across all sentiments — equal
+/// perceived weight regardless of hue.
+///
+/// Constant Oklab L alone was not enough: the Helmholtz–Kohlrausch lift gives a
+/// saturated green a much higher `J'` than a red at the same Oklab L, so green
+/// read brighter even after `M'` was equalised. A nested solve fixes both — the
+/// outer bisection finds the Oklab lightness whose result hits `target_jp` (`J'`
+/// is monotone in Oklab L); the inner one finds, at that lightness, the chroma
+/// hitting `target_mp` (`M'` monotone in chroma, capped at the gamut edge for a
+/// hue that cannot reach it).
+fn build_hex_at(target_jhk: f64, target_mp: f64, h_ok: f64, neutral: &NeutralCurve) -> String {
+    let vc = neutral.vc();
+    let hex_at = |l_ok: f64, c: f64| -> String {
         let a = c * h_ok.to_radians().cos();
         let b = c * h_ok.to_radians().sin();
         let rgb = oklab_to_srgb_linear([l_ok, a, b]);
@@ -488,27 +503,48 @@ fn build_hex_at_mp(h_ok: f64, target_mp: f64, neutral: &NeutralCurve) -> String 
             rgb[2].clamp(0.0, 1.0),
         ])
     };
-    // CAM16-UCS colourfulness M' of the quantised colour: `s = M'/(J'+1)`.
-    let mp_at = |c: f64| -> f64 {
-        match LcsColor::from_hex_with_vc(&hex_at(c), neutral.vc()) {
-            Ok(lcs) => lcs.s * (lcs.jp + 1.0),
+    let lcs_at = |l_ok: f64, c: f64| LcsColor::from_hex_with_vc(&hex_at(l_ok, c), vc);
+
+    // Chroma hitting `target_mp` at Oklab lightness `l_ok` (capped at the gamut).
+    let c_for_mp = |l_ok: f64| -> f64 {
+        let c_max = max_chroma(l_ok, h_ok);
+        let mp = |c: f64| lcs_at(l_ok, c).map(|p| p.s * (p.jp + 1.0)).unwrap_or(0.0);
+        if mp(c_max) <= target_mp {
+            return c_max;
+        }
+        let (mut lo, mut hi) = (0.0_f64, c_max);
+        for _ in 0..40 {
+            let mid = 0.5 * (lo + hi);
+            if mp(mid) < target_mp {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+
+    // H-K-corrected lightness of the colour at `(l_ok, c_for_mp(l_ok))`.
+    let jhk_at = |l_ok: f64| -> f64 {
+        let c = c_for_mp(l_ok);
+        match srgb_from_hex(&hex_at(l_ok, c)) {
+            Ok(rgb) => j_hk_from_xyz(srgb_to_xyz(rgb), vc),
             Err(_) => 0.0,
         }
     };
 
-    if mp_at(c_max) <= target_mp {
-        return hex_at(c_max);
-    }
-    let (mut lo, mut hi) = (0.0_f64, c_max);
-    for _ in 0..48 {
+    // Outer: the Oklab lightness whose resulting J_HK hits `target_jhk` (monotone).
+    let (mut lo, mut hi) = (0.0_f64, 1.0);
+    for _ in 0..40 {
         let mid = 0.5 * (lo + hi);
-        if mp_at(mid) < target_mp {
+        if jhk_at(mid) < target_jhk {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    hex_at(0.5 * (lo + hi))
+    let l_ok = 0.5 * (lo + hi);
+    hex_at(l_ok, c_for_mp(l_ok))
 }
 
 #[cfg(test)]
