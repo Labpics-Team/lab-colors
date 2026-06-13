@@ -102,6 +102,35 @@ fn decode_8bit(byte: u8) -> f64 {
     gamma_data::DECODE_8BIT[byte as usize]
 }
 
+/// The 8-bit grey code whose exact linear light equals `linear`, or `None` if
+/// `linear` is not one of the 256 reachable levels.
+///
+/// Binary search over the strictly increasing [`DECODE_8BIT`] table for an exact
+/// (bit) match. A solid grey background decoded from `#NNNNNN` lands exactly on
+/// `DECODE_8BIT[NN]`, so the match succeeds for on-grid greys and cleanly fails
+/// (the caller falls back to the live solver) for off-grid values such as a
+/// blurred average — the neutral fast path stays provably exact, never an
+/// approximation.
+pub(crate) fn grey_code(linear: f64) -> Option<u8> {
+    let table = &gamma_data::DECODE_8BIT;
+    let (mut lo, mut hi) = (0usize, table.len() - 1);
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        let v = table[mid];
+        if v == linear {
+            return Some(mid as u8);
+        }
+        if v < linear {
+            lo = mid + 1;
+        } else if mid == 0 {
+            break;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    None
+}
+
 // NOTE on the encode (quantisation) side — deliberately NOT tabulated.
 //
 // `hex_from_srgb` takes a *continuous* linear value (matrix / Oklab output), so

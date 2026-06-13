@@ -1071,6 +1071,24 @@ pub fn resolve_set(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
+    // Neutral fast path: a solid grey background under a supported VC and the
+    // default table resolves to a precomputed set in O(1) (no forwards, no
+    // bisection). Transparent — it returns the exact set the live solver below
+    // would, and declines (falls back) for anything outside that exact domain.
+    if let Some(fast) = crate::greyfast::try_resolve_set(bg, table, vc) {
+        return fast;
+    }
+    resolve_set_live(bg, table, vc)
+}
+
+/// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
+/// path falls back to, and the path that fills its precomputed table. Always
+/// recomputes; takes no fast path itself (so the table builder cannot recurse).
+pub(crate) fn resolve_set_live(
+    bg: &BgInput,
+    table: &RoleTable,
+    vc: &ViewingConditions,
+) -> Vec<(Role, Resolved)> {
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing
