@@ -299,6 +299,33 @@ mod tests {
     }
 
     #[test]
+    fn cache_returns_bit_identical_to_uncached_math() {
+        // ISOLATED VERIFICATION of the per-set forward cache: with the cache
+        // active, `forward` must return the exact bits `forward_compute` (the
+        // cache-free math) produces — including on cache HITS (a repeated XYZ).
+        // Independent of the resolve_set golden tests: it drives `forward`
+        // directly with deliberate repeats. The guard is scoped per viewing
+        // condition, mirroring resolve_set (the XYZ-only key is correct only
+        // while one VC is in flight).
+        use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let _guard = ForwardCacheGuard::activate();
+            for code in 0u32..=255 {
+                let hex = format!("#{code:02X}{code:02X}{code:02X}");
+                let xyz = srgb_to_xyz(srgb_from_hex(&hex).unwrap());
+                let want = forward_compute(xyz, &vc);
+                // First call misses and inserts; the rest are cache hits.
+                for _ in 0..3 {
+                    let got = forward(xyz, &vc);
+                    assert_eq!(got.0.to_bits(), want.0.to_bits(), "{hex}: J");
+                    assert_eq!(got.1.to_bits(), want.1.to_bits(), "{hex}: M");
+                    assert_eq!(got.2.to_bits(), want.2.to_bits(), "{hex}: h");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn ucs_rescale_round_trips() {
         // The four UCS helpers are exact inverses across the reachable J/M range,
         // so `lcs` (stores J'/M') and `lpc` (decompresses to J/M) never disagree.
