@@ -155,7 +155,11 @@ pub(crate) fn grey_code(linear: f64) -> Option<u8> {
 /// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
 pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
+    // `len()` is a *byte* count and the slices below cut on byte indices, so a
+    // non-ASCII string of 6 bytes (e.g. "€€") would pass a bare length check yet
+    // slice mid-codepoint and panic. Require ASCII so every byte is a char
+    // boundary; non-hex ASCII is still rejected by `from_str_radix` below.
+    if hex.len() != 6 || !hex.is_ascii() {
         return Err(format!("expected #RRGGBB, got #{}", hex));
     }
     let parse =
@@ -205,6 +209,26 @@ pub fn xyz_to_srgb(xyz: [f64; 3]) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srgb_from_hex_rejects_non_ascii_without_panicking() {
+        // Six bytes, but two 3-byte codepoints: a bare byte-length check passes,
+        // and slicing on byte index 2 would cut mid-codepoint and panic. The
+        // parser must return its declared Err instead (it is fallible, and is fed
+        // untrusted strings through the public lpc/solve/LcsColor entry points).
+        for bad in [
+            "\u{20AC}\u{20AC}",
+            "#\u{20AC}\u{20AC}",
+            "\u{00E9}\u{00E9}\u{00E9}",
+        ] {
+            assert!(
+                srgb_from_hex(bad).is_err(),
+                "non-ASCII hex {bad:?} must return Err, not panic"
+            );
+        }
+        // A valid #RRGGBB still parses.
+        assert!(srgb_from_hex("#1A2B3C").is_ok());
+    }
 
     /// Live decode table: the exact linear value of every 8-bit code.
     fn generate_decode() -> [f64; 256] {
