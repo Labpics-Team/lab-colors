@@ -71,6 +71,14 @@ fn s_min_deg(zone_chroma: f64) -> f64 {
     2.0 * ratio.asin().to_degrees()
 }
 
+/// Warning's categorical Oklab-hue floor in degrees: below this, amber reads as
+/// Danger red. Owner precedent (the pre-#65 `Sentiment::hue_floor` value); see
+/// [`Sentiment::hue_floor`] for why it is enforced as a conjunctive legality
+/// veto and why this value is PROVISIONAL. Calibrated to the old Warning peak
+/// (~67°); with the current field peak (~62.57°) it still leaves ~17.6° of
+/// headroom above the floor.
+const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
+
 /// Sentiment categories. Each maps to a prototype hue expressed in
 /// **Oklab hue degrees** (NOT HSB/HSL/sRGB hue). The resolved hue produced by
 /// [`SentimentCurve`] is likewise an Oklab hue.
@@ -108,7 +116,9 @@ impl Sentiment {
     /// - **Success** (green): *steep* toward yellow (lower hue, reads "off"),
     ///   *wide* toward teal (higher hue, still success), so it slides to teal.
     /// - **Warning** (amber): *steep* toward green (higher), *wide* toward
-    ///   orange/red (lower) — its reddish extreme; replaces the old 45° floor.
+    ///   orange/red (lower) — its reddish extreme. The wing shapes the slope;
+    ///   the categorical 45° floor ([`hue_floor`](Self::hue_floor)) is a separate,
+    ///   conjunctive legality veto that complements (does not replace) it.
     /// - **Info** (blue): roughly symmetric.
     fn field(self) -> HueField {
         let (sigma_lo, sigma_hi) = match self {
@@ -132,6 +142,33 @@ impl Sentiment {
             Sentiment::Warning => "#FF9500",
             Sentiment::Success => "#34C759",
             Sentiment::Info => "#007AFF",
+        }
+    }
+
+    /// Categorical **Oklab-hue floor** (degrees) below which this sentiment's
+    /// colour stops reading as itself and bleeds into a neighbour. Only
+    /// [`Sentiment::Warning`] has one: below ~45° its amber slides into Danger's
+    /// red, so Warning and Danger become indistinguishable (the #65 regression —
+    /// measured Warning↔Danger gap collapsed to 3.46° at an orange brand).
+    ///
+    /// This is the field-model port of the pre-#65 hard floor (deleted when the
+    /// asymmetric membership field replaced the side/hardness machinery). It is
+    /// reintroduced here as a **conjunctive legality constraint** inside the field
+    /// resolver — a hard veto on sub-floor boundary picks, never a soft preference
+    /// folded into the wings. `None` for Danger/Success/Info leaves their
+    /// resolution byte-identical to the field-only model.
+    ///
+    /// The value is **PROVISIONAL** (like the wing sigmas) — revisit if the owner
+    /// moves the Warning anchor. The simple [`normalize_hue`] predicate used to
+    /// enforce it (see [`resolve_field_hue`]) is correct *only because* Warning's
+    /// encroachment branch is unreachable outside brand ∈ [39.14, 86.00], a range
+    /// over which no boundary candidate wraps across 0/360. A future sentiment
+    /// gaining both a floor and a peak near 0/360 would need a signed-delta
+    /// predicate instead.
+    fn hue_floor(self) -> Option<f64> {
+        match self {
+            Sentiment::Warning => Some(WARNING_HUE_FLOOR_DEG),
+            _ => None,
         }
     }
 
@@ -292,15 +329,18 @@ impl SentimentCurve {
         Self::with_params(sentiment, brand_hue, prototype_hex, neutral, params)
     }
 
-    /// Resolve a sentiment curve with explicit asymptote [`SentimentParams`].
+    /// Resolve a sentiment curve. The `params` are currently inert — the resolver
+    /// is a **field maximiser**, not the old p-norm displacement: it picks the hue
+    /// that maximises the category's membership field subject to a conjunctive
+    /// floor+separation legality filter (see [`resolve_field_hue`]). `params` is
+    /// retained in the signature for API stability and a future calibration pass
+    /// that re-introduces per-side boundary smoothing.
     ///
-    /// The sentiment hue is pushed away from the brand along the smooth
-    /// p-norm asymptote `s(d) = (d^p + s_min^p)^(1/p)` (see [`SentimentParams`]).
-    /// There is **no on/off threshold**: a distant brand moves the hue by an
-    /// amount that decays smoothly to zero, a near brand is held at the
-    /// perceptual minimum [`s_min_deg`], and the transition is C¹ everywhere
-    /// except the single seam where the brand sits exactly on the prototype
-    /// (resolved on the [`Sentiment::preferred_side`]).
+    /// There is **no on/off threshold**: a distant brand keeps the hue at the
+    /// field peak (zero displacement), an encroaching brand moves it to the nearer
+    /// legal separation boundary on the higher-membership side, and the only
+    /// discontinuity is the single intrinsic seam where membership dominance
+    /// crosses between the two boundaries.
     ///
     /// # Invariants
     ///
@@ -418,39 +458,70 @@ impl SentimentCurve {
 ///   separation boundary, on **whichever side the field is higher**. That is
 ///   what makes Success slide into teal (its wide wing) rather than yellow (its
 ///   steep wing), Warning toward orange rather than green, and Danger to the
-///   closer red wing — the category's own asymmetry decides the side, replacing
-///   the former hard floor and side/hardness machinery.
+///   closer red wing — the category's own asymmetry decides the side.
 ///
-/// [`legalize_hue`] is the final separation net (it never needs to move the
-/// boundary picks, which are exactly `s_min` away, but guards float error).
+/// On top of that membership argmax sits a **conjunctive legality filter**: any
+/// boundary candidate whose normalized hue falls below the sentiment's
+/// [`hue_floor`](Sentiment::hue_floor) is vetoed (its membership treated as
+/// `-∞`) and excluded from the pick. This holds Warning on its amber/green wing
+/// (≥ 45°) instead of letting the encroachment branch dive into Danger's red,
+/// which is what collapsed the Warning↔Danger gap in #65. The chosen boundary is
+/// always exactly `brand ± s_min`, so the separation invariant is preserved *by
+/// construction* — the red boundary is excluded, never lifted toward the brand.
+/// For Danger/Success/Info the floor is `None`, so this is byte-identical to the
+/// field-only model.
+///
+/// [`legalize_hue`] is the final conjoined floor+separation net (it never needs
+/// to move the legal boundary picks, which are exactly `s_min` away and already
+/// clear the floor, but guards float error and fails loudly if the conjoined
+/// legal arc is geometrically empty).
 fn resolve_field_hue(sentiment: Sentiment, brand_hue: f64, s_min: f64) -> Result<f64, String> {
     let field = sentiment.field();
+    let floor = sentiment.hue_floor();
+    let floor_ok = |h: f64| floor.is_none_or(|f| normalize_hue(h) >= f - 1e-9);
 
     // Peak feasible → sit at the prototype (a distant brand barely perturbs it).
-    if angular_distance(field.peak, brand_hue) >= s_min - 1e-9 {
-        return legalize_hue(field.peak, brand_hue, s_min);
+    // Warning's peak (~62.57°) clears its 45° floor trivially, so this is
+    // unchanged for every sentiment; the floor clause only bites the encroachment
+    // branch below.
+    if angular_distance(field.peak, brand_hue) >= s_min - 1e-9 && floor_ok(field.peak) {
+        return legalize_hue(field.peak, brand_hue, s_min, floor);
     }
 
     // Brand encroaches: the unimodal field's constrained maximum is the nearer
-    // separation boundary on the higher-membership side.
+    // separation boundary on the higher-membership side — but a sub-floor
+    // boundary is vetoed (membership → -∞) so it can never win the argmax.
     let c_hi = normalize_hue(brand_hue + s_min);
     let c_lo = normalize_hue(brand_hue - s_min);
-    let pick = if field.membership(c_hi) >= field.membership(c_lo) {
-        c_hi
+    let mu_hi = if floor_ok(c_hi) {
+        field.membership(c_hi)
     } else {
-        c_lo
+        f64::NEG_INFINITY
     };
-    legalize_hue(pick, brand_hue, s_min)
+    let mu_lo = if floor_ok(c_lo) {
+        field.membership(c_lo)
+    } else {
+        f64::NEG_INFINITY
+    };
+    let pick = if mu_hi >= mu_lo { c_hi } else { c_lo };
+    legalize_hue(pick, brand_hue, s_min, floor)
 }
 
-/// Snap a candidate hue to the nearest hue at least `s_min` from the brand.
+/// Snap a candidate hue to the nearest hue that is **both** at least `s_min`
+/// from the brand **and** at or above the sentiment's `floor` (when it has one).
 ///
-/// The field resolver already returns separation-legal hues, so this is a thin
+/// The field resolver already returns conjoined-legal hues, so this is a thin
 /// final net against float error: a legal candidate returns unchanged; otherwise
-/// it scans outward to the closest legal point. (The categorical border that the
-/// old `floor` enforced is now part of the membership field itself.)
-fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, String> {
-    if is_legal_hue(candidate, brand_hue, s_min) {
+/// it scans outward to the closest hue satisfying *both* constraints. It returns
+/// `Err` only when the conjoined floor+separation arc is geometrically empty — a
+/// principled, loud failure, never a silent breach of either invariant.
+fn legalize_hue(
+    candidate: f64,
+    brand_hue: f64,
+    s_min: f64,
+    floor: Option<f64>,
+) -> Result<f64, String> {
+    if is_legal_hue(candidate, brand_hue, s_min, floor) {
         return Ok(normalize_hue(candidate));
     }
 
@@ -460,7 +531,7 @@ fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, Strin
             normalize_hue(candidate + step),
             normalize_hue(candidate - step),
         ] {
-            if is_legal_hue(cand, brand_hue, s_min) {
+            if is_legal_hue(cand, brand_hue, s_min, floor) {
                 return Ok(cand);
             }
         }
@@ -468,14 +539,16 @@ fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, Strin
     }
 
     Err(format!(
-        "no legal hue exists for brand={brand_hue}, s_min={s_min}: \
-         the separation invariant leaves no room on the hue circle"
+        "no legal hue exists for brand={brand_hue}, s_min={s_min}, floor={floor:?}: \
+         the floor and the separation invariant leave no room on the hue circle"
     ))
 }
 
-/// A hue is legal if it clears the brand zone (`>= s_min` away).
-fn is_legal_hue(h: f64, brand_hue: f64, s_min: f64) -> bool {
+/// A hue is legal if it clears the brand zone (`>= s_min` away) AND, when the
+/// sentiment has a floor, sits at or above it.
+fn is_legal_hue(h: f64, brand_hue: f64, s_min: f64, floor: Option<f64>) -> bool {
     angular_distance(h, brand_hue) >= s_min - 1e-9
+        && floor.is_none_or(|f| normalize_hue(h) >= f - 1e-9)
 }
 
 /// Signed shortest delta from `from` to `h` in (-180, 180].
@@ -684,5 +757,182 @@ mod tests {
     fn rejects_non_finite_brand_hue() {
         let n = neutral();
         assert!(SentimentCurve::new(Sentiment::Danger, f64::NAN, "#FF2E2E", &n).is_err());
+    }
+
+    /// s_min (deg) a sentiment enforces, derived from its anchor's own Oklab
+    /// chroma — the same quantity [`with_params`] computes internally.
+    fn s_min_of(s: Sentiment) -> f64 {
+        let lab = srgb_linear_to_oklab(srgb_from_hex(s.anchor_hex()).unwrap());
+        let chroma = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
+        s_min_deg(chroma)
+    }
+
+    /// THE regression pin for #65: Warning and Danger must stay perceptually
+    /// distinguishable for **every** brand on the full circle. On the un-fixed
+    /// (floor-less) resolver this collapses to ~3.46° at an orange brand (~55.5°),
+    /// where the encroachment branch dives Warning down to ~32° red onto Danger's
+    /// ~28.7° peak. The 45° floor holds Warning on its amber wing; the measured
+    /// floor of the gap after the fix is ~15.57°, so a 10° threshold is a
+    /// conservative pin that fails loudly on a future collapse.
+    #[test]
+    fn warning_and_danger_stay_distinguishable_full_circle() {
+        let n = neutral();
+        for brand in (0..3600).map(|d| d as f64 / 10.0) {
+            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n).unwrap();
+            let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n).unwrap();
+            let gap = angular_distance(w.resolved_hue, d.resolved_hue);
+            assert!(
+                gap >= 10.0 - 1e-6,
+                "brand {brand}: Warning {:.3} and Danger {:.3} only {gap:.3}° apart (< 10°)",
+                w.resolved_hue,
+                d.resolved_hue
+            );
+        }
+    }
+
+    /// Generalises the contract: no two of the four sentiments may collapse onto
+    /// each other at any brand. Guards against a future sigma/field/floor tweak
+    /// silently merging any pair (measured global all-pairs min ≈ 15.58°).
+    #[test]
+    fn all_pairs_distinguishable_full_circle() {
+        let n = neutral();
+        for brand in (0..720).map(|d| d as f64 / 2.0) {
+            let resolved: Vec<f64> = Sentiment::ALL
+                .iter()
+                .map(|&s| {
+                    SentimentCurve::new(s, brand, s.anchor_hex(), &n)
+                        .unwrap()
+                        .resolved_hue
+                })
+                .collect();
+            for i in 0..resolved.len() {
+                for j in (i + 1)..resolved.len() {
+                    let gap = angular_distance(resolved[i], resolved[j]);
+                    assert!(
+                        gap >= 10.0 - 1e-6,
+                        "brand {brand}: {:?} {:.3} and {:?} {:.3} only {gap:.3}° apart",
+                        Sentiment::ALL[i],
+                        resolved[i],
+                        Sentiment::ALL[j],
+                        resolved[j]
+                    );
+                }
+            }
+        }
+    }
+
+    /// The categorical floor holds for every brand: Warning never resolves below
+    /// 45°. Re-adds the deleted `warning_floor_enforced_full_circle`, ported to
+    /// the field model (measured min ≈ 45.006°).
+    #[test]
+    fn warning_hue_floor_holds_full_circle() {
+        let n = neutral();
+        for brand in (0..1440).map(|d| d as f64 / 4.0) {
+            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n).unwrap();
+            assert!(
+                w.resolved_hue >= WARNING_HUE_FLOOR_DEG - 1e-6,
+                "brand {brand}: Warning resolved {:.4}° dropped below the {WARNING_HUE_FLOOR_DEG}° floor",
+                w.resolved_hue
+            );
+        }
+    }
+
+    /// In Warning's encroachment zone (~39..86°) the floor and the separation
+    /// invariant compete; prove the conjunction is jointly satisfied — both hold
+    /// simultaneously for every brand in the wedge.
+    #[test]
+    fn warning_floor_and_separation_hold_together() {
+        let n = neutral();
+        let s_min = s_min_of(Sentiment::Warning);
+        let mut brand = 39.0_f64;
+        while brand <= 86.0 {
+            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n).unwrap();
+            assert!(
+                w.resolved_hue >= WARNING_HUE_FLOOR_DEG - 1e-6,
+                "brand {brand}: Warning {:.4}° below floor",
+                w.resolved_hue
+            );
+            let sep = angular_distance(w.resolved_hue, brand);
+            assert!(
+                sep >= s_min - 1e-6,
+                "brand {brand}: Warning separation {sep:.4}° < s_min {s_min:.4}°"
+            );
+            brand += 0.25;
+        }
+    }
+
+    /// Continuity contract: the floor must RELOCATE the single intrinsic
+    /// membership-dominance seam, not multiply it. Counts brands where the
+    /// resolved Warning hue jumps > 5° between adjacent 0.05° steps and asserts
+    /// exactly one such seam, of magnitude ≤ 47° (measured: 1 seam, ~46.86°).
+    #[test]
+    fn warning_resolution_has_a_single_seam() {
+        let n = neutral();
+        let resolve = |brand: f64| {
+            SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n)
+                .unwrap()
+                .resolved_hue
+        };
+        let mut seams = 0usize;
+        let mut max_jump = 0.0_f64;
+        let mut prev = resolve(0.0);
+        let mut i = 1u32;
+        while i <= 7200 {
+            let brand = i as f64 * 0.05;
+            let cur = resolve(brand);
+            let jump = angular_distance(cur, prev);
+            if jump > 5.0 {
+                seams += 1;
+                max_jump = max_jump.max(jump);
+            }
+            prev = cur;
+            i += 1;
+        }
+        assert_eq!(seams, 1, "expected exactly one Warning seam, found {seams}");
+        assert!(
+            max_jump <= 47.0,
+            "Warning seam magnitude {max_jump:.2}° exceeds the documented ≤ 47°"
+        );
+    }
+
+    /// Floor=None sentiments are inert under the change. For floor=None the
+    /// floor clause is vacuously true, so resolution equals the pure field
+    /// maximiser: at a far brand the peak is held untouched. Pinned across a
+    /// handful of brands for Danger/Success/Info (none has a floor) — a
+    /// regression pin against any accidental coupling of the floor into the
+    /// floor=None path.
+    #[test]
+    fn floored_sentiments_unaffected_when_floor_none() {
+        let n = neutral();
+        for s in [Sentiment::Danger, Sentiment::Success, Sentiment::Info] {
+            assert!(s.hue_floor().is_none(), "{s:?} unexpectedly has a floor");
+            let peak = s.field().peak;
+            for brand in [0.0, 90.0, 200.0, 300.0] {
+                let got = SentimentCurve::new(s, brand, s.anchor_hex(), &n)
+                    .unwrap()
+                    .resolved_hue;
+                assert!(
+                    (got - peak).abs() < 1e-9,
+                    "{s:?} brand {brand}: floor=None must leave the far-brand peak \
+                     untouched (got {got}, peak {peak})"
+                );
+            }
+        }
+    }
+
+    /// The principled-failure arm: when the conjoined floor+separation arc is
+    /// geometrically empty, [`legalize_hue`] returns `Err` rather than silently
+    /// breaching an invariant. Contrived so the whole circle is sub-floor or
+    /// inside the brand zone. The normal-brand sweeps never hit this (0 empty
+    /// arcs measured), but a future s_min/floor change must fail loudly.
+    #[test]
+    fn legalize_hue_returns_err_when_arc_empty() {
+        // s_min = 180° forbids every hue except the antipode; pin the floor so
+        // even the antipode is sub-floor → no legal hue anywhere.
+        let err = legalize_hue(10.0, 0.0, 180.0, Some(181.0));
+        assert!(
+            err.is_err(),
+            "an empty conjoined legal arc must return Err, got {err:?}"
+        );
     }
 }
