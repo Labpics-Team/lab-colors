@@ -12,6 +12,8 @@ pub(crate) mod wcag;
 
 pub mod curve;
 
+pub(crate) mod greyfast;
+
 #[cfg(test)]
 mod golden_tests;
 

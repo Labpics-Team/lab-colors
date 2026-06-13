@@ -1140,6 +1140,10 @@ mod tests {
         use crate::spaces::cam16::FORWARD_CALLS;
         let tbl = crate::RoleTable::default();
 
+        // Measures `resolve_set_live` (the solver), not `resolve_set`: the latter
+        // now serves a solid grey through the neutral O(1) fast path (zero
+        // forwards), so it would not exercise the solver this guard exists to pin.
+
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
         //
         // UPDATED for the per-set forward cache (`cam16::ForwardCacheGuard`): the
@@ -1171,7 +1175,7 @@ mod tests {
                 // COLD: fresh cache, first resolve of this theme.
                 crate::semantic::reset_curve_plan_cache();
                 FORWARD_CALLS.with(|c| c.set(0));
-                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
                 let cold = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
                     cold, cold_exp,
@@ -1180,7 +1184,7 @@ mod tests {
 
                 // WARM: same theme re-resolved, curve plans now cached.
                 FORWARD_CALLS.with(|c| c.set(0));
-                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
                 let warm = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
                     warm, warm_exp,
