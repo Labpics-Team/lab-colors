@@ -97,11 +97,11 @@ fn vars_mirror_reachable_role_hexes() {
     let vars = get_obj(&result, "vars");
     let roles = get_obj(&result, "roles");
 
-    // text-primary is reachable on white; its var must equal its role hex.
-    let tp = get_obj(&roles, "text-primary");
+    // label-primary is reachable on white; its var must equal its role hex.
+    let tp = get_obj(&roles, "label-primary");
     let tp_hex = get_str(&tp, "hex").expect("primary is a colour");
     assert_eq!(
-        get_str(&vars, "--lab-text-primary"),
+        get_str(&vars, "--lab-label-primary"),
         Some(tp_hex),
         "vars must mirror the role hex under the --lab- name"
     );

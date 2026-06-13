@@ -13,7 +13,7 @@ async function consume(): Promise<void> {
   const result: ResolvedTheme = engine.resolveTheme("#FFFFFF", theme);
 
   // The discriminated union narrows on `kind`.
-  const primary: RoleResult = result.roles["text-primary"];
+  const primary: RoleResult = result.roles["label-primary"];
   if (primary.kind === "color") {
     const hex: string = primary.hex;
     const lc: number = primary.lc;

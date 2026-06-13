@@ -35,7 +35,7 @@ use crate::lpc::{
 };
 use crate::scale::max_chroma;
 use crate::spaces::oklab::{oklab_hue, oklab_to_srgb_linear};
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_to_xyz};
+use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_gamma_inv, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
 
@@ -369,6 +369,15 @@ pub enum Unreachable {
     /// background can supply the target, the discrete sRGB grid cannot.
     /// `nearest` is the closest |Lc| an adjacent hex step actually achieves.
     QuantizationGap { target: f64, nearest: f64 },
+    /// A decorative perceived-lightness-difference (dJ') contract cannot be met:
+    /// the target sits off the end of the lightness axis (e.g. a positive dJ'
+    /// above a near-white background, where no lighter colour exists), or every
+    /// on-grid colour near the target J' lands outside the budget. Distinct from
+    /// the contrast variants — dJ' measures *perceived lightness distance* on the
+    /// CAM16-UCS J' axis (decorative distinguishability), not LPC readability.
+    /// `target_dj` is the requested magnitude; `nearest` the closest |dJ'| an
+    /// emitted colour actually achieves.
+    DjUnreachable { target_dj: f64, nearest: f64 },
     /// The WCAG legal floor cannot be met on this background even at the
     /// achromatic extreme (pure black for dark-on-light, pure white for
     /// light-on-dark). `max_ratio` is the most contrast this background can
@@ -406,6 +415,10 @@ impl core::fmt::Display for Unreachable {
             Self::QuantizationGap { target, nearest } => write!(
                 f,
                 "target Lc {target:.2} falls in an 8-bit quantisation gap; the nearest on-grid colour reaches only {nearest:.2}"
+            ),
+            Self::DjUnreachable { target_dj, nearest } => write!(
+                f,
+                "decorative dJ' {target_dj:.2} cannot be met on this background; the nearest on-grid colour reaches only {nearest:.2}"
             ),
             Self::FloorUnreachable { floor, max_ratio } => write!(
                 f,
@@ -683,6 +696,10 @@ fn solve_quantization_neighbor(
     // step is *accepted* only when it lands within the symmetric `QUANT_BUDGET`
     // below — an over-jump that overshoots the target is rejected, not clipped.
     let direction = if target >= 0.0 { -1.0 } else { 1.0 };
+    // Oklab-lightness step per probe. 0.001 is ~¼ of one 8-bit sRGB grid step
+    // near mid-tones, so consecutive `#RRGGBB` values are visited in order
+    // (never skipped) while keeping the walk bounded — the loop below caps it at
+    // `NEIGHBOR_STEPS` probes and accepts a step only inside `QUANT_BUDGET`.
     const PROBE: f64 = 0.001;
 
     let mut last_hex = hex_from_srgb(build_color(l_start, hue, chroma_policy));
@@ -733,6 +750,166 @@ fn solve_lpc_lightness(
     let y_fg = invert_contrast(y_bg, target)?;
     let target_j_hk = lpc::grey_j(y_fg, vc);
     Ok(match_lightness(target_j_hk, hue, chroma_policy, vc))
+}
+
+/// The CAM16-UCS lightness `J'` of a **linear**-sRGB colour under `vc`.
+fn jp_of_linear(rgb_linear: [f64; 3], vc: &ViewingConditions) -> f64 {
+    LcsColor::from_xyz_with_hok(srgb_to_xyz(rgb_linear), 0.0, vc).jp
+}
+
+/// The acceptance budget, in CAM16-UCS `J'` units, for a decorative dJ' solve: a
+/// colour is accepted when its measured `|dJ'|` lands within this distance of the
+/// target magnitude. It is the dJ' analogue of [`QUANT_BUDGET`] (the `±1 Lc`
+/// contrast budget): on the light end one 8-bit grey step is worth ~0.3–0.5 `J'`,
+/// so `0.6` is just over one grid step — wide enough that a reachable target is
+/// not rejected for landing on the neighbouring pixel, tight enough that the
+/// emitted colour is honestly within a pixel of the requested separation.
+const DJ_BUDGET: f64 = 0.6;
+
+/// Maximum distinct hex steps the dJ' search walks from the analytic seed toward
+/// the target `J'`. Like [`NEIGHBOR_STEPS`] this is a tiny grid-bridge, not an
+/// optimiser: the analytic seed lands within a pixel by construction, and a
+/// couple of steps cross the one grid cell quantisation can misplace it into.
+const DJ_NEIGHBOR_STEPS: u32 = 2;
+
+/// Solve a decorative perceived-lightness-difference (dJ') contract: find the
+/// in-gamut colour whose CAM16-UCS lightness `J'` is `magnitude_dj` away from the
+/// background's `J'`, in the direction `sign` selects (negative `J'` offset for
+/// dark-on-light `sign = +1` → a darker decorative mark on a light surface;
+/// positive for light-on-dark).
+///
+/// This is **different physics** from the contrast solver above: there is no
+/// readability floor and no low-contrast clip — distinguishability of a
+/// decorative element (a fill tint, a hairline border) is a *perceived lightness
+/// step* on the perceptually-uniform J' axis, not an LPC contrast ratio. The
+/// solve is analytic end to end:
+///
+/// 1. `J'_bg` — measured on the quantised background display colour under `vc`.
+/// 2. `J'_target = J'_bg − sign·dJ'` — the owner's literal anchor offset.
+/// 3. `J'_target → Oklab L` — the shared grey-axis inverse
+///    [`scale::jp_to_oklab_l`](crate::scale), the same one the accent curve uses.
+/// 4. `build_color` at the role's undertone plan → quantise → **measure the
+///    achieved `|dJ'|` on the emitted hex** (`|J'_fg_quant − J'_bg|`) — an honest
+///    finish on the colour the caller actually gets, never the pre-quantisation
+///    ideal.
+///
+/// If the quantised colour lands within [`DJ_BUDGET`] of the target it is
+/// returned. Otherwise a bounded walk steps toward the target `J'` across at most
+/// [`DJ_NEIGHBOR_STEPS`] distinct hex grid points. If none lands in budget — or
+/// the target J' falls off the end of the achievable axis (e.g. a positive dJ'
+/// requested above a near-white background) — the contract is honestly
+/// [`Unreachable::DjUnreachable`], reporting the closest `|dJ'|` actually reached.
+///
+/// The reported `lc` on the returned [`Solved`] is still the measured LPC
+/// contrast of the emitted colour against the background (so the ladder-order
+/// invariants and the golden read a consistent number); only the *target* and
+/// the *acceptance metric* are in J' space.
+pub(crate) fn solve_dj(
+    bg: &BgInput,
+    magnitude_dj: f64,
+    sign: f64,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+) -> Result<Solved, Unreachable> {
+    if !magnitude_dj.is_finite() || magnitude_dj < 0.0 {
+        return Err(Unreachable::InvalidInput(format!(
+            "dJ' magnitude must be finite and non-negative: {magnitude_dj}"
+        )));
+    }
+
+    // The contract is measured against the *displayed* background — the colour on
+    // screen, gamma-quantised then decoded back to linear — so the separation is
+    // the one the eye sees, in the same space `finish` measures the foreground in.
+    let bg_disp = bg.governing_display(sign);
+    // `governing_display` is gamma-encoded (8-bit display values); decode back to
+    // linear so the J' forward sees the same space `finish` measures in.
+    let bg_disp_linear = [
+        srgb_gamma_inv(bg_disp[0]),
+        srgb_gamma_inv(bg_disp[1]),
+        srgb_gamma_inv(bg_disp[2]),
+    ];
+    let jp_bg = jp_of_linear(bg_disp_linear, vc);
+    // Direction: dark-on-light (`sign = +1`) places the mark *below* the surface
+    // in lightness; light-on-dark *above*. "Toward the larger headroom" is exactly
+    // the set polarity, so the offset sign mirrors the contrast solver's.
+    let jp_target = jp_bg - sign * magnitude_dj;
+
+    // The luminance interval still governs which background endpoint the perceptual
+    // LPC measurement uses for the reported `lc` (degenerate for a Solid bg).
+    let interval = bg.luma_interval(vc)?;
+    let y_gov = interval.governing(sign);
+
+    // Build, quantise, and honestly measure the achieved separation on the emitted
+    // hex (decoded to linear — the colour the caller actually gets), not the
+    // pre-quantisation ideal.
+    let evaluate = |jp_goal: f64| -> Result<DjCandidate, Unreachable> {
+        let l_ok = crate::scale::jp_to_oklab_l(jp_goal, vc);
+        let rgb = build_color(l_ok, hue, chroma_policy);
+        let solved = finish(rgb, y_gov, bg_disp, false, vc)?;
+        let rgb_quantised = srgb_from_hex(solved.hex()).map_err(Unreachable::InvalidInput)?;
+        let achieved_dj = (jp_of_linear(rgb_quantised, vc) - jp_bg).abs();
+        Ok(DjCandidate {
+            error: (achieved_dj - magnitude_dj).abs(),
+            achieved_dj,
+            solved,
+        })
+    };
+
+    let primary = evaluate(jp_target)?;
+    if primary.error <= DJ_BUDGET {
+        return Ok(primary.solved);
+    }
+
+    // The seed missed the budget — walk distinct hex grid points toward larger
+    // separation (away from `jp_bg`, in the polarity's direction) so a
+    // quantisation undershoot is corrected. Probe well below one grid step so
+    // neighbours are visited in order. Track the closest `|dJ'|` across the seed
+    // and every neighbour, so the failure reports the true near-miss.
+    let direction = -sign;
+    const PROBE: f64 = 0.05;
+    // Bound the probe count independently of the distinct-step count so a run of
+    // identical grid points can never loop forever; with a J' axis span well
+    // under ~243 this reaches the white/black wall long before the cap.
+    const MAX_PROBES: u32 = 256;
+    let mut last_hex = primary.solved.hex().to_string();
+    let mut steps_taken = 0_u32;
+    let mut probes = 0_u32;
+    let mut jp_probe = jp_target;
+    let mut nearest = primary.achieved_dj;
+    let mut nearest_err = primary.error;
+
+    while steps_taken < DJ_NEIGHBOR_STEPS && probes < MAX_PROBES {
+        jp_probe += direction * PROBE;
+        probes += 1;
+        let candidate = evaluate(jp_probe)?;
+        if candidate.solved.hex() == last_hex {
+            continue; // same grid point — not yet a distinct neighbour step
+        }
+        last_hex = candidate.solved.hex().to_string();
+        steps_taken += 1;
+        if candidate.error < nearest_err {
+            nearest_err = candidate.error;
+            nearest = candidate.achieved_dj;
+        }
+        if candidate.error <= DJ_BUDGET {
+            return Ok(candidate.solved);
+        }
+    }
+
+    Err(Unreachable::DjUnreachable {
+        target_dj: magnitude_dj,
+        nearest,
+    })
+}
+
+/// One on-grid candidate the dJ' search evaluates: the solved colour, the
+/// `|dJ'|` it achieves on the quantised hex, and the distance of that from the
+/// requested magnitude (the budget the search minimises).
+struct DjCandidate {
+    solved: Solved,
+    achieved_dj: f64,
+    error: f64,
 }
 
 /// Stage 2: enforce the WCAG legal floor on the quantised colour.
@@ -1146,22 +1323,22 @@ mod tests {
 
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
         //
-        // UPDATED for the per-set forward cache (`cam16::ForwardCacheGuard`): the
-        // counter now records only *distinct* CIECAM16 computations, because a
-        // repeated `XYZ` within a set is served from the cache. The refine
-        // fixed-point and the hierarchy pass re-measure the same candidate
-        // colours, so 25–33% (WARM) / 44–47% (COLD, which also re-probes the
-        // curve-plan bisection) of the forwards were exact repeats — now elided.
-        // These counts equal the unique-`XYZ` measurement and are the honest
-        // "real CAM16 work" metric. (Prior pin, bg-hoist only: srgb/#FFFFFF
-        // 1991/1433 → 1063/958, etc.)
+        // Counts on the MERGED tree: the per-set forward cache
+        // (`cam16::ForwardCacheGuard`, #62 — counter records only *distinct*
+        // CIECAM16 computations, repeats within a set elided) AND the dJ'
+        // decorative contract (role-taxonomy-hig — base/soft borders + four fills
+        // moved off the Lc `Decorative` contrast inversion onto the analytic
+        // `solve_dj`). Both forces push the counts down versus either side alone,
+        // so the pins below were re-measured against this merged tree, not carried
+        // over from #62 (cache-only) or the role branch (no cache). Re-measured
+        // 2026-06-13.
         let expected = [
-            (("srgb", "#FFFFFF"), (1063u64, 958u64)),
-            (("srgb", "#7F7F7F"), (691, 605)),
-            (("srgb", "#101012"), (785, 689)),
-            (("dim", "#FFFFFF"), (976, 869)),
-            (("dim", "#7F7F7F"), (658, 567)),
-            (("dim", "#101012"), (796, 689)),
+            (("srgb", "#FFFFFF"), (1202u64, 1080u64)),
+            (("srgb", "#7F7F7F"), (935, 794)),
+            (("srgb", "#101012"), (1007, 858)),
+            (("dim", "#FFFFFF"), (1143, 996)),
+            (("dim", "#7F7F7F"), (887, 737)),
+            (("dim", "#101012"), (1031, 825)),
         ];
 
         for (vc, name) in vcs() {
@@ -2234,31 +2411,41 @@ mod tests {
     /// (achromatic Neutral and the v1 Tinted{286°, 0.10}). Regenerate the
     /// expectations with `_emit_resolve_set_golden` (kept below, `#[ignore]`d)
     /// only when a colour change is *intended* and explained.
+    ///
+    /// UPDATED for the HIG role taxonomy (`role-taxonomy-hig`): the row format now
+    /// carries all 20 roles per line (`label-*`, `icon`, `separator`, `border-*`,
+    /// `fill-*`, `shadow-*`, `none`) instead of the old 10. The `label-*` cells are
+    /// byte-identical to the prior `text-*` cells — the rename moved keys, not
+    /// colours — and `border-strong` mirrors `label-primary` (it shares the
+    /// label-primary contract). The new `border-*`/`fill-*`/`shadow-*` cells are
+    /// PROVISIONAL decorative magnitudes (recalibrated in `surface-jnd` after #44).
+    /// This expansion is the one allowed touch to this module's golden: `Role::ALL`
+    /// grew, so the line shape had to grow with it.
     const RESOLVE_SET_GOLDEN: &[&str] = &[
-        "srgb|#FFFFFF|Neutral|text-primary=#141414,text-secondary=#767676,text-muted=#949494,text-disabled=#C2C2C2,icon=#949494,separator=#E9E9E9,border=#E7E7E7,surface=#E9E9E9,shadow=#E5E5E5,none=none",
-        "srgb|#FFFFFF|Tinted|text-primary=#0C0C11,text-secondary=#6D6D7E,text-muted=#9493A0,text-disabled=#BEBEC6,icon=#9493A0,separator=#E8E8EA,border=#E6E6E9,surface=#E8E8EA,shadow=#E4E4E7,none=none",
-        "srgb|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#E0E0E0,surface=#E1E1E1,shadow=#DEDEDE,none=none",
-        "srgb|#F2F2F7|Tinted|text-primary=#0C0C10,text-secondary=#69697B,text-muted=#8C8B99,text-disabled=#B8B8C0,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
-        "srgb|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#666666,surface=#696969,shadow=#646464,none=none",
-        "srgb|#7F7F7F|Tinted|text-primary=#030304,text-secondary=#16161B,text-muted=#363541,text-disabled=#575667,icon=#363541,separator=#5F5E70,border=#5C5C6E,surface=#5F5E70,shadow=#5A5A6B,none=none",
-        "srgb|#1C1C1E|Neutral|text-primary=#F6F6F6,text-secondary=#BABABA,text-muted=#9A9A9A,text-disabled=#727272,icon=#9A9A9A,separator=#3F3F3F,border=#424242,surface=#3F3F3F,shadow=#444444,none=none",
-        "srgb|#1C1C1E|Tinted|text-primary=#F6F6F7,text-secondary=#B6B6BF,text-muted=#9494A0,text-disabled=#68687A,icon=#9494A0,separator=#363541,border=#383844,surface=#363541,shadow=#3B3B47,none=none",
-        "srgb|#101012|Neutral|text-primary=#F6F6F6,text-secondary=#B9B9B9,text-muted=#989898,text-disabled=#6F6F6F,icon=#989898,separator=#393939,border=#3C3C3C,surface=#393939,shadow=#3F3F3F,none=none",
-        "srgb|#101012|Tinted|text-primary=#F6F6F7,text-secondary=#B5B5BD,text-muted=#91919E,text-disabled=#646477,icon=#91919E,separator=#30303A,border=#33323D,surface=#30303A,shadow=#353540,none=none",
-        "srgb|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
-        "srgb|#3478F6|Tinted|text-primary=#050406,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7D,icon=#35343F,separator=#7C7C8C,border=#7A7A8A,surface=#7C7C8C,shadow=#787787,none=none",
-        "dim|#FFFFFF|Neutral|text-primary=#131313,text-secondary=#757575,text-muted=#949494,text-disabled=#C0C0C0,icon=#949494,separator=#E7E7E7,border=#E5E5E5,surface=#E7E7E7,shadow=#E3E3E3,none=none",
-        "dim|#FFFFFF|Tinted|text-primary=#0E0E12,text-secondary=#6D6C7E,text-muted=#9493A0,text-disabled=#BDBDC5,icon=#9493A0,separator=#E6E6E8,border=#E4E4E7,surface=#E6E6E8,shadow=#E2E2E5,none=none",
-        "dim|#F2F2F7|Neutral|text-primary=#131313,text-secondary=#6F6F6F,text-muted=#8C8C8C,text-disabled=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border=#DFDFDF,surface=#E1E1E1,shadow=#DEDEDE,none=none",
-        "dim|#F2F2F7|Tinted|text-primary=#0D0D12,text-secondary=#6A6A7B,text-muted=#8C8B99,text-disabled=#B8B8C1,icon=#8C8B99,separator=#E0E0E3,border=#DEDEE2,surface=#E0E0E3,shadow=#DCDCE0,none=none",
-        "dim|#7F7F7F|Neutral|text-primary=#070707,text-secondary=#161616,text-muted=#363636,text-disabled=#616161,icon=#363636,separator=#696969,border=#676767,surface=#696969,shadow=#646464,none=none",
-        "dim|#7F7F7F|Tinted|text-primary=#040406,text-secondary=#16161B,text-muted=#363541,text-disabled=#585868,icon=#363541,separator=#606072,border=#5E5D6F,surface=#606072,shadow=#5C5B6D,none=none",
-        "dim|#1C1C1E|Neutral|text-primary=#F4F4F4,text-secondary=#B8B8B8,text-muted=#989898,text-disabled=#707070,icon=#989898,separator=#3D3D3D,border=#404040,surface=#3D3D3D,shadow=#434343,none=none",
-        "dim|#1C1C1E|Tinted|text-primary=#F3F3F5,text-secondary=#B5B5BD,text-muted=#93939F,text-disabled=#686779,icon=#93939F,separator=#363641,border=#393844,surface=#363641,shadow=#3B3B47,none=none",
-        "dim|#101012|Neutral|text-primary=#F4F4F4,text-secondary=#B7B7B7,text-muted=#969696,text-disabled=#6D6D6D,icon=#969696,separator=#373737,border=#3A3A3A,surface=#373737,shadow=#3D3D3D,none=none",
-        "dim|#101012|Tinted|text-primary=#F3F3F5,text-secondary=#B3B3BC,text-muted=#90909D,text-disabled=#646476,icon=#90909D,separator=#30303A,border=#33333D,surface=#30303A,shadow=#363541,none=none",
-        "dim|#3478F6|Neutral|text-primary=#0A0A0A,text-secondary=#141414,text-muted=#353535,text-disabled=#757575,icon=#353535,separator=#848484,border=#828282,surface=#848484,shadow=#808080,none=none",
-        "dim|#3478F6|Tinted|text-primary=#060608,text-secondary=#15141A,text-muted=#35343F,text-disabled=#6C6C7E,icon=#35343F,separator=#7D7D8C,border=#7B7A8A,surface=#7D7D8C,shadow=#787888,none=none",
+        "srgb|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,icon=#949494,separator=#E9E9E9,border-strong=#141414,border-base=#E9E9E9,border-soft=#F4F4F4,border-ghost=none,fill-primary=#E4E4E4,fill-secondary=#E9E9E9,fill-tertiary=#EFEFEF,fill-quaternary=#F4F4F4,fill-none=none,shadow-minor=#E9E9E9,shadow-ambient=#E6E6E6,shadow-penumbra=#E3E3E3,shadow-major=#DEDEDE,none=none",
+        "srgb|#FFFFFF|Tinted|label-primary=#0C0C11,label-secondary=#6D6D7E,label-tertiary=#9493A0,label-quaternary=#BEBEC6,icon=#9493A0,separator=#E8E8EA,border-strong=#0C0C11,border-base=#E9E9EB,border-soft=#F4F4F5,border-ghost=none,fill-primary=#E4E4E7,fill-secondary=#E9E9EB,fill-tertiary=#EFEFF1,fill-quaternary=#F4F4F5,fill-none=none,shadow-minor=#E8E8EA,shadow-ambient=#E5E5E8,shadow-penumbra=#E1E1E4,shadow-major=#DCDCE0,none=none",
+        "srgb|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border-strong=#131313,border-base=#DDDDDD,border-soft=#E8E8E8,border-ghost=none,fill-primary=#D9D9D9,fill-secondary=#DDDDDD,fill-tertiary=#E3E3E3,fill-quaternary=#E8E8E8,fill-none=none,shadow-minor=#E1E1E1,shadow-ambient=#DFDFDF,shadow-penumbra=#DBDBDB,shadow-major=#D7D7D7,none=none",
+        "srgb|#F2F2F7|Tinted|label-primary=#0C0C10,label-secondary=#69697B,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,icon=#8C8B99,separator=#E0E0E3,border-strong=#0C0C10,border-base=#DDDDE1,border-soft=#E8E8EA,border-ghost=none,fill-primary=#D8D8DD,fill-secondary=#DDDDE1,fill-tertiary=#E3E3E6,fill-quaternary=#E8E8EA,fill-none=none,shadow-minor=#E0E0E3,shadow-ambient=#DDDDE1,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
+        "srgb|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,icon=#363636,separator=#696969,border-strong=#070707,border-base=#6F6F6F,border-soft=#777777,border-ghost=none,fill-primary=#6C6C6C,fill-secondary=#6F6F6F,fill-tertiary=#747474,fill-quaternary=#777777,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#616161,shadow-major=#5B5B5B,none=none",
+        "srgb|#7F7F7F|Tinted|label-primary=#030304,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#575667,icon=#363541,separator=#5F5E70,border-strong=#030304,border-base=#6E6E7F,border-soft=#767686,border-ghost=none,fill-primary=#6A6A7C,fill-secondary=#6E6E7F,fill-tertiary=#727283,fill-quaternary=#767686,fill-none=none,shadow-minor=#5F5E70,shadow-ambient=#5B5B6C,shadow-penumbra=#575667,shadow-major=#515060,none=none",
+        "srgb|#1C1C1E|Neutral|label-primary=#F6F6F6,label-secondary=#BABABA,label-tertiary=#9A9A9A,label-quaternary=#727272,icon=#9A9A9A,separator=#3F3F3F,border-strong=#F6F6F6,border-base=#2B2B2B,border-soft=#242424,border-ghost=none,fill-primary=#2F2F2F,fill-secondary=#2B2B2B,fill-tertiary=#272727,fill-quaternary=#242424,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
+        "srgb|#1C1C1E|Tinted|label-primary=#F6F6F7,label-secondary=#B6B6BF,label-tertiary=#9494A0,label-quaternary=#68687A,icon=#9494A0,separator=#363541,border-strong=#F6F6F7,border-base=#2A2A34,border-soft=#23232B,border-ghost=none,fill-primary=#2E2E38,fill-secondary=#2A2A34,fill-tertiary=#26262F,fill-quaternary=#23232B,fill-none=none,shadow-minor=#363541,shadow-ambient=#3A3945,shadow-penumbra=#3F3F4B,shadow-major=#454553,none=none",
+        "srgb|#101012|Neutral|label-primary=#F6F6F6,label-secondary=#B9B9B9,label-tertiary=#989898,label-quaternary=#6F6F6F,icon=#989898,separator=#393939,border-strong=#F6F6F6,border-base=#202020,border-soft=#181818,border-ghost=none,fill-primary=#242424,fill-secondary=#202020,fill-tertiary=#1C1C1C,fill-quaternary=#181818,fill-none=none,shadow-minor=#393939,shadow-ambient=#3D3D3D,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
+        "srgb|#101012|Tinted|label-primary=#F6F6F7,label-secondary=#B5B5BD,label-tertiary=#91919E,label-quaternary=#646477,icon=#91919E,separator=#30303A,border-strong=#F6F6F7,border-base=#1F1F27,border-soft=#18171E,border-ghost=none,fill-primary=#23232B,fill-secondary=#1F1F27,fill-tertiary=#1B1B22,fill-quaternary=#18171E,fill-none=none,shadow-minor=#30303A,shadow-ambient=#34343F,shadow-penumbra=#3A3945,shadow-major=#40404D,none=none",
+        "srgb|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,icon=#353535,separator=#848484,border-strong=#0A0A0A,border-base=#6F6F6F,border-soft=#777777,border-ghost=none,fill-primary=#6B6B6B,fill-secondary=#6F6F6F,fill-tertiary=#737373,fill-quaternary=#777777,fill-none=none,shadow-minor=#848484,shadow-ambient=#818181,shadow-penumbra=#7D7D7D,shadow-major=#777777,none=none",
+        "srgb|#3478F6|Tinted|label-primary=#050406,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7D,icon=#35343F,separator=#7C7C8C,border-strong=#050406,border-base=#6D6D7E,border-soft=#757585,border-ghost=none,fill-primary=#69697B,fill-secondary=#6D6D7E,fill-tertiary=#717182,fill-quaternary=#757585,fill-none=none,shadow-minor=#7C7C8C,shadow-ambient=#797989,shadow-penumbra=#747484,shadow-major=#6E6E7F,none=none",
+        "dim|#FFFFFF|Neutral|label-primary=#131313,label-secondary=#757575,label-tertiary=#949494,label-quaternary=#C0C0C0,icon=#949494,separator=#E7E7E7,border-strong=#131313,border-base=#D8D8D8,border-soft=#E8E8E8,border-ghost=none,fill-primary=#BEBEBE,fill-secondary=#C4C4C4,fill-tertiary=#D1D1D1,fill-quaternary=#DFDFDF,fill-none=none,shadow-minor=#E7E7E7,shadow-ambient=#E4E4E4,shadow-penumbra=#E0E0E0,shadow-major=#DCDCDC,none=none",
+        "dim|#FFFFFF|Tinted|label-primary=#0E0E12,label-secondary=#6D6C7E,label-tertiary=#9493A0,label-quaternary=#BDBDC5,icon=#9493A0,separator=#E6E6E8,border-strong=#0E0E12,border-base=#D7D7DC,border-soft=#E8E8EA,border-ghost=none,fill-primary=#BDBDC4,fill-secondary=#C3C3CA,fill-tertiary=#D1D1D6,fill-quaternary=#DEDFE2,fill-none=none,shadow-minor=#E6E6E8,shadow-ambient=#E3E3E6,shadow-penumbra=#DFDFE3,shadow-major=#DADADF,none=none",
+        "dim|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border-strong=#131313,border-base=#CDCDCD,border-soft=#DCDCDC,border-ghost=none,fill-primary=#B3B3B3,fill-secondary=#B9B9B9,fill-tertiary=#C6C6C6,fill-quaternary=#D3D3D3,fill-none=none,shadow-minor=#E1E1E1,shadow-ambient=#DEDEDE,shadow-penumbra=#DBDBDB,shadow-major=#D6D6D6,none=none",
+        "dim|#F2F2F7|Tinted|label-primary=#0D0D12,label-secondary=#6A6A7B,label-tertiary=#8C8B99,label-quaternary=#B8B8C1,icon=#8C8B99,separator=#E0E0E3,border-strong=#0D0D12,border-base=#CCCCD2,border-soft=#DCDCE0,border-ghost=none,fill-primary=#B2B2BB,fill-secondary=#B9B9C1,fill-tertiary=#C6C6CC,fill-quaternary=#D3D3D8,fill-none=none,shadow-minor=#E0E0E3,shadow-ambient=#DDDDE1,shadow-penumbra=#D9D9DE,shadow-major=#D5D5D9,none=none",
+        "dim|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,icon=#363636,separator=#696969,border-strong=#070707,border-base=#656565,border-soft=#707070,border-ghost=none,fill-primary=#525252,fill-secondary=#575757,fill-tertiary=#606060,fill-quaternary=#696969,fill-none=none,shadow-minor=#696969,shadow-ambient=#666666,shadow-penumbra=#616161,shadow-major=#5B5B5B,none=none",
+        "dim|#7F7F7F|Tinted|label-primary=#040406,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#585868,icon=#363541,separator=#606072,border-strong=#040406,border-base=#636375,border-soft=#6E6E7F,border-ghost=none,fill-primary=#515160,fill-secondary=#555565,fill-tertiary=#5E5E70,fill-quaternary=#68677A,fill-none=none,shadow-minor=#606072,shadow-ambient=#5D5C6E,shadow-penumbra=#585869,shadow-major=#525262,none=none",
+        "dim|#1C1C1E|Neutral|label-primary=#F4F4F4,label-secondary=#B8B8B8,label-tertiary=#989898,label-quaternary=#707070,icon=#989898,separator=#3D3D3D,border-strong=#F4F4F4,border-base=#323232,border-soft=#282828,border-ghost=none,fill-primary=#424242,fill-secondary=#3E3E3E,fill-tertiary=#363636,fill-quaternary=#2E2E2E,fill-none=none,shadow-minor=#3D3D3D,shadow-ambient=#424242,shadow-penumbra=#474747,shadow-major=#4E4E4E,none=none",
+        "dim|#1C1C1E|Tinted|label-primary=#F3F3F5,label-secondary=#B5B5BD,label-tertiary=#93939F,label-quaternary=#686779,icon=#93939F,separator=#363641,border-strong=#F3F3F5,border-base=#31313B,border-soft=#282730,border-ghost=none,fill-primary=#41414E,fill-secondary=#3D3D49,fill-tertiary=#353540,fill-quaternary=#2D2C36,fill-none=none,shadow-minor=#363641,shadow-ambient=#3A3A46,shadow-penumbra=#3F3F4C,shadow-major=#464553,none=none",
+        "dim|#101012|Neutral|label-primary=#F4F4F4,label-secondary=#B7B7B7,label-tertiary=#969696,label-quaternary=#6D6D6D,icon=#969696,separator=#373737,border-strong=#F4F4F4,border-base=#252525,border-soft=#1C1C1C,border-ghost=none,fill-primary=#353535,fill-secondary=#313131,fill-tertiary=#292929,fill-quaternary=#212121,fill-none=none,shadow-minor=#373737,shadow-ambient=#3C3C3C,shadow-penumbra=#414141,shadow-major=#484848,none=none",
+        "dim|#101012|Tinted|label-primary=#F3F3F5,label-secondary=#B3B3BC,label-tertiary=#90909D,label-quaternary=#646476,icon=#90909D,separator=#30303A,border-strong=#F3F3F5,border-base=#25242D,border-soft=#1C1C22,border-ghost=none,fill-primary=#34343F,fill-secondary=#30303B,fill-tertiary=#282831,fill-quaternary=#212028,fill-none=none,shadow-minor=#30303A,shadow-ambient=#34343F,shadow-penumbra=#3A3945,shadow-major=#40404D,none=none",
+        "dim|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,icon=#353535,separator=#848484,border-strong=#0A0A0A,border-base=#646464,border-soft=#6F6F6F,border-ghost=none,fill-primary=#525252,fill-secondary=#565656,fill-tertiary=#5F5F5F,fill-quaternary=#696969,fill-none=none,shadow-minor=#848484,shadow-ambient=#818181,shadow-penumbra=#7D7D7D,shadow-major=#777777,none=none",
+        "dim|#3478F6|Tinted|label-primary=#060608,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7E,icon=#35343F,separator=#7D7D8C,border-strong=#060608,border-base=#626275,border-soft=#6D6D7E,border-ghost=none,fill-primary=#505060,fill-secondary=#555465,fill-tertiary=#5E5D6F,fill-quaternary=#676779,fill-none=none,shadow-minor=#7D7D8C,shadow-ambient=#797989,shadow-penumbra=#757585,shadow-major=#6F6F80,none=none",
     ];
 
     /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.

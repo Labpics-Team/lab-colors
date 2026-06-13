@@ -38,7 +38,7 @@ export type ThemeName = "light" | "dark" | "light-ic" | "dark-ic";
 /** A solved colour and the contrasts it actually achieves. */
 export interface SolvedColor {
   readonly kind: "color";
-  /** The CSS custom-property name for this role, e.g. "--lab-text-primary". */
+  /** The CSS custom-property name for this role, e.g. "--lab-label-primary". */
   readonly cssVar: string;
   /** The resolved colour as #RRGGBB. */
   readonly hex: string;
@@ -74,7 +74,7 @@ export type RoleResult = SolvedColor | NoneRole | UnreachableRole;
 export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
-  /** Reachable roles only: { "--lab-text-primary": "#1a1a1a", ... }. */
+  /** Reachable roles only: { "--lab-label-primary": "#1a1a1a", ... }. */
   readonly vars: Record<string, string>;
   /** Every role, keyed by its stable role key (without the --lab- prefix). */
   readonly roles: Record<string, RoleResult>;

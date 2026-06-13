@@ -175,6 +175,11 @@ impl AccentCurve {
 ///
 /// Replacing the 64 forward CAM16 passes with one analytic `y_hk` is the only
 /// behavioural change; everything downstream of `y` is unchanged.
+///
+/// `pub(crate)` so the semantic dJ' contract (decorative perceived-lightness
+/// difference, `surface-jnd`) can map a target CAM16-UCS lightness `J'` onto the
+/// Oklab `L` the solver's `build_color` consumes — the same grey-axis inverse the
+/// accent curve uses, never a second copy of the rescale algebra.
 pub(crate) fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
     // Step 1: invert the CAM16-UCS lightness rescale J' → J through the shared
     // single-source helper (#19/#60) — never re-type the rescale constants here.

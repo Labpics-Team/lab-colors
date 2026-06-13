@@ -32,10 +32,10 @@ const CONTINUITY_BOUND: f64 = 2.0;
 /// The roles whose continuity is asserted — every text/UI role that resolves to
 /// a colour on a neutral background.
 const TRACKED: [Role; 5] = [
-    Role::TextPrimary,
-    Role::TextSecondary,
-    Role::TextMuted,
-    Role::TextDisabled,
+    Role::LabelPrimary,
+    Role::LabelSecondary,
+    Role::LabelTertiary,
+    Role::LabelQuaternary,
     Role::Icon,
 ];
 
@@ -76,8 +76,8 @@ fn grey_axis_is_continuous_outside_the_single_polarity_break() {
             // Is this the polarity-break step? Detected from TextPrimary's sign
             // change, the canonical signal of the break (it is allowed to teleport
             // here; the dedicated test below pins its exact location).
-            let p0 = role_lc(&bg0, &table, &vc, Role::TextPrimary);
-            let p1 = role_lc(&bg1, &table, &vc, Role::TextPrimary);
+            let p0 = role_lc(&bg0, &table, &vc, Role::LabelPrimary);
+            let p1 = role_lc(&bg1, &table, &vc, Role::LabelPrimary);
             let is_break = matches!((p0, p1), (Some(a), Some(b)) if a.signum() != b.signum());
             if is_break {
                 continue; // the documented discontinuity — pinned separately
@@ -119,8 +119,8 @@ fn polarity_break_zone_is_one_step_wide_and_vc_independent() {
             let bg0 = BgInput::solid(&gray(g)).unwrap();
             let bg1 = BgInput::solid(&gray(g + 1)).unwrap();
             if let (Some(a), Some(b)) = (
-                role_lc(&bg0, &table, &vc, Role::TextPrimary),
-                role_lc(&bg1, &table, &vc, Role::TextPrimary),
+                role_lc(&bg0, &table, &vc, Role::LabelPrimary),
+                role_lc(&bg1, &table, &vc, Role::LabelPrimary),
             ) && a.signum() != b.signum()
             {
                 flip_steps.push((g, g + 1));

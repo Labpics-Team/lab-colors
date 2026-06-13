@@ -36,10 +36,10 @@ const GRID: [&str; 6] = [
 
 /// The text roles strongest-first — the order the hierarchy invariant walks.
 const TEXT_ORDER: [Role; 4] = [
-    Role::TextPrimary,
-    Role::TextSecondary,
-    Role::TextMuted,
-    Role::TextDisabled,
+    Role::LabelPrimary,
+    Role::LabelSecondary,
+    Role::LabelTertiary,
+    Role::LabelQuaternary,
 ];
 
 /// The cool blue-violet undertone the default tinted table carries
@@ -72,9 +72,9 @@ fn dim_tinted_holds_wcag_floors_on_the_grid() {
         let bg = BgInput::solid(bg_hex).unwrap();
         let set = resolve_set(&bg, &table, &vc);
         for (role, min_ratio) in [
-            (Role::TextPrimary, 4.5),
-            (Role::TextSecondary, 4.5),
-            (Role::TextMuted, 3.0),
+            (Role::LabelPrimary, 4.5),
+            (Role::LabelSecondary, 4.5),
+            (Role::LabelTertiary, 3.0),
             (Role::Icon, 3.0),
         ] {
             let (solved, _) = role_solved(&set, role)
@@ -136,9 +136,9 @@ fn dim_tinted_carries_the_cool_neutral_undertone() {
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     let roles = [
-        Role::TextPrimary,
-        Role::TextSecondary,
-        Role::TextMuted,
+        Role::LabelPrimary,
+        Role::LabelSecondary,
+        Role::LabelTertiary,
         Role::Icon,
     ];
     for bg_hex in GRID {
@@ -197,10 +197,10 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     let roles = [
-        Role::TextPrimary,
-        Role::TextSecondary,
-        Role::TextMuted,
-        Role::TextDisabled,
+        Role::LabelPrimary,
+        Role::LabelSecondary,
+        Role::LabelTertiary,
+        Role::LabelQuaternary,
         Role::Icon,
     ];
     for bg_hex in GRID {
