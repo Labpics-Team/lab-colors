@@ -36,6 +36,94 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
     a.signum() * 100.0 * y.powf(1.0 / 0.42) / fl
 }
 
+// Per-`resolve_set` memoization of the `forward` pass, keyed on the input `XYZ`
+// bit pattern. Within one `resolve_set` the viewing conditions are fixed, so the
+// forward is a pure function of `XYZ` alone — and the curve refine fixed-point
+// and the text-hierarchy pass re-measure the same candidate colours, making
+// 25–33% of the forwards exact repeats (measured on the default table). The
+// cache is live only for the span of a set (see `ForwardCacheGuard`) and cleared
+// on entry and exit, so it never aliases across viewing conditions and cannot
+// grow unbounded; outside that span (`active == false`) it is transparent. It
+// returns the bit-identical tuple the math would have produced — pure
+// memoization, no numeric movement.
+thread_local! {
+    static FORWARD_CACHE: std::cell::RefCell<ForwardCache> =
+        std::cell::RefCell::new(ForwardCache {
+            active: false,
+            map: XyzMap::default(),
+        });
+}
+
+type XyzMap =
+    std::collections::HashMap<[u64; 3], (f64, f64, f64), std::hash::BuildHasherDefault<XyzHasher>>;
+
+struct ForwardCache {
+    active: bool,
+    map: XyzMap,
+}
+
+/// A minimal multiply-xor hasher for the `[u64; 3]` `XYZ`-bits key.
+///
+/// The default `SipHash` on a 24-byte key costs more than the CIECAM16 forward
+/// the cache is meant to save, erasing the win on native. The key is already
+/// three near-random `f64` bit patterns, so a single multiply-xor round per word
+/// disperses them well enough for a small per-set table (a few hundred entries,
+/// no adversarial input — these are colour coordinates, not untrusted data).
+#[derive(Default)]
+struct XyzHasher(u64);
+
+impl std::hash::Hasher for XyzHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        // Not on the hot path ([u64; 3] hashes via `write_u64`), but required by
+        // the trait — fold any stray bytes in so the impl stays total.
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0 ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+/// RAII activation of the [`FORWARD_CACHE`] for the lifetime of one `resolve_set`.
+///
+/// Activating clears any prior contents and enables caching; dropping restores
+/// the previous active state and clears the map. Because the cache is keyed on
+/// `XYZ` alone, it is correct only while a single viewing condition is in flight
+/// — clearing on both edges guarantees that, even under (today never) nesting.
+pub(crate) struct ForwardCacheGuard {
+    prev_active: bool,
+}
+
+impl ForwardCacheGuard {
+    /// Activate caching for the enclosing scope; the returned guard deactivates
+    /// and clears it on drop.
+    pub(crate) fn activate() -> Self {
+        let prev_active = FORWARD_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            let prev = c.active;
+            c.active = true;
+            c.map.clear();
+            prev
+        });
+        Self { prev_active }
+    }
+}
+
+impl Drop for ForwardCacheGuard {
+    fn drop(&mut self) {
+        let prev_active = self.prev_active;
+        FORWARD_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            c.active = prev_active;
+            c.map.clear();
+        });
+    }
+}
+
 /// CIECAM16 correlates `(J, M, h)` for an XYZ stimulus (`Y` normalised to 1).
 ///
 /// `h` is the CAM16 hue angle in **degrees** `[0, 360)`. This is the single
@@ -43,9 +131,37 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
 /// CAM16-UCS rescale ([`ucs_j`] / [`ucs_m`]) on top of it, and
 /// [`crate::lpc::cam16_jch_from_xyz`] is a thin re-export. Keeping one copy makes
 /// a CAM16 matrix or surround change land in exactly one place (issue #19).
+///
+/// When the [`FORWARD_CACHE`] is active (inside a `resolve_set`) a repeated
+/// `XYZ` is served from the table — the same bits, not a re-derivation — so the
+/// `FORWARD_CALLS` counter and the per-set forward count reflect *distinct*
+/// computations, the honest measure of real CAM16 work.
 pub(crate) fn forward(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
+    let key = [xyz[0].to_bits(), xyz[1].to_bits(), xyz[2].to_bits()];
+    if let Some(hit) = FORWARD_CACHE.with(|c| {
+        let c = c.borrow();
+        if c.active {
+            c.map.get(&key).copied()
+        } else {
+            None
+        }
+    }) {
+        return hit;
+    }
     #[cfg(test)]
     FORWARD_CALLS.with(|c| c.set(c.get() + 1));
+    let result = forward_compute(xyz, vc);
+    FORWARD_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.active {
+            c.map.insert(key, result);
+        }
+    });
+    result
+}
+
+/// The CIECAM16 forward math itself (cache-free); see [`forward`].
+fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
 
     let lms = cat16::xyz_to_cone(xyz);
@@ -178,6 +294,33 @@ mod tests {
                 assert_eq!(j.to_bits(), rj.to_bits(), "{hex}: J drifted {j} vs {rj}");
                 assert_eq!(m.to_bits(), rm.to_bits(), "{hex}: M drifted {m} vs {rm}");
                 assert_eq!(h.to_bits(), rh.to_bits(), "{hex}: h drifted {h} vs {rh}");
+            }
+        }
+    }
+
+    #[test]
+    fn cache_returns_bit_identical_to_uncached_math() {
+        // ISOLATED VERIFICATION of the per-set forward cache: with the cache
+        // active, `forward` must return the exact bits `forward_compute` (the
+        // cache-free math) produces — including on cache HITS (a repeated XYZ).
+        // Independent of the resolve_set golden tests: it drives `forward`
+        // directly with deliberate repeats. The guard is scoped per viewing
+        // condition, mirroring resolve_set (the XYZ-only key is correct only
+        // while one VC is in flight).
+        use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let _guard = ForwardCacheGuard::activate();
+            for code in 0u32..=255 {
+                let hex = format!("#{code:02X}{code:02X}{code:02X}");
+                let xyz = srgb_to_xyz(srgb_from_hex(&hex).unwrap());
+                let want = forward_compute(xyz, &vc);
+                // First call misses and inserts; the rest are cache hits.
+                for _ in 0..3 {
+                    let got = forward(xyz, &vc);
+                    assert_eq!(got.0.to_bits(), want.0.to_bits(), "{hex}: J");
+                    assert_eq!(got.1.to_bits(), want.1.to_bits(), "{hex}: M");
+                    assert_eq!(got.2.to_bits(), want.2.to_bits(), "{hex}: h");
+                }
             }
         }
     }

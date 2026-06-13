@@ -254,7 +254,10 @@ impl BgInput {
     /// Reduce the descriptor to its `Y_hk` luminance interval under `vc`.
     ///
     /// New variants plug in here without touching `solve`'s signature (SEAM a).
-    fn luma_interval(&self, vc: &ViewingConditions) -> Result<LumaInterval, Unreachable> {
+    pub(crate) fn luma_interval(
+        &self,
+        vc: &ViewingConditions,
+    ) -> Result<LumaInterval, Unreachable> {
         match self {
             BgInput::Solid(rgb) => {
                 let y = bg_luma(*rgb, vc);
@@ -277,7 +280,7 @@ impl BgInput {
 
 /// A background luminance interval in `Y_hk` space (H-K-corrected luminance).
 #[derive(Debug, Clone, Copy)]
-struct LumaInterval {
+pub(crate) struct LumaInterval {
     lo: f64,
     hi: f64,
 }
@@ -452,7 +455,65 @@ pub fn solve(
     if gamut != Gamut::Srgb {
         return Err(Unreachable::GamutUnsupported);
     }
+    validate_job(contract, hue, chroma_policy)?;
+    // The background side costs exactly one CIECAM16 forward — its H-K luminance
+    // interval. Compute it here and hand it to [`solve_in`]; [`solve_many`] and
+    // [`resolve_set`](crate::resolve_set) compute it once and reuse it across a
+    // whole batch instead of re-deriving the same background forward per target.
+    let interval = bg.luma_interval(vc)?;
+    solve_in(&bg, contract, hue, chroma_policy, vc, interval)
+}
 
+/// One foreground request in a [`solve_many`] batch: the contract to meet plus
+/// the foreground's hue and chroma policy. The background, viewing conditions,
+/// and gamut are shared across the batch, so the background's H-K luminance
+/// forward is paid once for the whole slice rather than once per request.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SolveJob {
+    /// The contrast contract this foreground must meet against the background.
+    pub contract: Contract,
+    /// The Oklab hue of the foreground (ignored when chroma is zero).
+    pub hue: Hue,
+    /// How saturated the foreground should be.
+    pub chroma_policy: ChromaPolicy,
+}
+
+/// Solve a batch of foreground requests against one shared background.
+///
+/// Equivalent to calling [`solve`] once per [`SolveJob`], but the background's
+/// luminance interval — the only CIECAM16 forward the background side costs — is
+/// computed once for the whole slice. The returned vector is positional: entry
+/// `i` is the result for `jobs[i]`, each carrying its own `Result` so one
+/// unreachable request never fails the batch. A whole-batch failure (unsupported
+/// gamut, or a background that cannot be reduced) is the outer `Err`.
+pub fn solve_many(
+    bg: BgInput,
+    jobs: &[SolveJob],
+    vc: &ViewingConditions,
+    gamut: Gamut,
+) -> Result<Vec<Result<Solved, Unreachable>>, Unreachable> {
+    if gamut != Gamut::Srgb {
+        return Err(Unreachable::GamutUnsupported);
+    }
+    // Background side: one forward for the whole batch (see [`solve`]).
+    let interval = bg.luma_interval(vc)?;
+    Ok(jobs
+        .iter()
+        .map(|job| {
+            validate_job(job.contract, job.hue, job.chroma_policy)?;
+            solve_in(&bg, job.contract, job.hue, job.chroma_policy, vc, interval)
+        })
+        .collect())
+}
+
+/// Reject a non-finite contract target, hue, or chroma ratio before solving —
+/// the per-request guard [`solve`] and [`solve_many`] share. Cheap; runs per
+/// request, never touching the background side.
+fn validate_job(
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+) -> Result<(), Unreachable> {
     let target = contract.floor();
     if !target.is_finite() {
         return Err(Unreachable::InvalidInput(format!(
@@ -473,8 +534,24 @@ pub fn solve(
             "chroma ratio is not finite: {ratio}"
         )));
     }
+    Ok(())
+}
 
-    let interval = bg.luma_interval(vc)?;
+/// Solve one foreground against a background whose luminance `interval` is
+/// already computed — the shared core of [`solve`], [`solve_many`], and the
+/// per-role solves in [`resolve_set`](crate::resolve_set). Inputs are assumed
+/// validated (finite target/hue/ratio, sRGB gamut); the public entry points
+/// guard that before calling in. See the [module documentation](self) for the
+/// algorithm.
+pub(crate) fn solve_in(
+    bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: LumaInterval,
+) -> Result<Solved, Unreachable> {
+    let target = contract.floor();
     let y_gov = interval.governing(target);
 
     // Stage 1 — perceptual target. Invert the LPC core for the Oklab lightness
@@ -1064,13 +1141,23 @@ mod tests {
         let tbl = crate::RoleTable::default();
 
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
+        //
+        // UPDATED for the per-set forward cache (`cam16::ForwardCacheGuard`): the
+        // counter now records only *distinct* CIECAM16 computations, because a
+        // repeated `XYZ` within a set is served from the cache. The refine
+        // fixed-point and the hierarchy pass re-measure the same candidate
+        // colours, so 25–33% (WARM) / 44–47% (COLD, which also re-probes the
+        // curve-plan bisection) of the forwards were exact repeats — now elided.
+        // These counts equal the unique-`XYZ` measurement and are the honest
+        // "real CAM16 work" metric. (Prior pin, bg-hoist only: srgb/#FFFFFF
+        // 1991/1433 → 1063/958, etc.)
         let expected = [
-            (("srgb", "#FFFFFF"), (2023u64, 1465u64)),
-            (("srgb", "#7F7F7F"), (1235, 832)),
-            (("srgb", "#101012"), (1424, 989)),
-            (("dim", "#FFFFFF"), (1804, 1277)),
-            (("dim", "#7F7F7F"), (1185, 782)),
-            (("dim", "#101012"), (1454, 989)),
+            (("srgb", "#FFFFFF"), (1063u64, 958u64)),
+            (("srgb", "#7F7F7F"), (691, 605)),
+            (("srgb", "#101012"), (785, 689)),
+            (("dim", "#FFFFFF"), (976, 869)),
+            (("dim", "#7F7F7F"), (658, 567)),
+            (("dim", "#101012"), (796, 689)),
         ];
 
         for (vc, name) in vcs() {
