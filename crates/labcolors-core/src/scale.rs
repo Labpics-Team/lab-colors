@@ -175,7 +175,7 @@ impl AccentCurve {
 ///
 /// Replacing the 64 forward CAM16 passes with one analytic `y_hk` is the only
 /// behavioural change; everything downstream of `y` is unchanged.
-fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
+pub(crate) fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
     // Step 1: invert the CAM16-UCS lightness rescale J' → J through the shared
     // single-source helper (#19/#60) — never re-type the rescale constants here.
     // J' is bounded above by the rescale's horizontal asymptote (1.7/0.007 ≈
