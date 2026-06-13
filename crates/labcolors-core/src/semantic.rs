@@ -1361,6 +1361,14 @@ pub fn resolve_set(
     if let Some(fast) = crate::greyfast::try_resolve_set(bg, table, vc) {
         return fast;
     }
+    // Chromatic memo: a non-grey solid under a supported VC and the default table
+    // is served from (or recorded into) a per-thread memo keyed on the exact
+    // display colour, so a repeated chromatic surface costs an O(1) lookup instead
+    // of the full live solve. Also transparent and bit-identical — a miss runs and
+    // caches the live solver below.
+    if let Some(fast) = crate::chromafast::try_resolve_set(bg, table, vc) {
+        return fast;
+    }
     resolve_set_live(bg, table, vc)
 }
 
