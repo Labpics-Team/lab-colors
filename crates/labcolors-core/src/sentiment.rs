@@ -95,32 +95,56 @@ impl Sentiment {
 
     /// The categorical **membership field** of this sentiment: an asymmetric bump
     /// over Oklab hue, peaked at the prototype, with per-side wing widths that
-    /// encode the empirical category borders. Directions are Daniil's design
-    /// input (2026-06-12); the widths are **PROVISIONAL** — to be fitted from
-    /// colour-naming data (xkcd / World Color Survey) and finalised by eye:
+    /// encode the empirical category borders.
     ///
-    /// - **Danger** (red): both wings wide — red reads as red whether nudged
-    ///   toward orange (higher hue) or crimson (lower), so it may shift either way.
-    /// - **Success** (green): a *steep* wing toward yellow (lower hue — yellow-green
-    ///   reads "off", not success) and a *wide* wing toward teal (higher hue —
-    ///   teal still reads as success, often nicer), so an encroaching brand sends
-    ///   it to teal, never yellow.
-    /// - **Warning** (amber): a *steep* wing toward green (higher hue — the green
-    ///   border) and a *wide* wing toward orange/red (lower hue — its reddish
-    ///   extreme). This replaces the old hard 45° floor with a smooth border.
+    /// The **peak is derived from a culturally-recognised anchor colour's actual
+    /// Oklab hue** ([`anchor_hex`](Self::anchor_hex)), not a hand-typed degree:
+    /// the previous hard-coded peaks were inconsistent with the anchors (Danger
+    /// `18°` vs the true `28.7°`, Info `240°` vs `257°` — a hue-model mix-up that
+    /// pulled Danger toward pink), while Oklab hue differs from HSB by 12–46°
+    /// across the wheel, so a typed number is fragile. Deriving it removes the
+    /// confusion at the source.
+    ///
+    /// Wing widths (Daniil's design directions, 2026-06-12) are still
+    /// **PROVISIONAL** — to be fitted from colour-naming data and finalised by
+    /// eye. `sigma_lo` is the wing toward *lower* hue (signed delta < 0):
+    /// - **Danger** (red): both wings wide — red holds toward orange or crimson.
+    /// - **Success** (green): *steep* toward yellow (lower hue, reads "off"),
+    ///   *wide* toward teal (higher hue, still success), so it slides to teal.
+    /// - **Warning** (amber): *steep* toward green (higher), *wide* toward
+    ///   orange/red (lower) — its reddish extreme; replaces the old 45° floor.
     /// - **Info** (blue): roughly symmetric.
-    ///
-    /// `sigma_lo` is the Gaussian wing toward *lower* hue (signed delta < 0),
-    /// `sigma_hi` toward higher hue.
     fn field(self) -> HueField {
+        let (sigma_lo, sigma_hi) = match self {
+            //                       σ_lo   σ_hi
+            Sentiment::Danger => (24.0, 26.0),
+            Sentiment::Warning => (26.0, 14.0),
+            Sentiment::Success => (13.0, 42.0),
+            Sentiment::Info => (26.0, 26.0),
+        };
+        HueField::new(oklab_hue_of(self.anchor_hex()), sigma_lo, sigma_hi)
+    }
+
+    /// The culturally-recognised anchor colour whose **Oklab hue** is this
+    /// sentiment's field peak (Apple HIG system colours — a widely-recognised
+    /// reference set). The hue is read off the colour, never typed as degrees, so
+    /// it cannot drift between hue models. The chroma/lightness of the anchor are
+    /// *not* used — the sentiment colour is rebuilt at a constant `M'`.
+    fn anchor_hex(self) -> &'static str {
         match self {
-            //                                  peak   σ_lo   σ_hi
-            Sentiment::Danger => HueField::new(27.0, 24.0, 26.0),
-            Sentiment::Warning => HueField::new(67.0, 26.0, 14.0),
-            Sentiment::Success => HueField::new(145.0, 13.0, 42.0),
-            Sentiment::Info => HueField::new(240.0, 26.0, 26.0),
+            Sentiment::Danger => "#FF3B30",
+            Sentiment::Warning => "#FF9500",
+            Sentiment::Success => "#34C759",
+            Sentiment::Info => "#007AFF",
         }
     }
+}
+
+/// The Oklab hue (degrees, `[0, 360)`) of a hex colour — the single source of a
+/// sentiment's field peak.
+fn oklab_hue_of(hex: &str) -> f64 {
+    let lab = srgb_linear_to_oklab(srgb_from_hex(hex).expect("valid anchor hex"));
+    lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0)
 }
 
 /// An asymmetric Gaussian **membership field** over Oklab hue: `μ(h) ∈ (0, 1]`,
