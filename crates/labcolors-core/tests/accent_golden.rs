@@ -39,17 +39,19 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
 /// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
 /// — frozen.
 ///
-/// CONSCIOUS SNAPSHOT CHANGE — category membership-field model
-/// (sentiment-category-fields). The Info field peak is now the *anchor colour's*
-/// Oklab hue (`#007AFF` → 257.42°), not a hand-typed 240°: brand 200° sits 57.4°
-/// away, well beyond the perceptual floor `s_min`, so the field's peak is
-/// feasible and the hue resolves to **257.42° un-displaced** (`was_displaced ==
-/// false`) — a far brand no longer perturbs the category at all. The ladder is
-/// also built at constant, hue-independent colourfulness (`binding_mp`), so its
-/// chroma profile matches the other sentiments. Intentional contract change.
+/// CONSCIOUS SNAPSHOT CHANGE — per-hue colourfulness recalibration
+/// (sentiment vividness). The field-model hue resolution is unchanged (the Info
+/// peak is still the anchor's Oklab hue `#007AFF` → 257.42°, and brand 200° sits
+/// 57.4° away so the hue resolves there **un-displaced**, `was_displaced ==
+/// false`). What changed is the chroma envelope: each sentiment now builds to
+/// `SENTIMENT_SAT_FRACTION` of *its own* gamut ceiling (`target_mp`) instead of
+/// the old equal-`M'` min-binding that pinned every hue to the most gamut-pinched
+/// one. Info therefore reads as a richer blue (e.g. `#2976DD` mid-ladder, up from
+/// the muted `#4B79BC`). Only the H-K-bright green band keeps a cap (to the warm
+/// budget); blue runs free. Intentional contract change.
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F7F8FA", "#E1E9F5", "#BFD4F2", "#8FB9F5", "#609AED", "#4B79BC", "#4672B1",
-    "#3C659E", "#325485", "#254068", "#172A46", "#06101F",
+    "#FFFFFF", "#F5F8FE", "#DCE9FC", "#BAD4FA", "#8FB9F5", "#5D9AF0", "#2976DD", "#266FD1",
+    "#2162B9", "#1A519C", "#103E7B", "#082955", "#020F27",
 ];
 
 #[test]

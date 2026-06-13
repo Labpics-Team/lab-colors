@@ -135,8 +135,12 @@ impl Sentiment {
         }
     }
 
-    /// All four sentiment categories — the set whose gamut ceilings define the
-    /// shared colourfulness envelope (see [`binding_mp`]).
+    /// All four sentiment categories. The warm pair (Danger/Warning) defines the
+    /// colourfulness budget the green band is held to (see [`warm_budget`]); the
+    /// full set is the property-sweep surface for the tests. Currently consumed
+    /// only by tests — `target_mp` reaches the warm pair by name — so it is
+    /// test-gated until the brand/sentiment table wiring (issue #59) consumes it.
+    #[cfg(test)]
     pub(crate) const ALL: [Sentiment; 4] = [
         Sentiment::Danger,
         Sentiment::Warning,
@@ -191,13 +195,11 @@ impl HueField {
 /// old hard 20° wall, `p → 1` is the softest (most eager) yield.
 pub const DEFAULT_HARDNESS: f64 = 2.0;
 
-/// Fraction of the **binding** (lowest-gamut) hue's colourfulness the sentiment
-/// ramp carries at every lightness. PROVISIONAL "strength" knob (Daniil's eye);
-/// `< 1` so even the weakest hue stays inside its gamut. Building every sentiment
-/// to the *same* `M'` at every step (not `sat_ratio × each hue's own ceiling`) is
-/// what stops green out-shouting red/orange — at any lightness all four carry
-/// identical perceived colourfulness, capped to whichever hue the sRGB gamut
-/// pinches first (green's vivid light tints come down to the warm hues' level).
+/// Fraction of a hue's gamut ceiling the sentiment ramp carries at each lightness
+/// — the "strength" knob (PROVISIONAL, Daniil's eye). `< 1` so a sentiment sits
+/// just inside its gamut wall rather than on it. Applied per hue to its own
+/// ceiling (rich warm/blue) and, for the green band, to the warm budget it is
+/// capped against (see [`target_mp`]).
 const SENTIMENT_SAT_FRACTION: f64 = 0.92;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
@@ -266,8 +268,13 @@ pub struct SentimentCurve {
     pub resolved_hue: f64,
     pub was_displaced: bool,
     pub displacement: f64,
+    /// Which category this curve is — the colourfulness target reads it so the
+    /// Helmholtz–Kohlrausch-bright green band ([`Sentiment::Success`]) can be
+    /// capped to the warm anchors' budget while the other hues run to their own
+    /// gamut ceiling. See [`target_mp`].
+    sentiment: Sentiment,
     /// The neutral curve this sentiment rides — its lightness ladder, viewing
-    /// conditions, and chroma helpers drive the constant-colourfulness ramp.
+    /// conditions, and chroma helpers drive the per-hue colourfulness ramp.
     neutral: NeutralCurve,
 }
 
@@ -352,22 +359,24 @@ impl SentimentCurve {
         let was_displaced = displacement > 1e-6;
 
         // The ramp itself (lightness ladder + chroma) is built on demand from the
-        // neutral curve and the resolved hue at a constant, hue-independent
-        // colourfulness (`binding_mp`); the caller's `prototype_hex` only informs
-        // the perceptual separation floor above, never the chroma.
+        // neutral curve and the resolved hue at the per-hue [`target_mp`]
+        // colourfulness; the caller's `prototype_hex` only informs the perceptual
+        // separation floor above, never the chroma.
         Ok(Self {
             resolved_hue,
             was_displaced,
             displacement,
+            sentiment,
             neutral: neutral.clone(),
         })
     }
 
     /// The sentiment colour at ramp position `t ∈ [0, 1]`. Lightness comes from
     /// the neutral curve (the four sentiments share one lightness ladder) and the
-    /// chroma is solved to the shared [`binding_mp`] colourfulness at that
-    /// lightness (they share one colourfulness ladder too) — so every step has
-    /// equal perceived weight across hues and no sentiment out-shouts another.
+    /// chroma is solved to the per-hue [`target_mp`] colourfulness at that
+    /// lightness — each hue runs to its own gamut budget, except the
+    /// Helmholtz–Kohlrausch-bright green band, which is capped to the warm
+    /// anchors' colourfulness so it cannot out-shout the warm sentiments.
     pub fn at(&self, t: f64) -> LcsColor {
         let vc = self.neutral.vc();
         let hex = self.hex_at(t);
@@ -401,8 +410,8 @@ impl SentimentCurve {
     fn hex_at(&self, t: f64) -> String {
         let vc = self.neutral.vc();
         let l_ok = jp_to_oklab_l(self.neutral.at(t).jp, vc);
-        let target_mp = binding_mp(l_ok, vc);
-        let c = chroma_for_mp(l_ok, self.resolved_hue, target_mp, vc);
+        let target = target_mp(self.sentiment, l_ok, self.resolved_hue, vc);
+        let c = chroma_for_mp(l_ok, self.resolved_hue, target, vc);
         oklab_lc_to_hex(l_ok, c, self.resolved_hue)
     }
 }
@@ -518,18 +527,44 @@ fn max_mp_at(l_ok: f64, h_ok: f64, vc: &ViewingConditions) -> f64 {
     mp_at(l_ok, max_chroma(l_ok, h_ok), h_ok, vc)
 }
 
-/// The shared colourfulness every sentiment is built to at lightness `l_ok`:
-/// [`SENTIMENT_SAT_FRACTION`] of the **binding** hue's max `M'` — the lowest
-/// gamut ceiling across the four sentiment categories at this lightness. It is
-/// hue-independent, so every sentiment carries the *same* `M'` at every step;
-/// the warm hues (which the gamut pinches first) set the level, pulling green's
-/// otherwise-brighter tints down to match.
-fn binding_mp(l_ok: f64, vc: &ViewingConditions) -> f64 {
-    let min_ceiling = Sentiment::ALL
-        .iter()
-        .map(|s| max_mp_at(l_ok, s.field().peak, vc))
-        .fold(f64::INFINITY, f64::min);
-    SENTIMENT_SAT_FRACTION * min_ceiling
+/// The colourfulness (CAM16-UCS `M'`) a sentiment of category `sentiment` and
+/// resolved hue `h_ok` is built to at Oklab lightness `l_ok`.
+///
+/// Each sentiment runs to [`SENTIMENT_SAT_FRACTION`] of **its own** gamut ceiling
+/// — so Danger, Warning and Info are as rich as the sRGB gamut allows at that
+/// lightness. This is the deliberate reversal of the old equal-`M'` "min-binding"
+/// envelope, which capped *every* hue to the single most gamut-pinched one (always
+/// a warm hue — red in the light tints, orange in the mids) and so left the whole
+/// palette muted and the mid-reds muddy.
+///
+/// The lone exception is the green band ([`Sentiment::Success`]). The
+/// Helmholtz–Kohlrausch effect makes green/chartreuse read **louder** than a warm
+/// or blue hue of equal `M'` and lightness, so at its own (very high) green
+/// ceiling Success out-shouts the warm sentiments. Green is therefore capped to
+/// the **warm anchors' budget** — the lower of the Danger/Warning gamut ceilings
+/// at this lightness — so it carries no more colourfulness than the least-colourful
+/// warm sentiment at every step, preserving the "green never out-shouts the warm
+/// sentiments" invariant while the rest of the palette is freed to its full
+/// richness. Warm and blue hues are not H-K-bright and need no such cap.
+fn target_mp(sentiment: Sentiment, l_ok: f64, h_ok: f64, vc: &ViewingConditions) -> f64 {
+    let own = max_mp_at(l_ok, h_ok, vc);
+    let ceiling = if sentiment == Sentiment::Success {
+        own.min(warm_budget(l_ok, vc))
+    } else {
+        own
+    };
+    SENTIMENT_SAT_FRACTION * ceiling
+}
+
+/// The warm anchors' colourfulness budget at lightness `l_ok`: the lower of the
+/// Danger and Warning gamut ceilings. The green band is held to this so it cannot
+/// carry more perceived colourfulness than the least-colourful warm sentiment.
+fn warm_budget(l_ok: f64, vc: &ViewingConditions) -> f64 {
+    max_mp_at(l_ok, Sentiment::Danger.field().peak, vc).min(max_mp_at(
+        l_ok,
+        Sentiment::Warning.field().peak,
+        vc,
+    ))
 }
 
 /// Chroma at `(l_ok, h_ok)` whose colour carries `target_mp` — bisection on the
@@ -592,11 +627,13 @@ mod tests {
 
     #[test]
     fn green_never_outshouts_the_warm_sentiments_and_shares_their_lightness() {
-        // Consistency law: every sentiment carries the same colourfulness (the
-        // binding envelope) and the same lightness (the neutral ladder) at every
-        // step, so Success (green) is never more colourful than the warm
-        // sentiments — the user's "green too bright" complaint, gone by
-        // construction. Swept across brand hues.
+        // Loudness invariant: Success (green) is capped to the warm anchors'
+        // colourfulness budget (the H-K cap in `target_mp`), so it is never more
+        // colourful than the warm sentiments at any step — the user's "green too
+        // bright" complaint, gone by construction — while still riding the shared
+        // neutral lightness ladder. The warm hues themselves now run to their own
+        // (richer) gamut ceilings; this only pins green relative to them. Swept
+        // across brand hues.
         let n = neutral();
         for brand in (0..360).step_by(13).map(|d| d as f64) {
             let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n)
@@ -684,5 +721,54 @@ mod tests {
     fn rejects_non_finite_brand_hue() {
         let n = neutral();
         assert!(SentimentCurve::new(Sentiment::Danger, f64::NAN, "#FF2E2E", &n).is_err());
+    }
+
+    #[test]
+    fn warm_and_blue_run_to_their_own_gamut_ceiling() {
+        // Vividness fix: Danger, Warning and Info build to `SENTIMENT_SAT_FRACTION`
+        // of their OWN gamut ceiling — not pinned down to the most-pinched hue as
+        // the old min-binding did. So each non-green sentiment's rendered M' tracks
+        // its own ceiling (within the fraction), which is what un-muddies the reds
+        // and the mid oranges. Checked on the mid-tone steps where the gamut has
+        // real chroma to give (the near-white/near-black ends pinch shut for all).
+        let n = neutral();
+        let brand = oklab_hue_of("#F93800");
+        for s in [Sentiment::Danger, Sentiment::Warning, Sentiment::Info] {
+            let curve = SentimentCurve::new(s, brand, s.anchor_hex(), &n).unwrap();
+            let vc = n.vc();
+            for i in 3..=7 {
+                let t = i as f64 / 9.0;
+                let l_ok = jp_to_oklab_l(n.at(t).jp, vc);
+                let ceil = max_mp_at(l_ok, curve.resolved_hue, vc);
+                let got = mp(&curve.at(t));
+                assert!(
+                    got >= SENTIMENT_SAT_FRACTION * ceil - 1.0,
+                    "{s:?} step {i}: rendered M' {got:.1} far below own ceiling \
+                     fraction {:.1} (ceiling {ceil:.1})",
+                    SENTIMENT_SAT_FRACTION * ceil
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn danger_is_richer_than_green_in_the_mids() {
+        // The concrete user complaint, pinned: with the fiery brand the mid-tone
+        // red must read clearly more colourful than the (H-K-capped) green, not
+        // muddied down to it. Sampled at the mid steps where red's gamut ceiling
+        // towers over the warm budget green is held to.
+        let n = neutral();
+        let brand = oklab_hue_of("#F93800");
+        let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n).unwrap();
+        let s = SentimentCurve::new(Sentiment::Success, brand, "#34C759", &n).unwrap();
+        for i in 4..=6 {
+            let t = i as f64 / 9.0;
+            assert!(
+                mp(&d.at(t)) > mp(&s.at(t)) + 2.0,
+                "step {i}: danger M' {:.1} should clearly exceed green {:.1}",
+                mp(&d.at(t)),
+                mp(&s.at(t))
+            );
+        }
     }
 }
