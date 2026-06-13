@@ -254,7 +254,10 @@ impl BgInput {
     /// Reduce the descriptor to its `Y_hk` luminance interval under `vc`.
     ///
     /// New variants plug in here without touching `solve`'s signature (SEAM a).
-    fn luma_interval(&self, vc: &ViewingConditions) -> Result<LumaInterval, Unreachable> {
+    pub(crate) fn luma_interval(
+        &self,
+        vc: &ViewingConditions,
+    ) -> Result<LumaInterval, Unreachable> {
         match self {
             BgInput::Solid(rgb) => {
                 let y = bg_luma(*rgb, vc);
@@ -277,7 +280,7 @@ impl BgInput {
 
 /// A background luminance interval in `Y_hk` space (H-K-corrected luminance).
 #[derive(Debug, Clone, Copy)]
-struct LumaInterval {
+pub(crate) struct LumaInterval {
     lo: f64,
     hi: f64,
 }
@@ -465,7 +468,65 @@ pub fn solve(
     if gamut != Gamut::Srgb {
         return Err(Unreachable::GamutUnsupported);
     }
+    validate_job(contract, hue, chroma_policy)?;
+    // The background side costs exactly one CIECAM16 forward — its H-K luminance
+    // interval. Compute it here and hand it to [`solve_in`]; [`solve_many`] and
+    // [`resolve_set`](crate::resolve_set) compute it once and reuse it across a
+    // whole batch instead of re-deriving the same background forward per target.
+    let interval = bg.luma_interval(vc)?;
+    solve_in(&bg, contract, hue, chroma_policy, vc, interval)
+}
 
+/// One foreground request in a [`solve_many`] batch: the contract to meet plus
+/// the foreground's hue and chroma policy. The background, viewing conditions,
+/// and gamut are shared across the batch, so the background's H-K luminance
+/// forward is paid once for the whole slice rather than once per request.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SolveJob {
+    /// The contrast contract this foreground must meet against the background.
+    pub contract: Contract,
+    /// The Oklab hue of the foreground (ignored when chroma is zero).
+    pub hue: Hue,
+    /// How saturated the foreground should be.
+    pub chroma_policy: ChromaPolicy,
+}
+
+/// Solve a batch of foreground requests against one shared background.
+///
+/// Equivalent to calling [`solve`] once per [`SolveJob`], but the background's
+/// luminance interval — the only CIECAM16 forward the background side costs — is
+/// computed once for the whole slice. The returned vector is positional: entry
+/// `i` is the result for `jobs[i]`, each carrying its own `Result` so one
+/// unreachable request never fails the batch. A whole-batch failure (unsupported
+/// gamut, or a background that cannot be reduced) is the outer `Err`.
+pub fn solve_many(
+    bg: BgInput,
+    jobs: &[SolveJob],
+    vc: &ViewingConditions,
+    gamut: Gamut,
+) -> Result<Vec<Result<Solved, Unreachable>>, Unreachable> {
+    if gamut != Gamut::Srgb {
+        return Err(Unreachable::GamutUnsupported);
+    }
+    // Background side: one forward for the whole batch (see [`solve`]).
+    let interval = bg.luma_interval(vc)?;
+    Ok(jobs
+        .iter()
+        .map(|job| {
+            validate_job(job.contract, job.hue, job.chroma_policy)?;
+            solve_in(&bg, job.contract, job.hue, job.chroma_policy, vc, interval)
+        })
+        .collect())
+}
+
+/// Reject a non-finite contract target, hue, or chroma ratio before solving —
+/// the per-request guard [`solve`] and [`solve_many`] share. Cheap; runs per
+/// request, never touching the background side.
+fn validate_job(
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+) -> Result<(), Unreachable> {
     let target = contract.floor();
     if !target.is_finite() {
         return Err(Unreachable::InvalidInput(format!(
@@ -486,8 +547,24 @@ pub fn solve(
             "chroma ratio is not finite: {ratio}"
         )));
     }
+    Ok(())
+}
 
-    let interval = bg.luma_interval(vc)?;
+/// Solve one foreground against a background whose luminance `interval` is
+/// already computed — the shared core of [`solve`], [`solve_many`], and the
+/// per-role solves in [`resolve_set`](crate::resolve_set). Inputs are assumed
+/// validated (finite target/hue/ratio, sRGB gamut); the public entry points
+/// guard that before calling in. See the [module documentation](self) for the
+/// algorithm.
+pub(crate) fn solve_in(
+    bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: LumaInterval,
+) -> Result<Solved, Unreachable> {
+    let target = contract.floor();
     let y_gov = interval.governing(target);
 
     // Stage 1 — perceptual target. Invert the LPC core for the Oklab lightness
@@ -1240,27 +1317,28 @@ mod tests {
         use crate::spaces::cam16::FORWARD_CALLS;
         let tbl = crate::RoleTable::default();
 
+        // Measures `resolve_set_live` (the solver), not `resolve_set`: the latter
+        // now serves a solid grey through the neutral O(1) fast path (zero
+        // forwards), so it would not exercise the solver this guard exists to pin.
+
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
         //
-        // RE-PINNED for the dJ' decorative contract (role-taxonomy-hig). The
-        // base/soft borders and the four fills moved from Lc `Decorative` (a full
-        // LPC contrast inversion per role, via `solve_with_chroma`) to the analytic
-        // dJ' solver (`solve_dj`: a J'-offset → grey-axis Oklab L seed plus the same
-        // curve probe/refine). Net effect on the hottest pass: srgb/#FFFFFF COLD
-        // fell from 3613 (the expanded 20-role table still on the old Decorative
-        // path, immediately post-merge) to 2577 — the analytic dJ' path is ~29 %
-        // cheaper than the contrast solve it replaced for those six roles, exactly
-        // as expected (no contrast bisection, just one forward per finish + the
-        // shared curve plan). The counts sit above the pre-taxonomy #60 baseline
-        // (2023) only because the table now resolves 20 roles instead of ~10.
-        // Measured on the merged tree (main@#61 + role-taxonomy-hig), 2026-06-13.
+        // Counts on the MERGED tree: the per-set forward cache
+        // (`cam16::ForwardCacheGuard`, #62 — counter records only *distinct*
+        // CIECAM16 computations, repeats within a set elided) AND the dJ'
+        // decorative contract (role-taxonomy-hig — base/soft borders + four fills
+        // moved off the Lc `Decorative` contrast inversion onto the analytic
+        // `solve_dj`). Both forces push the counts down versus either side alone,
+        // so the pins below were re-measured against this merged tree, not carried
+        // over from #62 (cache-only) or the role branch (no cache). Re-measured
+        // 2026-06-13.
         let expected = [
-            (("srgb", "#FFFFFF"), (2577u64, 1864u64)),
-            (("srgb", "#7F7F7F"), (1972, 1321)),
-            (("srgb", "#101012"), (2109, 1426)),
-            (("dim", "#FFFFFF"), (2426, 1651)),
-            (("dim", "#7F7F7F"), (1840, 1158)),
-            (("dim", "#101012"), (2336, 1406)),
+            (("srgb", "#FFFFFF"), (1202u64, 1080u64)),
+            (("srgb", "#7F7F7F"), (935, 794)),
+            (("srgb", "#101012"), (1007, 858)),
+            (("dim", "#FFFFFF"), (1143, 996)),
+            (("dim", "#7F7F7F"), (887, 737)),
+            (("dim", "#101012"), (1031, 825)),
         ];
 
         for (vc, name) in vcs() {
@@ -1274,7 +1352,7 @@ mod tests {
                 // COLD: fresh cache, first resolve of this theme.
                 crate::semantic::reset_curve_plan_cache();
                 FORWARD_CALLS.with(|c| c.set(0));
-                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
                 let cold = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
                     cold, cold_exp,
@@ -1283,7 +1361,7 @@ mod tests {
 
                 // WARM: same theme re-resolved, curve plans now cached.
                 FORWARD_CALLS.with(|c| c.set(0));
-                let _ = crate::resolve_set(&bgi, &tbl, &vc);
+                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
                 let warm = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
                     warm, warm_exp,

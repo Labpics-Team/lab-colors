@@ -138,7 +138,7 @@
 //! either via [`RoleTable::with_chroma`].
 
 use crate::scale;
-use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Solved, Unreachable};
+use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Hue, Solved, Unreachable};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -1102,7 +1102,7 @@ impl Resolved {
 /// more) per role — 32 `solve` calls collapse to 12. It also *guarantees* a
 /// uniform polarity across the set: every role reads its sign from the same
 /// `polarity` field, so they cannot disagree.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ResolveContext {
     /// The single polarity the whole set resolves in (chosen WCAG-first).
     polarity: Polarity,
@@ -1110,17 +1110,29 @@ struct ResolveContext {
     /// `None` if the background has no headroom in it at all (a pathological
     /// extreme). Anchored roles need this to take their fraction of it.
     max_contrast: Option<f64>,
+    /// The background's H-K luminance interval, computed once for the whole set.
+    /// Every role's solve reuses it instead of re-deriving the background's
+    /// CIECAM16 forward per call. `Err` if the background cannot be reduced —
+    /// then every colour role surfaces that reason.
+    interval: Result<solve::LumaInterval, Unreachable>,
 }
 
 impl ResolveContext {
-    /// Derive the shared context for `bg` under `vc`: pick the polarity, then read
-    /// the maximum contrast in it back from the solver.
+    /// Derive the shared context for `bg` under `vc`: pick the polarity, take the
+    /// background's luminance interval once, then read the maximum contrast in
+    /// that polarity back from the solver — reusing the interval, not re-forwarding.
     fn new(bg: &BgInput, vc: &ViewingConditions) -> Self {
         let polarity = choose_polarity(bg);
-        let max_contrast = max_contrast(bg, polarity, vc).ok();
+        // One background forward for the whole set; every role's solve reuses it.
+        let interval = bg.luma_interval(vc);
+        let max_contrast = interval
+            .as_ref()
+            .ok()
+            .and_then(|iv| max_contrast(bg, polarity, vc, *iv).ok());
         Self {
             polarity,
             max_contrast,
+            interval,
         }
     }
 
@@ -1204,7 +1216,11 @@ fn resolve_in(
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
     };
 
-    match solve_with_chroma(bg, contract, table.chroma(), vc) {
+    let interval = match &ctx.interval {
+        Ok(iv) => *iv,
+        Err(reason) => return Resolved::Unreachable(reason.clone()),
+    };
+    match solve_with_chroma(bg, contract, table.chroma(), vc, interval) {
         Ok(solved) => Resolved::color(solved),
         Err(reason) => Resolved::Unreachable(reason),
     }
@@ -1231,18 +1247,12 @@ fn solve_with_chroma(
     contract: Contract,
     chroma: RoleChroma,
     vc: &ViewingConditions,
+    interval: solve::LumaInterval,
 ) -> Result<Solved, Unreachable> {
     if let RoleChroma::Curve { .. } = chroma {
         // Probe — discover the contrast-solved lightness achromatically.
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
-        let probe = solve::solve(
-            bg.clone(),
-            contract,
-            probe_hue,
-            probe_chroma,
-            vc,
-            Gamut::Srgb,
-        )?;
+        let probe = solve::solve_in(bg, contract, probe_hue, probe_chroma, vc, interval)?;
         let mut l_plan = solved_oklab_lightness(&probe);
         let mut solved = probe;
         // Fixed-point: re-plan at the lightness the last solve actually produced.
@@ -1251,7 +1261,7 @@ fn solve_with_chroma(
         // it. `LIGHTNESS_SETTLE` stops as soon as the move is perceptually nil.
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
-            solved = solve::solve(bg.clone(), contract, hue, policy, vc, Gamut::Srgb)?;
+            solved = solve::solve_in(bg, contract, hue, policy, vc, interval)?;
             let l_new = solved_oklab_lightness(&solved);
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
@@ -1261,7 +1271,7 @@ fn solve_with_chroma(
         Ok(solved)
     } else {
         let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
-        solve::solve(bg.clone(), contract, hue, policy, vc, Gamut::Srgb)
+        solve::solve_in(bg, contract, hue, policy, vc, interval)
     }
 }
 
@@ -1344,6 +1354,29 @@ pub fn resolve_set(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
+    // Neutral fast path: a solid grey background under a supported VC and the
+    // default table resolves to a precomputed set in O(1) (no forwards, no
+    // bisection). Transparent — it returns the exact set the live solver below
+    // would, and declines (falls back) for anything outside that exact domain.
+    if let Some(fast) = crate::greyfast::try_resolve_set(bg, table, vc) {
+        return fast;
+    }
+    resolve_set_live(bg, table, vc)
+}
+
+/// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
+/// path falls back to, and the path that fills its precomputed table. Always
+/// recomputes; takes no fast path itself (so the table builder cannot recurse).
+pub(crate) fn resolve_set_live(
+    bg: &BgInput,
+    table: &RoleTable,
+    vc: &ViewingConditions,
+) -> Vec<(Role, Resolved)> {
+    // Memoize the CIECAM16 forward for the span of this set: viewing conditions
+    // are fixed here, so the refine fixed-point and the hierarchy pass that
+    // re-measure the same candidate colours hit the cache instead of recomputing
+    // (25–33 % of the forwards are exact repeats). Cleared on drop.
+    let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
     let mut set: Vec<(Role, Resolved)> = Role::ALL
         .iter()
@@ -1444,7 +1477,10 @@ fn demote_below(
     // no room to distinguish — detected by re-measuring the result below.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
     let contract = Contract::text(target).with_conformance(floor);
-    let solved = solve_with_chroma(bg, contract, chroma, vc).ok()?;
+    // Reuse the set's one background interval; an unreducible background has no
+    // demotion to offer, so propagate that as "no distinguishable step".
+    let interval = ctx.interval.as_ref().ok().copied()?;
+    let solved = solve_with_chroma(bg, contract, chroma, vc, interval).ok()?;
     if solved.lc().abs() + STRICT_STEP <= senior_mag {
         Some(solved)
     } else {
@@ -1481,17 +1517,18 @@ fn max_contrast(
     bg: &BgInput,
     polarity: Polarity,
     vc: &ViewingConditions,
+    interval: solve::LumaInterval,
 ) -> Result<f64, Unreachable> {
     let sign = polarity.sign();
     // 300 Lc is comfortably past the ~106 ceiling of any sRGB background.
     let probe = Contract::text(sign * 300.0).with_conformance(Floor::None);
-    match solve::solve(
-        bg.clone(),
+    match solve::solve_in(
+        bg,
         probe,
         Hue::deg(0.0),
         ChromaPolicy::Neutral,
         vc,
-        Gamut::Srgb,
+        interval,
     ) {
         // The probe is unreachable by design; ExceedsRange carries the ceiling.
         Err(Unreachable::ExceedsRange { max_achievable, .. }) => Ok(max_achievable.abs()),

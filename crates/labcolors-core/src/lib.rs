@@ -12,6 +12,8 @@ pub(crate) mod wcag;
 
 pub mod curve;
 
+pub(crate) mod greyfast;
+
 #[cfg(test)]
 mod golden_tests;
 
@@ -21,7 +23,7 @@ pub use semantic::{
     Resolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor, resolve, resolve_set,
 };
 pub use solve::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Solved, TypographicContext, Unreachable,
-    solve,
+    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
+    Unreachable, solve, solve_many,
 };
 pub use spaces::vc::ViewingConditions;

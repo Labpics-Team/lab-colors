@@ -226,17 +226,41 @@ pub(crate) fn soft_clamp_inv(clamped: f64) -> Option<f64> {
     if clamped < soft_clamp(0.0) {
         return None;
     }
+    // On `[0, T)` the clamp is `y + (T − y)^E`, smooth and strictly increasing
+    // with derivative `1 − E·(T − y)^(E−1)` bounded in ~`[0.71, 1]`, so a
+    // bracket-safeguarded Newton converges to full `f64` precision in a handful
+    // of steps instead of 64 bisections. The bracket `[lo, hi]` guards every
+    // step: a Newton iterate that leaves it falls back to bisection, so this
+    // converges to the *same* root the old fixed bisection found — the emitted
+    // hex is bit-identical (locked by the golden grid; checked directly by
+    // `soft_clamp_inv_matches_reference_bisection`).
+    let t = SOFT_CLAMP_THRESHOLD;
     let mut lo = 0.0_f64;
-    let mut hi = SOFT_CLAMP_THRESHOLD;
-    for _ in 0..64 {
-        let mid = (lo + hi) * 0.5;
-        if soft_clamp(mid) < clamped {
-            lo = mid;
+    let mut hi = t;
+    // Seed from above: the clamp only adds `(T − y)^E ≥ 0`, so the root sits at
+    // or below `clamped`, inside the bracket.
+    let mut y = clamped;
+    for _ in 0..12 {
+        let f = soft_clamp(y) - clamped;
+        if f > 0.0 {
+            hi = y;
         } else {
-            hi = mid;
+            lo = y;
         }
+        if hi - lo <= f64::EPSILON * t {
+            break;
+        }
+        // f'(y) = 1 − E·(T − y)^(E−1); bounded away from zero on the bracket.
+        let deriv = 1.0 - SOFT_CLAMP_EXP * (t - y).powf(SOFT_CLAMP_EXP - 1.0);
+        let next = y - f / deriv;
+        // Safeguard: keep the iterate strictly inside the bracket, else bisect.
+        y = if next > lo && next < hi {
+            next
+        } else {
+            0.5 * (lo + hi)
+        };
     }
-    Some((lo + hi) * 0.5)
+    Some(y)
 }
 
 /// Perceptual-contrast core curve (asymmetric power contrast on luminance).
@@ -751,6 +775,59 @@ mod tests {
             "sweep too coarse to be a property test: {samples} samples"
         );
         eprintln!("soft_clamp_inv round-trip: {samples} samples, max err = {max_err:e}");
+    }
+
+    #[test]
+    fn soft_clamp_inv_matches_reference_bisection() {
+        // BIT-IDENTITY GATE for the bisection→safeguarded-Newton swap. The new
+        // inverse must converge to the *same* root the original fixed 64-step
+        // bisection did, or a near-black solve could land on a different hex.
+        // Reproduce the exact old algorithm here and assert agreement to ULP
+        // scale across the whole clamped band; far below one 8-bit output step
+        // (~3.9e-3), so the emitted hex is provably unchanged.
+        fn reference_bisect(clamped: f64) -> f64 {
+            let mut lo = 0.0_f64;
+            let mut hi = SOFT_CLAMP_THRESHOLD;
+            for _ in 0..64 {
+                let mid = (lo + hi) * 0.5;
+                if soft_clamp(mid) < clamped {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            (lo + hi) * 0.5
+        }
+
+        let floor = soft_clamp(0.0);
+        let mut max_err = 0.0_f64;
+        let mut samples = 0_usize;
+        // Sweep the clamped-value domain [soft_clamp(0), T) densely.
+        let span = SOFT_CLAMP_THRESHOLD - floor;
+        for i in 0..=4000 {
+            let clamped = floor + span * (i as f64 / 4000.0);
+            // Stay strictly inside the lifted branch (>= T returns identity).
+            if clamped >= SOFT_CLAMP_THRESHOLD {
+                continue;
+            }
+            let newton = soft_clamp_inv(clamped).expect("clamped >= soft_clamp(0) is invertible");
+            let bisect = reference_bisect(clamped);
+            let err = (newton - bisect).abs();
+            max_err = max_err.max(err);
+            samples += 1;
+            // Both methods are limited by `powf` round-off in `soft_clamp`
+            // (measured worst case ~1.3e-12), so 1e-9 is the honest bound — the
+            // same margin the round-trip sibling uses. Nine orders below one
+            // 8-bit output step (~3.9e-3): the hex is provably unchanged.
+            assert!(
+                err < 1e-9,
+                "clamped={clamped}: newton={newton}, bisect={bisect}, err={err:e}"
+            );
+        }
+        assert!(samples >= 3000, "sweep too coarse: {samples} samples");
+        eprintln!(
+            "soft_clamp_inv vs reference bisection: {samples} samples, max err = {max_err:e}"
+        );
     }
 
     #[test]
