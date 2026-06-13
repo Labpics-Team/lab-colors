@@ -1071,6 +1071,11 @@ pub fn resolve_set(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
+    // Memoize the CIECAM16 forward for the span of this set: viewing conditions
+    // are fixed here, so the refine fixed-point and the hierarchy pass that
+    // re-measure the same candidate colours hit the cache instead of recomputing
+    // (25–33 % of the forwards are exact repeats). Cleared on drop.
+    let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
     let mut set: Vec<(Role, Resolved)> = Role::ALL
         .iter()

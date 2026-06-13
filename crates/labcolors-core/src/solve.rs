@@ -1142,21 +1142,22 @@ mod tests {
 
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
         //
-        // UPDATED for the background-side hoist (solve_many / solve_in): the
-        // background's H-K luminance forward is now computed once per set in
-        // `ResolveContext` and reused by every role's solve, instead of being
-        // re-derived inside each `solve` call. Both COLD and WARM drop by the same
-        // 25–32 forwards per (vc, bg) — exactly the count of redundant background
-        // forwards removed (one per per-role/probe/refine solve, minus the single
-        // hoisted one). The COLD−WARM delta (the curve-plan bisection the cache
-        // elides) is unchanged, confirming the saving is purely background-side.
+        // UPDATED for the per-set forward cache (`cam16::ForwardCacheGuard`): the
+        // counter now records only *distinct* CIECAM16 computations, because a
+        // repeated `XYZ` within a set is served from the cache. The refine
+        // fixed-point and the hierarchy pass re-measure the same candidate
+        // colours, so 25–33% (WARM) / 44–47% (COLD, which also re-probes the
+        // curve-plan bisection) of the forwards were exact repeats — now elided.
+        // These counts equal the unique-`XYZ` measurement and are the honest
+        // "real CAM16 work" metric. (Prior pin, bg-hoist only: srgb/#FFFFFF
+        // 1991/1433 → 1063/958, etc.)
         let expected = [
-            (("srgb", "#FFFFFF"), (1991u64, 1433u64)),
-            (("srgb", "#7F7F7F"), (1210, 807)),
-            (("srgb", "#101012"), (1396, 961)),
-            (("dim", "#FFFFFF"), (1774, 1247)),
-            (("dim", "#7F7F7F"), (1160, 757)),
-            (("dim", "#101012"), (1426, 961)),
+            (("srgb", "#FFFFFF"), (1063u64, 958u64)),
+            (("srgb", "#7F7F7F"), (691, 605)),
+            (("srgb", "#101012"), (785, 689)),
+            (("dim", "#FFFFFF"), (976, 869)),
+            (("dim", "#7F7F7F"), (658, 567)),
+            (("dim", "#101012"), (796, 689)),
         ];
 
         for (vc, name) in vcs() {
