@@ -1,8 +1,8 @@
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{AccentCurve, max_chroma};
-use crate::spaces::oklab::oklab_to_srgb_linear;
-use crate::spaces::srgb::hex_from_srgb;
+use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
+use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex};
 
 /// Perceptual minimum separation between a sentiment hue and the brand hue,
 /// expressed as a **chord length in the Oklab a/b chroma plane** (not degrees).
@@ -87,54 +87,73 @@ pub enum Sentiment {
 }
 
 impl Sentiment {
-    /// Ideal hue for this sentiment, in **Oklab hue degrees** (NOT HSB/HSL).
+    /// Ideal hue for this sentiment — the membership-field peak, in **Oklab hue
+    /// degrees** (NOT HSB/HSL).
     fn prototype_hue(self) -> f64 {
-        match self {
-            Sentiment::Danger => 18.0,
-            Sentiment::Warning => 67.0,
-            Sentiment::Success => 145.0,
-            Sentiment::Info => 240.0,
-        }
+        self.field().peak
     }
 
-    /// Per-side asymptote hardness `(p_low, p_high)` — the exponent `p` of the
-    /// smooth displacement [`SentimentParams`]. `p_low` governs the side where
-    /// the sentiment hue sits *below* the brand (toward 0°), `p_high` the side
-    /// above it.
+    /// The categorical **membership field** of this sentiment: an asymmetric bump
+    /// over Oklab hue, peaked at the prototype, with per-side wing widths that
+    /// encode the empirical category borders. Directions are Daniil's design
+    /// input (2026-06-12); the widths are **PROVISIONAL** — to be fitted from
+    /// colour-naming data (xkcd / World Color Survey) and finalised by eye:
     ///
-    /// This is the successor of the former slope pair: Warning kept a soft
-    /// `1.5` toward red and a hard `3.0` toward green. A lower `p` yields
-    /// sooner (the curve clings less to the raw distance and pushes out toward
-    /// `s_min` earlier), a higher `p` clings harder to the brand-distance and
-    /// thus stays closer to the prototype. The asymmetry encodes that Warning
-    /// must give ground gently toward Danger's red but resist sliding toward
-    /// Success's green.
-    fn hardness(self) -> (f64, f64) {
+    /// - **Danger** (red): both wings wide — red reads as red whether nudged
+    ///   toward orange (higher hue) or crimson (lower), so it may shift either way.
+    /// - **Success** (green): a *steep* wing toward yellow (lower hue — yellow-green
+    ///   reads "off", not success) and a *wide* wing toward teal (higher hue —
+    ///   teal still reads as success, often nicer), so an encroaching brand sends
+    ///   it to teal, never yellow.
+    /// - **Warning** (amber): a *steep* wing toward green (higher hue — the green
+    ///   border) and a *wide* wing toward orange/red (lower hue — its reddish
+    ///   extreme). This replaces the old hard 45° floor with a smooth border.
+    /// - **Info** (blue): roughly symmetric.
+    ///
+    /// `sigma_lo` is the Gaussian wing toward *lower* hue (signed delta < 0),
+    /// `sigma_hi` toward higher hue.
+    fn field(self) -> HueField {
         match self {
-            Sentiment::Warning => (1.5, 3.0),
-            _ => (DEFAULT_HARDNESS, DEFAULT_HARDNESS),
+            //                                  peak   σ_lo   σ_hi
+            Sentiment::Danger => HueField::new(27.0, 24.0, 26.0),
+            Sentiment::Warning => HueField::new(67.0, 26.0, 14.0),
+            Sentiment::Success => HueField::new(145.0, 13.0, 42.0),
+            Sentiment::Info => HueField::new(240.0, 26.0, 26.0),
+        }
+    }
+}
+
+/// An asymmetric Gaussian **membership field** over Oklab hue: `μ(h) ∈ (0, 1]`,
+/// peaked at `peak`, falling off with `sigma_lo` toward lower hue and `sigma_hi`
+/// toward higher hue. The asymmetry is what makes a category's two borders behave
+/// differently (Success's steep yellow side vs wide teal side). PROVISIONAL
+/// widths — see [`Sentiment::field`].
+#[derive(Debug, Clone, Copy)]
+struct HueField {
+    peak: f64,
+    sigma_lo: f64,
+    sigma_hi: f64,
+}
+
+impl HueField {
+    fn new(peak: f64, sigma_lo: f64, sigma_hi: f64) -> Self {
+        Self {
+            peak,
+            sigma_lo,
+            sigma_hi,
         }
     }
 
-    /// Categorical hue floor (Oklab degrees) below which the sentiment loses
-    /// its meaning — e.g. Warning must never slide into the red region.
-    /// Applied as a hard legality constraint, never a soft preference.
-    fn hue_floor(self) -> Option<f64> {
-        match self {
-            Sentiment::Warning => Some(45.0),
-            _ => None,
-        }
-    }
-
-    /// Preferred side for the degenerate `brand == prototype` tie-break.
-    /// `+1.0` pushes the sentiment hue up (toward higher degrees), `-1.0` down.
-    /// Warning prefers to climb away from red toward its hard side; the others
-    /// have symmetric hardness so the choice only sets the seam direction.
-    fn preferred_side(self) -> f64 {
-        match self {
-            Sentiment::Warning => 1.0,
-            _ => 1.0,
-        }
+    /// Membership `μ(h) = exp(-½·(δ/σ)²)`, `δ` the signed shortest hue delta from
+    /// the peak and `σ` the wing on `δ`'s side. `1` at the peak, decaying outward.
+    fn membership(&self, h: f64) -> f64 {
+        let delta = signed_delta(h, self.peak);
+        let sigma = if delta < 0.0 {
+            self.sigma_lo
+        } else {
+            self.sigma_hi
+        };
+        (-0.5 * (delta / sigma).powi(2)).exp()
     }
 }
 
@@ -142,6 +161,15 @@ impl Sentiment {
 /// `p = 2` is the calibration default Daniil picks by eye; `p → ∞` recovers the
 /// old hard 20° wall, `p → 1` is the softest (most eager) yield.
 pub const DEFAULT_HARDNESS: f64 = 2.0;
+
+/// Common target CAM16-UCS colourfulness `M'` every sentiment is built to, so the
+/// four read at the **same perceived saturation** regardless of hue. PROVISIONAL
+/// — the sentiment "strength" knob, finalised by Daniil's eye. Without it each
+/// sentiment took `sat_ratio × max_chroma(hue)`, and because the sRGB gamut
+/// ceiling is far higher for green than for red/orange, green came out visibly
+/// brighter. The consistency law (sentiment-category-fields): align by perceived
+/// `M'`, not by a fraction of each hue's own ceiling.
+const SENTIMENT_TARGET_MP: f64 = 38.0;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
 ///
@@ -229,8 +257,7 @@ impl SentimentCurve {
         prototype_hex: &str,
         neutral: &NeutralCurve,
     ) -> Result<Self, String> {
-        let (p_low, p_high) = sentiment.hardness();
-        let params = SentimentParams::new(p_low, p_high)?;
+        let params = SentimentParams::new(DEFAULT_HARDNESS, DEFAULT_HARDNESS)?;
         Self::with_params(sentiment, brand_hue, prototype_hex, neutral, params)
     }
 
@@ -273,12 +300,19 @@ impl SentimentCurve {
 
         let prototype = sentiment.prototype_hue();
 
-        let proto_accent = AccentCurve::new(prototype_hex, neutral)?;
-        let sat_ratio = proto_accent.sat_ratio();
+        // Perceptual separation floor from the prototype's *actual* Oklab chroma
+        // (issue #20: a fixed-degree margin is wrong — at high chroma the same
+        // perceptual chord subtends fewer degrees). Replaces the old fixed
+        // `REPRESENTATIVE_CHROMA`, which over-separated saturated warm hues and
+        // shoved Danger out of red into pink.
+        let proto_lab = srgb_linear_to_oklab(srgb_from_hex(prototype_hex)?);
+        let proto_chroma = (proto_lab[1].powi(2) + proto_lab[2].powi(2)).sqrt();
+        let s_min = s_min_deg(proto_chroma);
 
-        let s_min = s_min_deg(REPRESENTATIVE_CHROMA);
-
-        let resolved_hue = resolve_smooth_hue(sentiment, prototype, brand_hue, params, s_min)?;
+        // `p` (asymptote hardness) is reserved for boundary-transition smoothing
+        // in a later calibration pass; the field resolver below is parameter-free.
+        let _ = &params;
+        let resolved_hue = resolve_field_hue(sentiment, brand_hue, s_min)?;
 
         let displacement = angular_distance(resolved_hue, prototype);
         // The hue is "displaced" whenever the smooth model moved it off the
@@ -286,7 +320,12 @@ impl SentimentCurve {
         // more, so this is a reporting flag, not a branch.
         let was_displaced = displacement > 1e-6;
 
-        let canonical_hex = build_hex_from_hue(resolved_hue, sat_ratio, neutral);
+        // Constant perceived colourfulness across sentiments: build the canonical
+        // at a common CAM16-UCS `M'`, not at a per-hue `sat_ratio` of each hue's
+        // own (very different) gamut ceiling — otherwise green reads brighter than
+        // red/orange (consistency law). The caller's `prototype_hex` no longer
+        // sets the chroma; it only informs the perceptual separation floor above.
+        let canonical_hex = build_hex_at_mp(resolved_hue, SENTIMENT_TARGET_MP, neutral);
         let accent = AccentCurve::new(&canonical_hex, neutral).map_err(|e| {
             format!("failed to build accent from generated hex {canonical_hex}: {e}")
         })?;
@@ -316,74 +355,50 @@ impl SentimentCurve {
     }
 }
 
-/// The smooth displaced separation `s(d) = (d^p + s_min^p)^(1/p)`.
+/// Resolve the sentiment hue: the hue that **maximises the category membership**
+/// while staying at least `s_min` perceptual degrees from the brand.
 ///
-/// `d` and `s_min` are non-negative angular degrees; `p >= 1`. The result is
-/// always `>= max(d, s_min)` and is C¹ in `d` for `p > 1`. Computed in `f64`;
-/// the caller guarantees finiteness of the inputs.
-fn smooth_separation(d: f64, s_min: f64, p: f64) -> f64 {
-    (d.powf(p) + s_min.powf(p)).powf(1.0 / p)
-}
+/// The field `μ_s` is unimodal (peaked at the prototype), so the constrained
+/// optimum is simple:
+/// * if the peak is already `≥ s_min` from the brand, the peak itself wins — a
+///   far brand does not perturb the category at all (zero displacement);
+/// * otherwise the brand encroaches and the optimum sits on the nearer
+///   separation boundary, on **whichever side the field is higher**. That is
+///   what makes Success slide into teal (its wide wing) rather than yellow (its
+///   steep wing), Warning toward orange rather than green, and Danger to the
+///   closer red wing — the category's own asymmetry decides the side, replacing
+///   the former hard floor and side/hardness machinery.
+///
+/// [`legalize_hue`] is the final separation net (it never needs to move the
+/// boundary picks, which are exactly `s_min` away, but guards float error).
+fn resolve_field_hue(sentiment: Sentiment, brand_hue: f64, s_min: f64) -> Result<f64, String> {
+    let field = sentiment.field();
 
-/// Resolve the sentiment hue under the smooth-asymptote model, then pass it
-/// through the legality guard (separation + optional floor) as the final stage.
-fn resolve_smooth_hue(
-    sentiment: Sentiment,
-    prototype: f64,
-    brand_hue: f64,
-    params: SentimentParams,
-    s_min: f64,
-) -> Result<f64, String> {
-    // Signed shortest delta from prototype to brand, in (-180, 180]. Its sign
-    // tells us which side of the brand the prototype sits on; we push the
-    // resolved hue out along that same side, away from the brand.
-    let u = signed_delta(brand_hue, prototype);
-    let d = u.abs();
+    // Peak feasible → sit at the prototype (a distant brand barely perturbs it).
+    if angular_distance(field.peak, brand_hue) >= s_min - 1e-9 {
+        return legalize_hue(field.peak, brand_hue, s_min);
+    }
 
-    let (side, p) = if u > 0.0 {
-        // Brand is above the prototype -> prototype (and the resolved hue) sit
-        // below the brand -> low-side hardness.
-        (-1.0, params.p_low)
-    } else if u < 0.0 {
-        (1.0, params.p_high)
+    // Brand encroaches: the unimodal field's constrained maximum is the nearer
+    // separation boundary on the higher-membership side.
+    let c_hi = normalize_hue(brand_hue + s_min);
+    let c_lo = normalize_hue(brand_hue - s_min);
+    let pick = if field.membership(c_hi) >= field.membership(c_lo) {
+        c_hi
     } else {
-        // Degenerate seam: brand exactly on prototype. Pick the preferred side
-        // and the matching hardness so s(0) = s_min is reached cleanly.
-        let pref = sentiment.preferred_side();
-        let p = if pref >= 0.0 {
-            params.p_high
-        } else {
-            params.p_low
-        };
-        (pref, p)
+        c_lo
     };
-
-    let s = smooth_separation(d, s_min, p);
-    let smooth = normalize_hue(brand_hue + side * s);
-
-    // Final guard: the smooth target is already >= s_min from the brand by
-    // construction, but the categorical floor (Warning) can still forbid it.
-    // Reuse the #55 legality machinery as the single source of truth.
-    let floor = sentiment.hue_floor();
-    legalize_hue(smooth, brand_hue, floor, s_min)
+    legalize_hue(pick, brand_hue, s_min)
 }
 
-/// Snap a candidate hue to the nearest hue that is legal under both the
-/// separation invariant (`>= s_min` from the brand) and the optional floor.
+/// Snap a candidate hue to the nearest hue at least `s_min` from the brand.
 ///
-/// If the candidate is already legal it is returned unchanged. Otherwise we
-/// scan outward in fine steps from the candidate and return the first legal
-/// hue, which is the closest legal point — preserving smoothness as much as the
-/// constraints allow. If no legal hue exists on the whole circle (the floor and
-/// the brand zone between them leave no room) we return an `Err` rather than
-/// silently breaching an invariant.
-fn legalize_hue(
-    candidate: f64,
-    brand_hue: f64,
-    floor: Option<f64>,
-    s_min: f64,
-) -> Result<f64, String> {
-    if is_legal_hue(candidate, brand_hue, floor, s_min) {
+/// The field resolver already returns separation-legal hues, so this is a thin
+/// final net against float error: a legal candidate returns unchanged; otherwise
+/// it scans outward to the closest legal point. (The categorical border that the
+/// old `floor` enforced is now part of the membership field itself.)
+fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, String> {
+    if is_legal_hue(candidate, brand_hue, s_min) {
         return Ok(normalize_hue(candidate));
     }
 
@@ -393,7 +408,7 @@ fn legalize_hue(
             normalize_hue(candidate + step),
             normalize_hue(candidate - step),
         ] {
-            if is_legal_hue(cand, brand_hue, floor, s_min) {
+            if is_legal_hue(cand, brand_hue, s_min) {
                 return Ok(cand);
             }
         }
@@ -401,23 +416,14 @@ fn legalize_hue(
     }
 
     Err(format!(
-        "no legal hue exists for brand={brand_hue}, floor={floor:?}, s_min={s_min}: \
-         the floor and the separation invariant leave no room on the hue circle"
+        "no legal hue exists for brand={brand_hue}, s_min={s_min}: \
+         the separation invariant leaves no room on the hue circle"
     ))
 }
 
-/// A hue is legal if it clears the brand zone (>= `s_min` away) and, when a
-/// floor is set, sits at or above it.
-fn is_legal_hue(h: f64, brand_hue: f64, floor: Option<f64>, s_min: f64) -> bool {
-    if angular_distance(h, brand_hue) < s_min - 1e-9 {
-        return false;
-    }
-    if let Some(f) = floor
-        && normalize_hue(h) < f
-    {
-        return false;
-    }
-    true
+/// A hue is legal if it clears the brand zone (`>= s_min` away).
+fn is_legal_hue(h: f64, brand_hue: f64, s_min: f64) -> bool {
+    angular_distance(h, brand_hue) >= s_min - 1e-9
 }
 
 /// Signed shortest delta from `from` to `h` in (-180, 180].
@@ -434,30 +440,51 @@ fn angular_distance(a: f64, b: f64) -> f64 {
     if diff > 180.0 { 360.0 - diff } else { diff }
 }
 
-fn build_hex_from_hue(h_ok: f64, sat_ratio: f64, neutral: &NeutralCurve) -> String {
+/// Build the canonical sentiment hex at Oklab hue `h_ok`, choosing chroma so the
+/// colour carries `target_mp` CAM16-UCS colourfulness — **constant across
+/// sentiments** — at the neutral curve's base lightness. `M'` is monotone in
+/// chroma, so a bisection lands it; if the gamut cannot reach `target_mp` at this
+/// hue the chroma saturates at the gamut edge (the rare desaturated-hue case).
+fn build_hex_at_mp(h_ok: f64, target_mp: f64, neutral: &NeutralCurve) -> String {
     let base = neutral.base_anchor();
     // Issue #26: the base anchor was built under the neutral curve's own viewing
-    // conditions, so it must round-trip through the same VC. Using the sRGB VC
-    // (`to_hex`) drifts the lightness reference in dark themes.
+    // conditions, so it must round-trip through the same VC.
     let base_hex = base.to_hex_with_vc(neutral.vc());
-    let base_rgb = crate::spaces::srgb::srgb_from_hex(&base_hex).unwrap_or([0.5, 0.5, 0.5]);
-    let lab = crate::spaces::oklab::srgb_linear_to_oklab(base_rgb);
-    let l_ok = lab[0];
-
+    let base_rgb = srgb_from_hex(&base_hex).unwrap_or([0.5, 0.5, 0.5]);
+    let l_ok = srgb_linear_to_oklab(base_rgb)[0];
     let c_max = max_chroma(l_ok, h_ok);
-    let c = c_max * sat_ratio;
 
-    let a = c * h_ok.to_radians().cos();
-    let b = c * h_ok.to_radians().sin();
+    let hex_at = |c: f64| -> String {
+        let a = c * h_ok.to_radians().cos();
+        let b = c * h_ok.to_radians().sin();
+        let rgb = oklab_to_srgb_linear([l_ok, a, b]);
+        hex_from_srgb([
+            rgb[0].clamp(0.0, 1.0),
+            rgb[1].clamp(0.0, 1.0),
+            rgb[2].clamp(0.0, 1.0),
+        ])
+    };
+    // CAM16-UCS colourfulness M' of the quantised colour: `s = M'/(J'+1)`.
+    let mp_at = |c: f64| -> f64 {
+        match LcsColor::from_hex_with_vc(&hex_at(c), neutral.vc()) {
+            Ok(lcs) => lcs.s * (lcs.jp + 1.0),
+            Err(_) => 0.0,
+        }
+    };
 
-    let rgb = oklab_to_srgb_linear([l_ok, a, b]);
-    let rgb_clamped = [
-        rgb[0].clamp(0.0, 1.0),
-        rgb[1].clamp(0.0, 1.0),
-        rgb[2].clamp(0.0, 1.0),
-    ];
-
-    hex_from_srgb(rgb_clamped)
+    if mp_at(c_max) <= target_mp {
+        return hex_at(c_max);
+    }
+    let (mut lo, mut hi) = (0.0_f64, c_max);
+    for _ in 0..48 {
+        let mid = 0.5 * (lo + hi);
+        if mp_at(mid) < target_mp {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hex_at(0.5 * (lo + hi))
 }
 
 #[cfg(test)]
