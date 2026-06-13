@@ -24,9 +24,16 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use labcolors_core::{BgInput, RoleTable, ViewingConditions, resolve_set};
 use std::hint::black_box;
 
-/// Representative backgrounds: white, black, and a mid grey — the extremes and
-/// the middle of the grey axis the LUT is built for.
+/// Representative GREY backgrounds: white, black, and a mid grey — the extremes
+/// and the middle of the grey axis. These hit the `greyfast` O(1) table.
 const BACKGROUNDS: [&str; 3] = ["#FFFFFF", "#101012", "#7F7F7F"];
+
+/// Representative CHROMATIC backgrounds — the path that does NOT hit greyfast and
+/// today falls through to the full live solver (~1 ms / set, ~hundreds of CAM16
+/// forwards). This is the baseline the chromatic fast path (`chromafast`) is
+/// measured against: a cool blue, a warm terracotta, a green, and a saturated
+/// magenta spanning the hue wheel, plus a near-neutral low-chroma tint.
+const CHROMATIC_BACKGROUNDS: [&str; 5] = ["#2E6FB7", "#B5482E", "#3A8F5C", "#A23E8C", "#6E6E7A"];
 
 fn bench_resolve_set(c: &mut Criterion) {
     let table = RoleTable::default();
@@ -46,6 +53,18 @@ fn bench_resolve_set(c: &mut Criterion) {
         });
     }
     group.finish();
+
+    let mut chroma = c.benchmark_group("resolve_set_chromatic");
+    for bg_hex in CHROMATIC_BACKGROUNDS {
+        let bg = BgInput::solid(bg_hex).expect("valid chromatic bench background");
+        chroma.bench_function(format!("srgb/{bg_hex}"), |b| {
+            b.iter(|| resolve_set(black_box(&bg), black_box(&table), black_box(&srgb)));
+        });
+        chroma.bench_function(format!("dim/{bg_hex}"), |b| {
+            b.iter(|| resolve_set(black_box(&bg), black_box(&table), black_box(&dim)));
+        });
+    }
+    chroma.finish();
 }
 
 criterion_group!(benches, bench_resolve_set);
