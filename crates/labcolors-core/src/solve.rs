@@ -1505,7 +1505,11 @@ mod tests {
             "#3478F6", "#0A3D62", // chromatic light + dark
         ];
         let mut reachable = 0_usize;
-        let mut overridden = 0_usize;
+        // Count override exercise per polarity: a single global counter could be
+        // satisfied by one side alone, leaving the other polarity's override path
+        // unguarded. We require BOTH below.
+        let mut overridden_pos = 0_usize;
+        let mut overridden_neg = 0_usize;
         for (vc, vc_name) in vcs() {
             for bg_hex in backgrounds {
                 for magnitude in MAGNITUDES {
@@ -1536,19 +1540,31 @@ mod tests {
                              target {target}, measured {measured}, hex {}",
                             solved.hex()
                         );
-                        // A weak target the floor lifted well past its requested
-                        // magnitude, same sign: the override branch was exercised.
+                        // Override detection: a weak target (well under the AA
+                        // text floor — 15/30/45 Lc all sit below the ~4.5:1 legal
+                        // minimum) that the floor lifted at least +5 Lc past its
+                        // request, same sign. The `magnitude < 60` gate excludes
+                        // already-strong targets (which the floor leaves alone), so
+                        // a large-but-not-overridden result cannot be miscounted;
+                        // the +5 margin clears the ±1 Lc quantisation tolerance.
                         if magnitude < 60.0 && measured.abs() > magnitude + 5.0 {
-                            overridden += 1;
+                            if target > 0.0 {
+                                overridden_pos += 1;
+                            } else {
+                                overridden_neg += 1;
+                            }
                         }
                     }
                 }
             }
         }
         assert!(reachable >= 20, "too few reachable combos: {reachable}");
+        // Both polarity override paths must be exercised, or the test is not
+        // guarding the invariant it claims on one side.
         assert!(
-            overridden > 0,
-            "no floor override exercised — test would be vacuous"
+            overridden_pos > 0 && overridden_neg > 0,
+            "floor override not exercised on both polarities (pos {overridden_pos}, neg {overridden_neg}) — \
+             test would be vacuous on one side"
         );
     }
 
