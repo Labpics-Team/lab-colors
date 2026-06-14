@@ -100,6 +100,19 @@ fn display_key(bg: &BgInput) -> [u8; 3] {
     // Exhaustive in-crate (like `greyfast::neutral_code`): a future interval /
     // composite `BgInput` variant fails to compile here, forcing a deliberate
     // "not on the chromatic memo" decision rather than silently aliasing.
+    //
+    // SOUNDNESS of the 8-bit display triple as the key: the live solver derives
+    // the perceptual `Y_hk` interval from the *full-precision linear* background
+    // (`BgInput::luma_interval`), NOT from this quantised triple. The two agree
+    // only because the sole `BgInput::Solid` constructor — `BgInput::solid(hex)`
+    // — yields ON-GRID linear values (`srgb_from_hex` → `decode_8bit`), so the
+    // display triple ↔ linear background is bijective and this key is exact.
+    // A future OFF-GRID variant (a translucent composite or blurred-backdrop
+    // average) would break that: two distinct linear backgrounds could round to
+    // the same display triple yet have different `Y_hk`, and this memo would
+    // serve a wrong-colour collision. Such a variant MUST key on the full linear
+    // background (or the `(Y_hk, Y_wcag, J'_bg)` the resolve actually reads), not
+    // the display triple — the compile error above is the reminder to do so.
     match bg {
         BgInput::Solid(rgb) => {
             let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() as u8;
