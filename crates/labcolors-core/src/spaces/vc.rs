@@ -153,11 +153,26 @@ impl ViewingConditions {
     /// differs in adaptation (`aw`/`fl`/`n`/…) must fall through to the live
     /// solver, not be served another condition's cached set.
     pub(crate) fn fingerprint(&self) -> u64 {
-        let [d0, d1, d2] = self.rgb_d;
+        // Destructure rather than list `self.field`s: with no `..`, a field
+        // added to `ViewingConditions` is an E0027 compile error here until it is
+        // bound in this pattern — forcing whoever adds it to fold it into the hash
+        // below (a bound-but-unhashed field then warns as unused, which CI treats
+        // as an error). The fingerprint can no longer silently omit a field and
+        // revive the subset-aliasing bug (#73): the compiler guards completeness,
+        // not a comment.
+        let &ViewingConditions {
+            n,
+            aw,
+            nbb,
+            ncb,
+            fl,
+            z,
+            c,
+            nc,
+            rgb_d: [d0, d1, d2],
+        } = self;
         let mut h = 0xcbf2_9ce4_8422_2325u64;
-        for f in [
-            self.n, self.aw, self.nbb, self.ncb, self.fl, self.z, self.c, self.nc, d0, d1, d2,
-        ] {
+        for f in [n, aw, nbb, ncb, fl, z, c, nc, d0, d1, d2] {
             h ^= f.to_bits();
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
