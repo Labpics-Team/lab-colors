@@ -18,6 +18,14 @@
     "./apply-theme": {
       "types": "./apply-theme.d.ts",
       "default": "./apply-theme.js"
+    },
+    "./watch-theme": {
+      "types": "./watch-theme.d.ts",
+      "default": "./watch-theme.js"
+    },
+    "./effective-bg": {
+      "types": "./effective-bg.d.ts",
+      "default": "./effective-bg.js"
     }
   },
   "types": "./index.d.ts",
@@ -26,6 +34,10 @@
     "index.d.ts",
     "apply-theme.js",
     "apply-theme.d.ts",
+    "watch-theme.js",
+    "watch-theme.d.ts",
+    "effective-bg.js",
+    "effective-bg.d.ts",
     "pkg/labcolors.js",
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
@@ -35,7 +47,8 @@
   "scripts": {
     "//build": "wasm-pack resolves --out-dir relative to the CRATE dir (crates/labcolors-wasm), not the cwd, so the ../../packages path is correct and unambiguous regardless of where npm runs it.",
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test"
   },
   "devDependencies": {
     "typescript": "^5.5.0"

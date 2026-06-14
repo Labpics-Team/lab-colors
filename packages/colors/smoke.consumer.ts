@@ -2,7 +2,12 @@
 // types of @labpics/colors are usable from a strict TypeScript consumer. It is
 // never executed — `tsc` checking it is the test.
 
-import init, { LabColors, applyTheme } from "./index.js";
+import init, {
+  LabColors,
+  applyTheme,
+  watchTheme,
+  effectiveBackground,
+} from "./index.js";
 import type { ResolvedTheme, RoleResult, ThemeName } from "./index.js";
 
 async function consume(): Promise<void> {
@@ -36,6 +41,24 @@ async function consume(): Promise<void> {
 
   // The vanilla helper accepts the result directly.
   applyTheme(document.documentElement, result);
+
+  // The effective-background resolver returns a solid hex.
+  const effBg: string = effectiveBackground(document.documentElement);
+  void effBg;
+
+  // The reactive runtime keeps an element in sync; the controller is typed.
+  const surface = document.querySelector(".surface") as HTMLElement;
+  const controller = watchTheme(surface, {
+    colors: engine,
+    theme,
+    background: () => effectiveBackground(surface, { fallback: "#101012" }),
+  });
+  const applied: ResolvedTheme | null = controller.refresh();
+  void applied;
+  controller.setTheme("dark");
+  const bgHex: string = controller.background();
+  void bgHex;
+  controller.stop();
 }
 
 void consume;
