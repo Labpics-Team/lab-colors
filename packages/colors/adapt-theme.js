@@ -96,7 +96,11 @@ function lerpHex(from, to, t) {
  * @param {object} options
  * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:string,fgs:string[],theme:string)=>ArrayLike<number> }} options.colors
  * @param {string} options.theme
- * @param {string | (() => string)} [options.background]  explicit effective bg
+ * @param {string | string[] | (() => string | string[])} [options.background]
+ *   explicit effective background. An ARRAY (or a function returning one) is a
+ *   set of worst-case samples of a varying backdrop (gradient / image): the
+ *   colours are held legible against the hardest sample. The caller does the
+ *   pixel sampling; this consumes the samples worst-case.
  * @param {*} [options.target=element]  element to write vars onto
  * @param {string} [options.fallback="#FFFFFF"]
  * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
@@ -143,17 +147,54 @@ export function adaptTheme(element, options) {
   let easeStart = 0;
   let breachSince = null;
   let lastSolveAt = -Infinity;
-  let lastBg = null;
+  let lastKey = null;
 
   const readBackground = () => {
     const b = options.background;
     if (typeof b === "function") return b();
-    if (typeof b === "string") return b;
+    if (typeof b === "string" || Array.isArray(b)) return b;
     return effectiveBackground(element, {
       fallback,
       getStyle: options.getStyle,
       parentOf: options.parentOf,
     });
+  };
+
+  // The background is a SET of samples. A solid surface is one sample; a varying
+  // backdrop (gradient / image / video the caller sampled) is several. Every
+  // decision is worst-case over the set: a role "passes" only if it passes
+  // against EVERY sample, and we re-solve against the HARDEST sample. With one
+  // sample this collapses to plain single-background behaviour, bit-for-bit.
+  const readSamples = () => {
+    const v = readBackground();
+    const arr = Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.length > 0) : [v];
+    return arr.length > 0 ? arr : [fallback];
+  };
+
+  // Recheck the current colours against every sample. A role breaches if its
+  // achieved |Lc| drops below its Schmitt threshold against ANY sample. `worstIdx`
+  // is the sample with the least set-wide margin — the one to re-solve against, so
+  // the constraint we solve to is the same constraint we check hardest.
+  const recheckSamples = (fgs, samples) => {
+    let breached = false;
+    let worstIdx = 0;
+    let worstMargin = Infinity;
+    for (let s = 0; s < samples.length; s++) {
+      const flat = colors.recheckContrast(samples[s], fgs, theme);
+      let sampleMargin = Infinity;
+      for (let i = 0; i < roles.length; i++) {
+        const want = Math.abs(roles[i].lc) * (1 - dropFraction);
+        const lcNow = Math.abs(flat[2 * i]);
+        if (lcNow < want) breached = true;
+        const margin = want > 0 ? lcNow / want : Infinity;
+        if (margin < sampleMargin) sampleMargin = margin;
+      }
+      if (sampleMargin < worstMargin) {
+        worstMargin = sampleMargin;
+        worstIdx = s;
+      }
+    }
+    return { breached, worstIdx };
   };
 
   // Resolve a fresh set and adopt it as the current colours (no ease).
@@ -171,6 +212,24 @@ export function adaptTheme(element, options) {
     lastSolveAt = now;
     breachSince = null;
     return result;
+  };
+
+  // Solve+adopt against the hardest of `samples`. With one sample this is a
+  // single solve; with several it does a provisional solve to learn the role
+  // colours, picks the worst sample for them, and re-solves against it if that
+  // is not the one already chosen — so the adopted set is the strongest the
+  // backdrop demands. Used where there is no current set to recheck (initial
+  // apply, theme switch); the tick path already knows the worst sample from its
+  // own recheck and calls `solveAndAdopt` directly.
+  const solveAndAdoptWorst = (samples, now) => {
+    solveAndAdopt(samples[0], now);
+    if (samples.length > 1) {
+      const { worstIdx } = recheckSamples(
+        roles.map((r) => r.hex),
+        samples,
+      );
+      if (worstIdx !== 0) solveAndAdopt(samples[worstIdx], now);
+    }
   };
 
   const applyHexes = (hexByVar) => applyTheme(target, { vars: hexByVar });
@@ -195,16 +254,19 @@ export function adaptTheme(element, options) {
   };
 
   // Strict mode: the least blend in [e, 1] whose interpolated colour clears
-  // `floor` against background luminance `bgLum`. The destination (`to`, blend
-  // 1) is a freshly-solved legal colour, so it anchors the search; we bisect
-  // toward it from the natural ease value `e`. Returns `e` unchanged when the
-  // eased colour is already legal (the common case — no intervention). The
-  // returned blend is always floor-legal, except in the unavoidable case where
-  // even `to` is illegal against a bg that drifted further this frame — then it
-  // returns 1 (the most-legal colour we have) and the recheck loop re-solves.
-  const floorBlend = (seg, e, bgLum, floor) => {
-    const legalAt = (blend) =>
-      wcagRatio(relativeLuminanceHex(lerpHex(seg.from, seg.to, blend)), bgLum) >= floor;
+  // `floor` against EVERY background sample in `bgLums`. The destination (`to`,
+  // blend 1) is a freshly-solved legal colour, so it anchors the search; we
+  // bisect toward it from the natural ease value `e`. Returns `e` unchanged when
+  // the eased colour is already legal everywhere (the common case — no
+  // intervention). The returned blend is always floor-legal against the worst
+  // sample, except in the unavoidable case where even `to` is illegal against a
+  // sample that drifted further this frame — then it returns 1 (the most-legal
+  // colour we have) and the recheck loop re-solves.
+  const floorBlend = (seg, e, bgLums, floor) => {
+    const legalAt = (blend) => {
+      const lum = relativeLuminanceHex(lerpHex(seg.from, seg.to, blend));
+      return bgLums.every((L) => wcagRatio(lum, L) >= floor);
+    };
     if (legalAt(e)) return e;
     let lo = e;
     let hi = 1;
@@ -216,10 +278,10 @@ export function adaptTheme(element, options) {
     return hi; // hi is always legal (or blend 1, the most-legal we have)
   };
 
-  const stepEase = (now, bg) => {
+  const stepEase = (now, samples) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     const e = easeOut(t);
-    const bgLum = strict ? relativeLuminanceHex(bg) : 0;
+    const bgLums = strict ? samples.map(relativeLuminanceHex) : null;
     const vars = {};
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
@@ -229,14 +291,15 @@ export function adaptTheme(element, options) {
       }
       let blend = e;
       if (strict && r.legalFloor != null) {
-        // Hold the floor, then LATCH: the displayed blend may only advance
-        // toward the destination, never retreat. `floorBlend` is stateless and
-        // depends on the live (drifting) background, so on a frame where the bg
-        // drifts favourably it could return a *lower* blend than last frame — a
-        // backwards step toward the old colour, the precise jarring reversal
-        // this mode exists to avoid. `held` clamps that out: the colour
-        // progresses monotonically from→to and never below the legal line.
-        blend = Math.max(floorBlend(seg, e, bgLum, r.legalFloor), seg.held);
+        // Hold the floor (against the worst sample), then LATCH: the displayed
+        // blend may only advance toward the destination, never retreat.
+        // `floorBlend` is stateless and depends on the live (drifting) samples,
+        // so on a frame where they drift favourably it could return a *lower*
+        // blend than last frame — a backwards step toward the old colour, the
+        // precise jarring reversal this mode exists to avoid. `held` clamps that
+        // out: the colour progresses monotonically from→to and never below the
+        // legal line on any sample.
+        blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
         seg.held = blend;
       }
       vars[r.cssVar] = lerpHex(seg.from, seg.to, blend);
@@ -256,44 +319,39 @@ export function adaptTheme(element, options) {
 
   const tick = (nowArg) => {
     const now = nowArg ?? clock();
-    const bg = readBackground();
-    // Advance any in-flight ease first (against the live bg, so strict mode holds
-    // the legal floor every frame as the background keeps drifting under it).
-    if (easing.size > 0) stepEase(now, bg);
+    const samples = readSamples();
+    // Advance any in-flight ease first (against the live samples, so strict mode
+    // holds the legal floor every frame as the backdrop keeps drifting under it).
+    if (easing.size > 0) stepEase(now, samples);
 
-    // Steady state: a static background with no in-flight ease and no pending
-    // breach needs no work. A PENDING breach keeps us live even on a static bg, so
-    // the sustain timer can fire on a background that changed once to a failing
-    // value and then held.
-    if (bg === lastBg && easing.size === 0 && breachSince === null) return;
-    lastBg = bg;
+    // Steady state: a static backdrop with no in-flight ease and no pending
+    // breach needs no work. A PENDING breach keeps us live even on a static
+    // backdrop, so the sustain timer can fire on one that changed once to a
+    // failing value and then held.
+    const key = samples.join("|");
+    if (key === lastKey && easing.size === 0 && breachSince === null) return;
+    lastKey = key;
     if (roles.length === 0) return;
 
-    // Cheap re-check: do the current role colours still pass against `bg`?
-    const fgs = roles.map((r) => r.hex);
-    const flat = colors.recheckContrast(bg, fgs, theme);
-    let breached = false;
-    for (let i = 0; i < roles.length; i++) {
-      const lcNow = Math.abs(flat[2 * i]);
-      const want = Math.abs(roles[i].lc) * (1 - dropFraction);
-      if (lcNow < want) {
-        breached = true;
-        break;
-      }
-    }
+    // Cheap worst-case re-check: do the current colours still pass against every
+    // sample? `worstIdx` is the hardest sample, the one to re-solve against.
+    const { breached, worstIdx } = recheckSamples(
+      roles.map((r) => r.hex),
+      samples,
+    );
 
     if (!breached) {
       breachSince = null;
-      return; // hold — the common case for a slowly-drifting background
+      return; // hold — the common case for a slowly-drifting backdrop
     }
     if (breachSince === null) breachSince = now;
     if (now - breachSince < sustainMs || now - lastSolveAt < dwellMs) return; // debounce / dwell
 
-    // Sustained breach: re-solve and ease toward the fresh colours.
+    // Sustained breach: re-solve against the worst sample and ease toward fresh.
     const fromByVar = currentApplied();
-    solveAndAdopt(bg, now);
+    solveAndAdopt(samples[worstIdx], now);
     beginEase(fromByVar, now);
-    stepEase(now, bg);
+    stepEase(now, samples);
   };
 
   let rafId = null;
@@ -302,11 +360,11 @@ export function adaptTheme(element, options) {
     if (win?.requestAnimationFrame) rafId = win.requestAnimationFrame(loop);
   };
 
-  // Apply the initial set immediately.
+  // Apply the initial set immediately (against the worst sample of the backdrop).
   {
-    const bg = readBackground();
-    lastBg = bg;
-    solveAndAdopt(bg, clock());
+    const samples = readSamples();
+    lastKey = samples.join("|");
+    solveAndAdoptWorst(samples, clock());
     applyRolesDirect();
   }
 
@@ -314,10 +372,10 @@ export function adaptTheme(element, options) {
     tick,
     setTheme(next) {
       theme = next;
-      const bg = readBackground();
-      lastBg = bg;
+      const samples = readSamples();
+      lastKey = samples.join("|");
       easing = new Map();
-      solveAndAdopt(bg, clock());
+      solveAndAdoptWorst(samples, clock());
       applyRolesDirect(); // instant — a theme switch is intent, not drift
     },
     start() {

@@ -83,6 +83,15 @@ async function consume(): Promise<void> {
   const appliedVars: Record<string, string> = adaptive.current();
   void appliedVars;
   adaptive.stop();
+
+  // A varying backdrop: the background may be a set of worst-case samples.
+  const adaptiveBackdrop = adaptTheme(surface, {
+    colors: engine,
+    theme,
+    background: (): string[] => ["#101012", effectiveBackground(surface), "#202024"],
+    strict: true,
+  });
+  adaptiveBackdrop.stop();
 }
 
 void consume;

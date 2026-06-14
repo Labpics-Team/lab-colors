@@ -13,6 +13,8 @@ import { adaptTheme } from "../adapt-theme.js";
 function fakeColors(initial) {
   let resolveCount = 0;
   let resolve = initial;
+  let lastResolveBg = null;
+  let recheckByBg = null; // optional: per-sample { bgHex: lc[] }
   let recheckLc = initial.roles
     ? Object.values(initial.roles)
         .filter((r) => r.kind === "color")
@@ -20,19 +22,27 @@ function fakeColors(initial) {
     : [];
   return {
     resolveCount: () => resolveCount,
+    lastResolveBg: () => lastResolveBg,
     setResolve(r) {
       resolve = r;
     },
     setRecheckLc(lcs) {
       recheckLc = lcs;
+      recheckByBg = null;
     },
-    resolveTheme() {
+    // Drive recheck per background sample, so worst-case logic can be tested.
+    setRecheckByBg(map) {
+      recheckByBg = map;
+    },
+    resolveTheme(bg) {
       resolveCount++;
+      lastResolveBg = bg;
       return resolve;
     },
-    recheckContrast() {
+    recheckContrast(bg) {
+      const lcs = recheckByBg ? (recheckByBg[bg] ?? recheckLc) : recheckLc;
       const out = [];
-      for (const lc of recheckLc) {
+      for (const lc of lcs) {
         out.push(lc);
         out.push(10);
       }
@@ -336,6 +346,90 @@ test("strict mode leaves floorless (decorative) roles to ease freely", () => {
   h.colors.setRecheckLc([100]);
   const c0 = wcagContrast(h.el.props.get("--lab-label-primary"), "#101011");
   assert.ok(c0 < 4.5, `a floorless role must ease freely (low contrast allowed), saw ${c0.toFixed(2)}`);
+});
+
+test("worst-case recheck breaches when any sample fails (even if another passes)", () => {
+  let samples = ["#FFFFFF", "#FAFAFA"]; // both pass at construction
+  const h = harness({ background: () => samples });
+  h.colors.setResolve(oneRole("#EEEEEE", 100));
+  h.colors.setRecheckByBg({ "#FFFFFF": [100], "#FAFAFA": [100], "#202020": [10] });
+  samples = ["#FFFFFF", "#202020"]; // backdrop now spans a failing region
+  h.ctrl.tick(); // key changed → worst-case recheck arms the breach
+  assert.equal(h.colors.resolveCount(), 1, "arms only; dwell/sustain not yet met");
+  h.setNow(1300); // past sustain (120) and dwell vs lastSolveAt (1000)
+  h.ctrl.tick();
+  assert.equal(h.colors.resolveCount(), 2, "a failing sample must force a re-solve");
+  assert.equal(h.colors.lastResolveBg(), "#202020", "re-solve targets the hardest sample");
+});
+
+test("worst-case recheck holds when every sample still passes", () => {
+  let samples = ["#FFFFFF", "#FAFAFA"];
+  const h = harness({ background: () => samples });
+  h.colors.setRecheckByBg({ "#FFFFFF": [100], "#FAFAFA": [100], "#F5F5F5": [90] });
+  samples = ["#FFFFFF", "#F5F5F5"]; // 90 is still above the 80 Schmitt threshold
+  h.ctrl.tick();
+  assert.equal(h.colors.resolveCount(), 1, "all samples pass → hold, no re-solve");
+});
+
+test("the worst sample is chosen by least margin, not by position", () => {
+  let samples = ["#FFFFFF", "#FAFAFA"];
+  const h = harness({ background: () => samples });
+  h.colors.setResolve(oneRole("#EEEEEE", 100));
+  // Here the FIRST sample is the failing/hardest one.
+  h.colors.setRecheckByBg({ "#101010": [10], "#FFFFFF": [100], "#FAFAFA": [100] });
+  samples = ["#101010", "#FFFFFF"];
+  h.ctrl.tick();
+  h.setNow(1300);
+  h.ctrl.tick();
+  assert.equal(h.colors.lastResolveBg(), "#101010", "re-solve targets the least-margin sample");
+});
+
+test("initial apply re-solves against the worst sample of a varying backdrop", () => {
+  const colors = fakeColors(oneRole("#000000", 100));
+  colors.setRecheckByBg({ "#FFFFFF": [100], "#202020": [10] });
+  const el = fakeElement();
+  adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => ["#FFFFFF", "#202020"],
+    target: el,
+    now: () => 1000,
+    win: {},
+  });
+  // Provisional solve (#FFFFFF), then worst-case recheck picks #202020 and re-solves.
+  assert.equal(colors.resolveCount(), 2, "init adopts against the worst sample");
+  assert.equal(colors.lastResolveBg(), "#202020");
+});
+
+test("strict worst-case: the floor is held against the hardest sample every frame", () => {
+  let samples = ["#0A0A0A"]; // passing at construction
+  const h = harness({ strict: true, easeMs: 100, background: () => samples });
+  h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5));
+  h.colors.setRecheckByBg({ "#0A0A0A": [100], "#1A1A1A": [10], "#101010": [10] });
+  samples = ["#1A1A1A", "#101010"]; // dark backdrop; #1A1A1A is the hardest (lightest)
+  h.ctrl.tick(); // arm breach
+  h.setNow(1300);
+  h.ctrl.tick(); // re-solve against the worst sample + begin ease
+  assert.equal(h.colors.lastResolveBg(), "#1A1A1A");
+  for (const dt of [0, 25, 50, 75, 100]) {
+    h.setNow(1300 + dt);
+    h.ctrl.tick();
+    const hex = h.el.props.get("--lab-label-primary");
+    assert.ok(
+      wcagContrast(hex, "#1A1A1A") >= 4.5 - 0.05,
+      `frame ${dt}: ${hex} below the floor against the worst sample`,
+    );
+  }
+});
+
+test("a single-sample array behaves like a solid background (holds, no churn)", () => {
+  const h = harness({ background: () => ["#FFFFFF"] });
+  h.colors.setRecheckLc([100]);
+  for (let i = 0; i < 4; i++) {
+    h.advance(16);
+    h.ctrl.tick();
+  }
+  assert.equal(h.colors.resolveCount(), 1, "one passing sample → identical to a solid bg");
 });
 
 test("rejects a colours engine missing recheckContrast", () => {
