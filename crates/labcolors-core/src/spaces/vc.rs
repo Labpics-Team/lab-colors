@@ -153,11 +153,13 @@ impl ViewingConditions {
     /// differs in adaptation (`aw`/`fl`/`n`/…) must fall through to the live
     /// solver, not be served another condition's cached set.
     pub(crate) fn fingerprint(&self) -> u64 {
-        // Destructure rather than list `self.field`s: a field added to
-        // `ViewingConditions` then becomes a COMPILE error here until it is
-        // folded into the hash below. The fingerprint can never silently omit a
-        // field and revive the subset-aliasing bug (#73) — the compiler enforces
-        // completeness, not a comment.
+        // Destructure rather than list `self.field`s: with no `..`, a field
+        // added to `ViewingConditions` is an E0027 compile error here until it is
+        // bound in this pattern — forcing whoever adds it to fold it into the hash
+        // below (a bound-but-unhashed field then warns as unused, which CI treats
+        // as an error). The fingerprint can no longer silently omit a field and
+        // revive the subset-aliasing bug (#73): the compiler guards completeness,
+        // not a comment.
         let &ViewingConditions {
             n,
             aw,
