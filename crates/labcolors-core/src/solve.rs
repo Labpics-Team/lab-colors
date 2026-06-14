@@ -1533,12 +1533,15 @@ mod tests {
                         reachable += 1;
                         // Independently re-measure the emitted hex's signed Lc.
                         let measured = lpc_with_vc(solved.hex(), bg_hex, &vc);
-                        // Compare signum, not `> 0.0`: a floored result must land
-                        // firmly on the target's side. signum is ±1.0 for a real
-                        // colour, so a degenerate dead-zone `measured == 0.0`
-                        // (signum 0.0) fails for EITHER polarity — closing the seam
-                        // where a bare `measured > 0.0` would read a negative
-                        // target's zero as "satisfied".
+                        // Compare signum, not `> 0.0`. Under the AA text floor every
+                        // reachable result clears 4.5:1, so `measured` is never the
+                        // dead-zone zero here — this is belt-and-suspenders. f64
+                        // signum is ±1.0 by sign bit (not 0.0 for a zero), so it
+                        // still tightens the one seam a bare `measured > 0.0` missed:
+                        // a negative target whose measurement collapsed to +0.0 now
+                        // mismatches (-1.0 vs +1.0) instead of passing as
+                        // `false == false`. target.signum() is always ±1.0 (target
+                        // is ±magnitude, never 0).
                         assert_eq!(
                             target.signum(),
                             measured.signum(),
