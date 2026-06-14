@@ -6,6 +6,7 @@ import init, {
   LabColors,
   applyTheme,
   watchTheme,
+  adaptTheme,
   effectiveBackground,
 } from "./index.js";
 import type { ResolvedTheme, RoleResult, ThemeName } from "./index.js";
@@ -59,6 +60,21 @@ async function consume(): Promise<void> {
   const bgHex: string = controller.background();
   void bgHex;
   controller.stop();
+
+  // The adaptive (hysteresis) controller: lazy re-check + eased re-solve.
+  const adaptive = adaptTheme(surface, {
+    colors: engine,
+    theme,
+    background: () => effectiveBackground(surface, { fallback: "#101012" }),
+    easeMs: 280,
+    dropFraction: 0.2,
+  });
+  adaptive.start();
+  adaptive.tick();
+  adaptive.setTheme("dark");
+  const appliedVars: Record<string, string> = adaptive.current();
+  void appliedVars;
+  adaptive.stop();
 }
 
 void consume;

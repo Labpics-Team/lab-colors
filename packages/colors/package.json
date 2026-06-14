@@ -23,6 +23,10 @@
       "types": "./watch-theme.d.ts",
       "default": "./watch-theme.js"
     },
+    "./adapt-theme": {
+      "types": "./adapt-theme.d.ts",
+      "default": "./adapt-theme.js"
+    },
     "./effective-bg": {
       "types": "./effective-bg.d.ts",
       "default": "./effective-bg.js"
@@ -36,6 +40,8 @@
     "apply-theme.d.ts",
     "watch-theme.js",
     "watch-theme.d.ts",
+    "adapt-theme.js",
+    "adapt-theme.d.ts",
     "effective-bg.js",
     "effective-bg.d.ts",
     "pkg/labcolors.js",

@@ -10,6 +10,7 @@ export { default, default as init, initSync, LabColors } from "./pkg/labcolors.j
 
 export { applyTheme } from "./apply-theme.js";
 export { watchTheme } from "./watch-theme.js";
+export { adaptTheme } from "./adapt-theme.js";
 export {
   effectiveBackground,
   parseCssColor,
