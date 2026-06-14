@@ -254,6 +254,17 @@ impl BgInput {
     /// Reduce the descriptor to its `Y_hk` luminance interval under `vc`.
     ///
     /// New variants plug in here without touching `solve`'s signature (SEAM a).
+    ///
+    /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
+    /// the background **only** through three scalars derived here from `bg` — the
+    /// H-K-corrected perceptual luminance `Y_hk` (this interval), the WCAG 2.1
+    /// relative luminance `Y_wcag` of the quantised display colour (polarity +
+    /// the legal floor), and the CAM16-UCS lightness `J'_bg` (needed only by the
+    /// dJ' roles, and free from the same forward that yields `Y_hk`). Verified by
+    /// an exhaustive trace of every `bg` read on the `resolve_set_live` path: each
+    /// is one of those three, never a raw hue/chroma read. This is what lets the
+    /// grey fast path (256 codes) and the chromatic memo (keyed on the exact
+    /// display colour, a superset of the three) stay bit-identical to the solver.
     pub(crate) fn luma_interval(
         &self,
         vc: &ViewingConditions,
