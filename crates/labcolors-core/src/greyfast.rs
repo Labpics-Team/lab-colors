@@ -54,15 +54,16 @@ thread_local! {
 }
 
 /// Map a viewing condition to its grey-table slot, or `None` for an unsupported
-/// VC (which then takes the live solver). The surround pair `(c, nc)` identifies
-/// the two precompiled conditions, matching [`crate::lut`]'s convention.
+/// VC (which then takes the live solver). Matches on the FULL VC
+/// [`fingerprint`](ViewingConditions::fingerprint), not just the surround pair
+/// `(c, nc)`: a caller-built VC that aliases `(c, nc)` but differs in adaptation
+/// must fall through to the live solver, never be served the wrong precompiled
+/// set.
 fn vc_index(vc: &ViewingConditions) -> Option<usize> {
-    const EPS: f64 = 1e-9;
-    let srgb = ViewingConditions::srgb();
-    let dim = ViewingConditions::dim_surround();
-    if (vc.c - srgb.c).abs() < EPS && (vc.nc - srgb.nc).abs() < EPS {
+    let fp = vc.fingerprint();
+    if fp == ViewingConditions::srgb().fingerprint() {
         Some(0)
-    } else if (vc.c - dim.c).abs() < EPS && (vc.nc - dim.nc).abs() < EPS {
+    } else if fp == ViewingConditions::dim_surround().fingerprint() {
         Some(1)
     } else {
         None
@@ -166,8 +167,8 @@ mod tests {
     #[test]
     fn fast_path_declines_outside_its_exact_domain() {
         // The fast path must say `None` (fall back) whenever an exact lookup is not
-        // provable: a chromatic background or a custom table. (Both public VCs are
-        // supported, so the unsupported-VC arm has no constructor to exercise it.)
+        // provable: a chromatic background, a custom table, or a VC that is not a
+        // precompiled preset (the aliasing case below).
         let table = RoleTable::default();
         let srgb = ViewingConditions::srgb();
 
@@ -179,5 +180,19 @@ mod tests {
         let custom = RoleTable::default().with_chroma(crate::RoleChroma::Neutral);
         let grey = BgInput::solid("#808080").unwrap();
         assert!(try_resolve_set(&grey, &custom, &srgb).is_none());
+
+        // A caller-built VC that ALIASES sRGB's surround pair (c, nc) but differs
+        // in adaptation (aw): the old (c, nc)-only match would have served it
+        // sRGB's precompiled grey set (a silent wrong-colour memo collision). The
+        // full-fingerprint match must decline, so it takes the live solver. This
+        // is the unsupported-VC arm the comment above used to call unexercisable.
+        let mut aliasing = ViewingConditions::srgb();
+        aliasing.aw += 1.0;
+        assert_eq!(aliasing.c, srgb.c, "alias keeps c");
+        assert_eq!(aliasing.nc, srgb.nc, "alias keeps nc");
+        assert!(
+            try_resolve_set(&grey, &table, &aliasing).is_none(),
+            "a VC aliasing (c, nc) but differing in adaptation must decline the fast path"
+        );
     }
 }

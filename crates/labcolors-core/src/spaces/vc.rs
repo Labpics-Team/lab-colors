@@ -142,6 +142,27 @@ impl ViewingConditions {
         const AVERAGE_DIM_MIDPOINT_C: f64 = 0.64;
         self.c < AVERAGE_DIM_MIDPOINT_C
     }
+
+    /// Exact identity fingerprint over **every** field that affects a resolved
+    /// colour. Two viewing conditions with equal fingerprints produce
+    /// bit-identical output, so a fast-path cache may key on it: any difference
+    /// — even in a field the surround pair `(c, nc)` does not capture — forces a
+    /// distinct slot (a cold rebuild), never a wrong-colour memo collision. This
+    /// is why the grey/chroma fast paths match a VC on the full fingerprint, not
+    /// just `(c, nc)`: a caller-built VC that aliases the surround pair but
+    /// differs in adaptation (`aw`/`fl`/`n`/…) must fall through to the live
+    /// solver, not be served another condition's cached set.
+    pub(crate) fn fingerprint(&self) -> u64 {
+        let [d0, d1, d2] = self.rgb_d;
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for f in [
+            self.n, self.aw, self.nbb, self.ncb, self.fl, self.z, self.c, self.nc, d0, d1, d2,
+        ] {
+            h ^= f.to_bits();
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +237,30 @@ mod tests {
         assert!(
             ViewingConditions::dark_surround().is_dark_theme(),
             "dark_surround (c≈0.525) is a dark theme"
+        );
+    }
+
+    #[test]
+    fn fingerprint_separates_presets_and_surround_pair_aliases() {
+        let srgb = ViewingConditions::srgb();
+        let dim = ViewingConditions::dim_surround();
+        // The two precompiled conditions are distinct.
+        assert_ne!(srgb.fingerprint(), dim.fingerprint());
+        // Stable: a fresh construction fingerprints identically (so the fast-path
+        // exact match recognises the live preset).
+        assert_eq!(srgb.fingerprint(), ViewingConditions::srgb().fingerprint());
+
+        // The whole point: a VC that ALIASES sRGB's surround pair (c, nc) but
+        // differs in an adaptation field must fingerprint differently, so a
+        // fingerprint-keyed cache can never serve it sRGB's set.
+        let mut alias = srgb;
+        alias.aw += 1.0;
+        assert_eq!(alias.c, srgb.c);
+        assert_eq!(alias.nc, srgb.nc);
+        assert_ne!(
+            alias.fingerprint(),
+            srgb.fingerprint(),
+            "an aw-perturbed VC must not collide with sRGB's fingerprint"
         );
     }
 }

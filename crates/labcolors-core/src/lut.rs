@@ -207,19 +207,18 @@ impl GreyAxisLut {
 /// The table for `vc`, if `vc` is one of the two precompiled viewing conditions.
 ///
 /// Returns `None` for any other VC — the caller then keeps the full bisection,
-/// which is correct under every VC, only slower. The match is on the surround
-/// triplet `(c, nc)` that distinguishes [`ViewingConditions::srgb`] from
-/// [`ViewingConditions::dim_surround`]; both share the same adapting luminance
-/// and background, so these two coordinates identify the table.
+/// which is correct under every VC, only slower. The match is on the full VC
+/// [`fingerprint`](ViewingConditions::fingerprint), so a caller-built VC that
+/// merely shares the surround pair `(c, nc)` with a preset but differs in
+/// adaptation falls through to the bisection rather than seeding from the wrong
+/// precompiled grey-axis table.
 pub(crate) fn lut_for_vc(vc: &ViewingConditions) -> Option<GreyAxisLut> {
-    const EPS: f64 = 1e-9;
-    let srgb = ViewingConditions::srgb();
-    let dim = ViewingConditions::dim_surround();
-    if (vc.c - srgb.c).abs() < EPS && (vc.nc - srgb.nc).abs() < EPS {
+    let fp = vc.fingerprint();
+    if fp == ViewingConditions::srgb().fingerprint() {
         Some(GreyAxisLut {
             j_hk: &lut_data::GREY_AXIS_SRGB,
         })
-    } else if (vc.c - dim.c).abs() < EPS && (vc.nc - dim.nc).abs() < EPS {
+    } else if fp == ViewingConditions::dim_surround().fingerprint() {
         Some(GreyAxisLut {
             j_hk: &lut_data::GREY_AXIS_DIM,
         })
