@@ -1533,21 +1533,27 @@ mod tests {
                         reachable += 1;
                         // Independently re-measure the emitted hex's signed Lc.
                         let measured = lpc_with_vc(solved.hex(), bg_hex, &vc);
+                        // Compare signum, not `> 0.0`: a floored result must land
+                        // firmly on the target's side. signum is ±1.0 for a real
+                        // colour, so a degenerate dead-zone `measured == 0.0`
+                        // (signum 0.0) fails for EITHER polarity — closing the seam
+                        // where a bare `measured > 0.0` would read a negative
+                        // target's zero as "satisfied".
                         assert_eq!(
-                            target > 0.0,
-                            measured > 0.0,
-                            "{vc_name} {bg_hex}: default WCAG floor flipped polarity — \
+                            target.signum(),
+                            measured.signum(),
+                            "{vc_name} {bg_hex}: default WCAG floor broke polarity — \
                              target {target}, measured {measured}, hex {}",
                             solved.hex()
                         );
-                        // Override detection: a weak target (well under the AA
-                        // text floor — 15/30/45 Lc all sit below the ~4.5:1 legal
-                        // minimum) that the floor lifted at least +5 Lc past its
-                        // request, same sign. The `magnitude < 60` gate excludes
-                        // already-strong targets (which the floor leaves alone), so
-                        // a large-but-not-overridden result cannot be miscounted;
-                        // the +5 margin clears the ±1 Lc quantisation tolerance.
-                        if magnitude < 60.0 && measured.abs() > magnitude + 5.0 {
+                        // Override detection: a weak target (well under the AA text
+                        // floor — 15/30/45 Lc all sit below the ~4.5:1 legal minimum,
+                        // wcag::AA_TEXT_RATIO) that the floor lifted past its request,
+                        // same sign. The `magnitude < 60` gate excludes already-strong
+                        // targets (which the floor leaves alone), so a large-but-not-
+                        // overridden result cannot be miscounted; the `5.0 * TOL`
+                        // margin clears the ±TOL (1 Lc) quantisation tolerance fivefold.
+                        if magnitude < 60.0 && measured.abs() > magnitude + 5.0 * TOL {
                             if target > 0.0 {
                                 overridden_pos += 1;
                             } else {
