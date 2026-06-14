@@ -107,6 +107,69 @@ fn vars_mirror_reachable_role_hexes() {
     );
 }
 
+/// `recheckContrast` across the wasm boundary: the returned `Float64Array`
+/// reproduces the native `resolve_set`'s own `(lc, wcag)` per role, accepts the
+/// same shorthand hex forms as `resolveTheme`, and rejects a bad foreground.
+#[wasm_bindgen_test]
+fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
+    let bg = "#FFFFFF";
+    let native = resolve_set(
+        &BgInput::solid(bg).expect("white is valid"),
+        &RoleTable::default(),
+        &ViewingConditions::srgb(),
+    );
+    let mut fgs: Vec<String> = Vec::new();
+    let mut want: Vec<(f64, f64)> = Vec::new();
+    for (_role, resolved) in &native {
+        if let Resolved::Color { solved, .. } = resolved {
+            fgs.push(solved.hex().to_string());
+            want.push((solved.lc(), solved.wcag_ratio()));
+        }
+    }
+
+    let engine = LabColors::new();
+    let flat = engine
+        .recheck_contrast(bg, fgs.clone(), "light")
+        .expect("rechecks");
+    assert_eq!(
+        flat.len(),
+        want.len() * 2,
+        "one (lc, wcag) pair per foreground"
+    );
+    for (i, (lc, wcag)) in want.iter().enumerate() {
+        assert!(
+            (flat[2 * i] - lc).abs() < 1e-9,
+            "role {i} lc drift at the boundary"
+        );
+        assert!(
+            (flat[2 * i + 1] - wcag).abs() < 1e-9,
+            "role {i} wcag drift at the boundary"
+        );
+    }
+
+    // Shorthand / missing-`#` foregrounds are accepted, identical to canonical —
+    // the same hex contract `resolveTheme` honours (`#123` == `#112233`).
+    let canonical = engine
+        .recheck_contrast(bg, vec!["#112233".to_string()], "light")
+        .expect("canonical rechecks");
+    for fg in ["#123", "112233"] {
+        let got = engine
+            .recheck_contrast(bg, vec![fg.to_string()], "light")
+            .expect("shorthand rechecks");
+        assert_eq!(got, canonical, "{fg}: must match the canonical spelling");
+    }
+
+    // A malformed foreground rejects with the stable code, never a panic.
+    let err = engine
+        .recheck_contrast(bg, vec!["zzz".to_string()], "light")
+        .map(|_| ())
+        .expect_err("garbage foreground rejects");
+    assert!(
+        error_message(err).contains("invalid_background"),
+        "bad foreground must carry the stable code"
+    );
+}
+
 /// An uncalibrated theme rejects with a structured error — not a panic.
 #[wasm_bindgen_test]
 fn uncalibrated_theme_rejects_without_panic() {

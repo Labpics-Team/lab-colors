@@ -104,7 +104,15 @@ impl Engine {
     ) -> Result<Vec<f64>, BindingError> {
         let vc = theme.viewing_conditions()?;
         let bg = normalise_hex(bg_hex)?;
-        let refs: Vec<&str> = fg_hexes.iter().map(String::as_str).collect();
+        // Normalise foregrounds through the same parser as the background and
+        // `resolveTheme`, so the three entry points agree on what a valid hex is
+        // (`#RGB` shorthand, missing `#`, any case) instead of the core's
+        // stricter 6-digit-only parse rejecting a shorthand a resolve accepted.
+        let normalised: Vec<String> = fg_hexes
+            .iter()
+            .map(|h| normalise_hex(h))
+            .collect::<Result<_, _>>()?;
+        let refs: Vec<&str> = normalised.iter().map(String::as_str).collect();
         let pairs = labcolors_core::recheck_against(&bg, &refs, &vc)
             .map_err(|reason| BindingError::InvalidBackground { reason })?;
         let mut out = Vec::with_capacity(pairs.len() * 2);
@@ -259,6 +267,26 @@ mod tests {
                 .recheck("#FFFFFF", &["nothex".to_string()], Theme::Light)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn recheck_accepts_the_same_hex_forms_as_resolve_theme() {
+        // The three entry points share one hex contract: `#RGB` shorthand, a
+        // missing `#`, and mixed case are all accepted by recheck exactly as by
+        // resolve — and every spelling of a colour rechecks bit-identically.
+        // `#123` and `#112233` are the SAME colour (each nibble is doubled), and
+        // `#fff` is `#FFFFFF`, so all of these must agree with the canonical form.
+        let engine = Engine::new();
+        let canonical = engine
+            .recheck("#FFFFFF", &["#112233".to_string()], Theme::Light)
+            .unwrap();
+        for bg in ["#fff", "FFFFFF", "#FFFFFF"] {
+            for fg in ["#123", "112233", "#112233"] {
+                let got = engine.recheck(bg, &[fg.to_string()], Theme::Light).unwrap();
+                assert_eq!(got.len(), 2, "{bg}/{fg}: one (lc, wcag) pair");
+                assert_eq!(got, canonical, "{bg}/{fg}: must match the canonical form");
+            }
+        }
     }
 
     #[test]
