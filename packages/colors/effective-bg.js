@@ -100,6 +100,86 @@ export function toHex(rgb) {
   return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`.toUpperCase();
 }
 
+// --- Perceptual interpolation (Oklab) -------------------------------------
+//
+// A crossfade should feel even: equal progress should be equal *perceived*
+// change. A straight sRGB-channel blend is not that — it lingers in the brighter
+// half (black→white at t=0.5 is #808080, but the perceived midpoint grey is
+// ~#606060). Interpolating in Oklab — a perceptually-uniform space — fixes the
+// timing and, for chromatic endpoints, avoids the muddy desaturated midpoint a
+// raw RGB blend produces. Björn Ottosson's sRGB↔Oklab transform, self-contained.
+
+/** sRGB gamma transfer (IEC 61966-2-1): encoded channel 0..1 → linear 0..1. */
+function srgbToLinear(c) {
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+/** Inverse sRGB transfer: linear 0..1 → encoded 0..1. */
+function linearToSrgb(c) {
+  return c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055;
+}
+
+/** Linear-light sRGB `[r,g,b]` (0..1) → Oklab `[L, a, b]`. */
+function linearRgbToOklab(r, g, b) {
+  const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+  const m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+  const s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+  const l_ = Math.cbrt(l);
+  const m_ = Math.cbrt(m);
+  const s_ = Math.cbrt(s);
+  return [
+    0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_,
+    1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_,
+    0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_,
+  ];
+}
+
+/** Oklab `[L, a, b]` → linear-light sRGB `[r,g,b]` (0..1, may be out of gamut). */
+function oklabToLinearRgb(L, A, B) {
+  const l_ = L + 0.3963377774 * A + 0.2158037573 * B;
+  const m_ = L - 0.1055613458 * A - 0.0638541728 * B;
+  const s_ = L - 0.0894841775 * A - 1.291485548 * B;
+  const l = l_ * l_ * l_;
+  const m = m_ * m_ * m_;
+  const s = s_ * s_ * s_;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+}
+
+/**
+ * Interpolate two `#RRGGBB` colours in Oklab at `t ∈ [0,1]`, returning `#RRGGBB`.
+ *
+ * Perceptually uniform: equal steps in `t` are equal steps in perceived
+ * lightness (and a straight, non-muddy path in hue/chroma), so a crossfade feels
+ * even rather than lingering bright. Endpoints are returned exactly (`t ≤ 0` →
+ * `from`, `t ≥ 1` → `to`, both re-normalised through `toHex`); out-of-gamut
+ * intermediates are clamped per channel. Unparseable input falls back to the
+ * nearer endpoint.
+ *
+ * @param {string} fromHex
+ * @param {string} toHex_
+ * @param {number} t
+ * @returns {string}
+ */
+export function oklabLerp(fromHex, toHex_, t) {
+  const a = parseCssColor(fromHex);
+  const b = parseCssColor(toHex_);
+  if (!a || !b) return (b && t >= 0.5) || !a ? (b ? toHex(b) : "#000000") : toHex(a);
+  if (t <= 0) return toHex(a);
+  if (t >= 1) return toHex(b);
+  const la = linearRgbToOklab(srgbToLinear(a[0] / 255), srgbToLinear(a[1] / 255), srgbToLinear(a[2] / 255));
+  const lb = linearRgbToOklab(srgbToLinear(b[0] / 255), srgbToLinear(b[1] / 255), srgbToLinear(b[2] / 255));
+  const lin = oklabToLinearRgb(
+    la[0] + (lb[0] - la[0]) * t,
+    la[1] + (lb[1] - la[1]) * t,
+    la[2] + (lb[2] - la[2]) * t,
+  );
+  return toHex([linearToSrgb(lin[0]) * 255, linearToSrgb(lin[1]) * 255, linearToSrgb(lin[2]) * 255]);
+}
+
 /**
  * Compose an ordered stack of colour layers (front-to-back) over an opaque base
  * into a single opaque `#RRGGBB`. Pure — no DOM. Exposed for testing and for

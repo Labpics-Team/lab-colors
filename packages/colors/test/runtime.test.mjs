@@ -12,6 +12,7 @@ import {
   toHex,
   compositeStackToHex,
   effectiveBackground,
+  oklabLerp,
 } from "../effective-bg.js";
 import { watchTheme } from "../watch-theme.js";
 
@@ -42,6 +43,47 @@ test("toHex rounds and clamps", () => {
   assert.equal(toHex([255, 255, 255, 1]), "#FFFFFF");
   assert.equal(toHex([0, 0, 0, 1]), "#000000");
   assert.equal(toHex([127.6, 17, 300]), "#80115B".slice(0, 5) + "FF"); // 300→FF, 127.6→80, 17→11
+});
+
+test("oklabLerp returns endpoints exactly", () => {
+  assert.equal(oklabLerp("#000000", "#F0F0F0", 0), "#000000");
+  assert.equal(oklabLerp("#000000", "#F0F0F0", 1), "#F0F0F0");
+  // Out-of-range t is clamped to the endpoints.
+  assert.equal(oklabLerp("#102030", "#A0B0C0", -1), "#102030");
+  assert.equal(oklabLerp("#102030", "#A0B0C0", 2), "#A0B0C0");
+  // Endpoints are re-normalised through toHex (uppercase, 6-digit).
+  assert.equal(oklabLerp("#0a0", "#fff", 0), "#00AA00");
+});
+
+test("oklabLerp midpoint is perceptual, not the brighter sRGB midpoint", () => {
+  // A straight sRGB blend of black→white at t=0.5 is #808080 (channel 128). The
+  // perceptual midpoint is markedly darker (Oklab L=0.5 → ~#636363), which is
+  // the whole point: the crossfade does not linger in the bright half.
+  const mid = oklabLerp("#000000", "#FFFFFF", 0.5);
+  const ch = parseCssColor(mid)[0];
+  assert.ok(ch > 90 && ch < 110, `perceptual midpoint channel ~99, got ${ch}`);
+  assert.ok(ch < 128, "must be darker than the sRGB midpoint (128)");
+});
+
+test("oklabLerp lightness is monotone across t for a grey ramp", () => {
+  let prev = -1;
+  for (let i = 0; i <= 10; i++) {
+    const ch = parseCssColor(oklabLerp("#000000", "#FFFFFF", i / 10))[0];
+    assert.ok(ch >= prev, `grey ramp must be monotone: ${prev} → ${ch}`);
+    prev = ch;
+  }
+});
+
+test("oklabLerp keeps chromatic interpolation in gamut and parseable", () => {
+  // Red→blue midpoint: a valid #RRGGBB (clamped if needed), never NaN/garbage.
+  const mid = oklabLerp("#FF0000", "#0000FF", 0.5);
+  assert.match(mid, /^#[0-9A-F]{6}$/);
+  assert.ok(parseCssColor(mid) !== null);
+});
+
+test("oklabLerp falls back to the valid endpoint on unparseable input", () => {
+  assert.equal(oklabLerp("not-a-color", "#123456", 0.3), "#123456");
+  assert.equal(oklabLerp("#123456", "garbage", 0.7), "#123456");
 });
 
 test("compositeStackToHex composites front-to-back over an opaque base", () => {

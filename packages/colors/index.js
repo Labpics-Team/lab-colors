@@ -17,4 +17,5 @@ export {
   compositeOver,
   compositeStackToHex,
   toHex,
+  oklabLerp,
 } from "./effective-bg.js";
