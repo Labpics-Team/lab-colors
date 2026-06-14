@@ -1491,6 +1491,93 @@ mod tests {
     }
 
     #[test]
+    fn default_wcag_floor_preserves_polarity_sign() {
+        // The property grid above proves sign preservation under `Floor::None`
+        // (pure perceptual inversion). The PRODUCTION default for text is the AA
+        // WCAG floor, which may RAISE a too-weak |Lc| to the legal minimum — a
+        // separate code path (`apply_floor`). This pins the safety invariant on
+        // THAT path: the floor override may strengthen contrast but must never
+        // flip the foreground to the wrong side of the background. Weak targets
+        // (15/30/45 Lc, below the AA floor) force the override branch so the test
+        // is not a vacuous re-run of the no-floor grid.
+        let backgrounds = [
+            "#FFFFFF", "#E8E8E8", "#5A5A5A", "#101012", // neutrals
+            "#3478F6", "#0A3D62", // chromatic light + dark
+        ];
+        let mut reachable = 0_usize;
+        // Count override exercise per polarity: a single global counter could be
+        // satisfied by one side alone, leaving the other polarity's override path
+        // unguarded. We require BOTH below.
+        let mut overridden_pos = 0_usize;
+        let mut overridden_neg = 0_usize;
+        for (vc, vc_name) in vcs() {
+            for bg_hex in backgrounds {
+                for magnitude in MAGNITUDES {
+                    for target in [magnitude, -magnitude] {
+                        // Fresh per solve: `solve` consumes the `BgInput`.
+                        let bg = BgInput::solid(bg_hex).unwrap();
+                        // Default constructor → Floor::AaText (no with_conformance).
+                        let solved = match solve(
+                            bg,
+                            Contract::text(target),
+                            Hue::deg(0.0),
+                            ChromaPolicy::Neutral,
+                            &vc,
+                            Gamut::Srgb,
+                        ) {
+                            Ok(s) => s,
+                            // Wrong-polarity / out-of-range for this bg are
+                            // legitimately unreachable — skip, never a clip.
+                            Err(_) => continue,
+                        };
+                        reachable += 1;
+                        // Independently re-measure the emitted hex's signed Lc.
+                        let measured = lpc_with_vc(solved.hex(), bg_hex, &vc);
+                        // Compare signum, not `> 0.0`. Under the AA text floor every
+                        // reachable result clears 4.5:1, so `measured` is never the
+                        // dead-zone zero here — this is belt-and-suspenders. f64
+                        // signum is ±1.0 by sign bit (not 0.0 for a zero), so it
+                        // still tightens the one seam a bare `measured > 0.0` missed:
+                        // a negative target whose measurement collapsed to +0.0 now
+                        // mismatches (-1.0 vs +1.0) instead of passing as
+                        // `false == false`. target.signum() is always ±1.0 (target
+                        // is ±magnitude, never 0).
+                        assert_eq!(
+                            target.signum(),
+                            measured.signum(),
+                            "{vc_name} {bg_hex}: default WCAG floor broke polarity — \
+                             target {target}, measured {measured}, hex {}",
+                            solved.hex()
+                        );
+                        // Override detection: a weak target (well under the AA text
+                        // floor — 15/30/45 Lc all sit below the ~4.5:1 legal minimum,
+                        // wcag::AA_TEXT_RATIO) that the floor lifted past its request,
+                        // same sign. The `magnitude < 60` gate excludes already-strong
+                        // targets (which the floor leaves alone), so a large-but-not-
+                        // overridden result cannot be miscounted; the `5.0 * TOL`
+                        // margin clears the ±TOL (1 Lc) quantisation tolerance fivefold.
+                        if magnitude < 60.0 && measured.abs() > magnitude + 5.0 * TOL {
+                            if target > 0.0 {
+                                overridden_pos += 1;
+                            } else {
+                                overridden_neg += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(reachable >= 20, "too few reachable combos: {reachable}");
+        // Both polarity override paths must be exercised, or the test is not
+        // guarding the invariant it claims on one side.
+        assert!(
+            overridden_pos > 0 && overridden_neg > 0,
+            "floor override not exercised on both polarities (pos {overridden_pos}, neg {overridden_neg}) — \
+             test would be vacuous on one side"
+        );
+    }
+
+    #[test]
     fn below_contrast_floor_is_unreachable() {
         // Inside the loClip dead zone: the forward curve reports zero, so no
         // colour can reproduce it.
