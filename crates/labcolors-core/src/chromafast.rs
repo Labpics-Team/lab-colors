@@ -78,14 +78,14 @@ thread_local! {
 
 /// Map a viewing condition to its memo slot, or `None` for an unsupported VC
 /// (which then takes the live solver). Matches [`greyfast`](crate::greyfast)'s
-/// two-condition convention so the two fast paths agree on what is supported.
+/// full-[`fingerprint`](ViewingConditions::fingerprint) convention so the two
+/// fast paths agree on what is supported and neither aliases a caller-built VC
+/// that merely shares the surround pair `(c, nc)`.
 fn vc_index(vc: &ViewingConditions) -> Option<usize> {
-    const EPS: f64 = 1e-9;
-    let srgb = ViewingConditions::srgb();
-    let dim = ViewingConditions::dim_surround();
-    if (vc.c - srgb.c).abs() < EPS && (vc.nc - srgb.nc).abs() < EPS {
+    let fp = vc.fingerprint();
+    if fp == ViewingConditions::srgb().fingerprint() {
         Some(0)
-    } else if (vc.c - dim.c).abs() < EPS && (vc.nc - dim.nc).abs() < EPS {
+    } else if fp == ViewingConditions::dim_surround().fingerprint() {
         Some(1)
     } else {
         None
@@ -210,6 +210,16 @@ mod tests {
 
         let custom = RoleTable::default().with_chroma(crate::RoleChroma::Neutral);
         assert!(try_resolve_set(&bg, &custom, &srgb).is_none());
+
+        // A VC that aliases sRGB's surround pair (c, nc) but differs in adaptation
+        // must decline (full-fingerprint match), not be served sRGB's memo slot.
+        let table = RoleTable::default();
+        let mut aliasing = ViewingConditions::srgb();
+        aliasing.aw += 1.0;
+        assert!(
+            try_resolve_set(&bg, &table, &aliasing).is_none(),
+            "a VC aliasing (c, nc) but differing in adaptation must decline the chroma fast path"
+        );
     }
 
     #[test]
