@@ -39,17 +39,23 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
 /// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
 /// — frozen.
 ///
-/// CONSCIOUS SNAPSHOT CHANGE — category membership-field model
-/// (sentiment-category-fields). The Info field peak is now the *anchor colour's*
-/// Oklab hue (`#007AFF` → 257.42°), not a hand-typed 240°: brand 200° sits 57.4°
-/// away, well beyond the perceptual floor `s_min`, so the field's peak is
-/// feasible and the hue resolves to **257.42° un-displaced** (`was_displaced ==
-/// false`) — a far brand no longer perturbs the category at all. The ladder is
-/// also built at constant, hue-independent colourfulness (`binding_mp`), so its
-/// chroma profile matches the other sentiments. Intentional contract change.
+/// CONSCIOUS SNAPSHOT CHANGE — two intentional recalibrations:
+///
+/// 1. **Per-hue colourfulness** (sentiment vividness): each sentiment builds to
+///    `SENTIMENT_SAT_FRACTION` of *its own* gamut ceiling (`target_mp`) instead of
+///    the old equal-`M'` min-binding, so Info reads as a richer blue. Only the
+///    H-K-bright green band keeps a cap (to the warm budget); blue runs free.
+/// 2. **Smooth-asymptote hue resolution restored** (Warning↔Danger fix): the #65
+///    membership-field picker is replaced by the C¹ smooth-displacement model on
+///    the anchor-derived prototype (Info peak still `#007AFF` → 257.42°). The
+///    smooth model nudges even a *far* brand slightly — brand 200° (57.4° away)
+///    now resolves to **260.43°, displaced ~3.0°** (`was_displaced == true`),
+///    where the membership-field model returned the peak exactly. This is the C¹
+///    continuity cost the restored guard tests intend, and 3° at this chroma is
+///    imperceptible. Intentional contract change.
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F7F8FA", "#E1E9F5", "#BFD4F2", "#8FB9F5", "#609AED", "#4B79BC", "#4672B1",
-    "#3C659E", "#325485", "#254068", "#172A46", "#06101F",
+    "#FFFFFF", "#F5F8FF", "#DDE9FD", "#BCD3FA", "#93B8F6", "#6498F1", "#2B71E9", "#246ADF",
+    "#1F5DC6", "#184DA8", "#113B83", "#08265B", "#020E2A",
 ];
 
 #[test]
@@ -70,16 +76,19 @@ fn sentiment_info_curve_sample_hex_13_matches_golden() {
     let neutral = neutral();
     let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#007AFF", &neutral)
         .expect("Info sentiment with a far brand hue resolves");
-    // Pin the resolution decision under the membership-field model: the Info peak
-    // is the anchor's Oklab hue (257.42°), and brand 200° is 57.4° away — beyond
-    // s_min — so the peak is feasible and the hue resolves there *un-displaced*.
+    // Pin the resolution under the restored smooth-asymptote model: the Info
+    // prototype is the anchor's Oklab hue (257.42°), and brand 200° (57.4° away)
+    // nudges it only slightly — the smooth displacement decays but never reaches
+    // exactly zero, so the hue settles at ~260.43° with a small (~3°) displacement.
     assert!(
-        !curve.was_displaced,
-        "a far brand (57° away) must not perturb the category: was_displaced should be false"
+        curve.was_displaced && curve.displacement < 5.0,
+        "a far brand should nudge Info only slightly: displaced={}, Δ={}",
+        curve.was_displaced,
+        curve.displacement
     );
     assert!(
-        (curve.resolved_hue - 257.42).abs() < 0.1,
-        "Info resolved hue should be the anchor Oklab hue 257.42°: {}",
+        (curve.resolved_hue - 260.43).abs() < 0.1,
+        "Info resolved hue should be ~260.43° (257.42° prototype + ~3° smooth nudge): {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);

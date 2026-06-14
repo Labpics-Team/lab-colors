@@ -83,49 +83,66 @@ pub enum Sentiment {
 }
 
 impl Sentiment {
-    /// Ideal hue for this sentiment — the membership-field peak, in **Oklab hue
-    /// degrees** (NOT HSB/HSL).
+    /// Ideal hue for this sentiment — the **Oklab hue of its anchor colour**, in
+    /// degrees (NOT HSB/HSL).
+    ///
+    /// The prototype is derived from a culturally-recognised anchor colour's
+    /// actual Oklab hue ([`anchor_hex`](Self::anchor_hex)), not a hand-typed
+    /// degree: the original hard-coded peaks were inconsistent with the anchors
+    /// (Danger `18°` vs the true `28.7°`, Info `240°` vs `257°` — a hue-model
+    /// mix-up that pulled Danger toward pink), while Oklab hue differs from HSB by
+    /// 12–46° across the wheel, so a typed number is fragile. Deriving it removes
+    /// the confusion at the source (the #65 fix, kept).
     fn prototype_hue(self) -> f64 {
-        self.field().peak
+        oklab_hue_of(self.anchor_hex())
     }
 
-    /// The categorical **membership field** of this sentiment: an asymmetric bump
-    /// over Oklab hue, peaked at the prototype, with per-side wing widths that
-    /// encode the empirical category borders.
+    /// Per-side asymptote hardness `(p_low, p_high)` — the exponent `p` of the
+    /// smooth displacement [`SentimentParams`]. `p_low` governs the side where the
+    /// sentiment hue sits *below* the brand (toward 0°), `p_high` the side above
+    /// it. A lower `p` yields sooner (pushes out toward `s_min` earlier); a higher
+    /// `p` clings to the brand-distance and stays nearer the prototype.
     ///
-    /// The **peak is derived from a culturally-recognised anchor colour's actual
-    /// Oklab hue** ([`anchor_hex`](Self::anchor_hex)), not a hand-typed degree:
-    /// the previous hard-coded peaks were inconsistent with the anchors (Danger
-    /// `18°` vs the true `28.7°`, Info `240°` vs `257°` — a hue-model mix-up that
-    /// pulled Danger toward pink), while Oklab hue differs from HSB by 12–46°
-    /// across the wheel, so a typed number is fragile. Deriving it removes the
-    /// confusion at the source.
-    ///
-    /// Wing widths (Daniil's design directions, 2026-06-12) are still
-    /// **PROVISIONAL** — to be fitted from colour-naming data and finalised by
-    /// eye. `sigma_lo` is the wing toward *lower* hue (signed delta < 0):
-    /// - **Danger** (red): both wings wide — red holds toward orange or crimson.
-    /// - **Success** (green): *steep* toward yellow (lower hue, reads "off"),
-    ///   *wide* toward teal (higher hue, still success), so it slides to teal.
-    /// - **Warning** (amber): *steep* toward green (higher), *wide* toward
-    ///   orange/red (lower) — its reddish extreme; replaces the old 45° floor.
-    /// - **Info** (blue): roughly symmetric.
-    fn field(self) -> HueField {
-        let (sigma_lo, sigma_hi) = match self {
-            //                       σ_lo   σ_hi
-            Sentiment::Danger => (24.0, 26.0),
-            Sentiment::Warning => (26.0, 14.0),
-            Sentiment::Success => (13.0, 42.0),
-            Sentiment::Info => (26.0, 26.0),
-        };
-        HueField::new(oklab_hue_of(self.anchor_hex()), sigma_lo, sigma_hi)
+    /// All four categories use the **symmetric** default. A per-side asymmetry
+    /// makes the two sides' far-field overshoot decay at different rates, which
+    /// injects a small spurious discontinuity at the prototype's *antipode* — and
+    /// Warning's red-avoidance is already handled exactly by its [`hue_floor`], so
+    /// no asymmetry is needed. The hook is kept (and `with_params` still tunes it)
+    /// for a future per-zone calibration. **PROVISIONAL** (Daniil's eye).
+    fn hardness(self) -> (f64, f64) {
+        let _ = self;
+        (DEFAULT_HARDNESS, DEFAULT_HARDNESS)
+    }
+
+    /// Categorical hue floor (Oklab degrees) below which the sentiment loses its
+    /// meaning — Warning must never slide into the red region it would otherwise
+    /// share with Danger. Applied as a hard legality constraint, never a soft
+    /// preference. This is the guarantee #65 dropped (and #66 inherited), whose
+    /// loss let Warning resolve ~3.9° from Danger; restored here. **PROVISIONAL**.
+    fn hue_floor(self) -> Option<f64> {
+        match self {
+            Sentiment::Warning => Some(45.0),
+            _ => None,
+        }
+    }
+
+    /// Preferred side for the degenerate `brand == prototype` seam. `+1.0` pushes
+    /// the resolved hue up (higher degrees), `-1.0` down. Warning climbs away from
+    /// red toward its hard side; the symmetric-hardness categories use it only to
+    /// fix the seam direction deterministically.
+    fn preferred_side(self) -> f64 {
+        match self {
+            Sentiment::Warning => 1.0,
+            _ => 1.0,
+        }
     }
 
     /// The culturally-recognised anchor colour whose **Oklab hue** is this
-    /// sentiment's field peak (Apple HIG system colours — a widely-recognised
+    /// sentiment's prototype (Apple HIG system colours — a widely-recognised
     /// reference set). The hue is read off the colour, never typed as degrees, so
-    /// it cannot drift between hue models. The chroma/lightness of the anchor are
-    /// *not* used — the sentiment colour is rebuilt at a constant `M'`.
+    /// it cannot drift between hue models. The anchor's chroma/lightness are *not*
+    /// used — the ramp is rebuilt per-hue to its own gamut budget (see
+    /// [`target_mp`]).
     fn anchor_hex(self) -> &'static str {
         match self {
             Sentiment::Danger => "#FF3B30",
@@ -135,8 +152,12 @@ impl Sentiment {
         }
     }
 
-    /// All four sentiment categories — the set whose gamut ceilings define the
-    /// shared colourfulness envelope (see [`binding_mp`]).
+    /// All four sentiment categories. The warm pair (Danger/Warning) defines the
+    /// colourfulness budget the green band is held to (see [`warm_budget`]); the
+    /// full set is the property-sweep surface for the tests. Currently consumed
+    /// only by tests — `target_mp` reaches the warm pair by name — so it is
+    /// test-gated until the brand/sentiment table wiring (issue #59) consumes it.
+    #[cfg(test)]
     pub(crate) const ALL: [Sentiment; 4] = [
         Sentiment::Danger,
         Sentiment::Warning,
@@ -152,52 +173,16 @@ fn oklab_hue_of(hex: &str) -> f64 {
     lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0)
 }
 
-/// An asymmetric Gaussian **membership field** over Oklab hue: `μ(h) ∈ (0, 1]`,
-/// peaked at `peak`, falling off with `sigma_lo` toward lower hue and `sigma_hi`
-/// toward higher hue. The asymmetry is what makes a category's two borders behave
-/// differently (Success's steep yellow side vs wide teal side). PROVISIONAL
-/// widths — see [`Sentiment::field`].
-#[derive(Debug, Clone, Copy)]
-struct HueField {
-    peak: f64,
-    sigma_lo: f64,
-    sigma_hi: f64,
-}
-
-impl HueField {
-    fn new(peak: f64, sigma_lo: f64, sigma_hi: f64) -> Self {
-        Self {
-            peak,
-            sigma_lo,
-            sigma_hi,
-        }
-    }
-
-    /// Membership `μ(h) = exp(-½·(δ/σ)²)`, `δ` the signed shortest hue delta from
-    /// the peak and `σ` the wing on `δ`'s side. `1` at the peak, decaying outward.
-    fn membership(&self, h: f64) -> f64 {
-        let delta = signed_delta(h, self.peak);
-        let sigma = if delta < 0.0 {
-            self.sigma_lo
-        } else {
-            self.sigma_hi
-        };
-        (-0.5 * (delta / sigma).powi(2)).exp()
-    }
-}
-
 /// Default asymptote hardness `p` for a sentiment with no special asymmetry.
 /// `p = 2` is the calibration default Daniil picks by eye; `p → ∞` recovers the
 /// old hard 20° wall, `p → 1` is the softest (most eager) yield.
 pub const DEFAULT_HARDNESS: f64 = 2.0;
 
-/// Fraction of the **binding** (lowest-gamut) hue's colourfulness the sentiment
-/// ramp carries at every lightness. PROVISIONAL "strength" knob (Daniil's eye);
-/// `< 1` so even the weakest hue stays inside its gamut. Building every sentiment
-/// to the *same* `M'` at every step (not `sat_ratio × each hue's own ceiling`) is
-/// what stops green out-shouting red/orange — at any lightness all four carry
-/// identical perceived colourfulness, capped to whichever hue the sRGB gamut
-/// pinches first (green's vivid light tints come down to the warm hues' level).
+/// Fraction of a hue's gamut ceiling the sentiment ramp carries at each lightness
+/// — the "strength" knob (PROVISIONAL, Daniil's eye). `< 1` so a sentiment sits
+/// just inside its gamut wall rather than on it. Applied per hue to its own
+/// ceiling (rich warm/blue) and, for the green band, to the warm budget it is
+/// capped against (see [`target_mp`]).
 const SENTIMENT_SAT_FRACTION: f64 = 0.92;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
@@ -266,8 +251,13 @@ pub struct SentimentCurve {
     pub resolved_hue: f64,
     pub was_displaced: bool,
     pub displacement: f64,
+    /// Which category this curve is — the colourfulness target reads it so the
+    /// Helmholtz–Kohlrausch-bright green band ([`Sentiment::Success`]) can be
+    /// capped to the warm anchors' budget while the other hues run to their own
+    /// gamut ceiling. See [`target_mp`].
+    sentiment: Sentiment,
     /// The neutral curve this sentiment rides — its lightness ladder, viewing
-    /// conditions, and chroma helpers drive the constant-colourfulness ramp.
+    /// conditions, and chroma helpers drive the per-hue colourfulness ramp.
     neutral: NeutralCurve,
 }
 
@@ -288,7 +278,8 @@ impl SentimentCurve {
         prototype_hex: &str,
         neutral: &NeutralCurve,
     ) -> Result<Self, String> {
-        let params = SentimentParams::new(DEFAULT_HARDNESS, DEFAULT_HARDNESS)?;
+        let (p_low, p_high) = sentiment.hardness();
+        let params = SentimentParams::new(p_low, p_high)?;
         Self::with_params(sentiment, brand_hue, prototype_hex, neutral, params)
     }
 
@@ -307,9 +298,11 @@ impl SentimentCurve {
     /// - The resolved hue keeps **at least** `s_min` perceptual degrees from
     ///   the brand (separation invariant), enforced as a final legal guard.
     /// - For [`Sentiment::Warning`] the resolved hue additionally never drops
-    ///   below the hue floor. When the floor and the separation invariant
-    ///   collide, the resolver lands on the nearest legal hue that still honours
-    ///   the separation; if the legal arc is geometrically empty it returns an
+    ///   below the hue floor. When the floor blocks the prototype-ward
+    ///   displacement, the resolver flips to the opposite (preferred) side —
+    ///   keeping the hue in amber/yellow rather than wrapping the long way round
+    ///   into red — and only if neither side is legal does it scan outward to the
+    ///   nearest legal hue. If the legal arc is geometrically empty it returns an
     ///   `Err` rather than silently breaching either invariant.
     ///
     /// # Errors
@@ -340,10 +333,11 @@ impl SentimentCurve {
         let proto_chroma = (proto_lab[1].powi(2) + proto_lab[2].powi(2)).sqrt();
         let s_min = s_min_deg(proto_chroma);
 
-        // `p` (asymptote hardness) is reserved for boundary-transition smoothing
-        // in a later calibration pass; the field resolver below is parameter-free.
-        let _ = &params;
-        let resolved_hue = resolve_field_hue(sentiment, brand_hue, s_min)?;
+        // Smooth-asymptote displacement around the anchor-derived prototype,
+        // with the categorical floor (Warning) as the final legality net. This is
+        // the C¹ resolver that keeps the hue continuous in the brand and holds
+        // Warning clear of Danger.
+        let resolved_hue = resolve_smooth_hue(sentiment, prototype, brand_hue, params, s_min)?;
 
         let displacement = angular_distance(resolved_hue, prototype);
         // The hue is "displaced" whenever the smooth model moved it off the
@@ -352,22 +346,24 @@ impl SentimentCurve {
         let was_displaced = displacement > 1e-6;
 
         // The ramp itself (lightness ladder + chroma) is built on demand from the
-        // neutral curve and the resolved hue at a constant, hue-independent
-        // colourfulness (`binding_mp`); the caller's `prototype_hex` only informs
-        // the perceptual separation floor above, never the chroma.
+        // neutral curve and the resolved hue at the per-hue [`target_mp`]
+        // colourfulness; the caller's `prototype_hex` only informs the perceptual
+        // separation floor above, never the chroma.
         Ok(Self {
             resolved_hue,
             was_displaced,
             displacement,
+            sentiment,
             neutral: neutral.clone(),
         })
     }
 
     /// The sentiment colour at ramp position `t ∈ [0, 1]`. Lightness comes from
     /// the neutral curve (the four sentiments share one lightness ladder) and the
-    /// chroma is solved to the shared [`binding_mp`] colourfulness at that
-    /// lightness (they share one colourfulness ladder too) — so every step has
-    /// equal perceived weight across hues and no sentiment out-shouts another.
+    /// chroma is solved to the per-hue [`target_mp`] colourfulness at that
+    /// lightness — each hue runs to its own gamut budget, except the
+    /// Helmholtz–Kohlrausch-bright green band, which is capped to the warm
+    /// anchors' colourfulness so it cannot out-shout the warm sentiments.
     pub fn at(&self, t: f64) -> LcsColor {
         let vc = self.neutral.vc();
         let hex = self.hex_at(t);
@@ -401,56 +397,97 @@ impl SentimentCurve {
     fn hex_at(&self, t: f64) -> String {
         let vc = self.neutral.vc();
         let l_ok = jp_to_oklab_l(self.neutral.at(t).jp, vc);
-        let target_mp = binding_mp(l_ok, vc);
-        let c = chroma_for_mp(l_ok, self.resolved_hue, target_mp, vc);
+        let target = target_mp(self.sentiment, l_ok, self.resolved_hue, vc);
+        let c = chroma_for_mp(l_ok, self.resolved_hue, target, vc);
         oklab_lc_to_hex(l_ok, c, self.resolved_hue)
     }
 }
 
-/// Resolve the sentiment hue: the hue that **maximises the category membership**
-/// while staying at least `s_min` perceptual degrees from the brand.
+/// The smooth displaced separation `s(d) = (d^p + s_min^p)^(1/p)`.
 ///
-/// The field `μ_s` is unimodal (peaked at the prototype), so the constrained
-/// optimum is simple:
-/// * if the peak is already `≥ s_min` from the brand, the peak itself wins — a
-///   far brand does not perturb the category at all (zero displacement);
-/// * otherwise the brand encroaches and the optimum sits on the nearer
-///   separation boundary, on **whichever side the field is higher**. That is
-///   what makes Success slide into teal (its wide wing) rather than yellow (its
-///   steep wing), Warning toward orange rather than green, and Danger to the
-///   closer red wing — the category's own asymmetry decides the side, replacing
-///   the former hard floor and side/hardness machinery.
-///
-/// [`legalize_hue`] is the final separation net (it never needs to move the
-/// boundary picks, which are exactly `s_min` away, but guards float error).
-fn resolve_field_hue(sentiment: Sentiment, brand_hue: f64, s_min: f64) -> Result<f64, String> {
-    let field = sentiment.field();
-
-    // Peak feasible → sit at the prototype (a distant brand barely perturbs it).
-    if angular_distance(field.peak, brand_hue) >= s_min - 1e-9 {
-        return legalize_hue(field.peak, brand_hue, s_min);
-    }
-
-    // Brand encroaches: the unimodal field's constrained maximum is the nearer
-    // separation boundary on the higher-membership side.
-    let c_hi = normalize_hue(brand_hue + s_min);
-    let c_lo = normalize_hue(brand_hue - s_min);
-    let pick = if field.membership(c_hi) >= field.membership(c_lo) {
-        c_hi
-    } else {
-        c_lo
-    };
-    legalize_hue(pick, brand_hue, s_min)
+/// `d` and `s_min` are non-negative angular degrees; `p >= 1`. The result is
+/// always `>= max(d, s_min)` and is C¹ in `d` for `p > 1`. As `d → ∞` the
+/// displacement `s(d) − d → 0`, so a distant brand barely nudges the hue.
+fn smooth_separation(d: f64, s_min: f64, p: f64) -> f64 {
+    (d.powf(p) + s_min.powf(p)).powf(1.0 / p)
 }
 
-/// Snap a candidate hue to the nearest hue at least `s_min` from the brand.
+/// Resolve the sentiment hue under the smooth-asymptote model, then pass it
+/// through the legality guard (separation + optional floor) as the final stage.
 ///
-/// The field resolver already returns separation-legal hues, so this is a thin
-/// final net against float error: a legal candidate returns unchanged; otherwise
-/// it scans outward to the closest legal point. (The categorical border that the
-/// old `floor` enforced is now part of the membership field itself.)
-fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, String> {
-    if is_legal_hue(candidate, brand_hue, s_min) {
+/// The prototype is pushed away from the brand, along the side it already sits on
+/// relative to the brand, by `s(d)` — a displacement that grows to the perceptual
+/// floor `s_min` as the brand lands on the prototype and decays to zero as the
+/// brand recedes. Because `s(d)` is C¹ in the brand-distance, the resolved hue is
+/// continuous (no side-flip discontinuity), and the categorical [`hue_floor`]
+/// (Warning) keeps it out of Danger's red. This is the resolver that fixes the
+/// Warning↔Danger collision and the 46° jump the membership-field picker caused.
+fn resolve_smooth_hue(
+    sentiment: Sentiment,
+    prototype: f64,
+    brand_hue: f64,
+    params: SentimentParams,
+    s_min: f64,
+) -> Result<f64, String> {
+    // Signed shortest delta from prototype to brand. Its sign tells us which side
+    // of the brand the prototype sits on; we push the resolved hue out along that
+    // same side, away from the brand.
+    let u = signed_delta(brand_hue, prototype);
+    let d = u.abs();
+
+    let (side, p) = if u > 0.0 {
+        // Brand above the prototype → prototype sits below it → low-side hardness.
+        (-1.0, params.p_low)
+    } else if u < 0.0 {
+        (1.0, params.p_high)
+    } else {
+        // Degenerate seam: brand exactly on the prototype. Pick the preferred side.
+        let pref = sentiment.preferred_side();
+        let p = if pref >= 0.0 {
+            params.p_high
+        } else {
+            params.p_low
+        };
+        (pref, p)
+    };
+
+    let s = smooth_separation(d, s_min, p);
+    let floor = sentiment.hue_floor();
+
+    // The prototype-ward displacement is the natural target (it decays to the
+    // prototype as the brand recedes).
+    let natural = normalize_hue(brand_hue + side * s);
+    if is_legal_hue(natural, brand_hue, floor, s_min) {
+        return Ok(natural);
+    }
+
+    // The floor blocks the prototype-ward side near the seam (Warning's downward
+    // dip would land in Danger's red). Flip to the opposite side so the sentiment
+    // climbs *away* from the forbidden zone — never wrap the long way around the
+    // circle into it (the bug a blind nearest-legal scan would commit here).
+    let flipped = normalize_hue(brand_hue - side * s);
+    if is_legal_hue(flipped, brand_hue, floor, s_min) {
+        return Ok(flipped);
+    }
+
+    // Neither side legal as constructed: the scan net is the last resort.
+    legalize_hue(natural, brand_hue, floor, s_min)
+}
+
+/// Snap a candidate hue to the nearest hue legal under both the separation
+/// invariant (`>= s_min` from the brand) and the optional categorical floor.
+///
+/// A legal candidate returns unchanged; otherwise scan outward in fine steps and
+/// return the closest legal hue, preserving smoothness as much as the constraints
+/// allow. If no legal hue exists on the whole circle (the floor and the brand
+/// zone leave no room) return an `Err` rather than silently breaching an invariant.
+fn legalize_hue(
+    candidate: f64,
+    brand_hue: f64,
+    floor: Option<f64>,
+    s_min: f64,
+) -> Result<f64, String> {
+    if is_legal_hue(candidate, brand_hue, floor, s_min) {
         return Ok(normalize_hue(candidate));
     }
 
@@ -460,7 +497,7 @@ fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, Strin
             normalize_hue(candidate + step),
             normalize_hue(candidate - step),
         ] {
-            if is_legal_hue(cand, brand_hue, s_min) {
+            if is_legal_hue(cand, brand_hue, floor, s_min) {
                 return Ok(cand);
             }
         }
@@ -468,14 +505,23 @@ fn legalize_hue(candidate: f64, brand_hue: f64, s_min: f64) -> Result<f64, Strin
     }
 
     Err(format!(
-        "no legal hue exists for brand={brand_hue}, s_min={s_min}: \
-         the separation invariant leaves no room on the hue circle"
+        "no legal hue exists for brand={brand_hue}, floor={floor:?}, s_min={s_min}: \
+         the separation invariant and the floor leave no room on the hue circle"
     ))
 }
 
-/// A hue is legal if it clears the brand zone (`>= s_min` away).
-fn is_legal_hue(h: f64, brand_hue: f64, s_min: f64) -> bool {
-    angular_distance(h, brand_hue) >= s_min - 1e-9
+/// A hue is legal if it clears the brand zone (`>= s_min` away) and, where a floor
+/// is set, sits at or above it.
+fn is_legal_hue(h: f64, brand_hue: f64, floor: Option<f64>, s_min: f64) -> bool {
+    if angular_distance(h, brand_hue) < s_min - 1e-9 {
+        return false;
+    }
+    if let Some(f) = floor
+        && normalize_hue(h) < f
+    {
+        return false;
+    }
+    true
 }
 
 /// Signed shortest delta from `from` to `h` in (-180, 180].
@@ -518,18 +564,44 @@ fn max_mp_at(l_ok: f64, h_ok: f64, vc: &ViewingConditions) -> f64 {
     mp_at(l_ok, max_chroma(l_ok, h_ok), h_ok, vc)
 }
 
-/// The shared colourfulness every sentiment is built to at lightness `l_ok`:
-/// [`SENTIMENT_SAT_FRACTION`] of the **binding** hue's max `M'` — the lowest
-/// gamut ceiling across the four sentiment categories at this lightness. It is
-/// hue-independent, so every sentiment carries the *same* `M'` at every step;
-/// the warm hues (which the gamut pinches first) set the level, pulling green's
-/// otherwise-brighter tints down to match.
-fn binding_mp(l_ok: f64, vc: &ViewingConditions) -> f64 {
-    let min_ceiling = Sentiment::ALL
-        .iter()
-        .map(|s| max_mp_at(l_ok, s.field().peak, vc))
-        .fold(f64::INFINITY, f64::min);
-    SENTIMENT_SAT_FRACTION * min_ceiling
+/// The colourfulness (CAM16-UCS `M'`) a sentiment of category `sentiment` and
+/// resolved hue `h_ok` is built to at Oklab lightness `l_ok`.
+///
+/// Each sentiment runs to [`SENTIMENT_SAT_FRACTION`] of **its own** gamut ceiling
+/// — so Danger, Warning and Info are as rich as the sRGB gamut allows at that
+/// lightness. This is the deliberate reversal of the old equal-`M'` "min-binding"
+/// envelope, which capped *every* hue to the single most gamut-pinched one (always
+/// a warm hue — red in the light tints, orange in the mids) and so left the whole
+/// palette muted and the mid-reds muddy.
+///
+/// The lone exception is the green band ([`Sentiment::Success`]). The
+/// Helmholtz–Kohlrausch effect makes green/chartreuse read **louder** than a warm
+/// or blue hue of equal `M'` and lightness, so at its own (very high) green
+/// ceiling Success out-shouts the warm sentiments. Green is therefore capped to
+/// the **warm anchors' budget** — the lower of the Danger/Warning gamut ceilings
+/// at this lightness — so it carries no more colourfulness than the least-colourful
+/// warm sentiment at every step, preserving the "green never out-shouts the warm
+/// sentiments" invariant while the rest of the palette is freed to its full
+/// richness. Warm and blue hues are not H-K-bright and need no such cap.
+fn target_mp(sentiment: Sentiment, l_ok: f64, h_ok: f64, vc: &ViewingConditions) -> f64 {
+    let own = max_mp_at(l_ok, h_ok, vc);
+    let ceiling = if sentiment == Sentiment::Success {
+        own.min(warm_budget(l_ok, vc))
+    } else {
+        own
+    };
+    SENTIMENT_SAT_FRACTION * ceiling
+}
+
+/// The warm anchors' colourfulness budget at lightness `l_ok`: the lower of the
+/// Danger and Warning gamut ceilings. The green band is held to this so it cannot
+/// carry more perceived colourfulness than the least-colourful warm sentiment.
+fn warm_budget(l_ok: f64, vc: &ViewingConditions) -> f64 {
+    max_mp_at(l_ok, Sentiment::Danger.prototype_hue(), vc).min(max_mp_at(
+        l_ok,
+        Sentiment::Warning.prototype_hue(),
+        vc,
+    ))
 }
 
 /// Chroma at `(l_ok, h_ok)` whose colour carries `target_mp` — bisection on the
@@ -564,15 +636,15 @@ mod tests {
     }
 
     #[test]
-    fn field_peak_is_the_anchor_oklab_hue() {
-        // The peak is read off the anchor colour's Oklab hue, never typed — so it
-        // cannot drift between hue models (the bug that pulled Danger to pink).
+    fn prototype_is_the_anchor_oklab_hue() {
+        // The prototype is read off the anchor colour's Oklab hue, never typed — so
+        // it cannot drift between hue models (the bug that pulled Danger to pink).
         for s in Sentiment::ALL {
             let want = oklab_hue_of(s.anchor_hex());
             assert!(
-                (s.field().peak - want).abs() < 1e-9,
-                "{s:?}: peak {} != anchor Oklab hue {want}",
-                s.field().peak
+                (s.prototype_hue() - want).abs() < 1e-9,
+                "{s:?}: prototype {} != anchor Oklab hue {want}",
+                s.prototype_hue()
             );
         }
     }
@@ -592,11 +664,13 @@ mod tests {
 
     #[test]
     fn green_never_outshouts_the_warm_sentiments_and_shares_their_lightness() {
-        // Consistency law: every sentiment carries the same colourfulness (the
-        // binding envelope) and the same lightness (the neutral ladder) at every
-        // step, so Success (green) is never more colourful than the warm
-        // sentiments — the user's "green too bright" complaint, gone by
-        // construction. Swept across brand hues.
+        // Loudness invariant: Success (green) is capped to the warm anchors'
+        // colourfulness budget (the H-K cap in `target_mp`), so it is never more
+        // colourful than the warm sentiments at any step — the user's "green too
+        // bright" complaint, gone by construction — while still riding the shared
+        // neutral lightness ladder. The warm hues themselves now run to their own
+        // (richer) gamut ceilings; this only pins green relative to them. Swept
+        // across brand hues.
         let n = neutral();
         for brand in (0..360).step_by(13).map(|d| d as f64) {
             let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n)
@@ -649,10 +723,11 @@ mod tests {
 
     #[test]
     fn success_slides_to_teal_not_yellow_when_a_green_brand_encroaches() {
-        // The asymmetric field's headline behaviour: a brand on the yellow side of
-        // green pushes Success toward teal (higher hue), never into yellow-green.
+        // A brand on the yellow side of green pushes Success toward teal (higher
+        // hue), never into yellow-green — the smooth resolver displaces along the
+        // side the prototype sits on relative to the brand.
         let n = neutral();
-        let peak = Sentiment::Success.field().peak;
+        let peak = Sentiment::Success.prototype_hue();
         let brand = peak - 6.0;
         let sc = SentimentCurve::new(Sentiment::Success, brand, "#34C759", &n).unwrap();
         assert!(
@@ -684,5 +759,180 @@ mod tests {
     fn rejects_non_finite_brand_hue() {
         let n = neutral();
         assert!(SentimentCurve::new(Sentiment::Danger, f64::NAN, "#FF2E2E", &n).is_err());
+    }
+
+    #[test]
+    fn warm_and_blue_run_to_their_own_gamut_ceiling() {
+        // Vividness fix: Danger, Warning and Info build to `SENTIMENT_SAT_FRACTION`
+        // of their OWN gamut ceiling — not pinned down to the most-pinched hue as
+        // the old min-binding did. So each non-green sentiment's rendered M' tracks
+        // its own ceiling (within the fraction), which is what un-muddies the reds
+        // and the mid oranges. Checked on the mid-tone steps where the gamut has
+        // real chroma to give (the near-white/near-black ends pinch shut for all).
+        let n = neutral();
+        let brand = oklab_hue_of("#F93800");
+        for s in [Sentiment::Danger, Sentiment::Warning, Sentiment::Info] {
+            let curve = SentimentCurve::new(s, brand, s.anchor_hex(), &n).unwrap();
+            let vc = n.vc();
+            for i in 3..=7 {
+                let t = i as f64 / 9.0;
+                let l_ok = jp_to_oklab_l(n.at(t).jp, vc);
+                let ceil = max_mp_at(l_ok, curve.resolved_hue, vc);
+                let got = mp(&curve.at(t));
+                assert!(
+                    got >= SENTIMENT_SAT_FRACTION * ceil - 1.0,
+                    "{s:?} step {i}: rendered M' {got:.1} far below own ceiling \
+                     fraction {:.1} (ceiling {ceil:.1})",
+                    SENTIMENT_SAT_FRACTION * ceil
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn danger_is_richer_than_green_in_the_mids() {
+        // The concrete user complaint, pinned: with the fiery brand the mid-tone
+        // red must read clearly more colourful than the (H-K-capped) green, not
+        // muddied down to it. Sampled at the mid steps where red's gamut ceiling
+        // towers over the warm budget green is held to.
+        let n = neutral();
+        let brand = oklab_hue_of("#F93800");
+        let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n).unwrap();
+        let s = SentimentCurve::new(Sentiment::Success, brand, "#34C759", &n).unwrap();
+        for i in 4..=6 {
+            let t = i as f64 / 9.0;
+            assert!(
+                mp(&d.at(t)) > mp(&s.at(t)) + 2.0,
+                "step {i}: danger M' {:.1} should clearly exceed green {:.1}",
+                mp(&d.at(t)),
+                mp(&s.at(t))
+            );
+        }
+    }
+
+    #[test]
+    fn warning_floor_enforced_full_circle() {
+        // Restored guard (#65 dropped it, #66 inherited the gap): Warning must
+        // never slide below its categorical floor into the red region, for ANY
+        // brand on the circle. This is the hard half of the Warning↔Danger fix.
+        let n = neutral();
+        let mut brand = 0.0;
+        while brand < 360.0 {
+            let h = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n)
+                .unwrap()
+                .resolved_hue;
+            assert!(
+                normalize_hue(h) >= 45.0 - 1e-6,
+                "Warning resolved {h:.2}° is below the 45° floor at brand {brand}"
+            );
+            brand += 0.25;
+        }
+    }
+
+    #[test]
+    fn warning_stays_distinguishable_from_danger_full_circle() {
+        // The machine-proven defect this PR fixes: with the membership-field
+        // picker Warning could resolve ~3.9° from Danger (perceptually one colour)
+        // at brand≈56°. The smooth resolver + floor keep a clear gap everywhere.
+        let n = neutral();
+        let mut brand = 0.0;
+        let mut worst = f64::INFINITY;
+        while brand < 360.0 {
+            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n)
+                .unwrap()
+                .resolved_hue;
+            let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n)
+                .unwrap()
+                .resolved_hue;
+            worst = worst.min(angular_distance(w, d));
+            brand += 0.25;
+        }
+        assert!(
+            worst >= 10.0,
+            "Warning↔Danger closest approach {worst:.2}° (must stay >= 10° apart)"
+        );
+    }
+
+    #[test]
+    fn resolved_hue_is_smooth_between_its_two_seams() {
+        // Continuity guard. A single-valued hue that always clears the brand by
+        // `s_min` has exactly TWO topological seams on the circle: the prototype
+        // handoff (large, where the sentiment crosses the brand) and the prototype
+        // *antipode* (small, where the smooth displacement's far-field overshoot
+        // flips side). Both are inherent to the smooth-asymptote model — pre-#65
+        // skip-windowed both. So we skip a window around each seam and require the
+        // resolved hue to be Lipschitz-smooth everywhere else. This catches any
+        // SPURIOUS discontinuity (the membership-field picker's 46° flip lived far
+        // from either seam) while accepting the two unavoidable ones. Seam
+        // placement is PROVISIONAL (owner's perceptual eye).
+        let n = neutral();
+        let step = 0.05_f64;
+        for s in Sentiment::ALL {
+            let mut brand = 0.0;
+            let mut prev: Option<f64> = None;
+            let mut jumps: Vec<f64> = Vec::new();
+            while brand <= 360.0 {
+                let h = SentimentCurve::new(s, brand, s.anchor_hex(), &n)
+                    .unwrap()
+                    .resolved_hue;
+                if let Some(p) = prev {
+                    jumps.push(angular_distance(h, p));
+                }
+                prev = Some(h);
+                brand += step;
+            }
+            // Detect seams empirically (their location is floor-shifted, not fixed
+            // at the prototype): the largest jump is the handoff, the second is the
+            // antipode. Everything else must be Lipschitz-smooth — off-seam the
+            // slope is <= ~2, so a 0.05° brand step moves the hue well under 0.5°;
+            // a roomy 1.0° bound flags any genuine spurious discontinuity.
+            jumps.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            // The handoff seam is the topological flip of the hue across the brand,
+            // so it is bounded by ~2·s_min (a hue at one boundary `brand ± s_min`
+            // jumping to the other). Bounding its MAGNITUDE — not just allowing one
+            // big jump — keeps this guard load-bearing: a future model change that
+            // turned the handoff into a genuine large discontinuity (e.g. a 90°
+            // wrap) would fail here instead of slipping through as "the one seam".
+            let s_min = {
+                let lab = srgb_linear_to_oklab(srgb_from_hex(s.anchor_hex()).unwrap());
+                s_min_deg((lab[1].powi(2) + lab[2].powi(2)).sqrt())
+            };
+            let handoff_bound = 2.0 * s_min + 10.0; // 2·s_min + perceptual margin
+            assert!(
+                jumps[0] <= handoff_bound,
+                "{s:?}: handoff seam {:.1}° exceeds the ~2·s_min bound {:.1}° \
+                 (a spurious large discontinuity, not the expected topological flip)",
+                jumps[0],
+                handoff_bound
+            );
+            assert!(
+                jumps[1] <= 5.0,
+                "{s:?}: second discontinuity {:.2}° too large (antipode should be small)",
+                jumps[1]
+            );
+            assert!(
+                jumps[2] <= 1.0,
+                "{s:?}: a THIRD discontinuity of {:.2}° exists — only the handoff and \
+                 antipode seams are allowed",
+                jumps[2]
+            );
+        }
+    }
+
+    #[test]
+    fn legalize_hue_errs_when_floor_and_separation_leave_no_legal_arc() {
+        // The error branch must surface an `Err`, never silently breach an
+        // invariant. Construct a pathological floor admitting only the 1° arc
+        // [359°, 360°), then place the brand at 359.5° so that whole arc sits
+        // inside its ±5° separation zone — no hue can satisfy both at once.
+        let r = legalize_hue(0.0, 359.5, Some(359.0), 5.0);
+        assert!(
+            r.is_err(),
+            "expected Err when the floor and separation leave no legal hue, got {r:?}"
+        );
+
+        // Sanity: relax the floor and a legal hue exists again (the same inputs
+        // otherwise), so the Err above is the *constraint collision*, not a bug.
+        assert!(legalize_hue(0.0, 359.5, None, 5.0).is_ok());
     }
 }
