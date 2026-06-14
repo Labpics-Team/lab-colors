@@ -92,6 +92,18 @@ jobs:
         # The release bundle: panic=abort, no panic hook, wasm-opt -Oz. This is
         # the artifact @labpics/colors ships, so the size measured below is real.
         run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors
+      - name: "@labpics/colors: typecheck + runtime tests"
+        # Now that pkg/ exists (built above), the package's public types resolve
+        # against the *real* wasm-bindgen declarations — so the type-level smoke
+        # and the DOM-runtime helpers (applyTheme / watchTheme / effective-bg) are
+        # actually gated, not just the Rust core. node --test covers the pure
+        # runtime logic without a browser (the headless parity test below covers
+        # the wasm boundary).
+        working-directory: packages/colors
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
       - name: wasm-pack test (headless chrome)
         # ubuntu-latest ships Chrome; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.

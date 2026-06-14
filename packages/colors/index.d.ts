@@ -21,3 +21,13 @@ export type {
 } from "./pkg/labcolors.js";
 
 export { applyTheme } from "./apply-theme.js";
+export { watchTheme } from "./watch-theme.js";
+export type { WatchThemeOptions, WatchController } from "./watch-theme.js";
+export {
+  effectiveBackground,
+  parseCssColor,
+  compositeOver,
+  compositeStackToHex,
+  toHex,
+} from "./effective-bg.js";
+export type { Rgba, EffectiveBackgroundOptions, StyleLike } from "./effective-bg.js";
