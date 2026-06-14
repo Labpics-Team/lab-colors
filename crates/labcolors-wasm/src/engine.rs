@@ -74,7 +74,7 @@ impl Engine {
                 .into_iter()
                 .map(|(role, resolved)| RoleEntry {
                     role_key: role.key(),
-                    outcome: map_resolved(resolved),
+                    outcome: map_resolved(resolved, self.table.legal_floor(role)),
                 })
                 .collect();
             Rc::new(ResolvedTheme {
@@ -116,11 +116,12 @@ impl Engine {
     }
 }
 
-/// Map one core [`Resolved`] into the boundary [`RoleOutcome`].
-fn map_resolved(resolved: Resolved) -> RoleOutcome {
+/// Map one core [`Resolved`] into the boundary [`RoleOutcome`]. `legal_floor` is
+/// the role's WCAG clamp (from the role table), carried onto a solved colour.
+fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
     match resolved {
         Resolved::Color { solved, compressed } => {
-            RoleOutcome::Color(map_solved(solved, compressed))
+            RoleOutcome::Color(map_solved(solved, compressed, legal_floor))
         }
         Resolved::None => RoleOutcome::None,
         Resolved::Unreachable(reason) => RoleOutcome::Unreachable {
@@ -130,13 +131,14 @@ fn map_resolved(resolved: Resolved) -> RoleOutcome {
     }
 }
 
-fn map_solved(solved: Solved, compressed: bool) -> SolvedColor {
+fn map_solved(solved: Solved, compressed: bool, legal_floor: Option<f64>) -> SolvedColor {
     SolvedColor {
         hex: solved.hex().to_owned(),
         lc: solved.lc(),
         wcag_ratio: solved.wcag_ratio(),
         compressed,
         floor_override: solved.floor_override(),
+        legal_floor,
     }
 }
 
@@ -282,6 +284,36 @@ mod tests {
                 assert!(c.lc.abs() > 50.0, "primary text should be strong contrast");
             }
             other => panic!("expected a solved colour, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legal_floor_rides_along_on_solved_colours() {
+        // The DTO carries each role's legal WCAG clamp so the runtime can hold
+        // the floor while easing. Anchored roles report their conformance ratio;
+        // decorative / zero roles report None.
+        let engine = Engine::new();
+        let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let floor_of = |key: &str| {
+            result
+                .roles
+                .iter()
+                .find(|r| r.role_key == key)
+                .map(|r| &r.outcome)
+        };
+        // AA text role → 4.5.
+        match floor_of("label-primary") {
+            Some(RoleOutcome::Color(c)) => assert_eq!(c.legal_floor, Some(4.5)),
+            other => panic!("label-primary expected solved, got {other:?}"),
+        }
+        // AA UI role → 3.0.
+        match floor_of("icon") {
+            Some(RoleOutcome::Color(c)) => assert_eq!(c.legal_floor, Some(3.0)),
+            other => panic!("icon expected solved, got {other:?}"),
+        }
+        // Decorative / JND roles carry no legal floor even when solved.
+        if let Some(RoleOutcome::Color(c)) = floor_of("label-quaternary") {
+            assert_eq!(c.legal_floor, None);
         }
     }
 

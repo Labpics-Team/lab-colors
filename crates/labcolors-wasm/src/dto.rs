@@ -63,4 +63,9 @@ pub struct SolvedColor {
     pub compressed: bool,
     /// `true` when the WCAG legal floor overrode the perceptual target.
     pub floor_override: bool,
+    /// The minimum WCAG ratio this role is legally clamped to (`AaText` → 4.5,
+    /// `AaUi` → 3.0), or `None` for decorative / JND / zero roles. A property of
+    /// the role's contract, not of this solve: a runtime easing between themes
+    /// uses it to hold the floor every frame of the transition.
+    pub legal_floor: Option<f64>,
 }
