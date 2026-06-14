@@ -1415,6 +1415,42 @@ pub fn measure_contrast(
     (lc, wcag)
 }
 
+/// Batch recheck: the `(lc, wcag_ratio)` each foreground hex achieves against one
+/// **shared** background hex, under `vc`. The per-frame primitive the reactive
+/// runtime calls.
+///
+/// The background's H-K luminance and display value are computed **once** for the
+/// whole batch, so the cost is one CAM16 forward for the background plus one per
+/// foreground — not two per foreground as [`measure_contrast`] (single pair)
+/// would cost. That sharing is what makes "recheck every role each frame" cheap
+/// enough to replace "re-solve every role each frame": the controller keeps the
+/// current colours while they still pass and only re-solves the rare role that
+/// stably fails.
+///
+/// Each result equals what the solver's `finish` measured for that fg/bg pair, so
+/// a freshly-resolved set re-checks to its own reported contrasts. Returns `Err`
+/// if any hex is invalid (`#RGB`/`#RRGGBB`).
+pub fn recheck_against(
+    bg_hex: &str,
+    fg_hexes: &[&str],
+    vc: &ViewingConditions,
+) -> Result<Vec<(f64, f64)>, String> {
+    let bg_linear = crate::spaces::srgb::srgb_from_hex(bg_hex)?;
+    let y_bg = crate::solve::bg_luma(bg_linear, vc);
+    let bg_disp = crate::solve::quantised_display(bg_linear);
+    fg_hexes
+        .iter()
+        .map(|fg_hex| {
+            let fg_linear = crate::spaces::srgb::srgb_from_hex(fg_hex)?;
+            let y_fg = crate::solve::bg_luma(fg_linear, vc);
+            let lc = crate::lpc::contrast_core(y_fg, y_bg);
+            let wcag =
+                crate::wcag::contrast_ratio(crate::solve::quantised_display(fg_linear), bg_disp);
+            Ok((lc, wcag))
+        })
+        .collect()
+}
+
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
 ///
 /// The anchor principle already orders the *targets* strictly, but the legal
@@ -1682,6 +1718,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn recheck_against_batch_matches_per_pair_and_the_solver() {
+        // The batch recheck (shared bg) must give exactly the same (lc, wcag) as
+        // the single-pair `measure_contrast`, and both equal the solver's own
+        // reported values for a freshly-resolved set.
+        use crate::spaces::srgb::srgb_from_hex;
+        let table = RoleTable::default();
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for bg_hex in ["#FFFFFF", "#3478F6", "#1C1C1E", "#7F7F7F", "#A23E8C"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let bg_lin = srgb_from_hex(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let fg_hexes: Vec<&str> = set
+                    .iter()
+                    .filter_map(|(_, r)| r.solved().map(|s| s.hex()))
+                    .collect();
+                let batch = recheck_against(bg_hex, &fg_hexes, &vc).unwrap();
+                let solved: Vec<_> = set.iter().filter_map(|(_, r)| r.solved()).collect();
+                assert_eq!(batch.len(), solved.len());
+                for (i, s) in solved.iter().enumerate() {
+                    let fg_lin = srgb_from_hex(s.hex()).unwrap();
+                    let single = measure_contrast(bg_lin, fg_lin, &vc);
+                    assert_eq!(batch[i], single, "{bg_hex}: batch != single-pair");
+                    assert!((batch[i].0 - s.lc()).abs() < 1e-9, "{bg_hex}: lc != solver");
+                    assert!(
+                        (batch[i].1 - s.wcag_ratio()).abs() < 1e-9,
+                        "{bg_hex}: wcag != solver"
+                    );
+                }
+            }
+        }
+        // Invalid hex surfaces an Err, not a panic.
+        assert!(recheck_against("#FFFFFF", &["nothex"], &ViewingConditions::srgb()).is_err());
     }
 
     /// The 12 mid-to-light nodes of the owner's reference neutral ramp (pure
