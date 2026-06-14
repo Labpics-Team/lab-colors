@@ -22,8 +22,8 @@ mod golden_tests;
 pub use curve::ColorCurve;
 pub use lcs::LcsColor;
 pub use semantic::{
-    Resolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor, measure_contrast, resolve,
-    resolve_set,
+    Resolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor, measure_contrast, recheck_against,
+    resolve, resolve_set,
 };
 pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,

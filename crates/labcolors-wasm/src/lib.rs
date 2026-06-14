@@ -126,6 +126,29 @@ impl LabColors {
             .map_err(to_js_error)?;
         Ok(project_resolved(&resolved).unchecked_into())
     }
+
+    /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
+    /// the cheap per-frame primitive a reactive runtime uses to decide whether
+    /// already-resolved colours still pass against a changed background (re-solve
+    /// only when they stably do not). No solve: one CAM16 forward for the
+    /// background plus one per foreground.
+    ///
+    /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
+    /// order of `fgHexes`: index `2*i` is foreground `i`'s signed `Lc`, `2*i+1`
+    /// its WCAG ratio. Rejects (structured `{code, message}`) on an invalid hex or
+    /// an unknown/uncalibrated theme.
+    #[wasm_bindgen(js_name = recheckContrast)]
+    pub fn recheck_contrast(
+        &self,
+        bg_hex: &str,
+        fg_hexes: Vec<String>,
+        theme: &str,
+    ) -> Result<Vec<f64>, JsError> {
+        let theme = Theme::parse(theme).map_err(to_js_error)?;
+        self.inner
+            .recheck(bg_hex, &fg_hexes, theme)
+            .map_err(to_js_error)
+    }
 }
 
 impl Default for LabColors {

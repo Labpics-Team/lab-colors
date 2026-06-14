@@ -85,6 +85,35 @@ impl Engine {
         });
         Ok(result)
     }
+
+    /// Recheck the contrasts a set of foreground colours achieve against a
+    /// (possibly changed) `bg_hex` under `theme` — the cheap per-frame primitive
+    /// of the reactive runtime. One CAM16 forward for the background plus one per
+    /// foreground, **no solve**: the controller keeps current colours while they
+    /// still pass and re-solves only the rare role that stably fails.
+    ///
+    /// Returns a flat, interleaved buffer `[lc0, wcag0, lc1, wcag1, …]` (mapped to
+    /// a JS `Float64Array`) — no per-call object allocation on the hot path. The
+    /// values equal what the solver measured, so a freshly-resolved set rechecks
+    /// to its own reported contrasts.
+    pub fn recheck(
+        &self,
+        bg_hex: &str,
+        fg_hexes: &[String],
+        theme: Theme,
+    ) -> Result<Vec<f64>, BindingError> {
+        let vc = theme.viewing_conditions()?;
+        let bg = normalise_hex(bg_hex)?;
+        let refs: Vec<&str> = fg_hexes.iter().map(String::as_str).collect();
+        let pairs = labcolors_core::recheck_against(&bg, &refs, &vc)
+            .map_err(|reason| BindingError::InvalidBackground { reason })?;
+        let mut out = Vec::with_capacity(pairs.len() * 2);
+        for (lc, wcag) in pairs {
+            out.push(lc);
+            out.push(wcag);
+        }
+        Ok(out)
+    }
 }
 
 /// Map one core [`Resolved`] into the boundary [`RoleOutcome`].
@@ -188,6 +217,46 @@ mod tests {
         let keys: Vec<_> = result.roles.iter().map(|r| r.role_key).collect();
         assert!(keys.contains(&"label-primary"));
         assert!(keys.contains(&"none"));
+    }
+
+    #[test]
+    fn recheck_matches_resolve_theme_reported_contrasts() {
+        // The WASM recheck end-to-end: resolve a set, then recheck each solved
+        // colour against its OWN background — the returned interleaved (lc, wcag)
+        // pairs must equal exactly what `resolve_theme` reported. This is the
+        // identity the reactive controller stands on: "still passes?" means the
+        // same thing as the original solve.
+        let engine = Engine::new();
+        for (bg, theme) in [
+            ("#FFFFFF", Theme::Light),
+            ("#3478F6", Theme::Light),
+            ("#1C1C1E", Theme::Dark),
+        ] {
+            let result = engine.resolve_theme(bg, theme).unwrap();
+            let mut fgs = Vec::new();
+            let mut want = Vec::new();
+            for r in &result.roles {
+                if let RoleOutcome::Color(c) = &r.outcome {
+                    fgs.push(c.hex.clone());
+                    want.push((c.lc, c.wcag_ratio));
+                }
+            }
+            let flat = engine.recheck(bg, &fgs, theme).unwrap();
+            assert_eq!(flat.len(), want.len() * 2);
+            for (i, (lc, wcag)) in want.iter().enumerate() {
+                assert!((flat[2 * i] - lc).abs() < 1e-9, "{bg}: role {i} lc drift");
+                assert!(
+                    (flat[2 * i + 1] - wcag).abs() < 1e-9,
+                    "{bg}: role {i} wcag drift"
+                );
+            }
+        }
+        // Invalid foreground hex surfaces a structured error, not a panic.
+        assert!(
+            Engine::new()
+                .recheck("#FFFFFF", &["nothex".to_string()], Theme::Light)
+                .is_err()
+        );
     }
 
     #[test]
