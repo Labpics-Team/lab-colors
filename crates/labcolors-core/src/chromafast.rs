@@ -202,9 +202,9 @@ mod tests {
 
     #[test]
     fn declines_outside_its_exact_domain() {
-        // A custom role table is not memoised; an unsupported VC falls back. (Both
-        // public VCs are supported, so the unsupported-VC arm has no constructor
-        // to exercise it — same as greyfast.)
+        // A custom role table is not memoised; an unsupported VC falls back —
+        // including a VC that aliases a preset's surround pair but is not the
+        // preset (the aliasing case below), same as greyfast.
         let srgb = ViewingConditions::srgb();
         let bg = BgInput::solid("#2E6FB7").unwrap();
 

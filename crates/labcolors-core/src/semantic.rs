@@ -754,7 +754,7 @@ fn curve_plan_cached(
         canonical_hue_deg.to_bits(),
         target_mp.to_bits(),
         hue_stiffness.to_bits(),
-        vc_fingerprint(vc),
+        vc.fingerprint(),
     ];
     if let Some((hue_deg, ratio)) = CURVE_PLAN_CACHE.with(|c| c.borrow().get(&key).copied()) {
         return (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio));
@@ -769,17 +769,6 @@ fn curve_plan_cached(
         m.insert(key, (hue_deg, ratio));
     });
     (Hue::deg(hue_deg), ChromaPolicy::Relative(ratio))
-}
-
-/// A cheap, collision-resistant fingerprint of the viewing conditions for the
-/// curve-plan memo key — the same fields the achromatic CAM16 path reads.
-fn vc_fingerprint(vc: &ViewingConditions) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for f in [vc.aw, vc.c, vc.z, vc.nbb, vc.fl, vc.n] {
-        h ^= f.to_bits();
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
 }
 
 /// The hue (degrees) the undertone takes at Oklab lightness `l_ok` — mechanism 2.

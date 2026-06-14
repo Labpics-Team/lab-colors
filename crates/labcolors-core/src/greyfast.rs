@@ -167,8 +167,8 @@ mod tests {
     #[test]
     fn fast_path_declines_outside_its_exact_domain() {
         // The fast path must say `None` (fall back) whenever an exact lookup is not
-        // provable: a chromatic background or a custom table. (Both public VCs are
-        // supported, so the unsupported-VC arm has no constructor to exercise it.)
+        // provable: a chromatic background, a custom table, or a VC that is not a
+        // precompiled preset (the aliasing case below).
         let table = RoleTable::default();
         let srgb = ViewingConditions::srgb();
 
