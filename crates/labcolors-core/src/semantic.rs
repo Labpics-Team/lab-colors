@@ -1742,6 +1742,54 @@ mod tests {
     }
 
     #[test]
+    fn legal_floor_is_held_across_a_full_background_sweep() {
+        // Defence-in-depth for the engine's core legal guarantee: every anchored
+        // role's resolved colour clears its WCAG legal floor against EVERY
+        // background across the full 256-step grey axis plus a chromatic palette,
+        // under both calibrated viewing conditions. WCAG AA conformance is the
+        // engine's reason for existence, so this is the one invariant worth a
+        // brute sweep — and the per-role `legal_floor` accessor is only honest if
+        // the solver actually meets it everywhere. Doubles as a no-panic sweep:
+        // `resolve_set` must return cleanly across this whole input space.
+        //
+        // The floor is held essentially EXACTLY: the solver lands the quantised
+        // hex just above the line (measured worst margin ≈ +1.5e-4 at #949494),
+        // never below, so a tight `1e-6` epsilon — not a loose cushion — is the
+        // honest assertion. A regression that dropped a role below its legal floor
+        // (an accessibility-law violation) would fail here.
+        const FLOOR_EPS: f64 = 1e-6;
+        let table = RoleTable::default();
+        let mut backgrounds: Vec<String> = (0u32..=255)
+            .map(|c| format!("#{c:02X}{c:02X}{c:02X}"))
+            .collect();
+        for hex in [
+            "#3478F6", "#FF3B30", "#34C759", "#FF9500", "#AF52DE", "#5AC8FA", "#A2845E", "#0A3D62",
+            "#7B2D8E", "#C0FFEE", "#FFD60A", "#BF5AF2", "#30D158", "#FF453A", "#102A44", "#1C1C1E",
+        ] {
+            backgrounds.push(hex.to_string());
+        }
+        for (vi, vc) in [ViewingConditions::srgb(), ViewingConditions::dim_surround()]
+            .iter()
+            .enumerate()
+        {
+            for bg_hex in &backgrounds {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                for (role, resolved) in resolve_set(&bg, &table, vc) {
+                    let (Some(floor), Some(solved)) = (table.legal_floor(role), resolved.solved())
+                    else {
+                        continue;
+                    };
+                    assert!(
+                        solved.wcag_ratio() >= floor - FLOOR_EPS,
+                        "{role:?} on {bg_hex} (vc{vi}): wcag {:.5} below legal floor {floor}",
+                        solved.wcag_ratio()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn legal_floor_reports_each_roles_wcag_clamp_and_holds_under_resolve() {
         // `legal_floor` is the floor the solver can never drop below for a role,
         // independent of background. Anchored roles carry their conformance
