@@ -30,7 +30,7 @@ const engine = new LabColors();     // zero-config: default role table
 
 const result = engine.resolveTheme("#FFFFFF", "light");
 // result.vars  → { "--lab-label-primary": "#1a1a1a", "--lab-icon": "#5b5b5b", ... }
-// result.roles → per-role detail (hex, lc, wcagRatio, compressed, floorOverride)
+// result.roles → per-role detail (hex, lc, wcagRatio, compressed, floorOverride, legalFloor)
 
 applyTheme(document.documentElement, result);   // sets every --lab-* property
 ```
@@ -91,7 +91,8 @@ interface ResolvedTheme {
 
 type RoleResult =
   | { kind: "color"; cssVar: string; hex: string; lc: number;
-      wcagRatio: number; compressed: boolean; floorOverride: boolean }
+      wcagRatio: number; compressed: boolean; floorOverride: boolean;
+      legalFloor: number | null }   // WCAG clamp (4.5 / 3.0) or null (decorative)
   | { kind: "none"; cssVar: string }                       // the explicit zero token
   | { kind: "unreachable"; cssVar: string; code: string; message: string };
 ```

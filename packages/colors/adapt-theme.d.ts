@@ -20,6 +20,13 @@ export interface AdaptThemeOptions {
   dwellMs?: number;
   /** Crossfade duration in ms. Default `280` (capped to a short fade under reduced motion). */
   easeMs?: number;
+  /**
+   * Hold each role's WCAG legal floor every frame of the ease: an interpolated
+   * colour is only shown while it still clears the role's `legalFloor` against
+   * the live background (for text on animated content / `prefers-contrast`).
+   * Default `false` (the free ease — brief surplus dips, destination always legal).
+   */
+  strict?: boolean;
   /** Override reduced-motion detection (default reads `matchMedia`). */
   reducedMotion?: boolean;
   /** Clock injection (default `performance.now`/`Date.now`). */

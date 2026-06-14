@@ -61,6 +61,31 @@ const oneRole = (hex, lc) => ({
   roles: { "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc } },
 });
 
+// A role set that carries an explicit `legalFloor` (4.5 / 3.0 / null), the field
+// the strict floor-clamp reads.
+const floorRole = (hex, lc, legalFloor) => ({
+  vars: { "--lab-label-primary": hex },
+  roles: {
+    "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc, legalFloor },
+  },
+});
+
+// WCAG 2.1 contrast ratio between two #RRGGBB — the exact normative transcription
+// (0.03928 split, 2.4 exponent), the yardstick the strict clamp must respect.
+function wcagContrast(fg, bg) {
+  const lum = (hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+      const s = c / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  };
+  const a = lum(fg);
+  const b = lum(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
 function harness(opts = {}) {
   const colors = fakeColors(oneRole("#000000", 100));
   const el = fakeElement();
@@ -211,6 +236,75 @@ test("a background that changes once to a failing value still re-solves (stable-
     h.ctrl.tick();
   }
   assert.equal(h.colors.resolveCount(), 2, "stable failing bg must re-solve via the breach timer");
+});
+
+// Drive a dark-background breach that re-solves a black role to white, then ease
+// across the (polarity-crossing) blend, sampling the applied colour each frame.
+// Returns the contrast each frame achieved against the dark background.
+function easeContrasts({ strict }) {
+  const h = harness({ strict, easeMs: 100 });
+  h.colors.setRecheckLc([10]); // current #000000 fails on the dark bg
+  h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5)); // re-solve → legal white
+  h.setBg("#101010");
+  h.setNow(2000);
+  h.ctrl.tick(); // arms the breach timer (no re-solve yet)
+  const t0 = 2000 + 130; // past sustainMs (120) and dwell vs lastSolveAt
+  h.setNow(t0);
+  h.setBg("#101011");
+  h.ctrl.tick(); // sustained breach → re-solve + begin ease + first eased frame
+  h.colors.setRecheckLc([100]); // the white destination passes henceforth
+  const bg = "#101011";
+  const out = [wcagContrast(h.el.props.get("--lab-label-primary"), bg)];
+  for (const dt of [10, 25, 50, 75, 100]) {
+    h.setNow(t0 + dt);
+    h.ctrl.tick();
+    out.push(wcagContrast(h.el.props.get("--lab-label-primary"), bg));
+  }
+  return { h, out };
+}
+
+test("strict floor-clamp holds the WCAG floor every frame of the ease", () => {
+  const { h, out } = easeContrasts({ strict: true });
+  assert.equal(h.colors.resolveCount(), 2);
+  for (const c of out) {
+    assert.ok(c >= 4.5 - 0.05, `every eased frame must clear 4.5:1, saw ${c.toFixed(2)}`);
+  }
+  // And it still arrives exactly at the freshly-solved destination.
+  assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
+});
+
+test("strict floor-clamp is monotone (contrast never steps backwards)", () => {
+  const { out } = easeContrasts({ strict: true });
+  for (let i = 1; i < out.length; i++) {
+    assert.ok(
+      out[i] >= out[i - 1] - 0.05,
+      `contrast must not regress mid-ease: ${out[i - 1].toFixed(2)} → ${out[i].toFixed(2)}`,
+    );
+  }
+});
+
+test("the default (free) ease dips below the floor mid-transition — what strict fixes", () => {
+  const { out } = easeContrasts({ strict: false });
+  assert.ok(
+    out.some((c) => c < 4.5),
+    "without strict, an early polarity-crossing frame is expected below 4.5:1",
+  );
+});
+
+test("strict mode leaves floorless (decorative) roles to ease freely", () => {
+  // legalFloor null → the clamp is a no-op; the role crosses low contrast freely.
+  const h = harness({ strict: true, easeMs: 100 });
+  h.colors.setRecheckLc([10]);
+  h.colors.setResolve(floorRole("#FFFFFF", 100, null)); // no legal floor
+  h.setBg("#101010");
+  h.setNow(2000);
+  h.ctrl.tick(); // arm breach
+  h.setNow(2130);
+  h.setBg("#101011");
+  h.ctrl.tick(); // re-solve + begin ease (first eased frame at t=0 → #000000 end)
+  h.colors.setRecheckLc([100]);
+  const c0 = wcagContrast(h.el.props.get("--lab-label-primary"), "#101011");
+  assert.ok(c0 < 4.5, `a floorless role must ease freely (low contrast allowed), saw ${c0.toFixed(2)}`);
 });
 
 test("rejects a colours engine missing recheckContrast", () => {
