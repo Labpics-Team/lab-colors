@@ -39,23 +39,21 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
 /// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
 /// — frozen.
 ///
-/// CONSCIOUS SNAPSHOT CHANGE — two intentional recalibrations:
-///
-/// 1. **Per-hue colourfulness** (sentiment vividness): each sentiment builds to
-///    `SENTIMENT_SAT_FRACTION` of *its own* gamut ceiling (`target_mp`) instead of
-///    the old equal-`M'` min-binding, so Info reads as a richer blue. Only the
-///    H-K-bright green band keeps a cap (to the warm budget); blue runs free.
-/// 2. **Smooth-asymptote hue resolution restored** (Warning↔Danger fix): the #65
-///    membership-field picker is replaced by the C¹ smooth-displacement model on
-///    the anchor-derived prototype (Info peak still `#007AFF` → 257.42°). The
-///    smooth model nudges even a *far* brand slightly — brand 200° (57.4° away)
-///    now resolves to **260.43°, displaced ~3.0°** (`was_displaced == true`),
-///    where the membership-field model returned the peak exactly. This is the C¹
-///    continuity cost the restored guard tests intend, and 3° at this chroma is
-///    imperceptible. Intentional contract change.
+/// CONSCIOUS SNAPSHOT CHANGE — the **unified perceived-lightness law**. The old
+/// per-hue `target_mp` colourfulness model (each hue to a fraction of its own
+/// gamut ceiling, with a hand-tuned green cap) is replaced by ONE rule for every
+/// hue, with no per-hue caps: the four sentiments share a single **perceived
+/// (H-K) lightness `j_hk` ladder** (the neutral grey's), and each hue is placed at
+/// that perceived lightness at `CHROMA_FRACTION` (0.88) of the in-gamut maximum
+/// chroma. Equal `j_hk` ⇒ equal perceived brightness and contrast at each step
+/// (nothing out-shouts); max chroma ⇒ nothing dull. A saturated hue therefore
+/// sits at a *lower base lightness* so its H-K brightness boost lands it on the
+/// shared ladder — which is why this Info blue is deeper and more saturated than
+/// the previous snapshot (e.g. mid step `#3278F0` vs the old `#6498F1`). The hue
+/// resolution is unchanged (smooth-asymptote model; brand 200° → ~260.4°).
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F5F8FF", "#DDE9FD", "#BCD3FA", "#93B8F6", "#6498F1", "#2B71E9", "#246ADF",
-    "#1F5DC6", "#184DA8", "#113B83", "#08265B", "#020E2A",
+    "#FFFFFF", "#EDF3FE", "#CCDEFB", "#A2C2F8", "#6FA1F4", "#3278F0", "#1756C0", "#1550B2",
+    "#104499", "#0B357B", "#052357", "#021030", "#000108",
 ];
 
 #[test]
