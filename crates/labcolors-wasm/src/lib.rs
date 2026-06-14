@@ -50,6 +50,13 @@ export interface SolvedColor {
   readonly compressed: boolean;
   /** The WCAG floor overrode the perceptual target. */
   readonly floorOverride: boolean;
+  /**
+   * The minimum WCAG ratio this role is legally clamped to (4.5 for AA text,
+   * 3.0 for AA UI), or `null` for decorative / JND / zero roles. A property of
+   * the role's contract, not of this solve: a runtime easing between themes
+   * uses it to hold the floor every frame of the transition.
+   */
+  readonly legalFloor: number | null;
 }
 
 /** The explicit zero token: no colour here, by design (not a failure). */
@@ -183,6 +190,11 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                     &role_obj,
                     "floorOverride",
                     &JsValue::from_bool(c.floor_override),
+                );
+                set(
+                    &role_obj,
+                    "legalFloor",
+                    &c.legal_floor.map_or(JsValue::NULL, JsValue::from_f64),
                 );
                 set(&vars, &css_var, &JsValue::from_str(&c.hex));
             }

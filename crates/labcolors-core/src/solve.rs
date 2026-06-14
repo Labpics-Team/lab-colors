@@ -118,7 +118,7 @@ pub enum Floor {
 
 impl Floor {
     /// The minimum WCAG 2.1 contrast ratio this floor enforces, if any.
-    fn min_ratio(self) -> Option<f64> {
+    pub(crate) fn min_ratio(self) -> Option<f64> {
         match self {
             Floor::AaText => Some(wcag::AA_TEXT_RATIO),
             Floor::AaUi => Some(wcag::AA_UI_RATIO),

@@ -24,9 +24,11 @@ async function consume(): Promise<void> {
     const hex: string = primary.hex;
     const lc: number = primary.lc;
     const wcag: number = primary.wcagRatio;
+    const legalFloor: number | null = primary.legalFloor;
     void hex;
     void lc;
     void wcag;
+    void legalFloor;
   } else if (primary.kind === "unreachable") {
     const code: string = primary.code;
     void code;

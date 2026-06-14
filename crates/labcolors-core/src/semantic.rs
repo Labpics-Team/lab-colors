@@ -915,6 +915,27 @@ impl RoleTable {
         self.chroma
     }
 
+    /// The minimum WCAG 2.1 contrast ratio this role is legally clamped to, if
+    /// any.
+    ///
+    /// This is the *legal floor* the solver can never drop below for `role` —
+    /// independent of the perceptual target and of the background. Anchored
+    /// (text / UI) roles carry their [`TextAnchor`]'s WCAG conformance
+    /// ([`Floor::AaText`] → 4.5, [`Floor::AaUi`] → 3.0); every decorative /
+    /// JND / zero role has no legal floor and returns `None`.
+    ///
+    /// A runtime that eases between resolved themes uses this to *hold the
+    /// floor every frame* during the transition: an intermediate (interpolated)
+    /// colour is only allowed to be served while it still clears this ratio
+    /// against the live background. The value is a property of the contract,
+    /// not of any one solve, so it is exposed alongside each resolved role.
+    pub fn legal_floor(&self, role: Role) -> Option<f64> {
+        match self.spec(role) {
+            RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
+            _ => None,
+        }
+    }
+
     /// Return a copy with `role`'s recipe replaced — every other role keeps its
     /// default. This is the role-table override seam.
     pub fn with(mut self, role: Role, spec: RoleSpec) -> Self {
@@ -1713,6 +1734,50 @@ mod tests {
                     assert!(
                         (wcag - solved.wcag_ratio()).abs() < 1e-9,
                         "{role:?} on {bg_hex}: recheck wcag {wcag} != solver {}",
+                        solved.wcag_ratio()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legal_floor_reports_each_roles_wcag_clamp_and_holds_under_resolve() {
+        // `legal_floor` is the floor the solver can never drop below for a role,
+        // independent of background. Anchored roles carry their conformance
+        // (AaText → 4.5, AaUi → 3.0); decorative / JND / zero roles have none.
+        let table = RoleTable::default();
+        assert_eq!(
+            table.legal_floor(Role::LabelPrimary),
+            Some(crate::wcag::AA_TEXT_RATIO)
+        );
+        assert_eq!(
+            table.legal_floor(Role::LabelTertiary),
+            Some(crate::wcag::AA_UI_RATIO)
+        );
+        assert_eq!(
+            table.legal_floor(Role::Icon),
+            Some(crate::wcag::AA_UI_RATIO)
+        );
+        // No legal floor for the decorative / JND / zero contracts.
+        assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
+        assert_eq!(table.legal_floor(Role::Separator), None);
+        assert_eq!(table.legal_floor(Role::BorderGhost), None);
+
+        // The contract holds: every resolved anchored role clears its own legal
+        // floor against the live background (modulo the solver's own quantised
+        // tie-tolerance), so the value a runtime clamps to is real, not aspirational.
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for bg_hex in ["#FFFFFF", "#1C1C1E", "#3478F6", "#7F7F7F"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                for (role, resolved) in resolve_set(&bg, &table, &vc) {
+                    let (Some(floor), Some(solved)) = (table.legal_floor(role), resolved.solved())
+                    else {
+                        continue;
+                    };
+                    assert!(
+                        solved.wcag_ratio() >= floor - 0.05,
+                        "{role:?} on {bg_hex}: wcag {} below legal floor {floor}",
                         solved.wcag_ratio()
                     );
                 }
