@@ -45,6 +45,15 @@ test("toHex rounds and clamps", () => {
   assert.equal(toHex([127.6, 17, 300]), "#80115B".slice(0, 5) + "FF"); // 300→FF, 127.6→80, 17→11
 });
 
+test("toHex coerces non-finite channels to 0 (valid CSS, never #NAN…)", () => {
+  // A malformed Rgba (NaN/Infinity channels) must still yield a valid #RRGGBB,
+  // not an invalid CSS string. Reachable via the public toHex/compositeStackToHex.
+  assert.equal(toHex([NaN, 0, 0]), "#000000");
+  assert.equal(toHex([Infinity, 128, -Infinity]), "#008000"); // any non-finite → 0 (not clamped)
+  assert.equal(toHex([undefined, 255, 255]), "#00FFFF");
+  assert.match(toHex([NaN, NaN, NaN]), /^#[0-9A-F]{6}$/);
+});
+
 test("oklabLerp returns endpoints exactly", () => {
   assert.equal(oklabLerp("#000000", "#F0F0F0", 0), "#000000");
   assert.equal(oklabLerp("#000000", "#F0F0F0", 1), "#F0F0F0");

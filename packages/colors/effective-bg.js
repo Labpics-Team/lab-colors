@@ -96,7 +96,13 @@ export function compositeOver(top, bottom) {
  * @returns {string}
  */
 export function toHex(rgb) {
-  const h = (v) => Math.round(clamp255(v)).toString(16).padStart(2, "0");
+  // Coerce non-finite channels (NaN/±Infinity, e.g. from a malformed `Rgba`
+  // passed by a caller) to 0, so a bad input yields a valid `#RRGGBB` rather
+  // than an invalid CSS string like `"#NAN0000"`.
+  const h = (v) => {
+    const n = Math.round(clamp255(Number.isFinite(v) ? v : 0));
+    return n.toString(16).padStart(2, "0");
+  };
   return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`.toUpperCase();
 }
 
