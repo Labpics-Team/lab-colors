@@ -6,8 +6,14 @@ export interface AdaptThemeOptions {
   /** An initialised engine — needs `resolveTheme` AND `recheckContrast`. */
   colors: Pick<LabColors, "resolveTheme" | "recheckContrast">;
   theme: ThemeName;
-  /** Explicit effective background, overriding the ancestor-composite. */
-  background?: string | (() => string);
+  /**
+   * Explicit effective background, overriding the ancestor-composite. A single
+   * hex is one solid surface; an array (or a function returning one) is a set of
+   * worst-case samples of a varying backdrop (gradient / image / video the
+   * caller sampled), and the colours are held legible against the hardest
+   * sample. With one sample this is identical to plain single-background mode.
+   */
+  background?: string | string[] | (() => string | string[]);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
   target?: HTMLElement;
   /** Base colour when the ancestor chain is fully translucent. Default `"#FFFFFF"`. */
