@@ -1,4 +1,4 @@
-// Adaptive theme controller — the lazy/hysteresis runtime. Zero dependencies.
+// Adaptive theme controller — the lazy debounced-re-solve runtime. Zero dependencies.
 //
 // `watchTheme` re-resolves the whole set whenever the background changes. For a
 // CONTINUOUSLY changing background (animation/scroll/blur) that is both expensive
@@ -14,11 +14,16 @@
 // flicker, and a smooth, calm adaptation.
 //
 // Control law (principled defaults; all tunable):
-//   * Schmitt trigger — re-solve only when a role's achieved |Lc| drops by more
-//     than `dropFraction` of its surplus, not merely touches the line, so a
-//     background hovering on a boundary cannot make it chatter.
+//   * Margin threshold — re-solve only when a role's achieved |Lc| falls below
+//     `(1 - dropFraction)` of its target |Lc| (a `dropFraction` margin under the
+//     target), not merely when it touches the line. This is a SINGLE-threshold
+//     detector: the same level gates entering and leaving the breach state — NOT a
+//     Schmitt trigger, which would need two distinct levels. The margin keeps a
+//     background sitting right at the target from counting as a breach, but it
+//     does NOT by itself stop chatter for values straddling the threshold.
 //   * Debounce — the breach must persist `sustainMs` before acting, so a dark
-//     object scrolling past for a couple of frames never triggers.
+//     object scrolling past for a couple of frames never triggers. Together with
+//     min-dwell this is what actually prevents oscillation near the threshold.
 //   * Min dwell — at least `dwellMs` between re-solves, capping the effective
 //     transition rate well under the flash threshold.
 //   * Ease — a non-overshooting ease-out crossfade of `easeMs`; under
@@ -26,7 +31,7 @@
 //     instant state change is more stressful than a soft one, and a colour
 //     crossfade is not "motion").
 //   * Theme switches are a deliberate INTENT, not a drift: applied instantly
-//     (a single quick crossfade), never run through the hysteresis machinery.
+//     (a single quick crossfade), never run through the debounce/dwell machinery.
 //
 // Floor-clamp modes:
 //   * Default (free ease): the crossfade does not floor-clamp each frame.
@@ -45,9 +50,12 @@
 import { applyTheme } from "./apply-theme.js";
 import { effectiveBackground, parseCssColor, oklabLerp } from "./effective-bg.js";
 
-/** Cubic ease-out: fast start, gentle settle, no overshoot. */
+/** Cubic ease-out: fast start, gentle settle, no overshoot. A non-finite `t`
+ * (e.g. a NaN clock making `(now - easeStart) / easeMs` NaN) is treated as a
+ * completed ease (1), so the crossfade can never emit `#NANNANNAN` CSS. */
 function easeOut(t) {
-  const u = 1 - Math.min(1, Math.max(0, t));
+  const clamped = Number.isFinite(t) ? Math.min(1, Math.max(0, t)) : 1;
+  const u = 1 - clamped;
   return 1 - u * u * u;
 }
 
@@ -81,7 +89,7 @@ function lerpHex(from, to, t) {
  * @property {(now?: number) => void} tick  Drive one step (call from rAF, or let
  *   `start()` do it). Cheap: a re-check; a re-solve only on a sustained breach.
  * @property {(theme: string) => void} setTheme  Switch theme INSTANTLY (intent,
- *   not drift) — re-resolve and apply, bypassing the hysteresis.
+ *   not drift) — re-resolve and apply, bypassing the debounce/dwell machinery.
  * @property {() => void} start  Begin an internal requestAnimationFrame loop.
  * @property {() => void} stop   Stop the loop and disconnect.
  * @property {() => Record<string,string>} current  The currently-applied vars.
@@ -172,9 +180,10 @@ export function adaptTheme(element, options) {
   };
 
   // Recheck the current colours against every sample. A role breaches if its
-  // achieved |Lc| drops below its Schmitt threshold against ANY sample. `worstIdx`
-  // is the sample with the least set-wide margin — the one to re-solve against, so
-  // the constraint we solve to is the same constraint we check hardest.
+  // achieved |Lc| drops below its single-threshold margin (`|lc| * (1 -
+  // dropFraction)`) against ANY sample. `worstIdx` is the sample with the least
+  // set-wide margin — the one to re-solve against, so the constraint we solve to
+  // is the same constraint we check hardest.
   const recheckSamples = (fgs, samples) => {
     let breached = false;
     let worstIdx = 0;
@@ -317,6 +326,33 @@ export function adaptTheme(element, options) {
     return vars;
   };
 
+  // The colour each role is PAINTED right now — exactly what `stepEase` writes
+  // this frame: an in-flight segment sampled at `now` (with the SAME strict
+  // floor-hold + latch against the worst sample when `strict`), else the static
+  // hex. Mirrors `stepEase`'s blend math byte-for-byte so the begin-from value
+  // equals what is on screen, including the strict-mode `held` clamp — otherwise
+  // an overlapping re-solve in strict mode would start one frame BELOW the
+  // painted (floored) colour.
+  const paintedNow = (now, samples) => {
+    const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
+    const e = easeOut(t);
+    const bgLums = strict ? samples.map(relativeLuminanceHex) : null;
+    const vars = {};
+    for (const r of roles) {
+      const seg = easing.get(r.cssVar);
+      if (!seg) {
+        vars[r.cssVar] = r.hex;
+        continue;
+      }
+      const blend =
+        strict && r.legalFloor != null
+          ? Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held)
+          : e;
+      vars[r.cssVar] = lerpHex(seg.from, seg.to, blend);
+    }
+    return vars;
+  };
+
   const tick = (nowArg) => {
     const now = nowArg ?? clock();
     const samples = readSamples();
@@ -347,8 +383,12 @@ export function adaptTheme(element, options) {
     if (breachSince === null) breachSince = now;
     if (now - breachSince < sustainMs || now - lastSolveAt < dwellMs) return; // debounce / dwell
 
-    // Sustained breach: re-solve against the worst sample and ease toward fresh.
-    const fromByVar = currentApplied();
+    // Sustained breach: re-solve against the worst sample and ease toward fresh,
+    // starting from the colour each role is PAINTED right now (the in-flight ease
+    // sampled at `now`) — never the in-flight TARGET. Starting from the target
+    // would SNAP the element to the old target for one frame before easing,
+    // reintroducing flicker when a re-solve overlaps a previous ease.
+    const fromByVar = paintedNow(now, samples);
     solveAndAdopt(samples[worstIdx], now);
     beginEase(fromByVar, now);
     stepEase(now, samples);

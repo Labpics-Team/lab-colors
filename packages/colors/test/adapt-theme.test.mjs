@@ -1,4 +1,4 @@
-// Behaviour tests for the adaptive hysteresis controller, driven through injected
+// Behaviour tests for the adaptive debounced-re-solve controller, driven through injected
 // fakes (a fake engine, a fake element, an injected clock and background) so the
 // control law runs under plain `node --test` with no browser, no rAF, no WASM.
 
@@ -130,7 +130,7 @@ test("applies the resolved set immediately on creation", () => {
   assert.equal(h.el.props.get("--lab-label-primary"), "#000000");
 });
 
-test("holds (no re-solve) while colours still pass; Schmitt tolerates small drops", () => {
+test("holds (no re-solve) while colours still pass; the dropFraction margin tolerates small drops", () => {
   const h = harness();
   // A small drop (95 of 100; tolerance keeps to 80) → still passing → hold.
   h.colors.setRecheckLc([95]);
@@ -366,7 +366,7 @@ test("worst-case recheck holds when every sample still passes", () => {
   let samples = ["#FFFFFF", "#FAFAFA"];
   const h = harness({ background: () => samples });
   h.colors.setRecheckByBg({ "#FFFFFF": [100], "#FAFAFA": [100], "#F5F5F5": [90] });
-  samples = ["#FFFFFF", "#F5F5F5"]; // 90 is still above the 80 Schmitt threshold
+  samples = ["#FFFFFF", "#F5F5F5"]; // 90 is still above the 80 margin threshold
   h.ctrl.tick();
   assert.equal(h.colors.resolveCount(), 1, "all samples pass → hold, no re-solve");
 });
@@ -430,6 +430,114 @@ test("a single-sample array behaves like a solid background (holds, no churn)", 
     h.ctrl.tick();
   }
   assert.equal(h.colors.resolveCount(), 1, "one passing sample → identical to a solid bg");
+});
+
+// Channel distance between two `#RRGGBB`, as a max-per-channel step count.
+function hexStep(a, b) {
+  const n = (h, i) => parseInt(h.slice(1 + 2 * i, 3 + 2 * i), 16);
+  return Math.max(Math.abs(n(a, 0) - n(b, 0)), Math.abs(n(a, 1) - n(b, 1)), Math.abs(n(a, 2) - n(b, 2)));
+}
+
+test("overlapping re-solve continues from the PAINTED colour mid-ease, not a snap to the old target", () => {
+  // Regression for the #80 audit HIGH: a re-solve that fires while a previous ease
+  // is still in flight must begin from the colour currently ON SCREEN. The pre-fix
+  // code began from the in-flight ease's TARGET (currentApplied()'s seg.to), so the
+  // first frame of the new ease SNAPPED to the old target before easing — the very
+  // flicker the controller exists to remove.
+  //
+  // easeMs is deliberately > dwellMs so the second re-solve (gated by dwell) lands
+  // while the first ease is genuinely mid-flight (painted colour != old target).
+  // This is the DEFAULT regime (dwellMs 250 < easeMs 280); here easeMs 1000 just
+  // widens the window so the mid-ease colour is unambiguously distinct. dwellMs is
+  // 251 so an observe-only tick at 1650 precedes the overlapping re-solve at 1651.
+  const h = harness({ easeMs: 1000, dwellMs: 251, sustainMs: 120 });
+
+  // Arm a sustained breach at t=1000, then re-solve #1 to a light colour at t=1400
+  // (past sustain + dwell). The first ease runs #000000 -> #F0F0F0 over [1400,2400].
+  h.colors.setRecheckLc([10]);
+  h.setBg("#202020");
+  h.ctrl.tick(); // breachSince = 1000, resolveCount stays 1
+  h.colors.setResolve(oneRole("#F0F0F0", 100));
+  h.setNow(1400);
+  h.setBg("#202021");
+  h.ctrl.tick(); // re-solve #1, ease begins; first painted frame is still #000000
+  assert.equal(h.colors.resolveCount(), 2);
+  // re-solve #1 reset breachSince to null; re-arm it under the still-failing bg so
+  // the debounce (sustainMs) for the SECOND re-solve is satisfied well before dwell.
+  h.setNow(1410);
+  h.setBg("#202022");
+  h.ctrl.tick(); // breachSince = 1410; sustain & dwell not yet met → no re-solve
+
+  // OBSERVE the colour actually painted mid-ease, live off the element. At 1650 the
+  // breach is sustained (240ms >= 120) but dwell since 1400 is 250 < 251, so this
+  // tick only STEPS ease #1 — no re-solve. The painted value lies strictly between
+  // the start (#000000) and the old target (#F0F0F0).
+  h.setNow(1650);
+  h.setBg("#202023");
+  h.ctrl.tick();
+  const midPainted = h.el.props.get("--lab-label-primary");
+  assert.equal(h.colors.resolveCount(), 2, "observe tick must not re-solve yet (dwell not met)");
+  assert.notEqual(midPainted, "#000000");
+  assert.notEqual(midPainted, "#F0F0F0", "mid-ease colour is on the path, not at either end");
+
+  // Point re-solve #2 at a DARK target and advance one frame so the dwell gate
+  // (251ms since 1400) clears. Ease #1 is still in flight (251 < easeMs 1000), so
+  // this re-solve OVERLAPS it.
+  h.colors.setResolve(oneRole("#202020", 100));
+  h.setNow(1651);
+  h.setBg("#202024");
+  h.ctrl.tick();
+  assert.equal(h.colors.resolveCount(), 3, "overlapping re-solve fired mid-ease");
+
+  // The new ease must START from the painted colour (continuous, within 1 step of
+  // what was on screen the previous frame) — NOT jump to the old target #F0F0F0.
+  const firstNewFrame = h.el.props.get("--lab-label-primary");
+  assert.ok(
+    hexStep(firstNewFrame, midPainted) <= 1,
+    `first frame of overlapping ease (${firstNewFrame}) must continue from the painted colour (${midPainted}), not snap`,
+  );
+  assert.notEqual(firstNewFrame, "#F0F0F0", "must NOT snap to the previous ease's target");
+});
+
+test("a NaN clock mid-ease never paints invalid #NANNANNAN CSS (easeOut NaN guard)", () => {
+  // The guard lives in easeOut: t = (now - easeStart) / easeMs is NaN when the
+  // clock yields NaN, and without `Number.isFinite(t) ? . : 1` the eased blend
+  // is NaN → lerpHex emits "#NaNNaNNaN", invalid CSS. Drive a real in-flight ease,
+  // then STEP it with a NaN clock and assert the painted value is a valid 6-hex
+  // colour. The recheck is held passing on the NaN frame so the breach path can
+  // NOT re-solve+applyRolesDirect over the eased paint — the value asserted is the
+  // one `stepEase` (hence `easeOut`) actually wrote, which is what the guard guards.
+  const isHex6 = (s) => /^#[0-9a-fA-F]{6}$/.test(s);
+  const h = harness({ easeMs: 100 });
+
+  // Begin an ease #000000 -> #F0F0F0.
+  h.colors.setRecheckLc([10]);
+  h.setBg("#202020");
+  h.ctrl.tick(); // arm breach
+  h.colors.setResolve(oneRole("#F0F0F0", 100));
+  h.setNow(1300);
+  h.setBg("#202021");
+  h.ctrl.tick(); // re-solve + begin ease (in flight now)
+  // From here the destination passes, so no further re-solve can fire — any
+  // subsequent paint comes from stepEase advancing the in-flight segment.
+  h.colors.setRecheckLc([100]);
+  h.setNow(1340); // mid-ease: a genuine interpolated frame (t = 0.4)
+  h.setBg("#202022");
+  h.ctrl.tick();
+  const midPainted = h.el.props.get("--lab-label-primary");
+  assert.ok(isHex6(midPainted), "sanity: a valid interpolated hex mid-ease");
+  assert.notEqual(midPainted, "#000000", "sanity: genuinely mid-path, not the origin");
+  assert.notEqual(midPainted, "#F0F0F0", "sanity: genuinely mid-path, not the target");
+
+  // Now STEP the still-in-flight ease with a NaN clock. easeOut's guard turns the
+  // NaN `t` into a completed ease (1) → a valid hex; without it lerpHex emits
+  // "#NaNNaNNaN". The passing recheck means this paint is NOT overwritten by a
+  // re-solve, so it is exactly what easeOut produced.
+  h.setBg("#202023");
+  h.ctrl.tick(NaN);
+  const painted = h.el.props.get("--lab-label-primary");
+  assert.ok(isHex6(painted), `NaN clock must still paint a valid #RRGGBB, saw ${painted}`);
+  assert.ok(!/nan/i.test(painted), `painted colour must contain no NaN channel (never #NANNANNAN), saw ${painted}`);
 });
 
 test("rejects a colours engine missing recheckContrast", () => {
