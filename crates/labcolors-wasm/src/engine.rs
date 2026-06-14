@@ -150,12 +150,20 @@ fn map_solved(solved: Solved, compressed: bool, legal_floor: Option<f64>) -> Sol
     }
 }
 
-/// A stable machine code for each unreachability reason.
+/// A stable machine code for each unreachability reason. These strings are part
+/// of the JS-facing contract — a caller may branch on them — so they must not
+/// change silently (see `unreachable_codes_are_the_stable_js_contract`).
 ///
 /// `Unreachable` is `#[non_exhaustive]`, so the catch-all is mandatory and
 /// honest: a core variant we have not mapped yet reports `"unreachable"` rather
 /// than failing to compile against a future core. Known variants get a specific
 /// code so a JS caller can branch on the cause.
+///
+/// Note: with the v1 default role table, `resolve_theme` never actually yields
+/// an unreachable role on any solid background (a wide sweep finds none) — every
+/// default role is reachable everywhere. This mapping is therefore a forward-
+/// compatible / defensive seam, exercised below by driving the core `solve`
+/// directly into the cases a custom table or a future gamut would surface.
 fn unreachable_code(reason: &Unreachable) -> &'static str {
     match reason {
         Unreachable::BelowContrastFloor { .. } => "below_contrast_floor",
@@ -287,6 +295,43 @@ mod tests {
                 assert_eq!(got, canonical, "{bg}/{fg}: must match the canonical form");
             }
         }
+    }
+
+    #[test]
+    fn unreachable_codes_are_the_stable_js_contract() {
+        // The Unreachable→code mapping is a JS API contract. `Unreachable` is
+        // `#[non_exhaustive]` (can't be constructed here), and the default table
+        // never produces one through `resolve_theme`, so we drive the core
+        // `solve` into two real cases and pin their codes against silent drift.
+        use labcolors_core::ViewingConditions;
+        use labcolors_core::solve::{ChromaPolicy, Contract, Gamut, Hue, solve};
+
+        let vc = ViewingConditions::srgb();
+        let neutral = ChromaPolicy::Neutral;
+
+        // A non-sRGB gamut is reserved-but-unsupported in v1.
+        let gamut_err = solve(
+            BgInput::solid("#FFFFFF").unwrap(),
+            Contract::text(7.0),
+            Hue::deg(0.0),
+            neutral,
+            &vc,
+            Gamut::DisplayP3,
+        )
+        .unwrap_err();
+        assert_eq!(unreachable_code(&gamut_err), "gamut_unsupported");
+
+        // A non-finite target is rejected up front as invalid input.
+        let invalid_err = solve(
+            BgInput::solid("#FFFFFF").unwrap(),
+            Contract::text(f64::NAN),
+            Hue::deg(0.0),
+            neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        assert_eq!(unreachable_code(&invalid_err), "invalid_input");
     }
 
     #[test]
