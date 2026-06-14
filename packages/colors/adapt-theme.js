@@ -1,0 +1,258 @@
+// Adaptive theme controller — the lazy/hysteresis runtime. Zero dependencies.
+//
+// `watchTheme` re-resolves the whole set whenever the background changes. For a
+// CONTINUOUSLY changing background (animation/scroll/blur) that is both expensive
+// (a full solve every frame) and jittery (colours twitch frame to frame).
+//
+// `adaptTheme` is the elegant alternative, and the way real systems behave: it
+// does NOT re-solve per frame. Each frame it cheaply RE-CHECKS whether the
+// current colours still pass their contrast against the (new) background — one
+// CAM16 forward for the background plus one per role, no solve. While they pass
+// it does nothing (no churn, no jitter). Only when a role's perceptual contrast
+// stays below target for a sustained moment does it re-solve and **ease** to the
+// fresh colours over a short transition. The result: fewer computations, no
+// flicker, and a smooth, calm adaptation.
+//
+// Control law (principled defaults; all tunable):
+//   * Schmitt trigger — re-solve only when a role's achieved |Lc| drops by more
+//     than `dropFraction` of its surplus, not merely touches the line, so a
+//     background hovering on a boundary cannot make it chatter.
+//   * Debounce — the breach must persist `sustainMs` before acting, so a dark
+//     object scrolling past for a couple of frames never triggers.
+//   * Min dwell — at least `dwellMs` between re-solves, capping the effective
+//     transition rate well under the flash threshold.
+//   * Ease — a non-overshooting ease-out crossfade of `easeMs`; under
+//     `prefers-reduced-motion` a gentle short fade (NOT a jarring snap — an
+//     instant state change is more stressful than a soft one, and a colour
+//     crossfade is not "motion").
+//   * Theme switches are a deliberate INTENT, not a drift: applied instantly
+//     (a single quick crossfade), never run through the hysteresis machinery.
+//
+// Scope (v1): the eased crossfade is free — it does not floor-clamp each frame.
+// Reading comprehension is far slower than a ~300ms transition and surfaces
+// usually sit on a substrate, so a brief dip of the aesthetic *surplus* during
+// the ease is imperceptible while the freshly-solved destination is always
+// legal. A strict mode (floor held every frame, for `prefers-contrast` / text
+// directly on animated content) is a later refinement.
+
+import { applyTheme } from "./apply-theme.js";
+import { effectiveBackground, parseCssColor, toHex } from "./effective-bg.js";
+
+/** Cubic ease-out: fast start, gentle settle, no overshoot. */
+function easeOut(t) {
+  const u = 1 - Math.min(1, Math.max(0, t));
+  return 1 - u * u * u;
+}
+
+/** Interpolate two `#RRGGBB` hexes at `t ∈ [0,1]` (per-channel; role colours are
+ * near-neutral, so a straight sRGB blend has no muddy hue midpoint). */
+function lerpHex(from, to, t) {
+  const a = parseCssColor(from) ?? [0, 0, 0, 1];
+  const b = parseCssColor(to) ?? [0, 0, 0, 1];
+  return toHex([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+}
+
+/**
+ * @typedef {object} AdaptController
+ * @property {(now?: number) => void} tick  Drive one step (call from rAF, or let
+ *   `start()` do it). Cheap: a re-check; a re-solve only on a sustained breach.
+ * @property {(theme: string) => void} setTheme  Switch theme INSTANTLY (intent,
+ *   not drift) — re-resolve and apply, bypassing the hysteresis.
+ * @property {() => void} start  Begin an internal requestAnimationFrame loop.
+ * @property {() => void} stop   Stop the loop and disconnect.
+ * @property {() => Record<string,string>} current  The currently-applied vars.
+ */
+
+/**
+ * Keep an element's `--lab-*` variables adapting to its (changing) background
+ * lazily and smoothly. Applies the resolved set immediately, then holds it while
+ * it still passes, re-solving + easing only when contrast stably degrades.
+ *
+ * @param {*} element
+ * @param {object} options
+ * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:string,fgs:string[],theme:string)=>ArrayLike<number> }} options.colors
+ * @param {string} options.theme
+ * @param {string | (() => string)} [options.background]  explicit effective bg
+ * @param {*} [options.target=element]  element to write vars onto
+ * @param {string} [options.fallback="#FFFFFF"]
+ * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
+ * @param {number} [options.sustainMs=120]  breach must persist this long
+ * @param {number} [options.dwellMs=250]  minimum between re-solves
+ * @param {number} [options.easeMs=280]  crossfade duration
+ * @param {boolean} [options.reducedMotion]  override; default reads matchMedia
+ * @param {() => number} [options.now]  clock (default performance.now/Date.now)
+ * @param {*} [options.win=globalThis]
+ * @param {(el:*)=>*} [options.getStyle]  effectiveBackground seam (testing)
+ * @param {(el:*)=>*} [options.parentOf]  effectiveBackground seam (testing)
+ * @returns {AdaptController}
+ */
+export function adaptTheme(element, options) {
+  if (
+    !options ||
+    typeof options.colors?.resolveTheme !== "function" ||
+    typeof options.colors?.recheckContrast !== "function"
+  ) {
+    throw new TypeError("adaptTheme: options.colors needs resolveTheme + recheckContrast");
+  }
+  const colors = options.colors;
+  const target = options.target ?? element;
+  const fallback = options.fallback ?? "#FFFFFF";
+  const dropFraction = options.dropFraction ?? 0.2;
+  const sustainMs = options.sustainMs ?? 120;
+  const dwellMs = options.dwellMs ?? 250;
+  const win = options.win ?? (typeof globalThis !== "undefined" ? globalThis : undefined);
+  const reducedMotion =
+    options.reducedMotion ??
+    (win?.matchMedia ? win.matchMedia("(prefers-reduced-motion: reduce)").matches : false);
+  // Reduced motion → a gentle SHORT fade, never a hard snap.
+  const easeMs = reducedMotion ? Math.min(options.easeMs ?? 280, 80) : (options.easeMs ?? 280);
+  const clock = options.now ?? (() => (win?.performance?.now ? win.performance.now() : Date.now()));
+
+  let theme = options.theme;
+  /** @type {{ cssVar: string, key: string, lc: number, hex: string }[]} stable role order */
+  let roles = [];
+  /** @type {Map<string,{from:string,to:string}>} in-flight ease per cssVar */
+  let easing = new Map();
+  let easeStart = 0;
+  let breachSince = null;
+  let lastSolveAt = -Infinity;
+  let lastBg = null;
+
+  const readBackground = () => {
+    const b = options.background;
+    if (typeof b === "function") return b();
+    if (typeof b === "string") return b;
+    return effectiveBackground(element, {
+      fallback,
+      getStyle: options.getStyle,
+      parentOf: options.parentOf,
+    });
+  };
+
+  // Resolve a fresh set and adopt it as the current colours (no ease).
+  const solveAndAdopt = (bg, now) => {
+    const result = colors.resolveTheme(bg, theme);
+    roles = Object.entries(result.roles)
+      .filter(([, r]) => r && r.kind === "color")
+      .map(([key, r]) => ({ cssVar: r.cssVar, key, lc: r.lc, hex: r.hex }));
+    lastSolveAt = now;
+    breachSince = null;
+    return result;
+  };
+
+  const applyHexes = (hexByVar) => applyTheme(target, { vars: hexByVar });
+
+  const applyRolesDirect = () => {
+    const vars = {};
+    for (const r of roles) vars[r.cssVar] = r.hex;
+    applyHexes(vars);
+  };
+
+  // Begin an ease from the currently-applied colours toward the role colours.
+  const beginEase = (fromByVar, now) => {
+    easing = new Map();
+    for (const r of roles) {
+      const from = fromByVar[r.cssVar] ?? r.hex;
+      if (from !== r.hex) easing.set(r.cssVar, { from, to: r.hex });
+    }
+    easeStart = now;
+    if (easing.size === 0) applyRolesDirect();
+  };
+
+  const stepEase = (now) => {
+    const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
+    const e = easeOut(t);
+    const vars = {};
+    for (const r of roles) {
+      const seg = easing.get(r.cssVar);
+      vars[r.cssVar] = seg ? lerpHex(seg.from, seg.to, e) : r.hex;
+    }
+    applyHexes(vars);
+    if (t >= 1) easing = new Map();
+  };
+
+  const currentApplied = () => {
+    const vars = {};
+    for (const r of roles) {
+      const seg = easing.get(r.cssVar);
+      vars[r.cssVar] = seg ? seg.to : r.hex; // logical target during/after ease
+    }
+    return vars;
+  };
+
+  const tick = (nowArg) => {
+    const now = nowArg ?? clock();
+    // Advance any in-flight ease first.
+    if (easing.size > 0) stepEase(now);
+
+    const bg = readBackground();
+    // Steady state: a static background with no in-flight ease and no pending
+    // breach needs no work. A PENDING breach keeps us live even on a static bg, so
+    // the sustain timer can fire on a background that changed once to a failing
+    // value and then held.
+    if (bg === lastBg && easing.size === 0 && breachSince === null) return;
+    lastBg = bg;
+    if (roles.length === 0) return;
+
+    // Cheap re-check: do the current role colours still pass against `bg`?
+    const fgs = roles.map((r) => r.hex);
+    const flat = colors.recheckContrast(bg, fgs, theme);
+    let breached = false;
+    for (let i = 0; i < roles.length; i++) {
+      const lcNow = Math.abs(flat[2 * i]);
+      const want = Math.abs(roles[i].lc) * (1 - dropFraction);
+      if (lcNow < want) {
+        breached = true;
+        break;
+      }
+    }
+
+    if (!breached) {
+      breachSince = null;
+      return; // hold — the common case for a slowly-drifting background
+    }
+    if (breachSince === null) breachSince = now;
+    if (now - breachSince < sustainMs || now - lastSolveAt < dwellMs) return; // debounce / dwell
+
+    // Sustained breach: re-solve and ease toward the fresh colours.
+    const fromByVar = currentApplied();
+    solveAndAdopt(bg, now);
+    beginEase(fromByVar, now);
+    stepEase(now);
+  };
+
+  let rafId = null;
+  const loop = () => {
+    tick();
+    if (win?.requestAnimationFrame) rafId = win.requestAnimationFrame(loop);
+  };
+
+  // Apply the initial set immediately.
+  {
+    const bg = readBackground();
+    lastBg = bg;
+    solveAndAdopt(bg, clock());
+    applyRolesDirect();
+  }
+
+  return {
+    tick,
+    setTheme(next) {
+      theme = next;
+      const bg = readBackground();
+      lastBg = bg;
+      easing = new Map();
+      solveAndAdopt(bg, clock());
+      applyRolesDirect(); // instant — a theme switch is intent, not drift
+    },
+    start() {
+      if (rafId == null && win?.requestAnimationFrame) rafId = win.requestAnimationFrame(loop);
+    },
+    stop() {
+      if (rafId != null && win?.cancelAnimationFrame) win.cancelAnimationFrame(rafId);
+      rafId = null;
+      easing = new Map();
+    },
+    current: currentApplied,
+  };
+}

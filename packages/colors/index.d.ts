@@ -23,6 +23,8 @@ export type {
 export { applyTheme } from "./apply-theme.js";
 export { watchTheme } from "./watch-theme.js";
 export type { WatchThemeOptions, WatchController } from "./watch-theme.js";
+export { adaptTheme } from "./adapt-theme.js";
+export type { AdaptThemeOptions, AdaptController } from "./adapt-theme.js";
 export {
   effectiveBackground,
   parseCssColor,
