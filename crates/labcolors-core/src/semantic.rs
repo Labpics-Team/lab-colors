@@ -1383,6 +1383,38 @@ pub(crate) fn resolve_set_live(
     set
 }
 
+/// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
+/// achieves against a background — the cheap **recheck** primitive.
+///
+/// Both colours are **linear** sRGB; the result is `(lc, wcag_ratio)`. It costs
+/// one CAM16 forward per colour plus WCAG arithmetic — **no solve**. The reactive
+/// runtime calls this per frame to decide whether already-resolved colours still
+/// pass their contract against a *changed* background, re-solving (and easing)
+/// only when they stably do not, instead of re-solving every frame.
+///
+/// The returned `lc` is **signed** (its sign is the achieved polarity, matching
+/// [`Resolved::lc`]), and it is exactly what the solver's `finish` stage measures
+/// for the same pair — so a colour the solver resolved against a background
+/// re-measures here to its own reported `lc`/`wcag_ratio`. That identity is the
+/// guarantee that "still passes" means the same thing as the original solve.
+pub fn measure_contrast(
+    bg_linear: [f64; 3],
+    fg_linear: [f64; 3],
+    vc: &ViewingConditions,
+) -> (f64, f64) {
+    let y_bg = crate::solve::bg_luma(bg_linear, vc);
+    let y_fg = crate::solve::bg_luma(fg_linear, vc);
+    let lc = crate::lpc::contrast_core(y_fg, y_bg);
+    // WCAG is defined on the *display* (gamma-encoded, 8-bit) colour, exactly as
+    // the solver measures it (`finish` → `quantised_display`), so the recheck
+    // reproduces the solver's reported `wcag_ratio` bit-for-bit.
+    let wcag = crate::wcag::contrast_ratio(
+        crate::solve::quantised_display(fg_linear),
+        crate::solve::quantised_display(bg_linear),
+    );
+    (lc, wcag)
+}
+
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
 ///
 /// The anchor principle already orders the *targets* strictly, but the legal
@@ -1615,6 +1647,42 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measure_contrast_reproduces_the_solvers_own_lc_and_wcag() {
+        // The recheck primitive must agree with the solver's own `finish`
+        // measurement: a colour the solver resolved against a background
+        // re-measures here to EXACTLY its reported lc/wcag. This identity is what
+        // makes the runtime's "do these colours still pass?" mean the same thing
+        // as the original solve — the foundation of the lazy/hysteresis controller.
+        use crate::spaces::srgb::srgb_from_hex;
+        let table = RoleTable::default();
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for bg_hex in [
+                "#FFFFFF", "#3478F6", "#1C1C1E", "#7F7F7F", "#101012", "#B5482E",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let bg_lin = srgb_from_hex(bg_hex).unwrap();
+                for (role, resolved) in resolve_set(&bg, &table, &vc) {
+                    let Some(solved) = resolved.solved() else {
+                        continue;
+                    };
+                    let fg_lin = srgb_from_hex(solved.hex()).unwrap();
+                    let (lc, wcag) = measure_contrast(bg_lin, fg_lin, &vc);
+                    assert!(
+                        (lc - solved.lc()).abs() < 1e-9,
+                        "{role:?} on {bg_hex}: recheck lc {lc} != solver {}",
+                        solved.lc()
+                    );
+                    assert!(
+                        (wcag - solved.wcag_ratio()).abs() < 1e-9,
+                        "{role:?} on {bg_hex}: recheck wcag {wcag} != solver {}",
+                        solved.wcag_ratio()
+                    );
+                }
+            }
+        }
+    }
 
     /// The 12 mid-to-light nodes of the owner's reference neutral ramp (pure
     /// #FFFFFF dropped — it is achromatic). The VALIDATION set, never an input.

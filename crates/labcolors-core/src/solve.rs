@@ -973,7 +973,7 @@ fn floor_ratio_of(rgb_linear: [f64; 3], bg_disp: [f64; 3]) -> f64 {
 
 /// Gamma-encoded sRGB of a linear stimulus, quantised to 8-bit — the display
 /// values WCAG 2.1 measures, matching the emitted `#RRGGBB` hex exactly.
-fn quantised_display(rgb_linear: [f64; 3]) -> [f64; 3] {
+pub(crate) fn quantised_display(rgb_linear: [f64; 3]) -> [f64; 3] {
     let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
     [q(rgb_linear[0]), q(rgb_linear[1]), q(rgb_linear[2])]
 }
@@ -1258,8 +1258,11 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) 
     meets_floor_lc(lc, target)
 }
 
-/// H-K-corrected background luminance (`Y_hk`) of a linear-sRGB stimulus.
-fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
+/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus. Named for its
+/// commonest caller (the background), but it is purely `colour → Y_hk`; the
+/// reactive recheck primitive ([`semantic::measure_contrast`]) reuses it for the
+/// foreground too.
+pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
     lpc::y_hk(j_hk, vc)
 }
