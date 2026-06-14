@@ -283,6 +283,37 @@ test("strict floor-clamp is monotone (contrast never steps backwards)", () => {
   }
 });
 
+test("strict floor-clamp never reverses the colour when the background drifts favourably", () => {
+  // The structural guarantee: the displayed colour only ever advances from→to,
+  // never retreats — even when a favourably-drifting (darkening) background would
+  // let the stateless floor solver pick a LOWER blend frame to frame. Without the
+  // `held` latch the grey value would step back down; with it, it is monotone.
+  const h = harness({ strict: true, easeMs: 400 }); // long ease so bg drift dominates
+  h.colors.setRecheckLc([10]);
+  h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5));
+  h.setBg("#303030"); // moderate dark at re-solve → forces a mid blend up front
+  h.setNow(2000);
+  h.ctrl.tick(); // arm breach
+  const t0 = 2130;
+  h.setNow(t0);
+  h.setBg("#2F2F2F");
+  h.ctrl.tick(); // re-solve + begin ease (first eased frame on a dark bg)
+  h.colors.setRecheckLc([100]);
+  const grey = () => parseInt(h.el.props.get("--lab-label-primary").slice(1, 3), 16);
+  let prev = grey();
+  // Drift the background DARKER mid-ease: the legal floor gets *easier*, so the
+  // stateless solver would choose a smaller blend — the latch must hold the line.
+  const bgs = ["#202020", "#141414", "#0C0C0C", "#060606", "#000000"];
+  for (let i = 0; i < bgs.length; i++) {
+    h.setNow(t0 + 20 + i * 20);
+    h.setBg(bgs[i]);
+    h.ctrl.tick();
+    const g = grey();
+    assert.ok(g >= prev - 1, `colour must not retreat toward the origin: ${prev} → ${g}`);
+    prev = g;
+  }
+});
+
 test("the default (free) ease dips below the floor mid-transition — what strict fixes", () => {
   const { out } = easeContrasts({ strict: false });
   assert.ok(

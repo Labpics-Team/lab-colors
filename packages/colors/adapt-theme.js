@@ -184,11 +184,13 @@ export function adaptTheme(element, options) {
   };
 
   // Begin an ease from the currently-applied colours toward the role colours.
+  // `held` latches the per-role displayed blend so it only ever advances toward
+  // the destination (strict mode) — see `stepEase`.
   const beginEase = (fromByVar, now) => {
     easing = new Map();
     for (const r of roles) {
       const from = fromByVar[r.cssVar] ?? r.hex;
-      if (from !== r.hex) easing.set(r.cssVar, { from, to: r.hex });
+      if (from !== r.hex) easing.set(r.cssVar, { from, to: r.hex, held: 0 });
     }
     easeStart = now;
     if (easing.size === 0) applyRolesDirect();
@@ -198,8 +200,10 @@ export function adaptTheme(element, options) {
   // `floor` against background luminance `bgLum`. The destination (`to`, blend
   // 1) is a freshly-solved legal colour, so it anchors the search; we bisect
   // toward it from the natural ease value `e`. Returns `e` unchanged when the
-  // eased colour is already legal (the common case — no intervention). Monotone:
-  // because we only ever raise the blend, contrast never steps backwards.
+  // eased colour is already legal (the common case — no intervention). The
+  // returned blend is always floor-legal, except in the unavoidable case where
+  // even `to` is illegal against a bg that drifted further this frame — then it
+  // returns 1 (the most-legal colour we have) and the recheck loop re-solves.
   const floorBlend = (seg, e, bgLum, floor) => {
     const legalAt = (blend) =>
       wcagRatio(relativeLuminanceHex(lerpHex(seg.from, seg.to, blend)), bgLum) >= floor;
@@ -225,7 +229,18 @@ export function adaptTheme(element, options) {
         vars[r.cssVar] = r.hex;
         continue;
       }
-      const blend = strict && r.legalFloor != null ? floorBlend(seg, e, bgLum, r.legalFloor) : e;
+      let blend = e;
+      if (strict && r.legalFloor != null) {
+        // Hold the floor, then LATCH: the displayed blend may only advance
+        // toward the destination, never retreat. `floorBlend` is stateless and
+        // depends on the live (drifting) background, so on a frame where the bg
+        // drifts favourably it could return a *lower* blend than last frame — a
+        // backwards step toward the old colour, the precise jarring reversal
+        // this mode exists to avoid. `held` clamps that out: the colour
+        // progresses monotonically from→to and never below the legal line.
+        blend = Math.max(floorBlend(seg, e, bgLum, r.legalFloor), seg.held);
+        seg.held = blend;
+      }
       vars[r.cssVar] = lerpHex(seg.from, seg.to, blend);
     }
     applyHexes(vars);
