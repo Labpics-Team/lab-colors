@@ -8,6 +8,7 @@ import init, {
   watchTheme,
   adaptTheme,
   effectiveBackground,
+  oklabLerp,
 } from "./index.js";
 import type { ResolvedTheme, RoleResult, ThemeName } from "./index.js";
 
@@ -48,6 +49,10 @@ async function consume(): Promise<void> {
   // The effective-background resolver returns a solid hex.
   const effBg: string = effectiveBackground(document.documentElement);
   void effBg;
+
+  // The perceptual interpolation helper blends two hexes in Oklab.
+  const blended: string = oklabLerp("#101012", effBg, 0.5);
+  void blended;
 
   // The reactive runtime keeps an element in sync; the controller is typed.
   const surface = document.querySelector(".surface") as HTMLElement;

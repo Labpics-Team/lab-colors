@@ -31,5 +31,6 @@ export {
   compositeOver,
   compositeStackToHex,
   toHex,
+  oklabLerp,
 } from "./effective-bg.js";
 export type { Rgba, EffectiveBackgroundOptions, StyleLike } from "./effective-bg.js";

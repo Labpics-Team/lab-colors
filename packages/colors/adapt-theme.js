@@ -43,7 +43,7 @@
 //     with no legal floor (decorative / JND) ease freely either way.
 
 import { applyTheme } from "./apply-theme.js";
-import { effectiveBackground, parseCssColor, toHex } from "./effective-bg.js";
+import { effectiveBackground, parseCssColor, oklabLerp } from "./effective-bg.js";
 
 /** Cubic ease-out: fast start, gentle settle, no overshoot. */
 function easeOut(t) {
@@ -70,12 +70,10 @@ function wcagRatio(lumA, lumB) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Interpolate two `#RRGGBB` hexes at `t ∈ [0,1]` (per-channel; role colours are
- * near-neutral, so a straight sRGB blend has no muddy hue midpoint). */
+/** Interpolate two `#RRGGBB` hexes at `t ∈ [0,1]` in Oklab, so the crossfade is
+ * perceptually even (no lingering-bright sRGB midpoint, no muddy chroma path). */
 function lerpHex(from, to, t) {
-  const a = parseCssColor(from) ?? [0, 0, 0, 1];
-  const b = parseCssColor(to) ?? [0, 0, 0, 1];
-  return toHex([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+  return oklabLerp(from, to, t);
 }
 
 /**
