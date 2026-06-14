@@ -28,12 +28,19 @@
 //   * Theme switches are a deliberate INTENT, not a drift: applied instantly
 //     (a single quick crossfade), never run through the hysteresis machinery.
 //
-// Scope (v1): the eased crossfade is free — it does not floor-clamp each frame.
-// Reading comprehension is far slower than a ~300ms transition and surfaces
-// usually sit on a substrate, so a brief dip of the aesthetic *surplus* during
-// the ease is imperceptible while the freshly-solved destination is always
-// legal. A strict mode (floor held every frame, for `prefers-contrast` / text
-// directly on animated content) is a later refinement.
+// Floor-clamp modes:
+//   * Default (free ease): the crossfade does not floor-clamp each frame.
+//     Reading comprehension is far slower than a ~300ms transition and surfaces
+//     usually sit on a substrate, so a brief dip of the aesthetic *surplus*
+//     during the ease is imperceptible while the freshly-solved destination is
+//     always legal.
+//   * Strict (`strict: true`): the WCAG legal floor is HELD every frame. For
+//     text directly on animated content or under `prefers-contrast`, an
+//     intermediate colour is only shown while it still clears the role's
+//     `legalFloor` against the live background; a role whose eased intermediate
+//     would dip below its floor is advanced (monotonically) to the least blend
+//     that stays legal — never below the line, never a backwards flicker. Roles
+//     with no legal floor (decorative / JND) ease freely either way.
 
 import { applyTheme } from "./apply-theme.js";
 import { effectiveBackground, parseCssColor, toHex } from "./effective-bg.js";
@@ -42,6 +49,25 @@ import { effectiveBackground, parseCssColor, toHex } from "./effective-bg.js";
 function easeOut(t) {
   const u = 1 - Math.min(1, Math.max(0, t));
   return 1 - u * u * u;
+}
+
+/** WCAG 2.1 relative luminance of `#RRGGBB` — a faithful transcription of the
+ * normative definition (0.03928 split, 2.4 exponent), so the strict floor-clamp
+ * agrees byte-for-byte with the core's `legalFloor` semantics. */
+function relativeLuminanceHex(hex) {
+  const rgb = parseCssColor(hex) ?? [0, 0, 0, 1];
+  const lin = (c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+}
+
+/** WCAG contrast ratio from two relative luminances: `(L+0.05)/(L+0.05)`. */
+function wcagRatio(lumA, lumB) {
+  const hi = Math.max(lumA, lumB);
+  const lo = Math.min(lumA, lumB);
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 /** Interpolate two `#RRGGBB` hexes at `t ∈ [0,1]` (per-channel; role colours are
@@ -79,6 +105,8 @@ function lerpHex(from, to, t) {
  * @param {number} [options.sustainMs=120]  breach must persist this long
  * @param {number} [options.dwellMs=250]  minimum between re-solves
  * @param {number} [options.easeMs=280]  crossfade duration
+ * @param {boolean} [options.strict=false]  hold each role's WCAG legal floor
+ *   every frame of the ease (for text on animated content / `prefers-contrast`)
  * @param {boolean} [options.reducedMotion]  override; default reads matchMedia
  * @param {() => number} [options.now]  clock (default performance.now/Date.now)
  * @param {*} [options.win=globalThis]
@@ -100,6 +128,7 @@ export function adaptTheme(element, options) {
   const dropFraction = options.dropFraction ?? 0.2;
   const sustainMs = options.sustainMs ?? 120;
   const dwellMs = options.dwellMs ?? 250;
+  const strict = options.strict ?? false;
   const win = options.win ?? (typeof globalThis !== "undefined" ? globalThis : undefined);
   const reducedMotion =
     options.reducedMotion ??
@@ -109,7 +138,7 @@ export function adaptTheme(element, options) {
   const clock = options.now ?? (() => (win?.performance?.now ? win.performance.now() : Date.now()));
 
   let theme = options.theme;
-  /** @type {{ cssVar: string, key: string, lc: number, hex: string }[]} stable role order */
+  /** @type {{ cssVar: string, key: string, lc: number, hex: string, legalFloor: number|null }[]} stable role order */
   let roles = [];
   /** @type {Map<string,{from:string,to:string}>} in-flight ease per cssVar */
   let easing = new Map();
@@ -134,7 +163,13 @@ export function adaptTheme(element, options) {
     const result = colors.resolveTheme(bg, theme);
     roles = Object.entries(result.roles)
       .filter(([, r]) => r && r.kind === "color")
-      .map(([key, r]) => ({ cssVar: r.cssVar, key, lc: r.lc, hex: r.hex }));
+      .map(([key, r]) => ({
+        cssVar: r.cssVar,
+        key,
+        lc: r.lc,
+        hex: r.hex,
+        legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
+      }));
     lastSolveAt = now;
     breachSince = null;
     return result;
@@ -149,23 +184,64 @@ export function adaptTheme(element, options) {
   };
 
   // Begin an ease from the currently-applied colours toward the role colours.
+  // `held` latches the per-role displayed blend so it only ever advances toward
+  // the destination (strict mode) — see `stepEase`.
   const beginEase = (fromByVar, now) => {
     easing = new Map();
     for (const r of roles) {
       const from = fromByVar[r.cssVar] ?? r.hex;
-      if (from !== r.hex) easing.set(r.cssVar, { from, to: r.hex });
+      if (from !== r.hex) easing.set(r.cssVar, { from, to: r.hex, held: 0 });
     }
     easeStart = now;
     if (easing.size === 0) applyRolesDirect();
   };
 
-  const stepEase = (now) => {
+  // Strict mode: the least blend in [e, 1] whose interpolated colour clears
+  // `floor` against background luminance `bgLum`. The destination (`to`, blend
+  // 1) is a freshly-solved legal colour, so it anchors the search; we bisect
+  // toward it from the natural ease value `e`. Returns `e` unchanged when the
+  // eased colour is already legal (the common case — no intervention). The
+  // returned blend is always floor-legal, except in the unavoidable case where
+  // even `to` is illegal against a bg that drifted further this frame — then it
+  // returns 1 (the most-legal colour we have) and the recheck loop re-solves.
+  const floorBlend = (seg, e, bgLum, floor) => {
+    const legalAt = (blend) =>
+      wcagRatio(relativeLuminanceHex(lerpHex(seg.from, seg.to, blend)), bgLum) >= floor;
+    if (legalAt(e)) return e;
+    let lo = e;
+    let hi = 1;
+    for (let k = 0; k < 14; k++) {
+      const mid = (lo + hi) / 2;
+      if (legalAt(mid)) hi = mid;
+      else lo = mid;
+    }
+    return hi; // hi is always legal (or blend 1, the most-legal we have)
+  };
+
+  const stepEase = (now, bg) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     const e = easeOut(t);
+    const bgLum = strict ? relativeLuminanceHex(bg) : 0;
     const vars = {};
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
-      vars[r.cssVar] = seg ? lerpHex(seg.from, seg.to, e) : r.hex;
+      if (!seg) {
+        vars[r.cssVar] = r.hex;
+        continue;
+      }
+      let blend = e;
+      if (strict && r.legalFloor != null) {
+        // Hold the floor, then LATCH: the displayed blend may only advance
+        // toward the destination, never retreat. `floorBlend` is stateless and
+        // depends on the live (drifting) background, so on a frame where the bg
+        // drifts favourably it could return a *lower* blend than last frame — a
+        // backwards step toward the old colour, the precise jarring reversal
+        // this mode exists to avoid. `held` clamps that out: the colour
+        // progresses monotonically from→to and never below the legal line.
+        blend = Math.max(floorBlend(seg, e, bgLum, r.legalFloor), seg.held);
+        seg.held = blend;
+      }
+      vars[r.cssVar] = lerpHex(seg.from, seg.to, blend);
     }
     applyHexes(vars);
     if (t >= 1) easing = new Map();
@@ -182,10 +258,11 @@ export function adaptTheme(element, options) {
 
   const tick = (nowArg) => {
     const now = nowArg ?? clock();
-    // Advance any in-flight ease first.
-    if (easing.size > 0) stepEase(now);
-
     const bg = readBackground();
+    // Advance any in-flight ease first (against the live bg, so strict mode holds
+    // the legal floor every frame as the background keeps drifting under it).
+    if (easing.size > 0) stepEase(now, bg);
+
     // Steady state: a static background with no in-flight ease and no pending
     // breach needs no work. A PENDING breach keeps us live even on a static bg, so
     // the sustain timer can fire on a background that changed once to a failing
@@ -218,7 +295,7 @@ export function adaptTheme(element, options) {
     const fromByVar = currentApplied();
     solveAndAdopt(bg, now);
     beginEase(fromByVar, now);
-    stepEase(now);
+    stepEase(now, bg);
   };
 
   let rafId = null;

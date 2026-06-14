@@ -70,6 +70,7 @@ async function consume(): Promise<void> {
     background: () => effectiveBackground(surface, { fallback: "#101012" }),
     easeMs: 280,
     dropFraction: 0.2,
+    strict: true,
   });
   adaptive.start();
   adaptive.tick();
