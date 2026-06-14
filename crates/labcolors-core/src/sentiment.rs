@@ -298,9 +298,11 @@ impl SentimentCurve {
     /// - The resolved hue keeps **at least** `s_min` perceptual degrees from
     ///   the brand (separation invariant), enforced as a final legal guard.
     /// - For [`Sentiment::Warning`] the resolved hue additionally never drops
-    ///   below the hue floor. When the floor and the separation invariant
-    ///   collide, the resolver lands on the nearest legal hue that still honours
-    ///   the separation; if the legal arc is geometrically empty it returns an
+    ///   below the hue floor. When the floor blocks the prototype-ward
+    ///   displacement, the resolver flips to the opposite (preferred) side —
+    ///   keeping the hue in amber/yellow rather than wrapping the long way round
+    ///   into red — and only if neither side is legal does it scan outward to the
+    ///   nearest legal hue. If the legal arc is geometrically empty it returns an
     ///   `Err` rather than silently breaching either invariant.
     ///
     /// # Errors
@@ -885,6 +887,24 @@ mod tests {
             // slope is <= ~2, so a 0.05° brand step moves the hue well under 0.5°;
             // a roomy 1.0° bound flags any genuine spurious discontinuity.
             jumps.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            // The handoff seam is the topological flip of the hue across the brand,
+            // so it is bounded by ~2·s_min (a hue at one boundary `brand ± s_min`
+            // jumping to the other). Bounding its MAGNITUDE — not just allowing one
+            // big jump — keeps this guard load-bearing: a future model change that
+            // turned the handoff into a genuine large discontinuity (e.g. a 90°
+            // wrap) would fail here instead of slipping through as "the one seam".
+            let s_min = {
+                let lab = srgb_linear_to_oklab(srgb_from_hex(s.anchor_hex()).unwrap());
+                s_min_deg((lab[1].powi(2) + lab[2].powi(2)).sqrt())
+            };
+            let handoff_bound = 2.0 * s_min + 10.0; // 2·s_min + perceptual margin
+            assert!(
+                jumps[0] <= handoff_bound,
+                "{s:?}: handoff seam {:.1}° exceeds the ~2·s_min bound {:.1}° \
+                 (a spurious large discontinuity, not the expected topological flip)",
+                jumps[0],
+                handoff_bound
+            );
             assert!(
                 jumps[1] <= 5.0,
                 "{s:?}: second discontinuity {:.2}° too large (antipode should be small)",
@@ -897,5 +917,22 @@ mod tests {
                 jumps[2]
             );
         }
+    }
+
+    #[test]
+    fn legalize_hue_errs_when_floor_and_separation_leave_no_legal_arc() {
+        // The error branch must surface an `Err`, never silently breach an
+        // invariant. Construct a pathological floor admitting only the 1° arc
+        // [359°, 360°), then place the brand at 359.5° so that whole arc sits
+        // inside its ±5° separation zone — no hue can satisfy both at once.
+        let r = legalize_hue(0.0, 359.5, Some(359.0), 5.0);
+        assert!(
+            r.is_err(),
+            "expected Err when the floor and separation leave no legal hue, got {r:?}"
+        );
+
+        // Sanity: relax the floor and a legal hue exists again (the same inputs
+        // otherwise), so the Err above is the *constraint collision*, not a bug.
+        assert!(legalize_hue(0.0, 359.5, None, 5.0).is_ok());
     }
 }
