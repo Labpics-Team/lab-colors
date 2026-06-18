@@ -36,7 +36,7 @@ const TRACKED: [Role; 5] = [
     Role::LabelSecondary,
     Role::LabelTertiary,
     Role::LabelQuaternary,
-    Role::LabelTertiary,
+    Role::Icon,
 ];
 
 fn gray(g: u8) -> String {
