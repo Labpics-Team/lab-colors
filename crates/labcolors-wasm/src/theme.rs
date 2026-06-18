@@ -10,7 +10,12 @@
 //! calibrated*: asking for one is a real error with a real reason, not a
 //! silent substitution of a Light/Dark result. That keeps the type correct
 //! while the implementation is honestly absent.
+//!
+//! `Theme` also converts into the core's [`ThemeContext`] (scheme + contrast
+//! axes), so the background surface resolver can be driven from the same public
+//! theme contract.
 
+use labcolors_core::ThemeContext as CoreThemeContext;
 use labcolors_core::ViewingConditions;
 
 use crate::error::BindingError;
@@ -31,6 +36,17 @@ pub enum Theme {
     LightIncreasedContrast,
     /// Increased-contrast dark theme. Reserved; not yet calibrated.
     DarkIncreasedContrast,
+}
+
+impl From<Theme> for CoreThemeContext {
+    fn from(theme: Theme) -> Self {
+        match theme {
+            Theme::Light => CoreThemeContext::light(),
+            Theme::Dark => CoreThemeContext::dark(),
+            Theme::LightIncreasedContrast => CoreThemeContext::light_increased_contrast(),
+            Theme::DarkIncreasedContrast => CoreThemeContext::dark_increased_contrast(),
+        }
+    }
 }
 
 impl Theme {

@@ -5,6 +5,34 @@
 //! This module answers the layer below it: "which background hex should this part
 //! of the theme use?". Keeping the two separate prevents background tokens from
 //! leaking into the foreground role set and invalidating the contrast golden.
+//!
+//! # Calibration
+//!
+//! Hex values in [`resolve_background`] were calibrated against Daniel's Figma
+//! file `🧪Lab UI (v.1)` / `🔵 4.2 Semantic` collection / `Backgrounds/Neutral/*`
+//! variables (2026-06-18, Daniel eye-sign-off). The light ladder alternates two
+//! surfaces (`#FFFFFF` / `#F7F8FA`); the dark ladder uses three ascending steps
+//! (`#101012` / `#1C1C1E` / `#242426`). Grouped variants alias the non-grouped
+//! steps: they are the same physical colour, only a different semantic context.
+//!
+//! # Seams for future growth
+//!
+//! - **Static/adaptive** is a runtime inheritance decision. The core receives an
+//!   already-resolved [`ThemeContext`]. A caller who needs static-light or
+//!   static-dark backgrounds passes a fixed [`ColorScheme`] instead of inheriting
+//!   the OS/user preference. No `Static*` role variants are needed.
+//!
+//! - **Inverted tiering** currently resolves to the primary of the opposite
+//!   scheme (`BackgroundRole::Inverted`). The Figma semantic collection defines a
+//!   single `Backgrounds/Neutral/Inverted`. If the design later requires separate
+//!   `InvertedPrimary`/`InvertedSecondary`/`InvertedTertiary`, that will be added
+//!   as new variants behind `#[non_exhaustive]` without breaking consumers.
+//!
+//! - **Sentiment backgrounds** (Brand/Danger/Warning/Success/Info) are out of
+//!   scope for v1. When they land, they will reuse the same [`BackgroundRole`]
+//!   enum with a separate `BackgroundIntent` (colour parameter), NOT a per-family
+//!   variant explosion, keeping the role count constant regardless of how many
+//!   colour families the system supports.
 
 use crate::solve::{BgInput, Unreachable};
 

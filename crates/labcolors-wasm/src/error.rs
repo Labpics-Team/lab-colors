@@ -40,6 +40,21 @@ pub enum BindingError {
     },
 }
 
+impl From<labcolors_core::BackgroundError> for BindingError {
+    fn from(err: labcolors_core::BackgroundError) -> Self {
+        match err {
+            labcolors_core::BackgroundError::IncreasedContrastNotCalibrated => {
+                BindingError::ThemeNotCalibrated {
+                    theme: "increased-contrast",
+                }
+            }
+            labcolors_core::BackgroundError::InvalidBackgroundHex { reason, .. } => {
+                BindingError::InvalidBackground { reason }
+            }
+        }
+    }
+}
+
 impl BindingError {
     /// The stable, machine-readable code for this error — the contract a JS
     /// caller switches on. These never change without a versioned migration.

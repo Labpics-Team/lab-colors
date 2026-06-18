@@ -26,6 +26,7 @@ use crate::dto::{ResolvedTheme, RoleOutcome};
 use crate::engine::Engine;
 use crate::error::BindingError;
 use crate::theme::Theme;
+use labcolors_core::ThemeContext as CoreThemeContext;
 
 /// TypeScript shapes for the values `resolveTheme` returns. wasm-bindgen emits
 /// `LabColors.resolveTheme(...): ResolvedTheme` against these, so consumers get
@@ -132,6 +133,25 @@ impl LabColors {
             .resolve_theme(bg_hex, theme)
             .map_err(to_js_error)?;
         Ok(project_resolved(&resolved).unchecked_into())
+    }
+
+    /// Resolve the neutral background surface tokens for `theme`
+    /// (`"light" | "dark" | "light-ic" | "dark-ic"`).
+    ///
+    /// Returns a flat object `{ "bg-primary": "#FFFFFF", … }` with the seven
+    /// neutral background hex values. Rejects on `"light-ic"` / `"dark-ic"`
+    /// until IC calibration lands.
+    #[wasm_bindgen(js_name = resolveBackgrounds)]
+    pub fn resolve_backgrounds(&self, theme: &str) -> Result<JsValue, JsError> {
+        let theme = Theme::parse(theme).map_err(to_js_error)?;
+        let ctx = CoreThemeContext::from(theme);
+        let entries =
+            labcolors_core::resolve_background_set(ctx).map_err(|e| to_js_error(e.into()))?;
+        let out = js_sys::Object::new();
+        for entry in &entries {
+            set(&out, entry.key, &JsValue::from_str(entry.hex));
+        }
+        Ok(out.into())
     }
 
     /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
