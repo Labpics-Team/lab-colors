@@ -27,6 +27,7 @@ use crate::error::BindingError;
 /// variants are part of the contract but resolve to a calibration error until
 /// the IC tables land.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Theme {
     /// Light theme — sRGB average-surround viewing conditions.
     Light,

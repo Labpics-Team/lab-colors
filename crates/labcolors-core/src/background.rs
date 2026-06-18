@@ -39,6 +39,7 @@ use crate::solve::{BgInput, Unreachable};
 /// Light or dark colour scheme. Static/adaptive is intentionally not here: that is
 /// a runtime inheritance decision. The core receives an already-resolved scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ColorScheme {
     Light,
     Dark,
@@ -57,6 +58,7 @@ impl ColorScheme {
 /// callers can express Light+IC, Dark+IC, Static+IC, and inverted+IC without a
 /// combinatorial enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ContrastMode {
     Standard,
     Increased,
@@ -148,6 +150,7 @@ impl BackgroundRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BackgroundError {
     IncreasedContrastNotCalibrated,
     InvalidBackgroundHex {

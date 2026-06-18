@@ -51,6 +51,10 @@ impl From<labcolors_core::BackgroundError> for BindingError {
             labcolors_core::BackgroundError::InvalidBackgroundHex { reason, .. } => {
                 BindingError::InvalidBackground { reason }
             }
+            // #[non_exhaustive] — future variants map to invalid_background
+            _ => BindingError::InvalidBackground {
+                reason: err.to_string(),
+            },
         }
     }
 }
