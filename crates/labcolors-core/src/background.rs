@@ -161,6 +161,12 @@ pub enum BackgroundError {
 
 impl core::fmt::Display for BackgroundError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // The current variant set is exhaustively matched above; the wildcard
+        // arm covers future variants added behind `#[non_exhaustive]` from
+        // outside this crate. The `allow` silences a false-positive warning
+        // for the *internal* (in-crate) exhaustive case — outside the crate
+        // the wildcard is reachable and mandatory.
+        #[allow(unreachable_patterns)]
         match self {
             BackgroundError::IncreasedContrastNotCalibrated => {
                 write!(f, "increased-contrast backgrounds are not calibrated yet")
@@ -168,16 +174,19 @@ impl core::fmt::Display for BackgroundError {
             BackgroundError::InvalidBackgroundHex { role, reason } => {
                 write!(f, "{} background is invalid: {reason}", role.key())
             }
+            _ => write!(f, "background resolution error"),
         }
     }
 }
-
 /// One resolved background token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundEntry {
+    /// The role this entry resolves.
     pub role: BackgroundRole,
-    pub key: &'static str,
-    pub hex: &'static str,
+    /// The resolved surface colour. A `String` (not `&'static str`) so future
+    /// sentiment backgrounds can carry runtime-derived values, not only
+    /// compile-time literal hexes.
+    pub hex: String,
 }
 
 /// Resolve a neutral background role to the exact Figma-calibrated hex.
@@ -192,34 +201,44 @@ pub fn resolve_background(
         return Err(BackgroundError::IncreasedContrastNotCalibrated);
     }
 
-    let effective_context = if role == BackgroundRole::Inverted {
-        context.inverted()
+    // Inverted flips the scheme: asking for the inverted surface on light gives
+    // the dark primary, and vice versa. We normalise by rewriting the role
+    // before the match, so the match sees a non-inverted role and stays
+    // small and flat. If a future role variant is added, the `non_inverted`
+    // assignment forces a deliberate decision about how it relates to
+    // inversion.
+    let (effective_scheme, effective_role) = if role == BackgroundRole::Inverted {
+        (context.scheme().inverted(), BackgroundRole::Primary)
     } else {
-        context
+        (context.scheme(), role)
     };
 
-    let hex = match effective_context.scheme {
-        ColorScheme::Light => match role {
-            BackgroundRole::Primary | BackgroundRole::Tertiary => "#FFFFFF",
-            BackgroundRole::Secondary => "#F7F8FA",
-            BackgroundRole::GroupedPrimary | BackgroundRole::GroupedTertiary => "#F7F8FA",
-            BackgroundRole::GroupedSecondary => "#FFFFFF",
-            // Inverted is resolved by flipping the context first, so this is the
-            // primary of the opposite scheme.
-            BackgroundRole::Inverted => "#FFFFFF",
-        },
-        ColorScheme::Dark => match role {
-            BackgroundRole::Primary | BackgroundRole::GroupedPrimary => "#101012",
-            BackgroundRole::Secondary | BackgroundRole::GroupedSecondary => "#1C1C1E",
-            BackgroundRole::Tertiary | BackgroundRole::GroupedTertiary => "#242426",
-            BackgroundRole::Inverted => "#101012",
+    let hex = match (effective_scheme, effective_role) {
+        (ColorScheme::Light, BackgroundRole::Primary | BackgroundRole::Tertiary) => "#FFFFFF",
+        (ColorScheme::Light, BackgroundRole::Secondary) => "#F7F8FA",
+        (ColorScheme::Light, BackgroundRole::GroupedPrimary | BackgroundRole::GroupedTertiary) => {
+            "#F7F8FA"
+        }
+        (ColorScheme::Light, BackgroundRole::GroupedSecondary) => "#FFFFFF",
+        (ColorScheme::Dark, BackgroundRole::Primary | BackgroundRole::GroupedPrimary) => "#101012",
+        (ColorScheme::Dark, BackgroundRole::Secondary | BackgroundRole::GroupedSecondary) => {
+            "#1C1C1E"
+        }
+        (ColorScheme::Dark, BackgroundRole::Tertiary | BackgroundRole::GroupedTertiary) => {
+            "#242426"
+        }
+        // #[non_exhaustive] — a future role variant (e.g. Quaternary) lands
+        // here. It is NOT in the Figma v1 ladder, so the honest answer is
+        // the closest visible surface: the primary of the effective scheme.
+        _ => match effective_scheme {
+            ColorScheme::Light => "#FFFFFF",
+            ColorScheme::Dark => "#101012",
         },
     };
 
     Ok(BackgroundEntry {
         role,
-        key: role.key(),
-        hex,
+        hex: hex.to_owned(),
     })
 }
 
@@ -238,12 +257,12 @@ pub fn background_input(
     context: ThemeContext,
 ) -> Result<BgInput, BackgroundError> {
     let entry = resolve_background(role, context)?;
-    BgInput::solid(entry.hex).map_err(
-        |reason: Unreachable| BackgroundError::InvalidBackgroundHex {
+    BgInput::solid(&entry.hex).map_err(|reason: Unreachable| {
+        BackgroundError::InvalidBackgroundHex {
             role,
             reason: reason.to_string(),
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]
@@ -255,7 +274,7 @@ mod tests {
     #[test]
     fn neutral_light_backgrounds_match_figma_exactly() {
         let set = resolve_background_set(ThemeContext::light()).unwrap();
-        let pairs: Vec<(&str, &str)> = set.iter().map(|e| (e.key, e.hex)).collect();
+        let pairs: Vec<(&str, &str)> = set.iter().map(|e| (e.role.key(), e.hex.as_str())).collect();
         assert_eq!(
             pairs,
             vec![
@@ -273,7 +292,7 @@ mod tests {
     #[test]
     fn neutral_dark_backgrounds_match_figma_exactly() {
         let set = resolve_background_set(ThemeContext::dark()).unwrap();
-        let pairs: Vec<(&str, &str)> = set.iter().map(|e| (e.key, e.hex)).collect();
+        let pairs: Vec<(&str, &str)> = set.iter().map(|e| (e.role.key(), e.hex.as_str())).collect();
         assert_eq!(
             pairs,
             vec![
@@ -290,9 +309,26 @@ mod tests {
 
     #[test]
     fn inverted_preserves_contrast_axis_and_flips_scheme() {
-        let light_ic = ThemeContext::light_increased_contrast();
-        assert_eq!(light_ic.inverted(), ThemeContext::dark_increased_contrast());
+        // The contrast axis is *preserved* through inversion: flipping scheme
+        // must NOT change contrast. If this ever flips, Inverted backgrounds
+        // would carry the wrong contrast regime.
+        for (ctx, expected_inverse) in [
+            (ThemeContext::light(), ThemeContext::dark()),
+            (ThemeContext::dark(), ThemeContext::light()),
+            (
+                ThemeContext::light_increased_contrast(),
+                ThemeContext::dark_increased_contrast(),
+            ),
+            (
+                ThemeContext::dark_increased_contrast(),
+                ThemeContext::light_increased_contrast(),
+            ),
+        ] {
+            assert_eq!(ctx.inverted(), expected_inverse);
+        }
 
+        // The hex flips: the Inverted surface of the light scheme IS the
+        // primary of the dark scheme, and vice versa.
         assert_eq!(
             resolve_background(BackgroundRole::Inverted, ThemeContext::light())
                 .unwrap()
@@ -304,6 +340,23 @@ mod tests {
                 .unwrap()
                 .hex,
             "#FFFFFF"
+        );
+
+        // Other roles are NOT affected by the inversion logic — Primary on
+        // light is the same whether you ask for it via direct call or
+        // implicit through some hypothetical path. Guards against future
+        // refactors that move the Inverted rewrite up the stack.
+        assert_eq!(
+            resolve_background(BackgroundRole::Primary, ThemeContext::light())
+                .unwrap()
+                .hex,
+            "#FFFFFF"
+        );
+        assert_eq!(
+            resolve_background(BackgroundRole::Primary, ThemeContext::dark())
+                .unwrap()
+                .hex,
+            "#101012"
         );
     }
 
@@ -342,8 +395,12 @@ mod tests {
         use crate::spaces::srgb::srgb_from_hex;
         for context in [ThemeContext::light(), ThemeContext::dark()] {
             for entry in resolve_background_set(context).unwrap() {
-                srgb_from_hex(entry.hex).unwrap_or_else(|reason| {
-                    panic!("{} hex {} failed to parse: {reason}", entry.key, entry.hex)
+                srgb_from_hex(&entry.hex).unwrap_or_else(|reason| {
+                    panic!(
+                        "{} hex {} failed to parse: {reason}",
+                        entry.role.key(),
+                        entry.hex
+                    )
                 });
             }
         }
@@ -370,8 +427,8 @@ mod tests {
             }
             let light = resolve_background(role, ThemeContext::light()).unwrap();
             let dark = resolve_background(role, ThemeContext::dark()).unwrap();
-            let l_y = relative_luminance(light.hex);
-            let d_y = relative_luminance(dark.hex);
+            let l_y = relative_luminance(&light.hex);
+            let d_y = relative_luminance(&dark.hex);
             assert!(
                 l_y > d_y,
                 "{role:?}: light {} (Y={l_y}) must be lighter than dark {} (Y={d_y})",

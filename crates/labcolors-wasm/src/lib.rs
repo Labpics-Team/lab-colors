@@ -149,7 +149,7 @@ impl LabColors {
             labcolors_core::resolve_background_set(ctx).map_err(|e| to_js_error(e.into()))?;
         let out = js_sys::Object::new();
         for entry in &entries {
-            set(&out, entry.key, &JsValue::from_str(entry.hex));
+            set(&out, entry.role.key(), &JsValue::from_str(&entry.hex));
         }
         Ok(out.into())
     }
