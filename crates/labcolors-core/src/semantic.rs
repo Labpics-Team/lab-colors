@@ -149,7 +149,40 @@ use crate::wcag;
 /// and reports zero contrast, so a `Contract::range` floor beneath it would come
 /// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
 /// is held strictly above this until the real JND calibration lands.
+// NEEDS-SCIENCE — PROVISIONAL quantisation-cliff floor; awaits real JND calibration.
 const DECORATIVE_FLOOR_MIN: f64 = 7.6;
+
+// ── Text-anchor fractions (owner-calibrated against Daniel's Figma) ──────────────
+//
+// Each text/border role anchors its target to a fraction of the maximum contrast
+// the background can supply (the anchor principle, see the module header). These
+// fractions are calibrated against Daniel's Figma "Labels/Neutral" anchors on
+// white (~106 Lc max → 0.968 / 0.627 / 0.461 / 0.276) and stay "calibrates" until
+// his eye signs off — exactly the owner-calibrated-by-eye POLICY class. Lifted out
+// of the `RoleTable::default` body into named consts so each carries its own
+// paper-trail (marker + SSOT row) and is no longer an anonymous magic literal.
+
+/// Label-primary anchor fraction (~97 % of the per-background maximum) — also the
+/// `border-strong` contract (HIG Border/Strong == Labels/Primary strength).
+// NEEDS-SCIENCE — owner-calibrated fraction; awaits the owner's eye sign-off.
+const ANCHOR_FRACTION_PRIMARY: f64 = 0.968;
+
+/// Label-secondary anchor fraction.
+// NEEDS-SCIENCE — owner-calibrated fraction; awaits the owner's eye sign-off.
+const ANCHOR_FRACTION_SECONDARY: f64 = 0.627;
+
+/// Muted/icon anchor fraction (`label-tertiary` and `icon` share it).
+// NEEDS-SCIENCE — owner-calibrated fraction; awaits the owner's eye sign-off.
+const ANCHOR_FRACTION_MUTED: f64 = 0.461;
+
+/// Disabled (`label-quaternary`) anchor fraction.
+// NEEDS-SCIENCE — owner-calibrated fraction; awaits the owner's eye sign-off.
+const ANCHOR_FRACTION_DISABLED: f64 = 0.276;
+
+/// PROVISIONAL Lc decorative magnitude for the `separator` role — held above
+/// [`DECORATIVE_FLOOR_MIN`], pending the owner's dJ' anchor (chapter surface-jnd).
+// NEEDS-SCIENCE — PROVISIONAL Lc separator placeholder; awaits owner dJ' anchor.
+const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
 
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
@@ -173,14 +206,20 @@ const DECORATIVE_FLOOR_MIN: f64 = 7.6;
 
 /// Fill ladder dJ' anchors (`fill-primary` … `fill-quaternary`), strictly
 /// descending in visibility. Owner's literal values; light/dark per theme.
+// NEEDS-SCIENCE — owner's literal Figma-computed dJ' anchor; awaits surface-jnd.
 const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+// NEEDS-SCIENCE — owner's literal Figma-computed dJ' anchor; awaits surface-jnd.
 const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+// NEEDS-SCIENCE — owner's literal Figma-computed dJ' anchor; awaits surface-jnd.
 const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+// NEEDS-SCIENCE — owner's literal Figma-computed dJ' anchor; awaits surface-jnd.
 const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// Border base/soft dJ' anchors. Owner's literal values; base stronger than soft.
 /// (`border-strong` is an anchored readability role, not a dJ' step — not here.)
+// NEEDS-SCIENCE — owner's literal Figma-computed dJ' anchor; awaits surface-jnd.
 const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+// NEEDS-SCIENCE — owner's literal Figma-computed dJ' anchor; awaits surface-jnd.
 const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
 // ── PROVISIONAL shadow magnitudes (Lc decorative stub — see note) ───────────────
@@ -197,9 +236,13 @@ const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
 /// strongest) — the progressive FX/Shadow ramp. Lc placeholder, held above
 /// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
+// NEEDS-SCIENCE — PROVISIONAL Lc shadow placeholder; awaits surface-jnd alpha derivation.
 const SHADOW_MINOR_JND: f64 = 8.0;
+// NEEDS-SCIENCE — PROVISIONAL Lc shadow placeholder; awaits surface-jnd alpha derivation.
 const SHADOW_AMBIENT_JND: f64 = 9.5;
+// NEEDS-SCIENCE — PROVISIONAL Lc shadow placeholder; awaits surface-jnd alpha derivation.
 const SHADOW_PENUMBRA_JND: f64 = 11.5;
+// NEEDS-SCIENCE — PROVISIONAL Lc shadow placeholder; awaits surface-jnd alpha derivation.
 const SHADOW_MAJOR_JND: f64 = 14.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
@@ -506,6 +549,7 @@ pub enum RoleSpec {
 /// inherit this hue, which is what makes `text-primary` on white land as a
 /// relative of `#101012` (a cool near-black) rather than the sterile grey
 /// `#141414`.
+// NEEDS-SCIENCE — empirical hue measured on owner anchors; no published derivation.
 const NEUTRAL_HUE_DEG: f64 = 286.0;
 
 /// The fraction of the in-gamut maximum chroma a tinted role carries.
@@ -520,6 +564,7 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// `0.10` is the owner's calibrated optimum (picked by eye from engine-resolved
 /// swatches over `0.04 / 0.08 / 0.12`, 2026-06-12): on white, `text-primary`
 /// resolves to a cool near-black in the `#101012` family, not pure grey.
+// NEEDS-SCIENCE — owner-calibrated optimum picked by eye (sweep 0.04/0.08/0.12).
 const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// The default target perceptual colorfulness (CAM16-UCS `M'`) the v2 undertone
@@ -554,6 +599,7 @@ const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// best fit of this single strength scalar to the owner's reference (sweep in the
 /// `validate_against_reference` diagnostic, 2026-06-12). This is calibration of
 /// one scalar, not a fit of a curve to ramp nodes.
+// NEEDS-SCIENCE — calibrated default fit to owner reference; no published derivation.
 const TINT_TARGET_MP: f64 = 6.1;
 
 /// The default hue-pull stiffness for the v2 curve — the second (and last) free
@@ -569,6 +615,7 @@ const TINT_TARGET_MP: f64 = 6.1;
 /// honest-limit note on [`cusp_attracted_hue`]). `9.0` sits comfortably in the
 /// pinned regime, robust against float flutter that could otherwise nudge a
 /// near-white role toward the magenta cusp the reference never visits.
+// NEEDS-SCIENCE — empirical regime choice in the pinned band; no formal derivation.
 const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// The perceptibility threshold (mechanism 3), in CAM16-UCS `M'` units. Below
@@ -577,11 +624,13 @@ const TINT_HUE_STIFFNESS: f64 = 9.0;
 /// not chase it past the gamut wall; it takes the most the gamut allows and is
 /// honestly free to fall toward this floor at the very extremes (near-black /
 /// near-white), where even the reference's own `M'` drops to ~2.3–3.0.
+// NEEDS-SCIENCE — approximate perceptibility threshold; awaits JND calibration.
 const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
 /// canonical hue. The undertone may drift inside a blue-violet band; it may not
 /// wander into unrelated quadrants (red, cyan), so the search is bounded.
+// NEEDS-SCIENCE — bounding policy chosen by inspection; no formal derivation.
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
 /// The chroma policy a role table carries.
@@ -998,20 +1047,35 @@ impl Default for RoleTable {
                 // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
                 // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
-                (Role::LabelPrimary, anchor(0.968, Floor::AaText)),
-                (Role::LabelSecondary, anchor(0.627, Floor::AaText)),
-                (Role::LabelTertiary, anchor(0.461, Floor::AaUi)),
-                (Role::LabelQuaternary, anchor(0.276, Floor::None)),
+                (
+                    Role::LabelPrimary,
+                    anchor(ANCHOR_FRACTION_PRIMARY, Floor::AaText),
+                ),
+                (
+                    Role::LabelSecondary,
+                    anchor(ANCHOR_FRACTION_SECONDARY, Floor::AaText),
+                ),
+                (
+                    Role::LabelTertiary,
+                    anchor(ANCHOR_FRACTION_MUTED, Floor::AaUi),
+                ),
+                (
+                    Role::LabelQuaternary,
+                    anchor(ANCHOR_FRACTION_DISABLED, Floor::None),
+                ),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
-                (Role::Icon, anchor(0.461, Floor::AaUi)),
+                (Role::Icon, anchor(ANCHOR_FRACTION_MUTED, Floor::AaUi)),
                 // Separator — PROVISIONAL Lc decorative (no owner dJ' anchor yet).
-                (Role::Separator, decorative(8.0)),
+                (Role::Separator, decorative(SEPARATOR_DECORATIVE_LC)),
                 // Border ladder. Strong is an ANCHOR at the label-primary contract
                 // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
                 // N12-weight edge — a readability role, not a dJ' step. Base/Soft
                 // are dJ' steps carrying the owner's LITERAL anchors (light/dark per
                 // theme); base stronger than soft is the order contract.
-                (Role::BorderStrong, anchor(0.968, Floor::AaText)),
+                (
+                    Role::BorderStrong,
+                    anchor(ANCHOR_FRACTION_PRIMARY, Floor::AaText),
+                ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
                 (Role::BorderGhost, RoleSpec::Zero),
@@ -1333,6 +1397,7 @@ const CURVE_REFINE_STEPS: u32 = 3;
 /// The fixed-point stops once a re-plan moves the solved Oklab lightness by less
 /// than this — comfortably below one 8-bit grid step, so further passes cannot
 /// change the emitted hex.
+// NEEDS-SCIENCE — convergence tolerance chosen below the 8-bit grid; not derived.
 const LIGHTNESS_SETTLE: f64 = 0.002;
 
 /// The Oklab lightness of a solved colour, read back from its emitted hex.
@@ -1543,6 +1608,7 @@ fn enforce_text_hierarchy(
 /// so a demotion may need several grid steps to clear it — and when even the
 /// laxest legal target cannot, the junior is set equal to its senior instead.
 /// The 0.5 threshold separates real visual distinction from float noise.
+// NEEDS-SCIENCE — distinguishability threshold chosen by inspection; awaits JND work.
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still

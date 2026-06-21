@@ -11,8 +11,11 @@ pub struct CurveParams {
 impl Default for CurveParams {
     fn default() -> Self {
         Self {
+            // NEEDS-SCIENCE — owner-calibrated light-arm gamma; awaits JND derivation.
             gamma_light: 1.75,
+            // NEEDS-SCIENCE — owner-calibrated dark-arm gamma; awaits JND derivation.
             gamma_dark: 1.5,
+            // NEEDS-SCIENCE — owner-calibrated chroma-peak position; awaits JND derivation.
             chroma_peak_t: 0.35,
         }
     }
