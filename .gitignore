@@ -7,3 +7,6 @@ dist/
 target/
 Cargo.lock
 .git-pr-body.md
+
+# Epics live in the .agents/ SSOT, never tracked in-repo (see docs/decisions).
+epics/
