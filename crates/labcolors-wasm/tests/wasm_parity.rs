@@ -202,3 +202,61 @@ fn invalid_background_rejects() {
         "error must carry the stable code, got: {message}"
     );
 }
+
+/// TDD RED — the IC disposition is deterministic across the surface-shadow-tint
+/// fork, and never a fail-open alias.
+///
+/// The fork has exactly two honest sides:
+///   - CALIBRATED themes (`light` / `dark`): resolve successfully AND now carry
+///     the new `surface-shadow-tint` role with a real colour, the calibrated path
+///     this chapter adds.
+///   - DEFERRED themes (`light-ic` / `dark-ic`): reject deterministically with the
+///     stable `theme_not_calibrated` code — NEVER silently aliased to a Light/Dark
+///     result (invariant 4). This leg keeps `theme.rs:130` and
+///     `wasm_parity.rs:180` green.
+///
+/// RED REASON: `light` / `dark` do not emit a `surface-shadow-tint` role yet, so
+/// the calibrated side of the fork is missing — the assertion that the resolved
+/// role map carries `surface-shadow-tint` bites. The IC-rejection leg is asserted
+/// alongside so a future fix cannot weaken it into a fail-open alias unnoticed.
+#[wasm_bindgen_test]
+fn ic_disposition_deterministic() {
+    let engine = LabColors::new();
+
+    // Calibrated side: light / dark resolve and emit the new tint role.
+    for theme in ["light", "dark"] {
+        let result: JsValue = engine
+            .resolve_theme("#FFFFFF", theme)
+            .unwrap_or_else(|_| panic!("{theme} is a calibrated theme and must resolve"))
+            .into();
+        let roles = get_obj(&result, "roles");
+        let tint = js_sys::Reflect::get(&roles, &JsValue::from_str("surface-shadow-tint"))
+            .expect("reflect get cannot throw");
+        assert!(
+            !tint.is_undefined(),
+            "{theme}: calibrated themes must emit the surface-shadow-tint role"
+        );
+        let kind = get_str(&tint, "kind");
+        assert_eq!(
+            kind.as_deref(),
+            Some("color"),
+            "{theme}: surface-shadow-tint must be a law-derived colour, not absent or zero"
+        );
+    }
+
+    // Deferred side: IC themes reject deterministically — never a fail-open alias.
+    // `JsResolvedTheme` is not `Debug`, so collapse the Ok arm before observing the
+    // error — an accidental Ok (a fail-open alias) must surface as a test failure.
+    for ic in ["light-ic", "dark-ic"] {
+        let outcome = engine.resolve_theme("#FFFFFF", ic).map(|_| ());
+        assert!(
+            outcome.is_err(),
+            "{ic}: an uncalibrated theme must reject, never alias a Light/Dark result"
+        );
+        let message = error_message(outcome.expect_err("ic must reject"));
+        assert!(
+            message.contains("theme_not_calibrated"),
+            "{ic}: rejection must carry the stable theme_not_calibrated code, got: {message}"
+        );
+    }
+}
