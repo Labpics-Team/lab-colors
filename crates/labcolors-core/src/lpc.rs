@@ -179,26 +179,36 @@ fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
 // Do not re-declare these literals anywhere else.
 
 /// Soft black-clamp threshold (`blkThrs`): luminance below this is lifted.
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
 /// Soft black-clamp exponent (`blkClmp`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const SOFT_CLAMP_EXP: f64 = 1.414;
 /// Background power-curve exponent, normal polarity (`normBG`, bg > fg).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const EXP_BG_LIGHT: f64 = 0.56;
 /// Foreground power-curve exponent, normal polarity (`normTXT`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const EXP_FG_LIGHT: f64 = 0.57;
 /// Background power-curve exponent, reverse polarity (`revBG`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const EXP_BG_DARK: f64 = 0.65;
 /// Foreground power-curve exponent, reverse polarity (`revTXT`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const EXP_FG_DARK: f64 = 0.62;
 /// Raw power-curve delta scale, shared by both polarities (`scaleBoW` == `scaleWoB`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const CONTRAST_SCALE: f64 = 1.14;
 /// Minimum luminance delta below which the pair reports no contrast (`deltaYmin`).
 pub(crate) const DELTA_Y_MIN: f64 = 0.0005;
 /// Low-contrast clip: scaled deltas inside ±`loClip` collapse to zero.
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const LO_CLIP: f64 = 0.1;
 /// Polarity offset pulled toward zero past the clip, normal polarity (`loBoWoffset`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const LO_BOW_OFFSET: f64 = 0.027;
 /// Polarity offset pulled toward zero past the clip, reverse polarity (`loWoBoffset`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
 pub(crate) const LO_WOB_OFFSET: f64 = 0.027;
 /// Maps the offset contrast to the ~[-108, 108] Lc output range.
 pub(crate) const LC_SCALE: f64 = 100.0;

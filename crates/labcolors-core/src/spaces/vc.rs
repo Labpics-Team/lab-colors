@@ -1,4 +1,5 @@
 use crate::spaces::srgb::D65_WHITE;
+use std::sync::OnceLock;
 
 use super::{cam16::adapt, cat16::xyz_to_cone};
 
@@ -143,6 +144,39 @@ impl ViewingConditions {
         self.c < AVERAGE_DIM_MIDPOINT_C
     }
 
+    /// Slot index for the two precompiled viewing conditions (`0` = sRGB,
+    /// `1` = dim surround), or `None` for any other VC.
+    ///
+    /// Used by the grey and chroma fast paths and the grey-axis LUT to share a
+    /// single canonical slot assignment — no duplicated fingerprint comparisons
+    /// across callers. Matching on the full
+    /// [`fingerprint`](Self::fingerprint) (not just the surround pair `(c, nc)`)
+    /// ensures a caller-built VC that aliases a preset's `(c, nc)` but differs
+    /// in adaptation still returns `None` and falls back to the live solver.
+    ///
+    /// Preset fingerprints are computed once at first call and cached in two
+    /// `OnceLock<u64>` statics — `build()` + `fingerprint()` are never called
+    /// again on the hot path, eliminating the transcendental-op rebuild that was
+    /// paid on every `preset_index` invocation.
+    pub(crate) fn preset_index(&self) -> Option<usize> {
+        // Cached preset fingerprints: computed once, reused forever.
+        // Invariant: these statics hold exactly `ViewingConditions::srgb().fingerprint()`
+        // and `ViewingConditions::dim_surround().fingerprint()` respectively.
+        // They are the only place the presets are constructed at runtime; callers
+        // do not need to build a VC to compare against — they compare a single u64.
+        static SRGB_FP: OnceLock<u64> = OnceLock::new();
+        static DIM_FP: OnceLock<u64> = OnceLock::new();
+
+        let fp = self.fingerprint();
+        if fp == *SRGB_FP.get_or_init(|| ViewingConditions::srgb().fingerprint()) {
+            Some(0)
+        } else if fp == *DIM_FP.get_or_init(|| ViewingConditions::dim_surround().fingerprint()) {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
     /// Exact identity fingerprint over **every** field that affects a resolved
     /// colour. Two viewing conditions with equal fingerprints produce
     /// bit-identical output, so a fast-path cache may key on it: any difference
@@ -276,6 +310,47 @@ mod tests {
             alias.fingerprint(),
             srgb.fingerprint(),
             "an aw-perturbed VC must not collide with sRGB's fingerprint"
+        );
+    }
+
+    /// Class fix: preset_index must return the correct slot on repeated calls
+    /// (cached fingerprints must agree with a fresh construction every time).
+    /// Bites (mutation proof): change either OnceLock initialiser to use the
+    /// wrong preset → preset_index returns the wrong slot → assertions below fail.
+    #[test]
+    fn preset_index_is_stable_across_repeated_calls_and_cached_correctly() {
+        let srgb = ViewingConditions::srgb();
+        let dim = ViewingConditions::dim_surround();
+        let dark = ViewingConditions::dark_surround();
+
+        // First call primes the OnceLock; subsequent calls must agree.
+        for _ in 0..4 {
+            assert_eq!(
+                srgb.preset_index(),
+                Some(0),
+                "sRGB must always be slot 0 (OnceLock cache must not drift)"
+            );
+            assert_eq!(
+                dim.preset_index(),
+                Some(1),
+                "dim must always be slot 1 (OnceLock cache must not drift)"
+            );
+            assert_eq!(
+                dark.preset_index(),
+                None,
+                "dark surround is not a compiled preset and must return None"
+            );
+        }
+
+        // A surround-pair alias (same c/nc as sRGB, different aw) must NOT match
+        // the cached sRGB fingerprint — the full-field fingerprint guards this.
+        let mut alias = srgb;
+        alias.aw += 1.0;
+        assert_eq!(
+            alias.preset_index(),
+            None,
+            "a VC that aliases sRGB's (c, nc) but differs in aw must not match the \
+             cached sRGB fingerprint — subset-aliasing class is still open"
         );
     }
 }

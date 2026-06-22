@@ -54,20 +54,10 @@ thread_local! {
 }
 
 /// Map a viewing condition to its grey-table slot, or `None` for an unsupported
-/// VC (which then takes the live solver). Matches on the FULL VC
-/// [`fingerprint`](ViewingConditions::fingerprint), not just the surround pair
-/// `(c, nc)`: a caller-built VC that aliases `(c, nc)` but differs in adaptation
-/// must fall through to the live solver, never be served the wrong precompiled
-/// set.
+/// VC. Delegates to [`ViewingConditions::preset_index`], which is the canonical
+/// slot assignment shared across the grey/chroma fast paths and the LUT.
 fn vc_index(vc: &ViewingConditions) -> Option<usize> {
-    let fp = vc.fingerprint();
-    if fp == ViewingConditions::srgb().fingerprint() {
-        Some(0)
-    } else if fp == ViewingConditions::dim_surround().fingerprint() {
-        Some(1)
-    } else {
-        None
-    }
+    vc.preset_index()
 }
 
 /// The 8-bit grey code of `bg`, or `None` if it is not an on-grid solid grey.
