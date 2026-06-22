@@ -13,13 +13,12 @@
 | [`theme-invariant.md`](theme-invariant.md) | принято | инвариант светлой/тёмной темы (`semantic.rs`, `lpc.rs`, `spaces/vc.rs`) | 2026-06-10 |
 | [`surface-jnd.md`](surface-jnd.md) | принято (частично) — shadow ramp **HARD BLOCKED** | перцептивные магнитуды декоративного контракта (`semantic.rs`: `DECORATIVE_FLOOR_MIN`, `Role::Separator`, `SHADOW_*_JND`) | 2026-06-21 |
 
-## Внимание: `surface-jnd.md` — это скелет
+## `surface-jnd.md` — статус ратификации
 
-Выведенные **финальные магнитуды** (значение `DECORATIVE_FLOOR_MIN`, пин
-`Role::Separator`, ступени shadow-ramp) в `surface-jnd.md` помечены **`TBD`** —
-их ратифицируют downstream-скоупы `jnd-floor-and-separator-pin` и
-`shadow-ramp-derivation`, **не** этот эпик. Сохранены только факты движка
-(аналитический клип 7.30 Lc, описание сетки 7.6) и цитаты-первоисточники
-(порог невидимости тонкой линии Lc 15). Читатель не должен принимать `TBD`-числа
-за окончательные: пока соответствующий скоуп не закрыт, это плейсхолдеры, а
-shadow-ramp остаётся **HARD BLOCKED** на главе non-solid-backgrounds.
+**`DECORATIVE_FLOOR_MIN = 15.0`** и **`Role::Separator = decorative(DECORATIVE_FLOOR_MIN)`**
+ратифицированы эпиком `separator-tracks-jnd-floor` (chapter
+`raise-floor-and-pin-separator`). Ступени shadow-ramp (`SHADOW_*_JND`) —
+порядковые-заглушки (15.5/17.5/19.5/21.5), не производные JND; они остаются
+**`TBD` — заполняются скоупом `shadow-ramp-derivation`**. Shadow ramp остаётся
+**HARD BLOCKED** на главе non-solid-backgrounds до тех пор, пока не определена
+модель alpha→effective-luminance для составных фонов.

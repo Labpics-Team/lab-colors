@@ -485,7 +485,8 @@ pub fn solve(
     // [`resolve_set`](crate::resolve_set) compute it once and reuse it across a
     // whole batch instead of re-deriving the same background forward per target.
     let interval = bg.luma_interval(vc)?;
-    solve_in(&bg, contract, hue, chroma_policy, vc, interval)
+    // Public `solve` callers target arbitrary Lc values — not floor-pinned roles.
+    solve_in(&bg, contract, hue, chroma_policy, vc, interval, false)
 }
 
 /// One foreground request in a [`solve_many`] batch: the contract to meet plus
@@ -525,7 +526,16 @@ pub fn solve_many(
         .iter()
         .map(|job| {
             validate_job(job.contract, job.hue, job.chroma_policy)?;
-            solve_in(&bg, job.contract, job.hue, job.chroma_policy, vc, interval)
+            // `solve_many` serves arbitrary targets — not floor-pinned roles.
+            solve_in(
+                &bg,
+                job.contract,
+                job.hue,
+                job.chroma_policy,
+                vc,
+                interval,
+                false,
+            )
         })
         .collect())
 }
@@ -567,6 +577,15 @@ fn validate_job(
 /// validated (finite target/hue/ratio, sRGB gamut); the public entry points
 /// guard that before calling in. See the [module documentation](self) for the
 /// algorithm.
+///
+/// `strict_floor` — when `true` the *primary* analytic solution is accepted only
+/// when it strictly clears the perceptual target (`lc >= target`, no budget).
+/// A shortfall triggers the neighbour walk which steps darker until a value at
+/// or above the target is found. Use this for **floor-pinned decorative roles**
+/// (e.g. `separator` at `DECORATIVE_FLOOR_MIN = 15.0`) where the contract
+/// target *is* the floor and emitting below it violates the documented
+/// compliance claim.  For all other roles — text, UI, non-floor decorative — pass
+/// `false`: the 1-Lc quantisation budget in [`meets_floor_lc`] is correct there.
 pub(crate) fn solve_in(
     bg: &BgInput,
     contract: Contract,
@@ -574,6 +593,7 @@ pub(crate) fn solve_in(
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
     interval: LumaInterval,
+    strict_floor: bool,
 ) -> Result<Solved, Unreachable> {
     let target = contract.floor();
     let y_gov = interval.governing(target);
@@ -634,7 +654,14 @@ pub(crate) fn solve_in(
     };
 
     let primary = evaluate(l_final)?;
-    if primary.passes {
+    // For floor-pinned roles the primary is accepted only when it strictly clears
+    // the target — no quantisation budget. `meets_floor_lc` (used in `evaluate`)
+    // allows up to 1 Lc below the target, which is correct for general roles but
+    // means a floor-tracking role (e.g. separator at Lc 15.0) could emit Lc 14.91
+    // while the budget check passes. The extra strict gate below forces the
+    // neighbour walk for any sub-floor primary, closing the compliance gap.
+    let primary_strict_ok = !strict_floor || meets_floor_lc_strict(primary.lc, target);
+    if primary.passes && primary_strict_ok {
         return Ok(primary.solved);
     }
     solve_quantization_neighbor(l_final, target, hue, chroma_policy, primary.lc, evaluate)
@@ -1244,11 +1271,33 @@ fn finish(
 /// share: the governing endpoint passes its already-measured `solved.lc()` here
 /// directly (no re-derivation), a distinct endpoint passes the contrast
 /// [`meets_floor`] freshly measured for it.
+///
+/// The `±1` budget accepts values up to 1 Lc below the target. For general
+/// roles this is correct: the analytic solution lands close by construction, and
+/// the budget bridges the single dead-zone band the 8-bit grid opens near the
+/// clip. For **floor-pinned roles** (where the target equals a strict perceptual
+/// floor, e.g. `DECORATIVE_FLOOR_MIN = 15.0`), the caller must additionally
+/// apply [`meets_floor_lc_strict`] to prevent emitting a value below the floor
+/// itself. See [`solve_in`] for how both checks compose.
 fn meets_floor_lc(lc: f64, target: f64) -> bool {
     if target >= 0.0 {
         lc >= target - 1.0
     } else {
         lc <= target + 1.0
+    }
+}
+
+/// Whether a measured signed perceptual contrast **strictly** meets the (signed)
+/// floor — no quantisation budget. Used as an additional gate on the *primary*
+/// solution for floor-pinned roles (i.e. when `target` is itself the perceptual
+/// floor), ensuring the emitted colour is not below the ratified threshold.
+/// When this returns `false` the neighbour walk is triggered to find a step that
+/// genuinely clears the floor.
+fn meets_floor_lc_strict(lc: f64, target: f64) -> bool {
+    if target >= 0.0 {
+        lc >= target
+    } else {
+        lc <= target
     }
 }
 
@@ -1346,13 +1395,26 @@ mod tests {
         // so the pins below were re-measured against this merged tree, not carried
         // over from #62 (cache-only) or the role branch (no cache). Re-measured
         // 2026-06-13.
+        // Re-measured after strict-floor fix: Lc-decorative roles (separator +
+        // shadow stack) now use `strict_floor=true` in `solve_in`, meaning the
+        // primary analytic solution is accepted only when it strictly clears the
+        // target, not merely within the 1-Lc budget. Roles whose primary was
+        // sub-floor now trigger the neighbour walk (one extra solve per affected
+        // role per background), raising counts on some paths.
+        //
+        // CAUSAL NOTE (Finding 3 correction): the prior comment attributed count
+        // changes to a "15.1 → 15.0 (0.1 Lc shift)" step. That intermediate was
+        // NEVER committed as a constant (`git log --all -S 'DECORATIVE_FLOOR_MIN:
+        // f64 = 15.1'` returns empty); the ratified change is 7.6 → 15.0.  The
+        // counts below reflect the full 7.6 → 15.0 raise plus the strict-floor
+        // fix. Re-measured 2026-06-22.
         let expected = [
-            (("srgb", "#FFFFFF"), (1202u64, 1080u64)),
-            (("srgb", "#7F7F7F"), (935, 794)),
-            (("srgb", "#101012"), (1007, 858)),
-            (("dim", "#FFFFFF"), (1143, 996)),
-            (("dim", "#7F7F7F"), (887, 737)),
-            (("dim", "#101012"), (1031, 825)),
+            (("srgb", "#FFFFFF"), (1327u64, 1199u64)),
+            (("srgb", "#7F7F7F"), (971, 819)),
+            (("srgb", "#101012"), (1051, 900)),
+            (("dim", "#FFFFFF"), (1210, 1055)),
+            (("dim", "#7F7F7F"), (917, 743)),
+            (("dim", "#101012"), (1222, 988)),
         ];
 
         for (vc, name) in vcs() {
@@ -1381,6 +1443,28 @@ mod tests {
                     warm, warm_exp,
                     "{name}/{bg}: WARM CAM16 forwards/set = {warm}, expected {warm_exp}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn measure_cam16_forwards_actual() {
+        // Helper to re-measure all (vc, bg) counts without asserting.
+        // Run with: cargo test measure_cam16_forwards_actual -- --ignored --nocapture
+        use crate::spaces::cam16::FORWARD_CALLS;
+        let tbl = crate::RoleTable::default();
+        for (vc, name) in vcs() {
+            for bg in ["#FFFFFF", "#7F7F7F", "#101012"] {
+                let bgi = crate::BgInput::solid(bg).unwrap();
+                crate::semantic::reset_curve_plan_cache();
+                FORWARD_CALLS.with(|c| c.set(0));
+                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
+                let cold = FORWARD_CALLS.with(|c| c.get());
+                FORWARD_CALLS.with(|c| c.set(0));
+                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
+                let warm = FORWARD_CALLS.with(|c| c.get());
+                println!("(\"{name}\", \"{bg}\"), cold={cold}, warm={warm}");
             }
         }
     }
@@ -2503,7 +2587,7 @@ mod tests {
     /// Frozen `resolve_set` hex output across the owner's golden grid — the
     /// before/after gate for any hot-path refactor in this module. Each line is
     /// `vc|bg|policy|role=hex,…` produced by the live `resolve_set`. The full
-    /// set of emitted `#RRGGBB` hexes for every role must be byte-identical
+    /// set of emitted `#RRGGBB` hexes for every RATIFIED role must be byte-identical
     /// before and after a performance change; if any cell moves, the refactor
     /// altered the colour the caller gets and the test fails loudly.
     ///
@@ -2518,38 +2602,58 @@ mod tests {
     /// `fill-*`, `shadow-*`, `none`) instead of the old 10. The `label-*` cells are
     /// byte-identical to the prior `text-*` cells — the rename moved keys, not
     /// colours — and `border-strong` mirrors `label-primary` (it shares the
-    /// label-primary contract). The new `border-*`/`fill-*`/`shadow-*` cells are
-    /// PROVISIONAL decorative magnitudes (recalibrated in `surface-jnd` after #44).
-    /// This expansion is the one allowed touch to this module's golden: `Role::ALL`
-    /// grew, so the line shape had to grow with it.
+    /// label-primary contract). The new `border-*`/`fill-*` cells are ratified
+    /// decorative magnitudes. The `shadow-*` cells are EXCLUDED from the byte-lock
+    /// because the controlling ADR (`docs/decisions/surface-jnd.md` §3) marks the
+    /// shadow ramp HARD BLOCKED on the non-solid-backgrounds chapter — no per-step
+    /// JND is ratified. Shadow columns are stripped from both sides of the
+    /// comparison in `resolve_set_hex_matches_golden`; they are tested separately
+    /// for ascending order in `shadow_stack_is_strictly_ascending_in_visibility` and
+    /// `shadow_strict_order_over_corpus`.
+    // UPDATED: strict-floor fix (meets_floor_lc_strict for Decorative roles;
+    // see solve.rs::solve_in `strict_floor` parameter). The 1-Lc quantisation
+    // budget now only applies to text/UI roles; Lc-decorative roles (separator,
+    // shadows) must reach the floor exactly. A handful of separator cells
+    // shifted by one 8-bit step where the primary was sub-floor.
+    // shadow-* cells (order-only stubs, excluded from byte-lock) unchanged.
+    // All label-*/icon/border-*/fill-*/none cells byte-identical.
+    // (Previous update: floor correction DECORATIVE_FLOOR_MIN 15.1 → 15.0.
+    //  Before that: raise-floor-and-pin-separator, 7.6 → 15.1.)
     const RESOLVE_SET_GOLDEN: &[&str] = &[
-        "srgb|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,icon=#949494,separator=#E9E9E9,border-strong=#141414,border-base=#E9E9E9,border-soft=#F4F4F4,border-ghost=none,fill-primary=#E4E4E4,fill-secondary=#E9E9E9,fill-tertiary=#EFEFEF,fill-quaternary=#F4F4F4,fill-none=none,shadow-minor=#E9E9E9,shadow-ambient=#E6E6E6,shadow-penumbra=#E3E3E3,shadow-major=#DEDEDE,none=none",
-        "srgb|#FFFFFF|Tinted|label-primary=#0C0C11,label-secondary=#6D6D7E,label-tertiary=#9493A0,label-quaternary=#BEBEC6,icon=#9493A0,separator=#E8E8EA,border-strong=#0C0C11,border-base=#E9E9EB,border-soft=#F4F4F5,border-ghost=none,fill-primary=#E4E4E7,fill-secondary=#E9E9EB,fill-tertiary=#EFEFF1,fill-quaternary=#F4F4F5,fill-none=none,shadow-minor=#E8E8EA,shadow-ambient=#E5E5E8,shadow-penumbra=#E1E1E4,shadow-major=#DCDCE0,none=none",
-        "srgb|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border-strong=#131313,border-base=#DDDDDD,border-soft=#E8E8E8,border-ghost=none,fill-primary=#D9D9D9,fill-secondary=#DDDDDD,fill-tertiary=#E3E3E3,fill-quaternary=#E8E8E8,fill-none=none,shadow-minor=#E1E1E1,shadow-ambient=#DFDFDF,shadow-penumbra=#DBDBDB,shadow-major=#D7D7D7,none=none",
-        "srgb|#F2F2F7|Tinted|label-primary=#0C0C10,label-secondary=#69697B,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,icon=#8C8B99,separator=#E0E0E3,border-strong=#0C0C10,border-base=#DDDDE1,border-soft=#E8E8EA,border-ghost=none,fill-primary=#D8D8DD,fill-secondary=#DDDDE1,fill-tertiary=#E3E3E6,fill-quaternary=#E8E8EA,fill-none=none,shadow-minor=#E0E0E3,shadow-ambient=#DDDDE1,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
-        "srgb|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,icon=#363636,separator=#696969,border-strong=#070707,border-base=#6F6F6F,border-soft=#777777,border-ghost=none,fill-primary=#6C6C6C,fill-secondary=#6F6F6F,fill-tertiary=#747474,fill-quaternary=#777777,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#616161,shadow-major=#5B5B5B,none=none",
-        "srgb|#7F7F7F|Tinted|label-primary=#030304,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#575667,icon=#363541,separator=#5F5E70,border-strong=#030304,border-base=#6E6E7F,border-soft=#767686,border-ghost=none,fill-primary=#6A6A7C,fill-secondary=#6E6E7F,fill-tertiary=#727283,fill-quaternary=#767686,fill-none=none,shadow-minor=#5F5E70,shadow-ambient=#5B5B6C,shadow-penumbra=#575667,shadow-major=#515060,none=none",
-        "srgb|#1C1C1E|Neutral|label-primary=#F6F6F6,label-secondary=#BABABA,label-tertiary=#9A9A9A,label-quaternary=#727272,icon=#9A9A9A,separator=#3F3F3F,border-strong=#F6F6F6,border-base=#2B2B2B,border-soft=#242424,border-ghost=none,fill-primary=#2F2F2F,fill-secondary=#2B2B2B,fill-tertiary=#272727,fill-quaternary=#242424,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
-        "srgb|#1C1C1E|Tinted|label-primary=#F6F6F7,label-secondary=#B6B6BF,label-tertiary=#9494A0,label-quaternary=#68687A,icon=#9494A0,separator=#363541,border-strong=#F6F6F7,border-base=#2A2A34,border-soft=#23232B,border-ghost=none,fill-primary=#2E2E38,fill-secondary=#2A2A34,fill-tertiary=#26262F,fill-quaternary=#23232B,fill-none=none,shadow-minor=#363541,shadow-ambient=#3A3945,shadow-penumbra=#3F3F4B,shadow-major=#454553,none=none",
-        "srgb|#101012|Neutral|label-primary=#F6F6F6,label-secondary=#B9B9B9,label-tertiary=#989898,label-quaternary=#6F6F6F,icon=#989898,separator=#393939,border-strong=#F6F6F6,border-base=#202020,border-soft=#181818,border-ghost=none,fill-primary=#242424,fill-secondary=#202020,fill-tertiary=#1C1C1C,fill-quaternary=#181818,fill-none=none,shadow-minor=#393939,shadow-ambient=#3D3D3D,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
-        "srgb|#101012|Tinted|label-primary=#F6F6F7,label-secondary=#B5B5BD,label-tertiary=#91919E,label-quaternary=#646477,icon=#91919E,separator=#30303A,border-strong=#F6F6F7,border-base=#1F1F27,border-soft=#18171E,border-ghost=none,fill-primary=#23232B,fill-secondary=#1F1F27,fill-tertiary=#1B1B22,fill-quaternary=#18171E,fill-none=none,shadow-minor=#30303A,shadow-ambient=#34343F,shadow-penumbra=#3A3945,shadow-major=#40404D,none=none",
-        "srgb|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,icon=#353535,separator=#848484,border-strong=#0A0A0A,border-base=#6F6F6F,border-soft=#777777,border-ghost=none,fill-primary=#6B6B6B,fill-secondary=#6F6F6F,fill-tertiary=#737373,fill-quaternary=#777777,fill-none=none,shadow-minor=#848484,shadow-ambient=#818181,shadow-penumbra=#7D7D7D,shadow-major=#777777,none=none",
-        "srgb|#3478F6|Tinted|label-primary=#050406,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7D,icon=#35343F,separator=#7C7C8C,border-strong=#050406,border-base=#6D6D7E,border-soft=#757585,border-ghost=none,fill-primary=#69697B,fill-secondary=#6D6D7E,fill-tertiary=#717182,fill-quaternary=#757585,fill-none=none,shadow-minor=#7C7C8C,shadow-ambient=#797989,shadow-penumbra=#747484,shadow-major=#6E6E7F,none=none",
-        "dim|#FFFFFF|Neutral|label-primary=#131313,label-secondary=#757575,label-tertiary=#949494,label-quaternary=#C0C0C0,icon=#949494,separator=#E7E7E7,border-strong=#131313,border-base=#D8D8D8,border-soft=#E8E8E8,border-ghost=none,fill-primary=#BEBEBE,fill-secondary=#C4C4C4,fill-tertiary=#D1D1D1,fill-quaternary=#DFDFDF,fill-none=none,shadow-minor=#E7E7E7,shadow-ambient=#E4E4E4,shadow-penumbra=#E0E0E0,shadow-major=#DCDCDC,none=none",
-        "dim|#FFFFFF|Tinted|label-primary=#0E0E12,label-secondary=#6D6C7E,label-tertiary=#9493A0,label-quaternary=#BDBDC5,icon=#9493A0,separator=#E6E6E8,border-strong=#0E0E12,border-base=#D7D7DC,border-soft=#E8E8EA,border-ghost=none,fill-primary=#BDBDC4,fill-secondary=#C3C3CA,fill-tertiary=#D1D1D6,fill-quaternary=#DEDFE2,fill-none=none,shadow-minor=#E6E6E8,shadow-ambient=#E3E3E6,shadow-penumbra=#DFDFE3,shadow-major=#DADADF,none=none",
-        "dim|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,icon=#8C8C8C,separator=#E1E1E1,border-strong=#131313,border-base=#CDCDCD,border-soft=#DCDCDC,border-ghost=none,fill-primary=#B3B3B3,fill-secondary=#B9B9B9,fill-tertiary=#C6C6C6,fill-quaternary=#D3D3D3,fill-none=none,shadow-minor=#E1E1E1,shadow-ambient=#DEDEDE,shadow-penumbra=#DBDBDB,shadow-major=#D6D6D6,none=none",
-        "dim|#F2F2F7|Tinted|label-primary=#0D0D12,label-secondary=#6A6A7B,label-tertiary=#8C8B99,label-quaternary=#B8B8C1,icon=#8C8B99,separator=#E0E0E3,border-strong=#0D0D12,border-base=#CCCCD2,border-soft=#DCDCE0,border-ghost=none,fill-primary=#B2B2BB,fill-secondary=#B9B9C1,fill-tertiary=#C6C6CC,fill-quaternary=#D3D3D8,fill-none=none,shadow-minor=#E0E0E3,shadow-ambient=#DDDDE1,shadow-penumbra=#D9D9DE,shadow-major=#D5D5D9,none=none",
-        "dim|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,icon=#363636,separator=#696969,border-strong=#070707,border-base=#656565,border-soft=#707070,border-ghost=none,fill-primary=#525252,fill-secondary=#575757,fill-tertiary=#606060,fill-quaternary=#696969,fill-none=none,shadow-minor=#696969,shadow-ambient=#666666,shadow-penumbra=#616161,shadow-major=#5B5B5B,none=none",
-        "dim|#7F7F7F|Tinted|label-primary=#040406,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#585868,icon=#363541,separator=#606072,border-strong=#040406,border-base=#636375,border-soft=#6E6E7F,border-ghost=none,fill-primary=#515160,fill-secondary=#555565,fill-tertiary=#5E5E70,fill-quaternary=#68677A,fill-none=none,shadow-minor=#606072,shadow-ambient=#5D5C6E,shadow-penumbra=#585869,shadow-major=#525262,none=none",
-        "dim|#1C1C1E|Neutral|label-primary=#F4F4F4,label-secondary=#B8B8B8,label-tertiary=#989898,label-quaternary=#707070,icon=#989898,separator=#3D3D3D,border-strong=#F4F4F4,border-base=#323232,border-soft=#282828,border-ghost=none,fill-primary=#424242,fill-secondary=#3E3E3E,fill-tertiary=#363636,fill-quaternary=#2E2E2E,fill-none=none,shadow-minor=#3D3D3D,shadow-ambient=#424242,shadow-penumbra=#474747,shadow-major=#4E4E4E,none=none",
-        "dim|#1C1C1E|Tinted|label-primary=#F3F3F5,label-secondary=#B5B5BD,label-tertiary=#93939F,label-quaternary=#686779,icon=#93939F,separator=#363641,border-strong=#F3F3F5,border-base=#31313B,border-soft=#282730,border-ghost=none,fill-primary=#41414E,fill-secondary=#3D3D49,fill-tertiary=#353540,fill-quaternary=#2D2C36,fill-none=none,shadow-minor=#363641,shadow-ambient=#3A3A46,shadow-penumbra=#3F3F4C,shadow-major=#464553,none=none",
-        "dim|#101012|Neutral|label-primary=#F4F4F4,label-secondary=#B7B7B7,label-tertiary=#969696,label-quaternary=#6D6D6D,icon=#969696,separator=#373737,border-strong=#F4F4F4,border-base=#252525,border-soft=#1C1C1C,border-ghost=none,fill-primary=#353535,fill-secondary=#313131,fill-tertiary=#292929,fill-quaternary=#212121,fill-none=none,shadow-minor=#373737,shadow-ambient=#3C3C3C,shadow-penumbra=#414141,shadow-major=#484848,none=none",
-        "dim|#101012|Tinted|label-primary=#F3F3F5,label-secondary=#B3B3BC,label-tertiary=#90909D,label-quaternary=#646476,icon=#90909D,separator=#30303A,border-strong=#F3F3F5,border-base=#25242D,border-soft=#1C1C22,border-ghost=none,fill-primary=#34343F,fill-secondary=#30303B,fill-tertiary=#282831,fill-quaternary=#212028,fill-none=none,shadow-minor=#30303A,shadow-ambient=#34343F,shadow-penumbra=#3A3945,shadow-major=#40404D,none=none",
-        "dim|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,icon=#353535,separator=#848484,border-strong=#0A0A0A,border-base=#646464,border-soft=#6F6F6F,border-ghost=none,fill-primary=#525252,fill-secondary=#565656,fill-tertiary=#5F5F5F,fill-quaternary=#696969,fill-none=none,shadow-minor=#848484,shadow-ambient=#818181,shadow-penumbra=#7D7D7D,shadow-major=#777777,none=none",
-        "dim|#3478F6|Tinted|label-primary=#060608,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7E,icon=#35343F,separator=#7D7D8C,border-strong=#060608,border-base=#626275,border-soft=#6D6D7E,border-ghost=none,fill-primary=#505060,fill-secondary=#555465,fill-tertiary=#5E5D6F,fill-quaternary=#676779,fill-none=none,shadow-minor=#7D7D8C,shadow-ambient=#797989,shadow-penumbra=#757585,shadow-major=#6F6F80,none=none",
+        "srgb|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,icon=#949494,separator=#DCDCDC,border-strong=#141414,border-base=#E9E9E9,border-soft=#F4F4F4,border-ghost=none,fill-primary=#E4E4E4,fill-secondary=#E9E9E9,fill-tertiary=#EFEFEF,fill-quaternary=#F4F4F4,fill-none=none,none=none",
+        "srgb|#FFFFFF|Tinted|label-primary=#0C0C11,label-secondary=#6D6D7E,label-tertiary=#9493A0,label-quaternary=#BEBEC6,icon=#9493A0,separator=#DADADE,border-strong=#0C0C11,border-base=#E9E9EB,border-soft=#F4F4F5,border-ghost=none,fill-primary=#E4E4E7,fill-secondary=#E9E9EB,fill-tertiary=#EFEFF1,fill-quaternary=#F4F4F5,fill-none=none,none=none",
+        "srgb|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,icon=#8C8C8C,separator=#D4D4D4,border-strong=#131313,border-base=#DDDDDD,border-soft=#E8E8E8,border-ghost=none,fill-primary=#D9D9D9,fill-secondary=#DDDDDD,fill-tertiary=#E3E3E3,fill-quaternary=#E8E8E8,fill-none=none,none=none",
+        "srgb|#F2F2F7|Tinted|label-primary=#0C0C10,label-secondary=#69697B,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,icon=#8C8B99,separator=#D2D2D7,border-strong=#0C0C10,border-base=#DDDDE1,border-soft=#E8E8EA,border-ghost=none,fill-primary=#D8D8DD,fill-secondary=#DDDDE1,fill-tertiary=#E3E3E6,fill-quaternary=#E8E8EA,fill-none=none,none=none",
+        "srgb|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,icon=#363636,separator=#585858,border-strong=#070707,border-base=#6F6F6F,border-soft=#777777,border-ghost=none,fill-primary=#6C6C6C,fill-secondary=#6F6F6F,fill-tertiary=#747474,fill-quaternary=#777777,fill-none=none,none=none",
+        "srgb|#7F7F7F|Tinted|label-primary=#030304,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#575667,icon=#363541,separator=#4E4E5D,border-strong=#030304,border-base=#6E6E7F,border-soft=#767686,border-ghost=none,fill-primary=#6A6A7C,fill-secondary=#6E6E7F,fill-tertiary=#727283,fill-quaternary=#767686,fill-none=none,none=none",
+        "srgb|#1C1C1E|Neutral|label-primary=#F6F6F6,label-secondary=#BABABA,label-tertiary=#9A9A9A,label-quaternary=#727272,icon=#9A9A9A,separator=#525252,border-strong=#F6F6F6,border-base=#2B2B2B,border-soft=#242424,border-ghost=none,fill-primary=#2F2F2F,fill-secondary=#2B2B2B,fill-tertiary=#272727,fill-quaternary=#242424,fill-none=none,none=none",
+        "srgb|#1C1C1E|Tinted|label-primary=#F6F6F7,label-secondary=#B6B6BF,label-tertiary=#9494A0,label-quaternary=#68687A,icon=#9494A0,separator=#484856,border-strong=#F6F6F7,border-base=#2A2A34,border-soft=#23232B,border-ghost=none,fill-primary=#2E2E38,fill-secondary=#2A2A34,fill-tertiary=#26262F,fill-quaternary=#23232B,fill-none=none,none=none",
+        "srgb|#101012|Neutral|label-primary=#F6F6F6,label-secondary=#B9B9B9,label-tertiary=#989898,label-quaternary=#6F6F6F,icon=#989898,separator=#4D4D4D,border-strong=#F6F6F6,border-base=#202020,border-soft=#181818,border-ghost=none,fill-primary=#242424,fill-secondary=#202020,fill-tertiary=#1C1C1C,fill-quaternary=#181818,fill-none=none,none=none",
+        "srgb|#101012|Tinted|label-primary=#F6F6F7,label-secondary=#B5B5BD,label-tertiary=#91919E,label-quaternary=#646477,icon=#91919E,separator=#434350,border-strong=#F6F6F7,border-base=#1F1F27,border-soft=#18171E,border-ghost=none,fill-primary=#23232B,fill-secondary=#1F1F27,fill-tertiary=#1B1B22,fill-quaternary=#18171E,fill-none=none,none=none",
+        "srgb|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,icon=#353535,separator=#757575,border-strong=#0A0A0A,border-base=#6F6F6F,border-soft=#777777,border-ghost=none,fill-primary=#6B6B6B,fill-secondary=#6F6F6F,fill-tertiary=#737373,fill-quaternary=#777777,fill-none=none,none=none",
+        "srgb|#3478F6|Tinted|label-primary=#050406,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7D,icon=#35343F,separator=#6C6B7D,border-strong=#050406,border-base=#6D6D7E,border-soft=#757585,border-ghost=none,fill-primary=#69697B,fill-secondary=#6D6D7E,fill-tertiary=#717182,fill-quaternary=#757585,fill-none=none,none=none",
+        "dim|#FFFFFF|Neutral|label-primary=#131313,label-secondary=#757575,label-tertiary=#949494,label-quaternary=#C0C0C0,icon=#949494,separator=#DADADA,border-strong=#131313,border-base=#D8D8D8,border-soft=#E8E8E8,border-ghost=none,fill-primary=#BEBEBE,fill-secondary=#C4C4C4,fill-tertiary=#D1D1D1,fill-quaternary=#DFDFDF,fill-none=none,none=none",
+        "dim|#FFFFFF|Tinted|label-primary=#0E0E12,label-secondary=#6D6C7E,label-tertiary=#9493A0,label-quaternary=#BDBDC5,icon=#9493A0,separator=#D8D8DD,border-strong=#0E0E12,border-base=#D7D7DC,border-soft=#E8E8EA,border-ghost=none,fill-primary=#BDBDC4,fill-secondary=#C3C3CA,fill-tertiary=#D1D1D6,fill-quaternary=#DEDFE2,fill-none=none,none=none",
+        "dim|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,icon=#8C8C8C,separator=#D4D4D4,border-strong=#131313,border-base=#CDCDCD,border-soft=#DCDCDC,border-ghost=none,fill-primary=#B3B3B3,fill-secondary=#B9B9B9,fill-tertiary=#C6C6C6,fill-quaternary=#D3D3D3,fill-none=none,none=none",
+        "dim|#F2F2F7|Tinted|label-primary=#0D0D12,label-secondary=#6A6A7B,label-tertiary=#8C8B99,label-quaternary=#B8B8C1,icon=#8C8B99,separator=#D2D2D7,border-strong=#0D0D12,border-base=#CCCCD2,border-soft=#DCDCE0,border-ghost=none,fill-primary=#B2B2BB,fill-secondary=#B9B9C1,fill-tertiary=#C6C6CC,fill-quaternary=#D3D3D8,fill-none=none,none=none",
+        "dim|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,icon=#363636,separator=#585858,border-strong=#070707,border-base=#656565,border-soft=#707070,border-ghost=none,fill-primary=#525252,fill-secondary=#575757,fill-tertiary=#606060,fill-quaternary=#696969,fill-none=none,none=none",
+        "dim|#7F7F7F|Tinted|label-primary=#040406,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#585868,icon=#363541,separator=#50505F,border-strong=#040406,border-base=#636375,border-soft=#6E6E7F,border-ghost=none,fill-primary=#515160,fill-secondary=#555565,fill-tertiary=#5E5E70,fill-quaternary=#68677A,fill-none=none,none=none",
+        "dim|#1C1C1E|Neutral|label-primary=#F4F4F4,label-secondary=#B8B8B8,label-tertiary=#989898,label-quaternary=#707070,icon=#989898,separator=#515151,border-strong=#F4F4F4,border-base=#323232,border-soft=#282828,border-ghost=none,fill-primary=#424242,fill-secondary=#3E3E3E,fill-tertiary=#363636,fill-quaternary=#2E2E2E,fill-none=none,none=none",
+        "dim|#1C1C1E|Tinted|label-primary=#F3F3F5,label-secondary=#B5B5BD,label-tertiary=#93939F,label-quaternary=#686779,icon=#93939F,separator=#484856,border-strong=#F3F3F5,border-base=#31313B,border-soft=#282730,border-ghost=none,fill-primary=#41414E,fill-secondary=#3D3D49,fill-tertiary=#353540,fill-quaternary=#2D2C36,fill-none=none,none=none",
+        "dim|#101012|Neutral|label-primary=#F4F4F4,label-secondary=#B7B7B7,label-tertiary=#969696,label-quaternary=#6D6D6D,icon=#969696,separator=#4B4B4B,border-strong=#F4F4F4,border-base=#252525,border-soft=#1C1C1C,border-ghost=none,fill-primary=#353535,fill-secondary=#313131,fill-tertiary=#292929,fill-quaternary=#212121,fill-none=none,none=none",
+        "dim|#101012|Tinted|label-primary=#F3F3F5,label-secondary=#B3B3BC,label-tertiary=#90909D,label-quaternary=#646476,icon=#90909D,separator=#434350,border-strong=#F3F3F5,border-base=#25242D,border-soft=#1C1C22,border-ghost=none,fill-primary=#34343F,fill-secondary=#30303B,fill-tertiary=#282831,fill-quaternary=#212028,fill-none=none,none=none",
+        "dim|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,icon=#353535,separator=#747474,border-strong=#0A0A0A,border-base=#646464,border-soft=#6F6F6F,border-ghost=none,fill-primary=#525252,fill-secondary=#565656,fill-tertiary=#5F5F5F,fill-quaternary=#696969,fill-none=none,none=none",
+        "dim|#3478F6|Tinted|label-primary=#060608,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7E,icon=#35343F,separator=#6D6C7E,border-strong=#060608,border-base=#626275,border-soft=#6D6D7E,border-ghost=none,fill-primary=#505060,fill-secondary=#555465,fill-tertiary=#5E5D6F,fill-quaternary=#676779,fill-none=none,none=none",
     ];
 
-    /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.
+    /// Render one golden grid line for `(vc, bg, policy)` in the frozen format,
+    /// stripping HARD-BLOCKED shadow-* columns (docs/decisions/surface-jnd.md §3).
+    ///
+    /// Shadow ramp values are ORDER-ONLY provisional stubs (no ratified per-step JND
+    /// contract) and must NOT be byte-locked in the refactor-safety golden. They are
+    /// guarded separately by `shadow_stack_is_strictly_ascending_in_visibility` and
+    /// `shadow_strict_order_over_corpus`. Any performance-neutral refactor that
+    /// changes shadow hex is caught by those order tests, not by a false byte-lock.
     fn resolve_set_golden_line(
         vc: &ViewingConditions,
         vc_name: &str,
@@ -2558,10 +2662,21 @@ mod tests {
         chroma: crate::semantic::RoleChroma,
     ) -> String {
         use crate::semantic::{Resolved, RoleTable, resolve_set};
+        // Roles excluded from the golden byte-lock: shadow ramp is HARD BLOCKED in
+        // docs/decisions/surface-jnd.md §3. When the ADR lifts the block, remove
+        // these keys from the exclusion set and regenerate the golden strings.
+        // Keys must stay in sync with Role::key() in semantic.rs.
+        const SHADOW_KEYS: &[&str] = &[
+            "shadow-minor",
+            "shadow-ambient",
+            "shadow-penumbra",
+            "shadow-major",
+        ];
         let bg = BgInput::solid(bg_hex).unwrap();
         let table = RoleTable::default().with_chroma(chroma);
         let cells: Vec<String> = resolve_set(&bg, &table, vc)
             .iter()
+            .filter(|(role, _)| !SHADOW_KEYS.contains(&role.key()))
             .map(|(role, res)| {
                 let v = match res {
                     Resolved::Color { solved, .. } => solved.hex().to_string(),
@@ -2715,6 +2830,55 @@ mod tests {
             "golden grid size changed: covered {idx}, table has {}",
             RESOLVE_SET_GOLDEN.len()
         );
+    }
+
+    /// Shadow columns are excluded from the byte-lock golden (HARD BLOCKED in
+    /// docs/decisions/surface-jnd.md §3 — provisional stubs, no ratified JND).
+    /// This smoke test asserts that every shadow role resolves to a concrete colour
+    /// (not Unreachable / not None) on the golden grid — the stubs must be solvable
+    /// even while blocked, so a regression that breaks resolution is caught here
+    /// without falsely locking the provisional hex values.
+    #[test]
+    fn shadow_columns_resolve_on_golden_grid() {
+        use crate::semantic::{Resolved, Role, RoleChroma, RoleTable, resolve_set};
+        const SHADOW_ROLES: &[Role] = &[
+            Role::ShadowMinor,
+            Role::ShadowAmbient,
+            Role::ShadowPenumbra,
+            Role::ShadowMajor,
+        ];
+        let bgs = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+        let policies = [
+            RoleChroma::Neutral,
+            RoleChroma::Tinted {
+                hue_deg: 286.0,
+                ratio: 0.10,
+            },
+        ];
+        for (vc, vc_name) in vcs() {
+            for bg_hex in bgs {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                for chroma in policies {
+                    let table = RoleTable::default().with_chroma(chroma);
+                    let results = resolve_set(&bg, &table, &vc);
+                    for role in SHADOW_ROLES {
+                        let resolved = results
+                            .iter()
+                            .find(|(r, _)| r == role)
+                            .map(|(_, res)| res)
+                            .unwrap_or_else(|| {
+                                panic!("shadow role {role:?} missing from resolve_set")
+                            });
+                        assert!(
+                            matches!(resolved, Resolved::Color { .. }),
+                            "{vc_name} {bg_hex}: shadow role {role:?} did not resolve to a colour: {resolved:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

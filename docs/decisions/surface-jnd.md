@@ -42,14 +42,15 @@ APCA folds exactly that curvature into Lc. See §5.)
 
 ---
 
-> **Derived-magnitude placeholder (this epic ratifies no science).** This ADR is
-> rescued as a SKELETON. The §1b sourced *thin-line invisibility threshold* (Lc 15)
-> and every §1a engine fact (the 7.30 Lc analytic clip, the 7.6 grid description)
-> are preserved as ground truth. But the **chosen final constant value** is left as
-> `TBD — filled by scope jnd-floor-and-separator-pin / shadow-ramp-derivation`;
-> promoting it to a ratified `const` is downstream scope work, not this hygiene epic.
+> **Floor and separator ratified by epic `separator-tracks-jnd-floor`.**
+> `DECORATIVE_FLOOR_MIN = 15.0` and `Role::Separator = decorative(DECORATIVE_FLOOR_MIN)`
+> are now ratified constants (scope `raise-floor-and-pin-separator`). The §1b sourced
+> *thin-line invisibility threshold* (Lc 15) and every §1a engine fact (the 7.30 Lc
+> analytic clip, the 7.6 grid description) remain ground truth. The shadow ramp
+> (`SHADOW_*_JND`) remains **TBD — filled by scope `shadow-ramp-derivation`**; its
+> `HARD BLOCKER` status (non-solid-backgrounds chapter) is unchanged.
 
-## 1. `DECORATIVE_FLOOR_MIN` — VERDICT: **derived-to-root (engine) + authoritatively-sourced** (chosen value `TBD`)
+## 1. `DECORATIVE_FLOOR_MIN` — VERDICT: **derived-to-root (engine) + authoritatively-sourced** (chosen value **15.0**, ratified)
 
 ### 1a. What the current 7.6 actually is — derived to root from engine math
 
@@ -105,9 +106,9 @@ from the placeholder, grounded in the discernibility wording — **not a back-fi
 Implied single JND ≈ **Lc 9–10** (spot Lc30 ÷ 3; fluent Lc90 ÷ 10); Lc 15 ≈
 1.5× that JND = the reliable just-discernible step across users.
 
-**GROUNDED VALUE: `DECORATIVE_FLOOR_MIN = TBD` — filled by scope
-jnd-floor-and-separator-pin / shadow-ramp-derivation.** (The sourced thin-line
-floor is Lc 15; the chosen `const` is ratified downstream, not here.)
+**GROUNDED VALUE: `DECORATIVE_FLOOR_MIN = 15.0`** — ratified by epic
+`separator-tracks-jnd-floor` / chapter `raise-floor-and-pin-separator`. (The
+sourced thin-line floor is Lc 15; this const is now closed.)
 
 ---
 
@@ -132,12 +133,11 @@ over-separation = dirt).
   (30.05). All comfortably above the 7.6 cliff — **the engine can solve the
   sourced band**; the cliff does not constrain it.
 
-**GROUNDED VALUE: `Role::Separator` decorative magnitude = `TBD` — filled by scope
-jnd-floor-and-separator-pin.** The *sourced band* is [Lc 15, Lc 18] (bounded by the
-Lc 15 thin-line floor and the Lc 30 shape minimum); the +0..3 Lc headover is the
-owner's eye-calibration *within* that literature-bounded band — **not** a magic
-number. The chosen set point inside the band is ratified downstream, not in this
-hygiene epic.
+**GROUNDED VALUE: `Role::Separator` = `decorative(DECORATIVE_FLOOR_MIN)` = Lc 15**
+— ratified by epic `separator-tracks-jnd-floor` / chapter
+`raise-floor-and-pin-separator`. The sourced band is [Lc 15, Lc 18]; the set point
+at the floor (Lc 15 exactly, tracking `DECORATIVE_FLOOR_MIN`) is the conservative,
+source-grounded choice — no magic number, no independent literal.
 
 ---
 
@@ -189,25 +189,27 @@ the alpha→Lc mapping.
   rung values marked BLOCKED with the open question above as a code comment. **Do
   NOT fabricate per-step shadow JNDs.**
 
-**Provisional, order-only placeholder values:** `TBD — filled by scope
-shadow-ramp-derivation` (≥ floor, strictly ascending; perceptual magnitude
-explicitly NOT claimed). The chosen rung numbers sit above the sourced Lc 15
-floor and preserve strict order only; they are *not* derived JNDs and the
-comment must say so. This epic ratifies none of them — the shadow ramp stays
-**HARD BLOCKED** on the non-solid-backgrounds chapter (see above).
+**Provisional, order-only placeholder values:** `15.5 / 17.5 / 19.5 / 21.5`
+(SHADOW_MINOR/AMBIENT/PENUMBRA/MAJOR_JND in `semantic.rs`). These are **not**
+derived JNDs — they are order-preserving stubs lifted onto the ratified Lc 15
+floor by epic `separator-tracks-jnd-floor`. They remain **TBD — filled by scope
+`shadow-ramp-derivation`** (≥ floor, strictly ascending; perceptual magnitude
+explicitly NOT claimed). The shadow ramp stays **HARD BLOCKED** on the
+non-solid-backgrounds chapter (see above).
 
 ---
 
 ## 4. Recommended edits (no back-fit)
 
-| `semantic.rs` | from | to (downstream) | basis |
-|---|---|---|---|
-| `DECORATIVE_FLOOR_MIN` (:152) | 7.6 | **TBD** (sourced floor Lc 15) | §1 — engine cliff proof + 2 APCA sources |
-| `Role::Separator` (:1008) | `decorative(8.0)` | **TBD** (sourced band [15,18]) | §2 |
-| `SHADOW_*_JND` (:200-203) | 8.0/9.5/11.5/14.0 | **TBD**, order-only ≥ floor, **BLOCKED comment** | §3 |
+| `semantic.rs` | from | to (ratified / stub) | basis | status |
+|---|---|---|---|---|
+| `DECORATIVE_FLOOR_MIN` (:156) | 7.6 | **15.0** | §1 — engine cliff proof + 2 APCA sources | **ratified** by `separator-tracks-jnd-floor` |
+| `Role::Separator` (:1014) | `decorative(8.0)` | `decorative(DECORATIVE_FLOOR_MIN)` = Lc 15 | §2 | **ratified** by `separator-tracks-jnd-floor` |
+| `SHADOW_*_JND` (:205-208) | 8.0/9.5/11.5/14.0 | 15.5/17.5/19.5/21.5, order-only ≥ floor, **BLOCKED** | §3 | **HARD BLOCKER** — filled by `shadow-ramp-derivation` |
 
-The `to` column records the *downstream* edits scopes `jnd-floor-and-separator-pin`
-/ `shadow-ramp-derivation` will make; this epic ships none of them.
+The floor and separator edits are now complete. The shadow stubs are order-only
+placeholders on the Lc 15 floor; perceptual JNDs are not claimed and await
+the non-solid-backgrounds chapter.
 
 Also fix the `DECORATIVE_FLOOR_MIN` doc comment (`:146-152`): it must say
 *"engine quantisation/emission floor (≈7.3 analytic clip + 8-bit grid)"* and
@@ -280,24 +282,24 @@ factor in the engine.
    (they do today); no runtime mutation path. A test asserts the table's
    `Decorative { magnitude }` for these roles equals the named `const`s.
 4. **Floor is a perceptual quantity, not the engine cliff.** A regression test
-   pins `DECORATIVE_FLOOR_MIN == TBD` (the chosen value, ratified downstream)
-   *and* documents that the engine emission cliff is the *separate*
-   `(LO_CLIP − offset)·LC_SCALE = 7.30` — guarding against anyone re-collapsing
-   the two (the original #44 defect). The 7.30 figure is an engine fact and stays;
-   only the chosen floor constant is TBD here.
+   pins `DECORATIVE_FLOOR_MIN == 15.0` (the ratified value, exact; any drift
+   fails the assertion — `>= 15.0` is not sufficient) *and* documents that the
+   engine emission cliff is the *separate* `(LO_CLIP − offset)·LC_SCALE = 7.30`
+   — guarding against anyone re-collapsing the two (the original #44 defect).
+   The 7.30 figure is an engine fact and stays; the chosen floor is now 15.0.
 
 ---
 
 ## 8. Verdict summary
 
-| Magnitude | Chosen value (this epic) | Sourced basis | Verdict |
-|---|---|---|---|
-| `DECORATIVE_FLOOR_MIN` | **TBD** (downstream) | Lc 15 sourced; cliff 7.30 disproven as JND | **derived-to-root + authoritatively-sourced** |
-| `Role::Separator` hairline | **TBD** (downstream) | sourced band [Lc 15, 18] | **authoritatively-sourced** |
-| `SHADOW_MINOR_JND` | **TBD** (downstream) | order-only ≥ floor (rung value blocked) | **HARD BLOCKER** |
-| `SHADOW_AMBIENT_JND` | **TBD** (downstream) | order-only, > minor (rung value blocked) | **HARD BLOCKER** |
-| `SHADOW_PENUMBRA_JND` | **TBD** (downstream) | order-only, > ambient (rung value blocked) | **HARD BLOCKER** |
-| `SHADOW_MAJOR_JND` | **TBD** (downstream) | order-only, > penumbra (rung value blocked) | **HARD BLOCKER** |
+| Magnitude | Chosen value | Sourced basis | Verdict | Status |
+|---|---|---|---|---|
+| `DECORATIVE_FLOOR_MIN` | **15.0** | Lc 15 sourced; cliff 7.30 disproven as JND | **derived-to-root + authoritatively-sourced** | **ratified** by `separator-tracks-jnd-floor` |
+| `Role::Separator` hairline | **`decorative(15.0)`** | sourced band [Lc 15, 18]; floor = conservative set point | **authoritatively-sourced** | **ratified** by `separator-tracks-jnd-floor` |
+| `SHADOW_MINOR_JND` | **15.5** (order-only stub) | order-only ≥ floor (rung value blocked) | **HARD BLOCKER** | TBD — `shadow-ramp-derivation` |
+| `SHADOW_AMBIENT_JND` | **17.5** (order-only stub) | order-only, > minor (rung value blocked) | **HARD BLOCKER** | TBD — `shadow-ramp-derivation` |
+| `SHADOW_PENUMBRA_JND` | **19.5** (order-only stub) | order-only, > ambient (rung value blocked) | **HARD BLOCKER** | TBD — `shadow-ramp-derivation` |
+| `SHADOW_MAJOR_JND` | **21.5** (order-only stub) | order-only, > penumbra (rung value blocked) | **HARD BLOCKER** | TBD — `shadow-ramp-derivation` |
 
 **Alpha-over-variable-content shadow case is flagged irreducible** for the owner
 and the **non-solid-backgrounds chapter** (the alpha→effective-luminance

@@ -145,11 +145,25 @@ use crate::wcag;
 
 /// The reliable lower bound on a decorative role's contrast magnitude.
 ///
-/// Below roughly this `Lc` the solver hits its quantisation cliff (issue #44)
-/// and reports zero contrast, so a `Contract::range` floor beneath it would come
-/// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
-/// is held strictly above this until the real JND calibration lands.
-const DECORATIVE_FLOOR_MIN: f64 = 7.6;
+/// Two distinct quantities live in this module and must never be re-collapsed:
+///
+/// * **Engine quantisation/emission cliff ≈ Lc 7.30** — the analytic clip from
+///   `lpc.rs` constants (`LO_CLIP − LO_BOW_OFFSET) × LC_SCALE`; the 8-bit sRGB
+///   grid rounds this up to ≈ 7.6. This is a *solver artifact*, not a perceptual
+///   threshold (issue #44).
+///
+/// * **Perceptual floor = Lc 15** (this constant) — the APCA-author-published
+///   thin-line invisibility floor: *"Lc 15 is the point of invisibility for many
+///   users. This is especially true for thin lines or borders."* (Myndex,
+///   APCAeasyIntro; identical wording in WhyAPCA). Two independent primary sources,
+///   explicit for thin lines/borders/dividers, in the exact Lc unit the engine uses.
+///   Ratified at **15.0** by epic `separator-tracks-jnd-floor` /
+///   `raise-floor-and-pin-separator` (docs/decisions/surface-jnd.md §1b, §4, §8).
+///
+/// The `floor_cliff_gap_invariant` test enforces a gap > 5.0 Lc between the two
+/// quantities. // GROUNDED — Lc 15 thin-line floor, surface-jnd §1b
+/// (Myndex APCAeasyIntro + WhyAPCA, 2 cites; ratified by separator-tracks-jnd-floor)
+const DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
@@ -196,11 +210,12 @@ const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
 /// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
 /// strongest) — the progressive FX/Shadow ramp. Lc placeholder, held above
-/// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
-const SHADOW_MINOR_JND: f64 = 8.0;
-const SHADOW_AMBIENT_JND: f64 = 9.5;
-const SHADOW_PENUMBRA_JND: f64 = 11.5;
-const SHADOW_MAJOR_JND: f64 = 14.0;
+/// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps (ORDER-ONLY, BLOCKED —
+/// no per-step JND claim pending surface-jnd chapter, per ADR §3 HARD BLOCKER).
+const SHADOW_MINOR_JND: f64 = 15.5;
+const SHADOW_AMBIENT_JND: f64 = 17.5;
+const SHADOW_PENUMBRA_JND: f64 = 19.5;
+const SHADOW_MAJOR_JND: f64 = 21.5;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
@@ -1004,8 +1019,9 @@ impl Default for RoleTable {
                 (Role::LabelQuaternary, anchor(0.276, Floor::None)),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
-                // Separator — PROVISIONAL Lc decorative (no owner dJ' anchor yet).
-                (Role::Separator, decorative(8.0)),
+                // Separator — tracks DECORATIVE_FLOOR_MIN (perceptual thin-line
+                // floor, surface-jnd §7.1). Not independently hardcoded. // GROUNDED
+                (Role::Separator, decorative(DECORATIVE_FLOOR_MIN)),
                 // Border ladder. Strong is an ANCHOR at the label-primary contract
                 // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
                 // N12-weight edge — a readability role, not a dJ' step. Base/Soft
@@ -1202,10 +1218,15 @@ fn resolve_in(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> Resolved {
-    let contract = match table.spec(role) {
+    // `strict_floor` is true only for Lc-decorative roles: their target IS the
+    // perceptual floor, so the emitted colour must not fall below it even by a
+    // sub-Lc quantisation residual.  Anchor roles (text/UI) aim for an analytic
+    // target above the floor and accept the 1-Lc budget; dJ' roles bypass this
+    // path entirely.
+    let (contract, strict_floor) = match table.spec(role) {
         RoleSpec::Zero => return Resolved::None,
         RoleSpec::Anchor(anchor) => match ctx.anchored_contract(anchor) {
-            Ok(c) => c,
+            Ok(c) => (c, false),
             Err(reason) => return Resolved::Unreachable(reason),
         },
         RoleSpec::DecorativeDj { magnitude_dj } => {
@@ -1223,14 +1244,15 @@ fn resolve_in(
                 Err(reason) => Resolved::Unreachable(reason),
             };
         }
-        RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
+        // Lc-decorative: target == floor, emit must be at or above the floor.
+        RoleSpec::Decorative { magnitude } => (ctx.decorative_contract(magnitude), true),
     };
 
     let interval = match &ctx.interval {
         Ok(iv) => *iv,
         Err(reason) => return Resolved::Unreachable(reason.clone()),
     };
-    match solve_with_chroma(bg, contract, table.chroma(), vc, interval) {
+    match solve_with_chroma(bg, contract, table.chroma(), vc, interval, strict_floor) {
         Ok(solved) => Resolved::color(solved),
         Err(reason) => Resolved::Unreachable(reason),
     }
@@ -1258,11 +1280,14 @@ fn solve_with_chroma(
     chroma: RoleChroma,
     vc: &ViewingConditions,
     interval: solve::LumaInterval,
+    strict_floor: bool,
 ) -> Result<Solved, Unreachable> {
     if let RoleChroma::Curve { .. } = chroma {
         // Probe — discover the contrast-solved lightness achromatically.
+        // Probes are floor-agnostic: the fixed-point loop only discovers the
+        // lightness for chroma planning; the final solve (below) enforces the floor.
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
-        let probe = solve::solve_in(bg, contract, probe_hue, probe_chroma, vc, interval)?;
+        let probe = solve::solve_in(bg, contract, probe_hue, probe_chroma, vc, interval, false)?;
         let mut l_plan = solved_oklab_lightness(&probe);
         let mut solved = probe;
         // Fixed-point: re-plan at the lightness the last solve actually produced.
@@ -1271,7 +1296,12 @@ fn solve_with_chroma(
         // it. `LIGHTNESS_SETTLE` stops as soon as the move is perceptually nil.
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
-            solved = solve::solve_in(bg, contract, hue, policy, vc, interval)?;
+            // All but the last refinement are probes; pass `strict_floor` on the
+            // final step. Using it on every step risks a slightly different settled
+            // lightness (the strict primary fail shifts the emitted L by ~½ step),
+            // but the fixed-point tolerates this: it converges to the same L_OK
+            // neighbourhood and the last solve delivers the floor-compliant hex.
+            solved = solve::solve_in(bg, contract, hue, policy, vc, interval, strict_floor)?;
             let l_new = solved_oklab_lightness(&solved);
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
@@ -1281,7 +1311,7 @@ fn solve_with_chroma(
         Ok(solved)
     } else {
         let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
-        solve::solve_in(bg, contract, hue, policy, vc, interval)
+        solve::solve_in(bg, contract, hue, policy, vc, interval, strict_floor)
     }
 }
 
@@ -1566,7 +1596,9 @@ fn demote_below(
     // Reuse the set's one background interval; an unreducible background has no
     // demotion to offer, so propagate that as "no distinguishable step".
     let interval = ctx.interval.as_ref().ok().copied()?;
-    let solved = solve_with_chroma(bg, contract, chroma, vc, interval).ok()?;
+    // Demotion probes target an anchored Lc below the senior — not a floor-pinned
+    // decorative role — so the budget is appropriate here.
+    let solved = solve_with_chroma(bg, contract, chroma, vc, interval, false).ok()?;
     if solved.lc().abs() + STRICT_STEP <= senior_mag {
         Some(solved)
     } else {
@@ -1615,6 +1647,7 @@ fn max_contrast(
         ChromaPolicy::Neutral,
         vc,
         interval,
+        false, // max-contrast probe: not a floor-pinned role
     ) {
         // The probe is unreachable by design; ExceedsRange carries the ceiling.
         Err(Unreachable::ExceedsRange { max_achievable, .. }) => Ok(max_achievable.abs()),
@@ -2314,10 +2347,13 @@ mod tests {
                 other => panic!("{other:?}"),
             };
             assert!(
-                solved.lc().abs() >= DECORATIVE_FLOOR_MIN - 1.0,
-                "{}: Lc decorative |Lc| {} below reliable floor",
+                solved.lc().abs() >= DECORATIVE_FLOOR_MIN,
+                "{}: Lc decorative |Lc| {} is below DECORATIVE_FLOOR_MIN \
+                 ({}); strict-floor gate (solve_in strict_floor=true) must \
+                 prevent sub-floor emissions from Lc-decorative roles",
                 role.key(),
-                solved.lc().abs()
+                solved.lc().abs(),
+                DECORATIVE_FLOOR_MIN
             );
         }
     }
@@ -3205,7 +3241,7 @@ mod tests {
             ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
             ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
             ("srgb", "#FFFFFF", "icon", "#94949E"),
-            ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "separator", "#D8D8E1"),
             ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
             ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
             ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
@@ -3215,17 +3251,17 @@ mod tests {
             ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
             ("srgb", "#FFFFFF", "fill-quaternary", "#F3F3FE"),
             ("srgb", "#FFFFFF", "fill-none", "none"),
-            ("srgb", "#FFFFFF", "shadow-minor", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "shadow-ambient", "#E2E2EC"),
-            ("srgb", "#FFFFFF", "shadow-penumbra", "#DEDEE8"),
-            ("srgb", "#FFFFFF", "shadow-major", "#DADAE3"),
+            ("srgb", "#FFFFFF", "shadow-minor", "#D7D7E0"),
+            ("srgb", "#FFFFFF", "shadow-ambient", "#D3D3DD"),
+            ("srgb", "#FFFFFF", "shadow-penumbra", "#CFCFD9"),
+            ("srgb", "#FFFFFF", "shadow-major", "#CCCCD5"),
             ("srgb", "#FFFFFF", "none", "none"),
             ("srgb", "#F2F2F7", "label-primary", "#09090F"),
             ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
             ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
             ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
             ("srgb", "#F2F2F7", "icon", "#8B8B95"),
-            ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "separator", "#D0D0DA"),
             ("srgb", "#F2F2F7", "border-strong", "#09090F"),
             ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
             ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
@@ -3235,17 +3271,17 @@ mod tests {
             ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
             ("srgb", "#F2F2F7", "fill-quaternary", "#E7E7F0"),
             ("srgb", "#F2F2F7", "fill-none", "none"),
-            ("srgb", "#F2F2F7", "shadow-minor", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "shadow-ambient", "#DADAE4"),
-            ("srgb", "#F2F2F7", "shadow-penumbra", "#D7D7E0"),
-            ("srgb", "#F2F2F7", "shadow-major", "#D2D2DC"),
+            ("srgb", "#F2F2F7", "shadow-minor", "#CFCFD9"),
+            ("srgb", "#F2F2F7", "shadow-ambient", "#CCCCD5"),
+            ("srgb", "#F2F2F7", "shadow-penumbra", "#C8C8D1"),
+            ("srgb", "#F2F2F7", "shadow-major", "#C4C4CE"),
             ("srgb", "#F2F2F7", "none", "none"),
             ("srgb", "#7F7F7F", "label-primary", "#010103"),
             ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
             ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
             ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
             ("srgb", "#7F7F7F", "icon", "#36353D"),
-            ("srgb", "#7F7F7F", "separator", "#63636B"),
+            ("srgb", "#7F7F7F", "separator", "#52525A"),
             ("srgb", "#7F7F7F", "border-strong", "#010103"),
             ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
             ("srgb", "#7F7F7F", "border-soft", "#76767F"),
@@ -3255,17 +3291,17 @@ mod tests {
             ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
             ("srgb", "#7F7F7F", "fill-quaternary", "#76767F"),
             ("srgb", "#7F7F7F", "fill-none", "none"),
-            ("srgb", "#7F7F7F", "shadow-minor", "#63636B"),
-            ("srgb", "#7F7F7F", "shadow-ambient", "#5F5F68"),
-            ("srgb", "#7F7F7F", "shadow-penumbra", "#5B5B63"),
-            ("srgb", "#7F7F7F", "shadow-major", "#54545D"),
+            ("srgb", "#7F7F7F", "shadow-minor", "#515059"),
+            ("srgb", "#7F7F7F", "shadow-ambient", "#4B4B54"),
+            ("srgb", "#7F7F7F", "shadow-penumbra", "#47474E"),
+            ("srgb", "#7F7F7F", "shadow-major", "#414149"),
             ("srgb", "#7F7F7F", "none", "none"),
             ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
             ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
             ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
             ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
             ("srgb", "#1C1C1E", "icon", "#95959E"),
-            ("srgb", "#1C1C1E", "separator", "#38383F"),
+            ("srgb", "#1C1C1E", "separator", "#4B4B54"),
             ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
             ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
             ("srgb", "#1C1C1E", "border-soft", "#23232A"),
@@ -3275,17 +3311,17 @@ mod tests {
             ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
             ("srgb", "#1C1C1E", "fill-quaternary", "#23232A"),
             ("srgb", "#1C1C1E", "fill-none", "none"),
-            ("srgb", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("srgb", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("srgb", "#1C1C1E", "shadow-penumbra", "#42424A"),
-            ("srgb", "#1C1C1E", "shadow-major", "#494950"),
+            ("srgb", "#1C1C1E", "shadow-minor", "#4D4D55"),
+            ("srgb", "#1C1C1E", "shadow-ambient", "#52525A"),
+            ("srgb", "#1C1C1E", "shadow-penumbra", "#575760"),
+            ("srgb", "#1C1C1E", "shadow-major", "#5C5C65"),
             ("srgb", "#1C1C1E", "none", "none"),
             ("srgb", "#101012", "label-primary", "#F2F2FC"),
             ("srgb", "#101012", "label-secondary", "#B4B4BE"),
             ("srgb", "#101012", "label-tertiary", "#93939C"),
             ("srgb", "#101012", "label-quaternary", "#696972"),
             ("srgb", "#101012", "icon", "#93939C"),
-            ("srgb", "#101012", "separator", "#323239"),
+            ("srgb", "#101012", "separator", "#46464E"),
             ("srgb", "#101012", "border-strong", "#F2F2FC"),
             ("srgb", "#101012", "border-base", "#1F1F27"),
             ("srgb", "#101012", "border-soft", "#18171E"),
@@ -3295,17 +3331,17 @@ mod tests {
             ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
             ("srgb", "#101012", "fill-quaternary", "#18171E"),
             ("srgb", "#101012", "fill-none", "none"),
-            ("srgb", "#101012", "shadow-minor", "#323239"),
-            ("srgb", "#101012", "shadow-ambient", "#36363E"),
-            ("srgb", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("srgb", "#101012", "shadow-major", "#43434B"),
+            ("srgb", "#101012", "shadow-minor", "#48484F"),
+            ("srgb", "#101012", "shadow-ambient", "#4C4C55"),
+            ("srgb", "#101012", "shadow-penumbra", "#52525A"),
+            ("srgb", "#101012", "shadow-major", "#57575F"),
             ("srgb", "#101012", "none", "none"),
             ("srgb", "#3478F6", "label-primary", "#020205"),
             ("srgb", "#3478F6", "label-secondary", "#14141B"),
             ("srgb", "#3478F6", "label-tertiary", "#35343C"),
             ("srgb", "#3478F6", "label-quaternary", "#707078"),
             ("srgb", "#3478F6", "icon", "#35343C"),
-            ("srgb", "#3478F6", "separator", "#7F7F88"),
+            ("srgb", "#3478F6", "separator", "#707078"),
             ("srgb", "#3478F6", "border-strong", "#020205"),
             ("srgb", "#3478F6", "border-base", "#6E6E76"),
             ("srgb", "#3478F6", "border-soft", "#76767E"),
@@ -3315,17 +3351,17 @@ mod tests {
             ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
             ("srgb", "#3478F6", "fill-quaternary", "#76767E"),
             ("srgb", "#3478F6", "fill-none", "none"),
-            ("srgb", "#3478F6", "shadow-minor", "#7F7F88"),
-            ("srgb", "#3478F6", "shadow-ambient", "#7C7C85"),
-            ("srgb", "#3478F6", "shadow-penumbra", "#787880"),
-            ("srgb", "#3478F6", "shadow-major", "#72727A"),
+            ("srgb", "#3478F6", "shadow-minor", "#6E6E77"),
+            ("srgb", "#3478F6", "shadow-ambient", "#6A6A72"),
+            ("srgb", "#3478F6", "shadow-penumbra", "#65656E"),
+            ("srgb", "#3478F6", "shadow-major", "#606069"),
             ("srgb", "#3478F6", "none", "none"),
             ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
             ("dim", "#FFFFFF", "label-secondary", "#707079"),
             ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
             ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
             ("dim", "#FFFFFF", "icon", "#94949D"),
-            ("dim", "#FFFFFF", "separator", "#E3E3ED"),
+            ("dim", "#FFFFFF", "separator", "#D6D6E0"),
             ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
             ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
             ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
@@ -3335,17 +3371,17 @@ mod tests {
             ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
             ("dim", "#FFFFFF", "fill-quaternary", "#DEDEE7"),
             ("dim", "#FFFFFF", "fill-none", "none"),
-            ("dim", "#FFFFFF", "shadow-minor", "#E3E3ED"),
-            ("dim", "#FFFFFF", "shadow-ambient", "#E0E0EA"),
-            ("dim", "#FFFFFF", "shadow-penumbra", "#DDDDE6"),
-            ("dim", "#FFFFFF", "shadow-major", "#D8D9E2"),
+            ("dim", "#FFFFFF", "shadow-minor", "#D5D5DF"),
+            ("dim", "#FFFFFF", "shadow-ambient", "#D2D2DB"),
+            ("dim", "#FFFFFF", "shadow-penumbra", "#CECED8"),
+            ("dim", "#FFFFFF", "shadow-major", "#CACAD4"),
             ("dim", "#FFFFFF", "none", "none"),
             ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
             ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
             ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
             ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
             ("dim", "#F2F2F7", "icon", "#8B8B94"),
-            ("dim", "#F2F2F7", "separator", "#DEDEE7"),
+            ("dim", "#F2F2F7", "separator", "#D1D1DA"),
             ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
             ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
             ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
@@ -3355,17 +3391,17 @@ mod tests {
             ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
             ("dim", "#F2F2F7", "fill-quaternary", "#D3D3DC"),
             ("dim", "#F2F2F7", "fill-none", "none"),
-            ("dim", "#F2F2F7", "shadow-minor", "#DEDEE7"),
-            ("dim", "#F2F2F7", "shadow-ambient", "#DBDBE4"),
-            ("dim", "#F2F2F7", "shadow-penumbra", "#D7D7E1"),
-            ("dim", "#F2F2F7", "shadow-major", "#D3D3DC"),
+            ("dim", "#F2F2F7", "shadow-minor", "#D0D0D9"),
+            ("dim", "#F2F2F7", "shadow-ambient", "#CCCCD6"),
+            ("dim", "#F2F2F7", "shadow-penumbra", "#C8C8D2"),
+            ("dim", "#F2F2F7", "shadow-major", "#C5C5CE"),
             ("dim", "#F2F2F7", "none", "none"),
             ("dim", "#7F7F7F", "label-primary", "#030305"),
             ("dim", "#7F7F7F", "label-secondary", "#16161B"),
             ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
             ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
             ("dim", "#7F7F7F", "icon", "#36353D"),
-            ("dim", "#7F7F7F", "separator", "#64646D"),
+            ("dim", "#7F7F7F", "separator", "#54545B"),
             ("dim", "#7F7F7F", "border-strong", "#030305"),
             ("dim", "#7F7F7F", "border-base", "#64646C"),
             ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
@@ -3375,17 +3411,17 @@ mod tests {
             ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
             ("dim", "#7F7F7F", "fill-quaternary", "#696971"),
             ("dim", "#7F7F7F", "fill-none", "none"),
-            ("dim", "#7F7F7F", "shadow-minor", "#64646D"),
-            ("dim", "#7F7F7F", "shadow-ambient", "#616169"),
-            ("dim", "#7F7F7F", "shadow-penumbra", "#5D5D64"),
-            ("dim", "#7F7F7F", "shadow-major", "#57575E"),
+            ("dim", "#7F7F7F", "shadow-minor", "#53535A"),
+            ("dim", "#7F7F7F", "shadow-ambient", "#4E4E55"),
+            ("dim", "#7F7F7F", "shadow-penumbra", "#494950"),
+            ("dim", "#7F7F7F", "shadow-major", "#44434B"),
             ("dim", "#7F7F7F", "none", "none"),
             ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
             ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
             ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
             ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
             ("dim", "#1C1C1E", "icon", "#94949D"),
-            ("dim", "#1C1C1E", "separator", "#38383F"),
+            ("dim", "#1C1C1E", "separator", "#4C4C53"),
             ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
             ("dim", "#1C1C1E", "border-base", "#313137"),
             ("dim", "#1C1C1E", "border-soft", "#28282E"),
@@ -3395,17 +3431,17 @@ mod tests {
             ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
             ("dim", "#1C1C1E", "fill-quaternary", "#2D2D33"),
             ("dim", "#1C1C1E", "fill-none", "none"),
-            ("dim", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("dim", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("dim", "#1C1C1E", "shadow-penumbra", "#424249"),
-            ("dim", "#1C1C1E", "shadow-major", "#494950"),
+            ("dim", "#1C1C1E", "shadow-minor", "#4D4D55"),
+            ("dim", "#1C1C1E", "shadow-ambient", "#52525A"),
+            ("dim", "#1C1C1E", "shadow-penumbra", "#57575F"),
+            ("dim", "#1C1C1E", "shadow-major", "#5C5C64"),
             ("dim", "#1C1C1E", "none", "none"),
             ("dim", "#101012", "label-primary", "#F0F0FA"),
             ("dim", "#101012", "label-secondary", "#B3B3BD"),
             ("dim", "#101012", "label-tertiary", "#92929B"),
             ("dim", "#101012", "label-quaternary", "#686871"),
             ("dim", "#101012", "icon", "#92929B"),
-            ("dim", "#101012", "separator", "#323239"),
+            ("dim", "#101012", "separator", "#46464E"),
             ("dim", "#101012", "border-strong", "#F0F0FA"),
             ("dim", "#101012", "border-base", "#25252B"),
             ("dim", "#101012", "border-soft", "#1C1C22"),
@@ -3415,17 +3451,17 @@ mod tests {
             ("dim", "#101012", "fill-tertiary", "#29292F"),
             ("dim", "#101012", "fill-quaternary", "#212127"),
             ("dim", "#101012", "fill-none", "none"),
-            ("dim", "#101012", "shadow-minor", "#323239"),
-            ("dim", "#101012", "shadow-ambient", "#36363E"),
-            ("dim", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("dim", "#101012", "shadow-major", "#43434B"),
+            ("dim", "#101012", "shadow-minor", "#47474F"),
+            ("dim", "#101012", "shadow-ambient", "#4D4D54"),
+            ("dim", "#101012", "shadow-penumbra", "#525259"),
+            ("dim", "#101012", "shadow-major", "#57575F"),
             ("dim", "#101012", "none", "none"),
             ("dim", "#3478F6", "label-primary", "#040408"),
             ("dim", "#3478F6", "label-secondary", "#15141A"),
             ("dim", "#3478F6", "label-tertiary", "#35343B"),
             ("dim", "#3478F6", "label-quaternary", "#707079"),
             ("dim", "#3478F6", "icon", "#35343B"),
-            ("dim", "#3478F6", "separator", "#808088"),
+            ("dim", "#3478F6", "separator", "#707079"),
             ("dim", "#3478F6", "border-strong", "#040408"),
             ("dim", "#3478F6", "border-base", "#63636C"),
             ("dim", "#3478F6", "border-soft", "#6E6E76"),
@@ -3435,10 +3471,10 @@ mod tests {
             ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),
             ("dim", "#3478F6", "fill-quaternary", "#686870"),
             ("dim", "#3478F6", "fill-none", "none"),
-            ("dim", "#3478F6", "shadow-minor", "#808088"),
-            ("dim", "#3478F6", "shadow-ambient", "#7D7D85"),
-            ("dim", "#3478F6", "shadow-penumbra", "#787881"),
-            ("dim", "#3478F6", "shadow-major", "#73737B"),
+            ("dim", "#3478F6", "shadow-minor", "#6F6F78"),
+            ("dim", "#3478F6", "shadow-ambient", "#6B6B73"),
+            ("dim", "#3478F6", "shadow-penumbra", "#66666E"),
+            ("dim", "#3478F6", "shadow-major", "#61616A"),
             ("dim", "#3478F6", "none", "none"),
         ];
 
@@ -3471,6 +3507,163 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn print_all_separator_golden() {
+        // Helper: run with --ignored --nocapture to get all current separator hex
+        // values. Use to re-collect after a DECORATIVE_FLOOR_MIN change.
+        for (vc, vc_name) in vcs() {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let table = RoleTable::default();
+                let got = match resolve(&bg, Role::Separator, &table, &vc) {
+                    Resolved::Color { solved, .. } => solved.hex().to_string(),
+                    other => format!("{other:?}"),
+                };
+                println!("(\"{vc_name}\", \"{bg_hex}\", \"separator\", \"{got}\"),");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn print_all_shadow_golden() {
+        // Helper: run with --ignored --nocapture to get all current shadow hex
+        // values. Use to re-collect after a solve path change.
+        for (vc, vc_name) in vcs() {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let table = RoleTable::default();
+                let set = resolve_set(&bg, &table, &vc);
+                for role in [
+                    Role::ShadowMinor,
+                    Role::ShadowAmbient,
+                    Role::ShadowPenumbra,
+                    Role::ShadowMajor,
+                ] {
+                    let got = set
+                        .iter()
+                        .find(|(r, _)| *r == role)
+                        .map(|(_, res)| match res {
+                            Resolved::Color { solved, .. } => solved.hex().to_string(),
+                            other => format!("{other:?}"),
+                        })
+                        .unwrap_or_else(|| "MISSING".to_string());
+                    println!(
+                        "(\"{vc_name}\", \"{bg_hex}\", \"{}\", \"{got}\"),",
+                        role.key()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shadow_hex_characterization_over_corpus() {
+        // CLASS B (golden-master / characterisation): byte-locks the emitted shadow
+        // hex values across 6 backgrounds × 2 viewing conditions × 4 shadow roles
+        // under the default RoleTable.  Any change to the solve path, magnitude
+        // constants, or floor enforcement that silently shifts a shadow colour by
+        // even one 8-bit step is caught here immediately.
+        //
+        // To regenerate after a deliberate change: run the `print_all_shadow_golden`
+        // ignored test with `-- --ignored --nocapture`, collect the output, and
+        // replace the SHADOW_GOLDEN table below.
+        const SHADOW_GOLDEN: &[(&str, &str, &str, &str)] = &[
+            // srgb
+            ("srgb", "#FFFFFF", "shadow-minor", "#D7D7E0"),
+            ("srgb", "#FFFFFF", "shadow-ambient", "#D3D3DD"),
+            ("srgb", "#FFFFFF", "shadow-penumbra", "#CFCFD9"),
+            ("srgb", "#FFFFFF", "shadow-major", "#CCCCD5"),
+            ("srgb", "#F2F2F7", "shadow-minor", "#CFCFD9"),
+            ("srgb", "#F2F2F7", "shadow-ambient", "#CCCCD5"),
+            ("srgb", "#F2F2F7", "shadow-penumbra", "#C8C8D1"),
+            ("srgb", "#F2F2F7", "shadow-major", "#C4C4CE"),
+            ("srgb", "#7F7F7F", "shadow-minor", "#515059"),
+            ("srgb", "#7F7F7F", "shadow-ambient", "#4B4B54"),
+            ("srgb", "#7F7F7F", "shadow-penumbra", "#47474E"),
+            ("srgb", "#7F7F7F", "shadow-major", "#414149"),
+            ("srgb", "#1C1C1E", "shadow-minor", "#4D4D55"),
+            ("srgb", "#1C1C1E", "shadow-ambient", "#52525A"),
+            ("srgb", "#1C1C1E", "shadow-penumbra", "#575760"),
+            ("srgb", "#1C1C1E", "shadow-major", "#5C5C65"),
+            ("srgb", "#101012", "shadow-minor", "#48484F"),
+            ("srgb", "#101012", "shadow-ambient", "#4C4C55"),
+            ("srgb", "#101012", "shadow-penumbra", "#52525A"),
+            ("srgb", "#101012", "shadow-major", "#57575F"),
+            ("srgb", "#3478F6", "shadow-minor", "#6E6E77"),
+            ("srgb", "#3478F6", "shadow-ambient", "#6A6A72"),
+            ("srgb", "#3478F6", "shadow-penumbra", "#65656E"),
+            ("srgb", "#3478F6", "shadow-major", "#606069"),
+            // dim
+            ("dim", "#FFFFFF", "shadow-minor", "#D5D5DF"),
+            ("dim", "#FFFFFF", "shadow-ambient", "#D2D2DB"),
+            ("dim", "#FFFFFF", "shadow-penumbra", "#CECED8"),
+            ("dim", "#FFFFFF", "shadow-major", "#CACAD4"),
+            ("dim", "#F2F2F7", "shadow-minor", "#D0D0D9"),
+            ("dim", "#F2F2F7", "shadow-ambient", "#CCCCD6"),
+            ("dim", "#F2F2F7", "shadow-penumbra", "#C8C8D2"),
+            ("dim", "#F2F2F7", "shadow-major", "#C5C5CE"),
+            ("dim", "#7F7F7F", "shadow-minor", "#53535A"),
+            ("dim", "#7F7F7F", "shadow-ambient", "#4E4E55"),
+            ("dim", "#7F7F7F", "shadow-penumbra", "#494950"),
+            ("dim", "#7F7F7F", "shadow-major", "#44434B"),
+            ("dim", "#1C1C1E", "shadow-minor", "#4D4D55"),
+            ("dim", "#1C1C1E", "shadow-ambient", "#52525A"),
+            ("dim", "#1C1C1E", "shadow-penumbra", "#57575F"),
+            ("dim", "#1C1C1E", "shadow-major", "#5C5C64"),
+            ("dim", "#101012", "shadow-minor", "#47474F"),
+            ("dim", "#101012", "shadow-ambient", "#4D4D54"),
+            ("dim", "#101012", "shadow-penumbra", "#525259"),
+            ("dim", "#101012", "shadow-major", "#57575F"),
+            ("dim", "#3478F6", "shadow-minor", "#6F6F78"),
+            ("dim", "#3478F6", "shadow-ambient", "#6B6B73"),
+            ("dim", "#3478F6", "shadow-penumbra", "#66666E"),
+            ("dim", "#3478F6", "shadow-major", "#61616A"),
+        ];
+
+        let table = RoleTable::default();
+        let mut failures: Vec<String> = Vec::new();
+
+        for (vc_name, bg_hex, role_key, expected_hex) in SHADOW_GOLDEN {
+            let vc = match *vc_name {
+                "srgb" => ViewingConditions::srgb(),
+                "dim" => ViewingConditions::dim_surround(),
+                other => panic!("unknown vc {other:?}"),
+            };
+            let bg = BgInput::solid(bg_hex).unwrap();
+            let role = match *role_key {
+                "shadow-minor" => Role::ShadowMinor,
+                "shadow-ambient" => Role::ShadowAmbient,
+                "shadow-penumbra" => Role::ShadowPenumbra,
+                "shadow-major" => Role::ShadowMajor,
+                other => panic!("unknown role {other:?}"),
+            };
+            let got = match resolve(&bg, role, &table, &vc) {
+                Resolved::Color { solved, .. } => solved.hex().to_string(),
+                other => format!("{other:?}"),
+            };
+            if got != *expected_hex {
+                failures.push(format!(
+                    "SHADOW DRIFT {vc_name} {bg_hex} {role_key}: \
+                     expected {expected_hex}, got {got}"
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Shadow hex characterisation failed ({} case(s)):\n{}\n\
+             To regenerate: cargo test print_all_shadow_golden -- --ignored --nocapture",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -3536,6 +3729,485 @@ mod tests {
                     role.key(),
                     t.wcag_ratio()
                 );
+            }
+        }
+    }
+
+    // ── Floor/cliff invariant tests (PR #99) ────────────────────────────────────
+
+    /// The LPC engine's minimum non-zero Lc output, derived analytically from the
+    /// contrast-curve constants in `lpc.rs` (LO_CLIP, LO_BOW_OFFSET, LC_SCALE).
+    ///
+    /// When the scaled power-curve delta `sapc` equals `LO_CLIP` exactly, the
+    /// normal-polarity output is `(LO_CLIP − LO_BOW_OFFSET) × LC_SCALE`.
+    /// Values below `LO_CLIP` collapse to zero, so this is the cliff: the
+    /// smallest Lc the engine can return without reporting zero.
+    ///
+    /// INVARIANT (#44): this quantity and `DECORATIVE_FLOOR_MIN` are TWO DISTINCT,
+    /// separately-sourced values — one is a property of the LPC formula constants,
+    /// the other is the semantic design policy minimum. They must never be
+    /// re-collapsed (the original #44 defect was that the floor was set equal to
+    /// the cliff, giving zero margin). The `red_floor_cliff_bites_first` test
+    /// guards this invariant: DECORATIVE_FLOOR_MIN − ENGINE_CLIFF_LC must stay
+    /// well above 5.0 Lc.
+    const ENGINE_CLIFF_LC: f64 =
+        (crate::lpc::LO_CLIP - crate::lpc::LO_BOW_OFFSET) * crate::lpc::LC_SCALE;
+
+    // Compile-time: each named decorative magnitude must be >= DECORATIVE_FLOOR_MIN.
+    // A sub-floor literal fails to compile, enforcing the floor at the type level.
+    // This is the contract check — mutation proof: changing any constant below the
+    // floor causes a compile error, not a runtime failure.
+    const _: () = assert!(
+        SHADOW_MINOR_JND >= DECORATIVE_FLOOR_MIN,
+        "shadow-minor magnitude is below DECORATIVE_FLOOR_MIN"
+    );
+    const _: () = assert!(
+        SHADOW_AMBIENT_JND >= DECORATIVE_FLOOR_MIN,
+        "shadow-ambient magnitude is below DECORATIVE_FLOOR_MIN"
+    );
+    const _: () = assert!(
+        SHADOW_PENUMBRA_JND >= DECORATIVE_FLOOR_MIN,
+        "shadow-penumbra magnitude is below DECORATIVE_FLOOR_MIN"
+    );
+    const _: () = assert!(
+        SHADOW_MAJOR_JND >= DECORATIVE_FLOOR_MIN,
+        "shadow-major magnitude is below DECORATIVE_FLOOR_MIN"
+    );
+
+    #[test]
+    fn floor_cliff_gap_invariant() {
+        // CLASS: regression
+        //
+        // INVARIANT (#44): DECORATIVE_FLOOR_MIN and ENGINE_CLIFF_LC are SEPARATELY
+        // sourced — one from the LPC formula constants, one from the design policy
+        // table. They must never be re-collapsed (the original #44 defect was that
+        // the floor was set equal to the cliff, giving zero perceptual margin). A
+        // regression that collapses them (e.g. setting floor = cliff + ε) fails here
+        // immediately. The gap > 5.0 requirement gives a meaningful perceptual margin
+        // above the solver's reliable range.
+        //
+        // ENGINE_CLIFF_LC = (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE = (0.1 − 0.027)
+        //   × 100 = 7.30 — the smallest Lc the engine emits before collapsing to
+        //   zero. Sourced only from lpc.rs constants, never from this module.
+        //
+        // Current values: DECORATIVE_FLOOR_MIN = 15.0, ENGINE_CLIFF_LC ≈ 7.30,
+        // gap ≈ 7.70 > 5.0. Both assertions must hold simultaneously.
+        //
+        let gap = DECORATIVE_FLOOR_MIN - ENGINE_CLIFF_LC;
+        assert!(
+            gap > 5.0,
+            "DECORATIVE_FLOOR_MIN ({}) minus ENGINE_CLIFF_LC ({:.2}) = {:.2}; \
+             must be > 5.0 — floor is too close to the engine cliff (issue #44)",
+            DECORATIVE_FLOOR_MIN,
+            ENGINE_CLIFF_LC,
+            gap
+        );
+        // The floor must equal the governance-ratified value exactly: 15.0 (Lc 15).
+        // This is NOT ">= 15.0" — a threshold does not pin a specific ratified constant.
+        // Any drift (15.1, 14.9, …) violates the ratification by epic
+        // separator-tracks-jnd-floor (surface-jnd §1b, §4, §8).
+        // Kept as a runtime assert (not const) so both checks report together.
+        #[allow(clippy::assertions_on_constants)]
+        {
+            const RATIFIED_FLOOR: f64 = 15.0;
+            assert!(
+                (DECORATIVE_FLOOR_MIN - RATIFIED_FLOOR).abs() < 1e-10,
+                "DECORATIVE_FLOOR_MIN ({}) != ratified 15.0 (APCA thin-line floor, \
+                 surface-jnd §1b, ratified by separator-tracks-jnd-floor); \
+                 any change requires an ADR amendment",
+                DECORATIVE_FLOOR_MIN
+            );
+        }
+    }
+
+    #[test]
+    fn separator_tracks_floor() {
+        // CLASS: unit
+        //
+        // Resolving Role::Separator on a white background yields |Lc| >= the floor
+        // AND the spec equals decorative(DECORATIVE_FLOOR_MIN): no residual
+        // decorative(8.0) placeholder survives after the raise. The invariant is:
+        // separator tracks the floor — it is not independently hardcoded.
+        //
+        // After the floor raise the separator magnitude in RoleTable::default() must
+        // be DECORATIVE_FLOOR_MIN (the floor itself), not the stale 8.0 literal.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let table = RoleTable::default();
+
+        let solved = match resolve(&bg, Role::Separator, &table, &vc) {
+            Resolved::Color { solved, .. } => solved,
+            other => panic!("separator must resolve to a colour, got {other:?}"),
+        };
+        let lc_abs = solved.lc().abs();
+        // The solver enforces STRICT compliance for Lc-decorative roles: the
+        // emitted colour must reach (not merely approach) the stated target.
+        // `solve_in(strict_floor=true)` triggers the neighbour walk whenever
+        // the primary analytic solution falls below the floor, so the returned
+        // hex is guaranteed to be at or above DECORATIVE_FLOOR_MIN.
+        // This assertion formerly allowed lc >= DECORATIVE_FLOOR_MIN - 1.0 (the
+        // quantisation budget), which permitted ~14.91 Lc on white — below the
+        // ratified APCA Lc 15 thin-line visibility floor.  The budget now only
+        // guards the neighbour walk's overshoot check; primary acceptance is
+        // strict.  Any future regression to a sub-floor primary will surface here.
+        assert!(
+            lc_abs >= DECORATIVE_FLOOR_MIN,
+            "separator |Lc| {lc_abs} is below DECORATIVE_FLOOR_MIN \
+             ({DECORATIVE_FLOOR_MIN}); the strict-floor gate must prevent \
+             sub-floor emissions (solve.rs solve_in strict_floor=true)"
+        );
+
+        // The table's separator spec must be decorative(DECORATIVE_FLOOR_MIN), not
+        // decorative(8.0). A wrong literal fails here — the value, not just the
+        // comparison, is contractual.
+        let spec = table.spec(Role::Separator);
+        match spec {
+            RoleSpec::Decorative { magnitude } => {
+                assert!(
+                    (magnitude - DECORATIVE_FLOOR_MIN).abs() < 1e-10,
+                    "separator spec magnitude {magnitude} != DECORATIVE_FLOOR_MIN \
+                     ({DECORATIVE_FLOOR_MIN}); the decorative(8.0) placeholder was not removed"
+                );
+            }
+            other => panic!("separator spec must be Decorative, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shadow_strict_order_over_corpus() {
+        // CLASS: property (set property of the solve, not just the literals)
+        //
+        // Over a representative background corpus (light/dark extremes + mid-greys +
+        // the brand blue, both VCs, both chroma policies) the RESOLVED shadow Lc
+        // values satisfy: shadow-minor < shadow-ambient < shadow-penumbra < shadow-major.
+        // Strict ascending order is an invariant of the solve itself, not a trivial
+        // consequence of the input literals being pre-sorted (ADR §7.2).
+        //
+        // The ≥1.5 Lc inter-step gap requirement (from the module comment) is also
+        // checked per pair, marked BLOCKED — no fabricated per-step JND claimed.
+        const MIN_GAP: f64 = 1.5;
+        let table = RoleTable::default();
+        let corpus = ["#FFFFFF", "#101012", "#7F7F7F", "#3478F6"];
+        let chromas = [RoleChroma::Neutral, RoleChroma::flat_neutral_tint()];
+
+        for (vc, vc_name) in vcs() {
+            for bg_hex in corpus {
+                for chroma in chromas {
+                    let t = table.clone().with_chroma(chroma);
+                    let bg = BgInput::solid(bg_hex).unwrap();
+                    let set = resolve_set(&bg, &t, &vc);
+
+                    let stack = [
+                        Role::ShadowMinor,
+                        Role::ShadowAmbient,
+                        Role::ShadowPenumbra,
+                        Role::ShadowMajor,
+                    ];
+                    let mags: Vec<f64> = stack.iter().map(|&r| ladder_mag(&set, r)).collect();
+
+                    // Strict order.
+                    for w in mags.windows(2) {
+                        assert!(
+                            w[0] < w[1],
+                            "{vc_name} {bg_hex}: shadow not strictly ascending — {mags:?}"
+                        );
+                    }
+                    // Minimum gap (BLOCKED — no JND claim, purely structural).
+                    for (i, w) in mags.windows(2).enumerate() {
+                        let gap = w[1] - w[0];
+                        assert!(
+                            gap >= MIN_GAP,
+                            "{vc_name} {bg_hex}: gap between shadow step {i} ({} |Lc|={:.2}) \
+                             and {} (|Lc|={:.2}) is {:.2} < {MIN_GAP} — BLOCKED",
+                            stack[i].key(),
+                            w[0],
+                            stack[i + 1].key(),
+                            w[1],
+                            gap
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Golden column-drift guard (PR #99) ──────────────────────────────────────
+
+    #[test]
+    fn golden_column_drift_only_separator_and_shadow() {
+        // CLASS: golden / characterization (R3 invariant)
+        //
+        // After the floor raise the ONLY cells that may differ from the signed-off
+        // snapshot are separator and the four shadow roles.  label-*, icon,
+        // border-*, fill-*, none must remain byte-identical across all 12 grid
+        // points (6 backgrounds × 2 viewing conditions, default RoleTable).
+        //
+        // Bite proof (mutation): temporarily change any label/icon/border/fill
+        // constant or solve path → the matching IMMUTABLE_GOLDEN entry fails.
+        // A change confined to DECORATIVE_FLOOR_MIN or shadow/separator magnitudes
+        // only touches the MUTABLE rows and leaves this test green.
+        //
+        // This test is GREEN at birth: the immutable columns are already correct
+        // (they are the default-chroma rows from the existing
+        // resolve_set_golden_hex_is_byte_for_byte_stable GOLDEN table, extracted
+        // here so both tests can verify their respective invariants independently).
+        // format: (vc_name, bg_hex, role_key, expected_hex)
+        const IMMUTABLE_GOLDEN: &[(&str, &str, &str, &str)] = &[
+            // ── srgb / #FFFFFF ──────────────────────────────────────────────────
+            ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
+            ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
+            ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
+            ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
+            ("srgb", "#FFFFFF", "icon", "#94949E"),
+            ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
+            ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
+            ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
+            ("srgb", "#FFFFFF", "border-ghost", "none"),
+            ("srgb", "#FFFFFF", "fill-primary", "#E3E3ED"),
+            ("srgb", "#FFFFFF", "fill-secondary", "#E8E8F3"),
+            ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
+            ("srgb", "#FFFFFF", "fill-quaternary", "#F3F3FE"),
+            ("srgb", "#FFFFFF", "fill-none", "none"),
+            ("srgb", "#FFFFFF", "none", "none"),
+            // ── srgb / #F2F2F7 ──────────────────────────────────────────────────
+            ("srgb", "#F2F2F7", "label-primary", "#09090F"),
+            ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
+            ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
+            ("srgb", "#F2F2F7", "icon", "#8B8B95"),
+            ("srgb", "#F2F2F7", "border-strong", "#09090F"),
+            ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
+            ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
+            ("srgb", "#F2F2F7", "border-ghost", "none"),
+            ("srgb", "#F2F2F7", "fill-primary", "#D8D8E1"),
+            ("srgb", "#F2F2F7", "fill-secondary", "#DCDDE6"),
+            ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
+            ("srgb", "#F2F2F7", "fill-quaternary", "#E7E7F0"),
+            ("srgb", "#F2F2F7", "fill-none", "none"),
+            ("srgb", "#F2F2F7", "none", "none"),
+            // ── srgb / #7F7F7F ──────────────────────────────────────────────────
+            ("srgb", "#7F7F7F", "label-primary", "#010103"),
+            ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
+            ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
+            ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
+            ("srgb", "#7F7F7F", "icon", "#36353D"),
+            ("srgb", "#7F7F7F", "border-strong", "#010103"),
+            ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
+            ("srgb", "#7F7F7F", "border-soft", "#76767F"),
+            ("srgb", "#7F7F7F", "border-ghost", "none"),
+            ("srgb", "#7F7F7F", "fill-primary", "#6B6B73"),
+            ("srgb", "#7F7F7F", "fill-secondary", "#6F6F77"),
+            ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
+            ("srgb", "#7F7F7F", "fill-quaternary", "#76767F"),
+            ("srgb", "#7F7F7F", "fill-none", "none"),
+            ("srgb", "#7F7F7F", "none", "none"),
+            // ── srgb / #1C1C1E ──────────────────────────────────────────────────
+            ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
+            ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
+            ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
+            ("srgb", "#1C1C1E", "icon", "#95959E"),
+            ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
+            ("srgb", "#1C1C1E", "border-soft", "#23232A"),
+            ("srgb", "#1C1C1E", "border-ghost", "none"),
+            ("srgb", "#1C1C1E", "fill-primary", "#2E2E35"),
+            ("srgb", "#1C1C1E", "fill-secondary", "#2B2B32"),
+            ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
+            ("srgb", "#1C1C1E", "fill-quaternary", "#23232A"),
+            ("srgb", "#1C1C1E", "fill-none", "none"),
+            ("srgb", "#1C1C1E", "none", "none"),
+            // ── srgb / #101012 ──────────────────────────────────────────────────
+            ("srgb", "#101012", "label-primary", "#F2F2FC"),
+            ("srgb", "#101012", "label-secondary", "#B4B4BE"),
+            ("srgb", "#101012", "label-tertiary", "#93939C"),
+            ("srgb", "#101012", "label-quaternary", "#696972"),
+            ("srgb", "#101012", "icon", "#93939C"),
+            ("srgb", "#101012", "border-strong", "#F2F2FC"),
+            ("srgb", "#101012", "border-base", "#1F1F27"),
+            ("srgb", "#101012", "border-soft", "#18171E"),
+            ("srgb", "#101012", "border-ghost", "none"),
+            ("srgb", "#101012", "fill-primary", "#23232A"),
+            ("srgb", "#101012", "fill-secondary", "#1F1F27"),
+            ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
+            ("srgb", "#101012", "fill-quaternary", "#18171E"),
+            ("srgb", "#101012", "fill-none", "none"),
+            ("srgb", "#101012", "none", "none"),
+            // ── srgb / #3478F6 ──────────────────────────────────────────────────
+            ("srgb", "#3478F6", "label-primary", "#020205"),
+            ("srgb", "#3478F6", "label-secondary", "#14141B"),
+            ("srgb", "#3478F6", "label-tertiary", "#35343C"),
+            ("srgb", "#3478F6", "label-quaternary", "#707078"),
+            ("srgb", "#3478F6", "icon", "#35343C"),
+            ("srgb", "#3478F6", "border-strong", "#020205"),
+            ("srgb", "#3478F6", "border-base", "#6E6E76"),
+            ("srgb", "#3478F6", "border-soft", "#76767E"),
+            ("srgb", "#3478F6", "border-ghost", "none"),
+            ("srgb", "#3478F6", "fill-primary", "#6A6A73"),
+            ("srgb", "#3478F6", "fill-secondary", "#6E6E76"),
+            ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
+            ("srgb", "#3478F6", "fill-quaternary", "#76767E"),
+            ("srgb", "#3478F6", "fill-none", "none"),
+            ("srgb", "#3478F6", "none", "none"),
+            // ── dim / #FFFFFF ────────────────────────────────────────────────────
+            ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
+            ("dim", "#FFFFFF", "label-secondary", "#707079"),
+            ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
+            ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
+            ("dim", "#FFFFFF", "icon", "#94949D"),
+            ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
+            ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
+            ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
+            ("dim", "#FFFFFF", "border-ghost", "none"),
+            ("dim", "#FFFFFF", "fill-primary", "#BDBDC6"),
+            ("dim", "#FFFFFF", "fill-secondary", "#C3C3CC"),
+            ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
+            ("dim", "#FFFFFF", "fill-quaternary", "#DEDEE7"),
+            ("dim", "#FFFFFF", "fill-none", "none"),
+            ("dim", "#FFFFFF", "none", "none"),
+            // ── dim / #F2F2F7 ────────────────────────────────────────────────────
+            ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
+            ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
+            ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
+            ("dim", "#F2F2F7", "icon", "#8B8B94"),
+            ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
+            ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
+            ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
+            ("dim", "#F2F2F7", "border-ghost", "none"),
+            ("dim", "#F2F2F7", "fill-primary", "#B2B2BC"),
+            ("dim", "#F2F2F7", "fill-secondary", "#B9B9C2"),
+            ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
+            ("dim", "#F2F2F7", "fill-quaternary", "#D3D3DC"),
+            ("dim", "#F2F2F7", "fill-none", "none"),
+            ("dim", "#F2F2F7", "none", "none"),
+            // ── dim / #7F7F7F ────────────────────────────────────────────────────
+            ("dim", "#7F7F7F", "label-primary", "#030305"),
+            ("dim", "#7F7F7F", "label-secondary", "#16161B"),
+            ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
+            ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
+            ("dim", "#7F7F7F", "icon", "#36353D"),
+            ("dim", "#7F7F7F", "border-strong", "#030305"),
+            ("dim", "#7F7F7F", "border-base", "#64646C"),
+            ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
+            ("dim", "#7F7F7F", "border-ghost", "none"),
+            ("dim", "#7F7F7F", "fill-primary", "#525259"),
+            ("dim", "#7F7F7F", "fill-secondary", "#56565D"),
+            ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
+            ("dim", "#7F7F7F", "fill-quaternary", "#696971"),
+            ("dim", "#7F7F7F", "fill-none", "none"),
+            ("dim", "#7F7F7F", "none", "none"),
+            // ── dim / #1C1C1E ────────────────────────────────────────────────────
+            ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
+            ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
+            ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
+            ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
+            ("dim", "#1C1C1E", "icon", "#94949D"),
+            ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
+            ("dim", "#1C1C1E", "border-base", "#313137"),
+            ("dim", "#1C1C1E", "border-soft", "#28282E"),
+            ("dim", "#1C1C1E", "border-ghost", "none"),
+            ("dim", "#1C1C1E", "fill-primary", "#424249"),
+            ("dim", "#1C1C1E", "fill-secondary", "#3D3D45"),
+            ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
+            ("dim", "#1C1C1E", "fill-quaternary", "#2D2D33"),
+            ("dim", "#1C1C1E", "fill-none", "none"),
+            ("dim", "#1C1C1E", "none", "none"),
+            // ── dim / #101012 ────────────────────────────────────────────────────
+            ("dim", "#101012", "label-primary", "#F0F0FA"),
+            ("dim", "#101012", "label-secondary", "#B3B3BD"),
+            ("dim", "#101012", "label-tertiary", "#92929B"),
+            ("dim", "#101012", "label-quaternary", "#686871"),
+            ("dim", "#101012", "icon", "#92929B"),
+            ("dim", "#101012", "border-strong", "#F0F0FA"),
+            ("dim", "#101012", "border-base", "#25252B"),
+            ("dim", "#101012", "border-soft", "#1C1C22"),
+            ("dim", "#101012", "border-ghost", "none"),
+            ("dim", "#101012", "fill-primary", "#35353C"),
+            ("dim", "#101012", "fill-secondary", "#313137"),
+            ("dim", "#101012", "fill-tertiary", "#29292F"),
+            ("dim", "#101012", "fill-quaternary", "#212127"),
+            ("dim", "#101012", "fill-none", "none"),
+            ("dim", "#101012", "none", "none"),
+            // ── dim / #3478F6 ────────────────────────────────────────────────────
+            ("dim", "#3478F6", "label-primary", "#040408"),
+            ("dim", "#3478F6", "label-secondary", "#15141A"),
+            ("dim", "#3478F6", "label-tertiary", "#35343B"),
+            ("dim", "#3478F6", "label-quaternary", "#707079"),
+            ("dim", "#3478F6", "icon", "#35343B"),
+            ("dim", "#3478F6", "border-strong", "#040408"),
+            ("dim", "#3478F6", "border-base", "#63636C"),
+            ("dim", "#3478F6", "border-soft", "#6E6E76"),
+            ("dim", "#3478F6", "border-ghost", "none"),
+            ("dim", "#3478F6", "fill-primary", "#515158"),
+            ("dim", "#3478F6", "fill-secondary", "#56565D"),
+            ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),
+            ("dim", "#3478F6", "fill-quaternary", "#686870"),
+            ("dim", "#3478F6", "fill-none", "none"),
+            ("dim", "#3478F6", "none", "none"),
+        ];
+
+        // Mutable roles: allowed to change when DECORATIVE_FLOOR_MIN moves.
+        // Present here for structural coverage only (we verify they are resolved,
+        // not what value they carry).
+        const MUTABLE_ROLES: &[&str] = &[
+            "separator",
+            "shadow-minor",
+            "shadow-ambient",
+            "shadow-penumbra",
+            "shadow-major",
+        ];
+
+        let table = RoleTable::default();
+        for (vc, vc_name) in vcs() {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+
+                // Build role → hex map for this grid point.
+                let current: std::collections::HashMap<&str, String> = set
+                    .iter()
+                    .map(|(role, res)| {
+                        let hex = match res {
+                            Resolved::Color { solved, .. } => solved.hex().to_string(),
+                            Resolved::None => "none".to_string(),
+                            Resolved::Unreachable(_) => "unreach".to_string(),
+                        };
+                        (role.key(), hex)
+                    })
+                    .collect();
+
+                // Immutable columns: byte-identical to pinned golden values.
+                for &(gvc, gbg, grole, gexpected) in IMMUTABLE_GOLDEN {
+                    if gvc != vc_name || gbg != bg_hex {
+                        continue;
+                    }
+                    let got = current.get(grole).map(String::as_str).unwrap_or("MISSING");
+                    assert_eq!(
+                        got, gexpected,
+                        "IMMUTABLE column drift at {vc_name}|{bg_hex} role={grole}: \
+                         golden={gexpected} current={got} — label/icon/border/fill/none \
+                         must be byte-identical before and after the floor raise (R3)"
+                    );
+                }
+
+                // Mutable columns: must be present and resolve to a colour (structure).
+                for &key in MUTABLE_ROLES {
+                    assert!(
+                        current.contains_key(key),
+                        "mutable role {key} missing from resolve_set at {vc_name}|{bg_hex}"
+                    );
+                    // Verify the mutable role actually resolved (no Unreachable).
+                    let hex = &current[key];
+                    assert_ne!(
+                        hex.as_str(),
+                        "unreach",
+                        "mutable role {key} is Unreachable at {vc_name}|{bg_hex} — \
+                         the floor is above what the solver can reach"
+                    );
+                }
             }
         }
     }
