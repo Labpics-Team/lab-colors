@@ -22,11 +22,63 @@
 /** @typedef {[number, number, number, number]} Rgba  r,g,b in 0..255, a in 0..1 */
 
 /**
+ * Parse a CSS `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` hex literal.
+ * Returns `[r, g, b, a]` or `null` when the hex digits are invalid.
+ *
+ * @param {string} h  hex digits without the leading `#`
+ * @returns {Rgba | null}
+ */
+function parseHexColor(h) {
+  if (h.length === 3 || h.length === 4) {
+    const r = parseInt(h[0] + h[0], 16);
+    const g = parseInt(h[1] + h[1], 16);
+    const b = parseInt(h[2] + h[2], 16);
+    const a = h.length === 4 ? parseInt(h[3] + h[3], 16) / 255 : 1;
+    return [r, g, b, a].some(Number.isNaN) ? null : [r, g, b, a];
+  }
+  if (h.length === 6 || h.length === 8) {
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
+    return [r, g, b, a].some(Number.isNaN) ? null : [r, g, b, a];
+  }
+  return null;
+}
+
+/**
+ * Parse a CSS `rgb()`/`rgba()` functional notation (legacy comma-separated and
+ * modern space/slash syntax).
+ * Returns `[r, g, b, a]` or `null` when the value does not match.
+ *
+ * @param {string} s  full lowercased CSS string
+ * @returns {Rgba | null}
+ */
+function parseRgbColor(s) {
+  const m = s.match(/^rgba?\(([^)]+)\)$/);
+  if (!m) return null;
+  // Split on commas, whitespace, and the optional "/" alpha separator.
+  const parts = m[1].split(/[,\s/]+/).filter((p) => p.length > 0);
+  if (parts.length < 3) return null;
+  const chan = (p) => (p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p));
+  const alphaOf = (p) => (p.endsWith("%") ? parseFloat(p) / 100 : parseFloat(p));
+  const r = chan(parts[0]);
+  const g = chan(parts[1]);
+  const b = chan(parts[2]);
+  const a = parts.length >= 4 ? alphaOf(parts[3]) : 1;
+  if ([r, g, b, a].some((v) => Number.isNaN(v))) return null;
+  return [clamp255(r), clamp255(g), clamp255(b), Math.min(1, Math.max(0, a))];
+}
+
+/**
  * Parse a CSS colour string into `[r, g, b, a]`, or `null` if unrecognised.
  *
  * Handles the forms computed style actually yields (`rgb(r, g, b)`,
  * `rgba(r, g, b, a)`, the modern `rgb(r g b / a)`) plus `#rgb`/`#rrggbb` and the
  * `transparent` keyword. Unknown keywords return `null` (treated as "no layer").
+ *
+ * Complexity is kept low by delegating to `parseHexColor` and `parseRgbColor`;
+ * this function is a dispatcher only.
  *
  * @param {string} css
  * @returns {Rgba | null}
@@ -35,38 +87,8 @@ export function parseCssColor(css) {
   if (typeof css !== "string") return null;
   const s = css.trim().toLowerCase();
   if (s === "transparent") return [0, 0, 0, 0];
-
-  if (s[0] === "#") {
-    const h = s.slice(1);
-    if (h.length === 3 || h.length === 4) {
-      const r = parseInt(h[0] + h[0], 16);
-      const g = parseInt(h[1] + h[1], 16);
-      const b = parseInt(h[2] + h[2], 16);
-      const a = h.length === 4 ? parseInt(h[3] + h[3], 16) / 255 : 1;
-      return [r, g, b, a].some(Number.isNaN) ? null : [r, g, b, a];
-    }
-    if (h.length === 6 || h.length === 8) {
-      const r = parseInt(h.slice(0, 2), 16);
-      const g = parseInt(h.slice(2, 4), 16);
-      const b = parseInt(h.slice(4, 6), 16);
-      const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
-      return [r, g, b, a].some(Number.isNaN) ? null : [r, g, b, a];
-    }
-    return null;
-  }
-
-  const m = s.match(/^rgba?\(([^)]+)\)$/);
-  if (!m) return null;
-  // Split on commas or whitespace and an optional "/" alpha separator.
-  const parts = m[1].split(/[,\s/]+/).filter((p) => p.length > 0);
-  if (parts.length < 3) return null;
-  const chan = (p) => (p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p));
-  const r = chan(parts[0]);
-  const g = chan(parts[1]);
-  const b = chan(parts[2]);
-  const a = parts.length >= 4 ? (parts[3].endsWith("%") ? parseFloat(parts[3]) / 100 : parseFloat(parts[3])) : 1;
-  if ([r, g, b, a].some((v) => Number.isNaN(v))) return null;
-  return [clamp255(r), clamp255(g), clamp255(b), Math.min(1, Math.max(0, a))];
+  if (s[0] === "#") return parseHexColor(s.slice(1));
+  return parseRgbColor(s);
 }
 
 function clamp255(v) {

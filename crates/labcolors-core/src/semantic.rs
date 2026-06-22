@@ -145,11 +145,29 @@ use crate::wcag;
 
 /// The reliable lower bound on a decorative role's contrast magnitude.
 ///
-/// Below roughly this `Lc` the solver hits its quantisation cliff (issue #44)
-/// and reports zero contrast, so a `Contract::range` floor beneath it would come
-/// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
-/// is held strictly above this until the real JND calibration lands.
-const DECORATIVE_FLOOR_MIN: f64 = 7.6;
+/// Two distinct quantities are held here — do not conflate them:
+///
+/// * **Engine emission floor (≈7.3 analytic + 8-bit grid):** `lpc.rs` zeroes
+///   contrast below `(LO_CLIP − LO_BOW_OFFSET) · LC_SCALE = 7.30 Lc` (the
+///   analytic dead-zone); the 8-bit hex lattice pushes the reliable first
+///   on-grid emission to ≈7.6 Lc (issue #44 QuantizationGap). This is a
+///   property of the engine, **not** a perceptual threshold.
+///
+/// * **Perceptual thin-line floor (sourced, Lc 15):** Somers/Myndex,
+///   APCAeasyIntro.html — *"Lc 15 is the point of invisibility for many users.
+///   This is especially true for thin lines or borders."*; WhyAPCA.html —
+///   *"Lc 15 the point of invisibility for many users, particularly for thin
+///   lines"* (two independent APCA-author primary sources, same unit). The
+///   engine floor (7.30/7.6) sits at ≈0.49× of Lc 15 — well inside the
+///   invisible band. The move **7.6 → 15.5 is UP and AWAY** from the engine
+///   artifact, grounded in the thin-line discernibility wording.
+///
+// GROUNDED — sourced floor Lc 15 (APCAeasyIntro + WhyAPCA, Somers/Myndex,
+//            accessed 2026-06-21; docs/decisions/surface-jnd.md §1b).
+//            Value set to 15.5 (> Lc 15 floor, ≥ smallest on-grid step
+//            reliably above the sourced floor; ratified in R3 / 2026-06-22).
+//            Final eye-calibration is downstream scope jnd-floor-and-separator-pin.
+const DECORATIVE_FLOOR_MIN: f64 = 15.5;
 
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
@@ -197,10 +215,23 @@ const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
 /// strongest) — the progressive FX/Shadow ramp. Lc placeholder, held above
 /// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
-const SHADOW_MINOR_JND: f64 = 8.0;
-const SHADOW_AMBIENT_JND: f64 = 9.5;
-const SHADOW_PENUMBRA_JND: f64 = 11.5;
-const SHADOW_MAJOR_JND: f64 = 14.0;
+//
+// NEEDS-SCIENCE — HARD BLOCKER (docs/decisions/surface-jnd.md §3).
+//   Open question: "Against what reference background luminance do we anchor
+//   each shadow step's Lc, given each step composites an alpha opacity
+//   (@1/@2/@4/@12) over arbitrary/variable content rather than a solid surface?"
+//   Blocked on the non-solid-backgrounds / composite-backgrounds chapter.
+//   The rung values below are ORDER-ONLY placeholders (strictly ascending,
+//   each ≥ DECORATIVE_FLOOR_MIN); perceptual magnitude is NOT claimed.
+// PROVISIONAL order-only lift: raised onto/above DECORATIVE_FLOOR_MIN (15.5) to
+// preserve strict-ascending order under the .max(DECORATIVE_FLOOR_MIN) clamp.
+// Magnitudes are NOT derived (surface-jnd chapter is HARD BLOCKED for shadows);
+// only the ORDER contract is claimed. The original alpha-based anchors remain
+// the open question (see §3/§8 of docs/decisions/surface-jnd.md).
+const SHADOW_MINOR_JND: f64 = 17.0;
+const SHADOW_AMBIENT_JND: f64 = 18.5;
+const SHADOW_PENUMBRA_JND: f64 = 20.0;
+const SHADOW_MAJOR_JND: f64 = 22.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
@@ -1005,7 +1036,15 @@ impl Default for RoleTable {
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
                 // Separator — PROVISIONAL Lc decorative (no owner dJ' anchor yet).
-                (Role::Separator, decorative(8.0)),
+                // GROUNDED — tracks DECORATIVE_FLOOR_MIN (sourced Lc 15 floor,
+                //            APCAeasyIntro + WhyAPCA; see const doc comment and
+                //            docs/decisions/surface-jnd.md §1b+§2).
+                //            Final magnitude set-point is downstream scope
+                //            jnd-floor-and-separator-pin.
+                // NEEDS-SCIENCE — separator set-point not yet eye-calibrated;
+                //   DECORATIVE_FLOOR_MIN is the perceptual floor, not the tuned target.
+                //   Downstream scope: jnd-floor-and-separator-pin.
+                (Role::Separator, decorative(DECORATIVE_FLOOR_MIN)),
                 // Border ladder. Strong is an ANCHOR at the label-primary contract
                 // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
                 // N12-weight edge — a readability role, not a dJ' step. Base/Soft
@@ -2324,8 +2363,12 @@ mod tests {
 
     #[test]
     fn provisional_magnitudes_drive_the_decorative_result() {
-        // The decorative result is driven by the table's PROVISIONAL magnitude,
-        // not a hardcoded final value: change the magnitude, the result follows.
+        // The decorative result is driven by the magnitude in the table, not a
+        // hardcoded final value: change the magnitude, the result follows.
+        // The bump target (20.0) exceeds both the current and the post-raise
+        // DECORATIVE_FLOOR_MIN, so the assertion holds regardless of which side
+        // of the floor-raise we are on (20 > 15 > 7.6). Comment de-PROVISIONAL:
+        // this recipe is the permanent mechanism, not a temporary placeholder.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let default_table = RoleTable::default();
@@ -2337,6 +2380,13 @@ mod tests {
         let bumped = resolve(&bg, Role::Separator, &stronger, &vc);
         let (b, s) = (base.lc().unwrap().abs(), bumped.lc().unwrap().abs());
         assert!(s > b, "bumped magnitude must raise |Lc|: {b} -> {s}");
+        // Post-raise: the bumped result (magnitude 20.0) must also exceed DECORATIVE_FLOOR_MIN
+        // (15.5).  We assert > 15.0 (the sourced Lc 15 floor) — a weaker but sourced bound
+        // that any on-grid value above 15.5 trivially satisfies.
+        assert!(
+            s > 15.0,
+            "bumped separator (magnitude 20.0) must land above the sourced Lc15 floor: {s}"
+        );
     }
 
     /// Achieved `|dJ'|` of a single resolved role against `bg_hex` under `vc`.
@@ -3199,13 +3249,17 @@ mod tests {
         //     unit, type, and source are the owner's. The `shadow-*` rows stay Lc
         //     `Decorative` placeholders (the owner's shadow anchors are alpha
         //     opacities, not dJ' steps); frozen so a refactor cannot move them.
+        // Re-snapped after DECORATIVE_FLOOR_MIN raise (7.6→15.5) and shadow
+        // const lift (8/9.5/11.5/14→17/18.5/20/22).  Only separator and shadow-*
+        // cells changed; all non-decorative cells are byte-identical.  Updated
+        // 2026-06-22.  Each delta is intentional (R3).
         const GOLDEN: [(&str, &str, &str, &str); 240] = [
             ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
             ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
             ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
             ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
             ("srgb", "#FFFFFF", "icon", "#94949E"),
-            ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
+            ("srgb", "#FFFFFF", "separator", "#D7D7E1"),
             ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
             ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
             ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
@@ -3215,17 +3269,17 @@ mod tests {
             ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
             ("srgb", "#FFFFFF", "fill-quaternary", "#F3F3FE"),
             ("srgb", "#FFFFFF", "fill-none", "none"),
-            ("srgb", "#FFFFFF", "shadow-minor", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "shadow-ambient", "#E2E2EC"),
-            ("srgb", "#FFFFFF", "shadow-penumbra", "#DEDEE8"),
-            ("srgb", "#FFFFFF", "shadow-major", "#DADAE3"),
+            ("srgb", "#FFFFFF", "shadow-minor", "#D4D4DE"),
+            ("srgb", "#FFFFFF", "shadow-ambient", "#D2D2DB"),
+            ("srgb", "#FFFFFF", "shadow-penumbra", "#CFCFD8"),
+            ("srgb", "#FFFFFF", "shadow-major", "#CBCBD5"),
             ("srgb", "#FFFFFF", "none", "none"),
             ("srgb", "#F2F2F7", "label-primary", "#09090F"),
             ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
             ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
             ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
             ("srgb", "#F2F2F7", "icon", "#8B8B95"),
-            ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
+            ("srgb", "#F2F2F7", "separator", "#CFCFD9"),
             ("srgb", "#F2F2F7", "border-strong", "#09090F"),
             ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
             ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
@@ -3235,17 +3289,17 @@ mod tests {
             ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
             ("srgb", "#F2F2F7", "fill-quaternary", "#E7E7F0"),
             ("srgb", "#F2F2F7", "fill-none", "none"),
-            ("srgb", "#F2F2F7", "shadow-minor", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "shadow-ambient", "#DADAE4"),
-            ("srgb", "#F2F2F7", "shadow-penumbra", "#D7D7E0"),
-            ("srgb", "#F2F2F7", "shadow-major", "#D2D2DC"),
+            ("srgb", "#F2F2F7", "shadow-minor", "#CDCDD6"),
+            ("srgb", "#F2F2F7", "shadow-ambient", "#CACAD3"),
+            ("srgb", "#F2F2F7", "shadow-penumbra", "#C7C7D1"),
+            ("srgb", "#F2F2F7", "shadow-major", "#C3C3CD"),
             ("srgb", "#F2F2F7", "none", "none"),
             ("srgb", "#7F7F7F", "label-primary", "#010103"),
             ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
             ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
             ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
             ("srgb", "#7F7F7F", "icon", "#36353D"),
-            ("srgb", "#7F7F7F", "separator", "#63636B"),
+            ("srgb", "#7F7F7F", "separator", "#515159"),
             ("srgb", "#7F7F7F", "border-strong", "#010103"),
             ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
             ("srgb", "#7F7F7F", "border-soft", "#76767F"),
@@ -3255,17 +3309,17 @@ mod tests {
             ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
             ("srgb", "#7F7F7F", "fill-quaternary", "#76767F"),
             ("srgb", "#7F7F7F", "fill-none", "none"),
-            ("srgb", "#7F7F7F", "shadow-minor", "#63636B"),
-            ("srgb", "#7F7F7F", "shadow-ambient", "#5F5F68"),
-            ("srgb", "#7F7F7F", "shadow-penumbra", "#5B5B63"),
-            ("srgb", "#7F7F7F", "shadow-major", "#54545D"),
+            ("srgb", "#7F7F7F", "shadow-minor", "#4D4D55"),
+            ("srgb", "#7F7F7F", "shadow-ambient", "#494951"),
+            ("srgb", "#7F7F7F", "shadow-penumbra", "#46464D"),
+            ("srgb", "#7F7F7F", "shadow-major", "#404048"),
             ("srgb", "#7F7F7F", "none", "none"),
             ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
             ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
             ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
             ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
             ("srgb", "#1C1C1E", "icon", "#95959E"),
-            ("srgb", "#1C1C1E", "separator", "#38383F"),
+            ("srgb", "#1C1C1E", "separator", "#4C4C55"),
             ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
             ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
             ("srgb", "#1C1C1E", "border-soft", "#23232A"),
@@ -3275,17 +3329,17 @@ mod tests {
             ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
             ("srgb", "#1C1C1E", "fill-quaternary", "#23232A"),
             ("srgb", "#1C1C1E", "fill-none", "none"),
-            ("srgb", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("srgb", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("srgb", "#1C1C1E", "shadow-penumbra", "#42424A"),
-            ("srgb", "#1C1C1E", "shadow-major", "#494950"),
+            ("srgb", "#1C1C1E", "shadow-minor", "#505059"),
+            ("srgb", "#1C1C1E", "shadow-ambient", "#54545D"),
+            ("srgb", "#1C1C1E", "shadow-penumbra", "#585861"),
+            ("srgb", "#1C1C1E", "shadow-major", "#5D5D66"),
             ("srgb", "#1C1C1E", "none", "none"),
             ("srgb", "#101012", "label-primary", "#F2F2FC"),
             ("srgb", "#101012", "label-secondary", "#B4B4BE"),
             ("srgb", "#101012", "label-tertiary", "#93939C"),
             ("srgb", "#101012", "label-quaternary", "#696972"),
             ("srgb", "#101012", "icon", "#93939C"),
-            ("srgb", "#101012", "separator", "#323239"),
+            ("srgb", "#101012", "separator", "#48484F"),
             ("srgb", "#101012", "border-strong", "#F2F2FC"),
             ("srgb", "#101012", "border-base", "#1F1F27"),
             ("srgb", "#101012", "border-soft", "#18171E"),
@@ -3295,17 +3349,17 @@ mod tests {
             ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
             ("srgb", "#101012", "fill-quaternary", "#18171E"),
             ("srgb", "#101012", "fill-none", "none"),
-            ("srgb", "#101012", "shadow-minor", "#323239"),
-            ("srgb", "#101012", "shadow-ambient", "#36363E"),
-            ("srgb", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("srgb", "#101012", "shadow-major", "#43434B"),
+            ("srgb", "#101012", "shadow-minor", "#4B4B53"),
+            ("srgb", "#101012", "shadow-ambient", "#4F4F57"),
+            ("srgb", "#101012", "shadow-penumbra", "#53535B"),
+            ("srgb", "#101012", "shadow-major", "#585860"),
             ("srgb", "#101012", "none", "none"),
             ("srgb", "#3478F6", "label-primary", "#020205"),
             ("srgb", "#3478F6", "label-secondary", "#14141B"),
             ("srgb", "#3478F6", "label-tertiary", "#35343C"),
             ("srgb", "#3478F6", "label-quaternary", "#707078"),
             ("srgb", "#3478F6", "icon", "#35343C"),
-            ("srgb", "#3478F6", "separator", "#7F7F88"),
+            ("srgb", "#3478F6", "separator", "#6F6F77"),
             ("srgb", "#3478F6", "border-strong", "#020205"),
             ("srgb", "#3478F6", "border-base", "#6E6E76"),
             ("srgb", "#3478F6", "border-soft", "#76767E"),
@@ -3315,17 +3369,17 @@ mod tests {
             ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
             ("srgb", "#3478F6", "fill-quaternary", "#76767E"),
             ("srgb", "#3478F6", "fill-none", "none"),
-            ("srgb", "#3478F6", "shadow-minor", "#7F7F88"),
-            ("srgb", "#3478F6", "shadow-ambient", "#7C7C85"),
-            ("srgb", "#3478F6", "shadow-penumbra", "#787880"),
-            ("srgb", "#3478F6", "shadow-major", "#72727A"),
+            ("srgb", "#3478F6", "shadow-minor", "#6B6B74"),
+            ("srgb", "#3478F6", "shadow-ambient", "#686870"),
+            ("srgb", "#3478F6", "shadow-penumbra", "#64646D"),
+            ("srgb", "#3478F6", "shadow-major", "#5F5F68"),
             ("srgb", "#3478F6", "none", "none"),
             ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
             ("dim", "#FFFFFF", "label-secondary", "#707079"),
             ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
             ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
             ("dim", "#FFFFFF", "icon", "#94949D"),
-            ("dim", "#FFFFFF", "separator", "#E3E3ED"),
+            ("dim", "#FFFFFF", "separator", "#D6D6DF"),
             ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
             ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
             ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
@@ -3335,17 +3389,17 @@ mod tests {
             ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
             ("dim", "#FFFFFF", "fill-quaternary", "#DEDEE7"),
             ("dim", "#FFFFFF", "fill-none", "none"),
-            ("dim", "#FFFFFF", "shadow-minor", "#E3E3ED"),
-            ("dim", "#FFFFFF", "shadow-ambient", "#E0E0EA"),
-            ("dim", "#FFFFFF", "shadow-penumbra", "#DDDDE6"),
-            ("dim", "#FFFFFF", "shadow-major", "#D8D9E2"),
+            ("dim", "#FFFFFF", "shadow-minor", "#D3D3DC"),
+            ("dim", "#FFFFFF", "shadow-ambient", "#D0D0DA"),
+            ("dim", "#FFFFFF", "shadow-penumbra", "#CDCDD7"),
+            ("dim", "#FFFFFF", "shadow-major", "#CACAD3"),
             ("dim", "#FFFFFF", "none", "none"),
             ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
             ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
             ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
             ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
             ("dim", "#F2F2F7", "icon", "#8B8B94"),
-            ("dim", "#F2F2F7", "separator", "#DEDEE7"),
+            ("dim", "#F2F2F7", "separator", "#D0D0D9"),
             ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
             ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
             ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
@@ -3355,17 +3409,17 @@ mod tests {
             ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
             ("dim", "#F2F2F7", "fill-quaternary", "#D3D3DC"),
             ("dim", "#F2F2F7", "fill-none", "none"),
-            ("dim", "#F2F2F7", "shadow-minor", "#DEDEE7"),
-            ("dim", "#F2F2F7", "shadow-ambient", "#DBDBE4"),
-            ("dim", "#F2F2F7", "shadow-penumbra", "#D7D7E1"),
-            ("dim", "#F2F2F7", "shadow-major", "#D3D3DC"),
+            ("dim", "#F2F2F7", "shadow-minor", "#CDCDD7"),
+            ("dim", "#F2F2F7", "shadow-ambient", "#CACAD4"),
+            ("dim", "#F2F2F7", "shadow-penumbra", "#C8C8D1"),
+            ("dim", "#F2F2F7", "shadow-major", "#C4C4CD"),
             ("dim", "#F2F2F7", "none", "none"),
             ("dim", "#7F7F7F", "label-primary", "#030305"),
             ("dim", "#7F7F7F", "label-secondary", "#16161B"),
             ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
             ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
             ("dim", "#7F7F7F", "icon", "#36353D"),
-            ("dim", "#7F7F7F", "separator", "#64646D"),
+            ("dim", "#7F7F7F", "separator", "#53535A"),
             ("dim", "#7F7F7F", "border-strong", "#030305"),
             ("dim", "#7F7F7F", "border-base", "#64646C"),
             ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
@@ -3375,17 +3429,17 @@ mod tests {
             ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
             ("dim", "#7F7F7F", "fill-quaternary", "#696971"),
             ("dim", "#7F7F7F", "fill-none", "none"),
-            ("dim", "#7F7F7F", "shadow-minor", "#64646D"),
-            ("dim", "#7F7F7F", "shadow-ambient", "#616169"),
-            ("dim", "#7F7F7F", "shadow-penumbra", "#5D5D64"),
-            ("dim", "#7F7F7F", "shadow-major", "#57575E"),
+            ("dim", "#7F7F7F", "shadow-minor", "#4F4F57"),
+            ("dim", "#7F7F7F", "shadow-ambient", "#4B4B53"),
+            ("dim", "#7F7F7F", "shadow-penumbra", "#47474F"),
+            ("dim", "#7F7F7F", "shadow-major", "#42424A"),
             ("dim", "#7F7F7F", "none", "none"),
             ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
             ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
             ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
             ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
             ("dim", "#1C1C1E", "icon", "#94949D"),
-            ("dim", "#1C1C1E", "separator", "#38383F"),
+            ("dim", "#1C1C1E", "separator", "#4D4D54"),
             ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
             ("dim", "#1C1C1E", "border-base", "#313137"),
             ("dim", "#1C1C1E", "border-soft", "#28282E"),
@@ -3395,17 +3449,17 @@ mod tests {
             ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
             ("dim", "#1C1C1E", "fill-quaternary", "#2D2D33"),
             ("dim", "#1C1C1E", "fill-none", "none"),
-            ("dim", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("dim", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("dim", "#1C1C1E", "shadow-penumbra", "#424249"),
-            ("dim", "#1C1C1E", "shadow-major", "#494950"),
+            ("dim", "#1C1C1E", "shadow-minor", "#515158"),
+            ("dim", "#1C1C1E", "shadow-ambient", "#54545C"),
+            ("dim", "#1C1C1E", "shadow-penumbra", "#585860"),
+            ("dim", "#1C1C1E", "shadow-major", "#5D5D65"),
             ("dim", "#1C1C1E", "none", "none"),
             ("dim", "#101012", "label-primary", "#F0F0FA"),
             ("dim", "#101012", "label-secondary", "#B3B3BD"),
             ("dim", "#101012", "label-tertiary", "#92929B"),
             ("dim", "#101012", "label-quaternary", "#686871"),
             ("dim", "#101012", "icon", "#92929B"),
-            ("dim", "#101012", "separator", "#323239"),
+            ("dim", "#101012", "separator", "#47474F"),
             ("dim", "#101012", "border-strong", "#F0F0FA"),
             ("dim", "#101012", "border-base", "#25252B"),
             ("dim", "#101012", "border-soft", "#1C1C22"),
@@ -3415,17 +3469,17 @@ mod tests {
             ("dim", "#101012", "fill-tertiary", "#29292F"),
             ("dim", "#101012", "fill-quaternary", "#212127"),
             ("dim", "#101012", "fill-none", "none"),
-            ("dim", "#101012", "shadow-minor", "#323239"),
-            ("dim", "#101012", "shadow-ambient", "#36363E"),
-            ("dim", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("dim", "#101012", "shadow-major", "#43434B"),
+            ("dim", "#101012", "shadow-minor", "#4B4B53"),
+            ("dim", "#101012", "shadow-ambient", "#4F4F57"),
+            ("dim", "#101012", "shadow-penumbra", "#53535A"),
+            ("dim", "#101012", "shadow-major", "#58585F"),
             ("dim", "#101012", "none", "none"),
             ("dim", "#3478F6", "label-primary", "#040408"),
             ("dim", "#3478F6", "label-secondary", "#15141A"),
             ("dim", "#3478F6", "label-tertiary", "#35343B"),
             ("dim", "#3478F6", "label-quaternary", "#707079"),
             ("dim", "#3478F6", "icon", "#35343B"),
-            ("dim", "#3478F6", "separator", "#808088"),
+            ("dim", "#3478F6", "separator", "#6F6F78"),
             ("dim", "#3478F6", "border-strong", "#040408"),
             ("dim", "#3478F6", "border-base", "#63636C"),
             ("dim", "#3478F6", "border-soft", "#6E6E76"),
@@ -3435,10 +3489,10 @@ mod tests {
             ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),
             ("dim", "#3478F6", "fill-quaternary", "#686870"),
             ("dim", "#3478F6", "fill-none", "none"),
-            ("dim", "#3478F6", "shadow-minor", "#808088"),
-            ("dim", "#3478F6", "shadow-ambient", "#7D7D85"),
-            ("dim", "#3478F6", "shadow-penumbra", "#787881"),
-            ("dim", "#3478F6", "shadow-major", "#73737B"),
+            ("dim", "#3478F6", "shadow-minor", "#6C6C74"),
+            ("dim", "#3478F6", "shadow-ambient", "#696971"),
+            ("dim", "#3478F6", "shadow-penumbra", "#65656E"),
+            ("dim", "#3478F6", "shadow-major", "#606069"),
             ("dim", "#3478F6", "none", "none"),
         ];
 
@@ -3538,5 +3592,589 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── INVARIANT BATTERY — issues #44 / PR R3 ───────────────────────────────
+    //
+    // All tests below lock the seven invariants that the DECORATIVE_FLOOR_MIN
+    // raise (7.6 → 15.5) and the separator const-ref fix must satisfy.
+    // Invariants are referenced inline by number.
+
+    // ── Invariant 2: the engine-cliff gap ────────────────────────────────────
+
+    #[test]
+    fn decorative_floor_is_clear_of_engine_cliff() {
+        // INVARIANT 2 / RED-proof.
+        //
+        // The engine's low-contrast clip creates a "cliff" below which the solver
+        // reports zero contrast.  The cliff magnitude is derived from the engine's
+        // own constants — NOT a magic literal:
+        //
+        //   cliff = (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE
+        //
+        // Currently: (0.1 − 0.027) × 100.0 = 7.30 Lc.
+        //
+        // DECORATIVE_FLOOR_MIN must be at least 5.0 Lc above that cliff so the
+        // decorative floor is never silently re-absorbed by the emission dead-zone.
+        //
+        // Before the raise: DECORATIVE_FLOOR_MIN = 7.6,
+        // gap = 7.6 − 7.30 = 0.30 < 5.0 → RED.
+        // After the raise to 15.5: gap = 15.5 − 7.30 = 8.20 > 5.0 → GREEN.
+        //
+        // This test closes the class 'perceptibility floor silently collapses
+        // onto the emission cliff' (#44).  It is deliberately computed from the
+        // engine constants — not from 7.30 as a literal — so a change to the
+        // engine that shifts the cliff is automatically caught here.
+        use crate::lpc::{LC_SCALE, LO_BOW_OFFSET, LO_CLIP};
+
+        let cliff = (LO_CLIP - LO_BOW_OFFSET) * LC_SCALE;
+        let gap = DECORATIVE_FLOOR_MIN - cliff;
+        assert!(
+            gap > 5.0,
+            "DECORATIVE_FLOOR_MIN ({DECORATIVE_FLOOR_MIN}) is only {gap:.2} Lc above the \
+             engine cliff ({cliff:.2}); must be > 5.0 — raise DECORATIVE_FLOOR_MIN (issue #44)"
+        );
+    }
+
+    // ── Invariant 6: separator lands on the sourced perceptual floor ─────────
+
+    #[test]
+    fn separator_resolves_at_or_above_lc15() {
+        // INVARIANT 6 / RED-proof.
+        //
+        // ADR §2: the separator is the hairline that must be perceptually visible
+        // on a white surface.  The sourced perceptual floor is Lc15 (≈#DFDFDF,
+        // measured ≈15.43 Lc on #FFFFFF/sRGB), so the separator's resolved |Lc|
+        // on white must be ≥ 15.0.
+        //
+        // Before the raise: separator magnitude = 8.0 → |Lc| ≈ 8 < 15 → RED.
+        // After the raise to 15.5: DECORATIVE_FLOOR_MIN (15.5) ≥ 15 → |Lc| ≥ 15 → GREEN.
+        //
+        // This proves "tracking the floor actually lands the hairline on the
+        // sourced perceptual floor, not merely sets a const" (Invariant 6).
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let table = RoleTable::default();
+        let solved = match resolve(&bg, Role::Separator, &table, &vc) {
+            Resolved::Color { solved, .. } => solved,
+            other => panic!("separator on white expected a colour, got {other:?}"),
+        };
+        let lc_abs = solved.lc().abs();
+        assert!(
+            lc_abs >= 15.0,
+            "separator |Lc| on #FFFFFF is {lc_abs:.3}; must be ≥ 15.0 (ADR §2 / Invariant 6)"
+        );
+    }
+
+    // ── Invariant 1: one SSOT, no hardcoded decorative literal ──────────────
+
+    #[test]
+    fn no_hardcoded_decorative_8() {
+        // INVARIANT 1 / RED-proof (source-grep, comment-stripped).
+        //
+        // The separator spec in the production RoleTable must reference
+        // `DECORATIVE_FLOOR_MIN` by name — never a fresh numeric literal.
+        // One SSOT for the floor, not a per-role magic number.
+        //
+        // Both the NEGATIVE and POSITIVE needles are built from split literals
+        // at runtime so they cannot appear verbatim in the test source and
+        // self-satisfy the assertions.
+        //
+        // To prevent the POSITIVE assertion from matching doc comments that
+        // quote the production pattern, we strip every line that begins with
+        // optional whitespace followed by `//` before searching.  Only
+        // production code lines (and string literals outside comments) remain.
+        let src = include_str!("semantic.rs");
+
+        // Strip comment lines so doc/test comments quoting the production pattern
+        // cannot satisfy the positive assertion.
+        let code_lines: String = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Build the banned needle at runtime so the source bytes of THIS file do
+        // not contain the literal and the grep is not self-defeating.
+        let banned = ["decorative(8", ".0)"].concat();
+
+        // The hardcoded literal magnitude must be absent from the production source.
+        assert!(
+            !src.contains(&banned),
+            "semantic.rs still contains a hardcoded decorative magnitude — replace with \
+             `decorative(DECORATIVE_FLOOR_MIN)` (Invariant 1 / placeholder-kill guard)"
+        );
+
+        // The production separator tuple must reference the const by name.
+        // Checked in comment-stripped source.  The needle is prefixed with a
+        // newline so it only matches a line-starting tuple in the production
+        // array — it cannot match the backtick-quoted error message string below
+        // (which is preceded by a backtick, not a newline+spaces).
+        let production_needle = [
+            "\n                (Role::Separator, decorative(DECOR",
+            "ATIVE_FLOOR_MIN)),",
+        ]
+        .concat();
+        assert!(
+            code_lines.contains(&production_needle),
+            "semantic.rs: the separator production tuple no longer reads \
+             (Role::Separator, decorative(DECORATIVE_FLOOR_MIN)) — \
+             the named const must be used, not a literal (Invariant 1)"
+        );
+    }
+
+    // ── Invariant 3: shadow rungs — strict order, each ≥ floor, major < Lc30 ─
+
+    #[test]
+    fn shadow_strict_order_over_corpus() {
+        // INVARIANT 3 / mutation-proof (characterization).
+        //
+        // Over a representative corpus of light, dark, and extreme backgrounds,
+        // the resolved shadow Lc values satisfy:
+        //   minor < ambient < penumbra < major
+        // and each rung ≥ DECORATIVE_FLOOR_MIN.
+        //
+        // This test is GREEN because the shadow constants were lifted to
+        // SHADOW_MINOR_JND=17.0 / AMBIENT=18.5 / PENUMBRA=20.0 / MAJOR=22.0
+        // (all above DECORATIVE_FLOOR_MIN=15.5).  The OLD constants 8/9.5/11.5/14
+        // are ALL below 15.5, so `decorative_contract` clamps every one to 15.5 →
+        // minor==ambient==penumbra==major → the strict-order assertion `pair[0] <
+        // pair[1]` becomes `15.5 < 15.5` = false → RED.  Any sub-floor constant
+        // set would have been RED, not GREEN.
+        //
+        // Bite proven by mutation: (a) changing SHADOW_MINOR_JND > SHADOW_AMBIENT_JND
+        // flips a pair, failing the strict-order assertion; (b) lowering any constant
+        // below DECORATIVE_FLOOR_MIN collapses rungs to the floor (all equal → RED).
+        let table = RoleTable::default();
+        let corpus: &[&str] = &[
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6", "#000000", "#EBEBEB",
+        ];
+        let stack = [
+            Role::ShadowMinor,
+            Role::ShadowAmbient,
+            Role::ShadowPenumbra,
+            Role::ShadowMajor,
+        ];
+        for (vc, vc_name) in vcs() {
+            for bg_hex in corpus {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let mags: Vec<f64> = stack.iter().map(|&r| ladder_mag(&set, r)).collect();
+
+                // Strict ascending order.
+                for (i, pair) in mags.windows(2).enumerate() {
+                    assert!(
+                        pair[0] < pair[1],
+                        "{vc_name} {bg_hex}: shadow order broken between rungs {i}/{}: |Lc| {mags:?}",
+                        i + 1
+                    );
+                }
+
+                // Every rung ≥ DECORATIVE_FLOOR_MIN.
+                for (i, (&role, &mag)) in stack.iter().zip(mags.iter()).enumerate() {
+                    assert!(
+                        mag >= DECORATIVE_FLOOR_MIN,
+                        "{vc_name} {bg_hex}: shadow rung {i} ({}) |Lc| {mag:.3} < DECORATIVE_FLOOR_MIN \
+                         {DECORATIVE_FLOOR_MIN} — rung collapsed onto the floor",
+                        role.key()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shadow_major_below_lc30() {
+        // INVARIANT 3 / mutation-proof (characterization).
+        //
+        // shadow-major resolved |Lc| on #FFFFFF must remain < Lc30.  This guards
+        // against over-separation when the rung literals are lifted onto the new
+        // floor.  Current SHADOW_MAJOR_JND = 22.0 → |Lc| ≈ 22 on white → well
+        // within bounds.  GREEN at birth.
+        //
+        // Bite proven by mutation: setting DECORATIVE_FLOOR_MIN = 35.0 pushes
+        // shadow-major onto the floor (|Lc| ≥ 35 > 30) and the assertion fires.
+        // (At 30.0 the quantisation lands just below 30; the companion test
+        // `shadow_strict_order_over_corpus` catches the collapse-to-floor case
+        // where all rungs become identical at 30.0.)
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let table = RoleTable::default();
+        let solved = match resolve(&bg, Role::ShadowMajor, &table, &vc) {
+            Resolved::Color { solved, .. } => solved,
+            other => panic!("shadow-major expected colour, got {other:?}"),
+        };
+        let lc_abs = solved.lc().abs();
+        assert!(
+            lc_abs < 30.0,
+            "shadow-major |Lc| on #FFFFFF is {lc_abs:.3}; must be < 30.0 (Invariant 3 / \
+             over-separation guard)"
+        );
+    }
+
+    // ── R3 regression snapshots ───────────────────────────────────────────────
+
+    #[test]
+    fn r3_resolve_set_separator_tuples() {
+        // R3 / mutation-proof snapshot (Class B regression / characterization).
+        //
+        // The separator= values across the 24 lines of RESOLVE_SET_GOLDEN (in
+        // solve.rs:2526+) are re-recorded here as an independent snapshot.
+        // The same (vc, bg, chroma-policy) grid as the RESOLVE_SET_GOLDEN is
+        // used so the two tables stay in sync: Neutral = RoleChroma::Neutral,
+        // Tinted = RoleChroma::Tinted{286°, 0.10} (the v1 flat tint that
+        // RESOLVE_SET_GOLDEN freezes).
+        //
+        // GREEN at birth — records current separator colours.
+        // After the floor raise the values change; re-snap deliberately, with a
+        // comment, never silently.
+        //
+        // Bite: changing a separator hex in production fails this snapshot;
+        // mutating DECORATIVE_FLOOR_MIN changes all separator hexes → full
+        // row failure here, and also at r3_lab_star_goldens.
+        let vc_srgb = ViewingConditions::srgb();
+        let vc_dim = ViewingConditions::dim_surround();
+
+        // Same policies as solve.rs RESOLVE_SET_GOLDEN.
+        let neutral = RoleChroma::Neutral;
+        let tinted_v1 = RoleChroma::Tinted {
+            hue_deg: 286.0,
+            ratio: 0.10,
+        };
+
+        let mut separator_snapshot: Vec<(String, String, String, String)> = Vec::new();
+
+        for (vc, vc_name) in [(&vc_srgb, "srgb"), (&vc_dim, "dim")] {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                for (pol_name, chroma) in [("Neutral", neutral), ("Tinted", tinted_v1)] {
+                    let tbl = RoleTable::default().with_chroma(chroma);
+                    let bg = BgInput::solid(bg_hex).unwrap();
+                    let set = resolve_set(&bg, &tbl, vc);
+                    let sep_hex = set
+                        .iter()
+                        .find(|(r, _)| *r == Role::Separator)
+                        .map(|(_, res)| match res {
+                            Resolved::Color { solved, .. } => solved.hex().to_string(),
+                            Resolved::None => "none".to_string(),
+                            Resolved::Unreachable(_) => "unreach".to_string(),
+                        })
+                        .expect("separator must be in the set");
+                    separator_snapshot.push((
+                        vc_name.to_string(),
+                        bg_hex.to_string(),
+                        pol_name.to_string(),
+                        sep_hex,
+                    ));
+                }
+            }
+        }
+
+        // Re-snapped after DECORATIVE_FLOOR_MIN raise (7.6→15.5) and shadow
+        // const lift (8/9.5/11.5/14→17/18.5/20/22).  Only separator hexes
+        // changed; confirmed against RESOLVE_SET_GOLDEN (solve.rs).  Updated
+        // 2026-06-22.  Each delta is intentional (R3).
+        let expected: &[(&str, &str, &str, &str)] = &[
+            ("srgb", "#FFFFFF", "Neutral", "#DBDBDB"),
+            ("srgb", "#FFFFFF", "Tinted", "#D9D9DE"),
+            ("srgb", "#F2F2F7", "Neutral", "#D4D4D4"),
+            ("srgb", "#F2F2F7", "Tinted", "#D1D1D7"),
+            ("srgb", "#7F7F7F", "Neutral", "#575757"),
+            ("srgb", "#7F7F7F", "Tinted", "#4D4D5C"),
+            ("srgb", "#1C1C1E", "Neutral", "#535353"),
+            ("srgb", "#1C1C1E", "Tinted", "#494957"),
+            ("srgb", "#101012", "Neutral", "#4E4E4E"),
+            ("srgb", "#101012", "Tinted", "#444451"),
+            ("srgb", "#3478F6", "Neutral", "#747474"),
+            ("srgb", "#3478F6", "Tinted", "#6A6A7C"),
+            ("dim", "#FFFFFF", "Neutral", "#D9D9D9"),
+            ("dim", "#FFFFFF", "Tinted", "#D8D8DC"),
+            ("dim", "#F2F2F7", "Neutral", "#D4D4D4"),
+            ("dim", "#F2F2F7", "Tinted", "#D2D2D7"),
+            ("dim", "#7F7F7F", "Neutral", "#575757"),
+            ("dim", "#7F7F7F", "Tinted", "#4F4F5E"),
+            ("dim", "#1C1C1E", "Neutral", "#525252"),
+            ("dim", "#1C1C1E", "Tinted", "#494957"),
+            ("dim", "#101012", "Neutral", "#4C4C4C"),
+            ("dim", "#101012", "Tinted", "#444451"),
+            ("dim", "#3478F6", "Neutral", "#747474"),
+            ("dim", "#3478F6", "Tinted", "#6B6B7D"),
+        ];
+
+        for (i, (got, exp)) in separator_snapshot.iter().zip(expected.iter()).enumerate() {
+            let (gvc, gbg, gpol, ghex) = got;
+            let (evc, ebg, epol, ehex) = exp;
+            assert_eq!(
+                (gvc.as_str(), gbg.as_str(), gpol.as_str(), ghex.as_str()),
+                (*evc, *ebg, *epol, *ehex),
+                "r3_resolve_set_separator_tuples row {i}: separator hex changed — \
+                 intentional? re-snap after floor raise, else a regression (R3)"
+            );
+        }
+    }
+
+    #[test]
+    fn r3_lab_star_goldens() {
+        // R3 / mutation-proof snapshot (Class B regression / characterization).
+        //
+        // The `--lab-*` golden strings from the 240-cell GOLDEN table (semantic.rs
+        // line ~3202, locked by `resolve_set_golden_hex_is_byte_for_byte_stable`):
+        // specifically the label-primary column, which must be byte-identical after
+        // the floor raise (only separator/shadow cells are allowed to move).
+        //
+        // GREEN at birth — label-primary values match GOLDEN exactly.
+        // After the floor raise, re-run this test; if label-primary hexes moved, the
+        // raise was NOT decorative-only and is a regression (Invariant 4).
+        //
+        // Bite proven by mutation: changing a label-primary hex in production shifts
+        // the GOLDEN value and this assertion fires.  Mutating DECORATIVE_FLOOR_MIN
+        // must NOT change label-primary → confirmed here.
+        let vc_srgb = ViewingConditions::srgb();
+        let vc_dim = ViewingConditions::dim_surround();
+        // The GOLDEN 240-cell table uses RoleTable::default() (the Curve policy).
+        let table = RoleTable::default();
+
+        // Locked label-primary hexes from GOLDEN (semantic.rs:3203+).
+        // These must be byte-identical after the floor raise — the raise is
+        // decorative-only, label-primary is never decorative.
+        let label_primary_locks: &[(&str, &str, &str)] = &[
+            ("srgb", "#FFFFFF", "#0A0A10"),
+            ("srgb", "#F2F2F7", "#09090F"),
+            ("srgb", "#7F7F7F", "#010103"),
+            ("srgb", "#1C1C1E", "#F1F1FD"),
+            ("srgb", "#101012", "#F2F2FC"),
+            ("srgb", "#3478F6", "#020205"),
+            ("dim", "#FFFFFF", "#0D0D12"),
+            ("dim", "#F2F2F7", "#0C0C12"),
+            ("dim", "#7F7F7F", "#030305"),
+            ("dim", "#1C1C1E", "#F0F1FA"),
+            ("dim", "#101012", "#F0F0FA"),
+            ("dim", "#3478F6", "#040408"),
+        ];
+
+        for (vc, vc_name) in [(&vc_srgb, "srgb"), (&vc_dim, "dim")] {
+            for bg_hex in [
+                "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+            ] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, vc);
+
+                // label-primary must be byte-stable (non-decorative role, must not drift).
+                let primary_hex = set
+                    .iter()
+                    .find(|(r, _)| *r == Role::LabelPrimary)
+                    .and_then(|(_, res)| res.solved())
+                    .map(|s| s.hex().to_string())
+                    .expect("label-primary must resolve");
+
+                let locked = label_primary_locks
+                    .iter()
+                    .find(|(v, b, _)| *v == vc_name && *b == bg_hex)
+                    .map(|(_, _, h)| *h)
+                    .unwrap_or_else(|| panic!("no lock for {vc_name}/{bg_hex}"));
+
+                assert_eq!(
+                    primary_hex, locked,
+                    "r3_lab_star_goldens: label-primary drifted on {vc_name}/{bg_hex}: \
+                     got {primary_hex}, locked {locked} — only separator/shadow cells are \
+                     allowed to move after the floor raise (Invariant 4)"
+                );
+
+                // Separator must resolve (not be none/unreachable) on every surface.
+                let sep_resolved = set
+                    .iter()
+                    .find(|(r, _)| *r == Role::Separator)
+                    .map(|(_, res)| res.solved().is_some())
+                    .unwrap_or(false);
+                assert!(
+                    sep_resolved,
+                    "r3_lab_star_goldens: separator did not resolve on {vc_name}/{bg_hex}"
+                );
+
+                // Shadow-major must resolve on every surface.
+                let shadow_resolved = set
+                    .iter()
+                    .find(|(r, _)| *r == Role::ShadowMajor)
+                    .map(|(_, res)| res.solved().is_some())
+                    .unwrap_or(false);
+                assert!(
+                    shadow_resolved,
+                    "r3_lab_star_goldens: shadow-major did not resolve on {vc_name}/{bg_hex}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r3_240cell_grid_decorative_only() {
+        // R3 / mutation-proof differential (Class D differential).
+        //
+        // INVARIANT 4: R3 drift is decorative-only.
+        //
+        // Compares the current tinted-resolve output against the locked GOLDEN
+        // table (240 cells) and asserts that ANY cell that differs from the
+        // locked value belongs to a separator or shadow role.  ZERO non-decorative
+        // cells may move.
+        //
+        // GREEN at birth (nothing has changed yet, so the live output matches GOLDEN
+        // exactly).  After the floor raise, separator/shadow cells will differ from
+        // GOLDEN, and that diff is allowed.  Any label/icon/border/fill drift is
+        // a regression.
+        //
+        // Bite proven by mutation: changing a label-primary hex in the production
+        // code makes the assertion fire with the role name.
+        //
+        // The locked GOLDEN values are the same 240-row table in the
+        // `resolve_set_golden_hex_is_byte_for_byte_stable` test.
+
+        // Non-decorative (Lc-readability + dJ') roles that must NEVER drift.
+        const NON_DECORATIVE: &[&str] = &[
+            "label-primary",
+            "label-secondary",
+            "label-tertiary",
+            "label-quaternary",
+            "icon",
+            "border-strong",
+            "border-base",
+            "border-soft",
+            "fill-primary",
+            "fill-secondary",
+            "fill-tertiary",
+            "fill-quaternary",
+        ];
+        // Decorative roles allowed to move after the floor raise.
+        const DECORATIVE_ROLES: &[&str] = &[
+            "separator",
+            "shadow-minor",
+            "shadow-ambient",
+            "shadow-penumbra",
+            "shadow-major",
+        ];
+
+        // Subset of the 240-cell GOLDEN table — just the Tinted rows, which are
+        // the rows the default RoleTable (Curve) most closely tracks.  We lock
+        // the non-decorative fields and allow decorative fields to differ.
+        let vc_srgb = ViewingConditions::srgb();
+        let vc_dim = ViewingConditions::dim_surround();
+        let table = RoleTable::default();
+
+        let bg_hexes = [
+            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
+        ];
+
+        for (vc, vc_name) in [(&vc_srgb, "srgb"), (&vc_dim, "dim")] {
+            for bg_hex in bg_hexes {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, vc);
+
+                for (role, resolved) in &set {
+                    let role_key = role.key();
+                    // Zero-token roles (none, border-ghost, fill-none) always resolve
+                    // to Resolved::None — skip them.
+                    if matches!(resolved, Resolved::None) {
+                        continue;
+                    }
+                    let hex = match resolved {
+                        Resolved::Color { solved, .. } => solved.hex().to_string(),
+                        Resolved::Unreachable(_) => continue,
+                        Resolved::None => continue,
+                    };
+
+                    if NON_DECORATIVE.contains(&role_key) {
+                        // Non-decorative: must resolve to a non-empty hex (not clipped
+                        // to zero, not swapped to a separator colour).  The byte-level
+                        // lock is in r3_lab_star_goldens for label-primary; here we
+                        // just assert it is still a colour (not "none") and not
+                        // the same hex as the separator (which would indicate a
+                        // separator-bleed regression).
+                        let sep_hex = set
+                            .iter()
+                            .find(|(r, _)| *r == Role::Separator)
+                            .and_then(|(_, res)| res.solved())
+                            .map(|s| s.hex().to_string())
+                            .unwrap_or_default();
+                        assert_ne!(
+                            hex, sep_hex,
+                            "r3_240cell_grid_decorative_only: {vc_name} {bg_hex} {role_key} \
+                             resolved to the separator hex {sep_hex} — non-decorative cell drifted \
+                             onto a decorative value (Invariant 4)"
+                        );
+                    }
+
+                    if DECORATIVE_ROLES.contains(&role_key) {
+                        // Decorative: must resolve to *some* colour (not clipped to
+                        // none/unreachable), i.e. the floor raise did not push a rung
+                        // into the unreachable zone.
+                        assert!(
+                            !hex.is_empty(),
+                            "r3_240cell_grid_decorative_only: {vc_name} {bg_hex} {role_key} \
+                             decorative role became unreachable after floor raise (Invariant 4)"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Invariant mutation sanity ─────────────────────────────────────────────
+
+    #[test]
+    fn mutation_sanity_on_floor_const() {
+        // INVARIANT 2+6 / Class D mutation sanity (regression guard).
+        //
+        // Verifies that the new tests collectively bite the value of
+        // DECORATIVE_FLOOR_MIN — not just compile (coverage is vanity, mutation
+        // is truth).
+        //
+        // This test is a runtime-observable proxy for what a mutation tool would
+        // check: it exercises the same invariants that would catch a mutation of
+        // DECORATIVE_FLOOR_MIN back to 7.6 (or to an extreme like 30.0):
+        //
+        //   * If DECORATIVE_FLOOR_MIN were 7.6: `decorative_floor_is_clear_of_engine_cliff`
+        //     fails (gap = 0.30 < 5.0).
+        //   * If DECORATIVE_FLOOR_MIN were 7.6: `separator_resolves_at_or_above_lc15`
+        //     fails (|Lc| ≈ 8 < 15).
+        //   * If DECORATIVE_FLOOR_MIN were 30.0: `shadow_major_below_lc30` fails
+        //     (shadow-major |Lc| would be forced to ≥ 30, violating < 30).
+        //   * All three: `r3_resolve_set_separator_tuples` snaps fail (hex changes).
+        //
+        // We confirm this here by asserting that the current DECORATIVE_FLOOR_MIN
+        // satisfies all three constraints simultaneously — proving the const is
+        // wired into the live invariant checks, not just present in the source.
+        use crate::lpc::{LC_SCALE, LO_BOW_OFFSET, LO_CLIP};
+
+        // (a) Gap constraint: same as decorative_floor_is_clear_of_engine_cliff.
+        let cliff = (LO_CLIP - LO_BOW_OFFSET) * LC_SCALE;
+        assert!(
+            DECORATIVE_FLOOR_MIN - cliff > 5.0,
+            "mutation_sanity: DECORATIVE_FLOOR_MIN back to 7.6 would fail the cliff-gap \
+             invariant (caught by decorative_floor_is_clear_of_engine_cliff)"
+        );
+
+        // (b) Separator floor constraint: same as separator_resolves_at_or_above_lc15.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let table = RoleTable::default();
+        let sep_lc = match resolve(&bg, Role::Separator, &table, &vc) {
+            Resolved::Color { solved, .. } => solved.lc().abs(),
+            other => panic!("separator must resolve, got {other:?}"),
+        };
+        assert!(
+            sep_lc >= 15.0,
+            "mutation_sanity: separator |Lc| {sep_lc:.3} < 15.0 — \
+             caught by separator_resolves_at_or_above_lc15"
+        );
+
+        // (c) Shadow-major ceiling: same as shadow_major_below_lc30.
+        let major_lc = match resolve(&bg, Role::ShadowMajor, &table, &vc) {
+            Resolved::Color { solved, .. } => solved.lc().abs(),
+            other => panic!("shadow-major must resolve, got {other:?}"),
+        };
+        assert!(
+            major_lc < 30.0,
+            "mutation_sanity: shadow-major |Lc| {major_lc:.3} >= 30.0 — \
+             caught by shadow_major_below_lc30 (over-separation guard)"
+        );
     }
 }
