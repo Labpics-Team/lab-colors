@@ -76,20 +76,12 @@ thread_local! {
     static CHROMA_MEMO: RefCell<Memo> = RefCell::new(HashMap::new());
 }
 
-/// Map a viewing condition to its memo slot, or `None` for an unsupported VC
-/// (which then takes the live solver). Matches [`greyfast`](crate::greyfast)'s
-/// full-[`fingerprint`](ViewingConditions::fingerprint) convention so the two
-/// fast paths agree on what is supported and neither aliases a caller-built VC
-/// that merely shares the surround pair `(c, nc)`.
+/// Map a viewing condition to its memo slot, or `None` for an unsupported VC.
+/// Delegates to [`ViewingConditions::preset_index`] — the canonical slot
+/// assignment shared with [`greyfast`](crate::greyfast) and the LUT, so the
+/// two fast paths always agree on what is supported.
 fn vc_index(vc: &ViewingConditions) -> Option<usize> {
-    let fp = vc.fingerprint();
-    if fp == ViewingConditions::srgb().fingerprint() {
-        Some(0)
-    } else if fp == ViewingConditions::dim_surround().fingerprint() {
-        Some(1)
-    } else {
-        None
-    }
+    vc.preset_index()
 }
 
 /// The background's exact 8-bit display triple — the key the resolved set is a
