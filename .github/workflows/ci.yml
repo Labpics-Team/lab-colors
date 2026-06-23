@@ -43,6 +43,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # The lint_parity.rs meta-test (run by `cargo test`) shells out to
+          # `cargo +1.96.0 fmt --check` and `cargo +1.96.0 clippy`, so this job
+          # must provision those components on the SAME pinned toolchain — without
+          # them the meta-test panics with "'cargo-clippy'/'cargo-fmt' is not
+          # installed for the toolchain '1.96.0'". Kept in lockstep with the lint job.
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace

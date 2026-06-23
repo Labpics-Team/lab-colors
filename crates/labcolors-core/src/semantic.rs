@@ -149,6 +149,7 @@ use crate::wcag;
 /// and reports zero contrast, so a `Contract::range` floor beneath it would come
 /// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
 /// is held strictly above this until the real JND calibration lands.
+// NEEDS-SCIENCE — provisional JND floor; awaits surface-jnd calibration (issue #44).
 const DECORATIVE_FLOOR_MIN: f64 = 7.6;
 
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
@@ -173,14 +174,20 @@ const DECORATIVE_FLOOR_MIN: f64 = 7.6;
 
 /// Fill ladder dJ' anchors (`fill-primary` … `fill-quaternary`), strictly
 /// descending in visibility. Owner's literal values; light/dark per theme.
+// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
 const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
 const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
 const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
 const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// Border base/soft dJ' anchors. Owner's literal values; base stronger than soft.
 /// (`border-strong` is an anchored readability role, not a dJ' step — not here.)
+// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
 const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
 const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
 // ── PROVISIONAL shadow magnitudes (Lc decorative stub — see note) ───────────────
@@ -197,9 +204,13 @@ const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
 /// strongest) — the progressive FX/Shadow ramp. Lc placeholder, held above
 /// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
+// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
 const SHADOW_MINOR_JND: f64 = 8.0;
+// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
 const SHADOW_AMBIENT_JND: f64 = 9.5;
+// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
 const SHADOW_PENUMBRA_JND: f64 = 11.5;
+// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
 const SHADOW_MAJOR_JND: f64 = 14.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
@@ -506,6 +517,7 @@ pub enum RoleSpec {
 /// inherit this hue, which is what makes `text-primary` on white land as a
 /// relative of `#101012` (a cool near-black) rather than the sterile grey
 /// `#141414`.
+// NEEDS-SCIENCE — owner's measured Oklab hue of the neutral ladder; awaits sign-off.
 const NEUTRAL_HUE_DEG: f64 = 286.0;
 
 /// The fraction of the in-gamut maximum chroma a tinted role carries.
@@ -520,6 +532,7 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// `0.10` is the owner's calibrated optimum (picked by eye from engine-resolved
 /// swatches over `0.04 / 0.08 / 0.12`, 2026-06-12): on white, `text-primary`
 /// resolves to a cool near-black in the `#101012` family, not pure grey.
+// NEEDS-SCIENCE — owner's eye-calibrated chroma ratio (2026-06-12 swatch sweep).
 const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// The default target perceptual colorfulness (CAM16-UCS `M'`) the v2 undertone
@@ -554,6 +567,7 @@ const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// best fit of this single strength scalar to the owner's reference (sweep in the
 /// `validate_against_reference` diagnostic, 2026-06-12). This is calibration of
 /// one scalar, not a fit of a curve to ramp nodes.
+// NEEDS-SCIENCE — RMS-minimising CAM16-UCS M' target (2026-06-12 plateau sweep).
 const TINT_TARGET_MP: f64 = 6.1;
 
 /// The default hue-pull stiffness for the v2 curve — the second (and last) free
@@ -569,6 +583,7 @@ const TINT_TARGET_MP: f64 = 6.1;
 /// honest-limit note on [`cusp_attracted_hue`]). `9.0` sits comfortably in the
 /// pinned regime, robust against float flutter that could otherwise nudge a
 /// near-white role toward the magenta cusp the reference never visits.
+// NEEDS-SCIENCE — cusp-pinning stiffness; calibrated at 286° (2026-06-12).
 const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// The perceptibility threshold (mechanism 3), in CAM16-UCS `M'` units. Below
@@ -577,11 +592,13 @@ const TINT_HUE_STIFFNESS: f64 = 9.0;
 /// not chase it past the gamut wall; it takes the most the gamut allows and is
 /// honestly free to fall toward this floor at the very extremes (near-black /
 /// near-white), where even the reference's own `M'` drops to ~2.3–3.0.
+// NEEDS-SCIENCE — perceptibility floor in CAM16-UCS M'; awaits owner eye-calibration.
 const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
 /// canonical hue. The undertone may drift inside a blue-violet band; it may not
 /// wander into unrelated quadrants (red, cyan), so the search is bounded.
+// NEEDS-SCIENCE — hue search half-window (degrees); keeps undertone in blue-violet band.
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
 /// The chroma policy a role table carries.
@@ -1333,6 +1350,7 @@ const CURVE_REFINE_STEPS: u32 = 3;
 /// The fixed-point stops once a re-plan moves the solved Oklab lightness by less
 /// than this — comfortably below one 8-bit grid step, so further passes cannot
 /// change the emitted hex.
+// NEEDS-SCIENCE — fixed-point convergence threshold; sub-8-bit grid step by design.
 const LIGHTNESS_SETTLE: f64 = 0.002;
 
 /// The Oklab lightness of a solved colour, read back from its emitted hex.
@@ -1543,6 +1561,7 @@ fn enforce_text_hierarchy(
 /// so a demotion may need several grid steps to clear it — and when even the
 /// laxest legal target cannot, the junior is set equal to its senior instead.
 /// The 0.5 threshold separates real visual distinction from float noise.
+// NEEDS-SCIENCE — minimum Lc separation for visual distinction vs float noise.
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still

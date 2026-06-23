@@ -213,18 +213,12 @@ impl GreyAxisLut {
 /// adaptation falls through to the bisection rather than seeding from the wrong
 /// precompiled grey-axis table.
 pub(crate) fn lut_for_vc(vc: &ViewingConditions) -> Option<GreyAxisLut> {
-    let fp = vc.fingerprint();
-    if fp == ViewingConditions::srgb().fingerprint() {
-        Some(GreyAxisLut {
-            j_hk: &lut_data::GREY_AXIS_SRGB,
-        })
-    } else if fp == ViewingConditions::dim_surround().fingerprint() {
-        Some(GreyAxisLut {
-            j_hk: &lut_data::GREY_AXIS_DIM,
-        })
-    } else {
-        None
-    }
+    // Slot assignment from the canonical preset_index: 0 = sRGB, 1 = dim.
+    // This shares the definition with greyfast and chromafast — no duplicated
+    // fingerprint comparisons.
+    const TABLES: [&[f64; LUT_NODES]; 2] = [&lut_data::GREY_AXIS_SRGB, &lut_data::GREY_AXIS_DIM];
+    let idx = vc.preset_index()?;
+    Some(GreyAxisLut { j_hk: TABLES[idx] })
 }
 
 /// Seed [`match_lightness`](crate::solve) with a lightness bracket from the LUT,
