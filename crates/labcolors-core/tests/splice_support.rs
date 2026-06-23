@@ -57,6 +57,11 @@ use std::path::{Path, PathBuf};
 /// `target` is always either the original content or the fully-written restore
 /// content — never truncated — because we write to a `*.restore_tmp` sibling
 /// first, then atomically rename over `target`.
+///
+/// Currently used by s2b_baseline_guards.rs (on_disk_audit_probe.rs uses
+/// temp-dir isolation instead). The #[allow(dead_code)] covers scenarios where
+/// a particular test file doesn't use it.
+#[allow(dead_code)]
 pub struct RestoreGuard {
     pub target: PathBuf,
     pub backup: PathBuf,

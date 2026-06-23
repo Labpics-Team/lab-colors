@@ -10,35 +10,33 @@
 //! real unmarked const.
 //!
 //! This test closes that gap by:
-//!   1. Injecting an unmarked `_AUDIT_PROBE` const INTO the real `semantic.rs`
-//!      on disk (in a temporary copy / rename roundtrip so the original is safe).
-//!   2. Spawning `cargo test -p labcolors-core --test empirical_inventory
-//!      gate1_every_policy_const_is_marked` as a subprocess.
-//!   3. Asserting the subprocess exits NON-ZERO and its stderr/stdout mentions
-//!      `_AUDIT_PROBE` — proving the live gate bites on a real on-disk injection.
-//!   4. Restoring `semantic.rs` unconditionally (via Drop-guard).
+//!   1. Creating a temporary copy of the entire workspace (isolation-safe).
+//!   2. Injecting an unmarked `_AUDIT_PROBE` const into the COPY of `semantic.rs`
+//!      (never touching the real file).
+//!   3. Spawning `cargo test -p labcolors-core --test empirical_inventory
+//!      gate1_every_policy_const_is_marked` as a subprocess rooted at the tempdir.
+//!   4. Asserting the subprocess exits NON-ZERO and its stderr/stdout mentions
+//!      `_AUDIT_PROBE` — proving the live gate bites on an on-disk injection.
 //!
-//! Invariant: an unmarked policy const written to a real perceptual module file
+//! Invariant: an unmarked policy const written to a perceptual module file
 //! always fails the live gate and names the const in the failure message.
 //!
 //! Regime: R4 regression (governance hygiene). NOT R3 (no value emitted) and NOT
 //! R1 (no math). This test SOLELY proves the on-disk wiring of the scanner gate.
 //!
 //! How this test bites:
-//!   * The subprocess runs GATE-1 against the real tree. If _AUDIT_PROBE is
-//!     present and unmarked, gate1 exits with a test failure (non-zero exit) and
-//!     names the probe in the message. If it does NOT fail, this test panics:
-//!     "RED-proof FAILED — gate1 did not flag the on-disk probe".
-//!   * After the restore, the subprocess runs green again (real-tree invariant).
+//!   * The subprocess runs GATE-1 from the tempdir copy. If _AUDIT_PROBE is
+//!     present and unmarked in the copy, gate1 exits with a test failure
+//!     (non-zero exit) and names the probe in the message. If it does NOT fail,
+//!     this test panics: "RED-proof FAILED — gate1 did not flag the on-disk probe".
+//!   * The real tree is never touched, so the test is safe to run in parallel.
 //!
 //! # ISOLATION CONTRACT — MUST READ BEFORE RUNNING
 //!
-//! This test **writes to the real `crates/labcolors-core/src/semantic.rs`** on
-//! disk and spawns a nested `cargo test` subprocess against the same workspace.
-//! Running it concurrently with other tests (the default `cargo test` mode) can
-//! corrupt the source tree under concurrency or leave it permanently broken on a
-//! hard abort (SIGKILL / CI timeout / power loss), because the Drop guard does
-//! not run on SIGKILL.
+//! This test copies the workspace into a temporary directory and spawns a
+//! subprocess rooted at the tempdir. The **real source tree is never written to**,
+//! so it is safe to run in parallel with other tests. The tempdir is created
+//! fresh per test invocation and is cleaned up on drop (even on panic).
 //!
 //! ## Required opt-in (two independent gates — both must be satisfied):
 //!
@@ -54,38 +52,43 @@
 //!      ```sh
 //!      LABCOLORS_ON_DISK_PROBE_ENABLED=1 \
 //!        cargo test -p labcolors-core --test on_disk_audit_probe \
-//!        on_disk_audit_probe_goes_red_then_green_after_restore \
-//!        -- --ignored --test-threads=1
+//!        on_disk_audit_probe_goes_red_then_green_after_restore -- --ignored
 //!      ```
 //!
-//!   `--test-threads=1` is MANDATORY: the test must be the ONLY test running in
-//!   the same process to prevent concurrent test threads from observing the
-//!   corrupted source.
+//!   Unlike the old real-tree version, `--test-threads=1` is NO LONGER REQUIRED
+//!   (the real tree is never mutated). The test will pass with it, but default
+//!   parallelism is safe.
 //!
-//! ## Why not just use a temp file?
+//! # Isolation mechanism: temp-dir copy + atomic write + #[serial]
 //!
-//! The subprocess spawns `cargo test -p labcolors-core --test empirical_inventory`,
-//! which re-compiles `labcolors-core` from the REAL source directory. A copy
-//! would not be read by Cargo. The spliced file must be the actual source.
-//! The Drop guard + backup ensure correctness under panic; only SIGKILL defeats it.
-//!
-//! Isolation: the original `semantic.rs` is restored unconditionally via a
-//! Drop guard, so even a panic in the middle leaves the working tree clean.
+//! The real workspace is copied into a per-invocation tempdir, the probe is
+//! injected into the COPY with an atomic write (write-tmp → rename), and the
+//! subprocess runs `current_dir(<tempdir>)` so Cargo recompiles from the copy.
+//! The `#[serial]` annotation on this test serializes subprocess execution so
+//! nested cargo invocations don't thrash the shared target/ cache. The tempdir
+//! is cleaned up automatically when it goes out of scope.
 
-// Pull in the shared panic-safe splice + RestoreGuard from the support module.
+// Pull in the shared panic-safe splice_into from the support module.
 // This closes the DRY/SRP fracture: both on_disk_audit_probe.rs and
 // s2b_baseline_guards.rs previously maintained separate copies that had already
-// diverged in their Drop panic-safety semantics (confirmed High defect).
-// The canonical implementation in splice_support.rs is the single source of
-// truth; Drop is panic-safe (logs errors, never re-panics during unwind).
+// diverged. The canonical implementation in splice_support.rs is the single source
+// of truth; the probe now uses it to splice into a TEMP-DIR COPY, not the real tree.
 #[path = "splice_support.rs"]
 mod splice_support;
 
 use serial_test::serial;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn workspace_root() -> PathBuf {
+    crate_root()
+        .join("..")
+        .join("..")
+        .canonicalize()
+        .unwrap_or_else(|_| crate_root().join("..").join(".."))
 }
 
 fn semantic_path() -> PathBuf {
@@ -98,16 +101,33 @@ fn semantic_path() -> PathBuf {
 /// memory. Must match `RUST_TOOLCHAIN` in `.github/workflows/ci.yml`.
 const GATE_TOOLCHAIN: &str = "1.96.0";
 
-/// Spawn `cargo +<GATE_TOOLCHAIN> test -p labcolors-core --test empirical_inventory <test_name>`
-/// and return `(exit_success, combined_output_string)`.
-fn run_gate_test(test_name: &str) -> (bool, String) {
-    // Use the workspace root so cargo resolves the manifest correctly.
-    let workspace_root = crate_root()
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .unwrap_or_else(|_| crate_root().join("..").join(".."));
+/// Copy directory `src` recursively into `dst`, creating `dst` if it doesn't exist.
+/// Panics on fs errors (called before test body, not during unwind).
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst.join(&file_name);
 
+        if path.is_dir() {
+            // Skip common non-essential directories to speed up copy.
+            let name_str = file_name.to_string_lossy();
+            if name_str == "target" || name_str == ".git" || name_str == "node_modules" {
+                continue;
+            }
+            copy_dir_recursive(&path, &dst_path)?;
+        } else {
+            std::fs::copy(&path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Spawn `cargo +<GATE_TOOLCHAIN> test -p labcolors-core --test empirical_inventory <test_name>`
+/// from the given `workspace_dir` and return `(exit_success, combined_output_string)`.
+fn run_gate_test_from(workspace_dir: &Path, test_name: &str) -> (bool, String) {
     let output = std::process::Command::new("cargo")
         .args([
             &format!("+{GATE_TOOLCHAIN}"),
@@ -120,7 +140,7 @@ fn run_gate_test(test_name: &str) -> (bool, String) {
             "--",
             "--nocapture",
         ])
-        .current_dir(&workspace_root)
+        .current_dir(workspace_dir)
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn cargo test subprocess: {e}"));
 
@@ -136,12 +156,13 @@ fn run_gate_test(test_name: &str) -> (bool, String) {
 // Test
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// On-disk RED-proof: inject an unmarked `_AUDIT_PROBE` const into the REAL
-/// `semantic.rs` file, assert GATE-1 exits RED and names the probe, then restore.
+/// On-disk RED-proof: inject an unmarked `_AUDIT_PROBE` const into a TEMP-DIR COPY
+/// of `semantic.rs`, assert GATE-1 exits RED and names the probe.
 ///
 /// This test proves the LIVE gate (reading real files) bites on an on-disk
 /// injection — the in-memory probe in `empirical_inventory.rs` cannot prove this
-/// because it never writes to disk.
+/// because it never writes to disk. The test uses a temp-dir copy so the real
+/// tree is never touched, making it safe to run in parallel.
 ///
 /// Bites: the subprocess exits nonzero AND names `_AUDIT_PROBE` in its output.
 /// If neither condition holds, this test panics with an explicit message.
@@ -153,69 +174,74 @@ fn run_gate_test(test_name: &str) -> (bool, String) {
 /// See the module-level doc comment for the full rationale and the exact
 /// invocation command.
 ///
-/// `#[serial]` serialises threads within this binary. It does NOT close the
-/// cross-binary race with `s2b_baseline_guards::nested_subprocess_gate1_goes_red_on_injected_audit_probe`
-/// (a separate binary). The actual cross-binary isolation guarantee rests on the
-/// THREE independent gates documented in the module doc: `#[ignore]`, env-var
-/// tripwire, and `--test-threads=1` in the documented invocation.
+/// `#[serial]` serializes subprocess execution within the test binary so that
+/// nested cargo builds don't thrash the shared target/ cache. Unlike the old
+/// real-tree version, the real source tree is never written to, so the test is
+/// safe under default parallelism.
 #[test]
-#[ignore = "mutates the real src/semantic.rs on disk; run solo with \
-            LABCOLORS_ON_DISK_PROBE_ENABLED=1 and --test-threads=1 \
-            (see module doc for the exact command). Never run in default \
-            `cargo test` or `cargo test --workspace`."]
+#[ignore = "test runs a nested cargo subprocess; requires \
+            LABCOLORS_ON_DISK_PROBE_ENABLED=1 env var to enable. \
+            See module doc for the exact command."]
 #[serial]
 #[cfg(not(miri))] // Miri cannot execute external subprocesses.
 fn on_disk_audit_probe_goes_red_then_green_after_restore() {
     // Env-var tripwire: a CI runner that passes `--include-ignored` must still
-    // explicitly set this env var to trigger the disk-mutating test. Without it
+    // explicitly set this env var to trigger the subprocess test. Without it
     // the test skips cleanly (not panics), so CI stays green on accidental
-    // --include-ignored and the hazard is not silently unleashed.
+    // --include-ignored.
     if std::env::var("LABCOLORS_ON_DISK_PROBE_ENABLED").as_deref() != Ok("1") {
         eprintln!(
             "on_disk_audit_probe: SKIPPED — set LABCOLORS_ON_DISK_PROBE_ENABLED=1 \
-             and run with --test-threads=1 to enable this disk-mutating test. \
-             See module doc for the exact invocation command."
+             to enable this subprocess test. See module doc for the exact invocation."
         );
         return;
     }
-    let original_path = semantic_path();
-    let backup_path = original_path.with_extension("rs.on_disk_probe_backup");
 
-    // Back up the original before any mutation.
-    std::fs::copy(&original_path, &backup_path).unwrap_or_else(|e| {
-        panic!("on_disk probe: cannot create backup of semantic.rs: {e}");
+    // Create a temporary workspace copy.
+    let tempdir = tempfile::TempDir::new().unwrap_or_else(|e| {
+        panic!("on_disk_audit_probe: cannot create tempdir: {e}");
+    });
+    let tempdir_path = tempdir.path();
+
+    // Copy the entire workspace into the tempdir. We copy the real workspace root
+    // and all its contents (excluding target/ and .git/) so that the nested cargo
+    // invocation can resolve manifests and dependencies correctly.
+    let real_workspace = workspace_root();
+    copy_dir_recursive(&real_workspace, tempdir_path).unwrap_or_else(|e| {
+        panic!(
+            "on_disk_audit_probe: cannot copy workspace {:?} → {:?}: {e}",
+            real_workspace, tempdir_path
+        );
     });
 
-    // Install the Drop guard IMMEDIATELY after backup — before any other fallible op.
-    // Uses the canonical panic-safe RestoreGuard from splice_support (confirmed fix
-    // for the High defect: the old local RestoreGuard used .expect() in Drop,
-    // causing double-panic → process abort → semantic.rs left spliced on Windows
-    // AV/indexer file-lock races or disk-full during test unwind).
-    let _guard = splice_support::RestoreGuard {
-        target: original_path.clone(),
-        backup: backup_path.clone(),
-    };
+    let temp_semantic_path = tempdir_path
+        .join("crates")
+        .join("labcolors-core")
+        .join("src")
+        .join("semantic.rs");
 
-    // Verify the real tree is GREEN before the injection (pre-condition). If the
-    // real tree is already RED, the RED-proof would be ambiguous.
-    let (pre_green, pre_out) = run_gate_test("gate1_every_policy_const_is_marked");
+    // Verify the temp tree is GREEN before the injection (pre-condition). If it's
+    // already RED, the RED-proof would be ambiguous.
+    let (pre_green, pre_out) =
+        run_gate_test_from(tempdir_path, "gate1_every_policy_const_is_marked");
     assert!(
         pre_green,
-        "on_disk RED-proof pre-condition FAILED — gate1 is already RED on the real tree \
+        "on_disk RED-proof pre-condition FAILED — gate1 is already RED on the temp tree \
          before any injection. The probe cannot prove 'injection causes RED' unless the \
          tree starts GREEN.\n{pre_out}"
     );
 
-    // Inject an unmarked const into the real file using the canonical shared
-    // splice_into (atomic write: write to *.splice_tmp, rename over target).
-    splice_support::splice_into(&original_path, "const _AUDIT_PROBE: f64 = 42.0;");
+    // Inject an unmarked const into the COPY using the canonical shared splice_into
+    // (atomic write: write to *.splice_tmp, rename over target).
+    splice_support::splice_into(&temp_semantic_path, "const _AUDIT_PROBE: f64 = 42.0;");
 
-    // Run GATE-1 against the now-mutated on-disk file.
-    let (injected_green, injected_out) = run_gate_test("gate1_every_policy_const_is_marked");
+    // Run GATE-1 against the now-mutated temp file.
+    let (injected_green, injected_out) =
+        run_gate_test_from(tempdir_path, "gate1_every_policy_const_is_marked");
     assert!(
         !injected_green,
         "on_disk RED-proof FAILED — gate1 did NOT fail after injecting an unmarked \
-         `_AUDIT_PROBE: f64 = 42.0` into the real semantic.rs. The live on-disk scanner \
+         `_AUDIT_PROBE: f64 = 42.0` into the temp semantic.rs. The live on-disk scanner \
          is not biting; a real magic-number addition would pass the gate silently.\n{injected_out}"
     );
     assert!(
@@ -225,15 +251,23 @@ fn on_disk_audit_probe_goes_red_then_green_after_restore() {
          specifically because of the probe, not a pre-existing issue).\n{injected_out}"
     );
 
-    // Drop guard restores semantic.rs here (explicit drop for clarity, though
-    // it happens automatically).
-    drop(_guard);
-
-    // Post-condition: the restored tree must be GREEN again.
-    let (post_green, post_out) = run_gate_test("gate1_every_policy_const_is_marked");
+    // Post-condition: verify the real tree was NEVER touched (isolation invariant).
+    // The real semantic.rs should be byte-identical to its state before this test.
+    let real_semantic = semantic_path();
+    let git_status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .arg(real_semantic.file_name().unwrap())
+        .current_dir(crate_root())
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("on_disk_audit_probe: cannot run git status: {e}");
+        });
+    let status_str = String::from_utf8_lossy(&git_status_output.stdout);
     assert!(
-        post_green,
-        "on_disk RED-proof FAILED — gate1 is RED after the restore. The Drop guard may \
-         not have run correctly, or the real tree was already RED pre-existing.\n{post_out}"
+        status_str.trim().is_empty(),
+        "on_disk RED-proof FAILED — real semantic.rs was mutated during the test \
+         (isolation violation). git status:\n{status_str}"
     );
+
+    // Tempdir is automatically cleaned up when `tempdir` goes out of scope.
 }
