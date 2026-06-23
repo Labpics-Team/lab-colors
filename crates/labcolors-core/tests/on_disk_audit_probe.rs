@@ -72,6 +72,16 @@
 //! Isolation: the original `semantic.rs` is restored unconditionally via a
 //! Drop guard, so even a panic in the middle leaves the working tree clean.
 
+// Pull in the shared panic-safe splice + RestoreGuard from the support module.
+// This closes the DRY/SRP fracture: both on_disk_audit_probe.rs and
+// s2b_baseline_guards.rs previously maintained separate copies that had already
+// diverged in their Drop panic-safety semantics (confirmed High defect).
+// The canonical implementation in splice_support.rs is the single source of
+// truth; Drop is panic-safe (logs errors, never re-panics during unwind).
+#[path = "splice_support.rs"]
+mod splice_support;
+
+use serial_test::serial;
 use std::path::PathBuf;
 
 fn crate_root() -> PathBuf {
@@ -80,24 +90,6 @@ fn crate_root() -> PathBuf {
 
 fn semantic_path() -> PathBuf {
     crate_root().join("src").join("semantic.rs")
-}
-
-/// Drop guard that restores `semantic.rs` from a backup path on drop.
-/// Guarantees the real file is always restored, even on panic or assertion failure.
-struct RestoreGuard {
-    original_path: PathBuf,
-    backup_path: PathBuf,
-}
-
-impl Drop for RestoreGuard {
-    fn drop(&mut self) {
-        if self.backup_path.exists() {
-            std::fs::copy(&self.backup_path, &self.original_path)
-                .expect("RestoreGuard: failed to restore semantic.rs from backup");
-            std::fs::remove_file(&self.backup_path)
-                .expect("RestoreGuard: failed to remove backup file");
-        }
-    }
 }
 
 /// The CI-pinned Rust toolchain. The subprocess uses `cargo +<toolchain>` to
@@ -140,57 +132,6 @@ fn run_gate_test(test_name: &str) -> (bool, String) {
     (output.status.success(), combined)
 }
 
-/// Splice `snippet` into the real `semantic.rs` on disk (writing the modified
-/// content to the file in place), inserting AFTER the leading `//!` module-doc
-/// comment block so that the file remains syntactically valid (inner doc
-/// comments must precede any items). The original is already backed up by the
-/// `RestoreGuard` before this is called.
-fn splice_into_semantic(snippet: &str) {
-    let original =
-        std::fs::read_to_string(semantic_path()).expect("on_disk probe: cannot read semantic.rs");
-    // Find the first line that is NOT a `//!` inner-doc comment or blank — the
-    // start of the real item block. Walk byte-by-byte to handle both LF and
-    // CRLF line endings correctly (Windows source files use CRLF).
-    let insert_byte = {
-        let mut pos = 0usize;
-        let bytes = original.as_bytes();
-        let mut found = None;
-        while pos < bytes.len() {
-            // Find the end of this line (the '\n').
-            let line_end = bytes[pos..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .map(|off| pos + off)
-                .unwrap_or(bytes.len());
-            // The line content (strip trailing '\r' if present).
-            let line_bytes = if line_end > pos && bytes[line_end - 1] == b'\r' {
-                &bytes[pos..line_end - 1]
-            } else {
-                &bytes[pos..line_end]
-            };
-            let line = std::str::from_utf8(line_bytes).unwrap_or("");
-            let t = line.trim_start();
-            if !t.is_empty() && !t.starts_with("//!") {
-                found = Some(pos);
-                break;
-            }
-            pos = if line_end < bytes.len() {
-                line_end + 1
-            } else {
-                bytes.len()
-            };
-        }
-        found.unwrap_or(original.len())
-    };
-    let mut spliced = String::with_capacity(original.len() + snippet.len() + 2);
-    spliced.push_str(&original[..insert_byte]);
-    spliced.push_str(snippet);
-    spliced.push('\n');
-    spliced.push_str(&original[insert_byte..]);
-    std::fs::write(semantic_path(), spliced)
-        .expect("on_disk probe: cannot write spliced semantic.rs");
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Test
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,11 +152,18 @@ fn splice_into_semantic(snippet: &str) {
 /// `LABCOLORS_ON_DISK_PROBE_ENABLED=1` env var. Both gates must be satisfied.
 /// See the module-level doc comment for the full rationale and the exact
 /// invocation command.
+///
+/// `#[serial]` serialises threads within this binary. It does NOT close the
+/// cross-binary race with `s2b_baseline_guards::nested_subprocess_gate1_goes_red_on_injected_audit_probe`
+/// (a separate binary). The actual cross-binary isolation guarantee rests on the
+/// THREE independent gates documented in the module doc: `#[ignore]`, env-var
+/// tripwire, and `--test-threads=1` in the documented invocation.
 #[test]
 #[ignore = "mutates the real src/semantic.rs on disk; run solo with \
             LABCOLORS_ON_DISK_PROBE_ENABLED=1 and --test-threads=1 \
             (see module doc for the exact command). Never run in default \
             `cargo test` or `cargo test --workspace`."]
+#[serial]
 #[cfg(not(miri))] // Miri cannot execute external subprocesses.
 fn on_disk_audit_probe_goes_red_then_green_after_restore() {
     // Env-var tripwire: a CI runner that passes `--include-ignored` must still
@@ -239,9 +187,13 @@ fn on_disk_audit_probe_goes_red_then_green_after_restore() {
     });
 
     // Install the Drop guard IMMEDIATELY after backup — before any other fallible op.
-    let _guard = RestoreGuard {
-        original_path: original_path.clone(),
-        backup_path: backup_path.clone(),
+    // Uses the canonical panic-safe RestoreGuard from splice_support (confirmed fix
+    // for the High defect: the old local RestoreGuard used .expect() in Drop,
+    // causing double-panic → process abort → semantic.rs left spliced on Windows
+    // AV/indexer file-lock races or disk-full during test unwind).
+    let _guard = splice_support::RestoreGuard {
+        target: original_path.clone(),
+        backup: backup_path.clone(),
     };
 
     // Verify the real tree is GREEN before the injection (pre-condition). If the
@@ -254,8 +206,9 @@ fn on_disk_audit_probe_goes_red_then_green_after_restore() {
          tree starts GREEN.\n{pre_out}"
     );
 
-    // Inject an unmarked const into the real file.
-    splice_into_semantic("const _AUDIT_PROBE: f64 = 42.0;");
+    // Inject an unmarked const into the real file using the canonical shared
+    // splice_into (atomic write: write to *.splice_tmp, rename over target).
+    splice_support::splice_into(&original_path, "const _AUDIT_PROBE: f64 = 42.0;");
 
     // Run GATE-1 against the now-mutated on-disk file.
     let (injected_green, injected_out) = run_gate_test("gate1_every_policy_const_is_marked");

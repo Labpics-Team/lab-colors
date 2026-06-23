@@ -11,6 +11,10 @@ repository.workspace = true
 [dev-dependencies]
 pretty_assertions = "1.4"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# Dev-only serialisation for the tree-mutating on-disk audit probe (#[serial]).
+# Zero runtime deps: serial_test never appears in the normal dependency graph
+# (verified by s2b_baseline_guards::supply_chain_serial_test_absent_from_normal_dep_tree).
+serial_test = "3"
 
 [features]
 # Bench-only: disable the grey-axis LUT seed so a criterion run measures the
