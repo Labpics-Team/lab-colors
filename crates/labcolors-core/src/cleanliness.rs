@@ -618,12 +618,7 @@ mod tests {
         );
 
         // Puke #9AAE07 (Moderately muddy)
-        let rgb = crate::spaces::srgb::srgb_from_hex("#9AAE07").unwrap();
-        let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
-        let l = lab[0];
-        let c = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
-        let h = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
-        println!("Rust oklch for #9AAE07: L={}, C={}, h={}", l, c, h);
+
         let puke_mud = muddiness_from_hex("#9AAE07").unwrap();
         assert!(
             (puke_mud - 0.5435).abs() < 1e-3,
