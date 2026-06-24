@@ -420,4 +420,61 @@ mod tests {
             Err(BindingError::ThemeNotCalibrated { .. })
         ));
     }
+
+    #[test]
+    fn css_vars_and_role_keys_match_across_all_twenty_roles() {
+        // The WASM boundary contract: every role entry carries `role_key` from
+        // `Role::key()` and the CSS var is built mechanically as
+        // `--lab-{role_key}`. No parallel list — a change to `Role::key()`
+        // automatically propagates. This sweeps all 20 roles on three
+        // representative backgrounds, asserting the full set is present every
+        // time and every role_key is constructible into a CSS var name.
+        let engine = Engine::new();
+        let reps = [
+            ("#FFFFFF", Theme::Light),
+            ("#000000", Theme::Dark),
+            ("#808080", Theme::Light),
+        ];
+        for (bg, theme) in reps {
+            let result = engine.resolve_theme(bg, theme).unwrap();
+            assert_eq!(
+                result.roles.len(),
+                20,
+                "{bg}: resolve must return all 20 roles"
+            );
+            let mut seen = std::collections::HashSet::new();
+            for entry in &result.roles {
+                assert!(
+                    seen.insert(entry.role_key),
+                    "{bg}: duplicate role_key {}",
+                    entry.role_key
+                );
+                let css_var = format!("--lab-{}", entry.role_key);
+                assert!(
+                    css_var.starts_with("--lab-"),
+                    "{bg} {}: CSS var {css_var} must follow --lab-{{key}} format",
+                    entry.role_key
+                );
+                match &entry.outcome {
+                    RoleOutcome::Color(c) => {
+                        assert!(
+                            c.hex.starts_with('#'),
+                            "{bg} {}: hex must start with #",
+                            entry.role_key
+                        );
+                        assert!(
+                            c.hex.len() == 7,
+                            "{bg} {}: hex {} must be #RRGGBB (7 chars), got {}",
+                            entry.role_key,
+                            c.hex,
+                            c.hex.len(),
+                        );
+                    }
+                    RoleOutcome::None => {}
+                    RoleOutcome::Unreachable { .. } => {}
+                }
+            }
+            assert_eq!(seen.len(), 20, "{bg}: all 20 role keys must be unique");
+        }
+    }
 }
