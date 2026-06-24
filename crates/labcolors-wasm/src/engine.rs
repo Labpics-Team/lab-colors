@@ -413,12 +413,13 @@ mod tests {
     }
 
     #[test]
-    fn uncalibrated_theme_is_an_error_not_a_panic() {
+    fn ic_theme_resolves_without_error() {
         let engine = Engine::new();
-        assert!(matches!(
-            engine.resolve_theme("#FFFFFF", Theme::LightIncreasedContrast),
-            Err(BindingError::ThemeNotCalibrated { .. })
-        ));
+        assert!(
+            engine
+                .resolve_theme("#FFFFFF", Theme::LightIncreasedContrast)
+                .is_ok()
+        );
     }
 
     #[test]

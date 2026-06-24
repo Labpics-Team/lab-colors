@@ -10,7 +10,7 @@ Marker column: `NEEDS-SCIENCE` = provisional (awaits calibration); `GROUNDED` = 
 
 | row# | name | value | module | marker | rationale |
 |------|------|-------|--------|--------|-----------|
-| 1 | `DECORATIVE_FLOOR_MIN` | `7.6` | `semantic.rs` | NEEDS-SCIENCE | Provisional JND floor above solver quantisation cliff (issue #44); awaits surface-jnd calibration. |
+| 1 | `DECORATIVE_FLOOR_MIN` | `7.5` | `semantic.rs` | NEEDS-SCIENCE | Provisional JND floor above solver quantisation cliff (issue #44); awaits surface-jnd calibration. |
 | 2 | `FILL_PRIMARY_DJ` | `7.93, 17.67` | `semantic.rs` | NEEDS-SCIENCE | Owner's Figma-measured dJ' anchor (fill-primary), light/dark; awaits surface-jnd sign-off. |
 | 3 | `FILL_SECONDARY_DJ` | `6.41, 15.78` | `semantic.rs` | NEEDS-SCIENCE | Owner's Figma-measured dJ' anchor (fill-secondary), light/dark; awaits surface-jnd sign-off. |
 | 4 | `FILL_TERTIARY_DJ` | `4.63, 12.01` | `semantic.rs` | NEEDS-SCIENCE | Owner's Figma-measured dJ' anchor (fill-tertiary), light/dark; awaits surface-jnd sign-off. |

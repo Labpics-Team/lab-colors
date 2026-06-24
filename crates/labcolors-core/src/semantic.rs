@@ -150,7 +150,7 @@ use crate::wcag;
 /// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
 /// is held strictly above this until the real JND calibration lands.
 // NEEDS-SCIENCE — provisional JND floor; awaits surface-jnd calibration (issue #44).
-const DECORATIVE_FLOOR_MIN: f64 = 7.6;
+const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
@@ -1142,6 +1142,8 @@ struct ResolveContext {
     /// CIECAM16 forward per call. `Err` if the background cannot be reduced —
     /// then every colour role surfaces that reason.
     interval: Result<solve::LumaInterval, Unreachable>,
+    /// Whether these conditions enforce increased contrast (IC).
+    high_contrast: bool,
 }
 
 impl ResolveContext {
@@ -1160,6 +1162,7 @@ impl ResolveContext {
             polarity,
             max_contrast,
             interval,
+            high_contrast: vc.high_contrast,
         }
     }
 
@@ -1177,10 +1180,15 @@ impl ResolveContext {
     }
 
     /// The signed range contract for a decorative JND role: the chosen polarity's
-    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`], no readability
-    /// floor.
+    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`] (or 15.0 under high contrast),
+    /// no readability floor.
     fn decorative_contract(&self, magnitude: f64) -> Contract {
-        let target = self.polarity.sign() * magnitude.abs().max(DECORATIVE_FLOOR_MIN);
+        let floor = if self.high_contrast {
+            15.0
+        } else {
+            DECORATIVE_FLOOR_MIN
+        };
+        let target = self.polarity.sign() * magnitude.abs().max(floor);
         // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
         Contract::range(target, target)
     }

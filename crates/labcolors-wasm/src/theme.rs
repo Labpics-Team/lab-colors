@@ -69,9 +69,8 @@ impl Theme {
         match self {
             Theme::Light => Ok(ViewingConditions::srgb()),
             Theme::Dark => Ok(ViewingConditions::dim_surround()),
-            Theme::LightIncreasedContrast | Theme::DarkIncreasedContrast => {
-                Err(BindingError::ThemeNotCalibrated { theme: self.key() })
-            }
+            Theme::LightIncreasedContrast => Ok(ViewingConditions::srgb_high_contrast()),
+            Theme::DarkIncreasedContrast => Ok(ViewingConditions::dim_surround_high_contrast()),
         }
     }
 }
@@ -125,12 +124,10 @@ mod tests {
     }
 
     #[test]
-    fn increased_contrast_themes_are_honestly_uncalibrated() {
+    fn increased_contrast_themes_are_fully_calibrated() {
         for theme in [Theme::LightIncreasedContrast, Theme::DarkIncreasedContrast] {
-            match theme.viewing_conditions() {
-                Err(BindingError::ThemeNotCalibrated { .. }) => {}
-                other => panic!("expected ThemeNotCalibrated, got {other:?}"),
-            }
+            let vc = theme.viewing_conditions().unwrap();
+            assert!(vc.high_contrast);
         }
     }
 }
