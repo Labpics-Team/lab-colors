@@ -29,7 +29,7 @@ Marker column: `NEEDS-SCIENCE` = provisional (awaits calibration); `GROUNDED` = 
 | 17 | `CUSP_HALF_WINDOW_DEG` | `40.0` | `semantic.rs` | NEEDS-SCIENCE | Hue search half-window (degrees); keeps undertone in blue-violet band. |
 | 18 | `LIGHTNESS_SETTLE` | `0.002` | `semantic.rs` | NEEDS-SCIENCE | Fixed-point convergence threshold; sub-8-bit grid step by design. |
 | 19 | `STRICT_STEP` | `0.5` | `semantic.rs` | NEEDS-SCIENCE | Minimum Lc separation for visual distinction vs float noise. |
-| 20 | `DEFAULT_HARDNESS` | `2.0` | `sentiment.rs` | NEEDS-SCIENCE | p-norm hardness default; Daniil eye-calibrated (#55, PROVISIONAL). |
+| 20 | `DEFAULT_HARDNESS` | `5.0` | `sentiment.rs` | NEEDS-SCIENCE | p-norm hardness default; Daniil eye-calibrated (#55, PROVISIONAL). |
 | 21 | `CHROMA_FRACTION` | `0.88` | `sentiment.rs` | NEEDS-SCIENCE | Gamut-fraction chroma strength knob; PROVISIONAL, Daniil's eye. |
 | 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | `1.75` | `neutral.rs` | NEEDS-SCIENCE | Gamma for light-side neutral curve; PROVISIONAL, owner's eye. |
 | 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | `1.5` | `neutral.rs` | NEEDS-SCIENCE | Gamma for dark-side neutral curve; PROVISIONAL, owner's eye. |

@@ -36,7 +36,7 @@ impl AccentCurve {
             neutral: neutral.clone(),
             h_canonical,
             sat_ratio: sat_ratio.clamp(0.0, 1.0),
-            slope: 5.0,
+            slope: 0.15,
             canonical_hex: canonical_hex.to_uppercase(),
             vc: *neutral.vc(),
         })
@@ -121,22 +121,26 @@ impl AccentCurve {
     fn find_optimal_hue(&self, l_ok: f64) -> f64 {
         let c_at_canonical = max_chroma(l_ok, self.h_canonical);
 
-        if c_at_canonical > 1e-6 {
+        if c_at_canonical < 1e-5 {
             return self.h_canonical;
         }
 
-        let best = (0..36)
-            .map(|i| {
-                let h = self.h_canonical + (i as f64 - 18.0) * 10.0;
-                let c = max_chroma(l_ok, h);
-                let dh = ((h - self.h_canonical + 180.0).rem_euclid(360.0)) - 180.0;
-                let cost = self.slope / (1.0 - dh.abs() / 180.0).max(0.01);
-                let score = c - cost;
-                (h, c, score)
-            })
-            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-
-        best.map(|(h, _, _)| h).unwrap_or(self.h_canonical)
+        let mut best_h = self.h_canonical;
+        let mut best_score = f64::NEG_INFINITY;
+        let window = 30.0;
+        let penalty_scale = self.slope / window;
+        let steps = (window * 2.0) as i32;
+        for i in 0..=steps {
+            let h = self.h_canonical - window + i as f64;
+            let c = max_chroma(l_ok, h);
+            let drift = (h - self.h_canonical).abs();
+            let score = c - penalty_scale * drift;
+            if score > best_score {
+                best_score = score;
+                best_h = h;
+            }
+        }
+        best_h
     }
 }
 
