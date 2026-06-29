@@ -7,17 +7,29 @@
 //! mud = sigmoid(T * ln(raw + eps) + b_cal)
 //! ```
 //!
-//! # Parameters (fit on TRAIN split of `v3_dataset.json`)
+//! # Parameters — inventory status (docs/decisions/empirical-inventory.md rows 35–48)
 //!
-//! - `C0` = 0.0395: grey-frontier chroma floor
-//! - `JND` = 0.0122779190541810: transition width for neutral/opponent gates
-//! - `LESC` = 0.8208552000000002: light escape strength
-//! - `b0` = 0.0286896486335021: Oklab-b warm gate boundary
-//! - `bw` = 0.0202412867886758: Oklab-b warm gate transition width
-//! - `cal_eps` = 0.01: magnitude link bias
-//! - `cal_T` = 2.3569779717896631: magnitude link scale
-//! - `cal_b` = 6.4451683591874760: magnitude link shift
-//! - `m_w` = 0.1815267777247454: margin scale for confidence band geometry
+//! Science-vs-fit boundary: the **structural form** is derived from Oklab opponent-colour
+//! theory and CAM16-UCS geometry.  The **link calibration scalars** are Platt-fit on the
+//! v3 labelled dataset and declared as DECLARED-CALIBRATION.  See inventory for full
+//! per-constant rationale and bounds.
+//!
+//! | const         | inv row | status                | value (frozen)             |
+//! |---------------|---------|-----------------------|----------------------------|
+//! | `C0`          | 35      | DERIVED               | 0.0395 (sRGB grey-frontier)|
+//! | `JND`         | 36      | DERIVED               | 0.01228 (Oklab chroma JND) |
+//! | `LESC`        | 37      | DECLARED-CALIBRATION  | 0.8208552 (Platt-fit)      |
+//! | `B0`          | 38      | DECLARED-CALIBRATION  | 0.028690 (Platt-fit)       |
+//! | `BW`          | 39      | DECLARED-CALIBRATION  | 0.020241 (Platt-fit)       |
+//! | `CAL_EPS`     | 40      | DECLARED-CALIBRATION  | 0.01 (log regularisation)  |
+//! | `CAL_T`       | 41      | DECLARED-CALIBRATION  | 2.356978 (Platt-fit)       |
+//! | `CAL_B`       | 42      | DECLARED-CALIBRATION  | 6.445168 (Platt-fit)       |
+//! | `M_W`         | 43      | DECLARED-CALIBRATION  | 0.181527 (Platt-fit)       |
+//! | `KAPPA_CORE`  | 44      | DECLARED-CALIBRATION  | 0.34 (concept-floor)       |
+//! | `KAPPA_INTERIOR`| 45   | DECLARED-CALIBRATION  | 0.10 (concept-floor)       |
+//! | `W_HUE[8]`    | 46      | DECLARED-CALIBRATION  | (logistic regression fit)  |
+//! | `CUSP_L_TABLE`| 47      | DERIVED               | (Oklab gamut geometry)     |
+//! | `CEIL_N_TABLE`| 48      | DECLARED-CALIBRATION  | (Fourier basis fit)        |
 
 #![allow(clippy::excessive_precision)]
 
