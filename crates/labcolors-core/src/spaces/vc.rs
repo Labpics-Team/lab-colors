@@ -228,7 +228,11 @@ impl ViewingConditions {
             h ^= f.to_bits();
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
-        h ^= (high_contrast as u64) << 1;
+        // Shift by 1 so the boolean's only possible values (0u64 / 1u64) map to
+        // distinct bit positions from the FNV accumulator's LSB, avoiding a trivial
+        // XOR cancellation when `high_contrast` is folded into the running hash.
+        const HIGH_CONTRAST_FINGERPRINT_SALT: u64 = 1;
+        h ^= (high_contrast as u64) << HIGH_CONTRAST_FINGERPRINT_SALT;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
         h
     }

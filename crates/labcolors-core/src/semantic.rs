@@ -152,6 +152,11 @@ use crate::wcag;
 // NEEDS-SCIENCE — provisional JND floor; awaits surface-jnd calibration (issue #44).
 const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
+/// High-contrast decorative floor (Lc): raised above [`DECORATIVE_FLOOR_MIN`]
+/// to match the stronger perceptual requirements of the `-ic` themes.
+// NEEDS-SCIENCE — provisional IC floor; awaits surface-jnd calibration for increased-contrast themes.
+const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
+
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
 // The fill and border ladders carry the owner's *literal* dJ' anchors — the
@@ -1184,7 +1189,7 @@ impl ResolveContext {
     /// no readability floor.
     fn decorative_contract(&self, magnitude: f64) -> Contract {
         let floor = if self.high_contrast {
-            15.0
+            IC_DECORATIVE_FLOOR_MIN
         } else {
             DECORATIVE_FLOOR_MIN
         };
@@ -3070,11 +3075,11 @@ mod tests {
                 // Where reachable, primary/secondary/tertiary must be strict
                 // (quaternary is the only non-strict step in the anchor ladder).
                 for w in mags.windows(3) {
-                    if let (Some(a), Some(b), Some(c)) = (w[0], w[1], w[2])
-                        && a > b + 1e-9
-                        && b > c + 1e-9
-                    {
-                        continue;
+                    if let (Some(a), Some(b), Some(c)) = (w[0], w[1], w[2]) {
+                        assert!(
+                            a > b + 1e-9 && b > c + 1e-9,
+                            "{vc_name} {bg_hex}: strict-order violated in primary/secondary/tertiary window: {a} > {b} > {c}"
+                        );
                     }
                 }
                 // No two adjacent roles share an identical colour without being

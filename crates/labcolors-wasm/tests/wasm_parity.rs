@@ -180,7 +180,7 @@ fn unknown_theme_rejects_without_panic() {
     // `JsResolvedTheme` is not `Debug`, so map the Ok arm away before unwrapping
     // the error — we only care that the call rejected and why.
     let err = engine
-        .resolve_theme("#FFFFFF", "solarized")
+        .resolve_theme("#FFFFFF", "__not_a_theme__")
         .map(|_| ())
         .expect_err("unrecognised theme must reject");
     // The error message carries the stable code.

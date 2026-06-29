@@ -160,13 +160,15 @@ impl LabColors {
     /// Calculate the muddiness score (0 to 1) of an sRGB hex colour.
     #[wasm_bindgen(js_name = muddiness)]
     pub fn muddiness(&self, hex: &str) -> Result<f64, JsError> {
-        labcolors_core::cleanliness::muddiness_from_hex(hex).map_err(|e| JsError::new(&e))
+        labcolors_core::cleanliness::muddiness_from_hex(hex)
+            .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
     }
 
     /// Calculate the confidence score (0 to 0.34) of an sRGB hex colour.
     #[wasm_bindgen(js_name = confidence)]
     pub fn confidence(&self, hex: &str) -> Result<f64, JsError> {
-        labcolors_core::cleanliness::confidence_from_hex(hex).map_err(|e| JsError::new(&e))
+        labcolors_core::cleanliness::confidence_from_hex(hex)
+            .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
     }
 }
 

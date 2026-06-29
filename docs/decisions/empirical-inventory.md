@@ -44,6 +44,8 @@ Marker column: `NEEDS-SCIENCE` = provisional (awaits calibration); `GROUNDED` = 
 | 32 | `LO_CLIP` | `0.1` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
 | 33 | `LO_BOW_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
 | 34 | `LO_WOB_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
+| 35 | `IC_DECORATIVE_FLOOR_MIN` | `15.0` | `semantic.rs` | NEEDS-SCIENCE | Provisional increased-contrast decorative floor (Lc). Raised above `DECORATIVE_FLOOR_MIN` (7.5) to enforce stronger perceptual contrast in `-ic` themes. Awaits surface-jnd calibration for the IC tier. |
+| 36 | `HUE_SEARCH_HALF_WINDOW` | `30.0` | `scale.rs` | NEEDS-SCIENCE | Half-width of AccentCurve hue search window (degrees). 30° spans a typical sRGB gamut ridge; awaits perceptual calibration against empirical accent-hue spread data. |
 
 ## Muddiness Law constants — `cleanliness.rs`
 

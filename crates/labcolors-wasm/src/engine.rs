@@ -435,6 +435,9 @@ mod tests {
             ("#FFFFFF", Theme::Light),
             ("#000000", Theme::Dark),
             ("#808080", Theme::Light),
+            // Increased-contrast variants: same 20-role contract must hold.
+            ("#FFFFFF", Theme::LightIncreasedContrast),
+            ("#000000", Theme::DarkIncreasedContrast),
         ];
         for (bg, theme) in reps {
             let result = engine.resolve_theme(bg, theme).unwrap();

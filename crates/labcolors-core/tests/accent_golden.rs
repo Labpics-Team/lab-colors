@@ -86,7 +86,7 @@ fn sentiment_info_curve_sample_hex_13_matches_golden() {
     );
     assert!(
         (curve.resolved_hue - 257.47).abs() < 0.1,
-        "Info resolved hue should be ~257.47° (257.42° prototype + ~0.05° sticky nudge): {}",
+        "Info resolved hue should be ~257.47° (257.47° current target; prior nudge mechanics settled here): {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);

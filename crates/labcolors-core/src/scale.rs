@@ -119,19 +119,23 @@ impl AccentCurve {
     }
 
     fn find_optimal_hue(&self, l_ok: f64) -> f64 {
+        // NEEDS-SCIENCE — hue search half-window; 30° spans typical gamut ridge width; awaits perceptual calibration.
+        const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
+
         let c_at_canonical = max_chroma(l_ok, self.h_canonical);
 
+        // Degenerate guard: if all hues yield near-zero chroma, skip the search.
         if c_at_canonical < 1e-5 {
             return self.h_canonical;
         }
 
         let mut best_h = self.h_canonical;
         let mut best_score = f64::NEG_INFINITY;
-        let window = 30.0;
-        let penalty_scale = self.slope / window;
-        let steps = (window * 2.0) as i32;
+        let penalty_scale = self.slope / HUE_SEARCH_HALF_WINDOW;
+        // 1° step: coarser than Oklab JND but sufficient for the broad chroma ridge.
+        let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
         for i in 0..=steps {
-            let h = self.h_canonical - window + i as f64;
+            let h = self.h_canonical - HUE_SEARCH_HALF_WINDOW + i as f64;
             let c = max_chroma(l_ok, h);
             let drift = (h - self.h_canonical).abs();
             let score = c - penalty_scale * drift;

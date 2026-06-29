@@ -193,7 +193,9 @@ jobs:
           mkdir -p "$HOME/bin"
           ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome"
           ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome-stable"
-          echo "PATH=$HOME/bin:$PATH" >> "$GITHUB_ENV"
+          # Use GITHUB_PATH (step-scoped prepend) rather than PATH in GITHUB_ENV
+          # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
+          echo "$HOME/bin" >> "$GITHUB_PATH"
           echo "Linked CfT Chrome as google-chrome in ~/bin (for chromedriver path discovery)"
 
           # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
