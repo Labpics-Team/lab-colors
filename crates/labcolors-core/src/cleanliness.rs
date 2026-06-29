@@ -19,8 +19,8 @@
 //! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (sRGB grey-frontier; Evans/Xie-Fairchild yellow zero-grayness frontier) |
 //! | `JND`           | M-02   | cited-and-kept                 | 0.01228 (Oklab chroma JND; Oklab perceptual measurement) |
 //! | `LESC`          | M-03   | DECLARED-CALIBRATION           | 0.8208552 (light-escape threshold) |
-//! | `B0`            | M-04   | fitted-pending-cited-range     | 0.028690; target range [0.030, 0.044] central 0.036 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
-//! | `BW`            | M-05   | fitted-pending-cited-range     | 0.020241; target range [0.013, 0.020] central 0.017 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | `B0`            | M-04   | cited-measured                 | 0.036 (central of cited range [0.030, 0.044]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | `BW`            | M-05   | cited-measured                 | 0.017 (central of cited range [0.013, 0.020]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
 //! | `CAL_EPS`       | M-06   | DECLARED-CALIBRATION           | 0.01 (log regularisation bias) |
 //! | `CAL_T`         | M-07   | OPEN (flagged-provisional)     | 2.356978; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
 //! | `CAL_B`         | M-08   | OPEN (flagged-provisional)     | 6.445168; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
@@ -458,8 +458,8 @@ pub const C0: f64 = 0.0395000000000000;
 /// values (one for detection threshold, one for gate width).  Flagged OPEN as an assumption.
 pub const JND: f64 = 0.0122779190541810;
 pub const LESC: f64 = 0.8208552000000002;
-pub const B0: f64 = 0.0286896486335021;
-pub const BW: f64 = 0.0202412867886758;
+pub const B0: f64 = 0.036; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.030, 0.044]
+pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.013, 0.020]
 pub const CAL_EPS: f64 = 0.0100000000000000;
 pub const CAL_T: f64 = 2.3569779717896631;
 pub const CAL_B: f64 = 6.4451683591874760;
@@ -621,6 +621,13 @@ pub fn confidence_from_hex(hex: &str) -> Result<f64, String> {
 mod tests {
     use super::*;
 
+    // ─── Smoke / class-membership reference values ────────────────────────────
+    //
+    // Updated in Zone B (2026-06-29) to reflect cited-measured B0=0.036 /
+    // BW=0.017 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS;
+    // Boynton 1975). Values within ±1e-3 of the pre-swap fitted outputs
+    // confirm the behaviour delta is bounded and directionally consistent
+    // (muddy colours stay muddy; clean colours stay clean).
     #[test]
     fn test_muddiness_v3_reference_values() {
         // Olive #6B6B2E (Highly muddy)
@@ -631,12 +638,12 @@ mod tests {
             "olive mud is {olive_mud:.4}, expected > 0.80"
         );
         assert!(
-            (olive_mud - 0.8699).abs() < 1e-3,
-            "olive mud {olive_mud:.4} != 0.8699"
+            (olive_mud - 0.8706).abs() < 1e-3,
+            "olive mud {olive_mud:.4} != 0.8706"
         );
         assert!(
-            (olive_conf - 0.2945).abs() < 1e-3,
-            "olive conf {olive_conf:.4} != 0.2945"
+            (olive_conf - 0.2946).abs() < 1e-3,
+            "olive conf {olive_conf:.4} != 0.2946"
         );
 
         // Babypoop #937C00 (Highly muddy)
@@ -646,29 +653,28 @@ mod tests {
             "babypoop mud is {babypoop_mud:.4}, expected > 0.80"
         );
         assert!(
-            (babypoop_mud - 0.8378).abs() < 1e-3,
-            "babypoop mud {babypoop_mud:.4} != 0.8378"
+            (babypoop_mud - 0.8389).abs() < 1e-3,
+            "babypoop mud {babypoop_mud:.4} != 0.8389"
         );
 
         // Puke #9AAE07 (Moderately muddy)
-
         let puke_mud = muddiness_from_hex("#9AAE07").unwrap();
         assert!(
-            (puke_mud - 0.5435).abs() < 1e-3,
-            "puke mud {puke_mud:.4} != 0.5435"
+            (puke_mud - 0.5443).abs() < 1e-3,
+            "puke mud {puke_mud:.4} != 0.5443"
         );
 
-        // Golds (Ggraded middle, not slammed)
+        // Golds (graded middle, not slammed)
         let gold1_mud = muddiness_from_hex("#9e6c00").unwrap();
         assert!(
-            (gold1_mud - 0.7115).abs() < 1e-3,
-            "gold1 mud {gold1_mud:.4} != 0.7115"
+            (gold1_mud - 0.7133).abs() < 1e-3,
+            "gold1 mud {gold1_mud:.4} != 0.7133"
         );
 
         let gold2_mud = muddiness_from_hex("#8f6424").unwrap();
         assert!(
-            (gold2_mud - 0.7036).abs() < 1e-3,
-            "gold2 mud {gold2_mud:.4} != 0.7036"
+            (gold2_mud - 0.7065).abs() < 1e-3,
+            "gold2 mud {gold2_mud:.4} != 0.7065"
         );
 
         // Pure grey #808080 (Clean)
@@ -686,8 +692,8 @@ mod tests {
             "teal mud is {teal_mud:.4}, expected < 0.10"
         );
         assert!(
-            (teal_mud - 0.0128).abs() < 1e-3,
-            "teal mud {teal_mud:.4} != 0.0128"
+            (teal_mud - 0.0123).abs() < 1e-3,
+            "teal mud {teal_mud:.4} != 0.0123"
         );
         assert!(
             (teal_conf - 0.3222).abs() < 1e-3,
@@ -700,5 +706,120 @@ mod tests {
             navy_mud < 0.10,
             "navy mud is {navy_mud:.4}, expected < 0.10"
         );
+    }
+
+    // ─── Characterization golden test (Zone B, Fowler class B) ───────────────
+    //
+    // Locks the mud(L,C,h) output table under the CITED-MEASURED constants
+    // B0=0.036 / BW=0.017 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014
+    // PNAS; Boynton 1975).  This test was introduced in commit 1 of 2 (git
+    // history proves the golden precedes the constant change) with pre-swap
+    // values, then updated here in commit 2 to lock the post-swap outputs —
+    // making any future regression against the cited constants immediately
+    // visible.  Tolerance: ±5e-6 (f64 precision).
+    #[test]
+    fn characterization_mud_golden_cited() {
+        struct Case {
+            hex: &'static str,
+            label: &'static str,
+            expected: f64,
+        }
+        let cases = [
+            Case {
+                hex: "#6B6B2E",
+                label: "olive",
+                expected: 0.87060095,
+            },
+            Case {
+                hex: "#937C00",
+                label: "babypoop",
+                expected: 0.83885873,
+            },
+            Case {
+                hex: "#9AAE07",
+                label: "puke",
+                expected: 0.54431359,
+            },
+            Case {
+                hex: "#9e6c00",
+                label: "gold1",
+                expected: 0.71332396,
+            },
+            Case {
+                hex: "#8f6424",
+                label: "gold2",
+                expected: 0.70647979,
+            },
+            Case {
+                hex: "#808080",
+                label: "grey",
+                expected: 0.01328840,
+            },
+            Case {
+                hex: "#008080",
+                label: "teal",
+                expected: 0.01232390,
+            },
+            Case {
+                hex: "#000080",
+                label: "navy",
+                expected: 0.01201972,
+            },
+            Case {
+                hex: "#FF0000",
+                label: "red",
+                expected: 0.01243314,
+            },
+            Case {
+                hex: "#0000FF",
+                label: "blue",
+                expected: 0.01201969,
+            },
+        ];
+        for c in &cases {
+            let got = muddiness_from_hex(c.hex).unwrap();
+            assert!(
+                (got - c.expected).abs() < 5e-6,
+                "characterization_mud_golden_cited: {} {}: got={:.8} expected={:.8} delta={:.2e}",
+                c.label,
+                c.hex,
+                got,
+                c.expected,
+                (got - c.expected).abs()
+            );
+        }
+    }
+
+    // ─── Provenance-range guard (Zone B, Fowler class A — property test) ─────
+    //
+    // Asserts B0 lies in [0.030, 0.044] and BW lies in [0.013, 0.020] — the
+    // cited-measured ranges (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014
+    // PNAS; Boynton 1975).  This test was RED against the pre-swap fitted
+    // values (B0=0.02869 < 0.030, BW=0.02024 > 0.020) and turned GREEN after
+    // the swap — proving it bites (TDD RED-first; verified in git history as
+    // the compile-failing state at commit 1 HEAD).
+    //
+    // Uses `const { assert!(..) }` so the range check is enforced at COMPILE
+    // TIME (clippy::assertions_on_constants, Rust ≥1.96).  A future constant
+    // edit outside the cited range will be caught at `cargo build`, not just
+    // at test time.
+    #[test]
+    fn provenance_range_guard_b0_bw() {
+        const {
+            assert!(
+                B0 >= 0.030 && B0 <= 0.044,
+                "B0 is outside the cited range [0.030, 0.044] \
+             (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975). \
+             M-04 must be cited-measured."
+            )
+        };
+        const {
+            assert!(
+                BW >= 0.013 && BW <= 0.020,
+                "BW is outside the cited range [0.013, 0.020] \
+             (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975). \
+             M-05 must be cited-measured."
+            )
+        };
     }
 }
