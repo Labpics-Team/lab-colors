@@ -171,8 +171,10 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version || true
 
           # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
+          # Note: LD_LIBRARY_PATH in $GITHUB_ENV is not active in this step yet;
+          # must pass DEPS_LIB inline here.
           echo "--- chromedriver session diagnostic ---"
-          "$CHROMEDRIVER_BIN" --port=9515 --log-level=ALL 2>&1 &
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --port=9515 --log-level=ALL 2>&1 &
           CD_PID=$!
           sleep 1
           RESP=$(curl -s --max-time 10 -X POST http://localhost:9515/session \
@@ -207,6 +209,7 @@ jobs:
           kill $CD_PID 2>/dev/null || true
           wait $CD_PID 2>/dev/null || true
           echo "--- end diagnostic ---"
+          true # diagnostic is informational only — never fail the install step
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
