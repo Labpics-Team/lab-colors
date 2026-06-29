@@ -124,16 +124,25 @@ jobs:
           npm ci
           npm run typecheck
           npm test
-      - name: install Chrome
-        # Self-hosted WSL runners do not pre-install Chrome (unlike ubuntu-latest).
-        # browser-actions/setup-chrome provisions a stable Chrome build and exports
-        # CHROME_PATH so wasm-pack test --headless --chrome picks it up automatically.
-        # install-dependencies:true runs apt-get to satisfy libnspr4/libnss3/libatk* etc.
-        # Pinned to commit SHA for supply-chain safety; v2.1.2 @ 2024-09-10.
-        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
-        with:
-          chrome-version: stable
-          install-dependencies: true
+      - name: install Chrome (Chrome for Testing)
+        # Self-hosted WSL runners lack Chrome and passwordless sudo (blocking apt-get).
+        # Chrome for Testing (CfT) zip bundles all required .so files; no apt needed.
+        # The CHROME_PATH env var is exported so wasm-pack --headless --chrome finds it.
+        # webdriver.json in repo root adds --no-sandbox for WSL environments where
+        # Linux user-namespace sandbox is unavailable.
+        # Version: stable channel resolved at https://googlechromelabs.github.io/chrome-for-testing/
+        run: |
+          CfT_VERSION=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
+            | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);console.log(j.channels.Stable.version);});")
+          CfT_URL="https://storage.googleapis.com/chrome-for-testing-public/${CfT_VERSION}/linux64/chrome-linux64.zip"
+          mkdir -p "$HOME/.chrome-for-testing"
+          curl -sSL "$CfT_URL" -o "$HOME/.chrome-for-testing/chrome-linux64.zip"
+          unzip -q "$HOME/.chrome-for-testing/chrome-linux64.zip" -d "$HOME/.chrome-for-testing/"
+          CHROME_BIN="$HOME/.chrome-for-testing/chrome-linux64/chrome"
+          chmod +x "$CHROME_BIN"
+          echo "CHROME_PATH=$CHROME_BIN" >> "$GITHUB_ENV"
+          echo "Installed Chrome for Testing $CfT_VERSION at $CHROME_BIN"
+          "$CHROME_BIN" --version || true
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
