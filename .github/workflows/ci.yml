@@ -143,8 +143,8 @@ jobs:
           curl -sSL "${BASE_URL}/chrome-linux64.zip" -o "$HOME/.chrome-for-testing/chrome-linux64.zip" &
           curl -sSL "${BASE_URL}/chromedriver-linux64.zip" -o "$HOME/.chrome-for-testing/chromedriver-linux64.zip" &
           wait
-          unzip -q "$HOME/.chrome-for-testing/chrome-linux64.zip" -d "$HOME/.chrome-for-testing/"
-          unzip -q "$HOME/.chrome-for-testing/chromedriver-linux64.zip" -d "$HOME/.chrome-for-testing/"
+          unzip -q -o "$HOME/.chrome-for-testing/chrome-linux64.zip" -d "$HOME/.chrome-for-testing/"
+          unzip -q -o "$HOME/.chrome-for-testing/chromedriver-linux64.zip" -d "$HOME/.chrome-for-testing/"
           CHROME_BIN="$HOME/.chrome-for-testing/chrome-linux64/chrome"
           CHROMEDRIVER_BIN="$HOME/.chrome-for-testing/chromedriver-linux64/chromedriver"
           chmod +x "$CHROME_BIN" "$CHROMEDRIVER_BIN"
