@@ -173,6 +173,19 @@ jobs:
           echo "LD_LIBRARY_PATH: ${DEPS_LIB}"
           # Verify chrome binary can load now
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version || true
+      - name: smoke Chrome headless (diagnose sandbox/crash)
+        # Verify Chrome can actually start a headless session before wasm-pack.
+        # stderr shows sandbox/kernel errors that chromedriver doesn't surface.
+        run: |
+          timeout 10 "$CHROME_PATH" \
+            --headless=new \
+            --no-sandbox \
+            --disable-setuid-sandbox \
+            --disable-dev-shm-usage \
+            --disable-gpu \
+            --dump-dom \
+            --virtual-time-budget=1000 \
+            "about:blank" 2>&1 | head -40 || true
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
