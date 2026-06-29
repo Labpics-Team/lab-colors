@@ -7,29 +7,29 @@
 //! mud = sigmoid(T * ln(raw + eps) + b_cal)
 //! ```
 //!
-//! # Parameters — inventory status (docs/decisions/empirical-inventory.md rows 35–48)
+//! # Parameters — inventory status (docs/decisions/empirical-inventory.md, Muddiness section)
 //!
 //! Science-vs-fit boundary: the **structural form** is derived from Oklab opponent-colour
 //! theory and CAM16-UCS geometry.  The **link calibration scalars** are Platt-fit on the
 //! v3 labelled dataset and declared as DECLARED-CALIBRATION.  See inventory for full
-//! per-constant rationale and bounds.
+//! per-constant rationale and bounds.  Audited by `mud-oracle/verify_inventory.js` (exit 0).
 //!
-//! | const         | inv row | status                | value (frozen)             |
-//! |---------------|---------|-----------------------|----------------------------|
-//! | `C0`          | 35      | DERIVED               | 0.0395 (sRGB grey-frontier)|
-//! | `JND`         | 36      | DERIVED               | 0.01228 (Oklab chroma JND) |
-//! | `LESC`        | 37      | DECLARED-CALIBRATION  | 0.8208552 (Platt-fit)      |
-//! | `B0`          | 38      | DECLARED-CALIBRATION  | 0.028690 (Platt-fit)       |
-//! | `BW`          | 39      | DECLARED-CALIBRATION  | 0.020241 (Platt-fit)       |
-//! | `CAL_EPS`     | 40      | DECLARED-CALIBRATION  | 0.01 (log regularisation)  |
-//! | `CAL_T`       | 41      | DECLARED-CALIBRATION  | 2.356978 (Platt-fit)       |
-//! | `CAL_B`       | 42      | DECLARED-CALIBRATION  | 6.445168 (Platt-fit)       |
-//! | `M_W`         | 43      | DECLARED-CALIBRATION  | 0.181527 (Platt-fit)       |
-//! | `KAPPA_CORE`  | 44      | DECLARED-CALIBRATION  | 0.34 (concept-floor)       |
-//! | `KAPPA_INTERIOR`| 45   | DECLARED-CALIBRATION  | 0.10 (concept-floor)       |
-//! | `W_HUE[8]`    | 46      | DECLARED-CALIBRATION  | (logistic regression fit)  |
-//! | `CUSP_L_TABLE`| 47      | DERIVED               | (Oklab gamut geometry)     |
-//! | `CEIL_N_TABLE`| 48      | DECLARED-CALIBRATION  | (Fourier basis fit)        |
+//! | const           | mud-id | status                | value (frozen)              |
+//! |-----------------|--------|-----------------------|-----------------------------|
+//! | `C0`            | M-01   | DERIVED               | 0.0395 (sRGB grey-frontier) |
+//! | `JND`           | M-02   | DERIVED               | 0.01228 (Oklab chroma JND)  |
+//! | `LESC`          | M-03   | DECLARED-CALIBRATION  | 0.8208552 (Platt-fit)       |
+//! | `B0`            | M-04   | DECLARED-CALIBRATION  | 0.028690 (Platt-fit)        |
+//! | `BW`            | M-05   | DECLARED-CALIBRATION  | 0.020241 (Platt-fit)        |
+//! | `CAL_EPS`       | M-06   | DECLARED-CALIBRATION  | 0.01 (log regularisation)   |
+//! | `CAL_T`         | M-07   | DECLARED-CALIBRATION  | 2.356978 (Platt-fit)        |
+//! | `CAL_B`         | M-08   | DECLARED-CALIBRATION  | 6.445168 (Platt-fit)        |
+//! | `M_W`           | M-09   | DECLARED-CALIBRATION  | 0.181527 (Platt-fit)        |
+//! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION  | 0.34 (concept-floor)        |
+//! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION  | 0.10 (concept-floor)        |
+//! | `W_HUE[8]`      | M-12   | DECLARED-CALIBRATION  | (logistic regression fit)   |
+//! | `CUSP_L_TABLE`  | M-13   | DERIVED               | (Oklab gamut geometry)      |
+//! | `CEIL_N_TABLE`  | M-14   | DECLARED-CALIBRATION  | (Fourier basis fit)         |
 
 #![allow(clippy::excessive_precision)]
 
