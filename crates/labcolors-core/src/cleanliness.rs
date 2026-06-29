@@ -448,6 +448,14 @@ pub(crate) static CEIL_N_TABLE: [f64; 361] = [
 
 // High-precision frozen parameter constants
 pub const C0: f64 = 0.0395000000000000;
+/// JND reuse rationale: this constant is the cited Oklab chroma just-noticeable-difference
+/// (Oklab perceptual measurement, M-02 cited-and-kept). It is used as the sigmoid gate width
+/// throughout the module because JND is the natural perceptual scale for a logistic boundary —
+/// a ±1 JND band captures the transition from sub-threshold to supra-threshold chroma presence.
+/// No new fit is performed; this is the same cited value reused as a scale parameter.
+/// The applicability of a chroma JND as the gate width is a design assumption; if a future
+/// study finds a different gate width is warranted, M-02 should be split into separate cited
+/// values (one for detection threshold, one for gate width).  Flagged OPEN as an assumption.
 pub const JND: f64 = 0.0122779190541810;
 pub const LESC: f64 = 0.8208552000000002;
 pub const B0: f64 = 0.0286896486335021;
@@ -516,6 +524,14 @@ pub fn depth_mod(l: f64, c: f64, h_deg: f64, b0: f64, bw: f64) -> f64 {
 }
 
 /// Fourier hue basis vectors for K = 3
+///
+/// Hue-quantization rationale: `CEIL_N_TABLE` is sampled at 1-degree resolution.
+/// The table index uses `round()` (nearest integer degree), so the maximum lookup
+/// error is ≤ 0.5° of hue.  The mud response varies smoothly with hue (band-limited
+/// to K = 3 Fourier terms, i.e. the highest spatial frequency is a 120°-period wave),
+/// so a 0.5° quantization error produces a negligible output error — well below 1 JND
+/// in any perceptual hue dimension.  The trig terms (`cos`/`sin`) continue to use
+/// the original floating-point `h_deg` and are NOT quantized.
 pub fn hue_basis(h_deg: f64) -> [f64; 8] {
     let th = h_deg.rem_euclid(360.0).to_radians();
     let idx = (h_deg.rem_euclid(360.0).round() as usize) % 361;
@@ -533,6 +549,10 @@ pub fn hue_basis(h_deg: f64) -> [f64; 8] {
 }
 
 /// Hue weight term: emergent band-limited hue response
+///
+/// The table index for `CEIL_N_TABLE` is taken at the nearest integer degree (see
+/// `hue_basis` for the quantization-acceptability rationale).  W_HUE is currently
+/// OPEN (M-12, flagged-provisional) pending the drab L-tilt grayness study (Zone C).
 pub fn hue_weight(h_deg: f64) -> f64 {
     let rounded_hue = h_deg.rem_euclid(360.0).round() as usize;
     let idx = rounded_hue % 361;
@@ -561,7 +581,8 @@ pub fn muddiness_oklch(l: f64, c: f64, h_deg: f64) -> f64 {
 }
 
 /// Per-colour confidence that drops near decision boundary (mud ~ 0.5) and grey-frontier (chroma ~ C0).
-/// Bounded by the measured concept floor (externally cited ceiling of 0.34 stable-core / 0.10 interior).
+/// Bounded by the declared-calibration concept floor (DECLARED-CALIBRATION KAPPA_CORE=0.34 stable-core /
+/// KAPPA_INTERIOR=0.10 interior; empirical v3-retest floors, NOT published perceptual constants — see M-10/M-11 in the inventory table above).
 pub fn confidence(l: f64, c: f64, h_deg: f64) -> f64 {
     let cc = neutral_gate(l, c, C0, JND, LESC);
     let chroma_conf = (1.0 - 4.0 * cc * (1.0 - cc)).clamp(0.0, 1.0);
