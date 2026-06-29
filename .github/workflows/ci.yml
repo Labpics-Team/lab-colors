@@ -20,6 +20,11 @@ jobs:
   lint:
     name: clippy + rustfmt
     runs-on: [self-hosted, Linux, X64]
+    # Isolate RUSTUP_HOME/CARGO_HOME per run+job so parallel jobs on shared-HOME
+    # self-hosted runners cannot race each other's rustup/cargo directories.
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
@@ -38,6 +43,9 @@ jobs:
   test:
     name: test
     runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -56,6 +64,9 @@ jobs:
   audit:
     name: cargo audit (rustsec)
     runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -81,6 +92,9 @@ jobs:
   wasm:
     name: wasm build + headless test + size
     runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
