@@ -617,6 +617,63 @@ pub fn confidence_from_hex(hex: &str) -> Result<f64, String> {
     Ok(confidence(l, c, h))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Drab defect head (Zone B slice 2 — second INDEPENDENT output)
+//
+// `n_pure` and `drab` are a SEPARATE defect axis from mud/muddiness_oklch.
+// They share ONLY the cited gate constants C0 / JND as INPUTS.
+// They are NEVER called inside `raw_chromatic`, `muddiness_oklch`, or any
+// other mud code path — the two axes are provably independent (the curl /
+// integrability two-axes result from the paradigm North).
+//
+// drab(C) = sigmoid((C0 - C) / JND)
+//         = 1 - sigmoid((C   - C0) / JND)   [= 1 - n_pure(C)]
+//
+// Constants reused (zero new parameters):
+//   C0  = 0.0395  (cited-and-kept, M-01, Evans/Xie-Fairchild yellow zero-grayness frontier)
+//   JND = 0.0122779190541810 (cited-and-kept, M-02, Oklab chroma JND)
+//
+// OPEN items (left unchanged): CAL_T / CAL_B / W_HUE / g0_band — all still
+// flagged-provisional with their named studies (see inventory table above).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pure chroma-presence gate: N_pure(C) = sigmoid((C - C0) / JND).
+///
+/// This is the shared gate that enters both mud (as `neutral_gate`) and drab
+/// (as 1 - N_pure).  It is kept as a standalone `pub fn` so callers can
+/// compose the two heads independently without re-implementing the gate.
+///
+/// Parameters: cited-and-kept C0 (M-01) and JND (M-02).  Zero new parameters.
+#[inline]
+pub fn n_pure(c: f64) -> f64 {
+    sigmoid((c - C0) / JND)
+}
+
+/// Drab defect head: D(C) = 1 − N_pure(C).
+///
+/// Measures chroma ABSENCE — the complement of the cited chroma-presence gate.
+/// Returns 1.0 for achromatic colours (C ≈ 0, deeply grey/beige) and 0.0 for
+/// strongly chromatic colours (C >> C0).
+///
+/// Implementation: `1.0 - n_pure(c)` — exact f64 arithmetic complement.
+/// This guarantees `drab(C) + n_pure(C) == 1.0` exactly in IEEE 754, which
+/// the property tests verify.  The equivalent closed form sigmoid((C0 - C) / JND)
+/// would produce values that sum to 1.0 only up to ±1 ULP due to independent
+/// exp() calls; the subtraction form is exact by construction.
+///
+/// Invariants guaranteed by construction (independently property-tested):
+///   `drab(C) + n_pure(C) == 1.0`  exact in f64
+///   `drab` is strictly monotone-decreasing in C
+///   `drab(C0) == 0.5`  (sigmoid(0) == 0.5 exactly, since n_pure(C0) == 0.5)
+///
+/// This function is a SECOND DISTINCT output — it is NEVER called inside
+/// `raw_chromatic`, `muddiness_oklch`, or any mud path.  The only coupling
+/// with the mud head is the shared C0/JND constants as a shared INPUT gate.
+#[inline]
+pub fn drab(c: f64) -> f64 {
+    1.0 - n_pure(c)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,8 +899,7 @@ mod tests {
         // D(C0) must equal exactly 0.5 because sigmoid(0) == 0.5.
         let d = drab(C0);
         assert_eq!(
-            d,
-            0.5,
+            d, 0.5,
             "drab(C0) should be exactly 0.5 (sigmoid(0)); got {d:.18}"
         );
     }
