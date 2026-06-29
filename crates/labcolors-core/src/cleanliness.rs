@@ -701,4 +701,66 @@ mod tests {
             "navy mud is {navy_mud:.4}, expected < 0.10"
         );
     }
+
+    // ─── Characterization golden test (Zone B, Fowler class B) ───────────────
+    //
+    // Locks the CURRENT mud(L,C,h) output table under the pre-swap constants
+    // B0=0.0286896486335021 / BW=0.0202412867886758.  Committed BEFORE the
+    // constant swap so git history proves the golden precedes the change (TDD
+    // RED-first: this test is GREEN on pre-swap values and goes RED after the
+    // swap, bounding and making visible the behaviour delta).
+    //
+    // Tolerance: ±5e-6 (f64 precision; table entries rounded to 8 decimal places).
+    #[test]
+    fn characterization_mud_golden_pre_swap() {
+        struct Case {
+            hex: &'static str,
+            label: &'static str,
+            expected: f64,
+        }
+        let cases = [
+            Case { hex: "#6B6B2E", label: "olive",    expected: 0.86986679 },
+            Case { hex: "#937C00", label: "babypoop", expected: 0.83776237 },
+            Case { hex: "#9AAE07", label: "puke",     expected: 0.54353150 },
+            Case { hex: "#9e6c00", label: "gold1",    expected: 0.71146719 },
+            Case { hex: "#8f6424", label: "gold2",    expected: 0.70364908 },
+            Case { hex: "#808080", label: "grey",     expected: 0.01437701 },
+            Case { hex: "#008080", label: "teal",     expected: 0.01276013 },
+            Case { hex: "#000080", label: "navy",     expected: 0.01201997 },
+            Case { hex: "#FF0000", label: "red",      expected: 0.01243183 },
+            Case { hex: "#0000FF", label: "blue",     expected: 0.01201969 },
+        ];
+        for c in &cases {
+            let got = muddiness_from_hex(c.hex).unwrap();
+            assert!(
+                (got - c.expected).abs() < 5e-6,
+                "characterization_mud_golden_pre_swap: {} {}: got={:.8} expected={:.8} delta={:.2e}",
+                c.label, c.hex, got, c.expected, (got - c.expected).abs()
+            );
+        }
+    }
+
+    // ─── Provenance-range guard (Zone B, Fowler class A — property test) ─────
+    //
+    // Asserts B0 lies in [0.030, 0.044] and BW lies in [0.013, 0.020] — the
+    // cited-measured ranges (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014
+    // PNAS; Boynton 1975).  Uses `const { assert!(..) }` so the range check is
+    // enforced at COMPILE TIME (Rust ≥1.79 stable; clippy::assertions_on_constants
+    // 1.96 requires it).
+    //
+    // At this commit (1 of 2) the constants are still the pre-swap fitted values
+    // B0=0.0286896486335021 and BW=0.0202412867886758; both are outside the
+    // cited ranges (B0 < 0.030; BW > 0.020), so the const blocks below fail to
+    // COMPILE — this is the RED state that proves the guard bites (TDD RED-first).
+    #[test]
+    fn provenance_range_guard_b0_bw() {
+        const { assert!(B0 >= 0.030 && B0 <= 0.044,
+            "B0 is outside the cited range [0.030, 0.044] \
+             (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975). \
+             M-04 must be cited-measured.") };
+        const { assert!(BW >= 0.013 && BW <= 0.020,
+            "BW is outside the cited range [0.013, 0.020] \
+             (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975). \
+             M-05 must be cited-measured.") };
+    }
 }
