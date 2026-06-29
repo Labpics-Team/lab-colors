@@ -25,8 +25,8 @@
 //! | `CAL_T`         | M-07   | OPEN (flagged-provisional)     | 2.356978; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
 //! | `CAL_B`         | M-08   | OPEN (flagged-provisional)     | 6.445168; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
 //! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (margin scale, confidence band) |
-//! | `KAPPA_CORE`    | M-10   | cited                          | 0.34 (externally cited stable-core concept floor) |
-//! | `KAPPA_INTERIOR`| M-11   | cited                          | 0.10 (externally cited interior concept floor) |
+//! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION           | 0.34 (empirical concept-floor from v3 retest analysis; not a published perceptual constant) |
+//! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION           | 0.10 (empirical interior floor from v3 disputed-stratum analysis; not a published perceptual constant) |
 //! | `W_HUE[8]`      | M-12   | OPEN (flagged-provisional)     | (logistic regression fit); resolving study: drab L-tilt grayness magnitude-estimation (Zone C) |
 //! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (pure Oklab gamut geometry, verified to f64 — kept as-is per paradigm North) |
 //! | `CEIL_N_TABLE`  | M-14   | DECLARED-CALIBRATION           | (Fourier basis fit on observer-label dataset) |
