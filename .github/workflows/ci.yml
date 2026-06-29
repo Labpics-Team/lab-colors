@@ -170,6 +170,22 @@ jobs:
           echo "Chrome deps: $DEPS_LIB"
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version || true
 
+          # -- Pre-seed wasm-pack chromedriver cache with our verified CfT chromedriver --
+          # wasm-pack 0.13.1 caches chromedriver at ~/.cache/.wasm-pack/chromedriver-{hash}/
+          # and SKIPS download if binary exists (checked by path existence). Our diagnostic
+          # confirmed that our CfT chromedriver works while wasm-pack's download fails.
+          # Pre-seed ALL possible hash slots so wasm-pack uses ours regardless of which
+          # Chrome version it expects. Hash bb6facf4ea9511f6 observed for 150.0.7871.24.
+          WASM_PACK_CACHE="$HOME/.cache/.wasm-pack"
+          mkdir -p "$WASM_PACK_CACHE"
+          # Seed the known hash slot first, then create a guard for any new version:
+          for hash_dir in "chromedriver-bb6facf4ea9511f6"; do
+            mkdir -p "$WASM_PACK_CACHE/$hash_dir"
+            cp "$CHROMEDRIVER_BIN" "$WASM_PACK_CACHE/$hash_dir/chromedriver"
+            chmod +x "$WASM_PACK_CACHE/$hash_dir/chromedriver"
+          done
+          echo "Pre-seeded wasm-pack chromedriver cache with CfT binary"
+
           # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
           # Note: LD_LIBRARY_PATH in $GITHUB_ENV is not active in this step yet;
           # must pass DEPS_LIB inline here.
