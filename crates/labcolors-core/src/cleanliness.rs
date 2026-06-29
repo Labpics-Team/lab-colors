@@ -14,22 +14,22 @@
 //! v3 labelled dataset and declared as DECLARED-CALIBRATION.  See inventory for full
 //! per-constant rationale and bounds.  Audited by `mud-oracle/verify_inventory.js` (exit 0).
 //!
-//! | const           | mud-id | status                | value (frozen)              |
-//! |-----------------|--------|-----------------------|-----------------------------|
-//! | `C0`            | M-01   | DERIVED               | 0.0395 (sRGB grey-frontier) |
-//! | `JND`           | M-02   | DERIVED               | 0.01228 (Oklab chroma JND)  |
-//! | `LESC`          | M-03   | DECLARED-CALIBRATION  | 0.8208552 (Platt-fit)       |
-//! | `B0`            | M-04   | DECLARED-CALIBRATION  | 0.028690 (Platt-fit)        |
-//! | `BW`            | M-05   | DECLARED-CALIBRATION  | 0.020241 (Platt-fit)        |
-//! | `CAL_EPS`       | M-06   | DECLARED-CALIBRATION  | 0.01 (log regularisation)   |
-//! | `CAL_T`         | M-07   | DECLARED-CALIBRATION  | 2.356978 (Platt-fit)        |
-//! | `CAL_B`         | M-08   | DECLARED-CALIBRATION  | 6.445168 (Platt-fit)        |
-//! | `M_W`           | M-09   | DECLARED-CALIBRATION  | 0.181527 (Platt-fit)        |
-//! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION  | 0.34 (concept-floor)        |
-//! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION  | 0.10 (concept-floor)        |
-//! | `W_HUE[8]`      | M-12   | DECLARED-CALIBRATION  | (logistic regression fit)   |
-//! | `CUSP_L_TABLE`  | M-13   | DERIVED               | (Oklab gamut geometry)      |
-//! | `CEIL_N_TABLE`  | M-14   | DECLARED-CALIBRATION  | (Fourier basis fit)         |
+//! | const           | mud-id | status                         | value (frozen)              |
+//! |-----------------|--------|--------------------------------|-----------------------------|
+//! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (sRGB grey-frontier; Evans/Xie-Fairchild yellow zero-grayness frontier) |
+//! | `JND`           | M-02   | cited-and-kept                 | 0.01228 (Oklab chroma JND; Oklab perceptual measurement) |
+//! | `LESC`          | M-03   | DECLARED-CALIBRATION           | 0.8208552 (light-escape threshold) |
+//! | `B0`            | M-04   | fitted-pending-cited-range     | 0.028690; target range [0.030, 0.044] central 0.036 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | `BW`            | M-05   | fitted-pending-cited-range     | 0.020241; target range [0.013, 0.020] central 0.017 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | `CAL_EPS`       | M-06   | DECLARED-CALIBRATION           | 0.01 (log regularisation bias) |
+//! | `CAL_T`         | M-07   | OPEN (flagged-provisional)     | 2.356978; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
+//! | `CAL_B`         | M-08   | OPEN (flagged-provisional)     | 6.445168; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
+//! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (margin scale, confidence band) |
+//! | `KAPPA_CORE`    | M-10   | cited                          | 0.34 (externally cited stable-core concept floor) |
+//! | `KAPPA_INTERIOR`| M-11   | cited                          | 0.10 (externally cited interior concept floor) |
+//! | `W_HUE[8]`      | M-12   | OPEN (flagged-provisional)     | (logistic regression fit); resolving study: drab L-tilt grayness magnitude-estimation (Zone C) |
+//! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (pure Oklab gamut geometry, verified to f64 — kept as-is per paradigm North) |
+//! | `CEIL_N_TABLE`  | M-14   | DECLARED-CALIBRATION           | (Fourier basis fit on observer-label dataset) |
 
 #![allow(clippy::excessive_precision)]
 
