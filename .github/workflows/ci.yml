@@ -128,10 +128,12 @@ jobs:
         # Self-hosted WSL runners do not pre-install Chrome (unlike ubuntu-latest).
         # browser-actions/setup-chrome provisions a stable Chrome build and exports
         # CHROME_PATH so wasm-pack test --headless --chrome picks it up automatically.
+        # install-dependencies:true runs apt-get to satisfy libnspr4/libnss3/libatk* etc.
         # Pinned to commit SHA for supply-chain safety; v2.1.2 @ 2024-09-10.
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
         with:
           chrome-version: stable
+          install-dependencies: true
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
