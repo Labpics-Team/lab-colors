@@ -150,7 +150,16 @@ jobs:
           chmod +x "$CHROME_BIN" "$CHROMEDRIVER_BIN"
           echo "CHROME_PATH=$CHROME_BIN" >> "$GITHUB_ENV"
           echo "CHROMEDRIVER=$CHROMEDRIVER_BIN" >> "$GITHUB_ENV"
+          # Both CfT zips bundle their own .so files (libnspr4, libnss3, libatk*, etc.)
+          # in the same directory as the binary. wasm-pack downloads its OWN chromedriver
+          # (not the one pointed to by $CHROMEDRIVER) and that binary also needs these libs.
+          # Export LD_LIBRARY_PATH so that ANY chromedriver binary—including wasm-pack's
+          # cached copy—can resolve the shared libs from the CfT bundles without sudo.
+          CfT_CHROME_DIR="$(dirname "$CHROME_BIN")"
+          CfT_DRIVER_DIR="$(dirname "$CHROMEDRIVER_BIN")"
+          echo "LD_LIBRARY_PATH=${CfT_CHROME_DIR}:${CfT_DRIVER_DIR}:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
           echo "Installed CfT $CfT_VERSION: chrome=$CHROME_BIN chromedriver=$CHROMEDRIVER_BIN"
+          echo "LD_LIBRARY_PATH set to: ${CfT_CHROME_DIR}:${CfT_DRIVER_DIR}"
           "$CHROME_BIN" --version || true
           "$CHROMEDRIVER_BIN" --version || true
       - name: wasm-pack test (headless chrome)
