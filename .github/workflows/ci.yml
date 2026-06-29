@@ -158,10 +158,10 @@ jobs:
           DEPS_DIR="$HOME/.chromedeps"
           DEBS_DIR="$HOME/.chromedeps/debs"
           mkdir -p "$DEBS_DIR"
-          # libnspr4/libnss3 are NSS/NSPR crypto dependencies needed by Chrome and chromedriver.
-          # libasound2t64 (ALSA) is needed by Chrome even in headless mode.
-          # Note: Ubuntu 24.04 (noble) renamed libasound2 → libasound2t64 (64-bit time_t).
-          (cd "$DEBS_DIR" && apt-get download libnspr4 libnss3 libasound2t64 2>&1)
+          # libnspr4/libnss3: NSS/NSPR crypto deps for Chrome and chromedriver.
+          # libasound2t64: ALSA (renamed from libasound2 in Ubuntu 24.04 noble).
+          # libgbm1: GPU buffer manager (needed by Chrome headless for DRM/render node).
+          (cd "$DEBS_DIR" && apt-get download libnspr4 libnss3 libasound2t64 libgbm1 2>&1)
           for deb in "$DEBS_DIR"/*.deb; do
             dpkg --extract "$deb" "$DEPS_DIR"
           done
