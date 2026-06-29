@@ -19,7 +19,7 @@ env:
 jobs:
   lint:
     name: clippy + rustfmt
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
@@ -37,7 +37,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -55,7 +55,7 @@ jobs:
 
   audit:
     name: cargo audit (rustsec)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -80,7 +80,7 @@ jobs:
 
   wasm:
     name: wasm build + headless test + size
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -110,8 +110,16 @@ jobs:
           npm ci
           npm run typecheck
           npm test
+      - name: install Chrome
+        # Self-hosted WSL runners do not pre-install Chrome (unlike ubuntu-latest).
+        # browser-actions/setup-chrome provisions a stable Chrome build and exports
+        # CHROME_PATH so wasm-pack test --headless --chrome picks it up automatically.
+        # Pinned to commit SHA for supply-chain safety; v2.1.2 @ 2024-09-10.
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
+        with:
+          chrome-version: stable
       - name: wasm-pack test (headless chrome)
-        # ubuntu-latest ships Chrome; the parity smoke runs against native
+        # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
         run: wasm-pack test --headless --chrome crates/labcolors-wasm
       - name: report bundle size (gzip)
