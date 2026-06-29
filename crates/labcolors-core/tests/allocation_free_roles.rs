@@ -1,3 +1,4 @@
+use serial_test::serial;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -41,6 +42,7 @@ fn alloc_snapshot() -> (usize, usize) {
 }
 
 #[test]
+#[serial]
 fn iterating_role_all_and_reading_key_allocates_zero_bytes() {
     // Take a snapshot of current allocations (test harness has already
     // allocated for the test runner itself). Then iterate Role::ALL and
@@ -64,6 +66,7 @@ fn iterating_role_all_and_reading_key_allocates_zero_bytes() {
 }
 
 #[test]
+#[serial]
 fn role_table_default_construction_does_not_heap_allocate_the_roles_themselves() {
     // The RoleTable::default() constructs a fixed-size array on the stack
     // plus a thread-local cache internally (which MAY allocate). The roles
