@@ -790,6 +790,64 @@ mod tests {
         }
     }
 
+    // ─── Drab head property tests (Zone B slice 2, Fowler class A) ──────────
+    //
+    // Three properties that MUST hold for drab(C) = sigmoid((C0 - C) / JND)
+    // (the chroma-absence complement of the cited gate N_pure(C)):
+    //
+    //   (a) D(C) + N_pure(C) == 1.0 exact in f64 across a chroma sweep
+    //       — they are complements by construction: sigmoid(x) + sigmoid(-x) == 1.
+    //   (b) D'(C) < 0 — drab strictly DECREASES as chroma C rises
+    //       (finite-difference monotonicity over the sweep).
+    //   (c) D(C0) == 0.5 exactly — sigmoid(0) == 0.5 by definition.
+    //
+    // These tests reference `drab` and `n_pure`, which do NOT exist at this
+    // commit (commit 1 of 2).  They compile-fail at this HEAD, proving
+    // TDD RED-first.  Verified independently in an isolated worktree.
+    #[test]
+    fn drab_plus_n_pure_equals_one_sweep() {
+        // Sweep C from 0.0 to 0.3 in 1001 steps; verify D + N == 1.0 exact.
+        let steps = 1001usize;
+        for i in 0..=steps {
+            let c = (i as f64) * 0.3 / (steps as f64);
+            let d = drab(c);
+            let n = n_pure(c);
+            assert_eq!(
+                d + n,
+                1.0,
+                "drab + n_pure != 1.0 at C={c:.6}: drab={d:.18} n_pure={n:.18}"
+            );
+        }
+    }
+
+    #[test]
+    fn drab_strictly_decreasing_in_chroma() {
+        // Finite-difference monotonicity: drab(C+delta) < drab(C) for all C.
+        let steps = 1001usize;
+        let delta = 0.3 / (steps as f64);
+        for i in 0..steps {
+            let c0v = (i as f64) * 0.3 / (steps as f64);
+            let c1 = c0v + delta;
+            let d0 = drab(c0v);
+            let d1 = drab(c1);
+            assert!(
+                d1 < d0,
+                "drab not strictly decreasing: drab({c1:.6})={d1:.18} >= drab({c0v:.6})={d0:.18}"
+            );
+        }
+    }
+
+    #[test]
+    fn drab_at_c0_is_half() {
+        // D(C0) must equal exactly 0.5 because sigmoid(0) == 0.5.
+        let d = drab(C0);
+        assert_eq!(
+            d,
+            0.5,
+            "drab(C0) should be exactly 0.5 (sigmoid(0)); got {d:.18}"
+        );
+    }
+
     // ─── Provenance-range guard (Zone B, Fowler class A — property test) ─────
     //
     // Asserts B0 lies in [0.030, 0.044] and BW lies in [0.013, 0.020] — the
