@@ -186,6 +186,16 @@ jobs:
           done
           echo "Pre-seeded wasm-pack chromedriver cache with CfT binary"
 
+          # -- Make Chrome discoverable by chromedriver without explicit binary path --
+          # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium
+          # When CHROME_PATH/binary is not passed by wasm-bindgen-test-runner, chromedriver
+          # needs to find Chrome in PATH. Add ~/bin to PATH with our CfT binary linked.
+          mkdir -p "$HOME/bin"
+          ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome"
+          ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome-stable"
+          echo "PATH=$HOME/bin:$PATH" >> "$GITHUB_ENV"
+          echo "Linked CfT Chrome as google-chrome in ~/bin (for chromedriver path discovery)"
+
           # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
           # Note: LD_LIBRARY_PATH in $GITHUB_ENV is not active in this step yet;
           # must pass DEPS_LIB inline here.
