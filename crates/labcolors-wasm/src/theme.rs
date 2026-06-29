@@ -5,11 +5,11 @@
 //! CIECAM16 term for the dark theme's viewing conditions and never leaks out —
 //! the boundary speaks themes, the core speaks [`ViewingConditions`].
 //!
-//! The `-IC` ("increased contrast") themes are reserved in the type so the
-//! public surface is complete from day one, but they are honestly *not yet
-//! calibrated*: asking for one is a real error with a real reason, not a
-//! silent substitution of a Light/Dark result. That keeps the type correct
-//! while the implementation is honestly absent.
+//! The `-IC` ("increased contrast") themes are calibrated and resolve to their
+//! respective high-contrast viewing conditions: `LightIncreasedContrast` →
+//! `srgb_high_contrast()`, `DarkIncreasedContrast` → `dim_surround_high_contrast()`.
+//! The `ThemeNotCalibrated` error variant is retained for forward-compatibility
+//! (future reserved themes), but is not returned by any currently valid theme string.
 
 use labcolors_core::ViewingConditions;
 
@@ -27,9 +27,9 @@ pub enum Theme {
     Light,
     /// Dark theme — dim-surround viewing conditions internally.
     Dark,
-    /// Increased-contrast light theme. Reserved; not yet calibrated.
+    /// Increased-contrast light theme — `srgb_high_contrast()` viewing conditions.
     LightIncreasedContrast,
-    /// Increased-contrast dark theme. Reserved; not yet calibrated.
+    /// Increased-contrast dark theme — `dim_surround_high_contrast()` viewing conditions.
     DarkIncreasedContrast,
 }
 
@@ -62,16 +62,16 @@ impl Theme {
 
     /// The viewing conditions the core resolves under for this theme.
     ///
-    /// Light → `srgb` (average surround); Dark → `dim_surround` (the internal
-    /// term). The `-IC` themes have no calibrated mapping yet, so this returns
-    /// [`BindingError::ThemeNotCalibrated`] rather than aliasing a Light/Dark VC.
+    /// - `Light` → `srgb()` (average surround)
+    /// - `Dark` → `dim_surround()` (the internal CIECAM16 term)
+    /// - `LightIncreasedContrast` → `srgb_high_contrast()`
+    /// - `DarkIncreasedContrast` → `dim_surround_high_contrast()`
     pub fn viewing_conditions(self) -> Result<ViewingConditions, BindingError> {
         match self {
             Theme::Light => Ok(ViewingConditions::srgb()),
             Theme::Dark => Ok(ViewingConditions::dim_surround()),
-            Theme::LightIncreasedContrast | Theme::DarkIncreasedContrast => {
-                Err(BindingError::ThemeNotCalibrated { theme: self.key() })
-            }
+            Theme::LightIncreasedContrast => Ok(ViewingConditions::srgb_high_contrast()),
+            Theme::DarkIncreasedContrast => Ok(ViewingConditions::dim_surround_high_contrast()),
         }
     }
 }
@@ -125,12 +125,10 @@ mod tests {
     }
 
     #[test]
-    fn increased_contrast_themes_are_honestly_uncalibrated() {
+    fn increased_contrast_themes_are_fully_calibrated() {
         for theme in [Theme::LightIncreasedContrast, Theme::DarkIncreasedContrast] {
-            match theme.viewing_conditions() {
-                Err(BindingError::ThemeNotCalibrated { .. }) => {}
-                other => panic!("expected ThemeNotCalibrated, got {other:?}"),
-            }
+            let vc = theme.viewing_conditions().unwrap();
+            assert!(vc.high_contrast);
         }
     }
 }

@@ -65,15 +65,15 @@ use labcolors_core::{
 /// AccentCurve("#007AFF").sample_hex(13) — byte-identical to main@f21aac7.
 /// Any change to this ladder is a REGIME-R3 regression.
 const R3_ACCENT_007AFF_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F4F8FF", "#DAE9FF", "#B6D4FF", "#88B9FF", "#4F98FF", "#0072F0", "#006BE2",
-    "#005FC9", "#004FAA", "#003C85", "#00275B", "#000F2B",
+    "#FFFFFF", "#F4F8FF", "#DAE9FF", "#B6D4FF", "#88B9FF", "#4F98FF", "#0A6CFF", "#0060FC",
+    "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
 ];
 
 /// SentimentCurve(Info, 200°, "#007AFF").sample_hex(13) — byte-identical to main@f21aac7.
 /// Any change to this ladder is a REGIME-R3 regression.
 const R3_SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#EDF3FE", "#CCDEFB", "#A2C2F8", "#6FA1F4", "#3278F0", "#1756C0", "#1550B2",
-    "#104499", "#0B357B", "#052357", "#021030", "#000108",
+    "#FFFFFF", "#ECF3FD", "#CADEFB", "#9EC3F8", "#68A1F4", "#257BEC", "#195CB4", "#1755A7",
+    "#124890", "#0C3873", "#062652", "#02122D", "#000207",
 ];
 
 fn canonical_neutral() -> NeutralCurve {

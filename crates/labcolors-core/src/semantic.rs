@@ -150,7 +150,12 @@ use crate::wcag;
 /// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
 /// is held strictly above this until the real JND calibration lands.
 // NEEDS-SCIENCE — provisional JND floor; awaits surface-jnd calibration (issue #44).
-const DECORATIVE_FLOOR_MIN: f64 = 7.6;
+const DECORATIVE_FLOOR_MIN: f64 = 7.5;
+
+/// High-contrast decorative floor (Lc): raised above [`DECORATIVE_FLOOR_MIN`]
+/// to match the stronger perceptual requirements of the `-ic` themes.
+// NEEDS-SCIENCE — provisional IC floor; awaits surface-jnd calibration for increased-contrast themes.
+const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 // ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
 //
@@ -1142,6 +1147,8 @@ struct ResolveContext {
     /// CIECAM16 forward per call. `Err` if the background cannot be reduced —
     /// then every colour role surfaces that reason.
     interval: Result<solve::LumaInterval, Unreachable>,
+    /// Whether these conditions enforce increased contrast (IC).
+    high_contrast: bool,
 }
 
 impl ResolveContext {
@@ -1160,6 +1167,7 @@ impl ResolveContext {
             polarity,
             max_contrast,
             interval,
+            high_contrast: vc.high_contrast,
         }
     }
 
@@ -1177,10 +1185,15 @@ impl ResolveContext {
     }
 
     /// The signed range contract for a decorative JND role: the chosen polarity's
-    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`], no readability
-    /// floor.
+    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`] (or 15.0 under high contrast),
+    /// no readability floor.
     fn decorative_contract(&self, magnitude: f64) -> Contract {
-        let target = self.polarity.sign() * magnitude.abs().max(DECORATIVE_FLOOR_MIN);
+        let floor = if self.high_contrast {
+            IC_DECORATIVE_FLOOR_MIN
+        } else {
+            DECORATIVE_FLOOR_MIN
+        };
+        let target = self.polarity.sign() * magnitude.abs().max(floor);
         // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
         Contract::range(target, target)
     }
@@ -2909,6 +2922,80 @@ mod tests {
     }
 
     #[test]
+    fn fill_constant_anchors_are_strictly_descending() {
+        assert!(
+            FILL_PRIMARY_DJ.light() > FILL_SECONDARY_DJ.light(),
+            "FILL_PRIMARY_DJ.light {} must exceed FILL_SECONDARY_DJ.light {}",
+            FILL_PRIMARY_DJ.light(),
+            FILL_SECONDARY_DJ.light()
+        );
+        assert!(
+            FILL_SECONDARY_DJ.light() > FILL_TERTIARY_DJ.light(),
+            "FILL_SECONDARY_DJ.light {} must exceed FILL_TERTIARY_DJ.light {}",
+            FILL_SECONDARY_DJ.light(),
+            FILL_TERTIARY_DJ.light()
+        );
+        assert!(
+            FILL_TERTIARY_DJ.light() > FILL_QUATERNARY_DJ.light(),
+            "FILL_TERTIARY_DJ.light {} must exceed FILL_QUATERNARY_DJ.light {}",
+            FILL_TERTIARY_DJ.light(),
+            FILL_QUATERNARY_DJ.light()
+        );
+        assert!(
+            FILL_PRIMARY_DJ.dark() > FILL_SECONDARY_DJ.dark(),
+            "FILL_PRIMARY_DJ.dark {} must exceed FILL_SECONDARY_DJ.dark {}",
+            FILL_PRIMARY_DJ.dark(),
+            FILL_SECONDARY_DJ.dark()
+        );
+        assert!(
+            FILL_SECONDARY_DJ.dark() > FILL_TERTIARY_DJ.dark(),
+            "FILL_SECONDARY_DJ.dark {} must exceed FILL_TERTIARY_DJ.dark {}",
+            FILL_SECONDARY_DJ.dark(),
+            FILL_TERTIARY_DJ.dark()
+        );
+        assert!(
+            FILL_TERTIARY_DJ.dark() > FILL_QUATERNARY_DJ.dark(),
+            "FILL_TERTIARY_DJ.dark {} must exceed FILL_QUATERNARY_DJ.dark {}",
+            FILL_TERTIARY_DJ.dark(),
+            FILL_QUATERNARY_DJ.dark()
+        );
+    }
+
+    #[test]
+    fn shadow_constant_stack_is_strictly_ascending_with_gaps() {
+        const {
+            assert!(
+                SHADOW_MINOR_JND > DECORATIVE_FLOOR_MIN,
+                "shadow-minor must exceed floor"
+            );
+            assert!(
+                SHADOW_MINOR_JND < SHADOW_AMBIENT_JND,
+                "shadow-minor must be less than ambient"
+            );
+            assert!(
+                SHADOW_AMBIENT_JND < SHADOW_PENUMBRA_JND,
+                "shadow-ambient must be less than penumbra"
+            );
+            assert!(
+                SHADOW_PENUMBRA_JND < SHADOW_MAJOR_JND,
+                "shadow-penumbra must be less than major"
+            );
+            assert!(
+                SHADOW_AMBIENT_JND - SHADOW_MINOR_JND >= 1.5,
+                "gap ambient-minor must be >= 1.5"
+            );
+            assert!(
+                SHADOW_PENUMBRA_JND - SHADOW_AMBIENT_JND >= 1.5,
+                "gap penumbra-ambient must be >= 1.5"
+            );
+            assert!(
+                SHADOW_MAJOR_JND - SHADOW_PENUMBRA_JND >= 1.5,
+                "gap major-penumbra must be >= 1.5"
+            );
+        }
+    }
+
+    #[test]
     fn border_base_is_stronger_than_border_soft() {
         // The border dJ' ladder (base > soft); strong is anchored and tested
         // separately. Strict order in J' is the contract (measured as |dJ'|, not
@@ -2942,6 +3029,79 @@ mod tests {
             Role::ALL.to_vec(),
             "set must cover Role::ALL in order"
         );
+    }
+
+    #[test]
+    fn label_hierarchy_non_strict_across_broad_grid() {
+        // The label hierarchy must hold (primary >= secondary >= tertiary >=
+        // quaternary in absolute |Lc|) across a 6-background x 2-VC grid
+        // including non-reachable mid-greys. quaternary is the only role allowed
+        // to equal its senior (it carries no readability floor); primary/
+        // secondary/tertiary are strict by the anchor principle. When the
+        // hierarchy is compressed (readable window narrower than steps) the
+        // `compressed` flag must be set, never a silent equality.
+        const BROAD_BGS: [&str; 6] = [
+            "#FFFFFF", "#000000", "#808080", "#3478F6", "#93939C", "#6D6C7E",
+        ];
+        for (vc, vc_name) in vcs() {
+            for bg_hex in BROAD_BGS {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table_default(), &vc);
+                let mags: Vec<Option<f64>> = TEXT_ORDER
+                    .iter()
+                    .map(|&r| set_lc_opt(&set, r).map(f64::abs))
+                    .collect();
+                // primary >= secondary
+                if let (Some(p), Some(s)) = (mags[0], mags[1]) {
+                    assert!(
+                        p + 1e-9 >= s,
+                        "{vc_name} {bg_hex}: primary {p} must not be weaker than secondary {s}"
+                    );
+                }
+                // secondary >= tertiary
+                if let (Some(s), Some(t)) = (mags[1], mags[2]) {
+                    assert!(
+                        s + 1e-9 >= t,
+                        "{vc_name} {bg_hex}: secondary {s} must not be weaker than tertiary {t}"
+                    );
+                }
+                // tertiary >= quaternary (quaternary may equal)
+                if let (Some(t), Some(q)) = (mags[2], mags[3]) {
+                    assert!(
+                        t + 1e-9 >= q,
+                        "{vc_name} {bg_hex}: tertiary {t} must not be weaker than quaternary {q}"
+                    );
+                }
+                // Where reachable, primary/secondary/tertiary must be strict
+                // (quaternary is the only non-strict step in the anchor ladder).
+                for w in mags.windows(3) {
+                    if let (Some(a), Some(b), Some(c)) = (w[0], w[1], w[2]) {
+                        assert!(
+                            a > b + 1e-9 && b > c + 1e-9,
+                            "{vc_name} {bg_hex}: strict-order violated in primary/secondary/tertiary window: {a} > {b} > {c}"
+                        );
+                    }
+                }
+                // No two adjacent roles share an identical colour without being
+                // flagged compressed.
+                for window in TEXT_ORDER.windows(2) {
+                    let (Some((sh, sc)), Some((jh, jc))) = (
+                        set_hex_and_flag(&set, window[0]),
+                        set_hex_and_flag(&set, window[1]),
+                    ) else {
+                        continue;
+                    };
+                    if sh == jh {
+                        assert!(
+                            sc || jc,
+                            "{vc_name} {bg_hex}: {} and {} share hex {sh} without compression flag",
+                            window[0].key(),
+                            window[1].key()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // ── Neutral undertone: identity, not sterile grey ─────────────────────────

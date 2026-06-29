@@ -33,6 +33,7 @@ pub enum BindingError {
 
     /// A recognised theme whose contrast table is not calibrated yet — the
     /// honest "reserved but absent" signal for the increased-contrast themes.
+    #[allow(dead_code)]
     #[error("theme '{theme}' is not yet calibrated")]
     ThemeNotCalibrated {
         /// The stable key of the reserved theme.

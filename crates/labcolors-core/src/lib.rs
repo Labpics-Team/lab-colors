@@ -1,5 +1,6 @@
 pub(crate) mod spaces;
 
+pub mod cleanliness;
 pub mod lcs;
 pub mod lpc;
 pub(crate) mod lut;
@@ -19,6 +20,10 @@ pub(crate) mod chromafast;
 #[cfg(test)]
 mod golden_tests;
 
+pub use cleanliness::{
+    confidence as cleanliness_confidence, confidence_from_hex as cleanliness_confidence_from_hex,
+    muddiness_from_hex, muddiness_from_linear_srgb, muddiness_oklch,
+};
 pub use curve::ColorCurve;
 pub use lcs::LcsColor;
 pub use semantic::{

@@ -26,6 +26,8 @@ pub struct ViewingConditions {
     pub nc: f64,
     /// RGB discounting factors.
     pub rgb_d: [f64; 3],
+    /// Whether these conditions enforce increased contrast (IC).
+    pub high_contrast: bool,
 }
 
 impl Default for ViewingConditions {
@@ -51,6 +53,13 @@ impl ViewingConditions {
         Self::build(64.0, 20.0, 1.0, 0.69, 1.0)
     }
 
+    /// Standard sRGB viewing conditions with Increased Contrast (IC).
+    pub fn srgb_high_contrast() -> Self {
+        let mut vc = Self::srgb();
+        vc.high_contrast = true;
+        vc
+    }
+
     /// Dim surround viewing conditions for dark-theme colour resolution.
     ///
     /// Same illuminant (D65) and adapting luminance as sRGB average,
@@ -62,6 +71,13 @@ impl ViewingConditions {
     pub fn dim_surround() -> Self {
         // colour-science / colorjs.io surroundMap["dim"] = [0.9, 0.59, 0.9]
         Self::build(64.0, 20.0, 0.9, 0.59, 0.9)
+    }
+
+    /// Dim surround viewing conditions with Increased Contrast (IC).
+    pub fn dim_surround_high_contrast() -> Self {
+        let mut vc = Self::dim_surround();
+        vc.high_contrast = true;
+        vc
     }
 
     /// Dark surround viewing conditions (CIECAM16 Table 1: F = 0.8, c = 0.525,
@@ -123,6 +139,7 @@ impl ViewingConditions {
             c,
             nc,
             rgb_d,
+            high_contrast: false,
         }
     }
 
@@ -204,12 +221,19 @@ impl ViewingConditions {
             c,
             nc,
             rgb_d: [d0, d1, d2],
+            high_contrast,
         } = self;
         let mut h = 0xcbf2_9ce4_8422_2325u64;
         for f in [n, aw, nbb, ncb, fl, z, c, nc, d0, d1, d2] {
             h ^= f.to_bits();
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
+        // Shift by 1 so the boolean's only possible values (0u64 / 1u64) map to
+        // distinct bit positions from the FNV accumulator's LSB, avoiding a trivial
+        // XOR cancellation when `high_contrast` is folded into the running hash.
+        const HIGH_CONTRAST_FINGERPRINT_SALT: u64 = 1;
+        h ^= (high_contrast as u64) << HIGH_CONTRAST_FINGERPRINT_SALT;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
         h
     }
 }

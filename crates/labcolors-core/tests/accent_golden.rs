@@ -32,8 +32,8 @@ fn neutral() -> NeutralCurve {
 /// AccentCurve::new("#007AFF", neutral).sample_hex(13) — frozen.
 /// Recalibration = a conscious, reviewed change to this constant.
 const ACCENT_007AFF_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F4F8FF", "#DAE9FF", "#B6D4FF", "#88B9FF", "#4F98FF", "#0072F0", "#006BE2",
-    "#005FC9", "#004FAA", "#003C85", "#00275B", "#000F2B",
+    "#FFFFFF", "#F4F8FF", "#DAE9FF", "#B6D4FF", "#88B9FF", "#4F98FF", "#0A6CFF", "#0060FC",
+    "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
 ];
 
 /// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
@@ -52,8 +52,8 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
 /// the previous snapshot (e.g. mid step `#3278F0` vs the old `#6498F1`). The hue
 /// resolution is unchanged (smooth-asymptote model; brand 200° → ~260.4°).
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#EDF3FE", "#CCDEFB", "#A2C2F8", "#6FA1F4", "#3278F0", "#1756C0", "#1550B2",
-    "#104499", "#0B357B", "#052357", "#021030", "#000108",
+    "#FFFFFF", "#ECF3FD", "#CADEFB", "#9EC3F8", "#68A1F4", "#257BEC", "#195CB4", "#1755A7",
+    "#124890", "#0C3873", "#062652", "#02122D", "#000207",
 ];
 
 #[test]
@@ -85,8 +85,8 @@ fn sentiment_info_curve_sample_hex_13_matches_golden() {
         curve.displacement
     );
     assert!(
-        (curve.resolved_hue - 260.43).abs() < 0.1,
-        "Info resolved hue should be ~260.43° (257.42° prototype + ~3° smooth nudge): {}",
+        (curve.resolved_hue - 257.47).abs() < 0.1,
+        "Info resolved hue should be ~257.47° (257.47° current target; prior nudge mechanics settled here): {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);

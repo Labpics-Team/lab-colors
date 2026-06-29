@@ -156,6 +156,20 @@ impl LabColors {
             .recheck(bg_hex, &fg_hexes, theme)
             .map_err(to_js_error)
     }
+
+    /// Calculate the muddiness score (0 to 1) of an sRGB hex colour.
+    #[wasm_bindgen(js_name = muddiness)]
+    pub fn muddiness(&self, hex: &str) -> Result<f64, JsError> {
+        labcolors_core::cleanliness::muddiness_from_hex(hex)
+            .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
+    }
+
+    /// Calculate the confidence score (0 to 0.34) of an sRGB hex colour.
+    #[wasm_bindgen(js_name = confidence)]
+    pub fn confidence(&self, hex: &str) -> Result<f64, JsError> {
+        labcolors_core::cleanliness::confidence_from_hex(hex)
+            .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
+    }
 }
 
 impl Default for LabColors {
@@ -231,4 +245,29 @@ fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
 /// that path would drop the stable code. This keeps the code in the message.
 fn to_js_error(err: BindingError) -> JsError {
     JsError::new(&format!("{}: {}", err.code(), err))
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wasm_muddiness_and_confidence() {
+        let colors = LabColors::new();
+
+        // Olive is highly muddy
+        let olive_mud = colors.muddiness("#6B6B2E").unwrap();
+        let olive_conf = colors.confidence("#6B6B2E").unwrap();
+        assert!(olive_mud > 0.80);
+        assert!((olive_mud - 0.8699).abs() < 1e-3);
+        assert!((olive_conf - 0.2945).abs() < 1e-3);
+
+        // Gray is clean
+        let gray_mud = colors.muddiness("#808080").unwrap();
+        assert!(gray_mud < 0.05);
+
+        // Invalid hex returns an error
+        assert!(colors.muddiness("not_a_hex").is_err());
+        assert!(colors.confidence("not_a_hex").is_err());
+    }
 }

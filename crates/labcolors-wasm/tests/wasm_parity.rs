@@ -170,20 +170,23 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     );
 }
 
-/// An uncalibrated theme rejects with a structured error — not a panic.
+/// An unknown theme name rejects with a structured error — not a panic.
+/// (Previously tested "light-ic" as uncalibrated; IC themes are now fully
+/// calibrated since d2c9340. This test now covers the unknown-theme path,
+/// which is the remaining rejection path for invalid theme strings.)
 #[wasm_bindgen_test]
-fn uncalibrated_theme_rejects_without_panic() {
+fn unknown_theme_rejects_without_panic() {
     let engine = LabColors::new();
     // `JsResolvedTheme` is not `Debug`, so map the Ok arm away before unwrapping
     // the error — we only care that the call rejected and why.
     let err = engine
-        .resolve_theme("#FFFFFF", "light-ic")
+        .resolve_theme("#FFFFFF", "__not_a_theme__")
         .map(|_| ())
-        .expect_err("light-ic is not calibrated");
+        .expect_err("unrecognised theme must reject");
     // The error message carries the stable code.
     let message = error_message(err);
     assert!(
-        message.contains("theme_not_calibrated"),
+        message.contains("unknown_theme"),
         "error must carry the stable code, got: {message}"
     );
 }

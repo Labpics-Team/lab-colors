@@ -19,7 +19,12 @@ env:
 jobs:
   lint:
     name: clippy + rustfmt
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    # Isolate RUSTUP_HOME/CARGO_HOME per run+job so parallel jobs on shared-HOME
+    # self-hosted runners cannot race each other's rustup/cargo directories.
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
@@ -37,7 +42,10 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -55,7 +63,10 @@ jobs:
 
   audit:
     name: cargo audit (rustsec)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -80,7 +91,10 @@ jobs:
 
   wasm:
     name: wasm build + headless test + size
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -110,8 +124,122 @@ jobs:
           npm ci
           npm run typecheck
           npm test
+      - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
+        # Self-hosted WSL runners lack Chrome and passwordless sudo.
+        # Strategy:
+        #  1. Download CfT (Chrome for Testing) — stable channel; chrome + chromedriver.
+        #     wasm-pack reads CHROME_PATH to locate the browser; CHROMEDRIVER for driver.
+        #     wasm-pack 0.13.1 ignores CHROMEDRIVER in cargo-test invocation and downloads
+        #     its own chromedriver, but LD_LIBRARY_PATH covers that binary too.
+        #  2. Extract required shared libs (.so) from Ubuntu .deb packages without sudo:
+        #     `apt-get download` fetches .deb; `dpkg --extract` unpacks without root.
+        #     Chrome/chromedriver need libnspr4, libnss3, libasound2t64, libgbm1
+        #     which are absent on the slim WSL runner image.
+        #  3. Diagnose chromedriver session creation (Chrome's stderr) before wasm-pack.
+        run: |
+          set -euo pipefail
+          # -- CfT chrome + chromedriver --
+          CfT_VERSION=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
+            | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);console.log(j.channels.Stable.version);});")
+          BASE_URL="https://storage.googleapis.com/chrome-for-testing-public/${CfT_VERSION}/linux64"
+          mkdir -p "$HOME/.chrome-for-testing"
+          curl -sSL "${BASE_URL}/chrome-linux64.zip" -o "$HOME/.chrome-for-testing/chrome-linux64.zip"
+          curl -sSL "${BASE_URL}/chromedriver-linux64.zip" -o "$HOME/.chrome-for-testing/chromedriver-linux64.zip"
+          unzip -q -o "$HOME/.chrome-for-testing/chrome-linux64.zip" -d "$HOME/.chrome-for-testing/"
+          unzip -q -o "$HOME/.chrome-for-testing/chromedriver-linux64.zip" -d "$HOME/.chrome-for-testing/"
+          CHROME_BIN="$HOME/.chrome-for-testing/chrome-linux64/chrome"
+          CHROMEDRIVER_BIN="$HOME/.chrome-for-testing/chromedriver-linux64/chromedriver"
+          chmod +x "$CHROME_BIN" "$CHROMEDRIVER_BIN"
+          echo "CHROME_PATH=$CHROME_BIN" >> "$GITHUB_ENV"
+          echo "CfT_CHROMEDRIVER=$CHROMEDRIVER_BIN" >> "$GITHUB_ENV"
+          echo "Chrome for Testing $CfT_VERSION installed"
+
+          # -- Extract Chrome shared-lib dependencies from Ubuntu .deb (no sudo needed) --
+          DEPS_DIR="$HOME/.chromedeps"
+          DEBS_DIR="$HOME/.chromedeps/debs"
+          mkdir -p "$DEBS_DIR"
+          # libnspr4/libnss3: NSS/NSPR crypto deps for Chrome and chromedriver.
+          # libasound2t64: ALSA (renamed from libasound2 in Ubuntu 24.04 noble).
+          # libgbm1: GPU buffer manager (needed by Chrome headless for DRM/render node).
+          (cd "$DEBS_DIR" && apt-get download libnspr4 libnss3 libasound2t64 libgbm1 2>&1)
+          for deb in "$DEBS_DIR"/*.deb; do
+            dpkg --extract "$deb" "$DEPS_DIR"
+          done
+          DEPS_LIB="$(find "$DEPS_DIR/usr/lib" -maxdepth 2 -type d | tr '\n' ':' | sed 's/:$//')"
+          echo "LD_LIBRARY_PATH=${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "Chrome deps: $DEPS_LIB"
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version || true
+
+          # -- Pre-seed wasm-pack chromedriver cache with our verified CfT chromedriver --
+          # wasm-pack 0.13.1 caches chromedriver at ~/.cache/.wasm-pack/chromedriver-{hash}/
+          # and SKIPS download if binary exists (checked by path existence). Our diagnostic
+          # confirmed that our CfT chromedriver works while wasm-pack's download fails.
+          # Pre-seed ALL possible hash slots so wasm-pack uses ours regardless of which
+          # Chrome version it expects. Hash bb6facf4ea9511f6 observed for 150.0.7871.24.
+          WASM_PACK_CACHE="$HOME/.cache/.wasm-pack"
+          mkdir -p "$WASM_PACK_CACHE"
+          # Seed the known hash slot first, then create a guard for any new version:
+          for hash_dir in "chromedriver-bb6facf4ea9511f6"; do
+            mkdir -p "$WASM_PACK_CACHE/$hash_dir"
+            cp "$CHROMEDRIVER_BIN" "$WASM_PACK_CACHE/$hash_dir/chromedriver"
+            chmod +x "$WASM_PACK_CACHE/$hash_dir/chromedriver"
+          done
+          echo "Pre-seeded wasm-pack chromedriver cache with CfT binary"
+
+          # -- Make Chrome discoverable by chromedriver without explicit binary path --
+          # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium
+          # When CHROME_PATH/binary is not passed by wasm-bindgen-test-runner, chromedriver
+          # needs to find Chrome in PATH. Add ~/bin to PATH with our CfT binary linked.
+          mkdir -p "$HOME/bin"
+          ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome"
+          ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome-stable"
+          # Use GITHUB_PATH (step-scoped prepend) rather than PATH in GITHUB_ENV
+          # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          echo "Linked CfT Chrome as google-chrome in ~/bin (for chromedriver path discovery)"
+
+          # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
+          # Note: LD_LIBRARY_PATH in $GITHUB_ENV is not active in this step yet;
+          # must pass DEPS_LIB inline here.
+          echo "--- chromedriver session diagnostic ---"
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --port=9515 --log-level=ALL 2>&1 &
+          CD_PID=$!
+          sleep 1
+          RESP=$(curl -s --max-time 10 -X POST http://localhost:9515/session \
+            -H "Content-Type: application/json" \
+            -d '{
+              "capabilities": {
+                "alwaysMatch": {
+                  "browserName": "chrome",
+                  "goog:chromeOptions": {
+                    "binary": "'"$CHROME_BIN"'",
+                    "args": [
+                      "--no-sandbox",
+                      "--disable-setuid-sandbox",
+                      "--disable-dev-shm-usage",
+                      "--disable-gpu",
+                      "--disable-software-rasterizer"
+                    ]
+                  }
+                }
+              }
+            }' 2>&1)
+          echo "Session response (first 300 chars):"
+          echo "$RESP" | head -c 300
+          # Clean up session if it was created
+          SESSION_ID=$(echo "$RESP" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.value&&j.value.sessionId||'');}catch(e){}});" 2>/dev/null || true)
+          if [ -n "$SESSION_ID" ]; then
+            curl -s -X DELETE "http://localhost:9515/session/$SESSION_ID" || true
+            echo "Session created+deleted successfully! Chrome works via chromedriver."
+          else
+            echo "Session creation failed — see error above"
+          fi
+          kill $CD_PID 2>/dev/null || true
+          wait $CD_PID 2>/dev/null || true
+          echo "--- end diagnostic ---"
+          true # diagnostic is informational only — never fail the install step
       - name: wasm-pack test (headless chrome)
-        # ubuntu-latest ships Chrome; the parity smoke runs against native
+        # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
         run: wasm-pack test --headless --chrome crates/labcolors-wasm
       - name: report bundle size (gzip)
