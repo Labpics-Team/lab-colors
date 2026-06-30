@@ -36,24 +36,19 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
     "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
 ];
 
-/// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
+/// SentimentCurve(Info, brand=200°, prototype "#3E87FF", neutral).sample_hex(13)
 /// — frozen.
 ///
-/// CONSCIOUS SNAPSHOT CHANGE — the **unified perceived-lightness law**. The old
-/// per-hue `target_mp` colourfulness model (each hue to a fraction of its own
-/// gamut ceiling, with a hand-tuned green cap) is replaced by ONE rule for every
-/// hue, with no per-hue caps: the four sentiments share a single **perceived
-/// (H-K) lightness `j_hk` ladder** (the neutral grey's), and each hue is placed at
-/// that perceived lightness at `CHROMA_FRACTION` (0.88) of the in-gamut maximum
-/// chroma. Equal `j_hk` ⇒ equal perceived brightness and contrast at each step
-/// (nothing out-shouts); max chroma ⇒ nothing dull. A saturated hue therefore
-/// sits at a *lower base lightness* so its H-K brightness boost lands it on the
-/// shared ladder — which is why this Info blue is deeper and more saturated than
-/// the previous snapshot (e.g. mid step `#3278F0` vs the old `#6498F1`). The hue
-/// resolution is unchanged (smooth-asymptote model; brand 200° → ~260.4°).
+/// СОЗНАТЕЛЬНАЯ ЗАМЕНА СНЭПШОТА — Zone D (грауndинг якорей в Figma CONTENTS).
+/// Якорный цвет Info обновлён с `#007AFF` (Apple HIG) на `#3E87FF` (Figma
+/// Primitives `Accent/Blue`, `Labels/Info/Primary` Light-mode, traversal 2026-06-30).
+/// Новый Oklab-оттенок: 259.89° (было: 257.42°, разница +2.47°). При brand=200°
+/// прототип сдвигается плавно-асимптотически; resolved_hue ≈ 259.96° (было
+/// ≈257.47°). Синяя рампа чуть холоднее (более к фиолетовому), что соответствует
+/// Figma-дизайн-системе. `prototype_hex` в тесте обновлён на `#3E87FF`.
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CADEFB", "#9EC3F8", "#68A1F4", "#257BEC", "#195CB4", "#1755A7",
-    "#124890", "#0C3873", "#062652", "#02122D", "#000207",
+    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BE", "#1551B0",
+    "#114598", "#0B3579", "#052456", "#021130", "#000108",
 ];
 
 #[test]
@@ -72,12 +67,12 @@ fn accent_curve_007af_sample_hex_13_matches_golden() {
 #[test]
 fn sentiment_info_curve_sample_hex_13_matches_golden() {
     let neutral = neutral();
-    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#007AFF", &neutral)
+    // prototype_hex = Figma Accent/Blue (#3E87FF), Zone D заземление 2026-06-30.
+    // Oklab-оттенок якоря: 259.89° (было 257.42° у Apple HIG #007AFF).
+    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#3E87FF", &neutral)
         .expect("Info sentiment with a far brand hue resolves");
-    // Pin the resolution under the restored smooth-asymptote model: the Info
-    // prototype is the anchor's Oklab hue (257.42°), and brand 200° (57.4° away)
-    // nudges it only slightly — the smooth displacement decays but never reaches
-    // exactly zero, so the hue settles at ~260.43° with a small (~3°) displacement.
+    // Прототип Info: 259.89°. Brand 200° (≈59.9° ниже прототипа) вызывает малое
+    // плавно-асимптотическое смещение; resolved_hue ≈ 259.96° (displacement ≈ 0.07°).
     assert!(
         curve.was_displaced && curve.displacement < 5.0,
         "a far brand should nudge Info only slightly: displaced={}, Δ={}",
@@ -85,16 +80,16 @@ fn sentiment_info_curve_sample_hex_13_matches_golden() {
         curve.displacement
     );
     assert!(
-        (curve.resolved_hue - 257.47).abs() < 0.1,
-        "Info resolved hue should be ~257.47° (257.47° current target; prior nudge mechanics settled here): {}",
+        (curve.resolved_hue - 259.96).abs() < 0.1,
+        "Info resolved hue should be ~259.96° (Figma Accent/Blue anchor; прежнее 257.47° \
+         было Apple HIG): {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);
     assert_eq!(
         got, SENTIMENT_INFO_GOLDEN,
-        "SentimentCurve(Info) ladder drifted from its golden snapshot. If this was a deliberate \
-         recalibration, update SENTIMENT_INFO_GOLDEN consciously; otherwise it is a silent \
-         value regression."
+        "SentimentCurve(Info) ladder drifted from its golden snapshot. Это сознательная \
+         замена (Zone D, Figma grounding); будущий дрейф = регрессия."
     );
 }
 
