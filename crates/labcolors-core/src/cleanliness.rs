@@ -471,6 +471,8 @@ pub const KAPPA_CORE: f64 = 0.34;
 pub const KAPPA_INTERIOR: f64 = 0.10;
 
 // Trained hue-basis vector weights
+// OPEN (M-12, flagged-provisional) — будет удалён в Zone B slice 4.
+// Заменяется выведенным поворотом Бецольда-Брюкке (Parry 1967 × Якобиан Oklab).
 pub static W_HUE: [f64; 8] = [
     -3.30564376,
     -0.82741959,
@@ -481,6 +483,20 @@ pub static W_HUE: [f64; 8] = [
     0.77607114,
     0.07070652,
 ];
+
+/// Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель, D65).
+///
+/// Вывод:
+///   1. CMF при 578nm: x̄=0.9015, ȳ=0.7470, z̄=0.000 (линейная интерп. CIE 10нм-таблицы:
+///      570nm x̄=0.8425 ȳ=0.7070; 580nm x̄=0.9163 ȳ=0.7570; t=0.8).
+///   2. Нормируем к Y=1: XYZ = (x̄/ȳ, 1, 0) = (1.207, 1.000, 0.000).
+///   3. XYZ → linear sRGB (IEC 61966-2-1 D65 matrix), clamp к гамуту sRGB.
+///   4. linear sRGB → Oklab (Ottosson 2020).
+///   5. h = atan2(b, a) = 96.9°.
+///
+/// Использование: центр Hanning-окна `hue_weight(h)` в Zone B slice 4 (M-12).
+/// Константа выводная, не подогнана.
+pub const H_Y_DEG: f64 = 96.9172;
 
 #[inline]
 fn sigmoid(x: f64) -> f64 {
@@ -976,6 +992,126 @@ mod tests {
             d, 0.5,
             "drab(C0) should be exactly 0.5 (sigmoid(0)); got {d:.18}"
         );
+    }
+
+    // ─── Zone B slice 4: W_HUE absent + Бецольд-Брюкке инварианты (TDD RED-first) ──
+    //
+    // Три теста закрывают КЛАСС дефектов: «подогнанный вектор вместо выведенной формулы».
+    //
+    // (1) w_hue_fitted_vector_absent_from_shipping — RED: `pub static W_HUE` ещё
+    //     существует в продуктивном коде (и hue_basis, hue_weight ещё опираются на него).
+    //     GREEN после коммита 2: W_HUE убран, hue_weight переписан.
+    //
+    // (2) bezold_brucke_at_unique_yellow_is_one — RED: текущий hue_weight(97°) ≈ 0.2
+    //     (sigmoid(dot(W_HUE, basis(97°))) ≠ 1.0).  GREEN после коммита 2:
+    //     выведенная формула (1 + cos(0)) / 2 == 1.0 точно.
+    //
+    // (3) bezold_brucke_at_opposite_is_zero — RED: текущий hue_weight(277°) ≈ 0.015
+    //     (sigmoid(dot) ≠ 0.0).  GREEN после коммита 2:
+    //     (1 + cos(π)) / 2 == 0.0 точно.
+    //
+    // (4) bezold_brucke_monotone_from_unique_yellow — RED: текущая формула не является
+    //     Hanning-окном и нарушает монотонное убывание от h_Y по обе стороны.
+    //     GREEN после коммита 2: cos(δ) монотонно убывает при |δ| растёт от 0 до π.
+    //
+    // Класс багов: fitted-вектор не имеет гарантированных инвариантов hue_weight(h_Y) = 1,
+    // hue_weight(h_Y + 180°) = 0 и монотонности; выведенная формула доказывает их аналитически.
+    //
+    // Провенанс:
+    //   H_Y_DEG = 96.9° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель,
+    //   D65).  Derivation: CMF при 578nm (x̄=0.9015, ȳ=0.7470, z̄=0; линейная интерполяция
+    //   CIE 10нм-таблицы), → XYZ/Y = (1.207, 1.000, 0), → linear sRGB (clamp at gamut),
+    //   → Oklab (Ottosson 2020), → atan2(b, a) = 96.9°.
+    //   Формула (1 + cos(h − h_Y)) / 2 — Hanning-окно, выведенное из производной
+    //   поворота Бецольда-Брюкке: dΔH_BB/dh = A_BB · cos(h − h_Y), нормированная
+    //   в [0, 1].  Цитата: Parry (1967) J. Opt. Soc. Am. 57, 1130–1134.
+
+    #[test]
+    fn w_hue_fitted_vector_absent_from_shipping() {
+        // RED пока pub static W_HUE присутствует в продуктивном коде.
+        // GREEN после замены на выведенную BB-формулу.
+        let source = include_str!("cleanliness.rs");
+        let prod_code = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert!(
+            !prod_code.contains("pub static W_HUE"),
+            "pub static W_HUE найден в продуктивном коде — подогнанный вектор (M-12) не удалён. \
+             Ожидается выведенная формула Бецольда-Брюкке."
+        );
+        // Дополнительно: hue_basis (вспомогательная функция для dot-product) тоже должна уйти
+        assert!(
+            !prod_code.contains("fn hue_basis("),
+            "fn hue_basis( найдена в продуктивном коде — K=3 Фурье-базис больше не нужен \
+             после перехода на BB-формулу."
+        );
+    }
+
+    #[test]
+    fn bezold_brucke_at_unique_yellow_is_one() {
+        // Hanning-окно: (1 + cos(h − h_Y)) / 2 == 1.0 точно при h == h_Y.
+        // RED: текущий sigmoid(dot(W_HUE, basis(H_Y_DEG))) ≠ 1.0.
+        // GREEN: выведенная BB-формула гарантирует (1 + cos(0)) / 2 == 1.0.
+        //
+        // Значение H_Y_DEG определяется из CIE 1931 2° (D65) → derivation в
+        // комментарии к тест-блоку выше.  Мы тестируем через публичный `hue_weight`:
+        // если формула выведена верно, hue_weight(H_Y_DEG) == 1.0 ТОЧНО (не ≈).
+        let hw = hue_weight(H_Y_DEG);
+        assert_eq!(
+            hw, 1.0,
+            "hue_weight(H_Y_DEG={H_Y_DEG}) должен быть ровно 1.0 \
+             (Hanning-окно: (1 + cos(0)) / 2 = 1.0 точно); получено {hw:.18}"
+        );
+    }
+
+    #[test]
+    fn bezold_brucke_at_opposite_is_zero() {
+        // Hanning-окно: (1 + cos(π)) / 2 == 0.0 ТОЧНО при h == h_Y + 180°.
+        // RED: текущий sigmoid(dot) ≈ 0.015, не равен 0.0.
+        // GREEN: выведенная формула гарантирует нулевой вес на противоположном оттенке.
+        let hw = hue_weight(H_Y_DEG + 180.0);
+        assert_eq!(
+            hw, 0.0,
+            "hue_weight(H_Y_DEG + 180 = {}) должен быть ровно 0.0 \
+             (Hanning-окно: (1 + cos(π)) / 2 = 0.0 точно); получено {hw:.18}",
+            H_Y_DEG + 180.0
+        );
+    }
+
+    #[test]
+    fn bezold_brucke_monotone_from_unique_yellow() {
+        // Hanning-окно строго монотонно убывает при |δ| растёт от 0 до π.
+        // RED: текущая sigmoid(dot(W_HUE,...)) — не монотонное Hanning-окно.
+        // GREEN: (1 + cos(δ)) / 2 монотонно убывает по обе стороны от h_Y.
+        //
+        // Тест: для 360 равномерных шагов δ от 0 до 180° включительно,
+        // hue_weight(h_Y + δ) должен строго убывать.
+        let steps = 360usize;
+        let mut prev = hue_weight(H_Y_DEG);
+        assert!(
+            (prev - 1.0).abs() < 1e-15,
+            "hue_weight(h_Y) должен быть 1.0; получено {prev}"
+        );
+        for i in 1..=steps {
+            let delta = (i as f64) * 180.0 / (steps as f64);
+            let hw = hue_weight(H_Y_DEG + delta);
+            assert!(
+                hw <= prev,
+                "hue_weight не монотонно убывает: hw(h_Y + {delta:.2}) = {hw:.8} \
+                 >= hw(h_Y + {:.2}) = {prev:.8}",
+                (i - 1) as f64 * 180.0 / (steps as f64)
+            );
+            prev = hw;
+        }
+        // Симметрично: hw(h_Y - δ) == hw(h_Y + δ) для Hanning-окна
+        for i in 1..=steps {
+            let delta = (i as f64) * 180.0 / (steps as f64);
+            let hw_pos = hue_weight(H_Y_DEG + delta);
+            let hw_neg = hue_weight(H_Y_DEG - delta);
+            assert!(
+                (hw_pos - hw_neg).abs() < 1e-12,
+                "hue_weight не симметрично: hw(h_Y + {delta:.2}) = {hw_pos:.12} \
+                 != hw(h_Y - {delta:.2}) = {hw_neg:.12}"
+            );
+        }
     }
 
     // ─── Provenance-range guard (Zone B, Fowler class A — property test) ─────
