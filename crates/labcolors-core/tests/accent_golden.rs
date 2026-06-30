@@ -36,24 +36,25 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
     "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
 ];
 
-/// SentimentCurve(Info, brand=200°, prototype "#007AFF", neutral).sample_hex(13)
+/// SentimentCurve(Info, brand=200°, prototype "#3E87FF", neutral).sample_hex(13)
 /// — frozen.
 ///
-/// CONSCIOUS SNAPSHOT CHANGE — the **unified perceived-lightness law**. The old
-/// per-hue `target_mp` colourfulness model (each hue to a fraction of its own
-/// gamut ceiling, with a hand-tuned green cap) is replaced by ONE rule for every
-/// hue, with no per-hue caps: the four sentiments share a single **perceived
-/// (H-K) lightness `j_hk` ladder** (the neutral grey's), and each hue is placed at
-/// that perceived lightness at `CHROMA_FRACTION` (0.88) of the in-gamut maximum
-/// chroma. Equal `j_hk` ⇒ equal perceived brightness and contrast at each step
-/// (nothing out-shouts); max chroma ⇒ nothing dull. A saturated hue therefore
-/// sits at a *lower base lightness* so its H-K brightness boost lands it on the
-/// shared ladder — which is why this Info blue is deeper and more saturated than
-/// the previous snapshot (e.g. mid step `#3278F0` vs the old `#6498F1`). The hue
-/// resolution is unchanged (smooth-asymptote model; brand 200° → ~260.4°).
+/// CONSCIOUS SNAPSHOT CHANGE (Zone D, 2026-06-30) — anchor hex updated from
+/// `#007AFF` (Apple HIG / `Accent/Brand`) to `#3E87FF` (`Accent/Blue`) as
+/// confirmed by Figma CONTENTS traversal (Lab UI v.1, collection `4.1 Primitives`,
+/// Light-mode mode `7644:0`). The semantic collection maps Info to `Accent/Blue`,
+/// not to `Accent/Brand` (which is the brand/primary colour, a separate role).
+///
+/// With the new anchor (engine Oklab h≈259.9°) and brand=200°, the
+/// smooth-asymptote resolver nudges the prototype only slightly (≈0.07°
+/// displacement) — the prototype sits ~60° from the brand, which is far enough
+/// for the displacement to be negligible. The resulting ladder is marginally
+/// different from the prior snapshot: at mid step ~`#2F78F0` vs prior `#257BEC`,
+/// reflecting the small hue shift between `#3E87FF` (h≈259.9°) and `#007AFF`
+/// (h≈257.5° in the engine).
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CADEFB", "#9EC3F8", "#68A1F4", "#257BEC", "#195CB4", "#1755A7",
-    "#124890", "#0C3873", "#062652", "#02122D", "#000207",
+    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BE", "#1551B0",
+    "#114598", "#0B3579", "#052456", "#021130", "#000108",
 ];
 
 #[test]
@@ -72,21 +73,21 @@ fn accent_curve_007af_sample_hex_13_matches_golden() {
 #[test]
 fn sentiment_info_curve_sample_hex_13_matches_golden() {
     let neutral = neutral();
-    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#007AFF", &neutral)
+    // Prototype hex updated to Figma CONTENTS anchor (Accent/Blue = #3E87FF,
+    // confirmed via collection 4.1 Primitives Light-mode traversal 2026-06-30).
+    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#3E87FF", &neutral)
         .expect("Info sentiment with a far brand hue resolves");
-    // Pin the resolution under the restored smooth-asymptote model: the Info
-    // prototype is the anchor's Oklab hue (257.42°), and brand 200° (57.4° away)
-    // nudges it only slightly — the smooth displacement decays but never reaches
-    // exactly zero, so the hue settles at ~260.43° with a small (~3°) displacement.
+    // Pin the resolution: Info prototype engine h≈259.9°, brand 200° (≈60° away)
+    // nudges it only slightly — smooth displacement decays to near-zero.
     assert!(
         curve.was_displaced && curve.displacement < 5.0,
-        "a far brand should nudge Info only slightly: displaced={}, Δ={}",
+        "a far brand should nudge Info only slightly: displaced={}, delta={}",
         curve.was_displaced,
         curve.displacement
     );
     assert!(
-        (curve.resolved_hue - 257.47).abs() < 0.1,
-        "Info resolved hue should be ~257.47° (257.47° current target; prior nudge mechanics settled here): {}",
+        (curve.resolved_hue - 259.96).abs() < 0.1,
+        "Info resolved hue should be ~259.96° (Figma Accent/Blue anchor, engine Oklab): {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);

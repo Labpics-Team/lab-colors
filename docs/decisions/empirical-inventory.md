@@ -75,3 +75,40 @@ Science-vs-fit boundary: the **structural form** (warm gate b=C·sin h, neutral 
 | M-12 | `W_HUE[8]` | see code | `cleanliness.rs` | OPEN (flagged-provisional) | Fourier hue-basis dot-product weights (K=3 cosine/sine basis + constant + CEIL_N). Fitted via logistic regression on v3 train split to encode the band-limited hue dependence of dirtiness (peaking in the warm-yellow/olive pocket). Structural basis form (Fourier, K=3) chosen to avoid overfitting; weights are pure fit outputs. Resolving study: drab L-tilt grayness magnitude-estimation (Zone C). |
 | M-13 | `CUSP_L_TABLE[361]` | see code | `cleanliness.rs` | cited-and-kept | Oklab cusp lightness per integer hue degree (0–360). Derived from the sRGB gamut geometry (kept as-is per paradigm North, never refit): for each hue angle h the cusp L is the Oklab L of the maximum-chroma sRGB-boundary point at that hue. This is a deterministic geometric quantity (no fitting). Reproduced via the Oklab gamut-intersection algorithm (find_cusp in the Björn Ottosson reference implementation). Bound: values lie in [0.45, 0.97] as per full sRGB gamut sweep. |
 | M-14 | `CEIL_N_TABLE[361]` | see code | `cleanliness.rs` | DECLARED-CALIBRATION | Normalised hue-ceiling term used as the second Fourier basis coefficient (CEIL_N_TABLE[h] = basis[1]). Fitted from v3 data to capture non-sinusoidal hue variation in the muddiness ceiling; not derivable from first principles. Values span approximately [−1.32, 1.84] reflecting the asymmetric hue response of the warm pocket. |
+
+## Sentiment anchor colours — `sentiment.rs` (Zone D, 2026-06-30)
+
+Anchor hex values for the four sentiment categories confirmed against Figma CONTENTS (Lab UI v.1, collection
+`4.1 Primitives`, Light-mode mode `7644:0`, traversal 2026-06-30). These are the SSOT for anchor-derived
+prototype hues; the hex values are data grounding (not fitting), and are locked by the test
+`anchor_hex_matches_figma_contents_light_mode` in `sentiment.rs`.
+
+| Sentiment | Figma variable    | Hex      | Engine Oklab h° | Prior value   | Change reason |
+|-----------|-------------------|----------|-----------------|---------------|---------------|
+| Danger    | `Accent/Red`      | `#FF3B30` | 28.659°        | `#FF3B30`     | Confirmed, unchanged |
+| Warning   | `Accent/Orange`   | `#FFA100` | 68.607°        | `#FF9500` (Apple HIG iOS light) | Figma CONTENTS SSOT |
+| Success   | `Accent/Green`    | `#34C759` | 147.444°       | `#34C759`     | Confirmed, unchanged |
+| Info      | `Accent/Blue`     | `#3E87FF` | 259.892°       | `#007AFF` (Apple HIG / Accent/Brand) | Figma CONTENTS SSOT; Info maps to Accent/Blue, not Brand |
+
+**Note on engine Oklab h°:** the engine matrix `LMS_TO_OKLAB` in `spaces/oklab.rs` has a slightly
+different b-row than the reference Ottosson-2020 publication, producing hue angles that differ from
+external Oklab implementations (e.g. `#FF3B30` is 15.4° in CSS Color 4 Oklab but 28.7° in the engine).
+All engine values above are from the Rust pipeline, not from external tools.
+
+## S_PERC_MIN — status note (Zone D, 2026-06-30)
+
+`S_PERC_MIN = 0.071_157_9` is excluded from the GATE-2 table by `NUMERIC_METHOD_ALLOWLIST` (treated
+as a standard). Status: **OPEN — observer-fit, flagged-provisional**.
+
+The previous comment in `sentiment.rs` claimed a derivation via `C_rep = 0.2049` from the four anchor
+chromas, yielding `2 × 0.2049 × sin(10°) ≈ 0.0712`. This derivation does not reproduce: the actual
+Oklab chromas of the four anchors sum to `C_rep ≈ 0.150–0.157`, giving `2 × 0.157 × sin(10°) ≈ 0.0545`,
+not 0.0712. The fabricated provenance has been corrected; the value is now declared as an eyeball
+calibration (#55) awaiting the named resolving study.
+
+Resolving study: MacAdam (1942) colour-discrimination ellipses / Witzel & Gegenfurtner (2013, J. Vis.)
+— minimum-distinguishable chord distance in the Oklab a/b plane at representative chroma.
+
+Figma CONTENTS minimum hue separation (Danger↔Warning = 36.76° at C_rep ≈ 0.150) gives a chord of
+≈ 0.0948 — larger than 0.0712, confirming the current value is conservative relative to the design
+system's own colour placement, but does not constitute a perceptual JND measurement.

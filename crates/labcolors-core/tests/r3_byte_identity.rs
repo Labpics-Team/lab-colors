@@ -69,11 +69,18 @@ const R3_ACCENT_007AFF_GOLDEN: [&str; 13] = [
     "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
 ];
 
-/// SentimentCurve(Info, 200°, "#007AFF").sample_hex(13) — byte-identical to main@f21aac7.
-/// Any change to this ladder is a REGIME-R3 regression.
+/// SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) — byte-identical to
+/// main@91539db post Zone-D anchor update.
+///
+/// CONSCIOUS GOLDEN UPDATE (Zone D, 2026-06-30): prototype hex updated from
+/// `#007AFF` (Apple HIG / Accent/Brand) to `#3E87FF` (Accent/Blue), confirmed
+/// via Figma CONTENTS traversal (Lab UI v.1, collection `4.1 Primitives`,
+/// Light-mode `7644:0`). See `anchor_hex_matches_figma_contents_light_mode` test.
+///
+/// Any subsequent change to this ladder is a REGIME-R3 regression.
 const R3_SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CADEFB", "#9EC3F8", "#68A1F4", "#257BEC", "#195CB4", "#1755A7",
-    "#124890", "#0C3873", "#062652", "#02122D", "#000207",
+    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BE", "#1551B0",
+    "#114598", "#0B3579", "#052456", "#021130", "#000108",
 ];
 
 fn canonical_neutral() -> NeutralCurve {
@@ -103,22 +110,23 @@ fn r3_sample_hex_13_accent_007aff_byte_identity() {
     );
 }
 
-/// R3: SentimentCurve(Info, 200°, "#007AFF").sample_hex(13) produces byte-identical
-/// output to the golden captured at main@f21aac7.
+/// R3: SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) produces byte-identical
+/// output to the golden post Zone-D anchor update.
 ///
 /// This test is GREEN at birth (characterization lock). It bites on mutation:
 /// change any entry in `R3_SENTIMENT_INFO_GOLDEN` → `assert_eq!` fails.
 #[test]
 fn r3_sample_hex_13_sentiment_info_byte_identity() {
     let neutral = canonical_neutral();
-    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#007AFF", &neutral)
-        .expect("R3: Info sentiment with far brand hue resolves at main@f21aac7");
+    // Prototype hex updated to Figma CONTENTS anchor (Accent/Blue = #3E87FF).
+    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#3E87FF", &neutral)
+        .expect("R3: Info sentiment with far brand hue resolves");
     let got = curve.sample_hex(13);
     assert_eq!(
         got.as_slice(),
         R3_SENTIMENT_INFO_GOLDEN.as_slice(),
-        "R3 REGRESSION — SentimentCurve(Info, 200°, '#007AFF') sample_hex(13) is NOT \
-         byte-identical to the golden captured at main@f21aac7. Check for const RHS \
+        "R3 REGRESSION — SentimentCurve(Info, 200°, '#3E87FF') sample_hex(13) is NOT \
+         byte-identical to the golden (Zone D, 2026-06-30). Check for const RHS \
          drift caused by a marker commit or reformatting of a perceptual coefficient."
     );
 }
