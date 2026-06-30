@@ -598,14 +598,54 @@ mod tests {
 
     #[test]
     fn prototype_is_the_anchor_oklab_hue() {
-        // The prototype is read off the anchor colour's Oklab hue, never typed — so
-        // it cannot drift between hue models (the bug that pulled Danger to pink).
+        // Прототип читается с Oklab-оттенка якорного цвета, а не вводится вручную —
+        // это исключает дрейф между цветовыми моделями (баг, из-за которого
+        // Danger уходил в розовый).
         for s in Sentiment::ALL {
             let want = oklab_hue_of(s.anchor_hex());
             assert!(
                 (s.prototype_hue() - want).abs() < 1e-9,
                 "{s:?}: prototype {} != anchor Oklab hue {want}",
                 s.prototype_hue()
+            );
+        }
+    }
+
+    /// Якорные цвета заземлены в Figma CONTENTS (коллекция «🔵 4.1 Primitives»,
+    /// Light-mode, обход узлов через figma-console, дата: 2026-06-30).
+    ///
+    /// Доказательство из Figma:
+    ///   Labels/Danger/Primary  → Accent/Red   = #FF3B30  (Oklab h=28.66°)
+    ///   Labels/Warning/Primary → Accent/Orange = #FFA100  (Oklab h=68.61°)
+    ///   Labels/Success/Primary → Accent/Green  = #34C759  (Oklab h=147.44°)
+    ///   Labels/Info/Primary    → Accent/Blue   = #3E87FF  (Oklab h=259.89°)
+    ///
+    /// Тест зафиксирует любое отклонение якорного Oklab-оттенка от Figma-примитивов.
+    /// Используемый допуск < 0.001° — меньше разрешения 8-бит квантования.
+    #[test]
+    fn anchor_hues_match_figma_primitives_light_mode() {
+        // Figma CONTENTS: коллекция «4.1 Primitives», Light-mode, обход переменных.
+        // Значения верифицированы через figma-console figma_execute (2026-06-30).
+        let expected: &[(&str, f64)] = &[
+            // (figma_hex,        expected_oklab_hue_deg)
+            ("#FF3B30",  28.6592),  // Accent/Red   → Danger
+            ("#FFA100",  68.6070),  // Accent/Orange → Warning
+            ("#34C759", 147.4439),  // Accent/Green  → Success
+            ("#3E87FF", 259.8918),  // Accent/Blue   → Info
+        ];
+        let sentiments = [
+            Sentiment::Danger,
+            Sentiment::Warning,
+            Sentiment::Success,
+            Sentiment::Info,
+        ];
+        for ((figma_hex, want_hue), s) in expected.iter().zip(sentiments) {
+            let actual = s.prototype_hue();
+            // prototype_hue() ДОЛЖЕН совпадать с Oklab-оттенком Figma-примитива
+            assert!(
+                (actual - want_hue).abs() < 0.001,
+                "{s:?}: prototype_hue() = {actual:.4}° != Figma-оттенок {want_hue}° \
+                 (якорный hex Figma: {figma_hex})"
             );
         }
     }
