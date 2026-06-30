@@ -25,7 +25,7 @@ use crate::spaces::vc::ViewingConditions;
 /// ```
 ///
 /// где:
-/// - **C_rep_figma = 0.1978** — среднегеометрическое Oklab-хромы четырёх
+/// - **C_rep_figma = 0.1978** — среднеарифметическое Oklab-хромы четырёх
 ///   якорей, взятых из Figma CONTENTS (коллекция «🔵 4.1 Primitives»,
 ///   Light-mode, обход переменных через figma-console, 2026-06-30):
 ///
@@ -648,6 +648,12 @@ mod tests {
             Sentiment::Info,
         ];
         for ((figma_hex, want_hue), s) in expected.iter().zip(sentiments) {
+            // anchor_hex() ДОЛЖЕН совпадать точно с Figma-примитивом
+            assert_eq!(
+                s.anchor_hex(),
+                *figma_hex,
+                "{s:?}: anchor_hex() дрейфанул от заземлённого Figma-примитива"
+            );
             let actual = s.prototype_hue();
             // prototype_hue() ДОЛЖЕН совпадать с Oklab-оттенком Figma-примитива
             assert!(
@@ -931,8 +937,8 @@ mod tests {
     /// (коллекция «🔵 4.1 Primitives», Light-mode, 2026-06-30).
     /// Порог 20° — нижний предел категориального восприятия оттенка по
     /// Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1.
-    /// Допуск 0.002 (< 1 JND ≈ 0.02): деривация подтверждает совместимость
-    /// и верифицирует деривационную идентичность.
+    /// Допуск 1e-4: хромы зафиксированы до 4 знаков, итоговая погрешность
+    /// деривации существенно меньше — допуск исключает реальный дрейф константы.
     #[test]
     fn s_perc_min_derivation_identity() {
         // Oklab C якорей из Figma CONTENTS, 2026-06-30:
@@ -942,9 +948,9 @@ mod tests {
         // Источник порога 20°: Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1
         let derived = 2.0 * c_rep * (10.0_f64.to_radians()).sin();
         assert!(
-            (S_PERC_MIN - derived).abs() < 0.002,
+            (S_PERC_MIN - derived).abs() < 1e-4,
             "S_PERC_MIN = {S_PERC_MIN:.7} != выведено {derived:.7} \
-             (разница {:.7} >= 0.002; значение должно совпадать с Figma-деривацией)",
+             (разница {:.7} >= 1e-4; значение должно совпадать с Figma-деривацией)",
             (S_PERC_MIN - derived).abs()
         );
     }
