@@ -80,6 +80,31 @@ impl ViewingConditions {
         vc
     }
 
+    /// Average surround (light theme) с произвольной яркостью фона `y_b_pct`.
+    ///
+    /// Аналогичен [`srgb`], но параметр `Yb` (яркость фона, % от белого) задаётся явно.
+    /// Значение по умолчанию для [`srgb`] равно 20 % (нейтральный серый, IEC 61966-2-1).
+    /// Диапазон: [0.5, 100.0]; значения за пределами диапазона ограничиваются (clamp),
+    /// чтобы избежать вырожденных условий наблюдения (Yb = 0 → n = 0 → вырождение).
+    ///
+    /// Используется в surround-aware оценке дефектов (`cleanliness`), где фон цвета
+    /// известен из дизайн-контекста — источник: CIECAM16 (Li et al. 2017).
+    pub fn srgb_with_yb(y_b_pct: f64) -> Self {
+        // average surround: F=1.0, c=0.69, N_c=1.0 — CIECAM02/16 Table 1
+        Self::build(64.0, y_b_pct.clamp(0.5, 100.0), 1.0, 0.69, 1.0)
+    }
+
+    /// Dim surround (dark theme) с произвольной яркостью фона `y_b_pct`.
+    ///
+    /// Аналогичен [`dim_surround`], но параметр `Yb` задаётся явно.
+    /// Используется в surround-aware оценке дефектов.
+    ///
+    /// Значение по умолчанию для [`dim_surround`] равно 20 %; диапазон ограничен [0.5, 100.0].
+    pub fn dim_surround_with_yb(y_b_pct: f64) -> Self {
+        // dim surround: F=0.9, c=0.59, N_c=0.9 — CIECAM02/16 Table 1
+        Self::build(64.0, y_b_pct.clamp(0.5, 100.0), 0.9, 0.59, 0.9)
+    }
+
     /// Dark surround viewing conditions (CIECAM16 Table 1: F = 0.8, c = 0.525,
     /// N_c = 0.8). Not a precompiled LUT target — used in tests to exercise the
     /// grey-axis LUT's fall-back-to-bisection path for an unsupported VC.
