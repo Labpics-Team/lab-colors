@@ -21,8 +21,9 @@ pub(crate) mod chromafast;
 mod golden_tests;
 
 pub use cleanliness::{
-    confidence as cleanliness_confidence, confidence_from_hex as cleanliness_confidence_from_hex,
-    drab, muddiness_from_hex, muddiness_from_linear_srgb, muddiness_oklch, n_pure,
+    DefectContext, Theme, confidence as cleanliness_confidence,
+    confidence_from_hex as cleanliness_confidence_from_hex, drab, drab_in_context,
+    muddiness_from_hex, muddiness_from_linear_srgb, muddiness_in_context, muddiness_oklch, n_pure,
 };
 pub use curve::ColorCurve;
 pub use lcs::LcsColor;

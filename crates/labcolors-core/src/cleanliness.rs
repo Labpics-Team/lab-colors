@@ -360,6 +360,148 @@ pub fn drab(c: f64) -> f64 {
     1.0 - n_pure(c)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Surround-aware оценка дефектов (Zone G)
+//
+// Тема снаружи (light / dark / light-ic / dark-ic) маппируется на ViewingConditions
+// по таблице CIECAM16 (Li et al. 2017, Table 1):
+//   light      → average surround: F=1.0, c=0.69, Nc=1.0
+//   dark       → dim surround:     F=0.9, c=0.59, Nc=0.9
+//   light-ic   → average + increased contrast flag
+//   dark-ic    → dim + increased contrast flag
+//
+// Фон bg_hex даёт яркость Yb (Y-компонент фона в % от D65-белого), которая
+// подставляется в ViewingConditions::srgb_with_yb / dim_surround_with_yb.
+// Это единственный канал влияния фона на дефект — через CAM16 J (apparent lightness)
+// цвета под данным Yb+surround.
+//
+// mud и drab считаются на (l_app=J/100, C_oklab, h_oklab):
+//   - C_oklab, h_oklab — Oklab-координаты исходного цвета (не меняются от surround)
+//   - l_app = J/100 — CAM16 apparent lightness под фоном+темой, нормирован в [0,1]
+//
+// Это заменяет Oklab L в depth_term(l, h) (определяет положение цвета под cusp),
+// делая оценку surround-aware: цвет на тёмном фоне «воспринимается светлее»,
+// лежит ближе к cusp-L и получает меньший depth_term → меньшую грязь.
+//
+// Ноль новых параметров: все VC-параметры — таблица CIECAM16 (Li et al. 2017).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Тема просмотра — определяет условия окружения (surround) для оценки дефектов.
+///
+/// Соответствие CIECAM16 (Li et al. 2017, Table 1):
+/// - `Light` → average surround (F=1.0, c=0.69, Nc=1.0)
+/// - `Dark`  → dim surround    (F=0.9, c=0.59, Nc=0.9)
+/// - `LightIc` / `DarkIc` — то же, но с флагом повышенного контраста
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Theme {
+    /// Светлая тема: average surround (CIECAM16 Table 1).
+    Light,
+    /// Тёмная тема: dim surround (CIECAM16 Table 1).
+    Dark,
+    /// Светлая тема с повышенным контрастом (IC).
+    LightIc,
+    /// Тёмная тема с повышенным контрастом (IC).
+    DarkIc,
+}
+
+/// Контекст просмотра для surround-aware оценки дефектов.
+///
+/// Сочетает фон (hex-строка, задаёт яркость Yb) и тему (определяет surround).
+/// Передаётся в `muddiness_in_context` / `drab_in_context`.
+#[derive(Debug, Clone, Copy)]
+pub struct DefectContext<'a> {
+    /// Фоновый цвет в hex (`#RRGGBB`). Задаёт яркость фона Yb для CIECAM16.
+    pub bg_hex: &'a str,
+    /// Тема просмотра.
+    pub theme: Theme,
+}
+
+/// Y-компонент (относительная яркость) hex-цвета в % от D65-белого.
+///
+/// Формула: Y = 0.2126 R_lin + 0.7152 G_lin + 0.0722 B_lin (IEC 61966-2-1 D65),
+/// затем умножаем на 100 для CIECAM16 (где Yb задаётся в %).
+///
+/// Диапазон результата: [0.0, 100.0].
+fn y_pct_from_hex(hex: &str) -> Result<f64, String> {
+    let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
+    // Строка srgb_from_hex возвращает ЛИНЕЙНЫЙ sRGB (без гаммы).
+    // Y (IEC 61966-2-1, D65): Y = 0.2126 R + 0.7152 G + 0.0722 B
+    let y = 0.212_639_005_871_510_27 * rgb[0]
+        + 0.715_168_678_767_756 * rgb[1]
+        + 0.072_192_315_360_733_71 * rgb[2];
+    Ok(y * 100.0)
+}
+
+/// Viewing conditions для заданной темы и яркости фона Yb (в %).
+///
+/// Параметры surround — CIECAM16 Table 1 (Li et al. 2017). Ноль новых констант.
+fn vc_for_context(theme: Theme, y_b_pct: f64) -> crate::spaces::vc::ViewingConditions {
+    match theme {
+        Theme::Light => crate::spaces::vc::ViewingConditions::srgb_with_yb(y_b_pct),
+        Theme::Dark => crate::spaces::vc::ViewingConditions::dim_surround_with_yb(y_b_pct),
+        Theme::LightIc => {
+            let mut vc = crate::spaces::vc::ViewingConditions::srgb_with_yb(y_b_pct);
+            vc.high_contrast = true;
+            vc
+        }
+        Theme::DarkIc => {
+            let mut vc = crate::spaces::vc::ViewingConditions::dim_surround_with_yb(y_b_pct);
+            vc.high_contrast = true;
+            vc
+        }
+    }
+}
+
+/// Surround-aware оценка грязи цвета в заданном контексте просмотра.
+///
+/// # Алгоритм
+///
+/// 1. Из `hex` получаем Oklab `(L, C, h)` для геометрии (C, h не зависят от surround).
+/// 2. Из `ctx.bg_hex` получаем Yb — яркость фона в % от D65-белого.
+/// 3. Строим `ViewingConditions` для темы `ctx.theme` с данным Yb (CIECAM16 Table 1).
+/// 4. Из `hex` → XYZ → CAM16 `J` (apparent lightness под фоном+temой).
+/// 5. `l_app = J / 100` — нормированный apparent lightness ∈ [0, 1].
+/// 6. mud = `raw_chromatic(l_app, C_oklab, h_oklab)` — формула без изменений,
+///    но `l_app` учитывает surround и фон вместо Oklab L.
+///
+/// # Провенанс
+///
+/// VC-параметры: CIECAM16, Li et al. 2017, DOI 10.1002/col.22131, Table 1.
+/// Формула mud — без изменений (Zone B slices 3+4; H_Y_DEG, B0, BW цитированы).
+pub fn muddiness_in_context(hex: &str, ctx: DefectContext<'_>) -> Result<f64, String> {
+    // Oklab-координаты: C и h не зависят от viewing conditions
+    let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
+    let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
+    let c_oklab = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
+    let h_oklab = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
+
+    // Apparent lightness J через CAM16 под фоном+surround
+    let y_b_pct = y_pct_from_hex(ctx.bg_hex)?;
+    let vc = vc_for_context(ctx.theme, y_b_pct);
+    let xyz = crate::spaces::srgb::srgb_to_xyz(rgb);
+    let (j, _m, _h_cam) = crate::spaces::cam16::forward(xyz, &vc);
+    let l_app = (j / 100.0).clamp(0.0, 1.0);
+
+    Ok(raw_chromatic(l_app, c_oklab, h_oklab).clamp(0.0, 1.0))
+}
+
+/// Surround-aware оценка тусклости цвета в заданном контексте просмотра.
+///
+/// Тусклость `drab(C) = 1 − N_pure(C)` не зависит от lightness — только от
+/// Oklab chroma C, которая инвариантна к surround. Тем не менее функция принимает
+/// контекст для симметрии API и будущего расширения (например, gamut-aware chroma).
+///
+/// Возвращает то же значение, что `drab(C_oklab)` — surround-aware путь mud
+/// не меняет drab, только grязь через depth_term зависит от J.
+pub fn drab_in_context(hex: &str, ctx: DefectContext<'_>) -> Result<f64, String> {
+    // drab зависит только от C_oklab — surround не меняет chroma в Oklab
+    let _ = ctx; // принимается для симметрии API
+    let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
+    let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
+    let c_oklab = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
+    Ok(drab(c_oklab))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,5 +961,214 @@ mod tests {
              M-05 must be cited-measured."
             )
         };
+    }
+
+    // ─── Zone G: surround-aware кейс-тесты (Fowler class A, TDD RED-first) ────
+    //
+    // Условие успеха (Зона G exit-criteria):
+    //   (1) Серый (#808080) на пастельном фоне (#FFE4E1) даёт более высокую грязь,
+    //       чем тот же серый на нейтральном (#808080) — разница строго по знаку.
+    //   (2) Тёмный розовый (#C2185B) на чёрном фоне (#000000) даёт более низкую грязь,
+    //       чем тот же цвет на белом фоне (#FFFFFF) — направление дельты строго.
+    //
+    // Почему тест кусается (mutation-bite):
+    //   Если заменить l_app = J/100 на l_app = Oklab-L (т.е. убрать surround-aware путь),
+    //   оба теста провалятся: без учёта Yb фона CAM16 J не меняется при смене bg_hex,
+    //   поэтому muddiness_in_context вернёт одинаковое значение для обоих фонов.
+    //
+    // TDD RED-first: до добавления `muddiness_in_context` в файл эти тесты не
+    // компилировались (функция не существовала) — RED доказан структурно.
+    //
+    // Провенанс: параметры CAM16 — Li et al. 2017 Table 1 (cited); mud-формула —
+    // Zone B slices 3+4 (BB Hanning, B0/BW, C0/JND — все cited).
+
+    use super::{DefectContext, Theme, drab_in_context, muddiness_in_context};
+
+    /// Серый на пастельном фоне грязнее, чем тот же серый на нейтральном.
+    ///
+    /// Физика: пастельный фон (#FFE4E1, Yb≈82%) повышает адаптацию → сдвигает
+    /// CAM16 J серого (#808080, Yb≈22%) вниз от cusp-L → depth_term растёт →
+    /// mud растёт. На нейтральном фоне (#808080, Yb≈22%) адаптация стандартная.
+    ///
+    /// Направление дельты: mud_on_pastel > mud_on_neutral — строго.
+    #[test]
+    fn grey_on_pastel_is_muddier_than_grey_on_neutral() {
+        let grey = "#808080";
+        let pastel_bg = "#FFE4E1"; // розово-белёсый, Yb≈82%
+        let neutral_bg = "#808080"; // нейтральный серый, Yb≈22%
+
+        let mud_on_pastel = muddiness_in_context(
+            grey,
+            DefectContext {
+                bg_hex: pastel_bg,
+                theme: Theme::Light,
+            },
+        )
+        .unwrap();
+
+        let mud_on_neutral = muddiness_in_context(
+            grey,
+            DefectContext {
+                bg_hex: neutral_bg,
+                theme: Theme::Light,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            mud_on_pastel > mud_on_neutral,
+            "Серый на пастельном фоне должен быть грязнее, чем на нейтральном: \
+             mud_on_pastel={mud_on_pastel:.6} должно быть > mud_on_neutral={mud_on_neutral:.6}. \
+             Если равны — surround-aware путь не работает (J не учитывает Yb фона)."
+        );
+    }
+
+    /// Тёмный розовый чист (низкая грязь) на чёрном и грязнее на белом.
+    ///
+    /// Физика: на белом фоне (#FFFFFF, Yb≈100%) CAM16 J тёмного розового (#C2185B)
+    /// ниже, чем на чёрном (#000000, Yb≈0.5%), — он выглядит тёмным относительно
+    /// светлого окружения, глубже под cusp-L → depth_term растёт → mud растёт.
+    /// На чёрном фоне адаптация к темноте, J цвета выше → depth_term меньше → mud меньше.
+    ///
+    /// Направление дельты: mud_on_black < mud_on_white — строго.
+    #[test]
+    fn dark_pink_is_cleaner_on_black_than_on_white() {
+        let dark_pink = "#C2185B"; // тёмно-розовый (Material Design Pink 800)
+        let black_bg = "#000000";
+        let white_bg = "#FFFFFF";
+
+        let mud_on_black = muddiness_in_context(
+            dark_pink,
+            DefectContext {
+                bg_hex: black_bg,
+                theme: Theme::Dark,
+            },
+        )
+        .unwrap();
+
+        let mud_on_white = muddiness_in_context(
+            dark_pink,
+            DefectContext {
+                bg_hex: white_bg,
+                theme: Theme::Light,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            mud_on_black < mud_on_white,
+            "Тёмный розовый должен быть чище (меньше грязи) на чёрном фоне, чем на белом: \
+             mud_on_black={mud_on_black:.6} должно быть < mud_on_white={mud_on_white:.6}. \
+             Если равны — surround-aware путь не работает."
+        );
+    }
+
+    /// Mutation-bite: подмена l_app на фиксированное значение (убираем surround-aware путь)
+    /// должна РОНЯТЬ первый кейс-тест. Проверяем здесь что тест различает два значения.
+    ///
+    /// Реализация: вычисляем mud дважды — с пастельным и нейтральным фоном.
+    /// Разница строго ненулевая → epsilon-тест подтверждает укус.
+    #[test]
+    fn surround_aware_mud_differs_across_backgrounds_epsilon() {
+        let grey = "#808080";
+        let pastel_bg = "#FFE4E1";
+        let neutral_bg = "#808080";
+
+        let mud_pastel = muddiness_in_context(
+            grey,
+            DefectContext {
+                bg_hex: pastel_bg,
+                theme: Theme::Light,
+            },
+        )
+        .unwrap();
+        let mud_neutral = muddiness_in_context(
+            grey,
+            DefectContext {
+                bg_hex: neutral_bg,
+                theme: Theme::Light,
+            },
+        )
+        .unwrap();
+
+        // Разница должна быть не менее 1e-4 — иначе тест не кусается
+        assert!(
+            (mud_pastel - mud_neutral).abs() > 1e-4,
+            "surround-aware mud разница < 1e-4: pastel={mud_pastel:.8} neutral={mud_neutral:.8} \
+             delta={:.2e} — тест не кусается (mutation-bite провален).",
+            (mud_pastel - mud_neutral).abs()
+        );
+    }
+
+    /// API-test: drab_in_context принимает контекст и возвращает то же значение, что drab(C).
+    ///
+    /// Тест закрывает класс: drab не должен молча игнорировать контекст и возвращать ноль.
+    #[test]
+    fn drab_in_context_matches_bare_drab() {
+        use super::n_pure;
+        let hex = "#937C00"; // babypoop — умеренная хрома
+
+        let ctx_light = DefectContext {
+            bg_hex: "#FFFFFF",
+            theme: Theme::Light,
+        };
+        let ctx_dark = DefectContext {
+            bg_hex: "#000000",
+            theme: Theme::Dark,
+        };
+
+        let d_light = drab_in_context(hex, ctx_light).unwrap();
+        let d_dark = drab_in_context(hex, ctx_dark).unwrap();
+
+        // drab зависит только от C_oklab — должно быть идентично для обоих контекстов
+        assert_eq!(
+            d_light, d_dark,
+            "drab_in_context должен возвращать одинаковый результат \
+             независимо от контекста (drab зависит только от C_oklab): \
+             light={d_light:.8} dark={d_dark:.8}"
+        );
+
+        // Проверяем, что D + N = 1 выполняется и через context-путь
+        let rgb = crate::spaces::srgb::srgb_from_hex(hex).unwrap();
+        let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
+        let c_oklab = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
+        assert_eq!(
+            d_light + n_pure(c_oklab),
+            1.0,
+            "drab_in_context(babypoop) + n_pure должно быть ровно 1.0 (D+N=1 инвариант)"
+        );
+        // babypoop (#937C00) — сильно хроматический цвет: C >> C0=0.0395,
+        // поэтому drab(C) = 1 - N_pure(C) ≈ 0 (т.е. < 0.1 — почти нет тусклости).
+        assert!(
+            d_light < 0.1,
+            "drab_in_context(babypoop) = {d_light:.6} ожидается < 0.1 \
+             (babypoop сильно хроматичен, drab → 0)"
+        );
+    }
+
+    /// IC-тема компилируется и возвращает корректный результат.
+    #[test]
+    fn ic_themes_compile_and_return_finite_value() {
+        let hex = "#6B6B2E"; // olive
+        let ctx_lic = DefectContext {
+            bg_hex: "#FFFFFF",
+            theme: Theme::LightIc,
+        };
+        let ctx_dic = DefectContext {
+            bg_hex: "#000000",
+            theme: Theme::DarkIc,
+        };
+
+        let m_lic = muddiness_in_context(hex, ctx_lic).unwrap();
+        let m_dic = muddiness_in_context(hex, ctx_dic).unwrap();
+
+        assert!(
+            m_lic.is_finite() && (0.0..=1.0).contains(&m_lic),
+            "muddiness_in_context(LightIc) = {m_lic} вне [0,1]"
+        );
+        assert!(
+            m_dic.is_finite() && (0.0..=1.0).contains(&m_dic),
+            "muddiness_in_context(DarkIc) = {m_dic} вне [0,1]"
+        );
     }
 }
