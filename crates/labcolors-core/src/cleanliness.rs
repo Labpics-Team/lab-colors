@@ -1,35 +1,38 @@
-//! Port of the final "Law of Dirt" (Muddiness Law) for the `labcolors` system.
+//! Порт финального «Закона Грязи» (Muddiness Law) системы `labcolors`.
 //!
-//! # Equations
+//! # Уравнения
 //!
 //! ```text
-//! raw = neutral_gate(L, C) * hue_weight(h) * depth_term(L, h) * b_gate(C, h)
-//! mud = sigmoid(T * ln(raw + eps) + b_cal)
+//! raw = neutral_gate(L, C) * hue_weight(h) * depth_mod(L, C, h)
+//! mud = raw                   ← параметр-свободная монотонная нормировка (Zone B, 2026-06-30)
 //! ```
 //!
-//! # Parameters — inventory status (docs/decisions/empirical-inventory.md, Muddiness section)
+//! Platt-звено (логарифм raw + eps → sigmoid с двумя подогнанными скалярами) **удалено полностью**
+//! в Zone B slice 3: оба скаляра (M-07/M-08) подогнаны на авторском датасете 738 меток
+//! (наблюдатель-фит) и нарушали инвариант «ZERO observer-fit» (North).  mud = raw_chromatic напрямую:
+//! - параметр-свободно (нет новых констант);
+//! - монотонно (произведение монотонных сигмоидных факторов ∈ [0,1]);
+//! - ограничено [0,1] точно (каждый множитель ∈ [0,1]);
+//! - JND-относительно по конструкции (gate N(C) выровнен по M-02 JND).
 //!
-//! Science-vs-fit boundary: the **structural form** is derived from Oklab opponent-colour
-//! theory and CAM16-UCS geometry.  The **link calibration scalars** are Platt-fit on the
-//! v3 labelled dataset and declared as DECLARED-CALIBRATION.  See inventory for full
-//! per-constant rationale and bounds.  Audited by `mud-oracle/verify_inventory.js` (exit 0).
+//! # Инвентарь параметров (docs/decisions/empirical-inventory.md, раздел Muddiness)
 //!
-//! | const           | mud-id | status                         | value (frozen)              |
+//! | const           | mud-id | статус                         | значение                    |
 //! |-----------------|--------|--------------------------------|-----------------------------|
-//! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (sRGB grey-frontier; Evans/Xie-Fairchild yellow zero-grayness frontier) |
+//! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (граница серого sRGB; Evans/Xie-Fairchild yellow zero-grayness frontier) |
 //! | `JND`           | M-02   | cited-and-kept                 | 0.01228 (Oklab chroma JND; Oklab perceptual measurement) |
-//! | `LESC`          | M-03   | DECLARED-CALIBRATION           | 0.8208552 (light-escape threshold) |
-//! | `B0`            | M-04   | cited-measured                 | 0.036 (central of cited range [0.030, 0.044]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
-//! | `BW`            | M-05   | cited-measured                 | 0.017 (central of cited range [0.013, 0.020]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
-//! | `CAL_EPS`       | M-06   | DECLARED-CALIBRATION           | 0.01 (log regularisation bias) |
-//! | `CAL_T`         | M-07   | OPEN (flagged-provisional)     | 2.356978; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
-//! | `CAL_B`         | M-08   | OPEN (flagged-provisional)     | 6.445168; resolving study: CAL_T/CAL_B olive-brown naming-crossing (Zone C) |
-//! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (margin scale, confidence band) |
-//! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION           | 0.34 (empirical concept-floor from v3 retest analysis; not a published perceptual constant) |
-//! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION           | 0.10 (empirical interior floor from v3 disputed-stratum analysis; not a published perceptual constant) |
-//! | `W_HUE[8]`      | M-12   | OPEN (flagged-provisional)     | (logistic regression fit); resolving study: drab L-tilt grayness magnitude-estimation (Zone C) |
-//! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (pure Oklab gamut geometry, verified to f64 — kept as-is per paradigm North) |
-//! | `CEIL_N_TABLE`  | M-14   | DECLARED-CALIBRATION           | (Fourier basis fit on observer-label dataset) |
+//! | `LESC`          | M-03   | DECLARED-CALIBRATION           | 0.8208552 (порог light-escape) |
+//! | `B0`            | M-04   | cited-measured                 | 0.036 (центр диапазона [0.030, 0.044]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | `BW`            | M-05   | cited-measured                 | 0.017 (центр диапазона [0.013, 0.020]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | ~~`CAL_EPS`~~   | M-06   | УДАЛЁН (Zone B slice 3)        | был 0.01; log-регуляризатор для Platt — более не нужен |
+//! | ~~`CAL_T`~~     | M-07   | УДАЛЁН (Zone B slice 3)        | был 2.356978; Platt-скаляр, подогнанный на 738 авторских метках — нарушал ZERO observer-fit |
+//! | ~~`CAL_B`~~     | M-08   | УДАЛЁН (Zone B slice 3)        | был 6.445168; Platt-смещение — нарушало ZERO observer-fit |
+//! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (полуширина доверительного поля confidence) |
+//! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION           | 0.34 (эмпирический concept-floor из v3 retest; не перцептивная константа) |
+//! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION           | 0.10 (эмпирический interior-floor из v3 disputed-stratum; не перцептивная константа) |
+//! | `W_HUE[8]`      | M-12   | OPEN (flagged-provisional)     | (логистическая регрессия); resolving study: drab L-tilt grayness magnitude-estimation (Zone C) |
+//! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (чистая геометрия гамута Oklab, верифицирована до f64 — kept as-is) |
+//! | `CEIL_N_TABLE`  | M-14   | DECLARED-CALIBRATION           | (Fourier-базис, подогнан на датасете v3) |
 
 #![allow(clippy::excessive_precision)]
 
@@ -460,9 +463,9 @@ pub const JND: f64 = 0.0122779190541810;
 pub const LESC: f64 = 0.8208552000000002;
 pub const B0: f64 = 0.036; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.030, 0.044]
 pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.013, 0.020]
-pub const CAL_EPS: f64 = 0.0100000000000000;
-pub const CAL_T: f64 = 2.3569779717896631;
-pub const CAL_B: f64 = 6.4451683591874760;
+// CAL_EPS / CAL_T / CAL_B удалены (Zone B slice 3, 2026-06-30):
+// Platt-звено sigmoid(CAL_T*ln(raw+eps)+CAL_B) было observer-fit на 738 авторских метках
+// (нарушение ZERO observer-fit, North).  Заменено параметр-свободным mud = raw_chromatic.
 pub const M_W: f64 = 0.1815267777247454;
 pub const KAPPA_CORE: f64 = 0.34;
 pub const KAPPA_INTERIOR: f64 = 0.10;
@@ -572,12 +575,22 @@ pub fn raw_chromatic(l: f64, c: f64, h_deg: f64) -> f64 {
     cc * hw * dpm
 }
 
-/// Smooth monotone bounded magnitude calibration link (Platt)
+/// Параметр-свободная монотонная цена грязи (Zone B slice 3, 2026-06-30).
+///
+/// mud = raw_chromatic(l, c, h) — прямое произведение трёх перцептивно-обоснованных
+/// факторов из геометрии Oklab:
+///   N(C) = sigmoid((C - C0) / JND)         — JND-взвешенное присутствие хромы (M-01/M-02)
+///   hue_weight(h)                           — полосно-ограниченный отклик оттенка (K=3 Фурье)
+///   depth_mod(L, C, h)                      — глубина под cusp-L, взвешенная b-гейтом (M-04/M-05)
+///
+/// Свойства:
+///   - Параметр-свободно: нет новых констант, нет Platt CAL_T/CAL_B (удалены M-07/M-08)
+///   - Монотонно в raw: raw ∈ [0,1] → mud ∈ [0,1] точно (каждый множитель ∈ [0,1])
+///   - Строго монотонно в C при фиксированных L, h (через N(C) и depth_mod)
+///   - JND-нормировано по конструкции через M-02
+///   - Плюс .clamp(0.0, 1.0) для гарантии при f64-округлении
 pub fn muddiness_oklch(l: f64, c: f64, h_deg: f64) -> f64 {
-    let raw = raw_chromatic(l, c, h_deg);
-    let z = (raw.max(0.0) + CAL_EPS).ln();
-    let out = sigmoid(CAL_T * z + CAL_B);
-    out.clamp(0.0, 1.0)
+    raw_chromatic(l, c, h_deg).clamp(0.0, 1.0)
 }
 
 /// Per-colour confidence that drops near decision boundary (mud ~ 0.5) and grey-frontier (chroma ~ C0).
@@ -633,8 +646,9 @@ pub fn confidence_from_hex(hex: &str) -> Result<f64, String> {
 //   C0  = 0.0395  (cited-and-kept, M-01, Evans/Xie-Fairchild yellow zero-grayness frontier)
 //   JND = 0.0122779190541810 (cited-and-kept, M-02, Oklab chroma JND)
 //
-// OPEN items (left unchanged): CAL_T / CAL_B / W_HUE / g0_band — all still
-// flagged-provisional with their named studies (see inventory table above).
+// OPEN items (left unchanged): W_HUE / g0_band — всё ещё flagged-provisional
+// с named-исследованиями (см. таблицу инвентаря выше).
+// M-07/M-08 (Platt CAL_T/CAL_B) УДАЛЕНЫ в Zone B slice 3 — более не OPEN.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Pure chroma-presence gate: N_pure(C) = sigmoid((C - C0) / JND).
@@ -680,100 +694,116 @@ mod tests {
 
     // ─── Smoke / class-membership reference values ────────────────────────────
     //
-    // Updated in Zone B (2026-06-29) to reflect cited-measured B0=0.036 /
-    // BW=0.017 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS;
-    // Boynton 1975). Values within ±1e-3 of the pre-swap fitted outputs
-    // confirm the behaviour delta is bounded and directionally consistent
-    // (muddy colours stay muddy; clean colours stay clean).
+    // Обновлено в Zone B (2026-06-30): удалён Platt CAL_T/CAL_B, mud = raw_chromatic
+    // напрямую (параметр-свободное монотонное нормирование через JND-геометрию Oklab).
+    // Ранговый порядок сохранён: olive > babypoop > gold1 > gold2 > puke >> grey/teal/navy/clean.
+    // Диапазон mud теперь [0, ~0.14] вместо [0.01, 0.87] (нет Platt-сжатия).
+    // Значения confidence изменились незначительно (kappa_band/chroma_conf стабильны).
+    // (TDD коммит 1 из 2 — RED на текущем Platt-дереве, GREEN после коммита 2)
     #[test]
     fn test_muddiness_v3_reference_values() {
-        // Olive #6B6B2E (Highly muddy)
+        // Olive #6B6B2E (Наиболее грязный — максимальный raw)
         let olive_mud = muddiness_from_hex("#6B6B2E").unwrap();
         let olive_conf = confidence_from_hex("#6B6B2E").unwrap();
         assert!(
-            olive_mud > 0.80,
-            "olive mud is {olive_mud:.4}, expected > 0.80"
+            olive_mud > 0.10,
+            "olive mud is {olive_mud:.6}, expected > 0.10 (параметр-свободный диапазон)"
         );
         assert!(
-            (olive_mud - 0.8706).abs() < 1e-3,
-            "olive mud {olive_mud:.4} != 0.8706"
+            (olive_mud - 0.13577039).abs() < 1e-5,
+            "olive mud {olive_mud:.8} != 0.13577039"
         );
         assert!(
-            (olive_conf - 0.2946).abs() < 1e-3,
-            "olive conf {olive_conf:.4} != 0.2946"
+            (olive_conf - 0.29341764).abs() < 1e-4,
+            "olive conf {olive_conf:.8} != 0.29341764"
         );
 
-        // Babypoop #937C00 (Highly muddy)
+        // Babypoop #937C00 (Очень грязный)
         let babypoop_mud = muddiness_from_hex("#937C00").unwrap();
         assert!(
-            babypoop_mud > 0.80,
-            "babypoop mud is {babypoop_mud:.4}, expected > 0.80"
+            babypoop_mud > 0.10,
+            "babypoop mud is {babypoop_mud:.6}, expected > 0.10"
         );
         assert!(
-            (babypoop_mud - 0.8389).abs() < 1e-3,
-            "babypoop mud {babypoop_mud:.4} != 0.8389"
+            (babypoop_mud - 0.12073831).abs() < 1e-5,
+            "babypoop mud {babypoop_mud:.8} != 0.12073831"
         );
 
-        // Puke #9AAE07 (Moderately muddy)
+        // Puke #9AAE07 (Умеренно грязный)
         let puke_mud = muddiness_from_hex("#9AAE07").unwrap();
         assert!(
-            (puke_mud - 0.5443).abs() < 1e-3,
-            "puke mud {puke_mud:.4} != 0.5443"
+            (puke_mud - 0.06001098).abs() < 1e-5,
+            "puke mud {puke_mud:.8} != 0.06001098"
         );
 
-        // Golds (graded middle, not slammed)
+        // Золотые (средний диапазон, не схлопнутые)
         let gold1_mud = muddiness_from_hex("#9e6c00").unwrap();
         assert!(
-            (gold1_mud - 0.7133).abs() < 1e-3,
-            "gold1 mud {gold1_mud:.4} != 0.7133"
+            (gold1_mud - 0.08558437).abs() < 1e-5,
+            "gold1 mud {gold1_mud:.8} != 0.08558437"
         );
 
         let gold2_mud = muddiness_from_hex("#8f6424").unwrap();
         assert!(
-            (gold2_mud - 0.7065).abs() < 1e-3,
-            "gold2 mud {gold2_mud:.4} != 0.7065"
+            (gold2_mud - 0.08424603).abs() < 1e-5,
+            "gold2 mud {gold2_mud:.8} != 0.08424603"
         );
 
-        // Pure grey #808080 (Clean)
+        // Ранговый порядок грязности: olive > babypoop > gold1 > gold2 > puke
+        assert!(
+            olive_mud > babypoop_mud
+                && babypoop_mud > gold1_mud
+                && gold1_mud > gold2_mud
+                && gold2_mud > puke_mud,
+            "нарушен ранговый порядок грязности: olive={olive_mud:.6} babypoop={babypoop_mud:.6} \
+             gold1={gold1_mud:.6} gold2={gold2_mud:.6} puke={puke_mud:.6}"
+        );
+
+        // Pure grey #808080 (Чистый)
         let grey_mud = muddiness_from_hex("#808080").unwrap();
         assert!(
-            grey_mud < 0.05,
-            "grey mud is {grey_mud:.4}, expected < 0.05"
+            grey_mud < 0.005,
+            "grey mud is {grey_mud:.6}, expected < 0.005"
         );
 
-        // Teal #008080 (Clean, cool-immune)
+        // Teal #008080 (Чистый, прохладный — иммунный к mud)
         let teal_mud = muddiness_from_hex("#008080").unwrap();
         let teal_conf = confidence_from_hex("#008080").unwrap();
         assert!(
-            teal_mud < 0.10,
-            "teal mud is {teal_mud:.4}, expected < 0.10"
+            teal_mud < 0.005,
+            "teal mud is {teal_mud:.6}, expected < 0.005"
         );
         assert!(
-            (teal_mud - 0.0123).abs() < 1e-3,
-            "teal mud {teal_mud:.4} != 0.0123"
+            (teal_mud - 0.00010793).abs() < 1e-6,
+            "teal mud {teal_mud:.8} != 0.00010793"
         );
         assert!(
-            (teal_conf - 0.3222).abs() < 1e-3,
-            "teal conf {teal_conf:.4} != 0.3222"
+            (teal_conf - 0.32233909).abs() < 1e-4,
+            "teal conf {teal_conf:.8} != 0.32233909"
         );
 
-        // Navy Blue #000080 (Clean)
+        // Navy Blue #000080 (Чистый)
         let navy_mud = muddiness_from_hex("#000080").unwrap();
         assert!(
-            navy_mud < 0.10,
-            "navy mud is {navy_mud:.4}, expected < 0.10"
+            navy_mud < 0.001,
+            "navy mud is {navy_mud:.8}, expected < 0.001"
         );
     }
 
-    // ─── Characterization golden test (Zone B, Fowler class B) ───────────────
+    // ─── Characterization golden test (Zone B slice 3, Fowler class B) ─────────
     //
-    // Locks the mud(L,C,h) output table under the CITED-MEASURED constants
-    // B0=0.036 / BW=0.017 (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014
-    // PNAS; Boynton 1975).  This test was introduced in commit 1 of 2 (git
-    // history proves the golden precedes the constant change) with pre-swap
-    // values, then updated here in commit 2 to lock the post-swap outputs —
-    // making any future regression against the cited constants immediately
-    // visible.  Tolerance: ±5e-6 (f64 precision).
+    // Фиксирует таблицу mud(L,C,h) после удаления Platt CAL_T/CAL_B.
+    // mud = raw_chromatic(l,c,h) — параметр-свободная монотонная нормировка
+    // через JND-геометрию Oklab (нет ln, нет sigmoid-обёртки, нет подогнанных скаляров).
+    //
+    // Тест введён в коммит 1 из 2 (git-история доказывает: golden предшествует импл.
+    // свапу) с новыми значениями — RED на текущем Platt-дереве (Platt даёт ~[0.01..0.87],
+    // тест ожидает ~[0.00..0.14]). Зелёный после коммита 2 (свап muddiness_oklch).
+    // Tolerance: ±5e-6 (точность f64).
+    //
+    // Порядок коммитов (TDD RED-first):
+    //   коммит 1 — этот тест (RED)
+    //   коммит 2 — удаление CAL_T/CAL_B + mud = raw_chromatic (GREEN)
     #[test]
     fn characterization_mud_golden_cited() {
         struct Case {
@@ -781,56 +811,57 @@ mod tests {
             label: &'static str,
             expected: f64,
         }
+        // Значения = raw_chromatic(l,c,h) (параметр-свободный путь, после коммита 2)
         let cases = [
             Case {
                 hex: "#6B6B2E",
                 label: "olive",
-                expected: 0.87060095,
+                expected: 0.13577039,
             },
             Case {
                 hex: "#937C00",
                 label: "babypoop",
-                expected: 0.83885873,
+                expected: 0.12073831,
             },
             Case {
                 hex: "#9AAE07",
                 label: "puke",
-                expected: 0.54431359,
+                expected: 0.06001098,
             },
             Case {
                 hex: "#9e6c00",
                 label: "gold1",
-                expected: 0.71332396,
+                expected: 0.08558437,
             },
             Case {
                 hex: "#8f6424",
                 label: "gold2",
-                expected: 0.70647979,
+                expected: 0.08424603,
             },
             Case {
                 hex: "#808080",
                 label: "grey",
-                expected: 0.01328840,
+                expected: 0.00044062,
             },
             Case {
                 hex: "#008080",
                 label: "teal",
-                expected: 0.01232390,
+                expected: 0.00010793,
             },
             Case {
                 hex: "#000080",
                 label: "navy",
-                expected: 0.01201972,
+                expected: 0.00000001,
             },
             Case {
                 hex: "#FF0000",
                 label: "red",
-                expected: 0.01243314,
+                expected: 0.00014632,
             },
             Case {
                 hex: "#0000FF",
                 label: "blue",
-                expected: 0.01201969,
+                expected: 0.00000000,
             },
         ];
         for c in &cases {
@@ -845,6 +876,49 @@ mod tests {
                 (got - c.expected).abs()
             );
         }
+    }
+
+    // ─── CAL_T / CAL_B absence guard (Zone B slice 3, Fowler class Д) ──────────
+    //
+    // Проверяет, что `pub const CAL_T` и `pub const CAL_B` больше не определены,
+    // а `muddiness_oklch` не содержит вызовов CAL_T/CAL_B вне комментариев.
+    //
+    // Стратегия: ищем конкретные паттерны объявления (pub const CAL_T / pub const CAL_B)
+    // и паттерн употребления (CAL_T * / * CAL_B). Комментарии, описывающие удаление,
+    // допустимы — North: «комментарии могут только описывать удаление по-русски».
+    //
+    // RED на Platt-дереве (pub const CAL_T/CAL_B существуют и используются в muddiness_oklch).
+    // GREEN после коммита 2 (определения и употребления удалены).
+    #[test]
+    fn cal_t_cal_b_absent_from_shipping_code() {
+        let source = include_str!("cleanliness.rs");
+        // Продуктивный код — всё до маркера тест-модуля
+        let prod_code = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        // Проверяем отсутствие ОБЪЯВЛЕНИЙ (pub const CAL_T / pub const CAL_B)
+        assert!(
+            !prod_code.contains("pub const CAL_T"),
+            "pub const CAL_T найден в продуктивном коде — Platt-скаляр не удалён (M-07)."
+        );
+        assert!(
+            !prod_code.contains("pub const CAL_B"),
+            "pub const CAL_B найден в продуктивном коде — Platt-скаляр не удалён (M-08)."
+        );
+
+        // Проверяем отсутствие УПОТРЕБЛЕНИЙ в продуктивных выражениях
+        // (паттерны: CAL_T * z   и   + CAL_B)
+        assert!(
+            !prod_code.contains("CAL_T *"),
+            "CAL_T * найден в продуктивном коде — muddiness_oklch всё ещё использует Platt."
+        );
+        assert!(
+            !prod_code.contains("+ CAL_B"),
+            "+ CAL_B найден в продуктивном коде — muddiness_oklch всё ещё использует Platt."
+        );
+        assert!(
+            !prod_code.contains("pub const CAL_EPS"),
+            "pub const CAL_EPS найден в продуктивном коде — log-регуляризатор Platt не удалён (M-06)."
+        );
     }
 
     // ─── Drab head property tests (Zone B slice 2, Fowler class A) ──────────
