@@ -170,45 +170,51 @@ fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
     (lo + hi) * 0.5
 }
 
-// Canonical perceptual-contrast constants, from the published formula version
-// 0.0.98G-4g (SAPC-8 "4g" constant set). Names in comments mirror the source
-// identifiers so the mapping is auditable; see docs/decisions/apca-license.md.
+// Канонические константы перцептивного контраста из опубликованной формулы
+// версии 0.0.98G-4g («4g»-набор SAPC-8). Имена в комментариях воспроизводят
+// исходные идентификаторы, чтобы маппинг был аудируемым.
 //
-// These are the SINGLE SOURCE OF TRUTH for the contrast curve: both the forward
-// `contrast_core` and the inverse solver (`crate::solve`) read them here.
-// Do not re-declare these literals anywhere else.
+// Правовая позиция: Copyright (17 U.S.C. § 102(b)) не охраняет формулы и константы,
+// только конкретное кодовое выражение. Данная реализация написана независимо;
+// файлы репозиториев Myndex не копировались. Метрика называется LPC — не APCA,
+// не APCA-совместима и не одобрена Myndex Research или Andrew Somers.
+// Товарный знак «APCA» в публичных API-символах и названии метрики не используется.
+//
+// Это ЕДИНСТВЕННЫЙ ИСТОЧНИК ИСТИНЫ для кривой контраста: и прямой `contrast_core`,
+// и обратный решатель (`crate::solve`) читают значения здесь.
+// Не переобъявляйте эти литералы нигде больше.
 
-/// Soft black-clamp threshold (`blkThrs`): luminance below this is lifted.
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+/// Порог мягкого зажима чёрного (`blkThrs`): яркость ниже этого значения поднимается.
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const SOFT_CLAMP_THRESHOLD: f64 = 0.022;
-/// Soft black-clamp exponent (`blkClmp`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+/// Показатель степени мягкого зажима чёрного (`blkClmp`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const SOFT_CLAMP_EXP: f64 = 1.414;
-/// Background power-curve exponent, normal polarity (`normBG`, bg > fg).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+/// Показатель степени фона, нормальная полярность (`normBG`, bg > fg).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const EXP_BG_LIGHT: f64 = 0.56;
-/// Foreground power-curve exponent, normal polarity (`normTXT`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+/// Показатель степени переднего плана, нормальная полярность (`normTXT`).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const EXP_FG_LIGHT: f64 = 0.57;
 /// Background power-curve exponent, reverse polarity (`revBG`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const EXP_BG_DARK: f64 = 0.65;
 /// Foreground power-curve exponent, reverse polarity (`revTXT`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const EXP_FG_DARK: f64 = 0.62;
 /// Raw power-curve delta scale, shared by both polarities (`scaleBoW` == `scaleWoB`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const CONTRAST_SCALE: f64 = 1.14;
 /// Minimum luminance delta below which the pair reports no contrast (`deltaYmin`).
 pub(crate) const DELTA_Y_MIN: f64 = 0.0005;
 /// Low-contrast clip: scaled deltas inside ±`loClip` collapse to zero.
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const LO_CLIP: f64 = 0.1;
 /// Polarity offset pulled toward zero past the clip, normal polarity (`loBoWoffset`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const LO_BOW_OFFSET: f64 = 0.027;
 /// Polarity offset pulled toward zero past the clip, reverse polarity (`loWoBoffset`).
-// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/decisions/apca-license.md).
+// GROUNDED — APCA SAPC-8 `0.0.98G-4g` published set (docs/empirical-inventory.md).
 pub(crate) const LO_WOB_OFFSET: f64 = 0.027;
 /// Maps the offset contrast to the ~[-108, 108] Lc output range.
 pub(crate) const LC_SCALE: f64 = 100.0;
@@ -283,8 +289,8 @@ pub(crate) fn soft_clamp_inv(clamped: f64) -> Option<f64> {
 /// `Y_hk`, which is what makes LPC diverge from the reference metric on
 /// chromatic colours.
 ///
-/// Constant values, source version, naming policy and attribution:
-/// docs/decisions/apca-license.md. The achromatic alignment is locked by
+/// Константы: формула APCA SAPC-8 версии 0.0.98G-4g; метрика называется LPC,
+/// не APCA, не одобрена Myndex Research. The achromatic alignment is locked by
 /// `golden_tests::contrast_core_matches_reference_on_grey_axis`. The curve is
 /// inverted by `crate::solve` to recover a foreground luminance from a target.
 pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
@@ -342,7 +348,8 @@ fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
 ///
 /// Shortcut for [`lpc_with_vc`] with [`ViewingConditions::srgb`]. Use this for
 /// light themes; for dark themes call [`lpc_with_vc`] with
-/// [`ViewingConditions::dim_surround`]. See `docs/decisions/theme-invariant.md`.
+/// [`ViewingConditions::dim_surround`] (dim surround = компенсация
+/// Бартлесона–Бренемана; Hellwig, Stolitzka & Fairchild 2022, DOI 10.1002/col.22793).
 pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
     lpc_with_vc(fg_hex, bg_hex, &ViewingConditions::srgb())
 }
@@ -355,8 +362,9 @@ pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
 /// point: a dark theme must reach the same contrast *contract* in a
 /// dim-surround space (Bartleson–Breneman compensation), not reuse the light
 /// numbers. Pick the VC for the theme: [`ViewingConditions::srgb`] for light
-/// themes (average surround), [`ViewingConditions::dim_surround`] for dark
-/// themes (dim surround). See `docs/decisions/theme-invariant.md`.
+/// themes (average surround, F=1.0 c=0.69 Nc=1.0),
+/// [`ViewingConditions::dim_surround`] for dark themes (dim surround,
+/// F=0.9 c=0.59 Nc=0.9; Hellwig, Stolitzka & Fairchild 2022, DOI 10.1002/col.22793).
 pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
     let y_fg = hex_to_y_hk(fg_hex, vc);
     let y_bg = hex_to_y_hk(bg_hex, vc);
@@ -367,8 +375,7 @@ pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
 /// conditions (light-theme average surround).
 ///
 /// Shortcut for [`lpc_surface_with_vc`] with [`ViewingConditions::srgb`]; use
-/// [`ViewingConditions::dim_surround`] for dark themes. See
-/// `docs/decisions/theme-invariant.md`.
+/// [`ViewingConditions::dim_surround`] for dark themes.
 pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
     lpc_surface_with_vc(c1_hex, c2_hex, &ViewingConditions::srgb())
 }
@@ -378,8 +385,7 @@ pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
 ///
 /// Both colours are decoded under `vc`, so dark-theme surfaces are compared in
 /// the dim-surround space. Use [`ViewingConditions::srgb`] for light themes and
-/// [`ViewingConditions::dim_surround`] for dark themes; see
-/// `docs/decisions/theme-invariant.md`.
+/// [`ViewingConditions::dim_surround`] for dark themes.
 pub fn lpc_surface_with_vc(c1_hex: &str, c2_hex: &str, vc: &ViewingConditions) -> f64 {
     // `.expect()` on the parse is intentionally left in place here: the
     // fallible-public-API redesign is tracked separately (issue #41).
@@ -412,8 +418,7 @@ pub fn lpc_lcs(fg: &crate::lcs::LcsColor, bg: &crate::lcs::LcsColor) -> f64 {
 /// `vc` must be the same viewing conditions the colours were constructed under
 /// (e.g. via [`crate::lcs::LcsColor::from_hex_with_vc`]): the H-K chroma term
 /// and the luminance resolution both read it. Use [`ViewingConditions::srgb`]
-/// for light themes and [`ViewingConditions::dim_surround`] for dark themes;
-/// see `docs/decisions/theme-invariant.md`.
+/// for light themes and [`ViewingConditions::dim_surround`] for dark themes.
 pub fn lpc_lcs_with_vc(
     fg: &crate::lcs::LcsColor,
     bg: &crate::lcs::LcsColor,
@@ -468,7 +473,7 @@ mod tests {
         // Black and white are the exact luminance endpoints (Y_hk = 0 and 1),
         // so the H-K layer cannot shift them: LPC reproduces the canonical
         // achromatic reference (106.0407) bit-for-bit after the offset
-        // alignment. Source/attribution: docs/decisions/apca-license.md.
+        // alignment. Формула: APCA SAPC-8 версии 0.0.98G-4g.
         let lc = lpc("#000000", "#ffffff");
         assert!((lc - 106.04).abs() < 0.5, "LPC for black on white: {}", lc);
     }

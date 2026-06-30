@@ -223,8 +223,8 @@ fn cam16_matches_colour_science_dim_surround() {
 /// ```
 ///
 /// Grey-on-grey isolates the Helmholtz-Kohlrausch term out of the metric
-/// (luminance is fed directly), so this validates the curve alone. Naming
-/// and attribution policy: docs/decisions/apca-license.md.
+/// (luminance is fed directly), so this validates the curve alone.
+/// Константы: APCA SAPC-8 версии 0.0.98G-4g; метрика называется LPC, не APCA.
 type ContrastGolden = (f64, f64, f64);
 const ACHROMATIC_CONTRAST: [ContrastGolden; 13] = [
     (0.0, 1.0, 106.04066682868873), // #000000 on #ffffff (BoW max)

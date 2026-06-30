@@ -34,16 +34,16 @@ Marker column: `NEEDS-SCIENCE` = provisional (awaits calibration); `GROUNDED` = 
 | 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | `1.75` | `neutral.rs` | NEEDS-SCIENCE | Gamma for light-side neutral curve; PROVISIONAL, owner's eye. |
 | 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | `1.5` | `neutral.rs` | NEEDS-SCIENCE | Gamma for dark-side neutral curve; PROVISIONAL, owner's eye. |
 | 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | `0.35` | `neutral.rs` | NEEDS-SCIENCE | Chroma peak position along curve parameter t; PROVISIONAL. |
-| 25 | `SOFT_CLAMP_THRESHOLD` | `0.022` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 26 | `SOFT_CLAMP_EXP` | `1.414` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 27 | `EXP_BG_LIGHT` | `0.56` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 28 | `EXP_FG_LIGHT` | `0.57` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 29 | `EXP_BG_DARK` | `0.65` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 30 | `EXP_FG_DARK` | `0.62` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 31 | `CONTRAST_SCALE` | `1.14` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 32 | `LO_CLIP` | `0.1` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 33 | `LO_BOW_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
-| 34 | `LO_WOB_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set; see docs/decisions/apca-license.md. |
+| 25 | `SOFT_CLAMP_THRESHOLD` | `0.022` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 26 | `SOFT_CLAMP_EXP` | `1.414` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 27 | `EXP_BG_LIGHT` | `0.56` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 28 | `EXP_FG_LIGHT` | `0.57` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 29 | `EXP_BG_DARK` | `0.65` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 30 | `EXP_FG_DARK` | `0.62` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 31 | `CONTRAST_SCALE` | `1.14` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 32 | `LO_CLIP` | `0.1` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 33 | `LO_BOW_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
+| 34 | `LO_WOB_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
 | 35 | `IC_DECORATIVE_FLOOR_MIN` | `15.0` | `semantic.rs` | NEEDS-SCIENCE | Provisional increased-contrast decorative floor (Lc). Raised above `DECORATIVE_FLOOR_MIN` (7.5) to enforce stronger perceptual contrast in `-ic` themes. Awaits surface-jnd calibration for the IC tier. |
 | 36 | `HUE_SEARCH_HALF_WINDOW` | `30.0` | `scale.rs` | NEEDS-SCIENCE | Half-width of AccentCurve hue search window (degrees). 30° spans a typical sRGB gamut ridge; awaits perceptual calibration against empirical accent-hue spread data. |
 

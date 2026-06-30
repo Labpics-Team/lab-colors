@@ -53,7 +53,6 @@ fn inventory_path() -> PathBuf {
         .join("..")
         .join("..")
         .join("docs")
-        .join("decisions")
         .join("empirical-inventory.md")
 }
 
@@ -164,7 +163,7 @@ fn ssot_inventory_is_present_and_nonempty() {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "SMOKE FAILED — SSOT inventory missing at {} ({e}). \
-             The empirical-inventory gate REQUIRES docs/decisions/empirical-inventory.md.",
+             The empirical-inventory gate REQUIRES docs/empirical-inventory.md.",
             path.display()
         )
     });
