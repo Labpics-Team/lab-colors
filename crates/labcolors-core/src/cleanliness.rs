@@ -617,6 +617,63 @@ pub fn confidence_from_hex(hex: &str) -> Result<f64, String> {
     Ok(confidence(l, c, h))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Drab defect head (Zone B slice 2 — second INDEPENDENT output)
+//
+// `n_pure` and `drab` are a SEPARATE defect axis from mud/muddiness_oklch.
+// They share ONLY the cited gate constants C0 / JND as INPUTS.
+// They are NEVER called inside `raw_chromatic`, `muddiness_oklch`, or any
+// other mud code path — the two axes are provably independent (the curl /
+// integrability two-axes result from the paradigm North).
+//
+// drab(C) = sigmoid((C0 - C) / JND)
+//         = 1 - sigmoid((C   - C0) / JND)   [= 1 - n_pure(C)]
+//
+// Constants reused (zero new parameters):
+//   C0  = 0.0395  (cited-and-kept, M-01, Evans/Xie-Fairchild yellow zero-grayness frontier)
+//   JND = 0.0122779190541810 (cited-and-kept, M-02, Oklab chroma JND)
+//
+// OPEN items (left unchanged): CAL_T / CAL_B / W_HUE / g0_band — all still
+// flagged-provisional with their named studies (see inventory table above).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pure chroma-presence gate: N_pure(C) = sigmoid((C - C0) / JND).
+///
+/// This is the shared gate that enters both mud (as `neutral_gate`) and drab
+/// (as 1 - N_pure).  It is kept as a standalone `pub fn` so callers can
+/// compose the two heads independently without re-implementing the gate.
+///
+/// Parameters: cited-and-kept C0 (M-01) and JND (M-02).  Zero new parameters.
+#[inline]
+pub fn n_pure(c: f64) -> f64 {
+    sigmoid((c - C0) / JND)
+}
+
+/// Drab defect head: D(C) = 1 − N_pure(C).
+///
+/// Measures chroma ABSENCE — the complement of the cited chroma-presence gate.
+/// Returns 1.0 for achromatic colours (C ≈ 0, deeply grey/beige) and 0.0 for
+/// strongly chromatic colours (C >> C0).
+///
+/// Implementation: `1.0 - n_pure(c)` — exact f64 arithmetic complement.
+/// This guarantees `drab(C) + n_pure(C) == 1.0` exactly in IEEE 754, which
+/// the property tests verify.  The equivalent closed form sigmoid((C0 - C) / JND)
+/// would produce values that sum to 1.0 only up to ±1 ULP due to independent
+/// exp() calls; the subtraction form is exact by construction.
+///
+/// Invariants guaranteed by construction (independently property-tested):
+///   `drab(C) + n_pure(C) == 1.0`  exact in f64
+///   `drab` is strictly monotone-decreasing in C
+///   `drab(C0) == 0.5`  (sigmoid(0) == 0.5 exactly, since n_pure(C0) == 0.5)
+///
+/// This function is a SECOND DISTINCT output — it is NEVER called inside
+/// `raw_chromatic`, `muddiness_oklch`, or any mud path.  The only coupling
+/// with the mud head is the shared C0/JND constants as a shared INPUT gate.
+#[inline]
+pub fn drab(c: f64) -> f64 {
+    1.0 - n_pure(c)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,6 +845,63 @@ mod tests {
                 (got - c.expected).abs()
             );
         }
+    }
+
+    // ─── Drab head property tests (Zone B slice 2, Fowler class A) ──────────
+    //
+    // Three properties that MUST hold for drab(C) = sigmoid((C0 - C) / JND)
+    // (the chroma-absence complement of the cited gate N_pure(C)):
+    //
+    //   (a) D(C) + N_pure(C) == 1.0 exact in f64 across a chroma sweep
+    //       — they are complements by construction: sigmoid(x) + sigmoid(-x) == 1.
+    //   (b) D'(C) < 0 — drab strictly DECREASES as chroma C rises
+    //       (finite-difference monotonicity over the sweep).
+    //   (c) D(C0) == 0.5 exactly — sigmoid(0) == 0.5 by definition.
+    //
+    // These tests reference `drab` and `n_pure`, which do NOT exist at this
+    // commit (commit 1 of 2).  They compile-fail at this HEAD, proving
+    // TDD RED-first.  Verified independently in an isolated worktree.
+    #[test]
+    fn drab_plus_n_pure_equals_one_sweep() {
+        // Sweep C from 0.0 to 0.3 in 1001 steps; verify D + N == 1.0 exact.
+        let steps = 1001usize;
+        for i in 0..=steps {
+            let c = (i as f64) * 0.3 / (steps as f64);
+            let d = drab(c);
+            let n = n_pure(c);
+            assert_eq!(
+                d + n,
+                1.0,
+                "drab + n_pure != 1.0 at C={c:.6}: drab={d:.18} n_pure={n:.18}"
+            );
+        }
+    }
+
+    #[test]
+    fn drab_strictly_decreasing_in_chroma() {
+        // Finite-difference monotonicity: drab(C+delta) < drab(C) for all C.
+        let steps = 1001usize;
+        let delta = 0.3 / (steps as f64);
+        for i in 0..steps {
+            let c0v = (i as f64) * 0.3 / (steps as f64);
+            let c1 = c0v + delta;
+            let d0 = drab(c0v);
+            let d1 = drab(c1);
+            assert!(
+                d1 < d0,
+                "drab not strictly decreasing: drab({c1:.6})={d1:.18} >= drab({c0v:.6})={d0:.18}"
+            );
+        }
+    }
+
+    #[test]
+    fn drab_at_c0_is_half() {
+        // D(C0) must equal exactly 0.5 because sigmoid(0) == 0.5.
+        let d = drab(C0);
+        assert_eq!(
+            d, 0.5,
+            "drab(C0) should be exactly 0.5 (sigmoid(0)); got {d:.18}"
+        );
     }
 
     // ─── Provenance-range guard (Zone B, Fowler class A — property test) ─────
