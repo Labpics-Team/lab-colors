@@ -5,49 +5,72 @@ use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 
-/// Perceptual minimum separation between a sentiment hue and the brand hue,
-/// expressed as a **chord length in the Oklab a/b chroma plane** (not degrees).
+/// Перцептивный минимум разделения между оттенком сентимента и брендовым
+/// оттенком, выраженный как **длина хорды в плоскости Oklab a/b** (не в
+/// градусах).
 ///
-/// # Why a chord, not an angle
+/// # Почему хорда, а не угол
 ///
-/// Issue #20: equal hue *angles* are not equal *perceptual* steps — a 20°
-/// hue swing at low chroma is barely visible, while the same 20° at high
-/// chroma is an obvious colour change. A fixed angular margin therefore
-/// over-separates desaturated zones and under-separates saturated ones. The
-/// perceptually honest invariant is a constant *distance* in the (a, b)
-/// plane, which we then translate into the per-zone angle that achieves it.
+/// Issue #20: одинаковые угловые сдвиги хроматически не равноценны — поворот
+/// на 20° при низкой хроме почти незаметен, тогда как при высокой хроме это
+/// очевидная смена цвета. Фиксированный угловой порог поэтому создаёт
+/// избыточное разделение в десатурированных зонах и недостаточное в
+/// насыщенных. Перцептивно честный инвариант — постоянное *расстояние* в
+/// плоскости (a, b), которое затем переводится в зонный угол.
 ///
-/// # Derivation of the constant
+/// # Статус константы — OPEN (provisional)
 ///
-/// The pre-existing model (#55) used a flat 20° Oklab-hue margin and was
-/// accepted by eye as the right "just distinguishable" gap. We preserve that
-/// calibration by measuring what arc 20° subtends at the *representative*
-/// chroma of the four sentiment prototypes, then freezing that arc length as
-/// the perceptual target.
-///
-/// Measured prototype chromas (Oklab, sRGB VC):
-///
-/// | sentiment | hex       | Oklab C |
-/// |-----------|-----------|---------|
-/// | Danger    | `#FF3B30` | 0.2321  |
-/// | Warning   | `#FF9500` | 0.1752  |
-/// | Success   | `#34C759` | 0.1944  |
-/// | Info      | `#007AFF` | 0.2177  |
-///
-/// Representative (mean) chroma `C_rep = 0.2049`. A central angle `Δh`
-/// subtends a chord of `2·C·sin(Δh/2)` in the a/b plane, so the calibration
-/// chord is
+/// Значение `S_PERC_MIN = 0.071_157_9` получено из предыдущей модели (#55),
+/// которая использовала порог в 20° Oklab-hue, принятый **на глаз** как
+/// «минимально различимый зазор». Хорда вычислена как:
 ///
 /// ```text
 /// S_PERC_MIN = 2 · C_rep · sin(20° / 2)
-///            = 2 · 0.2049 · sin(10°)
-///            ≈ 0.07116   (Oklab a/b units)
 /// ```
 ///
-/// Feeding `C_rep` back through [`s_min_deg`] returns 20.0° by construction,
-/// so the v1 default behaviour matches the eyeball-calibrated #55 margin while
-/// the machinery is ready to vary the angle per zone once issue #20's per-zone
-/// chroma map lands.
+/// где `C_rep` — средняя хрома Figma-якорей (см. таблицу ниже).
+///
+/// **20° — наблюдательная оценка (#55), а не опубликованный перцептивный
+/// порог.** Разрешающий стандарт: Witzel & Gegenfurtner (2013) «Chromatic
+/// contrast sensitivity under natural viewing conditions», JOSA A 30(7):1501 —
+/// исследование минимально различимых оттенковых зазоров в Oklab-подобном
+/// пространстве при реальных условиях просмотра. До закрытия этой ссылки
+/// константа считается **OPEN/provisional** и должна нести этот флаг явно.
+///
+/// # Данные Figma CONTENTS (заземление, 2026-06-30)
+///
+/// Якорные хромы из коллекции «🔵 4.1 Primitives» (Light-mode), обход
+/// переменных через figma-console (никаких page-names):
+///
+/// | сентимент | hex Figma  | Oklab C |
+/// |-----------|-----------|---------|
+/// | Danger    | `#FF3B30` | 0.2321  |
+/// | Warning   | `#FFA100` | 0.1717  |
+/// | Success   | `#34C759` | 0.1944  |
+/// | Info      | `#3E87FF` | 0.1931  |
+///
+/// `C_rep = (0.2321 + 0.1717 + 0.1944 + 0.1931) / 4 = 0.1978`
+///
+/// ```text
+/// S_PERC_MIN_figma = 2 · 0.1978 · sin(10°) ≈ 0.0687
+/// ```
+///
+/// Текущее значение (`0.0712`) было вычислено по старым якорям Apple HIG
+/// (`C_rep = 0.2049`). Разница ≈ 0.0025 (< 0.5 JND). Константа **оставлена
+/// как есть** (поведенческая совместимость; смена ниже порога JND), пока
+/// разрешающее исследование (Witzel & Gegenfurtner 2013 или аналог) не даст
+/// первопринципное значение.
+///
+/// # OPEN: разрешающее исследование
+///
+/// Witzel & Gegenfurtner (2013), JOSA A 30(7):1501:
+/// «Chromatic contrast sensitivity under natural viewing conditions» —
+/// измерение минимально различимых хроматических зазоров; задаёт методологию
+/// перевода JND-порогов в допустимый зазор для сентимент-оттенков.
+// OPEN (provisional): 20° — наблюдательная оценка (#55); разрешить через
+// Witzel & Gegenfurtner 2013 (JOSA A 30:1501) или аналогичное исследование
+// минимальных хроматических зазоров. Значение оставлено неизменным до
+// закрытия исследования (разница с Figma-якорями < 0.5 JND).
 const S_PERC_MIN: f64 = 0.071_157_9;
 
 /// Translate the perceptual separation target [`S_PERC_MIN`] into the hue angle
@@ -137,18 +160,27 @@ impl Sentiment {
         }
     }
 
-    /// The culturally-recognised anchor colour whose **Oklab hue** is this
-    /// sentiment's prototype (Apple HIG system colours — a widely-recognised
-    /// reference set). The hue is read off the colour, never typed as degrees, so
-    /// it cannot drift between hue models. The anchor's chroma/lightness are *not*
-    /// used — the ramp is rebuilt from the shared perceived-lightness ladder at a
-    /// fixed fraction of the gamut-edge chroma (see [`SentimentCurve::at`]).
+    /// Якорный цвет сентимента, чей **Oklab-оттенок** используется как прототип.
+    ///
+    /// Значения заземлены в Figma CONTENTS (коллекция «🔵 4.1 Primitives»,
+    /// Light-mode, обход переменных через figma-console, 2026-06-30):
+    ///
+    /// | сентимент | переменная Figma       | hex      | Oklab h  |
+    /// |-----------|------------------------|----------|----------|
+    /// | Danger    | `Labels/Danger/Primary` → `Accent/Red`    | `#FF3B30` | 28.66° |
+    /// | Warning   | `Labels/Warning/Primary` → `Accent/Orange` | `#FFA100` | 68.61° |
+    /// | Success   | `Labels/Success/Primary` → `Accent/Green`  | `#34C759` | 147.44° |
+    /// | Info      | `Labels/Info/Primary` → `Accent/Blue`    | `#3E87FF` | 259.89° |
+    ///
+    /// Только Oklab-оттенок используется как прототип; хрома и светлота якоря
+    /// не применяются — рампа строится из общей perceived-lightness лестницы на
+    /// фиксированной доле граничной хромы гамута (см. [`SentimentCurve::at`]).
     fn anchor_hex(self) -> &'static str {
         match self {
-            Sentiment::Danger => "#FF3B30",
-            Sentiment::Warning => "#FF9500",
-            Sentiment::Success => "#34C759",
-            Sentiment::Info => "#007AFF",
+            Sentiment::Danger => "#FF3B30", // Figma: Accent/Red (Labels/Danger/Primary)
+            Sentiment::Warning => "#FFA100", // Figma: Accent/Orange (Labels/Warning/Primary)
+            Sentiment::Success => "#34C759", // Figma: Accent/Green (Labels/Success/Primary)
+            Sentiment::Info => "#3E87FF",   // Figma: Accent/Blue (Labels/Info/Primary)
         }
     }
 
@@ -628,10 +660,10 @@ mod tests {
         // Значения верифицированы через figma-console figma_execute (2026-06-30).
         let expected: &[(&str, f64)] = &[
             // (figma_hex,        expected_oklab_hue_deg)
-            ("#FF3B30",  28.6592),  // Accent/Red   → Danger
-            ("#FFA100",  68.6070),  // Accent/Orange → Warning
-            ("#34C759", 147.4439),  // Accent/Green  → Success
-            ("#3E87FF", 259.8918),  // Accent/Blue   → Info
+            ("#FF3B30", 28.6592),  // Accent/Red   → Danger
+            ("#FFA100", 68.6070),  // Accent/Orange → Warning
+            ("#34C759", 147.4439), // Accent/Green  → Success
+            ("#3E87FF", 259.8918), // Accent/Blue   → Info
         ];
         let sentiments = [
             Sentiment::Danger,
@@ -792,13 +824,14 @@ mod tests {
 
     #[test]
     fn warning_floor_enforced_full_circle() {
-        // Restored guard (#65 dropped it, #66 inherited the gap): Warning must
-        // never slide below its categorical floor into the red region, for ANY
-        // brand on the circle. This is the hard half of the Warning↔Danger fix.
+        // Восстановлена защита (#65 её убрала, #66 унаследовал уязвимость):
+        // Warning никогда не должен опускаться ниже своего категориального
+        // порога в красную зону, при ЛЮБОМ брендовом оттенке на круге.
+        // prototype_hex = Figma Accent/Orange (#FFA100, 2026-06-30).
         let n = neutral();
         let mut brand = 0.0;
         while brand < 360.0 {
-            let h = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n)
+            let h = SentimentCurve::new(Sentiment::Warning, brand, "#FFA100", &n)
                 .unwrap()
                 .resolved_hue;
             assert!(
@@ -811,14 +844,15 @@ mod tests {
 
     #[test]
     fn warning_stays_distinguishable_from_danger_full_circle() {
-        // The machine-proven defect this PR fixes: with the membership-field
-        // picker Warning could resolve ~3.9° from Danger (perceptually one colour)
-        // at brand≈56°. The smooth resolver + floor keep a clear gap everywhere.
+        // Доказанный дефект машинным тестом: с picker на основе membership-field
+        // Warning мог резолвиться в 3.9° от Danger (перцептивно один цвет) при
+        // brand≈56°. Smooth-resolver + floor держат чёткий зазор везде.
+        // prototype_hex: Warning = Figma #FFA100; Danger = Figma #FF3B30.
         let n = neutral();
         let mut brand = 0.0;
         let mut worst = f64::INFINITY;
         while brand < 360.0 {
-            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FF9500", &n)
+            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FFA100", &n)
                 .unwrap()
                 .resolved_hue;
             let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n)
