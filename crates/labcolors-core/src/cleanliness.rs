@@ -217,9 +217,21 @@ pub fn depth_mod(l: f64, c: f64, h_deg: f64, b0: f64, bw: f64) -> f64 {
 /// Единственная точка входа — `raw_chromatic`, которая и так гейтирована b-axis (depth_mod).
 #[inline]
 pub fn hue_weight(h_deg: f64) -> f64 {
-    // Hanning-окно: (1 + cos(h − H_Y_DEG)) / 2
-    // cos(h − H_Y_DEG) максимален (=1) при h = H_Y_DEG, минимален (= -1) при h = H_Y_DEG ± 180°
-    (1.0 + (h_deg - H_Y_DEG).to_radians().cos()) / 2.0
+    // Hanning-окно: (1 + cos(δ)) / 2, где δ = h − H_Y_DEG нормирован в [0°, 360°).
+    //
+    // Граничные случаи обрабатываются явно, чтобы гарантировать платформенно-точные
+    // значения 1.0 и 0.0 независимо от FP-реализации cos(0) / cos(π):
+    //   δ == 0.0° → cos(0) = 1 → hw = 1.0 точно
+    //   δ == 180.0° → cos(π) = −1 → hw = 0.0 точно
+    // Остальные углы вычисляются через cos как обычно.
+    let delta = (h_deg - H_Y_DEG).rem_euclid(360.0);
+    if delta == 0.0 {
+        1.0
+    } else if delta == 180.0 {
+        0.0
+    } else {
+        (1.0 + delta.to_radians().cos()) / 2.0
+    }
 }
 
 /// Сырой хроматический счёт грязи (без масштабирования).
@@ -427,6 +439,10 @@ mod tests {
         assert!(
             babypoop_mud > gold1_mud && babypoop_mud > gold2_mud,
             "babypoop должен быть грязнее золотых: {babypoop_mud:.6} vs gold1={gold1_mud:.6} gold2={gold2_mud:.6}"
+        );
+        assert!(
+            gold2_mud > gold1_mud,
+            "gold2 должен быть грязнее gold1 по BB-формуле: gold2={gold2_mud:.8} vs gold1={gold1_mud:.8}"
         );
         assert!(
             gold1_mud > puke_mud && gold2_mud > puke_mud,
@@ -752,8 +768,8 @@ mod tests {
             let delta = (i as f64) * 180.0 / (steps as f64);
             let hw = hue_weight(H_Y_DEG + delta);
             assert!(
-                hw <= prev,
-                "hue_weight не монотонно убывает: hw(h_Y + {delta:.2}) = {hw:.8} \
+                hw < prev,
+                "hue_weight не строго монотонно убывает (плато): hw(h_Y + {delta:.2}) = {hw:.8} \
                  >= hw(h_Y + {:.2}) = {prev:.8}",
                 (i - 1) as f64 * 180.0 / (steps as f64)
             );
