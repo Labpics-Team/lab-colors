@@ -7,7 +7,7 @@
 // `adaptTheme` is the elegant alternative, and the way real systems behave: it
 // does NOT re-solve per frame. Each frame it cheaply RE-CHECKS whether the
 // current colours still pass their contrast against the (new) background — one
-// CAM16 forward for the background plus one per role, no solve. While they pass
+// perceptual-model forward for the background plus one per role, no solve. While they pass
 // it does nothing (no churn, no jitter). Only when a role's perceptual contrast
 // stays below target for a sustained moment does it re-solve and **ease** to the
 // fresh colours over a short transition. The result: fewer computations, no
@@ -45,7 +45,7 @@
 //     `legalFloor` against the live background; a role whose eased intermediate
 //     would dip below its floor is advanced (monotonically) to the least blend
 //     that stays legal — never below the line, never a backwards flicker. Roles
-//     with no legal floor (decorative / JND) ease freely either way.
+//     with no legal floor (decorative) ease freely either way.
 
 import { applyTheme } from "./apply-theme.js";
 import { effectiveBackground, parseCssColor, oklabLerp } from "./effective-bg.js";

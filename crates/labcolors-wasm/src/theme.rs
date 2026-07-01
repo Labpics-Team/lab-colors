@@ -8,8 +8,8 @@
 //! The `-IC` ("increased contrast") themes are calibrated and resolve to their
 //! respective high-contrast viewing conditions: `LightIncreasedContrast` →
 //! `srgb_high_contrast()`, `DarkIncreasedContrast` → `dim_surround_high_contrast()`.
-//! The `ThemeNotCalibrated` error variant is retained for forward-compatibility
-//! (future reserved themes), but is not returned by any currently valid theme string.
+//! All four public spellings are fully supported; there is no reserved or
+//! not-yet-calibrated theme in the current contract.
 
 use labcolors_core::ViewingConditions;
 

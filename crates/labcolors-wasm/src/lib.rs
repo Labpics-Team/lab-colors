@@ -32,7 +32,7 @@ use crate::theme::Theme;
 /// full typing without a hand-written `.d.ts`.
 #[wasm_bindgen(typescript_custom_section)]
 const TS_RESULT_TYPES: &'static str = r##"
-/** The stable theme contract. `-ic` variants are reserved (not yet calibrated). */
+/** The stable theme contract. `-ic` variants apply increased contrast; all four spellings are fully supported. */
 export type ThemeName = "light" | "dark" | "light-ic" | "dark-ic";
 
 /** A solved colour and the contrasts it actually achieves. */
@@ -52,7 +52,7 @@ export interface SolvedColor {
   readonly floorOverride: boolean;
   /**
    * The minimum WCAG ratio this role is legally clamped to (4.5 for AA text,
-   * 3.0 for AA UI), or `null` for decorative / JND / zero roles. A property of
+   * 3.0 for AA UI), or `null` for decorative / zero roles. A property of
    * the role's contract, not of this solve: a runtime easing between themes
    * uses it to hold the floor every frame of the transition.
    */
@@ -107,8 +107,8 @@ impl LabColors {
     /// Create a zero-config engine on the default role table and the default
     /// per-theme viewing conditions.
     ///
-    /// `init(config)` in the task: v1 takes no config (the brand/anchor seam is
-    /// reserved). Adding an optional config object later is additive — it does
+    /// `v1` takes no config; the brand/anchor seam is left for a future
+    /// version. Adding an optional config object later is additive — it does
     /// not change this signature.
     #[wasm_bindgen(constructor)]
     pub fn new() -> LabColors {
@@ -122,7 +122,7 @@ impl LabColors {
     ///
     /// Returns a [`ResolvedTheme`] object. Per-role unreachability is part of a
     /// successful result (each role carries its own `kind`); only whole-call
-    /// failures (invalid hex, unknown or uncalibrated theme) reject — as a
+    /// failures (invalid hex, unknown theme) reject — as a
     /// structured `{ code, message }` error, never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
@@ -137,13 +137,13 @@ impl LabColors {
     /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
     /// the cheap per-frame primitive a reactive runtime uses to decide whether
     /// already-resolved colours still pass against a changed background (re-solve
-    /// only when they stably do not). No solve: one CAM16 forward for the
-    /// background plus one per foreground.
+    /// only when they stably do not). No full solve: one perceptual-model forward
+    /// for the background plus one per foreground.
     ///
     /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
     /// order of `fgHexes`: index `2*i` is foreground `i`'s signed `Lc`, `2*i+1`
     /// its WCAG ratio. Rejects (structured `{code, message}`) on an invalid hex or
-    /// an unknown/uncalibrated theme.
+    /// an unknown theme.
     #[wasm_bindgen(js_name = recheckContrast)]
     pub fn recheck_contrast(
         &self,
@@ -164,7 +164,11 @@ impl LabColors {
             .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
     }
 
-    /// Calculate the confidence score (0 to 0.34) of an sRGB hex colour.
+    /// Calculate a relative confidence score for the [`muddiness`](Self::muddiness)
+    /// call on an sRGB hex colour: `0` means the call is unreliable (near the
+    /// decision boundary or the grey frontier), higher means more confident.
+    /// The practical ceiling is an internal calibration detail, not a public
+    /// contract — do not hardcode an upper bound against this value.
     #[wasm_bindgen(js_name = confidence)]
     pub fn confidence(&self, hex: &str) -> Result<f64, JsError> {
         labcolors_core::cleanliness::confidence_from_hex(hex)
