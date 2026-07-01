@@ -113,8 +113,8 @@ pub const KAPPA_CORE: f64 = 0.34;
 pub const KAPPA_INTERIOR: f64 = 0.10;
 
 // W_HUE[8] удалён (Zone B slice 4, 2026-06-30):
-// Подогнанный вектор K=3 Фурье-регрессии (логистическая регрессия на 738 авторских метках,
-// M-12, OPEN/flagged-provisional) заменён выведенным Hanning-окном Бецольда-Брюкке.
+// Подогнанный вектор K=3 Фурье-регрессии (логистическая регрессия на 738 авторских
+// метках, M-12) заменён выведенным Hanning-окном Бецольда-Брюкке.
 // Формула: hue_weight(h) = (1 + cos(h − H_Y_DEG)) / 2
 // Провенанс: Parry (1967) J. Opt. Soc. Am. 57, 1130–1134 × Якобиан оттенка Oklab.
 // Инварианты: hue_weight(H_Y_DEG) = 1.0 точно; hue_weight(H_Y_DEG ± 180°) = 0.0 точно;
@@ -180,7 +180,7 @@ pub fn depth_mod(l: f64, c: f64, h_deg: f64, b0: f64, bw: f64) -> f64 {
 
 /// Весовой множитель оттенка — Hanning-окно Бецольда-Брюкке (Zone B slice 4, 2026-06-30).
 ///
-/// Заменяет подогнанный вектор W_HUE[8] (M-12, OPEN/flagged-provisional) на выводную формулу.
+/// Заменяет подогнанный вектор W_HUE[8] (M-12, удалён в Zone B slice 4) на выводную формулу.
 ///
 /// # Вывод формулы
 ///
@@ -318,9 +318,10 @@ pub fn confidence_from_hex(hex: &str) -> Result<f64, String> {
 //   C0  = 0.0395  (cited-and-kept, M-01, Evans/Xie-Fairchild yellow zero-grayness frontier)
 //   JND = 0.0122779190541810 (cited-and-kept, M-02, Oklab chroma JND)
 //
-// OPEN items (left unchanged): W_HUE / g0_band — всё ещё flagged-provisional
-// с named-исследованиями (см. таблицу инвентаря выше).
-// M-07/M-08 (Platt CAL_T/CAL_B) УДАЛЕНЫ в Zone B slice 3 — более не OPEN.
+// Статус (актуально на 2026-07-01): W_HUE[8] удалён и заменён выведенным Hanning-окном
+// Бецольда-Брюкке (Zone B slice 4, M-12 cited-derived, см. таблицу инвентаря выше);
+// Platt CAL_T/CAL_B удалены (Zone B slice 3). Открытых наблюдатель-фит параметров
+// в этом блоке не осталось.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Pure chroma-presence gate: N_pure(C) = sigmoid((C - C0) / JND).
