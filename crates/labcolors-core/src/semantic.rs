@@ -478,7 +478,9 @@ impl DjMagnitude {
 /// background's maximum; dJ' decorative roles
 /// ([`DecorativeDj`](RoleSpec::DecorativeDj)) target a perceived-lightness step on
 /// the CAM16-UCS J' axis with no readability floor; legacy Lc decorative roles
-/// ([`Decorative`](RoleSpec::Decorative)) target a provisional `Lc` magnitude; the
+/// ([`Decorative`](RoleSpec::Decorative)) target an `Lc` magnitude held only for
+/// the stack's relative ordering (the shadow anchors are alpha opacities, not
+/// dJ' steps — see the shadow-stack note above); the
 /// zero token ([`Zero`](RoleSpec::Zero)) resolves to nothing. Construct these
 /// through [`RoleTable`]; they are exposed so a caller can read or override a recipe.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2354,7 +2356,7 @@ mod tests {
     }
 
     #[test]
-    fn provisional_magnitudes_drive_the_decorative_result() {
+    fn decorative_magnitudes_drive_result() {
         // The decorative result is driven by the table's Lc magnitude,
         // not a hardcoded final value: change the magnitude, the result follows.
         let vc = ViewingConditions::srgb();
