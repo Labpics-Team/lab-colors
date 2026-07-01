@@ -3,7 +3,7 @@
 //! # Уравнения
 //!
 //! ```text
-//! raw = neutral_gate(L, C) * hue_weight(h) * depth_mod(L, C, h)
+//! raw = neutral_gate(C) * hue_weight(h) * depth_mod(L, C, h)
 //! mud = raw                   ← параметр-свободная монотонная нормировка (Zone B, 2026-06-30)
 //! ```
 //!
@@ -15,13 +15,17 @@
 //! - ограничено [0,1] точно (каждый множитель ∈ [0,1]);
 //! - JND-относительно по конструкции (gate N(C) выровнен по M-02 JND).
 //!
+//! Бывший light-escape порог M-03 (DECLARED-CALIBRATION скаляр) и его escape-член
+//! в `neutral_gate` **удалены целиком** (Zone B, 2026-07-01): escape-член протекал
+//! ось L в функцию, документированную как чисто-хроматический hue-agnostic гейт —
+//! нарушение независимости осей. `neutral_gate(c, c0, jnd) = sigmoid((c - c0) / jnd)`.
+//!
 //! # Инвентарь параметров (раздел Muddiness Law)
 //!
 //! | const           | mud-id | статус                         | значение                    |
 //! |-----------------|--------|--------------------------------|-----------------------------|
 //! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (граница серого sRGB; Evans/Xie-Fairchild yellow zero-grayness frontier) |
 //! | `JND`           | M-02   | cited-and-kept                 | 0.01228 (Oklab chroma JND; Oklab perceptual measurement) |
-//! | `LESC`          | M-03   | DECLARED-CALIBRATION           | 0.8208552 (порог light-escape) |
 //! | `B0`            | M-04   | cited-measured                 | 0.036 (центр диапазона [0.030, 0.044]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
 //! | `BW`            | M-05   | cited-measured                 | 0.017 (центр диапазона [0.013, 0.020]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
 //! | ~~`CAL_EPS`~~   | M-06   | УДАЛЁН (Zone B slice 3)        | был 0.01; log-регуляризатор для Platt — более не нужен |
@@ -102,7 +106,9 @@ pub const C0: f64 = 0.0395000000000000;
 /// study finds a different gate width is warranted, M-02 should be split into separate cited
 /// values (one for detection threshold, one for gate width).  Flagged OPEN as an assumption.
 pub const JND: f64 = 0.0122779190541810;
-pub const LESC: f64 = 0.8208552000000002;
+// M-03 (former light-escape calibration threshold, DECLARED-CALIBRATION) removed
+// entirely (Zone B, 2026-07-01): its escape term leaked the lightness axis into
+// what is documented as a hue-agnostic, chroma-only gate (see `neutral_gate` above).
 pub const B0: f64 = 0.036; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.030, 0.044]
 pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.013, 0.020]
 // CAL_EPS / CAL_T / CAL_B удалены (Zone B slice 3, 2026-06-30):
@@ -165,10 +171,15 @@ pub fn depth_term(l: f64, h_deg: f64) -> f64 {
 }
 
 /// Hue-agnostic chroma-confidence gate: checks if the color is chromatic at all, or reads grey/beige.
-pub fn neutral_gate(l: f64, c: f64, c0: f64, jnd: f64, lesc: f64) -> f64 {
-    let cc = sigmoid((c - c0) / jnd);
-    let escape = sigmoid((l - lesc) / jnd) * sigmoid((2.0 * c0 - c) / jnd);
-    cc * (1.0 - escape)
+///
+/// `neutral_gate(c, c0, jnd) = sigmoid((c - c0) / jnd)` — a pure JND-relative
+/// chroma-presence gate. The former light-escape term (a product of two
+/// sigmoids gated on lightness and chroma) depended on a DECLARED-CALIBRATION
+/// threshold (M-03, a Platt-fit scalar on the v3 dataset) and leaked the
+/// lightness axis into a function documented as hue-agnostic and chroma-only —
+/// removed entirely (Zone B, 2026-07-01) per North's ZERO observer-fit invariant.
+pub fn neutral_gate(c: f64, c0: f64, jnd: f64) -> f64 {
+    sigmoid((c - c0) / jnd)
 }
 
 /// Opponent b-gate (warm/clean filter): gates the geometric depth term. Warm -> 1.0, cool -> 0.0.
@@ -240,7 +251,7 @@ pub fn hue_weight(h_deg: f64) -> f64 {
 ///
 /// Все три множителя ∈ [0,1], поэтому raw ∈ [0,1] строго.
 pub fn raw_chromatic(l: f64, c: f64, h_deg: f64) -> f64 {
-    let cc = neutral_gate(l, c, C0, JND, LESC);
+    let cc = neutral_gate(c, C0, JND);
     let hw = hue_weight(h_deg);
     let dpm = depth_mod(l, c, h_deg, B0, BW);
     cc * hw * dpm
@@ -269,7 +280,7 @@ pub fn muddiness_oklch(l: f64, c: f64, h_deg: f64) -> f64 {
 /// Bounded by the declared-calibration concept floor (DECLARED-CALIBRATION KAPPA_CORE=0.34 stable-core /
 /// KAPPA_INTERIOR=0.10 interior; empirical v3-retest floors, NOT published perceptual constants — see M-10/M-11 in the inventory table above).
 pub fn confidence(l: f64, c: f64, h_deg: f64) -> f64 {
-    let cc = neutral_gate(l, c, C0, JND, LESC);
+    let cc = neutral_gate(c, C0, JND);
     let chroma_conf = (1.0 - 4.0 * cc * (1.0 - cc)).clamp(0.0, 1.0);
     let mud = muddiness_oklch(l, c, h_deg);
     let margin_conf = (1.0 - (-((mud - 0.5) / M_W).powi(2)).exp()).clamp(0.0, 1.0);
@@ -751,6 +762,50 @@ mod tests {
             !prod_code.contains("pub const CAL_EPS"),
             "pub const CAL_EPS найден в продуктивном коде — log-регуляризатор Platt не удалён (M-06)."
         );
+    }
+
+    // ─── Light-escape term removal guard (Zone B, Fowler class Д) ──────────────
+    //
+    // Проверяет, что `neutral_gate` — теперь 3-арная функция от (c, c0, jnd) —
+    // не содержит скрытого escape-члена, зависящего от L (former M-03
+    // DECLARED-CALIBRATION threshold). Закрывает класс «скрытый калибровочный
+    // порог + протечка оси L в чисто-хроматический гейт».
+    //
+    // Стратегия (сильнее grep-по-имени): арность сигнатуры проверяется на
+    // этапе КОМПИЛЯЦИИ (вызов ровно с 3 аргументами не скомпилируется, если
+    // функция всё ещё принимает L/escape-параметр — RED был подтверждён до
+    // правки: 5-арный вызов не собирался с 3 аргументами). Плюс узкий
+    // grep-guard на паттерн употребления (`let escape`) и property-sweep,
+    // доказывающий БИТОВОЕ равенство sigmoid((c-c0)/jnd) на широком диапазоне
+    // C — если бы escape-член вернулся под другим именем, sweep поймал бы
+    // отклонение на большинстве точек.
+    //
+    // RED на дереве с escape-членом: 3-арный вызов не компилировался (см.
+    // историю коммита). GREEN после удаления: точное битовое равенство.
+    #[test]
+    fn light_escape_term_absent_from_shipping_code() {
+        let source = include_str!("cleanliness.rs");
+        let prod_code = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        assert!(
+            !prod_code.contains("let escape"),
+            "`let escape` найден в продуктивном коде — escape-член neutral_gate не удалён."
+        );
+
+        // neutral_gate теперь чистый sigmoid gate: sigmoid((c-c0)/jnd), без L и без escape.
+        // Sweep C от 0.0 до 1.0 (включая бледный тёплый диапазон, где раньше срабатывал
+        // escape-член и подавлял cc) — каждая точка должна ТОЧНО совпадать с sigmoid.
+        let steps = 1001usize;
+        for i in 0..=steps {
+            let c = (i as f64) / (steps as f64);
+            let expected = sigmoid((c - C0) / JND);
+            let got = neutral_gate(c, C0, JND);
+            assert_eq!(
+                got, expected,
+                "neutral_gate(c={c:.6}, C0, JND) должен быть РОВНО sigmoid((c-C0)/JND) без \
+                 escape-члена; got={got:.18} expected={expected:.18}"
+            );
+        }
     }
 
     // ─── Drab head property tests (Zone B slice 2, Fowler class A) ──────────
