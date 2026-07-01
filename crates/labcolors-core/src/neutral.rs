@@ -11,11 +11,16 @@ pub struct CurveParams {
 impl Default for CurveParams {
     fn default() -> Self {
         Self {
-            // NEEDS-SCIENCE — gamma for light-side neutral curve; PROVISIONAL, owner's eye.
+            // Показатель степени, которым гамма-кривая отображает t на светлотный
+            // интервал [светлый якорь, базовый], при t <= 0.5.
+            // SSOT-TRACKED — гамма светлой ветви нейтральной кривой.
             gamma_light: 1.75,
-            // NEEDS-SCIENCE — gamma for dark-side neutral curve; PROVISIONAL, owner's eye.
+            // Показатель степени для тёмной ветви (t > 0.5): интервал [базовый,
+            // тёмный якорь].
+            // SSOT-TRACKED — гамма тёмной ветви нейтральной кривой.
             gamma_dark: 1.5,
-            // NEEDS-SCIENCE — chroma peak position along curve parameter t; PROVISIONAL.
+            // Позиция вдоль параметра кривой t, где огибающая хромы достигает пика.
+            // SSOT-TRACKED — положение пика хромы вдоль параметра кривой t.
             chroma_peak_t: 0.35,
         }
     }

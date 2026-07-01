@@ -1,7 +1,7 @@
 //! Empirical-inventory gate — R4 hygiene/governance regime (epic: empirical-inventory-gate).
 //!
 //! BUG CLASS this guards: *a numeric perceptual-POLICY constant lands with no
-//! paper-trail* — no `// NEEDS-SCIENCE`/`// GROUNDED` marker and no row in the
+//! paper-trail* — no `// SSOT-TRACKED`/`// GROUNDED` marker and no row in the
 //! SSOT `docs/empirical-inventory.md`. This is a governance regime
 //! (R4): it asserts every policy literal is **marked + inventoried**. It does
 //! NOT assert math (R1), derivation-identity (R2), or behavioural non-drift
@@ -136,10 +136,10 @@ struct DetectedConst {
     /// column: a single literal (`"0.10"`) or a `DjMagnitude` pair (`"7.93, 17.67"`).
     /// Empty only if a value could not be extracted (never for a real site).
     value: String,
-    /// Whether a `// NEEDS-SCIENCE` or `// GROUNDED` marker sits within a 2-line
+    /// Whether a `// SSOT-TRACKED` or `// GROUNDED` marker sits within a 2-line
     /// lookback above the site.
     has_marker: bool,
-    /// Whether the marker (if any) is the provisional `// NEEDS-SCIENCE` kind.
+    /// Whether the marker (if any) is the provisional `// SSOT-TRACKED` kind.
     needs_science: bool,
     /// The verbatim marker comment line (trimmed), if any — so GATE-4 can verify
     /// the *citation text* of a `// GROUNDED` marker, not merely its presence.
@@ -291,7 +291,7 @@ fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
             break;
         }
         let prev = lines[site_idx - back].trim_start();
-        if prev.contains("// NEEDS-SCIENCE") {
+        if prev.contains("// SSOT-TRACKED") {
             has = true;
             needs = true;
             marker_line = prev.to_string();
@@ -455,7 +455,7 @@ struct InventoryRow {
     /// The documented module (fourth column). GATE 2 asserts this equals the
     /// module the const is actually detected in.
     module: String,
-    /// Marker column normalised: true == provisional (`NEEDS-SCIENCE`).
+    /// Marker column normalised: true == provisional (`SSOT-TRACKED`).
     provisional: bool,
 }
 
@@ -505,7 +505,7 @@ fn parse_inventory(text: &str) -> Vec<InventoryRow> {
         let value = cells[2].trim_matches('`').to_string();
         let module = cells[3].trim_matches('`').to_string();
         let marker = cells[4].to_ascii_uppercase();
-        let provisional = marker.contains("NEEDS-SCIENCE");
+        let provisional = marker.contains("SSOT-TRACKED");
         rows.push(InventoryRow {
             row_num,
             name,
@@ -621,7 +621,7 @@ fn value_or_module_drift(rows: &[InventoryRow], detected: &[DetectedConst]) -> V
 //   1. A doc-link `(… docs/<file>.md …)` whose file EXISTS on disk.
 //   2. At least one backtick-quoted citation ANCHOR token (e.g. ``0.0.98G-4g``),
 //      and EVERY such anchor must be attested verbatim in that cited document.
-// A `// NEEDS-SCIENCE` marker is provisional-by-definition (no upstream source),
+// A `// SSOT-TRACKED` marker is provisional-by-definition (no upstream source),
 // so it is out of scope here — only `// GROUNDED` claims a citable provenance.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -657,7 +657,7 @@ fn backtick_spans(s: &str) -> Vec<String> {
 }
 
 /// Parse a `// GROUNDED` marker line into its citation. Returns `None` for a
-/// non-GROUNDED marker (e.g. `// NEEDS-SCIENCE`). The doc-link is the first
+/// non-GROUNDED marker (e.g. `// SSOT-TRACKED`). The doc-link is the first
 /// `docs/…\.md` token found anywhere on the line (parenthesised by convention,
 /// but we do not require the parens so a reformatting cannot bypass the check).
 fn parse_grounded_citation(marker_line: &str) -> Option<GroundedCitation> {
@@ -700,7 +700,7 @@ fn grounded_citation_defects(
     let mut defects = Vec::new();
     for c in detected {
         if !c.marker_line.contains("// GROUNDED") {
-            continue; // NEEDS-SCIENCE / unmarked: out of scope for provenance-truth.
+            continue; // SSOT-TRACKED / unmarked: out of scope for provenance-truth.
         }
         let Some(cite) = parse_grounded_citation(&c.marker_line) else {
             defects.push(format!(
@@ -771,7 +771,7 @@ fn gate1_every_policy_const_is_marked() {
 
     assert!(
         unmarked.is_empty(),
-        "GATE 1 FAILED — {} POLICY const(s) have no `// NEEDS-SCIENCE` / `// GROUNDED` \
+        "GATE 1 FAILED — {} POLICY const(s) have no `// SSOT-TRACKED` / `// GROUNDED` \
          marker within a 2-line lookback (magic number without a paper-trail):\n  {}",
         unmarked.len(),
         unmarked.join("\n  ")
@@ -842,8 +842,8 @@ fn gate2_inventory_and_markers_are_in_sync() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GATE 3 — unmarked-provisional contract (contract). The marker↔inventory
-// contract holds *both ways*: every `// NEEDS-SCIENCE` const has a provisional
-// inventory row, and every provisional row has a `// NEEDS-SCIENCE` const
+// contract holds *both ways*: every `// SSOT-TRACKED` const has a provisional
+// inventory row, and every provisional row has a `// SSOT-TRACKED` const
 // (INV-2).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -874,9 +874,9 @@ fn gate3_needs_science_contract_holds_both_ways() {
 
     assert!(
         const_without_provisional_row.is_empty() && provisional_row_without_const.is_empty(),
-        "GATE 3 FAILED — NEEDS-SCIENCE marker↔provisional-row contract broken (INV-2).\n  \
-         `// NEEDS-SCIENCE` consts with NO provisional row: {:?}\n  \
-         provisional rows with NO `// NEEDS-SCIENCE` const: {:?}",
+        "GATE 3 FAILED — SSOT-TRACKED marker↔provisional-row contract broken (INV-2).\n  \
+         `// SSOT-TRACKED` consts with NO provisional row: {:?}\n  \
+         provisional rows with NO `// SSOT-TRACKED` const: {:?}",
         const_without_provisional_row,
         provisional_row_without_const
     );
@@ -957,7 +957,7 @@ fn standards_are_excluded_from_inventory() {
         leaked.is_empty(),
         "standards-exclusion FAILED (INV-3) — standard name(s) leaked into the POLICY \
          inventory as a row: {:?}. Standards are excluded by construction and must never \
-         be marked NEEDS-SCIENCE or inventoried.",
+         be marked SSOT-TRACKED or inventoried.",
         leaked
     );
 

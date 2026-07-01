@@ -107,7 +107,7 @@ impl Sentiment {
     /// injects a small spurious discontinuity at the prototype's *antipode* — and
     /// Warning's red-avoidance is already handled exactly by its [`hue_floor`], so
     /// no asymmetry is needed. The hook is kept (and `with_params` still tunes it)
-    /// for a future per-zone calibration. **PROVISIONAL** (Daniil's eye).
+    /// as an open extension seam; no category currently needs it.
     fn hardness(self) -> (f64, f64) {
         let _ = self;
         (DEFAULT_HARDNESS, DEFAULT_HARDNESS)
@@ -117,7 +117,7 @@ impl Sentiment {
     /// meaning — Warning must never slide into the red region it would otherwise
     /// share with Danger. Applied as a hard legality constraint, never a soft
     /// preference. This is the guarantee #65 dropped (and #66 inherited), whose
-    /// loss let Warning resolve ~3.9° from Danger; restored here. **PROVISIONAL**.
+    /// loss let Warning resolve ~3.9° from Danger; restored here.
     fn hue_floor(self) -> Option<f64> {
         match self {
             Sentiment::Warning => Some(45.0),
@@ -180,17 +180,17 @@ fn oklab_hue_of(hex: &str) -> f64 {
 }
 
 /// Default asymptote hardness `p` for a sentiment with no special asymmetry.
-/// `p = 5` is the calibration default Daniil picks by eye (Sticky Potential Well);
-/// `p → ∞` recovers the old hard 20° wall, `p → 1` is the softest (most eager) yield.
-// NEEDS-SCIENCE — p-norm hardness default; Daniil eye-calibrated (#55, PROVISIONAL).
+/// `p = 5` is the calibration default (Sticky Potential Well); `p → ∞` recovers
+/// the old hard 20° wall, `p → 1` is the softest (most eager) yield.
+// SSOT-TRACKED — p-norm hardness default (#55).
 pub const DEFAULT_HARDNESS: f64 = 5.0;
 
 /// Fraction of the in-gamut maximum chroma every sentiment colour carries at its
-/// perceived-lightness-matched point — the single "strength" knob (PROVISIONAL,
-/// Daniil's eye). `< 1` so a sentiment sits just inside its gamut wall rather than
-/// on it (the edge can read neon). Applied identically to every hue: there is no
-/// per-hue cap. See [`SentimentCurve::hex_at`].
-// NEEDS-SCIENCE — gamut-fraction chroma strength knob; PROVISIONAL, Daniil's eye.
+/// perceived-lightness-matched point — the single "strength" knob. `< 1` so a
+/// sentiment sits just inside its gamut wall rather than on it (the edge can
+/// read neon). Applied identically to every hue: there is no per-hue cap. See
+/// [`SentimentCurve::hex_at`].
+// SSOT-TRACKED — gamut-fraction chroma strength knob.
 const CHROMA_FRACTION: f64 = 0.88;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
@@ -860,7 +860,9 @@ mod tests {
         // resolved hue to be Lipschitz-smooth everywhere else. This catches any
         // SPURIOUS discontinuity (the membership-field picker's 46° flip lived far
         // from either seam) while accepting the two unavoidable ones. Seam
-        // placement is PROVISIONAL (owner's perceptual eye).
+        // placement follows directly from the smooth-asymptote model's two
+        // topological seams (prototype handoff, prototype antipode), not a
+        // tuned threshold.
         let n = neutral();
         let step = 0.05_f64;
         for s in Sentiment::ALL {
