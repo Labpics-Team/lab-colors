@@ -137,8 +137,8 @@ impl LabColors {
     /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
     /// the cheap per-frame primitive a reactive runtime uses to decide whether
     /// already-resolved colours still pass against a changed background (re-solve
-    /// only when they stably do not). No solve: one CAM16 forward for the
-    /// background plus one per foreground.
+    /// only when they stably do not). No full solve: one perceptual-model forward
+    /// for the background plus one per foreground.
     ///
     /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
     /// order of `fgHexes`: index `2*i` is foreground `i`'s signed `Lc`, `2*i+1`
