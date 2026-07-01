@@ -52,7 +52,7 @@ export interface SolvedColor {
   readonly floorOverride: boolean;
   /**
    * The minimum WCAG ratio this role is legally clamped to (4.5 for AA text,
-   * 3.0 for AA UI), or `null` for decorative / JND / zero roles. A property of
+   * 3.0 for AA UI), or `null` for decorative / zero roles. A property of
    * the role's contract, not of this solve: a runtime easing between themes
    * uses it to hold the floor every frame of the transition.
    */
