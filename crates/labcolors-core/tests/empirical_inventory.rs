@@ -2,7 +2,7 @@
 //!
 //! BUG CLASS this guards: *a numeric perceptual-POLICY constant lands with no
 //! paper-trail* — no `// NEEDS-SCIENCE`/`// GROUNDED` marker and no row in the
-//! SSOT `docs/decisions/empirical-inventory.md`. This is a governance regime
+//! SSOT `docs/empirical-inventory.md`. This is a governance regime
 //! (R4): it asserts every policy literal is **marked + inventoried**. It does
 //! NOT assert math (R1), derivation-identity (R2), or behavioural non-drift
 //! (R3) — it never reads the magnitude of a value, only the presence of its
@@ -28,7 +28,8 @@
 //! green-from-birth).
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+
+mod common;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit surface — the 6 perceptual modules the detector scans.
@@ -81,27 +82,10 @@ const FORBIDDEN_STANDARD_ROW_NAMES: &[&str] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Path resolution (hermetic — keyed off CARGO_MANIFEST_DIR, no CWD assumptions).
+// Path resolution — делегировано в `common` (без дублирования между файлами).
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn src_dir() -> PathBuf {
-    crate_root().join("src")
-}
-
-/// The SSOT lives at workspace `docs/decisions/empirical-inventory.md`, two
-/// directories above the crate root (`crates/labcolors-core/`).
-fn inventory_path() -> PathBuf {
-    crate_root()
-        .join("..")
-        .join("..")
-        .join("docs")
-        .join("decisions")
-        .join("empirical-inventory.md")
-}
+use common::{crate_root, inventory_path, src_dir};
 
 fn read_module(file: &str) -> String {
     let path = src_dir().join(file);
@@ -483,7 +467,7 @@ fn read_inventory() -> Vec<InventoryRow> {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "SSOT inventory missing at {} ({e}). \
-             The empirical-inventory gate REQUIRES docs/decisions/empirical-inventory.md \
+             The empirical-inventory gate REQUIRES docs/empirical-inventory.md \
              (one row per POLICY const, join-keyed on (row#, name)).",
             path.display()
         )
@@ -634,7 +618,7 @@ fn value_or_module_drift(rows: &[InventoryRow], detected: &[DetectedConst]) -> V
 // citation is structurally TRUE against the cited document on disk.
 //
 // What a `// GROUNDED` marker must structurally contain, and what we verify:
-//   1. A doc-link `(… docs/decisions/<file>.md …)` whose file EXISTS on disk.
+//   1. A doc-link `(… docs/<file>.md …)` whose file EXISTS on disk.
 //   2. At least one backtick-quoted citation ANCHOR token (e.g. ``0.0.98G-4g``),
 //      and EVERY such anchor must be attested verbatim in that cited document.
 // A `// NEEDS-SCIENCE` marker is provisional-by-definition (no upstream source),
@@ -646,7 +630,7 @@ fn value_or_module_drift(rows: &[InventoryRow], detected: &[DetectedConst]) -> V
 /// attests. `None` when the marker is not a GROUNDED citation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GroundedCitation {
-    /// Document path as written in the marker, e.g. `docs/decisions/apca-license.md`.
+    /// Document path as written in the marker, e.g. `docs/empirical-inventory.md`.
     doc_rel_path: String,
     /// Every backtick-quoted anchor token in the marker (e.g. `0.0.98G-4g`). A
     /// GROUNDED marker with zero anchors is itself a defect (nothing to verify).
@@ -1202,7 +1186,7 @@ fn red_proof_audit_probe() {
     // (a) TYPO'D ANCHOR: a real doc but a citation anchor the doc does not attest.
     //     `read_workspace_doc` is the real reader — the fabrication is the anchor.
     let typo = vec![probe_grounded(
-        "// GROUNDED — APCA SAPC-8 `0.0.NONEXISTENT-Xg` published set (docs/decisions/apca-license.md).",
+        "// GROUNDED — APCA SAPC-8 `0.0.NONEXISTENT-Xg` published set (docs/empirical-inventory.md).",
     )];
     let d = grounded_citation_defects(&typo, &read_workspace_doc);
     assert!(

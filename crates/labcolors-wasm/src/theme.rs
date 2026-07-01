@@ -15,12 +15,12 @@ use labcolors_core::ViewingConditions;
 
 use crate::error::BindingError;
 
-/// A theme the engine can resolve a background against.
+/// Тема, в которой движок вычисляет контраст.
 ///
-/// Parsed from the stable lowercase-kebab string contract at the boundary
-/// (`"light"`, `"dark"`, `"light-ic"`, `"dark-ic"`); the increased-contrast
-/// variants are part of the contract but resolve to a calibration error until
-/// the IC tables land.
+/// Парсится из стабильного kebab-строкового контракта на границе
+/// (`"light"`, `"dark"`, `"light-ic"`, `"dark-ic"`). Все четыре варианта
+/// полностью поддержаны: `-ic`-темы разрешаются в `srgb_high_contrast()` /
+/// `dim_surround_high_contrast()` — режимы повышенного контраста.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
     /// Light theme — sRGB average-surround viewing conditions.

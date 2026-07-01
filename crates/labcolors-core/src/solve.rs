@@ -26,7 +26,7 @@
 //! silent clip.
 //!
 //! All canonical contrast constants are reused from [`crate::lpc`]; this module
-//! declares none of them (see `docs/decisions/apca-license.md`).
+//! declares none of them (формула APCA SAPC-8 версии 0.0.98G-4g; метрика LPC, не APCA).
 
 use crate::lcs::LcsColor;
 use crate::lpc::{

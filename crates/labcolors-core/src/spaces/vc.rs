@@ -45,7 +45,7 @@ impl ViewingConditions {
     /// The surround triplet matches colorjs.io `surroundMap["average"]`,
     /// but the adapting luminance does NOT match colorjs.io, whose default
     /// is `(64/π)·0.2 ≈ 4.07 cd/m²` — lab-colors deliberately uses 64
-    /// (L_A policy: docs/decisions/theme-invariant.md). The forward path
+    /// (L_A = 64: дисплейная адаптация, не предположение о тёмной комнате). The forward path
     /// at these exact parameters is cross-validated against colour-science
     /// in `golden_tests`.
     pub fn srgb() -> Self {
