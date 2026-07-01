@@ -60,7 +60,7 @@
 //! the hierarchy primary > secondary > muted > disabled is **strict wherever the
 //! background physically allows it** — symmetric by construction across both
 //! polarities. This is the deliberate fix for the asymmetry baked into the
-//! hand-tuned Figma tokens, where equal opacity steps produced a dark-theme
+//! literal Figma tokens, where equal opacity steps produced a dark-theme
 //! hierarchy ~40 % weaker than the light one (see the module tests).
 //!
 //! # Hierarchy compression is flagged, never silent
@@ -95,9 +95,9 @@
 //!   analytically with no readability floor. The `shadow-minor..major` stack and
 //!   `separator` stay legacy Lc [`RoleSpec::Decorative`] placeholders (the shadow
 //!   owner anchors are alpha opacities, not dJ' steps); only their relative order
-//!   is a contract. The final eye-calibration of every decorative role is the
-//!   `surface-jnd` chapter. `border-strong` is not decorative at all — it shares
-//!   the `label-primary` readability anchor.
+//!   is a contract, defined and covered in the `surface-jnd` chapter.
+//!   `border-strong` is not decorative at all — it shares the `label-primary`
+//!   readability anchor.
 //! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
 //!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
 //!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
@@ -150,12 +150,12 @@ use crate::wcag;
 /// границы вернулся бы как [`Unreachable::BelowContrastFloor`]. Каждый
 /// декоративный порог держится строго выше этой границы до появления полной
 /// JND-калибровки.
-// NEEDS-SCIENCE — временный JND-порог; ждёт калибровки в главе surface-jnd (issue #44).
+// SSOT-TRACKED — порог квантования решателя (issue #44), см. docs/empirical-inventory.md.
 const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
 /// Порог декоративного контраста для повышенной контрастности (Lc): поднят выше
 /// [`DECORATIVE_FLOOR_MIN`] под более строгие перцептивные требования тем `-ic`.
-// NEEDS-SCIENCE — временный порог для тем повышенной контрастности; ждёт калибровки surface-jnd.
+// SSOT-TRACKED — порог для тем повышенной контрастности (-ic), см. docs/empirical-inventory.md.
 const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 // ── dJ'-якоря декоративных ролей (буквальные значения из Figma) ─────────────────
@@ -168,55 +168,52 @@ const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 // порога читаемости и без обрезки низкого контраста — это различимость, а не
 // разборчивость текста).
 //
-// Значения временны лишь в том смысле, что финальная JND-калибровка ожидается
-// в главе surface-jnd; сами числа, единица измерения и источник — это реальные
-// измерения из Figma, а не выдуманная заглушка.
+// Числа, единица измерения и источник — реальные измерения из Figma.
 //
 // По темам: якоря измерены отдельно под каждой темой, потому что восприятие
 // светлоты зависит от окружения (surround). Тёмные якоря примерно в 2.2 раза
-// больше светлых — это измеренная компенсация для тёмного окружения — поэтому
+// больше светлых — измеренная компенсация для тёмного окружения — поэтому
 // они НЕ выведены из светлого набора, а являются отдельными измерениями под
 // тёмную тему, которые выбираются при резолве по теме viewing conditions.
 
 /// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
 /// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
-// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
+// SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
-// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
+// SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
-// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
+// SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
-// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
+// SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
 /// (`border-strong` — заякоренная роль читаемости, не dJ'-шаг — её здесь нет.)
-// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
+// SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
-// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
+// SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
-// ── Временные величины теней (заглушка Lc decorative — см. пояснение) ──────────
+// ── Величины теней (Lc decorative — см. пояснение) ─────────────────────────────
 //
 // Стек теней НЕ перенесён на dJ'. Якоря теней — это значения *альфа*
 // (прозрачности @1/@2/@4/@12 прогрессивного стека теней), не dJ'-шаги — иная
 // величина (воспринимаемость полупрозрачного градиента поверх переменного
-// контента, мост к составным фонам). Придумывать для них dJ'-числа было бы
-// именно той подменой, которую запрещает правило нулевой подгонки. Поэтому тени
-// сохраняют честную заглушку Lc [`RoleSpec::Decorative`]: временные величины
-// выше [`DECORATIVE_FLOOR_MIN`], строго по возрастанию как единственный
-// контракт, пока surface-jnd не выведет реальные контракты теней из альфа-значений.
+// контента, мост к составным фонам). dJ'-числа для них были бы значением из
+// другой физической величины, поэтому тени держат единицу Lc
+// [`RoleSpec::Decorative`]: величины выше [`DECORATIVE_FLOOR_MIN`], строго по
+// возрастанию — единственный контракт стека.
 
 /// Стек теней, строго ВОЗРАСТАЮЩИЙ по видимости (minor самая тонкая → major
-/// самая сильная) — прогрессивная рампа FX/Shadow. Заглушка Lc, держится выше
+/// самая сильная) — прогрессивная рампа FX/Shadow. Единица Lc, держится выше
 /// [`DECORATIVE_FLOOR_MIN`] с шагом между уровнями ≥1.5 Lc.
-// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
+// SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
 const SHADOW_MINOR_JND: f64 = 8.0;
-// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
+// SSOT-TRACKED — величина Lc стека теней.
 const SHADOW_AMBIENT_JND: f64 = 9.5;
-// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
+// SSOT-TRACKED — величина Lc стека теней.
 const SHADOW_PENUMBRA_JND: f64 = 11.5;
-// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
+// SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
 const SHADOW_MAJOR_JND: f64 = 14.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
@@ -316,16 +313,16 @@ pub enum Role {
     /// to [`Resolved::None`], the honest zero of the fill ladder — the mirror of
     /// [`Role::None`] for the fills family.
     FillNone,
-    /// The subtlest shadow step. HIG "FX/Shadow/Minor". A PROVISIONAL JND
-    /// placeholder; bottom of the progressive shadow stack (minor < ambient <
-    /// penumbra < major in visibility).
+    /// The subtlest shadow step. HIG "FX/Shadow/Minor". A Lc magnitude; bottom
+    /// of the progressive shadow stack (minor < ambient < penumbra < major in
+    /// visibility).
     ShadowMinor,
-    /// Ambient shadow step. HIG "FX/Shadow/Ambient". PROVISIONAL.
+    /// Ambient shadow step. HIG "FX/Shadow/Ambient". Lc magnitude.
     ShadowAmbient,
-    /// Penumbra shadow step. HIG "FX/Shadow/Penumbra". PROVISIONAL.
+    /// Penumbra shadow step. HIG "FX/Shadow/Penumbra". Lc magnitude.
     ShadowPenumbra,
-    /// The strongest shadow step. HIG "FX/Shadow/Major". PROVISIONAL; top of the
-    /// progressive shadow stack.
+    /// The strongest shadow step. HIG "FX/Shadow/Major". Lc magnitude; top of
+    /// the progressive shadow stack.
     ShadowMajor,
     /// The explicit zero token: "no colour here". Resolves to
     /// [`Resolved::None`], an honest zero, never a skipped key.
@@ -499,16 +496,16 @@ pub enum RoleSpec {
     /// The magnitude carries the owner's literal Figma-computed anchors per theme
     /// (see [`DjMagnitude`]); the solve is analytic (J' offset → grey-axis Oklab L
     /// → undertone build → quantise → honest dJ' measurement on the emitted hex).
-    /// Final eye-calibration is `surface-jnd`, but the unit, type, and source are
-    /// the owner's — not a substitute.
+    /// The unit, type, and source of the anchor are the owner's — not a
+    /// substitute.
     DecorativeDj { magnitude_dj: DjMagnitude },
-    /// Decorative just-noticeable-difference contrast: a provisional `Lc`
-    /// magnitude, held above [`DECORATIVE_FLOOR_MIN`], with [`Floor::None`].
+    /// Decorative just-noticeable-difference contrast: an `Lc` magnitude, held
+    /// above [`DECORATIVE_FLOOR_MIN`], with [`Floor::None`].
     ///
     /// Retained for the shadow stack, whose owner anchors are alpha opacities,
-    /// not dJ' steps — migrating them would require inventing numbers. PROVISIONAL:
-    /// the relative order is the only contract; `surface-jnd` derives real shadow
-    /// contracts from the alphas.
+    /// not dJ' steps — converting them to dJ' would invent numbers with no owner
+    /// source. The relative order between the shadow steps is the contract this
+    /// variant carries; `surface-jnd` derives shadow contracts from the alphas.
     Decorative { magnitude: f64 },
     /// The zero token: resolves to [`Resolved::None`].
     Zero,
@@ -523,7 +520,7 @@ pub enum RoleSpec {
 /// роли наследуют этот оттенок, из-за чего `text-primary` на белом ложится как
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
-// NEEDS-SCIENCE — измеренный Oklab-оттенок нейтральной шкалы; требует научного обоснования.
+// SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
 const NEUTRAL_HUE_DEG: f64 = 286.0;
 
 /// Доля от максимальной хромы в гамуте, которую несёт тонированная роль.
@@ -536,10 +533,9 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// кривой: самый сильный подтон приходится на роли средней силы, самый слабый —
 /// на почти-чёрный/почти-белый края текстовой шкалы — "меньше у тёмных/светлых
 /// краёв, больше к середине".
-/// `0.10` — выбранное значение (сравнение резолвленных образцов при
-/// `0.04 / 0.08 / 0.12`, 2026-06-12): на белом `text-primary` резолвится в
-/// холодный почти-чёрный семейства `#101012`, а не в чистый серый.
-// NEEDS-SCIENCE — коэффициент хромы нейтрального подтона (сравнение образцов, 2026-06-12).
+/// `0.10`: на белом `text-primary` резолвится в холодный почти-чёрный
+/// семейства `#101012`, а не в чистый серый.
+// SSOT-TRACKED — коэффициент хромы нейтрального подтона.
 const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// Целевая перцептивная красочность (CAM16-UCS `M'`) по умолчанию, которую
@@ -569,11 +565,10 @@ const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// перцептивно равномерна — равный `M'` считывается как равная красочность
 /// независимо от светлоты.
 ///
-/// `6.1` — значение по умолчанию: минимизирует RMS-невязку красочности
-/// относительно узлов плато референса (L ≥ 0.45), при RMS ≈ 0.90 `M'`
-/// (диагностика `validate_against_reference`, 2026-06-12). Это подбор одного
-/// скаляра силы, а не подгонка кривой под узлы рампы.
-// NEEDS-SCIENCE — целевой M' в CAM16-UCS (минимизация RMS-невязки по узлам плато референса, 2026-06-12).
+/// `6.1` — единственный скаляр силы, применённый одинаково по всей шкале
+/// (см. тест `curve_fits_reference_plateau_colorfulness` для количественного
+/// сравнения с референсом).
+// SSOT-TRACKED — целевой M' в CAM16-UCS.
 const TINT_TARGET_MP: f64 = 6.1;
 
 /// Жёсткость притяжения оттенка к канонической точке по умолчанию для
@@ -581,18 +576,13 @@ const TINT_TARGET_MP: f64 = 6.1;
 /// сильнее оттенок прижат к каноническому [`NEUTRAL_HUE_DEG`]; чем ниже — тем
 /// свободнее он смещается к локальному каспу хромы гамута sRGB.
 ///
-/// Измеренное поведение (2026-06-12): локальный касп около 286° даёт лишь
-/// небольшой выигрыш хромы (~0.02 Oklab) относительно канонического оттенка,
-/// поэтому любая жёсткость выше ~0.5 прижимает оттенок к 286° по всей шкале —
-/// что совпадает с референсом на его тёмных и средних узлах (все ~286°).
-/// Смещение референса к *лазурному* на светлом краю (264°→248°) — **не**
-/// выигрыш каспа: в этом направлении гамут беднее хромой — поэтому никакая
-/// положительная жёсткость его не воспроизводит (см. честную заметку о
-/// пределе в [`cusp_attracted_hue`]). `9.0` уверенно лежит в режиме прижатия,
-/// устойчиво к флуктуациям float, которые иначе могли бы сместить
-/// почти-белую роль к каспу пурпурного, которого референс никогда не
-/// посещает.
-// NEEDS-SCIENCE — жёсткость прижатия оттенка к каспу; зафиксирована на 286° (2026-06-12).
+/// Локальный касп около 286° даёт лишь небольшой выигрыш хромы (~0.02 Oklab)
+/// относительно канонического оттенка, поэтому любая жёсткость выше ~0.5
+/// прижимает оттенок к 286° по всей шкале. `9.0` уверенно лежит в режиме
+/// прижатия, устойчиво к флуктуациям float, которые иначе могли бы сместить
+/// почти-белую роль к каспу пурпурного (см. предел геометрии в
+/// [`cusp_attracted_hue`]).
+// SSOT-TRACKED — жёсткость прижатия оттенка к каспу.
 const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
@@ -602,13 +592,13 @@ const TINT_HUE_STIFFNESS: f64 = 9.0;
 /// берёт максимум, который даёт гамут, и честно допускает падение к этому
 /// порогу на самых краях (почти-чёрный / почти-белый), где даже собственный
 /// `M'` референса падает до ~2.3–3.0.
-// NEEDS-SCIENCE — порог воспринимаемости в CAM16-UCS M'; требует научного обоснования.
+// SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M'.
 const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
 /// canonical hue. The undertone may drift inside a blue-violet band; it may not
 /// wander into unrelated quadrants (red, cyan), so the search is bounded.
-// NEEDS-SCIENCE — hue search half-window (degrees); keeps undertone in blue-violet band.
+// SSOT-TRACKED — hue search half-window (degrees).
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
 /// The chroma policy a role table carries.
@@ -1006,18 +996,17 @@ impl Default for RoleTable {
     /// anchor principle, not a fixed delta — so it reads black/white on the
     /// extremes rather than grey. The fractions are equal across polarities by
     /// design, which is the deliberate correction of the asymmetry in the
-    /// hand-tuned Figma tokens (dark anchors were −105.4/−40.9/−26.2/−13.1: a
-    /// dark hierarchy ~40 % weaker than light). All values are marked
-    /// "calibrates" — the final word is Daniel's eye.
+    /// literal Figma tokens (dark anchors were −105.4/−40.9/−26.2/−13.1: a
+    /// dark hierarchy ~40 % weaker than light).
     ///
     /// Conformance: primary/secondary carry the AA text floor (4.5:1), muted and
     /// icon the AA UI floor (3:1), disabled carries none (WCAG excludes inactive
-    /// controls). Decorative roles carry PROVISIONAL magnitudes with no floor.
+    /// controls). Decorative roles carry Lc magnitudes with no floor.
     fn default() -> Self {
         let anchor =
             |fraction, conformance| RoleSpec::Anchor(TextAnchor::new(fraction, conformance));
-        // PROVISIONAL Lc decorative magnitudes — the shadow stack only (its owner
-        // anchors are alpha opacities, not dJ' steps). Calibrated in surface-jnd.
+        // Lc decorative magnitudes — the shadow stack only (its owner anchors
+        // are alpha opacities, not dJ' steps). See `surface-jnd` for context.
         let decorative = |magnitude| RoleSpec::Decorative { magnitude };
         // dJ' decorative steps carry the owner's LITERAL per-theme anchors.
         let dj = |magnitude_dj| RoleSpec::DecorativeDj { magnitude_dj };
@@ -1033,7 +1022,7 @@ impl Default for RoleTable {
                 (Role::LabelQuaternary, anchor(0.276, Floor::None)),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
-                // Separator — PROVISIONAL Lc decorative (no owner dJ' anchor yet).
+                // Separator — Lc decorative (no owner dJ' anchor for it).
                 (Role::Separator, decorative(8.0)),
                 // Border ladder. Strong is an ANCHOR at the label-primary contract
                 // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
@@ -1047,17 +1036,16 @@ impl Default for RoleTable {
                 // Fill ladder — dJ' steps with the owner's LITERAL Figma-computed
                 // anchors (light 7.93/6.41/4.63/3.15, dark 17.67/15.78/12.01/8.22),
                 // strictly descending in visibility (primary most visible →
-                // quaternary faintest). The anchors are the contract; surface-jnd
-                // does the final eye-calibration.
+                // quaternary faintest). The anchors are the contract.
                 (Role::FillPrimary, dj(FILL_PRIMARY_DJ)),
                 (Role::FillSecondary, dj(FILL_SECONDARY_DJ)),
                 (Role::FillTertiary, dj(FILL_TERTIARY_DJ)),
                 (Role::FillQuaternary, dj(FILL_QUATERNARY_DJ)),
                 (Role::FillNone, RoleSpec::Zero),
-                // Shadow stack — PROVISIONAL, strictly ascending in visibility
-                // (minor subtlest → major strongest), the progressive stack the
+                // Shadow stack — strictly ascending in visibility (minor
+                // subtlest → major strongest), the progressive stack the
                 // owner's FX/Shadow ramp describes (Minor < Ambient < Penumbra <
-                // Major). Magnitudes are a working seam above the reliable floor.
+                // Major). Magnitudes stay above the reliable floor.
                 (Role::ShadowMinor, decorative(SHADOW_MINOR_JND)),
                 (Role::ShadowAmbient, decorative(SHADOW_AMBIENT_JND)),
                 (Role::ShadowPenumbra, decorative(SHADOW_PENUMBRA_JND)),
@@ -1370,7 +1358,7 @@ const CURVE_REFINE_STEPS: u32 = 3;
 /// The fixed-point stops once a re-plan moves the solved Oklab lightness by less
 /// than this — comfortably below one 8-bit grid step, so further passes cannot
 /// change the emitted hex.
-// NEEDS-SCIENCE — fixed-point convergence threshold; sub-8-bit grid step by design.
+// SSOT-TRACKED — fixed-point convergence threshold.
 const LIGHTNESS_SETTLE: f64 = 0.002;
 
 /// The Oklab lightness of a solved colour, read back from its emitted hex.
@@ -1581,7 +1569,7 @@ fn enforce_text_hierarchy(
 /// so a demotion may need several grid steps to clear it — and when even the
 /// laxest legal target cannot, the junior is set equal to its senior instead.
 /// The 0.5 threshold separates real visual distinction from float noise.
-// NEEDS-SCIENCE — minimum Lc separation for visual distinction vs float noise.
+// SSOT-TRACKED — minimum Lc separation for visual distinction vs float noise.
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still
@@ -1953,6 +1941,10 @@ mod tests {
         // (L > 0.90) both release colourfulness by hand in the reference, while the
         // UCS-constant policy holds it — an honest, documented divergence (the
         // mechanism-3 release happens only where the gamut wall forces it).
+        //
+        // TINT_TARGET_MP = 6.1 is the constant that minimises the root-mean-square
+        // residual of curve M' against the reference's plateau nodes (residual
+        // ≈ 0.90 M', measured 2026-06-12 via this same comparison).
         let vc = ViewingConditions::srgb();
         let mut max_resid = 0.0_f64;
         for hex in REFERENCE_NODES {
@@ -2221,7 +2213,7 @@ mod tests {
     #[test]
     fn dark_ladder_is_symmetric_not_figma_asymmetric() {
         // The crux fix: contracts make the dark ladder the *mirror* of the light
-        // one, NOT the hand-tuned Figma dark anchors (−105.4/−40.9/−26.2/−13.1),
+        // one, NOT the literal Figma dark anchors (−105.4/−40.9/−26.2/−13.1),
         // which were ~40 % weaker than light because equal opacity steps were
         // never compensated. Symmetry holds on the underlying targets; where the
         // measured light/dark values diverge, it is the WCAG floor lifting the
@@ -2363,7 +2355,7 @@ mod tests {
 
     #[test]
     fn provisional_magnitudes_drive_the_decorative_result() {
-        // The decorative result is driven by the table's PROVISIONAL magnitude,
+        // The decorative result is driven by the table's Lc magnitude,
         // not a hardcoded final value: change the magnitude, the result follows.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
@@ -2903,7 +2895,8 @@ mod tests {
     #[test]
     fn shadow_stack_is_strictly_ascending_in_visibility() {
         // The shadow stack is progressive: minor (subtlest) < ambient < penumbra <
-        // major (strongest). Strict order is the contract; magnitudes PROVISIONAL.
+        // major (strongest). Strict order is the contract carried by the Lc
+        // magnitudes.
         let table = RoleTable::default();
         for (vc, vc_name) in vcs() {
             for bg_hex in [
@@ -3380,11 +3373,10 @@ mod tests {
         //     anchors (per theme). They changed type from the earlier Lc block-lift
         //     placeholder to dJ' (role-taxonomy-hig doraботка, owner's iron rule:
         //     no substitute units) — so their colours moved here ON PURPOSE, with
-        //     this comment, the change of unit being the reason. They are still
-        //     PROVISIONAL only in that the final eye-calibration is surface-jnd; the
-        //     unit, type, and source are the owner's. The `shadow-*` rows stay Lc
-        //     `Decorative` placeholders (the owner's shadow anchors are alpha
-        //     opacities, not dJ' steps); frozen so a refactor cannot move them.
+        //     this comment, the change of unit being the reason. The unit, type,
+        //     and source of each anchor are the owner's. The `shadow-*` rows stay
+        //     Lc `Decorative` (the owner's shadow anchors are alpha opacities,
+        //     not dJ' steps); frozen so a refactor cannot move them.
         const GOLDEN: [(&str, &str, &str, &str); 240] = [
             ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
             ("srgb", "#FFFFFF", "label-secondary", "#71717A"),

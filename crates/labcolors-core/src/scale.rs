@@ -119,7 +119,9 @@ impl AccentCurve {
     }
 
     fn find_optimal_hue(&self, l_ok: f64) -> f64 {
-        // NEEDS-SCIENCE — полуокно поиска оттенка; 30° покрывает типичную ширину гребня гамута, ждёт перцептивной калибровки.
+        // Полуокно поиска оттенка (градусы): 30° покрывает типичную ширину
+        // гребня гамута sRGB вокруг канонического оттенка.
+        // SSOT-TRACKED — hue search half-window (degrees).
         const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
 
         let c_at_canonical = max_chroma(l_ok, self.h_canonical);

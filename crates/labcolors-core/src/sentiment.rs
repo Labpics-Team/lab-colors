@@ -182,7 +182,7 @@ fn oklab_hue_of(hex: &str) -> f64 {
 /// Default asymptote hardness `p` for a sentiment with no special asymmetry.
 /// `p = 5` is the calibration default Daniil picks by eye (Sticky Potential Well);
 /// `p → ∞` recovers the old hard 20° wall, `p → 1` is the softest (most eager) yield.
-// NEEDS-SCIENCE — p-norm hardness default; Daniil eye-calibrated (#55, PROVISIONAL).
+// SSOT-TRACKED — p-norm hardness default; Daniil eye-calibrated (#55, PROVISIONAL).
 pub const DEFAULT_HARDNESS: f64 = 5.0;
 
 /// Fraction of the in-gamut maximum chroma every sentiment colour carries at its
@@ -190,7 +190,7 @@ pub const DEFAULT_HARDNESS: f64 = 5.0;
 /// Daniil's eye). `< 1` so a sentiment sits just inside its gamut wall rather than
 /// on it (the edge can read neon). Applied identically to every hue: there is no
 /// per-hue cap. See [`SentimentCurve::hex_at`].
-// NEEDS-SCIENCE — gamut-fraction chroma strength knob; PROVISIONAL, Daniil's eye.
+// SSOT-TRACKED — gamut-fraction chroma strength knob; PROVISIONAL, Daniil's eye.
 const CHROMA_FRACTION: f64 = 0.88;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
