@@ -60,10 +60,11 @@ fn iterating_role_all_and_reading_key_allocates_zero_bytes() {
     // соседнего #[serial]-теста параллельно телу этого (флак класса «шум
     // бухгалтерии в замеряемом окне»). Поэтому: несколько замеров, PASS если
     // ХОТЬ ОДИН чистый — дефект кода остаётся красным во всех попытках, шум
-    // транзиентен.
+    // транзиентен. Проходов достаточно нескольких: шум = единичные всплески.
+    const MEASURED_PASSES: usize = 5;
     let mut best_delta = usize::MAX;
     let mut best_bytes = 0usize;
-    for _ in 0..5 {
+    for _ in 0..MEASURED_PASSES {
         let (before_count, before_bytes) = alloc_snapshot();
 
         for role in labcolors_core::Role::ALL {
@@ -82,8 +83,9 @@ fn iterating_role_all_and_reading_key_allocates_zero_bytes() {
         }
     }
     panic!(
-        "iterating Role::ALL allocated in every one of 5 passes (best: {best_delta} allocations, \
-         {best_bytes} bytes) — Role and Role::ALL must be allocation-free",
+        "iterating Role::ALL allocated in every one of {MEASURED_PASSES} passes \
+         (best: {best_delta} allocations, {best_bytes} bytes) — \
+         Role and Role::ALL must be allocation-free",
     );
 }
 
