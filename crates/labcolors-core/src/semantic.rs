@@ -514,43 +514,43 @@ pub enum RoleSpec {
     Zero,
 }
 
-/// The Oklab hue (degrees) the system neutral is tinted with.
+/// Oklab-оттенок (в градусах), в который тонирован системный нейтральный цвет.
 ///
-/// Daniel's neutral ladder is not a pure grey: it carries a cool blue-violet
-/// undertone. Measured in Oklab on the owner's anchors, the hue is stable across
-/// the whole ladder — `#101012` → 285.97°, `#3C3C43` (Figma secondary) → 285.78°,
-/// `#787880` (mid) → 286.01° — so a single constant captures it. Resolved roles
-/// inherit this hue, which is what makes `text-primary` on white land as a
-/// relative of `#101012` (a cool near-black) rather than the sterile grey
+/// Нейтральная шкала не чисто серая: несёт холодный сине-фиолетовый подтон.
+/// Измеренный в Oklab по опорным точкам оттенок стабилен по всей шкале —
+/// `#101012` → 285.97°, `#3C3C43` (вторичный Figma) → 285.78°, `#787880`
+/// (средний) → 286.01° — поэтому его захватывает одна константа. Резолвленные
+/// роли наследуют этот оттенок, из-за чего `text-primary` на белом ложится как
+/// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
-// NEEDS-SCIENCE — owner's measured Oklab hue of the neutral ladder; awaits sign-off.
+// NEEDS-SCIENCE — измеренный Oklab-оттенок нейтральной шкалы; требует научного обоснования.
 const NEUTRAL_HUE_DEG: f64 = 286.0;
 
-/// The fraction of the in-gamut maximum chroma a tinted role carries.
+/// Доля от максимальной хромы в гамуте, которую несёт тонированная роль.
 ///
-/// Deliberately small: the undertone must be *felt*, never *seen* as colour. The
-/// absolute chroma the solver applies is `ratio · max_chroma(L)`
-/// ([`build_color`](crate::solve)), and `max_chroma` peaks at mid lightness and
-/// falls to ~0 at both the dark and the light extreme. So a single flat ratio
-/// reproduces the neutral curve's envelope spirit *for free*: the strongest tint
-/// lands on the mid-weight roles, the faintest on the near-black / near-white
-/// ends of the text ladder — "меньше у тёмных/светлых краёв, больше к середине".
-/// `0.10` is the owner's calibrated optimum (picked by eye from engine-resolved
-/// swatches over `0.04 / 0.08 / 0.12`, 2026-06-12): on white, `text-primary`
-/// resolves to a cool near-black in the `#101012` family, not pure grey.
-// NEEDS-SCIENCE — owner's eye-calibrated chroma ratio (2026-06-12 swatch sweep).
+/// Намеренно небольшая: подтон должен *ощущаться*, но никогда не *считываться*
+/// как цвет. Решатель применяет абсолютную хрому `ratio · max_chroma(L)`
+/// ([`build_color`](crate::solve)), а `max_chroma` достигает пика на средней
+/// светлоте и падает почти до нуля на обоих краях (тёмном и светлом). Поэтому
+/// один плоский коэффициент бесплатно воспроизводит дух огибающей нейтральной
+/// кривой: самый сильный подтон приходится на роли средней силы, самый слабый —
+/// на почти-чёрный/почти-белый края текстовой шкалы — "меньше у тёмных/светлых
+/// краёв, больше к середине".
+/// `0.10` — выбранное значение (сравнение резолвленных образцов при
+/// `0.04 / 0.08 / 0.12`, 2026-06-12): на белом `text-primary` резолвится в
+/// холодный почти-чёрный семейства `#101012`, а не в чистый серый.
+// NEEDS-SCIENCE — коэффициент хромы нейтрального подтона (сравнение образцов, 2026-06-12).
 const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
-/// The default target perceptual colorfulness (CAM16-UCS `M'`) the v2 undertone
-/// curve holds across the lightness ladder — the "strength" parameter.
+/// Целевая перцептивная красочность (CAM16-UCS `M'`) по умолчанию, которую
+/// v2-кривая подтона держит по всей шкале светлоты — параметр "сила".
 ///
-/// This is the heart of mechanism 1 (*constant perceptual chroma*). The owner's
-/// reference ramp, measured in CAM16-UCS, does **not** hold a constant fraction
-/// of the gamut maximum; it holds a roughly constant *colorfulness* `M'` across
-/// the body of the ladder, tapering only at the very ends where the gamut
-/// pinches shut:
+/// Это ядро механизма 1 (*постоянная перцептивная хрома*). Референсная рампа,
+/// измеренная в CAM16-UCS, держит **не** постоянную долю от максимума гамута,
+/// а примерно постоянную *красочность* `M'` по всему телу шкалы, спадающую
+/// только на самых краях, где гамут сужается:
 ///
-/// | ref hex | L_ok | M' |
+/// | референс hex | L_ok | M' |
 /// |---------|------|----|
 /// | #303136 | 0.31 | 4.6 |
 /// | #5B5C64 | 0.48 | 6.0 |
@@ -559,46 +559,50 @@ const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// | #B3B5BF | 0.78 | 6.6 |
 /// | #CDD0D9 | 0.86 | 6.2 |
 ///
-/// `M'` sits on a ~6.3 plateau from L≈0.48 to L≈0.86 — the band where most UI
-/// roles live — and only the near-black / near-white extremes fall away. A flat
-/// `ratio · max_chroma` (v1) instead tracks the gamut envelope: it over-saturates
-/// the middle (secondary M' hit 10.3, ~60 % above the reference) and starves the
-/// light end (primary-on-dark M' 1.8, ~40 % of the reference). Targeting a
-/// constant `M'` reproduces the reference's "holds chroma in the lights, moderate
-/// in the middle" envelope *because UCS is perceptually uniform* — equal `M'`
-/// reads as equal colourfulness regardless of lightness.
+/// `M'` лежит на плато ~6.3 от L≈0.48 до L≈0.86 — в диапазоне, где живёт
+/// большинство ролей UI — и спадает только на самых краях (почти-чёрный /
+/// почти-белый). Плоский `ratio · max_chroma` (v1) вместо этого следует
+/// огибающей гамута: перенасыщает середину (M' роли secondary достигает 10.3,
+/// ~60% выше референса) и обедняет светлый край (M' primary-на-тёмном 1.8,
+/// ~40% от референса). Постоянный `M'` воспроизводит огибающую референса
+/// "держит хрому в светлых, умеренную в середине" именно потому, что UCS
+/// перцептивно равномерна — равный `M'` считывается как равная красочность
+/// независимо от светлоты.
 ///
-/// `6.1` is the calibrated default: it minimises the RMS colourfulness residual
-/// against the reference's plateau nodes (L ≥ 0.45), at RMS ≈ 0.90 `M'` — the
-/// best fit of this single strength scalar to the owner's reference (sweep in the
-/// `validate_against_reference` diagnostic, 2026-06-12). This is calibration of
-/// one scalar, not a fit of a curve to ramp nodes.
-// NEEDS-SCIENCE — RMS-minimising CAM16-UCS M' target (2026-06-12 plateau sweep).
+/// `6.1` — значение по умолчанию: минимизирует RMS-невязку красочности
+/// относительно узлов плато референса (L ≥ 0.45), при RMS ≈ 0.90 `M'`
+/// (диагностика `validate_against_reference`, 2026-06-12). Это подбор одного
+/// скаляра силы, а не подгонка кривой под узлы рампы.
+// NEEDS-SCIENCE — целевой M' в CAM16-UCS (минимизация RMS-невязки по узлам плато референса, 2026-06-12).
 const TINT_TARGET_MP: f64 = 6.1;
 
-/// The default hue-pull stiffness for the v2 curve — the second (and last) free
-/// scalar. Higher keeps the hue pinned near the canonical [`NEUTRAL_HUE_DEG`];
-/// lower lets it drift toward the local chroma cusp of the sRGB gamut.
+/// Жёсткость притяжения оттенка к канонической точке по умолчанию для
+/// v2-кривой — второй (и последний) свободный скаляр. Чем выше значение, тем
+/// сильнее оттенок прижат к каноническому [`NEUTRAL_HUE_DEG`]; чем ниже — тем
+/// свободнее он смещается к локальному каспу хромы гамута sRGB.
 ///
-/// Measured behaviour (2026-06-12): the local cusp near 286° offers only a small
-/// chroma gain (~0.02 Oklab) over the canonical hue, so any stiffness above
-/// ~0.5 pins the hue at 286° across the whole ladder — which matches the
-/// reference on its dark and mid nodes (all ~286°). The reference's *azure*
-/// light-end drift (264°→248°) is **not** a cusp gain — that direction is
-/// chroma-poorer in the gamut — so no positive stiffness reproduces it (see the
-/// honest-limit note on [`cusp_attracted_hue`]). `9.0` sits comfortably in the
-/// pinned regime, robust against float flutter that could otherwise nudge a
-/// near-white role toward the magenta cusp the reference never visits.
-// NEEDS-SCIENCE — cusp-pinning stiffness; calibrated at 286° (2026-06-12).
+/// Измеренное поведение (2026-06-12): локальный касп около 286° даёт лишь
+/// небольшой выигрыш хромы (~0.02 Oklab) относительно канонического оттенка,
+/// поэтому любая жёсткость выше ~0.5 прижимает оттенок к 286° по всей шкале —
+/// что совпадает с референсом на его тёмных и средних узлах (все ~286°).
+/// Смещение референса к *лазурному* на светлом краю (264°→248°) — **не**
+/// выигрыш каспа: в этом направлении гамут беднее хромой — поэтому никакая
+/// положительная жёсткость его не воспроизводит (см. честную заметку о
+/// пределе в [`cusp_attracted_hue`]). `9.0` уверенно лежит в режиме прижатия,
+/// устойчиво к флуктуациям float, которые иначе могли бы сместить
+/// почти-белую роль к каспу пурпурного, которого референс никогда не
+/// посещает.
+// NEEDS-SCIENCE — жёсткость прижатия оттенка к каспу; зафиксирована на 286° (2026-06-12).
 const TINT_HUE_STIFFNESS: f64 = 9.0;
 
-/// The perceptibility threshold (mechanism 3), in CAM16-UCS `M'` units. Below
-/// roughly this colorfulness the undertone is the "dead grey zone" the owner
-/// objects to. Where the gamut cannot supply [`TINT_TARGET_MP`] the curve does
-/// not chase it past the gamut wall; it takes the most the gamut allows and is
-/// honestly free to fall toward this floor at the very extremes (near-black /
-/// near-white), where even the reference's own `M'` drops to ~2.3–3.0.
-// NEEDS-SCIENCE — perceptibility floor in CAM16-UCS M'; awaits owner eye-calibration.
+/// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
+/// примерно этой красочности подтон попадает в "мёртвую серую зону" —
+/// заметно неразличимую как цвет. Там, где гамут не может обеспечить
+/// [`TINT_TARGET_MP`], кривая не гонится за ним через стену гамута: она
+/// берёт максимум, который даёт гамут, и честно допускает падение к этому
+/// порогу на самых краях (почти-чёрный / почти-белый), где даже собственный
+/// `M'` референса падает до ~2.3–3.0.
+// NEEDS-SCIENCE — порог воспринимаемости в CAM16-UCS M'; требует научного обоснования.
 const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
@@ -628,31 +632,33 @@ pub enum RoleChroma {
     /// which over-saturates the middle and starves the light end relative to the
     /// reference. Prefer [`Curve`](RoleChroma::Curve).
     Tinted { hue_deg: f64, ratio: f64 },
-    /// The v2 undertone, derived from three computable mechanisms rather than
-    /// hard-coded ramp nodes:
+    /// v2-подтон, выведенный из трёх вычислимых механизмов, а не из
+    /// захардкоженных узлов рампы:
     ///
-    /// 1. **Constant perceptual colorfulness** — the chroma at each role's
-    ///    resolved lightness is solved so the colour carries `target_mp`
-    ///    CAM16-UCS `M'` (not a fixed fraction of the gamut). UCS uniformity is
-    ///    what makes one constant hold chroma in the lights and moderate it in
-    ///    the middle. See [`TINT_TARGET_MP`].
-    /// 2. **Cusp-attracted hue** — the hue at each lightness is pulled toward the
-    ///    local chroma cusp of the sRGB gamut (computed from `max_chroma(L, h)`),
-    ///    penalised by `hue_stiffness` for leaving `canonical_hue_deg`. See
-    ///    [`cusp_attracted_hue`].
-    /// 3. **Perceptibility floor** — where the gamut cannot supply `target_mp`,
-    ///    the curve takes the gamut maximum and is allowed to fall toward
-    ///    [`TINT_PERCEPTIBLE_MP_FLOOR`] at the extremes rather than fake chroma.
+    /// 1. **Постоянная перцептивная красочность** — хрома на резолвленной
+    ///    светлоте каждой роли решается так, чтобы цвет нёс `target_mp`
+    ///    CAM16-UCS `M'` (а не фиксированную долю гамута). Именно
+    ///    равномерность UCS позволяет одной константе держать хрому в светлых
+    ///    и умерять её в середине. См. [`TINT_TARGET_MP`].
+    /// 2. **Оттенок, притянутый к каспу** — оттенок на каждой светлоте
+    ///    притягивается к локальному каспу хромы гамута sRGB (вычисляется из
+    ///    `max_chroma(L, h)`), со штрафом `hue_stiffness` за отклонение от
+    ///    `canonical_hue_deg`. См. [`cusp_attracted_hue`].
+    /// 3. **Порог воспринимаемости** — там, где гамут не может обеспечить
+    ///    `target_mp`, кривая берёт максимум гамута и на краях честно
+    ///    допускает падение к [`TINT_PERCEPTIBLE_MP_FLOOR`], а не подделывает
+    ///    хрому.
     ///
-    /// `target_mp` ("strength") and `hue_stiffness` ("hue hold") are the two
-    /// **calibrated** scalars — fitted to the owner's reference, the only knobs
-    /// tuned by eye. The rest of the curve rests on three **measured / geometric**
-    /// constants, not free parameters: the dark-anchor hue `canonical_hue_deg`
-    /// (286°, measured off the neutral ladder), the perceptibility floor
-    /// ([`TINT_PERCEPTIBLE_MP_FLOOR`], 1.5 `M'`), and the cusp search window
-    /// ([`CUSP_HALF_WINDOW_DEG`], ±40°). So the policy is "two calibrated scalars +
-    /// three measured/geometric constants", not "two scalars" — everything beyond
-    /// the two calibrated knobs is fixed geometry.
+    /// `target_mp` ("сила") и `hue_stiffness` ("удержание оттенка") — два
+    /// **выбранных** скаляра, единственные свободные ручки политики.
+    /// Остальное в кривой опирается на три **измеренные / геометрические**
+    /// константы, а не на свободные параметры: оттенок тёмного якоря
+    /// `canonical_hue_deg` (286°, измерен по нейтральной шкале), порог
+    /// воспринимаемости ([`TINT_PERCEPTIBLE_MP_FLOOR`], 1.5 `M'`) и окно
+    /// поиска каспа по оттенку ([`CUSP_HALF_WINDOW_DEG`], ±40°). То есть
+    /// политика — это "два выбранных скаляра + три измеренные/геометрические
+    /// константы", а не "два скаляра" — всё за пределами двух выбранных ручек
+    /// является фиксированной геометрией.
     Curve {
         canonical_hue_deg: f64,
         target_mp: f64,
