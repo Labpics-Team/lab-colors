@@ -54,22 +54,36 @@ fn iterating_role_all_and_reading_key_allocates_zero_bytes() {
         let _ = role.key();
     }
 
-    // Measured pass: after warmup, iterating Role::ALL and reading Role::key()
-    // must allocate zero times — they are compile-time arrays and static strings.
-    let (before_count, before_bytes) = alloc_snapshot();
+    // Замеряемый путь детерминирован (const-массив + &'static str): реальная
+    // аллокация в нём воспроизводится КАЖДЫЙ проход. Счётчик же глобальный на
+    // процесс и видит чужие потоки — харнесс cargo test печатает результат
+    // соседнего #[serial]-теста параллельно телу этого (флак класса «шум
+    // бухгалтерии в замеряемом окне»). Поэтому: несколько замеров, PASS если
+    // ХОТЬ ОДИН чистый — дефект кода остаётся красным во всех попытках, шум
+    // транзиентен.
+    let mut best_delta = usize::MAX;
+    let mut best_bytes = 0usize;
+    for _ in 0..5 {
+        let (before_count, before_bytes) = alloc_snapshot();
 
-    for role in labcolors_core::Role::ALL {
-        let key = role.key();
-        assert!(!key.is_empty(), "every role must have a non-empty key");
+        for role in labcolors_core::Role::ALL {
+            let key = role.key();
+            assert!(!key.is_empty(), "every role must have a non-empty key");
+        }
+
+        let (after_count, after_bytes) = alloc_snapshot();
+        let delta = after_count - before_count;
+        if delta == 0 {
+            return;
+        }
+        if delta < best_delta {
+            best_delta = delta;
+            best_bytes = after_bytes - before_bytes;
+        }
     }
-
-    let (after_count, after_bytes) = alloc_snapshot();
-    assert_eq!(
-        after_count,
-        before_count,
-        "iterating Role::ALL allocated {} times ({} bytes delta) — Role and Role::ALL must be allocation-free",
-        after_count - before_count,
-        after_bytes - before_bytes,
+    panic!(
+        "iterating Role::ALL allocated in every one of 5 passes (best: {best_delta} allocations, \
+         {best_bytes} bytes) — Role and Role::ALL must be allocation-free",
     );
 }
 

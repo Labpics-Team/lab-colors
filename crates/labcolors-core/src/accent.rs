@@ -17,9 +17,10 @@
 //! гамута на резолвленном оттенке. Отличие семейства от семейства — ровно один
 //! якорный оттенок. Поэтому семейство — это *строка данных* (`anchor_hex`), а не
 //! отдельный блок логики: добавить семейство = добавить измеренный hex, ноль
-//! нового кода рампы. Это же устраняет дублирование с [`sentiment`]: четыре
-//! сентимента (Danger/Warning/Success/Info) больше не хранят собственные копии
-//! hex — они ссылаются на семейство палитры ([`Sentiment::accent`]).
+//! нового кода рампы. Это же устраняет дублирование с [`sentiment`](crate::sentiment):
+//! четыре сентимента (Danger/Warning/Success/Info) больше не хранят собственные копии
+//! hex — они ссылаются на семейство палитры
+//! ([`Sentiment::accent`](crate::sentiment::Sentiment::accent)).
 //!
 //! # Провенанс якорей — измерение, не выдумка
 //!
@@ -29,12 +30,12 @@
 //! `reference/labui-accent-primitives.md`; воспроизводимый скрипт —
 //! `cargo run -p labcolors-core --example accent_provenance`. Якорный hex — это
 //! *измеренное* значение (не выведенное): его правильность фиксирует тест
-//! [`accent_anchor_hex_matches_figma_primitives_light_mode`] против буквальных
+//! `accent_anchor_hex_matches_figma_primitives_light_mode` против буквальных
 //! значений Figma.
 //!
 //! # Только оттенок якоря — прототип
 //!
-//! Как и в [`sentiment`], из якоря берётся *только Oklab-оттенок*. Светлота и
+//! Как и в [`sentiment`](crate::sentiment), из якоря берётся *только Oklab-оттенок*. Светлота и
 //! хрома якоря не применяются: рампа кладёт оттенок на общую
 //! perceived-lightness лестницу при фиксированной доле граничной хромы (см.
 //! [`AccentCurve::at`](crate::scale::AccentCurve::at)). Поэтому тёмный/IC-вариант
@@ -167,11 +168,16 @@ impl Accent {
     }
 }
 
-/// Oklab-оттенок (градусы, `[0, 360)`) hex-цвета — единый источник якорного
-/// оттенка семейства. Тот же путь, что [`oklab_hue_of`](crate::sentiment) в
-/// модуле сентиментов (общая формула, не вторая копия физики).
-fn oklab_hue_of(hex: &str) -> f64 {
-    let lab = srgb_linear_to_oklab(srgb_from_hex(hex).expect("valid accent anchor hex"));
+/// Oklab-оттенок (градусы, `[0, 360)`) hex-цвета — ЕДИНСТВЕННАЯ реализация
+/// формулы якорного оттенка в движке: `pub(crate)`, чтобы [`sentiment`](crate::sentiment)
+/// потреблял её, а не держал вторую копию физики.
+///
+/// # Panics
+///
+/// Паникует на невалидном hex — вызывается только с встроенными якорями палитры,
+/// корректность которых фиксируют тесты обоих модулей.
+pub(crate) fn oklab_hue_of(hex: &str) -> f64 {
+    let lab = srgb_linear_to_oklab(srgb_from_hex(hex).expect("valid anchor hex"));
     lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0)
 }
 
@@ -180,12 +186,17 @@ mod tests {
     use super::*;
 
     fn neutral() -> NeutralCurve {
-        NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()
+        NeutralCurve::new("#FFFFFF", "#787880", "#101012")
+            .expect("канонические нейтральные якоря валидны — ошибка означает регресс парсера hex")
     }
 
-    /// Якорные hex заземлены в живой Figma (коллекция «🔵 4.1 Primitives»,
-    /// переменные `Accent/*`, режим Light-mode, обход через figma-console MCP,
-    /// 2026-07-02). Тест фиксирует ЛЮБОЙ дрейф константы от измеренного примитива.
+    /// Якорные hex, kebab-ключи и Oklab-оттенки заземлены в живой Figma
+    /// (коллекция «🔵 4.1 Primitives», переменные `Accent/*`, режим Light-mode,
+    /// обход через figma-console MCP, 2026-07-02 MSK). Тест фиксирует ЛЮБОЙ дрейф
+    /// константы от измеренного примитива, опечатку в `key()` (часть будущего
+    /// контракта имён `--lab-*-{key}`) и — числовым пином h° из reference §3 —
+    /// поломку самой цепочки srgb→Oklab→atan2 (нетавтологичное ожидание: числа
+    /// взяты из документа, не из вызова той же функции).
     ///
     /// Доказательство из Figma (Light-mode):
     ///   Accent/Red=#FF3B30 · Accent/Orange=#FFA100 · Accent/Yellow=#FFD000
@@ -194,32 +205,51 @@ mod tests {
     ///   Accent/Pink=#FF2D55
     #[test]
     fn accent_anchor_hex_matches_figma_primitives_light_mode() {
-        let expected: &[(Accent, &str)] = &[
-            (Accent::Red, "#FF3B30"),
-            (Accent::Orange, "#FFA100"),
-            (Accent::Yellow, "#FFD000"),
-            (Accent::Green, "#34C759"),
-            (Accent::Teal, "#5AC8FA"),
-            (Accent::Mint, "#00C7BE"),
-            (Accent::Blue, "#3E87FF"),
-            (Accent::Indigo, "#5856D6"),
-            (Accent::Purple, "#AF52DE"),
-            (Accent::Pink, "#FF2D55"),
+        // (Accent, якорный hex Figma, kebab-ключ, Oklab h° из reference §3).
+        let expected: &[(Accent, &str, &str, f64)] = &[
+            (Accent::Red, "#FF3B30", "red", 28.6592),
+            (Accent::Orange, "#FFA100", "orange", 68.6070),
+            (Accent::Yellow, "#FFD000", "yellow", 92.2265),
+            (Accent::Green, "#34C759", "green", 147.4439),
+            (Accent::Teal, "#5AC8FA", "teal", 230.8271),
+            (Accent::Mint, "#00C7BE", "mint", 189.0284),
+            (Accent::Blue, "#3E87FF", "blue", 259.8918),
+            (Accent::Indigo, "#5856D6", "indigo", 278.3368),
+            (Accent::Purple, "#AF52DE", "purple", 312.4106),
+            (Accent::Pink, "#FF2D55", "pink", 17.8982),
         ];
-        for (accent, hex) in expected {
+        for (accent, hex, key, hue) in expected {
             assert_eq!(
                 accent.anchor_hex(),
                 *hex,
                 "{accent:?}: anchor_hex() дрейфанул от заземлённого Figma-примитива"
             );
+            assert_eq!(
+                accent.key(),
+                *key,
+                "{accent:?}: key() разошёлся с контрактом имён семейств"
+            );
+            // Допуск 5e-5: значения §3 напечатаны с 4 знаками после запятой.
+            assert!(
+                (accent.prototype_hue() - hue).abs() < 5e-5,
+                "{accent:?}: prototype_hue {} != {hue} (reference §3)",
+                accent.prototype_hue()
+            );
         }
-        // ALL покрывает ровно перечисленные семейства (ни одно не забыто и не лишнее).
-        assert_eq!(Accent::ALL.len(), expected.len());
+        // ALL покрывает ровно перечисленные семейства — сравнение по СОДЕРЖИМОМУ
+        // (дубликат в ALL при сохранении длины 10 тоже упадёт).
+        let all: Vec<Accent> = Accent::ALL.to_vec();
+        let listed: Vec<Accent> = expected.iter().map(|(a, ..)| *a).collect();
+        assert_eq!(
+            all, listed,
+            "Accent::ALL разошёлся с заземлённым списком семейств"
+        );
     }
 
     /// Деривационная идентичность: якорный оттенок читается из Oklab-оттенка
     /// якорного цвета, а не вводится вручную — исключает дрейф между цветовыми
-    /// моделями. Допуск < 1e-9 (точное равенство одной и той же функции).
+    /// моделями. Допуск < 1e-9 (точное равенство одной и той же функции);
+    /// нетавтологичный числовой пин h° живёт в табличном тесте выше.
     #[test]
     fn prototype_hue_is_the_anchor_oklab_hue() {
         for a in Accent::ALL {
