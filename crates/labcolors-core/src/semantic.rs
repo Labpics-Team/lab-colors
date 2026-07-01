@@ -143,79 +143,80 @@ use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
 
-/// The reliable lower bound on a decorative role's contrast magnitude.
+/// Надёжная нижняя граница контрастной величины декоративной роли.
 ///
-/// Below roughly this `Lc` the solver hits its quantisation cliff (issue #44)
-/// and reports zero contrast, so a `Contract::range` floor beneath it would come
-/// back [`Unreachable::BelowContrastFloor`]. Every PROVISIONAL decorative floor
-/// is held strictly above this until the real JND calibration lands.
-// NEEDS-SCIENCE — provisional JND floor; awaits surface-jnd calibration (issue #44).
+/// Ниже примерно этого `Lc` решатель упирается в порог квантования (issue #44)
+/// и возвращает нулевой контраст, поэтому порог `Contract::range` ниже этой
+/// границы вернулся бы как [`Unreachable::BelowContrastFloor`]. Каждый
+/// декоративный порог держится строго выше этой границы до появления полной
+/// JND-калибровки.
+// NEEDS-SCIENCE — временный JND-порог; ждёт калибровки в главе surface-jnd (issue #44).
 const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
-/// High-contrast decorative floor (Lc): raised above [`DECORATIVE_FLOOR_MIN`]
-/// to match the stronger perceptual requirements of the `-ic` themes.
-// NEEDS-SCIENCE — provisional IC floor; awaits surface-jnd calibration for increased-contrast themes.
+/// Порог декоративного контраста для повышенной контрастности (Lc): поднят выше
+/// [`DECORATIVE_FLOOR_MIN`] под более строгие перцептивные требования тем `-ic`.
+// NEEDS-SCIENCE — временный порог для тем повышенной контрастности; ждёт калибровки surface-jnd.
 const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
-// ── dJ' decorative anchors (owner's LITERAL Figma-computed values) ──────────────
+// ── dJ'-якоря декоративных ролей (буквальные значения из Figma) ─────────────────
 //
-// The fill and border ladders carry the owner's *literal* dJ' anchors — the
-// perceived-lightness-difference each decorative step holds against its surface,
-// computed by the owner from the LabUI Figma stretches ("Вычисленные якоря",
-// reference/labui-figma-structure.md). This is the right unit (a J' step, not an
-// Lc contrast) and the right type ([`RoleSpec::DecorativeDj`], solved with no
-// readability floor and no low-contrast clip — distinguishability, not legibility).
+// Лестницы fill и border несут буквальные dJ'-якоря — перцептивную разницу
+// светлоты, которую каждый декоративный шаг держит относительно своей
+// поверхности, вычисленные из растяжек LabUI Figma ("Вычисленные якоря",
+// reference/labui-figma-structure.md). Это правильная единица измерения (шаг J',
+// а не контраст Lc) и правильный тип ([`RoleSpec::DecorativeDj`], решается без
+// порога читаемости и без обрезки низкого контраста — это различимость, а не
+// разборчивость текста).
 //
-// PROVISIONAL only in the sense that the *final* JND calibration is by the owner's
-// eye (chapter surface-jnd); the values, the unit, and the source are all honest.
-// This is NOT the old block-lift placeholder — it is the owner's number, used as
-// the owner wrote it.
+// Значения временны лишь в том смысле, что финальная JND-калибровка ожидается
+// в главе surface-jnd; сами числа, единица измерения и источник — это реальные
+// измерения из Figma, а не выдуманная заглушка.
 //
-// Per-theme: the owner measured the anchors separately under each theme, because
-// perceived-lightness perception differs by surround. The dark anchors are ~2.2×
-// the light ones — the owner's measured over-compensation for dark surrounds —
-// so they are NOT derived from the light set; they are the owner's own dark
-// measurements, selected at resolve time by the viewing conditions' theme.
+// По темам: якоря измерены отдельно под каждой темой, потому что восприятие
+// светлоты зависит от окружения (surround). Тёмные якоря примерно в 2.2 раза
+// больше светлых — это измеренная компенсация для тёмного окружения — поэтому
+// они НЕ выведены из светлого набора, а являются отдельными измерениями под
+// тёмную тему, которые выбираются при резолве по теме viewing conditions.
 
-/// Fill ladder dJ' anchors (`fill-primary` … `fill-quaternary`), strictly
-/// descending in visibility. Owner's literal values; light/dark per theme.
-// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
+/// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
+/// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
+// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
 const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
-// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
+// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
 const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
-// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
+// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
 const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
-// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
+// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
 const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
-/// Border base/soft dJ' anchors. Owner's literal values; base stronger than soft.
-/// (`border-strong` is an anchored readability role, not a dJ' step — not here.)
-// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
+/// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
+/// (`border-strong` — заякоренная роль читаемости, не dJ'-шаг — её здесь нет.)
+// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
 const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
-// NEEDS-SCIENCE — owner's Figma-measured dJ' anchors; awaits surface-jnd sign-off.
+// NEEDS-SCIENCE — dJ'-якоря, измеренные из Figma; ждут подтверждения surface-jnd.
 const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
-// ── PROVISIONAL shadow magnitudes (Lc decorative stub — see note) ───────────────
+// ── Временные величины теней (заглушка Lc decorative — см. пояснение) ──────────
 //
-// The shadow stack is NOT migrated to dJ'. The owner's shadow anchors are *alpha*
-// values (@1/@2/@4/@12 opacities of a progressive shadow stack), not dJ' steps —
-// a different quantity again (the perceptibility of a translucent gradient over
-// variable content, the bridge to composite-backgrounds). Inventing dJ' numbers
-// for them would be exactly the kind of substitute the owner's iron rule forbids.
-// So shadows keep the honest Lc [`RoleSpec::Decorative`] stub: PROVISIONAL
-// magnitudes above [`DECORATIVE_FLOOR_MIN`], strictly ascending order as the only
-// contract, until surface-jnd derives real shadow contracts from the alphas.
+// Стек теней НЕ перенесён на dJ'. Якоря теней — это значения *альфа*
+// (прозрачности @1/@2/@4/@12 прогрессивного стека теней), не dJ'-шаги — иная
+// величина (воспринимаемость полупрозрачного градиента поверх переменного
+// контента, мост к составным фонам). Придумывать для них dJ'-числа было бы
+// именно той подменой, которую запрещает правило нулевой подгонки. Поэтому тени
+// сохраняют честную заглушку Lc [`RoleSpec::Decorative`]: временные величины
+// выше [`DECORATIVE_FLOOR_MIN`], строго по возрастанию как единственный
+// контракт, пока surface-jnd не выведет реальные контракты теней из альфа-значений.
 
-/// Shadow stack, strictly ASCENDING in visibility (minor subtlest → major
-/// strongest) — the progressive FX/Shadow ramp. Lc placeholder, held above
-/// [`DECORATIVE_FLOOR_MIN`] with ≥1.5 Lc inter-step gaps.
-// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
+/// Стек теней, строго ВОЗРАСТАЮЩИЙ по видимости (minor самая тонкая → major
+/// самая сильная) — прогрессивная рампа FX/Shadow. Заглушка Lc, держится выше
+/// [`DECORATIVE_FLOOR_MIN`] с шагом между уровнями ≥1.5 Lc.
+// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
 const SHADOW_MINOR_JND: f64 = 8.0;
-// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
+// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
 const SHADOW_AMBIENT_JND: f64 = 9.5;
-// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
+// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
 const SHADOW_PENUMBRA_JND: f64 = 11.5;
-// NEEDS-SCIENCE — provisional Lc shadow stub; awaits composite-background / alpha derivation.
+// NEEDS-SCIENCE — временная заглушка Lc для теней; ждёт вывода из составных фонов / альфа-значений.
 const SHADOW_MAJOR_JND: f64 = 14.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any

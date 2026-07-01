@@ -11,11 +11,11 @@ pub struct CurveParams {
 impl Default for CurveParams {
     fn default() -> Self {
         Self {
-            // NEEDS-SCIENCE — gamma for light-side neutral curve; PROVISIONAL, owner's eye.
+            // NEEDS-SCIENCE — гамма светлой ветви нейтральной кривой; подобрана визуально, ждёт вывода.
             gamma_light: 1.75,
-            // NEEDS-SCIENCE — gamma for dark-side neutral curve; PROVISIONAL, owner's eye.
+            // NEEDS-SCIENCE — гамма тёмной ветви нейтральной кривой; подобрана визуально, ждёт вывода.
             gamma_dark: 1.5,
-            // NEEDS-SCIENCE — chroma peak position along curve parameter t; PROVISIONAL.
+            // NEEDS-SCIENCE — положение пика хромы вдоль параметра кривой t; подобрано визуально, ждёт вывода.
             chroma_peak_t: 0.35,
         }
     }
