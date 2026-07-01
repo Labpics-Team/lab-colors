@@ -15,6 +15,7 @@ use thiserror::Error;
 /// individual entries carry their own reason (see [`crate::dto`]). This enum is
 /// for failures of the call as a whole.
 #[derive(Error, Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum BindingError {
     /// The background hex string was not a valid `#RRGGBB` colour. Carries the
     /// core's own parse reason so the caller learns exactly what was wrong.
@@ -30,15 +31,6 @@ pub enum BindingError {
         /// The unrecognised theme string the caller passed.
         requested: String,
     },
-
-    /// A recognised theme whose contrast table is not calibrated yet — the
-    /// honest "reserved but absent" signal for the increased-contrast themes.
-    #[allow(dead_code)]
-    #[error("theme '{theme}' is not yet calibrated")]
-    ThemeNotCalibrated {
-        /// The stable key of the reserved theme.
-        theme: &'static str,
-    },
 }
 
 impl BindingError {
@@ -48,7 +40,6 @@ impl BindingError {
         match self {
             BindingError::InvalidBackground { .. } => "invalid_background",
             BindingError::UnknownTheme { .. } => "unknown_theme",
-            BindingError::ThemeNotCalibrated { .. } => "theme_not_calibrated",
         }
     }
 }
@@ -64,17 +55,9 @@ mod tests {
             BindingError::UnknownTheme {
                 requested: "x".into(),
             },
-            BindingError::ThemeNotCalibrated { theme: "light-ic" },
         ];
         let codes: Vec<_> = errors.iter().map(BindingError::code).collect();
-        assert_eq!(
-            codes,
-            [
-                "invalid_background",
-                "unknown_theme",
-                "theme_not_calibrated"
-            ]
-        );
+        assert_eq!(codes, ["invalid_background", "unknown_theme"]);
         // Distinctness, asserted directly so the test earns its name: a future
         // variant must not reuse an existing code.
         let unique: std::collections::HashSet<_> = codes.iter().collect();

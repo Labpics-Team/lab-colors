@@ -52,7 +52,7 @@ impl Engine {
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
     /// result. Repeated identical calls hit the contract cache.
     ///
-    /// Errors (bad hex, unknown/uncalibrated theme) are returned, never
+    /// Errors (bad hex, unknown theme) are returned, never
     /// panicked. Per-role unreachability is part of a *successful* result.
     pub fn resolve_theme(
         &self,
