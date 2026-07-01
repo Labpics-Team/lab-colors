@@ -24,7 +24,8 @@
 //! asserts nothing about the MAGNITUDE of detected values or the correctness of
 //! the SSOT. Those are GATE-1/2/3/4's job.
 
-use std::path::PathBuf;
+mod common;
+use common::{inventory_path, src_dir};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal re-declaration of the audit surface. Kept independent of the gate
@@ -39,22 +40,6 @@ const PERCEPTUAL_MODULES_SMOKE: [&str; 6] = [
     "lpc.rs",
     "lcs.rs",
 ];
-
-fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn src_dir() -> PathBuf {
-    crate_root().join("src")
-}
-
-fn inventory_path() -> PathBuf {
-    crate_root()
-        .join("..")
-        .join("..")
-        .join("docs")
-        .join("empirical-inventory.md")
-}
 
 /// Minimal policy-const counter: counts `const … : f64` / `f32` / DjMagnitude
 /// lines that are NOT on the standard allowlist. This mirrors the type of scan

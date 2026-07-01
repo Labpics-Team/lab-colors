@@ -28,7 +28,8 @@
 //! green-from-birth).
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+
+mod common;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit surface — the 6 perceptual modules the detector scans.
@@ -81,26 +82,10 @@ const FORBIDDEN_STANDARD_ROW_NAMES: &[&str] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Path resolution (hermetic — keyed off CARGO_MANIFEST_DIR, no CWD assumptions).
+// Path resolution — делегировано в `common` (без дублирования между файлами).
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn src_dir() -> PathBuf {
-    crate_root().join("src")
-}
-
-/// The SSOT lives at workspace `docs/empirical-inventory.md`, two
-/// directories above the crate root (`crates/labcolors-core/`).
-fn inventory_path() -> PathBuf {
-    crate_root()
-        .join("..")
-        .join("..")
-        .join("docs")
-        .join("empirical-inventory.md")
-}
+use common::{crate_root, inventory_path, src_dir};
 
 fn read_module(file: &str) -> String {
     let path = src_dir().join(file);
