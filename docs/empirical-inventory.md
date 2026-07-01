@@ -10,30 +10,30 @@ Marker column: `SSOT-TRACKED` = has a paper trail in this table but no citation-
 
 | row# | name | value | module | marker | rationale |
 |------|------|-------|--------|--------|-----------|
-| 1 | `DECORATIVE_FLOOR_MIN` | `7.5` | `semantic.rs` | SSOT-TRACKED | Provisional JND floor above solver quantisation cliff (issue #44); awaits surface-jnd calibration. |
-| 2 | `FILL_PRIMARY_DJ` | `7.93, 17.67` | `semantic.rs` | SSOT-TRACKED | Owner's Figma-measured dJ' anchor (fill-primary), light/dark; awaits surface-jnd sign-off. |
-| 3 | `FILL_SECONDARY_DJ` | `6.41, 15.78` | `semantic.rs` | SSOT-TRACKED | Owner's Figma-measured dJ' anchor (fill-secondary), light/dark; awaits surface-jnd sign-off. |
-| 4 | `FILL_TERTIARY_DJ` | `4.63, 12.01` | `semantic.rs` | SSOT-TRACKED | Owner's Figma-measured dJ' anchor (fill-tertiary), light/dark; awaits surface-jnd sign-off. |
-| 5 | `FILL_QUATERNARY_DJ` | `3.15, 8.22` | `semantic.rs` | SSOT-TRACKED | Owner's Figma-measured dJ' anchor (fill-quaternary), light/dark; awaits surface-jnd sign-off. |
-| 6 | `BORDER_BASE_DJ` | `6.41, 10.12` | `semantic.rs` | SSOT-TRACKED | Owner's Figma-measured dJ' anchor (border-base), light/dark; awaits surface-jnd sign-off. |
-| 7 | `BORDER_SOFT_DJ` | `3.15, 5.83` | `semantic.rs` | SSOT-TRACKED | Owner's Figma-measured dJ' anchor (border-soft), light/dark; awaits surface-jnd sign-off. |
-| 8 | `SHADOW_MINOR_JND` | `8.0` | `semantic.rs` | SSOT-TRACKED | Provisional Lc shadow stub; awaits composite-background / alpha derivation. |
-| 9 | `SHADOW_AMBIENT_JND` | `9.5` | `semantic.rs` | SSOT-TRACKED | Provisional Lc shadow stub; awaits composite-background / alpha derivation. |
-| 10 | `SHADOW_PENUMBRA_JND` | `11.5` | `semantic.rs` | SSOT-TRACKED | Provisional Lc shadow stub; awaits composite-background / alpha derivation. |
-| 11 | `SHADOW_MAJOR_JND` | `14.0` | `semantic.rs` | SSOT-TRACKED | Provisional Lc shadow stub; awaits composite-background / alpha derivation. |
-| 12 | `NEUTRAL_HUE_DEG` | `286.0` | `semantic.rs` | SSOT-TRACKED | Owner's measured Oklab hue of the neutral ladder; awaits sign-off. |
-| 13 | `NEUTRAL_TINT_RATIO` | `0.10` | `semantic.rs` | SSOT-TRACKED | Owner's eye-calibrated chroma ratio (2026-06-12 swatch sweep). |
+| 1 | `DECORATIVE_FLOOR_MIN` | `7.5` | `semantic.rs` | SSOT-TRACKED | JND floor held above the solver's quantisation cliff (issue #44); below it `Contract::range` reports `Unreachable::BelowContrastFloor`. |
+| 2 | `FILL_PRIMARY_DJ` | `7.93, 17.67` | `semantic.rs` | SSOT-TRACKED | Figma-measured dJ' anchor (fill-primary), light/dark, from the LabUI Figma stretches (reference/labui-figma-structure.md). |
+| 3 | `FILL_SECONDARY_DJ` | `6.41, 15.78` | `semantic.rs` | SSOT-TRACKED | Figma-measured dJ' anchor (fill-secondary), light/dark, from the LabUI Figma stretches (reference/labui-figma-structure.md). |
+| 4 | `FILL_TERTIARY_DJ` | `4.63, 12.01` | `semantic.rs` | SSOT-TRACKED | Figma-measured dJ' anchor (fill-tertiary), light/dark, from the LabUI Figma stretches (reference/labui-figma-structure.md). |
+| 5 | `FILL_QUATERNARY_DJ` | `3.15, 8.22` | `semantic.rs` | SSOT-TRACKED | Figma-measured dJ' anchor (fill-quaternary), light/dark, from the LabUI Figma stretches (reference/labui-figma-structure.md). |
+| 6 | `BORDER_BASE_DJ` | `6.41, 10.12` | `semantic.rs` | SSOT-TRACKED | Figma-measured dJ' anchor (border-base), light/dark, from the LabUI Figma stretches (reference/labui-figma-structure.md). |
+| 7 | `BORDER_SOFT_DJ` | `3.15, 5.83` | `semantic.rs` | SSOT-TRACKED | Figma-measured dJ' anchor (border-soft), light/dark, from the LabUI Figma stretches (reference/labui-figma-structure.md). |
+| 8 | `SHADOW_MINOR_JND` | `8.0` | `semantic.rs` | SSOT-TRACKED | Lc magnitude of the shadow stack's minor (subtlest) step; shadow anchors are alpha opacities, not dJ' steps, so the strictly-ascending step order is the only contract. |
+| 9 | `SHADOW_AMBIENT_JND` | `9.5` | `semantic.rs` | SSOT-TRACKED | Lc magnitude of the shadow stack's ambient step; shadow anchors are alpha opacities, not dJ' steps, so the strictly-ascending step order is the only contract. |
+| 10 | `SHADOW_PENUMBRA_JND` | `11.5` | `semantic.rs` | SSOT-TRACKED | Lc magnitude of the shadow stack's penumbra step; shadow anchors are alpha opacities, not dJ' steps, so the strictly-ascending step order is the only contract. |
+| 11 | `SHADOW_MAJOR_JND` | `14.0` | `semantic.rs` | SSOT-TRACKED | Lc magnitude of the shadow stack's major (strongest) step; shadow anchors are alpha opacities, not dJ' steps, so the strictly-ascending step order is the only contract. |
+| 12 | `NEUTRAL_HUE_DEG` | `286.0` | `semantic.rs` | SSOT-TRACKED | Measured Oklab hue of the neutral ladder, stable across it (#101012 → 285.97°, #3C3C43 → 285.78°, #787880 → 286.01°). |
+| 13 | `NEUTRAL_TINT_RATIO` | `0.10` | `semantic.rs` | SSOT-TRACKED | Chroma ratio applied to the neutral tint; places `text-primary` on white in the `#101012` cool near-black family rather than pure grey. |
 | 14 | `TINT_TARGET_MP` | `6.1` | `semantic.rs` | SSOT-TRACKED | RMS-minimising CAM16-UCS M' target (2026-06-12 plateau sweep). |
 | 15 | `TINT_HUE_STIFFNESS` | `9.0` | `semantic.rs` | SSOT-TRACKED | Cusp-pinning stiffness; calibrated at 286° (2026-06-12). |
-| 16 | `TINT_PERCEPTIBLE_MP_FLOOR` | `1.5` | `semantic.rs` | SSOT-TRACKED | Perceptibility floor in CAM16-UCS M'; awaits owner eye-calibration. |
+| 16 | `TINT_PERCEPTIBLE_MP_FLOOR` | `1.5` | `semantic.rs` | SSOT-TRACKED | Perceptibility floor in CAM16-UCS M'; below it the undertone reads as a dead grey zone rather than a felt tint. |
 | 17 | `CUSP_HALF_WINDOW_DEG` | `40.0` | `semantic.rs` | SSOT-TRACKED | Hue search half-window (degrees); keeps undertone in blue-violet band. |
 | 18 | `LIGHTNESS_SETTLE` | `0.002` | `semantic.rs` | SSOT-TRACKED | Fixed-point convergence threshold; sub-8-bit grid step by design. |
 | 19 | `STRICT_STEP` | `0.5` | `semantic.rs` | SSOT-TRACKED | Minimum Lc separation for visual distinction vs float noise. |
-| 20 | `DEFAULT_HARDNESS` | `5.0` | `sentiment.rs` | SSOT-TRACKED | p-norm hardness default; Daniil eye-calibrated (#55, PROVISIONAL). |
-| 21 | `CHROMA_FRACTION` | `0.88` | `sentiment.rs` | SSOT-TRACKED | Gamut-fraction chroma strength knob; PROVISIONAL, Daniil's eye. |
-| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | `1.75` | `neutral.rs` | SSOT-TRACKED | Gamma for light-side neutral curve; PROVISIONAL, owner's eye. |
-| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | `1.5` | `neutral.rs` | SSOT-TRACKED | Gamma for dark-side neutral curve; PROVISIONAL, owner's eye. |
-| 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | `0.35` | `neutral.rs` | SSOT-TRACKED | Chroma peak position along curve parameter t; PROVISIONAL. |
+| 20 | `DEFAULT_HARDNESS` | `5.0` | `sentiment.rs` | SSOT-TRACKED | p-norm hardness default for the Sticky Potential Well model (#55); `p → ∞` recovers the old hard 20° wall, `p → 1` is the softest yield. |
+| 21 | `CHROMA_FRACTION` | `0.88` | `sentiment.rs` | SSOT-TRACKED | Fraction of the in-gamut maximum chroma every sentiment colour carries at its lightness-matched point; held `< 1` so it sits just inside the gamut wall rather than reading neon. |
+| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | `1.75` | `neutral.rs` | SSOT-TRACKED | Gamma exponent for the light-side (t ≤ 0.5) branch of the neutral curve. |
+| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | `1.5` | `neutral.rs` | SSOT-TRACKED | Gamma exponent for the dark-side (t > 0.5) branch of the neutral curve. |
+| 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | `0.35` | `neutral.rs` | SSOT-TRACKED | Position along curve parameter t where the chroma envelope peaks. |
 | 25 | `SOFT_CLAMP_THRESHOLD` | `0.022` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
 | 26 | `SOFT_CLAMP_EXP` | `1.414` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
 | 27 | `EXP_BG_LIGHT` | `0.56` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
@@ -44,8 +44,8 @@ Marker column: `SSOT-TRACKED` = has a paper trail in this table but no citation-
 | 32 | `LO_CLIP` | `0.1` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
 | 33 | `LO_BOW_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
 | 34 | `LO_WOB_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
-| 35 | `IC_DECORATIVE_FLOOR_MIN` | `15.0` | `semantic.rs` | SSOT-TRACKED | Provisional increased-contrast decorative floor (Lc). Raised above `DECORATIVE_FLOOR_MIN` (7.5) to enforce stronger perceptual contrast in `-ic` themes. Awaits surface-jnd calibration for the IC tier. |
-| 36 | `HUE_SEARCH_HALF_WINDOW` | `30.0` | `scale.rs` | SSOT-TRACKED | Half-width of AccentCurve hue search window (degrees). 30° spans a typical sRGB gamut ridge; awaits perceptual calibration against empirical accent-hue spread data. |
+| 35 | `IC_DECORATIVE_FLOOR_MIN` | `15.0` | `semantic.rs` | SSOT-TRACKED | Increased-contrast decorative floor (Lc), raised above `DECORATIVE_FLOOR_MIN` (7.5) to match the stronger perceptual requirements of the `-ic` themes. |
+| 36 | `HUE_SEARCH_HALF_WINDOW` | `30.0` | `scale.rs` | SSOT-TRACKED | Half-width (degrees) of the hue search window in `find_optimal_hue`; 30° spans the typical sRGB gamut ridge width around the canonical hue. |
 
 ## Muddiness Law constants — `cleanliness.rs`
 
