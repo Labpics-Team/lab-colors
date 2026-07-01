@@ -2519,7 +2519,8 @@ mod tests {
     /// byte-identical to the prior `text-*` cells — the rename moved keys, not
     /// colours — and `border-strong` mirrors `label-primary` (it shares the
     /// label-primary contract). The new `border-*`/`fill-*`/`shadow-*` cells are
-    /// PROVISIONAL decorative magnitudes (recalibrated in `surface-jnd` after #44).
+    /// Decorative magnitudes resolved against the current `DECORATIVE_FLOOR_MIN`/dJ'
+    /// contract (see `semantic.rs`); will be re-derived in `surface-jnd` (#44).
     /// This expansion is the one allowed touch to this module's golden: `Role::ALL`
     /// grew, so the line shape had to grow with it.
     const RESOLVE_SET_GOLDEN: &[&str] = &[
