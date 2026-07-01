@@ -1,3 +1,4 @@
+use crate::accent::Accent;
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{jp_to_oklab_l, max_chroma};
@@ -136,28 +137,40 @@ impl Sentiment {
         }
     }
 
+    /// Семейство палитры акцентов, чей якорь несёт этот сентимент. Сентимент —
+    /// это *семантическая роль* цвета (Danger, Warning, …), а его прототипный
+    /// оттенок — это фиксированное семейство палитры ([`Accent`]). Отображение
+    /// заземлено в Figma (`Labels/Danger/Primary` → `Accent/Red` и т.д.,
+    /// коллекция «🔵 4.1 Primitives», Light-mode):
+    ///
+    /// | сентимент | семейство       | Figma-переменная  |
+    /// |-----------|-----------------|-------------------|
+    /// | Danger    | [`Accent::Red`]    | `Accent/Red`    |
+    /// | Warning   | [`Accent::Orange`] | `Accent/Orange` |
+    /// | Success   | [`Accent::Green`]  | `Accent/Green`  |
+    /// | Info      | [`Accent::Blue`]   | `Accent/Blue`   |
+    pub fn accent(self) -> Accent {
+        match self {
+            Sentiment::Danger => Accent::Red,
+            Sentiment::Warning => Accent::Orange,
+            Sentiment::Success => Accent::Green,
+            Sentiment::Info => Accent::Blue,
+        }
+    }
+
     /// Якорный цвет сентимента, чей **Oklab-оттенок** используется как прототип.
     ///
-    /// Значения заземлены в Figma CONTENTS (коллекция «🔵 4.1 Primitives»,
-    /// Light-mode, обход переменных через figma-console, 2026-06-30):
-    ///
-    /// | сентимент | переменная Figma       | hex      | Oklab h  |
-    /// |-----------|------------------------|----------|----------|
-    /// | Danger    | `Labels/Danger/Primary` → `Accent/Red`    | `#FF3B30` | 28.66° |
-    /// | Warning   | `Labels/Warning/Primary` → `Accent/Orange` | `#FFA100` | 68.61° |
-    /// | Success   | `Labels/Success/Primary` → `Accent/Green`  | `#34C759` | 147.44° |
-    /// | Info      | `Labels/Info/Primary` → `Accent/Blue`    | `#3E87FF` | 259.89° |
+    /// SSOT якорного hex — палитра акцентов ([`Accent::anchor_hex`]); сентимент
+    /// лишь ссылается на своё семейство ([`accent`](Self::accent)), а не хранит
+    /// собственную копию значения. Это устраняет дублирование hex между модулями
+    /// (задача «акценты как данные, не 10 копий кода»): при изменении якоря в
+    /// Figma правится ОДНА строка в `accent.rs`.
     ///
     /// Только Oklab-оттенок используется как прототип; хрома и светлота якоря
     /// не применяются — рампа строится из общей perceived-lightness лестницы на
     /// фиксированной доле граничной хромы гамута (см. [`SentimentCurve::at`]).
     fn anchor_hex(self) -> &'static str {
-        match self {
-            Sentiment::Danger => "#FF3B30", // Figma: Accent/Red (Labels/Danger/Primary)
-            Sentiment::Warning => "#FFA100", // Figma: Accent/Orange (Labels/Warning/Primary)
-            Sentiment::Success => "#34C759", // Figma: Accent/Green (Labels/Success/Primary)
-            Sentiment::Info => "#3E87FF",   // Figma: Accent/Blue (Labels/Info/Primary)
-        }
+        self.accent().anchor_hex()
     }
 
     /// All four sentiment categories — the property-sweep surface for the tests.

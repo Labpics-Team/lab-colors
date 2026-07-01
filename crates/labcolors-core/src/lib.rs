@@ -1,5 +1,6 @@
 pub(crate) mod spaces;
 
+pub mod accent;
 pub mod cleanliness;
 pub mod lcs;
 pub mod lpc;
@@ -20,6 +21,7 @@ pub(crate) mod chromafast;
 #[cfg(test)]
 mod golden_tests;
 
+pub use accent::Accent;
 pub use cleanliness::{
     DefectContext, Theme, confidence as cleanliness_confidence,
     confidence_from_hex as cleanliness_confidence_from_hex, drab, drab_in_context,
