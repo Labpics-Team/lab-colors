@@ -1,3 +1,6 @@
+// oklab_hue_of: единая реализация формулы якорного оттенка живёт в палитре
+// акцентов — сентименты потребляют её, не держат вторую копию физики.
+use crate::accent::{Accent, oklab_hue_of};
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{jp_to_oklab_l, max_chroma};
@@ -136,28 +139,40 @@ impl Sentiment {
         }
     }
 
+    /// Семейство палитры акцентов, чей якорь несёт этот сентимент. Сентимент —
+    /// это *семантическая роль* цвета (Danger, Warning, …), а его прототипный
+    /// оттенок — это фиксированное семейство палитры ([`Accent`]). Отображение
+    /// заземлено в Figma (`Labels/Danger/Primary` → `Accent/Red` и т.д.,
+    /// коллекция «🔵 4.1 Primitives», Light-mode):
+    ///
+    /// | сентимент | семейство       | Figma-переменная  |
+    /// |-----------|-----------------|-------------------|
+    /// | Danger    | [`Accent::Red`]    | `Accent/Red`    |
+    /// | Warning   | [`Accent::Orange`] | `Accent/Orange` |
+    /// | Success   | [`Accent::Green`]  | `Accent/Green`  |
+    /// | Info      | [`Accent::Blue`]   | `Accent/Blue`   |
+    pub fn accent(self) -> Accent {
+        match self {
+            Sentiment::Danger => Accent::Red,
+            Sentiment::Warning => Accent::Orange,
+            Sentiment::Success => Accent::Green,
+            Sentiment::Info => Accent::Blue,
+        }
+    }
+
     /// Якорный цвет сентимента, чей **Oklab-оттенок** используется как прототип.
     ///
-    /// Значения заземлены в Figma CONTENTS (коллекция «🔵 4.1 Primitives»,
-    /// Light-mode, обход переменных через figma-console, 2026-06-30):
-    ///
-    /// | сентимент | переменная Figma       | hex      | Oklab h  |
-    /// |-----------|------------------------|----------|----------|
-    /// | Danger    | `Labels/Danger/Primary` → `Accent/Red`    | `#FF3B30` | 28.66° |
-    /// | Warning   | `Labels/Warning/Primary` → `Accent/Orange` | `#FFA100` | 68.61° |
-    /// | Success   | `Labels/Success/Primary` → `Accent/Green`  | `#34C759` | 147.44° |
-    /// | Info      | `Labels/Info/Primary` → `Accent/Blue`    | `#3E87FF` | 259.89° |
+    /// SSOT якорного hex — палитра акцентов ([`Accent::anchor_hex`]); сентимент
+    /// лишь ссылается на своё семейство ([`accent`](Self::accent)), а не хранит
+    /// собственную копию значения. Это устраняет дублирование hex между модулями
+    /// (задача «акценты как данные, не 10 копий кода»): при изменении якоря в
+    /// Figma правится ОДНА строка в `accent.rs`.
     ///
     /// Только Oklab-оттенок используется как прототип; хрома и светлота якоря
     /// не применяются — рампа строится из общей perceived-lightness лестницы на
     /// фиксированной доле граничной хромы гамута (см. [`SentimentCurve::at`]).
     fn anchor_hex(self) -> &'static str {
-        match self {
-            Sentiment::Danger => "#FF3B30", // Figma: Accent/Red (Labels/Danger/Primary)
-            Sentiment::Warning => "#FFA100", // Figma: Accent/Orange (Labels/Warning/Primary)
-            Sentiment::Success => "#34C759", // Figma: Accent/Green (Labels/Success/Primary)
-            Sentiment::Info => "#3E87FF",   // Figma: Accent/Blue (Labels/Info/Primary)
-        }
+        self.accent().anchor_hex()
     }
 
     /// All four sentiment categories — the property-sweep surface for the tests.
@@ -170,13 +185,6 @@ impl Sentiment {
         Sentiment::Success,
         Sentiment::Info,
     ];
-}
-
-/// The Oklab hue (degrees, `[0, 360)`) of a hex colour — the single source of a
-/// sentiment's field peak.
-fn oklab_hue_of(hex: &str) -> f64 {
-    let lab = srgb_linear_to_oklab(srgb_from_hex(hex).expect("valid anchor hex"));
-    lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0)
 }
 
 /// Default asymptote hardness `p` for a sentiment with no special asymmetry.
@@ -660,6 +668,36 @@ mod tests {
                 (actual - want_hue).abs() < 0.001,
                 "{s:?}: prototype_hue() = {actual:.4}° != Figma-оттенок {want_hue}° \
                  (якорный hex Figma: {figma_hex})"
+            );
+        }
+    }
+
+    /// Пин контракта дедупликации, достижимый на уровне значений: (1) маппинг
+    /// сентимент→семейство заземлён Figma (Labels/<Sentiment>/Primary →
+    /// Accent/<Family>) и запинен явно; (2) якорь сентимента обязан быть равен
+    /// якорю его семейства — две поверхности не могут разойтись. Появление
+    /// локальной копии hex этот тест не видит в момент появления (значения
+    /// равны), но ловит при ПЕРВОМ расхождении копий (правка одной таблицы без
+    /// другой) — раньше расхождение было бы тихим.
+    #[test]
+    fn sentiment_delegates_anchor_to_its_accent_family() {
+        use crate::accent::Accent;
+        let mapping = [
+            (Sentiment::Danger, Accent::Red),
+            (Sentiment::Warning, Accent::Orange),
+            (Sentiment::Success, Accent::Green),
+            (Sentiment::Info, Accent::Blue),
+        ];
+        for (s, family) in mapping {
+            assert_eq!(
+                s.accent(),
+                family,
+                "{s:?}: маппинг сентимент→семейство разошёлся с Figma-заземлением"
+            );
+            assert_eq!(
+                s.anchor_hex(),
+                s.accent().anchor_hex(),
+                "{s:?}: anchor_hex() не делегирует в палитру (появилась локальная копия)"
             );
         }
     }
