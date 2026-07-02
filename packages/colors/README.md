@@ -188,6 +188,7 @@ interface WatchThemeOptions {
   target?: HTMLElement;                  // куда писать переменные (по умолчанию: element)
   fallback?: string;                     // фон при полностью прозрачной цепочке (по умолчанию "#FFFFFF")
   observe?: boolean;                     // авто-обновление при DOM-мутациях (по умолчанию true)
+  root?: Node;                           // корень MutationObserver (по умолчанию: documentElement)
 }
 
 interface WatchController {
@@ -252,10 +253,12 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-| Артефакт | raw | gzip | brotli |
-|----------|-----|------|--------|
-| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ | ~116 КБ |
-| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ | ~4 КБ |
+| Артефакт | raw | gzip |
+|----------|-----|------|
+| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ |
+| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ |
+
+Замер CI-шага `report bundle size` (ci.yml) — raw и gzip.
 
 Это ВЕСЬ движок: перцептивная модель CAM16, солверы контраста, лестницы, граница конфига. `.wasm` — не JS-байты бандла, а ассет: он **не на критическом пути рендера** — грузится параллельно, компилируется потоково вне главного треда, кэшируется браузером после первой загрузки. Вспомогательные функции (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) — несколько сотен байт чистого JavaScript с tree-shaking через именованные экспорты.
 
