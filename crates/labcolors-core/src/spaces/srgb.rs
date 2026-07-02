@@ -152,8 +152,9 @@ pub(crate) fn grey_code(linear: f64) -> Option<u8> {
 //  Public helpers
 // ------------------------------------------------------------------
 
-/// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
-pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
+/// Разбор `#RRGGBB` → три байта. Единственная реализация hex-парсинга —
+/// линейный и кодированный варианты различаются только декодом поверх байтов.
+fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
     let hex = hex.trim_start_matches('#');
     // `len()` is a *byte* count and the slices below cut on byte indices, so a
     // non-ASCII string of 6 bytes (e.g. "€€") would pass a bare length check yet
@@ -164,9 +165,12 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     }
     let parse =
         |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
-    let r = parse(&hex[0..2])?;
-    let g = parse(&hex[2..4])?;
-    let b = parse(&hex[4..6])?;
+    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
+}
+
+/// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
+pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
+    let [r, g, b] = hex_bytes(hex)?;
     // The input is always an 8-bit byte, so the decode is an exact table lookup
     // (finite domain) — no per-channel powf.
     Ok([decode_8bit(r), decode_8bit(g), decode_8bit(b)])
@@ -203,16 +207,11 @@ pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
 /// straight-alpha (см. [`crate::alpha`]); для колориметрии используй
 /// [`srgb_from_hex`] (линейный свет).
 pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 || !hex.is_ascii() {
-        return Err(format!("expected #RRGGBB, got #{}", hex));
-    }
-    let parse =
-        |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
+    let [r, g, b] = hex_bytes(hex)?;
     Ok([
-        f64::from(parse(&hex[0..2])?) / 255.0,
-        f64::from(parse(&hex[2..4])?) / 255.0,
-        f64::from(parse(&hex[4..6])?) / 255.0,
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
     ])
 }
 

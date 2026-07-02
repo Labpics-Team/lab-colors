@@ -49,9 +49,24 @@
 
 use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 
+/// Валидный кодированный канал/цвет: конечный и в `[0,1]` — домен всех
+/// функций модуля (hex-обёртки гарантируют его по построению, byte/255).
+fn is_encoded_rgb(v: [f64; 3]) -> bool {
+    v.into_iter()
+        .all(|x| x.is_finite() && (0.0..=1.0).contains(&x))
+}
+
 /// Прямой ход: straight-alpha композит `α·tint + (1−α)·bg` по кодированным
 /// каналам — закон Figma/браузера (см. модульную документацию).
+///
+/// Домен: `tint`/`bg` — кодированные цвета в `[0,1]³`, `alpha ∈ [0,1]`;
+/// вне домена — `debug_assert` (горячий путь чистой алгебры не платит за
+/// проверки в релизе; строгие Option-контракты — у инверсии и `min_alpha`).
 pub fn composite_over_encoded(tint: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64; 3] {
+    debug_assert!(
+        is_encoded_rgb(tint) && is_encoded_rgb(bg) && (0.0..=1.0).contains(&alpha),
+        "composite_over_encoded: вход вне домена кодированного sRGB"
+    );
     [
         alpha * tint[0] + (1.0 - alpha) * bg[0],
         alpha * tint[1] + (1.0 - alpha) * bg[1],
@@ -61,11 +76,12 @@ pub fn composite_over_encoded(tint: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64;
 
 /// Обратный ход: тинт, чей композит с `alpha` на `bg` равен `solid`.
 ///
-/// `None`, если хотя бы один канал тинта выходит из гамута `[0,1]` (α ниже
-/// [`min_alpha_encoded`]) или `alpha` не в `(0, 1]` — инверсия при α=0
-/// вырождена (композит не зависит от тинта).
+/// `None`, если вход вне домена (`solid`/`bg` не кодированные цвета `[0,1]³`
+/// или не конечные), `alpha` не в `(0, 1]` (при α=0 инверсия вырождена —
+/// композит не зависит от тинта), либо хотя бы один канал тинта выходит из
+/// гамута `[0,1]` (α ниже [`min_alpha_encoded`]).
 pub fn invert_composite_encoded(solid: [f64; 3], alpha: f64, bg: [f64; 3]) -> Option<[f64; 3]> {
-    if !(alpha > 0.0 && alpha <= 1.0) {
+    if !(is_encoded_rgb(solid) && is_encoded_rgb(bg) && alpha > 0.0 && alpha <= 1.0) {
         return None;
     }
     let mut tint = [0.0; 3];
@@ -86,7 +102,13 @@ pub fn invert_composite_encoded(solid: [f64; 3], alpha: f64, bg: [f64; 3]) -> Op
 /// Минимальная α, при которой инверсия `solid` над `bg` разрешима в гамуте
 /// (все каналы тинта в `[0,1]`). Для `solid == bg` равна 0 (любой видимый
 /// эффект отсутствует, тинт = фон при любой α).
-pub fn min_alpha_encoded(solid: [f64; 3], bg: [f64; 3]) -> f64 {
+///
+/// `None` при входе вне домена (не кодированный цвет `[0,1]³` / не конечный) —
+/// молчаливый ответ на мусор был бы ложным обещанием разрешимости.
+pub fn min_alpha_encoded(solid: [f64; 3], bg: [f64; 3]) -> Option<f64> {
+    if !is_encoded_rgb(solid) || !is_encoded_rgb(bg) {
+        return None;
+    }
     let mut lo = 0.0f64;
     for c in 0..3 {
         let (s, b) = (solid[c], bg[c]);
@@ -99,7 +121,7 @@ pub fn min_alpha_encoded(solid: [f64; 3], bg: [f64; 3]) -> f64 {
         };
         lo = lo.max(bound);
     }
-    lo.clamp(0.0, 1.0)
+    Some(lo.clamp(0.0, 1.0))
 }
 
 /// Hex-обёртка прямого хода: композит `tint_hex @ alpha` над `bg_hex`,
@@ -141,7 +163,8 @@ pub fn min_alpha_hex(solid_hex: &str, bg_hex: &str) -> Result<f64, String> {
     Ok(min_alpha_encoded(
         srgb_encoded_from_hex(solid_hex)?,
         srgb_encoded_from_hex(bg_hex)?,
-    ))
+    )
+    .expect("hex-вход всегда в домене byte/255 — None недостижим по построению"))
 }
 
 #[cfg(test)]
@@ -252,7 +275,7 @@ mod tests {
                 }
                 let solid = [s, 0.3, 0.7];
                 let bg = [b, 0.3, 0.7];
-                let a_min = min_alpha_encoded(solid, bg);
+                let a_min = min_alpha_encoded(solid, bg).expect("вход в домене");
                 assert!(
                     invert_composite_encoded(solid, a_min.max(1e-9), bg).is_some(),
                     "solid={s}, bg={b}: неразрешимо на собственной α_min={a_min}"
@@ -277,6 +300,37 @@ mod tests {
         assert!(invert_composite_encoded(s, 1.1, b).is_none());
         // α=1: тинт == солид, тривиально разрешимо.
         assert_eq!(invert_composite_encoded(s, 1.0, b), Some(s));
+    }
+
+    /// Домен ядра закреплён: внегамутные и неконечные входы отвергаются
+    /// (молчаливый ответ на мусор был бы ложным обещанием разрешимости).
+    #[test]
+    fn out_of_domain_inputs_are_rejected() {
+        let ok = [0.5, 0.5, 0.5];
+        for bad in [
+            [1.5, 0.5, 0.5],
+            [-0.1, 0.5, 0.5],
+            [f64::NAN, 0.5, 0.5],
+            [f64::INFINITY, 0.5, 0.5],
+        ] {
+            assert!(
+                invert_composite_encoded(bad, 0.5, ok).is_none(),
+                "{bad:?} как solid"
+            );
+            assert!(
+                invert_composite_encoded(ok, 0.5, bad).is_none(),
+                "{bad:?} как bg"
+            );
+            assert!(
+                min_alpha_encoded(bad, ok).is_none(),
+                "{bad:?} как solid (min_alpha)"
+            );
+            assert!(
+                min_alpha_encoded(ok, bad).is_none(),
+                "{bad:?} как bg (min_alpha)"
+            );
+        }
+        assert!(invert_composite_encoded(ok, f64::NAN, ok).is_none());
     }
 
     /// Граница квантования из модульной документации подтверждается на
