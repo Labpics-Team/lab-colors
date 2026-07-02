@@ -2123,6 +2123,78 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 mod tests {
     use super::*;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // DIFFERENTIAL HARNESS (perf/max-chroma-hotpath) — cusp-attracted hue.
+    //
+    // A frozen copy of the tint undertone's hue sweep as it stood before any perf
+    // optimisation, plus the bit-identity test that gates the C2 coarse-to-fine
+    // rework of `cusp_attracted_hue`. Any change to the emitted hue would move a
+    // tint hex value — forbidden on this branch — so the test pins the selected
+    // hue to full f64 `to_bits()` identity over a dense (l_ok, canonical) grid.
+    // The reference calls the PRODUCTION `scale::max_chroma`, isolating the
+    // *selection* logic from the solver internals.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// FROZEN reference: the flat 81-point cusp sweep exactly as it selected the
+    /// undertone hue at the base of this branch.
+    fn cusp_attracted_hue_reference(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
+        let penalty_scale = stiffness / 100.0;
+        let mut best_h = canonical_deg;
+        let mut best_score = f64::NEG_INFINITY;
+        let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
+        for i in 0..=steps {
+            let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
+            let chroma = scale::max_chroma(l_ok, h);
+            let drift = (h - canonical_deg).abs();
+            let score = chroma - penalty_scale * drift;
+            if score > best_score {
+                best_score = score;
+                best_h = h;
+            }
+        }
+        best_h
+    }
+
+    /// Diff test over a grid: production `cusp_attracted_hue` must select the
+    /// bit-identical undertone hue the frozen flat scan does, at the production
+    /// tint stiffness, across `l_ok` and canonical hue.
+    fn assert_cusp_hue_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
+        let stiffness = TINT_HUE_STIFFNESS;
+        let mut points = 0usize;
+        for li in 0..=l_steps {
+            let l = li as f64 / l_steps as f64;
+            let mut hc = 0usize;
+            while hc < 360 {
+                let hcd = hc as f64;
+                let prod = cusp_attracted_hue(l, hcd, stiffness);
+                let refv = cusp_attracted_hue_reference(l, hcd, stiffness);
+                assert_eq!(
+                    prod.to_bits(),
+                    refv.to_bits(),
+                    "cusp_attracted_hue drift at (L={l}, canon={hcd}): prod={prod} ref={refv}"
+                );
+                points += 1;
+                hc += h_step_deg;
+            }
+        }
+        points
+    }
+
+    #[test]
+    fn diff_cusp_hue_matches_frozen_reference_fast() {
+        // Fast subset for the per-PR run: 101 L × 72 canonical-hue = 7 272 points.
+        let n = assert_cusp_hue_matches_reference(100, 5);
+        assert_eq!(n, 101 * 72);
+    }
+
+    #[test]
+    #[ignore = "full 180k-point grid — run with `--ignored`; slow at opt-level 0"]
+    fn diff_cusp_hue_matches_frozen_reference_full() {
+        // Full grid: L step 0.002 (501) × canonical-hue step 1° (360) = 180 360.
+        let n = assert_cusp_hue_matches_reference(500, 1);
+        assert_eq!(n, 501 * 360);
+    }
+
     #[test]
     fn measure_contrast_reproduces_the_solvers_own_lc_and_wcag() {
         // The recheck primitive must agree with the solver's own `finish`
