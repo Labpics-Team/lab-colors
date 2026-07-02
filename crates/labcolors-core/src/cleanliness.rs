@@ -24,7 +24,7 @@
 //!
 //! | const           | mud-id | статус                         | значение                    |
 //! |-----------------|--------|--------------------------------|-----------------------------|
-//! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (граница серого sRGB; Evans/Xie-Fairchild yellow zero-grayness frontier) |
+//! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (порог хроматич. перехода; Evans/Xie-Fairchild zero-grayness; ⚠️ прежняя геометрия «границы серого sRGB» удалена как некорректная — TODO вывода, см. реестр M-01) |
 //! | `JND`           | M-02   | cited-and-kept                 | 0.01228 (Oklab chroma JND; Oklab perceptual measurement) |
 //! | `B0`            | M-04   | cited-measured                 | 0.036 (центр диапазона [0.030, 0.044]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
 //! | `BW`            | M-05   | cited-measured                 | 0.017 (центр диапазона [0.013, 0.020]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
@@ -34,7 +34,7 @@
 //! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (полуширина доверительного поля confidence) |
 //! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION           | 0.34 (эмпирический concept-floor из v3 retest; не перцептивная константа) |
 //! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION           | 0.10 (эмпирический interior-floor из v3 disputed-stratum; не перцептивная константа) |
-//! | `H_Y_DEG`       | M-12   | cited-derived (Zone B slice 4) | 96.9172° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65); hue_weight = (1+cos(h−H_Y))/2 |
+//! | `H_Y_DEG`       | M-12   | cited-derived ⚠️CMF-flag        | 96.9172° — Oklab hue уникального жёлтого; ⚠️ узлы CMF деривации расходятся с CIE 1931 2° (на верном узле 578nm вышло бы ≈106.5°) — см. флаг у `H_Y_DEG` / реестр M-12; значение заморожено |
 //! | ~~`W_HUE[8]`~~  | M-12   | УДАЛЁН (Zone B slice 4)        | был: подогнанный K=3 Fourier-вектор логистической регрессии — нарушал ZERO observer-fit |
 //! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (чистая геометрия гамута Oklab, верифицирована до f64 — kept as-is) |
 //! | ~~`CEIL_N_TABLE`~~ | M-14 | УДАЛЕНА (Zone B slice 4)       | была: Fourier CEIL_N, подогнана на датасете v3 — более не нужна после BB-замены |
@@ -120,7 +120,8 @@ pub const KAPPA_INTERIOR: f64 = 0.10;
 
 // W_HUE[8] удалён (Zone B slice 4, 2026-06-30):
 // Подогнанный вектор K=3 Фурье-регрессии (логистическая регрессия на 738 авторских
-// метках, M-12) заменён выведенным Hanning-окном Бецольда-Брюкке.
+// метках, M-12) заменён Hanning-окном Бецольда-Брюкке, выведенным из цитируемой
+// формы BB (CMF-узлы деривации центра H_Y_DEG — под ⚠️-флагом, см. ниже).
 // Формула: hue_weight(h) = (1 + cos(h − H_Y_DEG)) / 2
 // Провенанс: Jacobs & Wascher (1967) «Bezold–Brücke Hue Shift: Further Measurements»,
 // J. Opt. Soc. Am. 57(9):1155 (DOI 10.1364/josa.57.001155) × Якобиан оттенка Oklab.
@@ -149,9 +150,10 @@ pub const KAPPA_INTERIOR: f64 = 0.10;
 /// 5-нм шаг), а ȳ-узлы (0.7070/0.7470/0.7570) не соответствуют CIE
 /// (0.9520/0.8892/0.8700). Константа 96.9172 самосогласована со своими
 /// (ошибочными) узлами, но НЕ с официальной CMF: тот же конвейер на корректном
-/// узле 578nm (x̄=0.8879, ȳ=0.8892) даёт Oklab h≈106.5°. Пересчёт H_Y_DEG требует
-/// ОТДЕЛЬНОГО PR с обновлением goldens и подписи владельца — в этом PR значение
-/// НЕ меняется (North: значения на месте).
+/// узле 578nm (x̄=0.8879, ȳ=0.8892) даёт Oklab h≈106.5° (в обоих случаях linear
+/// sRGB клампится в куб [0,1] перед Oklab — обе цифры 96.9°/106.5° получены этой
+/// трактовкой). Пересчёт H_Y_DEG требует ОТДЕЛЬНОГО PR с обновлением goldens и
+/// подписи владельца — в этом PR значение НЕ меняется (North: значения на месте).
 pub const H_Y_DEG: f64 = 96.9172;
 
 #[inline]

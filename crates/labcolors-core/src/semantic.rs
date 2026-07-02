@@ -4223,6 +4223,14 @@ mod derivator_locks {
             (0.35..0.50).contains(&median),
             "медианный Lc-шаг {median:.4} вне замеренного диапазона [0.35, 0.50)"
         );
+        // Максимальный шаг ≈7.85 — это обрыв loClip мягкого клампа APCA (разрыв у
+        // порога различимости, НЕ шаг сетки); лочим его отдельной полосой, чтобы он
+        // не путался со STRICT_STEP и был зафиксирован как отдельный класс величины.
+        let max_step = *steps.last().expect("непустой набор шагов");
+        assert!(
+            (7.0..8.7).contains(&max_step) && (max_step - 7.85).abs() < 0.5,
+            "max Lc-шаг {max_step:.4} (обрыв loClip, не шаг сетки) вне замеренной полосы ~7.85"
+        );
     }
 
     /// Потолок ахроматического M'-шума CAM16 (серые #000..#FFF, дефолтный VC)
@@ -4240,10 +4248,13 @@ mod derivator_locks {
             (1.4..1.7).contains(&max_mp),
             "потолок M'-шума серых {max_mp:.4} вне замеренного диапазона [1.4, 1.7)"
         );
+        // Направленный ассерт (не |Δ|): порог стоит вплотную ПОД потолком шума —
+        // floor < max_mp И зазор < 0.15. Инверсия направления (floor над потолком)
+        // ломает тест.
         assert!(
-            (max_mp - TINT_PERCEPTIBLE_MP_FLOOR).abs() < 0.15,
-            "TINT_PERCEPTIBLE_MP_FLOOR={TINT_PERCEPTIBLE_MP_FLOOR} должен стоять у потолка \
-             M'-шума {max_mp:.4} (|Δ| < 0.15)"
+            TINT_PERCEPTIBLE_MP_FLOOR < max_mp && max_mp - TINT_PERCEPTIBLE_MP_FLOOR < 0.15,
+            "TINT_PERCEPTIBLE_MP_FLOOR={TINT_PERCEPTIBLE_MP_FLOOR} должен стоять чуть ПОД потолком \
+             M'-шума {max_mp:.4} (floor < max_mp и max_mp − floor < 0.15)"
         );
     }
 
@@ -4277,10 +4288,13 @@ mod derivator_locks {
             (35.0..46.0).contains(&max_drift),
             "замеренный дрейф каспа {max_drift:.2} вне диапазона [35, 46)"
         );
+        // Направленный ассерт (не |Δ|): окно (40°) клипует чуть ВНУТРИ полного дрейфа —
+        // дрейф СТРОГО больше окна (max_drift > 40°) и < 46°. Инверсия направления
+        // («окно покрывает дрейф») ломает тест.
         assert!(
-            (max_drift - CUSP_HALF_WINDOW_DEG).abs() < 6.0,
-            "CUSP_HALF_WINDOW_DEG={CUSP_HALF_WINDOW_DEG} должен стоять у замеренного дрейфа \
-             {max_drift:.2} (|Δ| < 6); окно клипует чуть внутри — по дизайну"
+            max_drift > CUSP_HALF_WINDOW_DEG && max_drift < 46.0,
+            "замеренный дрейф каспа {max_drift:.2} должен СТРОГО превышать окно \
+             CUSP_HALF_WINDOW_DEG={CUSP_HALF_WINDOW_DEG} (клип внутри — по дизайну) и быть < 46"
         );
     }
 }
