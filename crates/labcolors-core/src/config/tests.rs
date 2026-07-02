@@ -1139,6 +1139,13 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(0 122 255 / 0.522)",
             "rgb(74 143 255 / 0.522)",
         ),
+        // Края нейтрали пер-темные: контур (edge) и инверт — из стаба дословно.
+        ("fx-focus-ring-neutral", "rgb(16 16 18)", "rgb(246 248 250)"),
+        (
+            "fx-glow-inverted",
+            "rgb(176 176 185 / 0.522)",
+            "rgb(60 60 67 / 0.522)",
+        ),
         // Нейтральные: skeleton #787880 с ПЕР-ТЕМНОЙ альфой (base @8/@12), glow-neutral белый @52.
         (
             "fx-skeleton-base",
@@ -1360,5 +1367,93 @@ fn rgba_resolve_rejects_out_of_domain_spec() {
     assert_eq!(
         crate::ladder::LadderTint::new([[2.0, 0.5, 0.5]; 4]).unwrap_err(),
         "light"
+    );
+}
+
+/// Границы α AlphaAnalog: ровно 1.0 валидна, 1.0+ε — нет (RED-proof грани).
+#[test]
+fn alpha_analog_boundary_is_exact() {
+    let mut c = labui_reference();
+    c.roles.push((
+        "probe-alpha-boundary".to_string(),
+        RoleRecipe::AlphaAnalog {
+            of: LadderSource::Brand,
+            alpha: 1.0,
+        },
+    ));
+    assert!(c.validate().is_ok(), "α=1.0 легальна");
+    if let Some((_, RoleRecipe::AlphaAnalog { alpha, .. })) = c
+        .roles
+        .iter_mut()
+        .find(|(n, _)| n == "probe-alpha-boundary")
+    {
+        *alpha = 1.0 + 1e-9;
+    }
+    assert!(
+        matches!(c.validate(), Err(ConfigError::OutOfBounds { .. })),
+        "α чуть выше 1 обязана быть отвергнута"
+    );
+}
+
+/// Edge/Inverted без соответствующего поля конфига — честная ошибка, не выдумка.
+#[test]
+fn missing_neutral_quads_are_rejected() {
+    let mut c = labui_reference();
+    c.neutral.edge = None;
+    assert!(matches!(
+        c.compile_named_role_table(),
+        Err(ConfigError::MissingNeutralAnchors {
+            field: "neutral.edge",
+            ..
+        })
+    ));
+    let mut c = labui_reference();
+    c.neutral.inverted = None;
+    assert!(matches!(
+        c.compile_named_role_table(),
+        Err(ConfigError::MissingNeutralAnchors {
+            field: "neutral.inverted",
+            ..
+        })
+    ));
+}
+
+/// Ахроматичные источники оттенка: серая нейтраль без override — ошибка;
+/// серый бренд — сентимент честно равен сырому якорю (разведение отключено).
+#[test]
+fn achromatic_hue_sources_are_handled_honestly() {
+    let mut c = labui_reference();
+    c.neutral.tint.hue_override_deg = None;
+    c.neutral.anchors.dark = "#101010".to_string(); // чистый серый: хрома ≈ 0
+    assert!(matches!(
+        c.compile_named_role_table(),
+        Err(ConfigError::AchromaticHueSource { .. })
+    ));
+
+    let mut c = labui_reference();
+    // Серый бренд: все четыре режима ахроматичны.
+    c.brand.anchors = crate::ladder::ThemeAnchors {
+        light: "#808080".to_string(),
+        dark: "#808080".to_string(),
+        light_ic: "#808080".to_string(),
+        dark_ic: "#808080".to_string(),
+    };
+    let table = c.compile_named_role_table().expect("серый бренд легален");
+    let set = crate::semantic::resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &table,
+        &crate::spaces::vc::ViewingConditions::srgb(),
+    );
+    let (_, r) = set
+        .iter()
+        .find(|(n, _)| n == "label-danger-primary")
+        .expect("роль есть");
+    let Resolved::Rgba(r) = r else {
+        panic!("ожидался Rgba");
+    };
+    assert_eq!(
+        r.tint_hex(),
+        "#FF3B30",
+        "при сером бренде сентимент = сырой якорь семейства (разведение отключено)"
     );
 }

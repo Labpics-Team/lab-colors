@@ -182,6 +182,15 @@ pub enum ConfigError {
         dictionary: &'static str,
         key: String,
     },
+    /// Роль требует пер-темной нейтральной четвёрки (edge/inverted), которой в
+    /// конфиге нет — дублирование одного края дало бы невидимую роль.
+    MissingNeutralAnchors {
+        referenced_by: String,
+        field: &'static str,
+    },
+    /// Источник вывода оттенка ахроматичен (Oklab-хрома ≈ 0): hue математически
+    /// не определён — требуется явный hue_override_deg.
+    AchromaticHueSource { field: String },
     /// Значение ручки вне допустимого предела. `handle` — путь до ручки, `bound` —
     /// человеко-читаемое описание нарушенного предела с обоснованием.
     OutOfBounds {
@@ -218,6 +227,17 @@ impl std::fmt::Display for ConfigError {
             } => write!(
                 f,
                 "`{referenced_by}` ссылается на роль `{role}`, которой нет в roles"
+            ),
+            ConfigError::MissingNeutralAnchors {
+                referenced_by,
+                field,
+            } => write!(
+                f,
+                "`{referenced_by}` требует пер-темной нейтральной четвёрки `{field}`, которой нет в конфиге"
+            ),
+            ConfigError::AchromaticHueSource { field } => write!(
+                f,
+                "источник оттенка `{field}` ахроматичен — hue не определён, задай hue_override_deg"
             ),
             ConfigError::DuplicateKey { dictionary, key } => write!(
                 f,
@@ -298,6 +318,15 @@ pub struct NeutralConfig {
     pub anchors: NeutralAnchors,
     /// Ручки подтона.
     pub tint: NeutralTint,
+    /// Пер-темный «контурный» край нейтрали (контрастный теме: светлая тема —
+    /// тёмный контур, тёмная — почти белый; labui: #101012 / #F6F8FA). Нужен
+    /// ролям типа кольца фокуса; без поля [`NeutralPick::Edge`] даёт ошибку
+    /// конфига, не выдуманное значение.
+    pub edge: Option<crate::ladder::ThemeAnchors>,
+    /// Пер-темный «инвертированный» средний тон (labui: #B0B0B9 / #3C3C43) —
+    /// для свечения на инвертированной поверхности; без поля
+    /// [`NeutralPick::Inverted`] даёт ошибку конфига.
+    pub inverted: Option<crate::ladder::ThemeAnchors>,
 }
 
 /// Именованное семейство палитры: ключ + пер-темные якорные hex.
@@ -465,6 +494,11 @@ pub enum LadderSource {
 pub enum NeutralPick {
     /// Средний якорь `neutral.anchors.mid` (`#787880`) — скелетон, нейтральные тинты.
     Mid,
+    /// Контурный край, контрастный теме ([`NeutralConfig::edge`]) — кольцо фокуса.
+    Edge,
+    /// Инвертированный средний тон ([`NeutralConfig::inverted`]) — свечение на
+    /// инвертированной поверхности.
+    Inverted,
     /// Светлый край `neutral.anchors.light` (`#FFFFFF`) — нейтральное свечение.
     Light,
     /// Тёмный край `neutral.anchors.dark` (`#101012`) — нейтральный фокус.
@@ -503,6 +537,22 @@ fn is_valid_name(name: &str) -> bool {
 }
 
 /// Проверить, что hex парсится ядром (`#RGB` / `#RRGGBB`).
+/// Технический порог числовой определённости оттенка: ниже него atan2 в
+/// oklab_hue_of математически не определён (не перцептивная величина —
+/// защита от произвольного 0°, не политика).
+const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
+
+/// Oklab-хрома hex-цвета (для гарда ахроматичности источников оттенка).
+fn oklab_chroma_of_hex(hex: &str) -> f64 {
+    match crate::spaces::srgb::srgb_from_hex(hex) {
+        Ok(lin) => {
+            let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
+            (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
+        }
+        Err(_) => 0.0, // невалидный hex ловится валидатором раньше
+    }
+}
+
 fn check_hex(field: &str, value: &str) -> Result<(), ConfigError> {
     crate::spaces::srgb::srgb_from_hex(value)
         .map(|_| ())
@@ -874,7 +924,17 @@ impl ThemeConfig {
         // v2-кривую не входит (поле v1 flat-пути), но валидируется как ручка.
         let canonical_hue_deg = match self.neutral.tint.hue_override_deg {
             Some(hue) => hue,
-            None => crate::accent::oklab_hue_of(&self.neutral.anchors.dark),
+            None => {
+                // Ахроматичный якорь не несёт оттенка: atan2(0,0) дал бы
+                // произвольный 0° — тихо чужой подтон. Порог технический
+                // (числовая определённость), не перцептивный.
+                if oklab_chroma_of_hex(&self.neutral.anchors.dark) < ACHROMATIC_CHROMA_EPS {
+                    return Err(ConfigError::AchromaticHueSource {
+                        field: "neutral.anchors.dark".to_string(),
+                    });
+                }
+                crate::accent::oklab_hue_of(&self.neutral.anchors.dark)
+            }
         };
         let chroma = RoleChroma::Curve {
             canonical_hue_deg,
@@ -931,7 +991,7 @@ impl ThemeConfig {
             LadderSource::Brand => self.brand.anchors.clone(),
             LadderSource::Family(key) => self.family_anchors(role, key)?.clone(),
             LadderSource::Sentiment(name) => return self.compile_sentiment_tint(role, name),
-            LadderSource::Neutral(pick) => self.neutral_anchors(*pick),
+            LadderSource::Neutral(pick) => self.neutral_anchors(role, *pick)?,
         };
         let quad = anchors
             .encoded_quad()
@@ -949,18 +1009,40 @@ impl ThemeConfig {
     /// продублированный на четыре режима (нейтральная шкала конфига несёт один
     /// hex на край, без пер-темных IC-вариантов). Заземление — стаб labui:
     /// `Neutral/Derivable` тинтуется этими краями (`#787880`/`#FFFFFF`/`#101012`).
-    fn neutral_anchors(&self, pick: NeutralPick) -> ThemeAnchors {
-        let hex = match pick {
-            NeutralPick::Mid => &self.neutral.anchors.mid,
-            NeutralPick::Light => &self.neutral.anchors.light,
-            NeutralPick::Dark => &self.neutral.anchors.dark,
-        };
-        ThemeAnchors {
-            light: hex.clone(),
-            dark: hex.clone(),
-            light_ic: hex.clone(),
-            dark_ic: hex.clone(),
-        }
+    fn neutral_anchors(&self, role: &str, pick: NeutralPick) -> Result<ThemeAnchors, ConfigError> {
+        // Edge/Inverted — пер-темные четвёрки из конфига: дублирование одного
+        // hex дало бы невидимые роли (контур #101012 на тёмной теме); без поля
+        // pick честно падает ошибкой, не выдумкой.
+        let single =
+            match pick {
+                NeutralPick::Edge => {
+                    return self
+                        .neutral
+                        .edge
+                        .clone()
+                        .ok_or(ConfigError::MissingNeutralAnchors {
+                            referenced_by: format!("roles.{role}"),
+                            field: "neutral.edge",
+                        });
+                }
+                NeutralPick::Inverted => {
+                    return self.neutral.inverted.clone().ok_or(
+                        ConfigError::MissingNeutralAnchors {
+                            referenced_by: format!("roles.{role}"),
+                            field: "neutral.inverted",
+                        },
+                    );
+                }
+                NeutralPick::Mid => &self.neutral.anchors.mid,
+                NeutralPick::Light => &self.neutral.anchors.light,
+                NeutralPick::Dark => &self.neutral.anchors.dark,
+            };
+        Ok(ThemeAnchors {
+            light: single.clone(),
+            dark: single.clone(),
+            light_ic: single.clone(),
+            dark_ic: single.clone(),
+        })
     }
 
     /// Пер-темные якоря семейства палитры по ключу (валидатор уже проверил
@@ -995,6 +1077,17 @@ impl ThemeConfig {
         let s_perc_min = self.sentiment_s_perc_min()?;
 
         let solid_of = |anchor_hex: &str, brand_hex: &str| -> Result<[f64; 3], ConfigError> {
+            // Серый бренд не несёт оттенка — разведение по hue бессмысленно и
+            // численно не определено: сентимент честно остаётся сырым якорем
+            // семейства (ни с чем не сливается по оттенку).
+            if oklab_chroma_of_hex(brand_hex) < ACHROMATIC_CHROMA_EPS {
+                return crate::spaces::srgb::srgb_encoded_from_hex(anchor_hex).map_err(|_| {
+                    ConfigError::InvalidHex {
+                        field: format!("roles.{role} (якорь сентимента)"),
+                        value: anchor_hex.to_string(),
+                    }
+                });
+            }
             let brand_hue = crate::accent::oklab_hue_of(brand_hex);
             let solid = crate::sentiment::resolve_config_sentiment_solid(
                 anchor_hex,
@@ -1065,6 +1158,10 @@ impl ThemeConfig {
 // Эталонная фикстура labui.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// КАНОНИЧЕСКИЙ конфиг labui (не тестовая фикстура): значения = замеры
+/// Figma/стаба; публичен намеренно — до PR-b это единственный носитель
+/// labui-семантики у движка; в PR-b переезжает данными пакета @labpics/colors.
+///
 /// Эталонный конфиг labui (CH-02 t1+t2) — 20 нейтральных ролей ядра (байт-в-байт
 /// с [`RoleTable::default`](crate::RoleTable)) плюс акцент/сентимент/FX/альфа-роли
 /// лестницы и алиасы — полное покрытие consumedRoles labui-контракта.
@@ -1200,12 +1297,12 @@ pub fn labui_reference() -> ThemeConfig {
         sent_pos("warning", LadderPosition::FocusRing),
     ));
     // Нейтральный фокус: тёмный край нейтрали, солид (стаб light rgb(16 16 18) =
-    // #101012). Пер-темный флип к near-white на тёмной теме стаб несёт литералом
-    // (#F6F8FA) — движок из тройки anchors его не выводит: исключён из точного
-    // value-теста, помечен как gap пер-темного нейтрального края.
+    // Контур нейтрали ПЕР-ТЕМНЫЙ (стаб: light #101012 / dark #F6F8FA) — едет
+    // на neutral.edge (дублирование одного края дало бы невидимое кольцо
+    // фокуса на тёмной теме). В точном value-тесте — обе темы.
     roles.push((
         "fx-focus-ring-neutral".to_string(),
-        neutral_pos(NeutralPick::Dark, LadderPosition::FocusRing),
+        neutral_pos(NeutralPick::Edge, LadderPosition::FocusRing),
     ));
     roles.push(("fx-glow-brand".to_string(), brand_pos(LadderPosition::Glow)));
     roles.push((
@@ -1221,13 +1318,11 @@ pub fn labui_reference() -> ThemeConfig {
         "fx-glow-neutral".to_string(),
         neutral_pos(NeutralPick::Light, LadderPosition::Glow),
     ));
-    // Инвертированное свечение: нейтральный mid-тинт (стаб light #B0B0B9 /
-    // dark #3C3C43 — конкретные нейтральные литералы, не выводимые из тройки
-    // anchors). Приближено Neutral(Mid)@Glow; исключено из точного value-теста
-    // как известный gap (нужны отдельные inverted-якоря конфига).
+    // Инвертированное свечение — на neutral.inverted (пер-темная пара стаба
+    // #B0B0B9 / #3C3C43 дословно). В точном value-тесте — обе темы.
     roles.push((
         "fx-glow-inverted".to_string(),
-        neutral_pos(NeutralPick::Mid, LadderPosition::Glow),
+        neutral_pos(NeutralPick::Inverted, LadderPosition::Glow),
     ));
     // Skeleton — нейтральный тинт #787880 (стаб rgb(120 120 128 / …)), ПЕР-ТЕМНАЯ
     // альфа: base light @8 / dark @12, highlight @4. Источник = Neutral(Mid).
@@ -1317,6 +1412,21 @@ pub fn labui_reference() -> ThemeConfig {
                 // замер, деривация из тёмного якоря — путь клиентов без замера.
                 hue_override_deg: Some(semantic::NEUTRAL_HUE_DEG),
             },
+            // Пер-темные края (стаб labui дословно; IC = дубль базовых — стаб
+            // без ic-скоупов, наследование как у альф):
+            // контур — light #101012 / dark #F6F8FA; инверт — #B0B0B9 / #3C3C43.
+            edge: Some(crate::ladder::ThemeAnchors {
+                light: "#101012".to_string(),
+                dark: "#F6F8FA".to_string(),
+                light_ic: "#101012".to_string(),
+                dark_ic: "#F6F8FA".to_string(),
+            }),
+            inverted: Some(crate::ladder::ThemeAnchors {
+                light: "#B0B0B9".to_string(),
+                dark: "#3C3C43".to_string(),
+                light_ic: "#B0B0B9".to_string(),
+                dark_ic: "#3C3C43".to_string(),
+            }),
         },
         // Палитра labui — 10 замеренных семейств, ПЕР-ТЕМНО ДОСЛОВНО из
         // reference/labui-accent-primitives.md §2 (Figma `Accent/*`, все 4 режима,

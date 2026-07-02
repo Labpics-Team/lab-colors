@@ -492,12 +492,15 @@ pub fn resolve_smooth_hue_explicit(
         (1.0, params.p_high)
     } else {
         // Degenerate seam: brand exactly on the prototype. Pick the preferred side.
-        let p = if preferred_side >= 0.0 {
+        // Нормализация до ±1: публичный вход мог передать произвольный f64, а это
+        // МНОЖИТЕЛЬ направления, не масштаб (0/NaN трактуем как +1 — дефолт).
+        let side = if preferred_side < 0.0 { -1.0 } else { 1.0 };
+        let p = if side >= 0.0 {
             params.p_high
         } else {
             params.p_low
         };
-        (preferred_side, p)
+        (side, p)
     };
 
     let s = smooth_separation(d, s_min, p);
@@ -647,11 +650,12 @@ pub fn resolve_config_sentiment_solid(
     let prototype = oklab_hue_of(family_anchor_hex);
     let l_anchor = anchor_lab[0];
     let c_anchor = (anchor_lab[1].powi(2) + anchor_lab[2].powi(2)).sqrt();
-    let s_min = s_min_deg(c_anchor);
-    // Порог разделения — max из перцептивного (от хромы якоря) и конфиг-порога:
-    // конфиг S_PERC_MIN задаёт минимум для КАТЕГОРИИ, s_min_deg — для этой хромы.
+    // Порог разделения — ТОЛЬКО из конфиг-порога (s_perc_min пересчитан из
+    // якорей клиента): подмешивание замороженного labui-S_PERC_MIN через
+    // s_min_deg() завышало бы угол низкохромным палитрам чужим порогом
+    // (могло опустошить legal arc) — закон обязан быть чистым по конфигу.
     let params = SentimentParams::uniform(hardness)?;
-    let effective_s_min = s_min.max(s_min_deg_from_chord(s_perc_min, c_anchor));
+    let effective_s_min = s_min_deg_from_chord(s_perc_min, c_anchor);
     let resolved_hue = resolve_smooth_hue_explicit(
         preferred_side,
         hue_floor,

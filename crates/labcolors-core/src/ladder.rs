@@ -394,7 +394,8 @@ mod tests {
             ViewingConditions::srgb_high_contrast(),
             ViewingConditions::dim_surround_high_contrast(),
         ] {
-            let want = srgb_encoded_from_hex(anchors.for_vc(&vc)).unwrap();
+            let want = srgb_encoded_from_hex(anchors.for_vc(&vc))
+                .expect("якоря теста — валидные hex по построению");
             assert_eq!(tint.for_vc(&vc), want, "тинт для vc разошёлся с якорем");
         }
     }
