@@ -1364,6 +1364,38 @@ fn value_test_bites_on_alpha_mutation() {
     );
 }
 
+/// Сторона пары — идентичность семьи НА РЕЗОЛВ-УРОВНЕ: info в тёмной теме
+/// обязан остаться на светлой стороне (тёмный якорь #5696FF сам по себе
+/// перелезает кроссовер — контрпример оси A; мутация «сторона от vc» в
+/// semantic.rs обязана уронить этот тест).
+#[test]
+fn pair_side_is_family_stable_across_themes_at_resolve_level() {
+    let table = labui_reference().compile_named_role_table().unwrap();
+    let bg_dark = BgInput::solid("#101012").unwrap();
+    let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "badge-fill-info")
+        .expect("паспорт несёт badge-fill-info");
+    let fill = res
+        .translucent()
+        .expect("заливка пары эмитится лестничной сантехникой");
+    // Светлая сторона семьи: тёмная заливка (белый строго выигрывает
+    // штатную полярность — Y ниже выведенной границы WCAG).
+    let enc =
+        crate::spaces::srgb::srgb_encoded_from_hex(fill.tint_hex()).expect("эмиссия валидный hex");
+    let lin = [
+        crate::spaces::srgb::srgb_gamma_inv(enc[0]),
+        crate::spaces::srgb::srgb_gamma_inv(enc[1]),
+        crate::spaces::srgb::srgb_gamma_inv(enc[2]),
+    ];
+    let y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+    assert!(
+        y < 0.17913,
+        "badge-fill-info в dark обязан быть утемнён под светлую сторону семьи (Y={y:.4})"
+    );
+}
+
 /// Дубликаты ключей всех словарей отвергаются (повтор имени = неоднозначный
 /// lookup), включая алиас, затеняющий роль.
 #[test]
