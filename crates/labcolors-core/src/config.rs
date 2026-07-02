@@ -863,7 +863,7 @@ impl ThemeConfig {
             hue_stiffness: self.neutral.tint.hue_stiffness,
         };
 
-        Ok(NamedRoleTable::new(entries, chroma))
+        Ok(NamedRoleTable::new(entries, self.aliases.clone(), chroma))
     }
 
     /// Скомпилировать один рецепт в [`RoleSpec`]. Ladder/AlphaAnalog раскладывают
@@ -920,7 +920,10 @@ impl ThemeConfig {
                 field: format!("roles.{role} (источник лестницы)"),
                 value: "<пер-темный якорь>".to_string(),
             })?;
-        Ok(LadderTint::new(quad))
+        LadderTint::new(quad).map_err(|mode| ConfigError::InvalidHex {
+            field: format!("roles.{role} (тинт лестницы, режим {mode})"),
+            value: "<вне кодированного домена>".to_string(),
+        })
     }
 
     /// Нейтральный якорь из [`NeutralConfig::anchors`] по [`NeutralPick`],
@@ -970,7 +973,7 @@ impl ThemeConfig {
             })?;
         let fam = self.family_anchors(role, &cat.family)?.clone();
         let brand = self.brand.anchors.clone();
-        let s_perc_min = self.sentiment_s_perc_min();
+        let s_perc_min = self.sentiment_s_perc_min()?;
 
         let solid_of = |anchor_hex: &str, brand_hex: &str| -> Result<[f64; 3], ConfigError> {
             let brand_hue = crate::accent::oklab_hue_of(brand_hex);
@@ -995,30 +998,47 @@ impl ThemeConfig {
             })
         };
 
-        Ok(LadderTint::new([
+        LadderTint::new([
             solid_of(&fam.light, &brand.light)?,
             solid_of(&fam.dark, &brand.dark)?,
             solid_of(&fam.light_ic, &brand.light_ic)?,
             solid_of(&fam.dark_ic, &brand.dark_ic)?,
-        ]))
+        ])
+        .map_err(|mode| ConfigError::InvalidHex {
+            field: format!("roles.{role} (сентимент-тинт, режим {mode})"),
+            value: "<вне кодированного домена>".to_string(),
+        })
     }
 
     /// `S_PERC_MIN`, пересчитанный из Oklab-хром светлых якорей 4 (или скольких
     /// есть) сентимент-категорий конфига — закон `2·C_rep·sin(20°/2)` (поправка
     /// t2 №д). При labui-якорях == замороженная константа (тест-идентичность).
-    pub fn sentiment_s_perc_min(&self) -> f64 {
-        let chromas: Vec<f64> = self
-            .sentiments
-            .categories
-            .iter()
-            .filter_map(|c| self.palette.iter().find(|f| f.key == c.family))
-            .filter_map(|f| crate::spaces::srgb::srgb_from_hex(&f.anchors.light).ok())
-            .map(|lin| {
-                let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
-                (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
-            })
-            .collect();
-        crate::sentiment::s_perc_min_from_chromas(&chromas)
+    /// # Errors
+    ///
+    /// `Err`, если категория ссылается на несуществующее семейство или якорь
+    /// семейства — невалидный hex: порог разделения, посчитанный по НЕПОЛНОМУ
+    /// набору категорий, был бы тихой математической ложью.
+    pub fn sentiment_s_perc_min(&self) -> Result<f64, ConfigError> {
+        let mut chromas = Vec::with_capacity(self.sentiments.categories.len());
+        for c in &self.sentiments.categories {
+            let fam = self
+                .palette
+                .iter()
+                .find(|f| f.key == c.family)
+                .ok_or_else(|| ConfigError::UnknownFamily {
+                    referenced_by: format!("sentiments.{}", c.name),
+                    family: c.family.clone(),
+                })?;
+            let lin = crate::spaces::srgb::srgb_from_hex(&fam.anchors.light).map_err(|_| {
+                ConfigError::InvalidHex {
+                    field: format!("palette.{}.anchors.light", fam.key),
+                    value: fam.anchors.light.clone(),
+                }
+            })?;
+            let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
+            chromas.push((lab[1] * lab[1] + lab[2] * lab[2]).sqrt());
+        }
+        Ok(crate::sentiment::s_perc_min_from_chromas(&chromas))
     }
 }
 

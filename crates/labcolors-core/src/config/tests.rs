@@ -757,7 +757,9 @@ fn consumed_roles_diff_is_empty_against_labui_contract() {
 /// случай при labui-якорях (поправка t2 №д).
 #[test]
 fn s_perc_min_recomputed_from_config_anchors_matches_frozen() {
-    let recomputed = labui_reference().sentiment_s_perc_min();
+    let recomputed = labui_reference()
+        .sentiment_s_perc_min()
+        .expect("фикстура валидна");
     let frozen = crate::sentiment::s_perc_min_frozen();
     assert!(
         (recomputed - frozen).abs() < 1e-4,
@@ -774,7 +776,9 @@ fn s_perc_min_recomputed_from_config_anchors_matches_frozen() {
 /// хрома) сдвигает `S_PERC_MIN` — иначе пересчёт был бы слеп к якорям.
 #[test]
 fn s_perc_min_recompute_bites_on_anchor_mutation() {
-    let base = labui_reference().sentiment_s_perc_min();
+    let base = labui_reference()
+        .sentiment_s_perc_min()
+        .expect("фикстура валидна");
     let mut cfg = labui_reference();
     // Danger маппится на red; подменим red-якорь на серый (низкая хрома) →
     // C_rep падает → S_PERC_MIN падает.
@@ -783,7 +787,9 @@ fn s_perc_min_recompute_bites_on_anchor_mutation() {
             fam.anchors.light = "#808080".to_string();
         }
     }
-    let mutated = cfg.sentiment_s_perc_min();
+    let mutated = cfg
+        .sentiment_s_perc_min()
+        .expect("мутация якоря сохраняет валидность");
     assert!(
         (base - mutated).abs() > 1e-3,
         "RED-proof провален: подмена якоря НЕ сдвинула S_PERC_MIN ({base} vs {mutated})"
@@ -1276,4 +1282,75 @@ fn validator_reference_errors_are_distinguishable() {
     c.aliases
         .push(("probe-alias".to_string(), "nonexistent-role".to_string()));
     assert!(matches!(c.validate(), Err(ConfigError::UnknownRole { .. })));
+}
+
+/// IC-наследование альф закреплено: позиция отдаёт альфу базовой темы и в
+/// IC-режиме (IC меняет тинт, не прозрачность — стаб без ic-скоупов).
+#[test]
+fn ic_inherits_base_theme_alpha() {
+    use crate::spaces::vc::ViewingConditions;
+    let pos = crate::ladder::LadderPosition::SkeletonBase;
+    let light = ViewingConditions::srgb();
+    let dark = ViewingConditions::dim_surround();
+    let light_ic = ViewingConditions::srgb_high_contrast();
+    let dark_ic = ViewingConditions::dim_surround_high_contrast();
+    assert_eq!(pos.alpha_for_vc(&light), pos.alpha_for_vc(&light_ic));
+    assert_eq!(pos.alpha_for_vc(&dark), pos.alpha_for_vc(&dark_ic));
+    // Пер-темная пара реально различается (skeleton-base @8/@12).
+    assert!((pos.alpha_for_vc(&light) - pos.alpha_for_vc(&dark)).abs() > 1e-6);
+}
+
+/// Алиасы переносятся в скомпилированную таблицу — без переноса алиасные роли
+/// контракта терялись бы при эмиссии (major CodeRabbit r2).
+#[test]
+fn compiled_table_carries_aliases() {
+    let table = labui_reference()
+        .compile_named_role_table()
+        .expect("фикстура компилируется");
+    let aliases = table.aliases();
+    assert!(!aliases.is_empty(), "фикстура несёт алиасы");
+    assert!(
+        aliases
+            .iter()
+            .any(|(a, t)| a == "fill-neutral-tinted" && t == "fill-primary"),
+        "алиас fill-neutral-tinted→fill-primary обязан пережить компиляцию"
+    );
+}
+
+/// Сборка RoleSpec в обход валидатора не даёт правдоподобного мусора:
+/// невалидная α/тинт резолвятся в Unreachable, не в тихий кламп.
+#[test]
+fn rgba_resolve_rejects_out_of_domain_spec() {
+    use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
+    use crate::solve::BgInput;
+    use crate::spaces::vc::ViewingConditions;
+    let tint = crate::ladder::LadderTint::new([[0.5, 0.5, 0.5]; 4]).expect("валидный тинт");
+    for bad_alpha in [f64::NAN, 0.0, 1.5] {
+        let table = NamedRoleTable::new(
+            vec![(
+                "probe".to_string(),
+                RoleSpec::Ladder {
+                    tint,
+                    alpha_light: bad_alpha,
+                    alpha_dark: bad_alpha,
+                },
+            )],
+            vec![],
+            RoleChroma::Neutral,
+        );
+        let set = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        );
+        assert!(
+            matches!(set[0].1, Resolved::Unreachable(_)),
+            "α={bad_alpha} обязана дать Unreachable, не цвет"
+        );
+    }
+    // Мусорный quad отвергается конструктором тинта с именем режима.
+    assert_eq!(
+        crate::ladder::LadderTint::new([[2.0, 0.5, 0.5]; 4]).unwrap_err(),
+        "light"
+    );
 }

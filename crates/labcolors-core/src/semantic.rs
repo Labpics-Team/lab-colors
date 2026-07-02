@@ -1420,12 +1420,30 @@ fn resolve_spec_in(
 /// sRGB) — тот же путь, что Figma/браузер ([`crate::alpha`]). Контраст меряется
 /// на КОМПОЗИТЕ (солид-эквивалент), не на тинте: контраст полупрозрачной роли
 /// определён тем, во что она складывается на подложке.
+/// Валидный кодированный вход rgba-пути: конечные каналы [0,1] и α в (0,1].
+/// RoleSpec публичен — спека, собранная в обход валидатора конфига, не должна
+/// давать правдоподобный мусор: невалидный вход честно резолвится в
+/// Unreachable, не в тихий кламп.
+fn rgba_input_valid(tint_encoded: [f64; 3], alpha: f64) -> bool {
+    tint_encoded
+        .iter()
+        .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+        && alpha.is_finite()
+        && alpha > 0.0
+        && alpha <= 1.0
+}
+
 fn resolve_rgba_direct(
     tint_encoded: [f64; 3],
     alpha: f64,
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Resolved {
+    if !rgba_input_valid(tint_encoded, alpha) {
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "rgba-спека вне домена (тинт [0,1], α (0,1]) — сборка в обход валидатора".into(),
+        ));
+    }
     let bg_encoded = bg.encoded_display();
     let composite = crate::alpha::composite_over_encoded(tint_encoded, alpha, bg_encoded);
     finish_rgba(tint_encoded, alpha, composite, bg_encoded, vc)
@@ -1684,6 +1702,7 @@ pub(crate) fn resolve_set_live(
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
+    aliases: Vec<(String, String)>,
     chroma: RoleChroma,
 }
 
@@ -1692,8 +1711,23 @@ impl NamedRoleTable {
     /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
     /// constructor does not validate them — the config validator
     /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
-    pub fn new(entries: Vec<(String, RoleSpec)>, chroma: RoleChroma) -> Self {
-        Self { entries, chroma }
+    pub fn new(
+        entries: Vec<(String, RoleSpec)>,
+        aliases: Vec<(String, String)>,
+        chroma: RoleChroma,
+    ) -> Self {
+        Self {
+            entries,
+            aliases,
+            chroma,
+        }
+    }
+
+    /// Алиасы `(имя, цель)` — эмитируются потребителем как CSS-ссылка
+    /// `--lab-{имя}: var(--lab-{цель})` (одна истина значения, ноль копий);
+    /// без переноса сюда алиасные роли контракта терялись бы при компиляции.
+    pub fn aliases(&self) -> &[(String, String)] {
+        &self.aliases
     }
 
     /// The `(name, recipe)` entries, in declaration order.
@@ -3028,9 +3062,13 @@ mod tests {
                         }
                     }
                     Resolved::None => matches!(table.spec(*role), RoleSpec::Zero),
-                    // Дефолтная таблица не несёт Ladder/AlphaAnalog — вариант тут
-                    // недостижим; полупрозрачная роль в любом случае не «клип».
-                    Resolved::Rgba(_) => true,
+                    // Дефолтная таблица не несёт Ladder/AlphaAnalog — появление
+                    // Rgba здесь означало бы дрейф default() и обязано падать
+                    // шумно, а не маскироваться под «не клип».
+                    Resolved::Rgba(_) => panic!(
+                        "{bg_hex}: RoleTable::default() отдал Rgba для {:?} — дрейф дефолт-таблицы",
+                        role
+                    ),
                     Resolved::Unreachable(_) => true,
                 });
                 assert!(

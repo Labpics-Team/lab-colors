@@ -109,8 +109,20 @@ pub struct LadderTint {
 
 impl LadderTint {
     /// Собрать тинт из кодированной четвёрки режимов.
-    pub fn new(quad: [[f64; 3]; 4]) -> Self {
-        Self { quad }
+    ///
+    /// # Errors
+    ///
+    /// `Err` с именем битого режима, если любой канал не конечен или вне
+    /// `[0,1]` — тинт публично конструируем, и мусор на входе резолва дал бы
+    /// правдоподобно-неверный цвет (встроенный путь byte/255 валиден всегда).
+    pub fn new(quad: [[f64; 3]; 4]) -> Result<Self, &'static str> {
+        const MODES: [&str; 4] = ["light", "dark", "light-ic", "dark-ic"];
+        for (i, rgb) in quad.iter().enumerate() {
+            if !rgb.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)) {
+                return Err(MODES[i]);
+            }
+        }
+        Ok(Self { quad })
     }
 
     /// Кодированный тинт под условия просмотра резолва (тот же выбор режима, что
@@ -370,7 +382,7 @@ mod tests {
             light_ic: "#D70015".to_string(),
             dark_ic: "#FF6161".to_string(),
         };
-        let tint = LadderTint::new(anchors.encoded_quad().unwrap());
+        let tint = LadderTint::new(anchors.encoded_quad().unwrap()).unwrap();
         for vc in [
             ViewingConditions::srgb(),
             ViewingConditions::dim_surround(),
