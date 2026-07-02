@@ -370,13 +370,25 @@ fn hue_floor_out_of_range_is_rejected() {
     let mut neg = labui_reference();
     neg.sentiments.categories[1].hue_floor_deg = Some(-1.0);
     assert!(neg.validate().is_err());
-    // RED-proof: 0.0 валиден, чуть ниже 360 валиден.
+    // RED-proof: 0.0 валиден (ничего не исключает — компилируется).
     let mut lo = labui_reference();
     lo.sentiments.categories[1].hue_floor_deg = Some(0.0);
     assert_eq!(lo.validate(), Ok(()));
+    // 359.999 проходит проверку ДИАПАЗОНА (не OutOfBounds), но полный
+    // preflight честно ловит деривационную коллизию: такой пол исключает
+    // почти весь круг (`h < f` нелегален) — легальная дуга сентимента пуста.
+    // Старый ассерт `Ok` был ровно тем ложноположительным preflight-ом,
+    // который закрыт р-6 (validate = компиляция по построению).
     let mut hi = labui_reference();
     hi.sentiments.categories[1].hue_floor_deg = Some(359.999);
-    assert_eq!(hi.validate(), Ok(()));
+    assert!(
+        !matches!(hi.validate(), Err(ConfigError::OutOfBounds { .. })),
+        "359.999 внутри полуинтервала [0,360) — диапазонная проверка проходит"
+    );
+    assert!(
+        hi.validate().is_err(),
+        "пол 359.999 опустошает легальную дугу — деривационная ошибка"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1416,6 +1428,102 @@ fn missing_neutral_quads_are_rejected() {
             ..
         })
     ));
+}
+
+/// `validate()` — полный preflight ПО ПОСТРОЕНИЮ (компиляция с отброшенным
+/// результатом): для любого конфига validate и compile дают одинаковый исход
+/// и байт-в-байт одинаковую ошибку. Корпус — деривационные ошибки, которые
+/// структурная фаза не видит (класс р-6: ложноположительный `Ok` preflight-а).
+#[test]
+fn validate_is_a_complete_preflight() {
+    let ok = labui_reference();
+    assert!(
+        ok.validate().is_ok(),
+        "канонический конфиг проходит preflight"
+    );
+    assert!(ok.compile_named_role_table().is_ok());
+
+    let assert_parity = |c: &ThemeConfig, want: &str| {
+        let v = c.validate().expect_err("validate обязан падать");
+        let k = c
+            .compile_named_role_table()
+            .expect_err("compile обязан падать");
+        assert_eq!(
+            format!("{v:?}"),
+            format!("{k:?}"),
+            "validate и compile разошлись — полнота preflight нарушена"
+        );
+        let got = format!("{v:?}");
+        assert!(got.contains(want), "ждали {want}, получено {got}");
+    };
+
+    // Ахроматичная нейтраль без override — деривационная ошибка подтона.
+    let mut c = labui_reference();
+    c.neutral.tint.hue_override_deg = None;
+    c.neutral.anchors.dark = "#101010".to_string();
+    assert_parity(&c, "AchromaticHueSource");
+
+    // Edge-роль без четвёрки edge — деривационная ошибка края нейтрали.
+    let mut c = labui_reference();
+    c.neutral.edge = None;
+    assert_parity(&c, "MissingNeutralAnchors");
+
+    // Битый hex в ЗАДАННОЙ, но никем не используемой четвёрке edge:
+    // задекларированные данные валидируются даже без ссылающихся ролей —
+    // мёртвый битый hex не должен ждать первую ссылку, чтобы всплыть.
+    let mut c = labui_reference();
+    c.roles.retain(|(_, r)| {
+        !matches!(
+            r,
+            RoleRecipe::Ladder {
+                source: LadderSource::Neutral(NeutralPick::Edge),
+                ..
+            } | RoleRecipe::AlphaAnalog {
+                of: LadderSource::Neutral(NeutralPick::Edge),
+                ..
+            }
+        )
+    });
+    let kept: std::collections::BTreeSet<&str> = c.roles.iter().map(|(n, _)| n.as_str()).collect();
+    c.aliases
+        .retain(|(_, target)| kept.contains(target.as_str()));
+    c.neutral.edge = Some(crate::ladder::ThemeAnchors {
+        light: "не-hex".to_string(),
+        dark: "#F6F8FA".to_string(),
+        light_ic: "#101012".to_string(),
+        dark_ic: "#F6F8FA".to_string(),
+    });
+    assert_parity(&c, "InvalidHex");
+}
+
+/// `RoleSpec` публичен: alpha-analog-спека с недоменной α, собранная в обход
+/// валидатора конфига, резолвится в честный `Unreachable`, а не в
+/// правдоподобный hex через кламп резолвера инверсии. Недоменный СОЛИД по
+/// построению невозможен ([`crate::ladder::LadderTint::new`] валидирует домен
+/// квада) — гард по солиду остаётся глубинной защитой.
+#[test]
+fn alpha_analog_spec_bypassing_validator_is_rejected() {
+    use crate::ladder::LadderTint;
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
+
+    let tint = LadderTint::new([[0.5, 0.5, 0.5]; 4]).expect("валидный квад");
+    let bg = BgInput::solid("#FFFFFF").unwrap();
+    for alpha in [1.0 + 1e-9, 0.0, -0.5, f64::NAN, f64::INFINITY] {
+        let table = NamedRoleTable::new(
+            vec![(
+                "probe".to_string(),
+                RoleSpec::AlphaAnalog { of: tint, alpha },
+            )],
+            vec![],
+            RoleChroma::Neutral,
+        );
+        let set = crate::semantic::resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+        let (_, r) = set.iter().find(|(n, _)| n == "probe").expect("роль есть");
+        assert!(
+            matches!(r, Resolved::Unreachable(_)),
+            "α={alpha}: ждали Unreachable (честный отказ), получено {r:?}"
+        );
+    }
 }
 
 /// Ахроматичные источники оттенка: серая нейтраль без override — ошибка;

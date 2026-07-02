@@ -5,7 +5,9 @@ use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{jp_to_oklab_l, max_chroma};
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz};
+use crate::spaces::srgb::{
+    hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_from_hex, srgb_to_xyz,
+};
 use crate::spaces::vc::ViewingConditions;
 
 /// Перцептивный минимум разделения между оттенком сентимента и брендовым
@@ -620,6 +622,19 @@ pub fn s_perc_min_frozen() -> f64 {
     S_PERC_MIN
 }
 
+/// Технический порог числовой определённости оттенка: ниже него atan2 в
+/// [`oklab_hue_of`] математически не определён (не перцептивная величина —
+/// защита от произвольного 0°, не политика). Дом константы — здесь, рядом с
+/// законом «нет носителя оттенка → нет разведения»; конфиг-гарды
+/// (`crate::config`) ссылаются сюда же.
+///
+/// Провенанс ε: минимум ненулевой Oklab-хромы 8-битного цвета ≈ 1.1e-3
+/// (#FEFFFF; #808081 ≈ 1.5e-3), f64-шум конвейера sRGB→Oklab ≲ 1e-12;
+/// 1e-7 лежит между ними с запасом ≥4 порядка в обе стороны — не может
+/// переклассифицировать ни один представимый цвет.
+// GROUNDED — арифметика представимости: мин. 8-бит хрома `1.06e-3` ≫ ε ≫ f64-шум `1e-12` (docs/empirical-inventory.md).
+pub(crate) const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
+
 /// Config-facing сентимент-солид: якорь семейства, чей оттенок разведён с брендом
 /// сентимент-солвером, при СОХРАНЁННЫХ светлоте и хроме якоря.
 ///
@@ -632,8 +647,9 @@ pub fn s_perc_min_frozen() -> f64 {
 ///
 /// # Errors
 ///
-/// `Err`, если якорь невалиден или легальный оттенок геометрически пуст
-/// (см. [`resolve_smooth_hue_explicit`]).
+/// `Err`, если якорь невалиден, легальный оттенок геометрически пуст
+/// (см. [`resolve_smooth_hue_explicit`]) или порог `s_perc_min` не конечен
+/// (см. [`s_min_deg_from_chord`]).
 pub fn resolve_config_sentiment_solid(
     family_anchor_hex: &str,
     brand_hue: f64,
@@ -647,15 +663,40 @@ pub fn resolve_config_sentiment_solid(
     // chroma_fraction — ручка рампы SentimentCurve, не тинта; принимается для
     // единообразия сигнатуры конфига, но тинт держит фактическую хрому якоря.
     let anchor_lab = srgb_linear_to_oklab(srgb_from_hex(family_anchor_hex)?);
-    let prototype = oklab_hue_of(family_anchor_hex);
     let l_anchor = anchor_lab[0];
     let c_anchor = (anchor_lab[1].powi(2) + anchor_lab[2].powi(2)).sqrt();
+    // Ахроматичный якорь не несёт оттенка (prototype = atan2(0,0) — числовой
+    // произвол), а хорда разведения 2·C·sin(Δh/2) при C≈0 перцептивно пуста:
+    // тот же закон, что для серого бренда (`config::compile_sentiment_tint`) —
+    // нет носителя оттенка → нет разведения, солид = сырой якорь
+    // (байт-в-байт, нормализованный через encoded-roundtrip).
+    if c_anchor < ACHROMATIC_CHROMA_EPS {
+        return Ok(hex_from_srgb_encoded(srgb_encoded_from_hex(
+            family_anchor_hex,
+        )?));
+    }
+    let prototype = oklab_hue_of(family_anchor_hex);
     // Порог разделения — ТОЛЬКО из конфиг-порога (s_perc_min пересчитан из
     // якорей клиента): подмешивание замороженного labui-S_PERC_MIN через
     // s_min_deg() завышало бы угол низкохромным палитрам чужим порогом
     // (могло опустошить legal arc) — закон обязан быть чистым по конфигу.
     let params = SentimentParams::uniform(hardness)?;
-    let effective_s_min = s_min_deg_from_chord(s_perc_min, c_anchor);
+    let effective_s_min = s_min_deg_from_chord(s_perc_min, c_anchor)?;
+    // Сатурация порога (180° ⇔ chord ≥ 2C): требуемая хорда недостижима ни
+    // одним углом — ограничение вырождено, ответ аналитический: максимум
+    // разведения на легальной дуге («максимально приближенный приемлемый»,
+    // не отказ). Пол, блокирующий диаметраль, даёт границу пола — ближайшую
+    // легальную точку к максимуму; супремум у открытого конца дуги (360⁻ при
+    // поле у верха круга и бренде напротив) сознательно не берётся: границе
+    // пола отдан детерминизм в вырожденной конфигурации.
+    if effective_s_min >= 180.0 {
+        let diametric = normalize_hue(brand_hue + 180.0);
+        let resolved = match hue_floor {
+            Some(floor) if diametric < floor => floor,
+            _ => diametric,
+        };
+        return Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved));
+    }
     let resolved_hue = resolve_smooth_hue_explicit(
         preferred_side,
         hue_floor,
@@ -671,10 +712,33 @@ pub fn resolve_config_sentiment_solid(
 /// Перевести целевую хорду разделения `chord` в угол оттенка (градусы) при
 /// хроме `zone_chroma` — та же инверсия `2·C·sin(Δh/2)`, что [`s_min_deg`], но с
 /// произвольной хордой (для конфиг-`S_PERC_MIN`).
-fn s_min_deg_from_chord(chord: f64, zone_chroma: f64) -> f64 {
-    let safe_chroma = zone_chroma.max(1e-6);
-    let ratio = (chord / (2.0 * safe_chroma)).clamp(0.0, 1.0);
-    2.0 * ratio.asin().to_degrees()
+///
+/// При `chord ≥ 2·zone_chroma` порог недостижим НИ ОДНИМ углом (хорда
+/// окружности радиуса C ограничена диаметром 2C): возвращается ровно 180° —
+/// маркер сатурации. Вызывающий ОБЯЗАН обработать 180° аналитически
+/// (диаметральный оттенок = максимум разведения), НЕ передавая его p-норм
+/// солверу: `smooth_separation ≥ s_min` перелетает диаметраль, легальное
+/// множество вырождается в точку меры нуль, и скан-сетка `legalize_hue`
+/// (шаг 0.05°) её не находит — получился бы ложный «пустая дуга». Случай
+/// реален: приглушённый якорь (тёмная тема) при хромных соседях — средняя
+/// хорда категорий превышает диаметр одного якоря.
+///
+/// # Errors
+///
+/// `Err` на неконечных/отрицательных входах и `zone_chroma ≤ 0` — вызывающий
+/// обязан отсечь ахроматичную зону гардом [`ACHROMATIC_CHROMA_EPS`] до
+/// инверсии хорды (asin от NaN-отношения дал бы NaN-градусы дальше по физике).
+fn s_min_deg_from_chord(chord: f64, zone_chroma: f64) -> Result<f64, String> {
+    if !(chord.is_finite() && zone_chroma.is_finite() && chord >= 0.0 && zone_chroma > 0.0) {
+        return Err(format!(
+            "инверсия хорды вне домена: chord={chord}, zone_chroma={zone_chroma}"
+        ));
+    }
+    let ratio = chord / (2.0 * zone_chroma);
+    if ratio >= 1.0 {
+        return Ok(180.0);
+    }
+    Ok(2.0 * ratio.asin().to_degrees())
 }
 
 /// The in-gamut sRGB hex at Oklab `(L, C, h)`, channels clamped to `[0, 1]`.
@@ -1113,5 +1177,75 @@ mod tests {
              (разница {:.7} >= 1e-4; значение должно совпадать с Figma-деривацией)",
             (S_PERC_MIN - derived).abs()
         );
+    }
+
+    /// Инверсия хорды: достижимый порог строго внутри (0, 180°); сатурация
+    /// (chord ≥ 2C) — маркер ровно 180°; мусор-входы — честный Err, не
+    /// NaN-градусы дальше по физике.
+    #[test]
+    fn chord_inversion_saturates_and_rejects_garbage() {
+        let deg = s_min_deg_from_chord(0.05, 0.1).expect("достижимая хорда");
+        assert!(deg > 0.0 && deg < 180.0, "0 < {deg} < 180");
+        // Ровно диаметр и выше — маркер сатурации.
+        assert_eq!(s_min_deg_from_chord(0.2, 0.1).unwrap(), 180.0);
+        assert_eq!(s_min_deg_from_chord(0.5, 0.1).unwrap(), 180.0);
+        for (chord, zone) in [
+            (f64::NAN, 0.1),
+            (0.1, f64::NAN),
+            (f64::INFINITY, 0.1),
+            (-0.1, 0.1),
+            (0.1, 0.0),
+            (0.1, -0.1),
+        ] {
+            assert!(
+                s_min_deg_from_chord(chord, zone).is_err(),
+                "({chord}, {zone}) обязана быть отвергнута"
+            );
+        }
+    }
+
+    /// Сатурированный порог (хорда недостижима ни одним углом) резолвится
+    /// аналитически в диаметральный оттенок — максимум разведения, не ложный
+    /// «пустая дуга» от скан-сетки и не тихое меньшее разведение.
+    #[test]
+    fn saturated_chord_resolves_to_diametric_hue() {
+        // Ассерт байт-в-байт против аналитического закона (солид = якорные L/C
+        // на целевом оттенке): угол ПОСЛЕ hex-эмиссии сравнивать нельзя —
+        // гамут-клип каналов и 8-бит квантование легитимно смещают его
+        // (пре-существующий контракт oklab_lc_to_hex).
+        let anchor = "#FF3B30";
+        let brand_hue = 100.0;
+        let lab = srgb_linear_to_oklab(srgb_from_hex(anchor).unwrap());
+        let (l, c) = (lab[0], (lab[1].powi(2) + lab[2].powi(2)).sqrt());
+
+        // s_perc_min = 1.0 — заведомо больше диаметра 2C любого sRGB-цвета.
+        let solid = resolve_config_sentiment_solid(anchor, brand_hue, 4.0, 1.0, None, 1.0, 1.0)
+            .expect("сатурация — не отказ");
+        let diametric = normalize_hue(brand_hue + 180.0);
+        assert_eq!(
+            solid,
+            oklab_lc_to_hex(l, c, diametric),
+            "сатурация → диаметраль (максимум разведения) на якорных L/C"
+        );
+
+        // Пол, блокирующий диаметраль (brand 100° → диаметраль 280° < 300°):
+        // граница пола, не отказ и не нарушение пола.
+        let floored =
+            resolve_config_sentiment_solid(anchor, brand_hue, 4.0, 1.0, Some(300.0), 1.0, 1.0)
+                .expect("пол при сатурации — не отказ");
+        assert_eq!(
+            floored,
+            oklab_lc_to_hex(l, c, 300.0),
+            "при полу 300° сатурация садится на границу пола"
+        );
+    }
+
+    /// Ахроматичный якорь семейства не несёт оттенка: разведение отключается
+    /// честно — солид равен сырому якорю (тот же закон, что серый бренд).
+    #[test]
+    fn achromatic_family_anchor_returns_raw_anchor() {
+        let solid = resolve_config_sentiment_solid("#808080", 28.0, 4.0, 1.0, None, 1.0, 0.06)
+            .expect("серый якорь легален");
+        assert_eq!(solid, "#808080", "серый якорь возвращается байт-в-байт");
     }
 }

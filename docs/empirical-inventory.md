@@ -47,6 +47,7 @@ Marker column: `SSOT-TRACKED` = has a paper trail in this table but no citation-
 | 35 | `IC_DECORATIVE_FLOOR_MIN` | `15.0` | `semantic.rs` | SSOT-TRACKED | Increased-contrast decorative floor (Lc), raised above `DECORATIVE_FLOOR_MIN` (7.5) to match the stronger perceptual requirements of the `-ic` themes. |
 | 36 | `HUE_SEARCH_HALF_WINDOW` | `30.0` | `scale.rs` | SSOT-TRACKED | Half-width (degrees) of the hue search window in `find_optimal_hue`; 30° spans the typical sRGB gamut ridge width around the canonical hue. |
 | 37 | `HUE_DRIFT_PENALTY_SLOPE` | `0.15` | `scale.rs` | SSOT-TRACKED | Наклон штрафа дрейфа оттенка в `find_optimal_hue` (`penalty_scale = slope/half_window`, `score = c − penalty_scale·drift`): баланс «максимум хромы против ухода от канонического оттенка». Калибровочный; ранее жил незадекларированным поле-литералом (найден инвентарём конфиг-границы 2026-07-02). Кандидат науки: вывести или обосновать датасетом. |
+| 38 | `ACHROMATIC_CHROMA_EPS` | `1e-7` | `sentiment.rs` | GROUNDED | Технический ε числовой определённости оттенка (не перцептивная политика): ниже него `atan2(b,a)` не определён — гард против произвольного 0°. Вывод из арифметики представимости, а не подгонка: минимум ненулевой Oklab-хромы 8-битного sRGB-цвета ≈ 1.06e-3 (`#FEFFFF`; `#808081` ≈ 1.49e-3; расчёт конвейером sRGB→Oklab, Ottosson 2020), накопленный f64-шум того же конвейера ≲ 1e-12; 1e-7 лежит между границами с запасом ≥4 порядка в обе стороны, поэтому не может переклассифицировать ни один представимый цвет. |
 
 ## Muddiness Law constants — `cleanliness.rs`
 

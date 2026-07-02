@@ -536,11 +536,7 @@ fn is_valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// Проверить, что hex парсится ядром (`#RGB` / `#RRGGBB`).
-/// Технический порог числовой определённости оттенка: ниже него atan2 в
-/// oklab_hue_of математически не определён (не перцептивная величина —
-/// защита от произвольного 0°, не политика).
-const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
+use crate::sentiment::ACHROMATIC_CHROMA_EPS;
 
 /// Oklab-хрома hex-цвета (для гарда ахроматичности источников оттенка).
 fn oklab_chroma_of_hex(hex: &str) -> f64 {
@@ -553,6 +549,7 @@ fn oklab_chroma_of_hex(hex: &str) -> f64 {
     }
 }
 
+/// Проверить, что hex парсится ядром (`#RGB` / `#RRGGBB`).
 fn check_hex(field: &str, value: &str) -> Result<(), ConfigError> {
     crate::spaces::srgb::srgb_from_hex(value)
         .map(|_| ())
@@ -658,12 +655,30 @@ fn check_ge(
 }
 
 impl ThemeConfig {
-    /// Провалидировать конфиг: hex, имена, ссылки на семейства/источники лестницы
-    /// и пределы каждой экспонируемой ручки. Первая найденная ошибка возвращается
-    /// сразу — клиент чинит по одной. Успех означает:
-    /// [`compile_named_role_table`](Self::compile_named_role_table) не упадёт на
-    /// неверном hex/имени/ссылке/пределе (все рецепты компилируются).
+    /// Провалидировать конфиг как ПОЛНЫЙ preflight: `Ok` гарантирует, что
+    /// [`compile_named_role_table`](Self::compile_named_role_table) вернёт `Ok`.
+    ///
+    /// Гарантия держится по построению: `validate` — это компиляция с
+    /// отброшенным результатом (единый код-путь; паритет validate/compile не
+    /// может разъехаться, потому что второго списка проверок не существует).
+    /// Ловится и структурное (hex, имена, ссылки, пределы ручек), и
+    /// деривационное (ахроматичный источник оттенка, отсутствующие
+    /// edge/inverted-четвёрки, пустая легальная дуга сентимента). Первая
+    /// найденная ошибка возвращается сразу — клиент чинит по одной.
+    ///
+    /// # Errors
+    ///
+    /// Та же [`ConfigError`], которую вернула бы компиляция.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.compile_named_role_table().map(drop)
+    }
+
+    /// Структурная фаза валидации: hex, имена, ссылки на семейства/источники
+    /// лестницы, дубликаты словарей и пределы каждой экспонируемой ручки.
+    /// НЕ полный preflight: деривационные ошибки (ахроматичность, пустая дуга
+    /// сентимента) всплывают только в фазе компиляции — снаружи полноту даёт
+    /// [`validate`](Self::validate).
+    fn validate_syntactic(&self) -> Result<(), ConfigError> {
         // Бренд: пер-темная четвёрка hex.
         check_theme_anchors("brand.anchors", &self.brand.anchors)?;
 
@@ -671,6 +686,16 @@ impl ThemeConfig {
         check_hex("neutral.anchors.light", &self.neutral.anchors.light)?;
         check_hex("neutral.anchors.mid", &self.neutral.anchors.mid)?;
         check_hex("neutral.anchors.dark", &self.neutral.anchors.dark)?;
+
+        // Пер-темные края нейтрали: hex валидируется, если четвёрка задана —
+        // даже без ссылающихся ролей (задекларированные данные обязаны быть
+        // валидными: мёртвый битый hex всплыл бы позже дорогой загадкой).
+        if let Some(edge) = &self.neutral.edge {
+            check_theme_anchors("neutral.edge", edge)?;
+        }
+        if let Some(inverted) = &self.neutral.inverted {
+            check_theme_anchors("neutral.inverted", inverted)?;
+        }
 
         // Нейтраль: ручки подтона.
         check_in_incl_incl(
@@ -904,11 +929,15 @@ impl ThemeConfig {
     /// [`resolve_named_set`](crate::semantic::resolve_named_set) резолвит той же
     /// физикой, что и встроенную [`crate::RoleTable`].
     ///
-    /// Валидирует конфиг ([`validate`](Self::validate)) перед компиляцией.
-    /// [`Ladder`](RoleRecipe::Ladder) раскладывает источник в пер-темный тинт,
-    /// [`AlphaAnalog`](RoleRecipe::AlphaAnalog) — солид-цель источника + альфа (t2).
+    /// Структурная фаза ([`validate_syntactic`](Self::validate_syntactic))
+    /// выполняется первой; деривационные ошибки возвращаются по ходу компиляции
+    /// (снаружи обе фазы разом — [`validate`](Self::validate), который и есть
+    /// эта компиляция с отброшенным результатом — НЕ вызывать её отсюда:
+    /// рекурсия). [`Ladder`](RoleRecipe::Ladder) раскладывает источник в
+    /// пер-темный тинт, [`AlphaAnalog`](RoleRecipe::AlphaAnalog) — солид-цель
+    /// источника + альфа (t2).
     pub fn compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError> {
-        self.validate()?;
+        self.validate_syntactic()?;
 
         let mut entries: Vec<(String, RoleSpec)> = Vec::with_capacity(self.roles.len());
         for (name, recipe) in &self.roles {

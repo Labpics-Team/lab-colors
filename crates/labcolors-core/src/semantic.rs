@@ -1471,6 +1471,15 @@ fn resolve_rgba_inverted(
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Resolved {
+    // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен, а резолвер
+    // инверсии клампит запрошенную α — недоменная спека, собранная в обход
+    // валидатора конфига, стала бы правдоподобным hex вместо честного отказа.
+    if !rgba_input_valid(solid_encoded, requested_alpha) {
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "alpha-analog-спека вне домена (солид [0,1], α (0,1]) — сборка в обход валидатора"
+                .into(),
+        ));
+    }
     let bg_encoded = bg.encoded_display();
     let Some(analog) =
         crate::alpha::resolve_alpha_analog(solid_encoded, requested_alpha, bg_encoded)
