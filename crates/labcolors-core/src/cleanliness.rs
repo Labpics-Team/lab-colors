@@ -416,6 +416,49 @@ pub enum Theme {
     DarkIc,
 }
 
+impl Theme {
+    /// Разобрать стабильный kebab-контракт границы (`"light"` / `"dark"` /
+    /// `"light-ic"` / `"dark-ic"`). Неизвестная строка — ошибка вызывающего,
+    /// возвращается как есть (граница оборачивает в свой тип ошибки), никогда
+    /// не коэрсится в тему по умолчанию.
+    ///
+    /// # Errors
+    ///
+    /// `Err` с непринятой строкой.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "light" => Ok(Theme::Light),
+            "dark" => Ok(Theme::Dark),
+            "light-ic" => Ok(Theme::LightIc),
+            "dark-ic" => Ok(Theme::DarkIc),
+            other => Err(other.to_string()),
+        }
+    }
+
+    /// Стабильный kebab-ключ темы — обратная к [`parse`](Self::parse).
+    pub fn key(self) -> &'static str {
+        match self {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::LightIc => "light-ic",
+            Theme::DarkIc => "dark-ic",
+        }
+    }
+
+    /// Условия просмотра, под которыми ядро резолвит эту тему: та же карта
+    /// surround-ов, что у [`vc_for_context`] (Light → average, Dark → dim,
+    /// IC-темы → high-contrast двойники), но с дефолтным Yb — вход границы,
+    /// где фон ещё неизвестен.
+    pub fn viewing_conditions(self) -> crate::spaces::vc::ViewingConditions {
+        match self {
+            Theme::Light => crate::spaces::vc::ViewingConditions::srgb(),
+            Theme::Dark => crate::spaces::vc::ViewingConditions::dim_surround(),
+            Theme::LightIc => crate::spaces::vc::ViewingConditions::srgb_high_contrast(),
+            Theme::DarkIc => crate::spaces::vc::ViewingConditions::dim_surround_high_contrast(),
+        }
+    }
+}
+
 /// Контекст просмотра для surround-aware оценки дефектов.
 ///
 /// Сочетает фон (hex-строка, задаёт яркость Yb) и тему (определяет surround).

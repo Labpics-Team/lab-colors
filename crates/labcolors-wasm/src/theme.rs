@@ -1,79 +1,24 @@
-//! The public theme vocabulary and its mapping to core viewing conditions.
+//! Тематический словарь границы — реэкспорт КАНОНИЧЕСКОГО [`Theme`] ядра.
 //!
-//! The owner's HIG naming (2026-06-12) is the contract the web sees:
-//! `Light` / `Dark` / `Light-IC` / `Dark-IC`. "dim surround" is the *internal*
-//! CIECAM16 term for the dark theme's viewing conditions and never leaks out —
-//! the boundary speaks themes, the core speaks [`ViewingConditions`].
+//! Раньше здесь жила вторая копия enum-а (31 ссылка) — два словаря одного
+//! понятия расходились бы молча. Канон один, в ядре
+//! (`labcolors_core::Theme`): kebab-контракт (`"light"` / `"dark"` /
+//! `"light-ic"` / `"dark-ic"`), ключи и карта условий просмотра живут на нём.
+//! Граница добавляет ТОЛЬКО свой тип ошибки: неизвестная тема — ошибка
+//! вызывающего, оборачивается в [`BindingError::UnknownTheme`], никогда не
+//! коэрсится в тему по умолчанию.
 //!
-//! The `-IC` ("increased contrast") themes are calibrated and resolve to their
-//! respective high-contrast viewing conditions: `LightIncreasedContrast` →
-//! `srgb_high_contrast()`, `DarkIncreasedContrast` → `dim_surround_high_contrast()`.
-//! All four public spellings are fully supported; there is no reserved or
-//! not-yet-calibrated theme in the current contract.
+//! «dim surround» — внутренний термин CIECAM16 для тёмной темы и наружу не
+//! утекает: граница говорит темами, ядро — [`ViewingConditions`]
+//! (labcolors_core::ViewingConditions).
 
-use labcolors_core::ViewingConditions;
+pub use labcolors_core::Theme;
 
 use crate::error::BindingError;
 
-/// Тема, в которой движок вычисляет контраст.
-///
-/// Парсится из стабильного kebab-строкового контракта на границе
-/// (`"light"`, `"dark"`, `"light-ic"`, `"dark-ic"`). Все четыре варианта
-/// полностью поддержаны: `-ic`-темы разрешаются в `srgb_high_contrast()` /
-/// `dim_surround_high_contrast()` — режимы повышенного контраста.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Theme {
-    /// Light theme — sRGB average-surround viewing conditions.
-    Light,
-    /// Dark theme — dim-surround viewing conditions internally.
-    Dark,
-    /// Increased-contrast light theme — `srgb_high_contrast()` viewing conditions.
-    LightIncreasedContrast,
-    /// Increased-contrast dark theme — `dim_surround_high_contrast()` viewing conditions.
-    DarkIncreasedContrast,
-}
-
-impl Theme {
-    /// Parse the stable string contract into a theme.
-    ///
-    /// The accepted spellings are the public contract; an unknown string is a
-    /// caller error, surfaced — never coerced to a default theme.
-    pub fn parse(raw: &str) -> Result<Self, BindingError> {
-        match raw {
-            "light" => Ok(Theme::Light),
-            "dark" => Ok(Theme::Dark),
-            "light-ic" => Ok(Theme::LightIncreasedContrast),
-            "dark-ic" => Ok(Theme::DarkIncreasedContrast),
-            other => Err(BindingError::UnknownTheme {
-                requested: other.to_owned(),
-            }),
-        }
-    }
-
-    /// The stable string key for this theme — the inverse of [`parse`](Self::parse).
-    pub fn key(self) -> &'static str {
-        match self {
-            Theme::Light => "light",
-            Theme::Dark => "dark",
-            Theme::LightIncreasedContrast => "light-ic",
-            Theme::DarkIncreasedContrast => "dark-ic",
-        }
-    }
-
-    /// The viewing conditions the core resolves under for this theme.
-    ///
-    /// - `Light` → `srgb()` (average surround)
-    /// - `Dark` → `dim_surround()` (the internal CIECAM16 term)
-    /// - `LightIncreasedContrast` → `srgb_high_contrast()`
-    /// - `DarkIncreasedContrast` → `dim_surround_high_contrast()`
-    pub fn viewing_conditions(self) -> Result<ViewingConditions, BindingError> {
-        match self {
-            Theme::Light => Ok(ViewingConditions::srgb()),
-            Theme::Dark => Ok(ViewingConditions::dim_surround()),
-            Theme::LightIncreasedContrast => Ok(ViewingConditions::srgb_high_contrast()),
-            Theme::DarkIncreasedContrast => Ok(ViewingConditions::dim_surround_high_contrast()),
-        }
-    }
+/// Разобрать kebab-строку границы в тему, с границевой ошибкой.
+pub fn parse_theme(raw: &str) -> Result<Theme, BindingError> {
+    Theme::parse(raw).map_err(|requested| BindingError::UnknownTheme { requested })
 }
 
 #[cfg(test)]
@@ -82,21 +27,15 @@ mod tests {
 
     #[test]
     fn parses_every_public_spelling() {
-        assert_eq!(Theme::parse("light").unwrap(), Theme::Light);
-        assert_eq!(Theme::parse("dark").unwrap(), Theme::Dark);
-        assert_eq!(
-            Theme::parse("light-ic").unwrap(),
-            Theme::LightIncreasedContrast
-        );
-        assert_eq!(
-            Theme::parse("dark-ic").unwrap(),
-            Theme::DarkIncreasedContrast
-        );
+        assert_eq!(parse_theme("light").unwrap(), Theme::Light);
+        assert_eq!(parse_theme("dark").unwrap(), Theme::Dark);
+        assert_eq!(parse_theme("light-ic").unwrap(), Theme::LightIc);
+        assert_eq!(parse_theme("dark-ic").unwrap(), Theme::DarkIc);
     }
 
     #[test]
     fn rejects_unknown_theme_with_reason() {
-        match Theme::parse("solarized") {
+        match parse_theme("solarized") {
             Err(BindingError::UnknownTheme { requested }) => assert_eq!(requested, "solarized"),
             other => panic!("expected UnknownTheme, got {other:?}"),
         }
@@ -104,20 +43,15 @@ mod tests {
 
     #[test]
     fn key_round_trips_through_parse() {
-        for theme in [
-            Theme::Light,
-            Theme::Dark,
-            Theme::LightIncreasedContrast,
-            Theme::DarkIncreasedContrast,
-        ] {
-            assert_eq!(Theme::parse(theme.key()).unwrap(), theme);
+        for theme in [Theme::Light, Theme::Dark, Theme::LightIc, Theme::DarkIc] {
+            assert_eq!(parse_theme(theme.key()).unwrap(), theme);
         }
     }
 
     #[test]
     fn light_and_dark_map_to_distinct_viewing_conditions() {
-        let light = Theme::Light.viewing_conditions().unwrap();
-        let dark = Theme::Dark.viewing_conditions().unwrap();
+        let light = Theme::Light.viewing_conditions();
+        let dark = Theme::Dark.viewing_conditions();
         assert!(
             dark.aw < light.aw,
             "dim surround lowers the achromatic response"
@@ -126,9 +60,8 @@ mod tests {
 
     #[test]
     fn increased_contrast_themes_are_fully_calibrated() {
-        for theme in [Theme::LightIncreasedContrast, Theme::DarkIncreasedContrast] {
-            let vc = theme.viewing_conditions().unwrap();
-            assert!(vc.high_contrast);
+        for theme in [Theme::LightIc, Theme::DarkIc] {
+            assert!(theme.viewing_conditions().high_contrast);
         }
     }
 }

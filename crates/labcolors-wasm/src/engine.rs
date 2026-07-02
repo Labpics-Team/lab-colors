@@ -59,7 +59,7 @@ impl Engine {
         bg_hex: &str,
         theme: Theme,
     ) -> Result<Rc<ResolvedTheme>, BindingError> {
-        let vc = theme.viewing_conditions()?;
+        let vc = theme.viewing_conditions();
         // Validate and normalise the background once, before the cache lookup,
         // so an invalid hex fails fast and the cache key is canonical.
         let normalised = normalise_hex(bg_hex)?;
@@ -102,7 +102,7 @@ impl Engine {
         fg_hexes: &[String],
         theme: Theme,
     ) -> Result<Vec<f64>, BindingError> {
-        let vc = theme.viewing_conditions()?;
+        let vc = theme.viewing_conditions();
         let bg = normalise_hex(bg_hex)?;
         // Normalise foregrounds through the same parser as the background and
         // `resolveTheme`, so the three entry points agree on what a valid hex is
@@ -435,11 +435,7 @@ mod tests {
     #[test]
     fn ic_theme_resolves_without_error() {
         let engine = Engine::new();
-        assert!(
-            engine
-                .resolve_theme("#FFFFFF", Theme::LightIncreasedContrast)
-                .is_ok()
-        );
+        assert!(engine.resolve_theme("#FFFFFF", Theme::LightIc).is_ok());
     }
 
     #[test]
@@ -456,8 +452,8 @@ mod tests {
             ("#000000", Theme::Dark),
             ("#808080", Theme::Light),
             // Increased-contrast variants: same 20-role contract must hold.
-            ("#FFFFFF", Theme::LightIncreasedContrast),
-            ("#000000", Theme::DarkIncreasedContrast),
+            ("#FFFFFF", Theme::LightIc),
+            ("#000000", Theme::DarkIc),
         ];
         for (bg, theme) in reps {
             let result = engine.resolve_theme(bg, theme).unwrap();

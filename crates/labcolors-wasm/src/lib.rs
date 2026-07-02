@@ -25,7 +25,6 @@ use wasm_bindgen::prelude::*;
 use crate::dto::{ResolvedTheme, RoleOutcome};
 use crate::engine::Engine;
 use crate::error::BindingError;
-use crate::theme::Theme;
 
 /// TypeScript shapes for the values `resolveTheme` returns. wasm-bindgen emits
 /// `LabColors.resolveTheme(...): ResolvedTheme` against these, so consumers get
@@ -126,7 +125,7 @@ impl LabColors {
     /// structured `{ code, message }` error, never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
-        let theme = Theme::parse(theme).map_err(to_js_error)?;
+        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         let resolved = self
             .inner
             .resolve_theme(bg_hex, theme)
@@ -151,7 +150,7 @@ impl LabColors {
         fg_hexes: Vec<String>,
         theme: &str,
     ) -> Result<Vec<f64>, JsError> {
-        let theme = Theme::parse(theme).map_err(to_js_error)?;
+        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         self.inner
             .recheck(bg_hex, &fg_hexes, theme)
             .map_err(to_js_error)
