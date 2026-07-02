@@ -1225,11 +1225,13 @@ pub fn labui_reference() -> ThemeConfig {
     // = контракт label-primary. Рецепты собраны так, чтобы имя роли совпадало с
     // Role::key(), а RoleSpec был идентичен дефолтному.
     let text = |fraction, floor| RoleRecipe::TextAnchor { fraction, floor };
-    let dj = |m: DjMagnitude| RoleRecipe::DjAnchor {
-        light: m.light(),
-        dark: m.dark(),
-    };
     let lc = |magnitude| RoleRecipe::DecorativeLc { magnitude };
+    // Конструктор нейтрального источника (стаб: `Neutral/Derivable` тинтуется
+    // краями нейтральной шкалы, НЕ семейством палитры).
+    let neutral_pos = |pick, position| RoleRecipe::Ladder {
+        source: LadderSource::Neutral(pick),
+        position,
+    };
 
     // Конструкторы лестницы: источник × позиция → рецепт rgba-эмиссии.
     let brand_pos = |position| RoleRecipe::Ladder {
@@ -1251,21 +1253,37 @@ pub fn labui_reference() -> ThemeConfig {
         ("icon".to_string(), text(0.461, Floor::AaUi)),
         // Separator — Lc decorative.
         ("separator".to_string(), lc(8.0)),
-        // Border ladder. Strong = label-primary контракт; base/soft — dJ'.
+        // Border ladder. Strong = label-primary контракт; base/soft — лестница
+        // от нейтрали: полупрозрачный mid-тинт ложится на ЛЮБУЮ поверхность
+        // (композитит браузер), пер-темные пары альф — данные позиций.
         ("border-strong".to_string(), text(0.968, Floor::AaText)),
-        ("border-base".to_string(), dj(semantic::BORDER_BASE_DJ)),
-        ("border-soft".to_string(), dj(semantic::BORDER_SOFT_DJ)),
+        (
+            "border-base".to_string(),
+            neutral_pos(NeutralPick::Mid, LadderPosition::NeutralBorderBase),
+        ),
+        (
+            "border-soft".to_string(),
+            neutral_pos(NeutralPick::Mid, LadderPosition::NeutralBorderSoft),
+        ),
         ("border-ghost".to_string(), RoleRecipe::Zero),
-        // Fill ladder — dJ'.
-        ("fill-primary".to_string(), dj(semantic::FILL_PRIMARY_DJ)),
+        // Fill ladder — лестница от нейтрали (та же форма, что стаб labui:
+        // rgba(mid, α) с пер-темной парой — заливка обязана красиво ложиться
+        // на любой фон, солвер-солид терял полупрозрачность).
+        (
+            "fill-primary".to_string(),
+            neutral_pos(NeutralPick::Mid, LadderPosition::NeutralFillPrimary),
+        ),
         (
             "fill-secondary".to_string(),
-            dj(semantic::FILL_SECONDARY_DJ),
+            neutral_pos(NeutralPick::Mid, LadderPosition::NeutralFillSecondary),
         ),
-        ("fill-tertiary".to_string(), dj(semantic::FILL_TERTIARY_DJ)),
+        (
+            "fill-tertiary".to_string(),
+            neutral_pos(NeutralPick::Mid, LadderPosition::NeutralFillTertiary),
+        ),
         (
             "fill-quaternary".to_string(),
-            dj(semantic::FILL_QUATERNARY_DJ),
+            neutral_pos(NeutralPick::Mid, LadderPosition::NeutralFillQuaternary),
         ),
         ("fill-none".to_string(), RoleRecipe::Zero),
         // Shadow stack — Lc.
@@ -1318,13 +1336,6 @@ pub fn labui_reference() -> ThemeConfig {
         let mk = move |pos| sent_pos(sname, pos);
         roles.extend(ladder_family(prefix, &mk));
     }
-
-    // Конструктор нейтрального источника (стаб: `Neutral/Derivable` тинтуется
-    // краями нейтральной шкалы, НЕ семейством палитры).
-    let neutral_pos = |pick, position| RoleRecipe::Ladder {
-        source: LadderSource::Neutral(pick),
-        position,
-    };
 
     // FX focus-ring (солид) и glow (@52). Сентимент/бренд-источники — акцентные;
     // `*-neutral`/`inverted` — НЕЙТРАЛЬНЫЕ (стаб: rgb(255 255 255 / .522) и т.п.,

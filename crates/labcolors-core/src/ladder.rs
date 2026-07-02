@@ -186,11 +186,23 @@ pub enum LadderPosition {
     SkeletonBase,
     /// Скелетон-хайлайт — `@4` (обе темы).
     SkeletonHighlight,
+    /// Нейтральная заливка первичная — пер-темная пара `@20`/`@36`.
+    NeutralFillPrimary,
+    /// Нейтральная заливка вторичная — `@16`/`@32`.
+    NeutralFillSecondary,
+    /// Нейтральная заливка третичная — `@12`/`@24`.
+    NeutralFillTertiary,
+    /// Нейтральная заливка четвертичная — `@8`/`@16`.
+    NeutralFillQuaternary,
+    /// Нейтральная граница базовая — `@16`/`@20`.
+    NeutralBorderBase,
+    /// Нейтральная граница мягкая — `@8`/`@12`.
+    NeutralBorderSoft,
 }
 
 impl LadderPosition {
     /// Все позиции меню — поверхность для property-свипов и генерации ролей.
-    pub const ALL: [LadderPosition; 15] = [
+    pub const ALL: [LadderPosition; 21] = [
         LadderPosition::LabelPrimary,
         LadderPosition::LabelSecondary,
         LadderPosition::LabelTertiary,
@@ -206,6 +218,12 @@ impl LadderPosition {
         LadderPosition::Glow,
         LadderPosition::SkeletonBase,
         LadderPosition::SkeletonHighlight,
+        LadderPosition::NeutralFillPrimary,
+        LadderPosition::NeutralFillSecondary,
+        LadderPosition::NeutralFillTertiary,
+        LadderPosition::NeutralFillQuaternary,
+        LadderPosition::NeutralBorderBase,
+        LadderPosition::NeutralBorderSoft,
     ];
 
     /// Пер-темная пара альф `(light, dark)` позиции — ДАННЫЕ, снятые построчно из
@@ -239,6 +257,15 @@ impl LadderPosition {
             // Скелетон-база пер-темна: стаб light @8, dark @12.
             LadderPosition::SkeletonBase => (0.078, 0.122),
             LadderPosition::SkeletonHighlight => (0.039, 0.039),
+            // Нейтральная рампа заливок/границ НЕСЁТ СВОИ пер-темные пары —
+            // альфы темнее на тёмной теме (полупрозрачный mid-тинт на тёмном
+            // фоне читается слабее; стаб несёт замеренные Figma-пары @NN).
+            LadderPosition::NeutralFillPrimary => (0.2, 0.361),
+            LadderPosition::NeutralFillSecondary => (0.161, 0.322),
+            LadderPosition::NeutralFillTertiary => (0.122, 0.239),
+            LadderPosition::NeutralFillQuaternary => (0.078, 0.161),
+            LadderPosition::NeutralBorderBase => (0.161, 0.2),
+            LadderPosition::NeutralBorderSoft => (0.078, 0.122),
         }
     }
 
@@ -271,6 +298,12 @@ impl LadderPosition {
             LadderPosition::Glow => "glow",
             LadderPosition::SkeletonBase => "skeleton-base",
             LadderPosition::SkeletonHighlight => "skeleton-highlight",
+            LadderPosition::NeutralFillPrimary => "neutral-fill-primary",
+            LadderPosition::NeutralFillSecondary => "neutral-fill-secondary",
+            LadderPosition::NeutralFillTertiary => "neutral-fill-tertiary",
+            LadderPosition::NeutralFillQuaternary => "neutral-fill-quaternary",
+            LadderPosition::NeutralBorderBase => "neutral-border-base",
+            LadderPosition::NeutralBorderSoft => "neutral-border-soft",
         }
     }
 }
@@ -333,6 +366,36 @@ mod tests {
                 LadderPosition::SkeletonHighlight,
                 (0.039, 0.039),
                 "skeleton-highlight",
+            ),
+            (
+                LadderPosition::NeutralFillPrimary,
+                (0.2, 0.361),
+                "neutral-fill-primary",
+            ),
+            (
+                LadderPosition::NeutralFillSecondary,
+                (0.161, 0.322),
+                "neutral-fill-secondary",
+            ),
+            (
+                LadderPosition::NeutralFillTertiary,
+                (0.122, 0.239),
+                "neutral-fill-tertiary",
+            ),
+            (
+                LadderPosition::NeutralFillQuaternary,
+                (0.078, 0.161),
+                "neutral-fill-quaternary",
+            ),
+            (
+                LadderPosition::NeutralBorderBase,
+                (0.161, 0.2),
+                "neutral-border-base",
+            ),
+            (
+                LadderPosition::NeutralBorderSoft,
+                (0.078, 0.122),
+                "neutral-border-soft",
             ),
         ];
         for (pos, pair, key) in expected {

@@ -59,10 +59,25 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
         .expect("эталонная фикстура labui обязана компилироваться");
 
     // Фикстура несёт 20 core-ролей ПЛЮС акцентную/сентимент/FX/альфа
-    // лестницу. Байт-в-байт гарантия — на 20 CORE-ролях (имена =
-    // Role::key()): именно их пинит golden-грид. Проверяем, что каждая
-    // из 20 присутствует и эмитит идентично дефолтной таблице на всех точках.
-    let core_keys: Vec<&'static str> = Role::ALL.iter().map(|r| r.key()).collect();
+    // лестницу. Байт-в-байт гарантия — на СОЛВЕР-ролях (имена = Role::key()):
+    // именно их пинит golden-грид. Нейтральные заливки/границы НАМЕРЕННО
+    // расходятся с дефолт-таблицей: они эмитятся лестницей rgba(mid, α) —
+    // полупрозрачность обязана ложиться на любую поверхность, солвер-солид
+    // её терял; их значенческая истина — сверка со стабом
+    // (representative_roles_match_stub_values_light_and_dark).
+    const LADDER_MIGRATED: [&str; 6] = [
+        "fill-primary",
+        "fill-secondary",
+        "fill-tertiary",
+        "fill-quaternary",
+        "border-base",
+        "border-soft",
+    ];
+    let core_keys: Vec<&'static str> = Role::ALL
+        .iter()
+        .map(|r| r.key())
+        .filter(|k| !LADDER_MIGRATED.contains(k))
+        .collect();
     for key in &core_keys {
         assert!(
             table.entries().iter().any(|(n, _)| n == key),
@@ -98,10 +113,10 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
             }
         }
     }
-    // 20 ролей × 2 VC × 6 фонов = 240.
+    // 14 солвер-ролей (20 − 6 лестничных) × 2 VC × 6 фонов = 168.
     assert_eq!(
-        compared, 240,
-        "должно сравниться ровно 240 сегодняшних точек"
+        compared, 168,
+        "должно сравниться ровно 168 солвер-точек (пин не вакуумный)"
     );
 }
 
@@ -1214,6 +1229,38 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(176 176 185 / 0.522)",
             "rgb(60 60 67 / 0.522)",
         ),
+        // Мигрированные на лестницу нейтральные заливки/границы: rgba(mid, α)
+        // с пер-темными парами — дословно значения стаба (истина миграции).
+        (
+            "fill-primary",
+            "rgb(120 120 128 / 0.2)",
+            "rgb(120 120 128 / 0.361)",
+        ),
+        (
+            "fill-secondary",
+            "rgb(120 120 128 / 0.161)",
+            "rgb(120 120 128 / 0.322)",
+        ),
+        (
+            "fill-tertiary",
+            "rgb(120 120 128 / 0.122)",
+            "rgb(120 120 128 / 0.239)",
+        ),
+        (
+            "fill-quaternary",
+            "rgb(120 120 128 / 0.078)",
+            "rgb(120 120 128 / 0.161)",
+        ),
+        (
+            "border-base",
+            "rgb(120 120 128 / 0.161)",
+            "rgb(120 120 128 / 0.2)",
+        ),
+        (
+            "border-soft",
+            "rgb(120 120 128 / 0.078)",
+            "rgb(120 120 128 / 0.122)",
+        ),
         // Нейтральные: skeleton #787880 с ПЕР-ТЕМНОЙ альфой (base @8/@12), glow-neutral белый @52.
         (
             "fx-skeleton-base",
@@ -1324,16 +1371,16 @@ fn validator_rejects_preferred_side_outside_closed_menu() {
 #[test]
 fn validator_rejects_non_finite_handles() {
     for bad in [f64::INFINITY, f64::NAN] {
+        // Зонд-рецепт: dj-якорей в фикстуре больше нет (нейтральные
+        // заливки/границы уехали на лестницу), а предел ручки — свойство МЕНЮ.
         let mut c = labui_reference();
-        if let Some((_, RoleRecipe::DjAnchor { light, .. })) = c
-            .roles
-            .iter_mut()
-            .find(|(_, r)| matches!(r, RoleRecipe::DjAnchor { .. }))
-        {
-            *light = bad;
-        } else {
-            panic!("в фикстуре обязан быть dj_anchor");
-        }
+        c.roles.push((
+            "probe-dj".to_string(),
+            RoleRecipe::DjAnchor {
+                light: bad,
+                dark: 5.0,
+            },
+        ));
         assert!(
             matches!(c.validate(), Err(ConfigError::OutOfBounds { .. })),
             "dj={bad} обязан быть отвергнут"
