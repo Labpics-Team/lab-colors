@@ -257,15 +257,11 @@ fn run_cargo_check(args: &[&str]) -> (bool, String) {
 /// GREEN at birth (characterization). Bites on mutation: alter any byte in
 /// either file → the hash changes → assertion fails.
 ///
-/// Семантика анкора (решение владельца s2b, 2026-07-02, ре-анкор после t2
-/// ds-config-train): лок = «чисто против HEAD», НЕ вечная заморозка — ловит
-/// незакоммиченный дрейф в течение сессии; осознанная правка проходит через
-/// коммит + PR-гейт (CI + ревью) и СТАНОВИТСЯ новым анкором. Разовая правка
-/// r3 при t2 (арм `Resolved::Rgba`) — конверсия enum в `#[non_exhaustive]`;
-/// с тех пор r3 закрыт к расширениям `Resolved` (wildcard-паника в matсh —
-/// будущий вариант НЕ требует правки файла, но не проходит golden молча).
-/// Байт-дрейфа эмиссии при ре-анкоре не было: r3-тесты зелёные (240-cell
-/// golden + споты), включая nested-прогон `baseline_r3_byte_identity_tests_pass`.
+/// Семантика анкора: лок = «чисто против HEAD», НЕ вечная заморозка — ловит
+/// незакоммиченный дрейф в течение сессии; осознанная правка проходит коммит +
+/// PR-гейт (CI + ревью) и СТАНОВИТСЯ новым анкором. r3 закрыт к расширениям
+/// enum `Resolved` (`#[non_exhaustive]` + wildcard-паника в матче r3: новый
+/// вариант не требует правки залоченного файла, но не проходит golden молча).
 #[test]
 fn baseline_r3_and_empirical_inventory_files_are_git_clean() {
     // Both files must show no modification in `git status`.

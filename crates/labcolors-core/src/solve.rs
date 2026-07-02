@@ -2167,7 +2167,7 @@ mod tests {
             for (bg, target) in [("#FFFFFF", t), ("#000000", -t)] {
                 if let Ok((solved, measured)) = solve_and_measure(bg, target, &vc) {
                     checked += 1;
-                    // Symmetric budget — this is the guard CodeRabbit flagged: a
+                    // Symmetric budget — the guard this protects: a
                     // one-sided "not below floor" check would let an overshoot in.
                     assert!(
                         (measured - target).abs() <= TOL,

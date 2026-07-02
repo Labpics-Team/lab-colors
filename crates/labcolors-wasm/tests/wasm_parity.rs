@@ -81,7 +81,7 @@ fn resolve_theme_matches_native_resolve_set() {
             Resolved::Unreachable(_) => {
                 assert_eq!(kind, "unreachable", "{} should be unreachable", role.key());
             }
-            // Rgba в дефолт-таблице не встречается (rgba-граница — долг t3);
+            // Rgba в дефолт-таблице не встречается (rgba-граница WASM — открытый долг);
             // будущий вариант обязан быть переучтён здесь шумно, не замаскирован.
             other => panic!(
                 "неучтённый Resolved-вариант в wasm-парити ({}): {other:?}",
