@@ -202,6 +202,16 @@ pub enum ConfigError {
         value: f64,
         bound: &'static str,
     },
+    /// Сентимент-солвер не смог развести оттенок (пустая легальная дуга,
+    /// недоменные углы/пороги). Отдельный вариант, а не
+    /// [`InvalidHex`](Self::InvalidHex): ошибка политики/геометрии,
+    /// замаскированная под ошибку парсинга hex, ломала бы матчинг
+    /// потребителя по вариантам.
+    SentimentResolution {
+        role: String,
+        sentiment: String,
+        reason: String,
+    },
     /// Рецепт объявлен в меню, но его компиляция ещё не реализована — честная
     /// заглушка для БУДУЩИХ рецептов (все текущие компилируются; вариант
     /// сохранён как сеам для расширения меню без ломающего изменения).
@@ -259,6 +269,11 @@ impl std::fmt::Display for ConfigError {
                 value,
                 bound,
             } => write!(f, "ручка `{handle}` = {value} вне предела: {bound}"),
+            ConfigError::SentimentResolution {
+                role,
+                sentiment,
+                reason,
+            } => write!(f, "сентимент `{sentiment}` (роль `{role}`): {reason}"),
             ConfigError::NotYetImplemented { recipe, role } => write!(
                 f,
                 "рецепт `{recipe}` (роль `{role}`) ещё не реализован ядром"
@@ -1131,9 +1146,10 @@ impl ThemeConfig {
                 cat.preferred_side.map_or(1.0, f64::from),
                 s_perc_min,
             )
-            .map_err(|reason| ConfigError::InvalidHex {
-                field: format!("roles.{role} (сентимент `{name}`): {reason}"),
-                value: anchor_hex.to_string(),
+            .map_err(|reason| ConfigError::SentimentResolution {
+                role: role.to_string(),
+                sentiment: name.to_string(),
+                reason,
             })?;
             crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
                 ConfigError::InvalidHex {

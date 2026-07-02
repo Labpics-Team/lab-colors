@@ -472,7 +472,9 @@ fn resolve_smooth_hue(
 /// # Errors
 ///
 /// `Err` if no hue satisfies both the floor and the separation invariant
-/// (empty legal arc) — never a silent breach.
+/// (empty legal arc), or if any angular input is outside its domain
+/// (non-finite `prototype`/`brand_hue`, `s_min` outside `[0, 180]`,
+/// `hue_floor` outside `[0, 360)`) — never a silent breach.
 pub fn resolve_smooth_hue_explicit(
     preferred_side: f64,
     hue_floor: Option<f64>,
@@ -481,6 +483,22 @@ pub fn resolve_smooth_hue_explicit(
     params: SentimentParams,
     s_min: f64,
 ) -> Result<f64, String> {
+    // Домен публичного входа: NaN/inf в signed_delta/smooth_separation дали бы
+    // NaN-оттенок вниз по физике, а скан legalize_hue на NaN не завершается
+    // осмысленно — честный Err вместо тихого мусора.
+    if !(prototype.is_finite() && brand_hue.is_finite()) {
+        return Err(format!(
+            "углы вне домена (конечные): prototype={prototype}, brand_hue={brand_hue}"
+        ));
+    }
+    if !(s_min.is_finite() && (0.0..=180.0).contains(&s_min)) {
+        return Err(format!("s_min вне домена [0, 180]: {s_min}"));
+    }
+    if let Some(floor) = hue_floor
+        && !(floor.is_finite() && (0.0..360.0).contains(&floor))
+    {
+        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
+    }
     // Signed shortest delta from prototype to brand. Its sign tells us which side
     // of the brand the prototype sits on; we push the resolved hue out along that
     // same side, away from the brand.
@@ -675,6 +693,16 @@ pub fn resolve_config_sentiment_solid(
     {
         return Err(format!("hue_floor вне домена [0, 360): {floor}"));
     }
+    // Валидация ручек — ДО любого раннего возврата: ахроматичный fast path
+    // ниже не решает по hardness/s_perc_min, но недоменная ручка остаётся
+    // ошибкой вызова, а не «повезло с серым якорем» (иначе один и тот же
+    // мусорный вход то принимался бы, то отвергался в зависимости от цвета).
+    let params = SentimentParams::uniform(hardness)?;
+    if !(s_perc_min.is_finite() && s_perc_min >= 0.0) {
+        return Err(format!(
+            "s_perc_min вне домена (конечный неотрицательный): {s_perc_min}"
+        ));
+    }
     let anchor_lab = srgb_linear_to_oklab(srgb_from_hex(family_anchor_hex)?);
     let l_anchor = anchor_lab[0];
     let c_anchor = (anchor_lab[1].powi(2) + anchor_lab[2].powi(2)).sqrt();
@@ -693,7 +721,6 @@ pub fn resolve_config_sentiment_solid(
     // якорей клиента): подмешивание замороженного labui-S_PERC_MIN через
     // s_min_deg() завышало бы угол низкохромным палитрам чужим порогом
     // (могло опустошить legal arc) — закон обязан быть чистым по конфигу.
-    let params = SentimentParams::uniform(hardness)?;
     let effective_s_min = s_min_deg_from_chord(s_perc_min, c_anchor)?;
     // Сатурация порога (180° ⇔ chord ≥ 2C): требуемая хорда недостижима ни
     // одним углом — ограничение вырождено, ответ аналитический: максимум
@@ -1301,10 +1328,53 @@ mod tests {
 
     /// Ахроматичный якорь семейства не несёт оттенка: разведение отключается
     /// честно — солид равен сырому якорю (тот же закон, что серый бренд).
+    /// Fast path НЕ обходит валидацию ручек: недоменные hardness/s_perc_min
+    /// отвергаются и на сером якоре — мусорный вход не может «повезти»
+    /// в зависимости от цвета.
     #[test]
     fn achromatic_family_anchor_returns_raw_anchor() {
         let solid = resolve_config_sentiment_solid("#808080", 28.0, 4.0, 1.0, None, 1.0, 0.06)
             .expect("серый якорь легален");
         assert_eq!(solid, "#808080", "серый якорь возвращается байт-в-байт");
+
+        for (hardness, s_perc_min) in [
+            (0.5, 0.06),
+            (f64::NAN, 0.06),
+            (4.0, f64::NAN),
+            (4.0, -0.01),
+            (4.0, f64::INFINITY),
+        ] {
+            assert!(
+                resolve_config_sentiment_solid(
+                    "#808080", 28.0, hardness, 1.0, None, 1.0, s_perc_min
+                )
+                .is_err(),
+                "(hardness={hardness}, s_perc_min={s_perc_min}) обязаны отвергаться и на сером"
+            );
+        }
+    }
+
+    /// Домен публичного `resolve_smooth_hue_explicit`: неконечные углы,
+    /// `s_min` вне [0, 180] и пол вне [0, 360) — честный Err, не NaN-оттенок.
+    #[test]
+    fn smooth_hue_explicit_rejects_garbage_domain() {
+        let params = SentimentParams::uniform(4.0).unwrap();
+        let cases: &[(f64, f64, Option<f64>, f64)] = &[
+            (f64::NAN, 28.0, None, 10.0),
+            (68.0, f64::INFINITY, None, 10.0),
+            (68.0, 28.0, None, f64::NAN),
+            (68.0, 28.0, None, -1.0),
+            (68.0, 28.0, None, 180.0 + 1e-9),
+            (68.0, 28.0, Some(360.0), 10.0),
+            (68.0, 28.0, Some(f64::NAN), 10.0),
+        ];
+        for &(prototype, brand, floor, s_min) in cases {
+            assert!(
+                resolve_smooth_hue_explicit(1.0, floor, prototype, brand, params, s_min).is_err(),
+                "(prototype={prototype}, brand={brand}, floor={floor:?}, s_min={s_min})"
+            );
+        }
+        // Валидный вход по-прежнему резолвится.
+        assert!(resolve_smooth_hue_explicit(1.0, None, 68.0, 28.0, params, 10.0).is_ok());
     }
 }

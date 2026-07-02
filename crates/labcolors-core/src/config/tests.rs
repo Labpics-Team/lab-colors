@@ -1578,6 +1578,22 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
     }
 }
 
+/// Ошибка сентимент-солвера наружу — СВОИМ вариантом, не [`ConfigError::InvalidHex`]:
+/// потребитель матчится по вариантам, и ошибка политики/геометрии под маской
+/// ошибки парсинга hex ломала бы это различение. Пустая легальная дуга
+/// (пол 359.999 у категории) — ровно такой случай.
+#[test]
+fn sentiment_solver_errors_surface_as_their_own_variant() {
+    let mut c = labui_reference();
+    c.sentiments.categories[1].hue_floor_deg = Some(359.999);
+    match c.compile_named_role_table() {
+        Err(ConfigError::SentimentResolution { sentiment, .. }) => {
+            assert_eq!(sentiment, c.sentiments.categories[1].name);
+        }
+        other => panic!("ждали SentimentResolution, получено {other:?}"),
+    }
+}
+
 /// Ахроматичные источники оттенка: серая нейтраль без override — ошибка;
 /// серый бренд — сентимент честно равен сырому якорю (разведение отключено).
 #[test]
