@@ -218,6 +218,35 @@ pub(crate) const SHADOW_PENUMBRA_JND: f64 = 11.5;
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
 pub(crate) const SHADOW_MAJOR_JND: f64 = 14.0;
 
+// ── Доли текстовой иерархии (Labels) ────────────────────────────────────────────
+//
+// Каждая доля = Figma-якорь Lc роли на белом ÷ максимально достижимый Lc ≈ 106
+// (Labels/Neutral): 102.6/106≈0.968, 66.5/106≈0.627, 48.9/106≈0.461,
+// 29.3/106≈0.276. Якоря и вывод долей задокументированы в rustdoc
+// `Default for RoleTable` ниже (таблица «Role | Figma Lc | fraction of max»).
+// Это «якорный принцип»: роль держит почти максимум, что позволяет фон, а не
+// фиксированную дельту. Значения 1:1 с прежними ролями text-* (byte-identity);
+// финальная перцептивная калибровка долей — за владельцем.
+
+/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_PRIMARY_FRACTION: f64 = 0.968;
+/// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_SECONDARY_FRACTION: f64 = 0.627;
+/// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_TERTIARY_FRACTION: f64 = 0.461;
+/// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
+
+/// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
+/// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
+/// (7.5); финальная JND-калибровка — за владельцем.
+// SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
+const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
+
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
 /// Selecting against the strictest floor keeps a single polarity for the whole
@@ -1058,21 +1087,36 @@ impl Default for RoleTable {
                 // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
                 // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
-                (Role::LabelPrimary, anchor(0.968, Floor::AaText)),
-                (Role::LabelSecondary, anchor(0.627, Floor::AaText)),
-                (Role::LabelTertiary, anchor(0.461, Floor::AaUi)),
-                (Role::LabelQuaternary, anchor(0.276, Floor::None)),
+                (
+                    Role::LabelPrimary,
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaText),
+                ),
+                (
+                    Role::LabelSecondary,
+                    anchor(LABEL_SECONDARY_FRACTION, Floor::AaText),
+                ),
+                (
+                    Role::LabelTertiary,
+                    anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi),
+                ),
+                (
+                    Role::LabelQuaternary,
+                    anchor(LABEL_QUATERNARY_FRACTION, Floor::None),
+                ),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
-                (Role::Icon, anchor(0.461, Floor::AaUi)),
+                (Role::Icon, anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
-                (Role::Separator, decorative(8.0)),
+                (Role::Separator, decorative(SEPARATOR_DECORATIVE_LC)),
                 // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
                 // Labels/Primary strength): the label-primary FRACTION with a
                 // non-text 3:1 floor (WCAG 1.4.11) — a border must be
                 // distinguishable, not readable. Base/Soft are dJ' steps carrying
                 // the owner's LITERAL anchors (light/dark per theme); base
                 // stronger than soft is the order contract.
-                (Role::BorderStrong, anchor(0.968, Floor::AaUi)),
+                (
+                    Role::BorderStrong,
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaUi),
+                ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
                 (Role::BorderGhost, RoleSpec::Zero),

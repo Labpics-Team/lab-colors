@@ -125,7 +125,7 @@ impl Sentiment {
     /// loss let Warning resolve ~3.9° from Danger; restored here.
     fn hue_floor(self) -> Option<f64> {
         match self {
-            Sentiment::Warning => Some(45.0),
+            Sentiment::Warning => Some(WARNING_HUE_FLOOR_DEG),
             _ => None,
         }
     }
@@ -202,6 +202,13 @@ pub const DEFAULT_HARDNESS: f64 = 5.0;
 /// [`SentimentCurve::hex_at`].
 // SSOT-TRACKED — gamut-fraction chroma strength knob.
 const CHROMA_FRACTION: f64 = 0.88;
+
+/// Categorical hue floor (Oklab degrees) for `Warning`: a hard legality bound
+/// below which Warning would slide into the red region it shares with `Danger`
+/// (the guarantee #65 dropped and #66 inherited — its loss let Warning resolve
+/// ~3.9° from Danger). Applied as a constraint, never a soft preference.
+// SSOT-TRACKED — категориальный пол оттенка Warning (Oklab°), защита от Danger; см. docs/empirical-inventory.md.
+const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
 
 /// Tunable parameters of the smooth-asymptote displacement model.
 ///
