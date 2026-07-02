@@ -44,14 +44,15 @@ use crate::spaces::vc::ViewingConditions;
 ///   `C_rep_figma = (0.2321 + 0.1717 + 0.1944 + 0.1931) / 4 = 0.1978`
 ///
 /// - **20°** — нижний предел категориального восприятия оттенка по
-///   Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1: средняя
-///   граница категорий ≈ 18–22° Oklab-hue при типичной насыщенности.
+///   Witzel & Gegenfurtner (2013) «Categorical sensitivity to color differences»,
+///   Journal of Vision 13(7):1 (DOI 10.1167/13.7.1): средняя граница категорий
+///   ≈ 18–22° Oklab-hue при типичной насыщенности.
 ///   Значение 20° — нижний предел этого диапазона (консервативный выбор
 ///   для разделения семантических категорий).
 ///
 /// Итог: `2 × 0.1978 × sin(10°) ≈ 0.068_703_9`
 // Выведено: 2 × C_rep_figma × sin(20°/2); C_rep_figma из Figma CONTENTS 2026-06-30;
-// 20° — категориальный порог по Witzel & Gegenfurtner (2013) JOSA A 30(7):1501.
+// 20° — категориальный порог по Witzel & Gegenfurtner (2013) Journal of Vision 13(7):1 (DOI 10.1167/13.7.1).
 const S_PERC_MIN: f64 = 0.068_703_9;
 
 /// Translate the perceptual separation target [`S_PERC_MIN`] into the hue angle
@@ -631,7 +632,7 @@ fn angular_distance(a: f64, b: f64) -> f64 {
 /// `2·C_rep·sin(20°/2)`, где `C_rep` — среднее хром.
 ///
 /// `20°` — нижний предел категориального восприятия (Witzel & Gegenfurtner 2013,
-/// JOSA A 30(7):1501). При labui-якорях (хромы Red/Orange/Green/Blue) результат
+/// Journal of Vision 13(7):1, DOI 10.1167/13.7.1). При labui-якорях (хромы Red/Orange/Green/Blue) результат
 /// совпадает с замороженной константой [`S_PERC_MIN`] (`0.068_703_9`,
 /// деривационная идентичность — тестом, допуск 1e-4): формула остаётся законом
 /// при произвольных якорях клиента, а сегодняшнее значение — её частный случай.
@@ -1229,7 +1230,7 @@ mod tests {
     /// где C_rep_figma — средняя Oklab-хрома четырёх якорей из Figma CONTENTS
     /// (коллекция «🔵 4.1 Primitives», Light-mode, 2026-06-30).
     /// Порог 20° — нижний предел категориального восприятия оттенка по
-    /// Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1.
+    /// Witzel & Gegenfurtner (2013), Journal of Vision 13(7):1 (DOI 10.1167/13.7.1).
     /// Допуск 1e-4: хромы зафиксированы до 4 знаков, итоговая погрешность
     /// деривации существенно меньше — допуск исключает реальный дрейф константы.
     #[test]
@@ -1238,7 +1239,7 @@ mod tests {
         let c_figma = [0.2321_f64, 0.1717_f64, 0.1944_f64, 0.1931_f64];
         let c_rep = c_figma.iter().sum::<f64>() / c_figma.len() as f64;
         // Геометрическая деривация: 2 × C_rep × sin(20°/2)
-        // Источник порога 20°: Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1
+        // Источник порога 20°: Witzel & Gegenfurtner (2013), Journal of Vision 13(7):1 (DOI 10.1167/13.7.1)
         let derived = 2.0 * c_rep * (10.0_f64.to_radians()).sin();
         assert!(
             (S_PERC_MIN - derived).abs() < 1e-4,
