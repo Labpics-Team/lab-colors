@@ -2,10 +2,12 @@
 //! generically over whatever role set the core provides.
 //!
 //! This layer knows the core and the DTOs; it does NOT know wasm-bindgen. It
-//! holds the role table and the contract cache, runs `resolve_set`, and maps
-//! the core's `Vec<(Role, Resolved)>` into [`ResolvedTheme`]. The mapping never
-//! enumerates roles — it walks the vector the core returns and keys each entry
-//! by `Role::key()` — so issue #59's role growth flows through on a rebuild.
+//! holds the role table (built-in, or the compiled config table after
+//! `load_config`) and the contract cache, runs the core resolve, and maps the
+//! resolved vector into [`ResolvedTheme`]. The mapping never enumerates roles —
+//! it walks whatever the core returns and keys each entry by its stable key
+//! (`Role::key()` built-in, the config's own names after load) — so role
+//! growth flows through on a rebuild.
 
 use std::rc::Rc;
 

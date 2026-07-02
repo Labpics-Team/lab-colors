@@ -75,7 +75,79 @@ export interface UnreachableRole {
   readonly message: string;
 }
 
-export type RoleResult = SolvedColor | NoneRole | UnreachableRole;
+/** A semi-transparent ladder / alpha-analog emission: the CSS carries rgba(), the browser composites it. */
+export interface RgbaRole {
+  readonly kind: "rgba";
+  readonly cssVar: string;
+  /** The tint as #RRGGBB — the colour the rgba() carries. */
+  readonly tintHex: string;
+  /** The alpha of the emission, (0, 1]. */
+  readonly alpha: number;
+  /** The solid the tint composites to on the resolve background. */
+  readonly compositeHex: string;
+  /** Signed perceptual contrast (Lc) of the composite. */
+  readonly compositeLc: number;
+  /** WCAG 2.1 ratio of the composite. */
+  readonly compositeWcag: number;
+  /** Ready-to-serve CSS value: "rgb(R G B / A)". `vars` carries the same string. */
+  readonly css: string;
+}
+
+export type RoleResult = SolvedColor | RgbaRole | NoneRole | UnreachableRole;
+
+/** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
+export interface ThemeAnchors {
+  readonly light: string;
+  readonly dark: string;
+  readonly light_ic: string;
+  readonly dark_ic: string;
+}
+
+/** Источник тинта лестницы/альфа-аналога. */
+export type LadderSource =
+  | { kind: "brand" }
+  | { kind: "family"; key: string }
+  | { kind: "sentiment"; name: string }
+  | { kind: "neutral"; pick: "mid" | "edge" | "inverted" | "light" | "dark" };
+
+/** Рецепт роли из физического меню движка. */
+export type RoleRecipe =
+  | { kind: "text-anchor"; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
+  | { kind: "dj-anchor"; light: number; dark: number }
+  | { kind: "decorative-lc"; magnitude: number }
+  | { kind: "ladder"; source: LadderSource; position: string }
+  | { kind: "alpha-analog"; of: LadderSource; alpha: number }
+  | { kind: "zero" };
+
+/** Полный конфиг дизайн-системы клиента — вход loadConfig (JSON.stringify(config)). */
+export interface ThemeConfig {
+  readonly brand: ThemeAnchors;
+  readonly neutral: {
+    readonly anchors: { light: string; mid: string; dark: string };
+    readonly tint: {
+      ratio: number;
+      target_mp: number;
+      hue_stiffness: number;
+      hue_override_deg?: number;
+    };
+    readonly edge?: ThemeAnchors;
+    readonly inverted?: ThemeAnchors;
+  };
+  readonly palette: ReadonlyArray<{ key: string; anchors: ThemeAnchors }>;
+  readonly sentiments: {
+    readonly categories: ReadonlyArray<{
+      name: string;
+      family: string;
+      hue_floor_deg?: number;
+      preferred_side?: -1 | 1;
+    }>;
+    readonly hardness: number;
+    readonly chroma_fraction: number;
+  };
+  readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
+  readonly roles: ReadonlyArray<{ name: string; recipe: RoleRecipe }>;
+  readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
+}
 
 /** The full result of resolving one background under one theme. */
 export interface ResolvedTheme {
