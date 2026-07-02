@@ -632,7 +632,7 @@ pub fn s_perc_min_frozen() -> f64 {
 /// (#FEFFFF; #808081 ≈ 1.5e-3), f64-шум конвейера sRGB→Oklab ≲ 1e-12;
 /// 1e-7 лежит между ними с запасом ≥4 порядка в обе стороны — не может
 /// переклассифицировать ни один представимый цвет.
-// GROUNDED — арифметика представимости: мин. 8-бит хрома `1.06e-3` ≫ ε ≫ f64-шум `1e-12` (docs/empirical-inventory.md).
+// SSOT-TRACKED — арифметика представимости (деривация закрыта, внешнего стандарта не существует): границы в docs/empirical-inventory.md.
 pub(crate) const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
 
 /// Config-facing сентимент-солид: якорь семейства, чей оттенок разведён с брендом
@@ -647,9 +647,10 @@ pub(crate) const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
 ///
 /// # Errors
 ///
-/// `Err`, если якорь невалиден, легальный оттенок геометрически пуст
-/// (см. [`resolve_smooth_hue_explicit`]) или порог `s_perc_min` не конечен
-/// (см. [`s_min_deg_from_chord`]).
+/// `Err`, если якорь невалиден, `brand_hue`/`hue_floor` вне домена (конечный
+/// угол; пол — в `[0, 360)`, те же пределы, что у конфиг-валидатора),
+/// легальный оттенок геометрически пуст (см. [`resolve_smooth_hue_explicit`])
+/// или порог `s_perc_min` не конечен (см. [`s_min_deg_from_chord`]).
 pub fn resolve_config_sentiment_solid(
     family_anchor_hex: &str,
     brand_hue: f64,
@@ -662,6 +663,18 @@ pub fn resolve_config_sentiment_solid(
     let _ = chroma_fraction; // хрома тинта = хрома якоря (сохраняем солид якоря);
     // chroma_fraction — ручка рампы SentimentCurve, не тинта; принимается для
     // единообразия сигнатуры конфига, но тинт держит фактическую хрому якоря.
+    //
+    // Публичная граница: конфиг-путь передаёт сюда уже валидированные углы, но
+    // прямой вызов мог бы протащить NaN в сатурированную ветку мимо солвера —
+    // прямо в oklab_lc_to_hex, тихим неверным hex.
+    if !brand_hue.is_finite() {
+        return Err(format!("brand_hue вне домена (конечный угол): {brand_hue}"));
+    }
+    if let Some(floor) = hue_floor
+        && !(floor.is_finite() && (0.0..360.0).contains(&floor))
+    {
+        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
+    }
     let anchor_lab = srgb_linear_to_oklab(srgb_from_hex(family_anchor_hex)?);
     let l_anchor = anchor_lab[0];
     let c_anchor = (anchor_lab[1].powi(2) + anchor_lab[2].powi(2)).sqrt();
@@ -685,14 +698,21 @@ pub fn resolve_config_sentiment_solid(
     // Сатурация порога (180° ⇔ chord ≥ 2C): требуемая хорда недостижима ни
     // одним углом — ограничение вырождено, ответ аналитический: максимум
     // разведения на легальной дуге («максимально приближенный приемлемый»,
-    // не отказ). Пол, блокирующий диаметраль, даёт границу пола — ближайшую
-    // легальную точку к максимуму; супремум у открытого конца дуги (360⁻ при
-    // поле у верха круга и бренде напротив) сознательно не берётся: границе
-    // пола отдан детерминизм в вырожденной конфигурации.
+    // не отказ). Пол, блокирующий диаметраль: легальная дуга [floor, 360°) —
+    // берётся её граница с БОЛЬШИМ разведением от бренда (не всегда floor);
+    // верхняя граница открыта, берётся достижимая точка 360⁻ на суб-LSB
+    // отступе (1e-9° много ниже углового разрешения 8-бит квантования hex).
     if effective_s_min >= 180.0 {
         let diametric = normalize_hue(brand_hue + 180.0);
         let resolved = match hue_floor {
-            Some(floor) if diametric < floor => floor,
+            Some(floor) if diametric < floor => {
+                let upper = 360.0 - 1e-9;
+                if angular_distance(upper, brand_hue) > angular_distance(floor, brand_hue) {
+                    upper
+                } else {
+                    floor
+                }
+            }
             _ => diametric,
         };
         return Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved));
@@ -1229,15 +1249,54 @@ mod tests {
         );
 
         // Пол, блокирующий диаметраль (brand 100° → диаметраль 280° < 300°):
-        // граница пола, не отказ и не нарушение пола.
+        // разведение у floor=300 (160°) больше, чем у 360⁻ (100°) → floor.
         let floored =
             resolve_config_sentiment_solid(anchor, brand_hue, 4.0, 1.0, Some(300.0), 1.0, 1.0)
                 .expect("пол при сатурации — не отказ");
         assert_eq!(
             floored,
             oklab_lc_to_hex(l, c, 300.0),
-            "при полу 300° сатурация садится на границу пола"
+            "при полу 300° максимум разведения — граница пола"
         );
+
+        // Зеркальный корпус: brand 185° → диаметраль 5° < пола 350°; разведение
+        // у 360⁻ (175°) БОЛЬШЕ, чем у floor=350 (165°) → верхняя граница дуги.
+        let upper = resolve_config_sentiment_solid(anchor, 185.0, 4.0, 1.0, Some(350.0), 1.0, 1.0)
+            .expect("пол при сатурации — не отказ");
+        assert_eq!(
+            upper,
+            oklab_lc_to_hex(l, c, 360.0 - 1e-9),
+            "максимум разведения на дуге [350,360) — верхняя граница, не floor"
+        );
+    }
+
+    /// Публичная граница `resolve_config_sentiment_solid`: неконечный
+    /// `brand_hue` и недоменный `hue_floor` — честный Err, не тихий hex
+    /// (в сатурированной ветке NaN уходил бы прямо в oklab_lc_to_hex).
+    #[test]
+    fn config_sentiment_public_boundary_rejects_garbage_angles() {
+        for bad_brand in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                resolve_config_sentiment_solid("#FF3B30", bad_brand, 4.0, 1.0, None, 1.0, 0.06)
+                    .is_err(),
+                "brand_hue={bad_brand} обязан быть отвергнут"
+            );
+        }
+        for bad_floor in [f64::NAN, -1.0, 360.0, f64::INFINITY] {
+            assert!(
+                resolve_config_sentiment_solid(
+                    "#FF3B30",
+                    28.0,
+                    4.0,
+                    1.0,
+                    Some(bad_floor),
+                    1.0,
+                    0.06
+                )
+                .is_err(),
+                "hue_floor={bad_floor} обязан быть отвергнут"
+            );
+        }
     }
 
     /// Ахроматичный якорь семейства не несёт оттенка: разведение отключается

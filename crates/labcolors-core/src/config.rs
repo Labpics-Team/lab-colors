@@ -155,6 +155,10 @@ const HUE_FLOOR_MAX_EXCLUSIVE: f64 = 360.0;
 /// «рецепт ещё не реализован». Реализована вручную (без `thiserror`) — крейт
 /// `labcolors-core` держит НОЛЬ runtime-зависимостей (issue #29); стиль `Display`
 /// повторяет ручные ошибки ядра.
+///
+/// NB: `PartialEq` наследует IEEE-семантику `f64`-полей —
+/// `OutOfBounds { value: NaN, .. }` НЕ равен самому себе (как и сам `f64`);
+/// для сравнения NaN-ошибок матчитесь по варианту, не по равенству.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ConfigError {

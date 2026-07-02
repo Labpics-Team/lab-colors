@@ -739,24 +739,54 @@ fn consumed_roles_diff_is_empty_against_labui_contract() {
     );
 
     // Обратная сторона: фикстура не эмитит НИ ОДНОЙ коллапс-роли (иначе коллапс
-    // не исполнен). Проверяем по конкретным маркерам удаляемых семейств
-    // (`fx-glow-inverted` — легитимная FX-роль, НЕ инвертированный лейбл/бордер).
+    // не исполнен). Предикат ВЫВОДИТСЯ из деклараций COLLAPSED_ROLES — второй,
+    // вручную синхронизируемый список условий гнил бы молча (новый паттерн в
+    // декларации без правки предиката = тест перестаёт кусаться).
     for (name, _) in table.entries() {
-        let collapsed = name.contains("static")
-            || name.starts_with("label-inverted")
-            || name == "border-inverted"
-            || name.starts_with("label-on-")
-            || name.starts_with("bg-")
-            || name.starts_with("badge-")
-            || name == "control-bg"
-            || name.contains("material");
-        assert!(
-            !collapsed,
-            "фикстура эмитит коллапс-роль `{name}` — коллапс контракта нарушен"
-        );
+        if let Some((pattern, why)) = COLLAPSED_ROLES
+            .iter()
+            .find(|(p, _)| matches_collapsed_pattern(name, p))
+        {
+            panic!(
+                "фикстура эмитит коллапс-роль `{name}` (паттерн `{pattern}`: {why}) — \
+                 коллапс контракта нарушен"
+            );
+        }
     }
+    // Значенческий гард сопоставителя (RED-proof против немого предиката):
+    // коллапс-имена ловятся, легитимная FX-роль `fx-glow-inverted` — нет
+    // (она НЕ инвертированный лейбл/бордер).
+    let hits = |name: &str| {
+        COLLAPSED_ROLES
+            .iter()
+            .any(|(p, _)| matches_collapsed_pattern(name, p))
+    };
+    assert!(hits("label-on-accent") && hits("bg-material-thick") && hits("tint-static-dark-4"));
+    assert!(!hits("fx-glow-inverted") && !hits("label-danger-primary"));
     // COLLAPSED_ROLES не пуст — декларация причин присутствует.
     assert!(!COLLAPSED_ROLES.is_empty());
+}
+
+/// Glob-сопоставление паттернов [`COLLAPSED_ROLES`] (`*` — любая подстрока):
+/// сегменты между `*` обязаны входить по порядку; без ведущей/замыкающей `*`
+/// первый/последний сегмент заякорен на начало/конец имени.
+fn matches_collapsed_pattern(name: &str, pattern: &str) -> bool {
+    let segments: Vec<&str> = pattern.split('*').collect();
+    let mut pos = 0usize;
+    for (i, seg) in segments.iter().enumerate() {
+        if seg.is_empty() {
+            continue;
+        }
+        let Some(found) = name[pos..].find(seg) else {
+            return false;
+        };
+        if i == 0 && found != 0 {
+            return false; // без ведущей `*` — якорь на начало
+        }
+        pos += found + seg.len();
+    }
+    // Без замыкающей `*` — якорь на конец имени.
+    pattern.ends_with('*') || pos == name.len()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1094,22 +1124,49 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
 // стаба contract.css ПОБАЙТНО (нормализованный формат), в light И dark.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Нормализовать [`Resolved::Rgba`] в канонический `rgb(R G B / A)` (формат стаба
-/// labui): тинт-hex → десятичные каналы, альфа как есть. Солид (α=1) → `rgb(R G B)`.
-fn rgba_to_stub_string(res: &Resolved) -> String {
+/// Нормализовать [`Resolved::Rgba`] в пару (rgb-строка, α): rgb сверяется со
+/// стабом ПОБАЙТОВО, α — числом с допуском (Display-сравнение f64 хрупко:
+/// хвост вида 0.07800000000000001 после будущего рефакторинга формулы уронил
+/// бы тест по ФОРМАТУ, маскируя семантику — класс «строковое сравнение
+/// плавающей точки», CodeRabbit р-7).
+fn rgba_to_parts(res: &Resolved) -> (String, f64) {
     let r = res
         .rgba()
         .unwrap_or_else(|| panic!("ожидался Resolved::Rgba, получено {res:?}"));
     let rgb = crate::spaces::srgb::srgb_encoded_from_hex(r.tint_hex()).unwrap();
     let ch = |v: f64| (v * 255.0).round() as u8;
-    let (rr, gg, bb) = (ch(rgb[0]), ch(rgb[1]), ch(rgb[2]));
-    if (r.alpha() - 1.0).abs() < 1e-9 {
-        format!("rgb({rr} {gg} {bb})")
-    } else {
-        // Стаб печатает альфу без ведущего нуля целой части и без хвостовых нулей
-        // (0.722, 0.2, 0.078…); {} по f64 это воспроизводит для наших величин.
-        format!("rgb({rr} {gg} {bb} / {})", r.alpha())
+    (
+        format!("rgb({} {} {})", ch(rgb[0]), ch(rgb[1]), ch(rgb[2])),
+        r.alpha(),
+    )
+}
+
+/// Разбить стаб-литерал `rgb(R G B / A)` / `rgb(R G B)` на (rgb-строка, α):
+/// солид без слэша несёт α = 1.
+fn split_stub_rgba(stub: &str) -> (String, f64) {
+    match stub.split_once(" / ") {
+        Some((rgb, a)) => (
+            format!("{rgb})"),
+            a.trim_end_matches(')').parse().expect("α стаба — число"),
+        ),
+        None => (stub.to_string(), 1.0),
     }
+}
+
+/// Сверить эмиссию роли со стаб-литералом: rgb побайтово, α с допуском 1e-12
+/// (тот же допуск, что у соседних численных сверок α).
+#[track_caller]
+fn assert_matches_stub(role: &str, theme: &str, got: &Resolved, want: &str) {
+    let (got_rgb, got_alpha) = rgba_to_parts(got);
+    let (want_rgb, want_alpha) = split_stub_rgba(want);
+    assert_eq!(
+        got_rgb, want_rgb,
+        "ЗНАЧЕНИЕ РАЗОШЛОСЬ ({theme}) `{role}`: rgb {got_rgb} != стаб {want_rgb}"
+    );
+    assert!(
+        (got_alpha - want_alpha).abs() < 1e-12,
+        "ЗНАЧЕНИЕ РАЗОШЛОСЬ ({theme}) `{role}`: α {got_alpha} != стаб {want_alpha}"
+    );
 }
 
 /// Значенческая сверка представителей групп против стаба labui в light И dark.
@@ -1179,16 +1236,10 @@ fn representative_roles_match_stub_values_light_and_dark() {
     for (role, want_light, want_dark) in cases {
         let set_l = resolve_named_set(&bg_light, &table, &ViewingConditions::srgb());
         let set_d = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
-        let got_l = rgba_to_stub_string(&set_l.iter().find(|(n, _)| n == role).unwrap().1);
-        let got_d = rgba_to_stub_string(&set_d.iter().find(|(n, _)| n == role).unwrap().1);
-        assert_eq!(
-            &got_l, want_light,
-            "ЗНАЧЕНИЕ РАЗОШЛОСЬ (light) `{role}`: эмиссия {got_l} != стаб {want_light}"
-        );
-        assert_eq!(
-            &got_d, want_dark,
-            "ЗНАЧЕНИЕ РАЗОШЛОСЬ (dark) `{role}`: эмиссия {got_d} != стаб {want_dark}"
-        );
+        let got_l = &set_l.iter().find(|(n, _)| n == role).unwrap().1;
+        let got_d = &set_d.iter().find(|(n, _)| n == role).unwrap().1;
+        assert_matches_stub(role, "light", got_l, want_light);
+        assert_matches_stub(role, "dark", got_d, want_dark);
     }
 }
 
@@ -1209,9 +1260,11 @@ fn value_test_bites_on_alpha_mutation() {
     let table = cfg.compile_named_role_table().unwrap();
     let bg_dark = BgInput::solid("#101012").unwrap();
     let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
-    let got = rgba_to_stub_string(&set.iter().find(|(n, _)| n == "fx-skeleton-base").unwrap().1);
-    assert_ne!(
-        got, "rgb(120 120 128 / 0.122)",
+    let (got_rgb, got_alpha) =
+        rgba_to_parts(&set.iter().find(|(n, _)| n == "fx-skeleton-base").unwrap().1);
+    assert_eq!(got_rgb, "rgb(120 120 128)", "мутация двигает ТОЛЬКО альфу");
+    assert!(
+        (got_alpha - 0.122).abs() > 1e-9,
         "RED-proof значенческого теста провален: мутация альфы НЕ сдвинула эмиссию"
     );
 }
