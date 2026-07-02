@@ -15,7 +15,9 @@
 //! a vanilla helper for that lives in the npm package, not in the WASM core.
 
 mod cache;
-mod config_dto;
+// pub: эмиттер паспорта (examples/emit_passport.rs) сериализует канонический
+// конфиг через DTO; wasm_bindgen экспортирует только аннотированное — JS-API не растёт.
+pub mod config_dto;
 mod dto;
 mod engine;
 mod error;
