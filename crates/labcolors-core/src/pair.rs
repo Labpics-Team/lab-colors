@@ -22,12 +22,15 @@
 //!
 //! # Кроссовер
 //!
-//! [`PAIR_CROSSOVER_Y`] — VC-независимый порог по WCAG-люминансу якоря
-//! (стабильность полярности между темами, то же свойство, что у
-//! `choose_polarity`). Ниже порога поверхность перцептивно тёмная → белая
-//! сторона; выше — светлая → чернильная. Чернильная сторона уже выигрывает
-//! штатную полярность на светлых якорях (жёлтый Y≈0.47, зелёный Y≈0.42) —
-//! заливка не двигается вовсе.
+//! Сторона пары — свойство ИДЕНТИЧНОСТИ СЕМЬИ: решается ОДИН РАЗ по
+//! каноническому светлому якорю ([`PAIR_CROSSOVER_Y`]) и не флипается между
+//! темами/IC — иначе «Brand» носил бы белый лейбл в light и чернильный в
+//! dark (тёмные якоря labui осветлены и перелезают порог: info dark
+//! #5696FF Y=0.31). Пер-режимная заливка двигается ПОД выбранную сторону:
+//! светлая сторона — утемнение до строгой победы белого; чернильная —
+//! осветление до строгой победы чёрного (IC-якоря warning/success
+//! проваливаются под границу: #C93400 Y=0.149 — без осветления штатная
+//! полярность отдала бы белый и сторона флипнулась бы в IC).
 //!
 //! Белая сторона требует строгой победы белого в `choose_polarity`:
 //! `(Y + 0.05)² < 1.05 · 0.05`, т.е. Y < 0.17913 (белый ≥ 4.58:1) — граница
@@ -49,9 +52,18 @@ use crate::spaces::srgb::srgb_gamma_inv;
 pub(crate) const PAIR_CROSSOVER_Y: f64 = 0.30;
 
 /// Строгая граница победы белой стороны в `choose_polarity`:
-/// `(Y + 0.05)² < 1.05 · 0.05`. Выведена из формулы WCAG (не настройка):
-/// ниже неё белый и по ратио, и по tie-break выигрывает штатную полярность.
+/// `(Y + 0.05)² < 1.05 · 0.05` ⇒ Y < 0.17913. Выведена из формулы WCAG (не
+/// настройка); округлена ВНИЗ (консервативно): ниже неё белый и по ратио, и
+/// по tie-break выигрывает штатную полярность.
 pub(crate) const WHITE_WINS_Y: f64 = 0.179;
+
+/// Строгая граница победы чернильной стороны — та же формула с другой
+/// стороны: `(Y + 0.05)² > 1.05 · 0.05` ⇒ Y > 0.17913; округлена ВВЕРХ.
+pub(crate) const BLACK_WINS_Y: f64 = 0.1795;
+
+/// Итераций бисекции минимального сдвига: 48 делений пополам ≫ шага 8-битной
+/// решётки, на которой квантуется каждый кандидат — сходимость до кванта.
+const BISECTION_STEPS: usize = 48;
 
 /// WCAG-люминанс кодированного (byte/255) sRGB.
 fn wcag_y_encoded(rgb: [f64; 3]) -> f64 {
@@ -83,41 +95,54 @@ pub fn pair_side(anchor_encoded: [f64; 3]) -> PairSide {
     }
 }
 
-/// Заливка пары: якорь, минимально сдвинутый до победы выбранной стороны.
+/// Заливка пары: пер-режимный якорь, минимально сдвинутый по L Oklab до
+/// строгой победы СТОРОНЫ СЕМЬИ (a, b — оттенок/хрома идентичности — не
+/// трогаются в Oklab-координатах; у края куба каналы честно клампятся).
 ///
-/// Светлая сторона: бисекция по L Oklab (a, b — оттенок и хрома идентичности —
-/// не трогаются) до `Y < WHITE_WINS_Y`; уже тёмный якорь возвращается как
-/// есть. Чернильная сторона: якорь как есть (светлые якоря уже отдают тёмную
-/// полярность штатному закону).
-pub fn pair_fill(anchor_encoded: [f64; 3]) -> [f64; 3] {
-    match pair_side(anchor_encoded) {
-        PairSide::Ink => anchor_encoded,
-        PairSide::Light => {
-            if wcag_y_encoded(anchor_encoded) < WHITE_WINS_Y {
-                return anchor_encoded;
-            }
-            let lin = [
-                srgb_gamma_inv(anchor_encoded[0]),
-                srgb_gamma_inv(anchor_encoded[1]),
-                srgb_gamma_inv(anchor_encoded[2]),
-            ];
-            let lab = srgb_linear_to_oklab(lin);
-            // Бисекция минимального утемнения: инвариант — lo даёт победу
-            // белого, hi нет; сходимся к максимальной светлоте с победой.
-            let mut lo = 0.0_f64;
-            let mut hi = lab[0];
-            for _ in 0..48 {
-                let mid = 0.5 * (lo + hi);
-                let cand = encode_clamped(oklab_to_srgb_linear([mid, lab[1], lab[2]]));
-                if wcag_y_encoded(cand) < WHITE_WINS_Y {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            encode_clamped(oklab_to_srgb_linear([lo, lab[1], lab[2]]))
+/// Сторона приходит от канонического светлого якоря семьи ([`pair_side`]) и
+/// одна на все режимы; движение пер-режимное: светлая сторона — утемнение до
+/// `Y < WHITE_WINS_Y`, чернильная — осветление до `Y > BLACK_WINS_Y`
+/// (IC-якоря проваливаются под границу). Якорь, уже дающий победу, не
+/// двигается вовсе.
+pub fn pair_fill(anchor_encoded: [f64; 3], side: PairSide) -> [f64; 3] {
+    let y = wcag_y_encoded(anchor_encoded);
+    let (needs_move, target_dark) = match side {
+        PairSide::Light => (y >= WHITE_WINS_Y, true),
+        PairSide::Ink => (y <= BLACK_WINS_Y, false),
+    };
+    if !needs_move {
+        return anchor_encoded;
+    }
+    let lin = [
+        srgb_gamma_inv(anchor_encoded[0]),
+        srgb_gamma_inv(anchor_encoded[1]),
+        srgb_gamma_inv(anchor_encoded[2]),
+    ];
+    let lab = srgb_linear_to_oklab(lin);
+    let wins = |l: f64| {
+        let cand = encode_clamped(oklab_to_srgb_linear([l, lab[1], lab[2]]));
+        if target_dark {
+            wcag_y_encoded(cand) < WHITE_WINS_Y
+        } else {
+            wcag_y_encoded(cand) > BLACK_WINS_Y
+        }
+    };
+    // Бисекция минимального сдвига: инвариант — lo выигрывает, hi нет;
+    // сходимся к ближайшей к якорю светлоте с победой стороны.
+    let (mut lo, mut hi) = if target_dark {
+        (0.0_f64, lab[0])
+    } else {
+        (1.0_f64, lab[0])
+    };
+    for _ in 0..BISECTION_STEPS {
+        let mid = 0.5 * (lo + hi);
+        if wins(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
         }
     }
+    encode_clamped(oklab_to_srgb_linear([lo, lab[1], lab[2]]))
 }
 
 /// Линейный sRGB → кодированный, КВАНТОВАННЫЙ в 8-битную решётку с клампом
@@ -136,7 +161,7 @@ mod tests {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 
     fn enc(hex: &str) -> [f64; 3] {
-        srgb_encoded_from_hex(hex).unwrap()
+        srgb_encoded_from_hex(hex).expect("тестовые hex-литералы валидны")
     }
 
     /// Калибровка кроссовера консенсус-сетом якорей labui: перцептивно тёмные
@@ -162,7 +187,7 @@ mod tests {
     fn light_side_nudges_minimally_preserving_identity() {
         for hex in ["#007AFF", "#FF3B30", "#3E87FF"] {
             let anchor = enc(hex);
-            let fill = pair_fill(anchor);
+            let fill = pair_fill(anchor, PairSide::Light);
             let y = wcag_y_encoded(fill);
             assert!(
                 y < WHITE_WINS_Y,
@@ -192,17 +217,53 @@ mod tests {
         }
     }
 
-    /// Чернильная сторона и уже-тёмные якоря не двигаются вовсе.
+    /// Якоря, уже дающие победу своей стороны, не двигаются вовсе.
     #[test]
-    fn ink_side_and_already_dark_anchors_stay_put() {
-        for hex in ["#FFA100", "#34C759", "#101012", "#FFFFFF"] {
+    fn winning_anchors_stay_put() {
+        for hex in ["#FFA100", "#34C759", "#FFFFFF"] {
             let anchor = enc(hex);
             assert_eq!(
-                hex_from_srgb_encoded(pair_fill(anchor)),
+                hex_from_srgb_encoded(pair_fill(anchor, PairSide::Ink)),
                 hex_from_srgb_encoded(anchor),
-                "{hex}: заливка не тронута"
+                "{hex}: чернильная сторона, заливка не тронута"
             );
         }
+        let dark = enc("#101012");
+        assert_eq!(
+            hex_from_srgb_encoded(pair_fill(dark, PairSide::Light)),
+            hex_from_srgb_encoded(dark),
+            "тёмный якорь светлой стороны не тронут"
+        );
+    }
+
+    /// Сторона — идентичность семьи: канонический светлый якорь решает один
+    /// раз, тёмные/IC-варианты семьи НЕ флипают её (info dark #5696FF Y=0.31
+    /// перелезает кроссовер — контрпример оси A).
+    #[test]
+    fn side_is_family_canonical_not_per_vc() {
+        // Канон info (light) — светлая сторона...
+        assert_eq!(pair_side(enc("#3E87FF")), PairSide::Light);
+        // ...а его тёмный якорь сам по себе ушёл бы в чернила: фиксируем,
+        // что при семейной стороне заливка двигается, лейбл остаётся белым.
+        let fill = pair_fill(enc("#5696FF"), PairSide::Light);
+        assert!(
+            wcag_y_encoded(fill) < WHITE_WINS_Y,
+            "тёмный якорь info утемнён под светлую сторону семьи"
+        );
+    }
+
+    /// Чернильная сторона осветляет провалившиеся под границу IC-якоря
+    /// (warning light-ic #C93400 Y=0.149): без осветления штатная полярность
+    /// отдала бы белый и сторона флипнулась бы в IC.
+    #[test]
+    fn ink_side_lightens_sunken_ic_anchors() {
+        let fill = pair_fill(enc("#C93400"), PairSide::Ink);
+        let y = wcag_y_encoded(fill);
+        assert!(
+            y > BLACK_WINS_Y,
+            "IC-якорь осветлён до победы чернил (Y={y:.4})"
+        );
+        assert!(y < BLACK_WINS_Y + 0.006, "сдвиг минимален (Y={y:.4})");
     }
 
     /// Сквозной закон: на выведенной заливке ШТАТНАЯ полярность отдаёт
@@ -214,7 +275,7 @@ mod tests {
         use crate::semantic::{Resolved, Role, RoleTable, resolve};
         use crate::spaces::vc::ViewingConditions;
         for hex in ["#007AFF", "#FF3B30"] {
-            let fill = pair_fill(enc(hex));
+            let fill = pair_fill(enc(hex), PairSide::Light);
             let fill_hex = hex_from_srgb_encoded(fill);
             let bg = BgInput::solid(&fill_hex).unwrap();
             let table = RoleTable::default();

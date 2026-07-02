@@ -1389,10 +1389,14 @@ fn resolve_spec_in(
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
         RoleSpec::PairFill { tint } => {
-            // Заливка пары: якорь по теме → минимальный сдвиг закона пары →
-            // солид через лестничную сантехнику (α = 1; композит на фоне
-            // резолва замеряется честно, как у любой лестничной эмиссии).
-            let fill = crate::pair::pair_fill(tint.for_vc(vc));
+            // Сторона пары — идентичность СЕМЬИ: решается по каноническому
+            // светлому якорю и не флипается между темами/IC (тёмные якоря
+            // labui осветлены и перелезали бы кроссовер). Пер-режимный якорь
+            // затем двигается ПОД эту сторону; солид — лестничной сантехникой
+            // (α = 1; композит на фоне резолва замеряется честно).
+            let side =
+                crate::pair::pair_side(tint.for_vc(&crate::spaces::vc::ViewingConditions::srgb()));
+            let fill = crate::pair::pair_fill(tint.for_vc(vc), side);
             return resolve_rgba_direct(fill, 1.0, bg, vc);
         }
         RoleSpec::Ladder {
