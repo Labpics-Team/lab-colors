@@ -34,7 +34,9 @@ pub fn oklch_from_hex(hex: &str) -> Result<[f64; 3], String> {
 ///
 /// Точность: L — 5 знаков процента, C — 6, H — 3; запас относительно
 /// полушага 8-битного канала, доказан round-trip тестом на всём кубе.
-/// Альфа печатается как есть (данные рампы, не производная).
+/// Альфа — до 4 знаков с обрезкой хвостовых нулей: литералы рампы проходят
+/// как есть (`0.122` → `0.122`), а вычисленная альфа (альфа-аналог) не
+/// тащит float-хвост в CSS-строку.
 ///
 /// # Errors
 ///
@@ -43,7 +45,11 @@ pub fn oklch_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, Strin
     let [l, c, h] = oklch_from_hex(hex)?;
     let base = format!("oklch({:.5}% {:.6} {:.3}", l * 100.0, c, h);
     Ok(match alpha {
-        Some(a) => format!("{base} / {a})"),
+        Some(a) => {
+            let a4 = format!("{a:.4}");
+            let a4 = a4.trim_end_matches('0').trim_end_matches('.');
+            format!("{base} / {a4})")
+        }
         None => format!("{base})"),
     })
 }

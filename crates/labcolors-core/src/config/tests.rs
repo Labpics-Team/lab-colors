@@ -34,7 +34,7 @@ fn repr(res: &Resolved) -> String {
     match res {
         Resolved::Color { solved, .. } => solved.hex().to_string(),
         // rgba-роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
-        Resolved::Rgba(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+        Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
         Resolved::None => "none".to_string(),
         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
     }
@@ -974,8 +974,8 @@ fn ladder_emits_rgba_with_composite_over_bg() {
         .iter()
         .find(|(n, _)| n == "fill-brand-secondary")
         .unwrap();
-    let Resolved::Rgba(r) = res else {
-        panic!("fill-brand-secondary: ожидался Rgba, получено {res:?}");
+    let Resolved::Translucent(r) = res else {
+        panic!("fill-brand-secondary: ожидался Translucent, получено {res:?}");
     };
     // Тинт brand light = #007AFF (эмитится напрямую).
     assert_eq!(r.tint_hex(), "#007AFF", "тинт brand-роли (светлая тема)");
@@ -1020,8 +1020,8 @@ fn ladder_bites_on_position_mutation() {
         .iter()
         .find(|(n, _)| n == "fill-brand-secondary")
         .unwrap();
-    let Resolved::Rgba(r) = res else {
-        panic!("ожидался Rgba")
+    let Resolved::Translucent(r) = res else {
+        panic!("ожидался Translucent")
     };
     assert!(
         (r.alpha() - 1.0).abs() < 1e-12,
@@ -1150,14 +1150,14 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
 // стаба contract.css ПОБАЙТНО (нормализованный формат), в light И dark.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Нормализовать [`Resolved::Rgba`] в пару (rgb-строка, α): rgb сверяется со
+/// Нормализовать [`Resolved::Translucent`] в пару (rgb-строка, α): rgb сверяется со
 /// стабом ПОБАЙТОВО, α — числом с допуском (Display-сравнение f64 хрупко:
 /// хвост вида 0.07800000000000001 после будущего рефакторинга формулы уронил
 /// бы тест по ФОРМАТУ, маскируя семантику).
 fn rgba_to_parts(res: &Resolved) -> (String, f64) {
     let r = res
         .rgba()
-        .unwrap_or_else(|| panic!("ожидался Resolved::Rgba, получено {res:?}"));
+        .unwrap_or_else(|| panic!("ожидался Resolved::Translucent, получено {res:?}"));
     let rgb = crate::spaces::srgb::srgb_encoded_from_hex(r.tint_hex()).unwrap();
     let ch = |v: f64| (v * 255.0).round() as u8;
     (
@@ -1706,8 +1706,8 @@ fn achromatic_hue_sources_are_handled_honestly() {
         .iter()
         .find(|(n, _)| n == "label-danger-primary")
         .expect("роль есть");
-    let Resolved::Rgba(r) = r else {
-        panic!("ожидался Rgba");
+    let Resolved::Translucent(r) = r else {
+        panic!("ожидался Translucent");
     };
     assert_eq!(
         r.tint_hex(),

@@ -239,7 +239,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
         // наружу уходит rgba(tint, α), браузер композитит; контраст — свойство
         // композита на фоне резолва (закон лестницы ядра).
-        Resolved::Rgba(rgba) => RoleOutcome::Rgba(RgbaColor {
+        Resolved::Translucent(rgba) => RoleOutcome::Translucent(RgbaColor {
             tint_hex: rgba.tint_hex().to_string(),
             alpha: rgba.alpha(),
             composite_hex: rgba.composite_hex().to_string(),
@@ -574,7 +574,7 @@ mod tests {
                     entry.role_key
                 );
                 match &entry.outcome {
-                    RoleOutcome::Rgba(r) => {
+                    RoleOutcome::Translucent(r) => {
                         assert!(
                             r.tint_hex.starts_with('#') && r.composite_hex.starts_with('#'),
                             "{bg} {}: rgba-эмиссия несёт hex-тинт и hex-композит",
@@ -657,7 +657,7 @@ mod tests {
                 .roles
                 .iter()
                 .any(|r| r.role_key == "fill-brand-primary"
-                    && matches!(r.outcome, RoleOutcome::Rgba(_))),
+                    && matches!(r.outcome, RoleOutcome::Translucent(_))),
             "конфиг-контракт несёт rgba-роль лестницы"
         );
 
@@ -750,7 +750,7 @@ mod tests {
                         "{name}: floor_override"
                     );
                 }
-                (Resolved::Rgba(r), RoleOutcome::Rgba(o)) => {
+                (Resolved::Translucent(r), RoleOutcome::Translucent(o)) => {
                     assert_eq!(r.tint_hex(), o.tint_hex, "{name}: tint");
                     assert_eq!(r.alpha(), o.alpha, "{name}: alpha");
                     assert_eq!(r.composite_hex(), o.composite_hex, "{name}: composite");

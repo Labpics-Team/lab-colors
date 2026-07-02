@@ -194,7 +194,7 @@ fn r3_resolve_set_240_cell_representative_byte_identity() {
                 // Дефолтная `RoleTable` (Role-путь) не несёт Ladder/AlphaAnalog-
                 // рецептов, поэтому rgba-роль здесь недостижима; арм обязателен
                 // из-за `#[non_exhaustive] Resolved`.
-                Resolved::Rgba(_) => "RGBA".to_string(),
+                Resolved::Translucent(_) => "RGBA".to_string(),
                 // Будущий вариант Resolved не должен молча пройти golden: паника
                 // делает его видимым (обязан быть переучтён вместе с golden).
                 other => panic!("неучтённый Resolved-вариант в r3 golden: {other:?}"),

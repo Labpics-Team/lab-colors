@@ -81,7 +81,7 @@ fn resolve_theme_matches_native_resolve_set() {
             Resolved::Unreachable(_) => {
                 assert_eq!(kind, "unreachable", "{} should be unreachable", role.key());
             }
-            // Rgba в дефолт-таблице не встречается (rgba-граница WASM — открытый долг);
+            // Translucent в дефолт-таблице не встречается (полупрозрачная граница уже открыта конфиг-путём);
             // будущий вариант обязан быть переучтён здесь шумно, не замаскирован.
             other => panic!(
                 "неучтённый Resolved-вариант в wasm-парити ({}): {other:?}",
@@ -264,7 +264,7 @@ fn config_boundary_two_configs_diverge() {
 
     let roles_a = get_obj(set_a.as_ref(), "roles");
     let accent_a = get_obj(&roles_a, "accent-fill");
-    assert_eq!(get_str(&accent_a, "kind").as_deref(), Some("rgba"));
+    assert_eq!(get_str(&accent_a, "kind").as_deref(), Some("translucent"));
     let css_a = get_str(&accent_a, "css").expect("rgba несёт css");
     assert!(
         css_a.starts_with("oklch(") && css_a.contains(" / "),

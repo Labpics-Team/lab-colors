@@ -28,7 +28,7 @@
 //! тинт-якорь ([`crate::ladder::LadderTint`]), позиция несёт альфу Figma-рампы.
 //! [`RoleRecipe::AlphaAnalog`] компилируется в [`RoleSpec::AlphaAnalog`] (солид-
 //! цель источника + запрошенная альфа, композит-инверсия — [`crate::alpha`], #119).
-//! Резолв обоих — [`crate::semantic::Resolved::Rgba`] (rgba напрямую + солид-
+//! Резолв обоих — [`crate::semantic::Resolved::Translucent`] (rgba напрямую + солид-
 //! композит на фоне резолва для замера контраста). Меню позиций + провенанс —
 //! приложение A к `docs/decisions/0001-config-boundary.md`.
 

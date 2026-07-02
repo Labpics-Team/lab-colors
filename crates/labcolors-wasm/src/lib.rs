@@ -80,8 +80,8 @@ export interface UnreachableRole {
 }
 
 /** A semi-transparent ladder / alpha-analog emission: the CSS carries oklch(L% C H / A), the browser composites it. */
-export interface RgbaRole {
-  readonly kind: "rgba";
+export interface TranslucentRole {
+  readonly kind: "translucent";
   readonly cssVar: string;
   /** The tint as #RRGGBB (data) — the colour the oklch(… / A) carries. */
   readonly tintHex: string;
@@ -97,7 +97,7 @@ export interface RgbaRole {
   readonly css: string;
 }
 
-export type RoleResult = SolvedColor | RgbaRole | NoneRole | UnreachableRole;
+export type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 /** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
 export interface ThemeAnchors {
@@ -317,8 +317,8 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                 set(&role_obj, "css", &JsValue::from_str(&css));
                 set(&vars, &css_var, &JsValue::from_str(&css));
             }
-            RoleOutcome::Rgba(r) => {
-                set(&role_obj, "kind", &JsValue::from_str("rgba"));
+            RoleOutcome::Translucent(r) => {
+                set(&role_obj, "kind", &JsValue::from_str("translucent"));
                 set(&role_obj, "tintHex", &JsValue::from_str(&r.tint_hex));
                 set(&role_obj, "alpha", &JsValue::from_f64(r.alpha));
                 set(

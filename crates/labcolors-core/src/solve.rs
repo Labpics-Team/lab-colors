@@ -2581,7 +2581,7 @@ mod tests {
                 let v = match res {
                     Resolved::Color { solved, .. } => solved.hex().to_string(),
                     // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо здесь.
-                    Resolved::Rgba(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+                    Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                     Resolved::None => "none".to_string(),
                     Resolved::Unreachable(_) => "unreach".to_string(),
                 };
