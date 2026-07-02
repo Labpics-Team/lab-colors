@@ -418,6 +418,35 @@ mod tests {
         }
     }
 
+    /// Все три hex-обёртки публичной поверхности: roundtrip на живой Figma-паре
+    /// + честный Err (не паника) на невалидном hex — .expect в min_alpha_hex
+    /// недостижим, парсинг падает раньше через `?`.
+    #[test]
+    fn hex_wrappers_roundtrip_and_reject_invalid_hex() {
+        // Roundtrip: Fills/Neutral/Primary light (композит #E4E4E6 = #787880@0.20 над #FFFFFF).
+        let tint = invert_composite_hex("#E4E4E6", 0.20, "#FFFFFF")
+            .expect("валидный hex")
+            .expect("α=0.20 разрешима");
+        assert_eq!(composite_hex(&tint, 0.20, "#FFFFFF").unwrap(), "#E4E4E6");
+        // min_alpha_hex: для равных цветов пол = 0; для контрастной пары > 0.
+        assert_eq!(min_alpha_hex("#FFFFFF", "#FFFFFF").unwrap(), 0.0);
+        assert!(min_alpha_hex("#101012", "#FFFFFF").unwrap() > 0.9);
+        // resolve_alpha_analog_hex: неразрешимая α поднимается, композит равен солиду.
+        let (tint2, actual) = resolve_alpha_analog_hex("#101012", 0.05, "#FFFFFF")
+            .expect("валидный hex")
+            .expect("цвета в домене");
+        assert!(actual > 0.05, "α обязана подняться до разрешимой");
+        assert_eq!(composite_hex(&tint2, actual, "#FFFFFF").unwrap(), "#101012");
+        // Невалидный hex — Err на каждой обёртке (никаких паник).
+        for f in [
+            invert_composite_hex("ош", 0.5, "#FFFFFF").err(),
+            min_alpha_hex("#12345", "#FFFFFF").err(),
+            resolve_alpha_analog_hex("#GGGGGG", 0.5, "#FFFFFF").err(),
+        ] {
+            assert!(f.is_some(), "невалидный hex обязан дать Err");
+        }
+    }
+
     /// Резолвер отвергает только мусор; NaN-α — тоже мусор, не «поднять до α_min».
     #[test]
     fn resolver_rejects_only_out_of_domain() {
