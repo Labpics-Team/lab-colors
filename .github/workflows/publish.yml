@@ -1,0 +1,63 @@
+# Публикация @labpics/colors в npm по тегу colors-vX.Y.Z.
+#
+# БЕЗ ТОКЕНОВ: аутентификация — Trusted Publishing (OIDC): npm доверяет
+# именно этому workflow этого репозитория (настройка — на странице пакета
+# npmjs.com → Settings → Trusted publishing). Provenance-аттестация
+# генерируется автоматически. Требования OIDC: npm ≥ 11.5.1, Node ≥ 22.14 —
+# Node 24 несёт npm 11.x из коробки.
+#
+# Версия пакета обязана совпадать с тегом — расхождение роняет публикацию
+# ДО выхода в registry (защита от «тег v0.2.0, а publish 0.1.0»).
+name: publish
+
+on:
+  push:
+    tags: ["colors-v*"]
+
+env:
+  RUST_TOOLCHAIN: "1.96.0"
+
+permissions:
+  contents: read
+  id-token: write # OIDC для Trusted Publishing
+
+jobs:
+  publish:
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
+      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+      - name: wasm-pack build (release)
+        # Тот же артефакт, что гейтится в ci.yml (panic=abort, wasm-opt -Oz).
+        run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d93f # v6.0.1
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: гейт перед публикацией — typecheck + runtime-тесты пакета
+        working-directory: packages/colors
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+      - name: версия пакета == тег
+        working-directory: packages/colors
+        run: |
+          tag="${GITHUB_REF_NAME#colors-v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "тег colors-v$tag != package.json $version" >&2
+            exit 1
+          fi
+      - name: npm publish (OIDC, без токена)
+        working-directory: packages/colors
+        run: npm publish
