@@ -1,6 +1,6 @@
 # @labpics/colors
 
-Адаптивные цветовые роли для дизайн-системы. Получает фоновый цвет и тему — возвращает полный набор ролей (`--lab-label-primary`, `--lab-icon`, `--lab-border-base`, …) как `#RRGGBB`-значения CSS-переменных. Ядро написано на Rust и скомпилировано в WebAssembly; пакет не имеет runtime-зависимостей.
+Адаптивные цветовые роли для дизайн-системы. Получает фоновый цвет и тему — возвращает полный набор ролей (`--lab-label-primary`, `--lab-icon`, `--lab-border-base`, …). CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Ядро написано на Rust и скомпилировано в WebAssembly; пакет не имеет runtime-зависимостей.
 
 Ядро возвращает **данные**, не затрагивает DOM. Три вспомогательные функции переводят эти данные в живые CSS-переменные: `applyTheme` (разовое применение), `watchTheme` (реактивное — обновляется при изменении фона) и `adaptTheme` (плавная адаптация для фона, меняющегося каждый кадр).
 
@@ -33,8 +33,9 @@ await init();                       // загрузить WASM-модуль (о�
 const engine = new LabColors();     // движок по умолчанию
 
 const result = engine.resolveTheme("#FFFFFF", "light");
-// result.vars  → { "--lab-label-primary": "#1a1a1a", "--lab-icon": "#5b5b5b", ... }
-// result.roles → детали каждой роли (hex, контраст, флаги)
+// result.vars  → { "--lab-label-primary": "oklch(14.79140% 0.012878 284.717)",
+//                  "--lab-icon": "oklch(66.97448% 0.014606 285.999)", ... }
+// result.roles → детали каждой роли (css, hex, контраст, флаги)
 
 applyTheme(document.documentElement, result);   // записать все --lab-* в элемент
 ```
@@ -128,7 +129,7 @@ adaptTheme(hero, {
 interface ResolvedTheme {
   theme: ThemeName;
   background: string;                     // нормализованный #RRGGBB
-  vars: Record<string, string>;           // достижимые роли: "--lab-<ключ>" → hex
+  vars: Record<string, string>;           // достижимые роли: "--lab-<ключ>" → готовое CSS-значение oklch
   roles: Record<string, RoleResult>;      // все роли с деталями
 }
 
@@ -137,7 +138,7 @@ type RoleResult = SolvedColor | NoneRole | UnreachableRole;
 
 Каждая роль — одно из трёх состояний:
 
-- `SolvedColor` — цвет найден (`kind: "color"`, поля `hex`, `lc`, `wcagRatio`, …).
+- `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
 
