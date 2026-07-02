@@ -46,6 +46,7 @@ Marker column: `SSOT-TRACKED` = has a paper trail in this table but no citation-
 | 34 | `LO_WOB_OFFSET` | `0.027` | `lpc.rs` | GROUNDED | APCA SAPC-8 `0.0.98G-4g` published set. |
 | 35 | `IC_DECORATIVE_FLOOR_MIN` | `15.0` | `semantic.rs` | SSOT-TRACKED | Increased-contrast decorative floor (Lc), raised above `DECORATIVE_FLOOR_MIN` (7.5) to match the stronger perceptual requirements of the `-ic` themes. |
 | 36 | `HUE_SEARCH_HALF_WINDOW` | `30.0` | `scale.rs` | SSOT-TRACKED | Half-width (degrees) of the hue search window in `find_optimal_hue`; 30° spans the typical sRGB gamut ridge width around the canonical hue. |
+| 37 | `HUE_DRIFT_PENALTY_SLOPE` | `0.15` | `scale.rs` | SSOT-TRACKED | Наклон штрафа дрейфа оттенка в `find_optimal_hue` (`penalty_scale = slope/half_window`, `score = c − penalty_scale·drift`): баланс «максимум хромы против ухода от канонического оттенка». Калибровочный; ранее жил незадекларированным поле-литералом (найден инвентарём конфиг-границы 2026-07-02). Кандидат науки: вывести или обосновать датасетом. |
 
 ## Muddiness Law constants — `cleanliness.rs`
 

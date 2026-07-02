@@ -5,6 +5,15 @@ use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
 use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
 
+/// Наклон штрафа дрейфа оттенка в поиске оптимального hue рампы акцента:
+/// `penalty_scale = HUE_DRIFT_PENALTY_SLOPE / HUE_SEARCH_HALF_WINDOW`, дальше
+/// `score = c − penalty_scale·drift` — баланс «максимум хромы» против «уход от
+/// канонического оттенка». Перцептивная ручка; значение калибровочное
+/// (кандидат науки: вывести или обосновать датасетом — реестр
+/// docs/empirical-inventory.md, научная задача роадмапа).
+// SSOT-TRACKED: см. docs/empirical-inventory.md (join по имени/значению).
+const HUE_DRIFT_PENALTY_SLOPE: f64 = 0.15;
+
 #[derive(Debug, Clone)]
 pub struct AccentCurve {
     neutral: NeutralCurve,
@@ -36,7 +45,7 @@ impl AccentCurve {
             neutral: neutral.clone(),
             h_canonical,
             sat_ratio: sat_ratio.clamp(0.0, 1.0),
-            slope: 0.15,
+            slope: HUE_DRIFT_PENALTY_SLOPE,
             canonical_hex: canonical_hex.to_uppercase(),
             vc: *neutral.vc(),
         })
