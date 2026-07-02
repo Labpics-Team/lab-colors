@@ -179,20 +179,20 @@ const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 /// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
 /// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+pub(crate) const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+pub(crate) const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+pub(crate) const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
+pub(crate) const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
 /// (`border-strong` — заякоренная роль читаемости, не dJ'-шаг — её здесь нет.)
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+pub(crate) const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
+pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
 // ── Величины теней (Lc decorative — см. пояснение) ─────────────────────────────
 //
@@ -208,13 +208,13 @@ const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// самая сильная) — прогрессивная рампа FX/Shadow. Единица Lc, держится выше
 /// [`DECORATIVE_FLOOR_MIN`] с шагом между уровнями ≥1.5 Lc.
 // SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
-const SHADOW_MINOR_JND: f64 = 8.0;
+pub(crate) const SHADOW_MINOR_JND: f64 = 8.0;
 // SSOT-TRACKED — величина Lc стека теней.
-const SHADOW_AMBIENT_JND: f64 = 9.5;
+pub(crate) const SHADOW_AMBIENT_JND: f64 = 9.5;
 // SSOT-TRACKED — величина Lc стека теней.
-const SHADOW_PENUMBRA_JND: f64 = 11.5;
+pub(crate) const SHADOW_PENUMBRA_JND: f64 = 11.5;
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
-const SHADOW_MAJOR_JND: f64 = 14.0;
+pub(crate) const SHADOW_MAJOR_JND: f64 = 14.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
@@ -523,7 +523,7 @@ pub enum RoleSpec {
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
 // SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
-const NEUTRAL_HUE_DEG: f64 = 286.0;
+pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 
 /// Доля от максимальной хромы в гамуте, которую несёт тонированная роль.
 ///
@@ -538,7 +538,7 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// `0.10`: на белом `text-primary` резолвится в холодный почти-чёрный
 /// семейства `#101012`, а не в чистый серый.
 // SSOT-TRACKED — коэффициент хромы нейтрального подтона.
-const NEUTRAL_TINT_RATIO: f64 = 0.10;
+pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// Целевая перцептивная красочность (CAM16-UCS `M'`) по умолчанию, которую
 /// v2-кривая подтона держит по всей шкале светлоты — параметр "сила".
@@ -571,7 +571,7 @@ const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// (см. тест `curve_fits_reference_plateau_colorfulness` для количественного
 /// сравнения с референсом).
 // SSOT-TRACKED — целевой M' в CAM16-UCS.
-const TINT_TARGET_MP: f64 = 6.1;
+pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 
 /// Жёсткость притяжения оттенка к канонической точке по умолчанию для
 /// v2-кривой — второй (и последний) свободный скаляр. Чем выше значение, тем
@@ -585,7 +585,7 @@ const TINT_TARGET_MP: f64 = 6.1;
 /// почти-белую роль к каспу пурпурного (см. предел геометрии в
 /// [`cusp_attracted_hue`]).
 // SSOT-TRACKED — жёсткость прижатия оттенка к каспу.
-const TINT_HUE_STIFFNESS: f64 = 9.0;
+pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
 /// примерно этой красочности подтон попадает в "мёртвую серую зону" —
@@ -1222,6 +1222,13 @@ pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditio
 
 /// Resolve one role through an already-derived [`ResolveContext`], so a whole set
 /// shares one polarity and one maximum-contrast computation.
+///
+/// Thin wrapper over [`resolve_spec_in`]: it looks the role's recipe up in
+/// `table` and resolves that recipe. Keeping the recipe-driven physics in
+/// [`resolve_spec_in`] is the dependency-inversion seam — the config layer
+/// ([`NamedRoleTable`]) resolves the *same* recipe against the *same* physics
+/// without knowing about the [`Role`] enum, and the golden [`Role`] path stays a
+/// byte-for-byte-equivalent wrapper.
 fn resolve_in(
     bg: &BgInput,
     role: Role,
@@ -1229,7 +1236,26 @@ fn resolve_in(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> Resolved {
-    let contract = match table.spec(role) {
+    resolve_spec_in(bg, &table.spec(role), table.chroma(), vc, ctx)
+}
+
+/// Resolve one [`RoleSpec`] against `bg` under an already-derived
+/// [`ResolveContext`], applying `chroma` as the undertone policy.
+///
+/// This is the physics core the two front doors share: the [`Role`]-keyed
+/// [`resolve_in`] and the string-keyed [`resolve_named_set`]. It takes a `&RoleSpec`
+/// directly — not a [`Role`] — so a caller that names roles with arbitrary strings
+/// (the consumer config) resolves them through the identical code path as the
+/// built-in table. Nothing about the physics changes; only *where the recipe comes
+/// from* differs, which is exactly the seam ADR-0001 opens.
+fn resolve_spec_in(
+    bg: &BgInput,
+    spec: &RoleSpec,
+    chroma: RoleChroma,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Resolved {
+    let contract = match *spec {
         RoleSpec::Zero => return Resolved::None,
         RoleSpec::Anchor(anchor) => match ctx.anchored_contract(anchor) {
             Ok(c) => c,
@@ -1239,13 +1265,7 @@ fn resolve_in(
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
             // `solve_with_chroma`.
-            return match resolve_dj(
-                bg,
-                magnitude_dj.for_vc(vc),
-                ctx.polarity,
-                table.chroma(),
-                vc,
-            ) {
+            return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
                 Ok(solved) => Resolved::color(solved),
                 Err(reason) => Resolved::Unreachable(reason),
             };
@@ -1257,7 +1277,7 @@ fn resolve_in(
         Ok(iv) => *iv,
         Err(reason) => return Resolved::Unreachable(reason.clone()),
     };
-    match solve_with_chroma(bg, contract, table.chroma(), vc, interval) {
+    match solve_with_chroma(bg, contract, chroma, vc, interval) {
         Ok(solved) => Resolved::color(solved),
         Err(reason) => Resolved::Unreachable(reason),
     }
@@ -1430,6 +1450,85 @@ pub(crate) fn resolve_set_live(
         .collect();
     enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
     set
+}
+
+/// A recipe table keyed by **arbitrary string names**, the config-layer analogue
+/// of [`RoleTable`].
+///
+/// Where [`RoleTable`] carries the fixed v1 [`Role`] enum, `NamedRoleTable` carries
+/// whatever role *names* a consumer's [`ThemeConfig`](crate::config::ThemeConfig)
+/// declares — the engine knows none of them. It is built from a config via
+/// [`from_config`](crate::config::ThemeConfig::compile_named_role_table) and
+/// resolved by [`resolve_named_set`]. The physics is identical to [`RoleTable`]'s:
+/// each entry is the same [`RoleSpec`] the built-in path solves, and the same
+/// [`RoleChroma`] undertone applies to the whole table.
+///
+/// v1 note: this table carries **no hierarchy-compression pass**. That pass
+/// ([`enforce_text_hierarchy`]) walks the *typed* label ladder
+/// (`LabelPrimary..Quaternary`), which is meaningless for arbitrary names; the
+/// byte-identity guarantee for the labui fixture holds because every one of its
+/// text roles is individually reachable on the golden grid (so the pass is a no-op
+/// there — see the byte-identity test). A general consumer table with a squeezed
+/// mid-grey background would resolve each role in isolation, exactly as
+/// [`resolve`] does for a single role.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedRoleTable {
+    entries: Vec<(String, RoleSpec)>,
+    chroma: RoleChroma,
+}
+
+impl NamedRoleTable {
+    /// Build a named table from its `(name, recipe)` entries and an undertone
+    /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
+    /// constructor does not validate them — the config validator
+    /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
+    pub fn new(entries: Vec<(String, RoleSpec)>, chroma: RoleChroma) -> Self {
+        Self { entries, chroma }
+    }
+
+    /// The `(name, recipe)` entries, in declaration order.
+    pub fn entries(&self) -> &[(String, RoleSpec)] {
+        &self.entries
+    }
+
+    /// The undertone policy applied to every role in this table.
+    pub fn chroma(&self) -> RoleChroma {
+        self.chroma
+    }
+}
+
+/// Resolve every named role in `table` against `bg` under `vc`, in declaration
+/// order — the string-keyed sibling of [`resolve_set`].
+///
+/// Each `(name, recipe)` pair resolves through the very same [`resolve_spec_in`]
+/// physics core the built-in [`resolve_set`] uses, so a config whose recipes match
+/// the built-in table emits byte-for-byte identical colours (the byte-identity
+/// guarantee ADR-0001 requires of the labui fixture). The returned pairs preserve
+/// declaration order so a serialiser emits stable output.
+///
+/// Unlike [`resolve_set`], this takes no O(1) grey/chromatic fast path (those are
+/// keyed on the built-in default table) and runs no label-ladder compression pass
+/// (see [`NamedRoleTable`]); it is the honest live sweep for an arbitrary table.
+pub fn resolve_named_set(
+    bg: &BgInput,
+    table: &NamedRoleTable,
+    vc: &ViewingConditions,
+) -> Vec<(String, Resolved)> {
+    // One CIECAM16 forward-cache for the span of this sweep, mirroring
+    // `resolve_set_live`: the curve refine fixed-point and repeated lightnesses
+    // across roles hit the cache instead of recomputing.
+    let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
+    let ctx = ResolveContext::new(bg, vc);
+    table
+        .entries
+        .iter()
+        .map(|(name, spec)| {
+            (
+                name.clone(),
+                resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+            )
+        })
+        .collect()
 }
 
 /// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
