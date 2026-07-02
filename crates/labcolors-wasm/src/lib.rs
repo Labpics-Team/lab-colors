@@ -161,7 +161,9 @@ export interface ResolvedTheme {
    * Reachable roles only. Values are ready-to-serve CSS in ONE form:
    * "oklch(L% C H)" for solid roles, "oklch(L% C H / A)" for semi-transparent
    * ladder/alpha-analog roles. Solved in the sRGB gamut (oklch is the
-   * notation, not a gamut extension); byte-exact vs the role's hex fields.
+   * notation, not a gamut extension); byte-exact vs `SolvedColor.hex` and
+   * `TranslucentRole.tintHex` (`compositeHex` is the background-specific
+   * composite, not the emitted token).
    * Scope: this is resolveTheme's contract (applyTheme/watchTheme inject it
    * verbatim); adaptTheme's per-frame easing writes concrete interpolated
    * colours and is not bound by the emission form.
@@ -361,9 +363,9 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
 /// потребитель ждёт oklch, а полупрозрачная роль при подмене ещё и потеряла бы альфу.
 fn oklch_css(hex: &str, alpha: Option<f64>) -> Result<String, JsError> {
     labcolors_core::oklch_css_from_hex(hex, alpha).map_err(|reason| {
-        JsError::new(&format!(
-            "internal_error: резолвнутый цвет не сериализуется в oklch: {reason}"
-        ))
+        to_js_error(BindingError::Internal {
+            reason: format!("резолвнутый цвет не сериализуется в oklch: {reason}"),
+        })
     })
 }
 

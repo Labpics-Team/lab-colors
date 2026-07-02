@@ -33,6 +33,16 @@ pub enum BindingError {
         reason: String,
     },
 
+    /// A resolved colour failed to serialise into the oklch emission form.
+    /// Unreachable by construction (solver/ladder hexes are valid) — carried
+    /// as a structured code so JS branching stays uniform even for the
+    /// impossible branch.
+    #[error("internal error: {reason}")]
+    Internal {
+        /// What exactly failed to serialise.
+        reason: String,
+    },
+
     /// The theme string is not one of the public spellings.
     #[error("unknown theme: '{requested}' (expected light | dark | light-ic | dark-ic)")]
     UnknownTheme {
@@ -49,6 +59,7 @@ impl BindingError {
             BindingError::InvalidBackground { .. } => "invalid_background",
             BindingError::InvalidConfig { .. } => "invalid_config",
             BindingError::UnknownTheme { .. } => "unknown_theme",
+            BindingError::Internal { .. } => "internal_error",
         }
     }
 }

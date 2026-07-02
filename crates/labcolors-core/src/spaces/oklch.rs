@@ -26,6 +26,9 @@ pub fn oklch_from_hex(hex: &str) -> Result<[f64; 3], String> {
     let lab = srgb_linear_to_oklab(srgb_from_hex(hex)?);
     let c = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
     let h = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
+    // atan2(-0.0, x>0) даёт -0.0, а rem_euclid его не снимает (−0.0 не < 0) —
+    // печать дала бы "-0.000" и нарушила контракт H ∈ [0, 360).
+    let h = if h == 0.0 { 0.0 } else { h };
     Ok([lab[0], c, h])
 }
 
@@ -131,6 +134,11 @@ mod tests {
     fn alpha_guard_rejects_nan_and_clamps_noise() {
         assert!(oklch_css_from_hex("#101012", Some(f64::NAN)).is_err());
         assert!(oklch_css_from_hex("#101012", Some(f64::INFINITY)).is_err());
+        // Знаковый ноль H не просачивается в печать.
+        assert!(
+            !oklch_css_from_hex("#FFFFFF", None).unwrap().contains("-0."),
+            "signed zero в компонентах запрещён"
+        );
         let noisy = oklch_css_from_hex("#101012", Some(-1e-7)).unwrap();
         assert!(noisy.ends_with(" / 0)"), "шум у нуля клампится: {noisy}");
         let over = oklch_css_from_hex("#101012", Some(1.0 + 1e-9)).unwrap();
