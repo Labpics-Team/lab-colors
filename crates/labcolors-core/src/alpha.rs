@@ -418,8 +418,8 @@ mod tests {
         }
     }
 
-    /// Все три hex-обёртки публичной поверхности: roundtrip на живой Figma-паре
-    /// + честный Err (не паника) на невалидном hex — .expect в min_alpha_hex
+    /// Все три hex-обёртки публичной поверхности: roundtrip на живой Figma-паре,
+    /// плюс честный Err (не паника) на невалидном hex — .expect в min_alpha_hex
     /// недостижим, парсинг падает раньше через `?`.
     #[test]
     fn hex_wrappers_roundtrip_and_reject_invalid_hex() {
