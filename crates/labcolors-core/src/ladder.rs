@@ -423,7 +423,11 @@ mod tests {
                 "neutral-border-soft",
             ),
             (LadderPosition::ShadowMinor, (0.012, 0.02), "shadow-minor"),
-            (LadderPosition::ShadowAmbient, (0.02, 0.039), "shadow-ambient"),
+            (
+                LadderPosition::ShadowAmbient,
+                (0.02, 0.039),
+                "shadow-ambient",
+            ),
             (
                 LadderPosition::ShadowPenumbra,
                 (0.039, 0.122),

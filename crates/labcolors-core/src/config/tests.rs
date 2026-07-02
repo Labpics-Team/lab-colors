@@ -1283,14 +1283,26 @@ fn representative_roles_match_stub_values_light_and_dark() {
         ),
         // Тени: тёмный якорь нейтрали (#101012) в ОБЕИХ темах, rgba by design —
         // солид над картинкой/стеклом закрывал бы контент пятном.
-        ("fx-shadow-minor", "rgb(16 16 18 / 0.012)", "rgb(16 16 18 / 0.02)"),
-        ("fx-shadow-ambient", "rgb(16 16 18 / 0.02)", "rgb(16 16 18 / 0.039)"),
+        (
+            "fx-shadow-minor",
+            "rgb(16 16 18 / 0.012)",
+            "rgb(16 16 18 / 0.02)",
+        ),
+        (
+            "fx-shadow-ambient",
+            "rgb(16 16 18 / 0.02)",
+            "rgb(16 16 18 / 0.039)",
+        ),
         (
             "fx-shadow-penumbra",
             "rgb(16 16 18 / 0.039)",
             "rgb(16 16 18 / 0.122)",
         ),
-        ("fx-shadow-major", "rgb(16 16 18 / 0.122)", "rgb(16 16 18 / 0.2)"),
+        (
+            "fx-shadow-major",
+            "rgb(16 16 18 / 0.122)",
+            "rgb(16 16 18 / 0.2)",
+        ),
         (
             "fx-glow-neutral",
             "rgb(255 255 255 / 0.522)",
