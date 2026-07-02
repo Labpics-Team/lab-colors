@@ -1011,9 +1011,8 @@ pub fn labui_reference() -> ThemeConfig {
         roles.extend(ladder_family(prefix, &mk));
     }
 
-    // FX focus-ring/glow: солид (focus/strong) и @52 (glow). Neutral-семья = family(blue?)
-    // нет — neutral focus/glow берёт нейтраль через семейство `blue`? Нет: FX-neutral
-    // — бренд-нейтральный акцент. По заземлению focus-ring/glow — солид/@52 источника.
+    // FX focus-ring (солид) и glow (@52). Источник `*-neutral` = бренд: labui
+    // трактует нейтральный фокус/свечение как приглушённый брендовый акцент.
     roles.push((
         "fx-focus-ring-brand".to_string(),
         brand_pos(LadderPosition::FocusRing),
@@ -1047,8 +1046,9 @@ pub fn labui_reference() -> ThemeConfig {
         "fx-glow-inverted".to_string(),
         brand_pos(LadderPosition::Glow),
     ));
-    // FX shadow/skeleton — не-акцентные: shadow-* уже эмитятся (fx-shadow-* = alias);
-    // skeleton — нейтральный fill-аналог. Эмитим как альфа-аналог нейтрали.
+    // Skeleton — нейтральная полупрозрачная заливка (base @4, highlight @8):
+    // лестница нейтрального семейства `blue`. (Тени эмитятся отдельно как
+    // shadow-*, которые labui читает через alias fx-shadow-*.)
     roles.push((
         "fx-skeleton-base".to_string(),
         fam_pos("blue", LadderPosition::FillTertiary),

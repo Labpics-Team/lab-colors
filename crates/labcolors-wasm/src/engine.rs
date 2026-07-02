@@ -148,6 +148,10 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
                       (config path, task t3)"
                 .to_string(),
         },
+        // ОСОЗНАННЫЙ ДОЛГ t3: `Resolved` — `#[non_exhaustive]`, поэтому catch-all
+        // обязателен для будущих вариантов ядра. Пока маппит в стабильный код,
+        // а не молча роняет неверный цвет; при экспорте rgba-границы (t3) каждый
+        // новый вариант должен получить явный арм выше, а не оседать сюда.
         _ => RoleOutcome::Unreachable {
             code: "unreachable",
             message: "unmapped resolved variant".to_string(),
