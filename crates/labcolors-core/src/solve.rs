@@ -287,6 +287,20 @@ impl BgInput {
             BgInput::Solid(rgb) => quantised_display(*rgb),
         }
     }
+
+    /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — то самое
+    /// device-пространство, в котором Figma/браузер композитят straight-alpha
+    /// ([`crate::alpha`]). Альфа-роль ([`crate::semantic::RoleSpec::Ladder`] /
+    /// [`AlphaAnalog`](crate::semantic::RoleSpec::AlphaAnalog)) композитит свой
+    /// тинт на этом фоне для честного замера контраста солид-эквивалента. Для
+    /// [`Solid`](BgInput::Solid) это квантованный дисплей-цвет фона; будущие
+    /// интервальные фоны выберут здесь свой представительный край, оставляя
+    /// физику резолва свободной от матчинга вариантов (SEAM a).
+    pub(crate) fn encoded_display(&self) -> [f64; 3] {
+        match self {
+            BgInput::Solid(rgb) => quantised_display(*rgb),
+        }
+    }
 }
 
 /// A background luminance interval in `Y_hk` space (H-K-corrected luminance).
@@ -2153,7 +2167,7 @@ mod tests {
             for (bg, target) in [("#FFFFFF", t), ("#000000", -t)] {
                 if let Ok((solved, measured)) = solve_and_measure(bg, target, &vc) {
                     checked += 1;
-                    // Symmetric budget — this is the guard CodeRabbit flagged: a
+                    // Symmetric budget — the guard this protects: a
                     // one-sided "not below floor" check would let an overshoot in.
                     assert!(
                         (measured - target).abs() <= TOL,
@@ -2566,6 +2580,8 @@ mod tests {
             .map(|(role, res)| {
                 let v = match res {
                     Resolved::Color { solved, .. } => solved.hex().to_string(),
+                    // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо здесь.
+                    Resolved::Rgba(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                     Resolved::None => "none".to_string(),
                     Resolved::Unreachable(_) => "unreach".to_string(),
                 };

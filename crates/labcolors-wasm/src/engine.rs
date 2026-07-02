@@ -136,6 +136,26 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             code: unreachable_code(&reason),
             message: reason.to_string(),
         },
+        // Полупрозрачные роли лестницы/альфа-аналога появляются только на
+        // конфиг-пути (`resolve_named_set`), который ЭТА поверхность ещё не
+        // экспортирует: `resolve_theme` идёт по встроенной `RoleTable`, где
+        // Ladder/AlphaAnalog-рецептов нет, поэтому вариант здесь недостижим.
+        // rgba-форма границы WASM ещё не экспортирована; до неё маппим в стабильный код,
+        // а не молчаливо роняем неверный цвет (`Resolved` теперь non_exhaustive).
+        Resolved::Rgba(_) => RoleOutcome::Unreachable {
+            code: "rgba_boundary_not_yet_exported",
+            message: "semi-transparent ladder/alpha-analog role is not exported by resolve_theme \
+                      (solid-only surface)"
+                .to_string(),
+        },
+        // ОСОЗНАННЫЙ ДОЛГ: `Resolved` — `#[non_exhaustive]`, поэтому catch-all
+        // обязателен для будущих вариантов ядра. Пока маппит в стабильный код,
+        // а не молча роняет неверный цвет; при экспорте rgba-границы каждый
+        // новый вариант должен получить явный арм выше, а не оседать сюда.
+        _ => RoleOutcome::Unreachable {
+            code: "unreachable",
+            message: "unmapped resolved variant".to_string(),
+        },
     }
 }
 

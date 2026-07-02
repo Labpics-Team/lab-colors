@@ -137,6 +137,7 @@
 //! [`RoleChroma::flat_neutral_tint`]; pure grey with [`RoleChroma::Neutral`];
 //! either via [`RoleTable::with_chroma`].
 
+use crate::ladder::LadderTint;
 use crate::scale;
 use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Hue, Solved, Unreachable};
 use crate::spaces::srgb::srgb_gamma;
@@ -179,20 +180,20 @@ const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 /// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
 /// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+pub(crate) const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+pub(crate) const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+pub(crate) const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
+pub(crate) const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
 /// (`border-strong` — заякоренная роль читаемости, не dJ'-шаг — её здесь нет.)
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+pub(crate) const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
-const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
+pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
 // ── Величины теней (Lc decorative — см. пояснение) ─────────────────────────────
 //
@@ -208,13 +209,13 @@ const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// самая сильная) — прогрессивная рампа FX/Shadow. Единица Lc, держится выше
 /// [`DECORATIVE_FLOOR_MIN`] с шагом между уровнями ≥1.5 Lc.
 // SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
-const SHADOW_MINOR_JND: f64 = 8.0;
+pub(crate) const SHADOW_MINOR_JND: f64 = 8.0;
 // SSOT-TRACKED — величина Lc стека теней.
-const SHADOW_AMBIENT_JND: f64 = 9.5;
+pub(crate) const SHADOW_AMBIENT_JND: f64 = 9.5;
 // SSOT-TRACKED — величина Lc стека теней.
-const SHADOW_PENUMBRA_JND: f64 = 11.5;
+pub(crate) const SHADOW_PENUMBRA_JND: f64 = 11.5;
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
-const SHADOW_MAJOR_JND: f64 = 14.0;
+pub(crate) const SHADOW_MAJOR_JND: f64 = 14.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
@@ -509,6 +510,47 @@ pub enum RoleSpec {
     /// source. The relative order between the shadow steps is the contract this
     /// variant carries; `surface-jnd` derives shadow contracts from the alphas.
     Decorative { magnitude: f64 },
+    /// Ступень лестницы акцента/сентимента/бренда/нейтрали: тинт-якорь источника
+    /// (по теме) при альфе позиции. Эмитит `rgba(tint, α)` НАПРЯМУЮ (закон
+    /// лестницы labui — композитит браузер, а не солид-эквивалент, см.
+    /// [`crate::ladder`]). Резолв — [`Resolved::Rgba`]: несёт тинт (то, что
+    /// красит `--lab-*`), альфу и солид-композит `α·tint + (1−α)·bg` на фоне
+    /// резолва для честного замера контраста (фаза 1 AA меряет композит).
+    ///
+    /// bg-независимость тинта (это якорь источника) — почему он `Copy`-payload
+    /// [`LadderTint`], разложенный по темам на этапе компиляции. Альфа — ПЕР-ТЕМНАЯ
+    /// пара `(light, dark)` данных позиции меню
+    /// ([`LadderPosition::alpha_pair`](crate::ladder::LadderPosition::alpha_pair)):
+    /// у акцентов пара равна, но скелетон-база пер-темна (стаб light @8 / dark @12),
+    /// поэтому альфа выбирается по теме резолва, как и тинт.
+    Ladder {
+        /// Пер-темный кодированный тинт (якорь источника).
+        tint: LadderTint,
+        /// Альфа для светлой темы (`(0, 1]`; солид = 1.0).
+        alpha_light: f64,
+        /// Альфа для тёмной темы (`(0, 1]`; у акцентов = `alpha_light`).
+        alpha_dark: f64,
+    },
+    /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
+    /// #119): для солид-цвета `of` (по теме) на фоне резолва подбирается
+    /// `(tint, α)`, чей композит равен солиду. Отличается от [`Ladder`](Self::Ladder)
+    /// тем, что здесь солид-цель ФИКСИРОВАНА (тинт выводится инверсией), а не
+    /// тинт-якорь эмитится напрямую. Даёт `-tinted`-роли labui (fill-*-tinted):
+    /// заливка, чей композит на подложке = соответствующий солид.
+    ///
+    /// Фактическая α возвращается явно ([`crate::alpha::AlphaAnalog::alpha`]): при
+    /// неразрешимой запрошенной α поднимается до `α_min` (композит остаётся точно
+    /// равным солиду — двигается прозрачность, не цвет; кламп тинта запрещён).
+    AlphaAnalog {
+        /// Пер-темный кодированный солид-источник, чей альфа-аналог берётся.
+        of: LadderTint,
+        /// Запрошенная альфа: `(0, 1]` — контракт РОЛИ (тот же предел, что у
+        /// конфиг-валидатора: α = 0 — невидимая роль, отказ честнее выдумки).
+        /// Уже: библиотечный [`crate::alpha::resolve_alpha_analog`] принимает
+        /// и `0.0` (вырожденный ответ tint=фон) — то его домен, не ролевой.
+        /// Поднимается до `α_min`, если запрошенная ниже разрешимой.
+        alpha: f64,
+    },
     /// The zero token: resolves to [`Resolved::None`].
     Zero,
 }
@@ -523,7 +565,7 @@ pub enum RoleSpec {
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
 // SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
-const NEUTRAL_HUE_DEG: f64 = 286.0;
+pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 
 /// Доля от максимальной хромы в гамуте, которую несёт тонированная роль.
 ///
@@ -538,7 +580,7 @@ const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// `0.10`: на белом `text-primary` резолвится в холодный почти-чёрный
 /// семейства `#101012`, а не в чистый серый.
 // SSOT-TRACKED — коэффициент хромы нейтрального подтона.
-const NEUTRAL_TINT_RATIO: f64 = 0.10;
+pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// Целевая перцептивная красочность (CAM16-UCS `M'`) по умолчанию, которую
 /// v2-кривая подтона держит по всей шкале светлоты — параметр "сила".
@@ -571,7 +613,7 @@ const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// (см. тест `curve_fits_reference_plateau_colorfulness` для количественного
 /// сравнения с референсом).
 // SSOT-TRACKED — целевой M' в CAM16-UCS.
-const TINT_TARGET_MP: f64 = 6.1;
+pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 
 /// Жёсткость притяжения оттенка к канонической точке по умолчанию для
 /// v2-кривой — второй (и последний) свободный скаляр. Чем выше значение, тем
@@ -585,7 +627,7 @@ const TINT_TARGET_MP: f64 = 6.1;
 /// почти-белую роль к каспу пурпурного (см. предел геометрии в
 /// [`cusp_attracted_hue`]).
 // SSOT-TRACKED — жёсткость прижатия оттенка к каспу.
-const TINT_HUE_STIFFNESS: f64 = 9.0;
+pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
 /// примерно этой красочности подтон попадает в "мёртвую серую зону" —
@@ -1067,6 +1109,7 @@ impl Default for RoleTable {
 /// background (e.g. muted text on a mid-grey that cannot supply enough contrast)
 /// returns [`Unreachable`], it is not silently clipped to a wrong colour.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Resolved {
     /// A solved colour for a text/UI or decorative role. `compressed` is `true`
     /// when the legal floor squeezed this role's target against its senior's so
@@ -1074,10 +1117,67 @@ pub enum Resolved {
     /// smallest distinguishable step below — an honest, flagged degradation
     /// rather than a silent two-roles-one-colour collapse. See the module docs.
     Color { solved: Solved, compressed: bool },
+    /// Полупрозрачная роль лестницы/альфа-аналога: `rgba(tint, α)`, которую
+    /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
+    /// Несёт солид-композит на фоне резолва для честного замера контраста.
+    Rgba(RgbaResolved),
     /// The honest zero of the [`Role::None`] token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
     Unreachable(Unreachable),
+}
+
+/// Резолв полупрозрачной роли: пара `(tint, α)` для прямой эмиссии `rgba(...)`
+/// плюс её солид-композит на фоне резолва для замера контраста.
+///
+/// Потребитель красит `--lab-{role}: rgba(tint, α)` — браузер композитит на
+/// фактической подложке. `composite` — то, во что этот rgba складывается на
+/// ФОНЕ РЕЗОЛВА (`α·tint + (1−α)·bg`, кодированный sRGB — device-пространство
+/// Figma/браузера); его контраст ([`RgbaResolved::composite_lc`],
+/// [`composite_wcag`](RgbaResolved::composite_wcag)) — то, что фаза 1 AA меряет
+/// (контраст полупрозрачной роли определён её композитом, не тинтом). На ином
+/// фоне композит другой — это и есть смысл альфы; гарантия сформулирована для
+/// фона резолва.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RgbaResolved {
+    /// Тинт `#RRGGBB` — цвет, эмитируемый как `rgba(tint, α)` (без учёта α).
+    tint_hex: String,
+    /// Фактическая α `(0, 1]` — запрошенная, если разрешима, иначе поднятая до
+    /// разрешимого минимума (для альфа-аналога; у прямой лестницы = альфа позиции).
+    alpha: f64,
+    /// Солид-композит `rgba(tint, α)` над фоном резолва, `#RRGGBB`.
+    composite_hex: String,
+    /// Знаковый перцептивный контраст `Lc` композита против фона резолва.
+    composite_lc: f64,
+    /// WCAG 2.1 контраст-отношение композита против фона резолва (1–21).
+    composite_wcag: f64,
+}
+
+impl RgbaResolved {
+    /// Тинт `#RRGGBB` — красится как `rgba(tint, α)`.
+    pub fn tint_hex(&self) -> &str {
+        &self.tint_hex
+    }
+
+    /// Фактическая альфа `(0, 1]`.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+
+    /// Солид-композит `#RRGGBB` над фоном резолва.
+    pub fn composite_hex(&self) -> &str {
+        &self.composite_hex
+    }
+
+    /// Знаковый `Lc` композита против фона резолва (метрика фазы 1 AA).
+    pub fn composite_lc(&self) -> f64 {
+        self.composite_lc
+    }
+
+    /// WCAG 2.1 контраст-отношение композита против фона резолва.
+    pub fn composite_wcag(&self) -> f64 {
+        self.composite_wcag
+    }
 }
 
 impl Resolved {
@@ -1112,12 +1212,24 @@ impl Resolved {
     }
 
     /// The signed perceptual contrast `Lc` of a resolved colour, if any. The
-    /// zero token reports `0.0`; an unreachable role reports `None`.
+    /// zero token reports `0.0`; an unreachable role reports `None`; a
+    /// [`Rgba`](Resolved::Rgba) role reports its **composite's** `Lc` (a
+    /// semi-transparent role's contrast is that of its composite, not its tint).
     pub fn lc(&self) -> Option<f64> {
         match self {
             Resolved::Color { solved, .. } => Some(solved.lc()),
+            Resolved::Rgba(r) => Some(r.composite_lc),
             Resolved::None => Some(0.0),
             Resolved::Unreachable(_) => Option::None,
+        }
+    }
+
+    /// The `(tint, α)` of a semi-transparent [`Rgba`](Resolved::Rgba) role, if this
+    /// resolved to one. `None` for solved-colour / zero / unreachable roles.
+    pub fn rgba(&self) -> Option<&RgbaResolved> {
+        match self {
+            Resolved::Rgba(r) => Some(r),
+            _ => Option::None,
         }
     }
 }
@@ -1222,6 +1334,13 @@ pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditio
 
 /// Resolve one role through an already-derived [`ResolveContext`], so a whole set
 /// shares one polarity and one maximum-contrast computation.
+///
+/// Thin wrapper over [`resolve_spec_in`]: it looks the role's recipe up in
+/// `table` and resolves that recipe. Keeping the recipe-driven physics in
+/// [`resolve_spec_in`] is the dependency-inversion seam — the config layer
+/// ([`NamedRoleTable`]) resolves the *same* recipe against the *same* physics
+/// without knowing about the [`Role`] enum, and the golden [`Role`] path stays a
+/// byte-for-byte-equivalent wrapper.
 fn resolve_in(
     bg: &BgInput,
     role: Role,
@@ -1229,7 +1348,26 @@ fn resolve_in(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> Resolved {
-    let contract = match table.spec(role) {
+    resolve_spec_in(bg, &table.spec(role), table.chroma(), vc, ctx)
+}
+
+/// Resolve one [`RoleSpec`] against `bg` under an already-derived
+/// [`ResolveContext`], applying `chroma` as the undertone policy.
+///
+/// This is the physics core the two front doors share: the [`Role`]-keyed
+/// [`resolve_in`] and the string-keyed [`resolve_named_set`]. It takes a `&RoleSpec`
+/// directly — not a [`Role`] — so a caller that names roles with arbitrary strings
+/// (the consumer config) resolves them through the identical code path as the
+/// built-in table. Nothing about the physics changes; only *where the recipe comes
+/// from* differs, which is exactly the seam ADR-0001 opens.
+fn resolve_spec_in(
+    bg: &BgInput,
+    spec: &RoleSpec,
+    chroma: RoleChroma,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Resolved {
+    let contract = match *spec {
         RoleSpec::Zero => return Resolved::None,
         RoleSpec::Anchor(anchor) => match ctx.anchored_contract(anchor) {
             Ok(c) => c,
@@ -1239,28 +1377,171 @@ fn resolve_in(
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
             // `solve_with_chroma`.
-            return match resolve_dj(
-                bg,
-                magnitude_dj.for_vc(vc),
-                ctx.polarity,
-                table.chroma(),
-                vc,
-            ) {
+            return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
                 Ok(solved) => Resolved::color(solved),
                 Err(reason) => Resolved::Unreachable(reason),
             };
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
+        RoleSpec::Ladder {
+            tint,
+            alpha_light,
+            alpha_dark,
+        } => {
+            // Лестница эмитит rgba(tint, α) НАПРЯМУЮ: тинт — якорь источника по
+            // теме (bg-независим), α — пер-темные данные позиции (light/dark).
+            // Композит на фоне резолва — для честного замера контраста
+            // (закон лестницы, `crate::ladder`).
+            let alpha = if vc.is_dark_theme() {
+                alpha_dark
+            } else {
+                alpha_light
+            };
+            return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
+        }
+        RoleSpec::AlphaAnalog { of, alpha } => {
+            // Альфа-аналог: солид-цель фиксирована (тинт источника по теме),
+            // тинт выводится композит-инверсией (`crate::alpha`, #119). Фактическая
+            // α поднимается до α_min, если запрошенная неразрешима в гамуте.
+            return resolve_rgba_inverted(of.for_vc(vc), alpha, bg, vc);
+        }
     };
 
     let interval = match &ctx.interval {
         Ok(iv) => *iv,
         Err(reason) => return Resolved::Unreachable(reason.clone()),
     };
-    match solve_with_chroma(bg, contract, table.chroma(), vc, interval) {
+    match solve_with_chroma(bg, contract, chroma, vc, interval) {
         Ok(solved) => Resolved::color(solved),
         Err(reason) => Resolved::Unreachable(reason),
     }
+}
+
+/// Лестница: rgba(`tint`, `alpha`) эмитится напрямую; его композит на фоне
+/// резолва замеряется для контраста. `tint` — кодированный (byte/255) sRGB.
+///
+/// Композитинг straight-alpha живёт в device-пространстве (гамма-кодированный
+/// sRGB) — тот же путь, что Figma/браузер ([`crate::alpha`]). Контраст меряется
+/// на КОМПОЗИТЕ (солид-эквивалент), не на тинте: контраст полупрозрачной роли
+/// определён тем, во что она складывается на подложке.
+/// Квантовать кодированный цвет до 8-битной сетки (hex-roundtrip без строки):
+/// эмиссия и замер обязаны считаться из одного — отдаваемого — значения.
+fn quantise_encoded(e: [f64; 3]) -> [f64; 3] {
+    let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() / 255.0;
+    [q(e[0]), q(e[1]), q(e[2])]
+}
+
+/// Валидный кодированный вход rgba-пути: конечные каналы [0,1] и α в (0,1].
+/// RoleSpec публичен — спека, собранная в обход валидатора конфига, не должна
+/// давать правдоподобный мусор: невалидный вход честно резолвится в
+/// Unreachable, не в тихий кламп.
+fn rgba_input_valid(tint_encoded: [f64; 3], alpha: f64) -> bool {
+    tint_encoded
+        .iter()
+        .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+        && alpha.is_finite()
+        && alpha > 0.0
+        && alpha <= 1.0
+}
+
+fn resolve_rgba_direct(
+    tint_encoded: [f64; 3],
+    alpha: f64,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+) -> Resolved {
+    if !rgba_input_valid(tint_encoded, alpha) {
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "rgba-спека вне домена (тинт [0,1], α (0,1]) — сборка в обход валидатора".into(),
+        ));
+    }
+    let bg_encoded = bg.encoded_display();
+    // Тинт квантуется ДО композита: наружу уходит 8-битный tint_hex, и браузер
+    // скомпозитит именно его — замер обязан считаться из эмитируемого значения,
+    // иначе composite_hex/Lc/WCAG расходились бы с CSS-результатом на LSB.
+    let tint_q = quantise_encoded(tint_encoded);
+    let composite = crate::alpha::composite_over_encoded(tint_q, alpha, bg_encoded);
+    finish_rgba(tint_q, alpha, composite, bg_encoded, vc)
+}
+
+/// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
+/// инвертируется в `(tint, фактическая α)` через [`crate::alpha::resolve_alpha_analog`].
+/// Композит фактической пары равен солиду ПО ПОСТРОЕНИЮ, поэтому контраст
+/// наследуется солидом; замер идёт на этом композите. `None`-инверсия
+/// (вход вне гамута) физически недостижима — солид-тинт по теме всегда в гамуте.
+fn resolve_rgba_inverted(
+    solid_encoded: [f64; 3],
+    requested_alpha: f64,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+) -> Resolved {
+    // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен, а резолвер
+    // инверсии клампит запрошенную α — недоменная спека, собранная в обход
+    // валидатора конфига, стала бы правдоподобным hex вместо честного отказа.
+    if !rgba_input_valid(solid_encoded, requested_alpha) {
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "alpha-analog-спека вне домена (солид [0,1], α (0,1]) — сборка в обход валидатора"
+                .into(),
+        ));
+    }
+    let bg_encoded = bg.encoded_display();
+    let Some(analog) =
+        crate::alpha::resolve_alpha_analog(solid_encoded, requested_alpha, bg_encoded)
+    else {
+        // Тинт источника по теме — валидный кодированный цвет byte/255, поэтому
+        // домен инверсии не нарушается; None здесь означал бы мусорный вход.
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "alpha-analog source out of encoded sRGB domain".to_string(),
+        ));
+    };
+    // Тинт инверсии квантуется до композита (см. resolve_rgba_direct: замер из
+    // эмитируемого значения — браузер скомпозитит 8-битный tint_hex). Композит
+    // пересчитывается от квантованного тинта; равенство солиду держится в
+    // пределах LSB-границы квантования (#119).
+    let tint_q = quantise_encoded(analog.tint);
+    let composite = crate::alpha::composite_over_encoded(tint_q, analog.alpha, bg_encoded);
+    finish_rgba(tint_q, analog.alpha, composite, bg_encoded, vc)
+}
+
+/// Собрать [`Resolved::Rgba`] из тинта, альфы и композита: квантовать тинт и
+/// композит до hex, замерить контраст композита против фона резолва.
+///
+/// Контраст меряется в тех же метриках, что и у солид-роли: перцептивный `Lc`
+/// на линейном свете ([`measure_contrast`]) и WCAG на кодированном дисплее — так
+/// rgba-роль сопоставима с solved-ролью на фазе 1 AA.
+fn finish_rgba(
+    tint_encoded: [f64; 3],
+    alpha: f64,
+    composite_encoded: [f64; 3],
+    bg_encoded: [f64; 3],
+    vc: &ViewingConditions,
+) -> Resolved {
+    use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
+    // Замер идёт по КВАНТОВАННОМУ композиту — тому же 8-битному hex, который
+    // уходит наружу (закон движка: честный dJ' меряется на отданном цвете,
+    // как в solve_dj; неквантованный замер расходился бы с отданным на LSB).
+    let composite_hex = hex_from_srgb_encoded(composite_encoded);
+    let composite_q =
+        srgb_encoded_from_hex(&composite_hex).expect("hex собственного форматтера всегда валиден");
+    // Линейный свет из кодированного (per-channel gamma-декод) для перцептивного Lc.
+    let decode = |e: [f64; 3]| {
+        [
+            srgb_gamma_inv(e[0]),
+            srgb_gamma_inv(e[1]),
+            srgb_gamma_inv(e[2]),
+        ]
+    };
+    let composite_linear = decode(composite_q);
+    let bg_linear = decode(bg_encoded);
+    let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
+    let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
+    Resolved::Rgba(RgbaResolved {
+        tint_hex: hex_from_srgb_encoded(tint_encoded),
+        alpha,
+        composite_hex,
+        composite_lc,
+        composite_wcag,
+    })
 }
 
 /// Solve `contract` against `bg` under `chroma`, building the undertone the
@@ -1430,6 +1711,101 @@ pub(crate) fn resolve_set_live(
         .collect();
     enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
     set
+}
+
+/// A recipe table keyed by **arbitrary string names**, the config-layer analogue
+/// of [`RoleTable`].
+///
+/// Where [`RoleTable`] carries the fixed v1 [`Role`] enum, `NamedRoleTable` carries
+/// whatever role *names* a consumer's [`ThemeConfig`](crate::config::ThemeConfig)
+/// declares — the engine knows none of them. It is built from a config via
+/// [`from_config`](crate::config::ThemeConfig::compile_named_role_table) and
+/// resolved by [`resolve_named_set`]. The physics is identical to [`RoleTable`]'s:
+/// each entry is the same [`RoleSpec`] the built-in path solves, and the same
+/// [`RoleChroma`] undertone applies to the whole table.
+///
+/// v1 note: this table carries **no hierarchy-compression pass**. That pass
+/// ([`enforce_text_hierarchy`]) walks the *typed* label ladder
+/// (`LabelPrimary..Quaternary`), which is meaningless for arbitrary names; the
+/// byte-identity guarantee for the labui fixture holds because every one of its
+/// text roles is individually reachable on the golden grid (so the pass is a no-op
+/// there — see the byte-identity test). A general consumer table with a squeezed
+/// mid-grey background would resolve each role in isolation, exactly as
+/// [`resolve`] does for a single role.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedRoleTable {
+    entries: Vec<(String, RoleSpec)>,
+    aliases: Vec<(String, String)>,
+    chroma: RoleChroma,
+}
+
+impl NamedRoleTable {
+    /// Build a named table from its `(name, recipe)` entries and an undertone
+    /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
+    /// constructor does not validate them — the config validator
+    /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
+    pub fn new(
+        entries: Vec<(String, RoleSpec)>,
+        aliases: Vec<(String, String)>,
+        chroma: RoleChroma,
+    ) -> Self {
+        Self {
+            entries,
+            aliases,
+            chroma,
+        }
+    }
+
+    /// Алиасы `(имя, цель)` — эмитируются потребителем как CSS-ссылка
+    /// `--lab-{имя}: var(--lab-{цель})` (одна истина значения, ноль копий);
+    /// без переноса сюда алиасные роли контракта терялись бы при компиляции.
+    pub fn aliases(&self) -> &[(String, String)] {
+        &self.aliases
+    }
+
+    /// The `(name, recipe)` entries, in declaration order.
+    pub fn entries(&self) -> &[(String, RoleSpec)] {
+        &self.entries
+    }
+
+    /// The undertone policy applied to every role in this table.
+    pub fn chroma(&self) -> RoleChroma {
+        self.chroma
+    }
+}
+
+/// Resolve every named role in `table` against `bg` under `vc`, in declaration
+/// order — the string-keyed sibling of [`resolve_set`].
+///
+/// Each `(name, recipe)` pair resolves through the very same [`resolve_spec_in`]
+/// physics core the built-in [`resolve_set`] uses, so a config whose recipes match
+/// the built-in table emits byte-for-byte identical colours (the byte-identity
+/// guarantee ADR-0001 requires of the labui fixture). The returned pairs preserve
+/// declaration order so a serialiser emits stable output.
+///
+/// Unlike [`resolve_set`], this takes no O(1) grey/chromatic fast path (those are
+/// keyed on the built-in default table) and runs no label-ladder compression pass
+/// (see [`NamedRoleTable`]); it is the honest live sweep for an arbitrary table.
+pub fn resolve_named_set(
+    bg: &BgInput,
+    table: &NamedRoleTable,
+    vc: &ViewingConditions,
+) -> Vec<(String, Resolved)> {
+    // One CIECAM16 forward-cache for the span of this sweep, mirroring
+    // `resolve_set_live`: the curve refine fixed-point and repeated lightnesses
+    // across roles hit the cache instead of recomputing.
+    let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
+    let ctx = ResolveContext::new(bg, vc);
+    table
+        .entries
+        .iter()
+        .map(|(name, spec)| {
+            (
+                name.clone(),
+                resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+            )
+        })
+        .collect()
 }
 
 /// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
@@ -2719,6 +3095,13 @@ mod tests {
                         }
                     }
                     Resolved::None => matches!(table.spec(*role), RoleSpec::Zero),
+                    // Дефолтная таблица не несёт Ladder/AlphaAnalog — появление
+                    // Rgba здесь означало бы дрейф default() и обязано падать
+                    // шумно, а не маскироваться под «не клип».
+                    Resolved::Rgba(_) => panic!(
+                        "{bg_hex}: RoleTable::default() отдал Rgba для {:?} — дрейф дефолт-таблицы",
+                        role
+                    ),
                     Resolved::Unreachable(_) => true,
                 });
                 assert!(
@@ -3632,6 +4015,8 @@ mod tests {
                 for (role, res) in &set {
                     let got = match res {
                         Resolved::Color { solved, .. } => solved.hex().to_string(),
+                        // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо.
+                        Resolved::Rgba(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                         Resolved::None => "none".to_string(),
                         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
                     };

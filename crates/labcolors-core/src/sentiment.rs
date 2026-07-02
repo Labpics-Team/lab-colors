@@ -5,7 +5,9 @@ use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{jp_to_oklab_l, max_chroma};
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz};
+use crate::spaces::srgb::{
+    hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_from_hex, srgb_to_xyz,
+};
 use crate::spaces::vc::ViewingConditions;
 
 /// Перцептивный минимум разделения между оттенком сентимента и брендовым
@@ -448,6 +450,51 @@ fn resolve_smooth_hue(
     params: SentimentParams,
     s_min: f64,
 ) -> Result<f64, String> {
+    resolve_smooth_hue_explicit(
+        sentiment.preferred_side(),
+        sentiment.hue_floor(),
+        prototype,
+        brand_hue,
+        params,
+        s_min,
+    )
+}
+
+/// Config-facing sibling of [`resolve_smooth_hue`] that takes the categorical
+/// policy (`preferred_side`, `hue_floor`) explicitly instead of reading it off the
+/// fixed [`Sentiment`] enum — so an arbitrary consumer sentiment category
+/// ([`crate::config::SentimentCategory`]) resolves through the identical smooth
+/// p-norm displacement + legality guard, no second copy of the physics.
+///
+/// `prototype`, `brand_hue` and the result are **Oklab hue degrees**. See
+/// [`resolve_smooth_hue`] / [`SentimentCurve::with_params`] for the model.
+///
+/// # Errors
+///
+/// `Err` if no hue satisfies both the floor and the separation invariant
+/// (empty legal arc), or if any angular input is outside its domain
+/// (non-finite `prototype`/`brand_hue`, `s_min` outside `[0, 180]`,
+/// `hue_floor` outside `[0, 360)`) — never a silent breach.
+pub fn resolve_smooth_hue_explicit(
+    preferred_side: f64,
+    hue_floor: Option<f64>,
+    prototype: f64,
+    brand_hue: f64,
+    params: SentimentParams,
+    s_min: f64,
+) -> Result<f64, String> {
+    // Домен публичного входа: NaN/inf в signed_delta/smooth_separation дали бы
+    // NaN-оттенок вниз по физике, а скан legalize_hue на NaN не завершается
+    // осмысленно — честный Err вместо тихого мусора.
+    if !(prototype.is_finite() && brand_hue.is_finite()) {
+        return Err(format!(
+            "углы вне домена (конечные): prototype={prototype}, brand_hue={brand_hue}"
+        ));
+    }
+    if !(s_min.is_finite() && (0.0..=180.0).contains(&s_min)) {
+        return Err(format!("s_min вне домена [0, 180]: {s_min}"));
+    }
+    check_hue_floor_domain(hue_floor)?;
     // Signed shortest delta from prototype to brand. Its sign tells us which side
     // of the brand the prototype sits on; we push the resolved hue out along that
     // same side, away from the brand.
@@ -461,17 +508,19 @@ fn resolve_smooth_hue(
         (1.0, params.p_high)
     } else {
         // Degenerate seam: brand exactly on the prototype. Pick the preferred side.
-        let pref = sentiment.preferred_side();
-        let p = if pref >= 0.0 {
+        // Нормализация до ±1: публичный вход мог передать произвольный f64, а это
+        // МНОЖИТЕЛЬ направления, не масштаб (0/NaN трактуем как +1 — дефолт).
+        let side = if preferred_side < 0.0 { -1.0 } else { 1.0 };
+        let p = if side >= 0.0 {
             params.p_high
         } else {
             params.p_low
         };
-        (pref, p)
+        (side, p)
     };
 
     let s = smooth_separation(d, s_min, p);
-    let floor = sentiment.hue_floor();
+    let floor = hue_floor;
 
     // The prototype-ward displacement is the natural target (it decays to the
     // prototype as the brand recedes).
@@ -544,6 +593,19 @@ fn is_legal_hue(h: f64, brand_hue: f64, floor: Option<f64>, s_min: f64) -> bool 
 }
 
 /// Signed shortest delta from `from` to `h` in (-180, 180].
+/// Домен-гард пола оттенка: единая проверка для обоих публичных входов
+/// (валидатор конфига и солвер) — дублированный блок разошёлся бы тихо,
+/// ровно как разошлись бы независимые литералы одного домена.
+fn check_hue_floor_domain(hue_floor: Option<f64>) -> Result<(), String> {
+    if let Some(floor) = hue_floor
+        && !(floor.is_finite()
+            && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&floor))
+    {
+        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
+    }
+    Ok(())
+}
+
 fn signed_delta(h: f64, from: f64) -> f64 {
     ((h - from + 180.0).rem_euclid(360.0)) - 180.0
 }
@@ -555,6 +617,190 @@ fn normalize_hue(h: f64) -> f64 {
 fn angular_distance(a: f64, b: f64) -> f64 {
     let diff = (a - b).rem_euclid(360.0);
     if diff > 180.0 { 360.0 - diff } else { diff }
+}
+
+/// Категориальный порог оттенка `S_PERC_MIN` (длина хорды Oklab a/b),
+/// пересчитанный из хром сентимент-якорей конфига по закону
+/// `2·C_rep·sin(20°/2)`, где `C_rep` — среднее хром.
+///
+/// `20°` — нижний предел категориального восприятия (Witzel & Gegenfurtner 2013,
+/// JOSA A 30(7):1501). При labui-якорях (хромы Red/Orange/Green/Blue) результат
+/// совпадает с замороженной константой [`S_PERC_MIN`] (`0.068_703_9`,
+/// деривационная идентичность — тестом, допуск 1e-4): формула остаётся законом
+/// при произвольных якорях клиента, а сегодняшнее значение — её частный случай.
+///
+/// Пустой срез хром даёт `0.0` (нет сентиментов — нет порога разделения).
+pub fn s_perc_min_from_chromas(chromas: &[f64]) -> f64 {
+    if chromas.is_empty() {
+        return 0.0;
+    }
+    let c_rep = chromas.iter().sum::<f64>() / chromas.len() as f64;
+    // Хорда длины 2·C·sin(Δh/2) при Δh = 20° — тот же категориальный порог
+    // (Witzel & Gegenfurtner 2013), что в деривации [`S_PERC_MIN`]; инлайн
+    // (не именованная const), т.к. это derivation-identity вход, не новый
+    // POLICY-литерал — provenance держит doc [`S_PERC_MIN`].
+    2.0 * c_rep * (20.0_f64.to_radians() / 2.0).sin()
+}
+
+/// Замороженное значение `S_PERC_MIN` (для теста деривационной идентичности).
+/// Возвращается функцией (не `const`), чтобы не заводить второй POLICY-литерал в
+/// аудите реестра — это тот же derivation-identity, что [`S_PERC_MIN`].
+pub fn s_perc_min_frozen() -> f64 {
+    S_PERC_MIN
+}
+
+/// Технический порог числовой определённости оттенка: ниже него atan2 в
+/// [`oklab_hue_of`] математически не определён (не перцептивная величина —
+/// защита от произвольного 0°, не политика). Дом константы — здесь, рядом с
+/// законом «нет носителя оттенка → нет разведения»; конфиг-гарды
+/// (`crate::config`) ссылаются сюда же.
+///
+/// Провенанс ε: минимум ненулевой Oklab-хромы 8-битного цвета ≈ 1.1e-3
+/// (#FEFFFF; #808081 ≈ 1.5e-3), f64-шум конвейера sRGB→Oklab ≲ 1e-12;
+/// 1e-7 лежит между ними с запасом ≥4 порядка в обе стороны — не может
+/// переклассифицировать ни один представимый цвет.
+// SSOT-TRACKED — арифметика представимости (деривация закрыта, внешнего стандарта не существует): границы в docs/empirical-inventory.md.
+pub(crate) const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
+
+/// Канонический домен угла оттенка (градусы): `[0, 360)` — угол по модулю
+/// 360°, где 360° ≡ 0°. Единые границы для `hue_floor`/`hue_override`
+/// валидатора конфига и гардов солвера: два независимых литерала одного
+/// домена в цветовом коде — класс тихого расхождения пределов.
+// SSOT-TRACKED — определение домена: угол по модулю 360°, не перцептивная политика (реестр, строка 39).
+pub(crate) const HUE_DOMAIN_MIN_INCLUSIVE: f64 = 0.0;
+/// Верхняя граница канонического домена оттенка (исключительно; 360° ≡ 0°).
+// SSOT-TRACKED — определение домена: полный оборот окружности, не перцептивная политика (реестр, строка 40).
+pub(crate) const HUE_DOMAIN_MAX_EXCLUSIVE: f64 = 360.0;
+
+/// Config-facing сентимент-солид: якорь семейства, чей оттенок разведён с брендом
+/// сентимент-солвером, при СОХРАНЁННЫХ светлоте и хроме якоря.
+///
+/// Тинт лестницы сентимента: берётся оттенок семейства,
+/// смещённый от бренда через [`resolve_smooth_hue_explicit`] (тот же C¹-солвер,
+/// что у [`SentimentCurve`]), но светлота/хрома — исходного якоря. Когда
+/// смещение не нужно (`resolved_hue == prototype`, случай labui-бренда), солид
+/// воспроизводит СЫРОЙ якорь семейства — это и есть деривационная идентичность,
+/// которую фиксирует тест. `brand_hue` — Oklab-оттенок бренда (градусы).
+///
+/// # Errors
+///
+/// `Err`, если якорь невалиден, `brand_hue`/`hue_floor` вне домена (конечный
+/// угол; пол — в `[0, 360)`, те же пределы, что у конфиг-валидатора),
+/// легальный оттенок геометрически пуст (см. [`resolve_smooth_hue_explicit`])
+/// или порог `s_perc_min` не конечен (см. [`s_min_deg_from_chord`]).
+pub fn resolve_config_sentiment_solid(
+    family_anchor_hex: &str,
+    brand_hue: f64,
+    hardness: f64,
+    chroma_fraction: f64,
+    hue_floor: Option<f64>,
+    preferred_side: f64,
+    s_perc_min: f64,
+) -> Result<String, String> {
+    let _ = chroma_fraction; // хрома тинта = хрома якоря (сохраняем солид якоря);
+    // chroma_fraction — ручка рампы SentimentCurve, не тинта; принимается для
+    // единообразия сигнатуры конфига, но тинт держит фактическую хрому якоря.
+    //
+    // Публичная граница: конфиг-путь передаёт сюда уже валидированные углы, но
+    // прямой вызов мог бы протащить NaN в сатурированную ветку мимо солвера —
+    // прямо в oklab_lc_to_hex, тихим неверным hex.
+    if !brand_hue.is_finite() {
+        return Err(format!("brand_hue вне домена (конечный угол): {brand_hue}"));
+    }
+    check_hue_floor_domain(hue_floor)?;
+    // Валидация ручек — ДО любого раннего возврата: ахроматичный fast path
+    // ниже не решает по hardness/s_perc_min, но недоменная ручка остаётся
+    // ошибкой вызова, а не «повезло с серым якорем» (иначе один и тот же
+    // мусорный вход то принимался бы, то отвергался в зависимости от цвета).
+    let params = SentimentParams::uniform(hardness)?;
+    if !(s_perc_min.is_finite() && s_perc_min >= 0.0) {
+        return Err(format!(
+            "s_perc_min вне домена (конечный неотрицательный): {s_perc_min}"
+        ));
+    }
+    let anchor_lab = srgb_linear_to_oklab(srgb_from_hex(family_anchor_hex)?);
+    let l_anchor = anchor_lab[0];
+    let c_anchor = (anchor_lab[1].powi(2) + anchor_lab[2].powi(2)).sqrt();
+    // Ахроматичный якорь не несёт оттенка (prototype = atan2(0,0) — числовой
+    // произвол), а хорда разведения 2·C·sin(Δh/2) при C≈0 перцептивно пуста:
+    // тот же закон, что для серого бренда (`config::compile_sentiment_tint`) —
+    // нет носителя оттенка → нет разведения, солид = сырой якорь
+    // (байт-в-байт, нормализованный через encoded-roundtrip).
+    if c_anchor < ACHROMATIC_CHROMA_EPS {
+        return Ok(hex_from_srgb_encoded(srgb_encoded_from_hex(
+            family_anchor_hex,
+        )?));
+    }
+    let prototype = oklab_hue_of(family_anchor_hex);
+    // Порог разделения — ТОЛЬКО из конфиг-порога (s_perc_min пересчитан из
+    // якорей клиента): подмешивание замороженного labui-S_PERC_MIN через
+    // s_min_deg() завышало бы угол низкохромным палитрам чужим порогом
+    // (могло опустошить legal arc) — закон обязан быть чистым по конфигу.
+    let effective_s_min = s_min_deg_from_chord(s_perc_min, c_anchor)?;
+    // Сатурация порога (180° ⇔ chord ≥ 2C): требуемая хорда недостижима ни
+    // одним углом — ограничение вырождено, ответ аналитический: максимум
+    // разведения на легальной дуге («максимально приближенный приемлемый»,
+    // не отказ). Пол, блокирующий диаметраль: легальная дуга [floor, 360°) —
+    // берётся её граница с БОЛЬШИМ разведением от бренда (не всегда floor);
+    // верхняя граница открыта, берётся достижимая точка 360⁻ на суб-LSB
+    // отступе (1e-9° много ниже углового разрешения 8-бит квантования hex).
+    if effective_s_min >= 180.0 {
+        let diametric = normalize_hue(brand_hue + 180.0);
+        let resolved = match hue_floor {
+            Some(floor) if diametric < floor => {
+                let upper = 360.0 - 1e-9;
+                if angular_distance(upper, brand_hue) > angular_distance(floor, brand_hue) {
+                    upper
+                } else {
+                    floor
+                }
+            }
+            _ => diametric,
+        };
+        return Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved));
+    }
+    let resolved_hue = resolve_smooth_hue_explicit(
+        preferred_side,
+        hue_floor,
+        prototype,
+        brand_hue,
+        params,
+        effective_s_min,
+    )?;
+    // Солид на исходных L/C якоря, смещённый оттенок.
+    Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved_hue))
+}
+
+/// Перевести целевую хорду разделения `chord` в угол оттенка (градусы) при
+/// хроме `zone_chroma` — та же инверсия `2·C·sin(Δh/2)`, что [`s_min_deg`], но с
+/// произвольной хордой (для конфиг-`S_PERC_MIN`).
+///
+/// При `chord ≥ 2·zone_chroma` порог недостижим НИ ОДНИМ углом (хорда
+/// окружности радиуса C ограничена диаметром 2C): возвращается ровно 180° —
+/// маркер сатурации. Вызывающий ОБЯЗАН обработать 180° аналитически
+/// (диаметральный оттенок = максимум разведения), НЕ передавая его p-норм
+/// солверу: `smooth_separation ≥ s_min` перелетает диаметраль, легальное
+/// множество вырождается в точку меры нуль, и скан-сетка `legalize_hue`
+/// (шаг 0.05°) её не находит — получился бы ложный «пустая дуга». Случай
+/// реален: приглушённый якорь (тёмная тема) при хромных соседях — средняя
+/// хорда категорий превышает диаметр одного якоря.
+///
+/// # Errors
+///
+/// `Err` на неконечных/отрицательных входах и `zone_chroma ≤ 0` — вызывающий
+/// обязан отсечь ахроматичную зону гардом [`ACHROMATIC_CHROMA_EPS`] до
+/// инверсии хорды (asin от NaN-отношения дал бы NaN-градусы дальше по физике).
+fn s_min_deg_from_chord(chord: f64, zone_chroma: f64) -> Result<f64, String> {
+    if !(chord.is_finite() && zone_chroma.is_finite() && chord >= 0.0 && zone_chroma > 0.0) {
+        return Err(format!(
+            "инверсия хорды вне домена: chord={chord}, zone_chroma={zone_chroma}"
+        ));
+    }
+    let ratio = chord / (2.0 * zone_chroma);
+    if ratio >= 1.0 {
+        return Ok(180.0);
+    }
+    Ok(2.0 * ratio.asin().to_degrees())
 }
 
 /// The in-gamut sRGB hex at Oklab `(L, C, h)`, channels clamped to `[0, 1]`.
@@ -993,5 +1239,157 @@ mod tests {
              (разница {:.7} >= 1e-4; значение должно совпадать с Figma-деривацией)",
             (S_PERC_MIN - derived).abs()
         );
+    }
+
+    /// Инверсия хорды: достижимый порог строго внутри (0, 180°); сатурация
+    /// (chord ≥ 2C) — маркер ровно 180°; мусор-входы — честный Err, не
+    /// NaN-градусы дальше по физике.
+    #[test]
+    fn chord_inversion_saturates_and_rejects_garbage() {
+        let deg = s_min_deg_from_chord(0.05, 0.1).expect("достижимая хорда");
+        assert!(deg > 0.0 && deg < 180.0, "0 < {deg} < 180");
+        // Ровно диаметр и выше — маркер сатурации.
+        assert_eq!(s_min_deg_from_chord(0.2, 0.1).unwrap(), 180.0);
+        assert_eq!(s_min_deg_from_chord(0.5, 0.1).unwrap(), 180.0);
+        for (chord, zone) in [
+            (f64::NAN, 0.1),
+            (0.1, f64::NAN),
+            (f64::INFINITY, 0.1),
+            (-0.1, 0.1),
+            (0.1, 0.0),
+            (0.1, -0.1),
+        ] {
+            assert!(
+                s_min_deg_from_chord(chord, zone).is_err(),
+                "({chord}, {zone}) обязана быть отвергнута"
+            );
+        }
+    }
+
+    /// Сатурированный порог (хорда недостижима ни одним углом) резолвится
+    /// аналитически в диаметральный оттенок — максимум разведения, не ложный
+    /// «пустая дуга» от скан-сетки и не тихое меньшее разведение.
+    #[test]
+    fn saturated_chord_resolves_to_diametric_hue() {
+        // Ассерт байт-в-байт против аналитического закона (солид = якорные L/C
+        // на целевом оттенке): угол ПОСЛЕ hex-эмиссии сравнивать нельзя —
+        // гамут-клип каналов и 8-бит квантование легитимно смещают его
+        // (пре-существующий контракт oklab_lc_to_hex).
+        let anchor = "#FF3B30";
+        let brand_hue = 100.0;
+        let lab = srgb_linear_to_oklab(srgb_from_hex(anchor).unwrap());
+        let (l, c) = (lab[0], (lab[1].powi(2) + lab[2].powi(2)).sqrt());
+
+        // s_perc_min = 1.0 — заведомо больше диаметра 2C любого sRGB-цвета.
+        let solid = resolve_config_sentiment_solid(anchor, brand_hue, 4.0, 1.0, None, 1.0, 1.0)
+            .expect("сатурация — не отказ");
+        let diametric = normalize_hue(brand_hue + 180.0);
+        assert_eq!(
+            solid,
+            oklab_lc_to_hex(l, c, diametric),
+            "сатурация → диаметраль (максимум разведения) на якорных L/C"
+        );
+
+        // Пол, блокирующий диаметраль (brand 100° → диаметраль 280° < 300°):
+        // разведение у floor=300 (160°) больше, чем у 360⁻ (100°) → floor.
+        let floored =
+            resolve_config_sentiment_solid(anchor, brand_hue, 4.0, 1.0, Some(300.0), 1.0, 1.0)
+                .expect("пол при сатурации — не отказ");
+        assert_eq!(
+            floored,
+            oklab_lc_to_hex(l, c, 300.0),
+            "при полу 300° максимум разведения — граница пола"
+        );
+
+        // Зеркальный корпус: brand 185° → диаметраль 5° < пола 350°; разведение
+        // у 360⁻ (175°) БОЛЬШЕ, чем у floor=350 (165°) → верхняя граница дуги.
+        let upper = resolve_config_sentiment_solid(anchor, 185.0, 4.0, 1.0, Some(350.0), 1.0, 1.0)
+            .expect("пол при сатурации — не отказ");
+        assert_eq!(
+            upper,
+            oklab_lc_to_hex(l, c, 360.0 - 1e-9),
+            "максимум разведения на дуге [350,360) — верхняя граница, не floor"
+        );
+    }
+
+    /// Публичная граница `resolve_config_sentiment_solid`: неконечный
+    /// `brand_hue` и недоменный `hue_floor` — честный Err, не тихий hex
+    /// (в сатурированной ветке NaN уходил бы прямо в oklab_lc_to_hex).
+    #[test]
+    fn config_sentiment_public_boundary_rejects_garbage_angles() {
+        for bad_brand in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                resolve_config_sentiment_solid("#FF3B30", bad_brand, 4.0, 1.0, None, 1.0, 0.06)
+                    .is_err(),
+                "brand_hue={bad_brand} обязан быть отвергнут"
+            );
+        }
+        for bad_floor in [f64::NAN, -1.0, 360.0, f64::INFINITY] {
+            assert!(
+                resolve_config_sentiment_solid(
+                    "#FF3B30",
+                    28.0,
+                    4.0,
+                    1.0,
+                    Some(bad_floor),
+                    1.0,
+                    0.06
+                )
+                .is_err(),
+                "hue_floor={bad_floor} обязан быть отвергнут"
+            );
+        }
+    }
+
+    /// Ахроматичный якорь семейства не несёт оттенка: разведение отключается
+    /// честно — солид равен сырому якорю (тот же закон, что серый бренд).
+    /// Fast path НЕ обходит валидацию ручек: недоменные hardness/s_perc_min
+    /// отвергаются и на сером якоре — мусорный вход не может «повезти»
+    /// в зависимости от цвета.
+    #[test]
+    fn achromatic_family_anchor_returns_raw_anchor() {
+        let solid = resolve_config_sentiment_solid("#808080", 28.0, 4.0, 1.0, None, 1.0, 0.06)
+            .expect("серый якорь легален");
+        assert_eq!(solid, "#808080", "серый якорь возвращается байт-в-байт");
+
+        for (hardness, s_perc_min) in [
+            (0.5, 0.06),
+            (f64::NAN, 0.06),
+            (4.0, f64::NAN),
+            (4.0, -0.01),
+            (4.0, f64::INFINITY),
+        ] {
+            assert!(
+                resolve_config_sentiment_solid(
+                    "#808080", 28.0, hardness, 1.0, None, 1.0, s_perc_min
+                )
+                .is_err(),
+                "(hardness={hardness}, s_perc_min={s_perc_min}) обязаны отвергаться и на сером"
+            );
+        }
+    }
+
+    /// Домен публичного `resolve_smooth_hue_explicit`: неконечные углы,
+    /// `s_min` вне [0, 180] и пол вне [0, 360) — честный Err, не NaN-оттенок.
+    #[test]
+    fn smooth_hue_explicit_rejects_garbage_domain() {
+        let params = SentimentParams::uniform(4.0).unwrap();
+        let cases: &[(f64, f64, Option<f64>, f64)] = &[
+            (f64::NAN, 28.0, None, 10.0),
+            (68.0, f64::INFINITY, None, 10.0),
+            (68.0, 28.0, None, f64::NAN),
+            (68.0, 28.0, None, -1.0),
+            (68.0, 28.0, None, 180.0 + 1e-9),
+            (68.0, 28.0, Some(360.0), 10.0),
+            (68.0, 28.0, Some(f64::NAN), 10.0),
+        ];
+        for &(prototype, brand, floor, s_min) in cases {
+            assert!(
+                resolve_smooth_hue_explicit(1.0, floor, prototype, brand, params, s_min).is_err(),
+                "(prototype={prototype}, brand={brand}, floor={floor:?}, s_min={s_min})"
+            );
+        }
+        // Валидный вход по-прежнему резолвится.
+        assert!(resolve_smooth_hue_explicit(1.0, None, 68.0, 28.0, params, 10.0).is_ok());
     }
 }

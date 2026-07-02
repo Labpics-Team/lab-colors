@@ -256,6 +256,12 @@ fn run_cargo_check(args: &[&str]) -> (bool, String) {
 ///
 /// GREEN at birth (characterization). Bites on mutation: alter any byte in
 /// either file → the hash changes → assertion fails.
+///
+/// Семантика анкора: лок = «чисто против HEAD», не вечная заморозка — ловит
+/// незакоммиченный дрейф; закоммиченное состояние и есть анкор. r3 закрыт к
+/// расширениям enum `Resolved` (`#[non_exhaustive]` + wildcard-паника в матче
+/// r3: новый вариант не требует правки залоченного файла, но не проходит
+/// golden молча).
 #[test]
 fn baseline_r3_and_empirical_inventory_files_are_git_clean() {
     // Both files must show no modification in `git status`.
