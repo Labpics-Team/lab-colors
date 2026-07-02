@@ -2226,6 +2226,12 @@ mod tests {
             table.legal_floor(Role::Icon),
             Some(crate::wcag::AA_UI_RATIO)
         );
+        // border-strong: различимость (non-text 3:1), не текстовый пол —
+        // API-контракт для даунстримов, фиксируем значением.
+        assert_eq!(
+            table.legal_floor(Role::BorderStrong),
+            Some(crate::wcag::AA_UI_RATIO)
+        );
         // No legal floor for the decorative / JND / zero contracts.
         assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
         assert_eq!(table.legal_floor(Role::Separator), None);
