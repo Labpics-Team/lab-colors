@@ -133,12 +133,13 @@ interface ResolvedTheme {
   roles: Record<string, RoleResult>;      // все роли с деталями
 }
 
-type RoleResult = SolvedColor | NoneRole | UnreachableRole;
+type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 ```
 
-Каждая роль — одно из трёх состояний:
+Каждая роль — одно из четырёх состояний:
 
 - `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
+- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — солид-композит на фоне резолва и его контраст (браузер композитит тинт на живой подложке).
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
 
@@ -148,6 +149,24 @@ type RoleResult = SolvedColor | NoneRole | UnreachableRole;
 |------------|---------|
 | `invalid_background` | `bgHex` не является `#RGB` или `#RRGGBB` |
 | `unknown_theme` | `theme` не входит в список допустимых |
+
+---
+
+### `engine.loadConfig(json): string`
+
+Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`) — главная фича конфиг-границы: движок начинает эмитить роли и подтон конфига вместо встроенной таблицы. Полный preflight: невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+
+---
+
+### `engine.recheckContrast(bgHex, fgHexes, theme): Float64Array`
+
+Дешёвая покадровая проверка: какие контрасты дают цвета `fgHexes` на фоне `bgHex` под темой `theme`, без полного резолва (один прямой ход модели на фон плюс по одному на каждый передний план). Возвращает `Float64Array` пар `[lc, wcagRatio]` в порядке `fgHexes`: индекс `2·i` — знаковый `Lc` цвета `i`, `2·i+1` — его WCAG-отношение. Это примитив, которым `adaptTheme` решает, пора ли пересчитывать.
+
+---
+
+### `engine.muddiness(hex): number` · `engine.confidence(hex): number`
+
+`muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи). `confidence` — надёжность этой оценки: `0` означает, что оценке нельзя доверять (у границы решения или серого фронтира), выше — увереннее. Верхний потолок — деталь калибровки, не контракт: не хардкодить.
 
 ---
 
