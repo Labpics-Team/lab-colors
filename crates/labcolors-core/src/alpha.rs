@@ -129,8 +129,13 @@ pub fn min_alpha_encoded(solid: [f64; 3], bg: [f64; 3]) -> Option<f64> {
 ///
 /// # Errors
 ///
-/// `Err` при невалидном hex на любом входе.
+/// `Err` при невалидном hex на любом входе или `alpha` вне `[0,1]`/NaN —
+/// публичная поверхность не пропускает мусор в release-алгебру (внутри только
+/// `debug_assert`).
 pub fn composite_hex(tint_hex: &str, alpha: f64, bg_hex: &str) -> Result<String, String> {
+    if !(alpha.is_finite() && (0.0..=1.0).contains(&alpha)) {
+        return Err(format!("alpha must be in [0,1], got {alpha}"));
+    }
     let tint = srgb_encoded_from_hex(tint_hex)?;
     let bg = srgb_encoded_from_hex(bg_hex)?;
     Ok(hex_from_srgb_encoded(composite_over_encoded(
@@ -399,6 +404,17 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Публичная hex-поверхность не пропускает мусорную α в release-алгебру.
+    #[test]
+    fn composite_hex_rejects_out_of_range_alpha() {
+        for bad in [f64::NAN, -0.1, 1.1, f64::INFINITY] {
+            assert!(
+                composite_hex("#787880", bad, "#FFFFFF").is_err(),
+                "α={bad} обязана быть отвергнута"
+            );
         }
     }
 
