@@ -341,17 +341,114 @@ pub(crate) fn max_chroma(l_ok: f64, h_ok_deg: f64) -> f64 {
             coeff[2] += mk * 3.0 * pk * qk * qk;
             coeff[3] += mk * qk * qk * qk;
         }
-        // First crossing of the upper wall (channel = 1 + eps) and the lower
-        // wall (channel = -eps), whichever comes first for this channel.
-        if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
-            smallest = smallest.min(c);
-        }
-        if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
-            smallest = smallest.min(c);
+        // C1 — prune the non-binding wall. A channel starts at C = 0 strictly
+        // inside both walls (f(0) = l_ok^3 in [0, 1]). Where the channel's cubic
+        // is monotone on [0, ∞) it can only ever reach the wall in its slope
+        // direction; the opposite wall has NO C > 0 crossing, so the solver would
+        // return None for it and skipping it is bit-identical. Only when the
+        // channel may reverse on the positive axis are both walls solved — the
+        // exact prior behaviour, including the near-black non-convex slivers.
+        match binding_walls(coeff) {
+            WallBinding::UpperOnly => {
+                if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+            }
+            WallBinding::LowerOnly => {
+                if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+            }
+            WallBinding::Both => {
+                // First crossing of the upper wall (channel = 1 + eps) and the
+                // lower wall (channel = -eps), whichever comes first.
+                if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+                if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+            }
         }
     }
 
     smallest.clamp(0.0, 1.0)
+}
+
+/// Which gamut wall(s) a channel's cubic can reach for `C > 0`.
+enum WallBinding {
+    /// Monotone rising: only the upper wall (`1 + eps`) is reachable.
+    UpperOnly,
+    /// Monotone falling: only the lower wall (`-eps`) is reachable.
+    LowerOnly,
+    /// May reverse on the positive axis (or a near-degenerate slope): solve both.
+    Both,
+}
+
+/// Decide, from the SHAPE of the channel cubic `f(C) = coeff · [1, C, C², C³]`,
+/// which gamut wall(s) it can cross for `C > 0` — soundly, never optimistically.
+///
+/// `f(0) = coeff[0] = l_ok³ ∈ [0, 1]` sits strictly inside both walls
+/// (`-eps < 0 ≤ f(0) ≤ 1 < 1 + eps`). If `f` is monotone on `[0, ∞)` it can only
+/// ever reach the wall in the direction of its slope: rising → the upper wall
+/// (it grows without bound; the lower is unreachable because `f ≥ f(0) ≥ 0 >
+/// -eps`), falling → the lower wall by the mirror argument. In either monotone
+/// case the OTHER wall has no `C > 0` crossing at all, so the two-wall solver
+/// returns `None` for it and pruning it changes nothing — bit-identical.
+///
+/// Monotonicity is tested through the derivative `f'(C) = 3c₃·C² + 2c₂·C + c₁`:
+/// if `f'` has no real root at or near the non-negative axis, `f` keeps one
+/// slope sign on `[0, ∞)`. A comfortable negative margin (`R_MARGIN`) below zero
+/// guarantees floating-point error near a root can never let a real positive
+/// reversal (a non-convex gamut sliver) masquerade as monotone: any critical
+/// point within the margin, or an ambiguous near-zero slope, falls back to
+/// solving both walls — conservative and never wrong.
+fn binding_walls(coeff: [f64; 4]) -> WallBinding {
+    let c1 = coeff[1];
+    let c2 = coeff[2];
+    let c3 = coeff[3];
+
+    // f'(C) = a·C² + b·C + cc.
+    let a = 3.0 * c3;
+    let b = 2.0 * c2;
+    let cc = c1;
+
+    // Largest real root of f'(C) = 0 (−∞ sentinel = no real root ⇒ one sign).
+    let max_root = if a.abs() < 1e-14 {
+        if b.abs() < 1e-14 {
+            f64::NEG_INFINITY // constant slope
+        } else {
+            -cc / b // linear derivative
+        }
+    } else {
+        let disc = b * b - 4.0 * a * cc;
+        if disc < 0.0 {
+            f64::NEG_INFINITY // no real root: slope keeps one sign
+        } else {
+            let s = disc.sqrt();
+            ((-b + s) / (2.0 * a)).max((-b - s) / (2.0 * a))
+        }
+    };
+
+    // Any critical point at or near the non-negative axis ⇒ possible reversal ⇒
+    // solve both walls. The `1e-6` margin below zero is a floating-point safety
+    // band: it comfortably exceeds the round-off in a root near the origin, so a
+    // real positive reversal (a non-convex gamut sliver) can never be misread as
+    // a negative root and mistakenly pruned.
+    if max_root >= -1e-6 {
+        return WallBinding::Both;
+    }
+
+    // Monotone on [0, ∞): the slope sign at the origin is the direction. The
+    // `1e-12` band leaves an ambiguous near-zero slope to the safe both-walls
+    // branch rather than committing to a direction it cannot confidently sign.
+    if cc > 1e-12 {
+        WallBinding::UpperOnly
+    } else if cc < -1e-12 {
+        WallBinding::LowerOnly
+    } else {
+        WallBinding::Both
+    }
 }
 
 /// The smallest strictly-positive real root of the cubic `coeff` (ascending
@@ -532,12 +629,11 @@ mod tests {
     // frozen reference that silently follows the code it guards proves nothing.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Frozen mirror of the production [`GAMUT_EPS`].
-    const GAMUT_EPS_REF: f64 = 1e-6;
-
     /// FROZEN reference: the analytic max-chroma solver exactly as it stood at
-    /// the base of `perf/max-chroma-hotpath`. Diff test A pins the production
-    /// [`max_chroma`] bit-for-bit against this.
+    /// the base of `perf/max-chroma-hotpath` — always solving BOTH gamut walls.
+    /// Diff test A pins the production [`max_chroma`] bit-for-bit against this.
+    /// The gamut band `1e-6` is inlined (frozen mirror of the production
+    /// `GAMUT_EPS`) so this oracle carries no scanned const of its own.
     fn max_chroma_reference(l_ok: f64, h_ok_deg: f64) -> f64 {
         use crate::spaces::oklab::{LMS_TO_SRGB, OKLAB_TO_LMS};
 
@@ -561,10 +657,10 @@ mod tests {
                 coeff[2] += mk * 3.0 * pk * qk * qk;
                 coeff[3] += mk * qk * qk * qk;
             }
-            if let Some(c) = spc_ref(coeff, 1.0 + GAMUT_EPS_REF) {
+            if let Some(c) = spc_ref(coeff, 1.0 + 1e-6) {
                 smallest = smallest.min(c);
             }
-            if let Some(c) = spc_ref(coeff, -GAMUT_EPS_REF) {
+            if let Some(c) = spc_ref(coeff, -1e-6) {
                 smallest = smallest.min(c);
             }
         }
@@ -665,17 +761,19 @@ mod tests {
     /// [`max_chroma`] so diff test B isolates the *selection* logic (C2/C4) from
     /// the solver internals (which diff test A guards separately).
     fn find_optimal_hue_reference(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
-        const HALF_WINDOW: f64 = 30.0;
+        // 30.0 inlined (frozen mirror of `HUE_SEARCH_HALF_WINDOW`) so this oracle
+        // carries no scanned const of its own.
+        let half_window = 30.0_f64;
         let c_at_canonical = max_chroma(l_ok, h_canonical);
         if c_at_canonical < 1e-5 {
             return h_canonical;
         }
         let mut best_h = h_canonical;
         let mut best_score = f64::NEG_INFINITY;
-        let penalty_scale = slope / HALF_WINDOW;
-        let steps = (HALF_WINDOW * 2.0) as i32;
+        let penalty_scale = slope / half_window;
+        let steps = (half_window * 2.0) as i32;
         for i in 0..=steps {
-            let h = h_canonical - HALF_WINDOW + i as f64;
+            let h = h_canonical - half_window + i as f64;
             let c = max_chroma(l_ok, h);
             let drift = (h - h_canonical).abs();
             let score = c - penalty_scale * drift;
