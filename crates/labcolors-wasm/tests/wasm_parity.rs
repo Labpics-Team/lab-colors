@@ -92,9 +92,9 @@ fn resolve_theme_matches_native_resolve_set() {
 }
 
 /// Reachable roles are mirrored into `vars` under their `--lab-` CSS name, and
-/// the hex there equals the role's hex — the contract css-injection consumes.
+/// the value there equals the role's css (oklch) — what css-injection consumes.
 #[wasm_bindgen_test]
-fn vars_mirror_reachable_role_hexes() {
+fn vars_mirror_reachable_roles_in_oklch() {
     let engine = LabColors::new();
     let result: JsValue = engine
         .resolve_theme("#FFFFFF", "light")
@@ -103,13 +103,22 @@ fn vars_mirror_reachable_role_hexes() {
     let vars = get_obj(&result, "vars");
     let roles = get_obj(&result, "roles");
 
-    // label-primary is reachable on white; its var must equal its role hex.
+    // label-primary is reachable on white; its var must equal the role's css
+    // and carry the ONE emission form — oklch (hex stays a data field).
     let tp = get_obj(&roles, "label-primary");
-    let tp_hex = get_str(&tp, "hex").expect("primary is a colour");
+    let tp_css = get_str(&tp, "css").expect("primary carries css");
     assert_eq!(
         get_str(&vars, "--lab-label-primary"),
-        Some(tp_hex),
-        "vars must mirror the role hex under the --lab- name"
+        Some(tp_css.clone()),
+        "vars must mirror the role css under the --lab- name"
+    );
+    assert!(
+        tp_css.starts_with("oklch(") && tp_css.contains('%') && !tp_css.contains('/'),
+        "solid css must be oklch(L% C H), got {tp_css}"
+    );
+    assert!(
+        get_str(&tp, "hex").is_some_and(|h| h.starts_with('#')),
+        "hex stays as a data field"
     );
 }
 

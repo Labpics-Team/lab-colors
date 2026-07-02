@@ -42,8 +42,10 @@ export interface SolvedColor {
   readonly kind: "color";
   /** The CSS custom-property name for this role, e.g. "--lab-label-primary". */
   readonly cssVar: string;
-  /** The resolved colour as #RRGGBB. */
+  /** The resolved colour as #RRGGBB (data; `css`/`vars` carry oklch). */
   readonly hex: string;
+  /** Ready-to-serve CSS value: "oklch(L% C H)". `vars` carries the same string. */
+  readonly css: string;
   /** Signed perceptual contrast (Lc) against the background. */
   readonly lc: number;
   /** WCAG 2.1 ratio (1–21) against the background. */
@@ -91,7 +93,7 @@ export interface RgbaRole {
   readonly compositeLc: number;
   /** WCAG 2.1 ratio of the composite. */
   readonly compositeWcag: number;
-  /** Ready-to-serve CSS value: "rgb(R G B / A)". `vars` carries the same string. */
+  /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
   readonly css: string;
 }
 
@@ -156,9 +158,10 @@ export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
   /**
-   * Reachable roles only. Values are ready-to-serve CSS: "#RRGGBB" for solid
-   * roles, "rgb(R G B / A)" for semi-transparent ladder/alpha-analog roles —
-   * do not validate them as hex.
+   * Reachable roles only. Values are ready-to-serve CSS in ONE form:
+   * "oklch(L% C H)" for solid roles, "oklch(L% C H / A)" for semi-transparent
+   * ladder/alpha-analog roles. Solved in the sRGB gamut (oklch is the
+   * notation, not a gamut extension); byte-exact vs the role's hex fields.
    */
   readonly vars: Record<string, string>;
   /** Every role, keyed by its stable role key (without the --lab- prefix). */
@@ -305,7 +308,18 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                     "legalFloor",
                     &c.legal_floor.map_or(JsValue::NULL, JsValue::from_f64),
                 );
-                set(&vars, &css_var, &JsValue::from_str(&c.hex));
+                // Единая форма эмиссии: oklch и для солида (hex остаётся
+                // данными роли; синтаксис переменной один на все исходы).
+                set(
+                    &role_obj,
+                    "css",
+                    &JsValue::from_str(&oklch_css(&c.hex, None)),
+                );
+                set(
+                    &vars,
+                    &css_var,
+                    &JsValue::from_str(&oklch_css(&c.hex, None)),
+                );
             }
             RoleOutcome::Rgba(r) => {
                 set(&role_obj, "kind", &JsValue::from_str("rgba"));
@@ -322,8 +336,9 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                     "compositeWcag",
                     &JsValue::from_f64(r.composite_wcag),
                 );
-                // Эмиссия — rgba(): переменная несёт то, что скомпозитит браузер.
-                let css = rgba_css(&r.tint_hex, r.alpha);
+                // Переменная несёт тинт в oklch со слэш-альфой — браузер
+                // композитит на живой подложке; форма едина с солидами.
+                let css = oklch_css(&r.tint_hex, Some(r.alpha));
                 set(&role_obj, "css", &JsValue::from_str(&css));
                 set(&vars, &css_var, &JsValue::from_str(&css));
             }
@@ -343,12 +358,13 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
     out.into()
 }
 
-/// CSS-эмиссия полупрозрачной роли: современный синтаксис `rgb(R G B / A)` —
-/// тот же формат, что стаб labui; браузер композитит на живой подложке.
-fn rgba_css(tint_hex: &str, alpha: f64) -> String {
-    let hex = tint_hex.trim_start_matches('#');
-    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
-    format!("rgb({} {} {} / {})", ch(0), ch(2), ch(4), alpha)
+/// Единая CSS-форма эмиссии: `oklch(L% C H)` / `oklch(L% C H / A)`.
+/// Байт-точность реконструкции доказана round-trip тестом ядра на решётке
+/// куба; hex к этому месту валиден по построению (солвер/лестница), поэтому
+/// ошибка парса невозможна — ветка Err недостижима и схлопнута в сам hex
+/// (честнее уронить видимым мусором, чем тихо подменить цвет).
+fn oklch_css(hex: &str, alpha: Option<f64>) -> String {
+    labcolors_core::oklch_css_from_hex(hex, alpha).unwrap_or_else(|_| hex.to_string())
 }
 
 /// Set a property on a JS object. `Reflect::set` on a freshly created `Object`
