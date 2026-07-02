@@ -33,6 +33,18 @@ use crate::spaces::vc::ViewingConditions;
 
 /// Пер-темная четвёрка якорных hex (`light` / `dark` / `light-ic` / `dark-ic`).
 ///
+/// ЕДИНСТВЕННОЕ отображение условий просмотра → слот четвёрки режимов
+/// (light/dark/light-ic/dark-ic): обе раскладки лестницы обязаны выбирать
+/// режим одинаково — расхождение было бы тихим рассинхроном темы и тинта.
+fn vc_slot(vc: &ViewingConditions) -> usize {
+    match (vc.is_dark_theme(), vc.high_contrast) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (true, true) => 3,
+    }
+}
+
 /// Источник лестницы (семейство палитры или бренд) несёт свой якорь отдельно для
 /// каждого режима — тёмная тема и режим повышенного контраста (IC) не выводятся
 /// из светлого якоря, а замеряются (`reference/labui-accent-primitives.md` §2:
@@ -56,11 +68,11 @@ impl ThemeAnchors {
     /// Четыре VC-пресета движка ([`crate::config::VcPreset`]) отображаются ровно
     /// на четыре якоря — иных режимов у лестницы нет.
     pub fn for_vc(&self, vc: &ViewingConditions) -> &str {
-        match (vc.is_dark_theme(), vc.high_contrast) {
-            (false, false) => &self.light,
-            (true, false) => &self.dark,
-            (false, true) => &self.light_ic,
-            (true, true) => &self.dark_ic,
+        match vc_slot(vc) {
+            0 => &self.light,
+            1 => &self.dark,
+            2 => &self.light_ic,
+            _ => &self.dark_ic,
         }
     }
 
@@ -104,13 +116,7 @@ impl LadderTint {
     /// Кодированный тинт под условия просмотра резолва (тот же выбор режима, что
     /// [`ThemeAnchors::for_vc`]).
     pub fn for_vc(&self, vc: &ViewingConditions) -> [f64; 3] {
-        let idx = match (vc.is_dark_theme(), vc.high_contrast) {
-            (false, false) => 0,
-            (true, false) => 1,
-            (false, true) => 2,
-            (true, true) => 3,
-        };
-        self.quad[idx]
+        self.quad[vc_slot(vc)]
     }
 
     /// Oklab-хрома светлого якоря тинта — вход в пересчёт `S_PERC_MIN`

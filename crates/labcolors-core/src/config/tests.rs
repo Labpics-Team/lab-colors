@@ -429,11 +429,13 @@ fn sentiment_referencing_missing_family_is_rejected() {
 #[test]
 fn alias_to_missing_role_is_rejected() {
     let mut cfg = labui_reference();
+    // Уникальное имя алиаса: дубликат существующего поймался бы раньше как
+    // DuplicateKey — здесь проверяется именно различимая ошибка ссылки.
     cfg.aliases
-        .push(("control-bg".to_string(), "no-such-role".to_string()));
+        .push(("probe-unique-alias".to_string(), "no-such-role".to_string()));
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigError::UnknownFamily { family, .. }) if family == "no-such-role"
+        Err(ConfigError::UnknownRole { role, .. }) if role == "no-such-role"
     ));
 }
 
@@ -1179,4 +1181,99 @@ fn value_test_bites_on_alpha_mutation() {
         got, "rgb(120 120 128 / 0.122)",
         "RED-proof значенческого теста провален: мутация альфы НЕ сдвинула эмиссию"
     );
+}
+
+/// Валидатор CodeRabbit-раунда: дубликаты ключей всех словарей отвергаются
+/// (повтор имени = неоднозначный lookup), включая алиас, затеняющий роль.
+#[test]
+fn validator_rejects_duplicate_dictionary_keys() {
+    let mut c = labui_reference();
+    c.roles.push(c.roles[0].clone());
+    assert!(matches!(
+        c.validate(),
+        Err(ConfigError::DuplicateKey {
+            dictionary: "roles",
+            ..
+        })
+    ));
+
+    let mut c = labui_reference();
+    c.palette.push(c.palette[0].clone());
+    assert!(matches!(
+        c.validate(),
+        Err(ConfigError::DuplicateKey {
+            dictionary: "palette",
+            ..
+        })
+    ));
+
+    let mut c = labui_reference();
+    let role_name = c.roles[0].0.clone();
+    c.aliases.push((role_name, c.roles[1].0.clone()));
+    assert!(matches!(
+        c.validate(),
+        Err(ConfigError::DuplicateKey {
+            dictionary: "roles∪aliases",
+            ..
+        })
+    ));
+}
+
+/// preferred_side — закрытое меню {-1, +1}: 0 и 2 отвергаются.
+#[test]
+fn validator_rejects_preferred_side_outside_closed_menu() {
+    for bad in [0i8, 2, -3] {
+        let mut c = labui_reference();
+        c.sentiments.categories[0].preferred_side = Some(bad);
+        assert!(
+            matches!(c.validate(), Err(ConfigError::OutOfBounds { .. })),
+            "preferred_side={bad} обязан быть отвергнут"
+        );
+    }
+    let mut c = labui_reference();
+    c.sentiments.categories[0].preferred_side = Some(-1);
+    assert!(c.validate().is_ok(), "-1 легален");
+}
+
+/// Неконечные значения ручек (∞/NaN) отвергаются и open-сверху пределами.
+#[test]
+fn validator_rejects_non_finite_handles() {
+    for bad in [f64::INFINITY, f64::NAN] {
+        let mut c = labui_reference();
+        if let Some((_, RoleRecipe::DjAnchor { light, .. })) = c
+            .roles
+            .iter_mut()
+            .find(|(_, r)| matches!(r, RoleRecipe::DjAnchor { .. }))
+        {
+            *light = bad;
+        } else {
+            panic!("в фикстуре обязан быть dj_anchor");
+        }
+        assert!(
+            matches!(c.validate(), Err(ConfigError::OutOfBounds { .. })),
+            "dj={bad} обязан быть отвергнут"
+        );
+    }
+}
+
+/// Ошибки ссылок различимы по виду: сентимент/роль/семейство — разные варианты.
+#[test]
+fn validator_reference_errors_are_distinguishable() {
+    let mut c = labui_reference();
+    c.roles.push((
+        "probe-bad-sentiment".to_string(),
+        RoleRecipe::Ladder {
+            source: LadderSource::Sentiment("nonexistent".to_string()),
+            position: LadderPosition::LabelPrimary,
+        },
+    ));
+    assert!(matches!(
+        c.validate(),
+        Err(ConfigError::UnknownSentiment { .. })
+    ));
+
+    let mut c = labui_reference();
+    c.aliases
+        .push(("probe-alias".to_string(), "nonexistent-role".to_string()));
+    assert!(matches!(c.validate(), Err(ConfigError::UnknownRole { .. })));
 }

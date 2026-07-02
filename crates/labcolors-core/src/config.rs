@@ -169,6 +169,19 @@ pub enum ConfigError {
         referenced_by: String,
         family: String,
     },
+    /// Ссылка на категорию сентиментов, которой нет в `sentiments.categories`.
+    UnknownSentiment {
+        referenced_by: String,
+        sentiment: String,
+    },
+    /// Ссылка (алиас/alpha_analog) на роль, которой нет в `roles`.
+    UnknownRole { referenced_by: String, role: String },
+    /// Дубликат ключа в словаре конфига: повтор имени сделал бы lookup и
+    /// эмиссию неоднозначными (какая запись выиграла — вопрос порядка, тихо).
+    DuplicateKey {
+        dictionary: &'static str,
+        key: String,
+    },
     /// Значение ручки вне допустимого предела. `handle` — путь до ручки, `bound` —
     /// человеко-читаемое описание нарушенного предела с обоснованием.
     OutOfBounds {
@@ -191,6 +204,24 @@ impl std::fmt::Display for ConfigError {
             ConfigError::InvalidName { field, value } => write!(
                 f,
                 "невалидное имя в поле `{field}`: {value:?} (допустимо [a-z0-9-]+, не пусто)"
+            ),
+            ConfigError::UnknownSentiment {
+                referenced_by,
+                sentiment,
+            } => write!(
+                f,
+                "`{referenced_by}` ссылается на категорию сентиментов `{sentiment}`, которой нет в sentiments"
+            ),
+            ConfigError::UnknownRole {
+                referenced_by,
+                role,
+            } => write!(
+                f,
+                "`{referenced_by}` ссылается на роль `{role}`, которой нет в roles"
+            ),
+            ConfigError::DuplicateKey { dictionary, key } => write!(
+                f,
+                "дубликат ключа `{key}` в словаре `{dictionary}` — lookup был бы неоднозначным"
             ),
             ConfigError::UnknownFamily {
                 referenced_by,
@@ -534,14 +565,15 @@ fn check_in_incl_incl(
     }
 }
 
-/// Проверить `value > min` (строго положительно).
+/// Проверить `value > min` (строго положительно). Неконечные значения (±∞,
+/// NaN) отвергаются всегда: открытый сверху предел — не лазейка для мусора.
 fn check_gt(
     handle: &str,
     value: f64,
     min_excl: f64,
     bound: &'static str,
 ) -> Result<(), ConfigError> {
-    if value > min_excl {
+    if value.is_finite() && value > min_excl {
         Ok(())
     } else {
         Err(ConfigError::OutOfBounds {
@@ -552,14 +584,14 @@ fn check_gt(
     }
 }
 
-/// Проверить `value ≥ min`.
+/// Проверить `value ≥ min`. Неконечные значения отвергаются всегда.
 fn check_ge(
     handle: &str,
     value: f64,
     min_incl: f64,
     bound: &'static str,
 ) -> Result<(), ConfigError> {
-    if value >= min_incl {
+    if value.is_finite() && value >= min_incl {
         Ok(())
     } else {
         Err(ConfigError::OutOfBounds {
@@ -637,6 +669,16 @@ impl ThemeConfig {
                     family: cat.family.clone(),
                 });
             }
+            if let Some(side) = cat.preferred_side
+                && side != 1
+                && side != -1
+            {
+                return Err(ConfigError::OutOfBounds {
+                    handle: format!("sentiments.{}.preferred_side", cat.name),
+                    value: f64::from(side),
+                    bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
+                });
+            }
             if let Some(hue) = cat.hue_floor_deg {
                 let field = format!("sentiments.{}.hue_floor_deg", cat.name);
                 // Полуинтервал `[0, 360)`: угол по модулю 360°, где 360° ≡ 0°.
@@ -647,6 +689,43 @@ impl ThemeConfig {
                         bound: "0 ≤ hue_floor_deg < 360 (угол оттенка по модулю 360°)",
                     });
                 }
+            }
+        }
+
+        // Дубликаты ключей всех словарей: повтор имени = неоднозначный lookup.
+        fn check_unique<'a, I: Iterator<Item = &'a str>>(
+            dictionary: &'static str,
+            keys: I,
+        ) -> Result<(), ConfigError> {
+            let mut seen = std::collections::BTreeSet::new();
+            for k in keys {
+                if !seen.insert(k) {
+                    return Err(ConfigError::DuplicateKey {
+                        dictionary,
+                        key: k.to_string(),
+                    });
+                }
+            }
+            Ok(())
+        }
+        check_unique("palette", self.palette.iter().map(|f| f.key.as_str()))?;
+        check_unique(
+            "sentiments.categories",
+            self.sentiments.categories.iter().map(|c| c.name.as_str()),
+        )?;
+        check_unique(
+            "themes",
+            self.themes.entries.iter().map(|(n, _)| n.as_str()),
+        )?;
+        check_unique("roles", self.roles.iter().map(|(n, _)| n.as_str()))?;
+        check_unique("aliases", self.aliases.iter().map(|(n, _)| n.as_str()))?;
+        // Алиас не может затенять роль: одно имя — одна сущность эмиссии.
+        for (alias, _) in &self.aliases {
+            if self.roles.iter().any(|(rname, _)| rname == alias) {
+                return Err(ConfigError::DuplicateKey {
+                    dictionary: "roles∪aliases",
+                    key: alias.clone(),
+                });
             }
         }
 
@@ -668,9 +747,9 @@ impl ThemeConfig {
             let field = format!("aliases.{alias}");
             check_name(&field, alias)?;
             if !self.roles.iter().any(|(rname, _)| rname == target) {
-                return Err(ConfigError::UnknownFamily {
+                return Err(ConfigError::UnknownRole {
                     referenced_by: format!("aliases.{alias}"),
-                    family: target.clone(),
+                    role: target.clone(),
                 });
             }
         }
@@ -744,9 +823,9 @@ impl ThemeConfig {
                 if self.sentiments.categories.iter().any(|c| &c.name == name) {
                     Ok(())
                 } else {
-                    Err(ConfigError::UnknownFamily {
+                    Err(ConfigError::UnknownSentiment {
                         referenced_by: format!("roles.{role}"),
-                        family: name.clone(),
+                        sentiment: name.clone(),
                     })
                 }
             }
@@ -885,9 +964,9 @@ impl ThemeConfig {
             .categories
             .iter()
             .find(|c| c.name == name)
-            .ok_or_else(|| ConfigError::UnknownFamily {
+            .ok_or_else(|| ConfigError::UnknownSentiment {
                 referenced_by: format!("roles.{role}"),
-                family: name.to_string(),
+                sentiment: name.to_string(),
             })?;
         let fam = self.family_anchors(role, &cat.family)?.clone();
         let brand = self.brand.anchors.clone();
