@@ -107,12 +107,52 @@ test("component forms: none = 0, chroma as a percentage (100% = 0.4), deg suffix
   assert.deepEqual(parseCssColor("oklch(0% none none)"), [0, 0, 0, 1]);
   assert.deepEqual(parseCssColor("oklch(100% none none)"), [255, 255, 255, 1]);
   assert.deepEqual(parseCssColor("oklch(59.98708% 0 none)"), [128, 128, 128, 1]); // grey, hue irrelevant
-  // Chroma percentage: 100% ≡ 0.4. #FF0000's C=0.257683 → 64.42075%.
+  // Chroma percentage: 100% ≡ 0.4. #FF0000's C=0.257683 → 64.42075% (gamut edge).
   assert.deepEqual(parseCssColor("oklch(62.79554% 64.42075% 29.234)"), [255, 0, 0, 1]);
+  // …and a MID-gamut sample (not a clamped extreme) locks the 0.4 factor from
+  // BOTH sides: #787880's C=0.012136 → 3.034%. A wrong factor (e.g. 0.5) lands
+  // off #787880 here, where no per-channel clamp can hide it.
+  assert.deepEqual(parseCssColor("oklch(57.53363% 3.034% 286.012)"), [120, 120, 128, 1]);
+  assert.deepEqual(
+    parseCssColor("oklch(57.53363% 3.034% 286.012)"),
+    parseCssColor("oklch(57.53363% 0.012136 286.012)"),
+    "chroma % and number forms agree at mid-gamut",
+  );
   // Hue may carry a `deg` suffix.
   assert.deepEqual(parseCssColor("oklch(64.04613% 0.193058 259.892deg)"), [62, 135, 255, 1]);
   // Alpha as a percentage.
   assert.deepEqual(parseCssColor("oklch(64.04613% 0.193058 259.892 / 80%)"), [62, 135, 255, 0.8]);
+});
+
+test("out-of-range components clamp per CSS Color 4 (L≥0, C≥0, alpha∈[0,1])", () => {
+  // F3 — negative L clamps to 0. A per-channel byte clamp alone masks this at
+  // low chroma, so use HIGH chroma where an unclamped negative L lands on
+  // different bytes than L=0; asserting the two are equal locks the L clamp.
+  assert.deepEqual(
+    parseCssColor("oklch(-10% 0.3 30)"),
+    parseCssColor("oklch(0% 0.3 30)"),
+    "negative L must clamp to 0 (not pass through to a different colour)",
+  );
+  // F4 — negative chroma clamps to 0 → achromatic, hue irrelevant.
+  assert.deepEqual(
+    parseCssColor("oklch(50% -0.1 120)"),
+    parseCssColor("oklch(50% 0 120)"),
+    "negative chroma must clamp to 0 (grey)",
+  );
+  // F5 — alpha clamps into [0,1] from both sides.
+  assert.equal(parseCssColor("oklch(50% 0 0 / 1.5)")[3], 1, "alpha > 1 clamps to 1");
+  assert.equal(parseCssColor("oklch(50% 0 0 / -0.5)")[3], 0, "alpha < 0 clamps to 0");
+  assert.equal(parseCssColor("oklch(50% 0 0 / 150%)")[3], 1, "alpha % > 100 clamps to 1");
+});
+
+test("hue is periodic and chroma 0 is grey regardless of hue", () => {
+  // F7 — 360° ≡ 0°, and hue wraps (periodicity of sin/cos), no special-casing.
+  assert.deepEqual(parseCssColor("oklch(60% 0.1 360)"), parseCssColor("oklch(60% 0.1 0)"));
+  assert.deepEqual(parseCssColor("oklch(60% 0.1 420)"), parseCssColor("oklch(60% 0.1 60)"));
+  assert.deepEqual(parseCssColor("oklch(60% 0.1 -60)"), parseCssColor("oklch(60% 0.1 300)"));
+  // Chroma 0 → achromatic for ANY hue value (a real number, not only `none`).
+  assert.deepEqual(parseCssColor("oklch(60% 0 120)"), parseCssColor("oklch(60% 0 0)"));
+  assert.deepEqual(parseCssColor("oklch(60% 0 120)"), [128, 128, 128, 1]);
 });
 
 test("garbage inside oklch(...) yields null, never throws", () => {

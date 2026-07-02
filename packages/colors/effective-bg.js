@@ -136,13 +136,15 @@ function cssNumber(tok) {
   return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(tok) ? parseFloat(tok) : null;
 }
 
-/** L: a percentage → `/100` into `0..1`; a bare number is already `0..1`; `none` → 0. */
+/** L: a percentage → `/100` into `0..1`; a bare number is already `0..1`; `none`
+ * → 0. Negative lightness clamps to 0 (CSS Color 4), symmetric to chroma — a
+ * byte-level clamp alone would mask it for low chroma but not for high. */
 function oklchLightness(tok) {
   if (tok === "none") return 0;
   const pct = tok.endsWith("%");
   const n = cssNumber(pct ? tok.slice(0, -1) : tok);
   if (n === null) return null;
-  return pct ? n / 100 : n;
+  return Math.max(0, pct ? n / 100 : n);
 }
 
 /** C: a bare number is absolute chroma; a percentage is a fraction of 0.4

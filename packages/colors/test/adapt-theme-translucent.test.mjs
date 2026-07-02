@@ -158,6 +158,59 @@ test("current() reports the full applied picture, including translucent roles", 
   assert.equal(snap["--lab-label"], "oklch(20.000% 0 0)");
 });
 
+// baseVars is a REPLACE of the last solve's vars, never a merge. These lock the
+// "stuck key" class: a role present in an earlier solve but ABSENT from a later
+// one must not linger. A merge (`{...baseVars, ...result.vars}`) would leave the
+// stale var on the element AND in current() — invisible to every test that keeps
+// the role set constant, so it is pinned explicitly here.
+const THREE = {
+  vars: {
+    "--lab-label": "oklch(20.000% 0 0)",
+    "--lab-panel": "oklch(96.000% 0.01 260 / 0.6)",
+    "--lab-extra": "oklch(50.000% 0.1 120 / 0.4)",
+  },
+  roles: {
+    label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null },
+    panel: { kind: "translucent", cssVar: "--lab-panel" },
+    extra: { kind: "translucent", cssVar: "--lab-extra" },
+  },
+};
+const TWO = {
+  vars: { "--lab-label": "oklch(90.000% 0 0)", "--lab-panel": "oklch(30.000% 0.02 260 / 0.6)" },
+  roles: {
+    label: { kind: "color", cssVar: "--lab-label", hex: "#E5E5E5", lc: 100, legalFloor: null },
+    panel: { kind: "translucent", cssVar: "--lab-panel" },
+  },
+};
+const ONE = {
+  vars: { "--lab-label": "oklch(20.000% 0 0)" },
+  roles: { label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null } },
+};
+
+test("a later solve that DROPS a role removes its var from target and current()", () => {
+  const colors = fakeColors(THREE);
+  const el = fakeElement();
+  const ctrl = adaptTheme(el, { colors, theme: "light", background: () => "#FFFFFF", target: el, now: () => 1000, win: {} });
+  assert.equal(el.props.get("--lab-extra"), "oklch(50.000% 0.1 120 / 0.4)", "present initially");
+  colors.setResolve(TWO); // extra role gone
+  ctrl.setTheme("dark");
+  assert.equal(el.props.get("--lab-extra"), undefined, "dropped role's var must vanish from target");
+  assert.ok(!("--lab-extra" in ctrl.current()), "and be absent from current()");
+  // The surviving roles are updated (not stale).
+  assert.equal(el.props.get("--lab-panel"), "oklch(30.000% 0.02 260 / 0.6)");
+  assert.equal(el.props.get("--lab-label"), "oklch(90.000% 0 0)");
+});
+
+test("a later solve that ADDS a role writes its new var", () => {
+  const colors = fakeColors(ONE);
+  const el = fakeElement();
+  const ctrl = adaptTheme(el, { colors, theme: "light", background: () => "#FFFFFF", target: el, now: () => 1000, win: {} });
+  assert.equal(el.props.get("--lab-panel"), undefined, "absent initially");
+  colors.setResolve(TWO); // panel role added
+  ctrl.setTheme("dark");
+  assert.equal(el.props.get("--lab-panel"), "oklch(30.000% 0.02 260 / 0.6)", "added role's var must appear");
+});
+
 // Differential lock for the OTHER color-string consumer in this file: the
 // strict floor-clamp reads each background sample through `relativeLuminanceHex`
 // → `parseCssColor`. An explicit oklch background must drive the clamp EXACTLY
