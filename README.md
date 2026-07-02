@@ -96,7 +96,7 @@ let dim_vc = ViewingConditions::dim_surround(); // c = 0.59
 ```mermaid
 graph LR
     L["light\n#FFFFFF\nJ' ≈ 100"] -->|"γ_light = 1.75"| B["base\n#787880\nJ' ≈ 54"]
-    B -->|"γ_dark = 1.5"| D["dark\n#101012\nJ' ≈ 4"]
+    B -->|"γ_dark = 1.5"| D["dark\n#101012\nJ' ≈ 9.1"]
 ```
 
 **Степенная интерполяция** — J' не линейный, а через `u^γ`. Это даёт больше шагов в середине шкалы (где глаз различает лучше) и меньше на краях.
@@ -241,7 +241,7 @@ println!("t=0.5  J'={:.1}", mid.jp);
 
 // sample_hex(N) — N точек из непрерывной кривой
 let steps: Vec<String> = light.sample_hex(13);
-// ["#FFFFFF", "#F0F0F5", "#E1E1E9", ..., "#101012"]
+// ["#FFFFFF", "#F8F8FA", "#E7E8EC", ..., "#101012"]
 
 // Нейтральная шкала — тёмная тема
 let dim_vc = ViewingConditions::dim_surround();
@@ -305,15 +305,16 @@ crates/labcolors-core/src/
     └── mod.rs
 ```
 
+Карта — продакшн-модули; тест-модули (`golden_tests.rs`, `config/tests.rs`, `*/tests.rs`) под `#[cfg(test)]` в неё не входят.
+
 ## Тесты
 
-`cargo test --workspace` гоняет юнит-тесты, doctest-ы (включая примеры этого README) и мета-тесты. CI на каждом PR держит пять гейтов на Rust 1.96.0:
+`cargo test --workspace` гоняет юнит-тесты, doctest-ы (включая примеры этого README) и мета-тесты. CI на каждом PR держит четыре джоба на Rust 1.96.0:
 
-- **clippy + rustfmt** — `cargo clippy --workspace --all-targets -- -D warnings` и `cargo fmt --all --check`
+- **lint** (clippy + rustfmt) — `cargo clippy --workspace --all-targets -- -D warnings` и `cargo fmt --all --check`
 - **test** — `cargo test --workspace`
 - **audit** — `cargo audit --deny warnings` (RustSec: уязвимые или отозванные зависимости блокируют мерж)
-- **wasm** — release-сборка `wasm-pack`, headless-Chrome паритет-тест обёртки против нативного `resolve_set`, замер размера бандла
-- **@labpics/colors** — `npm run typecheck` и `npm test` против собранного `pkg/` (публичные типы и DOM-хелперы)
+- **wasm** — release-сборка `wasm-pack`; блокирующими шагами внутри того же джоба: `npm run typecheck` + `npm test` пакета `@labpics/colors` против собранного `pkg/`, headless-Chrome паритет-тест обёртки против нативного `resolve_set`, замер размера бандла
 
 Что покрыто:
 
@@ -328,8 +329,8 @@ crates/labcolors-core/src/
 
 ## Что дальше
 
-- **surface-jnd** — финальная JND-калибровка стека теней и `separator`: сегодня они держат Lc-заглушки выше надёжного пола решателя, глава выводит их контракты из альфа-якорей LabUI. Лестницы `border-*` и `fill-*` уже несут буквальные dJ'-якоря (не заглушки); роли `surface` в таблице нет.
-- **конфиг-граница (ADR-0001)** — акцентная лестница как рецепт (issue #59) и ломающая чистка ядра PR-c (снос запечённых `RoleTable::default` / `enum Role` / данных `Accent`). Ядро `ThemeConfig` и WASM-`loadConfig` уже влиты.
+- **surface-jnd** — финальная JND-калибровка стека теней и `separator`: они держат Lc-заглушки выше надёжного пола решателя, а глава выводит их контракты из альфа-якорей LabUI. Лестницы `border-*` и `fill-*` уже несут буквальные dJ'-якоря (не заглушки); роли `surface` в таблице нет.
+- **конфиг-граница (ADR-0001)** — ломающая чистка ядра (PR-c): снос запечённых `RoleTable::default` / `enum Role` / данных `Accent` после зелёного потребительского поезда labui. Ядро `ThemeConfig`, рецепт `ladder` (поглотил акцентный GAP #59) и WASM-`loadConfig` уже влиты.
 
 ## LPC vs APCA
 
