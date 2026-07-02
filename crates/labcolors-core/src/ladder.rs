@@ -279,7 +279,7 @@ impl LadderPosition {
             LadderPosition::NeutralFillQuaternary => (0.078, 0.161),
             LadderPosition::NeutralBorderBase => (0.161, 0.2),
             LadderPosition::NeutralBorderSoft => (0.078, 0.122),
-            // Тени — rgba by design: солид над картинкой/стеклом закрывал бы
+            // Тени — полупрозрачность by design: солид над картинкой/стеклом закрывал бы
             // контент пятном вместо пропорционального затемнения. Пары —
             // данные стаба; вывод контрактом вырожден на тёмной базе
             // (тинт ≈ фон ⇒ dJ = 0 при любой α) — научная подзадача

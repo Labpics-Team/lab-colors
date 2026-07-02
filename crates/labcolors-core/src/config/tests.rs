@@ -4,7 +4,7 @@
 //! 2. RED-proof байт-в-байт: мутация одного рецепта фикстуры роняет тест.
 //! 3. Валидатор: за-предельное значение КАЖДОЙ ручки даёт `ConfigError` +
 //!    RED-proof мутацией предела (валидный vs невалидный на границе).
-//! 4. Лестница/альфа: Ladder/AlphaAnalog компилируются в rgba-специи;
+//! 4. Лестница/альфа: Ladder/AlphaAnalog компилируются в полупрозрачные специи;
 //!    diff=пусто против consumedRoles; S_PERC_MIN-идентичность; значенческая
 //!    сверка со стабом labui (light+dark) + RED-proof мутаций.
 
@@ -33,7 +33,7 @@ fn grid() -> ([(ViewingConditions, &'static str); 2], [&'static str; 6]) {
 fn repr(res: &Resolved) -> String {
     match res {
         Resolved::Color { solved, .. } => solved.hex().to_string(),
-        // rgba-роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
+        // полупрозрачная роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
         Resolved::None => "none".to_string(),
         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
@@ -67,7 +67,7 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
     // (representative_roles_match_stub_values_light_and_dark).
     // Плюс роли, покинувшие паспорт по закону семантики: separator — токена
     // нет (бордер и сепаратор едины, компонент применяет бордер), shadow-* —
-    // rgba-лестница под стаб-именами fx-shadow-* (солид над контентом был бы
+    // полупрозрачных лестница под стаб-именами fx-shadow-* (солид над контентом был бы
     // грязью), border-strong — пол различимости AaUi (зеркалится: дефолт-таблица
     // несёт тот же пол).
     const LADDER_MIGRATED: [&str; 11] = [
@@ -482,7 +482,7 @@ fn alias_to_missing_role_is_rejected() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn ladder_recipe_compiles_to_rgba_spec() {
+fn ladder_recipe_compiles_to_translucent_spec() {
     // Ladder — не заглушка: компилируется в RoleSpec::Ladder.
     let cfg = with_role_recipe(
         "fill-primary",
@@ -508,7 +508,7 @@ fn ladder_recipe_compiles_to_rgba_spec() {
 }
 
 #[test]
-fn alpha_analog_recipe_compiles_to_rgba_spec() {
+fn alpha_analog_recipe_compiles_to_translucent_spec() {
     let cfg = with_role_recipe(
         "fill-primary",
         RoleRecipe::AlphaAnalog {
@@ -678,7 +678,7 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "fx-glow-inverted",
     "fx-skeleton-base",
     "fx-skeleton-highlight",
-    // FX shadow — rgba-лестница тёмного якоря под стаб-именами.
+    // FX shadow — полупрозрачных лестница тёмного якоря под стаб-именами.
     "fx-shadow-minor",
     "fx-shadow-ambient",
     "fx-shadow-penumbra",
@@ -957,14 +957,14 @@ fn info_is_displaced_from_blue_brand_by_design() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// rgba-эмиссия + RED-proof мутаций (позиция/семейство/альфа → RED).
+// полупрозрачная эмиссия + RED-proof мутаций (позиция/семейство/альфа → RED).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Резолв Ladder-роли несёт rgba(тинт, α) + солид-композит на фоне резолва.
 /// Тинт brand-роли по светлой теме == светлый якорь бренда (эмитится напрямую);
 /// композит — то, что реально показывается на белом фоне.
 #[test]
-fn ladder_emits_rgba_with_composite_over_bg() {
+fn ladder_emits_translucent_with_composite_over_bg() {
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#FFFFFF").unwrap();
     let vc = ViewingConditions::srgb();
@@ -1154,7 +1154,7 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
 /// стабом ПОБАЙТОВО, α — числом с допуском (Display-сравнение f64 хрупко:
 /// хвост вида 0.07800000000000001 после будущего рефакторинга формулы уронил
 /// бы тест по ФОРМАТУ, маскируя семантику).
-fn rgba_to_parts(res: &Resolved) -> (String, f64) {
+fn translucent_to_parts(res: &Resolved) -> (String, f64) {
     let r = res
         .translucent()
         .unwrap_or_else(|| panic!("ожидался Resolved::Translucent, получено {res:?}"));
@@ -1182,7 +1182,7 @@ fn split_stub_rgba(stub: &str) -> (String, f64) {
 /// (тот же допуск, что у соседних численных сверок α).
 #[track_caller]
 fn assert_matches_stub(role: &str, theme: &str, got: &Resolved, want: &str) {
-    let (got_rgb, got_alpha) = rgba_to_parts(got);
+    let (got_rgb, got_alpha) = translucent_to_parts(got);
     let (want_rgb, want_alpha) = split_stub_rgba(want);
     assert_eq!(
         got_rgb, want_rgb,
@@ -1281,7 +1281,7 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(120 120 128 / 0.039)",
             "rgb(120 120 128 / 0.039)",
         ),
-        // Тени: тёмный якорь нейтрали (#101012) в ОБЕИХ темах, rgba by design —
+        // Тени: тёмный якорь нейтрали (#101012) в ОБЕИХ темах, полупрозрачность by design —
         // солид над картинкой/стеклом закрывал бы контент пятном.
         (
             "fx-shadow-minor",
@@ -1337,7 +1337,7 @@ fn value_test_bites_on_alpha_mutation() {
     let table = cfg.compile_named_role_table().unwrap();
     let bg_dark = BgInput::solid("#101012").unwrap();
     let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
-    let (got_rgb, got_alpha) = rgba_to_parts(
+    let (got_rgb, got_alpha) = translucent_to_parts(
         &set.iter()
             .find(|(n, _)| n == "fx-skeleton-highlight")
             .unwrap()
@@ -1481,7 +1481,7 @@ fn compiled_table_carries_aliases() {
 /// Сборка RoleSpec в обход валидатора не даёт правдоподобного мусора:
 /// невалидная α/тинт резолвятся в Unreachable, не в тихий кламп.
 #[test]
-fn rgba_resolve_rejects_out_of_domain_spec() {
+fn translucent_resolve_rejects_out_of_domain_spec() {
     use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
     use crate::solve::BgInput;
     use crate::spaces::vc::ViewingConditions;

@@ -28,7 +28,7 @@
 //! тинт-якорь ([`crate::ladder::LadderTint`]), позиция несёт альфу Figma-рампы.
 //! [`RoleRecipe::AlphaAnalog`] компилируется в [`RoleSpec::AlphaAnalog`] (солид-
 //! цель источника + запрошенная альфа, композит-инверсия — [`crate::alpha`], #119).
-//! Резолв обоих — [`crate::semantic::Resolved::Translucent`] (rgba напрямую + солид-
+//! Резолв обоих — [`crate::semantic::Resolved::Translucent`] (тинт×альфа напрямую + солид-
 //! композит на фоне резолва для замера контраста). Меню позиций + провенанс —
 //! приложение A к `docs/decisions/0001-config-boundary.md`.
 
@@ -424,7 +424,7 @@ pub struct ThemesConfig {
 /// Рецепт роли из ФИЗИЧЕСКОГО меню (типология из [`crate::semantic`]).
 ///
 /// Все рецепты компилируются в [`RoleSpec`]: текст/dJ'/Lc/zero — солвер-роли,
-/// [`Ladder`](Self::Ladder) / [`AlphaAnalog`](Self::AlphaAnalog) — rgba-эмиссия.
+/// [`Ladder`](Self::Ladder) / [`AlphaAnalog`](Self::AlphaAnalog) — полупрозрачная эмиссия.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RoleRecipe {
@@ -1232,7 +1232,7 @@ pub fn labui_reference() -> ThemeConfig {
         position,
     };
 
-    // Конструкторы лестницы: источник × позиция → рецепт rgba-эмиссии.
+    // Конструкторы лестницы: источник × позиция → рецепт полупрозрачной эмиссии.
     let brand_pos = |position| RoleRecipe::Ladder {
         source: LadderSource::Brand,
         position,
@@ -1287,7 +1287,7 @@ pub fn labui_reference() -> ThemeConfig {
             neutral_pos(NeutralPick::Mid, LadderPosition::NeutralFillQuaternary),
         ),
         ("fill-none".to_string(), RoleRecipe::Zero),
-        // Тени — rgba by design (солид над картинкой/стеклом закрывал бы контент
+        // Тени — полупрозрачность by design (солид над картинкой/стеклом закрывал бы контент
         // пятном): тёмный якорь нейтрали в ОБЕИХ темах × пер-темная пара альф
         // ступени. Имена = стаб-контракт fx-shadow-*.
         (
@@ -1404,7 +1404,7 @@ pub fn labui_reference() -> ThemeConfig {
     // border-neutral алиасят нейтральные core-роли fill-primary/border-base).
     //
     // Солид-роль (`fill-accent`) = лестница LabelPrimary (солид, α=1). `-tinted` —
-    // ЗАЛИВКА при низкой альфе (rgba напрямую), то есть Ladder FillPrimary: тинт
+    // ЗАЛИВКА при низкой альфе (тинт×альфа напрямую), то есть Ladder FillPrimary: тинт
     // = якорь источника, α = @12. (AlphaAnalog-рецепт — для инверсии УЖЕ
     // РЕШЁННОГО контраст-солида, отдельный случай #119; здесь тинт-якорь эмитится
     // напрямую, поэтому Ladder, а не инверсия — иначе солид над белым дал бы

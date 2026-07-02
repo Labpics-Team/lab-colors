@@ -577,7 +577,7 @@ mod tests {
                     RoleOutcome::Translucent(r) => {
                         assert!(
                             r.tint_hex.starts_with('#') && r.composite_hex.starts_with('#'),
-                            "{bg} {}: rgba-эмиссия несёт hex-тинт и hex-композит",
+                            "{bg} {}: полупрозрачная эмиссия несёт hex-тинт и hex-композит",
                             entry.role_key
                         );
                         assert!(
@@ -658,7 +658,7 @@ mod tests {
                 .iter()
                 .any(|r| r.role_key == "fill-brand-primary"
                     && matches!(r.outcome, RoleOutcome::Translucent(_))),
-            "конфиг-контракт несёт rgba-роль лестницы"
+            "конфиг-контракт несёт полупрозрачная роль лестницы"
         );
 
         let fp_acme = engine.load_config(&acme_json()).expect("acme валиден");

@@ -358,7 +358,7 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
 /// Байт-точность реконструкции доказана round-trip тестом ядра на решётке
 /// куба. Hex к этому месту валиден по построению (солвер/лестница), но при
 /// невозможном парсе — честная структурная ошибка, НЕ тихая подмена формы:
-/// потребитель ждёт oklch, а rgba-роль при подмене ещё и потеряла бы альфу.
+/// потребитель ждёт oklch, а полупрозрачная роль при подмене ещё и потеряла бы альфу.
 fn oklch_css(hex: &str, alpha: Option<f64>) -> Result<String, JsError> {
     labcolors_core::oklch_css_from_hex(hex, alpha).map_err(|reason| {
         JsError::new(&format!(
