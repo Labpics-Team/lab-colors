@@ -900,11 +900,19 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 /// [`TINT_PERCEPTIBLE_MP_FLOOR`] at the pinched extremes) rather than fake it.
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
     let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
+    // The in-gamut max chroma depends only on `(l_ok, hue_deg)`, both fixed across
+    // the ratio bisection — solve it once here instead of re-solving it on every
+    // `mp_at` iteration (the bisection ran it ~30× per call). Bit-identical: the
+    // value fed to every `build_curve_color_with_cmax` is the same `max_chroma`
+    // the per-iteration call produced.
+    let c_max = scale::max_chroma(l_ok, hue_deg);
     let mp_at = |ratio: f64| -> f64 {
-        // `build_curve_color` returns clamped linear sRGB; quantise it to the
-        // display grid (the byte-for-byte identity of the old hex round-trip) and
-        // measure M' directly — no `format!`/parse on the bisection's hot path.
-        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color(l_ok, hue_deg, ratio));
+        // `build_curve_color_with_cmax` returns clamped linear sRGB; quantise it to
+        // the display grid (the byte-for-byte identity of the old hex round-trip)
+        // and measure M' directly — no `format!`/parse on the bisection's hot path.
+        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color_with_cmax(
+            l_ok, hue_deg, ratio, c_max,
+        ));
         crate::lcs::LcsColor::mp_of_linear_srgb(rgb, vc)
     };
 
@@ -944,10 +952,19 @@ const RATIO_BISECT_EPS: f64 = 1e-9;
 /// `hue_deg`, carrying `ratio` of the in-gamut maximum chroma — the same
 /// construction [`solve::solve`] applies internally, mirrored here so the curve
 /// can measure the `M'` a candidate ratio would yield before committing to it.
+#[cfg(test)]
 fn build_curve_color(l_ok: f64, hue_deg: f64, ratio: f64) -> [f64; 3] {
+    build_curve_color_with_cmax(l_ok, hue_deg, ratio, scale::max_chroma(l_ok, hue_deg))
+}
+
+/// [`build_curve_color`] with the in-gamut max chroma supplied by the caller, so
+/// a loop over many `ratio`s at a fixed `(l_ok, hue_deg)` solves `max_chroma`
+/// once instead of per iteration. Bit-identical to `build_curve_color` when
+/// `c_max == max_chroma(l_ok, hue_deg)`.
+fn build_curve_color_with_cmax(l_ok: f64, hue_deg: f64, ratio: f64, c_max: f64) -> [f64; 3] {
     use crate::spaces::oklab::oklab_to_srgb_linear;
     let hr = hue_deg.to_radians();
-    let chroma = ratio.clamp(0.0, 1.0) * scale::max_chroma(l_ok, hue_deg);
+    let chroma = ratio.clamp(0.0, 1.0) * c_max;
     let lab = [l_ok, chroma * hr.cos(), chroma * hr.sin()];
     let rgb = oklab_to_srgb_linear(lab);
     [
