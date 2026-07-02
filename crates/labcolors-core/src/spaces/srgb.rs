@@ -152,8 +152,9 @@ pub(crate) fn grey_code(linear: f64) -> Option<u8> {
 //  Public helpers
 // ------------------------------------------------------------------
 
-/// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
-pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
+/// Разбор `#RRGGBB` → три байта. Единственная реализация hex-парсинга —
+/// линейный и кодированный варианты различаются только декодом поверх байтов.
+fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
     let hex = hex.trim_start_matches('#');
     // `len()` is a *byte* count and the slices below cut on byte indices, so a
     // non-ASCII string of 6 bytes (e.g. "€€") would pass a bare length check yet
@@ -164,9 +165,12 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     }
     let parse =
         |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
-    let r = parse(&hex[0..2])?;
-    let g = parse(&hex[2..4])?;
-    let b = parse(&hex[4..6])?;
+    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
+}
+
+/// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
+pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
+    let [r, g, b] = hex_bytes(hex)?;
     // The input is always an 8-bit byte, so the decode is an exact table lookup
     // (finite domain) — no per-channel powf.
     Ok([decode_8bit(r), decode_8bit(g), decode_8bit(b)])
@@ -193,6 +197,28 @@ pub(crate) fn quantise_srgb(rgb: [f64; 3]) -> [f64; 3] {
 /// function (see the encode note above for why a table cannot be bit-exact here).
 pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
     let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
+}
+
+/// Разбор `#RRGGBB` → ГАММА-КОДИРОВАННЫЙ sRGB `[r, g, b]` в `[0, 1]`
+/// (byte/255, без декода в линейный свет).
+///
+/// Кодированное пространство — то, в котором Figma и браузер композитят
+/// straight-alpha (см. [`crate::alpha`]); для колориметрии используй
+/// [`srgb_from_hex`] (линейный свет).
+pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
+    let [r, g, b] = hex_bytes(hex)?;
+    Ok([
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
+    ])
+}
+
+/// Гамма-кодированный sRGB `[0, 1]` → `#RRGGBB` (clamp + round до 8 бит).
+/// Обратная сторона [`srgb_encoded_from_hex`] — без гамма-преобразований.
+pub fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
+    let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
 }
 
