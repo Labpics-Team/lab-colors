@@ -1364,19 +1364,25 @@ fn value_test_bites_on_alpha_mutation() {
     );
 }
 
-/// Сторона пары — идентичность семьи НА РЕЗОЛВ-УРОВНЕ: info в тёмной теме
-/// обязан остаться на светлой стороне (тёмный якорь #5696FF сам по себе
-/// перелезает кроссовер — контрпример оси A; мутация «сторона от vc» в
-/// semantic.rs обязана уронить этот тест).
+/// Сторона пары — идентичность семьи НА РЕЗОЛВ-УРОВНЕ. Носитель класса —
+/// БРЕНД под dark-IC: источник Brand несёт сырые якоря, и его dark-ic
+/// (#409CFF, Y = 0.321) пересекает кроссовер 0.30. Сентименты (включая
+/// info) разведены солвером и порог не straddle-ят — на них мутация
+/// «сторона от vc» поведенчески неразличима (выживший мутант M3
+/// верификатора). Мутация semantic.rs srgb→vc обязана уронить ЭТОТ тест.
 #[test]
 fn pair_side_is_family_stable_across_themes_at_resolve_level() {
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg_dark = BgInput::solid("#101012").unwrap();
-    let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
+    let set = resolve_named_set(
+        &bg_dark,
+        &table,
+        &ViewingConditions::dim_surround_high_contrast(),
+    );
     let (_, res) = set
         .iter()
-        .find(|(n, _)| n == "badge-fill-info")
-        .expect("паспорт несёт badge-fill-info");
+        .find(|(n, _)| n == "badge-fill-brand")
+        .expect("паспорт несёт badge-fill-brand");
     let fill = res
         .translucent()
         .expect("заливка пары эмитится лестничной сантехникой");
@@ -1392,7 +1398,7 @@ fn pair_side_is_family_stable_across_themes_at_resolve_level() {
     let y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
     assert!(
         y < 0.17913,
-        "badge-fill-info в dark обязан быть утемнён под светлую сторону семьи (Y={y:.4})"
+        "badge-fill-brand в dark-IC обязан быть утемнён под светлую сторону семьи (Y={y:.4})"
     );
 }
 
