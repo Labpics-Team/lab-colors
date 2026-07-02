@@ -147,29 +147,37 @@ primitives.md` §2 (пер-темные якоря) + grounding-документ
 альф Figma `Accent/Derivable/<Family>/<Family>@NN`. Единый паттерн проверен на
 brand/danger/info/success.
 
-### Позиции и альфы (провенанс — Figma-рампа @NN)
+### Позиции и ПЕР-ТЕМНЫЕ альфы (провенанс — стаб labui `contract.css`)
 
-Альфы — данные (float32-квантование процентов из имён переменных Figma), НЕ
-POLICY-константы перцептивных модулей: провенанс держит doc-строка
-`crate::ladder` + тест `position_alphas_match_grounded_figma_ramp` (нетавтологичный
-пин из grounding-документа), а не строка реестра `docs/empirical-inventory.md`
-(как якорные hex палитры в `accent.rs`).
+Альфы — данные, снятые ПОСТРОЧНО из стаба labui `packages/colors-stub/contract.css`
+(light-scope `[data-theme="light"]` и dark-scope `[data-theme="dark"]`, 2026-07-02),
+НЕ POLICY-константы: провенанс держит doc-строка `crate::ladder` + тест
+`position_alpha_pairs_match_grounded_stub` (нетавтологичный пин из стаба).
 
-| позиция          | α       | Figma @NN |
-|------------------|---------|-----------|
-| `LabelPrimary`   | 1.0     | солид     |
-| `LabelSecondary` | 0.722   | @72       |
-| `LabelTertiary`  | 0.522   | @52       |
-| `LabelQuaternary`| 0.322   | @32       |
-| `FillPrimary`    | 0.122   | @12       |
-| `FillSecondary`  | 0.078   | @8        |
-| `FillTertiary`   | 0.039   | @4        |
-| `FillQuaternary` | 0.02    | @2        |
-| `BorderBase`     | 0.2     | @20       |
-| `BorderSoft`     | 0.122   | @12       |
-| `BorderStrong`   | 1.0     | солид     |
-| `FocusRing`      | 1.0     | солид     |
-| `Glow`           | 0.522   | @52       |
+Альфа — ПЕР-ТЕМНАЯ пара `(light, dark)`. У акцентов пара равна (меняется только
+тинт по теме — у Figma ещё нет отдельных dark-рампов альф акцентов, стаб держит
+пары равными). Скелетон-база — ЕДИНСТВЕННАЯ пер-темная альфа. IC-темы наследуют
+альфу базовой темы (стаб не несёт ic-скоупов; IC отличается только тинтом).
+
+| позиция             | α (light) | α (dark) | стаб @NN     |
+|---------------------|-----------|----------|--------------|
+| `LabelPrimary`      | 1.0       | 1.0      | солид        |
+| `LabelSecondary`    | 0.722     | 0.722    | @72          |
+| `LabelTertiary`     | 0.522     | 0.522    | @52          |
+| `LabelQuaternary`   | 0.322     | 0.322    | @32          |
+| `FillPrimary`       | 0.122     | 0.122    | @12          |
+| `FillSecondary`     | 0.078     | 0.078    | @8           |
+| `FillTertiary`      | 0.039     | 0.039    | @4           |
+| `FillQuaternary`    | 0.02      | 0.02     | @2           |
+| `BorderBase`        | 0.2       | 0.2      | @20          |
+| `BorderSoft`        | 0.122     | 0.122    | @12          |
+| `BorderStrong`      | 1.0       | 1.0      | солид        |
+| `FocusRing`         | 1.0       | 1.0      | солид        |
+| `Glow`              | 0.522     | 0.522    | @52          |
+| `SkeletonBase`      | 0.078     | 0.122    | @8 / @12 ⚠   |
+| `SkeletonHighlight` | 0.039     | 0.039    | @4           |
+
+⚠ `SkeletonBase` — единственная пер-темная альфа (стаб: light @8, dark @12).
 
 ### Источник тинта (`source`)
 
@@ -181,9 +189,24 @@ POLICY-константы перцептивных модулей: провен�
   конфига (закон `2·C_rep·sin(20°/2)`, Witzel & Gegenfurtner 2013); при
   labui-якорях == замороженная `0.068_703_9` (деривационная идентичность —
   тест `s_perc_min_recomputed_from_config_anchors_matches_frozen`).
+- `neutral(pick)` — НЕЙТРАЛЬНЫЙ тинт из `neutral.anchors` (НЕ семейство палитры).
+  Заземление — стаб: `Neutral/Derivable` тинтуется краями нейтральной шкалы.
+  `pick`: `Mid` (`#787880`, стаб `rgb(120 120 128 / …)`) — скелетон/нейтральные
+  тинты; `Light` (`#FFFFFF`) — нейтральное свечение (стаб `rgb(255 255 255 / 0.522)`);
+  `Dark` (`#101012`) — нейтральный фокус (стаб `rgb(16 16 18)` на светлой теме).
 
 Пер-темность якорей (а не «светлый + вывод») — из reference §2: тёмный/IC-варианты
 Figma-примитивов замерены, не выведены.
+
+### Значенческая сверка (класс «имя без значения»)
+
+`representative_roles_match_stub_values_light_and_dark` сверяет эмиссию
+`rgba(тинт, α)` представителя КАЖДОЙ группы со строкой стаба ПОБАЙТНО в light И
+dark (нормализованный формат). Закрывает класс дефекта «роль в diff по имени, но
+эмитит не то значение». Исключены намеренно расходящиеся роли (с ссылкой):
+`*-info-*` (смещение солвером); `fx-focus-ring-neutral` (dark), `fx-glow-inverted`,
+`fill-neutral` — задокументированные gap-и (пер-темный нейтральный край /
+inverted-якоря / PROVISIONAL-литерал не выводятся из тройки `neutral.anchors`).
 
 ### Деривационная идентичность сентимента (честная находка t2)
 

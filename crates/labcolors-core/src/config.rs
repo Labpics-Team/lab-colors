@@ -373,9 +373,9 @@ pub enum RoleRecipe {
     /// `position` — позиция закрытого меню (несёт свою альфу; перечень —
     /// приложение A к ADR-0001). Компилируется в [`RoleSpec::Ladder`].
     Ladder {
-        /// Источник тинта: бренд, семейство палитры или сентимент.
+        /// Источник тинта: бренд, семейство палитры, сентимент или нейтраль.
         source: LadderSource,
-        /// Позиция меню (несёт альфу Figma-рампы).
+        /// Позиция меню (несёт пер-темную пару альф из стаба labui).
         position: LadderPosition,
     },
     /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
@@ -409,6 +409,30 @@ pub enum LadderSource {
     /// Сентимент-категория по имени: оттенок семейства, разведённый с брендом
     /// сентимент-солвером (пер-темный солид на разрешённом оттенке).
     Sentiment(String),
+    /// Нейтральный тинт из [`NeutralConfig::anchors`] — семейство `Neutral/Derivable`
+    /// стаба labui (`rgb(120 120 128 / …)` = `neutral.anchors.mid`). Скелетон и
+    /// нейтральные fill/border/glow/focus-роли берут ЭТОТ источник, НЕ семейство
+    /// палитры. Какой из трёх нейтральных якорей — задаёт [`NeutralPick`].
+    Neutral(NeutralPick),
+}
+
+/// Какой якорь нейтральной шкалы берёт [`LadderSource::Neutral`] как тинт.
+///
+/// Нейтральная лестница labui тинтуется РАЗНЫМИ якорями по роли (заземление —
+/// стаб `contract.css`): скелетон/тинты — средним (`neutral.anchors.mid`,
+/// `#787880`, стаб `rgb(120 120 128 / …)`); нейтральное свечение — светлым краем
+/// (`#FFFFFF`, стаб `rgb(255 255 255 / 0.522)`); нейтральный фокус — тёмным краем
+/// (`#101012`, стаб `rgb(16 16 18)` на светлой теме). Выбор здесь держит тинт
+/// пер-темными данными, а не веткой физики.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NeutralPick {
+    /// Средний якорь `neutral.anchors.mid` (`#787880`) — скелетон, нейтральные тинты.
+    Mid,
+    /// Светлый край `neutral.anchors.light` (`#FFFFFF`) — нейтральное свечение.
+    Light,
+    /// Тёмный край `neutral.anchors.dark` (`#101012`) — нейтральный фокус.
+    Dark,
 }
 
 /// Полный конфиг темы потребителя (без сериализации — t3).
@@ -726,6 +750,9 @@ impl ThemeConfig {
                     })
                 }
             }
+            // Нейтральный источник всегда разрешим (neutral.anchors — обязательный
+            // вход конфига, провалидирован check_theme_anchors как тройка hex).
+            LadderSource::Neutral(_) => Ok(()),
         }
     }
 
@@ -775,10 +802,14 @@ impl ThemeConfig {
                 magnitude: *magnitude,
             }),
             RoleRecipe::Zero => Ok(RoleSpec::Zero),
-            RoleRecipe::Ladder { source, position } => Ok(RoleSpec::Ladder {
-                tint: self.compile_ladder_tint(role, source)?,
-                alpha: position.alpha(),
-            }),
+            RoleRecipe::Ladder { source, position } => {
+                let (alpha_light, alpha_dark) = position.alpha_pair();
+                Ok(RoleSpec::Ladder {
+                    tint: self.compile_ladder_tint(role, source)?,
+                    alpha_light,
+                    alpha_dark,
+                })
+            }
             RoleRecipe::AlphaAnalog { of, alpha } => Ok(RoleSpec::AlphaAnalog {
                 of: self.compile_ladder_tint(role, of)?,
                 alpha: *alpha,
@@ -802,6 +833,7 @@ impl ThemeConfig {
             LadderSource::Brand => self.brand.anchors.clone(),
             LadderSource::Family(key) => self.family_anchors(role, key)?.clone(),
             LadderSource::Sentiment(name) => return self.compile_sentiment_tint(role, name),
+            LadderSource::Neutral(pick) => self.neutral_anchors(*pick),
         };
         let quad = anchors
             .encoded_quad()
@@ -810,6 +842,24 @@ impl ThemeConfig {
                 value: "<пер-темный якорь>".to_string(),
             })?;
         Ok(LadderTint::new(quad))
+    }
+
+    /// Нейтральный якорь из [`NeutralConfig::anchors`] по [`NeutralPick`],
+    /// продублированный на четыре режима (нейтральная шкала конфига несёт один
+    /// hex на край, без пер-темных IC-вариантов). Заземление — стаб labui:
+    /// `Neutral/Derivable` тинтуется этими краями (`#787880`/`#FFFFFF`/`#101012`).
+    fn neutral_anchors(&self, pick: NeutralPick) -> ThemeAnchors {
+        let hex = match pick {
+            NeutralPick::Mid => &self.neutral.anchors.mid,
+            NeutralPick::Light => &self.neutral.anchors.light,
+            NeutralPick::Dark => &self.neutral.anchors.dark,
+        };
+        ThemeAnchors {
+            light: hex.clone(),
+            dark: hex.clone(),
+            light_ic: hex.clone(),
+            dark_ic: hex.clone(),
+        }
     }
 
     /// Пер-темные якоря семейства палитры по ключу (валидатор уже проверил
@@ -928,10 +978,6 @@ pub fn labui_reference() -> ThemeConfig {
         source: LadderSource::Sentiment(name.to_string()),
         position,
     };
-    let fam_pos = |key: &str, position| RoleRecipe::Ladder {
-        source: LadderSource::Family(key.to_string()),
-        position,
-    };
 
     let mut roles = vec![
         // Labels.
@@ -1011,8 +1057,16 @@ pub fn labui_reference() -> ThemeConfig {
         roles.extend(ladder_family(prefix, &mk));
     }
 
-    // FX focus-ring (солид) и glow (@52). Источник `*-neutral` = бренд: labui
-    // трактует нейтральный фокус/свечение как приглушённый брендовый акцент.
+    // Конструктор нейтрального источника (стаб: `Neutral/Derivable` тинтуется
+    // краями нейтральной шкалы, НЕ семейством палитры).
+    let neutral_pos = |pick, position| RoleRecipe::Ladder {
+        source: LadderSource::Neutral(pick),
+        position,
+    };
+
+    // FX focus-ring (солид) и glow (@52). Сентимент/бренд-источники — акцентные;
+    // `*-neutral`/`inverted` — НЕЙТРАЛЬНЫЕ (стаб: rgb(255 255 255 / .522) и т.п.,
+    // НЕ бренд).
     roles.push((
         "fx-focus-ring-brand".to_string(),
         brand_pos(LadderPosition::FocusRing),
@@ -1025,9 +1079,13 @@ pub fn labui_reference() -> ThemeConfig {
         "fx-focus-ring-warning".to_string(),
         sent_pos("warning", LadderPosition::FocusRing),
     ));
+    // Нейтральный фокус: тёмный край нейтрали, солид (стаб light rgb(16 16 18) =
+    // #101012). Пер-темный флип к near-white на тёмной теме стаб несёт литералом
+    // (#F6F8FA) — движок из тройки anchors его не выводит: исключён из точного
+    // value-теста, помечен как gap пер-темного нейтрального края.
     roles.push((
         "fx-focus-ring-neutral".to_string(),
-        brand_pos(LadderPosition::FocusRing),
+        neutral_pos(NeutralPick::Dark, LadderPosition::FocusRing),
     ));
     roles.push(("fx-glow-brand".to_string(), brand_pos(LadderPosition::Glow)));
     roles.push((
@@ -1038,28 +1096,33 @@ pub fn labui_reference() -> ThemeConfig {
         "fx-glow-warning".to_string(),
         sent_pos("warning", LadderPosition::Glow),
     ));
+    // Нейтральное свечение: светлый край нейтрали @52 (стаб rgb(255 255 255 / .522)).
     roles.push((
         "fx-glow-neutral".to_string(),
-        brand_pos(LadderPosition::Glow),
+        neutral_pos(NeutralPick::Light, LadderPosition::Glow),
     ));
+    // Инвертированное свечение: нейтральный mid-тинт (стаб light #B0B0B9 /
+    // dark #3C3C43 — конкретные нейтральные литералы, не выводимые из тройки
+    // anchors). Приближено Neutral(Mid)@Glow; исключено из точного value-теста
+    // как известный gap (нужны отдельные inverted-якоря конфига).
     roles.push((
         "fx-glow-inverted".to_string(),
-        brand_pos(LadderPosition::Glow),
+        neutral_pos(NeutralPick::Mid, LadderPosition::Glow),
     ));
-    // Skeleton — нейтральная полупрозрачная заливка (base @4, highlight @8):
-    // лестница нейтрального семейства `blue`. (Тени эмитятся отдельно как
-    // shadow-*, которые labui читает через alias fx-shadow-*.)
+    // Skeleton — нейтральный тинт #787880 (стаб rgb(120 120 128 / …)), ПЕР-ТЕМНАЯ
+    // альфа: base light @8 / dark @12, highlight @4. Источник = Neutral(Mid).
     roles.push((
         "fx-skeleton-base".to_string(),
-        fam_pos("blue", LadderPosition::FillTertiary),
+        neutral_pos(NeutralPick::Mid, LadderPosition::SkeletonBase),
     ));
     roles.push((
         "fx-skeleton-highlight".to_string(),
-        fam_pos("blue", LadderPosition::FillSecondary),
+        neutral_pos(NeutralPick::Mid, LadderPosition::SkeletonHighlight),
     ));
 
-    // Компонентные роли: accent = бренд-семья, neutral = нейтраль-семейство
-    // (labui `Neutral` компонент = семейство blue), danger = danger-сентимент.
+    // Компонентные роли. accent = бренд, danger = danger-сентимент, neutral —
+    // НЕЙТРАЛЬНЫЙ (стаб: fill-neutral солид-литерал; fill-neutral-tinted и
+    // border-neutral алиасят нейтральные core-роли fill-primary/border-base).
     //
     // Солид-роль (`fill-accent`) = лестница LabelPrimary (солид, α=1). `-tinted` —
     // ЗАЛИВКА при низкой альфе (rgba напрямую), то есть Ladder FillPrimary: тинт
@@ -1071,9 +1134,11 @@ pub fn labui_reference() -> ThemeConfig {
         "fill-accent".to_string(),
         brand_pos(LadderPosition::LabelPrimary),
     ));
+    // fill-neutral — солид-литерал PROVISIONAL стаба (нет engine-деривации);
+    // приближено Neutral(Mid) солид, исключено из точного value-теста (owner-провизион).
     roles.push((
         "fill-neutral".to_string(),
-        fam_pos("blue", LadderPosition::LabelPrimary),
+        neutral_pos(NeutralPick::Mid, LadderPosition::LabelPrimary),
     ));
     roles.push((
         "fill-danger".to_string(),
@@ -1083,10 +1148,8 @@ pub fn labui_reference() -> ThemeConfig {
         "fill-accent-tinted".to_string(),
         brand_pos(LadderPosition::FillPrimary),
     ));
-    roles.push((
-        "fill-neutral-tinted".to_string(),
-        fam_pos("blue", LadderPosition::FillPrimary),
-    ));
+    // fill-neutral-tinted = var(fill-primary) → алиас на нейтральную core-заливку.
+    // border-neutral = var(border-base) → алиас (см. aliases ниже).
     roles.push((
         "fill-danger-tinted".to_string(),
         sent_pos("danger", LadderPosition::FillPrimary),
@@ -1103,10 +1166,7 @@ pub fn labui_reference() -> ThemeConfig {
         "border-accent".to_string(),
         brand_pos(LadderPosition::BorderBase),
     ));
-    roles.push((
-        "border-neutral".to_string(),
-        fam_pos("blue", LadderPosition::BorderBase),
-    ));
+    // border-neutral = var(border-base): алиас на нейтральную dJ' границу core.
     roles.push((
         "border-danger".to_string(),
         sent_pos("danger", LadderPosition::BorderBase),
@@ -1169,7 +1229,16 @@ pub fn labui_reference() -> ThemeConfig {
             ],
         },
         roles,
-        aliases: Vec::new(),
+        // Компонентные нейтральные роли, которые стаб алиасит через var() на
+        // нейтральные core-роли (одна истина, ноль дублирования значений):
+        // fill-neutral-tinted = var(--lab-fill-primary); border-neutral = var(--lab-border-base).
+        aliases: vec![
+            (
+                "fill-neutral-tinted".to_string(),
+                "fill-primary".to_string(),
+            ),
+            ("border-neutral".to_string(), "border-base".to_string()),
+        ],
     }
 }
 

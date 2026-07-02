@@ -4,7 +4,9 @@
 //! 2. RED-proof байт-в-байт: мутация одного рецепта фикстуры роняет тест.
 //! 3. Валидатор: за-предельное значение КАЖДОЙ ручки даёт `ConfigError` +
 //!    RED-proof мутацией предела (валидный vs невалидный на границе).
-//! 4. Заглушки t2: `Ladder`/`AlphaAnalog` дают `NotYetImplemented`.
+//! 4. t2: Ladder/AlphaAnalog компилируются в rgba-специи; diff=пусто против
+//!    consumedRoles; S_PERC_MIN-идентичность; значенческая сверка со стабом
+//!    labui (light+dark) + RED-proof мутаций.
 
 use super::*;
 use crate::ladder::LadderPosition;
@@ -459,8 +461,9 @@ fn ladder_recipe_compiles_to_rgba_spec() {
         .find(|(n, _)| n == "fill-primary")
         .unwrap();
     assert!(
-        matches!(spec, RoleSpec::Ladder { alpha, .. } if (*alpha - 0.122).abs() < 1e-12),
-        "Ladder(FillPrimary) обязан нести альфу @12; получено {spec:?}"
+        matches!(spec, RoleSpec::Ladder { alpha_light, alpha_dark, .. }
+            if (*alpha_light - 0.122).abs() < 1e-12 && (*alpha_dark - 0.122).abs() < 1e-12),
+        "Ladder(FillPrimary) обязан нести альфу @12 (обе темы); получено {spec:?}"
     );
 }
 
@@ -696,16 +699,22 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
 /// фона, on-* выброшены, фоны=входы, алиасы).
 #[test]
 fn consumed_roles_diff_is_empty_against_labui_contract() {
-    let table = labui_reference()
+    let cfg = labui_reference();
+    let table = cfg
         .compile_named_role_table()
         .expect("фикстура labui компилируется");
-    let emitted: std::collections::HashSet<&str> =
+    // Покрытие = эмитируемые роли ∪ компонентные алиасы (стаб алиасит нейтральные
+    // компонентные роли через var() на core-роли — они покрыты алиасом, не рецептом).
+    let mut covered: std::collections::HashSet<&str> =
         table.entries().iter().map(|(n, _)| n.as_str()).collect();
+    for (alias, _) in &cfg.aliases {
+        covered.insert(alias.as_str());
+    }
 
-    // Каждая требуемая (не-коллапс) роль обязана эмитироваться.
+    // Каждая требуемая (не-коллапс) роль обязана быть покрыта (рецептом или алиасом).
     let mut missing = Vec::new();
     for role in LABUI_CONSUMED_ROLES {
-        if !emitted.contains(role) {
+        if !covered.contains(role) {
             missing.push(*role);
         }
     }
@@ -1046,4 +1055,128 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
             );
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t2 (класс «имена без значений»): значенческий тест фикстуры против стаба.
+//
+// Класс дефекта: роль присутствует в diff-тесте по ИМЕНИ, но эмитит НЕ ТО
+// значение (напр. нейтральный skeleton, ошибочно взятый из семейства blue).
+// Здесь эмиссия rgba(тинт, α) представителя каждой группы сверяется со строкой
+// стаба contract.css ПОБАЙТНО (нормализованный формат), в light И dark.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Нормализовать [`Resolved::Rgba`] в канонический `rgb(R G B / A)` (формат стаба
+/// labui): тинт-hex → десятичные каналы, альфа как есть. Солид (α=1) → `rgb(R G B)`.
+fn rgba_to_stub_string(res: &Resolved) -> String {
+    let r = res
+        .rgba()
+        .unwrap_or_else(|| panic!("ожидался Resolved::Rgba, получено {res:?}"));
+    let rgb = crate::spaces::srgb::srgb_encoded_from_hex(r.tint_hex()).unwrap();
+    let ch = |v: f64| (v * 255.0).round() as u8;
+    let (rr, gg, bb) = (ch(rgb[0]), ch(rgb[1]), ch(rgb[2]));
+    if (r.alpha() - 1.0).abs() < 1e-9 {
+        format!("rgb({rr} {gg} {bb})")
+    } else {
+        // Стаб печатает альфу без ведущего нуля целой части и без хвостовых нулей
+        // (0.722, 0.2, 0.078…); {} по f64 это воспроизводит для наших величин.
+        format!("rgb({rr} {gg} {bb} / {})", r.alpha())
+    }
+}
+
+/// Значенческая сверка представителей групп против стаба labui в light И dark.
+/// Закрывает класс «имя есть, значение врёт»: skeleton = нейтраль #787880 с
+/// пер-темной альфой, glow-neutral = белый @52, акценты = пер-темный якорь.
+///
+/// Исключены НАМЕРЕННО расходящиеся роли (с комментарием-ссылкой):
+/// - `border-info-*`/`label-info-*`/`fill-info-*` — оттенок смещён сентимент-
+///   солвером относительно бренда (тест `info_is_displaced_from_blue_brand_by_design`);
+/// - `fx-focus-ring-neutral` (dark), `fx-glow-inverted`, `fill-neutral` —
+///   задокументированные gap-и (пер-темный нейтральный край / inverted-якоря /
+///   PROVISIONAL-литерал не выводятся из тройки neutral.anchors).
+#[test]
+fn representative_roles_match_stub_values_light_and_dark() {
+    let table = labui_reference().compile_named_role_table().unwrap();
+    let bg_light = BgInput::solid("#FFFFFF").unwrap();
+    let bg_dark = BgInput::solid("#101012").unwrap();
+
+    // (роль, стаб-light, стаб-dark). Значения — из contract.css (2026-07-02).
+    let cases: &[(&str, &str, &str)] = &[
+        // Акцент/сентимент: пер-темный тинт, альфа @72/@12/@52.
+        (
+            "label-danger-secondary",
+            "rgb(255 59 48 / 0.722)",
+            "rgb(255 58 58 / 0.722)",
+        ),
+        (
+            "fill-brand-primary",
+            "rgb(0 122 255 / 0.122)",
+            "rgb(74 143 255 / 0.122)",
+        ),
+        (
+            "border-success-base",
+            "rgb(52 199 89 / 0.2)",
+            "rgb(48 209 88 / 0.2)",
+        ),
+        (
+            "fx-glow-brand",
+            "rgb(0 122 255 / 0.522)",
+            "rgb(74 143 255 / 0.522)",
+        ),
+        // Нейтральные: skeleton #787880 с ПЕР-ТЕМНОЙ альфой (base @8/@12), glow-neutral белый @52.
+        (
+            "fx-skeleton-base",
+            "rgb(120 120 128 / 0.078)",
+            "rgb(120 120 128 / 0.122)",
+        ),
+        (
+            "fx-skeleton-highlight",
+            "rgb(120 120 128 / 0.039)",
+            "rgb(120 120 128 / 0.039)",
+        ),
+        (
+            "fx-glow-neutral",
+            "rgb(255 255 255 / 0.522)",
+            "rgb(255 255 255 / 0.522)",
+        ),
+    ];
+
+    for (role, want_light, want_dark) in cases {
+        let set_l = resolve_named_set(&bg_light, &table, &ViewingConditions::srgb());
+        let set_d = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
+        let got_l = rgba_to_stub_string(&set_l.iter().find(|(n, _)| n == role).unwrap().1);
+        let got_d = rgba_to_stub_string(&set_d.iter().find(|(n, _)| n == role).unwrap().1);
+        assert_eq!(
+            &got_l, want_light,
+            "ЗНАЧЕНИЕ РАЗОШЛОСЬ (light) `{role}`: эмиссия {got_l} != стаб {want_light}"
+        );
+        assert_eq!(
+            &got_d, want_dark,
+            "ЗНАЧЕНИЕ РАЗОШЛОСЬ (dark) `{role}`: эмиссия {got_d} != стаб {want_dark}"
+        );
+    }
+}
+
+/// RED-proof значенческого теста: мутация ОДНОЙ альфы (skeleton-base dark @12→@2)
+/// роняет сверку — тест кусается, не green-from-birth.
+#[test]
+fn value_test_bites_on_alpha_mutation() {
+    let mut cfg = labui_reference();
+    for (name, recipe) in &mut cfg.roles {
+        if name == "fx-skeleton-base" {
+            // Подменяем позицию на FillQuaternary (@2) — dark-альфа уедет с @12 на @2.
+            *recipe = RoleRecipe::Ladder {
+                source: LadderSource::Neutral(crate::config::NeutralPick::Mid),
+                position: LadderPosition::FillQuaternary,
+            };
+        }
+    }
+    let table = cfg.compile_named_role_table().unwrap();
+    let bg_dark = BgInput::solid("#101012").unwrap();
+    let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
+    let got = rgba_to_stub_string(&set.iter().find(|(n, _)| n == "fx-skeleton-base").unwrap().1);
+    assert_ne!(
+        got, "rgb(120 120 128 / 0.122)",
+        "RED-proof значенческого теста провален: мутация альфы НЕ сдвинула эмиссию"
+    );
 }

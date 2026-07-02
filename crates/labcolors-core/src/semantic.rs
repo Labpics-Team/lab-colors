@@ -518,13 +518,18 @@ pub enum RoleSpec {
     /// резолва для честного замера контраста (фаза 1 AA меряет композит).
     ///
     /// bg-независимость тинта (это якорь источника) — почему он `Copy`-payload
-    /// [`LadderTint`], разложенный по темам на этапе компиляции; альфа — данные
-    /// позиции меню ([`LadderPosition::alpha`]).
+    /// [`LadderTint`], разложенный по темам на этапе компиляции. Альфа — ПЕР-ТЕМНАЯ
+    /// пара `(light, dark)` данных позиции меню
+    /// ([`LadderPosition::alpha_pair`](crate::ladder::LadderPosition::alpha_pair)):
+    /// у акцентов пара равна, но скелетон-база пер-темна (стаб light @8 / dark @12),
+    /// поэтому альфа выбирается по теме резолва, как и тинт.
     Ladder {
         /// Пер-темный кодированный тинт (якорь источника).
         tint: LadderTint,
-        /// Альфа позиции (`(0, 1]`; солид = 1.0).
-        alpha: f64,
+        /// Альфа для светлой темы (`(0, 1]`; солид = 1.0).
+        alpha_light: f64,
+        /// Альфа для тёмной темы (`(0, 1]`; у акцентов = `alpha_light`).
+        alpha_dark: f64,
     },
     /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
     /// #119): для солид-цвета `of` (по теме) на фоне резолва подбирается
@@ -1374,10 +1379,20 @@ fn resolve_spec_in(
             };
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
-        RoleSpec::Ladder { tint, alpha } => {
+        RoleSpec::Ladder {
+            tint,
+            alpha_light,
+            alpha_dark,
+        } => {
             // Лестница эмитит rgba(tint, α) НАПРЯМУЮ: тинт — якорь источника по
-            // теме (bg-независим), α — данные позиции. Композит на фоне резолва —
-            // для честного замера контраста (закон лестницы, `crate::ladder`).
+            // теме (bg-независим), α — пер-темные данные позиции (light/dark).
+            // Композит на фоне резолва — для честного замера контраста
+            // (закон лестницы, `crate::ladder`).
+            let alpha = if vc.is_dark_theme() {
+                alpha_dark
+            } else {
+                alpha_light
+            };
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
         }
         RoleSpec::AlphaAnalog { of, alpha } => {

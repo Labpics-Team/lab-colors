@@ -163,11 +163,15 @@ pub enum LadderPosition {
     FocusRing,
     /// Свечение — `@52`.
     Glow,
+    /// Скелетон-база — ПЕР-ТЕМНАЯ альфа (light `@8`, dark `@12` по стабу labui).
+    SkeletonBase,
+    /// Скелетон-хайлайт — `@4` (обе темы).
+    SkeletonHighlight,
 }
 
 impl LadderPosition {
     /// Все позиции меню — поверхность для property-свипов и генерации ролей.
-    pub const ALL: [LadderPosition; 13] = [
+    pub const ALL: [LadderPosition; 15] = [
         LadderPosition::LabelPrimary,
         LadderPosition::LabelSecondary,
         LadderPosition::LabelTertiary,
@@ -181,26 +185,51 @@ impl LadderPosition {
         LadderPosition::BorderStrong,
         LadderPosition::FocusRing,
         LadderPosition::Glow,
+        LadderPosition::SkeletonBase,
+        LadderPosition::SkeletonHighlight,
     ];
 
-    /// Альфа позиции — ДАННЫЕ рампы Figma `@NN` (провенанс — документация модуля).
-    /// Мутация любого значения роняет тест лестницы (RED-proof).
-    pub fn alpha(self) -> f64 {
+    /// Пер-темная пара альф `(light, dark)` позиции — ДАННЫЕ, снятые построчно из
+    /// стаба labui `packages/colors-stub/contract.css` (light-scope `[data-theme=
+    /// "light"]` и dark-scope `[data-theme="dark"]`, снято 2026-07-02).
+    ///
+    /// Для акцентных позиций пара РАВНА (свет и тьма несут одну альфу @NN, меняется
+    /// только тинт по теме — стаб dark = копия light-альфы). Скелетон-база —
+    /// ЕДИНСТВЕННАЯ пер-темная альфа: light `@8` (0.078) / dark `@12` (0.122).
+    /// IC-темы: стаб не несёт отдельных ic-скоупов, поэтому light-ic берёт
+    /// light-альфу, dark-ic — dark-альфу ([`alpha_for_vc`](Self::alpha_for_vc)).
+    ///
+    /// Замечание: у Figma нет отдельных dark-рампов альф акцентов — стаб держит
+    /// пары равными; когда рампы появятся, правится ЭТА таблица (данные), не код.
+    pub fn alpha_pair(self) -> (f64, f64) {
         match self {
-            LadderPosition::LabelPrimary => 1.0,
-            LadderPosition::LabelSecondary => 0.722,
-            LadderPosition::LabelTertiary => 0.522,
-            LadderPosition::LabelQuaternary => 0.322,
-            LadderPosition::FillPrimary => 0.122,
-            LadderPosition::FillSecondary => 0.078,
-            LadderPosition::FillTertiary => 0.039,
-            LadderPosition::FillQuaternary => 0.02,
-            LadderPosition::BorderBase => 0.2,
-            LadderPosition::BorderSoft => 0.122,
-            LadderPosition::BorderStrong => 1.0,
-            LadderPosition::FocusRing => 1.0,
-            LadderPosition::Glow => 0.522,
+            LadderPosition::LabelPrimary => (1.0, 1.0),
+            LadderPosition::LabelSecondary => (0.722, 0.722),
+            LadderPosition::LabelTertiary => (0.522, 0.522),
+            LadderPosition::LabelQuaternary => (0.322, 0.322),
+            LadderPosition::FillPrimary => (0.122, 0.122),
+            LadderPosition::FillSecondary => (0.078, 0.078),
+            LadderPosition::FillTertiary => (0.039, 0.039),
+            LadderPosition::FillQuaternary => (0.02, 0.02),
+            LadderPosition::BorderBase => (0.2, 0.2),
+            LadderPosition::BorderSoft => (0.122, 0.122),
+            LadderPosition::BorderStrong => (1.0, 1.0),
+            LadderPosition::FocusRing => (1.0, 1.0),
+            LadderPosition::Glow => (0.522, 0.522),
+            // Скелетон-база пер-темна: стаб light @8, dark @12.
+            LadderPosition::SkeletonBase => (0.078, 0.122),
+            LadderPosition::SkeletonHighlight => (0.039, 0.039),
         }
+    }
+
+    /// Альфа позиции под условия просмотра резолва: тёмный сурраунд
+    /// (`vc.is_dark_theme()`) берёт `dark`-элемент пары, иначе `light`. IC-режим
+    /// наследует альфу базовой темы (стаб не несёт отдельных ic-альф — см.
+    /// [`alpha_pair`](Self::alpha_pair)); IC отличается только тинтом (пер-темный
+    /// якорь [`LadderTint::for_vc`]).
+    pub fn alpha_for_vc(self, vc: &ViewingConditions) -> f64 {
+        let (light, dark) = self.alpha_pair();
+        if vc.is_dark_theme() { dark } else { light }
     }
 
     /// Стабильный kebab-ключ позиции — для разбора рецепта из конфига (t3 JSON)
@@ -220,6 +249,8 @@ impl LadderPosition {
             LadderPosition::BorderStrong => "border-strong",
             LadderPosition::FocusRing => "focus-ring",
             LadderPosition::Glow => "glow",
+            LadderPosition::SkeletonBase => "skeleton-base",
+            LadderPosition::SkeletonHighlight => "skeleton-highlight",
         }
     }
 }
@@ -228,33 +259,72 @@ impl LadderPosition {
 mod tests {
     use super::*;
 
-    /// Меню позиций закрыто и его альфы — заземлённая Figma-рампа `@NN`.
-    /// Нетавтологичный пин: числа взяты из grounding-документа, а мутация
-    /// [`LadderPosition::alpha`] роняет тест (RED-proof альф позиций).
+    /// Меню позиций закрыто; пер-темные пары альф `(light, dark)` — заземлены
+    /// построчно из стаба labui (contract.css light/dark-scope). Нетавтологичный
+    /// пин: числа из стаба, мутация [`LadderPosition::alpha_pair`] роняет тест.
     #[test]
-    fn position_alphas_match_grounded_figma_ramp() {
-        let expected: &[(LadderPosition, f64, &str)] = &[
-            (LadderPosition::LabelPrimary, 1.0, "label-primary"),
-            (LadderPosition::LabelSecondary, 0.722, "label-secondary"),
-            (LadderPosition::LabelTertiary, 0.522, "label-tertiary"),
-            (LadderPosition::LabelQuaternary, 0.322, "label-quaternary"),
-            (LadderPosition::FillPrimary, 0.122, "fill-primary"),
-            (LadderPosition::FillSecondary, 0.078, "fill-secondary"),
-            (LadderPosition::FillTertiary, 0.039, "fill-tertiary"),
-            (LadderPosition::FillQuaternary, 0.02, "fill-quaternary"),
-            (LadderPosition::BorderBase, 0.2, "border-base"),
-            (LadderPosition::BorderSoft, 0.122, "border-soft"),
-            (LadderPosition::BorderStrong, 1.0, "border-strong"),
-            (LadderPosition::FocusRing, 1.0, "focus-ring"),
-            (LadderPosition::Glow, 0.522, "glow"),
+    fn position_alpha_pairs_match_grounded_stub() {
+        // (позиция, (light, dark), ключ) — дословно из contract.css.
+        let expected: &[(LadderPosition, (f64, f64), &str)] = &[
+            (LadderPosition::LabelPrimary, (1.0, 1.0), "label-primary"),
+            (
+                LadderPosition::LabelSecondary,
+                (0.722, 0.722),
+                "label-secondary",
+            ),
+            (
+                LadderPosition::LabelTertiary,
+                (0.522, 0.522),
+                "label-tertiary",
+            ),
+            (
+                LadderPosition::LabelQuaternary,
+                (0.322, 0.322),
+                "label-quaternary",
+            ),
+            (LadderPosition::FillPrimary, (0.122, 0.122), "fill-primary"),
+            (
+                LadderPosition::FillSecondary,
+                (0.078, 0.078),
+                "fill-secondary",
+            ),
+            (
+                LadderPosition::FillTertiary,
+                (0.039, 0.039),
+                "fill-tertiary",
+            ),
+            (
+                LadderPosition::FillQuaternary,
+                (0.02, 0.02),
+                "fill-quaternary",
+            ),
+            (LadderPosition::BorderBase, (0.2, 0.2), "border-base"),
+            (LadderPosition::BorderSoft, (0.122, 0.122), "border-soft"),
+            (LadderPosition::BorderStrong, (1.0, 1.0), "border-strong"),
+            (LadderPosition::FocusRing, (1.0, 1.0), "focus-ring"),
+            (LadderPosition::Glow, (0.522, 0.522), "glow"),
+            // Скелетон-база пер-темна: light @8, dark @12 (единственная).
+            (
+                LadderPosition::SkeletonBase,
+                (0.078, 0.122),
+                "skeleton-base",
+            ),
+            (
+                LadderPosition::SkeletonHighlight,
+                (0.039, 0.039),
+                "skeleton-highlight",
+            ),
         ];
-        for (pos, alpha, key) in expected {
+        for (pos, pair, key) in expected {
             assert_eq!(
-                pos.alpha(),
-                *alpha,
-                "{pos:?}: альфа дрейфанула от Figma-рампы"
+                pos.alpha_pair(),
+                *pair,
+                "{pos:?}: пара альф дрейфанула от стаба"
             );
             assert_eq!(pos.key(), *key, "{pos:?}: ключ разошёлся с контрактом имён");
+            // alpha_for_vc выбирает верный элемент пары по теме.
+            assert_eq!(pos.alpha_for_vc(&ViewingConditions::srgb()), pair.0);
+            assert_eq!(pos.alpha_for_vc(&ViewingConditions::dim_surround()), pair.1);
         }
         let all: Vec<LadderPosition> = LadderPosition::ALL.to_vec();
         let listed: Vec<LadderPosition> = expected.iter().map(|(p, ..)| *p).collect();

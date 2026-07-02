@@ -31,9 +31,9 @@ pub use cleanliness::{
     muddiness_from_hex, muddiness_from_linear_srgb, muddiness_in_context, muddiness_oklch, n_pure,
 };
 pub use config::{
-    Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralTint, PaletteFamily,
-    RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig, VcPreset,
-    labui_reference,
+    Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
+    PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
+    VcPreset, labui_reference,
 };
 pub use curve::ColorCurve;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
