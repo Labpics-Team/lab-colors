@@ -416,6 +416,67 @@ pub enum Theme {
     DarkIc,
 }
 
+impl Theme {
+    /// Разобрать стабильный kebab-контракт границы (`"light"` / `"dark"` /
+    /// `"light-ic"` / `"dark-ic"`). Неизвестная строка — ошибка вызывающего,
+    /// возвращается как есть (граница оборачивает в свой тип ошибки), никогда
+    /// не коэрсится в тему по умолчанию.
+    ///
+    /// # Errors
+    ///
+    /// `Err` с непринятой строкой.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "light" => Ok(Theme::Light),
+            "dark" => Ok(Theme::Dark),
+            "light-ic" => Ok(Theme::LightIc),
+            "dark-ic" => Ok(Theme::DarkIc),
+            other => Err(other.to_string()),
+        }
+    }
+
+    /// Стабильный kebab-ключ темы — обратная к [`parse`](Self::parse).
+    pub fn key(self) -> &'static str {
+        match self {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::LightIc => "light-ic",
+            Theme::DarkIc => "dark-ic",
+        }
+    }
+
+    /// Условия просмотра, под которыми ядро резолвит эту тему: та же карта
+    /// surround-ов, что у [`vc_for_context`] (Light → average, Dark → dim,
+    /// IC-темы → high-contrast двойники), но с дефолтным Yb — вход границы,
+    /// где фон ещё неизвестен.
+    pub fn viewing_conditions(self) -> crate::spaces::vc::ViewingConditions {
+        self.vc_by(
+            crate::spaces::vc::ViewingConditions::srgb,
+            crate::spaces::vc::ViewingConditions::dim_surround,
+        )
+    }
+
+    /// ЕДИНАЯ карта тема → surround: light-темы берут average-конструктор,
+    /// dark-темы — dim, IC-темы поднимают флаг повышенного контраста. Обе
+    /// точки входа (дефолтный Yb на границе, Yb-от-фона в контексте дефектов)
+    /// обязаны выбирать surround здесь — вторая копия карты в цветовом коде
+    /// расходилась бы тихо при добавлении темы.
+    fn vc_by(
+        self,
+        srgb: impl FnOnce() -> crate::spaces::vc::ViewingConditions,
+        dim: impl FnOnce() -> crate::spaces::vc::ViewingConditions,
+    ) -> crate::spaces::vc::ViewingConditions {
+        let (mut vc, ic) = match self {
+            Theme::Light => (srgb(), false),
+            Theme::Dark => (dim(), false),
+            Theme::LightIc => (srgb(), true),
+            Theme::DarkIc => (dim(), true),
+        };
+        vc.high_contrast = vc.high_contrast || ic;
+        vc
+    }
+}
+
 /// Контекст просмотра для surround-aware оценки дефектов.
 ///
 /// Сочетает фон (hex-строка, задаёт яркость Yb) и тему (определяет surround).
@@ -448,20 +509,10 @@ fn y_pct_from_hex(hex: &str) -> Result<f64, String> {
 ///
 /// Параметры surround — CIECAM16 Table 1 (Li et al. 2017). Ноль новых констант.
 fn vc_for_context(theme: Theme, y_b_pct: f64) -> crate::spaces::vc::ViewingConditions {
-    match theme {
-        Theme::Light => crate::spaces::vc::ViewingConditions::srgb_with_yb(y_b_pct),
-        Theme::Dark => crate::spaces::vc::ViewingConditions::dim_surround_with_yb(y_b_pct),
-        Theme::LightIc => {
-            let mut vc = crate::spaces::vc::ViewingConditions::srgb_with_yb(y_b_pct);
-            vc.high_contrast = true;
-            vc
-        }
-        Theme::DarkIc => {
-            let mut vc = crate::spaces::vc::ViewingConditions::dim_surround_with_yb(y_b_pct);
-            vc.high_contrast = true;
-            vc
-        }
-    }
+    theme.vc_by(
+        || crate::spaces::vc::ViewingConditions::srgb_with_yb(y_b_pct),
+        || crate::spaces::vc::ViewingConditions::dim_surround_with_yb(y_b_pct),
+    )
 }
 
 /// Surround-aware оценка грязи цвета в заданном контексте просмотра.

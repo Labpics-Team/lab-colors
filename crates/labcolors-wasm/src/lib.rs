@@ -15,6 +15,7 @@
 //! a vanilla helper for that lives in the npm package, not in the WASM core.
 
 mod cache;
+mod config_dto;
 mod dto;
 mod engine;
 mod error;
@@ -25,7 +26,6 @@ use wasm_bindgen::prelude::*;
 use crate::dto::{ResolvedTheme, RoleOutcome};
 use crate::engine::Engine;
 use crate::error::BindingError;
-use crate::theme::Theme;
 
 /// TypeScript shapes for the values `resolveTheme` returns. wasm-bindgen emits
 /// `LabColors.resolveTheme(...): ResolvedTheme` against these, so consumers get
@@ -75,13 +75,89 @@ export interface UnreachableRole {
   readonly message: string;
 }
 
-export type RoleResult = SolvedColor | NoneRole | UnreachableRole;
+/** A semi-transparent ladder / alpha-analog emission: the CSS carries rgba(), the browser composites it. */
+export interface RgbaRole {
+  readonly kind: "rgba";
+  readonly cssVar: string;
+  /** The tint as #RRGGBB — the colour the rgba() carries. */
+  readonly tintHex: string;
+  /** The alpha of the emission, (0, 1]. */
+  readonly alpha: number;
+  /** The solid the tint composites to on the resolve background. */
+  readonly compositeHex: string;
+  /** Signed perceptual contrast (Lc) of the composite. */
+  readonly compositeLc: number;
+  /** WCAG 2.1 ratio of the composite. */
+  readonly compositeWcag: number;
+  /** Ready-to-serve CSS value: "rgb(R G B / A)". `vars` carries the same string. */
+  readonly css: string;
+}
+
+export type RoleResult = SolvedColor | RgbaRole | NoneRole | UnreachableRole;
+
+/** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
+export interface ThemeAnchors {
+  readonly light: string;
+  readonly dark: string;
+  readonly light_ic: string;
+  readonly dark_ic: string;
+}
+
+/** Источник тинта лестницы/альфа-аналога. */
+export type LadderSource =
+  | { kind: "brand" }
+  | { kind: "family"; key: string }
+  | { kind: "sentiment"; name: string }
+  | { kind: "neutral"; pick: "mid" | "edge" | "inverted" | "light" | "dark" };
+
+/** Рецепт роли из физического меню движка. */
+export type RoleRecipe =
+  | { kind: "text-anchor"; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
+  | { kind: "dj-anchor"; light: number; dark: number }
+  | { kind: "decorative-lc"; magnitude: number }
+  | { kind: "ladder"; source: LadderSource; position: string }
+  | { kind: "alpha-analog"; of: LadderSource; alpha: number }
+  | { kind: "zero" };
+
+/** Полный конфиг дизайн-системы клиента — вход loadConfig (JSON.stringify(config)). */
+export interface ThemeConfig {
+  readonly brand: ThemeAnchors;
+  readonly neutral: {
+    readonly anchors: { light: string; mid: string; dark: string };
+    readonly tint: {
+      ratio: number;
+      target_mp: number;
+      hue_stiffness: number;
+      hue_override_deg?: number;
+    };
+    readonly edge?: ThemeAnchors;
+    readonly inverted?: ThemeAnchors;
+  };
+  readonly palette: ReadonlyArray<{ key: string; anchors: ThemeAnchors }>;
+  readonly sentiments: {
+    readonly categories: ReadonlyArray<{
+      name: string;
+      family: string;
+      hue_floor_deg?: number;
+      preferred_side?: -1 | 1;
+    }>;
+    readonly hardness: number;
+    readonly chroma_fraction: number;
+  };
+  readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
+  readonly roles: ReadonlyArray<{ name: string; recipe: RoleRecipe }>;
+  readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
+}
 
 /** The full result of resolving one background under one theme. */
 export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
-  /** Reachable roles only: { "--lab-label-primary": "#1a1a1a", ... }. */
+  /**
+   * Reachable roles only. Values are ready-to-serve CSS: "#RRGGBB" for solid
+   * roles, "rgb(R G B / A)" for semi-transparent ladder/alpha-analog roles —
+   * do not validate them as hex.
+   */
   readonly vars: Record<string, string>;
   /** Every role, keyed by its stable role key (without the --lab- prefix). */
   readonly roles: Record<string, RoleResult>;
@@ -126,12 +202,25 @@ impl LabColors {
     /// structured `{ code, message }` error, never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
-        let theme = Theme::parse(theme).map_err(to_js_error)?;
+        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         let resolved = self
             .inner
             .resolve_theme(bg_hex, theme)
             .map_err(to_js_error)?;
         Ok(project_resolved(&resolved).unchecked_into())
+    }
+
+    /// Загрузить конфиг дизайн-системы (JSON по типу `ThemeConfig` из `.d.ts`).
+    ///
+    /// Полный preflight движка: невалидный конфиг отклоняется структурной
+    /// ошибкой `invalid_config: …` и НЕ меняет состояние. После успешной
+    /// загрузки `resolveTheme` эмитит роли конфига (включая полупрозрачные
+    /// `rgba`-роли лестницы). Возвращает отпечаток конфига — 16 hex-символов;
+    /// разные конфиги дают разные отпечатки (и разные кэш-пространства).
+    #[wasm_bindgen(js_name = loadConfig)]
+    pub fn load_config(&mut self, json: &str) -> Result<String, JsError> {
+        let fp = self.inner.load_config(json).map_err(to_js_error)?;
+        Ok(format!("{fp:016x}"))
     }
 
     /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
@@ -151,7 +240,7 @@ impl LabColors {
         fg_hexes: Vec<String>,
         theme: &str,
     ) -> Result<Vec<f64>, JsError> {
-        let theme = Theme::parse(theme).map_err(to_js_error)?;
+        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         self.inner
             .recheck(bg_hex, &fg_hexes, theme)
             .map_err(to_js_error)
@@ -216,6 +305,26 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                 );
                 set(&vars, &css_var, &JsValue::from_str(&c.hex));
             }
+            RoleOutcome::Rgba(r) => {
+                set(&role_obj, "kind", &JsValue::from_str("rgba"));
+                set(&role_obj, "tintHex", &JsValue::from_str(&r.tint_hex));
+                set(&role_obj, "alpha", &JsValue::from_f64(r.alpha));
+                set(
+                    &role_obj,
+                    "compositeHex",
+                    &JsValue::from_str(&r.composite_hex),
+                );
+                set(&role_obj, "compositeLc", &JsValue::from_f64(r.composite_lc));
+                set(
+                    &role_obj,
+                    "compositeWcag",
+                    &JsValue::from_f64(r.composite_wcag),
+                );
+                // Эмиссия — rgba(): переменная несёт то, что скомпозитит браузер.
+                let css = rgba_css(&r.tint_hex, r.alpha);
+                set(&role_obj, "css", &JsValue::from_str(&css));
+                set(&vars, &css_var, &JsValue::from_str(&css));
+            }
             RoleOutcome::None => {
                 set(&role_obj, "kind", &JsValue::from_str("none"));
             }
@@ -225,11 +334,19 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                 set(&role_obj, "message", &JsValue::from_str(message));
             }
         }
-        set(&roles, entry.role_key, &role_obj);
+        set(&roles, &entry.role_key, &role_obj);
     }
     set(&out, "vars", &vars);
     set(&out, "roles", &roles);
     out.into()
+}
+
+/// CSS-эмиссия полупрозрачной роли: современный синтаксис `rgb(R G B / A)` —
+/// тот же формат, что стаб labui; браузер композитит на живой подложке.
+fn rgba_css(tint_hex: &str, alpha: f64) -> String {
+    let hex = tint_hex.trim_start_matches('#');
+    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+    format!("rgb({} {} {} / {})", ch(0), ch(2), ch(4), alpha)
 }
 
 /// Set a property on a JS object. `Reflect::set` on a freshly created `Object`

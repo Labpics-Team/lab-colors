@@ -993,10 +993,7 @@ impl RoleTable {
     /// against the live background. The value is a property of the contract,
     /// not of any one solve, so it is exposed alongside each resolved role.
     pub fn legal_floor(&self, role: Role) -> Option<f64> {
-        match self.spec(role) {
-            RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
-            _ => None,
-        }
+        self.spec(role).legal_floor()
     }
 
     /// Return a copy with `role`'s recipe replaced — every other role keeps its
@@ -1737,6 +1734,20 @@ pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
     aliases: Vec<(String, String)>,
     chroma: RoleChroma,
+}
+
+impl RoleSpec {
+    /// WCAG-пол этой спеки — свойство контракта, не резолва: текст/UI-якорь
+    /// несёт пол своего [`TextAnchor`] (AaText → 4.5, AaUi → 3.0), все
+    /// остальные формы (декоративные, dJ', лестница, альфа-аналог, zero) —
+    /// без легального пола. Одна семантика для обеих таблиц
+    /// ([`RoleTable::legal_floor`] и string-keyed границы).
+    pub fn legal_floor(&self) -> Option<f64> {
+        match self {
+            RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
+            _ => None,
+        }
+    }
 }
 
 impl NamedRoleTable {

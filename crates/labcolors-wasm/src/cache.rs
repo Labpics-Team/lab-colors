@@ -100,6 +100,14 @@ impl<V: Clone> ContractCache<V> {
         value
     }
 
+    /// Очистить кэш целиком. Смена таблицы (загрузка конфига) обязана снести
+    /// прошлое пространство записей: одновременно в кэше живёт ровно ОДНО
+    /// пространство ключей, и корректность не опирается на вероятностную
+    /// уникальность отпечатка.
+    pub fn clear(&self) {
+        self.entries.borrow_mut().clear();
+    }
+
     /// Number of live entries — for tests and introspection.
     #[cfg(test)]
     pub fn len(&self) -> usize {

@@ -2,17 +2,24 @@
 //! generically over whatever role set the core provides.
 //!
 //! This layer knows the core and the DTOs; it does NOT know wasm-bindgen. It
-//! holds the role table and the contract cache, runs `resolve_set`, and maps
-//! the core's `Vec<(Role, Resolved)>` into [`ResolvedTheme`]. The mapping never
-//! enumerates roles — it walks the vector the core returns and keys each entry
-//! by `Role::key()` — so issue #59's role growth flows through on a rebuild.
+//! holds the role table (built-in, or the compiled config table after
+//! `load_config`) and the contract cache, runs the core resolve, and maps the
+//! resolved vector into [`ResolvedTheme`]. The mapping never enumerates roles —
+//! it walks whatever the core returns and keys each entry by its stable key
+//! (`Role::key()` built-in, the config's own names after load) — so role
+//! growth flows through on a rebuild.
 
 use std::rc::Rc;
 
+use std::collections::HashMap;
+
+use labcolors_core::config::ThemeConfig;
+use labcolors_core::semantic::NamedRoleTable;
 use labcolors_core::{BgInput, Resolved, RoleTable, Solved, Unreachable};
 
 use crate::cache::{CacheKey, ContractCache, DEFAULT_TABLE_FINGERPRINT};
-use crate::dto::{ResolvedTheme, RoleEntry, RoleOutcome, SolvedColor};
+use crate::config_dto::{ConfigDto, fingerprint};
+use crate::dto::{ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
 use crate::error::BindingError;
 use crate::theme::Theme;
 
@@ -30,7 +37,18 @@ const CACHE_CAPACITY: usize = 4096;
 pub struct Engine {
     table: RoleTable,
     table_fingerprint: u64,
+    named: Option<NamedState>,
     cache: ContractCache<Rc<ResolvedTheme>>,
+}
+
+/// Загруженный конфиг потребителя: скомпилированная таблица + её отпечаток
+/// (компонент ключа кэша — два конфига не делят записи) + полы ролей,
+/// предвычисленные на загрузке (свойство контракта, не резолва; алиас несёт
+/// пол своей цели).
+struct NamedState {
+    table: NamedRoleTable,
+    fingerprint: u64,
+    floors: HashMap<String, Option<f64>>,
 }
 
 impl Default for Engine {
@@ -45,8 +63,53 @@ impl Engine {
         Self {
             table: RoleTable::default(),
             table_fingerprint: DEFAULT_TABLE_FINGERPRINT,
+            named: None,
             cache: ContractCache::new(CACHE_CAPACITY),
         }
+    }
+
+    /// Загрузить конфиг потребителя из JSON: полный preflight ядра
+    /// (validate = компиляция) + вычисленный отпечаток. После успешной
+    /// загрузки [`resolve_theme`](Self::resolve_theme) эмитит РОЛИ КОНФИГА
+    /// (string-keyed контракт) той же физикой; сигнатура resolve_theme
+    /// неизменна. Возвращает отпечаток — компонент ключа кэша: другой конфиг
+    /// даёт другой отпечаток, записи не делятся (нет кэш-коллизии).
+    ///
+    /// Ошибочный конфиг НЕ трогает текущее состояние: движок остаётся на
+    /// прежней таблице (загрузка атомарна).
+    pub fn load_config(&mut self, json: &str) -> Result<u64, BindingError> {
+        let dto: ConfigDto =
+            serde_json::from_str(json).map_err(|e| BindingError::InvalidConfig {
+                reason: e.to_string(),
+            })?;
+        let fp = fingerprint(&dto);
+        let cfg =
+            ThemeConfig::try_from(dto).map_err(|reason| BindingError::InvalidConfig { reason })?;
+        let table = cfg
+            .compile_named_role_table()
+            .map_err(|e| BindingError::InvalidConfig {
+                reason: e.to_string(),
+            })?;
+        let mut floors: HashMap<String, Option<f64>> = table
+            .entries()
+            .iter()
+            .map(|(name, spec)| (name.clone(), spec.legal_floor()))
+            .collect();
+        for (alias, target) in table.aliases() {
+            let floor = floors.get(target).copied().flatten();
+            floors.insert(alias.clone(), floor);
+        }
+        // Прошлое пространство записей сносится целиком: гарантия «чужой
+        // конфиг не отдаст свои цвета» — очистка, а не вероятностная
+        // уникальность 64-битного отпечатка (отпечаток в ключе остаётся
+        // belt-and-suspenders и идентичностью конфига наружу).
+        self.cache.clear();
+        self.named = Some(NamedState {
+            table,
+            fingerprint: fp,
+            floors,
+        });
+        Ok(fp)
     }
 
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
@@ -59,7 +122,7 @@ impl Engine {
         bg_hex: &str,
         theme: Theme,
     ) -> Result<Rc<ResolvedTheme>, BindingError> {
-        let vc = theme.viewing_conditions()?;
+        let vc = theme.viewing_conditions();
         // Validate and normalise the background once, before the cache lookup,
         // so an invalid hex fails fast and the cache key is canonical.
         let normalised = normalise_hex(bg_hex)?;
@@ -67,13 +130,50 @@ impl Engine {
             reason: u.to_string(),
         })?;
 
+        // Конфиг загружен → эмитится ЕГО контракт (string-keyed) той же
+        // физикой; отпечаток в ключе разводит кэш-пространства конфигов.
+        if let Some(named) = &self.named {
+            let key = CacheKey::new(normalised.clone(), theme, named.fingerprint);
+            let result = self.cache.get_or_insert_with(key, || {
+                let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc);
+                let mut roles: Vec<RoleEntry> = set
+                    .into_iter()
+                    .map(|(name, resolved)| {
+                        let floor = named.floors.get(&name).copied().flatten();
+                        RoleEntry {
+                            role_key: name,
+                            outcome: map_resolved(resolved, floor),
+                        }
+                    })
+                    .collect();
+                // Алиасы — часть эмитируемого контракта (--lab-{alias} обязан
+                // существовать у потребителя): ядро их не резолвит (алиас — не
+                // рецепт), граница эмитит исход ЦЕЛИ под именем алиаса.
+                for (alias, target) in named.table.aliases() {
+                    if let Some(entry) = roles.iter().find(|e| &e.role_key == target) {
+                        let outcome = entry.outcome.clone();
+                        roles.push(RoleEntry {
+                            role_key: alias.clone(),
+                            outcome,
+                        });
+                    }
+                }
+                Rc::new(ResolvedTheme {
+                    theme: theme.key(),
+                    background: normalised.clone(),
+                    roles,
+                })
+            });
+            return Ok(result);
+        }
+
         let key = CacheKey::new(normalised.clone(), theme, self.table_fingerprint);
         let result = self.cache.get_or_insert_with(key, || {
             let set = labcolors_core::resolve_set(&bg, &self.table, &vc);
             let roles = set
                 .into_iter()
                 .map(|(role, resolved)| RoleEntry {
-                    role_key: role.key(),
+                    role_key: role.key().to_string(),
                     outcome: map_resolved(resolved, self.table.legal_floor(role)),
                 })
                 .collect();
@@ -102,7 +202,7 @@ impl Engine {
         fg_hexes: &[String],
         theme: Theme,
     ) -> Result<Vec<f64>, BindingError> {
-        let vc = theme.viewing_conditions()?;
+        let vc = theme.viewing_conditions();
         let bg = normalise_hex(bg_hex)?;
         // Normalise foregrounds through the same parser as the background and
         // `resolveTheme`, so the three entry points agree on what a valid hex is
@@ -136,18 +236,16 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             code: unreachable_code(&reason),
             message: reason.to_string(),
         },
-        // Полупрозрачные роли лестницы/альфа-аналога появляются только на
-        // конфиг-пути (`resolve_named_set`), который ЭТА поверхность ещё не
-        // экспортирует: `resolve_theme` идёт по встроенной `RoleTable`, где
-        // Ladder/AlphaAnalog-рецептов нет, поэтому вариант здесь недостижим.
-        // rgba-форма границы WASM ещё не экспортирована; до неё маппим в стабильный код,
-        // а не молчаливо роняем неверный цвет (`Resolved` теперь non_exhaustive).
-        Resolved::Rgba(_) => RoleOutcome::Unreachable {
-            code: "rgba_boundary_not_yet_exported",
-            message: "semi-transparent ladder/alpha-analog role is not exported by resolve_theme \
-                      (solid-only surface)"
-                .to_string(),
-        },
+        // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
+        // наружу уходит rgba(tint, α), браузер композитит; контраст — свойство
+        // композита на фоне резолва (закон лестницы ядра).
+        Resolved::Rgba(rgba) => RoleOutcome::Rgba(RgbaColor {
+            tint_hex: rgba.tint_hex().to_string(),
+            alpha: rgba.alpha(),
+            composite_hex: rgba.composite_hex().to_string(),
+            composite_lc: rgba.composite_lc(),
+            composite_wcag: rgba.composite_wcag(),
+        }),
         // ОСОЗНАННЫЙ ДОЛГ: `Resolved` — `#[non_exhaustive]`, поэтому catch-all
         // обязателен для будущих вариантов ядра. Пока маппит в стабильный код,
         // а не молча роняет неверный цвет; при экспорте rgba-границы каждый
@@ -252,7 +350,7 @@ mod tests {
         // Generic over the role set: at least the v1 roles are present, each
         // keyed by Role::key(). We assert the keys exist, not their count, so
         // issue #59's growth does not break this test.
-        let keys: Vec<_> = result.roles.iter().map(|r| r.role_key).collect();
+        let keys: Vec<_> = result.roles.iter().map(|r| r.role_key.as_str()).collect();
         assert!(keys.contains(&"label-primary"));
         assert!(keys.contains(&"none"));
     }
@@ -435,11 +533,7 @@ mod tests {
     #[test]
     fn ic_theme_resolves_without_error() {
         let engine = Engine::new();
-        assert!(
-            engine
-                .resolve_theme("#FFFFFF", Theme::LightIncreasedContrast)
-                .is_ok()
-        );
+        assert!(engine.resolve_theme("#FFFFFF", Theme::LightIc).is_ok());
     }
 
     #[test]
@@ -456,8 +550,8 @@ mod tests {
             ("#000000", Theme::Dark),
             ("#808080", Theme::Light),
             // Increased-contrast variants: same 20-role contract must hold.
-            ("#FFFFFF", Theme::LightIncreasedContrast),
-            ("#000000", Theme::DarkIncreasedContrast),
+            ("#FFFFFF", Theme::LightIc),
+            ("#000000", Theme::DarkIc),
         ];
         for (bg, theme) in reps {
             let result = engine.resolve_theme(bg, theme).unwrap();
@@ -469,7 +563,7 @@ mod tests {
             let mut seen = std::collections::HashSet::new();
             for entry in &result.roles {
                 assert!(
-                    seen.insert(entry.role_key),
+                    seen.insert(entry.role_key.as_str()),
                     "{bg}: duplicate role_key {}",
                     entry.role_key
                 );
@@ -480,6 +574,18 @@ mod tests {
                     entry.role_key
                 );
                 match &entry.outcome {
+                    RoleOutcome::Rgba(r) => {
+                        assert!(
+                            r.tint_hex.starts_with('#') && r.composite_hex.starts_with('#'),
+                            "{bg} {}: rgba-эмиссия несёт hex-тинт и hex-композит",
+                            entry.role_key
+                        );
+                        assert!(
+                            r.alpha > 0.0 && r.alpha <= 1.0,
+                            "{bg} {}: α в (0,1]",
+                            entry.role_key
+                        );
+                    }
                     RoleOutcome::Color(c) => {
                         assert!(
                             c.hex.starts_with('#'),
@@ -500,5 +606,216 @@ mod tests {
             }
             assert_eq!(seen.len(), 20, "{bg}: all 20 role keys must be unique");
         }
+    }
+
+    /// JSON канонического labui-конфига — через сериализуемое зеркало границы.
+    fn labui_json() -> String {
+        let dto =
+            crate::config_dto::ConfigDto::try_from(&labcolors_core::config::labui_reference())
+                .expect("эталон сериализуем");
+        serde_json::to_string(&dto).expect("JSON")
+    }
+
+    /// Минимальный конфиг второго клиента: другой бренд, своё пространство имён.
+    fn acme_json() -> String {
+        r##"{
+          "brand": {"light": "#7C3AED", "dark": "#8B5CF6", "light_ic": "#5B21B6", "dark_ic": "#A78BFA"},
+          "neutral": {
+            "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"},
+            "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
+          },
+          "palette": [],
+          "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+          "themes": [{"name": "light", "preset": "srgb"}, {"name": "dark", "preset": "dim"}],
+          "roles": [
+            {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
+            {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+          ],
+          "aliases": [{"alias": "btn-label", "target": "body-text"}]
+        }"##
+        .to_string()
+    }
+
+    /// Загрузка конфига переключает контракт на string-keyed, отпечатки разных
+    /// конфигов различны, и кэш не отдаёт чужие записи на одинаковом (bg, тема).
+    #[test]
+    fn load_config_switches_contract_and_separates_cache_spaces() {
+        let mut engine = Engine::new();
+        let before = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(
+            before
+                .roles
+                .iter()
+                .all(|r| r.role_key != "fill-brand-primary"),
+            "встроенный контракт не несёт ролей конфига"
+        );
+
+        let fp_labui = engine.load_config(&labui_json()).expect("labui валиден");
+        let labui_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(
+            labui_set
+                .roles
+                .iter()
+                .any(|r| r.role_key == "fill-brand-primary"
+                    && matches!(r.outcome, RoleOutcome::Rgba(_))),
+            "конфиг-контракт несёт rgba-роль лестницы"
+        );
+
+        let fp_acme = engine.load_config(&acme_json()).expect("acme валиден");
+        assert_ne!(fp_labui, fp_acme, "разные конфиги → разные отпечатки");
+        assert_eq!(
+            engine.cache.len(),
+            0,
+            "загрузка конфига сносит прошлое пространство записей целиком —              корректность кэша не опирается на вероятностную уникальность отпечатка"
+        );
+        // Тот же (bg, тема) СРАЗУ после смены конфига: попадание в чужую запись
+        // было бы кэш-коллизией — пространство ключей обязано быть acme.
+        let acme_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(acme_set.roles.iter().any(|r| r.role_key == "accent-fill"));
+        assert!(
+            acme_set
+                .roles
+                .iter()
+                .all(|r| r.role_key != "fill-brand-primary"),
+            "кэш-коллизия: под ключом acme отдан labui-контракт"
+        );
+        // Алиас наследует пол цели и через named-путь (btn-label → body-text,
+        // aa-text → 4.5) — вторая половина класса «потерянный legal_floor».
+        let alias_entry = acme_set
+            .roles
+            .iter()
+            .find(|r| r.role_key == "btn-label")
+            .expect("алиас в контракте acme");
+        match &alias_entry.outcome {
+            RoleOutcome::Color(c) => assert_eq!(
+                c.legal_floor,
+                Some(4.5),
+                "алиас несёт AA-пол своей цели через named-путь"
+            ),
+            other => panic!("btn-label ожидался цветом, получено {other:?}"),
+        }
+    }
+
+    /// Паритет: загруженный конфиг эмитит байт-в-байт то же, что прямой
+    /// resolve_named_set той же таблицы (граница ничего не подменяет).
+    #[test]
+    fn loaded_config_matches_direct_named_resolve() {
+        let mut engine = Engine::new();
+        engine.load_config(&labui_json()).unwrap();
+        let via_engine = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+
+        let table = labcolors_core::config::labui_reference()
+            .compile_named_role_table()
+            .unwrap();
+        let bg = labcolors_core::BgInput::solid("#101012").unwrap();
+        let direct =
+            labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions());
+
+        assert_eq!(
+            via_engine.roles.len(),
+            direct.len() + table.aliases().len(),
+            "полный контракт: роли ядра + алиасы границы"
+        );
+        // Оракул пола: та же семантика, что у загрузки — спека роли, алиас
+        // наследует пол цели. Мутация, теряющая пол на named-пути, обязана
+        // падать ЗДЕСЬ (выживший мутант map_resolved(_, None) — дыра ЗАКРЫТА).
+        let mut expected_floor: std::collections::HashMap<&str, Option<f64>> = table
+            .entries()
+            .iter()
+            .map(|(n, spec)| (n.as_str(), spec.legal_floor()))
+            .collect();
+        for (alias, target) in table.aliases() {
+            let floor = expected_floor.get(target.as_str()).copied().flatten();
+            expected_floor.insert(alias.as_str(), floor);
+        }
+        let mut anchored_seen = 0usize;
+        for ((name, resolved), entry) in direct.iter().zip(via_engine.roles.iter()) {
+            assert_eq!(name, &entry.role_key, "порядок и имена совпадают");
+            if let RoleOutcome::Color(c) = &entry.outcome {
+                let want = expected_floor.get(name.as_str()).copied().flatten();
+                assert_eq!(c.legal_floor, want, "{name}: legal_floor конфиг-роли");
+                if want.is_some() {
+                    anchored_seen += 1;
+                }
+            }
+            match (resolved, &entry.outcome) {
+                (Resolved::Color { solved, compressed }, RoleOutcome::Color(c)) => {
+                    assert_eq!(solved.hex(), c.hex, "{name}: hex");
+                    assert_eq!(solved.lc(), c.lc, "{name}: lc");
+                    assert_eq!(solved.wcag_ratio(), c.wcag_ratio, "{name}: wcag");
+                    assert_eq!(*compressed, c.compressed, "{name}: compressed");
+                    assert_eq!(
+                        solved.floor_override(),
+                        c.floor_override,
+                        "{name}: floor_override"
+                    );
+                }
+                (Resolved::Rgba(r), RoleOutcome::Rgba(o)) => {
+                    assert_eq!(r.tint_hex(), o.tint_hex, "{name}: tint");
+                    assert_eq!(r.alpha(), o.alpha, "{name}: alpha");
+                    assert_eq!(r.composite_hex(), o.composite_hex, "{name}: composite");
+                    assert_eq!(r.composite_lc(), o.composite_lc, "{name}: composite_lc");
+                    assert_eq!(
+                        r.composite_wcag(),
+                        o.composite_wcag,
+                        "{name}: composite_wcag"
+                    );
+                }
+                (Resolved::None, RoleOutcome::None) => {}
+                (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),
+            }
+        }
+        assert!(
+            anchored_seen > 0,
+            "оракул пола вакуумный: ни одной конфиг-роли с ненулевым полом"
+        );
+        let label = via_engine
+            .roles
+            .iter()
+            .find(|r| r.role_key == "label-primary")
+            .expect("label-primary в контракте");
+        match &label.outcome {
+            RoleOutcome::Color(c) => assert_eq!(
+                c.legal_floor,
+                Some(4.5),
+                "AA-пол текстового якоря доходит до границы через named-путь"
+            ),
+            other => panic!("label-primary ожидался цветом, получено {other:?}"),
+        }
+    }
+
+    /// Невалидный конфиг отклоняется и НЕ меняет состояние (атомарность).
+    #[test]
+    fn invalid_config_is_rejected_atomically() {
+        let mut engine = Engine::new();
+        engine.load_config(&acme_json()).unwrap();
+
+        assert!(matches!(
+            engine.load_config("{ не json"),
+            Err(BindingError::InvalidConfig { .. })
+        ));
+        let bad_position = acme_json().replace("fill-primary", "fill-quinary");
+        match engine.load_config(&bad_position) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(reason.contains("fill-quinary"), "ошибка называет позицию");
+            }
+            other => panic!("ждали InvalidConfig, получено {other:?}"),
+        }
+        // Недоменная α альфа-аналога режется полным preflight-ом ядра
+        // (validate = компиляция), а не отдельной проверкой границы.
+        let bad_alpha = acme_json().replace(
+            r#"{"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}"#,
+            r#"{"kind": "alpha-analog", "of": {"kind": "brand"}, "alpha": 1.5}"#,
+        );
+        match engine.load_config(&bad_alpha) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(reason.contains("alpha"), "ошибка называет ручку: {reason}");
+            }
+            other => panic!("α=1.5 обязана быть отвергнута, получено {other:?}"),
+        }
+
+        // Состояние прежнее: контракт acme жив.
+        let set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(set.roles.iter().any(|r| r.role_key == "accent-fill"));
     }
 }

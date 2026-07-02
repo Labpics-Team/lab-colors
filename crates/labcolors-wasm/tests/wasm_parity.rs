@@ -211,3 +211,63 @@ fn invalid_background_rejects() {
         "error must carry the stable code, got: {message}"
     );
 }
+
+/// Смоук границы конфига в живом wasm-рантайме: два РАЗНЫХ конфига дают разные
+/// отпечатки, разные пространства ключей и разные эмиссии; rgba-роль лестницы
+/// доходит до JS-объекта с готовой css-строкой.
+#[wasm_bindgen_test]
+fn config_boundary_two_configs_diverge() {
+    let acme = r##"{
+      "brand": {"light": "#7C3AED", "dark": "#8B5CF6", "light_ic": "#5B21B6", "dark_ic": "#A78BFA"},
+      "neutral": {
+        "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"},
+        "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
+      },
+      "palette": [],
+      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+      "themes": [{"name": "light", "preset": "srgb"}],
+      "roles": [
+        {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
+        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+      ]
+    }"##;
+    // Второй клиент: тот же контракт имён, другой бренд → другая эмиссия.
+    let other = acme.replace("#7C3AED", "#0E7490");
+
+    let mut colors = LabColors::new();
+    let fp_a = colors.load_config(acme).expect("acme валиден");
+    let set_a = colors.resolve_theme("#FFFFFF", "light").expect("резолв");
+    let fp_b = colors.load_config(&other).expect("вариант валиден");
+    let set_b = colors.resolve_theme("#FFFFFF", "light").expect("резолв");
+
+    assert_ne!(fp_a, fp_b, "разные конфиги → разные отпечатки");
+
+    let roles_a = get_obj(set_a.as_ref(), "roles");
+    let accent_a = get_obj(&roles_a, "accent-fill");
+    assert_eq!(get_str(&accent_a, "kind").as_deref(), Some("rgba"));
+    let css_a = get_str(&accent_a, "css").expect("rgba несёт css");
+    assert!(css_a.starts_with("rgb("), "css-эмиссия rgba: {css_a}");
+
+    let roles_b = get_obj(set_b.as_ref(), "roles");
+    let accent_b = get_obj(&roles_b, "accent-fill");
+    let css_b = get_str(&accent_b, "css").expect("rgba несёт css");
+    assert_ne!(css_a, css_b, "другой бренд → другая эмиссия той же роли");
+
+    // Пространство ключей — конфига, не встроенной таблицы.
+    let keys = js_sys::Object::keys(&roles_b.clone().into());
+    let mut keys: Vec<String> = keys.iter().filter_map(|k| k.as_string()).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["accent-fill", "body-text"],
+        "после загрузки конфига пространство ключей — РОВНО его контракт,          без примеси встроенной таблицы"
+    );
+
+    // Невалидный конфиг — структурная ошибка invalid_config.
+    let err = colors.load_config("{").expect_err("битый JSON отклонён");
+    let msg = js_sys::Reflect::get(&err.into(), &JsValue::from_str("message"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    assert!(msg.contains("invalid_config"), "код в сообщении: {msg}");
+}
