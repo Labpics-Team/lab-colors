@@ -96,8 +96,8 @@
 //!   `separator` stay legacy Lc [`RoleSpec::Decorative`] placeholders (the shadow
 //!   owner anchors are alpha opacities, not dJ' steps); only their relative order
 //!   is a contract, defined and covered in the `surface-jnd` chapter.
-//!   `border-strong` is not decorative at all — it shares the `label-primary`
-//!   readability anchor.
+//!   `border-strong` carries the `label-primary` FRACTION but a 3:1 non-text
+//!   floor (WCAG 1.4.11): a border must be distinguishable, not readable.
 //! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
 //!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
 //!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
@@ -189,7 +189,8 @@ pub(crate) const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
 pub(crate) const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
-/// (`border-strong` — заякоренная роль читаемости, не dJ'-шаг — её здесь нет.)
+/// (`border-strong` — заякоренная роль различимости (доля label-primary, пол
+/// non-text 3:1), не dJ'-шаг — её здесь нет.)
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
@@ -1065,12 +1066,13 @@ impl Default for RoleTable {
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
                 (Role::Separator, decorative(8.0)),
-                // Border ladder. Strong is an ANCHOR at the label-primary contract
-                // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
-                // N12-weight edge — a readability role, not a dJ' step. Base/Soft
-                // are dJ' steps carrying the owner's LITERAL anchors (light/dark per
-                // theme); base stronger than soft is the order contract.
-                (Role::BorderStrong, anchor(0.968, Floor::AaText)),
+                // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
+                // Labels/Primary strength): the label-primary FRACTION with a
+                // non-text 3:1 floor (WCAG 1.4.11) — a border must be
+                // distinguishable, not readable. Base/Soft are dJ' steps carrying
+                // the owner's LITERAL anchors (light/dark per theme); base
+                // stronger than soft is the order contract.
+                (Role::BorderStrong, anchor(0.968, Floor::AaUi)),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
                 (Role::BorderGhost, RoleSpec::Zero),
@@ -2223,6 +2225,12 @@ mod tests {
             table.legal_floor(Role::Icon),
             Some(crate::wcag::AA_UI_RATIO)
         );
+        // border-strong: различимость (non-text 3:1), не текстовый пол —
+        // API-контракт для даунстримов, фиксируем значением.
+        assert_eq!(
+            table.legal_floor(Role::BorderStrong),
+            Some(crate::wcag::AA_UI_RATIO)
+        );
         // No legal floor for the decorative / JND / zero contracts.
         assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
         assert_eq!(table.legal_floor(Role::Separator), None);
@@ -3183,9 +3191,10 @@ mod tests {
 
     #[test]
     fn border_strong_mirrors_label_primary_exactly() {
-        // border-strong is HIG Border/Strong = N12 = Labels/Primary strength: it is
-        // an ANCHORED role carrying the label-primary contract, not a JND
-        // placeholder. So its emitted colour must equal label-primary's on every
+        // border-strong is HIG Border/Strong = N12 = Labels/Primary strength: same
+        // FRACTION as label-primary, but the floor is non-text 3:1 (a border must
+        // be distinguishable, not readable). On these backgrounds neither floor
+        // binds, so the emitted colour must still equal label-primary's on every
         // background, both VCs — a crisp N12-weight edge.
         for (vc, vc_name) in vcs() {
             for bg_hex in ["#FFFFFF", "#101012", "#7F7F7F", "#3478F6"] {
