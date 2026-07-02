@@ -135,14 +135,9 @@ const ALPHA_MIN_EXCLUSIVE: f64 = 0.0;
 /// Верхний предел запрошенной альфы (включительно; α = 1 = солид).
 const ALPHA_MAX_INCLUSIVE: f64 = 1.0;
 
-/// Нижний предел `hue_floor` сентимент-политики (градусы): `[0, 360)`.
-///
-/// `hue_floor_deg` — минимальный угол оттенка категории (напр. Warning ≥ 45°).
-/// Оттенок — величина по модулю 360°; значение вне `[0, 360)` не является
-/// каноническим углом.
-const HUE_FLOOR_MIN_INCLUSIVE: f64 = 0.0;
-/// Верхний предел `hue_floor` (исключительно; 360° ≡ 0°).
-const HUE_FLOOR_MAX_EXCLUSIVE: f64 = 360.0;
+// Канонический домен оттенка [0, 360) — единый дом в crate::sentiment
+// (два независимых литерала одного домена = класс тихого расхождения).
+use crate::sentiment::{HUE_DOMAIN_MAX_EXCLUSIVE, HUE_DOMAIN_MIN_INCLUSIVE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ошибки валидации конфига.
@@ -781,7 +776,7 @@ impl ThemeConfig {
             if let Some(hue) = cat.hue_floor_deg {
                 let field = format!("sentiments.{}.hue_floor_deg", cat.name);
                 // Полуинтервал `[0, 360)`: угол по модулю 360°, где 360° ≡ 0°.
-                if !(HUE_FLOOR_MIN_INCLUSIVE..HUE_FLOOR_MAX_EXCLUSIVE).contains(&hue) {
+                if !(HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue) {
                     return Err(ConfigError::OutOfBounds {
                         handle: field,
                         value: hue,
@@ -792,7 +787,8 @@ impl ThemeConfig {
         }
 
         if let Some(hue) = self.neutral.tint.hue_override_deg
-            && !(hue.is_finite() && (0.0..360.0).contains(&hue))
+            && !(hue.is_finite()
+                && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue))
         {
             return Err(ConfigError::OutOfBounds {
                 handle: "neutral.tint.hue_override_deg".to_string(),

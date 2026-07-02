@@ -21,7 +21,8 @@
 //! Альфы — ДАННЫЕ рампы Figma `@NN` (float32-квантование процентов из имён
 //! переменных), не выведенные величины: `@72 → 0.722`, `@52 → 0.522`,
 //! `@32 → 0.322`, `@20 → 0.2`, `@12 → 0.122`, `@8 → 0.078`, `@4 → 0.039`,
-//! `@2 → 0.02`; `primary`/`border-strong`/`focus-ring` — солид (α = 1.0).
+//! `@2 → 0.02`; `label-primary`/`border-strong`/`focus-ring` — солид (α = 1.0;
+//! имена = [`LadderPosition::key`], контракт разбора конфига).
 //! Единый паттерн проверен на brand/danger/info/success (см. «Закон лестницы»
 //! выше). Это данные позиций, а не POLICY-константы перцептивных модулей,
 //! поэтому провенанс держится этой doc-строкой + тестом лестницы, а не строкой
@@ -344,6 +345,17 @@ mod tests {
             // alpha_for_vc выбирает верный элемент пары по теме.
             assert_eq!(pos.alpha_for_vc(&ViewingConditions::srgb()), pair.0);
             assert_eq!(pos.alpha_for_vc(&ViewingConditions::dim_surround()), pair.1);
+            // IC-режимы НАМЕРЕННО наследуют альфу базовой темы (стаб не несёт
+            // отдельных ic-скоупов) — фиксируем, чтобы будущая ic-ветка в
+            // alpha_for_vc не проехала молча.
+            assert_eq!(
+                pos.alpha_for_vc(&ViewingConditions::srgb_high_contrast()),
+                pair.0
+            );
+            assert_eq!(
+                pos.alpha_for_vc(&ViewingConditions::dim_surround_high_contrast()),
+                pair.1
+            );
         }
         let all: Vec<LadderPosition> = LadderPosition::ALL.to_vec();
         let listed: Vec<LadderPosition> = expected.iter().map(|(p, ..)| *p).collect();

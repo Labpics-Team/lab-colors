@@ -494,11 +494,7 @@ pub fn resolve_smooth_hue_explicit(
     if !(s_min.is_finite() && (0.0..=180.0).contains(&s_min)) {
         return Err(format!("s_min вне домена [0, 180]: {s_min}"));
     }
-    if let Some(floor) = hue_floor
-        && !(floor.is_finite() && (0.0..360.0).contains(&floor))
-    {
-        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
-    }
+    check_hue_floor_domain(hue_floor)?;
     // Signed shortest delta from prototype to brand. Its sign tells us which side
     // of the brand the prototype sits on; we push the resolved hue out along that
     // same side, away from the brand.
@@ -597,6 +593,19 @@ fn is_legal_hue(h: f64, brand_hue: f64, floor: Option<f64>, s_min: f64) -> bool 
 }
 
 /// Signed shortest delta from `from` to `h` in (-180, 180].
+/// Домен-гард пола оттенка: единая проверка для обоих публичных входов
+/// (валидатор конфига и солвер) — дублированный блок разошёлся бы тихо,
+/// ровно как разошлись бы независимые литералы одного домена.
+fn check_hue_floor_domain(hue_floor: Option<f64>) -> Result<(), String> {
+    if let Some(floor) = hue_floor
+        && !(floor.is_finite()
+            && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&floor))
+    {
+        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
+    }
+    Ok(())
+}
+
 fn signed_delta(h: f64, from: f64) -> f64 {
     ((h - from + 180.0).rem_euclid(360.0)) - 180.0
 }
@@ -653,6 +662,14 @@ pub fn s_perc_min_frozen() -> f64 {
 // SSOT-TRACKED — арифметика представимости (деривация закрыта, внешнего стандарта не существует): границы в docs/empirical-inventory.md.
 pub(crate) const ACHROMATIC_CHROMA_EPS: f64 = 1e-7;
 
+/// Канонический домен угла оттенка (градусы): `[0, 360)` — угол по модулю
+/// 360°, где 360° ≡ 0°. Единые границы для `hue_floor`/`hue_override`
+/// валидатора конфига и гардов солвера: два независимых литерала одного
+/// домена в цветовом коде — класс тихого расхождения пределов.
+pub(crate) const HUE_DOMAIN_MIN_INCLUSIVE: f64 = 0.0;
+/// Верхняя граница канонического домена оттенка (исключительно; 360° ≡ 0°).
+pub(crate) const HUE_DOMAIN_MAX_EXCLUSIVE: f64 = 360.0;
+
 /// Config-facing сентимент-солид: якорь семейства, чей оттенок разведён с брендом
 /// сентимент-солвером, при СОХРАНЁННЫХ светлоте и хроме якоря.
 ///
@@ -688,11 +705,7 @@ pub fn resolve_config_sentiment_solid(
     if !brand_hue.is_finite() {
         return Err(format!("brand_hue вне домена (конечный угол): {brand_hue}"));
     }
-    if let Some(floor) = hue_floor
-        && !(floor.is_finite() && (0.0..360.0).contains(&floor))
-    {
-        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
-    }
+    check_hue_floor_domain(hue_floor)?;
     // Валидация ручек — ДО любого раннего возврата: ахроматичный fast path
     // ниже не решает по hardness/s_perc_min, но недоменная ручка остаётся
     // ошибкой вызова, а не «повезло с серым якорем» (иначе один и тот же
