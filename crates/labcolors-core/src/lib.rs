@@ -1,6 +1,7 @@
 pub(crate) mod spaces;
 
 pub mod accent;
+pub mod alpha;
 pub mod cleanliness;
 pub mod lcs;
 pub mod lpc;

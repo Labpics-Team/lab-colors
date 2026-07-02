@@ -196,6 +196,33 @@ pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
 }
 
+/// Разбор `#RRGGBB` → ГАММА-КОДИРОВАННЫЙ sRGB `[r, g, b]` в `[0, 1]`
+/// (byte/255, без декода в линейный свет).
+///
+/// Кодированное пространство — то, в котором Figma и браузер композитят
+/// straight-alpha (см. [`crate::alpha`]); для колориметрии используй
+/// [`srgb_from_hex`] (линейный свет).
+pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 || !hex.is_ascii() {
+        return Err(format!("expected #RRGGBB, got #{}", hex));
+    }
+    let parse =
+        |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
+    Ok([
+        f64::from(parse(&hex[0..2])?) / 255.0,
+        f64::from(parse(&hex[2..4])?) / 255.0,
+        f64::from(parse(&hex[4..6])?) / 255.0,
+    ])
+}
+
+/// Гамма-кодированный sRGB `[0, 1]` → `#RRGGBB` (clamp + round до 8 бит).
+/// Обратная сторона [`srgb_encoded_from_hex`] — без гамма-преобразований.
+pub fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
+    let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
+}
+
 /// Linear sRGB → CIE XYZ under D65.
 pub fn srgb_to_xyz(rgb: [f64; 3]) -> [f64; 3] {
     mat_vec_mul(SRGB_TO_XYZ_D65, rgb)
