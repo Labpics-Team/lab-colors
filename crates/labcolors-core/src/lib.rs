@@ -49,3 +49,10 @@ pub use solve::{
 };
 pub use spaces::oklch::{oklch_css_from_hex, oklch_from_hex};
 pub use spaces::vc::ViewingConditions;
+
+/// Компилирует rust-блоки корневого README как doctest-ы: их API-примеры
+/// обязаны собираться на каждом `cargo test --doc`, иначе README тихо
+/// разъедется с кодом. Тип существует только под `--test`, в бинарь не входит.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+pub struct ReadmeDoctests;
