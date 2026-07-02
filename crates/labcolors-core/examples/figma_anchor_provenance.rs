@@ -69,13 +69,11 @@ fn srgb_gamma_encode(v: f64) -> f64 {
 }
 
 /// Композит straight-alpha в gamma-пространстве (как композитит Figma на
-/// канвасе без color management): c = a·fg + (1−a)·bg по кодированным каналам.
+/// канвасе без color management) — ЕДИНСТВЕННАЯ реализация закона живёт в
+/// библиотеке ([`labcolors_core::alpha::composite_over_encoded`]); пример
+/// потребляет её, а не держит вторую копию формулы.
 fn composite_gamma(fg: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64; 3] {
-    [
-        alpha * fg[0] + (1.0 - alpha) * bg[0],
-        alpha * fg[1] + (1.0 - alpha) * bg[1],
-        alpha * fg[2] + (1.0 - alpha) * bg[2],
-    ]
+    labcolors_core::alpha::composite_over_encoded(fg, alpha, bg)
 }
 
 /// Композит в линейном свете: каналы декодируются из gamma, смешиваются,
