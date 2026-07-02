@@ -46,7 +46,13 @@ pub fn oklch_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, Strin
     let base = format!("oklch({:.5}% {:.6} {:.3}", l * 100.0, c, h);
     Ok(match alpha {
         Some(a) => {
-            let a4 = format!("{a:.4}");
+            // Не-конечная альфа — честная ошибка (NaN в CSS невалиден);
+            // конечный вычислительный шум за краями [0, 1] — кламп (легитимен
+            // у выведенных альф), заодо гасит артефакт "-0".
+            if !a.is_finite() {
+                return Err(format!("альфа не конечна: {a}"));
+            }
+            let a4 = format!("{:.4}", a.clamp(0.0, 1.0));
             let a4 = a4.trim_end_matches('0').trim_end_matches('.');
             format!("{base} / {a4})")
         }
@@ -117,6 +123,18 @@ mod tests {
             assert_eq!(back, hex, "grey round-trip разошёлся: {css}");
             assert_eq!(alpha, Some(0.361));
         }
+    }
+
+    /// Гард альфы: NaN — честная ошибка, конечный шум за краями — кламп
+    /// без артефакта "-0".
+    #[test]
+    fn alpha_guard_rejects_nan_and_clamps_noise() {
+        assert!(oklch_css_from_hex("#101012", Some(f64::NAN)).is_err());
+        assert!(oklch_css_from_hex("#101012", Some(f64::INFINITY)).is_err());
+        let noisy = oklch_css_from_hex("#101012", Some(-1e-7)).unwrap();
+        assert!(noisy.ends_with(" / 0)"), "шум у нуля клампится: {noisy}");
+        let over = oklch_css_from_hex("#101012", Some(1.0 + 1e-9)).unwrap();
+        assert!(over.ends_with(" / 1)"), "шум у единицы клампится: {over}");
     }
 
     /// Форма строки — контракт потребителя: процент у L, слэш-альфа,

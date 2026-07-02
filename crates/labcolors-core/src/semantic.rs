@@ -1225,7 +1225,7 @@ impl Resolved {
 
     /// The `(tint, α)` of a semi-transparent [`Translucent`](Resolved::Translucent) role, if this
     /// resolved to one. `None` for solved-colour / zero / unreachable roles.
-    pub fn rgba(&self) -> Option<&TranslucentResolved> {
+    pub fn translucent(&self) -> Option<&TranslucentResolved> {
         match self {
             Resolved::Translucent(r) => Some(r),
             _ => Option::None,

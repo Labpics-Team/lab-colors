@@ -1043,7 +1043,7 @@ fn ladder_bites_on_family_source_mutation() {
             .iter()
             .find(|(n, _)| n == "fill-danger-primary")
             .unwrap();
-        res.rgba().unwrap().tint_hex().to_string()
+        res.translucent().unwrap().tint_hex().to_string()
     };
 
     let mut cfg = labui_reference();
@@ -1062,7 +1062,7 @@ fn ladder_bites_on_family_source_mutation() {
             .iter()
             .find(|(n, _)| n == "fill-danger-primary")
             .unwrap();
-        res.rgba().unwrap().tint_hex().to_string()
+        res.translucent().unwrap().tint_hex().to_string()
     };
     assert_ne!(
         base_tint, mutated_tint,
@@ -1108,7 +1108,7 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
         let table = cfg.compile_named_role_table().unwrap();
         let set = resolve_named_set(&bg, &table, &vc);
         let (_, res) = set.iter().find(|(n, _)| n == "probe-tinted").unwrap();
-        let r = res.rgba().unwrap();
+        let r = res.translucent().unwrap();
         (
             r.tint_hex().to_string(),
             r.alpha(),
@@ -1156,7 +1156,7 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
 /// бы тест по ФОРМАТУ, маскируя семантику).
 fn rgba_to_parts(res: &Resolved) -> (String, f64) {
     let r = res
-        .rgba()
+        .translucent()
         .unwrap_or_else(|| panic!("ожидался Resolved::Translucent, получено {res:?}"));
     let rgb = crate::spaces::srgb::srgb_encoded_from_hex(r.tint_hex()).unwrap();
     let ch = |v: f64| (v * 255.0).round() as u8;
