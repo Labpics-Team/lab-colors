@@ -7,8 +7,8 @@
 //! (`reference/labui-figma-structure.md` §3–§4, воспроизводимо
 //! `cargo run -p labcolors-core --example figma_anchor_provenance`); браузерный
 //! композитинг CSS-альфы живёт в том же device-пространстве. Линейный свет
-//! ([`srgb_from_hex`](crate::spaces::srgb::srgb_from_hex)) здесь не участвует —
-//! он для колориметрии, не для наложения.
+//! (внутренний `srgb_from_hex`) здесь не участвует — он для колориметрии, не
+//! для наложения.
 //!
 //! # Зачем обратный ход
 //!
