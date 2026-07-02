@@ -696,6 +696,14 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "border-neutral",
     "border-danger",
     "border-focus",
+    // Пары бейджа: заливка законом пары, лейбл — nested resolve потребителя.
+    "badge-fill-brand",
+    "badge-fill-danger",
+    "badge-fill-warning",
+    "badge-fill-success",
+    "badge-fill-info",
+    "badge-fill-static-dark",
+    "badge-fill-static-light",
     // Прочие эмитируемые нейтральные (icon/none — core; separator НЕ токен:
     // бордер и сепаратор едины, компонент применяет бордер-токен).
     "icon",
@@ -726,8 +734,14 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
         "bg-overlay-*",
         "оверлеи → alpha.rs-роли (вне поглощаемого GAP)",
     ),
-    // Компонентные алиасы (badge/control) — конфиг-алиасы, не рецепты.
-    ("badge-*", "компонентный алиас, не рецепт эмиссии"),
+    // Компонентные алиасы — конфиг-алиасы, не рецепты. Бейдж сузился законом
+    // пары: badge-fill-* стали первоклассной эмиссией (RoleRecipe::PairFill,
+    // crate::pair), коллапс остаётся только за лейблами бейджа — те решаются
+    // nested resolve потребителя от выведенной заливки.
+    (
+        "badge-label-*",
+        "лейбл бейджа — nested resolve от заливки пары",
+    ),
     ("control-bg", "компонентный алиас, не рецепт эмиссии"),
 ];
 
