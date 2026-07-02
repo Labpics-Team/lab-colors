@@ -145,7 +145,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
         Resolved::Rgba(_) => RoleOutcome::Unreachable {
             code: "rgba_boundary_not_yet_exported",
             message: "semi-transparent ladder/alpha-analog role is not exported by resolve_theme \
-                      (config path, task t3)"
+                      (solid-only surface)"
                 .to_string(),
         },
         // ОСОЗНАННЫЙ ДОЛГ: `Resolved` — `#[non_exhaustive]`, поэтому catch-all

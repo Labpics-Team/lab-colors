@@ -1382,8 +1382,8 @@ pub fn labui_reference() -> ThemeConfig {
         "fill-accent".to_string(),
         brand_pos(LadderPosition::LabelPrimary),
     ));
-    // fill-neutral — солид-литерал PROVISIONAL стаба (нет engine-деривации);
-    // приближено Neutral(Mid) солид, исключено из точного value-теста (owner-провизион).
+    // fill-neutral — солид-литерал стаба без engine-деривации; приближен
+    // солидом Neutral(Mid) и потому исключён из точного value-теста.
     roles.push((
         "fill-neutral".to_string(),
         neutral_pos(NeutralPick::Mid, LadderPosition::LabelPrimary),

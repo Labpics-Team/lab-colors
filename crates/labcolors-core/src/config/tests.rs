@@ -60,7 +60,7 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
 
     // Фикстура несёт 20 core-ролей ПЛЮС акцентную/сентимент/FX/альфа
     // лестницу. Байт-в-байт гарантия — на 20 CORE-ролях (имена =
-    // Role::key()): именно их пинит owner-approved golden. Проверяем, что каждая
+    // Role::key()): именно их пинит golden-грид. Проверяем, что каждая
     // из 20 присутствует и эмитит идентично дефолтной таблице на всех точках.
     let core_keys: Vec<&'static str> = Role::ALL.iter().map(|r| r.key()).collect();
     for key in &core_keys {
