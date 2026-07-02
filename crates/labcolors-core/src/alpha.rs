@@ -167,6 +167,68 @@ pub fn min_alpha_hex(solid_hex: &str, bg_hex: &str) -> Result<f64, String> {
     .expect("hex-вход всегда в домене byte/255 — None недостижим по построению"))
 }
 
+/// Альфа-аналог солида: тинт + ФАКТИЧЕСКАЯ α.
+///
+/// Продуктовый слой поверх строгого закона: потребитель всегда получает
+/// пригодный ответ, и ответ никогда не врёт о цвете.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlphaAnalog {
+    /// Кодированный тинт `[0,1]³`.
+    pub tint: [f64; 3],
+    /// Фактическая α: запрошенная, если она разрешима, иначе минимально
+    /// разрешимая (композит при ней остаётся точно равным солиду).
+    pub alpha: f64,
+}
+
+/// Продуктовый резолвер: ближайший ПРИЕМЛЕМЫЙ альфа-аналог вместо отказа.
+///
+/// «Приблизить» можно двумя способами, и только один честен: кламп тинта при
+/// запрошенной α тихо сдвинул бы композит (система соврала бы о цвете —
+/// запрещённая подмена), а подъём α до [`min_alpha_encoded`] сохраняет
+/// композит ПОБАЙТНО равным солиду — двигается только прозрачность, и
+/// фактическая α возвращается явно ([`AlphaAnalog::alpha`]). Запрошенная α
+/// клампится в `[0,1]` (α=0 вырожденна и поднимается до α_min как «слишком
+/// низкая»).
+///
+/// `None` — только на входе вне домена (не кодированный цвет `[0,1]³` /
+/// не конечный); для валидных цветов ответ существует всегда (в худшем
+/// случае α=1, тинт=солид).
+pub fn resolve_alpha_analog(
+    solid: [f64; 3],
+    requested_alpha: f64,
+    bg: [f64; 3],
+) -> Option<AlphaAnalog> {
+    let floor = min_alpha_encoded(solid, bg)?; // None только на мусор-входах
+    if !requested_alpha.is_finite() {
+        return None;
+    }
+    let alpha = requested_alpha.clamp(0.0, 1.0).max(floor);
+    // При α == floor == 0 солид равен фону: любой видимый эффект отсутствует,
+    // тинт = фон (инверсия при α=0 вырожденна — отвечаем без неё).
+    if alpha == 0.0 {
+        return Some(AlphaAnalog { tint: bg, alpha });
+    }
+    let tint = invert_composite_encoded(solid, alpha, bg)
+        .expect("α ≥ α_min по построению — инверсия разрешима");
+    Some(AlphaAnalog { tint, alpha })
+}
+
+/// Hex-обёртка [`resolve_alpha_analog`]: `(tint_hex, фактическая α)`.
+///
+/// # Errors
+///
+/// `Err` при невалидном hex на любом входе.
+pub fn resolve_alpha_analog_hex(
+    solid_hex: &str,
+    requested_alpha: f64,
+    bg_hex: &str,
+) -> Result<Option<(String, f64)>, String> {
+    let solid = srgb_encoded_from_hex(solid_hex)?;
+    let bg = srgb_encoded_from_hex(bg_hex)?;
+    Ok(resolve_alpha_analog(solid, requested_alpha, bg)
+        .map(|a| (hex_from_srgb_encoded(a.tint), a.alpha)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +362,57 @@ mod tests {
         assert!(invert_composite_encoded(s, 1.1, b).is_none());
         // α=1: тинт == солид, тривиально разрешимо.
         assert_eq!(invert_composite_encoded(s, 1.0, b), Some(s));
+    }
+
+    /// Продуктовый резолвер никогда не врёт о цвете: при разрешимой
+    /// запрошенной α возвращает её саму; при неразрешимой — поднимает α ровно
+    /// до α_min, и композит остаётся ТОЧНО равным солиду (двигается
+    /// прозрачность, не цвет). Кламп-подмена тинта не происходит.
+    #[test]
+    fn resolver_moves_alpha_never_the_colour() {
+        let grid: Vec<f64> = (0..=8).map(|i| f64::from(i) / 8.0).collect();
+        for &s in &grid {
+            for &b in &grid {
+                let solid = [s, 0.4, 0.6];
+                let bg = [b, 0.4, 0.6];
+                let floor = min_alpha_encoded(solid, bg).expect("в домене");
+                for requested in [0.0, 0.05, 0.3, 0.9, 1.0] {
+                    let a = resolve_alpha_analog(solid, requested, bg).expect("в домене");
+                    // Фактическая α: запрошенная, если разрешима, иначе ровно α_min.
+                    let want = requested.max(floor);
+                    assert!(
+                        (a.alpha - want).abs() < 1e-12,
+                        "solid={s},bg={b},req={requested}: α={} != {want}",
+                        a.alpha
+                    );
+                    // Композит НИКОГДА не отклоняется от солида.
+                    let c = if a.alpha == 0.0 {
+                        bg // вырожденный случай solid==bg
+                    } else {
+                        composite_over_encoded(a.tint, a.alpha, bg)
+                    };
+                    for ch in 0..3 {
+                        assert!(
+                            (c[ch] - solid[ch]).abs() < 1e-9,
+                            "solid={s},bg={b},req={requested}: композит уехал на канале {ch}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Резолвер отвергает только мусор; NaN-α — тоже мусор, не «поднять до α_min».
+    #[test]
+    fn resolver_rejects_only_out_of_domain() {
+        let ok = [0.5, 0.5, 0.5];
+        assert!(resolve_alpha_analog([1.5, 0.0, 0.0], 0.5, ok).is_none());
+        assert!(resolve_alpha_analog(ok, f64::NAN, ok).is_none());
+        // Запрошенная α вне [0,1] клампится, не отвергается (пригодный ответ).
+        assert_eq!(
+            resolve_alpha_analog(ok, 5.0, ok).map(|a| a.alpha),
+            Some(1.0)
+        );
     }
 
     /// Домен ядра закреплён: внегамутные и неконечные входы отвергаются
