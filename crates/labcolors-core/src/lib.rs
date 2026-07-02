@@ -9,6 +9,7 @@ pub mod lcs;
 pub mod lpc;
 pub(crate) mod lut;
 pub mod neutral;
+pub mod pair;
 pub mod scale;
 pub mod semantic;
 pub mod sentiment;

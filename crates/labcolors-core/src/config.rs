@@ -457,6 +457,16 @@ pub enum RoleRecipe {
         /// Позиция меню (несёт пер-темную пару альф из стаба labui).
         position: LadderPosition,
     },
+    /// Заливка пары «поверхность × лейбл» ([`crate::pair`]): якорь источника,
+    /// минимально сдвинутый по светлоте до победы перцептивно правильной
+    /// стороны лейбла в штатной полярности (Oklab: оттенок/хрома идентичности
+    /// целы). Лейбл на такой заливке решается ОБЫЧНЫМ nested resolve — пара
+    /// не второй текстовый закон, а подготовка поверхности. Эмиссия — солид
+    /// (лестничная сантехника с α = 1).
+    PairFill {
+        /// Источник якоря: бренд, семейство, сентимент или нейтраль.
+        source: LadderSource,
+    },
     /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
     /// #119): `(tint, α)`, чей композит на фоне резолва равен солиду `of`. Даёт
     /// `-tinted`-роли labui. Компилируется в [`RoleSpec::AlphaAnalog`].
@@ -893,6 +903,7 @@ impl ThemeConfig {
                 "magnitude > 0 (Lc-величина тени; ≤ 0 = невидима)",
             ),
             RoleRecipe::Ladder { source, .. } => self.check_ladder_source(role, source),
+            RoleRecipe::PairFill { source } => self.check_ladder_source(role, source),
             RoleRecipe::AlphaAnalog { of, alpha } => {
                 self.check_ladder_source(role, of)?;
                 check_in_excl_incl(
@@ -1015,6 +1026,9 @@ impl ThemeConfig {
             RoleRecipe::AlphaAnalog { of, alpha } => Ok(RoleSpec::AlphaAnalog {
                 of: self.compile_ladder_tint(role, of)?,
                 alpha: *alpha,
+            }),
+            RoleRecipe::PairFill { source } => Ok(RoleSpec::PairFill {
+                tint: self.compile_ladder_tint(role, source)?,
             }),
         }
     }
@@ -1453,6 +1467,27 @@ pub fn labui_reference() -> ThemeConfig {
     roles.push((
         "border-focus".to_string(),
         brand_pos(LadderPosition::FocusRing),
+    ));
+
+    // Пары «заливка × лейбл» бейджа (crate::pair): якорь источника, минимально
+    // сдвинутый до победы перцептивной стороны лейбла в штатной полярности;
+    // лейбл на такой заливке — обычный nested resolve потребителя. Статики
+    // покрываются тем же законом (белый/чёрный якоря нейтрали).
+    let pair = |source| RoleRecipe::PairFill { source };
+    roles.push(("badge-fill-brand".to_string(), pair(LadderSource::Brand)));
+    for sname in ["danger", "warning", "success", "info"] {
+        roles.push((
+            format!("badge-fill-{sname}"),
+            pair(LadderSource::Sentiment(sname.to_string())),
+        ));
+    }
+    roles.push((
+        "badge-fill-static-dark".to_string(),
+        pair(LadderSource::Neutral(NeutralPick::Dark)),
+    ));
+    roles.push((
+        "badge-fill-static-light".to_string(),
+        pair(LadderSource::Neutral(NeutralPick::Light)),
     ));
 
     ThemeConfig {

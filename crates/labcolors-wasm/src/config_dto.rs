@@ -153,6 +153,9 @@ pub enum RoleRecipeDto {
         source: LadderSourceDto,
         position: String,
     },
+    PairFill {
+        source: LadderSourceDto,
+    },
     AlphaAnalog {
         of: LadderSourceDto,
         alpha: f64,
@@ -293,6 +296,9 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
                 source: source.into(),
                 position: position_from_key(&position)?,
             },
+            RoleRecipeDto::PairFill { source } => RoleRecipe::PairFill {
+                source: source.into(),
+            },
             RoleRecipeDto::AlphaAnalog { of, alpha } => RoleRecipe::AlphaAnalog {
                 of: of.into(),
                 alpha,
@@ -431,6 +437,9 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
             RoleRecipe::Ladder { source, position } => RoleRecipeDto::Ladder {
                 source: source.try_into()?,
                 position: position.key().to_string(),
+            },
+            RoleRecipe::PairFill { source } => RoleRecipeDto::PairFill {
+                source: source.try_into()?,
             },
             RoleRecipe::AlphaAnalog { of, alpha } => RoleRecipeDto::AlphaAnalog {
                 of: of.try_into()?,
