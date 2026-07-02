@@ -255,11 +255,12 @@ fn config_boundary_two_configs_diverge() {
 
     // Пространство ключей — конфига, не встроенной таблицы.
     let keys = js_sys::Object::keys(&roles_b.clone().into());
-    let keys: Vec<String> = keys.iter().filter_map(|k| k.as_string()).collect();
-    assert!(keys.contains(&"accent-fill".to_string()));
-    assert!(
-        !keys.contains(&"label-primary".to_string()) || keys.len() == 2,
-        "после загрузки конфига эмитится ЕГО контракт: {keys:?}"
+    let mut keys: Vec<String> = keys.iter().filter_map(|k| k.as_string()).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["accent-fill", "body-text"],
+        "после загрузки конфига пространство ключей — РОВНО его контракт,          без примеси встроенной таблицы"
     );
 
     // Невалидный конфиг — структурная ошибка invalid_config.

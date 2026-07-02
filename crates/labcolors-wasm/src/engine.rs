@@ -99,6 +99,11 @@ impl Engine {
             let floor = floors.get(target).copied().flatten();
             floors.insert(alias.clone(), floor);
         }
+        // Прошлое пространство записей сносится целиком: гарантия «чужой
+        // конфиг не отдаст свои цвета» — очистка, а не вероятностная
+        // уникальность 64-битного отпечатка (отпечаток в ключе остаётся
+        // belt-and-suspenders и идентичностью конфига наружу).
+        self.cache.clear();
         self.named = Some(NamedState {
             table,
             fingerprint: fp,
@@ -645,6 +650,11 @@ mod tests {
 
         let fp_acme = engine.load_config(&acme_json()).expect("acme валиден");
         assert_ne!(fp_labui, fp_acme, "разные конфиги → разные отпечатки");
+        assert_eq!(
+            engine.cache.len(),
+            0,
+            "загрузка конфига сносит прошлое пространство записей целиком —              корректность кэша не опирается на вероятностную уникальность отпечатка"
+        );
         // Тот же (bg, тема) СРАЗУ после смены конфига: попадание в чужую запись
         // было бы кэш-коллизией — пространство ключей обязано быть acme.
         let acme_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
@@ -677,12 +687,27 @@ mod tests {
         for ((name, resolved), entry) in direct.iter().zip(via_engine.roles.iter()) {
             assert_eq!(name, &entry.role_key, "порядок и имена совпадают");
             match (resolved, &entry.outcome) {
-                (Resolved::Color { solved, .. }, RoleOutcome::Color(c)) => {
-                    assert_eq!(solved.hex(), c.hex)
+                (Resolved::Color { solved, compressed }, RoleOutcome::Color(c)) => {
+                    assert_eq!(solved.hex(), c.hex, "{name}: hex");
+                    assert_eq!(solved.lc(), c.lc, "{name}: lc");
+                    assert_eq!(solved.wcag_ratio(), c.wcag_ratio, "{name}: wcag");
+                    assert_eq!(*compressed, c.compressed, "{name}: compressed");
+                    assert_eq!(
+                        solved.floor_override(),
+                        c.floor_override,
+                        "{name}: floor_override"
+                    );
                 }
                 (Resolved::Rgba(r), RoleOutcome::Rgba(o)) => {
-                    assert_eq!(r.tint_hex(), o.tint_hex);
-                    assert_eq!(r.composite_hex(), o.composite_hex);
+                    assert_eq!(r.tint_hex(), o.tint_hex, "{name}: tint");
+                    assert_eq!(r.alpha(), o.alpha, "{name}: alpha");
+                    assert_eq!(r.composite_hex(), o.composite_hex, "{name}: composite");
+                    assert_eq!(r.composite_lc(), o.composite_lc, "{name}: composite_lc");
+                    assert_eq!(
+                        r.composite_wcag(),
+                        o.composite_wcag,
+                        "{name}: composite_wcag"
+                    );
                 }
                 (Resolved::None, RoleOutcome::None) => {}
                 (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),
@@ -707,6 +732,19 @@ mod tests {
             }
             other => panic!("ждали InvalidConfig, получено {other:?}"),
         }
+        // Недоменная α альфа-аналога режется полным preflight-ом ядра
+        // (validate = компиляция), а не отдельной проверкой границы.
+        let bad_alpha = acme_json().replace(
+            r#"{"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}"#,
+            r#"{"kind": "alpha-analog", "of": {"kind": "brand"}, "alpha": 1.5}"#,
+        );
+        match engine.load_config(&bad_alpha) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(reason.contains("alpha"), "ошибка называет ручку: {reason}");
+            }
+            other => panic!("α=1.5 обязана быть отвергнута, получено {other:?}"),
+        }
+
         // Состояние прежнее: контракт acme жив.
         let set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         assert!(set.roles.iter().any(|r| r.role_key == "accent-fill"));

@@ -153,7 +153,11 @@ export interface ThemeConfig {
 export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
-  /** Reachable roles only: { "--lab-label-primary": "#1a1a1a", ... }. */
+  /**
+   * Reachable roles only. Values are ready-to-serve CSS: "#RRGGBB" for solid
+   * roles, "rgb(R G B / A)" for semi-transparent ladder/alpha-analog roles —
+   * do not validate them as hex.
+   */
   readonly vars: Record<string, string>;
   /** Every role, keyed by its stable role key (without the --lab- prefix). */
   readonly roles: Record<string, RoleResult>;
