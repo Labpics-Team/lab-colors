@@ -1,6 +1,7 @@
 # ADR-0001. Конфиг-граница: физика в движке, семантика в конфиге потребителя
 
-Статус: предложено (2026-07-02). Решение владельца об архитектуре зон —
+Статус: принято (2026-07-02), внедрено — ядро `ThemeConfig` (#121), WASM
+`loadConfig` (#122). Решение владельца об архитектуре зон —
 2026-07-02: «цвета агностичны, чтобы ими пользовались разные ДС с разной
 семантикой; каждое в рамках своей зоны; система для любого клиента студии:
 взял → закастомил быстро → внедрил».
@@ -33,10 +34,12 @@ TINT_PERCEPTIBLE_MP_FLOOR, CUSP_HALF_WINDOW_DEG, HUE_DRIFT_PENALTY_SLOPE).
 Основание — инвентарь семантики ядра (2026-07-02, main@31643d9): единственный
 load-bearing продакшн-hex движка — 10 якорей `Accent::anchor_hex`
 (accent.rs:115-124); эмиссия — ровно 20 ролей из запечённого
-`RoleTable::default()`; в типе кэш-ключа WASM уже есть слот
-`table_fingerprint` (cache.rs), но сегодня он — константа-заглушка 0:
-вычисление отпечатка из конфига — часть PR-b (до него два разных конфига
-коллизили бы в одном пространстве ключей).
+`RoleTable::default()`. Слот `table_fingerprint` в кэш-ключе WASM (cache.rs)
+с тех пор наполнен: PR-b вычисляет отпечаток загруженного конфига
+(FNV-1a над канонической сериализацией DTO, `config_dto.rs`) и продевает его
+в ключ через `loadConfig`. Встроенная дефолт-таблица остаётся на
+`DEFAULT_TABLE_FINGERPRINT = 0` (конфига нет), а корректность при смене
+конфига держит wholesale `clear()` кэша, не уникальность 64-битного отпечатка.
 
 ## Схема ThemeConfig (сущность; полная спека — при реализации CH-02)
 
@@ -74,8 +77,9 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
 
 ## API
 
-- Ядро: `RoleTable::from_config(&ThemeConfig) -> Result<RoleTable, ConfigError>`;
-  `resolve_set(bg, &table, vc)` — без изменений.
+- Ядро: `ThemeConfig::compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError>`
+  (semantic.rs `NamedRoleTable`); `resolve_named_set(bg, &table, vc)` резолвит
+  именованную таблицу той же физикой, что и встроенную `resolve_set`.
 - WASM: `engine.load_config(json) -> fingerprint`; сигнатура
   `resolve_theme(bg_hex, theme)` НЕ меняется — конфиг = состояние движка,
   кэш по fingerprint.
