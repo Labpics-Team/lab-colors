@@ -79,11 +79,11 @@ export interface UnreachableRole {
   readonly message: string;
 }
 
-/** A semi-transparent ladder / alpha-analog emission: the CSS carries rgba(), the browser composites it. */
+/** A semi-transparent ladder / alpha-analog emission: the CSS carries oklch(L% C H / A), the browser composites it. */
 export interface RgbaRole {
   readonly kind: "rgba";
   readonly cssVar: string;
-  /** The tint as #RRGGBB — the colour the rgba() carries. */
+  /** The tint as #RRGGBB (data) — the colour the oklch(… / A) carries. */
   readonly tintHex: string;
   /** The alpha of the emission, (0, 1]. */
   readonly alpha: number;
@@ -162,6 +162,9 @@ export interface ResolvedTheme {
    * "oklch(L% C H)" for solid roles, "oklch(L% C H / A)" for semi-transparent
    * ladder/alpha-analog roles. Solved in the sRGB gamut (oklch is the
    * notation, not a gamut extension); byte-exact vs the role's hex fields.
+   * Scope: this is resolveTheme's contract (applyTheme/watchTheme inject it
+   * verbatim); adaptTheme's per-frame easing writes concrete interpolated
+   * colours and is not bound by the emission form.
    */
   readonly vars: Record<string, string>;
   /** Every role, keyed by its stable role key (without the --lab- prefix). */
@@ -212,7 +215,7 @@ impl LabColors {
             .inner
             .resolve_theme(bg_hex, theme)
             .map_err(to_js_error)?;
-        Ok(project_resolved(&resolved).unchecked_into())
+        Ok(project_resolved(&resolved)?.unchecked_into())
     }
 
     /// Загрузить конфиг дизайн-системы (JSON по типу `ThemeConfig` из `.d.ts`).
@@ -280,7 +283,7 @@ impl Default for LabColors {
 ///
 /// Built generically from the role vector — no role is named here, so the set
 /// can grow without touching this function.
-fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
+fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
     let out = js_sys::Object::new();
     set(&out, "theme", &JsValue::from_str(resolved.theme));
     set(&out, "background", &JsValue::from_str(&resolved.background));
@@ -310,16 +313,9 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                 );
                 // Единая форма эмиссии: oklch и для солида (hex остаётся
                 // данными роли; синтаксис переменной один на все исходы).
-                set(
-                    &role_obj,
-                    "css",
-                    &JsValue::from_str(&oklch_css(&c.hex, None)),
-                );
-                set(
-                    &vars,
-                    &css_var,
-                    &JsValue::from_str(&oklch_css(&c.hex, None)),
-                );
+                let css = oklch_css(&c.hex, None)?;
+                set(&role_obj, "css", &JsValue::from_str(&css));
+                set(&vars, &css_var, &JsValue::from_str(&css));
             }
             RoleOutcome::Rgba(r) => {
                 set(&role_obj, "kind", &JsValue::from_str("rgba"));
@@ -338,7 +334,7 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                 );
                 // Переменная несёт тинт в oklch со слэш-альфой — браузер
                 // композитит на живой подложке; форма едина с солидами.
-                let css = oklch_css(&r.tint_hex, Some(r.alpha));
+                let css = oklch_css(&r.tint_hex, Some(r.alpha))?;
                 set(&role_obj, "css", &JsValue::from_str(&css));
                 set(&vars, &css_var, &JsValue::from_str(&css));
             }
@@ -355,16 +351,20 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
     }
     set(&out, "vars", &vars);
     set(&out, "roles", &roles);
-    out.into()
+    Ok(out.into())
 }
 
 /// Единая CSS-форма эмиссии: `oklch(L% C H)` / `oklch(L% C H / A)`.
 /// Байт-точность реконструкции доказана round-trip тестом ядра на решётке
-/// куба; hex к этому месту валиден по построению (солвер/лестница), поэтому
-/// ошибка парса невозможна — ветка Err недостижима и схлопнута в сам hex
-/// (честнее уронить видимым мусором, чем тихо подменить цвет).
-fn oklch_css(hex: &str, alpha: Option<f64>) -> String {
-    labcolors_core::oklch_css_from_hex(hex, alpha).unwrap_or_else(|_| hex.to_string())
+/// куба. Hex к этому месту валиден по построению (солвер/лестница), но при
+/// невозможном парсе — честная структурная ошибка, НЕ тихая подмена формы:
+/// потребитель ждёт oklch, а rgba-роль при подмене ещё и потеряла бы альфу.
+fn oklch_css(hex: &str, alpha: Option<f64>) -> Result<String, JsError> {
+    labcolors_core::oklch_css_from_hex(hex, alpha).map_err(|reason| {
+        JsError::new(&format!(
+            "internal_error: резолвнутый цвет не сериализуется в oklch: {reason}"
+        ))
+    })
 }
 
 /// Set a property on a JS object. `Reflect::set` on a freshly created `Object`

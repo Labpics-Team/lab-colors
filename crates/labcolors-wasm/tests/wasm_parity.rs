@@ -112,9 +112,20 @@ fn vars_mirror_reachable_roles_in_oklch() {
         Some(tp_css.clone()),
         "vars must mirror the role css under the --lab- name"
     );
+    // Строгая форма: ровно три компоненты, процент ТОЛЬКО у L, без альфы.
+    let inner = tp_css
+        .strip_prefix("oklch(")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("solid css must be oklch(...), got {tp_css}"));
+    let parts: Vec<&str> = inner.split_whitespace().collect();
+    assert_eq!(parts.len(), 3, "solid oklch has exactly L C H: {tp_css}");
     assert!(
-        tp_css.starts_with("oklch(") && tp_css.contains('%') && !tp_css.contains('/'),
-        "solid css must be oklch(L% C H), got {tp_css}"
+        parts[0].ends_with('%') && parts[0].trim_end_matches('%').parse::<f64>().is_ok(),
+        "L is a percentage: {tp_css}"
+    );
+    assert!(
+        parts[1].parse::<f64>().is_ok() && parts[2].parse::<f64>().is_ok(),
+        "C and H are bare numbers: {tp_css}"
     );
     assert!(
         get_str(&tp, "hex").is_some_and(|h| h.starts_with('#')),
@@ -255,7 +266,10 @@ fn config_boundary_two_configs_diverge() {
     let accent_a = get_obj(&roles_a, "accent-fill");
     assert_eq!(get_str(&accent_a, "kind").as_deref(), Some("rgba"));
     let css_a = get_str(&accent_a, "css").expect("rgba несёт css");
-    assert!(css_a.starts_with("rgb("), "css-эмиссия rgba: {css_a}");
+    assert!(
+        css_a.starts_with("oklch(") && css_a.contains(" / "),
+        "css-эмиссия rgba — oklch со слэш-альфой: {css_a}"
+    );
 
     let roles_b = get_obj(set_b.as_ref(), "roles");
     let accent_b = get_obj(&roles_b, "accent-fill");
