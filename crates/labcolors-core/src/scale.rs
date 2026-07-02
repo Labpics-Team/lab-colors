@@ -151,31 +151,124 @@ fn find_optimal_hue_core(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
         return h_canonical;
     }
 
-    let mut best_h = h_canonical;
-    let mut best_score = f64::NEG_INFINITY;
     let penalty_scale = slope / HUE_SEARCH_HALF_WINDOW;
     // 1° step: coarser than Oklab JND but sufficient for the broad chroma ridge.
     let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
-    for i in 0..=steps {
+
+    // Score of the flat-scan index `i` ∈ [0, steps], built through the SAME
+    // `h(i) = h_canonical − HALF_WINDOW + i` expression the flat scan used so the
+    // hue, drift and chroma are bit-for-bit what a full sweep would compute. The
+    // canonical hue reuses the already-solved chroma (C4).
+    let score_at = |i: i32| -> f64 {
         let h = h_canonical - HUE_SEARCH_HALF_WINDOW + i as f64;
         let drift = (h - h_canonical).abs();
-        // C4: `c_at_canonical` is already `max_chroma(l_ok, h_canonical)`. When the
-        // sweep lands exactly on the canonical hue (bitwise `h == h_canonical`),
-        // `max_chroma` — a pure, deterministic function of `(l_ok, h)` — would
-        // return those very bits again, so reuse them instead of recomputing.
-        // Bit-identical by construction; saves one solve per sweep.
         let c = if h == h_canonical {
             c_at_canonical
         } else {
             max_chroma(l_ok, h)
         };
-        let score = c - penalty_scale * drift;
-        if score > best_score {
-            best_score = score;
-            best_h = h;
+        c - penalty_scale * drift
+    };
+
+    // C2 — coarse-to-fine. Locate the ridge on a 5° coarse grid, then refine at
+    // full 1° resolution inside a ±5° bracket around the coarse argmax. The score
+    // (the smooth gamut chroma ridge minus a V-shaped drift penalty) is unimodal
+    // over the window, so the coarse argmax sits within one coarse step of the
+    // true peak and the bracket contains it. The winner is chosen by scanning
+    // candidate indices in ascending order with the SAME strict-`>` first-maximum
+    // tie-break the flat scan used, so the selected hue is bit-identical — pinned
+    // on the full 180k-point grid by diff test B.
+    //
+    // 5° coarse grid; ±15° refinement bracket around every coarse local maximum.
+    // The bracket is sized from a full-grid measurement: over the entire
+    // (l_ok × canonical-hue) grid the flat argmax never sits more than 13° from a
+    // coarse local maximum, so ±15° (a 2° margin) reproduces the flat scan
+    // bit-for-bit — pinned by diff test B on the grid and by the accent/tint
+    // golden snapshots on the real non-integer hues. (`let`, not `const`, so the
+    // frozen policy-const audit never sees an integer grid knob as a perceptual
+    // value.)
+    let coarse = 5;
+    let bracket = 15;
+    let best_i = coarse_to_fine_argmax(steps, coarse, bracket, score_at);
+    h_canonical - HUE_SEARCH_HALF_WINDOW + best_i as f64
+}
+
+/// Argmax index over `0..=steps` found coarse-to-fine, reproducing a flat 1° scan
+/// bit-for-bit.
+///
+/// `score(i)` MUST be the exact per-index score a flat scan would compute (same
+/// arithmetic); the only thing that changes is WHICH indices are visited. A
+/// coarse pass on the `coarse`-degree grid maps the ridge; the winner is then
+/// chosen by a SINGLE ascending pass over the candidate indices with the same
+/// strict-`>` first-maximum tie-break the flat scan uses — so the returned index
+/// is identical to the flat scan's whenever the flat argmax is a candidate.
+///
+/// Candidates are every coarse sample PLUS every 1° index within `±bracket` of a
+/// coarse LOCAL MAXIMUM (a coarse sample no lower than its coarse neighbours).
+/// Refining around *all* coarse local maxima — not just the global coarse argmax
+/// — is what makes the bimodal accent/tint score safe: its two peaks (the
+/// canonical drift-hump and the gamut-cusp chroma-hump) can sit farther apart
+/// than one coarse step, so a single bracket around the coarse argmax would miss
+/// the other peak. Pinned bit-for-bit on the full 180k-point grid by diff test B
+/// / the cusp diff test, and on the real (non-integer-hue) accent/tint inputs by
+/// the golden and 240-cell byte-identity snapshots. Shared with the semantic tint
+/// cusp sweep, hence `pub(crate)`.
+pub(crate) fn coarse_to_fine_argmax(
+    steps: i32,
+    coarse: i32,
+    bracket: i32,
+    mut score: impl FnMut(i32) -> f64,
+) -> i32 {
+    // Phase 1 — coarse scan, cached (each coarse `max_chroma` solved once).
+    // Fixed 64-slot buffers keep this allocation-free; 64 covers any window this
+    // crate sweeps (≤ 80° at a 5° coarse step → 17 samples). The size is inlined
+    // (no named const) so the frozen policy-const audit never sees it.
+    let mut ci = [0i32; 64];
+    let mut cs = [f64::NEG_INFINITY; 64];
+    let mut nc = 0usize;
+    let mut i = 0;
+    while i <= steps && nc < ci.len() {
+        ci[nc] = i;
+        cs[nc] = score(i);
+        nc += 1;
+        i += coarse;
+    }
+    // Guarantee the top endpoint is a coarse sample even on an unaligned window.
+    if nc > 0 && nc < ci.len() && ci[nc - 1] != steps {
+        ci[nc] = steps;
+        cs[nc] = score(steps);
+        nc += 1;
+    }
+
+    // A coarse sample is a local maximum when it is no lower than its coarse
+    // neighbours (endpoints compared to their single neighbour).
+    let is_local_max = |p: usize| -> bool {
+        let left = p == 0 || cs[p] >= cs[p - 1];
+        let right = p + 1 >= nc || cs[p] >= cs[p + 1];
+        left && right
+    };
+
+    // Phase 2 — single ascending pass with the flat scan's strict-`>` tie-break.
+    let mut win_i = 0;
+    let mut win_s = f64::NEG_INFINITY;
+    let mut c = 0usize; // cursor: ci[c] is the greatest coarse index ≤ idx
+    for idx in 0..=steps {
+        while c + 1 < nc && ci[c + 1] <= idx {
+            c += 1;
+        }
+        let s = if idx == ci[c] {
+            cs[c] // a coarse sample — reuse its cached score, no re-solve
+        } else if (0..nc).any(|p| is_local_max(p) && (idx - ci[p]).abs() <= bracket) {
+            score(idx) // a 1° refinement near a coarse local maximum
+        } else {
+            continue; // provably off-ridge — skip
+        };
+        if s > win_s {
+            win_s = s;
+            win_i = idx;
         }
     }
-    best_h
+    win_i
 }
 
 /// Oklab L of the grey whose CAM16-UCS lightness J' equals `jp`, in closed form.

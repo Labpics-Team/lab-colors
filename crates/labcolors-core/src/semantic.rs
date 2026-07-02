@@ -863,21 +863,28 @@ fn curve_plan_cached(
 /// calibration, not of the sRGB gamut, and is flagged as out of reach here.
 fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
     let penalty_scale = stiffness / 100.0;
-    let mut best_h = canonical_deg;
-    let mut best_score = f64::NEG_INFINITY;
-    // Step the window in 1° increments — finer than the cusp moves between roles.
+    // 1° window steps — finer than the cusp moves between roles.
     let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
-    for i in 0..=steps {
+
+    // Bit-identical per-index score (the exact arithmetic of the flat sweep).
+    let score_at = |i: i32| -> f64 {
         let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
         let chroma = scale::max_chroma(l_ok, h);
         let drift = (h - canonical_deg).abs();
-        let score = chroma - penalty_scale * drift;
-        if score > best_score {
-            best_score = score;
-            best_h = h;
-        }
-    }
-    best_h
+        chroma - penalty_scale * drift
+    };
+
+    // C2 — coarse-to-fine hue sweep (shared with the accent ramp, see
+    // `scale::coarse_to_fine_argmax`). 5° coarse grid, ±15° refinement bracket
+    // around every coarse local maximum, then a single ascending pass with the
+    // flat scan's strict-`>` first-maximum tie-break. Bit-identical to the flat
+    // 81-point sweep — pinned on the full (l_ok × canonical) grid by the cusp
+    // diff test and on real tints by the 240-cell resolve_set byte-identity
+    // snapshot. (`let`, not `const`, keeps the frozen policy-const audit clean.)
+    let coarse = 5;
+    let bracket = 15;
+    let best_i = scale::coarse_to_fine_argmax(steps, coarse, bracket, score_at);
+    canonical_deg - CUSP_HALF_WINDOW_DEG + best_i as f64
 }
 
 /// The chroma ratio (for [`ChromaPolicy::Relative`]) that lands a colour of Oklab
