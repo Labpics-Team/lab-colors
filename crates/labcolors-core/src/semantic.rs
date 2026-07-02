@@ -4169,3 +4169,118 @@ mod tests {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Дериватор-локи (Fowler class Б: characterization). Эти тесты НЕ выводят
+// константы из первых принципов — они ИЗМЕРЯЮТ перцептивную величину, к которой
+// привязана каждая калибровочная константа, и фиксируют измеренное отношение как
+// регрессионный якорь. Где строгая деривация НЕ держится (замер это показал),
+// граница честно широкая и помечена — БЕЗ подгонки под значение (North).
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod derivator_locks {
+    use super::{CUSP_HALF_WINDOW_DEG, LIGHTNESS_SETTLE, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR};
+    use crate::lcs::LcsColor;
+
+    fn grey(i: u8) -> String {
+        format!("#{i:02X}{i:02X}{i:02X}")
+    }
+
+    /// LIGHTNESS_SETTLE (0.002) < минимальный шаг выходной 8-бит сетки (1/256 ≈
+    /// 0.00391). Единственная из четвёрки, где вывод держится СТРОГО: порог
+    /// сходимости лежит ниже наименьшего представимого шага сетки, поэтому
+    /// не может «застрять» на различимой ступени.
+    #[test]
+    fn lightness_settle_is_below_min_grid_step() {
+        let min_grid_step = 1.0 / 256.0;
+        assert!(
+            LIGHTNESS_SETTLE < min_grid_step,
+            "LIGHTNESS_SETTLE={LIGHTNESS_SETTLE} должен быть ниже минимального шага сетки {min_grid_step}"
+        );
+    }
+
+    /// Типичный (медианный) Lc-шаг одного 8-бит кванта серых < STRICT_STEP (0.5).
+    /// ⚠️ ЗАМЕР: медианный шаг ≈0.44 < 0.5, но МАКСИМАЛЬНЫЙ шаг ≈7.85 — это обрыв
+    /// мягкого клампа APCA (разрыв, не шаг сетки), а не «шаг кванта». Поэтому
+    /// характеризуем МЕДИАННЫЙ шаг: STRICT_STEP=0.5 сидит чуть выше типичного шага
+    /// выходной сетки — это граница квантования сетки, не JND-клейм.
+    #[test]
+    fn strict_step_sits_just_above_typical_grid_step() {
+        let mut steps: Vec<f64> = Vec::new();
+        let mut prev = crate::lpc::lpc(&grey(0), "#FFFFFF");
+        for i in 1u8..=255 {
+            let lc = crate::lpc::lpc(&grey(i), "#FFFFFF");
+            steps.push((lc - prev).abs());
+            prev = lc;
+        }
+        steps.sort_by(|a, b| a.partial_cmp(b).expect("Lc steps are finite"));
+        let median = steps[steps.len() / 2];
+        assert!(
+            median < STRICT_STEP,
+            "медианный Lc-шаг кванта {median:.4} должен быть ниже STRICT_STEP={STRICT_STEP}"
+        );
+        assert!(
+            (0.35..0.50).contains(&median),
+            "медианный Lc-шаг {median:.4} вне замеренного диапазона [0.35, 0.50)"
+        );
+    }
+
+    /// Потолок ахроматического M'-шума CAM16 (серые #000..#FFF, дефолтный VC)
+    /// отслеживается порогом TINT_PERCEPTIBLE_MP_FLOOR (1.5). ЗАМЕР: максимум —
+    /// у белого, M'≈1.53; порог 1.5 стоит вплотную ПОД ним. Полоса характеризации
+    /// широкая, брекетит замер, без подгонки под 1.5.
+    #[test]
+    fn tint_floor_tracks_achromatic_mp_noise_ceiling() {
+        let mut max_mp = 0.0f64;
+        for i in 0u8..=255 {
+            let mp = LcsColor::from_hex(&grey(i)).expect("valid grey hex").mp();
+            max_mp = max_mp.max(mp);
+        }
+        assert!(
+            (1.4..1.7).contains(&max_mp),
+            "потолок M'-шума серых {max_mp:.4} вне замеренного диапазона [1.4, 1.7)"
+        );
+        assert!(
+            (max_mp - TINT_PERCEPTIBLE_MP_FLOOR).abs() < 0.15,
+            "TINT_PERCEPTIBLE_MP_FLOOR={TINT_PERCEPTIBLE_MP_FLOOR} должен стоять у потолка \
+             M'-шума {max_mp:.4} (|Δ| < 0.15)"
+        );
+    }
+
+    /// Дрейф каспа гамута sRGB вблизи канонического 286° по L-шкале задаёт
+    /// CUSP_HALF_WINDOW_DEG (40°). ⚠️ ЗАМЕР: полный дрейф достигает ≈42.5°, т.е.
+    /// окно поиска (40°) клипует чуть ВНУТРИ полного дрейфа — намеренно (движок
+    /// держит оттенок близко к каноническому, см. `cusp_attracted_hue`). Поэтому
+    /// НЕ утверждаем «окно покрывает дрейф»; характеризуем, что окно ≈ замеренный
+    /// дрейф (в широкой полосе), без подгонки.
+    #[test]
+    fn cusp_window_is_near_measured_gamut_drift() {
+        let canonical = 286.0_f64;
+        let mut max_drift = 0.0f64;
+        let mut l = 0.05;
+        while l <= 0.95 {
+            let mut best_h = canonical;
+            let mut best_c = f64::NEG_INFINITY;
+            let mut h = canonical - 70.0;
+            while h <= canonical + 70.0 {
+                let c = crate::scale::max_chroma(l, h);
+                if c > best_c {
+                    best_c = c;
+                    best_h = h;
+                }
+                h += 0.5;
+            }
+            max_drift = max_drift.max((best_h - canonical).abs());
+            l += 0.02;
+        }
+        assert!(
+            (35.0..46.0).contains(&max_drift),
+            "замеренный дрейф каспа {max_drift:.2} вне диапазона [35, 46)"
+        );
+        assert!(
+            (max_drift - CUSP_HALF_WINDOW_DEG).abs() < 6.0,
+            "CUSP_HALF_WINDOW_DEG={CUSP_HALF_WINDOW_DEG} должен стоять у замеренного дрейфа \
+             {max_drift:.2} (|Δ| < 6); окно клипует чуть внутри — по дизайну"
+        );
+    }
+}

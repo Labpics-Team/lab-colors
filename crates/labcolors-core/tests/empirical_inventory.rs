@@ -35,13 +35,14 @@ mod common;
 // Audit surface — the 6 perceptual modules the detector scans.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PERCEPTUAL_MODULES: [&str; 6] = [
+const PERCEPTUAL_MODULES: [&str; 7] = [
     "semantic.rs",
     "scale.rs",
     "sentiment.rs",
     "neutral.rs",
     "lpc.rs",
     "lcs.rs",
+    "solve.rs",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +117,12 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "RATIO_EPS",
     "FLOOR_EPS",
     "GAMUT_EPS",
+    // L'-axis convergence epsilon in the quantisation solver — numeric, non-perceptual (solve.rs).
+    "L_OK_EPSILON",
+    // Algorithmic search-PROBE step of the quantisation-gap search — a numerical
+    // sampling granularity, not a perceptual magnitude (solve.rs; two local `PROBE`
+    // consts, both excluded by this name).
+    "PROBE",
     // Derived from a WCAG standard ratio, not an independent policy literal.
     "POLARITY_FLOOR_RATIO",
 ];
@@ -166,6 +173,11 @@ const STRUCTURAL_NONPOLICY_ALLOWLIST: &[&str] = &[
     // Max curve-plan refinements after the achromatic probe — an iteration count,
     // not a perceptual magnitude (semantic.rs).
     "CURVE_REFINE_STEPS",
+    // Neighbour-search / probe COUNTS in the quantisation solver — iteration counts,
+    // not perceptual magnitudes (solve.rs).
+    "NEIGHBOR_STEPS",
+    "DJ_NEIGHBOR_STEPS",
+    "MAX_PROBES",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -370,7 +382,11 @@ fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
 /// Scan a single module's source text into the detected POLICY magnitudes.
 /// `allowlist` is injected so the RED-proof can reuse the exact scanner.
 fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedConst> {
-    let lines: Vec<&str> = source.lines().collect();
+    // Skip `#[cfg(test)]` blocks: a test-only const (a test tolerance / fixture) is
+    // never perceptual POLICY. `production_lines` removes them while preserving the
+    // original 1-based line numbers used in diagnostics.
+    let prod = production_lines(source);
+    let lines: Vec<&str> = prod.iter().map(|(_, s)| s.as_str()).collect();
     let module_stem = module.trim_end_matches(".rs").to_ascii_uppercase();
     let mut out = Vec::new();
     let mut in_default_body = false;
@@ -400,7 +416,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: idx + 1,
+                        line: prod[idx].0,
                         name,
                         value,
                         has_marker,
@@ -444,7 +460,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: idx + 1,
+                        line: prod[idx].0,
                         name,
                         value,
                         has_marker,
@@ -466,7 +482,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                 let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                 out.push(DetectedConst {
                     module: module.to_string(),
-                    line: idx + 1,
+                    line: prod[idx].0,
                     name,
                     value,
                     has_marker,
