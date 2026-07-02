@@ -7,12 +7,14 @@
 //! key carries every input that can change the output, so a hit is always
 //! correct, never stale.
 //!
-//! The table fingerprint is the third key component. v1 ships only the default
-//! [`RoleTable`](labcolors_core::RoleTable), so the fingerprint is a constant
-//! today — but it is a real key slot, not a hard-coded omission. When a future
-//! engine carries an overridden table, the fingerprint changes with it and the
-//! cache invalidates the affected entries automatically (no entry built under
-//! one table can alias another). See [`DEFAULT_TABLE_FINGERPRINT`].
+//! The table fingerprint is the third key component. The built-in default
+//! [`RoleTable`](labcolors_core::RoleTable) has no config, so it shares one
+//! namespace under [`DEFAULT_TABLE_FINGERPRINT`]. A loaded config (`loadConfig`)
+//! instead carries a real fingerprint — an FNV-1a over its canonical DTO,
+//! computed in the engine and threaded into the key. Correctness across a config
+//! switch does not rest on that fingerprint being unique, though: `loadConfig`
+//! wholesale-clears the cache (see [`ContractCache::clear`]), so exactly one key
+//! namespace is ever live and a stale entry from another config cannot be served.
 //!
 //! Single-threaded by design: WASM has no threads, so a `RefCell` interior is
 //! the right shared-mutability tool — no lock, no contention, no `Send` bound.
@@ -22,13 +24,13 @@ use std::collections::HashMap;
 
 use crate::theme::Theme;
 
-/// The fingerprint of the default role table.
+/// The fingerprint of the built-in default role table.
 ///
-/// SEAM: a constant while only [`RoleTable::default`](labcolors_core::RoleTable)
-/// is reachable through the public engine. The moment a table override lands,
-/// this becomes a hash of the table's specs + chroma, computed where the table
-/// is built, and threaded into [`CacheKey`]. Until then it is one stable value
-/// so every default-table resolve shares a cache namespace.
+/// The default table carries no config, so every default-table resolve shares
+/// this one stable namespace. A loaded config does not use this constant: its
+/// fingerprint is computed from the config itself (an FNV-1a over the canonical
+/// DTO) in the engine and threaded into [`CacheKey`]. This value only names the
+/// no-config namespace.
 pub const DEFAULT_TABLE_FINGERPRINT: u64 = 0;
 
 /// The full key of a cached resolve: every input that can change the output.

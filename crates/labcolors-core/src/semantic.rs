@@ -46,7 +46,7 @@
 //! # Sanity over arithmetic: the anchor principle
 //!
 //! Text contrast magnitudes are **not fixed deltas**. A fixed delta is how
-//! `text-primary` once came out grey: a mid contrast number satisfies the
+//! `label-primary` once came out grey: a mid contrast number satisfies the
 //! contract arithmetically but violates the design intent that primary text on
 //! white reads as *black*. Instead, a text role anchors its target to a
 //! **fraction of the maximum contrast the background can supply**
@@ -109,9 +109,9 @@
 //!
 //! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
 //! not a pure grey. A role table resolved with zero chroma threw that identity
-//! away: `text-primary` on white came out the sterile `#141414`. So every
+//! away: `label-primary` on white came out the sterile `#141414`. So every
 //! resolved role carries the neutral's undertone and lands as a *relative* of the
-//! neutral family — `text-primary` on white as a cool near-black in the `#101012`
+//! neutral family — `label-primary` on white as a cool near-black in the `#101012`
 //! family. The undertone is small enough that the WCAG floors, the strict
 //! hierarchy, and the near-black/near-white primary all hold exactly as before
 //! (the solver re-solves lightness to the same target with the tint applied).
@@ -562,7 +562,7 @@ pub enum RoleSpec {
 /// Измеренный в Oklab по опорным точкам оттенок стабилен по всей шкале —
 /// `#101012` → 285.97°, `#3C3C43` (вторичный Figma) → 285.78°, `#787880`
 /// (средний) → 286.01° — поэтому его захватывает одна константа. Резолвленные
-/// роли наследуют этот оттенок, из-за чего `text-primary` на белом ложится как
+/// роли наследуют этот оттенок, из-за чего `label-primary` на белом ложится как
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
 // SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
@@ -578,7 +578,7 @@ pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// кривой: самый сильный подтон приходится на роли средней силы, самый слабый —
 /// на почти-чёрный/почти-белый края текстовой шкалы — "меньше у тёмных/светлых
 /// краёв, больше к середине".
-/// `0.10`: на белом `text-primary` резолвится в холодный почти-чёрный
+/// `0.10`: на белом `label-primary` резолвится в холодный почти-чёрный
 /// семейства `#101012`, а не в чистый серый.
 // SSOT-TRACKED — коэффициент хромы нейтрального подтона.
 pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;

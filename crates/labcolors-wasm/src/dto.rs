@@ -8,8 +8,9 @@
 //!
 //! Generic over the role set BY CONSTRUCTION: an entry is built per `(Role,
 //! Resolved)` the core returns and keyed by `Role::key()`. Nothing here
-//! enumerates the roles, so when issue #59 grows the set (10 → 20) and adds a
-//! new resolved shape, a rebuild carries them through untouched.
+//! enumerates the roles, so a change to the set carries through on a rebuild
+//! untouched — the label expansion already grew it to 20 roles, and issue #59's
+//! accent ladder (a new resolved shape) is a further such change.
 
 /// The full result of resolving one background under one theme.
 #[derive(Debug, Clone, PartialEq)]

@@ -1,7 +1,7 @@
 //! Criterion benchmark for [`resolve_set`] — the grey-axis LUT's headline win.
 //!
-//! `resolve_set` runs ~13 `solve` calls per background (12 roles + the
-//! max-contrast probe), each of which previously drove `match_lightness`
+//! `resolve_set` solves the whole role set for one background plus the
+//! max-contrast probe. Each non-trivial role previously drove `match_lightness`
 //! through a 64-iteration CAM16 bisection. The LUT replaces that bisection with
 //! an O(1) table lookup for the neutral core, so this bench is the end-to-end
 //! measure of the speed-up the chapter's "< 1 ms in WASM" exit-criterion builds
@@ -28,11 +28,13 @@ use std::hint::black_box;
 /// and the middle of the grey axis. These hit the `greyfast` O(1) table.
 const BACKGROUNDS: [&str; 3] = ["#FFFFFF", "#101012", "#7F7F7F"];
 
-/// Representative CHROMATIC backgrounds — the path that does NOT hit greyfast and
-/// today falls through to the full live solver (~1 ms / set, ~hundreds of CAM16
-/// forwards). This is the baseline the chromatic fast path (`chromafast`) is
-/// measured against: a cool blue, a warm terracotta, a green, and a saturated
-/// magenta spanning the hue wheel, plus a near-neutral low-chroma tint.
+/// Representative CHROMATIC backgrounds — the path that does NOT hit greyfast.
+/// Since `chromafast` landed, a non-grey surface is served from a per-thread
+/// memo keyed on the exact display colour: a first-seen colour pays the cold
+/// live solve (~1 ms / set, hundreds of CAM16 forwards), but a repeated one —
+/// what this bench measures in steady state — is an O(1) lookup (~0.8–1.2 µs).
+/// A cool blue, a warm terracotta, a green, and a saturated magenta spanning the
+/// hue wheel, plus a near-neutral low-chroma tint.
 const CHROMATIC_BACKGROUNDS: [&str; 5] = ["#2E6FB7", "#B5482E", "#3A8F5C", "#A23E8C", "#6E6E7A"];
 
 fn bench_resolve_set(c: &mut Criterion) {
