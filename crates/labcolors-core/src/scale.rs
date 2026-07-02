@@ -158,8 +158,17 @@ fn find_optimal_hue_core(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
     let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
     for i in 0..=steps {
         let h = h_canonical - HUE_SEARCH_HALF_WINDOW + i as f64;
-        let c = max_chroma(l_ok, h);
         let drift = (h - h_canonical).abs();
+        // C4: `c_at_canonical` is already `max_chroma(l_ok, h_canonical)`. When the
+        // sweep lands exactly on the canonical hue (bitwise `h == h_canonical`),
+        // `max_chroma` — a pure, deterministic function of `(l_ok, h)` — would
+        // return those very bits again, so reuse them instead of recomputing.
+        // Bit-identical by construction; saves one solve per sweep.
+        let c = if h == h_canonical {
+            c_at_canonical
+        } else {
+            max_chroma(l_ok, h)
+        };
         let score = c - penalty_scale * drift;
         if score > best_score {
             best_score = score;
