@@ -21,15 +21,18 @@
 //!   которую [`crate::semantic::resolve_named_set`] резолвит той же физикой, что и
 //!   встроенную [`crate::RoleTable`].
 //!
-//! # Честные заглушки (границы CH-02)
+//! # Рецепты лестницы и альфа-аналога (CH-02 t2)
 //!
-//! Рецепты [`RoleRecipe::Ladder`] (акцентная/сентимент/нейтраль-лестница) и
-//! [`RoleRecipe::AlphaAnalog`] (альфа-аналог через композит-инверсию) объявлены в
-//! меню рецептов с ПРАВИЛЬНЫМ типом, но их компиляция возвращает
-//! [`ConfigError::NotYetImplemented`] — реализация в t2 (ladder поглощает акцентный
-//! GAP #59; alpha_analog опирается на [`crate::alpha`]). Это честная заглушка с
-//! верным типом, а не выдумка значений.
+//! [`RoleRecipe::Ladder`] (акцентная/сентимент/бренд-лестница, поглощает GAP #59)
+//! компилируется в [`RoleSpec::Ladder`]: источник раскладывается в пер-темный
+//! тинт-якорь ([`crate::ladder::LadderTint`]), позиция несёт альфу Figma-рампы.
+//! [`RoleRecipe::AlphaAnalog`] компилируется в [`RoleSpec::AlphaAnalog`] (солид-
+//! цель источника + запрошенная альфа, композит-инверсия — [`crate::alpha`], #119).
+//! Резолв обоих — [`crate::semantic::Resolved::Rgba`] (rgba напрямую + солид-
+//! композит на фоне резолва для замера контраста). Меню позиций + провенанс —
+//! приложение A к `docs/decisions/0001-config-boundary.md`.
 
+use crate::ladder::{LadderPosition, LadderTint, ThemeAnchors};
 use crate::semantic::{self, DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec, TextAnchor};
 use crate::solve::Floor;
 
@@ -122,6 +125,16 @@ const CHROMA_FRACTION_MIN_EXCLUSIVE: f64 = 0.0;
 /// Верхний предел доли хромы сентимента (включительно).
 const CHROMA_FRACTION_MAX_INCLUSIVE: f64 = 1.0;
 
+/// Запрошенная альфа альфа-аналога (`roles.*.alpha`) обязана лежать в `(0, 1]`.
+///
+/// `≤ 0` — невидимая роль (вырождение), `> 1` — не альфа. Резолвер поднимает
+/// фактическую α до `α_min`, если запрошенная ниже минимально-разрешимой в
+/// гамуте ([`crate::alpha::resolve_alpha_analog`]) — но сам запрос должен быть
+/// валидной альфой.
+const ALPHA_MIN_EXCLUSIVE: f64 = 0.0;
+/// Верхний предел запрошенной альфы (включительно; α = 1 = солид).
+const ALPHA_MAX_INCLUSIVE: f64 = 1.0;
+
 /// Нижний предел `hue_floor` сентимент-политики (градусы): `[0, 360)`.
 ///
 /// `hue_floor_deg` — минимальный угол оттенка категории (напр. Warning ≥ 45°).
@@ -163,8 +176,9 @@ pub enum ConfigError {
         value: f64,
         bound: &'static str,
     },
-    /// Рецепт объявлен в меню, но его компиляция ещё не реализована в этой главе
-    /// (`Ladder` / `AlphaAnalog` — задача t2). Честная заглушка с верным типом.
+    /// Рецепт объявлен в меню, но его компиляция ещё не реализована — честная
+    /// заглушка для БУДУЩИХ рецептов (в t2 все текущие рецепты компилируются;
+    /// вариант сохранён как сеам для расширения меню без ломающего изменения).
     NotYetImplemented { recipe: &'static str, role: String },
 }
 
@@ -204,11 +218,18 @@ impl std::error::Error for ConfigError {}
 // Типы конфига (без serde — JSON-парсинг это t3).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Бренд — вход, не роль: якорный hex; оттенок движок выводит физикой.
+/// Бренд — вход, не роль: пер-темные якорные hex. Оттенок движок выводит физикой;
+/// лестница бренда ([`RoleRecipe::Ladder`] с [`LadderSource::Brand`]) эмитит
+/// `rgba(якорь, α)` напрямую, а якорь берётся по теме резолва.
+///
+/// Пер-темность (а не один якорь + вывод) — из заземления
+/// (`reference/labui-accent-primitives.md` §2: Brand light `#007AFF` /
+/// dark `#4A8FFF` / light-ic `#0040DD` / dark-ic `#409CFF`): тёмный/IC-вариант
+/// измерен, не выведен из светлого.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Brand {
-    /// Якорный цвет бренда в hex (`#RRGGBB`). Дефолта в ядре нет.
-    pub anchor_hex: String,
+    /// Пер-темные якорные цвета бренда. Дефолта в ядре нет.
+    pub anchors: ThemeAnchors,
 }
 
 /// Тройка якорей нейтральной шкалы: конфиг несёт ИЗМЕРЕННОЕ, движок выводит
@@ -243,13 +264,20 @@ pub struct NeutralConfig {
     pub tint: NeutralTint,
 }
 
-/// Именованное семейство палитры: ключ + якорный hex.
+/// Именованное семейство палитры: ключ + пер-темные якорные hex.
+///
+/// Якорь несётся отдельно для каждого режима (light/dark/light-ic/dark-ic):
+/// заземление `reference/labui-accent-primitives.md` §2 показывает, что тёмный и
+/// IC-варианты Figma-примитивов `Accent/*` замерены, а не выведены из светлого
+/// (Red light `#FF3B30` / dark `#FF3A3A` / light-ic `#D70015` / dark-ic `#FF6161`).
+/// Лестница семейства ([`RoleRecipe::Ladder`] с [`LadderSource::Family`]) выбирает
+/// якорь по теме резолва ([`ThemeAnchors::for_vc`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaletteFamily {
     /// Стабильный ключ семейства (`[a-z0-9-]+`), напр. `red`.
     pub key: String,
-    /// Якорный цвет семейства в hex (`#RRGGBB`).
-    pub anchor_hex: String,
+    /// Пер-темные якорные цвета семейства.
+    pub anchors: ThemeAnchors,
 }
 
 /// Политика одной семантической категории потребителя: маппинг на семейство
@@ -316,9 +344,8 @@ pub struct ThemesConfig {
 
 /// Рецепт роли из ФИЗИЧЕСКОГО меню (типология из [`crate::semantic`]).
 ///
-/// Реализованные в t1 рецепты компилируются в [`RoleSpec`]; [`Ladder`](Self::Ladder)
-/// и [`AlphaAnalog`](Self::AlphaAnalog) объявлены с верным типом, но их компиляция
-/// возвращает [`ConfigError::NotYetImplemented`] — задача t2 (честная заглушка).
+/// Все рецепты компилируются в [`RoleSpec`]: текст/dJ'/Lc/zero (t1) и
+/// [`Ladder`](Self::Ladder) / [`AlphaAnalog`](Self::AlphaAnalog) (t2, rgba-эмиссия).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RoleRecipe {
@@ -341,14 +368,47 @@ pub enum RoleRecipe {
         /// Величина `Lc` (`> 0`).
         magnitude: f64,
     },
-    /// Ступень рампы акцента/семейства/нейтрали. Меню t2 (акцентный GAP #59) —
-    /// компиляция возвращает [`ConfigError::NotYetImplemented`].
-    Ladder,
-    /// Альфа-аналог через композит-инверсию ([`crate::alpha`]). Меню t2 —
-    /// компиляция возвращает [`ConfigError::NotYetImplemented`].
-    AlphaAnalog,
+    /// Ступень лестницы акцента/сентимента/бренда/нейтрали: `rgba(якорь, α)`
+    /// напрямую (поглощает акцентный GAP #59). `source` — откуда берётся тинт,
+    /// `position` — позиция закрытого меню (несёт свою альфу; перечень —
+    /// приложение A к ADR-0001). Компилируется в [`RoleSpec::Ladder`].
+    Ladder {
+        /// Источник тинта: бренд, семейство палитры или сентимент.
+        source: LadderSource,
+        /// Позиция меню (несёт альфу Figma-рампы).
+        position: LadderPosition,
+    },
+    /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
+    /// #119): `(tint, α)`, чей композит на фоне резолва равен солиду `of`. Даёт
+    /// `-tinted`-роли labui. Компилируется в [`RoleSpec::AlphaAnalog`].
+    AlphaAnalog {
+        /// Источник солид-цели (бренд/семейство/сентимент), чей аналог берётся.
+        of: LadderSource,
+        /// Запрошенная альфа `(0, 1]` (поднимается до `α_min`, если ниже).
+        alpha: f64,
+    },
     /// Явный ноль: «нет цвета здесь» ([`RoleSpec::Zero`]).
     Zero,
+}
+
+/// Источник тинта лестницы/альфа-аналога: откуда берётся якорный цвет.
+///
+/// Тинт bg-независим (это якорь источника), только пер-темен. Для [`Family`](Self::Family)
+/// и [`Sentiment`](Self::Sentiment) `key` — ссылка на семейство/категорию конфига
+/// (валидатор проверяет существование). Сентимент-источник разводит оттенок с
+/// брендом сентимент-солвером ([`crate::sentiment`]); при бренде labui резолв
+/// сентимента совпадает с сырым якорем семейства (деривационная идентичность —
+/// тестом).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum LadderSource {
+    /// Бренд-вход конфига (пер-темный якорь [`Brand`]).
+    Brand,
+    /// Семейство палитры по ключу (пер-темный якорь [`PaletteFamily`]).
+    Family(String),
+    /// Сентимент-категория по имени: оттенок семейства, разведённый с брендом
+    /// сентимент-солвером (пер-темный солид на разрешённом оттенке).
+    Sentiment(String),
 }
 
 /// Полный конфиг темы потребителя (без сериализации — t3).
@@ -390,6 +450,14 @@ fn check_hex(field: &str, value: &str) -> Result<(), ConfigError> {
             field: field.to_string(),
             value: value.to_string(),
         })
+}
+
+/// Проверить, что все четыре пер-темных якоря — валидный hex (`field.light` …).
+fn check_theme_anchors(field: &str, a: &ThemeAnchors) -> Result<(), ConfigError> {
+    check_hex(&format!("{field}.light"), &a.light)?;
+    check_hex(&format!("{field}.dark"), &a.dark)?;
+    check_hex(&format!("{field}.light_ic"), &a.light_ic)?;
+    check_hex(&format!("{field}.dark_ic"), &a.dark_ic)
 }
 
 /// Проверить, что имя валидно, иначе [`ConfigError::InvalidName`].
@@ -479,14 +547,14 @@ fn check_ge(
 }
 
 impl ThemeConfig {
-    /// Провалидировать конфиг: hex, имена, ссылки на семейства и пределы каждой
-    /// экспонируемой ручки. Первая найденная ошибка возвращается сразу — клиент
-    /// чинит по одной. Успех означает: [`compile_named_role_table`](Self::compile_named_role_table)
-    /// упадёт только на честной заглушке ([`ConfigError::NotYetImplemented`]),
-    /// никогда на неверном hex/имени/пределе.
+    /// Провалидировать конфиг: hex, имена, ссылки на семейства/источники лестницы
+    /// и пределы каждой экспонируемой ручки. Первая найденная ошибка возвращается
+    /// сразу — клиент чинит по одной. Успех означает:
+    /// [`compile_named_role_table`](Self::compile_named_role_table) не упадёт на
+    /// неверном hex/имени/ссылке/пределе (все рецепты компилируются).
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Бренд-hex.
-        check_hex("brand.anchor_hex", &self.brand.anchor_hex)?;
+        // Бренд: пер-темная четвёрка hex.
+        check_theme_anchors("brand.anchors", &self.brand.anchors)?;
 
         // Нейтраль: тройка hex.
         check_hex("neutral.anchors.light", &self.neutral.anchors.light)?;
@@ -514,12 +582,12 @@ impl ThemeConfig {
             "hue_stiffness ≥ 0 (жёсткость прижатия оттенка к каноническому)",
         )?;
 
-        // Палитра: имена + hex каждого семейства.
+        // Палитра: имена + пер-темная четвёрка hex каждого семейства.
         for fam in &self.palette {
             let field = format!("palette[{}].key", fam.key);
             check_name(&field, &fam.key)?;
-            let hex_field = format!("palette[{}].anchor_hex", fam.key);
-            check_hex(&hex_field, &fam.anchor_hex)?;
+            let anchors_field = format!("palette[{}].anchors", fam.key);
+            check_theme_anchors(&anchors_field, &fam.anchors)?;
         }
 
         // Сентименты: ручки + категории (маппинг на существующее семейство).
@@ -616,8 +684,48 @@ impl ThemeConfig {
                 DECORATIVE_LC_MIN_EXCLUSIVE,
                 "magnitude > 0 (Lc-величина тени; ≤ 0 = невидима)",
             ),
-            // Заглушки t2: тип верный, значений нет — пределов тоже нет.
-            RoleRecipe::Ladder | RoleRecipe::AlphaAnalog | RoleRecipe::Zero => Ok(()),
+            RoleRecipe::Ladder { source, .. } => self.check_ladder_source(role, source),
+            RoleRecipe::AlphaAnalog { of, alpha } => {
+                self.check_ladder_source(role, of)?;
+                check_in_excl_incl(
+                    &format!("roles.{role}.alpha"),
+                    *alpha,
+                    ALPHA_MIN_EXCLUSIVE,
+                    ALPHA_MAX_INCLUSIVE,
+                    "0 < alpha ≤ 1 (запрошенная альфа альфа-аналога)",
+                )
+            }
+            RoleRecipe::Zero => Ok(()),
+        }
+    }
+
+    /// Проверить, что источник лестницы разрешим: [`LadderSource::Family`]
+    /// ссылается на существующее семейство `palette`, [`LadderSource::Sentiment`]
+    /// — на существующую категорию `sentiments`; [`LadderSource::Brand`] всегда
+    /// разрешим (бренд — обязательный вход конфига).
+    fn check_ladder_source(&self, role: &str, source: &LadderSource) -> Result<(), ConfigError> {
+        match source {
+            LadderSource::Brand => Ok(()),
+            LadderSource::Family(key) => {
+                if self.palette.iter().any(|f| &f.key == key) {
+                    Ok(())
+                } else {
+                    Err(ConfigError::UnknownFamily {
+                        referenced_by: format!("roles.{role}"),
+                        family: key.clone(),
+                    })
+                }
+            }
+            LadderSource::Sentiment(name) => {
+                if self.sentiments.categories.iter().any(|c| &c.name == name) {
+                    Ok(())
+                } else {
+                    Err(ConfigError::UnknownFamily {
+                        referenced_by: format!("roles.{role}"),
+                        family: name.clone(),
+                    })
+                }
+            }
         }
     }
 
@@ -626,14 +734,14 @@ impl ThemeConfig {
     /// физикой, что и встроенную [`crate::RoleTable`].
     ///
     /// Валидирует конфиг ([`validate`](Self::validate)) перед компиляцией.
-    /// [`Ladder`](RoleRecipe::Ladder) и [`AlphaAnalog`](RoleRecipe::AlphaAnalog)
-    /// возвращают [`ConfigError::NotYetImplemented`] (задача t2).
+    /// [`Ladder`](RoleRecipe::Ladder) раскладывает источник в пер-темный тинт,
+    /// [`AlphaAnalog`](RoleRecipe::AlphaAnalog) — солид-цель источника + альфа (t2).
     pub fn compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError> {
         self.validate()?;
 
         let mut entries: Vec<(String, RoleSpec)> = Vec::with_capacity(self.roles.len());
         for (name, recipe) in &self.roles {
-            let spec = compile_recipe(name, recipe)?;
+            let spec = self.compile_recipe(name, recipe)?;
             entries.push((name.clone(), spec));
         }
 
@@ -651,30 +759,137 @@ impl ThemeConfig {
 
         Ok(NamedRoleTable::new(entries, chroma))
     }
-}
 
-/// Скомпилировать один рецепт в [`RoleSpec`]. Заглушки t2 возвращают
-/// [`ConfigError::NotYetImplemented`] с верным именем рецепта.
-fn compile_recipe(role: &str, recipe: &RoleRecipe) -> Result<RoleSpec, ConfigError> {
-    match recipe {
-        RoleRecipe::TextAnchor { fraction, floor } => {
-            Ok(RoleSpec::Anchor(TextAnchor::new(*fraction, *floor)))
+    /// Скомпилировать один рецепт в [`RoleSpec`]. Ladder/AlphaAnalog раскладывают
+    /// источник в пер-темный тинт (`Copy`-payload [`LadderTint`]) на этапе
+    /// компиляции — резолв остаётся bg-зависимым только через фон подложки.
+    fn compile_recipe(&self, role: &str, recipe: &RoleRecipe) -> Result<RoleSpec, ConfigError> {
+        match recipe {
+            RoleRecipe::TextAnchor { fraction, floor } => {
+                Ok(RoleSpec::Anchor(TextAnchor::new(*fraction, *floor)))
+            }
+            RoleRecipe::DjAnchor { light, dark } => Ok(RoleSpec::DecorativeDj {
+                magnitude_dj: DjMagnitude::new(*light, *dark),
+            }),
+            RoleRecipe::DecorativeLc { magnitude } => Ok(RoleSpec::Decorative {
+                magnitude: *magnitude,
+            }),
+            RoleRecipe::Zero => Ok(RoleSpec::Zero),
+            RoleRecipe::Ladder { source, position } => Ok(RoleSpec::Ladder {
+                tint: self.compile_ladder_tint(role, source)?,
+                alpha: position.alpha(),
+            }),
+            RoleRecipe::AlphaAnalog { of, alpha } => Ok(RoleSpec::AlphaAnalog {
+                of: self.compile_ladder_tint(role, of)?,
+                alpha: *alpha,
+            }),
         }
-        RoleRecipe::DjAnchor { light, dark } => Ok(RoleSpec::DecorativeDj {
-            magnitude_dj: DjMagnitude::new(*light, *dark),
-        }),
-        RoleRecipe::DecorativeLc { magnitude } => Ok(RoleSpec::Decorative {
-            magnitude: *magnitude,
-        }),
-        RoleRecipe::Zero => Ok(RoleSpec::Zero),
-        RoleRecipe::Ladder => Err(ConfigError::NotYetImplemented {
-            recipe: "ladder",
-            role: role.to_string(),
-        }),
-        RoleRecipe::AlphaAnalog => Err(ConfigError::NotYetImplemented {
-            recipe: "alpha_analog",
-            role: role.to_string(),
-        }),
+    }
+
+    /// Разложить источник лестницы в пер-темный кодированный [`LadderTint`].
+    ///
+    /// - [`LadderSource::Brand`] / [`LadderSource::Family`]: сырая пер-темная
+    ///   четвёрка якорей (эмитится напрямую как `rgba`).
+    /// - [`LadderSource::Sentiment`]: пер-темный СОЛИД, чей оттенок разведён с
+    ///   брендом сентимент-солвером (`crate::sentiment`, поправка t2 №г);
+    ///   светлота/хрома — исходного якоря семейства категории.
+    fn compile_ladder_tint(
+        &self,
+        role: &str,
+        source: &LadderSource,
+    ) -> Result<LadderTint, ConfigError> {
+        let anchors = match source {
+            LadderSource::Brand => self.brand.anchors.clone(),
+            LadderSource::Family(key) => self.family_anchors(role, key)?.clone(),
+            LadderSource::Sentiment(name) => return self.compile_sentiment_tint(role, name),
+        };
+        let quad = anchors
+            .encoded_quad()
+            .map_err(|_| ConfigError::InvalidHex {
+                field: format!("roles.{role} (источник лестницы)"),
+                value: "<пер-темный якорь>".to_string(),
+            })?;
+        Ok(LadderTint::new(quad))
+    }
+
+    /// Пер-темные якоря семейства палитры по ключу (валидатор уже проверил
+    /// существование — здесь защита компиляции).
+    fn family_anchors(&self, role: &str, key: &str) -> Result<&ThemeAnchors, ConfigError> {
+        self.palette
+            .iter()
+            .find(|f| f.key == key)
+            .map(|f| &f.anchors)
+            .ok_or_else(|| ConfigError::UnknownFamily {
+                referenced_by: format!("roles.{role}"),
+                family: key.to_string(),
+            })
+    }
+
+    /// Пер-темный сентимент-солид: для каждой темы взять якорь семейства
+    /// категории, развести оттенок с пер-темным брендом сентимент-солвером,
+    /// сохранив светлоту/хрому якоря. `S_PERC_MIN` — пересчёт из хром 4 якорей
+    /// сентиментов конфига (поправка t2 №д).
+    fn compile_sentiment_tint(&self, role: &str, name: &str) -> Result<LadderTint, ConfigError> {
+        let cat = self
+            .sentiments
+            .categories
+            .iter()
+            .find(|c| c.name == name)
+            .ok_or_else(|| ConfigError::UnknownFamily {
+                referenced_by: format!("roles.{role}"),
+                family: name.to_string(),
+            })?;
+        let fam = self.family_anchors(role, &cat.family)?.clone();
+        let brand = self.brand.anchors.clone();
+        let s_perc_min = self.sentiment_s_perc_min();
+
+        let solid_of = |anchor_hex: &str, brand_hex: &str| -> Result<[f64; 3], ConfigError> {
+            let brand_hue = crate::accent::oklab_hue_of(brand_hex);
+            let solid = crate::sentiment::resolve_config_sentiment_solid(
+                anchor_hex,
+                brand_hue,
+                self.sentiments.hardness,
+                self.sentiments.chroma_fraction,
+                cat.hue_floor_deg,
+                cat.preferred_side.map_or(1.0, f64::from),
+                s_perc_min,
+            )
+            .map_err(|reason| ConfigError::InvalidHex {
+                field: format!("roles.{role} (сентимент `{name}`): {reason}"),
+                value: anchor_hex.to_string(),
+            })?;
+            crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
+                ConfigError::InvalidHex {
+                    field: format!("roles.{role} (сентимент-солид)"),
+                    value: solid.clone(),
+                }
+            })
+        };
+
+        Ok(LadderTint::new([
+            solid_of(&fam.light, &brand.light)?,
+            solid_of(&fam.dark, &brand.dark)?,
+            solid_of(&fam.light_ic, &brand.light_ic)?,
+            solid_of(&fam.dark_ic, &brand.dark_ic)?,
+        ]))
+    }
+
+    /// `S_PERC_MIN`, пересчитанный из Oklab-хром светлых якорей 4 (или скольких
+    /// есть) сентимент-категорий конфига — закон `2·C_rep·sin(20°/2)` (поправка
+    /// t2 №д). При labui-якорях == замороженная константа (тест-идентичность).
+    pub fn sentiment_s_perc_min(&self) -> f64 {
+        let chromas: Vec<f64> = self
+            .sentiments
+            .categories
+            .iter()
+            .filter_map(|c| self.palette.iter().find(|f| f.key == c.family))
+            .filter_map(|f| crate::spaces::srgb::srgb_from_hex(&f.anchors.light).ok())
+            .map(|lin| {
+                let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
+                (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
+            })
+            .collect();
+        crate::sentiment::s_perc_min_from_chromas(&chromas)
     }
 }
 
@@ -704,7 +919,21 @@ pub fn labui_reference() -> ThemeConfig {
     };
     let lc = |magnitude| RoleRecipe::DecorativeLc { magnitude };
 
-    let roles = vec![
+    // Конструкторы лестницы: источник × позиция → рецепт rgba-эмиссии.
+    let brand_pos = |position| RoleRecipe::Ladder {
+        source: LadderSource::Brand,
+        position,
+    };
+    let sent_pos = |name: &str, position| RoleRecipe::Ladder {
+        source: LadderSource::Sentiment(name.to_string()),
+        position,
+    };
+    let fam_pos = |key: &str, position| RoleRecipe::Ladder {
+        source: LadderSource::Family(key.to_string()),
+        position,
+    };
+
+    let mut roles = vec![
         // Labels.
         ("label-primary".to_string(), text(0.968, Floor::AaText)),
         ("label-secondary".to_string(), text(0.627, Floor::AaText)),
@@ -746,10 +975,152 @@ pub fn labui_reference() -> ThemeConfig {
         ("none".to_string(), RoleRecipe::Zero),
     ];
 
+    // ── Акцентная/сентимент/FX/альфа-лестница (t2, поглощает GAP #59) ──────────
+    // Имена = consumedRoles labui (roles.json) без префикса `--lab-`, минус
+    // удаляемые по коллапсу (static-*/inverted-*/on-*/material-*, роли-от-фона).
+    // Каждая семья (brand + 4 сентимента) несёт label×4 · fill×4 · border(strong/
+    // base/soft). FX focus-ring/glow — солид/@52. `-tinted` — альфа-аналог солида
+    // соответствующего fill-*-primary. Все альфы — из меню LadderPosition (Figma).
+    let ladder_family = |prefix: &str, mk: &dyn Fn(LadderPosition) -> RoleRecipe| {
+        use LadderPosition::*;
+        vec![
+            (format!("label-{prefix}-primary"), mk(LabelPrimary)),
+            (format!("label-{prefix}-secondary"), mk(LabelSecondary)),
+            (format!("label-{prefix}-tertiary"), mk(LabelTertiary)),
+            (format!("label-{prefix}-quaternary"), mk(LabelQuaternary)),
+            (format!("fill-{prefix}-primary"), mk(FillPrimary)),
+            (format!("fill-{prefix}-secondary"), mk(FillSecondary)),
+            (format!("fill-{prefix}-tertiary"), mk(FillTertiary)),
+            (format!("fill-{prefix}-quaternary"), mk(FillQuaternary)),
+            (format!("border-{prefix}-strong"), mk(BorderStrong)),
+            (format!("border-{prefix}-base"), mk(BorderBase)),
+            (format!("border-{prefix}-soft"), mk(BorderSoft)),
+        ]
+    };
+
+    // Brand-семья: источник = бренд.
+    roles.extend(ladder_family("brand", &brand_pos));
+    // Сентимент-семьи: источник = сентимент-категория (разводится с брендом).
+    for (prefix, sname) in [
+        ("danger", "danger"),
+        ("warning", "warning"),
+        ("success", "success"),
+        ("info", "info"),
+    ] {
+        let mk = move |pos| sent_pos(sname, pos);
+        roles.extend(ladder_family(prefix, &mk));
+    }
+
+    // FX focus-ring/glow: солид (focus/strong) и @52 (glow). Neutral-семья = family(blue?)
+    // нет — neutral focus/glow берёт нейтраль через семейство `blue`? Нет: FX-neutral
+    // — бренд-нейтральный акцент. По заземлению focus-ring/glow — солид/@52 источника.
+    roles.push((
+        "fx-focus-ring-brand".to_string(),
+        brand_pos(LadderPosition::FocusRing),
+    ));
+    roles.push((
+        "fx-focus-ring-danger".to_string(),
+        sent_pos("danger", LadderPosition::FocusRing),
+    ));
+    roles.push((
+        "fx-focus-ring-warning".to_string(),
+        sent_pos("warning", LadderPosition::FocusRing),
+    ));
+    roles.push((
+        "fx-focus-ring-neutral".to_string(),
+        brand_pos(LadderPosition::FocusRing),
+    ));
+    roles.push(("fx-glow-brand".to_string(), brand_pos(LadderPosition::Glow)));
+    roles.push((
+        "fx-glow-danger".to_string(),
+        sent_pos("danger", LadderPosition::Glow),
+    ));
+    roles.push((
+        "fx-glow-warning".to_string(),
+        sent_pos("warning", LadderPosition::Glow),
+    ));
+    roles.push((
+        "fx-glow-neutral".to_string(),
+        brand_pos(LadderPosition::Glow),
+    ));
+    roles.push((
+        "fx-glow-inverted".to_string(),
+        brand_pos(LadderPosition::Glow),
+    ));
+    // FX shadow/skeleton — не-акцентные: shadow-* уже эмитятся (fx-shadow-* = alias);
+    // skeleton — нейтральный fill-аналог. Эмитим как альфа-аналог нейтрали.
+    roles.push((
+        "fx-skeleton-base".to_string(),
+        fam_pos("blue", LadderPosition::FillTertiary),
+    ));
+    roles.push((
+        "fx-skeleton-highlight".to_string(),
+        fam_pos("blue", LadderPosition::FillSecondary),
+    ));
+
+    // Компонентные роли: accent = бренд-семья, neutral = нейтраль-семейство
+    // (labui `Neutral` компонент = семейство blue), danger = danger-сентимент.
+    //
+    // Солид-роль (`fill-accent`) = лестница LabelPrimary (солид, α=1). `-tinted` —
+    // ЗАЛИВКА при низкой альфе (rgba напрямую), то есть Ladder FillPrimary: тинт
+    // = якорь источника, α = @12. (AlphaAnalog-рецепт — для инверсии УЖЕ
+    // РЕШЁННОГО контраст-солида, отдельный случай #119; здесь тинт-якорь эмитится
+    // напрямую, поэтому Ladder, а не инверсия — иначе солид над белым дал бы
+    // α_min≈1 и «-tinted» перестал быть полупрозрачным.)
+    roles.push((
+        "fill-accent".to_string(),
+        brand_pos(LadderPosition::LabelPrimary),
+    ));
+    roles.push((
+        "fill-neutral".to_string(),
+        fam_pos("blue", LadderPosition::LabelPrimary),
+    ));
+    roles.push((
+        "fill-danger".to_string(),
+        sent_pos("danger", LadderPosition::LabelPrimary),
+    ));
+    roles.push((
+        "fill-accent-tinted".to_string(),
+        brand_pos(LadderPosition::FillPrimary),
+    ));
+    roles.push((
+        "fill-neutral-tinted".to_string(),
+        fam_pos("blue", LadderPosition::FillPrimary),
+    ));
+    roles.push((
+        "fill-danger-tinted".to_string(),
+        sent_pos("danger", LadderPosition::FillPrimary),
+    ));
+    roles.push((
+        "label-accent".to_string(),
+        brand_pos(LadderPosition::LabelPrimary),
+    ));
+    roles.push((
+        "label-danger".to_string(),
+        sent_pos("danger", LadderPosition::LabelPrimary),
+    ));
+    roles.push((
+        "border-accent".to_string(),
+        brand_pos(LadderPosition::BorderBase),
+    ));
+    roles.push((
+        "border-neutral".to_string(),
+        fam_pos("blue", LadderPosition::BorderBase),
+    ));
+    roles.push((
+        "border-danger".to_string(),
+        sent_pos("danger", LadderPosition::BorderBase),
+    ));
+    roles.push((
+        "border-focus".to_string(),
+        brand_pos(LadderPosition::FocusRing),
+    ));
+
     ThemeConfig {
         brand: Brand {
-            // Дефолт бренда labui (accent.rs:54-56).
-            anchor_hex: "#007AFF".to_string(),
+            // Пер-темный бренд labui (reference/labui-accent-primitives.md §2,
+            // Figma `Accent/Brand`): light/dark/light-ic/dark-ic — дословно.
+            anchors: anchors("#007AFF", "#4A8FFF", "#0040DD", "#409CFF"),
         },
         neutral: NeutralConfig {
             anchors: NeutralAnchors {
@@ -764,19 +1135,20 @@ pub fn labui_reference() -> ThemeConfig {
                 hue_stiffness: semantic::TINT_HUE_STIFFNESS,
             },
         },
-        // Палитра labui — 10 замеренных семейств (Figma 2026-07-02, accent.rs:113-126).
-        // В t1 не потребляется (акценты — t2), но несёт корректный конфиг-снимок.
+        // Палитра labui — 10 замеренных семейств, ПЕР-ТЕМНО ДОСЛОВНО из
+        // reference/labui-accent-primitives.md §2 (Figma `Accent/*`, все 4 режима,
+        // замер 2026-07-02). Светлый якорь совпадает с accent.rs::anchor_hex.
         palette: vec![
-            fam("red", "#FF3B30"),
-            fam("orange", "#FF9500"),
-            fam("yellow", "#FFCC00"),
-            fam("green", "#34C759"),
-            fam("mint", "#00C7BE"),
-            fam("teal", "#30B0C7"),
-            fam("cyan", "#32ADE6"),
-            fam("blue", "#007AFF"),
-            fam("indigo", "#5856D6"),
-            fam("pink", "#FF2D55"),
+            fam("red", "#FF3B30", "#FF3A3A", "#D70015", "#FF6161"),
+            fam("orange", "#FFA100", "#FF9008", "#C93400", "#FFA940"),
+            fam("yellow", "#FFD000", "#FFD60A", "#B25000", "#FFD426"),
+            fam("green", "#34C759", "#30D158", "#248A3D", "#30DB5B"),
+            fam("teal", "#5AC8FA", "#64D2FF", "#0071A4", "#70D7FF"),
+            fam("mint", "#00C7BE", "#63E6E2", "#0C817B", "#6CEBE7"),
+            fam("blue", "#3E87FF", "#5696FF", "#0050CF", "#95C0FF"),
+            fam("indigo", "#5856D6", "#5E5CE6", "#3634A3", "#7D7AFF"),
+            fam("purple", "#AF52DE", "#BF5AF2", "#8944AB", "#DA8FFF"),
+            fam("pink", "#FF2D55", "#FF2D55", "#D30F45", "#FF6482"),
         ],
         sentiments: SentimentsConfig {
             categories: vec![
@@ -801,11 +1173,21 @@ pub fn labui_reference() -> ThemeConfig {
     }
 }
 
-/// Краткий конструктор семейства палитры для фикстуры.
-fn fam(key: &str, anchor_hex: &str) -> PaletteFamily {
+/// Краткий конструктор пер-темной четвёрки якорей.
+fn anchors(light: &str, dark: &str, light_ic: &str, dark_ic: &str) -> ThemeAnchors {
+    ThemeAnchors {
+        light: light.to_string(),
+        dark: dark.to_string(),
+        light_ic: light_ic.to_string(),
+        dark_ic: dark_ic.to_string(),
+    }
+}
+
+/// Краткий конструктор семейства палитры для фикстуры (пер-темно).
+fn fam(key: &str, light: &str, dark: &str, light_ic: &str, dark_ic: &str) -> PaletteFamily {
     PaletteFamily {
         key: key.to_string(),
-        anchor_hex: anchor_hex.to_string(),
+        anchors: anchors(light, dark, light_ic, dark_ic),
     }
 }
 

@@ -448,6 +448,37 @@ fn resolve_smooth_hue(
     params: SentimentParams,
     s_min: f64,
 ) -> Result<f64, String> {
+    resolve_smooth_hue_explicit(
+        sentiment.preferred_side(),
+        sentiment.hue_floor(),
+        prototype,
+        brand_hue,
+        params,
+        s_min,
+    )
+}
+
+/// Config-facing sibling of [`resolve_smooth_hue`] that takes the categorical
+/// policy (`preferred_side`, `hue_floor`) explicitly instead of reading it off the
+/// fixed [`Sentiment`] enum — so an arbitrary consumer sentiment category
+/// ([`crate::config::SentimentCategory`]) resolves through the identical smooth
+/// p-norm displacement + legality guard, no second copy of the physics.
+///
+/// `prototype`, `brand_hue` and the result are **Oklab hue degrees**. See
+/// [`resolve_smooth_hue`] / [`SentimentCurve::with_params`] for the model.
+///
+/// # Errors
+///
+/// `Err` if no hue satisfies both the floor and the separation invariant
+/// (empty legal arc) — never a silent breach.
+pub fn resolve_smooth_hue_explicit(
+    preferred_side: f64,
+    hue_floor: Option<f64>,
+    prototype: f64,
+    brand_hue: f64,
+    params: SentimentParams,
+    s_min: f64,
+) -> Result<f64, String> {
     // Signed shortest delta from prototype to brand. Its sign tells us which side
     // of the brand the prototype sits on; we push the resolved hue out along that
     // same side, away from the brand.
@@ -461,17 +492,16 @@ fn resolve_smooth_hue(
         (1.0, params.p_high)
     } else {
         // Degenerate seam: brand exactly on the prototype. Pick the preferred side.
-        let pref = sentiment.preferred_side();
-        let p = if pref >= 0.0 {
+        let p = if preferred_side >= 0.0 {
             params.p_high
         } else {
             params.p_low
         };
-        (pref, p)
+        (preferred_side, p)
     };
 
     let s = smooth_separation(d, s_min, p);
-    let floor = sentiment.hue_floor();
+    let floor = hue_floor;
 
     // The prototype-ward displacement is the natural target (it decays to the
     // prototype as the brand recedes).
@@ -555,6 +585,92 @@ fn normalize_hue(h: f64) -> f64 {
 fn angular_distance(a: f64, b: f64) -> f64 {
     let diff = (a - b).rem_euclid(360.0);
     if diff > 180.0 { 360.0 - diff } else { diff }
+}
+
+/// Категориальный порог оттенка `S_PERC_MIN` (длина хорды Oklab a/b),
+/// пересчитанный из хром сентимент-якорей конфига по закону
+/// `2·C_rep·sin(20°/2)`, где `C_rep` — среднее хром (поправка t2 №д).
+///
+/// `20°` — нижний предел категориального восприятия (Witzel & Gegenfurtner 2013,
+/// JOSA A 30(7):1501). При labui-якорях (хромы Red/Orange/Green/Blue) результат
+/// совпадает с замороженной константой [`S_PERC_MIN`] (`0.068_703_9`,
+/// деривационная идентичность — тестом, допуск 1e-4): формула остаётся законом
+/// при произвольных якорях клиента, а сегодняшнее значение — её частный случай.
+///
+/// Пустой срез хром даёт `0.0` (нет сентиментов — нет порога разделения).
+pub fn s_perc_min_from_chromas(chromas: &[f64]) -> f64 {
+    if chromas.is_empty() {
+        return 0.0;
+    }
+    let c_rep = chromas.iter().sum::<f64>() / chromas.len() as f64;
+    // Хорда длины 2·C·sin(Δh/2) при Δh = 20° — тот же категориальный порог
+    // (Witzel & Gegenfurtner 2013), что в деривации [`S_PERC_MIN`]; инлайн
+    // (не именованная const), т.к. это derivation-identity вход, не новый
+    // POLICY-литерал — provenance держит doc [`S_PERC_MIN`].
+    2.0 * c_rep * (20.0_f64.to_radians() / 2.0).sin()
+}
+
+/// Замороженное значение `S_PERC_MIN` (для деривационной идентичности теста t2).
+/// Возвращается функцией (не `const`), чтобы не заводить второй POLICY-литерал в
+/// аудите реестра — это тот же derivation-identity, что [`S_PERC_MIN`].
+pub fn s_perc_min_frozen() -> f64 {
+    S_PERC_MIN
+}
+
+/// Config-facing сентимент-солид: якорь семейства, чей оттенок разведён с брендом
+/// сентимент-солвером, при СОХРАНЁННЫХ светлоте и хроме якоря.
+///
+/// Тинт лестницы сентимента (поправка t2 №г): берётся оттенок семейства,
+/// смещённый от бренда через [`resolve_smooth_hue_explicit`] (тот же C¹-солвер,
+/// что у [`SentimentCurve`]), но светлота/хрома — исходного якоря. Когда
+/// смещение не нужно (`resolved_hue == prototype`, случай labui-бренда), солид
+/// воспроизводит СЫРОЙ якорь семейства — это и есть деривационная идентичность,
+/// которую фиксирует тест. `brand_hue` — Oklab-оттенок бренда (градусы).
+///
+/// # Errors
+///
+/// `Err`, если якорь невалиден или легальный оттенок геометрически пуст
+/// (см. [`resolve_smooth_hue_explicit`]).
+pub fn resolve_config_sentiment_solid(
+    family_anchor_hex: &str,
+    brand_hue: f64,
+    hardness: f64,
+    chroma_fraction: f64,
+    hue_floor: Option<f64>,
+    preferred_side: f64,
+    s_perc_min: f64,
+) -> Result<String, String> {
+    let _ = chroma_fraction; // хрома тинта = хрома якоря (сохраняем солид якоря);
+    // chroma_fraction — ручка рампы SentimentCurve, не тинта; принимается для
+    // единообразия сигнатуры конфига, но тинт держит фактическую хрому якоря.
+    let anchor_lab = srgb_linear_to_oklab(srgb_from_hex(family_anchor_hex)?);
+    let prototype = oklab_hue_of(family_anchor_hex);
+    let l_anchor = anchor_lab[0];
+    let c_anchor = (anchor_lab[1].powi(2) + anchor_lab[2].powi(2)).sqrt();
+    let s_min = s_min_deg(c_anchor);
+    // Порог разделения — max из перцептивного (от хромы якоря) и конфиг-порога:
+    // конфиг S_PERC_MIN задаёт минимум для КАТЕГОРИИ, s_min_deg — для этой хромы.
+    let params = SentimentParams::uniform(hardness)?;
+    let effective_s_min = s_min.max(s_min_deg_from_chord(s_perc_min, c_anchor));
+    let resolved_hue = resolve_smooth_hue_explicit(
+        preferred_side,
+        hue_floor,
+        prototype,
+        brand_hue,
+        params,
+        effective_s_min,
+    )?;
+    // Солид на исходных L/C якоря, смещённый оттенок.
+    Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved_hue))
+}
+
+/// Перевести целевую хорду разделения `chord` в угол оттенка (градусы) при
+/// хроме `zone_chroma` — та же инверсия `2·C·sin(Δh/2)`, что [`s_min_deg`], но с
+/// произвольной хордой (для конфиг-`S_PERC_MIN`).
+fn s_min_deg_from_chord(chord: f64, zone_chroma: f64) -> f64 {
+    let safe_chroma = zone_chroma.max(1e-6);
+    let ratio = (chord / (2.0 * safe_chroma)).clamp(0.0, 1.0);
+    2.0 * ratio.asin().to_degrees()
 }
 
 /// The in-gamut sRGB hex at Oklab `(L, C, h)`, channels clamped to `[0, 1]`.

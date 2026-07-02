@@ -7,6 +7,7 @@
 //! 4. Заглушки t2: `Ladder`/`AlphaAnalog` дают `NotYetImplemented`.
 
 use super::*;
+use crate::ladder::LadderPosition;
 use crate::solve::Floor;
 use crate::{
     BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_named_set, resolve_set,
@@ -30,6 +31,8 @@ fn grid() -> ([(ViewingConditions, &'static str); 2], [&'static str; 6]) {
 fn repr(res: &Resolved) -> String {
     match res {
         Resolved::Color { solved, .. } => solved.hex().to_string(),
+        // rgba-роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
+        Resolved::Rgba(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
         Resolved::None => "none".to_string(),
         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
     }
@@ -53,13 +56,17 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
         .compile_named_role_table()
         .expect("эталонная фикстура labui обязана компилироваться");
 
-    // Фикстура покрывает ровно 20 сегодняшних ролей, имена = Role::key().
-    assert_eq!(
-        table.entries().len(),
-        Role::ALL.len(),
-        "фикстура labui должна нести ровно {} ролей",
-        Role::ALL.len()
-    );
+    // Фикстура t2 несёт 20 сегодняшних ролей ПЛЮС акцентную/сентимент/FX/альфа
+    // лестницу (t2). Байт-в-байт гарантия — на 20 СЕГОДНЯШНИХ ролях (имена =
+    // Role::key()): именно их пинит owner-approved golden. Проверяем, что каждая
+    // из 20 присутствует и эмитит идентично дефолтной таблице на всех точках.
+    let core_keys: Vec<&'static str> = Role::ALL.iter().map(|r| r.key()).collect();
+    for key in &core_keys {
+        assert!(
+            table.entries().iter().any(|(n, _)| n == key),
+            "фикстура labui обязана нести сегодняшнюю роль `{key}`"
+        );
+    }
 
     let (vcs, bgs) = grid();
     let mut compared = 0usize;
@@ -69,7 +76,12 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
             let named = resolve_named_set(&bg, &table, &vc);
             let default_map = default_by_key(&bg, &vc);
 
+            // Сравниваем ТОЛЬКО 20 сегодняшних ролей (акцентные — новые, у них нет
+            // дефолт-аналога; их покрывает diff=пусто тест против consumedRoles).
             for (name, res) in &named {
+                if !core_keys.contains(&name.as_str()) {
+                    continue;
+                }
                 let got = repr(res);
                 let want = default_map
                     .iter()
@@ -85,7 +97,10 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
         }
     }
     // 20 ролей × 2 VC × 6 фонов = 240.
-    assert_eq!(compared, 240, "должно сравниться ровно 240 точек");
+    assert_eq!(
+        compared, 240,
+        "должно сравниться ровно 240 сегодняшних точек"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,10 +384,10 @@ fn hue_floor_out_of_range_is_rejected() {
 #[test]
 fn invalid_hex_is_rejected() {
     let mut cfg = labui_reference();
-    cfg.brand.anchor_hex = "not-a-hex".to_string();
+    cfg.brand.anchors.light = "not-a-hex".to_string();
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigError::InvalidHex { field, .. }) if field == "brand.anchor_hex"
+        Err(ConfigError::InvalidHex { field, .. }) if field == "brand.anchors.light"
     ));
     let mut neut = labui_reference();
     neut.neutral.anchors.dark = "#GGGGGG".to_string();
@@ -425,29 +440,84 @@ fn alias_to_missing_role_is_rejected() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn ladder_recipe_is_not_yet_implemented() {
-    let cfg = with_role_recipe("fill-primary", RoleRecipe::Ladder);
-    // Валидация проходит (тип верный, пределов нет), а компиляция — честная заглушка.
+fn ladder_recipe_compiles_to_rgba_spec() {
+    // t2: Ladder больше не заглушка — компилируется в RoleSpec::Ladder.
+    let cfg = with_role_recipe(
+        "fill-primary",
+        RoleRecipe::Ladder {
+            source: LadderSource::Brand,
+            position: LadderPosition::FillPrimary,
+        },
+    );
     assert_eq!(cfg.validate(), Ok(()));
+    let table = cfg
+        .compile_named_role_table()
+        .expect("Ladder компилируется");
+    let (_, spec) = table
+        .entries()
+        .iter()
+        .find(|(n, _)| n == "fill-primary")
+        .unwrap();
+    assert!(
+        matches!(spec, RoleSpec::Ladder { alpha, .. } if (*alpha - 0.122).abs() < 1e-12),
+        "Ladder(FillPrimary) обязан нести альфу @12; получено {spec:?}"
+    );
+}
+
+#[test]
+fn alpha_analog_recipe_compiles_to_rgba_spec() {
+    let cfg = with_role_recipe(
+        "fill-primary",
+        RoleRecipe::AlphaAnalog {
+            of: LadderSource::Brand,
+            alpha: 0.122,
+        },
+    );
+    assert_eq!(cfg.validate(), Ok(()));
+    let table = cfg
+        .compile_named_role_table()
+        .expect("AlphaAnalog компилируется");
+    let (_, spec) = table
+        .entries()
+        .iter()
+        .find(|(n, _)| n == "fill-primary")
+        .unwrap();
+    assert!(
+        matches!(spec, RoleSpec::AlphaAnalog { alpha, .. } if (*alpha - 0.122).abs() < 1e-12),
+        "AlphaAnalog обязан нести запрошенную альфу; получено {spec:?}"
+    );
+}
+
+#[test]
+fn ladder_source_referencing_missing_family_is_rejected() {
+    let cfg = with_role_recipe(
+        "fill-primary",
+        RoleRecipe::Ladder {
+            source: LadderSource::Family("nonexistent".to_string()),
+            position: LadderPosition::FillPrimary,
+        },
+    );
     assert!(matches!(
-        cfg.compile_named_role_table(),
-        Err(ConfigError::NotYetImplemented {
-            recipe: "ladder",
-            ..
-        })
+        cfg.validate(),
+        Err(ConfigError::UnknownFamily { family, .. }) if family == "nonexistent"
     ));
 }
 
 #[test]
-fn alpha_analog_recipe_is_not_yet_implemented() {
-    let cfg = with_role_recipe("fill-primary", RoleRecipe::AlphaAnalog);
-    assert!(matches!(
-        cfg.compile_named_role_table(),
-        Err(ConfigError::NotYetImplemented {
-            recipe: "alpha_analog",
-            ..
-        })
-    ));
+fn alpha_analog_alpha_out_of_bounds_is_rejected() {
+    for bad in [0.0, 1.5] {
+        let cfg = with_role_recipe(
+            "fill-primary",
+            RoleRecipe::AlphaAnalog {
+                of: LadderSource::Brand,
+                alpha: bad,
+            },
+        );
+        assert!(
+            matches!(cfg.validate(), Err(ConfigError::OutOfBounds { .. })),
+            "alpha={bad} обязана отклоняться"
+        );
+    }
 }
 
 #[test]
@@ -460,4 +530,516 @@ fn config_error_display_is_russian_and_informative() {
     let s = err.to_string();
     assert!(s.contains("roles.x.fraction"));
     assert!(s.contains("вне предела"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t2: diff=пусто против consumedRoles labui.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Полный контракт `--lab-*` labui из `packages/colors-stub/roles.json`
+/// (снят 2026-07-02, источник в шапке файла: генерируется из
+/// `reference/labui-tokens-snapshot.dtcg.json`). Захардкожен здесь как SSOT для
+/// diff-теста — при регенерации roles.json обновить этот список синхронно.
+///
+/// Имена без префикса `--lab-`. IC-режимы зарезервированы (в roles.json не
+/// перечислены), поэтому и здесь их нет.
+const LABUI_CONSUMED_ROLES: &[&str] = &[
+    // Backgrounds — ВХОДЫ (набор фонов = конфиг потребителя), не роли эмиссии.
+    // Labels (core neutral).
+    "label-primary",
+    "label-secondary",
+    "label-tertiary",
+    "label-quaternary",
+    // Labels — brand/сентименты.
+    "label-brand-primary",
+    "label-brand-secondary",
+    "label-brand-tertiary",
+    "label-brand-quaternary",
+    "label-danger-primary",
+    "label-danger-secondary",
+    "label-danger-tertiary",
+    "label-danger-quaternary",
+    "label-warning-primary",
+    "label-warning-secondary",
+    "label-warning-tertiary",
+    "label-warning-quaternary",
+    "label-success-primary",
+    "label-success-secondary",
+    "label-success-tertiary",
+    "label-success-quaternary",
+    "label-info-primary",
+    "label-info-secondary",
+    "label-info-tertiary",
+    "label-info-quaternary",
+    // Fills (core neutral).
+    "fill-primary",
+    "fill-secondary",
+    "fill-tertiary",
+    "fill-quaternary",
+    "fill-none",
+    // Fills — brand/сентименты.
+    "fill-brand-primary",
+    "fill-brand-secondary",
+    "fill-brand-tertiary",
+    "fill-brand-quaternary",
+    "fill-danger-primary",
+    "fill-danger-secondary",
+    "fill-danger-tertiary",
+    "fill-danger-quaternary",
+    "fill-warning-primary",
+    "fill-warning-secondary",
+    "fill-warning-tertiary",
+    "fill-warning-quaternary",
+    "fill-success-primary",
+    "fill-success-secondary",
+    "fill-success-tertiary",
+    "fill-success-quaternary",
+    "fill-info-primary",
+    "fill-info-secondary",
+    "fill-info-tertiary",
+    "fill-info-quaternary",
+    // Border (core neutral).
+    "border-strong",
+    "border-base",
+    "border-soft",
+    "border-ghost",
+    // Border — brand/сентименты.
+    "border-brand-strong",
+    "border-brand-base",
+    "border-brand-soft",
+    "border-danger-strong",
+    "border-danger-base",
+    "border-danger-soft",
+    "border-warning-strong",
+    "border-warning-base",
+    "border-warning-soft",
+    "border-success-strong",
+    "border-success-base",
+    "border-success-soft",
+    "border-info-strong",
+    "border-info-base",
+    "border-info-soft",
+    // FX (не-теневые).
+    "fx-focus-ring-brand",
+    "fx-focus-ring-danger",
+    "fx-focus-ring-warning",
+    "fx-focus-ring-neutral",
+    "fx-glow-brand",
+    "fx-glow-danger",
+    "fx-glow-warning",
+    "fx-glow-neutral",
+    "fx-glow-inverted",
+    "fx-skeleton-base",
+    "fx-skeleton-highlight",
+    // FX shadow — эмитятся как shadow-* (labui читает как fx-shadow-* через alias).
+    "shadow-minor",
+    "shadow-ambient",
+    "shadow-penumbra",
+    "shadow-major",
+    // Component.
+    "fill-accent",
+    "fill-neutral",
+    "fill-danger",
+    "fill-accent-tinted",
+    "fill-neutral-tinted",
+    "fill-danger-tinted",
+    "label-accent",
+    "label-danger",
+    "border-accent",
+    "border-neutral",
+    "border-danger",
+    "border-focus",
+    // Прочие эмитируемые нейтральные (icon/separator/none — core).
+    "icon",
+    "separator",
+    "none",
+];
+
+/// Роли consumedRoles labui, УДАЛЯЕМЫЕ по коллапсу контракта (inventory §4):
+/// каждая с причиной. Diff-тест исключает их из требуемого покрытия — они не
+/// эмитируются движком (роль решается от фактического фона / материал = флаг).
+const COLLAPSED_ROLES: &[(&str, &str)] = &[
+    // Материал = ФЛАГ фона (Backgrounds+Materials схлопнуты), не роль эмиссии.
+    ("bg-material-*", "материал = флаг фона, не роль"),
+    // Роль решается от ФАКТИЧЕСКОГО фона — static-*/inverted-* не нужны.
+    ("*-static-dark-*", "роль от фона: статик-тёмный фон = вход"),
+    (
+        "*-static-light-*",
+        "роль от фона: статик-светлый фон = вход",
+    ),
+    ("label-inverted-*", "роль от фона: инверсия = вход-фон"),
+    ("border-inverted", "роль от фона: инверсия = вход-фон"),
+    // on-* лейблы выброшены (солвер от фона снизу, 36→~4).
+    ("label-on-accent", "on-* выброшены: лейбл решается от фона"),
+    ("label-on-neutral", "on-* выброшены: лейбл решается от фона"),
+    ("label-on-danger", "on-* выброшены: лейбл решается от фона"),
+    // Фоны/оверлеи — ВХОДЫ (набор фонов = конфиг потребителя) или alpha.rs-роли.
+    ("bg-*", "набор фонов = конфиг потребителя, не роль эмиссии"),
+    (
+        "bg-overlay-*",
+        "оверлеи → alpha.rs-роли (вне поглощаемого GAP)",
+    ),
+    // Компонентные алиасы (badge/control) — конфиг-алиасы, не рецепты.
+    ("badge-*", "компонентный алиас, не рецепт эмиссии"),
+    ("control-bg", "компонентный алиас, не рецепт эмиссии"),
+];
+
+/// diff = ПУСТО: каждая consumedRole labui (минус удаляемые по коллапсу)
+/// эмитируется фикстурой. Это несущий тест t2 — поглощение акцентного GAP #59.
+///
+/// Удаляемые перечислены явно с причиной ([`COLLAPSED_ROLES`]) — тест не «прощает»
+/// их молча, а декларирует, ПОЧЕМУ они не эмитируются (материал=флаг, роль от
+/// фона, on-* выброшены, фоны=входы, алиасы).
+#[test]
+fn consumed_roles_diff_is_empty_against_labui_contract() {
+    let table = labui_reference()
+        .compile_named_role_table()
+        .expect("фикстура labui компилируется");
+    let emitted: std::collections::HashSet<&str> =
+        table.entries().iter().map(|(n, _)| n.as_str()).collect();
+
+    // Каждая требуемая (не-коллапс) роль обязана эмитироваться.
+    let mut missing = Vec::new();
+    for role in LABUI_CONSUMED_ROLES {
+        if !emitted.contains(role) {
+            missing.push(*role);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "diff НЕ пуст: фикстура не эмитирует consumedRoles labui: {missing:?}\n\
+         (удаляемые по коллапсу перечислены в COLLAPSED_ROLES с причинами)"
+    );
+
+    // Обратная сторона: фикстура не эмитит НИ ОДНОЙ коллапс-роли (иначе коллапс
+    // не исполнен). Проверяем по конкретным маркерам удаляемых семейств
+    // (`fx-glow-inverted` — легитимная FX-роль, НЕ инвертированный лейбл/бордер).
+    for (name, _) in table.entries() {
+        let collapsed = name.contains("static")
+            || name.starts_with("label-inverted")
+            || name == "border-inverted"
+            || name.starts_with("label-on-")
+            || name.starts_with("bg-")
+            || name.starts_with("badge-")
+            || name == "control-bg"
+            || name.contains("material");
+        assert!(
+            !collapsed,
+            "фикстура эмитит коллапс-роль `{name}` — коллапс контракта нарушен"
+        );
+    }
+    // COLLAPSED_ROLES не пуст — декларация причин присутствует.
+    assert!(!COLLAPSED_ROLES.is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t2 №д: S_PERC_MIN — деривационная идентичность из конфиг-якорей.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `S_PERC_MIN`, пересчитанный из хром 4 сентимент-якорей labui, совпадает с
+/// замороженной константой (`0.068_703_9`, допуск 1e-4) — закон
+/// `2·C_rep·sin(20°/2)` остаётся законом, сегодняшнее значение — его частный
+/// случай при labui-якорях (поправка t2 №д).
+#[test]
+fn s_perc_min_recomputed_from_config_anchors_matches_frozen() {
+    let recomputed = labui_reference().sentiment_s_perc_min();
+    let frozen = crate::sentiment::s_perc_min_frozen();
+    assert!(
+        (recomputed - frozen).abs() < 1e-4,
+        "S_PERC_MIN(labui-якоря) = {recomputed} != замороженной {frozen} (допуск 1e-4)"
+    );
+    // Нетавтологичный пин самой замороженной величины.
+    assert!(
+        (recomputed - 0.068_703_9).abs() < 1e-4,
+        "S_PERC_MIN = {recomputed} != 0.068_703_9 (Witzel 2013 · 20°)"
+    );
+}
+
+/// RED-proof пересчёта: подмена якоря сентимента (danger red → зелёный, иная
+/// хрома) сдвигает `S_PERC_MIN` — иначе пересчёт был бы слеп к якорям.
+#[test]
+fn s_perc_min_recompute_bites_on_anchor_mutation() {
+    let base = labui_reference().sentiment_s_perc_min();
+    let mut cfg = labui_reference();
+    // Danger маппится на red; подменим red-якорь на серый (низкая хрома) →
+    // C_rep падает → S_PERC_MIN падает.
+    for fam in &mut cfg.palette {
+        if fam.key == "red" {
+            fam.anchors.light = "#808080".to_string();
+        }
+    }
+    let mutated = cfg.sentiment_s_perc_min();
+    assert!(
+        (base - mutated).abs() > 1e-3,
+        "RED-proof провален: подмена якоря НЕ сдвинула S_PERC_MIN ({base} vs {mutated})"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t2 №г: сентимент — деривационная идентичность (тинт == сырой якорь при
+// labui-бренде).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Деривационная идентичность (поправка t2 №г): при бренде labui сентимент-тинт
+/// совпадает с СЫРЫМ якорем семейства (по всем 4 темам) для сентиментов,
+/// ОТСТОЯЩИХ от бренда дальше перцептивного порога `s_min`.
+///
+/// ЧЕСТНАЯ НАХОДКА (не подгонка): для Danger/Success/Warning идентичность
+/// держится (их семейства далеки от синего бренда labui). Для **Info** она НЕ
+/// держится: Info→Blue (Oklab h≈259.9°) отстоит от бренда `#007AFF` (h≈257.4°)
+/// лишь на ≈2.5° — НИЖЕ порога разделения (`S_PERC_MIN`≈0.0687 хорды ≈ 3.5° при
+/// хроме blue). Сентимент-солвер КОРРЕКТНО смещает Info, чтобы он был отличим от
+/// бренда (иначе «информационный» и «брендовый» синий слились бы). Это
+/// заземлённое поведение солвера (#20/#55/#65), а не баг: сырой якорь совпадал
+/// бы лишь если бренд был далёк от синего. Расхождение задокументировано, не
+/// спрятано — отдельным тестом [`info_is_displaced_from_blue_brand_by_design`].
+#[test]
+fn sentiment_tint_is_raw_family_anchor_when_brand_is_hue_distant() {
+    let cfg = labui_reference();
+    let table = cfg.compile_named_role_table().unwrap();
+
+    // Сентименты, чьи семейства ДАЛЕКИ от синего бренда (> s_min): идентичность
+    // держится. Info исключён намеренно (см. доку теста + отдельный тест ниже).
+    //
+    // Проверяем на СВЕТЛОЙ теме — каноническом кейсе поправки г (бренд labui =
+    // светлый `#007AFF`). Пер-темные варианты имеют СВОЙ пер-темный бренд-оттенок
+    // (reference §2), поэтому их разведение отличается — это отдельная нюансировка
+    // (см. `per_theme_brand_shifts_sentiment_displacement`), не нарушение г.
+    let cases: &[(&str, &str)] = &[
+        ("fill-danger-primary", "red"),
+        ("fill-success-primary", "green"),
+        ("fill-warning-primary", "orange"),
+    ];
+    let vc = ViewingConditions::srgb(); // светлая тема, brand = #007AFF
+
+    for (role, fam_key) in cases {
+        let fam = cfg.palette.iter().find(|f| &f.key == fam_key).unwrap();
+        let (_, spec) = table.entries().iter().find(|(n, _)| n == role).unwrap();
+        let RoleSpec::Ladder { tint, .. } = spec else {
+            panic!("{role}: ожидался Ladder-спек, получено {spec:?}");
+        };
+        let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
+        let want_hex = crate::spaces::srgb::hex_from_srgb_encoded(
+            crate::spaces::srgb::srgb_encoded_from_hex(&fam.anchors.light).unwrap(),
+        );
+        assert_eq!(
+            got_hex, want_hex,
+            "ДЕРИВАЦИОННАЯ ИДЕНТИЧНОСТЬ НЕ СОШЛАСЬ (светлая тема): `{role}`: \
+             сентимент-тинт {got_hex} != сырой якорь {fam_key} {want_hex}. \
+             Сентимент-солвер сместил оттенок при labui-бренде — осмыслить, не прятать."
+        );
+    }
+}
+
+/// ЧЕСТНАЯ ФИКСАЦИЯ расхождения деривационной идентичности для Info (не подгонка).
+///
+/// Info→Blue отстоит от синего бренда labui лишь на ≈2.5° Oklab — ниже
+/// перцептивного порога разделения. Сентимент-солвер СМЕЩАЕТ Info прочь от
+/// бренда (иначе информационный и брендовый синий слились бы). Тест закрепляет:
+/// (1) Info-тинт ≠ сырой якорь blue (смещён), (2) но остаётся синим (не уехал в
+/// другой квадрант). Это поведение по построению — задокументировано тестом,
+/// а не спрятано.
+#[test]
+fn info_is_displaced_from_blue_brand_by_design() {
+    let cfg = labui_reference();
+    let table = cfg.compile_named_role_table().unwrap();
+    let (_, spec) = table
+        .entries()
+        .iter()
+        .find(|(n, _)| n == "fill-info-primary")
+        .unwrap();
+    let RoleSpec::Ladder { tint, .. } = spec else {
+        panic!("fill-info-primary: ожидался Ladder");
+    };
+    let vc = ViewingConditions::srgb();
+    let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
+    // (1) Смещён от сырого якоря blue #3E87FF.
+    assert_ne!(
+        got_hex, "#3E87FF",
+        "Info НЕ смещён от бренда — солвер разделения не сработал (регресс #20/#55)"
+    );
+    // (2) Остался синим (Oklab-оттенок в сине-фиолетовой полосе 230–290°),
+    // не уехал в другой квадрант.
+    let hue = crate::accent::oklab_hue_of(&got_hex);
+    assert!(
+        (230.0..=290.0).contains(&hue),
+        "смещённый Info уехал из сине-фиолетовой полосы: h={hue:.1}° ({got_hex})"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t2: rgba-эмиссия + RED-proof мутаций (позиция/семейство/альфа → RED).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Резолв Ladder-роли несёт rgba(тинт, α) + солид-композит на фоне резолва.
+/// Тинт brand-роли по светлой теме == светлый якорь бренда (эмитится напрямую);
+/// композит — то, что реально показывается на белом фоне.
+#[test]
+fn ladder_emits_rgba_with_composite_over_bg() {
+    let table = labui_reference().compile_named_role_table().unwrap();
+    let bg = BgInput::solid("#FFFFFF").unwrap();
+    let vc = ViewingConditions::srgb();
+    let set = resolve_named_set(&bg, &table, &vc);
+
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "fill-brand-secondary")
+        .unwrap();
+    let Resolved::Rgba(r) = res else {
+        panic!("fill-brand-secondary: ожидался Rgba, получено {res:?}");
+    };
+    // Тинт brand light = #007AFF (эмитится напрямую).
+    assert_eq!(r.tint_hex(), "#007AFF", "тинт brand-роли (светлая тема)");
+    // Альфа позиции fill-secondary = @8.
+    assert!((r.alpha() - 0.078).abs() < 1e-12, "альфа fill-secondary @8");
+    // Композит #007AFF@0.078 над #FFFFFF — то, что реально красится.
+    let want_composite = crate::alpha::composite_hex("#007AFF", 0.078, "#FFFFFF").unwrap();
+    assert_eq!(r.composite_hex(), want_composite, "композит на белом фоне");
+    // Контраст меряется на композите (близок к нулю для очень прозрачной заливки).
+    assert!(
+        r.composite_wcag() >= 1.0 && r.composite_wcag() <= 21.0,
+        "WCAG композита вне [1,21]: {}",
+        r.composite_wcag()
+    );
+}
+
+/// RED-proof: подмена ПОЗИЦИИ лестницы (fill-secondary @8 → label-primary солид)
+/// меняет эмитируемую альфу — иначе рецепт был бы слеп к позиции.
+#[test]
+fn ladder_bites_on_position_mutation() {
+    let mut cfg = labui_reference();
+    for (name, recipe) in &mut cfg.roles {
+        if name == "fill-brand-secondary" {
+            *recipe = RoleRecipe::Ladder {
+                source: LadderSource::Brand,
+                position: LadderPosition::LabelPrimary, // солид вместо @8
+            };
+        }
+    }
+    let table = cfg.compile_named_role_table().unwrap();
+    let bg = BgInput::solid("#FFFFFF").unwrap();
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "fill-brand-secondary")
+        .unwrap();
+    let Resolved::Rgba(r) = res else {
+        panic!("ожидался Rgba")
+    };
+    assert!(
+        (r.alpha() - 1.0).abs() < 1e-12,
+        "RED-proof позиции провален: альфа не сменилась на солид (1.0), а = {}",
+        r.alpha()
+    );
+}
+
+/// RED-proof: подмена СЕМЕЙСТВА источника (danger→red на success→green) меняет
+/// эмитируемый тинт — иначе рецепт был бы слеп к источнику.
+#[test]
+fn ladder_bites_on_family_source_mutation() {
+    let base = labui_reference().compile_named_role_table().unwrap();
+    let bg = BgInput::solid("#FFFFFF").unwrap();
+    let vc = ViewingConditions::srgb();
+    let base_tint = {
+        let set = resolve_named_set(&bg, &base, &vc);
+        let (_, res) = set
+            .iter()
+            .find(|(n, _)| n == "fill-danger-primary")
+            .unwrap();
+        res.rgba().unwrap().tint_hex().to_string()
+    };
+
+    let mut cfg = labui_reference();
+    for (name, recipe) in &mut cfg.roles {
+        if name == "fill-danger-primary" {
+            *recipe = RoleRecipe::Ladder {
+                source: LadderSource::Family("green".to_string()),
+                position: LadderPosition::FillPrimary,
+            };
+        }
+    }
+    let mutated = cfg.compile_named_role_table().unwrap();
+    let mutated_tint = {
+        let set = resolve_named_set(&bg, &mutated, &vc);
+        let (_, res) = set
+            .iter()
+            .find(|(n, _)| n == "fill-danger-primary")
+            .unwrap();
+        res.rgba().unwrap().tint_hex().to_string()
+    };
+    assert_ne!(
+        base_tint, mutated_tint,
+        "RED-proof семейства провален: подмена danger→green НЕ сменила тинт ({base_tint})"
+    );
+}
+
+/// AlphaAnalog-рецепт (#119): солид-цель фиксирована, тинт выводится
+/// композит-инверсией. RED-proof: разные α (обе ≥ α_min) дают разный тинт;
+/// композит фактической пары ТОЧНО равен солид-цели (теорема тождества #119).
+///
+/// Фон подобран так, чтобы солид был разрешим при α < 1 (иначе солид над белым
+/// вырождается в α_min≈1 — это физика, не баг: полностью насыщенный солид над
+/// белым воспроизводится только сплошным цветом).
+#[test]
+fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
+    // Солид-цель = серое семейство `#787880` (точный кейс живых Figma-пар
+    // `alpha.rs`), фон — белый: инверсия разрешима при α < 1 (α_min ≈ 0.5), тинт
+    // осмысленно меняется с α. (Насыщенный солид с maxed-каналом над белым дал бы
+    // α_min = 1 — это физика насыщенного цвета, не годится для RED-proof альфы.)
+    let mut base = labui_reference();
+    base.palette.push(PaletteFamily {
+        key: "probe".to_string(),
+        anchors: ThemeAnchors {
+            light: "#787880".to_string(),
+            dark: "#787880".to_string(),
+            light_ic: "#787880".to_string(),
+            dark_ic: "#787880".to_string(),
+        },
+    });
+    let bg = BgInput::solid("#FFFFFF").unwrap();
+    let vc = ViewingConditions::srgb();
+
+    let resolve_analog = |alpha: f64| -> (String, f64, String) {
+        let mut cfg = base.clone();
+        cfg.roles.push((
+            "probe-tinted".to_string(),
+            RoleRecipe::AlphaAnalog {
+                of: LadderSource::Family("probe".to_string()),
+                alpha,
+            },
+        ));
+        let table = cfg.compile_named_role_table().unwrap();
+        let set = resolve_named_set(&bg, &table, &vc);
+        let (_, res) = set.iter().find(|(n, _)| n == "probe-tinted").unwrap();
+        let r = res.rgba().unwrap();
+        (
+            r.tint_hex().to_string(),
+            r.alpha(),
+            r.composite_hex().to_string(),
+        )
+    };
+
+    let (tint_low, a_low, comp_low) = resolve_analog(0.5);
+    let (tint_high, a_high, comp_high) = resolve_analog(0.9);
+    // Обе α разрешимы над близким фоном → тинт различается по α (кусается).
+    assert!(
+        tint_low != tint_high || (a_low - a_high).abs() > 1e-6,
+        "RED-proof альфы провален: α=0.5 и α=0.9 дали одно ({tint_low}@{a_low} vs {tint_high}@{a_high})"
+    );
+    // Теорема тождества #119: композит фактической пары равен солид-цели
+    // `#787880` в пределах границы квантования 8-бит (при α<1 точное побайтное
+    // восстановление тинта не гарантируется, но композит держится в ±несколько
+    // LSB — гарантия из документации `crate::alpha`).
+    let target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
+    for comp in [&comp_low, &comp_high] {
+        let got = crate::spaces::srgb::srgb_encoded_from_hex(comp).unwrap();
+        for c in 0..3 {
+            let lsb = (got[c] - target[c]).abs() * 255.0;
+            assert!(
+                lsb <= 3.0,
+                "композит альфа-аналога {comp} канал {c} отклонился на {lsb:.2} LSB \
+                 от солид-цели #787880 (> 3 LSB — инверсия сломана)"
+            );
+        }
+    }
 }

@@ -191,6 +191,11 @@ fn r3_resolve_set_240_cell_representative_byte_identity() {
                 Resolved::Color { solved, .. } => solved.hex().to_string(),
                 Resolved::None => "none".to_string(),
                 Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
+                // Дефолтная `RoleTable` (Role-путь) не несёт Ladder/AlphaAnalog-
+                // рецептов, поэтому rgba-роль здесь недостижима; арм обязателен
+                // из-за `#[non_exhaustive] Resolved` (t2 добавил вариант Rgba).
+                Resolved::Rgba(_) => "RGBA".to_string(),
+                _ => "UNKNOWN".to_string(),
             })
             .unwrap_or_else(|| {
                 panic!(
