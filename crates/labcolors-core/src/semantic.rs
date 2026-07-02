@@ -1489,7 +1489,13 @@ fn finish_rgba(
     bg_encoded: [f64; 3],
     vc: &ViewingConditions,
 ) -> Resolved {
-    use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_gamma_inv};
+    use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
+    // Замер идёт по КВАНТОВАННОМУ композиту — тому же 8-битному hex, который
+    // уходит наружу (закон движка: честный dJ' меряется на отданном цвете,
+    // как в solve_dj; неквантованный замер расходился бы с отданным на LSB).
+    let composite_hex = hex_from_srgb_encoded(composite_encoded);
+    let composite_q =
+        srgb_encoded_from_hex(&composite_hex).expect("hex собственного форматтера всегда валиден");
     // Линейный свет из кодированного (per-channel gamma-декод) для перцептивного Lc.
     let decode = |e: [f64; 3]| {
         [
@@ -1498,14 +1504,14 @@ fn finish_rgba(
             srgb_gamma_inv(e[2]),
         ]
     };
-    let composite_linear = decode(composite_encoded);
+    let composite_linear = decode(composite_q);
     let bg_linear = decode(bg_encoded);
     let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
-    let composite_wcag = crate::wcag::contrast_ratio(composite_encoded, bg_encoded);
+    let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
     Resolved::Rgba(RgbaResolved {
         tint_hex: hex_from_srgb_encoded(tint_encoded),
         alpha,
-        composite_hex: hex_from_srgb_encoded(composite_encoded),
+        composite_hex,
         composite_lc,
         composite_wcag,
     })

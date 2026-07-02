@@ -10,7 +10,7 @@
 //! [`RoleChroma`], [`DjMagnitude`], [`TextAnchor`], [`NamedRoleTable`]), а ядро
 //! про конфиг не знает ничего.
 //!
-//! # Что этот модуль делает (CH-02 t1)
+//! # Что этот модуль делает (CH-02 t1+t2)
 //!
 //! - Несёт типы конфига без сериализации ([`ThemeConfig`] и вложенные) — JSON-парсинг
 //!   это отдельная задача границы WASM (t3), не ядро.
@@ -284,6 +284,11 @@ pub struct NeutralTint {
     pub target_mp: f64,
     /// Жёсткость прижатия оттенка к каноническому (v2-кривая): `≥ 0`.
     pub hue_stiffness: f64,
+    /// Явный оттенок подтона (градусы `[0, 360)`), если у потребителя есть
+    /// ИЗМЕРЕННАЯ величина (labui: SSOT 286.0°). `None` — движок выводит оттенок
+    /// из тёмного якоря нейтрали (та же деривация, которой была получена
+    /// labui-константа: `#101012` → 285.97°).
+    pub hue_override_deg: Option<f64>,
 }
 
 /// Нейтраль: тройка якорей + ручки подтона.
@@ -692,6 +697,16 @@ impl ThemeConfig {
             }
         }
 
+        if let Some(hue) = self.neutral.tint.hue_override_deg
+            && !(hue.is_finite() && (0.0..360.0).contains(&hue))
+        {
+            return Err(ConfigError::OutOfBounds {
+                handle: "neutral.tint.hue_override_deg".to_string(),
+                value: hue,
+                bound: "0 ≤ hue < 360 (явный оттенок подтона по модулю 360°)",
+            });
+        }
+
         // Дубликаты ключей всех словарей: повтор имени = неоднозначный lookup.
         fn check_unique<'a, I: Iterator<Item = &'a str>>(
             dictionary: &'static str,
@@ -851,14 +866,18 @@ impl ThemeConfig {
             entries.push((name.clone(), spec));
         }
 
-        // Нейтраль-подтон: v2-кривая. Форма строго сверена с
-        // `semantic::RoleChroma::Curve` дефолтной таблицы (`neutral_curve()`):
-        // canonical_hue_deg = измеренный NEUTRAL_HUE_DEG (движок выводит оттенок из
-        // нейтральной тройки; для t1 берём измеренную SSOT-величину — вывод из hex
-        // это t2), target_mp / hue_stiffness — из конфиг-ручек. `ratio` в v2-кривую
-        // не входит (это поле v1 flat-пути), но валидируется как экспонированная ручка.
+        // Нейтраль-подтон: v2-кривая. Оттенок подтона — ИЗ КОНФИГА: явная ручка
+        // hue_override (labui несёт измеренную SSOT-величину 286.0°), иначе —
+        // деривация из ТЁМНОГО якоря нейтрали клиента (NEUTRAL_HUE_DEG сам был
+        // измерен по #101012 → 285.97°; labui-константа для чужой нейтрали была
+        // бы чужим подтоном — дефект агностичности, CodeRabbit р-3). `ratio` в
+        // v2-кривую не входит (поле v1 flat-пути), но валидируется как ручка.
+        let canonical_hue_deg = match self.neutral.tint.hue_override_deg {
+            Some(hue) => hue,
+            None => crate::accent::oklab_hue_of(&self.neutral.anchors.dark),
+        };
         let chroma = RoleChroma::Curve {
-            canonical_hue_deg: semantic::NEUTRAL_HUE_DEG,
+            canonical_hue_deg,
             target_mp: self.neutral.tint.target_mp,
             hue_stiffness: self.neutral.tint.hue_stiffness,
         };
@@ -1046,7 +1065,9 @@ impl ThemeConfig {
 // Эталонная фикстура labui.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Эталонный конфиг labui для CH-02 t1 — покрывает сегодняшние 20 эмитируемых ролей.
+/// Эталонный конфиг labui (CH-02 t1+t2) — 20 нейтральных ролей ядра (байт-в-байт
+/// с [`RoleTable::default`](crate::RoleTable)) плюс акцент/сентимент/FX/альфа-роли
+/// лестницы и алиасы — полное покрытие consumedRoles labui-контракта.
 ///
 /// Имена ролей = `Role::key()` сегодняшнего ядра; рецепты сняты 1:1 из
 /// [`RoleTable::default`](crate::RoleTable) (`semantic.rs`): текст-фракции с их
@@ -1292,6 +1313,9 @@ pub fn labui_reference() -> ThemeConfig {
                 ratio: semantic::NEUTRAL_TINT_RATIO,
                 target_mp: semantic::TINT_TARGET_MP,
                 hue_stiffness: semantic::TINT_HUE_STIFFNESS,
+                // Явный измеренный оттенок (SSOT NEUTRAL_HUE_DEG): labui несёт
+                // замер, деривация из тёмного якоря — путь клиентов без замера.
+                hue_override_deg: Some(semantic::NEUTRAL_HUE_DEG),
             },
         },
         // Палитра labui — 10 замеренных семейств, ПЕР-ТЕМНО ДОСЛОВНО из

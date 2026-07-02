@@ -382,7 +382,12 @@ mod tests {
             light_ic: "#D70015".to_string(),
             dark_ic: "#FF6161".to_string(),
         };
-        let tint = LadderTint::new(anchors.encoded_quad().unwrap()).unwrap();
+        let tint = LadderTint::new(
+            anchors
+                .encoded_quad()
+                .expect("захардкоженные hex теста валидны"),
+        )
+        .expect("byte/255 всегда в домене");
         for vc in [
             ViewingConditions::srgb(),
             ViewingConditions::dim_surround(),
