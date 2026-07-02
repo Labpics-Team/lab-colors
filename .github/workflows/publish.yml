@@ -1,0 +1,67 @@
+# Публикация @labpics/colors в npm по тегу colors-vX.Y.Z.
+#
+# БЕЗ ТОКЕНОВ: аутентификация — Trusted Publishing (OIDC): npm доверяет
+# именно этому workflow этого репозитория (настройка — страница пакета
+# npmjs.com → Settings → Trusted publishing; привязка включает environment
+# npm-publish — второй фактор доверия поверх имени workflow). Provenance
+# генерируется автоматически. Требования OIDC: npm ≥ 11.5.1, Node ≥ 22.14 —
+# Node 24 несёт npm 11.x из коробки.
+#
+# GitHub-hosted раннер НАМЕРЕННО: публикация исполняется по факту пуша тега,
+# а защита тегов на текущем плане недоступна — эфемерный раннер изолирует
+# сборку от внутреннего периметра (self-hosted раннер дал бы исполнение
+# кода тега в сети Labpics).
+#
+# Гард «версия пакета == тег» стоит ДО любых установок из сети: fail-fast
+# на расхождении, публикация «тег v0.2.0 / пакет 0.1.0» невозможна.
+name: publish
+
+on:
+  push:
+    tags: ["colors-v*"]
+
+env:
+  RUST_TOOLCHAIN: "1.96.0"
+
+permissions:
+  contents: read
+  id-token: write # OIDC для Trusted Publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: версия пакета == тег (fail-fast, до установок из сети)
+        working-directory: packages/colors
+        run: |
+          tag="${GITHUB_REF_NAME#colors-v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "тег colors-v$tag != package.json $version" >&2
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27 (у action нет релизных тегов; бамп сверять с историей master)
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+      - name: wasm-pack build (release)
+        # Тот же артефакт, что гейтится в ci.yml (panic=abort, wasm-opt -Oz).
+        run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: гейт перед публикацией — typecheck + runtime-тесты пакета
+        working-directory: packages/colors
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+      - name: npm publish (OIDC, без токена)
+        working-directory: packages/colors
+        run: npm publish

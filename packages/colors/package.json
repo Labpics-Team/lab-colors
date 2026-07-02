@@ -1,13 +1,16 @@
 {
   "name": "@labpics/colors",
   "version": "0.1.0",
-  "private": true,
   "description": "Framework-agnostic contrast engine: resolve accessible, perceptually-anchored colour roles for any background. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lemone112/lab-colors",
+    "url": "https://github.com/Labpics-Team/lab-colors",
     "directory": "packages/colors"
   },
   "exports": {
@@ -32,7 +35,6 @@
       "default": "./effective-bg.js"
     }
   },
-  "types": "./index.d.ts",
   "files": [
     "index.js",
     "index.d.ts",
@@ -49,7 +51,6 @@
     "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts"
   ],
-  "sideEffects": false,
   "scripts": {
     "//build": "wasm-pack resolves --out-dir relative to the CRATE dir (crates/labcolors-wasm), not the cwd, so the ../../packages path is correct and unambiguous regardless of where npm runs it.",
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors",
@@ -58,5 +59,7 @@
   },
   "devDependencies": {
     "typescript": "^5.5.0"
-  }
+  },
+  "types": "./index.d.ts",
+  "sideEffects": false
 }
