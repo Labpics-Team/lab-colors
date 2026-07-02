@@ -25,6 +25,14 @@ pub enum BindingError {
         reason: String,
     },
 
+    /// The config JSON was rejected: parse error, unknown menu item, or a
+    /// core validation/compile error (the full preflight message is carried).
+    #[error("invalid config: {reason}")]
+    InvalidConfig {
+        /// The parse/validation reason, verbatim.
+        reason: String,
+    },
+
     /// The theme string is not one of the public spellings.
     #[error("unknown theme: '{requested}' (expected light | dark | light-ic | dark-ic)")]
     UnknownTheme {
@@ -39,6 +47,7 @@ impl BindingError {
     pub fn code(&self) -> &'static str {
         match self {
             BindingError::InvalidBackground { .. } => "invalid_background",
+            BindingError::InvalidConfig { .. } => "invalid_config",
             BindingError::UnknownTheme { .. } => "unknown_theme",
         }
     }
@@ -52,12 +61,16 @@ mod tests {
     fn codes_are_stable_and_distinct() {
         let errors = [
             BindingError::InvalidBackground { reason: "x".into() },
+            BindingError::InvalidConfig { reason: "x".into() },
             BindingError::UnknownTheme {
                 requested: "x".into(),
             },
         ];
         let codes: Vec<_> = errors.iter().map(BindingError::code).collect();
-        assert_eq!(codes, ["invalid_background", "unknown_theme"]);
+        assert_eq!(
+            codes,
+            ["invalid_background", "invalid_config", "unknown_theme"]
+        );
         // Distinctness, asserted directly so the test earns its name: a future
         // variant must not reuse an existing code.
         let unique: std::collections::HashSet<_> = codes.iter().collect();

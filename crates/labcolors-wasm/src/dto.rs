@@ -26,8 +26,10 @@ pub struct ResolvedTheme {
 /// One role's outcome, keyed by its stable role key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoleEntry {
-    /// The stable role key from `Role::key()` — the CSS-variable stem.
-    pub role_key: &'static str,
+    /// The stable role key — the CSS-variable stem. Built-in roles use
+    /// `Role::key()`; config-defined roles carry the config's own name
+    /// (the string-keyed contract), so the key is owned.
+    pub role_key: String,
     /// What the role resolved to.
     pub outcome: RoleOutcome,
 }
@@ -40,6 +42,10 @@ pub enum RoleOutcome {
     Color(SolvedColor),
     /// The explicit zero token (`Role::None`): no colour here, by design.
     None,
+    /// A semi-transparent ladder / alpha-analog role: the emission is
+    /// `rgba(tint, alpha)` and the browser composites it; the measured
+    /// contrasts are those of the composite on the resolve background.
+    Rgba(RgbaColor),
     /// No colour can satisfy this role on this background, with the reason.
     Unreachable {
         /// A stable machine code for the unreachability reason.
@@ -47,6 +53,21 @@ pub enum RoleOutcome {
         /// A human-readable explanation (the core's `Display`).
         message: String,
     },
+}
+
+/// A semi-transparent emission and the contrasts its composite achieves.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RgbaColor {
+    /// The tint as `#RRGGBB` — the colour the CSS `rgba()` carries.
+    pub tint_hex: String,
+    /// The alpha the emission carries, `(0, 1]`.
+    pub alpha: f64,
+    /// The solid the tint composites to on the resolve background.
+    pub composite_hex: String,
+    /// The signed perceptual contrast `Lc` of the composite.
+    pub composite_lc: f64,
+    /// The WCAG 2.1 ratio of the composite.
+    pub composite_wcag: f64,
 }
 
 /// A resolved colour and the contrasts it actually achieves.

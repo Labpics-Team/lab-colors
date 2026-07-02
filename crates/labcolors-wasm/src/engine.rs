@@ -9,10 +9,15 @@
 
 use std::rc::Rc;
 
+use std::collections::HashMap;
+
+use labcolors_core::config::ThemeConfig;
+use labcolors_core::semantic::NamedRoleTable;
 use labcolors_core::{BgInput, Resolved, RoleTable, Solved, Unreachable};
 
 use crate::cache::{CacheKey, ContractCache, DEFAULT_TABLE_FINGERPRINT};
-use crate::dto::{ResolvedTheme, RoleEntry, RoleOutcome, SolvedColor};
+use crate::config_dto::{ConfigDto, fingerprint};
+use crate::dto::{ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
 use crate::error::BindingError;
 use crate::theme::Theme;
 
@@ -30,7 +35,18 @@ const CACHE_CAPACITY: usize = 4096;
 pub struct Engine {
     table: RoleTable,
     table_fingerprint: u64,
+    named: Option<NamedState>,
     cache: ContractCache<Rc<ResolvedTheme>>,
+}
+
+/// Загруженный конфиг потребителя: скомпилированная таблица + её отпечаток
+/// (компонент ключа кэша — два конфига не делят записи) + полы ролей,
+/// предвычисленные на загрузке (свойство контракта, не резолва; алиас несёт
+/// пол своей цели).
+struct NamedState {
+    table: NamedRoleTable,
+    fingerprint: u64,
+    floors: HashMap<String, Option<f64>>,
 }
 
 impl Default for Engine {
@@ -45,8 +61,48 @@ impl Engine {
         Self {
             table: RoleTable::default(),
             table_fingerprint: DEFAULT_TABLE_FINGERPRINT,
+            named: None,
             cache: ContractCache::new(CACHE_CAPACITY),
         }
+    }
+
+    /// Загрузить конфиг потребителя из JSON: полный preflight ядра
+    /// (validate = компиляция) + вычисленный отпечаток. После успешной
+    /// загрузки [`resolve_theme`](Self::resolve_theme) эмитит РОЛИ КОНФИГА
+    /// (string-keyed контракт) той же физикой; сигнатура resolve_theme
+    /// неизменна. Возвращает отпечаток — компонент ключа кэша: другой конфиг
+    /// даёт другой отпечаток, записи не делятся (нет кэш-коллизии).
+    ///
+    /// Ошибочный конфиг НЕ трогает текущее состояние: движок остаётся на
+    /// прежней таблице (загрузка атомарна).
+    pub fn load_config(&mut self, json: &str) -> Result<u64, BindingError> {
+        let dto: ConfigDto =
+            serde_json::from_str(json).map_err(|e| BindingError::InvalidConfig {
+                reason: e.to_string(),
+            })?;
+        let fp = fingerprint(&dto);
+        let cfg =
+            ThemeConfig::try_from(dto).map_err(|reason| BindingError::InvalidConfig { reason })?;
+        let table = cfg
+            .compile_named_role_table()
+            .map_err(|e| BindingError::InvalidConfig {
+                reason: e.to_string(),
+            })?;
+        let mut floors: HashMap<String, Option<f64>> = table
+            .entries()
+            .iter()
+            .map(|(name, spec)| (name.clone(), spec.legal_floor()))
+            .collect();
+        for (alias, target) in table.aliases() {
+            let floor = floors.get(target).copied().flatten();
+            floors.insert(alias.clone(), floor);
+        }
+        self.named = Some(NamedState {
+            table,
+            fingerprint: fp,
+            floors,
+        });
+        Ok(fp)
     }
 
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
@@ -67,13 +123,38 @@ impl Engine {
             reason: u.to_string(),
         })?;
 
+        // Конфиг загружен → эмитится ЕГО контракт (string-keyed) той же
+        // физикой; отпечаток в ключе разводит кэш-пространства конфигов.
+        if let Some(named) = &self.named {
+            let key = CacheKey::new(normalised.clone(), theme, named.fingerprint);
+            let result = self.cache.get_or_insert_with(key, || {
+                let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc);
+                let roles = set
+                    .into_iter()
+                    .map(|(name, resolved)| {
+                        let floor = named.floors.get(&name).copied().flatten();
+                        RoleEntry {
+                            role_key: name,
+                            outcome: map_resolved(resolved, floor),
+                        }
+                    })
+                    .collect();
+                Rc::new(ResolvedTheme {
+                    theme: theme.key(),
+                    background: normalised.clone(),
+                    roles,
+                })
+            });
+            return Ok(result);
+        }
+
         let key = CacheKey::new(normalised.clone(), theme, self.table_fingerprint);
         let result = self.cache.get_or_insert_with(key, || {
             let set = labcolors_core::resolve_set(&bg, &self.table, &vc);
             let roles = set
                 .into_iter()
                 .map(|(role, resolved)| RoleEntry {
-                    role_key: role.key(),
+                    role_key: role.key().to_string(),
                     outcome: map_resolved(resolved, self.table.legal_floor(role)),
                 })
                 .collect();
@@ -136,18 +217,16 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             code: unreachable_code(&reason),
             message: reason.to_string(),
         },
-        // Полупрозрачные роли лестницы/альфа-аналога появляются только на
-        // конфиг-пути (`resolve_named_set`), который ЭТА поверхность ещё не
-        // экспортирует: `resolve_theme` идёт по встроенной `RoleTable`, где
-        // Ladder/AlphaAnalog-рецептов нет, поэтому вариант здесь недостижим.
-        // rgba-форма границы WASM ещё не экспортирована; до неё маппим в стабильный код,
-        // а не молчаливо роняем неверный цвет (`Resolved` теперь non_exhaustive).
-        Resolved::Rgba(_) => RoleOutcome::Unreachable {
-            code: "rgba_boundary_not_yet_exported",
-            message: "semi-transparent ladder/alpha-analog role is not exported by resolve_theme \
-                      (solid-only surface)"
-                .to_string(),
-        },
+        // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
+        // наружу уходит rgba(tint, α), браузер композитит; контраст — свойство
+        // композита на фоне резолва (закон лестницы ядра).
+        Resolved::Rgba(rgba) => RoleOutcome::Rgba(RgbaColor {
+            tint_hex: rgba.tint_hex().to_string(),
+            alpha: rgba.alpha(),
+            composite_hex: rgba.composite_hex().to_string(),
+            composite_lc: rgba.composite_lc(),
+            composite_wcag: rgba.composite_wcag(),
+        }),
         // ОСОЗНАННЫЙ ДОЛГ: `Resolved` — `#[non_exhaustive]`, поэтому catch-all
         // обязателен для будущих вариантов ядра. Пока маппит в стабильный код,
         // а не молча роняет неверный цвет; при экспорте rgba-границы каждый
@@ -252,7 +331,7 @@ mod tests {
         // Generic over the role set: at least the v1 roles are present, each
         // keyed by Role::key(). We assert the keys exist, not their count, so
         // issue #59's growth does not break this test.
-        let keys: Vec<_> = result.roles.iter().map(|r| r.role_key).collect();
+        let keys: Vec<_> = result.roles.iter().map(|r| r.role_key.as_str()).collect();
         assert!(keys.contains(&"label-primary"));
         assert!(keys.contains(&"none"));
     }
@@ -465,7 +544,7 @@ mod tests {
             let mut seen = std::collections::HashSet::new();
             for entry in &result.roles {
                 assert!(
-                    seen.insert(entry.role_key),
+                    seen.insert(entry.role_key.as_str()),
                     "{bg}: duplicate role_key {}",
                     entry.role_key
                 );
@@ -476,6 +555,18 @@ mod tests {
                     entry.role_key
                 );
                 match &entry.outcome {
+                    RoleOutcome::Rgba(r) => {
+                        assert!(
+                            r.tint_hex.starts_with('#') && r.composite_hex.starts_with('#'),
+                            "{bg} {}: rgba-эмиссия несёт hex-тинт и hex-композит",
+                            entry.role_key
+                        );
+                        assert!(
+                            r.alpha > 0.0 && r.alpha <= 1.0,
+                            "{bg} {}: α в (0,1]",
+                            entry.role_key
+                        );
+                    }
                     RoleOutcome::Color(c) => {
                         assert!(
                             c.hex.starts_with('#'),

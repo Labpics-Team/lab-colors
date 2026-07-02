@@ -15,6 +15,7 @@
 //! a vanilla helper for that lives in the npm package, not in the WASM core.
 
 mod cache;
+mod config_dto;
 mod dto;
 mod engine;
 mod error;
@@ -133,6 +134,19 @@ impl LabColors {
         Ok(project_resolved(&resolved).unchecked_into())
     }
 
+    /// Загрузить конфиг дизайн-системы (JSON по типу `ThemeConfig` из `.d.ts`).
+    ///
+    /// Полный preflight движка: невалидный конфиг отклоняется структурной
+    /// ошибкой `invalid_config: …` и НЕ меняет состояние. После успешной
+    /// загрузки `resolveTheme` эмитит роли конфига (включая полупрозрачные
+    /// `rgba`-роли лестницы). Возвращает отпечаток конфига — 16 hex-символов;
+    /// разные конфиги дают разные отпечатки (и разные кэш-пространства).
+    #[wasm_bindgen(js_name = loadConfig)]
+    pub fn load_config(&mut self, json: &str) -> Result<String, JsError> {
+        let fp = self.inner.load_config(json).map_err(to_js_error)?;
+        Ok(format!("{fp:016x}"))
+    }
+
     /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
     /// the cheap per-frame primitive a reactive runtime uses to decide whether
     /// already-resolved colours still pass against a changed background (re-solve
@@ -215,6 +229,26 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                 );
                 set(&vars, &css_var, &JsValue::from_str(&c.hex));
             }
+            RoleOutcome::Rgba(r) => {
+                set(&role_obj, "kind", &JsValue::from_str("rgba"));
+                set(&role_obj, "tintHex", &JsValue::from_str(&r.tint_hex));
+                set(&role_obj, "alpha", &JsValue::from_f64(r.alpha));
+                set(
+                    &role_obj,
+                    "compositeHex",
+                    &JsValue::from_str(&r.composite_hex),
+                );
+                set(&role_obj, "compositeLc", &JsValue::from_f64(r.composite_lc));
+                set(
+                    &role_obj,
+                    "compositeWcag",
+                    &JsValue::from_f64(r.composite_wcag),
+                );
+                // Эмиссия — rgba(): переменная несёт то, что скомпозитит браузер.
+                let css = rgba_css(&r.tint_hex, r.alpha);
+                set(&role_obj, "css", &JsValue::from_str(&css));
+                set(&vars, &css_var, &JsValue::from_str(&css));
+            }
             RoleOutcome::None => {
                 set(&role_obj, "kind", &JsValue::from_str("none"));
             }
@@ -224,11 +258,19 @@ fn project_resolved(resolved: &ResolvedTheme) -> JsValue {
                 set(&role_obj, "message", &JsValue::from_str(message));
             }
         }
-        set(&roles, entry.role_key, &role_obj);
+        set(&roles, &entry.role_key, &role_obj);
     }
     set(&out, "vars", &vars);
     set(&out, "roles", &roles);
     out.into()
+}
+
+/// CSS-эмиссия полупрозрачной роли: современный синтаксис `rgb(R G B / A)` —
+/// тот же формат, что стаб labui; браузер композитит на живой подложке.
+fn rgba_css(tint_hex: &str, alpha: f64) -> String {
+    let hex = tint_hex.trim_start_matches('#');
+    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+    format!("rgb({} {} {} / {})", ch(0), ch(2), ch(4), alpha)
 }
 
 /// Set a property on a JS object. `Reflect::set` on a freshly created `Object`
