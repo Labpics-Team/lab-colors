@@ -1225,7 +1225,6 @@ pub fn labui_reference() -> ThemeConfig {
     // = контракт label-primary. Рецепты собраны так, чтобы имя роли совпадало с
     // Role::key(), а RoleSpec был идентичен дефолтному.
     let text = |fraction, floor| RoleRecipe::TextAnchor { fraction, floor };
-    let lc = |magnitude| RoleRecipe::DecorativeLc { magnitude };
     // Конструктор нейтрального источника (стаб: `Neutral/Derivable` тинтуется
     // краями нейтральной шкалы, НЕ семейством палитры).
     let neutral_pos = |pick, position| RoleRecipe::Ladder {
@@ -1251,12 +1250,14 @@ pub fn labui_reference() -> ThemeConfig {
         ("label-quaternary".to_string(), text(0.276, Floor::None)),
         // Icon.
         ("icon".to_string(), text(0.461, Floor::AaUi)),
-        // Separator — Lc decorative.
-        ("separator".to_string(), lc(8.0)),
-        // Border ladder. Strong = label-primary контракт; base/soft — лестница
-        // от нейтрали: полупрозрачный mid-тинт ложится на ЛЮБУЮ поверхность
-        // (композитит браузер), пер-темные пары альф — данные позиций.
-        ("border-strong".to_string(), text(0.968, Floor::AaText)),
+        // Сепаратора в словаре НЕТ: бордер и сепаратор — единое целое (так
+        // задумано в Figma), компонент-сепаратор применяет бордер-токен.
+        // Border ladder. Strong — РАЗЛИЧИМОСТЬ, не читаемость: та же доля
+        // контраста, что у label-primary, но пол non-text 3:1 (WCAG 1.4.11 для
+        // границ контролов) вместо текстового 4.5:1 — бордер не обязан читаться.
+        // base/soft — лестница от нейтрали: полупрозрачный mid-тинт ложится на
+        // ЛЮБУЮ поверхность (композитит браузер), пер-темные пары альф — данные.
+        ("border-strong".to_string(), text(0.968, Floor::AaUi)),
         (
             "border-base".to_string(),
             neutral_pos(NeutralPick::Mid, LadderPosition::NeutralBorderBase),
@@ -1286,17 +1287,25 @@ pub fn labui_reference() -> ThemeConfig {
             neutral_pos(NeutralPick::Mid, LadderPosition::NeutralFillQuaternary),
         ),
         ("fill-none".to_string(), RoleRecipe::Zero),
-        // Shadow stack — Lc.
-        ("shadow-minor".to_string(), lc(semantic::SHADOW_MINOR_JND)),
+        // Тени — rgba by design (солид над картинкой/стеклом закрывал бы контент
+        // пятном): тёмный якорь нейтрали в ОБЕИХ темах × пер-темная пара альф
+        // ступени. Имена = стаб-контракт fx-shadow-*.
         (
-            "shadow-ambient".to_string(),
-            lc(semantic::SHADOW_AMBIENT_JND),
+            "fx-shadow-minor".to_string(),
+            neutral_pos(NeutralPick::Dark, LadderPosition::ShadowMinor),
         ),
         (
-            "shadow-penumbra".to_string(),
-            lc(semantic::SHADOW_PENUMBRA_JND),
+            "fx-shadow-ambient".to_string(),
+            neutral_pos(NeutralPick::Dark, LadderPosition::ShadowAmbient),
         ),
-        ("shadow-major".to_string(), lc(semantic::SHADOW_MAJOR_JND)),
+        (
+            "fx-shadow-penumbra".to_string(),
+            neutral_pos(NeutralPick::Dark, LadderPosition::ShadowPenumbra),
+        ),
+        (
+            "fx-shadow-major".to_string(),
+            neutral_pos(NeutralPick::Dark, LadderPosition::ShadowMajor),
+        ),
         // Универсальный ноль.
         ("none".to_string(), RoleRecipe::Zero),
     ];
@@ -1382,10 +1391,9 @@ pub fn labui_reference() -> ThemeConfig {
     ));
     // Skeleton — нейтральный тинт #787880 (стаб rgb(120 120 128 / …)), ПЕР-ТЕМНАЯ
     // альфа: base light @8 / dark @12, highlight @4. Источник = Neutral(Mid).
-    roles.push((
-        "fx-skeleton-base".to_string(),
-        neutral_pos(NeutralPick::Mid, LadderPosition::SkeletonBase),
-    ));
+    // Skeleton-base НАСЛЕДУЕТ fill-quaternary (алиас, см. aliases ниже):
+    // четверичная заливка = disabled-уровень, скелетон = будущая форма — то же
+    // семейство слабых заливок, отдельной позиции не заслуживает.
     roles.push((
         "fx-skeleton-highlight".to_string(),
         neutral_pos(NeutralPick::Mid, LadderPosition::SkeletonHighlight),
@@ -1527,6 +1535,10 @@ pub fn labui_reference() -> ThemeConfig {
                 "fill-primary".to_string(),
             ),
             ("border-neutral".to_string(), "border-base".to_string()),
+            (
+                "fx-skeleton-base".to_string(),
+                "fill-quaternary".to_string(),
+            ),
         ],
     }
 }

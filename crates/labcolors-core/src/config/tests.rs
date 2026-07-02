@@ -65,13 +65,23 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
     // полупрозрачность обязана ложиться на любую поверхность, солвер-солид
     // её терял; их значенческая истина — сверка со стабом
     // (representative_roles_match_stub_values_light_and_dark).
-    const LADDER_MIGRATED: [&str; 6] = [
+    // Плюс роли, покинувшие паспорт по закону семантики: separator — токена
+    // нет (бордер и сепаратор едины, компонент применяет бордер), shadow-* —
+    // rgba-лестница под стаб-именами fx-shadow-* (солид над контентом был бы
+    // грязью), border-strong — пол различимости AaUi (зеркалится: дефолт-таблица
+    // несёт тот же пол).
+    const LADDER_MIGRATED: [&str; 11] = [
         "fill-primary",
         "fill-secondary",
         "fill-tertiary",
         "fill-quaternary",
         "border-base",
         "border-soft",
+        "separator",
+        "shadow-minor",
+        "shadow-ambient",
+        "shadow-penumbra",
+        "shadow-major",
     ];
     let core_keys: Vec<&'static str> = Role::ALL
         .iter()
@@ -113,10 +123,11 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
             }
         }
     }
-    // 14 солвер-ролей (20 − 6 лестничных) × 2 VC × 6 фонов = 168.
+    // 9 солвер-ролей (20 − 6 лестничных − separator − 4 теней, ушедших из
+    // паспорта по закону семантики) × 2 VC × 6 фонов = 108.
     assert_eq!(
-        compared, 168,
-        "должно сравниться ровно 168 солвер-точек (пин не вакуумный)"
+        compared, 108,
+        "должно сравниться ровно 108 солвер-точек (пин не вакуумный)"
     );
 }
 
@@ -288,10 +299,10 @@ fn dj_anchor_bound_red_proof() {
 
 #[test]
 fn decorative_lc_non_positive_is_rejected() {
-    let cfg = with_role_recipe("shadow-minor", RoleRecipe::DecorativeLc { magnitude: 0.0 });
+    let cfg = with_role_recipe("icon", RoleRecipe::DecorativeLc { magnitude: 0.0 });
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.shadow-minor.magnitude"
+        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.icon.magnitude"
     ));
 }
 
@@ -667,11 +678,11 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "fx-glow-inverted",
     "fx-skeleton-base",
     "fx-skeleton-highlight",
-    // FX shadow — эмитятся как shadow-* (labui читает как fx-shadow-* через alias).
-    "shadow-minor",
-    "shadow-ambient",
-    "shadow-penumbra",
-    "shadow-major",
+    // FX shadow — rgba-лестница тёмного якоря под стаб-именами.
+    "fx-shadow-minor",
+    "fx-shadow-ambient",
+    "fx-shadow-penumbra",
+    "fx-shadow-major",
     // Component.
     "fill-accent",
     "fill-neutral",
@@ -685,9 +696,9 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "border-neutral",
     "border-danger",
     "border-focus",
-    // Прочие эмитируемые нейтральные (icon/separator/none — core).
+    // Прочие эмитируемые нейтральные (icon/none — core; separator НЕ токен:
+    // бордер и сепаратор едины, компонент применяет бордер-токен).
     "icon",
-    "separator",
     "none",
 ];
 
@@ -1261,17 +1272,25 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(120 120 128 / 0.078)",
             "rgb(120 120 128 / 0.122)",
         ),
-        // Нейтральные: skeleton #787880 с ПЕР-ТЕМНОЙ альфой (base @8/@12), glow-neutral белый @52.
-        (
-            "fx-skeleton-base",
-            "rgb(120 120 128 / 0.078)",
-            "rgb(120 120 128 / 0.122)",
-        ),
+        // Нейтральные: skeleton highlight #787880 @4; base — алиас
+        // fill-quaternary (наследование слабых заливок: четверичная заливка =
+        // disabled-уровень, скелетон = будущая форма), эмиссию алиаса
+        // проверяет граница. glow-neutral белый @52.
         (
             "fx-skeleton-highlight",
             "rgb(120 120 128 / 0.039)",
             "rgb(120 120 128 / 0.039)",
         ),
+        // Тени: тёмный якорь нейтрали (#101012) в ОБЕИХ темах, rgba by design —
+        // солид над картинкой/стеклом закрывал бы контент пятном.
+        ("fx-shadow-minor", "rgb(16 16 18 / 0.012)", "rgb(16 16 18 / 0.02)"),
+        ("fx-shadow-ambient", "rgb(16 16 18 / 0.02)", "rgb(16 16 18 / 0.039)"),
+        (
+            "fx-shadow-penumbra",
+            "rgb(16 16 18 / 0.039)",
+            "rgb(16 16 18 / 0.122)",
+        ),
+        ("fx-shadow-major", "rgb(16 16 18 / 0.122)", "rgb(16 16 18 / 0.2)"),
         (
             "fx-glow-neutral",
             "rgb(255 255 255 / 0.522)",
@@ -1289,28 +1308,32 @@ fn representative_roles_match_stub_values_light_and_dark() {
     }
 }
 
-/// RED-proof значенческого теста: мутация ОДНОЙ альфы (skeleton-base dark @12→@2)
-/// роняет сверку — тест кусается, не green-from-birth.
+/// RED-proof значенческого теста: мутация ОДНОЙ альфы (skeleton-highlight
+/// @4 → NeutralFillPrimary @36 на тёмной) роняет сверку — тест кусается,
+/// не green-from-birth.
 #[test]
 fn value_test_bites_on_alpha_mutation() {
     let mut cfg = labui_reference();
     for (name, recipe) in &mut cfg.roles {
-        if name == "fx-skeleton-base" {
-            // Подменяем позицию на FillQuaternary (@2) — dark-альфа уедет с @12 на @2.
+        if name == "fx-skeleton-highlight" {
             *recipe = RoleRecipe::Ladder {
                 source: LadderSource::Neutral(crate::config::NeutralPick::Mid),
-                position: LadderPosition::FillQuaternary,
+                position: LadderPosition::NeutralFillPrimary,
             };
         }
     }
     let table = cfg.compile_named_role_table().unwrap();
     let bg_dark = BgInput::solid("#101012").unwrap();
     let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
-    let (got_rgb, got_alpha) =
-        rgba_to_parts(&set.iter().find(|(n, _)| n == "fx-skeleton-base").unwrap().1);
+    let (got_rgb, got_alpha) = rgba_to_parts(
+        &set.iter()
+            .find(|(n, _)| n == "fx-skeleton-highlight")
+            .unwrap()
+            .1,
+    );
     assert_eq!(got_rgb, "rgb(120 120 128)", "мутация двигает ТОЛЬКО альфу");
     assert!(
-        (got_alpha - 0.122).abs() > 1e-9,
+        (got_alpha - 0.039).abs() > 1e-9,
         "RED-proof значенческого теста провален: мутация альфы НЕ сдвинула эмиссию"
     );
 }

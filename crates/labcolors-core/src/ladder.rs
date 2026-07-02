@@ -198,11 +198,19 @@ pub enum LadderPosition {
     NeutralBorderBase,
     /// Нейтральная граница мягкая — `@8`/`@12`.
     NeutralBorderSoft,
+    /// Тень минимальная — `@1.2`/`@2`.
+    ShadowMinor,
+    /// Тень рассеянная — `@2`/`@4`.
+    ShadowAmbient,
+    /// Тень полутеневая — `@4`/`@12`.
+    ShadowPenumbra,
+    /// Тень основная — `@12`/`@20`.
+    ShadowMajor,
 }
 
 impl LadderPosition {
     /// Все позиции меню — поверхность для property-свипов и генерации ролей.
-    pub const ALL: [LadderPosition; 21] = [
+    pub const ALL: [LadderPosition; 25] = [
         LadderPosition::LabelPrimary,
         LadderPosition::LabelSecondary,
         LadderPosition::LabelTertiary,
@@ -224,6 +232,10 @@ impl LadderPosition {
         LadderPosition::NeutralFillQuaternary,
         LadderPosition::NeutralBorderBase,
         LadderPosition::NeutralBorderSoft,
+        LadderPosition::ShadowMinor,
+        LadderPosition::ShadowAmbient,
+        LadderPosition::ShadowPenumbra,
+        LadderPosition::ShadowMajor,
     ];
 
     /// Пер-темная пара альф `(light, dark)` позиции — ДАННЫЕ, снятые построчно из
@@ -266,6 +278,15 @@ impl LadderPosition {
             LadderPosition::NeutralFillQuaternary => (0.078, 0.161),
             LadderPosition::NeutralBorderBase => (0.161, 0.2),
             LadderPosition::NeutralBorderSoft => (0.078, 0.122),
+            // Тени — rgba by design: солид над картинкой/стеклом закрывал бы
+            // контент пятном вместо пропорционального затемнения. Пары —
+            // данные стаба; вывод контрактом вырожден на тёмной базе
+            // (тинт ≈ фон ⇒ dJ = 0 при любой α) — научная подзадача
+            // «противоположная сторона тени» (поднятая поверхность).
+            LadderPosition::ShadowMinor => (0.012, 0.02),
+            LadderPosition::ShadowAmbient => (0.02, 0.039),
+            LadderPosition::ShadowPenumbra => (0.039, 0.122),
+            LadderPosition::ShadowMajor => (0.122, 0.2),
         }
     }
 
@@ -304,6 +325,10 @@ impl LadderPosition {
             LadderPosition::NeutralFillQuaternary => "neutral-fill-quaternary",
             LadderPosition::NeutralBorderBase => "neutral-border-base",
             LadderPosition::NeutralBorderSoft => "neutral-border-soft",
+            LadderPosition::ShadowMinor => "shadow-minor",
+            LadderPosition::ShadowAmbient => "shadow-ambient",
+            LadderPosition::ShadowPenumbra => "shadow-penumbra",
+            LadderPosition::ShadowMajor => "shadow-major",
         }
     }
 }
@@ -397,6 +422,14 @@ mod tests {
                 (0.078, 0.122),
                 "neutral-border-soft",
             ),
+            (LadderPosition::ShadowMinor, (0.012, 0.02), "shadow-minor"),
+            (LadderPosition::ShadowAmbient, (0.02, 0.039), "shadow-ambient"),
+            (
+                LadderPosition::ShadowPenumbra,
+                (0.039, 0.122),
+                "shadow-penumbra",
+            ),
+            (LadderPosition::ShadowMajor, (0.122, 0.2), "shadow-major"),
         ];
         for (pos, pair, key) in expected {
             assert_eq!(
