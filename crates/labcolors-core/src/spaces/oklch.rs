@@ -49,11 +49,13 @@ pub fn oklch_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, Strin
     let base = format!("oklch({:.5}% {:.6} {:.3}", l * 100.0, c, h);
     Ok(match alpha {
         Some(a) => {
-            // Не-конечная альфа — честная ошибка (NaN в CSS невалиден);
-            // конечный вычислительный шум за краями [0, 1] — кламп (легитимен
-            // у выведенных альф), заодо гасит артефакт "-0".
-            if !a.is_finite() {
-                return Err(format!("альфа не конечна: {a}"));
+            // Кламп — только для вычислительного шума в пределах эпсилона от
+            // [0, 1] (легитимен у выведенных альф; заодно гасит артефакт "-0").
+            // Всё остальное — честная ошибка, не тихая подмена: NaN в CSS
+            // невалиден, а альфа -10 или 2 — дефект вызывающего кода.
+            const ALPHA_NOISE: f64 = 1e-6;
+            if !a.is_finite() || !(-ALPHA_NOISE..=1.0 + ALPHA_NOISE).contains(&a) {
+                return Err(format!("альфа вне [0, 1]: {a}"));
             }
             let a4 = format!("{:.4}", a.clamp(0.0, 1.0));
             let a4 = a4.trim_end_matches('0').trim_end_matches('.');
@@ -83,13 +85,18 @@ mod tests {
             .and_then(|s| s.strip_suffix(')'))
             .expect("форма oklch(...)");
         let (lch, alpha) = match inner.split_once(" / ") {
-            Some((lch, a)) => (lch, Some(a.parse::<f64>().unwrap())),
+            Some((lch, a)) => (lch, Some(a.parse::<f64>().expect("альфа — число"))),
             None => (inner, None),
         };
         let parts: Vec<f64> = lch
             .split_whitespace()
-            .map(|p| p.trim_end_matches('%').parse::<f64>().unwrap())
+            .map(|p| {
+                p.trim_end_matches('%')
+                    .parse::<f64>()
+                    .unwrap_or_else(|_| panic!("компонента не число: {p} в {css}"))
+            })
             .collect();
+        assert_eq!(parts.len(), 3, "ровно L C H: {css}");
         (hex_from_oklch(parts[0] / 100.0, parts[1], parts[2]), alpha)
     }
 
@@ -134,6 +141,9 @@ mod tests {
     fn alpha_guard_rejects_nan_and_clamps_noise() {
         assert!(oklch_css_from_hex("#101012", Some(f64::NAN)).is_err());
         assert!(oklch_css_from_hex("#101012", Some(f64::INFINITY)).is_err());
+        // Грубо невалидная альфа — дефект вызывающего, не шум: ошибка, не кламп.
+        assert!(oklch_css_from_hex("#101012", Some(-10.0)).is_err());
+        assert!(oklch_css_from_hex("#101012", Some(2.0)).is_err());
         // Знаковый ноль H не просачивается в печать.
         assert!(
             !oklch_css_from_hex("#FFFFFF", None).unwrap().contains("-0."),

@@ -208,8 +208,10 @@ impl LabColors {
     ///
     /// Returns a [`ResolvedTheme`] object. Per-role unreachability is part of a
     /// successful result (each role carries its own `kind`); only whole-call
-    /// failures (invalid hex, unknown theme) reject — as a
-    /// structured `{ code, message }` error, never an unwound panic.
+    /// failures reject (invalid hex, unknown theme, and the
+    /// by-construction-unreachable oklch serialisation failure as
+    /// `internal_error`) — as a structured `"<code>: <message>"` error,
+    /// never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
         let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;

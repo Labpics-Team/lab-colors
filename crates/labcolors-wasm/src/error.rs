@@ -76,11 +76,17 @@ mod tests {
             BindingError::UnknownTheme {
                 requested: "x".into(),
             },
+            BindingError::Internal { reason: "x".into() },
         ];
         let codes: Vec<_> = errors.iter().map(BindingError::code).collect();
         assert_eq!(
             codes,
-            ["invalid_background", "invalid_config", "unknown_theme"]
+            [
+                "invalid_background",
+                "invalid_config",
+                "unknown_theme",
+                "internal_error"
+            ]
         );
         // Distinctness, asserted directly so the test earns its name: a future
         // variant must not reuse an existing code.
