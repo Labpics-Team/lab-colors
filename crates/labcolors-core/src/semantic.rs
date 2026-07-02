@@ -512,9 +512,9 @@ pub enum RoleSpec {
     /// variant carries; `surface-jnd` derives shadow contracts from the alphas.
     Decorative { magnitude: f64 },
     /// Ступень лестницы акцента/сентимента/бренда/нейтрали: тинт-якорь источника
-    /// (по теме) при альфе позиции. Эмитит `rgba(tint, α)` НАПРЯМУЮ (закон
+    /// (по теме) при альфе позиции. Эмитит пару (тинт, α) НАПРЯМУЮ (закон
     /// лестницы labui — композитит браузер, а не солид-эквивалент, см.
-    /// [`crate::ladder`]). Резолв — [`Resolved::Rgba`]: несёт тинт (то, что
+    /// [`crate::ladder`]). Резолв — [`Resolved::Translucent`]: несёт тинт (то, что
     /// красит `--lab-*`), альфу и солид-композит `α·tint + (1−α)·bg` на фоне
     /// резолва для честного замера контраста (фаза 1 AA меряет композит).
     ///
@@ -1119,7 +1119,7 @@ pub enum Resolved {
     /// Полупрозрачная роль лестницы/альфа-аналога: `rgba(tint, α)`, которую
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
     /// Несёт солид-композит на фоне резолва для честного замера контраста.
-    Rgba(RgbaResolved),
+    Translucent(TranslucentResolved),
     /// The honest zero of the [`Role::None`] token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
@@ -1132,13 +1132,13 @@ pub enum Resolved {
 /// Потребитель красит `--lab-{role}: rgba(tint, α)` — браузер композитит на
 /// фактической подложке. `composite` — то, во что этот rgba складывается на
 /// ФОНЕ РЕЗОЛВА (`α·tint + (1−α)·bg`, кодированный sRGB — device-пространство
-/// Figma/браузера); его контраст ([`RgbaResolved::composite_lc`],
-/// [`composite_wcag`](RgbaResolved::composite_wcag)) — то, что фаза 1 AA меряет
+/// Figma/браузера); его контраст ([`TranslucentResolved::composite_lc`],
+/// [`composite_wcag`](TranslucentResolved::composite_wcag)) — то, что фаза 1 AA меряет
 /// (контраст полупрозрачной роли определён её композитом, не тинтом). На ином
 /// фоне композит другой — это и есть смысл альфы; гарантия сформулирована для
 /// фона резолва.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RgbaResolved {
+pub struct TranslucentResolved {
     /// Тинт `#RRGGBB` — цвет, эмитируемый как `rgba(tint, α)` (без учёта α).
     tint_hex: String,
     /// Фактическая α `(0, 1]` — запрошенная, если разрешима, иначе поднятая до
@@ -1152,7 +1152,7 @@ pub struct RgbaResolved {
     composite_wcag: f64,
 }
 
-impl RgbaResolved {
+impl TranslucentResolved {
     /// Тинт `#RRGGBB` — красится как `rgba(tint, α)`.
     pub fn tint_hex(&self) -> &str {
         &self.tint_hex
@@ -1212,22 +1212,22 @@ impl Resolved {
 
     /// The signed perceptual contrast `Lc` of a resolved colour, if any. The
     /// zero token reports `0.0`; an unreachable role reports `None`; a
-    /// [`Rgba`](Resolved::Rgba) role reports its **composite's** `Lc` (a
+    /// [`Translucent`](Resolved::Translucent) role reports its **composite's** `Lc` (a
     /// semi-transparent role's contrast is that of its composite, not its tint).
     pub fn lc(&self) -> Option<f64> {
         match self {
             Resolved::Color { solved, .. } => Some(solved.lc()),
-            Resolved::Rgba(r) => Some(r.composite_lc),
+            Resolved::Translucent(r) => Some(r.composite_lc),
             Resolved::None => Some(0.0),
             Resolved::Unreachable(_) => Option::None,
         }
     }
 
-    /// The `(tint, α)` of a semi-transparent [`Rgba`](Resolved::Rgba) role, if this
+    /// The `(tint, α)` of a semi-transparent [`Translucent`](Resolved::Translucent) role, if this
     /// resolved to one. `None` for solved-colour / zero / unreachable roles.
-    pub fn rgba(&self) -> Option<&RgbaResolved> {
+    pub fn translucent(&self) -> Option<&TranslucentResolved> {
         match self {
-            Resolved::Rgba(r) => Some(r),
+            Resolved::Translucent(r) => Some(r),
             _ => Option::None,
         }
     }
@@ -1502,12 +1502,12 @@ fn resolve_rgba_inverted(
     finish_rgba(tint_q, analog.alpha, composite, bg_encoded, vc)
 }
 
-/// Собрать [`Resolved::Rgba`] из тинта, альфы и композита: квантовать тинт и
+/// Собрать [`Resolved::Translucent`] из тинта, альфы и композита: квантовать тинт и
 /// композит до hex, замерить контраст композита против фона резолва.
 ///
 /// Контраст меряется в тех же метриках, что и у солид-роли: перцептивный `Lc`
 /// на линейном свете ([`measure_contrast`]) и WCAG на кодированном дисплее — так
-/// rgba-роль сопоставима с solved-ролью на фазе 1 AA.
+/// полупрозрачная роль сопоставима с solved-ролью на фазе 1 AA.
 fn finish_rgba(
     tint_encoded: [f64; 3],
     alpha: f64,
@@ -1534,7 +1534,7 @@ fn finish_rgba(
     let bg_linear = decode(bg_encoded);
     let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
     let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
-    Resolved::Rgba(RgbaResolved {
+    Resolved::Translucent(TranslucentResolved {
         tint_hex: hex_from_srgb_encoded(tint_encoded),
         alpha,
         composite_hex,
@@ -3115,10 +3115,10 @@ mod tests {
                     }
                     Resolved::None => matches!(table.spec(*role), RoleSpec::Zero),
                     // Дефолтная таблица не несёт Ladder/AlphaAnalog — появление
-                    // Rgba здесь означало бы дрейф default() и обязано падать
+                    // Translucent здесь означало бы дрейф default() и обязано падать
                     // шумно, а не маскироваться под «не клип».
-                    Resolved::Rgba(_) => panic!(
-                        "{bg_hex}: RoleTable::default() отдал Rgba для {:?} — дрейф дефолт-таблицы",
+                    Resolved::Translucent(_) => panic!(
+                        "{bg_hex}: RoleTable::default() отдал Translucent для {:?} — дрейф дефолт-таблицы",
                         role
                     ),
                     Resolved::Unreachable(_) => true,
@@ -4036,7 +4036,7 @@ mod tests {
                     let got = match res {
                         Resolved::Color { solved, .. } => solved.hex().to_string(),
                         // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо.
-                        Resolved::Rgba(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+                        Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                         Resolved::None => "none".to_string(),
                         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
                     };

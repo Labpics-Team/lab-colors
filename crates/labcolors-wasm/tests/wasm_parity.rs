@@ -81,7 +81,7 @@ fn resolve_theme_matches_native_resolve_set() {
             Resolved::Unreachable(_) => {
                 assert_eq!(kind, "unreachable", "{} should be unreachable", role.key());
             }
-            // Rgba в дефолт-таблице не встречается (rgba-граница WASM — открытый долг);
+            // Translucent в дефолт-таблице не встречается (полупрозрачная граница уже открыта конфиг-путём);
             // будущий вариант обязан быть переучтён здесь шумно, не замаскирован.
             other => panic!(
                 "неучтённый Resolved-вариант в wasm-парити ({}): {other:?}",
@@ -92,9 +92,9 @@ fn resolve_theme_matches_native_resolve_set() {
 }
 
 /// Reachable roles are mirrored into `vars` under their `--lab-` CSS name, and
-/// the hex there equals the role's hex — the contract css-injection consumes.
+/// the value there equals the role's css (oklch) — what css-injection consumes.
 #[wasm_bindgen_test]
-fn vars_mirror_reachable_role_hexes() {
+fn vars_mirror_reachable_roles_in_oklch() {
     let engine = LabColors::new();
     let result: JsValue = engine
         .resolve_theme("#FFFFFF", "light")
@@ -103,13 +103,33 @@ fn vars_mirror_reachable_role_hexes() {
     let vars = get_obj(&result, "vars");
     let roles = get_obj(&result, "roles");
 
-    // label-primary is reachable on white; its var must equal its role hex.
+    // label-primary is reachable on white; its var must equal the role's css
+    // and carry the ONE emission form — oklch (hex stays a data field).
     let tp = get_obj(&roles, "label-primary");
-    let tp_hex = get_str(&tp, "hex").expect("primary is a colour");
+    let tp_css = get_str(&tp, "css").expect("primary carries css");
     assert_eq!(
         get_str(&vars, "--lab-label-primary"),
-        Some(tp_hex),
-        "vars must mirror the role hex under the --lab- name"
+        Some(tp_css.clone()),
+        "vars must mirror the role css under the --lab- name"
+    );
+    // Строгая форма: ровно три компоненты, процент ТОЛЬКО у L, без альфы.
+    let inner = tp_css
+        .strip_prefix("oklch(")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("solid css must be oklch(...), got {tp_css}"));
+    let parts: Vec<&str> = inner.split_whitespace().collect();
+    assert_eq!(parts.len(), 3, "solid oklch has exactly L C H: {tp_css}");
+    assert!(
+        parts[0].ends_with('%') && parts[0].trim_end_matches('%').parse::<f64>().is_ok(),
+        "L is a percentage: {tp_css}"
+    );
+    assert!(
+        parts[1].parse::<f64>().is_ok() && parts[2].parse::<f64>().is_ok(),
+        "C and H are bare numbers: {tp_css}"
+    );
+    assert!(
+        get_str(&tp, "hex").is_some_and(|h| h.starts_with('#')),
+        "hex stays as a data field"
     );
 }
 
@@ -213,7 +233,7 @@ fn invalid_background_rejects() {
 }
 
 /// Смоук границы конфига в живом wasm-рантайме: два РАЗНЫХ конфига дают разные
-/// отпечатки, разные пространства ключей и разные эмиссии; rgba-роль лестницы
+/// отпечатки, разные пространства ключей и разные эмиссии; полупрозрачная роль лестницы
 /// доходит до JS-объекта с готовой css-строкой.
 #[wasm_bindgen_test]
 fn config_boundary_two_configs_diverge() {
@@ -244,9 +264,12 @@ fn config_boundary_two_configs_diverge() {
 
     let roles_a = get_obj(set_a.as_ref(), "roles");
     let accent_a = get_obj(&roles_a, "accent-fill");
-    assert_eq!(get_str(&accent_a, "kind").as_deref(), Some("rgba"));
+    assert_eq!(get_str(&accent_a, "kind").as_deref(), Some("translucent"));
     let css_a = get_str(&accent_a, "css").expect("rgba несёт css");
-    assert!(css_a.starts_with("rgb("), "css-эмиссия rgba: {css_a}");
+    assert!(
+        css_a.starts_with("oklch(") && css_a.contains(" / "),
+        "css-эмиссия rgba — oklch со слэш-альфой: {css_a}"
+    );
 
     let roles_b = get_obj(set_b.as_ref(), "roles");
     let accent_b = get_obj(&roles_b, "accent-fill");

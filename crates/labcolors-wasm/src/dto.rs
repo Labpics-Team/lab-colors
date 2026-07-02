@@ -45,7 +45,7 @@ pub enum RoleOutcome {
     /// A semi-transparent ladder / alpha-analog role: the emission is
     /// `rgba(tint, alpha)` and the browser composites it; the measured
     /// contrasts are those of the composite on the resolve background.
-    Rgba(RgbaColor),
+    Translucent(RgbaColor),
     /// No colour can satisfy this role on this background, with the reason.
     Unreachable {
         /// A stable machine code for the unreachability reason.

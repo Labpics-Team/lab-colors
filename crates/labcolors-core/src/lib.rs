@@ -39,11 +39,13 @@ pub use curve::ColorCurve;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{
-    NamedRoleTable, Resolved, RgbaResolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor,
-    measure_contrast, recheck_against, resolve, resolve_named_set, resolve_set,
+    NamedRoleTable, Resolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor,
+    TranslucentResolved, measure_contrast, recheck_against, resolve, resolve_named_set,
+    resolve_set,
 };
 pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
     Unreachable, solve, solve_many,
 };
+pub use spaces::oklch::{oklch_css_from_hex, oklch_from_hex};
 pub use spaces::vc::ViewingConditions;
