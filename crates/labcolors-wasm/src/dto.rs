@@ -8,9 +8,10 @@
 //!
 //! Generic over the role set BY CONSTRUCTION: an entry is built per `(Role,
 //! Resolved)` the core returns and keyed by `Role::key()`. Nothing here
-//! enumerates the roles, so a change to the set carries through on a rebuild
-//! untouched — the label expansion already grew it to 20 roles, and issue #59's
-//! accent ladder (a new resolved shape) is a further such change.
+//! enumerates the roles, so a set change carries through on a rebuild untouched:
+//! the label expansion already grew it to 20 roles, and the accent ladder
+//! (issue #59) added the `Translucent` outcome carried below. Any further
+//! outcome lands the same way.
 
 /// The full result of resolving one background under one theme.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +36,7 @@ pub struct RoleEntry {
     pub outcome: RoleOutcome,
 }
 
-/// The three honest outcomes of resolving a role, mirroring the core's
+/// The four honest outcomes of resolving a role, mirroring the core's
 /// `Resolved` without leaking the core type across the boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleOutcome {
@@ -44,7 +45,7 @@ pub enum RoleOutcome {
     /// The explicit zero token (`Role::None`): no colour here, by design.
     None,
     /// A semi-transparent ladder / alpha-analog role: the emission is
-    /// `rgba(tint, alpha)` and the browser composites it; the measured
+    /// `oklch(L% C H / A)` and the browser composites it; the measured
     /// contrasts are those of the composite on the resolve background.
     Translucent(RgbaColor),
     /// No colour can satisfy this role on this background, with the reason.
@@ -59,7 +60,7 @@ pub enum RoleOutcome {
 /// A semi-transparent emission and the contrasts its composite achieves.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RgbaColor {
-    /// The tint as `#RRGGBB` — the colour the CSS `rgba()` carries.
+    /// The tint as `#RRGGBB` — the colour the emitted `oklch(… / A)` carries.
     pub tint_hex: String,
     /// The alpha the emission carries, `(0, 1]`.
     pub alpha: f64,
