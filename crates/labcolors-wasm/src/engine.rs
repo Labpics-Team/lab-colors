@@ -588,4 +588,125 @@ mod tests {
             assert_eq!(seen.len(), 20, "{bg}: all 20 role keys must be unique");
         }
     }
+
+    /// JSON канонического labui-конфига — через сериализуемое зеркало границы.
+    fn labui_json() -> String {
+        let dto =
+            crate::config_dto::ConfigDto::try_from(&labcolors_core::config::labui_reference())
+                .expect("эталон сериализуем");
+        serde_json::to_string(&dto).expect("JSON")
+    }
+
+    /// Минимальный конфиг второго клиента: другой бренд, своё пространство имён.
+    fn acme_json() -> String {
+        r##"{
+          "brand": {"light": "#7C3AED", "dark": "#8B5CF6", "light_ic": "#5B21B6", "dark_ic": "#A78BFA"},
+          "neutral": {
+            "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"},
+            "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
+          },
+          "palette": [],
+          "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+          "themes": [{"name": "light", "preset": "srgb"}, {"name": "dark", "preset": "dim"}],
+          "roles": [
+            {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
+            {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+          ]
+        }"##
+        .to_string()
+    }
+
+    /// Загрузка конфига переключает контракт на string-keyed, отпечатки разных
+    /// конфигов различны, и кэш не отдаёт чужие записи на одинаковом (bg, тема).
+    #[test]
+    fn load_config_switches_contract_and_separates_cache_spaces() {
+        let mut engine = Engine::new();
+        let before = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(
+            before
+                .roles
+                .iter()
+                .all(|r| r.role_key != "fill-brand-primary"),
+            "встроенный контракт не несёт ролей конфига"
+        );
+
+        let fp_labui = engine.load_config(&labui_json()).expect("labui валиден");
+        let labui_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(
+            labui_set
+                .roles
+                .iter()
+                .any(|r| r.role_key == "fill-brand-primary"
+                    && matches!(r.outcome, RoleOutcome::Rgba(_))),
+            "конфиг-контракт несёт rgba-роль лестницы"
+        );
+
+        let fp_acme = engine.load_config(&acme_json()).expect("acme валиден");
+        assert_ne!(fp_labui, fp_acme, "разные конфиги → разные отпечатки");
+        // Тот же (bg, тема) СРАЗУ после смены конфига: попадание в чужую запись
+        // было бы кэш-коллизией — пространство ключей обязано быть acme.
+        let acme_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(acme_set.roles.iter().any(|r| r.role_key == "accent-fill"));
+        assert!(
+            acme_set
+                .roles
+                .iter()
+                .all(|r| r.role_key != "fill-brand-primary"),
+            "кэш-коллизия: под ключом acme отдан labui-контракт"
+        );
+    }
+
+    /// Паритет: загруженный конфиг эмитит байт-в-байт то же, что прямой
+    /// resolve_named_set той же таблицы (граница ничего не подменяет).
+    #[test]
+    fn loaded_config_matches_direct_named_resolve() {
+        let mut engine = Engine::new();
+        engine.load_config(&labui_json()).unwrap();
+        let via_engine = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+
+        let table = labcolors_core::config::labui_reference()
+            .compile_named_role_table()
+            .unwrap();
+        let bg = labcolors_core::BgInput::solid("#101012").unwrap();
+        let direct =
+            labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions());
+
+        assert_eq!(via_engine.roles.len(), direct.len(), "полный контракт");
+        for ((name, resolved), entry) in direct.iter().zip(via_engine.roles.iter()) {
+            assert_eq!(name, &entry.role_key, "порядок и имена совпадают");
+            match (resolved, &entry.outcome) {
+                (Resolved::Color { solved, .. }, RoleOutcome::Color(c)) => {
+                    assert_eq!(solved.hex(), c.hex)
+                }
+                (Resolved::Rgba(r), RoleOutcome::Rgba(o)) => {
+                    assert_eq!(r.tint_hex(), o.tint_hex);
+                    assert_eq!(r.composite_hex(), o.composite_hex);
+                }
+                (Resolved::None, RoleOutcome::None) => {}
+                (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),
+            }
+        }
+    }
+
+    /// Невалидный конфиг отклоняется и НЕ меняет состояние (атомарность).
+    #[test]
+    fn invalid_config_is_rejected_atomically() {
+        let mut engine = Engine::new();
+        engine.load_config(&acme_json()).unwrap();
+
+        assert!(matches!(
+            engine.load_config("{ не json"),
+            Err(BindingError::InvalidConfig { .. })
+        ));
+        let bad_position = acme_json().replace("fill-primary", "fill-quinary");
+        match engine.load_config(&bad_position) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(reason.contains("fill-quinary"), "ошибка называет позицию");
+            }
+            other => panic!("ждали InvalidConfig, получено {other:?}"),
+        }
+        // Состояние прежнее: контракт acme жив.
+        let set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        assert!(set.roles.iter().any(|r| r.role_key == "accent-fill"));
+    }
 }
