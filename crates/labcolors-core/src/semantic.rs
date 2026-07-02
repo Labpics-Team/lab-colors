@@ -1420,6 +1420,13 @@ fn resolve_spec_in(
 /// sRGB) — тот же путь, что Figma/браузер ([`crate::alpha`]). Контраст меряется
 /// на КОМПОЗИТЕ (солид-эквивалент), не на тинте: контраст полупрозрачной роли
 /// определён тем, во что она складывается на подложке.
+/// Квантовать кодированный цвет до 8-битной сетки (hex-roundtrip без строки):
+/// эмиссия и замер обязаны считаться из одного — отдаваемого — значения.
+fn quantise_encoded(e: [f64; 3]) -> [f64; 3] {
+    let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() / 255.0;
+    [q(e[0]), q(e[1]), q(e[2])]
+}
+
 /// Валидный кодированный вход rgba-пути: конечные каналы [0,1] и α в (0,1].
 /// RoleSpec публичен — спека, собранная в обход валидатора конфига, не должна
 /// давать правдоподобный мусор: невалидный вход честно резолвится в
@@ -1445,8 +1452,12 @@ fn resolve_rgba_direct(
         ));
     }
     let bg_encoded = bg.encoded_display();
-    let composite = crate::alpha::composite_over_encoded(tint_encoded, alpha, bg_encoded);
-    finish_rgba(tint_encoded, alpha, composite, bg_encoded, vc)
+    // Тинт квантуется ДО композита: наружу уходит 8-битный tint_hex, и браузер
+    // скомпозитит именно его — замер обязан считаться из эмитируемого значения,
+    // иначе composite_hex/Lc/WCAG расходились бы с CSS-результатом на LSB.
+    let tint_q = quantise_encoded(tint_encoded);
+    let composite = crate::alpha::composite_over_encoded(tint_q, alpha, bg_encoded);
+    finish_rgba(tint_q, alpha, composite, bg_encoded, vc)
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -1470,10 +1481,13 @@ fn resolve_rgba_inverted(
             "alpha-analog source out of encoded sRGB domain".to_string(),
         ));
     };
-    // Композит фактической пары == солид (теорема тождества, `alpha` #119),
-    // но считаем его явно — единый путь замера с прямой лестницей.
-    let composite = crate::alpha::composite_over_encoded(analog.tint, analog.alpha, bg_encoded);
-    finish_rgba(analog.tint, analog.alpha, composite, bg_encoded, vc)
+    // Тинт инверсии квантуется до композита (см. resolve_rgba_direct: замер из
+    // эмитируемого значения — браузер скомпозитит 8-битный tint_hex). Композит
+    // пересчитывается от квантованного тинта; равенство солиду держится в
+    // пределах LSB-границы квантования (#119).
+    let tint_q = quantise_encoded(analog.tint);
+    let composite = crate::alpha::composite_over_encoded(tint_q, analog.alpha, bg_encoded);
+    finish_rgba(tint_q, analog.alpha, composite, bg_encoded, vc)
 }
 
 /// Собрать [`Resolved::Rgba`] из тинта, альфы и композита: квантовать тинт и

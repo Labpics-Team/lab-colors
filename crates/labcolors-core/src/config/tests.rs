@@ -916,11 +916,19 @@ fn ladder_emits_rgba_with_composite_over_bg() {
     // Композит #007AFF@0.078 над #FFFFFF — то, что реально красится.
     let want_composite = crate::alpha::composite_hex("#007AFF", 0.078, "#FFFFFF").unwrap();
     assert_eq!(r.composite_hex(), want_composite, "композит на белом фоне");
-    // Контраст меряется на композите (близок к нулю для очень прозрачной заливки).
+    // Контраст меряется на КОМПОЗИТЕ, не на тинте: у прозрачной заливки @8 над
+    // белым композит почти белый — WCAG близок к 1 и заведомо МЕНЬШЕ контраста
+    // солидного тинта (#007AFF на белом ≈ 4.0) — нетавтологичная проверка того,
+    // что замер идёт по правильному цвету.
+    let solid_wcag = crate::wcag::contrast_ratio(
+        crate::spaces::srgb::srgb_encoded_from_hex("#007AFF").expect("валидный hex"),
+        crate::spaces::srgb::srgb_encoded_from_hex("#FFFFFF").expect("валидный hex"),
+    );
     assert!(
-        r.composite_wcag() >= 1.0 && r.composite_wcag() <= 21.0,
-        "WCAG композита вне [1,21]: {}",
-        r.composite_wcag()
+        r.composite_wcag() < 1.2 && r.composite_wcag() < solid_wcag / 2.0,
+        "WCAG обязан меряться по композиту (почти белому), не по тинту: composite={}, solid={}",
+        r.composite_wcag(),
+        solid_wcag
     );
 }
 
