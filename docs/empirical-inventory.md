@@ -65,10 +65,15 @@ Marker column: `SSOT-TRACKED` = has a paper trail in this table but no citation-
 > **GATE SCOPE NOTE:** `cleanliness.rs` is NOT in the `PERCEPTUAL_MODULES` audit surface of
 > `tests/empirical_inventory.rs` (that gate covers `semantic.rs`, `scale.rs`, `sentiment.rs`,
 > `neutral.rs`, `lpc.rs`, `lcs.rs`). The rows below use non-integer keys (`M-01` … `M-14`)
-> so the GATE-2 parser skips them. Correctness of these constants is enforced by the
-> separate deterministic auditor: `.agents/tools/mud-oracle/verify_inventory.js`
-> (exits 0 on the branch HEAD; run from repo root via `node .agents/tools/mud-oracle/verify_inventory.js`).
-> The module header in `cleanliness.rs` cross-references each constant to its row here.
+> so the GATE-2 integer-row parser skips them. Correctness of these constants is now enforced
+> by the **in-tree Rust auditor** `mud_rows_match_cleanliness_source` in
+> `tests/empirical_inventory.rs`: every non-REMOVED `M-` row must join to a `pub const` in
+> `cleanliness.rs` whose value equals the documented value at the row's displayed precision;
+> `CUSP_L_TABLE` (M-13, "see code") is verified for existence and declared length 361. REMOVED
+> rows are covered by the absent-guard `cal_t_cal_b_absent_from_shipping_code` in `cleanliness.rs`.
+> The former external `.agents/tools/mud-oracle/verify_inventory.js` script is **no longer a
+> gate** and does not exist on this tree. The module header in `cleanliness.rs` cross-references
+> each constant to its row here.
 
 Science-vs-fit boundary: the **structural form** (warm gate b=C·sin h, neutral gate sigmoid on C, depth term below cusp-L) is derived from Oklab opponent-colour theory and CAM16-UCS. The **link calibration scalar** (M_W) is DECLARED-CALIBRATION, never silently tuned. The former M-03 light-escape threshold has been **removed entirely** (Zone B, 2026-07-01): its escape term leaked the lightness axis into the neutral gate, which is documented as chroma-only; `neutral_gate` is now `sigmoid((C - C0) / JND)`. **B0 and BW are cited-measured** (Zone B, 2026-06-29). **Platt scalars CAL_T/CAL_B/CAL_EPS (M-06/M-07/M-08) have been removed** (Zone B slice 3, 2026-06-30). **W_HUE[8] and CEIL_N_TABLE have been replaced** (Zone B slice 4, 2026-06-30) by the derived Bezold-Brücke Hanning window `hue_weight(h) = (1 + cos(h − H_Y_DEG)) / 2`, cited from Parry (1967) J. Opt. Soc. Am. 57, 1130–1134 × Oklab hue Jacobian; H_Y_DEG = 96.9172° (Oklab hue of unique yellow, CIE 1931 2° D65). Zero fitting. CUSP_L_TABLE is cited-and-kept: pure sRGB-gamut geometry, kept as-is per paradigm North.
 

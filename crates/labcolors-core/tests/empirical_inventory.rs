@@ -1006,6 +1006,228 @@ fn read_workspace_doc(rel: &str) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Muddiness-Law (M-row) auditor — resurrects the retired external `mud-oracle`.
+//
+// BUG CLASS this closes: the GATE-1/2/3 integer-row parser SKIPS the `M-` rows
+// (their first cell `M-01` is not a bare integer), so the Muddiness-Law constants
+// of `cleanliness.rs` had NO in-repo gate — the SSOT once deferred them to
+// `.agents/tools/mud-oracle/verify_inventory.js`, which does not exist on this
+// tree. This auditor pulls that check IN-TREE: every non-REMOVED `M-` row must
+// join to a `pub const` in `cleanliness.rs` whose value equals the documented
+// value at the row's DISPLAYED precision (the SSOT shows a rounded value; the
+// const carries full precision, so the comparison is numeric-with-display-tol, not
+// string-equality). `CUSP_L_TABLE` (M-13, value "see code") is checked for
+// existence and its declared length 361. REMOVED rows are NOT re-checked here —
+// their absence is enforced by `cal_t_cal_b_absent_from_shipping_code` in
+// `cleanliness.rs` (no duplication). Shared verbatim by the gate and the RED-proof.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One parsed Muddiness-Law row from the SSOT (`M-` keyed).
+#[derive(Debug, Clone)]
+struct MudRow {
+    /// Const name, markdown decoration stripped (backticks, `~~…~~`).
+    name: String,
+    /// Documented value cell (backticks stripped); `see code` / `(удалён)` for the
+    /// table / removed rows.
+    value: String,
+    removed: bool,
+}
+
+/// Number of decimal digits displayed after the point in a numeric string (used to
+/// derive the display tolerance).
+fn decimal_places(s: &str) -> usize {
+    match s.split_once('.') {
+        Some((_, frac)) => frac.chars().take_while(|c| c.is_ascii_digit()).count(),
+        None => 0,
+    }
+}
+
+/// Parse the `M-` rows of the SSOT. A mud row is a `|`-row whose first cell starts
+/// with `M-`. Columns: `mud-id | name | value | module | status | rationale`.
+fn parse_mud_rows(text: &str) -> Vec<MudRow> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if cells.len() < 6 || !cells[0].starts_with("M-") {
+            continue;
+        }
+        let name = cells[1].replace("~~", "");
+        let name = name.trim().trim_matches('`').trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let value = cells[2].replace("~~", "");
+        let value = value.trim().trim_matches('`').trim().to_string();
+        let status = cells[4].to_ascii_uppercase();
+        let removed = status.contains("REMOVED") || cells[4].contains("УДАЛ");
+        rows.push(MudRow {
+            name,
+            value,
+            removed,
+        });
+    }
+    rows
+}
+
+/// Extract `name -> value` for every `pub const … : f64 = …;` in the PRODUCTION
+/// part of `cleanliness.rs` (everything before the first `#[cfg(test)]`), so a
+/// test-only const can never satisfy an M-row.
+fn cleanliness_const_values(src: &str) -> std::collections::BTreeMap<String, f64> {
+    let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+    let mut map = std::collections::BTreeMap::new();
+    for line in prod.lines() {
+        if let Some(ConstDecl::Numeric { name, value, .. }) = parse_const_decl(line)
+            && let Ok(v) = value.parse::<f64>()
+        {
+            map.insert(name, v);
+        }
+    }
+    map
+}
+
+/// GATE analogue of `scan_source`: the shared M-row comparison the live gate and
+/// the RED-proof both run (INV-4). Returns one defect string per non-REMOVED M-row
+/// whose documented value does not join to the source const at its display
+/// precision (or whose const is missing). REMOVED rows are skipped (absence is the
+/// job of `cleanliness.rs`'s absent-guard).
+fn mud_row_defects(rows: &[MudRow], cleanliness_src: &str) -> Vec<String> {
+    let consts = cleanliness_const_values(cleanliness_src);
+    let mut defects = Vec::new();
+    for r in rows {
+        if r.removed {
+            continue;
+        }
+        // M-13 `CUSP_L_TABLE[361]`: a 361-entry static table ("see code") — verify
+        // it exists with its declared length, not a scalar value.
+        if r.name.starts_with("CUSP_L_TABLE") {
+            if !cleanliness_src.contains("CUSP_L_TABLE: [f64; 361]") {
+                defects.push(format!(
+                    "M-row `{}`: `CUSP_L_TABLE: [f64; 361]` not found in cleanliness.rs \
+                     (missing table or wrong declared length)",
+                    r.name
+                ));
+            }
+            continue;
+        }
+        let Some(&src_val) = consts.get(&r.name) else {
+            defects.push(format!(
+                "M-row `{}`: no `pub const {}` in cleanliness.rs production code \
+                 (active row resolves to no source const)",
+                r.name, r.name
+            ));
+            continue;
+        };
+        let Ok(doc_val) = r.value.parse::<f64>() else {
+            defects.push(format!(
+                "M-row `{}`: documented value `{}` is not a parseable number",
+                r.name, r.value
+            ));
+            continue;
+        };
+        // Tolerance = half a unit in the last DISPLAYED decimal: a real drift
+        // (e.g. 0.012278 → 0.019) exceeds it; display rounding of full precision
+        // (0.0122779190541810 shown as 0.012278) does not.
+        let tol = 0.5 * 10f64.powi(-(decimal_places(&r.value) as i32));
+        if (src_val - doc_val).abs() > tol {
+            defects.push(format!(
+                "M-row `{}`: documented {} vs source {} (drift {:.3e} > display tol {:.3e})",
+                r.name,
+                doc_val,
+                src_val,
+                (src_val - doc_val).abs(),
+                tol
+            ));
+        }
+    }
+    defects
+}
+
+/// Rewrite the `value` cell of the `M-` row whose name matches `name`, for the
+/// RED-proof only (mirror of `rewrite_inventory_cell` but for `M-`-keyed rows).
+fn rewrite_mud_row_value(text: &str, name: &str, new_value: &str) -> String {
+    let strip = |c: &str| {
+        c.replace("~~", "")
+            .trim()
+            .trim_matches('`')
+            .trim()
+            .to_string()
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let is_mud_row = trimmed.starts_with('|') && {
+            let cells: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            cells.len() >= 6
+                && cells[0].starts_with("M-")
+                && cells.get(1).map(|c| strip(c)) == Some(name.to_string())
+        };
+        if is_mud_row {
+            let cells: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            let rebuilt: Vec<String> = cells
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    if i == 2 {
+                        new_value.to_string()
+                    } else {
+                        (*c).to_string()
+                    }
+                })
+                .collect();
+            out.push(format!("| {} |", rebuilt.join(" | ")));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+#[test]
+fn mud_rows_match_cleanliness_source() {
+    let ssot = std::fs::read_to_string(inventory_path()).unwrap_or_else(|e| {
+        panic!(
+            "mud auditor cannot read SSOT at {} ({e})",
+            inventory_path().display()
+        )
+    });
+    let rows = parse_mud_rows(&ssot);
+    let active = rows.iter().filter(|r| !r.removed).count();
+    assert!(
+        active > 0,
+        "mud auditor parsed zero ACTIVE M-rows — the parser is mis-scoped (a vacuous gate)."
+    );
+    let src = read_module("cleanliness.rs");
+    let defects = mud_row_defects(&rows, &src);
+    assert!(
+        defects.is_empty(),
+        "Muddiness-Law auditor FAILED — {} M-row(s) do not join to cleanliness.rs at the \
+         documented value/precision:\n  {}",
+        defects.len(),
+        defects.join("\n  ")
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GATE 1 — untracked-const (differential). Every detected POLICY const must have
 // a marker within a 2-line lookback. An unmarked const → RED naming the const.
 // Closes the CLASS "magic number without a paper-trail".
@@ -1566,5 +1788,32 @@ fn red_proof_audit_probe() {
          probe cannot prove 'fabrication flips green→red' until the real tree is green:\n  {}",
         real_citation_defects.len(),
         real_citation_defects.join("\n  ")
+    );
+
+    // 8. Muddiness-Law auditor must flip RED on an M-row value drift. Mutate ONE
+    //    ACTIVE M-row's value in an IN-MEMORY copy of the SSOT and run the *same*
+    //    `mud_row_defects` the live gate runs (INV-4), so a mutation to the auditor
+    //    is caught here, not green-from-birth.
+    let cleanliness_src = read_module("cleanliness.rs");
+    let mud_probe = "H_Y_DEG";
+    // Floor: the UNMUTATED SSOT must be GREEN against the source, so the drift below
+    // is provably caused by the splice.
+    let mud_baseline = mud_row_defects(&parse_mud_rows(&real_ssot), &cleanliness_src);
+    assert!(
+        mud_baseline.is_empty(),
+        "RED-proof FAILED — real SSOT M-rows are NOT GREEN against cleanliness.rs; the probe \
+         cannot prove 'mutation flips green→red' until they are in sync:\n  {}",
+        mud_baseline.join("\n  ")
+    );
+    let mud_drifted = rewrite_mud_row_value(&real_ssot, mud_probe, "196.9172");
+    assert_ne!(
+        mud_drifted, real_ssot,
+        "RED-proof setup wrong — mud value-drift splice did not change the SSOT (row `{mud_probe}` not found)."
+    );
+    let mud_drift = mud_row_defects(&parse_mud_rows(&mud_drifted), &cleanliness_src);
+    assert!(
+        mud_drift.iter().any(|d| d.contains(mud_probe)),
+        "RED-proof FAILED (mud value-drift path) — drifting M-row `{mud_probe}` value to `196.9172` \
+         did NOT flip the auditor RED; the Muddiness-Law audit is green-from-birth. Saw: {mud_drift:?}"
     );
 }
