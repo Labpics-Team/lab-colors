@@ -232,11 +232,17 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-| Артефакт | gzip | brotli |
-|----------|------|--------|
-| `labcolors_bg.wasm` | ~54 КБ | ~47 КБ |
-| `labcolors.js` (JS-обёртка) | ~3 КБ | ~3 КБ |
+| Артефакт | raw | gzip | brotli |
+|----------|-----|------|--------|
+| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ | ~116 КБ |
+| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ | ~4 КБ |
 
-Вспомогательные функции (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) — несколько сотен байт чистого JavaScript, поддерживают tree-shaking через именованные экспорты `./watch-theme`, `./adapt-theme` и `./effective-bg`.
+Это ВЕСЬ движок: перцептивная модель CAM16, солверы контраста, лестницы, граница конфига. `.wasm` — не JS-байты бандла, а ассет: он **не на критическом пути рендера** — грузится параллельно, компилируется потоково вне главного треда, кэшируется браузером после первой загрузки. Вспомогательные функции (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) — несколько сотен байт чистого JavaScript с tree-shaking через именованные экспорты.
 
-Требует современных браузеров (2023+).
+Требует современных браузеров (2023+): сборщики Vite / webpack 5 / Next штатно понимают `new URL('….wasm', import.meta.url)` (вывод wasm-pack). В node передавайте wasm-байты напрямую в `init({ module_or_path })`.
+
+### Для аудиторов цепочки поставки
+
+- **Network access (Socket и др.):** единственный `fetch` в пакете (`pkg/labcolors.js`) загружает СОБСТВЕННЫЙ `.wasm`-файл пакета при `init(url)` — стандартный лоадер wasm-bindgen. Ни внешних адресов, ни отправки данных, ни исполнения при импорте. В node-пути (передача байтов) `fetch` не вызывается.
+- **Bundlephobia `BuildError`:** их webpack-конвейер не умеет `.wasm`-ассеты («loader customization needed») — так падает почти любой WASM-пакет. Реальные размеры — в таблице выше (замер CI-шага `report bundle size`).
+- **Zero runtime JS-dependencies:** npm-поле `dependencies` пусто — транзитивной JS/npm-цепочки поставки нет. Rust-крейты сборки (`serde`, `serde_json` и др.) компилируются ВНУТРЬ `.wasm` (учтены в его размере выше); их цепочка аудируется на стороне сборки — `cargo audit` (RustSec) в CI lab-colors.

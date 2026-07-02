@@ -3,9 +3,13 @@
 # БЕЗ ТОКЕНОВ: аутентификация — Trusted Publishing (OIDC): npm доверяет
 # именно этому workflow этого репозитория (настройка — страница пакета
 # npmjs.com → Settings → Trusted publishing; привязка включает environment
-# npm-publish — второй фактор доверия поверх имени workflow). Provenance
-# генерируется автоматически. Требования OIDC: npm ≥ 11.5.1, Node ≥ 22.14 —
-# Node 24 несёт npm 11.x из коробки.
+# npm-publish — второй фактор доверия поверх имени workflow). Требования
+# OIDC: npm ≥ 11.5.1, Node ≥ 22.14 — Node 24 несёт npm 11.x из коробки.
+#
+# Provenance-аттестация ОТКЛЮЧЕНА (package.json publishConfig.provenance:false):
+# npm выдаёт sigstore-provenance ТОЛЬКО публичным репозиториям (E422 на
+# приватном). При открытии lab-colors публично — вернуть provenance:true
+# (аттестация «собрано этим workflow из этого репо» усилит сигналы Socket).
 #
 # GitHub-hosted раннер НАМЕРЕННО: публикация исполняется по факту пуша тега,
 # а защита тегов на текущем плане недоступна — эфемерный раннер изолирует
