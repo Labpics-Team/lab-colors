@@ -1066,13 +1066,12 @@ impl Default for RoleTable {
                 (Role::Icon, anchor(0.461, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
                 (Role::Separator, decorative(8.0)),
-                // Border ladder. Strong is an ANCHOR at the label-primary contract
-                // (HIG Border/Strong = N12 = Labels/Primary strength), so a crisp
-                // N12-weight edge — a readability role, not a dJ' step. Base/Soft
-                // are dJ' steps carrying the owner's LITERAL anchors (light/dark per
-                // theme); base stronger than soft is the order contract.
-                // Различимость, не читаемость: доля как у label-primary, но пол
-                // non-text 3:1 (WCAG 1.4.11) — бордер не обязан читаться.
+                // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
+                // Labels/Primary strength): the label-primary FRACTION with a
+                // non-text 3:1 floor (WCAG 1.4.11) — a border must be
+                // distinguishable, not readable. Base/Soft are dJ' steps carrying
+                // the owner's LITERAL anchors (light/dark per theme); base
+                // stronger than soft is the order contract.
                 (Role::BorderStrong, anchor(0.968, Floor::AaUi)),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
