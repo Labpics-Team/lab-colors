@@ -150,6 +150,12 @@ export function adaptTheme(element, options) {
   let theme = options.theme;
   /** @type {{ cssVar: string, key: string, lc: number, hex: string, legalFloor: number|null }[]} stable role order */
   let roles = [];
+  /** Full canonical var set from the last solve — the `result.vars` of EVERY
+   * reachable role (color AND translucent), each an oklch string. Every apply is
+   * `applyTheme(target, {...baseVars, ...easedColorOverlay})`, so translucent
+   * roles are never dropped by `applyTheme`'s clear-then-write and always carry
+   * the current theme's value. Only `kind === "color"` roles (in `roles`) ease. */
+  let baseVars = {};
   /** @type {Map<string,{from:string,to:string}>} in-flight ease per cssVar */
   let easing = new Map();
   let easeStart = 0;
@@ -209,6 +215,9 @@ export function adaptTheme(element, options) {
   // Resolve a fresh set and adopt it as the current colours (no ease).
   const solveAndAdopt = (bg, now) => {
     const result = colors.resolveTheme(bg, theme);
+    // Carry the FULL canonical var set (color + translucent) so no reachable
+    // role is dropped by a subsequent apply; only color roles feed the ease.
+    baseVars = result.vars && typeof result.vars === "object" ? result.vars : {};
     roles = Object.entries(result.roles)
       .filter(([, r]) => r && r.kind === "color")
       .map(([key, r]) => ({
@@ -241,13 +250,15 @@ export function adaptTheme(element, options) {
     }
   };
 
-  const applyHexes = (hexByVar) => applyTheme(target, { vars: hexByVar });
+  // Every write goes through the full canonical set with the (optional) eased
+  // color overlay on top — so translucent roles in `baseVars` persist through
+  // `applyTheme`'s clear-then-write, and non-eased color roles keep their
+  // canonical oklch form. `overlay` carries only in-flight color roles as hex.
+  const applyHexes = (overlay) => applyTheme(target, { vars: { ...baseVars, ...overlay } });
 
-  const applyRolesDirect = () => {
-    const vars = {};
-    for (const r of roles) vars[r.cssVar] = r.hex;
-    applyHexes(vars);
-  };
+  // Apply the canonical set as-is (no ease in flight): color roles show their
+  // oklch form, translucent roles their tint+alpha.
+  const applyRolesDirect = () => applyHexes({});
 
   // Begin an ease from the currently-applied colours toward the role colours.
   // `held` latches the per-role displayed blend so it only ever advances toward
@@ -289,15 +300,25 @@ export function adaptTheme(element, options) {
 
   const stepEase = (now, samples) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
+    // Ease finished: drop the segments and re-apply the canonical set, so the
+    // just-eased color roles snap back from their interpolated hex to their
+    // oklch form (and translucent roles stay put). A NaN clock keeps `t < 1`
+    // false here, so it takes the normal path where easeOut's guard lands on
+    // the destination — never `#NANNANNAN`.
+    if (t >= 1) {
+      easing = new Map();
+      applyRolesDirect();
+      return;
+    }
     const e = easeOut(t);
     const bgLums = strict ? samples.map(relativeLuminanceHex) : null;
-    const vars = {};
+    // Overlay carries ONLY in-flight color roles (as interpolated hex); every
+    // other role — non-eased color and all translucent — keeps its canonical
+    // `baseVars` value under the merge in `applyHexes`.
+    const overlay = {};
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
-      if (!seg) {
-        vars[r.cssVar] = r.hex;
-        continue;
-      }
+      if (!seg) continue;
       let blend = e;
       if (strict && r.legalFloor != null) {
         // Hold the floor (against the worst sample), then LATCH: the displayed
@@ -311,17 +332,19 @@ export function adaptTheme(element, options) {
         blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
         seg.held = blend;
       }
-      vars[r.cssVar] = lerpHex(seg.from, seg.to, blend);
+      overlay[r.cssVar] = lerpHex(seg.from, seg.to, blend);
     }
-    applyHexes(vars);
-    if (t >= 1) easing = new Map();
+    applyHexes(overlay);
   };
 
+  // The full applied picture: the canonical set (color + translucent) with each
+  // in-flight color role reported at its LOGICAL target (`seg.to`), so a reader
+  // sees where the ease is going, not a mid-transition frame.
   const currentApplied = () => {
-    const vars = {};
+    const vars = { ...baseVars };
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
-      vars[r.cssVar] = seg ? seg.to : r.hex; // logical target during/after ease
+      if (seg) vars[r.cssVar] = seg.to;
     }
     return vars;
   };
