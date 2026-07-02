@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Framework-agnostic contrast engine: resolve accessible, perceptually-anchored colour roles for any background. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,9 @@
     "./effective-bg": {
       "types": "./effective-bg.d.ts",
       "default": "./effective-bg.js"
-    }
+    },
+    "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
