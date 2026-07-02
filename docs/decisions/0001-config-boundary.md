@@ -44,7 +44,8 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
 ## Схема ThemeConfig (сущность; полная спека — при реализации CH-02)
 
 - `brand.anchors` — пер-темная четвёрка hex `{light, dark, light_ic, dark_ic}`
-  (тип `ThemeAnchors`, config.rs; hue выводит физика) — дефолта в ядре нет.
+  (тип `ThemeAnchors` — определён в ladder.rs, config.rs использует его полем
+  `Brand.anchors`; hue выводит физика) — дефолта в ядре нет.
 - `neutral.anchors {light, mid, dark}` (hex-тройка: конфиг несёт ИЗМЕРЕННОЕ,
   движок выводит производное — hue, кривую) + ручки подтона
   (`ratio`, `target_mp`, `hue_stiffness`).
