@@ -29,11 +29,13 @@ export declare function compositeOver(top: Rgba, bottom: Rgba): Rgba;
 export declare function toHex(rgb: Rgba | [number, number, number]): string;
 
 /**
- * Interpolate two `#RRGGBB` colours in Oklab at `t ∈ [0,1]` → `#RRGGBB`.
- * Perceptually uniform (even crossfade timing, non-muddy chroma path); endpoints
- * are exact and out-of-gamut intermediates are clamped per channel.
+ * Interpolate two colours in Oklab at `t ∈ [0,1]` → `#RRGGBB`. `from`/`to` may be
+ * any string `parseCssColor` accepts (`#hex`, `rgb()`/`rgba()`, `oklch()`,
+ * `transparent`), not only `#RRGGBB`. Perceptually uniform (even crossfade timing,
+ * non-muddy chroma path); endpoints are exact and out-of-gamut intermediates are
+ * clamped per channel.
  */
-export declare function oklabLerp(fromHex: string, toHex_: string, t: number): string;
+export declare function oklabLerp(from: string, to: string, t: number): string;
 
 /** Composite an ordered front-to-back layer stack over an opaque base → `#RRGGBB`. */
 export declare function compositeStackToHex(layersFrontToBack: Rgba[], opaqueBase: Rgba): string;

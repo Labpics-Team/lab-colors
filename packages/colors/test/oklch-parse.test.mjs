@@ -133,6 +133,13 @@ test("out-of-range components clamp per CSS Color 4 (L≥0, C≥0, alpha∈[0,1]
     parseCssColor("oklch(0% 0.3 30)"),
     "negative L must clamp to 0 (not pass through to a different colour)",
   );
+  // …and above 100% clamps to 1 (symmetric upper bound). High chroma keeps the
+  // two distinct pre-clamp, so this locks the upper clamp, not the byte clamp.
+  assert.deepEqual(
+    parseCssColor("oklch(150% 0.3 30)"),
+    parseCssColor("oklch(100% 0.3 30)"),
+    "L > 100% must clamp to 1",
+  );
   // F4 — negative chroma clamps to 0 → achromatic, hue irrelevant.
   assert.deepEqual(
     parseCssColor("oklch(50% -0.1 120)"),

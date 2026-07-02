@@ -300,12 +300,16 @@ export function adaptTheme(element, options) {
 
   const stepEase = (now, samples) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
-    // Ease finished: drop the segments and re-apply the canonical set, so the
-    // just-eased color roles snap back from their interpolated hex to their
-    // oklch form (and translucent roles stay put). A NaN clock keeps `t < 1`
-    // false here, so it takes the normal path where easeOut's guard lands on
-    // the destination — never `#NANNANNAN`.
-    if (t >= 1) {
+    // Terminate the ease when it is done (`t >= 1`) OR when the clock went
+    // non-finite (a NaN/±∞ `now` making `t` non-finite): drop the segments and
+    // re-apply the canonical set, so the just-eased color roles snap back from
+    // their interpolated hex to their oklch form (translucent roles stay put).
+    // The non-finite guard is load-bearing for STATE, not just paint: without it
+    // a persistently bad clock would leave `easing` in flight forever, freezing
+    // color roles at their hex destination and never reverting to canonical
+    // oklch. (`easeOut` separately guards the interpolation math from
+    // `#NANNANNAN`; this guards the controller's easing state.)
+    if (t >= 1 || !Number.isFinite(t)) {
       easing = new Map();
       applyRolesDirect();
       return;

@@ -137,14 +137,14 @@ function cssNumber(tok) {
 }
 
 /** L: a percentage → `/100` into `0..1`; a bare number is already `0..1`; `none`
- * → 0. Negative lightness clamps to 0 (CSS Color 4), symmetric to chroma — a
- * byte-level clamp alone would mask it for low chroma but not for high. */
+ * → 0. Lightness clamps to `[0, 1]` (CSS Color 4) — a byte-level clamp alone
+ * masks out-of-range L only at low chroma, not high, so clamp L explicitly. */
 function oklchLightness(tok) {
   if (tok === "none") return 0;
   const pct = tok.endsWith("%");
   const n = cssNumber(pct ? tok.slice(0, -1) : tok);
   if (n === null) return null;
-  return Math.max(0, pct ? n / 100 : n);
+  return Math.min(1, Math.max(0, pct ? n / 100 : n));
 }
 
 /** C: a bare number is absolute chroma; a percentage is a fraction of 0.4
@@ -256,23 +256,25 @@ function oklabToLinearRgb(L, A, B) {
 }
 
 /**
- * Interpolate two `#RRGGBB` colours in Oklab at `t ∈ [0,1]`, returning `#RRGGBB`.
+ * Interpolate two colours in Oklab at `t ∈ [0,1]`, returning `#RRGGBB`.
  *
- * Perceptually uniform: equal steps in `t` are equal steps in perceived
- * lightness (and a straight, non-muddy path in hue/chroma), so a crossfade feels
- * even rather than lingering bright. Endpoints are returned exactly (`t ≤ 0` →
- * `from`, `t ≥ 1` → `to`, both re-normalised through `toHex`); out-of-gamut
+ * `from`/`to` may be ANY string `parseCssColor` accepts (`#rgb`/`#rrggbb`,
+ * `rgb()`/`rgba()`, `oklch()`, `transparent`) — not only `#RRGGBB`. Perceptually
+ * uniform: equal steps in `t` are equal steps in perceived lightness (and a
+ * straight, non-muddy path in hue/chroma), so a crossfade feels even rather than
+ * lingering bright. Endpoints are returned exactly (`t ≤ 0` → `from`, `t ≥ 1` →
+ * `to`), always normalised to `#RRGGBB` through `toHex`; out-of-gamut
  * intermediates are clamped per channel. Unparseable input falls back to the
- * nearer endpoint.
+ * nearer parseable endpoint.
  *
- * @param {string} fromHex
- * @param {string} toHex_
+ * @param {string} from  any colour string `parseCssColor` accepts
+ * @param {string} to    any colour string `parseCssColor` accepts
  * @param {number} t
- * @returns {string}
+ * @returns {string} a `#RRGGBB` string
  */
-export function oklabLerp(fromHex, toHex_, t) {
-  const a = parseCssColor(fromHex);
-  const b = parseCssColor(toHex_);
+export function oklabLerp(from, to, t) {
+  const a = parseCssColor(from);
+  const b = parseCssColor(to);
   if (!a || !b) return (b && t >= 0.5) || !a ? (b ? toHex(b) : "#000000") : toHex(a);
   if (t <= 0) return toHex(a);
   if (t >= 1) return toHex(b);
