@@ -136,7 +136,7 @@ impl Engine {
             let key = CacheKey::new(normalised.clone(), theme, named.fingerprint);
             let result = self.cache.get_or_insert_with(key, || {
                 let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc);
-                let roles = set
+                let mut roles: Vec<RoleEntry> = set
                     .into_iter()
                     .map(|(name, resolved)| {
                         let floor = named.floors.get(&name).copied().flatten();
@@ -146,6 +146,18 @@ impl Engine {
                         }
                     })
                     .collect();
+                // Алиасы — часть эмитируемого контракта (--lab-{alias} обязан
+                // существовать у потребителя): ядро их не резолвит (алиас — не
+                // рецепт), граница эмитит исход ЦЕЛИ под именем алиаса.
+                for (alias, target) in named.table.aliases() {
+                    if let Some(entry) = roles.iter().find(|e| &e.role_key == target) {
+                        let outcome = entry.outcome.clone();
+                        roles.push(RoleEntry {
+                            role_key: alias.clone(),
+                            outcome,
+                        });
+                    }
+                }
                 Rc::new(ResolvedTheme {
                     theme: theme.key(),
                     background: normalised.clone(),
@@ -618,7 +630,8 @@ mod tests {
           "roles": [
             {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
             {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
-          ]
+          ],
+          "aliases": [{"alias": "btn-label", "target": "body-text"}]
         }"##
         .to_string()
     }
@@ -666,6 +679,21 @@ mod tests {
                 .all(|r| r.role_key != "fill-brand-primary"),
             "кэш-коллизия: под ключом acme отдан labui-контракт"
         );
+        // Алиас наследует пол цели и через named-путь (btn-label → body-text,
+        // aa-text → 4.5) — вторая половина класса «потерянный legal_floor».
+        let alias_entry = acme_set
+            .roles
+            .iter()
+            .find(|r| r.role_key == "btn-label")
+            .expect("алиас в контракте acme");
+        match &alias_entry.outcome {
+            RoleOutcome::Color(c) => assert_eq!(
+                c.legal_floor,
+                Some(4.5),
+                "алиас несёт AA-пол своей цели через named-путь"
+            ),
+            other => panic!("btn-label ожидался цветом, получено {other:?}"),
+        }
     }
 
     /// Паритет: загруженный конфиг эмитит байт-в-байт то же, что прямой
@@ -683,9 +711,33 @@ mod tests {
         let direct =
             labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions());
 
-        assert_eq!(via_engine.roles.len(), direct.len(), "полный контракт");
+        assert_eq!(
+            via_engine.roles.len(),
+            direct.len() + table.aliases().len(),
+            "полный контракт: роли ядра + алиасы границы"
+        );
+        // Оракул пола: та же семантика, что у загрузки — спека роли, алиас
+        // наследует пол цели. Мутация, теряющая пол на named-пути, обязана
+        // падать ЗДЕСЬ (выживший мутант map_resolved(_, None) — дыра ЗАКРЫТА).
+        let mut expected_floor: std::collections::HashMap<&str, Option<f64>> = table
+            .entries()
+            .iter()
+            .map(|(n, spec)| (n.as_str(), spec.legal_floor()))
+            .collect();
+        for (alias, target) in table.aliases() {
+            let floor = expected_floor.get(target.as_str()).copied().flatten();
+            expected_floor.insert(alias.as_str(), floor);
+        }
+        let mut anchored_seen = 0usize;
         for ((name, resolved), entry) in direct.iter().zip(via_engine.roles.iter()) {
             assert_eq!(name, &entry.role_key, "порядок и имена совпадают");
+            if let RoleOutcome::Color(c) = &entry.outcome {
+                let want = expected_floor.get(name.as_str()).copied().flatten();
+                assert_eq!(c.legal_floor, want, "{name}: legal_floor конфиг-роли");
+                if want.is_some() {
+                    anchored_seen += 1;
+                }
+            }
             match (resolved, &entry.outcome) {
                 (Resolved::Color { solved, compressed }, RoleOutcome::Color(c)) => {
                     assert_eq!(solved.hex(), c.hex, "{name}: hex");
@@ -712,6 +764,23 @@ mod tests {
                 (Resolved::None, RoleOutcome::None) => {}
                 (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),
             }
+        }
+        assert!(
+            anchored_seen > 0,
+            "оракул пола вакуумный: ни одной конфиг-роли с ненулевым полом"
+        );
+        let label = via_engine
+            .roles
+            .iter()
+            .find(|r| r.role_key == "label-primary")
+            .expect("label-primary в контракте");
+        match &label.outcome {
+            RoleOutcome::Color(c) => assert_eq!(
+                c.legal_floor,
+                Some(4.5),
+                "AA-пол текстового якоря доходит до границы через named-путь"
+            ),
+            other => panic!("label-primary ожидался цветом, получено {other:?}"),
         }
     }
 
