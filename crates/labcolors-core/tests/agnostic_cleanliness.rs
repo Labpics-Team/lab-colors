@@ -1,0 +1,459 @@
+//! Agnostic-cleanliness gate (ADR-0001 PR-c).
+//!
+//! BUG CLASS this guards: a built-in BRAND value or SHOWCASE type silently
+//! re-enters the PRODUCTION surface of the agnostic core. PR-c made the engine
+//! agnostic — the HIG/Figma anchor hexes (`#007AFF`/`#FF3B30`/…) and the built-in
+//! showcase types (`Accent`/`Sentiment`/`Role`/`RoleTable`) survive ONLY as
+//! `#[cfg(test)]` oracles for the string-keyed path. The failure mode this closes
+//! is INVISIBLE to every behavioural test: if someone drops a `#[cfg(test)]`,
+//! hardcodes an anchor hex inside a resolver, or re-exports a showcase enum, the
+//! built-ins still WORK, so all the value/property/golden tests stay green — the
+//! core has merely stopped being agnostic. This gate turns that regression RED by
+//! scanning the production (non-`cfg(test)`, non-comment) `src` for either class.
+//!
+//! Scope discipline (what is NOT a violation):
+//! * Doc/line comments may still CITE a retired anchor — the physics rustdoc
+//!   explains why `#007AFF` was replaced. Comments are cut (at `//`) before the
+//!   scan, so a cited hex never trips the gate; only a hex in live code does.
+//! * `#[cfg(test)]` blocks and whole `#[cfg(test)] mod X;` files (the relocated
+//!   byte-identity oracles, the labui fixture) legitimately hold every anchor and
+//!   enum — they are stripped/excluded before the scan.
+//!
+//! INV-4 (no green-from-birth): the two GATE tests and the four `red_proof_*`
+//! tests call the SAME scanner (`forbidden_hex_sites` / `forbidden_definition_sites`
+//! over `production_lines`), so a mutation to the detector — or to the cfg(test)
+//! stripper — is caught by a RED-proof, not merely asserted by an inlined check.
+//!
+//! Pure-`std`, zero new deps (labcolors-core stays zero-dep, issue #29); a
+//! top-of-graph test-only consumer (Clean: depends on `src`, nothing depends on it).
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+mod common;
+use common::src_dir;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Forbidden production content.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Brand-ANCHOR hex literals that must never appear in production code. These are
+/// the culturally-recognised seed colours the built-in showcase baked in (Apple
+/// HIG legacy blue/orange + the ten Figma `Accent/*` primitives). In the agnostic
+/// core they live ONLY in the `#[cfg(test)]` `Accent::anchor_hex` oracle and the
+/// labui fixture; a consumer supplies its own via `ThemeConfig`.
+const BRAND_ANCHOR_HEXES: &[&str] = &[
+    "#007AFF", // Apple HIG systemBlue — legacy Info anchor (now cited only in docs).
+    "#FF9500", // Apple HIG systemOrange — legacy Warning anchor.
+    "#FF3B30", // Figma Accent/Red — Danger.
+    "#FFA100", // Figma Accent/Orange — Warning.
+    "#FFD000", // Figma Accent/Yellow.
+    "#34C759", // Figma Accent/Green — Success.
+    "#5AC8FA", // Figma Accent/Teal.
+    "#00C7BE", // Figma Accent/Mint.
+    "#3E87FF", // Figma Accent/Blue — Info.
+    "#5856D6", // Figma Accent/Indigo.
+    "#AF52DE", // Figma Accent/Purple.
+    "#FF2D55", // Figma Accent/Pink.
+];
+
+/// Built-in SHOWCASE type DEFINITIONS that must stay `#[cfg(test)]`-only. A match
+/// in production code means a `#[cfg(test)]` was dropped and the showcase re-entered
+/// the shipped API. Matched with identifier boundaries so production types that
+/// merely share a prefix (`RoleChroma`, `RoleSpec`, `NamedRoleTable`) are NOT hits.
+const SHOWCASE_DEFINITIONS: &[&str] = &[
+    "enum Accent",
+    "enum Sentiment",
+    "enum Role",
+    "struct RoleTable",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// production_lines — strip `#[cfg(test)]`-guarded items, preserving 1-based line
+// numbers for diagnostics. Mirrors the `empirical_inventory` gate's stripper: a
+// braced item (`mod tests { … }`, a gated `impl`/`enum`) is removed by brace-match;
+// a bracket/`;`-terminated item (`#[cfg(test)] pub(crate) const ALL … ;`,
+// `#[cfg(test)] mod fixture;`) by `;`-match. Only test code is removed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn production_lines(source: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim_start().starts_with("#[cfg(test)]") {
+            // Skip further attribute/blank lines to reach the guarded item.
+            let mut j = i + 1;
+            while j < lines.len() {
+                let tj = lines[j].trim_start();
+                if tj.starts_with('#') || tj.is_empty() {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if j < lines.len() && lines[j].contains('{') {
+                // Braced item: brace-match to its close.
+                let mut depth = 0i32;
+                let mut opened = false;
+                let mut k = j;
+                while k < lines.len() {
+                    depth += lines[k].matches('{').count() as i32;
+                    depth -= lines[k].matches('}').count() as i32;
+                    if lines[k].contains('{') {
+                        opened = true;
+                    }
+                    if opened && depth <= 0 {
+                        break;
+                    }
+                    k += 1;
+                }
+                i = k + 1;
+            } else {
+                // Non-braced item (`… ;`): skip through the terminating `;`.
+                let mut k = j;
+                while k < lines.len() && !lines[k].contains(';') {
+                    k += 1;
+                }
+                i = k + 1;
+            }
+            continue;
+        }
+        out.push((i + 1, lines[i].to_string()));
+        i += 1;
+    }
+    out
+}
+
+/// Cut a source line at the first `//` (line/inline/doc comment). No `/* */` block
+/// comments exist in the production `src` (verified), so this is sufficient to keep
+/// a cited anchor hex in a comment from tripping the gate.
+fn code_only(line: &str) -> &str {
+    match line.split_once("//") {
+        Some((before, _)) => before,
+        None => line,
+    }
+}
+
+/// True when `decl` (e.g. `enum Role`) appears in `code` bounded by non-identifier
+/// characters on both sides — so `enum Role` does NOT match `enum RoleChroma`, and
+/// `struct RoleTable` does NOT match `struct NamedRoleTable`.
+fn defines(code: &str, decl: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = code[start..].find(decl) {
+        let at = start + pos;
+        let before_ok = code[..at]
+            .chars()
+            .last()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        let after_ok = code[at + decl.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if before_ok && after_ok {
+            return true;
+        }
+        start = at + decl.len();
+    }
+    false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared scanners — called verbatim by the GATE tests and the RED-proofs (INV-4).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One production-code occurrence of a forbidden brand hex or showcase definition.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Site {
+    module: String,
+    line: usize,
+    found: String,
+}
+
+/// Every brand-anchor hex literal in the PRODUCTION code of `source`
+/// (`#[cfg(test)]` stripped, comments cut). Case-insensitive: `#3e87ff` and
+/// `#3E87FF` are the same anchor.
+fn forbidden_hex_sites(module: &str, source: &str) -> Vec<Site> {
+    let mut out = Vec::new();
+    for (line, text) in production_lines(source) {
+        let code = code_only(&text).to_ascii_uppercase();
+        for hex in BRAND_ANCHOR_HEXES {
+            if code.contains(&hex.to_ascii_uppercase()) {
+                out.push(Site {
+                    module: module.to_string(),
+                    line,
+                    found: (*hex).to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Every showcase type DEFINITION in the PRODUCTION code of `source`.
+fn forbidden_definition_sites(module: &str, source: &str) -> Vec<Site> {
+    let mut out = Vec::new();
+    for (line, text) in production_lines(source) {
+        let code = code_only(&text);
+        for decl in SHOWCASE_DEFINITIONS {
+            if defines(code, decl) {
+                out.push(Site {
+                    module: module.to_string(),
+                    line,
+                    found: (*decl).to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Production-file enumeration — every `src/**/*.rs` EXCEPT files that are declared
+// as `#[cfg(test)] mod X;` (whole-file test modules: the relocated byte-identity
+// oracles, the labui fixture, the config tests). The exclusion set is DERIVED from
+// the tree, not hardcoded, so a future `#[cfg(test)] mod` is excluded automatically
+// (self-maintaining — no gate edit needed when a test module is added).
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn all_rs_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read src dir {}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("readable dir entry").path();
+        if path.is_dir() {
+            out.extend(all_rs_files(&path));
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Parse a `mod NAME;` DECLARATION (not a `mod NAME { … }` definition). Returns the
+/// module name, stripping a leading `pub`/`pub(crate)` visibility.
+fn parse_mod_decl(trimmed: &str) -> Option<String> {
+    let t = trimmed
+        .strip_prefix("pub(crate) ")
+        .or_else(|| trimmed.strip_prefix("pub "))
+        .unwrap_or(trimmed);
+    let rest = t.strip_prefix("mod ")?;
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        return None;
+    }
+    // A declaration is terminated by `;`; a `{` would be an inline definition.
+    if rest[name.len()..].trim_start().starts_with(';') {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// The directory a module's children resolve into: the crate root (`src/`) for
+/// `lib.rs`/`mod.rs`, else the sibling directory named after the module file's stem
+/// (`config.rs` → `config/`).
+fn children_dir(file: &Path) -> PathBuf {
+    let stem = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let dir = file.parent().expect("src file has a parent");
+    if stem == "lib" || stem == "mod" {
+        dir.to_path_buf()
+    } else {
+        dir.join(stem)
+    }
+}
+
+/// Files that are whole-file `#[cfg(test)]` modules — excluded from the production
+/// scan. Derived by finding every `#[cfg(test)]` immediately above a `mod NAME;`
+/// declaration and resolving `NAME` to its file (`NAME.rs` or `NAME/mod.rs`) in the
+/// declaring module's children directory.
+fn cfg_test_module_files() -> BTreeSet<PathBuf> {
+    let mut excluded = BTreeSet::new();
+    for file in all_rs_files(&src_dir()) {
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            if !l.trim_start().starts_with("#[cfg(test)]") {
+                continue;
+            }
+            let mut j = i + 1;
+            while j < lines.len() {
+                let tj = lines[j].trim_start();
+                if tj.starts_with('#') || tj.is_empty() {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if let Some(name) = lines.get(j).and_then(|l| parse_mod_decl(l.trim_start())) {
+                let dir = children_dir(&file);
+                excluded.insert(dir.join(format!("{name}.rs")));
+                excluded.insert(dir.join(&name).join("mod.rs"));
+            }
+        }
+    }
+    excluded
+}
+
+/// Every production source file: all `src/**/*.rs` minus the cfg(test) module files.
+fn production_src_files() -> Vec<PathBuf> {
+    let excluded = cfg_test_module_files();
+    all_rs_files(&src_dir())
+        .into_iter()
+        .filter(|f| !excluded.contains(f))
+        .collect()
+}
+
+/// Module label for diagnostics — path relative to `src/` (e.g. `spaces/srgb.rs`).
+fn module_label(file: &Path) -> String {
+    file.strip_prefix(src_dir())
+        .unwrap_or(file)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GATE 1/2 — the live gates over the real tree.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn production_src_carries_no_brand_anchor_hex() {
+    let mut leaks = Vec::new();
+    for file in production_src_files() {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        leaks.extend(forbidden_hex_sites(&module_label(&file), &source));
+    }
+    assert!(
+        leaks.is_empty(),
+        "AGNOSTIC-CLEANLINESS: brand-anchor hex leaked into PRODUCTION code (must be \
+         `#[cfg(test)]`-only or supplied via ThemeConfig). Offending sites: {leaks:#?}"
+    );
+}
+
+#[test]
+fn production_src_defines_no_builtin_showcase_type() {
+    let mut leaks = Vec::new();
+    for file in production_src_files() {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        leaks.extend(forbidden_definition_sites(&module_label(&file), &source));
+    }
+    assert!(
+        leaks.is_empty(),
+        "AGNOSTIC-CLEANLINESS: a built-in showcase type DEFINITION re-entered PRODUCTION \
+         code (a `#[cfg(test)]` was dropped). Offending sites: {leaks:#?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED-proofs — prove the shared scanner BITES on a violation and is SILENT on the
+// two legitimate cases (cfg(test) block, comment). A mutation that neuters the
+// detector or the cfg(test) stripper turns one of these RED (INV-4).
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn red_proof_hex_scanner_bites_on_injected_anchor_in_code() {
+    // A hex in live code (before an inline comment) is flagged.
+    let dirty = "    let seed = \"#3E87FF\"; // injected brand anchor\n";
+    let hits = forbidden_hex_sites("probe.rs", dirty);
+    assert_eq!(
+        hits.len(),
+        1,
+        "scanner must flag a brand hex in production code"
+    );
+    assert_eq!(hits[0].found, "#3E87FF");
+
+    // Clean agnostic code has none.
+    let clean = "    let set = resolve_named_set(bg, table, vc)?;\n";
+    assert!(
+        forbidden_hex_sites("probe.rs", clean).is_empty(),
+        "agnostic code must be hex-clean"
+    );
+}
+
+#[test]
+fn red_proof_hex_scanner_is_silent_on_cfg_test_and_comments() {
+    // Inside a `#[cfg(test)]` block: invisible (stripped).
+    let gated = "#[cfg(test)]\nmod t {\n    const A: &str = \"#FF3B30\";\n}\n";
+    assert!(
+        forbidden_hex_sites("probe.rs", gated).is_empty(),
+        "a hex inside #[cfg(test)] must NOT be flagged (stripper failed)"
+    );
+
+    // In a comment (line + doc): invisible (cut at `//`).
+    let commented = "// the retired anchor was #007AFF\n/// доки: было #FF9500\n";
+    assert!(
+        forbidden_hex_sites("probe.rs", commented).is_empty(),
+        "a cited hex in a comment must NOT be flagged"
+    );
+}
+
+#[test]
+fn red_proof_definition_scanner_bites_on_ungated_enum() {
+    // An un-gated showcase enum in production is flagged…
+    let dirty = "pub enum Accent {\n    Red,\n    Blue,\n}\n";
+    let hits = forbidden_definition_sites("probe.rs", dirty);
+    assert_eq!(hits.len(), 1, "an un-gated `enum Accent` must be flagged");
+    assert_eq!(hits[0].found, "enum Accent");
+
+    // …but the same enum under `#[cfg(test)]` is not.
+    let gated = "#[derive(Debug)]\n#[cfg(test)]\npub enum Accent {\n    Red,\n}\n";
+    assert!(
+        forbidden_definition_sites("probe.rs", gated).is_empty(),
+        "a `#[cfg(test)]` showcase enum is allowed"
+    );
+}
+
+#[test]
+fn red_proof_definition_scanner_ignores_prefix_shared_production_types() {
+    // Production types that merely share a prefix with a showcase type must NOT be
+    // flagged — identifier boundaries, not substring.
+    let production = "pub enum RoleChroma {\n    Neutral,\n}\npub struct NamedRoleTable;\n\
+                      pub struct RoleSpec;\n";
+    assert!(
+        forbidden_definition_sites("probe.rs", production).is_empty(),
+        "RoleChroma / NamedRoleTable / RoleSpec are production types, not the showcase \
+         `Role`/`RoleTable` — must not be flagged"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Meta — the exclusion derivation itself must resolve the known test modules, so a
+// silent break in `cfg_test_module_files` (which would make the gates scan test
+// files and false-RED, or worse, scan nothing) is caught.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn cfg_test_module_exclusion_covers_the_relocated_oracles() {
+    let excluded = cfg_test_module_files();
+    for expected in [
+        "accent_golden_tests.rs",
+        "r3_byte_identity_tests.rs",
+        "continuity_tests.rs",
+        "dim_tinted_tests.rs",
+        "config/fixture.rs",
+        "config/tests.rs",
+    ] {
+        let path = src_dir().join(expected);
+        assert!(
+            excluded.contains(&path),
+            "cfg(test) module exclusion must cover {expected} (derivation drifted); \
+             excluded set: {excluded:#?}"
+        );
+    }
+    // And a genuine production module must NOT be excluded.
+    assert!(
+        !excluded.contains(&src_dir().join("semantic.rs")),
+        "semantic.rs is production and must be scanned, not excluded"
+    );
+}

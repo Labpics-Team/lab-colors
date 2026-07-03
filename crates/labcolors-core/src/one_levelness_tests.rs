@@ -17,9 +17,9 @@
 //! TOL = 5.0 Lc — DECLARED инженерный допуск (квантование + разница путей
 //! резолва нейтрали и оттенка), ратифицирован в ch5c-ratification-build.md.
 
-use labcolors_core::config::labui_reference;
-use labcolors_core::semantic::{NamedRoleTable, resolve_named_set};
-use labcolors_core::{BgInput, Resolved, ViewingConditions};
+use crate::config::fixture::labui_reference;
+use crate::semantic::{NamedRoleTable, resolve_named_set};
+use crate::{BgInput, Resolved, ViewingConditions};
 
 /// Инженерный допуск одноуровневости (Lc).
 const TOL: f64 = 5.0;
@@ -155,8 +155,8 @@ fn one_levelness_holds_on_labui_reference() {
 /// молчаливая деградация, ровно тот класс, что гейт обязан ловить.
 #[test]
 fn red_proof_ladder_recipe_breaks_one_levelness() {
-    use labcolors_core::LadderPosition;
-    use labcolors_core::config::{LadderSource, RoleRecipe};
+    use crate::LadderPosition;
+    use crate::config::{LadderSource, RoleRecipe};
 
     // Сначала докажем, что БЕЗ мутации гейт зелёный — иначе RED-proof доказывал
     // бы не то (splice обязан флипать green→red, а не red→red).

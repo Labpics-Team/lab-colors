@@ -230,9 +230,10 @@ extern "C" {
     pub type JsResolvedTheme;
 }
 
-/// A configured contrast engine. Construct with [`LabColors::new`], then call
-/// [`resolve_theme`](LabColors::resolve_theme) many times; identical calls are
-/// served from the contract cache.
+/// A contrast engine over a consumer-supplied design system. Construct with
+/// [`LabColors::new`], load a config with [`loadConfig`](LabColors::load_config),
+/// then call [`resolve_theme`](LabColors::resolve_theme) many times; identical
+/// calls are served from the contract cache.
 #[wasm_bindgen]
 pub struct LabColors {
     inner: Engine,
@@ -240,12 +241,11 @@ pub struct LabColors {
 
 #[wasm_bindgen]
 impl LabColors {
-    /// Create a zero-config engine on the default role table and the default
-    /// per-theme viewing conditions.
+    /// Create an engine with no design system loaded.
     ///
-    /// `v1` takes no config; the brand/anchor seam is left for a future
-    /// version. Adding an optional config object later is additive — it does
-    /// not change this signature.
+    /// The engine is agnostic (ADR-0001): it carries no built-in role table, so
+    /// [`resolveTheme`](LabColors::resolve_theme) rejects with `config_required`
+    /// until [`loadConfig`](LabColors::load_config) supplies a design system.
     #[wasm_bindgen(constructor)]
     pub fn new() -> LabColors {
         LabColors {
@@ -258,10 +258,10 @@ impl LabColors {
     ///
     /// Returns a [`ResolvedTheme`] object. Per-role unreachability is part of a
     /// successful result (each role carries its own `kind`); only whole-call
-    /// failures reject (invalid hex, unknown theme, and the
-    /// by-construction-unreachable oklch serialisation failure as
-    /// `internal_error`) — as a structured `"<code>: <message>"` error,
-    /// never an unwound panic.
+    /// failures reject (no config loaded yet as `config_required`, invalid hex,
+    /// unknown theme, and the by-construction-unreachable oklch serialisation
+    /// failure as `internal_error`) — as a structured `"<code>: <message>"`
+    /// error, never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
         let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;

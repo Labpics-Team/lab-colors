@@ -125,9 +125,20 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
    конфига + провайдер (FOUC-baseline + adaptTheme) + замена colors-stub на
    git-dep + коллапс + миграция 27 компонентов + гарды против эмиссии конфига
    + полный e2e + переезд золота.
-4. **[открыто]** Пост-поезд, lab-colors PR-c (ломающий): снос
-   `RoleTable::default()`, `enum Role`, данных `Accent` из ядра + grep-гейт
-   чистоты (ни имён ролей, ни брендовых hex вне тестов).
+4. **[сделано, PR-c, ломающий]** Пост-поезд, lab-colors PR-c: встроенная витрина
+   (`RoleTable::default()`, `enum Role`/`RoleTable`/`resolve_set`, энумы
+   `Accent`/`Sentiment` с их брендовыми hex) убрана из ПРОДАКШН-API — не удалена
+   физически, а переведена под `#[cfg(test)]`: она остаётся байт-идентичным
+   ОРАКУЛОМ именованного пути (тесты `resolve_set` ↔ `resolve_named_set`,
+   `agnostic_gates`, r3-пины), но в собранный крейт и публичный API не входит.
+   Кривые `AccentCurve`/`SentimentCurve` оставлены как enum-free инструмент
+   произвольного seed: `SentimentCurve::{new,with_params}` рефакторены на прямые
+   параметры (`brand_hue`, `prototype_hue`, `chroma_hex`, `hue_floor`,
+   `preferred_side`) — витринный энум из сигнатуры убран, честное разделение
+   «оттенок vs хрома» сохранено. Публичная версия SDK — 0.6.0 (ломающая).
+   Grep-гейт чистоты — `tests/agnostic_cleanliness.rs`: продакшн-`src`
+   (после снятия `#[cfg(test)]` и комментариев) не несёт ни брендовых якорных hex,
+   ни определений витринных типов; гейт с живым RED-proof.
 
 ## Последствия
 

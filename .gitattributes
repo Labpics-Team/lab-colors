@@ -1,0 +1,4 @@
+# Golden emission snapshots are byte-compared by tests and regenerated with LF.
+# Pin them to LF so `core.autocrlf` checkouts cannot rewrite them to CRLF and
+# spuriously drift the byte-identity gates.
+crates/labcolors-core/tests/data/*.txt text eol=lf

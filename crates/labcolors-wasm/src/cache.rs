@@ -7,10 +7,8 @@
 //! key carries every input that can change the output, so a hit is always
 //! correct, never stale.
 //!
-//! The table fingerprint is the third key component. The built-in default
-//! [`RoleTable`](labcolors_core::RoleTable) has no config, so it shares one
-//! namespace under [`DEFAULT_TABLE_FINGERPRINT`]. A loaded config (`loadConfig`)
-//! instead carries a real fingerprint — an FNV-1a over its canonical DTO,
+//! The table fingerprint is the third key component. A loaded config
+//! (`loadConfig`) carries a real fingerprint — an FNV-1a over its canonical DTO,
 //! computed in the engine and threaded into the key. Correctness across a config
 //! switch does not rest on that fingerprint being unique, though: `loadConfig`
 //! wholesale-clears the cache (see [`ContractCache::clear`]), so exactly one key
@@ -24,14 +22,12 @@ use std::collections::HashMap;
 
 use crate::theme::Theme;
 
-/// The fingerprint of the built-in default role table.
-///
-/// The default table carries no config, so every default-table resolve shares
-/// this one stable namespace. A loaded config does not use this constant: its
-/// fingerprint is computed from the config itself (an FNV-1a over the canonical
-/// DTO) in the engine and threaded into [`CacheKey`]. This value only names the
-/// no-config namespace.
-pub const DEFAULT_TABLE_FINGERPRINT: u64 = 0;
+/// A stable, arbitrary fingerprint used by the cache's own unit tests as a
+/// single key namespace. Production keys always carry a real config fingerprint
+/// (an FNV-1a over the canonical DTO, computed in the engine); this constant
+/// exists only so the cache tests can key on a fixed value.
+#[cfg(test)]
+pub(crate) const DEFAULT_TABLE_FINGERPRINT: u64 = 0;
 
 /// The full key of a cached resolve: every input that can change the output.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -87,7 +83,7 @@ impl<V: Clone> ContractCache<V> {
     /// `build` must not call `get_or_insert_with` on this same cache with the
     /// same `key` — the entry is not inserted until `build` returns, so a
     /// same-key re-entry would recurse without end. A different key is safe.
-    /// In this crate `build` only calls `core::resolve_set`, which never
+    /// In this crate `build` only calls `core::resolve_named_set`, which never
     /// re-enters the cache, so the constraint holds by construction.
     pub fn get_or_insert_with(&self, key: CacheKey, build: impl FnOnce() -> V) -> V {
         if let Some(hit) = self.entries.borrow().get(&key) {

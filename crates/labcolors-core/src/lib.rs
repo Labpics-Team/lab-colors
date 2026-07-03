@@ -19,14 +19,35 @@ pub(crate) mod wcag;
 
 pub mod curve;
 
-pub(crate) mod greyfast;
-
-pub(crate) mod chromafast;
-
 #[cfg(test)]
 mod golden_tests;
 
-pub use accent::Accent;
+#[cfg(test)]
+mod agnostic_gates;
+
+#[cfg(test)]
+mod one_levelness_tests;
+
+// Built-in-showcase behaviour tests, relocated in-crate (ADR-0001 PR-c): the
+// built-in `Role`/`RoleTable`/`resolve_set` cluster is now `#[cfg(test)]`-only,
+// so these tests — which exercise it as the byte-identity oracle — must live
+// inside the crate to see it (integration tests only see the public API).
+#[cfg(test)]
+mod continuity_tests;
+
+#[cfg(test)]
+mod dim_tinted_tests;
+
+#[cfg(test)]
+mod r3_byte_identity_tests;
+
+// AccentCurve/SentimentCurve golden snapshots, relocated in-crate (ADR-0001
+// PR-c): the `Sentiment` enum is now `#[cfg(test)]`-only, and the golden uses
+// the crate-private `SentimentCurve::from_sentiment` helper, so this test must
+// live inside the crate to see them.
+#[cfg(test)]
+mod accent_golden_tests;
+
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
     DefectContext, Theme, confidence as cleanliness_confidence,
@@ -36,7 +57,7 @@ pub use cleanliness::{
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
     PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
-    VcPreset, labui_reference,
+    VcPreset,
 };
 pub use curve::ColorCurve;
 pub use glow::{
@@ -46,10 +67,16 @@ pub use glow::{
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{
-    NamedRoleTable, Resolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor,
-    TranslucentResolved, measure_contrast, recheck_against, resolve, resolve_named_set,
-    resolve_set,
+    NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor, TranslucentResolved,
+    measure_contrast, recheck_against, resolve_named_set,
 };
+// The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no
+// longer part of the production API (ADR-0001 PR-c): the agnostic engine ships
+// only the string-keyed `resolve_named_set` path. It survives ONLY as the
+// `#[cfg(test)]` byte-identity oracle for the named path, re-exported crate-wide
+// so the in-crate showcase tests keep their `crate::…` spellings.
+#[cfg(test)]
+pub(crate) use semantic::{Role, RoleTable, resolve_set};
 pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
     Unreachable, solve, solve_many,

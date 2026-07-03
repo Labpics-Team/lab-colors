@@ -90,16 +90,9 @@ fn main() {
         prev = Some(jp);
     }
 
-    // Ссылка на живую константу через публичную таблицу ролей (ревью 2026-07-03:
-    // литералы 3.15/8.22 тихо устарели бы при смене контракта).
-    let quaternary =
-        labcolors_core::RoleTable::default().spec(labcolors_core::Role::FillQuaternary);
-    let labcolors_core::RoleSpec::DecorativeDj { magnitude_dj } = quaternary else {
-        panic!("fill-quaternary обязан быть DecorativeDj-контрактом, получено {quaternary:?}");
-    };
-    println!(
-        "\nсправочно: FILL_QUATERNARY_DJ (самый тонкий существующий контрактный шаг) = {} (light) / {} (dark)",
-        magnitude_dj.light(),
-        magnitude_dj.dark()
-    );
+    // Прежний хвост печатал FILL_QUATERNARY_DJ через встроенную `RoleTable::default()`;
+    // та витрина вынесена из прод-API (ADR-0001 PR-c), а dJ'-контракты теперь живут
+    // в конфиге потребителя. Этот пример остаётся инструментом замера J'-якорей
+    // (единственная физика, что ему нужна) — сам контракт dJ' инспектируется через
+    // паспорт labui, не через встроенную таблицу.
 }

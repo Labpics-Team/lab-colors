@@ -580,13 +580,19 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use labcolors_core::config::labui_reference;
+
+    /// Паспорт labui как статический SSOT (`tests/data/labui.config.json`): дерево
+    /// Даниила вынесено из прод-API ядра (ADR-0001 PR-c), граница читает паспорт.
+    fn labui_dto() -> ConfigDto {
+        serde_json::from_str(include_str!("../tests/data/labui.config.json"))
+            .expect("паспорт labui парсится")
+    }
 
     /// Канонический конфиг гоняется через JSON туда-обратно без потерь:
-    /// ядро → DTO → JSON → DTO → ядро даёт РАВНЫЙ конфиг (PartialEq ядра).
+    /// паспорт → ядро → DTO → JSON → DTO → ядро даёт РАВНЫЙ конфиг (PartialEq ядра).
     #[test]
-    fn labui_reference_round_trips_through_json() {
-        let cfg = labui_reference();
+    fn labui_passport_round_trips_through_json() {
+        let cfg = ThemeConfig::try_from(labui_dto()).expect("паспорт → ThemeConfig");
         let dto = ConfigDto::try_from(&cfg).expect("эталон сериализуем");
         let json = serde_json::to_string(&dto).expect("JSON");
         let back: ConfigDto = serde_json::from_str(&json).expect("парсится");
@@ -601,8 +607,7 @@ mod tests {
     /// пробелов/порядка через парсинг) и различает разные конфиги.
     #[test]
     fn fingerprint_is_deterministic_and_discriminating() {
-        let cfg = labui_reference();
-        let dto = ConfigDto::try_from(&cfg).unwrap();
+        let dto = labui_dto();
         let fp1 = fingerprint(&dto);
         // Реконструкция из JSON — тот же отпечаток.
         let json = serde_json::to_string_pretty(&dto).unwrap();
@@ -610,7 +615,7 @@ mod tests {
         assert_eq!(fp1, fingerprint(&re), "детерминизм через JSON-нормализацию");
 
         // Минимальная мутация (один якорь бренда) — другой отпечаток.
-        let mut other = ConfigDto::try_from(&cfg).unwrap();
+        let mut other = labui_dto();
         other.brand.light = "#007AFE".to_string();
         assert_ne!(fp1, fingerprint(&other), "разные конфиги различимы");
     }

@@ -33,6 +33,13 @@ pub enum BindingError {
         reason: String,
     },
 
+    /// `resolve_theme` was called before any config was loaded. The engine is
+    /// agnostic (ADR-0001 PR-c): it carries no built-in design system, so a
+    /// resolve has nothing to emit until `load_config` supplies one. Honest,
+    /// matchable failure — never a panic and never a silent built-in default.
+    #[error("no config loaded: call load_config before resolve_theme")]
+    ConfigRequired,
+
     /// A resolved colour failed to serialise into the oklch emission form.
     /// Unreachable by construction (solver/ladder hexes are valid) — carried
     /// as a structured code so JS branching stays uniform even for the
@@ -58,6 +65,7 @@ impl BindingError {
         match self {
             BindingError::InvalidBackground { .. } => "invalid_background",
             BindingError::InvalidConfig { .. } => "invalid_config",
+            BindingError::ConfigRequired => "config_required",
             BindingError::UnknownTheme { .. } => "unknown_theme",
             BindingError::Internal { .. } => "internal_error",
         }
@@ -73,6 +81,7 @@ mod tests {
         let errors = [
             BindingError::InvalidBackground { reason: "x".into() },
             BindingError::InvalidConfig { reason: "x".into() },
+            BindingError::ConfigRequired,
             BindingError::UnknownTheme {
                 requested: "x".into(),
             },
@@ -84,6 +93,7 @@ mod tests {
             [
                 "invalid_background",
                 "invalid_config",
+                "config_required",
                 "unknown_theme",
                 "internal_error"
             ]

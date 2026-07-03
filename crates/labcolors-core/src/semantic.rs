@@ -188,20 +188,26 @@ const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 /// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
 /// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
 /// (`border-strong` — заякоренная роль различимости (доля label-primary, пол
 /// non-text 3:1), не dJ'-шаг — её здесь нет.)
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
@@ -225,12 +231,16 @@ pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// строгий возрастающий порядок ступеней (тест
 /// `shadow_constant_stack_is_strictly_ascending_with_gaps`). Финальная
 /// перцептивная калибровка теневого стека — за владельцем.
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
 pub(crate) const SHADOW_MINOR_LC: f64 = 8.0;
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней.
 pub(crate) const SHADOW_AMBIENT_LC: f64 = 9.5;
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней.
 pub(crate) const SHADOW_PENUMBRA_LC: f64 = 11.5;
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
 pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 
@@ -245,21 +255,26 @@ pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 // финальная перцептивная калибровка долей — за владельцем.
 
 /// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_PRIMARY_FRACTION: f64 = 0.968;
 /// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_SECONDARY_FRACTION: f64 = 0.627;
 /// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_TERTIARY_FRACTION: f64 = 0.461;
 /// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
 
 /// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
 /// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
 /// (7.5); финальная JND-калибровка — за владельцем.
+#[cfg(test)]
 // SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
 const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
 
@@ -303,6 +318,7 @@ impl Polarity {
 /// the module docs on the zero token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
+#[cfg(test)]
 pub enum Role {
     /// Body / primary label text — anchored near the strongest contrast the
     /// background allows, so it reads black-on-light or white-on-dark. HIG
@@ -376,6 +392,7 @@ pub enum Role {
     None,
 }
 
+#[cfg(test)]
 impl Role {
     /// Every role, grouped by family and ordered within each family by visual
     /// weight (strongest first, except the progressive shadow stack which runs
@@ -708,6 +725,7 @@ pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// `6.1` — единственный скаляр силы, применённый одинаково по всей шкале
 /// (см. тест `curve_fits_reference_plateau_colorfulness` для количественного
 /// сравнения с референсом).
+#[cfg(test)]
 // SSOT-TRACKED — целевой M' в CAM16-UCS.
 pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 
@@ -814,6 +832,7 @@ impl RoleChroma {
 
     /// The v2 default: the science-derived undertone curve at its calibrated
     /// scalars.
+    #[cfg(test)]
     fn neutral_curve() -> Self {
         RoleChroma::Curve {
             canonical_hue_deg: NEUTRAL_HUE_DEG,
@@ -1162,11 +1181,13 @@ pub fn tint_target_sweep_repro(
 /// defaults. A custom table is how a caller tunes one role's target without
 /// touching the others.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(test)]
 pub struct RoleTable {
     specs: [(Role, RoleSpec); 20],
     chroma: RoleChroma,
 }
 
+#[cfg(test)]
 impl RoleTable {
     /// The recipe for `role` in this table.
     pub fn spec(&self, role: Role) -> RoleSpec {
@@ -1226,6 +1247,7 @@ impl RoleTable {
     }
 }
 
+#[cfg(test)]
 impl Default for RoleTable {
     /// The v1 role table.
     ///
@@ -1710,6 +1732,7 @@ impl ResolveContext {
 /// * `table` — the recipe set; pass [`RoleTable::default`] for the v1 table.
 /// * `vc` — viewing conditions (light vs dim/dark); pass the same VC the theme
 ///   resolves under.
+#[cfg(test)]
 pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditions) -> Resolved {
     let ctx = ResolveContext::new(bg, vc);
     resolve_in(bg, role, table, vc, &ctx)
@@ -1724,6 +1747,7 @@ pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditio
 /// ([`NamedRoleTable`]) resolves the *same* recipe against the *same* physics
 /// without knowing about the [`Role`] enum, and the golden [`Role`] path stays a
 /// byte-for-byte-equivalent wrapper.
+#[cfg(test)]
 fn resolve_in(
     bg: &BgInput,
     role: Role,
@@ -2290,54 +2314,32 @@ fn solved_oklab_lightness(solved: &Solved) -> f64 {
 /// step below if one still clears its floor, flagging it [`Resolved::compressed`]
 /// — an honest, visible degradation rather than a silent identical-colour
 /// collapse.
+#[cfg(test)]
 pub fn resolve_set(
     bg: &BgInput,
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    // Neutral fast path: a solid grey background under a supported VC and the
-    // default table resolves to a precomputed set in O(1) (no forwards, no
-    // bisection). Transparent — it returns the exact set the live solver below
-    // would, and declines (falls back) for anything outside that exact domain.
-    if let Some(fast) = crate::greyfast::try_resolve_set(bg, table, vc) {
-        return fast;
-    }
-    // Chromatic memo: a non-grey solid under a supported VC and the default table
-    // is served from (or recorded into) a per-thread memo keyed on the exact
-    // display colour, so a repeated chromatic surface costs an O(1) lookup instead
-    // of the full live solve. Also transparent and bit-identical — a miss runs and
-    // caches the live solver below.
-    if let Some(fast) = crate::chromafast::try_resolve_set(bg, table, vc) {
-        return fast;
-    }
+    // The former O(1) grey (`greyfast`) and chromatic-memo (`chromafast`) fast
+    // paths were deleted with ADR-0001 PR-c: they only ever accelerated this
+    // built-in `resolve_set`, which is no longer on any production path (the
+    // agnostic engine ships only the string-keyed `resolve_named_set`). A cold
+    // named grey resolve was measured at ~1.7 ms (resolve-only) / ~3.1 ms
+    // (compile+resolve) in release — a one-time, sub-frame cost — so the ~468 KB
+    // precomputed grey table earned no keep. This built-in path survives solely as
+    // the `#[cfg(test)]` byte-identity oracle for the named path, so the live
+    // solve is all it needs.
     resolve_set_live(bg, table, vc)
 }
 
+/// The full solver sweep behind [`resolve_set`] — the built-in byte-identity
+/// oracle for the named path. Always recomputes.
 #[cfg(test)]
-thread_local! {
-    /// Test-only counter of [`resolve_set_live`] invocations. Lets the greyfast
-    /// probe prove the constant fast path reconstructs a grey set without ever
-    /// calling the live solver (no lazy 256-resolve build). Zero cost in
-    /// production: the increment is compiled out entirely.
-    pub(crate) static LIVE_SOLVE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Reset the test-only [`LIVE_SOLVE_COUNT`] to zero and return its prior value.
-#[cfg(test)]
-pub(crate) fn reset_live_solve_count() -> usize {
-    LIVE_SOLVE_COUNT.with(|c| c.replace(0))
-}
-
-/// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
-/// path falls back to, and the path that fills its precomputed table. Always
-/// recomputes; takes no fast path itself (so the table builder cannot recurse).
 pub(crate) fn resolve_set_live(
     bg: &BgInput,
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    #[cfg(test)]
-    LIVE_SOLVE_COUNT.with(|c| c.set(c.get() + 1));
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing
@@ -2363,14 +2365,14 @@ pub(crate) fn resolve_set_live(
 /// each entry is the same [`RoleSpec`] the built-in path solves, and the same
 /// [`RoleChroma`] undertone applies to the whole table.
 ///
-/// v1 note: this table carries **no hierarchy-compression pass**. That pass
-/// ([`enforce_text_hierarchy`]) walks the *typed* label ladder
-/// (`LabelPrimary..Quaternary`), which is meaningless for arbitrary names; the
-/// byte-identity guarantee for the labui fixture holds because every one of its
-/// text roles is individually reachable on the golden grid (so the pass is a no-op
-/// there — see the byte-identity test). A general consumer table with a squeezed
-/// mid-grey background would resolve each role in isolation, exactly as
-/// [`resolve`] does for a single role.
+/// Text ladders are compressed honestly by [`enforce_named_text_hierarchy`], the
+/// string-keyed analogue of [`enforce_text_hierarchy`]: a ladder is read off the
+/// config (a declaration-order run of strictly-descending [`Anchor`](RoleSpec::Anchor)
+/// roles), not off role names, so an arbitrary consumer table degrades a squeezed
+/// mid-grey exactly as the built-in table does instead of silently collapsing two
+/// labels onto one colour. The pass is a no-op wherever every rung is individually
+/// reachable — which is why the labui fixture stays byte-identical on the golden
+/// grid (see the byte-identity test).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
@@ -2437,8 +2439,9 @@ impl NamedRoleTable {
 /// declaration order so a serialiser emits stable output.
 ///
 /// Unlike [`resolve_set`], this takes no O(1) grey/chromatic fast path (those are
-/// keyed on the built-in default table) and runs no label-ladder compression pass
-/// (see [`NamedRoleTable`]); it is the honest live sweep for an arbitrary table.
+/// keyed on the built-in default table); it is the honest live sweep for an
+/// arbitrary table, followed by the same honest hierarchy-compression pass
+/// ([`enforce_named_text_hierarchy`]) applied to every declared text ladder.
 pub fn resolve_named_set(
     bg: &BgInput,
     table: &NamedRoleTable,
@@ -2449,7 +2452,7 @@ pub fn resolve_named_set(
     // across roles hit the cache instead of recomputing.
     let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
-    table
+    let mut set: Vec<(String, Resolved)> = table
         .entries
         .iter()
         .map(|(name, spec)| {
@@ -2458,7 +2461,13 @@ pub fn resolve_named_set(
                 resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
             )
         })
-        .collect()
+        .collect();
+    // Keep every declared text ladder non-strict-but-honest, the string-keyed
+    // analogue of the built-in path's hierarchy pass (see
+    // [`enforce_named_text_hierarchy`]). A no-op wherever each ladder is already
+    // individually reachable (the labui fixture on the golden grid).
+    enforce_named_text_hierarchy(&mut set, table, bg, vc, &ctx);
+    set
 }
 
 /// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
@@ -2539,6 +2548,7 @@ pub fn recheck_against(
 /// it strictly weaker *while it still clears its own WCAG floor*; if none does,
 /// the junior becomes a copy of the senior (equality — never stronger). Either
 /// way, flag it [`Resolved::compressed`] so the squeeze is visible, not silent.
+#[cfg(test)]
 fn enforce_text_hierarchy(
     set: &mut [(Role, Resolved)],
     bg: &BgInput,
@@ -2601,6 +2611,118 @@ fn enforce_text_hierarchy(
     }
 }
 
+/// The string-keyed analogue of [`enforce_text_hierarchy`]: keep every declared
+/// text ladder in an arbitrary [`NamedRoleTable`] non-strict-but-honest, so the
+/// agnostic path degrades a squeezed hierarchy exactly as the built-in one does
+/// (V1 found the named path had *no* such pass — a general config on a near-AA
+/// mid-grey could silently collapse two labels onto one colour).
+///
+/// **Which roles form a ladder is read off the config, not off role names.** A
+/// ladder is a maximal run of *consecutive* [`Anchor`](RoleSpec::Anchor) roles, in
+/// declaration order, whose fractions strictly descend — the shape a text
+/// hierarchy has by construction (`primary > secondary > …`). A non-anchor role or
+/// a fraction that does not descend ends the run, so `icon` (a lone anchor whose
+/// fraction sits above the label below it) and `border-strong` are singleton runs
+/// the pass never touches — matching the built-in `TEXT_HIERARCHY` exactly for the
+/// labui fixture. Coloured (hued) ladders demote in their family hue
+/// ([`demote_below_hued`]); neutral ladders in the undertone ([`demote_below`]).
+fn enforce_named_text_hierarchy(
+    set: &mut [(String, Resolved)],
+    table: &NamedRoleTable,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) {
+    let entries = table.entries();
+    let chroma = table.chroma();
+
+    // Group declaration-order anchors into strictly-descending runs (the hierarchy
+    // shape). Runs of length < 2 have no senior/junior pair and are dropped.
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    let mut cur: Vec<usize> = Vec::new();
+    let mut prev_fraction = f64::INFINITY;
+    let flush = |cur: &mut Vec<usize>, runs: &mut Vec<Vec<usize>>| {
+        if cur.len() >= 2 {
+            runs.push(std::mem::take(cur));
+        } else {
+            cur.clear();
+        }
+    };
+    for (i, (_, spec)) in entries.iter().enumerate() {
+        match spec {
+            RoleSpec::Anchor(a) if a.fraction() < prev_fraction => {
+                cur.push(i);
+                prev_fraction = a.fraction();
+            }
+            RoleSpec::Anchor(a) => {
+                // An anchor that does not descend starts a fresh ladder at itself.
+                flush(&mut cur, &mut runs);
+                cur.push(i);
+                prev_fraction = a.fraction();
+            }
+            _ => {
+                flush(&mut cur, &mut runs);
+                prev_fraction = f64::INFINITY;
+            }
+        }
+    }
+    flush(&mut cur, &mut runs);
+
+    for run in &runs {
+        for pair in run.windows(2) {
+            let (senior_idx, junior_idx) = (pair[0], pair[1]);
+            let Some(senior_mag) = set[senior_idx].1.solved().map(|s| s.lc().abs()) else {
+                continue; // senior unreachable — nothing to compress against
+            };
+            let Some(junior_mag) = set[junior_idx].1.solved().map(|s| s.lc().abs()) else {
+                continue; // junior unreachable — surfaced honestly already
+            };
+            if junior_mag + STRICT_STEP <= senior_mag {
+                continue; // strictly weaker already — hierarchy holds here
+            }
+
+            // The junior's own conformance governs how far down it may still be legal.
+            let RoleSpec::Anchor(anchor) = entries[junior_idx].1 else {
+                continue;
+            };
+            let floor = anchor.conformance();
+            let demoted = match anchor.hue() {
+                Some(hue_tint) => demote_below_hued(senior_mag, hue_tint, floor, bg, vc, ctx),
+                None => demote_below(senior_mag, ctx, chroma, floor, bg, vc),
+            };
+            // A hued junior that keeps colour reports `hue_vanished` the same way
+            // `resolve_hued_anchor` does; a neutral junior never vanishes a hue.
+            let vanished = |solved: &Solved| {
+                anchor.hue().is_some() && solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR
+            };
+            let senior_solved = set[senior_idx].1.solved().cloned();
+            set[junior_idx].1 = match (demoted, senior_solved, &set[junior_idx].1) {
+                // A distinguishable, still-legal step below the senior.
+                (Some(solved), _, _) => {
+                    let hue_vanished = vanished(&solved);
+                    Resolved::Color {
+                        solved,
+                        compressed: true,
+                        achieved_dj: Option::None,
+                        hue_vanished,
+                    }
+                }
+                // No room to separate: equal to the senior by copy, flagged.
+                (None, Some(solved), Resolved::Color { .. }) => {
+                    let hue_vanished = vanished(&solved);
+                    Resolved::Color {
+                        solved,
+                        compressed: true,
+                        achieved_dj: Option::None,
+                        hue_vanished,
+                    }
+                }
+                (None, _, other) => other.clone(),
+            };
+        }
+    }
+}
+
 /// The smallest separation in `|Lc|` that counts as "strictly weaker". Note:
 /// near the extremes a single quantisation step can be worth only ~0.2–0.3 Lc,
 /// so a demotion may need several grid steps to clear it — and when even the
@@ -2638,7 +2760,43 @@ fn demote_below(
     }
 }
 
+/// Hue-preserving sibling of [`demote_below`] for a **coloured** label (M1): the
+/// junior is re-solved just under its senior *in the family hue*, not in the
+/// neutral undertone — a neutral demote would strip the family colour the whole
+/// point of a hued label is to carry. Mirrors [`resolve_hued_anchor`]'s solve
+/// (`Hue::deg(family)`, `ChromaPolicy::Relative(1.0)`) but at the reduced target.
+fn demote_below_hued(
+    senior_mag: f64,
+    hue_tint: crate::ladder::LadderTint,
+    floor: Floor,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Option<Solved> {
+    let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
+    let contract = Contract::text(target).with_conformance(floor);
+    let interval = ctx.interval.as_ref().ok().copied()?;
+    let hue_deg = crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(
+        hue_tint.for_vc(vc),
+    ));
+    let solved = solve::solve_in(
+        bg,
+        contract,
+        Hue::deg(hue_deg),
+        ChromaPolicy::Relative(1.0),
+        vc,
+        interval,
+    )
+    .ok()?;
+    if solved.lc().abs() + STRICT_STEP <= senior_mag {
+        Some(solved)
+    } else {
+        None
+    }
+}
+
 /// The `|Lc|` of a role's solved colour in `set`, if it resolved to one.
+#[cfg(test)]
 fn solved_magnitude(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
     set.iter()
         .find(|(r, _)| *r == role)
@@ -2649,6 +2807,7 @@ fn solved_magnitude(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
 /// The text roles in strict visual-weight order — the sequence the hierarchy
 /// invariant and the compression pass walk. Disabled is included: it is still
 /// part of the order even though it carries no floor.
+#[cfg(test)]
 const TEXT_HIERARCHY: [Role; 4] = [
     Role::LabelPrimary,
     Role::LabelSecondary,

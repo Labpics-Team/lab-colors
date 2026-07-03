@@ -1,0 +1,1276 @@
+{
+  "brand": {
+    "light": "#007AFF",
+    "dark": "#4A8FFF",
+    "light_ic": "#0040DD",
+    "dark_ic": "#409CFF"
+  },
+  "neutral": {
+    "anchors": {
+      "light": "#FFFFFF",
+      "mid": "#787880",
+      "dark": "#101012"
+    },
+    "tint": {
+      "ratio": 0.1,
+      "target_mp": 6.1,
+      "hue_stiffness": 9.0,
+      "hue_override_deg": 286.0
+    },
+    "edge": {
+      "light": "#101012",
+      "dark": "#F6F8FA",
+      "light_ic": "#101012",
+      "dark_ic": "#F6F8FA"
+    },
+    "inverted": {
+      "light": "#B0B0B9",
+      "dark": "#3C3C43",
+      "light_ic": "#B0B0B9",
+      "dark_ic": "#3C3C43"
+    }
+  },
+  "palette": [
+    {
+      "key": "red",
+      "anchors": {
+        "light": "#FF3B30",
+        "dark": "#FF3A3A",
+        "light_ic": "#D70015",
+        "dark_ic": "#FF6161"
+      }
+    },
+    {
+      "key": "orange",
+      "anchors": {
+        "light": "#FFA100",
+        "dark": "#FF9008",
+        "light_ic": "#C93400",
+        "dark_ic": "#FFA940"
+      }
+    },
+    {
+      "key": "yellow",
+      "anchors": {
+        "light": "#FFD000",
+        "dark": "#FFD60A",
+        "light_ic": "#B25000",
+        "dark_ic": "#FFD426"
+      }
+    },
+    {
+      "key": "green",
+      "anchors": {
+        "light": "#34C759",
+        "dark": "#30D158",
+        "light_ic": "#248A3D",
+        "dark_ic": "#30DB5B"
+      }
+    },
+    {
+      "key": "teal",
+      "anchors": {
+        "light": "#5AC8FA",
+        "dark": "#64D2FF",
+        "light_ic": "#0071A4",
+        "dark_ic": "#70D7FF"
+      }
+    },
+    {
+      "key": "mint",
+      "anchors": {
+        "light": "#00C7BE",
+        "dark": "#63E6E2",
+        "light_ic": "#0C817B",
+        "dark_ic": "#6CEBE7"
+      }
+    },
+    {
+      "key": "blue",
+      "anchors": {
+        "light": "#3E87FF",
+        "dark": "#5696FF",
+        "light_ic": "#0050CF",
+        "dark_ic": "#95C0FF"
+      }
+    },
+    {
+      "key": "indigo",
+      "anchors": {
+        "light": "#5856D6",
+        "dark": "#5E5CE6",
+        "light_ic": "#3634A3",
+        "dark_ic": "#7D7AFF"
+      }
+    },
+    {
+      "key": "purple",
+      "anchors": {
+        "light": "#AF52DE",
+        "dark": "#BF5AF2",
+        "light_ic": "#8944AB",
+        "dark_ic": "#DA8FFF"
+      }
+    },
+    {
+      "key": "pink",
+      "anchors": {
+        "light": "#FF2D55",
+        "dark": "#FF2D55",
+        "light_ic": "#D30F45",
+        "dark_ic": "#FF6482"
+      }
+    }
+  ],
+  "sentiments": {
+    "categories": [
+      {
+        "name": "danger",
+        "family": "red"
+      },
+      {
+        "name": "warning",
+        "family": "orange",
+        "hue_floor_deg": 45.0,
+        "preferred_side": 1
+      },
+      {
+        "name": "success",
+        "family": "green"
+      },
+      {
+        "name": "info",
+        "family": "blue"
+      }
+    ],
+    "hardness": 5.0,
+    "chroma_fraction": 1.0
+  },
+  "themes": [
+    {
+      "name": "light",
+      "preset": "srgb"
+    },
+    {
+      "name": "dark",
+      "preset": "dim"
+    },
+    {
+      "name": "light-ic",
+      "preset": "srgb-ic"
+    },
+    {
+      "name": "dark-ic",
+      "preset": "dim-ic"
+    }
+  ],
+  "roles": [
+    {
+      "name": "bg-tone-2",
+      "recipe": {
+        "kind": "dj-anchor",
+        "light": 2.03,
+        "dark": 5.78
+      }
+    },
+    {
+      "name": "bg-tone-3",
+      "recipe": {
+        "kind": "dj-anchor",
+        "light": 2.03,
+        "dark": 9.6
+      }
+    },
+    {
+      "name": "label-primary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-text"
+      }
+    },
+    {
+      "name": "label-secondary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.627,
+        "floor": "aa-text"
+      }
+    },
+    {
+      "name": "label-tertiary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "label-quaternary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.276,
+        "floor": "none"
+      }
+    },
+    {
+      "name": "icon",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-strong",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-base",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "neutral-border-base"
+      }
+    },
+    {
+      "name": "border-soft",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "neutral-border-soft"
+      }
+    },
+    {
+      "name": "border-ghost",
+      "recipe": {
+        "kind": "zero"
+      }
+    },
+    {
+      "name": "fill-primary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "neutral-fill-primary"
+      }
+    },
+    {
+      "name": "fill-secondary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "neutral-fill-secondary"
+      }
+    },
+    {
+      "name": "fill-tertiary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "neutral-fill-tertiary"
+      }
+    },
+    {
+      "name": "fill-quaternary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "neutral-fill-quaternary"
+      }
+    },
+    {
+      "name": "fill-none",
+      "recipe": {
+        "kind": "zero"
+      }
+    },
+    {
+      "name": "fx-shadow-minor",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "dark"
+        },
+        "position": "shadow-minor"
+      }
+    },
+    {
+      "name": "fx-shadow-ambient",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "dark"
+        },
+        "position": "shadow-ambient"
+      }
+    },
+    {
+      "name": "fx-shadow-penumbra",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "dark"
+        },
+        "position": "shadow-penumbra"
+      }
+    },
+    {
+      "name": "fx-shadow-major",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "dark"
+        },
+        "position": "shadow-major"
+      }
+    },
+    {
+      "name": "none",
+      "recipe": {
+        "kind": "zero"
+      }
+    },
+    {
+      "name": "label-brand-primary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "brand"
+        }
+      }
+    },
+    {
+      "name": "label-brand-secondary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.627,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "brand"
+        }
+      }
+    },
+    {
+      "name": "label-brand-tertiary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui",
+        "hue": {
+          "kind": "brand"
+        }
+      }
+    },
+    {
+      "name": "label-brand-quaternary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.276,
+        "floor": "none",
+        "hue": {
+          "kind": "brand"
+        }
+      }
+    },
+    {
+      "name": "fill-brand-primary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "fill-brand-secondary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "fill-secondary"
+      }
+    },
+    {
+      "name": "fill-brand-tertiary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "fill-tertiary"
+      }
+    },
+    {
+      "name": "fill-brand-quaternary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "fill-quaternary"
+      }
+    },
+    {
+      "name": "border-brand-strong",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "border-strong",
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-brand-base",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-brand-soft",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "border-soft"
+      }
+    },
+    {
+      "name": "label-danger-primary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "danger"
+        }
+      }
+    },
+    {
+      "name": "label-danger-secondary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.627,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "danger"
+        }
+      }
+    },
+    {
+      "name": "label-danger-tertiary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui",
+        "hue": {
+          "kind": "sentiment",
+          "name": "danger"
+        }
+      }
+    },
+    {
+      "name": "label-danger-quaternary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.276,
+        "floor": "none",
+        "hue": {
+          "kind": "sentiment",
+          "name": "danger"
+        }
+      }
+    },
+    {
+      "name": "fill-danger-primary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "fill-danger-secondary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "fill-secondary"
+      }
+    },
+    {
+      "name": "fill-danger-tertiary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "fill-tertiary"
+      }
+    },
+    {
+      "name": "fill-danger-quaternary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "fill-quaternary"
+      }
+    },
+    {
+      "name": "border-danger-strong",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "border-strong",
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-danger-base",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-danger-soft",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "border-soft"
+      }
+    },
+    {
+      "name": "label-warning-primary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "warning"
+        }
+      }
+    },
+    {
+      "name": "label-warning-secondary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.627,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "warning"
+        }
+      }
+    },
+    {
+      "name": "label-warning-tertiary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui",
+        "hue": {
+          "kind": "sentiment",
+          "name": "warning"
+        }
+      }
+    },
+    {
+      "name": "label-warning-quaternary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.276,
+        "floor": "none",
+        "hue": {
+          "kind": "sentiment",
+          "name": "warning"
+        }
+      }
+    },
+    {
+      "name": "fill-warning-primary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "fill-warning-secondary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "fill-secondary"
+      }
+    },
+    {
+      "name": "fill-warning-tertiary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "fill-tertiary"
+      }
+    },
+    {
+      "name": "fill-warning-quaternary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "fill-quaternary"
+      }
+    },
+    {
+      "name": "border-warning-strong",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "border-strong",
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-warning-base",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-warning-soft",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "border-soft"
+      }
+    },
+    {
+      "name": "label-success-primary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "success"
+        }
+      }
+    },
+    {
+      "name": "label-success-secondary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.627,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "success"
+        }
+      }
+    },
+    {
+      "name": "label-success-tertiary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui",
+        "hue": {
+          "kind": "sentiment",
+          "name": "success"
+        }
+      }
+    },
+    {
+      "name": "label-success-quaternary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.276,
+        "floor": "none",
+        "hue": {
+          "kind": "sentiment",
+          "name": "success"
+        }
+      }
+    },
+    {
+      "name": "fill-success-primary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "fill-success-secondary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "fill-secondary"
+      }
+    },
+    {
+      "name": "fill-success-tertiary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "fill-tertiary"
+      }
+    },
+    {
+      "name": "fill-success-quaternary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "fill-quaternary"
+      }
+    },
+    {
+      "name": "border-success-strong",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "border-strong",
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-success-base",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-success-soft",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        },
+        "position": "border-soft"
+      }
+    },
+    {
+      "name": "label-info-primary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.968,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "info"
+        }
+      }
+    },
+    {
+      "name": "label-info-secondary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.627,
+        "floor": "aa-text",
+        "hue": {
+          "kind": "sentiment",
+          "name": "info"
+        }
+      }
+    },
+    {
+      "name": "label-info-tertiary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.461,
+        "floor": "aa-ui",
+        "hue": {
+          "kind": "sentiment",
+          "name": "info"
+        }
+      }
+    },
+    {
+      "name": "label-info-quaternary",
+      "recipe": {
+        "kind": "text-anchor",
+        "fraction": 0.276,
+        "floor": "none",
+        "hue": {
+          "kind": "sentiment",
+          "name": "info"
+        }
+      }
+    },
+    {
+      "name": "fill-info-primary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "fill-info-secondary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "fill-secondary"
+      }
+    },
+    {
+      "name": "fill-info-tertiary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "fill-tertiary"
+      }
+    },
+    {
+      "name": "fill-info-quaternary",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "fill-quaternary"
+      }
+    },
+    {
+      "name": "border-info-strong",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "border-strong",
+        "floor": "aa-ui"
+      }
+    },
+    {
+      "name": "border-info-base",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-info-soft",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        },
+        "position": "border-soft"
+      }
+    },
+    {
+      "name": "fx-focus-ring-brand",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "focus-ring"
+      }
+    },
+    {
+      "name": "fx-focus-ring-danger",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "focus-ring"
+      }
+    },
+    {
+      "name": "fx-focus-ring-warning",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "position": "focus-ring"
+      }
+    },
+    {
+      "name": "fx-focus-ring-neutral",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "edge"
+        },
+        "position": "focus-ring"
+      }
+    },
+    {
+      "name": "fx-glow-brand",
+      "recipe": {
+        "kind": "glow",
+        "source": {
+          "kind": "brand"
+        },
+        "step": "base"
+      }
+    },
+    {
+      "name": "fx-glow-danger",
+      "recipe": {
+        "kind": "glow",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "step": "base"
+      }
+    },
+    {
+      "name": "fx-glow-warning",
+      "recipe": {
+        "kind": "glow",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        },
+        "step": "base"
+      }
+    },
+    {
+      "name": "fx-glow-neutral",
+      "recipe": {
+        "kind": "glow",
+        "source": {
+          "kind": "neutral",
+          "pick": "light"
+        },
+        "step": "base"
+      }
+    },
+    {
+      "name": "fx-glow-inverted",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "inverted"
+        },
+        "position": "glow"
+      }
+    },
+    {
+      "name": "fx-skeleton-highlight",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "skeleton-highlight"
+      }
+    },
+    {
+      "name": "fill-accent",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "label-primary"
+      }
+    },
+    {
+      "name": "fill-neutral",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "neutral",
+          "pick": "mid"
+        },
+        "position": "label-primary"
+      }
+    },
+    {
+      "name": "fill-danger",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "label-primary"
+      }
+    },
+    {
+      "name": "fill-accent-tinted",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "fill-danger-tinted",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "fill-primary"
+      }
+    },
+    {
+      "name": "label-accent",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "label-primary"
+      }
+    },
+    {
+      "name": "label-danger",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "label-primary"
+      }
+    },
+    {
+      "name": "border-accent",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-danger",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        },
+        "position": "border-base"
+      }
+    },
+    {
+      "name": "border-focus",
+      "recipe": {
+        "kind": "ladder",
+        "source": {
+          "kind": "brand"
+        },
+        "position": "focus-ring"
+      }
+    },
+    {
+      "name": "badge-fill-brand",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "brand"
+        }
+      }
+    },
+    {
+      "name": "badge-fill-danger",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "sentiment",
+          "name": "danger"
+        }
+      }
+    },
+    {
+      "name": "badge-fill-warning",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "sentiment",
+          "name": "warning"
+        }
+      }
+    },
+    {
+      "name": "badge-fill-success",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "sentiment",
+          "name": "success"
+        }
+      }
+    },
+    {
+      "name": "badge-fill-info",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "sentiment",
+          "name": "info"
+        }
+      }
+    },
+    {
+      "name": "badge-fill-static-dark",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "neutral",
+          "pick": "dark"
+        }
+      }
+    },
+    {
+      "name": "badge-fill-static-light",
+      "recipe": {
+        "kind": "pair-fill",
+        "source": {
+          "kind": "neutral",
+          "pick": "light"
+        }
+      }
+    }
+  ],
+  "aliases": [
+    {
+      "alias": "fill-neutral-tinted",
+      "target": "fill-primary"
+    },
+    {
+      "alias": "border-neutral",
+      "target": "border-base"
+    },
+    {
+      "alias": "fx-skeleton-base",
+      "target": "fill-quaternary"
+    }
+  ]
+}

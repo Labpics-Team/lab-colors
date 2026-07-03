@@ -147,18 +147,45 @@ LPC — перцептивная цель; юридический минимум
 
 ## Семантика
 
-`solve()` отвечает «какой цвет даёт *этот* контраст на *этом* фоне». Семантический слой (`semantic.rs`) поднимается на ступень выше и отвечает на продуктовый вопрос: «дай весь набор именованных цветов, который нужен UI на этом фоне». Роль — это стабильный строковый ключ плюс рецепт контракта; `resolve(bg, role)` решает одну роль, `resolve_set(bg)` — всю таблицу одним проходом. Сериализацию в CSS custom properties делает рантайм — здесь только структурированная карта `роль → Resolved`.
+`solve()` отвечает «какой цвет даёт *этот* контраст на *этом* фоне». Семантический слой (`semantic.rs`) поднимается на ступень выше и отвечает на продуктовый вопрос: «дай весь набор именованных цветов, который нужен UI на этом фоне». Ядро **агностично** (ADR-0001 PR-c): таксономию ролей поставляет ПОТРЕБИТЕЛЬ через [`ThemeConfig`], который компилируется в `NamedRoleTable`; `resolve_named_set(bg, &table, vc)` решает весь набор одним проходом со строковыми ключами. Никакой встроенной дизайн-системы: любая компания подключает свою. Сериализацию в CSS custom properties делает рантайм — здесь только структурированная карта `имя роли → Resolved`.
 
 ```rust
-use labcolors_core::{BgInput, Role, RoleTable, ViewingConditions, resolve};
+use labcolors_core::{
+    resolve_named_set, BgInput, Brand, NeutralAnchors, NeutralConfig, NeutralTint,
+    RoleRecipe, SentimentsConfig, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions,
+};
+use labcolors_core::ladder::ThemeAnchors;
+use labcolors_core::solve::Floor;
 
+let anchors = |l: &str, d: &str| ThemeAnchors {
+    light: l.to_string(), dark: d.to_string(),
+    light_ic: l.to_string(), dark_ic: d.to_string(),
+};
+// Минимальный конфиг потребителя: бренд, нейтраль и одна текстовая роль.
+let config = ThemeConfig {
+    brand: Brand { anchors: anchors("#007AFF", "#4DA3FF") },
+    neutral: NeutralConfig {
+        anchors: NeutralAnchors {
+            light: "#FFFFFF".into(), mid: "#787880".into(), dark: "#101012".into(),
+        },
+        tint: NeutralTint { ratio: 0.10, target_mp: 6.1, hue_stiffness: 9.0, hue_override_deg: None },
+        edge: None, inverted: None,
+    },
+    palette: vec![],
+    sentiments: SentimentsConfig { categories: vec![], hardness: 5.0, chroma_fraction: 0.88 },
+    themes: ThemesConfig { entries: vec![("light".into(), VcPreset::Srgb)] },
+    roles: vec![(
+        "label-primary".into(),
+        RoleRecipe::TextAnchor { fraction: 0.968, floor: Floor::AaText, hue: None },
+    )],
+    aliases: vec![],
+};
+
+let table = config.compile_named_role_table().unwrap();
 let bg = BgInput::solid("#FFFFFF").unwrap();
-let table = RoleTable::default();
-let vc = ViewingConditions::srgb();
-// LabelPrimary на белом → #0A0A10, lc 102.7:
-// холодный почти-чёрный семейства #101012, а не стерильный серый.
-let primary = resolve(&bg, Role::LabelPrimary, &table, &vc);
-assert!(primary.solved().is_some());
+let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+// label-primary на белом → холодный почти-чёрный семейства #101012, а не стерильный серый.
+assert!(set.iter().any(|(name, r)| name == "label-primary" && r.solved().is_some()));
 ```
 
 **Полярность — из фона, не из роли, и в первую очередь по WCAG-достижимости.** Роль хранит только *модуль* нужного контраста; знак (`+` тёмное-на-светлом, `−` светлое-на-тёмном) выбирается по фону в два шага. Сначала — по достижимости строгого юридического пола 4.5:1: какая полярность вообще может дать AA — это свойство одного фона (`contrast_ratio` чёрного vs белого текста), не зависящее от viewing conditions, поэтому полярность стабильна между light/dim темами и не «монетка» на ничьей вроде `#3478F6`. При ничьей (обе полярности достигают пол — узкая полоса `Y ∈ [0.175, 0.1833]`, около `#767676`) выбирается светлое-на-тёмном (белый): на всей полосе перцептивный слой (люминансное ядро LPC) предпочитает белый с большим запасом, а его перелом «чёрный обгоняет белый» лежит много выше полосы (~`Y ≈ 0.36`). Это заменило прежнее правило «большая WCAG-маржа», которое на верхней половине полосы (`Y > 0.1791`) отдавало чёрный — перцептивно слабую сторону, из-за чего Fluent `#0078D4` (белый легален 4.529:1) выходил чёрным вопреки конвенции. Так светло-серый фон (`#808080`, `#999999`) больше не отдаёт «все текстовые роли недостижимы» при том, что чёрный текст на нём проходит AA с запасом: старое правило «больший LPC-максимум» переламывало полярность около `#999999`, далеко от WCAG-перелома около `#747474`.
@@ -169,11 +196,11 @@ assert!(primary.solved().is_some());
 
 **Компрессия иерархии флагуется, не молчит.** Где читаемое окно фона *уже шага самой иерархии* — околопороговый серый вроде `#747474`, у которого единственная читаемая полярность едва держится над 4.5:1 — две соседние роли может прижать юридическим полом в одну точку. Раньше primary и secondary молча схлопывались в один hex, фальсифицируя «строгую иерархию по построению». Теперь — честная деградация: порядок остаётся нестрогим (`primary ≥ secondary ≥ muted ≥ disabled`), младшую роль сдвигают на минимально различимый квант ниже старшей, **только пока она держит свой пол**, а любую роль, прижатую полом в эту тесноту, помечают флагом `Resolved::compressed`. Потребитель видит флаг и знает, что иерархия здесь сжата, вместо того чтобы обнаружить два одинаковых цвета.
 
-**Токен нуля.** «Пусто» — это значение, а не отсутствие записи. Роль `Role::None` — часть таблицы и решается в явный `Resolved::None` (честный ноль), а не пропуск ключа.
+**Токен нуля.** «Пусто» — это значение, а не отсутствие записи. Роль-ноль (например `none`) — часть таблицы и решается в явный `Resolved::None` (честный ноль), а не пропуск ключа.
 
-**Роли v1 (20 ролей, дефолтный подтон `RoleChroma::Curve`):**
+**Пример дизайн-системы — labui reference (20 ролей, подтон `RoleChroma::Curve`):**
 
-Порядок — как в `Role::ALL`; имена ролей переименованы из `text-*` в HIG-таксономию владельца (`label-*`). Рецепт — фактический `RoleSpec` из `RoleTable::default()`; dJ'-якоря даны парой `light/dark` (пер-темные буквальные значения из Figma-структуры LabUI).
+Это НЕ встроенная таблица — ядро агностично. Ниже показан один конкретный конфиг потребителя (labui), заморожённый как паспорт `crates/labcolors-wasm/tests/data/labui.config.json` и как байт-идентичный тест-оракул ядра. Любой другой бренд подключает свою таблицу тем же путём. Имена ролей — HIG-таксономия владельца (`label-*`); рецепт — `RoleRecipe` из конфига; dJ'-якоря даны парой `light/dark` (пер-темные буквальные значения из Figma-структуры LabUI).
 
 | Роль | Ключ | Семейство | Рецепт | Пол WCAG |
 |------|------|-----------|--------|----------|
@@ -200,7 +227,7 @@ assert!(primary.solved().is_some());
 
 Лестницы `fill-*` и `border-base`/`border-soft` несут буквальные dJ'-якоря — перцептивный шаг светлоты `J'` относительно поверхности, измеренный из Figma-структуры LabUI отдельно под каждую тему. Это различимость, а не разборчивость текста, поэтому пола читаемости у них нет. `border-strong` несёт силу `label-primary` (доля 0.968·max), но с non-text-полом 3:1 (WCAG 1.4.11): граница должна быть различима, не читаема. Стек теней и `separator` держат Lc-величины выше надёжного пола решателя (`DECORATIVE_FLOOR_MIN` ≈ 7.5 Lc); их финальная калибровка по JND (just-noticeable difference — минимально заметная глазу разница) от альфа-якорей — глава `surface-jnd`. `border-ghost`, `fill-none` и `none` — явный ноль (`Resolved::None`).
 
-Дефолтный подтон таблицы — `RoleChroma::Curve`: тонированный холодный подтон нейтрали (не чистый серый), выведенный из постоянной перцептивной красочности, притянутого к каспу оттенка и порога воспринимаемости. Он перекрываем целиком через `RoleTable::default().with_chroma(...)` — `RoleChroma::Neutral` даёт ахроматику, `RoleChroma::flat_neutral_tint()` — плоский подтон v1; отдельный рецепт роли меняется через `.with(role, spec)`. (`ChromaPolicy` из `solve.rs` — другой, низкоуровневый enum решателя, `Neutral` / `Relative`; не путать с `RoleChroma`.) Брендовые/сентиментные роли в v1 не входят — оставлен только шов расширения.
+Подтон таблицы — `RoleChroma`, выведенный из `NeutralConfig` конфига: labui ставит `RoleChroma::Curve` — тонированный холодный подтон нейтрали (не чистый серый), выведенный из постоянной перцептивной красочности, притянутого к каспу оттенка и порога воспринимаемости. Альтернативы — `RoleChroma::Neutral` (ахроматика) и `RoleChroma::flat_neutral_tint()` (плоский подтон). (`ChromaPolicy` из `solve.rs` — другой, низкоуровневый enum решателя, `Neutral` / `Relative`; не путать с `RoleChroma`.) Брендовые/сентиментные роли объявляются рецептами конфига (`RoleRecipe::Ladder` с источником `Brand`/`Sentiment`).
 
 ## AccentCurve
 
@@ -286,14 +313,12 @@ crates/labcolors-core/src/
 ├── solve.rs         — обратный решатель: solve(bg, contract) → цвет
 ├── lpc.rs           — LPC-контраст (APCA + HK)
 ├── wcag.rs          — WCAG 2.1 relative-luminance ratio (юридический пол)
-├── semantic.rs      — таблица семантических ролей от фона (Role, RoleTable)
+├── semantic.rs      — string-keyed таблица ролей от фона (NamedRoleTable, resolve_named_set)
 ├── sentiment.rs     — sentiment-цвета (brand displacement)
 ├── config.rs        — граница конфига: ThemeConfig → NamedRoleTable (+ config/)
 ├── ladder.rs        — лестница акцент/сентимент/бренд/нейтраль как данные
 ├── alpha.rs         — альфа-аналог солида (композит-инверсия)
 ├── cleanliness.rs   — «Закон Грязи» (Muddiness Law)
-├── greyfast.rs      — O(1) быстрый путь resolve_set для нейтральных фонов
-├── chromafast.rs    — memo быстрый путь resolve_set для хроматических фонов
 ├── lut.rs           — предвычисленный LUT светлоты серой оси (+ lut/lut_data.rs)
 └── spaces/
     ├── cam16.rs     — CIECAM16 forward/inverse
@@ -314,7 +339,7 @@ crates/labcolors-core/src/
 - **lint** (clippy + rustfmt) — `cargo clippy --workspace --all-targets -- -D warnings` и `cargo fmt --all --check`
 - **test** — `cargo test --workspace`
 - **audit** — `cargo audit --deny warnings` (RustSec: уязвимые или отозванные зависимости блокируют мерж)
-- **wasm** — release-сборка `wasm-pack`; блокирующими шагами внутри того же джоба: `npm run typecheck` + `npm test` пакета `@labpics/colors` против собранного `pkg/`, headless-Chrome паритет-тест обёртки против нативного `resolve_set`, замер размера бандла
+- **wasm** — release-сборка `wasm-pack`; блокирующими шагами внутри того же джоба: `npm run typecheck` + `npm test` пакета `@labpics/colors` против собранного `pkg/`, headless-Chrome паритет-тест обёртки против нативного `resolve_named_set`, замер размера бандла
 
 Что покрыто:
 

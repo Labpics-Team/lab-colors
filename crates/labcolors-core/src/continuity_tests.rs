@@ -27,7 +27,7 @@
 //!   tie-break resolves the whole double-legal band to white, so #767676 joins
 //!   the white side and the break shifts to #767676 → #777777.
 
-use labcolors_core::{BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_set};
+use crate::{BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_set};
 
 /// Off-break per-quantum continuity bound, ~2× the measured worst case (~1.05).
 const CONTINUITY_BOUND: f64 = 2.0;
