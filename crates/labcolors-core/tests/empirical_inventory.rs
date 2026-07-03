@@ -32,10 +32,10 @@ use std::collections::BTreeSet;
 mod common;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Audit surface — the 6 perceptual modules the detector scans.
+// Audit surface — the perceptual modules the detector scans.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PERCEPTUAL_MODULES: [&str; 7] = [
+const PERCEPTUAL_MODULES: [&str; 8] = [
     "semantic.rs",
     "scale.rs",
     "sentiment.rs",
@@ -43,6 +43,9 @@ const PERCEPTUAL_MODULES: [&str; 7] = [
     "lpc.rs",
     "lcs.rs",
     "solve.rs",
+    // Added for the honest-reclassification wave: `pair.rs` carries the tunable
+    // policy const `PAIR_CROSSOVER_Y` (row 52) — now under GATE-1/2/3.
+    "pair.rs",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,9 +69,14 @@ const PERCEPTUAL_MODULES: [&str; 7] = [
 // `HUE_SEARCH_HALF_WINDOW`, `HUE_DRIFT_PENALTY_SLOPE`, the APCA `SOFT_CLAMP_*`/`EXP_*`
 // set — all GATE-1/2 covered). `solve.rs` (added to `PERCEPTUAL_MODULES` for its
 // const budgets) is likewise a quantisation-search transform, so it too stays out
-// of the bare-literal surface. All six remain under the const-marker gate; only the
-// three POLICY modules are scanned for inline literals.
-const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutral.rs"];
+// of the bare-literal surface. `pair.rs` IS scanned for inline literals: it carries a
+// genuine tunable policy const (`PAIR_CROSSOVER_Y`), so it is a POLICY module. Its only
+// non-policy inline floats were the ITU-R BT.709 / WCAG relative-luminance coefficients
+// (`0.2126/0.7152/0.0722`), now extracted into the `WCAG_LUMA_{R,G,B}` consts on
+// `NUMERIC_METHOD_ALLOWLIST` (a cited standard, excluded by construction — INV-3).
+// Every module in `PERCEPTUAL_MODULES` remains under the const-marker gate; the four
+// POLICY modules below are additionally scanned for inline bare literals.
+const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutral.rs", "pair.rs"];
 
 /// Bare float literal VALUES that are NOT tunable perceptual policy — universal
 /// domain/normalisation/degenerate/sentinel/numerical arithmetic, plus cited
@@ -125,6 +133,18 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "PROBE",
     // Derived from a WCAG standard ratio, not an independent policy literal.
     "POLARITY_FLOOR_RATIO",
+    // Derivation-identity from the WCAG strict-win contrast formula
+    // ((Y+0.05)² vs 1.05·0.05 ⇒ Y = 0.17913), rounded conservatively — the pair
+    // polarity crossover BOUNDARY, not an independent tunable policy literal
+    // (same class as `POLARITY_FLOOR_RATIO`). Provenance in pair.rs rustdoc (pair.rs).
+    "WHITE_WINS_Y",
+    "BLACK_WINS_Y",
+    // ITU-R BT.709 / WCAG 2.x relative-luminance coefficients (Rec.709 luma) —
+    // a cited standard, extracted from inline literals in `wcag_y_encoded` so
+    // pair.rs passes GATE-5 with no undeclared bare numbers (pair.rs; values unchanged).
+    "WCAG_LUMA_R",
+    "WCAG_LUMA_G",
+    "WCAG_LUMA_B",
 ];
 
 /// Known standard *names* that must NEVER appear as an inventory row — the
@@ -178,6 +198,9 @@ const STRUCTURAL_NONPOLICY_ALLOWLIST: &[&str] = &[
     "NEIGHBOR_STEPS",
     "DJ_NEIGHBOR_STEPS",
     "MAX_PROBES",
+    // Bisection iteration count in the pair-fill minimal-nudge search — an
+    // iteration budget, not a perceptual magnitude (pair.rs).
+    "BISECTION_STEPS",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -499,7 +522,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
     out
 }
 
-/// Scan all 6 perceptual modules off the real tree.
+/// Scan every perceptual module in `PERCEPTUAL_MODULES` off the real tree.
 fn scan_tree() -> Vec<DetectedConst> {
     let mut all = Vec::new();
     for module in PERCEPTUAL_MODULES {

@@ -209,14 +209,21 @@ pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// Стек теней, строго ВОЗРАСТАЮЩИЙ по видимости (minor самая тонкая → major
 /// самая сильная) — прогрессивная рампа FX/Shadow. Единица Lc, держится выше
 /// [`DECORATIVE_FLOOR_MIN`] с шагом между уровнями ≥1.5 Lc.
+///
+/// Суффикс `_LC`, а НЕ `_JND`: это лестница Lc-величин, не JND-замер — прямого
+/// измерения различимости (JND) для этих ступеней НЕТ, прежнее имя `_JND` было
+/// терминологическим подлогом. Значения провизорны; единственный контракт —
+/// строгий возрастающий порядок ступеней (тест
+/// `shadow_constant_stack_is_strictly_ascending_with_gaps`). Финальная
+/// перцептивная калибровка теневого стека — за владельцем.
 // SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
-pub(crate) const SHADOW_MINOR_JND: f64 = 8.0;
+pub(crate) const SHADOW_MINOR_LC: f64 = 8.0;
 // SSOT-TRACKED — величина Lc стека теней.
-pub(crate) const SHADOW_AMBIENT_JND: f64 = 9.5;
+pub(crate) const SHADOW_AMBIENT_LC: f64 = 9.5;
 // SSOT-TRACKED — величина Lc стека теней.
-pub(crate) const SHADOW_PENUMBRA_JND: f64 = 11.5;
+pub(crate) const SHADOW_PENUMBRA_LC: f64 = 11.5;
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
-pub(crate) const SHADOW_MAJOR_JND: f64 = 14.0;
+pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 
 // ── Доли текстовой иерархии (Labels) ────────────────────────────────────────────
 //
@@ -1174,10 +1181,10 @@ impl Default for RoleTable {
                 // subtlest → major strongest), the progressive stack the
                 // owner's FX/Shadow ramp describes (Minor < Ambient < Penumbra <
                 // Major). Magnitudes stay above the reliable floor.
-                (Role::ShadowMinor, decorative(SHADOW_MINOR_JND)),
-                (Role::ShadowAmbient, decorative(SHADOW_AMBIENT_JND)),
-                (Role::ShadowPenumbra, decorative(SHADOW_PENUMBRA_JND)),
-                (Role::ShadowMajor, decorative(SHADOW_MAJOR_JND)),
+                (Role::ShadowMinor, decorative(SHADOW_MINOR_LC)),
+                (Role::ShadowAmbient, decorative(SHADOW_AMBIENT_LC)),
+                (Role::ShadowPenumbra, decorative(SHADOW_PENUMBRA_LC)),
+                (Role::ShadowMajor, decorative(SHADOW_MAJOR_LC)),
                 // The universal zero token.
                 (Role::None, RoleSpec::Zero),
             ],
@@ -3818,31 +3825,31 @@ mod tests {
     fn shadow_constant_stack_is_strictly_ascending_with_gaps() {
         const {
             assert!(
-                SHADOW_MINOR_JND > DECORATIVE_FLOOR_MIN,
+                SHADOW_MINOR_LC > DECORATIVE_FLOOR_MIN,
                 "shadow-minor must exceed floor"
             );
             assert!(
-                SHADOW_MINOR_JND < SHADOW_AMBIENT_JND,
+                SHADOW_MINOR_LC < SHADOW_AMBIENT_LC,
                 "shadow-minor must be less than ambient"
             );
             assert!(
-                SHADOW_AMBIENT_JND < SHADOW_PENUMBRA_JND,
+                SHADOW_AMBIENT_LC < SHADOW_PENUMBRA_LC,
                 "shadow-ambient must be less than penumbra"
             );
             assert!(
-                SHADOW_PENUMBRA_JND < SHADOW_MAJOR_JND,
+                SHADOW_PENUMBRA_LC < SHADOW_MAJOR_LC,
                 "shadow-penumbra must be less than major"
             );
             assert!(
-                SHADOW_AMBIENT_JND - SHADOW_MINOR_JND >= 1.5,
+                SHADOW_AMBIENT_LC - SHADOW_MINOR_LC >= 1.5,
                 "gap ambient-minor must be >= 1.5"
             );
             assert!(
-                SHADOW_PENUMBRA_JND - SHADOW_AMBIENT_JND >= 1.5,
+                SHADOW_PENUMBRA_LC - SHADOW_AMBIENT_LC >= 1.5,
                 "gap penumbra-ambient must be >= 1.5"
             );
             assert!(
-                SHADOW_MAJOR_JND - SHADOW_PENUMBRA_JND >= 1.5,
+                SHADOW_MAJOR_LC - SHADOW_PENUMBRA_LC >= 1.5,
                 "gap major-penumbra must be >= 1.5"
             );
         }
