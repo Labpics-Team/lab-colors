@@ -73,6 +73,14 @@ fn emit_snapshot() -> String {
 
 const GOLDEN: &str = include_str!("data/labui_emission_golden.txt");
 
+/// Normalise CRLF/CR to LF. The golden is stored LF (pinned by `.gitattributes`),
+/// but `core.autocrlf` checkouts can still hand a CRLF working copy to
+/// `include_str!`; line endings are not part of the colour contract, so the gate
+/// compares emission content, not the platform's newline convention.
+fn lf(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 #[test]
 fn labui_fixture_emission_is_byte_identical_to_frozen_golden() {
     let got = emit_snapshot();
@@ -87,17 +95,18 @@ fn labui_fixture_emission_is_byte_identical_to_frozen_golden() {
         return;
     }
 
+    let (got, golden) = (lf(&got), lf(GOLDEN));
     // The line count is pinned first so a role added/dropped from the fixture is a
     // loud, specific failure rather than a diff buried in the middle.
     assert_eq!(
         got.lines().count(),
-        GOLDEN.lines().count(),
+        golden.lines().count(),
         "labui emission line count drifted — a role/alias/grid point changed"
     );
     // Byte-for-byte. The two-path equivalence that justified these values is the
     // config byte-identity test; here we only guard that the frozen bytes hold.
     assert_eq!(
-        got, GOLDEN,
+        got, golden,
         "labui fixture emission drifted from the frozen golden \
          (regenerate with BLESS_LABUI_GOLDEN=1 only for a reviewed change)"
     );
