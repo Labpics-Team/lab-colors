@@ -149,6 +149,7 @@ fn byte_identity_test_bites_on_mutated_recipe() {
             *recipe = RoleRecipe::TextAnchor {
                 fraction: 0.627,
                 floor: Floor::AaText,
+                hue: None,
             };
         }
     }
@@ -214,6 +215,7 @@ fn fraction_out_of_bounds_is_rejected() {
         RoleRecipe::TextAnchor {
             fraction: 1.5,
             floor: Floor::AaText,
+            hue: None,
         },
     );
     assert!(matches!(
@@ -226,6 +228,7 @@ fn fraction_out_of_bounds_is_rejected() {
         RoleRecipe::TextAnchor {
             fraction: 0.0,
             floor: Floor::AaText,
+            hue: None,
         },
     );
     assert!(matches!(
@@ -242,6 +245,7 @@ fn fraction_bound_red_proof_at_edges() {
         RoleRecipe::TextAnchor {
             fraction: 1.0,
             floor: Floor::AaText,
+            hue: None,
         },
     );
     assert_eq!(at.validate(), Ok(()), "fraction=1.0 должен быть валиден");
@@ -250,6 +254,7 @@ fn fraction_bound_red_proof_at_edges() {
         RoleRecipe::TextAnchor {
             fraction: 1.0 + 1e-9,
             floor: Floor::AaText,
+            hue: None,
         },
     );
     assert!(
@@ -448,6 +453,7 @@ fn invalid_role_name_is_rejected() {
         RoleRecipe::TextAnchor {
             fraction: 0.5,
             floor: Floor::AaUi,
+            hue: None,
         },
     ));
     assert!(matches!(
@@ -491,6 +497,7 @@ fn ladder_recipe_compiles_to_translucent_spec() {
         RoleRecipe::Ladder {
             source: LadderSource::Brand,
             position: LadderPosition::FillPrimary,
+            floor: None,
         },
     );
     assert_eq!(cfg.validate(), Ok(()));
@@ -540,6 +547,7 @@ fn ladder_source_referencing_missing_family_is_rejected() {
         RoleRecipe::Ladder {
             source: LadderSource::Family("nonexistent".to_string()),
             position: LadderPosition::FillPrimary,
+            floor: None,
         },
     );
     assert!(matches!(
@@ -1047,6 +1055,7 @@ fn ladder_bites_on_position_mutation() {
             *recipe = RoleRecipe::Ladder {
                 source: LadderSource::Brand,
                 position: LadderPosition::LabelPrimary, // солид вместо @8
+                floor: None,
             };
         }
     }
@@ -1089,6 +1098,7 @@ fn ladder_bites_on_family_source_mutation() {
             *recipe = RoleRecipe::Ladder {
                 source: LadderSource::Family("green".to_string()),
                 position: LadderPosition::FillPrimary,
+                floor: None,
             };
         }
     }
@@ -1249,11 +1259,17 @@ fn representative_roles_match_stub_values_light_and_dark() {
 
     // (роль, стаб-light, стаб-dark). Значения — из contract.css (2026-07-02).
     let cases: &[(&str, &str, &str)] = &[
-        // Акцент/сентимент: пер-темный тинт, альфа @72/@12/@52.
+        // Ратификация ch5c (M1): `label-<family>-<level>` больше НЕ Ladder@72/52/32
+        // (тинт семьи под альфой — 40/40 нарушений одноуровневости), а цветной
+        // TextAnchor — держит Lc-контракт уровня в чистом оттенке семьи и
+        // резолвится в СОЛИД (`Resolved::Color`), не в Translucent. Его эмиссия и
+        // одноуровневость проверяются гейтом `tests/one_levelness.rs`. Здесь
+        // остаётся представитель полупрозрачной СЕМЕЙНОЙ заливки (тот же
+        // сентимент-тинт под альфой рампы — класс «имя есть, значение тинта врёт»).
         (
-            "label-danger-secondary",
-            "rgb(255 59 48 / 0.722)",
-            "rgb(255 58 58 / 0.722)",
+            "fill-danger-secondary",
+            "rgb(255 59 48 / 0.078)",
+            "rgb(255 58 58 / 0.078)",
         ),
         (
             "fill-brand-primary",
@@ -1364,6 +1380,7 @@ fn value_test_bites_on_alpha_mutation() {
             *recipe = RoleRecipe::Ladder {
                 source: LadderSource::Neutral(crate::config::NeutralPick::Mid),
                 position: LadderPosition::NeutralFillPrimary,
+                floor: None,
             };
         }
     }
@@ -1503,6 +1520,7 @@ fn validator_reference_errors_are_distinguishable() {
         RoleRecipe::Ladder {
             source: LadderSource::Sentiment("nonexistent".to_string()),
             position: LadderPosition::LabelPrimary,
+            floor: None,
         },
     ));
     assert!(matches!(
@@ -1565,6 +1583,7 @@ fn translucent_resolve_rejects_out_of_domain_spec() {
                     tint,
                     alpha_light: bad_alpha,
                     alpha_dark: bad_alpha,
+                    floor: None,
                 },
             )],
             vec![],
@@ -1773,9 +1792,12 @@ fn achromatic_hue_sources_are_handled_honestly() {
         &table,
         &crate::spaces::vc::ViewingConditions::srgb(),
     );
+    // `fill-danger-primary` остаётся Ladder (сентимент-тинт под альфой) — на нём
+    // и проверяем «серый бренд → сырой якорь семейства». `label-danger-primary`
+    // после ратификации ch5c (M1) — цветной TextAnchor (Color), не Translucent.
     let (_, r) = set
         .iter()
-        .find(|(n, _)| n == "label-danger-primary")
+        .find(|(n, _)| n == "fill-danger-primary")
         .expect("роль есть");
     let Resolved::Translucent(r) = r else {
         panic!("ожидался Translucent");

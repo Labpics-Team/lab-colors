@@ -98,6 +98,12 @@ pub struct RgbaColor {
     /// alpha carried in `alpha` differs from what was asked. Always `false` for a
     /// direct ladder emission.
     pub alpha_coerced: bool,
+    /// `true` when a solid family border (`border-<family>-strong`, M2 ch5c) was
+    /// darkened along the family curve to meet the AA UI floor (3:1), because the
+    /// raw family tint did not clear it on this background — an honest, flagged
+    /// minimal legal shift (family hue/chroma preserved, only lightness moved).
+    /// `false` for a direct ladder emission and for legal family solids.
+    pub floor_coerced: bool,
 }
 
 /// A resolved colour and the contrasts it actually achieves.
@@ -112,6 +118,13 @@ pub struct SolvedColor {
     /// `true` when the legal floor squeezed this role onto the smallest step
     /// below its senior (an honest, flagged hierarchy degradation).
     pub compressed: bool,
+    /// `true` when a coloured family label (M1 ch5c) lost perceptible colour on
+    /// its contract-solved lightness: the colour's `M'` fell below the tint
+    /// perceptibility floor, so at the family curve's extremes (near-white /
+    /// near-black) the hue is physically indistinguishable. An honest, flagged
+    /// outcome — not a silent degradation to grey. `false` for neutral labels and
+    /// for coloured labels that kept a distinguishable colour.
+    pub hue_vanished: bool,
     /// Честный замер |ΔJ'| на отданном hex для dJ'-ролей (симметрия с glow);
     /// `None` у контраст-ролей (их метрика — Lc).
     pub achieved_dj: Option<f64>,

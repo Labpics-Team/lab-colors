@@ -187,6 +187,9 @@ fn reconstruct_set(
                 solved,
                 compressed: entry.flags & FLAG_COMPRESSED != 0,
                 achieved_dj,
+                // Быстрый путь — нейтральная таблица (серый фон); оттенок семьи
+                // здесь не участвует, лейбл цвета не теряет.
+                hue_vanished: false,
             }
         };
         out.push((role, resolved));
@@ -415,14 +418,17 @@ mod tests {
                     solved: sa,
                     compressed: ca,
                     achieved_dj: da,
+                    hue_vanished: va,
                 },
                 Resolved::Color {
                     solved: sb,
                     compressed: cb,
                     achieved_dj: db,
+                    hue_vanished: vb,
                 },
             ) => {
                 ca == cb
+                    && va == vb
                     && sa.hex() == sb.hex()
                     && sa.lc().to_bits() == sb.lc().to_bits()
                     && sa.wcag_ratio().to_bits() == sb.wcag_ratio().to_bits()

@@ -451,16 +451,35 @@ impl Role {
 pub struct TextAnchor {
     fraction: f64,
     conformance: Floor,
+    /// Опциональный источник ОТТЕНКА семьи (ратификация ch5c, M1). `None` —
+    /// нейтральный лейбл (подтон из [`RoleChroma`] таблицы, прежний путь
+    /// байт-в-байт). `Some(tint)` — ЦВЕТНОЙ лейбл: держит ТОТ ЖЕ Lc-контракт
+    /// уровня, что нейтральный (доля·max, тот же WCAG-пол — одноуровневость по
+    /// построению), но решённый в чистом оттенке семьи. Тинт — пер-темный
+    /// `Copy`-якорь идентичности (Figma-оттенок сохранён); светлота выводится
+    /// контрактом на LCS-кривой семьи, хрома = стена гамута на решённой
+    /// светлоте. Резолв — [`resolve_hued_anchor`].
+    hue: Option<crate::ladder::LadderTint>,
 }
 
 impl TextAnchor {
     /// A text anchor at `fraction` of the background's maximum contrast, with the
-    /// given WCAG conformance floor. `fraction` is clamped into `(0, 1)`.
+    /// given WCAG conformance floor. `fraction` is clamped into `(0, 1)`. Neutral
+    /// undertone (no family hue); attach one with [`with_hue`](Self::with_hue).
     pub fn new(fraction: f64, conformance: Floor) -> Self {
         Self {
             fraction: fraction.clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON),
             conformance,
+            hue: None,
         }
+    }
+
+    /// Тот же якорь, но решаемый в чистом оттенке `hue`-семьи (M1 ch5c). Контракт
+    /// уровня (`fraction`/`conformance`) НЕ меняется — меняется лишь физика цвета:
+    /// одноуровневость держится, оттенок = идентичность семьи.
+    pub fn with_hue(mut self, hue: crate::ladder::LadderTint) -> Self {
+        self.hue = Some(hue);
+        self
     }
 
     /// The fraction of maximum contrast this anchor targets, in `(0, 1)`.
@@ -471,6 +490,11 @@ impl TextAnchor {
     /// The WCAG conformance floor applied after the perceptual target.
     pub fn conformance(self) -> Floor {
         self.conformance
+    }
+
+    /// Источник оттенка семьи, если это цветной лейбл (M1). `None` — нейтральный.
+    pub fn hue(self) -> Option<crate::ladder::LadderTint> {
+        self.hue
     }
 }
 
@@ -593,6 +617,15 @@ pub enum RoleSpec {
         alpha_light: f64,
         /// Альфа для тёмной темы (`(0, 1]`; у акцентов = `alpha_light`).
         alpha_dark: f64,
+        /// Опциональный юр. пол UI (M2 ch5c): солидная семейная граница
+        /// (`border-<family>-strong`, α=1) ОБЯЗАНА держать 3:1 (WCAG 1.4.11).
+        /// `None` — прежний путь (тинт эмитится как есть). `Some(floor)` —
+        /// если композит чист (≥ пола), эмитится точный семейный солид (Figma
+        /// цел); иначе МИНИМАЛЬНЫЙ ЛЕГАЛЬНЫЙ СДВИГ по кривой семьи до легальности,
+        /// объявленный флагом [`TranslucentResolved::floor_coerced`]. Применим
+        /// только к солиду (α=1); у полупрозрачных позиций игнорируется (контраст
+        /// полупрозрачной роли — свойство композита, не тинта).
+        floor: Option<Floor>,
     },
     /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
     /// #119): для солид-цвета `of` (по теме) на фоне резолва подбирается
@@ -1310,6 +1343,14 @@ pub enum Resolved {
         solved: Solved,
         compressed: bool,
         achieved_dj: Option<f64>,
+        /// Цветной лейбл (M1 ch5c) фактически ПОТЕРЯЛ цвет: на решённой
+        /// уровнем-контрактом светлоте красочность `M'` цвета упала ниже порога
+        /// воспринимаемости тинта ([`TINT_PERCEPTIBLE_MP_FLOOR`]) — у краёв
+        /// LCS-кривой семьи (почти-белый / почти-чёрный) хрома физически → 0.
+        /// Честный флаг, НЕ молчаливая деградация к серому/белому: потребитель
+        /// читает флаг и знает, что оттенок семьи здесь неразличим. `false` у
+        /// нейтральных лейблов и у цветных, сохранивших различимый цвет.
+        hue_vanished: bool,
     },
     /// Полупрозрачная роль лестницы/альфа-аналога: `rgba(tint, α)`, которую
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
@@ -1367,6 +1408,13 @@ pub struct TranslucentResolved {
     /// объявляет, что эмитированная α — не запрошенная, а минимально разрешимая
     /// ([`alpha`](Self::alpha) несёт фактическое значение).
     alpha_coerced: bool,
+    /// Солидная семейная граница (`border-<family>-strong`, M2 ch5c) была
+    /// притемнена по кривой семьи до юр. пола UI (3:1), потому что тинт-якорь
+    /// семьи не держал 3:1 на этом фоне. Честный флаг минимального легального
+    /// сдвига — оттенок/насыщенность семьи сохранены, изменилась лишь светлота.
+    /// `false` у прямой лестницы и когда семейный солид уже легален (Figma-тинт
+    /// эмитирован без сдвига).
+    floor_coerced: bool,
 }
 
 impl TranslucentResolved {
@@ -1410,6 +1458,12 @@ impl TranslucentResolved {
     /// побайтно — коэрсится только прозрачность (см. поле-документацию).
     pub fn alpha_coerced(&self) -> bool {
         self.alpha_coerced
+    }
+
+    /// Солидная семейная граница притемнена до юр. пола UI (M2 ch5c). `false` у
+    /// прямой лестницы и легальных семейных солидов. См. поле-документацию.
+    pub fn floor_coerced(&self) -> bool {
+        self.floor_coerced
     }
 }
 
@@ -1460,6 +1514,7 @@ impl Resolved {
             solved,
             compressed: false,
             achieved_dj: Option::None,
+            hue_vanished: false,
         }
     }
 
@@ -1469,6 +1524,20 @@ impl Resolved {
             Resolved::Color { solved, .. } => Some(solved),
             _ => None,
         }
+    }
+
+    /// Цветной лейбл потерял различимый цвет на решённой светлоте (M1 ch5c):
+    /// `M'` цвета ниже [`TINT_PERCEPTIBLE_MP_FLOOR`]. `false` для нейтральных и
+    /// сохранивших цвет ролей, для zero и unreachable. Честный сигнал вырождения
+    /// оттенка — не молчаливая деградация.
+    pub fn hue_vanished(&self) -> bool {
+        matches!(
+            self,
+            Resolved::Color {
+                hue_vanished: true,
+                ..
+            }
+        )
     }
 
     /// Whether this role's contract was **degraded to the nearest achievable**
@@ -1683,10 +1752,18 @@ fn resolve_spec_in(
 ) -> Resolved {
     let contract = match *spec {
         RoleSpec::Zero => return Resolved::None,
-        RoleSpec::Anchor(anchor) => match ctx.anchored_contract(anchor) {
-            Ok(c) => c,
-            Err(reason) => return Resolved::Unreachable(reason),
-        },
+        RoleSpec::Anchor(anchor) => {
+            // Цветной лейбл (M1 ch5c): тот же контракт уровня, решённый в чистом
+            // оттенке семьи. Нейтральный (`hue == None`) идёт прежним путём
+            // байт-в-байт.
+            if let Some(hue_tint) = anchor.hue() {
+                return resolve_hued_anchor(bg, anchor, hue_tint, vc, ctx);
+            }
+            match ctx.anchored_contract(anchor) {
+                Ok(c) => c,
+                Err(reason) => return Resolved::Unreachable(reason),
+            }
+        }
         RoleSpec::DecorativeDj { magnitude_dj } => {
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
@@ -1699,6 +1776,7 @@ fn resolve_spec_in(
                     solved: d.solved,
                     compressed: d.degraded,
                     achieved_dj: Some(d.achieved_dj),
+                    hue_vanished: false,
                 },
                 Err(reason) => Resolved::Unreachable(reason),
             };
@@ -1719,6 +1797,7 @@ fn resolve_spec_in(
             tint,
             alpha_light,
             alpha_dark,
+            floor,
         } => {
             // Лестница эмитит rgba(tint, α) НАПРЯМУЮ: тинт — якорь источника по
             // теме (bg-независим), α — пер-темные данные позиции (light/dark).
@@ -1729,6 +1808,15 @@ fn resolve_spec_in(
             } else {
                 alpha_light
             };
+            // M2 ch5c: солидная семейная граница (`floor = Some`, α=1) обязана
+            // держать юр. пол UI (3:1). Пол применим лишь к солиду — у
+            // полупрозрачной позиции контраст определяется композитом, а не
+            // тинтом, и притемнять тинт бессмысленно.
+            if let Some(floor) = floor
+                && (alpha - 1.0).abs() < f64::EPSILON
+            {
+                return resolve_solid_with_ui_floor(tint.for_vc(vc), floor, bg, vc, ctx);
+            }
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
         }
         RoleSpec::Glow { tint, step } => {
@@ -1820,7 +1908,158 @@ fn resolve_rgba_direct(
     let tint_q = quantise_encoded(tint_encoded);
     let composite = crate::alpha::composite_over_encoded(tint_q, alpha, bg_encoded);
     // Прямая лестница эмитит запрошенную α как есть — коэрсии нет по построению.
-    finish_rgba(tint_q, alpha, composite, bg_encoded, vc, false)
+    finish_rgba(tint_q, alpha, composite, bg_encoded, vc, false, false)
+}
+
+/// Резолв ЦВЕТНОГО текст/UI-лейбла (ратификация ch5c, M1).
+///
+/// Цветной лейбл держит ТОТ ЖЕ Lc-контракт уровня, что нейтральный
+/// ([`ResolveContext::anchored_contract`] — доля·max ахроматической полярности +
+/// тот же WCAG-пол): одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ, потому что
+/// цель — абсолютный Lc нейтральной ступени, а НЕ доля от максимума-в-оттенке
+/// (последнее снова оказалось бы слабее нейтрали). Отличие от нейтрального пути —
+/// физика цвета:
+///
+/// * оттенок = ИДЕНТИЧНОСТЬ семьи (Oklab-угол пер-темного тинта-якоря; Figma-
+///   оттенок сохранён, светлота выводится);
+/// * лексикографический порядок «красоты» — (1) контракт читаемости фиксирует
+///   светлоту на LCS-кривой семьи, (2) на ней берётся МАКСИМУМ чистого цвета
+///   (стена гамута, [`ChromaPolicy::Relative`]`(1.0)`): каждая точка кривой
+///   красива, хрома выведена, не оптимизируется отдельной метрикой.
+///
+/// Честные исходы (не молчаливая деградация):
+/// * `compressed` — юр. пол уровня перекрыл перцептивную цель
+///   ([`Solved::floor_override`]): контракт занят ближайшим легальным, не точным;
+/// * `hue_vanished` — на решённой светлоте красочность `M'` цвета упала ниже
+///   [`TINT_PERCEPTIBLE_MP_FLOOR`]: у краёв кривой (почти-белый/чёрный) хрома
+///   физически → 0, лейбл фактически потерял цвет — объявлено флагом.
+fn resolve_hued_anchor(
+    bg: &BgInput,
+    anchor: TextAnchor,
+    hue_tint: crate::ladder::LadderTint,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Resolved {
+    let contract = match ctx.anchored_contract(anchor) {
+        Ok(c) => c,
+        Err(reason) => return Resolved::Unreachable(reason),
+    };
+    let interval = match &ctx.interval {
+        Ok(iv) => *iv,
+        Err(reason) => return Resolved::Unreachable(reason.clone()),
+    };
+    let hue_deg = crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(
+        hue_tint.for_vc(vc),
+    ));
+    match solve::solve_in(
+        bg,
+        contract,
+        Hue::deg(hue_deg),
+        ChromaPolicy::Relative(1.0),
+        vc,
+        interval,
+    ) {
+        Ok(solved) => {
+            let hue_vanished = solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR;
+            // Тот же смысл, что у нейтрали: пол перекрыл перцептивную цель.
+            let compressed = solved.floor_override();
+            Resolved::Color {
+                solved,
+                compressed,
+                achieved_dj: Option::None,
+                hue_vanished,
+            }
+        }
+        Err(reason) => Resolved::Unreachable(reason),
+    }
+}
+
+/// Резолв СОЛИДНОЙ семейной границы `border-<family>-strong` с юр. полом UI
+/// (ратификация ch5c, M2).
+///
+/// Солид семьи (α=1) обязан держать 3:1 (WCAG 1.4.11 для границ контролов). Если
+/// композит тинта уже чист (≥ пола) — эмитится ТОЧНЫЙ семейный солид (Figma-
+/// идентичность цела, диффа эмиссии нет). Иначе — МИНИМАЛЬНЫЙ ЛЕГАЛЬНЫЙ СДВИГ по
+/// кривой семьи: контракт целит естественный Lc тинта, а юр. пол притемняет цвет
+/// РОВНО до легальности; оттенок и насыщенность семьи сохранены (доля хромы
+/// якоря на решённой светлоте). Сдвиг объявлен флагом
+/// [`TranslucentResolved::floor_coerced`] — не молчаливая деградация. Эмиссия
+/// остаётся полупрозрачной формой (`rgba`, α=1), как у любой семейной границы,
+/// чтобы форма роли не расходилась между легальными и притемнёнными характерами.
+fn resolve_solid_with_ui_floor(
+    tint_encoded: [f64; 3],
+    floor: Floor,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Resolved {
+    if !rgba_input_valid(tint_encoded, 1.0) {
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "solid-floor-спека вне домена (тинт [0,1]) — сборка в обход валидатора".into(),
+        ));
+    }
+    let bg_encoded = bg.encoded_display();
+    let tint_q = quantise_encoded(tint_encoded);
+    let min_ratio = match floor.min_ratio() {
+        Some(r) => r,
+        // Пол None (декоратив) — притемнять не нужно; прямой солид.
+        None => return resolve_rgba_direct(tint_encoded, 1.0, bg, vc),
+    };
+    let current_wcag = crate::wcag::contrast_ratio(tint_q, bg_encoded);
+    if current_wcag >= min_ratio {
+        // Уже легально — точный семейный солид, без сдвига (floor_coerced = false).
+        // Сравнение прямое: у семейных якорей нет цвета РОВНО на границе 3:1
+        // (легальные — с запасом, нелегальные — заметно ниже), поэтому f64-шум
+        // отношения не может переклассифицировать роль; порог-допуск не нужен.
+        return resolve_rgba_direct(tint_encoded, 1.0, bg, vc);
+    }
+    // Нелегально: минимальный сдвиг по кривой семьи до пола.
+    let interval = match &ctx.interval {
+        Ok(iv) => *iv,
+        Err(reason) => return Resolved::Unreachable(reason.clone()),
+    };
+    let tint_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint_q);
+    let hue_deg = crate::accent::oklab_hue_of(&tint_hex);
+    // Естественный знаковый Lc якоря и доля его хромы на собственной светлоте —
+    // чтобы сдвиг сохранил насыщенность семьи, а не выехал на стену гамута.
+    let tint_linear = [
+        crate::spaces::srgb::srgb_gamma_inv(tint_q[0]),
+        crate::spaces::srgb::srgb_gamma_inv(tint_q[1]),
+        crate::spaces::srgb::srgb_gamma_inv(tint_q[2]),
+    ];
+    let bg_linear = [
+        crate::spaces::srgb::srgb_gamma_inv(bg_encoded[0]),
+        crate::spaces::srgb::srgb_gamma_inv(bg_encoded[1]),
+        crate::spaces::srgb::srgb_gamma_inv(bg_encoded[2]),
+    ];
+    let (anchor_lc, _) = measure_contrast(bg_linear, tint_linear, vc);
+    let lab = crate::spaces::oklab::srgb_linear_to_oklab(tint_linear);
+    let anchor_chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
+    let c_max = scale::max_chroma(lab[0], hue_deg);
+    let chroma_ratio = if c_max > f64::EPSILON {
+        (anchor_chroma / c_max).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    // Контракт целит естественный Lc; пол уровня (`floor`) притемняет ровно до
+    // легальности — минимальный сдвиг по построению solve.
+    let contract = solve::Contract::text(anchor_lc).with_conformance(floor);
+    match solve::solve_in(
+        bg,
+        contract,
+        Hue::deg(hue_deg),
+        ChromaPolicy::Relative(chroma_ratio),
+        vc,
+        interval,
+    ) {
+        Ok(solved) => {
+            let shifted = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
+                .expect("hex собственного солвера всегда валиден");
+            let composite = crate::alpha::composite_over_encoded(shifted, 1.0, bg_encoded);
+            finish_rgba(shifted, 1.0, composite, bg_encoded, vc, false, true)
+        }
+        Err(reason) => Resolved::Unreachable(reason),
+    }
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -1873,6 +2112,7 @@ fn resolve_rgba_inverted(
         bg_encoded,
         vc,
         alpha_coerced,
+        false,
     )
 }
 
@@ -1889,6 +2129,7 @@ fn finish_rgba(
     bg_encoded: [f64; 3],
     vc: &ViewingConditions,
     alpha_coerced: bool,
+    floor_coerced: bool,
 ) -> Resolved {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
     // Замер идёт по КВАНТОВАННОМУ композиту — тому же 8-битному hex, который
@@ -1921,6 +2162,7 @@ fn finish_rgba(
         composite_wcag,
         composite_distinct,
         alpha_coerced,
+        floor_coerced,
     })
 }
 
@@ -2345,12 +2587,14 @@ fn enforce_text_hierarchy(
                 solved,
                 compressed: true,
                 achieved_dj: Option::None,
+                hue_vanished: false,
             },
             // No room to separate: equal to the senior by copy, flagged.
             (None, Some(solved), Resolved::Color { .. }) => Resolved::Color {
                 solved,
                 compressed: true,
                 achieved_dj: Option::None,
+                hue_vanished: false,
             },
             (None, _, other) => other.clone(),
         };

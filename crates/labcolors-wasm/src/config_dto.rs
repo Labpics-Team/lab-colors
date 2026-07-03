@@ -141,6 +141,10 @@ pub enum RoleRecipeDto {
     TextAnchor {
         fraction: f64,
         floor: FloorDto,
+        /// Опциональный источник оттенка семьи (M1 ch5c) — аддитивен: отсутствие
+        /// = нейтральный лейбл (прежние конфиги читаются без изменений).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hue: Option<LadderSourceDto>,
     },
     DjAnchor {
         light: f64,
@@ -152,6 +156,10 @@ pub enum RoleRecipeDto {
     Ladder {
         source: LadderSourceDto,
         position: String,
+        /// Опциональный юр. пол UI для солидной семейной границы (M2 ch5c) —
+        /// аддитивен: отсутствие = прежний путь без пола.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor: Option<FloorDto>,
     },
     Glow {
         source: LadderSourceDto,
@@ -285,6 +293,18 @@ fn position_from_key(key: &str) -> Result<LadderPosition, String> {
         })
 }
 
+/// [`Floor`] → сериализуемый [`FloorDto`] (kebab). Разделяемо `TextAnchor` и
+/// опциональным полом `Ladder` (M2 ch5c). `Floor` — `#[non_exhaustive]`:
+/// неизвестный вариант — честный `Err`, не тихий дефолт.
+fn floor_to_dto(f: Floor) -> Result<FloorDto, String> {
+    Ok(match f {
+        Floor::AaText => FloorDto::AaText,
+        Floor::AaUi => FloorDto::AaUi,
+        Floor::None => FloorDto::None,
+        other => return Err(format!("несериализуемый Floor: {other:?}")),
+    })
+}
+
 impl TryFrom<RoleRecipeDto> for RoleRecipe {
     type Error = String;
 
@@ -295,15 +315,25 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
                 step: labcolors_core::glow::GlowStep::parse(&step)
                     .map_err(|bad| format!("roles.*.step: неизвестная ступень glow `{bad}` (ожидается subtle|base|bloom)"))?,
             },
-            RoleRecipeDto::TextAnchor { fraction, floor } => RoleRecipe::TextAnchor {
+            RoleRecipeDto::TextAnchor {
+                fraction,
+                floor,
+                hue,
+            } => RoleRecipe::TextAnchor {
                 fraction,
                 floor: floor.into(),
+                hue: hue.map(LadderSource::from),
             },
             RoleRecipeDto::DjAnchor { light, dark } => RoleRecipe::DjAnchor { light, dark },
             RoleRecipeDto::DecorativeLc { magnitude } => RoleRecipe::DecorativeLc { magnitude },
-            RoleRecipeDto::Ladder { source, position } => RoleRecipe::Ladder {
+            RoleRecipeDto::Ladder {
+                source,
+                position,
+                floor,
+            } => RoleRecipe::Ladder {
                 source: source.into(),
                 position: position_from_key(&position)?,
+                floor: floor.map(Floor::from),
             },
             RoleRecipeDto::PairFill { source } => RoleRecipe::PairFill {
                 source: source.into(),
@@ -431,14 +461,14 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
                 source: source.try_into()?,
                 step: step.key().to_string(),
             },
-            RoleRecipe::TextAnchor { fraction, floor } => RoleRecipeDto::TextAnchor {
+            RoleRecipe::TextAnchor {
+                fraction,
+                floor,
+                hue,
+            } => RoleRecipeDto::TextAnchor {
                 fraction: *fraction,
-                floor: match floor {
-                    Floor::AaText => FloorDto::AaText,
-                    Floor::AaUi => FloorDto::AaUi,
-                    Floor::None => FloorDto::None,
-                    other => return Err(format!("несериализуемый Floor: {other:?}")),
-                },
+                floor: floor_to_dto(*floor)?,
+                hue: hue.as_ref().map(TryInto::try_into).transpose()?,
             },
             RoleRecipe::DjAnchor { light, dark } => RoleRecipeDto::DjAnchor {
                 light: *light,
@@ -447,9 +477,14 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
             RoleRecipe::DecorativeLc { magnitude } => RoleRecipeDto::DecorativeLc {
                 magnitude: *magnitude,
             },
-            RoleRecipe::Ladder { source, position } => RoleRecipeDto::Ladder {
+            RoleRecipe::Ladder {
+                source,
+                position,
+                floor,
+            } => RoleRecipeDto::Ladder {
                 source: source.try_into()?,
                 position: position.key().to_string(),
+                floor: floor.map(floor_to_dto).transpose()?,
             },
             RoleRecipe::PairFill { source } => RoleRecipeDto::PairFill {
                 source: source.try_into()?,

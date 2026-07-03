@@ -52,6 +52,15 @@ export interface SolvedColor {
   readonly wcagRatio: number;
   /** The legal floor squeezed this role onto the smallest step below its senior. */
   readonly compressed: boolean;
+  /**
+   * `true` when a coloured family label (M1) lost perceptible colour on its
+   * contract-solved lightness: the colour's M′ fell below the tint perceptibility
+   * floor, so at the family curve's extremes (near-white / near-black) the hue is
+   * physically indistinguishable. An honest, flagged outcome — not a silent
+   * degradation to grey. `false` for neutral labels and coloured labels that kept
+   * a distinguishable colour.
+   */
+  readonly hueVanished: boolean;
   /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
   readonly achievedDj: number | null;
   /** The WCAG floor overrode the perceptual target. */
@@ -104,6 +113,14 @@ export interface TranslucentRole {
    * `false` for a direct ladder emission.
    */
   readonly alphaCoerced: boolean;
+  /**
+   * `true` when a solid family border (`border-<family>-strong`, M2) was darkened
+   * along the family curve to meet the AA UI floor (3:1), because the raw family
+   * tint did not clear it on this background — an honest, flagged minimal legal
+   * shift (family hue/chroma preserved, only lightness moved). `false` for a
+   * direct ladder emission and for legal family solids.
+   */
+  readonly floorCoerced: boolean;
   /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
   readonly css: string;
 }
@@ -341,6 +358,11 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                 set(&role_obj, "compressed", &JsValue::from_bool(c.compressed));
                 set(
                     &role_obj,
+                    "hueVanished",
+                    &JsValue::from_bool(c.hue_vanished),
+                );
+                set(
+                    &role_obj,
                     "achievedDj",
                     &c.achieved_dj.map_or(JsValue::NULL, JsValue::from_f64),
                 );
@@ -379,6 +401,11 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                     &role_obj,
                     "alphaCoerced",
                     &JsValue::from_bool(r.alpha_coerced),
+                );
+                set(
+                    &role_obj,
+                    "floorCoerced",
+                    &JsValue::from_bool(r.floor_coerced),
                 );
                 // Переменная несёт тинт в oklch со слэш-альфой — браузер
                 // композитит на живой подложке; форма едина с солидами.
