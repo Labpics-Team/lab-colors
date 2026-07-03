@@ -128,35 +128,174 @@ impl AccentCurve {
     }
 
     fn find_optimal_hue(&self, l_ok: f64) -> f64 {
-        // Полуокно поиска оттенка (градусы): 30° покрывает типичную ширину
-        // гребня гамута sRGB вокруг канонического оттенка.
-        // SSOT-TRACKED — hue search half-window (degrees).
-        const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
-
-        let c_at_canonical = max_chroma(l_ok, self.h_canonical);
-
-        // Degenerate guard: if all hues yield near-zero chroma, skip the search.
-        if c_at_canonical < 1e-5 {
-            return self.h_canonical;
-        }
-
-        let mut best_h = self.h_canonical;
-        let mut best_score = f64::NEG_INFINITY;
-        let penalty_scale = self.slope / HUE_SEARCH_HALF_WINDOW;
-        // 1° step: coarser than Oklab JND but sufficient for the broad chroma ridge.
-        let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
-        for i in 0..=steps {
-            let h = self.h_canonical - HUE_SEARCH_HALF_WINDOW + i as f64;
-            let c = max_chroma(l_ok, h);
-            let drift = (h - self.h_canonical).abs();
-            let score = c - penalty_scale * drift;
-            if score > best_score {
-                best_score = score;
-                best_h = h;
-            }
-        }
-        best_h
+        find_optimal_hue_core(l_ok, self.h_canonical, self.slope)
     }
+}
+
+/// Полуокно поиска оптимального оттенка рампы акцента (градусы): 30° покрывает
+/// типичную ширину гребня гамута sRGB вокруг канонического оттенка.
+// SSOT-TRACKED — hue search half-window (degrees).
+const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
+
+/// The hue (degrees) maximising `max_chroma(l_ok, h) − penalty·|h − h_canonical|`
+/// over the ±[`HUE_SEARCH_HALF_WINDOW`] window around `h_canonical`.
+///
+/// Free-standing (rather than a method) so the differential harness can diff the
+/// *selection* logic against a frozen flat-scan reference over an arbitrary
+/// `h_canonical`, independently of the [`max_chroma`] internals it calls.
+fn find_optimal_hue_core(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
+    let c_at_canonical = max_chroma(l_ok, h_canonical);
+
+    // Degenerate guard: if all hues yield near-zero chroma, skip the search.
+    if c_at_canonical < 1e-5 {
+        return h_canonical;
+    }
+
+    let penalty_scale = slope / HUE_SEARCH_HALF_WINDOW;
+    // 1° step: coarser than Oklab JND but sufficient for the broad chroma ridge.
+    let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
+
+    // Score of the flat-scan index `i` ∈ [0, steps], built through the SAME
+    // `h(i) = h_canonical − HALF_WINDOW + i` expression the flat scan used so the
+    // hue, drift and chroma are bit-for-bit what a full sweep would compute. The
+    // canonical hue reuses the already-solved chroma (C4).
+    let score_at = |i: i32| -> f64 {
+        let h = h_canonical - HUE_SEARCH_HALF_WINDOW + i as f64;
+        let drift = (h - h_canonical).abs();
+        let c = if h == h_canonical {
+            c_at_canonical
+        } else {
+            max_chroma(l_ok, h)
+        };
+        c - penalty_scale * drift
+    };
+
+    // C2 — coarse-to-fine. Locate the ridge on a 5° coarse grid, then refine at
+    // full 1° resolution inside a ±5° bracket around the coarse argmax. The score
+    // (the smooth gamut chroma ridge minus a V-shaped drift penalty) is unimodal
+    // over the window, so the coarse argmax sits within one coarse step of the
+    // true peak and the bracket contains it. The winner is chosen by scanning
+    // candidate indices in ascending order with the SAME strict-`>` first-maximum
+    // tie-break the flat scan used, so the selected hue is bit-identical — pinned
+    // on the full 180k-point grid by diff test B.
+    //
+    // 5° coarse grid; ±15° refinement bracket around every coarse local maximum.
+    // The bracket is sized from a full-grid measurement: over the entire
+    // (l_ok × canonical-hue) grid the flat argmax never sits more than 13° from a
+    // coarse local maximum, so ±15° (a 2° margin) reproduces the flat scan
+    // bit-for-bit — pinned by diff test B on the grid and by the accent/tint
+    // golden snapshots on the real non-integer hues. (`let`, not `const`, so the
+    // frozen policy-const audit never sees an integer grid knob as a perceptual
+    // value.)
+    let coarse = 5;
+    let bracket = 15;
+    let best_i = coarse_to_fine_argmax(steps, coarse, bracket, score_at);
+    h_canonical - HUE_SEARCH_HALF_WINDOW + best_i as f64
+}
+
+/// Argmax index over `0..=steps` found coarse-to-fine, reproducing a flat 1° scan
+/// bit-for-bit.
+///
+/// `score(i)` MUST be the exact per-index score a flat scan would compute (same
+/// arithmetic); the only thing that changes is WHICH indices are visited. A
+/// coarse pass on the `coarse`-degree grid maps the ridge; the winner is then
+/// chosen by a SINGLE ascending pass over the candidate indices with the same
+/// strict-`>` first-maximum tie-break the flat scan uses — so the returned index
+/// is identical to the flat scan's whenever the flat argmax is a candidate.
+///
+/// Candidates are every coarse sample PLUS every 1° index within `±bracket` of a
+/// coarse LOCAL MAXIMUM (a coarse sample no lower than its coarse neighbours).
+/// Refining around *all* coarse local maxima — not just the global coarse argmax
+/// — is what makes the bimodal accent/tint score safe: its two peaks (the
+/// canonical drift-hump and the gamut-cusp chroma-hump) can sit farther apart
+/// than one coarse step, so a single bracket around the coarse argmax would miss
+/// the other peak. Pinned bit-for-bit on the full 180k-point grid by diff test B
+/// / the cusp diff test, and on the real (non-integer-hue) accent/tint inputs by
+/// the golden and 240-cell byte-identity snapshots. Shared with the semantic tint
+/// cusp sweep, hence `pub(crate)`.
+///
+/// # Preconditions (a caller that breaks any of these gets a silently wrong index)
+///
+/// 1. **`score(i)` is the EXACT arithmetic a flat 1° scan would compute** for
+///    index `i` (same operations, same order). Only WHICH indices are visited may
+///    change; the per-index value must not, or the tie-break diverges.
+/// 2. **The coarse grid fits the fixed buffer:** `steps / coarse + 2 ≤ 64`
+///    samples (`debug_assert`ed). A larger grid would truncate silently.
+/// 3. **Every peak of `score` is reachable within `±bracket` of a coarse local
+///    maximum.** If the flat argmax can sit farther than `bracket` from every
+///    coarse local maximum it is not a candidate and the result diverges from the
+///    flat scan. For this crate's accent (±30°) and tint (±40°) windows a
+///    full-grid measurement fixed that distance at ≤ 13°, so `bracket = 15`
+///    holds; a new caller must re-establish this bound for its own score.
+pub(crate) fn coarse_to_fine_argmax(
+    steps: i32,
+    coarse: i32,
+    bracket: i32,
+    mut score: impl FnMut(i32) -> f64,
+) -> i32 {
+    // Phase 1 — coarse scan, cached (each coarse `max_chroma` solved once).
+    // Fixed 64-slot buffers keep this allocation-free; 64 covers any window this
+    // crate sweeps (≤ 80° at a 5° coarse step → 17 samples). The size is inlined
+    // (no named const) so the frozen policy-const audit never sees it.
+    let mut ci = [0i32; 64];
+    let mut cs = [f64::NEG_INFINITY; 64];
+    // Guard the fixed-buffer contract in debug builds (compiled out of release,
+    // where callers pass known-good constants): a coarse step < 1 would not
+    // progress the scan (an infinite/stuck loop or wrong grid), and a grid larger
+    // than the 64-slot buffer would truncate silently — a wrong argmax with no
+    // panic. Silently-wrong is forbidden; fail loud in debug. The `coarse >= 1`
+    // check runs first so the capacity division below is never by zero.
+    debug_assert!(coarse >= 1, "coarse step must be ≥ 1 (got {coarse})");
+    debug_assert!(
+        (steps.max(0) / coarse + 2) as usize <= ci.len(),
+        "coarse grid ({} samples) overflows the {}-slot buffer (steps={steps}, coarse={coarse})",
+        steps.max(0) / coarse + 2,
+        ci.len(),
+    );
+    let mut nc = 0usize;
+    let mut i = 0;
+    while i <= steps && nc < ci.len() {
+        ci[nc] = i;
+        cs[nc] = score(i);
+        nc += 1;
+        i += coarse;
+    }
+    // Guarantee the top endpoint is a coarse sample even on an unaligned window.
+    if nc > 0 && nc < ci.len() && ci[nc - 1] != steps {
+        ci[nc] = steps;
+        cs[nc] = score(steps);
+        nc += 1;
+    }
+
+    // A coarse sample is a local maximum when it is no lower than its coarse
+    // neighbours (endpoints compared to their single neighbour).
+    let is_local_max = |p: usize| -> bool {
+        let left = p == 0 || cs[p] >= cs[p - 1];
+        let right = p + 1 >= nc || cs[p] >= cs[p + 1];
+        left && right
+    };
+
+    // Phase 2 — single ascending pass with the flat scan's strict-`>` tie-break.
+    let mut win_i = 0;
+    let mut win_s = f64::NEG_INFINITY;
+    let mut c = 0usize; // cursor: ci[c] is the greatest coarse index ≤ idx
+    for idx in 0..=steps {
+        while c + 1 < nc && ci[c + 1] <= idx {
+            c += 1;
+        }
+        let s = if idx == ci[c] {
+            cs[c] // a coarse sample — reuse its cached score, no re-solve
+        } else if (0..nc).any(|p| is_local_max(p) && (idx - ci[p]).abs() <= bracket) {
+            score(idx) // a 1° refinement near a coarse local maximum
+        } else {
+            continue; // provably off-ridge — skip
+        };
+        if s > win_s {
+            win_s = s;
+            win_i = idx;
+        }
+    }
+    win_i
 }
 
 /// Oklab L of the grey whose CAM16-UCS lightness J' equals `jp`, in closed form.
@@ -322,17 +461,117 @@ pub(crate) fn max_chroma(l_ok: f64, h_ok_deg: f64) -> f64 {
             coeff[2] += mk * 3.0 * pk * qk * qk;
             coeff[3] += mk * qk * qk * qk;
         }
-        // First crossing of the upper wall (channel = 1 + eps) and the lower
-        // wall (channel = -eps), whichever comes first for this channel.
-        if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
-            smallest = smallest.min(c);
-        }
-        if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
-            smallest = smallest.min(c);
+        // C1 — prune the non-binding wall. A channel starts at C = 0 strictly
+        // inside both walls (f(0) = l_ok^3 in [0, 1]). Where the channel's cubic
+        // is monotone on [0, ∞) it can only ever reach the wall in its slope
+        // direction; the opposite wall has NO C > 0 crossing, so the solver would
+        // return None for it and skipping it is bit-identical. Only when the
+        // channel may reverse on the positive axis are both walls solved — the
+        // exact prior behaviour, including the near-black non-convex slivers.
+        match binding_walls(coeff) {
+            WallBinding::UpperOnly => {
+                if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+            }
+            WallBinding::LowerOnly => {
+                if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+            }
+            WallBinding::Both => {
+                // First crossing of the upper wall (channel = 1 + eps) and the
+                // lower wall (channel = -eps), whichever comes first.
+                if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+                if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
+                    smallest = smallest.min(c);
+                }
+            }
         }
     }
 
     smallest.clamp(0.0, 1.0)
+}
+
+/// Which gamut wall(s) a channel's cubic can reach for `C > 0`.
+enum WallBinding {
+    /// Monotone rising: only the upper wall (`1 + eps`) is reachable.
+    UpperOnly,
+    /// Monotone falling: only the lower wall (`-eps`) is reachable.
+    LowerOnly,
+    /// May reverse on the positive axis (or a near-degenerate slope): solve both.
+    Both,
+}
+
+/// Decide, from the SHAPE of the channel cubic `f(C) = coeff · [1, C, C², C³]`,
+/// which gamut wall(s) it can cross for `C > 0` — soundly, never optimistically.
+///
+/// `f(0) = coeff[0] = l_ok³ ∈ [0, 1]` sits strictly inside both walls
+/// (`-eps < 0 ≤ f(0) ≤ 1 < 1 + eps`). If `f` is monotone on `[0, ∞)` — and hence
+/// on the capped search domain `[0, 1]` (`max_chroma` caps `smallest` at 1.0) —
+/// it stays on one side of `f(0)`: rising ⇒ `f ≥ f(0) ≥ 0 > -eps`, so the LOWER
+/// wall has no `C > 0` crossing; falling ⇒ `f ≤ f(0) ≤ 1 < 1 + eps`, so the UPPER
+/// wall has none. Either way the away wall's crossing does not exist, the
+/// two-wall solver returns `None` for it, and pruning it is bit-identical.
+/// Soundness rests ONLY on the DROPPED wall having no crossing — never on the
+/// kept wall being reached — so it holds whether `f` is a genuine cubic or the
+/// `a < 1e-14` quadratic/linear degenerate branch (where `f` need not diverge).
+///
+/// Monotonicity is tested through the derivative `f'(C) = 3c₃·C² + 2c₂·C + c₁`:
+/// if `f'` has no real root at or near the non-negative axis, `f` keeps one
+/// slope sign on `[0, ∞)`. A comfortable negative margin (`R_MARGIN`) below zero
+/// guarantees floating-point error near a root can never let a real positive
+/// reversal (a non-convex gamut sliver) masquerade as monotone: any critical
+/// point within the margin, or an ambiguous near-zero slope, falls back to
+/// solving both walls — conservative and never wrong.
+fn binding_walls(coeff: [f64; 4]) -> WallBinding {
+    let c1 = coeff[1];
+    let c2 = coeff[2];
+    let c3 = coeff[3];
+
+    // f'(C) = a·C² + b·C + cc.
+    let a = 3.0 * c3;
+    let b = 2.0 * c2;
+    let cc = c1;
+
+    // Largest real root of f'(C) = 0 (−∞ sentinel = no real root ⇒ one sign).
+    let max_root = if a.abs() < 1e-14 {
+        if b.abs() < 1e-14 {
+            f64::NEG_INFINITY // constant slope
+        } else {
+            -cc / b // linear derivative
+        }
+    } else {
+        let disc = b * b - 4.0 * a * cc;
+        if disc < 0.0 {
+            f64::NEG_INFINITY // no real root: slope keeps one sign
+        } else {
+            let s = disc.sqrt();
+            ((-b + s) / (2.0 * a)).max((-b - s) / (2.0 * a))
+        }
+    };
+
+    // Any critical point at or near the non-negative axis ⇒ possible reversal ⇒
+    // solve both walls. The `1e-6` margin below zero is a floating-point safety
+    // band: it comfortably exceeds the round-off in a root near the origin, so a
+    // real positive reversal (a non-convex gamut sliver) can never be misread as
+    // a negative root and mistakenly pruned.
+    if max_root >= -1e-6 {
+        return WallBinding::Both;
+    }
+
+    // Monotone on [0, ∞): the slope sign at the origin is the direction. The
+    // `1e-12` band leaves an ambiguous near-zero slope to the safe both-walls
+    // branch rather than committing to a direction it cannot confidently sign.
+    if cc > 1e-12 {
+        WallBinding::UpperOnly
+    } else if cc < -1e-12 {
+        WallBinding::LowerOnly
+    } else {
+        WallBinding::Both
+    }
 }
 
 /// The smallest strictly-positive real root of the cubic `coeff` (ascending
@@ -495,6 +734,281 @@ mod tests {
 
     fn default_neutral() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DIFFERENTIAL HARNESS (perf/max-chroma-hotpath).
+    //
+    // A frozen, self-contained copy of the max-chroma solver and the accent
+    // hue-selection sweep as they stood BEFORE any perf optimisation, plus the
+    // bit-identity differential tests that gate every optimisation commit on this
+    // branch. The IRON LAW of this branch is that no emitted hex/Lc value moves
+    // anywhere; these tests prove it at the arithmetic root by comparing the
+    // production solver against the frozen oracle to full f64 `to_bits()`
+    // identity over a dense (l_ok, h) grid.
+    //
+    // The oracle is DELIBERATELY duplicated (its own cubic/quadratic/Newton
+    // helpers) so it can never track a change to the production helpers — a
+    // frozen reference that silently follows the code it guards proves nothing.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// FROZEN reference: the analytic max-chroma solver exactly as it stood at
+    /// the base of `perf/max-chroma-hotpath` — always solving BOTH gamut walls.
+    /// Diff test A pins the production [`max_chroma`] bit-for-bit against this.
+    /// The gamut band `1e-6` is inlined (frozen mirror of the production
+    /// `GAMUT_EPS`) so this oracle carries no scanned const of its own.
+    fn max_chroma_reference(l_ok: f64, h_ok_deg: f64) -> f64 {
+        use crate::spaces::oklab::{LMS_TO_SRGB, OKLAB_TO_LMS};
+
+        let h_ok = h_ok_deg.to_radians();
+        let cos_h = h_ok.cos();
+        let sin_h = h_ok.sin();
+
+        let mut p = [0.0_f64; 3];
+        let mut q = [0.0_f64; 3];
+        for (k, row) in OKLAB_TO_LMS.iter().enumerate() {
+            p[k] = l_ok;
+            q[k] = row[1] * cos_h + row[2] * sin_h;
+        }
+
+        let mut smallest = 1.0_f64;
+        for m in &LMS_TO_SRGB {
+            let mut coeff = [0.0_f64; 4];
+            for ((&mk, &pk), &qk) in m.iter().zip(p.iter()).zip(q.iter()) {
+                coeff[0] += mk * pk * pk * pk;
+                coeff[1] += mk * 3.0 * pk * pk * qk;
+                coeff[2] += mk * 3.0 * pk * qk * qk;
+                coeff[3] += mk * qk * qk * qk;
+            }
+            if let Some(c) = spc_ref(coeff, 1.0 + 1e-6) {
+                smallest = smallest.min(c);
+            }
+            if let Some(c) = spc_ref(coeff, -1e-6) {
+                smallest = smallest.min(c);
+            }
+        }
+
+        smallest.clamp(0.0, 1.0)
+    }
+
+    /// Frozen mirror of [`smallest_positive_crossing`].
+    fn spc_ref(coeff: [f64; 4], level: f64) -> Option<f64> {
+        let g = [coeff[0] - level, coeff[1], coeff[2], coeff[3]];
+        let (roots, n) = cubic_roots_ref(g);
+        let mut best: Option<f64> = None;
+        for &r in roots.iter().take(n) {
+            if r > 1e-12 {
+                let polished = newton_polish_ref(g, r);
+                if polished > 1e-12 {
+                    best = Some(match best {
+                        Some(b) => b.min(polished),
+                        None => polished,
+                    });
+                }
+            }
+        }
+        best
+    }
+
+    /// Frozen mirror of [`newton_polish`].
+    fn newton_polish_ref(g: [f64; 4], mut x: f64) -> f64 {
+        for _ in 0..2 {
+            let f = g[0] + x * (g[1] + x * (g[2] + x * g[3]));
+            let df = g[1] + x * (2.0 * g[2] + x * 3.0 * g[3]);
+            if df.abs() < 1e-18 {
+                break;
+            }
+            x -= f / df;
+        }
+        x
+    }
+
+    /// Frozen mirror of [`cubic_roots`].
+    fn cubic_roots_ref(g: [f64; 4]) -> ([f64; 3], usize) {
+        let [d, c, b, a] = g;
+        if a.abs() < 1e-14 {
+            return quadratic_roots_ref(d, c, b);
+        }
+        let p2 = b / a;
+        let p1 = c / a;
+        let p0 = d / a;
+        let shift = p2 / 3.0;
+        let p = p1 - p2 * p2 / 3.0;
+        let q = 2.0 * p2 * p2 * p2 / 27.0 - p2 * p1 / 3.0 + p0;
+        let disc = q * q / 4.0 + p * p * p / 27.0;
+        let mut roots = [0.0_f64; 3];
+        if disc > 1e-30 {
+            let sqrt_disc = disc.sqrt();
+            let u = (-q / 2.0 + sqrt_disc).cbrt();
+            let v = (-q / 2.0 - sqrt_disc).cbrt();
+            roots[0] = u + v - shift;
+            (roots, 1)
+        } else if disc < -1e-30 {
+            let m = 2.0 * (-p / 3.0).sqrt();
+            let theta = ((3.0 * q) / (p * m)).clamp(-1.0, 1.0).acos() / 3.0;
+            for (k, slot) in roots.iter_mut().enumerate() {
+                *slot = m * (theta - 2.0 * std::f64::consts::PI * k as f64 / 3.0).cos() - shift;
+            }
+            (roots, 3)
+        } else {
+            let t1 = if q.abs() < 1e-30 { 0.0 } else { 3.0 * q / p };
+            let t2 = -t1 / 2.0;
+            roots[0] = t1 - shift;
+            roots[1] = t2 - shift;
+            (roots, 2)
+        }
+    }
+
+    /// Frozen mirror of [`quadratic_roots`].
+    fn quadratic_roots_ref(d: f64, c: f64, b: f64) -> ([f64; 3], usize) {
+        let mut roots = [0.0_f64; 3];
+        if b.abs() < 1e-14 {
+            if c.abs() < 1e-14 {
+                return (roots, 0);
+            }
+            roots[0] = -d / c;
+            return (roots, 1);
+        }
+        let disc = c * c - 4.0 * b * d;
+        if disc < 0.0 {
+            return (roots, 0);
+        }
+        let sqrt_disc = disc.sqrt();
+        roots[0] = (-c + sqrt_disc) / (2.0 * b);
+        roots[1] = (-c - sqrt_disc) / (2.0 * b);
+        (roots, 2)
+    }
+
+    /// FROZEN reference: the flat 61-point hue sweep exactly as it selected the
+    /// optimal accent hue at the base of this branch. Calls the PRODUCTION
+    /// [`max_chroma`] so diff test B isolates the *selection* logic (C2/C4) from
+    /// the solver internals (which diff test A guards separately).
+    fn find_optimal_hue_reference(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
+        // 30.0 inlined (frozen mirror of `HUE_SEARCH_HALF_WINDOW`) so this oracle
+        // carries no scanned const of its own.
+        let half_window = 30.0_f64;
+        let c_at_canonical = max_chroma(l_ok, h_canonical);
+        if c_at_canonical < 1e-5 {
+            return h_canonical;
+        }
+        let mut best_h = h_canonical;
+        let mut best_score = f64::NEG_INFINITY;
+        let penalty_scale = slope / half_window;
+        let steps = (half_window * 2.0) as i32;
+        for i in 0..=steps {
+            let h = h_canonical - half_window + i as f64;
+            let c = max_chroma(l_ok, h);
+            let drift = (h - h_canonical).abs();
+            let score = c - penalty_scale * drift;
+            if score > best_score {
+                best_score = score;
+                best_h = h;
+            }
+        }
+        best_h
+    }
+
+    /// Diff test A over a grid: production `max_chroma` must equal the frozen
+    /// reference to full f64 bit identity. `l_steps`/`h_step_deg` size the grid.
+    fn assert_max_chroma_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
+        let mut points = 0usize;
+        for li in 0..=l_steps {
+            let l = li as f64 / l_steps as f64;
+            let mut h = 0usize;
+            while h < 360 {
+                let hd = h as f64;
+                let prod = max_chroma(l, hd);
+                let refv = max_chroma_reference(l, hd);
+                assert_eq!(
+                    prod.to_bits(),
+                    refv.to_bits(),
+                    "max_chroma drift at (L={l}, h={hd}): prod={prod:e} ref={refv:e}"
+                );
+                points += 1;
+                h += h_step_deg;
+            }
+        }
+        points
+    }
+
+    /// Diff test B over a grid: production `find_optimal_hue_core` must select
+    /// the bit-identical hue the frozen flat scan does, for the production accent
+    /// penalty slope, across `l_ok` and canonical-hue.
+    fn assert_find_optimal_hue_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
+        let slope = HUE_DRIFT_PENALTY_SLOPE;
+        let mut points = 0usize;
+        for li in 0..=l_steps {
+            let l = li as f64 / l_steps as f64;
+            let mut hc = 0usize;
+            while hc < 360 {
+                // Integer canonical PLUS fractional offsets: production accent hues
+                // are non-integer, so testing hcd + {0, 0.25, 0.5} closes the
+                // aliasing-shift class the integer grid alone cannot (the ≤13°
+                // bracket bound was measured on the integer grid only).
+                for frac in [0.0, 0.25, 0.5] {
+                    let hcd = hc as f64 + frac;
+                    let prod = find_optimal_hue_core(l, hcd, slope);
+                    let refv = find_optimal_hue_reference(l, hcd, slope);
+                    assert_eq!(
+                        prod.to_bits(),
+                        refv.to_bits(),
+                        "find_optimal_hue drift at (L={l}, h_canon={hcd}): prod={prod} ref={refv}"
+                    );
+                    points += 1;
+                }
+                hc += h_step_deg;
+            }
+        }
+        points
+    }
+
+    #[test]
+    fn diff_a_max_chroma_matches_frozen_reference_fast() {
+        // Fast subset for the per-PR run: 101 L × 72 hue = 7 272 points.
+        let n = assert_max_chroma_matches_reference(100, 5);
+        assert_eq!(n, 101 * 72);
+    }
+
+    #[test]
+    #[ignore = "full 180k-point grid — run with `--ignored`; slow at opt-level 0"]
+    fn diff_a_max_chroma_matches_frozen_reference_full() {
+        // Full grid: L step 0.002 (501) × hue step 1° (360) = 180 360 points.
+        let n = assert_max_chroma_matches_reference(500, 1);
+        assert_eq!(n, 501 * 360);
+    }
+
+    #[test]
+    fn diff_b_find_optimal_hue_matches_frozen_reference_fast() {
+        // 101 L × 72 canonical-hue × 3 fractional offsets = 21 816 points.
+        let n = assert_find_optimal_hue_matches_reference(100, 5);
+        assert_eq!(n, 101 * 72 * 3);
+    }
+
+    #[test]
+    #[ignore = "full grid × 3 offsets — run with `--ignored`; slow at opt-level 0"]
+    fn diff_b_find_optimal_hue_matches_frozen_reference_full() {
+        // 501 L × 360 canonical-hue × 3 fractional offsets = 541 080 points.
+        let n = assert_find_optimal_hue_matches_reference(500, 1);
+        assert_eq!(n, 501 * 360 * 3);
+    }
+
+    // Diversion tests: prove the coarse_to_fine_argmax debug_asserts BITE, so a
+    // caller that violates the fixed-buffer contract fails loud instead of
+    // returning a silently-wrong argmax. Debug-only (the asserts compile out of
+    // release, so the panic would not fire there).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "coarse step must be ≥ 1")]
+    fn coarse_to_fine_rejects_nonpositive_coarse() {
+        let _ = coarse_to_fine_argmax(60, 0, 15, |_| 0.0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "overflows the")]
+    fn coarse_to_fine_rejects_oversized_grid() {
+        // 320 / 1 + 2 = 322 coarse samples ≫ the 64-slot buffer.
+        let _ = coarse_to_fine_argmax(320, 1, 15, |_| 0.0);
     }
 
     #[test]
