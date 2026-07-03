@@ -145,15 +145,19 @@ impl NeutralCurve {
             return self.a_dark;
         }
 
+        // jp-якоря берутся напрямую из полей якорей (Oklab jp). Прежний метод-
+        // обёртка effective_hue_anchor_jp был identity ({ anchor.jp }) — имя
+        // обещало hue-зависимый расчёт, тело возвращало поле; заинлайнен (аудит
+        // D2(c), 2026-07-03), value-preserving.
         let jp = if t <= 0.5 {
             let u = t / 0.5;
-            let j0 = self.effective_hue_anchor_jp(&self.a_light);
-            let j6 = self.effective_hue_anchor_jp(&self.a_base);
+            let j0 = self.a_light.jp;
+            let j6 = self.a_base.jp;
             j0 + (j6 - j0) * u.powf(self.params.gamma_light)
         } else {
             let u = (t - 0.5) / 0.5;
-            let j6 = self.effective_hue_anchor_jp(&self.a_base);
-            let j12 = self.effective_hue_anchor_jp(&self.a_dark);
+            let j6 = self.a_base.jp;
+            let j12 = self.a_dark.jp;
             j6 + (j12 - j6) * u.powf(self.params.gamma_dark)
         };
 
@@ -204,10 +208,6 @@ impl NeutralCurve {
 
     pub fn dark_anchor(&self) -> &LcsColor {
         &self.a_dark
-    }
-
-    fn effective_hue_anchor_jp(&self, anchor: &LcsColor) -> f64 {
-        anchor.jp
     }
 
     fn interpolate_hue_ok(&self, t: f64) -> f64 {

@@ -408,8 +408,6 @@ pub enum Unreachable {
     PolarityMismatch { target: f64 },
     /// The requested gamut is not supported yet (Display P3 arrives later).
     GamutUnsupported,
-    /// A background descriptor that cannot yet be reduced (future inputs).
-    UnsupportedBackground,
     /// Malformed input, such as an invalid hex colour or a non-finite target.
     InvalidInput(String),
 }
@@ -445,9 +443,6 @@ impl core::fmt::Display for Unreachable {
                     f,
                     "requested gamut is not supported yet (Display P3 is future work)"
                 )
-            }
-            Self::UnsupportedBackground => {
-                write!(f, "this background descriptor cannot be resolved yet")
             }
             Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
         }
@@ -1386,6 +1381,52 @@ pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
 mod tests {
     use super::*;
     use crate::lpc::lpc_with_vc;
+
+    /// D2(a) страж (аудит 2026-07-03): `Unreachable` не несёт never-constructed
+    /// вариантов-заготовок. `UnsupportedBackground` («future inputs», 0 точек
+    /// конструирования по grep всех крейтов — только объявление + Display + wasm-
+    /// маппинг) удалён; enum остаётся `#[non_exhaustive]`.
+    ///
+    /// Исчерпывающий `match` БЕЗ `_` внутри defining-крейта (там `#[non_exhaustive]`
+    /// не требует wildcard): добавление варианта сломает компиляцию ИМЕННО ЗДЕСЬ,
+    /// заставив автора обосновать конструируемость, а не осесть мёртвой заготовкой
+    /// как `UnsupportedBackground`. Массив-образцы доказывают конструируемость
+    /// каждого живого варианта и покрывают их `Display`.
+    #[test]
+    fn unreachable_carries_only_constructed_variants_with_display() {
+        let samples = [
+            Unreachable::BelowContrastFloor { target: 0.1 },
+            Unreachable::ExceedsRange {
+                target: 1.0,
+                max_achievable: 0.5,
+            },
+            Unreachable::QuantizationGap {
+                target: 1.0,
+                nearest: 0.9,
+            },
+            Unreachable::FloorUnreachable {
+                floor: 4.5,
+                max_ratio: 2.0,
+            },
+            Unreachable::PolarityMismatch { target: 1.0 },
+            Unreachable::GamutUnsupported,
+            Unreachable::InvalidInput("x".to_string()),
+        ];
+        for u in &samples {
+            assert!(!u.to_string().is_empty(), "Display пуст для {u:?}");
+            // Замок исчерпываемости: новый вариант non_exhaustive-enum обязан
+            // пройти этот match (нет `_`), иначе компиляция здесь падает.
+            match u {
+                Unreachable::BelowContrastFloor { .. }
+                | Unreachable::ExceedsRange { .. }
+                | Unreachable::QuantizationGap { .. }
+                | Unreachable::FloorUnreachable { .. }
+                | Unreachable::PolarityMismatch { .. }
+                | Unreachable::GamutUnsupported
+                | Unreachable::InvalidInput(_) => {}
+            }
+        }
+    }
 
     const TOL: f64 = 1.0;
     const MAGNITUDES: [f64; 6] = [15.0, 30.0, 45.0, 60.0, 75.0, 90.0];
