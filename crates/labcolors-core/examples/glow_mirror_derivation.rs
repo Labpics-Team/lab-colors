@@ -79,4 +79,58 @@ fn main() {
             }
         );
     }
+
+    // ── Мост для labui-генератора (glow-волна поезда) ────────────────────────
+    // Пока labui ест released-движок без kind:"glow", его generate-contract
+    // эмитит glow-роли appended-блоком с ЭТИМИ решёнными значениями (провенанс:
+    // этот пример, ветка поезда). При релизе 0.6.0 блок переезжает на живую
+    // эмиссию — значения обязаны совпасть байт-в-байт.
+    println!("\n— мост labui: fx-glow-* тёмной темы (набор фикстуры на #101012, dim) —");
+    let bg_dark = BgInput::solid("#101012").expect("константный литерал");
+    let set_dark = resolve_named_set(&bg_dark, &table, &vc_dark);
+    for (name, resolved) in set_dark.iter() {
+        if !name.starts_with("fx-glow-") {
+            continue;
+        }
+        match resolved.glow() {
+            Some(g) => println!(
+                "{name:16} halo {}  core {}  α = {:.4}  |ΔJ'| = {:.4}{}",
+                g.halo_hex(),
+                g.core_hex(),
+                g.alpha(),
+                g.achieved_dj(),
+                if g.degraded() {
+                    "  [ДЕГРАДАЦИЯ]"
+                } else {
+                    ""
+                }
+            ),
+            Option::None => println!("{name:16} не Glow-исход: {resolved:?}"),
+        }
+    }
+    println!("\n— мост labui: fx-glow-* светлой темы (на #FFFFFF, srgb) —");
+    // Свет над белым физически гаснет (screen-подъём некуда): роль может
+    // решиться с деградацией или честно не решиться — печатаем как есть,
+    // это и есть основание ADR-0002 §5 «светлая тема — border-reveal».
+    let set_light = resolve_named_set(&bg, &table, &vc);
+    for (name, resolved) in set_light.iter() {
+        if !name.starts_with("fx-glow-") {
+            continue;
+        }
+        match resolved.glow() {
+            Some(g) => println!(
+                "{name:16} halo {}  core {}  α = {:.4}  |ΔJ'| = {:.4}{}",
+                g.halo_hex(),
+                g.core_hex(),
+                g.alpha(),
+                g.achieved_dj(),
+                if g.degraded() {
+                    "  [ДЕГРАДАЦИЯ]"
+                } else {
+                    ""
+                }
+            ),
+            Option::None => println!("{name:16} не решается над белым: {resolved:?}"),
+        }
+    }
 }

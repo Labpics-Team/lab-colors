@@ -1317,6 +1317,15 @@ impl Resolved {
             _ => Option::None,
         }
     }
+
+    /// Слои свечения [`Glow`](Resolved::Glow)-роли, если роль решилась в
+    /// свечение. `None` для остальных исходов (паритет с [`Self::translucent`]).
+    pub fn glow(&self) -> Option<&GlowResolved> {
+        match self {
+            Resolved::Glow(g) => Some(g),
+            _ => Option::None,
+        }
+    }
 }
 
 /// Everything about a `(background, viewing-conditions)` pair that every role in
