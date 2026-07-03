@@ -14,7 +14,7 @@
 | Режимы | Light-mode · Dark-mode · Light-mode/IC · Dark-mode/IC |
 | Инструмент | figma-console MCP (Desktop Bridge, WebSocket), `figma_get_variables` (namePattern `Accent`, `resolveAliases: true`) |
 | Дата замера | 2026-07-02 (MSK) |
-| Вычисление Oklab-оттенка | `cargo run -p labcolors-core --example accent_provenance` (публичный `Accent::prototype_hue`, тот же путь, что рампа акцента) |
+| Вычисление Oklab-оттенка | `#[cfg(test)]`-путь `accent::Accent::prototype_hue` (srgb→Oklab→atan2, тот же путь, что рампа акцента); значения пинит тест `accent_anchor_hex_matches_figma_primitives_light_mode` |
 
 ## 2. Сырые значения (живой Figma, все режимы)
 

@@ -15,8 +15,8 @@
 //! a vanilla helper for that lives in the npm package, not in the WASM core.
 
 mod cache;
-// pub: эмиттер паспорта (examples/emit_passport.rs) сериализует канонический
-// конфиг через DTO; wasm_bindgen экспортирует только аннотированное — JS-API не растёт.
+// pub: сериализация канонического конфига через DTO (output boundary);
+// wasm_bindgen экспортирует только аннотированное — JS-API от этого не растёт.
 pub mod config_dto;
 mod dto;
 mod engine;
@@ -315,17 +315,6 @@ impl LabColors {
         labcolors_core::cleanliness::muddiness_from_hex(hex)
             .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
     }
-
-    /// Calculate a relative confidence score for the [`muddiness`](Self::muddiness)
-    /// call on an sRGB hex colour: `0` means the call is unreliable (near the
-    /// decision boundary or the grey frontier), higher means more confident.
-    /// The practical ceiling is an internal calibration detail, not a public
-    /// contract — do not hardcode an upper bound against this value.
-    #[wasm_bindgen(js_name = confidence)]
-    pub fn confidence(&self, hex: &str) -> Result<f64, JsError> {
-        labcolors_core::cleanliness::confidence_from_hex(hex)
-            .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
-    }
 }
 
 impl Default for LabColors {
@@ -492,15 +481,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_wasm_muddiness_and_confidence() {
+    fn test_wasm_muddiness() {
         let colors = LabColors::new();
 
         // Olive is highly muddy
         let olive_mud = colors.muddiness("#6B6B2E").unwrap();
-        let olive_conf = colors.confidence("#6B6B2E").unwrap();
         assert!(olive_mud > 0.80);
         assert!((olive_mud - 0.8699).abs() < 1e-3);
-        assert!((olive_conf - 0.2945).abs() < 1e-3);
 
         // Gray is clean
         let gray_mud = colors.muddiness("#808080").unwrap();
@@ -508,6 +495,5 @@ mod tests {
 
         // Invalid hex returns an error
         assert!(colors.muddiness("not_a_hex").is_err());
-        assert!(colors.confidence("not_a_hex").is_err());
     }
 }

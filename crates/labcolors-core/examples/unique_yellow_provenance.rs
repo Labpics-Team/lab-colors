@@ -109,7 +109,6 @@ fn main() {
         ("blue", "#0000FF"),
     ] {
         let mud = labcolors_core::cleanliness::muddiness_from_hex(hex).unwrap();
-        let conf = labcolors_core::cleanliness::confidence_from_hex(hex).unwrap();
-        println!("{label:9} {hex}  mud={mud:.8}  conf={conf:.8}");
+        println!("{label:9} {hex}  mud={mud:.8}");
     }
 }

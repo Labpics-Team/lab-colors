@@ -1,6 +1,6 @@
 pub(crate) mod spaces;
 
-pub mod accent;
+pub(crate) mod accent;
 pub mod alpha;
 pub mod cleanliness;
 pub mod config;
@@ -50,9 +50,8 @@ mod accent_golden_tests;
 
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
-    DefectContext, Theme, confidence as cleanliness_confidence,
-    confidence_from_hex as cleanliness_confidence_from_hex, drab, drab_in_context,
-    muddiness_from_hex, muddiness_from_linear_srgb, muddiness_in_context, muddiness_oklch, n_pure,
+    DefectContext, Theme, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
+    muddiness_in_context, muddiness_oklch, n_pure,
 };
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,

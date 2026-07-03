@@ -31,9 +31,9 @@
 //! | ~~`CAL_EPS`~~   | M-06   | УДАЛЁН (Zone B slice 3)        | был 0.01; log-регуляризатор для Platt — более не нужен |
 //! | ~~`CAL_T`~~     | M-07   | УДАЛЁН (Zone B slice 3)        | был 2.356978; Platt-скаляр, подогнанный на 738 авторских метках — нарушал ZERO observer-fit |
 //! | ~~`CAL_B`~~     | M-08   | УДАЛЁН (Zone B slice 3)        | был 6.445168; Platt-смещение — нарушало ZERO observer-fit |
-//! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (полуширина доверительного поля; калибровка N=1, 738 меток владельца, reliability-модели нет) |
-//! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION           | 0.34 (потолок уверенности ядра; однонаблюдательская оценка N=1, не метрика согласия; не перцептивная константа) |
-//! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION           | 0.10 (пол уверенности спорной полосы; однонаблюдательская оценка N=1; не перцептивная константа) |
+//! | ~~`M_W`~~       | M-09   | УДАЛЁН (Front B, 2026-07-04)    | был 0.181527; полуширина доверительного поля confidence-слоя — субъективная калибровка владельца без модели надёжности, вне пути эмиссии — удалён целиком |
+//! | ~~`KAPPA_CORE`~~ | M-10  | УДАЛЁН (Front B, 2026-07-04)    | был 0.34; потолок уверенности ядра — та же субъективная калибровка — удалён вместе с confidence-слоем |
+//! | ~~`KAPPA_INTERIOR`~~ | M-11 | УДАЛЁН (Front B, 2026-07-04)  | был 0.10; пол уверенности спорной полосы — удалён вместе с confidence-слоем |
 //! | `H_Y_DEG`       | M-12   | cited-derived (Zone B slice 5) | 90.4011° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65, XYZ→Oklab напрямую); hue_weight = (1+cos(h−H_Y))/2 |
 //! | ~~`W_HUE[8]`~~  | M-12   | УДАЛЁН (Zone B slice 4)        | был: подогнанный K=3 Fourier-вектор логистической регрессии — нарушал ZERO observer-fit |
 //! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (чистая геометрия гамута Oklab, верифицирована до f64 — kept as-is) |
@@ -114,17 +114,10 @@ pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 194
 // CAL_EPS / CAL_T / CAL_B удалены (Zone B slice 3, 2026-06-30):
 // Platt-звено sigmoid(CAL_T*ln(raw+eps)+CAL_B) было observer-fit на 738 авторских метках
 // (нарушение ZERO observer-fit, North).  Заменено параметр-свободным mud = raw_chromatic.
-// Confidence-слой (M_W / KAPPA_CORE / KAPPA_INTERIOR): DECLARED-CALIBRATION из
-// ОДНОНАБЛЮДАТЕЛЬСКОЙ разметки владельца (N=1, 738 меток, датасет v3 вне репо).
-// Модели надёжности (reliability) НЕТ — при одном рейтере согласие оценщиков не
-// определено; прежний клейм про согласие рейтеров отозван как некорректный.
-// 16-значная точность M_W — артефакт кодирования, НЕ измеренная точность
-// калибровочного скаляра одного рейтера. Для научной публикации: мультинаблю-
-// дательский протокол ИЛИ исключение confidence-слоя из клеймов. Значения не
-// меняются. См. M-09/M-10/M-11 в docs/empirical-inventory.md.
-pub const M_W: f64 = 0.1815267777247454;
-pub const KAPPA_CORE: f64 = 0.34;
-pub const KAPPA_INTERIOR: f64 = 0.10;
+// Confidence-слой (M_W / KAPPA_CORE / KAPPA_INTERIOR) удалён целиком (Front B, 2026-07-04):
+// это была субъективная калибровка владельца без модели надёжности — вне пути эмиссии
+// (solve/semantic/resolve его не звали), вне агностичного контракта движка. Снос не
+// двигает ни байта эмиссии. См. removed-строки M-09/M-10/M-11 в docs/empirical-inventory.md.
 
 // W_HUE[8] удалён (Zone B slice 4, 2026-06-30):
 // Подогнанный вектор K=3 Фурье-регрессии (логистическая регрессия на 738 авторских
@@ -308,21 +301,6 @@ pub fn muddiness_oklch(l: f64, c: f64, h_deg: f64) -> f64 {
     raw_chromatic(l, c, h_deg).clamp(0.0, 1.0)
 }
 
-/// Per-colour confidence that drops near decision boundary (mud ~ 0.5) and grey-frontier (chroma ~ C0).
-/// Bounded by DECLARED-CALIBRATION floors (KAPPA_CORE=0.34 stable-core / KAPPA_INTERIOR=0.10 interior),
-/// derived from the owner's SINGLE-OBSERVER labelling (N=1, 738 labels, dataset out of repo): these are
-/// one rater's empirical floors, NOT an agreement/reliability metric and NOT published perceptual
-/// constants — see M-09/M-10/M-11 in the inventory table above. Publication needs a multi-observer
-/// protocol or exclusion of this confidence layer from scientific claims.
-pub fn confidence(l: f64, c: f64, h_deg: f64) -> f64 {
-    let cc = neutral_gate(c, C0, JND);
-    let chroma_conf = (1.0 - 4.0 * cc * (1.0 - cc)).clamp(0.0, 1.0);
-    let mud = muddiness_oklch(l, c, h_deg);
-    let margin_conf = (1.0 - (-((mud - 0.5) / M_W).powi(2)).exp()).clamp(0.0, 1.0);
-    let kappa_band = KAPPA_INTERIOR + (KAPPA_CORE - KAPPA_INTERIOR) * margin_conf;
-    kappa_band * chroma_conf * margin_conf
-}
-
 /// Compute muddiness from linear sRGB values [r, g, b] in [0, 1].
 pub fn muddiness_from_linear_srgb(rgb: [f64; 3]) -> f64 {
     let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
@@ -336,16 +314,6 @@ pub fn muddiness_from_linear_srgb(rgb: [f64; 3]) -> f64 {
 pub fn muddiness_from_hex(hex: &str) -> Result<f64, String> {
     let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
     Ok(muddiness_from_linear_srgb(rgb))
-}
-
-/// Compute confidence from an sRGB hex color string like "#6B6B2E".
-pub fn confidence_from_hex(hex: &str) -> Result<f64, String> {
-    let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
-    let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
-    let l = lab[0];
-    let c = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
-    let h = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
-    Ok(confidence(l, c, h))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -623,7 +591,6 @@ mod tests {
         // Провенанс golden: mud = N(C) * hue_weight_BB(h) * depth_mod(L, C, h),
         // hue_weight_BB(109°) = (1 + cos(109° - 90.4°)) / 2 ≈ 0.974.
         let olive_mud = muddiness_from_hex("#6B6B2E").unwrap();
-        let olive_conf = confidence_from_hex("#6B6B2E").unwrap();
         assert!(
             olive_mud > 0.30,
             "olive mud is {olive_mud:.6}, expected > 0.30 (BB-диапазон)"
@@ -631,10 +598,6 @@ mod tests {
         assert!(
             (olive_mud - 0.40640072).abs() < 1e-5,
             "olive mud {olive_mud:.8} != 0.40640072 (Zone B slice 5 H_Y golden)"
-        );
-        assert!(
-            (olive_conf - 0.03241542).abs() < 1e-4,
-            "olive conf {olive_conf:.8} != 0.03241542"
         );
 
         // Babypoop #937C00 (Очень грязный)
@@ -698,7 +661,6 @@ mod tests {
 
         // Teal #008080 (прохладный — b < B0, depth_mod → почти 0)
         let teal_mud = muddiness_from_hex("#008080").unwrap();
-        let teal_conf = confidence_from_hex("#008080").unwrap();
         assert!(
             teal_mud < 0.01,
             "teal mud is {teal_mud:.6}, expected < 0.01 (depth_mod b-гейт)"
@@ -706,10 +668,6 @@ mod tests {
         assert!(
             (teal_mud - 0.00430967).abs() < 1e-5,
             "teal mud {teal_mud:.8} != 0.00430967 (Zone B slice 5 H_Y golden)"
-        );
-        assert!(
-            (teal_conf - 0.32230121).abs() < 1e-4,
-            "teal conf {teal_conf:.8} != 0.32230121"
         );
 
         // Navy Blue #000080 (Чистый — синий, depth_mod → 0 через b-гейт)

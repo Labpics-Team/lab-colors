@@ -183,8 +183,12 @@ impl Sentiment {
 /// Default asymptote hardness `p` for a sentiment with no special asymmetry.
 /// `p = 5` is the calibration default (Sticky Potential Well); `p → ∞` recovers
 /// the old hard 20° wall, `p → 1` is the softest (most eager) yield.
+///
+/// `pub(crate)`: internal p-norm default consumed by [`SentimentParams::default`];
+/// not part of the public agnostic API surface (callers tune `p` via
+/// [`SentimentParams::uniform`], never by reading this knob).
 // SSOT-TRACKED — p-norm hardness default (#55).
-pub const DEFAULT_HARDNESS: f64 = 5.0;
+pub(crate) const DEFAULT_HARDNESS: f64 = 5.0;
 
 /// Нижняя граница оттенка Warning (Oklab hue, градусы) — жёсткий пол,
 /// не дающий Warning соскользнуть в красную (danger) зону при разводке от бренда.
@@ -318,13 +322,13 @@ impl SentimentCurve {
     /// amount that decays smoothly to zero, a near brand is held at the
     /// perceptual minimum [`s_min_deg`], and the transition is C¹ everywhere
     /// except the single seam where the brand sits exactly on the prototype
-    /// (resolved on the [`Sentiment::preferred_side`]).
+    /// (resolved on the sentiment's `preferred_side`).
     ///
     /// # Invariants
     ///
     /// - The resolved hue keeps **at least** `s_min` perceptual degrees from
     ///   the brand (separation invariant), enforced as a final legal guard.
-    /// - For [`Sentiment::Warning`] the resolved hue additionally never drops
+    /// - For the `Warning` sentiment the resolved hue additionally never drops
     ///   below the hue floor. When the floor blocks the prototype-ward
     ///   displacement, the resolver flips to the opposite (preferred) side —
     ///   keeping the hue in amber/yellow rather than wrapping the long way round
@@ -746,7 +750,9 @@ pub fn s_perc_min_from_chromas(chromas: &[f64]) -> f64 {
 /// Замороженное значение `S_PERC_MIN` (для теста деривационной идентичности).
 /// Возвращается функцией (не `const`), чтобы не заводить второй POLICY-литерал в
 /// аудите реестра — это тот же derivation-identity, что [`S_PERC_MIN`].
-pub fn s_perc_min_frozen() -> f64 {
+/// `#[cfg(test)]`: единственный потребитель — тест `config::tests` (не прод-API).
+#[cfg(test)]
+pub(crate) fn s_perc_min_frozen() -> f64 {
     S_PERC_MIN
 }
 
