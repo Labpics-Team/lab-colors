@@ -1142,33 +1142,96 @@ impl ThemeConfig {
     /// сохранив светлоту/хрому якоря. `S_PERC_MIN` — пересчёт из хром якорей
     /// сентиментов конфига (закон не зависит от labui-констант).
     fn compile_sentiment_tint(&self, role: &str, name: &str) -> Result<LadderTint, ConfigError> {
-        let cat = self
-            .sentiments
-            .categories
-            .iter()
-            .find(|c| c.name == name)
-            .ok_or_else(|| ConfigError::UnknownSentiment {
+        // Существование категории проверяется до пофазного резолва, чтобы
+        // неизвестное имя дало свою ошибку, а не «семья не найдена».
+        if !self.sentiments.categories.iter().any(|c| c.name == name) {
+            return Err(ConfigError::UnknownSentiment {
                 referenced_by: format!("roles.{role}"),
                 sentiment: name.to_string(),
-            })?;
-        let fam = self.family_anchors(role, &cat.family)?.clone();
-        let brand = self.brand.anchors.clone();
-        let s_perc_min = self.sentiment_s_perc_min()?;
+            });
+        }
 
-        let solid_of = |anchor_hex: &str, brand_hex: &str| -> Result<[f64; 3], ConfigError> {
-            // Серый бренд не несёт оттенка — разведение по hue бессмысленно и
-            // численно не определено: сентимент честно остаётся сырым якорем
-            // семейства (ни с чем не сливается по оттенку).
-            if oklab_chroma_of_hex(brand_hex) < ACHROMATIC_CHROMA_EPS {
-                return crate::spaces::srgb::srgb_encoded_from_hex(anchor_hex).map_err(|_| {
-                    ConfigError::InvalidHex {
-                        field: format!("roles.{role} (якорь сентимента)"),
-                        value: anchor_hex.to_string(),
-                    }
-                });
+        LadderTint::new([
+            self.sentiment_solid_for_mode(role, name, 0)?,
+            self.sentiment_solid_for_mode(role, name, 1)?,
+            self.sentiment_solid_for_mode(role, name, 2)?,
+            self.sentiment_solid_for_mode(role, name, 3)?,
+        ])
+        .map_err(|mode| ConfigError::InvalidHex {
+            field: format!("roles.{role} (сентимент-тинт, режим {mode})"),
+            value: "<вне кодированного домена>".to_string(),
+        })
+    }
+
+    /// Солид сентимента `name` в режиме `mode_idx` (0 light / 1 dark /
+    /// 2 light-ic / 3 dark-ic) — МНОГОТЕЛЬНЫЙ резолв (находка S-02 аудита
+    /// 2026-07-03: брендоцентричный закон был попарно слеп — light-ic Warning
+    /// телепортировался flip-ветвью в зелень к Success, ab 0.042 < 0.0687).
+    ///
+    /// Двухфазная оккупация, детерминированная порядком категорий конфига:
+    ///
+    /// 1. каждая категория решается прежним брендоцентричным законом;
+    ///    ПОКОЯЩИЕСЯ (решённый оттенок = оттенок якоря, ≤ 0.5°) объявляются
+    ///    неподвижными оккупантами — деривационная идентичность якорей
+    ///    клиента не нарушается по построению;
+    /// 2. СМЕЩЁННЫЕ (пол/бренд сдвинули оттенок) перерешиваются по порядку
+    ///    конфига с зонами оккупантов: угловой отступ от каждой зоны —
+    ///    инверсия хорды `s_perc_min` при средней хроме пары (тот же закон
+    ///    различимости, что для бренда). Решённый смещённый сам становится
+    ///    оккупантом для следующих.
+    ///
+    /// Ахроматичные оккупанты (C < ε) зон не несут — у серого нет оттенка.
+    fn sentiment_solid_for_mode(
+        &self,
+        role: &str,
+        name: &str,
+        mode_idx: usize,
+    ) -> Result<[f64; 3], ConfigError> {
+        let s_perc_min = self.sentiment_s_perc_min()?;
+        let pick = |a: &ThemeAnchors| -> String {
+            match mode_idx {
+                0 => a.light.clone(),
+                1 => a.dark.clone(),
+                2 => a.light_ic.clone(),
+                _ => a.dark_ic.clone(),
             }
-            let brand_hue = crate::accent::oklab_hue_of(brand_hex);
-            let solid = crate::sentiment::resolve_config_sentiment_solid(
+        };
+        let brand_hex = pick(&self.brand.anchors);
+
+        let raw_anchor = |anchor_hex: &str| -> Result<[f64; 3], ConfigError> {
+            crate::spaces::srgb::srgb_encoded_from_hex(anchor_hex).map_err(|_| {
+                ConfigError::InvalidHex {
+                    field: format!("roles.{role} (якорь сентимента)"),
+                    value: anchor_hex.to_string(),
+                }
+            })
+        };
+
+        // Серый бренд не несёт оттенка — разведение по hue бессмысленно и
+        // численно не определено: каждый сентимент честно остаётся сырым
+        // якорем семейства (прежний закон, фазы не нужны).
+        let anchor_of = |cat: &SentimentCategory| -> Result<String, ConfigError> {
+            Ok(pick(self.family_anchors(role, &cat.family)?))
+        };
+        let target_anchor = {
+            let cat = self
+                .sentiments
+                .categories
+                .iter()
+                .find(|c| c.name == name)
+                .expect("существование категории проверено вызывающим");
+            anchor_of(cat)?
+        };
+        if oklab_chroma_of_hex(&brand_hex) < ACHROMATIC_CHROMA_EPS {
+            return raw_anchor(&target_anchor);
+        }
+        let brand_hue = crate::accent::oklab_hue_of(&brand_hex);
+
+        let solve = |cat: &SentimentCategory,
+                     anchor_hex: &str,
+                     zones: &[crate::sentiment::NeighborZone]|
+         -> Result<String, ConfigError> {
+            crate::sentiment::resolve_config_sentiment_solid_among(
                 anchor_hex,
                 brand_hue,
                 self.sentiments.hardness,
@@ -1176,30 +1239,84 @@ impl ThemeConfig {
                 cat.hue_floor_deg,
                 cat.preferred_side.map_or(1.0, f64::from),
                 s_perc_min,
+                zones,
             )
             .map_err(|reason| ConfigError::SentimentResolution {
                 role: role.to_string(),
-                sentiment: name.to_string(),
+                sentiment: cat.name.clone(),
                 reason,
-            })?;
-            crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
-                ConfigError::InvalidHex {
-                    field: format!("roles.{role} (сентимент-солид)"),
-                    value: solid.clone(),
-                }
             })
         };
 
-        LadderTint::new([
-            solid_of(&fam.light, &brand.light)?,
-            solid_of(&fam.dark, &brand.dark)?,
-            solid_of(&fam.light_ic, &brand.light_ic)?,
-            solid_of(&fam.dark_ic, &brand.dark_ic)?,
-        ])
-        .map_err(|mode| ConfigError::InvalidHex {
-            field: format!("roles.{role} (сентимент-тинт, режим {mode})"),
-            value: "<вне кодированного домена>".to_string(),
-        })
+        // Фаза 1: брендоцентричный резолв всех категорий; классификация покоя.
+        // (hue, chroma) занятых зон меряются на РЕШЁННОМ солиде — честный
+        // оккупант, не идеал.
+        let mut occupied: Vec<(f64, f64)> = Vec::new();
+        let mut displaced: Vec<(usize, String)> = Vec::new(); // (index, anchor)
+        let mut target_phase1: Option<String> = None;
+        for (i, cat) in self.sentiments.categories.iter().enumerate() {
+            let anchor_hex = anchor_of(cat)?;
+            let solid = solve(cat, &anchor_hex, &[])?;
+            let proto_hue = crate::accent::oklab_hue_of(&anchor_hex);
+            let solid_hue = crate::accent::oklab_hue_of(&solid);
+            let solid_chroma = oklab_chroma_of_hex(&solid);
+            let rested = crate::sentiment::angular_distance(solid_hue, proto_hue) <= 0.5
+                || solid_chroma < ACHROMATIC_CHROMA_EPS;
+            if rested {
+                if solid_chroma >= ACHROMATIC_CHROMA_EPS {
+                    occupied.push((solid_hue, solid_chroma));
+                }
+                if cat.name == name {
+                    target_phase1 = Some(solid);
+                }
+            } else {
+                displaced.push((i, anchor_hex));
+            }
+        }
+        if let Some(solid) = target_phase1 {
+            // Покоящаяся цель неподвижна по построению — байт-в-байт фаза 1.
+            return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
+                ConfigError::InvalidHex {
+                    field: format!("roles.{role} (сентимент-солид)"),
+                    value: solid,
+                }
+            });
+        }
+
+        // Фаза 2: смещённые перерешиваются с зонами оккупантов, по порядку.
+        for (i, anchor_hex) in displaced {
+            let cat = &self.sentiments.categories[i];
+            let c_self = oklab_chroma_of_hex(&anchor_hex);
+            let mut zones = Vec::with_capacity(occupied.len());
+            for &(hue, c_other) in &occupied {
+                let pair_chroma = (c_self + c_other) / 2.0;
+                let min_sep = crate::sentiment::s_min_deg_from_chord(s_perc_min, pair_chroma)
+                    .map_err(|reason| ConfigError::SentimentResolution {
+                        role: role.to_string(),
+                        sentiment: cat.name.clone(),
+                        reason,
+                    })?;
+                zones.push(crate::sentiment::NeighborZone {
+                    hue_deg: hue,
+                    min_sep_deg: min_sep,
+                });
+            }
+            let solid = solve(cat, &anchor_hex, &zones)?;
+            if cat.name == name {
+                return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
+                    ConfigError::InvalidHex {
+                        field: format!("roles.{role} (сентимент-солид)"),
+                        value: solid,
+                    }
+                });
+            }
+            let solid_hue = crate::accent::oklab_hue_of(&solid);
+            let solid_chroma = oklab_chroma_of_hex(&solid);
+            if solid_chroma >= ACHROMATIC_CHROMA_EPS {
+                occupied.push((solid_hue, solid_chroma));
+            }
+        }
+        unreachable!("категория `{name}` обязана быть покоящейся или смещённой")
     }
 
     /// `S_PERC_MIN`, пересчитанный из Oklab-хром светлых якорей 4 (или скольких

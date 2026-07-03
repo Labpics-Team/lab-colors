@@ -1928,15 +1928,14 @@ fn glow_roles_resolve_screen_layers() {
 /// режимам против конфиг-порога `s_perc_min` — того же порога перцептивной
 /// различимости, что закон применяет к бренду.
 ///
-/// НАХОДКА (2026-07-03, зафиксирована честно — не подогнана): в режиме
-/// light-ic Warning↔Success слипаются (ab ≈ 0.042 < 0.0687). Механика:
-/// категориальный пол Warning выталкивает приглушённый IC-якорь оранжевого
-/// (#C93400) за уникальный жёлтый в жёлто-зелёный (#508300), рядом с
-/// приглушённым IC-зелёным Success (#248A3D). Закон разведения — брендо-
-/// центричный и попарно слепой; лечение — многотельное разведение
-/// (попарная репульсия сентиментов), отдельный слайс солвера. До него
-/// коллизия ЗАПИНЕНА узкой полосой: дрейф в любую сторону (чинится /
-/// углубляется) обязан осознанно обновить пин.
+/// ИСТОРИЯ: находка S-02 (2026-07-03) — light-ic Warning↔Success слипались
+/// (ab ≈ 0.042 < 0.0687): flip-ветка при ДАЛЁКОМ бренде зеркалила Warning
+/// через полкруга в зелень к Success. ВЫЛЕЧЕНО тем же днём многотельной
+/// легальностью (двухфазная оккупация, `sentiment_solid_for_mode`):
+/// покоящиеся сентименты — неподвижные оккупанты (идентичность якорей цела),
+/// смещённые держат выведенный угловой отступ от их зон — Warning light-ic
+/// ложится в янтарную дугу у пола вместо зелени. Тест держит закон:
+/// ВСЕ пары ≥ порога во всех режимах, без исключений.
 #[test]
 fn labui_sentiment_solids_keep_pairwise_ab_distance() {
     use crate::spaces::oklab::srgb_linear_to_oklab;
@@ -1950,8 +1949,6 @@ fn labui_sentiment_solids_keep_pairwise_ab_distance() {
         crate::spaces::vc::ViewingConditions::srgb_high_contrast(),
         crate::spaces::vc::ViewingConditions::dim_surround_high_contrast(),
     ];
-    // Единственная известная коллизия: (режим, пара) → полоса пина.
-    const KNOWN_COLLISION: (usize, &str, &str) = (2, "warning", "success");
     for (mode_idx, vc) in vcs.iter().enumerate() {
         let mut solids: Vec<(String, [f64; 3])> = Vec::new();
         for cat in &cfg.sentiments.categories {
@@ -1971,15 +1968,6 @@ fn labui_sentiment_solids_keep_pairwise_ab_distance() {
                 let (na, a) = &solids[i];
                 let (nb, b) = &solids[j];
                 let d_ab = ((a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
-                if (mode_idx, na.as_str(), nb.as_str()) == KNOWN_COLLISION {
-                    assert!(
-                        (0.03..0.0687).contains(&d_ab),
-                        "известная коллизия light-ic warning↔success уплыла из полосы \
-                         [0.03, 0.0687): ab={d_ab:.4}. Починили многотельным разведением — \
-                         снимите пин; углубилась — осмыслить."
-                    );
-                    continue;
-                }
                 assert!(
                     d_ab >= s_perc_min,
                     "режим {mode_idx}: сентименты `{na}` и `{nb}` перцептивно слиплись: \
@@ -1988,4 +1976,51 @@ fn labui_sentiment_solids_keep_pairwise_ab_distance() {
             }
         }
     }
+}
+
+/// Пин лечения S-02: Warning light-ic — янтарь у пола, не зелень у Success.
+///
+/// RED-proof класса: брендоцентричный закон (пустые зоны, старый путь)
+/// зеркалит IC-Warning через далёкий бренд в зелень (~127°) — тест
+/// удерживает разницу между законами явной, чтобы регресс на однотельный
+/// резолв не прошёл тихо.
+#[test]
+fn warning_light_ic_heals_into_amber_arc_not_green() {
+    let cfg = labui_reference();
+    let tint = cfg
+        .compile_sentiment_tint("s02-probe", "warning")
+        .expect("warning компилируется");
+    let vc_ic = crate::spaces::vc::ViewingConditions::srgb_high_contrast();
+    let healed = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc_ic));
+    let healed_hue = crate::accent::oklab_hue_of(&healed);
+    // Янтарная дуга: над полом Warning (45°), заведомо ниже зелени (< 90°).
+    assert!(
+        (45.0..90.0).contains(&healed_hue),
+        "warning light-ic обязан лечь в янтарь [45°, 90°), получено {healed_hue:.2}° ({healed})"
+    );
+
+    // RED-proof: однотельный закон даёт зелень — контраст с вылеченным.
+    let anchor = &cfg
+        .palette
+        .iter()
+        .find(|f| f.key == "orange")
+        .unwrap()
+        .anchors
+        .light_ic;
+    let brand_ic = &cfg.brand.anchors.light_ic;
+    let single = crate::sentiment::resolve_config_sentiment_solid(
+        anchor,
+        crate::accent::oklab_hue_of(brand_ic),
+        cfg.sentiments.hardness,
+        cfg.sentiments.chroma_fraction,
+        Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
+        1.0,
+        cfg.sentiment_s_perc_min().unwrap(),
+    )
+    .expect("однотельный резолв решается");
+    let single_hue = crate::accent::oklab_hue_of(&single);
+    assert!(
+        single_hue > 110.0,
+        "контраст законов исчез: однотельный давал зелень (~127°), получено {single_hue:.2}°"
+    );
 }
