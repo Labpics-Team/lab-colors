@@ -239,8 +239,8 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             message: reason.to_string(),
         },
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
-        // наружу уходит rgba(tint, α), браузер композитит; контраст — свойство
-        // композита на фоне резолва (закон лестницы ядра).
+        // наружу уходит oklch(L% C H / α), браузер композитит; контраст —
+        // свойство композита на фоне резолва (закон лестницы ядра).
         Resolved::Translucent(rgba) => RoleOutcome::Translucent(RgbaColor {
             tint_hex: rgba.tint_hex().to_string(),
             alpha: rgba.alpha(),

@@ -46,7 +46,7 @@
 //! # Sanity over arithmetic: the anchor principle
 //!
 //! Text contrast magnitudes are **not fixed deltas**. A fixed delta is how
-//! `text-primary` once came out grey: a mid contrast number satisfies the
+//! `label-primary` once came out grey: a mid contrast number satisfies the
 //! contract arithmetically but violates the design intent that primary text on
 //! white reads as *black*. Instead, a text role anchors its target to a
 //! **fraction of the maximum contrast the background can supply**
@@ -109,9 +109,9 @@
 //!
 //! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
 //! not a pure grey. A role table resolved with zero chroma threw that identity
-//! away: `text-primary` on white came out the sterile `#141414`. So every
+//! away: `label-primary` on white came out the sterile `#141414`. So every
 //! resolved role carries the neutral's undertone and lands as a *relative* of the
-//! neutral family — `text-primary` on white as a cool near-black in the `#101012`
+//! neutral family — `label-primary` on white as a cool near-black in the `#101012`
 //! family. The undertone is small enough that the WCAG floors, the strict
 //! hierarchy, and the near-black/near-white primary all hold exactly as before
 //! (the solver re-solves lightness to the same target with the tint applied).
@@ -579,7 +579,7 @@ pub enum RoleSpec {
 /// Измеренный в Oklab по опорным точкам оттенок стабилен по всей шкале —
 /// `#101012` → 285.97°, `#3C3C43` (вторичный Figma) → 285.78°, `#787880`
 /// (средний) → 286.01° — поэтому его захватывает одна константа. Резолвленные
-/// роли наследуют этот оттенок, из-за чего `text-primary` на белом ложится как
+/// роли наследуют этот оттенок, из-за чего `label-primary` на белом ложится как
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
 // SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
@@ -595,7 +595,7 @@ pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// кривой: самый сильный подтон приходится на роли средней силы, самый слабый —
 /// на почти-чёрный/почти-белый края текстовой шкалы — "меньше у тёмных/светлых
 /// краёв, больше к середине".
-/// `0.10`: на белом `text-primary` резолвится в холодный почти-чёрный
+/// `0.10`: на белом `label-primary` резолвится в холодный почти-чёрный
 /// семейства `#101012`, а не в чистый серый.
 // SSOT-TRACKED — коэффициент хромы нейтрального подтона.
 pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
@@ -880,21 +880,28 @@ fn curve_plan_cached(
 /// calibration, not of the sRGB gamut, and is flagged as out of reach here.
 fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
     let penalty_scale = stiffness / 100.0;
-    let mut best_h = canonical_deg;
-    let mut best_score = f64::NEG_INFINITY;
-    // Step the window in 1° increments — finer than the cusp moves between roles.
+    // 1° window steps — finer than the cusp moves between roles.
     let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
-    for i in 0..=steps {
+
+    // Bit-identical per-index score (the exact arithmetic of the flat sweep).
+    let score_at = |i: i32| -> f64 {
         let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
         let chroma = scale::max_chroma(l_ok, h);
         let drift = (h - canonical_deg).abs();
-        let score = chroma - penalty_scale * drift;
-        if score > best_score {
-            best_score = score;
-            best_h = h;
-        }
-    }
-    best_h
+        chroma - penalty_scale * drift
+    };
+
+    // C2 — coarse-to-fine hue sweep (shared with the accent ramp, see
+    // `scale::coarse_to_fine_argmax`). 5° coarse grid, ±15° refinement bracket
+    // around every coarse local maximum, then a single ascending pass with the
+    // flat scan's strict-`>` first-maximum tie-break. Bit-identical to the flat
+    // 81-point sweep — pinned on the full (l_ok × canonical) grid by the cusp
+    // diff test and on real tints by the 240-cell resolve_set byte-identity
+    // snapshot. (`let`, not `const`, keeps the frozen policy-const audit clean.)
+    let coarse = 5;
+    let bracket = 15;
+    let best_i = scale::coarse_to_fine_argmax(steps, coarse, bracket, score_at);
+    canonical_deg - CUSP_HALF_WINDOW_DEG + best_i as f64
 }
 
 /// The chroma ratio (for [`ChromaPolicy::Relative`]) that lands a colour of Oklab
@@ -910,11 +917,19 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 /// [`TINT_PERCEPTIBLE_MP_FLOOR`] at the pinched extremes) rather than fake it.
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
     let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
+    // The in-gamut max chroma depends only on `(l_ok, hue_deg)`, both fixed across
+    // the ratio bisection — solve it once here instead of re-solving it on every
+    // `mp_at` iteration (the bisection ran it ~30× per call). Bit-identical: the
+    // value fed to every `build_curve_color_with_cmax` is the same `max_chroma`
+    // the per-iteration call produced.
+    let c_max = scale::max_chroma(l_ok, hue_deg);
     let mp_at = |ratio: f64| -> f64 {
-        // `build_curve_color` returns clamped linear sRGB; quantise it to the
-        // display grid (the byte-for-byte identity of the old hex round-trip) and
-        // measure M' directly — no `format!`/parse on the bisection's hot path.
-        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color(l_ok, hue_deg, ratio));
+        // `build_curve_color_with_cmax` returns clamped linear sRGB; quantise it to
+        // the display grid (the byte-for-byte identity of the old hex round-trip)
+        // and measure M' directly — no `format!`/parse on the bisection's hot path.
+        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color_with_cmax(
+            l_ok, hue_deg, ratio, c_max,
+        ));
         crate::lcs::LcsColor::mp_of_linear_srgb(rgb, vc)
     };
 
@@ -954,10 +969,19 @@ const RATIO_BISECT_EPS: f64 = 1e-9;
 /// `hue_deg`, carrying `ratio` of the in-gamut maximum chroma — the same
 /// construction [`solve::solve`] applies internally, mirrored here so the curve
 /// can measure the `M'` a candidate ratio would yield before committing to it.
+#[cfg(test)]
 fn build_curve_color(l_ok: f64, hue_deg: f64, ratio: f64) -> [f64; 3] {
+    build_curve_color_with_cmax(l_ok, hue_deg, ratio, scale::max_chroma(l_ok, hue_deg))
+}
+
+/// [`build_curve_color`] with the in-gamut max chroma supplied by the caller, so
+/// a loop over many `ratio`s at a fixed `(l_ok, hue_deg)` solves `max_chroma`
+/// once instead of per iteration. Bit-identical to `build_curve_color` when
+/// `c_max == max_chroma(l_ok, hue_deg)`.
+fn build_curve_color_with_cmax(l_ok: f64, hue_deg: f64, ratio: f64, c_max: f64) -> [f64; 3] {
     use crate::spaces::oklab::oklab_to_srgb_linear;
     let hr = hue_deg.to_radians();
-    let chroma = ratio.clamp(0.0, 1.0) * scale::max_chroma(l_ok, hue_deg);
+    let chroma = ratio.clamp(0.0, 1.0) * c_max;
     let lab = [l_ok, chroma * hr.cos(), chroma * hr.sin()];
     let rgb = oklab_to_srgb_linear(lab);
     [
@@ -1856,6 +1880,21 @@ pub fn resolve_set(
     resolve_set_live(bg, table, vc)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only counter of [`resolve_set_live`] invocations. Lets the greyfast
+    /// probe prove the constant fast path reconstructs a grey set without ever
+    /// calling the live solver (no lazy 256-resolve build). Zero cost in
+    /// production: the increment is compiled out entirely.
+    pub(crate) static LIVE_SOLVE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset the test-only [`LIVE_SOLVE_COUNT`] to zero and return its prior value.
+#[cfg(test)]
+pub(crate) fn reset_live_solve_count() -> usize {
+    LIVE_SOLVE_COUNT.with(|c| c.replace(0))
+}
+
 /// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
 /// path falls back to, and the path that fills its precomputed table. Always
 /// recomputes; takes no fast path itself (so the table builder cannot recurse).
@@ -1864,6 +1903,8 @@ pub(crate) fn resolve_set_live(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
+    #[cfg(test)]
+    LIVE_SOLVE_COUNT.with(|c| c.set(c.get() + 1));
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing
@@ -2292,6 +2333,84 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DIFFERENTIAL HARNESS (perf/max-chroma-hotpath) — cusp-attracted hue.
+    //
+    // A frozen copy of the tint undertone's hue sweep as it stood before any perf
+    // optimisation, plus the bit-identity test that gates the C2 coarse-to-fine
+    // rework of `cusp_attracted_hue`. Any change to the emitted hue would move a
+    // tint hex value — forbidden on this branch — so the test pins the selected
+    // hue to full f64 `to_bits()` identity over a dense (l_ok, canonical) grid.
+    // The reference calls the PRODUCTION `scale::max_chroma`, isolating the
+    // *selection* logic from the solver internals.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// FROZEN reference: the flat 81-point cusp sweep exactly as it selected the
+    /// undertone hue at the base of this branch.
+    fn cusp_attracted_hue_reference(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
+        let penalty_scale = stiffness / 100.0;
+        let mut best_h = canonical_deg;
+        let mut best_score = f64::NEG_INFINITY;
+        let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
+        for i in 0..=steps {
+            let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
+            let chroma = scale::max_chroma(l_ok, h);
+            let drift = (h - canonical_deg).abs();
+            let score = chroma - penalty_scale * drift;
+            if score > best_score {
+                best_score = score;
+                best_h = h;
+            }
+        }
+        best_h
+    }
+
+    /// Diff test over a grid: production `cusp_attracted_hue` must select the
+    /// bit-identical undertone hue the frozen flat scan does, at the production
+    /// tint stiffness, across `l_ok` and canonical hue.
+    fn assert_cusp_hue_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
+        let stiffness = TINT_HUE_STIFFNESS;
+        let mut points = 0usize;
+        for li in 0..=l_steps {
+            let l = li as f64 / l_steps as f64;
+            let mut hc = 0usize;
+            while hc < 360 {
+                // Integer canonical PLUS fractional offsets: the production tint
+                // canonical (286°) is integer, but a consumer brand hue is not, so
+                // testing hcd + {0, 0.25, 0.5} closes the aliasing-shift class the
+                // integer grid alone cannot.
+                for frac in [0.0, 0.25, 0.5] {
+                    let hcd = hc as f64 + frac;
+                    let prod = cusp_attracted_hue(l, hcd, stiffness);
+                    let refv = cusp_attracted_hue_reference(l, hcd, stiffness);
+                    assert_eq!(
+                        prod.to_bits(),
+                        refv.to_bits(),
+                        "cusp_attracted_hue drift at (L={l}, canon={hcd}): prod={prod} ref={refv}"
+                    );
+                    points += 1;
+                }
+                hc += h_step_deg;
+            }
+        }
+        points
+    }
+
+    #[test]
+    fn diff_cusp_hue_matches_frozen_reference_fast() {
+        // 101 L × 72 canonical-hue × 3 fractional offsets = 21 816 points.
+        let n = assert_cusp_hue_matches_reference(100, 5);
+        assert_eq!(n, 101 * 72 * 3);
+    }
+
+    #[test]
+    #[ignore = "full grid × 3 offsets — run with `--ignored`; slow at opt-level 0"]
+    fn diff_cusp_hue_matches_frozen_reference_full() {
+        // 501 L × 360 canonical-hue × 3 fractional offsets = 541 080 points.
+        let n = assert_cusp_hue_matches_reference(500, 1);
+        assert_eq!(n, 501 * 360 * 3);
+    }
 
     #[test]
     fn measure_contrast_reproduces_the_solvers_own_lc_and_wcag() {

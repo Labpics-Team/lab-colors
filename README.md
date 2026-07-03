@@ -46,14 +46,14 @@ LCS — собственное перцептуальное цветовое п�
 
 CIECAM16 даёт J и M — но они не перцептуально однородны. CAM16-UCS применяет рескейлинг:
 
-```
+```text
 J' = 1.7 × J / (1 + 0.007 × J)        — сжимает верхний диапазон
 M' = ln(1 + 0.0228 × M) / 0.0228       — логарифмическая компрессия
 ```
 
 Результат: `J'=50` воспринимается как «половина яркости» между чёрным и белым. В «сыром» CIECAM16 `J=50` — нет.
 
-Формулы рескейлинга — CAM16-UCS (Li et al. 2017, DOI [10.1002/col.22131](https://doi.org/10.1002/col.22131)); реализация — `crates/labcolors-core/src/lcs.rs`.
+Формулы рескейлинга — CAM16-UCS (Li et al. 2017, DOI [10.1002/col.22131](https://doi.org/10.1002/col.22131)); сами формулы — `spaces/cam16.rs` (`ucs_j` / `ucs_m`), применяет их `lcs.rs`.
 
 **2. Оттенок из Oklab (не из CAM16):**
 
@@ -63,7 +63,7 @@ Oklab — Björn Ottosson, [«A perceptual color space for image processing»](h
 
 **Итоговый LcsColor:**
 
-```rust
+```text
 struct LcsColor {
     jp: f64,     // J' — перцептуальная яркость (CAM16-UCS)
     h_ok: f64,   // оттенок (Oklab) — для интерполяции
@@ -76,7 +76,7 @@ struct LcsColor {
 
 LCS учитывает условия просмотра через CIECAM16. Тот же стимул в светлой и тёмной среде даёт разные J':
 
-```rust
+```text
 // Светлая тема — стандартные условия sRGB
 let avg_vc = ViewingConditions::srgb();        // c = 0.69
 
@@ -89,14 +89,14 @@ let dim_vc = ViewingConditions::dim_surround(); // c = 0.59
 
 Каждая кривая хранит VC, которым была создана. Нельзя создать с dim VC, а конвертировать в hex через srgb VC — будет дрифт (есть тест `wrong_vc_roundtrip_drifts`).
 
-### 2. Кривая — NeutralCurve
+### Кривая — NeutralCurve
 
 Три якоря (светлый, базовый, тёмный) соединяются непрерывной кривой в пространстве J'. Это не набор шагов — это функция `at(t)` где `t ∈ [0, 1]`. Палитра — непрерывный градиент. `sample_hex(13)` просто выбирает 13 точек из него.
 
 ```mermaid
 graph LR
     L["light\n#FFFFFF\nJ' ≈ 100"] -->|"γ_light = 1.75"| B["base\n#787880\nJ' ≈ 54"]
-    B -->|"γ_dark = 1.5"| D["dark\n#101012\nJ' ≈ 4"]
+    B -->|"γ_dark = 1.5"| D["dark\n#101012\nJ' ≈ 9.1"]
 ```
 
 **Степенная интерполяция** — J' не линейный, а через `u^γ`. Это даёт больше шагов в середине шкалы (где глаз различает лучше) и меньше на краях.
@@ -111,9 +111,9 @@ purity = (mp / mp_ref)^0.6
 
 Это не моделирование эффекта Эбни (искривление линий постоянного оттенка с ростом чистоты) — коррекция Эбни вынесена в отдельную задачу (issue #27, `abney_correct`).
 
-**Chroma envelope** — C1-непрерывная огибающая через хромы всех трёх якорей: плавный подъём от светлого якоря до уровня базы к t≈0.35 (ранний хроматический пик), плато до базового якоря на t=0.5, спад к тёмному якорю. Якоря воспроизводятся точно, разрывов нет — непрерывность закреплена property-тестом.
+**Chroma envelope** — C1-непрерывная (гладкая: непрерывна и сама функция, и её производная — без изломов) огибающая через хромы всех трёх якорей: плавный подъём от светлого якоря до уровня базы к t≈0.35 (ранний хроматический пик), плато до базового якоря на t=0.5, спад к тёмному якорю. Якоря воспроизводятся точно, разрывов нет — непрерывность закреплена property-тестом.
 
-### 3. Контраст — LPC (Labpics Perceptual Contrast)
+### Контраст — LPC (Labpics Perceptual Contrast)
 
 LPC = APCA + коррекция Гельмгольца-Кольрауша. Формула APCA не меняется — меняется luminance, который в неё подаётся.
 
@@ -152,16 +152,18 @@ LPC — перцептивная цель; юридический минимум
 ```rust
 use labcolors_core::{BgInput, Role, RoleTable, ViewingConditions, resolve};
 
-let bg = BgInput::solid("#FFFFFF")?;
+let bg = BgInput::solid("#FFFFFF").unwrap();
 let table = RoleTable::default();
 let vc = ViewingConditions::srgb();
-// text-primary на белом → #141414, lc 102.7 (читается чёрным, не серым)
-let primary = resolve(&bg, Role::TextPrimary, &table, &vc);
+// LabelPrimary на белом → #0A0A10, lc 102.7:
+// холодный почти-чёрный семейства #101012, а не стерильный серый.
+let primary = resolve(&bg, Role::LabelPrimary, &table, &vc);
+assert!(primary.solved().is_some());
 ```
 
 **Полярность — из фона, не из роли, и в первую очередь по WCAG-достижимости.** Роль хранит только *модуль* нужного контраста; знак (`+` тёмное-на-светлом, `−` светлое-на-тёмном) выбирается по фону в два шага. Сначала — по достижимости строгого юридического пола 4.5:1: какая полярность вообще может дать AA — это свойство одного фона (`contrast_ratio` чёрного vs белого текста), не зависящее от viewing conditions, поэтому полярность стабильна между light/dim темами и не «монетка» на ничьей вроде `#3478F6`. При ничьей (обе полярности достигают пол, около перелома `#767676`) — большая WCAG-маржа, затем больший LPC-headroom. Так светло-серый фон (`#808080`, `#999999`) больше не отдаёт «все текстовые роли недостижимы» при том, что чёрный текст на нём проходит AA с запасом: старое правило «больший LPC-максимум» переламывало полярность около `#999999`, далеко от WCAG-перелома около `#747474`.
 
-**Санити вместо арифметики: принцип якоря.** Контрасты текста — *не фиксированные дельты*. Фиксированная дельта — это как `text-primary` однажды вышел серым: число удовлетворяет контракту, но нарушает замысел «первичный текст на белом читается *чёрным*». Вместо этого текстовая роль целится в *долю от максимального контраста, который фон вообще может дать*. Primary просит ~97 % максимума — почти предел — поэтому на белом он почти чёрный, на чёрном почти белый, на *любом* фоне. Доли откалиброваны по референсным Figma-якорям (102.6 / 66.5 / 48.9 / 29.3 при максимуме ~106 → 0.968 / 0.627 / 0.461 / 0.276) и помечены «калибруется» до визуальной приёмки.
+**Санити вместо арифметики: принцип якоря.** Контрасты текста — *не фиксированные дельты*. Фиксированная дельта — это как `label-primary` однажды вышел серым: число удовлетворяет контракту, но нарушает замысел «первичный текст на белом читается *чёрным*». Вместо этого текстовая роль целится в *долю от максимального контраста, который фон вообще может дать*. Primary просит ~97 % максимума — почти предел — поэтому на белом он почти чёрный, на чёрном почти белый, на *любом* фоне. Доли откалиброваны по референсным Figma-якорям (102.6 / 66.5 / 48.9 / 29.3 при максимуме ~106 → 0.968 / 0.627 / 0.461 / 0.276) и помечены «калибруется» до визуальной приёмки.
 
 Поскольку все текстовые роли — доли *одного* per-фон максимума, иерархия `primary > secondary > muted > disabled` строгая **там, где фон физически это позволяет** — симметрична по построению в обеих полярностях. Это сознательное исправление асимметрии ручных Figma-токенов, где одинаковые ступени прозрачности давали тёмную иерархию на ~40 % слабее светлой. (Где WCAG-пол всё же поднимает одну сторону — это видно по `floor_override`, не тихий дрейф.)
 
@@ -169,21 +171,36 @@ let primary = resolve(&bg, Role::TextPrimary, &table, &vc);
 
 **Токен нуля.** «Пусто» — это значение, а не отсутствие записи. Роль `Role::None` — часть таблицы и решается в явный `Resolved::None` (честный ноль), а не пропуск ключа.
 
-**Роли v1 (9, `ChromaPolicy::Neutral`):**
+**Роли v1 (20 ролей, дефолтный подтон `RoleChroma::Curve`):**
 
-| Роль | Ключ | Семейство | Контракт | Conformance |
-|------|------|-----------|----------|-------------|
-| `TextPrimary` | `text-primary` | текст | якорь 0.968·max | AA текст 4.5:1 |
-| `TextSecondary` | `text-secondary` | текст | якорь 0.627·max | AA текст 4.5:1 |
-| `TextMuted` | `text-muted` | текст/UI | якорь 0.461·max | AA UI 3:1 |
-| `TextDisabled` | `text-disabled` | текст | якорь 0.276·max | None (WCAG исключает inactive) |
-| `Icon` | `icon` | UI | якорь 0.461·max | AA UI 3:1 |
-| `Separator` | `separator` | декор JND | `range` PROVISIONAL | None |
-| `Border` | `border` | декор JND | `range` PROVISIONAL | None |
-| `Surface` | `surface` | декор JND | `range` PROVISIONAL | None |
-| `Shadow` | `shadow` | декор JND | `range` PROVISIONAL | None |
+Порядок — как в `Role::ALL`; имена ролей переименованы из `text-*` в HIG-таксономию владельца (`label-*`). Рецепт — фактический `RoleSpec` из `RoleTable::default()`; dJ'-якоря даны парой `light/dark` (пер-темные буквальные значения из Figma-структуры LabUI).
 
-Декоративные значения — провизорные заглушки (держатся выше надёжного пола решателя ~7.6 Lc); финальная JND-калибровка — глава `surface-jnd` после issue #44. Таблица перекрываема: `RoleTable::default().with(role, spec)` меняет один рецепт, остальные остаются дефолтными. Брендовые/сентиментные роли в v1 не входят — оставлен только шов расширения (`RoleChroma`).
+| Роль | Ключ | Семейство | Рецепт | Пол WCAG |
+|------|------|-----------|--------|----------|
+| `LabelPrimary` | `label-primary` | лейбл (текст) | `Anchor` 0.968·max | AA текст 4.5:1 |
+| `LabelSecondary` | `label-secondary` | лейбл | `Anchor` 0.627·max | AA текст 4.5:1 |
+| `LabelTertiary` | `label-tertiary` | лейбл | `Anchor` 0.461·max | AA UI 3:1 |
+| `LabelQuaternary` | `label-quaternary` | лейбл | `Anchor` 0.276·max | нет (WCAG исключает inactive) |
+| `Icon` | `icon` | UI | `Anchor` 0.461·max | AA UI 3:1 |
+| `Separator` | `separator` | декор (Lc) | `Decorative` 8.0 | нет |
+| `BorderStrong` | `border-strong` | граница | `Anchor` 0.968·max | AA UI 3:1 |
+| `BorderBase` | `border-base` | граница (dJ') | `DecorativeDj` 6.41/10.12 | нет |
+| `BorderSoft` | `border-soft` | граница (dJ') | `DecorativeDj` 3.15/5.83 | нет |
+| `BorderGhost` | `border-ghost` | граница | `Zero` | нет |
+| `FillPrimary` | `fill-primary` | заливка (dJ') | `DecorativeDj` 7.93/17.67 | нет |
+| `FillSecondary` | `fill-secondary` | заливка (dJ') | `DecorativeDj` 6.41/15.78 | нет |
+| `FillTertiary` | `fill-tertiary` | заливка (dJ') | `DecorativeDj` 4.63/12.01 | нет |
+| `FillQuaternary` | `fill-quaternary` | заливка (dJ') | `DecorativeDj` 3.15/8.22 | нет |
+| `FillNone` | `fill-none` | заливка | `Zero` | нет |
+| `ShadowMinor` | `shadow-minor` | тень (Lc) | `Decorative` 8.0 | нет |
+| `ShadowAmbient` | `shadow-ambient` | тень (Lc) | `Decorative` 9.5 | нет |
+| `ShadowPenumbra` | `shadow-penumbra` | тень (Lc) | `Decorative` 11.5 | нет |
+| `ShadowMajor` | `shadow-major` | тень (Lc) | `Decorative` 14.0 | нет |
+| `None` | `none` | ноль | `Zero` | нет |
+
+Лестницы `fill-*` и `border-base`/`border-soft` несут буквальные dJ'-якоря — перцептивный шаг светлоты `J'` относительно поверхности, измеренный из Figma-структуры LabUI отдельно под каждую тему. Это различимость, а не разборчивость текста, поэтому пола читаемости у них нет. `border-strong` несёт силу `label-primary` (доля 0.968·max), но с non-text-полом 3:1 (WCAG 1.4.11): граница должна быть различима, не читаема. Стек теней и `separator` держат Lc-величины выше надёжного пола решателя (`DECORATIVE_FLOOR_MIN` ≈ 7.5 Lc); их финальная калибровка по JND (just-noticeable difference — минимально заметная глазу разница) от альфа-якорей — глава `surface-jnd`. `border-ghost`, `fill-none` и `none` — явный ноль (`Resolved::None`).
+
+Дефолтный подтон таблицы — `RoleChroma::Curve`: тонированный холодный подтон нейтрали (не чистый серый), выведенный из постоянной перцептивной красочности, притянутого к каспу оттенка и порога воспринимаемости. Он перекрываем целиком через `RoleTable::default().with_chroma(...)` — `RoleChroma::Neutral` даёт ахроматику, `RoleChroma::flat_neutral_tint()` — плоский подтон v1; отдельный рецепт роли меняется через `.with(role, spec)`. (`ChromaPolicy` из `solve.rs` — другой, низкоуровневый enum решателя, `Neutral` / `Relative`; не путать с `RoleChroma`.) Брендовые/сентиментные роли в v1 не входят — оставлен только шов расширения.
 
 ## AccentCurve
 
@@ -212,70 +229,92 @@ graph TD
 ## API
 
 ```rust
-use labcolors_core::{LcsColor, ViewingConditions, ColorCurve};
+use labcolors_core::{ViewingConditions, ColorCurve};
 use labcolors_core::neutral::{NeutralCurve, CurveParams};
 use labcolors_core::scale::AccentCurve;
 
 // Нейтральная шкала — светлая тема
-let light = NeutralCurve::new("#FFFFFF", "#787880", "#101012")?;
-// Палитра — непрерывный градиент
-// at(t) — любая точка от 0.0 до 1.0
+let light = NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap();
+// Палитра — непрерывный градиент; at(t) — любая точка от 0.0 до 1.0
 let mid = light.at(0.5);
 println!("t=0.5  J'={:.1}", mid.jp);
 
 // sample_hex(N) — N точек из непрерывной кривой
 let steps: Vec<String> = light.sample_hex(13);
-// ["#FFFFFF", "#F0F0F5", "#E1E1E9", ..., "#101012"]
+// ["#FFFFFF", "#F8F8FA", "#E7E8EC", ..., "#101012"]
 
 // Нейтральная шкала — тёмная тема
 let dim_vc = ViewingConditions::dim_surround();
 let dark = NeutralCurve::with_vc(
     "#FFFFFF", "#787880", "#101012",
-    &CurveParams::default(), &dim_vc
-)?;
+    &CurveParams::default(), &dim_vc,
+).unwrap();
 
 // Акцент
-let blue = AccentCurve::new("#007AFF", &light)?;
+let blue = AccentCurve::new("#007AFF", &light).unwrap();
 let blue_steps: Vec<String> = blue.sample_hex(13);
 
 // Контраст между двумя цветами
 let lc = labcolors_core::lpc::lpc("#000000", "#ffffff");
 // lc ≈ 106.0
 
-// Generic trait
+// Обобщённо через трейт
 fn print_curve(curve: &dyn ColorCurve) {
     for i in 0..=12 {
         let c = curve.at(i as f64 / 12.0);
         println!("t={:.2}  J'={:.1}", i as f64 / 12.0, c.jp);
     }
 }
+print_curve(&light);
+print_curve(&dark);
+
+assert_eq!(steps.len(), 13);
+assert_eq!(blue_steps.len(), 13);
+assert!(lc > 100.0);
 ```
 
 ## Структура проекта
 
-```
+```text
 crates/labcolors-core/src/
-├── lib.rs           — реэкспорты
+├── lib.rs           — публичные реэкспорты
 ├── lcs.rs           — LcsColor: хранение и конвертация (hex ↔ CAM16)
 ├── neutral.rs       — NeutralCurve: нейтральная шкала
 ├── scale.rs         — AccentCurve: акцентная шкала
-├── curve.rs         — ColorCurve trait
-├── lpc.rs           — LPC контраст (APCA + HK)
+├── accent.rs        — палитра акцентов как данные: 10 именованных семейств
+├── curve.rs         — трейт ColorCurve
 ├── solve.rs         — обратный решатель: solve(bg, contract) → цвет
-├── semantic.rs      — таблица семантических ролей от фона
+├── lpc.rs           — LPC-контраст (APCA + HK)
+├── wcag.rs          — WCAG 2.1 relative-luminance ratio (юридический пол)
+├── semantic.rs      — таблица семантических ролей от фона (Role, RoleTable)
 ├── sentiment.rs     — sentiment-цвета (brand displacement)
+├── config.rs        — граница конфига: ThemeConfig → NamedRoleTable (+ config/)
+├── ladder.rs        — лестница акцент/сентимент/бренд/нейтраль как данные
+├── alpha.rs         — альфа-аналог солида (композит-инверсия)
+├── cleanliness.rs   — «Закон Грязи» (Muddiness Law)
+├── greyfast.rs      — O(1) быстрый путь resolve_set для нейтральных фонов
+├── chromafast.rs    — memo быстрый путь resolve_set для хроматических фонов
+├── lut.rs           — предвычисленный LUT светлоты серой оси (+ lut/lut_data.rs)
 └── spaces/
     ├── cam16.rs     — CIECAM16 forward/inverse
     ├── cat16.rs     — CAT16 cone transform
     ├── oklab.rs     — Oklab hue
-    ├── srgb.rs      — sRGB ↔ XYZ
+    ├── oklch.rs     — CSS-эмиссия oklch (единая форма ролей наружу)
+    ├── srgb.rs      — sRGB ↔ XYZ(D65) (+ srgb/gamma_data.rs — 8-битная таблица декода)
     ├── vc.rs        — ViewingConditions (srgb, dim_surround)
     └── mod.rs
 ```
 
+Карта — продакшн-модули; тест-модули (`golden_tests.rs`, `config/tests.rs`, `*/tests.rs`) под `#[cfg(test)]` в неё не входят.
+
 ## Тесты
 
-`cargo test` — актуальное число и статус; CI гоняет тесты, clippy и rustfmt на каждом PR.
+`cargo test --workspace` гоняет юнит-тесты, doctest-ы (включая примеры этого README) и мета-тесты. CI на каждом PR держит четыре джоба на Rust 1.96.0:
+
+- **lint** (clippy + rustfmt) — `cargo clippy --workspace --all-targets -- -D warnings` и `cargo fmt --all --check`
+- **test** — `cargo test --workspace`
+- **audit** — `cargo audit --deny warnings` (RustSec: уязвимые или отозванные зависимости блокируют мерж)
+- **wasm** — release-сборка `wasm-pack`; блокирующими шагами внутри того же джоба: `npm run typecheck` + `npm test` пакета `@labpics/colors` против собранного `pkg/`, headless-Chrome паритет-тест обёртки против нативного `resolve_set`, замер размера бандла
 
 Что покрыто:
 
@@ -290,9 +329,8 @@ crates/labcolors-core/src/
 
 ## Что дальше
 
-- **surface-jnd** — финальная JND-калибровка декоративных ролей (separator/border/surface/shadow) по Figma-якорям после issue #44; v1 даёт провизорные заглушки
-- **runtime-engine** — сериализация набора ролей в CSS custom properties; адаптеры React/Mitosis потребляют эти ключи
-- **labcolors-preview** — визуализатор: HTML с реальными цветами, ползунками, side-by-side light/dark
+- **surface-jnd** — финальная JND-калибровка стека теней и `separator`: они держат Lc-заглушки выше надёжного пола решателя, а глава выводит их контракты из альфа-якорей LabUI. Лестницы `border-*` и `fill-*` уже несут буквальные dJ'-якоря (не заглушки); роли `surface` в таблице нет.
+- **конфиг-граница (ADR-0001)** — ломающая чистка ядра (PR-c): снос запечённых `RoleTable::default` / `enum Role` / данных `Accent` после зелёного потребительского поезда labui. Ядро `ThemeConfig`, рецепт `ladder` (поглотил акцентный GAP #59) и WASM-`loadConfig` уже влиты.
 
 ## LPC vs APCA
 

@@ -18,15 +18,36 @@
 // `background` option of `watchTheme`, or a sampled average). What it does cover —
 // translucent panels over solid parents — is the common case and is composited
 // *correctly* (true source-over alpha), not approximated.
+//
+// COLOUR FORMS: `parseCssColor` reads the forms this package actually meets —
+// `#hex`, `rgb()/rgba()` (legacy comma and modern space/slash), `transparent`,
+// and `oklch()` (the engine's OWN emission form since 0.4.0, and what a browser
+// serialises `background-color` back to for an oklch-painted surface). Other
+// modern forms — `lab()`, `lch()`, `color(srgb …)`, `color-mix()`, `hsl()`,
+// named colours beyond `transparent` — are NOT parsed and return `null` (a
+// dropped layer). If a surface's background is authored in one of those, pass the
+// effective background explicitly via the `background` option.
 
 /** @typedef {[number, number, number, number]} Rgba  r,g,b in 0..255, a in 0..1 */
 
 /**
  * Parse a CSS colour string into `[r, g, b, a]`, or `null` if unrecognised.
  *
- * Handles the forms computed style actually yields (`rgb(r, g, b)`,
- * `rgba(r, g, b, a)`, the modern `rgb(r g b / a)`) plus `#rgb`/`#rrggbb` and the
- * `transparent` keyword. Unknown keywords return `null` (treated as "no layer").
+ * Handles the forms computed style actually yields:
+ *   - `rgb(r, g, b)` / `rgba(r, g, b, a)` and the modern `rgb(r g b / a)`;
+ *   - `#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa`;
+ *   - the `transparent` keyword;
+ *   - `oklch(L C H)` / `oklch(L C H / A)` — the engine's own emission form and
+ *     what a browser serialises an oklch-painted `background-color` back to.
+ *     `L` accepts both a `0..1` number (Chrome's computed form) and a percentage
+ *     (the engine's literal form); `C` a number or a `%` (100% = 0.4 per CSS
+ *     Color 4); `H` degrees (bare or `deg`-suffixed); a missing component
+ *     (`none`) is 0. Conversion to sRGB bytes reuses the file's Oklab↔sRGB
+ *     transform and is byte-exact to the core's round-trip proof.
+ *
+ * Any other form — `lab()`, `lch()`, `color(srgb …)`, `color-mix()`, `hsl()`,
+ * named colours other than `transparent` — returns `null` (treated as "no
+ * layer"); supply such backgrounds explicitly via the `background` option.
  *
  * @param {string} css
  * @returns {Rgba | null}
@@ -35,6 +56,8 @@ export function parseCssColor(css) {
   if (typeof css !== "string") return null;
   const s = css.trim().toLowerCase();
   if (s === "transparent") return [0, 0, 0, 0];
+
+  if (s.startsWith("oklch(") && s.endsWith(")")) return parseOklch(s.slice(6, -1));
 
   if (s[0] === "#") {
     const h = s.slice(1);
@@ -71,6 +94,83 @@ export function parseCssColor(css) {
 
 function clamp255(v) {
   return Math.min(255, Math.max(0, v));
+}
+
+/**
+ * Parse the inside of an `oklch(...)` (the part between the parens) into sRGB
+ * `[r, g, b, a]`, or `null` on any malformed component.
+ *
+ * The engine emits `oklch(L% C H)` / `oklch(L% C H / A)`; a browser's computed
+ * form is `oklch(<L 0..1> C H [/ A])`. Components are whitespace-separated with
+ * an optional `/`-separated alpha, exactly like `rgb()`'s modern syntax.
+ * oklch → Oklab is `a = C·cos(H)`, `b = C·sin(H)`; then the file's own
+ * `oklabToLinearRgb` + `linearToSrgb` land it in sRGB — the SAME transform (and
+ * the SAME clamp-then-round the core uses in `hex_from_srgb`) that carries the
+ * emitter's byte-exact round-trip, so an emitted string decodes to its source
+ * bytes. Out-of-gamut channels clamp per channel, matching `oklabLerp`/`toHex`.
+ *
+ * @param {string} inner  the text between `oklch(` and `)`
+ * @returns {Rgba | null}
+ */
+function parseOklch(inner) {
+  const slash = inner.indexOf("/");
+  const lch = (slash >= 0 ? inner.slice(0, slash) : inner).trim();
+  const alphaTok = slash >= 0 ? inner.slice(slash + 1).trim() : null;
+  const comps = lch.split(/\s+/).filter((p) => p.length > 0);
+  if (comps.length !== 3) return null;
+
+  const L = oklchLightness(comps[0]);
+  const C = oklchChroma(comps[1]);
+  const H = oklchHue(comps[2]);
+  const a = alphaTok === null ? 1 : oklchAlpha(alphaTok);
+  if (L === null || C === null || H === null || a === null) return null;
+
+  const hRad = (H * Math.PI) / 180;
+  const lin = oklabToLinearRgb(L, C * Math.cos(hRad), C * Math.sin(hRad));
+  const byte = (i) => Math.round(clamp255(linearToSrgb(lin[i]) * 255));
+  return [byte(0), byte(1), byte(2), a];
+}
+
+/** Strict CSS `<number>` (no trailing junk, unlike `parseFloat`), else `null`. */
+function cssNumber(tok) {
+  return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(tok) ? parseFloat(tok) : null;
+}
+
+/** L: a percentage → `/100` into `0..1`; a bare number is already `0..1`; `none`
+ * → 0. Lightness clamps to `[0, 1]` (CSS Color 4) — a byte-level clamp alone
+ * masks out-of-range L only at low chroma, not high, so clamp L explicitly. */
+function oklchLightness(tok) {
+  if (tok === "none") return 0;
+  const pct = tok.endsWith("%");
+  const n = cssNumber(pct ? tok.slice(0, -1) : tok);
+  if (n === null) return null;
+  return Math.min(1, Math.max(0, pct ? n / 100 : n));
+}
+
+/** C: a bare number is absolute chroma; a percentage is a fraction of 0.4
+ * (CSS Color 4: 100% = 0.4); `none` → 0. Negative chroma clamps to 0. */
+function oklchChroma(tok) {
+  if (tok === "none") return 0;
+  const pct = tok.endsWith("%");
+  const n = cssNumber(pct ? tok.slice(0, -1) : tok);
+  if (n === null) return null;
+  return Math.max(0, pct ? (n / 100) * 0.4 : n);
+}
+
+/** H: degrees, bare or `deg`-suffixed; `none` → 0. (grad/rad/turn are out of
+ * scope — the engine and browsers emit bare degrees.) */
+function oklchHue(tok) {
+  if (tok === "none") return 0;
+  return cssNumber(tok.endsWith("deg") ? tok.slice(0, -3) : tok);
+}
+
+/** Alpha: a number `0..1` or a percentage; `none` → 0; clamped to `[0, 1]`. */
+function oklchAlpha(tok) {
+  if (tok === "none") return 0;
+  const pct = tok.endsWith("%");
+  const n = cssNumber(pct ? tok.slice(0, -1) : tok);
+  if (n === null) return null;
+  return Math.min(1, Math.max(0, pct ? n / 100 : n));
 }
 
 /**
@@ -156,23 +256,25 @@ function oklabToLinearRgb(L, A, B) {
 }
 
 /**
- * Interpolate two `#RRGGBB` colours in Oklab at `t ∈ [0,1]`, returning `#RRGGBB`.
+ * Interpolate two colours in Oklab at `t ∈ [0,1]`, returning `#RRGGBB`.
  *
- * Perceptually uniform: equal steps in `t` are equal steps in perceived
- * lightness (and a straight, non-muddy path in hue/chroma), so a crossfade feels
- * even rather than lingering bright. Endpoints are returned exactly (`t ≤ 0` →
- * `from`, `t ≥ 1` → `to`, both re-normalised through `toHex`); out-of-gamut
+ * `from`/`to` may be ANY string `parseCssColor` accepts (`#rgb`/`#rrggbb`,
+ * `rgb()`/`rgba()`, `oklch()`, `transparent`) — not only `#RRGGBB`. Perceptually
+ * uniform: equal steps in `t` are equal steps in perceived lightness (and a
+ * straight, non-muddy path in hue/chroma), so a crossfade feels even rather than
+ * lingering bright. Endpoints are returned exactly (`t ≤ 0` → `from`, `t ≥ 1` →
+ * `to`), always normalised to `#RRGGBB` through `toHex`; out-of-gamut
  * intermediates are clamped per channel. Unparseable input falls back to the
- * nearer endpoint.
+ * nearer parseable endpoint.
  *
- * @param {string} fromHex
- * @param {string} toHex_
+ * @param {string} from  any colour string `parseCssColor` accepts
+ * @param {string} to    any colour string `parseCssColor` accepts
  * @param {number} t
- * @returns {string}
+ * @returns {string} a `#RRGGBB` string
  */
-export function oklabLerp(fromHex, toHex_, t) {
-  const a = parseCssColor(fromHex);
-  const b = parseCssColor(toHex_);
+export function oklabLerp(from, to, t) {
+  const a = parseCssColor(from);
+  const b = parseCssColor(to);
   if (!a || !b) return (b && t >= 0.5) || !a ? (b ? toHex(b) : "#000000") : toHex(a);
   if (t <= 0) return toHex(a);
   if (t >= 1) return toHex(b);
