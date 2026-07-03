@@ -26,6 +26,12 @@ pub(crate) mod chromafast;
 #[cfg(test)]
 mod golden_tests;
 
+#[cfg(test)]
+mod agnostic_gates;
+
+#[cfg(test)]
+mod one_levelness_tests;
+
 pub use accent::Accent;
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
@@ -36,7 +42,7 @@ pub use cleanliness::{
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
     PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
-    VcPreset, labui_reference,
+    VcPreset,
 };
 pub use curve::ColorCurve;
 pub use glow::{

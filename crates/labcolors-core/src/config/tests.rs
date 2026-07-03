@@ -8,6 +8,7 @@
 //!    diff=пусто против consumedRoles; S_PERC_MIN-идентичность; значенческая
 //!    сверка со стабом labui (light+dark) + RED-proof мутаций.
 
+use super::fixture::labui_reference;
 use super::*;
 use crate::ladder::LadderPosition;
 use crate::solve::Floor;

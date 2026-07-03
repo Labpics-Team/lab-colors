@@ -646,12 +646,21 @@ mod tests {
         }
     }
 
-    /// JSON канонического labui-конфига — через сериализуемое зеркало границы.
+    /// JSON канонического labui-конфига — статический SSOT-паспорт
+    /// (`tests/data/labui.config.json`). Дерево Даниила вынесено из прод-API ядра
+    /// (ADR-0001 PR-c), поэтому граница читает замороженный паспорт, а не строит
+    /// его из `labui_reference` (её больше нет в публичном API).
     fn labui_json() -> String {
-        let dto =
-            crate::config_dto::ConfigDto::try_from(&labcolors_core::config::labui_reference())
-                .expect("эталон сериализуем");
-        serde_json::to_string(&dto).expect("JSON")
+        include_str!("../tests/data/labui.config.json").to_string()
+    }
+
+    /// Скомпилированная labui-таблица через тот же путь, что `load_config`:
+    /// паспорт-JSON → DTO → `ThemeConfig` ядра → `compile_named_role_table`.
+    fn labui_table() -> labcolors_core::semantic::NamedRoleTable {
+        let dto: crate::config_dto::ConfigDto =
+            serde_json::from_str(&labui_json()).expect("паспорт labui парсится");
+        let cfg = labcolors_core::config::ThemeConfig::try_from(dto).expect("DTO → ThemeConfig");
+        cfg.compile_named_role_table().expect("labui компилируется")
     }
 
     /// Минимальный конфиг второго клиента: другой бренд, своё пространство имён.
@@ -742,9 +751,7 @@ mod tests {
         engine.load_config(&labui_json()).unwrap();
         let via_engine = engine.resolve_theme("#101012", Theme::Dark).unwrap();
 
-        let table = labcolors_core::config::labui_reference()
-            .compile_named_role_table()
-            .unwrap();
+        let table = labui_table();
         let bg = labcolors_core::BgInput::solid("#101012").unwrap();
         let direct =
             labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions());
