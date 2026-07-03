@@ -1273,9 +1273,17 @@ impl Resolved {
         }
     }
 
-    /// Whether the hierarchy was compressed at this role: the legal floor forced
-    /// it onto (or just below) its senior, so its place in the order is
-    /// non-strict. `false` for the zero token and unreachable roles.
+    /// Whether this role's contract was **degraded to the nearest achievable**
+    /// (закон 2 ADR-0002) — the emitted colour honours the contract as closely
+    /// as physics allows, but not exactly:
+    ///
+    /// - contrast roles: the legal floor forced the colour onto (or just below)
+    ///   its senior, so its place in the hierarchy order is non-strict;
+    /// - decorative dJ' roles: the requested |ΔJ'| sits past the wall of the
+    ///   J' axis (or in a quantisation gap) — the colour with the closest
+    ///   achievable |ΔJ'| was emitted instead.
+    ///
+    /// `false` for the zero token and unreachable roles.
     pub fn compressed(&self) -> bool {
         matches!(
             self,
@@ -1466,9 +1474,15 @@ fn resolve_spec_in(
         RoleSpec::DecorativeDj { magnitude_dj } => {
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
-            // `solve_with_chroma`.
+            // `solve_with_chroma`. Недостижимая цель (стена оси J' / квантовая
+            // дыра) деградирует к ближайшему достижимому с флагом `compressed`
+            // (закон 2 ADR-0002 — смысл флага тот же, что у контраст-ролей:
+            // «контракт занят ближайшим честным, не точным»).
             return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
-                Ok(solved) => Resolved::color(solved),
+                Ok(d) => Resolved::Color {
+                    solved: d.solved,
+                    compressed: d.degraded,
+                },
                 Err(reason) => Resolved::Unreachable(reason),
             };
         }
@@ -1742,17 +1756,17 @@ fn resolve_dj(
     polarity: Polarity,
     chroma: RoleChroma,
     vc: &ViewingConditions,
-) -> Result<Solved, Unreachable> {
+) -> Result<solve::DjSolved, Unreachable> {
     let sign = polarity.sign();
     if let RoleChroma::Curve { .. } = chroma {
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
         let probe = solve::solve_dj(bg, magnitude_dj, sign, probe_hue, probe_chroma, vc)?;
-        let mut l_plan = solved_oklab_lightness(&probe);
+        let mut l_plan = solved_oklab_lightness(&probe.solved);
         let mut solved = probe;
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
             solved = solve::solve_dj(bg, magnitude_dj, sign, hue, policy, vc)?;
-            let l_new = solved_oklab_lightness(&solved);
+            let l_new = solved_oklab_lightness(&solved.solved);
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
             }
@@ -2994,14 +3008,14 @@ mod tests {
     }
 
     #[test]
-    fn dj_off_axis_target_is_honestly_unreachable() {
-        // A dJ' larger than the axis can supply (a big positive step requested on a
-        // near-white surface, where the foreground would need J' > 100) surfaces
-        // Unreachable::DjUnreachable — never a silent clip to white.
+    fn dj_off_axis_target_degrades_to_nearest_with_flag() {
+        // A dJ' larger than the axis can supply (300 J' on near-black — the
+        // foreground would need J' ≈ −290) деградирует по закону 2 ADR-0002:
+        // ближайший достижимый цвет (стена оси — почти белый) с флагом
+        // compressed. Прежний голый Unreachable::DjUnreachable наказывал
+        // владельца ошибкой за физическую стену; тихий клип БЕЗ флага —
+        // обратная нечестность. Флаг — граница между ними.
         let vc = ViewingConditions::srgb();
-        // Force light-on-dark polarity by overriding a fill to a huge dark-theme-
-        // style step on a near-white bg is still dark-on-light; instead request a
-        // separation past the dark wall on near-black.
         let table = RoleTable::default().with(
             Role::FillPrimary,
             RoleSpec::DecorativeDj {
@@ -3010,8 +3024,33 @@ mod tests {
         );
         let bg = BgInput::solid("#101012").unwrap();
         match resolve(&bg, Role::FillPrimary, &table, &vc) {
-            Resolved::Unreachable(Unreachable::DjUnreachable { .. }) => {}
-            other => panic!("expected DjUnreachable for an off-axis dJ', got {other:?}"),
+            Resolved::Color { solved, compressed } => {
+                assert!(compressed, "off-axis dJ' must carry the degradation flag");
+                // Стена светлой стороны: решённый цвет заметно светлее фона
+                // (light-on-dark полярность на #101012) — не тихий возврат фона.
+                let rgb = crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap();
+                let l = crate::spaces::oklab::srgb_linear_to_oklab(rgb)[0];
+                assert!(
+                    l > 0.9,
+                    "degraded colour must sit at the light wall, got L={l:.3} ({})",
+                    solved.hex()
+                );
+            }
+            other => panic!("expected degraded Color for an off-axis dJ', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dj_in_budget_target_is_not_flagged() {
+        // Парный контроль: достижимая ступень (дефолтная таблица на белом)
+        // решается точно и БЕЗ флага — деградация не размазывается на всех.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        match resolve(&bg, Role::FillPrimary, &RoleTable::default(), &vc) {
+            Resolved::Color { compressed, .. } => {
+                assert!(!compressed, "in-budget dJ' must not be flagged")
+            }
+            other => panic!("expected Color, got {other:?}"),
         }
     }
 

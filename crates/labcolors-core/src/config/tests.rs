@@ -1918,3 +1918,74 @@ fn glow_roles_resolve_screen_layers() {
         other => panic!("fx-glow-neutral должен быть Resolved::Glow, получено {other:?}"),
     }
 }
+
+/// Попарная различимость сентиментов между СОБОЙ (аудит 2026-07-03).
+///
+/// Модель разводит каждый сентимент от БРЕНДА (`s_min` — хорда до бренда);
+/// попарные дистанции сентиментов между собой ею прямо не гарантируются
+/// (Warning↔Danger держит только категориальный пол). Этот тест ЗАМЕРЯЕТ
+/// попарные Oklab-ab-дистанции решённых labui-солидов по всем четырём
+/// режимам против конфиг-порога `s_perc_min` — того же порога перцептивной
+/// различимости, что закон применяет к бренду.
+///
+/// НАХОДКА (2026-07-03, зафиксирована честно — не подогнана): в режиме
+/// light-ic Warning↔Success слипаются (ab ≈ 0.042 < 0.0687). Механика:
+/// категориальный пол Warning выталкивает приглушённый IC-якорь оранжевого
+/// (#C93400) за уникальный жёлтый в жёлто-зелёный (#508300), рядом с
+/// приглушённым IC-зелёным Success (#248A3D). Закон разведения — брендо-
+/// центричный и попарно слепой; лечение — многотельное разведение
+/// (попарная репульсия сентиментов), отдельный слайс солвера. До него
+/// коллизия ЗАПИНЕНА узкой полосой: дрейф в любую сторону (чинится /
+/// углубляется) обязан осознанно обновить пин.
+#[test]
+fn labui_sentiment_solids_keep_pairwise_ab_distance() {
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::srgb_gamma_inv;
+
+    let cfg = labui_reference();
+    let s_perc_min = cfg.sentiment_s_perc_min().expect("порог из якорей labui");
+    let vcs = [
+        crate::spaces::vc::ViewingConditions::srgb(),
+        crate::spaces::vc::ViewingConditions::dim_surround(),
+        crate::spaces::vc::ViewingConditions::srgb_high_contrast(),
+        crate::spaces::vc::ViewingConditions::dim_surround_high_contrast(),
+    ];
+    // Единственная известная коллизия: (режим, пара) → полоса пина.
+    const KNOWN_COLLISION: (usize, &str, &str) = (2, "warning", "success");
+    for (mode_idx, vc) in vcs.iter().enumerate() {
+        let mut solids: Vec<(String, [f64; 3])> = Vec::new();
+        for cat in &cfg.sentiments.categories {
+            let tint = cfg
+                .compile_sentiment_tint("pairwise-probe", &cat.name)
+                .expect("labui-сентимент компилируется");
+            let e = tint.for_vc(vc);
+            let lab = srgb_linear_to_oklab([
+                srgb_gamma_inv(e[0]),
+                srgb_gamma_inv(e[1]),
+                srgb_gamma_inv(e[2]),
+            ]);
+            solids.push((cat.name.clone(), lab));
+        }
+        for i in 0..solids.len() {
+            for j in (i + 1)..solids.len() {
+                let (na, a) = &solids[i];
+                let (nb, b) = &solids[j];
+                let d_ab = ((a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                if (mode_idx, na.as_str(), nb.as_str()) == KNOWN_COLLISION {
+                    assert!(
+                        (0.03..0.0687).contains(&d_ab),
+                        "известная коллизия light-ic warning↔success уплыла из полосы \
+                         [0.03, 0.0687): ab={d_ab:.4}. Починили многотельным разведением — \
+                         снимите пин; углубилась — осмыслить."
+                    );
+                    continue;
+                }
+                assert!(
+                    d_ab >= s_perc_min,
+                    "режим {mode_idx}: сентименты `{na}` и `{nb}` перцептивно слиплись: \
+                     ab-дистанция {d_ab:.4} < порога {s_perc_min:.4}"
+                );
+            }
+        }
+    }
+}

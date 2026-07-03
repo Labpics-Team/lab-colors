@@ -711,9 +711,16 @@ pub fn resolve_config_sentiment_solid(
     preferred_side: f64,
     s_perc_min: f64,
 ) -> Result<String, String> {
-    let _ = chroma_fraction; // хрома тинта = хрома якоря (сохраняем солид якоря);
-    // chroma_fraction — ручка рампы SentimentCurve, не тинта; принимается для
-    // единообразия сигнатуры конфига, но тинт держит фактическую хрому якоря.
+    // chroma_fraction — АНТИ-НЕОНОВЫЙ ПОТОЛОК (применён 2026-07-03, аудит
+    // sentiment; прежде ручка была инертна — принималась и игнорировалась):
+    //   c_тинта = min(c_якоря, chroma_fraction · C_max(L, h_решённый)).
+    // Закон совместим с деривационной идентичностью: якорь внутри потолка
+    // воспроизводится байт-в-байт (доля 1.0 — чистая стена гамута); кусается
+    // потолок только на неоново-насыщенном якоре ИЛИ когда смещённый оттенок
+    // имеет более узкий гамут, чем исходный. Второе одновременно закрывает
+    // прежнюю тихую нечестность: c_якоря на новом оттенке мог выходить за
+    // гамут, и oklab_lc_to_hex резал КАНАЛЫ (искажая оттенок) — теперь
+    // усечение идёт по оси хромы (оттенок сохранён).
     //
     // Публичная граница: конфиг-путь передаёт сюда уже валидированные углы, но
     // прямой вызов мог бы протащить NaN в сатурированную ветку мимо солвера —
@@ -730,6 +737,13 @@ pub fn resolve_config_sentiment_solid(
     if !(s_perc_min.is_finite() && s_perc_min >= 0.0) {
         return Err(format!(
             "s_perc_min вне домена (конечный неотрицательный): {s_perc_min}"
+        ));
+    }
+    // Тот же домен, что у конфиг-валидатора ((0, 1]): прямой вызов не должен
+    // протаскивать NaN/0/1.5 в потолок хромы тихим неверным hex.
+    if !(chroma_fraction.is_finite() && chroma_fraction > 0.0 && chroma_fraction <= 1.0) {
+        return Err(format!(
+            "chroma_fraction вне домена (0 < f ≤ 1): {chroma_fraction}"
         ));
     }
     let anchor_lab = srgb_linear_to_oklab(srgb_from_hex(family_anchor_hex)?);
@@ -771,7 +785,8 @@ pub fn resolve_config_sentiment_solid(
             }
             _ => diametric,
         };
-        return Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved));
+        let c = capped_chroma(c_anchor, chroma_fraction, l_anchor, resolved);
+        return Ok(oklab_lc_to_hex(l_anchor, c, resolved));
     }
     let resolved_hue = resolve_smooth_hue_explicit(
         preferred_side,
@@ -781,8 +796,18 @@ pub fn resolve_config_sentiment_solid(
         params,
         effective_s_min,
     )?;
-    // Солид на исходных L/C якоря, смещённый оттенок.
-    Ok(oklab_lc_to_hex(l_anchor, c_anchor, resolved_hue))
+    // Солид на исходной светлоте якоря и его хроме ПОД анти-неоновым потолком,
+    // смещённый оттенок (см. закон потолка у гарда chroma_fraction выше).
+    let c = capped_chroma(c_anchor, chroma_fraction, l_anchor, resolved_hue);
+    Ok(oklab_lc_to_hex(l_anchor, c, resolved_hue))
+}
+
+/// Анти-неоновый потолок хромы тинта: `min(c_якоря, f · C_max(L, h))` — хрома
+/// якоря сохраняется, пока не упирается в долю гамутного максимума на
+/// РЕШЁННОМ оттенке; усечение по оси хромы держит оттенок (в отличие от
+/// канального клипа sRGB).
+fn capped_chroma(c_anchor: f64, fraction: f64, l_ok: f64, h_deg: f64) -> f64 {
+    c_anchor.min(fraction * crate::scale::max_chroma(l_ok, h_deg))
 }
 
 /// Перевести целевую хорду разделения `chord` в угол оттенка (градусы) при
@@ -1103,6 +1128,29 @@ mod tests {
     }
 
     #[test]
+    fn prototype_hex_chroma_never_leaks_into_the_ramp() {
+        // Честный API (аудит 2026-07-03): `prototype_hex` информирует ТОЛЬКО
+        // перцептивный порог разделения (s_min из его фактической хромы) —
+        // никогда хрому рампы (дока `with_params` это обещает; тест пинит).
+        // Далёкий бренд: смещение s(d)−d затухает до нуля, поэтому разные
+        // s_min от разных прототипов дают одинаковый resolved_hue → рампа
+        // обязана совпасть БАЙТ-В-БАЙТ при насыщенном и приглушённом
+        // прототипе одного оттенка.
+        let n = neutral();
+        let s = Sentiment::Danger;
+        let brand = normalize_hue(s.prototype_hue() + 180.0); // максимально далёкий
+        let saturated = SentimentCurve::new(s, brand, "#FF3B30", &n).unwrap();
+        let muted = SentimentCurve::new(s, brand, "#B36A65", &n).unwrap(); // тот же красный, хрома ~вдвое ниже
+        for t in [0.2, 0.5, 0.8] {
+            assert_eq!(
+                saturated.hex_at(t),
+                muted.hex_at(t),
+                "хрома прототипа просочилась в рампу (t={t})"
+            );
+        }
+    }
+
+    #[test]
     fn warning_floor_enforced_full_circle() {
         // Восстановлена защита (#65 её убрала, #66 унаследовал уязвимость):
         // Warning никогда не должен опускаться ниже своего категориального
@@ -1285,14 +1333,17 @@ mod tests {
     /// «пустая дуга» от скан-сетки и не тихое меньшее разведение.
     #[test]
     fn saturated_chord_resolves_to_diametric_hue() {
-        // Ассерт байт-в-байт против аналитического закона (солид = якорные L/C
-        // на целевом оттенке): угол ПОСЛЕ hex-эмиссии сравнивать нельзя —
-        // гамут-клип каналов и 8-бит квантование легитимно смещают его
-        // (пре-существующий контракт oklab_lc_to_hex).
+        // Ассерт байт-в-байт против аналитического закона: солид = якорная L,
+        // хрома якоря ПОД анти-неоновым потолком min(C, f·C_max(L, h_цели))
+        // на целевом оттенке (2026-07-03: прежний пин ожидал сырую хрому
+        // якоря и молчаливый КАНАЛЬНЫЙ клип oklab_lc_to_hex — клип искажал
+        // оттенок; усечение по оси хромы держит его). Угол ПОСЛЕ hex-эмиссии
+        // сравнивать нельзя — 8-бит квантование легитимно смещает его.
         let anchor = "#FF3B30";
         let brand_hue = 100.0;
         let lab = srgb_linear_to_oklab(srgb_from_hex(anchor).unwrap());
         let (l, c) = (lab[0], (lab[1].powi(2) + lab[2].powi(2)).sqrt());
+        let capped = |h: f64| c.min(crate::scale::max_chroma(l, h));
 
         // s_perc_min = 1.0 — заведомо больше диаметра 2C любого sRGB-цвета.
         let solid = resolve_config_sentiment_solid(anchor, brand_hue, 4.0, 1.0, None, 1.0, 1.0)
@@ -1300,8 +1351,8 @@ mod tests {
         let diametric = normalize_hue(brand_hue + 180.0);
         assert_eq!(
             solid,
-            oklab_lc_to_hex(l, c, diametric),
-            "сатурация → диаметраль (максимум разведения) на якорных L/C"
+            oklab_lc_to_hex(l, capped(diametric), diametric),
+            "сатурация → диаметраль (максимум разведения) на якорной L и потолочной хроме"
         );
 
         // Пол, блокирующий диаметраль (brand 100° → диаметраль 280° < 300°):
@@ -1311,7 +1362,7 @@ mod tests {
                 .expect("пол при сатурации — не отказ");
         assert_eq!(
             floored,
-            oklab_lc_to_hex(l, c, 300.0),
+            oklab_lc_to_hex(l, capped(300.0), 300.0),
             "при полу 300° максимум разведения — граница пола"
         );
 
