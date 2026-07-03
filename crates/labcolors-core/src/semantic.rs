@@ -1716,10 +1716,11 @@ fn resolve_rgba_inverted(
     let tint_q = quantise_encoded(analog.tint);
     let composite = crate::alpha::composite_over_encoded(tint_q, analog.alpha, bg_encoded);
     // Коэрсия α: фактическая (`analog.alpha`) строго выше запрошенной ⇔ пол
-    // `α_min` перекрыл запрошенную (`resolve_alpha_analog`: α = req.max(floor);
-    // при floor ≤ req значения побайтно равны, при floor > req — строго больше).
-    // Сравнение точное, эпсилон не нужен: `max` возвращает либо тот же f64,
-    // либо floor.
+    // `α_min` перекрыл запрошенную. `resolve_alpha_analog`: α =
+    // req.clamp(0,1).max(floor); под гардом `rgba_input_valid` (req ∈ (0,1])
+    // clamp — no-op, т.е. α = req.max(floor). При floor ≤ req значения побайтно
+    // равны, при floor > req — строго больше. Сравнение точное, эпсилон не нужен:
+    // `max` возвращает либо тот же f64, либо floor.
     let alpha_coerced = analog.alpha > requested_alpha;
     finish_rgba(
         tint_q,
