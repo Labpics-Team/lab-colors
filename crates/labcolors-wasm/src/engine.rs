@@ -232,7 +232,14 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             solved,
             compressed,
             achieved_dj,
-        } => RoleOutcome::Color(map_solved(solved, compressed, achieved_dj, legal_floor)),
+            hue_vanished,
+        } => RoleOutcome::Color(map_solved(
+            solved,
+            compressed,
+            achieved_dj,
+            hue_vanished,
+            legal_floor,
+        )),
         Resolved::None => RoleOutcome::None,
         Resolved::Unreachable(reason) => RoleOutcome::Unreachable {
             code: unreachable_code(&reason),
@@ -248,6 +255,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             composite_lc: rgba.composite_lc(),
             composite_wcag: rgba.composite_wcag(),
             alpha_coerced: rgba.alpha_coerced(),
+            floor_coerced: rgba.floor_coerced(),
         }),
         // Свечение: слои + интенсивность, оператор потребителя — screen.
         Resolved::Glow(g) => RoleOutcome::Glow(crate::dto::GlowColor {
@@ -272,6 +280,7 @@ fn map_solved(
     solved: Solved,
     compressed: bool,
     achieved_dj: Option<f64>,
+    hue_vanished: bool,
     legal_floor: Option<f64>,
 ) -> SolvedColor {
     SolvedColor {
@@ -282,6 +291,7 @@ fn map_solved(
         achieved_dj,
         floor_override: solved.floor_override(),
         legal_floor,
+        hue_vanished,
     }
 }
 
@@ -772,6 +782,7 @@ mod tests {
                         solved,
                         compressed,
                         achieved_dj,
+                        hue_vanished,
                     },
                     RoleOutcome::Color(c),
                 ) => {
@@ -780,6 +791,7 @@ mod tests {
                     assert_eq!(solved.wcag_ratio(), c.wcag_ratio, "{name}: wcag");
                     assert_eq!(*compressed, c.compressed, "{name}: compressed");
                     assert_eq!(*achieved_dj, c.achieved_dj, "{name}: achieved_dj");
+                    assert_eq!(*hue_vanished, c.hue_vanished, "{name}: hue_vanished");
                     assert_eq!(
                         solved.floor_override(),
                         c.floor_override,
@@ -797,6 +809,7 @@ mod tests {
                         "{name}: composite_wcag"
                     );
                     assert_eq!(r.alpha_coerced(), o.alpha_coerced, "{name}: alpha_coerced");
+                    assert_eq!(r.floor_coerced(), o.floor_coerced, "{name}: floor_coerced");
                 }
                 (Resolved::Glow(g), RoleOutcome::Glow(o)) => {
                     assert_eq!(g.core_hex(), o.core_hex, "{name}: glow core");

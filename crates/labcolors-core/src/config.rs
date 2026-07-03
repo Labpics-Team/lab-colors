@@ -453,6 +453,14 @@ pub enum RoleRecipe {
         fraction: f64,
         /// WCAG-пол читаемости.
         floor: Floor,
+        /// Опциональный источник ОТТЕНКА семьи (ратификация ch5c, M1). `None` —
+        /// нейтральный лейбл (подтон таблицы, прежний путь). `Some(source)` —
+        /// ЦВЕТНОЙ лейбл: держит ТОТ ЖЕ контракт уровня (`fraction`/`floor`), что
+        /// нейтральный (одноуровневость по построению), но решённый в чистом
+        /// оттенке семьи-источника. Источник валидируется как у лестницы
+        /// (существование семейства/сентимента); аддитивен в JSON/DTO —
+        /// `{kind:"text-anchor", fraction, floor, hue?: source}`.
+        hue: Option<LadderSource>,
     },
     /// Заякоренная декоративная роль: dJ'-шаг светлоты, отдельно light/dark по теме.
     DjAnchor {
@@ -475,6 +483,12 @@ pub enum RoleRecipe {
         source: LadderSource,
         /// Позиция меню (несёт пер-темную пару альф из стаба labui).
         position: LadderPosition,
+        /// Опциональный юр. пол UI (ратификация ch5c, M2). `None` — прежний путь
+        /// (тинт эмитится как есть). `Some(floor)` — только для СОЛИДНОЙ позиции
+        /// (`α=1`, напр. `BorderStrong`): семейный солид обязан держать пол
+        /// (3:1); если не держит — минимальный легальный сдвиг по кривой семьи с
+        /// честным флагом. Аддитивен в JSON — `{..., floor?: "aa-ui"}`.
+        floor: Option<Floor>,
     },
     /// Свечение (labui ADR-0002 §5): screen-слои цвета источника, интенсивность
     /// решается солвером под контрактную ступень [`crate::glow::GlowStep`]
@@ -903,13 +917,21 @@ impl ThemeConfig {
     /// Провалидировать пределы ручек одного рецепта роли.
     fn validate_recipe(&self, role: &str, recipe: &RoleRecipe) -> Result<(), ConfigError> {
         match recipe {
-            RoleRecipe::TextAnchor { fraction, .. } => check_in_excl_incl(
-                &format!("roles.{role}.fraction"),
-                *fraction,
-                FRACTION_MIN_EXCLUSIVE,
-                FRACTION_MAX_INCLUSIVE,
-                "0 < fraction ≤ 1 (доля максимального контраста фона)",
-            ),
+            RoleRecipe::TextAnchor { fraction, hue, .. } => {
+                check_in_excl_incl(
+                    &format!("roles.{role}.fraction"),
+                    *fraction,
+                    FRACTION_MIN_EXCLUSIVE,
+                    FRACTION_MAX_INCLUSIVE,
+                    "0 < fraction ≤ 1 (доля максимального контраста фона)",
+                )?;
+                // Цветной лейбл (M1): источник оттенка обязан существовать —
+                // та же проверка, что у источника лестницы.
+                if let Some(source) = hue {
+                    self.check_ladder_source(role, source)?;
+                }
+                Ok(())
+            }
             RoleRecipe::DjAnchor { light, dark } => {
                 check_gt(
                     &format!("roles.{role}.light"),
@@ -1035,8 +1057,21 @@ impl ThemeConfig {
     /// компиляции — резолв остаётся bg-зависимым только через фон подложки.
     fn compile_recipe(&self, role: &str, recipe: &RoleRecipe) -> Result<RoleSpec, ConfigError> {
         match recipe {
-            RoleRecipe::TextAnchor { fraction, floor } => {
-                Ok(RoleSpec::Anchor(TextAnchor::new(*fraction, *floor)))
+            RoleRecipe::TextAnchor {
+                fraction,
+                floor,
+                hue,
+            } => {
+                let anchor = TextAnchor::new(*fraction, *floor);
+                // Цветной лейбл (M1): источник оттенка раскладывается в пер-темный
+                // тинт-якорь тем же механизмом, что тинт лестницы (для сентимента
+                // — солид, разведённый с брендом). Резолв держит контракт уровня в
+                // этом оттенке.
+                let anchor = match hue {
+                    Some(source) => anchor.with_hue(self.compile_ladder_tint(role, source)?),
+                    None => anchor,
+                };
+                Ok(RoleSpec::Anchor(anchor))
             }
             RoleRecipe::DjAnchor { light, dark } => Ok(RoleSpec::DecorativeDj {
                 magnitude_dj: DjMagnitude::new(*light, *dark),
@@ -1049,12 +1084,17 @@ impl ThemeConfig {
                 tint: self.compile_ladder_tint(role, source)?,
                 step: *step,
             }),
-            RoleRecipe::Ladder { source, position } => {
+            RoleRecipe::Ladder {
+                source,
+                position,
+                floor,
+            } => {
                 let (alpha_light, alpha_dark) = position.alpha_pair();
                 Ok(RoleSpec::Ladder {
                     tint: self.compile_ladder_tint(role, source)?,
                     alpha_light,
                     alpha_dark,
+                    floor: *floor,
                 })
             }
             RoleRecipe::AlphaAnalog { of, alpha } => Ok(RoleSpec::AlphaAnalog {
@@ -1389,22 +1429,29 @@ pub fn labui_reference() -> ThemeConfig {
     // Фракции и полы — 1:1 из RoleTable::default (semantic.rs), включая border-strong
     // = контракт label-primary. Рецепты собраны так, чтобы имя роли совпадало с
     // Role::key(), а RoleSpec был идентичен дефолтному.
-    let text = |fraction, floor| RoleRecipe::TextAnchor { fraction, floor };
+    let text = |fraction, floor| RoleRecipe::TextAnchor {
+        fraction,
+        floor,
+        hue: None,
+    };
     // Конструктор нейтрального источника (стаб: `Neutral/Derivable` тинтуется
     // краями нейтральной шкалы, НЕ семейством палитры).
     let neutral_pos = |pick, position| RoleRecipe::Ladder {
         source: LadderSource::Neutral(pick),
         position,
+        floor: None,
     };
 
     // Конструкторы лестницы: источник × позиция → рецепт полупрозрачной эмиссии.
     let brand_pos = |position| RoleRecipe::Ladder {
         source: LadderSource::Brand,
         position,
+        floor: None,
     };
     let sent_pos = |name: &str, position| RoleRecipe::Ladder {
         source: LadderSource::Sentiment(name.to_string()),
         position,
+        floor: None,
     };
 
     let mut roles = vec![
@@ -1508,25 +1555,53 @@ pub fn labui_reference() -> ThemeConfig {
     // Каждая семья (brand + 4 сентимента) несёт label×4 · fill×4 · border(strong/
     // base/soft). FX focus-ring/glow — солид/@52. `-tinted` — альфа-аналог солида
     // соответствующего fill-*-primary. Все альфы — из меню LadderPosition (Figma).
-    let ladder_family = |prefix: &str, mk: &dyn Fn(LadderPosition) -> RoleRecipe| {
-        use LadderPosition::*;
-        vec![
-            (format!("label-{prefix}-primary"), mk(LabelPrimary)),
-            (format!("label-{prefix}-secondary"), mk(LabelSecondary)),
-            (format!("label-{prefix}-tertiary"), mk(LabelTertiary)),
-            (format!("label-{prefix}-quaternary"), mk(LabelQuaternary)),
-            (format!("fill-{prefix}-primary"), mk(FillPrimary)),
-            (format!("fill-{prefix}-secondary"), mk(FillSecondary)),
-            (format!("fill-{prefix}-tertiary"), mk(FillTertiary)),
-            (format!("fill-{prefix}-quaternary"), mk(FillQuaternary)),
-            (format!("border-{prefix}-strong"), mk(BorderStrong)),
-            (format!("border-{prefix}-base"), mk(BorderBase)),
-            (format!("border-{prefix}-soft"), mk(BorderSoft)),
-        ]
-    };
+    // Цветной лейбл (ратификация ch5c, M1): доля/пол КАЖДОГО уровня = нейтральный
+    // контракт лейбла (0.968/0.627/0.461/0.276, AaText/AaText/AaUi/None) —
+    // одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ; оттенок = источник семьи
+    // (чистый цвет, светлота выводится контрактом на кривой семьи). Заменяет
+    // прежнюю α-рампу @72/@52/@32 поверх тинта (40/40 нарушений одноуровневости,
+    // нелегальность light-темы) — см. scratchpad/ch5c-ratification.md §2.
+    let hued_label =
+        |prefix: &str, level: &str, fraction: f64, floor: Floor, source: &LadderSource| {
+            (
+                format!("label-{prefix}-{level}"),
+                RoleRecipe::TextAnchor {
+                    fraction,
+                    floor,
+                    hue: Some(source.clone()),
+                },
+            )
+        };
+    let ladder_family =
+        |prefix: &str, source: LadderSource, mk: &dyn Fn(LadderPosition) -> RoleRecipe| {
+            use LadderPosition::*;
+            vec![
+                hued_label(prefix, "primary", 0.968, Floor::AaText, &source),
+                hued_label(prefix, "secondary", 0.627, Floor::AaText, &source),
+                hued_label(prefix, "tertiary", 0.461, Floor::AaUi, &source),
+                hued_label(prefix, "quaternary", 0.276, Floor::None, &source),
+                (format!("fill-{prefix}-primary"), mk(FillPrimary)),
+                (format!("fill-{prefix}-secondary"), mk(FillSecondary)),
+                (format!("fill-{prefix}-tertiary"), mk(FillTertiary)),
+                (format!("fill-{prefix}-quaternary"), mk(FillQuaternary)),
+                // M2 ch5c: солидная семейная граница обязана держать юр. пол UI
+                // (3:1, WCAG 1.4.11). Солид эмитится как есть, если легален
+                // (Figma-тинт цел); иначе минимальный сдвиг по кривой семьи.
+                (
+                    format!("border-{prefix}-strong"),
+                    RoleRecipe::Ladder {
+                        source: source.clone(),
+                        position: BorderStrong,
+                        floor: Some(Floor::AaUi),
+                    },
+                ),
+                (format!("border-{prefix}-base"), mk(BorderBase)),
+                (format!("border-{prefix}-soft"), mk(BorderSoft)),
+            ]
+        };
 
     // Brand-семья: источник = бренд.
-    roles.extend(ladder_family("brand", &brand_pos));
+    roles.extend(ladder_family("brand", LadderSource::Brand, &brand_pos));
     // Сентимент-семьи: источник = сентимент-категория (разводится с брендом).
     for (prefix, sname) in [
         ("danger", "danger"),
@@ -1535,7 +1610,11 @@ pub fn labui_reference() -> ThemeConfig {
         ("info", "info"),
     ] {
         let mk = move |pos| sent_pos(sname, pos);
-        roles.extend(ladder_family(prefix, &mk));
+        roles.extend(ladder_family(
+            prefix,
+            LadderSource::Sentiment(sname.to_string()),
+            &mk,
+        ));
     }
 
     // FX focus-ring (солид) и glow (@52). Сентимент/бренд-источники — акцентные;
