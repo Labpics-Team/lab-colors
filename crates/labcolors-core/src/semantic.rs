@@ -2189,15 +2189,21 @@ mod tests {
             let l = li as f64 / l_steps as f64;
             let mut hc = 0usize;
             while hc < 360 {
-                let hcd = hc as f64;
-                let prod = cusp_attracted_hue(l, hcd, stiffness);
-                let refv = cusp_attracted_hue_reference(l, hcd, stiffness);
-                assert_eq!(
-                    prod.to_bits(),
-                    refv.to_bits(),
-                    "cusp_attracted_hue drift at (L={l}, canon={hcd}): prod={prod} ref={refv}"
-                );
-                points += 1;
+                // Integer canonical PLUS fractional offsets: the production tint
+                // canonical (286°) is integer, but a consumer brand hue is not, so
+                // testing hcd + {0, 0.25, 0.5} closes the aliasing-shift class the
+                // integer grid alone cannot.
+                for frac in [0.0, 0.25, 0.5] {
+                    let hcd = hc as f64 + frac;
+                    let prod = cusp_attracted_hue(l, hcd, stiffness);
+                    let refv = cusp_attracted_hue_reference(l, hcd, stiffness);
+                    assert_eq!(
+                        prod.to_bits(),
+                        refv.to_bits(),
+                        "cusp_attracted_hue drift at (L={l}, canon={hcd}): prod={prod} ref={refv}"
+                    );
+                    points += 1;
+                }
                 hc += h_step_deg;
             }
         }
@@ -2206,17 +2212,17 @@ mod tests {
 
     #[test]
     fn diff_cusp_hue_matches_frozen_reference_fast() {
-        // Fast subset for the per-PR run: 101 L × 72 canonical-hue = 7 272 points.
+        // 101 L × 72 canonical-hue × 3 fractional offsets = 21 816 points.
         let n = assert_cusp_hue_matches_reference(100, 5);
-        assert_eq!(n, 101 * 72);
+        assert_eq!(n, 101 * 72 * 3);
     }
 
     #[test]
-    #[ignore = "full 180k-point grid — run with `--ignored`; slow at opt-level 0"]
+    #[ignore = "full grid × 3 offsets — run with `--ignored`; slow at opt-level 0"]
     fn diff_cusp_hue_matches_frozen_reference_full() {
-        // Full grid: L step 0.002 (501) × canonical-hue step 1° (360) = 180 360.
+        // 501 L × 360 canonical-hue × 3 fractional offsets = 541 080 points.
         let n = assert_cusp_hue_matches_reference(500, 1);
-        assert_eq!(n, 501 * 360);
+        assert_eq!(n, 501 * 360 * 3);
     }
 
     #[test]

@@ -213,6 +213,20 @@ fn find_optimal_hue_core(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
 /// / the cusp diff test, and on the real (non-integer-hue) accent/tint inputs by
 /// the golden and 240-cell byte-identity snapshots. Shared with the semantic tint
 /// cusp sweep, hence `pub(crate)`.
+///
+/// # Preconditions (a caller that breaks any of these gets a silently wrong index)
+///
+/// 1. **`score(i)` is the EXACT arithmetic a flat 1° scan would compute** for
+///    index `i` (same operations, same order). Only WHICH indices are visited may
+///    change; the per-index value must not, or the tie-break diverges.
+/// 2. **The coarse grid fits the fixed buffer:** `steps / coarse + 2 ≤ 64`
+///    samples (`debug_assert`ed). A larger grid would truncate silently.
+/// 3. **Every peak of `score` is reachable within `±bracket` of a coarse local
+///    maximum.** If the flat argmax can sit farther than `bracket` from every
+///    coarse local maximum it is not a candidate and the result diverges from the
+///    flat scan. For this crate's accent (±30°) and tint (±40°) windows a
+///    full-grid measurement fixed that distance at ≤ 13°, so `bracket = 15`
+///    holds; a new caller must re-establish this bound for its own score.
 pub(crate) fn coarse_to_fine_argmax(
     steps: i32,
     coarse: i32,
@@ -225,6 +239,19 @@ pub(crate) fn coarse_to_fine_argmax(
     // (no named const) so the frozen policy-const audit never sees it.
     let mut ci = [0i32; 64];
     let mut cs = [f64::NEG_INFINITY; 64];
+    // Guard the fixed-buffer contract in debug builds (compiled out of release,
+    // where callers pass known-good constants): a coarse step < 1 would not
+    // progress the scan (an infinite/stuck loop or wrong grid), and a grid larger
+    // than the 64-slot buffer would truncate silently — a wrong argmax with no
+    // panic. Silently-wrong is forbidden; fail loud in debug. The `coarse >= 1`
+    // check runs first so the capacity division below is never by zero.
+    debug_assert!(coarse >= 1, "coarse step must be ≥ 1 (got {coarse})");
+    debug_assert!(
+        (steps.max(0) / coarse + 2) as usize <= ci.len(),
+        "coarse grid ({} samples) overflows the {}-slot buffer (steps={steps}, coarse={coarse})",
+        steps.max(0) / coarse + 2,
+        ci.len(),
+    );
     let mut nc = 0usize;
     let mut i = 0;
     while i <= steps && nc < ci.len() {
@@ -482,12 +509,15 @@ enum WallBinding {
 /// which gamut wall(s) it can cross for `C > 0` — soundly, never optimistically.
 ///
 /// `f(0) = coeff[0] = l_ok³ ∈ [0, 1]` sits strictly inside both walls
-/// (`-eps < 0 ≤ f(0) ≤ 1 < 1 + eps`). If `f` is monotone on `[0, ∞)` it can only
-/// ever reach the wall in the direction of its slope: rising → the upper wall
-/// (it grows without bound; the lower is unreachable because `f ≥ f(0) ≥ 0 >
-/// -eps`), falling → the lower wall by the mirror argument. In either monotone
-/// case the OTHER wall has no `C > 0` crossing at all, so the two-wall solver
-/// returns `None` for it and pruning it changes nothing — bit-identical.
+/// (`-eps < 0 ≤ f(0) ≤ 1 < 1 + eps`). If `f` is monotone on `[0, ∞)` — and hence
+/// on the capped search domain `[0, 1]` (`max_chroma` caps `smallest` at 1.0) —
+/// it stays on one side of `f(0)`: rising ⇒ `f ≥ f(0) ≥ 0 > -eps`, so the LOWER
+/// wall has no `C > 0` crossing; falling ⇒ `f ≤ f(0) ≤ 1 < 1 + eps`, so the UPPER
+/// wall has none. Either way the away wall's crossing does not exist, the
+/// two-wall solver returns `None` for it, and pruning it is bit-identical.
+/// Soundness rests ONLY on the DROPPED wall having no crossing — never on the
+/// kept wall being reached — so it holds whether `f` is a genuine cubic or the
+/// `a < 1e-14` quadratic/linear degenerate branch (where `f` need not diverge).
 ///
 /// Monotonicity is tested through the derivative `f'(C) = 3c₃·C² + 2c₂·C + c₁`:
 /// if `f'` has no real root at or near the non-negative axis, `f` keeps one
@@ -911,15 +941,21 @@ mod tests {
             let l = li as f64 / l_steps as f64;
             let mut hc = 0usize;
             while hc < 360 {
-                let hcd = hc as f64;
-                let prod = find_optimal_hue_core(l, hcd, slope);
-                let refv = find_optimal_hue_reference(l, hcd, slope);
-                assert_eq!(
-                    prod.to_bits(),
-                    refv.to_bits(),
-                    "find_optimal_hue drift at (L={l}, h_canon={hcd}): prod={prod} ref={refv}"
-                );
-                points += 1;
+                // Integer canonical PLUS fractional offsets: production accent hues
+                // are non-integer, so testing hcd + {0, 0.25, 0.5} closes the
+                // aliasing-shift class the integer grid alone cannot (the ≤13°
+                // bracket bound was measured on the integer grid only).
+                for frac in [0.0, 0.25, 0.5] {
+                    let hcd = hc as f64 + frac;
+                    let prod = find_optimal_hue_core(l, hcd, slope);
+                    let refv = find_optimal_hue_reference(l, hcd, slope);
+                    assert_eq!(
+                        prod.to_bits(),
+                        refv.to_bits(),
+                        "find_optimal_hue drift at (L={l}, h_canon={hcd}): prod={prod} ref={refv}"
+                    );
+                    points += 1;
+                }
                 hc += h_step_deg;
             }
         }
@@ -943,17 +979,36 @@ mod tests {
 
     #[test]
     fn diff_b_find_optimal_hue_matches_frozen_reference_fast() {
-        // Fast subset for the per-PR run: 101 L × 72 canonical-hue = 7 272 points.
+        // 101 L × 72 canonical-hue × 3 fractional offsets = 21 816 points.
         let n = assert_find_optimal_hue_matches_reference(100, 5);
-        assert_eq!(n, 101 * 72);
+        assert_eq!(n, 101 * 72 * 3);
     }
 
     #[test]
-    #[ignore = "full 180k-point grid — run with `--ignored`; slow at opt-level 0"]
+    #[ignore = "full grid × 3 offsets — run with `--ignored`; slow at opt-level 0"]
     fn diff_b_find_optimal_hue_matches_frozen_reference_full() {
-        // Full grid: L step 0.002 (501) × canonical-hue step 1° (360) = 180 360.
+        // 501 L × 360 canonical-hue × 3 fractional offsets = 541 080 points.
         let n = assert_find_optimal_hue_matches_reference(500, 1);
-        assert_eq!(n, 501 * 360);
+        assert_eq!(n, 501 * 360 * 3);
+    }
+
+    // Diversion tests: prove the coarse_to_fine_argmax debug_asserts BITE, so a
+    // caller that violates the fixed-buffer contract fails loud instead of
+    // returning a silently-wrong argmax. Debug-only (the asserts compile out of
+    // release, so the panic would not fire there).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "coarse step must be ≥ 1")]
+    fn coarse_to_fine_rejects_nonpositive_coarse() {
+        let _ = coarse_to_fine_argmax(60, 0, 15, |_| 0.0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "overflows the")]
+    fn coarse_to_fine_rejects_oversized_grid() {
+        // 320 / 1 + 2 = 322 coarse samples ≫ the 64-slot buffer.
+        let _ = coarse_to_fine_argmax(320, 1, 15, |_| 0.0);
     }
 
     #[test]
