@@ -3812,7 +3812,9 @@ mod tests {
         // при α=0.5 → флаг false.
         let light_solid = srgb_encoded_from_hex("#E4E4E6").unwrap();
         let ok = resolve_rgba_inverted(light_solid, 0.5, &white, &vc);
-        let t_ok = ok.translucent().expect("разрешимый альфа-аналог резолвится");
+        let t_ok = ok
+            .translucent()
+            .expect("разрешимый альфа-аналог резолвится");
         assert!(
             !t_ok.alpha_coerced(),
             "α=0.5 разрешима для #E4E4E6 над белым — флаг обязан быть false (α={})",

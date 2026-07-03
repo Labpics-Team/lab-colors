@@ -796,11 +796,7 @@ mod tests {
                         o.composite_wcag,
                         "{name}: composite_wcag"
                     );
-                    assert_eq!(
-                        r.alpha_coerced(),
-                        o.alpha_coerced,
-                        "{name}: alpha_coerced"
-                    );
+                    assert_eq!(r.alpha_coerced(), o.alpha_coerced, "{name}: alpha_coerced");
                 }
                 (Resolved::Glow(g), RoleOutcome::Glow(o)) => {
                     assert_eq!(g.core_hex(), o.core_hex, "{name}: glow core");
