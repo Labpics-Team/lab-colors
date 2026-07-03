@@ -126,6 +126,7 @@ pub fn p3_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, String> 
 ///
 /// `Err` — компонента вне гамута P3 сверх шумового эпсилона: квантовать
 /// не-цвет молча нельзя (честная граница, ADR-0002 закон 3).
+#[cfg_attr(not(test), allow(dead_code))] // прод-потребитель — этап 2
 pub(crate) fn p3_bytes_from_linear(lin: [f64; 3]) -> Result<[u8; 3], String> {
     let mut out = [0_u8; 3];
     for (i, &v) in lin.iter().enumerate() {
@@ -136,6 +137,7 @@ pub(crate) fn p3_bytes_from_linear(lin: [f64; 3]) -> Result<[u8; 3], String> {
 }
 
 /// Линейный P3 из 8-битных байтов решётки (обратный путь квантования).
+#[cfg_attr(not(test), allow(dead_code))] // прод-потребитель — этап 2
 pub(crate) fn p3_linear_from_bytes(bytes: [u8; 3]) -> [f64; 3] {
     [
         super::srgb::srgb_gamma_inv(f64::from(bytes[0]) / 255.0),
@@ -148,6 +150,7 @@ pub(crate) fn p3_linear_from_bytes(bytes: [u8; 3]) -> [f64; 3] {
 /// Точность печати и политика альфы — те же, что у [`p3_css_from_hex`]
 /// (6 знаков: полушаг канала ≈ 2·10⁻³, запас > 3 порядков; байт-точность
 /// round-trip доказана тестом на решётке).
+#[cfg_attr(not(test), allow(dead_code))] // прод-потребитель — этап 2
 pub(crate) fn p3_css_from_bytes(bytes: [u8; 3], alpha: Option<f64>) -> Result<String, String> {
     let r = f64::from(bytes[0]) / 255.0;
     let g = f64::from(bytes[1]) / 255.0;
