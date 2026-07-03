@@ -125,7 +125,7 @@ impl Sentiment {
     /// loss let Warning resolve ~3.9° from Danger; restored here.
     fn hue_floor(self) -> Option<f64> {
         match self {
-            Sentiment::Warning => Some(45.0),
+            Sentiment::Warning => Some(WARNING_HUE_FLOOR_DEG),
             _ => None,
         }
     }
@@ -194,6 +194,20 @@ impl Sentiment {
 /// the old hard 20° wall, `p → 1` is the softest (most eager) yield.
 // SSOT-TRACKED — p-norm hardness default (#55).
 pub const DEFAULT_HARDNESS: f64 = 5.0;
+
+/// Нижняя граница оттенка Warning (Oklab hue, градусы) — жёсткий пол,
+/// не дающий Warning соскользнуть в красную (danger) зону при разводке от бренда.
+///
+/// Статус: DECLARED-CALIBRATION, деривации нет (2026-07-03, аудит sentiment).
+/// Значение НЕ выведено: середина между канониками danger (28.66°) и warning
+/// (68.61°) была бы 48.6°, а не 45.0 — число подобрано вручную. Запас natural-
+/// минимума Warning над полом всего ≈0.52° (68.607 − 23.09 − 45.0): снижение
+/// хромы orange-якоря включит flip-ветку и добавит третий разрыв. Кандидат
+/// науки: вывести из нижней границы orange-категории (Witzel & Gegenfurtner).
+/// Единственный дом значения по построению: фикстура labui (config.rs)
+/// ссылается на эту константу напрямую, второго литерала не существует.
+// SSOT-TRACKED — DECLARED-CALIBRATION без деривации (аудит 2026-07-03), см. docs/empirical-inventory.md.
+pub(crate) const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
 
 /// Fraction of the in-gamut maximum chroma every sentiment colour carries at its
 /// perceived-lightness-matched point — the single "strength" knob. `< 1` so a
@@ -276,7 +290,7 @@ pub struct SentimentCurve {
 
 impl SentimentCurve {
     /// Resolve a sentiment curve against a brand hue using the calibration
-    /// defaults (per-sentiment hardness, `p = 2` where unspecified).
+    /// defaults (per-sentiment hardness, `p = DEFAULT_HARDNESS = 5` where unspecified).
     ///
     /// `brand_hue` is an **Oklab hue in degrees** (NOT HSB/HSL/sRGB hue); so is
     /// the resulting [`resolved_hue`](Self::resolved_hue). The public signature

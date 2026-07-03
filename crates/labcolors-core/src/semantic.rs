@@ -1156,6 +1156,14 @@ pub struct TranslucentResolved {
     composite_lc: f64,
     /// WCAG 2.1 контраст-отношение композита против фона резолва (1–21).
     composite_wcag: f64,
+    /// Композит отличим от фона на 8-битной сетке дисплея (ADR-0002, закон 2).
+    ///
+    /// `false` — вырожденный случай «тинт ≈ фон»: квантованный композит
+    /// побайтно равен квантованному фону, эмиссия роли — пиксельный no-op
+    /// (класс, признанный в `ladder.rs`: «тинт ≈ фон ⇒ dJ = 0 при любой α»;
+    /// до этого флага такие тени/свечения проходили как валидный резолв
+    /// молча). Параметр-свободный замер: сетка дисплея, не политика.
+    composite_distinct: bool,
 }
 
 impl TranslucentResolved {
@@ -1182,6 +1190,15 @@ impl TranslucentResolved {
     /// WCAG 2.1 контраст-отношение композита против фона резолва.
     pub fn composite_wcag(&self) -> f64 {
         self.composite_wcag
+    }
+
+    /// Композит отличим от фона резолва на 8-битной сетке дисплея.
+    ///
+    /// `false` — эмиссия роли является пиксельным no-op на этом фоне
+    /// (вырожденный тинт ≈ фон); потребитель обязан считать такую
+    /// тень/свечение невидимой, а не «решённой» (ADR-0002, закон 2).
+    pub fn composite_distinct(&self) -> bool {
+        self.composite_distinct
     }
 }
 
@@ -1564,12 +1581,17 @@ fn finish_rgba(
     let bg_linear = decode(bg_encoded);
     let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
     let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
+    // Отличимость на сетке дисплея (ADR-0002): сравнение по 8-битным hex — тому
+    // же представлению, в котором браузер отдаст пиксели. Фон квантуется тем же
+    // форматтером (off-grid фон, напр. blur-среднее, честно садится на байт).
+    let composite_distinct = composite_hex != hex_from_srgb_encoded(bg_encoded);
     Resolved::Translucent(TranslucentResolved {
         tint_hex: hex_from_srgb_encoded(tint_encoded),
         alpha,
         composite_hex,
         composite_lc,
         composite_wcag,
+        composite_distinct,
     })
 }
 
@@ -3403,6 +3425,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn composite_distinct_flags_degenerate_tint_over_own_background() {
+        // ADR-0002 (закон 2), класс «тинт ≈ фон ⇒ пиксельный no-op»: до флага
+        // вырожденная тень/свечение (тёмный тинт на тёмном фоне, светлый на
+        // светлом) проходила как валидный Translucent молча — composite_lc≈0
+        // вычислялся, но нигде не гейтился. Теперь вырождение ИЗМЕРИМО.
+        use crate::spaces::srgb::srgb_encoded_from_hex;
+        let vc = ViewingConditions::srgb();
+
+        // Вырождение: тинт побайтно равен фону — композит не может отличаться.
+        for (hex, alpha) in [("#101012", 0.22), ("#FFFFFF", 0.08), ("#787880", 0.5)] {
+            let tint = srgb_encoded_from_hex(hex).unwrap();
+            let bg = BgInput::solid(hex).unwrap();
+            let res = resolve_rgba_direct(tint, alpha, &bg, &vc);
+            let t = res
+                .translucent()
+                .unwrap_or_else(|| panic!("{hex} rgba должен резолвиться"));
+            assert!(
+                !t.composite_distinct(),
+                "{hex} @ {alpha}: тинт == фон, композит обязан быть неотличим \
+                 (composite={}, флаг должен быть false)",
+                t.composite_hex()
+            );
+        }
+
+        // Контроль: контрастный тинт на том же фоне отличим уже при малой α.
+        let dark = srgb_encoded_from_hex("#101012").unwrap();
+        let bg_white = BgInput::solid("#FFFFFF").unwrap();
+        let res = resolve_rgba_direct(dark, 0.12, &bg_white, &vc);
+        let t = res.translucent().expect("контрастный rgba резолвится");
+        assert!(
+            t.composite_distinct(),
+            "тёмный тинт @ 0.12 на белом обязан быть отличим (composite={})",
+            t.composite_hex()
+        );
     }
 
     #[test]

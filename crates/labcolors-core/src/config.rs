@@ -117,10 +117,17 @@ const HARDNESS_MIN_INCLUSIVE: f64 = 1.0;
 /// Доля хромы сентимент-цвета (`sentiments.chroma_fraction`) обязана лежать в
 /// `(0, 1]`.
 ///
-/// Каждый сентимент-цвет несёт `chroma_fraction · max_chroma` на своей светлоте.
 /// `≤ 0` — обесцвеченный (не сентимент), `> 1` — за стеной гамута (неон/недостижимо).
 /// Дефолт реестра — `0.88` (держится `< 1`, чтобы сидеть внутри стены гамута, не
 /// читаясь как неон).
+///
+/// ЧЕСТНАЯ ГРАНИЦА (2026-07-03, аудит sentiment): в продакшн-пути солида
+/// (`resolve_config_sentiment_solid`) ручка сейчас ИНЕРТНА — тинт держит
+/// фактическую хрому якоря, `chroma_fraction` валидируется и игнорируется
+/// (`let _ = chroma_fraction`). Реально работает только в рампе
+/// `SentimentCurve::hex_at` (тест-путь). Применение доли в продакшн-тинте —
+/// видимое изменение эмиссии, отложено отдельным слайсом (ADR-0002: без
+/// молчаливых сдвигов цвета); до тех пор ручка зарезервирована.
 const CHROMA_FRACTION_MIN_EXCLUSIVE: f64 = 0.0;
 /// Верхний предел доли хромы сентимента (включительно).
 const CHROMA_FRACTION_MAX_INCLUSIVE: f64 = 1.0;
@@ -1545,7 +1552,12 @@ pub fn labui_reference() -> ThemeConfig {
         sentiments: SentimentsConfig {
             categories: vec![
                 sentiment("danger", "red", None, None),
-                sentiment("warning", "orange", Some(45.0), Some(1)),
+                sentiment(
+                    "warning",
+                    "orange",
+                    Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
+                    Some(1),
+                ),
                 sentiment("success", "green", None, None),
                 sentiment("info", "blue", None, None),
             ],
