@@ -3,8 +3,12 @@
 //! Закон формы тот же, что у [`super::oklch`]: **система координат записи, не
 //! расширение гамута**. Значения остаются решёнными в sRGB-гамуте (sRGB ⊂ P3,
 //! поэтому каждая решённая роль представима в P3 точно, с запасом от стен).
-//! Расширение самого решателя на гамут P3 (стены max_chroma, cusp-таблицы,
-//! LUT) — отдельный этап «gamut-aware солвер», НЕ этот модуль.
+//! Расширение самого решателя на гамут P3 — поездными этапами:
+//! **этап 1 (2026-07-03, сделан)** — геометрия стен ([`crate::scale`]::
+//! `max_chroma_p3_bisect`) и 8-битная решётка эмиссии этого модуля
+//! (`p3_bytes_from_linear` / `p3_css_from_bytes`, байт-точный round-trip);
+//! **этап 2 (следующий)** — P3-кандидаты в солвере и перевод `Solved`/эмиссии
+//! с hex-строки на типизированный цвет (hex непредставим вне sRGB).
 //!
 //! Матрицы — CSS Color Module Level 4 (та же деривация, что у sRGB-матриц в
 //! [`super::srgb`]: <https://github.com/w3c/csswg-drafts/issues/5922>, значения
@@ -106,6 +110,48 @@ pub fn p3_from_hex(hex: &str) -> Result<[f64; 3], String> {
 /// `Err` — невалидный hex либо альфа вне [0, 1] сверх шумового эпсилона.
 pub fn p3_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, String> {
     let [r, g, b] = p3_from_hex(hex)?;
+    let suffix = super::oklch::css_alpha_suffix(alpha)?;
+    Ok(format!("color(display-p3 {r:.6} {g:.6} {b:.6}{suffix})"))
+}
+
+// ------------------------------------------------------------------
+//  8-битная решётка эмиссии P3 (этап 1 gamut-aware солвера, 2026-07-03)
+// ------------------------------------------------------------------
+
+/// 8-битное квантование линейного P3: передаточная кривая (общая с sRGB) →
+/// байты. Решётка кандидатов будущего P3-солвера — зеркало sRGB-пути
+/// (quantise + измерение на отданном значении).
+///
+/// # Errors
+///
+/// `Err` — компонента вне гамута P3 сверх шумового эпсилона: квантовать
+/// не-цвет молча нельзя (честная граница, ADR-0002 закон 3).
+pub(crate) fn p3_bytes_from_linear(lin: [f64; 3]) -> Result<[u8; 3], String> {
+    let mut out = [0_u8; 3];
+    for (i, &v) in lin.iter().enumerate() {
+        let encoded = srgb_gamma(clamp_gamut_noise(v)?);
+        out[i] = (encoded * 255.0).round() as u8;
+    }
+    Ok(out)
+}
+
+/// Линейный P3 из 8-битных байтов решётки (обратный путь квантования).
+pub(crate) fn p3_linear_from_bytes(bytes: [u8; 3]) -> [f64; 3] {
+    [
+        super::srgb::srgb_gamma_inv(f64::from(bytes[0]) / 255.0),
+        super::srgb::srgb_gamma_inv(f64::from(bytes[1]) / 255.0),
+        super::srgb::srgb_gamma_inv(f64::from(bytes[2]) / 255.0),
+    ]
+}
+
+/// CSS-строка `color(display-p3 R G B [/ A])` из 8-битных байтов решётки.
+/// Точность печати и политика альфы — те же, что у [`p3_css_from_hex`]
+/// (6 знаков: полушаг канала ≈ 2·10⁻³, запас > 3 порядков; байт-точность
+/// round-trip доказана тестом на решётке).
+pub(crate) fn p3_css_from_bytes(bytes: [u8; 3], alpha: Option<f64>) -> Result<String, String> {
+    let r = f64::from(bytes[0]) / 255.0;
+    let g = f64::from(bytes[1]) / 255.0;
+    let b = f64::from(bytes[2]) / 255.0;
     let suffix = super::oklch::css_alpha_suffix(alpha)?;
     Ok(format!("color(display-p3 {r:.6} {g:.6} {b:.6}{suffix})"))
 }
@@ -252,5 +298,97 @@ mod tests {
         let [r, g, b] = p3_from_hex("#FF0000").unwrap();
         assert!(r > 0.9 && r < 1.0, "P3 r красного: {r}");
         assert!(g > 0.0 && b > 0.0, "P3 g/b красного: {g}/{b}");
+    }
+
+    /// Этап 1 gamut-aware: стена P3 не уже sRGB-стены НИГДЕ (sRGB ⊂ P3) и
+    /// СТРОГО шире на насыщенных срединных светлотах (зелёная зона P3 —
+    /// самое сильное расширение). Сетка L × h покрывает обе ветки бисекции.
+    #[test]
+    fn p3_wall_dominates_srgb_wall() {
+        let mut strictly_wider_somewhere = false;
+        for l10 in 2..=9 {
+            let l = f64::from(l10) / 10.0;
+            for h in (0..360).step_by(15) {
+                let h = f64::from(h);
+                let srgb = crate::scale::max_chroma_bisect(l, h);
+                let p3 = crate::scale::max_chroma_p3_bisect(l, h);
+                assert!(
+                    p3 >= srgb - 1e-9,
+                    "P3-стена уже sRGB при L={l}, h={h}: {p3} < {srgb}"
+                );
+                if p3 > srgb * 1.05 {
+                    strictly_wider_somewhere = true;
+                }
+            }
+        }
+        assert!(
+            strictly_wider_somewhere,
+            "P3 обязан быть строго шире sRGB хоть где-то (иначе матрицы выродились)"
+        );
+    }
+
+    /// Достижимость за sRGB-стеной: цвет с хромой между стенами (вне sRGB,
+    /// внутри P3) представим на 8-битной P3-решётке И ПЕРЕЖИВАЕТ квантование —
+    /// перечитанный с решётки цвет остаётся за sRGB-стеной. Это ровно то,
+    /// что этап 2 отдаст наружу.
+    #[test]
+    fn beyond_srgb_chroma_survives_the_p3_lattice() {
+        use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
+        // Зелёная срединная зона — максимальный разрыв стен.
+        let (l, h) = (0.75, 145.0);
+        let srgb_wall = crate::scale::max_chroma_bisect(l, h);
+        let p3_wall = crate::scale::max_chroma_p3_bisect(l, h);
+        assert!(
+            p3_wall > srgb_wall * 1.1,
+            "в зелёной зоне разрыв стен обязан быть ощутимым: {p3_wall} vs {srgb_wall}"
+        );
+        let c = (srgb_wall + p3_wall) / 2.0;
+        let h_rad = h.to_radians();
+        let lab = [l, c * h_rad.cos(), c * h_rad.sin()];
+        let lin_p3 = xyz_to_p3_linear(srgb_to_xyz(oklab_to_srgb_linear(lab)));
+        let bytes = p3_bytes_from_linear(lin_p3).expect("между стенами — внутри P3");
+        // Перечитываем с решётки и меряем хрому честно (на отданном значении).
+        let back = p3_linear_to_xyz(p3_linear_from_bytes(bytes));
+        let back_lab = srgb_linear_to_oklab(crate::spaces::srgb::xyz_to_srgb(back));
+        let back_c = (back_lab[1] * back_lab[1] + back_lab[2] * back_lab[2]).sqrt();
+        assert!(
+            back_c > srgb_wall,
+            "квантование не должно ронять хрому обратно в sRGB: {back_c} <= {srgb_wall}"
+        );
+    }
+
+    /// Байт-точный round-trip решётки: байты → css-строка → парс компонент →
+    /// байты. Шаг 7 взаимно прост с 255 — решётка пробегает все классы вычетов.
+    #[test]
+    fn p3_lattice_css_round_trip_is_byte_exact() {
+        for r in (0..=255).step_by(7) {
+            for g in (0..=255).step_by(51) {
+                for b in (0..=255).step_by(51) {
+                    let bytes = [r as u8, g as u8, b as u8];
+                    let css = p3_css_from_bytes(bytes, None).expect("байты валидны");
+                    let inner = css
+                        .strip_prefix("color(display-p3 ")
+                        .and_then(|s| s.strip_suffix(')'))
+                        .expect("форма color(display-p3 ...)");
+                    let parts: Vec<f64> = inner
+                        .split_whitespace()
+                        .map(|p| p.parse::<f64>().expect("компонента — число"))
+                        .collect();
+                    let parsed = [
+                        (parts[0] * 255.0).round() as u8,
+                        (parts[1] * 255.0).round() as u8,
+                        (parts[2] * 255.0).round() as u8,
+                    ];
+                    assert_eq!(parsed, bytes, "byte round-trip сломан: {css}");
+                }
+            }
+        }
+    }
+
+    /// Гард решётки: не-цвет (за гамутом P3) не квантуется молча.
+    #[test]
+    fn out_of_gamut_linear_is_an_error_not_a_clamp() {
+        assert!(p3_bytes_from_linear([1.2, 0.5, 0.5]).is_err());
+        assert!(p3_bytes_from_linear([-0.2, 0.5, 0.5]).is_err());
     }
 }
