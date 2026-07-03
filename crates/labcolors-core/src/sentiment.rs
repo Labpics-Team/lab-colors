@@ -334,10 +334,12 @@ impl SentimentCurve {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `brand_hue` is not finite, if the params are invalid,
-    /// if no hue can satisfy both the floor and the separation invariant, or if
-    /// either the prototype or the generated canonical hex fails to construct an
-    /// [`AccentCurve`].
+    /// Returns `Err` if `brand_hue` is not finite, if `prototype_hex` fails to
+    /// parse as an sRGB colour (its Oklab chroma sets the perceptual separation
+    /// floor), if the params are invalid, or if no hue can satisfy both the floor
+    /// and the separation invariant (empty legal arc). The ramp colour is an
+    /// [`LcsColor`] built lazily in [`at`](Self::at); no
+    /// [`AccentCurve`](crate::scale::AccentCurve) is constructed here.
     pub fn with_params(
         sentiment: Sentiment,
         brand_hue: f64,

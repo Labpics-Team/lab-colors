@@ -32,9 +32,11 @@
 //!    spare: the old "pick the larger LPC maximum" rule flipped polarity near
 //!    `#999999`, far from the WCAG flip near `#747474`, and chose the side the
 //!    legal floor could not reach.
-//! 2. **Tie-break on headroom.** When both polarities clear the strict floor
-//!    (near the flip, e.g. `#767676`), the side with the larger WCAG margin wins;
-//!    if that too is level, the larger LPC headroom breaks it. When *neither*
+//! 2. **Tie-break on the WCAG margin.** When both polarities clear the strict
+//!    floor (near the flip, e.g. `#767676`), the side with the larger WCAG margin
+//!    wins; at an exact margin tie dark-on-light is preferred — a fixed,
+//!    VC-independent convention (no LPC fallback: LPC reads the viewing
+//!    conditions and would re-open the theme-flip seam). When *neither*
 //!    polarity can clear the floor (a true mid-grey with no readable side), the
 //!    side that comes *closest* is chosen, so the [`Unreachable`] a role surfaces
 //!    carries the honest best-case `max_ratio`, not a worse one.
@@ -1477,9 +1479,18 @@ impl ResolveContext {
 /// * [`Resolved::Unreachable`] — when no colour can meet the role's contract on
 ///   this background (an extreme background, never a silent clip).
 ///
-/// This solves the single role in isolation; the hierarchy-compression flag is a
-/// *set* property and is only raised by [`resolve_set`], which sees a role's
-/// seniors. A role resolved here therefore always reports `compressed == false`.
+/// This solves the single role in isolation. The `compressed` flag has two
+/// independent sources, and only one is suppressed here:
+/// * **Hierarchy compression** is a *set* property — a role squeezed against its
+///   senior's target — and is raised only by [`resolve_set`], which sees a
+///   role's seniors. In isolation it is therefore never set.
+/// * **dJ'-path degradation** is a *single-role* property: a decorative dJ' role
+///   ([`RoleSpec::DecorativeDj`]) whose magnitude target is unreachable degrades
+///   to the nearest achievable step and reports `compressed == true` on its own
+///   (see `resolve_dj`), even resolved here in isolation.
+///
+/// So a contract (Lc) role resolved here always reports `compressed == false`,
+/// but a decorative dJ' role can report `compressed == true`.
 ///
 /// * `bg` — the background to resolve against.
 /// * `role` — which semantic slot to solve.
@@ -2321,7 +2332,8 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
         // Exactly one side is legal — take it.
         (true, false) => Polarity::DarkOnLight,
         (false, true) => Polarity::LightOnDark,
-        // Both legal (near the flip) — larger WCAG margin, then LPC headroom.
+        // Both legal (near the flip) — larger WCAG margin wins; an exact margin
+        // tie resolves to dark-on-light (fixed convention, no LPC — see break_tie).
         (true, true) => break_tie(ratio_dark_on_light, ratio_light_on_dark),
         // Neither legal — the closest side, so the diagnostic is the honest best.
         (false, false) => {
