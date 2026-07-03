@@ -176,6 +176,19 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     Ok([decode_8bit(r), decode_8bit(g), decode_8bit(b)])
 }
 
+/// Decode three 8-bit sRGB channels → linear sRGB `[r, g, b]` in `[0, 1]`, the
+/// exact byte-for-byte value [`srgb_from_hex`] yields for the same bytes, with no
+/// hex string. The precomputed grey fast-path stores each resolved colour as its
+/// three emitted bytes and decodes them here before replaying `finish`, so the
+/// decode must be the same finite-domain table [`srgb_from_hex`] uses.
+pub(crate) fn srgb_from_rgb8(rgb: [u8; 3]) -> [f64; 3] {
+    [
+        decode_8bit(rgb[0]),
+        decode_8bit(rgb[1]),
+        decode_8bit(rgb[2]),
+    ]
+}
+
 /// Quantise linear sRGB to the 8-bit display grid and back to linear, exactly as
 /// `srgb_from_hex(hex_from_srgb(rgb))` would — same gamma encode, same per-channel
 /// round to `[0, 255]`, same gamma decode — but without allocating the hex string.

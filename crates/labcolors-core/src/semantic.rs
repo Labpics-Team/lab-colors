@@ -1731,6 +1731,21 @@ pub fn resolve_set(
     resolve_set_live(bg, table, vc)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only counter of [`resolve_set_live`] invocations. Lets the greyfast
+    /// probe prove the constant fast path reconstructs a grey set without ever
+    /// calling the live solver (no lazy 256-resolve build). Zero cost in
+    /// production: the increment is compiled out entirely.
+    pub(crate) static LIVE_SOLVE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset the test-only [`LIVE_SOLVE_COUNT`] to zero and return its prior value.
+#[cfg(test)]
+pub(crate) fn reset_live_solve_count() -> usize {
+    LIVE_SOLVE_COUNT.with(|c| c.replace(0))
+}
+
 /// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
 /// path falls back to, and the path that fills its precomputed table. Always
 /// recomputes; takes no fast path itself (so the table builder cannot recurse).
@@ -1739,6 +1754,8 @@ pub(crate) fn resolve_set_live(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
+    #[cfg(test)]
+    LIVE_SOLVE_COUNT.with(|c| c.set(c.get() + 1));
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing
