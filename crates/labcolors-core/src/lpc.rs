@@ -286,11 +286,15 @@ pub(crate) fn soft_clamp_inv(clamped: f64) -> Option<f64> {
 /// gate, the low-contrast clip, and the polarity offsets. Fed the *same* input
 /// luminance, the curve reproduces the reference; the absolute numbers agree
 /// with the published APCA only at the endpoints (Y = 0 and Y = 1, e.g. black
-/// on white ≈ `106.04`). For interior greys the luminance fed here is the
-/// H-K-corrected `Y_hk`, not the reference's `Ys`, so LPC departs from the
-/// published APCA by ~3–4.7 Lc on those — a deliberate, declared difference of
-/// the metric (the same `Y_hk` substitution that makes LPC diverge from the
-/// reference on chromatic colours), not a porting error.
+/// on white ≈ `106.04`). For interior greys the luminance fed here is
+/// `Y_hk`, not the reference's `Ys`, so LPC departs from the published APCA
+/// on those: measured against `apca-w3` on the 8-bit grey axis the departure
+/// stays within ~2.3 Lc (grey-on-grey pairs ≤ ~0.6 Lc, endpoints exact). On
+/// near-neutrals the H-K term itself is ≈0 (M ≲ 1), so the interior departure
+/// is dominated by the CAM16 lightness reconstruction inside `Y_hk`. A
+/// deliberate, declared difference of the metric (the same `Y_hk` substitution
+/// that makes LPC diverge from the reference on chromatic colours), not a
+/// porting error.
 ///
 /// Константы: формула APCA SAPC-8 версии 0.0.98G-4g; метрика называется LPC,
 /// не APCA, не одобрена Myndex Research. The achromatic alignment is locked by
