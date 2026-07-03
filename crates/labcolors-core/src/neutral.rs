@@ -1,6 +1,26 @@
 use crate::lcs::LcsColor;
 use crate::spaces::vc::ViewingConditions;
 
+/// Порог M' (CAM16-UCS), ниже которого якорь считается ахроматическим и его
+/// шумный `h_ok` замещается базовым оттенком. CAM16 даёт ненулевой M' даже для
+/// номинально ахроматических стимулов (mp ≈ 1.5 для белого, ≈ 2.3 для near-black),
+/// поэтому 5.0 ловит модельный шум, сохраняя подлинно хроматические якоря.
+// SSOT-TRACKED — порог ахроматичности M' (модельный шум CAM16), см. docs/empirical-inventory.md.
+const ACHROMATIC_MP_THRESHOLD: f64 = 5.0;
+
+/// Множитель опорной хромы для нормировки чистоты оттенка: `mp_ref = 1.5 × M'`
+/// базового якоря, чтобы база сохраняла почти весь свой оттенок, а
+/// near-ахроматические якоря сильно корректировались. Калибровочный.
+// SSOT-TRACKED — множитель опорной хромы для нормировки чистоты оттенка, см. docs/empirical-inventory.md.
+const HUE_PURITY_MP_REF_RATIO: f64 = 1.5;
+
+/// Показатель степени кривой чистоты оттенка `(mp/mp_ref)^0.6`: агрессивная
+/// коррекция оттенка для сильно десатурированных цветов, плавно отпускаемая с
+/// ростом хромы. Калибровочный; кандидат вывода — связь с near-neutral hue-noise
+/// (Abney, issue #27).
+// SSOT-TRACKED — показатель кривой чистоты оттенка (калибровочный), см. docs/empirical-inventory.md.
+const HUE_PURITY_EXPONENT: f64 = 0.6;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurveParams {
     pub gamma_light: f64,
@@ -90,12 +110,12 @@ impl NeutralCurve {
         // nominally achromatic stimuli (mp ≈ 1.5 for white, ≈ 2.3 for
         // near-black).  Threshold 5.0 catches model noise while preserving
         // genuinely chromatic anchors.
-        let a_light = if a_light.mp() < 5.0 {
+        let a_light = if a_light.mp() < ACHROMATIC_MP_THRESHOLD {
             LcsColor::new(a_light.jp, h_ok_base, a_light.s, a_light.h_cam())
         } else {
             a_light
         };
-        let a_dark = if a_dark.mp() < 5.0 {
+        let a_dark = if a_dark.mp() < ACHROMATIC_MP_THRESHOLD {
             LcsColor::new(a_dark.jp, h_ok_base, a_dark.s, a_dark.h_cam())
         } else {
             a_dark
@@ -233,7 +253,7 @@ impl NeutralCurve {
     /// Set to 1.5× the base anchor's M' so that the base itself retains most
     /// of its own hue while near-achromatic anchors are strongly corrected.
     fn mp_ref(&self) -> f64 {
-        self.a_base.mp() * 1.5
+        self.a_base.mp() * HUE_PURITY_MP_REF_RATIO
     }
 }
 
@@ -289,7 +309,7 @@ fn hue_purity(mp: f64, mp_ref: f64) -> f64 {
     if mp >= mp_ref {
         return 1.0;
     }
-    (mp / mp_ref).powf(0.6).clamp(0.0, 1.0)
+    (mp / mp_ref).powf(HUE_PURITY_EXPONENT).clamp(0.0, 1.0)
 }
 
 impl crate::curve::ColorCurve for NeutralCurve {
