@@ -1217,24 +1217,18 @@ impl ThemeConfig {
 // Эталонная фикстура labui.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// КАНОНИЧЕСКИЙ конфиг labui (не тестовая фикстура): значения = замеры
-/// Figma/стаба; публичен намеренно — до переезда данными пакета
-/// `@labpics/colors` это единственный носитель labui-семантики у движка.
+/// Роли эталонного пресета labui (101 роль) в порядке объявления.
 ///
-/// Эталонный конфиг labui — 20 нейтральных ролей ядра (байт-в-байт
-/// с [`RoleTable::default`](crate::RoleTable)) плюс акцент/сентимент/FX/альфа-роли
-/// лестницы и алиасы — полное покрытие consumedRoles labui-контракта.
+/// Вынесены из [`labui_reference`], чтобы механизм пресета
+/// ([`RolePreset::Labui`]) наполнял тонкий конфиг (без собственного `roles`) ТЕМ
+/// ЖЕ словарём, что несёт полный эталон — один источник, ноль расхождения.
+/// Байт-в-байт с прежней встроенной сборкой (замок — отпечаток паспорта
+/// `a97994470b2581f3`, 101 роль).
 ///
 /// Имена ролей = `Role::key()` сегодняшнего ядра; рецепты сняты 1:1 из
 /// [`RoleTable::default`](crate::RoleTable) (`semantic.rs`): текст-фракции с их
-/// WCAG-полами, dJ'-якоря fill/border из тех же констант, Lc-тени, zero. Нейтраль —
-/// тройка Даниила `#FFFFFF`/`#787880`/`#101012`; ручки подтона — из констант
-/// `semantic.rs` (единый источник истины, фикстура не может тихо разойтись с ядром).
-///
-/// Байт-в-байт тест доказывает: [`resolve_named_set`](crate::semantic::resolve_named_set)
-/// этой фикстуры эмитит идентично [`resolve_set`](crate::resolve_set) дефолтной
-/// таблицы на всех 240 точках golden-грида (лестница/альфа — сверх этой таблицы).
-pub fn labui_reference() -> ThemeConfig {
+/// WCAG-полами, dJ'-якоря fill/border из тех же констант, Lc-тени, zero.
+pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // Фракции и полы — 1:1 из RoleTable::default (semantic.rs), включая border-strong
     // = контракт label-primary. Рецепты собраны так, чтобы имя роли совпадало с
     // Role::key(), а RoleSpec был идентичен дефолтному.
@@ -1490,6 +1484,48 @@ pub fn labui_reference() -> ThemeConfig {
         pair(LadderSource::Neutral(NeutralPick::Light)),
     ));
 
+    roles
+}
+
+/// Компонентные алиасы эталонного пресета labui (имя → существующая роль).
+///
+/// Нейтральные компонент-роли, которые стаб алиасит через `var()` на нейтральные
+/// core-роли (одна истина, ноль дублирования значений). Вынесены из
+/// [`labui_reference`] вместе с [`labui_preset_roles`] — пресет наполняет роли И
+/// алиасы как единое целое.
+pub fn labui_preset_aliases() -> Vec<(String, String)> {
+    vec![
+        (
+            "fill-neutral-tinted".to_string(),
+            "fill-primary".to_string(),
+        ),
+        ("border-neutral".to_string(), "border-base".to_string()),
+        (
+            "fx-skeleton-base".to_string(),
+            "fill-quaternary".to_string(),
+        ),
+    ]
+}
+
+/// КАНОНИЧЕСКИЙ конфиг labui (не тестовая фикстура): значения = замеры
+/// Figma/стаба; публичен намеренно — до переезда данными пакета
+/// `@labpics/colors` это единственный носитель labui-семантики у движка.
+///
+/// Эталонный конфиг labui — 20 нейтральных ролей ядра (байт-в-байт
+/// с [`RoleTable::default`](crate::RoleTable)) плюс акцент/сентимент/FX/альфа-роли
+/// лестницы и алиасы — полное покрытие consumedRoles labui-контракта. Роли и
+/// алиасы вынесены в [`labui_preset_roles`] / [`labui_preset_aliases`] (единый
+/// источник и для полного эталона, и для наполнения тонкого конфига механизмом
+/// [`RolePreset::Labui`]).
+///
+/// Нейтраль — тройка Даниила `#FFFFFF`/`#787880`/`#101012`; ручки подтона — из
+/// констант `semantic.rs` (единый источник истины, фикстура не может тихо
+/// разойтись с ядром).
+///
+/// Байт-в-байт тест доказывает: [`resolve_named_set`](crate::semantic::resolve_named_set)
+/// этой фикстуры эмитит идентично [`resolve_set`](crate::resolve_set) дефолтной
+/// таблицы на всех 240 точках golden-грида (лестница/альфа — сверх этой таблицы).
+pub fn labui_reference() -> ThemeConfig {
     ThemeConfig {
         brand: Brand {
             // Пер-темный бренд labui (reference/labui-accent-primitives.md §2,
@@ -1560,21 +1596,8 @@ pub fn labui_reference() -> ThemeConfig {
                 ("dark-ic".to_string(), VcPreset::DimIc),
             ],
         },
-        roles,
-        // Компонентные нейтральные роли, которые стаб алиасит через var() на
-        // нейтральные core-роли (одна истина, ноль дублирования значений):
-        // fill-neutral-tinted = var(--lab-fill-primary); border-neutral = var(--lab-border-base).
-        aliases: vec![
-            (
-                "fill-neutral-tinted".to_string(),
-                "fill-primary".to_string(),
-            ),
-            ("border-neutral".to_string(), "border-base".to_string()),
-            (
-                "fx-skeleton-base".to_string(),
-                "fill-quaternary".to_string(),
-            ),
-        ],
+        roles: labui_preset_roles(),
+        aliases: labui_preset_aliases(),
     }
 }
 
