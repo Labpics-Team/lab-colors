@@ -22,7 +22,9 @@ thread_local! {
 
 /// Forward nonlinear adaptation.
 ///
-/// Source: CIE 170-2:2015 eq. (6.5).
+/// Source: Li et al. 2017, DOI 10.1002/col.22131 (the CAM16 post-adaptation
+/// compression), later formalised in CIE 248:2022. (Not CIE 170-2:2015, which
+/// is the cone-fundamental standard and does not specify CAM16.)
 pub(crate) fn adapt(c: f64, fl: f64) -> f64 {
     let x = fl * c.abs() / 100.0;
     let y = x.powf(0.42);
@@ -186,7 +188,9 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     let j = 100.0 * (a_achrom / vc.aw).powf(vc.c * vc.z);
 
     let u = (a * a + b * b).sqrt();
-    let t = (50000.0 / 13.0) * e_hue * vc.nc * vc.nbb * u
+    // N_c · N_cb per the CAM16 `t` equation; N_cb = N_bb by construction (vc.rs
+    // sets `ncb: nbb`), so `vc.ncb` is byte-identical to the prior `vc.nbb`.
+    let t = (50000.0 / 13.0) * e_hue * vc.nc * vc.ncb * u
         / (lms_aa[0] + lms_aa[1] + 1.05 * lms_aa[2] + 0.305);
     let m = t.powf(0.9)
         * (j / 100.0).sqrt()

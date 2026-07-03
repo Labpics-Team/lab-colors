@@ -51,7 +51,7 @@ pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
 
 /// Closed-form inverse of [`grey_j`] with Newton polish.
 ///
-/// # Derivation (CIECAM16, CIE 170-2:2015)
+/// # Derivation (CIECAM16 — Li et al. 2017, DOI 10.1002/col.22131; CIE 248:2022)
 ///
 /// For an achromatic D65 stimulus of luminance `y`, the forward path
 /// [`grey_j`] reduces to a chain of monotonic, individually invertible links.
@@ -70,7 +70,7 @@ pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
 /// 3. seed `y`:          collapse the three channels onto one effective scale
 ///    `k_eff = Σ wᵢkᵢ / Σ wᵢ` and invert the single compression
 ///    `adapt(k_eff·y) = S` via `(F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S)`
-///    (the inverse of [`cam16::adapt`], CIE 170-2:2015 eq. 6.5), then take the
+///    (the inverse of [`cam16::adapt`], Li et al. 2017 / CIE 248:2022), then take the
 ///    `1/0.42` power.
 ///
 /// The three channels do **not** share one scale (`k_i` spread ≈ 1 % from
@@ -283,11 +283,18 @@ pub(crate) fn soft_clamp_inv(clamped: f64) -> Option<f64> {
 ///
 /// Faithful port of the published generic perceptual-contrast math — soft
 /// black clamp, polarity-dependent power exponents, the minimum-luminance
-/// gate, the low-contrast clip, and the polarity offsets — so that
-/// achromatic inputs reproduce the canonical reference numbers (e.g. black
-/// on white ≈ `106.04`). The luminance fed here is the H-K-corrected
-/// `Y_hk`, which is what makes LPC diverge from the reference metric on
-/// chromatic colours.
+/// gate, the low-contrast clip, and the polarity offsets. Fed the *same* input
+/// luminance, the curve reproduces the reference; the absolute numbers agree
+/// with the published APCA only at the endpoints (Y = 0 and Y = 1, e.g. black
+/// on white ≈ `106.04`). For interior greys the luminance fed here is
+/// `Y_hk`, not the reference's `Ys`, so LPC departs from the published APCA
+/// on those: measured against `apca-w3` on the 8-bit grey axis the departure
+/// stays within ~2.3 Lc (grey-on-grey pairs ≤ ~0.6 Lc, endpoints exact). On
+/// near-neutrals the H-K term itself is ≈0 (M ≲ 1), so the interior departure
+/// is dominated by the CAM16 lightness reconstruction inside `Y_hk`. A
+/// deliberate, declared difference of the metric (the same `Y_hk` substitution
+/// that makes LPC diverge from the reference on chromatic colours), not a
+/// porting error.
 ///
 /// Константы: формула APCA SAPC-8 версии 0.0.98G-4g; метрика называется LPC,
 /// не APCA, не одобрена Myndex Research. The achromatic alignment is locked by
@@ -348,8 +355,8 @@ fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
 ///
 /// Shortcut for [`lpc_with_vc`] with [`ViewingConditions::srgb`]. Use this for
 /// light themes; for dark themes call [`lpc_with_vc`] with
-/// [`ViewingConditions::dim_surround`] (dim surround = компенсация
-/// Бартлесона–Бренемана; Hellwig, Stolitzka & Fairchild 2022, DOI 10.1002/col.22793).
+/// [`ViewingConditions::dim_surround`] (dim surround компенсирует эффект
+/// Бартлесона–Бренемана; параметры окружения — CIE 159:2004 Table 1 / CIE 248:2022).
 pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
     lpc_with_vc(fg_hex, bg_hex, &ViewingConditions::srgb())
 }
@@ -364,7 +371,11 @@ pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
 /// numbers. Pick the VC for the theme: [`ViewingConditions::srgb`] for light
 /// themes (average surround, F=1.0 c=0.69 Nc=1.0),
 /// [`ViewingConditions::dim_surround`] for dark themes (dim surround,
-/// F=0.9 c=0.59 Nc=0.9; Hellwig, Stolitzka & Fairchild 2022, DOI 10.1002/col.22793).
+/// F=0.9 c=0.59 Nc=0.9). The surround triplets are CIE 159:2004 Table 1
+/// (carried unchanged into CIE 248:2022); Bartleson & Breneman (1967) is the
+/// psychophysical basis for a dim surround lowering apparent contrast. (This is
+/// NOT DOI 10.1002/col.22793, which is the Helmholtz–Kohlrausch paper cited by
+/// [`hk_coeff`] — that DOI was previously misattached to the surround params.)
 pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
     let y_fg = hex_to_y_hk(fg_hex, vc);
     let y_bg = hex_to_y_hk(bg_hex, vc);
@@ -533,8 +544,9 @@ mod tests {
         //   factor for L_A = 64, and the hue coefficient
         //   f(h) = −0.160cos h + 0.132cos 2h − 0.405sin h + 0.080sin 2h + 0.792
         //   evaluated at the CAM16 hue, then J_HK = J + f(h)·C^0.587.
-        // Script archived alongside this commit; values reproduce the three
-        // original anchors (blue/red/gold) within 0.006.
+        // Reproduce with `scripts/jhk_golden_ref.py` (colour-science 0.4.7); its
+        // output matches these pins and the three original anchors
+        // (blue/red/gold) within 0.006.
         //
         // The grid deliberately covers the green / cyan / magenta / orange
         // sectors the original three-point test never touched — the zones where
