@@ -95,6 +95,15 @@ export interface TranslucentRole {
   readonly compositeLc: number;
   /** WCAG 2.1 ratio of the composite. */
   readonly compositeWcag: number;
+  /**
+   * `true` when the requested alpha was raised to the smallest resolvable value
+   * (α_min) because the requested transparency is not reproducible in gamut — an
+   * honest, flagged contract degradation (mirrors `SolvedColor.compressed` /
+   * `GlowRole.degraded`). The colour never lies: the composite still equals the
+   * target solid byte-for-byte; only `alpha` differs from what was asked. Always
+   * `false` for a direct ladder emission.
+   */
+  readonly alphaCoerced: boolean;
   /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
   readonly css: string;
 }
@@ -365,6 +374,11 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                     &role_obj,
                     "compositeWcag",
                     &JsValue::from_f64(r.composite_wcag),
+                );
+                set(
+                    &role_obj,
+                    "alphaCoerced",
+                    &JsValue::from_bool(r.alpha_coerced),
                 );
                 // Переменная несёт тинт в oklch со слэш-альфой — браузер
                 // композитит на живой подложке; форма едина с солидами.

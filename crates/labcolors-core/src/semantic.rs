@@ -1210,6 +1210,17 @@ pub struct TranslucentResolved {
     /// до этого флага такие тени/свечения проходили как валидный резолв
     /// молча). Параметр-свободный замер: сетка дисплея, не политика.
     composite_distinct: bool,
+    /// Запрошенная α была поднята до разрешимого минимума (`α_min`), потому что
+    /// исходная не воспроизводима в гамуте — честный флаг деградации КОНТРАКТА
+    /// РОЛИ (симметрия с `compressed`/`degraded`). Ставится только на пути
+    /// альфа-аналога ([`resolve_rgba_inverted`]), где солид-цель фиксирована, а
+    /// α выводится; у прямой лестницы ([`resolve_rgba_direct`]) всегда `false`.
+    ///
+    /// Цвет при этом НЕ врёт: композит фактической пары остаётся ПОБАЙТНО равен
+    /// солиду (двигается только прозрачность — см. [`crate::alpha`]). Флаг лишь
+    /// объявляет, что эмитированная α — не запрошенная, а минимально разрешимая
+    /// ([`alpha`](Self::alpha) несёт фактическое значение).
+    alpha_coerced: bool,
 }
 
 impl TranslucentResolved {
@@ -1245,6 +1256,14 @@ impl TranslucentResolved {
     /// тень/свечение невидимой, а не «решённой» (ADR-0002, закон 2).
     pub fn composite_distinct(&self) -> bool {
         self.composite_distinct
+    }
+
+    /// Запрошенная α была поднята до `α_min` (альфа-аналог с неразрешимой
+    /// запрошенной прозрачностью). `false` у прямой лестницы и когда
+    /// запрошенная α разрешима как есть. Цвет композита при этом равен солиду
+    /// побайтно — коэрсится только прозрачность (см. поле-документацию).
+    pub fn alpha_coerced(&self) -> bool {
+        self.alpha_coerced
     }
 }
 
@@ -1645,7 +1664,8 @@ fn resolve_rgba_direct(
     // иначе composite_hex/Lc/WCAG расходились бы с CSS-результатом на LSB.
     let tint_q = quantise_encoded(tint_encoded);
     let composite = crate::alpha::composite_over_encoded(tint_q, alpha, bg_encoded);
-    finish_rgba(tint_q, alpha, composite, bg_encoded, vc)
+    // Прямая лестница эмитит запрошенную α как есть — коэрсии нет по построению.
+    finish_rgba(tint_q, alpha, composite, bg_encoded, vc, false)
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -1684,7 +1704,20 @@ fn resolve_rgba_inverted(
     // пределах LSB-границы квантования (#119).
     let tint_q = quantise_encoded(analog.tint);
     let composite = crate::alpha::composite_over_encoded(tint_q, analog.alpha, bg_encoded);
-    finish_rgba(tint_q, analog.alpha, composite, bg_encoded, vc)
+    // Коэрсия α: фактическая (`analog.alpha`) строго выше запрошенной ⇔ пол
+    // `α_min` перекрыл запрошенную (`resolve_alpha_analog`: α = req.max(floor);
+    // при floor ≤ req значения побайтно равны, при floor > req — строго больше).
+    // Сравнение точное, эпсилон не нужен: `max` возвращает либо тот же f64,
+    // либо floor.
+    let alpha_coerced = analog.alpha > requested_alpha;
+    finish_rgba(
+        tint_q,
+        analog.alpha,
+        composite,
+        bg_encoded,
+        vc,
+        alpha_coerced,
+    )
 }
 
 /// Собрать [`Resolved::Translucent`] из тинта, альфы и композита: квантовать тинт и
@@ -1699,6 +1732,7 @@ fn finish_rgba(
     composite_encoded: [f64; 3],
     bg_encoded: [f64; 3],
     vc: &ViewingConditions,
+    alpha_coerced: bool,
 ) -> Resolved {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
     // Замер идёт по КВАНТОВАННОМУ композиту — тому же 8-битному hex, который
@@ -1730,6 +1764,7 @@ fn finish_rgba(
         composite_lc,
         composite_wcag,
         composite_distinct,
+        alpha_coerced,
     })
 }
 
@@ -3727,6 +3762,70 @@ mod tests {
             t.composite_distinct(),
             "тёмный тинт @ 0.12 на белом обязан быть отличим (composite={})",
             t.composite_hex()
+        );
+    }
+
+    #[test]
+    fn alpha_coerced_flags_only_when_requested_alpha_raised_to_floor() {
+        // H1 (аудит 2026-07-03): поднятие α до α_min на пути альфа-аналога —
+        // деградация КОНТРАКТА роли (эмитируется не запрошенная α). До флага она
+        // проходила молча: композит побайтно равен солиду, но обещанная
+        // прозрачность подменялась без объявления. Флаг делает подмену видимой.
+        use crate::spaces::srgb::srgb_encoded_from_hex;
+        let vc = ViewingConditions::srgb();
+        let white = BgInput::solid("#FFFFFF").unwrap();
+
+        // Коэрсия: почти-чёрный солид над белым требует α_min ≈ 0.94 (см.
+        // alpha.rs::min_alpha_hex("#101012","#FFFFFF") > 0.9); запрос 0.05
+        // неразрешим → α поднимается → флаг true.
+        let dark_solid = srgb_encoded_from_hex("#101012").unwrap();
+        let coerced = resolve_rgba_inverted(dark_solid, 0.05, &white, &vc);
+        let t = coerced
+            .translucent()
+            .expect("альфа-аналог резолвится (α поднимается до разрешимой)");
+        assert!(
+            t.alpha_coerced(),
+            "запрос α=0.05 неразрешим для #101012 над белым — флаг обязан быть true \
+             (фактическая α={}, тинт={})",
+            t.alpha(),
+            t.tint_hex()
+        );
+        assert!(
+            t.alpha() > 0.05,
+            "коэрсия обязана поднять α выше запрошенной 0.05, получено {}",
+            t.alpha()
+        );
+
+        // Без коэрсии (α разрешима как есть): светлый солид над белым (низкий пол)
+        // при α=0.5 → флаг false.
+        let light_solid = srgb_encoded_from_hex("#E4E4E6").unwrap();
+        let ok = resolve_rgba_inverted(light_solid, 0.5, &white, &vc);
+        let t_ok = ok.translucent().expect("разрешимый альфа-аналог резолвится");
+        assert!(
+            !t_ok.alpha_coerced(),
+            "α=0.5 разрешима для #E4E4E6 над белым — флаг обязан быть false (α={})",
+            t_ok.alpha()
+        );
+        assert!(
+            (t_ok.alpha() - 0.5).abs() < 1e-12,
+            "разрешимая α эмитится как запрошенная, получено {}",
+            t_ok.alpha()
+        );
+
+        // Граница: α=1.0 всегда разрешима (тинт=солид) → флаг false даже для
+        // насыщенного солида, который иначе коэрсил бы.
+        let full = resolve_rgba_inverted(dark_solid, 1.0, &white, &vc);
+        let t_full = full.translucent().expect("α=1.0 тривиально разрешима");
+        assert!(
+            !t_full.alpha_coerced(),
+            "α=1.0 разрешима по построению — коэрсии нет"
+        );
+
+        // Прямая лестница (не альфа-аналог) НИКОГДА не коэрсит α.
+        let direct = resolve_rgba_direct(dark_solid, 0.12, &white, &vc);
+        assert!(
+            !direct.translucent().unwrap().alpha_coerced(),
+            "прямая rgba-лестница эмитит α как есть — флаг всегда false"
         );
     }
 

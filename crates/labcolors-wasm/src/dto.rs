@@ -90,6 +90,14 @@ pub struct RgbaColor {
     pub composite_lc: f64,
     /// The WCAG 2.1 ratio of the composite.
     pub composite_wcag: f64,
+    /// `true` when the requested alpha was raised to the smallest resolvable
+    /// value (`α_min`) because the requested transparency is not reproducible in
+    /// gamut — an honest, flagged degradation of the role contract (mirrors
+    /// `SolvedColor::compressed` / `GlowColor::degraded`). The colour never lies:
+    /// the composite still equals the target solid byte-for-byte; only the
+    /// alpha carried in `alpha` differs from what was asked. Always `false` for a
+    /// direct ladder emission.
+    pub alpha_coerced: bool,
 }
 
 /// A resolved colour and the contrasts it actually achieves.
