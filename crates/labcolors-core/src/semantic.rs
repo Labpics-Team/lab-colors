@@ -46,7 +46,7 @@
 //! # Sanity over arithmetic: the anchor principle
 //!
 //! Text contrast magnitudes are **not fixed deltas**. A fixed delta is how
-//! `text-primary` once came out grey: a mid contrast number satisfies the
+//! `label-primary` once came out grey: a mid contrast number satisfies the
 //! contract arithmetically but violates the design intent that primary text on
 //! white reads as *black*. Instead, a text role anchors its target to a
 //! **fraction of the maximum contrast the background can supply**
@@ -109,9 +109,9 @@
 //!
 //! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
 //! not a pure grey. A role table resolved with zero chroma threw that identity
-//! away: `text-primary` on white came out the sterile `#141414`. So every
+//! away: `label-primary` on white came out the sterile `#141414`. So every
 //! resolved role carries the neutral's undertone and lands as a *relative* of the
-//! neutral family — `text-primary` on white as a cool near-black in the `#101012`
+//! neutral family — `label-primary` on white as a cool near-black in the `#101012`
 //! family. The undertone is small enough that the WCAG floors, the strict
 //! hierarchy, and the near-black/near-white primary all hold exactly as before
 //! (the solver re-solves lightness to the same target with the tint applied).
@@ -217,6 +217,35 @@ pub(crate) const SHADOW_AMBIENT_JND: f64 = 9.5;
 pub(crate) const SHADOW_PENUMBRA_JND: f64 = 11.5;
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
 pub(crate) const SHADOW_MAJOR_JND: f64 = 14.0;
+
+// ── Доли текстовой иерархии (Labels) ────────────────────────────────────────────
+//
+// Каждая доля = Figma-якорь Lc роли на белом ÷ максимально достижимый Lc ≈ 106
+// (Labels/Neutral): 102.6/106≈0.968, 66.5/106≈0.627, 48.9/106≈0.461,
+// 29.3/106≈0.276. Якоря и вывод долей задокументированы в rustdoc
+// `Default for RoleTable` ниже (таблица «Role | Figma Lc | fraction of max»).
+// Это «якорный принцип»: роль держит почти максимум, что позволяет фон, а не
+// фиксированную дельту. Значения 1:1 с прежними ролями text-* (byte-identity);
+// финальная перцептивная калибровка долей — за владельцем.
+
+/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_PRIMARY_FRACTION: f64 = 0.968;
+/// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_SECONDARY_FRACTION: f64 = 0.627;
+/// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_TERTIARY_FRACTION: f64 = 0.461;
+/// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
+
+/// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
+/// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
+/// (7.5); финальная JND-калибровка — за владельцем.
+// SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
+const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
 
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
@@ -568,7 +597,7 @@ pub enum RoleSpec {
 /// Измеренный в Oklab по опорным точкам оттенок стабилен по всей шкале —
 /// `#101012` → 285.97°, `#3C3C43` (вторичный Figma) → 285.78°, `#787880`
 /// (средний) → 286.01° — поэтому его захватывает одна константа. Резолвленные
-/// роли наследуют этот оттенок, из-за чего `text-primary` на белом ложится как
+/// роли наследуют этот оттенок, из-за чего `label-primary` на белом ложится как
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
 // SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
@@ -584,7 +613,7 @@ pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// кривой: самый сильный подтон приходится на роли средней силы, самый слабый —
 /// на почти-чёрный/почти-белый края текстовой шкалы — "меньше у тёмных/светлых
 /// краёв, больше к середине".
-/// `0.10`: на белом `text-primary` резолвится в холодный почти-чёрный
+/// `0.10`: на белом `label-primary` резолвится в холодный почти-чёрный
 /// семейства `#101012`, а не в чистый серый.
 // SSOT-TRACKED — коэффициент хромы нейтрального подтона.
 pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
@@ -869,21 +898,28 @@ fn curve_plan_cached(
 /// calibration, not of the sRGB gamut, and is flagged as out of reach here.
 fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
     let penalty_scale = stiffness / 100.0;
-    let mut best_h = canonical_deg;
-    let mut best_score = f64::NEG_INFINITY;
-    // Step the window in 1° increments — finer than the cusp moves between roles.
+    // 1° window steps — finer than the cusp moves between roles.
     let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
-    for i in 0..=steps {
+
+    // Bit-identical per-index score (the exact arithmetic of the flat sweep).
+    let score_at = |i: i32| -> f64 {
         let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
         let chroma = scale::max_chroma(l_ok, h);
         let drift = (h - canonical_deg).abs();
-        let score = chroma - penalty_scale * drift;
-        if score > best_score {
-            best_score = score;
-            best_h = h;
-        }
-    }
-    best_h
+        chroma - penalty_scale * drift
+    };
+
+    // C2 — coarse-to-fine hue sweep (shared with the accent ramp, see
+    // `scale::coarse_to_fine_argmax`). 5° coarse grid, ±15° refinement bracket
+    // around every coarse local maximum, then a single ascending pass with the
+    // flat scan's strict-`>` first-maximum tie-break. Bit-identical to the flat
+    // 81-point sweep — pinned on the full (l_ok × canonical) grid by the cusp
+    // diff test and on real tints by the 240-cell resolve_set byte-identity
+    // snapshot. (`let`, not `const`, keeps the frozen policy-const audit clean.)
+    let coarse = 5;
+    let bracket = 15;
+    let best_i = scale::coarse_to_fine_argmax(steps, coarse, bracket, score_at);
+    canonical_deg - CUSP_HALF_WINDOW_DEG + best_i as f64
 }
 
 /// The chroma ratio (for [`ChromaPolicy::Relative`]) that lands a colour of Oklab
@@ -899,11 +935,19 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 /// [`TINT_PERCEPTIBLE_MP_FLOOR`] at the pinched extremes) rather than fake it.
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
     let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
+    // The in-gamut max chroma depends only on `(l_ok, hue_deg)`, both fixed across
+    // the ratio bisection — solve it once here instead of re-solving it on every
+    // `mp_at` iteration (the bisection ran it ~30× per call). Bit-identical: the
+    // value fed to every `build_curve_color_with_cmax` is the same `max_chroma`
+    // the per-iteration call produced.
+    let c_max = scale::max_chroma(l_ok, hue_deg);
     let mp_at = |ratio: f64| -> f64 {
-        // `build_curve_color` returns clamped linear sRGB; quantise it to the
-        // display grid (the byte-for-byte identity of the old hex round-trip) and
-        // measure M' directly — no `format!`/parse on the bisection's hot path.
-        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color(l_ok, hue_deg, ratio));
+        // `build_curve_color_with_cmax` returns clamped linear sRGB; quantise it to
+        // the display grid (the byte-for-byte identity of the old hex round-trip)
+        // and measure M' directly — no `format!`/parse on the bisection's hot path.
+        let rgb = crate::spaces::srgb::quantise_srgb(build_curve_color_with_cmax(
+            l_ok, hue_deg, ratio, c_max,
+        ));
         crate::lcs::LcsColor::mp_of_linear_srgb(rgb, vc)
     };
 
@@ -943,10 +987,19 @@ const RATIO_BISECT_EPS: f64 = 1e-9;
 /// `hue_deg`, carrying `ratio` of the in-gamut maximum chroma — the same
 /// construction [`solve::solve`] applies internally, mirrored here so the curve
 /// can measure the `M'` a candidate ratio would yield before committing to it.
+#[cfg(test)]
 fn build_curve_color(l_ok: f64, hue_deg: f64, ratio: f64) -> [f64; 3] {
+    build_curve_color_with_cmax(l_ok, hue_deg, ratio, scale::max_chroma(l_ok, hue_deg))
+}
+
+/// [`build_curve_color`] with the in-gamut max chroma supplied by the caller, so
+/// a loop over many `ratio`s at a fixed `(l_ok, hue_deg)` solves `max_chroma`
+/// once instead of per iteration. Bit-identical to `build_curve_color` when
+/// `c_max == max_chroma(l_ok, hue_deg)`.
+fn build_curve_color_with_cmax(l_ok: f64, hue_deg: f64, ratio: f64, c_max: f64) -> [f64; 3] {
     use crate::spaces::oklab::oklab_to_srgb_linear;
     let hr = hue_deg.to_radians();
-    let chroma = ratio.clamp(0.0, 1.0) * scale::max_chroma(l_ok, hue_deg);
+    let chroma = ratio.clamp(0.0, 1.0) * c_max;
     let lab = [l_ok, chroma * hr.cos(), chroma * hr.sin()];
     let rgb = oklab_to_srgb_linear(lab);
     [
@@ -1064,21 +1117,36 @@ impl Default for RoleTable {
                 // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
                 // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
-                (Role::LabelPrimary, anchor(0.968, Floor::AaText)),
-                (Role::LabelSecondary, anchor(0.627, Floor::AaText)),
-                (Role::LabelTertiary, anchor(0.461, Floor::AaUi)),
-                (Role::LabelQuaternary, anchor(0.276, Floor::None)),
+                (
+                    Role::LabelPrimary,
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaText),
+                ),
+                (
+                    Role::LabelSecondary,
+                    anchor(LABEL_SECONDARY_FRACTION, Floor::AaText),
+                ),
+                (
+                    Role::LabelTertiary,
+                    anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi),
+                ),
+                (
+                    Role::LabelQuaternary,
+                    anchor(LABEL_QUATERNARY_FRACTION, Floor::None),
+                ),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
-                (Role::Icon, anchor(0.461, Floor::AaUi)),
+                (Role::Icon, anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
-                (Role::Separator, decorative(8.0)),
+                (Role::Separator, decorative(SEPARATOR_DECORATIVE_LC)),
                 // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
                 // Labels/Primary strength): the label-primary FRACTION with a
                 // non-text 3:1 floor (WCAG 1.4.11) — a border must be
                 // distinguishable, not readable. Base/Soft are dJ' steps carrying
                 // the owner's LITERAL anchors (light/dark per theme); base
                 // stronger than soft is the order contract.
-                (Role::BorderStrong, anchor(0.968, Floor::AaUi)),
+                (
+                    Role::BorderStrong,
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaUi),
+                ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
                 (Role::BorderGhost, RoleSpec::Zero),
@@ -1707,6 +1775,21 @@ pub fn resolve_set(
     resolve_set_live(bg, table, vc)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only counter of [`resolve_set_live`] invocations. Lets the greyfast
+    /// probe prove the constant fast path reconstructs a grey set without ever
+    /// calling the live solver (no lazy 256-resolve build). Zero cost in
+    /// production: the increment is compiled out entirely.
+    pub(crate) static LIVE_SOLVE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset the test-only [`LIVE_SOLVE_COUNT`] to zero and return its prior value.
+#[cfg(test)]
+pub(crate) fn reset_live_solve_count() -> usize {
+    LIVE_SOLVE_COUNT.with(|c| c.replace(0))
+}
+
 /// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
 /// path falls back to, and the path that fills its precomputed table. Always
 /// recomputes; takes no fast path itself (so the table builder cannot recurse).
@@ -1715,6 +1798,8 @@ pub(crate) fn resolve_set_live(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
+    #[cfg(test)]
+    LIVE_SOLVE_COUNT.with(|c| c.set(c.get() + 1));
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing
@@ -2139,6 +2224,84 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DIFFERENTIAL HARNESS (perf/max-chroma-hotpath) — cusp-attracted hue.
+    //
+    // A frozen copy of the tint undertone's hue sweep as it stood before any perf
+    // optimisation, plus the bit-identity test that gates the C2 coarse-to-fine
+    // rework of `cusp_attracted_hue`. Any change to the emitted hue would move a
+    // tint hex value — forbidden on this branch — so the test pins the selected
+    // hue to full f64 `to_bits()` identity over a dense (l_ok, canonical) grid.
+    // The reference calls the PRODUCTION `scale::max_chroma`, isolating the
+    // *selection* logic from the solver internals.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// FROZEN reference: the flat 81-point cusp sweep exactly as it selected the
+    /// undertone hue at the base of this branch.
+    fn cusp_attracted_hue_reference(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
+        let penalty_scale = stiffness / 100.0;
+        let mut best_h = canonical_deg;
+        let mut best_score = f64::NEG_INFINITY;
+        let steps = (CUSP_HALF_WINDOW_DEG * 2.0) as i32;
+        for i in 0..=steps {
+            let h = canonical_deg - CUSP_HALF_WINDOW_DEG + i as f64;
+            let chroma = scale::max_chroma(l_ok, h);
+            let drift = (h - canonical_deg).abs();
+            let score = chroma - penalty_scale * drift;
+            if score > best_score {
+                best_score = score;
+                best_h = h;
+            }
+        }
+        best_h
+    }
+
+    /// Diff test over a grid: production `cusp_attracted_hue` must select the
+    /// bit-identical undertone hue the frozen flat scan does, at the production
+    /// tint stiffness, across `l_ok` and canonical hue.
+    fn assert_cusp_hue_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
+        let stiffness = TINT_HUE_STIFFNESS;
+        let mut points = 0usize;
+        for li in 0..=l_steps {
+            let l = li as f64 / l_steps as f64;
+            let mut hc = 0usize;
+            while hc < 360 {
+                // Integer canonical PLUS fractional offsets: the production tint
+                // canonical (286°) is integer, but a consumer brand hue is not, so
+                // testing hcd + {0, 0.25, 0.5} closes the aliasing-shift class the
+                // integer grid alone cannot.
+                for frac in [0.0, 0.25, 0.5] {
+                    let hcd = hc as f64 + frac;
+                    let prod = cusp_attracted_hue(l, hcd, stiffness);
+                    let refv = cusp_attracted_hue_reference(l, hcd, stiffness);
+                    assert_eq!(
+                        prod.to_bits(),
+                        refv.to_bits(),
+                        "cusp_attracted_hue drift at (L={l}, canon={hcd}): prod={prod} ref={refv}"
+                    );
+                    points += 1;
+                }
+                hc += h_step_deg;
+            }
+        }
+        points
+    }
+
+    #[test]
+    fn diff_cusp_hue_matches_frozen_reference_fast() {
+        // 101 L × 72 canonical-hue × 3 fractional offsets = 21 816 points.
+        let n = assert_cusp_hue_matches_reference(100, 5);
+        assert_eq!(n, 101 * 72 * 3);
+    }
+
+    #[test]
+    #[ignore = "full grid × 3 offsets — run with `--ignored`; slow at opt-level 0"]
+    fn diff_cusp_hue_matches_frozen_reference_full() {
+        // 501 L × 360 canonical-hue × 3 fractional offsets = 541 080 points.
+        let n = assert_cusp_hue_matches_reference(500, 1);
+        assert_eq!(n, 501 * 360 * 3);
+    }
 
     #[test]
     fn measure_contrast_reproduces_the_solvers_own_lc_and_wcag() {
@@ -4140,5 +4303,134 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Дериватор-локи (Fowler class Б: characterization). Эти тесты НЕ выводят
+// константы из первых принципов — они ИЗМЕРЯЮТ перцептивную величину, к которой
+// привязана каждая калибровочная константа, и фиксируют измеренное отношение как
+// регрессионный якорь. Где строгая деривация НЕ держится (замер это показал),
+// граница честно широкая и помечена — БЕЗ подгонки под значение (North).
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod derivator_locks {
+    use super::{CUSP_HALF_WINDOW_DEG, LIGHTNESS_SETTLE, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR};
+    use crate::lcs::LcsColor;
+
+    fn grey(i: u8) -> String {
+        format!("#{i:02X}{i:02X}{i:02X}")
+    }
+
+    /// LIGHTNESS_SETTLE (0.002) < минимальный шаг выходной 8-бит сетки (1/256 ≈
+    /// 0.00391). Единственная из четвёрки, где вывод держится СТРОГО: порог
+    /// сходимости лежит ниже наименьшего представимого шага сетки, поэтому
+    /// не может «застрять» на различимой ступени.
+    #[test]
+    fn lightness_settle_is_below_min_grid_step() {
+        let min_grid_step = 1.0 / 256.0;
+        assert!(
+            LIGHTNESS_SETTLE < min_grid_step,
+            "LIGHTNESS_SETTLE={LIGHTNESS_SETTLE} должен быть ниже минимального шага сетки {min_grid_step}"
+        );
+    }
+
+    /// Типичный (медианный) Lc-шаг одного 8-бит кванта серых < STRICT_STEP (0.5).
+    /// ⚠️ ЗАМЕР: медианный шаг ≈0.44 < 0.5, но МАКСИМАЛЬНЫЙ шаг ≈7.85 — это обрыв
+    /// мягкого клампа APCA (разрыв, не шаг сетки), а не «шаг кванта». Поэтому
+    /// характеризуем МЕДИАННЫЙ шаг: STRICT_STEP=0.5 сидит чуть выше типичного шага
+    /// выходной сетки — это граница квантования сетки, не JND-клейм.
+    #[test]
+    fn strict_step_sits_just_above_typical_grid_step() {
+        let mut steps: Vec<f64> = Vec::new();
+        let mut prev = crate::lpc::lpc(&grey(0), "#FFFFFF");
+        for i in 1u8..=255 {
+            let lc = crate::lpc::lpc(&grey(i), "#FFFFFF");
+            steps.push((lc - prev).abs());
+            prev = lc;
+        }
+        steps.sort_by(|a, b| a.partial_cmp(b).expect("Lc steps are finite"));
+        let median = steps[steps.len() / 2];
+        assert!(
+            median < STRICT_STEP,
+            "медианный Lc-шаг кванта {median:.4} должен быть ниже STRICT_STEP={STRICT_STEP}"
+        );
+        assert!(
+            (0.35..0.50).contains(&median),
+            "медианный Lc-шаг {median:.4} вне замеренного диапазона [0.35, 0.50)"
+        );
+        // Максимальный шаг ≈7.85 — это обрыв loClip мягкого клампа APCA (разрыв у
+        // порога различимости, НЕ шаг сетки); лочим его отдельной полосой, чтобы он
+        // не путался со STRICT_STEP и был зафиксирован как отдельный класс величины.
+        let max_step = *steps.last().expect("непустой набор шагов");
+        assert!(
+            (7.0..8.7).contains(&max_step) && (max_step - 7.85).abs() < 0.5,
+            "max Lc-шаг {max_step:.4} (обрыв loClip, не шаг сетки) вне замеренной полосы ~7.85"
+        );
+    }
+
+    /// Потолок ахроматического M'-шума CAM16 (серые #000..#FFF, дефолтный VC)
+    /// отслеживается порогом TINT_PERCEPTIBLE_MP_FLOOR (1.5). ЗАМЕР: максимум —
+    /// у белого, M'≈1.53; порог 1.5 стоит вплотную ПОД ним. Полоса характеризации
+    /// широкая, брекетит замер, без подгонки под 1.5.
+    #[test]
+    fn tint_floor_tracks_achromatic_mp_noise_ceiling() {
+        let mut max_mp = 0.0f64;
+        for i in 0u8..=255 {
+            let mp = LcsColor::from_hex(&grey(i)).expect("valid grey hex").mp();
+            max_mp = max_mp.max(mp);
+        }
+        assert!(
+            (1.4..1.7).contains(&max_mp),
+            "потолок M'-шума серых {max_mp:.4} вне замеренного диапазона [1.4, 1.7)"
+        );
+        // Направленный ассерт (не |Δ|): порог стоит вплотную ПОД потолком шума —
+        // floor < max_mp И зазор < 0.15. Инверсия направления (floor над потолком)
+        // ломает тест.
+        assert!(
+            TINT_PERCEPTIBLE_MP_FLOOR < max_mp && max_mp - TINT_PERCEPTIBLE_MP_FLOOR < 0.15,
+            "TINT_PERCEPTIBLE_MP_FLOOR={TINT_PERCEPTIBLE_MP_FLOOR} должен стоять чуть ПОД потолком \
+             M'-шума {max_mp:.4} (floor < max_mp и max_mp − floor < 0.15)"
+        );
+    }
+
+    /// Дрейф каспа гамута sRGB вблизи канонического 286° по L-шкале задаёт
+    /// CUSP_HALF_WINDOW_DEG (40°). ⚠️ ЗАМЕР: полный дрейф достигает ≈42.5°, т.е.
+    /// окно поиска (40°) клипует чуть ВНУТРИ полного дрейфа — намеренно (движок
+    /// держит оттенок близко к каноническому, см. `cusp_attracted_hue`). Поэтому
+    /// НЕ утверждаем «окно покрывает дрейф»; характеризуем, что окно ≈ замеренный
+    /// дрейф (в широкой полосе), без подгонки.
+    #[test]
+    fn cusp_window_is_near_measured_gamut_drift() {
+        let canonical = 286.0_f64;
+        let mut max_drift = 0.0f64;
+        let mut l = 0.05;
+        while l <= 0.95 {
+            let mut best_h = canonical;
+            let mut best_c = f64::NEG_INFINITY;
+            let mut h = canonical - 70.0;
+            while h <= canonical + 70.0 {
+                let c = crate::scale::max_chroma(l, h);
+                if c > best_c {
+                    best_c = c;
+                    best_h = h;
+                }
+                h += 0.5;
+            }
+            max_drift = max_drift.max((best_h - canonical).abs());
+            l += 0.02;
+        }
+        assert!(
+            (35.0..46.0).contains(&max_drift),
+            "замеренный дрейф каспа {max_drift:.2} вне диапазона [35, 46)"
+        );
+        // Направленный ассерт (не |Δ|): окно (40°) клипует чуть ВНУТРИ полного дрейфа —
+        // дрейф СТРОГО больше окна (max_drift > 40°) и < 46°. Инверсия направления
+        // («окно покрывает дрейф») ломает тест.
+        assert!(
+            max_drift > CUSP_HALF_WINDOW_DEG && max_drift < 46.0,
+            "замеренный дрейф каспа {max_drift:.2} должен СТРОГО превышать окно \
+             CUSP_HALF_WINDOW_DEG={CUSP_HALF_WINDOW_DEG} (клип внутри — по дизайну) и быть < 46"
+        );
     }
 }
