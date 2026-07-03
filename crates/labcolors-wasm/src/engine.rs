@@ -246,6 +246,14 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             composite_lc: rgba.composite_lc(),
             composite_wcag: rgba.composite_wcag(),
         }),
+        // Свечение: слои + интенсивность, оператор потребителя — screen.
+        Resolved::Glow(g) => RoleOutcome::Glow(crate::dto::GlowColor {
+            core_hex: g.core_hex().to_string(),
+            halo_hex: g.halo_hex().to_string(),
+            alpha: g.alpha(),
+            achieved_dj: g.achieved_dj(),
+            degraded: g.degraded(),
+        }),
         // ОСОЗНАННЫЙ ДОЛГ: `Resolved` — `#[non_exhaustive]`, поэтому catch-all
         // обязателен для будущих вариантов ядра. Пока маппит в стабильный код,
         // а не молча роняет неверный цвет; при экспорте rgba-границы каждый
@@ -600,6 +608,18 @@ mod tests {
                             c.hex.len(),
                         );
                     }
+                    RoleOutcome::Glow(g) => {
+                        assert!(
+                            g.core_hex.starts_with('#') && g.halo_hex.starts_with('#'),
+                            "{bg} {}: слои свечения несут hex",
+                            entry.role_key
+                        );
+                        assert!(
+                            g.alpha > 0.0 && g.alpha <= 1.0,
+                            "{bg} {}: α свечения в (0,1]",
+                            entry.role_key
+                        );
+                    }
                     RoleOutcome::None => {}
                     RoleOutcome::Unreachable { .. } => {}
                 }
@@ -760,6 +780,12 @@ mod tests {
                         o.composite_wcag,
                         "{name}: composite_wcag"
                     );
+                }
+                (Resolved::Glow(g), RoleOutcome::Glow(o)) => {
+                    assert_eq!(g.core_hex(), o.core_hex, "{name}: glow core");
+                    assert_eq!(g.halo_hex(), o.halo_hex, "{name}: glow halo");
+                    assert_eq!(g.alpha(), o.alpha, "{name}: glow alpha");
+                    assert_eq!(g.degraded(), o.degraded, "{name}: glow degraded");
                 }
                 (Resolved::None, RoleOutcome::None) => {}
                 (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),

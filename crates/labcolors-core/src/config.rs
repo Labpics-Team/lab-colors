@@ -464,6 +464,15 @@ pub enum RoleRecipe {
         /// Позиция меню (несёт пер-темную пару альф из стаба labui).
         position: LadderPosition,
     },
+    /// Свечение (labui ADR-0002 §5): screen-слои цвета источника, интенсивность
+    /// решается солвером под контрактную ступень [`crate::glow::GlowStep`]
+    /// (зеркальная деривация от стека теней) на фактическом фоне резолва.
+    Glow {
+        /// Источник цвета свечения (свечение не имеет собственного цвета).
+        source: LadderSource,
+        /// Контрактная ступень стека: subtle | base | bloom.
+        step: crate::glow::GlowStep,
+    },
     /// Заливка пары «поверхность × лейбл» ([`crate::pair`]): якорь источника,
     /// минимально сдвинутый по светлоте до победы перцептивно правильной
     /// стороны лейбла в штатной полярности (Oklab: оттенок/хрома идентичности
@@ -910,6 +919,8 @@ impl ThemeConfig {
                 "magnitude > 0 (Lc-величина тени; ≤ 0 = невидима)",
             ),
             RoleRecipe::Ladder { source, .. } => self.check_ladder_source(role, source),
+            // Ступень — закрытый enum, числовой валидации не требует; источник — как у лестницы.
+            RoleRecipe::Glow { source, .. } => self.check_ladder_source(role, source),
             RoleRecipe::PairFill { source } => self.check_ladder_source(role, source),
             RoleRecipe::AlphaAnalog { of, alpha } => {
                 self.check_ladder_source(role, of)?;
@@ -1022,6 +1033,10 @@ impl ThemeConfig {
                 magnitude: *magnitude,
             }),
             RoleRecipe::Zero => Ok(RoleSpec::Zero),
+            RoleRecipe::Glow { source, step } => Ok(RoleSpec::Glow {
+                tint: self.compile_ladder_tint(role, source)?,
+                step: *step,
+            }),
             RoleRecipe::Ladder { source, position } => {
                 let (alpha_light, alpha_dark) = position.alpha_pair();
                 Ok(RoleSpec::Ladder {
@@ -1417,19 +1432,27 @@ pub fn labui_reference() -> ThemeConfig {
         "fx-focus-ring-neutral".to_string(),
         neutral_pos(NeutralPick::Edge, LadderPosition::FocusRing),
     ));
-    roles.push(("fx-glow-brand".to_string(), brand_pos(LadderPosition::Glow)));
+    // Свечения — новый kind glow (labui ADR-0002 §5, 2026-07-03): screen-слои
+    // цвета источника, интенсивность решается под контрактную ступень base
+    // (зеркало fx-shadow-ambient) на фактическом фоне. Прежние Ladder@52
+    // (фикс-альфа, нормальная композиция) вырождались на одноимённых фонах;
+    // physics свечения — добавление света, не наложение краски.
+    let glow = |source: LadderSource| RoleRecipe::Glow {
+        source,
+        step: crate::glow::GlowStep::Base,
+    };
+    roles.push(("fx-glow-brand".to_string(), glow(LadderSource::Brand)));
     roles.push((
         "fx-glow-danger".to_string(),
-        sent_pos("danger", LadderPosition::Glow),
+        glow(LadderSource::Sentiment("danger".to_string())),
     ));
     roles.push((
         "fx-glow-warning".to_string(),
-        sent_pos("warning", LadderPosition::Glow),
+        glow(LadderSource::Sentiment("warning".to_string())),
     ));
-    // Нейтральное свечение: светлый край нейтрали @52 (стаб rgb(255 255 255 / .522)).
     roles.push((
         "fx-glow-neutral".to_string(),
-        neutral_pos(NeutralPick::Light, LadderPosition::Glow),
+        glow(LadderSource::Neutral(NeutralPick::Light)),
     ));
     // Инвертированное свечение — на neutral.inverted (пер-темная пара стаба
     // #B0B0B9 / #3C3C43 дословно). В точном value-тесте — обе темы.

@@ -2580,8 +2580,9 @@ mod tests {
             .map(|(role, res)| {
                 let v = match res {
                     Resolved::Color { solved, .. } => solved.hex().to_string(),
-                    // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо здесь.
+                    // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо здесь.
                     Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+                    Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
                     Resolved::None => "none".to_string(),
                     Resolved::Unreachable(_) => "unreach".to_string(),
                 };

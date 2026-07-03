@@ -35,6 +35,8 @@ fn repr(res: &Resolved) -> String {
         Resolved::Color { solved, .. } => solved.hex().to_string(),
         // полупрозрачная роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+        // Свечение: слои + α — стабильное представление для голденов.
+        Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
         Resolved::None => "none".to_string(),
         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
     }
@@ -1263,11 +1265,10 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(52 199 89 / 0.2)",
             "rgb(48 209 88 / 0.2)",
         ),
-        (
-            "fx-glow-brand",
-            "rgb(0 122 255 / 0.522)",
-            "rgb(74 143 255 / 0.522)",
-        ),
+        // fx-glow-brand выведен из значенческой сверки со стабом: с 2026-07-03
+        // это kind glow (screen-слои + решённая α), а не Ladder@52 — стаб-строка
+        // rgba больше не является его контрактом. Новая эмиссия закреплена
+        // отдельным тестом `glow_roles_resolve_screen_layers`.
         // Края нейтрали пер-темные: контур (edge) и инверт — из стаба дословно.
         ("fx-focus-ring-neutral", "rgb(16 16 18)", "rgb(246 248 250)"),
         (
@@ -1338,11 +1339,8 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(16 16 18 / 0.122)",
             "rgb(16 16 18 / 0.2)",
         ),
-        (
-            "fx-glow-neutral",
-            "rgb(255 255 255 / 0.522)",
-            "rgb(255 255 255 / 0.522)",
-        ),
+        // fx-glow-neutral выведен из сверки со стабом: kind glow с 2026-07-03
+        // (см. комментарий у fx-glow-brand выше и тест glow_roles_resolve_screen_layers).
     ];
 
     for (role, want_light, want_dark) in cases {
@@ -1855,5 +1853,68 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
             "{name}: композиция стека не прогрессивна: |ΔJ'| {delta:.4} ≤ пред. {prev_delta:.4}"
         );
         prev_delta = delta;
+    }
+}
+
+/// Kind glow (labui ADR-0002 §5): screen-слои + решённая интенсивность.
+///
+/// Закрепляет новую эмиссию fx-glow-* (взамен выведенных из стаб-сверки
+/// Ladder@52-строк): (а) на тёмной базе паспорта свечение решается БЕЗ
+/// деградации, halo = пер-темный якорь источника, α ∈ (0, 1], фактический шаг
+/// в допуске квантования от контрактной ступени Base; (б) на белом фоне
+/// белое нейтральное свечение деградирует ЧЕСТНО (screen гаснет физически) —
+/// флаг degraded, не молчание и не ошибка (ADR-0002, закон 2).
+#[test]
+fn glow_roles_resolve_screen_layers() {
+    let cfg = labui_reference();
+    let table = cfg
+        .compile_named_role_table()
+        .expect("фикстура labui компилируется");
+
+    // (а) тёмная база: полноценное свечение бренда.
+    let bg_dark = BgInput::solid("#101012").unwrap();
+    let vc_dark = ViewingConditions::dim_surround();
+    let set = resolve_named_set(&bg_dark, &table, &vc_dark);
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "fx-glow-brand")
+        .expect("fx-glow-brand в наборе");
+    let g = match res {
+        Resolved::Glow(g) => g,
+        other => panic!("fx-glow-brand должен быть Resolved::Glow, получено {other:?}"),
+    };
+    assert!(
+        !g.degraded(),
+        "бренд-свечение на тёмной базе не деградирует"
+    );
+    assert_eq!(g.halo_hex(), "#4A8FFF", "halo = пер-темный якорь бренда");
+    assert!(g.alpha() > 0.0 && g.alpha() <= 1.0);
+    let target = crate::glow::GlowStep::Base.target_dj();
+    assert!(
+        g.achieved_dj() >= target - 1e-9 && g.achieved_dj() - target < 0.5,
+        "шаг ступени Base: достигнуто {:.4} (ожидалось [цель, цель+0.5))",
+        g.achieved_dj()
+    );
+    // Анатомия: core светлее halo (пересвет).
+    let vc = &vc_dark;
+    let jp = |hex: &str| crate::lcs::LcsColor::from_hex_with_vc(hex, vc).unwrap().jp;
+    assert!(jp(g.core_hex()) > jp(g.halo_hex()), "core светлее halo");
+
+    // (б) белое свечение на белом — честная деградация.
+    let bg_white = BgInput::solid("#FFFFFF").unwrap();
+    let set = resolve_named_set(&bg_white, &table, &ViewingConditions::srgb());
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "fx-glow-neutral")
+        .expect("fx-glow-neutral в наборе");
+    match res {
+        Resolved::Glow(g) => {
+            assert!(
+                g.degraded(),
+                "белое свечение на белом обязано деградировать честно"
+            );
+            assert!(g.achieved_dj() < 0.5, "screen над белым гаснет физически");
+        }
+        other => panic!("fx-glow-neutral должен быть Resolved::Glow, получено {other:?}"),
     }
 }

@@ -46,6 +46,11 @@ pub enum RoleOutcome {
     /// `rgba(tint, alpha)` and the browser composites it; the measured
     /// contrasts are those of the composite on the resolve background.
     Translucent(RgbaColor),
+    /// Свечение (kind glow, labui ADR-0002 §5): screen-слои цвета источника +
+    /// решённая интенсивность. Потребитель красит слои с
+    /// `mix-blend-mode: screen`; `--lab-<role>` несёт halo, `--lab-<role>-core`
+    /// — слой пересвета, `--lab-<role>-alpha` — интенсивность числом.
+    Glow(GlowColor),
     /// No colour can satisfy this role on this background, with the reason.
     Unreachable {
         /// A stable machine code for the unreachability reason.
@@ -53,6 +58,21 @@ pub enum RoleOutcome {
         /// A human-readable explanation (the core's `Display`).
         message: String,
     },
+}
+
+/// Слои свечения и решённая интенсивность (kind glow).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlowColor {
+    /// Слой пересвета (малый радиус), `#RRGGBB`.
+    pub core_hex: String,
+    /// Слой ореола — источник, `#RRGGBB`.
+    pub halo_hex: String,
+    /// Интенсивность screen-слоя `(0, 1]`.
+    pub alpha: f64,
+    /// Фактический |ΔJ'| композита от фона.
+    pub achieved_dj: f64,
+    /// Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2).
+    pub degraded: bool,
 }
 
 /// A semi-transparent emission and the contrasts its composite achieves.

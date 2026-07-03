@@ -524,6 +524,17 @@ pub enum RoleSpec {
     /// ([`LadderPosition::alpha_pair`](crate::ladder::LadderPosition::alpha_pair)):
     /// у акцентов пара равна, но скелетон-база пер-темна (стаб light @8 / dark @12),
     /// поэтому альфа выбирается по теме резолва, как и тинт.
+    /// Свечение — добавление света (labui ADR-0002 §5): screen-слой цвета
+    /// источника, интенсивность решается солвером под контрактную ступень
+    /// [`crate::glow::GlowStep`] на фактическом фоне резолва. Эмиссия — пара
+    /// слоёв (core = пересвет, halo = источник) + α; оператор потребителя —
+    /// `mix-blend-mode: screen` (контрактный, не темнит по построению).
+    Glow {
+        /// Пер-темный кодированный якорь источника (как у лестницы).
+        tint: crate::ladder::LadderTint,
+        /// Контрактная ступень стека.
+        step: crate::glow::GlowStep,
+    },
     /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
     /// перцептивной стороны лейбла в штатной полярности; солид-эмиссия.
     PairFill {
@@ -1126,6 +1137,9 @@ pub enum Resolved {
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
     /// Несёт солид-композит на фоне резолва для честного замера контраста.
     Translucent(TranslucentResolved),
+    /// Свечение: screen-слои (core, halo) + решённая интенсивность
+    /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
+    Glow(GlowResolved),
     /// The honest zero of the [`Role::None`] token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
@@ -1202,6 +1216,45 @@ impl TranslucentResolved {
     }
 }
 
+/// Резолв свечения: двухслойная анатомия + решённая интенсивность.
+///
+/// Слои — [`crate::glow::glow_layers_from_source`] (halo = источник, core =
+/// пересвет); α — [`crate::glow::solve_screen_alpha_for_dj`] под контрактную
+/// ступень на фактическом фоне; `degraded` — честный флаг закона 2 ADR-0002
+/// (цель недостижима даже при α = 1, например на белом — screen гаснет
+/// физически; возвращён ближайший достижимый шаг).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlowResolved {
+    core_hex: String,
+    halo_hex: String,
+    alpha: f64,
+    achieved_dj: f64,
+    degraded: bool,
+}
+
+impl GlowResolved {
+    /// Слой пересвета (малый радиус), `#RRGGBB`.
+    pub fn core_hex(&self) -> &str {
+        &self.core_hex
+    }
+    /// Слой ореола (большой радиус) — источник, `#RRGGBB`.
+    pub fn halo_hex(&self) -> &str {
+        &self.halo_hex
+    }
+    /// Решённая интенсивность screen-слоя `(0, 1]`.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+    /// Фактический |ΔJ'| композита от фона (замер на эмитируемом hex).
+    pub fn achieved_dj(&self) -> f64 {
+        self.achieved_dj
+    }
+    /// Цель недостижима — возвращён ближайший достижимый шаг (ADR-0002).
+    pub fn degraded(&self) -> bool {
+        self.degraded
+    }
+}
+
 impl Resolved {
     /// A non-compressed solved colour — the common case where the hierarchy holds
     /// strictly and no floor squeeze was needed.
@@ -1241,6 +1294,8 @@ impl Resolved {
         match self {
             Resolved::Color { solved, .. } => Some(solved.lc()),
             Resolved::Translucent(r) => Some(r.composite_lc),
+            // Свечение — не контраст-роль: его контракт — |ΔJ'| ступени, не Lc.
+            Resolved::Glow(_) => Option::None,
             Resolved::None => Some(0.0),
             Resolved::Unreachable(_) => Option::None,
         }
@@ -1444,6 +1499,32 @@ fn resolve_spec_in(
                 alpha_light
             };
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
+        }
+        RoleSpec::Glow { tint, step } => {
+            // Свечение: halo = якорь источника по теме; core — пересвет;
+            // интенсивность решается под контрактную ступень на фоне резолва.
+            let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
+            let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc) {
+                Ok(pair) => pair,
+                Err(e) => return Resolved::Unreachable(Unreachable::InvalidInput(e)),
+            };
+            let bg_hex =
+                crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+            return match crate::glow::solve_screen_alpha_for_dj(
+                &halo_hex,
+                &bg_hex,
+                step.target_dj(),
+                vc,
+            ) {
+                Ok(g) => Resolved::Glow(GlowResolved {
+                    core_hex,
+                    halo_hex,
+                    alpha: g.alpha,
+                    achieved_dj: g.achieved_dj,
+                    degraded: g.degraded,
+                }),
+                Err(e) => Resolved::Unreachable(Unreachable::InvalidInput(e)),
+            };
         }
         RoleSpec::AlphaAnalog { of, alpha } => {
             // Альфа-аналог: солид-цель фиксирована (тинт источника по теме),
@@ -3155,6 +3236,8 @@ mod tests {
                     .jp;
                 let set = resolve_set(&bg, &table, &vc);
                 let no_silent_clip = set.iter().all(|(role, r)| match r {
+                    // Свечение не участвует в dJ'-клип-инварианте (не контраст-роль).
+                    Resolved::Glow(_) => true,
                     Resolved::Color { solved, .. } => {
                         if matches!(table.spec(*role), RoleSpec::DecorativeDj { .. }) {
                             let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
@@ -4173,8 +4256,9 @@ mod tests {
                 for (role, res) in &set {
                     let got = match res {
                         Resolved::Color { solved, .. } => solved.hex().to_string(),
-                        // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо.
+                        // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо.
                         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+                        Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
                         Resolved::None => "none".to_string(),
                         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
                     };

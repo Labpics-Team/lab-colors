@@ -342,6 +342,32 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                 set(&role_obj, "css", &JsValue::from_str(&css));
                 set(&vars, &css_var, &JsValue::from_str(&css));
             }
+            RoleOutcome::Glow(g) => {
+                // Свечение: слои для screen-наложения потребителем.
+                // --lab-<role> несёт halo (единая oklch-форма), сателлиты
+                // --lab-<role>-core / --lab-<role>-alpha — анатомия и
+                // решённая интенсивность (число, не цвет).
+                set(&role_obj, "kind", &JsValue::from_str("glow"));
+                set(&role_obj, "coreHex", &JsValue::from_str(&g.core_hex));
+                set(&role_obj, "haloHex", &JsValue::from_str(&g.halo_hex));
+                set(&role_obj, "alpha", &JsValue::from_f64(g.alpha));
+                set(&role_obj, "achievedDj", &JsValue::from_f64(g.achieved_dj));
+                set(&role_obj, "degraded", &JsValue::from_bool(g.degraded));
+                let halo_css = oklch_css(&g.halo_hex, None)?;
+                let core_css = oklch_css(&g.core_hex, None)?;
+                set(&role_obj, "css", &JsValue::from_str(&halo_css));
+                set(&vars, &css_var, &JsValue::from_str(&halo_css));
+                set(
+                    &vars,
+                    &format!("{css_var}-core"),
+                    &JsValue::from_str(&core_css),
+                );
+                set(
+                    &vars,
+                    &format!("{css_var}-alpha"),
+                    &JsValue::from_str(&format!("{:.4}", g.alpha)),
+                );
+            }
             RoleOutcome::None => {
                 set(&role_obj, "kind", &JsValue::from_str("none"));
             }

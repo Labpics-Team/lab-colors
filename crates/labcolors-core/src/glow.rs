@@ -54,6 +54,51 @@ pub const GLOW_BASE_DJ: f64 = 2.3006;
 // SSOT-TRACKED — зеркальная деривация от владельческих альф теней (examples/glow_mirror_derivation).
 pub const GLOW_BLOOM_DJ: f64 = 13.3251;
 
+/// Ступень контрактного стека свечения (зеркальная деривация, см. шапку).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlowStep {
+    /// subtle := зеркало fx-shadow-minor.
+    Subtle,
+    /// base := зеркало fx-shadow-ambient.
+    Base,
+    /// bloom := зеркало fx-shadow-major.
+    Bloom,
+}
+
+impl GlowStep {
+    /// Целевой перцептивный шаг |ΔJ'| композита ступени.
+    pub fn target_dj(self) -> f64 {
+        match self {
+            GlowStep::Subtle => GLOW_SUBTLE_DJ,
+            GlowStep::Base => GLOW_BASE_DJ,
+            GlowStep::Bloom => GLOW_BLOOM_DJ,
+        }
+    }
+
+    /// Стабильный kebab-ключ ступени (граница конфига).
+    pub fn key(self) -> &'static str {
+        match self {
+            GlowStep::Subtle => "subtle",
+            GlowStep::Base => "base",
+            GlowStep::Bloom => "bloom",
+        }
+    }
+
+    /// Разбор kebab-ключа; неизвестная строка — ошибка вызывающего.
+    ///
+    /// # Errors
+    ///
+    /// `Err` с непринятой строкой.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "subtle" => Ok(GlowStep::Subtle),
+            "base" => Ok(GlowStep::Base),
+            "bloom" => Ok(GlowStep::Bloom),
+            other => Err(other.to_string()),
+        }
+    }
+}
+
 /// Screen-слой над непрозрачным фоном: `bg + α·G·(1−bg)` покомпонентно
 /// (device-пространство, закон лестницы — композитит браузер).
 pub fn screen_layer_over_encoded(glow: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64; 3] {
@@ -197,9 +242,12 @@ mod tests {
         for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
             let g = solve_screen_alpha_for_dj("#3E87FF", "#101012", target, &vc).unwrap();
             assert!(!g.degraded, "цель {target} недостижима на #101012");
+            // Солвер возвращает ВЕРХНЮЮ сторону брекета: достигнутое ≥ цели
+            // (закон 2 ADR-0002 — ближайший достижимый СВЕРХУ), перелёт ограничен
+            // шагом 8-битной сетки на тёмной базе (≲0.3 J' на канал-инкремент).
             assert!(
-                (g.achieved_dj - target).abs() < 0.25,
-                "цель {target}: достигнуто {:.4} (допуск квантования 0.25 J')",
+                g.achieved_dj >= target - 1e-9 && g.achieved_dj - target < 0.5,
+                "цель {target}: достигнуто {:.4} (ожидалось [цель, цель+0.5))",
                 g.achieved_dj
             );
             assert!(g.alpha > 0.0 && g.alpha <= 1.0);
