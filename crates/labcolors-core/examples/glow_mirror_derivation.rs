@@ -22,13 +22,13 @@ fn main() {
         .expect("фикстура labui компилируется");
     let vc = ViewingConditions::srgb();
     let bg_hex = "#FFFFFF";
-    let bg = BgInput::solid(bg_hex).unwrap();
+    let bg = BgInput::solid(bg_hex).expect("bg_hex — константный валидный литерал");
     let set = resolve_named_set(&bg, &table, &vc);
 
     let bg_jp = labcolors_core::LcsColor::from_hex_with_vc(bg_hex, &vc)
-        .unwrap()
+        .expect("bg_hex — константный валидный литерал")
         .jp;
-    let mut state = labcolors_core::srgb_encoded_from_hex(bg_hex).unwrap();
+    let mut state = labcolors_core::srgb_encoded_from_hex(bg_hex).expect("bg_hex валиден");
 
     println!("— композит-шаги стека теней на светлом якоре (зеркальные цели glow) —");
     for name in [
@@ -39,11 +39,12 @@ fn main() {
     ] {
         let (_, resolved) = set.iter().find(|(n, _)| n == name).expect("роль в наборе");
         let t = resolved.translucent().expect("тень — Translucent");
-        let tint = labcolors_core::srgb_encoded_from_hex(t.tint_hex()).unwrap();
+        let tint = labcolors_core::srgb_encoded_from_hex(t.tint_hex())
+            .expect("tint_hex эмитирован собственным форматтером");
         state = labcolors_core::composite_over_encoded(tint, t.alpha(), state);
         let hex = labcolors_core::hex_from_srgb_encoded(state);
         let jp = labcolors_core::LcsColor::from_hex_with_vc(&hex, &vc)
-            .unwrap()
+            .expect("hex собственного форматтера всегда валиден")
             .jp;
         println!(
             "{name:22} стек-композит {hex}  |ΔJ'| от фона = {:.4}",
@@ -55,7 +56,8 @@ fn main() {
     // Решённые слои для прототипа labui (бренд тёмной темы на тёмной базе).
     let vc_dark = ViewingConditions::dim_surround();
     let brand_dark = "#4A8FFF";
-    let (core, halo) = labcolors_core::glow_layers_from_source(brand_dark, &vc_dark).unwrap();
+    let (core, halo) = labcolors_core::glow_layers_from_source(brand_dark, &vc_dark)
+        .expect("бренд-hex константен и валиден");
     println!("\n— решённые слои (бренд {brand_dark} на #101012, dim surround) —");
     println!("core (пересвет) = {core}; halo = {halo}");
     for (name, target) in [

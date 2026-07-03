@@ -25,9 +25,10 @@ fn main() {
         ("base    (bg-primary / grouped-primary)", "#000000"),
         ("base+1  (secondary)", "#1C1C1E"),
         ("base+2  (tertiary)", "#2C2C2E"),
-        // Elevated-вариант базы (модальные контексты HIG) — для полноты.
-        ("elevated base", "#161618"),
     ];
+    // Elevated-вариант базы (модальные контексты HIG) — СПРАВОЧНО, не ступень
+    // лестницы: печатается отдельным блоком без ΔJ'-цепочки.
+    let elevated = ("elevated base (справочно, вне лестницы)", "#161618");
 
     let vc_light = ViewingConditions::srgb();
     let vc_dark = ViewingConditions::dim_surround();
@@ -35,7 +36,9 @@ fn main() {
     println!("— светлая тема (average surround) —");
     let mut prev: Option<f64> = None;
     for (label, hex) in light {
-        let jp = LcsColor::from_hex_with_vc(hex, &vc_light).unwrap().jp;
+        let jp = LcsColor::from_hex_with_vc(hex, &vc_light)
+            .expect("hex-литерал константный и валиден")
+            .jp;
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:48} {hex}  J' = {jp:7.3}  ΔJ' от пред. = {step:+.3}");
         prev = Some(jp);
@@ -44,10 +47,20 @@ fn main() {
     println!("\n— тёмная тема (dim surround) —");
     let mut prev: Option<f64> = None;
     for (label, hex) in dark {
-        let jp = LcsColor::from_hex_with_vc(hex, &vc_dark).unwrap().jp;
+        let jp = LcsColor::from_hex_with_vc(hex, &vc_dark)
+            .expect("hex-литерал константный и валиден")
+            .jp;
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:48} {hex}  J' = {jp:7.3}  ΔJ' от пред. = {step:+.3}");
         prev = Some(jp);
+    }
+
+    {
+        let (label, hex) = elevated;
+        let jp = LcsColor::from_hex_with_vc(hex, &vc_dark)
+            .expect("hex-литерал константный и валиден")
+            .jp;
+        println!("{label:48} {hex}  J' = {jp:7.3}");
     }
 
     // Пары СОБСТВЕННОГО Figma-якоря labui (colors-stub/figma-reference.css) —
@@ -55,7 +68,9 @@ fn main() {
     println!("\n— labui-якоря, светлая —");
     let mut prev: Option<f64> = None;
     for (label, hex) in [("bg-primary", "#FFFFFF"), ("bg-secondary", "#F7F8FA")] {
-        let jp = LcsColor::from_hex_with_vc(hex, &vc_light).unwrap().jp;
+        let jp = LcsColor::from_hex_with_vc(hex, &vc_light)
+            .expect("hex-литерал константный и валиден")
+            .jp;
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:12} {hex}  J' = {jp:7.3}  ΔJ' = {step:+.3}");
         prev = Some(jp);
@@ -67,7 +82,9 @@ fn main() {
         ("bg-secondary", "#1C1C1E"),
         ("bg-tertiary", "#242426"),
     ] {
-        let jp = LcsColor::from_hex_with_vc(hex, &vc_dark).unwrap().jp;
+        let jp = LcsColor::from_hex_with_vc(hex, &vc_dark)
+            .expect("hex-литерал константный и валиден")
+            .jp;
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:12} {hex}  J' = {jp:7.3}  ΔJ' = {step:+.3}");
         prev = Some(jp);

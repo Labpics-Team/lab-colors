@@ -97,7 +97,27 @@ export interface TranslucentRole {
   readonly css: string;
 }
 
-export type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
+/** Свечение (kind glow, labui ADR-0002 §5): screen-слои + решённая интенсивность.
+ *  Потребитель красит слои с mix-blend-mode: screen; `vars` несёт
+ *  --lab-<role> (halo, oklch), --lab-<role>-core и --lab-<role>-alpha. */
+export interface GlowRole {
+  readonly kind: "glow";
+  readonly cssVar: string;
+  /** Слой пересвета (малый радиус), #RRGGBB. */
+  readonly coreHex: string;
+  /** Слой ореола — источник, #RRGGBB. */
+  readonly haloHex: string;
+  /** Интенсивность screen-слоя, (0, 1]. */
+  readonly alpha: number;
+  /** Фактический |ΔJ'| композита от фона. */
+  readonly achievedDj: number;
+  /** Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2). */
+  readonly degraded: boolean;
+  /** Ready-to-serve CSS value халo: "oklch(L% C H)". */
+  readonly css: string;
+}
+
+export type RoleResult = SolvedColor | TranslucentRole | GlowRole | NoneRole | UnreachableRole;
 
 /** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
 export interface ThemeAnchors {
@@ -120,6 +140,8 @@ export type RoleRecipe =
   | { kind: "dj-anchor"; light: number; dark: number }
   | { kind: "decorative-lc"; magnitude: number }
   | { kind: "ladder"; source: LadderSource; position: string }
+  | { kind: "glow"; source: LadderSource; step: "subtle" | "base" | "bloom" }
+  | { kind: "pair-fill"; source: LadderSource }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
   | { kind: "zero" };
 
