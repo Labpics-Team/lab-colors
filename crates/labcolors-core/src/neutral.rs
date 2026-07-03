@@ -301,7 +301,7 @@ fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
 ///
 /// ```text
 /// mp/mp_ref = 0.1 → purity ≈ 0.25  (75 % corrected)
-/// mp/mp_ref = 0.3 → purity ≈ 0.46  (54 % corrected)
+/// mp/mp_ref = 0.3 → purity ≈ 0.49  (51 % corrected)
 /// mp/mp_ref = 0.5 → purity ≈ 0.66  (34 % corrected)
 /// mp/mp_ref = 1.0 → purity = 1.00  (0   % corrected)
 /// ```

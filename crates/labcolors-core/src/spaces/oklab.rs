@@ -1,3 +1,16 @@
+//! Oklab perceptual colour space (sRGB path).
+//!
+//! Source: Björn Ottosson, "A perceptual color space for image processing"
+//! (2020), <https://bottosson.github.io/posts/oklab/>. The matrices below are
+//! the 2021-01-25 revision (the values Ottosson pinned after the original post)
+//! and were checked against that reference implementation to the last printed
+//! digit (audit 2026-07-03).
+//!
+//! The published model does not send D65 white exactly to `L = 1`: the
+//! `LMS_TO_OKLAB` first-row sum gives `L = 0.9999999935 ≠ 1` for `[1, 1, 1]`.
+//! That ~6.5e-9 offset is a property of the published matrices themselves, not a
+//! porting error, and is absorbed by the `< 1e-6` white-point test below.
+
 #[rustfmt::skip]
 const SRGB_TO_LMS: [[f64; 3]; 3] = [
     [0.4122214708, 0.5363325363, 0.0514459929],
