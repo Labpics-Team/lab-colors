@@ -1260,6 +1260,44 @@ mod tests {
     }
 
     #[test]
+    fn warning_natural_minimum_margin_over_floor_is_pinned() {
+        // C1 (аудит 2026-07-03): страж ХРУПКОСТИ. Запас натурального минимума
+        // оранжевой категории над WARNING_HUE_FLOOR_DEG (45.0°) — всего ≈0.52°
+        // (prototype 68.607° − s_min − 45.0). Хрупкость: снижение хромы
+        // orange-якоря ПОВЫШАЕТ s_min_deg (= 2·asin(S_PERC_MIN/(2·C))) и опускает
+        // натуральный минимум К ПОЛУ; подползёт ближе — включится flip-ветка и
+        // добавит третий разрыв непрерывности. Страж пинит запас и падает с
+        // внятным сообщением ДО того, как хрупкость станет багом. Значение 45.0 —
+        // DECLARED-CALIBRATION, НЕ трогается (см. WARNING_HUE_FLOOR_DEG).
+        let proto_hue = Sentiment::Warning.prototype_hue();
+        let orange_hex = Sentiment::Warning.anchor_hex();
+        let lab = srgb_linear_to_oklab(srgb_from_hex(orange_hex).unwrap());
+        let orange_chroma = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
+        let s_min = s_min_deg(orange_chroma);
+        // Натуральный минимум = максимальное prototype-ward смещение к меньшим
+        // оттенкам (достигается, когда бренд стоит на прототипе: s → s_min).
+        let natural_min = proto_hue - s_min;
+        let margin = natural_min - WARNING_HUE_FLOOR_DEG;
+
+        assert!(
+            margin > 0.1,
+            "ЗАПАС ОРАНЖЕВОЙ НАД ПОЛОМ подполз к {margin:.3}° (< 0.1°): натуральный \
+             минимум {natural_min:.3}° почти на полу {WARNING_HUE_FLOOR_DEG}° \
+             (proto={proto_hue:.3}°, s_min={s_min:.3}°, chroma={orange_chroma:.4}). \
+             Снижение хромы orange-якоря повышает s_min и включит flip-ветку — \
+             третий разрыв непрерывности. Пересмотреть якорь/пол, не глушить тест."
+        );
+        // Нетавтологичный пин текущего запаса (0.5274° при orange #FFA100,
+        // proto 68.607°, s_min 23.079°): ловит дрейф в обе стороны (сдвиг
+        // прототипа/хромы orange-якоря или S_PERC_MIN).
+        assert!(
+            (margin - 0.5274).abs() < 0.02,
+            "запас {margin:.4}° ушёл от задокументированных ≈0.527° — сдвинулся \
+             прототип или хрома orange-якоря; осмыслить провенанс, не подгонять"
+        );
+    }
+
+    #[test]
     fn warning_stays_distinguishable_from_danger_full_circle() {
         // Доказанный дефект машинным тестом: с picker на основе membership-field
         // Warning мог резолвиться в 3.9° от Danger (перцептивно один цвет) при
