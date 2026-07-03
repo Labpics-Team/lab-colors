@@ -80,7 +80,13 @@ jobs:
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
         # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
         # CVSS v4.0 and fail to load the advisory database entirely.
-        run: cargo install cargo-audit --version 0.22.2 --locked
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # toolchain action does not add it, and standalone `cargo install`
+        # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
+        # `cargo audit` only survived by resolving as a cargo subcommand).
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       # Hard-fail on actively-exploitable advisories AND on yanked crates.
       # Rationale: a known-vulnerable or yanked dependency is a supply-chain
       # liability we will not knowingly merge. cargo-audit exits non-zero on any
@@ -110,7 +116,12 @@ jobs:
         # Pinned for reproducibility; --locked respects the tool's own lockfile.
         # wasm-pack vendors a matching wasm-opt and downloads a matching
         # chromedriver for the headless run below.
-        run: cargo install wasm-pack --version 0.13.1 --locked
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # toolchain action does not add it, so the installed `wasm-pack` binary
+        # was unreachable (exit 127 "command not found" on the de-02 farm).
+        run: |
+          cargo install wasm-pack --version 0.13.1 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       - name: wasm-pack build (release)
         # The release bundle: panic=abort, no panic hook, wasm-opt -Oz. This is
         # the artifact @labpics/colors ships, so the size measured below is real.
