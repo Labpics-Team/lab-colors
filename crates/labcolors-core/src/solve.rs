@@ -1312,6 +1312,35 @@ pub(crate) fn reconstruct_solved(
     finish(rgb_linear, y_bg, bg_disp, floor_override, vc)
 }
 
+/// Re-measure the honest `|dJ'|` a decorative dJ' role's emitted colour achieves
+/// against its background — the exact quantity [`solve_dj`] records as
+/// `achieved_dj` (`|J'_fg − J'_bg|` on the emitted, gamma-decoded hex), replayed
+/// from the stored on-grid colour so the greyfast reconstruction reproduces the
+/// live [`Resolved::Color::achieved_dj`](crate::semantic::Resolved) field
+/// bit-for-bit. The measurement takes the same inputs as the live path (the same
+/// stored 8-bit rgb the emitted hex encodes, the same governing background
+/// display endpoint), so the value is identical, not an approximation.
+///
+/// For a [`Solid`](BgInput::Solid) background the governing display endpoint is
+/// polarity-independent (`lo == hi`), so no sign is threaded; a genuine luminance
+/// interval would need the real role polarity here (mirrors the assumption in
+/// [`reconstruct_solved`]).
+pub(crate) fn reconstruct_achieved_dj(
+    emitted_rgb8: [u8; 3],
+    bg: &BgInput,
+    vc: &ViewingConditions,
+) -> f64 {
+    let bg_disp = bg.governing_display(1.0);
+    let bg_disp_linear = [
+        srgb_gamma_inv(bg_disp[0]),
+        srgb_gamma_inv(bg_disp[1]),
+        srgb_gamma_inv(bg_disp[2]),
+    ];
+    let jp_bg = jp_of_linear(bg_disp_linear, vc);
+    let rgb_linear = crate::spaces::srgb::srgb_from_rgb8(emitted_rgb8);
+    (jp_of_linear(rgb_linear, vc) - jp_bg).abs()
+}
+
 /// Whether a measured signed perceptual contrast meets the (signed) floor within
 /// the 1-Lc quantisation budget. The single comparison both endpoint checks
 /// share: the governing endpoint passes its already-measured `solved.lc()` here
