@@ -454,6 +454,49 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
     y_hk(j_hk.max(0.0), vc)
 }
 
+/// Perceptual contrast (LPC) of a foreground over a background computed in the
+/// **readability luminance domain** `Ys` (WCAG relative luminance) rather than
+/// the Helmholtz–Kohlrausch brightness domain `Y_hk` that [`lpc`] and the solver
+/// use.
+///
+/// # Why a second domain exists
+///
+/// [`contrast_core`] carries the published SAPC-8 (`0.0.98G-4g`) constants, and
+/// those constants were **calibrated with screen luminance `Ys` as their input**.
+/// [`lpc`] instead feeds the curve `Y_hk` — a *brightness* estimate that lifts a
+/// saturated hue's effective luminance above its photometric value (`#007AFF`:
+/// `Y 0.211 → Y_hk 0.346`). Applied to the readability axis this inverts the
+/// label polarity: the saturated background reads as a mid grey and the curve
+/// prefers a black label where a white one is more legible. The CH-4 science
+/// étude measured a monotonic 15:0 white→black flip across the saturated-hue
+/// sweep, driven entirely by that out-of-domain `Y_hk` substitution. Reading the
+/// **calibrated** domain removes it. Full rationale and blast radius:
+/// `docs/decisions/0003-hk-scope.md` (variant A — awaiting owner signature).
+///
+/// # Argument domain
+///
+/// `fg`/`bg` are **display** (gamma-encoded) sRGB triples in `[0, 1]` — the same
+/// domain [`crate::wcag::relative_luminance`] is defined on and the legal WCAG
+/// floor is measured in. Callers pass already-decoded colours (no hex parse, no
+/// `unwrap_or` fallback — ADR-0002 law 3). `Ys` is display-referred, so this
+/// contrast is viewing-condition invariant by construction: the dark-theme
+/// surround compensation `Y_hk` carries is a brightness concern, kept off the
+/// readability axis (flagged as an open question in the ADR).
+///
+/// Deliberately **not** wired into the solver, the role contracts, or the public
+/// prelude, and hidden from the rendered docs: this is the dormant variant-A seam
+/// the étude proposes, not a shipped entry point. It introduces no new constants
+/// (it reuses [`contrast_core`] and [`crate::wcag::relative_luminance`]) and does
+/// not change any existing output, so the default engine is bit-for-bit unchanged
+/// until the owner signs off on migrating the legibility axis.
+#[doc(hidden)]
+pub fn lpc_readability_ys(fg_display: [f64; 3], bg_display: [f64; 3]) -> f64 {
+    contrast_core(
+        crate::wcag::relative_luminance(fg_display),
+        crate::wcag::relative_luminance(bg_display),
+    )
+}
+
 /// Benchmark-only access to the two grey-axis inverse implementations.
 ///
 /// These wrap the crate-private [`y_hk_analytic`] and [`y_hk_bisect`] so the
@@ -527,6 +570,74 @@ mod tests {
         // achromatic number for this luminance.
         let lc = lpc("#444444", "#ffffff");
         assert!((lc - 87.6).abs() < 1.0, "achromatic LPC: {}", lc);
+    }
+
+    #[test]
+    fn readability_domain_keeps_white_on_saturated_backgrounds() {
+        // CH-4 variant A (docs/decisions/0003-hk-scope.md). The H-K domain that
+        // `lpc` reads monotonically sinks the white label on saturated
+        // backgrounds — the V3 étude measured 15:0 white→black flips — because
+        // `Y_hk` lifts the background's effective luminance out of the SAPC-8
+        // calibration domain. The calibrated `Ys` domain does not. On each cell
+        // below, the white label must WIN in the Ys domain (larger |Lc|), and
+        // the current H-K domain must prefer black — documenting the flip.
+        let enc = |hex: &str| crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("valid hex");
+        let white = enc("#FFFFFF");
+        let black = enc("#000000");
+        for bg_hex in ["#007AFF", "#0082FF", "#FF0000", "#00B087"] {
+            let bg = enc(bg_hex);
+            // Readability (Ys) domain: white wins — matches platform convention.
+            let white_ys = lpc_readability_ys(white, bg).abs();
+            let black_ys = lpc_readability_ys(black, bg).abs();
+            assert!(
+                white_ys > black_ys,
+                "{bg_hex}: Ys domain must prefer white (|white|={white_ys} !> |black|={black_ys})"
+            );
+            // Current H-K domain (`lpc`): black wins — the flip variant A removes.
+            let white_hk = lpc("#FFFFFF", bg_hex).abs();
+            let black_hk = lpc("#000000", bg_hex).abs();
+            assert!(
+                black_hk > white_hk,
+                "{bg_hex}: H-K domain flips to black (|black|={black_hk} !> |white|={white_hk})"
+            );
+        }
+    }
+
+    #[test]
+    fn readability_domain_matches_hk_at_luminance_endpoints() {
+        // Black and white are the luminance endpoints (Ys = 0/1 == Y_hk = 0/1),
+        // so the two domains must agree there bit-for-bit: variant A moves only
+        // the chromatic interior, never the achromatic endpoints. The canonical
+        // black-on-white number (≈106.04) is preserved, so the WCAG legal floor
+        // and the endpoint anchors the golden grid locks are untouched.
+        let enc = |hex: &str| crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("valid hex");
+        let bw_ys = lpc_readability_ys(enc("#000000"), enc("#FFFFFF"));
+        let bw_hk = lpc("#000000", "#FFFFFF");
+        assert!(
+            (bw_ys - bw_hk).abs() < 1e-9,
+            "endpoints must agree across domains: Ys={bw_ys} Y_hk={bw_hk}"
+        );
+        assert!(
+            (bw_ys - 106.04).abs() < 0.5,
+            "canonical black-on-white preserved: {bw_ys}"
+        );
+    }
+
+    #[test]
+    fn hk_domain_suppresses_white_contrast_on_saturated_bg() {
+        // Mechanism the 15:0 flips ride on: the H-K lift eats the white label's
+        // contrast on a saturated background (V3: on #007AFF the white label
+        // drops from ~69.7 Lc to ~54.2 Lc as `Y_hk` climbs 0.211→0.346). The
+        // calibrated Ys domain restores that suppressed contrast, so white-on-blue
+        // reads as materially higher contrast there than in the H-K domain.
+        let enc = |hex: &str| crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("valid hex");
+        let bg = "#007AFF";
+        let white_ys = lpc_readability_ys(enc("#FFFFFF"), enc(bg)).abs();
+        let white_hk = lpc("#FFFFFF", bg).abs();
+        assert!(
+            white_ys > white_hk + 5.0,
+            "Ys should restore the contrast H-K suppressed: Ys={white_ys} Y_hk={white_hk}"
+        );
     }
 
     #[test]
