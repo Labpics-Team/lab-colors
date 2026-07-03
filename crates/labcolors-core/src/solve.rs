@@ -394,15 +394,6 @@ pub enum Unreachable {
     /// background can supply the target, the discrete sRGB grid cannot.
     /// `nearest` is the closest |Lc| an adjacent hex step actually achieves.
     QuantizationGap { target: f64, nearest: f64 },
-    /// A decorative perceived-lightness-difference (dJ') contract cannot be met:
-    /// the target sits off the end of the lightness axis (e.g. a positive dJ'
-    /// above a near-white background, where no lighter colour exists), or every
-    /// on-grid colour near the target J' lands outside the budget. Distinct from
-    /// the contrast variants — dJ' measures *perceived lightness distance* on the
-    /// CAM16-UCS J' axis (decorative distinguishability), not LPC readability.
-    /// `target_dj` is the requested magnitude; `nearest` the closest |dJ'| an
-    /// emitted colour actually achieves.
-    DjUnreachable { target_dj: f64, nearest: f64 },
     /// The WCAG legal floor cannot be met on this background even at the
     /// achromatic extreme (pure black for dark-on-light, pure white for
     /// light-on-dark). `max_ratio` is the most contrast this background can
@@ -440,10 +431,6 @@ impl core::fmt::Display for Unreachable {
             Self::QuantizationGap { target, nearest } => write!(
                 f,
                 "target Lc {target:.2} falls in an 8-bit quantisation gap; the nearest on-grid colour reaches only {nearest:.2}"
-            ),
-            Self::DjUnreachable { target_dj, nearest } => write!(
-                f,
-                "decorative dJ' {target_dj:.2} cannot be met on this background; the nearest on-grid colour reaches only {nearest:.2}"
             ),
             Self::FloorUnreachable { floor, max_ratio } => write!(
                 f,
@@ -822,8 +809,13 @@ const DJ_NEIGHBOR_STEPS: u32 = 2;
 /// returned. Otherwise a bounded walk steps toward the target `J'` across at most
 /// [`DJ_NEIGHBOR_STEPS`] distinct hex grid points. If none lands in budget — or
 /// the target J' falls off the end of the achievable axis (e.g. a positive dJ'
-/// requested above a near-white background) — the contract is honestly
-/// [`Unreachable::DjUnreachable`], reporting the closest `|dJ'|` actually reached.
+/// requested above a near-white background) — the contract **деградирует к
+/// ближайшему достижимому** (ADR-0002, закон 2): возвращается цвет с
+/// минимальной ошибкой `||ΔJ'|−цель|` среди осмотренных грид-точек, помеченный
+/// `degraded: true`, с честно замеренным `achieved_dj`. Голый отказ прежней
+/// версии (`DjUnreachable`) наказывал владельца контракта ошибкой за
+/// физическую стену оси — вместо честного результата (политика Figma-коэрсии:
+/// rgb(999) → 255, не exception).
 ///
 /// The reported `lc` on the returned [`Solved`] is still the measured LPC
 /// contrast of the emitted colour against the background (so the ladder-order
@@ -836,7 +828,7 @@ pub(crate) fn solve_dj(
     hue: Hue,
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
-) -> Result<Solved, Unreachable> {
+) -> Result<DjSolved, Unreachable> {
     if !magnitude_dj.is_finite() || magnitude_dj < 0.0 {
         return Err(Unreachable::InvalidInput(format!(
             "dJ' magnitude must be finite and non-negative: {magnitude_dj}"
@@ -883,14 +875,19 @@ pub(crate) fn solve_dj(
 
     let primary = evaluate(jp_target)?;
     if primary.error <= DJ_BUDGET {
-        return Ok(primary.solved);
+        return Ok(DjSolved {
+            achieved_dj: primary.achieved_dj,
+            solved: primary.solved,
+            degraded: false,
+        });
     }
 
     // The seed missed the budget — walk distinct hex grid points toward larger
     // separation (away from `jp_bg`, in the polarity's direction) so a
     // quantisation undershoot is corrected. Probe well below one grid step so
-    // neighbours are visited in order. Track the closest `|dJ'|` across the seed
-    // and every neighbour, so the failure reports the true near-miss.
+    // neighbours are visited in order. Track the best candidate (min error)
+    // across the seed and every neighbour — it becomes the degraded result if
+    // nothing lands in budget.
     let direction = -sign;
     const PROBE: f64 = 0.05;
     // Bound the probe count independently of the distinct-step count so a run of
@@ -901,8 +898,7 @@ pub(crate) fn solve_dj(
     let mut steps_taken = 0_u32;
     let mut probes = 0_u32;
     let mut jp_probe = jp_target;
-    let mut nearest = primary.achieved_dj;
-    let mut nearest_err = primary.error;
+    let mut best = primary;
 
     while steps_taken < DJ_NEIGHBOR_STEPS && probes < MAX_PROBES {
         jp_probe += direction * PROBE;
@@ -913,18 +909,25 @@ pub(crate) fn solve_dj(
         }
         last_hex = candidate.solved.hex().to_string();
         steps_taken += 1;
-        if candidate.error < nearest_err {
-            nearest_err = candidate.error;
-            nearest = candidate.achieved_dj;
+        let in_budget = candidate.error <= DJ_BUDGET;
+        if candidate.error < best.error {
+            best = candidate;
         }
-        if candidate.error <= DJ_BUDGET {
-            return Ok(candidate.solved);
+        if in_budget {
+            return Ok(DjSolved {
+                achieved_dj: best.achieved_dj,
+                solved: best.solved,
+                degraded: false,
+            });
         }
     }
 
-    Err(Unreachable::DjUnreachable {
-        target_dj: magnitude_dj,
-        nearest,
+    // Закон 2 ADR-0002: цель за стеной оси / в квантовой дыре — ближайший
+    // достижимый цвет с флагом, не ошибка.
+    Ok(DjSolved {
+        achieved_dj: best.achieved_dj,
+        solved: best.solved,
+        degraded: true,
     })
 }
 
@@ -935,6 +938,17 @@ struct DjCandidate {
     solved: Solved,
     achieved_dj: f64,
     error: f64,
+}
+
+/// Результат dJ'-солва: решённый цвет, честно замеренный `|ΔJ'|` на отданном
+/// hex и флаг деградации (закон 2 ADR-0002 — цель недостижима, отдан
+/// ближайший достижимый).
+pub(crate) struct DjSolved {
+    pub(crate) solved: Solved,
+    /// Честный замер |ΔJ'| на отданном hex — доносится до
+    /// `Resolved::Color.achieved_dj` и wasm-DTO (симметрия честности с glow).
+    pub(crate) achieved_dj: f64,
+    pub(crate) degraded: bool,
 }
 
 /// Stage 2: enforce the WCAG legal floor on the quantised colour.
@@ -1296,6 +1310,35 @@ pub(crate) fn reconstruct_solved(
     let bg_disp = bg.governing_display(1.0);
     let rgb_linear = crate::spaces::srgb::srgb_from_rgb8(emitted_rgb8);
     finish(rgb_linear, y_bg, bg_disp, floor_override, vc)
+}
+
+/// Re-measure the honest `|dJ'|` a decorative dJ' role's emitted colour achieves
+/// against its background — the exact quantity [`solve_dj`] records as
+/// `achieved_dj` (`|J'_fg − J'_bg|` on the emitted, gamma-decoded hex), replayed
+/// from the stored on-grid colour so the greyfast reconstruction reproduces the
+/// live [`Resolved::Color::achieved_dj`](crate::semantic::Resolved) field
+/// bit-for-bit. The measurement takes the same inputs as the live path (the same
+/// stored 8-bit rgb the emitted hex encodes, the same governing background
+/// display endpoint), so the value is identical, not an approximation.
+///
+/// For a [`Solid`](BgInput::Solid) background the governing display endpoint is
+/// polarity-independent (`lo == hi`), so no sign is threaded; a genuine luminance
+/// interval would need the real role polarity here (mirrors the assumption in
+/// [`reconstruct_solved`]).
+pub(crate) fn reconstruct_achieved_dj(
+    emitted_rgb8: [u8; 3],
+    bg: &BgInput,
+    vc: &ViewingConditions,
+) -> f64 {
+    let bg_disp = bg.governing_display(1.0);
+    let bg_disp_linear = [
+        srgb_gamma_inv(bg_disp[0]),
+        srgb_gamma_inv(bg_disp[1]),
+        srgb_gamma_inv(bg_disp[2]),
+    ];
+    let jp_bg = jp_of_linear(bg_disp_linear, vc);
+    let rgb_linear = crate::spaces::srgb::srgb_from_rgb8(emitted_rgb8);
+    (jp_of_linear(rgb_linear, vc) - jp_bg).abs()
 }
 
 /// Whether a measured signed perceptual contrast meets the (signed) floor within
@@ -1709,6 +1752,49 @@ mod tests {
                 Unreachable::ExceedsRange { .. } | Unreachable::PolarityMismatch { .. }
             ),
             "{err:?}"
+        );
+    }
+
+    #[test]
+    fn dj_degradation_reports_honest_achieved_dj() {
+        // Закон 2 ADR-0002: цель за стеной оси J' деградирует к ближайшему
+        // достижимому с флагом. `achieved_dj` обязан быть ЗАМЕРОМ на отданном
+        // hex (та же честность, что glow.degraded): перечитываем hex и
+        // сверяем |ΔJ'| против фона независимо.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#101012").unwrap();
+        let d = solve_dj(&bg, 300.0, -1.0, Hue::deg(0.0), ChromaPolicy::Neutral, &vc)
+            .expect("degradation returns Ok, not Err");
+        assert!(d.degraded, "300 J' на почти-чёрном обязан деградировать");
+        assert!(
+            d.achieved_dj < 300.0,
+            "стена оси ниже цели: achieved {:.2}",
+            d.achieved_dj
+        );
+        // Независимый перезамер на отданном hex.
+        let fg = srgb_from_hex(d.solved.hex()).unwrap();
+        let bg_disp = bg.governing_display(-1.0);
+        let bg_lin = [
+            srgb_gamma_inv(bg_disp[0]),
+            srgb_gamma_inv(bg_disp[1]),
+            srgb_gamma_inv(bg_disp[2]),
+        ];
+        let measured = (jp_of_linear(fg, &vc) - jp_of_linear(bg_lin, &vc)).abs();
+        assert!(
+            (measured - d.achieved_dj).abs() < 1e-9,
+            "achieved_dj {:.6} must equal the re-measured |dJ'| {:.6} on the emitted hex",
+            d.achieved_dj,
+            measured
+        );
+
+        // Парный контроль: достижимая ступень — точное решение без флага.
+        let ok = solve_dj(&bg, 10.0, -1.0, Hue::deg(0.0), ChromaPolicy::Neutral, &vc)
+            .expect("in-budget dJ' solves");
+        assert!(!ok.degraded);
+        assert!(
+            (ok.achieved_dj - 10.0).abs() <= DJ_BUDGET,
+            "in-budget achieved {:.3}",
+            ok.achieved_dj
         );
     }
 
@@ -2625,8 +2711,9 @@ mod tests {
             .map(|(role, res)| {
                 let v = match res {
                     Resolved::Color { solved, .. } => solved.hex().to_string(),
-                    // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо здесь.
+                    // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо здесь.
                     Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+                    Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
                     Resolved::None => "none".to_string(),
                     Resolved::Unreachable(_) => "unreach".to_string(),
                 };

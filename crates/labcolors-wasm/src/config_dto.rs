@@ -153,6 +153,10 @@ pub enum RoleRecipeDto {
         source: LadderSourceDto,
         position: String,
     },
+    Glow {
+        source: LadderSourceDto,
+        step: String,
+    },
     PairFill {
         source: LadderSourceDto,
     },
@@ -286,6 +290,11 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
 
     fn try_from(r: RoleRecipeDto) -> Result<Self, String> {
         Ok(match r {
+            RoleRecipeDto::Glow { source, step } => RoleRecipe::Glow {
+                source: source.into(),
+                step: labcolors_core::glow::GlowStep::parse(&step)
+                    .map_err(|bad| format!("roles.*.step: неизвестная ступень glow `{bad}` (ожидается subtle|base|bloom)"))?,
+            },
             RoleRecipeDto::TextAnchor { fraction, floor } => RoleRecipe::TextAnchor {
                 fraction,
                 floor: floor.into(),
@@ -418,6 +427,10 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
 
     fn try_from(r: &RoleRecipe) -> Result<Self, String> {
         Ok(match r {
+            RoleRecipe::Glow { source, step } => RoleRecipeDto::Glow {
+                source: source.try_into()?,
+                step: step.key().to_string(),
+            },
             RoleRecipe::TextAnchor { fraction, floor } => RoleRecipeDto::TextAnchor {
                 fraction: *fraction,
                 floor: match floor {

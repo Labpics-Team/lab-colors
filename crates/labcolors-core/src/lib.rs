@@ -4,6 +4,7 @@ pub mod accent;
 pub mod alpha;
 pub mod cleanliness;
 pub mod config;
+pub mod glow;
 pub mod ladder;
 pub mod lcs;
 pub mod lpc;
@@ -26,6 +27,7 @@ pub(crate) mod chromafast;
 mod golden_tests;
 
 pub use accent::Accent;
+pub use alpha::composite_over_encoded;
 pub use cleanliness::{
     DefectContext, Theme, confidence as cleanliness_confidence,
     confidence_from_hex as cleanliness_confidence_from_hex, drab, drab_in_context,
@@ -37,6 +39,10 @@ pub use config::{
     VcPreset, labui_reference,
 };
 pub use curve::ColorCurve;
+pub use glow::{
+    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_SUBTLE_DJ, GlowSolve, glow_layers_from_source,
+    screen_layer_over_encoded, solve_screen_alpha_for_dj,
+};
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{
@@ -49,6 +55,8 @@ pub use solve::{
     Unreachable, solve, solve_many,
 };
 pub use spaces::oklch::{oklch_css_from_hex, oklch_from_hex};
+pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
+pub use spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 pub use spaces::vc::ViewingConditions;
 
 /// Компилирует rust-блоки корневого README как doctest-ы: их API-примеры

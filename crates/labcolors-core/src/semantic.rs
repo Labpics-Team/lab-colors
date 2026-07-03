@@ -524,6 +524,17 @@ pub enum RoleSpec {
     /// ([`LadderPosition::alpha_pair`](crate::ladder::LadderPosition::alpha_pair)):
     /// у акцентов пара равна, но скелетон-база пер-темна (стаб light @8 / dark @12),
     /// поэтому альфа выбирается по теме резолва, как и тинт.
+    /// Свечение — добавление света (labui ADR-0002 §5): screen-слой цвета
+    /// источника, интенсивность решается солвером под контрактную ступень
+    /// [`crate::glow::GlowStep`] на фактическом фоне резолва. Эмиссия — пара
+    /// слоёв (core = пересвет, halo = источник) + α; оператор потребителя —
+    /// `mix-blend-mode: screen` (контрактный, не темнит по построению).
+    Glow {
+        /// Пер-темный кодированный якорь источника (как у лестницы).
+        tint: crate::ladder::LadderTint,
+        /// Контрактная ступень стека.
+        step: crate::glow::GlowStep,
+    },
     /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
     /// перцептивной стороны лейбла в штатной полярности; солид-эмиссия.
     PairFill {
@@ -1145,11 +1156,22 @@ pub enum Resolved {
     /// the strict hierarchy could not hold and the role was demoted to the
     /// smallest distinguishable step below — an honest, flagged degradation
     /// rather than a silent two-roles-one-colour collapse. See the module docs.
-    Color { solved: Solved, compressed: bool },
+    ///
+    /// `achieved_dj` — честный замер |ΔJ'| на отданном hex для dJ'-ролей
+    /// (симметрия честности с [`GlowResolved::achieved_dj`]); `None` у
+    /// контраст-ролей (их метрика — Lc, он в [`Solved::lc`]).
+    Color {
+        solved: Solved,
+        compressed: bool,
+        achieved_dj: Option<f64>,
+    },
     /// Полупрозрачная роль лестницы/альфа-аналога: `rgba(tint, α)`, которую
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
     /// Несёт солид-композит на фоне резолва для честного замера контраста.
     Translucent(TranslucentResolved),
+    /// Свечение: screen-слои (core, halo) + решённая интенсивность
+    /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
+    Glow(GlowResolved),
     /// The honest zero of the [`Role::None`] token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
@@ -1180,6 +1202,14 @@ pub struct TranslucentResolved {
     composite_lc: f64,
     /// WCAG 2.1 контраст-отношение композита против фона резолва (1–21).
     composite_wcag: f64,
+    /// Композит отличим от фона на 8-битной сетке дисплея (ADR-0002, закон 2).
+    ///
+    /// `false` — вырожденный случай «тинт ≈ фон»: квантованный композит
+    /// побайтно равен квантованному фону, эмиссия роли — пиксельный no-op
+    /// (класс, признанный в `ladder.rs`: «тинт ≈ фон ⇒ dJ = 0 при любой α»;
+    /// до этого флага такие тени/свечения проходили как валидный резолв
+    /// молча). Параметр-свободный замер: сетка дисплея, не политика.
+    composite_distinct: bool,
 }
 
 impl TranslucentResolved {
@@ -1207,6 +1237,54 @@ impl TranslucentResolved {
     pub fn composite_wcag(&self) -> f64 {
         self.composite_wcag
     }
+
+    /// Композит отличим от фона резолва на 8-битной сетке дисплея.
+    ///
+    /// `false` — эмиссия роли является пиксельным no-op на этом фоне
+    /// (вырожденный тинт ≈ фон); потребитель обязан считать такую
+    /// тень/свечение невидимой, а не «решённой» (ADR-0002, закон 2).
+    pub fn composite_distinct(&self) -> bool {
+        self.composite_distinct
+    }
+}
+
+/// Резолв свечения: двухслойная анатомия + решённая интенсивность.
+///
+/// Слои — [`crate::glow::glow_layers_from_source`] (halo = источник, core =
+/// пересвет); α — [`crate::glow::solve_screen_alpha_for_dj`] под контрактную
+/// ступень на фактическом фоне; `degraded` — честный флаг закона 2 ADR-0002
+/// (цель недостижима даже при α = 1, например на белом — screen гаснет
+/// физически; возвращён ближайший достижимый шаг).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlowResolved {
+    core_hex: String,
+    halo_hex: String,
+    alpha: f64,
+    achieved_dj: f64,
+    degraded: bool,
+}
+
+impl GlowResolved {
+    /// Слой пересвета (малый радиус), `#RRGGBB`.
+    pub fn core_hex(&self) -> &str {
+        &self.core_hex
+    }
+    /// Слой ореола (большой радиус) — источник, `#RRGGBB`.
+    pub fn halo_hex(&self) -> &str {
+        &self.halo_hex
+    }
+    /// Решённая интенсивность screen-слоя `(0, 1]`.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+    /// Фактический |ΔJ'| композита от фона (замер на эмитируемом hex).
+    pub fn achieved_dj(&self) -> f64 {
+        self.achieved_dj
+    }
+    /// Цель недостижима — возвращён ближайший достижимый шаг (ADR-0002).
+    pub fn degraded(&self) -> bool {
+        self.degraded
+    }
 }
 
 impl Resolved {
@@ -1216,6 +1294,7 @@ impl Resolved {
         Resolved::Color {
             solved,
             compressed: false,
+            achieved_dj: Option::None,
         }
     }
 
@@ -1227,9 +1306,17 @@ impl Resolved {
         }
     }
 
-    /// Whether the hierarchy was compressed at this role: the legal floor forced
-    /// it onto (or just below) its senior, so its place in the order is
-    /// non-strict. `false` for the zero token and unreachable roles.
+    /// Whether this role's contract was **degraded to the nearest achievable**
+    /// (закон 2 ADR-0002) — the emitted colour honours the contract as closely
+    /// as physics allows, but not exactly:
+    ///
+    /// - contrast roles: the legal floor forced the colour onto (or just below)
+    ///   its senior, so its place in the hierarchy order is non-strict;
+    /// - decorative dJ' roles: the requested |ΔJ'| sits past the wall of the
+    ///   J' axis (or in a quantisation gap) — the colour with the closest
+    ///   achievable |ΔJ'| was emitted instead.
+    ///
+    /// `false` for the zero token and unreachable roles.
     pub fn compressed(&self) -> bool {
         matches!(
             self,
@@ -1248,6 +1335,8 @@ impl Resolved {
         match self {
             Resolved::Color { solved, .. } => Some(solved.lc()),
             Resolved::Translucent(r) => Some(r.composite_lc),
+            // Свечение — не контраст-роль: его контракт — |ΔJ'| ступени, не Lc.
+            Resolved::Glow(_) => Option::None,
             Resolved::None => Some(0.0),
             Resolved::Unreachable(_) => Option::None,
         }
@@ -1258,6 +1347,15 @@ impl Resolved {
     pub fn translucent(&self) -> Option<&TranslucentResolved> {
         match self {
             Resolved::Translucent(r) => Some(r),
+            _ => Option::None,
+        }
+    }
+
+    /// Слои свечения [`Glow`](Resolved::Glow)-роли, если роль решилась в
+    /// свечение. `None` для остальных исходов (паритет с [`Self::translucent`]).
+    pub fn glow(&self) -> Option<&GlowResolved> {
+        match self {
+            Resolved::Glow(g) => Some(g),
             _ => Option::None,
         }
     }
@@ -1323,15 +1421,28 @@ impl ResolveContext {
     }
 
     /// The signed range contract for a decorative JND role: the chosen polarity's
-    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`] (or 15.0 under high contrast),
-    /// no readability floor.
+    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`], no readability
+    /// floor.
+    ///
+    /// Under high contrast the floor delta `IC_DECORATIVE_FLOOR_MIN −
+    /// DECORATIVE_FLOOR_MIN` is applied as an ORDER-PRESERVING uniform shift on
+    /// top of the regular floored magnitude — not as a `max` with the IC floor.
+    /// A plain `max(|m|, 15.0)` collapsed every decorative magnitude below 15
+    /// (the whole shadow stack 8/9.5/11.5/14 and the separator) onto one
+    /// identical target, so under `-ic` all four shadows resolved to the same
+    /// byte-identical colour, violating the stack's strictly-ascending contract
+    /// and silently mutating the owner-measured Lc deltas. The shift keeps every
+    /// pairwise gap exactly as measured while guaranteeing the result is at
+    /// least `IC_DECORATIVE_FLOOR_MIN` (any input already sits at or above
+    /// `DECORATIVE_FLOOR_MIN` after the regular floor).
     fn decorative_contract(&self, magnitude: f64) -> Contract {
-        let floor = if self.high_contrast {
-            IC_DECORATIVE_FLOOR_MIN
+        let floored = magnitude.abs().max(DECORATIVE_FLOOR_MIN);
+        let effective = if self.high_contrast {
+            floored + (IC_DECORATIVE_FLOOR_MIN - DECORATIVE_FLOOR_MIN)
         } else {
-            DECORATIVE_FLOOR_MIN
+            floored
         };
-        let target = self.polarity.sign() * magnitude.abs().max(floor);
+        let target = self.polarity.sign() * effective;
         // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
         Contract::range(target, target)
     }
@@ -1405,9 +1516,16 @@ fn resolve_spec_in(
         RoleSpec::DecorativeDj { magnitude_dj } => {
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
-            // `solve_with_chroma`.
+            // `solve_with_chroma`. Недостижимая цель (стена оси J' / квантовая
+            // дыра) деградирует к ближайшему достижимому с флагом `compressed`
+            // (закон 2 ADR-0002 — смысл флага тот же, что у контраст-ролей:
+            // «контракт занят ближайшим честным, не точным»).
             return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
-                Ok(solved) => Resolved::color(solved),
+                Ok(d) => Resolved::Color {
+                    solved: d.solved,
+                    compressed: d.degraded,
+                    achieved_dj: Some(d.achieved_dj),
+                },
                 Err(reason) => Resolved::Unreachable(reason),
             };
         }
@@ -1438,6 +1556,32 @@ fn resolve_spec_in(
                 alpha_light
             };
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
+        }
+        RoleSpec::Glow { tint, step } => {
+            // Свечение: halo = якорь источника по теме; core — пересвет;
+            // интенсивность решается под контрактную ступень на фоне резолва.
+            let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
+            let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc) {
+                Ok(pair) => pair,
+                Err(e) => return Resolved::Unreachable(Unreachable::InvalidInput(e)),
+            };
+            let bg_hex =
+                crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+            return match crate::glow::solve_screen_alpha_for_dj(
+                &halo_hex,
+                &bg_hex,
+                step.target_dj(),
+                vc,
+            ) {
+                Ok(g) => Resolved::Glow(GlowResolved {
+                    core_hex,
+                    halo_hex,
+                    alpha: g.alpha,
+                    achieved_dj: g.achieved_dj,
+                    degraded: g.degraded,
+                }),
+                Err(e) => Resolved::Unreachable(Unreachable::InvalidInput(e)),
+            };
         }
         RoleSpec::AlphaAnalog { of, alpha } => {
             // Альфа-аналог: солид-цель фиксирована (тинт источника по теме),
@@ -1575,12 +1719,17 @@ fn finish_rgba(
     let bg_linear = decode(bg_encoded);
     let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
     let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
+    // Отличимость на сетке дисплея (ADR-0002): сравнение по 8-битным hex — тому
+    // же представлению, в котором браузер отдаст пиксели. Фон квантуется тем же
+    // форматтером (off-grid фон, напр. blur-среднее, честно садится на байт).
+    let composite_distinct = composite_hex != hex_from_srgb_encoded(bg_encoded);
     Resolved::Translucent(TranslucentResolved {
         tint_hex: hex_from_srgb_encoded(tint_encoded),
         alpha,
         composite_hex,
         composite_lc,
         composite_wcag,
+        composite_distinct,
     })
 }
 
@@ -1650,17 +1799,17 @@ fn resolve_dj(
     polarity: Polarity,
     chroma: RoleChroma,
     vc: &ViewingConditions,
-) -> Result<Solved, Unreachable> {
+) -> Result<solve::DjSolved, Unreachable> {
     let sign = polarity.sign();
     if let RoleChroma::Curve { .. } = chroma {
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
         let probe = solve::solve_dj(bg, magnitude_dj, sign, probe_hue, probe_chroma, vc)?;
-        let mut l_plan = solved_oklab_lightness(&probe);
+        let mut l_plan = solved_oklab_lightness(&probe.solved);
         let mut solved = probe;
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
             solved = solve::solve_dj(bg, magnitude_dj, sign, hue, policy, vc)?;
-            let l_new = solved_oklab_lightness(&solved);
+            let l_new = solved_oklab_lightness(&solved.solved);
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
             }
@@ -1999,14 +2148,18 @@ fn enforce_text_hierarchy(
         };
         entry.1 = match (demoted, senior_solved, &entry.1) {
             // A distinguishable, still-legal step below the senior.
+            // achieved_dj сбрасывается: цвет заменён сжатием, прежний замер
+            // ему не принадлежит (честнее None, чем чужое число).
             (Some(solved), _, _) => Resolved::Color {
                 solved,
                 compressed: true,
+                achieved_dj: Option::None,
             },
             // No room to separate: equal to the senior by copy, flagged.
             (None, Some(solved), Resolved::Color { .. }) => Resolved::Color {
                 solved,
                 compressed: true,
+                achieved_dj: Option::None,
             },
             (None, _, other) => other.clone(),
         };
@@ -2638,9 +2791,9 @@ mod tests {
         set.iter()
             .find(|(r, _)| *r == role)
             .and_then(|(_, res)| match res {
-                Resolved::Color { solved, compressed } => {
-                    Some((solved.hex().to_string(), *compressed))
-                }
+                Resolved::Color {
+                    solved, compressed, ..
+                } => Some((solved.hex().to_string(), *compressed)),
                 _ => None,
             })
     }
@@ -2997,14 +3150,14 @@ mod tests {
     }
 
     #[test]
-    fn dj_off_axis_target_is_honestly_unreachable() {
-        // A dJ' larger than the axis can supply (a big positive step requested on a
-        // near-white surface, where the foreground would need J' > 100) surfaces
-        // Unreachable::DjUnreachable — never a silent clip to white.
+    fn dj_off_axis_target_degrades_to_nearest_with_flag() {
+        // A dJ' larger than the axis can supply (300 J' on near-black — the
+        // foreground would need J' ≈ −290) деградирует по закону 2 ADR-0002:
+        // ближайший достижимый цвет (стена оси — почти белый) с флагом
+        // compressed. Прежний голый Unreachable::DjUnreachable наказывал
+        // владельца ошибкой за физическую стену; тихий клип БЕЗ флага —
+        // обратная нечестность. Флаг — граница между ними.
         let vc = ViewingConditions::srgb();
-        // Force light-on-dark polarity by overriding a fill to a huge dark-theme-
-        // style step on a near-white bg is still dark-on-light; instead request a
-        // separation past the dark wall on near-black.
         let table = RoleTable::default().with(
             Role::FillPrimary,
             RoleSpec::DecorativeDj {
@@ -3013,8 +3166,35 @@ mod tests {
         );
         let bg = BgInput::solid("#101012").unwrap();
         match resolve(&bg, Role::FillPrimary, &table, &vc) {
-            Resolved::Unreachable(Unreachable::DjUnreachable { .. }) => {}
-            other => panic!("expected DjUnreachable for an off-axis dJ', got {other:?}"),
+            Resolved::Color {
+                solved, compressed, ..
+            } => {
+                assert!(compressed, "off-axis dJ' must carry the degradation flag");
+                // Стена светлой стороны: решённый цвет заметно светлее фона
+                // (light-on-dark полярность на #101012) — не тихий возврат фона.
+                let rgb = crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap();
+                let l = crate::spaces::oklab::srgb_linear_to_oklab(rgb)[0];
+                assert!(
+                    l > 0.9,
+                    "degraded colour must sit at the light wall, got L={l:.3} ({})",
+                    solved.hex()
+                );
+            }
+            other => panic!("expected degraded Color for an off-axis dJ', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dj_in_budget_target_is_not_flagged() {
+        // Парный контроль: достижимая ступень (дефолтная таблица на белом)
+        // решается точно и БЕЗ флага — деградация не размазывается на всех.
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        match resolve(&bg, Role::FillPrimary, &RoleTable::default(), &vc) {
+            Resolved::Color { compressed, .. } => {
+                assert!(!compressed, "in-budget dJ' must not be flagged")
+            }
+            other => panic!("expected Color, got {other:?}"),
         }
     }
 
@@ -3239,6 +3419,8 @@ mod tests {
                     .jp;
                 let set = resolve_set(&bg, &table, &vc);
                 let no_silent_clip = set.iter().all(|(role, r)| match r {
+                    // Свечение не участвует в dJ'-клип-инварианте (не контраст-роль).
+                    Resolved::Glow(_) => true,
                     Resolved::Color { solved, .. } => {
                         if matches!(table.spec(*role), RoleSpec::DecorativeDj { .. }) {
                             let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
@@ -3460,6 +3642,92 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn shadow_stack_is_strictly_ascending_under_increased_contrast() {
+        // Класс-замок корнер-кейса IC (2026-07-03): пол повышенной контрастности
+        // применялся как `max(|m|, 15.0)` и схлопывал ВЕСЬ стек теней
+        // (8/9.5/11.5/14 → 15/15/15/15) плюс сепаратор в один побайтно
+        // одинаковый цвет — строгая лестница нарушалась ровно в `-ic` темах,
+        // которые не гонял ни один тест (`vcs()` не содержит IC-пресетов).
+        // RED до порядкосохраняющего сдвига в `decorative_contract`, GREEN после:
+        // (1) строгий порядок minor < ambient < penumbra < major сохранён;
+        // (2) каждая ступень держит IC-пол 15.0 Lc (с допуском квантования);
+        // (3) измеренные владельцем зазоры стека не мутируют: целевые величины
+        //     сдвинуты равномерно, поэтому попарные разрывы ≥ 1 Lc остаются.
+        let table = RoleTable::default();
+        for (vc, vc_name) in [
+            (ViewingConditions::srgb_high_contrast(), "srgb-ic"),
+            (ViewingConditions::dim_surround_high_contrast(), "dim-ic"),
+        ] {
+            for bg_hex in ["#FFFFFF", "#F2F2F7", "#1C1C1E", "#101012"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let stack = [
+                    Role::ShadowMinor,
+                    Role::ShadowAmbient,
+                    Role::ShadowPenumbra,
+                    Role::ShadowMajor,
+                ];
+                let mags: Vec<f64> = stack.iter().map(|&r| ladder_mag(&set, r)).collect();
+                for pair in mags.windows(2) {
+                    assert!(
+                        pair[0] < pair[1],
+                        "{vc_name} {bg_hex}: IC shadow stack not strictly ascending, |Lc| {mags:?}"
+                    );
+                    assert!(
+                        pair[1] - pair[0] >= 1.0,
+                        "{vc_name} {bg_hex}: IC shadow gap collapsed below 1 Lc: {mags:?}"
+                    );
+                }
+                for (role, mag) in stack.iter().zip(&mags) {
+                    assert!(
+                        *mag >= IC_DECORATIVE_FLOOR_MIN - 1.0,
+                        "{vc_name} {bg_hex}: {} |Lc| {mag:.2} below the IC floor \
+                         {IC_DECORATIVE_FLOOR_MIN} (quantisation tolerance 1.0)",
+                        role.key()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn composite_distinct_flags_degenerate_tint_over_own_background() {
+        // ADR-0002 (закон 2), класс «тинт ≈ фон ⇒ пиксельный no-op»: до флага
+        // вырожденная тень/свечение (тёмный тинт на тёмном фоне, светлый на
+        // светлом) проходила как валидный Translucent молча — composite_lc≈0
+        // вычислялся, но нигде не гейтился. Теперь вырождение ИЗМЕРИМО.
+        use crate::spaces::srgb::srgb_encoded_from_hex;
+        let vc = ViewingConditions::srgb();
+
+        // Вырождение: тинт побайтно равен фону — композит не может отличаться.
+        for (hex, alpha) in [("#101012", 0.22), ("#FFFFFF", 0.08), ("#787880", 0.5)] {
+            let tint = srgb_encoded_from_hex(hex).unwrap();
+            let bg = BgInput::solid(hex).unwrap();
+            let res = resolve_rgba_direct(tint, alpha, &bg, &vc);
+            let t = res
+                .translucent()
+                .unwrap_or_else(|| panic!("{hex} rgba должен резолвиться"));
+            assert!(
+                !t.composite_distinct(),
+                "{hex} @ {alpha}: тинт == фон, композит обязан быть неотличим \
+                 (composite={}, флаг должен быть false)",
+                t.composite_hex()
+            );
+        }
+
+        // Контроль: контрастный тинт на том же фоне отличим уже при малой α.
+        let dark = srgb_encoded_from_hex("#101012").unwrap();
+        let bg_white = BgInput::solid("#FFFFFF").unwrap();
+        let res = resolve_rgba_direct(dark, 0.12, &bg_white, &vc);
+        let t = res.translucent().expect("контрастный rgba резолвится");
+        assert!(
+            t.composite_distinct(),
+            "тёмный тинт @ 0.12 на белом обязан быть отличим (composite={})",
+            t.composite_hex()
+        );
     }
 
     #[test]
@@ -4171,8 +4439,9 @@ mod tests {
                 for (role, res) in &set {
                     let got = match res {
                         Resolved::Color { solved, .. } => solved.hex().to_string(),
-                        // Дефолтная таблица не несёт Ladder/AlphaAnalog — недостижимо.
+                        // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо.
                         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+                        Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
                         Resolved::None => "none".to_string(),
                         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
                     };

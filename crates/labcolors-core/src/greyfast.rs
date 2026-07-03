@@ -71,7 +71,7 @@
 //! Chromatic backgrounds and the `next_breakpoint` animation API are later steps
 //! of the breakpoint-curve chapter; this is the neutral 1-D foundation.
 
-use crate::semantic::{Resolved, Role, RoleTable};
+use crate::semantic::{Resolved, Role, RoleSpec, RoleTable};
 use crate::solve::BgInput;
 use crate::spaces::srgb::grey_code;
 use crate::spaces::vc::ViewingConditions;
@@ -159,6 +159,10 @@ fn reconstruct_set(
 ) -> Option<GreySet> {
     let table = TABLES[idx];
     let base = code * ROLES;
+    // The fast path is only entered for the default table (guarded in
+    // `try_resolve_set`), so the role specs are the default ones — used here to
+    // re-attach `achieved_dj`, which the live path measures for dJ' roles only.
+    let specs = RoleTable::default();
     let mut out: GreySet = Vec::with_capacity(ROLES);
     for (i, &role) in Role::ALL.iter().enumerate() {
         let entry = table[base + i];
@@ -172,9 +176,17 @@ fn reconstruct_set(
                 vc,
             )
             .ok()?;
+            // `achieved_dj` is `Some` iff the live solver produced it — that is,
+            // for decorative dJ' roles (`RoleSpec::DecorativeDj`), the only path
+            // that records a measured `|dJ'|`. It is a pure re-measurement of the
+            // emitted on-grid colour, so replaying it reproduces the live value
+            // bit-for-bit; every other role carries `None`, matching the live set.
+            let achieved_dj = matches!(specs.spec(role), RoleSpec::DecorativeDj { .. })
+                .then(|| crate::solve::reconstruct_achieved_dj(entry.rgb, bg, vc));
             Resolved::Color {
                 solved,
                 compressed: entry.flags & FLAG_COMPRESSED != 0,
+                achieved_dj,
             }
         };
         out.push((role, resolved));
@@ -236,7 +248,13 @@ mod tests {
                 for (role, res) in resolve_set_live(&bg, &table, vc) {
                     let row = match res {
                         Resolved::None => (0u8, 0u8, 0u8, FLAG_NONE),
-                        Resolved::Color { solved, compressed } => {
+                        // `achieved_dj` is not stored — it is a pure re-measurement
+                        // of the emitted colour, re-derived on reconstruction (see
+                        // `reconstruct_set`); only the search flags a `finish` replay
+                        // cannot re-derive are committed.
+                        Resolved::Color {
+                            solved, compressed, ..
+                        } => {
                             let h = solved.hex();
                             let byte = |a, b| u8::from_str_radix(&h[a..b], 16).unwrap();
                             let mut flags = 0u8;
@@ -396,10 +414,12 @@ mod tests {
                 Resolved::Color {
                     solved: sa,
                     compressed: ca,
+                    achieved_dj: da,
                 },
                 Resolved::Color {
                     solved: sb,
                     compressed: cb,
+                    achieved_dj: db,
                 },
             ) => {
                 ca == cb
@@ -408,6 +428,7 @@ mod tests {
                     && sa.wcag_ratio().to_bits() == sb.wcag_ratio().to_bits()
                     && sa.floor_override() == sb.floor_override()
                     && lcs_bits_eq(sa.color(), sb.color())
+                    && da.map(f64::to_bits) == db.map(f64::to_bits)
             }
             _ => false,
         }

@@ -685,6 +685,47 @@ fn quadratic_roots(d: f64, c: f64, b: f64) -> ([f64; 3], usize) {
     (roots, 2)
 }
 
+/// Стена гамута **Display P3** при `(L, h)` — та же бисекция, что
+/// [`max_chroma_bisect`], но валидность кандидата проверяется в ЛИНЕЙНОМ P3
+/// (Oklab → линейный sRGB → XYZ → линейный P3; первые два шага — линейная
+/// алгебра, корректная и за пределами sRGB-куба).
+///
+/// Этап 1 gamut-aware солвера (2026-07-03): геометрия стен и решётка эмиссии;
+/// перевод `Solved`/эмиссии на P3-кандидаты — этап 2. Чистая гамут-геометрия
+/// CSS Color 4 матриц — нуля подгонки (класс M-13 инвентаря).
+// Прод-потребитель — этап 2 (P3-кандидаты солвера); до него читается тестами.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn max_chroma_p3_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
+    let h_ok = h_ok_deg.to_radians();
+    let cos_h = h_ok.cos();
+    let sin_h = h_ok.sin();
+
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+
+    for _ in 0..64 {
+        let mid = (lo + hi) * 0.5;
+        let a = mid * cos_h;
+        let b = mid * sin_h;
+        let rgb =
+            crate::spaces::p3::xyz_to_p3_linear(srgb_to_xyz(oklab_to_srgb_linear([l_ok, a, b])));
+
+        if rgb[0] >= -1e-6
+            && rgb[0] <= 1.0 + 1e-6
+            && rgb[1] >= -1e-6
+            && rgb[1] <= 1.0 + 1e-6
+            && rgb[2] >= -1e-6
+            && rgb[2] <= 1.0 + 1e-6
+        {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    (lo + hi) * 0.5
+}
+
 /// The bisection that [`max_chroma`] replaced, kept (test-only) as the reference
 /// oracle the analytical solver is proven bit-for-bit against on a dense grid.
 #[cfg(test)]

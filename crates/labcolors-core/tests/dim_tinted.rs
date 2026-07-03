@@ -51,7 +51,9 @@ const TINT_HUE_BAND: f64 = 25.0;
 
 fn role_solved(set: &[(Role, Resolved)], role: Role) -> Option<(Solved, bool)> {
     set.iter().find_map(|(r, res)| match res {
-        Resolved::Color { solved, compressed } if *r == role => Some((solved.clone(), *compressed)),
+        Resolved::Color {
+            solved, compressed, ..
+        } if *r == role => Some((solved.clone(), *compressed)),
         _ => None,
     })
 }

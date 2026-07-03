@@ -35,6 +35,8 @@ fn repr(res: &Resolved) -> String {
         Resolved::Color { solved, .. } => solved.hex().to_string(),
         // полупрозрачная роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
+        // Свечение: слои + α — стабильное представление для голденов.
+        Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
         Resolved::None => "none".to_string(),
         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
     }
@@ -729,7 +731,26 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
     ("label-on-neutral", "on-* выброшены: лейбл решается от фона"),
     ("label-on-danger", "on-* выброшены: лейбл решается от фона"),
     // Фоны/оверлеи — ВХОДЫ (набор фонов = конфиг потребителя) или alpha.rs-роли.
-    ("bg-*", "набор фонов = конфиг потребителя, не роль эмиссии"),
+    // СУЖЕНО (ADR-0002 labui §1, 2026-07-03): базовый фон остаётся ВХОДОМ
+    // (bg-primary/secondary/... — маппинг потребителя на тона), но выведенные
+    // ТОНА лестницы фонов (bg-tone-*) — легитимные dJ'-эмиссии солвера:
+    // «еле отличимо»-ступени — контракт движка, не рукописные hex потребителя.
+    (
+        "bg-primary*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
+    (
+        "bg-secondary*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
+    (
+        "bg-tertiary*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
+    (
+        "bg-grouped-*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
     (
         "bg-overlay-*",
         "оверлеи → alpha.rs-роли (вне поглощаемого GAP)",
@@ -890,8 +911,10 @@ fn s_perc_min_recompute_bites_on_anchor_mutation() {
 /// ЧЕСТНАЯ НАХОДКА (не подгонка): для Danger/Success/Warning идентичность
 /// держится (их семейства далеки от синего бренда labui). Для **Info** она НЕ
 /// держится: Info→Blue (Oklab h≈259.9°) отстоит от бренда `#007AFF` (h≈257.4°)
-/// лишь на ≈2.5° — НИЖЕ порога разделения (`S_PERC_MIN`≈0.0687 хорды ≈ 3.5° при
-/// хроме blue). Сентимент-солвер КОРРЕКТНО смещает Info, чтобы он был отличим от
+/// лишь на ≈2.5° — НИЖЕ порога разделения (`S_PERC_MIN`≈0.0687 хорды ≈ 20.5° при
+/// хроме blue ≈0.19: 2·asin(0.0687/0.38); прежняя оценка «3.5°» занижала
+/// фактическое смещение Info (≈18–20°, до ≈277.9° в фиолетово-синий) почти
+/// на порядок). Сентимент-солвер КОРРЕКТНО смещает Info, чтобы он был отличим от
 /// бренда (иначе «информационный» и «брендовый» синий слились бы). Это
 /// заземлённое поведение солвера (#20/#55/#65), а не баг: сырой якорь совпадал
 /// бы лишь если бренд был далёк от синего. Расхождение задокументировано, не
@@ -1242,11 +1265,10 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(52 199 89 / 0.2)",
             "rgb(48 209 88 / 0.2)",
         ),
-        (
-            "fx-glow-brand",
-            "rgb(0 122 255 / 0.522)",
-            "rgb(74 143 255 / 0.522)",
-        ),
+        // fx-glow-brand выведен из значенческой сверки со стабом: с 2026-07-03
+        // это kind glow (screen-слои + решённая α), а не Ladder@52 — стаб-строка
+        // rgba больше не является его контрактом. Новая эмиссия закреплена
+        // отдельным тестом `glow_roles_resolve_screen_layers`.
         // Края нейтрали пер-темные: контур (edge) и инверт — из стаба дословно.
         ("fx-focus-ring-neutral", "rgb(16 16 18)", "rgb(246 248 250)"),
         (
@@ -1317,11 +1339,8 @@ fn representative_roles_match_stub_values_light_and_dark() {
             "rgb(16 16 18 / 0.122)",
             "rgb(16 16 18 / 0.2)",
         ),
-        (
-            "fx-glow-neutral",
-            "rgb(255 255 255 / 0.522)",
-            "rgb(255 255 255 / 0.522)",
-        ),
+        // fx-glow-neutral выведен из сверки со стабом: kind glow с 2026-07-03
+        // (см. комментарий у fx-glow-brand выше и тест glow_roles_resolve_screen_layers).
     ];
 
     for (role, want_light, want_dark) in cases {
@@ -1765,5 +1784,243 @@ fn achromatic_hue_sources_are_handled_honestly() {
         r.tint_hex(),
         "#FF3B30",
         "при сером бренде сентимент = сырой якорь семейства (разведение отключено)"
+    );
+}
+
+/// Волна 2 ADR-0002 labui §5 — КОМПОЗИЦИОННЫЙ контракт FX-стека теней.
+///
+/// Прежний контракт держал только пер-токенный порядок (|Lc| каждой ступени
+/// сама по себе). Закон владельца сильнее: токены НАСЛАИВАЮТСЯ (minor под
+/// ambient под penumbra под major), и прогрессивным обязан быть СУММАРНЫЙ
+/// эффект composited-стека. Здесь стек компонуется честной альфа-композицией
+/// (`alpha::composite_over_encoded`, тот же оператор, что у браузера) слой за
+/// слоем над светлым фоном паспорта, и проверяется:
+///   (1) каждый слой меняет пиксели: state_k ≠ state_{k-1} на 8-битной сетке
+///       (класс `composite_distinct`, ADR-0002 lab-colors);
+///   (2) различимость стека от фона строго растёт: |ΔJ'|(state_k, bg)
+///       возрастает по k — прогрессия именно КОМПОЗИЦИИ, не отдельных ступеней.
+///
+/// Тёмная тема намеренно не в этом тесте: elevation тёмной темы — тональная
+/// лестница фонов (bg-tone-*, dj-anchor контракты этого же поезда), тень на
+/// тёмном вырождается физически (тинт ≈ фон — класс, признанный ladder.rs);
+/// glow-стека не существует (fx-glow-* — одиночные позиции @52).
+#[test]
+fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
+    use crate::alpha::composite_over_encoded;
+    use crate::lcs::LcsColor;
+    use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
+
+    let cfg = labui_reference();
+    let table = cfg
+        .compile_named_role_table()
+        .expect("фикстура labui компилируется");
+    let vc = ViewingConditions::srgb();
+    let bg_hex = "#FFFFFF"; // светлый якорь паспорта — фон резолва светлой темы
+    let bg = BgInput::solid(bg_hex).unwrap();
+    let set = resolve_named_set(&bg, &table, &vc);
+
+    let stack = [
+        "fx-shadow-minor",
+        "fx-shadow-ambient",
+        "fx-shadow-penumbra",
+        "fx-shadow-major",
+    ];
+    let bg_jp = LcsColor::from_hex_with_vc(bg_hex, &vc).unwrap().jp;
+    let mut state = srgb_encoded_from_hex(bg_hex).unwrap();
+    let mut prev_delta = 0.0_f64;
+    for name in stack {
+        let (_, resolved) = set
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name} отсутствует в наборе"));
+        let t = resolved
+            .translucent()
+            .unwrap_or_else(|| panic!("{name} должен быть Translucent"));
+        let tint = srgb_encoded_from_hex(t.tint_hex()).unwrap();
+        let prev_hex = hex_from_srgb_encoded(state);
+        state = composite_over_encoded(tint, t.alpha(), state);
+        let state_hex = hex_from_srgb_encoded(state);
+        // (1) слой меняет пиксели поверх уже наслоённого стека.
+        assert_ne!(
+            state_hex, prev_hex,
+            "{name}: наслоение слоя не изменило композит ({state_hex}) — вырожденная ступень стека"
+        );
+        // (2) суммарная различимость стека от фона строго растёт.
+        let jp = LcsColor::from_hex_with_vc(&state_hex, &vc).unwrap().jp;
+        let delta = (jp - bg_jp).abs();
+        assert!(
+            delta > prev_delta,
+            "{name}: композиция стека не прогрессивна: |ΔJ'| {delta:.4} ≤ пред. {prev_delta:.4}"
+        );
+        prev_delta = delta;
+    }
+}
+
+/// Kind glow (labui ADR-0002 §5): screen-слои + решённая интенсивность.
+///
+/// Закрепляет новую эмиссию fx-glow-* (взамен выведенных из стаб-сверки
+/// Ladder@52-строк): (а) на тёмной базе паспорта свечение решается БЕЗ
+/// деградации, halo = пер-темный якорь источника, α ∈ (0, 1], фактический шаг
+/// в допуске квантования от контрактной ступени Base; (б) на белом фоне
+/// белое нейтральное свечение деградирует ЧЕСТНО (screen гаснет физически) —
+/// флаг degraded, не молчание и не ошибка (ADR-0002, закон 2).
+#[test]
+fn glow_roles_resolve_screen_layers() {
+    let cfg = labui_reference();
+    let table = cfg
+        .compile_named_role_table()
+        .expect("фикстура labui компилируется");
+
+    // (а) тёмная база: полноценное свечение бренда.
+    let bg_dark = BgInput::solid("#101012").unwrap();
+    let vc_dark = ViewingConditions::dim_surround();
+    let set = resolve_named_set(&bg_dark, &table, &vc_dark);
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "fx-glow-brand")
+        .expect("fx-glow-brand в наборе");
+    let g = match res {
+        Resolved::Glow(g) => g,
+        other => panic!("fx-glow-brand должен быть Resolved::Glow, получено {other:?}"),
+    };
+    assert!(
+        !g.degraded(),
+        "бренд-свечение на тёмной базе не деградирует"
+    );
+    assert_eq!(g.halo_hex(), "#4A8FFF", "halo = пер-темный якорь бренда");
+    assert!(g.alpha() > 0.0 && g.alpha() <= 1.0);
+    let target = crate::glow::GlowStep::Base.target_dj();
+    assert!(
+        g.achieved_dj() >= target - 1e-9 && g.achieved_dj() - target < 0.5,
+        "шаг ступени Base: достигнуто {:.4} (ожидалось [цель, цель+0.5))",
+        g.achieved_dj()
+    );
+    // Анатомия: core светлее halo (пересвет).
+    let vc = &vc_dark;
+    let jp = |hex: &str| crate::lcs::LcsColor::from_hex_with_vc(hex, vc).unwrap().jp;
+    assert!(jp(g.core_hex()) > jp(g.halo_hex()), "core светлее halo");
+
+    // (б) белое свечение на белом — честная деградация.
+    let bg_white = BgInput::solid("#FFFFFF").unwrap();
+    let set = resolve_named_set(&bg_white, &table, &ViewingConditions::srgb());
+    let (_, res) = set
+        .iter()
+        .find(|(n, _)| n == "fx-glow-neutral")
+        .expect("fx-glow-neutral в наборе");
+    match res {
+        Resolved::Glow(g) => {
+            assert!(
+                g.degraded(),
+                "белое свечение на белом обязано деградировать честно"
+            );
+            assert!(g.achieved_dj() < 0.5, "screen над белым гаснет физически");
+        }
+        other => panic!("fx-glow-neutral должен быть Resolved::Glow, получено {other:?}"),
+    }
+}
+
+/// Попарная различимость сентиментов между СОБОЙ (аудит 2026-07-03).
+///
+/// Модель разводит каждый сентимент от БРЕНДА (`s_min` — хорда до бренда);
+/// попарные дистанции сентиментов между собой ею прямо не гарантируются
+/// (Warning↔Danger держит только категориальный пол). Этот тест ЗАМЕРЯЕТ
+/// попарные Oklab-ab-дистанции решённых labui-солидов по всем четырём
+/// режимам против конфиг-порога `s_perc_min` — того же порога перцептивной
+/// различимости, что закон применяет к бренду.
+///
+/// ИСТОРИЯ: находка S-02 (2026-07-03) — light-ic Warning↔Success слипались
+/// (ab ≈ 0.042 < 0.0687): flip-ветка при ДАЛЁКОМ бренде зеркалила Warning
+/// через полкруга в зелень к Success. ВЫЛЕЧЕНО тем же днём многотельной
+/// легальностью (двухфазная оккупация, `sentiment_solid_for_mode`):
+/// покоящиеся сентименты — неподвижные оккупанты (идентичность якорей цела),
+/// смещённые держат выведенный угловой отступ от их зон — Warning light-ic
+/// ложится в янтарную дугу у пола вместо зелени. Тест держит закон:
+/// ВСЕ пары ≥ порога во всех режимах, без исключений.
+#[test]
+fn labui_sentiment_solids_keep_pairwise_ab_distance() {
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::srgb_gamma_inv;
+
+    let cfg = labui_reference();
+    let s_perc_min = cfg.sentiment_s_perc_min().expect("порог из якорей labui");
+    let vcs = [
+        crate::spaces::vc::ViewingConditions::srgb(),
+        crate::spaces::vc::ViewingConditions::dim_surround(),
+        crate::spaces::vc::ViewingConditions::srgb_high_contrast(),
+        crate::spaces::vc::ViewingConditions::dim_surround_high_contrast(),
+    ];
+    for (mode_idx, vc) in vcs.iter().enumerate() {
+        let mut solids: Vec<(String, [f64; 3])> = Vec::new();
+        for cat in &cfg.sentiments.categories {
+            let tint = cfg
+                .compile_sentiment_tint("pairwise-probe", &cat.name)
+                .expect("labui-сентимент компилируется");
+            let e = tint.for_vc(vc);
+            let lab = srgb_linear_to_oklab([
+                srgb_gamma_inv(e[0]),
+                srgb_gamma_inv(e[1]),
+                srgb_gamma_inv(e[2]),
+            ]);
+            solids.push((cat.name.clone(), lab));
+        }
+        for i in 0..solids.len() {
+            for j in (i + 1)..solids.len() {
+                let (na, a) = &solids[i];
+                let (nb, b) = &solids[j];
+                let d_ab = ((a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                assert!(
+                    d_ab >= s_perc_min,
+                    "режим {mode_idx}: сентименты `{na}` и `{nb}` перцептивно слиплись: \
+                     ab-дистанция {d_ab:.4} < порога {s_perc_min:.4}"
+                );
+            }
+        }
+    }
+}
+
+/// Пин лечения S-02: Warning light-ic — янтарь у пола, не зелень у Success.
+///
+/// RED-proof класса: брендоцентричный закон (пустые зоны, старый путь)
+/// зеркалит IC-Warning через далёкий бренд в зелень (~127°) — тест
+/// удерживает разницу между законами явной, чтобы регресс на однотельный
+/// резолв не прошёл тихо.
+#[test]
+fn warning_light_ic_heals_into_amber_arc_not_green() {
+    let cfg = labui_reference();
+    let tint = cfg
+        .compile_sentiment_tint("s02-probe", "warning")
+        .expect("warning компилируется");
+    let vc_ic = crate::spaces::vc::ViewingConditions::srgb_high_contrast();
+    let healed = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc_ic));
+    let healed_hue = crate::accent::oklab_hue_of(&healed);
+    // Янтарная дуга: над полом Warning (45°), заведомо ниже зелени (< 90°).
+    assert!(
+        (45.0..90.0).contains(&healed_hue),
+        "warning light-ic обязан лечь в янтарь [45°, 90°), получено {healed_hue:.2}° ({healed})"
+    );
+
+    // RED-proof: однотельный закон даёт зелень — контраст с вылеченным.
+    let anchor = &cfg
+        .palette
+        .iter()
+        .find(|f| f.key == "orange")
+        .unwrap()
+        .anchors
+        .light_ic;
+    let brand_ic = &cfg.brand.anchors.light_ic;
+    let single = crate::sentiment::resolve_config_sentiment_solid(
+        anchor,
+        crate::accent::oklab_hue_of(brand_ic),
+        cfg.sentiments.hardness,
+        cfg.sentiments.chroma_fraction,
+        Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
+        1.0,
+        cfg.sentiment_s_perc_min().unwrap(),
+    )
+    .expect("однотельный резолв решается");
+    let single_hue = crate::accent::oklab_hue_of(&single);
+    assert!(
+        single_hue > 110.0,
+        "контраст законов исчез: однотельный давал зелень (~127°), получено {single_hue:.2}°"
     );
 }

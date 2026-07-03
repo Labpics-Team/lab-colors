@@ -34,7 +34,7 @@
 //! | `M_W`           | M-09   | DECLARED-CALIBRATION           | 0.181527 (полуширина доверительного поля confidence) |
 //! | `KAPPA_CORE`    | M-10   | DECLARED-CALIBRATION           | 0.34 (эмпирический concept-floor из v3 retest; не перцептивная константа) |
 //! | `KAPPA_INTERIOR`| M-11   | DECLARED-CALIBRATION           | 0.10 (эмпирический interior-floor из v3 disputed-stratum; не перцептивная константа) |
-//! | `H_Y_DEG`       | M-12   | cited-derived (Zone B slice 4) | 96.9172° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65); hue_weight = (1+cos(h−H_Y))/2 |
+//! | `H_Y_DEG`       | M-12   | cited-derived (Zone B slice 5) | 90.4011° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65, XYZ→Oklab напрямую); hue_weight = (1+cos(h−H_Y))/2 |
 //! | ~~`W_HUE[8]`~~  | M-12   | УДАЛЁН (Zone B slice 4)        | был: подогнанный K=3 Fourier-вектор логистической регрессии — нарушал ZERO observer-fit |
 //! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (чистая геометрия гамута Oklab, верифицирована до f64 — kept as-is) |
 //! | ~~`CEIL_N_TABLE`~~ | M-14 | УДАЛЕНА (Zone B slice 4)       | была: Fourier CEIL_N, подогнана на датасете v3 — более не нужна после BB-замены |
@@ -122,23 +122,41 @@ pub const KAPPA_INTERIOR: f64 = 0.10;
 // Подогнанный вектор K=3 Фурье-регрессии (логистическая регрессия на 738 авторских
 // метках, M-12) заменён выведенным Hanning-окном Бецольда-Брюкке.
 // Формула: hue_weight(h) = (1 + cos(h − H_Y_DEG)) / 2
-// Провенанс: Parry (1967) J. Opt. Soc. Am. 57, 1130–1134 × Якобиан оттенка Oklab.
+// Провенанс: инвариантная точка жёлтого BB 578nm (Purdy 1937; Jacobs & Wascher 1967,
+// J. Opt. Soc. Am. 57, 1155–1156) × Oklab (Ottosson 2020).
 // Инварианты: hue_weight(H_Y_DEG) = 1.0 точно; hue_weight(H_Y_DEG ± 180°) = 0.0 точно;
 // строго монотонное убывание при |h − H_Y_DEG| растёт от 0 до 180°.
 
 /// Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель, D65).
 ///
-/// Вывод:
-///   1. CMF при 578nm: x̄=0.9015, ȳ=0.7470, z̄=0.000 (линейная интерп. CIE 10нм-таблицы:
-///      570nm x̄=0.8425 ȳ=0.7070; 580nm x̄=0.9163 ȳ=0.7570; t=0.8).
-///   2. Нормируем к Y=1: XYZ = (x̄/ȳ, 1, 0) = (1.207, 1.000, 0.000).
-///   3. XYZ → linear sRGB (IEC 61966-2-1 D65 matrix), clamp к гамуту sRGB.
-///   4. linear sRGB → Oklab (Ottosson 2020).
-///   5. h = atan2(b, a) = 96.9°.
+/// Вывод (Zone B slice 5, 2026-07-03 — исправление ошибочной деривации slice 4):
+///   1. CMF при 578nm — линейная интерп. официальной CIE 1931 2° 5нм-таблицы:
+///      575nm (x̄=0.8425, ȳ=0.9154, z̄=0.0018); 580nm (x̄=0.9163, ȳ=0.8700, z̄=0.00165);
+///      t=0.6 → (x̄=0.886780, ȳ=0.888160, z̄=0.001710).
+///   2. Нормируем к Y=1: XYZ = (0.998446, 1.000000, 0.001925).
+///   3. XYZ → Oklab НАПРЯМУЮ через M1/M2 (Ottosson 2020). Проекция в sRGB не нужна:
+///      hue инвариантен к абсолютной радиансности стимула — равномерное
+///      масштабирование LMS′ множит a и b ОДИНАКОВО (линейность M2), отношение
+///      в atan2 не меняется; отдельный верный факт: нулевые суммы строк a,b
+///      матрицы M2 дают a = b = 0 на ахромате (L′=M′=S′).
+///   4. h = atan2(b, a) = 90.4011°.
 ///
-/// Использование: центр Hanning-окна `hue_weight(h)` в Zone B slice 4 (M-12).
-/// Константа выводная, не подогнана.
-pub const H_Y_DEG: f64 = 96.9172;
+/// История slice 4 (значение 96.9172 — ОТОЗВАНО): деривация содержала две ошибки.
+/// (а) CMF-значения были спутаны между строками таблицы (заявленные ȳ=0.7070/0.7570
+///     для 570/580нм — на деле ȳ(570)=0.9520, ȳ(580)=0.8700; 0.7570 — это ȳ(590нм)),
+///     что давало ложный XYZ=(1.207, 1, 0) вместо (0.998, 1, 0.002).
+/// (б) Перед взятием hue цвет клэмпился к гамуту sRGB — покомпонентный клэмп НЕ
+///     сохраняет оттенок: без клэмпа тот же XYZ давал h=69.7°, после клэмпа 96.9°.
+///     Значение 96.9172° было артефактом клэмпа поверх неверного XYZ.
+///
+/// Выбор λ=578nm: инвариантная точка жёлтого Бецольда-Брюкке (Purdy 1937,
+/// Am. J. Psychol. 49, 313–315; подтверждено Jacobs & Wascher 1967,
+/// J. Opt. Soc. Am. 57, 1155–1156). Прежняя цитата «Parry (1967) JOSA 57,
+/// 1130–1134» не существует в литературе и удалена.
+///
+/// Использование: центр Hanning-окна `hue_weight(h)` (M-12).
+/// Константа выводная, не подогнана; воспроизводится скриптом деривации из CMF.
+pub const H_Y_DEG: f64 = 90.4011;
 
 #[inline]
 fn sigmoid(x: f64) -> f64 {
@@ -211,9 +229,11 @@ pub fn depth_mod(l: f64, c: f64, h_deg: f64, b0: f64, bw: f64) -> f64 {
 ///
 /// # Провенанс констант
 ///
-/// - `H_Y_DEG = 96.9172°` — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65).
-///   Вывод: CMF → XYZ → linear sRGB → Oklab (Ottosson 2020) → atan2(b, a).
-///   Цитата: Parry (1967) Table 1 (unique yellow); König & Dieterici (1884) unique-hue loci.
+/// - `H_Y_DEG = 90.4011°` — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65).
+///   Вывод: CMF → XYZ → Oklab напрямую (Ottosson 2020) → atan2(b, a); без sRGB-клэмпа
+///   (клэмп не сохраняет hue — см. историю slice 4 в доке H_Y_DEG).
+///   Цитата: Purdy (1937) — инвариантная точка жёлтого 578nm; Jacobs & Wascher (1967)
+///   J. Opt. Soc. Am. 57, 1155–1156.
 ///
 /// # Инварианты (проверены тестами)
 ///
@@ -266,7 +286,7 @@ pub fn raw_chromatic(l: f64, c: f64, h_deg: f64) -> f64 {
 ///   depth_mod(L, C, h)                           — глубина под cusp-L, взвешенная b-гейтом (M-04/M-05)
 ///
 /// Свойства:
-///   - Выводных констант: только H_Y_DEG = 96.9° (CIE D65 unique yellow, Parry 1967)
+///   - Выводных констант: только H_Y_DEG = 90.4° (CIE D65 unique yellow 578nm, Purdy 1937)
 ///   - Нет подогнанных скаляров: W_HUE/CEIL_N_TABLE/CAL_T/CAL_B — все удалены
 ///   - raw ∈ [0,1] точно (произведение ∈ [0,1] множителей)
 ///   - Строго монотонно в C при фиксированных L, h (через N(C))
@@ -586,7 +606,7 @@ mod tests {
     fn test_muddiness_v3_reference_values() {
         // Olive #6B6B2E (Наиболее грязный — максимальный raw)
         // Провенанс golden: mud = N(C) * hue_weight_BB(h) * depth_mod(L, C, h),
-        // hue_weight_BB(109°) = (1 + cos(109° - 96.9°)) / 2 ≈ 0.989.
+        // hue_weight_BB(109°) = (1 + cos(109° - 90.4°)) / 2 ≈ 0.974.
         let olive_mud = muddiness_from_hex("#6B6B2E").unwrap();
         let olive_conf = confidence_from_hex("#6B6B2E").unwrap();
         assert!(
@@ -594,44 +614,44 @@ mod tests {
             "olive mud is {olive_mud:.6}, expected > 0.30 (BB-диапазон)"
         );
         assert!(
-            (olive_mud - 0.41267217).abs() < 1e-5,
-            "olive mud {olive_mud:.8} != 0.41267217 (Zone B slice 4 BB golden)"
+            (olive_mud - 0.40640072).abs() < 1e-5,
+            "olive mud {olive_mud:.8} != 0.40640072 (Zone B slice 5 H_Y golden)"
         );
         assert!(
-            (olive_conf - 0.02750167).abs() < 1e-4,
-            "olive conf {olive_conf:.8} != 0.02750167"
+            (olive_conf - 0.03241542).abs() < 1e-4,
+            "olive conf {olive_conf:.8} != 0.03241542"
         );
 
         // Babypoop #937C00 (Очень грязный)
-        // hue_weight_BB(96°) = (1 + cos(96° - 96.9°)) / 2 ≈ 0.9999.
+        // hue_weight_BB(96°) = (1 + cos(96° - 90.4°)) / 2 ≈ 0.998.
         let babypoop_mud = muddiness_from_hex("#937C00").unwrap();
         assert!(
             babypoop_mud > 0.20,
             "babypoop mud is {babypoop_mud:.6}, expected > 0.20"
         );
         assert!(
-            (babypoop_mud - 0.33297635).abs() < 1e-5,
-            "babypoop mud {babypoop_mud:.8} != 0.33297635"
+            (babypoop_mud - 0.33220155).abs() < 1e-5,
+            "babypoop mud {babypoop_mud:.8} != 0.33220155"
         );
 
         // Puke #9AAE07 (Умеренно грязный)
         let puke_mud = muddiness_from_hex("#9AAE07").unwrap();
         assert!(
-            (puke_mud - 0.24024764).abs() < 1e-5,
-            "puke mud {puke_mud:.8} != 0.24024764"
+            (puke_mud - 0.23449461).abs() < 1e-5,
+            "puke mud {puke_mud:.8} != 0.23449461"
         );
 
         // Золотые (средний диапазон)
         let gold1_mud = muddiness_from_hex("#9e6c00").unwrap();
         assert!(
-            (gold1_mud - 0.28807528).abs() < 1e-5,
-            "gold1 mud {gold1_mud:.8} != 0.28807528"
+            (gold1_mud - 0.29296999).abs() < 1e-5,
+            "gold1 mud {gold1_mud:.8} != 0.29296999"
         );
 
         let gold2_mud = muddiness_from_hex("#8f6424").unwrap();
         assert!(
-            (gold2_mud - 0.30349357).abs() < 1e-5,
-            "gold2 mud {gold2_mud:.8} != 0.30349357"
+            (gold2_mud - 0.30971375).abs() < 1e-5,
+            "gold2 mud {gold2_mud:.8} != 0.30971375"
         );
 
         // Ранговый порядок: olive > babypoop > gold2 > gold1 > puke >> achromatic
@@ -669,12 +689,12 @@ mod tests {
             "teal mud is {teal_mud:.6}, expected < 0.01 (depth_mod b-гейт)"
         );
         assert!(
-            (teal_mud - 0.00494901).abs() < 1e-5,
-            "teal mud {teal_mud:.8} != 0.00494901 (Zone B slice 4 BB golden)"
+            (teal_mud - 0.00430967).abs() < 1e-5,
+            "teal mud {teal_mud:.8} != 0.00430967 (Zone B slice 5 H_Y golden)"
         );
         assert!(
-            (teal_conf - 0.32229504).abs() < 1e-4,
-            "teal conf {teal_conf:.8} != 0.32229504"
+            (teal_conf - 0.32230121).abs() < 1e-4,
+            "teal conf {teal_conf:.8} != 0.32230121"
         );
 
         // Navy Blue #000080 (Чистый — синий, depth_mod → 0 через b-гейт)
@@ -710,47 +730,47 @@ mod tests {
             Case {
                 hex: "#6B6B2E",
                 label: "olive",
-                expected: 0.41267217,
+                expected: 0.40640072,
             },
             Case {
                 hex: "#937C00",
                 label: "babypoop",
-                expected: 0.33297635,
+                expected: 0.33220155,
             },
             Case {
                 hex: "#9AAE07",
                 label: "puke",
-                expected: 0.24024764,
+                expected: 0.23449461,
             },
             Case {
                 hex: "#9e6c00",
                 label: "gold1",
-                expected: 0.28807528,
+                expected: 0.29296999,
             },
             Case {
                 hex: "#8f6424",
                 label: "gold2",
-                expected: 0.30349357,
+                expected: 0.30971375,
             },
             Case {
                 hex: "#808080",
                 label: "grey",
-                expected: 0.00125515,
+                expected: 0.00125988,
             },
             Case {
                 hex: "#008080",
                 label: "teal",
-                expected: 0.00494901,
+                expected: 0.00430967,
             },
             Case {
                 hex: "#000080",
                 label: "navy",
-                expected: 0.00000001,
+                expected: 0.00000000,
             },
             Case {
                 hex: "#FF0000",
                 label: "red",
-                expected: 0.00124390,
+                expected: 0.00133634,
             },
             Case {
                 hex: "#0000FF",
@@ -940,13 +960,18 @@ mod tests {
     // hue_weight(h_Y + 180°) = 0 и монотонности; выведенная формула доказывает их аналитически.
     //
     // Провенанс:
-    //   H_Y_DEG = 96.9° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель,
-    //   D65).  Derivation: CMF при 578nm (x̄=0.9015, ȳ=0.7470, z̄=0; линейная интерполяция
-    //   CIE 10нм-таблицы), → XYZ/Y = (1.207, 1.000, 0), → linear sRGB (clamp at gamut),
-    //   → Oklab (Ottosson 2020), → atan2(b, a) = 96.9°.
+    //   H_Y_DEG = 90.4011° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель,
+    //   D65).  Derivation (slice 5): CMF при 578nm — линейная интерполяция CIE 5нм-таблицы
+    //   (575nm: 0.8425/0.9154/0.0018; 580nm: 0.9163/0.8700/0.00165) → (0.886780, 0.888160,
+    //   0.001710), → XYZ/Y = (0.998446, 1, 0.001925), → Oklab напрямую (Ottosson 2020, M1/M2;
+    //   hue инвариантен к радиансности, sRGB-клэмп не нужен и не hue-сохраняющ),
+    //   → atan2(b, a) = 90.4011°. Неопределённость 5нм-интерполяции: ±0.01°
+    //   (1нм-таблица CIE даёт 90.3925° — расхождение 0.009°, на 4 порядка ниже
+    //   ширины Hanning-окна; центр объявлен по официальной 5нм-таблице).
     //   Формула (1 + cos(h − h_Y)) / 2 — Hanning-окно, выведенное из производной
     //   поворота Бецольда-Брюкке: dΔH_BB/dh = A_BB · cos(h − h_Y), нормированная
-    //   в [0, 1].  Цитата: Parry (1967) J. Opt. Soc. Am. 57, 1130–1134.
+    //   в [0, 1].  Цитаты: Purdy (1937) Am. J. Psychol. 49, 313–315 (инвариант 578nm);
+    //   Jacobs & Wascher (1967) J. Opt. Soc. Am. 57, 1155–1156.
 
     #[test]
     fn w_hue_fitted_vector_absent_from_shipping() {

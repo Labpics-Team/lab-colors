@@ -117,10 +117,16 @@ const HARDNESS_MIN_INCLUSIVE: f64 = 1.0;
 /// Доля хромы сентимент-цвета (`sentiments.chroma_fraction`) обязана лежать в
 /// `(0, 1]`.
 ///
-/// Каждый сентимент-цвет несёт `chroma_fraction · max_chroma` на своей светлоте.
 /// `≤ 0` — обесцвеченный (не сентимент), `> 1` — за стеной гамута (неон/недостижимо).
 /// Дефолт реестра — `0.88` (держится `< 1`, чтобы сидеть внутри стены гамута, не
 /// читаясь как неон).
+///
+/// СЕМАНТИКА (применена 2026-07-03; тем самым закрыт слайс «инертной ручки»
+/// аудита): в продакшн-тинте (`resolve_config_sentiment_solid`) ручка —
+/// АНТИ-НЕОНОВЫЙ ПОТОЛОК: `c = min(c_якоря, f · C_max(L, h_решённый))`.
+/// Хрома якоря клиента — авторитет идентичности и сохраняется, пока не
+/// упирается в долю гамутного максимума; усечение идёт по оси хромы
+/// (оттенок сохранён — прежний канальный клип sRGB искажал оттенок).
 const CHROMA_FRACTION_MIN_EXCLUSIVE: f64 = 0.0;
 /// Верхний предел доли хромы сентимента (включительно).
 const CHROMA_FRACTION_MAX_INCLUSIVE: f64 = 1.0;
@@ -456,6 +462,15 @@ pub enum RoleRecipe {
         source: LadderSource,
         /// Позиция меню (несёт пер-темную пару альф из стаба labui).
         position: LadderPosition,
+    },
+    /// Свечение (labui ADR-0002 §5): screen-слои цвета источника, интенсивность
+    /// решается солвером под контрактную ступень [`crate::glow::GlowStep`]
+    /// (зеркальная деривация от стека теней) на фактическом фоне резолва.
+    Glow {
+        /// Источник цвета свечения (свечение не имеет собственного цвета).
+        source: LadderSource,
+        /// Контрактная ступень стека: subtle | base | bloom.
+        step: crate::glow::GlowStep,
     },
     /// Заливка пары «поверхность × лейбл» ([`crate::pair`]): якорь источника,
     /// минимально сдвинутый по светлоте до победы перцептивно правильной
@@ -903,6 +918,8 @@ impl ThemeConfig {
                 "magnitude > 0 (Lc-величина тени; ≤ 0 = невидима)",
             ),
             RoleRecipe::Ladder { source, .. } => self.check_ladder_source(role, source),
+            // Ступень — закрытый enum, числовой валидации не требует; источник — как у лестницы.
+            RoleRecipe::Glow { source, .. } => self.check_ladder_source(role, source),
             RoleRecipe::PairFill { source } => self.check_ladder_source(role, source),
             RoleRecipe::AlphaAnalog { of, alpha } => {
                 self.check_ladder_source(role, of)?;
@@ -1015,6 +1032,10 @@ impl ThemeConfig {
                 magnitude: *magnitude,
             }),
             RoleRecipe::Zero => Ok(RoleSpec::Zero),
+            RoleRecipe::Glow { source, step } => Ok(RoleSpec::Glow {
+                tint: self.compile_ladder_tint(role, source)?,
+                step: *step,
+            }),
             RoleRecipe::Ladder { source, position } => {
                 let (alpha_light, alpha_dark) = position.alpha_pair();
                 Ok(RoleSpec::Ladder {
@@ -1121,33 +1142,96 @@ impl ThemeConfig {
     /// сохранив светлоту/хрому якоря. `S_PERC_MIN` — пересчёт из хром якорей
     /// сентиментов конфига (закон не зависит от labui-констант).
     fn compile_sentiment_tint(&self, role: &str, name: &str) -> Result<LadderTint, ConfigError> {
-        let cat = self
-            .sentiments
-            .categories
-            .iter()
-            .find(|c| c.name == name)
-            .ok_or_else(|| ConfigError::UnknownSentiment {
+        // Существование категории проверяется до пофазного резолва, чтобы
+        // неизвестное имя дало свою ошибку, а не «семья не найдена».
+        if !self.sentiments.categories.iter().any(|c| c.name == name) {
+            return Err(ConfigError::UnknownSentiment {
                 referenced_by: format!("roles.{role}"),
                 sentiment: name.to_string(),
-            })?;
-        let fam = self.family_anchors(role, &cat.family)?.clone();
-        let brand = self.brand.anchors.clone();
-        let s_perc_min = self.sentiment_s_perc_min()?;
+            });
+        }
 
-        let solid_of = |anchor_hex: &str, brand_hex: &str| -> Result<[f64; 3], ConfigError> {
-            // Серый бренд не несёт оттенка — разведение по hue бессмысленно и
-            // численно не определено: сентимент честно остаётся сырым якорем
-            // семейства (ни с чем не сливается по оттенку).
-            if oklab_chroma_of_hex(brand_hex) < ACHROMATIC_CHROMA_EPS {
-                return crate::spaces::srgb::srgb_encoded_from_hex(anchor_hex).map_err(|_| {
-                    ConfigError::InvalidHex {
-                        field: format!("roles.{role} (якорь сентимента)"),
-                        value: anchor_hex.to_string(),
-                    }
-                });
+        LadderTint::new([
+            self.sentiment_solid_for_mode(role, name, 0)?,
+            self.sentiment_solid_for_mode(role, name, 1)?,
+            self.sentiment_solid_for_mode(role, name, 2)?,
+            self.sentiment_solid_for_mode(role, name, 3)?,
+        ])
+        .map_err(|mode| ConfigError::InvalidHex {
+            field: format!("roles.{role} (сентимент-тинт, режим {mode})"),
+            value: "<вне кодированного домена>".to_string(),
+        })
+    }
+
+    /// Солид сентимента `name` в режиме `mode_idx` (0 light / 1 dark /
+    /// 2 light-ic / 3 dark-ic) — МНОГОТЕЛЬНЫЙ резолв (находка S-02 аудита
+    /// 2026-07-03: брендоцентричный закон был попарно слеп — light-ic Warning
+    /// телепортировался flip-ветвью в зелень к Success, ab 0.042 < 0.0687).
+    ///
+    /// Двухфазная оккупация, детерминированная порядком категорий конфига:
+    ///
+    /// 1. каждая категория решается прежним брендоцентричным законом;
+    ///    ПОКОЯЩИЕСЯ (решённый оттенок = оттенок якоря, ≤ 0.5°) объявляются
+    ///    неподвижными оккупантами — деривационная идентичность якорей
+    ///    клиента не нарушается по построению;
+    /// 2. СМЕЩЁННЫЕ (пол/бренд сдвинули оттенок) перерешиваются по порядку
+    ///    конфига с зонами оккупантов: угловой отступ от каждой зоны —
+    ///    инверсия хорды `s_perc_min` при средней хроме пары (тот же закон
+    ///    различимости, что для бренда). Решённый смещённый сам становится
+    ///    оккупантом для следующих.
+    ///
+    /// Ахроматичные оккупанты (C < ε) зон не несут — у серого нет оттенка.
+    fn sentiment_solid_for_mode(
+        &self,
+        role: &str,
+        name: &str,
+        mode_idx: usize,
+    ) -> Result<[f64; 3], ConfigError> {
+        let s_perc_min = self.sentiment_s_perc_min()?;
+        let pick = |a: &ThemeAnchors| -> String {
+            match mode_idx {
+                0 => a.light.clone(),
+                1 => a.dark.clone(),
+                2 => a.light_ic.clone(),
+                _ => a.dark_ic.clone(),
             }
-            let brand_hue = crate::accent::oklab_hue_of(brand_hex);
-            let solid = crate::sentiment::resolve_config_sentiment_solid(
+        };
+        let brand_hex = pick(&self.brand.anchors);
+
+        let raw_anchor = |anchor_hex: &str| -> Result<[f64; 3], ConfigError> {
+            crate::spaces::srgb::srgb_encoded_from_hex(anchor_hex).map_err(|_| {
+                ConfigError::InvalidHex {
+                    field: format!("roles.{role} (якорь сентимента)"),
+                    value: anchor_hex.to_string(),
+                }
+            })
+        };
+
+        // Серый бренд не несёт оттенка — разведение по hue бессмысленно и
+        // численно не определено: каждый сентимент честно остаётся сырым
+        // якорем семейства (прежний закон, фазы не нужны).
+        let anchor_of = |cat: &SentimentCategory| -> Result<String, ConfigError> {
+            Ok(pick(self.family_anchors(role, &cat.family)?))
+        };
+        let target_anchor = {
+            let cat = self
+                .sentiments
+                .categories
+                .iter()
+                .find(|c| c.name == name)
+                .expect("существование категории проверено вызывающим");
+            anchor_of(cat)?
+        };
+        if oklab_chroma_of_hex(&brand_hex) < ACHROMATIC_CHROMA_EPS {
+            return raw_anchor(&target_anchor);
+        }
+        let brand_hue = crate::accent::oklab_hue_of(&brand_hex);
+
+        let solve = |cat: &SentimentCategory,
+                     anchor_hex: &str,
+                     zones: &[crate::sentiment::NeighborZone]|
+         -> Result<String, ConfigError> {
+            crate::sentiment::resolve_config_sentiment_solid_among(
                 anchor_hex,
                 brand_hue,
                 self.sentiments.hardness,
@@ -1155,30 +1239,84 @@ impl ThemeConfig {
                 cat.hue_floor_deg,
                 cat.preferred_side.map_or(1.0, f64::from),
                 s_perc_min,
+                zones,
             )
             .map_err(|reason| ConfigError::SentimentResolution {
                 role: role.to_string(),
-                sentiment: name.to_string(),
+                sentiment: cat.name.clone(),
                 reason,
-            })?;
-            crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
-                ConfigError::InvalidHex {
-                    field: format!("roles.{role} (сентимент-солид)"),
-                    value: solid.clone(),
-                }
             })
         };
 
-        LadderTint::new([
-            solid_of(&fam.light, &brand.light)?,
-            solid_of(&fam.dark, &brand.dark)?,
-            solid_of(&fam.light_ic, &brand.light_ic)?,
-            solid_of(&fam.dark_ic, &brand.dark_ic)?,
-        ])
-        .map_err(|mode| ConfigError::InvalidHex {
-            field: format!("roles.{role} (сентимент-тинт, режим {mode})"),
-            value: "<вне кодированного домена>".to_string(),
-        })
+        // Фаза 1: брендоцентричный резолв всех категорий; классификация покоя.
+        // (hue, chroma) занятых зон меряются на РЕШЁННОМ солиде — честный
+        // оккупант, не идеал.
+        let mut occupied: Vec<(f64, f64)> = Vec::new();
+        let mut displaced: Vec<(usize, String)> = Vec::new(); // (index, anchor)
+        let mut target_phase1: Option<String> = None;
+        for (i, cat) in self.sentiments.categories.iter().enumerate() {
+            let anchor_hex = anchor_of(cat)?;
+            let solid = solve(cat, &anchor_hex, &[])?;
+            let proto_hue = crate::accent::oklab_hue_of(&anchor_hex);
+            let solid_hue = crate::accent::oklab_hue_of(&solid);
+            let solid_chroma = oklab_chroma_of_hex(&solid);
+            let rested = crate::sentiment::angular_distance(solid_hue, proto_hue) <= 0.5
+                || solid_chroma < ACHROMATIC_CHROMA_EPS;
+            if rested {
+                if solid_chroma >= ACHROMATIC_CHROMA_EPS {
+                    occupied.push((solid_hue, solid_chroma));
+                }
+                if cat.name == name {
+                    target_phase1 = Some(solid);
+                }
+            } else {
+                displaced.push((i, anchor_hex));
+            }
+        }
+        if let Some(solid) = target_phase1 {
+            // Покоящаяся цель неподвижна по построению — байт-в-байт фаза 1.
+            return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
+                ConfigError::InvalidHex {
+                    field: format!("roles.{role} (сентимент-солид)"),
+                    value: solid,
+                }
+            });
+        }
+
+        // Фаза 2: смещённые перерешиваются с зонами оккупантов, по порядку.
+        for (i, anchor_hex) in displaced {
+            let cat = &self.sentiments.categories[i];
+            let c_self = oklab_chroma_of_hex(&anchor_hex);
+            let mut zones = Vec::with_capacity(occupied.len());
+            for &(hue, c_other) in &occupied {
+                let pair_chroma = (c_self + c_other) / 2.0;
+                let min_sep = crate::sentiment::s_min_deg_from_chord(s_perc_min, pair_chroma)
+                    .map_err(|reason| ConfigError::SentimentResolution {
+                        role: role.to_string(),
+                        sentiment: cat.name.clone(),
+                        reason,
+                    })?;
+                zones.push(crate::sentiment::NeighborZone {
+                    hue_deg: hue,
+                    min_sep_deg: min_sep,
+                });
+            }
+            let solid = solve(cat, &anchor_hex, &zones)?;
+            if cat.name == name {
+                return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
+                    ConfigError::InvalidHex {
+                        field: format!("roles.{role} (сентимент-солид)"),
+                        value: solid,
+                    }
+                });
+            }
+            let solid_hue = crate::accent::oklab_hue_of(&solid);
+            let solid_chroma = oklab_chroma_of_hex(&solid);
+            if solid_chroma >= ACHROMATIC_CHROMA_EPS {
+                occupied.push((solid_hue, solid_chroma));
+            }
+        }
+        unreachable!("категория `{name}` обязана быть покоящейся или смещённой")
     }
 
     /// `S_PERC_MIN`, пересчитанный из Oklab-хром светлых якорей 4 (или скольких
@@ -1257,6 +1395,33 @@ pub fn labui_reference() -> ThemeConfig {
     };
 
     let mut roles = vec![
+        // Backgrounds — тона лестницы фонов (labui ADR-0002 §1, волна 1).
+        // Асимметрия тем — закон владельца: светлая — 2 тона × 3 применения
+        // (elevation тенями), тёмная — 3 тона × 2 (elevation осветлением).
+        // Тон-1 = сам фон резолва (не эмитится); тона 2-3 — dJ'-шаги от него,
+        // направление даёт полярность (светлая → темнее, тёмная → светлее).
+        // Величины ИЗМЕРЕНЫ движком по СОБСТВЕННЫМ Figma-якорям labui
+        // (examples/bg_ladder_anchors; методология HIG там же как референс):
+        // «еле отличимо» светлой = 2.03 (#FFFFFF↔#F7F8FA); тёмная лестница
+        // замедляется — данные: тон-2 = 5.78 (#101012→#1C1C1E), тон-3 = 9.60
+        // от базы (#101012→#242426). Светлой темой тон-3 не используется —
+        // маппинг ролей bg-primary/…/grouped-* на тона живёт в потребителе
+        // (чередование 2×3); light-значение тона-3 = тону-2, чтобы шкала
+        // оставалась честной, если потребитель его прочтёт.
+        (
+            "bg-tone-2".to_string(),
+            RoleRecipe::DjAnchor {
+                light: 2.03,
+                dark: 5.78,
+            },
+        ),
+        (
+            "bg-tone-3".to_string(),
+            RoleRecipe::DjAnchor {
+                light: 2.03,
+                dark: 9.6,
+            },
+        ),
         // Labels.
         ("label-primary".to_string(), text(0.968, Floor::AaText)),
         ("label-secondary".to_string(), text(0.627, Floor::AaText)),
@@ -1383,19 +1548,27 @@ pub fn labui_reference() -> ThemeConfig {
         "fx-focus-ring-neutral".to_string(),
         neutral_pos(NeutralPick::Edge, LadderPosition::FocusRing),
     ));
-    roles.push(("fx-glow-brand".to_string(), brand_pos(LadderPosition::Glow)));
+    // Свечения — новый kind glow (labui ADR-0002 §5, 2026-07-03): screen-слои
+    // цвета источника, интенсивность решается под контрактную ступень base
+    // (зеркало fx-shadow-ambient) на фактическом фоне. Прежние Ladder@52
+    // (фикс-альфа, нормальная композиция) вырождались на одноимённых фонах;
+    // physics свечения — добавление света, не наложение краски.
+    let glow = |source: LadderSource| RoleRecipe::Glow {
+        source,
+        step: crate::glow::GlowStep::Base,
+    };
+    roles.push(("fx-glow-brand".to_string(), glow(LadderSource::Brand)));
     roles.push((
         "fx-glow-danger".to_string(),
-        sent_pos("danger", LadderPosition::Glow),
+        glow(LadderSource::Sentiment("danger".to_string())),
     ));
     roles.push((
         "fx-glow-warning".to_string(),
-        sent_pos("warning", LadderPosition::Glow),
+        glow(LadderSource::Sentiment("warning".to_string())),
     ));
-    // Нейтральное свечение: светлый край нейтрали @52 (стаб rgb(255 255 255 / .522)).
     roles.push((
         "fx-glow-neutral".to_string(),
-        neutral_pos(NeutralPick::Light, LadderPosition::Glow),
+        glow(LadderSource::Neutral(NeutralPick::Light)),
     ));
     // Инвертированное свечение — на neutral.inverted (пер-темная пара стаба
     // #B0B0B9 / #3C3C43 дословно). В точном value-тесте — обе темы.
@@ -1545,12 +1718,21 @@ pub fn labui_reference() -> ThemeConfig {
         sentiments: SentimentsConfig {
             categories: vec![
                 sentiment("danger", "red", None, None),
-                sentiment("warning", "orange", Some(45.0), Some(1)),
+                sentiment(
+                    "warning",
+                    "orange",
+                    Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
+                    Some(1),
+                ),
                 sentiment("success", "green", None, None),
                 sentiment("info", "blue", None, None),
             ],
             hardness: 5.0,
-            chroma_fraction: 0.88,
+            // 1.0 = потолок на чистой стене гамута: якоря labui — авторитет
+            // идентичности (Figma-калибровка, danger #FF3B30 сидит ВЫШЕ
+            // 0.88·C_max — доля 0.88 съедала бы клиентский красный).
+            // Реестровый дефолт для клиентов без якорной калибровки — 0.88.
+            chroma_fraction: 1.0,
         },
         themes: ThemesConfig {
             entries: vec![

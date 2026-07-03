@@ -52,6 +52,8 @@ export interface SolvedColor {
   readonly wcagRatio: number;
   /** The legal floor squeezed this role onto the smallest step below its senior. */
   readonly compressed: boolean;
+  /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
+  readonly achievedDj: number | null;
   /** The WCAG floor overrode the perceptual target. */
   readonly floorOverride: boolean;
   /**
@@ -97,7 +99,27 @@ export interface TranslucentRole {
   readonly css: string;
 }
 
-export type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
+/** Свечение (kind glow, labui ADR-0002 §5): screen-слои + решённая интенсивность.
+ *  Потребитель красит слои с mix-blend-mode: screen; `vars` несёт
+ *  --lab-<role> (halo, oklch), --lab-<role>-core и --lab-<role>-alpha. */
+export interface GlowRole {
+  readonly kind: "glow";
+  readonly cssVar: string;
+  /** Слой пересвета (малый радиус), #RRGGBB. */
+  readonly coreHex: string;
+  /** Слой ореола — источник, #RRGGBB. */
+  readonly haloHex: string;
+  /** Интенсивность screen-слоя, (0, 1]. */
+  readonly alpha: number;
+  /** Фактический |ΔJ'| композита от фона. */
+  readonly achievedDj: number;
+  /** Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2). */
+  readonly degraded: boolean;
+  /** Ready-to-serve CSS value халo: "oklch(L% C H)". */
+  readonly css: string;
+}
+
+export type RoleResult = SolvedColor | TranslucentRole | GlowRole | NoneRole | UnreachableRole;
 
 /** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
 export interface ThemeAnchors {
@@ -120,6 +142,8 @@ export type RoleRecipe =
   | { kind: "dj-anchor"; light: number; dark: number }
   | { kind: "decorative-lc"; magnitude: number }
   | { kind: "ladder"; source: LadderSource; position: string }
+  | { kind: "glow"; source: LadderSource; step: "subtle" | "base" | "bloom" }
+  | { kind: "pair-fill"; source: LadderSource }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
   | { kind: "zero" };
 
@@ -308,6 +332,11 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                 set(&role_obj, "compressed", &JsValue::from_bool(c.compressed));
                 set(
                     &role_obj,
+                    "achievedDj",
+                    &c.achieved_dj.map_or(JsValue::NULL, JsValue::from_f64),
+                );
+                set(
+                    &role_obj,
                     "floorOverride",
                     &JsValue::from_bool(c.floor_override),
                 );
@@ -342,6 +371,32 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                 let css = oklch_css(&r.tint_hex, Some(r.alpha))?;
                 set(&role_obj, "css", &JsValue::from_str(&css));
                 set(&vars, &css_var, &JsValue::from_str(&css));
+            }
+            RoleOutcome::Glow(g) => {
+                // Свечение: слои для screen-наложения потребителем.
+                // --lab-<role> несёт halo (единая oklch-форма), сателлиты
+                // --lab-<role>-core / --lab-<role>-alpha — анатомия и
+                // решённая интенсивность (число, не цвет).
+                set(&role_obj, "kind", &JsValue::from_str("glow"));
+                set(&role_obj, "coreHex", &JsValue::from_str(&g.core_hex));
+                set(&role_obj, "haloHex", &JsValue::from_str(&g.halo_hex));
+                set(&role_obj, "alpha", &JsValue::from_f64(g.alpha));
+                set(&role_obj, "achievedDj", &JsValue::from_f64(g.achieved_dj));
+                set(&role_obj, "degraded", &JsValue::from_bool(g.degraded));
+                let halo_css = oklch_css(&g.halo_hex, None)?;
+                let core_css = oklch_css(&g.core_hex, None)?;
+                set(&role_obj, "css", &JsValue::from_str(&halo_css));
+                set(&vars, &css_var, &JsValue::from_str(&halo_css));
+                set(
+                    &vars,
+                    &format!("{css_var}-core"),
+                    &JsValue::from_str(&core_css),
+                );
+                set(
+                    &vars,
+                    &format!("{css_var}-alpha"),
+                    &JsValue::from_str(&format!("{:.4}", g.alpha)),
+                );
             }
             RoleOutcome::None => {
                 set(&role_obj, "kind", &JsValue::from_str("none"));
