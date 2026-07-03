@@ -307,7 +307,6 @@ fn unreachable_code(reason: &Unreachable) -> &'static str {
         Unreachable::FloorUnreachable { .. } => "floor_unreachable",
         Unreachable::PolarityMismatch { .. } => "polarity_mismatch",
         Unreachable::GamutUnsupported => "gamut_unsupported",
-        Unreachable::UnsupportedBackground => "unsupported_background",
         Unreachable::InvalidInput(_) => "invalid_input",
         _ => "unreachable",
     }
