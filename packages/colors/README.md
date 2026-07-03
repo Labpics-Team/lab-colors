@@ -1,6 +1,6 @@
 # @labpics/colors
 
-Адаптивные цветовые роли для дизайн-системы. Получает фоновый цвет и тему — возвращает полный набор ролей (`--lab-label-primary`, `--lab-icon`, `--lab-border-base`, …) как `#RRGGBB`-значения CSS-переменных. Ядро написано на Rust и скомпилировано в WebAssembly; пакет не имеет runtime-зависимостей.
+Адаптивные цветовые роли для дизайн-системы. Получает фоновый цвет и тему — возвращает полный набор ролей (`--lab-label-primary`, `--lab-icon`, `--lab-border-base`, …). CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Ядро написано на Rust и скомпилировано в WebAssembly; пакет не имеет runtime-зависимостей.
 
 Ядро возвращает **данные**, не затрагивает DOM. Три вспомогательные функции переводят эти данные в живые CSS-переменные: `applyTheme` (разовое применение), `watchTheme` (реактивное — обновляется при изменении фона) и `adaptTheme` (плавная адаптация для фона, меняющегося каждый кадр).
 
@@ -33,8 +33,9 @@ await init();                       // загрузить WASM-модуль (о�
 const engine = new LabColors();     // движок по умолчанию
 
 const result = engine.resolveTheme("#FFFFFF", "light");
-// result.vars  → { "--lab-label-primary": "#1a1a1a", "--lab-icon": "#5b5b5b", ... }
-// result.roles → детали каждой роли (hex, контраст, флаги)
+// result.vars  → { "--lab-label-primary": "oklch(14.79140% 0.012878 284.717)",
+//                  "--lab-icon": "oklch(66.97448% 0.014606 285.999)", ... }
+// result.roles → детали каждой роли (css, hex, контраст, флаги)
 
 applyTheme(document.documentElement, result);   // записать все --lab-* в элемент
 ```
@@ -128,16 +129,17 @@ adaptTheme(hero, {
 interface ResolvedTheme {
   theme: ThemeName;
   background: string;                     // нормализованный #RRGGBB
-  vars: Record<string, string>;           // достижимые роли: "--lab-<ключ>" → hex
+  vars: Record<string, string>;           // достижимые роли: "--lab-<ключ>" → готовое CSS-значение oklch
   roles: Record<string, RoleResult>;      // все роли с деталями
 }
 
-type RoleResult = SolvedColor | NoneRole | UnreachableRole;
+type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 ```
 
-Каждая роль — одно из трёх состояний:
+Каждая роль — одно из четырёх состояний:
 
-- `SolvedColor` — цвет найден (`kind: "color"`, поля `hex`, `lc`, `wcagRatio`, …).
+- `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
+- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — солид-композит на фоне резолва и его контраст (браузер композитит тинт на живой подложке).
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
 
@@ -147,6 +149,24 @@ type RoleResult = SolvedColor | NoneRole | UnreachableRole;
 |------------|---------|
 | `invalid_background` | `bgHex` не является `#RGB` или `#RRGGBB` |
 | `unknown_theme` | `theme` не входит в список допустимых |
+
+---
+
+### `engine.loadConfig(json): string`
+
+Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`) — главная фича конфиг-границы: движок начинает эмитить роли и подтон конфига вместо встроенной таблицы. Полный preflight: невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+
+---
+
+### `engine.recheckContrast(bgHex, fgHexes, theme): Float64Array`
+
+Дешёвая покадровая проверка: какие контрасты дают цвета `fgHexes` на фоне `bgHex` под темой `theme`, без полного резолва (один прямой ход модели на фон плюс по одному на каждый передний план). Возвращает `Float64Array` пар `[lc, wcagRatio]` в порядке `fgHexes`: индекс `2·i` — знаковый `Lc` цвета `i`, `2·i+1` — его WCAG-отношение. Это примитив, которым `adaptTheme` решает, пора ли пересчитывать.
+
+---
+
+### `engine.muddiness(hex): number` · `engine.confidence(hex): number`
+
+`muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи). `confidence` — надёжность этой оценки: `0` означает, что оценке нельзя доверять (у границы решения или серого фронтира), выше — увереннее. Верхний потолок — деталь калибровки, не контракт: не хардкодить.
 
 ---
 
@@ -168,6 +188,7 @@ interface WatchThemeOptions {
   target?: HTMLElement;                  // куда писать переменные (по умолчанию: element)
   fallback?: string;                     // фон при полностью прозрачной цепочке (по умолчанию "#FFFFFF")
   observe?: boolean;                     // авто-обновление при DOM-мутациях (по умолчанию true)
+  root?: Node;                           // корень MutationObserver (по умолчанию: documentElement)
 }
 
 interface WatchController {
@@ -232,10 +253,12 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-| Артефакт | raw | gzip | brotli |
-|----------|-----|------|--------|
-| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ | ~116 КБ |
-| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ | ~4 КБ |
+| Артефакт | raw | gzip |
+|----------|-----|------|
+| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ |
+| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ |
+
+Замер CI-шага `report bundle size` (ci.yml) — raw и gzip.
 
 Это ВЕСЬ движок: перцептивная модель CAM16, солверы контраста, лестницы, граница конфига. `.wasm` — не JS-байты бандла, а ассет: он **не на критическом пути рендера** — грузится параллельно, компилируется потоково вне главного треда, кэшируется браузером после первой загрузки. Вспомогательные функции (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) — несколько сотен байт чистого JavaScript с tree-shaking через именованные экспорты.
 
