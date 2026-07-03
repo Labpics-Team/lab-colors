@@ -25,14 +25,24 @@ jobs:
     # race each other AND nothing leaks. /tmp is forbidden here: on the de-02
     # farm it is an 8 GB tmpfs, and per-run /tmp toolchains (~600 MB each)
     # filled it in ~12 jobs (ENOSPC cascade, 2026-07-03).
-    env:
-      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
-      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
       # The toolchain VERSION is pinned via the explicit input below, not @stable,
       # so a new stable release cannot silently change CI behavior.
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
+          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -46,11 +56,21 @@ jobs:
   test:
     name: test
     runs-on: [self-hosted, Linux, X64]
-    env:
-      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
-      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
+          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -67,11 +87,21 @@ jobs:
   audit:
     name: cargo audit (rustsec)
     runs-on: [self-hosted, Linux, X64]
-    env:
-      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
-      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
+          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -101,11 +131,21 @@ jobs:
   wasm:
     name: wasm build + headless test + size
     runs-on: [self-hosted, Linux, X64]
-    env:
-      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
-      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
+          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
