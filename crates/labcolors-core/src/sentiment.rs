@@ -1,6 +1,8 @@
 // oklab_hue_of: единая реализация формулы якорного оттенка живёт в палитре
 // акцентов — сентименты потребляют её, не держат вторую копию физики.
-use crate::accent::{Accent, oklab_hue_of};
+#[cfg(test)]
+use crate::accent::Accent;
+use crate::accent::oklab_hue_of;
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::scale::{jp_to_oklab_l, max_chroma};
@@ -83,6 +85,7 @@ fn s_min_deg(zone_chroma: f64) -> f64 {
 /// **Oklab hue degrees** (NOT HSB/HSL/sRGB hue). The resolved hue produced by
 /// [`SentimentCurve`] is likewise an Oklab hue.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(test)]
 pub enum Sentiment {
     Danger,
     Warning,
@@ -90,6 +93,7 @@ pub enum Sentiment {
     Info,
 }
 
+#[cfg(test)]
 impl Sentiment {
     /// Ideal hue for this sentiment — the **Oklab hue of its anchor colour**, in
     /// degrees (NOT HSB/HSL).
@@ -103,23 +107,6 @@ impl Sentiment {
     /// the confusion at the source (the #65 fix, kept).
     fn prototype_hue(self) -> f64 {
         oklab_hue_of(self.anchor_hex())
-    }
-
-    /// Per-side asymptote hardness `(p_low, p_high)` — the exponent `p` of the
-    /// smooth displacement [`SentimentParams`]. `p_low` governs the side where the
-    /// sentiment hue sits *below* the brand (toward 0°), `p_high` the side above
-    /// it. A lower `p` yields sooner (pushes out toward `s_min` earlier); a higher
-    /// `p` clings to the brand-distance and stays nearer the prototype.
-    ///
-    /// All four categories use the **symmetric** default. A per-side asymmetry
-    /// makes the two sides' far-field overshoot decay at different rates, which
-    /// injects a small spurious discontinuity at the prototype's *antipode* — and
-    /// Warning's red-avoidance is already handled exactly by its [`hue_floor`], so
-    /// no asymmetry is needed. The hook is kept (and `with_params` still tunes it)
-    /// as an open extension seam; no category currently needs it.
-    fn hardness(self) -> (f64, f64) {
-        let _ = self;
-        (DEFAULT_HARDNESS, DEFAULT_HARDNESS)
     }
 
     /// Categorical hue floor (Oklab degrees) below which the sentiment loses its
@@ -210,6 +197,7 @@ pub const DEFAULT_HARDNESS: f64 = 5.0;
 /// науки: вывести из нижней границы orange-категории (Witzel & Gegenfurtner).
 /// Единственный дом значения по построению: фикстура labui (config.rs)
 /// ссылается на эту константу напрямую, второго литерала не существует.
+#[cfg(test)]
 // SSOT-TRACKED — DECLARED-CALIBRATION без деривации (аудит 2026-07-03), см. docs/empirical-inventory.md.
 pub(crate) const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
 
@@ -304,14 +292,22 @@ impl SentimentCurve {
     ///
     /// See [`Self::with_params`].
     pub fn new(
-        sentiment: Sentiment,
         brand_hue: f64,
-        prototype_hex: &str,
+        prototype_hue: f64,
+        chroma_hex: &str,
+        hue_floor: Option<f64>,
+        preferred_side: f64,
         neutral: &NeutralCurve,
     ) -> Result<Self, String> {
-        let (p_low, p_high) = sentiment.hardness();
-        let params = SentimentParams::new(p_low, p_high)?;
-        Self::with_params(sentiment, brand_hue, prototype_hex, neutral, params)
+        Self::with_params(
+            brand_hue,
+            prototype_hue,
+            chroma_hex,
+            hue_floor,
+            preferred_side,
+            neutral,
+            SentimentParams::default(),
+        )
     }
 
     /// Resolve a sentiment curve with explicit asymptote [`SentimentParams`].
@@ -338,16 +334,18 @@ impl SentimentCurve {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `brand_hue` is not finite, if `prototype_hex` fails to
+    /// Returns `Err` if `brand_hue` is not finite, if `chroma_hex` fails to
     /// parse as an sRGB colour (its Oklab chroma sets the perceptual separation
     /// floor), if the params are invalid, or if no hue can satisfy both the floor
     /// and the separation invariant (empty legal arc). The ramp colour is an
     /// [`LcsColor`] built lazily in [`at`](Self::at); no
     /// [`AccentCurve`](crate::scale::AccentCurve) is constructed here.
     pub fn with_params(
-        sentiment: Sentiment,
         brand_hue: f64,
-        prototype_hex: &str,
+        prototype_hue: f64,
+        chroma_hex: &str,
+        hue_floor: Option<f64>,
+        preferred_side: f64,
         neutral: &NeutralCurve,
         params: SentimentParams,
     ) -> Result<Self, String> {
@@ -355,14 +353,22 @@ impl SentimentCurve {
             return Err(format!("brand_hue is not finite: {brand_hue}"));
         }
 
-        let prototype = sentiment.prototype_hue();
+        // Прототипный ОТТЕНОК и прототипная ХРОМА — два независимых входа, честно
+        // разделённых (агностичное ядро не знает витринных энумов). Оттенок задаётся
+        // напрямую (`prototype_hue`, Oklab-градусы); хрома для порога разделения
+        // берётся отдельно из `chroma_hex`. Для категории витрины оба брались из
+        // одного якорного hex, поэтому байт-идентично прежнему
+        // `Sentiment::prototype_hue()` (= `oklab_hue_of(anchor_hex)`) + якорной хроме.
+        // Разделение — контракт теста `prototype_hex_chroma_never_leaks_into_the_ramp`:
+        // хрома НИКОГДА не смещает оттенок рампы.
+        let prototype = prototype_hue;
 
         // Perceptual separation floor from the prototype's *actual* Oklab chroma
         // (issue #20: a fixed-degree margin is wrong — at high chroma the same
         // perceptual chord subtends fewer degrees). Replaces the old fixed
         // `REPRESENTATIVE_CHROMA`, which over-separated saturated warm hues and
         // shoved Danger out of red into pink.
-        let proto_lab = srgb_linear_to_oklab(srgb_from_hex(prototype_hex)?);
+        let proto_lab = srgb_linear_to_oklab(srgb_from_hex(chroma_hex)?);
         let proto_chroma = (proto_lab[1].powi(2) + proto_lab[2].powi(2)).sqrt();
         let s_min = s_min_deg(proto_chroma);
 
@@ -370,7 +376,14 @@ impl SentimentCurve {
         // with the categorical floor (Warning) as the final legality net. This is
         // the C¹ resolver that keeps the hue continuous in the brand and holds
         // Warning clear of Danger.
-        let resolved_hue = resolve_smooth_hue(sentiment, prototype, brand_hue, params, s_min)?;
+        let resolved_hue = resolve_smooth_hue_explicit(
+            preferred_side,
+            hue_floor,
+            prototype,
+            brand_hue,
+            params,
+            s_min,
+        )?;
 
         let displacement = angular_distance(resolved_hue, prototype);
         // The hue is "displaced" whenever the smooth model moved it off the
@@ -380,8 +393,8 @@ impl SentimentCurve {
 
         // The ramp itself is built on demand from the neutral curve's perceived
         // lightness and the resolved hue (one chroma law for every hue); the
-        // caller's `prototype_hex` only informs the perceptual separation floor
-        // above, never the chroma.
+        // caller's `chroma_hex` only informs the perceptual separation floor
+        // above, never the ramp's chroma.
         Ok(Self {
             resolved_hue,
             was_displaced,
@@ -444,6 +457,35 @@ impl SentimentCurve {
     }
 }
 
+/// Test-only convenience over the built-in [`Sentiment`] witness: maps a category
+/// to its prototype hue (from its anchor), `(hue_floor, preferred_side)`, and
+/// calls the enum-free public API. Keeps the byte-identity oracles terse without
+/// leaking the showcase enum into the production signature (ADR-0001 PR-c).
+///
+/// The category's prototype HUE comes from its anchor
+/// ([`prototype_hue`](Sentiment::prototype_hue)); `chroma_hex` supplies only the
+/// perceptual separation floor — the honest split the enum-free `new` now models
+/// explicitly, and the invariant `prototype_hex_chroma_never_leaks_into_the_ramp`
+/// pins.
+#[cfg(test)]
+impl SentimentCurve {
+    pub(crate) fn from_sentiment(
+        sentiment: Sentiment,
+        brand_hue: f64,
+        chroma_hex: &str,
+        neutral: &NeutralCurve,
+    ) -> Result<Self, String> {
+        Self::new(
+            brand_hue,
+            sentiment.prototype_hue(),
+            chroma_hex,
+            sentiment.hue_floor(),
+            sentiment.preferred_side(),
+            neutral,
+        )
+    }
+}
+
 /// The smooth displaced separation `s(d) = (d^p + s_min^p)^(1/p)`.
 ///
 /// `d` and `s_min` are non-negative angular degrees; `p >= 1`. The result is
@@ -463,26 +505,9 @@ fn smooth_separation(d: f64, s_min: f64, p: f64) -> f64 {
 /// continuous (no side-flip discontinuity), and the categorical [`hue_floor`]
 /// (Warning) keeps it out of Danger's red. This is the resolver that fixes the
 /// Warning↔Danger collision and the 46° jump the membership-field picker caused.
-fn resolve_smooth_hue(
-    sentiment: Sentiment,
-    prototype: f64,
-    brand_hue: f64,
-    params: SentimentParams,
-    s_min: f64,
-) -> Result<f64, String> {
-    resolve_smooth_hue_explicit(
-        sentiment.preferred_side(),
-        sentiment.hue_floor(),
-        prototype,
-        brand_hue,
-        params,
-        s_min,
-    )
-}
-
-/// Config-facing sibling of [`resolve_smooth_hue`] that takes the categorical
-/// policy (`preferred_side`, `hue_floor`) explicitly instead of reading it off the
-/// fixed [`Sentiment`] enum — so an arbitrary consumer sentiment category
+/// Config-facing resolver that takes the categorical policy (`preferred_side`,
+/// `hue_floor`) explicitly instead of reading it off the fixed [`Sentiment`] enum
+/// — so an arbitrary consumer sentiment category
 /// ([`crate::config::SentimentCategory`]) resolves through the identical smooth
 /// p-norm displacement + legality guard, no second copy of the physics.
 ///
@@ -1083,7 +1108,7 @@ mod tests {
     #[test]
     fn sample_hex_has_requested_length_and_valid_hex() {
         let n = neutral();
-        let sc = SentimentCurve::new(Sentiment::Danger, 33.5, "#FF2E2E", &n).unwrap();
+        let sc = SentimentCurve::from_sentiment(Sentiment::Danger, 33.5, "#FF2E2E", &n).unwrap();
         for k in [0usize, 1, 2, 10, 13] {
             let v = sc.sample_hex(k);
             assert_eq!(v.len(), k, "sample_hex({k}) length");
@@ -1113,7 +1138,7 @@ mod tests {
         for brand in (0..360).step_by(13).map(|d| d as f64) {
             let curves: Vec<_> = Sentiment::ALL
                 .into_iter()
-                .map(|s| SentimentCurve::new(s, brand, s.anchor_hex(), &n).unwrap())
+                .map(|s| SentimentCurve::from_sentiment(s, brand, s.anchor_hex(), &n).unwrap())
                 .collect();
             for i in 0..=10 {
                 let t = i as f64 / 10.0;
@@ -1141,7 +1166,7 @@ mod tests {
             let chroma = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
             let s_min = s_min_deg(chroma);
             for brand in (0..360).step_by(7).map(|d| d as f64) {
-                let sc = SentimentCurve::new(s, brand, s.anchor_hex(), &n).unwrap();
+                let sc = SentimentCurve::from_sentiment(s, brand, s.anchor_hex(), &n).unwrap();
                 let sep = angular_distance(sc.resolved_hue, brand);
                 assert!(
                     sep >= s_min - 1e-6,
@@ -1159,7 +1184,7 @@ mod tests {
         let n = neutral();
         let peak = Sentiment::Success.prototype_hue();
         let brand = peak - 6.0;
-        let sc = SentimentCurve::new(Sentiment::Success, brand, "#34C759", &n).unwrap();
+        let sc = SentimentCurve::from_sentiment(Sentiment::Success, brand, "#34C759", &n).unwrap();
         assert!(
             sc.resolved_hue > peak,
             "resolved {} should sit teal-side of the green peak {peak}",
@@ -1171,7 +1196,7 @@ mod tests {
     fn ramp_lightness_is_monotone_dark() {
         let n = neutral();
         for s in Sentiment::ALL {
-            let r = SentimentCurve::new(s, 33.5, s.anchor_hex(), &n)
+            let r = SentimentCurve::from_sentiment(s, 33.5, s.anchor_hex(), &n)
                 .unwrap()
                 .sample(13);
             for w in r.windows(2) {
@@ -1188,7 +1213,9 @@ mod tests {
     #[test]
     fn rejects_non_finite_brand_hue() {
         let n = neutral();
-        assert!(SentimentCurve::new(Sentiment::Danger, f64::NAN, "#FF2E2E", &n).is_err());
+        assert!(
+            SentimentCurve::from_sentiment(Sentiment::Danger, f64::NAN, "#FF2E2E", &n).is_err()
+        );
     }
 
     #[test]
@@ -1202,7 +1229,7 @@ mod tests {
         let n = neutral();
         for brand in (0..360).step_by(29).map(|d| d as f64) {
             for s in Sentiment::ALL {
-                let curve = SentimentCurve::new(s, brand, s.anchor_hex(), &n).unwrap();
+                let curve = SentimentCurve::from_sentiment(s, brand, s.anchor_hex(), &n).unwrap();
                 let h = curve.resolved_hue;
                 for i in 3..=7 {
                     let hex = curve.sample_hex(11)[i].clone();
@@ -1232,8 +1259,8 @@ mod tests {
         let n = neutral();
         let s = Sentiment::Danger;
         let brand = normalize_hue(s.prototype_hue() + 180.0); // максимально далёкий
-        let saturated = SentimentCurve::new(s, brand, "#FF3B30", &n).unwrap();
-        let muted = SentimentCurve::new(s, brand, "#B36A65", &n).unwrap(); // тот же красный, хрома ~вдвое ниже
+        let saturated = SentimentCurve::from_sentiment(s, brand, "#FF3B30", &n).unwrap();
+        let muted = SentimentCurve::from_sentiment(s, brand, "#B36A65", &n).unwrap(); // тот же красный, хрома ~вдвое ниже
         for t in [0.2, 0.5, 0.8] {
             assert_eq!(
                 saturated.hex_at(t),
@@ -1252,7 +1279,7 @@ mod tests {
         let n = neutral();
         let mut brand = 0.0;
         while brand < 360.0 {
-            let h = SentimentCurve::new(Sentiment::Warning, brand, "#FFA100", &n)
+            let h = SentimentCurve::from_sentiment(Sentiment::Warning, brand, "#FFA100", &n)
                 .unwrap()
                 .resolved_hue;
             assert!(
@@ -1311,10 +1338,10 @@ mod tests {
         let mut brand = 0.0;
         let mut worst = f64::INFINITY;
         while brand < 360.0 {
-            let w = SentimentCurve::new(Sentiment::Warning, brand, "#FFA100", &n)
+            let w = SentimentCurve::from_sentiment(Sentiment::Warning, brand, "#FFA100", &n)
                 .unwrap()
                 .resolved_hue;
-            let d = SentimentCurve::new(Sentiment::Danger, brand, "#FF3B30", &n)
+            let d = SentimentCurve::from_sentiment(Sentiment::Danger, brand, "#FF3B30", &n)
                 .unwrap()
                 .resolved_hue;
             worst = worst.min(angular_distance(w, d));
@@ -1347,7 +1374,7 @@ mod tests {
             let mut prev: Option<f64> = None;
             let mut jumps: Vec<f64> = Vec::new();
             while brand <= 360.0 {
-                let h = SentimentCurve::new(s, brand, s.anchor_hex(), &n)
+                let h = SentimentCurve::from_sentiment(s, brand, s.anchor_hex(), &n)
                     .unwrap()
                     .resolved_hue;
                 if let Some(p) = prev {

@@ -41,7 +41,13 @@ mod dim_tinted_tests;
 #[cfg(test)]
 mod r3_byte_identity_tests;
 
-pub use accent::Accent;
+// AccentCurve/SentimentCurve golden snapshots, relocated in-crate (ADR-0001
+// PR-c): the `Sentiment` enum is now `#[cfg(test)]`-only, and the golden uses
+// the crate-private `SentimentCurve::from_sentiment` helper, so this test must
+// live inside the crate to see them.
+#[cfg(test)]
+mod accent_golden_tests;
+
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
     DefectContext, Theme, confidence as cleanliness_confidence,

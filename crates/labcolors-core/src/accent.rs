@@ -42,7 +42,9 @@
 //! Figma-якоря не участвует в построении рампы — он задокументирован в
 //! reference как часть замера, но прототипом служит светлый якорь.
 
+#[cfg(test)]
 use crate::neutral::NeutralCurve;
+#[cfg(test)]
 use crate::scale::AccentCurve;
 use crate::spaces::oklab::srgb_linear_to_oklab;
 use crate::spaces::srgb::srgb_from_hex;
@@ -63,6 +65,7 @@ use crate::spaces::srgb::srgb_from_hex;
 /// (см. `all_ten_families_are_distinct_hues`), не их монотонность.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
+#[cfg(test)]
 pub enum Accent {
     /// Красный. Figma `Accent/Red` = `#FF3B30`. Прототип сентимента Danger.
     Red,
@@ -86,6 +89,7 @@ pub enum Accent {
     Pink,
 }
 
+#[cfg(test)]
 impl Accent {
     /// Все 10 семейств палитры в порядке коллекции Figma-примитивов (Red → Pink,
     /// порядок семейств HIG — не сортировка по оттенку) — поверхность для

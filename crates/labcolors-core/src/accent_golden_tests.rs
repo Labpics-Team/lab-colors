@@ -19,9 +19,9 @@
 //! Snapshots captured 2026-06-12 from the curves' own `sample_hex(13)` through
 //! their inherited (srgb) viewing conditions.
 
-use labcolors_core::neutral::NeutralCurve;
-use labcolors_core::scale::AccentCurve;
-use labcolors_core::sentiment::{Sentiment, SentimentCurve};
+use crate::neutral::NeutralCurve;
+use crate::scale::AccentCurve;
+use crate::sentiment::{Sentiment, SentimentCurve};
 
 /// The system neutral ladder all accent/sentiment curves are built on.
 fn neutral() -> NeutralCurve {
@@ -69,7 +69,7 @@ fn sentiment_info_curve_sample_hex_13_matches_golden() {
     let neutral = neutral();
     // prototype_hex = Figma Accent/Blue (#3E87FF), Zone D заземление 2026-06-30.
     // Oklab-оттенок якоря: 259.89° (было 257.42° у Apple HIG #007AFF).
-    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#3E87FF", &neutral)
+    let curve = SentimentCurve::from_sentiment(Sentiment::Info, 200.0, "#3E87FF", &neutral)
         .expect("Info sentiment with a far brand hue resolves");
     // Прототип Info: 259.89°. Brand 200° (≈59.9° ниже прототипа) вызывает малое
     // плавно-асимптотическое смещение; resolved_hue ≈ 259.96° (displacement ≈ 0.07°).

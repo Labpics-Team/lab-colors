@@ -113,7 +113,7 @@ fn r3_sample_hex_13_accent_007aff_byte_identity() {
 fn r3_sample_hex_13_sentiment_info_byte_identity() {
     let neutral = canonical_neutral();
     // prototype_hex = Figma Accent/Blue (#3E87FF), сознательное обновление Zone D.
-    let curve = SentimentCurve::new(Sentiment::Info, 200.0, "#3E87FF", &neutral)
+    let curve = SentimentCurve::from_sentiment(Sentiment::Info, 200.0, "#3E87FF", &neutral)
         .expect("R3: Info sentiment with far brand hue resolves (Figma anchor)");
     let got = curve.sample_hex(13);
     assert_eq!(
