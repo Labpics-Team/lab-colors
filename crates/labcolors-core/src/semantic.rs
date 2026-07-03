@@ -1027,6 +1027,92 @@ fn build_curve_color_with_cmax(l_ok: f64, hue_deg: f64, ratio: f64, c_max: f64) 
     ]
 }
 
+/// Plateau reference node for the tint sweep: `(oklab_l, reference_mp)`.
+type PlateauNode = (f64, f64);
+/// One tint-sweep row: `(candidate_target, rms_residual, max_residual)`.
+type SweepRow = (f64, f64, f64);
+
+/// Reproduction hook for `examples/tint_target_sweep.rs` — **not** stable public
+/// API (`#[doc(hidden)]`). Exposes the real-engine tint identity-curve `M'` sweep
+/// behind [`TINT_TARGET_MP`] so its provenance is reproducible from outside
+/// `#[cfg(test)]` without duplicating (and drifting from) the engine. The realised
+/// curve `M'` is computed by the exact path the `#[cfg(test)]`
+/// `curve_fits_reference_plateau_colorfulness` metric uses (`cusp_attracted_hue` →
+/// `ratio_for_target_mp` → gamut-clamped build → CAM16-UCS `M'`), so a caller's
+/// printed numbers cannot drift from the test.
+///
+/// Returns `(plateau_nodes, sweep)`:
+/// * `plateau_nodes`: `(oklab_l, reference_mp)` for the reference-ramp nodes whose
+///   Oklab lightness lies in `[l_min, l_max]` (the colourfulness plateau).
+/// * `sweep`: `(candidate_target, rms_residual, max_residual)` — over the plateau
+///   of `|realised_curve_mp(l, target) − reference_mp|` (the `M'` of the
+///   **gamut-clamped** curve built to `target`, not the raw target): `rms` is the
+///   RMS (the metric `TINT_TARGET_MP` minimises), `max` is the largest per-node
+///   residual (the quality figure the in-code test bounds at ≤ 1.0).
+///
+/// Value-preserving: reads the engine, changes nothing.
+#[doc(hidden)]
+pub fn tint_target_sweep_repro(
+    targets: &[f64],
+    l_min: f64,
+    l_max: f64,
+) -> (Vec<PlateauNode>, Vec<SweepRow>) {
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex};
+    // Mirrors the `#[cfg(test)]` REFERENCE_NODES (owner reference ramp; pure
+    // #FFFFFF dropped as achromatic). Bound by the shared metric, not by name.
+    let nodes: [&str; 12] = [
+        "#101012", "#151518", "#212125", "#303136", "#44444B", "#5B5C64", "#787881", "#9698A2",
+        "#B3B5BF", "#CDD0D9", "#E4E7ED", "#F6F8FA",
+    ];
+    let vc = ViewingConditions::srgb();
+    let mut plateau: Vec<PlateauNode> = Vec::new();
+    for hex in nodes {
+        let Ok(rgb) = srgb_from_hex(hex) else {
+            continue;
+        };
+        let l = srgb_linear_to_oklab(rgb)[0];
+        if l < l_min || l > l_max {
+            continue;
+        }
+        let Ok(node) = crate::lcs::LcsColor::from_hex_with_vc(hex, &vc) else {
+            continue;
+        };
+        plateau.push((l, node.mp()));
+    }
+    let curve_mp = |l: f64, target: f64| -> Option<f64> {
+        let h = cusp_attracted_hue(l, NEUTRAL_HUE_DEG, TINT_HUE_STIFFNESS);
+        let r = ratio_for_target_mp(l, h, target, &vc);
+        let rgb = build_curve_color_with_cmax(l, h, r, crate::scale::max_chroma(l, h));
+        crate::lcs::LcsColor::from_hex_with_vc(&hex_from_srgb(rgb), &vc)
+            .ok()
+            .map(|c| c.mp())
+    };
+    let mut sweep: Vec<SweepRow> = Vec::with_capacity(targets.len());
+    for &t in targets {
+        let mut sumsq = 0.0_f64;
+        let mut maxabs = 0.0_f64;
+        let mut n = 0_usize;
+        for &(l, ref_mp) in &plateau {
+            if let Some(cm) = curve_mp(l, t) {
+                let d = (cm - ref_mp).abs();
+                sumsq += d * d;
+                if d > maxabs {
+                    maxabs = d;
+                }
+                n += 1;
+            }
+        }
+        let rms = if n > 0 {
+            (sumsq / n as f64).sqrt()
+        } else {
+            f64::NAN
+        };
+        sweep.push((t, rms, maxabs));
+    }
+    (plateau, sweep)
+}
+
 /// The default, overridable recipe set mapping every [`Role`] to a [`RoleSpec`].
 ///
 /// [`default`](RoleTable::default) is the calibrated v1 table; override any
@@ -2679,9 +2765,12 @@ mod tests {
         // UCS-constant policy holds it — an honest, documented divergence (the
         // mechanism-3 release happens only where the gamut wall forces it).
         //
-        // TINT_TARGET_MP = 6.1 is the constant that minimises the root-mean-square
-        // residual of curve M' against the reference's plateau nodes (residual
-        // ≈ 0.90 M', measured 2026-06-12 via this same comparison).
+        // TINT_TARGET_MP = 6.1 sits (essentially) at the constant that minimises the
+        // root-mean-square residual of curve M' against the reference's plateau nodes.
+        // The reproducible sweep (`examples/tint_target_sweep.rs`, real engine) measures
+        // RMS-argmin t* = 6.01 and, at 6.1, RMS 0.358 / max per-node 0.649 M' on the
+        // current engine — a broad, flat minimum across 6.0-6.2. (An earlier note read
+        // "residual ≈ 0.90 M'"; that figure is superseded by this measurement.)
         let vc = ViewingConditions::srgb();
         let mut max_resid = 0.0_f64;
         for hex in REFERENCE_NODES {
