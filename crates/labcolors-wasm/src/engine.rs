@@ -772,6 +772,31 @@ mod tests {
         );
     }
 
+    /// Пустой контракт (JSON со структурой, но БЕЗ `roles` и БЕЗ `preset`)
+    /// отклоняется НА ЗАГРУЗКЕ — `#[serde(default)]` на roles не должен превращать
+    /// пропуск словаря в тихий пустой контракт (дефект уехал бы на использование).
+    #[test]
+    fn load_config_empty_contract_is_rejected() {
+        let full: serde_json::Value = serde_json::from_str(&labui_json()).unwrap();
+        let obj = {
+            let mut m = full.as_object().unwrap().clone();
+            m.remove("roles");
+            m.remove("aliases");
+            // preset НЕ добавляем — контракт пуст.
+            m
+        };
+        let json = serde_json::to_string(&serde_json::Value::Object(obj)).unwrap();
+
+        let mut engine = Engine::new();
+        let err = engine
+            .load_config(&json)
+            .expect_err("пустой контракт обязан отклоняться на загрузке");
+        assert!(
+            matches!(err, BindingError::InvalidConfig { .. }),
+            "структурная ошибка конфига, не паника: {err:?}"
+        );
+    }
+
     /// Паритет: загруженный конфиг эмитит байт-в-байт то же, что прямой
     /// resolve_named_set той же таблицы (граница ничего не подменяет).
     #[test]

@@ -247,6 +247,11 @@ pub enum ConfigError {
     /// Оверрайд отдельных ролей поверх пресета — будущий слой (если владелец
     /// решит); в этом слое пресет — всё-или-ничего.
     PresetWithRoles,
+    /// Контракт пуст: ни пресета, ни ролей, ни алиасов. Резолв не эмитил бы ни
+    /// одной роли — молчаливый приём увёл бы дефект на использование. Отказ
+    /// обязан быть НА ЗАГРУЗКЕ (`#[serde(default)]` на `roles` разрешает ОПУСТИТЬ
+    /// словарь ради пресета, но не остаться совсем без контракта).
+    EmptyContract,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -311,8 +316,9 @@ impl std::fmt::Display for ConfigError {
             ),
             ConfigError::PresetWithRoles => write!(
                 f,
-                "пресет наполняет роли целиком; передайте либо preset, либо roles"
+                "пресет наполняет роли целиком; передайте либо preset, либо roles/aliases"
             ),
+            ConfigError::EmptyContract => write!(f, "контракт пуст: передайте preset или roles"),
         }
     }
 }
@@ -605,7 +611,13 @@ impl RolePreset {
 }
 
 /// Полный конфиг темы потребителя (без сериализации — она на границе WASM).
+///
+/// `#[non_exhaustive]`: будущие поля (напр. фоновая лестница дельтами, §4 плана
+/// BL-007) станут неломающими. Внешние крейты собирают конфиг через
+/// [`ThemeConfig::new`](Self::new), не struct-литералом; поля остаются `pub` для
+/// чтения и мутации.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ThemeConfig {
     /// Именованный пресет ролей. При `Some(preset)` и пустых `roles`/`aliases`
     /// компилятор наполняет словарь из пресета ДО валидации — тонкий конфиг:
@@ -760,6 +772,34 @@ fn check_ge(
 }
 
 impl ThemeConfig {
+    /// Собрать конфиг из полного набора полей, `preset = None`.
+    ///
+    /// Конструктор существует, потому что [`ThemeConfig`] помечен
+    /// `#[non_exhaustive]` (будущие поля — неломающие): внешние крейты (граница
+    /// WASM) собирают конфиг через него, а не struct-литералом. Пресет задаётся
+    /// после — присваиванием `pub`-поля [`preset`](Self::preset).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        brand: Brand,
+        neutral: NeutralConfig,
+        palette: Vec<PaletteFamily>,
+        sentiments: SentimentsConfig,
+        themes: ThemesConfig,
+        roles: Vec<(String, RoleRecipe)>,
+        aliases: Vec<(String, String)>,
+    ) -> Self {
+        ThemeConfig {
+            preset: None,
+            brand,
+            neutral,
+            palette,
+            sentiments,
+            themes,
+            roles,
+            aliases,
+        }
+    }
+
     /// Провалидировать конфиг как ПОЛНЫЙ preflight: `Ok` гарантирует, что
     /// [`compile_named_role_table`](Self::compile_named_role_table) вернёт `Ok`.
     ///
@@ -1087,6 +1127,15 @@ impl ThemeConfig {
     /// единственный вызыватель [`compile_named_role_table`](Self::compile_named_role_table).
     fn compile_expanded(&self) -> Result<NamedRoleTable, ConfigError> {
         self.validate_syntactic()?;
+
+        // Пустой контракт — ошибка НА ЗАГРУЗКЕ, не тихий приём: конфиг без
+        // пресета и без ролей/алиасов не эмитил бы ни одной роли, и дефект уехал
+        // бы на использование. Проверяется по РАСКРЫТОЙ форме — пресет всегда
+        // наполнил бы словарь, так что срабатывает только на голом контракте.
+        // После структурной фазы: конкретные ошибки полей всплывают раньше.
+        if self.roles.is_empty() && self.aliases.is_empty() {
+            return Err(ConfigError::EmptyContract);
+        }
 
         let mut entries: Vec<(String, RoleSpec)> = Vec::with_capacity(self.roles.len());
         for (name, recipe) in &self.roles {

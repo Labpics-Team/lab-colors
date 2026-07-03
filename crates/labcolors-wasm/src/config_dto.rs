@@ -379,63 +379,66 @@ impl TryFrom<ConfigDto> for ThemeConfig {
         for role in dto.roles {
             roles.push((role.name, RoleRecipe::try_from(role.recipe)?));
         }
-        Ok(ThemeConfig {
-            preset: dto.preset.map(Into::into),
-            brand: Brand {
-                anchors: dto.brand.into(),
+        let brand = Brand {
+            anchors: dto.brand.into(),
+        };
+        let neutral = NeutralConfig {
+            anchors: NeutralAnchors {
+                light: dto.neutral.anchors.light,
+                mid: dto.neutral.anchors.mid,
+                dark: dto.neutral.anchors.dark,
             },
-            neutral: NeutralConfig {
-                anchors: NeutralAnchors {
-                    light: dto.neutral.anchors.light,
-                    mid: dto.neutral.anchors.mid,
-                    dark: dto.neutral.anchors.dark,
-                },
-                tint: NeutralTint {
-                    ratio: dto.neutral.tint.ratio,
-                    target_mp: dto.neutral.tint.target_mp,
-                    hue_stiffness: dto.neutral.tint.hue_stiffness,
-                    hue_override_deg: dto.neutral.tint.hue_override_deg,
-                },
-                edge: dto.neutral.edge.map(Into::into),
-                inverted: dto.neutral.inverted.map(Into::into),
+            tint: NeutralTint {
+                ratio: dto.neutral.tint.ratio,
+                target_mp: dto.neutral.tint.target_mp,
+                hue_stiffness: dto.neutral.tint.hue_stiffness,
+                hue_override_deg: dto.neutral.tint.hue_override_deg,
             },
-            palette: dto
-                .palette
+            edge: dto.neutral.edge.map(Into::into),
+            inverted: dto.neutral.inverted.map(Into::into),
+        };
+        let palette = dto
+            .palette
+            .into_iter()
+            .map(|f| PaletteFamily {
+                key: f.key,
+                anchors: f.anchors.into(),
+            })
+            .collect();
+        let sentiments = SentimentsConfig {
+            categories: dto
+                .sentiments
+                .categories
                 .into_iter()
-                .map(|f| PaletteFamily {
-                    key: f.key,
-                    anchors: f.anchors.into(),
+                .map(|c| SentimentCategory {
+                    name: c.name,
+                    family: c.family,
+                    hue_floor_deg: c.hue_floor_deg,
+                    preferred_side: c.preferred_side,
                 })
                 .collect(),
-            sentiments: SentimentsConfig {
-                categories: dto
-                    .sentiments
-                    .categories
-                    .into_iter()
-                    .map(|c| SentimentCategory {
-                        name: c.name,
-                        family: c.family,
-                        hue_floor_deg: c.hue_floor_deg,
-                        preferred_side: c.preferred_side,
-                    })
-                    .collect(),
-                hardness: dto.sentiments.hardness,
-                chroma_fraction: dto.sentiments.chroma_fraction,
-            },
-            themes: ThemesConfig {
-                entries: dto
-                    .themes
-                    .into_iter()
-                    .map(|t| (t.name, t.preset.into()))
-                    .collect(),
-            },
-            roles,
-            aliases: dto
-                .aliases
+            hardness: dto.sentiments.hardness,
+            chroma_fraction: dto.sentiments.chroma_fraction,
+        };
+        let themes = ThemesConfig {
+            entries: dto
+                .themes
                 .into_iter()
-                .map(|a| (a.alias, a.target))
+                .map(|t| (t.name, t.preset.into()))
                 .collect(),
-        })
+        };
+        let aliases = dto
+            .aliases
+            .into_iter()
+            .map(|a| (a.alias, a.target))
+            .collect();
+
+        // ThemeConfig — #[non_exhaustive]: сборка через конструктор ядра, не
+        // struct-литералом (запрещён вне крейта ядра). Пресет — присваиванием
+        // pub-поля (не part конструктора, задаётся отдельно от полного набора).
+        let mut cfg = ThemeConfig::new(brand, neutral, palette, sentiments, themes, roles, aliases);
+        cfg.preset = dto.preset.map(Into::into);
+        Ok(cfg)
     }
 }
 

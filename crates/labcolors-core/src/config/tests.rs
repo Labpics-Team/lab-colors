@@ -1840,8 +1840,41 @@ fn preset_error_message_is_russian_and_names_both_sides() {
     // Сообщение по-русски и называет ОБЕ стороны развилки — клиент чинит без гадания.
     let msg = ConfigError::PresetWithRoles.to_string();
     assert!(
-        msg.contains("пресет") && msg.contains("preset") && msg.contains("roles"),
-        "сообщение по-русски и различимо: {msg:?}"
+        msg.contains("пресет")
+            && msg.contains("preset")
+            && msg.contains("roles")
+            && msg.contains("aliases"),
+        "сообщение по-русски и называет обе стороны (roles/aliases): {msg:?}"
+    );
+}
+
+#[test]
+fn empty_contract_is_rejected_at_load() {
+    // Голый контракт: валидная структура, но ни пресета, ни ролей, ни алиасов —
+    // честная ошибка НА ЗАГРУЗКЕ (validate = компиляция), не тихий пустой приём.
+    let mut empty = labui_reference();
+    empty.roles.clear();
+    empty.aliases.clear();
+    // preset остаётся None.
+    assert_eq!(
+        empty.validate(),
+        Err(ConfigError::EmptyContract),
+        "конфиг без пресета/ролей/алиасов обязан отклоняться"
+    );
+    assert_eq!(
+        empty.compile_named_role_table().err(),
+        Some(ConfigError::EmptyContract),
+        "отказ на компиляции (загрузке), не на использовании"
+    );
+
+    // Второй путь: preset-only (без ролей) — ОК, пресет наполнил контракт.
+    assert_eq!(thin_labui().validate(), Ok(()), "preset-only — валиден");
+
+    // Сообщение по-русски и называет выход.
+    let msg = ConfigError::EmptyContract.to_string();
+    assert!(
+        msg.contains("контракт пуст") && msg.contains("preset") && msg.contains("roles"),
+        "сообщение по-русски и подсказывает выход: {msg:?}"
     );
 }
 
