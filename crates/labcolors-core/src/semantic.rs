@@ -32,11 +32,18 @@
 //!    spare: the old "pick the larger LPC maximum" rule flipped polarity near
 //!    `#999999`, far from the WCAG flip near `#747474`, and chose the side the
 //!    legal floor could not reach.
-//! 2. **Tie-break on the WCAG margin.** When both polarities clear the strict
-//!    floor (near the flip, e.g. `#767676`), the side with the larger WCAG margin
-//!    wins; at an exact margin tie dark-on-light is preferred — a fixed,
-//!    VC-independent convention (no LPC fallback: LPC reads the viewing
-//!    conditions and would re-open the theme-flip seam). When *neither*
+//! 2. **Tie-break to the perceptual winner (white).** When both polarities clear
+//!    the strict floor they do so only on a narrow band: black clears 4.5:1 at
+//!    `Y ≥ 0.175`, white at `Y ≤ 0.1833`, so both are legal only on
+//!    `Y ∈ [0.175, 0.1833]` (`#757575`, `#767676` and same-luminance chromatics
+//!    such as `#0078D4`). Across that whole band the perceptual layer prefers
+//!    *light-on-dark* with a wide margin — the luminance-domain LPC core
+//!    ([`crate::lpc::contrast_core`]) has its black-overtakes-white crossover far
+//!    higher, near `Y ≈ 0.36` — so the tie resolves to white ([`break_tie`]). This
+//!    replaces the former "larger WCAG margin wins" rule, whose symmetric margin
+//!    crossed over *inside* the band (`Y ≈ 0.1791`) and chose dark-on-light on the
+//!    upper half — the perceptually weaker side there, and the one that made
+//!    `#0078D4` emit black against the Fluent convention of white. When *neither*
 //!    polarity can clear the floor (a true mid-grey with no readable side), the
 //!    side that comes *closest* is chosen, so the [`Unreachable`] a role surfaces
 //!    carries the honest best-case `max_ratio`, not a worse one.
@@ -2359,11 +2366,12 @@ fn max_contrast(
 /// `#999999`, but the legal floor flips near `#747474`, and on the band between
 /// them the LPC rule chose the side that could not reach 4.5:1.
 ///
-/// Stage 2 — *tie-break*: when both sides clear the floor, the larger WCAG margin
-/// wins; an exact margin tie prefers dark-on-light (fixed convention), keeping
-/// the whole decision VC-independent. When neither clears it, the side that
-/// comes *closest* wins, so the role's [`Unreachable`] reports the honest
-/// best-case `max_ratio`.
+/// Stage 2 — *tie-break*: when both sides clear the floor (the narrow
+/// double-legal band `Y ∈ [0.175, 0.1833]`), the tie resolves to light-on-dark —
+/// the side the perceptual layer prefers across the whole band ([`break_tie`]).
+/// The winner is a fixed derived polarity, so the decision stays VC-independent.
+/// When neither clears it, the side that comes *closest* wins, so the role's
+/// [`Unreachable`] reports the honest best-case `max_ratio`.
 fn choose_polarity(bg: &BgInput) -> Polarity {
     let bg_disp = bg_display(bg);
     // Dark-on-light is hosted by a black foreground; light-on-dark by white.
@@ -2377,9 +2385,8 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
         // Exactly one side is legal — take it.
         (true, false) => Polarity::DarkOnLight,
         (false, true) => Polarity::LightOnDark,
-        // Both legal (near the flip) — larger WCAG margin wins; an exact margin
-        // tie resolves to dark-on-light (fixed convention, no LPC — see break_tie).
-        (true, true) => break_tie(ratio_dark_on_light, ratio_light_on_dark),
+        // Both legal — the derived perceptual winner across the band (white).
+        (true, true) => break_tie(),
         // Neither legal — the closest side, so the diagnostic is the honest best.
         (false, false) => {
             if ratio_dark_on_light >= ratio_light_on_dark {
@@ -2391,19 +2398,43 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
     }
 }
 
-/// Break a polarity tie when both sides clear the legal floor: larger WCAG margin
-/// wins; at an exact margin tie (the knife-edge background near L ≈ 0.179)
-/// dark-on-light is preferred — a fixed, documented convention. Every input to
-/// this decision is a property of the background bytes alone, so the choice is
-/// VC-independent by construction (no LPC fallback: LPC reads the viewing
-/// conditions and would re-open the theme-flip seam this module promises away).
-fn break_tie(ratio_dark_on_light: f64, ratio_light_on_dark: f64) -> Polarity {
-    const RATIO_EPS: f64 = 1e-6;
-    if (ratio_light_on_dark - ratio_dark_on_light) > RATIO_EPS {
-        Polarity::LightOnDark
-    } else {
-        Polarity::DarkOnLight
-    }
+/// Break a polarity tie when both sides clear the legal floor: **light-on-dark
+/// (white)** — a value derived from the band's geometry and the perceptual
+/// metric, not a tuned convention.
+///
+/// # Derivation
+///
+/// The double-legal band is narrow by construction. Solving the WCAG ratio for a
+/// background luminance `Y`, black text clears the AA 4.5:1 floor when
+/// `(Y + 0.05) / 0.05 ≥ 4.5` (i.e. `Y ≥ 0.175`) and white when
+/// `1.05 / (Y + 0.05) ≥ 4.5` (i.e. `Y ≤ 0.1833`). Both are legal only on
+/// `Y ∈ [0.175, 0.1833]`, a band ≈0.008 wide.
+///
+/// Legality does not decide the tie there — both sides are legal by definition —
+/// so the perceptual layer does. In the luminance domain the LPC core
+/// ([`crate::lpc::contrast_core`]) is asymmetric: its light-on-dark exponents
+/// make a light foreground read *stronger* than a dark one against a
+/// mid-luminance background, and the crossover where black would overtake white
+/// sits far above the band, near `Y ≈ 0.36` (V3 measurement: on `Y = 0.211`
+/// white scores 69.78 Lc against black's 39.79). So across the *entire*
+/// double-legal band the readable-and-perceptually-stronger side is white.
+///
+/// This replaces the former "larger WCAG margin wins" rule. The WCAG ratio is
+/// symmetric and non-perceptual; its margin crossover lies *inside* the band, at
+/// `Y ≈ 0.1791` (where `(Y+0.05)/0.05 = 1.05/(Y+0.05)`), so on the upper half
+/// `Y ∈ (0.1791, 0.1833]` the margin rule picked dark-on-light — the
+/// perceptually weaker side, and the one that made Fluent `#0078D4` (white legal
+/// at 4.529:1) emit black on its 4.637:1 margin, against the platform convention
+/// of white text on that blue.
+///
+/// The decision is still a pure function of the background bytes (band
+/// membership is WCAG; the winner is a fixed derived polarity), so it stays
+/// VC-independent by construction — no LPC *fallback* that would read the
+/// viewing conditions and re-open the per-theme-flip seam this module promises
+/// away. The perceptual asymmetry motivates the constant; it is not evaluated
+/// per background.
+fn break_tie() -> Polarity {
+    Polarity::LightOnDark
 }
 
 /// The quantised 8-bit *display* sRGB the WCAG formula is measured against — the
@@ -2845,6 +2876,335 @@ mod tests {
             let srgb = ResolveContext::new(&bg, &ViewingConditions::srgb()).polarity;
             let dim = ResolveContext::new(&bg, &ViewingConditions::dim_surround()).polarity;
             assert_eq!(srgb, dim, "{bg_hex}: polarity must not depend on VC");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CH-4a — polarity tie-break: both legal ⇒ light-on-dark (derived, not tuned).
+    //
+    // Black clears AA 4.5:1 at Y ≥ 0.175, white at Y ≤ 0.1833, so both are legal
+    // only on the narrow band Y ∈ [0.175, 0.1833]. The former rule broke the tie
+    // on the larger symmetric WCAG margin, which crosses over INSIDE the band at
+    // Y ≈ 0.1791 (solve (Y+0.05)/0.05 = 1.05/(Y+0.05)); above it black's margin
+    // wins, so the old engine emitted DARK on Y ∈ (0.1791, 0.1833] — the
+    // perceptually weaker side there (contrast_core's black-overtakes-white
+    // crossover sits near Y ≈ 0.36) and the one that made Fluent #0078D4 resolve
+    // black. The derived rule takes light-on-dark across the whole band.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// WCAG relative luminance of a solid background's quantised display bytes —
+    /// the exact number the polarity gate reads (mirrors `bg_display`).
+    fn bg_luminance(bg_hex: &str) -> f64 {
+        let bg = BgInput::solid(bg_hex).unwrap();
+        crate::wcag::relative_luminance(bg_display(&bg))
+    }
+
+    /// The FROZEN pre-CH-4a tie-break — larger symmetric WCAG margin wins, exact
+    /// tie to dark-on-light. Kept as the emission-diff ORACLE so the sweep can
+    /// enumerate exactly which backgrounds the derivation moved. Do not "improve":
+    /// it is a fixed historical reference (what `main` emits), not live policy.
+    fn choose_polarity_margin_oracle(bg: &BgInput) -> Polarity {
+        let disp = bg_display(bg);
+        let dol = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
+        let lod = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+        let dol_clears = dol + 1e-9 >= POLARITY_FLOOR_RATIO;
+        let lod_clears = lod + 1e-9 >= POLARITY_FLOOR_RATIO;
+        match (dol_clears, lod_clears) {
+            (true, false) => Polarity::DarkOnLight,
+            (false, true) => Polarity::LightOnDark,
+            (true, true) => {
+                // The old margin rule: larger WCAG margin, exact tie to dark.
+                if (lod - dol) > 1e-6 {
+                    Polarity::LightOnDark
+                } else {
+                    Polarity::DarkOnLight
+                }
+            }
+            (false, false) => {
+                if dol >= lod {
+                    Polarity::DarkOnLight
+                } else {
+                    Polarity::LightOnDark
+                }
+            }
+        }
+    }
+
+    /// Resolve every role under a FORCED polarity, mirroring `ResolveContext::new`
+    /// but substituting `polarity`. Because the tie-break is the *only* code the
+    /// derivation changed, forcing the margin oracle's polarity reproduces exactly
+    /// what `main` emits (the "before" of the emission diff) and forcing the live
+    /// polarity reproduces `resolve` — so the sweep can compare the two bit-for-bit.
+    fn resolve_all_with_polarity(
+        bg: &BgInput,
+        vc: &ViewingConditions,
+        polarity: Polarity,
+    ) -> Vec<(Role, Resolved)> {
+        let interval = bg.luma_interval(vc);
+        let max = interval
+            .as_ref()
+            .ok()
+            .and_then(|iv| max_contrast(bg, polarity, vc, *iv).ok());
+        let ctx = ResolveContext {
+            polarity,
+            max_contrast: max,
+            interval,
+            high_contrast: vc.high_contrast,
+        };
+        let table = RoleTable::default();
+        Role::ALL
+            .iter()
+            .map(|&r| (r, resolve_in(bg, r, &table, vc, &ctx)))
+            .collect()
+    }
+
+    /// One role under a forced polarity — prints the emission diff's before/after
+    /// primary hex.
+    fn resolve_forced(
+        bg: &BgInput,
+        role: Role,
+        vc: &ViewingConditions,
+        polarity: Polarity,
+    ) -> Resolved {
+        resolve_all_with_polarity(bg, vc, polarity)
+            .into_iter()
+            .find(|(r, _)| *r == role)
+            .map(|(_, res)| res)
+            .unwrap()
+    }
+
+    /// 256 neutrals + a dense chromatic byte-cube + named design tokens near the
+    /// band. The polarity gate is a pure function of the display bytes, so a
+    /// byte-space cube probes the whole chromatic input space directly.
+    fn emission_diff_grid() -> Vec<String> {
+        let mut g: Vec<String> = (0u32..=255)
+            .map(|c| format!("#{c:02X}{c:02X}{c:02X}"))
+            .collect();
+        for r in (0u32..=255).step_by(16) {
+            for gg in (0u32..=255).step_by(16) {
+                for b in (0u32..=255).step_by(16) {
+                    if r == gg && gg == b {
+                        continue; // neutrals already present
+                    }
+                    g.push(format!("#{r:02X}{gg:02X}{b:02X}"));
+                }
+            }
+        }
+        for t in [
+            "#0078D4", "#3478F6", "#007AFF", "#0066FF", "#2F80ED", "#1E88E5", "#0A84FF",
+        ] {
+            g.push(t.to_string());
+        }
+        g.sort();
+        g.dedup();
+        g
+    }
+
+    #[test]
+    fn fluent_blue_0078d4_resolves_light_on_dark() {
+        // #0078D4 (Y ≈ 0.1818) is double-legal: white 4.529:1, black 4.637:1 —
+        // both clear AA. The old margin rule took black (larger margin); the
+        // derived rule takes white, matching the Fluent convention.
+        let bg = BgInput::solid("#0078D4").unwrap();
+        let disp = bg_display(&bg);
+        let d = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
+        let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+        assert!(
+            d >= 4.5 && w >= 4.5,
+            "premise: #0078D4 must be double-legal (dark {d:.3}, white {w:.3})"
+        );
+        assert_eq!(
+            choose_polarity(&bg),
+            Polarity::LightOnDark,
+            "#0078D4 is double-legal; the derived tie-break must pick white"
+        );
+        // The whole resolved set is light-on-dark (primary lc < 0), both VCs.
+        for (vc, name) in vcs() {
+            let lc = solved_lc(&bg, Role::LabelPrimary, &vc);
+            assert!(
+                lc < 0.0,
+                "{name} #0078D4: primary must be light-on-dark, got lc {lc}"
+            );
+        }
+    }
+
+    #[test]
+    fn choose_polarity_covers_all_four_legality_branches() {
+        // (true,false) — only dark-on-light legal (white-on-white is 1:1).
+        assert_eq!(
+            choose_polarity(&BgInput::solid("#FFFFFF").unwrap()),
+            Polarity::DarkOnLight
+        );
+        // (false,true) — only light-on-dark legal (black-on-near-black < 4.5:1).
+        assert_eq!(
+            choose_polarity(&BgInput::solid("#101012").unwrap()),
+            Polarity::LightOnDark
+        );
+        // (true,true) — both legal on the band → white by derivation.
+        assert_eq!(
+            choose_polarity(&BgInput::solid("#767676").unwrap()),
+            Polarity::LightOnDark
+        );
+        assert_eq!(
+            choose_polarity(&BgInput::solid("#0078D4").unwrap()),
+            Polarity::LightOnDark
+        );
+        // (false,false) is unreachable on solid sRGB: for every Y at least one of
+        // black (Y≥0.175) / white (Y≤0.1833) clears 4.5:1, and the two half-lines
+        // cover the whole axis. Prove the dead arm stays dead over the full grid.
+        for hex in emission_diff_grid() {
+            let bg = BgInput::solid(&hex).unwrap();
+            let disp = bg_display(&bg);
+            let d = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
+            let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+            assert!(
+                d + 1e-9 >= 4.5 || w + 1e-9 >= 4.5,
+                "{hex}: neither polarity clears 4.5:1 — (false,false) must be unreachable"
+            );
+        }
+    }
+
+    #[test]
+    fn emission_diff_is_exactly_the_upper_double_legal_band_and_prints_the_table() {
+        let mut flips: Vec<(String, Polarity, Polarity, f64)> = Vec::new();
+        for hex in emission_diff_grid() {
+            let bg = BgInput::solid(&hex).unwrap();
+            let new = choose_polarity(&bg);
+            let old = choose_polarity_margin_oracle(&bg);
+            if new != old {
+                flips.push((hex.clone(), old, new, bg_luminance(&hex)));
+            }
+        }
+        // Every moved background is a dark→light flip on the upper double-legal
+        // band Y ∈ (0.1791, 0.1833], both sides genuinely legal.
+        for (hex, old, new, y) in &flips {
+            assert_eq!(
+                *old,
+                Polarity::DarkOnLight,
+                "{hex}: old polarity not dark-on-light"
+            );
+            assert_eq!(
+                *new,
+                Polarity::LightOnDark,
+                "{hex}: new polarity not light-on-dark"
+            );
+            assert!(
+                *y > 0.1791 && *y <= 0.1834,
+                "{hex}: Y {y:.6} outside the moved band (0.1791, 0.1833]"
+            );
+            let bg = BgInput::solid(hex).unwrap();
+            let disp = bg_display(&bg);
+            let d = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
+            let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+            assert!(
+                d + 1e-9 >= 4.5 && w + 1e-9 >= 4.5,
+                "{hex}: tie premise broken (dark {d:.4}, white {w:.4})"
+            );
+        }
+        // The move is real and includes the canonical neutral and chromatic cases.
+        assert!(
+            flips.iter().any(|f| f.0.as_str() == "#767676"),
+            "the neutral #767676 (Y≈0.1813) must move dark→light"
+        );
+        assert!(
+            flips.iter().any(|f| f.0.as_str() == "#0078D4"),
+            "Fluent #0078D4 (Y≈0.1818) must move dark→light"
+        );
+        // Print the before/after table (run with --nocapture to lift into the PR).
+        let vc = ViewingConditions::srgb();
+        println!(
+            "\n=== CH-4a EMISSION DIFF: {} backgrounds moved dark->light ===",
+            flips.len()
+        );
+        for (hex, old, new, y) in &flips {
+            let bg = BgInput::solid(hex).unwrap();
+            let before = resolve_forced(&bg, Role::LabelPrimary, &vc, *old)
+                .solved()
+                .map(|s| s.hex().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let after = resolve_forced(&bg, Role::LabelPrimary, &vc, *new)
+                .solved()
+                .map(|s| s.hex().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            assert_ne!(
+                before, after,
+                "{hex}: emission must actually move at resolve level, both {before}"
+            );
+            println!("{hex}  Y={y:.6}  {old:?} -> {new:?}  primary {before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn every_polarity_move_is_the_derived_white_tie_break_nothing_else_moves() {
+        // Byte-identity vs main at the decision level: the tie-break is the ONLY
+        // changed code, so wherever the derived choose_polarity equals the frozen
+        // margin oracle the whole resolved set is byte-identical to main. Assert
+        // that every DIVERGENCE across 256 neutrals + the chromatic cube is the
+        // one sanctioned move (dark→light on the band); nothing else moves.
+        for hex in emission_diff_grid() {
+            let bg = BgInput::solid(&hex).unwrap();
+            let new = choose_polarity(&bg);
+            let old = choose_polarity_margin_oracle(&bg);
+            if new == old {
+                continue; // unchanged — identical to main
+            }
+            assert_eq!(
+                old,
+                Polarity::DarkOnLight,
+                "{hex}: unexpected move FROM {old:?}"
+            );
+            assert_eq!(
+                new,
+                Polarity::LightOnDark,
+                "{hex}: unexpected move TO {new:?}"
+            );
+            let y = bg_luminance(&hex);
+            assert!(
+                y > 0.1791 && y <= 0.1834,
+                "{hex}: move at Y {y:.6} outside band"
+            );
+        }
+    }
+
+    #[test]
+    fn neutrals_outside_the_band_resolve_byte_identical_to_the_margin_rule() {
+        // Concrete to_bits identity THROUGH `resolve`, over all 256 8-bit neutrals
+        // and both VCs: wherever the derived polarity equals the margin rule, every
+        // role's emitted colour is bit-for-bit what main produced (signed lc bits +
+        // hex). Inside the moved band the two intentionally differ (the emission
+        // diff), so those neutrals are skipped here and covered by the diff test.
+        for c in 0u32..=255 {
+            let hex = format!("#{c:02X}{c:02X}{c:02X}");
+            let bg = BgInput::solid(&hex).unwrap();
+            let live = choose_polarity(&bg);
+            let oracle = choose_polarity_margin_oracle(&bg);
+            if live != oracle {
+                continue; // the intended diff
+            }
+            for (vc, name) in vcs() {
+                let a = resolve_all_with_polarity(&bg, &vc, live); // == resolve()
+                let b = resolve_all_with_polarity(&bg, &vc, oracle); // == main
+                for ((role, ra), (_, rb)) in a.iter().zip(b.iter()) {
+                    match (ra.solved(), rb.solved()) {
+                        (Some(sa), Some(sb)) => {
+                            assert_eq!(
+                                sa.lc().to_bits(),
+                                sb.lc().to_bits(),
+                                "{name} {hex} {}: lc bits moved outside the band",
+                                role.key()
+                            );
+                            assert_eq!(
+                                sa.hex(),
+                                sb.hex(),
+                                "{name} {hex} {}: hex moved outside the band",
+                                role.key()
+                            );
+                        }
+                        (None, None) => {}
+                        _ => panic!("{name} {hex} {}: resolution shape differs", role.key()),
+                    }
+                }
+            }
         }
     }
 

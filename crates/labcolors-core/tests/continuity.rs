@@ -18,11 +18,14 @@
 //!   Lc) breaks it, ordinary floor nudges do not. A *tightening* of this bound
 //!   over time would be a welcome signal; a *breach* is a regression.
 //!
-//! * **Polarity-break zone.** TextPrimary's contrast sign flips across exactly
-//!   **#757575 → #767676** — one single 8-bit step — and the step is identical
+//! * **Polarity-break zone.** LabelPrimary's contrast sign flips across exactly
+//!   **#767676 → #777777** — one single 8-bit step — and the step is identical
 //!   under both viewing conditions (the semantic module's VC-independence
 //!   promise). The test pins both the location and the width: if the zone widens,
-//!   shifts, or becomes VC-dependent, that is the signal to investigate.
+//!   shifts, or becomes VC-dependent, that is the signal to investigate. CH-4a
+//!   moved this boundary up one step (was #757575 → #767676): the derived
+//!   tie-break resolves the whole double-legal band to white, so #767676 joins
+//!   the white side and the break shifts to #767676 → #777777.
 
 use labcolors_core::{BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_set};
 
@@ -105,13 +108,23 @@ fn grey_axis_is_continuous_outside_the_single_polarity_break() {
 
 #[test]
 fn polarity_break_zone_is_one_step_wide_and_vc_independent() {
-    // The single legitimate discontinuity on the grey axis: TextPrimary's
-    // contrast sign flips across exactly #757575 -> #767676, and at no other
+    // The single legitimate discontinuity on the grey axis: LabelPrimary's
+    // contrast sign flips across exactly #767676 -> #777777, and at no other
     // step. Pinning the EXACT boundary turns any future widening or shifting of
     // the flip zone into a hard test failure (the #777-#999 stripe was precisely
     // a misplaced flip). The step must also be identical under both viewing
     // conditions — the semantic module guarantees polarity is read from the
     // background bytes alone, never the VC.
+    //
+    // CH-4a moved this boundary UP one grey step, from #757575->#767676 to
+    // #767676->#777777. Derivation: #767676 (Y≈0.1813) is double-legal (black
+    // 4.626:1, white 4.540:1 both clear AA), and the tie-break now resolves the
+    // whole double-legal band to light-on-dark (white) — see `semantic::break_tie`.
+    // So #767676 flips from dark-on-light to light-on-dark and joins #757575 on
+    // the white side; the sign break shifts to the next step #767676->#777777,
+    // where white finally becomes illegal (Y > 0.1833). The invariant is unchanged
+    // (exactly one VC-independent flip); only the derived location moved. This IS
+    // part of the CH-4a emission diff.
     for (vc, vc_name) in vcs() {
         let table = RoleTable::default();
         let mut flip_steps: Vec<(u8, u8)> = Vec::new();
@@ -134,9 +147,9 @@ fn polarity_break_zone_is_one_step_wide_and_vc_independent() {
         );
         assert_eq!(
             flip_steps[0],
-            (0x75, 0x76),
-            "{vc_name}: polarity break moved off #757575->#767676 to \
-             #{:02X}->#{:02X} — the WCAG flip shifted",
+            (0x76, 0x77),
+            "{vc_name}: polarity break moved off the derived #767676->#777777 to \
+             #{:02X}->#{:02X} — the derived tie-break boundary shifted",
             flip_steps[0].0,
             flip_steps[0].1,
         );
