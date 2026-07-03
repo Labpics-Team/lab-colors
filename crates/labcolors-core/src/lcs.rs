@@ -7,6 +7,10 @@ use crate::spaces::{cam16, cat16, oklab, vc::ViewingConditions};
 pub struct LcsColor {
     pub jp: f64,
     pub h_ok: f64,
+    /// Internal reparameterisation of CAM16-UCS colourfulness `M′`:
+    /// `s = M′ / (J′ + 1)`. The `+ 1` is a regulariser against division by zero
+    /// as `J′ → 0`; it is lossless — [`LcsColor::mp`] recovers `M′` exactly as
+    /// `s · (J′ + 1)`. This is NOT the CAM16 saturation correlate.
     pub s: f64,
     h_cam: f64,
 }

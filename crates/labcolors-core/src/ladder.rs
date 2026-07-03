@@ -15,7 +15,9 @@
 //! контраст-корректности на подложке (фаза 1 AA: контраст меряется на композите).
 //! Заземление: Figma «🧪Lab UI (v.1)» (переменные `Accent/Derivable/*`, обход
 //! через figma-console, 2026-07-02), `reference/labui-accent-primitives.md` §2
-//! (пер-темные якоря), стаб labui `packages/colors-stub/contract.css` (@NN-рампа).
+//! (пер-темные якоря), стаб из labui-репо `packages/colors-stub/contract.css`
+//! (не путь в ЭТОМ репо — файла здесь нет; @NN-рампа, снапшот-значения запинены
+//! тестами конфига).
 //!
 //! # Провенанс альф позиций
 //!
@@ -240,7 +242,8 @@ impl LadderPosition {
     ];
 
     /// Пер-темная пара альф `(light, dark)` позиции — ДАННЫЕ, снятые построчно из
-    /// стаба labui `packages/colors-stub/contract.css` (light-scope `[data-theme=
+    /// стаба в labui-репо `packages/colors-stub/contract.css` (файла нет в ЭТОМ
+    /// репо; снапшот запинен тестами конфига — light-scope `[data-theme=
     /// "light"]` и dark-scope `[data-theme="dark"]`, снято 2026-07-02).
     ///
     /// Пару `(light, dark)` несёт КАЖДАЯ позиция; у акцентных обе альфы равны
