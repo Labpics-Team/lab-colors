@@ -2295,49 +2295,25 @@ pub fn resolve_set(
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    // Neutral fast path: a solid grey background under a supported VC and the
-    // default table resolves to a precomputed set in O(1) (no forwards, no
-    // bisection). Transparent — it returns the exact set the live solver below
-    // would, and declines (falls back) for anything outside that exact domain.
-    if let Some(fast) = crate::greyfast::try_resolve_set(bg, table, vc) {
-        return fast;
-    }
-    // Chromatic memo: a non-grey solid under a supported VC and the default table
-    // is served from (or recorded into) a per-thread memo keyed on the exact
-    // display colour, so a repeated chromatic surface costs an O(1) lookup instead
-    // of the full live solve. Also transparent and bit-identical — a miss runs and
-    // caches the live solver below.
-    if let Some(fast) = crate::chromafast::try_resolve_set(bg, table, vc) {
-        return fast;
-    }
+    // The former O(1) grey (`greyfast`) and chromatic-memo (`chromafast`) fast
+    // paths were deleted with ADR-0001 PR-c: they only ever accelerated this
+    // built-in `resolve_set`, which is no longer on any production path (the
+    // agnostic engine ships only the string-keyed `resolve_named_set`). A cold
+    // named grey resolve was measured at ~1.7 ms (resolve-only) / ~3.1 ms
+    // (compile+resolve) in release — a one-time, sub-frame cost — so the ~468 KB
+    // precomputed grey table earned no keep. This built-in path survives solely as
+    // the `#[cfg(test)]` byte-identity oracle for the named path, so the live
+    // solve is all it needs.
     resolve_set_live(bg, table, vc)
 }
 
-#[cfg(test)]
-thread_local! {
-    /// Test-only counter of [`resolve_set_live`] invocations. Lets the greyfast
-    /// probe prove the constant fast path reconstructs a grey set without ever
-    /// calling the live solver (no lazy 256-resolve build). Zero cost in
-    /// production: the increment is compiled out entirely.
-    pub(crate) static LIVE_SOLVE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Reset the test-only [`LIVE_SOLVE_COUNT`] to zero and return its prior value.
-#[cfg(test)]
-pub(crate) fn reset_live_solve_count() -> usize {
-    LIVE_SOLVE_COUNT.with(|c| c.replace(0))
-}
-
-/// The full solver sweep behind [`resolve_set`] — the live path the neutral fast
-/// path falls back to, and the path that fills its precomputed table. Always
-/// recomputes; takes no fast path itself (so the table builder cannot recurse).
+/// The full solver sweep behind [`resolve_set`] — the built-in byte-identity
+/// oracle for the named path. Always recomputes.
 pub(crate) fn resolve_set_live(
     bg: &BgInput,
     table: &RoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
-    #[cfg(test)]
-    LIVE_SOLVE_COUNT.with(|c| c.set(c.get() + 1));
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing

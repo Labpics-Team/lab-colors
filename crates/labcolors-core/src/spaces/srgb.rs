@@ -107,35 +107,6 @@ fn decode_8bit(byte: u8) -> f64 {
     gamma_data::DECODE_8BIT[byte as usize]
 }
 
-/// The 8-bit grey code whose exact linear light equals `linear`, or `None` if
-/// `linear` is not one of the 256 reachable levels.
-///
-/// Binary search over the strictly increasing [`DECODE_8BIT`] table for an exact
-/// (bit) match. A solid grey background decoded from `#NNNNNN` lands exactly on
-/// `DECODE_8BIT[NN]`, so the match succeeds for on-grid greys and cleanly fails
-/// (the caller falls back to the live solver) for off-grid values such as a
-/// blurred average — the neutral fast path stays provably exact, never an
-/// approximation.
-pub(crate) fn grey_code(linear: f64) -> Option<u8> {
-    let table = &gamma_data::DECODE_8BIT;
-    let (mut lo, mut hi) = (0usize, table.len() - 1);
-    while lo <= hi {
-        let mid = (lo + hi) / 2;
-        let v = table[mid];
-        if v == linear {
-            return Some(mid as u8);
-        }
-        if v < linear {
-            lo = mid + 1;
-        } else if mid == 0 {
-            break;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    None
-}
-
 // NOTE on the encode (quantisation) side — deliberately NOT tabulated.
 //
 // `hex_from_srgb` takes a *continuous* linear value (matrix / Oklab output), so
@@ -179,19 +150,6 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     // The input is always an 8-bit byte, so the decode is an exact table lookup
     // (finite domain) — no per-channel powf.
     Ok([decode_8bit(r), decode_8bit(g), decode_8bit(b)])
-}
-
-/// Decode three 8-bit sRGB channels → linear sRGB `[r, g, b]` in `[0, 1]`, the
-/// exact byte-for-byte value [`srgb_from_hex`] yields for the same bytes, with no
-/// hex string. The precomputed grey fast-path stores each resolved colour as its
-/// three emitted bytes and decodes them here before replaying `finish`, so the
-/// decode must be the same finite-domain table [`srgb_from_hex`] uses.
-pub(crate) fn srgb_from_rgb8(rgb: [u8; 3]) -> [f64; 3] {
-    [
-        decode_8bit(rgb[0]),
-        decode_8bit(rgb[1]),
-        decode_8bit(rgb[2]),
-    ]
 }
 
 /// Quantise linear sRGB to the 8-bit display grid and back to linear, exactly as

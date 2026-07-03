@@ -30,9 +30,5 @@ name = "y_hk"
 harness = false
 
 [[bench]]
-name = "resolve_set"
-harness = false
-
-[[bench]]
 name = "jp_inv"
 harness = false
