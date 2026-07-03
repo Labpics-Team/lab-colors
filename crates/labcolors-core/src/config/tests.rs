@@ -1767,3 +1767,93 @@ fn achromatic_hue_sources_are_handled_honestly() {
         "при сером бренде сентимент = сырой якорь семейства (разведение отключено)"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Пресет ролей: тонкий конфиг наполняется словарём пресета ДО валидации.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Тонкий конфиг labui: пресет + якоря/ручки эталона, БЕЗ собственного словаря.
+///
+/// Строим из эталона, обнуляя `roles`/`aliases` и ставя `preset` — так якоря
+/// гарантированно те же, а тест проверяет МЕХАНИЗМ наполнения, не переписывает
+/// значения.
+fn thin_labui() -> ThemeConfig {
+    let mut cfg = labui_reference();
+    cfg.roles = Vec::new();
+    cfg.aliases = Vec::new();
+    cfg.preset = Some(RolePreset::Labui);
+    cfg
+}
+
+#[test]
+fn thin_labui_preset_expands_to_reference_byte_for_byte() {
+    let thin = thin_labui();
+    // Каноническая форма тонкого конфига == полный эталон: пресет наполнил
+    // словарь, поле пресета снято (иначе полный эталон с preset=None не совпал бы).
+    let expanded = thin
+        .with_preset_expanded()
+        .expect("тонкий labui обязан раскрываться");
+    assert_eq!(
+        *expanded,
+        labui_reference(),
+        "раскрытый тонкий конфиг байт-в-байт равен labui_reference()"
+    );
+
+    // И компилируется в БАЙТ-ИДЕНТИЧНУЮ NamedRoleTable (голден по всем ролям и
+    // алиасам — NamedRoleTable: PartialEq над спецификациями и алиасами).
+    let thin_table = thin
+        .compile_named_role_table()
+        .expect("тонкий конфиг компилируется");
+    let full_table = labui_reference()
+        .compile_named_role_table()
+        .expect("эталон компилируется");
+    assert_eq!(
+        thin_table, full_table,
+        "тонкий (preset) и полный (roles) дают одну NamedRoleTable"
+    );
+
+    // Полный preflight тонкого конфига проходит (validate = компиляция).
+    assert_eq!(thin.validate(), Ok(()), "тонкий конфиг валиден");
+}
+
+#[test]
+fn preset_with_explicit_roles_is_rejected() {
+    // Пресет + собственная роль: оверрайд запрещён в этом слое — честная ошибка.
+    let mut with_role = thin_labui();
+    with_role.roles = vec![("my-role".to_string(), RoleRecipe::Zero)];
+    assert_eq!(
+        with_role.with_preset_expanded().err(),
+        Some(ConfigError::PresetWithRoles),
+        "preset + непустые roles обязан отклоняться"
+    );
+    // Полный preflight (validate = compile) даёт ту же ошибку тем же путём.
+    assert_eq!(with_role.validate(), Err(ConfigError::PresetWithRoles));
+
+    // Симметрично: пресет + собственный алиас (словарь пресета — единое целое).
+    let mut with_alias = thin_labui();
+    with_alias.aliases = vec![("a".to_string(), "border-base".to_string())];
+    assert_eq!(with_alias.validate(), Err(ConfigError::PresetWithRoles));
+}
+
+#[test]
+fn preset_error_message_is_russian_and_names_both_sides() {
+    // Сообщение по-русски и называет ОБЕ стороны развилки — клиент чинит без гадания.
+    let msg = ConfigError::PresetWithRoles.to_string();
+    assert!(
+        msg.contains("пресет") && msg.contains("preset") && msg.contains("roles"),
+        "сообщение по-русски и различимо: {msg:?}"
+    );
+}
+
+#[test]
+fn no_preset_leaves_config_untouched() {
+    // Конфиг без пресета — существующее поведение: with_preset_expanded не
+    // клонирует и не трогает словарь (Cow::Borrowed на self).
+    let full = labui_reference();
+    let expanded = full.with_preset_expanded().expect("эталон раскрывается");
+    assert!(
+        matches!(expanded, std::borrow::Cow::Borrowed(_)),
+        "конфиг без пресета не клонируется (Cow::Borrowed)"
+    );
+    assert_eq!(*expanded, full, "и остаётся байт-в-байт собой");
+}

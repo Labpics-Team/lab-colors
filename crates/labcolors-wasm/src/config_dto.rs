@@ -317,6 +317,9 @@ impl TryFrom<ConfigDto> for ThemeConfig {
             roles.push((role.name, RoleRecipe::try_from(role.recipe)?));
         }
         Ok(ThemeConfig {
+            // Слой 2: ядро несёт поле `preset`, но DTO ещё нет — вход всегда
+            // полный (со своим словарём). Слой 3 добавит поле в DTO и мэппинг.
+            preset: None,
             brand: Brand {
                 anchors: dto.brand.into(),
             },

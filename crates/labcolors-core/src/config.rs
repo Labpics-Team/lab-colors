@@ -32,6 +32,8 @@
 //! композит на фоне резолва для замера контраста). Меню позиций + провенанс —
 //! приложение A к `docs/decisions/0001-config-boundary.md`.
 
+use std::borrow::Cow;
+
 use crate::ladder::{LadderPosition, LadderTint, ThemeAnchors};
 use crate::semantic::{self, DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec, TextAnchor};
 use crate::solve::Floor;
@@ -211,6 +213,12 @@ pub enum ConfigError {
     /// заглушка для БУДУЩИХ рецептов (все текущие компилируются; вариант
     /// сохранён как сеам для расширения меню без ломающего изменения).
     NotYetImplemented { recipe: &'static str, role: String },
+    /// Конфиг задал И [`preset`](ThemeConfig::preset), И собственные
+    /// `roles`/`aliases`. Пресет наполняет словарь ролей ЦЕЛИКОМ — смешение
+    /// неоднозначно (какой словарь выигрывает, было бы тихим вопросом порядка).
+    /// Оверрайд отдельных ролей поверх пресета — будущий слой (если владелец
+    /// решит); в этом слое пресет — всё-или-ничего.
+    PresetWithRoles,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -272,6 +280,10 @@ impl std::fmt::Display for ConfigError {
             ConfigError::NotYetImplemented { recipe, role } => write!(
                 f,
                 "рецепт `{recipe}` (роль `{role}`) ещё не реализован ядром"
+            ),
+            ConfigError::PresetWithRoles => write!(
+                f,
+                "пресет наполняет роли целиком; передайте либо preset, либо roles"
             ),
         }
     }
@@ -529,9 +541,50 @@ pub enum NeutralPick {
     Dark,
 }
 
+/// Именованный пресет ролей: наполняет тонкий конфиг полным словарём ролей и
+/// алиасов дизайн-системы, чтобы клиент вносил ТОЛЬКО значения (якоря нейтрали и
+/// бренда, ручки), а не семантику (простыню из 101 роли).
+///
+/// В этом слое пресет — всё-или-ничего: конфиг задаёт [`preset`](ThemeConfig::preset)
+/// ЛИБО собственные `roles`/`aliases`, но не то и другое (оверрайд отдельных
+/// ролей поверх пресета — будущий слой, если владелец решит; сейчас честная
+/// [`ConfigError::PresetWithRoles`]).
+///
+/// `#[non_exhaustive]`: меню пресетов растёт (ныне шипится один — [`Labui`](Self::Labui)),
+/// новые варианты не станут ломающим изменением для клиентов сопоставления.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RolePreset {
+    /// Пресет дизайн-системы Labui — 101 роль + 3 алиаса
+    /// ([`labui_preset_roles`] / [`labui_preset_aliases`]).
+    Labui,
+}
+
+impl RolePreset {
+    /// Роли пресета в порядке объявления.
+    pub fn roles(self) -> Vec<(String, RoleRecipe)> {
+        match self {
+            RolePreset::Labui => labui_preset_roles(),
+        }
+    }
+
+    /// Алиасы пресета (имя → существующая роль).
+    pub fn aliases(self) -> Vec<(String, String)> {
+        match self {
+            RolePreset::Labui => labui_preset_aliases(),
+        }
+    }
+}
+
 /// Полный конфиг темы потребителя (без сериализации — она на границе WASM).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
+    /// Именованный пресет ролей. При `Some(preset)` и пустых `roles`/`aliases`
+    /// компилятор наполняет словарь из пресета ДО валидации — тонкий конфиг:
+    /// клиент вносит значения, не семантику. `None` — конфиг несёт собственный
+    /// словарь `roles`/`aliases`. `Some(preset)` + непустые `roles`/`aliases` —
+    /// [`ConfigError::PresetWithRoles`] (см. [`with_preset_expanded`](Self::with_preset_expanded)).
+    pub preset: Option<RolePreset>,
     /// Бренд-вход.
     pub brand: Brand,
     /// Нейтральная шкала + подтон.
@@ -951,18 +1004,60 @@ impl ThemeConfig {
         }
     }
 
+    /// Каноническая форма конфига: если задан [`preset`](Self::preset), наполнить
+    /// `roles`/`aliases` из него и снять поле пресета; иначе — конфиг как есть.
+    ///
+    /// Наполнение идёт ДО валидации/компиляции, поэтому тонкий конфиг (пресет +
+    /// якоря + ручки, без `roles`) и полный (тот же словарь прямо в `roles`) дают
+    /// БАЙТ-ИДЕНТИЧНУЮ каноническую форму — а значит и один отпечаток. Это тот же
+    /// код-путь, что и у конфига со своим словарём: паритет не разъедется.
+    ///
+    /// [`Cow`]: конфиг без пресета не клонируется (частый путь — полный эталон и
+    /// клиенты со своим словарём резолвятся без лишней копии).
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::PresetWithRoles`], если задан и пресет, и непустые
+    /// `roles`/`aliases`: пресет наполняет словарь целиком, смешение
+    /// неоднозначно (оверрайд отдельных ролей — будущий слой).
+    pub fn with_preset_expanded(&self) -> Result<Cow<'_, ThemeConfig>, ConfigError> {
+        let Some(preset) = self.preset else {
+            return Ok(Cow::Borrowed(self));
+        };
+        if !self.roles.is_empty() || !self.aliases.is_empty() {
+            return Err(ConfigError::PresetWithRoles);
+        }
+        let mut expanded = self.clone();
+        expanded.roles = preset.roles();
+        expanded.aliases = preset.aliases();
+        expanded.preset = None;
+        Ok(Cow::Owned(expanded))
+    }
+
     /// Скомпилировать роли конфига в [`NamedRoleTable`], которую
     /// [`resolve_named_set`](crate::semantic::resolve_named_set) резолвит той же
     /// физикой, что и встроенную [`crate::RoleTable`].
     ///
-    /// Структурная фаза ([`validate_syntactic`](Self::validate_syntactic))
-    /// выполняется первой; деривационные ошибки возвращаются по ходу компиляции
-    /// (снаружи обе фазы разом — [`validate`](Self::validate), который и есть
-    /// эта компиляция с отброшенным результатом — НЕ вызывать её отсюда:
-    /// рекурсия). [`Ladder`](RoleRecipe::Ladder) раскладывает источник в
-    /// пер-темный тинт, [`AlphaAnalog`](RoleRecipe::AlphaAnalog) — солид-цель
-    /// источника + альфа.
+    /// Пресет наполняется первым ([`with_preset_expanded`](Self::with_preset_expanded)),
+    /// затем структурная фаза ([`validate_syntactic`](Self::validate_syntactic)) и
+    /// деривационные ошибки по ходу компиляции (снаружи все фазы разом —
+    /// [`validate`](Self::validate), который и есть эта компиляция с отброшенным
+    /// результатом; НЕ вызывать её из фаз — рекурсия). [`Ladder`](RoleRecipe::Ladder)
+    /// раскладывает источник в пер-темный тинт, [`AlphaAnalog`](RoleRecipe::AlphaAnalog)
+    /// — солид-цель источника + альфа.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] структурной/деривационной фазы либо
+    /// [`ConfigError::PresetWithRoles`] наполнения пресета.
     pub fn compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError> {
+        self.with_preset_expanded()?.compile_expanded()
+    }
+
+    /// Скомпилировать УЖЕ РАСКРЫТУЮ форму (пресет наполнен, поле снято) в
+    /// [`NamedRoleTable`]. Приватна: инвариант «пресет уже раскрыт» держит
+    /// единственный вызыватель [`compile_named_role_table`](Self::compile_named_role_table).
+    fn compile_expanded(&self) -> Result<NamedRoleTable, ConfigError> {
         self.validate_syntactic()?;
 
         let mut entries: Vec<(String, RoleSpec)> = Vec::with_capacity(self.roles.len());
@@ -1527,6 +1622,9 @@ pub fn labui_preset_aliases() -> Vec<(String, String)> {
 /// таблицы на всех 240 точках golden-грида (лестница/альфа — сверх этой таблицы).
 pub fn labui_reference() -> ThemeConfig {
     ThemeConfig {
+        // Полный эталон несёт словарь в `roles`/`aliases` напрямую (не через
+        // пресет): это и есть источник, из которого пресет наполняет тонкий конфиг.
+        preset: None,
         brand: Brand {
             // Пер-темный бренд labui (reference/labui-accent-primitives.md §2,
             // Figma `Accent/Brand`): light/dark/light-ic/dark-ic — дословно.
