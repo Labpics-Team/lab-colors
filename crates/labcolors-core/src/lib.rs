@@ -49,4 +49,5 @@ pub use solve::{
     Unreachable, solve, solve_many,
 };
 pub use spaces::oklch::{oklch_css_from_hex, oklch_from_hex};
+pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
 pub use spaces::vc::ViewingConditions;

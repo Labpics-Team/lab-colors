@@ -47,22 +47,31 @@ pub fn oklch_from_hex(hex: &str) -> Result<[f64; 3], String> {
 pub fn oklch_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, String> {
     let [l, c, h] = oklch_from_hex(hex)?;
     let base = format!("oklch({:.5}% {:.6} {:.3}", l * 100.0, c, h);
-    Ok(match alpha {
+    let suffix = css_alpha_suffix(alpha)?;
+    Ok(format!("{base}{suffix})"))
+}
+
+/// Общий CSS-суффикс альфы для всех форм эмиссии (`oklch(...)`, `color(display-p3 ...)`):
+/// пустая строка для солида, `" / A"` для полупрозрачного. ЕДИНСТВЕННЫЙ дом
+/// политики альфы — правило клампа/ошибки не переобъявлять в других модулях.
+///
+/// Кламп — только для вычислительного шума в пределах эпсилона от
+/// [0, 1] (легитимен у выведенных альф; заодно гасит артефакт "-0").
+/// Всё остальное — честная ошибка, не тихая подмена: NaN в CSS
+/// невалиден, а альфа -10 или 2 — дефект вызывающего кода.
+pub(crate) fn css_alpha_suffix(alpha: Option<f64>) -> Result<String, String> {
+    match alpha {
+        None => Ok(String::new()),
         Some(a) => {
-            // Кламп — только для вычислительного шума в пределах эпсилона от
-            // [0, 1] (легитимен у выведенных альф; заодно гасит артефакт "-0").
-            // Всё остальное — честная ошибка, не тихая подмена: NaN в CSS
-            // невалиден, а альфа -10 или 2 — дефект вызывающего кода.
             const ALPHA_NOISE: f64 = 1e-6;
             if !a.is_finite() || !(-ALPHA_NOISE..=1.0 + ALPHA_NOISE).contains(&a) {
                 return Err(format!("альфа вне [0, 1]: {a}"));
             }
             let a4 = format!("{:.4}", a.clamp(0.0, 1.0));
             let a4 = a4.trim_end_matches('0').trim_end_matches('.');
-            format!("{base} / {a4})")
+            Ok(format!(" / {a4}"))
         }
-        None => format!("{base})"),
-    })
+    }
 }
 
 /// Обратный путь (только для доказательства round-trip): (L, C, H°) → hex.

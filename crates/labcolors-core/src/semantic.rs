@@ -1299,15 +1299,28 @@ impl ResolveContext {
     }
 
     /// The signed range contract for a decorative JND role: the chosen polarity's
-    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`] (or 15.0 under high contrast),
-    /// no readability floor.
+    /// sign times a magnitude held above [`DECORATIVE_FLOOR_MIN`], no readability
+    /// floor.
+    ///
+    /// Under high contrast the floor delta `IC_DECORATIVE_FLOOR_MIN −
+    /// DECORATIVE_FLOOR_MIN` is applied as an ORDER-PRESERVING uniform shift on
+    /// top of the regular floored magnitude — not as a `max` with the IC floor.
+    /// A plain `max(|m|, 15.0)` collapsed every decorative magnitude below 15
+    /// (the whole shadow stack 8/9.5/11.5/14 and the separator) onto one
+    /// identical target, so under `-ic` all four shadows resolved to the same
+    /// byte-identical colour, violating the stack's strictly-ascending contract
+    /// and silently mutating the owner-measured Lc deltas. The shift keeps every
+    /// pairwise gap exactly as measured while guaranteeing the result is at
+    /// least `IC_DECORATIVE_FLOOR_MIN` (any input already sits at or above
+    /// `DECORATIVE_FLOOR_MIN` after the regular floor).
     fn decorative_contract(&self, magnitude: f64) -> Contract {
-        let floor = if self.high_contrast {
-            IC_DECORATIVE_FLOOR_MIN
+        let floored = magnitude.abs().max(DECORATIVE_FLOOR_MIN);
+        let effective = if self.high_contrast {
+            floored + (IC_DECORATIVE_FLOOR_MIN - DECORATIVE_FLOOR_MIN)
         } else {
-            DECORATIVE_FLOOR_MIN
+            floored
         };
-        let target = self.polarity.sign() * magnitude.abs().max(floor);
+        let target = self.polarity.sign() * effective;
         // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
         Contract::range(target, target)
     }
@@ -3337,6 +3350,55 @@ mod tests {
                     assert!(
                         pair[0] < pair[1],
                         "{vc_name} {bg_hex}: shadow stack not strictly ascending, |Lc| {mags:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shadow_stack_is_strictly_ascending_under_increased_contrast() {
+        // Класс-замок корнер-кейса IC (2026-07-03): пол повышенной контрастности
+        // применялся как `max(|m|, 15.0)` и схлопывал ВЕСЬ стек теней
+        // (8/9.5/11.5/14 → 15/15/15/15) плюс сепаратор в один побайтно
+        // одинаковый цвет — строгая лестница нарушалась ровно в `-ic` темах,
+        // которые не гонял ни один тест (`vcs()` не содержит IC-пресетов).
+        // RED до порядкосохраняющего сдвига в `decorative_contract`, GREEN после:
+        // (1) строгий порядок minor < ambient < penumbra < major сохранён;
+        // (2) каждая ступень держит IC-пол 15.0 Lc (с допуском квантования);
+        // (3) измеренные владельцем зазоры стека не мутируют: целевые величины
+        //     сдвинуты равномерно, поэтому попарные разрывы ≥ 1 Lc остаются.
+        let table = RoleTable::default();
+        for (vc, vc_name) in [
+            (ViewingConditions::srgb_high_contrast(), "srgb-ic"),
+            (ViewingConditions::dim_surround_high_contrast(), "dim-ic"),
+        ] {
+            for bg_hex in ["#FFFFFF", "#F2F2F7", "#1C1C1E", "#101012"] {
+                let bg = BgInput::solid(bg_hex).unwrap();
+                let set = resolve_set(&bg, &table, &vc);
+                let stack = [
+                    Role::ShadowMinor,
+                    Role::ShadowAmbient,
+                    Role::ShadowPenumbra,
+                    Role::ShadowMajor,
+                ];
+                let mags: Vec<f64> = stack.iter().map(|&r| ladder_mag(&set, r)).collect();
+                for pair in mags.windows(2) {
+                    assert!(
+                        pair[0] < pair[1],
+                        "{vc_name} {bg_hex}: IC shadow stack not strictly ascending, |Lc| {mags:?}"
+                    );
+                    assert!(
+                        pair[1] - pair[0] >= 1.0,
+                        "{vc_name} {bg_hex}: IC shadow gap collapsed below 1 Lc: {mags:?}"
+                    );
+                }
+                for (role, mag) in stack.iter().zip(&mags) {
+                    assert!(
+                        *mag >= IC_DECORATIVE_FLOOR_MIN - 1.0,
+                        "{vc_name} {bg_hex}: {} |Lc| {mag:.2} below the IC floor \
+                         {IC_DECORATIVE_FLOOR_MIN} (quantisation tolerance 1.0)",
+                        role.key()
                     );
                 }
             }
