@@ -1132,7 +1132,15 @@ pub enum Resolved {
     /// the strict hierarchy could not hold and the role was demoted to the
     /// smallest distinguishable step below — an honest, flagged degradation
     /// rather than a silent two-roles-one-colour collapse. See the module docs.
-    Color { solved: Solved, compressed: bool },
+    ///
+    /// `achieved_dj` — честный замер |ΔJ'| на отданном hex для dJ'-ролей
+    /// (симметрия честности с [`GlowResolved::achieved_dj`]); `None` у
+    /// контраст-ролей (их метрика — Lc, он в [`Solved::lc`]).
+    Color {
+        solved: Solved,
+        compressed: bool,
+        achieved_dj: Option<f64>,
+    },
     /// Полупрозрачная роль лестницы/альфа-аналога: `rgba(tint, α)`, которую
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
     /// Несёт солид-композит на фоне резолва для честного замера контраста.
@@ -1262,6 +1270,7 @@ impl Resolved {
         Resolved::Color {
             solved,
             compressed: false,
+            achieved_dj: Option::None,
         }
     }
 
@@ -1491,6 +1500,7 @@ fn resolve_spec_in(
                 Ok(d) => Resolved::Color {
                     solved: d.solved,
                     compressed: d.degraded,
+                    achieved_dj: Some(d.achieved_dj),
                 },
                 Err(reason) => Resolved::Unreachable(reason),
             };
@@ -2097,14 +2107,18 @@ fn enforce_text_hierarchy(
         };
         entry.1 = match (demoted, senior_solved, &entry.1) {
             // A distinguishable, still-legal step below the senior.
+            // achieved_dj сбрасывается: цвет заменён сжатием, прежний замер
+            // ему не принадлежит (честнее None, чем чужое число).
             (Some(solved), _, _) => Resolved::Color {
                 solved,
                 compressed: true,
+                achieved_dj: Option::None,
             },
             // No room to separate: equal to the senior by copy, flagged.
             (None, Some(solved), Resolved::Color { .. }) => Resolved::Color {
                 solved,
                 compressed: true,
+                achieved_dj: Option::None,
             },
             (None, _, other) => other.clone(),
         };
@@ -2658,9 +2672,9 @@ mod tests {
         set.iter()
             .find(|(r, _)| *r == role)
             .and_then(|(_, res)| match res {
-                Resolved::Color { solved, compressed } => {
-                    Some((solved.hex().to_string(), *compressed))
-                }
+                Resolved::Color {
+                    solved, compressed, ..
+                } => Some((solved.hex().to_string(), *compressed)),
                 _ => None,
             })
     }
@@ -3033,7 +3047,9 @@ mod tests {
         );
         let bg = BgInput::solid("#101012").unwrap();
         match resolve(&bg, Role::FillPrimary, &table, &vc) {
-            Resolved::Color { solved, compressed } => {
+            Resolved::Color {
+                solved, compressed, ..
+            } => {
                 assert!(compressed, "off-axis dJ' must carry the degradation flag");
                 // Стена светлой стороны: решённый цвет заметно светлее фона
                 // (light-on-dark полярность на #101012) — не тихий возврат фона.

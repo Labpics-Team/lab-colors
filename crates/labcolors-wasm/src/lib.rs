@@ -52,6 +52,8 @@ export interface SolvedColor {
   readonly wcagRatio: number;
   /** The legal floor squeezed this role onto the smallest step below its senior. */
   readonly compressed: boolean;
+  /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
+  readonly achievedDj: number | null;
   /** The WCAG floor overrode the perceptual target. */
   readonly floorOverride: boolean;
   /**
@@ -327,6 +329,11 @@ fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
                 set(&role_obj, "lc", &JsValue::from_f64(c.lc));
                 set(&role_obj, "wcagRatio", &JsValue::from_f64(c.wcag_ratio));
                 set(&role_obj, "compressed", &JsValue::from_bool(c.compressed));
+                set(
+                    &role_obj,
+                    "achievedDj",
+                    &c.achieved_dj.map_or(JsValue::NULL, JsValue::from_f64),
+                );
                 set(
                     &role_obj,
                     "floorOverride",

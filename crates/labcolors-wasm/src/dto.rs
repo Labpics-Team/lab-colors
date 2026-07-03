@@ -102,6 +102,9 @@ pub struct SolvedColor {
     /// `true` when the legal floor squeezed this role onto the smallest step
     /// below its senior (an honest, flagged hierarchy degradation).
     pub compressed: bool,
+    /// Честный замер |ΔJ'| на отданном hex для dJ'-ролей (симметрия с glow);
+    /// `None` у контраст-ролей (их метрика — Lc).
+    pub achieved_dj: Option<f64>,
     /// `true` when the WCAG legal floor overrode the perceptual target.
     pub floor_override: bool,
     /// The minimum WCAG ratio this role is legally clamped to (`AaText` → 4.5,

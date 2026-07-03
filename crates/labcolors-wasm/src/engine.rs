@@ -228,9 +228,11 @@ impl Engine {
 /// the role's WCAG clamp (from the role table), carried onto a solved colour.
 fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
     match resolved {
-        Resolved::Color { solved, compressed } => {
-            RoleOutcome::Color(map_solved(solved, compressed, legal_floor))
-        }
+        Resolved::Color {
+            solved,
+            compressed,
+            achieved_dj,
+        } => RoleOutcome::Color(map_solved(solved, compressed, achieved_dj, legal_floor)),
         Resolved::None => RoleOutcome::None,
         Resolved::Unreachable(reason) => RoleOutcome::Unreachable {
             code: unreachable_code(&reason),
@@ -265,12 +267,18 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
     }
 }
 
-fn map_solved(solved: Solved, compressed: bool, legal_floor: Option<f64>) -> SolvedColor {
+fn map_solved(
+    solved: Solved,
+    compressed: bool,
+    achieved_dj: Option<f64>,
+    legal_floor: Option<f64>,
+) -> SolvedColor {
     SolvedColor {
         hex: solved.hex().to_owned(),
         lc: solved.lc(),
         wcag_ratio: solved.wcag_ratio(),
         compressed,
+        achieved_dj,
         floor_override: solved.floor_override(),
         legal_floor,
     }
@@ -759,11 +767,19 @@ mod tests {
                 }
             }
             match (resolved, &entry.outcome) {
-                (Resolved::Color { solved, compressed }, RoleOutcome::Color(c)) => {
+                (
+                    Resolved::Color {
+                        solved,
+                        compressed,
+                        achieved_dj,
+                    },
+                    RoleOutcome::Color(c),
+                ) => {
                     assert_eq!(solved.hex(), c.hex, "{name}: hex");
                     assert_eq!(solved.lc(), c.lc, "{name}: lc");
                     assert_eq!(solved.wcag_ratio(), c.wcag_ratio, "{name}: wcag");
                     assert_eq!(*compressed, c.compressed, "{name}: compressed");
+                    assert_eq!(*achieved_dj, c.achieved_dj, "{name}: achieved_dj");
                     assert_eq!(
                         solved.floor_override(),
                         c.floor_override,

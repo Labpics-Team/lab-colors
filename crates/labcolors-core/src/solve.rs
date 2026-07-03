@@ -945,10 +945,8 @@ struct DjCandidate {
 /// ближайший достижимый).
 pub(crate) struct DjSolved {
     pub(crate) solved: Solved,
-    /// Честный замер на отданном hex; в продакшн-резолве пока не эмитится
-    /// (Resolved::Color несёт только флаг) — читается тестом честности
-    /// деградации и зарезервирован под диагностический DTO.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Честный замер |ΔJ'| на отданном hex — доносится до
+    /// `Resolved::Color.achieved_dj` и wasm-DTO (симметрия честности с glow).
     pub(crate) achieved_dj: f64,
     pub(crate) degraded: bool,
 }
