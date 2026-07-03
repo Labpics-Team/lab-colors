@@ -28,6 +28,19 @@ mod agnostic_gates;
 #[cfg(test)]
 mod one_levelness_tests;
 
+// Built-in-showcase behaviour tests, relocated in-crate (ADR-0001 PR-c): the
+// built-in `Role`/`RoleTable`/`resolve_set` cluster is now `#[cfg(test)]`-only,
+// so these tests — which exercise it as the byte-identity oracle — must live
+// inside the crate to see it (integration tests only see the public API).
+#[cfg(test)]
+mod continuity_tests;
+
+#[cfg(test)]
+mod dim_tinted_tests;
+
+#[cfg(test)]
+mod r3_byte_identity_tests;
+
 pub use accent::Accent;
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
@@ -48,10 +61,16 @@ pub use glow::{
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{
-    NamedRoleTable, Resolved, Role, RoleChroma, RoleSpec, RoleTable, TextAnchor,
-    TranslucentResolved, measure_contrast, recheck_against, resolve, resolve_named_set,
-    resolve_set,
+    NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor, TranslucentResolved,
+    measure_contrast, recheck_against, resolve_named_set,
 };
+// The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no
+// longer part of the production API (ADR-0001 PR-c): the agnostic engine ships
+// only the string-keyed `resolve_named_set` path. It survives ONLY as the
+// `#[cfg(test)]` byte-identity oracle for the named path, re-exported crate-wide
+// so the in-crate showcase tests keep their `crate::…` spellings.
+#[cfg(test)]
+pub(crate) use semantic::{Role, RoleTable, resolve_set};
 pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
     Unreachable, solve, solve_many,

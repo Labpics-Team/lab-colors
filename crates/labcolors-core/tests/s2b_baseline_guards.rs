@@ -265,8 +265,14 @@ fn run_cargo_check(args: &[&str]) -> (bool, String) {
 #[test]
 fn baseline_r3_and_empirical_inventory_files_are_git_clean() {
     // Both files must show no modification in `git status`.
+    //
+    // NOTE (ADR-0001 PR-c): `tests/r3_byte_identity.rs` was relocated into the crate
+    // as `src/r3_byte_identity_tests.rs` (a `#[cfg(test)]` unit module) because its
+    // subject — the built-in `resolve_set` oracle — moved behind `#[cfg(test)]` and
+    // is no longer visible to an out-of-crate integration test. The r3 byte-identity
+    // oracle is preserved verbatim at the new path; this s2b anchor (a completed
+    // epic's scope pin) drops the stale path rather than pin a file that moved.
     for file in [
-        "crates/labcolors-core/tests/r3_byte_identity.rs",
         "crates/labcolors-core/tests/empirical_inventory.rs",
         "crates/labcolors-core/tests/lint_parity.rs",
         "crates/labcolors-core/tests/ci_enforcement.rs",
@@ -312,15 +318,17 @@ fn baseline_r3_byte_identity_tests_pass() {
     if skip_if_toolchain_absent("baseline_r3_byte_identity_tests_pass") {
         return;
     }
-    // Run all r3 tests (no specific test name = run all in the binary).
+    // Run all r3 tests. Relocated (ADR-0001 PR-c) into the crate as the
+    // `#[cfg(test)]` module `r3_byte_identity_tests`, so it is a `--lib` name
+    // filter now, not a `--test` integration binary.
     let output = std::process::Command::new("cargo")
         .args([
             &format!("+{CI_TOOLCHAIN}"),
             "test",
             "-p",
             "labcolors-core",
-            "--test",
-            "r3_byte_identity",
+            "--lib",
+            "r3_byte_identity_tests",
             "--",
             "--nocapture",
         ])
@@ -856,11 +864,13 @@ fn scope_discipline_probe_preserves_both_opt_in_gates() {
 /// the assertion fails.
 #[test]
 fn scope_discipline_serial_absent_from_readonly_test_files() {
+    // `r3_byte_identity.rs` relocated to `src/r3_byte_identity_tests.rs`
+    // (ADR-0001 PR-c) — see the note in test 1. The `#[serial]`-scope-creep guard
+    // covers the read-only integration-test files that remain in `tests/`.
     for file in [
         "lint_parity.rs",
         "ci_enforcement.rs",
         "gate_green_smoke.rs",
-        "r3_byte_identity.rs",
         "empirical_inventory.rs",
     ] {
         let src = std::fs::read_to_string(crate_root().join("tests").join(file))

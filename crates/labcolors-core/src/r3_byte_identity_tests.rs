@@ -42,7 +42,7 @@
 //!   INV (1): zero emitted accent/sentiment hex values change.
 //!   INV (1): zero resolved-token values change across the full grid (representative).
 
-use labcolors_core::{
+use crate::{
     BgInput, Resolved, Role, RoleTable, ViewingConditions,
     neutral::NeutralCurve,
     resolve_set,

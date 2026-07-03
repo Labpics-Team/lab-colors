@@ -22,9 +22,7 @@
 //!    with non-zero saturation — it is a *relative of the neutral family*, not a
 //!    sterile grey, and the tint leans cool (blue ≥ red in the emitted byte).
 
-use labcolors_core::{
-    BgInput, LcsColor, Resolved, Role, RoleTable, Solved, ViewingConditions, resolve_set,
-};
+use crate::{BgInput, LcsColor, Resolved, Role, RoleTable, Solved, ViewingConditions, resolve_set};
 
 /// Backgrounds with headroom in both polarities so every text role resolves —
 /// the light and dark ends of the neutral ladder plus two off-neutral cases.
@@ -195,7 +193,7 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
     // instead we assert the solver's OWN reported lc() matches an independent
     // re-measurement of the emitted hex — the honest "the number the caller sees
     // is the number the colour achieves" contract, under dim + tint.
-    use labcolors_core::lpc::lpc_with_vc;
+    use crate::lpc::lpc_with_vc;
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     let roles = [

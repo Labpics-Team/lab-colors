@@ -188,20 +188,26 @@ const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 /// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
 /// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_PRIMARY_DJ: DjMagnitude = DjMagnitude::new(7.93, 17.67);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_SECONDARY_DJ: DjMagnitude = DjMagnitude::new(6.41, 15.78);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_TERTIARY_DJ: DjMagnitude = DjMagnitude::new(4.63, 12.01);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const FILL_QUATERNARY_DJ: DjMagnitude = DjMagnitude::new(3.15, 8.22);
 
 /// dJ'-якоря border base/soft. Буквальные измеренные значения; base сильнее soft.
 /// (`border-strong` — заякоренная роль различимости (доля label-primary, пол
 /// non-text 3:1), не dJ'-шаг — её здесь нет.)
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const BORDER_BASE_DJ: DjMagnitude = DjMagnitude::new(6.41, 10.12);
+#[cfg(test)]
 // SSOT-TRACKED — dJ'-якоря из Figma-структуры LabUI (light, dark).
 pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 
@@ -225,12 +231,16 @@ pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// строгий возрастающий порядок ступеней (тест
 /// `shadow_constant_stack_is_strictly_ascending_with_gaps`). Финальная
 /// перцептивная калибровка теневого стека — за владельцем.
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
 pub(crate) const SHADOW_MINOR_LC: f64 = 8.0;
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней.
 pub(crate) const SHADOW_AMBIENT_LC: f64 = 9.5;
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней.
 pub(crate) const SHADOW_PENUMBRA_LC: f64 = 11.5;
+#[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
 pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 
@@ -245,21 +255,26 @@ pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 // финальная перцептивная калибровка долей — за владельцем.
 
 /// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_PRIMARY_FRACTION: f64 = 0.968;
 /// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_SECONDARY_FRACTION: f64 = 0.627;
 /// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_TERTIARY_FRACTION: f64 = 0.461;
 /// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+#[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
 
 /// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
 /// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
 /// (7.5); финальная JND-калибровка — за владельцем.
+#[cfg(test)]
 // SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
 const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
 
@@ -303,6 +318,7 @@ impl Polarity {
 /// the module docs on the zero token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
+#[cfg(test)]
 pub enum Role {
     /// Body / primary label text — anchored near the strongest contrast the
     /// background allows, so it reads black-on-light or white-on-dark. HIG
@@ -376,6 +392,7 @@ pub enum Role {
     None,
 }
 
+#[cfg(test)]
 impl Role {
     /// Every role, grouped by family and ordered within each family by visual
     /// weight (strongest first, except the progressive shadow stack which runs
@@ -708,6 +725,7 @@ pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// `6.1` — единственный скаляр силы, применённый одинаково по всей шкале
 /// (см. тест `curve_fits_reference_plateau_colorfulness` для количественного
 /// сравнения с референсом).
+#[cfg(test)]
 // SSOT-TRACKED — целевой M' в CAM16-UCS.
 pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 
@@ -814,6 +832,7 @@ impl RoleChroma {
 
     /// The v2 default: the science-derived undertone curve at its calibrated
     /// scalars.
+    #[cfg(test)]
     fn neutral_curve() -> Self {
         RoleChroma::Curve {
             canonical_hue_deg: NEUTRAL_HUE_DEG,
@@ -1162,11 +1181,13 @@ pub fn tint_target_sweep_repro(
 /// defaults. A custom table is how a caller tunes one role's target without
 /// touching the others.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(test)]
 pub struct RoleTable {
     specs: [(Role, RoleSpec); 20],
     chroma: RoleChroma,
 }
 
+#[cfg(test)]
 impl RoleTable {
     /// The recipe for `role` in this table.
     pub fn spec(&self, role: Role) -> RoleSpec {
@@ -1226,6 +1247,7 @@ impl RoleTable {
     }
 }
 
+#[cfg(test)]
 impl Default for RoleTable {
     /// The v1 role table.
     ///
@@ -1710,6 +1732,7 @@ impl ResolveContext {
 /// * `table` — the recipe set; pass [`RoleTable::default`] for the v1 table.
 /// * `vc` — viewing conditions (light vs dim/dark); pass the same VC the theme
 ///   resolves under.
+#[cfg(test)]
 pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditions) -> Resolved {
     let ctx = ResolveContext::new(bg, vc);
     resolve_in(bg, role, table, vc, &ctx)
@@ -1724,6 +1747,7 @@ pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditio
 /// ([`NamedRoleTable`]) resolves the *same* recipe against the *same* physics
 /// without knowing about the [`Role`] enum, and the golden [`Role`] path stays a
 /// byte-for-byte-equivalent wrapper.
+#[cfg(test)]
 fn resolve_in(
     bg: &BgInput,
     role: Role,
@@ -2290,6 +2314,7 @@ fn solved_oklab_lightness(solved: &Solved) -> f64 {
 /// step below if one still clears its floor, flagging it [`Resolved::compressed`]
 /// — an honest, visible degradation rather than a silent identical-colour
 /// collapse.
+#[cfg(test)]
 pub fn resolve_set(
     bg: &BgInput,
     table: &RoleTable,
@@ -2309,6 +2334,7 @@ pub fn resolve_set(
 
 /// The full solver sweep behind [`resolve_set`] — the built-in byte-identity
 /// oracle for the named path. Always recomputes.
+#[cfg(test)]
 pub(crate) fn resolve_set_live(
     bg: &BgInput,
     table: &RoleTable,
@@ -2522,6 +2548,7 @@ pub fn recheck_against(
 /// it strictly weaker *while it still clears its own WCAG floor*; if none does,
 /// the junior becomes a copy of the senior (equality — never stronger). Either
 /// way, flag it [`Resolved::compressed`] so the squeeze is visible, not silent.
+#[cfg(test)]
 fn enforce_text_hierarchy(
     set: &mut [(Role, Resolved)],
     bg: &BgInput,
@@ -2769,6 +2796,7 @@ fn demote_below_hued(
 }
 
 /// The `|Lc|` of a role's solved colour in `set`, if it resolved to one.
+#[cfg(test)]
 fn solved_magnitude(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
     set.iter()
         .find(|(r, _)| *r == role)
@@ -2779,6 +2807,7 @@ fn solved_magnitude(set: &[(Role, Resolved)], role: Role) -> Option<f64> {
 /// The text roles in strict visual-weight order — the sequence the hierarchy
 /// invariant and the compression pass walk. Disabled is included: it is still
 /// part of the order even though it carries no floor.
+#[cfg(test)]
 const TEXT_HIERARCHY: [Role; 4] = [
     Role::LabelPrimary,
     Role::LabelSecondary,
