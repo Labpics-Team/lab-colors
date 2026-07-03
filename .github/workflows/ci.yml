@@ -20,11 +20,14 @@ jobs:
   lint:
     name: clippy + rustfmt
     runs-on: [self-hosted, Linux, X64]
-    # Isolate RUSTUP_HOME/CARGO_HOME per run+job so parallel jobs on shared-HOME
-    # self-hosted runners cannot race each other's rustup/cargo directories.
+    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp: the runner wipes
+    # _work/_temp between jobs, so parallel jobs on shared-HOME runners cannot
+    # race each other AND nothing leaks. /tmp is forbidden here: on the de-02
+    # farm it is an 8 GB tmpfs, and per-run /tmp toolchains (~600 MB each)
+    # filled it in ~12 jobs (ENOSPC cascade, 2026-07-03).
     env:
-      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
-      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
+      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
@@ -44,8 +47,8 @@ jobs:
     name: test
     runs-on: [self-hosted, Linux, X64]
     env:
-      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
-      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
+      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -65,8 +68,8 @@ jobs:
     name: cargo audit (rustsec)
     runs-on: [self-hosted, Linux, X64]
     env:
-      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
-      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
+      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -77,7 +80,13 @@ jobs:
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
         # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
         # CVSS v4.0 and fail to load the advisory database entirely.
-        run: cargo install cargo-audit --version 0.22.2 --locked
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # toolchain action does not add it, and standalone `cargo install`
+        # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
+        # `cargo audit` only survived by resolving as a cargo subcommand).
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       # Hard-fail on actively-exploitable advisories AND on yanked crates.
       # Rationale: a known-vulnerable or yanked dependency is a supply-chain
       # liability we will not knowingly merge. cargo-audit exits non-zero on any
@@ -93,8 +102,8 @@ jobs:
     name: wasm build + headless test + size
     runs-on: [self-hosted, Linux, X64]
     env:
-      RUSTUP_HOME: /tmp/rustup-${{ github.run_id }}-${{ github.job }}
-      CARGO_HOME: /tmp/cargo-${{ github.run_id }}-${{ github.job }}
+      RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -107,7 +116,12 @@ jobs:
         # Pinned for reproducibility; --locked respects the tool's own lockfile.
         # wasm-pack vendors a matching wasm-opt and downloads a matching
         # chromedriver for the headless run below.
-        run: cargo install wasm-pack --version 0.13.1 --locked
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # toolchain action does not add it, so the installed `wasm-pack` binary
+        # was unreachable (exit 127 "command not found" on the de-02 farm).
+        run: |
+          cargo install wasm-pack --version 0.13.1 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       - name: wasm-pack build (release)
         # The release bundle: panic=abort, no panic hook, wasm-opt -Oz. This is
         # the artifact @labpics/colors ships, so the size measured below is real.

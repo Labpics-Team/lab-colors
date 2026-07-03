@@ -642,6 +642,7 @@ pub(crate) fn solve_in(
 /// *away* from the target toward larger `|Lc|`, so without the upper bound a
 /// step could overshoot — this constant makes the `±1` contract explicit and
 /// symmetric for the neighbour search (mirrors the test tolerance `TOL`).
+// SSOT-TRACKED — допуск приёмки Lc в единицах шага сетки (±1 Lc), см. docs/empirical-inventory.md.
 const QUANT_BUDGET: f64 = 1.0;
 
 /// One on-grid candidate the quantisation-gap search evaluates: the solved
@@ -771,6 +772,7 @@ fn jp_of_linear(rgb_linear: [f64; 3], vc: &ViewingConditions) -> f64 {
 /// so `0.6` is just over one grid step — wide enough that a reachable target is
 /// not rejected for landing on the neighbouring pixel, tight enough that the
 /// emitted colour is honestly within a pixel of the requested separation.
+// SSOT-TRACKED — допуск приёмки dJ' (J'-единицы), ~1 шаг сетки; см. docs/empirical-inventory.md.
 const DJ_BUDGET: f64 = 0.6;
 
 /// Maximum distinct hex steps the dJ' search walks from the analytic seed toward
