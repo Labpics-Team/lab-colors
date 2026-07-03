@@ -96,7 +96,7 @@ pub fn solve_screen_alpha_for_dj(
     target_dj: f64,
     vc: &ViewingConditions,
 ) -> Result<GlowSolve, String> {
-    if !(target_dj > 0.0) {
+    if target_dj.is_nan() || target_dj <= 0.0 {
         return Err(format!("целевой шаг вне домена: {target_dj}"));
     }
     let glow = srgb_encoded_from_hex(glow_tint_hex)?;
@@ -209,7 +209,7 @@ mod tests {
     /// Ступени контракта строго возрастают и по цели, и по решённой α.
     #[test]
     fn glow_stack_is_strictly_progressive() {
-        assert!(GLOW_SUBTLE_DJ < GLOW_BASE_DJ && GLOW_BASE_DJ < GLOW_BLOOM_DJ);
+        const { assert!(GLOW_SUBTLE_DJ < GLOW_BASE_DJ && GLOW_BASE_DJ < GLOW_BLOOM_DJ) };
         let vc = ViewingConditions::dim_surround();
         let mut prev = 0.0;
         for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
