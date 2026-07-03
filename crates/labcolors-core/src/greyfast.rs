@@ -32,18 +32,42 @@
 //! match and takes the live path, so the fast path is never an approximation.
 //! Gated bit-for-bit by [`tests::greyfast_const_is_bit_identical_to_live`].
 //!
-//! ## Cost and scope
+//! ## Cost and scope — the deliberate size/latency trade
 //!
 //! There is **no 256-resolve build**: the first grey resolve reconstructs only
 //! the requested code (tens of microseconds — a few forwards per role) and
-//! memoises it, so it never pays the ~566 ms table build the old lazy design
+//! memoises it, so it never pays the ~555 ms table build the old lazy design
 //! folded into the first grey call. Every later resolve of that code is an O(1)
-//! clone. The constant table is `256 codes × 20 roles × 4 bytes × 2 VCs ≈ 40 KB`
-//! of committed data — the emitted-colour bytes only, never the measured floats
-//! (those are re-derived), so `labcolors-core` stays `[dependencies]`-empty
-//! (issue #29), like the grey-axis LUT. The default grey domain carries only
-//! solved colours and the three zero-token roles — never an unreachable role
-//! (asserted at generation) — so the record needs no unreachable payload.
+//! clone.
+//!
+//! Unlike the grey-axis LUT (which is packed mathematics, ~4 KB), this table is a
+//! **precomputed palette**, and it is committed **into the WASM binary**: `256
+//! codes × 20 roles × 4 bytes × 2 VCs ≈ 41 KB` raw (`+~18 KB` gzipped, ~13 % of
+//! the bundle). That is a *chosen* trade — carry ~41 KB of static data to erase a
+//! ~555 ms first-paint freeze on a grey surface — made under the owner's explicit
+//! "speed is critical, colours must compute instantly" priority. It stays cheap
+//! because only the emitted-colour bytes are stored, never the measured floats
+//! (those are re-derived by the `finish` replay), so `labcolors-core` keeps its
+//! empty `[dependencies]` (issue #29).
+//!
+//! **Domain invariant (loud, not silent).** A [`GreyEntry`] is four bytes and
+//! encodes exactly two outcomes: a solved `Color` or the zero token (`None`). The
+//! neutral default domain provably produces nothing else — no `Unreachable`, no
+//! `Translucent` (the default table has no ladder/alpha roles, and every text
+//! role is reachable on every grey). If a future policy change ever makes the
+//! default table yield an `Unreachable` or `Translucent` role on a grey, the
+//! generator [`tests::_emit_grey_data`] **panics** rather than emit an
+//! unrepresentable record, and [`tests::greyfast_const_is_bit_identical_to_live`]
+//! goes red — the assumption fails at the gate, never as a wrong colour in
+//! production.
+//!
+//! **Memo is thread-local.** The per-code cache is a `thread_local!` of 512 slots
+//! (256 codes × 2 VCs). In WASM — single-threaded — this is exactly one shared
+//! cache, ideal. On a multi-threaded native host each worker warms its own copy
+//! (bounded, correct, a little redundant): a deliberate choice, since the crate's
+//! primary target is the browser and the const table makes a cold reconstruction
+//! cheap anyway.
+//!
 //! Chromatic backgrounds and the `next_breakpoint` animation API are later steps
 //! of the breakpoint-curve chapter; this is the neutral 1-D foundation.
 

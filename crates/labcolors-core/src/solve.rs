@@ -1269,12 +1269,16 @@ fn finish(
 /// This is why the precomputed table stores only three bytes and two flags per
 /// resolved role instead of the whole `Solved`: the measurements are re-derived
 /// here from the crate's own `finish`, never duplicated. Bit-identity to the live
-/// solver is gated by `greyfast::tests::greyfast_const_matches_live_solver`.
+/// solver is gated by `greyfast::tests::greyfast_const_is_bit_identical_to_live`
+/// (to-bits, const-vs-live) and `greyfast_matches_live_solver_on_every_grey`.
 ///
 /// `bg` is the resolved background. For a solid background the luminance interval
-/// is degenerate and `governing_display` ignores the sign, so the governing
-/// endpoint (`y_bg`, `bg_disp`) is independent of polarity — the `+1.0` passed
-/// here yields the same pair the live per-role solve used under any sign.
+/// is degenerate (`lo == hi`) and `governing_display` ignores the sign, so the
+/// governing endpoint (`y_bg`, `bg_disp`) is independent of polarity — the `+1.0`
+/// passed here yields the same pair the live per-role solve used under any sign.
+/// The degeneracy is `debug_assert`ed below so a future non-solid [`BgInput`]
+/// variant (whose interval is *not* degenerate, making the fixed `+1.0` a
+/// polarity bug) trips loudly in tests instead of drifting silently.
 pub(crate) fn reconstruct_solved(
     emitted_rgb8: [u8; 3],
     bg: &BgInput,
@@ -1282,6 +1286,12 @@ pub(crate) fn reconstruct_solved(
     vc: &ViewingConditions,
 ) -> Result<Solved, Unreachable> {
     let interval = bg.luma_interval(vc)?;
+    debug_assert!(
+        interval.lo == interval.hi,
+        "reconstruct_solved assumes a degenerate (solid) luminance interval so the \
+         governing endpoint is polarity-independent; a non-degenerate interval means \
+         the fixed +1.0 sign is wrong — thread the real polarity before extending here"
+    );
     let y_bg = interval.governing(1.0);
     let bg_disp = bg.governing_display(1.0);
     let rgb_linear = crate::spaces::srgb::srgb_from_rgb8(emitted_rgb8);
