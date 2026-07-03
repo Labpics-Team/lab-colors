@@ -729,7 +729,26 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
     ("label-on-neutral", "on-* выброшены: лейбл решается от фона"),
     ("label-on-danger", "on-* выброшены: лейбл решается от фона"),
     // Фоны/оверлеи — ВХОДЫ (набор фонов = конфиг потребителя) или alpha.rs-роли.
-    ("bg-*", "набор фонов = конфиг потребителя, не роль эмиссии"),
+    // СУЖЕНО (ADR-0002 labui §1, 2026-07-03): базовый фон остаётся ВХОДОМ
+    // (bg-primary/secondary/... — маппинг потребителя на тона), но выведенные
+    // ТОНА лестницы фонов (bg-tone-*) — легитимные dJ'-эмиссии солвера:
+    // «еле отличимо»-ступени — контракт движка, не рукописные hex потребителя.
+    (
+        "bg-primary*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
+    (
+        "bg-secondary*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
+    (
+        "bg-tertiary*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
+    (
+        "bg-grouped-*",
+        "набор фонов = конфиг потребителя, не роль эмиссии",
+    ),
     (
         "bg-overlay-*",
         "оверлеи → alpha.rs-роли (вне поглощаемого GAP)",
@@ -1768,4 +1787,73 @@ fn achromatic_hue_sources_are_handled_honestly() {
         "#FF3B30",
         "при сером бренде сентимент = сырой якорь семейства (разведение отключено)"
     );
+}
+
+/// Волна 2 ADR-0002 labui §5 — КОМПОЗИЦИОННЫЙ контракт FX-стека теней.
+///
+/// Прежний контракт держал только пер-токенный порядок (|Lc| каждой ступени
+/// сама по себе). Закон владельца сильнее: токены НАСЛАИВАЮТСЯ (minor под
+/// ambient под penumbra под major), и прогрессивным обязан быть СУММАРНЫЙ
+/// эффект composited-стека. Здесь стек компонуется честной альфа-композицией
+/// (`alpha::composite_over_encoded`, тот же оператор, что у браузера) слой за
+/// слоем над светлым фоном паспорта, и проверяется:
+///   (1) каждый слой меняет пиксели: state_k ≠ state_{k-1} на 8-битной сетке
+///       (класс `composite_distinct`, ADR-0002 lab-colors);
+///   (2) различимость стека от фона строго растёт: |ΔJ'|(state_k, bg)
+///       возрастает по k — прогрессия именно КОМПОЗИЦИИ, не отдельных ступеней.
+///
+/// Тёмная тема намеренно не в этом тесте: elevation тёмной темы — тональная
+/// лестница фонов (bg-tone-*, dj-anchor контракты этого же поезда), тень на
+/// тёмном вырождается физически (тинт ≈ фон — класс, признанный ladder.rs);
+/// glow-стека не существует (fx-glow-* — одиночные позиции @52).
+#[test]
+fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
+    use crate::alpha::composite_over_encoded;
+    use crate::lcs::LcsColor;
+    use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
+
+    let cfg = labui_reference();
+    let table = cfg
+        .compile_named_role_table()
+        .expect("фикстура labui компилируется");
+    let vc = ViewingConditions::srgb();
+    let bg_hex = "#FFFFFF"; // светлый якорь паспорта — фон резолва светлой темы
+    let bg = BgInput::solid(bg_hex).unwrap();
+    let set = resolve_named_set(&bg, &table, &vc);
+
+    let stack = [
+        "fx-shadow-minor",
+        "fx-shadow-ambient",
+        "fx-shadow-penumbra",
+        "fx-shadow-major",
+    ];
+    let bg_jp = LcsColor::from_hex_with_vc(bg_hex, &vc).unwrap().jp;
+    let mut state = srgb_encoded_from_hex(bg_hex).unwrap();
+    let mut prev_delta = 0.0_f64;
+    for name in stack {
+        let (_, resolved) = set
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name} отсутствует в наборе"));
+        let t = resolved
+            .translucent()
+            .unwrap_or_else(|| panic!("{name} должен быть Translucent"));
+        let tint = srgb_encoded_from_hex(t.tint_hex()).unwrap();
+        let prev_hex = hex_from_srgb_encoded(state);
+        state = composite_over_encoded(tint, t.alpha(), state);
+        let state_hex = hex_from_srgb_encoded(state);
+        // (1) слой меняет пиксели поверх уже наслоённого стека.
+        assert_ne!(
+            state_hex, prev_hex,
+            "{name}: наслоение слоя не изменило композит ({state_hex}) — вырожденная ступень стека"
+        );
+        // (2) суммарная различимость стека от фона строго растёт.
+        let jp = LcsColor::from_hex_with_vc(&state_hex, &vc).unwrap().jp;
+        let delta = (jp - bg_jp).abs();
+        assert!(
+            delta > prev_delta,
+            "{name}: композиция стека не прогрессивна: |ΔJ'| {delta:.4} ≤ пред. {prev_delta:.4}"
+        );
+        prev_delta = delta;
+    }
 }
