@@ -43,15 +43,19 @@ use crate::spaces::vc::ViewingConditions;
 ///
 ///   `C_rep_figma = (0.2321 + 0.1717 + 0.1944 + 0.1931) / 4 = 0.1978`
 ///
-/// - **20°** — нижний предел категориального восприятия оттенка по
-///   Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1: средняя
-///   граница категорий ≈ 18–22° Oklab-hue при типичной насыщенности.
+/// - **20°** — нижний предел категориального восприятия оттенка.
+///   ИЗ СТАТЬИ (Witzel & Gegenfurtner 2013 «Categorical sensitivity to color
+///   differences», Journal of Vision 13(7):1, DOI 10.1167/13.7.1): категориальный
+///   порог различения оттенка ~20° измерен в ИХ пространстве (hue-угол DKL, НЕ Oklab —
+///   Oklab появился в 2020). ПРИНЯТО ДВИЖКОМ (приближение): этот порог перенесён в
+///   Oklab-hue как ≈ 18–22° при типичной насыщенности; слой конверсии между
+///   пространствами не из статьи, а принятое приближение движка.
 ///   Значение 20° — нижний предел этого диапазона (консервативный выбор
 ///   для разделения семантических категорий).
 ///
 /// Итог: `2 × 0.1978 × sin(10°) ≈ 0.068_703_9`
 // Выведено: 2 × C_rep_figma × sin(20°/2); C_rep_figma из Figma CONTENTS 2026-06-30;
-// 20° — категориальный порог по Witzel & Gegenfurtner (2013) JOSA A 30(7):1501.
+// 20° — категориальный порог по Witzel & Gegenfurtner (2013) Journal of Vision 13(7):1 (DOI 10.1167/13.7.1).
 const S_PERC_MIN: f64 = 0.068_703_9;
 
 /// Translate the perceptual separation target [`S_PERC_MIN`] into the hue angle
@@ -334,10 +338,12 @@ impl SentimentCurve {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `brand_hue` is not finite, if the params are invalid,
-    /// if no hue can satisfy both the floor and the separation invariant, or if
-    /// either the prototype or the generated canonical hex fails to construct an
-    /// [`AccentCurve`].
+    /// Returns `Err` if `brand_hue` is not finite, if `prototype_hex` fails to
+    /// parse as an sRGB colour (its Oklab chroma sets the perceptual separation
+    /// floor), if the params are invalid, or if no hue can satisfy both the floor
+    /// and the separation invariant (empty legal arc). The ramp colour is an
+    /// [`LcsColor`] built lazily in [`at`](Self::at); no
+    /// [`AccentCurve`](crate::scale::AccentCurve) is constructed here.
     pub fn with_params(
         sentiment: Sentiment,
         brand_hue: f64,
@@ -694,7 +700,7 @@ pub(crate) fn angular_distance(a: f64, b: f64) -> f64 {
 /// `2·C_rep·sin(20°/2)`, где `C_rep` — среднее хром.
 ///
 /// `20°` — нижний предел категориального восприятия (Witzel & Gegenfurtner 2013,
-/// JOSA A 30(7):1501). При labui-якорях (хромы Red/Orange/Green/Blue) результат
+/// Journal of Vision 13(7):1, DOI 10.1167/13.7.1). При labui-якорях (хромы Red/Orange/Green/Blue) результат
 /// совпадает с замороженной константой [`S_PERC_MIN`] (`0.068_703_9`,
 /// деривационная идентичность — тестом, допуск 1e-4): формула остаётся законом
 /// при произвольных якорях клиента, а сегодняшнее значение — её частный случай.
@@ -1258,6 +1264,44 @@ mod tests {
     }
 
     #[test]
+    fn warning_natural_minimum_margin_over_floor_is_pinned() {
+        // C1 (аудит 2026-07-03): страж ХРУПКОСТИ. Запас натурального минимума
+        // оранжевой категории над WARNING_HUE_FLOOR_DEG (45.0°) — всего ≈0.52°
+        // (prototype 68.607° − s_min − 45.0). Хрупкость: снижение хромы
+        // orange-якоря ПОВЫШАЕТ s_min_deg (= 2·asin(S_PERC_MIN/(2·C))) и опускает
+        // натуральный минимум К ПОЛУ; подползёт ближе — включится flip-ветка и
+        // добавит третий разрыв непрерывности. Страж пинит запас и падает с
+        // внятным сообщением ДО того, как хрупкость станет багом. Значение 45.0 —
+        // DECLARED-CALIBRATION, НЕ трогается (см. WARNING_HUE_FLOOR_DEG).
+        let proto_hue = Sentiment::Warning.prototype_hue();
+        let orange_hex = Sentiment::Warning.anchor_hex();
+        let lab = srgb_linear_to_oklab(srgb_from_hex(orange_hex).unwrap());
+        let orange_chroma = (lab[1].powi(2) + lab[2].powi(2)).sqrt();
+        let s_min = s_min_deg(orange_chroma);
+        // Натуральный минимум = максимальное prototype-ward смещение к меньшим
+        // оттенкам (достигается, когда бренд стоит на прототипе: s → s_min).
+        let natural_min = proto_hue - s_min;
+        let margin = natural_min - WARNING_HUE_FLOOR_DEG;
+
+        assert!(
+            margin > 0.1,
+            "ЗАПАС ОРАНЖЕВОЙ НАД ПОЛОМ подполз к {margin:.3}° (< 0.1°): натуральный \
+             минимум {natural_min:.3}° почти на полу {WARNING_HUE_FLOOR_DEG}° \
+             (proto={proto_hue:.3}°, s_min={s_min:.3}°, chroma={orange_chroma:.4}). \
+             Снижение хромы orange-якоря повышает s_min и включит flip-ветку — \
+             третий разрыв непрерывности. Пересмотреть якорь/пол, не глушить тест."
+        );
+        // Нетавтологичный пин текущего запаса (0.5274° при orange #FFA100,
+        // proto 68.607°, s_min 23.079°): ловит дрейф в обе стороны (сдвиг
+        // прототипа/хромы orange-якоря или S_PERC_MIN).
+        assert!(
+            (margin - 0.5274).abs() < 0.02,
+            "запас {margin:.4}° ушёл от задокументированных ≈0.527° — сдвинулся \
+             прототип или хрома orange-якоря; осмыслить провенанс, не подгонять"
+        );
+    }
+
+    #[test]
     fn warning_stays_distinguishable_from_danger_full_circle() {
         // Доказанный дефект машинным тестом: с picker на основе membership-field
         // Warning мог резолвиться в 3.9° от Danger (перцептивно один цвет) при
@@ -1371,7 +1415,7 @@ mod tests {
     /// где C_rep_figma — средняя Oklab-хрома четырёх якорей из Figma CONTENTS
     /// (коллекция «🔵 4.1 Primitives», Light-mode, 2026-06-30).
     /// Порог 20° — нижний предел категориального восприятия оттенка по
-    /// Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1.
+    /// Witzel & Gegenfurtner (2013), Journal of Vision 13(7):1 (DOI 10.1167/13.7.1).
     /// Допуск 1e-4: хромы зафиксированы до 4 знаков, итоговая погрешность
     /// деривации существенно меньше — допуск исключает реальный дрейф константы.
     #[test]
@@ -1380,7 +1424,7 @@ mod tests {
         let c_figma = [0.2321_f64, 0.1717_f64, 0.1944_f64, 0.1931_f64];
         let c_rep = c_figma.iter().sum::<f64>() / c_figma.len() as f64;
         // Геометрическая деривация: 2 × C_rep × sin(20°/2)
-        // Источник порога 20°: Witzel & Gegenfurtner (2013), JOSA A 30(7):1501, Table 1
+        // Источник порога 20°: Witzel & Gegenfurtner (2013), Journal of Vision 13(7):1 (DOI 10.1167/13.7.1)
         let derived = 2.0 * c_rep * (10.0_f64.to_radians()).sin();
         assert!(
             (S_PERC_MIN - derived).abs() < 1e-4,

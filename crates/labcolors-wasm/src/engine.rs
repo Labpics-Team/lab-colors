@@ -247,6 +247,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             composite_hex: rgba.composite_hex().to_string(),
             composite_lc: rgba.composite_lc(),
             composite_wcag: rgba.composite_wcag(),
+            alpha_coerced: rgba.alpha_coerced(),
         }),
         // Свечение: слои + интенсивность, оператор потребителя — screen.
         Resolved::Glow(g) => RoleOutcome::Glow(crate::dto::GlowColor {
@@ -306,7 +307,6 @@ fn unreachable_code(reason: &Unreachable) -> &'static str {
         Unreachable::FloorUnreachable { .. } => "floor_unreachable",
         Unreachable::PolarityMismatch { .. } => "polarity_mismatch",
         Unreachable::GamutUnsupported => "gamut_unsupported",
-        Unreachable::UnsupportedBackground => "unsupported_background",
         Unreachable::InvalidInput(_) => "invalid_input",
         _ => "unreachable",
     }
@@ -796,6 +796,7 @@ mod tests {
                         o.composite_wcag,
                         "{name}: composite_wcag"
                     );
+                    assert_eq!(r.alpha_coerced(), o.alpha_coerced, "{name}: alpha_coerced");
                 }
                 (Resolved::Glow(g), RoleOutcome::Glow(o)) => {
                     assert_eq!(g.core_hex(), o.core_hex, "{name}: glow core");

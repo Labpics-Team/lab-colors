@@ -227,6 +227,35 @@ pub(crate) const SHADOW_PENUMBRA_JND: f64 = 11.5;
 // SSOT-TRACKED — величина Lc стека теней (максимальная ступень).
 pub(crate) const SHADOW_MAJOR_JND: f64 = 14.0;
 
+// ── Доли текстовой иерархии (Labels) ────────────────────────────────────────────
+//
+// Каждая доля = Figma-якорь Lc роли на белом ÷ максимально достижимый Lc ≈ 106
+// (Labels/Neutral): 102.6/106≈0.968, 66.5/106≈0.627, 48.9/106≈0.461,
+// 29.3/106≈0.276. Якоря и вывод долей задокументированы в rustdoc
+// `Default for RoleTable` ниже (таблица «Role | Figma Lc | fraction of max»).
+// Это «якорный принцип»: роль держит почти максимум, что позволяет фон, а не
+// фиксированную дельту. Значения 1:1 с прежними ролями text-* (byte-identity);
+// финальная перцептивная калибровка долей — за владельцем.
+
+/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_PRIMARY_FRACTION: f64 = 0.968;
+/// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_SECONDARY_FRACTION: f64 = 0.627;
+/// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_TERTIARY_FRACTION: f64 = 0.461;
+/// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
+const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
+
+/// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
+/// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
+/// (7.5); финальная JND-калибровка — за владельцем.
+// SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
+const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
+
 /// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
 /// Selecting against the strictest floor keeps a single polarity for the whole
@@ -1108,21 +1137,36 @@ impl Default for RoleTable {
                 // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
                 // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
-                (Role::LabelPrimary, anchor(0.968, Floor::AaText)),
-                (Role::LabelSecondary, anchor(0.627, Floor::AaText)),
-                (Role::LabelTertiary, anchor(0.461, Floor::AaUi)),
-                (Role::LabelQuaternary, anchor(0.276, Floor::None)),
+                (
+                    Role::LabelPrimary,
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaText),
+                ),
+                (
+                    Role::LabelSecondary,
+                    anchor(LABEL_SECONDARY_FRACTION, Floor::AaText),
+                ),
+                (
+                    Role::LabelTertiary,
+                    anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi),
+                ),
+                (
+                    Role::LabelQuaternary,
+                    anchor(LABEL_QUATERNARY_FRACTION, Floor::None),
+                ),
                 // Icon — unchanged functional role (legal 3:1 floor, our contract).
-                (Role::Icon, anchor(0.461, Floor::AaUi)),
+                (Role::Icon, anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
-                (Role::Separator, decorative(8.0)),
+                (Role::Separator, decorative(SEPARATOR_DECORATIVE_LC)),
                 // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
                 // Labels/Primary strength): the label-primary FRACTION with a
                 // non-text 3:1 floor (WCAG 1.4.11) — a border must be
                 // distinguishable, not readable. Base/Soft are dJ' steps carrying
                 // the owner's LITERAL anchors (light/dark per theme); base
                 // stronger than soft is the order contract.
-                (Role::BorderStrong, anchor(0.968, Floor::AaUi)),
+                (
+                    Role::BorderStrong,
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaUi),
+                ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
                 (Role::BorderGhost, RoleSpec::Zero),
@@ -1219,6 +1263,17 @@ pub struct TranslucentResolved {
     /// до этого флага такие тени/свечения проходили как валидный резолв
     /// молча). Параметр-свободный замер: сетка дисплея, не политика.
     composite_distinct: bool,
+    /// Запрошенная α была поднята до разрешимого минимума (`α_min`), потому что
+    /// исходная не воспроизводима в гамуте — честный флаг деградации КОНТРАКТА
+    /// РОЛИ (симметрия с `compressed`/`degraded`). Ставится только на пути
+    /// альфа-аналога ([`resolve_rgba_inverted`]), где солид-цель фиксирована, а
+    /// α выводится; у прямой лестницы ([`resolve_rgba_direct`]) всегда `false`.
+    ///
+    /// Цвет при этом НЕ врёт: композит фактической пары остаётся ПОБАЙТНО равен
+    /// солиду (двигается только прозрачность — см. [`crate::alpha`]). Флаг лишь
+    /// объявляет, что эмитированная α — не запрошенная, а минимально разрешимая
+    /// ([`alpha`](Self::alpha) несёт фактическое значение).
+    alpha_coerced: bool,
 }
 
 impl TranslucentResolved {
@@ -1254,6 +1309,14 @@ impl TranslucentResolved {
     /// тень/свечение невидимой, а не «решённой» (ADR-0002, закон 2).
     pub fn composite_distinct(&self) -> bool {
         self.composite_distinct
+    }
+
+    /// Запрошенная α была поднята до `α_min` (альфа-аналог с неразрешимой
+    /// запрошенной прозрачностью). `false` у прямой лестницы и когда
+    /// запрошенная α разрешима как есть. Цвет композита при этом равен солиду
+    /// побайтно — коэрсится только прозрачность (см. поле-документацию).
+    pub fn alpha_coerced(&self) -> bool {
+        self.alpha_coerced
     }
 }
 
@@ -1467,9 +1530,18 @@ impl ResolveContext {
 /// * [`Resolved::Unreachable`] — when no colour can meet the role's contract on
 ///   this background (an extreme background, never a silent clip).
 ///
-/// This solves the single role in isolation; the hierarchy-compression flag is a
-/// *set* property and is only raised by [`resolve_set`], which sees a role's
-/// seniors. A role resolved here therefore always reports `compressed == false`.
+/// This solves the single role in isolation. The `compressed` flag has two
+/// independent sources, and only one is suppressed here:
+/// * **Hierarchy compression** is a *set* property — a role squeezed against its
+///   senior's target — and is raised only by [`resolve_set`], which sees a
+///   role's seniors. In isolation it is therefore never set.
+/// * **dJ'-path degradation** is a *single-role* property: a decorative dJ' role
+///   ([`RoleSpec::DecorativeDj`]) whose magnitude target is unreachable degrades
+///   to the nearest achievable step and reports `compressed == true` on its own
+///   (see `resolve_dj`), even resolved here in isolation.
+///
+/// So a contract (Lc) role resolved here always reports `compressed == false`,
+/// but a decorative dJ' role can report `compressed == true`.
 ///
 /// * `bg` — the background to resolve against.
 /// * `role` — which semantic slot to solve.
@@ -1654,7 +1726,8 @@ fn resolve_rgba_direct(
     // иначе composite_hex/Lc/WCAG расходились бы с CSS-результатом на LSB.
     let tint_q = quantise_encoded(tint_encoded);
     let composite = crate::alpha::composite_over_encoded(tint_q, alpha, bg_encoded);
-    finish_rgba(tint_q, alpha, composite, bg_encoded, vc)
+    // Прямая лестница эмитит запрошенную α как есть — коэрсии нет по построению.
+    finish_rgba(tint_q, alpha, composite, bg_encoded, vc, false)
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -1693,7 +1766,21 @@ fn resolve_rgba_inverted(
     // пределах LSB-границы квантования (#119).
     let tint_q = quantise_encoded(analog.tint);
     let composite = crate::alpha::composite_over_encoded(tint_q, analog.alpha, bg_encoded);
-    finish_rgba(tint_q, analog.alpha, composite, bg_encoded, vc)
+    // Коэрсия α: фактическая (`analog.alpha`) строго выше запрошенной ⇔ пол
+    // `α_min` перекрыл запрошенную. `resolve_alpha_analog`: α =
+    // req.clamp(0,1).max(floor); под гардом `rgba_input_valid` (req ∈ (0,1])
+    // clamp — no-op, т.е. α = req.max(floor). При floor ≤ req значения побайтно
+    // равны, при floor > req — строго больше. Сравнение точное, эпсилон не нужен:
+    // `max` возвращает либо тот же f64, либо floor.
+    let alpha_coerced = analog.alpha > requested_alpha;
+    finish_rgba(
+        tint_q,
+        analog.alpha,
+        composite,
+        bg_encoded,
+        vc,
+        alpha_coerced,
+    )
 }
 
 /// Собрать [`Resolved::Translucent`] из тинта, альфы и композита: квантовать тинт и
@@ -1708,6 +1795,7 @@ fn finish_rgba(
     composite_encoded: [f64; 3],
     bg_encoded: [f64; 3],
     vc: &ViewingConditions,
+    alpha_coerced: bool,
 ) -> Resolved {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
     // Замер идёт по КВАНТОВАННОМУ композиту — тому же 8-битному hex, который
@@ -1739,6 +1827,7 @@ fn finish_rgba(
         composite_lc,
         composite_wcag,
         composite_distinct,
+        alpha_coerced,
     })
 }
 
@@ -4094,6 +4183,72 @@ mod tests {
     }
 
     #[test]
+    fn alpha_coerced_flags_only_when_requested_alpha_raised_to_floor() {
+        // H1 (аудит 2026-07-03): поднятие α до α_min на пути альфа-аналога —
+        // деградация КОНТРАКТА роли (эмитируется не запрошенная α). До флага она
+        // проходила молча: композит побайтно равен солиду, но обещанная
+        // прозрачность подменялась без объявления. Флаг делает подмену видимой.
+        use crate::spaces::srgb::srgb_encoded_from_hex;
+        let vc = ViewingConditions::srgb();
+        let white = BgInput::solid("#FFFFFF").unwrap();
+
+        // Коэрсия: почти-чёрный солид над белым требует α_min ≈ 0.94 (см.
+        // alpha.rs::min_alpha_hex("#101012","#FFFFFF") > 0.9); запрос 0.05
+        // неразрешим → α поднимается → флаг true.
+        let dark_solid = srgb_encoded_from_hex("#101012").unwrap();
+        let coerced = resolve_rgba_inverted(dark_solid, 0.05, &white, &vc);
+        let t = coerced
+            .translucent()
+            .expect("альфа-аналог резолвится (α поднимается до разрешимой)");
+        assert!(
+            t.alpha_coerced(),
+            "запрос α=0.05 неразрешим для #101012 над белым — флаг обязан быть true \
+             (фактическая α={}, тинт={})",
+            t.alpha(),
+            t.tint_hex()
+        );
+        assert!(
+            t.alpha() > 0.05,
+            "коэрсия обязана поднять α выше запрошенной 0.05, получено {}",
+            t.alpha()
+        );
+
+        // Без коэрсии (α разрешима как есть): светлый солид над белым (низкий пол)
+        // при α=0.5 → флаг false.
+        let light_solid = srgb_encoded_from_hex("#E4E4E6").unwrap();
+        let ok = resolve_rgba_inverted(light_solid, 0.5, &white, &vc);
+        let t_ok = ok
+            .translucent()
+            .expect("разрешимый альфа-аналог резолвится");
+        assert!(
+            !t_ok.alpha_coerced(),
+            "α=0.5 разрешима для #E4E4E6 над белым — флаг обязан быть false (α={})",
+            t_ok.alpha()
+        );
+        assert!(
+            (t_ok.alpha() - 0.5).abs() < 1e-12,
+            "разрешимая α эмитится как запрошенная, получено {}",
+            t_ok.alpha()
+        );
+
+        // Граница: α=1.0 всегда разрешима (тинт=солид) → флаг false даже для
+        // насыщенного солида, который иначе коэрсил бы.
+        let full = resolve_rgba_inverted(dark_solid, 1.0, &white, &vc);
+        let t_full = full.translucent().expect("α=1.0 тривиально разрешима");
+        assert!(
+            !t_full.alpha_coerced(),
+            "α=1.0 разрешима по построению — коэрсии нет"
+        );
+
+        // Прямая лестница (не альфа-аналог) НИКОГДА не коэрсит α.
+        let direct = resolve_rgba_direct(dark_solid, 0.12, &white, &vc);
+        assert!(
+            !direct.translucent().unwrap().alpha_coerced(),
+            "прямая rgba-лестница эмитит α как есть — флаг всегда false"
+        );
+    }
+
+    #[test]
     fn fill_constant_anchors_are_strictly_descending() {
         assert!(
             FILL_PRIMARY_DJ.light() > FILL_SECONDARY_DJ.light(),
@@ -4891,5 +5046,134 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Дериватор-локи (Fowler class Б: characterization). Эти тесты НЕ выводят
+// константы из первых принципов — они ИЗМЕРЯЮТ перцептивную величину, к которой
+// привязана каждая калибровочная константа, и фиксируют измеренное отношение как
+// регрессионный якорь. Где строгая деривация НЕ держится (замер это показал),
+// граница честно широкая и помечена — БЕЗ подгонки под значение (North).
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod derivator_locks {
+    use super::{CUSP_HALF_WINDOW_DEG, LIGHTNESS_SETTLE, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR};
+    use crate::lcs::LcsColor;
+
+    fn grey(i: u8) -> String {
+        format!("#{i:02X}{i:02X}{i:02X}")
+    }
+
+    /// LIGHTNESS_SETTLE (0.002) < минимальный шаг выходной 8-бит сетки (1/256 ≈
+    /// 0.00391). Единственная из четвёрки, где вывод держится СТРОГО: порог
+    /// сходимости лежит ниже наименьшего представимого шага сетки, поэтому
+    /// не может «застрять» на различимой ступени.
+    #[test]
+    fn lightness_settle_is_below_min_grid_step() {
+        let min_grid_step = 1.0 / 256.0;
+        assert!(
+            LIGHTNESS_SETTLE < min_grid_step,
+            "LIGHTNESS_SETTLE={LIGHTNESS_SETTLE} должен быть ниже минимального шага сетки {min_grid_step}"
+        );
+    }
+
+    /// Типичный (медианный) Lc-шаг одного 8-бит кванта серых < STRICT_STEP (0.5).
+    /// ⚠️ ЗАМЕР: медианный шаг ≈0.44 < 0.5, но МАКСИМАЛЬНЫЙ шаг ≈7.85 — это обрыв
+    /// мягкого клампа APCA (разрыв, не шаг сетки), а не «шаг кванта». Поэтому
+    /// характеризуем МЕДИАННЫЙ шаг: STRICT_STEP=0.5 сидит чуть выше типичного шага
+    /// выходной сетки — это граница квантования сетки, не JND-клейм.
+    #[test]
+    fn strict_step_sits_just_above_typical_grid_step() {
+        let mut steps: Vec<f64> = Vec::new();
+        let mut prev = crate::lpc::lpc(&grey(0), "#FFFFFF");
+        for i in 1u8..=255 {
+            let lc = crate::lpc::lpc(&grey(i), "#FFFFFF");
+            steps.push((lc - prev).abs());
+            prev = lc;
+        }
+        steps.sort_by(|a, b| a.partial_cmp(b).expect("Lc steps are finite"));
+        let median = steps[steps.len() / 2];
+        assert!(
+            median < STRICT_STEP,
+            "медианный Lc-шаг кванта {median:.4} должен быть ниже STRICT_STEP={STRICT_STEP}"
+        );
+        assert!(
+            (0.35..0.50).contains(&median),
+            "медианный Lc-шаг {median:.4} вне замеренного диапазона [0.35, 0.50)"
+        );
+        // Максимальный шаг ≈7.85 — это обрыв loClip мягкого клампа APCA (разрыв у
+        // порога различимости, НЕ шаг сетки); лочим его отдельной полосой, чтобы он
+        // не путался со STRICT_STEP и был зафиксирован как отдельный класс величины.
+        let max_step = *steps.last().expect("непустой набор шагов");
+        assert!(
+            (7.0..8.7).contains(&max_step) && (max_step - 7.85).abs() < 0.5,
+            "max Lc-шаг {max_step:.4} (обрыв loClip, не шаг сетки) вне замеренной полосы ~7.85"
+        );
+    }
+
+    /// Потолок ахроматического M'-шума CAM16 (серые #000..#FFF, дефолтный VC)
+    /// отслеживается порогом TINT_PERCEPTIBLE_MP_FLOOR (1.5). ЗАМЕР: максимум —
+    /// у белого, M'≈1.53; порог 1.5 стоит вплотную ПОД ним. Полоса характеризации
+    /// широкая, брекетит замер, без подгонки под 1.5.
+    #[test]
+    fn tint_floor_tracks_achromatic_mp_noise_ceiling() {
+        let mut max_mp = 0.0f64;
+        for i in 0u8..=255 {
+            let mp = LcsColor::from_hex(&grey(i)).expect("valid grey hex").mp();
+            max_mp = max_mp.max(mp);
+        }
+        assert!(
+            (1.4..1.7).contains(&max_mp),
+            "потолок M'-шума серых {max_mp:.4} вне замеренного диапазона [1.4, 1.7)"
+        );
+        // Направленный ассерт (не |Δ|): порог стоит вплотную ПОД потолком шума —
+        // floor < max_mp И зазор < 0.15. Инверсия направления (floor над потолком)
+        // ломает тест.
+        assert!(
+            TINT_PERCEPTIBLE_MP_FLOOR < max_mp && max_mp - TINT_PERCEPTIBLE_MP_FLOOR < 0.15,
+            "TINT_PERCEPTIBLE_MP_FLOOR={TINT_PERCEPTIBLE_MP_FLOOR} должен стоять чуть ПОД потолком \
+             M'-шума {max_mp:.4} (floor < max_mp и max_mp − floor < 0.15)"
+        );
+    }
+
+    /// Дрейф каспа гамута sRGB вблизи канонического 286° по L-шкале задаёт
+    /// CUSP_HALF_WINDOW_DEG (40°). ⚠️ ЗАМЕР: полный дрейф достигает ≈42.5°, т.е.
+    /// окно поиска (40°) клипует чуть ВНУТРИ полного дрейфа — намеренно (движок
+    /// держит оттенок близко к каноническому, см. `cusp_attracted_hue`). Поэтому
+    /// НЕ утверждаем «окно покрывает дрейф»; характеризуем, что окно ≈ замеренный
+    /// дрейф (в широкой полосе), без подгонки.
+    #[test]
+    fn cusp_window_is_near_measured_gamut_drift() {
+        let canonical = 286.0_f64;
+        let mut max_drift = 0.0f64;
+        let mut l = 0.05;
+        while l <= 0.95 {
+            let mut best_h = canonical;
+            let mut best_c = f64::NEG_INFINITY;
+            let mut h = canonical - 70.0;
+            while h <= canonical + 70.0 {
+                let c = crate::scale::max_chroma(l, h);
+                if c > best_c {
+                    best_c = c;
+                    best_h = h;
+                }
+                h += 0.5;
+            }
+            max_drift = max_drift.max((best_h - canonical).abs());
+            l += 0.02;
+        }
+        assert!(
+            (35.0..46.0).contains(&max_drift),
+            "замеренный дрейф каспа {max_drift:.2} вне диапазона [35, 46)"
+        );
+        // Направленный ассерт (не |Δ|): окно (40°) клипует чуть ВНУТРИ полного дрейфа —
+        // дрейф СТРОГО больше окна (max_drift > 40°) и < 46°. Инверсия направления
+        // («окно покрывает дрейф») ломает тест.
+        assert!(
+            max_drift > CUSP_HALF_WINDOW_DEG && max_drift < 46.0,
+            "замеренный дрейф каспа {max_drift:.2} должен СТРОГО превышать окно \
+             CUSP_HALF_WINDOW_DEG={CUSP_HALF_WINDOW_DEG} (клип внутри — по дизайну) и быть < 46"
+        );
     }
 }

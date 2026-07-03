@@ -1,6 +1,26 @@
 use crate::lcs::LcsColor;
 use crate::spaces::vc::ViewingConditions;
 
+/// Порог M' (CAM16-UCS), ниже которого якорь считается ахроматическим и его
+/// шумный `h_ok` замещается базовым оттенком. CAM16 даёт ненулевой M' даже для
+/// номинально ахроматических стимулов (mp ≈ 1.5 для белого, ≈ 2.3 для near-black),
+/// поэтому 5.0 ловит модельный шум, сохраняя подлинно хроматические якоря.
+// SSOT-TRACKED — порог ахроматичности M' (модельный шум CAM16), см. docs/empirical-inventory.md.
+const ACHROMATIC_MP_THRESHOLD: f64 = 5.0;
+
+/// Множитель опорной хромы для нормировки чистоты оттенка: `mp_ref = 1.5 × M'`
+/// базового якоря, чтобы база сохраняла почти весь свой оттенок, а
+/// near-ахроматические якоря сильно корректировались. Калибровочный.
+// SSOT-TRACKED — множитель опорной хромы для нормировки чистоты оттенка, см. docs/empirical-inventory.md.
+const HUE_PURITY_MP_REF_RATIO: f64 = 1.5;
+
+/// Показатель степени кривой чистоты оттенка `(mp/mp_ref)^0.6`: агрессивная
+/// коррекция оттенка для сильно десатурированных цветов, плавно отпускаемая с
+/// ростом хромы. Калибровочный; кандидат вывода — связь с near-neutral hue-noise
+/// (Abney, issue #27).
+// SSOT-TRACKED — показатель кривой чистоты оттенка (калибровочный), см. docs/empirical-inventory.md.
+const HUE_PURITY_EXPONENT: f64 = 0.6;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurveParams {
     pub gamma_light: f64,
@@ -90,12 +110,12 @@ impl NeutralCurve {
         // nominally achromatic stimuli (mp ≈ 1.5 for white, ≈ 2.3 for
         // near-black).  Threshold 5.0 catches model noise while preserving
         // genuinely chromatic anchors.
-        let a_light = if a_light.mp() < 5.0 {
+        let a_light = if a_light.mp() < ACHROMATIC_MP_THRESHOLD {
             LcsColor::new(a_light.jp, h_ok_base, a_light.s, a_light.h_cam())
         } else {
             a_light
         };
-        let a_dark = if a_dark.mp() < 5.0 {
+        let a_dark = if a_dark.mp() < ACHROMATIC_MP_THRESHOLD {
             LcsColor::new(a_dark.jp, h_ok_base, a_dark.s, a_dark.h_cam())
         } else {
             a_dark
@@ -125,15 +145,19 @@ impl NeutralCurve {
             return self.a_dark;
         }
 
+        // jp-якоря берутся напрямую из полей якорей (Oklab jp). Прежний метод-
+        // обёртка effective_hue_anchor_jp был identity ({ anchor.jp }) — имя
+        // обещало hue-зависимый расчёт, тело возвращало поле; заинлайнен (аудит
+        // D2(c), 2026-07-03), value-preserving.
         let jp = if t <= 0.5 {
             let u = t / 0.5;
-            let j0 = self.effective_hue_anchor_jp(&self.a_light);
-            let j6 = self.effective_hue_anchor_jp(&self.a_base);
+            let j0 = self.a_light.jp;
+            let j6 = self.a_base.jp;
             j0 + (j6 - j0) * u.powf(self.params.gamma_light)
         } else {
             let u = (t - 0.5) / 0.5;
-            let j6 = self.effective_hue_anchor_jp(&self.a_base);
-            let j12 = self.effective_hue_anchor_jp(&self.a_dark);
+            let j6 = self.a_base.jp;
+            let j12 = self.a_dark.jp;
             j6 + (j12 - j6) * u.powf(self.params.gamma_dark)
         };
 
@@ -186,10 +210,6 @@ impl NeutralCurve {
         &self.a_dark
     }
 
-    fn effective_hue_anchor_jp(&self, anchor: &LcsColor) -> f64 {
-        anchor.jp
-    }
-
     fn interpolate_hue_ok(&self, t: f64) -> f64 {
         let h_start = self.hue_or(&self.a_light, self.h_ok_base);
         let h_end = self.hue_or(&self.a_dark, self.h_ok_base);
@@ -233,7 +253,7 @@ impl NeutralCurve {
     /// Set to 1.5× the base anchor's M' so that the base itself retains most
     /// of its own hue while near-achromatic anchors are strongly corrected.
     fn mp_ref(&self) -> f64 {
-        self.a_base.mp() * 1.5
+        self.a_base.mp() * HUE_PURITY_MP_REF_RATIO
     }
 }
 
@@ -281,7 +301,7 @@ fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
 ///
 /// ```text
 /// mp/mp_ref = 0.1 → purity ≈ 0.25  (75 % corrected)
-/// mp/mp_ref = 0.3 → purity ≈ 0.46  (54 % corrected)
+/// mp/mp_ref = 0.3 → purity ≈ 0.49  (51 % corrected)
 /// mp/mp_ref = 0.5 → purity ≈ 0.66  (34 % corrected)
 /// mp/mp_ref = 1.0 → purity = 1.00  (0   % corrected)
 /// ```
@@ -289,7 +309,7 @@ fn hue_purity(mp: f64, mp_ref: f64) -> f64 {
     if mp >= mp_ref {
         return 1.0;
     }
-    (mp / mp_ref).powf(0.6).clamp(0.0, 1.0)
+    (mp / mp_ref).powf(HUE_PURITY_EXPONENT).clamp(0.0, 1.0)
 }
 
 impl crate::curve::ColorCurve for NeutralCurve {

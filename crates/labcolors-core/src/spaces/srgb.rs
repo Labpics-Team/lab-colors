@@ -9,9 +9,14 @@
 //! transitive crates) and guarantees exact reproducibility with other
 //! CSS-based pipelines.
 
-/// CIE D65 standard illuminant (normalized to Y = 1.0).
+/// D65 white point (normalized to Y = 1.0).
 ///
-/// Source: ISO 11664-2:2007 / CIE 015:2018.
+/// Derived from the 4-digit chromaticity (0.3127, 0.3290) of IEC 61966-2-1 /
+/// CSS Color 4 via `X = x/y`, `Z = (1 − x − y)/y`. This is NOT the tabulated
+/// CIE 015 / ISO 11664-2 D65 spectrum white, whose Y = 1 normalisation differs
+/// by ≈2.3e-4 in Z. The chromaticity-derived white is used deliberately: it is
+/// the exact white the sRGB matrices below are defined against, so the
+/// transforms stay self-consistent with CSS-based pipelines.
 pub const D65_WHITE: [f64; 3] = [
     0.950_455_927_051_671_6,
     1.000_000_000_000_000_0,

@@ -42,12 +42,15 @@ impl ViewingConditions {
     /// Parameters: D65 illuminant, L_A = 64 cd/m², Y_b = 20 %,
     /// average surround (F = 1.0, c = 0.69, N_c = 1.0).
     ///
-    /// The surround triplet matches colorjs.io `surroundMap["average"]`,
-    /// but the adapting luminance does NOT match colorjs.io, whose default
-    /// is `(64/π)·0.2 ≈ 4.07 cd/m²` — lab-colors deliberately uses 64
-    /// (L_A = 64: дисплейная адаптация, не предположение о тёмной комнате). The forward path
-    /// at these exact parameters is cross-validated against colour-science
-    /// in `golden_tests`.
+    /// The surround triplet `(F, c, N_c)` is CIE 159:2004 Table 1 (carried
+    /// unchanged into CAM16; CIE 248:2022) and matches colorjs.io
+    /// `surroundMap["average"]`. The adapting luminance does NOT match
+    /// colorjs.io, whose default is `(64/π)·0.2 ≈ 4.07 cd/m²`: lab-colors
+    /// deliberately uses L_A = 64. That choice is DECLARED, not canonical — the
+    /// standards fix no single adapting luminance for display viewing; deriving
+    /// the value or sweeping its sensitivity is left to a separate PR. The
+    /// forward path at these exact parameters is cross-validated against
+    /// colour-science in `golden_tests`.
     pub fn srgb() -> Self {
         // colour-science / colorjs.io surroundMap["average"] = [1.0, 0.69, 1.0]
         Self::build(64.0, 20.0, 1.0, 0.69, 1.0)

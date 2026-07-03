@@ -35,13 +35,68 @@ mod common;
 // Audit surface — the 6 perceptual modules the detector scans.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PERCEPTUAL_MODULES: [&str; 6] = [
+const PERCEPTUAL_MODULES: [&str; 7] = [
     "semantic.rs",
     "scale.rs",
     "sentiment.rs",
     "neutral.rs",
     "lpc.rs",
     "lcs.rs",
+    "solve.rs",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BARE-LITERAL audit surface (GATE-5) — a DELIBERATE subset of `PERCEPTUAL_MODULES`.
+//
+// BUG CLASS this closes: a tunable perceptual-POLICY magnitude hides as an inline
+// bare float literal (a fn-argument, match-arm, comparison, or expression operand)
+// instead of a named const — exactly how the label-hierarchy fractions
+// (0.968/0.627/0.461/0.276) and the Separator Lc (8.0) evaded GATE-1 until they
+// were extracted. The const-only detector (GATE-1/2/3) is blind to inline literals.
+//
+// Why a SUBSET and not all six: the three modules below are POLICY modules — their
+// magnitudes are tunable perceptual policy (role fractions, sentiment/curve
+// thresholds). The other three (`scale.rs`, `lpc.rs`, `lcs.rs`) are STANDARD-MODEL
+// transform modules: their inline coefficients implement cited colour-appearance
+// models verbatim — CIECAM16 (`460/451/288/6300/1403…` in `lcs.rs`), the Hellwig
+// 2022 H-K first-harmonic (`0.080/0.132/0.160/0.405/0.792` in `lpc.rs`), the CAM16
+// non-linearity (`27.13/400.0/0.42`), and the J′ compression / cubic solver in
+// `scale.rs`. Those are NOT tunable policy; flagging them as "magic numbers" would
+// be a false claim (their tunable policy already lives in NAMED consts:
+// `HUE_SEARCH_HALF_WINDOW`, `HUE_DRIFT_PENALTY_SLOPE`, the APCA `SOFT_CLAMP_*`/`EXP_*`
+// set — all GATE-1/2 covered). `solve.rs` (added to `PERCEPTUAL_MODULES` for its
+// const budgets) is likewise a quantisation-search transform, so it too stays out
+// of the bare-literal surface. All six remain under the const-marker gate; only the
+// three POLICY modules are scanned for inline literals.
+const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutral.rs"];
+
+/// Bare float literal VALUES that are NOT tunable perceptual policy — universal
+/// domain/normalisation/degenerate/sentinel/numerical arithmetic, plus cited
+/// derivation-identity inputs (the same class `NUMERIC_METHOD_ALLOWLIST` excludes
+/// for named consts). A bare float in a POLICY module whose normalised value is on
+/// this list is not a hidden policy magnitude; anything else must be a NAMED const
+/// (with a marker + inventory row), so it surfaces through GATE-1/2/3. Each entry
+/// is a reviewable assertion that the value is not a tunable perceptual threshold:
+const BARE_FLOAT_ALLOWLIST: &[&str] = &[
+    "0.0",  // additive identity / origin / degenerate lower clamp bound.
+    "0.5",  // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
+    "1.0",  // multiplicative identity / unit upper clamp bound / purity ceiling.
+    "2.0",  // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
+    "0.05", // hue-search STEP granularity (numerical resolution of the sentiment
+    // hue sweep), not a perceptual threshold — the continuous analogue of the
+    // `STRUCTURAL_NONPOLICY_ALLOWLIST` iteration counts.
+    "20.0", // cited categorical-hue-perception threshold (20°, Witzel & Gegenfurtner
+    // 2013) that recomputes the `S_PERC_MIN` DERIVATION-IDENTITY inline
+    // (`2·C_rep·sin(20°/2)`, see sentiment.rs `s_perc_min_from_chromas`). Excluded on
+    // the SAME grounds `NUMERIC_METHOD_ALLOWLIST` excludes `S_PERC_MIN` — recomputed /
+    // cited, not a new tunable policy literal (provenance held by the `S_PERC_MIN` doc).
+    "100.0", // CAM16 J lightness scale (0..100) / percent normalisation.
+    "180.0", // half-turn in degrees (shortest-arc hue wrap: (Δ+180)%360−180).
+    "255.0", // 8-bit sRGB channel quantisation (round·255 / 255).
+    "300.0", // out-of-range Lc PROBE sentinel — deliberately past the ~106 Lc sRGB
+    // ceiling in `max_contrast` to read back the solver's true maximum; not a
+    // perceptual threshold (see semantic.rs `max_contrast`).
+    "360.0", // full-turn in degrees (hue-circle modulus, rem_euclid(360)).
 ];
 
 /// STANDARD const names — excluded **by construction** (INV-3). These are pinned
@@ -62,6 +117,12 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "RATIO_EPS",
     "FLOOR_EPS",
     "GAMUT_EPS",
+    // L'-axis convergence epsilon in the quantisation solver — numeric, non-perceptual (solve.rs).
+    "L_OK_EPSILON",
+    // Algorithmic search-PROBE step of the quantisation-gap search — a numerical
+    // sampling granularity, not a perceptual magnitude (solve.rs; two local `PROBE`
+    // consts, both excluded by this name).
+    "PROBE",
     // Derived from a WCAG standard ratio, not an independent policy literal.
     "POLARITY_FLOOR_RATIO",
 ];
@@ -112,6 +173,11 @@ const STRUCTURAL_NONPOLICY_ALLOWLIST: &[&str] = &[
     // Max curve-plan refinements after the achromatic probe — an iteration count,
     // not a perceptual magnitude (semantic.rs).
     "CURVE_REFINE_STEPS",
+    // Neighbour-search / probe COUNTS in the quantisation solver — iteration counts,
+    // not perceptual magnitudes (solve.rs).
+    "NEIGHBOR_STEPS",
+    "DJ_NEIGHBOR_STEPS",
+    "MAX_PROBES",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,7 +382,11 @@ fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
 /// Scan a single module's source text into the detected POLICY magnitudes.
 /// `allowlist` is injected so the RED-proof can reuse the exact scanner.
 fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedConst> {
-    let lines: Vec<&str> = source.lines().collect();
+    // Skip `#[cfg(test)]` blocks: a test-only const (a test tolerance / fixture) is
+    // never perceptual POLICY. `production_lines` removes them while preserving the
+    // original 1-based line numbers used in diagnostics.
+    let prod = production_lines(source);
+    let lines: Vec<&str> = prod.iter().map(|(_, s)| s.as_str()).collect();
     let module_stem = module.trim_end_matches(".rs").to_ascii_uppercase();
     let mut out = Vec::new();
     let mut in_default_body = false;
@@ -346,7 +416,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: idx + 1,
+                        line: prod[idx].0,
                         name,
                         value,
                         has_marker,
@@ -390,7 +460,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: idx + 1,
+                        line: prod[idx].0,
                         name,
                         value,
                         has_marker,
@@ -412,7 +482,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                 let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                 out.push(DetectedConst {
                     module: module.to_string(),
-                    line: idx + 1,
+                    line: prod[idx].0,
                     name,
                     value,
                     has_marker,
@@ -435,6 +505,210 @@ fn scan_tree() -> Vec<DetectedConst> {
     for module in PERCEPTUAL_MODULES {
         let source = read_module(module);
         all.extend(scan_source(module, &source, NUMERIC_METHOD_ALLOWLIST));
+    }
+    all
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scan (bare-literal) — GATE-5's detector. Finds inline bare float literals in a
+// POLICY module's PRODUCTION code (outside consts, `fn default()` field literals,
+// `#[cfg(test)]` blocks, and comments) whose value is not on
+// `BARE_FLOAT_ALLOWLIST`. Shared verbatim by the gate and the RED-proof (INV-4).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One detected inline bare float literal that is NOT allowlisted — a candidate
+/// hidden POLICY magnitude that should be a named const.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct BareFloatSite {
+    module: String,
+    /// 1-based line number in the ORIGINAL source (pre-strip).
+    line: usize,
+    /// The normalised literal value (e.g. `1.5`).
+    value: String,
+}
+
+/// Return the production source lines (1-based line# preserved) with every
+/// `#[cfg(test)]`-guarded item removed by brace/`;`-matching. Handles: a braced
+/// item (`mod tests { … }`, `fn … { … }`) via brace-match, and a bracket/`;`-
+/// terminated item (`#[cfg(test)] pub const ALL: […] = [ … ];`) via `;`-match.
+/// Test code is the ONLY thing removed — production line numbers are unchanged.
+fn production_lines(source: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim_start().starts_with("#[cfg(test)]") {
+            // Skip any further attribute/blank lines to reach the guarded item.
+            let mut j = i + 1;
+            while j < lines.len() {
+                let tj = lines[j].trim_start();
+                if tj.starts_with('#') || tj.is_empty() {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if j < lines.len() && lines[j].contains('{') {
+                // Braced item: brace-match to its close.
+                let mut depth = 0i32;
+                let mut opened = false;
+                let mut k = j;
+                while k < lines.len() {
+                    depth += lines[k].matches('{').count() as i32;
+                    depth -= lines[k].matches('}').count() as i32;
+                    if lines[k].contains('{') {
+                        opened = true;
+                    }
+                    if opened && depth <= 0 {
+                        break;
+                    }
+                    k += 1;
+                }
+                i = k + 1;
+            } else {
+                // Non-braced item (`… = [ … ];`, `use …;`): skip through the `;`.
+                let mut k = j;
+                while k < lines.len() && !lines[k].contains(';') {
+                    k += 1;
+                }
+                i = k + 1;
+            }
+            continue;
+        }
+        out.push((i + 1, lines[i].to_string()));
+        i += 1;
+    }
+    out
+}
+
+/// Extract every bare FLOATING-POINT literal token from one line of source: a run
+/// that starts with a digit not glued to an identifier/`.`, and contains a literal
+/// decimal point. Returns each token normalised via `normalise_num` (so `1.5_f64`
+/// and `1.5` compare equal). Integer literals and dot-less scientific forms
+/// (`1e-6` epsilons) are intentionally ignored — perceptual magnitudes here are
+/// always written with a decimal point (mirrors `parse_default_field_literal`).
+fn extract_float_literals(line: &str) -> Vec<String> {
+    let ch: Vec<char> = line.chars().collect();
+    let n = ch.len();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let glued = i > 0 && {
+            let p = ch[i - 1];
+            p.is_ascii_alphanumeric() || p == '_' || p == '.'
+        };
+        if ch[i].is_ascii_digit() && !glued {
+            let start = i;
+            while i < n && (ch[i].is_ascii_digit() || ch[i] == '_') {
+                i += 1;
+            }
+            let mut has_dot = false;
+            if i + 1 < n && ch[i] == '.' && ch[i + 1].is_ascii_digit() {
+                has_dot = true;
+                i += 1;
+                while i < n && (ch[i].is_ascii_digit() || ch[i] == '_') {
+                    i += 1;
+                }
+            }
+            // Consume an exponent if present (keeps `1.0e5` one token) — but a
+            // dot-less `1e-6` stays has_dot=false and is therefore not emitted.
+            if i < n && (ch[i] == 'e' || ch[i] == 'E') {
+                let mut j = i + 1;
+                if j < n && (ch[j] == '+' || ch[j] == '-') {
+                    j += 1;
+                }
+                if j < n && ch[j].is_ascii_digit() {
+                    i = j;
+                    while i < n && (ch[i].is_ascii_digit() || ch[i] == '_') {
+                        i += 1;
+                    }
+                }
+            }
+            // Consume a trailing type suffix (`f64`/`f32`); normalise_num strips it.
+            while i < n && (ch[i].is_ascii_alphanumeric() || ch[i] == '_') {
+                i += 1;
+            }
+            if has_dot {
+                let tok: String = ch[start..i].iter().collect();
+                let norm = normalise_num(&tok);
+                if !norm.is_empty() {
+                    out.push(norm);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Scan a POLICY module's source for un-allowlisted inline bare float literals.
+/// A site is reported when a production line (see `production_lines`) that is
+/// neither a `const` declaration nor a `fn default()` field literal (both already
+/// covered by `scan_source`) carries a bare float whose value is not on
+/// `allowlist`. `allowlist` is injected so the RED-proof reuses the exact scanner.
+fn scan_bare_float_literals(module: &str, source: &str, allowlist: &[&str]) -> Vec<BareFloatSite> {
+    let mut out = Vec::new();
+    let mut in_default_body = false;
+    let mut default_brace_depth: i32 = 0;
+    for (lineno, raw) in production_lines(source) {
+        // Strip an inline/whole-line comment (no `/* */` block comments exist in
+        // the policy modules — verified — so cutting at `//` is sufficient).
+        let code = match raw.split_once("//") {
+            Some((before, _)) => before,
+            None => raw.as_str(),
+        };
+        let trimmed = code.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Track `fn default()` bodies so their `field: <float>` literals — already
+        // detected by `scan_source` as `<MODULE>_DEFAULT_<FIELD>` consts — are not
+        // double-flagged here.
+        if !in_default_body && trimmed.contains("fn default()") {
+            in_default_body = true;
+            default_brace_depth = 0;
+        }
+        if in_default_body {
+            default_brace_depth += code.matches('{').count() as i32;
+            default_brace_depth -= code.matches('}').count() as i32;
+        }
+
+        let is_const = parse_const_decl(code).is_some();
+        let is_default_field = in_default_body
+            && default_brace_depth > 0
+            && parse_default_field_literal(code).is_some();
+
+        if !is_const && !is_default_field {
+            for value in extract_float_literals(code) {
+                if !allowlist.contains(&value.as_str()) {
+                    out.push(BareFloatSite {
+                        module: module.to_string(),
+                        line: lineno,
+                        value,
+                    });
+                }
+            }
+        }
+
+        if in_default_body && default_brace_depth <= 0 && code.contains('}') {
+            in_default_body = false;
+        }
+    }
+    out
+}
+
+/// Scan every POLICY module off the real tree for un-allowlisted bare floats.
+fn scan_bare_floats_tree() -> Vec<BareFloatSite> {
+    let mut all = Vec::new();
+    for module in POLICY_LITERAL_MODULES {
+        let source = read_module(module);
+        all.extend(scan_bare_float_literals(
+            module,
+            &source,
+            BARE_FLOAT_ALLOWLIST,
+        ));
     }
     all
 }
@@ -748,6 +1022,228 @@ fn read_workspace_doc(rel: &str) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Muddiness-Law (M-row) auditor — resurrects the retired external `mud-oracle`.
+//
+// BUG CLASS this closes: the GATE-1/2/3 integer-row parser SKIPS the `M-` rows
+// (their first cell `M-01` is not a bare integer), so the Muddiness-Law constants
+// of `cleanliness.rs` had NO in-repo gate — the SSOT once deferred them to
+// `.agents/tools/mud-oracle/verify_inventory.js`, which does not exist on this
+// tree. This auditor pulls that check IN-TREE: every non-REMOVED `M-` row must
+// join to a `pub const` in `cleanliness.rs` whose value equals the documented
+// value at the row's DISPLAYED precision (the SSOT shows a rounded value; the
+// const carries full precision, so the comparison is numeric-with-display-tol, not
+// string-equality). `CUSP_L_TABLE` (M-13, value "see code") is checked for
+// existence and its declared length 361. REMOVED rows are NOT re-checked here —
+// their absence is enforced by `cal_t_cal_b_absent_from_shipping_code` in
+// `cleanliness.rs` (no duplication). Shared verbatim by the gate and the RED-proof.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One parsed Muddiness-Law row from the SSOT (`M-` keyed).
+#[derive(Debug, Clone)]
+struct MudRow {
+    /// Const name, markdown decoration stripped (backticks, `~~…~~`).
+    name: String,
+    /// Documented value cell (backticks stripped); `see code` / `(удалён)` for the
+    /// table / removed rows.
+    value: String,
+    removed: bool,
+}
+
+/// Number of decimal digits displayed after the point in a numeric string (used to
+/// derive the display tolerance).
+fn decimal_places(s: &str) -> usize {
+    match s.split_once('.') {
+        Some((_, frac)) => frac.chars().take_while(|c| c.is_ascii_digit()).count(),
+        None => 0,
+    }
+}
+
+/// Parse the `M-` rows of the SSOT. A mud row is a `|`-row whose first cell starts
+/// with `M-`. Columns: `mud-id | name | value | module | status | rationale`.
+fn parse_mud_rows(text: &str) -> Vec<MudRow> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if cells.len() < 6 || !cells[0].starts_with("M-") {
+            continue;
+        }
+        let name = cells[1].replace("~~", "");
+        let name = name.trim().trim_matches('`').trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let value = cells[2].replace("~~", "");
+        let value = value.trim().trim_matches('`').trim().to_string();
+        let status = cells[4].to_ascii_uppercase();
+        let removed = status.contains("REMOVED") || cells[4].contains("УДАЛ");
+        rows.push(MudRow {
+            name,
+            value,
+            removed,
+        });
+    }
+    rows
+}
+
+/// Extract `name -> value` for every `pub const … : f64 = …;` in the PRODUCTION
+/// part of `cleanliness.rs` (everything before the first `#[cfg(test)]`), so a
+/// test-only const can never satisfy an M-row.
+fn cleanliness_const_values(src: &str) -> std::collections::BTreeMap<String, f64> {
+    let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+    let mut map = std::collections::BTreeMap::new();
+    for line in prod.lines() {
+        if let Some(ConstDecl::Numeric { name, value, .. }) = parse_const_decl(line)
+            && let Ok(v) = value.parse::<f64>()
+        {
+            map.insert(name, v);
+        }
+    }
+    map
+}
+
+/// GATE analogue of `scan_source`: the shared M-row comparison the live gate and
+/// the RED-proof both run (INV-4). Returns one defect string per non-REMOVED M-row
+/// whose documented value does not join to the source const at its display
+/// precision (or whose const is missing). REMOVED rows are skipped (absence is the
+/// job of `cleanliness.rs`'s absent-guard).
+fn mud_row_defects(rows: &[MudRow], cleanliness_src: &str) -> Vec<String> {
+    let consts = cleanliness_const_values(cleanliness_src);
+    let mut defects = Vec::new();
+    for r in rows {
+        if r.removed {
+            continue;
+        }
+        // M-13 `CUSP_L_TABLE[361]`: a 361-entry static table ("see code") — verify
+        // it exists with its declared length, not a scalar value.
+        if r.name.starts_with("CUSP_L_TABLE") {
+            if !cleanliness_src.contains("CUSP_L_TABLE: [f64; 361]") {
+                defects.push(format!(
+                    "M-row `{}`: `CUSP_L_TABLE: [f64; 361]` not found in cleanliness.rs \
+                     (missing table or wrong declared length)",
+                    r.name
+                ));
+            }
+            continue;
+        }
+        let Some(&src_val) = consts.get(&r.name) else {
+            defects.push(format!(
+                "M-row `{}`: no `pub const {}` in cleanliness.rs production code \
+                 (active row resolves to no source const)",
+                r.name, r.name
+            ));
+            continue;
+        };
+        let Ok(doc_val) = r.value.parse::<f64>() else {
+            defects.push(format!(
+                "M-row `{}`: documented value `{}` is not a parseable number",
+                r.name, r.value
+            ));
+            continue;
+        };
+        // Tolerance = half a unit in the last DISPLAYED decimal: a real drift
+        // (e.g. 0.012278 → 0.019) exceeds it; display rounding of full precision
+        // (0.0122779190541810 shown as 0.012278) does not.
+        let tol = 0.5 * 10f64.powi(-(decimal_places(&r.value) as i32));
+        if (src_val - doc_val).abs() > tol {
+            defects.push(format!(
+                "M-row `{}`: documented {} vs source {} (drift {:.3e} > display tol {:.3e})",
+                r.name,
+                doc_val,
+                src_val,
+                (src_val - doc_val).abs(),
+                tol
+            ));
+        }
+    }
+    defects
+}
+
+/// Rewrite the `value` cell of the `M-` row whose name matches `name`, for the
+/// RED-proof only (mirror of `rewrite_inventory_cell` but for `M-`-keyed rows).
+fn rewrite_mud_row_value(text: &str, name: &str, new_value: &str) -> String {
+    let strip = |c: &str| {
+        c.replace("~~", "")
+            .trim()
+            .trim_matches('`')
+            .trim()
+            .to_string()
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let is_mud_row = trimmed.starts_with('|') && {
+            let cells: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            cells.len() >= 6
+                && cells[0].starts_with("M-")
+                && cells.get(1).map(|c| strip(c)) == Some(name.to_string())
+        };
+        if is_mud_row {
+            let cells: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            let rebuilt: Vec<String> = cells
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    if i == 2 {
+                        new_value.to_string()
+                    } else {
+                        (*c).to_string()
+                    }
+                })
+                .collect();
+            out.push(format!("| {} |", rebuilt.join(" | ")));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+#[test]
+fn mud_rows_match_cleanliness_source() {
+    let ssot = std::fs::read_to_string(inventory_path()).unwrap_or_else(|e| {
+        panic!(
+            "mud auditor cannot read SSOT at {} ({e})",
+            inventory_path().display()
+        )
+    });
+    let rows = parse_mud_rows(&ssot);
+    let active = rows.iter().filter(|r| !r.removed).count();
+    assert!(
+        active > 0,
+        "mud auditor parsed zero ACTIVE M-rows — the parser is mis-scoped (a vacuous gate)."
+    );
+    let src = read_module("cleanliness.rs");
+    let defects = mud_row_defects(&rows, &src);
+    assert!(
+        defects.is_empty(),
+        "Muddiness-Law auditor FAILED — {} M-row(s) do not join to cleanliness.rs at the \
+         documented value/precision:\n  {}",
+        defects.len(),
+        defects.join("\n  ")
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GATE 1 — untracked-const (differential). Every detected POLICY const must have
 // a marker within a 2-line lookback. An unmarked const → RED naming the const.
 // Closes the CLASS "magic number without a paper-trail".
@@ -1014,6 +1510,35 @@ fn gate4_grounded_citations_are_truthful() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GATE 5 — inline-bare-literal (differential). Every production bare float literal
+// in a POLICY module (`POLICY_LITERAL_MODULES`) must be either an allowlisted
+// domain/normalisation value (`BARE_FLOAT_ALLOWLIST`) or extracted into a NAMED
+// const (which then flows through GATE-1/2/3). Closes the CLASS "a tunable
+// perceptual-policy magnitude hides as an inline literal instead of a marked
+// const" — the exact blindness that let the label fractions and Separator Lc
+// evade the const-only gate until they were extracted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn gate5_no_untracked_bare_float_literals() {
+    let sites = scan_bare_floats_tree();
+    let offenders: Vec<String> = sites
+        .iter()
+        .map(|s| format!("{}:{} bare literal `{}`", s.module, s.line, s.value))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "GATE 5 FAILED — {} inline bare float literal(s) in a POLICY module are neither \
+         allowlisted domain/normalisation values nor extracted into a named const (a tunable \
+         perceptual magnitude must be a marked const, not a magic number):\n  {}\n\
+         Fix: extract to a `// SSOT-TRACKED` const + inventory row, or — if it is genuinely \
+         non-policy domain arithmetic — add its value to `BARE_FLOAT_ALLOWLIST` with a rationale.",
+        offenders.len(),
+        offenders.join("\n  ")
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // red_proof_audit_probe (regression, INV-4). Splice an `_AUDIT_PROBE` literal
 // into an IN-MEMORY copy of a module's source, run the *same* scanner, and
 // assert GATE-1 deterministically goes RED naming the spliced literal. Then
@@ -1038,6 +1563,22 @@ fn unmarked_after_splice(snippet: &str) -> Vec<String> {
         .into_iter()
         .filter(|c| !c.has_marker)
         .map(|c| c.name)
+        .collect()
+}
+
+/// GATE-5 mirror of `unmarked_after_splice`: prepend `snippet` to an in-memory copy
+/// of `semantic.rs` (a POLICY module) and return the values of every un-allowlisted
+/// bare float the *same* GATE-5 scanner flags — so the RED-proof exercises the real
+/// bare-literal detection verbatim (INV-4), not a green-from-birth copy.
+fn bare_floats_after_splice(snippet: &str) -> Vec<String> {
+    let original = read_module("semantic.rs");
+    let mut spliced = String::with_capacity(original.len() + snippet.len() + 2);
+    spliced.push_str(snippet);
+    spliced.push('\n');
+    spliced.push_str(&original);
+    scan_bare_float_literals("semantic.rs", &spliced, BARE_FLOAT_ALLOWLIST)
+        .into_iter()
+        .map(|s| s.value)
         .collect()
 }
 
@@ -1081,6 +1622,39 @@ fn red_proof_audit_probe() {
         v.iter().any(|n| n.ends_with("_DEFAULT_X")),
         "RED-proof FAILED (Default-field path) — GATE-1 did not flag an unmarked `field: <float>` \
          literal in a `fn default()` body (the Default-field-literal class is still open). Saw: {v:?}"
+    );
+
+    // 4b. GATE-5 inline bare-literal path — invisible to EVERY const/default-field
+    //     detector (paths 1-4). Splice an un-allowlisted bare float as an inline
+    //     expression; GATE-5 must flag its value. This is the 5th detection path.
+    let v = bare_floats_after_splice("fn _audit_probe_bare() -> f64 { some_call(42.0) }");
+    assert!(
+        v.contains(&"42.0".to_string()),
+        "RED-proof FAILED (GATE-5 bare-literal path) — an un-allowlisted inline bare float in a \
+         POLICY module did NOT surface through the bare-literal scanner; a tunable policy magnitude \
+         could still hide as an inline literal. Saw: {v:?}"
+    );
+    // And an ALLOWLISTED bare float must NOT be flagged (the allowlist is load-bearing,
+    // not vacuous — a scanner that flagged everything would be green-from-birth here).
+    let v_allow = bare_floats_after_splice("fn _audit_probe_ok() -> f64 { some_call(1.0) + 0.5 }");
+    assert!(
+        !v_allow.contains(&"1.0".to_string()) && !v_allow.contains(&"0.5".to_string()),
+        "RED-proof FAILED (GATE-5 allowlist path) — an allowlisted domain value was flagged; the \
+         allowlist is not being honoured. Saw: {v_allow:?}"
+    );
+
+    // 4c. The real POLICY tree must remain GREEN under GATE-5 — every splice above was
+    //     in-memory; no real production bare float may be un-allowlisted after extraction.
+    let real_bare: Vec<String> = scan_bare_floats_tree()
+        .iter()
+        .map(|s| format!("{}:{} `{}`", s.module, s.line, s.value))
+        .collect();
+    assert!(
+        real_bare.is_empty(),
+        "RED-proof FAILED — real POLICY tree is NOT GREEN under GATE-5 ({} un-allowlisted bare \
+         float(s)); the probe cannot prove 'splice flips green→red' until the tree is green:\n  {}",
+        real_bare.len(),
+        real_bare.join("\n  ")
     );
 
     // 5. The real tree must remain GREEN under GATE-1 — every splice was in-memory.
@@ -1230,5 +1804,32 @@ fn red_proof_audit_probe() {
          probe cannot prove 'fabrication flips green→red' until the real tree is green:\n  {}",
         real_citation_defects.len(),
         real_citation_defects.join("\n  ")
+    );
+
+    // 8. Muddiness-Law auditor must flip RED on an M-row value drift. Mutate ONE
+    //    ACTIVE M-row's value in an IN-MEMORY copy of the SSOT and run the *same*
+    //    `mud_row_defects` the live gate runs (INV-4), so a mutation to the auditor
+    //    is caught here, not green-from-birth.
+    let cleanliness_src = read_module("cleanliness.rs");
+    let mud_probe = "H_Y_DEG";
+    // Floor: the UNMUTATED SSOT must be GREEN against the source, so the drift below
+    // is provably caused by the splice.
+    let mud_baseline = mud_row_defects(&parse_mud_rows(&real_ssot), &cleanliness_src);
+    assert!(
+        mud_baseline.is_empty(),
+        "RED-proof FAILED — real SSOT M-rows are NOT GREEN against cleanliness.rs; the probe \
+         cannot prove 'mutation flips green→red' until they are in sync:\n  {}",
+        mud_baseline.join("\n  ")
+    );
+    let mud_drifted = rewrite_mud_row_value(&real_ssot, mud_probe, "196.9172");
+    assert_ne!(
+        mud_drifted, real_ssot,
+        "RED-proof setup wrong — mud value-drift splice did not change the SSOT (row `{mud_probe}` not found)."
+    );
+    let mud_drift = mud_row_defects(&parse_mud_rows(&mud_drifted), &cleanliness_src);
+    assert!(
+        mud_drift.iter().any(|d| d.contains(mud_probe)),
+        "RED-proof FAILED (mud value-drift path) — drifting M-row `{mud_probe}` value to `196.9172` \
+         did NOT flip the auditor RED; the Muddiness-Law audit is green-from-birth. Saw: {mud_drift:?}"
     );
 }
