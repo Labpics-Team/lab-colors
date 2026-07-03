@@ -1,13 +1,14 @@
 //! The application core of the bindings: resolve a background under a theme,
-//! generically over whatever role set the core provides.
+//! generically over whatever role set a loaded config provides.
 //!
 //! This layer knows the core and the DTOs; it does NOT know wasm-bindgen. It
-//! holds the role table (built-in, or the compiled config table after
-//! `load_config`) and the contract cache, runs the core resolve, and maps the
-//! resolved vector into [`ResolvedTheme`]. The mapping never enumerates roles —
-//! it walks whatever the core returns and keys each entry by its stable key
-//! (`Role::key()` built-in, the config's own names after load) — so role
-//! growth flows through on a rebuild.
+//! holds the compiled config table (supplied by `load_config`) and the contract
+//! cache, runs the core resolve, and maps the resolved vector into
+//! [`ResolvedTheme`]. The engine is agnostic (ADR-0001 PR-c): it carries no
+//! built-in design system, so `resolve_theme` needs a config first. The mapping
+//! never enumerates roles — it walks whatever the core returns and keys each
+//! entry by the config's own role name — so role growth flows through on a
+//! rebuild.
 
 use std::rc::Rc;
 
@@ -15,9 +16,9 @@ use std::collections::HashMap;
 
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
-use labcolors_core::{BgInput, Resolved, RoleTable, Solved, Unreachable};
+use labcolors_core::{BgInput, Resolved, Solved, Unreachable};
 
-use crate::cache::{CacheKey, ContractCache, DEFAULT_TABLE_FINGERPRINT};
+use crate::cache::{CacheKey, ContractCache};
 use crate::config_dto::{ConfigDto, fingerprint};
 use crate::dto::{ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
 use crate::error::BindingError;
@@ -28,15 +29,15 @@ use crate::theme::Theme;
 /// design tool sweeping backgrounds, bounded so memory cannot run away.
 const CACHE_CAPACITY: usize = 4096;
 
-/// A configured, caching contrast engine.
+/// A caching contrast engine over a consumer-supplied design system.
 ///
-/// Construct once (`init`), call [`resolve_theme`](Self::resolve_theme) many
-/// times. Zero-config: the default role table and the per-theme default viewing
-/// conditions are baked in. The result is cached behind an `Rc` so a cache hit
-/// is a cheap reference-count bump, not a re-clone of the whole set.
+/// Construct once (`init`), load a config (`load_config`), then call
+/// [`resolve_theme`](Self::resolve_theme) many times. The engine is agnostic —
+/// it has no built-in role table — so a resolve before `load_config` returns
+/// [`BindingError::ConfigRequired`], never a panic or a silent default. The
+/// result is cached behind an `Rc` so a cache hit is a cheap reference-count
+/// bump, not a re-clone of the whole set.
 pub struct Engine {
-    table: RoleTable,
-    table_fingerprint: u64,
     named: Option<NamedState>,
     cache: ContractCache<Rc<ResolvedTheme>>,
 }
@@ -58,11 +59,11 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// A zero-config engine on the default role table.
+    /// A fresh engine with no config loaded yet. [`resolve_theme`](Self::resolve_theme)
+    /// returns [`BindingError::ConfigRequired`] until [`load_config`](Self::load_config)
+    /// supplies a design system.
     pub fn new() -> Self {
         Self {
-            table: RoleTable::default(),
-            table_fingerprint: DEFAULT_TABLE_FINGERPRINT,
             named: None,
             cache: ContractCache::new(CACHE_CAPACITY),
         }
@@ -167,23 +168,9 @@ impl Engine {
             return Ok(result);
         }
 
-        let key = CacheKey::new(normalised.clone(), theme, self.table_fingerprint);
-        let result = self.cache.get_or_insert_with(key, || {
-            let set = labcolors_core::resolve_set(&bg, &self.table, &vc);
-            let roles = set
-                .into_iter()
-                .map(|(role, resolved)| RoleEntry {
-                    role_key: role.key().to_string(),
-                    outcome: map_resolved(resolved, self.table.legal_floor(role)),
-                })
-                .collect();
-            Rc::new(ResolvedTheme {
-                theme: theme.key(),
-                background: normalised.clone(),
-                roles,
-            })
-        });
-        Ok(result)
+        // Agnostic engine: no config, nothing to emit. An honest, matchable
+        // failure — the boundary refuses rather than inventing a built-in system.
+        Err(BindingError::ConfigRequired)
     }
 
     /// Recheck the contrasts a set of foreground colours achieve against a
@@ -348,6 +335,29 @@ fn normalise_hex(raw: &str) -> Result<String, BindingError> {
 mod tests {
     use super::*;
 
+    /// An engine with the frozen labui passport loaded — the config the built-in
+    /// default table used to hardcode. The agnostic engine has no built-in system,
+    /// so every resolve test drives a real loaded contract.
+    fn engine_with_labui() -> Engine {
+        let mut engine = Engine::new();
+        engine
+            .load_config(&labui_json())
+            .expect("labui passport loads");
+        engine
+    }
+
+    #[test]
+    fn resolve_theme_without_config_is_config_required() {
+        // The agnostic contract: no built-in fallback. A resolve before any
+        // load_config is an honest, matchable failure — not a panic, not a
+        // silent default system.
+        let engine = Engine::new();
+        assert!(matches!(
+            engine.resolve_theme("#FFFFFF", Theme::Light),
+            Err(BindingError::ConfigRequired)
+        ));
+    }
+
     #[test]
     fn normalises_short_and_cased_hex() {
         assert_eq!(normalise_hex("#fff").unwrap(), "#FFFFFF");
@@ -369,13 +379,13 @@ mod tests {
 
     #[test]
     fn resolves_white_light_to_keyed_entries() {
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         assert_eq!(result.theme, "light");
         assert_eq!(result.background, "#FFFFFF");
-        // Generic over the role set: at least the v1 roles are present, each
-        // keyed by Role::key(). We assert the keys exist, not their count, so
-        // issue #59's growth does not break this test.
+        // Generic over the role set: the config's own role names key each entry.
+        // We assert the keys exist, not their count, so role growth does not
+        // break this test.
         let keys: Vec<_> = result.roles.iter().map(|r| r.role_key.as_str()).collect();
         assert!(keys.contains(&"label-primary"));
         assert!(keys.contains(&"none"));
@@ -388,7 +398,7 @@ mod tests {
         // pairs must equal exactly what `resolve_theme` reported. This is the
         // identity the reactive controller stands on: "still passes?" means the
         // same thing as the original solve.
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         for (bg, theme) in [
             ("#FFFFFF", Theme::Light),
             ("#3478F6", Theme::Light),
@@ -480,7 +490,7 @@ mod tests {
 
     #[test]
     fn none_role_resolves_to_none_outcome() {
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         let none_entry = result.roles.iter().find(|r| r.role_key == "none").unwrap();
         assert_eq!(none_entry.outcome, RoleOutcome::None);
@@ -488,7 +498,7 @@ mod tests {
 
     #[test]
     fn label_primary_on_white_is_a_dark_colour() {
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         let tp = result
             .roles
@@ -509,7 +519,7 @@ mod tests {
         // The DTO carries each role's legal WCAG clamp so the runtime can hold
         // the floor while easing. Anchored roles report their conformance ratio;
         // decorative / zero roles report None.
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         let floor_of = |key: &str| {
             result
@@ -536,7 +546,7 @@ mod tests {
 
     #[test]
     fn cache_returns_identical_shared_result() {
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         let first = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         let second = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         assert!(
@@ -547,7 +557,7 @@ mod tests {
 
     #[test]
     fn cache_key_is_hex_normalised() {
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         let canonical = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         let shorthand = engine.resolve_theme("#fff", Theme::Light).unwrap();
         assert!(
@@ -558,33 +568,41 @@ mod tests {
 
     #[test]
     fn ic_theme_resolves_without_error() {
-        let engine = Engine::new();
+        let engine = engine_with_labui();
         assert!(engine.resolve_theme("#FFFFFF", Theme::LightIc).is_ok());
     }
 
     #[test]
-    fn css_vars_and_role_keys_match_across_all_twenty_roles() {
-        // The WASM boundary contract: every role entry carries `role_key` from
-        // `Role::key()` and the CSS var is built mechanically as
-        // `--lab-{role_key}`. No parallel list — a change to `Role::key()`
-        // automatically propagates. This sweeps all 20 roles on three
-        // representative backgrounds, asserting the full set is present every
-        // time and every role_key is constructible into a CSS var name.
-        let engine = Engine::new();
+    fn css_vars_and_role_keys_are_consistent_for_the_loaded_contract() {
+        // The WASM boundary contract: every role entry carries the config's own
+        // `role_key` and the CSS var is built mechanically as `--lab-{role_key}`.
+        // No parallel list — the emitted set follows whatever the loaded contract
+        // declares. This sweeps the labui contract on representative backgrounds,
+        // asserting the same non-empty role set is present every time, every key
+        // is unique, and every key is constructible into a CSS var name.
+        let engine = engine_with_labui();
         let reps = [
             ("#FFFFFF", Theme::Light),
             ("#000000", Theme::Dark),
             ("#808080", Theme::Light),
-            // Increased-contrast variants: same 20-role contract must hold.
+            // Increased-contrast variants: the same contract must hold.
             ("#FFFFFF", Theme::LightIc),
             ("#000000", Theme::DarkIc),
         ];
+        // The role count is a property of the loaded contract, not a magic number:
+        // pin it to the first sweep and assert every background emits the same set.
+        let expected_len = engine
+            .resolve_theme("#FFFFFF", Theme::Light)
+            .unwrap()
+            .roles
+            .len();
+        assert!(expected_len > 0, "loaded contract must emit roles");
         for (bg, theme) in reps {
             let result = engine.resolve_theme(bg, theme).unwrap();
             assert_eq!(
                 result.roles.len(),
-                20,
-                "{bg}: resolve must return all 20 roles"
+                expected_len,
+                "{bg}: resolve must return the full loaded contract every time"
             );
             let mut seen = std::collections::HashSet::new();
             for entry in &result.roles {
@@ -642,7 +660,11 @@ mod tests {
                     RoleOutcome::Unreachable { .. } => {}
                 }
             }
-            assert_eq!(seen.len(), 20, "{bg}: all 20 role keys must be unique");
+            assert_eq!(
+                seen.len(),
+                expected_len,
+                "{bg}: every role key must be unique"
+            );
         }
     }
 
@@ -688,13 +710,14 @@ mod tests {
     #[test]
     fn load_config_switches_contract_and_separates_cache_spaces() {
         let mut engine = Engine::new();
-        let before = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        // Агностичный движок до load_config не несёт никакого контракта —
+        // resolve обязан честно отказать, а не отдать встроенный дефолт.
         assert!(
-            before
-                .roles
-                .iter()
-                .all(|r| r.role_key != "fill-brand-primary"),
-            "встроенный контракт не несёт ролей конфига"
+            matches!(
+                engine.resolve_theme("#FFFFFF", Theme::Light),
+                Err(BindingError::ConfigRequired)
+            ),
+            "до load_config resolve_theme = ConfigRequired"
         );
 
         let fp_labui = engine.load_config(&labui_json()).expect("labui валиден");

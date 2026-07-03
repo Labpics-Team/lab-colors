@@ -1,19 +1,47 @@
 //! Headless-browser parity smoke: the binding's resolve must equal the native
-//! `resolve_set` it wraps, role for role.
+//! `resolve_named_set` it wraps, role for role.
 //!
 //! Run with `wasm-pack test --headless --chrome` (D1 default from the chapter).
-//! Expectations are GENERATED from the core's own `resolve_set` inside the same
-//! wasm runtime — never hand-typed — so this test cannot drift from the engine
-//! and stays correct when issue #59 grows the role set.
+//! The engine is agnostic (ADR-0001 PR-c): it has no built-in table, so parity
+//! is proven against a LOADED config (the frozen labui passport). Expectations
+//! are GENERATED from the core's own `resolve_named_set` inside the same wasm
+//! runtime — never hand-typed — so this test cannot drift from the engine and
+//! stays correct when the role set grows.
 
 #![cfg(target_arch = "wasm32")]
 
-use labcolors_core::{BgInput, Resolved, RoleTable, ViewingConditions, resolve_set};
+use labcolors_core::config::ThemeConfig;
+use labcolors_core::semantic::NamedRoleTable;
+use labcolors_core::{BgInput, Resolved, ViewingConditions, resolve_named_set};
 use labcolors_wasm::LabColors;
+use labcolors_wasm::config_dto::ConfigDto;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+/// The frozen labui passport — the config the built-in default table used to
+/// hardcode. Both the boundary (via `loadConfig`) and the native expectation
+/// (via `ConfigDto` → `ThemeConfig` → `compile_named_role_table`) read this one
+/// SSOT, so the two sides cannot diverge on their input.
+const LABUI_JSON: &str = include_str!("data/labui.config.json");
+
+/// Build the native labui role table through the same public path `loadConfig`
+/// uses, so the parity oracle is the core's own compile, not a parallel copy.
+fn native_labui_table() -> NamedRoleTable {
+    let dto: ConfigDto = serde_json::from_str(LABUI_JSON).expect("labui passport parses");
+    let cfg = ThemeConfig::try_from(dto).expect("DTO → ThemeConfig");
+    cfg.compile_named_role_table().expect("labui compiles")
+}
+
+/// A boundary engine with the labui passport loaded.
+fn boundary_with_labui() -> LabColors {
+    let mut engine = LabColors::new();
+    engine
+        .load_config(LABUI_JSON)
+        .expect("labui passport loads");
+    engine
+}
 
 /// Read a string property off a JS object, panicking with context on absence —
 /// this is test scaffolding, where a missing field IS the failure.
@@ -38,18 +66,18 @@ fn error_message(err: wasm_bindgen::JsError) -> String {
 }
 
 /// The binding's `resolveTheme("#FFFFFF","light")` must reproduce the native
-/// `resolve_set` for the default table under sRGB viewing conditions, for every
-/// role the core returns.
+/// `resolve_named_set` of the loaded labui table under sRGB, for every role the
+/// core returns.
 #[wasm_bindgen_test]
-fn resolve_theme_matches_native_resolve_set() {
+fn resolve_theme_matches_native_named_resolve() {
     // Expectations straight from the core, in the wasm runtime.
     let bg = BgInput::solid("#FFFFFF").expect("white is valid");
-    let table = RoleTable::default();
+    let table = native_labui_table();
     let vc = ViewingConditions::srgb();
-    let native = resolve_set(&bg, &table, &vc);
+    let native = resolve_named_set(&bg, &table, &vc);
 
-    // The binding result for the same inputs.
-    let engine = LabColors::new();
+    // The binding result for the same inputs, from a loaded config.
+    let engine = boundary_with_labui();
     let result: JsValue = engine
         .resolve_theme("#FFFFFF", "light")
         .expect("white/light resolves")
@@ -62,31 +90,43 @@ fn resolve_theme_matches_native_resolve_set() {
         "theme echoed back"
     );
 
-    for (role, resolved) in &native {
-        let entry = get_obj(&roles, role.key());
+    for (name, resolved) in &native {
+        let entry = get_obj(&roles, name);
         let kind = get_str(&entry, "kind").expect("every role has a kind");
         match resolved {
             Resolved::Color { solved, .. } => {
-                assert_eq!(kind, "color", "{} should be a colour", role.key());
+                assert_eq!(kind, "color", "{name} should be a colour");
                 assert_eq!(
                     get_str(&entry, "hex").as_deref(),
                     Some(solved.hex()),
-                    "{} hex must match native",
-                    role.key()
+                    "{name} hex must match native"
                 );
             }
             Resolved::None => {
-                assert_eq!(kind, "none", "{} should be the zero token", role.key());
+                assert_eq!(kind, "none", "{name} should be the zero token");
             }
             Resolved::Unreachable(_) => {
-                assert_eq!(kind, "unreachable", "{} should be unreachable", role.key());
+                assert_eq!(kind, "unreachable", "{name} should be unreachable");
             }
-            // Translucent в дефолт-таблице не встречается (полупрозрачная граница уже открыта конфиг-путём);
-            // будущий вариант обязан быть переучтён здесь шумно, не замаскирован.
-            other => panic!(
-                "неучтённый Resolved-вариант в wasm-парити ({}): {other:?}",
-                role.key()
-            ),
+            Resolved::Translucent(r) => {
+                assert_eq!(kind, "translucent", "{name} should be translucent");
+                assert_eq!(
+                    get_str(&entry, "tintHex").as_deref(),
+                    Some(r.tint_hex()),
+                    "{name} tint must match native"
+                );
+            }
+            Resolved::Glow(g) => {
+                assert_eq!(kind, "glow", "{name} should be a glow");
+                assert_eq!(
+                    get_str(&entry, "coreHex").as_deref(),
+                    Some(g.core_hex()),
+                    "{name} glow core must match native"
+                );
+            }
+            // `Resolved` is `#[non_exhaustive]`: a future core variant must be
+            // re-accounted here loudly, never masked.
+            other => panic!("unmapped Resolved variant in wasm parity ({name}): {other:?}"),
         }
     }
 }
@@ -95,7 +135,7 @@ fn resolve_theme_matches_native_resolve_set() {
 /// the value there equals the role's css (oklch) — what css-injection consumes.
 #[wasm_bindgen_test]
 fn vars_mirror_reachable_roles_in_oklch() {
-    let engine = LabColors::new();
+    let engine = boundary_with_labui();
     let result: JsValue = engine
         .resolve_theme("#FFFFFF", "light")
         .expect("resolves")
@@ -134,26 +174,26 @@ fn vars_mirror_reachable_roles_in_oklch() {
 }
 
 /// `recheckContrast` across the wasm boundary: the returned `Float64Array`
-/// reproduces the native `resolve_set`'s own `(lc, wcag)` per role, accepts the
-/// same shorthand hex forms as `resolveTheme`, and rejects a bad foreground.
+/// reproduces the native `resolve_named_set`'s own `(lc, wcag)` per role, accepts
+/// the same shorthand hex forms as `resolveTheme`, and rejects a bad foreground.
 #[wasm_bindgen_test]
 fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     let bg = "#FFFFFF";
-    let native = resolve_set(
+    let native = resolve_named_set(
         &BgInput::solid(bg).expect("white is valid"),
-        &RoleTable::default(),
+        &native_labui_table(),
         &ViewingConditions::srgb(),
     );
     let mut fgs: Vec<String> = Vec::new();
     let mut want: Vec<(f64, f64)> = Vec::new();
-    for (_role, resolved) in &native {
+    for (_name, resolved) in &native {
         if let Resolved::Color { solved, .. } = resolved {
             fgs.push(solved.hex().to_string());
             want.push((solved.lc(), solved.wcag_ratio()));
         }
     }
 
-    let engine = LabColors::new();
+    let engine = boundary_with_labui();
     let flat = engine
         .recheck_contrast(bg, fgs.clone(), "light")
         .expect("rechecks");
@@ -174,7 +214,8 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     }
 
     // Shorthand / missing-`#` foregrounds are accepted, identical to canonical —
-    // the same hex contract `resolveTheme` honours (`#123` == `#112233`).
+    // the same hex contract `resolveTheme` honours (`#123` == `#112233`). recheck
+    // is stateless, so no config is needed for this half.
     let canonical = engine
         .recheck_contrast(bg, vec!["#112233".to_string()], "light")
         .expect("canonical rechecks");
@@ -196,10 +237,24 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     );
 }
 
-/// An unknown theme name rejects with a structured error — not a panic.
-/// (Previously tested "light-ic" as uncalibrated; IC themes are now fully
-/// calibrated since d2c9340. This test now covers the unknown-theme path,
-/// which is the remaining rejection path for invalid theme strings.)
+/// `resolveTheme` before any `loadConfig` rejects with the stable
+/// `config_required` code — the agnostic contract, surfaced across the boundary.
+#[wasm_bindgen_test]
+fn resolve_without_config_rejects_config_required() {
+    let engine = LabColors::new();
+    let err = engine
+        .resolve_theme("#FFFFFF", "light")
+        .map(|_| ())
+        .expect_err("resolve before loadConfig must reject");
+    let message = error_message(err);
+    assert!(
+        message.contains("config_required"),
+        "error must carry the stable code, got: {message}"
+    );
+}
+
+/// An unknown theme name rejects with a structured error — not a panic. Theme
+/// parsing happens before the config check, so this holds with no config loaded.
 #[wasm_bindgen_test]
 fn unknown_theme_rejects_without_panic() {
     let engine = LabColors::new();
@@ -217,7 +272,8 @@ fn unknown_theme_rejects_without_panic() {
     );
 }
 
-/// A malformed background rejects with the invalid-background code.
+/// A malformed background rejects with the invalid-background code. Hex
+/// normalisation happens before the config check, so this holds with no config.
 #[wasm_bindgen_test]
 fn invalid_background_rejects() {
     let engine = LabColors::new();
