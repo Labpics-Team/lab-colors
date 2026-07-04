@@ -1,0 +1,71 @@
+name: mutation (scheduled)
+
+# Мутационное тестирование (Класс Д) — ПО РАСПИСАНИЮ, НЕ на каждый PR.
+# Каденс из craft-qa: дорогие наборы (mutation/soak/generative-fuzz) уходят с
+# критического пути PR на расписание, иначе люди начинают обходить CI.
+# Аналог Stryker-по-расписанию в lab-motion (ядро под мутацию, не весь код).
+on:
+  schedule:
+    # Еженедельно, понедельник 04:00 UTC — вне рабочего окна раннер-фермы.
+    - cron: "0 4 * * 1"
+  # Ручной запуск для отладки/по требованию.
+  workflow_dispatch:
+    inputs:
+      full_workspace:
+        description: "Мутировать весь workspace (иначе — только математ-ядро из .cargo/mutants.toml)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Тот же пин, что в ci.yml — детерминированный тулчейн.
+  RUST_TOOLCHAIN: 1.96.0
+  # Мутация — чистые прогоны, инкрементальная компиляция только мешает.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  mutants:
+    name: cargo-mutants (math core)
+    runs-on: [self-hosted, Linux, X64]
+    # Мутация долгая; не держим слот вечно.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: toolchain env (runner.temp)
+        # Изоляция RUSTUP_HOME/CARGO_HOME/TMPDIR per job под runner.temp — тот же
+        # приём, что во всех джобах ci.yml (класс утечки /tmp закрыт, история #143).
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install cargo-mutants
+        # Пин для воспроизводимости; --locked уважает собственный lockfile тулзы.
+        # $CARGO_HOME/bin → PATH явно: с кастомным CARGO_HOME toolchain-экшен его
+        # не добавляет, и standalone-бинарь недостижим (класс exit 127 на de-02).
+        run: |
+          cargo install cargo-mutants --version 25.0.0 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      - name: cargo mutants (математ-ядро — скоуп из .cargo/mutants.toml)
+        # Без флагов скоуп берётся из .cargo/mutants.toml (cleanliness.rs + pair.rs).
+        # workflow_dispatch с full_workspace=true снимает скоуп (--file '**/*.rs').
+        run: |
+          if [ "${{ inputs.full_workspace }}" = "true" ]; then
+            cargo mutants --no-shuffle --in-place --file 'crates/labcolors-core/src/**/*.rs'
+          else
+            cargo mutants --no-shuffle --in-place
+          fi
+      - name: upload mutants report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutants-report
+          path: mutants.out/
+          retention-days: 30
