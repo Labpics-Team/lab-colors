@@ -11,10 +11,16 @@
 # приватном). При открытии lab-colors публично — вернуть provenance:true
 # (аттестация «собрано этим workflow из этого репо» усилит сигналы Socket).
 #
-# GitHub-hosted раннер НАМЕРЕННО: публикация исполняется по факту пуша тега,
-# а защита тегов на текущем плане недоступна — эфемерный раннер изолирует
-# сборку от внутреннего периметра (self-hosted раннер дал бы исполнение
-# кода тега в сети Labpics).
+# Self-hosted раннер — ВРЕМЕННО, по решению владельца (2026-07-04): публикация
+# 0.6.0 не стартовала на github-hosted («account payments have failed»,
+# run 28689086170), платные минуты закрыты. Прежний риск self-hosted
+# («исполнение кода произвольного тега в сети Labpics») закрыт гардом
+# «тег достижим из origin/main»: main защищён PR-only + зелёным CI, значит
+# публикуемый код всегда прошёл ревью и гейты; произвольный rogue-тег
+# отклоняется до любых установок из сети. Остаточный риск — co-tenancy de-02
+# (общий с ci.yml; класс закрывает выделенный CI-узел, см. эпик изоляции
+# раннеров). Вернуть github-hosted, когда починен биллинг ИЛИ появился
+# выделенный узел.
 #
 # Гард «версия пакета == тег» стоит ДО любых установок из сети: fail-fast
 # на расхождении, публикация «тег v0.2.0 / пакет 0.1.0» невозможна.
@@ -33,10 +39,21 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     environment: npm-publish
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Полная история: гард ниже проверяет достижимость тега из main
+          # через merge-base, shallow-клон дал бы ложный отказ.
+          fetch-depth: 0
+      - name: гард — тег из истории main (anti-rogue-tag, до установок из сети)
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "тег $GITHUB_REF_NAME указывает вне истории origin/main — публикация запрещена" >&2
+            exit 1
+          fi
       - name: версия пакета == тег (fail-fast, до установок из сети)
         working-directory: packages/colors
         run: |
