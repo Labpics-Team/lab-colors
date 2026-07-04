@@ -25,7 +25,7 @@
 //!
 //! **glow-k (dark) := фактический композит-шаг shadow-k (light)** — свечение
 //! на тёмном обязано давать тот же перцептивный шаг |ΔJ'|, что тень на
-//! светлом. Значения ИЗМЕРЕНЫ (examples/glow_mirror_derivation) от
+//! светлом. Значения ИЗМЕРЕНЫ от
 //! владельческих альф стека теней; отображение subtle:=minor, base:=ambient,
 //! bloom:=major (penumbra — анатомическая ступень именно тени, у излучения
 //! света полутени нет). Ноль придуманных чисел.
@@ -45,13 +45,13 @@ use crate::spaces::vc::ViewingConditions;
 
 /// Контрактный шаг glow-subtle (|ΔJ'| композита от фона): зеркало
 /// стек-композита fx-shadow-minor на светлом якоре labui.
-// SSOT-TRACKED — зеркальная деривация от владельческих альф теней (examples/glow_mirror_derivation).
+// SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
 pub const GLOW_SUBTLE_DJ: f64 = 0.8563;
 /// Контрактный шаг glow-base: зеркало стек-композита fx-shadow-ambient.
-// SSOT-TRACKED — зеркальная деривация от владельческих альф теней (examples/glow_mirror_derivation).
+// SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
 pub const GLOW_BASE_DJ: f64 = 2.3006;
 /// Контрактный шаг glow-bloom: зеркало стек-композита fx-shadow-major.
-// SSOT-TRACKED — зеркальная деривация от владельческих альф теней (examples/glow_mirror_derivation).
+// SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
 pub const GLOW_BLOOM_DJ: f64 = 13.3251;
 
 /// Ступень контрактного стека свечения (зеркальная деривация, см. шапку).

@@ -457,3 +457,151 @@ fn cfg_test_module_exclusion_covers_the_relocated_oracles() {
         "semantic.rs is production and must be scanned, not excluded"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Observer-fit (single-observer / N=1) calibration gate (Front B).
+//
+// BUG CLASS this guards: a constant CALIBRATED to ONE observer's perception
+// (N=1, single rater, no reliability model) re-enters the PRODUCTION surface of
+// the agnostic core. The engine must emit only values it can honestly ground in
+// measurement or geometry; a single-observer DECLARED-CALIBRATION scalar — the
+// removed `confidence` layer (`M_W` / `KAPPA_CORE` / `KAPPA_INTERIOR`) was
+// exactly this — is observer-fit noise the agnostic contract forbids. Like the
+// sibling gates above, the failure mode is INVISIBLE to behavioural tests: an
+// observer-fit constant still WORKS, so every value/golden test stays green —
+// the core has merely stopped being agnostic. This gate turns that regression
+// RED by scanning the production (non-`cfg(test)`) `src` for the single-observer
+// provenance SIGNATURE.
+//
+// WHY THE SIGNATURE, NOT BARE `DECLARED-CALIBRATION`: a `DECLARED-CALIBRATION`
+// marker alone is legitimate — a design-choice knob carries it (e.g.
+// `PAIR_CROSSOVER_Y`), and a RETIRED threshold is still CITED in comments (the
+// removed M-03 light-escape). The forbidden class is specifically the
+// SINGLE-OBSERVER fit, whose provenance always carries `N=1` /
+// `single-observer` / `однонаблюдательск`. Keying on that signature makes the
+// gate BITE on observer-fit re-entry yet stay SILENT on honest design-choice
+// calibration and on historical citations (proved by the RED-proofs below).
+//
+// Comments are NOT cut here (unlike the hex/definition scanners): the provenance
+// signature lives in the doc/annotation adjacent to the constant, and that is
+// exactly what the gate reads. `#[cfg(test)]` items are still stripped, so the
+// engine's own test oracles (which legitimately discuss N=1 provenance) are out
+// of scope.
+//
+// INV: the GATE test and the two `red_proof_observer_fit_*` tests share the same
+// `single_observer_calibration_sites` scanner, so a mutation to the detector is
+// caught by a RED-proof, not merely asserted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Lowercased provenance substrings that unambiguously denote single-observer
+/// (N=1) calibration. Matched as plain substrings; `n=1` is handled separately
+/// as a bounded token (see `has_single_observer_marker`).
+const SINGLE_OBSERVER_SUBSTR_MARKERS: &[&str] = &["single-observer", "однонаблюдательск"];
+
+/// True when `lower` (an already-lowercased line) carries a single-observer
+/// calibration signature: one of the plain substrings, or the bounded token
+/// `n=1` — bounded so a word ENDING in `n` before `=1` (`GOLDEN=1`) is not a
+/// false hit (the char before `n` must not be an identifier character).
+fn has_single_observer_marker(lower: &str) -> bool {
+    if SINGLE_OBSERVER_SUBSTR_MARKERS
+        .iter()
+        .any(|m| lower.contains(m))
+    {
+        return true;
+    }
+    let bytes = lower.as_bytes();
+    lower.match_indices("n=1").any(|(at, _)| {
+        at == 0 || {
+            let prev = bytes[at - 1];
+            !(prev.is_ascii_alphanumeric() || prev == b'_')
+        }
+    })
+}
+
+/// Every production-code line of `source` (`#[cfg(test)]` stripped, comments
+/// KEPT) carrying a single-observer calibration signature.
+fn single_observer_calibration_sites(module: &str, source: &str) -> Vec<Site> {
+    let mut out = Vec::new();
+    for (line, text) in production_lines(source) {
+        if has_single_observer_marker(&text.to_lowercase()) {
+            out.push(Site {
+                module: module.to_string(),
+                line,
+                found: text.trim().to_string(),
+            });
+        }
+    }
+    out
+}
+
+#[test]
+fn production_src_carries_no_single_observer_calibration() {
+    let mut leaks = Vec::new();
+    for file in production_src_files() {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        leaks.extend(single_observer_calibration_sites(
+            &module_label(&file),
+            &source,
+        ));
+    }
+    assert!(
+        leaks.is_empty(),
+        "AGNOSTIC-CLEANLINESS: single-observer (N=1) calibration re-entered PRODUCTION code. \
+         An observer-fit constant must be REMOVED or supplied by the consumer via config — the \
+         agnostic core never emits a value fit to one rater's perception. Offending sites: \
+         {leaks:#?}"
+    );
+}
+
+#[test]
+fn red_proof_observer_fit_scanner_bites_on_single_observer_signature() {
+    // Every single-observer signature in production code is flagged.
+    for dirty in [
+        "pub const KAPPA: f64 = 0.34; // DECLARED-CALIBRATION N=1, single rater\n",
+        "// однонаблюдательская калибровка владельца, reliability-модели нет\n",
+        "/// derived from the owner's single-observer labelling (738 labels)\n",
+    ] {
+        let hits = single_observer_calibration_sites("probe.rs", dirty);
+        assert_eq!(
+            hits.len(),
+            1,
+            "scanner must flag the single-observer signature in {dirty:?}"
+        );
+    }
+}
+
+#[test]
+fn red_proof_observer_fit_scanner_is_silent_on_cfg_test_bare_calibration_and_lookalikes() {
+    // Inside a `#[cfg(test)]` block: invisible (stripped) — the engine's own test
+    // oracles legitimately discuss N=1 provenance.
+    let gated = "#[cfg(test)]\nmod t {\n    // N=1 single-observer calibration note\n}\n";
+    assert!(
+        single_observer_calibration_sites("probe.rs", gated).is_empty(),
+        "a signature inside #[cfg(test)] must NOT be flagged (stripper failed)"
+    );
+
+    // A bare DECLARED-CALIBRATION marker WITHOUT the single-observer signature is a
+    // legitimate design-choice knob or a historical citation — must stay silent.
+    let bare = "// PAIR_CROSSOVER_Y is a DECLARED-CALIBRATION design choice\n\
+                // the former M-03 light-escape threshold (DECLARED-CALIBRATION) was removed\n";
+    assert!(
+        single_observer_calibration_sites("probe.rs", bare).is_empty(),
+        "bare DECLARED-CALIBRATION (no N=1 / single-observer) must NOT be flagged — else the \
+         gate would false-RED on every honest design-choice knob and historical citation"
+    );
+
+    // Look-alikes that merely END in `n` before `=1` are not the token `n=1`.
+    let lookalike = "    // regenerate with BLESS_LABUI_GOLDEN=1 for a reviewed change\n";
+    assert!(
+        single_observer_calibration_sites("probe.rs", lookalike).is_empty(),
+        "`GOLDEN=1` must NOT match the bounded token `n=1`"
+    );
+
+    // Clean agnostic code has none.
+    let clean = "    let set = resolve_named_set(bg, table, vc)?;\n";
+    assert!(
+        single_observer_calibration_sites("probe.rs", clean).is_empty(),
+        "agnostic code must be observer-fit-clean"
+    );
+}

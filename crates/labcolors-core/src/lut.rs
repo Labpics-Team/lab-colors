@@ -240,13 +240,6 @@ pub(crate) fn seed_bracket(
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
 ) -> Option<LutSeed> {
-    // Bench-only escape hatch: with the `bench-cold-bisection` feature the LUT
-    // seed is disabled so a profiling run measures the pre-LUT cold bisection
-    // through the identical solver call site. Compiled out entirely by default —
-    // zero cost in production builds, which never enable this feature.
-    if cfg!(feature = "bench-cold-bisection") {
-        return None;
-    }
     let ratio = match chroma_policy {
         ChromaPolicy::Neutral => 0.0,
         ChromaPolicy::Relative(r) => r.clamp(0.0, 1.0),

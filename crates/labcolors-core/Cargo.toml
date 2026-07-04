@@ -19,12 +19,6 @@ serial_test = "3"
 # Zero runtime deps (verified by s2b_baseline_guards supply-chain test).
 tempfile = "3.10"
 
-[features]
-# Bench-only: disable the grey-axis LUT seed so a criterion run measures the
-# pre-LUT cold bisection through the same `resolve_set` call site. Never enabled
-# in production builds; the gate compiles out to nothing when off.
-bench-cold-bisection = []
-
 [[bench]]
 name = "y_hk"
 harness = false
