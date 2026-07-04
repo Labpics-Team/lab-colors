@@ -88,10 +88,27 @@ fn error_message(err: wasm_bindgen::JsError) -> String {
 /// Shared parity assertion: for a passport, the binding's `resolveTheme`
 /// must reproduce the native `resolve_named_set`, role for role. Expectations
 /// come straight from the core inside the same wasm runtime — never hand-typed.
+/// The native side derives its ViewingConditions from the SAME core enum the
+/// boundary resolves through (`Theme::viewing_conditions()`): a hardcoded
+/// `srgb()` here silently diverges on any non-srgb theme (dark = dim surround)
+/// — exactly the miss that kept the old light-only test blind to dim parity.
+/// (String→Theme mapping is the boundary parser's contract, covered by its own
+/// unit tests; the literals here mirror it 1:1.)
+fn theme_vc(theme: &str) -> ViewingConditions {
+    let t = match theme {
+        "light" => labcolors_core::Theme::Light,
+        "dark" => labcolors_core::Theme::Dark,
+        "light-ic" => labcolors_core::Theme::LightIc,
+        "dark-ic" => labcolors_core::Theme::DarkIc,
+        other => panic!("test scaffolding: unmapped theme literal {other}"),
+    };
+    t.viewing_conditions()
+}
+
 fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
     let bg = BgInput::solid(bg_hex).expect("bg is valid");
     let table = native_table(passport);
-    let vc = ViewingConditions::srgb();
+    let vc = theme_vc(theme);
     let native = resolve_named_set(&bg, &table, &vc);
 
     // The binding result for the same inputs, from a loaded config.
