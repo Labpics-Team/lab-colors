@@ -787,7 +787,7 @@ mod tests {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "a97994470b2581f3",
+            "fdbe79bfa30442de",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }
