@@ -30,7 +30,8 @@ wasm_bindgen_test_configure!(run_in_browser);
 const LABUI_JSON: &str = include_str!("data/labui.config.json");
 
 /// Snapshot of the passport labui ships in PRODUCTION
-/// (`labui/packages/colors/labui.config.json`, 2026-07-04, sha256 439d948d…).
+/// (`labui/packages/colors/labui.config.json` @ labui commit bd7b843 (#80),
+/// sha256 f9bbf7e4… — point-in-time snapshot, refresh on passport changes).
 /// It still describes hued labels via `ladder position label-*`, so the M1
 /// text-anchor branches stay dormant on this path. Keeping BOTH fixtures under
 /// parity closes the class "wasm tests exercise a recipe style production

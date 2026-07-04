@@ -1060,33 +1060,12 @@
       }
     },
     {
-      "name": "fill-accent",
-      "recipe": {
-        "kind": "ladder",
-        "source": {
-          "kind": "brand"
-        },
-        "position": "label-primary"
-      }
-    },
-    {
       "name": "fill-neutral",
       "recipe": {
         "kind": "ladder",
         "source": {
           "kind": "neutral",
           "pick": "mid"
-        },
-        "position": "label-primary"
-      }
-    },
-    {
-      "name": "fill-danger",
-      "recipe": {
-        "kind": "ladder",
-        "source": {
-          "kind": "sentiment",
-          "name": "danger"
         },
         "position": "label-primary"
       }
@@ -1246,6 +1225,14 @@
     {
       "alias": "fx-skeleton-base",
       "target": "fill-quaternary"
+    },
+    {
+      "alias": "fill-accent",
+      "target": "badge-fill-brand"
+    },
+    {
+      "alias": "fill-danger",
+      "target": "badge-fill-danger"
     }
   ]
 }
