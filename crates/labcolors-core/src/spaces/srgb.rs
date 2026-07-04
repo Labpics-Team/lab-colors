@@ -181,7 +181,7 @@ pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
 ///
 /// Кодированное пространство — то, в котором Figma и браузер композитят
 /// straight-alpha (см. [`crate::alpha`]); для колориметрии используй
-/// [`srgb_from_hex`] (линейный свет).
+/// `srgb_from_hex` (линейный свет).
 pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
     let [r, g, b] = hex_bytes(hex)?;
     Ok([

@@ -1,12 +1,12 @@
 //! `@labpics/colors` — WASM bindings over the `labcolors-core` contrast engine.
 //!
 //! The whole crate is one Clean-Architecture slice:
-//! - [`theme`] — the public theme vocabulary (value object) → core viewing
+//! - `theme` — the public theme vocabulary (value object) → core viewing
 //!   conditions.
-//! - [`error`] — matchable boundary errors (`thiserror`).
-//! - [`dto`] — framework-free result types (output boundary).
-//! - [`cache`] — the contract cache.
-//! - [`engine`] — the application core: `resolve_set` made generic over roles.
+//! - `error` — matchable boundary errors (`thiserror`).
+//! - `dto` — framework-free result types (output boundary).
+//! - `cache` — the contract cache.
+//! - `engine` — the application core: `resolve_set` made generic over roles.
 //! - this module — the *only* place `#[wasm_bindgen]` appears: the adapter that
 //!   projects the engine's pure results into JS objects.
 //!
@@ -256,7 +256,7 @@ impl LabColors {
     /// Resolve every role for `bgHex` under `theme` (`"light" | "dark" |
     /// "light-ic" | "dark-ic"`).
     ///
-    /// Returns a [`ResolvedTheme`] object. Per-role unreachability is part of a
+    /// Returns a `ResolvedTheme` object. Per-role unreachability is part of a
     /// successful result (each role carries its own `kind`); only whole-call
     /// failures reject (no config loaded yet as `config_required`, invalid hex,
     /// unknown theme, and the by-construction-unreachable oklch serialisation
