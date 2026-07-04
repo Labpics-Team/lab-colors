@@ -294,7 +294,10 @@ pub fn raw_chromatic(l: f64, c: f64, h_deg: f64) -> f64 {
 ///   - Выводных констант: только H_Y_DEG = 90.4° (CIE D65 unique yellow 578nm, Purdy 1937)
 ///   - Нет подогнанных скаляров: W_HUE/CEIL_N_TABLE/CAL_T/CAL_B — все удалены
 ///   - raw ∈ [0,1] точно (произведение ∈ [0,1] множителей)
-///   - Строго монотонно в C при фиксированных L, h (через N(C))
+///   - Монотонно в C только на ТЁПЛОЙ полуплоскости (h∈[0°,180°], sin h ≥ 0):
+///     N(C) растёт, b-гейт depth_mod не убывает. На холодных (sin h < 0) b-гейт
+///     `sigmoid((c·sin h − B0)/BW)` убывает в C → НЕ глобально монотонно
+///     (запинено `property_invariants`: warm-инвариант + cool-characterization)
 ///   - JND-нормировано по конструкции через M-02
 ///   - .clamp(0.0, 1.0) — safety no-op при f64-округлении
 pub fn muddiness_oklch(l: f64, c: f64, h_deg: f64) -> f64 {

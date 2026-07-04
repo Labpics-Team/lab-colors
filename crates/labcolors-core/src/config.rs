@@ -163,7 +163,7 @@ use crate::sentiment::{HUE_DOMAIN_MAX_EXCLUSIVE, HUE_DOMAIN_MIN_INCLUSIVE};
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ConfigError {
-    /// Невалидная hex-строка цвета (`#RGB` / `#RRGGBB`). `field` — путь до поля в
+    /// Невалидная hex-строка цвета (принимается только `#RRGGBB`). `field` — путь до поля в
     /// конфиге, `value` — то, что прислал клиент.
     InvalidHex { field: String, value: String },
     /// Невалидное имя роли или семейства: имена — стабильный CSS-контракт
@@ -615,7 +615,7 @@ fn oklab_chroma_of_hex(hex: &str) -> f64 {
     }
 }
 
-/// Проверить, что hex парсится ядром (`#RGB` / `#RRGGBB`).
+/// Проверить, что hex парсится ядром (только `#RRGGBB`).
 fn check_hex(field: &str, value: &str) -> Result<(), ConfigError> {
     crate::spaces::srgb::srgb_from_hex(value)
         .map(|_| ())

@@ -2516,7 +2516,7 @@ pub fn measure_contrast(
 ///
 /// Each result equals what the solver's `finish` measured for that fg/bg pair, so
 /// a freshly-resolved set re-checks to its own reported contrasts. Returns `Err`
-/// if any hex is invalid (`#RGB`/`#RRGGBB`).
+/// if any hex is invalid (only `#RRGGBB` or bare `RRGGBB` is accepted).
 pub fn recheck_against(
     bg_hex: &str,
     fg_hexes: &[&str],
