@@ -39,6 +39,9 @@ mod continuity_tests;
 mod dim_tinted_tests;
 
 #[cfg(test)]
+mod pair_label_tests;
+
+#[cfg(test)]
 mod r3_byte_identity_tests;
 
 // AccentCurve/SentimentCurve golden snapshots, relocated in-crate (ADR-0001

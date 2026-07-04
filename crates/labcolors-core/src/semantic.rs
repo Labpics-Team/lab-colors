@@ -627,6 +627,25 @@ pub enum RoleSpec {
         /// Пер-темный кодированный якорь источника.
         tint: LadderTint,
     },
+    /// Лейбл ТИНТ-бейджа ([`crate::pair`], лейбл-сторона) — близнец
+    /// [`PairFill`](Self::PairFill). Семейно-оттеночный лейбл, чей WCAG-пол
+    /// энфорсится ПРОТИВ тинт-поверхности бейджа (композит `tint` при альфе
+    /// `fill-*-primary` над фоном резолва), а не против фона страницы. Резолв:
+    /// построить поверхность, затем решить оттеночный лейбл на ней ШТАТНЫМ законом
+    /// (`resolve_hued_anchor`) — пол поверхности гарантирован по построению, тон
+    /// клампится (флаг `compressed`) при недостижимости на кривой семьи.
+    PairLabel {
+        /// Пер-темный кодированный тинт-якорь семьи (как у лестницы).
+        tint: LadderTint,
+        /// Доля максимума контраста тинт-поверхности `(0, 1]`.
+        fraction: f64,
+        /// WCAG-пол против тинт-поверхности.
+        floor: Floor,
+        /// Альфа поверхности (светлая тема) — из позиции `fill-*-primary`.
+        surface_alpha_light: f64,
+        /// Альфа поверхности (тёмная тема) — из позиции `fill-*-primary`.
+        surface_alpha_dark: f64,
+    },
     Ladder {
         /// Пер-темный кодированный тинт (якорь источника).
         tint: LadderTint,
@@ -1821,6 +1840,23 @@ fn resolve_spec_in(
             let fill = crate::pair::pair_fill(tint.for_vc(vc), side);
             return resolve_rgba_direct(fill, 1.0, bg, vc);
         }
+        RoleSpec::PairLabel {
+            tint,
+            fraction,
+            floor,
+            surface_alpha_light,
+            surface_alpha_dark,
+        } => {
+            return resolve_pair_label(
+                bg,
+                tint,
+                fraction,
+                floor,
+                surface_alpha_light,
+                surface_alpha_dark,
+                vc,
+            );
+        }
         RoleSpec::Ladder {
             tint,
             alpha_light,
@@ -2088,6 +2124,60 @@ fn resolve_solid_with_ui_floor(
         }
         Err(reason) => Resolved::Unreachable(reason),
     }
+}
+
+/// Резолв лейбла ТИНТ-бейджа — жёсткий контраст `label ↔ tinted-fill`
+/// ([`crate::pair`], лейбл-сторона; близнец [`resolve_solid_with_ui_floor`], но
+/// пол энфорсится против ВЫВОДИМОЙ подложки, а не против фона страницы).
+///
+/// Поверхность бейджа — композит семейного тинта при альфе `fill-*-primary` над
+/// фоном резолва (то же, во что складывается роль `fill-*-tinted`). Оттеночный
+/// лейбл решается ШТАТНЫМ законом ([`resolve_hued_anchor`]) НА ЭТОЙ ПОВЕРХНОСТИ:
+/// её собственный [`ResolveContext`] задаёт полярность/макс-контраст, поэтому
+/// WCAG-пол лейбла гарантирован против той подложки, на которой лейбл реально
+/// стоит, а не против белого/чёрного фона страницы (обычные `label-*` роли
+/// решаются против страницы, и на тинт-подложке их контраст проседает — класс,
+/// который закрывает эта роль). Недостижимость пола на кривой семьи клампит тон
+/// (`floor_override` → `compressed`), как у любой контраст-роли (ADR-0002 честный
+/// результат) — консервативный дефолт вместо тихой нечитаемости.
+#[allow(clippy::too_many_arguments)]
+fn resolve_pair_label(
+    bg: &BgInput,
+    tint: crate::ladder::LadderTint,
+    fraction: f64,
+    floor: Floor,
+    surface_alpha_light: f64,
+    surface_alpha_dark: f64,
+    vc: &ViewingConditions,
+) -> Resolved {
+    let alpha = if vc.is_dark_theme() {
+        surface_alpha_dark
+    } else {
+        surface_alpha_light
+    };
+    // Тинт квантуется ДО композита — браузер красит 8-битный tint, поэтому
+    // подложка обязана считаться из отдаваемого значения (тот же закон, что в
+    // resolve_rgba_direct). Композит квантуется тем же форматтером: лейбл решается
+    // против ТОГО ЖЕ пикселя, что уйдёт наружу.
+    let tint_q = quantise_encoded(tint.for_vc(vc));
+    let surface = quantise_encoded(crate::alpha::composite_over_encoded(
+        tint_q,
+        alpha,
+        bg.encoded_display(),
+    ));
+    let surface_hex = crate::spaces::srgb::hex_from_srgb_encoded(surface);
+    let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
+        // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
+        // отказ, чем правдоподобный мусор (RoleSpec публичен).
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
+        ));
+    };
+    // Свежий контекст ПОВЕРХНОСТИ: полярность/интервал/макс-контраст берутся от
+    // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
+    let surface_ctx = ResolveContext::new(&surface_bg, vc);
+    let anchor = TextAnchor::new(fraction, floor);
+    resolve_hued_anchor(&surface_bg, anchor, tint, vc, &surface_ctx)
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -2393,6 +2483,10 @@ impl RoleSpec {
     pub fn legal_floor(&self) -> Option<f64> {
         match self {
             RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
+            // Лейбл тинт-бейджа несёт свой пол против тинт-поверхности — семантика
+            // контракта, как у текст/UI-якоря (иерархия-пасс его не трогает: он
+            // singleton, не ступень лестницы).
+            RoleSpec::PairLabel { floor, .. } => floor.min_ratio(),
             _ => None,
         }
     }
