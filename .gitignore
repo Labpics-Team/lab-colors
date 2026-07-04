@@ -8,6 +8,11 @@ target/
 Cargo.lock
 .git-pr-body.md
 
+# Mutation testing (cargo-mutants) — transient run output, never committed.
+# Produced locally and by the scheduled `.github/workflows/mutation.yml` job.
+mutants.out/
+mutants.out.old/
+
 # Splice/restore/backup sidecars left by on-disk probe tests on abnormal exit
 # (SIGKILL between write and rename, or rename failure during Drop unwind).
 # These are safe to remove; the backup is the recovery path.

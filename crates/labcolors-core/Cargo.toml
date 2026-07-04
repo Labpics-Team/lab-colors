@@ -18,6 +18,11 @@ serial_test = "3"
 # Dev-only temp directory for isolation-safe on-disk probe: the real tree is never mutated.
 # Zero runtime deps (verified by s2b_baseline_guards supply-chain test).
 tempfile = "3.10"
+# Dev-only property/fuzz engine for the mathematical-invariant tests
+# (tests/property_invariants.rs). Zero runtime deps: proptest never appears in the
+# normal dependency graph (verified by s2b_baseline_guards::supply_chain_proptest_*).
+# Pin centralised in the workspace Cargo.toml (issue #29 dependency discipline).
+proptest = { workspace = true }
 
 [[bench]]
 name = "y_hk"

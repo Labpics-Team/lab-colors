@@ -997,6 +997,113 @@ fn supply_chain_serial_test_absent_from_normal_dep_tree() {
     // No assertion needed for the empty case — the test passes by not panicking.
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 7d/7e — supply-chain guard for `proptest` (property/fuzz dev-dep)
+//
+// REGIME: contract. Same zero-RUNTIME-dep invariant (issue #29) as serial_test,
+// extended to the property/fuzz engine `proptest` (tests/property_invariants.rs).
+// `proptest` MUST stay dev-only: it never enters the runtime dependency graph.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Contract: `proptest` appears only under `[dev-dependencies]` in
+/// `crates/labcolors-core/Cargo.toml` — zero-runtime-dep invariant (issue #29).
+///
+/// GREEN at birth. Bites on mutation: move `proptest` to `[dependencies]` →
+/// this test fails (the Cargo.toml content check fails).
+#[test]
+fn supply_chain_proptest_is_dev_dep_only() {
+    let cargo_toml_path = crate_root().join("Cargo.toml");
+    let cargo_toml = std::fs::read_to_string(&cargo_toml_path)
+        .expect("s2b_baseline/test7d: cannot read Cargo.toml");
+
+    // `proptest` must appear under [dev-dependencies], not [dependencies].
+    // Strategy mirrors `supply_chain_serial_test_is_dev_dep_only`: track which
+    // section each `proptest` occurrence sits in.
+    let lines: Vec<&str> = cargo_toml.lines().collect();
+    let mut in_dev_deps = false;
+    let mut found_in_dev = false;
+    let mut found_in_runtime = false;
+
+    for line in &lines {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_dev_deps = t == "[dev-dependencies]";
+        }
+        if t.starts_with("proptest") || t.starts_with(r#""proptest""#) {
+            if in_dev_deps {
+                found_in_dev = true;
+            } else {
+                found_in_runtime = true;
+            }
+        }
+    }
+
+    assert!(
+        found_in_dev,
+        "SUPPLY-CHAIN FAILED — `proptest` is not present under [dev-dependencies] \
+         in `crates/labcolors-core/Cargo.toml`. It must be a dev-dep (required for \
+         the property/fuzz invariants in tests/property_invariants.rs). Zero-runtime-dep \
+         invariant (issue #29) requires it stays dev-only."
+    );
+
+    assert!(
+        !found_in_runtime,
+        "SUPPLY-CHAIN FAILED — `proptest` appears under [dependencies] (runtime) \
+         in `crates/labcolors-core/Cargo.toml`. It must be dev-only. \
+         Zero-runtime-dep invariant (issue #29) is violated."
+    );
+}
+
+/// Contract: `cargo tree -e normal -i proptest` returns empty — proptest has no
+/// path through the normal (runtime) dependency graph.
+///
+/// GREEN at birth. Bites on mutation: promote proptest to a runtime dep →
+/// `cargo tree -e normal -i proptest` returns non-empty → assertion fails.
+///
+/// `#[ignore]`: spawns `cargo +1.96.0 tree`, which resolves the workspace
+/// dependency graph and may contend on the build-directory lock. Run manually
+/// before PR:
+/// ```sh
+/// cargo +1.96.0 test -p labcolors-core --test s2b_baseline_guards \
+///   supply_chain_proptest_absent_from_normal_dep_tree -- --ignored
+/// ```
+#[test]
+#[ignore = "spawns nested cargo (+1.96.0 tree) — may contend on build-dir lock. \
+            Run manually before PR (see test doc)."]
+fn supply_chain_proptest_absent_from_normal_dep_tree() {
+    if skip_if_toolchain_absent("supply_chain_proptest_absent_from_normal_dep_tree") {
+        return;
+    }
+    let output = std::process::Command::new("cargo")
+        .args([
+            &format!("+{CI_TOOLCHAIN}"),
+            "tree",
+            "-p",
+            "labcolors-core",
+            "-e",
+            "normal",
+            "-i",
+            "proptest",
+        ])
+        .current_dir(workspace_root())
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("s2b_baseline/test7e: cannot run `cargo tree -e normal -i proptest`: {e}")
+        });
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // A non-zero exit + empty stdout means "not in the normal dep tree" — GREEN.
+    // A zero exit with output means proptest is in the runtime tree — RED.
+    if output.status.success() && !stdout.is_empty() {
+        panic!(
+            "SUPPLY-CHAIN FAILED — `cargo tree -p labcolors-core -e normal -i proptest` \
+             returned non-empty output. `proptest` appears in the RUNTIME dependency \
+             graph — it must be dev-only (issue #29 zero-runtime-dep invariant).\n\
+             Output:\n{stdout}"
+        );
+    }
+}
+
 /// Contract: `cargo audit --deny warnings` is green — no known advisories
 /// introduced by adding `serial_test` (or any other dev-dep in this diff).
 ///
