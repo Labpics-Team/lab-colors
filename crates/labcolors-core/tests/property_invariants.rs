@@ -308,11 +308,13 @@ fn base_config(
         hex_of(lighten(fr), lighten(fg), lighten(fb)),
         hex_of(darken(fr), darken(fg), darken(fb)),
     );
-    ThemeConfig {
-        brand: Brand {
+    // `ThemeConfig` помечен `#[non_exhaustive]` — снаружи крейта только `new`
+    // (позиционный порядок = порядок объявления полей; `preset = None`).
+    ThemeConfig::new(
+        Brand {
             anchors: brand_anchors,
         },
-        neutral: NeutralConfig {
+        NeutralConfig {
             anchors: NeutralAnchors {
                 light: "#FBFBFD".to_string(),
                 mid: "#8A8A8E".to_string(),
@@ -327,11 +329,11 @@ fn base_config(
             edge: None,
             inverted: None,
         },
-        palette: vec![PaletteFamily {
+        vec![PaletteFamily {
             key: "fam".to_string(),
             anchors: family_anchors,
         }],
-        sentiments: SentimentsConfig {
+        SentimentsConfig {
             categories: vec![SentimentCategory {
                 name: "alert".to_string(),
                 family: "fam".to_string(),
@@ -341,13 +343,13 @@ fn base_config(
             hardness: 5.0,
             chroma_fraction: 0.88,
         },
-        themes: ThemesConfig {
+        ThemesConfig {
             entries: vec![
                 ("day".to_string(), VcPreset::Srgb),
                 ("night".to_string(), VcPreset::Dim),
             ],
         },
-        roles: vec![
+        vec![
             (
                 "text-strong".to_string(),
                 RoleRecipe::TextAnchor {
@@ -398,8 +400,8 @@ fn base_config(
             ),
         ],
         // Цель алиаса ОБЯЗАНА существовать среди ролей (валидатор это проверяет).
-        aliases: vec![("ring".to_string(), "brand-fill".to_string())],
-    }
+        vec![("ring".to_string(), "brand-fill".to_string())],
+    )
 }
 
 /// Стратегия произвольного ВАЛИДНОГО конфига: доли строго в (0,1], убывающая
