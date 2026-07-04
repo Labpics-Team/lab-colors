@@ -2110,3 +2110,125 @@ fn warning_light_ic_heals_into_amber_arc_not_green() {
         "контраст законов исчез: однотельный давал зелень (~127°), получено {single_hue:.2}°"
     );
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Пресет ролей: тонкий конфиг наполняется словарём пресета ДО валидации.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Тонкий конфиг labui: пресет + якоря/ручки эталона, БЕЗ собственного словаря.
+///
+/// Строим из эталона, обнуляя `roles`/`aliases` и ставя `preset` — так якоря
+/// гарантированно те же, а тест проверяет МЕХАНИЗМ наполнения, не переписывает
+/// значения.
+fn thin_labui() -> ThemeConfig {
+    let mut cfg = labui_reference();
+    cfg.roles = Vec::new();
+    cfg.aliases = Vec::new();
+    cfg.preset = Some(RolePreset::Labui);
+    cfg
+}
+
+#[test]
+fn thin_labui_preset_expands_to_reference_byte_for_byte() {
+    let thin = thin_labui();
+    // Каноническая форма тонкого конфига == полный эталон: пресет наполнил
+    // словарь, поле пресета снято (иначе полный эталон с preset=None не совпал бы).
+    let expanded = thin
+        .with_preset_expanded()
+        .expect("тонкий labui обязан раскрываться");
+    assert_eq!(
+        *expanded,
+        labui_reference(),
+        "раскрытый тонкий конфиг байт-в-байт равен labui_reference()"
+    );
+
+    // И компилируется в БАЙТ-ИДЕНТИЧНУЮ NamedRoleTable (голден по всем ролям и
+    // алиасам — NamedRoleTable: PartialEq над спецификациями и алиасами).
+    let thin_table = thin
+        .compile_named_role_table()
+        .expect("тонкий конфиг компилируется");
+    let full_table = labui_reference()
+        .compile_named_role_table()
+        .expect("эталон компилируется");
+    assert_eq!(
+        thin_table, full_table,
+        "тонкий (preset) и полный (roles) дают одну NamedRoleTable"
+    );
+
+    // Полный preflight тонкого конфига проходит (validate = компиляция).
+    assert_eq!(thin.validate(), Ok(()), "тонкий конфиг валиден");
+}
+
+#[test]
+fn preset_with_explicit_roles_is_rejected() {
+    // Пресет + собственная роль: оверрайд запрещён в этом слое — честная ошибка.
+    let mut with_role = thin_labui();
+    with_role.roles = vec![("my-role".to_string(), RoleRecipe::Zero)];
+    assert_eq!(
+        with_role.with_preset_expanded().err(),
+        Some(ConfigError::PresetWithRoles),
+        "preset + непустые roles обязан отклоняться"
+    );
+    // Полный preflight (validate = compile) даёт ту же ошибку тем же путём.
+    assert_eq!(with_role.validate(), Err(ConfigError::PresetWithRoles));
+
+    // Симметрично: пресет + собственный алиас (словарь пресета — единое целое).
+    let mut with_alias = thin_labui();
+    with_alias.aliases = vec![("a".to_string(), "border-base".to_string())];
+    assert_eq!(with_alias.validate(), Err(ConfigError::PresetWithRoles));
+}
+
+#[test]
+fn preset_error_message_is_russian_and_names_both_sides() {
+    // Сообщение по-русски и называет ОБЕ стороны развилки — клиент чинит без гадания.
+    let msg = ConfigError::PresetWithRoles.to_string();
+    assert!(
+        msg.contains("пресет")
+            && msg.contains("preset")
+            && msg.contains("roles")
+            && msg.contains("aliases"),
+        "сообщение по-русски и называет обе стороны (roles/aliases): {msg:?}"
+    );
+}
+
+#[test]
+fn empty_contract_is_rejected_at_load() {
+    // Голый контракт: валидная структура, но ни пресета, ни ролей, ни алиасов —
+    // честная ошибка НА ЗАГРУЗКЕ (validate = компиляция), не тихий пустой приём.
+    let mut empty = labui_reference();
+    empty.roles.clear();
+    empty.aliases.clear();
+    // preset остаётся None.
+    assert_eq!(
+        empty.validate(),
+        Err(ConfigError::EmptyContract),
+        "конфиг без пресета/ролей/алиасов обязан отклоняться"
+    );
+    assert_eq!(
+        empty.compile_named_role_table().err(),
+        Some(ConfigError::EmptyContract),
+        "отказ на компиляции (загрузке), не на использовании"
+    );
+
+    // Второй путь: preset-only (без ролей) — ОК, пресет наполнил контракт.
+    assert_eq!(thin_labui().validate(), Ok(()), "preset-only — валиден");
+
+    // Сообщение по-русски и называет выход.
+    let msg = ConfigError::EmptyContract.to_string();
+    assert!(
+        msg.contains("контракт пуст") && msg.contains("preset") && msg.contains("roles"),
+        "сообщение по-русски и подсказывает выход: {msg:?}"
+    );
+}
+
+#[test]
+fn no_preset_leaves_config_untouched() {
+    // Конфиг без пресета — существующее поведение: with_preset_expanded не
+    // клонирует и не трогает словарь (Cow::Borrowed на self).
+    let full = labui_reference();
+    let expanded = full.with_preset_expanded().expect("эталон раскрывается");
+    assert!(
+        matches!(expanded, std::borrow::Cow::Borrowed(_)),
+        "конфиг без пресета не клонируется (Cow::Borrowed)"
+    );
+    assert_eq!(*expanded, full, "и остаётся байт-в-байт собой");
+}

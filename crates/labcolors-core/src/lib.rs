@@ -55,8 +55,8 @@ pub use cleanliness::{
 };
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
-    PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
-    VcPreset,
+    PaletteFamily, RolePreset, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig,
+    ThemesConfig, VcPreset, labui_preset_aliases, labui_preset_roles,
 };
 pub use curve::ColorCurve;
 pub use glow::{

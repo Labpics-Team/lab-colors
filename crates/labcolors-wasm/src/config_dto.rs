@@ -15,9 +15,12 @@
 //! ключей и пробелов входного JSON. Отпечаток — компонент ключа контракт-кэша:
 //! два разных конфига обязаны давать разные ключи (кэш-коллизия = чужие цвета).
 
+use std::borrow::Cow;
+
 use labcolors_core::config::{
     Brand, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily,
-    RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig, VcPreset,
+    RolePreset, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
+    VcPreset,
 };
 use labcolors_core::solve::Floor;
 use labcolors_core::{LadderPosition, ThemeAnchors};
@@ -95,6 +98,14 @@ pub enum VcPresetDto {
     Dim,
     SrgbIc,
     DimIc,
+}
+
+/// Пресет ролей — kebab-строка меню пресетов (как [`VcPresetDto`]). Тонкий
+/// конфиг несёт `"preset": "labui"` вместо простыни ролей.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RolePresetDto {
+    Labui,
 }
 
 /// Запись словаря тем.
@@ -192,17 +203,35 @@ pub struct AliasDto {
 /// Полный конфиг темы потребителя — JSON-форма [`ThemeConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigDto {
+    /// Пресет ролей тонкого конфига. `skip_serializing_if` держит поле НЕВИДИМЫМ
+    /// для полного конфига (`None`) — байты полного эталона не сдвинулись, а с
+    /// ними и его отпечаток. Отпечаток считается по РАСКРЫТОЙ форме (см.
+    /// [`fingerprint`]), поэтому тонкий и полный labui дают один отпечаток.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<RolePresetDto>,
     pub brand: AnchorsDto,
     pub neutral: NeutralDto,
     pub palette: Vec<FamilyDto>,
     pub sentiments: SentimentsDto,
     pub themes: Vec<ThemeEntryDto>,
+    /// `#[serde(default)]`: тонкий конфиг ОПУСКАЕТ словарь ролей целиком (несёт
+    /// `preset`). Только на десериализацию — полный конфиг всегда сериализует
+    /// `roles` (101 роль, никогда не пусто), его байты и отпечаток неизменны.
+    #[serde(default)]
     pub roles: Vec<RoleDto>,
     #[serde(default)]
     pub aliases: Vec<AliasDto>,
 }
 
-/// FNV-1a 64 над канонической JSON-сериализацией DTO — отпечаток конфига.
+/// FNV-1a 64 над канонической JSON-сериализацией РАСКРЫТОЙ формы DTO — отпечаток
+/// конфига.
+///
+/// Отпечаток есть идентичность РЕЗУЛЬТАТА, не входа: тонкий конфиг `"preset":
+/// "labui"` (без `roles`) и полный SSOT-паспорт наполняют один и тот же
+/// словарь, поэтому ОБЯЗАНЫ дать один отпечаток. [`canonical_dto`] раскрывает
+/// пресет (ядро, [`ThemeConfig::with_preset_expanded`]) и снимает поле `preset`,
+/// приводя вход к той форме, что реально резолвится; конфиг без пресета уже
+/// каноничен и хэшируется как есть (байты полного эталона неизменны).
 ///
 /// Не криптографический: различение конфигов ВЕРОЯТНОСТНОЕ, поэтому оно не
 /// несущая гарантия — корректность кэша держит очистка при загрузке (в кэше
@@ -210,7 +239,8 @@ pub struct ConfigDto {
 /// наружу и belt-and-suspenders в ключе. Детерминизм даёт serde: порядок
 /// полей структур фиксирован, вход нормализуется парсингом.
 pub fn fingerprint(dto: &ConfigDto) -> u64 {
-    let bytes = serde_json::to_vec(dto).expect("DTO без не-сериализуемых типов");
+    let canonical = canonical_dto(dto);
+    let bytes = serde_json::to_vec(&*canonical).expect("DTO без не-сериализуемых типов");
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = OFFSET;
@@ -219,6 +249,31 @@ pub fn fingerprint(dto: &ConfigDto) -> u64 {
         hash = hash.wrapping_mul(PRIME);
     }
     hash
+}
+
+/// Каноническая (раскрытая пресетом) форма DTO для отпечатка.
+///
+/// Конфиг без пресета уже каноничен — возвращается без конверсий (частый путь;
+/// байты и отпечаток полного эталона неизменны). Тонкий конфиг раскрывается через
+/// ядро: DTO → [`ThemeConfig`] → [`with_preset_expanded`](ThemeConfig::with_preset_expanded)
+/// → DTO (поле `preset` снято, `roles`/`aliases` наполнены).
+///
+/// Деградация к сырому входу при непреобразуемом/невалидном DTO — намеренная и
+/// безопасная: такой конфиг всё равно не скомпилируется, `load_config` отклонит
+/// его раньше, чем отпечаток станет ключом кэша (отпечаток «мусорного» входа
+/// наружу не утекает).
+fn canonical_dto(dto: &ConfigDto) -> Cow<'_, ConfigDto> {
+    if dto.preset.is_none() {
+        return Cow::Borrowed(dto);
+    }
+    let expanded = ThemeConfig::try_from(dto.clone())
+        .ok()
+        .and_then(|cfg| Some(cfg.with_preset_expanded().ok()?.into_owned()))
+        .and_then(|cfg| ConfigDto::try_from(&cfg).ok());
+    match expanded {
+        Some(canonical) => Cow::Owned(canonical),
+        None => Cow::Borrowed(dto),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -243,6 +298,14 @@ impl From<VcPresetDto> for VcPreset {
             VcPresetDto::Dim => VcPreset::Dim,
             VcPresetDto::SrgbIc => VcPreset::SrgbIc,
             VcPresetDto::DimIc => VcPreset::DimIc,
+        }
+    }
+}
+
+impl From<RolePresetDto> for RolePreset {
+    fn from(p: RolePresetDto) -> Self {
+        match p {
+            RolePresetDto::Labui => RolePreset::Labui,
         }
     }
 }
@@ -355,62 +418,66 @@ impl TryFrom<ConfigDto> for ThemeConfig {
         for role in dto.roles {
             roles.push((role.name, RoleRecipe::try_from(role.recipe)?));
         }
-        Ok(ThemeConfig {
-            brand: Brand {
-                anchors: dto.brand.into(),
+        let brand = Brand {
+            anchors: dto.brand.into(),
+        };
+        let neutral = NeutralConfig {
+            anchors: NeutralAnchors {
+                light: dto.neutral.anchors.light,
+                mid: dto.neutral.anchors.mid,
+                dark: dto.neutral.anchors.dark,
             },
-            neutral: NeutralConfig {
-                anchors: NeutralAnchors {
-                    light: dto.neutral.anchors.light,
-                    mid: dto.neutral.anchors.mid,
-                    dark: dto.neutral.anchors.dark,
-                },
-                tint: NeutralTint {
-                    ratio: dto.neutral.tint.ratio,
-                    target_mp: dto.neutral.tint.target_mp,
-                    hue_stiffness: dto.neutral.tint.hue_stiffness,
-                    hue_override_deg: dto.neutral.tint.hue_override_deg,
-                },
-                edge: dto.neutral.edge.map(Into::into),
-                inverted: dto.neutral.inverted.map(Into::into),
+            tint: NeutralTint {
+                ratio: dto.neutral.tint.ratio,
+                target_mp: dto.neutral.tint.target_mp,
+                hue_stiffness: dto.neutral.tint.hue_stiffness,
+                hue_override_deg: dto.neutral.tint.hue_override_deg,
             },
-            palette: dto
-                .palette
+            edge: dto.neutral.edge.map(Into::into),
+            inverted: dto.neutral.inverted.map(Into::into),
+        };
+        let palette = dto
+            .palette
+            .into_iter()
+            .map(|f| PaletteFamily {
+                key: f.key,
+                anchors: f.anchors.into(),
+            })
+            .collect();
+        let sentiments = SentimentsConfig {
+            categories: dto
+                .sentiments
+                .categories
                 .into_iter()
-                .map(|f| PaletteFamily {
-                    key: f.key,
-                    anchors: f.anchors.into(),
+                .map(|c| SentimentCategory {
+                    name: c.name,
+                    family: c.family,
+                    hue_floor_deg: c.hue_floor_deg,
+                    preferred_side: c.preferred_side,
                 })
                 .collect(),
-            sentiments: SentimentsConfig {
-                categories: dto
-                    .sentiments
-                    .categories
-                    .into_iter()
-                    .map(|c| SentimentCategory {
-                        name: c.name,
-                        family: c.family,
-                        hue_floor_deg: c.hue_floor_deg,
-                        preferred_side: c.preferred_side,
-                    })
-                    .collect(),
-                hardness: dto.sentiments.hardness,
-                chroma_fraction: dto.sentiments.chroma_fraction,
-            },
-            themes: ThemesConfig {
-                entries: dto
-                    .themes
-                    .into_iter()
-                    .map(|t| (t.name, t.preset.into()))
-                    .collect(),
-            },
-            roles,
-            aliases: dto
-                .aliases
+            hardness: dto.sentiments.hardness,
+            chroma_fraction: dto.sentiments.chroma_fraction,
+        };
+        let themes = ThemesConfig {
+            entries: dto
+                .themes
                 .into_iter()
-                .map(|a| (a.alias, a.target))
+                .map(|t| (t.name, t.preset.into()))
                 .collect(),
-        })
+        };
+        let aliases = dto
+            .aliases
+            .into_iter()
+            .map(|a| (a.alias, a.target))
+            .collect();
+
+        // ThemeConfig — #[non_exhaustive]: сборка через конструктор ядра, не
+        // struct-литералом (запрещён вне крейта ядра). Пресет — присваиванием
+        // pub-поля (не part конструктора, задаётся отдельно от полного набора).
+        let mut cfg = ThemeConfig::new(brand, neutral, palette, sentiments, themes, roles, aliases);
+        cfg.preset = dto.preset.map(Into::into);
+        Ok(cfg)
     }
 }
 
@@ -511,6 +578,14 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
             });
         }
         Ok(ConfigDto {
+            preset: match cfg.preset {
+                None => None,
+                Some(RolePreset::Labui) => Some(RolePresetDto::Labui),
+                // Ядро несёт #[non_exhaustive]-меню пресетов: честный Err на
+                // варианте, которого эта версия DTO не знает, — не тихий сброс
+                // пресета (тихая потеря семантики роняет отпечаток и контракт).
+                Some(other) => return Err(format!("несериализуемый RolePreset: {other:?}")),
+            },
             brand: (&cfg.brand.anchors).into(),
             neutral: NeutralDto {
                 anchors: NeutralAnchorsDto {
@@ -649,5 +724,71 @@ mod tests {
     fn unknown_ladder_position_is_rejected_with_menu() {
         let err = position_from_key("label-quinary").unwrap_err();
         assert!(err.contains("label-quinary") && err.contains("label-primary"));
+    }
+
+    // ── Слой 3: отпечаток по РАСКРЫТОЙ форме (тонкий == полный) ───────────────
+
+    /// Тонкий labui как его прислал бы клиент: полный DTO без словаря ролей,
+    /// плюс `preset`. Строим из замороженного SSOT-паспорта (те же якоря/ручки),
+    /// обнуляя roles/aliases (дерево Даниила ушло из прод-API ядра, ADR-0001 PR-c).
+    fn thin_labui_dto() -> ConfigDto {
+        let mut dto = labui_dto();
+        dto.roles = Vec::new();
+        dto.aliases = Vec::new();
+        dto.preset = Some(RolePresetDto::Labui);
+        dto
+    }
+
+    /// ГЛАВНЫЙ инвариант: отпечаток — идентичность РЕЗУЛЬТАТА, не входа. Тонкий
+    /// конфиг (preset, без roles) и полный (тот же словарь в roles) обязаны дать
+    /// ОДИН отпечаток. Оба считаются ЖИВЬЁМ из замороженного SSOT-паспорта, поэтому тест
+    /// переживёт любую легитимную смену паспорта (сравнение относительное, без пина).
+    #[test]
+    fn thin_and_full_labui_share_one_fingerprint() {
+        let full = labui_dto();
+        let thin = thin_labui_dto();
+        assert_eq!(
+            fingerprint(&thin),
+            fingerprint(&full),
+            "тонкий и полный labui дают ОДИН отпечаток (по итогу, не по входу)"
+        );
+    }
+
+    /// Тот же инвариант ЧЕРЕЗ JSON-путь клиента: конфиг ОПУСКАЕТ `roles`/`aliases`
+    /// (serde default), несёт лишь `"preset":"labui"` + значения. Парсится и даёт
+    /// отпечаток полного эталона.
+    #[test]
+    fn thin_labui_json_omits_roles_and_hashes_to_full() {
+        let full = labui_dto();
+        let mut val = serde_json::to_value(&full).expect("значение");
+        let obj = val.as_object_mut().expect("объект");
+        obj.remove("roles");
+        obj.remove("aliases");
+        obj.insert("preset".to_string(), serde_json::json!("labui"));
+        let json = serde_json::to_string(&val).expect("JSON");
+
+        let thin: ConfigDto = serde_json::from_str(&json).expect("тонкий JSON парсится без roles");
+        assert!(matches!(thin.preset, Some(RolePresetDto::Labui)));
+        assert!(thin.roles.is_empty(), "тонкий конфиг без словаря ролей");
+        assert_eq!(
+            fingerprint(&thin),
+            fingerprint(&full),
+            "тонкий JSON (preset, без roles) → отпечаток полного эталона"
+        );
+    }
+
+    /// Характеризационный ЗАМОК ТЕКУЩЕГО main: отпечаток полного labui-конфига —
+    /// константа. Это НЕ инвариант навсегда: при ЛЕГИТИМНОЙ смене паспорта labui
+    /// (значения якорей/ручек) отпечаток сменится — тогда ОБНОВИ это число здесь
+    /// и пин `PASSPORT_FINGERPRINT` на стороне labui. Относительное равенство
+    /// тонкий==полный держит соседний тест независимо от этого пина.
+    #[test]
+    fn full_labui_fingerprint_pin_current_main() {
+        let full = labui_dto();
+        assert_eq!(
+            format!("{:016x}", fingerprint(&full)),
+            "a97994470b2581f3",
+            "пин паспорта main; при легитимной смене паспорта обнови это число"
+        );
     }
 }

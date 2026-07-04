@@ -221,7 +221,8 @@ pub(crate) const DEFAULT_HARDNESS: f64 = 5.0;
 ///
 /// Единственный дом значения по построению: фикстура labui (config/fixture.rs)
 /// ссылается на эту константу напрямую, второго литерала не существует.
-#[cfg(test)]
+/// Продовая (не `cfg(test)`) с BL-007: фикстура несёт словарь пресета
+/// [`RolePreset::Labui`](crate::config::RolePreset) и публична для wasm-границы.
 // SSOT-TRACKED — привязка выведена (натур. минимум = prototype − s_min = 45.528°), зазор до пола — калибровка (аудит 2026-07-03, уточнён 2026-07-04), см. docs/empirical-inventory.md.
 pub(crate) const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
 
