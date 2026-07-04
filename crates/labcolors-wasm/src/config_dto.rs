@@ -588,6 +588,30 @@ mod tests {
             .expect("паспорт labui парсится")
     }
 
+    /// Снапшот ПРОДАКШН-паспорта labui (`labui/packages/colors/labui.config.json`,
+    /// 2026-07-04, sha256 439d948d…): цветные лейблы там ещё в ladder-стиле, ветки
+    /// M1 text-anchor не активируются. Покрывает путь, которым потребитель идёт
+    /// СЕГОДНЯ, — класс «тестируем не тот стиль рецептов, что в проде».
+    fn labui_prod_dto() -> ConfigDto {
+        serde_json::from_str(include_str!("../tests/data/labui.config.prod.json"))
+            .expect("прод-паспорт labui парсится")
+    }
+
+    /// Прод-снапшот гоняется тем же путём без потерь и компилируется — паритет
+    /// гейта для обоих стилей паспорта (канонический M1 + прод-ladder).
+    #[test]
+    fn labui_prod_passport_round_trips_and_compiles() {
+        let cfg = ThemeConfig::try_from(labui_prod_dto()).expect("прод-паспорт → ThemeConfig");
+        let dto = ConfigDto::try_from(&cfg).expect("сериализуем");
+        let json = serde_json::to_string(&dto).expect("JSON");
+        let back: ConfigDto = serde_json::from_str(&json).expect("парсится");
+        let restored = ThemeConfig::try_from(back).expect("конвертируется");
+        assert_eq!(cfg, restored, "JSON-путь без потерь (прод-стиль)");
+        restored
+            .compile_named_role_table()
+            .expect("прод-паспорт компилируется");
+    }
+
     /// Канонический конфиг гоняется через JSON туда-обратно без потерь:
     /// паспорт → ядро → DTO → JSON → DTO → ядро даёт РАВНЫЙ конфиг (PartialEq ядра).
     #[test]
