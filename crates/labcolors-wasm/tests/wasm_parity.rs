@@ -24,23 +24,44 @@ wasm_bindgen_test_configure!(run_in_browser);
 /// hardcode. Both the boundary (via `loadConfig`) and the native expectation
 /// (via `ConfigDto` → `ThemeConfig` → `compile_named_role_table`) read this one
 /// SSOT, so the two sides cannot diverge on their input.
+///
+/// NOTE: this canonical fixture describes hued labels in the ratified
+/// `text-anchor + floor + hue` form (#148 M1) — the TARGET passport style.
 const LABUI_JSON: &str = include_str!("data/labui.config.json");
 
-/// Build the native labui role table through the same public path `loadConfig`
-/// uses, so the parity oracle is the core's own compile, not a parallel copy.
-fn native_labui_table() -> NamedRoleTable {
-    let dto: ConfigDto = serde_json::from_str(LABUI_JSON).expect("labui passport parses");
+/// Snapshot of the passport labui ships in PRODUCTION
+/// (`labui/packages/colors/labui.config.json` @ labui commit bd7b843 (#80),
+/// sha256 f9bbf7e4… — point-in-time snapshot, refresh on passport changes).
+/// It still describes hued labels via `ladder position label-*`, so the M1
+/// text-anchor branches stay dormant on this path. Keeping BOTH fixtures under
+/// parity closes the class "wasm tests exercise a recipe style production
+/// never takes": every recipe style a real consumer uses must hold parity.
+const LABUI_PROD_JSON: &str = include_str!("data/labui.config.prod.json");
+
+/// Build the native role table for a passport through the same public path
+/// `loadConfig` uses, so the parity oracle is the core's own compile, not a
+/// parallel copy.
+fn native_table(passport: &str) -> NamedRoleTable {
+    let dto: ConfigDto = serde_json::from_str(passport).expect("passport parses");
     let cfg = ThemeConfig::try_from(dto).expect("DTO → ThemeConfig");
-    cfg.compile_named_role_table().expect("labui compiles")
+    cfg.compile_named_role_table().expect("passport compiles")
 }
 
-/// A boundary engine with the labui passport loaded.
-fn boundary_with_labui() -> LabColors {
+/// Build the native labui role table (canonical fixture).
+fn native_labui_table() -> NamedRoleTable {
+    native_table(LABUI_JSON)
+}
+
+/// A boundary engine with the given passport loaded.
+fn boundary_with(passport: &str) -> LabColors {
     let mut engine = LabColors::new();
+    engine.load_config(passport).expect("passport loads");
     engine
-        .load_config(LABUI_JSON)
-        .expect("labui passport loads");
-    engine
+}
+
+/// A boundary engine with the canonical labui passport loaded.
+fn boundary_with_labui() -> LabColors {
+    boundary_with(LABUI_JSON)
 }
 
 /// Read a string property off a JS object, panicking with context on absence —
@@ -65,28 +86,43 @@ fn error_message(err: wasm_bindgen::JsError) -> String {
     get_str(&value, "message").expect("JsError must carry a .message property")
 }
 
-/// The binding's `resolveTheme("#FFFFFF","light")` must reproduce the native
-/// `resolve_named_set` of the loaded labui table under sRGB, for every role the
-/// core returns.
-#[wasm_bindgen_test]
-fn resolve_theme_matches_native_named_resolve() {
-    // Expectations straight from the core, in the wasm runtime.
-    let bg = BgInput::solid("#FFFFFF").expect("white is valid");
-    let table = native_labui_table();
-    let vc = ViewingConditions::srgb();
+/// Shared parity assertion: for a passport, the binding's `resolveTheme`
+/// must reproduce the native `resolve_named_set`, role for role. Expectations
+/// come straight from the core inside the same wasm runtime — never hand-typed.
+/// The native side derives its ViewingConditions from the SAME core enum the
+/// boundary resolves through (`Theme::viewing_conditions()`): a hardcoded
+/// `srgb()` here silently diverges on any non-srgb theme (dark = dim surround)
+/// — exactly the miss that kept the old light-only test blind to dim parity.
+/// (String→Theme mapping is the boundary parser's contract, covered by its own
+/// unit tests; the literals here mirror it 1:1.)
+fn theme_vc(theme: &str) -> ViewingConditions {
+    let t = match theme {
+        "light" => labcolors_core::Theme::Light,
+        "dark" => labcolors_core::Theme::Dark,
+        "light-ic" => labcolors_core::Theme::LightIc,
+        "dark-ic" => labcolors_core::Theme::DarkIc,
+        other => panic!("test scaffolding: unmapped theme literal {other}"),
+    };
+    t.viewing_conditions()
+}
+
+fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
+    let bg = BgInput::solid(bg_hex).expect("bg is valid");
+    let table = native_table(passport);
+    let vc = theme_vc(theme);
     let native = resolve_named_set(&bg, &table, &vc);
 
     // The binding result for the same inputs, from a loaded config.
-    let engine = boundary_with_labui();
+    let engine = boundary_with(passport);
     let result: JsValue = engine
-        .resolve_theme("#FFFFFF", "light")
-        .expect("white/light resolves")
+        .resolve_theme(bg_hex, theme)
+        .expect("bg/theme resolves")
         .into();
     let roles = get_obj(&result, "roles");
 
     assert_eq!(
         get_str(&result, "theme").as_deref(),
-        Some("light"),
+        Some(theme),
         "theme echoed back"
     );
 
@@ -129,6 +165,21 @@ fn resolve_theme_matches_native_named_resolve() {
             other => panic!("unmapped Resolved variant in wasm parity ({name}): {other:?}"),
         }
     }
+}
+
+/// Canonical labui passport (target M1 text-anchor style), white/light.
+#[wasm_bindgen_test]
+fn resolve_theme_matches_native_named_resolve() {
+    assert_parity(LABUI_JSON, "#FFFFFF", "light");
+}
+
+/// PRODUCTION passport snapshot (ladder-style hued labels) — the exact recipe
+/// path labui takes today must hold parity on both of its theme anchors.
+/// Guards the class: "a recipe style a real consumer uses is untested in wasm".
+#[wasm_bindgen_test]
+fn resolve_theme_matches_native_on_prod_passport() {
+    assert_parity(LABUI_PROD_JSON, "#FFFFFF", "light");
+    assert_parity(LABUI_PROD_JSON, "#101012", "dark");
 }
 
 /// Reachable roles are mirrored into `vars` under their `--lab-` CSS name, and
