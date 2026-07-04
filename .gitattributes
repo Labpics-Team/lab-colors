@@ -2,3 +2,8 @@
 # Pin them to LF so `core.autocrlf` checkouts cannot rewrite them to CRLF and
 # spuriously drift the byte-identity gates.
 crates/labcolors-core/tests/data/*.txt text eol=lf
+
+# Passport fixtures are embedded via include_str! and must be byte-identical
+# across platforms (snapshot sha provenance, canonical-byte checks). Same class
+# as the golden snapshots above.
+crates/labcolors-wasm/tests/data/*.json text eol=lf
