@@ -162,24 +162,26 @@ let anchors = |l: &str, d: &str| ThemeAnchors {
     light_ic: l.to_string(), dark_ic: d.to_string(),
 };
 // Минимальный конфиг потребителя: бренд, нейтраль и одна текстовая роль.
-let config = ThemeConfig {
-    brand: Brand { anchors: anchors("#007AFF", "#4DA3FF") },
-    neutral: NeutralConfig {
+// `ThemeConfig` помечен `#[non_exhaustive]` — снаружи собирается через `new`,
+// не struct-литералом (пресет при желании задаётся после, полем `preset`).
+let config = ThemeConfig::new(
+    Brand { anchors: anchors("#007AFF", "#4DA3FF") },
+    NeutralConfig {
         anchors: NeutralAnchors {
             light: "#FFFFFF".into(), mid: "#787880".into(), dark: "#101012".into(),
         },
         tint: NeutralTint { ratio: 0.10, target_mp: 6.1, hue_stiffness: 9.0, hue_override_deg: None },
         edge: None, inverted: None,
     },
-    palette: vec![],
-    sentiments: SentimentsConfig { categories: vec![], hardness: 5.0, chroma_fraction: 0.88 },
-    themes: ThemesConfig { entries: vec![("light".into(), VcPreset::Srgb)] },
-    roles: vec![(
+    vec![],
+    SentimentsConfig { categories: vec![], hardness: 5.0, chroma_fraction: 0.88 },
+    ThemesConfig { entries: vec![("light".into(), VcPreset::Srgb)] },
+    vec![(
         "label-primary".into(),
         RoleRecipe::TextAnchor { fraction: 0.968, floor: Floor::AaText, hue: None },
     )],
-    aliases: vec![],
-};
+    vec![],
+);
 
 let table = config.compile_named_role_table().unwrap();
 let bg = BgInput::solid("#FFFFFF").unwrap();
