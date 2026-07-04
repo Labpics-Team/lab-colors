@@ -318,6 +318,16 @@ fn acme_config() -> ThemeConfig {
                     hue: Some(LadderSource::Brand),
                 },
             ),
+            // Лейбл тинт-бейджа: любой клиент получает жёсткий контраст
+            // label↔tinted-fill через тот же движок, без правок ядра.
+            (
+                "badge-label".to_string(),
+                RoleRecipe::PairLabel {
+                    source: LadderSource::Brand,
+                    fraction: 0.461,
+                    floor: Floor::AaUi,
+                },
+            ),
             ("focus".to_string(), brand_ladder(LadderPosition::FocusRing)),
         ],
         aliases: vec![("ring".to_string(), "focus".to_string())],
@@ -333,8 +343,8 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         .expect("a well-formed foreign config must compile");
     assert_eq!(
         table.entries().len(),
-        6,
-        "acme declared six roles; the table carries exactly them"
+        7,
+        "acme declared seven roles; the table carries exactly them"
     );
 
     // Emits a real, non-empty, physically-solved system on both a light and a dark
@@ -345,7 +355,7 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
     ] {
         let bg = BgInput::solid(bg_hex).unwrap();
         let set = resolve_named_set(&bg, &table, &vc);
-        assert_eq!(set.len(), 6, "every declared role resolves to an outcome");
+        assert_eq!(set.len(), 7, "every declared role resolves to an outcome");
 
         // The text ladder is real: strong is a solved colour that clears its AA
         // text floor and reads stronger than the weak rung.
@@ -369,6 +379,26 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         assert!(
             matches!(brand_label.1, Resolved::Color { .. }),
             "hued brand-label must resolve to a solved colour on {bg_hex}"
+        );
+
+        // Лейбл тинт-бейджа — агностичный жёсткий контраст: решается цветом и
+        // держит свой UI-пол (3:1) ПРОТИВ тинт-поверхности бренда (композит
+        // brand-fill), а не против фона страницы. Тот же движок, чужой конфиг.
+        let badge_label = set.iter().find(|(n, _)| n == "badge-label").unwrap();
+        let Resolved::Color { solved, .. } = &badge_label.1 else {
+            panic!("badge-label must resolve to a solved colour on {bg_hex}");
+        };
+        let brand_fill = set.iter().find(|(n, _)| n == "brand-fill").unwrap();
+        let surface_hex = brand_fill
+            .1
+            .translucent()
+            .expect("brand-fill is a translucent tinted surface")
+            .composite_hex();
+        let enc = |h: &str| crate::spaces::srgb::srgb_encoded_from_hex(h).unwrap();
+        let ratio = crate::wcag::contrast_ratio(enc(solved.hex()), enc(surface_hex));
+        assert!(
+            ratio >= 3.0 - 1e-9,
+            "badge-label must clear 3:1 against its tinted surface on {bg_hex}: got {ratio:.2}:1"
         );
     }
 }

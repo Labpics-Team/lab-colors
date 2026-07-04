@@ -555,6 +555,29 @@ pub enum RoleRecipe {
         /// Источник якоря: бренд, семейство, сентимент или нейтраль.
         source: LadderSource,
     },
+    /// Лейбл ТИНТ-бейджа — лейбл-сторона пары «поверхность × лейбл»
+    /// ([`crate::pair`]), близнец [`PairFill`](Self::PairFill). Семейно-оттеночный
+    /// лейбл, чей WCAG-пол энфорсится ПРОТИВ тинт-поверхности бейджа (композит
+    /// семейного тинта при альфе `fill-*-primary` над фоном резолва), а НЕ против
+    /// фона страницы. Закрывает класс «контраст label↔tinted-fill эмерджентен, не
+    /// гарантирован»: обычные `label-*`/`fill-*-tinted` роли решаются независимо
+    /// против фона страницы, и их взаимный контраст на тинт-подложке бейджа никем
+    /// не констрейнится (для warning/статусных семей на кривой оседает к ~3:1 и
+    /// ниже). Здесь лейбл решается ШТАТНЫМ законом НА тинт-поверхности, поэтому пол
+    /// гарантирован против той подложки, на которой лейбл реально стоит.
+    /// Недостижимость пола на кривой семьи клампит тон (флаг `compressed`, ADR-0002
+    /// честный результат) — консервативный дефолт. Компилируется в
+    /// [`RoleSpec::PairLabel`](crate::semantic::RoleSpec::PairLabel).
+    PairLabel {
+        /// Источник семьи оттенка/тинта: бренд, семейство, сентимент или нейтраль.
+        source: LadderSource,
+        /// Доля максимума контраста тинт-поверхности `(0, 1]` (как у
+        /// [`TextAnchor`](Self::TextAnchor)): низкая доля = максимально «цветной»
+        /// лейбл у пола, высокая = ближе к нейтральному пределу.
+        fraction: f64,
+        /// WCAG-пол, энфорсимый ПРОТИВ тинт-поверхности (а не фона страницы).
+        floor: Floor,
+    },
     /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
     /// #119): `(tint, α)`, чей композит на фоне резолва равен солиду `of`. Даёт
     /// `-tinted`-роли labui. Компилируется в [`RoleSpec::AlphaAnalog`].
@@ -1077,6 +1100,18 @@ impl ThemeConfig {
             // Ступень — закрытый enum, числовой валидации не требует; источник — как у лестницы.
             RoleRecipe::Glow { source, .. } => self.check_ladder_source(role, source),
             RoleRecipe::PairFill { source } => self.check_ladder_source(role, source),
+            RoleRecipe::PairLabel {
+                source, fraction, ..
+            } => {
+                self.check_ladder_source(role, source)?;
+                check_in_excl_incl(
+                    &format!("roles.{role}.fraction"),
+                    *fraction,
+                    FRACTION_MIN_EXCLUSIVE,
+                    FRACTION_MAX_INCLUSIVE,
+                    "0 < fraction ≤ 1 (доля максимального контраста тинт-поверхности бейджа)",
+                )
+            }
             RoleRecipe::AlphaAnalog { of, alpha } => {
                 self.check_ladder_source(role, of)?;
                 check_in_excl_incl(
@@ -1276,6 +1311,25 @@ impl ThemeConfig {
             RoleRecipe::PairFill { source } => Ok(RoleSpec::PairFill {
                 tint: self.compile_ladder_tint(role, source)?,
             }),
+            RoleRecipe::PairLabel {
+                source,
+                fraction,
+                floor,
+            } => {
+                // Поверхность бейджа = семейный тинт при альфе `fill-*-primary`
+                // (@12) над фоном резолва. Альфа берётся из ЗАКРЫТОГО меню позиции
+                // (не литерал), поэтому tinted-badge лейбл и `fill-*-tinted`
+                // заливка всегда садятся на одну и ту же подложку по построению.
+                let (surface_alpha_light, surface_alpha_dark) =
+                    crate::ladder::LadderPosition::FillPrimary.alpha_pair();
+                Ok(RoleSpec::PairLabel {
+                    tint: self.compile_ladder_tint(role, source)?,
+                    fraction: *fraction,
+                    floor: *floor,
+                    surface_alpha_light,
+                    surface_alpha_dark,
+                })
+            }
         }
     }
 

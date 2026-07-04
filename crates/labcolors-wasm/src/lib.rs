@@ -170,6 +170,7 @@ export type RoleRecipe =
   | { kind: "ladder"; source: LadderSource; position: string }
   | { kind: "glow"; source: LadderSource; step: "subtle" | "base" | "bloom" }
   | { kind: "pair-fill"; source: LadderSource }
+  | { kind: "pair-label"; source: LadderSource; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
   | { kind: "zero" };
 

@@ -179,6 +179,11 @@ pub enum RoleRecipeDto {
     PairFill {
         source: LadderSourceDto,
     },
+    PairLabel {
+        source: LadderSourceDto,
+        fraction: f64,
+        floor: FloorDto,
+    },
     AlphaAnalog {
         of: LadderSourceDto,
         alpha: f64,
@@ -402,6 +407,15 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
             RoleRecipeDto::PairFill { source } => RoleRecipe::PairFill {
                 source: source.into(),
             },
+            RoleRecipeDto::PairLabel {
+                source,
+                fraction,
+                floor,
+            } => RoleRecipe::PairLabel {
+                source: source.into(),
+                fraction,
+                floor: floor.into(),
+            },
             RoleRecipeDto::AlphaAnalog { of, alpha } => RoleRecipe::AlphaAnalog {
                 of: of.into(),
                 alpha,
@@ -557,6 +571,15 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
             RoleRecipe::PairFill { source } => RoleRecipeDto::PairFill {
                 source: source.try_into()?,
             },
+            RoleRecipe::PairLabel {
+                source,
+                fraction,
+                floor,
+            } => RoleRecipeDto::PairLabel {
+                source: source.try_into()?,
+                fraction: *fraction,
+                floor: floor_to_dto(*floor)?,
+            },
             RoleRecipe::AlphaAnalog { of, alpha } => RoleRecipeDto::AlphaAnalog {
                 of: of.try_into()?,
                 alpha: *alpha,
@@ -701,6 +724,30 @@ mod tests {
         restored
             .compile_named_role_table()
             .expect("восстановленный конфиг компилируется");
+    }
+
+    /// Рецепт `pair-label` (лейбл тинт-бейджа, task #29) гоняется через JSON без
+    /// потерь: kebab-тег `pair-label`, источник/доля/пол целы туда-обратно.
+    /// Закрывает класс «DTO-ветка компилируется, но круг-трип врёт».
+    #[test]
+    fn pair_label_recipe_round_trips_through_json() {
+        use labcolors_core::solve::Floor;
+        let json = r#"{"kind":"pair-label","source":{"kind":"sentiment","name":"warning"},"fraction":0.461,"floor":"aa-ui"}"#;
+        let dto: RoleRecipeDto = serde_json::from_str(json).expect("pair-label парсится");
+        let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");
+        assert!(
+            matches!(
+                &core,
+                RoleRecipe::PairLabel { fraction, floor: Floor::AaUi, .. }
+                    if (*fraction - 0.461).abs() < 1e-12
+            ),
+            "pair-label конвертируется в ядро с целыми полями"
+        );
+        let back = RoleRecipeDto::try_from(&core).expect("RoleRecipe → DTO");
+        let re = serde_json::to_string(&back).expect("сериализуем");
+        assert!(re.contains(r#""kind":"pair-label""#), "kebab-тег цел: {re}");
+        assert!(re.contains(r#""floor":"aa-ui""#), "пол цел: {re}");
+        assert!(re.contains(r#""name":"warning""#), "источник цел: {re}");
     }
 
     /// Отпечаток: детерминирован для одного конфига (включая нормализацию
