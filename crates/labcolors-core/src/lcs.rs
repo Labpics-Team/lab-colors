@@ -9,7 +9,7 @@ pub struct LcsColor {
     pub h_ok: f64,
     /// Internal reparameterisation of CAM16-UCS colourfulness `M′`:
     /// `s = M′ / (J′ + 1)`. The `+ 1` is a regulariser against division by zero
-    /// as `J′ → 0`; it is lossless — [`LcsColor::mp`] recovers `M′` exactly as
+    /// as `J′ → 0`; it is lossless — `LcsColor::mp` recovers `M′` exactly as
     /// `s · (J′ + 1)`. This is NOT the CAM16 saturation correlate.
     pub s: f64,
     h_cam: f64,

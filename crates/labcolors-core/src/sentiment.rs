@@ -222,7 +222,7 @@ const CHROMA_FRACTION: f64 = 0.88;
 /// ```
 ///
 /// where `d` is the raw angular distance (degrees) from the brand to the
-/// prototype and `s_min` is the perceptual floor from [`s_min_deg`]. As
+/// prototype and `s_min` is the perceptual floor from `s_min_deg`. As
 /// `d → ∞` the displacement `s(d) − d → 0` (a far brand barely nudges the
 /// sentiment); as `d → 0` the separation smoothly approaches `s_min` (a brand
 /// landing on the prototype is pushed out by exactly the minimum gap). `p`
@@ -320,7 +320,7 @@ impl SentimentCurve {
     /// p-norm asymptote `s(d) = (d^p + s_min^p)^(1/p)` (see [`SentimentParams`]).
     /// There is **no on/off threshold**: a distant brand moves the hue by an
     /// amount that decays smoothly to zero, a near brand is held at the
-    /// perceptual minimum [`s_min_deg`], and the transition is C¹ everywhere
+    /// perceptual minimum `s_min_deg`, and the transition is C¹ everywhere
     /// except the single seam where the brand sits exactly on the prototype
     /// (resolved on the sentiment's `preferred_side`).
     ///
@@ -506,17 +506,17 @@ fn smooth_separation(d: f64, s_min: f64, p: f64) -> f64 {
 /// relative to the brand, by `s(d)` — a displacement that grows to the perceptual
 /// floor `s_min` as the brand lands on the prototype and decays to zero as the
 /// brand recedes. Because `s(d)` is C¹ in the brand-distance, the resolved hue is
-/// continuous (no side-flip discontinuity), and the categorical [`hue_floor`]
+/// continuous (no side-flip discontinuity), and the categorical `hue_floor`
 /// (Warning) keeps it out of Danger's red. This is the resolver that fixes the
 /// Warning↔Danger collision and the 46° jump the membership-field picker caused.
 /// Config-facing resolver that takes the categorical policy (`preferred_side`,
-/// `hue_floor`) explicitly instead of reading it off the fixed [`Sentiment`] enum
+/// `hue_floor`) explicitly instead of reading it off the fixed `Sentiment` enum
 /// — so an arbitrary consumer sentiment category
 /// ([`crate::config::SentimentCategory`]) resolves through the identical smooth
 /// p-norm displacement + legality guard, no second copy of the physics.
 ///
 /// `prototype`, `brand_hue` and the result are **Oklab hue degrees**. See
-/// [`resolve_smooth_hue`] / [`SentimentCurve::with_params`] for the model.
+/// `resolve_smooth_hue` / [`SentimentCurve::with_params`] for the model.
 ///
 /// # Errors
 ///
@@ -730,7 +730,7 @@ pub(crate) fn angular_distance(a: f64, b: f64) -> f64 {
 ///
 /// `20°` — нижний предел категориального восприятия (Witzel & Gegenfurtner 2013,
 /// Journal of Vision 13(7):1, DOI 10.1167/13.7.1). При labui-якорях (хромы Red/Orange/Green/Blue) результат
-/// совпадает с замороженной константой [`S_PERC_MIN`] (`0.068_703_9`,
+/// совпадает с замороженной константой `S_PERC_MIN` (`0.068_703_9`,
 /// деривационная идентичность — тестом, допуск 1e-4): формула остаётся законом
 /// при произвольных якорях клиента, а сегодняшнее значение — её частный случай.
 ///
@@ -794,7 +794,7 @@ pub(crate) const HUE_DOMAIN_MAX_EXCLUSIVE: f64 = 360.0;
 /// `Err`, если якорь невалиден, `brand_hue`/`hue_floor` вне домена (конечный
 /// угол; пол — в `[0, 360)`, те же пределы, что у конфиг-валидатора),
 /// легальный оттенок геометрически пуст (см. [`resolve_smooth_hue_explicit`])
-/// или порог `s_perc_min` не конечен (см. [`s_min_deg_from_chord`]).
+/// или порог `s_perc_min` не конечен (см. `s_min_deg_from_chord`).
 pub fn resolve_config_sentiment_solid(
     family_anchor_hex: &str,
     brand_hue: f64,
@@ -935,7 +935,7 @@ fn capped_chroma(c_anchor: f64, fraction: f64, l_ok: f64, h_deg: f64) -> f64 {
 }
 
 /// Перевести целевую хорду разделения `chord` в угол оттенка (градусы) при
-/// хроме `zone_chroma` — та же инверсия `2·C·sin(Δh/2)`, что [`s_min_deg`], но с
+/// хроме `zone_chroma` — та же инверсия `2·C·sin(Δh/2)`, что `s_min_deg`, но с
 /// произвольной хордой (для конфиг-`S_PERC_MIN`).
 ///
 /// При `chord ≥ 2·zone_chroma` порог недостижим НИ ОДНИМ углом (хорда

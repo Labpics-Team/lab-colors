@@ -375,7 +375,7 @@ pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
 /// (carried unchanged into CIE 248:2022); Bartleson & Breneman (1967) is the
 /// psychophysical basis for a dim surround lowering apparent contrast. (This is
 /// NOT DOI 10.1002/col.22793, which is the Helmholtz–Kohlrausch paper cited by
-/// [`hk_coeff`] — that DOI was previously misattached to the surround params.)
+/// `hk_coeff` — that DOI was previously misattached to the surround params.)
 pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
     let y_fg = hex_to_y_hk(fg_hex, vc);
     let y_bg = hex_to_y_hk(bg_hex, vc);
@@ -456,10 +456,10 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 
 /// Benchmark-only access to the two grey-axis inverse implementations.
 ///
-/// These wrap the crate-private [`y_hk_analytic`] and [`y_hk_bisect`] so the
+/// These wrap the crate-private `y_hk_analytic` and `y_hk_bisect` so the
 /// `benches/y_hk.rs` Criterion harness can compare them head-to-head. Hidden
 /// from the rendered docs and not part of the supported public surface — the
-/// only supported entry point is [`y_hk`], whose signature is unchanged.
+/// only supported entry point is `y_hk`, whose signature is unchanged.
 #[doc(hidden)]
 pub mod bench_support {
     use super::ViewingConditions;

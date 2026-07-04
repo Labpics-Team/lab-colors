@@ -1,12 +1,12 @@
 //! Semantic role table: a named contrast contract resolved from any background
 //! in one [`solve`] call.
 //!
-//! Where [`solve`](crate::solve) answers "what colour meets *this* signed
+//! Where [`solve`](crate::solve()) answers "what colour meets *this* signed
 //! contrast against *this* background", this module answers the product-level
 //! question one layer up: "give me the whole set of named colours a UI needs
-//! against this background". A [`Role`] is a stable string key plus a recipe for
-//! a [`Contract`]; [`RoleTable`] is the default recipe set, overridable per role;
-//! [`resolve`] solves one role and [`resolve_set`] solves the whole table in a
+//! against this background". A `Role` is a stable string key plus a recipe for
+//! a [`Contract`]; `RoleTable` is the default recipe set, overridable per role;
+//! `resolve` solves one role and `resolve_set` solves the whole table in a
 //! single sweep. Serialising the result to CSS custom properties is the
 //! runtime-engine chapter's job — this module returns a structured
 //! `role → Solved` map and nothing else.
@@ -38,8 +38,8 @@
 //!    `Y ∈ [0.175, 0.1833]` (`#757575`, `#767676` and same-luminance chromatics
 //!    such as `#0078D4`). Across that whole band the perceptual layer prefers
 //!    *light-on-dark* with a wide margin — the luminance-domain LPC core
-//!    ([`crate::lpc::contrast_core`]) has its black-overtakes-white crossover far
-//!    higher, near `Y ≈ 0.36` — so the tie resolves to white ([`break_tie`]). This
+//!    (`crate::lpc::contrast_core`) has its black-overtakes-white crossover far
+//!    higher, near `Y ≈ 0.36` — so the tie resolves to white (`break_tie`). This
 //!    replaces the former "larger WCAG margin wins" rule, whose symmetric margin
 //!    crossed over *inside* the band (`Y ≈ 0.1791`) and chose dark-on-light on the
 //!    upper half — the perceptually weaker side there, and the one that made
@@ -62,7 +62,7 @@
 //! ([`TextAnchor`]). Primary asks for ~97 % of that maximum — almost the
 //! strongest the background allows — so on white it lands near-black and on
 //! black near-white, by construction, on *any* background. The fractions are
-//! calibrated against Daniel's Figma anchors (see [`RoleTable::default`]) and
+//! calibrated against Daniel's Figma anchors (see `RoleTable::default`) and
 //! stay marked "calibrates" until his eye signs off.
 //!
 //! Because every text role is a fraction of the *same* per-background maximum,
@@ -90,7 +90,7 @@
 //! # The zero token
 //!
 //! "Empty" is a value, not a missing entry. A role that means "no colour here"
-//! ([`Role::None`]) is part of the table and resolves to an explicit
+//! (`Role::None`) is part of the table and resolves to an explicit
 //! [`Resolved::None`] — an honest zero (transparent / no contrast), never a
 //! skipped key. Swapping a literal for a token later is then a change of value,
 //! not the insertion of a token where a hole used to be.
@@ -110,7 +110,7 @@
 //! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
 //!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
 //!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
-//!   chroma seam ([`RoleTable::with_chroma`]) is left open so that chapter can
+//!   chroma seam (`RoleTable::with_chroma`) is left open so that chapter can
 //!   swap the policy over the existing sentiment machinery without reshaping
 //!   this table.
 //!
@@ -129,22 +129,22 @@
 //! computable mechanisms rather than a flat ratio of the gamut:
 //!
 //! 1. **Constant perceptual colorfulness** — the chroma at each role's resolved
-//!    lightness is solved to a *constant* CAM16-UCS `M'` ([`TINT_TARGET_MP`]), not
+//!    lightness is solved to a *constant* CAM16-UCS `M'` (`TINT_TARGET_MP`), not
 //!    a fixed fraction of the gamut maximum. Because UCS is perceptually uniform,
 //!    one constant holds the chroma in the lights and moderates it in the middle —
 //!    fixing v1's inverted envelope (over-saturated middle, starved light end).
 //! 2. **Cusp-attracted hue** — the hue at each lightness is pulled toward the
 //!    local chroma cusp of the sRGB gamut, penalised for leaving the canonical
-//!    286° ([`cusp_attracted_hue`]). The drift emerges from geometry; it is *not*
+//!    286° (`cusp_attracted_hue`). The drift emerges from geometry; it is *not*
 //!    a set of hard-coded hue nodes. (Honest limit: the gamut's cusp near 286°
 //!    does not drift to the reference's light-end azure — see that function.)
 //! 3. **Perceptibility floor** — where the gamut cannot host the target
 //!    colorfulness, the curve takes the gamut maximum and is allowed to fall
-//!    toward [`TINT_PERCEPTIBLE_MP_FLOOR`] rather than fake chroma it cannot reach.
+//!    toward `TINT_PERCEPTIBLE_MP_FLOOR` rather than fake chroma it cannot reach.
 //!
 //! A caller who wants the v1 flat-ratio undertone opts back into it with
 //! [`RoleChroma::flat_neutral_tint`]; pure grey with [`RoleChroma::Neutral`];
-//! either via [`RoleTable::with_chroma`].
+//! either via `RoleTable::with_chroma`.
 
 use crate::ladder::LadderTint;
 use crate::scale;
@@ -374,7 +374,7 @@ pub enum Role {
     FillQuaternary,
     /// The explicit-zero fill: "no fill here". HIG "Fills/None" (`@0`). Resolves
     /// to [`Resolved::None`], the honest zero of the fill ladder — the mirror of
-    /// [`Role::None`] for the fills family.
+    /// `Role::None` for the fills family.
     FillNone,
     /// The subtlest shadow step. HIG "FX/Shadow/Minor". A Lc magnitude; bottom
     /// of the progressive shadow stack (minor < ambient < penumbra < major in
@@ -570,7 +570,7 @@ impl DjMagnitude {
 /// the stack's relative ordering (the shadow anchors are alpha opacities, not
 /// dJ' steps — see the shadow-stack note above); the
 /// zero token ([`Zero`](RoleSpec::Zero)) resolves to nothing. Construct these
-/// through [`RoleTable`]; they are exposed so a caller can read or override a recipe.
+/// through `RoleTable`; they are exposed so a caller can read or override a recipe.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleSpec {
@@ -581,7 +581,7 @@ pub enum RoleSpec {
     /// axis, toward the larger headroom (the set polarity). No readability floor
     /// and no low-contrast clip — this is distinguishability of a decorative
     /// element (a fill tint, a hairline border), a different physics from the
-    /// legibility the [`Anchor`](RoleSpec::Anchor) / [`Decorative`] roles solve.
+    /// legibility the [`Anchor`](RoleSpec::Anchor) / [`Decorative`](RoleSpec::Decorative) roles solve.
     ///
     /// The magnitude carries the owner's literal Figma-computed anchors per theme
     /// (see [`DjMagnitude`]); the solve is analytic (J' offset → grey-axis Oklab L
@@ -590,7 +590,7 @@ pub enum RoleSpec {
     /// substitute.
     DecorativeDj { magnitude_dj: DjMagnitude },
     /// Decorative just-noticeable-difference contrast: an `Lc` magnitude, held
-    /// above [`DECORATIVE_FLOOR_MIN`], with [`Floor::None`].
+    /// above `DECORATIVE_FLOOR_MIN`, with [`Floor::None`].
     ///
     /// Retained for the shadow stack, whose owner anchors are alpha opacities,
     /// not dJ' steps — converting them to dJ' would invent numbers with no owner
@@ -739,14 +739,14 @@ pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 /// прижимает оттенок к 286° по всей шкале. `9.0` уверенно лежит в режиме
 /// прижатия, устойчиво к флуктуациям float, которые иначе могли бы сместить
 /// почти-белую роль к каспу пурпурного (см. предел геометрии в
-/// [`cusp_attracted_hue`]).
+/// `cusp_attracted_hue`).
 // SSOT-TRACKED — жёсткость прижатия оттенка к каспу.
 pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
 /// примерно этой красочности подтон попадает в "мёртвую серую зону" —
 /// заметно неразличимую как цвет. Там, где гамут не может обеспечить
-/// [`TINT_TARGET_MP`], кривая не гонится за ним через стену гамута: она
+/// `TINT_TARGET_MP`, кривая не гонится за ним через стену гамута: она
 /// берёт максимум, который даёт гамут, и честно допускает падение к этому
 /// порогу на самых краях (почти-чёрный / почти-белый), где даже собственный
 /// `M'` референса падает до ~2.3–3.0.
@@ -766,7 +766,7 @@ const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 /// undertone (constant perceptual colorfulness + cusp-attracted hue + a
 /// perceptibility floor). [`Neutral`](RoleChroma::Neutral) is the achromatic
 /// override. A caller replaces the table's chroma wholesale via
-/// [`RoleTable::with_chroma`]; the enum is the seam later chapters extend for
+/// `RoleTable::with_chroma`; the enum is the seam later chapters extend for
 /// brand/sentiment-tinted roles without reshaping this type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -787,14 +787,14 @@ pub enum RoleChroma {
     ///    светлоте каждой роли решается так, чтобы цвет нёс `target_mp`
     ///    CAM16-UCS `M'` (а не фиксированную долю гамута). Именно
     ///    равномерность UCS позволяет одной константе держать хрому в светлых
-    ///    и умерять её в середине. См. [`TINT_TARGET_MP`].
+    ///    и умерять её в середине. См. `TINT_TARGET_MP`.
     /// 2. **Оттенок, притянутый к каспу** — оттенок на каждой светлоте
     ///    притягивается к локальному каспу хромы гамута sRGB (вычисляется из
     ///    `max_chroma(L, h)`), со штрафом `hue_stiffness` за отклонение от
-    ///    `canonical_hue_deg`. См. [`cusp_attracted_hue`].
+    ///    `canonical_hue_deg`. См. `cusp_attracted_hue`.
     /// 3. **Порог воспринимаемости** — там, где гамут не может обеспечить
     ///    `target_mp`, кривая берёт максимум гамута и на краях честно
-    ///    допускает падение к [`TINT_PERCEPTIBLE_MP_FLOOR`], а не подделывает
+    ///    допускает падение к `TINT_PERCEPTIBLE_MP_FLOOR`, а не подделывает
     ///    хрому.
     ///
     /// `target_mp` ("сила") и `hue_stiffness` ("удержание оттенка") — два
@@ -802,8 +802,8 @@ pub enum RoleChroma {
     /// Остальное в кривой опирается на три **измеренные / геометрические**
     /// константы, а не на свободные параметры: оттенок тёмного якоря
     /// `canonical_hue_deg` (286°, измерен по нейтральной шкале), порог
-    /// воспринимаемости ([`TINT_PERCEPTIBLE_MP_FLOOR`], 1.5 `M'`) и окно
-    /// поиска каспа по оттенку ([`CUSP_HALF_WINDOW_DEG`], ±40°). То есть
+    /// воспринимаемости (`TINT_PERCEPTIBLE_MP_FLOOR`, 1.5 `M'`) и окно
+    /// поиска каспа по оттенку (`CUSP_HALF_WINDOW_DEG`, ±40°). То есть
     /// политика — это "два выбранных скаляра + три измеренные/геометрические
     /// константы", а не "два скаляра" — всё за пределами двух выбранных ручек
     /// является фиксированной геометрией.
@@ -819,7 +819,7 @@ impl RoleChroma {
     ///
     /// The default table moved to [`Curve`](RoleChroma::Curve); a caller who
     /// prefers the older flat-ratio behaviour (the neutral's cool hue at a fixed
-    /// fraction of the gamut maximum, [`NEUTRAL_TINT_RATIO`]) opts back into it
+    /// fraction of the gamut maximum, `NEUTRAL_TINT_RATIO`) opts back into it
     /// with `RoleTable::default().with_chroma(RoleChroma::flat_neutral_tint())`.
     /// This is the additive seam the task requires: the v1 policy stays a
     /// first-class, named choice even though it is no longer the default.
@@ -1011,7 +1011,7 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 /// narrow. If even `ratio = 1` (the gamut maximum) cannot reach `target_mp`, the
 /// gamut is the limit — return `1.0` and let the colourfulness sit at the most
 /// the gamut allows (honestly below target, toward
-/// [`TINT_PERCEPTIBLE_MP_FLOOR`] at the pinched extremes) rather than fake it.
+/// `TINT_PERCEPTIBLE_MP_FLOOR` at the pinched extremes) rather than fake it.
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
     let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
     // The in-gamut max chroma depends only on `(l_ok, hue_deg)`, both fixed across
@@ -1095,7 +1095,7 @@ type SweepRow = (f64, f64, f64);
 
 /// Reproduction hook for `examples/tint_target_sweep.rs` — **not** stable public
 /// API (`#[doc(hidden)]`). Exposes the real-engine tint identity-curve `M'` sweep
-/// behind [`TINT_TARGET_MP`] so its provenance is reproducible from outside
+/// behind `TINT_TARGET_MP` so its provenance is reproducible from outside
 /// `#[cfg(test)]` without duplicating (and drifting from) the engine. The realised
 /// curve `M'` is computed by the exact path the `#[cfg(test)]`
 /// `curve_fits_reference_plateau_colorfulness` metric uses (`cusp_attracted_hue` →
@@ -1174,7 +1174,7 @@ pub fn tint_target_sweep_repro(
     (plateau, sweep)
 }
 
-/// The default, overridable recipe set mapping every [`Role`] to a [`RoleSpec`].
+/// The default, overridable recipe set mapping every `Role` to a [`RoleSpec`].
 ///
 /// [`default`](RoleTable::default) is the calibrated v1 table; override any
 /// single role with [`with`](RoleTable::with) and the rest stay at their
@@ -1367,7 +1367,7 @@ pub enum Resolved {
         achieved_dj: Option<f64>,
         /// Цветной лейбл (M1 ch5c) фактически ПОТЕРЯЛ цвет: на решённой
         /// уровнем-контрактом светлоте красочность `M'` цвета упала ниже порога
-        /// воспринимаемости тинта ([`TINT_PERCEPTIBLE_MP_FLOOR`]) — у краёв
+        /// воспринимаемости тинта (`TINT_PERCEPTIBLE_MP_FLOOR`) — у краёв
         /// LCS-кривой семьи (почти-белый / почти-чёрный) хрома физически → 0.
         /// Честный флаг, НЕ молчаливая деградация к серому/белому: потребитель
         /// читает флаг и знает, что оттенок семьи здесь неразличим. `false` у
@@ -1381,7 +1381,7 @@ pub enum Resolved {
     /// Свечение: screen-слои (core, halo) + решённая интенсивность
     /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
     Glow(GlowResolved),
-    /// The honest zero of the [`Role::None`] token: no colour, no contrast.
+    /// The honest zero of the `Role::None` token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
     Unreachable(Unreachable),
@@ -1549,7 +1549,7 @@ impl Resolved {
     }
 
     /// Цветной лейбл потерял различимый цвет на решённой светлоте (M1 ch5c):
-    /// `M'` цвета ниже [`TINT_PERCEPTIBLE_MP_FLOOR`]. `false` для нейтральных и
+    /// `M'` цвета ниже `TINT_PERCEPTIBLE_MP_FLOOR`. `false` для нейтральных и
     /// сохранивших цвет ролей, для zero и unreachable. Честный сигнал вырождения
     /// оттенка — не молчаливая деградация.
     pub fn hue_vanished(&self) -> bool {
@@ -1621,7 +1621,7 @@ impl Resolved {
 /// a set shares: the one polarity the whole table resolves in, and the maximum
 /// contrast magnitude that polarity can supply.
 ///
-/// Computing this once is what makes [`resolve_set`] solve the table in a single
+/// Computing this once is what makes `resolve_set` solve the table in a single
 /// sweep instead of re-deriving polarity (two probe solves) and the maximum (one
 /// more) per role — 32 `solve` calls collapse to 12. It also *guarantees* a
 /// uniform polarity across the set: every role reads its sign from the same
@@ -1704,20 +1704,20 @@ impl ResolveContext {
     }
 }
 
-/// Resolve one [`Role`] against `bg` under `vc`, using `table`'s recipe.
+/// Resolve one `Role` against `bg` under `vc`, using `table`'s recipe.
 ///
 /// Polarity is chosen from the background (WCAG-first, see the module docs), so
 /// the same role resolves on light or dark backgrounds. Returns:
 ///
 /// * [`Resolved::Color`] — the solved colour for a text/UI or decorative role;
-/// * [`Resolved::None`] — for the [`Role::None`] zero token;
+/// * [`Resolved::None`] — for the `Role::None` zero token;
 /// * [`Resolved::Unreachable`] — when no colour can meet the role's contract on
 ///   this background (an extreme background, never a silent clip).
 ///
 /// This solves the single role in isolation. The `compressed` flag has two
 /// independent sources, and only one is suppressed here:
 /// * **Hierarchy compression** is a *set* property — a role squeezed against its
-///   senior's target — and is raised only by [`resolve_set`], which sees a
+///   senior's target — and is raised only by `resolve_set`, which sees a
 ///   role's seniors. In isolation it is therefore never set.
 /// * **dJ'-path degradation** is a *single-role* property: a decorative dJ' role
 ///   ([`RoleSpec::DecorativeDj`]) whose magnitude target is unreachable degrades
@@ -1745,7 +1745,7 @@ pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditio
 /// `table` and resolves that recipe. Keeping the recipe-driven physics in
 /// [`resolve_spec_in`] is the dependency-inversion seam — the config layer
 /// ([`NamedRoleTable`]) resolves the *same* recipe against the *same* physics
-/// without knowing about the [`Role`] enum, and the golden [`Role`] path stays a
+/// without knowing about the `Role` enum, and the golden `Role` path stays a
 /// byte-for-byte-equivalent wrapper.
 #[cfg(test)]
 fn resolve_in(
@@ -1761,9 +1761,9 @@ fn resolve_in(
 /// Resolve one [`RoleSpec`] against `bg` under an already-derived
 /// [`ResolveContext`], applying `chroma` as the undertone policy.
 ///
-/// This is the physics core the two front doors share: the [`Role`]-keyed
+/// This is the physics core the two front doors share: the `Role`-keyed
 /// [`resolve_in`] and the string-keyed [`resolve_named_set`]. It takes a `&RoleSpec`
-/// directly — not a [`Role`] — so a caller that names roles with arbitrary strings
+/// directly — not a `Role` — so a caller that names roles with arbitrary strings
 /// (the consumer config) resolves them through the identical code path as the
 /// built-in table. Nothing about the physics changes; only *where the recipe comes
 /// from* differs, which is exactly the seam ADR-0001 opens.
@@ -1955,7 +1955,7 @@ fn resolve_rgba_direct(
 /// * `compressed` — юр. пол уровня перекрыл перцептивную цель
 ///   ([`Solved::floor_override`]): контракт занят ближайшим легальным, не точным;
 /// * `hue_vanished` — на решённой светлоте красочность `M'` цвета упала ниже
-///   [`TINT_PERCEPTIBLE_MP_FLOOR`]: у краёв кривой (почти-белый/чёрный) хрома
+///   `TINT_PERCEPTIBLE_MP_FLOOR`: у краёв кривой (почти-белый/чёрный) хрома
 ///   физически → 0, лейбл фактически потерял цвет — объявлено флагом.
 fn resolve_hued_anchor(
     bg: &BgInput,
@@ -2302,7 +2302,7 @@ fn solved_oklab_lightness(solved: &Solved) -> f64 {
     }
 }
 
-/// Resolve every [`Role`] in [`Role::ALL`] against `bg` in one sweep, in strict
+/// Resolve every `Role` in [`Role::ALL`] against `bg` in one sweep, in strict
 /// visual-weight order (strongest text first, then decorative, then the zero
 /// token). The returned pairs preserve that order, so a consumer can read the
 /// hierarchy off the sequence and a serialiser emits stable output.
@@ -2332,7 +2332,7 @@ pub fn resolve_set(
     resolve_set_live(bg, table, vc)
 }
 
-/// The full solver sweep behind [`resolve_set`] — the built-in byte-identity
+/// The full solver sweep behind `resolve_set` — the built-in byte-identity
 /// oracle for the named path. Always recomputes.
 #[cfg(test)]
 pub(crate) fn resolve_set_live(
@@ -2355,18 +2355,18 @@ pub(crate) fn resolve_set_live(
 }
 
 /// A recipe table keyed by **arbitrary string names**, the config-layer analogue
-/// of [`RoleTable`].
+/// of `RoleTable`.
 ///
-/// Where [`RoleTable`] carries the fixed v1 [`Role`] enum, `NamedRoleTable` carries
+/// Where `RoleTable` carries the fixed v1 `Role` enum, `NamedRoleTable` carries
 /// whatever role *names* a consumer's [`ThemeConfig`](crate::config::ThemeConfig)
 /// declares — the engine knows none of them. It is built from a config via
 /// [`from_config`](crate::config::ThemeConfig::compile_named_role_table) and
-/// resolved by [`resolve_named_set`]. The physics is identical to [`RoleTable`]'s:
+/// resolved by [`resolve_named_set`]. The physics is identical to `RoleTable`'s:
 /// each entry is the same [`RoleSpec`] the built-in path solves, and the same
 /// [`RoleChroma`] undertone applies to the whole table.
 ///
-/// Text ladders are compressed honestly by [`enforce_named_text_hierarchy`], the
-/// string-keyed analogue of [`enforce_text_hierarchy`]: a ladder is read off the
+/// Text ladders are compressed honestly by `enforce_named_text_hierarchy`, the
+/// string-keyed analogue of `enforce_text_hierarchy`: a ladder is read off the
 /// config (a declaration-order run of strictly-descending [`Anchor`](RoleSpec::Anchor)
 /// roles), not off role names, so an arbitrary consumer table degrades a squeezed
 /// mid-grey exactly as the built-in table does instead of silently collapsing two
@@ -2385,7 +2385,7 @@ impl RoleSpec {
     /// несёт пол своего [`TextAnchor`] (AaText → 4.5, AaUi → 3.0), все
     /// остальные формы (декоративные, dJ', лестница, альфа-аналог, zero) —
     /// без легального пола. Одна семантика для обеих таблиц
-    /// ([`RoleTable::legal_floor`] и string-keyed границы).
+    /// (`RoleTable::legal_floor` и string-keyed границы).
     pub fn legal_floor(&self) -> Option<f64> {
         match self {
             RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
@@ -2430,18 +2430,18 @@ impl NamedRoleTable {
 }
 
 /// Resolve every named role in `table` against `bg` under `vc`, in declaration
-/// order — the string-keyed sibling of [`resolve_set`].
+/// order — the string-keyed sibling of `resolve_set`.
 ///
-/// Each `(name, recipe)` pair resolves through the very same [`resolve_spec_in`]
-/// physics core the built-in [`resolve_set`] uses, so a config whose recipes match
+/// Each `(name, recipe)` pair resolves through the very same `resolve_spec_in`
+/// physics core the built-in `resolve_set` uses, so a config whose recipes match
 /// the built-in table emits byte-for-byte identical colours (the byte-identity
 /// guarantee ADR-0001 requires of the labui fixture). The returned pairs preserve
 /// declaration order so a serialiser emits stable output.
 ///
-/// Unlike [`resolve_set`], this takes no O(1) grey/chromatic fast path (those are
+/// Unlike `resolve_set`, this takes no O(1) grey/chromatic fast path (those are
 /// keyed on the built-in default table); it is the honest live sweep for an
 /// arbitrary table, followed by the same honest hierarchy-compression pass
-/// ([`enforce_named_text_hierarchy`]) applied to every declared text ladder.
+/// (`enforce_named_text_hierarchy`) applied to every declared text ladder.
 pub fn resolve_named_set(
     bg: &BgInput,
     table: &NamedRoleTable,

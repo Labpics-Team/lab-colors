@@ -53,6 +53,38 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  docs:
+    name: cargo doc (intra-doc links)
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
+          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo doc
+        # Intra-doc links are a hard gate: a broken [`link`] in any doc comment
+        # (link to a private/renamed/removed item, or bare brackets rustdoc reads
+        # as a link) fails the build. RUSTDOCFLAGS="-D warnings" promotes every
+        # rustdoc warning — including broken_intra_doc_links — to an error;
+        # --no-deps keeps the gate on our own crates only. This stops a stale doc
+        # reference from merging silently (main was green with ~81 broken links
+        # because cargo doc was never gated — #26).
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
   test:
     name: test
     runs-on: [self-hosted, Linux, X64]

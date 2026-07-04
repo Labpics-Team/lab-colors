@@ -393,7 +393,7 @@ fn jp_to_oklab_l_bisect(jp: f64, vc: &ViewingConditions) -> f64 {
 
 /// Benchmark-only access to the two grey-axis J' → Oklab L implementations.
 ///
-/// Wraps the module-private analytic [`jp_to_oklab_l`] and the bisection oracle
+/// Wraps the module-private analytic `jp_to_oklab_l` and the bisection oracle
 /// so the `benches/jp_inv.rs` Criterion harness can compare them head-to-head.
 /// Hidden from the rendered docs and not part of the supported public surface —
 /// production callers reach this only through [`AccentCurve::at`].
