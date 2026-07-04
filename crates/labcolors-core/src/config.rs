@@ -1159,7 +1159,7 @@ impl ThemeConfig {
     /// физикой, что и встроенную `crate::RoleTable`.
     ///
     /// Пресет наполняется первым ([`with_preset_expanded`](Self::with_preset_expanded)),
-    /// затем структурная фаза ([`validate_syntactic`](Self::validate_syntactic)) и
+    /// затем структурная фаза (приватный `validate_syntactic` — потому не линк) и
     /// деривационные ошибки по ходу компиляции (снаружи все фазы разом —
     /// [`validate`](Self::validate), который и есть эта компиляция с отброшенным
     /// результатом; НЕ вызывать её из фаз — рекурсия). [`Ladder`](RoleRecipe::Ladder)
