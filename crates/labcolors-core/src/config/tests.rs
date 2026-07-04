@@ -393,6 +393,69 @@ fn chroma_fraction_out_of_bounds_is_rejected() {
     assert_eq!(at.validate(), Ok(()));
 }
 
+/// Class-B differential-регресс: живость ПРОВОДКИ `sentiments.chroma_fraction`.
+///
+/// # Закрываемая дыра (диагноз debugger 2026-07-04)
+///
+/// Поле `config.sentiments.chroma_fraction` ЖИВОЕ — долетает до эмитируемого
+/// байта: `resolve_config_sentiment_solid_among` передаёт его в
+/// `sentiment::capped_chroma` = `min(c_якоря, f · C_max(L, h))` (анти-неоновый
+/// потолок). Но валидатор (`chroma_fraction_out_of_bounds_is_rejected`) проверяет
+/// лишь ГРАНИЦЫ, а байт-в-байт golden упражняет фикстуру с `chroma_fraction = 1.0`,
+/// при котором на якорях labui потолок ВЫРОЖДАЕТСЯ в no-op (`min(c, 1·C_max) = c`)
+/// → эффект ручки не эмитируется. Значит регресс к ИНЕРТНОСТИ (константа вместо
+/// поля в проводке ИЛИ игнор параметра `fraction` в `capped_chroma`) прошёл бы
+/// ВСЕ существующие гейты зелёным. Этот тест пинает саму проводку.
+///
+/// # Differential-механизм
+///
+/// Один паспорт (`labui_reference`), одна НАСЫЩЕННАЯ сентимент-роль — danger,
+/// якорь `#FF3B30` (`c_якоря > 0.88·C_max`, потолок реально кусается), три
+/// значения `chroma_fraction`. Доля меняет ТОЛЬКО ось хромы: `resolved_hue` и
+/// `L` от неё не зависят, поэтому `C_max(L, h)` общий для всех трёх прогонов →
+/// потолок обязан дать строгий порядок `chroma(0.5) < chroma(0.88)` и no-op на
+/// границе `chroma(1.0) = c_якоря`. Инертная проводка уравнивает три хромы —
+/// строгие `<` падают (см. RED-proof в PR-описании).
+#[test]
+fn chroma_fraction_wiring_bites_on_a_saturated_sentiment_anchor() {
+    // Насыщенный danger-солид под условия светлой темы (якорь #FF3B30).
+    let vc = ViewingConditions::srgb();
+    let danger_chroma_at = |fraction: f64| -> f64 {
+        let mut cfg = labui_reference();
+        cfg.sentiments.chroma_fraction = fraction;
+        let tint = cfg
+            .compile_sentiment_tint("diff-probe", "danger")
+            .expect("danger компилируется при валидной доле хромы");
+        let hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
+        oklab_chroma_of_hex(&hex)
+    };
+
+    let c_050 = danger_chroma_at(0.50);
+    let c_088 = danger_chroma_at(0.88);
+    let c_100 = danger_chroma_at(1.00);
+
+    // Ручка кусается: строго меньшая доля → строго меньшая выходная хрома.
+    assert!(
+        c_050 < c_088,
+        "проводка chroma_fraction ИНЕРТНА: доля 0.50 дала хрому {c_050:.4}, \
+         не строго меньше доли 0.88 ({c_088:.4}) — потолок не долетел до выхода"
+    );
+    assert!(
+        c_088 < c_100,
+        "проводка chroma_fraction ИНЕРТНА: доля 0.88 дала хрому {c_088:.4}, \
+         не строго меньше доли 1.00 ({c_100:.4})"
+    );
+
+    // Граница: доля 1.0 = no-op (потолок на стене гамута) ⇒ выходная хрома ==
+    // хроме сырого якоря #FF3B30 (в пределах 8-бит квантизации эмиссии).
+    let anchor_chroma = oklab_chroma_of_hex("#FF3B30");
+    assert!(
+        (c_100 - anchor_chroma).abs() < 0.02 * anchor_chroma,
+        "доля 1.0 обязана быть no-op: выходная хрома {c_100:.4} разошлась с \
+         сырым якорем #FF3B30 ({anchor_chroma:.4}) больше 2%"
+    );
+}
+
 #[test]
 fn hue_floor_out_of_range_is_rejected() {
     let mut over = labui_reference();
