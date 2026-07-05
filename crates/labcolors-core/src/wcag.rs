@@ -42,16 +42,21 @@ pub(crate) fn relative_luminance(srgb: [f64; 3]) -> f64 {
     0.2126 * linearise(srgb[0]) + 0.7152 * linearise(srgb[1]) + 0.0722 * linearise(srgb[2])
 }
 
+/// The `[1, 21]` WCAG ratio of two relative luminances:
+/// `(L_lighter + 0.05) / (L_darker + 0.05)`. Split out so both the gamma-encoded
+/// path ([`contrast_ratio`]) and the linear-grid fast path share one formula.
+pub(crate) fn ratio_from_luminances(la: f64, lb: f64) -> f64 {
+    let (lighter, darker) = if la >= lb { (la, lb) } else { (lb, la) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
 /// WCAG 2.1 contrast ratio between two gamma-encoded sRGB colours, in `[1, 21]`.
 ///
 /// `(L_lighter + 0.05) / (L_darker + 0.05)`. Symmetric and polarity-agnostic by
 /// construction — unlike the signed perceptual LPC metric, which is why the two
 /// numbers are reported separately and never folded into one.
 pub(crate) fn contrast_ratio(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let la = relative_luminance(a);
-    let lb = relative_luminance(b);
-    let (lighter, darker) = if la >= lb { (la, lb) } else { (lb, la) };
-    (lighter + 0.05) / (darker + 0.05)
+    ratio_from_luminances(relative_luminance(a), relative_luminance(b))
 }
 
 #[cfg(test)]
@@ -107,5 +112,23 @@ mod tests {
             (r - 4.48).abs() < 0.05,
             "#777777 on white should be ~4.48:1, got {r}"
         );
+    }
+
+    /// `contrast_ratio` still equals its inlined `(L+0.05)/(L+0.05)` form after
+    /// being refactored to delegate to [`ratio_from_luminances`] — a byte-for-byte
+    /// guard that the split introduced no arithmetic change.
+    #[test]
+    fn contrast_ratio_matches_inlined_formula() {
+        for &(a, b) in &[
+            ([1.0, 1.0, 1.0], [0.0, 0.0, 0.0]),
+            ([0.42, 0.13, 0.77], [0.10, 0.20, 0.30]),
+            ([0.03, 0.5, 0.9], [0.9, 0.5, 0.03]),
+        ] {
+            let la = relative_luminance(a);
+            let lb = relative_luminance(b);
+            let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+            let inlined = (hi + 0.05) / (lo + 0.05);
+            assert_eq!(contrast_ratio(a, b).to_bits(), inlined.to_bits());
+        }
     }
 }
