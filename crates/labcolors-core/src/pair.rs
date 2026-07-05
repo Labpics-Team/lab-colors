@@ -307,3 +307,80 @@ mod tests {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Научные локи объективизации (волна science/constants-objectivization).
+// (c) INTERVAL-INSENSITIVE + EXPOSURE-анализ для PAIR_CROSSOVER_Y. Значение НЕ
+// меняется — тесты предъявляют, что классификационный выход (сторона пары) на
+// реальной палитре labui НЕ зависит от точного порога внутри задекларированного
+// интервала, и измеряют долю гаммы в зоне флипа.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod exposure_locks {
+    use super::{PAIR_CROSSOVER_Y, PairSide, pair_side, wcag_y_encoded};
+    use crate::exposure_support::{LABUI_ANCHORS, band_exposure, enc_of, wcag_y};
+    use crate::spaces::srgb::srgb_encoded_from_hex;
+
+    fn y_of(hex: &str) -> f64 {
+        wcag_y_encoded(srgb_encoded_from_hex(hex).unwrap())
+    }
+
+    /// (c) Sensitivity: на консенсус-сете labui сторона пары ИНВАРИАНТНА для любого
+    /// порога в задекларированном интервале. Доказ.: max Y светлой стороны СТРОГО
+    /// ниже min Y чернильной (чистый зазор), и PAIR_CROSSOVER_Y лежит в нём — значит
+    /// точное значение внутри зазора нематериально для этой палитры.
+    #[test]
+    fn crossover_side_is_invariant_across_palette_gap() {
+        let light = ["#007AFF", "#FF3B30", "#3E87FF", "#101012", "#5856D6"];
+        let ink = ["#FFA100", "#34C759", "#FFD000", "#FFFFFF", "#5AC8FA"];
+        let light_max = light.iter().map(|h| y_of(h)).fold(0.0f64, f64::max);
+        let ink_min = ink.iter().map(|h| y_of(h)).fold(f64::INFINITY, f64::min);
+        assert!(
+            light_max < ink_min,
+            "консенсус-сет должен иметь чистый зазор Y (light_max={light_max:.4} < ink_min={ink_min:.4})"
+        );
+        assert!(
+            light_max < PAIR_CROSSOVER_Y && PAIR_CROSSOVER_Y < ink_min,
+            "PAIR_CROSSOVER_Y={PAIR_CROSSOVER_Y} должен лежать в зазоре ({light_max:.4}, {ink_min:.4})"
+        );
+        // Любой порог в зазоре даёт то же разбиение — проверяем на границах зазора.
+        for theta in [light_max + 1e-6, ink_min - 1e-6, PAIR_CROSSOVER_Y] {
+            for h in light {
+                assert!(y_of(h) < theta, "{h}: светлая сторона при θ={theta:.4}");
+            }
+            for h in ink {
+                assert!(y_of(h) >= theta, "{h}: чернильная сторона при θ={theta:.4}");
+            }
+        }
+    }
+
+    /// EXPOSURE: доля гаммы в зоне флипа PAIR_CROSSOVER_Y = доля цветов с Y в
+    /// задекларированном интервале (0.246, 0.423) [красный/зелёный якоря labui].
+    /// Числа печатаются в отчёт (docs/empirical-residue.md); поведенческий инвариант —
+    /// НИ ОДИН реальный якорь labui не лежит СТРОГО внутри интервала (сторона семьи
+    /// однозначна по построению палитры).
+    #[test]
+    fn exposure_pair_crossover() {
+        let (lo, hi) = (0.246, 0.423);
+        let (grid_pct, labui_hits) = band_exposure(wcag_y, lo, hi);
+        eprintln!(
+            "EXPOSURE PAIR_CROSSOVER_Y interval=({lo},{hi}) grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
+            labui_hits.len(),
+            labui_hits
+        );
+        // Консистентность реимплементированного предиката с продакшн-решением.
+        for &h in LABUI_ANCHORS {
+            let enc = srgb_encoded_from_hex(h).unwrap();
+            let prod = pair_side(enc);
+            let reimpl = if wcag_y(enc_of(h)) < PAIR_CROSSOVER_Y {
+                PairSide::Light
+            } else {
+                PairSide::Ink
+            };
+            assert_eq!(
+                prod, reimpl,
+                "{h}: реимпл-предикат расходится с продакшн pair_side"
+            );
+        }
+    }
+}

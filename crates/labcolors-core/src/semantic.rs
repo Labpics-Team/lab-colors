@@ -5875,3 +5875,78 @@ mod derivator_locks {
         );
     }
 }
+
+// EXPOSURE-анализ (волна science/constants-objectivization) для чувствительных
+// констант semantic.rs: доля входа, где точное значение меняет классификационное
+// решение. Продакшн НЕ трогается.
+#[cfg(test)]
+mod exposure_locks {
+    use super::{
+        DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR,
+    };
+    use crate::exposure_support::{band_exposure, mp_srgb};
+
+    /// EXPOSURE TINT_PERCEPTIBLE_MP_FLOOR: доля гаммы с M' в +-50% полосе вокруг
+    /// порога перцептируемости тинта — цвета, чья классификация «ощущаемый тон vs
+    /// мёртвая серость» зависит от точного значения.
+    #[test]
+    fn exposure_tint_perceptible_mp_floor() {
+        let (lo, hi) = (
+            0.5 * TINT_PERCEPTIBLE_MP_FLOOR,
+            1.5 * TINT_PERCEPTIBLE_MP_FLOOR,
+        );
+        let (grid_pct, labui) = band_exposure(|c| mp_srgb(c, false), lo, hi);
+        eprintln!(
+            "EXPOSURE TINT_PERCEPTIBLE_MP_FLOOR band=[{lo:.2},{hi:.2}] grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
+            labui.len(),
+            labui
+        );
+    }
+
+    /// EXPOSURE STRICT_STEP: доля соседних Lc-шагов 8-бит серой сетки в +-20% полосе
+    /// вокруг границы квантования — где точный STRICT_STEP решает «на сетке / нет».
+    #[test]
+    fn exposure_strict_step() {
+        let greys: Vec<f64> = (0u16..=255)
+            .map(|i| crate::lpc::lpc(&format!("#{i:02X}{i:02X}{i:02X}", i = i as u8), "#FFFFFF"))
+            .collect();
+        let (lo, hi) = (0.8 * STRICT_STEP, 1.2 * STRICT_STEP);
+        let (mut hits, mut tot) = (0usize, 0usize);
+        for w in greys.windows(2) {
+            let s = (w[1] - w[0]).abs();
+            if s >= lo && s < hi {
+                hits += 1;
+            }
+            tot += 1;
+        }
+        eprintln!(
+            "EXPOSURE STRICT_STEP band=[{lo:.2},{hi:.2}] step_flip={:.2}%",
+            100.0 * hits as f64 / tot as f64
+        );
+    }
+
+    /// EXPOSURE декоративных полов: доля декоративного Lc-диапазона [0,30], чьё
+    /// значение флипает «зажат полом / нет», пока пол ходит в +-25% полосе. Раздельно
+    /// для обычного (7.5) и -ic (15.0) порогов.
+    #[test]
+    fn exposure_decorative_floors() {
+        let frac = |floor: f64| {
+            let (lo, hi) = (0.75 * floor, 1.25 * floor);
+            let (mut hits, mut tot) = (0usize, 0usize);
+            let mut t = 0.0;
+            while t <= 30.0 {
+                if t >= lo && t < hi {
+                    hits += 1;
+                }
+                tot += 1;
+                t += 0.05;
+            }
+            100.0 * hits as f64 / tot as f64
+        };
+        eprintln!(
+            "EXPOSURE DECORATIVE_FLOOR_MIN(7.5) range_flip={:.2}% | IC_DECORATIVE_FLOOR_MIN(15.0) range_flip={:.2}%",
+            frac(DECORATIVE_FLOOR_MIN),
+            frac(IC_DECORATIVE_FLOOR_MIN)
+        );
+    }
+}

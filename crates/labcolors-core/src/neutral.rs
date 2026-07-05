@@ -619,3 +619,81 @@ mod tests {
         assert!((lerp_angle(350.0, 10.0, 1.0).rem_euclid(360.0) - 10.0).abs() < 1e-9);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Научные локи + EXPOSURE (волна science/constants-objectivization).
+// ACHROMATIC_MP_THRESHOLD: (c) INTERVAL-INSENSITIVE — порог ловит модельный M'-шум
+// CAM16 в ШИРОКОМ пустом зазоре между потолком шума ахроматических серых и полом
+// хромы подлинно цветных якорей. Значение НЕ меняется.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod exposure_locks {
+    use super::ACHROMATIC_MP_THRESHOLD;
+    use crate::exposure_support::{band_exposure, mp_srgb};
+    use crate::lcs::LcsColor;
+    use crate::spaces::vc::ViewingConditions;
+
+    fn grey_mp_ceiling() -> f64 {
+        let mut m = 0.0f64;
+        for i in 0u16..=255 {
+            let hex = format!("#{i:02X}{i:02X}{i:02X}", i = i as u8);
+            m = m.max(LcsColor::from_hex(&hex).unwrap().mp());
+            m = m.max(
+                LcsColor::from_hex_with_vc(&hex, &ViewingConditions::dim_surround())
+                    .unwrap()
+                    .mp(),
+            );
+        }
+        m
+    }
+
+    /// (c) Порог сидит в ПУСТОМ зазоре (потолок ахроматического M'-шума, пол хромы
+    /// цветных якорей) — партиция achromatic↔chromatic инвариантна для любого θ в
+    /// зазоре, значит точное значение нематериально.
+    #[test]
+    fn achromatic_threshold_sits_in_empty_noise_to_chroma_gap() {
+        let ceiling = grey_mp_ceiling();
+        let chromatic = [
+            "#FF3B30", "#34C759", "#007AFF", "#FFD000", "#5856D6", "#FF9500", "#AF52DE", "#5AC8FA",
+        ];
+        let chroma_floor = chromatic
+            .iter()
+            .map(|h| LcsColor::from_hex(h).unwrap().mp())
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            ceiling < ACHROMATIC_MP_THRESHOLD && ACHROMATIC_MP_THRESHOLD < chroma_floor,
+            "порог {ACHROMATIC_MP_THRESHOLD} должен лежать в зазоре (шум серых {ceiling:.3}, хрома цветных {chroma_floor:.3})"
+        );
+        // Инвариантность партиции: для θ на обеих границах зазора серые остаются
+        // ахроматическими, цветные — хроматическими.
+        for theta in [ceiling + 1e-3, chroma_floor - 1e-3, ACHROMATIC_MP_THRESHOLD] {
+            for i in [0u8, 64, 128, 192, 255] {
+                let hex = format!("#{i:02X}{i:02X}{i:02X}");
+                assert!(
+                    LcsColor::from_hex(&hex).unwrap().mp() < theta,
+                    "grey {hex} achromatic @θ={theta:.3}"
+                );
+            }
+            for h in chromatic {
+                assert!(
+                    LcsColor::from_hex(h).unwrap().mp() >= theta,
+                    "{h} chromatic @θ={theta:.3}"
+                );
+            }
+        }
+    }
+
+    /// EXPOSURE: доля гаммы с M' в полосе флипа [потолок_шума, 2×порог] — цвета,
+    /// чья ахроматическая классификация зависит от точного порога.
+    #[test]
+    fn exposure_achromatic_mp_threshold() {
+        let ceiling = grey_mp_ceiling();
+        let (lo, hi) = (ceiling, 2.0 * ACHROMATIC_MP_THRESHOLD);
+        let (grid_pct, labui) = band_exposure(|c| mp_srgb(c, false), lo, hi);
+        eprintln!(
+            "EXPOSURE ACHROMATIC_MP_THRESHOLD band=[{lo:.3},{hi:.3}] grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
+            labui.len(),
+            labui
+        );
+    }
+}
