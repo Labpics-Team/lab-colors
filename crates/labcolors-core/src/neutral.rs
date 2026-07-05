@@ -21,6 +21,9 @@ const HUE_PURITY_MP_REF_RATIO: f64 = 1.5;
 // SSOT-TRACKED — показатель кривой чистоты оттенка (калибровочный), см. docs/empirical-inventory.md.
 const HUE_PURITY_EXPONENT: f64 = 0.6;
 
+/// Форм-параметры нейтральной кривой: гаммы светлотных ветвей и позиция пика
+/// хромы. Раздельные гаммы — потому что восприятие шага светлоты асимметрично
+/// относительно базы: светлая ветвь требует более плотного шага у якоря.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurveParams {
     pub gamma_light: f64,
@@ -46,6 +49,12 @@ impl Default for CurveParams {
     }
 }
 
+/// Нейтральная (серо-осевая) кривая по трём якорям: светлый → базовый → тёмный.
+///
+/// Светлота ведётся гамма-ветвями (`CurveParams`), хрома — C1-огибающей
+/// (`chroma_envelope`), оттенок — покоем у базы с purity-коррекцией шумных
+/// концов (`hue_purity`). `at()` — примитив каждого шага построения лестницы,
+/// поэтому все t-инвариантные величины предвычислены в конструкторе.
 #[derive(Debug, Clone)]
 pub struct NeutralCurve {
     a_light: LcsColor,
@@ -53,6 +62,14 @@ pub struct NeutralCurve {
     a_dark: LcsColor,
     h_ok_base: f64,
     h_cam_base: f64,
+    // Purity-скорректированные оттенки концов кривой. Они не зависят от t,
+    // а их пересчёт в каждом `at()` стоил 4×powf на сэмпл (hue_purity для
+    // двух якорей в двух hue-пространствах). Предвычисление в with_vc даёт
+    // бит-идентичный результат: те же операции над теми же входами, один раз.
+    h_ok_light_eff: f64,
+    h_ok_dark_eff: f64,
+    h_cam_light_eff: f64,
+    h_cam_dark_eff: f64,
     params: CurveParams,
     vc: ViewingConditions,
 }
@@ -69,6 +86,8 @@ impl NeutralCurve {
         )
     }
 
+    /// Как [`NeutralCurve::new`], но с нестандартными форм-параметрами
+    /// (например, из `labui.config`), viewing conditions — стандартные sRGB.
     pub fn with_params(
         light: &str,
         base: &str,
@@ -121,20 +140,43 @@ impl NeutralCurve {
             a_dark
         };
 
+        // Эффективные оттенки концов: шумный hue near-ахроматического якоря
+        // подтягивается к базовому пропорционально его хроматической чистоте
+        // (см. `hue_purity`). mp_ref = 1.5×M' базы — база сохраняет почти весь
+        // свой оттенок, near-серые концы корректируются сильно. Считается здесь,
+        // а не в `at()`: величины t-инвариантны, а `at()` — горячий путь.
+        let mp_ref = a_base.mp() * HUE_PURITY_MP_REF_RATIO;
+        let purity_light = hue_purity(a_light.mp(), mp_ref);
+        let purity_dark = hue_purity(a_dark.mp(), mp_ref);
+        let h_ok_light_eff = lerp_angle(h_ok_base, a_light.h_ok, purity_light);
+        let h_ok_dark_eff = lerp_angle(h_ok_base, a_dark.h_ok, purity_dark);
+        let h_cam_light_eff = lerp_angle(h_cam_base, a_light.h_cam(), purity_light);
+        let h_cam_dark_eff = lerp_angle(h_cam_base, a_dark.h_cam(), purity_dark);
+
         Ok(Self {
             a_light,
             a_base,
             a_dark,
             h_ok_base,
             h_cam_base,
+            h_ok_light_eff,
+            h_ok_dark_eff,
+            h_cam_light_eff,
+            h_cam_dark_eff,
             params: *params,
             vc: *vc,
         })
     }
 
+    /// Точка кривой при `t ∈ [0, 1]`: 0 — светлый якорь, 0.5 — базовый,
+    /// 1 — тёмный.
     pub fn at(&self, t: f64) -> LcsColor {
         let t = t.clamp(0.0, 1.0);
 
+        // Снап к якорям в пределах 1e-12: гарантирует байт-точное
+        // воспроизведение входных hex-якорей на концах и в базе — иначе
+        // накопленная FP-погрешность интерполяции могла бы сдвинуть
+        // квантованный выход на единицу канала.
         if (t - 0.0).abs() < 1e-12 {
             return self.a_light;
         }
@@ -176,6 +218,8 @@ impl NeutralCurve {
         LcsColor::new(jp, h_ok, s, h_cam)
     }
 
+    /// `n` равноотстоящих точек кривой, концы включительно; `n == 1` даёт
+    /// базовый якорь (t = 0.5) — середина полезнее произвольного конца.
     pub fn sample(&self, n: usize) -> Vec<LcsColor> {
         if n == 0 {
             return Vec::new();
@@ -186,6 +230,8 @@ impl NeutralCurve {
         (0..n).map(|i| self.at(i as f64 / (n - 1) as f64)).collect()
     }
 
+    /// Как [`NeutralCurve::sample`], но сразу в hex через viewing conditions
+    /// кривой — чтобы вызывающий не мог случайно сконвертировать под чужие VC.
     pub fn sample_hex(&self, n: usize) -> Vec<String> {
         self.sample(n)
             .iter()
@@ -210,50 +256,23 @@ impl NeutralCurve {
         &self.a_dark
     }
 
+    // Обе hue-дорожки (Oklab h_ok и CAM16 h_cam) ведутся параллельно одной
+    // схемой: конец → база → конец по кратчайшей дуге. Концы — предвычисленные
+    // purity-скорректированные поля (см. with_vc).
     fn interpolate_hue_ok(&self, t: f64) -> f64 {
-        let h_start = self.hue_or(&self.a_light, self.h_ok_base);
-        let h_end = self.hue_or(&self.a_dark, self.h_ok_base);
-
         if t <= 0.5 {
-            let u = t / 0.5;
-            lerp_angle(h_start, self.h_ok_base, u)
+            lerp_angle(self.h_ok_light_eff, self.h_ok_base, t / 0.5)
         } else {
-            let u = (t - 0.5) / 0.5;
-            lerp_angle(self.h_ok_base, h_end, u)
+            lerp_angle(self.h_ok_base, self.h_ok_dark_eff, (t - 0.5) / 0.5)
         }
     }
 
     fn interpolate_hue_cam(&self, t: f64) -> f64 {
-        let h_start = self.hue_or_cam(&self.a_light);
-        let h_end = self.hue_or_cam(&self.a_dark);
-
         if t <= 0.5 {
-            let u = t / 0.5;
-            lerp_angle(h_start, self.h_cam_base, u)
+            lerp_angle(self.h_cam_light_eff, self.h_cam_base, t / 0.5)
         } else {
-            let u = (t - 0.5) / 0.5;
-            lerp_angle(self.h_cam_base, h_end, u)
+            lerp_angle(self.h_cam_base, self.h_cam_dark_eff, (t - 0.5) / 0.5)
         }
-    }
-
-    fn hue_or(&self, anchor: &LcsColor, fallback: f64) -> f64 {
-        let mp_ref = self.mp_ref();
-        let purity = hue_purity(anchor.mp(), mp_ref);
-        lerp_angle(fallback, anchor.h_ok, purity)
-    }
-
-    fn hue_or_cam(&self, anchor: &LcsColor) -> f64 {
-        let mp_ref = self.mp_ref();
-        let purity = hue_purity(anchor.mp(), mp_ref);
-        lerp_angle(self.h_cam_base, anchor.h_cam(), purity)
-    }
-
-    /// Reference chroma for hue-purity normalisation.
-    ///
-    /// Set to 1.5× the base anchor's M' so that the base itself retains most
-    /// of its own hue while near-achromatic anchors are strongly corrected.
-    fn mp_ref(&self) -> f64 {
-        self.a_base.mp() * HUE_PURITY_MP_REF_RATIO
     }
 }
 
