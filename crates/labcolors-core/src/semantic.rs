@@ -2620,33 +2620,40 @@ pub fn measure_contrast(
 /// Each result equals what the solver's `finish` measured for that fg/bg pair, so
 /// a freshly-resolved set re-checks to its own reported contrasts. Returns `Err`
 /// if any hex is invalid (only `#RRGGBB` or bare `RRGGBB` is accepted).
+/// One colour's two recheck ingredients from its hex: the H-K luminance `y`
+/// (for the perceptual `Lc`) and the WCAG relative luminance `rl`.
+///
+/// SINGLE SOURCE OF TRUTH for the forward, shared by [`recheck_against`] and
+/// [`recheck_against_multi`] so they cannot drift — the byte-identity both
+/// functions promise now holds *by construction*, not by two copies staying in
+/// sync. Both hot-path economies live here:
+///   1. The WCAG display value is taken straight from the byte (`byte/255`) by
+///      `srgb_linear_and_display_from_hex`, so the per-channel `quantised_display`
+///      encode `powf` is gone — `byte/255 == quantised_display(decode(byte))`
+///      exactly (pinned in `spaces::srgb::display_equals_quantised_display_on_every_byte`).
+///   2. `y` and `rl` are both derived from one parse of the hex, no second decode.
+fn hex_forward(hex: &str, vc: &ViewingConditions) -> Result<(f64, f64), String> {
+    let (linear, disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(hex)?;
+    let y = crate::solve::bg_luma(linear, vc);
+    let rl = crate::wcag::relative_luminance(disp);
+    Ok((y, rl))
+}
+
 pub fn recheck_against(
     bg_hex: &str,
     fg_hexes: &[&str],
     vc: &ViewingConditions,
 ) -> Result<Vec<(f64, f64)>, String> {
-    let (bg_linear, bg_disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(bg_hex)?;
-    let y_bg = crate::solve::bg_luma(bg_linear, vc);
-    // WCAG side, two hot-path economies that are BOTH byte-identical to the old
-    // `contrast_ratio(quantised_display(fg), quantised_display(bg))`:
-    //   1. The display value comes straight from the byte (`byte/255`) via
-    //      `srgb_linear_and_display_from_hex`, so the per-channel `quantised_display`
-    //      encode `powf` is gone — `byte/255 == quantised_display(decode(byte))`
-    //      exactly (pinned in `spaces::srgb::display_equals_quantised_display_on_every_byte`).
-    //   2. The background's relative luminance is loop-invariant, so it is
-    //      linearised **once**, not re-linearised inside every foreground's
-    //      `contrast_ratio`.
-    // The remaining WCAG cost is one `relative_luminance` (the WCAG re-linearise)
-    // per colour, on the exact display value the solver measured.
-    let rl_bg = crate::wcag::relative_luminance(bg_disp);
+    // The background's forward is loop-invariant — computed once — and its WCAG
+    // relative luminance is therefore linearised once, not re-linearised inside
+    // every foreground's ratio. The remaining per-colour WCAG cost is a single
+    // `relative_luminance` on the exact display value the solver measured.
+    let (y_bg, rl_bg) = hex_forward(bg_hex, vc)?;
     fg_hexes
         .iter()
         .map(|fg_hex| {
-            let (fg_linear, fg_disp) =
-                crate::spaces::srgb::srgb_linear_and_display_from_hex(fg_hex)?;
-            let y_fg = crate::solve::bg_luma(fg_linear, vc);
+            let (y_fg, rl_fg) = hex_forward(fg_hex, vc)?;
             let lc = crate::lpc::contrast_core(y_fg, y_bg);
-            let rl_fg = crate::wcag::relative_luminance(fg_disp);
             let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
             Ok((lc, wcag))
         })
@@ -2674,24 +2681,17 @@ pub fn recheck_against_multi(
     fg_hexes: &[&str],
     vc: &ViewingConditions,
 ) -> Result<Vec<f64>, String> {
-    // Precompute each foreground's background-independent quantities exactly once
-    // (the same display-value economy as `recheck_against`).
+    // Precompute each foreground's background-independent forward exactly once,
+    // through the SAME `hex_forward` `recheck_against` uses — so the shared-forward
+    // path guarantees byte-identity between the two entry points by construction.
     let fg_pre: Vec<(f64, f64)> = fg_hexes
         .iter()
-        .map(|fg_hex| {
-            let (fg_linear, fg_disp) =
-                crate::spaces::srgb::srgb_linear_and_display_from_hex(fg_hex)?;
-            let y_fg = crate::solve::bg_luma(fg_linear, vc);
-            let rl_fg = crate::wcag::relative_luminance(fg_disp);
-            Ok((y_fg, rl_fg))
-        })
+        .map(|fg_hex| hex_forward(fg_hex, vc))
         .collect::<Result<_, String>>()?;
 
     let mut out = Vec::with_capacity(bg_hexes.len() * fg_hexes.len() * 2);
     for bg_hex in bg_hexes {
-        let (bg_linear, bg_disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(bg_hex)?;
-        let y_bg = crate::solve::bg_luma(bg_linear, vc);
-        let rl_bg = crate::wcag::relative_luminance(bg_disp);
+        let (y_bg, rl_bg) = hex_forward(bg_hex, vc)?;
         for &(y_fg, rl_fg) in &fg_pre {
             out.push(crate::lpc::contrast_core(y_fg, y_bg));
             out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
