@@ -2625,20 +2625,79 @@ pub fn recheck_against(
     fg_hexes: &[&str],
     vc: &ViewingConditions,
 ) -> Result<Vec<(f64, f64)>, String> {
-    let bg_linear = crate::spaces::srgb::srgb_from_hex(bg_hex)?;
+    let (bg_linear, bg_disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(bg_hex)?;
     let y_bg = crate::solve::bg_luma(bg_linear, vc);
-    let bg_disp = crate::solve::quantised_display(bg_linear);
+    // WCAG side, two hot-path economies that are BOTH byte-identical to the old
+    // `contrast_ratio(quantised_display(fg), quantised_display(bg))`:
+    //   1. The display value comes straight from the byte (`byte/255`) via
+    //      `srgb_linear_and_display_from_hex`, so the per-channel `quantised_display`
+    //      encode `powf` is gone — `byte/255 == quantised_display(decode(byte))`
+    //      exactly (pinned in `spaces::srgb::display_equals_quantised_display_on_every_byte`).
+    //   2. The background's relative luminance is loop-invariant, so it is
+    //      linearised **once**, not re-linearised inside every foreground's
+    //      `contrast_ratio`.
+    // The remaining WCAG cost is one `relative_luminance` (the WCAG re-linearise)
+    // per colour, on the exact display value the solver measured.
+    let rl_bg = crate::wcag::relative_luminance(bg_disp);
     fg_hexes
         .iter()
         .map(|fg_hex| {
-            let fg_linear = crate::spaces::srgb::srgb_from_hex(fg_hex)?;
+            let (fg_linear, fg_disp) =
+                crate::spaces::srgb::srgb_linear_and_display_from_hex(fg_hex)?;
             let y_fg = crate::solve::bg_luma(fg_linear, vc);
             let lc = crate::lpc::contrast_core(y_fg, y_bg);
-            let wcag =
-                crate::wcag::contrast_ratio(crate::solve::quantised_display(fg_linear), bg_disp);
+            let rl_fg = crate::wcag::relative_luminance(fg_disp);
+            let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
             Ok((lc, wcag))
         })
         .collect()
+}
+
+/// Multi-background recheck: the `(lc, wcag_ratio)` each foreground achieves
+/// against EACH of several background samples, sharing every foreground's CAM16
+/// forward across all samples. The reactive controller's worst-case loop rechecks
+/// the SAME foreground set against N backdrop samples (a gradient / image), and
+/// the dominant cost — one CAM16 forward per foreground — does not depend on the
+/// background, so it is wasted N−1 times when each sample is a separate
+/// [`recheck_against`] call. Here each foreground's `(y_fg, rl_fg)` is computed
+/// ONCE and reused for every sample; only the per-background luminances and the
+/// two cheap combine steps (`contrast_core`, `ratio_from_luminances`) repeat.
+///
+/// The result is **byte-identical**, pair for pair, to calling [`recheck_against`]
+/// once per background: the same float operations run in the same order, only the
+/// loop nesting is inverted so the foreground forward is hoisted. Layout is flat
+/// and background-major: entry `bg s`, foreground `i` is at
+/// `out[(s*fg_hexes.len() + i) * 2 + {0:lc, 1:wcag}]`. Returns `Err` on any
+/// invalid hex.
+pub fn recheck_against_multi(
+    bg_hexes: &[&str],
+    fg_hexes: &[&str],
+    vc: &ViewingConditions,
+) -> Result<Vec<f64>, String> {
+    // Precompute each foreground's background-independent quantities exactly once
+    // (the same display-value economy as `recheck_against`).
+    let fg_pre: Vec<(f64, f64)> = fg_hexes
+        .iter()
+        .map(|fg_hex| {
+            let (fg_linear, fg_disp) =
+                crate::spaces::srgb::srgb_linear_and_display_from_hex(fg_hex)?;
+            let y_fg = crate::solve::bg_luma(fg_linear, vc);
+            let rl_fg = crate::wcag::relative_luminance(fg_disp);
+            Ok((y_fg, rl_fg))
+        })
+        .collect::<Result<_, String>>()?;
+
+    let mut out = Vec::with_capacity(bg_hexes.len() * fg_hexes.len() * 2);
+    for bg_hex in bg_hexes {
+        let (bg_linear, bg_disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(bg_hex)?;
+        let y_bg = crate::solve::bg_luma(bg_linear, vc);
+        let rl_bg = crate::wcag::relative_luminance(bg_disp);
+        for &(y_fg, rl_fg) in &fg_pre {
+            out.push(crate::lpc::contrast_core(y_fg, y_bg));
+            out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
+        }
+    }
+    Ok(out)
 }
 
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
@@ -3301,6 +3360,43 @@ mod tests {
         }
         // Invalid hex surfaces an Err, not a panic.
         assert!(recheck_against("#FFFFFF", &["nothex"], &ViewingConditions::srgb()).is_err());
+    }
+
+    #[test]
+    fn recheck_against_multi_is_byte_identical_to_per_bg_recheck() {
+        // The multi-background recheck (fg forwards shared across samples) must be
+        // byte-identical, pair for pair, to calling recheck_against once per
+        // background — only the loop nesting differs, never the arithmetic.
+        let table = RoleTable::default();
+        let bgs = ["#38383A", "#404042", "#2E2E30", "#FFFFFF", "#000000"];
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            // A representative foreground set: one solved theme's colours.
+            let seed = BgInput::solid("#3A3A3C").unwrap();
+            let set = resolve_set(&seed, &table, &vc);
+            let fg_hexes: Vec<&str> = set
+                .iter()
+                .filter_map(|(_, r)| r.solved().map(|s| s.hex()))
+                .collect();
+            let multi = recheck_against_multi(&bgs, &fg_hexes, &vc).unwrap();
+            assert_eq!(multi.len(), bgs.len() * fg_hexes.len() * 2);
+            for (s, bg) in bgs.iter().enumerate() {
+                let per = recheck_against(bg, &fg_hexes, &vc).unwrap();
+                for (i, (lc, wcag)) in per.iter().enumerate() {
+                    let base = (s * fg_hexes.len() + i) * 2;
+                    assert_eq!(multi[base].to_bits(), lc.to_bits(), "{bg}: fg {i} lc drift");
+                    assert_eq!(
+                        multi[base + 1].to_bits(),
+                        wcag.to_bits(),
+                        "{bg}: fg {i} wcag drift"
+                    );
+                }
+            }
+        }
+        // Invalid hex in either position surfaces an Err, not a panic.
+        assert!(
+            recheck_against_multi(&["#FFFFFF"], &["nothex"], &ViewingConditions::srgb()).is_err()
+        );
+        assert!(recheck_against_multi(&["bad"], &["#FFFFFF"], &ViewingConditions::srgb()).is_err());
     }
 
     /// The 12 mid-to-light nodes of the owner's reference neutral ramp (pure

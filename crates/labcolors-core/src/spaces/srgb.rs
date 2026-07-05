@@ -152,6 +152,30 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
     Ok([decode_8bit(r), decode_8bit(g), decode_8bit(b)])
 }
 
+/// Parse `#RRGGBB` → `(linear, display)` in one pass over the bytes: `linear`
+/// is the exact 8-bit decode (as [`srgb_from_hex`]), `display` is the
+/// **gamma-encoded** value WCAG measures — `[r/255, g/255, b/255]` — obtained
+/// **without** the encode `powf`, because the byte *is* the display code.
+///
+/// For a hex input this `display` equals `quantised_display(linear)`
+/// **bit-for-bit**: `quantised_display` computes `round(srgb_gamma(linear)·255)/255`,
+/// and `round(srgb_gamma(decode_8bit(b))·255) == b` for every byte (the 8-bit
+/// encode/decode round-trip, pinned exhaustively by
+/// `display_equals_quantised_display_on_every_byte`). So a caller that needs both
+/// the linear colour (for the CAM16/LPC forward) and the WCAG display value (for
+/// the contrast ratio) gets the display value for free — no `srgb_gamma` on the
+/// hot path — while staying byte-identical to the `quantised_display` path.
+pub(crate) fn srgb_linear_and_display_from_hex(hex: &str) -> Result<([f64; 3], [f64; 3]), String> {
+    let [r, g, b] = hex_bytes(hex)?;
+    let linear = [decode_8bit(r), decode_8bit(g), decode_8bit(b)];
+    let display = [
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
+    ];
+    Ok((linear, display))
+}
+
 /// Quantise linear sRGB to the 8-bit display grid and back to linear, exactly as
 /// `srgb_from_hex(hex_from_srgb(rgb))` would — same gamma encode, same per-channel
 /// round to `[0, 255]`, same gamma decode — but without allocating the hex string.
@@ -291,6 +315,32 @@ mod tests {
                 c.to_bits(),
                 "DECODE_8BIT[{b}] drifted: live {l} vs committed {c} — regenerate gamma_data.rs"
             );
+        }
+    }
+
+    #[test]
+    fn display_equals_quantised_display_on_every_byte() {
+        // The identity `srgb_linear_and_display_from_hex` stands on: for every
+        // 8-bit code, its `byte/255` display value equals `quantised_display` of
+        // the linear decode, bit-for-bit — so the recheck primitive can take the
+        // WCAG display value straight from the byte, skipping the encode `powf`,
+        // and stay byte-identical to the `quantised_display` path. Exhaustive
+        // over all 256 codes (the round in `quantised_display` snaps any 1-ULP
+        // encode wobble back onto the exact grid).
+        for byte in 0u16..=255 {
+            let b = byte as u8;
+            let hex = format!("#{b:02X}{b:02X}{b:02X}");
+            let (linear, display) = srgb_linear_and_display_from_hex(&hex).unwrap();
+            let quantised = crate::solve::quantised_display(linear);
+            for ch in 0..3 {
+                assert_eq!(
+                    display[ch].to_bits(),
+                    quantised[ch].to_bits(),
+                    "byte {b}: display {} != quantised_display {}",
+                    display[ch],
+                    quantised[ch]
+                );
+            }
         }
     }
 

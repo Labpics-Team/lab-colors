@@ -10,9 +10,9 @@
 //! entry by the config's own role name — so role growth flows through on a
 //! rebuild.
 
-use std::rc::Rc;
-
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
@@ -190,17 +190,20 @@ impl Engine {
         theme: Theme,
     ) -> Result<Vec<f64>, BindingError> {
         let vc = theme.viewing_conditions();
-        let bg = normalise_hex(bg_hex)?;
-        // Normalise foregrounds through the same parser as the background and
-        // `resolveTheme`, so the three entry points agree on what a valid hex is
-        // (`#RGB` shorthand, missing `#`, any case) instead of the core's
-        // stricter 6-digit-only parse rejecting a shorthand a resolve accepted.
-        let normalised: Vec<String> = fg_hexes
+        // Accept the same hex forms as the background and `resolveTheme` (`#RGB`
+        // shorthand, missing `#`, any case) — but on this per-frame primitive,
+        // BORROW the input when it is already a valid 6-hex-digit colour so the
+        // common case (already-canonical `#RRGGBB` role hexes) allocates nothing.
+        // Only `#RGB` shorthand (or an otherwise-non-canonical form) allocates a
+        // normalised `String`. `srgb_from_hex` parses case- and `#`-insensitively,
+        // so a borrowed lower/upper/bare form yields the byte-identical colour.
+        let bg = hex_for_recheck(bg_hex)?;
+        let fg_cows: Vec<Cow<'_, str>> = fg_hexes
             .iter()
-            .map(|h| normalise_hex(h))
+            .map(|h| hex_for_recheck(h))
             .collect::<Result<_, _>>()?;
-        let refs: Vec<&str> = normalised.iter().map(String::as_str).collect();
-        let pairs = labcolors_core::recheck_against(&bg, &refs, &vc)
+        let refs: Vec<&str> = fg_cows.iter().map(Cow::as_ref).collect();
+        let pairs = labcolors_core::recheck_against(bg.as_ref(), &refs, &vc)
             .map_err(|reason| BindingError::InvalidBackground { reason })?;
         let mut out = Vec::with_capacity(pairs.len() * 2);
         for (lc, wcag) in pairs {
@@ -208,6 +211,32 @@ impl Engine {
             out.push(wcag);
         }
         Ok(out)
+    }
+
+    /// PROTOTYPE (owner decision): recheck one foreground set against MANY
+    /// background samples in a single call, sharing each foreground's CAM16
+    /// forward across all samples. Byte-identical, pair for pair, to N separate
+    /// [`recheck`](Self::recheck) calls; see [`recheck_against_multi`]. Not wired
+    /// to any runtime — measured only.
+    pub fn recheck_multi(
+        &self,
+        bg_hexes: &[String],
+        fg_hexes: &[String],
+        theme: Theme,
+    ) -> Result<Vec<f64>, BindingError> {
+        let vc = theme.viewing_conditions();
+        let bg_cows: Vec<Cow<'_, str>> = bg_hexes
+            .iter()
+            .map(|h| hex_for_recheck(h))
+            .collect::<Result<_, _>>()?;
+        let bg_refs: Vec<&str> = bg_cows.iter().map(Cow::as_ref).collect();
+        let fg_cows: Vec<Cow<'_, str>> = fg_hexes
+            .iter()
+            .map(|h| hex_for_recheck(h))
+            .collect::<Result<_, _>>()?;
+        let fg_refs: Vec<&str> = fg_cows.iter().map(Cow::as_ref).collect();
+        labcolors_core::recheck_against_multi(&bg_refs, &fg_refs, &vc)
+            .map_err(|reason| BindingError::InvalidBackground { reason })
     }
 }
 
@@ -307,6 +336,22 @@ fn unreachable_code(reason: &Unreachable) -> &'static str {
         Unreachable::InvalidInput(_) => "invalid_input",
         _ => "unreachable",
     }
+}
+
+/// A recheck-ready hex that BORROWS when the input is already a valid 6-hex-digit
+/// colour (with or without `#`, any case), allocating only for `#RGB` shorthand
+/// or a form that must change. `srgb_from_hex` (the recheck parser) is case- and
+/// `#`-insensitive on a 6-digit body, so the borrowed form is byte-identical to
+/// the normalised one for the numeric result — and recheck does not cache, so it
+/// needs no canonical (upper-cased, `#`-led) key. Validation is preserved: a
+/// 6-length non-hex body falls through to [`normalise_hex`], which rejects it
+/// with the same message; other lengths likewise route through `normalise_hex`.
+fn hex_for_recheck(raw: &str) -> Result<Cow<'_, str>, BindingError> {
+    let body = raw.strip_prefix('#').unwrap_or(raw);
+    if body.len() == 6 && body.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(Cow::Borrowed(raw));
+    }
+    normalise_hex(raw).map(Cow::Owned)
 }
 
 /// Normalise a background hex to the canonical `#RRGGBB` upper-case form the

@@ -70,7 +70,7 @@ pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{
     NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor, TranslucentResolved,
-    measure_contrast, recheck_against, resolve_named_set,
+    measure_contrast, recheck_against, recheck_against_multi, resolve_named_set,
 };
 // The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no
 // longer part of the production API (ADR-0001 PR-c): the agnostic engine ships
