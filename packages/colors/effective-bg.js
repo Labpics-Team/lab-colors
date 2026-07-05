@@ -288,6 +288,141 @@ export function oklabLerp(from, to, t) {
   return toHex([linearToSrgb(lin[0]) * 255, linearToSrgb(lin[1]) * 255, linearToSrgb(lin[2]) * 255]);
 }
 
+// --- Compiled hot-path forms (package-internal) -----------------------------
+//
+// `adaptTheme` interpolates the SAME from/to pair on every frame of an ease,
+// and strict mode re-derives WCAG luminance from the interpolated colour up to
+// 14× per floored role per frame (`floorBlend`'s bisection). Doing that
+// through the string API means re-parsing both endpoints and round-tripping
+// through `#RRGGBB` text on every call — measured at ~85-90% of the ease-frame
+// budget (bench/hotpath.bench.mjs). These helpers compile a pair once and then
+// produce results BYTE-IDENTICAL to their string-path equivalents:
+//
+//   · `lerpPairHex(pair, t)`       ≡ `oklabLerp(from, to, t)`
+//   · `lerpPairLuminance(pair, t)` ≡ WCAG luminance of `oklabLerp(from, to, t)`
+//   · `wcagLuminanceCached(css)`   ≡ luminance of `parseCssColor(css) ?? black`
+//
+// (locked by test/hotpath-parity.test.mjs on randomised inputs). They are
+// consumed by `adapt-theme.js` and are NOT part of the public package surface
+// (`index.js` does not re-export them).
+
+const PARSE_CACHE_CAP = 256;
+const parseCache = new Map();
+
+/** `parseCssColor` behind a small bounded memo, for per-frame callers feeding
+ *  it recurring strings (computed-style values, backdrop samples, ease
+ *  endpoints). The cap is a blunt bound, not an LRU: a full cache is simply
+ *  cleared and refills within a frame — cheaper than eviction bookkeeping for
+ *  a working set that is a handful of strings. The cached arrays are SHARED —
+ *  package-internal callers must treat them as immutable. (The public
+ *  `parseCssColor` stays unmemoized and returns a fresh array per call.) */
+export function parseCssColorCached(css) {
+  let hit = parseCache.get(css);
+  if (hit === undefined) {
+    hit = parseCssColor(css);
+    if (parseCache.size >= PARSE_CACHE_CAP) parseCache.clear();
+    parseCache.set(css, hit);
+  }
+  return hit;
+}
+
+/** WCAG 2.1 relative luminance of r,g,b channels (0..255) — the normative
+ *  0.03928 / 12.92 / 2.4 constants, matching `adapt-theme`'s floor semantics. */
+function wcagLumChannels(r, g, b) {
+  const lin = (c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+const LUM_CACHE_CAP = 256;
+const lumCache = new Map();
+
+/** WCAG relative luminance of any colour string, memoised. Byte-equal to the
+ *  string path `adapt-theme` used per sample per frame: luminance of
+ *  `parseCssColor(css) ?? [0,0,0,1]` — i.e. unparseable input yields the
+ *  luminance of black, preserving the historical fallback. */
+export function wcagLuminanceCached(css) {
+  let lum = lumCache.get(css);
+  if (lum === undefined) {
+    const c = parseCssColorCached(css) ?? [0, 0, 0, 1];
+    lum = wcagLumChannels(c[0], c[1], c[2]);
+    if (lumCache.size >= LUM_CACHE_CAP) lumCache.clear();
+    lumCache.set(css, lum);
+  }
+  return lum;
+}
+
+/** Round a channel to the exact byte `toHex` would emit (non-finite → 0,
+ *  clamp, round) — keeps the numeric luminance path quantisation-identical to
+ *  the `#RRGGBB` round-trip it replaces. */
+function hexByte(v) {
+  return Math.round(clamp255(Number.isFinite(v) ? v : 0));
+}
+
+/**
+ * Compile a from/to colour pair for repeated interpolation. Returns `null`
+ * when either endpoint fails to parse — callers fall back to `oklabLerp`,
+ * which owns the unparseable-endpoint fallback semantics. The pair carries
+ * both endpoints' Oklab coordinates plus their exact `toHex` forms, so the
+ * per-frame work is one Oklab lerp + gamut map — no string parsing at all.
+ *
+ * @param {string} from  any colour string `parseCssColor` accepts
+ * @param {string} to    any colour string `parseCssColor` accepts
+ * @returns {{la:number[],lb:number[],aHex:string,bHex:string,aBytes:number[],bBytes:number[]} | null}
+ */
+export function compileLerpPair(from, to) {
+  const a = parseCssColorCached(from);
+  const b = parseCssColorCached(to);
+  if (!a || !b) return null;
+  return {
+    la: linearRgbToOklab(srgbToLinear(a[0] / 255), srgbToLinear(a[1] / 255), srgbToLinear(a[2] / 255)),
+    lb: linearRgbToOklab(srgbToLinear(b[0] / 255), srgbToLinear(b[1] / 255), srgbToLinear(b[2] / 255)),
+    aHex: toHex(a),
+    bHex: toHex(b),
+    aBytes: [hexByte(a[0]), hexByte(a[1]), hexByte(a[2])],
+    bBytes: [hexByte(b[0]), hexByte(b[1]), hexByte(b[2])],
+  };
+}
+
+/** Byte-identical to `oklabLerp(from, to, t)` for the pair's endpoints — the
+ *  same double-precision Oklab lerp on the same parsed channels, minus the
+ *  per-call re-parse. */
+export function lerpPairHex(pair, t) {
+  if (t <= 0) return pair.aHex;
+  if (t >= 1) return pair.bHex;
+  const la = pair.la;
+  const lb = pair.lb;
+  const lin = oklabToLinearRgb(
+    la[0] + (lb[0] - la[0]) * t,
+    la[1] + (lb[1] - la[1]) * t,
+    la[2] + (lb[2] - la[2]) * t,
+  );
+  return toHex([linearToSrgb(lin[0]) * 255, linearToSrgb(lin[1]) * 255, linearToSrgb(lin[2]) * 255]);
+}
+
+/** WCAG relative luminance of `lerpPairHex(pair, t)` WITHOUT the `#RRGGBB`
+ *  round-trip: channels are quantised to the exact bytes `toHex` would emit,
+ *  then fed to the normative formula — so strict-mode bisection over `t` is
+ *  ~20 flops instead of serialise + re-parse, at identical results. */
+export function lerpPairLuminance(pair, t) {
+  if (t <= 0) return wcagLumChannels(pair.aBytes[0], pair.aBytes[1], pair.aBytes[2]);
+  if (t >= 1) return wcagLumChannels(pair.bBytes[0], pair.bBytes[1], pair.bBytes[2]);
+  const la = pair.la;
+  const lb = pair.lb;
+  const lin = oklabToLinearRgb(
+    la[0] + (lb[0] - la[0]) * t,
+    la[1] + (lb[1] - la[1]) * t,
+    la[2] + (lb[2] - la[2]) * t,
+  );
+  return wcagLumChannels(
+    hexByte(linearToSrgb(lin[0]) * 255),
+    hexByte(linearToSrgb(lin[1]) * 255),
+    hexByte(linearToSrgb(lin[2]) * 255),
+  );
+}
+
 /**
  * Compose an ordered stack of colour layers (front-to-back) over an opaque base
  * into a single opaque `#RRGGBB`. Pure — no DOM. Exposed for testing and for
