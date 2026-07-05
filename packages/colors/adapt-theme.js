@@ -48,7 +48,15 @@
 //     with no legal floor (decorative) ease freely either way.
 
 import { applyTheme } from "./apply-theme.js";
-import { effectiveBackground, parseCssColor, oklabLerp } from "./effective-bg.js";
+import {
+  effectiveBackground,
+  parseCssColor,
+  oklabLerp,
+  compileLerpPair,
+  lerpPairHex,
+  lerpPairLuminance,
+  wcagLuminanceCached,
+} from "./effective-bg.js";
 
 /** Cubic ease-out: fast start, gentle settle, no overshoot. A non-finite `t`
  * (e.g. a NaN clock making `(now - easeStart) / easeMs` NaN) is treated as a
@@ -78,10 +86,23 @@ function wcagRatio(lumA, lumB) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Interpolate two `#RRGGBB` hexes at `t ∈ [0,1]` in Oklab, so the crossfade is
- * perceptually even (no lingering-bright sRGB midpoint, no muddy chroma path). */
-function lerpHex(from, to, t) {
-  return oklabLerp(from, to, t);
+/** Interpolate an ease segment at `t ∈ [0,1]` in Oklab, so the crossfade is
+ * perceptually even (no lingering-bright sRGB midpoint, no muddy chroma path).
+ * Segments carry a compiled pair (`compileLerpPair`) when both endpoints
+ * parse — the always-case in practice, both being engine-emitted `#RRGGBB` —
+ * so per-frame interpolation runs on pre-parsed Oklab coordinates instead of
+ * re-parsing both endpoint strings every frame. A `null` pair falls back to
+ * `oklabLerp`, which owns the unparseable-endpoint fallback semantics.
+ * Byte-identical either way (locked by test/hotpath-parity.test.mjs). */
+function segHex(seg, t) {
+  return seg.pair ? lerpPairHex(seg.pair, t) : oklabLerp(seg.from, seg.to, t);
+}
+
+/** WCAG relative luminance of `segHex(seg, t)` — numeric fast path on the
+ * compiled pair (no `#RRGGBB` round-trip), string path otherwise. Strict
+ * mode's `floorBlend` bisection calls this up to 14× per role per frame. */
+function segLum(seg, t) {
+  return seg.pair ? lerpPairLuminance(seg.pair, t) : relativeLuminanceHex(segHex(seg, t));
 }
 
 /**
@@ -156,7 +177,7 @@ export function adaptTheme(element, options) {
    * roles are never dropped by `applyTheme`'s clear-then-write and always carry
    * the current theme's value. Only `kind === "color"` roles (in `roles`) ease. */
   let baseVars = {};
-  /** @type {Map<string,{from:string,to:string}>} in-flight ease per cssVar */
+  /** @type {Map<string,{from:string,to:string,held:number,pair:object|null}>} in-flight ease per cssVar */
   let easing = new Map();
   let easeStart = 0;
   let breachSince = null;
@@ -190,12 +211,16 @@ export function adaptTheme(element, options) {
   // dropFraction)`) against ANY sample. `worstIdx` is the sample with the least
   // set-wide margin — the one to re-solve against, so the constraint we solve to
   // is the same constraint we check hardest.
-  const recheckSamples = (fgs, samples) => {
+  // The current foreground hexes, refreshed on adopt. Rechecks run per changed
+  // frame and previously rebuilt this identical array from `roles` each time.
+  let fgsCache = [];
+
+  const recheckSamples = (samples) => {
     let breached = false;
     let worstIdx = 0;
     let worstMargin = Infinity;
     for (let s = 0; s < samples.length; s++) {
-      const flat = colors.recheckContrast(samples[s], fgs, theme);
+      const flat = colors.recheckContrast(samples[s], fgsCache, theme);
       let sampleMargin = Infinity;
       for (let i = 0; i < roles.length; i++) {
         const want = Math.abs(roles[i].lc) * (1 - dropFraction);
@@ -227,6 +252,10 @@ export function adaptTheme(element, options) {
         hex: r.hex,
         legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
       }));
+    fgsCache = roles.map((r) => r.hex);
+    // The adopt may change the var/role KEY SET — force the next write through
+    // `applyTheme`'s full clear-then-write instead of the mid-ease diff path.
+    written = null;
     lastSolveAt = now;
     breachSince = null;
     return result;
@@ -242,19 +271,41 @@ export function adaptTheme(element, options) {
   const solveAndAdoptWorst = (samples, now) => {
     solveAndAdopt(samples[0], now);
     if (samples.length > 1) {
-      const { worstIdx } = recheckSamples(
-        roles.map((r) => r.hex),
-        samples,
-      );
+      const { worstIdx } = recheckSamples(samples);
       if (worstIdx !== 0) solveAndAdopt(samples[worstIdx], now);
     }
   };
 
   // Every write goes through the full canonical set with the (optional) eased
   // color overlay on top — so translucent roles in `baseVars` persist through
-  // `applyTheme`'s clear-then-write, and non-eased color roles keep their
-  // canonical oklch form. `overlay` carries only in-flight color roles as hex.
-  const applyHexes = (overlay) => applyTheme(target, { vars: { ...baseVars, ...overlay } });
+  // the apply, and non-eased color roles keep their canonical oklch form.
+  // `overlay` carries only in-flight color roles as hex.
+  //
+  // WRITE STRATEGY — full vs diff. `written` holds the vars of the last write;
+  // `null` forces the next write through `applyTheme`'s full clear-then-write.
+  // Between two adopts the composed key set is invariant (always `baseVars`'
+  // keys), so mid-ease frames DIFF against `written`: only values that changed
+  // this frame hit `setProperty` (≈ the roles actually easing), instead of
+  // remove+set of EVERY `--lab-*` var on every frame — the dominant DOM cost
+  // of an ease and pure churn for the style engine. The final style state is
+  // byte-identical to a full rewrite (locked by the golden fingerprints in
+  // test/hotpath-parity.test.mjs). Every adopt nulls `written`, so key-set
+  // changes and any external clobbering self-heal at the next solve — the same
+  // guarantee the always-full-rewrite gave, which also wrote nothing between
+  // eases while steady.
+  let written = null;
+  const applyHexes = (overlay) => {
+    const vars = { ...baseVars, ...overlay };
+    if (written === null) {
+      applyTheme(target, { vars });
+    } else {
+      for (const k in vars) {
+        const v = vars[k];
+        if (written[k] !== v) target.style.setProperty(k, v);
+      }
+    }
+    written = vars;
+  };
 
   // Apply the canonical set as-is (no ease in flight): color roles show their
   // oklch form, translucent roles their tint+alpha.
@@ -267,7 +318,9 @@ export function adaptTheme(element, options) {
     easing = new Map();
     for (const r of roles) {
       const from = fromByVar[r.cssVar] ?? r.hex;
-      if (from !== r.hex) easing.set(r.cssVar, { from, to: r.hex, held: 0 });
+      if (from !== r.hex) {
+        easing.set(r.cssVar, { from, to: r.hex, held: 0, pair: compileLerpPair(from, r.hex) });
+      }
     }
     easeStart = now;
     if (easing.size === 0) applyRolesDirect();
@@ -284,8 +337,11 @@ export function adaptTheme(element, options) {
   // colour we have) and the recheck loop re-solves.
   const floorBlend = (seg, e, bgLums, floor) => {
     const legalAt = (blend) => {
-      const lum = relativeLuminanceHex(lerpHex(seg.from, seg.to, blend));
-      return bgLums.every((L) => wcagRatio(lum, L) >= floor);
+      const lum = segLum(seg, blend);
+      for (let i = 0; i < bgLums.length; i++) {
+        if (wcagRatio(lum, bgLums[i]) < floor) return false;
+      }
+      return true;
     };
     if (legalAt(e)) return e;
     let lo = e;
@@ -298,7 +354,21 @@ export function adaptTheme(element, options) {
     return hi; // hi is always legal (or blend 1, the most-legal we have)
   };
 
-  const stepEase = (now, samples) => {
+  // Per-key memo of the samples' WCAG luminances. Strict mode reads them in
+  // both `stepEase` and `paintedNow` within a tick, and across consecutive
+  // frames of a static backdrop mid-ease; the tick already computes the
+  // samples key, so this costs one map per DISTINCT backdrop, not per call.
+  let lumsKey = null;
+  let lums = null;
+  const bgLumsFor = (samples, key) => {
+    if (key !== lumsKey) {
+      lums = samples.map(wcagLuminanceCached);
+      lumsKey = key;
+    }
+    return lums;
+  };
+
+  const stepEase = (now, samples, key) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     // Terminate the ease when it is done (`t >= 1`) OR when the clock went
     // non-finite (a NaN/±∞ `now` making `t` non-finite): drop the segments and
@@ -315,7 +385,7 @@ export function adaptTheme(element, options) {
       return;
     }
     const e = easeOut(t);
-    const bgLums = strict ? samples.map(relativeLuminanceHex) : null;
+    const bgLums = strict ? bgLumsFor(samples, key) : null;
     // Overlay carries ONLY in-flight color roles (as interpolated hex); every
     // other role — non-eased color and all translucent — keeps its canonical
     // `baseVars` value under the merge in `applyHexes`.
@@ -336,7 +406,7 @@ export function adaptTheme(element, options) {
         blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
         seg.held = blend;
       }
-      overlay[r.cssVar] = lerpHex(seg.from, seg.to, blend);
+      overlay[r.cssVar] = segHex(seg, blend);
     }
     applyHexes(overlay);
   };
@@ -360,10 +430,10 @@ export function adaptTheme(element, options) {
   // equals what is on screen, including the strict-mode `held` clamp — otherwise
   // an overlapping re-solve in strict mode would start one frame BELOW the
   // painted (floored) colour.
-  const paintedNow = (now, samples) => {
+  const paintedNow = (now, samples, key) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     const e = easeOut(t);
-    const bgLums = strict ? samples.map(relativeLuminanceHex) : null;
+    const bgLums = strict ? bgLumsFor(samples, key) : null;
     const vars = {};
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
@@ -375,7 +445,7 @@ export function adaptTheme(element, options) {
         strict && r.legalFloor != null
           ? Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held)
           : e;
-      vars[r.cssVar] = lerpHex(seg.from, seg.to, blend);
+      vars[r.cssVar] = segHex(seg, blend);
     }
     return vars;
   };
@@ -383,25 +453,22 @@ export function adaptTheme(element, options) {
   const tick = (nowArg) => {
     const now = nowArg ?? clock();
     const samples = readSamples();
+    const key = samples.join("|");
     // Advance any in-flight ease first (against the live samples, so strict mode
     // holds the legal floor every frame as the backdrop keeps drifting under it).
-    if (easing.size > 0) stepEase(now, samples);
+    if (easing.size > 0) stepEase(now, samples, key);
 
     // Steady state: a static backdrop with no in-flight ease and no pending
     // breach needs no work. A PENDING breach keeps us live even on a static
     // backdrop, so the sustain timer can fire on one that changed once to a
     // failing value and then held.
-    const key = samples.join("|");
     if (key === lastKey && easing.size === 0 && breachSince === null) return;
     lastKey = key;
     if (roles.length === 0) return;
 
     // Cheap worst-case re-check: do the current colours still pass against every
     // sample? `worstIdx` is the hardest sample, the one to re-solve against.
-    const { breached, worstIdx } = recheckSamples(
-      roles.map((r) => r.hex),
-      samples,
-    );
+    const { breached, worstIdx } = recheckSamples(samples);
 
     if (!breached) {
       breachSince = null;
@@ -415,10 +482,10 @@ export function adaptTheme(element, options) {
     // sampled at `now`) — never the in-flight TARGET. Starting from the target
     // would SNAP the element to the old target for one frame before easing,
     // reintroducing flicker when a re-solve overlaps a previous ease.
-    const fromByVar = paintedNow(now, samples);
+    const fromByVar = paintedNow(now, samples, key);
     solveAndAdopt(samples[worstIdx], now);
     beginEase(fromByVar, now);
-    stepEase(now, samples);
+    stepEase(now, samples, key);
   };
 
   let rafId = null;
