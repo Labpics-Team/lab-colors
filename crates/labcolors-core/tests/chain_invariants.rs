@@ -109,22 +109,39 @@ fn plain_sentiments() -> SentimentsConfig {
 /// решённый цвет — валидный `#RRGGBB`, его oklch-эмиссия без `NaN`/`inf` и
 /// парсится в три КОНЕЧНЫХ компоненты, а метрики (Lc/WCAG, α, dJ') конечны.
 /// Панику ловит сам факт достижения ассертов.
-fn assert_table_is_total(table: &NamedRoleTable, label: &str) {
+///
+/// Возвращает число ДОСТИЖИМЫХ (эмитирующих цвет) исходов за весь свип — гард
+/// не-вакуумности для вызывающих: тест, чей контракт заявляет эмиссию, обязан
+/// увидеть >0, иначе конечность/эмитируемость не проверилась ни разу (все роли
+/// решились в None/Unreachable — зелёный впустую).
+#[must_use]
+fn assert_table_is_total(table: &NamedRoleTable, label: &str) -> usize {
+    let mut reachable = 0usize;
     for bg_hex in EXTREME_BGS {
         let bg = BgInput::solid(bg_hex).expect("экстремальный фон валиден");
         for vc in all_vcs() {
             let set = resolve_named_set(&bg, table, &vc);
             for (name, resolved) in &set {
-                assert_resolved_is_finite_and_emittable(resolved, label, name, bg_hex);
+                if assert_resolved_is_finite_and_emittable(resolved, label, name, bg_hex) {
+                    reachable += 1;
+                }
             }
         }
     }
+    reachable
 }
 
 /// Ни один исход не несёт не-конечного числа, а каждый hex решается в oklch без
 /// `NaN`/`inf`. `Resolved` — `#[non_exhaustive]`: неучтённый вариант обязан
-/// падать громко, а не пройти молча.
-fn assert_resolved_is_finite_and_emittable(resolved: &Resolved, label: &str, name: &str, bg: &str) {
+/// падать громко, а не пройти молча. Возвращает `true`, если исход ЭМИТИРУЕТ
+/// цвет (Color/Translucent/Glow) — то есть ассерты эмитируемости реально
+/// сработали, а не пропущены пустыми ветками None/Unreachable.
+fn assert_resolved_is_finite_and_emittable(
+    resolved: &Resolved,
+    label: &str,
+    name: &str,
+    bg: &str,
+) -> bool {
     let emittable = |hex: &str, alpha: Option<f64>| {
         assert_valid_hex(hex, label, name, bg);
         let css = oklch_css_from_hex(hex, alpha)
@@ -144,6 +161,7 @@ fn assert_resolved_is_finite_and_emittable(resolved: &Resolved, label: &str, nam
                 solved.lc().is_finite() && solved.wcag_ratio().is_finite(),
                 "{label}/{name}@{bg}: не-конечная метрика Lc/WCAG"
             );
+            true
         }
         Resolved::Translucent(r) => {
             assert!(
@@ -152,6 +170,7 @@ fn assert_resolved_is_finite_and_emittable(resolved: &Resolved, label: &str, nam
                 r.alpha()
             );
             emittable(r.tint_hex(), Some(r.alpha()));
+            true
         }
         Resolved::Glow(g) => {
             assert!(
@@ -161,9 +180,10 @@ fn assert_resolved_is_finite_and_emittable(resolved: &Resolved, label: &str, nam
             );
             emittable(g.core_hex(), None);
             emittable(g.halo_hex(), None);
+            true
         }
-        Resolved::None => {}
-        Resolved::Unreachable(_) => {}
+        Resolved::None => false,
+        Resolved::Unreachable(_) => false,
         other => panic!("{label}/{name}@{bg}: неучтённый Resolved: {other:?}"),
     }
 }
@@ -229,7 +249,13 @@ fn single_role_config_is_total() {
         .compile_named_role_table()
         .expect("одноролевой конфиг валиден ⇒ компилируется");
     assert_eq!(table.entries().len(), 1, "ровно одна роль в контракте");
-    assert_table_is_total(&table, "single-role");
+    // Контракт заявляет эмиссию: TextAnchor 0.5 без пола обязан РЕШИТЬСЯ в цвет
+    // хотя бы на части свипа — иначе ассерты эмитируемости не сработали.
+    let reachable = assert_table_is_total(&table, "single-role");
+    assert!(
+        reachable > 0,
+        "single-role: роль не эмитила цвет ни разу — тест вакуумен"
+    );
 }
 
 /// НОЛЬ ролей на уровне ЯДРА (не границы, что его отклоняет): `compile` не
@@ -294,7 +320,9 @@ fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
             vec![ladder_role.clone()],
         );
         if let Ok(table) = cfg.compile_named_role_table() {
-            assert_table_is_total(
+            // Чистый гард тотальности/не-паники: достижимость на экстремальных
+            // ручках не обязательна (роль может честно уйти в Unreachable).
+            let _ = assert_table_is_total(
                 &table,
                 &format!("neutral(r={ratio},mp={target_mp},k={hue_stiffness})"),
             );
@@ -340,7 +368,8 @@ fn extreme_sentiment_knobs_never_panic_or_emit_nonfinite() {
             )],
         );
         if let Ok(table) = cfg.compile_named_role_table() {
-            assert_table_is_total(
+            // Чистый гард тотальности/не-паники (как neutral выше).
+            let _ = assert_table_is_total(
                 &table,
                 &format!("sentiment(cf={chroma_fraction},h={hardness})"),
             );
@@ -388,7 +417,15 @@ fn achromatic_extreme_brand_never_panics() {
             vec![],
         );
         if let Ok(table) = cfg.compile_named_role_table() {
-            assert_table_is_total(&table, &format!("achromatic-brand({brand_hex})"));
+            // Ахром-бренд обязан РЕАЛЬНО эмитить (не только не паниковать): чёрный
+            // лейбл на белом / белый на чёрном достижим — свип проходит путь
+            // эмиссии на ахром-якоре (atan2-край), а не только его отсутствие.
+            let reachable =
+                assert_table_is_total(&table, &format!("achromatic-brand({brand_hex})"));
+            assert!(
+                reachable > 0,
+                "achromatic-brand({brand_hex}): ни одной эмиссии на свипе — путь ахром-якоря не пройден"
+            );
         }
     }
 }

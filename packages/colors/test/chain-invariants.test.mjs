@@ -126,19 +126,31 @@ test("legality survives serialization: each solid role's emitted var reparses to
 // ЛЕГАЛЬНОСТЬ НАСКВОЗЬ — полупрозрачные роли (композит, как его соберёт браузер)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// НАХОДКА (репро ниже, зафиксирована в PR): для 3 из 1699 полупрозрачных
-// сэмплов корпуса (все — тинт #C0B2FA при низкой α над чистым чёрным в dark-ic)
-// композит, СОБРАННЫЙ браузером из ЭМИТИРОВАННОГО 8-бит тинта, расходится с
-// движковым `compositeHex` ровно на 1 LSB (#17161F vs #17161E и т.п.). Причина:
-// движок считает `compositeHex` по тинту ДО квантования в 8 бит, а эмитит
-// (и браузер рендерит) уже квантованный тинт — round(comp(exact)) ≠
-// round(comp(round(exact))) на 1 ступень. Следствие: обещанные метрики
-// композита относятся к тинту, чуть отличному от эмитированного (суб-JND, но
-// реальный выходной quantization-gap). Живёт в эмиссии labcolors-core — не
-// чиним здесь (зона солвера), фиксируем как границу. Инвариант ниже строгий на
-// том, что ЭМИССИЯ СТРОКИ ничего не теряет, и держит композит в истинной
-// границе ≤1 LSB — любой дрейф ≥2 LSB или потеря тинта/α упадёт RED.
+// НАХОДКА (репро ниже, зафиксирована в PR; причина заземлена на исходники
+// labcolors-core): для 3 из 1699 полупрозрачных сэмплов корпуса (все — тинт
+// #C0B2FA при низкой α над чистым чёрным в dark-ic) композит, СОБРАННЫЙ
+// браузером из эмитированной строки, расходится с движковым `compositeHex`
+// ровно на 1 LSB (#17161F vs #17161E и т.п.).
+// ПРИЧИНА — РАЗНОЕ ПРОСТРАНСТВО АРИФМЕТИКИ, не потеря точности тинта: тинт
+// КВАНТУЕТСЯ в 8 бит В ОБОИХ путях (semantic.rs:1977 `quantise_encoded` ДО
+// `composite_over_encoded`), α одна. Но движок композитит в нормализованном
+// encoded-[0,1] (`α·(byte/255)`), затем hex_from_srgb_encoded делает `·255·round`
+// (srgb.rs:196); браузер (`compositeOver`) — в 0–255 (`α·byte`). На α·byte ровно
+// = 30.5 (тинт-канал 250, α=0.122): движок `0.122·(250/255)·255 = 30.4999… →
+// round → 30` (#…1E), браузер `250·0.122 = 30.5 → round → 31` (#…1F). Округление
+// точной половины расходится, потому что ÷255·255 стягивает 30.5 к 30.4999.
+// Следствие: обещанный `compositeHex`/Lc/WCAG считаны в другом пространстве,
+// чем то, что реально отрендерит браузер (суб-JND, но реальный выходной gap).
+// Живёт в эмиссии labcolors-core — не чиним здесь (зона солвера), фиксируем
+// границей. Возможный фикс ядра: композитить в том же (байтовом) пространстве,
+// что и браузер, — тогда обещанное == отрендеренное. Инвариант ниже строгий на
+// том, что ЭМИССИЯ СТРОКИ (тинт/α) ничего не теряет побайтно, и держит композит
+// в истинной границе ≤1 LSB — дрейф ≥2 LSB или потеря тинта/α упадёт RED.
 const COMPOSITE_QUANT_LSB = 1;
+// Известная верхняя граница числа расхождений на текущем корпусе (THEMES×
+// BACKGROUNDS×паспорт). Пин: разрастание gap (в другие темы/фоны/роли) поднимет
+// число выше и упадёт RED — характеризация защищает и КОЛИЧЕСТВО, и ЛОКАЦИЮ.
+const KNOWN_COMPOSITE_DIVERGENCES = 3;
 
 test("translucent serialization fidelity: emitted tint+alpha round-trip exactly; browser composite matches the promise within the ≤1-LSB quantization bound", () => {
   const e = engine();
@@ -177,7 +189,7 @@ test("translucent serialization fidelity: emitted tint+alpha round-trip exactly;
         );
 
         // Композит, собранный браузером из ЭМИТИРОВАННОГО тинта, — в истинной
-        // границе ≤1 LSP от обещанного (см. находку выше). Дрейф ≥2 = регрессия.
+        // границе ≤1 LSB от обещанного (см. находку выше). Дрейф ≥2 = регрессия.
         const compHex = toHex(compositeOver(parsed, [bgParsed[0], bgParsed[1], bgParsed[2], 1]));
         assert.ok(
           channelDelta(compHex, role.compositeHex) <= COMPOSITE_QUANT_LSB,
@@ -201,13 +213,16 @@ test("translucent serialization fidelity: emitted tint+alpha round-trip exactly;
   assert.ok(translucentChecked > 0, "no translucent roles exercised — sweep is vacuous");
 });
 
-// Характеризация НАХОДКИ: пин ТЕКУЩЕГО поведения — известные ≤1-LSB
-// расхождения существуют и ограничены. Тест НЕ узаконивает баг; он ловит момент,
-// когда движок начнут считать композит по эмитированному (квантованному) тинту:
-// тогда расхождения исчезнут, `maxObservedDelta` станет 0 < 1, ассерт «дельта
-// РОВНО в [0,1] и хотя бы одно расхождение наблюдалось» упадёт → форс-ревью и
-// обновление. Это документирование текущего поведения, а не приёмка.
-test("characterization: the composite quantization gap is real, bounded to ≤1 LSB, and confined to near-black dark-ic (pins current behaviour)", () => {
+// Характеризация НАХОДКИ: пин ТЕКУЩЕГО поведения по трём осям — ВЕЛИЧИНА (≤1 LSB),
+// КОЛИЧЕСТВО (≤ известного) и ЛОКАЦИЯ (только near-black dark-ic). Тест НЕ
+// узаконивает баг:
+//   • починят движок (композит в байтовом пространстве) → расхождения исчезнут,
+//     `divergent.length > 0` упадёт → форс-ревью;
+//   • разрастётся gap (другие темы/фоны/роли или >1 LSB) → величина/количество/
+//     локация превысят пин → RED.
+// Без пина количества и локации регрессия, размазавшая тот же ≤1-LSB зазор на
+// сотню сэмплов или в light-темы, прошла бы зелёной — находка тихо сгнила бы.
+test("characterization: the composite quantization gap is real, bounded to ≤1 LSB, count-capped, and confined to near-black dark-ic (pins current behaviour)", () => {
   const e = engine();
   let maxObservedDelta = 0;
   const divergent = [];
@@ -225,14 +240,26 @@ test("characterization: the composite quantization gap is real, bounded to ≤1 
       }
     }
   }
-  // Граница держится: никогда больше 1 LSB.
+  // ВЕЛИЧИНА: никогда больше 1 LSB.
   assert.ok(maxObservedDelta <= 1, `composite quantization gap exceeded 1 LSB: ${maxObservedDelta}`);
-  // И расхождение РЕАЛЬНО существует сегодня (иначе находка «исчезла» —
-  // вероятно, движок починили: обнови отчёт/сними характеризацию).
+  // СУЩЕСТВОВАНИЕ: расхождение реально сегодня (иначе движок, вероятно, починили).
   assert.ok(
     divergent.length > 0,
-    "composite gap no longer reproduces — engine may compose the emitted tint now; revisit the PR finding",
+    "composite gap no longer reproduces — engine may compose in byte space now; revisit the PR finding",
   );
+  // КОЛИЧЕСТВО: не больше известной верхней границы — разрастание gap → RED.
+  assert.ok(
+    divergent.length <= KNOWN_COMPOSITE_DIVERGENCES,
+    `composite gap spread: ${divergent.length} divergences > known ${KNOWN_COMPOSITE_DIVERGENCES} — ${divergent.join(", ")}`,
+  );
+  // ЛОКАЦИЯ: все расхождения — только near-black (#000000) в dark-ic. Утечка в
+  // другую тему/фон = смена природы находки → форс-ревью.
+  for (const loc of divergent) {
+    assert.ok(
+      loc.startsWith("dark-ic/#000000/"),
+      `composite gap escaped near-black dark-ic: ${loc}`,
+    );
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,6 +353,9 @@ test("no colliding vars keys: every emitted var name is unique (glow satellites 
         }
         if (role.kind === "glow") expected += 2;
       }
+      // Гард не-вакуумности: паспорт обязан эмитить роли, иначе 0==0 пройдёт
+      // тривиально и коллизия осталась бы непроверенной.
+      assert.ok(expected > 0, `${theme}/${bg}: no emitting roles — collision check is vacuous`);
       const actual = Object.keys(res.vars).length;
       assert.equal(
         actual,
@@ -343,6 +373,8 @@ test("reachable role-key set is identical across all four themes, and every reac
   // Один и тот же контракт-набор ключей во всех темах (тема меняет цвета, не роли).
   const keysets = THEMES.map((t) => Object.keys(e.resolveTheme(bg, t).roles).sort());
   const first = keysets[0];
+  // Гард не-вакуумности: пустой набор во всех темах прошёл бы deepEqual тривиально.
+  assert.ok(first.length > 0, "role-key set is empty — cross-theme equality is vacuous");
   for (let i = 1; i < keysets.length; i++) {
     assert.deepEqual(
       keysets[i],
