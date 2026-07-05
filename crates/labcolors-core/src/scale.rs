@@ -14,6 +14,12 @@ use crate::spaces::vc::ViewingConditions;
 // SSOT-TRACKED: см. docs/empirical-inventory.md (join по имени/значению).
 const HUE_DRIFT_PENALTY_SLOPE: f64 = 0.15;
 
+/// Акцентная кривая: светлотный скелет — нейтральная кривая темы, оттенок и
+/// насыщенность — от канонического цвета бренда.
+///
+/// Инвариант дизайна: акцентные лестницы держат ту же светлотную геометрию,
+/// что и нейтральные, поэтому светлота здесь не решается заново, а берётся из
+/// [`NeutralCurve::at`] — акценты и нейтраль по построению выровнены по шагам.
 #[derive(Debug, Clone)]
 pub struct AccentCurve {
     neutral: NeutralCurve,
@@ -25,6 +31,12 @@ pub struct AccentCurve {
 }
 
 impl AccentCurve {
+    /// Кривая от канонического hex поверх светлотного скелета `neutral`.
+    ///
+    /// Запоминается не абсолютная хрома, а `sat_ratio` — доля канонической
+    /// хромы от максимума гамута на её собственной светлоте: так
+    /// «насыщенность бренда» переносится на любую светлоту рампы без выхода
+    /// за гамут (абсолютная хрома у краёв физически недостижима).
     pub fn new(canonical_hex: &str, neutral: &NeutralCurve) -> Result<Self, String> {
         let color = LcsColor::from_hex(canonical_hex)?;
         let h_canonical = color.h_ok;
@@ -51,6 +63,10 @@ impl AccentCurve {
         })
     }
 
+    /// Точка рампы при `t ∈ [0, 1]`: светлота — от нейтрального скелета,
+    /// оттенок — поиск максимума хромы со штрафом дрейфа от канонического
+    /// (см. `find_optimal_hue`), хрома — `sat_ratio ×` стена гамута на этой
+    /// светлоте.
     pub fn at(&self, t: f64) -> LcsColor {
         let t = t.clamp(0.0, 1.0);
         let neutral_color = self.neutral.at(t);
@@ -92,6 +108,9 @@ impl AccentCurve {
         LcsColor::new(jp_actual, h_ok, s.max(0.0), h_cam)
     }
 
+    /// `n` равноотстоящих точек рампы, концы включительно; `n == 1` — середина
+    /// (t = 0.5). Та же семантика, что у [`NeutralCurve::sample`], — лестницы
+    /// акцентов и нейтрали обязаны сэмплироваться идентичной сеткой.
     pub fn sample(&self, n: usize) -> Vec<LcsColor> {
         if n == 0 {
             return Vec::new();
@@ -102,6 +121,8 @@ impl AccentCurve {
         (0..n).map(|i| self.at(i as f64 / (n - 1) as f64)).collect()
     }
 
+    /// Как [`AccentCurve::sample`], но сразу в hex через VC кривой — чтобы
+    /// вызывающий не сконвертировал под чужие viewing conditions.
     pub fn sample_hex(&self, n: usize) -> Vec<String> {
         self.sample(n)
             .iter()
@@ -114,10 +135,13 @@ impl AccentCurve {
         &self.vc
     }
 
+    /// Oklab-оттенок канонического цвета (градусы) — идентичность семьи.
     pub fn canonical_hue(&self) -> f64 {
         self.h_canonical
     }
 
+    /// Доля канонической хромы от стены гамута на её светлоте, `[0, 1]`
+    /// (см. [`AccentCurve::new`]).
     pub fn sat_ratio(&self) -> f64 {
         self.sat_ratio
     }

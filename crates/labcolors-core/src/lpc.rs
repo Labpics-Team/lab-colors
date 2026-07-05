@@ -345,6 +345,10 @@ pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) ->
 }
 
 fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
+    // Невалидный hex деградирует к чёрному, а не к Err: публичный LPC-API
+    // (`lpc`, `lpc_with_vc`) намеренно infallible (f64, не Result) — hex
+    // валидируются на границах (config/wasm), здесь только детерминированный
+    // фолбэк вместо паники.
     let rgb = srgb_from_hex(hex).unwrap_or([0.0, 0.0, 0.0]);
     let xyz = srgb_to_xyz(rgb);
     y_hk(j_hk_from_xyz(xyz, vc).max(0.0), vc)

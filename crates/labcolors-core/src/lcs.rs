@@ -48,10 +48,14 @@ impl LcsColor {
         hex_from_srgb(rgb)
     }
 
+    /// Raw constructor from already-valid coordinates (curves, solver).
+    /// No validation here: inputs come from our own maths, not user input.
     pub(crate) fn new(jp: f64, h_ok: f64, s: f64, h_cam: f64) -> Self {
         Self { jp, h_ok, s, h_cam }
     }
 
+    /// CAM16-UCS colourfulness `M'`, recovered losslessly from the stored
+    /// reparameterisation (see the `s` field doc).
     pub(crate) fn mp(&self) -> f64 {
         self.s * (self.jp + 1.0)
     }
@@ -69,6 +73,9 @@ impl LcsColor {
         Self::from_xyz_with_hok(xyz, 0.0, vc).mp()
     }
 
+    /// CAM16 hue in degrees. Field is private (accessor-only) so the two hue
+    /// spaces can't be mixed up: `h_ok` (Oklab) is the geometric hue, `h_cam`
+    /// feeds only CAM16 inverse/appearance maths.
     pub(crate) fn h_cam(&self) -> f64 {
         self.h_cam
     }

@@ -31,3 +31,7 @@ harness = false
 [[bench]]
 name = "jp_inv"
 harness = false
+
+[[bench]]
+name = "neutral_at"
+harness = false
