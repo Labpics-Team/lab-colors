@@ -7,3 +7,8 @@ crates/labcolors-core/tests/data/*.txt text eol=lf
 # across platforms (snapshot sha provenance, canonical-byte checks). Same class
 # as the golden snapshots above.
 crates/labcolors-wasm/tests/data/*.json text eol=lf
+
+# JS↔Rust oklch parity fixture: emitted by the Rust core, decoded byte-for-byte
+# by the JS `reference-vectors.test.mjs`. Pin to LF so a CRLF checkout cannot
+# perturb the committed strings the JS parser reads.
+packages/colors/test/data/*.txt text eol=lf
