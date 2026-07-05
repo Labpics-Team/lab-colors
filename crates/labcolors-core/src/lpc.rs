@@ -21,7 +21,11 @@ const HK_CHROMA_EXPONENT: f64 = 0.587;
 /// 47(5), DOI 10.1002/col.22793: `J_HK = J + f(h) * C^0.587` where `C` is the
 /// CAM16 chroma correlate. Coefficients verified against the colour-science
 /// reference implementation (`hue_angle_dependency_Hellwig2022`).
-fn hk_coeff(h_cam_deg: f64) -> f64 {
+///
+/// `pub(crate)` so the external-reference-vector suite (`reference_vectors_deep`)
+/// can pin the RHS coefficients directly to the Hellwig 2022 publication; not
+/// part of the public API.
+pub(crate) fn hk_coeff(h_cam_deg: f64) -> f64 {
     let h_cam = h_cam_deg.to_radians();
     -0.160 * h_cam.cos() + 0.132 * (2.0 * h_cam).cos() - 0.405 * h_cam.sin()
         + 0.080 * (2.0 * h_cam).sin()

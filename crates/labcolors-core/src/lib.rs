@@ -44,6 +44,14 @@ mod pair_label_tests;
 #[cfg(test)]
 mod r3_byte_identity_tests;
 
+// External published reference vectors for the deepest colour-science layers
+// (sRGB EOTF & matrices, Ottosson Oklab, CAT16/CIECAM16 adapt, Hellwig-2022 H-K,
+// WCAG linearise). These reach `pub(crate)` transforms an integration test in
+// `tests/` cannot see; the public-API-reachable vectors live in
+// `tests/reference_vectors.rs`. See `docs/verification-map.md`.
+#[cfg(test)]
+mod reference_vectors_deep;
+
 // AccentCurve/SentimentCurve golden snapshots, relocated in-crate (ADR-0001
 // PR-c): the `Sentiment` enum is now `#[cfg(test)]`-only, and the golden uses
 // the crate-private `SentimentCurve::from_sentiment` helper, so this test must
