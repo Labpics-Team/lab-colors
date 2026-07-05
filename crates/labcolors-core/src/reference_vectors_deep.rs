@@ -336,19 +336,23 @@ fn hk_coeff_matches_hellwig2022_published() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WCAG 2.1 linearisation threshold — W3C WCAG 2.1 §1.4.3 (normative version).
+// WCAG 2.1 linearisation threshold — W3C WCAG 2.1 §1.4.3 (original 2018 text).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// WCAG's own linearisation uses the NORMATIVE `0.03928` breakpoint (not the IEC
-/// `0.04045` erratum value). We probe it through `relative_luminance` on a
-/// single-channel colour: `relative_luminance([c,0,0]) = 0.2126·linearise(c)`.
+/// lab-colors uses the ORIGINAL WCAG 2.1 (2018) `0.03928` breakpoint. The W3C
+/// erratum of 2022-02-22 (PR #1780, incorporated into the May 2025
+/// Recommendation) corrected the threshold to the IEC value `0.04045` — so the
+/// CURRENT normative text says 0.04045, and 0.03928 is the superseded original.
+/// We probe it through `relative_luminance` on a single-channel colour:
+/// `relative_luminance([c,0,0]) = 0.2126·linearise(c)`.
 ///
-/// FINDING (declared, not a bug): lab-colors keeps the normative `0.03928`
-/// deliberately. For 8-bit inputs both breakpoints select the same branch, so
-/// quantised colours linearise identically; the two differ only on sub-quantum
-/// values that never reach an 8-bit pipeline.
+/// FINDING (declared, not a bug): lab-colors keeps the original `0.03928`
+/// deliberately. No 8-bit code lies in (0.03928, 0.04045) — 10/255 ≈ 0.039216
+/// is below both, 11/255 ≈ 0.043137 above both — so both versions select the
+/// same branch for every quantised colour and linearise identically; the two
+/// differ only on sub-quantum values that never reach an 8-bit pipeline.
 #[test]
-fn wcag_linearise_threshold_is_normative_03928() {
+fn wcag_linearise_threshold_is_original_03928() {
     const KR: f64 = 0.2126; // red luminance weight
     // AT the WCAG breakpoint the linear branch (c/12.92) is taken.
     let at = relative_luminance([0.039_28, 0.0, 0.0]) / KR;
@@ -363,13 +367,13 @@ fn wcag_linearise_threshold_is_normative_03928() {
         (above - curved).abs() < 1e-12,
         "linearise(0.05) must be the curved branch, got {above} vs {curved}"
     );
-    // The IEC breakpoint 0.04045 lies in the SAME curved region under WCAG's
-    // 0.03928 rule — proving WCAG's threshold is the smaller, normative one.
+    // The erratum breakpoint 0.04045 lies in the SAME curved region under the
+    // original 0.03928 rule — proving lab-colors uses the smaller (original) one.
     let at_iec = relative_luminance([0.040_45, 0.0, 0.0]) / KR;
     let iec_curved = ((0.040_45 + 0.055) / 1.055_f64).powf(2.4);
     assert!(
         (at_iec - iec_curved).abs() < 1e-12,
-        "under WCAG 0.03928, input 0.04045 must be on the curved branch"
+        "under the original 0.03928, input 0.04045 must be on the curved branch"
     );
     // White = 1, black = 0 (luminance endpoints).
     assert!((relative_luminance([1.0, 1.0, 1.0]) - 1.0).abs() < 1e-9);

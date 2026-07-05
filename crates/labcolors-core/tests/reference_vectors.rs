@@ -203,6 +203,14 @@ fn cam16_viewing_conditions_derivation() {
         adapt(rgb_w[1] * rgb_d[1]),
         adapt(rgb_w[2] * rgb_d[2]),
     ];
+    // Achromatic white response. NOTE: this mirrors `vc.rs::build` exactly,
+    // including its omission of the CIE `− 0.305` offset that the full CIECAM16
+    // achromatic signal `A = (2R'+G'+B'/20 − 0.305)·N_bb` carries (the crate
+    // drops it consistently in both `A_w` here and `A` in `cam16::forward`). So
+    // this asserts TRANSCRIPTION PARITY with the crate's initialisation, not the
+    // literal CIE constant; the crate's absolute CAM16 accuracy at these exact
+    // parameters is anchored separately by the colour-science golden
+    // (`golden_tests::cam16_matches_colour_science_*`).
     let aw = (2.0 * rgb_aw[0] + rgb_aw[1] + rgb_aw[2] / 20.0) * nbb;
 
     let vc = ViewingConditions::srgb();
