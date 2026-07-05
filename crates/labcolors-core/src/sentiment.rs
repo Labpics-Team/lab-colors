@@ -1642,3 +1642,89 @@ mod tests {
         assert!(resolve_smooth_hue_explicit(1.0, None, 68.0, 28.0, params, 10.0).is_ok());
     }
 }
+
+// Научные локи (a) DERIVABLE (волна science/constants-objectivization). Значения
+// НЕ меняются — тесты предъявляют вывод из представимости/определения окружности.
+#[cfg(test)]
+mod derivator_locks {
+    use super::{
+        ACHROMATIC_CHROMA_EPS, HUE_DOMAIN_MAX_EXCLUSIVE, HUE_DOMAIN_MIN_INCLUSIVE, normalize_hue,
+    };
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::srgb_gamma_inv;
+
+    fn oklab_chroma(rgb: [u8; 3]) -> f64 {
+        let e = [
+            rgb[0] as f64 / 255.0,
+            rgb[1] as f64 / 255.0,
+            rgb[2] as f64 / 255.0,
+        ];
+        let l = [
+            srgb_gamma_inv(e[0]),
+            srgb_gamma_inv(e[1]),
+            srgb_gamma_inv(e[2]),
+        ];
+        let lab = srgb_linear_to_oklab(l);
+        lab[1].hypot(lab[2])
+    }
+
+    /// (a) ACHROMATIC_CHROMA_EPS выведен из АРИФМЕТИКИ ПРЕДСТАВИМОСТИ: строго зажат
+    /// между двумя ИЗМЕРЕННЫМИ границами конвейера sRGB->Oklab — потолком f64-шума
+    /// истинно ахроматических (R=G=B) цветов снизу и полом минимальной ненулевой
+    /// хромы представимого 8-битного цвета сверху.
+    ///
+    /// КОРРЕКЦИЯ ПРОВЕНАНСА: замер даёт потолок шума ~3.7e-8 (НЕ <=1e-12, как
+    /// ранее заявлял реестр) — EPS сидит лишь ~2.7x ВЫШЕ потолка шума. Запас >=3
+    /// порядка держится ТОЛЬКО сверху (мин. представимая хрома ~1.06e-3). Обе
+    /// границы соблюдены, EPS не переклассифицирует ни один представимый цвет.
+    #[test]
+    fn achromatic_eps_between_f64_noise_and_min_representable_chroma() {
+        let mut noise = 0.0f64;
+        for i in 0u16..=255 {
+            noise = noise.max(oklab_chroma([i as u8, i as u8, i as u8]));
+        }
+        let mut min_nz = f64::INFINITY;
+        for i in 0u16..=254 {
+            let i = i as u8;
+            for c in [[i, i, i + 1], [i, i + 1, i + 1], [i, i + 1, i]] {
+                let ch = oklab_chroma(c);
+                if ch > 0.0 {
+                    min_nz = min_nz.min(ch);
+                }
+            }
+        }
+        assert!(
+            noise < ACHROMATIC_CHROMA_EPS,
+            "потолок f64-шума серых {noise:.3e} ниже EPS={ACHROMATIC_CHROMA_EPS:.0e}"
+        );
+        assert!(
+            (1e-8..1e-7).contains(&noise),
+            "замеренный потолок шума {noise:.3e} вне полосы [1e-8,1e-7) — провенанс изменился"
+        );
+        assert!(
+            min_nz > ACHROMATIC_CHROMA_EPS * 1e3,
+            "мин. представимая ненулевая хрома {min_nz:.3e} >= 3 порядков выше EPS"
+        );
+    }
+
+    /// (a) HUE_DOMAIN_{MIN_INCLUSIVE,MAX_EXCLUSIVE} — ОПРЕДЕЛЕНИЕ угла по модулю
+    /// 360 (не политика): normalize_hue = rem_euclid(360) имеет кодомен ровно
+    /// [0, 360). Границы выводятся из кодомена нормализатора.
+    #[test]
+    fn hue_domain_is_the_circle_modulus_codomain() {
+        assert_eq!(HUE_DOMAIN_MIN_INCLUSIVE, 0.0);
+        assert_eq!(HUE_DOMAIN_MAX_EXCLUSIVE, 360.0);
+        for k in -5..=5 {
+            for step in 0..360 {
+                let h = k as f64 * 360.0 + step as f64 + 0.5;
+                let n = normalize_hue(h);
+                assert!(
+                    (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&n),
+                    "normalize_hue({h})={n} вне домена"
+                );
+            }
+        }
+        assert_eq!(normalize_hue(360.0), HUE_DOMAIN_MIN_INCLUSIVE);
+        assert!((normalize_hue(-1.0) - 359.0).abs() < 1e-9);
+    }
+}

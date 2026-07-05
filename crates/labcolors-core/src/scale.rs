@@ -1391,3 +1391,94 @@ mod tests {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Научные локи + EXPOSURE (волна science/constants-objectivization) для окна поиска
+// оптимального оттенка и наклона штрафа дрейфа. Реимплементируют argmax-предикат с
+// ЯВНЫМ окном/наклоном (продакшн НЕ трогается) и мерят долю (l,hue)-сетки, где меняется
+// выбранная категория оттенка.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod exposure_locks {
+    use super::{HUE_DRIFT_PENALTY_SLOPE, HUE_SEARCH_HALF_WINDOW, max_chroma};
+
+    /// Flat-scan argmax оттенка с ЯВНЫМ окном и наклоном штрафа (bit-совместим с
+    /// продакшн `find_optimal_hue_core` при window=HUE_SEARCH_HALF_WINDOW,
+    /// penalty_scale=SLOPE/HALF_WINDOW).
+    fn argmax_hue(l: f64, hc: f64, penalty_scale: f64, half_window: f64) -> f64 {
+        let steps = (half_window * 2.0) as i32;
+        let (mut best_h, mut best) = (hc, f64::NEG_INFINITY);
+        for i in 0..=steps {
+            let h = hc - half_window + i as f64;
+            let s = max_chroma(l, h) - penalty_scale * (h - hc).abs();
+            if s > best {
+                best = s;
+                best_h = h;
+            }
+        }
+        best_h
+    }
+
+    fn grid_flip(sweep: &[(f64, f64)]) -> (f64, f64) {
+        // sweep = list of (penalty_scale, half_window). base is first.
+        let (base_ps, base_hw) = sweep[0];
+        let (mut flips, mut total, mut max_shift) = (0usize, 0usize, 0.0f64);
+        let mut l = 0.05;
+        while l <= 0.95 {
+            let mut hc = 0.0;
+            while hc < 360.0 {
+                let base = argmax_hue(l, hc, base_ps, base_hw);
+                let mut flipped = false;
+                for &(ps, hw) in &sweep[1..] {
+                    let alt = argmax_hue(l, hc, ps, hw);
+                    let shift = (alt - base).abs();
+                    max_shift = max_shift.max(shift);
+                    if shift > 0.5 {
+                        flipped = true;
+                    }
+                }
+                if flipped {
+                    flips += 1;
+                }
+                total += 1;
+                hc += 2.0;
+            }
+            l += 0.05;
+        }
+        (100.0 * flips as f64 / total as f64, max_shift)
+    }
+
+    /// EXPOSURE окна поиска: доля (l,hue)-сетки, где выбранный оттенок меняется при
+    /// свипе окна в [25°,35°] (наклон штрафа держится продакшн). Малая доля ⇒ окно —
+    /// нежёсткая нижняя граница, точное 30° нематериально; заметная ⇒ окно намеренно
+    /// КАПИРУЕТ дрейф оттенка (как CUSP_HALF_WINDOW_DEG) — мишень с приоритетом.
+    #[test]
+    fn exposure_hue_search_window() {
+        let ps = HUE_DRIFT_PENALTY_SLOPE / HUE_SEARCH_HALF_WINDOW;
+        let sweep = [
+            (ps, HUE_SEARCH_HALF_WINDOW),
+            (ps, 25.0),
+            (ps, 35.0),
+            (ps, 45.0),
+        ];
+        let (pct, max_shift) = grid_flip(&sweep);
+        eprintln!(
+            "EXPOSURE HUE_SEARCH_HALF_WINDOW sweep=25..45deg grid_flip={pct:.2}% max_hue_shift={max_shift:.2}deg"
+        );
+    }
+
+    /// EXPOSURE наклона штрафа: доля (l,hue)-сетки, где выбранный оттенок меняется при
+    /// свипе наклона в [0.10,0.20] (окно фиксировано). Прямо измеряет чувствительность
+    /// категории оттенка к калибровочному наклону (у которого есть кандидат-вывод —
+    /// хорда Oklab — дающий ДРУГОЕ значение: см. реестр строка 37).
+    #[test]
+    fn exposure_hue_drift_penalty_slope() {
+        let hw = HUE_SEARCH_HALF_WINDOW;
+        let base = HUE_DRIFT_PENALTY_SLOPE / hw;
+        let sweep = [(base, hw), (0.10 / hw, hw), (0.20 / hw, hw)];
+        let (pct, max_shift) = grid_flip(&sweep);
+        eprintln!(
+            "EXPOSURE HUE_DRIFT_PENALTY_SLOPE sweep=0.10..0.20 grid_flip={pct:.2}% max_hue_shift={max_shift:.2}deg"
+        );
+    }
+}

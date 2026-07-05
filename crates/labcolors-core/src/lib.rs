@@ -20,6 +20,9 @@ pub(crate) mod wcag;
 pub mod curve;
 
 #[cfg(test)]
+pub(crate) mod exposure_support;
+
+#[cfg(test)]
 mod golden_tests;
 
 #[cfg(test)]

@@ -2882,3 +2882,104 @@ mod tests {
         );
     }
 }
+
+// Научные локи + EXPOSURE (волна science/constants-objectivization). Бюджеты
+// приёмки QUANT_BUDGET (Lc) и DJ_BUDGET (dJ CAM16-UCS) характеризуются как «N x
+// медианного шага 8-бит серой сетки»; экспозиция мерит долю целей, чья приёмка
+// зависит от точного бюджета.
+#[cfg(test)]
+mod exposure_locks {
+    use super::{DJ_BUDGET, QUANT_BUDGET};
+    use crate::lcs::LcsColor;
+    use crate::lpc::lpc;
+
+    fn grey(i: u8) -> String {
+        format!("#{i:02X}{i:02X}{i:02X}")
+    }
+    fn grey_lc() -> Vec<f64> {
+        (0u16..=255)
+            .map(|i| lpc(&grey(i as u8), "#FFFFFF"))
+            .collect()
+    }
+    fn grey_jp() -> Vec<f64> {
+        (0u16..=255)
+            .map(|i| LcsColor::from_hex(&grey(i as u8)).unwrap().jp)
+            .collect()
+    }
+    fn median_step(vals: &[f64]) -> f64 {
+        let mut s: Vec<f64> = vals.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s[s.len() / 2]
+    }
+
+    /// (c) QUANT_BUDGET (контракт «+-1 Lc») ~ 2x медианного Lc-шага 8-бит серой
+    /// сетки (замер ~0.44): на дискретной сетке любой бюджет >= шага принимает
+    /// ближайший узел, поэтому точное значение внутри [1x, ~3x шага] нематериально.
+    #[test]
+    fn quant_budget_is_a_couple_of_grid_steps() {
+        let step = median_step(&grey_lc());
+        let ratio = QUANT_BUDGET / step;
+        assert!(
+            (0.35..0.50).contains(&step),
+            "Lc-шаг {step:.4} вне [0.35,0.50)"
+        );
+        assert!(
+            (2.0..3.0).contains(&ratio),
+            "QUANT_BUDGET/шаг={ratio:.3} вне [2,3)"
+        );
+    }
+
+    /// (c) DJ_BUDGET ~ 1.5x медианного dJ-шага 8-бит серой сетки (замер ~0.39).
+    #[test]
+    fn dj_budget_tracks_grid_step() {
+        let step = median_step(&grey_jp());
+        let ratio = DJ_BUDGET / step;
+        assert!(
+            (0.30..0.50).contains(&step),
+            "dJ-шаг {step:.4} вне [0.30,0.50)"
+        );
+        assert!(
+            (1.2..2.0).contains(&ratio),
+            "DJ_BUDGET/шаг={ratio:.3} вне [1.2,2)"
+        );
+    }
+
+    fn nearest_err(t: f64, grid: &[f64]) -> f64 {
+        grid.iter()
+            .map(|g| (g - t).abs())
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// EXPOSURE: доля целевого диапазона, чья приёмка ближайшего узла флипает, пока
+    /// бюджет ходит в +-50% полосе. Малая ⇒ дискретность сетки поглощает свип.
+    #[test]
+    fn exposure_quant_and_dj_budgets() {
+        let lc = grey_lc();
+        let jp = grey_jp();
+        let (mut fq, mut tq) = (0usize, 0usize);
+        let mut t = 0.0;
+        while t <= 106.0 {
+            let e = nearest_err(t, &lc);
+            if (0.5 * QUANT_BUDGET..1.5 * QUANT_BUDGET).contains(&e) {
+                fq += 1;
+            }
+            tq += 1;
+            t += 0.05;
+        }
+        let (mut fd, mut td) = (0usize, 0usize);
+        let mut t = 0.0;
+        while t <= 100.0 {
+            let e = nearest_err(t, &jp);
+            if (0.5 * DJ_BUDGET..1.5 * DJ_BUDGET).contains(&e) {
+                fd += 1;
+            }
+            td += 1;
+            t += 0.05;
+        }
+        eprintln!(
+            "EXPOSURE QUANT_BUDGET flip={:.2}% | DJ_BUDGET flip={:.2}%",
+            100.0 * fq as f64 / tq as f64,
+            100.0 * fd as f64 / td as f64
+        );
+    }
+}
