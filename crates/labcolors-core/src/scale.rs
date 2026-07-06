@@ -1482,3 +1482,90 @@ mod exposure_locks {
         );
     }
 }
+
+/// Замки отвергнутых дерайваций: кандидаты, которые ПРОВЕРЕНЫ и отклонены с
+/// измеренной причиной. Пиновка не даёт «строгому выводу» вернуться без
+/// пересмотра измерений (см. docs/empirical-residue.md, мишень №2).
+#[cfg(test)]
+mod derivation_rejection_locks {
+    use super::{max_chroma, srgb_from_hex, srgb_linear_to_oklab};
+
+    /// Flat-scan argmax (bit-совместим с find_optimal_hue_core, окно ±30°/1°).
+    fn argmax(l: f64, hc: f64, penalty_scale: f64) -> f64 {
+        let (mut best_h, mut best) = (hc, f64::NEG_INFINITY);
+        for i in 0..=60 {
+            let h = hc - 30.0 + i as f64;
+            let s = max_chroma(l, h) - penalty_scale * (h - hc).abs();
+            if s > best {
+                best = s;
+                best_h = h;
+            }
+        }
+        best_h
+    }
+
+    /// ОТКЛОНЁННЫЙ кандидат для `HUE_DRIFT_PENALTY_SLOPE`: «строгий» хордовый
+    /// штраф Oklab `penalty_scale = C·π/180` (перцептивная цена дрейфа = длина
+    /// хорды). Замер на 49-якорном замороженном паспорте labui (2026-07-06),
+    /// l-сетка 0.05..0.95 шаг 0.01:
+    ///   * прод-наклон 0.15/30 = 0.005/°: оптимум ВНУТРИ окна на всех 43
+    ///     хроматических якорях (0 прижатий к ребру);
+    ///   * хордовый кандидат: прижатие к ребру ±30° на 12/43 якорях, флип
+    ///     оптимума >0.5° на 27/43, сдвиги до полного окна (ΔE_ok до 0.077).
+    ///
+    /// Вывод: кандидат не объективизирует — он передаёт решение произвольной
+    /// границе HUE_SEARCH_HALF_WINDOW (интерьерный оптимум → клип по окну),
+    /// делая нечувствительную константу окна чувствительной. Отклонён;
+    /// значение остаётся калибровочным классом (d).
+    #[test]
+    fn chord_derived_slope_rejected_degenerates_to_window_edge() {
+        let (mut base_edge, mut chord_edge, mut chord_flip, mut n) =
+            (0usize, 0usize, 0usize, 0usize);
+        for &hex in crate::exposure_support::LABUI_ANCHORS {
+            let rgb = srgb_from_hex(hex).unwrap();
+            let lab = srgb_linear_to_oklab(rgb);
+            let c0 = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
+            if c0 < 0.02 {
+                continue; // нейтраль: поиск оттенка не участвует
+            }
+            n += 1;
+            let hc = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
+            let (mut be, mut ce, mut cf) = (false, false, false);
+            let mut l = 0.05;
+            while l <= 0.951 {
+                let base = argmax(l, hc, 0.005);
+                let ps_chord = max_chroma(l, hc) * std::f64::consts::PI / 180.0;
+                let chord = argmax(l, hc, ps_chord);
+                if (base - hc).abs() >= 29.999 {
+                    be = true;
+                }
+                if (chord - hc).abs() >= 29.999 {
+                    ce = true;
+                }
+                if (chord - base).abs() > 0.5 {
+                    cf = true;
+                }
+                l += 0.01;
+            }
+            if be {
+                base_edge += 1;
+            }
+            if ce {
+                chord_edge += 1;
+            }
+            if cf {
+                chord_flip += 1;
+            }
+        }
+        assert_eq!(n, 43, "хроматических якорей в паспорте");
+        // Прод-наклон: интерьерный оптимум всюду — окно НЕ является решающим.
+        assert_eq!(
+            base_edge, 0,
+            "прод-наклон не должен прижиматься к ребру окна"
+        );
+        // Хордовый кандидат вырождается (замерено 12 и 27; нижние границы с
+        // запасом на будущие уточнения max_chroma).
+        assert!(chord_edge >= 8, "прижатий к ребру: {chord_edge}");
+        assert!(chord_flip >= 20, "флипов оптимума: {chord_flip}");
+    }
+}
