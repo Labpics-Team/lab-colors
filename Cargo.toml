@@ -1,5 +1,8 @@
 [workspace]
-members = ["crates/*"]
+# `experiments/*` — калибровочные харнессы (напр. experiments/psychophysics для
+# мишени #1 empirical-residue). Зависимость-нулевые члены воркспейса: попадают под
+# те же гейты CI (fmt/clippy/test/doc/audit --workspace), не расширяя граф зависимостей.
+members = ["crates/*", "experiments/*"]
 resolver = "2"
 
 [workspace.package]

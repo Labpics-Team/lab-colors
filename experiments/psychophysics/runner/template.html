@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lab-colors · психофизика · PAIR_CROSSOVER_Y</title>
+<style>
+  :root { --bg:#4a4a4a; --panel:#2b2b2b; --ink:#f2f2f2; --muted:#b8b8b8; --line:#5c5c5c; --accent:#7db0ff; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    display:flex; flex-direction:column; min-height:100%;
+  }
+  main { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .card { background: var(--panel); border:1px solid var(--line); border-radius:12px; padding:28px; max-width:760px; width:100%; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:20px 0 8px; }
+  p, li { color: var(--ink); }
+  .muted { color: var(--muted); font-size:13px; }
+  code { background:#1c1c1c; padding:1px 5px; border-radius:4px; }
+  ul { padding-left:20px; }
+  label.chk { display:flex; gap:10px; align-items:flex-start; margin:10px 0; cursor:pointer; }
+  label.chk input { margin-top:3px; width:18px; height:18px; }
+  input[type=text] { background:#1c1c1c; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:14px; width:220px; }
+  button { font:inherit; font-weight:600; border:none; border-radius:8px; padding:11px 20px; cursor:pointer; }
+  button.primary { background: var(--accent); color:#08213f; }
+  button.primary:disabled { background:#555; color:#999; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  /* Trial */
+  .stage { width:100%; max-width:980px; }
+  .prompt { text-align:center; margin-bottom:16px; }
+  .prompt .q { font-size:18px; font-weight:600; }
+  .panels { display:flex; gap:20px; }
+  .swatch { flex:1; border-radius:14px; height:230px; display:flex; align-items:center; justify-content:center;
+            cursor:pointer; user-select:none; border:2px solid transparent; transition:border-color .08s; }
+  .swatch:hover, .swatch:focus-visible { border-color:#ffffff; outline:none; }
+  .swatch .label { font-size:34px; font-weight:600; letter-spacing:.2px; text-align:center; }
+  .swatch .key { font-size:13px; font-weight:700; opacity:.85; margin-top:12px; }
+  .progress { text-align:center; margin-top:18px; color:var(--muted); font-size:13px; }
+  .bar { height:6px; background:#1c1c1c; border-radius:3px; overflow:hidden; margin:8px auto 0; max-width:420px; }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0; }
+  .hidden { display:none !important; }
+  .done-num { font-size:26px; font-weight:700; }
+  .warn { color:#ffcf8f; }
+  footer { text-align:center; padding:10px; color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<main>
+  <!-- INTRO -->
+  <section id="intro" class="card">
+    <h1>Психофизическая сессия · кроссовер полярности лейбла</h1>
+    <p class="muted">Мишень калибровки: <code>PAIR_CROSSOVER_Y</code> (lab-colors). Локально, без сети.</p>
+
+    <h2>Что нужно делать</h2>
+    <p>На каждом экране — два одинаковых по цвету прямоугольника. На левом и правом лейбл нарисован
+       разным цветом (белым или чернильным). Выберите <b>тот прямоугольник, где надпись читается
+       легче</b>. Нажмите на него мышью или клавишу <b>F</b> (левый) / <b>J</b> (правый).
+       Отвечайте быстро и по первому впечатлению, не вглядывайтесь.</p>
+
+    <h2>Условия предъявления (обязательный чек-лист)</h2>
+    <label class="chk"><input type="checkbox" id="c_cv"> Нормальное цветовосприятие (не дальтонизм); при сомнении — пройден тест Ишихары.</label>
+    <label class="chk"><input type="checkbox" id="c_cal"> Дисплей откалиброван (профиль sRGB/gamma 2.2), яркость ≈ 80–120 кд/м².</label>
+    <label class="chk"><input type="checkbox" id="c_d65"> Окружающий свет нейтральный, близкий к D65; без цветных бликов на экране.</label>
+    <label class="chk"><input type="checkbox" id="c_dist"> Расстояние до экрана ≈ 50–70 см; свотч виден целиком без наклона.</label>
+    <label class="chk"><input type="checkbox" id="c_full"> Окно развёрнуто на весь экран, масштаб ОС/браузера 100%.</label>
+
+    <h2>Наблюдатель</h2>
+    <div class="row">
+      <input type="text" id="observer" placeholder="ID наблюдателя (напр. obs01)" autocomplete="off">
+      <span class="muted" id="sessinfo"></span>
+    </div>
+    <p class="muted">Один файл экспорта = один наблюдатель. Для N ≥ 15 запустите сессию с разными людьми
+       (или сгенерируйте манифесты с разными seed для контрбаланса порядка).</p>
+
+    <div class="row" style="margin-top:18px">
+      <button class="primary" id="startBtn" disabled>Начать сессию</button>
+      <span class="muted" id="startHint">Отметьте все условия и укажите ID.</span>
+    </div>
+  </section>
+
+  <!-- TRIAL -->
+  <section id="trial" class="stage hidden">
+    <div class="prompt"><span class="q">Где надпись читается легче?</span>
+      <div class="muted">Мышь по прямоугольнику · или клавиши <b>F</b> / <b>J</b></div>
+    </div>
+    <div class="panels">
+      <div class="swatch" id="left"  tabindex="0" role="button" aria-label="левый прямоугольник">
+        <div><div class="label">Aa Читаемость 123</div><div class="key">F</div></div>
+      </div>
+      <div class="swatch" id="right" tabindex="0" role="button" aria-label="правый прямоугольник">
+        <div><div class="label">Aa Читаемость 123</div><div class="key">J</div></div>
+      </div>
+    </div>
+    <div class="progress"><span id="pnum"></span><div class="bar"><i id="pbar"></i></div></div>
+  </section>
+
+  <!-- DONE -->
+  <section id="done" class="card hidden">
+    <h1>Сессия завершена</h1>
+    <p>Ответов собрано: <span class="done-num" id="ntrials"></span></p>
+    <p>Сохраните сырые данные и передайте аналитику (<code>psychophysics analyze</code>).</p>
+    <div class="row">
+      <button class="primary" id="dlBtn">Скачать сырой JSON</button>
+      <button class="ghost" id="restartBtn">Новая сессия</button>
+    </div>
+    <p class="muted warn" id="dlHint" style="margin-top:14px"></p>
+  </section>
+</main>
+<footer>lab-colors · experiments/psychophysics · автономный локальный раннер</footer>
+
+<script>
+"use strict";
+// Манифест сессии встраивается генератором (детерминирован из seed).
+const SESSION = __SESSION_JSON__;
+
+const $ = (id) => document.getElementById(id);
+const CHK = ["c_cv","c_cal","c_d65","c_dist","c_full"];
+const state = { idx:0, responses:[], trialStart:0, startedUtc:null };
+
+function nowIso(){ return new Date().toISOString(); }
+
+function refreshStart(){
+  const allChecked = CHK.every(id => $(id).checked);
+  const hasId = $("observer").value.trim().length > 0;
+  $("startBtn").disabled = !(allChecked && hasId);
+  $("startHint").textContent = $("startBtn").disabled ? "Отметьте все условия и укажите ID." : "Готово к старту.";
+}
+CHK.forEach(id => $(id).addEventListener("change", refreshStart));
+$("observer").addEventListener("input", refreshStart);
+$("sessinfo").textContent = "seed " + SESSION.seed + " · проб " + SESSION.trials.length +
+  " · семей " + SESSION.families.length;
+
+function conditions(){
+  return { normal_cv:$("c_cv").checked, calibrated:$("c_cal").checked, d65:$("c_d65").checked,
+           distance_ok:$("c_dist").checked, fullscreen_100:$("c_full").checked };
+}
+
+function startSession(){
+  state.idx = 0; state.responses = []; state.startedUtc = nowIso();
+  $("intro").classList.add("hidden");
+  $("done").classList.add("hidden");
+  $("trial").classList.remove("hidden");
+  renderTrial();
+}
+
+function renderTrial(){
+  const t = SESSION.trials[state.idx];
+  const whiteLeft = (t.white_side === "left");
+  const L = $("left"), R = $("right");
+  // Оба прямоугольника — цвет свотча; отличается лишь цвет лейбла.
+  L.style.background = t.swatch_hex; R.style.background = t.swatch_hex;
+  L.querySelector(".label").style.color = whiteLeft ? SESSION.white_hex : SESSION.ink_hex;
+  R.querySelector(".label").style.color = whiteLeft ? SESSION.ink_hex   : SESSION.white_hex;
+  $("pnum").textContent = "Проба " + (state.idx+1) + " / " + SESSION.trials.length;
+  $("pbar").style.width = (100*(state.idx)/SESSION.trials.length) + "%";
+  state.trialStart = performance.now();
+}
+
+function respond(side){
+  const t = SESSION.trials[state.idx];
+  const rt = Math.round(performance.now() - state.trialStart);
+  const choseWhite = (side === t.white_side);
+  state.responses.push({
+    id:t.id, family:t.family, target_y:t.target_y, measured_y:t.measured_y,
+    swatch_hex:t.swatch_hex, white_side:t.white_side, response_side:side,
+    chose_white:choseWhite, rt_ms:rt
+  });
+  state.idx++;
+  if (state.idx < SESSION.trials.length) renderTrial(); else finish();
+}
+
+$("left").addEventListener("click", () => respond("left"));
+$("right").addEventListener("click", () => respond("right"));
+document.addEventListener("keydown", (e) => {
+  if ($("trial").classList.contains("hidden")) return;
+  const k = e.key.toLowerCase();
+  if (k === "f") respond("left");
+  else if (k === "j") respond("right");
+});
+
+function finish(){
+  $("pbar").style.width = "100%";
+  $("trial").classList.add("hidden");
+  $("done").classList.remove("hidden");
+  $("ntrials").textContent = state.responses.length;
+}
+
+function buildExport(){
+  return {
+    harness: SESSION.harness, target: SESSION.target, version: SESSION.version,
+    seed: SESSION.seed, observer: $("observer").value.trim(),
+    started_utc: state.startedUtc, finished_utc: nowIso(),
+    user_agent: navigator.userAgent, conditions: conditions(),
+    manifest_n_trials: SESSION.trials.length, responses: state.responses
+  };
+}
+
+function download(){
+  const data = buildExport();
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = data.finished_utc.replace(/[:.]/g,"-");
+  a.href = url; a.download = "psychophysics-" + (data.observer||"obs") + "-" + stamp + ".json";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  $("dlHint").textContent = "Если загрузка не началась — проверьте разрешения браузера для file://.";
+}
+
+$("startBtn").addEventListener("click", startSession);
+$("dlBtn").addEventListener("click", download);
+$("restartBtn").addEventListener("click", () => {
+  $("done").classList.add("hidden"); $("intro").classList.remove("hidden");
+  CHK.forEach(id => $(id).checked = false); refreshStart();
+});
+refreshStart();
+</script>
+</body>
+</html>
