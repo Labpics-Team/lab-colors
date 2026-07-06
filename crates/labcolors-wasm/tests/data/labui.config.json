@@ -14,8 +14,8 @@
     "tint": {
       "ratio": 0.1,
       "target_mp": 6.1,
-      "hue_stiffness": 9.0,
-      "hue_override_deg": 286.0
+      "hue_stiffness": 9,
+      "hue_override_deg": 286
     },
     "edge": {
       "light": "#101012",
@@ -131,7 +131,7 @@
       {
         "name": "warning",
         "family": "orange",
-        "hue_floor_deg": 45.0,
+        "hue_floor_deg": 45,
         "preferred_side": 1
       },
       {
@@ -143,8 +143,8 @@
         "family": "blue"
       }
     ],
-    "hardness": 5.0,
-    "chroma_fraction": 1.0
+    "hardness": 5,
+    "chroma_fraction": 1
   },
   "themes": [
     {
@@ -214,14 +214,6 @@
       }
     },
     {
-      "name": "icon",
-      "recipe": {
-        "kind": "text-anchor",
-        "fraction": 0.461,
-        "floor": "aa-ui"
-      }
-    },
-    {
       "name": "border-strong",
       "recipe": {
         "kind": "text-anchor",
@@ -252,7 +244,7 @@
       }
     },
     {
-      "name": "border-ghost",
+      "name": "border-none",
       "recipe": {
         "kind": "zero"
       }
@@ -1085,33 +1077,12 @@
       }
     },
     {
-      "name": "fill-accent",
-      "recipe": {
-        "kind": "ladder",
-        "source": {
-          "kind": "brand"
-        },
-        "position": "label-primary"
-      }
-    },
-    {
       "name": "fill-neutral",
       "recipe": {
         "kind": "ladder",
         "source": {
           "kind": "neutral",
           "pick": "mid"
-        },
-        "position": "label-primary"
-      }
-    },
-    {
-      "name": "fill-danger",
-      "recipe": {
-        "kind": "ladder",
-        "source": {
-          "kind": "sentiment",
-          "name": "danger"
         },
         "position": "label-primary"
       }
@@ -1271,6 +1242,22 @@
     {
       "alias": "fx-skeleton-base",
       "target": "fill-quaternary"
+    },
+    {
+      "alias": "fill-accent",
+      "target": "badge-fill-brand"
+    },
+    {
+      "alias": "fill-danger",
+      "target": "badge-fill-danger"
+    },
+    {
+      "alias": "icon",
+      "target": "label-tertiary"
+    },
+    {
+      "alias": "border-ghost",
+      "target": "border-none"
     }
   ]
 }
