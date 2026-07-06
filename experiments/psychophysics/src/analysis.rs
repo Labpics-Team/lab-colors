@@ -13,6 +13,12 @@ use crate::logistic::{self, Point};
 use crate::rng::SplitMix64;
 use crate::stimulus::{Acceptance, round6};
 
+/// Минимальная доля сошедшихся bootstrap-ресэмплов для вынесения вердикта.
+/// Вырожденные подгонки выбрасываются из CI; если уцелели немногие,
+/// перцентильный CI по выжившим может быть обманчиво узким — тогда
+/// вердикт не выносится, только эскалация.
+const MIN_SUCCESS_FRAC: f64 = 0.95;
+
 /// Сессия одного наблюдателя.
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -61,6 +67,8 @@ pub struct Verdict {
     pub ci_width: f64,
     pub ci_ok: bool,
     pub pse_in_interval: bool,
+    /// Достаточна ли доля сошедшихся ресэмплов (`≥ MIN_SUCCESS_FRAC`).
+    pub success_ok: bool,
 }
 
 /// Собрать все точки в один пул.
@@ -154,14 +162,27 @@ pub fn bootstrap_pse(sessions: &[Session], n_resamples: usize, seed: u64) -> Opt
 
 /// Оценить итог bootstrap против критерия приёмки.
 ///
-/// Принять ⟺ ширина CI `< ci_width_max` И PSE в `(pse_lo, pse_hi)`. Иначе —
-/// эскалация владельцу с указанием, какое условие нарушено.
+/// Принять ⟺ сошлось `≥ MIN_SUCCESS_FRAC` ресэмплов И ширина CI `< ci_width_max`
+/// И PSE в `(pse_lo, pse_hi)`. Иначе — эскалация владельцу с указанием, какое
+/// условие нарушено.
 #[must_use]
 pub fn evaluate(boot: &BootResult, acc: &Acceptance) -> Verdict {
     let ci_ok = boot.ci_width < acc.ci_width_max;
     let pse_in_interval = boot.pse > acc.pse_lo && boot.pse < acc.pse_hi;
+    let success_ok =
+        boot.n_resamples > 0 && boot.n_success as f64 >= MIN_SUCCESS_FRAC * boot.n_resamples as f64;
 
-    let (decision, reason) = if ci_ok && pse_in_interval {
+    let (decision, reason) = if !success_ok {
+        (
+            Decision::Escalate,
+            format!(
+                "Сошлись лишь {}/{} bootstrap-ресэмплов (< {:.0}%): CI по уцелевшим ненадёжен. Эскалация.",
+                boot.n_success,
+                boot.n_resamples,
+                MIN_SUCCESS_FRAC * 100.0
+            ),
+        )
+    } else if ci_ok && pse_in_interval {
         (
             Decision::Accept,
             format!(
@@ -196,6 +217,7 @@ pub fn evaluate(boot: &BootResult, acc: &Acceptance) -> Verdict {
         ci_width: boot.ci_width,
         ci_ok,
         pse_in_interval,
+        success_ok,
     }
 }
 
@@ -215,6 +237,7 @@ impl Verdict {
             ("ci95_width", Value::Number(self.ci_width)),
             ("ci_ok", Value::Bool(self.ci_ok)),
             ("pse_in_interval", Value::Bool(self.pse_in_interval)),
+            ("bootstrap_success_ok", Value::Bool(self.success_ok)),
             (
                 "bootstrap_resamples",
                 Value::Number(boot.n_resamples as f64),
@@ -268,6 +291,22 @@ mod tests {
         let v = evaluate(&boot, &Acceptance::default());
         assert_eq!(v.decision, Decision::Escalate);
         assert!(!v.ci_ok);
+    }
+
+    #[test]
+    fn verdict_escalates_on_low_bootstrap_success() {
+        // Узкий CI по горстке уцелевших ресэмплов не должен давать Accept.
+        let boot = BootResult {
+            pse: 0.30,
+            ci_lo: 0.29,
+            ci_hi: 0.31,
+            ci_width: 0.02,
+            n_success: 1200,
+            n_resamples: 2000,
+        };
+        let v = evaluate(&boot, &Acceptance::default());
+        assert_eq!(v.decision, Decision::Escalate);
+        assert!(!v.success_ok);
     }
 
     #[test]

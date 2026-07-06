@@ -69,6 +69,7 @@ pub fn fit(points: &[Point]) -> Option<Fit> {
     let mut used = MAX_ITERS;
 
     for it in 0..MAX_ITERS {
+        used = it + 1;
         let (mut ga, mut gb) = (0.0f64, 0.0f64);
         let (mut haa, mut hab, mut hbb) = (0.0f64, 0.0f64, 0.0f64);
         for p in points {
@@ -102,7 +103,6 @@ pub fn fit(points: &[Point]) -> Option<Fit> {
         b += db;
         if da.abs() < TOL && db.abs() < TOL {
             converged = true;
-            used = it + 1;
             break;
         }
     }
@@ -119,6 +119,7 @@ pub fn fit(points: &[Point]) -> Option<Fit> {
 }
 
 /// PSE (`Y*` при `P=0.5`) из подгонки: `−a/b`. `None`, если наклон ~0.
+/// Сходимость НЕ проверяет — вызывающий смотрит `fit.converged` (см. `fit_pse`).
 #[must_use]
 pub fn pse(fit: &Fit) -> Option<f64> {
     if fit.b.abs() < 1e-9 {
@@ -129,9 +130,17 @@ pub fn pse(fit: &Fit) -> Option<f64> {
 }
 
 /// Удобно: подогнать и вернуть PSE.
+///
+/// `None`, если данные вырождены ИЛИ Ньютон не сошёлся: несошедшиеся `a,b` —
+/// потенциально смещённая оценка, молча доверять ей нельзя. Несошедшийся
+/// bootstrap-ресэмпл при этом просто выбрасывается из CI (см. `analysis`).
 #[must_use]
 pub fn fit_pse(points: &[Point]) -> Option<f64> {
-    pse(&fit(points)?)
+    let f = fit(points)?;
+    if !f.converged {
+        return None;
+    }
+    pse(&f)
 }
 
 #[cfg(test)]

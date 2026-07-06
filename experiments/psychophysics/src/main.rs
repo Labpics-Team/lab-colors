@@ -19,6 +19,14 @@ use psychophysics::stimulus::{Acceptance, DesignParams, Manifest, build_session}
 use psychophysics::synthetic::{self, Population};
 use psychophysics::{color, html, json, passport};
 
+/// Чернильный лейбл по умолчанию — нейтральное ребро паспорта labui.
+/// Один литерал на все подкоманды (иначе рассинхрон дефолтов).
+const DEFAULT_INK: &str = "#101012";
+
+/// Минимум bootstrap-ресэмплов для вынесения вердикта (протокол §1). Вердикт на
+/// меньшем числе статистически несостоятелен — блокируем, а не предупреждаем.
+const MIN_RESAMPLES: usize = 2000;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
@@ -96,6 +104,19 @@ fn parse_f64(args: &[String], name: &str, default: f64) -> Result<f64, String> {
     }
 }
 
+/// Отклонить неизвестные `--флаги`. Значения флагов в харнессе — числа, hex или
+/// пути (никогда не `--`-префиксные), поэтому любой `--`-токен вне белого списка
+/// — это опечатка (напр. `--sedd`), которая иначе тихо взяла бы дефолт и убила
+/// воспроизводимость прогона по seed. Явный отказ вместо тихой деградации.
+fn reject_unknown_flags(args: &[String], allowed: &[&str]) -> Result<(), String> {
+    for a in args {
+        if a.starts_with("--") && !allowed.contains(&a.as_str()) {
+            return Err(format!("неизвестный флаг '{a}'.\n\n{USAGE}"));
+        }
+    }
+    Ok(())
+}
+
 /// Позиционные аргументы = всё, что не является флагом и не значением флага.
 fn positionals(args: &[String], value_flags: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
@@ -126,8 +147,18 @@ fn default_passport_path() -> PathBuf {
 }
 
 fn cmd_generate(args: &[String]) -> Result<u8, String> {
+    reject_unknown_flags(
+        args,
+        &[
+            "--seed",
+            "--passport",
+            "--ink",
+            "--chroma-frac",
+            "--out-dir",
+        ],
+    )?;
     let seed = parse_u64(args, "--seed", 1)?;
-    let ink = flag_value(args, "--ink").unwrap_or_else(|| "#101012".to_string());
+    let ink = flag_value(args, "--ink").unwrap_or_else(|| DEFAULT_INK.to_string());
     let chroma_frac = parse_f64(args, "--chroma-frac", 0.9)?;
     let out_dir = flag_value(args, "--out-dir").unwrap_or_else(|| "psychophysics-out".to_string());
 
@@ -145,7 +176,7 @@ fn cmd_generate(args: &[String]) -> Result<u8, String> {
         chroma_frac,
         ..DesignParams::default()
     };
-    let manifest = build_session(&families, design, Acceptance::default(), &ink, seed);
+    let manifest = build_session(&families, design, Acceptance::default(), &ink, seed)?;
 
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("не создать {out_dir}: {e}"))?;
     let manifest_path = format!("{out_dir}/session-{seed}.json");
@@ -202,14 +233,18 @@ fn session_from_raw(text: &str, fallback: &str) -> Result<Session, String> {
 }
 
 fn cmd_analyze(args: &[String]) -> Result<u8, String> {
-    let resamples = parse_u64(args, "--resamples", 2000)? as usize;
+    reject_unknown_flags(args, &["--resamples", "--seed"])?;
+    let resamples = parse_u64(args, "--resamples", MIN_RESAMPLES as u64)? as usize;
     let seed = parse_u64(args, "--seed", 12345)?;
     let paths = positionals(args, &["--resamples", "--seed"]);
     if paths.is_empty() {
         return Err(format!("нужен хотя бы один сырой JSON.\n\n{USAGE}"));
     }
-    if resamples < 2000 {
-        eprintln!("предупреждение: протокол требует ≥ 2000 ресэмплов (задано {resamples}).");
+    if resamples < MIN_RESAMPLES {
+        return Err(format!(
+            "протокол требует ≥ {MIN_RESAMPLES} bootstrap-ресэмплов для вердикта (задано {resamples}); \
+             на меньшем числе вердикт статистически несостоятелен."
+        ));
     }
 
     let mut sessions = Vec::new();
@@ -242,8 +277,9 @@ fn cmd_analyze(args: &[String]) -> Result<u8, String> {
 // ── selftest ─────────────────────────────────────────────────────────────────
 
 fn cmd_selftest(args: &[String]) -> Result<u8, String> {
+    reject_unknown_flags(args, &["--observers", "--resamples", "--seed"])?;
     let observers = parse_u64(args, "--observers", 18)? as usize;
-    let resamples = parse_u64(args, "--resamples", 2000)? as usize;
+    let resamples = parse_u64(args, "--resamples", MIN_RESAMPLES as u64)? as usize;
     let seed = parse_u64(args, "--seed", 20_250_706)?;
 
     // Манифест из паспорта (или фолбэк), затем синтетическая популяция PSE=0.30.
@@ -252,9 +288,9 @@ fn cmd_selftest(args: &[String]) -> Result<u8, String> {
         &families,
         DesignParams::default(),
         Acceptance::default(),
-        "#101012",
+        DEFAULT_INK,
         seed,
-    );
+    )?;
     let pop = Population::calibration_default();
     let sessions = synthetic::simulate_population(&manifest, pop, observers, seed ^ 0xABCD);
 
@@ -301,6 +337,14 @@ fn cmd_selftest(args: &[String]) -> Result<u8, String> {
 /// поэтому восстанавливаем полную запись пробы: сторону ответа выводим из
 /// `chose_white` и `white_side`.
 fn synthetic_raw_export(manifest: &Manifest, observer: &str, points: &[Point]) -> json::Value {
+    // Инвариант 1:1 проб манифеста и точек наблюдателя (см. `simulate_observer`).
+    // `zip` тихо обрезал бы по меньшей длине — для «замка честности» скрытое
+    // усечение данных особенно коварно, поэтому явная проверка.
+    debug_assert_eq!(
+        manifest.trials.len(),
+        points.len(),
+        "рассинхрон проб манифеста и точек наблюдателя"
+    );
     let responses: Vec<json::Value> = manifest
         .trials
         .iter()
@@ -337,7 +381,8 @@ fn synthetic_raw_export(manifest: &Manifest, observer: &str, points: &[Point]) -
         ("harness", json::Value::String(manifest.harness.clone())),
         ("target", json::Value::String(manifest.target.clone())),
         ("version", json::Value::Number(f64::from(manifest.version))),
-        ("seed", json::Value::Number(manifest.seed as f64)),
+        // seed строкой — как в манифесте (u64 > 2^53 не пролезает в f64 без потерь).
+        ("seed", json::Value::String(manifest.seed.to_string())),
         ("observer", json::Value::String(observer.to_string())),
         ("started_utc", json::Value::String("synthetic".to_string())),
         ("finished_utc", json::Value::String("synthetic".to_string())),
@@ -361,6 +406,17 @@ fn synthetic_raw_export(manifest: &Manifest, observer: &str, points: &[Point]) -
 }
 
 fn cmd_simulate(args: &[String]) -> Result<u8, String> {
+    reject_unknown_flags(
+        args,
+        &[
+            "--observers",
+            "--pse",
+            "--slope",
+            "--pse-sd",
+            "--seed",
+            "--out-dir",
+        ],
+    )?;
     let observers = parse_u64(args, "--observers", 18)? as usize;
     let pse = parse_f64(args, "--pse", 0.30)?;
     let slope = parse_f64(args, "--slope", -45.0)?;
@@ -372,10 +428,10 @@ fn cmd_simulate(args: &[String]) -> Result<u8, String> {
         &psychophysics::stimulus::families_or_fallback(),
         DesignParams::default(),
         Acceptance::default(),
-        "#101012",
+        DEFAULT_INK,
         seed,
-    );
-    let pop = Population { pse, slope, pse_sd };
+    )?;
+    let pop = Population::new(pse, slope, pse_sd)?;
     let sessions = synthetic::simulate_population(&manifest, pop, observers, seed ^ 0xABCD);
 
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("не создать {out_dir}: {e}"))?;

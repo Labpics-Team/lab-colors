@@ -42,6 +42,7 @@ mod tests {
             "#101012",
             3,
         )
+        .unwrap()
     }
 
     #[test]

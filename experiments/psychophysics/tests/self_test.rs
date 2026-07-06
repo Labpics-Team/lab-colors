@@ -22,6 +22,7 @@ fn calibration_manifest(seed: u64) -> psychophysics::stimulus::Manifest {
         "#101012",
         seed,
     )
+    .expect("валидный ink → манифест строится")
 }
 
 #[test]

@@ -23,7 +23,30 @@ pub struct Population {
 }
 
 impl Population {
+    /// Валидированный конструктор для НЕДОВЕРЕННОГО входа (CLI `simulate`).
+    ///
+    /// # Errors
+    /// `Err`, если `slope >= 0` (психометрика 2AFC обязана падать с ростом Y —
+    /// иначе симулируется «перевёрнутый» наблюдатель) или `pse_sd < 0`. Без
+    /// проверки неверный флаг тихо дал бы бессмысленные данные под видом
+    /// валидных — недопустимо для замка честности.
+    pub fn new(pse: f64, slope: f64, pse_sd: f64) -> Result<Self, String> {
+        if slope.is_nan() || slope >= 0.0 {
+            return Err(format!(
+                "slope должен быть < 0 (2AFC падает по Y), задано {slope}"
+            ));
+        }
+        if pse_sd.is_nan() || pse_sd < 0.0 {
+            return Err(format!("pse_sd должно быть ≥ 0, задано {pse_sd}"));
+        }
+        if !pse.is_finite() {
+            return Err(format!("pse должно быть конечным, задано {pse}"));
+        }
+        Ok(Self { pse, slope, pse_sd })
+    }
+
     /// Разумный дефолт: истинный PSE = 0.30, крутой наклон, умеренный разброс.
+    /// Значения заведомо валидны, поэтому строится напрямую.
     #[must_use]
     pub fn calibration_default() -> Self {
         Self {
@@ -111,6 +134,7 @@ mod tests {
             "#101012",
             seed,
         )
+        .unwrap()
     }
 
     #[test]

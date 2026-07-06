@@ -140,16 +140,21 @@ pub fn round6(x: f64) -> f64 {
 ///
 /// Чернильный лейбл `ink_hex` — тёмный «чернильный» цвет (по умолчанию `#101012`,
 /// нейтральное ребро паспорта); белый — `#FFFFFF`.
-#[must_use]
+///
+/// # Errors
+/// `Err`, если `ink_hex` не парсится: для калибровочного инструмента тихая
+/// подмена цвета лейбла означала бы сессию с НЕВЕРНЫМ стимулом, незаметную ни в
+/// манифесте, ни в отчёте, — поэтому явный отказ вместо `unwrap_or`-дефолта.
 pub fn build_session(
     families: &[Family],
     design: DesignParams,
     acceptance: Acceptance,
     ink_hex: &str,
     seed: u64,
-) -> Manifest {
+) -> Result<Manifest, String> {
     let grid = luminance_grid(&design);
-    let ink_rgb = color::hex_to_rgb(ink_hex).unwrap_or([16, 16, 18]);
+    let ink_rgb =
+        color::hex_to_rgb(ink_hex).map_err(|e| format!("некорректный ink_hex '{ink_hex}': {e}"))?;
     let white_rgb = [255u8, 255, 255];
 
     // 1) Канонический набор стимулов (family-major, затем по Y). id стабилен.
@@ -187,7 +192,7 @@ pub fn build_session(
     // 3) Рандомизация порядка предъявления.
     rng.shuffle(&mut trials);
 
-    Manifest {
+    Ok(Manifest {
         harness: "labcolors-psychophysics".to_string(),
         target: "PAIR_CROSSOVER_Y".to_string(),
         version: 1,
@@ -199,7 +204,7 @@ pub fn build_session(
         y_grid: grid,
         families: families.iter().map(|f| f.key.clone()).collect(),
         trials,
-    }
+    })
 }
 
 impl Manifest {
@@ -230,7 +235,11 @@ impl Manifest {
             ("harness", Value::String(self.harness.clone())),
             ("target", Value::String(self.target.clone())),
             ("version", Value::Number(f64::from(self.version))),
-            ("seed", Value::Number(self.seed as f64)),
+            // seed как СТРОКА: u64 > 2^53 теряет точность в f64, и тогда манифест
+            // невоспроизводим по собственной записи. Строка держит зерно точно;
+            // никто не читает seed обратно как число (analyze берёт только
+            // observer/responses).
+            ("seed", Value::String(self.seed.to_string())),
             ("white_hex", Value::String(self.white_hex.clone())),
             ("ink_hex", Value::String(self.ink_hex.clone())),
             (
@@ -338,14 +347,16 @@ mod tests {
             Acceptance::default(),
             "#101012",
             777,
-        );
+        )
+        .unwrap();
         let b = build_session(
             &f,
             DesignParams::default(),
             Acceptance::default(),
             "#101012",
             777,
-        );
+        )
+        .unwrap();
         assert_eq!(a.to_json_string(), b.to_json_string());
     }
 
@@ -358,14 +369,16 @@ mod tests {
             Acceptance::default(),
             "#101012",
             1,
-        );
+        )
+        .unwrap();
         let b = build_session(
             &f,
             DesignParams::default(),
             Acceptance::default(),
             "#101012",
             2,
-        );
+        )
+        .unwrap();
         let ord_a: Vec<usize> = a.trials.iter().map(|t| t.id).collect();
         let ord_b: Vec<usize> = b.trials.iter().map(|t| t.id).collect();
         assert_ne!(ord_a, ord_b, "разные seed → разный порядок");
@@ -381,7 +394,8 @@ mod tests {
             Acceptance::default(),
             "#101012",
             5,
-        );
+        )
+        .unwrap();
         assert_eq!(m.trials.len(), f.len() * grid.len());
         // id — перестановка 0..n.
         let mut ids: Vec<usize> = m.trials.iter().map(|t| t.id).collect();
@@ -398,7 +412,8 @@ mod tests {
             Acceptance::default(),
             "#101012",
             42,
-        );
+        )
+        .unwrap();
         let left = m
             .trials
             .iter()
@@ -418,7 +433,8 @@ mod tests {
             Acceptance::default(),
             "#101012",
             9,
-        );
+        )
+        .unwrap();
         let parsed = crate::json::parse(&m.to_pretty_json()).expect("манифест — валидный JSON");
         assert_eq!(
             parsed.get("target").unwrap().as_str().unwrap(),
