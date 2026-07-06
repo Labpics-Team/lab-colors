@@ -214,14 +214,6 @@
       }
     },
     {
-      "name": "icon",
-      "recipe": {
-        "kind": "text-anchor",
-        "fraction": 0.461,
-        "floor": "aa-ui"
-      }
-    },
-    {
       "name": "border-strong",
       "recipe": {
         "kind": "text-anchor",
@@ -252,7 +244,7 @@
       }
     },
     {
-      "name": "border-ghost",
+      "name": "border-none",
       "recipe": {
         "kind": "zero"
       }
@@ -1233,6 +1225,14 @@
     {
       "alias": "fill-danger",
       "target": "badge-fill-danger"
+    },
+    {
+      "alias": "icon",
+      "target": "label-tertiary"
+    },
+    {
+      "alias": "border-ghost",
+      "target": "border-none"
     }
   ]
 }

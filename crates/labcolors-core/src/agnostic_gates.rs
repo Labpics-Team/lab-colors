@@ -180,16 +180,13 @@ fn hierarchy_pass_fires_and_flags_when_ladder_is_squeezed() {
 
 #[test]
 fn hierarchy_pass_does_not_sweep_in_lone_anchors() {
-    // `icon` (0.461, above quaternary 0.276) and `border-strong` (0.968) are lone
-    // anchors, not label-ladder rungs: the grouping reads strictly-descending runs
-    // off the config, so they are never compressed.
+    // `border-strong` (0.968) is a lone anchor, not a label-ladder rung: the
+    // grouping reads strictly-descending runs off the config, so it is never
+    // compressed. (`icon` был вторым lone-anchor; канон #92 снёс роль — глиф
+    // теперь label-tertiary, штатный rung лестницы.)
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#747474").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
-    assert!(
-        !compressed(&set, "icon"),
-        "icon must not join the label ladder"
-    );
     assert!(
         !compressed(&set, "border-strong"),
         "border-strong must not join the label ladder"

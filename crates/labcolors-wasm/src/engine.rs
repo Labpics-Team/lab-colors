@@ -578,10 +578,11 @@ mod tests {
             Some(RoleOutcome::Color(c)) => assert_eq!(c.legal_floor, Some(4.5)),
             other => panic!("label-primary expected solved, got {other:?}"),
         }
-        // AA UI role → 3.0.
-        match floor_of("icon") {
+        // AA UI role → 3.0. (`icon` каноном #92 стал алиасом на label-tertiary —
+        // сам label-tertiary и есть AA-UI роль с полом 3.0.)
+        match floor_of("label-tertiary") {
             Some(RoleOutcome::Color(c)) => assert_eq!(c.legal_floor, Some(3.0)),
-            other => panic!("icon expected solved, got {other:?}"),
+            other => panic!("label-tertiary expected solved, got {other:?}"),
         }
         // Decorative / JND roles carry no legal floor even when solved.
         if let Some(RoleOutcome::Color(c)) = floor_of("label-quaternary") {

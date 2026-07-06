@@ -687,10 +687,13 @@ mod tests {
             .expect("паспорт labui парсится")
     }
 
-    /// Снапшот ПРОДАКШН-паспорта labui (`labui/packages/colors/labui.config.json`,
-    /// @ labui bd7b843 (#80), sha256 f9bbf7e4… — снапшот, обновлять при изменении паспорта): цветные лейблы там ещё в ladder-стиле, ветки
-    /// M1 text-anchor не активируются. Покрывает путь, которым потребитель идёт
-    /// СЕГОДНЯ, — класс «тестируем не тот стиль рецептов, что в проде».
+    /// Снапшот ПРОДАКШН-паспорта labui (`labui/packages/colors/labui.config.json`):
+    /// ВОКАБУЛЯР синкнут со словарным каноном (labui#92 — роль `icon` снесена в
+    /// алиас на label-tertiary, `border-ghost`→`border-none`), но РЕЦЕПТЫ цветных
+    /// лейблов НАМЕРЕННО оставлены в ladder-стиле — ветки M1 text-anchor не
+    /// активируются. Этим `.prod.json` и отличается от канонического `.json`:
+    /// покрывает путь ladder-эпохи потребителя — класс «тестируем не тот стиль
+    /// рецептов, что в проде». Обновлять при изменении паспорта.
     fn labui_prod_dto() -> ConfigDto {
         serde_json::from_str(include_str!("../tests/data/labui.config.prod.json"))
             .expect("прод-паспорт labui парсится")
@@ -835,7 +838,7 @@ mod tests {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "fdbe79bfa30442de",
+            "5013ba77a61f58ff",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }
