@@ -262,7 +262,8 @@ const LABEL_PRIMARY_FRACTION: f64 = 0.968;
 #[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_SECONDARY_FRACTION: f64 = 0.627;
-/// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+/// Доля максимального Lc для `LabelTertiary`: 48.9/106 ≈ 0.461. (Иконки —
+/// глифы: красятся `label-tertiary`; отдельной роли `icon` в словаре нет.)
 #[cfg(test)]
 // SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
 const LABEL_TERTIARY_FRACTION: f64 = 0.461;
@@ -337,13 +338,6 @@ pub enum Role {
     LabelQuaternary,
     /// Meaningful icons and graphical UI objects — non-text 3:1 floor.
     ///
-    /// DEPARTURE FROM HIG (documented choice): in Apple's HIG glyphs live inside
-    /// the Labels ramp and carry no separate contrast rule. We keep `icon` as a
-    /// distinct functional role because our contract gives it a *legal floor* of
-    /// 3:1 (`Floor::AaUi`) — meaningful non-text UI objects must clear WCAG 1.4.11.
-    /// That legal floor is ours, not HIG's, so the role stays explicit rather than
-    /// folding into `label-*`.
-    Icon,
     /// Hairline separator between content — a decorative JND contract. Kept as a
     /// first-class role (HIG carries it under separators / hairlines).
     Separator,
@@ -358,9 +352,9 @@ pub enum Role {
     /// Soft container outline — the faintest visible border. HIG "Border/Soft". A
     /// dJ' step at the owner's literal anchor (light 3.15 / dark 5.83).
     BorderSoft,
-    /// The explicit-zero border: "no edge here". HIG "Border/Ghost" (`@0`).
+    /// The explicit-zero border: "no edge here". HIG "Border/None" (`@0`).
     /// Resolves to [`Resolved::None`], the honest zero of the border ramp.
-    BorderGhost,
+    BorderNone,
     /// Strongest fill tint over the background. HIG "Fills/Primary". A dJ' step at
     /// the owner's literal anchor (light 7.93 / dark 17.67); top of the
     /// strictly-descending fill ladder.
@@ -398,21 +392,19 @@ impl Role {
     /// weight (strongest first, except the progressive shadow stack which runs
     /// subtlest→strongest), so a resolved set iterates deterministically and the
     /// ladder ordering invariants read off the sequence directly.
-    pub const ALL: [Role; 20] = [
+    pub const ALL: [Role; 19] = [
         // Labels — strongest text first.
         Role::LabelPrimary,
         Role::LabelSecondary,
         Role::LabelTertiary,
         Role::LabelQuaternary,
-        // Icon — functional, between labels and decorative.
-        Role::Icon,
         // Separator.
         Role::Separator,
         // Border ladder — strong → soft, then the explicit zero.
         Role::BorderStrong,
         Role::BorderBase,
         Role::BorderSoft,
-        Role::BorderGhost,
+        Role::BorderNone,
         // Fill ladder — primary (most visible) → quaternary, then the zero.
         Role::FillPrimary,
         Role::FillSecondary,
@@ -438,12 +430,11 @@ impl Role {
             Role::LabelSecondary => "label-secondary",
             Role::LabelTertiary => "label-tertiary",
             Role::LabelQuaternary => "label-quaternary",
-            Role::Icon => "icon",
             Role::Separator => "separator",
             Role::BorderStrong => "border-strong",
             Role::BorderBase => "border-base",
             Role::BorderSoft => "border-soft",
-            Role::BorderGhost => "border-ghost",
+            Role::BorderNone => "border-none",
             Role::FillPrimary => "fill-primary",
             Role::FillSecondary => "fill-secondary",
             Role::FillTertiary => "fill-tertiary",
@@ -1206,7 +1197,7 @@ pub fn tint_target_sweep_repro(
 #[derive(Debug, Clone, PartialEq)]
 #[cfg(test)]
 pub struct RoleTable {
-    specs: [(Role, RoleSpec); 20],
+    specs: [(Role, RoleSpec); 19],
     chroma: RoleChroma,
 }
 
@@ -1324,8 +1315,6 @@ impl Default for RoleTable {
                     Role::LabelQuaternary,
                     anchor(LABEL_QUATERNARY_FRACTION, Floor::None),
                 ),
-                // Icon — unchanged functional role (legal 3:1 floor, our contract).
-                (Role::Icon, anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
                 (Role::Separator, decorative(SEPARATOR_DECORATIVE_LC)),
                 // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
@@ -1340,7 +1329,7 @@ impl Default for RoleTable {
                 ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
-                (Role::BorderGhost, RoleSpec::Zero),
+                (Role::BorderNone, RoleSpec::Zero),
                 // Fill ladder — dJ' steps with the owner's LITERAL Figma-computed
                 // anchors (light 7.93/6.41/4.63/3.15, dark 17.67/15.78/12.01/8.22),
                 // strictly descending in visibility (primary most visible →
@@ -3291,10 +3280,6 @@ mod tests {
             table.legal_floor(Role::LabelTertiary),
             Some(crate::wcag::AA_UI_RATIO)
         );
-        assert_eq!(
-            table.legal_floor(Role::Icon),
-            Some(crate::wcag::AA_UI_RATIO)
-        );
         // border-strong: различимость (non-text 3:1), не текстовый пол —
         // API-контракт для даунстримов, фиксируем значением.
         assert_eq!(
@@ -3304,7 +3289,7 @@ mod tests {
         // No legal floor for the decorative / JND / zero contracts.
         assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
         assert_eq!(table.legal_floor(Role::Separator), None);
-        assert_eq!(table.legal_floor(Role::BorderGhost), None);
+        assert_eq!(table.legal_floor(Role::BorderNone), None);
 
         // The contract holds: every resolved anchored role clears its own legal
         // floor against the live background (modulo the solver's own quantised
@@ -4117,7 +4102,6 @@ mod tests {
                     (Role::LabelPrimary, 4.5),
                     (Role::LabelSecondary, 4.5),
                     (Role::LabelTertiary, 3.0),
-                    (Role::Icon, 3.0),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
                         Resolved::Color { solved, .. } => solved,
@@ -4408,7 +4392,7 @@ mod tests {
         // 5.32:1; #3478F6: 5.16:1) — the old "larger LPC maximum" polarity rule
         // chose the white side, which cannot reach 4.5:1, and floored every text
         // role. With the WCAG-first polarity the readable side is chosen, so
-        // primary/secondary/muted/icon all resolve on the whole band, both VCs.
+        // primary/secondary/muted all resolve on the whole band, both VCs.
         for (vc, vc_name) in vcs() {
             for bg_hex in band_hexes() {
                 let bg = BgInput::solid(&bg_hex).unwrap();
@@ -4417,7 +4401,6 @@ mod tests {
                     Role::LabelPrimary,
                     Role::LabelSecondary,
                     Role::LabelTertiary,
-                    Role::Icon,
                 ] {
                     let r = &set.iter().find(|(rr, _)| *rr == role).unwrap().1;
                     assert!(
@@ -4551,11 +4534,11 @@ mod tests {
     fn no_silent_clip_anywhere_on_the_band() {
         // Every resolved colour carries a real separation from its background; the
         // only legitimate zeros are the explicit zero-token roles (Role::None and
-        // the family zeros border-ghost / fill-none, all spec'd RoleSpec::Zero); an
+        // the family zeros border-none / fill-none, all spec'd RoleSpec::Zero); an
         // unreachable role surfaces a reason. Nothing clips silently.
         //
         // The honest "carries separation" metric depends on the contract's PHYSICS:
-        // an Lc role (labels, icon, separator, shadows) must have |Lc| ≥ 1; a dJ'
+        // an Lc role (labels, separator, shadows) must have |Lc| ≥ 1; a dJ'
         // role (fills, base/soft borders) must have a real perceived-lightness
         // difference |dJ'| ≥ 1 — its |Lc| can sit at zero inside the low-contrast
         // clip while its J' separation is genuine, which is exactly why it uses a
@@ -4620,12 +4603,11 @@ mod tests {
             "label-secondary",
             "label-tertiary",
             "label-quaternary",
-            "icon",
             "separator",
             "border-strong",
             "border-base",
             "border-soft",
-            "border-ghost",
+            "border-none",
             "fill-primary",
             "fill-secondary",
             "fill-tertiary",
@@ -4641,8 +4623,8 @@ mod tests {
         }
         assert_eq!(
             keys.len(),
-            20,
-            "the HIG taxonomy is exactly 20 roles, found {}",
+            19,
+            "the HIG taxonomy is exactly 19 roles, found {}",
             keys.len()
         );
         // No legacy text-* key may survive the rename.
@@ -4679,12 +4661,12 @@ mod tests {
 
     #[test]
     fn explicit_zero_roles_resolve_to_honest_zero() {
-        // Both family zeros — border-ghost and fill-none — are values, not missing
+        // Both family zeros — border-none and fill-none — are values, not missing
         // keys: they resolve to Resolved::None with zero contrast, like Role::None.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let table = RoleTable::default();
-        for role in [Role::BorderGhost, Role::FillNone, Role::None] {
+        for role in [Role::BorderNone, Role::FillNone, Role::None] {
             let resolved = resolve(&bg, role, &table, &vc);
             assert_eq!(
                 resolved,
@@ -5041,13 +5023,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_set_returns_all_twenty_roles() {
-        // The full sweep returns 20 roles (the HIG taxonomy) including both family
+    fn resolve_set_returns_all_nineteen_roles() {
+        // The full sweep returns 19 roles (the HIG taxonomy) including both family
         // zeros and the universal zero, in Role::ALL order.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let set = resolve_set(&bg, &RoleTable::default(), &vc);
-        assert_eq!(set.len(), 20, "resolve_set must return all 20 roles");
+        assert_eq!(set.len(), 19, "resolve_set must return all 19 roles");
         let roles: Vec<Role> = set.iter().map(|(r, _)| *r).collect();
         assert_eq!(
             roles,
@@ -5402,17 +5384,16 @@ mod tests {
         //     and source of each anchor are the owner's. The `shadow-*` rows stay
         //     Lc `Decorative` (the owner's shadow anchors are alpha opacities,
         //     not dJ' steps); frozen so a refactor cannot move them.
-        const GOLDEN: [(&str, &str, &str, &str); 240] = [
+        const GOLDEN: [(&str, &str, &str, &str); 228] = [
             ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
             ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
             ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
             ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
-            ("srgb", "#FFFFFF", "icon", "#94949E"),
             ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
             ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
             ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
             ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
-            ("srgb", "#FFFFFF", "border-ghost", "none"),
+            ("srgb", "#FFFFFF", "border-none", "none"),
             ("srgb", "#FFFFFF", "fill-primary", "#E3E3ED"),
             ("srgb", "#FFFFFF", "fill-secondary", "#E8E8F3"),
             ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
@@ -5427,12 +5408,11 @@ mod tests {
             ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
             ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
             ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
-            ("srgb", "#F2F2F7", "icon", "#8B8B95"),
             ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
             ("srgb", "#F2F2F7", "border-strong", "#09090F"),
             ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
             ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
-            ("srgb", "#F2F2F7", "border-ghost", "none"),
+            ("srgb", "#F2F2F7", "border-none", "none"),
             ("srgb", "#F2F2F7", "fill-primary", "#D8D8E1"),
             ("srgb", "#F2F2F7", "fill-secondary", "#DCDDE6"),
             ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
@@ -5447,12 +5427,11 @@ mod tests {
             ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
             ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
             ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
-            ("srgb", "#7F7F7F", "icon", "#36353D"),
             ("srgb", "#7F7F7F", "separator", "#63636B"),
             ("srgb", "#7F7F7F", "border-strong", "#010103"),
             ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
             ("srgb", "#7F7F7F", "border-soft", "#76767F"),
-            ("srgb", "#7F7F7F", "border-ghost", "none"),
+            ("srgb", "#7F7F7F", "border-none", "none"),
             ("srgb", "#7F7F7F", "fill-primary", "#6B6B73"),
             ("srgb", "#7F7F7F", "fill-secondary", "#6F6F77"),
             ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
@@ -5467,12 +5446,11 @@ mod tests {
             ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
             ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
             ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
-            ("srgb", "#1C1C1E", "icon", "#95959E"),
             ("srgb", "#1C1C1E", "separator", "#38383F"),
             ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
             ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
             ("srgb", "#1C1C1E", "border-soft", "#23232A"),
-            ("srgb", "#1C1C1E", "border-ghost", "none"),
+            ("srgb", "#1C1C1E", "border-none", "none"),
             ("srgb", "#1C1C1E", "fill-primary", "#2E2E35"),
             ("srgb", "#1C1C1E", "fill-secondary", "#2B2B32"),
             ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
@@ -5487,12 +5465,11 @@ mod tests {
             ("srgb", "#101012", "label-secondary", "#B4B4BE"),
             ("srgb", "#101012", "label-tertiary", "#93939C"),
             ("srgb", "#101012", "label-quaternary", "#696972"),
-            ("srgb", "#101012", "icon", "#93939C"),
             ("srgb", "#101012", "separator", "#323239"),
             ("srgb", "#101012", "border-strong", "#F2F2FC"),
             ("srgb", "#101012", "border-base", "#1F1F27"),
             ("srgb", "#101012", "border-soft", "#18171E"),
-            ("srgb", "#101012", "border-ghost", "none"),
+            ("srgb", "#101012", "border-none", "none"),
             ("srgb", "#101012", "fill-primary", "#23232A"),
             ("srgb", "#101012", "fill-secondary", "#1F1F27"),
             ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
@@ -5507,12 +5484,11 @@ mod tests {
             ("srgb", "#3478F6", "label-secondary", "#14141B"),
             ("srgb", "#3478F6", "label-tertiary", "#35343C"),
             ("srgb", "#3478F6", "label-quaternary", "#707078"),
-            ("srgb", "#3478F6", "icon", "#35343C"),
             ("srgb", "#3478F6", "separator", "#7F7F88"),
             ("srgb", "#3478F6", "border-strong", "#020205"),
             ("srgb", "#3478F6", "border-base", "#6E6E76"),
             ("srgb", "#3478F6", "border-soft", "#76767E"),
-            ("srgb", "#3478F6", "border-ghost", "none"),
+            ("srgb", "#3478F6", "border-none", "none"),
             ("srgb", "#3478F6", "fill-primary", "#6A6A73"),
             ("srgb", "#3478F6", "fill-secondary", "#6E6E76"),
             ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
@@ -5527,12 +5503,11 @@ mod tests {
             ("dim", "#FFFFFF", "label-secondary", "#707079"),
             ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
             ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
-            ("dim", "#FFFFFF", "icon", "#94949D"),
             ("dim", "#FFFFFF", "separator", "#E3E3ED"),
             ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
             ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
             ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
-            ("dim", "#FFFFFF", "border-ghost", "none"),
+            ("dim", "#FFFFFF", "border-none", "none"),
             ("dim", "#FFFFFF", "fill-primary", "#BDBDC6"),
             ("dim", "#FFFFFF", "fill-secondary", "#C3C3CC"),
             ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
@@ -5547,12 +5522,11 @@ mod tests {
             ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
             ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
             ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
-            ("dim", "#F2F2F7", "icon", "#8B8B94"),
             ("dim", "#F2F2F7", "separator", "#DEDEE7"),
             ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
             ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
             ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
-            ("dim", "#F2F2F7", "border-ghost", "none"),
+            ("dim", "#F2F2F7", "border-none", "none"),
             ("dim", "#F2F2F7", "fill-primary", "#B2B2BC"),
             ("dim", "#F2F2F7", "fill-secondary", "#B9B9C2"),
             ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
@@ -5567,12 +5541,11 @@ mod tests {
             ("dim", "#7F7F7F", "label-secondary", "#16161B"),
             ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
             ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
-            ("dim", "#7F7F7F", "icon", "#36353D"),
             ("dim", "#7F7F7F", "separator", "#64646D"),
             ("dim", "#7F7F7F", "border-strong", "#030305"),
             ("dim", "#7F7F7F", "border-base", "#64646C"),
             ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
-            ("dim", "#7F7F7F", "border-ghost", "none"),
+            ("dim", "#7F7F7F", "border-none", "none"),
             ("dim", "#7F7F7F", "fill-primary", "#525259"),
             ("dim", "#7F7F7F", "fill-secondary", "#56565D"),
             ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
@@ -5587,12 +5560,11 @@ mod tests {
             ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
             ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
             ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
-            ("dim", "#1C1C1E", "icon", "#94949D"),
             ("dim", "#1C1C1E", "separator", "#38383F"),
             ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
             ("dim", "#1C1C1E", "border-base", "#313137"),
             ("dim", "#1C1C1E", "border-soft", "#28282E"),
-            ("dim", "#1C1C1E", "border-ghost", "none"),
+            ("dim", "#1C1C1E", "border-none", "none"),
             ("dim", "#1C1C1E", "fill-primary", "#424249"),
             ("dim", "#1C1C1E", "fill-secondary", "#3D3D45"),
             ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
@@ -5607,12 +5579,11 @@ mod tests {
             ("dim", "#101012", "label-secondary", "#B3B3BD"),
             ("dim", "#101012", "label-tertiary", "#92929B"),
             ("dim", "#101012", "label-quaternary", "#686871"),
-            ("dim", "#101012", "icon", "#92929B"),
             ("dim", "#101012", "separator", "#323239"),
             ("dim", "#101012", "border-strong", "#F0F0FA"),
             ("dim", "#101012", "border-base", "#25252B"),
             ("dim", "#101012", "border-soft", "#1C1C22"),
-            ("dim", "#101012", "border-ghost", "none"),
+            ("dim", "#101012", "border-none", "none"),
             ("dim", "#101012", "fill-primary", "#35353C"),
             ("dim", "#101012", "fill-secondary", "#313137"),
             ("dim", "#101012", "fill-tertiary", "#29292F"),
@@ -5627,12 +5598,11 @@ mod tests {
             ("dim", "#3478F6", "label-secondary", "#15141A"),
             ("dim", "#3478F6", "label-tertiary", "#35343B"),
             ("dim", "#3478F6", "label-quaternary", "#707079"),
-            ("dim", "#3478F6", "icon", "#35343B"),
             ("dim", "#3478F6", "separator", "#808088"),
             ("dim", "#3478F6", "border-strong", "#040408"),
             ("dim", "#3478F6", "border-base", "#63636C"),
             ("dim", "#3478F6", "border-soft", "#6E6E76"),
-            ("dim", "#3478F6", "border-ghost", "none"),
+            ("dim", "#3478F6", "border-none", "none"),
             ("dim", "#3478F6", "fill-primary", "#515158"),
             ("dim", "#3478F6", "fill-secondary", "#56565D"),
             ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),

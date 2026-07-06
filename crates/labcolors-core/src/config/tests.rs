@@ -106,7 +106,7 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
             let named = resolve_named_set(&bg, &table, &vc);
             let default_map = default_by_key(&bg, &vc);
 
-            // Сравниваем ТОЛЬКО 20 сегодняшних ролей (акцентные — новые, у них нет
+            // Сравниваем ТОЛЬКО 19 сегодняшних ролей (акцентные — новые, у них нет
             // дефолт-аналога; их покрывает diff=пусто тест против consumedRoles).
             for (name, res) in &named {
                 if !core_keys.contains(&name.as_str()) {
@@ -126,11 +126,12 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
             }
         }
     }
-    // 9 солвер-ролей (20 − 6 лестничных − separator − 4 теней, ушедших из
-    // паспорта по закону семантики) × 2 VC × 6 фонов = 108.
+    // 8 солвер-ролей (19 − 6 лестничных − separator − 4 теней, ушедших из
+    // паспорта по закону семантики; словарный канон #92 снёс роль icon) ×
+    // 2 VC × 6 фонов = 96.
     assert_eq!(
-        compared, 108,
-        "должно сравниться ровно 108 солвер-точек (пин не вакуумный)"
+        compared, 96,
+        "должно сравниться ровно 96 солвер-точек (пин не вакуумный)"
     );
 }
 
@@ -307,10 +308,15 @@ fn dj_anchor_bound_red_proof() {
 
 #[test]
 fn decorative_lc_non_positive_is_rejected() {
-    let cfg = with_role_recipe("icon", RoleRecipe::DecorativeLc { magnitude: 0.0 });
+    // `icon` больше не роль (канон #92 — алиас на label-tertiary); валидацию
+    // неположительной магнитуды проверяем на существующей роли label-tertiary.
+    let cfg = with_role_recipe(
+        "label-tertiary",
+        RoleRecipe::DecorativeLc { magnitude: 0.0 },
+    );
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.icon.magnitude"
+        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.label-tertiary.magnitude"
     ));
 }
 
@@ -719,11 +725,13 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "fill-info-secondary",
     "fill-info-tertiary",
     "fill-info-quaternary",
-    // Border (core neutral).
+    // Border (core neutral). border-ghost — deprecated-алиас канона #92,
+    // border-none — честный ноль (оба в контракте roles.json labui).
     "border-strong",
     "border-base",
     "border-soft",
     "border-ghost",
+    "border-none",
     // Border — brand/сентименты.
     "border-brand-strong",
     "border-brand-base",
@@ -778,9 +786,9 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "badge-fill-info",
     "badge-fill-static-dark",
     "badge-fill-static-light",
-    // Прочие эмитируемые нейтральные (icon/none — core; separator НЕ токен:
-    // бордер и сепаратор едины, компонент применяет бордер-токен).
-    "icon",
+    // Прочие эмитируемые нейтральные (none — core; icon снят с контракта каноном
+    // #92 — глиф красится label-tertiary; separator НЕ токен: бордер и сепаратор
+    // едины, компонент применяет бордер-токен).
     "none",
 ];
 

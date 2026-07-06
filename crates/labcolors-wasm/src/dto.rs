@@ -9,7 +9,7 @@
 //! Generic over the role set BY CONSTRUCTION: an entry is built per `(Role,
 //! Resolved)` the core returns and keyed by `Role::key()`. Nothing here
 //! enumerates the roles, so a set change carries through on a rebuild untouched:
-//! the label expansion already grew it to 20 roles, and the accent ladder
+//! the label expansion already grew it to 19 roles, and the accent ladder
 //! (issue #59) added the `Translucent` outcome carried below. Any further
 //! outcome lands the same way.
 
