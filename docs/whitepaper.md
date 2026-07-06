@@ -219,7 +219,8 @@ preferred_side }` ([`config.rs`](../crates/labcolors-core/src/config.rs));
 достигает юридический пол 4.5:1 (свойство одного фона, стабильное между
 light/dim); при ничьей (узкая полоса `Y ∈ [0.175, 0.1833]`, около `#767676`)
 выбирается белый — люминансное ядро LPC на всей полосе предпочитает белый, а
-его перелом лежит много выше (`~Y ≈ 0.36`). Это заменило правило «большая
+его перелом лежит много выше (измерен: `Y ≈ 0.342`, лок
+`model_polarity_crossover_is_measured_not_recited`). Это заменило правило «большая
 WCAG-маржа», которое отдавало Fluent-фон `#0078D4` (белый легален 4.529:1)
 чёрному вопреки конвенции.
 
@@ -330,9 +331,12 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
   8.0; тени 8.0 / 9.5 / 11.5 / 14.0 — таблица ролей в
   [`README.md`](../README.md)) держатся выше этого пола.
 - `PAIR_CROSSOVER_Y = 0.30` ([`pair.rs`](../crates/labcolors-core/src/pair.rs)) —
-  Y-порог кроссовера стороны тинт-пары; design-choice, откалиброван на 10 якорях
-  владельца («калибровка к якорям, не независимая валидация; значение не
-  меняется» — док константы).
+  Y-порог кроссовера стороны тинт-пары; терминал **(e) design-choice**: значение
+  выбрано внутри интервала якорей владельца (0.246, 0.423), модельный якорь
+  ИЗМЕРЕН (перелом метрики: ядро 0.3420, полная метрика ≈ 0.325 — лок
+  `model_polarity_crossover_is_measured_not_recited`), дизайн-значение сидит
+  ниже модельного предсказания — задекларированный конфликт вывода, значение не
+  меняется (док константы).
 
 ### 3.6. Байт-идентичность как контракт
 
@@ -400,7 +404,7 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
 | `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | допуск приёмки Lc, ±1 шаг сетки |
 | `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **выведен** = `MODEL_LC_FLOOR` 7.3 (клип APCA `0.0.98G-4g`) + `QUANT_GUARD` 0.2 (issue #44) |
 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **заземлён** — APCA-уровень Lc 15 (различимость не-текста; draft/single-origin, не WCAG 3) |
-| `PAIR_CROSSOVER_Y` | 0.30 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | **design-choice**, калибровка к 10 якорям владельца — не независимая валидация |
+| `PAIR_CROSSOVER_Y` | 0.30 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | терминал **(e) design-choice**: интервал якорей (0.246, 0.423), модельный якорь измерен (перелом ядра ≈0.342) — значение ниже модели, задекларированный конфликт вывода |
 | `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — калибровка |
 | `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона |
 | `TINT_TARGET_MP` | 6.1 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | целевая перцептивная красочность подтона |
