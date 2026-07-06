@@ -20,10 +20,11 @@
 //! готовит поверхность, на которой существующий закон даёт перцептивно
 //! правильную сторону с легальным полом.
 //!
-//! # Кроссовер
+//! # Кроссовер (level-3)
 //!
 //! Сторона пары — свойство ИДЕНТИЧНОСТИ СЕМЬИ: решается ОДИН РАЗ по
-//! каноническому светлому якорю (`PAIR_CROSSOVER_Y`) и не флипается между
+//! каноническому светлому якорю ([`pair_side`], смешанное доменное сравнение
+//! достижимого контраста двух архетипов лейбла) и не флипается между
 //! темами/IC — иначе «Brand» носил бы белый лейбл в light и чернильный в
 //! dark (тёмные якоря labui осветлены и перелезают порог: info dark
 //! #5696FF Y=0.31). Пер-режимная заливка двигается ПОД выбранную сторону:
@@ -39,23 +40,15 @@
 
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
 use crate::spaces::srgb::srgb_gamma_inv;
+use crate::spaces::vc::ViewingConditions;
 
-/// Y-порог кроссовера стороны пары «заливка × лейбл» — решается ОДИН РАЗ по
-/// каноническому светлому якорю семьи.
-///
-/// DESIGN-CHOICE, НЕ «перцептивный консенсус» и не измеренный порог. Значение
-/// 0.30 выбрано ВНУТРИ перцептивно-мотивированного интервала (0.246, 0.423),
-/// зажатого 10 Figma-якорями labui (красный #FF3B30 Y=0.246 → белая сторона;
-/// зелёный #34C759 Y=0.423 → чернильная). Полярностная асимметрия чтения —
-/// качественное основание (класс исследований, на которых построен APCA), НЕ
-/// источник конкретного числа. Правило «нижняя треть» интервала даёт 0.305;
-/// 0.30 — округление внутри интервала. Провенанс = 10 якорей ОДНОЙ палитры,
-/// 0 наблюдателей; контролируемый эксперимент (N≥15 наблюдателей) — ОТКРЫТАЯ
-/// задача. Тест `crossover_matches_palette_consensus` фиксирует лишь разделение
-/// этих 10 якорей на заявленные стороны — калибровка к якорям, не независимая
-/// валидация. Значение не меняется.
-// SSOT-TRACKED — Y-порог кроссовера стороны пары (design-choice), см. docs/empirical-inventory.md.
-pub(crate) const PAIR_CROSSOVER_Y: f64 = 0.30;
+// История порога: до главы #64 сторону решал калиброванный к 10 якорям
+// design-choice `PAIR_CROSSOVER_Y = 0.30` (level-2, чистый WCAG-люминанс;
+// провенанс — docs/empirical-inventory.md, бывшая строка 52). Константа
+// УДАЛЕНА: level-3 выводит кроссовер из самой контраст-кривой и снимает
+// калибровку — на ахроматической оси правило редуцируется к равно-|Lc|
+// кроссоверу Y* ≈ 0.342 (см. [`pair_side`] и лок
+// `achromatic_reduction_matches_derived_crossover`).
 
 /// Строгая граница победы белой стороны в `choose_polarity`:
 /// `(Y + 0.05)² < 1.05 · 0.05` ⇒ Y < 0.17913. Выведена из формулы WCAG (не
@@ -100,12 +93,49 @@ pub enum PairSide {
     Ink,
 }
 
-/// Выбрать сторону пары для кодированного якоря.
+/// Выбрать сторону пары для кодированного якоря — level-3: смешанное доменное
+/// сравнение достижимого контраста двух архетипов лейбла.
+///
+/// `Ink ⇔ |Lc(чёрный, Y_eff)| > |Lc(белый, Ys)|`,
+///
+/// где `Lc` — контраст-кривая SAPC-8 ([`crate::lpc`], `contrast_core`), `Ys` —
+/// WCAG-люминанс display-байтов якоря, `Y_eff` — воспринимаемая яркость якоря
+/// (Гельмгольц–Кольрауш: [`crate::solve::bg_luma`], серый эквивалент J_HK по
+/// Hellwig 2022 под каноническим sRGB-окружением).
+///
+/// Декомпозиция доменов — следствие ADR-0003, не его обход:
+///
+/// - читаемость СВЕТЛОГО лейбла — люминансная величина (Mullen 1985: детальную
+///   разборчивость несёт ахроматический канал): белая сторона меряется в Ys,
+///   H-K к ней не допущен — класс «H-K топит белый» (15:0, отчёт V3) исключён
+///   конструкцией;
+/// - «поверхность выглядит светлой → ей место нести чернила» — суждение о
+///   ЯРКОСТИ поверхности, законный дом H-K по тому же ADR: чернильная сторона
+///   меряется от Y_eff.
+///
+/// На ахроматической оси Y_eff ≈ Ys (H-K-член ≈ 0), и правило редуцируется к
+/// РАВНО-|Lc| кроссоверу самой кривой Y* ≈ 0.342 — порог не задаётся, а
+/// выводится (лок `achromatic_reduction_matches_derived_crossover`). Насыщенные
+/// фоны флипают в чернила РАНЬШЕ по Ys — hue-каверна полнотекстов таска #62;
+/// величина сдвига следует hue-зависимости H-K (Hellwig f(h)·C^0.587), новых
+/// констант нет: обе стороны — существующие функции движка.
+///
+/// Тай (равенство скоров) отдан свету: полярностная асимметрия чтения — белый
+/// предпочтителен, пока чернила строго не выиграли.
 pub fn pair_side(anchor_encoded: [f64; 3]) -> PairSide {
-    if wcag_y_encoded(anchor_encoded) < PAIR_CROSSOVER_Y {
-        PairSide::Light
-    } else {
+    let ys = wcag_y_encoded(anchor_encoded);
+    let lin = [
+        srgb_gamma_inv(anchor_encoded[0]),
+        srgb_gamma_inv(anchor_encoded[1]),
+        srgb_gamma_inv(anchor_encoded[2]),
+    ];
+    let y_eff = crate::solve::bg_luma(lin, &ViewingConditions::srgb());
+    let ink_score = crate::lpc::contrast_core(0.0, y_eff).abs();
+    let white_score = crate::lpc::contrast_core(1.0, ys).abs();
+    if ink_score > white_score {
         PairSide::Ink
+    } else {
+        PairSide::Light
     }
 }
 
@@ -191,6 +221,21 @@ mod tests {
                 pair_side(enc(hex)),
                 PairSide::Ink,
                 "{hex}: чернильная сторона"
+            );
+        }
+    }
+
+    /// (а) Тёмные/IC-якоря Figma носят чернильный лейбл СТЭНДАЛОН: их Ys
+    /// (0.31–0.32) чуть выше, но воспринимаемая яркость (0.43–0.47, H-K)
+    /// далеко за кроссовером — перцептивно это светлая пастель (полнотексты
+    /// таска #62). Семейные стороны это не трогает (канон решает светлый якорь).
+    #[test]
+    fn figma_dark_anchors_take_ink_side() {
+        for hex in ["#FF6161", "#5696FF", "#FF6482", "#409CFF"] {
+            assert_eq!(
+                pair_side(enc(hex)),
+                PairSide::Ink,
+                "{hex}: чернильная сторона стэндалон"
             );
         }
     }
@@ -309,78 +354,202 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Научные локи объективизации (волна science/constants-objectivization).
-// (c) INTERVAL-INSENSITIVE + EXPOSURE-анализ для PAIR_CROSSOVER_Y. Значение НЕ
-// меняется — тесты предъявляют, что классификационный выход (сторона пары) на
-// реальной палитре labui НЕ зависит от точного порога внутри задекларированного
-// интервала, и измеряют долю гаммы в зоне флипа.
+// Научные локи level-3 (глава #64): валидация выведенного кроссовера и
+// H-K-сдвига стороны. Заменяют exposure-локи удалённой константы (interval-
+// insensitivity потеряла предмет: порога больше нет, кроссовер выводится из
+// самой контраст-кривой, а H-K-сдвиг — из Hellwig f(h)·C^0.587).
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
-mod exposure_locks {
-    use super::{PAIR_CROSSOVER_Y, PairSide, pair_side, wcag_y_encoded};
-    use crate::exposure_support::{LABUI_ANCHORS, band_exposure, enc_of, wcag_y};
+mod level3_locks {
+    use super::{PairSide, encode_clamped, pair_side, wcag_y_encoded};
+    use crate::exposure_support::LABUI_ANCHORS;
+    use crate::spaces::oklab::oklab_to_srgb_linear;
     use crate::spaces::srgb::srgb_encoded_from_hex;
 
-    fn y_of(hex: &str) -> f64 {
-        wcag_y_encoded(srgb_encoded_from_hex(hex).unwrap())
+    /// Отставленный порог level-2 — нужен тестам как БАЗА СРАВНЕНИЯ (карта
+    /// флипов корпуса против прежнего поведения), не как правило.
+    const LEVEL2_CROSSOVER_Y_RETIRED: f64 = 0.30;
+
+    fn enc(hex: &str) -> [f64; 3] {
+        srgb_encoded_from_hex(hex).expect("тестовые hex-литералы валидны")
     }
 
-    /// (c) Sensitivity: на консенсус-сете labui сторона пары ИНВАРИАНТНА для любого
-    /// порога в задекларированном интервале. Доказ.: max Y светлой стороны СТРОГО
-    /// ниже min Y чернильной (чистый зазор), и PAIR_CROSSOVER_Y лежит в нём — значит
-    /// точное значение внутри зазора нематериально для этой палитры.
-    #[test]
-    fn crossover_side_is_invariant_across_palette_gap() {
-        let light = ["#007AFF", "#FF3B30", "#3E87FF", "#101012", "#5856D6"];
-        let ink = ["#FFA100", "#34C759", "#FFD000", "#FFFFFF", "#5AC8FA"];
-        let light_max = light.iter().map(|h| y_of(h)).fold(0.0f64, f64::max);
-        let ink_min = ink.iter().map(|h| y_of(h)).fold(f64::INFINITY, f64::min);
-        assert!(
-            light_max < ink_min,
-            "консенсус-сет должен иметь чистый зазор Y (light_max={light_max:.4} < ink_min={ink_min:.4})"
-        );
-        assert!(
-            light_max < PAIR_CROSSOVER_Y && PAIR_CROSSOVER_Y < ink_min,
-            "PAIR_CROSSOVER_Y={PAIR_CROSSOVER_Y} должен лежать в зазоре ({light_max:.4}, {ink_min:.4})"
-        );
-        // Любой порог в зазоре даёт то же разбиение — проверяем на границах зазора.
-        for theta in [light_max + 1e-6, ink_min - 1e-6, PAIR_CROSSOVER_Y] {
-            for h in light {
-                assert!(y_of(h) < theta, "{h}: светлая сторона при θ={theta:.4}");
-            }
-            for h in ink {
-                assert!(y_of(h) >= theta, "{h}: чернильная сторона при θ={theta:.4}");
+    /// Равно-|Lc| кроссовер контраст-кривой для архетипов белого (1.0) и
+    /// чёрного (0.0) — бисекция самой кривой, не константа.
+    fn derived_equal_lc_crossover() -> f64 {
+        let (mut lo, mut hi) = (0.05_f64, 0.95_f64);
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            let white = crate::lpc::contrast_core(1.0, mid).abs();
+            let black = crate::lpc::contrast_core(0.0, mid).abs();
+            if white > black {
+                lo = mid;
+            } else {
+                hi = mid;
             }
         }
+        0.5 * (lo + hi)
     }
 
-    /// EXPOSURE: доля гаммы в зоне флипа PAIR_CROSSOVER_Y = доля цветов с Y в
-    /// задекларированном интервале (0.246, 0.423) [красный/зелёный якоря labui].
-    /// Числа печатаются в отчёт (docs/empirical-residue.md); поведенческий инвариант —
-    /// НИ ОДИН реальный якорь labui не лежит СТРОГО внутри интервала (сторона семьи
-    /// однозначна по построению палитры).
+    /// Максимальная хрома Oklch внутри sRGB-куба для (L, h) — бисекция по C.
+    fn max_chroma(l: f64, h_rad: f64) -> f64 {
+        let inside = |c: f64| {
+            let lin = oklab_to_srgb_linear([l, c * h_rad.cos(), c * h_rad.sin()]);
+            lin.iter().all(|&v| (-1e-9..=1.0 + 1e-9).contains(&v))
+        };
+        let (mut lo, mut hi) = (0.0_f64, 0.5_f64);
+        for _ in 0..48 {
+            let mid = 0.5 * (lo + hi);
+            if inside(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
+    /// Насыщенная ячейка: (L, h, доля максимальной хромы) → display-байты.
+    fn swatch(l: f64, h_rad: f64, rel_c: f64) -> [f64; 3] {
+        let c = rel_c * max_chroma(l, h_rad);
+        encode_clamped(oklab_to_srgb_linear([l, c * h_rad.cos(), c * h_rad.sin()]))
+    }
+
+    /// (в) Ахроматическая редукция: на серой оси H-K-член ≈ 0, и флип
+    /// pair_side обязан совпасть с выведенным равно-|Lc| кроссовером Y* самой
+    /// кривой (Y* = 0.3420) с точностью остаточной колоримости CAM16 на
+    /// нейтралях (неполная хроматическая адаптация; задекларированный резидуй
+    /// `lpc`). Резидуй строго ОДНОнаправлен: C ≥ 0 ⇒ Y_eff ≥ Ys ⇒ флип может
+    /// лечь только НИЖЕ Y* — измерено 0.3340 (сдвиг 0.008 < 0.01). Обе точки
+    /// заметно выше отставленного level-2 порога 0.30 — сам подъём кроссовера
+    /// от резидуя не зависит.
     #[test]
-    fn exposure_pair_crossover() {
-        let (lo, hi) = (0.246, 0.423);
-        let (grid_pct, labui_hits) = band_exposure(wcag_y, lo, hi);
-        eprintln!(
-            "EXPOSURE PAIR_CROSSOVER_Y interval=({lo},{hi}) grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
-            labui_hits.len(),
-            labui_hits
+    fn achromatic_reduction_matches_derived_crossover() {
+        let y_star = derived_equal_lc_crossover();
+        eprintln!("выведенный равно-|Lc| кроссовер Y* = {y_star:.6}");
+        let side_at = |g: f64| pair_side([g, g, g]);
+        assert_eq!(side_at(0.0), PairSide::Light, "чёрный фон — светлый лейбл");
+        assert_eq!(side_at(1.0), PairSide::Ink, "белый фон — чернила");
+        let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+        for _ in 0..48 {
+            let mid = 0.5 * (lo + hi);
+            if side_at(mid) == PairSide::Light {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let flip_ys = crate::spaces::srgb::srgb_gamma_inv(0.5 * (lo + hi));
+        eprintln!("флип pair_side на серой оси: Ys = {flip_ys:.6}");
+        let residual = y_star - flip_ys;
+        assert!(
+            (0.0..0.01).contains(&residual),
+            "ахроматическая редукция: флип {flip_ys:.4} против Y* {y_star:.4} \
+             (резидуй {residual:.4} обязан быть в [0, 0.01))"
         );
-        // Консистентность реимплементированного предиката с продакшн-решением.
-        for &h in LABUI_ANCHORS {
-            let enc = srgb_encoded_from_hex(h).unwrap();
-            let prod = pair_side(enc);
-            let reimpl = if wcag_y(enc_of(h)) < PAIR_CROSSOVER_Y {
+        assert!(
+            flip_ys > LEVEL2_CROSSOVER_Y_RETIRED,
+            "подъём кроссовера против level-2 реален (флип {flip_ys:.4} > 0.30)"
+        );
+    }
+
+    /// (г) Корпус 49 якорей labui: ЕДИНСТВЕННОЕ расхождение с level-2 —
+    /// #4A8FFF (Brand dark): Ys=0.283, воспринимаемая яркость 0.42 —
+    /// перцептивно светлая пастель, чернила стэндалон. Семейная сторона
+    /// Brand не затронута: её решает канонический светлый #007AFF (Light,
+    /// пин консенсус-теста). Консенсус-10 и якоря (а) закреплены отдельно.
+    #[test]
+    fn corpus_flips_vs_level2_are_named_and_explained() {
+        let mut flips: Vec<&str> = Vec::new();
+        for &hex in LABUI_ANCHORS {
+            let e = enc(hex);
+            let old = if wcag_y_encoded(e) < LEVEL2_CROSSOVER_Y_RETIRED {
                 PairSide::Light
             } else {
                 PairSide::Ink
             };
+            if old != pair_side(e) {
+                flips.push(hex);
+            }
+        }
+        eprintln!("флипы корпуса против level-2: {flips:?}");
+        assert_eq!(
+            flips,
+            vec!["#4A8FFF"],
+            "ровно один поимённо объяснённый флип"
+        );
+        assert_eq!(pair_side(enc("#4A8FFF")), PairSide::Ink);
+    }
+
+    /// (д) Свип класса этюда V3 (10 оттенков × 24 средне-светлых тона,
+    /// максимальная хрома): H-K-сдвиг стороны против чистой Ys-модели идёт
+    /// ТОЛЬКО в направлении Light→Ink (насыщенная поверхность выглядит
+    /// светлее — раньше готова нести чернила; f(h) Хеллвига всюду > 0) и не
+    /// топит ни одну ячейку с ИЗВЕСТНОЙ белой конвенцией — пины V3 #007AFF,
+    /// #0082FF, #FF0000. Контр-конвенционный класс «H-K топит белый» пуст.
+    #[test]
+    fn v3_sweep_hk_shift_never_sinks_conventional_white() {
+        let y_star = derived_equal_lc_crossover();
+        let (mut light_to_ink, mut ink_to_light) = (0usize, 0usize);
+        for hue_step in 0..10 {
+            let h = f64::from(hue_step) * std::f64::consts::TAU / 10.0;
+            for tone in 0..24 {
+                let l = 0.30 + 0.60 * f64::from(tone) / 23.0;
+                let cell = swatch(l, h, 1.0);
+                let pure = if wcag_y_encoded(cell) < y_star {
+                    PairSide::Light
+                } else {
+                    PairSide::Ink
+                };
+                match (pure, pair_side(cell)) {
+                    (PairSide::Light, PairSide::Ink) => light_to_ink += 1,
+                    (PairSide::Ink, PairSide::Light) => ink_to_light += 1,
+                    _ => {}
+                }
+            }
+        }
+        eprintln!("свип 240: сдвигов white→ink {light_to_ink}, обратных {ink_to_light}");
+        assert_eq!(ink_to_light, 0, "H-K не имеет права «затемнять» поверхность");
+        assert!(light_to_ink > 0, "hue-каверна обязана существовать (таск #62)");
+        for hex in ["#007AFF", "#0082FF", "#FF0000"] {
             assert_eq!(
-                prod, reimpl,
-                "{h}: реимпл-предикат расходится с продакшн pair_side"
+                pair_side(enc(hex)),
+                PairSide::Light,
+                "{hex}: известная конвенция — белый лейбл"
             );
+        }
+    }
+
+    /// (е) Монотонность стороны: вдоль линии одного hue по возрастанию
+    /// светлоты — не более одного переключения, и только Light→Ink. Три
+    /// уровня относительной хромы, включая гамут-границу (каспы).
+    #[test]
+    fn at_most_one_switch_along_hue_lightness_lines() {
+        for hue_step in 0..12 {
+            let h = f64::from(hue_step) * std::f64::consts::TAU / 12.0;
+            for rel_c in [0.35, 0.70, 1.0] {
+                let mut prev = None;
+                let mut switches = 0usize;
+                for step in 0..=120 {
+                    let l = 0.02 + 0.96 * f64::from(step) / 120.0;
+                    let side = pair_side(swatch(l, h, rel_c));
+                    if let Some(p) = prev {
+                        if side != p {
+                            switches += 1;
+                            assert_eq!(
+                                (p, side),
+                                (PairSide::Light, PairSide::Ink),
+                                "hue {hue_step}, C_rel {rel_c}: только Light→Ink"
+                            );
+                        }
+                    }
+                    prev = Some(side);
+                }
+                assert!(
+                    switches <= 1,
+                    "hue {hue_step}, C_rel {rel_c}: {switches} переключений стороны"
+                );
+            }
         }
     }
 }

@@ -2576,8 +2576,9 @@ pub fn resolve_named_set(
 /// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
 /// achieves against a background — the cheap **recheck** primitive.
 ///
-/// Both colours are **linear** sRGB; the result is `(lc, wcag_ratio)`. It costs
-/// one CAM16 forward per colour plus WCAG arithmetic — **no solve**. The reactive
+/// Both colours are **linear** sRGB; the result is `(lc, wcag_ratio)`. С
+/// активации ADR-0003 (глава #64) замер полностью display-доменный — ни
+/// одного CAM16-форварда, только WCAG-арифметика — **no solve**. The reactive
 /// runtime calls this per frame to decide whether already-resolved colours still
 /// pass their contract against a *changed* background, re-solving (and easing)
 /// only when they stably do not, instead of re-solving every frame.
@@ -2590,18 +2591,19 @@ pub fn resolve_named_set(
 pub fn measure_contrast(
     bg_linear: [f64; 3],
     fg_linear: [f64; 3],
-    vc: &ViewingConditions,
+    _vc: &ViewingConditions,
 ) -> (f64, f64) {
-    let y_bg = crate::solve::bg_luma(bg_linear, vc);
-    let y_fg = crate::solve::bg_luma(fg_linear, vc);
-    let lc = crate::lpc::contrast_core(y_fg, y_bg);
-    // WCAG is defined on the *display* (gamma-encoded, 8-bit) colour, exactly as
+    // Обе метрики — перцептивный `Lc` и легальный WCAG — читают ОДНУ люминансу
+    // квантованного display-цвета (ось читаемости в `Ys`, ADR-0003), exactly as
     // the solver measures it (`finish` → `quantised_display`), so the recheck
-    // reproduces the solver's reported `wcag_ratio` bit-for-bit.
-    let wcag = crate::wcag::contrast_ratio(
-        crate::solve::quantised_display(fg_linear),
-        crate::solve::quantised_display(bg_linear),
+    // reproduces the solver's reported `lc`/`wcag_ratio` bit-for-bit.
+    let fg_disp = crate::solve::quantised_display(fg_linear);
+    let bg_disp = crate::solve::quantised_display(bg_linear);
+    let lc = crate::lpc::contrast_core(
+        crate::wcag::relative_luminance(fg_disp),
+        crate::wcag::relative_luminance(bg_disp),
     );
+    let wcag = crate::wcag::contrast_ratio(fg_disp, bg_disp);
     (lc, wcag)
 }
 
@@ -2609,51 +2611,47 @@ pub fn measure_contrast(
 /// **shared** background hex, under `vc`. The per-frame primitive the reactive
 /// runtime calls.
 ///
-/// The background's H-K luminance and display value are computed **once** for the
-/// whole batch, so the cost is one CAM16 forward for the background plus one per
-/// foreground — not two per foreground as [`measure_contrast`] (single pair)
-/// would cost. That sharing is what makes "recheck every role each frame" cheap
-/// enough to replace "re-solve every role each frame": the controller keeps the
-/// current colours while they still pass and only re-solves the rare role that
-/// stably fails.
+/// The background's luminance is computed **once** for the whole batch. С
+/// активации ADR-0003 форвард цвета — это ОДНА `relative_luminance` его
+/// display-байтов (ни одного CAM16), so "recheck every role each frame" is
+/// cheaper still than "re-solve every role each frame": the controller keeps
+/// the current colours while they still pass and only re-solves the rare role
+/// that stably fails.
 ///
 /// Each result equals what the solver's `finish` measured for that fg/bg pair, so
 /// a freshly-resolved set re-checks to its own reported contrasts. Returns `Err`
 /// if any hex is invalid (only `#RRGGBB` or bare `RRGGBB` is accepted).
-/// One colour's two recheck ingredients from its hex: the H-K luminance `y`
-/// (for the perceptual `Lc`) and the WCAG relative luminance `rl`.
+/// One colour's recheck ingredient from its hex: the WCAG relative luminance
+/// `rl` of its display bytes — с активации ADR-0003 перцептивный `Lc` и
+/// легальный WCAG читают ОДНУ и ту же люминансу, бывшая пара `(y_hk, rl)`
+/// схлопнулась в один скаляр, а recheck стал VC-независимым (display-домен).
 ///
 /// SINGLE SOURCE OF TRUTH for the forward, shared by [`recheck_against`] and
 /// [`recheck_against_multi`] so they cannot drift — the byte-identity both
 /// functions promise now holds *by construction*, not by two copies staying in
-/// sync. Both hot-path economies live here:
-///   1. The WCAG display value is taken straight from the byte (`byte/255`) by
-///      `srgb_linear_and_display_from_hex`, so the per-channel `quantised_display`
-///      encode `powf` is gone — `byte/255 == quantised_display(decode(byte))`
-///      exactly (pinned in `spaces::srgb::display_equals_quantised_display_on_every_byte`).
-///   2. `y` and `rl` are both derived from one parse of the hex, no second decode.
-fn hex_forward(hex: &str, vc: &ViewingConditions) -> Result<(f64, f64), String> {
-    let (linear, disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(hex)?;
-    let y = crate::solve::bg_luma(linear, vc);
-    let rl = crate::wcag::relative_luminance(disp);
-    Ok((y, rl))
+/// sync. The hot-path economy lives here: the WCAG display value is taken
+/// straight from the byte (`byte/255`) by `srgb_encoded_from_hex`, so the
+/// per-channel `quantised_display` encode `powf` is gone —
+/// `byte/255 == quantised_display(decode(byte))` exactly (pinned in
+/// `spaces::srgb::display_equals_quantised_display_on_every_byte`).
+fn hex_forward(hex: &str) -> Result<f64, String> {
+    let disp = crate::spaces::srgb::srgb_encoded_from_hex(hex)?;
+    Ok(crate::wcag::relative_luminance(disp))
 }
 
 pub fn recheck_against(
     bg_hex: &str,
     fg_hexes: &[&str],
-    vc: &ViewingConditions,
+    _vc: &ViewingConditions,
 ) -> Result<Vec<(f64, f64)>, String> {
-    // The background's forward is loop-invariant — computed once — and its WCAG
-    // relative luminance is therefore linearised once, not re-linearised inside
-    // every foreground's ratio. The remaining per-colour WCAG cost is a single
-    // `relative_luminance` on the exact display value the solver measured.
-    let (y_bg, rl_bg) = hex_forward(bg_hex, vc)?;
+    // The background's forward is loop-invariant — computed once. Один скаляр
+    // на цвет: та же люминанса кормит и `contrast_core`, и WCAG-ратио.
+    let rl_bg = hex_forward(bg_hex)?;
     fg_hexes
         .iter()
         .map(|fg_hex| {
-            let (y_fg, rl_fg) = hex_forward(fg_hex, vc)?;
-            let lc = crate::lpc::contrast_core(y_fg, y_bg);
+            let rl_fg = hex_forward(fg_hex)?;
+            let lc = crate::lpc::contrast_core(rl_fg, rl_bg);
             let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
             Ok((lc, wcag))
         })
@@ -2661,14 +2659,14 @@ pub fn recheck_against(
 }
 
 /// Multi-background recheck: the `(lc, wcag_ratio)` each foreground achieves
-/// against EACH of several background samples, sharing every foreground's CAM16
-/// forward across all samples. The reactive controller's worst-case loop rechecks
-/// the SAME foreground set against N backdrop samples (a gradient / image), and
-/// the dominant cost — one CAM16 forward per foreground — does not depend on the
-/// background, so it is wasted N−1 times when each sample is a separate
-/// [`recheck_against`] call. Here each foreground's `(y_fg, rl_fg)` is computed
-/// ONCE and reused for every sample; only the per-background luminances and the
-/// two cheap combine steps (`contrast_core`, `ratio_from_luminances`) repeat.
+/// against EACH of several background samples, sharing every foreground's
+/// forward across all samples. The reactive controller's worst-case loop
+/// rechecks the SAME foreground set against N backdrop samples (a gradient /
+/// image); each foreground's `rl_fg` is computed ONCE and reused for every
+/// sample — с активации ADR-0003 форвард подешевел до одной
+/// `relative_luminance` display-байтов (CAM16 ушёл с оси читаемости), но
+/// хойстинг сохранён: он несёт контракт byte-identity двух входов, не только
+/// экономию.
 ///
 /// The result is **byte-identical**, pair for pair, to calling [`recheck_against`]
 /// once per background: the same float operations run in the same order, only the
@@ -2679,21 +2677,21 @@ pub fn recheck_against(
 pub fn recheck_against_multi(
     bg_hexes: &[&str],
     fg_hexes: &[&str],
-    vc: &ViewingConditions,
+    _vc: &ViewingConditions,
 ) -> Result<Vec<f64>, String> {
     // Precompute each foreground's background-independent forward exactly once,
     // through the SAME `hex_forward` `recheck_against` uses — so the shared-forward
     // path guarantees byte-identity between the two entry points by construction.
-    let fg_pre: Vec<(f64, f64)> = fg_hexes
+    let fg_pre: Vec<f64> = fg_hexes
         .iter()
-        .map(|fg_hex| hex_forward(fg_hex, vc))
+        .map(|fg_hex| hex_forward(fg_hex))
         .collect::<Result<_, String>>()?;
 
     let mut out = Vec::with_capacity(bg_hexes.len() * fg_hexes.len() * 2);
     for bg_hex in bg_hexes {
-        let (y_bg, rl_bg) = hex_forward(bg_hex, vc)?;
-        for &(y_fg, rl_fg) in &fg_pre {
-            out.push(crate::lpc::contrast_core(y_fg, y_bg));
+        let rl_bg = hex_forward(bg_hex)?;
+        for &rl_fg in &fg_pre {
+            out.push(crate::lpc::contrast_core(rl_fg, rl_bg));
             out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
         }
     }

@@ -1,26 +1,29 @@
 //! Inverse perceptual-contrast solver: `solve(bg, contract, …) → colour`.
 //!
-//! The forward path maps a colour to its H-K-corrected luminance `Y_hk` and
-//! through [`contrast_core`](crate::lpc) to a contrast value `Lc`. This module
-//! runs that path backwards: given a background and a target contrast it
-//! recovers the foreground luminance analytically (the contrast core is
-//! invertible), then searches `(lightness, chroma, hue)` for an in-gamut colour
-//! whose H-K-corrected lightness reproduces that luminance.
+//! The forward path maps a colour to the WCAG relative luminance `Ys` of its
+//! quantised display value and through [`contrast_core`](crate::lpc) to a
+//! contrast value `Lc` — ось читаемости считает в домене `Ys`, в котором
+//! определены константы SAPC-8 (ADR-0003; активировано главой #64). This
+//! module runs that path backwards: given a background and a target contrast
+//! it recovers the foreground luminance analytically (the contrast core is
+//! invertible), then searches `(lightness, chroma, hue)` for an in-gamut
+//! colour whose display luminance reproduces that target.
 //!
 //! ## Algorithm
 //!
 //! 1. **Background → luminance interval.** [`BgInput`] reduces to `[Y_lo, Y_hi]`
-//!    in `Y_hk` space; a [`Solid`](BgInput::Solid) colour is the degenerate
-//!    interval `[Y, Y]`. The contract is checked at both ends.
+//!    in `Ys` space (WCAG relative luminance of the quantised display colour);
+//!    a [`Solid`](BgInput::Solid) colour is the degenerate interval `[Y, Y]`.
+//!    The contract is checked at both ends.
 //! 2. **Invert the contrast core.** From the target `Lc` and a background
 //!    luminance, recover the clamped foreground luminance for the matching
-//!    polarity, then invert the soft black clamp to a raw `Y_hk` — using the
+//!    polarity, then invert the soft black clamp to a raw `Ys` — using the
 //!    same canonical constants the forward curve uses (no duplicated literals).
-//! 3. **`Y_hk` → `J_HK`.** [`grey_j`](crate::lpc) is the exact inverse of the
-//!    forward `y_hk` binary search, so this step is analytic.
-//! 4. **`J_HK` → colour.** Bisect Oklab lightness so that, after the H-K
-//!    correction and the chroma the policy requests (capped at the in-gamut
-//!    maximum via [`max_chroma`](crate::scale)), the colour lands on `J_HK`.
+//! 3. **`Ys` → colour.** Bisect Oklab lightness so that, after the chroma the
+//!    policy requests (capped at the in-gamut maximum via
+//!    [`max_chroma`](crate::scale)), the display encoding of the colour lands
+//!    on `Ys`. The step is VC-free and CAM16-free: WCAG luminance is a
+//!    display-domain quantity.
 //!
 //! An unreachable contract returns [`Unreachable`] with a reason — never a
 //! silent clip.
@@ -251,27 +254,31 @@ impl BgInput {
         Ok(Self::Solid(rgb))
     }
 
-    /// Reduce the descriptor to its `Y_hk` luminance interval under `vc`.
+    /// Reduce the descriptor to its readability luminance interval — `Ys`,
+    /// WCAG relative luminance of the quantised display colour (ADR-0003:
+    /// ось читаемости считает в `Ys`; активировано главой #64).
     ///
     /// New variants plug in here without touching `solve`'s signature (SEAM a).
     ///
     /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
-    /// the background **only** through three scalars derived here from `bg` — the
-    /// H-K-corrected perceptual luminance `Y_hk` (this interval), the WCAG 2.1
-    /// relative luminance `Y_wcag` of the quantised display colour (polarity +
-    /// the legal floor), and the CAM16-UCS lightness `J'_bg` (needed only by the
-    /// dJ' roles, and free from the same forward that yields `Y_hk`). Verified by
-    /// an exhaustive trace of every `bg` read on the `resolve_set_live` path: each
-    /// is one of those three, never a raw hue/chroma read. This is what lets the
-    /// grey fast path (256 codes) and the chromatic memo (keyed on the exact
-    /// display colour, a superset of the three) stay bit-identical to the solver.
+    /// the background **only** through two scalars derived here from `bg` — the
+    /// WCAG 2.1 relative luminance `Y_wcag` of the quantised display colour
+    /// (readability contract + polarity + the legal floor: один домен, одно
+    /// число) and the CAM16-UCS lightness `J'_bg` (needed only by the dJ'
+    /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — покинул ось
+    /// читаемости вместе с ADR-0003 и живёт только на яркостной оси
+    /// ([`bg_luma`]: сторона пары, свечение, сентимент). Verified by an
+    /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
+    /// This is what lets the grey fast path (256 codes) and the chromatic memo
+    /// (keyed on the exact display colour, a superset of the two) stay
+    /// bit-identical to the solver.
     pub(crate) fn luma_interval(
         &self,
-        vc: &ViewingConditions,
+        _vc: &ViewingConditions,
     ) -> Result<LumaInterval, Unreachable> {
         match self {
             BgInput::Solid(rgb) => {
-                let y = bg_luma(*rgb, vc);
+                let y = wcag::relative_luminance(quantised_display(*rgb));
                 Ok(LumaInterval { lo: y, hi: y })
             }
         }
@@ -303,7 +310,8 @@ impl BgInput {
     }
 }
 
-/// A background luminance interval in `Y_hk` space (H-K-corrected luminance).
+/// A background luminance interval in `Ys` space (WCAG relative luminance of
+/// the quantised display colour — домен оси читаемости, ADR-0003).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LumaInterval {
     lo: f64,
@@ -576,7 +584,7 @@ pub(crate) fn solve_in(
 
     // Stage 1 — perceptual target. Invert the LPC core for the Oklab lightness
     // that reproduces the contract's target against the governing endpoint.
-    let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy, vc)?;
+    let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy)?;
 
     // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
     // perceptual solution falls short of it, push the colour until it clears the
@@ -747,17 +755,16 @@ fn solve_quantization_neighbor(
 }
 
 /// Stage 1: invert the LPC core to the Oklab lightness reproducing `target`
-/// against a single background luminance.
+/// against a single background luminance (`Ys` domain, ADR-0003). VC-free:
+/// обе стороны инверсии — display-доменные величины.
 fn solve_lpc_lightness(
     y_bg: f64,
     target: f64,
     hue: Hue,
     chroma_policy: ChromaPolicy,
-    vc: &ViewingConditions,
 ) -> Result<f64, Unreachable> {
     let y_fg = invert_contrast(y_bg, target)?;
-    let target_j_hk = lpc::grey_j(y_fg, vc);
-    Ok(match_lightness(target_j_hk, hue, chroma_policy, vc))
+    Ok(match_lightness_ys(y_fg, hue, chroma_policy))
 }
 
 /// The CAM16-UCS lightness `J'` of a **linear**-sRGB colour under `vc`.
@@ -1088,125 +1095,51 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
     }
 }
 
-/// Recover the Oklab lightness whose H-K-corrected lightness equals
-/// `target_j_hk`, applying `chroma_policy` at `hue`.
+/// Recover the Oklab lightness whose display-encoded WCAG relative luminance
+/// equals `target_ys`, applying `chroma_policy` at `hue`.
 ///
-/// `J_HK` runs from ~0 at black to ~100 at white and is strictly monotone in
-/// `l_ok`, so the lightness endpoints bracket the target and a search on the
-/// continuous curve converges to the reproducing lightness. Returns the Oklab
-/// lightness; the colour itself is built from it via [`build_color`].
+/// `Ys` runs from 0 at black to 1 at white and is monotone in `l_ok` along a
+/// hue line under the policy's chroma profile, so the lightness endpoints
+/// bracket the target and the bisection converges to the reproducing
+/// lightness. Returns the Oklab lightness; the colour itself is built from it
+/// via [`build_color`].
 ///
-/// ## Fast path: grey-axis LUT seed
-///
-/// For the neutral core — `ChromaPolicy::Neutral`, or a small undertone
-/// (`ratio ≤ `[`MAX_LUT_CHROMA`](crate::lut::MAX_LUT_CHROMA)) under one of the
-/// two precompiled viewing conditions — [`seed_bracket`](crate::lut::seed_bracket)
-/// supplies a *validated* lightness bracket from the precompiled grey-axis table
-/// (see [`crate::lut`]). Refining inside that narrow bracket reaches full
-/// precision in a handful of bisection steps instead of 64, collapsing the
-/// per-`solve` cost from ~64 CAM16 forward passes to a few. The result is
-/// bit-compatible with the cold bisection: the seed is only a starting bracket,
-/// the refinement converges the same root, and the empirical final-`Lc` delta
-/// over the solver grid is `0.00000` — gated `< 0.01 Lc` by the LUT golden
-/// tests (`lut_adds_…`, `lut_bracket_path_…`), ten times tighter than the
-/// solver's `0.1 Lc` budget.
-///
-/// ## Slow path: cold bisection
-///
-/// Any other viewing condition, or a chroma past the LUT threshold, takes the
-/// original full-`[0, 1]` 64-iteration bisection verbatim — correctness is
-/// never traded for the seed, only speed. The threshold is a performance gate;
-/// the bracket [`seed_bracket`](crate::lut::seed_bracket) returns is
-/// re-validated against the real (possibly tinted) curve before use, so the
-/// fast path is taken only when the bracket provably contains the root.
-fn match_lightness(
-    target_j_hk: f64,
-    hue: Hue,
-    chroma_policy: ChromaPolicy,
-    vc: &ViewingConditions,
-) -> f64 {
-    let j_hk_of =
-        |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
-
-    match crate::lut::seed_bracket(target_j_hk, hue, chroma_policy, vc) {
-        // Pure neutral: the direct table inverse is the answer.
-        Some(crate::lut::LutSeed::Exact(l_ok)) => l_ok,
-        // Small chroma: refine the validated bracket on the real curve.
-        Some(crate::lut::LutSeed::Bracket(bracket)) => {
-            refine_in_bracket(target_j_hk, bracket, j_hk_of)
-        }
-        // Unsupported VC or large chroma: the original cold bisection.
-        None => cold_bisect(target_j_hk, j_hk_of),
-    }
+/// The search is **VC-free and CAM16-free**: WCAG luminance is a
+/// display-domain quantity (ADR-0003 — ось читаемости в `Ys`), so each probe
+/// costs one Oklab→sRGB conversion plus gamma-encode and a dot product. Это
+/// сняло смысл grey-axis LUT (бывший `crate::lut`, удалён этой главой #64):
+/// таблица существовала, чтобы не платить ~64 CAM16-форварда за бисекцию
+/// `J_HK`; бисекция `Ys` дешевле обслуживания самой таблицы, а её
+/// bit-identity-мост стал безпредметен вместе с доменом.
+fn match_lightness_ys(target_ys: f64, hue: Hue, chroma_policy: ChromaPolicy) -> f64 {
+    let ys_of = |l_ok: f64| {
+        let rgb = build_color(l_ok, hue, chroma_policy);
+        wcag::relative_luminance([srgb_gamma(rgb[0]), srgb_gamma(rgb[1]), srgb_gamma(rgb[2])])
+    };
+    cold_bisect(target_ys, ys_of)
 }
 
-/// The Oklab-lightness resolution the bracket refinement converges to. At
-/// `1e-12` the residual is far below one 8-bit output step (`≈ 3.9e-3`), so the
-/// emitted hex — and the measured `Solved.lc()` — matches the cold bisection;
-/// validated to a `0.00000` final-`Lc` delta on the solver grid. The `64`-step
-/// cap mirrors the cold path so a degenerate bracket can never spin.
-const L_OK_EPSILON: f64 = 1e-12;
-
-/// Refine a LUT-seeded lightness bracket to [`L_OK_EPSILON`] by bisection on the
-/// real curve. The bracket is guaranteed to contain the root, so this only
-/// tightens it — typically in far fewer than 64 steps.
-fn refine_in_bracket(
-    target_j_hk: f64,
-    bracket: crate::lut::LightnessBracket,
-    j_hk_of: impl Fn(f64) -> f64,
-) -> f64 {
-    let mut lo = bracket.lo;
-    let mut hi = bracket.hi;
-    // Endpoint short-circuits mirror the cold path's, so a target at or beyond
-    // the gamut extremes returns the same boundary lightness.
-    if target_j_hk <= j_hk_of(lo) {
-        return lo;
-    }
-    if target_j_hk >= j_hk_of(hi) {
-        return hi;
-    }
-    let mut iterations = 0;
-    while hi - lo > L_OK_EPSILON && iterations < 64 {
-        let mid = (lo + hi) * 0.5;
-        if j_hk_of(mid) < target_j_hk {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-        iterations += 1;
-    }
-    (lo + hi) * 0.5
-}
-
-/// The original cold bisection over the full `[0, 1]` lightness range, used when
-/// no LUT seed applies. Kept byte-for-byte equivalent to the pre-LUT solver so
-/// unsupported-VC and large-chroma results are unchanged.
-fn cold_bisect(target_j_hk: f64, j_hk_of: impl Fn(f64) -> f64) -> f64 {
+/// Full-range `[0, 1]` lightness bisection over a monotone luminance curve.
+/// 64 halvings take the interval far beyond the 8-bit output grid; endpoint
+/// short-circuits return the boundary lightness for out-of-gamut targets.
+fn cold_bisect(target: f64, curve_of: impl Fn(f64) -> f64) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
-    if target_j_hk <= j_hk_of(lo) {
+    if target <= curve_of(lo) {
         return lo;
     }
-    if target_j_hk >= j_hk_of(hi) {
+    if target >= curve_of(hi) {
         return hi;
     }
     for _ in 0..64 {
         let mid = (lo + hi) * 0.5;
-        if j_hk_of(mid) < target_j_hk {
+        if curve_of(mid) < target {
             lo = mid;
         } else {
             hi = mid;
         }
     }
     (lo + hi) * 0.5
-}
-
-/// Crate-internal re-export of [`build_color`] for the grey-axis LUT generator
-/// and its small-chroma bracket validation. Keeps the table bound to the *same*
-/// forward path `solve` uses, so the LUT can never tabulate a different colour
-/// than the one the solver emits (single source of truth, issue #29).
-pub(crate) fn build_color_for_lut(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
-    build_color(l_ok, hue, chroma_policy)
 }
 
 /// Build the in-gamut linear-sRGB colour at Oklab lightness `l_ok`, applying
@@ -1230,8 +1163,11 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
 
 /// Quantise the ideal colour to hex and report both contrasts it actually
 /// achieves — what the caller gets, not the pre-quantisation ideal. The
-/// perceptual `lc` is measured in `Y_hk` space against `y_bg`; the legal
-/// `wcag_ratio` on the quantised display colour against `bg_disp`.
+/// perceptual `lc` is measured in `Ys` space (WCAG relative luminance of the
+/// quantised display colour — ADR-0003) against `y_bg`; the legal `wcag_ratio`
+/// on the same display colour against `bg_disp`. Обе метрики читают ОДНУ
+/// люминансу — домен-мисматч оси читаемости закрыт конструкцией. The CAM16
+/// forward remains solely for the returned [`LcsColor`] appearance correlates.
 fn finish(
     rgb_ideal: [f64; 3],
     y_bg: f64,
@@ -1240,21 +1176,14 @@ fn finish(
     vc: &ViewingConditions,
 ) -> Result<Solved, Unreachable> {
     let hex = hex_from_srgb(rgb_ideal);
-    // The quantised colour, decoded once to linear sRGB, drives both perceptual
-    // measurements that follow — the H-K luminance and the CAM16 appearance
-    // correlates. Both previously ran the CIECAM16 forward on this *same* XYZ
-    // independently (`from_xyz_with_hok` and `bg_luma` → `j_hk_from_xyz`),
-    // doubling the hottest pass on every candidate. Run the forward once and feed
-    // both: `LcsColor::from_cam16` is exactly what `from_xyz_with_hok` builds, and
-    // `j_hk_from_cam16` is the same `J_HK` `bg_luma` derives — bit-identical, one
-    // forward instead of two.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
     let xyz = srgb_to_xyz(rgb_quantised);
     let (j, m, h) = crate::spaces::cam16::forward(xyz, vc);
     let color = LcsColor::from_cam16(j, m, h, oklab_hue(rgb_quantised));
-    let y_fg = lpc::y_hk(lpc::j_hk_from_cam16(j, m, h, vc).max(0.0), vc);
+    let disp = quantised_display(rgb_ideal);
+    let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
+    let wcag_ratio = wcag::contrast_ratio(disp, bg_disp);
     Ok(Solved {
         color,
         hex,
@@ -1283,21 +1212,27 @@ fn meets_floor_lc(lc: f64, target: f64) -> bool {
 /// intervals. Re-measures the contrast on the *quantised* hex — the value the
 /// caller actually gets — so the gate reflects the emitted colour, not the
 /// pre-quantisation ideal.
-fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) -> bool {
-    let Ok(rgb) = srgb_from_hex(solved.hex()) else {
+fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions) -> bool {
+    let Ok(disp) = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) else {
         // `solved.hex()` is produced by `hex_from_srgb`, so it always parses;
         // an unparsable hex here is a contradiction — treat it as not meeting.
         return false;
     };
-    let y_fg = bg_luma(rgb, vc);
+    // `byte/255 == quantised_display(decode(byte))` точно (пин
+    // `display_equals_quantised_display_on_every_byte`) — читаем ту же `Ys`,
+    // которую замерил `finish`.
+    let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
     meets_floor_lc(lc, target)
 }
 
-/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus. Named for its
-/// commonest caller (the background), but it is purely `colour → Y_hk`; the
-/// reactive recheck primitive ([`semantic::measure_contrast`]) reuses it for the
-/// foreground too.
+/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus — воспринимаемая
+/// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).
+///
+/// После активации ADR-0003 (глава #64) ось читаемости это НЕ читает: контракт
+/// контраста, полы и recheck меряются в `Ys`. Потребители — яркостная ось:
+/// выбор стороны пары ([`crate::pair::pair_side`] — H-K-сдвиг кроссовера на
+/// насыщенных фонах) и яркостные подсистемы.
 pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
     lpc::y_hk(j_hk, vc)
@@ -2309,308 +2244,62 @@ mod tests {
         );
     }
 
-    // ── Grey-axis LUT: bit-compatibility with the cold bisection ──────────────
+    // ── `match_lightness_ys`: инверсия оси читаемости (ADR-0003, глава #64) ──
 
-    /// Reference: the pre-LUT cold bisection of `match_lightness`, kept here as
-    /// the golden oracle the LUT path is measured against. Bit-identical to the
-    /// loop `match_lightness` falls back to when no LUT seed applies.
-    fn reference_match_lightness(
-        target_j_hk: f64,
-        hue: Hue,
-        chroma_policy: ChromaPolicy,
-        vc: &ViewingConditions,
-    ) -> f64 {
-        let j_hk_of =
-            |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
-        cold_bisect(target_j_hk, j_hk_of)
-    }
-
+    /// Round-trip lock on the `Ys` matcher that replaced the CAM16 `J_HK`
+    /// bisection + grey-axis LUT (глава #64). For a dense lightness grid along
+    /// both production chroma profiles, the WCAG relative luminance of the
+    /// built colour must be recovered to bisection precision, and out-of-gamut
+    /// targets must short-circuit to the gamut endpoints.
+    ///
+    /// Это единственное место, где солвер инвертирует ось читаемости; тест
+    /// охраняет строгую монотонность `Ys` вдоль тонированной кривой
+    /// (`build_color` при фиксированных hue/policy), на которой держится
+    /// корректность бисекции: плато или излом кривой развалили бы
+    /// единственность корня и провалили round-trip задолго до 1e-9.
     #[test]
-    fn lut_match_lightness_matches_bisection_on_the_grey_grid() {
-        // Golden: across a dense l_ok grid under both precompiled VCs, the LUT
-        // `match_lightness` (neutral → direct interp; the fast path) reproduces
-        // the cold bisection's lightness to within the interpolation bound, and
-        // wherever the 8-bit hex differs the perceptual Lc cost stays under the
-        // tightened `MAX_LC_AT_MISMATCH` gate. (A handful of grid points sit
-        // exactly on an 8-bit rounding boundary, where the sub-3e-4 lightness
-        // difference flips one hex step either way — both colours are within
-        // budget; the boundary assignment is not a regression.)
-        const MAX_L_INTERP: f64 = 5e-4; // K=257 inverse-interp bound, with margin
-        // Measured worst case is 0.0003 Lc at one of those boundary flips; gate
-        // at 0.01 — ~33× the fact, 10× tighter than the old 0.1 budget — so a
-        // regression that crept the cost toward 0.1 fails instead of passing
-        // green. The eprintln still reports the exact measured number.
-        const MAX_LC_AT_MISMATCH: f64 = 0.01;
-        for (vc, vc_name) in vcs() {
+    fn match_lightness_ys_round_trips_on_both_chroma_profiles() {
+        // 64 halvings shrink the bracket to ~5.4e-20; the gate sits at 1e-9 —
+        // ~11 decades of headroom, yet any monotonicity break or a bisection
+        // that stops short blows past it immediately.
+        const MAX_L_ERR: f64 = 1e-9;
+        let cases = [
+            (Hue::deg(0.0), ChromaPolicy::Neutral),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.05)),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.10)),
+            (Hue::deg(30.0), ChromaPolicy::Relative(0.10)),
+        ];
+        let n = 1024usize;
+        for (hue, policy) in cases {
             let mut max_l_err = 0.0_f64;
-            let mut max_lc_at_mismatch = 0.0_f64;
-            let mut hex_mismatches = 0usize;
-            let n = 4096usize;
             for i in 0..=n {
                 let l = i as f64 / n as f64;
-                let target_j_hk = lpc::j_hk_from_xyz(
-                    srgb_to_xyz(build_color(l, Hue::deg(0.0), ChromaPolicy::Neutral)),
-                    &vc,
-                );
-                let l_lut = match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &vc);
-                let l_ref = reference_match_lightness(
-                    target_j_hk,
-                    Hue::deg(0.0),
-                    ChromaPolicy::Neutral,
-                    &vc,
-                );
-                max_l_err = max_l_err.max((l_lut - l_ref).abs());
-
-                let rgb_lut = build_color(l_lut, Hue::deg(0.0), ChromaPolicy::Neutral);
-                let rgb_ref = build_color(l_ref, Hue::deg(0.0), ChromaPolicy::Neutral);
-                if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
-                    hex_mismatches += 1;
-                    // Cost of the boundary flip, measured against a fixed white
-                    // reference in this VC — bounds the Lc the caller could see.
-                    let y_lut = bg_luma(rgb_lut, &vc);
-                    let y_ref = bg_luma(rgb_ref, &vc);
-                    let lc_lut = lpc::contrast_core(y_lut, 1.0);
-                    let lc_ref = lpc::contrast_core(y_ref, 1.0);
-                    max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
-                }
+                let rgb = build_color(l, hue, policy);
+                let target_ys = wcag::relative_luminance([
+                    srgb_gamma(rgb[0]),
+                    srgb_gamma(rgb[1]),
+                    srgb_gamma(rgb[2]),
+                ]);
+                let l_back = match_lightness_ys(target_ys, hue, policy);
+                max_l_err = max_l_err.max((l_back - l).abs());
             }
-            eprintln!(
-                "[{vc_name}] LUT vs bisection: max|Δl_ok|={max_l_err:.2e}, hex mismatches={hex_mismatches}/{} (max ΔLc at mismatch {max_lc_at_mismatch:.4})",
-                n + 1
-            );
+            eprintln!("[{hue:?} {policy:?}] Ys round-trip: max|Δl_ok|={max_l_err:.2e}");
             assert!(
-                max_l_err < MAX_L_INTERP,
-                "{vc_name}: LUT lightness drifted {max_l_err} from bisection (> {MAX_L_INTERP})"
-            );
-            assert!(
-                max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
-                "{vc_name}: a hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+                max_l_err < MAX_L_ERR,
+                "{hue:?} {policy:?}: Ys round-trip drifted {max_l_err:.2e} (> {MAX_L_ERR:.0e})"
             );
         }
-    }
-
-    #[test]
-    fn lut_adds_under_a_tenth_of_an_lc_across_the_solver_grid() {
-        // The contract tolerance the task pins: the LUT must not widen the
-        // solver's error budget. Run the REAL solve path and compare the final
-        // `Solved.lc()` against a run that forces the cold bisection, over the
-        // full neutral background × magnitude × polarity × VC grid. The added
-        // error is empirically 0.00000 Lc; the gate is pinned at 0.01 — 10×
-        // tighter than the old 0.1 budget — so any nonzero regression in the
-        // emitted hex fails here instead of passing under 0.1. The exact
-        // measured add is still reported via eprintln below.
-        const MAX_ADD: f64 = 0.01;
-        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
-        let mut max_add = 0.0_f64;
-        let mut compared = 0usize;
-        for (vc, vc_name) in vcs() {
-            for bg_hex in backgrounds {
-                let bg = BgInput::solid(bg_hex).unwrap();
-                for magnitude in MAGNITUDES {
-                    for target in [magnitude, -magnitude] {
-                        // The live solver uses the LUT path internally.
-                        let lut = solve(
-                            bg.clone(),
-                            Contract::text(target).with_conformance(Floor::None),
-                            Hue::deg(0.0),
-                            ChromaPolicy::Neutral,
-                            &vc,
-                            Gamut::Srgb,
-                        );
-                        // Reference: reconstruct the same solve but resolve the
-                        // lightness with the cold bisection oracle, then finish
-                        // through the identical quantise/measure path.
-                        let interval = bg.luma_interval(&vc).unwrap();
-                        let y_gov = interval.governing(target);
-                        let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
-                            let tj = lpc::grey_j(y_fg, &vc);
-                            let l = reference_match_lightness(
-                                tj,
-                                Hue::deg(0.0),
-                                ChromaPolicy::Neutral,
-                                &vc,
-                            );
-                            finish(
-                                build_color(l, Hue::deg(0.0), ChromaPolicy::Neutral),
-                                y_gov,
-                                bg.governing_display(target),
-                                false,
-                                &vc,
-                            )
-                            .map(|s| s.lc())
-                        });
-                        if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
-                            let add = (s_lut.lc() - lc_ref).abs();
-                            max_add = max_add.max(add);
-                            compared += 1;
-                            assert!(
-                                add < MAX_ADD,
-                                "{vc_name} {bg_hex} t={target}: LUT added {add} Lc (> {MAX_ADD} gate)"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        eprintln!("LUT final-Lc add over {compared} solver cases: max={max_add:.5}");
-        assert!(compared >= 30, "grid exercised too few cases: {compared}");
-    }
-
-    #[test]
-    fn lut_bracket_path_matches_bisection_at_small_chroma() {
-        // Golden for the small-chroma SEED path (`LutSeed::Bracket` →
-        // `refine_in_bracket`), the branch the neutral tests above never reach:
-        // both `lut_adds…` and `lut_match_lightness…` run `ChromaPolicy::Neutral`
-        // (ratio = 0), which only exercises the direct-interp `Exact` arm. The
-        // main default role policy is tinted (hue 286°, ratio 0.10), so the
-        // Bracket arm is the production hot path — and until now it was checked
-        // only indirectly. Two arms drive it directly:
-        //   1. UNIT: a dense l_ok grid × {srgb, dim} × {Relative(0.05),
-        //      Relative(0.10)} at hue 286° asserts the LUT-seeded
-        //      `match_lightness` reproduces the cold bisection bit-for-bit on the
-        //      emitted hex wherever it can, any 8-bit flip costing under gate.
-        //   2. END-TO-END: the real `solve` with BOTH polarities (+mag, -mag)
-        //      across the background grid, final `Solved.lc()` vs the
-        //      cold-bisection oracle — the same shape as `lut_adds_…`, for the
-        //      Bracket arm.
-        //
-        // Both paths bisect the SAME real tinted curve to `L_OK_EPSILON` (1e-12);
-        // the seed only changes the starting bracket, not the root. So the
-        // measured agreement is far tighter than the neutral `Exact` path's
-        // interp bound: max|Δl_ok| ≈ 5e-13 (a couple of bisection ULPs), with
-        // ZERO 8-bit hex mismatches over the grid — hence max ΔLc at mismatch is
-        // a hard 0.0000. The two gates are pinned just above those measured
-        // facts so a real seed regression (a mis-padded bracket, a refine that
-        // stops short, a bracket that excludes the root) fails them, instead of
-        // sliding under the old 0.1 budget:
-        //   * MAX_L_BRACKET = 1e-9: ~2000× the measured 5e-13, still 5e5× under
-        //     the `Exact` interp bound — a bracket off by even one node would
-        //     blow past it.
-        //   * MAX_LC_AT_MISMATCH = 0.01: 10× tighter than the old 0.1; with zero
-        //     mismatches today, any future hex flip is gated hard.
-        const MAX_L_BRACKET: f64 = 1e-9;
-        const MAX_LC_AT_MISMATCH: f64 = 0.01;
-        let hue = Hue::deg(286.0);
-        let policies = [ChromaPolicy::Relative(0.05), ChromaPolicy::Relative(0.10)];
-        let mut max_l_err = 0.0_f64;
-        let mut max_lc_at_mismatch = 0.0_f64;
-        let mut hex_mismatches = 0usize;
-        let mut compared = 0usize;
-        let n = 1024usize;
-        for (vc, vc_name) in vcs() {
-            for policy in policies {
-                let mut took_bracket = false;
-                for i in 0..=n {
-                    let l = i as f64 / n as f64;
-                    // Build the target J_HK on the *tinted* curve so the root the
-                    // solver must invert genuinely sits on the small-chroma path,
-                    // not the neutral axis. This grid is the unit check on
-                    // `match_lightness`; the end-to-end both-polarity arm below
-                    // drives the same Bracket path through the real `solve`.
-                    let target_j_hk =
-                        lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l, hue, policy)), &vc);
-
-                    // Confirm this case actually takes the Bracket arm — otherwise
-                    // the test would silently pass on the cold path and prove
-                    // nothing about the seed. (Endpoints can fall through to the
-                    // cold bisection via the bracket-widening guard; interior
-                    // targets must seed.)
-                    if matches!(
-                        crate::lut::seed_bracket(target_j_hk, hue, policy, &vc),
-                        Some(crate::lut::LutSeed::Bracket(_))
-                    ) {
-                        took_bracket = true;
-                    }
-
-                    let l_lut = match_lightness(target_j_hk, hue, policy, &vc);
-                    let l_ref = reference_match_lightness(target_j_hk, hue, policy, &vc);
-                    max_l_err = max_l_err.max((l_lut - l_ref).abs());
-                    compared += 1;
-
-                    let rgb_lut = build_color(l_lut, hue, policy);
-                    let rgb_ref = build_color(l_ref, hue, policy);
-                    if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
-                        hex_mismatches += 1;
-                        let y_lut = bg_luma(rgb_lut, &vc);
-                        let y_ref = bg_luma(rgb_ref, &vc);
-                        let lc_lut = lpc::contrast_core(y_lut, 1.0);
-                        let lc_ref = lpc::contrast_core(y_ref, 1.0);
-                        max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
-                    }
-                }
-                assert!(
-                    took_bracket,
-                    "{vc_name} {policy:?}: no grid point took the Bracket seed — the test is not exercising the small-chroma path it claims to"
-                );
-            }
-        }
-
-        // End-to-end arm: drive the SAME Bracket path through the real `solve`
-        // with BOTH polarities (+mag light-on-dark, -mag dark-on-light) at the
-        // tinted policies, and compare the final `Solved.lc()` against the
-        // cold-bisection oracle finished through the identical quantise/measure
-        // path — exactly the comparison `lut_adds_…` makes for the neutral arm,
-        // here for the small-chroma Bracket arm the production default uses.
-        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
-        let mut max_add = 0.0_f64;
-        let mut e2e_compared = 0usize;
-        for (vc, vc_name) in vcs() {
-            for policy in policies {
-                for bg_hex in backgrounds {
-                    let bg = BgInput::solid(bg_hex).unwrap();
-                    for magnitude in MAGNITUDES {
-                        for target in [magnitude, -magnitude] {
-                            let lut = solve(
-                                bg.clone(),
-                                Contract::text(target).with_conformance(Floor::None),
-                                hue,
-                                policy,
-                                &vc,
-                                Gamut::Srgb,
-                            );
-                            let interval = bg.luma_interval(&vc).unwrap();
-                            let y_gov = interval.governing(target);
-                            let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
-                                let tj = lpc::grey_j(y_fg, &vc);
-                                let l = reference_match_lightness(tj, hue, policy, &vc);
-                                finish(
-                                    build_color(l, hue, policy),
-                                    y_gov,
-                                    bg.governing_display(target),
-                                    false,
-                                    &vc,
-                                )
-                                .map(|s| s.lc())
-                            });
-                            if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
-                                let add = (s_lut.lc() - lc_ref).abs();
-                                max_add = max_add.max(add);
-                                e2e_compared += 1;
-                                assert!(
-                                    add < MAX_LC_AT_MISMATCH,
-                                    "{vc_name} {bg_hex} {policy:?} t={target}: Bracket-path solve added {add} Lc (> {MAX_LC_AT_MISMATCH} gate)"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            e2e_compared >= 60,
-            "end-to-end Bracket arm exercised too few cases: {e2e_compared}"
+        // Endpoint short-circuits: targets outside the reachable luminance
+        // range clamp to the gamut edge instead of oscillating.
+        assert_eq!(
+            match_lightness_ys(-0.5, Hue::deg(0.0), ChromaPolicy::Neutral),
+            0.0,
+            "below-black target must clamp to l_ok = 0"
         );
-
-        eprintln!(
-            "Bracket-path LUT vs bisection: max|Δl_ok|={max_l_err:.2e} over {compared} cases, hex mismatches={hex_mismatches} (max ΔLc at mismatch {max_lc_at_mismatch:.4}); end-to-end both-polarity max add={max_add:.5} over {e2e_compared} solve cases"
-        );
-        assert!(
-            max_l_err < MAX_L_BRACKET,
-            "Bracket-path lightness drifted {max_l_err} from bisection (> {MAX_L_BRACKET})"
-        );
-        assert!(
-            max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
-            "a Bracket-path hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+        assert_eq!(
+            match_lightness_ys(1.5, Hue::deg(0.0), ChromaPolicy::Neutral),
+            1.0,
+            "above-white target must clamp to l_ok = 1"
         );
     }
 
@@ -2862,24 +2551,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn unsupported_vc_takes_the_cold_path_unchanged() {
-        // A third surround (neither srgb nor dim) has no table, so the LUT must
-        // step aside and the cold bisection governs — identical to pre-LUT.
-        let dark = ViewingConditions::dark_surround();
-        let target_j_hk = lpc::j_hk_from_xyz(
-            srgb_to_xyz(build_color(0.5, Hue::deg(0.0), ChromaPolicy::Neutral)),
-            &dark,
-        );
-        let l_lut = match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &dark);
-        let l_ref =
-            reference_match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &dark);
-        assert_eq!(
-            l_lut, l_ref,
-            "unsupported VC must yield the identical cold-bisection lightness"
-        );
     }
 }
 

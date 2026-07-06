@@ -464,8 +464,9 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 
 /// Perceptual contrast (LPC) of a foreground over a background computed in the
 /// **readability luminance domain** `Ys` (WCAG relative luminance) rather than
-/// the Helmholtz–Kohlrausch brightness domain `Y_hk` that [`lpc`] and the solver
-/// use.
+/// the Helmholtz–Kohlrausch brightness domain `Y_hk` that the apparent-contrast
+/// metric [`lpc`] uses. С главы #64 (активация ADR-0003) это домен, в котором
+/// считает ось читаемости движка.
 ///
 /// # Why a second domain exists
 ///
@@ -491,12 +492,15 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 /// surround compensation `Y_hk` carries is a brightness concern, kept off the
 /// readability axis (flagged as an open question in the ADR).
 ///
-/// Deliberately **not** wired into the solver, the role contracts, or the public
-/// prelude, and hidden from the rendered docs: this is the dormant variant-A seam
-/// the étude proposes, not a shipped entry point. It introduces no new constants
-/// (it reuses [`contrast_core`] and [`crate::wcag::relative_luminance`]) and does
-/// not change any existing output, so the default engine is bit-for-bit unchanged
-/// until the owner signs off on migrating the legibility axis.
+/// АКТИВИРОВАНО главой #64 (вариант A ADR-0003 в проде): ось читаемости движка
+/// считает именно в этом домене — `solve::finish`/`meets_floor`, интервал фона,
+/// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и белая
+/// сторона кроссовера пары (`pair::pair_side`). Сам движок зовёт
+/// [`contrast_core`] + [`crate::wcag::relative_luminance`] напрямую на уже
+/// готовых скалярах; эта функция — референс-вход той же формулы (те же
+/// функции, ноль новых констант), удобный для внешних сверок. `Y_hk` остался
+/// только на яркостной оси: метрика [`lpc`] (apparent contrast), чернильная
+/// сторона пары, свечение, сентимент, нейтральная лестница.
 #[doc(hidden)]
 pub fn lpc_readability_ys(fg_display: [f64; 3], bg_display: [f64; 3]) -> f64 {
     contrast_core(
