@@ -39,7 +39,9 @@
 //!    such as `#0078D4`). Across that whole band the perceptual layer prefers
 //!    *light-on-dark* with a wide margin — the luminance-domain LPC core
 //!    (`crate::lpc::contrast_core`) has its black-overtakes-white crossover far
-//!    higher, near `Y ≈ 0.36` — so the tie resolves to white (`break_tie`). This
+//!    higher, near `Y ≈ 0.342` (measured, locked by
+//!    `pair::exposure_locks::model_polarity_crossover_is_measured_not_recited`)
+//!    — so the tie resolves to white (`break_tie`). This
 //!    replaces the former "larger WCAG margin wins" rule, whose symmetric margin
 //!    crossed over *inside* the band (`Y ≈ 0.1791`) and chose dark-on-light on the
 //!    upper half — the perceptually weaker side there, and the one that made
@@ -3098,8 +3100,11 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
 /// ([`crate::lpc::contrast_core`]) is asymmetric: its light-on-dark exponents
 /// make a light foreground read *stronger* than a dark one against a
 /// mid-luminance background, and the crossover where black would overtake white
-/// sits far above the band, near `Y ≈ 0.36` (V3 measurement: on `Y = 0.211`
-/// white scores 69.78 Lc against black's 39.79). So across the *entire*
+/// sits far above the band, near `Y ≈ 0.342` — measured by bisection of the
+/// luminance core and locked by
+/// `pair::exposure_locks::model_polarity_crossover_is_measured_not_recited`
+/// (on `Y = 0.211` white scores ≈69.8 Lc against black's ≈39.7; the earlier V3
+/// estimate `≈0.36` is superseded by this measurement). So across the *entire*
 /// double-legal band the readable-and-perceptually-stronger side is white.
 ///
 /// This replaces the former "larger WCAG margin wins" rule. The WCAG ratio is
@@ -3607,7 +3612,7 @@ mod tests {
     // Y ≈ 0.1791 (solve (Y+0.05)/0.05 = 1.05/(Y+0.05)); above it black's margin
     // wins, so the old engine emitted DARK on Y ∈ (0.1791, 0.1833] — the
     // perceptually weaker side there (contrast_core's black-overtakes-white
-    // crossover sits near Y ≈ 0.36) and the one that made Fluent #0078D4 resolve
+    // crossover sits near Y ≈ 0.342, measured) and the one that made Fluent #0078D4 resolve
     // black. The derived rule takes light-on-dark across the whole band.
     // ─────────────────────────────────────────────────────────────────────────
 
