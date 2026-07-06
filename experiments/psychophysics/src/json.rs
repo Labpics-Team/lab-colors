@@ -107,6 +107,7 @@ pub fn parse(input: &str) -> Result<Value, String> {
     let mut p = Parser {
         chars: &chars,
         pos: 0,
+        depth: 0,
     };
     p.skip_ws();
     let v = p.parse_value()?;
@@ -120,9 +121,17 @@ pub fn parse(input: &str) -> Result<Value, String> {
     Ok(v)
 }
 
+/// Максимальная вложенность контейнеров при разборе. Экспорт раннера —
+/// НЕДОВЕРЕННЫЙ вход: без лимита ~10^5 вложенных `[`/`{` переполняют стек
+/// рекурсивного спуска и роняют процесс abort'ом вместо `Err` (R3).
+/// Реальные документы харнесса (паспорт, манифест, экспорт) глубже 6 не бывают.
+const MAX_DEPTH: usize = 128;
+
 struct Parser<'a> {
     chars: &'a [char],
     pos: usize,
+    /// Текущая глубина вложенности контейнеров.
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -173,7 +182,26 @@ impl Parser<'_> {
         }
     }
 
+    /// Войти в контейнер: учесть глубину, отклонить сверхглубокий вход.
+    fn enter(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(format!(
+                "вложенность JSON превышает {MAX_DEPTH} на позиции {} — вход отклонён",
+                self.pos
+            ));
+        }
+        Ok(())
+    }
+
     fn parse_object(&mut self) -> Result<Value, String> {
+        self.enter()?;
+        let v = self.parse_object_inner();
+        self.depth -= 1;
+        v
+    }
+
+    fn parse_object_inner(&mut self) -> Result<Value, String> {
         self.expect('{')?;
         let mut entries: Vec<(String, Value)> = Vec::new();
         self.skip_ws();
@@ -204,6 +232,13 @@ impl Parser<'_> {
     }
 
     fn parse_array(&mut self) -> Result<Value, String> {
+        self.enter()?;
+        let v = self.parse_array_inner();
+        self.depth -= 1;
+        v
+    }
+
+    fn parse_array_inner(&mut self) -> Result<Value, String> {
         self.expect('[')?;
         let mut items = Vec::new();
         self.skip_ws();
@@ -369,6 +404,12 @@ fn write_string(out: &mut String, s: &str) {
             '\r' => out.push_str("\\r"),
             '\u{0008}' => out.push_str("\\b"),
             '\u{000C}' => out.push_str("\\f"),
+            // '<' экранируем юникод-эскейпом (см. строку ниже): JSON харнесса
+            // встраивается в <script> раннера литеральной подстановкой, и сырой
+            // "</script>" в данных (ключ семьи из произвольного --passport)
+            // разрывал бы скрипт-блок (R2). Экранирование стандартно по
+            // RFC 8259 и прозрачно для парсеров.
+            '<' => out.push_str("\\u003c"),
             c if (c as u32) < 0x20 => {
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
@@ -507,6 +548,67 @@ mod tests {
         let v = Value::String(original.to_string());
         let s = v.to_compact();
         assert_eq!(parse(&s).unwrap().as_str().unwrap(), original);
+    }
+
+    #[test]
+    fn depth_limit_rejects_hostile_nesting() {
+        // R3: недоверенный вход не должен переполнять стек — Err, не abort.
+        for open in ["[", "{\"k\":"] {
+            let close = if open == "[" { "]" } else { "}" };
+            let hostile = format!("{}1{}", open.repeat(100_000), close.repeat(100_000));
+            let err = parse(&hostile).expect_err("сверхглубокий вход отклонён");
+            assert!(err.contains("вложенность"), "err={err}");
+        }
+    }
+
+    #[test]
+    fn depth_limit_allows_reasonable_nesting() {
+        // Глубина 100 < лимита 128 — валидна; ширина не считается глубиной.
+        let deep = format!("{}1{}", "[".repeat(100), "]".repeat(100));
+        assert!(parse(&deep).is_ok());
+        let wide = format!("[{}1]", "[1],".repeat(500));
+        assert!(parse(&wide).is_ok());
+    }
+
+    #[test]
+    fn truncated_inputs_err_not_panic() {
+        // R9: обрезанные экспорты — ошибка, не паника.
+        for src in [
+            "{\"a\":",
+            "[1,",
+            "\"abc",
+            "{\"a\"",
+            "tru",
+            "-",
+            "{\"a\":1,",
+            "[",
+        ] {
+            assert!(parse(src).is_err(), "src={src:?} должен быть Err");
+        }
+    }
+
+    #[test]
+    fn duplicate_keys_preserved_get_returns_first() {
+        // Пин поведения (R9): дубликаты ключей парсер сохраняет как есть,
+        // `get` отдаёт ПЕРВОЕ вхождение. Валидация дубликатов — на слое импорта.
+        let v = parse(r#"{"a":1,"a":2}"#).expect("parse");
+        assert_eq!(v.get("a").unwrap().as_f64(), Some(1.0));
+        if let Value::Object(entries) = &v {
+            assert_eq!(entries.len(), 2);
+        } else {
+            panic!("не объект");
+        }
+    }
+
+    #[test]
+    fn angle_bracket_escaped_and_roundtrips() {
+        // R2: '<' экранируется в < — сериализованный JSON безопасен для
+        // литерального встраивания в <script>, а разбор возвращает исходник.
+        let v = Value::String("</script><b>".to_string());
+        let s = v.to_compact();
+        assert!(!s.contains('<'), "сырой '<' в сериализации: {s}");
+        assert!(s.contains("\\u003c"));
+        assert_eq!(parse(&s).unwrap().as_str().unwrap(), "</script><b>");
     }
 
     #[test]
