@@ -1,0 +1,17 @@
+{
+  "name": "@labpics/comparative-experiments",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Сравнительный экспериментальный харнесс lab-colors против MCU / наивных OKLCH-рамп / Radix Colors. НЕ публикуется; не входит в npm-пакет @labpics/colors.",
+  "type": "module",
+  "scripts": {
+    "experiment": "node src/run.mjs",
+    "test": "vitest run",
+    "gen-seeds": "node src/gen-seeds.mjs"
+  },
+  "devDependencies": {
+    "@material/material-color-utilities": "^0.3.0",
+    "@radix-ui/colors": "^3.0.0",
+    "vitest": "^4.1.9"
+  }
+}
