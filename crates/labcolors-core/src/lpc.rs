@@ -471,7 +471,7 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 /// étude measured a monotonic 15:0 white→black flip across the saturated-hue
 /// sweep, driven entirely by that out-of-domain `Y_hk` substitution. Reading the
 /// **calibrated** domain removes it. Full rationale and blast radius:
-/// `docs/decisions/0003-hk-scope.md` (variant A — awaiting owner signature).
+/// `docs/decisions/0003-hk-scope.md` (variant A — accepted 2026-07-06).
 ///
 /// # Argument domain
 ///
