@@ -387,6 +387,24 @@ mod exposure_locks {
             f(0.2) > 0.0 && f(0.6) < 0.0,
             "предпосылка бисекции: белый выигрывает на 0.2, чёрный на 0.6"
         );
+        // Единственность корня: знак f меняется РОВНО один раз на сетке
+        // интервала — без этого бисекция могла бы сойтись к одному из
+        // нескольких пересечений (замечание CodeRabbit, PR #177).
+        let mut sign_changes = 0u32;
+        let mut prev_positive = true;
+        let mut y = 0.2_f64;
+        while y <= 0.6 {
+            let cur_positive = f(y) > 0.0;
+            if cur_positive != prev_positive {
+                sign_changes += 1;
+                prev_positive = cur_positive;
+            }
+            y += 0.002;
+        }
+        assert_eq!(
+            sign_changes, 1,
+            "f обязана пересекать ноль ровно один раз на [0.2, 0.6]"
+        );
         let (mut lo, mut hi) = (0.2_f64, 0.6_f64);
         for _ in 0..60 {
             let mid = 0.5 * (lo + hi);
