@@ -405,7 +405,7 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
 | `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **выведен** = `MODEL_LC_FLOOR` 7.3 (клип APCA `0.0.98G-4g`) + `QUANT_GUARD` 0.2 (issue #44) |
 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **заземлён** — APCA-уровень Lc 15 (различимость не-текста; draft/single-origin, не WCAG 3) |
 | `PAIR_CROSSOVER_Y` | 0.30 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | терминал **(e) design-choice**: интервал якорей (0.246, 0.423), модельный якорь измерен (перелом ядра ≈0.342) — значение ниже модели, задекларированный конфликт вывода |
-| `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — калибровка |
+| `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — дизайн-ручка, терминал **(e)** (хроматические якоря инвариантны) |
 | `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона |
 | `TINT_TARGET_MP` | 6.1 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | целевая перцептивная красочность подтона |
 | `TINT_HUE_STIFFNESS` | 9.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | жёсткость притяжения оттенка подтона |
@@ -450,8 +450,8 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
   мотивирована сходящимися основаниями: численным (atan2-шум у серой оси) и
   перцептивным — эффект Эбни (Abney 1909, Proc. R. Soc. Lond. A 83; Kurtenbach,
   Sternheim & Spillmann 1984, JOSA A 1(4)): воспринимаемый тон сдвигается при
-  падении чистоты. Конкретные показатель/множитель (0.6/1.5) — калибровка, НЕ
-  вывод из данных Эбни.
+  падении чистоты. Конкретные показатель/множитель (0.6/1.5) —
+  задекларированные дизайн-ручки (терминал (e)), НЕ вывод из данных Эбни.
 - **Warning-пол — не перцептивная граница red↔orange.** Это C¹-предохранитель
   с хрупким зазором ≈0.527°; категориальные границы цвета размыты
   (Berlin & Kay) — [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs).
