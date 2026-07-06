@@ -65,4 +65,49 @@ dominated by the JS-object projection (`project_resolved` builds ~106 role objec
 via hundreds of `Reflect.set` FFI calls) — reruns on every call even on a cache
 hit. Off the per-frame path (`resolveTheme` fires only on a sustained, debounced
 breach), but the projection is the obvious next target if resolve latency ever
-matters; flagged for the owner, not addressed here.
+matters; flagged for the owner, not addressed here. (Addressed by #54 — next
+section.)
+
+## resolveTheme projection (#54, this wave)
+
+Reproduce: `node --expose-gc packages/colors/bench/wasm-boundary.bench.mjs`
+(same harness/fixture/machine as above). Re-measured baseline at this branch
+point: hit 618619 ns, changing-bg 650531 ns (prior wave quoted ≈657µs/≈1303µs
+on an earlier tree state).
+
+| call                                | before ns | after ns | Δ      |
+|-------------------------------------|----------:|---------:|-------:|
+| resolveTheme cache-hit ×1           |    618619 |    76041 | −87.7% |
+| resolveTheme changing-bg ×1         |    650531 |    92053 | −85.8% |
+| recheckContrast ×1 (28 roles, ctrl) |     36593 |   ~36600 | noise  |
+
+After-numbers are medians of 3 harness runs (hit 81741/76041/75212, min
+69505; changing-bg 145748/86255/92053).
+
+What changed (no public API change, output byte-identical):
+1. The projection is built in Rust (`crates/labcolors-wasm/src/project.rs`) as
+   one JSON string; the boundary is crossed twice per call (string out + one
+   `JSON.parse`) instead of hundreds of `Reflect::set` FFI calls building ~106
+   role objects.
+2. The JSON text is memoised per live contract-cache entry (`Weak` +
+   `Rc::ptr_eq`; memo capacity mirrors the engine cache). A repeat hit
+   re-serialises nothing; ABA is impossible because the memo key is the entry
+   allocation itself, not the input key.
+3. f64s are emitted via ryu shortest round-trip form — the same algorithm
+   `serde_json` uses — pinned bit-for-bit by Rust tests.
+
+Byte-identity evidence:
+- golden snapshot of the full projection, generated on the pre-optimisation
+  baseline (`test/gen-resolve-projection-golden.mjs`), asserted structurally
+  after (`test/resolve-projection-parity.test.mjs`); projection fingerprint
+  `bf20165b…` stable across runs.
+- Rust tests: every emitted f64 survives JSON round-trip bit-for-bit; the
+  hand-rolled serialiser output equals `serde_json`'s canonical encoding.
+- recheck byte-oracle (`7c072d28…`) untouched and green.
+
+Caveat on the "miss" row: after warmup the changing-bg pool (4096) is resident
+in the engine cache, so that row measures projection under a changing key, not
+a full solve. A true cold-key solve (12000 unique backgrounds, same probe
+style) is ≈4.36 ms median and is dominated by the Rust core solve
+(`crates/labcolors-core`) — out of scope for #54 (core owned by a parallel
+effort; not touched).

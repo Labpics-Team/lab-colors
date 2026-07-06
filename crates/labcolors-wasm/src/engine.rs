@@ -27,7 +27,7 @@ use crate::theme::Theme;
 /// How many distinct `(bg, theme, table)` resolves the cache holds before a
 /// wholesale clear. A few thousand entries at well under 1 MB — generous for a
 /// design tool sweeping backgrounds, bounded so memory cannot run away.
-const CACHE_CAPACITY: usize = 4096;
+pub(crate) const CACHE_CAPACITY: usize = 4096;
 
 /// A caching contrast engine over a consumer-supplied design system.
 ///

@@ -7,6 +7,8 @@
 //! - `dto` — framework-free result types (output boundary).
 //! - `cache` — the contract cache.
 //! - `engine` — the application core: `resolve_set` made generic over roles.
+//! - `project` — результат как JSON-текст: чистая, нативно тестируемая
+//!   сериализация, которую адаптер отдаёт `JSON.parse` (задача #54).
 //! - this module — the *only* place `#[wasm_bindgen]` appears: the adapter that
 //!   projects the engine's pure results into JS objects.
 //!
@@ -21,11 +23,16 @@ pub mod config_dto;
 mod dto;
 mod engine;
 mod error;
+mod project;
 mod theme;
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use wasm_bindgen::prelude::*;
 
-use crate::dto::{ResolvedTheme, RoleOutcome};
+use crate::dto::ResolvedTheme;
 use crate::engine::Engine;
 use crate::error::BindingError;
 
@@ -246,9 +253,17 @@ extern "C" {
 /// [`LabColors::new`], load a config with [`loadConfig`](LabColors::load_config),
 /// then call [`resolve_theme`](LabColors::resolve_theme) many times; identical
 /// calls are served from the contract cache.
+/// Запись мемо проекций: адрес Rc-аллокации записи контракт-кэша →
+/// (`Weak` для проверки, что аллокация всё ещё та самая, готовый JSON-текст).
+type ProjectionMemo = HashMap<usize, (Weak<ResolvedTheme>, Rc<String>)>;
+
 #[wasm_bindgen]
 pub struct LabColors {
     inner: Engine,
+    /// Мемо сериализованной проекции по живым записям контракт-кэша движка —
+    /// см. [`LabColors::projection_json`]. `RefCell`: wasm однопоточен, а
+    /// `resolveTheme` принимает `&self`.
+    projection_memo: RefCell<ProjectionMemo>,
 }
 
 #[wasm_bindgen]
@@ -262,6 +277,7 @@ impl LabColors {
     pub fn new() -> LabColors {
         LabColors {
             inner: Engine::new(),
+            projection_memo: RefCell::new(HashMap::new()),
         }
     }
 
@@ -281,7 +297,8 @@ impl LabColors {
             .inner
             .resolve_theme(bg_hex, theme)
             .map_err(to_js_error)?;
-        Ok(project_resolved(&resolved)?.unchecked_into())
+        let json = self.projection_json(&resolved).map_err(to_js_error)?;
+        Ok(parse_projection(&json)?.unchecked_into())
     }
 
     /// Загрузить конфиг дизайн-системы (JSON по типу `ThemeConfig` из `.d.ts`).
@@ -361,146 +378,63 @@ impl Default for LabColors {
     }
 }
 
-/// Project a pure [`ResolvedTheme`] into the JS object the `.d.ts` describes.
-///
-/// Built generically from the role vector — no role is named here, so the set
-/// can grow without touching this function.
-fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
-    let out = js_sys::Object::new();
-    set(&out, "theme", &JsValue::from_str(resolved.theme));
-    set(&out, "background", &JsValue::from_str(&resolved.background));
-
-    let vars = js_sys::Object::new();
-    let roles = js_sys::Object::new();
-    for entry in &resolved.roles {
-        let css_var = format!("--lab-{}", entry.role_key);
-        let role_obj = js_sys::Object::new();
-        set(&role_obj, "cssVar", &JsValue::from_str(&css_var));
-        match &entry.outcome {
-            RoleOutcome::Color(c) => {
-                set(&role_obj, "kind", &JsValue::from_str("color"));
-                set(&role_obj, "hex", &JsValue::from_str(&c.hex));
-                set(&role_obj, "lc", &JsValue::from_f64(c.lc));
-                set(&role_obj, "wcagRatio", &JsValue::from_f64(c.wcag_ratio));
-                set(&role_obj, "compressed", &JsValue::from_bool(c.compressed));
-                set(
-                    &role_obj,
-                    "hueVanished",
-                    &JsValue::from_bool(c.hue_vanished),
-                );
-                set(
-                    &role_obj,
-                    "achievedDj",
-                    &c.achieved_dj.map_or(JsValue::NULL, JsValue::from_f64),
-                );
-                set(
-                    &role_obj,
-                    "floorOverride",
-                    &JsValue::from_bool(c.floor_override),
-                );
-                set(
-                    &role_obj,
-                    "legalFloor",
-                    &c.legal_floor.map_or(JsValue::NULL, JsValue::from_f64),
-                );
-                // Единая форма эмиссии: oklch и для солида (hex остаётся
-                // данными роли; синтаксис переменной один на все исходы).
-                let css = oklch_css(&c.hex, None)?;
-                set(&role_obj, "css", &JsValue::from_str(&css));
-                set(&vars, &css_var, &JsValue::from_str(&css));
-            }
-            RoleOutcome::Translucent(r) => {
-                set(&role_obj, "kind", &JsValue::from_str("translucent"));
-                set(&role_obj, "tintHex", &JsValue::from_str(&r.tint_hex));
-                set(&role_obj, "alpha", &JsValue::from_f64(r.alpha));
-                set(
-                    &role_obj,
-                    "compositeHex",
-                    &JsValue::from_str(&r.composite_hex),
-                );
-                set(&role_obj, "compositeLc", &JsValue::from_f64(r.composite_lc));
-                set(
-                    &role_obj,
-                    "compositeWcag",
-                    &JsValue::from_f64(r.composite_wcag),
-                );
-                set(
-                    &role_obj,
-                    "alphaCoerced",
-                    &JsValue::from_bool(r.alpha_coerced),
-                );
-                set(
-                    &role_obj,
-                    "floorCoerced",
-                    &JsValue::from_bool(r.floor_coerced),
-                );
-                // Переменная несёт тинт в oklch со слэш-альфой — браузер
-                // композитит на живой подложке; форма едина с солидами.
-                let css = oklch_css(&r.tint_hex, Some(r.alpha))?;
-                set(&role_obj, "css", &JsValue::from_str(&css));
-                set(&vars, &css_var, &JsValue::from_str(&css));
-            }
-            RoleOutcome::Glow(g) => {
-                // Свечение: слои для screen-наложения потребителем.
-                // --lab-<role> несёт halo (единая oklch-форма), сателлиты
-                // --lab-<role>-core / --lab-<role>-alpha — анатомия и
-                // решённая интенсивность (число, не цвет).
-                set(&role_obj, "kind", &JsValue::from_str("glow"));
-                set(&role_obj, "coreHex", &JsValue::from_str(&g.core_hex));
-                set(&role_obj, "haloHex", &JsValue::from_str(&g.halo_hex));
-                set(&role_obj, "alpha", &JsValue::from_f64(g.alpha));
-                set(&role_obj, "achievedDj", &JsValue::from_f64(g.achieved_dj));
-                set(&role_obj, "degraded", &JsValue::from_bool(g.degraded));
-                let halo_css = oklch_css(&g.halo_hex, None)?;
-                let core_css = oklch_css(&g.core_hex, None)?;
-                set(&role_obj, "css", &JsValue::from_str(&halo_css));
-                set(&vars, &css_var, &JsValue::from_str(&halo_css));
-                set(
-                    &vars,
-                    &format!("{css_var}-core"),
-                    &JsValue::from_str(&core_css),
-                );
-                set(
-                    &vars,
-                    &format!("{css_var}-alpha"),
-                    &JsValue::from_str(&format!("{:.4}", g.alpha)),
-                );
-            }
-            RoleOutcome::None => {
-                set(&role_obj, "kind", &JsValue::from_str("none"));
-            }
-            RoleOutcome::Unreachable { code, message } => {
-                set(&role_obj, "kind", &JsValue::from_str("unreachable"));
-                set(&role_obj, "code", &JsValue::from_str(code));
-                set(&role_obj, "message", &JsValue::from_str(message));
+impl LabColors {
+    /// JSON-текст проекции записи контракт-кэша — посчитанный не более одного
+    /// раза на живую запись (перф-форма задачи #54, этап 2).
+    ///
+    /// [`Engine::resolve_theme`] на cache-hit возвращает `Rc` на ту же самую
+    /// аллокацию [`ResolvedTheme`]; её содержимое иммутабельно, значит
+    /// идентичность аллокации влечёт идентичность сериализации — и hit-путь
+    /// не обязан пересобирать JSON-строку (форматирование ~30 oklch-значений)
+    /// заново.
+    ///
+    /// Корректность (мемо никогда не отдаёт чужой/устаревший текст): хит
+    /// засчитывается только если `Weak` апгрейдится И полученный `Rc`
+    /// `ptr_eq` текущему. Умершая запись не апгрейдится никогда
+    /// (strong == 0 необратим), поэтому переиспользование её адреса новой
+    /// аллокацией (ABA) хита не даёт — будет честный пересчёт и перезапись.
+    ///
+    /// Ограниченность памяти зеркалит политику `ContractCache`: при
+    /// достижении ёмкости сначала выметаются умершие записи; если живых всё
+    /// ещё сверх ёмкости — снос целиком. Холодная пересборка — да, неверный
+    /// ответ — никогда.
+    fn projection_json(&self, resolved: &Rc<ResolvedTheme>) -> Result<Rc<String>, BindingError> {
+        let key = Rc::as_ptr(resolved) as usize;
+        if let Some((weak, json)) = self.projection_memo.borrow().get(&key)
+            && weak
+                .upgrade()
+                .is_some_and(|live| Rc::ptr_eq(&live, resolved))
+        {
+            return Ok(Rc::clone(json));
+        }
+        let json = Rc::new(project::resolved_to_json(resolved)?);
+        let mut memo = self.projection_memo.borrow_mut();
+        if memo.len() >= crate::engine::CACHE_CAPACITY {
+            memo.retain(|_, (weak, _)| weak.strong_count() > 0);
+            if memo.len() >= crate::engine::CACHE_CAPACITY {
+                memo.clear();
             }
         }
-        set(&roles, &entry.role_key, &role_obj);
+        memo.insert(key, (Rc::downgrade(resolved), Rc::clone(&json)));
+        Ok(json)
     }
-    set(&out, "vars", &vars);
-    set(&out, "roles", &roles);
-    Ok(out.into())
 }
 
-/// Единая CSS-форма эмиссии: `oklch(L% C H)` / `oklch(L% C H / A)`.
-/// Байт-точность реконструкции доказана round-trip тестом ядра на решётке
-/// куба. Hex к этому месту валиден по построению (солвер/лестница), но при
-/// невозможном парсе — честная структурная ошибка, НЕ тихая подмена формы:
-/// потребитель ждёт oklch, а полупрозрачная роль при подмене ещё и потеряла бы альфу.
-fn oklch_css(hex: &str, alpha: Option<f64>) -> Result<String, JsError> {
-    labcolors_core::oklch_css_from_hex(hex, alpha).map_err(|reason| {
+/// Развернуть JSON-текст проекции в свежий JS-граф одним нативным
+/// `JSON.parse` — два пересечения границы на вызов вместо сотен
+/// `Reflect::set` (≈30 ролей × ≈10 свойств; перф-форма задачи #54, этап 1).
+/// Порядок ключей и значения идентичны прежней по-полевой проекции
+/// (лок: `resolve-projection-parity.test.mjs`); каждый вызов по-прежнему
+/// возвращает свежий граф.
+fn parse_projection(json: &str) -> Result<JsValue, JsError> {
+    js_sys::JSON::parse(json).map_err(|_| {
+        // По построению недостижимо: сериализатор эмитит валидный JSON (лок
+        // нативным тестом). При нарушении — честная структурная ошибка,
+        // не unwound-паника.
         to_js_error(BindingError::Internal {
-            reason: format!("резолвнутый цвет не сериализуется в oklch: {reason}"),
+            reason: "JSON.parse отверг сериализованную проекцию результата".into(),
         })
     })
-}
-
-/// Set a property on a JS object. `Reflect::set` on a freshly created `Object`
-/// cannot fail (the target is always a real object and the key a string), so
-/// the result is intentionally ignored — there is no recoverable error here and
-/// nothing to surface to the caller.
-fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
-    let _ = js_sys::Reflect::set(target, &JsValue::from_str(key), value);
 }
 
 /// Turn a boundary error into a JS `Error` carrying both the stable machine
@@ -512,6 +446,81 @@ fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
 /// that path would drop the stable code. This keeps the code in the message.
 fn to_js_error(err: BindingError) -> JsError {
     JsError::new(&format!("{}: {}", err.code(), err))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod projection_memo_tests {
+    use super::*;
+    use crate::theme::Theme;
+
+    const LABUI: &str = include_str!("../tests/data/labui.config.json");
+
+    #[test]
+    fn hit_reuses_the_serialised_string_for_the_same_cache_entry() {
+        let mut colors = LabColors::new();
+        colors.inner.load_config(LABUI).unwrap();
+        let first = colors.inner.resolve_theme("#3A3A3C", Theme::Dark).unwrap();
+        let hit = colors.inner.resolve_theme("#3A3A3C", Theme::Dark).unwrap();
+        assert!(
+            Rc::ptr_eq(&first, &hit),
+            "прекондиция: контракт-кэш движка отдаёт ту же аллокацию"
+        );
+        let j1 = colors.projection_json(&first).unwrap();
+        let j2 = colors.projection_json(&hit).unwrap();
+        assert!(
+            Rc::ptr_eq(&j1, &j2),
+            "hit обязан переиспользовать сериализацию, не пересобирать её"
+        );
+    }
+
+    #[test]
+    fn dead_entry_never_hits_fresh_serialisation_is_identical() {
+        let mut colors = LabColors::new();
+        colors.inner.load_config(LABUI).unwrap();
+        let a = colors.inner.resolve_theme("#3A3A3C", Theme::Dark).unwrap();
+        let ja = colors.projection_json(&a).unwrap();
+        drop(a);
+        // Перезагрузка конфига сносит контракт-кэш движка — прежняя запись
+        // мертва; тот же конфиг ⇒ новая аллокация с тем же содержимым.
+        colors.inner.load_config(LABUI).unwrap();
+        let b = colors.inner.resolve_theme("#3A3A3C", Theme::Dark).unwrap();
+        let jb = colors.projection_json(&b).unwrap();
+        assert!(
+            !Rc::ptr_eq(&ja, &jb),
+            "умершая запись не должна давать хит (Weak не апгрейдится)"
+        );
+        assert_eq!(
+            ja.as_str(),
+            jb.as_str(),
+            "независимые сериализации одного содержимого идентичны"
+        );
+    }
+
+    #[test]
+    fn memo_sweeps_dead_entries_and_stays_bounded() {
+        let mut colors = LabColors::new();
+        colors.inner.load_config(LABUI).unwrap();
+        {
+            let mut memo = colors.projection_memo.borrow_mut();
+            for i in 0..crate::engine::CACHE_CAPACITY {
+                let dead = Rc::new(ResolvedTheme {
+                    theme: "dark",
+                    background: String::new(),
+                    roles: Vec::new(),
+                });
+                let weak = Rc::downgrade(&dead);
+                drop(dead);
+                memo.insert(usize::MAX - i, (weak, Rc::new(String::new())));
+            }
+        }
+        let live = colors.inner.resolve_theme("#3A3A3C", Theme::Dark).unwrap();
+        let _ = colors.projection_json(&live).unwrap();
+        assert_eq!(
+            colors.projection_memo.borrow().len(),
+            1,
+            "переполнение выметает умершие записи; остаётся только живая"
+        );
+    }
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]

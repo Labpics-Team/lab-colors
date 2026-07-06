@@ -26,6 +26,10 @@ thiserror = "2"
 # size (информационный до perf-bench).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# f64 → кратчайшая round-trip десятичная форма для JSON-проекции результата
+# (задача #54). Внутри serde_json живёт тот же ryu, так что нового
+# third-party дерева зависимостей не появляется.
+ryu = "1"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
