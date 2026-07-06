@@ -1,0 +1,4660 @@
+{
+  "meta": {
+    "issue": 45,
+    "s1Commit": "0081ce7",
+    "versions": {
+      "@material/material-color-utilities": "0.3.0",
+      "@radix-ui/colors": "3.0.0"
+    },
+    "seeds": {
+      "p": 11,
+      "h": 12,
+      "zone": 2
+    },
+    "bgSweepL": [
+      0.97,
+      0.885,
+      0.8,
+      0.715,
+      0.63,
+      0.545,
+      0.46,
+      0.375,
+      0.29,
+      0.205,
+      0.12
+    ],
+    "zoneSeedIds": [
+      "p-yellow",
+      "h-120"
+    ]
+  },
+  "native": {
+    "s1": {
+      "total": 5060,
+      "achieved": 5060,
+      "flagged": 1056
+    },
+    "s2": {
+      "claim45": {
+        "pairs": 483,
+        "pass": 464
+      },
+      "claim30": {
+        "pairs": 644,
+        "pass": 644
+      }
+    },
+    "s3a": null,
+    "s3b": null,
+    "s4": {
+      "pairs": 115,
+      "pass": 109
+    }
+  },
+  "aggregates": {
+    "s1": {
+      "all": {
+        "ladders": 23,
+        "errors": 0,
+        "m1a": {
+          "pairs": 483,
+          "ge45": 0,
+          "ge30": 0
+        },
+        "m2": {
+          "ladders": 23,
+          "medianMean": 0,
+          "medianMax": 0
+        },
+        "m3": {
+          "ladders": 20,
+          "median": 0.9781224629776601
+        },
+        "m4": {
+          "ladders": 23,
+          "violations": 230,
+          "clean": 0
+        }
+      },
+      "zone": {
+        "ladders": 2,
+        "errors": 0,
+        "m1a": {
+          "pairs": 42,
+          "ge45": 0,
+          "ge30": 0
+        },
+        "m2": {
+          "ladders": 2,
+          "medianMean": 0,
+          "medianMax": 0
+        },
+        "m3": {
+          "ladders": 1,
+          "median": 0.9721334594599066
+        },
+        "m4": {
+          "ladders": 2,
+          "violations": 20,
+          "clean": 0
+        }
+      }
+    },
+    "s2": {
+      "all": {
+        "ladders": 23,
+        "errors": 0,
+        "m1a": {
+          "pairs": 483,
+          "ge45": 464,
+          "ge30": 483
+        },
+        "m2": {
+          "ladders": 23,
+          "medianMean": 0.5281581351367777,
+          "medianMax": 1.6472762038006294
+        },
+        "m3": {
+          "ladders": 23,
+          "median": 1
+        },
+        "m4": {
+          "ladders": 23,
+          "violations": 0,
+          "clean": 23
+        }
+      },
+      "zone": {
+        "ladders": 2,
+        "errors": 0,
+        "m1a": {
+          "pairs": 42,
+          "ge45": 41,
+          "ge30": 42
+        },
+        "m2": {
+          "ladders": 2,
+          "medianMean": 0.344994280301241,
+          "medianMax": 1.2524654618863167
+        },
+        "m3": {
+          "ladders": 2,
+          "median": 1
+        },
+        "m4": {
+          "ladders": 2,
+          "violations": 0,
+          "clean": 2
+        }
+      }
+    },
+    "s3a": {
+      "all": {
+        "ladders": 23,
+        "errors": 0,
+        "m1a": {
+          "pairs": 483,
+          "ge45": 417,
+          "ge30": 482
+        },
+        "m2": {
+          "ladders": 23,
+          "medianMean": 6.186282354075734,
+          "medianMax": 24.53376840954354
+        },
+        "m3": {
+          "ladders": 23,
+          "median": 1
+        },
+        "m4": {
+          "ladders": 23,
+          "violations": 0,
+          "clean": 23
+        }
+      },
+      "zone": {
+        "ladders": 2,
+        "errors": 0,
+        "m1a": {
+          "pairs": 42,
+          "ge45": 38,
+          "ge30": 42
+        },
+        "m2": {
+          "ladders": 2,
+          "medianMean": 12.774267387633508,
+          "medianMax": 34.85528492825506
+        },
+        "m3": {
+          "ladders": 2,
+          "median": 1
+        },
+        "m4": {
+          "ladders": 2,
+          "violations": 0,
+          "clean": 2
+        }
+      }
+    },
+    "s3b": {
+      "all": {
+        "ladders": 23,
+        "errors": 0,
+        "m1a": {
+          "pairs": 483,
+          "ge45": 452,
+          "ge30": 483
+        },
+        "m2": {
+          "ladders": 23,
+          "medianMean": 0.25291665987618794,
+          "medianMax": 1.0719973315135576
+        },
+        "m3": {
+          "ladders": 23,
+          "median": 1
+        },
+        "m4": {
+          "ladders": 23,
+          "violations": 0,
+          "clean": 23
+        }
+      },
+      "zone": {
+        "ladders": 2,
+        "errors": 0,
+        "m1a": {
+          "pairs": 42,
+          "ge45": 39,
+          "ge30": 42
+        },
+        "m2": {
+          "ladders": 2,
+          "medianMean": 0.4846954418130787,
+          "medianMax": 3.163854070051684
+        },
+        "m3": {
+          "ladders": 2,
+          "median": 1
+        },
+        "m4": {
+          "ladders": 2,
+          "violations": 0,
+          "clean": 2
+        }
+      }
+    },
+    "s4": {
+      "all": {
+        "ladders": 23,
+        "errors": 0,
+        "m1a": {
+          "pairs": 483,
+          "ge45": 240,
+          "ge30": 366
+        },
+        "m2": {
+          "ladders": 23,
+          "medianMean": 3.0633141916375655,
+          "medianMax": 5.567553055571182
+        },
+        "m3": {
+          "ladders": 23,
+          "median": 0.7743160311964505
+        },
+        "m4": {
+          "ladders": 23,
+          "violations": 7,
+          "clean": 16
+        }
+      },
+      "zone": {
+        "ladders": 2,
+        "errors": 0,
+        "m1a": {
+          "pairs": 42,
+          "ge45": 15,
+          "ge30": 22
+        },
+        "m2": {
+          "ladders": 2,
+          "medianMean": 7.552885211945278,
+          "medianMax": 18.715442374042112
+        },
+        "m3": {
+          "ladders": 2,
+          "median": 0.74327222280733
+        },
+        "m4": {
+          "ladders": 2,
+          "violations": 2,
+          "clean": 0
+        }
+      }
+    }
+  },
+  "perSeed": [
+    {
+      "id": "p-red",
+      "hex": "#FF3B30",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30",
+            "#FF3B30"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 46
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFDAD5",
+            "#FFB4AA",
+            "#FF8A7B",
+            "#FF5545",
+            "#E62721",
+            "#C0000A",
+            "#930005",
+            "#690003",
+            "#410001",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.5845806805735252,
+            "max": 1.6472762038006294
+          },
+          "m3": {
+            "counted": 4,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFAE97",
+            "#FF907B",
+            "#FF7260",
+            "#FF5345",
+            "#F63027",
+            "#D60000",
+            "#B70000",
+            "#980000",
+            "#790000",
+            "#5A0000",
+            "#3B0000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 12,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 1.3921041604217883,
+            "max": 7.877291240121735
+          },
+          "m3": {
+            "counted": 7,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF2EF",
+            "#FFCBC3",
+            "#FFA193",
+            "#FF6F5F",
+            "#F63027",
+            "#D30007",
+            "#A80004",
+            "#7F0002",
+            "#580001",
+            "#340000",
+            "#140000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.18796917453340142,
+            "max": 0.5747290952753019
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "tomato",
+          "ladder": [
+            "#FFFCFC",
+            "#FFF8F7",
+            "#FEEBE7",
+            "#FFDCD3",
+            "#FFCDC2",
+            "#FDBDAF",
+            "#F5A898",
+            "#EC8E7B",
+            "#E54D2E",
+            "#DD4425",
+            "#D13415",
+            "#5C271F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 8,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 1.0395846736797807,
+            "max": 2.9488698992206537
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.861958987257659
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-orange",
+      "hex": "#FFA100",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100",
+            "#FFA100"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": null,
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 51
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFDDB9",
+            "#FFB963",
+            "#F09700",
+            "#CC8000",
+            "#A86900",
+            "#865300",
+            "#663E00",
+            "#472A00",
+            "#2B1700",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.5281581351367777,
+            "max": 1.3544387480426394
+          },
+          "m3": {
+            "counted": 4,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFDE65",
+            "#FFC143",
+            "#FFA613",
+            "#E78A00",
+            "#CA7000",
+            "#AE5600",
+            "#923B00",
+            "#772000",
+            "#5C0000",
+            "#410000",
+            "#260000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 21.853931648036838,
+            "max": 39.37310283739504
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF3E6",
+            "#FFCF9C",
+            "#FFA834",
+            "#E18E00",
+            "#BE7700",
+            "#9C6100",
+            "#7C4C00",
+            "#5D3700",
+            "#3F2400",
+            "#241300",
+            "#0C0400"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.7187016931938967,
+            "max": 2.7870150656704595
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "brown",
+          "ladder": [
+            "#FEFDFC",
+            "#FCF9F6",
+            "#F6EEE7",
+            "#F0E4D9",
+            "#EBDACA",
+            "#E4CDB7",
+            "#DCBC9F",
+            "#CEA37E",
+            "#AD7F58",
+            "#A07553",
+            "#815E46",
+            "#3E332E"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 10,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 7,
+            "mean": 3.0633141916375655,
+            "max": 5.531092069131034
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.48706715756607877
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-yellow",
+      "hex": "#FFD000",
+      "zone": true,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000",
+            "#FFD000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": null,
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 50
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFE082",
+            "#EEC200",
+            "#CDA700",
+            "#AE8D00",
+            "#907400",
+            "#725C00",
+            "#564500",
+            "#3C2F00",
+            "#231B00",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.3953806129698655,
+            "max": 1.3947531294811029
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFF049",
+            "#FFD413",
+            "#E7B800",
+            "#CB9D00",
+            "#B08200",
+            "#956800",
+            "#7B4F00",
+            "#623600",
+            "#4A1E00",
+            "#330500",
+            "#1B0000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 23.185687127973292,
+            "max": 62.99260371918973
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF5D6",
+            "#FFD543",
+            "#E3B900",
+            "#C49F00",
+            "#A58600",
+            "#876D00",
+            "#6B5600",
+            "#503F00",
+            "#362A00",
+            "#1E1600",
+            "#090500"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.7164742237499695,
+            "max": 5.400726531397424
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "amber",
+          "ladder": [
+            "#FEFDFB",
+            "#FEFBE9",
+            "#FFF7C2",
+            "#FFEE9C",
+            "#FBE577",
+            "#F3D673",
+            "#E9C162",
+            "#E2A336",
+            "#FFC53D",
+            "#FFBA18",
+            "#AB6400",
+            "#4F3422"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 7,
+            "ge30": 11
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 11.979647675838738,
+            "max": 29.961364973635
+          },
+          "m3": {
+            "counted": 2,
+            "median": 0.7760928347244407
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 4
+          }
+        }
+      }
+    },
+    {
+      "id": "p-green",
+      "hex": "#34C759",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759",
+            "#34C759"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.9062993752148473
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 46
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#72FE88",
+            "#53E16F",
+            "#30C456",
+            "#00A741",
+            "#008A34",
+            "#006E28",
+            "#00531C",
+            "#003911",
+            "#002107",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.34196710685358767,
+            "max": 0.652278551754307
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#90FFA6",
+            "#71FB8A",
+            "#52DE6F",
+            "#2CC254",
+            "#00A638",
+            "#008C19",
+            "#007100",
+            "#005800",
+            "#003F00",
+            "#002700",
+            "#001000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 2.8024157467402855,
+            "max": 4.948604163478251
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#E0FFE2",
+            "#71FB8A",
+            "#52DE6F",
+            "#2CC254",
+            "#00A53E",
+            "#008832",
+            "#006B25",
+            "#00501A",
+            "#00360F",
+            "#001E06",
+            "#000901"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.1818754140889599,
+            "max": 0.6921395305375881
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "grass",
+          "ladder": [
+            "#FBFEFB",
+            "#F5FBF5",
+            "#E9F6E9",
+            "#DAF1DB",
+            "#C9E8CA",
+            "#B2DDB5",
+            "#94CE9A",
+            "#65BA74",
+            "#46A758",
+            "#3E9B4F",
+            "#2A7E3B",
+            "#203C25"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 9,
+            "ge30": 14
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.741508454933205,
+            "max": 1.9905235361228506
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.7743160311964505
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-teal",
+      "hex": "#5AC8FA",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA",
+            "#5AC8FA"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": null,
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 44
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#C1E8FF",
+            "#74D1FF",
+            "#44B7E8",
+            "#149CCB",
+            "#0080AA",
+            "#006687",
+            "#004D67",
+            "#003548",
+            "#001E2B",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 1.3759662236491421,
+            "max": 3.1706247226771893
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#98FFFF",
+            "#7BE8FF",
+            "#5ECCFE",
+            "#3FB0E1",
+            "#1595C5",
+            "#007BAA",
+            "#00628F",
+            "#004975",
+            "#00315C",
+            "#001A43",
+            "#00022C"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 14.422900319288978,
+            "max": 35.19469195057741
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#EAF8FF",
+            "#AAE2FF",
+            "#5ECCFE",
+            "#3FB0E1",
+            "#1595C5",
+            "#007BA4",
+            "#006082",
+            "#004861",
+            "#003043",
+            "#001A26",
+            "#00070D"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.333135034261295,
+            "max": 1.0719973315135576
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "cyan",
+          "ladder": [
+            "#FAFDFE",
+            "#F2FAFB",
+            "#DEF7F9",
+            "#CAF1F6",
+            "#B5E9F0",
+            "#9DDDE7",
+            "#7DCEDC",
+            "#3DB9CF",
+            "#00A2C7",
+            "#0797B9",
+            "#107D98",
+            "#0D3C48"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 8,
+            "ge30": 14
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 8.985341344290049,
+            "max": 19.18201634862868
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.9782202576531542
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-mint",
+      "hex": "#00C7BE",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE",
+            "#00C7BE"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#61F9EF",
+            "#39DCD2",
+            "#00BFB7",
+            "#00A29A",
+            "#00857F",
+            "#006A65",
+            "#00504C",
+            "#003734",
+            "#00201E",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 21,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.20599970359453185,
+            "max": 0.43307506322395284
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 21
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#7BFFFF",
+            "#5AF4EA",
+            "#32D8CF",
+            "#00BCB4",
+            "#00A199",
+            "#00877F",
+            "#006D67",
+            "#00544F",
+            "#003C38",
+            "#002523",
+            "#000F0F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 1.6983776809332611,
+            "max": 6.299994055536104
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#D6FFFB",
+            "#5AF4EA",
+            "#32D8CF",
+            "#00BBB3",
+            "#009E97",
+            "#00817B",
+            "#006661",
+            "#004C48",
+            "#003330",
+            "#001C1A",
+            "#000807"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.39012747446578155,
+            "max": 1.5811529498046184
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "teal",
+          "ladder": [
+            "#FAFEFD",
+            "#F3FBF9",
+            "#E0F8F3",
+            "#CCF3EA",
+            "#B8EAE0",
+            "#A1DED2",
+            "#83CDC1",
+            "#53B9AB",
+            "#12A594",
+            "#0D9B8A",
+            "#008573",
+            "#0D3D38"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 6,
+            "ge30": 15
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 1.2728661655119198,
+            "max": 3.16830264402563
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.9795419045116983
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "p-blue",
+      "hex": "#3E87FF",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF",
+            "#3E87FF"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 43
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#D8E2FF",
+            "#AEC6FF",
+            "#81AAFF",
+            "#4D8EFF",
+            "#1F73EA",
+            "#005AC3",
+            "#004395",
+            "#002E6A",
+            "#001A42",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 3.5428846666179843,
+            "max": 10.572348626728171
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#A5F4FF",
+            "#8AD8FF",
+            "#6FBBFF",
+            "#559FFF",
+            "#3B84FB",
+            "#1F68DE",
+            "#004DC1",
+            "#0031A4",
+            "#000F88",
+            "#00006D",
+            "#0E0052"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 11.366415802681997,
+            "max": 52.99214481606168
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#F0F6FF",
+            "#C4DBFF",
+            "#98BFFF",
+            "#6AA2FF",
+            "#3B84FB",
+            "#1F68DE",
+            "#004EBD",
+            "#003A8F",
+            "#002664",
+            "#00143C",
+            "#000518"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.2512408988234256,
+            "max": 0.811974252176185
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "indigo",
+          "ladder": [
+            "#FDFDFE",
+            "#F7F9FF",
+            "#EDF2FE",
+            "#E1E9FF",
+            "#D2DEFF",
+            "#C1D0FF",
+            "#ABBDF9",
+            "#8DA4EF",
+            "#3E63DD",
+            "#3358D4",
+            "#3A5BC7",
+            "#1F2D5C"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 17,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 2.1684890313152447,
+            "max": 4.408082241957231
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.7358220619868463
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-indigo",
+      "hex": "#5856D6",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6",
+            "#5856D6"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.7160432050238856
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 44
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#E2DFFF",
+            "#C2C1FF",
+            "#A2A2FF",
+            "#8382FF",
+            "#6867E7",
+            "#4F4CCD",
+            "#3631B4",
+            "#1C0B9F",
+            "#0C006A",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 5.152220542627782,
+            "max": 11.478560575462154
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.8128658847477988
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#D9E6FF",
+            "#BEC9FF",
+            "#A4ADFF",
+            "#8B91FF",
+            "#7376F9",
+            "#5C5BDB",
+            "#4740BE",
+            "#3422A2",
+            "#240086",
+            "#19006A",
+            "#140050"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 2.017412556358548,
+            "max": 14.71305095840819
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.8299880092963012
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#F3F4FF",
+            "#D0D6FF",
+            "#AEB7FF",
+            "#8F97FF",
+            "#7376F9",
+            "#5C5BDB",
+            "#4740BE",
+            "#3422A2",
+            "#23007F",
+            "#12004E",
+            "#040021"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.07873708662842774,
+            "max": 0.28156733508239995
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.8299880092963012
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "iris",
+          "ladder": [
+            "#FDFDFF",
+            "#F8F8FF",
+            "#F0F1FE",
+            "#E6E7FF",
+            "#DADCFF",
+            "#CBCDFF",
+            "#B8BAF8",
+            "#9B9EF0",
+            "#5B5BD6",
+            "#5151CD",
+            "#5753C6",
+            "#272962"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 18,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 2.8519940264929016,
+            "max": 5.567553055571182
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6887560822474557
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-purple",
+      "hex": "#AF52DE",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE",
+            "#AF52DE"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.7206189754707015
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#F6D9FF",
+            "#E8B3FF",
+            "#DA8CFF",
+            "#C567F4",
+            "#A94CD8",
+            "#8D2EBC",
+            "#7201A2",
+            "#510074",
+            "#310048",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 1.9301082233956335,
+            "max": 5.727390742164573
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.8608025236563799
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFC7FF",
+            "#FFAAFF",
+            "#EC8EFF",
+            "#CF73FF",
+            "#B457E3",
+            "#993AC6",
+            "#7F18AA",
+            "#65008E",
+            "#4D0073",
+            "#350059",
+            "#1F003F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 18,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 5.7953910207229455,
+            "max": 14.358007181958953
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.9253736398348783
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FAF2FF",
+            "#EBCBFF",
+            "#DDA2FF",
+            "#CF74FF",
+            "#B457E3",
+            "#993AC6",
+            "#7F18AA",
+            "#610085",
+            "#43005D",
+            "#260037",
+            "#0D0015"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.21205907859888384,
+            "max": 1.2222761043528863
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.9253736398348783
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "purple",
+          "ladder": [
+            "#FEFCFE",
+            "#FBF7FE",
+            "#F7EDFE",
+            "#F2E2FC",
+            "#EAD5F9",
+            "#E0C4F4",
+            "#D1AFEC",
+            "#BE93E4",
+            "#8E4EC6",
+            "#8347B9",
+            "#8145B5",
+            "#402060"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 17,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 3.166414646390757,
+            "max": 6.794728620265687
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6470685157151792
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-pink",
+      "hex": "#FF2D55",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55",
+            "#FF2D55"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFDADA",
+            "#FFB3B5",
+            "#FF8890",
+            "#FF5167",
+            "#E91748",
+            "#BE0036",
+            "#920027",
+            "#680019",
+            "#40000C",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.2795463007291801,
+            "max": 1.0303134544532213
+          },
+          "m3": {
+            "counted": 4,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFA7B7",
+            "#FF899C",
+            "#FF6B82",
+            "#FF4A68",
+            "#F8224F",
+            "#D80037",
+            "#B8001E",
+            "#990001",
+            "#7A0000",
+            "#5B0000",
+            "#3B0000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 10,
+            "ge30": 20
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 7.0855265201697595,
+            "max": 11.335726672710507
+          },
+          "m3": {
+            "counted": 7,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF1F1",
+            "#FFCACA",
+            "#FF9FA2",
+            "#FF6C78",
+            "#F8224F",
+            "#D1003C",
+            "#A6002E",
+            "#7E0021",
+            "#570014",
+            "#340008",
+            "#140002"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.32514648326375095,
+            "max": 1.92204919458095
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "ruby",
+          "ladder": [
+            "#FFFCFD",
+            "#FFF7F8",
+            "#FEEAED",
+            "#FFDCE1",
+            "#FFCED6",
+            "#F8BFC8",
+            "#EFACB8",
+            "#E592A3",
+            "#E54666",
+            "#DC3B5D",
+            "#CA244D",
+            "#64172B"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 9,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 3.893362500475945,
+            "max": 6.6520518285091725
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.7973348817924839
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "p-brand",
+      "hex": "#007AFF",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF",
+            "#007AFF"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.9999991604402529
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 44
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#D8E2FF",
+            "#ADC6FF",
+            "#80ABFF",
+            "#4B8EFF",
+            "#0072F0",
+            "#005BC1",
+            "#004493",
+            "#002E69",
+            "#001A41",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 21,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 3.398981241513411,
+            "max": 13.040260204252775
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 21
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#90F5FF",
+            "#74D8FF",
+            "#58BBFF",
+            "#3A9FFF",
+            "#1583FF",
+            "#0067EB",
+            "#004BCD",
+            "#002DB0",
+            "#000093",
+            "#010077",
+            "#13005C"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 13.869908140551418,
+            "max": 53.58869604036488
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#EFF6FF",
+            "#C2DBFF",
+            "#94C0FF",
+            "#64A4FF",
+            "#2885FF",
+            "#006ADF",
+            "#0053B2",
+            "#003D87",
+            "#00285E",
+            "#001538",
+            "#000516"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.13823333214387504,
+            "max": 0.3287461384931021
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "blue",
+          "ladder": [
+            "#FBFDFF",
+            "#F4FAFF",
+            "#E6F4FE",
+            "#D5EFFF",
+            "#C2E5FF",
+            "#ACD8FC",
+            "#8EC8F6",
+            "#5EB1EF",
+            "#0090FF",
+            "#0588F0",
+            "#0D74CE",
+            "#113264"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 8,
+            "ge30": 17
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 7.497147629189516,
+            "max": 16.978220450098263
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.9810715324991481
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-000",
+      "hex": "#D6638B",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B",
+            "#D6638B"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.5777277830952902
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 44
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFD9E2",
+            "#FFB1C7",
+            "#FF84AD",
+            "#DF6A92",
+            "#BF5179",
+            "#A03960",
+            "#822048",
+            "#640432",
+            "#3E001C",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.38008346351851213,
+            "max": 1.7996248684025886
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6705357995716923
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFC9F1",
+            "#FFADD5",
+            "#FF92B9",
+            "#ED779F",
+            "#CF5D85",
+            "#B2436C",
+            "#952754",
+            "#79033D",
+            "#5E0028",
+            "#420014",
+            "#270004"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 18,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 6.676538537343276,
+            "max": 24.53376840954354
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.7730819929674209
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF1F4",
+            "#FFC8D7",
+            "#FF9BBA",
+            "#ED779F",
+            "#CF5D85",
+            "#B2436C",
+            "#952754",
+            "#79033D",
+            "#550029",
+            "#320015",
+            "#130005"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.2339056725472119,
+            "max": 0.8035620468833145
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.7730819929674209
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "crimson",
+          "ladder": [
+            "#FFFCFD",
+            "#FEF7F9",
+            "#FFE9F0",
+            "#FEDCE7",
+            "#FACEDD",
+            "#F3BED1",
+            "#EAACC3",
+            "#E093B2",
+            "#E93D82",
+            "#DF3478",
+            "#CB1D63",
+            "#621639"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 9,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 4.3566992621949625,
+            "max": 7.254954282099561
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.8449323159267447
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-030",
+      "hex": "#DB6656",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656",
+            "#DB6656"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.6324615723458861
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 43
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFDAD5",
+            "#FFB4A8",
+            "#FF8A79",
+            "#E46D5C",
+            "#C35445",
+            "#A33C30",
+            "#83251B",
+            "#630D07",
+            "#410000",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.5013777928570815,
+            "max": 2.6600176925762185
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6944007838662498
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFCDB9",
+            "#FFB19E",
+            "#FF9683",
+            "#F27B6A",
+            "#D46050",
+            "#B74638",
+            "#9A2A1F",
+            "#7E0501",
+            "#620000",
+            "#460000",
+            "#2A0000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 17,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 1.9083879482253627,
+            "max": 13.225628299753112
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.8033335988442363
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF2EF",
+            "#FFCBC2",
+            "#FFA192",
+            "#F27B6A",
+            "#D46050",
+            "#B74638",
+            "#9A2A1F",
+            "#7E0501",
+            "#580100",
+            "#340000",
+            "#140000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.14522073084736462,
+            "max": 0.4380123935002871
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.8033335988442363
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "tomato",
+          "ladder": [
+            "#FFFCFC",
+            "#FFF8F7",
+            "#FEEBE7",
+            "#FFDCD3",
+            "#FFCDC2",
+            "#FDBDAF",
+            "#F5A898",
+            "#EC8E7B",
+            "#E54D2E",
+            "#DD4425",
+            "#D13415",
+            "#5C271F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 8,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 1.0395846736797807,
+            "max": 2.9488698992206537
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.861958987257659
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-060",
+      "hex": "#D0750A",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A",
+            "#D0750A"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.9841114664954136
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 48
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFDCC2",
+            "#FFB77A",
+            "#F6932F",
+            "#D67A12",
+            "#B36300",
+            "#8F4E00",
+            "#6D3A00",
+            "#4C2700",
+            "#2E1500",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.4073741498525894,
+            "max": 1.1914285771360937
+          },
+          "m3": {
+            "counted": 4,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFDC88",
+            "#FFC06B",
+            "#FFA44E",
+            "#E6892E",
+            "#C96F00",
+            "#AD5500",
+            "#913B00",
+            "#762000",
+            "#5B0000",
+            "#400000",
+            "#260000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 16.12744790811844,
+            "max": 30.61397027728617
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF3E9",
+            "#FFCEA8",
+            "#FFA659",
+            "#E6892E",
+            "#C86F00",
+            "#A55B00",
+            "#834700",
+            "#623300",
+            "#432100",
+            "#271100",
+            "#0D0400"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.5324118445679403,
+            "max": 2.8497422550142915
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "brown",
+          "ladder": [
+            "#FEFDFC",
+            "#FCF9F6",
+            "#F6EEE7",
+            "#F0E4D9",
+            "#EBDACA",
+            "#E4CDB7",
+            "#DCBC9F",
+            "#CEA37E",
+            "#AD7F58",
+            "#A07553",
+            "#815E46",
+            "#3E332E"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 10,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 7,
+            "mean": 3.0633141916375655,
+            "max": 5.531092069131034
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.48706715756607877
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-090",
+      "hex": "#AF8A00",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00",
+            "#AF8A00"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 50
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFE08E",
+            "#ECC244",
+            "#CEA629",
+            "#B18C04",
+            "#927300",
+            "#755B00",
+            "#584400",
+            "#3D2E00",
+            "#241A00",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.25174066820317065,
+            "max": 0.5344528056609761
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.9999981267252731
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFF186",
+            "#FCD56A",
+            "#DFB94C",
+            "#C49E2B",
+            "#A98400",
+            "#8E6A00",
+            "#755200",
+            "#5C3A00",
+            "#452300",
+            "#2E0B00",
+            "#180000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 16.487048232139852,
+            "max": 60.36806262095524
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF5D9",
+            "#FCD56A",
+            "#DFB94C",
+            "#C49E2B",
+            "#A88400",
+            "#8A6C00",
+            "#6D5500",
+            "#513E00",
+            "#372900",
+            "#1F1600",
+            "#090500"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.619119612512882,
+            "max": 2.7761854331629365
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "amber",
+          "ladder": [
+            "#FEFDFB",
+            "#FEFBE9",
+            "#FFF7C2",
+            "#FFEE9C",
+            "#FBE577",
+            "#F3D673",
+            "#E9C162",
+            "#E2A336",
+            "#FFC53D",
+            "#FFBA18",
+            "#AB6400",
+            "#4F3422"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 7,
+            "ge30": 11
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 11.979647675838738,
+            "max": 29.961364973635
+          },
+          "m3": {
+            "counted": 2,
+            "median": 0.7760928347244407
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 4
+          }
+        }
+      }
+    },
+    {
+      "id": "h-120",
+      "hex": "#849B11",
+      "zone": true,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11",
+            "#849B11"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.9721334594599066
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 49
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#D4EE63",
+            "#B8D24A",
+            "#9DB630",
+            "#839A10",
+            "#6B7F00",
+            "#556500",
+            "#3F4C00",
+            "#2B3400",
+            "#181E00",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 21,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.2946079476326165,
+            "max": 1.1101777942915305
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 21
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#E8FF8B",
+            "#CDE76F",
+            "#B2CB52",
+            "#98B033",
+            "#7E9500",
+            "#667B00",
+            "#4F6200",
+            "#394A00",
+            "#243200",
+            "#121C00",
+            "#040800"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 2.3628476472937234,
+            "max": 6.7179661373203885
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#EDFFB9",
+            "#CDE76F",
+            "#B2CB52",
+            "#98B033",
+            "#7E9500",
+            "#677A00",
+            "#516000",
+            "#3B4700",
+            "#273000",
+            "#151A00",
+            "#050700"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.25291665987618794,
+            "max": 0.9269816087059439
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "lime",
+          "ladder": [
+            "#FCFDFA",
+            "#F8FAF3",
+            "#EEF6D6",
+            "#E2F0BD",
+            "#D3E7A6",
+            "#C2DA91",
+            "#ABC978",
+            "#8DB654",
+            "#BDEE63",
+            "#B0E64C",
+            "#5C7C2F",
+            "#37401C"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 8,
+            "ge30": 11
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 3.126122748051819,
+            "max": 7.469519774449225
+          },
+          "m3": {
+            "counted": 3,
+            "median": 0.7104516108902192
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-150",
+      "hex": "#3AA85B",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B",
+            "#3AA85B"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.8381038779448897
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 50
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#8DF9A3",
+            "#70DC89",
+            "#54C070",
+            "#36A458",
+            "#0B8940",
+            "#006D31",
+            "#005323",
+            "#003916",
+            "#00210A",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 21,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.4580308129092272,
+            "max": 0.8179842311825496
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.9792173741814667
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 21
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#A7FFBE",
+            "#8AF5A3",
+            "#6ED888",
+            "#51BD6E",
+            "#32A255",
+            "#00873C",
+            "#006D23",
+            "#005404",
+            "#003C00",
+            "#002500",
+            "#000F00"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 3.1158490207325826,
+            "max": 7.379807398100638
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#DFFFE4",
+            "#8AF5A3",
+            "#6ED888",
+            "#51BD6E",
+            "#32A255",
+            "#00873C",
+            "#006B2E",
+            "#004F20",
+            "#003614",
+            "#001E08",
+            "#000902"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.202263028195122,
+            "max": 1.5927890079169629
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "grass",
+          "ladder": [
+            "#FBFEFB",
+            "#F5FBF5",
+            "#E9F6E9",
+            "#DAF1DB",
+            "#C9E8CA",
+            "#B2DDB5",
+            "#94CE9A",
+            "#65BA74",
+            "#46A758",
+            "#3E9B4F",
+            "#2A7E3B",
+            "#203C25"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 9,
+            "ge30": 14
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.741508454933205,
+            "max": 1.9905235361228506
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.7743160311964505
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-180",
+      "hex": "#00A692",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692",
+            "#00A692"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#7AF7E0",
+            "#5BDBC5",
+            "#38BEAA",
+            "#00A38F",
+            "#008676",
+            "#006B5D",
+            "#005046",
+            "#003730",
+            "#00201B",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.46928621038400326,
+            "max": 1.194870050571808
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#93FFF8",
+            "#75F3DC",
+            "#55D6C1",
+            "#32BBA6",
+            "#00A08C",
+            "#008673",
+            "#006C5B",
+            "#005344",
+            "#003C2E",
+            "#002519",
+            "#000F07"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 5.630918681839432,
+            "max": 17.78353374312627
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#D8FFF6",
+            "#75F3DC",
+            "#55D6C1",
+            "#32BBA6",
+            "#009F8C",
+            "#008272",
+            "#00675A",
+            "#004D42",
+            "#00342C",
+            "#001D18",
+            "#000806"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.41924460940969704,
+            "max": 1.221779200818446
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "teal",
+          "ladder": [
+            "#FAFEFD",
+            "#F3FBF9",
+            "#E0F8F3",
+            "#CCF3EA",
+            "#B8EAE0",
+            "#A1DED2",
+            "#83CDC1",
+            "#53B9AB",
+            "#12A594",
+            "#0D9B8A",
+            "#008573",
+            "#0D3D38"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 6,
+            "ge30": 15
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 1.2728661655119198,
+            "max": 3.16830264402563
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.9795419045116983
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "h-210",
+      "hex": "#00A1B5",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5",
+            "#00A1B5"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#9FEFFF",
+            "#5FD6EB",
+            "#3BBACF",
+            "#009FB3",
+            "#008394",
+            "#006876",
+            "#004E59",
+            "#00363E",
+            "#001F24",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 0.5972405743218019,
+            "max": 1.3247070696790502
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#92FFFF",
+            "#74EDFF",
+            "#55D1E6",
+            "#31B6CA",
+            "#009BAF",
+            "#008194",
+            "#00677B",
+            "#004F62",
+            "#00374A",
+            "#002033",
+            "#000A1D"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 11.704228187068923,
+            "max": 43.79794025717251
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#E2FAFF",
+            "#80ECFF",
+            "#55D1E6",
+            "#31B6CA",
+            "#009AAE",
+            "#007E8F",
+            "#006471",
+            "#004A54",
+            "#003239",
+            "#001B20",
+            "#00070A"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 1.0022666153742223,
+            "max": 5.757636884167368
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "sky",
+          "ladder": [
+            "#F9FEFF",
+            "#F1FAFD",
+            "#E1F6FD",
+            "#D1F0FA",
+            "#BEE7F5",
+            "#A9DAED",
+            "#8DCAE3",
+            "#60B3D7",
+            "#7CE2FE",
+            "#74DAF8",
+            "#00749E",
+            "#1D3E56"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 9,
+            "ge30": 11
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 7.108861224599548,
+            "max": 24.569241608235416
+          },
+          "m3": {
+            "counted": 3,
+            "median": 0.6827507031628142
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-240",
+      "hex": "#0099E0",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0",
+            "#0099E0"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 1
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#CBE6FF",
+            "#8FCDFF",
+            "#40B4FD",
+            "#0099E0",
+            "#007EB9",
+            "#006494",
+            "#004B71",
+            "#00344F",
+            "#001E30",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 1.5370866801400906,
+            "max": 6.366434481863394
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#8EFFFF",
+            "#71E5FF",
+            "#52C9FF",
+            "#2FADF6",
+            "#0092D9",
+            "#0078BD",
+            "#005EA1",
+            "#004586",
+            "#002C6C",
+            "#001152",
+            "#000039"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 15.880458426603303,
+            "max": 44.35797164257758
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#ECF7FF",
+            "#B4E0FF",
+            "#75C7FF",
+            "#2FADF6",
+            "#0092D6",
+            "#0078B1",
+            "#005E8C",
+            "#004669",
+            "#002F49",
+            "#00192A",
+            "#00070F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.41127842915520885,
+            "max": 1.5082755668818777
+          },
+          "m3": {
+            "counted": 5,
+            "median": 1
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "blue",
+          "ladder": [
+            "#FBFDFF",
+            "#F4FAFF",
+            "#E6F4FE",
+            "#D5EFFF",
+            "#C2E5FF",
+            "#ACD8FC",
+            "#8EC8F6",
+            "#5EB1EF",
+            "#0090FF",
+            "#0588F0",
+            "#0D74CE",
+            "#113264"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 8,
+            "ge30": 17
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 7.497147629189516,
+            "max": 16.978220450098263
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.9810715324991481
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-270",
+      "hex": "#6C88EA",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA",
+            "#6C88EA"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.8062008970818476
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 44
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#DCE1FF",
+            "#B6C4FF",
+            "#8FA7FF",
+            "#6F8BEE",
+            "#5571D2",
+            "#3A58B7",
+            "#1D3F9E",
+            "#00277E",
+            "#00164F",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 4.161593433779343,
+            "max": 8.201727303417897
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6557528301865284
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#CEF0FF",
+            "#B2D3FF",
+            "#98B8FF",
+            "#7F9CFF",
+            "#6682E3",
+            "#4F67C6",
+            "#394EAA",
+            "#25348F",
+            "#141974",
+            "#090059",
+            "#090040"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 6.186282354075734,
+            "max": 43.58015655274153
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6134690521163537
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#F1F5FF",
+            "#CAD8FF",
+            "#A4BBFF",
+            "#7F9CFF",
+            "#6682E3",
+            "#4F67C6",
+            "#394EAA",
+            "#25348F",
+            "#141974",
+            "#080053",
+            "#020024"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.2789689825158234,
+            "max": 1.0534021729772576
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6134690521163537
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "indigo",
+          "ladder": [
+            "#FDFDFE",
+            "#F7F9FF",
+            "#EDF2FE",
+            "#E1E9FF",
+            "#D2DEFF",
+            "#C1D0FF",
+            "#ABBDF9",
+            "#8DA4EF",
+            "#3E63DD",
+            "#3358D4",
+            "#3A5BC7",
+            "#1F2D5C"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 17,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 2.1684890313152447,
+            "max": 4.408082241957231
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.7358220619868463
+          },
+          "m4": {
+            "violations": 1
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-300",
+      "hex": "#9E77DC",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC",
+            "#9E77DC"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.6766362236039652
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#ECDCFF",
+            "#D6BAFF",
+            "#C098FF",
+            "#A47DE3",
+            "#8A63C6",
+            "#704AAB",
+            "#573092",
+            "#40147A",
+            "#280057",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 2.561673287608193,
+            "max": 5.964719141164835
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6234283312184501
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFDDFF",
+            "#E9C1FF",
+            "#CDA6FF",
+            "#B28BF2",
+            "#9871D5",
+            "#7F57B9",
+            "#663E9E",
+            "#4F2483",
+            "#390468",
+            "#25004F",
+            "#130036"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 5.311527489872824,
+            "max": 25.953000630550775
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6322570579457651
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#F7F3FF",
+            "#DFD0FF",
+            "#C9ACFF",
+            "#B28BF2",
+            "#9871D5",
+            "#7F57B9",
+            "#663E9E",
+            "#4F2483",
+            "#390468",
+            "#210040",
+            "#0A001A"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 0.24059751577177052,
+            "max": 0.43001529694709006
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6322570579457651
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "purple",
+          "ladder": [
+            "#FEFCFE",
+            "#FBF7FE",
+            "#F7EDFE",
+            "#F2E2FC",
+            "#EAD5F9",
+            "#E0C4F4",
+            "#D1AFEC",
+            "#BE93E4",
+            "#8E4EC6",
+            "#8347B9",
+            "#8145B5",
+            "#402060"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 17,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 3.166414646390757,
+            "max": 6.794728620265687
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6470685157151792
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "h-330",
+      "hex": "#C16ABA",
+      "zone": false,
+      "systems": {
+        "s1": {
+          "ladder": [
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA",
+            "#C16ABA"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 0,
+            "ge30": 0
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0,
+            "max": 0
+          },
+          "m3": {
+            "counted": 11,
+            "median": 0.5053654132819667
+          },
+          "m4": {
+            "violations": 10
+          },
+          "native": {
+            "total": 220,
+            "achieved": 220,
+            "flagged": 45
+          }
+        },
+        "s2": {
+          "ladder": [
+            "#FFFFFF",
+            "#FFD7F6",
+            "#FFAAF5",
+            "#E78BDE",
+            "#C971C2",
+            "#AC58A6",
+            "#8F3E8B",
+            "#742572",
+            "#590759",
+            "#380038",
+            "#000000"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 9,
+            "mean": 1.2107033611212803,
+            "max": 3.7837944285645335
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.5966928470485835
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "claim45": {
+              "pairs": 21,
+              "pass": 20
+            },
+            "claim30": {
+              "pairs": 28,
+              "pass": 28
+            }
+          }
+        },
+        "s3a": {
+          "ladder": [
+            "#FFCFFF",
+            "#FFB4FF",
+            "#F398EB",
+            "#D77ECF",
+            "#BA64B3",
+            "#9F4A99",
+            "#84317F",
+            "#691465",
+            "#4F004D",
+            "#360035",
+            "#1E001F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 19,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 1.1250230939208554,
+            "max": 3.9082347703931077
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6061112089015017
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s3b": {
+          "ladder": [
+            "#FFF0FD",
+            "#FFC2F8",
+            "#F398EB",
+            "#D77ECF",
+            "#BA64B3",
+            "#9F4A99",
+            "#84317F",
+            "#691465",
+            "#4C0049",
+            "#2C002A",
+            "#10000F"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 20,
+            "ge30": 21
+          },
+          "m2": {
+            "counted": 11,
+            "mean": 0.12212574428621213,
+            "max": 0.2415022421026265
+          },
+          "m3": {
+            "counted": 5,
+            "median": 0.6061112089015017
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": null
+        },
+        "s4": {
+          "scale": "plum",
+          "ladder": [
+            "#FEFCFF",
+            "#FDF7FD",
+            "#FBEBFB",
+            "#F7DEF8",
+            "#F2D1F3",
+            "#E9C2EC",
+            "#DEADE3",
+            "#CF91D8",
+            "#AB4ABA",
+            "#A144AF",
+            "#953EA3",
+            "#53195D"
+          ],
+          "m1a": {
+            "pairs": 21,
+            "ge45": 15,
+            "ge30": 18
+          },
+          "m2": {
+            "counted": 10,
+            "mean": 1.3512104442160022,
+            "max": 3.6804646455988745
+          },
+          "m3": {
+            "counted": 4,
+            "median": 0.6878281589045435
+          },
+          "m4": {
+            "violations": 0
+          },
+          "native": {
+            "pairs": 5,
+            "pass": 5
+          }
+        }
+      }
+    }
+  ]
+}
