@@ -193,7 +193,6 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
     // instead we assert the solver's OWN reported lc() matches an independent
     // re-measurement of the emitted hex — the honest "the number the caller sees
     // is the number the colour achieves" contract, under dim + tint.
-    use crate::lpc::lpc_with_vc;
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     let roles = [
@@ -208,7 +207,13 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
         let set = resolve_set(&bg, &table, &vc);
         for role in roles {
             if let Some((solved, _)) = role_solved(&set, role) {
-                let measured = lpc_with_vc(solved.hex(), bg_hex, &vc);
+                // Ось читаемости меряется в Ys (ADR-0003 глава #64): `solved.lc()`
+                // — Ys-замер, независимый пересчёт обязан читать тот же домен.
+                let fg_disp =
+                    crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()).expect("valid hex");
+                let bg_disp =
+                    crate::spaces::srgb::srgb_encoded_from_hex(bg_hex).expect("valid hex");
+                let measured = crate::lpc::lpc_readability_ys(fg_disp, bg_disp);
                 assert!(
                     (solved.lc() - measured).abs() <= 1.0,
                     "dim {bg_hex} {}: reported lc {} disagrees with re-measured {measured} \

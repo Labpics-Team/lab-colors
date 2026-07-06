@@ -1391,8 +1391,25 @@ mod tests {
         }
     }
 
+    /// Independent re-measure of an emitted hex's signed perceptual contrast in
+    /// the READABILITY domain (`Ys`) the solver targets since глава #64. Заменяет
+    /// Y_hk-мерило `lpc_with_vc` в round-trip проверках ВЕЛИЧИНЫ (сверять надо в
+    /// домене цели; signum-проверки домен-агностичны и остаются на `lpc_with_vc`).
+    fn readability_lc(fg_hex: &str, bg_hex: &str) -> f64 {
+        let fg = crate::spaces::srgb::srgb_encoded_from_hex(fg_hex).expect("valid emitted hex");
+        let bg = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex).expect("valid bg hex");
+        crate::lpc::lpc_readability_ys(fg, bg)
+    }
+
     /// Solve and return both the solved value and the contrast measured
-    /// independently through the public `lpc_with_vc` on the resolved hex.
+    /// independently on the resolved hex — in the SAME readability domain the
+    /// solver now targets (`Ys`, ADR-0003 глава #64): `lpc_readability_ys` on the
+    /// display bytes. Меряться через `lpc_with_vc` (домен `Y_hk`, apparent
+    /// contrast) здесь БОЛЬШЕ НЕЛЬЗЯ: ось читаемости переехала в `Ys`, и
+    /// round-trip обязан сверяться в домене цели, иначе Ys≈Y_hk-разрыв на серости
+    /// (CAM16-лайтнесс ≠ WCAG-люминанс даже при C=0) даёт ложный недолёт. Третий
+    /// ассерт вызывающих (`solved.lc() == measured` до 1e-9) фиксирует именно это:
+    /// `solved.lc()` — Ys-замер `finish`, и независимый пересчёт обязан совпасть.
     fn solve_and_measure(
         bg_hex: &str,
         target: f64,
@@ -1409,7 +1426,11 @@ mod tests {
             vc,
             Gamut::Srgb,
         )?;
-        let measured = lpc_with_vc(solved.hex(), bg_hex, vc);
+        let fg_disp = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
+            .expect("solved hex is produced by hex_from_srgb → always parses");
+        let bg_disp = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex)
+            .expect("test bg hex is a valid literal");
+        let measured = crate::lpc::lpc_readability_ys(fg_disp, bg_disp);
         Ok((solved, measured))
     }
 
@@ -1792,7 +1813,7 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap();
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!(
             (measured - target).abs() <= TOL,
             "chromatic target {target}, measured {measured}, hex {}",
@@ -1891,7 +1912,7 @@ mod tests {
         .unwrap();
         assert!(solved.floor_override(), "floor must override Lc 15");
         assert!(solved.wcag_ratio() >= 4.5 - 1e-9);
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!(
             measured > 15.0,
             "pushed darker means more contrast, got {measured}"
@@ -1942,7 +1963,7 @@ mod tests {
         )
         .unwrap();
         assert!(!solved.floor_override());
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!((measured - 15.0).abs() <= TOL);
         assert!(solved.wcag_ratio() < 4.5);
     }
@@ -1963,7 +1984,7 @@ mod tests {
         .unwrap();
         assert!(!solved.floor_override());
         assert!(solved.wcag_ratio() >= 4.5);
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!((measured - 90.0).abs() <= TOL);
     }
 
