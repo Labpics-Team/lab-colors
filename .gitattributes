@@ -12,3 +12,8 @@ crates/labcolors-wasm/tests/data/*.json text eol=lf
 # by the JS `reference-vectors.test.mjs`. Pin to LF so a CRLF checkout cannot
 # perturb the committed strings the JS parser reads.
 packages/colors/test/data/*.txt text eol=lf
+
+# Шаблон раннера психофизики вкомпилирован через include_str! и разбирается
+# тестами построчно; пин к LF, чтобы core.autocrlf-чекаут (Windows) не превращал
+# ";\n" в ";\r\n" и не ронял поиск в тестах. Тот же класс, что фикстуры выше.
+experiments/psychophysics/runner/template.html text eol=lf

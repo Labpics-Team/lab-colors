@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/*"]
+# Калибровочные харнессы перечислены ПОИМЁННО, не глобом: в experiments/ живут и
+# не-Rust эксперименты (experiments/comparative — Node/JS, #163), а глоб
+# `experiments/*` роняет `cargo metadata` на членах без Cargo.toml.
+# Rust-харнессы (напр. experiments/psychophysics для мишени #1 empirical-residue) —
+# зависимость-нулевые члены воркспейса: попадают под те же гейты CI
+# (fmt/clippy/test/doc/audit --workspace), не расширяя граф зависимостей.
+members = ["crates/*", "experiments/psychophysics"]
 resolver = "2"
 
 [workspace.package]
