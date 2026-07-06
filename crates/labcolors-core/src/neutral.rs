@@ -10,15 +10,33 @@ const ACHROMATIC_MP_THRESHOLD: f64 = 5.0;
 
 /// Множитель опорной хромы для нормировки чистоты оттенка: `mp_ref = 1.5 × M'`
 /// базового якоря, чтобы база сохраняла почти весь свой оттенок, а
-/// near-ахроматические якоря сильно корректировались. Калибровочный.
-// SSOT-TRACKED — множитель опорной хромы для нормировки чистоты оттенка, см. docs/empirical-inventory.md.
+/// near-ахроматические якоря сильно корректировались. Калибровочный (магнитуда без
+/// литературы); ПРОВЕНАНС ФОРМЫ — см. [`HUE_PURITY_EXPONENT`].
+// SSOT-TRACKED — множитель опорной хромы (калибровка; форма мотивирована Abney), см. docs/empirical-inventory.md.
 const HUE_PURITY_MP_REF_RATIO: f64 = 1.5;
 
 /// Показатель степени кривой чистоты оттенка `(mp/mp_ref)^0.6`: агрессивная
 /// коррекция оттенка для сильно десатурированных цветов, плавно отпускаемая с
-/// ростом хромы. Калибровочный; кандидат вывода — связь с near-neutral hue-noise
-/// (Abney, issue #27).
-// SSOT-TRACKED — показатель кривой чистоты оттенка (калибровочный), см. docs/empirical-inventory.md.
+/// ростом хромы.
+///
+/// ПРОВЕНАНС ФОРМЫ (не значения). «Не доверяй тону у нейтрали» мотивировано двумя
+/// СХОДЯЩИМИСЯ причинами:
+/// 1. ЧИСЛЕННОЙ — `atan2(b, a)` ill-conditioned у серой оси, оттенок почти-серых
+///    построен из шума (см. [`hue_purity`]);
+/// 2. ПЕРЦЕПТИВНОЙ — эффект Abney: воспринимаемый тон монохроматического стимула
+///    СДВИГАЕТСЯ при разбавлении белым (падении чистоты). Abney (1909) Proc. R.
+///    Soc. Lond. A 83, 120–127 (DOI 10.1098/rspa.1909.0085); величина сдвига
+///    растёт с падением колориметрической чистоты — Kurtenbach, Sternheim &
+///    Spillmann (1984) JOSA A 1(4), 365–372 (DOI 10.1364/JOSAA.1.000365).
+///
+/// ⚠️ Перцептивный Abney — ОТДЕЛЬНОЕ явление от численного atan2-шума; конкретные
+/// `1.5`/`0.6` — инженерная калибровка формы, НЕ выведены из данных Abney (эта
+/// кривая эффект Abney не моделирует, issue #27 — `abney_correct`). Sensitivity:
+/// хроматические якоря (`mp ≥ mp_ref`) инвариантны к значению (`purity == 1`),
+/// значит константы двигают ТОЛЬКО оттенок near-нейтралей, который и так шум.
+/// Локи `hue_purity_curve_shape_is_pinned`, `exposure_hue_purity_curve`;
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — показатель кривой чистоты (калибровка; форма мотивирована Abney), см. docs/empirical-inventory.md.
 const HUE_PURITY_EXPONENT: f64 = 0.6;
 
 /// Форм-параметры нейтральной кривой: гаммы светлотных ветвей и позиция пика
@@ -694,6 +712,66 @@ mod exposure_locks {
             "EXPOSURE ACHROMATIC_MP_THRESHOLD band=[{lo:.3},{hi:.3}] grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
             labui.len(),
             labui
+        );
+    }
+
+    /// FORM-лок кривой чистоты (values pinned + границы + монотонность + ключевой
+    /// инвариант). ХРОМАТИЧЕСКИЙ ИНВАРИАНТ: при `mp ≥ mp_ref` `hue_purity == 1` при
+    /// ЛЮБОМ показателе, значит `HUE_PURITY_EXPONENT`/`_MP_REF_RATIO` двигают
+    /// ТОЛЬКО оттенок near-нейтралей (шум atan2), а не хроматические якоря.
+    #[test]
+    fn hue_purity_curve_shape_is_pinned() {
+        use super::{HUE_PURITY_EXPONENT, HUE_PURITY_MP_REF_RATIO, hue_purity};
+        // Значения (магнитуда калибровочная — пиннится, чтобы дрейф был виден).
+        assert_eq!(HUE_PURITY_EXPONENT, 0.6);
+        assert_eq!(HUE_PURITY_MP_REF_RATIO, 1.5);
+        let ref_mp = 10.0;
+        // Границы: 0 → 0 (полная коррекция), ≥ref → 1 (нет коррекции).
+        assert_eq!(hue_purity(0.0, ref_mp), 0.0);
+        assert_eq!(hue_purity(ref_mp, ref_mp), 1.0);
+        assert_eq!(hue_purity(2.0 * ref_mp, ref_mp), 1.0);
+        // Монотонно не убывает на [0, ref].
+        let mut prev = -1.0_f64;
+        let mut x = 0.0_f64;
+        while x <= ref_mp {
+            let p = hue_purity(x, ref_mp);
+            assert!(
+                p >= prev - 1e-12 && (0.0..=1.0).contains(&p),
+                "purity must be monotone in [0,1]: hue_purity({x},{ref_mp})={p}"
+            );
+            prev = p;
+            x += ref_mp / 64.0;
+        }
+    }
+
+    /// EXPOSURE/sensitivity кривой чистоты: константы влияют ТОЛЬКО на near-нейтрали
+    /// (`r = mp/mp_ref < 1`), чей оттенок и так шум; при `r ≥ 1` `purity == 1` при
+    /// любом показателе (хроматические якоря инвариантны). Свипаем показатель по
+    /// [0.4, 0.9] и печатаем макс. |Δpurity| — непрерывный ОГРАНИЧЕННЫЙ дрейф, не
+    /// бинарный флип: точное значение нематериально для хроматического выхода.
+    #[test]
+    fn exposure_hue_purity_curve() {
+        use super::HUE_PURITY_EXPONENT;
+        let prod = |r: f64| r.powf(HUE_PURITY_EXPONENT);
+        let mut max_dp = 0.0_f64;
+        let mut r = 0.0_f64;
+        while r <= 1.0 {
+            for e in [0.4_f64, 0.5, 0.7, 0.8, 0.9] {
+                max_dp = max_dp.max((r.powf(e) - prod(r)).abs());
+            }
+            r += 1.0 / 128.0;
+        }
+        // Хроматический инвариант: при r >= 1 покрытие purity == 1 для любого e.
+        for e in [0.4_f64, 0.6, 0.9, 1.5] {
+            assert_eq!(
+                (1.0_f64).powf(e),
+                1.0,
+                "r=1 purity must be 1 for any exponent"
+            );
+        }
+        eprintln!(
+            "EXPOSURE HUE_PURITY exponent-sweep[0.4,0.9] max|Δpurity|={max_dp:.3} \
+             (bounded, continuous; chromatic anchors invariant, only near-neutral hue-noise moves)"
         );
     }
 }

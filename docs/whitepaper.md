@@ -319,10 +319,16 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
   допуск приёмки Lc в единицах шага сетки (±1 Lc): контракт `±1` явный и
   симметричный для соседского поиска, зеркалит тестовый допуск `TOL`.
 - `DECORATIVE_FLOOR_MIN = 7.5`
-  ([`semantic.rs`](../crates/labcolors-core/src/semantic.rs)) — порог
-  квантования решателя (issue #44): декоративные Lc-величины labui (separator
+  ([`semantic.rs`](../crates/labcolors-core/src/semantic.rs)) — **выведен**:
+  `MODEL_LC_FLOOR` (7.3) + `QUANT_GUARD` (0.2). `MODEL_LC_FLOOR =
+  (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE = 7.3` — минимальный ненулевой контраст
+  модели: за низкоконтрастным клипом кривая стартует ровно с 7.3, внутри клипа —
+  ноль (issue #44). Это следствие GROUNDED APCA `0.0.98G-4g` набора, а guard 0.2
+  держит цель выше инфимума 7.3, чтобы 8-бит квантование решённого цвета не уронило
+  контраст в ноль. Скан подтверждает: ни одна квантованная пара не эмитит контраст
+  в (0, 7.3) (замер минимума 7.3005). Декоративные Lc-величины labui (separator
   8.0; тени 8.0 / 9.5 / 11.5 / 14.0 — таблица ролей в
-  [`README.md`](../README.md)) держатся выше этого надёжного пола.
+  [`README.md`](../README.md)) держатся выше этого пола.
 - `PAIR_CROSSOVER_Y = 0.30` ([`pair.rs`](../crates/labcolors-core/src/pair.rs)) —
   Y-порог кроссовера стороны тинт-пары; design-choice, откалиброван на 10 якорях
   владельца («калибровка к якорям, не независимая валидация; значение не
@@ -392,9 +398,10 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
 | `DEFAULT_HARDNESS` | 5.0 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | **калибровочный дефолт** p-нормы (#55) |
 | `CHROMA_FRACTION` | 0.88 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | ручка силы: доля гамутного максимума, единая для всех hue |
 | `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | допуск приёмки Lc, ±1 шаг сетки |
-| `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | порог квантования решателя (issue #44); JND-калибровка декоративных величин впереди (глава surface-jnd) |
+| `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **выведен** = `MODEL_LC_FLOOR` 7.3 (клип APCA `0.0.98G-4g`) + `QUANT_GUARD` 0.2 (issue #44) |
+| `IC_DECORATIVE_FLOOR_MIN` | 15.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **заземлён** — APCA-уровень Lc 15 (различимость не-текста; draft/single-origin, не WCAG 3) |
 | `PAIR_CROSSOVER_Y` | 0.30 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | **design-choice**, калибровка к 10 якорям владельца — не независимая валидация |
-| `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка |
+| `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — калибровка |
 | `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона |
 | `TINT_TARGET_MP` | 6.1 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | целевая перцептивная красочность подтона |
 | `TINT_HUE_STIFFNESS` | 9.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | жёсткость притяжения оттенка подтона |
@@ -405,17 +412,22 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
 
 Инвентарь различает происхождение значений, и это различие — содержательное:
 
-- **выведенные** привязки (деривация из других величин системы; пример —
-  натуральный минимум Warning-зоны);
+- **выведенные** привязки (деривация из других величин системы; примеры —
+  натуральный минимум Warning-зоны; `DECORATIVE_FLOOR_MIN` = `MODEL_LC_FLOOR` 7.3
+  клипа APCA + guard 0.2);
+- **заземлённые в опубликованном источнике** (GROUNDED-строки инвентаря; пример —
+  `IC_DECORATIVE_FLOOR_MIN` = APCA-уровень Lc 15, черновиковый дизайн-уровень с
+  явной оговоркой draft/single-origin) — в отличие от жёстких стандартов
+  (Hellwig/WCAG/D65), которые вне инвентаря по построению (INV-3);
 - **калибровки к референсу владельца** (Figma-якоря labui; доли текста,
   `PAIR_CROSSOVER_Y`) — воспроизводят конкретную дизайн-практику, а не
   независимые психофизические измерения;
 - **design-choice** — осознанный выбор без претензии на вывод;
-- **цитированные стандарты** — вне инвентаря по построению (INV-3).
+- **цитированные жёсткие стандарты** — вне инвентаря по построению (INV-3).
 
 Ни одна константа этого документа не выдаётся за независимо измеренную
-психофизическую величину, если её статус в инвентаре — калибровка или
-design-choice.
+психофизическую величину, если её статус в инвентаре — калибровка, design-choice
+или черновиковый заземлённый уровень.
 
 ---
 
@@ -430,13 +442,21 @@ design-choice.
   «LPC vs APCA»).
 - **Эффект Эбни не моделируется** — hue-purity кривая им не является; коррекция
   Эбни вынесена в отдельную задачу (issue #27, `abney_correct`)
-  ([`README.md`](../README.md)).
+  ([`README.md`](../README.md)). При этом ФОРМА кривой (гасить тон near-нейтралей)
+  мотивирована сходящимися основаниями: численным (atan2-шум у серой оси) и
+  перцептивным — эффект Эбни (Abney 1909, Proc. R. Soc. Lond. A 83; Kurtenbach,
+  Sternheim & Spillmann 1984, JOSA A 1(4)): воспринимаемый тон сдвигается при
+  падении чистоты. Конкретные показатель/множитель (0.6/1.5) — калибровка, НЕ
+  вывод из данных Эбни.
 - **Warning-пол — не перцептивная граница red↔orange.** Это C¹-предохранитель
   с хрупким зазором ≈0.527°; категориальные границы цвета размыты
   (Berlin & Kay) — [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs).
-- **Декоративные величины — заглушки до JND-калибровки.** Тени и `separator`
-  держат Lc выше `DECORATIVE_FLOOR_MIN`; их финальные контракты выведет глава
-  surface-jnd из альфа-якорей LabUI ([`README.md`](../README.md), «Что дальше»).
+- **Декоративные ВЕЛИЧИНЫ (не пол) — заглушки до JND-калибровки.** Сам пол
+  `DECORATIVE_FLOOR_MIN` теперь выведен (7.3 клипа APCA + guard 0.2, §3.5), а
+  `IC_DECORATIVE_FLOOR_MIN` заземлён в APCA Lc 15; но конкретные Lc теней
+  (8.0 / 9.5 / 11.5 / 14.0) и `separator` держат лишь строгий порядок над полом —
+  их финальные контракты выведет глава surface-jnd из альфа-якорей LabUI
+  ([`README.md`](../README.md), «Что дальше»).
 - **Текстовые доли — калибровка до визуальной приёмки**
   ([`README.md`](../README.md)).
 - **R4-гейт не утверждает корректность математики** — только наличие

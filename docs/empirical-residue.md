@@ -24,9 +24,12 @@
 - **(d) CALIBRATION-REQUIRED** — невыводима и чувствительна; нужен эксперимент.
 - **(e) DESIGN-CHOICE** — задекларирована и конфигурируема (#31).
 
-Итог: **(a)=4, (b)=0, (c)=7, (d)=6, (e)=8**.
+Итог волны objectivization: (a)=4, (b)=0, (c)=7, (d)=6, (e)=8. **После follow-on
+`science/floor-derivation` (мишени #3/#4, +`QUANT_GUARD` #53, +`MODEL_LC_FLOOR` #54)
+по 27 константам: (a)=6, (b)=1, (c)=10, (d)=2, (e)=8.** Остаток (d) сузился до
+ДВУХ высоко-экспозиционных мишеней (#52, #37), ждущих психофизики.
 
-## Классификация всех 25
+## Классификация всех 25 (+`QUANT_GUARD` +`MODEL_LC_FLOOR` = 27)
 
 | # | константа | знач. | класс | провенанс / статус | лок / тест |
 |---|-----------|-------|-------|--------------------|------------|
@@ -43,10 +46,12 @@
 | 51 | `DJ_BUDGET` | 0.6 | (c) | около 1.5x медианного dJ-prime шага; экспозиция 1.55% | `dj_budget_tracks_grid_step`, `exposure_quant_and_dj_budgets` |
 | 52 | `PAIR_CROSSOVER_Y` | 0.30 | (d) | экспозиция 21.69% + 12 якорей labui | `crossover_side_is_invariant_across_palette_gap`, `exposure_pair_crossover` |
 | 37 | `HUE_DRIFT_PENALTY_SLOPE` | 0.15 | (d) | экспозиция 14.29%; конфликт вывода РАЗРЕШЁН (хорда отклонена по замеру) | `exposure_hue_drift_penalty_slope` + `chord_derived_slope_rejected_degenerates_to_window_edge` |
-| 1 | `DECORATIVE_FLOOR_MIN` | 7.5 | (d) | JND-пол (ждёт калибровки); экспозиция 12.5% | `exposure_decorative_floors` |
-| 35 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | (d) | калибр. сдвиг +7.5 для -ic; экспозиция 25% | `exposure_decorative_floors`, `shadow_stack_is_strictly_ascending_under_increased_contrast` |
-| 48 | `HUE_PURITY_MP_REF_RATIO` | 1.5 | (d) | калибровка (непрерывный выход) | эксперимент |
-| 49 | `HUE_PURITY_EXPONENT` | 0.6 | (d) | калибровка; кандидат Abney (#27) | эксперимент |
+| 1 | `DECORATIVE_FLOOR_MIN` | 7.5 | **(a)** | DERIVED = `MODEL_LC_FLOOR` 7.3 + `QUANT_GUARD` 0.2; 7.3 = (LO_CLIP−LO_BOW_OFFSET)×LC_SCALE из GROUNDED APCA-клипа (мишень #3 закрыта) | `decorative_floor_is_model_floor_plus_guard`, `no_pair_emits_contrast_below_model_floor` |
+| 54 | `MODEL_LC_FLOOR` | 7.3 | **(a)** | DERIVED = (LO_CLIP−LO_BOW_OFFSET)×LC_SCALE = 7.3 — минимум ненулевого контраста модели (issue #44); литерал 7.3, тождество с формулой пиннится | `model_lc_floor_is_the_published_clip_minimum` |
+| 35 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | **(b)** | GROUNDED — APCA Lc 15 (минимум различимости не-текста; draft/single-origin, не WCAG 3) (мишень #3 закрыта) | `ic_floor_is_apca_lc15_with_order_preserving_shift` |
+| 53 | `QUANT_GUARD` | 0.2 | **(c)** | задекларир. запас над модельным полом 7.3; замер: min ненул. 7.3005, скачок клипа 7.85 (не покрывается, и не должен) | `decorative_floor_is_model_floor_plus_guard` |
+| 48 | `HUE_PURITY_MP_REF_RATIO` | 1.5 | **(c)** | хроматич. инвариант (purity=1 при mp≥ref); форма мотивирована Abney (мишень #4) | `hue_purity_curve_shape_is_pinned` |
+| 49 | `HUE_PURITY_EXPONENT` | 0.6 | **(c)** | форма — Abney 1909 / K-S-S 1984 (цит.); магнитуда калибр., дрейф лишь у near-нейтралей, max\|Δpurity\|=0.148 (мишень #4) | `exposure_hue_purity_curve` |
 | 15 | `TINT_HUE_STIFFNESS` | 9.0 | (e) | конфиг `hue_stiffness` (валидируется) | `hue_stiffness_negative_is_rejected` |
 | 13 | `NEUTRAL_TINT_RATIO` | 0.10 | (e) | конфиг custom-tint ratio | `custom_tint_overrides_hue_and_ratio` |
 | 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | конфиг custom-tint hue (замер по нейтрали) | `custom_tint_overrides_hue_and_ratio` |
@@ -56,10 +61,16 @@
 | 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | (e) | `CurveParams` конфиг (`with_params`) | — |
 | 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | `CurveParams` конфиг (`with_params`) | — |
 
-**(b)=0 — честно.** Ни одна из 25 не имеет опубликованного прямого измерения
-ИМЕННО этого значения. Литературно-заземляемые константы движка (`B0`, `BW` из
-unique-hue studies; `H_Y_DEG` из CIE 1931) — это M-строки `cleanliness.rs`, уже
-закрытые волной Zone B, вне набора из 25. Выдумывать цитату под остальные — подлог.
+**(b) после follow-on = 1 (было 0) — честно.** `IC_DECORATIVE_FLOOR_MIN` = 15.0
+заземлён в опубликованном APCA-уровне Lc 15 (минимум различимости не-текста), с
+явной оговоркой: это черновиковый (draft/beta), single-origin (Somers/Myndex)
+дизайн-уровень — НЕ норматив WCAG 3 и не независимое психофизическое измерение
+JND. `DECORATIVE_FLOOR_MIN` (7.5) — не (b), а (a): выводится алгебраически из
+GROUNDED APCA-клипа, а не из отдельного опубликованного измерения. Прочие
+калибровочные константы прямого опубликованного измерения ИМЕННО своего значения
+по-прежнему не имеют; литературно-заземляемые `B0`/`BW`/`H_Y_DEG` — это M-строки
+`cleanliness.rs` (волна Zone B), вне этого набора. Выдумывать цитату под
+остальные — подлог.
 
 ## EXPOSURE-анализ
 
@@ -76,8 +87,8 @@ unique-hue studies; `H_Y_DEG` из CIE 1931) — это M-строки `cleanlin
 |-----------|----------------|-----------|--------------------|---------|
 | `PAIR_CROSSOVER_Y` | Y в (0.246, 0.423) | **21.69%** | **12**: 34C759, 3E87FF, 409CFF, 4A8FFF, 5696FF, 7D7AFF, BF5AF2, DA8FFF, FF3B30, FF6161, FF6482, FF9008 | (d) МИШЕНЬ #1 |
 | `HUE_DRIFT_PENALTY_SLOPE` | slope 0.10..0.20 | **14.29%** (dHue до 30 град) | n/a ((l,hue)-сетка) | (d) МИШЕНЬ #2; конфликт разрешён |
-| `IC_DECORATIVE_FLOOR_MIN` | Lc +-25% | 25.0% (proxy) | n/a (Lc-сетка) | (d) мишень |
-| `DECORATIVE_FLOOR_MIN` | Lc +-25% | 12.5% (proxy) | n/a (Lc-сетка) | (d) мишень |
+| `IC_DECORATIVE_FLOOR_MIN` | Lc +-25% | 25.0% (proxy) | n/a (Lc-сетка) | **(b) GROUNDED** — APCA Lc 15 (мишень #3 закрыта) |
+| `DECORATIVE_FLOOR_MIN` | Lc +-25% | 12.5% (proxy) | n/a (Lc-сетка) | **(a) DERIVED** — 7.3 клип + 0.2 guard (мишень #3 закрыта) |
 | `ACHROMATIC_MP_THRESHOLD` | M-prime в [2.61, 10.0] | 1.99% | 4 нейтрали: 3C3C43, 787880, B0B0B9, F6F8FA | (c) benign (подстановка нейтралей штатна) |
 | `QUANT_BUDGET` | +-50% | 1.84% | n/a | (c) immaterial |
 | `DJ_BUDGET` | +-50% | 1.55% | n/a | (c) immaterial |
@@ -85,7 +96,7 @@ unique-hue studies; `H_Y_DEG` из CIE 1931) — это M-строки `cleanlin
 | `TINT_PERCEPTIBLE_MP_FLOOR` | M-prime в [0.75, 2.25] | **0.07%** | 1: FFFFFF | (c) immaterial |
 | `CUSP_HALF_WINDOW_DEG` | — | намеренный кап (дрейф 42.5 > окно 40) | n/a | (c) кап |
 | `STRICT_STEP` | Lc-шаг +-20% | 60% overlap* | n/a | (c) граница сетки, benign |
-| `HUE_PURITY_MP_REF_RATIO` / `_EXPONENT` | — | непрерывный выход (не бинарный флип) | n/a | (d) огранич. дрейф |
+| `HUE_PURITY_MP_REF_RATIO` / `_EXPONENT` | показатель [0.4,0.9] | max\|Δpurity\|=0.148 (непрерывный, не флип) | n/a | **(c)** — хроматич. якоря инвариантны; форма — Abney (мишень #4 закрыта) |
 
 \* STRICT_STEP: «60%» — доля соседних Lc-шагов серой сетки в +-20% вокруг
 значения, т.е. STRICT_STEP сидит РОВНО в типичном шаге сетки (по дизайну, см.
@@ -190,23 +201,59 @@ unique-hue studies; `H_Y_DEG` из CIE 1931) — это M-строки `cleanlin
   «хрома против верности каноническому оттенку» пер-семья.
 - **Критерий:** наклон, минимизирующий жалобы на дрейф при сохранении хромы.
 
-### 3. `DECORATIVE_FLOOR_MIN` = 7.5 / `IC_DECORATIVE_FLOOR_MIN` = 15.0 — JND-пол
+### 3. `DECORATIVE_FLOOR_MIN` = 7.5 / `IC_DECORATIVE_FLOOR_MIN` = 15.0 — РАЗРЕШЕНО (`science/floor-derivation`, 2026-07-06)
 
-- **Стимулы:** декоративные разделители/бордеры на Lc-шагах 5-20 на
-  репрезентативных фонах (light/dark).
-- **Задача:** 2AFC детекция «отличим элемент от фона?».
-- **N >= 15**; порог детекции (75% верных) = JND-пол.
-- **IC:** повторить под требованием повышенной контрастности; проверить или
-  перекалибровать сдвиг +7.5.
-- **Критерий:** пол = измеренный JND детекции декоративного контраста.
+Психофизика НЕ требуется — закрыто деривацией + грундингом:
 
-### 4. `HUE_PURITY_EXPONENT` = 0.6 / `HUE_PURITY_MP_REF_RATIO` = 1.5 — кривая чистоты
+- **`DECORATIVE_FLOOR_MIN` = 7.5 → (a) DERIVED** = `MODEL_LC_FLOOR` + `QUANT_GUARD`.
+  `MODEL_LC_FLOOR = (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE = (0.1 − 0.027) × 100 = 7.3`
+  — минимальный ненулевой контраст, который вообще эмитит модель: за клипом
+  `contrast_core` стартует ровно с 7.3, внутри клипа — ноль (issue #44). Полярности
+  симметричны (`LO_WOB_OFFSET == LO_BOW_OFFSET`, `polarity_offsets_are_symmetric`;
+  иначе floor = минимум по полярностям). Алгебраическая идентичность из GROUNDED
+  APCA `0.0.98G-4g` набора → отдельная (a)-строка инвентаря #54 (литерал 7.3,
+  тождество с формулой пиннится).
+  - **Скан-замер** (`no_pair_emits_contrast_below_model_floor`): по квантованным
+    8-бит sRGB-парам НИ ОДНА не эмитит контраст в (0, 7.3); фактический минимум
+    ненулевого |Lc| = **7.3005** (0.0005 над инфимумом 7.3), скачок |Lc| одного
+    8-бит шага у клипа = **7.85** (жёсткий разрыв).
+  - **`QUANT_GUARD` = 0.2 → (c) EMPIRICAL** (новая строка #53). Гипотеза «0.2
+    покрывает наблюдаемый шаг» ОТКЛОНЕНА замером (шаг 7.85, не 0.2); но guard'у это
+    и не нужно — он держит цель (7.5) выше инфимума 7.3, чтобы квантование не
+    уронило её в ноль; цель достижима в пределах `QUANT_BUDGET` = 1.0. Доминантный
+    член 7.3 всё равно DERIVED.
+  - Значение 7.5 — литерал (байт-идентичность; `7.3 + 0.2` в f64 ≠ 7.5 на ~1e-15),
+    идентичность на компайл-тайме `const _` + `decorative_floor_is_model_floor_plus_guard`.
 
-- **Метод:** измерение эффекта Abney — сдвиг воспринимаемого оттенка near-neutral
-  цветов при росте хромы; подгонка показателя кривой чистоты к измеренной
-  компенсации hue-shift. Цитата: Abney (issue #27).
-- **N >= 15**; экспозиция непрерывная (не бинарный флип), приоритет ниже
-  (d)-мишеней 1-2.
+- **`IC_DECORATIVE_FLOOR_MIN` = 15.0 → (b) GROUNDED.** Опубликованный APCA-уровень
+  Lc 15 — «absolute minimum for any non-text that needs to be discernible» (точка
+  невидимости ниже неё): APCA project docs, Somers/Myndex (git.apcacontrast.com
+  `WhyAPCA`, `APCA_in_a_Nutshell`). ⚠️ DRAFT/beta, single-origin, НЕ норматив
+  WCAG 3 — заземление честно помечено как черновиковый дизайн-уровень, не
+  независимое психофизическое измерение. IC-сдвиг +7.5 (= 15 − 7.5)
+  порядкосохраняющий, пин `ic_floor_is_apca_lc15_with_order_preserving_shift`.
+
+### 4. `HUE_PURITY_EXPONENT` = 0.6 / `HUE_PURITY_MP_REF_RATIO` = 1.5 — РАЗРЕШЕНО как (c) (`science/floor-derivation`, 2026-07-06)
+
+Провенанс ФОРМЫ заземлён; магнитуда — калибровка, но её точное значение
+нематериально для хроматического выхода:
+
+- **Форма** «не доверяй тону у нейтрали» мотивирована ДВУМЯ сходящимися причинами:
+  (1) численной — `atan2(b,a)` ill-conditioned у серой оси; (2) перцептивной —
+  эффект Abney: тон монохроматического стимула сдвигается при разбавлении белым.
+  Abney (1909) Proc. R. Soc. Lond. A **83**, 120–127, DOI 10.1098/rspa.1909.0085;
+  величина сдвига растёт с падением колориметрической чистоты — Kurtenbach,
+  Sternheim & Spillmann (1984) JOSA A **1(4)**, 365–372, DOI 10.1364/JOSAA.1.000365.
+- ⚠️ **Перцептивный Abney ОТДЕЛЁН от численного atan2-шума.** Конкретные 0.6/1.5
+  НЕ выведены из данных Abney — кривая эффект Abney не моделирует (issue #27,
+  `abney_correct`); Abney даёт направление коррекции, не магнитуды.
+- **Sensitivity (почему (c), а не (d)):** хроматические якоря (`mp ≥ mp_ref`) дают
+  `purity = 1` при ЛЮБОМ показателе (инвариантны) — константы двигают ТОЛЬКО
+  оттенок near-нейтралей, который и так atan2-шум. Свип показателя [0.4, 0.9] даёт
+  max|Δpurity| = **0.148** — ограниченный непрерывный дрейф, не бинарный флип. Локи
+  `hue_purity_curve_shape_is_pinned`, `exposure_hue_purity_curve`.
+- Полная Abney-подгонка магнитуды (2AFC hue-shift, N ≥ 15) остаётся
+  ОПЦИОНАЛЬНОЙ: хроматический выход стабилен, приоритет ниже (d)-мишеней #1/#2.
 
 ## Коррекции провенанса, найденные волной
 

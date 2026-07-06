@@ -153,19 +153,55 @@ use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
 
-/// Надёжная нижняя граница контрастной величины декоративной роли.
+/// DERIVED — надёжная нижняя граница контрастной величины декоративной роли.
 ///
-/// Ниже примерно этого `Lc` решатель упирается в порог квантования (issue #44)
-/// и возвращает нулевой контраст, поэтому порог `Contract::range` ниже этой
-/// границы вернулся бы как [`Unreachable::BelowContrastFloor`]. Каждый
+/// Раскладывается как [`MODEL_LC_FLOOR`](crate::lpc::MODEL_LC_FLOOR) (`7.3`) +
+/// [`QUANT_GUARD`] (`0.2`). За клипом решатель эмитит |Lc| ≥ 7.3 — это алгебраически
+/// следует из GROUNDED APCA `0.0.98G-4g` набора (issue #44); guard держит пол
+/// строго выше 7.3, чтобы `Contract::range` у самого клипа не садился на порог
+/// квантования и не возвращал [`Unreachable::BelowContrastFloor`]. Каждый
 /// декоративный порог держится строго выше этой границы до появления полной
 /// JND-калибровки.
-// SSOT-TRACKED — порог квантования решателя (issue #44), см. docs/empirical-inventory.md.
+///
+/// Значение оставлено ЛИТЕРАЛОМ `7.5` ради байт-идентичности выходов (сумма
+/// `7.3 + 0.2` в f64 отличается от `7.5` на ~1e-15); идентичность
+/// `7.5 == MODEL_LC_FLOOR + QUANT_GUARD` закреплена компайл-тайм-проверкой ниже и
+/// тестом `decorative_floor_is_model_floor_plus_guard`.
+// SSOT-TRACKED — DERIVED: MODEL_LC_FLOOR (7.3) + QUANT_GUARD (0.2), issue #44, см. docs/empirical-inventory.md.
 const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
-/// Порог декоративного контраста для повышенной контрастности (Lc): поднят выше
-/// [`DECORATIVE_FLOOR_MIN`] под более строгие перцептивные требования тем `-ic`.
-// SSOT-TRACKED — порог для тем повышенной контрастности (-ic), см. docs/empirical-inventory.md.
+/// Квант-guard над модельным полом [`MODEL_LC_FLOOR`](crate::lpc::MODEL_LC_FLOOR):
+/// зазор `DECORATIVE_FLOOR_MIN − MODEL_LC_FLOOR`, держащий декоративный пол строго
+/// выше 7.3, чтобы решатель не садился на порог клипа и не возвращал нулевой
+/// контраст (issue #44). (c) EMPIRICAL: скан-тест
+/// `lpc::no_pair_emits_contrast_below_model_floor` печатает фактический
+/// минимальный ненулевой |Lc| и максимальный скачок |Lc| одного 8-бит шага у
+/// клипа; guard выбран покрыть этот шаг. Sensitivity — docs/empirical-inventory.md.
+// SSOT-TRACKED — квант-guard декоративного пола (issue #44), см. docs/empirical-inventory.md.
+const QUANT_GUARD: f64 = 0.2;
+
+// Компайл-тайм пиннинг деривации: DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR +
+// QUANT_GUARD в пределах f64-шума суммирования. Заодно ИСПОЛЬЗУЕТ обе константы в
+// продакшене (не dead_code); сам литерал 7.5 при этом НЕ меняется (байт-идентичность).
+const _: () = {
+    let derived = crate::lpc::MODEL_LC_FLOOR + QUANT_GUARD;
+    let d = DECORATIVE_FLOOR_MIN - derived;
+    let ad = if d < 0.0 { -d } else { d };
+    assert!(
+        ad < 1e-9,
+        "DECORATIVE_FLOOR_MIN must equal MODEL_LC_FLOOR + QUANT_GUARD"
+    );
+};
+
+/// GROUNDED — порог декоративного контраста для тем повышенной контрастности (`-ic`).
+///
+/// Опубликованный APCA-уровень `Lc 15` — «absolute minimum for any non-text that
+/// needs to be discernible», ниже которого элемент считается невидимым (APCA
+/// project docs, Somers/Myndex; **DRAFT/beta, single-origin — НЕ норматив WCAG 3**).
+/// Декоративный `-ic`-пол — ровно этот случай: минимальный различимый
+/// не-текстовый контраст. Применяется порядкосохраняющим сдвигом `+7.5`
+/// (= 15 − 7.5), НЕ как `max` — см. [`RoleTable::decorative_contract`].
+// GROUNDED — APCA `Lc 15` non-text discernibility level, draft (docs/empirical-inventory.md).
 const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 // ── dJ'-якоря декоративных ролей (буквальные значения из Figma) ─────────────────
@@ -5852,9 +5888,55 @@ mod derivator_locks {
 #[cfg(test)]
 mod exposure_locks {
     use super::{
-        DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR,
+        DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, QUANT_GUARD, STRICT_STEP,
+        TINT_PERCEPTIBLE_MP_FLOOR,
     };
     use crate::exposure_support::{band_exposure, mp_srgb};
+
+    /// DERIVED-лок (issue #44): `DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR + QUANT_GUARD`,
+    /// и модельный пол строго ниже декоративного (guard положителен). Рантайм-зеркало
+    /// компайл-тайм `const _`-проверки в semantic.rs; печатает разложение 7.5 = 7.3 + 0.2.
+    // Намеренные constant-relationship пины (регресс-локи): clippy-lint
+    // assertions_on_constants здесь ожидаем и точечно подавлен.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn decorative_floor_is_model_floor_plus_guard() {
+        use crate::lpc::MODEL_LC_FLOOR;
+        assert!(
+            (DECORATIVE_FLOOR_MIN - (MODEL_LC_FLOOR + QUANT_GUARD)).abs() < 1e-9,
+            "7.5 must decompose as MODEL_LC_FLOOR {MODEL_LC_FLOOR} + QUANT_GUARD {QUANT_GUARD}"
+        );
+        assert!(
+            DECORATIVE_FLOOR_MIN > MODEL_LC_FLOOR,
+            "decorative floor {DECORATIVE_FLOOR_MIN} must sit strictly above the model floor {MODEL_LC_FLOOR}"
+        );
+        assert!(
+            QUANT_GUARD > 0.0,
+            "guard must be positive, got {QUANT_GUARD}"
+        );
+        eprintln!(
+            "DECORATIVE_FLOOR_MIN {DECORATIVE_FLOOR_MIN} = MODEL_LC_FLOOR {MODEL_LC_FLOOR} + QUANT_GUARD {QUANT_GUARD}"
+        );
+    }
+
+    /// GROUNDED-лок: IC-пол равен опубликованному APCA-уровню Lc 15 (минимум
+    /// различимости не-текста, draft), а порядкосохраняющий IC-сдвиг над обычным
+    /// полом равен `15 − 7.5 = 7.5` — тот, что применяет `decorative_contract`.
+    // Намеренные constant-relationship пины (регресс-локи): clippy-lint
+    // assertions_on_constants здесь ожидаем и точечно подавлен.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn ic_floor_is_apca_lc15_with_order_preserving_shift() {
+        assert!(
+            (IC_DECORATIVE_FLOOR_MIN - 15.0).abs() < 1e-12,
+            "IC floor must be the published APCA Lc 15, got {IC_DECORATIVE_FLOOR_MIN}"
+        );
+        assert!(IC_DECORATIVE_FLOOR_MIN > DECORATIVE_FLOOR_MIN);
+        assert!(
+            ((IC_DECORATIVE_FLOOR_MIN - DECORATIVE_FLOOR_MIN) - 7.5).abs() < 1e-9,
+            "the -ic uniform shift must be 15 − 7.5 = 7.5"
+        );
+    }
 
     /// EXPOSURE TINT_PERCEPTIBLE_MP_FLOOR: доля гаммы с M' в +-50% полосе вокруг
     /// порога перцептируемости тинта — цвета, чья классификация «ощущаемый тон vs
