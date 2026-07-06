@@ -63,11 +63,13 @@ mod tests {
     #[test]
     fn injected_json_is_valid() {
         // Вырезаем встроенный JSON и парсим его — гарантия, что раннер получит
-        // валидный литерал.
+        // валидный литерал. Ищем ';' (не ";\n"): при core.autocrlf=true чекаут
+        // переписал бы шаблон в CRLF и ";\n" не нашёлся бы (MAJOR-1). Компактный
+        // JSON манифеста не содержит ';' — терминатор однозначен.
         let html = render(&demo());
         let start = html.find("const SESSION = ").unwrap() + "const SESSION = ".len();
         let tail = &html[start..];
-        let end = tail.find(";\n").unwrap();
+        let end = tail.find(';').unwrap();
         let json = &tail[..end];
         let parsed = crate::json::parse(json).expect("встроенный JSON валиден");
         assert_eq!(
