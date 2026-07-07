@@ -40,7 +40,7 @@
 //!    *light-on-dark* with a wide margin — the luminance-domain LPC core
 //!    (`crate::lpc::contrast_core`) has its black-overtakes-white crossover far
 //!    higher, near `Y ≈ 0.342` (measured, locked by
-//!    `pair::exposure_locks::model_polarity_crossover_is_measured_not_recited`)
+//!    `pair::exposure_locks::pair_crossover_equals_measured_core_polarity_flip`)
 //!    — so the tie resolves to white (`break_tie`). This
 //!    replaces the former "larger WCAG margin wins" rule, whose symmetric margin
 //!    crossed over *inside* the band (`Y ≈ 0.1791`) and chose dark-on-light on the
@@ -3142,7 +3142,7 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
 /// mid-luminance background, and the crossover where black would overtake white
 /// sits far above the band, near `Y ≈ 0.342` — measured by bisection of the
 /// luminance core and locked by
-/// `pair::exposure_locks::model_polarity_crossover_is_measured_not_recited`
+/// `pair::exposure_locks::pair_crossover_equals_measured_core_polarity_flip`
 /// (on `Y = 0.211` white scores ≈69.8 Lc against black's ≈39.7; the earlier V3
 /// estimate `≈0.36` is superseded by this measurement). So across the *entire*
 /// double-legal band the readable-and-perceptually-stronger side is white.
