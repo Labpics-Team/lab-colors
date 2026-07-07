@@ -25,9 +25,10 @@
 - **(e) DESIGN-CHOICE** — задекларирована и конфигурируема (#31).
 
 Итог волны objectivization: (a)=4, (b)=0, (c)=7, (d)=6, (e)=8. **После follow-on
-`science/floor-derivation` (мишени #3/#4, +`QUANT_GUARD` #53, +`MODEL_LC_FLOOR` #54)
-и закрытия `PAIR_CROSSOVER_Y` терминалом (e) (`science/crossover-terminal-e`,
-2026-07-07) по 27 константам: (a)=6, (b)=1, (c)=10, (d)=1, (e)=9.** Остаток (d) —
+`science/floor-derivation` (мишени #3/#4, +`QUANT_GUARD` #53, +`MODEL_LC_FLOOR` #54),
+закрытия `PAIR_CROSSOVER_Y` терминалом (e) (`science/crossover-terminal-e`,
+2026-07-07) и перевода `HUE_PURITY_*` (c) → (e) (`science/purity-terminal-e`,
+2026-07-07) по 27 константам: (a)=6, (b)=1, (c)=8, (d)=1, (e)=11.** Остаток (d) —
 одна мишень: #37 (`HUE_DRIFT_PENALTY_SLOPE`).
 
 ## Классификация всех 25 (+`QUANT_GUARD` +`MODEL_LC_FLOOR` = 27)
@@ -51,8 +52,8 @@
 | 54 | `MODEL_LC_FLOOR` | 7.3 | **(a)** | DERIVED = (LO_CLIP−LO_BOW_OFFSET)×LC_SCALE = 7.3 — минимум ненулевого контраста модели (issue #44); литерал 7.3, тождество с формулой пиннится | `model_lc_floor_is_the_published_clip_minimum` |
 | 35 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | **(b)** | GROUNDED — APCA Lc 15 (минимум различимости не-текста; draft/single-origin, не WCAG 3) (мишень #3 закрыта) | `ic_floor_is_apca_lc15_with_order_preserving_shift` |
 | 53 | `QUANT_GUARD` | 0.2 | **(c)** | задекларир. запас над модельным полом 7.3; замер: min ненул. 7.3005, скачок клипа 7.85 (не покрывается, и не должен) | `decorative_floor_is_model_floor_plus_guard` |
-| 48 | `HUE_PURITY_MP_REF_RATIO` | 1.5 | **(c)** | хроматич. инвариант (purity=1 при mp≥ref); форма мотивирована Abney (мишень #4) | `hue_purity_curve_shape_is_pinned` |
-| 49 | `HUE_PURITY_EXPONENT` | 0.6 | **(c)** | форма — Abney 1909 / K-S-S 1984 (цит.); магнитуда калибр., дрейф лишь у near-нейтралей, max\|Δpurity\|=0.148 (мишень #4) | `exposure_hue_purity_curve` |
+| 48 | `HUE_PURITY_MP_REF_RATIO` | 1.5 | **(e)** | дизайн-ручка: опубликованного значения нет; робастность — хроматич. инвариант (purity=1 при mp≥ref); форма мотивирована Abney (мишень #4 закрыта) | `hue_purity_curve_shape_is_pinned` |
+| 49 | `HUE_PURITY_EXPONENT` | 0.6 | **(e)** | дизайн-ручка; форма — Abney 1909 / K-S-S 1984 (цит.); дрейф лишь у near-нейтралей, max\|Δpurity\|=0.148 (мишень #4 закрыта) | `exposure_hue_purity_curve` |
 | 15 | `TINT_HUE_STIFFNESS` | 9.0 | (e) | конфиг `hue_stiffness` (валидируется) | `hue_stiffness_negative_is_rejected` |
 | 13 | `NEUTRAL_TINT_RATIO` | 0.10 | (e) | конфиг custom-tint ratio | `custom_tint_overrides_hue_and_ratio` |
 | 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | конфиг custom-tint hue (замер по нейтрали) | `custom_tint_overrides_hue_and_ratio` |
@@ -97,7 +98,7 @@ GROUNDED APCA-клипа, а не из отдельного опубликова
 | `TINT_PERCEPTIBLE_MP_FLOOR` | M-prime в [0.75, 2.25] | **0.07%** | 1: FFFFFF | (c) immaterial |
 | `CUSP_HALF_WINDOW_DEG` | — | намеренный кап (дрейф 42.5 > окно 40) | n/a | (c) кап |
 | `STRICT_STEP` | Lc-шаг +-20% | 60% overlap* | n/a | (c) граница сетки, benign |
-| `HUE_PURITY_MP_REF_RATIO` / `_EXPONENT` | показатель [0.4,0.9] | max\|Δpurity\|=0.148 (непрерывный, не флип) | n/a | **(c)** — хроматич. якоря инвариантны; форма — Abney (мишень #4 закрыта) |
+| `HUE_PURITY_MP_REF_RATIO` / `_EXPONENT` | показатель [0.4,0.9] | max\|Δpurity\|=0.148 (непрерывный, не флип) | n/a | **(e)** — дизайн-ручки; хроматич. якоря инвариантны; форма — Abney (мишень #4 закрыта) |
 
 \* STRICT_STEP: «60%» — доля соседних Lc-шагов серой сетки в +-20% вокруг
 значения, т.е. STRICT_STEP сидит РОВНО в типичном шаге сетки (по дизайну, см.
@@ -232,10 +233,12 @@ GROUNDED APCA-клипа, а не из отдельного опубликова
   независимое психофизическое измерение. IC-сдвиг +7.5 (= 15 − 7.5)
   порядкосохраняющий, пин `ic_floor_is_apca_lc15_with_order_preserving_shift`.
 
-### 4. `HUE_PURITY_EXPONENT` = 0.6 / `HUE_PURITY_MP_REF_RATIO` = 1.5 — РАЗРЕШЕНО как (c) (`science/floor-derivation`, 2026-07-06)
+### 4. `HUE_PURITY_EXPONENT` = 0.6 / `HUE_PURITY_MP_REF_RATIO` = 1.5 — ЗАКРЫТЫ терминалом (e) (`science/purity-terminal-e`, 2026-07-07; разрешены как (c) в `science/floor-derivation`, 2026-07-06)
 
-Провенанс ФОРМЫ заземлён; магнитуда — калибровка, но её точное значение
-нематериально для хроматического выхода:
+Провенанс ФОРМЫ заземлён; магнитуды — задекларированные дизайн-ручки
+(терминал (e) по терминальной таксономии, решение владельца 2026-07-07),
+их точное значение нематериально для хроматических якорей (инвариант
+`purity == 1` при `mp ≥ mp_ref`), у near-нейтралей — ограниченный дрейф:
 
 - **Форма** «не доверяй тону у нейтрали» мотивирована ДВУМЯ сходящимися причинами:
   (1) численной — `atan2(b,a)` ill-conditioned у серой оси; (2) перцептивной —
@@ -245,14 +248,18 @@ GROUNDED APCA-клипа, а не из отдельного опубликова
   Sternheim & Spillmann (1984) JOSA A **1(4)**, 365–372, DOI 10.1364/JOSAA.1.000365.
 - ⚠️ **Перцептивный Abney ОТДЕЛЁН от численного atan2-шума.** Конкретные 0.6/1.5
   НЕ выведены из данных Abney — кривая эффект Abney не моделирует (issue #27,
-  `abney_correct`); Abney даёт направление коррекции, не магнитуды.
-- **Sensitivity (почему (c), а не (d)):** хроматические якоря (`mp ≥ mp_ref`) дают
-  `purity = 1` при ЛЮБОМ показателе (инвариантны) — константы двигают ТОЛЬКО
-  оттенок near-нейтралей, который и так atan2-шум. Свип показателя [0.4, 0.9] даёт
-  max|Δpurity| = **0.148** — ограниченный непрерывный дрейф, не бинарный флип. Локи
-  `hue_purity_curve_shape_is_pinned`, `exposure_hue_purity_curve`.
-- Полная Abney-подгонка магнитуды (2AFC hue-shift, N ≥ 15) остаётся
-  ОПЦИОНАЛЬНОЙ: хроматический выход стабилен, приоритет ниже (d)-мишеней #1/#2.
+  `abney_correct`); Abney даёт направление коррекции, не магнитуды. Поэтому
+  честный терминал магнитуд — (e), не (b): маркировка (b) была бы подлогом
+  (ADR-0002/INV-2).
+- **Робастность (почему (e)-ручка безопасна):** хроматические якоря
+  (`mp ≥ mp_ref`) дают `purity = 1` при ЛЮБОМ показателе (инвариантны) —
+  константы двигают ТОЛЬКО оттенок near-нейтралей, который и так atan2-шум.
+  Свип показателя [0.4, 0.9] даёт max|Δpurity| = **0.148** — ограниченный
+  непрерывный дрейф, не бинарный флип. Локи `hue_purity_curve_shape_is_pinned`,
+  `exposure_hue_purity_curve`.
+- Фит магнитуд к психофизическим данным (2AFC hue-shift), если когда-нибудь
+  появится, станет кандидатом-ВЫВОДОМ на общих основаниях (замер → сравнение →
+  решение); терминал (e) уже закрыт и этого НЕ требует.
 
 ## Коррекции провенанса, найденные волной
 
