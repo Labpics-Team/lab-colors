@@ -8,10 +8,13 @@ use crate::spaces::vc::ViewingConditions;
 /// Наклон штрафа дрейфа оттенка в поиске оптимального hue рампы акцента:
 /// `penalty_scale = HUE_DRIFT_PENALTY_SLOPE / HUE_SEARCH_HALF_WINDOW`, дальше
 /// `score = c − penalty_scale·drift` — баланс «максимум хромы» против «уход от
-/// канонического оттенка». Перцептивная ручка; значение калибровочное
-/// (кандидат науки: вывести или обосновать датасетом — реестр
-/// docs/empirical-inventory.md, научная задача роадмапа).
-// SSOT-TRACKED: см. docs/empirical-inventory.md (join по имени/значению).
+/// канонического оттенка». Перцептивная ручка — терминал (e) DESIGN-CHOICE:
+/// строгий кандидат-вывод (хорда Oklab, `penalty_scale = C·π/180`) ИЗМЕРЕН и
+/// ОТКЛОНЁН — вырождает интерьерный оптимум в клип по ребру окна ±30° на 12/43
+/// якорях (лок `chord_derived_slope_rejected_degenerates_to_window_edge`);
+/// свободная ручка с отклонённым кандидатом честнее подгонки — реестр
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — наклон штрафа дрейфа, терминал (e) design-choice, см. docs/empirical-inventory.md.
 const HUE_DRIFT_PENALTY_SLOPE: f64 = 0.15;
 
 /// Акцентная кривая: светлотный скелет — нейтральная кривая темы, оттенок и
