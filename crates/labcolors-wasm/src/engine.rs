@@ -812,84 +812,9 @@ mod tests {
         }
     }
 
-    /// Тонкий labui-JSON как его прислал бы клиент: полный конфиг БЕЗ словаря
-    /// ролей/алиасов, только `preset` + значения (якоря, ручки). Источник —
-    /// тот же замороженный SSOT-паспорт, что и `labui_json`.
-    fn thin_labui_json() -> String {
-        let mut val: serde_json::Value =
-            serde_json::from_str(&labui_json()).expect("паспорт labui парсится");
-        let obj = val.as_object_mut().expect("объект");
-        obj.remove("roles");
-        obj.remove("aliases");
-        obj.insert("preset".to_string(), serde_json::json!("labui"));
-        serde_json::to_string(&val).expect("JSON")
-    }
-
-    /// Абсолютная агностичность: тонкий конфиг (`preset`, без `roles`) грузится,
-    /// возвращает ОТПЕЧАТОК полного эталона и эмитит ТОТ ЖЕ контракт ролей —
-    /// клиент внёс значения, не семантику.
-    #[test]
-    fn load_config_thin_preset_matches_full() {
-        let mut thin_engine = Engine::new();
-        let fp_thin = thin_engine
-            .load_config(&thin_labui_json())
-            .expect("тонкий labui валиден");
-
-        let mut full_engine = Engine::new();
-        let fp_full = full_engine
-            .load_config(&labui_json())
-            .expect("полный labui валиден");
-
-        assert_eq!(
-            fp_thin, fp_full,
-            "тонкий и полный labui дают ОДИН отпечаток (по итогу, не по входу)"
-        );
-
-        // И один контракт: то же число ролей, та же полупрозрачная роль лестницы.
-        let thin_set = thin_engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
-        let full_set = full_engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
-        assert_eq!(
-            thin_set.roles.len(),
-            full_set.roles.len(),
-            "тонкий и полный эмитят одинаковое число ролей"
-        );
-        assert!(
-            thin_set
-                .roles
-                .iter()
-                .any(|r| r.role_key == "fill-brand-primary"
-                    && matches!(r.outcome, RoleOutcome::Translucent(_))),
-            "тонкий конфиг наполнил словарь пресета labui"
-        );
-    }
-
-    /// Пресет + собственные роли — честная ошибка `invalid_config` (оверрайд
-    /// отдельных ролей поверх пресета не разрешён в этом слое).
-    #[test]
-    fn load_config_preset_with_roles_is_rejected() {
-        let mut val = serde_json::to_value(
-            serde_json::from_str::<serde_json::Value>(&thin_labui_json()).unwrap(),
-        )
-        .unwrap();
-        val.as_object_mut().unwrap().insert(
-            "roles".to_string(),
-            serde_json::json!([{"name": "my-role", "recipe": {"kind": "zero"}}]),
-        );
-        let json = serde_json::to_string(&val).unwrap();
-
-        let mut engine = Engine::new();
-        let err = engine
-            .load_config(&json)
-            .expect_err("preset + roles обязан отклоняться");
-        assert!(
-            matches!(err, BindingError::InvalidConfig { .. }),
-            "структурная ошибка конфига, не паника: {err:?}"
-        );
-    }
-
-    /// Пустой контракт (JSON со структурой, но БЕЗ `roles` и БЕЗ `preset`)
-    /// отклоняется НА ЗАГРУЗКЕ — `#[serde(default)]` на roles не должен превращать
-    /// пропуск словаря в тихий пустой контракт (дефект уехал бы на использование).
+    /// Пустой контракт (JSON со структурой, но БЕЗ `roles`) отклоняется НА
+    /// ЗАГРУЗКЕ — `#[serde(default)]` на roles не должен превращать пропуск
+    /// словаря в тихий пустой контракт (дефект уехал бы на использование).
     #[test]
     fn load_config_empty_contract_is_rejected() {
         let full: serde_json::Value = serde_json::from_str(&labui_json()).unwrap();
@@ -897,7 +822,7 @@ mod tests {
             let mut m = full.as_object().unwrap().clone();
             m.remove("roles");
             m.remove("aliases");
-            // preset НЕ добавляем — контракт пуст.
+            // роли/алиасы удалены — контракт пуст.
             m
         };
         let json = serde_json::to_string(&serde_json::Value::Object(obj)).unwrap();

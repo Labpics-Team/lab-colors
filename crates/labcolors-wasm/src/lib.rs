@@ -178,18 +178,8 @@ export type RoleRecipe =
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
   | { kind: "zero" };
 
-/** Именованный пресет ролей. Тонкий конфиг несёт `preset` вместо простыни `roles`. */
-export type RolePreset = "labui";
-
 /** Полный конфиг дизайн-системы клиента — вход loadConfig (JSON.stringify(config)). */
 export interface ThemeConfig {
-  /**
-   * Пресет ролей: наполняет словарь дизайн-системы целиком, чтобы клиент вносил
-   * ТОЛЬКО значения (якоря, ручки), не семантику. Тонкий конфиг задаёт `preset` и
-   * ОПУСКАЕТ `roles`/`aliases`. Задать `preset` вместе с непустыми `roles` —
-   * ошибка `invalid_config` (оверрайд отдельных ролей — не этот слой).
-   */
-  readonly preset?: RolePreset;
   readonly brand: ThemeAnchors;
   readonly neutral: {
     readonly anchors: { light: string; mid: string; dark: string };
@@ -214,7 +204,8 @@ export interface ThemeConfig {
     readonly chroma_fraction: number;
   };
   readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
-  /** Опускается в тонком конфиге (задан `preset`); иначе — полный словарь ролей. */
+  /** Словарь ролей дизайн-системы. Конфиг обязан нести собственные роли; пустой
+   *  контракт (без `roles` и `aliases`) отклоняется на загрузке. */
   readonly roles?: ReadonlyArray<{ name: string; recipe: RoleRecipe }>;
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }

@@ -328,7 +328,6 @@ fn acme_config() -> ThemeConfig {
             ("focus".to_string(), brand_ladder(LadderPosition::FocusRing)),
         ],
         aliases: vec![("ring".to_string(), "focus".to_string())],
-        preset: None,
     }
 }
 

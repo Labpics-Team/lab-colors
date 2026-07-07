@@ -309,7 +309,7 @@ fn base_config(
         hex_of(darken(fr), darken(fg), darken(fb)),
     );
     // `ThemeConfig` помечен `#[non_exhaustive]` — снаружи крейта только `new`
-    // (позиционный порядок = порядок объявления полей; `preset = None`).
+    // (позиционный порядок = порядок объявления полей).
     ThemeConfig::new(
         Brand {
             anchors: brand_anchors,

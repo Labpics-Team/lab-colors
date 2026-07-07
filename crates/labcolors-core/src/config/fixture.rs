@@ -99,10 +99,6 @@ pub fn labui_reference() -> ThemeConfig {
         },
         roles: labui_preset_roles(),
         aliases: labui_preset_aliases(),
-        // Полный эталон несёт словарь сам — preset не ставится (иначе
-        // PresetWithRoles); тонкая форма строится клиентом: roles/aliases
-        // пустые + preset = Labui.
-        preset: None,
     }
 }
 
