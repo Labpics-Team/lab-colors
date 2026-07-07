@@ -115,11 +115,14 @@ const TARGET_MP_MIN_EXCLUSIVE: f64 = 0.0;
 /// нефизично.
 const HUE_STIFFNESS_MIN_INCLUSIVE: f64 = 0.0;
 
-/// Жёсткость сентимент-разделения (`sentiments.hardness`) обязана быть `≥ 1`.
+/// Нижняя граница валидации поля `sentiments.hardness` (`≥ 1`).
 ///
-/// Это p-норма модели Sticky Potential Well (#55): `p → ∞` восстанавливает жёсткую
-/// стену 20°, `p → 1` — самый мягкий изгиб. `p < 1` выводит p-норму из
-/// корректной области (перестаёт быть нормой). Дефолт реестра — `5.0`.
+/// ⚠️ VESTIGIAL после Волны 1: поле `hardness` задавало p-норму brand-displacement
+/// (Sticky Potential Well, #55), но закон категориальных зон снёс этот механизм —
+/// поле больше НЕ влияет на выход (см. док `SentimentsConfig.hardness`). Граница
+/// `≥ 1` сохранена как контракт схемы конфига: значение всё ещё валидируется
+/// (мусор отвергается), но законом оттенка не потребляется. Историческая
+/// семантика: `p < 1` выводило p-норму из корректной области.
 const HARDNESS_MIN_INCLUSIVE: f64 = 1.0;
 
 /// Доля хромы сентимент-цвета (`sentiments.chroma_fraction`) обязана лежать в
@@ -872,7 +875,7 @@ impl ThemeConfig {
             "sentiments.hardness",
             self.sentiments.hardness,
             HARDNESS_MIN_INCLUSIVE,
-            "hardness ≥ 1 (p-норма Sticky Potential Well; p < 1 не норма)",
+            "hardness ≥ 1 (vestigial-контракт схемы; прежде p-норма brand-displacement, снесена Волной 1)",
         )?;
         check_in_excl_incl(
             "sentiments.chroma_fraction",
@@ -1444,6 +1447,14 @@ impl ThemeConfig {
                         sentiment: cat.name.clone(),
                         reason,
                     })?;
+                // Сатурация (маркер 180° из s_min_deg_from_chord): пара так
+                // приглушена, что категориальная хорда недостижима при любом угле —
+                // перцептивно НЕРАЗДЕЛИМА. Отступ бессмыслен, зону пропускаем: иначе
+                // legalize искал бы точный антипод (мера нуль) и вернул ложный
+                // «пустая дуга». Дормантно для labui (все сентименты хромны).
+                if min_sep >= 180.0 {
+                    continue;
+                }
                 zones.push(crate::sentiment::NeighborZone {
                     hue_deg: hue,
                     min_sep_deg: min_sep,

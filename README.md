@@ -352,7 +352,7 @@ crates/labcolors-core/src/
 - **lcs** — roundtrip XYZ ↔ LCS под обеими VC, hue в градусах, дрейф при чужой VC
 - **neutral** — монотонность J', непрерывность кривой, точность якорей, chroma envelope через все три якоря, hue-дрейф, интерполяция угла через 0°, dim-тема, валидация входа
 - **scale** — акцентная кривая: монотонность, попадание в гамут, max_chroma, sat_ratio, dim-тема
-- **sentiment** — смещение сентиментов от брендового цвета, warning floor
+- **sentiment** — покой сентимента на фокусе своей категориальной зоны, warning floor как исключение
 - **lpc** — полярность контраста, H-K буст со сверкой против Hellwig 2022, surface-метрика
 - **golden_tests** — кросс-валидация CIECAM16 против colour-science с задокументированными допусками
 - **spaces** (oklab, vc) — Oklab hue и roundtrip, параметры окружения
