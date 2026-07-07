@@ -642,7 +642,13 @@ pub(crate) fn solve_in(
 /// *away* from the target toward larger `|Lc|`, so without the upper bound a
 /// step could overshoot — this constant makes the `±1` contract explicit and
 /// symmetric for the neighbour search (mirrors the test tolerance `TOL`).
-// SSOT-TRACKED — допуск приёмки Lc в единицах шага сетки (±1 Lc), см. docs/empirical-inventory.md.
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: `QUANT_BUDGET` ≈ 2–3× медианного
+/// Lc-шага 8-бит серой сетки (замер ≈0.44) — на дискретной сетке любой бюджет
+/// в этом диапазоне принимает тот же ближайший узел
+/// (`quant_budget_is_a_couple_of_grid_steps`). Экспозиция (доля целей, чья
+/// приёмка флипает при свипе ±50%) — **1.84%** (`exposure_quant_and_dj_budgets`).
+// SSOT-TRACKED — допуск приёмки Lc в единицах шага сетки (±1 Lc), терминал (c) interval-insensitive (exposure 1.84%), см. docs/empirical-inventory.md.
 const QUANT_BUDGET: f64 = 1.0;
 
 /// One on-grid candidate the quantisation-gap search evaluates: the solved
@@ -772,7 +778,12 @@ fn jp_of_linear(rgb_linear: [f64; 3], vc: &ViewingConditions) -> f64 {
 /// so `0.6` is just over one grid step — wide enough that a reachable target is
 /// not rejected for landing on the neighbouring pixel, tight enough that the
 /// emitted colour is honestly within a pixel of the requested separation.
-// SSOT-TRACKED — допуск приёмки dJ' (J'-единицы), ~1 шаг сетки; см. docs/empirical-inventory.md.
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: `DJ_BUDGET` ≈ 1.2–2× медианного
+/// dJ'-шага 8-бит серой сетки (замер ≈0.39) — тот же класс, что
+/// [`QUANT_BUDGET`] (`dj_budget_tracks_grid_step`). Экспозиция — **1.55%**
+/// (`exposure_quant_and_dj_budgets`).
+// SSOT-TRACKED — допуск приёмки dJ' (J'-единицы), ~1 шаг сетки, терминал (c) interval-insensitive (exposure 1.55%); см. docs/empirical-inventory.md.
 const DJ_BUDGET: f64 = 0.6;
 
 /// Maximum distinct hex steps the dJ' search walks from the analytic seed toward

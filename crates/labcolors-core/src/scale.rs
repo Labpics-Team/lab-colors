@@ -8,13 +8,19 @@ use crate::spaces::vc::ViewingConditions;
 /// Наклон штрафа дрейфа оттенка в поиске оптимального hue рампы акцента:
 /// `penalty_scale = HUE_DRIFT_PENALTY_SLOPE / HUE_SEARCH_HALF_WINDOW`, дальше
 /// `score = c − penalty_scale·drift` — баланс «максимум хромы» против «уход от
-/// канонического оттенка». Перцептивная ручка — терминал (e) DESIGN-CHOICE:
-/// строгий кандидат-вывод (хорда Oklab, `penalty_scale = C·π/180`) ИЗМЕРЕН и
-/// ОТКЛОНЁН — вырождает интерьерный оптимум в клип по ребру окна ±30° на 12/43
-/// якорях (лок `chord_derived_slope_rejected_degenerates_to_window_edge`);
-/// свободная ручка с отклонённым кандидатом честнее подгонки — реестр
-/// docs/empirical-inventory.md.
-// SSOT-TRACKED — наклон штрафа дрейфа, терминал (e) design-choice, см. docs/empirical-inventory.md.
+/// канонического оттенка». Перцептивная ручка — терминал (e) DESIGN-CHOICE.
+///
+/// **MODEL-CONFLICT: ИЗМЕРЕН И ОТКЛОНЁН (не OWNER-PENDING).** Строгий
+/// кандидат-вывод (хорда Oklab, `penalty_scale = C·π/180 ≈ 0.0026–0.0035/°`)
+/// ИЗМЕРЕН и ОТКЛОНЁН — вырождает интерьерный оптимум в клип по ребру окна
+/// ±30° на 12/43 якорях, флипает оптимум на 27/43 (лок
+/// `chord_derived_slope_rejected_degenerates_to_window_edge`). В отличие от
+/// [`crate::pair::PAIR_CROSSOVER_Y`] (где модельный якорь существует и
+/// ждёт решения владельца), здесь единственный строгий кандидат уже
+/// ПРОВЕРЕН и признан ХУЖЕ текущего значения — вопрос закрыт замером, не
+/// открыт для владельца: свободная ручка с отклонённым кандидатом честнее
+/// подгонки — реестр docs/empirical-inventory.md.
+// SSOT-TRACKED — наклон штрафа дрейфа, терминал (e) design-choice (model-conflict: измерен и отклонён, не owner-pending), см. docs/empirical-inventory.md.
 const HUE_DRIFT_PENALTY_SLOPE: f64 = 0.15;
 
 /// Акцентная кривая: светлотный скелет — нейтральная кривая темы, оттенок и
@@ -161,7 +167,16 @@ impl AccentCurve {
 
 /// Полуокно поиска оптимального оттенка рампы акцента (градусы): 30° покрывает
 /// типичную ширину гребня гамута sRGB вокруг канонического оттенка.
-// SSOT-TRACKED — hue search half-window (degrees).
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE** (в отличие от
+/// [`crate::semantic::CUSP_HALF_WINDOW_DEG`], которое ДОКАЗАННО клипует):
+/// лок `chord_derived_slope_rejected_degenerates_to_window_edge` показывает
+/// интерьерный оптимум (0 прижатий к ребру ±30°) на ВСЕХ 43 хроматических
+/// якорях 49-якорного паспорта labui при продакшн-наклоне; окно — нежёсткая
+/// нижняя граница, не связывающий кап. Экспозиция (доля (l,hue)-сетки, где
+/// точное окно меняет выбранный оттенок при свипе [25°, 45°]) — **0.93%**
+/// (`exposure_hue_search_window`). Значение не меняется.
+// SSOT-TRACKED — hue search half-window (degrees), терминал (c) interval-insensitive (exposure 0.93%, 0/43 якорей у ребра), см. docs/empirical-inventory.md.
 const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
 
 /// The hue (degrees) maximising `max_chroma(l_ok, h) − penalty·|h − h_canonical|`

@@ -401,10 +401,10 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
 | `WARNING_HUE_FLOOR_DEG` | 45.0 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | привязка **выведена** (натуральный минимум 45.528°), зазор до пола — **калибровка** (аудит 2026-07-03, уточнён 2026-07-04) |
 | `DEFAULT_HARDNESS` | 5.0 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | **калибровочный дефолт** p-нормы (#55) |
 | `CHROMA_FRACTION` | 0.88 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | ручка силы: доля гамутного максимума, единая для всех hue |
-| `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | допуск приёмки Lc, ±1 шаг сетки |
+| `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | терминал **(c) interval-insensitive**: допуск приёмки Lc, ±1 шаг сетки; экспозиция 1.84% (доказанный ratio-band над медианным шагом) |
 | `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **выведен** = `MODEL_LC_FLOOR` 7.3 (клип APCA `0.0.98G-4g`) + `QUANT_GUARD` 0.2 (issue #44) |
 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **заземлён** — APCA-уровень Lc 15 (различимость не-текста; draft/single-origin, не WCAG 3) |
-| `PAIR_CROSSOVER_Y` | 0.30 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | терминал **(e) design-choice**: интервал якорей (0.246, 0.423), модельный якорь измерен (перелом ядра ≈0.342) — значение ниже модели, задекларированный конфликт вывода |
+| `PAIR_CROSSOVER_Y` | 0.30 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | терминал **(e) design-choice, MODEL-CONFLICT: OWNER DECISION PENDING**: интервал якорей (0.246, 0.423), модельный якорь измерен (перелом ядра ≈0.342 / полная метрика ≈0.325) — значение ниже модели на 0.025–0.042, владелец ещё не выбрал между переходом на модель (→ (a), цвета сдвинутся) и осознанным тюнингом |
 | `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — дизайн-ручка, терминал **(e)** (хроматические якоря инвариантны) |
 | `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона |
 | `TINT_TARGET_MP` | 6.1 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | целевая перцептивная красочность подтона |
@@ -423,10 +423,22 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
   `IC_DECORATIVE_FLOOR_MIN` = APCA-уровень Lc 15, черновиковый дизайн-уровень с
   явной оговоркой draft/single-origin) — в отличие от жёстких стандартов
   (Hellwig/WCAG/D65), которые вне инвентаря по построению (INV-3);
-- **калибровки к референсу владельца** (Figma-якоря labui; доли текста,
-  `PAIR_CROSSOVER_Y`) — воспроизводят конкретную дизайн-практику, а не
-  независимые психофизические измерения;
-- **design-choice** — осознанный выбор без претензии на вывод;
+- **интервал-нечувствительные** (терминал (c), ре-аудит `science/reclassify-e-buckets`
+  2026-07-07; 6 констант — `TINT_PERCEPTIBLE_MP_FLOOR`, `HUE_SEARCH_HALF_WINDOW`,
+  `ACHROMATIC_MP_THRESHOLD`, `QUANT_BUDGET`, `DJ_BUDGET`, `QUANT_GUARD`) — точное
+  значение ДОКАЗУЕМО не влияет на выход: измеренная низкая экспозиция (≤ ~2%
+  гаммы) плюс тест/лок, подтверждающий инвариантность выхода по интервалу. Это
+  СИЛЬНЕЕ «design-choice» — утверждение о поведении, не о происхождении числа;
+  полный разбор — `docs/empirical-residue.md`;
+- **калибровки к референсу владельца** (Figma-якоря labui; доли текста) —
+  воспроизводят конкретную дизайн-практику, а не независимые психофизические
+  измерения;
+- **design-choice** — осознанный выбор без претензии на вывод; несёт
+  под-пометку **MODEL-CONFLICT**, когда выведенное из модели значение
+  существует и расходится с shipped: `PAIR_CROSSOVER_Y` (OWNER DECISION
+  PENDING — модель ≈0.325–0.342 против shipped 0.30, владелец ещё не выбрал)
+  и `HUE_DRIFT_PENALTY_SLOPE` (ИЗМЕРЕН И ОТКЛОНЁН — единственный строгий
+  кандидат уже проверен и признан хуже shipped, вопрос закрыт замером);
 - **цитированные жёсткие стандарты** — вне инвентаря по построению (INV-3).
 
 Ни одна константа этого документа не выдаётся за независимо измеренную
