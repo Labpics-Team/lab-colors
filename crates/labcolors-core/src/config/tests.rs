@@ -984,37 +984,31 @@ fn s_perc_min_recompute_bites_on_anchor_mutation() {
 // labui-бренде).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Деривационная идентичность: при бренде labui сентимент-тинт
-/// совпадает с СЫРЫМ якорем семейства (по всем 4 темам) для сентиментов,
-/// ОТСТОЯЩИХ от бренда дальше перцептивного порога `s_min`.
+/// Деривационная идентичность: при бренде labui сентимент-тинт совпадает с СЫРЫМ
+/// якорем семейства — под законом категориальных зон (Волна 1) это держится для
+/// ВСЕХ сентиментов, ВКЛЮЧАЯ Info, ПОТОМУ ЧТО бренд оттенок больше не смещает
+/// (сентимент отдыхает на фокусе своей категории).
 ///
-/// ЧЕСТНАЯ НАХОДКА (не подгонка): для Danger/Success/Warning идентичность
-/// держится (их семейства далеки от синего бренда labui). Для **Info** она НЕ
-/// держится: Info→Blue (Oklab h≈259.9°) отстоит от бренда `#007AFF` (h≈257.4°)
-/// лишь на ≈2.5° — НИЖЕ порога разделения (`S_PERC_MIN`≈0.0687 хорды ≈ 20.5° при
-/// хроме blue ≈0.19: 2·asin(0.0687/0.38); прежняя оценка «3.5°» занижала
-/// фактическое смещение Info (≈18–20°, до ≈277.9° в фиолетово-синий) почти
-/// на порядок). Сентимент-солвер КОРРЕКТНО смещает Info, чтобы он был отличим от
-/// бренда (иначе «информационный» и «брендовый» синий слились бы). Это
-/// заземлённое поведение солвера (#20/#55/#65), а не баг: сырой якорь совпадал
-/// бы лишь если бренд был далёк от синего. Расхождение задокументировано, не
-/// спрятано — отдельным тестом [`info_is_displaced_from_blue_brand_by_design`].
+/// ИСТОРИЯ (Волна 1 перевернула это): прежде для Danger/Success/Warning
+/// идентичность держалась (их семейства далеки от синего бренда), а Info НЕ
+/// держался — brand-separation уводил его в пурпур, т.к. Info→Blue (h≈259.9°) был
+/// лишь ≈2.5° от синего бренда labui. ИМЕННО ЭТО и был баг. Категориальный закон
+/// убрал brand-separation — теперь Info ТОЖЕ отдыхает на сыром синем якоре (включён
+/// в кейсы ниже; пер-темный «покой» пинит [`labui_info_sentiment_rests_on_blue_focus`]).
 #[test]
-fn sentiment_tint_is_raw_family_anchor_when_brand_is_hue_distant() {
+fn sentiment_tint_is_raw_family_anchor_under_categorical_zones() {
     let cfg = labui_reference();
     let table = cfg.compile_named_role_table().unwrap();
 
-    // Сентименты, чьи семейства ДАЛЕКИ от синего бренда (> s_min): идентичность
-    // держится. Info исключён намеренно (см. доку теста + отдельный тест ниже).
-    //
-    // Проверяем на СВЕТЛОЙ теме — каноническом кейсе поправки г (бренд labui =
-    // светлый `#007AFF`). Пер-темные варианты имеют СВОЙ пер-темный бренд-оттенок
-    // (reference §2), поэтому их разведение отличается — это отдельная нюансировка
-    // (см. `per_theme_brand_shifts_sentiment_displacement`), не нарушение г.
+    // Под законом зон бренд оттенок НЕ смещает — ВСЕ сентименты (включая Info)
+    // отдыхают на сыром якоре семейства. Проверяем на светлой теме (канонический
+    // кейс, бренд labui = светлый `#007AFF`); пер-темные режимы покрыты
+    // `labui_info_sentiment_rests_on_blue_focus` и байт-гейтом эмиссии.
     let cases: &[(&str, &str)] = &[
         ("fill-danger-primary", "red"),
         ("fill-success-primary", "green"),
         ("fill-warning-primary", "orange"),
+        ("fill-info-primary", "blue"),
     ];
     let vc = ViewingConditions::srgb(); // светлая тема, brand = #007AFF
 
@@ -1037,16 +1031,20 @@ fn sentiment_tint_is_raw_family_anchor_when_brand_is_hue_distant() {
     }
 }
 
-/// ЧЕСТНАЯ ФИКСАЦИЯ расхождения деривационной идентичности для Info (не подгонка).
+/// ФИКС, ВИДИМЫЙ ВЛАДЕЛЬЦУ (РЕФРЕЙМ Волны 1). Прежний тест
+/// `info_is_displaced_from_blue_brand_by_design` УТВЕРЖДАЛ обратное — что Info
+/// смещён от синего бренда (`assert_ne!(got, "#3E87FF")`). ИМЕННО ЭТО и был баг:
+/// info-заливка labui уезжала в пурпур (#7579FE и т.п.) вместо своего синего
+/// якоря. Закон категориальных зон (Волна 1) его убрал — совпадение info с
+/// брендовым синим внутри синей категории легитимно (Kay & McDaniel 1978).
 ///
-/// Info→Blue отстоит от синего бренда labui лишь на ≈2.5° Oklab — ниже
-/// перцептивного порога разделения. Сентимент-солвер СМЕЩАЕТ Info прочь от
-/// бренда (иначе информационный и брендовый синий слились бы). Тест закрепляет:
-/// (1) Info-тинт ≠ сырой якорь blue (смещён), (2) но остаётся синим (не уехал в
-/// другой квадрант). Это поведение по построению — задокументировано тестом,
-/// а не спрятано.
+/// Проверяем через ПОЛНЫЙ config-путь (`fill-info-primary` Ladder-тинт) во всех
+/// 4 режимах: эмитируемый info-тинт обязан ОТДЫХАТЬ на синем якоре СВОЕГО режима
+/// (деривационная идентичность — бренд оттенок не смещает), а его Oklab-hue —
+/// в пределах 2° от синего фокуса. Для light-режима это 259.89° (Figma Accent/Blue
+/// `#3E87FF`), как заявил владелец.
 #[test]
-fn info_is_displaced_from_blue_brand_by_design() {
+fn labui_info_sentiment_rests_on_blue_focus() {
     let cfg = labui_reference();
     let table = cfg.compile_named_role_table().unwrap();
     let (_, spec) = table
@@ -1057,19 +1055,49 @@ fn info_is_displaced_from_blue_brand_by_design() {
     let RoleSpec::Ladder { tint, .. } = spec else {
         panic!("fill-info-primary: ожидался Ladder");
     };
-    let vc = ViewingConditions::srgb();
-    let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
-    // (1) Смещён от сырого якоря blue #3E87FF.
-    assert_ne!(
-        got_hex, "#3E87FF",
-        "Info НЕ смещён от бренда — солвер разделения не сработал (регресс #20/#55)"
-    );
-    // (2) Остался синим (Oklab-оттенок в сине-фиолетовой полосе 230–290°),
-    // не уехал в другой квадрант.
-    let hue = crate::accent::oklab_hue_of(&got_hex);
+    let blue = cfg.palette.iter().find(|f| f.key == "blue").unwrap();
+    let modes = [
+        (
+            "light",
+            ViewingConditions::srgb(),
+            blue.anchors.light.as_str(),
+        ),
+        (
+            "dark",
+            ViewingConditions::dim_surround(),
+            blue.anchors.dark.as_str(),
+        ),
+        (
+            "light-ic",
+            ViewingConditions::srgb_high_contrast(),
+            blue.anchors.light_ic.as_str(),
+        ),
+        (
+            "dark-ic",
+            ViewingConditions::dim_surround_high_contrast(),
+            blue.anchors.dark_ic.as_str(),
+        ),
+    ];
+    for (name, vc, anchor_hex) in modes {
+        let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
+        let got_hue = crate::accent::oklab_hue_of(&got_hex);
+        let focus = crate::accent::oklab_hue_of(anchor_hex);
+        assert!(
+            crate::sentiment::angular_distance(got_hue, focus) <= 2.0,
+            "режим {name}: Info-тинт {got_hex} (h={got_hue:.2}°) обязан ОТДЫХАТЬ на синем \
+             фокусе {anchor_hex} (h={focus:.2}°) — бренд оттенок не смещает (Волна 1); \
+             отклонение {:.2}° > 2°",
+            crate::sentiment::angular_distance(got_hue, focus)
+        );
+    }
+    // Light-режим — заявленный владельцем синий фокус 259.89°.
+    let light_hex =
+        crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&ViewingConditions::srgb()));
+    let light_hue = crate::accent::oklab_hue_of(&light_hex);
     assert!(
-        (230.0..=290.0).contains(&hue),
-        "смещённый Info уехал из сине-фиолетовой полосы: h={hue:.1}° ({got_hex})"
+        (light_hue - 259.89).abs() <= 2.0,
+        "light Info-тинт h={light_hue:.2}° обязан лежать в пределах 2° от синего фокуса 259.89° \
+         ({light_hex})"
     );
 }
 
@@ -1318,8 +1346,9 @@ fn assert_matches_stub(role: &str, theme: &str, got: &Resolved, want: &str) {
 /// пер-темной альфой, glow-neutral = белый @52, акценты = пер-темный якорь.
 ///
 /// Исключены НАМЕРЕННО расходящиеся роли (с комментарием-ссылкой):
-/// - `border-info-*`/`label-info-*`/`fill-info-*` — оттенок смещён сентимент-
-///   солвером относительно бренда (тест `info_is_displaced_from_blue_brand_by_design`);
+/// - `border-info-*`/`label-info-*`/`fill-info-*` — под законом Волны 1 info
+///   отдыхает на синем фокусе (тест `labui_info_sentiment_rests_on_blue_focus`); их
+///   значенческую сверку со стабом (до-Wave-1 значения) обрабатывает владелец;
 /// - `fx-focus-ring-neutral` (dark), `fx-glow-inverted`, `fill-neutral` —
 ///   задокументированные gap-и (пер-темный нейтральный край / inverted-якоря /
 ///   PROVISIONAL-литерал не выводятся из тройки neutral.anchors).
@@ -2072,17 +2101,21 @@ fn labui_sentiment_solids_keep_pairwise_ab_distance() {
     }
 }
 
-/// Пин лечения S-02: Warning light-ic — янтарь у пола, не зелень у Success.
+/// Warning light-ic лежит в янтарной дуге, а не в зелени.
 ///
-/// RED-proof класса: брендоцентричный закон (пустые зоны, старый путь)
-/// зеркалит IC-Warning через далёкий бренд в зелень (~127°) — тест
-/// удерживает разницу между законами явной, чтобы регресс на однотельный
-/// резолв не прошёл тихо.
+/// РЕФРЕЙМ Волны 1 (закон категориальных зон). Прежде это был RED-proof лечения
+/// S-02: брендоцентричный однотельный закон зеркалил IC-Warning далёким брендом в
+/// зелень (~127°), а многотельный лечил в янтарь. Под новым законом
+/// brand-displacement УБРАН целиком — Warning всегда ОТДЫХАЕТ на своём оранжевом
+/// прототипе (для light-ic якорь orange `#C93400`), поэтому зелени неоткуда взяться
+/// и однотельного контр-примера больше не существует. Инвариант «warning light-ic
+/// в янтаре» ОСТАЁТСЯ валидным следствием закона и сохранён как страж; мёртвый
+/// RED-proof (однотельный→зелень) удалён.
 #[test]
-fn warning_light_ic_heals_into_amber_arc_not_green() {
+fn warning_light_ic_rests_in_amber_arc() {
     let cfg = labui_reference();
     let tint = cfg
-        .compile_sentiment_tint("s02-probe", "warning")
+        .compile_sentiment_tint("warning-amber-probe", "warning")
         .expect("warning компилируется");
     let vc_ic = crate::spaces::vc::ViewingConditions::srgb_high_contrast();
     let healed = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc_ic));
@@ -2091,31 +2124,6 @@ fn warning_light_ic_heals_into_amber_arc_not_green() {
     assert!(
         (45.0..90.0).contains(&healed_hue),
         "warning light-ic обязан лечь в янтарь [45°, 90°), получено {healed_hue:.2}° ({healed})"
-    );
-
-    // RED-proof: однотельный закон даёт зелень — контраст с вылеченным.
-    let anchor = &cfg
-        .palette
-        .iter()
-        .find(|f| f.key == "orange")
-        .unwrap()
-        .anchors
-        .light_ic;
-    let brand_ic = &cfg.brand.anchors.light_ic;
-    let single = crate::sentiment::resolve_config_sentiment_solid(
-        anchor,
-        crate::accent::oklab_hue_of(brand_ic),
-        cfg.sentiments.hardness,
-        cfg.sentiments.chroma_fraction,
-        Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
-        1.0,
-        cfg.sentiment_s_perc_min().unwrap(),
-    )
-    .expect("однотельный резолв решается");
-    let single_hue = crate::accent::oklab_hue_of(&single);
-    assert!(
-        single_hue > 110.0,
-        "контраст законов исчез: однотельный давал зелень (~127°), получено {single_hue:.2}°"
     );
 }
 // ─────────────────────────────────────────────────────────────────────────────

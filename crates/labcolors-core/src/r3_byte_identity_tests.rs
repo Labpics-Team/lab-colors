@@ -69,13 +69,13 @@ const R3_ACCENT_007AFF_GOLDEN: [&str; 13] = [
     "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
 ];
 
-/// SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) — byte-identical после
-/// Zone D грауndинга (2026-06-30). prototype_hex обновлён с "#007AFF" (Apple HIG)
-/// на "#3E87FF" (Figma Accent/Blue, Labels/Info/Primary Light-mode). Любое
-/// изменение этой лестницы — R3-регрессия.
+/// SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) — byte-identical под законом
+/// Волны 1 (категориальные зоны). Прежде brand=200° смещал Info до ≈259.96°; теперь
+/// бренд НЕ смещает — Info покоится на синем фокусе 259.89° (Figma Accent/Blue),
+/// массив перегенерирован из фактического вывода. Любое дальнейшее изменение — R3-регрессия.
 const R3_SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BE", "#1551B0",
-    "#114598", "#0B3579", "#052456", "#021130", "#000108",
+    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BD", "#1551B0",
+    "#114597", "#0B3579", "#052456", "#02112F", "#000108",
 ];
 
 fn canonical_neutral() -> NeutralCurve {
