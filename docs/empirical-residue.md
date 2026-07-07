@@ -85,7 +85,7 @@
 | 13 | `NEUTRAL_TINT_RATIO` | 0.10 | (e) | конфиг custom-tint ratio | `custom_tint_overrides_hue_and_ratio` |
 | 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | конфиг custom-tint hue (замер по нейтрали) | `custom_tint_overrides_hue_and_ratio` |
 | 21 | `CHROMA_FRACTION` | 0.88 | (e) | конфиг `chroma_fraction` (labui=1.0) | `chroma_fraction_out_of_bounds_is_rejected` |
-| 20 | `DEFAULT_HARDNESS` | 5.0 | (e) | конфиг `hardness` (валидируется) | `hardness_below_one_is_rejected` |
+| ~~20~~ | ~~`DEFAULT_HARDNESS`~~ | — | — | **УДАЛЁН Волной 1** (снесён механизм p-нормы brand-displacement; config-поле `hardness` живо как vestigial, тест `hardness_below_one_is_rejected` держит его границу) | — |
 | 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | (e) | `CurveParams` конфиг (`with_params`) | `custom_tint_overrides_hue_and_ratio` |
 | 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | (e) | `CurveParams` конфиг (`with_params`) | — |
 | 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | `CurveParams` конфиг (`with_params`) | — |
@@ -337,9 +337,10 @@ GROUNDED APCA-клипа, а не из отдельного опубликова
   замером, не требует решения владельца. Разница с #52: там модельный якорь ЖДЁТ
   выбора, здесь альтернатива уже дисквалифицирована экспериментом.
 
-**Генуинные (e), без изменений, 12 констант:** `NEUTRAL_HUE_DEG` (#12),
-`NEUTRAL_TINT_RATIO` (#13), `TINT_HUE_STIFFNESS` (#15), `DEFAULT_HARDNESS`
-(#20), `CHROMA_FRACTION` (#21), `NEUTRAL_DEFAULT_GAMMA_LIGHT` (#22),
+**Генуинные (e), без изменений, 11 констант** (было 12 — `DEFAULT_HARDNESS` #20
+УДАЛЁН Волной 1 вместе с механизмом p-нормы brand-displacement): `NEUTRAL_HUE_DEG`
+(#12), `NEUTRAL_TINT_RATIO` (#13), `TINT_HUE_STIFFNESS` (#15),
+`CHROMA_FRACTION` (#21), `NEUTRAL_DEFAULT_GAMMA_LIGHT` (#22),
 `NEUTRAL_DEFAULT_GAMMA_DARK` (#23), `NEUTRAL_DEFAULT_CHROMA_PEAK_T` (#24),
 `HUE_PURITY_MP_REF_RATIO` (#48), `HUE_PURITY_EXPONENT` (#49) — ни один не несёт
 exposure-теста, ни для одного не существует модельного якоря; провенанс формы
