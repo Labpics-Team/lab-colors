@@ -26,3 +26,6 @@ mutants.out.old/
 *.restore_tmp
 *.on_disk_probe_backup
 *.s2b_test5_backup
+
+# локальные worktree агентов — не часть проекта
+.claude/worktrees/
