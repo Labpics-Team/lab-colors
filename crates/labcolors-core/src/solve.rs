@@ -1146,6 +1146,21 @@ fn cold_bisect(target: f64, curve_of: impl Fn(f64) -> f64) -> f64 {
 /// `chroma_policy` at `hue`. Chroma is capped at [`max_chroma`], so the result
 /// is always inside the sRGB gamut.
 fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
+    if matches!(chroma_policy, ChromaPolicy::Neutral) {
+        // Ахроматика — байт-точный серый ПО ПОСТРОЕНИЮ, не по float-совпадению.
+        // Математика точная: при a = b = 0 инверсия Oklab даёт l' = m' = s' = L
+        // (прибавляются точные нули), LMS = L³ поканально, а строки матрицы
+        // LMS→linear-sRGB суммируются ровно в 1 — линейный серый есть L³ в
+        // каждом канале. Прогон через матрицу вносил пер-строчную ошибку ~1 ulp
+        // с РАЗНЫМ знаком по каналам; бисекция `apply_floor`, честно меряющая
+        // квантованный hex, сходится ровно на байтовый обрыв (x.5/255), где эта
+        // асимметрия расщепляет «серый» на целый байт: floored-tertiary на белом
+        // эмитил #949595 (148,149,149; ratio 3.0036) вместо документированного
+        // #949494. Один общий float на все три канала закрывает класс целиком:
+        // любой обрыв флипает каналы синхронно.
+        let v = (l_ok * l_ok * l_ok).clamp(0.0, 1.0);
+        return [v, v, v];
+    }
     let h = hue.degrees();
     let hr = h.to_radians();
     let chroma = match chroma_policy {
@@ -1916,6 +1931,82 @@ mod tests {
         assert!(
             measured > 15.0,
             "pushed darker means more contrast, got {measured}"
+        );
+    }
+
+    #[test]
+    fn neutral_policy_emits_byte_exact_grey_everywhere() {
+        // Класс-инвариант ахроматики: ChromaPolicy::Neutral обязан эмитить
+        // байт-точный серый (R==G==B) на ЛЮБОМ достижимом контракте — включая
+        // подъём законным полом и цели на границе округления байта. Регресс
+        // главы #64 (снос grey-LUT): ахроматика пошла через матричный
+        // roundtrip Oklab→sRGB, чья микро-асимметрия каналов у целей на
+        // ~x.5/255 расщепляет серый (#949595 у floored-tertiary на белом,
+        // Y=0.30 → 148.5/255). Инвариант держится конструкцией, не допуском.
+        let vc = ViewingConditions::srgb();
+        let mut reachable = 0;
+        let mut floored = 0;
+        for bg_hex in ["#FFFFFF", "#F4F4F4", "#767676", "#101012", "#000000"] {
+            for sign in [1.0_f64, -1.0] {
+                let mut m = 5.0_f64;
+                while m <= 100.0 {
+                    for ui in [false, true] {
+                        let bg = BgInput::solid(bg_hex).unwrap();
+                        let contract = if ui {
+                            Contract::ui(sign * m)
+                        } else {
+                            Contract::text(sign * m)
+                        };
+                        if let Ok(solved) = solve(
+                            bg,
+                            contract,
+                            Hue::deg(0.0),
+                            ChromaPolicy::Neutral,
+                            &vc,
+                            Gamut::Srgb,
+                        ) {
+                            reachable += 1;
+                            floored += solved.floor_override() as u32;
+                            let hex = solved.hex();
+                            assert!(
+                                hex[1..3] == hex[3..5] && hex[3..5] == hex[5..7],
+                                "{bg_hex} target {:+.1} (ui={ui}): Neutral эмитит не-серый {hex}",
+                                sign * m
+                            );
+                        }
+                    }
+                    m += 2.5;
+                }
+            }
+        }
+        // Свип обязан реально проходить и обычный, и floored-режим — иначе
+        // тест не сторожит заявленный инвариант.
+        assert!(reachable >= 100, "too few reachable combos: {reachable}");
+        assert!(floored > 0, "floor-lift режим не задет свипом");
+
+        // Прицельный обрыв: якорный таргет tertiary (0.47572199·max ≈ Lc 50.45,
+        // пол 3:1 на белом) кладёт бисекцию `apply_floor` ровно на байтовую
+        // границу 148.5/255, где 149-серый ещё падает (2.996 < 3), а флип ОДНОГО
+        // канала уже проходит (148,149,149 → 3.0036). Свип шагом 2.5 эту цель
+        // минует — регресс #949595 ловится только точным таргетом.
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let cliff = solve(
+            bg,
+            Contract::ui(50.4459),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(
+            cliff.floor_override(),
+            "пол 3:1 обязан включиться на Lc 50.45 (белый фон)"
+        );
+        let hex = cliff.hex();
+        assert!(
+            hex[1..3] == hex[3..5] && hex[3..5] == hex[5..7],
+            "floored-tertiary на белом: Neutral эмитит не-серый {hex}"
         );
     }
 

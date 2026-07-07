@@ -246,30 +246,37 @@ pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 
 // ── Доли текстовой иерархии (Labels) ────────────────────────────────────────────
 //
-// Каждая доля = Figma-якорь Lc роли на белом ÷ максимально достижимый Lc ≈ 106
-// (Labels/Neutral): 102.6/106≈0.968, 66.5/106≈0.627, 48.9/106≈0.461,
-// 29.3/106≈0.276. Якоря и вывод долей задокументированы в rustdoc
-// `Default for RoleTable` ниже (таблица «Role | Figma Lc | fraction of max»).
-// Это «якорный принцип»: роль держит почти максимум, что позволяет фон, а не
-// фиксированную дельту. Значения 1:1 с прежними ролями text-* (byte-identity);
-// финальная перцептивная калибровка долей — за владельцем.
+// Каждая доля = Ys-якорь Lc роли на белом ÷ максимально достижимый Ys-Lc
+// 106.0407 (чёрный на белом). Якоря перенесены из генезис-домена Y_hk
+// (Figma-замеры 102.6/66.5/48.9/29.3) при миграции мерила читаемости на Ys:
+// инвариант переноса — ЦВЕТ, не Lc-число. Primary/secondary/quaternary — это
+// Ys-замер принятых владельцем hex'ов лестницы (#141414/#767676/#C2C2C2), что
+// гарантирует байт-идентичность эмиссии; tertiary эмиссией защищён полом 3:1
+// (#949494), его якорь восстановлен побайтовой инверсией генезис-числа 48.9 →
+// #9C9C9C → Ys 50.446. Вывод задокументирован в rustdoc `Default for
+// RoleTable` ниже. Это «якорный принцип»: роль держит почти максимум, что
+// позволяет фон, а не фиксированную дельту; финальная перцептивная
+// калибровка долей — за владельцем.
 
-/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`):
+/// Ys(#141414)/Ys(max) = 103.2157/106.0407.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_PRIMARY_FRACTION: f64 = 0.968;
-/// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_PRIMARY_FRACTION: f64 = 0.97335917;
+/// Доля максимального Lc для `LabelSecondary`: Ys(#767676)/Ys(max) = 68.2467/106.0407.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_SECONDARY_FRACTION: f64 = 0.627;
-/// Доля максимального Lc для `LabelTertiary` (и `Icon`): 48.9/106 ≈ 0.461.
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_SECONDARY_FRACTION: f64 = 0.64359014;
+/// Доля максимального Lc для `LabelTertiary` (и `Icon`):
+/// Ys(#9C9C9C)/Ys(max) = 50.4459/106.0407 (инверсия генезис-якоря 48.9).
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_TERTIARY_FRACTION: f64 = 0.461;
-/// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_TERTIARY_FRACTION: f64 = 0.47572199;
+/// Доля максимального Lc для `LabelQuaternary` (disabled):
+/// Ys(#C2C2C2)/Ys(max) = 31.1081/106.0407.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_QUATERNARY_FRACTION: f64 = 0.29335999;
 
 /// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
 /// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
@@ -323,13 +330,13 @@ pub enum Role {
     /// Body / primary label text — anchored near the strongest contrast the
     /// background allows, so it reads black-on-light or white-on-dark. HIG
     /// "Labels/Primary" (`N12`-strength). Was `text-primary` before the HIG
-    /// taxonomy rename; the contract (0.968 of max, AA-text floor) is unchanged.
+    /// taxonomy rename; the contract (0.9734 of max, AA-text floor) is unchanged.
     LabelPrimary,
     /// Secondary label text — clearly subordinate to primary, still comfortably
     /// readable. HIG "Labels/Secondary". Was `text-secondary`.
     LabelSecondary,
     /// Tertiary label text — the weakest label still meant to be read. HIG
-    /// "Labels/Tertiary". Was `text-muted`; same 0.461 / AA-UI contract.
+    /// "Labels/Tertiary". Was `text-muted`; same 0.4757 / AA-UI contract.
     LabelTertiary,
     /// Quaternary label text — deliberately low contrast; not for reading, so it
     /// carries no readability floor (WCAG excludes inactive controls). HIG
@@ -350,7 +357,7 @@ pub enum Role {
     /// Strong container outline — the strongest border. HIG "Border/Strong" =
     /// `N12`, the same strength as [`LabelPrimary`](Role::LabelPrimary), so it is
     /// an *anchored* role (not a JND placeholder): it carries the label-primary
-    /// contract (0.968 of max, AA-text floor), giving a crisp `N12`-weight edge.
+    /// contract (0.9734 of max, AA-text floor), giving a crisp `N12`-weight edge.
     BorderStrong,
     /// Base container outline — the default border weight. HIG "Border/Base". A
     /// dJ' step at the owner's literal anchor (light 6.41 / dark 10.12).
@@ -1275,16 +1282,25 @@ impl Default for RoleTable {
     /// The v1 role table.
     ///
     /// Text fractions are calibrated against Daniel's Figma "Labels/Neutral"
-    /// anchors on white, where the maximum achievable contrast is ~106 Lc:
+    /// anchors on white, transferred into the Ys readability metric (the
+    /// genesis anchors were measured in the legacy Y_hk metric; the transfer
+    /// invariant is the COLOUR, not the Lc number). Maximum achievable
+    /// contrast on white is 106.0407 Ys-Lc (black on white):
     ///
-    /// | Role | Figma Lc (light) | fraction of max |
-    /// |------|------------------|-----------------|
-    /// | primary | 102.6 | 0.968 |
-    /// | secondary | 66.5 | 0.627 |
-    /// | muted (tertiary) | 48.9 | 0.461 |
-    /// | disabled (quaternary) | 29.3 | 0.276 |
+    /// | Role | genesis Lc (Y_hk) | anchor colour | Ys Lc | fraction of max |
+    /// |------|-------------------|---------------|-------|-----------------|
+    /// | primary | 102.6 | `#141414` (accepted) | 103.2157 | 0.97335917 |
+    /// | secondary | 66.5 | `#767676` (accepted) | 68.2467 | 0.64359014 |
+    /// | muted (tertiary) | 48.9 | `#9C9C9C` (inverted) | 50.4459 | 0.47572199 |
+    /// | disabled (quaternary) | 29.3 | `#C2C2C2` (accepted) | 31.1081 | 0.29335999 |
     ///
-    /// Primary's 0.968 makes it "almost the maximum the background allows" — the
+    /// "Accepted" anchor colours are the ladder hexes Daniel signed off
+    /// (byte-identity is the review acceptance criterion), so solver
+    /// quantisation lands exactly back on them; tertiary's emission is
+    /// protected by the 3:1 floor (`#949494`), so its anchor is the byte-level
+    /// inversion of the genesis 48.9 instead.
+    ///
+    /// Primary's 0.973 makes it "almost the maximum the background allows" — the
     /// anchor principle, not a fixed delta — so it reads black/white on the
     /// extremes rather than grey. The fractions are equal across polarities by
     /// design, which is the deliberate correction of the asymmetry in the
@@ -1305,8 +1321,9 @@ impl Default for RoleTable {
         Self {
             specs: [
                 // Labels — the text ladder, renamed from text-* to the owner's HIG
-                // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
-                // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
+                // names. The contracts are carried over 1:1 (0.97335917 /
+                // 0.64359014 / 0.47572199 / 0.29335999 with the same
+                // AaText/AaText/AaUi/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
                 (
                     Role::LabelPrimary,
@@ -4007,32 +4024,36 @@ mod tests {
 
     #[test]
     fn primary_matches_figma_light_anchor_within_tolerance() {
-        // Snapshot: primary on white should land near Daniel's Figma anchor
-        // 102.6 Lc (the 0.968 fraction of ~106). A few Lc of tolerance absorbs
-        // quantisation and the max-probe.
+        // Snapshot: primary on white should land near the transferred anchor
+        // 103.22 Ys-Lc (the 0.97335917 fraction of 106.0407; genesis Figma
+        // anchor 102.6 in the legacy Y_hk metric). A few Lc of tolerance
+        // absorbs quantisation and the max-probe.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let lc = solved_lc(&bg, Role::LabelPrimary, &vc);
         assert!(
-            (lc - 102.6).abs() <= 2.5,
-            "primary on white {lc} should match Figma anchor 102.6 within 2.5"
+            (lc - 103.22).abs() <= 2.5,
+            "primary on white {lc} should match transferred Figma anchor 103.22 within 2.5"
         );
     }
 
     #[test]
     fn light_ladder_matches_figma_anchors() {
         // Snapshot: the light text ladder lands near Daniel's Figma "Labels"
-        // anchors. Primary/disabled match closely (no floor in play); secondary
-        // and muted sit a few Lc *above* their anchor because the WCAG AA floor
-        // legitimately lifts them on white (see `dark_ladder_is_symmetric_…`),
-        // so they get a wider tolerance — an explained shift, not silent drift.
+        // anchors, transferred into Ys (anchor = Ys of the accepted ladder hex;
+        // tertiary = byte-inversion of the genesis 48.9, see the fraction
+        // consts). Primary/secondary/disabled match closely (targets sit
+        // exactly on the accepted hexes); muted sits a few Lc *above* its
+        // anchor because the WCAG 3:1 floor legitimately lifts it on white
+        // (see `dark_ladder_is_symmetric_…`) — an explained shift, not silent
+        // drift.
         let vc = ViewingConditions::srgb();
         let white = BgInput::solid("#FFFFFF").unwrap();
         let anchors = [
-            (Role::LabelPrimary, 102.6, 2.5),
-            (Role::LabelSecondary, 66.5, 1.0),
-            (Role::LabelTertiary, 48.9, 4.5), // floored up to ~52.7 to clear 3:1
-            (Role::LabelQuaternary, 29.3, 1.0),
+            (Role::LabelPrimary, 103.22, 2.5),
+            (Role::LabelSecondary, 68.25, 1.0),
+            (Role::LabelTertiary, 50.45, 4.5), // floored up to ~54.3 to clear 3:1
+            (Role::LabelQuaternary, 31.11, 1.0),
         ];
         for (role, anchor, tol) in anchors {
             let lc = solved_lc(&white, role, &vc);

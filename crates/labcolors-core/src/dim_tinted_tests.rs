@@ -226,3 +226,18 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
         }
     }
 }
+
+#[test]
+fn tmp_probe_ys_anchors() {
+    let white = crate::spaces::srgb::srgb_encoded_from_hex("#FFFFFF").expect("bg");
+    let max = crate::lpc::lpc_readability_ys(
+        crate::spaces::srgb::srgb_encoded_from_hex("#000000").expect("fg"),
+        white,
+    );
+    println!("PROBE max(black-on-white) = {max}");
+    for h in ["#141414", "#767676", "#949494", "#C2C2C2", "#17171C", "#EDEDED"] {
+        let fg = crate::spaces::srgb::srgb_encoded_from_hex(h).expect("fg");
+        let ys = crate::lpc::lpc_readability_ys(fg, white);
+        println!("PROBE {h}: ys_lc={ys} fraction={}", ys / max);
+    }
+}

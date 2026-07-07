@@ -82,12 +82,14 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
             },
         ),
         // Labels.
-        ("label-primary".to_string(), text(0.968, Floor::AaText)),
-        ("label-secondary".to_string(), text(0.627, Floor::AaText)),
-        ("label-tertiary".to_string(), text(0.461, Floor::AaUi)),
-        ("label-quaternary".to_string(), text(0.276, Floor::None)),
+        // Доли — Ys-перенос Figma-якорей (генезис Y_hk: 102.6/66.5/48.9/29.3),
+        // инвариант переноса — цвет: см. semantic.rs «Доли текстовой иерархии».
+        ("label-primary".to_string(), text(0.97335917, Floor::AaText)),
+        ("label-secondary".to_string(), text(0.64359014, Floor::AaText)),
+        ("label-tertiary".to_string(), text(0.47572199, Floor::AaUi)),
+        ("label-quaternary".to_string(), text(0.29335999, Floor::None)),
         // Icon.
-        ("icon".to_string(), text(0.461, Floor::AaUi)),
+        ("icon".to_string(), text(0.47572199, Floor::AaUi)),
         // Сепаратора в словаре НЕТ: бордер и сепаратор — единое целое (так
         // задумано в Figma), компонент-сепаратор применяет бордер-токен.
         // Border ladder. Strong — РАЗЛИЧИМОСТЬ, не читаемость: та же доля
@@ -95,7 +97,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         // границ контролов) вместо текстового 4.5:1 — бордер не обязан читаться.
         // base/soft — лестница от нейтрали: полупрозрачный mid-тинт ложится на
         // ЛЮБУЮ поверхность (композитит браузер), пер-темные пары альф — данные.
-        ("border-strong".to_string(), text(0.968, Floor::AaUi)),
+        ("border-strong".to_string(), text(0.97335917, Floor::AaUi)),
         (
             "border-base".to_string(),
             neutral_pos(NeutralPick::Mid, LadderPosition::NeutralBorderBase),
@@ -155,7 +157,8 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // base/soft). FX focus-ring/glow — солид/@52. `-tinted` — альфа-аналог солида
     // соответствующего fill-*-primary. Все альфы — из меню LadderPosition (Figma).
     // Цветной лейбл (ратификация ch5c, M1): доля/пол КАЖДОГО уровня = нейтральный
-    // контракт лейбла (0.968/0.627/0.461/0.276, AaText/AaText/AaUi/None) —
+    // контракт лейбла (0.97335917/0.64359014/0.47572199/0.29335999,
+    // AaText/AaText/AaUi/None) —
     // одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ; оттенок = источник семьи
     // (чистый цвет, светлота выводится контрактом на кривой семьи). Заменяет
     // прежнюю α-рампу @72/@52/@32 поверх тинта (40/40 нарушений одноуровневости,
@@ -175,10 +178,10 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         |prefix: &str, source: LadderSource, mk: &dyn Fn(LadderPosition) -> RoleRecipe| {
             use LadderPosition::*;
             vec![
-                hued_label(prefix, "primary", 0.968, Floor::AaText, &source),
-                hued_label(prefix, "secondary", 0.627, Floor::AaText, &source),
-                hued_label(prefix, "tertiary", 0.461, Floor::AaUi, &source),
-                hued_label(prefix, "quaternary", 0.276, Floor::None, &source),
+                hued_label(prefix, "primary", 0.97335917, Floor::AaText, &source),
+                hued_label(prefix, "secondary", 0.64359014, Floor::AaText, &source),
+                hued_label(prefix, "tertiary", 0.47572199, Floor::AaUi, &source),
+                hued_label(prefix, "quaternary", 0.29335999, Floor::None, &source),
                 (format!("fill-{prefix}-primary"), mk(FillPrimary)),
                 (format!("fill-{prefix}-secondary"), mk(FillSecondary)),
                 (format!("fill-{prefix}-tertiary"), mk(FillTertiary)),
