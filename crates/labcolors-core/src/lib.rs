@@ -1,6 +1,7 @@
 pub(crate) mod spaces;
 
 pub(crate) mod accent;
+pub mod accent_balance;
 pub mod accent_surface;
 pub mod alpha;
 pub mod cleanliness;

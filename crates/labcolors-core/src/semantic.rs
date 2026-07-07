@@ -823,7 +823,7 @@ pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 /// дизайна», ре-аудит `science/reclassify-e-buckets` 2026-07-07, реестр
 /// docs/empirical-inventory.md.
 // SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M', терминал (c) interval-insensitive (exposure 0.07%), см. docs/empirical-inventory.md.
-const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
+pub(crate) const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
 /// canonical hue. The undertone may drift inside a blue-violet band; it may not
