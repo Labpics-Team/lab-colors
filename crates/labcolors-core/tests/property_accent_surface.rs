@@ -28,15 +28,25 @@
 //! не нарушение закона. `TOL` — задекларированная полоса этого вобла, замерена
 //! `measure_step_mismatch_across_hues_and_themes` (печатает фактический максимум).
 
+use labcolors_core::accent_balance::BalancedAccent;
 use labcolors_core::neutral::{CurveParams, NeutralCurve};
 use labcolors_core::{LcsColor, ViewingConditions, derive_accent_surface_ramp};
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 
 /// Задекларированный допуск одноуровневости (J'): полоса хромового вобла CAM16-J
-/// субтильного тинта. Замер (см. `measure_step_mismatch_*`) держит фактический
-/// максимум комфортно ниже.
-const TOL: f64 = 1.0;
+/// эмитированного цвета.
+///
+/// РЕЖИМ СТЕНЫ ГАМУТА (провенанс): после унификации деривации на единый примитив
+/// баланса ([`accent_balanced`]) хрома фона = `max_chroma(L, hue)` (стена гамута),
+/// а не субтильная доля. На МАКСИМАЛЬНОЙ хроме вклад Гельмгольца-Кольрауша в
+/// CAM16-J максимален, поэтому вобл J' эмиссии относительно серого шире, чем под
+/// прежней долей. Замер `measure_step_mismatch_across_hues_and_themes` (72 тона ×
+/// 2 темы, печатает факт. максимум) держит худший |Δшаг| ≈ 1.07 J' у пурпурных
+/// (hue≈305°) на мид-светлоте, где стена гамута наибольшая. TOL=1.5 — DECLARED
+/// полоса с запасом над этим физическим максимумом (светлота НАСЛЕДУЕТСЯ из
+/// нейтрали по построению; вобл — чисто хроматический CAM16-J, не дрейф Oklab-L).
+const TOL: f64 = 1.5;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Нейтральные surface-рампы. Паттерн 2×3 (светлая: 2 осветления + база + 3
@@ -59,6 +69,11 @@ fn neutral_ramp(vc: &ViewingConditions, ts: &[f64]) -> Vec<LcsColor> {
 
 fn jps(ramp: &[LcsColor]) -> Vec<f64> {
     ramp.iter().map(|c| c.jp).collect()
+}
+
+/// J' эмитированных ступеней акцентной рампы (`BalancedAccent` несёт цвет + флаг).
+fn accent_jps(ramp: &[BalancedAccent]) -> Vec<f64> {
+    ramp.iter().map(|b| b.color.jp).collect()
 }
 
 /// Пер-уровневые нарушения одноуровневости: `|Δшаг акцента − Δшаг нейтрали| > tol`.
@@ -109,10 +124,10 @@ fn accent_surface_ramp_is_one_level_with_neutral_light() {
     let vc = ViewingConditions::srgb();
     let neutral = neutral_ramp(&vc, &LIGHT_TS);
     let neutral_jp = jps(&neutral);
-    check(64, (0.0f64..360.0, 0.05f64..0.35), move |(hue, frac)| {
-        let accent = derive_accent_surface_ramp(&neutral, hue, frac, &vc);
-        let v = step_violations(&neutral_jp, &jps(&accent), TOL);
-        prop_assert!(v.is_empty(), "light hue={hue:.2} frac={frac:.3}: {v:?}");
+    check(64, 0.0f64..360.0, move |hue| {
+        let accent = derive_accent_surface_ramp(&neutral, hue, &vc);
+        let v = step_violations(&neutral_jp, &accent_jps(&accent), TOL);
+        prop_assert!(v.is_empty(), "light hue={hue:.2}: {v:?}");
         Ok(())
     });
 }
@@ -122,10 +137,10 @@ fn accent_surface_ramp_is_one_level_with_neutral_dark() {
     let vc = ViewingConditions::dim_surround();
     let neutral = neutral_ramp(&vc, &DARK_TS);
     let neutral_jp = jps(&neutral);
-    check(64, (0.0f64..360.0, 0.05f64..0.35), move |(hue, frac)| {
-        let accent = derive_accent_surface_ramp(&neutral, hue, frac, &vc);
-        let v = step_violations(&neutral_jp, &jps(&accent), TOL);
-        prop_assert!(v.is_empty(), "dark hue={hue:.2} frac={frac:.3}: {v:?}");
+    check(64, 0.0f64..360.0, move |hue| {
+        let accent = derive_accent_surface_ramp(&neutral, hue, &vc);
+        let v = step_violations(&neutral_jp, &accent_jps(&accent), TOL);
+        prop_assert!(v.is_empty(), "dark hue={hue:.2}: {v:?}");
         Ok(())
     });
 }
@@ -138,9 +153,9 @@ fn accent_surface_ramp_is_one_level_with_neutral_dark() {
 fn red_proof_per_level_lightness_drift_breaks_the_gate() {
     let vc = ViewingConditions::srgb();
     let neutral = neutral_ramp(&vc, &LIGHT_TS);
-    let accent = derive_accent_surface_ramp(&neutral, 264.0, 0.15, &vc);
+    let accent = derive_accent_surface_ramp(&neutral, 264.0, &vc);
     let n = jps(&neutral);
-    let a = jps(&accent);
+    let a = accent_jps(&accent);
 
     // Предусловие: реальная рампа зелёная (splice обязан флипать green→red).
     assert!(
@@ -176,18 +191,16 @@ fn measure_step_mismatch_across_hues_and_themes() {
     ] {
         let neutral = neutral_ramp(&vc, ts);
         let n = jps(&neutral);
-        // 24 равноотстоящих оттенка × три субтильности.
-        for k in 0..24 {
-            let hue = k as f64 * 15.0;
-            for frac in [0.08, 0.20, 0.34] {
-                let accent = derive_accent_surface_ramp(&neutral, hue, frac, &vc);
-                let a = jps(&accent);
-                for i in 0..n.len() - 1 {
-                    let d = ((a[i + 1] - a[i]) - (n[i + 1] - n[i])).abs();
-                    if d > worst {
-                        worst = d;
-                        worst_ctx = format!("{label} hue={hue} frac={frac} step={i}");
-                    }
+        // 72 равноотстоящих оттенка, шаг 5° (хрома — стена гамута, не ручка).
+        for k in 0..72 {
+            let hue = k as f64 * 5.0;
+            let accent = derive_accent_surface_ramp(&neutral, hue, &vc);
+            let a = accent_jps(&accent);
+            for i in 0..n.len() - 1 {
+                let d = ((a[i + 1] - a[i]) - (n[i + 1] - n[i])).abs();
+                if d > worst {
+                    worst = d;
+                    worst_ctx = format!("{label} hue={hue} step={i}");
                 }
             }
         }

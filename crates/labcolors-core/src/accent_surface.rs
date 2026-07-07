@@ -13,17 +13,22 @@
 //! # Строгая агностичность (frozen northInvariant)
 //!
 //! Ноль labui-имён ролей, ноль хардкод-оттенков, ноль резерваций
-//! (сентимент→оттенок) в ядре: оттенок, нейтральная рампа, тема и субтильность
-//! тинта приходят ПАРАМЕТРАМИ. Порядок выходной рампы = порядок входной
-//! (иерархия Primary..Tertiary — семантика ПОТРЕБИТЕЛЯ, ядро лишь сохраняет
-//! порядок). Гейты `agnostic_cleanliness` это стерегут.
+//! (сентимент→оттенок) в ядре: оттенок, нейтральная рампа и тема приходят
+//! ПАРАМЕТРАМИ. Порядок выходной рампы = порядок входной (иерархия
+//! Primary..Tertiary — семантика ПОТРЕБИТЕЛЯ, ядро лишь сохраняет порядок).
+//! Гейты `agnostic_cleanliness` это стерегут.
 //!
-//! # Почему хрома ограничена стеной гамута
+//! # Хрома — ЕДИНЫЙ закон баланса, не второй рецепт (DRY)
 //!
-//! Тинт красится на ФИКСИРОВАННОЙ Oklab-светлоте нейтральной ступени с хромой
-//! `chroma_fraction × max_chroma(L, hue)`. Множитель ≤ 1 держит цвет В ГАМУТЕ,
-//! поэтому эмиссия не клипует каналы и светлота не «съезжает» вниз — ровно тот
-//! класс дефекта (клип у стены гамута двигает J'), который ловит property-тест.
+//! Тинт красится на ФИКСИРОВАННОЙ Oklab-светлоте нейтральной ступени; хрома —
+//! НЕ отдельная ручка-доля `доля × max_chroma`, а ЕДИНЫЙ агностичный
+//! примитив [`crate::accent_balance::accent_balanced`]: на этой светлоте берётся
+//! СТЕНА ГАМУТА (`max_chroma`). Субтильность фона — следствие
+//! ГЕОМЕТРИИ: у белого/чёрного гамут узок, поэтому near-white/near-black — не
+//! молчаливая доля, а честный итог закона; когда даже стена оставляет оттенок
+//! ниже перцептивного пола, примитив ставит [`BalancedAccent::hue_vanished`], а
+//! не гасит цвет тихо. Стена гамута В ГАМУТЕ по построению ⇒ эмиссия не клипует
+//! каналы и светлота не «съезжает» — тот класс дефекта, что ловит property-тест.
 //!
 //! # Материал — флаг, не ветка
 //!
@@ -32,9 +37,10 @@
 //! `(tint, α)` над базой темы ПОБАЙТНО равен солиду, значит J' — а с ним
 //! одноуровневость — наследуется алгеброй, а не переизобретается.
 
+use crate::accent_balance::{BalancedAccent, accent_balanced};
 use crate::alpha::resolve_alpha_analog_hex;
 use crate::lcs::LcsColor;
-use crate::scale::{jp_to_oklab_l, lcs_from_oklab_lch, max_chroma};
+use crate::scale::jp_to_oklab_l;
 use crate::spaces::vc::ViewingConditions;
 
 /// Материал выдачи ступени акцентного фона. Флаг представления — деривация
@@ -56,48 +62,40 @@ pub enum AccentSurface {
     Alpha { tint_hex: String, alpha: f64 },
 }
 
-/// Акцентный фон ОДНОЙ ступени: солид на светлоте `neutral_level` (та же J'),
-/// с акцентным `hue_deg` и хромой `chroma_fraction × стена гамута`.
+/// Акцентный фон ОДНОЙ ступени: баланс акцента `hue_deg` на перцептивной
+/// светлоте `neutral_level` (та же J') — через ЕДИНЫЙ примитив
+/// [`accent_balanced`] (стена гамута [`crate::scale::max_chroma`], НЕ доля).
 ///
 /// Зеркалит светлотную часть [`crate::accent::AccentCurve::at`], но оттенок
-/// ФИКСИРОВАН (фоны не дрейфуют оттенком, в отличие от акцентных лестниц), а
-/// хрома субтильна и всегда в гамуте (см. модульную доку).
-fn accent_level(
-    neutral_level: &LcsColor,
-    hue_deg: f64,
-    chroma_fraction: f64,
-    vc: &ViewingConditions,
-) -> LcsColor {
+/// ФИКСИРОВАН (фоны не дрейфуют оттенком, в отличие от акцентных лестниц).
+/// Возвращает [`BalancedAccent`], а не голый цвет: у краёв гамута оттенок может
+/// физически выродиться — вызывающий видит это флагом [`BalancedAccent::hue_vanished`]
+/// примитива, а не молчаливым near-white (см. модульную доку).
+fn accent_level(neutral_level: &LcsColor, hue_deg: f64, vc: &ViewingConditions) -> BalancedAccent {
     // Светлота наследуется из нейтральной ступени (одноуровневость по построению).
-    let jp = neutral_level.jp;
-    let l_ok = jp_to_oklab_l(jp, vc);
-
-    // Хрома ≤ стены гамута на этой светлоте ⇒ каналы не клипуются ⇒ светлота цела.
-    let c_max = max_chroma(l_ok, hue_deg);
-    let c_use = chroma_fraction.clamp(0.0, 1.0) * c_max;
-
-    // Отрисовка Oklab(L,C,h) → LcsColor — единый разделяемый источник (см. [`lcs_from_oklab_lch`]).
-    lcs_from_oklab_lch(l_ok, c_use, hue_deg, vc)
+    let l_ok = jp_to_oklab_l(neutral_level.jp, vc);
+    // ЕДИНЫЙ закон баланса: стена гамута на этой светлоте — без второго рецепта доли.
+    accent_balanced(l_ok, hue_deg, vc)
 }
 
-/// Вывести акцентную Background-рампу (солиды) из нейтральной surface-рампы.
+/// Вывести акцентную Background-рампу из нейтральной surface-рампы.
 ///
 /// Для каждой нейтральной ступени — акцентный фон на ТОЙ ЖЕ перцептивной
 /// светлоте; порядок сохраняется (иерархия входа). Пер-уровневые шаги светлоты
-/// выхода по построению равны шагам нейтрали — ЗАКОН ОДНОУРОВНЕВОСТИ.
+/// выхода по построению равны шагам нейтрали — ЗАКОН ОДНОУРОВНЕВОСТИ. Хрома —
+/// ЕДИНЫЙ закон баланса ([`accent_balanced`]), НЕ отдельная ручка; каждый
+/// [`BalancedAccent`] несёт свой `hue_vanished` (честность вырождения у краёв).
 ///
-/// `hue_deg` — акцентный оттенок (градусы, параметр); `chroma_fraction ∈ [0,1]`
-/// — субтильность тинта (доля стены гамута); `vc` — тема (srgb=светлая,
+/// `hue_deg` — акцентный оттенок (градусы, параметр); `vc` — тема (srgb=светлая,
 /// dim=тёмная).
 pub fn derive_accent_surface_ramp(
     neutral: &[LcsColor],
     hue_deg: f64,
-    chroma_fraction: f64,
     vc: &ViewingConditions,
-) -> Vec<LcsColor> {
+) -> Vec<BalancedAccent> {
     neutral
         .iter()
-        .map(|n| accent_level(n, hue_deg, chroma_fraction, vc))
+        .map(|n| accent_level(n, hue_deg, vc))
         .collect()
 }
 
@@ -157,11 +155,11 @@ mod tests {
     fn accent_ramp_inherits_neutral_lightness_steps() {
         let vc = ViewingConditions::srgb();
         let neutral = neutral_ramp(&vc);
-        let accent = derive_accent_surface_ramp(&neutral, 264.0, 0.15, &vc);
+        let accent = derive_accent_surface_ramp(&neutral, 264.0, &vc);
         assert_eq!(accent.len(), neutral.len());
         for i in 0..neutral.len() - 1 {
             let dn = neutral[i + 1].jp - neutral[i].jp;
-            let da = accent[i + 1].jp - accent[i].jp;
+            let da = accent[i + 1].color.jp - accent[i].color.jp;
             assert!(
                 (da - dn).abs() <= 1.0,
                 "шаг {i}: акцент Δ{da:.3} против нейтрали Δ{dn:.3}"
@@ -175,9 +173,9 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let neutral = neutral_ramp(&vc);
         for hue in [12.0, 140.0, 264.0] {
-            let accent = derive_accent_surface_ramp(&neutral, hue, 0.2, &vc);
+            let accent = derive_accent_surface_ramp(&neutral, hue, &vc);
             for c in &accent {
-                let rgb = crate::spaces::srgb::srgb_from_hex(&c.to_hex_with_vc(&vc)).unwrap();
+                let rgb = crate::spaces::srgb::srgb_from_hex(&c.color.to_hex_with_vc(&vc)).unwrap();
                 assert!(
                     rgb.iter().all(|&x| (-0.01..=1.01).contains(&x)),
                     "вне гамута на hue={hue}"
@@ -192,9 +190,10 @@ mod tests {
     fn alpha_material_composites_back_to_solid() {
         let vc = ViewingConditions::srgb();
         let neutral = neutral_ramp(&vc);
-        let accent = derive_accent_surface_ramp(&neutral, 264.0, 0.15, &vc);
+        let accent = derive_accent_surface_ramp(&neutral, 264.0, &vc);
         let base_hex = "#FFFFFF";
-        for color in &accent {
+        for surface in &accent {
+            let color = &surface.color;
             let solid_hex = color.to_hex_with_vc(&vc);
             let AccentSurface::Alpha { tint_hex, alpha } =
                 render_surface(color, SurfaceMaterial::Alpha, base_hex, 0.5, &vc).unwrap()
