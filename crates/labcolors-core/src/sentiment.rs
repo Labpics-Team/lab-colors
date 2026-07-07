@@ -179,7 +179,7 @@ impl Sentiment {
 /// построению: фикстура labui (config/fixture.rs) ссылается на эту константу
 /// напрямую, второго литерала не существует.
 #[cfg(test)]
-// SSOT-TRACKED — привязка выведена (натур. минимум = prototype − s_min = 45.528°), зазор до пола — калибровка (аудит 2026-07-03, уточнён 2026-07-04), см. docs/empirical-inventory.md.
+// SSOT-TRACKED — DECLARED-CALIBRATION (design-choice): консервативный категориальный пол между danger 28.66° и warning 68.61°, дремлющий для labui (прототип orange > пола). Прежняя «привязка выведена (натур. минимум = prototype − s_min = 45.528°)» относилась к brand-displacement, УБРАННОМУ Волной 1 — вывод снят.
 pub(crate) const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
 
 /// Fraction of the in-gamut maximum chroma every sentiment colour carries at its
