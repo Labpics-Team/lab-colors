@@ -5,6 +5,7 @@ pub mod alpha;
 pub mod cleanliness;
 pub mod config;
 pub mod glow;
+pub mod hash;
 pub mod ladder;
 pub mod lcs;
 pub mod lpc;
@@ -77,6 +78,7 @@ pub use glow::{
     GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_SUBTLE_DJ, GlowSolve, glow_layers_from_source,
     screen_layer_over_encoded, solve_screen_alpha_for_dj,
 };
+pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{
