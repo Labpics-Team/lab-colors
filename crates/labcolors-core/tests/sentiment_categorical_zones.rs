@@ -40,30 +40,22 @@ const ORANGE: &str = "#FFA100";
 const GREEN: &str = "#34C759";
 const BLUE: &str = "#3E87FF";
 
-/// Пер-темные бренды labui (Figma `Accent/Brand`): свет/тьма/light-ic/dark-ic.
-/// Под законом Волны 1 бренд оттенок сентимента НЕ смещает — цикл по брендам
-/// доказывает именно brand-независимость (результат одинаков для всех).
-const LABUI_BRANDS: [&str; 4] = ["#007AFF", "#4A8FFF", "#0040DD", "#409CFF"];
-
-/// ЦЕНТРАЛЬНОЕ требование владельца: Info отдыхает на своём синем якоре при
-/// брендовом синем во ВСЕХ 4 режимах labui — совпадение инфо↔бренд легитимно,
-/// не пурпур. Порог 2° >> квантование, << прежнего смещения ≈13–20°.
+/// ЦЕНТРАЛЬНОЕ требование владельца: Info отдыхает на своём синем якоре —
+/// совпадение инфо↔бренд легитимно, не пурпур. Brand-независимость гарантирована
+/// СИГНАТУРОЙ: `resolve_config_sentiment_solid` бренд не принимает вовсе (прежний
+/// форс сепарации снесён), поэтому «при любом бренде» — не цикл, а тип; фиктивный
+/// перебор брендов давал бы ложное ощущение brand-aware покрытия.
+/// Порог 2° >> квантование, << прежнего смещения ≈13–20°.
 #[test]
-fn info_rests_on_blue_anchor_under_the_blue_labui_brand_all_modes() {
+fn info_rests_on_its_blue_anchor_brand_is_not_an_input() {
     let proto = hue(BLUE); // 259.89°
-    for brand_hex in LABUI_BRANDS {
-        let brand_hue = hue(brand_hex);
-        // Новый закон: бренд игнорируется — Info отдыхает на синем прототипе во
-        // всех 4 режимах (порог 2° >> квантование).
-        let solid = resolve_config_sentiment_solid(BLUE, 1.0, None).expect("Info резолвится");
-        let got = hue(&solid);
-        assert!(
-            ang(got, proto) <= 2.0,
-            "Info при бренде {brand_hex} (hue {brand_hue:.2}°) обязан отдыхать на синем \
-             якоре {proto:.2}°, получено {got:.2}° (solid {solid}) — инфо-зона включает синий, \
-             совпадение с брендом не ошибка"
-        );
-    }
+    let solid = resolve_config_sentiment_solid(BLUE, 1.0, None).expect("Info резолвится");
+    let got = hue(&solid);
+    assert!(
+        ang(got, proto) <= 2.0,
+        "Info обязан отдыхать на синем якоре {proto:.2}°, получено {got:.2}° (solid {solid}) — \
+         инфо-зона включает синий, совпадение с брендом не ошибка"
+    );
 }
 
 /// КЛАСС инварианта (обобщение): для ЛЮБОГО сентимента, когда бренд совпадает с
@@ -88,20 +80,16 @@ fn every_sentiment_rests_when_brand_coincides_with_its_own_anchor() {
 }
 
 /// Warning остаётся в оранжевой зоне и НЕ сползает в красную (danger) — пол 45°
-/// как задокументированное исключение сохраняется при любом бренде.
+/// как задокументированное исключение. Бренд в резолв не входит (не параметр
+/// `resolve_config_sentiment_solid`), поэтому одного вызова достаточно — перебор
+/// «всех брендов» повторял бы идентичный ассерт 360 раз.
 #[test]
-fn warning_stays_in_the_orange_zone_above_the_floor_all_brands() {
-    let mut brand = 0.0_f64;
-    while brand < 360.0 {
-        // Бренд в новом законе игнорируется; цикл держит инвариант «Warning над
-        // полом 45°» независимым от него.
-        let solid =
-            resolve_config_sentiment_solid(ORANGE, 1.0, Some(45.0)).expect("Warning резолвится");
-        let got = hue(&solid);
-        assert!(
-            got >= 45.0 - 1e-6,
-            "Warning оттенок {got:.2}° при бренде {brand:.1}° ниже пола 45° (сполз в красную зону)"
-        );
-        brand += 1.0;
-    }
+fn warning_stays_in_the_orange_zone_above_the_documented_floor() {
+    let solid =
+        resolve_config_sentiment_solid(ORANGE, 1.0, Some(45.0)).expect("Warning резолвится");
+    let got = hue(&solid);
+    assert!(
+        got >= 45.0 - 1e-6,
+        "Warning оттенок {got:.2}° ниже пола 45° (сполз в красную зону)"
+    );
 }
