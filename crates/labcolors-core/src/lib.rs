@@ -1,6 +1,7 @@
 pub(crate) mod spaces;
 
 pub(crate) mod accent;
+pub mod accent_surface;
 pub mod alpha;
 pub mod cleanliness;
 pub mod config;
@@ -62,6 +63,9 @@ mod reference_vectors_deep;
 #[cfg(test)]
 mod accent_golden_tests;
 
+pub use accent_surface::{
+    AccentSurface, SurfaceMaterial, derive_accent_surface_ramp, render_surface,
+};
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
     DefectContext, Theme, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
