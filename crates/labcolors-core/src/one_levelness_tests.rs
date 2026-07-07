@@ -190,3 +190,69 @@ fn red_proof_ladder_recipe_breaks_one_levelness() {
         violations.join("\n")
     );
 }
+
+/// Closed-form differential (Класс В, Фаулер): УНИФИЦИРОВАННАЯ деривация
+/// акцентного **ФОНА** берёт СТЕНУ ГАМУТА на КАЖДОМ интерьерном уровне светлоты —
+/// не долю. Для 9 уровней × 72 тона (шаг 5°) хрома, которую вернул путь
+/// `derive_accent_surface_ramp → accent_balanced`, РАВНА `max_chroma(L, hue)`, а
+/// эмитированный цвет ступени РАВЕН выходу примитива баланса на той же `(L, hue)`.
+///
+/// Это DRY-контракт слайса: второй рецепт `chroma_fraction × max_chroma` СНЯТ,
+/// и деривация фона теперь ездит на едином агностичном примитиве. Любой множитель
+/// `< 1` (например мутация центра примитива к `0.5 × max_chroma`) немедленно
+/// роняет равенство — RED-proof кусается.
+///
+/// `EPS = 1e-9` (провенанс): `c_ok` ступени и эталон `max_chroma(L, hue)` зовут
+/// ОДНУ функцию стены гамута (accent_balanced c_ok = max_chroma по построению),
+/// поэтому истинное расхождение либо строго ноль, либо макроскопично (доля стены);
+/// «шума в младших битах» тут физически нет — обе величины из единой геометрии.
+#[test]
+fn accent_surface_derivation_rides_gamut_wall_closed_form() {
+    use crate::accent_balance::accent_balanced;
+    use crate::derive_accent_surface_ramp;
+    use crate::neutral::{CurveParams, NeutralCurve};
+    use crate::scale::{jp_to_oklab_l, max_chroma};
+
+    const EPS: f64 = 1e-9;
+    // 9 интерьерных уровней светлоты (нейтральный скелет из 9 ступеней).
+    const TS: [f64; 9] = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90];
+
+    for theme in themes() {
+        let curve = NeutralCurve::with_vc(
+            "#FFFFFF",
+            "#787880",
+            "#101012",
+            &CurveParams::default(),
+            &theme.vc,
+        )
+        .expect("нейтральная кривая строится");
+        let neutral: Vec<_> = TS.iter().map(|&t| curve.at(t)).collect();
+
+        for h_step in 0..72 {
+            let hue = f64::from(h_step) * 5.0;
+            let ramp = derive_accent_surface_ramp(&neutral, hue, &theme.vc);
+            assert_eq!(ramp.len(), neutral.len());
+            for (lvl, surface) in ramp.iter().enumerate() {
+                // Светлота уровня наследуется из нейтрали (одноуровневость).
+                let l_ok = jp_to_oklab_l(neutral[lvl].jp, &theme.vc);
+                let wall = max_chroma(l_ok, hue);
+                // ЕДИНЫЙ баланс: хрома ступени == стена гамута (не доля).
+                assert!(
+                    (surface.c_ok - wall).abs() < EPS,
+                    "{}: L={l_ok:.4} h={hue}° уровень {lvl}: c_ok={} != стена {wall} \
+                     (рецидив доли chroma_fraction?)",
+                    theme.name,
+                    surface.c_ok
+                );
+                // Провенанс DRY: ступень фона — РОВНО выход accent_balanced(L, hue).
+                assert_eq!(
+                    surface,
+                    &accent_balanced(l_ok, hue, &theme.vc),
+                    "{}: L={l_ok:.4} h={hue}° уровень {lvl}: surface-ступень обязана \
+                     быть выходом единого примитива баланса (DRY)",
+                    theme.name
+                );
+            }
+        }
+    }
+}
