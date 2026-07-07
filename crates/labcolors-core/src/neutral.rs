@@ -5,7 +5,14 @@ use crate::spaces::vc::ViewingConditions;
 /// шумный `h_ok` замещается базовым оттенком. CAM16 даёт ненулевой M' даже для
 /// номинально ахроматических стимулов (mp ≈ 1.5 для белого, ≈ 2.3 для near-black),
 /// поэтому 5.0 ловит модельный шум, сохраняя подлинно хроматические якоря.
-// SSOT-TRACKED — порог ахроматичности M' (модельный шум CAM16), см. docs/empirical-inventory.md.
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: порог сидит в ШИРОКОМ пустом зазоре
+/// между потолком ахроматического `M'`-шума серых и полом хромы подлинно
+/// цветных якорей; партиция achromatic↔chromatic инвариантна для ЛЮБОГО θ в
+/// этом зазоре (`achromatic_threshold_sits_in_empty_noise_to_chroma_gap`).
+/// Экспозиция — доля sRGB-гаммы, где точное значение флипает партицию, —
+/// **1.99%** (`exposure_achromatic_mp_threshold`). Значение не меняется.
+// SSOT-TRACKED — порог ахроматичности M' (модельный шум CAM16), терминал (c) interval-insensitive (exposure 1.99%), см. docs/empirical-inventory.md.
 const ACHROMATIC_MP_THRESHOLD: f64 = 5.0;
 
 /// Множитель опорной хромы для нормировки чистоты оттенка: `mp_ref = 1.5 × M'`

@@ -175,11 +175,22 @@ const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 /// Квант-guard над модельным полом [`MODEL_LC_FLOOR`](crate::lpc::MODEL_LC_FLOOR):
 /// зазор `DECORATIVE_FLOOR_MIN − MODEL_LC_FLOOR`, держащий декоративный пол строго
 /// выше 7.3, чтобы решатель не садился на порог клипа и не возвращал нулевой
-/// контраст (issue #44). (c) EMPIRICAL: скан-тест
-/// `lpc::no_pair_emits_contrast_below_model_floor` печатает фактический
-/// минимальный ненулевой |Lc| и максимальный скачок |Lc| одного 8-бит шага у
-/// клипа; guard выбран покрыть этот шаг. Sensitivity — docs/empirical-inventory.md.
-// SSOT-TRACKED — квант-guard декоративного пола (issue #44), см. docs/empirical-inventory.md.
+/// контраст (issue #44).
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: `QUANT_GUARD` НЕ используется в
+/// продакшене независимо — единственная величина, которую видит решатель, это
+/// байт-идентичный литерал [`DECORATIVE_FLOOR_MIN`] (7.5); guard существует
+/// только как провенанс-разложение этого литерала на DERIVED-член (7.3) и
+/// задекларированный запас, пиннится компайл-тайм-проверкой и локом
+/// `decorative_floor_is_model_floor_plus_guard`. Скан-тест
+/// `lpc::no_pair_emits_contrast_below_model_floor` показывает: фактический
+/// минимальный ненулевой |Lc| = 7.3005 — сидит практически НА модельном полу
+/// 7.3, а не у номинальной цели 7.5, то есть точная магнитуда guard'а (пока он
+/// положителен и цель остаётся достижимой в пределах `QUANT_BUDGET` = 1.0) не
+/// меняет ни одного реального эмитируемого контраста. Ре-аудит
+/// `science/reclassify-e-buckets` 2026-07-07 — реестр
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — квант-guard декоративного пола (issue #44), терминал (c) interval-insensitive, см. docs/empirical-inventory.md.
 const QUANT_GUARD: f64 = 0.2;
 
 // Компайл-тайм пиннинг деривации: DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR +
@@ -802,13 +813,34 @@ pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 /// берёт максимум, который даёт гамут, и честно допускает падение к этому
 /// порогу на самых краях (почти-чёрный / почти-белый), где даже собственный
 /// `M'` референса падает до ~2.3–3.0.
-// SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M'.
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: порог сидит вплотную ПОД измеренным
+/// потолком ахроматического `M'`-шума серых (максимум ≈1.53 у белого,
+/// `tint_floor_tracks_achromatic_mp_noise_ceiling`), а доля sRGB-гаммы, где
+/// точное значение решает «ощущаемый тон / мёртвая серость», — **0.07%**
+/// (`exposure_tint_perceptible_mp_floor`). Ниже порога классификация выхода
+/// провизорно неизменна по всему практическому интервалу — сильнее «выбор
+/// дизайна», ре-аудит `science/reclassify-e-buckets` 2026-07-07, реестр
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M', терминал (c) interval-insensitive (exposure 0.07%), см. docs/empirical-inventory.md.
 const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
 /// canonical hue. The undertone may drift inside a blue-violet band; it may not
 /// wander into unrelated quadrants (red, cyan), so the search is bounded.
-// SSOT-TRACKED — hue search half-window (degrees).
+///
+/// Терминал **(e) DESIGN-CHOICE** (НЕ (c), несмотря на внешнее сходство с
+/// [`crate::scale::HUE_SEARCH_HALF_WINDOW`]): замер
+/// `cusp_window_is_near_measured_gamut_drift` показывает, что полный
+/// геометрический дрейф каспа гамута (≈42.5°) СТРОГО ПРЕВЫШАЕТ окно (40°) —
+/// окно намеренно клипует чуть ВНУТРИ полного дрейфа (движок держит оттенок
+/// у канонического, не гонится за магента-каспом). Это доказанно СВЯЗЫВАЮЩИЙ
+/// кап (в отличие от `HUE_SEARCH_HALF_WINDOW`, где интерьерный оптимум НИКОГДА
+/// не касается ребра окна ни на одном из 43 хроматических якорей) — точное
+/// значение окна МЕНЯЕТ, на сколько градусов оттенку позволено сместиться на
+/// экстремумах светлоты, поэтому доказательства интервал-нечувствительности
+/// нет: честный терминал — задекларированный дизайн-кап, не (c).
+// SSOT-TRACKED — hue search half-window (degrees), терминал (e) design-choice (намеренный кап, не interval-insensitive), см. docs/empirical-inventory.md.
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
 /// The chroma policy a role table carries.
@@ -2917,7 +2949,15 @@ fn enforce_named_text_hierarchy(
 /// so a demotion may need several grid steps to clear it — and when even the
 /// laxest legal target cannot, the junior is set equal to its senior instead.
 /// The 0.5 threshold separates real visual distinction from float noise.
-// SSOT-TRACKED — minimum Lc separation for visual distinction vs float noise.
+///
+/// Терминал **(e) DESIGN-CHOICE** (НЕ (c)): `STRICT_STEP` — прямое слагаемое
+/// цели демоции (`target = senior_mag − STRICT_STEP`), поэтому его точное
+/// значение НЕПРЕРЫВНО и напрямую сдвигает эмитируемый цвет junior-роли —
+/// доказательства интервал-нечувствительности нет. Лок
+/// `strict_step_sits_just_above_typical_grid_step` лишь характеризует, что
+/// 0.5 сидит чуть выше типичного (медианного ≈0.44) Lc-шага 8-бит серой
+/// сетки — обоснование ГРАНИЦЫ квантования, не доказательство immaterial-сти.
+// SSOT-TRACKED — minimum Lc separation for visual distinction vs float noise, терминал (e) design-choice (не interval-insensitive — прямо параметризует выход), см. docs/empirical-inventory.md.
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still

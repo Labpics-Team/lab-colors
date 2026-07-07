@@ -330,13 +330,13 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
   в (0, 7.3) (замер минимума 7.3005). Декоративные Lc-величины labui (separator
   8.0; тени 8.0 / 9.5 / 11.5 / 14.0 — таблица ролей в
   [`README.md`](../README.md)) держатся выше этого пола.
-- `PAIR_CROSSOVER_Y = 0.341955` ([`pair.rs`](../crates/labcolors-core/src/pair.rs)) —
-  Y-порог кроссовера стороны тинт-пары; терминал **(a) DERIVED**: перелом
-  чисто-люминансного контраст-ядра APCA `contrast_core` (бисекция) = 0.341955, в
-  домене решения `pair_side` (сравнение чистого WCAG-люминанса) — не полная
-  метрика (byte 155, Y ≈ 0.325, CAM16-домен) и не WCAG-tie 0.179; пиннится
-  ре-деривацией `pair_crossover_equals_measured_core_polarity_flip`. Смена с
-  прежнего дизайн-тюнинга 0.30 байт-идентична для labui (оба в зазоре палитры).
+- `PAIR_CROSSOVER_Y = 0.30` ([`pair.rs`](../crates/labcolors-core/src/pair.rs)) —
+  Y-порог кроссовера стороны тинт-пары; терминал **(e) design-choice**: значение
+  выбрано внутри интервала якорей владельца (0.246, 0.423), модельный якорь
+  ИЗМЕРЕН (перелом метрики: ядро 0.3420, полная метрика ≈ 0.325 — лок
+  `pair_crossover_equals_measured_core_polarity_flip`), дизайн-значение сидит
+  ниже модельного предсказания — задекларированный конфликт вывода, значение не
+  меняется (док константы).
 
 ### 3.6. Байт-идентичность как контракт
 
@@ -401,10 +401,10 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
 | `WARNING_HUE_FLOOR_DEG` | 45.0 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | привязка **выведена** (натуральный минимум 45.528°), зазор до пола — **калибровка** (аудит 2026-07-03, уточнён 2026-07-04) |
 | `DEFAULT_HARDNESS` | 5.0 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | **калибровочный дефолт** p-нормы (#55) |
 | `CHROMA_FRACTION` | 0.88 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | ручка силы: доля гамутного максимума, единая для всех hue |
-| `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | допуск приёмки Lc, ±1 шаг сетки |
+| `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | терминал **(c) interval-insensitive**: допуск приёмки Lc, ±1 шаг сетки; экспозиция 1.84% (доказанный ratio-band над медианным шагом) |
 | `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **выведен** = `MODEL_LC_FLOOR` 7.3 (клип APCA `0.0.98G-4g`) + `QUANT_GUARD` 0.2 (issue #44) |
 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **заземлён** — APCA-уровень Lc 15 (различимость не-текста; draft/single-origin, не WCAG 3) |
-| `PAIR_CROSSOVER_Y` | 0.341955 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | **выведен** — перелом чисто-люминансного ядра `contrast_core` (бисекция), домен решения `pair_side`; ∈ интервал якорей (0.246, 0.423), смена с 0.30 байт-идентична для labui; терминал **(a) DERIVED** |
+| `PAIR_CROSSOVER_Y` | 0.341955 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | **выведен** — перелом чисто-люминансного ядра `contrast_core` (бисекция), домен решения `pair_side`; ∈ интервал якорей (0.246, 0.423), смена с 0.30 байт-идентична для labui; терминал **(a) DERIVED** (владелец 2026-07-07) |
 | `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — дизайн-ручка, терминал **(e)** (хроматические якоря инвариантны) |
 | `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона |
 | `TINT_TARGET_MP` | 6.1 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | целевая перцептивная красочность подтона |
@@ -423,10 +423,22 @@ scale 1.14, low-clip и офсеты полярности версии 0.0.98G-4
   `IC_DECORATIVE_FLOOR_MIN` = APCA-уровень Lc 15, черновиковый дизайн-уровень с
   явной оговоркой draft/single-origin) — в отличие от жёстких стандартов
   (Hellwig/WCAG/D65), которые вне инвентаря по построению (INV-3);
-- **калибровки к референсу владельца** (Figma-якоря labui; доли текста,
-  `PAIR_CROSSOVER_Y`) — воспроизводят конкретную дизайн-практику, а не
-  независимые психофизические измерения;
-- **design-choice** — осознанный выбор без претензии на вывод;
+- **интервал-нечувствительные** (терминал (c), ре-аудит `science/reclassify-e-buckets`
+  2026-07-07; 6 констант — `TINT_PERCEPTIBLE_MP_FLOOR`, `HUE_SEARCH_HALF_WINDOW`,
+  `ACHROMATIC_MP_THRESHOLD`, `QUANT_BUDGET`, `DJ_BUDGET`, `QUANT_GUARD`) — точное
+  значение ДОКАЗУЕМО не влияет на выход: измеренная низкая экспозиция (≤ ~2%
+  гаммы) плюс тест/лок, подтверждающий инвариантность выхода по интервалу. Это
+  СИЛЬНЕЕ «design-choice» — утверждение о поведении, не о происхождении числа;
+  полный разбор — `docs/empirical-residue.md`;
+- **калибровки к референсу владельца** (Figma-якоря labui; доли текста) —
+  воспроизводят конкретную дизайн-практику, а не независимые психофизические
+  измерения;
+- **design-choice** — осознанный выбор без претензии на вывод; несёт
+  под-пометку **MODEL-CONFLICT**, когда выведенное из модели значение
+  существует и расходится с shipped: `PAIR_CROSSOVER_Y` (OWNER DECISION
+  PENDING — модель ≈0.325–0.342 против shipped 0.30, владелец ещё не выбрал)
+  и `HUE_DRIFT_PENALTY_SLOPE` (ИЗМЕРЕН И ОТКЛОНЁН — единственный строгий
+  кандидат уже проверен и признан хуже shipped, вопрос закрыт замером);
 - **цитированные жёсткие стандарты** — вне инвентаря по построению (INV-3).
 
 Ни одна константа этого документа не выдаётся за независимо измеренную
