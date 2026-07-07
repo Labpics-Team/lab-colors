@@ -34,10 +34,7 @@
 
 use crate::alpha::resolve_alpha_analog_hex;
 use crate::lcs::LcsColor;
-use crate::scale::{jp_to_oklab_l, max_chroma};
-use crate::spaces::cam16;
-use crate::spaces::oklab::oklab_to_srgb_linear;
-use crate::spaces::srgb::srgb_to_xyz;
+use crate::scale::{jp_to_oklab_l, lcs_from_oklab_lch, max_chroma};
 use crate::spaces::vc::ViewingConditions;
 
 /// Материал выдачи ступени акцентного фона. Флаг представления — деривация
@@ -79,32 +76,8 @@ fn accent_level(
     let c_max = max_chroma(l_ok, hue_deg);
     let c_use = chroma_fraction.clamp(0.0, 1.0) * c_max;
 
-    let h_rad = hue_deg.to_radians();
-    let a_ok = c_use * h_rad.cos();
-    let b_ok = c_use * h_rad.sin();
-
-    let rgb = oklab_to_srgb_linear([l_ok, a_ok, b_ok]);
-    // Кламп — страховка от машинного шума у самой стены; в гамуте это no-op.
-    let rgb_clamped = [
-        rgb[0].clamp(0.0, 1.0),
-        rgb[1].clamp(0.0, 1.0),
-        rgb[2].clamp(0.0, 1.0),
-    ];
-
-    let xyz = srgb_to_xyz(rgb_clamped);
-    let h_ok = b_ok.atan2(a_ok).to_degrees().rem_euclid(360.0);
-
-    let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(xyz, vc);
-    // CAM16-UCS rescale через единый источник (#19/#60) — константы не дублируем.
-    let jp_actual = cam16::ucs_j(j);
-    let mp = cam16::ucs_m(m);
-    let s = if jp_actual + 1.0 > 1e-9 {
-        mp / (jp_actual + 1.0)
-    } else {
-        0.0
-    };
-
-    LcsColor::new(jp_actual, h_ok, s.max(0.0), h_cam)
+    // Отрисовка Oklab(L,C,h) → LcsColor — единый разделяемый источник (см. [`lcs_from_oklab_lch`]).
+    lcs_from_oklab_lch(l_ok, c_use, hue_deg, vc)
 }
 
 /// Вывести акцентную Background-рампу (солиды) из нейтральной surface-рампы.

@@ -404,6 +404,47 @@ pub(crate) fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
     srgb_linear_to_oklab([y, y, y])[0]
 }
 
+/// Render an Oklab `(L, C, hue)` point to an [`LcsColor`] under viewing
+/// conditions `vc` — the SINGLE source of the `Oklab → linear sRGB → XYZ →
+/// CAM16-UCS` assembly the accent-surface and accent-balance primitives share
+/// (no second copy of the rescale chain).
+///
+/// The caller guarantees `(l_ok, c_ok)` is in gamut (e.g. `c_ok ≤`
+/// [`max_chroma`]); the per-channel `clamp` is only machine-noise insurance at
+/// the gamut wall and a no-op strictly inside it. VC enters only the CAM16
+/// projection, exactly as the accent curve's emission does.
+pub(crate) fn lcs_from_oklab_lch(
+    l_ok: f64,
+    c_ok: f64,
+    hue_deg: f64,
+    vc: &ViewingConditions,
+) -> LcsColor {
+    let h_rad = hue_deg.to_radians();
+    let a_ok = c_ok * h_rad.cos();
+    let b_ok = c_ok * h_rad.sin();
+
+    let rgb = oklab_to_srgb_linear([l_ok, a_ok, b_ok]);
+    let rgb_clamped = [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+    ];
+
+    let xyz = srgb_to_xyz(rgb_clamped);
+    let h_ok = b_ok.atan2(a_ok).to_degrees().rem_euclid(360.0);
+
+    let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(xyz, vc);
+    // CAM16-UCS rescale через единый источник (#19/#60) — константы не дублируем.
+    let jp_actual = cam16::ucs_j(j);
+    let mp = cam16::ucs_m(m);
+    let s = if jp_actual + 1.0 > 1e-9 {
+        mp / (jp_actual + 1.0)
+    } else {
+        0.0
+    };
+    LcsColor::new(jp_actual, h_ok, s.max(0.0), h_cam)
+}
+
 /// The 64-step bisection that [`jp_to_oklab_l`] replaced, kept as the reference
 /// oracle the analytic inverse is proven against on a dense J' grid (tests) and
 /// timed against (the `jp_inv` Criterion bench). Reached only through
