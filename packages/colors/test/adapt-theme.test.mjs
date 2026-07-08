@@ -647,11 +647,21 @@ test("batch path is byte-identical to the fallback loop: same worstIdx, re-solve
 });
 
 test("batch engine still uses the per-sample path for a single-sample backdrop", () => {
+  let sample = "#FFFFFF";
   const colors = fakeColorsBatch(oneRole("#000000", 100));
-  const h = batchHarness(colors, { background: () => ["#FFFFFF"] });
+  const h = batchHarness(colors, { background: () => [sample] });
+  const perAtStart = colors.perSampleCalls();
   const multiAtStart = colors.multiCalls();
   colors.setRecheckLc([95]);
+  // Change the (still single-sample) backdrop so the tick actually rechecks
+  // (key !== lastKey) instead of early-returning — otherwise recheckSamples is
+  // never entered and the counter assertions below are vacuous.
+  sample = "#202020";
   h.ctrl.tick();
+  assert.ok(
+    colors.perSampleCalls() > perAtStart,
+    "a single-sample recheck must run through the per-sample recheckContrast path",
+  );
   assert.equal(
     colors.multiCalls(),
     multiAtStart,
