@@ -1051,7 +1051,7 @@ mod whittle_crispening_metric {
     /// должна была бы принять) и проверяет, что сравнение с shipped-значением
     /// (не с фитом) кричит — т.е. тест не тавтологичен самому себе.
     #[test]
-    fn shipped_gamma_light_pin_is_load_bearing() {
+    fn shipped_gamma_pins_are_load_bearing() {
         assert_eq!(
             CurveParams::default().gamma_light,
             1.75,
