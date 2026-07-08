@@ -21,6 +21,11 @@ Lab Colors решает это через собственное перцепт�
 ## Пайплайн
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'lineColor':'#787880','textColor':'#0A0A10',
+  'edgeLabelBackground':'#F7F7FF',
+  'clusterBkg':'transparent','clusterBorder':'#787880'
+}}}%%
 graph TD
     HEX["hex (#007AFF)"] --> SRGB["sRGB"]
     SRGB --> FORK{"параллельно"}
@@ -34,9 +39,16 @@ graph TD
     CURVE --> PAL["палитра — непрерывный градиент"]
     PAL --> LPC["LPC — контраст (APCA-кривая + HK)"]
     LPC --> SEM["семантика — именованные роли"]
+
+    classDef node fill:#F7F7FF,stroke:#787880,color:#0A0A10
+    classDef accent fill:#006FF3,stroke:#787880,color:#FCFDFF
+    classDef dark fill:#101012,stroke:#787880,color:#F2F2FC
+    class HEX,SRGB,FORK,J,M,HOK,CURVE,PAL node
+    class LCS,LPC accent
+    class SEM dark
 ```
 
-Диаграммы намеренно без захардкоженных заливок: GitHub красит mermaid темо-зависимо, и схема остаётся читаемой в обеих темах.
+Схемы стилизованы фиксированными заливками палитры проекта с обводкой `#787880`: тема GitHub на них не влияет, каждый узел отделён от любого фона рамкой (проверено рендером на `#FFFFFF` и `#0D1117`).
 
 ## LCS — Labpics Color Space
 
@@ -95,9 +107,20 @@ assert!((grey_dim.jp - 59.23).abs() < 0.05);   // J' ≈ 59.2
 Три якоря (светлый, базовый, тёмный) соединяются непрерывной кривой в пространстве J'. Это не набор шагов, а функция `at(t)` при `t` от 0 до 1; палитра — непрерывный градиент, `sample_hex(13)` просто выбирает из него 13 точек.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'lineColor':'#787880','textColor':'#0A0A10',
+  'edgeLabelBackground':'#F7F7FF',
+  'clusterBkg':'transparent','clusterBorder':'#787880'
+}}}%%
 graph LR
     L["light: #FFFFFF, J' = 100"] -->|"γ_light = 1.75"| B["base: #787880, J' ≈ 53.5"]
     B -->|"γ_dark = 1.5"| D["dark: #101012, J' ≈ 9"]
+
+    classDef node fill:#F7F7FF,stroke:#787880,color:#0A0A10
+    classDef accent fill:#006FF3,stroke:#787880,color:#FCFDFF
+    classDef dark fill:#101012,stroke:#787880,color:#F2F2FC
+    class L,B node
+    class D dark
 ```
 
 **Степенная интерполяция.** J' идёт не линейно, а через `u^γ` — больше шагов в середине шкалы (где глаз различает лучше) и меньше на краях.
@@ -117,6 +140,11 @@ purity = (mp / mp_ref)^0.6
 LPC = опубликованная контрастная кривая APCA + коррекция Гельмгольца-Кольрауша. Кривая не меняется — меняется luminance, который в неё подаётся.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'lineColor':'#787880','textColor':'#0A0A10',
+  'edgeLabelBackground':'#F7F7FF',
+  'clusterBkg':'transparent','clusterBorder':'#787880'
+}}}%%
 graph LR
     FG["fg hex"] --> C16a["CIECAM16: J, M, h"]
     BG["bg hex"] --> C16b["CIECAM16: J, M, h"]
@@ -127,6 +155,12 @@ graph LR
     BIN1 --> CURVE2["контрастная кривая: (Y_bg^0.56 − Y_fg^0.57) × 1.14, офсет 0.027, low-clip"]
     BIN2 --> CURVE2
     CURVE2 --> Lc["Lc от −107.9 до +106.0"]
+
+    classDef node fill:#F7F7FF,stroke:#787880,color:#0A0A10
+    classDef accent fill:#006FF3,stroke:#787880,color:#FCFDFF
+    classDef dark fill:#101012,stroke:#787880,color:#F2F2FC
+    class FG,BG,C16a,C16b,HK1,HK2,BIN1,BIN2,CURVE2 node
+    class Lc accent
 ```
 
 1. Оба цвета переводятся в CIECAM16 (J, M, h).
@@ -236,10 +270,21 @@ assert!(set.iter().any(|(name, r)| name == "label-primary" && r.solved().is_some
 Акцентный цвет (например `#007AFF`) протягивается через нейтральную шкалу:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'lineColor':'#787880','textColor':'#0A0A10',
+  'edgeLabelBackground':'#F7F7FF',
+  'clusterBkg':'transparent','clusterBorder':'#787880'
+}}}%%
 graph TD
     NC["NeutralCurve"] -->|"J' на каждом шаге"| AC["AccentCurve"]
     CH["канонический hue (#007AFF)"] -->|"фиксация оттенка"| AC
     AC --> OUT["та же лестница светлоты, оттенок акцента, насыщенность — доля от максимальной хромы"]
+
+    classDef node fill:#F7F7FF,stroke:#787880,color:#0A0A10
+    classDef accent fill:#006FF3,stroke:#787880,color:#FCFDFF
+    classDef dark fill:#101012,stroke:#787880,color:#F2F2FC
+    class NC,CH,OUT node
+    class AC accent
 ```
 
 На каждом шаге J' берётся из нейтральной шкалы; для этой светлоты и канонического hue ищется максимальная хрома, достижимая в гамуте sRGB, и умножается на долю насыщенности исходного цвета от максимума.
