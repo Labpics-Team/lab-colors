@@ -286,8 +286,8 @@ impl SentimentCurve {
         LcsColor::from_hex_with_vc(&hex, vc).unwrap_or_else(|_| self.neutral.at(t))
     }
 
-    /// `n` hex-строк рампы напрямую через [`hex_at`](Self::hex_at) — НЕ через
-    /// трейтовый [`ColorCurve::sample_hex`], который прогнал бы каждый цвет
+    /// `n` hex-строк рампы напрямую через `hex_at` — НЕ через
+    /// трейтовый `ColorCurve::sample_hex`, который прогнал бы каждый цвет
     /// лишним hex→[`LcsColor`]→hex кругом (`at` уже строится из hex) и мог бы
     /// дрейфнуть на ±1 LSB. Прямой путь держит вывод байт-идентичным
     /// (`r3_byte_identity_tests`), поэтому этот inherent-метод сознательно
