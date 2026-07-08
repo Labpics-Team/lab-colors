@@ -356,21 +356,19 @@ impl LabColors {
             .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
     }
 
-    /// PROTOTYPE — NOT part of the public API (unlisted, `_`-prefixed; may change
-    /// or be removed without notice). Recheck one foreground set against MANY
-    /// background samples in a single call. The reactive controller's worst-case
-    /// loop rechecks the same foregrounds against every sample of a varying
-    /// backdrop; the dominant per-foreground CAM16 forward is background-
+    /// Recheck one foreground set against MANY background samples in a single
+    /// call. The reactive controller's worst-case loop rechecks the same
+    /// foregrounds against every sample of a varying backdrop (gradient / image /
+    /// bg-blur / glass); the dominant per-foreground CAM16 forward is background-
     /// independent, so this shares it across all samples instead of recomputing it
-    /// per `recheckContrast` call.
+    /// per `recheckContrast` call — a measured ~2.6x on the multi-sample recheck.
     ///
     /// Returns a flat, background-major `Float64Array`: sample `s`, foreground `i`
     /// is at `(s * fgHexes.length + i) * 2` (`lc`) and `+1` (`wcagRatio`). The
     /// values are byte-identical to calling `recheckContrast(bgHexes[s], fgHexes,
-    /// theme)` for each `s`. Wiring the runtime to it is an OWNER decision (it
-    /// changes the controller↔engine call shape); it is measured, not adopted.
-    #[wasm_bindgen(js_name = _recheckContrastMulti)]
-    pub fn _recheck_contrast_multi(
+    /// theme)` for each `s`.
+    #[wasm_bindgen(js_name = recheckContrastMulti)]
+    pub fn recheck_contrast_multi(
         &self,
         bg_hexes: Vec<String>,
         fg_hexes: Vec<String>,

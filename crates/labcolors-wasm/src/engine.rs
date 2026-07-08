@@ -213,11 +213,12 @@ impl Engine {
         Ok(out)
     }
 
-    /// PROTOTYPE (owner decision): recheck one foreground set against MANY
-    /// background samples in a single call, sharing each foreground's CAM16
-    /// forward across all samples. Byte-identical, pair for pair, to N separate
-    /// [`recheck`](Self::recheck) calls; see [`recheck_against_multi`]. Not wired
-    /// to any runtime — measured only.
+    /// Recheck one foreground set against MANY background samples in a single
+    /// call, sharing each foreground's CAM16 forward across all samples.
+    /// Byte-identical, pair for pair, to N separate [`recheck`](Self::recheck)
+    /// calls; see [`recheck_against_multi`]. Exported to JS as
+    /// `recheckContrastMulti` and used by the `adaptTheme` controller's
+    /// multi-sample worst-case backdrop loop.
     pub fn recheck_multi(
         &self,
         bg_hexes: &[String],

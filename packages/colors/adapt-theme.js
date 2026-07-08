@@ -215,16 +215,33 @@ export function adaptTheme(element, options) {
   // frame and previously rebuilt this identical array from `roles` each time.
   let fgsCache = [];
 
+  // Batch path (many samples): collapse the shared per-foreground CAM16 forward
+  // across every sample into ONE engine call. `recheckContrastMulti` returns a
+  // background-major flat buffer where sample `s`, foreground `i` sits at
+  // `(s * stride + i) * 2` (Lc) — the batched analogue of the per-sample loop's
+  // `flat[2 * i]`. Byte-identical to N `recheckContrast` calls (locked by the
+  // wasm boundary parity test), so the worst-margin / breach / worstIdx decision
+  // below is bit-for-bit the same as the fallback loop.
+  const canBatch =
+    typeof colors.recheckContrastMulti === "function";
+
   const recheckSamples = (samples) => {
     let breached = false;
     let worstIdx = 0;
     let worstMargin = Infinity;
+    const stride = fgsCache.length;
+    const batch =
+      canBatch && samples.length > 1
+        ? colors.recheckContrastMulti(samples, fgsCache, theme)
+        : null;
     for (let s = 0; s < samples.length; s++) {
-      const flat = colors.recheckContrast(samples[s], fgsCache, theme);
+      // Per-sample flat buffer, or a background-major window into the batch one.
+      const flat = batch ? null : colors.recheckContrast(samples[s], fgsCache, theme);
+      const base = s * stride;
       let sampleMargin = Infinity;
       for (let i = 0; i < roles.length; i++) {
         const want = Math.abs(roles[i].lc) * (1 - dropFraction);
-        const lcNow = Math.abs(flat[2 * i]);
+        const lcNow = Math.abs(batch ? batch[(base + i) * 2] : flat[2 * i]);
         if (lcNow < want) breached = true;
         const margin = want > 0 ? lcNow / want : Infinity;
         if (margin < sampleMargin) sampleMargin = margin;

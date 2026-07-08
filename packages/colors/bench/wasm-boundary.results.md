@@ -39,24 +39,24 @@ What changed (both provably byte-identical on the 8-bit grid):
 The remaining recheck cost is dominated by the per-foreground CAM16 forward
 (`bg_luma`), which is irreducible for a distinct colour within a single call.
 
-## Prototype (NEW API — owner decision, NOT wired to any runtime)
+## Batch recheck (public API — wired into the controller)
 
-`_recheckContrastMulti(bgHexes, fgHexes, theme)` rechecks one foreground set
+`recheckContrastMulti(bgHexes, fgHexes, theme)` rechecks one foreground set
 against several background samples in one call, sharing each foreground's CAM16
 forward across all samples. Byte-identical, pair for pair, to N `recheckContrast`
 calls.
 
-| call                        | after ns | ns/role | vs recheck ×3 |
-|-----------------------------|---------:|--------:|--------------:|
-| recheckContrast ×3 (3 calls)|   110101 |  1310.7 |          1.0x |
-| _recheckMulti 3bg (1 call)  |    43634 |   519.5 |          2.5x |
+| call                          | after ns | ns/role | vs recheck ×3 |
+|-------------------------------|---------:|--------:|--------------:|
+| recheckContrast ×3 (3 calls)  |   110101 |  1310.7 |          1.0x |
+| recheckContrastMulti 3bg      |    43634 |   519.5 |          2.5x |
 
 The controller's worst-case backdrop loop (`adaptTheme` with a 1–3 sample gradient
-/ image) rechecks the SAME foregrounds against every sample; the CAM16 forward is
-background-independent, so batching the samples collapses N−1 of the forwards. A
-2.5x win at 3 samples. Adopting it changes the controller↔engine call shape, so it
-is a design decision for the package owner — left as an unlisted `_`-prefixed
-method, measured only.
+/ image / bg-blur / glass) rechecks the SAME foregrounds against every sample; the
+CAM16 forward is background-independent, so batching the samples collapses N−1 of
+the forwards — a ~2.5x win at 3 samples. `adaptTheme` now feature-detects the
+method and calls it once per multi-sample frame, falling back to the per-sample
+`recheckContrast` loop for single samples or engines that do not expose it.
 
 ## resolveTheme (on-breach re-solve; NOT touched by this work)
 
