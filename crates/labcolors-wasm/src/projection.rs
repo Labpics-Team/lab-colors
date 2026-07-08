@@ -98,6 +98,30 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                     &format!("{:.4}", g.alpha),
                 );
             }
+            RoleOutcome::Material(m) => {
+                // Материал (#89): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
+                // --lab-<role> несёт солид-канон (= тон, опаковый) как SOLID-
+                // фолбэк; --lab-<role>-01 — тинт со слэш-альфой; --lab-<role>-02 —
+                // база. Тон/01/02 несут один тон (композит T над T есть T).
+                field_str(&mut roles, "kind", "material");
+                field_str(&mut roles, "toneHex", &m.tone_hex);
+                field_num(&mut roles, "alpha", m.alpha)?;
+                field_num(&mut roles, "worstContrast", m.worst_contrast)?;
+                field_num(&mut roles, "floor", m.floor)?;
+                field_bool(&mut roles, "guaranteed", m.guaranteed);
+                field_bool(&mut roles, "poleWhite", m.pole_white);
+                field_num(&mut roles, "achievedDj", m.achieved_dj)?;
+                field_bool(&mut roles, "toneCompressed", m.tone_compressed);
+                field_bool(&mut roles, "hueVanished", m.hue_vanished);
+                field_bool(&mut roles, "distinct", m.distinct);
+                let solid_css = oklch_css(&m.tone_hex, None)?;
+                let tint_css = oklch_css(&m.tone_hex, Some(m.alpha))?;
+                field_str(&mut roles, "css", &solid_css);
+                // --lab-<role> = солид-канон; -01 = тинт (α); -02 = опаковая база.
+                push_var(&mut vars, &css_var, &solid_css);
+                push_var(&mut vars, &format!("{css_var}-01"), &tint_css);
+                push_var(&mut vars, &format!("{css_var}-02"), &solid_css);
+            }
             RoleOutcome::None => {
                 field_str(&mut roles, "kind", "none");
             }

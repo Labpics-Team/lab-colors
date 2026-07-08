@@ -38,6 +38,8 @@ fn repr(res: &Resolved) -> String {
         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
         // Свечение: слои + α — стабильное представление для голденов.
         Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
+        // Материал: тон + выведенная α — стабильное представление.
+        Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
         Resolved::None => "none".to_string(),
         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
     }
@@ -2155,5 +2157,288 @@ fn empty_contract_is_rejected_at_load() {
     assert!(
         msg.contains("контракт пуст") && msg.contains("roles"),
         "сообщение по-русски и подсказывает выход: {msg:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Материал (#89): двухслойный контракт «тинт 01 (α) + база 02» с ВЫВЕДЕННОЙ α.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Заменить роль на произвольный рецепт и вернуть её резолв на `bg_hex`/`vc`.
+fn resolve_role_recipe(
+    role: &str,
+    recipe: RoleRecipe,
+    bg_hex: &str,
+    vc: &ViewingConditions,
+) -> Resolved {
+    let cfg = with_role_recipe(role, recipe);
+    let table = cfg
+        .compile_named_role_table()
+        .expect("material-конфиг компилируется");
+    let bg = BgInput::solid(bg_hex).unwrap();
+    resolve_named_set(&bg, &table, vc)
+        .into_iter()
+        .find(|(n, _)| n == role)
+        .map(|(_, r)| r)
+        .expect("роль присутствует в резолве")
+}
+
+/// Нейтральный material-рецепт на данном |ΔJ'| тона (обе темы).
+fn neutral_material(tone: f64, floor: Floor) -> RoleRecipe {
+    RoleRecipe::Material {
+        source: LadderSource::Neutral(NeutralPick::Mid),
+        tone_light: tone,
+        tone_dark: tone,
+        floor,
+    }
+}
+
+/// Резолв нейтрального материала на белом фоне (светлая тема).
+fn material_on_white(tone: f64) -> Resolved {
+    resolve_role_recipe(
+        "fill-brand-secondary",
+        neutral_material(tone, Floor::AaText),
+        "#FFFFFF",
+        &ViewingConditions::srgb(),
+    )
+}
+
+/// Двухслойность + солид-канон байт-точен + AA-гарантия держится.
+#[test]
+fn material_two_layer_solid_canon_byte_exact_and_guaranteed() {
+    let res = material_on_white(12.0);
+    let Resolved::Material(m) = &res else {
+        panic!("ожидался Material, получено {res:?}");
+    };
+    // Тинт 01 = база 02 = солид-канон (один тон).
+    assert_eq!(m.tint_hex(), m.base_hex(), "01 и 02 — один тон");
+    assert_eq!(m.tint_hex(), m.solid_hex(), "солид-канон = тон");
+    // Композит 01-над-02 БАЙТ-ТОЧНО равен тону (композит T над T есть T).
+    let solid = crate::alpha::composite_hex(m.tint_hex(), m.alpha(), m.base_hex()).unwrap();
+    assert_eq!(
+        &solid,
+        m.solid_hex(),
+        "солид-канон 01-над-02 разошёлся с тоном"
+    );
+    // α выведена в (0,1] и держит пол.
+    assert!(
+        m.alpha() > 0.0 && m.alpha() <= 1.0,
+        "α вне (0,1]: {}",
+        m.alpha()
+    );
+    assert!(m.guaranteed(), "AA-гарантия обязана держаться");
+    assert!(m.worst_contrast() >= m.floor() - 1e-9, "worst < floor");
+    assert!((m.floor() - 4.5).abs() < 1e-12, "AA-text пол = 4.5");
+}
+
+/// Гарантия читаемости пересчитываема потребителем из эмитированных `01`/`02`:
+/// композит квантованного тинта над чёрным/белым точно даёт худший контраст.
+#[test]
+fn material_guarantee_recomputable_over_worst_backdrop() {
+    let res = material_on_white(15.0);
+    let Resolved::Material(m) = &res else {
+        panic!("ожидался Material");
+    };
+    let tint = crate::spaces::srgb::srgb_encoded_from_hex(m.tint_hex()).unwrap();
+    // ЭКСАКТНЫЙ композит квантованного тинта (как ядро и потребитель), без
+    // переквантования — над двумя углами полного коридора.
+    let over_black = crate::alpha::composite_over_encoded(tint, m.alpha(), [0.0; 3]);
+    let over_white = crate::alpha::composite_over_encoded(tint, m.alpha(), [1.0; 3]);
+    let pole_lum = if matches!(m.pole(), crate::material::Pole::White) {
+        1.0
+    } else {
+        0.0
+    };
+    let recomputed =
+        crate::wcag::ratio_from_luminances(pole_lum, crate::wcag::relative_luminance(over_black))
+            .min(crate::wcag::ratio_from_luminances(
+                pole_lum,
+                crate::wcag::relative_luminance(over_white),
+            ));
+    assert!(
+        (recomputed - m.worst_contrast()).abs() < 1e-9,
+        "пересчёт {recomputed} != вердикту {}",
+        m.worst_contrast()
+    );
+    assert!(recomputed >= 4.5 - 1e-9, "пересчёт ниже AA-пола");
+}
+
+/// Нейтральный материал БАЙТ-в-байт переиспользует тон dj-anchor (та же физика
+/// поверхности), а не изобретает второй путь.
+#[test]
+fn neutral_material_tone_matches_dj_anchor() {
+    let vc = ViewingConditions::srgb();
+    let mat = resolve_role_recipe(
+        "fill-brand-secondary",
+        neutral_material(14.0, Floor::AaText),
+        "#FFFFFF",
+        &vc,
+    );
+    let Resolved::Material(m) = &mat else {
+        panic!("ожидался Material");
+    };
+    let dj = resolve_role_recipe(
+        "fill-brand-secondary",
+        RoleRecipe::DjAnchor {
+            light: 14.0,
+            dark: 14.0,
+        },
+        "#FFFFFF",
+        &vc,
+    );
+    let dj_hex = dj.solved().expect("dj-anchor решается в цвет").hex();
+    assert_eq!(
+        m.tint_hex(),
+        dj_hex,
+        "нейтральный материал обязан нести тот же тон, что dj-anchor"
+    );
+}
+
+/// Семейный (brand) материал несёт ОТТЕНОК семьи — его тон отличается от
+/// нейтрального на том же |ΔJ'| (акцент-стекло разблокировано).
+#[test]
+fn accent_material_tone_carries_family_hue() {
+    let vc = ViewingConditions::srgb();
+    let neutral = material_on_white(22.0);
+    let brand = resolve_role_recipe(
+        "fill-brand-secondary",
+        RoleRecipe::Material {
+            source: LadderSource::Brand,
+            tone_light: 22.0,
+            tone_dark: 22.0,
+            floor: Floor::AaText,
+        },
+        "#FFFFFF",
+        &vc,
+    );
+    let (Resolved::Material(n), Resolved::Material(b)) = (&neutral, &brand) else {
+        panic!("ожидались Material");
+    };
+    assert_ne!(
+        n.tint_hex(),
+        b.tint_hex(),
+        "brand-материал обязан отличаться от нейтрального (оттенок семьи)"
+    );
+}
+
+/// Порядок тиров ВЫВОДИТСЯ физикой, не подбором: на светлой теме тон дальше от
+/// белого (крупнее |ΔJ'| = base) требует ПЛОТНЕЕ α, чем ближе (subtle).
+#[test]
+fn material_base_denser_than_subtle_light_theme() {
+    let alpha_of = |tone: f64| match material_on_white(tone) {
+        Resolved::Material(m) => m.alpha(),
+        other => panic!("ожидался Material, получено {other:?}"),
+    };
+    let subtle = alpha_of(6.0);
+    let base = alpha_of(26.0);
+    assert!(
+        base > subtle,
+        "base ({base}) обязан быть плотнее subtle ({subtle})"
+    );
+}
+
+/// RED-proof тона: разный |ΔJ'| обязан дать разный тон (рецепт не слеп к тиру).
+#[test]
+fn material_bites_on_tone_mutation() {
+    let tone_of = |tone: f64| match material_on_white(tone) {
+        Resolved::Material(m) => m.tint_hex().to_string(),
+        other => panic!("ожидался Material, получено {other:?}"),
+    };
+    assert_ne!(
+        tone_of(8.0),
+        tone_of(28.0),
+        "RED-proof: разный |ΔJ'| дал одинаковый тон — рецепт слеп к тиру"
+    );
+}
+
+/// Тон-база различима от фона (|ΔJ'| ≈ цель) и отмечена distinct.
+#[test]
+fn material_tone_is_distinguishable_from_bg() {
+    let res = material_on_white(15.0);
+    let Resolved::Material(m) = &res else {
+        panic!("ожидался Material");
+    };
+    assert!(
+        m.distinct(),
+        "тон обязан быть отличим от фона на 8-битной сетке"
+    );
+    assert!(
+        (m.achieved_dj() - 15.0).abs() < 2.5,
+        "achieved_dj {} далёк от цели 15.0",
+        m.achieved_dj()
+    );
+}
+
+/// Тёмная тема: тёмная поверхность → белый коммит-полюс, гарантия держится.
+#[test]
+fn material_dark_theme_white_pole_guaranteed() {
+    let res = resolve_role_recipe(
+        "fill-brand-secondary",
+        neutral_material(15.0, Floor::AaText),
+        "#101012",
+        &ViewingConditions::dim_surround(),
+    );
+    let Resolved::Material(m) = &res else {
+        panic!("ожидался Material");
+    };
+    assert!(
+        matches!(m.pole(), crate::material::Pole::White),
+        "тёмная поверхность обязана коммитить белый полюс"
+    );
+    assert!(
+        m.guaranteed(),
+        "AA-гарантия обязана держаться и на тёмной теме"
+    );
+}
+
+/// Валидатор: material без пола читаемости отвергается на загрузке.
+#[test]
+fn material_floor_none_rejected() {
+    let cfg = with_role_recipe("fill-brand-secondary", neutral_material(10.0, Floor::None));
+    assert!(
+        matches!(
+            cfg.validate(),
+            Err(ConfigError::MaterialFloorRequired { role }) if role == "fill-brand-secondary"
+        ),
+        "floor=none обязан быть отвергнут"
+    );
+}
+
+/// Валидатор: неположительный |ΔJ'| тона отвергается (нет различимой поверхности).
+#[test]
+fn material_non_positive_tone_rejected() {
+    let cfg = with_role_recipe(
+        "fill-brand-secondary",
+        RoleRecipe::Material {
+            source: LadderSource::Neutral(NeutralPick::Mid),
+            tone_light: 0.0,
+            tone_dark: 10.0,
+            floor: Floor::AaText,
+        },
+    );
+    assert!(
+        matches!(
+            cfg.validate(),
+            Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.fill-brand-secondary.tone_light"
+        ),
+        "tone_light=0 обязан быть отвергнут"
+    );
+}
+
+/// Валидатор: material со ссылкой на несуществующее семейство отвергается.
+#[test]
+fn material_unknown_family_rejected() {
+    let cfg = with_role_recipe(
+        "fill-brand-secondary",
+        RoleRecipe::Material {
+            source: LadderSource::Family("нет-такого".to_string()),
+            tone_light: 10.0,
+            tone_dark: 10.0,
+            floor: Floor::AaText,
+        },
+    );
+    assert!(
+        matches!(cfg.validate(), Err(ConfigError::UnknownFamily { .. })),
+        "ссылка на несуществующее семейство обязана быть отвергнута"
     );
 }

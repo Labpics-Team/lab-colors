@@ -2504,6 +2504,7 @@ mod tests {
                     // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо здесь.
                     Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                     Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
+                    Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
                     Resolved::None => "none".to_string(),
                     Resolved::Unreachable(_) => "unreach".to_string(),
                 };

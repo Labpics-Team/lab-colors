@@ -177,6 +177,15 @@ pub enum RoleRecipeDto {
         of: LadderSourceDto,
         alpha: f64,
     },
+    /// Двухслойный материал (стекло/акрил, #89): база на целевом |ΔJ'| тира +
+    /// тинт с выведенной α. `source` — оттенок семьи, `tone_light`/`tone_dark` —
+    /// |ΔJ'| тира по теме, `floor` — пол читаемости выводимой α.
+    Material {
+        source: LadderSourceDto,
+        tone_light: f64,
+        tone_dark: f64,
+        floor: FloorDto,
+    },
     Zero,
 }
 
@@ -365,6 +374,17 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
                 of: of.into(),
                 alpha,
             },
+            RoleRecipeDto::Material {
+                source,
+                tone_light,
+                tone_dark,
+                floor,
+            } => RoleRecipe::Material {
+                source: source.into(),
+                tone_light,
+                tone_dark,
+                floor: floor.into(),
+            },
             RoleRecipeDto::Zero => RoleRecipe::Zero,
         })
     }
@@ -527,6 +547,17 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
                 of: of.try_into()?,
                 alpha: *alpha,
             },
+            RoleRecipe::Material {
+                source,
+                tone_light,
+                tone_dark,
+                floor,
+            } => RoleRecipeDto::Material {
+                source: source.try_into()?,
+                tone_light: *tone_light,
+                tone_dark: *tone_dark,
+                floor: floor_to_dto(*floor)?,
+            },
             RoleRecipe::Zero => RoleRecipeDto::Zero,
             other => return Err(format!("несериализуемый RoleRecipe: {other:?}")),
         })
@@ -686,6 +717,32 @@ mod tests {
         assert!(re.contains(r#""kind":"pair-label""#), "kebab-тег цел: {re}");
         assert!(re.contains(r#""floor":"aa-ui""#), "пол цел: {re}");
         assert!(re.contains(r#""name":"warning""#), "источник цел: {re}");
+    }
+
+    /// Рецепт `material` (#89) гоняется через JSON без потерь: kebab-тег
+    /// `material`, источник/тон/пол целы туда-обратно (поля snake_case
+    /// `tone_light`/`tone_dark`, как остальная config-схема). Закрывает класс
+    /// «DTO-ветка компилируется, но круг-трип врёт».
+    #[test]
+    fn material_recipe_round_trips_through_json() {
+        use labcolors_core::solve::Floor;
+        let json = r#"{"kind":"material","source":{"kind":"neutral","pick":"mid"},"tone_light":12.0,"tone_dark":18.0,"floor":"aa-text"}"#;
+        let dto: RoleRecipeDto = serde_json::from_str(json).expect("material парсится");
+        let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");
+        assert!(
+            matches!(
+                &core,
+                RoleRecipe::Material { tone_light, tone_dark, floor: Floor::AaText, .. }
+                    if (*tone_light - 12.0).abs() < 1e-12 && (*tone_dark - 18.0).abs() < 1e-12
+            ),
+            "material конвертируется в ядро с целыми полями"
+        );
+        let back = RoleRecipeDto::try_from(&core).expect("RoleRecipe → DTO");
+        let re = serde_json::to_string(&back).expect("сериализуем");
+        assert!(re.contains(r#""kind":"material""#), "kebab-тег цел: {re}");
+        assert!(re.contains(r#""tone_light":12"#), "tone_light цел: {re}");
+        assert!(re.contains(r#""tone_dark":18"#), "tone_dark цел: {re}");
+        assert!(re.contains(r#""floor":"aa-text""#), "пол цел: {re}");
     }
 
     /// Отпечаток: детерминирован для одного конфига (включая нормализацию

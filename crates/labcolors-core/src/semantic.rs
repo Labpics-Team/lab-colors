@@ -730,6 +730,26 @@ pub enum RoleSpec {
         /// Поднимается до `α_min`, если запрошенная ниже разрешимой.
         alpha: f64,
     },
+    /// Двухслойный материал (стекло/акрил): опаковая тон-база `02` на целевом
+    /// |ΔJ'| тира + полупрозрачный тинт `01` (тот же тон) с ВЫВЕДЕННОЙ альфой.
+    /// Резолв — [`Resolved::Material`] ([`crate::material`], #89).
+    ///
+    /// Тон строится dj-anchor-солвером на светлоте `tone` от фона резолва в
+    /// оттенке семьи; α выводится как минимальная плотность, при которой композит
+    /// над худшим фоном коридора держит `floor` (читаемость коммит-полюса).
+    Material {
+        /// Оттенок семьи тона. `None` — нейтральный материал (подтон таблицы, то
+        /// же 286°, что и остальные нейтральные эмиссии). `Some(tint)` —
+        /// семейно-оттеночный (акцент/сентимент): оттенок подставляется в кривую
+        /// подтона таблицы, красочность (`target_mp`/`hue_stiffness`) — от неё же.
+        hue: Option<LadderTint>,
+        /// Целевой |ΔJ'| тона-базы от фона резолва (пер-темная пара): тир
+        /// материала (base = крупный/заметный, subtle = малый/тонкий).
+        tone: DjMagnitude,
+        /// WCAG-пол читаемости, который держит выведенная α (`AaText`/`AaUi`).
+        /// `Floor::None` невалиден — материал обязан нести пол (валидатор ловит).
+        floor: Floor,
+    },
     /// The zero token: resolves to [`Resolved::None`].
     Zero,
 }
@@ -1533,6 +1553,10 @@ pub enum Resolved {
     /// Свечение: screen-слои (core, halo) + решённая интенсивность
     /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
     Glow(GlowResolved),
+    /// Двухслойный материал (стекло/акрил): полупрозрачный тинт `01` + опаковая
+    /// база `02`, обе — один тон, с ВЫВЕДЕННОЙ альфой (композит-гарантия над
+    /// коридором фонов). См. [`MaterialResolved`] и [`crate::material`].
+    Material(MaterialResolved),
     /// The honest zero of the `Role::None` token: no colour, no contrast.
     None,
     /// No colour can satisfy this role against this background, with the reason.
@@ -1680,6 +1704,110 @@ impl GlowResolved {
     }
 }
 
+/// Резолв двухслойного материала: тон `T` (семейно-оттеночный опаковый цвет на
+/// целевой светлоте тира) + ВЫВЕДЕННАЯ альфа тинта.
+///
+/// Потребитель красит `--lab-bg-material-<tier>-01: oklch(<tone> / α)`
+/// (полупрозрачный слой стекла) и `-02: <tone>` (опаковая база под солид-каноном).
+/// Солид-канон `01`-над-`02` = `α·T + (1−α)·T = T` — БАЙТ-ТОЧНО равен тону при
+/// любой α (композит `T` над `T` есть `T`), поэтому [`tint_hex`](Self::tint_hex),
+/// [`base_hex`](Self::base_hex) и [`solid_hex`](Self::solid_hex) равны по
+/// построению (единственная решаемая величина — α).
+///
+/// Гарантия читаемости — свойство GLASS-режима (тинт над живым фоном): α выведена
+/// как минимальная плотность, при которой коммит-полюс поверхности
+/// ([`pole`](Self::pole)) держит [`floor`](Self::floor) по всему коридору
+/// `[чёрный, белый]` ([`crate::material`]). [`worst_contrast`](Self::worst_contrast)
+/// и [`guaranteed`](Self::guaranteed) пересчитываемы потребителем из эмитированных
+/// `01`/`02` (та же α-граничная математика, `material-guarantee.ts`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialResolved {
+    tone_hex: String,
+    alpha: f64,
+    worst_contrast: f64,
+    floor: f64,
+    guaranteed: bool,
+    pole: crate::material::Pole,
+    achieved_dj: f64,
+    tone_compressed: bool,
+    hue_vanished: bool,
+    distinct: bool,
+}
+
+impl MaterialResolved {
+    /// Тинт слоя `01` `#RRGGBB` — красится как `oklch(<tone> / α)`. Равен базе и
+    /// солид-канону по построению (композит `T` над `T` есть `T`).
+    pub fn tint_hex(&self) -> &str {
+        &self.tone_hex
+    }
+
+    /// База слоя `02` `#RRGGBB` — опаковая подложка под солид-каноном. Равна тинту
+    /// (тот же тон, лишь без прозрачности).
+    pub fn base_hex(&self) -> &str {
+        &self.tone_hex
+    }
+
+    /// Солид-канон `01`-над-`02` `#RRGGBB` — то, что видно в SOLID-режиме и в
+    /// деградациях. Равен тону байт-точно.
+    pub fn solid_hex(&self) -> &str {
+        &self.tone_hex
+    }
+
+    /// Выведенная альфа тинта `01`, `(0, 1]`.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+
+    /// Худший WCAG-контраст коммит-полюса по коридору `[чёрный, белый]` при
+    /// выведенной α (`[1, 21]`).
+    pub fn worst_contrast(&self) -> f64 {
+        self.worst_contrast
+    }
+
+    /// WCAG-пол читаемости, который держит выведенная α (напр. 4.5 / 3.0).
+    pub fn floor(&self) -> f64 {
+        self.floor
+    }
+
+    /// Гарантия выполнена: `worst_contrast ≥ floor` (α нашлась в `(0, 1]`).
+    /// `false` — пол недостижим даже при α = 1 (тогда α = 1 как ближайшая
+    /// достижимая, честная деградация — не молчание).
+    pub fn guaranteed(&self) -> bool {
+        self.guaranteed
+    }
+
+    /// Коммит-полюс поверхности: полюс максимального контраста на тоне (белый на
+    /// тёмном, чёрный на светлом).
+    pub fn pole(&self) -> crate::material::Pole {
+        self.pole
+    }
+
+    /// Фактический |ΔJ'| тона-базы от фона резолва — различимость поверхности
+    /// (замер на эмитируемом hex).
+    pub fn achieved_dj(&self) -> f64 {
+        self.achieved_dj
+    }
+
+    /// Целевой |ΔJ'| тона был недостижим (стена оси J' / квантовая дыра) —
+    /// возвращён ближайший достижимый тон (закон 2 ADR-0002). `false` в норме.
+    pub fn tone_compressed(&self) -> bool {
+        self.tone_compressed
+    }
+
+    /// Оттенок семьи физически выродился у края гамута (near-white/near-black):
+    /// красочность тона ниже порога воспринимаемости. Честный флаг — не
+    /// молчаливая деградация к серому. `false` у нейтрали и различимых оттенков.
+    pub fn hue_vanished(&self) -> bool {
+        self.hue_vanished
+    }
+
+    /// Солид-канон (тон) отличим от фона резолва на 8-битной сетке дисплея. `false`
+    /// — тон ≈ фон, поверхность является пиксельным no-op на этом фоне.
+    pub fn distinct(&self) -> bool {
+        self.distinct
+    }
+}
+
 impl Resolved {
     /// A non-compressed solved colour — the common case where the hierarchy holds
     /// strictly and no floor squeeze was needed.
@@ -1745,6 +1873,9 @@ impl Resolved {
             Resolved::Translucent(r) => Some(r.composite_lc),
             // Свечение — не контраст-роль: его контракт — |ΔJ'| ступени, не Lc.
             Resolved::Glow(_) => Option::None,
+            // Материал — поверхность, не контраст-роль: его контракт — WCAG
+            // α-гарантия читаемости + |ΔJ'| различимость тона, не единый Lc.
+            Resolved::Material(_) => Option::None,
             Resolved::None => Some(0.0),
             Resolved::Unreachable(_) => Option::None,
         }
@@ -1764,6 +1895,16 @@ impl Resolved {
     pub fn glow(&self) -> Option<&GlowResolved> {
         match self {
             Resolved::Glow(g) => Some(g),
+            _ => Option::None,
+        }
+    }
+
+    /// Двухслойный материал [`Material`](Resolved::Material)-роли, если роль
+    /// решилась в материал. `None` для остальных исходов (паритет с
+    /// [`Self::translucent`]/[`Self::glow`]).
+    pub fn material(&self) -> Option<&MaterialResolved> {
+        match self {
+            Resolved::Material(m) => Some(m),
             _ => Option::None,
         }
     }
@@ -2043,6 +2184,42 @@ fn resolve_spec_in(
             // тинт выводится композит-инверсией (`crate::alpha`, #119). Фактическая
             // α поднимается до α_min, если запрошенная неразрешима в гамуте.
             return resolve_rgba_inverted(of.for_vc(vc), alpha, bg, vc);
+        }
+        RoleSpec::Material { hue, tone, floor } => {
+            // Материал (#89): тон-база — семейно-оттеночная опаковая поверхность на
+            // целевом |ΔJ'| тира (dj-anchor-солвером), тинт — тот же тон с
+            // ВЫВЕДЕННОЙ альфой. Нейтральный материал (`hue == None`) держит подтон
+            // ТАБЛИЦЫ (тот же 286°, что остальные нейтральные эмиссии); семейный
+            // подставляет оттенок якоря в кривую подтона.
+            let tone_chroma = match hue {
+                None => chroma,
+                Some(hue_tint) => {
+                    let hue_deg = crate::accent::oklab_hue_of(
+                        &crate::spaces::srgb::hex_from_srgb_encoded(hue_tint.for_vc(vc)),
+                    );
+                    match chroma {
+                        RoleChroma::Curve {
+                            target_mp,
+                            hue_stiffness,
+                            ..
+                        } => RoleChroma::Curve {
+                            canonical_hue_deg: hue_deg,
+                            target_mp,
+                            hue_stiffness,
+                        },
+                        other => other,
+                    }
+                }
+            };
+            return resolve_material(
+                bg,
+                tone.for_vc(vc),
+                floor,
+                ctx.polarity,
+                tone_chroma,
+                hue.is_some(),
+                vc,
+            );
         }
     };
 
@@ -2415,6 +2592,67 @@ fn finish_rgba(
         composite_distinct,
         alpha_coerced,
         floor_coerced,
+    })
+}
+
+/// Резолв двухслойного материала (#89): тон-база `02` на целевом |ΔJ'| в оттенке
+/// семьи + тинт `01` (тот же тон) с ВЫВЕДЕННОЙ альфой.
+///
+/// Тон строится тем же dj-anchor-солвером, что декоративные |ΔJ'|-роли
+/// ([`resolve_dj`]), поэтому различимость поверхности от фона наследуется его
+/// физикой. Альфа тинта выводится [`crate::material::solve_material_alpha_hex`]
+/// как минимальная плотность, при которой композит тона над худшим фоном коридора
+/// `[чёрный, белый]` держит пол читаемости коммит-полюса. `family_hued` — оттенок
+/// семьи присутствует (флаг вырождения оттенка применим); у нейтрали `false`.
+fn resolve_material(
+    bg: &BgInput,
+    tone_dj: f64,
+    floor: Floor,
+    polarity: Polarity,
+    chroma: RoleChroma,
+    family_hued: bool,
+    vc: &ViewingConditions,
+) -> Resolved {
+    use crate::spaces::srgb::hex_from_srgb_encoded;
+    // Пол читаемости обязателен: у материала без пола нет цели для вывода α.
+    let floor_ratio = match floor.min_ratio() {
+        Some(r) => r,
+        None => {
+            return Resolved::Unreachable(Unreachable::InvalidInput(
+                "material-роль требует пол читаемости (aa-text/aa-ui), получен zero-floor"
+                    .to_string(),
+            ));
+        }
+    };
+    // Тон-база 02: семейно-оттеночная опаковая поверхность на целевом |ΔJ'|.
+    let dj = match resolve_dj(bg, tone_dj, polarity, chroma, vc) {
+        Ok(d) => d,
+        Err(reason) => return Resolved::Unreachable(reason),
+    };
+    let tone_hex = dj.solved.hex().to_string();
+    // Вырождение оттенка семьи у края гамута — только у семейных материалов;
+    // нейтраль ахроматична намеренно, не «выродилась».
+    let hue_vanished = family_hued && dj.solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR;
+    // α: минимальная плотность под пол над коридором [чёрный, белый].
+    let m = match crate::material::solve_material_alpha_hex(&tone_hex, floor_ratio) {
+        Ok(m) => m,
+        Err(e) => return Resolved::Unreachable(Unreachable::InvalidInput(e)),
+    };
+    // Различимость солид-канона (= тона) от фона резолва на 8-битной сетке (тот же
+    // замер, что у полупрозрачных ролей; off-grid фон честно квантуется).
+    let bg_hex = hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+    let distinct = tone_hex != bg_hex;
+    Resolved::Material(MaterialResolved {
+        tone_hex,
+        alpha: m.alpha,
+        worst_contrast: m.worst_contrast,
+        floor: floor_ratio,
+        guaranteed: !m.degraded,
+        pole: m.pole,
+        achieved_dj: dj.achieved_dj,
+        tone_compressed: dj.degraded,
+        hue_vanished,
+        distinct,
     })
 }
 
@@ -4734,6 +4972,11 @@ mod tests {
                         "{bg_hex}: RoleTable::default() отдал Translucent для {:?} — дрейф дефолт-таблицы",
                         role
                     ),
+                    // Дефолтная таблица не несёт Material — появление означало бы дрейф.
+                    Resolved::Material(_) => panic!(
+                        "{bg_hex}: RoleTable::default() отдал Material для {:?} — дрейф дефолт-таблицы",
+                        role
+                    ),
                     Resolved::Unreachable(_) => true,
                 });
                 assert!(
@@ -5790,6 +6033,9 @@ mod tests {
                         // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо.
                         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                         Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
+                        Resolved::Material(m) => {
+                            format!("material({},{:.4})", m.tint_hex(), m.alpha())
+                        }
                         Resolved::None => "none".to_string(),
                         Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
                     };
