@@ -90,6 +90,32 @@ impl ViewingConditions {
     ///
     /// Produces lower J' for the same stimulus compared to average surround,
     /// which matches human perception in darkened viewing environments.
+    ///
+    /// # Why dim (F = 0.9), not dark (F = 0.8), for a dark-theme UI?
+    ///
+    /// A dark-theme UI (phone at night, monitor in night mode) is formally
+    /// closer to the *dark* surround, whose triplet (F = 0.8, c = 0.525,
+    /// N_c = 0.8) models a projector in *complete* darkness, where the stimulus
+    /// is the only light in the field. A screen in a dim room is different: it is
+    /// a self-luminous panel plus residual ambient light from the room, so its
+    /// effective surround never reaches that projector limit. The *dim* working
+    /// point (F = 0.9) sits between average and dark and is the better match for
+    /// that reality. This is a deliberate engine choice, not a strict CIE
+    /// mandate; the test-only `dark_surround` constructor keeps the F = 0.8
+    /// endpoint available so it can still be exercised in comparisons and tests.
+    ///
+    /// The documented dim triplet is asserted here so a silent regression to the
+    /// dark parameters — the choice this rationale rejects — fails the doctest:
+    ///
+    /// ```
+    /// use labcolors_core::ViewingConditions;
+    /// let dim = ViewingConditions::dim_surround();
+    /// // Dim surround (CIECAM16 Table 1): c = 0.59, N_c = 0.9.
+    /// assert_eq!(dim.c, 0.59);
+    /// assert_eq!(dim.nc, 0.9);
+    /// // Deliberately NOT the dark endpoint (c = 0.525, N_c = 0.8).
+    /// assert_ne!(dim.c, 0.525);
+    /// ```
     pub fn dim_surround() -> Self {
         // colour-science / colorjs.io surroundMap["dim"] = [0.9, 0.59, 0.9]
         Self::build(64.0, 20.0, 0.9, 0.59, 0.9)
