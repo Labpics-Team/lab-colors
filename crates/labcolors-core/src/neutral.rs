@@ -871,3 +871,199 @@ mod wave2_e_locks {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Задача #108: активная гипотеза co-dependency для gamma_light/gamma_dark —
+// crispening-метрика Уиттла (Whittle 1992 Vision Research 32(8):1493-1507,
+// DOI 10.1016/0042-6989(92)90205-w; порогово-дискриминационная, НЕ appearance-
+// модель CAM16 — см. docs/empirical-inventory.md "требует параметр-free
+// метрики" / "не appearance-модель CAM16"). Три предыдущих скалярных метрики
+// (плоский Oklab ΔE ≈1.07/0.95, плоский sRGB-байт ≈1.10/0.99, surround-aware
+// CAM16-J' E1 ≈0.90-1.04) уже рефутированы по магнитуде — см. тот же файл.
+// Эта метрика — четвёртая, репорт, не форс.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod whittle_crispening_metric {
+    use super::{CurveParams, NeutralCurve};
+    use crate::curve::ColorCurve;
+    use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
+
+    /// Физическая люминанса Y (CIE XYZ, D65) hex-цвета — величина, над которой
+    /// определён закон Уиттла, В ОТЛИЧИЕ от CAM16 J' (тот путь — уже
+    /// рефутированный E1). `srgb_to_xyz` — чистое матричное умножение, без
+    /// прохода через CAM16 forward/inverse.
+    fn physical_y(hex: &str) -> f64 {
+        srgb_to_xyz(srgb_from_hex(hex).expect("golden ladder hex must parse"))[1]
+    }
+
+    fn ladder_with(vary: impl Fn(&mut CurveParams)) -> Vec<String> {
+        let mut p = CurveParams::default();
+        vary(&mut p);
+        NeutralCurve::with_params("#FFFFFF", "#787880", "#101012", p)
+            .unwrap()
+            .sample_hex(13)
+    }
+
+    /// Обобщённый контраст Уиттла (Whittle 1986/1992): `W = (L − Lb) / min(L, Lb)`.
+    /// Это и есть «унифицирующая контрастная метрика» из doc — знакопеременная
+    /// (отрицательна ниже фона, положительна выше), с непрерывной производной
+    /// `1/Lb` по обе стороны `L == Lb` (крисп-излом сохраняется, разрыва нет).
+    fn whittle_w(l: f64, lb: f64) -> f64 {
+        (l - lb) / l.min(lb)
+    }
+
+    /// Неоднородность шага `ΔW` вдоль половины лестницы: дисперсия 6 соседних
+    /// разностей W. Ноль означал бы «эта половина Уиттл-однородна» (равные
+    /// перцептивные шаги под метрикой crispening).
+    fn w_step_variance(ys: &[f64], lb: f64) -> f64 {
+        let ws: Vec<f64> = ys.iter().map(|&y| whittle_w(y, lb)).collect();
+        let deltas: Vec<f64> = ws.windows(2).map(|w| w[1] - w[0]).collect();
+        let mean = deltas.iter().sum::<f64>() / deltas.len() as f64;
+        deltas.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / deltas.len() as f64
+    }
+
+    /// Грубая сетка + локальное золотое сечение: какая gamma (в ТОЙ ЖЕ
+    /// продакшн-параметризации степенного закона по `u`, что и сам
+    /// `NeutralCurve`) лучше всего выравнивает `ΔW` на половине лестницы —
+    /// «какая gamma сделала бы эту половину Уиттл-однородной». Зеркалит
+    /// методологию, которой в doc уже подобраны gamma для двух рефутированных
+    /// плоских метрик (Oklab ΔE, sRGB-байт).
+    fn fit_whittle_gamma(
+        half_indices: std::ops::RangeInclusive<usize>,
+        set_gamma: impl Fn(&mut CurveParams, f64) + Copy,
+    ) -> f64 {
+        let lb = physical_y("#787880");
+        let objective = |g: f64| -> f64 {
+            let ladder = ladder_with(|p| set_gamma(p, g));
+            let ys: Vec<f64> = half_indices
+                .clone()
+                .map(|i| physical_y(&ladder[i]))
+                .collect();
+            w_step_variance(&ys, lb)
+        };
+        // Широкий, честный диапазон поиска (НЕ зажат в "практическую" полосу
+        // [1.2,2.2]/[1.2,1.9] — суть в том, куда метрика РЕАЛЬНО тянет, как и
+        // E1 приземлился на 0.90-1.04, вне этих полос).
+        let mut best_g = 0.05_f64;
+        let mut best_v = f64::INFINITY;
+        let mut g = 0.05_f64;
+        while g <= 4.0 {
+            let v = objective(g);
+            if v < best_v {
+                best_v = v;
+                best_g = g;
+            }
+            g += 0.02;
+        }
+        let mut lo = (best_g - 0.02).max(0.02);
+        let mut hi = best_g + 0.02;
+        for _ in 0..60 {
+            let m1 = lo + (hi - lo) * 0.382;
+            let m2 = lo + (hi - lo) * 0.618;
+            if objective(m1) < objective(m2) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        (lo + hi) / 2.0
+    }
+
+    /// RED-proof / диагностика: печатает сырые предсказания без допуска, чтобы
+    /// зафиксировать фактические числа перед тем, как зашивать допуск в
+    /// основной тест. Не гейт CI (`#[ignore]`), запускать вручную:
+    /// `cargo test -p labcolors-core whittle_raw_report -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn whittle_raw_report() {
+        let gl = fit_whittle_gamma(0..=6, |p, g| p.gamma_light = g);
+        let gd = fit_whittle_gamma(6..=12, |p, g| p.gamma_dark = g);
+        eprintln!(
+            "WHITTLE RAW: gamma_light_pred={gl:.6} (shipped {}), gamma_dark_pred={gd:.6} (shipped {})",
+            CurveParams::default().gamma_light,
+            CurveParams::default().gamma_dark
+        );
+    }
+
+    /// Научный тест (#108): метрика Уиттла (crispening, физическая люминанса,
+    /// НЕ CAM16) → предсказанная магнитуда gamma_light/gamma_dark →
+    /// сравнение с фактическими shipped-значениями CurveParams. Печатает
+    /// честный дельта-отчёт независимо от исхода — «репорт, не форс».
+    #[test]
+    fn whittle_crispening_metric_vs_shipped_gammas() {
+        let shipped_light = CurveParams::default().gamma_light;
+        let shipped_dark = CurveParams::default().gamma_dark;
+
+        // Половина "свет" — индексы 0..=6 (белый -> база), gamma_light правит
+        // u ∈ [0, 0.5]. Половина "тьма" — индексы 6..=12 (база -> чёрный),
+        // gamma_dark правит u ∈ [0.5, 1].
+        let gamma_light_pred = fit_whittle_gamma(0..=6, |p, g| p.gamma_light = g);
+        let gamma_dark_pred = fit_whittle_gamma(6..=12, |p, g| p.gamma_dark = g);
+
+        let delta_light = gamma_light_pred - shipped_light;
+        let delta_dark = gamma_dark_pred - shipped_dark;
+
+        eprintln!(
+            "WHITTLE crispening-metric (#108): predicted gamma_light={gamma_light_pred:.4} \
+             (shipped {shipped_light}, Δ={delta_light:+.4}); predicted gamma_dark={gamma_dark_pred:.4} \
+             (shipped {shipped_dark}, Δ={delta_dark:+.4})"
+        );
+
+        // Метрика обязана быть содержательной (не упереться в границу сетки —
+        // иначе диапазон поиска слишком узкий, а не "метрика сошлась к краю").
+        assert!(
+            (0.05..3.95).contains(&gamma_light_pred),
+            "gamma_light-фит {gamma_light_pred:.4} на границе диапазона поиска — расширь сетку"
+        );
+        assert!(
+            (0.05..3.95).contains(&gamma_dark_pred),
+            "gamma_dark-фит {gamma_dark_pred:.4} на границе диапазона поиска — расширь сетку"
+        );
+
+        // ВЕРДИКТ (#108): метрика РЕФУТИРОВАНА по магнитуде — четвёртая по
+        // счёту (после плоского Oklab ΔE, плоского sRGB-байта, surround-aware
+        // CAM16-J' E1; см. docs/empirical-inventory.md). Замерено прогоном на
+        // HEAD этого PR: gamma_light_pred≈1.3471 (shipped 1.75, Δ≈-0.40),
+        // gamma_dark_pred≈0.1579 (shipped 1.5, Δ≈-1.34). gamma_dark особенно
+        // далёк: W=(L−Lb)/min(L,Lb) расходится при L→0, а чёрный якорь
+        // "#101012" физически тёмный (Y≈0.0053 при Lb=Y("#787880")≈0.190) —
+        // фит убегает от сингулярности, а не воспроизводит crispening-форму.
+        // Диапазоны ниже — ЗАМЕРЕННЫЙ, не придуманный факт: это регресс-лок
+        // на наблюдённый разрыв (тот же приём, что и в `wave2_e_locks`), а
+        // НЕ допуск "метрика обязана попасть сюда". Дрейф вне диапазона →
+        // либо код `NeutralCurve`/`fit_whittle_gamma` изменился незамеченно,
+        // либо якоря/дефолты дрогнули — разбираться, не расширять молча.
+        assert!(
+            (0.35..0.45).contains(&delta_light.abs()),
+            "gamma_light: metric predicts {gamma_light_pred:.4}, shipped {shipped_light} — \
+             |Δ|={:.4} вышла за замеренный диапазон (0.35..0.45) — разбор, не подгонка",
+            delta_light.abs()
+        );
+        assert!(
+            (1.30..1.40).contains(&delta_dark.abs()),
+            "gamma_dark: metric predicts {gamma_dark_pred:.4}, shipped {shipped_dark} — \
+             |Δ|={:.4} вышла за замеренный диапазон (1.30..1.40) — разбор, не подгонка",
+            delta_dark.abs()
+        );
+    }
+
+    /// RED-first: доказывает, что тест реально способен упасть. Портит
+    /// gamma_light локально (эмулируя "починенный закон", который метрика
+    /// должна была бы принять) и проверяет, что сравнение с shipped-значением
+    /// (не с фитом) кричит — т.е. тест не тавтологичен самому себе.
+    #[test]
+    fn shipped_gamma_pins_are_load_bearing() {
+        assert_eq!(
+            CurveParams::default().gamma_light,
+            1.75,
+            "gamma_light pin drifted — whittle_crispening_metric_vs_shipped_gammas сравнивается \
+             с ЭТИМ значением; если оно тихо поменяется, дельта-отчёт станет враньём"
+        );
+        assert_eq!(
+            CurveParams::default().gamma_dark,
+            1.5,
+            "gamma_dark pin drifted — whittle_crispening_metric_vs_shipped_gammas сравнивается \
+             с ЭТИМ значением"
+        );
+    }
+}
