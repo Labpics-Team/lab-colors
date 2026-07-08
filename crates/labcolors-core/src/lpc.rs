@@ -223,6 +223,28 @@ pub(crate) const LO_WOB_OFFSET: f64 = 0.027;
 /// Maps the offset contrast to the ~[-108, 108] Lc output range.
 pub(crate) const LC_SCALE: f64 = 100.0;
 
+/// DERIVED — минимальный ненулевой |Lc|, который вообще может эмитить модель.
+///
+/// Прямо за клипом [`LO_CLIP`] выход стартует не с нуля, а со скачка: внутри
+/// клипа `contrast_core` схлопывает контраст в `0`, а первый ненулевой отсчёт
+/// равен `(LO_CLIP − LO_BOW_OFFSET) × LC_SCALE`. Обе полярности симметричны
+/// ([`LO_WOB_OFFSET`] == [`LO_BOW_OFFSET`], пиннится
+/// `polarity_offsets_are_symmetric`), поэтому модельный пол одинаков для
+/// нормальной и обратной сторон — иначе он был бы минимумом по полярностям
+/// `(LO_CLIP − max(LO_BOW_OFFSET, LO_WOB_OFFSET)) × LC_SCALE`.
+///
+/// Численно `(0.1 − 0.027) × 100 = 7.3`. Это НЕ независимая политика, а
+/// алгебраическая идентичность из GROUNDED APCA `0.0.98G-4g` набора (те же
+/// [`LO_CLIP`], [`LO_BOW_OFFSET`], [`LC_SCALE`]). Значение — литерал `7.3` (чистое
+/// число для инвентаря, класс (a) DERIVED), но тождество с формулой обязано
+/// держаться байт-равно: пиннится `model_lc_floor_is_the_published_clip_minimum`
+/// (дрейф любого из трёх APCA-входов ломает лок). Прямое следствие issue #44:
+/// решатель, целясь в декоративный контраст ниже 7.3, упирается в порог клипа и
+/// возвращает ноль, поэтому `DECORATIVE_FLOOR_MIN` держится строго выше него.
+/// Скан-инвариант — `no_pair_emits_contrast_below_model_floor`.
+// SSOT-TRACKED — (a) DERIVED = (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE (issue #44), см. docs/empirical-inventory.md.
+pub(crate) const MODEL_LC_FLOOR: f64 = 7.3;
+
 /// Soft black clamp: lifts luminance below [`SOFT_CLAMP_THRESHOLD`] so the
 /// contrast curve stays monotonic near black. Strictly increasing on `[0, T]`
 /// and the identity above `T`, hence invertible — see [`soft_clamp_inv`].
@@ -1018,6 +1040,100 @@ mod tests {
         assert!(
             recovered_zero.abs() < 1e-9,
             "soft_clamp_inv(soft_clamp(0)) should recover 0, got {recovered_zero}"
+        );
+    }
+
+    #[test]
+    fn model_lc_floor_is_the_published_clip_minimum() {
+        // DERIVED IDENTITY (issue #44). The model's smallest non-zero output is
+        // (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE: inside the low-contrast clip the
+        // curve collapses to 0, and the first sample past it is this value. The
+        // const is stored as the literal 7.3 (a clean inventory number), but this
+        // pins that literal to the DERIVATION — a drift in any of the three GROUNDED
+        // APCA `0.0.98G-4g` inputs, or a hand-edit of the literal, breaks the lock.
+        let derived = (LO_CLIP - LO_BOW_OFFSET) * LC_SCALE;
+        assert!(
+            (MODEL_LC_FLOOR - derived).abs() < 1e-12,
+            "MODEL_LC_FLOOR literal {MODEL_LC_FLOOR} must equal the derived clip minimum \
+             (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE = {derived}"
+        );
+        assert!(
+            (MODEL_LC_FLOOR - 7.3).abs() < 1e-12,
+            "the derived clip minimum must be 7.3, got {MODEL_LC_FLOOR}"
+        );
+    }
+
+    #[test]
+    fn polarity_offsets_are_symmetric() {
+        // The single-polarity MODEL_LC_FLOOR formula holds only because both
+        // polarity offsets are equal; were they to diverge the floor would become
+        // the minimum over polarities `(LO_CLIP − max(offset)) × LC_SCALE`. Pin the
+        // equality the derivation rests on.
+        assert_eq!(
+            LO_WOB_OFFSET, LO_BOW_OFFSET,
+            "polarity offsets must be equal for a single-polarity MODEL_LC_FLOOR"
+        );
+    }
+
+    #[test]
+    fn no_pair_emits_contrast_below_model_floor() {
+        // MODEL INVARIANT + guard measurement (issue #44). Across quantised 8-bit
+        // sRGB pairs the contrast curve emits either exactly 0 or a magnitude
+        // ≥ MODEL_LC_FLOOR — never a value strictly inside the band (0, 7.3). This
+        // is the empirical face of the algebraic identity above, and it measures
+        // the two numbers QUANT_GUARD is sized against: the actual minimum non-zero
+        // |Lc| the solver can emit, and the largest single-8-bit-step jump in |Lc|
+        // across the clip boundary.
+        let eps = 1e-9;
+        let mut min_nonzero = f64::INFINITY;
+        let mut max_clip_step = 0.0_f64;
+
+        // Grey axis: adjacent-fg jumps across the clip + min non-zero.
+        let grey = |i: u8| format!("#{i:02X}{i:02X}{i:02X}");
+        for bg_i in 0u16..=255 {
+            let bg = grey(bg_i as u8);
+            let mut prev = lpc(&grey(0), &bg).abs();
+            for fg_i in 1u16..=255 {
+                let cur = lpc(&grey(fg_i as u8), &bg).abs();
+                if cur > eps {
+                    min_nonzero = min_nonzero.min(cur);
+                }
+                // A jump ACROSS the clip: exactly one side collapsed to 0.
+                if (prev <= eps) != (cur <= eps) {
+                    max_clip_step = max_clip_step.max((cur - prev).abs());
+                }
+                assert!(
+                    cur <= eps || cur >= MODEL_LC_FLOOR - eps,
+                    "grey fg={} bg={bg}: |Lc|={cur} lands in the forbidden band (0, {MODEL_LC_FLOOR})",
+                    grey(fg_i as u8)
+                );
+                prev = cur;
+            }
+        }
+
+        // Chromatic sample: the 32³ representable cube against a few backgrounds,
+        // so the invariant is not a grey-axis artefact.
+        for bg in ["#FFFFFF", "#000000", "#808080"] {
+            crate::exposure_support::rgb_cube(|c| {
+                let fg = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+                let v = lpc(&fg, bg).abs();
+                if v > eps {
+                    min_nonzero = min_nonzero.min(v);
+                }
+                assert!(
+                    v <= eps || v >= MODEL_LC_FLOOR - eps,
+                    "cube fg={fg} bg={bg}: |Lc|={v} in forbidden band (0, {MODEL_LC_FLOOR})"
+                );
+            });
+        }
+
+        assert!(
+            min_nonzero >= MODEL_LC_FLOOR - eps,
+            "measured minimum non-zero |Lc| {min_nonzero} is below MODEL_LC_FLOOR {MODEL_LC_FLOOR}"
+        );
+        eprintln!(
+            "MODEL_LC_FLOOR scan: min non-zero |Lc| = {min_nonzero:.6}, \
+             max single-8-bit-step jump across clip = {max_clip_step:.6} (QUANT_GUARD = 0.2)"
         );
     }
 }

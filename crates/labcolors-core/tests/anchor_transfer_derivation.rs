@@ -19,7 +19,7 @@
 //! (semantic.rs, preset.rs, labui.config.json) + README/whitepaper.
 
 use labcolors_core::lpc::{lpc_readability_ys, lpc_with_vc};
-use labcolors_core::{srgb_encoded_from_hex, ViewingConditions};
+use labcolors_core::{ViewingConditions, srgb_encoded_from_hex};
 
 /// (роль, канонический якорь-hex, ожидаемая доля).
 const EXPECTED: [(&str, &str, f64); 4] = [

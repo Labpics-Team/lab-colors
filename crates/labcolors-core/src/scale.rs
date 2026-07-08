@@ -8,10 +8,27 @@ use crate::spaces::vc::ViewingConditions;
 /// Наклон штрафа дрейфа оттенка в поиске оптимального hue рампы акцента:
 /// `penalty_scale = HUE_DRIFT_PENALTY_SLOPE / HUE_SEARCH_HALF_WINDOW`, дальше
 /// `score = c − penalty_scale·drift` — баланс «максимум хромы» против «уход от
-/// канонического оттенка». Перцептивная ручка; значение калибровочное
-/// (кандидат науки: вывести или обосновать датасетом — реестр
-/// docs/empirical-inventory.md, научная задача роадмапа).
-// SSOT-TRACKED: см. docs/empirical-inventory.md (join по имени/значению).
+/// канонического оттенка». Перцептивная ручка — терминал (e) DESIGN-CHOICE.
+///
+/// **MODEL-CONFLICT: ИЗМЕРЕН И ОТКЛОНЁН (не OWNER-PENDING).** Строгий
+/// кандидат-вывод (хорда Oklab, `penalty_scale = C·π/180 ≈ 0.0026–0.0035/°`)
+/// ИЗМЕРЕН и ОТКЛОНЁН — вырождает интерьерный оптимум в клип по ребру окна
+/// ±30° на 12/43 якорях, флипает оптимум на 27/43 (лок
+/// `chord_derived_slope_rejected_degenerates_to_window_edge`). В отличие от
+/// [`crate::pair::PAIR_CROSSOVER_Y`] (где модельный якорь существует и
+/// ждёт решения владельца), здесь единственный строгий кандидат уже
+/// ПРОВЕРЕН и признан ХУЖЕ текущего значения — вопрос закрыт замером, не
+/// открыт для владельца: свободная ручка с отклонённым кандидатом честнее
+/// подгонки — реестр docs/empirical-inventory.md.
+///
+/// Легальный диапазон (Волна 2): проектный интервал свипа экспозиции
+/// **[0.10, 0.20]** (номинал 0.15 — центр); экспозиция 14.29% (l,hue)-сетки, где
+/// значение РЕШАЕТ выбранный оттенок (`exposure_hue_drift_penalty_slope`). Протокол
+/// «объективизации»: психофизический фит приемлемости дрейфа оттенка рампы (2AFC,
+/// N ≥ 15) стал бы кандидатом-ВЫВОДОМ на общих основаниях (замер → сравнение →
+/// решение, как хорда выше), НЕ обязательным экспериментом — терминал (e) уже
+/// закрыт замером отклонения строгого кандидата.
+// SSOT-TRACKED — наклон штрафа дрейфа, терминал (e) design-choice (model-conflict: измерен и отклонён, не owner-pending; диапазон [0.10,0.20]), см. docs/empirical-inventory.md.
 const HUE_DRIFT_PENALTY_SLOPE: f64 = 0.15;
 
 /// Акцентная кривая: светлотный скелет — нейтральная кривая темы, оттенок и
@@ -158,7 +175,16 @@ impl AccentCurve {
 
 /// Полуокно поиска оптимального оттенка рампы акцента (градусы): 30° покрывает
 /// типичную ширину гребня гамута sRGB вокруг канонического оттенка.
-// SSOT-TRACKED — hue search half-window (degrees).
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE** (в отличие от
+/// [`crate::semantic::CUSP_HALF_WINDOW_DEG`], которое ДОКАЗАННО клипует):
+/// лок `chord_derived_slope_rejected_degenerates_to_window_edge` показывает
+/// интерьерный оптимум (0 прижатий к ребру ±30°) на ВСЕХ 43 хроматических
+/// якорях 49-якорного паспорта labui при продакшн-наклоне; окно — нежёсткая
+/// нижняя граница, не связывающий кап. Экспозиция (доля (l,hue)-сетки, где
+/// точное окно меняет выбранный оттенок при свипе [25°, 45°]) — **0.93%**
+/// (`exposure_hue_search_window`). Значение не меняется.
+// SSOT-TRACKED — hue search half-window (degrees), терминал (c) interval-insensitive (exposure 0.93%, 0/43 якорей у ребра), см. docs/empirical-inventory.md.
 const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
 
 /// The hue (degrees) maximising `max_chroma(l_ok, h) − penalty·|h − h_canonical|`
@@ -384,6 +410,47 @@ pub(crate) fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
     // Step 3: grey Oklab L through the identical forward function the bisection
     // used — keeps the emitted lightness bit-for-bit, so the accent golden holds.
     srgb_linear_to_oklab([y, y, y])[0]
+}
+
+/// Render an Oklab `(L, C, hue)` point to an [`LcsColor`] under viewing
+/// conditions `vc` — the SINGLE source of the `Oklab → linear sRGB → XYZ →
+/// CAM16-UCS` assembly the accent-surface and accent-balance primitives share
+/// (no second copy of the rescale chain).
+///
+/// The caller guarantees `(l_ok, c_ok)` is in gamut (e.g. `c_ok ≤`
+/// [`max_chroma`]); the per-channel `clamp` is only machine-noise insurance at
+/// the gamut wall and a no-op strictly inside it. VC enters only the CAM16
+/// projection, exactly as the accent curve's emission does.
+pub(crate) fn lcs_from_oklab_lch(
+    l_ok: f64,
+    c_ok: f64,
+    hue_deg: f64,
+    vc: &ViewingConditions,
+) -> LcsColor {
+    let h_rad = hue_deg.to_radians();
+    let a_ok = c_ok * h_rad.cos();
+    let b_ok = c_ok * h_rad.sin();
+
+    let rgb = oklab_to_srgb_linear([l_ok, a_ok, b_ok]);
+    let rgb_clamped = [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+    ];
+
+    let xyz = srgb_to_xyz(rgb_clamped);
+    let h_ok = b_ok.atan2(a_ok).to_degrees().rem_euclid(360.0);
+
+    let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(xyz, vc);
+    // CAM16-UCS rescale через единый источник (#19/#60) — константы не дублируем.
+    let jp_actual = cam16::ucs_j(j);
+    let mp = cam16::ucs_m(m);
+    let s = if jp_actual + 1.0 > 1e-9 {
+        mp / (jp_actual + 1.0)
+    } else {
+        0.0
+    };
+    LcsColor::new(jp_actual, h_ok, s.max(0.0), h_cam)
 }
 
 /// The 64-step bisection that [`jp_to_oklab_l`] replaced, kept as the reference
@@ -1516,7 +1583,8 @@ mod derivation_rejection_locks {
     /// Вывод: кандидат не объективизирует — он передаёт решение произвольной
     /// границе HUE_SEARCH_HALF_WINDOW (интерьерный оптимум → клип по окну),
     /// делая нечувствительную константу окна чувствительной. Отклонён;
-    /// значение остаётся калибровочным классом (d).
+    /// значение остаётся design-choice (e), MODEL-CONFLICT: ИЗМЕРЕН-И-ОТКЛОНЁН
+    /// (терминальная таксономия; класс (d) упразднён).
     #[test]
     fn chord_derived_slope_rejected_degenerates_to_window_edge() {
         let (mut base_edge, mut chord_edge, mut chord_flip, mut n) =

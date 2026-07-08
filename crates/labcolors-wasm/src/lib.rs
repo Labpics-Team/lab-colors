@@ -21,11 +21,15 @@ pub mod config_dto;
 mod dto;
 mod engine;
 mod error;
+mod projection;
 mod theme;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 
-use crate::dto::{ResolvedTheme, RoleOutcome};
+use crate::dto::ResolvedTheme;
 use crate::engine::Engine;
 use crate::error::BindingError;
 
@@ -174,18 +178,8 @@ export type RoleRecipe =
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
   | { kind: "zero" };
 
-/** Именованный пресет ролей. Тонкий конфиг несёт `preset` вместо простыни `roles`. */
-export type RolePreset = "labui";
-
 /** Полный конфиг дизайн-системы клиента — вход loadConfig (JSON.stringify(config)). */
 export interface ThemeConfig {
-  /**
-   * Пресет ролей: наполняет словарь дизайн-системы целиком, чтобы клиент вносил
-   * ТОЛЬКО значения (якоря, ручки), не семантику. Тонкий конфиг задаёт `preset` и
-   * ОПУСКАЕТ `roles`/`aliases`. Задать `preset` вместе с непустыми `roles` —
-   * ошибка `invalid_config` (оверрайд отдельных ролей — не этот слой).
-   */
-  readonly preset?: RolePreset;
   readonly brand: ThemeAnchors;
   readonly neutral: {
     readonly anchors: { light: string; mid: string; dark: string };
@@ -210,7 +204,8 @@ export interface ThemeConfig {
     readonly chroma_fraction: number;
   };
   readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
-  /** Опускается в тонком конфиге (задан `preset`); иначе — полный словарь ролей. */
+  /** Словарь ролей дизайн-системы. Конфиг обязан нести собственные роли; пустой
+   *  контракт (без `roles` и `aliases`) отклоняется на загрузке. */
   readonly roles?: ReadonlyArray<{ name: string; recipe: RoleRecipe }>;
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }
@@ -249,6 +244,13 @@ extern "C" {
 #[wasm_bindgen]
 pub struct LabColors {
     inner: Engine,
+    /// Одноячеечный мемо сериализации последнего резолва: кэш-хит движка
+    /// возвращает тот же `Rc`, значит его JSON можно не пересобирать —
+    /// hit-путь `resolveTheme` платит только `JSON.parse`. Ячейка держит
+    /// сильный `Rc`, поэтому `Rc::ptr_eq` не может ложно совпасть с новой
+    /// аллокацией (наша жива — адрес занят); смена конфига даёт новые `Rc`,
+    /// и мемо промахивается честно.
+    proj_memo: RefCell<Option<(Rc<ResolvedTheme>, Rc<str>)>>,
 }
 
 #[wasm_bindgen]
@@ -262,6 +264,7 @@ impl LabColors {
     pub fn new() -> LabColors {
         LabColors {
             inner: Engine::new(),
+            proj_memo: RefCell::new(None),
         }
     }
 
@@ -281,7 +284,32 @@ impl LabColors {
             .inner
             .resolve_theme(bg_hex, theme)
             .map_err(to_js_error)?;
-        Ok(project_resolved(&resolved)?.unchecked_into())
+        // Одна «широкая» FFI-строка + нативный JSON.parse вместо ~тысячи
+        // Reflect::set (почему — в док-комменте модуля `projection`); мемо
+        // снимает с кэш-хита ещё и пересборку строки. Каждый вызов по-прежнему
+        // отдаёт СВЕЖИЙ объект — семантика для мутирующего потребителя не
+        // меняется.
+        let json: Rc<str> = {
+            let mut memo = self.proj_memo.borrow_mut();
+            match memo.as_ref() {
+                Some((rc, s)) if Rc::ptr_eq(rc, &resolved) => Rc::clone(s),
+                _ => {
+                    let s: Rc<str> = crate::projection::resolved_json(&resolved)
+                        .map_err(to_js_error)?
+                        .into();
+                    *memo = Some((Rc::clone(&resolved), Rc::clone(&s)));
+                    s
+                }
+            }
+        };
+        // По построению строка — валидный JSON; невозможный отказ парсера —
+        // честная внутренняя ошибка, не паника.
+        let parsed = js_sys::JSON::parse(&json).map_err(|_| {
+            to_js_error(BindingError::Internal {
+                reason: "проекция не распарсилась как JSON".to_string(),
+            })
+        })?;
+        Ok(parsed.unchecked_into())
     }
 
     /// Загрузить конфиг дизайн-системы (JSON по типу `ThemeConfig` из `.d.ts`).
@@ -359,148 +387,6 @@ impl Default for LabColors {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Project a pure [`ResolvedTheme`] into the JS object the `.d.ts` describes.
-///
-/// Built generically from the role vector — no role is named here, so the set
-/// can grow without touching this function.
-fn project_resolved(resolved: &ResolvedTheme) -> Result<JsValue, JsError> {
-    let out = js_sys::Object::new();
-    set(&out, "theme", &JsValue::from_str(resolved.theme));
-    set(&out, "background", &JsValue::from_str(&resolved.background));
-
-    let vars = js_sys::Object::new();
-    let roles = js_sys::Object::new();
-    for entry in &resolved.roles {
-        let css_var = format!("--lab-{}", entry.role_key);
-        let role_obj = js_sys::Object::new();
-        set(&role_obj, "cssVar", &JsValue::from_str(&css_var));
-        match &entry.outcome {
-            RoleOutcome::Color(c) => {
-                set(&role_obj, "kind", &JsValue::from_str("color"));
-                set(&role_obj, "hex", &JsValue::from_str(&c.hex));
-                set(&role_obj, "lc", &JsValue::from_f64(c.lc));
-                set(&role_obj, "wcagRatio", &JsValue::from_f64(c.wcag_ratio));
-                set(&role_obj, "compressed", &JsValue::from_bool(c.compressed));
-                set(
-                    &role_obj,
-                    "hueVanished",
-                    &JsValue::from_bool(c.hue_vanished),
-                );
-                set(
-                    &role_obj,
-                    "achievedDj",
-                    &c.achieved_dj.map_or(JsValue::NULL, JsValue::from_f64),
-                );
-                set(
-                    &role_obj,
-                    "floorOverride",
-                    &JsValue::from_bool(c.floor_override),
-                );
-                set(
-                    &role_obj,
-                    "legalFloor",
-                    &c.legal_floor.map_or(JsValue::NULL, JsValue::from_f64),
-                );
-                // Единая форма эмиссии: oklch и для солида (hex остаётся
-                // данными роли; синтаксис переменной один на все исходы).
-                let css = oklch_css(&c.hex, None)?;
-                set(&role_obj, "css", &JsValue::from_str(&css));
-                set(&vars, &css_var, &JsValue::from_str(&css));
-            }
-            RoleOutcome::Translucent(r) => {
-                set(&role_obj, "kind", &JsValue::from_str("translucent"));
-                set(&role_obj, "tintHex", &JsValue::from_str(&r.tint_hex));
-                set(&role_obj, "alpha", &JsValue::from_f64(r.alpha));
-                set(
-                    &role_obj,
-                    "compositeHex",
-                    &JsValue::from_str(&r.composite_hex),
-                );
-                set(&role_obj, "compositeLc", &JsValue::from_f64(r.composite_lc));
-                set(
-                    &role_obj,
-                    "compositeWcag",
-                    &JsValue::from_f64(r.composite_wcag),
-                );
-                set(
-                    &role_obj,
-                    "alphaCoerced",
-                    &JsValue::from_bool(r.alpha_coerced),
-                );
-                set(
-                    &role_obj,
-                    "floorCoerced",
-                    &JsValue::from_bool(r.floor_coerced),
-                );
-                // Переменная несёт тинт в oklch со слэш-альфой — браузер
-                // композитит на живой подложке; форма едина с солидами.
-                let css = oklch_css(&r.tint_hex, Some(r.alpha))?;
-                set(&role_obj, "css", &JsValue::from_str(&css));
-                set(&vars, &css_var, &JsValue::from_str(&css));
-            }
-            RoleOutcome::Glow(g) => {
-                // Свечение: слои для screen-наложения потребителем.
-                // --lab-<role> несёт halo (единая oklch-форма), сателлиты
-                // --lab-<role>-core / --lab-<role>-alpha — анатомия и
-                // решённая интенсивность (число, не цвет).
-                set(&role_obj, "kind", &JsValue::from_str("glow"));
-                set(&role_obj, "coreHex", &JsValue::from_str(&g.core_hex));
-                set(&role_obj, "haloHex", &JsValue::from_str(&g.halo_hex));
-                set(&role_obj, "alpha", &JsValue::from_f64(g.alpha));
-                set(&role_obj, "achievedDj", &JsValue::from_f64(g.achieved_dj));
-                set(&role_obj, "degraded", &JsValue::from_bool(g.degraded));
-                let halo_css = oklch_css(&g.halo_hex, None)?;
-                let core_css = oklch_css(&g.core_hex, None)?;
-                set(&role_obj, "css", &JsValue::from_str(&halo_css));
-                set(&vars, &css_var, &JsValue::from_str(&halo_css));
-                set(
-                    &vars,
-                    &format!("{css_var}-core"),
-                    &JsValue::from_str(&core_css),
-                );
-                set(
-                    &vars,
-                    &format!("{css_var}-alpha"),
-                    &JsValue::from_str(&format!("{:.4}", g.alpha)),
-                );
-            }
-            RoleOutcome::None => {
-                set(&role_obj, "kind", &JsValue::from_str("none"));
-            }
-            RoleOutcome::Unreachable { code, message } => {
-                set(&role_obj, "kind", &JsValue::from_str("unreachable"));
-                set(&role_obj, "code", &JsValue::from_str(code));
-                set(&role_obj, "message", &JsValue::from_str(message));
-            }
-        }
-        set(&roles, &entry.role_key, &role_obj);
-    }
-    set(&out, "vars", &vars);
-    set(&out, "roles", &roles);
-    Ok(out.into())
-}
-
-/// Единая CSS-форма эмиссии: `oklch(L% C H)` / `oklch(L% C H / A)`.
-/// Байт-точность реконструкции доказана round-trip тестом ядра на решётке
-/// куба. Hex к этому месту валиден по построению (солвер/лестница), но при
-/// невозможном парсе — честная структурная ошибка, НЕ тихая подмена формы:
-/// потребитель ждёт oklch, а полупрозрачная роль при подмене ещё и потеряла бы альфу.
-fn oklch_css(hex: &str, alpha: Option<f64>) -> Result<String, JsError> {
-    labcolors_core::oklch_css_from_hex(hex, alpha).map_err(|reason| {
-        to_js_error(BindingError::Internal {
-            reason: format!("резолвнутый цвет не сериализуется в oklch: {reason}"),
-        })
-    })
-}
-
-/// Set a property on a JS object. `Reflect::set` on a freshly created `Object`
-/// cannot fail (the target is always a real object and the key a string), so
-/// the result is intentionally ignored — there is no recoverable error here and
-/// nothing to surface to the caller.
-fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
-    let _ = js_sys::Reflect::set(target, &JsValue::from_str(key), value);
 }
 
 /// Turn a boundary error into a JS `Error` carrying both the stable machine

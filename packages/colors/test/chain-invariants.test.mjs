@@ -150,7 +150,10 @@ const COMPOSITE_QUANT_LSB = 1;
 // Известная верхняя граница числа расхождений на текущем корпусе (THEMES×
 // BACKGROUNDS×паспорт). Пин: разрастание gap (в другие темы/фоны/роли) поднимет
 // число выше и упадёт RED — характеризация защищает и КОЛИЧЕСТВО, и ЛОКАЦИЮ.
-const KNOWN_COMPOSITE_DIVERGENCES = 3;
+// Волна 1 (закон категориальных зон) сменила info-сентимент с пурпура на синий
+// фокус — прежние 3 near-black dark-ic расхождения исчезли, осталась РОВНО 1
+// benign ≤1-LSB точка (см. локацию ниже). Число снижено 3 → 1.
+const KNOWN_COMPOSITE_DIVERGENCES = 1;
 
 test("translucent serialization fidelity: emitted tint+alpha round-trip exactly; browser composite matches the promise within the ≤1-LSB quantization bound", () => {
   const e = engine();
@@ -214,15 +217,15 @@ test("translucent serialization fidelity: emitted tint+alpha round-trip exactly;
 });
 
 // Характеризация НАХОДКИ: пин ТЕКУЩЕГО поведения по трём осям — ВЕЛИЧИНА (≤1 LSB),
-// КОЛИЧЕСТВО (≤ известного) и ЛОКАЦИЯ (только near-black dark-ic). Тест НЕ
-// узаконивает баг:
+// КОЛИЧЕСТВО (≤ известного) и ЛОКАЦИЯ (единственная info-заливка light-ic/#FFFFFF;
+// Волна 1 сместила её с near-black dark-ic). Тест НЕ узаконивает баг:
 //   • починят движок (композит в байтовом пространстве) → расхождения исчезнут,
 //     `divergent.length > 0` упадёт → форс-ревью;
 //   • разрастётся gap (другие темы/фоны/роли или >1 LSB) → величина/количество/
 //     локация превысят пин → RED.
 // Без пина количества и локации регрессия, размазавшая тот же ≤1-LSB зазор на
 // сотню сэмплов или в light-темы, прошла бы зелёной — находка тихо сгнила бы.
-test("characterization: the composite quantization gap is real, bounded to ≤1 LSB, count-capped, and confined to near-black dark-ic (pins current behaviour)", () => {
+test("characterization: the composite quantization gap is real, bounded to ≤1 LSB, count-capped, and confined to the light-ic info fill (pins current behaviour)", () => {
   const e = engine();
   let maxObservedDelta = 0;
   const divergent = [];
@@ -252,12 +255,15 @@ test("characterization: the composite quantization gap is real, bounded to ≤1 
     divergent.length <= KNOWN_COMPOSITE_DIVERGENCES,
     `composite gap spread: ${divergent.length} divergences > known ${KNOWN_COMPOSITE_DIVERGENCES} — ${divergent.join(", ")}`,
   );
-  // ЛОКАЦИЯ: все расхождения — только near-black (#000000) в dark-ic. Утечка в
-  // другую тему/фон = смена природы находки → форс-ревью.
+  // ЛОКАЦИЯ: единственное расхождение — низкоальфовая info-заливка на белом в
+  // light-ic (`fill-info-quaternary`, α≈0.02). Волна 1 (закон категориальных зон)
+  // сменила info-сентимент с пурпура на синий фокус — та же природа зазора
+  // (8-бит квантование браузерного композита), новая точка от нового цвета.
+  // Утечка в другую роль/тему/фон = смена природы находки → форс-ревью.
   for (const loc of divergent) {
     assert.ok(
-      loc.startsWith("dark-ic/#000000/"),
-      `composite gap escaped near-black dark-ic: ${loc}`,
+      loc === "light-ic/#FFFFFF/fill-info-quaternary",
+      `composite gap escaped the known info-fill point: ${loc}`,
     );
   }
 });

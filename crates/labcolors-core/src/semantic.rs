@@ -39,7 +39,9 @@
 //!    such as `#0078D4`). Across that whole band the perceptual layer prefers
 //!    *light-on-dark* with a wide margin — the luminance-domain LPC core
 //!    (`crate::lpc::contrast_core`) has its black-overtakes-white crossover far
-//!    higher, near `Y ≈ 0.36` — so the tie resolves to white (`break_tie`). This
+//!    higher, near `Y ≈ 0.342` (measured, locked by
+//!    `pair::exposure_locks::pair_crossover_equals_measured_core_polarity_flip`)
+//!    — so the tie resolves to white (`break_tie`). This
 //!    replaces the former "larger WCAG margin wins" rule, whose symmetric margin
 //!    crossed over *inside* the band (`Y ≈ 0.1791`) and chose dark-on-light on the
 //!    upper half — the perceptually weaker side there, and the one that made
@@ -153,19 +155,66 @@ use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
 
-/// Надёжная нижняя граница контрастной величины декоративной роли.
+/// DERIVED — надёжная нижняя граница контрастной величины декоративной роли.
 ///
-/// Ниже примерно этого `Lc` решатель упирается в порог квантования (issue #44)
-/// и возвращает нулевой контраст, поэтому порог `Contract::range` ниже этой
-/// границы вернулся бы как [`Unreachable::BelowContrastFloor`]. Каждый
+/// Раскладывается как [`MODEL_LC_FLOOR`](crate::lpc::MODEL_LC_FLOOR) (`7.3`) +
+/// [`QUANT_GUARD`] (`0.2`). За клипом решатель эмитит |Lc| ≥ 7.3 — это алгебраически
+/// следует из GROUNDED APCA `0.0.98G-4g` набора (issue #44); guard держит пол
+/// строго выше 7.3, чтобы `Contract::range` у самого клипа не садился на порог
+/// квантования и не возвращал [`Unreachable::BelowContrastFloor`]. Каждый
 /// декоративный порог держится строго выше этой границы до появления полной
 /// JND-калибровки.
-// SSOT-TRACKED — порог квантования решателя (issue #44), см. docs/empirical-inventory.md.
+///
+/// Значение оставлено ЛИТЕРАЛОМ `7.5` ради байт-идентичности выходов (сумма
+/// `7.3 + 0.2` в f64 отличается от `7.5` на ~1e-15); идентичность
+/// `7.5 == MODEL_LC_FLOOR + QUANT_GUARD` закреплена компайл-тайм-проверкой ниже и
+/// тестом `decorative_floor_is_model_floor_plus_guard`.
+// SSOT-TRACKED — DERIVED: MODEL_LC_FLOOR (7.3) + QUANT_GUARD (0.2), issue #44, см. docs/empirical-inventory.md.
 const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
-/// Порог декоративного контраста для повышенной контрастности (Lc): поднят выше
-/// [`DECORATIVE_FLOOR_MIN`] под более строгие перцептивные требования тем `-ic`.
-// SSOT-TRACKED — порог для тем повышенной контрастности (-ic), см. docs/empirical-inventory.md.
+/// Квант-guard над модельным полом [`MODEL_LC_FLOOR`](crate::lpc::MODEL_LC_FLOOR):
+/// зазор `DECORATIVE_FLOOR_MIN − MODEL_LC_FLOOR`, держащий декоративный пол строго
+/// выше 7.3, чтобы решатель не садился на порог клипа и не возвращал нулевой
+/// контраст (issue #44).
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: `QUANT_GUARD` НЕ используется в
+/// продакшене независимо — единственная величина, которую видит решатель, это
+/// байт-идентичный литерал [`DECORATIVE_FLOOR_MIN`] (7.5); guard существует
+/// только как провенанс-разложение этого литерала на DERIVED-член (7.3) и
+/// задекларированный запас, пиннится компайл-тайм-проверкой и локом
+/// `decorative_floor_is_model_floor_plus_guard`. Скан-тест
+/// `lpc::no_pair_emits_contrast_below_model_floor` показывает: фактический
+/// минимальный ненулевой |Lc| = 7.3005 — сидит практически НА модельном полу
+/// 7.3, а не у номинальной цели 7.5, то есть точная магнитуда guard'а (пока он
+/// положителен и цель остаётся достижимой в пределах `QUANT_BUDGET` = 1.0) не
+/// меняет ни одного реального эмитируемого контраста. Ре-аудит
+/// `science/reclassify-e-buckets` 2026-07-07 — реестр
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — квант-guard декоративного пола (issue #44), терминал (c) interval-insensitive, см. docs/empirical-inventory.md.
+const QUANT_GUARD: f64 = 0.2;
+
+// Компайл-тайм пиннинг деривации: DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR +
+// QUANT_GUARD в пределах f64-шума суммирования. Заодно ИСПОЛЬЗУЕТ обе константы в
+// продакшене (не dead_code); сам литерал 7.5 при этом НЕ меняется (байт-идентичность).
+const _: () = {
+    let derived = crate::lpc::MODEL_LC_FLOOR + QUANT_GUARD;
+    let d = DECORATIVE_FLOOR_MIN - derived;
+    let ad = if d < 0.0 { -d } else { d };
+    assert!(
+        ad < 1e-9,
+        "DECORATIVE_FLOOR_MIN must equal MODEL_LC_FLOOR + QUANT_GUARD"
+    );
+};
+
+/// GROUNDED — порог декоративного контраста для тем повышенной контрастности (`-ic`).
+///
+/// Опубликованный APCA-уровень `Lc 15` — «absolute minimum for any non-text that
+/// needs to be discernible», ниже которого элемент считается невидимым (APCA
+/// project docs, Somers/Myndex; **DRAFT/beta, single-origin — НЕ норматив WCAG 3**).
+/// Декоративный `-ic`-пол — ровно этот случай: минимальный различимый
+/// не-текстовый контраст. Применяется порядкосохраняющим сдвигом `+7.5`
+/// (= 15 − 7.5), НЕ как `max` — см. [`RoleTable::decorative_contract`].
+// GROUNDED — APCA `Lc 15` non-text discernibility level, draft (docs/empirical-inventory.md).
 const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 
 // ── dJ'-якоря декоративных ролей (буквальные значения из Figma) ─────────────────
@@ -267,8 +316,9 @@ const LABEL_PRIMARY_FRACTION: f64 = 0.97335917;
 #[cfg(test)]
 // SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
 const LABEL_SECONDARY_FRACTION: f64 = 0.64359014;
-/// Доля максимального Lc для `LabelTertiary` (и `Icon`):
-/// Ys(#9C9C9C)/Ys(max) = 50.4459/106.0407 (инверсия генезис-якоря 48.9).
+/// Доля максимального Lc для `LabelTertiary`:
+/// Ys(#9C9C9C)/Ys(max) = 50.4459/106.0407 (инверсия генезис-якоря 48.9). Иконки —
+/// глифы: красятся `label-tertiary`; отдельной роли `icon` в словаре нет.
 #[cfg(test)]
 // SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
 const LABEL_TERTIARY_FRACTION: f64 = 0.47572199;
@@ -344,13 +394,6 @@ pub enum Role {
     LabelQuaternary,
     /// Meaningful icons and graphical UI objects — non-text 3:1 floor.
     ///
-    /// DEPARTURE FROM HIG (documented choice): in Apple's HIG glyphs live inside
-    /// the Labels ramp and carry no separate contrast rule. We keep `icon` as a
-    /// distinct functional role because our contract gives it a *legal floor* of
-    /// 3:1 (`Floor::AaUi`) — meaningful non-text UI objects must clear WCAG 1.4.11.
-    /// That legal floor is ours, not HIG's, so the role stays explicit rather than
-    /// folding into `label-*`.
-    Icon,
     /// Hairline separator between content — a decorative JND contract. Kept as a
     /// first-class role (HIG carries it under separators / hairlines).
     Separator,
@@ -365,9 +408,9 @@ pub enum Role {
     /// Soft container outline — the faintest visible border. HIG "Border/Soft". A
     /// dJ' step at the owner's literal anchor (light 3.15 / dark 5.83).
     BorderSoft,
-    /// The explicit-zero border: "no edge here". HIG "Border/Ghost" (`@0`).
+    /// The explicit-zero border: "no edge here". HIG "Border/None" (`@0`).
     /// Resolves to [`Resolved::None`], the honest zero of the border ramp.
-    BorderGhost,
+    BorderNone,
     /// Strongest fill tint over the background. HIG "Fills/Primary". A dJ' step at
     /// the owner's literal anchor (light 7.93 / dark 17.67); top of the
     /// strictly-descending fill ladder.
@@ -405,21 +448,19 @@ impl Role {
     /// weight (strongest first, except the progressive shadow stack which runs
     /// subtlest→strongest), so a resolved set iterates deterministically and the
     /// ladder ordering invariants read off the sequence directly.
-    pub const ALL: [Role; 20] = [
+    pub const ALL: [Role; 19] = [
         // Labels — strongest text first.
         Role::LabelPrimary,
         Role::LabelSecondary,
         Role::LabelTertiary,
         Role::LabelQuaternary,
-        // Icon — functional, between labels and decorative.
-        Role::Icon,
         // Separator.
         Role::Separator,
         // Border ladder — strong → soft, then the explicit zero.
         Role::BorderStrong,
         Role::BorderBase,
         Role::BorderSoft,
-        Role::BorderGhost,
+        Role::BorderNone,
         // Fill ladder — primary (most visible) → quaternary, then the zero.
         Role::FillPrimary,
         Role::FillSecondary,
@@ -445,12 +486,11 @@ impl Role {
             Role::LabelSecondary => "label-secondary",
             Role::LabelTertiary => "label-tertiary",
             Role::LabelQuaternary => "label-quaternary",
-            Role::Icon => "icon",
             Role::Separator => "separator",
             Role::BorderStrong => "border-strong",
             Role::BorderBase => "border-base",
             Role::BorderSoft => "border-soft",
-            Role::BorderGhost => "border-ghost",
+            Role::BorderNone => "border-none",
             Role::FillPrimary => "fill-primary",
             Role::FillSecondary => "fill-secondary",
             Role::FillTertiary => "fill-tertiary",
@@ -703,7 +743,21 @@ pub enum RoleSpec {
 /// роли наследуют этот оттенок, из-за чего `label-primary` на белом ложится как
 /// родственник `#101012` (холодный почти-чёрный), а не стерильно-серый
 /// `#141414`.
-// SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы.
+///
+/// Терминал **(e) DESIGN-CHOICE** — ИЗМЕРЕННЫЙ якорь дизайна (оттенок семейства
+/// нейтралей labui), не первопринципная величина: канонического «правильного»
+/// оттенка нейтрали не существует, это выбор холодного почти-чёрного семейства.
+/// Легальный диапазон = ИЗМЕРЕННЫЙ разброс шкалы **[285.78°, 286.01°]** (0.23°).
+/// Sensitivity (Волна 2, лок `neutral_hue_emits_byte_invariant_across_measured_family_spread`):
+/// эмитируемый тинт-цвет **байт-инвариантен (ΔE_ok = 0)** по всему измеренному
+/// разбросу — при малой хроме тинта (ratio 0.10) сдвиг 0.23° ниже кванта
+/// 8-бит сетки; даже грубая ошибка ±20° даёт лишь ΔE_ok ≈ 0.0114 (≈1 JND в
+/// Oklab). Оттенок ВСЁ ЖЕ материален (питает `cusp_attracted_hue` как канонический
+/// и в режиме пиннинга переносится в выход ~1:1), поэтому не (c), а честный (e):
+/// измеренный якорь с доказанной локальной робастностью. Протокол калибровки:
+/// пере-замерить Oklab-оттенок собственного семейства нейтралей потребителя
+/// (`atan2(b,a)` средней ступени) — измерение, а не эксперимент с наблюдателями.
+// SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы, терминал (e) design-choice (измеренный якорь, байт-инвариант по разбросу [285.78,286.01]), см. docs/empirical-inventory.md.
 pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 
 /// Доля от максимальной хромы в гамуте, которую несёт тонированная роль.
@@ -718,7 +772,21 @@ pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
 /// краёв, больше к середине".
 /// `0.10`: на белом `label-primary` резолвится в холодный почти-чёрный
 /// семейства `#101012`, а не в чистый серый.
-// SSOT-TRACKED — коэффициент хромы нейтрального подтона.
+///
+/// Терминал **(e) DESIGN-CHOICE** — генуинная свободная ручка «силы подтона».
+/// Blast radius: используется ТОЛЬКО опциональной v1-политикой
+/// [`RoleChroma::flat_neutral_tint`] (не дефолтная — дефолт `Curve` держит хрому
+/// через `TINT_TARGET_MP`), т.е. в проде «спит», пока потребитель не вернётся к
+/// плоскому тинту. Легальный диапазон конфига **[0, 1]** (валидатор `TINT_RATIO`
+/// в `config.rs`). Sensitivity (Волна 2, лок
+/// `neutral_tint_ratio_sensitivity_is_bounded`): свип легальной полосы
+/// [0, 0.20] по светлотам шкалы даёт max ΔE_ok ≈ **0.0288** (>1 JND) —
+/// НЕПРЕРЫВНЫЙ материальный дрейф (ratio прямо масштабирует хрому
+/// `ratio · max_chroma(L)`), значит честный (e), не (c). Протокол калибровки:
+/// поднимать ratio, пока подтон не начнёт «считываться как цвет» (перцептивный
+/// потолок, замер по [`TINT_PERCEPTIBLE_MP_FLOOR`]) — тогда 0.10 = чуть ниже
+/// этого потолка на серединных ролях.
+// SSOT-TRACKED — коэффициент хромы нейтрального подтона, терминал (e) design-choice (opt-in v1-политика; max ΔE_ok 0.0288 по [0,0.2]), см. docs/empirical-inventory.md.
 pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// Целевая перцептивная красочность (CAM16-UCS `M'`) по умолчанию, которую
@@ -760,17 +828,32 @@ pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 
 /// Жёсткость притяжения оттенка к канонической точке по умолчанию для
-/// v2-кривой — второй (и последний) свободный скаляр. Чем выше значение, тем
-/// сильнее оттенок прижат к каноническому [`NEUTRAL_HUE_DEG`]; чем ниже — тем
-/// свободнее он смещается к локальному каспу хромы гамута sRGB.
+/// v2-кривой. Чем выше значение, тем сильнее оттенок прижат к каноническому
+/// [`NEUTRAL_HUE_DEG`]; чем ниже — тем свободнее он смещается к локальному
+/// каспу хромы гамута sRGB.
 ///
-/// Локальный касп около 286° даёт лишь небольшой выигрыш хромы (~0.02 Oklab)
-/// относительно канонического оттенка, поэтому любая жёсткость выше ~0.5
-/// прижимает оттенок к 286° по всей шкале. `9.0` уверенно лежит в режиме
-/// прижатия, устойчиво к флуктуациям float, которые иначе могли бы сместить
-/// почти-белую роль к каспу пурпурного (см. предел геометрии в
-/// `cusp_attracted_hue`).
-// SSOT-TRACKED — жёсткость прижатия оттенка к каспу.
+/// Терминал **(c) INTERVAL-INSENSITIVE** (ре-классификация Волны 2
+/// «объективизация», 2026-07-08; ранее (e) DESIGN-CHOICE). Замер
+/// `cusp_attracted_hue` на светлотной сетке [0.05, 0.95]: локальный касп около
+/// 286° даёт лишь небольшой выигрыш хромы относительно канонического оттенка,
+/// поэтому выше **измеренного порога пиннинга ≈0.36 (шаг 0.01)** штраф `stiffness/100 · drift`
+/// подавляет весь выигрыш, и argmax встаёт РОВНО на канонический оттенок
+/// (drift = 0). Отклонение эмитируемого оттенка от канонического по всей полосе
+/// жёсткости `[1.0, 100.0]` — **0.000000°** (байт-инвариант выхода), тогда как
+/// при `stiffness → 0` оттенок уходит до края окна ±40° (полностью материален
+/// НИЖЕ режима). `9.0` сидит в **25×** порога пиннинга — значение доказуемо
+/// нематериально для выхода в своём режиме: это ИЗМЕРЕННОЕ утверждение об
+/// инвариантности выхода, сильнее «выбора дизайна». Лок
+/// `stiffness_pins_hue_to_canonical_above_threshold` (порог + инвариантность +
+/// маржа), реестр docs/empirical-inventory.md.
+///
+/// Легальный диапазон конфига: `hue_stiffness ≥ 0` (валидатор `config.rs`);
+/// режим пиннинга — `[≈0.36, ∞)`. Ниже ≈0.36 оттенок клиента материально
+/// смещается к каспу — там `hue_stiffness` становится настоящей (e)-ручкой
+/// потребителя, но ДЕФОЛТ 9.0 к этому режиму не относится. Протокол «выхода из
+/// (c)»: если потребитель осознанно ставит стиффнес < 0.36 (хочет касп-дрейф),
+/// он ре-открывает материальность и обязан объявить своё значение (e)-ручкой.
+// SSOT-TRACKED — жёсткость прижатия оттенка к каспу, терминал (c) interval-insensitive (выход байт-инвариантен выше порога пиннинга ≈0.36, дефолт 9.0 = 25× порога), см. docs/empirical-inventory.md.
 pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 
 /// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
@@ -780,13 +863,44 @@ pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 /// берёт максимум, который даёт гамут, и честно допускает падение к этому
 /// порогу на самых краях (почти-чёрный / почти-белый), где даже собственный
 /// `M'` референса падает до ~2.3–3.0.
-// SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M'.
-const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: порог сидит вплотную ПОД измеренным
+/// потолком ахроматического `M'`-шума серых (максимум ≈1.53 у белого,
+/// `tint_floor_tracks_achromatic_mp_noise_ceiling`), а доля sRGB-гаммы, где
+/// точное значение решает «ощущаемый тон / мёртвая серость», — **0.07%**
+/// (`exposure_tint_perceptible_mp_floor`). Ниже порога классификация выхода
+/// провизорно неизменна по всему практическому интервалу — сильнее «выбор
+/// дизайна», ре-аудит `science/reclassify-e-buckets` 2026-07-07, реестр
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M', терминал (c) interval-insensitive (exposure 0.07%), см. docs/empirical-inventory.md.
+pub(crate) const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 
 /// Half-width (degrees) of the hue window the cusp search explores around the
 /// canonical hue. The undertone may drift inside a blue-violet band; it may not
 /// wander into unrelated quadrants (red, cyan), so the search is bounded.
-// SSOT-TRACKED — hue search half-window (degrees).
+///
+/// Терминал **(e) DESIGN-CHOICE** (НЕ (c), несмотря на внешнее сходство с
+/// [`crate::scale::HUE_SEARCH_HALF_WINDOW`]): замер
+/// `cusp_window_is_near_measured_gamut_drift` показывает, что полный
+/// геометрический дрейф каспа гамута (≈42.5°) СТРОГО ПРЕВЫШАЕТ окно (40°) —
+/// окно намеренно клипует чуть ВНУТРИ полного дрейфа (движок держит оттенок
+/// у канонического, не гонится за магента-каспом). Это доказанно СВЯЗЫВАЮЩИЙ
+/// кап (в отличие от `HUE_SEARCH_HALF_WINDOW`, где интерьерный оптимум НИКОГДА
+/// не касается ребра окна ни на одном из 43 хроматических якорей) — точное
+/// значение окна МЕНЯЕТ, на сколько градусов оттенку позволено сместиться на
+/// экстремумах светлоты, поэтому доказательства интервал-нечувствительности
+/// нет: честный терминал — задекларированный дизайн-кап, не (c).
+///
+/// Легальный диапазон (Волна 2): `(0°, ~42.5°]` — измеренный полный дрейф
+/// каспа. Значение обязано быть ≤ полного дрейфа (иначе кап перестаёт быть
+/// связывающим и вырождается в `HUE_SEARCH`-случай) и > 0. Sensitivity: у
+/// края этого интервала точное значение решает величину допустимого сдвига
+/// оттенка на крайних светлотах (лок `cusp_window_is_near_measured_gamut_drift`
+/// пинит `дрейф > окно`). Протокол «объективизации»: замерить перцептивный
+/// порог приемлемого дрейфа undertone (2AFC на рампе near-white ролей) — тогда
+/// окно = min(этот порог, полный дрейф); измерение стало бы кандидатом-выводом
+/// (замер → сравнение → решение), а не обязательным экспериментом.
+// SSOT-TRACKED — hue search half-window (degrees), терминал (e) design-choice (намеренный кап (0,~42.5°], не interval-insensitive), см. docs/empirical-inventory.md.
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
 /// The chroma policy a role table carries.
@@ -1213,7 +1327,7 @@ pub fn tint_target_sweep_repro(
 #[derive(Debug, Clone, PartialEq)]
 #[cfg(test)]
 pub struct RoleTable {
-    specs: [(Role, RoleSpec); 20],
+    specs: [(Role, RoleSpec); 19],
     chroma: RoleChroma,
 }
 
@@ -1341,8 +1455,6 @@ impl Default for RoleTable {
                     Role::LabelQuaternary,
                     anchor(LABEL_QUATERNARY_FRACTION, Floor::None),
                 ),
-                // Icon — unchanged functional role (legal 3:1 floor, our contract).
-                (Role::Icon, anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi)),
                 // Separator — Lc decorative (no owner dJ' anchor for it).
                 (Role::Separator, decorative(SEPARATOR_DECORATIVE_LC)),
                 // Border ladder. Strong is an ANCHOR (HIG Border/Strong = N12 =
@@ -1357,7 +1469,7 @@ impl Default for RoleTable {
                 ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
-                (Role::BorderGhost, RoleSpec::Zero),
+                (Role::BorderNone, RoleSpec::Zero),
                 // Fill ladder — dJ' steps with the owner's LITERAL Figma-computed
                 // anchors (light 7.93/6.41/4.63/3.15, dark 17.67/15.78/12.01/8.22),
                 // strictly descending in visibility (primary most visible →
@@ -2905,7 +3017,24 @@ fn enforce_named_text_hierarchy(
 /// so a demotion may need several grid steps to clear it — and when even the
 /// laxest legal target cannot, the junior is set equal to its senior instead.
 /// The 0.5 threshold separates real visual distinction from float noise.
-// SSOT-TRACKED — minimum Lc separation for visual distinction vs float noise.
+///
+/// Терминал **(e) DESIGN-CHOICE** (НЕ (c)): `STRICT_STEP` — прямое слагаемое
+/// цели демоции (`target = senior_mag − STRICT_STEP`), поэтому его точное
+/// значение НЕПРЕРЫВНО и напрямую сдвигает эмитируемый цвет junior-роли —
+/// доказательства интервал-нечувствительности нет. Лок
+/// `strict_step_sits_just_above_typical_grid_step` лишь характеризует, что
+/// 0.5 сидит чуть выше типичного (медианного ≈0.44) Lc-шага 8-бит серой
+/// сетки — обоснование ГРАНИЦЫ квантования, не доказательство immaterial-сти.
+///
+/// Легальный диапазон (Волна 2): `[~0.44, ~7.85)` — снизу типичный (медианный)
+/// Lc-шаг кванта серых (ниже него «строго слабее» = float-шум, лок), сверху
+/// обрыв loClip мягкого клампа APCA (жёсткий разрыв — единственный шаг такого
+/// размера). 0.5 сидит у нижней границы: минимальный шаг, надёжно превышающий
+/// шум сетки. Протокол «объективизации»: замерить перцептивный порог
+/// различимости соседних Lc-ступеней (JND по контрасту на серой рампе) — тогда
+/// `STRICT_STEP = max(этот JND, медианный шаг сетки)`; измерение стало бы
+/// кандидатом-выводом (замер → сравнение → решение), не обязательным экспериментом.
+// SSOT-TRACKED — minimum Lc separation for visual distinction vs float noise, терминал (e) design-choice (не interval-insensitive — прямо параметризует выход; диапазон [~0.44,~7.85)), см. docs/empirical-inventory.md.
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still
@@ -3088,8 +3217,11 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
 /// ([`crate::lpc::contrast_core`]) is asymmetric: its light-on-dark exponents
 /// make a light foreground read *stronger* than a dark one against a
 /// mid-luminance background, and the crossover where black would overtake white
-/// sits far above the band, near `Y ≈ 0.36` (V3 measurement: on `Y = 0.211`
-/// white scores 69.78 Lc against black's 39.79). So across the *entire*
+/// sits far above the band, near `Y ≈ 0.342` — measured by bisection of the
+/// luminance core and locked by
+/// `pair::exposure_locks::pair_crossover_equals_measured_core_polarity_flip`
+/// (on `Y = 0.211` white scores ≈69.8 Lc against black's ≈39.7; the earlier V3
+/// estimate `≈0.36` is superseded by this measurement). So across the *entire*
 /// double-legal band the readable-and-perceptually-stronger side is white.
 ///
 /// This replaces the former "larger WCAG margin wins" rule. The WCAG ratio is
@@ -3306,10 +3438,6 @@ mod tests {
             table.legal_floor(Role::LabelTertiary),
             Some(crate::wcag::AA_UI_RATIO)
         );
-        assert_eq!(
-            table.legal_floor(Role::Icon),
-            Some(crate::wcag::AA_UI_RATIO)
-        );
         // border-strong: различимость (non-text 3:1), не текстовый пол —
         // API-контракт для даунстримов, фиксируем значением.
         assert_eq!(
@@ -3319,7 +3447,7 @@ mod tests {
         // No legal floor for the decorative / JND / zero contracts.
         assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
         assert_eq!(table.legal_floor(Role::Separator), None);
-        assert_eq!(table.legal_floor(Role::BorderGhost), None);
+        assert_eq!(table.legal_floor(Role::BorderNone), None);
 
         // The contract holds: every resolved anchored role clears its own legal
         // floor against the live background (modulo the solver's own quantised
@@ -3601,7 +3729,7 @@ mod tests {
     // Y ≈ 0.1791 (solve (Y+0.05)/0.05 = 1.05/(Y+0.05)); above it black's margin
     // wins, so the old engine emitted DARK on Y ∈ (0.1791, 0.1833] — the
     // perceptually weaker side there (contrast_core's black-overtakes-white
-    // crossover sits near Y ≈ 0.36) and the one that made Fluent #0078D4 resolve
+    // crossover sits near Y ≈ 0.342, measured) and the one that made Fluent #0078D4 resolve
     // black. The derived rule takes light-on-dark across the whole band.
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -4136,7 +4264,6 @@ mod tests {
                     (Role::LabelPrimary, 4.5),
                     (Role::LabelSecondary, 4.5),
                     (Role::LabelTertiary, 3.0),
-                    (Role::Icon, 3.0),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
                         Resolved::Color { solved, .. } => solved,
@@ -4427,7 +4554,7 @@ mod tests {
         // 5.32:1; #3478F6: 5.16:1) — the old "larger LPC maximum" polarity rule
         // chose the white side, which cannot reach 4.5:1, and floored every text
         // role. With the WCAG-first polarity the readable side is chosen, so
-        // primary/secondary/muted/icon all resolve on the whole band, both VCs.
+        // primary/secondary/muted all resolve on the whole band, both VCs.
         for (vc, vc_name) in vcs() {
             for bg_hex in band_hexes() {
                 let bg = BgInput::solid(&bg_hex).unwrap();
@@ -4436,7 +4563,6 @@ mod tests {
                     Role::LabelPrimary,
                     Role::LabelSecondary,
                     Role::LabelTertiary,
-                    Role::Icon,
                 ] {
                     let r = &set.iter().find(|(rr, _)| *rr == role).unwrap().1;
                     assert!(
@@ -4570,11 +4696,11 @@ mod tests {
     fn no_silent_clip_anywhere_on_the_band() {
         // Every resolved colour carries a real separation from its background; the
         // only legitimate zeros are the explicit zero-token roles (Role::None and
-        // the family zeros border-ghost / fill-none, all spec'd RoleSpec::Zero); an
+        // the family zeros border-none / fill-none, all spec'd RoleSpec::Zero); an
         // unreachable role surfaces a reason. Nothing clips silently.
         //
         // The honest "carries separation" metric depends on the contract's PHYSICS:
-        // an Lc role (labels, icon, separator, shadows) must have |Lc| ≥ 1; a dJ'
+        // an Lc role (labels, separator, shadows) must have |Lc| ≥ 1; a dJ'
         // role (fills, base/soft borders) must have a real perceived-lightness
         // difference |dJ'| ≥ 1 — its |Lc| can sit at zero inside the low-contrast
         // clip while its J' separation is genuine, which is exactly why it uses a
@@ -4639,12 +4765,11 @@ mod tests {
             "label-secondary",
             "label-tertiary",
             "label-quaternary",
-            "icon",
             "separator",
             "border-strong",
             "border-base",
             "border-soft",
-            "border-ghost",
+            "border-none",
             "fill-primary",
             "fill-secondary",
             "fill-tertiary",
@@ -4660,8 +4785,8 @@ mod tests {
         }
         assert_eq!(
             keys.len(),
-            20,
-            "the HIG taxonomy is exactly 20 roles, found {}",
+            19,
+            "the HIG taxonomy is exactly 19 roles, found {}",
             keys.len()
         );
         // No legacy text-* key may survive the rename.
@@ -4698,12 +4823,12 @@ mod tests {
 
     #[test]
     fn explicit_zero_roles_resolve_to_honest_zero() {
-        // Both family zeros — border-ghost and fill-none — are values, not missing
+        // Both family zeros — border-none and fill-none — are values, not missing
         // keys: they resolve to Resolved::None with zero contrast, like Role::None.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let table = RoleTable::default();
-        for role in [Role::BorderGhost, Role::FillNone, Role::None] {
+        for role in [Role::BorderNone, Role::FillNone, Role::None] {
             let resolved = resolve(&bg, role, &table, &vc);
             assert_eq!(
                 resolved,
@@ -5060,13 +5185,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_set_returns_all_twenty_roles() {
-        // The full sweep returns 20 roles (the HIG taxonomy) including both family
+    fn resolve_set_returns_all_nineteen_roles() {
+        // The full sweep returns 19 roles (the HIG taxonomy) including both family
         // zeros and the universal zero, in Role::ALL order.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let set = resolve_set(&bg, &RoleTable::default(), &vc);
-        assert_eq!(set.len(), 20, "resolve_set must return all 20 roles");
+        assert_eq!(set.len(), 19, "resolve_set must return all 19 roles");
         let roles: Vec<Role> = set.iter().map(|(r, _)| *r).collect();
         assert_eq!(
             roles,
@@ -5421,246 +5546,234 @@ mod tests {
         //     and source of each anchor are the owner's. The `shadow-*` rows stay
         //     Lc `Decorative` (the owner's shadow anchors are alpha opacities,
         //     not dJ' steps); frozen so a refactor cannot move them.
-        const GOLDEN: [(&str, &str, &str, &str); 240] = [
-            ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
-            ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
+        const GOLDEN: [(&str, &str, &str, &str); 228] = [
+            ("srgb", "#FFFFFF", "label-primary", "#14131A"),
+            ("srgb", "#FFFFFF", "label-secondary", "#75757E"),
             ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
-            ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
-            ("srgb", "#FFFFFF", "icon", "#94949E"),
-            ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
+            ("srgb", "#FFFFFF", "label-quaternary", "#C1C1CB"),
+            ("srgb", "#FFFFFF", "separator", "#EBECF6"),
+            ("srgb", "#FFFFFF", "border-strong", "#14131A"),
             ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
             ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
-            ("srgb", "#FFFFFF", "border-ghost", "none"),
+            ("srgb", "#FFFFFF", "border-none", "none"),
             ("srgb", "#FFFFFF", "fill-primary", "#E3E3ED"),
             ("srgb", "#FFFFFF", "fill-secondary", "#E8E8F3"),
             ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
             ("srgb", "#FFFFFF", "fill-quaternary", "#F3F3FE"),
             ("srgb", "#FFFFFF", "fill-none", "none"),
-            ("srgb", "#FFFFFF", "shadow-minor", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "shadow-ambient", "#E2E2EC"),
-            ("srgb", "#FFFFFF", "shadow-penumbra", "#DEDEE8"),
-            ("srgb", "#FFFFFF", "shadow-major", "#DADAE3"),
+            ("srgb", "#FFFFFF", "shadow-minor", "#EBECF6"),
+            ("srgb", "#FFFFFF", "shadow-ambient", "#E9E9F3"),
+            ("srgb", "#FFFFFF", "shadow-penumbra", "#E5E5EF"),
+            ("srgb", "#FFFFFF", "shadow-major", "#E1E1EA"),
             ("srgb", "#FFFFFF", "none", "none"),
-            ("srgb", "#F2F2F7", "label-primary", "#09090F"),
-            ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("srgb", "#F2F2F7", "label-primary", "#131219"),
+            ("srgb", "#F2F2F7", "label-secondary", "#6F6E77"),
             ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
             ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
-            ("srgb", "#F2F2F7", "icon", "#8B8B95"),
-            ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "border-strong", "#09090F"),
+            ("srgb", "#F2F2F7", "separator", "#DFDFE8"),
+            ("srgb", "#F2F2F7", "border-strong", "#131219"),
             ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
             ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
-            ("srgb", "#F2F2F7", "border-ghost", "none"),
+            ("srgb", "#F2F2F7", "border-none", "none"),
             ("srgb", "#F2F2F7", "fill-primary", "#D8D8E1"),
             ("srgb", "#F2F2F7", "fill-secondary", "#DCDDE6"),
             ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
             ("srgb", "#F2F2F7", "fill-quaternary", "#E7E7F0"),
             ("srgb", "#F2F2F7", "fill-none", "none"),
-            ("srgb", "#F2F2F7", "shadow-minor", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "shadow-ambient", "#DADAE4"),
-            ("srgb", "#F2F2F7", "shadow-penumbra", "#D7D7E0"),
-            ("srgb", "#F2F2F7", "shadow-major", "#D2D2DC"),
+            ("srgb", "#F2F2F7", "shadow-minor", "#DFDFE8"),
+            ("srgb", "#F2F2F7", "shadow-ambient", "#DCDCE6"),
+            ("srgb", "#F2F2F7", "shadow-penumbra", "#D8D9E2"),
+            ("srgb", "#F2F2F7", "shadow-major", "#D4D4DD"),
             ("srgb", "#F2F2F7", "none", "none"),
-            ("srgb", "#7F7F7F", "label-primary", "#010103"),
+            ("srgb", "#7F7F7F", "label-primary", "#08070E"),
             ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
             ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
-            ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
-            ("srgb", "#7F7F7F", "icon", "#36353D"),
-            ("srgb", "#7F7F7F", "separator", "#63636B"),
-            ("srgb", "#7F7F7F", "border-strong", "#010103"),
+            ("srgb", "#7F7F7F", "label-quaternary", "#5F5F67"),
+            ("srgb", "#7F7F7F", "separator", "#686870"),
+            ("srgb", "#7F7F7F", "border-strong", "#08070E"),
             ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
             ("srgb", "#7F7F7F", "border-soft", "#76767F"),
-            ("srgb", "#7F7F7F", "border-ghost", "none"),
+            ("srgb", "#7F7F7F", "border-none", "none"),
             ("srgb", "#7F7F7F", "fill-primary", "#6B6B73"),
             ("srgb", "#7F7F7F", "fill-secondary", "#6F6F77"),
             ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
             ("srgb", "#7F7F7F", "fill-quaternary", "#76767F"),
             ("srgb", "#7F7F7F", "fill-none", "none"),
-            ("srgb", "#7F7F7F", "shadow-minor", "#63636B"),
-            ("srgb", "#7F7F7F", "shadow-ambient", "#5F5F68"),
-            ("srgb", "#7F7F7F", "shadow-penumbra", "#5B5B63"),
-            ("srgb", "#7F7F7F", "shadow-major", "#54545D"),
+            ("srgb", "#7F7F7F", "shadow-minor", "#686870"),
+            ("srgb", "#7F7F7F", "shadow-ambient", "#64646D"),
+            ("srgb", "#7F7F7F", "shadow-penumbra", "#606068"),
+            ("srgb", "#7F7F7F", "shadow-major", "#5A5A62"),
             ("srgb", "#7F7F7F", "none", "none"),
-            ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
-            ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
-            ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
-            ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
-            ("srgb", "#1C1C1E", "icon", "#95959E"),
-            ("srgb", "#1C1C1E", "separator", "#38383F"),
-            ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "label-primary", "#FAFAFF"),
+            ("srgb", "#1C1C1E", "label-secondary", "#C0C0C9"),
+            ("srgb", "#1C1C1E", "label-tertiary", "#9F9FA8"),
+            ("srgb", "#1C1C1E", "label-quaternary", "#77777F"),
+            ("srgb", "#1C1C1E", "separator", "#3E3E45"),
+            ("srgb", "#1C1C1E", "border-strong", "#FAFAFF"),
             ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
             ("srgb", "#1C1C1E", "border-soft", "#23232A"),
-            ("srgb", "#1C1C1E", "border-ghost", "none"),
+            ("srgb", "#1C1C1E", "border-none", "none"),
             ("srgb", "#1C1C1E", "fill-primary", "#2E2E35"),
             ("srgb", "#1C1C1E", "fill-secondary", "#2B2B32"),
             ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
             ("srgb", "#1C1C1E", "fill-quaternary", "#23232A"),
             ("srgb", "#1C1C1E", "fill-none", "none"),
-            ("srgb", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("srgb", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("srgb", "#1C1C1E", "shadow-penumbra", "#42424A"),
-            ("srgb", "#1C1C1E", "shadow-major", "#494950"),
+            ("srgb", "#1C1C1E", "shadow-minor", "#3E3E45"),
+            ("srgb", "#1C1C1E", "shadow-ambient", "#42424A"),
+            ("srgb", "#1C1C1E", "shadow-penumbra", "#48484F"),
+            ("srgb", "#1C1C1E", "shadow-major", "#4F4F57"),
             ("srgb", "#1C1C1E", "none", "none"),
-            ("srgb", "#101012", "label-primary", "#F2F2FC"),
-            ("srgb", "#101012", "label-secondary", "#B4B4BE"),
-            ("srgb", "#101012", "label-tertiary", "#93939C"),
-            ("srgb", "#101012", "label-quaternary", "#696972"),
-            ("srgb", "#101012", "icon", "#93939C"),
-            ("srgb", "#101012", "separator", "#323239"),
-            ("srgb", "#101012", "border-strong", "#F2F2FC"),
+            ("srgb", "#101012", "label-primary", "#FAFAFF"),
+            ("srgb", "#101012", "label-secondary", "#BEBEC8"),
+            ("srgb", "#101012", "label-tertiary", "#9D9DA6"),
+            ("srgb", "#101012", "label-quaternary", "#74747C"),
+            ("srgb", "#101012", "separator", "#393940"),
+            ("srgb", "#101012", "border-strong", "#FAFAFF"),
             ("srgb", "#101012", "border-base", "#1F1F27"),
             ("srgb", "#101012", "border-soft", "#18171E"),
-            ("srgb", "#101012", "border-ghost", "none"),
+            ("srgb", "#101012", "border-none", "none"),
             ("srgb", "#101012", "fill-primary", "#23232A"),
             ("srgb", "#101012", "fill-secondary", "#1F1F27"),
             ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
             ("srgb", "#101012", "fill-quaternary", "#18171E"),
             ("srgb", "#101012", "fill-none", "none"),
-            ("srgb", "#101012", "shadow-minor", "#323239"),
-            ("srgb", "#101012", "shadow-ambient", "#36363E"),
-            ("srgb", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("srgb", "#101012", "shadow-major", "#43434B"),
+            ("srgb", "#101012", "shadow-minor", "#393940"),
+            ("srgb", "#101012", "shadow-ambient", "#3D3D44"),
+            ("srgb", "#101012", "shadow-penumbra", "#43434A"),
+            ("srgb", "#101012", "shadow-major", "#4A4A52"),
             ("srgb", "#101012", "none", "none"),
-            ("srgb", "#3478F6", "label-primary", "#020205"),
+            ("srgb", "#3478F6", "label-primary", "#08070D"),
             ("srgb", "#3478F6", "label-secondary", "#14141B"),
             ("srgb", "#3478F6", "label-tertiary", "#35343C"),
-            ("srgb", "#3478F6", "label-quaternary", "#707078"),
-            ("srgb", "#3478F6", "icon", "#35343C"),
-            ("srgb", "#3478F6", "separator", "#7F7F88"),
-            ("srgb", "#3478F6", "border-strong", "#020205"),
+            ("srgb", "#3478F6", "label-quaternary", "#5E5E67"),
+            ("srgb", "#3478F6", "separator", "#67676F"),
+            ("srgb", "#3478F6", "border-strong", "#08070D"),
             ("srgb", "#3478F6", "border-base", "#6E6E76"),
             ("srgb", "#3478F6", "border-soft", "#76767E"),
-            ("srgb", "#3478F6", "border-ghost", "none"),
+            ("srgb", "#3478F6", "border-none", "none"),
             ("srgb", "#3478F6", "fill-primary", "#6A6A73"),
             ("srgb", "#3478F6", "fill-secondary", "#6E6E76"),
             ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
             ("srgb", "#3478F6", "fill-quaternary", "#76767E"),
             ("srgb", "#3478F6", "fill-none", "none"),
-            ("srgb", "#3478F6", "shadow-minor", "#7F7F88"),
-            ("srgb", "#3478F6", "shadow-ambient", "#7C7C85"),
-            ("srgb", "#3478F6", "shadow-penumbra", "#787880"),
-            ("srgb", "#3478F6", "shadow-major", "#72727A"),
+            ("srgb", "#3478F6", "shadow-minor", "#67676F"),
+            ("srgb", "#3478F6", "shadow-ambient", "#63636B"),
+            ("srgb", "#3478F6", "shadow-penumbra", "#5E5E67"),
+            ("srgb", "#3478F6", "shadow-major", "#585861"),
             ("srgb", "#3478F6", "none", "none"),
-            ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
-            ("dim", "#FFFFFF", "label-secondary", "#707079"),
+            ("dim", "#FFFFFF", "label-primary", "#141419"),
+            ("dim", "#FFFFFF", "label-secondary", "#75757E"),
             ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
-            ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
-            ("dim", "#FFFFFF", "icon", "#94949D"),
-            ("dim", "#FFFFFF", "separator", "#E3E3ED"),
-            ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
+            ("dim", "#FFFFFF", "label-quaternary", "#C1C1CB"),
+            ("dim", "#FFFFFF", "separator", "#ECECF5"),
+            ("dim", "#FFFFFF", "border-strong", "#141419"),
             ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
             ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
-            ("dim", "#FFFFFF", "border-ghost", "none"),
+            ("dim", "#FFFFFF", "border-none", "none"),
             ("dim", "#FFFFFF", "fill-primary", "#BDBDC6"),
             ("dim", "#FFFFFF", "fill-secondary", "#C3C3CC"),
             ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
             ("dim", "#FFFFFF", "fill-quaternary", "#DEDEE7"),
             ("dim", "#FFFFFF", "fill-none", "none"),
-            ("dim", "#FFFFFF", "shadow-minor", "#E3E3ED"),
-            ("dim", "#FFFFFF", "shadow-ambient", "#E0E0EA"),
-            ("dim", "#FFFFFF", "shadow-penumbra", "#DDDDE6"),
-            ("dim", "#FFFFFF", "shadow-major", "#D8D9E2"),
+            ("dim", "#FFFFFF", "shadow-minor", "#ECECF5"),
+            ("dim", "#FFFFFF", "shadow-ambient", "#E9E9F2"),
+            ("dim", "#FFFFFF", "shadow-penumbra", "#E5E5EF"),
+            ("dim", "#FFFFFF", "shadow-major", "#E1E1EA"),
             ("dim", "#FFFFFF", "none", "none"),
-            ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
-            ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("dim", "#F2F2F7", "label-primary", "#131218"),
+            ("dim", "#F2F2F7", "label-secondary", "#6F6E77"),
             ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
             ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
-            ("dim", "#F2F2F7", "icon", "#8B8B94"),
-            ("dim", "#F2F2F7", "separator", "#DEDEE7"),
-            ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
+            ("dim", "#F2F2F7", "separator", "#DFDFE8"),
+            ("dim", "#F2F2F7", "border-strong", "#131218"),
             ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
             ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
-            ("dim", "#F2F2F7", "border-ghost", "none"),
+            ("dim", "#F2F2F7", "border-none", "none"),
             ("dim", "#F2F2F7", "fill-primary", "#B2B2BC"),
             ("dim", "#F2F2F7", "fill-secondary", "#B9B9C2"),
             ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
             ("dim", "#F2F2F7", "fill-quaternary", "#D3D3DC"),
             ("dim", "#F2F2F7", "fill-none", "none"),
-            ("dim", "#F2F2F7", "shadow-minor", "#DEDEE7"),
-            ("dim", "#F2F2F7", "shadow-ambient", "#DBDBE4"),
-            ("dim", "#F2F2F7", "shadow-penumbra", "#D7D7E1"),
-            ("dim", "#F2F2F7", "shadow-major", "#D3D3DC"),
+            ("dim", "#F2F2F7", "shadow-minor", "#DFDFE8"),
+            ("dim", "#F2F2F7", "shadow-ambient", "#DCDCE6"),
+            ("dim", "#F2F2F7", "shadow-penumbra", "#D8D9E2"),
+            ("dim", "#F2F2F7", "shadow-major", "#D4D4DD"),
             ("dim", "#F2F2F7", "none", "none"),
-            ("dim", "#7F7F7F", "label-primary", "#030305"),
+            ("dim", "#7F7F7F", "label-primary", "#08080C"),
             ("dim", "#7F7F7F", "label-secondary", "#16161B"),
             ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
-            ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
-            ("dim", "#7F7F7F", "icon", "#36353D"),
-            ("dim", "#7F7F7F", "separator", "#64646D"),
-            ("dim", "#7F7F7F", "border-strong", "#030305"),
+            ("dim", "#7F7F7F", "label-quaternary", "#5F5F67"),
+            ("dim", "#7F7F7F", "separator", "#686870"),
+            ("dim", "#7F7F7F", "border-strong", "#08080C"),
             ("dim", "#7F7F7F", "border-base", "#64646C"),
             ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
-            ("dim", "#7F7F7F", "border-ghost", "none"),
+            ("dim", "#7F7F7F", "border-none", "none"),
             ("dim", "#7F7F7F", "fill-primary", "#525259"),
             ("dim", "#7F7F7F", "fill-secondary", "#56565D"),
             ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
             ("dim", "#7F7F7F", "fill-quaternary", "#696971"),
             ("dim", "#7F7F7F", "fill-none", "none"),
-            ("dim", "#7F7F7F", "shadow-minor", "#64646D"),
-            ("dim", "#7F7F7F", "shadow-ambient", "#616169"),
-            ("dim", "#7F7F7F", "shadow-penumbra", "#5D5D64"),
-            ("dim", "#7F7F7F", "shadow-major", "#57575E"),
+            ("dim", "#7F7F7F", "shadow-minor", "#686870"),
+            ("dim", "#7F7F7F", "shadow-ambient", "#64646D"),
+            ("dim", "#7F7F7F", "shadow-penumbra", "#606068"),
+            ("dim", "#7F7F7F", "shadow-major", "#5A5A61"),
             ("dim", "#7F7F7F", "none", "none"),
-            ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
-            ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
-            ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
-            ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
-            ("dim", "#1C1C1E", "icon", "#94949D"),
-            ("dim", "#1C1C1E", "separator", "#38383F"),
-            ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
+            ("dim", "#1C1C1E", "label-primary", "#FAFAFF"),
+            ("dim", "#1C1C1E", "label-secondary", "#C0C0C9"),
+            ("dim", "#1C1C1E", "label-tertiary", "#9F9FA8"),
+            ("dim", "#1C1C1E", "label-quaternary", "#77777F"),
+            ("dim", "#1C1C1E", "separator", "#3E3E45"),
+            ("dim", "#1C1C1E", "border-strong", "#FAFAFF"),
             ("dim", "#1C1C1E", "border-base", "#313137"),
             ("dim", "#1C1C1E", "border-soft", "#28282E"),
-            ("dim", "#1C1C1E", "border-ghost", "none"),
+            ("dim", "#1C1C1E", "border-none", "none"),
             ("dim", "#1C1C1E", "fill-primary", "#424249"),
             ("dim", "#1C1C1E", "fill-secondary", "#3D3D45"),
             ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
             ("dim", "#1C1C1E", "fill-quaternary", "#2D2D33"),
             ("dim", "#1C1C1E", "fill-none", "none"),
-            ("dim", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("dim", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("dim", "#1C1C1E", "shadow-penumbra", "#424249"),
-            ("dim", "#1C1C1E", "shadow-major", "#494950"),
+            ("dim", "#1C1C1E", "shadow-minor", "#3E3E45"),
+            ("dim", "#1C1C1E", "shadow-ambient", "#42424A"),
+            ("dim", "#1C1C1E", "shadow-penumbra", "#48484F"),
+            ("dim", "#1C1C1E", "shadow-major", "#4F4F56"),
             ("dim", "#1C1C1E", "none", "none"),
-            ("dim", "#101012", "label-primary", "#F0F0FA"),
-            ("dim", "#101012", "label-secondary", "#B3B3BD"),
-            ("dim", "#101012", "label-tertiary", "#92929B"),
-            ("dim", "#101012", "label-quaternary", "#686871"),
-            ("dim", "#101012", "icon", "#92929B"),
-            ("dim", "#101012", "separator", "#323239"),
-            ("dim", "#101012", "border-strong", "#F0F0FA"),
+            ("dim", "#101012", "label-primary", "#FAFAFF"),
+            ("dim", "#101012", "label-secondary", "#BEBEC8"),
+            ("dim", "#101012", "label-tertiary", "#9D9DA6"),
+            ("dim", "#101012", "label-quaternary", "#74747C"),
+            ("dim", "#101012", "separator", "#393940"),
+            ("dim", "#101012", "border-strong", "#FAFAFF"),
             ("dim", "#101012", "border-base", "#25252B"),
             ("dim", "#101012", "border-soft", "#1C1C22"),
-            ("dim", "#101012", "border-ghost", "none"),
+            ("dim", "#101012", "border-none", "none"),
             ("dim", "#101012", "fill-primary", "#35353C"),
             ("dim", "#101012", "fill-secondary", "#313137"),
             ("dim", "#101012", "fill-tertiary", "#29292F"),
             ("dim", "#101012", "fill-quaternary", "#212127"),
             ("dim", "#101012", "fill-none", "none"),
-            ("dim", "#101012", "shadow-minor", "#323239"),
-            ("dim", "#101012", "shadow-ambient", "#36363E"),
-            ("dim", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("dim", "#101012", "shadow-major", "#43434B"),
+            ("dim", "#101012", "shadow-minor", "#393940"),
+            ("dim", "#101012", "shadow-ambient", "#3D3D44"),
+            ("dim", "#101012", "shadow-penumbra", "#43434A"),
+            ("dim", "#101012", "shadow-major", "#4A4A51"),
             ("dim", "#101012", "none", "none"),
-            ("dim", "#3478F6", "label-primary", "#040408"),
+            ("dim", "#3478F6", "label-primary", "#08070C"),
             ("dim", "#3478F6", "label-secondary", "#15141A"),
             ("dim", "#3478F6", "label-tertiary", "#35343B"),
-            ("dim", "#3478F6", "label-quaternary", "#707079"),
-            ("dim", "#3478F6", "icon", "#35343B"),
-            ("dim", "#3478F6", "separator", "#808088"),
-            ("dim", "#3478F6", "border-strong", "#040408"),
+            ("dim", "#3478F6", "label-quaternary", "#5E5E67"),
+            ("dim", "#3478F6", "separator", "#67676F"),
+            ("dim", "#3478F6", "border-strong", "#08070C"),
             ("dim", "#3478F6", "border-base", "#63636C"),
             ("dim", "#3478F6", "border-soft", "#6E6E76"),
-            ("dim", "#3478F6", "border-ghost", "none"),
+            ("dim", "#3478F6", "border-none", "none"),
             ("dim", "#3478F6", "fill-primary", "#515158"),
             ("dim", "#3478F6", "fill-secondary", "#56565D"),
             ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),
             ("dim", "#3478F6", "fill-quaternary", "#686870"),
             ("dim", "#3478F6", "fill-none", "none"),
-            ("dim", "#3478F6", "shadow-minor", "#808088"),
-            ("dim", "#3478F6", "shadow-ambient", "#7D7D85"),
-            ("dim", "#3478F6", "shadow-penumbra", "#787881"),
-            ("dim", "#3478F6", "shadow-major", "#73737B"),
+            ("dim", "#3478F6", "shadow-minor", "#67676F"),
+            ("dim", "#3478F6", "shadow-ambient", "#63636B"),
+            ("dim", "#3478F6", "shadow-penumbra", "#5E5E67"),
+            ("dim", "#3478F6", "shadow-major", "#585860"),
             ("dim", "#3478F6", "none", "none"),
         ];
 
@@ -5901,9 +6014,55 @@ mod derivator_locks {
 #[cfg(test)]
 mod exposure_locks {
     use super::{
-        DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR,
+        DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, QUANT_GUARD, STRICT_STEP,
+        TINT_PERCEPTIBLE_MP_FLOOR,
     };
     use crate::exposure_support::{band_exposure, mp_srgb};
+
+    /// DERIVED-лок (issue #44): `DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR + QUANT_GUARD`,
+    /// и модельный пол строго ниже декоративного (guard положителен). Рантайм-зеркало
+    /// компайл-тайм `const _`-проверки в semantic.rs; печатает разложение 7.5 = 7.3 + 0.2.
+    // Намеренные constant-relationship пины (регресс-локи): clippy-lint
+    // assertions_on_constants здесь ожидаем и точечно подавлен.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn decorative_floor_is_model_floor_plus_guard() {
+        use crate::lpc::MODEL_LC_FLOOR;
+        assert!(
+            (DECORATIVE_FLOOR_MIN - (MODEL_LC_FLOOR + QUANT_GUARD)).abs() < 1e-9,
+            "7.5 must decompose as MODEL_LC_FLOOR {MODEL_LC_FLOOR} + QUANT_GUARD {QUANT_GUARD}"
+        );
+        assert!(
+            DECORATIVE_FLOOR_MIN > MODEL_LC_FLOOR,
+            "decorative floor {DECORATIVE_FLOOR_MIN} must sit strictly above the model floor {MODEL_LC_FLOOR}"
+        );
+        assert!(
+            QUANT_GUARD > 0.0,
+            "guard must be positive, got {QUANT_GUARD}"
+        );
+        eprintln!(
+            "DECORATIVE_FLOOR_MIN {DECORATIVE_FLOOR_MIN} = MODEL_LC_FLOOR {MODEL_LC_FLOOR} + QUANT_GUARD {QUANT_GUARD}"
+        );
+    }
+
+    /// GROUNDED-лок: IC-пол равен опубликованному APCA-уровню Lc 15 (минимум
+    /// различимости не-текста, draft), а порядкосохраняющий IC-сдвиг над обычным
+    /// полом равен `15 − 7.5 = 7.5` — тот, что применяет `decorative_contract`.
+    // Намеренные constant-relationship пины (регресс-локи): clippy-lint
+    // assertions_on_constants здесь ожидаем и точечно подавлен.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn ic_floor_is_apca_lc15_with_order_preserving_shift() {
+        assert!(
+            (IC_DECORATIVE_FLOOR_MIN - 15.0).abs() < 1e-12,
+            "IC floor must be the published APCA Lc 15, got {IC_DECORATIVE_FLOOR_MIN}"
+        );
+        assert!(IC_DECORATIVE_FLOOR_MIN > DECORATIVE_FLOOR_MIN);
+        assert!(
+            ((IC_DECORATIVE_FLOOR_MIN - DECORATIVE_FLOOR_MIN) - 7.5).abs() < 1e-9,
+            "the -ic uniform shift must be 15 − 7.5 = 7.5"
+        );
+    }
 
     /// EXPOSURE TINT_PERCEPTIBLE_MP_FLOOR: доля гаммы с M' в +-50% полосе вокруг
     /// порога перцептируемости тинта — цвета, чья классификация «ощущаемый тон vs
@@ -5966,6 +6125,145 @@ mod exposure_locks {
             "EXPOSURE DECORATIVE_FLOOR_MIN(7.5) range_flip={:.2}% | IC_DECORATIVE_FLOOR_MIN(15.0) range_flip={:.2}%",
             frac(DECORATIVE_FLOOR_MIN),
             frac(IC_DECORATIVE_FLOOR_MIN)
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Волна 2 «объективизация» — терминалы (e)-констант semantic.rs.
+// Каждый лок КУСАЕТСЯ: value-пин генуинной (e)-ручки падает на любой мутации;
+// (c)-инвариантность TINT_HUE_STIFFNESS падает при уходе значения из режима
+// пиннинга. Продакшн-константы НЕ тронуты — это #[cfg(test)] измерители.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod wave2_e_locks {
+    use super::{
+        NEUTRAL_HUE_DEG, NEUTRAL_TINT_RATIO, TINT_HUE_STIFFNESS, build_curve_color,
+        cusp_attracted_hue,
+    };
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::quantise_srgb;
+
+    /// ΔE в Oklab между эмитируемыми (квантованными в 8-бит) цветами.
+    fn de_ok(a: [f64; 3], b: [f64; 3]) -> f64 {
+        let la = srgb_linear_to_oklab(quantise_srgb(a));
+        let lb = srgb_linear_to_oklab(quantise_srgb(b));
+        ((la[0] - lb[0]).powi(2) + (la[1] - lb[1]).powi(2) + (la[2] - lb[2]).powi(2)).sqrt()
+    }
+
+    /// Светлотная сетка [0.05, 0.95] шаг 0.01 (как в `cusp_window_is_near_measured_gamut_drift`).
+    fn lgrid() -> Vec<f64> {
+        (5..=95).map(|i| i as f64 / 100.0).collect()
+    }
+
+    /// (c) INTERVAL-INSENSITIVE лок для `TINT_HUE_STIFFNESS`. Выше измеренного
+    /// порога пиннинга (≈0.36) argmax `cusp_attracted_hue` встаёт РОВНО на
+    /// канонический оттенок, и выход байт-инвариантен по всей практической полосе
+    /// жёсткости [1, 100]. Дефолт 9.0 сидит глубоко в режиме — точное значение
+    /// нематериально. КУСАЕТСЯ: если стиффнес уйдёт ниже режима пиннинга,
+    /// `TINT_HUE_STIFFNESS >= 1.0` падает; если механизм перестанет пиннить,
+    /// `max_dev == 0` падает.
+    #[test]
+    fn stiffness_pins_hue_to_canonical_above_threshold() {
+        let ls = lgrid();
+        // Измеренный порог пиннинга: минимальная жёсткость, при которой ВСЕ
+        // светлоты дают оттенок == канонический (drift 0).
+        let mut threshold = f64::INFINITY;
+        let mut s = 0.0_f64;
+        while s <= 5.0 {
+            let all_pinned = ls.iter().all(|&l| {
+                (cusp_attracted_hue(l, NEUTRAL_HUE_DEG, s) - NEUTRAL_HUE_DEG).abs() < 1e-9
+            });
+            if all_pinned {
+                threshold = s;
+                break;
+            }
+            s += 0.01;
+        }
+        assert!(
+            (0.2..0.6).contains(&threshold),
+            "порог пиннинга {threshold:.3} вне замеренного диапазона [0.2, 0.6)"
+        );
+        // Инвариантность выхода: по всей полосе [1, 100] оттенок отклоняется от
+        // канонического на 0.0° — байт-инвариант (это свойство механизма, от
+        // значения константы не зависит).
+        let mut max_dev = 0.0_f64;
+        for &st in &[1.0_f64, 3.0, 5.0, 9.0, 15.0, 30.0, 50.0, 100.0] {
+            for &l in &ls {
+                max_dev = max_dev
+                    .max((cusp_attracted_hue(l, NEUTRAL_HUE_DEG, st) - NEUTRAL_HUE_DEG).abs());
+            }
+        }
+        assert!(
+            max_dev < 1e-9,
+            "оттенок должен быть байт-инвариантен по [1,100] (max_dev={max_dev:.6}°)"
+        );
+        // Дефолт сидит в режиме пиннинга с комфортной маржой (устойчивость к float).
+        assert!(
+            TINT_HUE_STIFFNESS >= 1.0 && TINT_HUE_STIFFNESS > threshold * 2.0,
+            "TINT_HUE_STIFFNESS={TINT_HUE_STIFFNESS} должен лежать в режиме пиннинга (> порог {threshold:.3} с маржой)"
+        );
+        eprintln!(
+            "WAVE2 TINT_HUE_STIFFNESS (c): pinning_threshold={threshold:.3} value={TINT_HUE_STIFFNESS} (={:.1}x порога) max_dev[1..100]={max_dev:.6}deg",
+            TINT_HUE_STIFFNESS / threshold
+        );
+    }
+
+    /// (e) DESIGN-CHOICE robustness-лок для `NEUTRAL_HUE_DEG` (измеренный якорь).
+    /// Эмитируемый тинт-цвет БАЙТ-ИНВАРИАНТЕН (ΔE_ok = 0) по всему измеренному
+    /// разбросу семейства нейтралей [285.78°, 286.01°]; даже грубая ошибка ±20°
+    /// даёт лишь ~1 JND (оттенок материален, но при малой хроме тинта эффект мал).
+    /// КУСАЕТСЯ: value-пин `== 286.0` падает на любой мутации.
+    #[test]
+    fn neutral_hue_emits_byte_invariant_across_measured_family_spread() {
+        assert_eq!(NEUTRAL_HUE_DEG, 286.0, "измеренный якорь нейтрали");
+        let ls = [0.15_f64, 0.31, 0.48, 0.58, 0.68, 0.78, 0.86];
+        let mut max_spread = 0.0_f64;
+        let mut max_wide = 0.0_f64;
+        for &l in &ls {
+            let base = build_curve_color(l, NEUTRAL_HUE_DEG, NEUTRAL_TINT_RATIO);
+            for h in [285.78_f64, 285.90, 286.01] {
+                max_spread =
+                    max_spread.max(de_ok(base, build_curve_color(l, h, NEUTRAL_TINT_RATIO)));
+            }
+            for h in [266.0_f64, 276.0, 296.0, 306.0] {
+                max_wide = max_wide.max(de_ok(base, build_curve_color(l, h, NEUTRAL_TINT_RATIO)));
+            }
+        }
+        assert!(
+            max_spread < 1e-9,
+            "тинт-цвет обязан быть байт-инвариантен по измеренному разбросу (ΔE={max_spread:.6})"
+        );
+        assert!(
+            (0.005..0.03).contains(&max_wide),
+            "широкополосная (±20°) чувствительность {max_wide:.4} вне замеренного [0.005, 0.03)"
+        );
+        eprintln!(
+            "WAVE2 NEUTRAL_HUE_DEG (e): ΔE_ok[measured spread]={max_spread:.6} ΔE_ok[±20°]={max_wide:.4}"
+        );
+    }
+
+    /// (e) DESIGN-CHOICE sensitivity-лок для `NEUTRAL_TINT_RATIO`. Свип легальной
+    /// полосы [0, 0.20] по светлотам шкалы: непрерывный МАТЕРИАЛЬНЫЙ дрейф (ratio
+    /// прямо масштабирует хрому), значит (e), не (c). КУСАЕТСЯ: value-пин `== 0.10`
+    /// падает на любой мутации.
+    #[test]
+    fn neutral_tint_ratio_sensitivity_is_bounded() {
+        assert_eq!(NEUTRAL_TINT_RATIO, 0.10, "коэффициент подтона");
+        let ls = [0.15_f64, 0.31, 0.48, 0.58, 0.68, 0.78, 0.86];
+        let mut max_de = 0.0_f64;
+        for &l in &ls {
+            let base = build_curve_color(l, NEUTRAL_HUE_DEG, NEUTRAL_TINT_RATIO);
+            for r in [0.0_f64, 0.05, 0.08, 0.12, 0.15, 0.20] {
+                max_de = max_de.max(de_ok(base, build_curve_color(l, NEUTRAL_HUE_DEG, r)));
+            }
+        }
+        assert!(
+            (0.015..0.05).contains(&max_de),
+            "max ΔE_ok по [0,0.2] {max_de:.4} вне замеренного [0.015, 0.05) — ручка материальна (e)"
+        );
+        eprintln!(
+            "WAVE2 NEUTRAL_TINT_RATIO (e): max ΔE_ok[0,0.2]={max_de:.4} (материальна → (e), не (c))"
         );
     }
 }

@@ -1,4 +1,8 @@
 use crate::spaces::srgb::D65_WHITE;
+// `OnceLock` кеширует фингерпринты пресетов только внутри `preset_index`, который
+// с главы #64 стал test-only (единственный продакшн-потребитель, grey-axis LUT,
+// удалён) — потому импорт под тем же `#[cfg(test)]`.
+#[cfg(test)]
 use std::sync::OnceLock;
 
 use super::{cam16::adapt, cat16::xyz_to_cone};
@@ -196,6 +200,12 @@ impl ViewingConditions {
     /// Slot index for the two precompiled viewing conditions (`0` = sRGB,
     /// `1` = dim surround), or `None` for any other VC.
     ///
+    /// С главы #64 (level-3) единственный продакшн-потребитель — grey-axis LUT
+    /// (`crate::lut`) — удалён (солвер решает лестницу напрямую, без сид-брекета);
+    /// метод остаётся как проверяемый инвариант кеша фингерпринтов
+    /// (`preset_index_is_stable_across_repeated_calls_and_cached_correctly`),
+    /// потому `#[cfg(test)]`.
+    ///
     /// Used by the grey and chroma fast paths and the grey-axis LUT to share a
     /// single canonical slot assignment — no duplicated fingerprint comparisons
     /// across callers. Matching on the full
@@ -207,6 +217,7 @@ impl ViewingConditions {
     /// `OnceLock<u64>` statics — `build()` + `fingerprint()` are never called
     /// again on the hot path, eliminating the transcendental-op rebuild that was
     /// paid on every `preset_index` invocation.
+    #[cfg(test)]
     pub(crate) fn preset_index(&self) -> Option<usize> {
         // Cached preset fingerprints: computed once, reused forever.
         // Invariant: these statics hold exactly `ViewingConditions::srgb().fingerprint()`

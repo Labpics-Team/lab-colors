@@ -5,25 +5,83 @@ use crate::spaces::vc::ViewingConditions;
 /// шумный `h_ok` замещается базовым оттенком. CAM16 даёт ненулевой M' даже для
 /// номинально ахроматических стимулов (mp ≈ 1.5 для белого, ≈ 2.3 для near-black),
 /// поэтому 5.0 ловит модельный шум, сохраняя подлинно хроматические якоря.
-// SSOT-TRACKED — порог ахроматичности M' (модельный шум CAM16), см. docs/empirical-inventory.md.
+///
+/// Терминал **(c) INTERVAL-INSENSITIVE**: порог сидит в ШИРОКОМ пустом зазоре
+/// между потолком ахроматического `M'`-шума серых и полом хромы подлинно
+/// цветных якорей; партиция achromatic↔chromatic инвариантна для ЛЮБОГО θ в
+/// этом зазоре (`achromatic_threshold_sits_in_empty_noise_to_chroma_gap`).
+/// Экспозиция — доля sRGB-гаммы, где точное значение флипает партицию, —
+/// **1.99%** (`exposure_achromatic_mp_threshold`). Значение не меняется.
+// SSOT-TRACKED — порог ахроматичности M' (модельный шум CAM16), терминал (c) interval-insensitive (exposure 1.99%), см. docs/empirical-inventory.md.
 const ACHROMATIC_MP_THRESHOLD: f64 = 5.0;
 
 /// Множитель опорной хромы для нормировки чистоты оттенка: `mp_ref = 1.5 × M'`
 /// базового якоря, чтобы база сохраняла почти весь свой оттенок, а
-/// near-ахроматические якоря сильно корректировались. Калибровочный.
-// SSOT-TRACKED — множитель опорной хромы для нормировки чистоты оттенка, см. docs/empirical-inventory.md.
+/// near-ахроматические якоря сильно корректировались. Терминал (e) DESIGN-CHOICE:
+/// магнитуда — свободная ручка (опубликованного значения не существует),
+/// робастность доказана хроматическим инвариантом (`purity == 1` при
+/// `mp ≥ mp_ref` при ЛЮБОМ множителе); ПРОВЕНАНС ФОРМЫ — см.
+/// [`HUE_PURITY_EXPONENT`]. Легальный диапазон **> 1** (множитель обязан
+/// поднимать опорную хрому над хромой базы, иначе база сама корректируется);
+/// практический вкус [1.2, 2.0].
+// SSOT-TRACKED — множитель опорной хромы, терминал (e) design-choice (форма мотивирована Abney; > 1), см. docs/empirical-inventory.md.
 const HUE_PURITY_MP_REF_RATIO: f64 = 1.5;
 
 /// Показатель степени кривой чистоты оттенка `(mp/mp_ref)^0.6`: агрессивная
 /// коррекция оттенка для сильно десатурированных цветов, плавно отпускаемая с
-/// ростом хромы. Калибровочный; кандидат вывода — связь с near-neutral hue-noise
-/// (Abney, issue #27).
-// SSOT-TRACKED — показатель кривой чистоты оттенка (калибровочный), см. docs/empirical-inventory.md.
+/// ростом хромы.
+///
+/// ПРОВЕНАНС ФОРМЫ (не значения). «Не доверяй тону у нейтрали» мотивировано двумя
+/// СХОДЯЩИМИСЯ причинами:
+/// 1. ЧИСЛЕННОЙ — `atan2(b, a)` ill-conditioned у серой оси, оттенок почти-серых
+///    построен из шума (см. [`hue_purity`]);
+/// 2. ПЕРЦЕПТИВНОЙ — эффект Abney: воспринимаемый тон монохроматического стимула
+///    СДВИГАЕТСЯ при разбавлении белым (падении чистоты). Abney (1909) Proc. R.
+///    Soc. Lond. A 83, 120–127 (DOI 10.1098/rspa.1909.0085); величина сдвига
+///    растёт с падением колориметрической чистоты — Kurtenbach, Sternheim &
+///    Spillmann (1984) JOSA A 1(4), 365–372 (DOI 10.1364/JOSAA.1.000365).
+///
+/// ⚠️ Перцептивный Abney — ОТДЕЛЬНОЕ явление от численного atan2-шума; конкретные
+/// `1.5`/`0.6` — инженерная калибровка формы, НЕ выведены из данных Abney (эта
+/// кривая эффект Abney не моделирует, issue #27 — `abney_correct`).
+///
+/// Терминал (e) DESIGN-CHOICE (решение владельца 2026-07-07): фит магнитуд к
+/// данным Abney дал бы ДРУГУЮ кривую — маркировать их (b) GROUNDED было бы
+/// подлогом (ADR-0002); честный терминал — задекларированные свободные ручки с
+/// доказанной робастностью. Sensitivity: хроматические якоря (`mp ≥ mp_ref`)
+/// инвариантны к значению (`purity == 1`), константы двигают ТОЛЬКО оттенок
+/// near-нейтралей (и так atan2-шум); свип показателя [0.4, 0.9] даёт
+/// max|Δpurity| = 0.148 — непрерывный ограниченный дрейф, не флип. Легальный
+/// диапазон **(0, 1]** (показатель < 1 = вогнутая кривая, агрессивная коррекция
+/// near-нейтралей; практический вкус [0.4, 0.9]). Протокол «объективизации»:
+/// 2AFC hue-shift на десатурированных стимулах (величина Abney-сдвига vs чистота)
+/// стал бы кандидатом-ВЫВОДОМ (замер → сравнение → решение), не обязательным
+/// экспериментом. Локи `hue_purity_curve_shape_is_pinned`, `exposure_hue_purity_curve`;
+/// docs/empirical-inventory.md.
+// SSOT-TRACKED — показатель кривой чистоты, терминал (e) design-choice (форма мотивирована Abney; (0,1]), см. docs/empirical-inventory.md.
 const HUE_PURITY_EXPONENT: f64 = 0.6;
 
 /// Форм-параметры нейтральной кривой: гаммы светлотных ветвей и позиция пика
 /// хромы. Раздельные гаммы — потому что восприятие шага светлоты асимметрично
-/// относительно базы: светлая ветвь требует более плотного шага у якоря.
+/// относительно базы: светлая ветвь требует более плотного шага у якоря
+/// (мотивирует НАПРАВЛЕНИЕ `gamma_light > gamma_dark`, не магнитуды).
+///
+/// Все три поля — терминал **(e) DESIGN-CHOICE** (Волна 2 «объективизация»):
+/// генуинные свободные ручки формы, дефолты для конфигурируемого `with_params`.
+/// Sensitivity на дефолтной шкале `#FFFFFF→#787880→#101012` (лок
+/// `curve_params_sensitivity_is_bounded`, max ΔE_ok эмитируемых 13 ступеней):
+/// * `gamma_light` свип [1.3, 2.2] → **0.0466** (>1 JND, материальна);
+/// * `gamma_dark` свип [1.2, 1.9] → **0.0325** (>1 JND, материальна);
+/// * `chroma_peak_t` свип [0.2, 0.5] → **0.0042** (< ½ JND — самая низкая
+///   чувствительность: на near-серой шкале пик огибающей хромы почти не двигает
+///   выход; на хроматической базе был бы материальнее, поэтому (e), не (c)).
+///
+/// Легальные диапазоны: гаммы `> 0` (степень powf; практический вкус
+/// [1.2, 2.2]), `chroma_peak_t ∈ (0, 0.5]` (клампится в `chroma_envelope`).
+/// Протокол «объективизации»: замерить перцептивную равномерность шага рампы
+/// (ΔE соседних ступеней должен быть ~констан­тен для глаза) и выбрать гаммы,
+/// минимизирующие дисперсию воспринимаемого шага — измерение стало бы
+/// кандидатом-выводом (замер → сравнение → решение), не обязательным экспериментом.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurveParams {
     pub gamma_light: f64,
@@ -36,14 +94,14 @@ impl Default for CurveParams {
         Self {
             // Показатель степени, которым гамма-кривая отображает t на светлотный
             // интервал [светлый якорь, базовый], при t <= 0.5.
-            // SSOT-TRACKED — гамма светлой ветви нейтральной кривой.
+            // SSOT-TRACKED — гамма светлой ветви нейтральной кривой, (e) design-choice (max ΔE_ok 0.0466 по [1.3,2.2]).
             gamma_light: 1.75,
             // Показатель степени для тёмной ветви (t > 0.5): интервал [базовый,
             // тёмный якорь].
-            // SSOT-TRACKED — гамма тёмной ветви нейтральной кривой.
+            // SSOT-TRACKED — гамма тёмной ветви нейтральной кривой, (e) design-choice (max ΔE_ok 0.0325 по [1.2,1.9]).
             gamma_dark: 1.5,
             // Позиция вдоль параметра кривой t, где огибающая хромы достигает пика.
-            // SSOT-TRACKED — положение пика хромы вдоль параметра кривой t.
+            // SSOT-TRACKED — положение пика хромы, (e) design-choice (max ΔE_ok 0.0042 по [0.2,0.5], низшая чувствительность).
             chroma_peak_t: 0.35,
         }
     }
@@ -694,6 +752,141 @@ mod exposure_locks {
             "EXPOSURE ACHROMATIC_MP_THRESHOLD band=[{lo:.3},{hi:.3}] grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
             labui.len(),
             labui
+        );
+    }
+
+    /// FORM-лок кривой чистоты (values pinned + границы + монотонность + ключевой
+    /// инвариант). ХРОМАТИЧЕСКИЙ ИНВАРИАНТ: при `mp ≥ mp_ref` `hue_purity == 1` при
+    /// ЛЮБОМ показателе, значит `HUE_PURITY_EXPONENT`/`_MP_REF_RATIO` двигают
+    /// ТОЛЬКО оттенок near-нейтралей (шум atan2), а не хроматические якоря.
+    #[test]
+    fn hue_purity_curve_shape_is_pinned() {
+        use super::{HUE_PURITY_EXPONENT, HUE_PURITY_MP_REF_RATIO, hue_purity};
+        // Значения (магнитуда калибровочная — пиннится, чтобы дрейф был виден).
+        assert_eq!(HUE_PURITY_EXPONENT, 0.6);
+        assert_eq!(HUE_PURITY_MP_REF_RATIO, 1.5);
+        let ref_mp = 10.0;
+        // Границы: 0 → 0 (полная коррекция), ≥ref → 1 (нет коррекции).
+        assert_eq!(hue_purity(0.0, ref_mp), 0.0);
+        assert_eq!(hue_purity(ref_mp, ref_mp), 1.0);
+        assert_eq!(hue_purity(2.0 * ref_mp, ref_mp), 1.0);
+        // Монотонно не убывает на [0, ref].
+        let mut prev = -1.0_f64;
+        let mut x = 0.0_f64;
+        while x <= ref_mp {
+            let p = hue_purity(x, ref_mp);
+            assert!(
+                p >= prev - 1e-12 && (0.0..=1.0).contains(&p),
+                "purity must be monotone in [0,1]: hue_purity({x},{ref_mp})={p}"
+            );
+            prev = p;
+            x += ref_mp / 64.0;
+        }
+    }
+
+    /// EXPOSURE/sensitivity кривой чистоты: константы влияют ТОЛЬКО на near-нейтрали
+    /// (`r = mp/mp_ref < 1`), чей оттенок и так шум; при `r ≥ 1` `purity == 1` при
+    /// любом показателе (хроматические якоря инвариантны). Свипаем показатель по
+    /// [0.4, 0.9] и печатаем макс. |Δpurity| — непрерывный ОГРАНИЧЕННЫЙ дрейф, не
+    /// бинарный флип: точное значение нематериально для хроматического выхода.
+    #[test]
+    fn exposure_hue_purity_curve() {
+        use super::HUE_PURITY_EXPONENT;
+        let prod = |r: f64| r.powf(HUE_PURITY_EXPONENT);
+        let mut max_dp = 0.0_f64;
+        let mut r = 0.0_f64;
+        while r <= 1.0 {
+            for e in [0.4_f64, 0.5, 0.7, 0.8, 0.9] {
+                max_dp = max_dp.max((r.powf(e) - prod(r)).abs());
+            }
+            r += 1.0 / 128.0;
+        }
+        // Хроматический инвариант: при r >= 1 покрытие purity == 1 для любого e.
+        for e in [0.4_f64, 0.6, 0.9, 1.5] {
+            assert_eq!(
+                (1.0_f64).powf(e),
+                1.0,
+                "r=1 purity must be 1 for any exponent"
+            );
+        }
+        eprintln!(
+            "EXPOSURE HUE_PURITY exponent-sweep[0.4,0.9] max|Δpurity|={max_dp:.3} \
+             (bounded, continuous; chromatic anchors invariant, only near-neutral hue-noise moves)"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Волна 2 «объективизация» — терминал (e) для CurveParams (гаммы + пик хромы).
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod wave2_e_locks {
+    use super::{CurveParams, NeutralCurve};
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::srgb_from_hex;
+
+    fn de_ok_hex(a: &str, b: &str) -> f64 {
+        let la = srgb_linear_to_oklab(srgb_from_hex(a).unwrap());
+        let lb = srgb_linear_to_oklab(srgb_from_hex(b).unwrap());
+        ((la[0] - lb[0]).powi(2) + (la[1] - lb[1]).powi(2) + (la[2] - lb[2]).powi(2)).sqrt()
+    }
+
+    fn ladder(params: CurveParams) -> Vec<String> {
+        NeutralCurve::with_params("#FFFFFF", "#787880", "#101012", params)
+            .unwrap()
+            .sample_hex(13)
+    }
+
+    fn max_de_vs_default(vary: impl Fn(&mut CurveParams)) -> f64 {
+        let base = ladder(CurveParams::default());
+        let mut p = CurveParams::default();
+        vary(&mut p);
+        let alt = ladder(p);
+        base.iter()
+            .zip(alt.iter())
+            .map(|(a, b)| de_ok_hex(a, b))
+            .fold(0.0_f64, f64::max)
+    }
+
+    /// (e) DESIGN-CHOICE sensitivity-лок для трёх форм-параметров `CurveParams`.
+    /// Свип каждой ручки по легальной полосе на дефолтной near-серой шкале:
+    /// gamma_light/gamma_dark материальны (>1 JND), chroma_peak_t почти
+    /// нематериален на near-серой шкале (< ½ JND), но был бы материальнее на
+    /// хроматической базе — потому все три честно (e), не (c). КУСАЕТСЯ:
+    /// value-пины `== 1.75/1.5/0.35` падают на любой мутации.
+    #[test]
+    fn curve_params_sensitivity_is_bounded() {
+        let d = CurveParams::default();
+        assert_eq!(d.gamma_light, 1.75);
+        assert_eq!(d.gamma_dark, 1.5);
+        assert_eq!(d.chroma_peak_t, 0.35);
+
+        let mut gl = 0.0_f64;
+        for g in [1.3_f64, 1.5, 2.0, 2.2] {
+            gl = gl.max(max_de_vs_default(|p| p.gamma_light = g));
+        }
+        let mut gd = 0.0_f64;
+        for g in [1.2_f64, 1.35, 1.7, 1.9] {
+            gd = gd.max(max_de_vs_default(|p| p.gamma_dark = g));
+        }
+        let mut pk = 0.0_f64;
+        for t in [0.2_f64, 0.28, 0.42, 0.5] {
+            pk = pk.max(max_de_vs_default(|p| p.chroma_peak_t = t));
+        }
+        assert!(
+            (0.03..0.07).contains(&gl),
+            "gamma_light max ΔE_ok {gl:.4} вне замеренного [0.03, 0.07) — материальна (e)"
+        );
+        assert!(
+            (0.02..0.05).contains(&gd),
+            "gamma_dark max ΔE_ok {gd:.4} вне замеренного [0.02, 0.05) — материальна (e)"
+        );
+        assert!(
+            (0.001..0.01).contains(&pk),
+            "chroma_peak_t max ΔE_ok {pk:.4} вне замеренного [0.001, 0.01) — низшая чувствительность"
+        );
+        eprintln!(
+            "WAVE2 CurveParams (e): gamma_light ΔE_ok={gl:.4} gamma_dark ΔE_ok={gd:.4} chroma_peak_t ΔE_ok={pk:.4}"
         );
     }
 }

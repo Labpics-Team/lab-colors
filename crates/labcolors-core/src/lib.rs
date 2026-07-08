@@ -1,10 +1,13 @@
 pub(crate) mod spaces;
 
 pub(crate) mod accent;
+pub mod accent_balance;
+pub mod accent_surface;
 pub mod alpha;
 pub mod cleanliness;
 pub mod config;
 pub mod glow;
+pub mod hash;
 pub mod ladder;
 pub mod lcs;
 pub mod lpc;
@@ -61,6 +64,9 @@ mod reference_vectors_deep;
 #[cfg(test)]
 mod accent_golden_tests;
 
+pub use accent_surface::{
+    AccentSurface, SurfaceMaterial, derive_accent_surface_ramp, render_surface,
+};
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
     DefectContext, Theme, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
@@ -68,14 +74,15 @@ pub use cleanliness::{
 };
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
-    PaletteFamily, RolePreset, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig,
-    ThemesConfig, VcPreset, labui_preset_aliases, labui_preset_roles,
+    PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
+    VcPreset,
 };
 pub use curve::ColorCurve;
 pub use glow::{
     GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_SUBTLE_DJ, GlowSolve, glow_layers_from_source,
     screen_layer_over_encoded, solve_screen_alpha_for_dj,
 };
+pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use semantic::{

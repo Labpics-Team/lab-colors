@@ -187,20 +187,15 @@ fn hierarchy_pass_fires_and_flags_when_ladder_is_squeezed() {
 
 #[test]
 fn hierarchy_pass_does_not_sweep_in_lone_anchors() {
-    // `icon` (0.4757, above quaternary 0.2934) and `border-strong` (0.9734) are lone
-    // anchors, not label-ladder rungs: the grouping reads strictly-descending runs
-    // off the config, so they are never compressed. `#767676` sits mid squeeze
+    // `border-strong` (0.9734) is a lone anchor, not a label-ladder rung: the
+    // grouping reads strictly-descending runs off the config, so it is never
+    // compressed. (`icon` был вторым lone-anchor; канон #92 снёс роль — глиф
+    // теперь label-tertiary, штатный rung лестницы.) `#767676` sits mid squeeze
     // band (see `hierarchy_pass_fires_and_flags_when_ladder_is_squeezed`), so the
-    // pass demonstrably fires on the labels while leaving lone anchors alone —
-    // on the old `#747474` the pass no longer fires at all, which would make
-    // this test vacuously green.
+    // pass demonstrably fires on the labels while leaving `border-strong` alone.
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#767676").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
-    assert!(
-        !compressed(&set, "icon"),
-        "icon must not join the label ladder"
-    );
     assert!(
         !compressed(&set, "border-strong"),
         "border-strong must not join the label ladder"
@@ -342,7 +337,6 @@ fn acme_config() -> ThemeConfig {
             ("focus".to_string(), brand_ladder(LadderPosition::FocusRing)),
         ],
         aliases: vec![("ring".to_string(), "focus".to_string())],
-        preset: None,
     }
 }
 

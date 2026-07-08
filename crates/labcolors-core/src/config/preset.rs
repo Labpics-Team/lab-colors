@@ -1,14 +1,14 @@
 //! Словарь эталонного пресета labui — СЕМАНТИКА ролей/алиасов (ADR-0001 PR-c,
 //! план BL-007): имена (= `Role::key()` ядра), фракции, позиции лестницы,
-//! полы — ни одного цветового значения. Модуль ПРОДОВЫЙ: механизм пресета
-//! ([`RolePreset::Labui`]) наполняет тонкий конфиг (без собственного `roles`)
-//! в рантайме; якоря/ручки остаются в конфиге клиента, поэтому агностичность
-//! ядра не нарушается (гейт `tests/agnostic_cleanliness.rs` сканирует модуль
-//! как прод и обязан оставаться зелёным).
+//! полы — ни одного цветового значения. Модуль `#[cfg(test)]`-ONLY: labui-дерево
+//! НЕ входит в ОТГРУЖАЕМЫЙ код ядра (строгая агностичность) — прод-скан
+//! `tests/agnostic_cleanliness.rs` этот модуль ИСКЛЮЧАЕТ. Единственный
+//! потребитель — цветоносная референс-фикстура (`labui_reference`,
+//! `config/fixture.rs`), которая наполняет свой словарь ИЗ этого модуля: один
+//! источник, ноль расхождения.
 //!
-//! Цветоносная референс-фикстура (`labui_reference`, дерево Даниила с
-//! замеренными hex) живёт отдельно в `#[cfg(test)]`-модуле `config/fixture.rs`
-//! и наполняет свой словарь ИЗ этого модуля — один источник, ноль расхождения.
+//! Дерево Даниила С ЦВЕТАМИ (замеренные hex) живёт в фикстуре — hex не покидают
+//! `#[cfg(test)]`; этот модуль несёт только имена/рецепты, без цвета.
 
 use super::*;
 use crate::ladder::LadderPosition;
@@ -16,14 +16,11 @@ use crate::solve::Floor;
 
 /// Роли эталонного пресета labui в порядке объявления.
 ///
-/// Вынесены из `labui_reference` (`#[cfg(test)]`-фикстура, в doc-билде
-/// не существует — потому не линк), чтобы механизм пресета
-/// ([`RolePreset::Labui`]) наполнял тонкий конфиг (без собственного `roles`)
-/// ТЕМ ЖЕ словарём, что несёт полный эталон — один источник, ноль
-/// расхождения. Словарь несёт семантику (имена = `Role::key()` ядра, рецепты
-/// 1:1 из `RoleTable::default` — тот тоже `#[cfg(test)]`-only оракул
-/// (ADR-0001 PR-c), потому не линк) — ни одного цветового
-/// значения: якоря/ручки остаются в конфиге клиента.
+/// Общий источник для фикстуры `labui_reference` (`#[cfg(test)]`, потому не
+/// линк): полный эталон несёт ТОТ ЖЕ словарь — один источник, ноль расхождения.
+/// Словарь несёт семантику (имена = `Role::key()` ядра, рецепты 1:1 из
+/// `RoleTable::default` — тоже `#[cfg(test)]`-only оракул (ADR-0001 PR-c), потому
+/// не линк) — ни одного цветового значения: якоря/ручки остаются в конфиге клиента.
 pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // Фракции и полы — 1:1 из RoleTable::default (semantic.rs), включая border-strong
     // = контракт label-primary. Рецепты собраны так, чтобы имя роли совпадало с
@@ -85,13 +82,20 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         // Доли — Ys-перенос Figma-якорей (генезис Y_hk: 102.6/66.5/48.9/29.3),
         // инвариант переноса — цвет: см. semantic.rs «Доли текстовой иерархии».
         ("label-primary".to_string(), text(0.97335917, Floor::AaText)),
-        ("label-secondary".to_string(), text(0.64359014, Floor::AaText)),
+        (
+            "label-secondary".to_string(),
+            text(0.64359014, Floor::AaText),
+        ),
         ("label-tertiary".to_string(), text(0.47572199, Floor::AaUi)),
-        ("label-quaternary".to_string(), text(0.29335999, Floor::None)),
-        // Icon.
-        ("icon".to_string(), text(0.47572199, Floor::AaUi)),
-        // Сепаратора в словаре НЕТ: бордер и сепаратор — единое целое (так
-        // задумано в Figma), компонент-сепаратор применяет бордер-токен.
+        (
+            "label-quaternary".to_string(),
+            text(0.29335999, Floor::None),
+        ),
+        // Иконки владеют Labels: отдельной роли `icon` в словаре НЕТ — глиф
+        // красится `label-*` (по умолчанию `label-tertiary`); `icon` живёт
+        // deprecation-алиасом (labui_preset_aliases). Сепаратора тоже нет:
+        // бордер и сепаратор — единое целое (так задумано в Figma),
+        // компонент-сепаратор применяет бордер-токен.
         // Border ladder. Strong — РАЗЛИЧИМОСТЬ, не читаемость: та же доля
         // контраста, что у label-primary, но пол non-text 3:1 (WCAG 1.4.11 для
         // границ контролов) вместо текстового 4.5:1 — бордер не обязан читаться.
@@ -106,7 +110,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
             "border-soft".to_string(),
             neutral_pos(NeutralPick::Mid, LadderPosition::NeutralBorderSoft),
         ),
-        ("border-ghost".to_string(), RoleRecipe::Zero),
+        ("border-none".to_string(), RoleRecipe::Zero),
         // Fill ladder — лестница от нейтрали (та же форма, что стаб labui:
         // rgba(mid, α) с пер-темной парой — заливка обязана красиво ложиться
         // на любой фон, солвер-солид терял полупрозрачность).
@@ -284,25 +288,17 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // НЕЙТРАЛЬНЫЙ (стаб: fill-neutral солид-литерал; fill-neutral-tinted и
     // border-neutral алиасят нейтральные core-роли fill-primary/border-base).
     //
-    // Солид-роль (`fill-accent`) = лестница LabelPrimary (солид, α=1). `-tinted` —
-    // ЗАЛИВКА при низкой альфе (тинт×альфа напрямую), то есть Ladder FillPrimary: тинт
-    // = якорь источника, α = @12. (AlphaAnalog-рецепт — для инверсии УЖЕ
-    // РЕШЁННОГО контраст-солида, отдельный случай #119; здесь тинт-якорь эмитится
-    // напрямую, поэтому Ladder, а не инверсия — иначе солид над белым дал бы
-    // α_min≈1 и «-tinted» перестал быть полупрозрачным.)
-    roles.push((
-        "fill-accent".to_string(),
-        brand_pos(LadderPosition::LabelPrimary),
-    ));
+    // Словарный канон labui#92: `fill-accent`/`fill-danger` — НЕ роли, а
+    // deprecation-алиасы на `badge-fill-brand`/`badge-fill-danger` (закон пары;
+    // labui_preset_aliases). `-tinted` остаётся РОЛЬЮ: ЗАЛИВКА при низкой альфе
+    // (тинт×альфа напрямую), то есть Ladder FillPrimary — тинт = якорь источника,
+    // α = @12 (солид над белым дал бы α_min≈1 и «-tinted» перестал быть
+    // полупрозрачным, поэтому Ladder, а не инверсия).
     // fill-neutral — солид-литерал стаба без engine-деривации; приближен
     // солидом Neutral(Mid) и потому исключён из точного value-теста.
     roles.push((
         "fill-neutral".to_string(),
         neutral_pos(NeutralPick::Mid, LadderPosition::LabelPrimary),
-    ));
-    roles.push((
-        "fill-danger".to_string(),
-        sent_pos("danger", LadderPosition::LabelPrimary),
     ));
     roles.push((
         "fill-accent-tinted".to_string(),
@@ -360,12 +356,16 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     roles
 }
 
-/// Компонентные алиасы эталонного пресета labui (имя → существующая роль).
+/// Компонентные алиасы эталонного пресета labui (имя → существующая роль),
+/// в порядке `passport.aliases` labui (словарный канон #92).
 ///
 /// Нейтральные компонент-роли, которые стаб алиасит через `var()` на
 /// нейтральные core-роли (одна истина, ноль дублирования значений):
 /// fill-neutral-tinted = var(--lab-fill-primary); border-neutral =
-/// var(--lab-border-base). Пресет наполняет роли И алиасы как единое целое.
+/// var(--lab-border-base). Плюс deprecation-алиасы канона #92: fill-accent/
+/// fill-danger → badge-fill-brand/danger (закон пары), icon → label-tertiary
+/// (глиф красится Labels), border-ghost → border-none (честный ноль). Пресет
+/// наполняет роли И алиасы как единое целое.
 pub fn labui_preset_aliases() -> Vec<(String, String)> {
     vec![
         (
@@ -377,5 +377,12 @@ pub fn labui_preset_aliases() -> Vec<(String, String)> {
             "fx-skeleton-base".to_string(),
             "fill-quaternary".to_string(),
         ),
+        // Словарный канон labui#92 (порядок = passport.aliases labui; отпечаток
+        // тонкий==полный чувствителен к порядку). Акцент/данжер-заливки — закон
+        // пары; icon — глиф (label-tertiary); border-ghost — честный ноль.
+        ("fill-accent".to_string(), "badge-fill-brand".to_string()),
+        ("fill-danger".to_string(), "badge-fill-danger".to_string()),
+        ("icon".to_string(), "label-tertiary".to_string()),
+        ("border-ghost".to_string(), "border-none".to_string()),
     ]
 }

@@ -39,16 +39,15 @@ const ACCENT_007AFF_GOLDEN: [&str; 13] = [
 /// SentimentCurve(Info, brand=200°, prototype "#3E87FF", neutral).sample_hex(13)
 /// — frozen.
 ///
-/// СОЗНАТЕЛЬНАЯ ЗАМЕНА СНЭПШОТА — Zone D (грауndинг якорей в Figma CONTENTS).
-/// Якорный цвет Info обновлён с `#007AFF` (Apple HIG) на `#3E87FF` (Figma
-/// Primitives `Accent/Blue`, `Labels/Info/Primary` Light-mode, traversal 2026-06-30).
-/// Новый Oklab-оттенок: 259.89° (было: 257.42°, разница +2.47°). При brand=200°
-/// прототип сдвигается плавно-асимптотически; resolved_hue ≈ 259.96° (было
-/// ≈257.47°). Синяя рампа чуть холоднее (более к фиолетовому), что соответствует
-/// Figma-дизайн-системе. `prototype_hex` в тесте обновлён на `#3E87FF`.
+/// СОЗНАТЕЛЬНЫЙ ДРЕЙФ Волны 1 (закон категориальных зон). Прежде brand=200°
+/// смещал Info плавно-асимптотически до resolved_hue ≈ 259.96°. Под новым законом
+/// бренд НЕ смещает сентимент — Info ОТДЫХАЕТ на своём синем фокусе 259.89°
+/// (Figma `Accent/Blue`), поэтому рампа чуть сдвинулась. Это следствие закона (info
+/// теперь покоится на синем фокусе), а не тихая регрессия; массив перегенерирован
+/// из ФАКТИЧЕСКОГО вывода нового закона.
 const SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BE", "#1551B0",
-    "#114598", "#0B3579", "#052456", "#021130", "#000108",
+    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BD", "#1551B0",
+    "#114597", "#0B3579", "#052456", "#02112F", "#000108",
 ];
 
 #[test]
@@ -67,29 +66,30 @@ fn accent_curve_007af_sample_hex_13_matches_golden() {
 #[test]
 fn sentiment_info_curve_sample_hex_13_matches_golden() {
     let neutral = neutral();
-    // prototype_hex = Figma Accent/Blue (#3E87FF), Zone D заземление 2026-06-30.
-    // Oklab-оттенок якоря: 259.89° (было 257.42° у Apple HIG #007AFF).
+    // prototype_hex = Figma Accent/Blue (#3E87FF), Oklab-оттенок 259.89°.
+    // СОЗНАТЕЛЬНЫЙ ДРЕЙФ Волны 1: бренд (200°) больше НЕ смещает Info — сентимент
+    // ОТДЫХАЕТ на своём синем фокусе 259.89° (прежде brand-displacement уводил его
+    // до ≈259.96°). Следствие закона категориальных зон, не тихая регрессия.
     let curve = SentimentCurve::from_sentiment(Sentiment::Info, 200.0, "#3E87FF", &neutral)
-        .expect("Info sentiment with a far brand hue resolves");
-    // Прототип Info: 259.89°. Brand 200° (≈59.9° ниже прототипа) вызывает малое
-    // плавно-асимптотическое смещение; resolved_hue ≈ 259.96° (displacement ≈ 0.07°).
+        .expect("Info sentiment resolves (brand ignored by the categorical-zone law)");
+    // Info покоится: смещения от прототипа нет (was_displaced == false, Δ ≈ 0).
     assert!(
-        curve.was_displaced && curve.displacement < 5.0,
-        "a far brand should nudge Info only slightly: displaced={}, Δ={}",
+        !curve.was_displaced && curve.displacement < 1e-6,
+        "Info должен ОТДЫХАТЬ на фокусе (бренд игнорируется): displaced={}, Δ={}",
         curve.was_displaced,
         curve.displacement
     );
     assert!(
-        (curve.resolved_hue - 259.96).abs() < 0.1,
-        "Info resolved hue should be ~259.96° (Figma Accent/Blue anchor; прежнее 257.47° \
-         было Apple HIG): {}",
+        (curve.resolved_hue - 259.89).abs() < 0.1,
+        "Info resolved hue должен быть ~259.89° (синий фокус Figma Accent/Blue; \
+         бренд не смещает): {}",
         curve.resolved_hue
     );
     let got = curve.sample_hex(13);
     assert_eq!(
         got, SENTIMENT_INFO_GOLDEN,
-        "SentimentCurve(Info) ladder drifted from its golden snapshot. Это сознательная \
-         замена (Zone D, Figma grounding); будущий дрейф = регрессия."
+        "SentimentCurve(Info) ladder drifted from its golden snapshot. Golden перегенерирован \
+         под закон Волны 1 (Info покоится на синем фокусе); будущий дрейф = регрессия."
     );
 }
 

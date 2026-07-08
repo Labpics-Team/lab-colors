@@ -34,12 +34,11 @@ const CONTINUITY_BOUND: f64 = 2.0;
 
 /// The roles whose continuity is asserted — every text/UI role that resolves to
 /// a colour on a neutral background.
-const TRACKED: [Role; 5] = [
+const TRACKED: [Role; 4] = [
     Role::LabelPrimary,
     Role::LabelSecondary,
     Role::LabelTertiary,
     Role::LabelQuaternary,
-    Role::Icon,
 ];
 
 fn gray(g: u8) -> String {
