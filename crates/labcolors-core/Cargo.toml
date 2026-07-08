@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "neutral_at"
 harness = false
+
+[[bench]]
+name = "forward"
+harness = false
