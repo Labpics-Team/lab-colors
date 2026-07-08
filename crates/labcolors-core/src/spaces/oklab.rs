@@ -60,8 +60,27 @@ pub(crate) fn oklab_to_srgb_linear(lab: [f64; 3]) -> [f64; 3] {
 }
 
 pub(crate) fn oklab_hue(rgb: [f64; 3]) -> f64 {
-    let lab = srgb_linear_to_oklab(rgb);
-    lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0)
+    // Хью зависит только от Oklab-компонент `a`, `b` (строки 1, 2 матрицы
+    // `LMS_TO_OKLAB`) — светлота `L` (строка 0) не участвует. Считаем ровно эти
+    // две проекции нелинейной `lms_`, не гоняя полный `srgb_linear_to_oklab` с
+    // выбрасываемой строкой `L`. Значения `a`, `b` — те же независимые скалярные
+    // произведения (те же операнды, тот же порядок слева-направо), что даёт полный
+    // matmul, поэтому результат байт-идентичен; пинится golden/reference-векторами
+    // (`h_ok`). Пропуск строки `L` убирает одно скалярное произведение и, главное,
+    // одну ветку зависимостей, которую LLVM не всегда вычищает через границу
+    // `mat_vec_mul` (массив `[f64; 3]` целиком).
+    let lms = mat_vec_mul(SRGB_TO_LMS, rgb);
+    let lms_ = [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()];
+    let a =
+        LMS_TO_OKLAB[1][0] * lms_[0] + LMS_TO_OKLAB[1][1] * lms_[1] + LMS_TO_OKLAB[1][2] * lms_[2];
+    let b =
+        LMS_TO_OKLAB[2][0] * lms_[0] + LMS_TO_OKLAB[2][1] * lms_[1] + LMS_TO_OKLAB[2][2] * lms_[2];
+    // `atan2().to_degrees()` лежит в (−180, 180], поэтому `rem_euclid(360)` здесь
+    // тождественно равен одной условной прибавке 360 (для отрицательного угла) —
+    // байт-идентично, но без floating-modulo. Та же замена, что в `cam16::
+    // forward_compute`; байт-гейтится golden/reference-векторами (`h_ok`).
+    let deg = b.atan2(a).to_degrees();
+    if deg < 0.0 { deg + 360.0 } else { deg }
 }
 
 #[cfg(test)]

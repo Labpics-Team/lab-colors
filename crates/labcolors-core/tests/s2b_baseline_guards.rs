@@ -1054,6 +1054,52 @@ fn supply_chain_proptest_is_dev_dep_only() {
     );
 }
 
+/// Contract: the `[dependencies]` section of `labcolors-core/Cargo.toml` is
+/// EMPTY — zero runtime dependencies (issue #29). The `serial_test`/`proptest`
+/// guards above are crate-name-specific; this one catches ANY arbitrary new
+/// runtime dep (e.g. `libc`, a math crate) that a perf candidate might add.
+///
+/// GREEN at birth (the section holds only a comment). Bites on mutation: add any
+/// entry under `[dependencies]` → this test fails. Parses the manifest directly
+/// (no nested `cargo tree`), so it runs in the DEFAULT gate, not behind
+/// `#[ignore]`.
+#[test]
+fn supply_chain_runtime_dependencies_section_is_empty() {
+    let cargo_toml_path = crate_root().join("Cargo.toml");
+    let cargo_toml =
+        std::fs::read_to_string(&cargo_toml_path).expect("s2b_baseline: cannot read Cargo.toml");
+
+    let mut in_runtime_deps = false;
+    let mut offenders: Vec<String> = Vec::new();
+
+    for line in cargo_toml.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            // Exactly `[dependencies]` — NOT `[dev-dependencies]`,
+            // `[build-dependencies]`, or `[target.'…'.dependencies]`.
+            in_runtime_deps = t == "[dependencies]";
+            continue;
+        }
+        if !in_runtime_deps {
+            continue;
+        }
+        // Inside `[dependencies]`: ignore blank lines and comments; any other
+        // non-empty line declares a runtime dependency.
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        offenders.push(t.to_string());
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "SUPPLY-CHAIN FAILED — `[dependencies]` in \
+         `crates/labcolors-core/Cargo.toml` is NOT empty: {offenders:?}. \
+         labcolors-core must have ZERO runtime dependencies (std only, issue #29). \
+         Any perf win must be algorithmic, not a new crate."
+    );
+}
+
 /// Contract: `cargo tree -e normal -i proptest` returns empty — proptest has no
 /// path through the normal (runtime) dependency graph.
 ///
