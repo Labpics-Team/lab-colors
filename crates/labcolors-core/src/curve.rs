@@ -43,6 +43,38 @@ pub trait ColorCurve {
 mod tests {
     use super::*;
     use crate::neutral::{CurveParams, NeutralCurve};
+    use crate::scale::AccentCurve;
+    use crate::sentiment::{Sentiment, SentimentCurve};
+
+    /// Dedup guard (issue #6): all three curves must reach `sample()` through the
+    /// ONE trait default, not through per-struct inherent copies. A `&dyn
+    /// ColorCurve` can only call the trait method, so if any struct stops
+    /// implementing `ColorCurve` — the exact regression that left this issue
+    /// half-done for `SentimentCurve` — this test fails to compile. The value
+    /// assertions pin that the shared default reproduces each curve's own ramp,
+    /// so removing the inherent bodies changed no output.
+    #[test]
+    fn every_curve_samples_through_the_shared_trait_default() {
+        let neutral = NeutralCurve::new("#FFFFFF", "#787880", "#101012")
+            .expect("canonical anchors are valid");
+        let accent = AccentCurve::new("#007AFF", &neutral).expect("#007AFF is a valid accent seed");
+        let sentiment = SentimentCurve::from_sentiment(Sentiment::Info, 33.5, "#3E87FF", &neutral)
+            .expect("Info sentiment resolves on the canonical neutral");
+
+        for curve in [
+            &neutral as &dyn ColorCurve,
+            &accent as &dyn ColorCurve,
+            &sentiment as &dyn ColorCurve,
+        ] {
+            // n == 0 / n == 1 / n > 1 branches of the single default body.
+            assert!(curve.sample(0).is_empty(), "n=0 must be empty");
+            assert_eq!(curve.sample(1), vec![curve.at(0.5)], "n=1 is the midpoint");
+            let five = curve.sample(5);
+            assert_eq!(five.len(), 5, "n>1 returns n samples");
+            assert_eq!(five[0], curve.at(0.0), "first sample is t=0");
+            assert_eq!(five[4], curve.at(1.0), "last sample is t=1");
+        }
+    }
 
     #[test]
     fn dyn_curve_renders_through_own_vc() {

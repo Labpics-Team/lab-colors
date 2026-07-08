@@ -286,16 +286,12 @@ impl SentimentCurve {
         LcsColor::from_hex_with_vc(&hex, vc).unwrap_or_else(|_| self.neutral.at(t))
     }
 
-    pub fn sample(&self, n: usize) -> Vec<LcsColor> {
-        if n == 0 {
-            return Vec::new();
-        }
-        if n == 1 {
-            return vec![self.at(0.5)];
-        }
-        (0..n).map(|i| self.at(i as f64 / (n - 1) as f64)).collect()
-    }
-
+    /// `n` hex-строк рампы напрямую через `hex_at` — НЕ через
+    /// трейтовый `ColorCurve::sample_hex`, который прогнал бы каждый цвет
+    /// лишним hex→[`LcsColor`]→hex кругом (`at` уже строится из hex) и мог бы
+    /// дрейфнуть на ±1 LSB. Прямой путь держит вывод байт-идентичным
+    /// (`r3_byte_identity_tests`), поэтому этот inherent-метод сознательно
+    /// оставлен и затеняет трейтовый дефолт только для sentiment.
     pub fn sample_hex(&self, n: usize) -> Vec<String> {
         if n == 0 {
             return Vec::new();
@@ -323,6 +319,16 @@ impl SentimentCurve {
         let l = l_for_jhk(target_jhk, h, vc);
         let c = CHROMA_FRACTION * max_chroma(l, h);
         oklab_lc_to_hex(l, c, h)
+    }
+}
+
+impl crate::curve::ColorCurve for SentimentCurve {
+    fn at(&self, t: f64) -> LcsColor {
+        self.at(t)
+    }
+
+    fn vc(&self) -> &ViewingConditions {
+        self.neutral.vc()
     }
 }
 
@@ -700,6 +706,7 @@ fn l_for_jhk(target: f64, h_ok: f64, vc: &ViewingConditions) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::ColorCurve;
 
     fn neutral() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()

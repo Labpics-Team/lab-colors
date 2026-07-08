@@ -19,6 +19,7 @@
 //! Snapshots captured 2026-06-12 from the curves' own `sample_hex(13)` through
 //! their inherited (srgb) viewing conditions.
 
+use crate::curve::ColorCurve;
 use crate::neutral::NeutralCurve;
 use crate::scale::AccentCurve;
 use crate::sentiment::{Sentiment, SentimentCurve};
