@@ -978,6 +978,14 @@ pub(crate) struct DjSolved {
 /// up to the bisection's resolution; the floor guarantee itself never depends
 /// on monotonicity — the returned colour is always a verified passing point.) If even the extreme cannot reach the floor, the contract
 /// is [`Unreachable::FloorUnreachable`].
+/// Lightness-bracket width below which the floor bisection has pinned the
+/// lightness finely enough that the emitted 8-bit hex can no longer move. At
+/// ~1e-9 it is far tighter than the lightness step one hex byte spans, so the
+/// early exit is provably hex-preserving while cutting the bisection from a
+/// fixed 48 steps to ~30. Mirrors `semantic::RATIO_BISECT_EPS` (excluded from the
+/// perceptual-const gate by `NUMERIC_METHOD_ALLOWLIST`, same numeric-epsilon class).
+const FLOOR_BISECT_EPS: f64 = 1e-9;
+
 fn apply_floor(
     l_lpc: f64,
     floor_ratio: f64,
@@ -1004,12 +1012,32 @@ fn apply_floor(
     // floor) to the achromatic extreme (`t = 1`, clears it). Invariant: `hi`
     // always names a colour that clears the floor, `lo` one that does not, so the
     // returned lightness is guaranteed to meet the floor even after quantisation.
+    //
+    // The background's relative luminance is loop-invariant — computed ONCE here.
+    // `floor_ratio_of` re-linearised `bg_disp` (three `powf(2.4)`) on every
+    // iteration; hoisting it feeds the same `rl_bg` to `ratio_from_luminances`,
+    // which is the exact value `contrast_ratio(fg, bg)` would produce (same
+    // operands, same order) — byte-identical, pinned by
+    // `apply_floor_matches_the_cold_bisection_byte_for_byte`.
+    let rl_bg = wcag::relative_luminance(bg_disp);
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
     for _ in 0..48 {
+        // Early exit — the returned `hi` maps a lightness span `|l_extreme -
+        // l_lpc| ≤ 1`, so once the bracket collapses below `FLOOR_BISECT_EPS`
+        // the fully-converged `hi*` (with `lo ≤ hi* ≤ hi`) differs from the
+        // current `hi` by < 1e-9 in lightness — far below the ~1/255 channel
+        // move one 8-bit byte spans, so `build_color(l_final)` quantises to the
+        // identical hex. Same provably-hex-preserving reasoning as
+        // `ratio_for_target_mp`'s `RATIO_BISECT_EPS`; pinned byte-for-byte
+        // against the full-48 bisection by
+        // `apply_floor_matches_the_cold_bisection_byte_for_byte`.
+        if hi - lo < FLOOR_BISECT_EPS {
+            break;
+        }
         let mid = (lo + hi) * 0.5;
         let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
-        if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
+        if floor_ratio_of_with_bg_rl(build_color(l_mid, hue, chroma_policy), rl_bg) >= floor_ratio {
             hi = mid;
         } else {
             lo = mid;
@@ -1023,6 +1051,17 @@ fn apply_floor(
 /// will be emitted as) against the gamma-encoded background.
 fn floor_ratio_of(rgb_linear: [f64; 3], bg_disp: [f64; 3]) -> f64 {
     wcag::contrast_ratio(quantised_display(rgb_linear), bg_disp)
+}
+
+/// [`floor_ratio_of`] with the background's relative luminance precomputed, for a
+/// loop over many foregrounds against ONE fixed background (the `apply_floor`
+/// bisection). Byte-identical to `floor_ratio_of(rgb_linear, bg_disp)` when
+/// `rl_bg == relative_luminance(bg_disp)`: `contrast_ratio` is exactly
+/// `ratio_from_luminances(relative_luminance(fg), relative_luminance(bg))`, so
+/// substituting the cached `rl_bg` changes nothing but the redundant re-linearise.
+fn floor_ratio_of_with_bg_rl(rgb_linear: [f64; 3], rl_bg: f64) -> f64 {
+    let rl_fg = wcag::relative_luminance(quantised_display(rgb_linear));
+    wcag::ratio_from_luminances(rl_fg, rl_bg)
 }
 
 /// Gamma-encoded sRGB of a linear stimulus, quantised to 8-bit — the display

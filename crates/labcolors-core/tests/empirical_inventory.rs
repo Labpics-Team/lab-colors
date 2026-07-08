@@ -124,6 +124,10 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "RATIO_BISECT_EPS",
     "RATIO_EPS",
     "FLOOR_EPS",
+    // Lightness bracket-collapse epsilon in the apply_floor bisection — numeric,
+    // non-perceptual, hex-preserving early exit (solve.rs). Same class as
+    // RATIO_BISECT_EPS.
+    "FLOOR_BISECT_EPS",
     "GAMUT_EPS",
     // L'-axis convergence epsilon in the quantisation solver — numeric, non-perceptual (solve.rs).
     "L_OK_EPSILON",
