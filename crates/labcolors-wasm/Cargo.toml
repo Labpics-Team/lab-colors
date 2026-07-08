@@ -32,6 +32,9 @@ wasm-bindgen-test = "0.3"
 # Native criterion bench of the solve cache-MISS path (`benches/resolve.rs`),
 # over the real labui config via the same load_config path. Mirrors
 # labcolors-core's `forward` bench. dev-only — never in the WASM bundle.
+# Feature set matches labcolors-core exactly: plots are intentionally off
+# (no `plotters`, no gnuplot requirement) — criterion 0.5 degrades to
+# text-only output; nothing in the repo consumes the HTML reports.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
