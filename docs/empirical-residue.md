@@ -53,9 +53,15 @@
 `science/purity-terminal-e` (#48/#49 → (e)), `science/registry-coherence`
 (#37 → (e), остальные (c) → (e), временно), `science/reclassify-e-buckets`
 (6 бывших (c)-строк ВОЗВРАЩЕНЫ в (c) по измерению; #37 несёт MODEL-CONFLICT-пометку)
-и `science/crossover-derived` (#52 → **(a) DERIVED** по измеренному перелому ядра)
-по 27 константам: (a)=7, (b)=1, (c)=6, (e)=13
-(из которых 1 — MODEL-CONFLICT: `HUE_DRIFT_PENALTY_SLOPE`, измерен-и-отклонён).**
+`science/crossover-derived` (#52 → **(a) DERIVED** по измеренному перелому ядра)
+и `science/wave2-e-terminal` (#15 → **(c)** по измеренной инвариантности выхода;
+остальные (e) снабжены sensitivity/bound/протоколом/пином)
+по **26** константам: **(a)=7, (b)=1, (c)=7, (e)=11**
+(из которых 1 (e) — MODEL-CONFLICT: `HUE_DRIFT_PENALTY_SLOPE`, измерен-и-отклонён;
+10 — генуинный design-choice).**
+⚠️ КОРРЕКЦИЯ ЧЕСТНОСТИ (Волна 2): прежняя строка «по 27 константам … (e)=13»
+была устаревшей арифметикой — Волна 1 удалила `#20 DEFAULT_HARDNESS`, поэтому
+трекаемых констант 26, а не 27; актуальный итог выше.
 Незакрытых мишеней нет; строк «нужен эксперимент» — ноль.
 
 ## Классификация всех 25 (+`QUANT_GUARD` +`MODEL_LC_FLOOR` = 27)
@@ -81,14 +87,14 @@
 | 53 | `QUANT_GUARD` | 0.2 | **(c)** | ре-аудит 2026-07-07 (было (e)): НЕ используется независимо в продакшене — только провенанс-разложение байт-идентичного `DECORATIVE_FLOOR_MIN`; замер: min ненул. |Lc| 7.3005 сидит у модельного члена 7.3, скачок клипа 7.85 (не покрывается, и не должен) | `decorative_floor_is_model_floor_plus_guard` |
 | 48 | `HUE_PURITY_MP_REF_RATIO` | 1.5 | **(e)** | дизайн-ручка: опубликованного значения нет; робастность — хроматич. инвариант (purity=1 при mp≥ref); форма мотивирована Abney (мишень #4 закрыта). Ре-аудит 2026-07-07: подтверждён генуинный (e) — инвариантность здесь про сам хроматический якорь, не про immaterial-сть магнитуды 1.5 | `hue_purity_curve_shape_is_pinned` |
 | 49 | `HUE_PURITY_EXPONENT` | 0.6 | **(e)** | дизайн-ручка; форма — Abney 1909 / K-S-S 1984 (цит.); дрейф лишь у near-нейтралей, max\|Δpurity\|=0.148 (мишень #4 закрыта). Ре-аудит 2026-07-07: подтверждён генуинный (e) — max\|Δpurity\|=0.148 НЕ ноль, значит показатель материален для near-нейтралей | `exposure_hue_purity_curve` |
-| 15 | `TINT_HUE_STIFFNESS` | 9.0 | (e) | конфиг `hue_stiffness` (валидируется) | `hue_stiffness_negative_is_rejected` |
-| 13 | `NEUTRAL_TINT_RATIO` | 0.10 | (e) | конфиг custom-tint ratio | `custom_tint_overrides_hue_and_ratio` |
-| 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | конфиг custom-tint hue (замер по нейтрали) | `custom_tint_overrides_hue_and_ratio` |
-| 21 | `CHROMA_FRACTION` | 0.88 | (e) | конфиг `chroma_fraction` (labui=1.0) | `chroma_fraction_out_of_bounds_is_rejected` |
+| 15 | `TINT_HUE_STIFFNESS` | 9.0 | **(c)** | **Волна 2 (e)→(c):** замер `cusp_attracted_hue` — выше порога пиннинга ≈0.36 выход байт-инвариантен по полосе [1,100] (dev=0°), дефолт 9.0 = 25× порога | `stiffness_pins_hue_to_canonical_above_threshold`, `hue_stiffness_negative_is_rejected` |
+| 13 | `NEUTRAL_TINT_RATIO` | 0.10 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0288 по [0,0.2]; opt-in v1-политика; диапазон [0,1] | `neutral_tint_ratio_sensitivity_is_bounded`, `custom_tint_overrides_hue_and_ratio` |
+| 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | измер. якорь; Волна 2: байт-инвариант по разбросу [285.78,286.01], ±20°→0.0114 (~1 JND) | `neutral_hue_emits_byte_invariant_across_measured_family_spread`, `custom_tint_overrides_hue_and_ratio` |
+| 21 | `CHROMA_FRACTION` | 0.88 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0421 по [0.70,1.0]; labui=1.0; диапазон (0,1] | `chroma_fraction_sensitivity_is_bounded`, `chroma_fraction_out_of_bounds_is_rejected` |
 | ~~20~~ | ~~`DEFAULT_HARDNESS`~~ | — | — | **УДАЛЁН Волной 1** (снесён механизм p-нормы brand-displacement; config-поле `hardness` живо как vestigial, тест `hardness_below_one_is_rejected` держит его границу) | — |
-| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | (e) | `CurveParams` конфиг (`with_params`) | `custom_tint_overrides_hue_and_ratio` |
-| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | (e) | `CurveParams` конфиг (`with_params`) | — |
-| 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | `CurveParams` конфиг (`with_params`) | — |
+| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0466 по [1.3,2.2]; диапазон >0 | `curve_params_sensitivity_is_bounded` |
+| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0325 по [1.2,1.9]; диапазон >0 | `curve_params_sensitivity_is_bounded` |
+| 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0042 по [0.2,0.5] (низшая); диапазон (0,0.5] | `curve_params_sensitivity_is_bounded` |
 
 **(b) после follow-on = 1 (было 0) — честно.** `IC_DECORATIVE_FLOOR_MIN` = 15.0
 заземлён в опубликованном APCA-уровне Lc 15 (минимум различимости не-текста), с
@@ -337,22 +343,68 @@ GROUNDED APCA-клипа, а не из отдельного опубликова
   замером, не требует решения владельца. Разница с #52: там модельный якорь ЖДЁТ
   выбора, здесь альтернатива уже дисквалифицирована экспериментом.
 
-**Генуинные (e), без изменений, 11 констант** (было 12 — `DEFAULT_HARDNESS` #20
-УДАЛЁН Волной 1 вместе с механизмом p-нормы brand-displacement): `NEUTRAL_HUE_DEG`
-(#12), `NEUTRAL_TINT_RATIO` (#13), `TINT_HUE_STIFFNESS` (#15),
+**Генуинные (e) на конец `reclassify-e-buckets`, 9 явных** (плюс #17, #19 из
+блока «две ложные кандидатуры» выше = 11 всего): `NEUTRAL_HUE_DEG`
+(#12), `NEUTRAL_TINT_RATIO` (#13), ~~`TINT_HUE_STIFFNESS` (#15)~~,
 `CHROMA_FRACTION` (#21), `NEUTRAL_DEFAULT_GAMMA_LIGHT` (#22),
 `NEUTRAL_DEFAULT_GAMMA_DARK` (#23), `NEUTRAL_DEFAULT_CHROMA_PEAK_T` (#24),
-`HUE_PURITY_MP_REF_RATIO` (#48), `HUE_PURITY_EXPONENT` (#49) — ни один не несёт
-exposure-теста, ни для одного не существует модельного якоря; провенанс формы
-там, где он есть (`HUE_PURITY_*`), не покрывает магнитуду (ADR-0002/INV-2 против
-фейкового (b)), и та же пара показывает материальный (не нулевой) дрейф
-(max|Δpurity|=0.148) — то есть магнитуда НЕ immaterial, значит честный терминал
-именно (e), не (c).
+`HUE_PURITY_MP_REF_RATIO` (#48), `HUE_PURITY_EXPONENT` (#49) — ни для одного не
+существует модельного якоря; провенанс формы там, где он есть (`HUE_PURITY_*`),
+не покрывает магнитуду (ADR-0002/INV-2 против фейкового (b)), и та же пара
+показывает материальный дрейф (max|Δpurity|=0.148) — магнитуда НЕ immaterial,
+честный терминал (e), не (c). **⚠️ Волна 2 (2026-07-08) ВЫВЕЛА `#15 TINT_HUE_STIFFNESS`
+из этой группы в (c)** — измерена инвариантность выхода (порог пиннинга ≈0.36,
+dev=0° по [1,100]); остальные подтверждены (e) замером sensitivity.
 
-**Итог: (a)=7, (b)=1, (c)=6, (e)=13** (сумма 27), из которых 1 (e) несёт
-MODEL-CONFLICT (`HUE_DRIFT_PENALTY_SLOPE`, измерен-и-отклонён) и 12 — генуинный
+**Итог `reclassify-e-buckets` (СКОРРЕКТИРОВАН Волной 2): (a)=7, (b)=1, (c)=6,
+(e)=12** (сумма **26**, не 27 — прежняя запись «(e)=13, сумма 27» была устаревшей
+арифметикой: `#20 DEFAULT_HARDNESS` удалён Волной 1). **После Волны 2
+`science/wave2-e-terminal`: (a)=7, (b)=1, (c)=7, (e)=11** (#15 → (c)), из которых
+1 (e) несёт MODEL-CONFLICT (`HUE_DRIFT_PENALTY_SLOPE`) и 10 — генуинный
 design-choice. Ноль изменений чисел (INV-1): reference-vectors/chain-invariants/r3
 байт-идентичны; правки только rustdoc-маркеров, реестра и этого документа.
+
+### 6. Волна 2 «объективизация» (e)-терминалов (`science/wave2-e-terminal`, 2026-07-08)
+
+Пройдены все 12 (e)-строк. Один честный подъём по лестнице, остальным — полный
+пакет робастности (вывод честно невозможен, но термин не завышен):
+
+- **`#15 TINT_HUE_STIFFNESS` = 9.0: (e) → (c) INTERVAL-INSENSITIVE.** Замер
+  `cusp_attracted_hue` на светлотной сетке [0.05, 0.95]: выше **порога пиннинга
+  ≈0.36** штраф `stiffness/100·drift` подавляет выигрыш хромы каспа, argmax
+  встаёт РОВНО на канонический оттенок. Отклонение эмитируемого оттенка по всей
+  полосе жёсткости [1, 100] = **0.000000°** (байт-инвариант); при `stiffness→0`
+  оттенок уходит до края окна ±40° (материален НИЖЕ режима). Дефолт 9.0 = **25×**
+  порога → значение доказуемо нематериально для выхода в своём режиме. Критерий
+  (c) выполнен: 0% флипа в режиме + прямой лок инвариантности
+  (`stiffness_pins_hue_to_canonical_above_threshold`). Семантически как
+  `HUE_SEARCH_HALF_WINDOW` (интерьерный оптимум), НЕ как `CUSP_HALF_WINDOW_DEG`
+  (связывающий кап). Ниже 0.36 стиффнес становится настоящей (e)-ручкой клиента,
+  но дефолт к режиму не относится.
+
+- **10 генуинных (e) — вывод невозможен, терминал (e) ПОДТВЕРЖДЁН, добавлен
+  пакет.** Каждая непрерывная ручка проверена свипом её легального диапазона;
+  измеренный max ΔE_ok эмитируемого цвета материален (> ½ JND) → магнитуда НЕ
+  immaterial → (c) был бы завышением. Числа: `NEUTRAL_TINT_RATIO` 0.0288,
+  `CHROMA_FRACTION` 0.0421, `GAMMA_LIGHT` 0.0466, `GAMMA_DARK` 0.0325,
+  `CHROMA_PEAK_T` 0.0042 (низшая, но на near-серой шкале; на хроматической базе
+  материальнее), `HUE_PURITY_*` max|Δpurity|=0.148. `NEUTRAL_HUE_DEG` —
+  измеренный якорь, байт-инвариант по разбросу семейства [285.78°,286.01°], ±20°
+  даёт ~1 JND. `CUSP_HALF_WINDOW_DEG`/`STRICT_STEP`/`HUE_DRIFT_PENALTY_SLOPE`
+  уже несли локи (Волны objectivization/reclassify), добавлены легальный диапазон
+  + протокол.
+
+- **Протоколы калибровки** сформулированы как «какой замер стал бы
+  кандидатом-ВЫВОДОМ» (замер → сравнение → решение), НЕ как обязательный
+  эксперимент — по терминальной таксономии владельца бакета «нужен эксперимент»
+  нет.
+
+- **Честность:** ноль изменений отгружаемых байт (продакшн-константы не тронуты,
+  добавлены `#[cfg(test)]`-локи + rustdoc). Кусаемость проверена мутацией:
+  `TINT_HUE_STIFFNESS`←0.1 роняет (c)-лок, `CHROMA_FRACTION`←0.5 роняет value-пин.
+  Найдена и исправлена устаревшая арифметика реестра/этого документа
+  («(e)=13, сумма 27» → корректно (c)=7,(e)=11, сумма 26) и stale rustdoc-маркер
+  «класс (d)» в `scale.rs`.
 
 ## Коррекции провенанса, найденные волной
 

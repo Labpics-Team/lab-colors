@@ -187,7 +187,20 @@ pub(crate) const WARNING_HUE_FLOOR_DEG: f64 = 45.0;
 /// sentiment sits just inside its gamut wall rather than on it (the edge can
 /// read neon). Applied identically to every hue: there is no per-hue cap. See
 /// [`SentimentCurve::hex_at`].
-// SSOT-TRACKED — gamut-fraction chroma strength knob.
+///
+/// Терминал **(e) DESIGN-CHOICE** — генуинная свободная ручка «силы». Легальный
+/// диапазон конфига **(0, 1]** (валидатор `CHROMA_FRACTION` в `config.rs`;
+/// `>1` = за стеной гамута). Sensitivity (Волна 2, лок
+/// `chroma_fraction_sensitivity_is_bounded`): свип [0.70, 1.0] на реальных
+/// сентимент-якорях (danger/warning/success/info) даёт max ΔE_ok ≈ **0.0421**
+/// (>1 JND) — НЕПРЕРЫВНЫЙ материальный дрейф (fraction прямо масштабирует хрому
+/// `f · max_chroma`), значит честный (e), не (c). Реестровый дефолт `0.88` — для
+/// клиентов без якорной калибровки; **labui ставит `1.0`** (чистая стена гамута:
+/// его якорь danger `#FF3B30` сидит ВЫШЕ `0.88·C_max`, см. S-01). Протокол
+/// калибровки: подобрать fraction так, чтобы самый насыщенный якорь клиента сел
+/// чуть внутри стены гамута (не «неон», но и не тускло) — измерение по палитре
+/// клиента, а не эксперимент с наблюдателями.
+// SSOT-TRACKED — gamut-fraction chroma strength knob, терминал (e) design-choice (labui=1.0; max ΔE_ok 0.0421 по [0.70,1.0]), см. docs/empirical-inventory.md.
 const CHROMA_FRACTION: f64 = 0.88;
 
 #[derive(Debug, Clone)]
@@ -1256,5 +1269,55 @@ mod derivator_locks {
         }
         assert_eq!(normalize_hue(360.0), HUE_DOMAIN_MIN_INCLUSIVE);
         assert!((normalize_hue(-1.0) - 359.0).abs() < 1e-9);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Волна 2 «объективизация» — терминал (e) для CHROMA_FRACTION.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod wave2_e_locks {
+    use super::{CHROMA_FRACTION, oklab_lc_to_hex};
+    use crate::scale::max_chroma;
+    use crate::spaces::oklab::srgb_linear_to_oklab;
+    use crate::spaces::srgb::srgb_from_hex;
+
+    fn de_ok_hex(a: &str, b: &str) -> f64 {
+        let la = srgb_linear_to_oklab(srgb_from_hex(a).unwrap());
+        let lb = srgb_linear_to_oklab(srgb_from_hex(b).unwrap());
+        ((la[0] - lb[0]).powi(2) + (la[1] - lb[1]).powi(2) + (la[2] - lb[2]).powi(2)).sqrt()
+    }
+
+    /// (e) DESIGN-CHOICE sensitivity-лок для `CHROMA_FRACTION`. Свип [0.70, 1.0]
+    /// на реальных сентимент-якорях labui (danger/warning/success/info): непрерывный
+    /// МАТЕРИАЛЬНЫЙ дрейф (fraction прямо масштабирует хрому), значит (e), не (c).
+    /// КУСАЕТСЯ: value-пин `== 0.88` падает на любой мутации.
+    #[test]
+    fn chroma_fraction_sensitivity_is_bounded() {
+        assert_eq!(
+            CHROMA_FRACTION, 0.88,
+            "реестровый дефолт доли хромы сентимента"
+        );
+        let anchors = ["#FF3B30", "#FF9008", "#34C759", "#3E87FF"];
+        let mut max_de = 0.0_f64;
+        for hex in anchors {
+            let lab = srgb_linear_to_oklab(srgb_from_hex(hex).unwrap());
+            let l = lab[0];
+            let h = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
+            let base = oklab_lc_to_hex(l, CHROMA_FRACTION * max_chroma(l, h), h);
+            for f in [0.70_f64, 0.80, 0.85, 0.92, 0.96, 1.0] {
+                max_de = max_de.max(de_ok_hex(
+                    &base,
+                    &oklab_lc_to_hex(l, f * max_chroma(l, h), h),
+                ));
+            }
+        }
+        assert!(
+            (0.025..0.06).contains(&max_de),
+            "max ΔE_ok по [0.70,1.0] {max_de:.4} вне замеренного [0.025, 0.06) — ручка материальна (e)"
+        );
+        eprintln!(
+            "WAVE2 CHROMA_FRACTION (e): max ΔE_ok[0.70,1.0]={max_de:.4} (материальна → (e), не (c); labui=1.0)"
+        );
     }
 }
