@@ -1,0 +1,84 @@
+[
+  {
+    "bg": "#FFFFFF",
+    "contract": {
+      "kind": "text",
+      "lc": 60.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "solved",
+      "hex": "#767676",
+      "lc": 66.73969133581068,
+      "wcagRatio": 4.542224959605253,
+      "floorOverride": true
+    }
+  },
+  {
+    "bg": "#FFFFFF",
+    "contract": {
+      "kind": "ui",
+      "lc": 45.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "solved",
+      "hex": "#949494",
+      "lc": 52.675353869603114,
+      "wcagRatio": 3.0334698257384747,
+      "floorOverride": true
+    }
+  },
+  {
+    "bg": "#FFFFFF",
+    "contract": {
+      "kind": "range",
+      "floor": 30.0,
+      "ceiling": 60.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "solved",
+      "hex": "#C1C1C1",
+      "lc": 29.785880491256368,
+      "wcagRatio": 1.8001756847703523,
+      "floorOverride": false
+    }
+  },
+  {
+    "bg": "#101012",
+    "contract": {
+      "kind": "text",
+      "lc": 75.0
+    },
+    "theme": "dark",
+    "outcome": {
+      "kind": "unreachable",
+      "code": "exceeds_range"
+    }
+  },
+  {
+    "bg": "#007AFF",
+    "contract": {
+      "kind": "text",
+      "lc": 60.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "unreachable",
+      "code": "exceeds_range"
+    }
+  },
+  {
+    "bg": "#FFFFFF",
+    "contract": {
+      "kind": "text",
+      "lc": 150.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "unreachable",
+      "code": "exceeds_range"
+    }
+  }
+]
