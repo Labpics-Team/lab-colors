@@ -20,6 +20,13 @@ jobs:
   lint:
     name: clippy + rustfmt
     runs-on: [self-hosted, Linux, X64]
+    # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
+    # Форк-PR пропускается (job skipped, раннер не выделяется); push в main
+    # и same-repo PR (коллаборатор) — гоняются. Тот же паттерн, что уже принят
+    # в native-conformance.yml (PR #194, ветка feat/native-conformance-swift).
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp: the runner wipes
     # _work/_temp between jobs, so parallel jobs on shared-HOME runners cannot
     # race each other AND nothing leaks. /tmp is forbidden here: on the de-02
@@ -56,6 +63,10 @@ jobs:
   docs:
     name: cargo doc (intra-doc links)
     runs-on: [self-hosted, Linux, X64]
+    # Защита от fork-PR — см. комментарий в job `lint` выше.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: toolchain env (runner.temp)
@@ -88,6 +99,10 @@ jobs:
   test:
     name: test
     runs-on: [self-hosted, Linux, X64]
+    # Защита от fork-PR — см. комментарий в job `lint` выше.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: toolchain env (runner.temp)
@@ -119,6 +134,10 @@ jobs:
   audit:
     name: cargo audit (rustsec)
     runs-on: [self-hosted, Linux, X64]
+    # Защита от fork-PR — см. комментарий в job `lint` выше.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: toolchain env (runner.temp)
@@ -163,6 +182,10 @@ jobs:
   wasm:
     name: wasm build + headless test + size
     runs-on: [self-hosted, Linux, X64]
+    # Защита от fork-PR — см. комментарий в job `lint` выше.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: toolchain env (runner.temp)
