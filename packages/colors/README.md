@@ -1,6 +1,6 @@
 # @labpics/colors
 
-Адаптивные цветовые роли для дизайн-системы. Получает фоновый цвет и тему — возвращает полный набор ролей (`--lab-label-primary`, `--lab-icon`, `--lab-border-base`, …). CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Ядро написано на Rust и скомпилировано в WebAssembly; пакет не имеет runtime-зависимостей.
+Агностичный контраст-движок для дизайн-систем. Получает фоновый цвет и тему — возвращает полный набор цветовых ролей **вашей** системы. Словарь ролей не встроен в пакет: его задаёт конфиг дизайн-системы (`ThemeConfig`), загружаемый через `loadConfig`; имена вида `--lab-label-primary`, `--lab-border-base` в примерах ниже — из конфига дизайн-системы labui. CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Ядро написано на Rust и скомпилировано в WebAssembly; пакет не имеет runtime-зависимостей.
 
 Ядро возвращает **данные**, не затрагивает DOM. Три вспомогательные функции переводят эти данные в живые CSS-переменные: `applyTheme` (разовое применение), `watchTheme` (реактивное — обновляется при изменении фона) и `adaptTheme` (плавная адаптация для фона, меняющегося каждый кадр).
 
@@ -28,13 +28,15 @@ npm run build   # → pkg/ (wasm + JS-обёртка + .d.ts)
 
 ```ts
 import init, { LabColors, applyTheme } from "@labpics/colors";
+import dsConfig from "./theme.config.json"; // паспорт вашей дизайн-системы (ThemeConfig)
 
-await init();                       // загрузить WASM-модуль (один раз)
-const engine = new LabColors();     // движок по умолчанию
+await init();                                // загрузить WASM-модуль (один раз)
+const engine = new LabColors();              // пустой движок: словаря ролей ещё нет
+engine.loadConfig(JSON.stringify(dsConfig)); // без этого шага resolveTheme отклонится: config_required
 
 const result = engine.resolveTheme("#FFFFFF", "light");
-// result.vars  → { "--lab-label-primary": "oklch(14.79140% 0.012878 284.717)",
-//                  "--lab-icon": "oklch(66.97448% 0.014606 285.999)", ... }
+// result.vars  → готовые CSS-значения по ролям ВАШЕГО конфига:
+//                { "--lab-label-primary": "oklch(<L>% <C> <H>)", … }
 // result.roles → детали каждой роли (css, hex, контраст, флаги)
 
 applyTheme(document.documentElement, result);   // записать все --lab-* в элемент
@@ -49,6 +51,7 @@ import init, { LabColors, watchTheme } from "@labpics/colors";
 
 await init();
 const colors = new LabColors();
+colors.loadConfig(JSON.stringify(dsConfig));   // конфиг дизайн-системы (см. квик-старт)
 
 const panel = document.querySelector(".panel") as HTMLElement;
 const watcher = watchTheme(panel, { colors, theme: "light" });
@@ -73,6 +76,7 @@ import init, { LabColors, adaptTheme, effectiveBackground } from "@labpics/color
 
 await init();
 const colors = new LabColors();
+colors.loadConfig(JSON.stringify(dsConfig));   // конфиг дизайн-системы (см. квик-старт)
 
 const surface = document.querySelector(".hero") as HTMLElement;
 const adaptive = adaptTheme(surface, {
@@ -114,7 +118,7 @@ adaptTheme(hero, {
 
 ### `new LabColors()`
 
-Создаёт движок с таблицей ролей и условиями наблюдения по умолчанию. Повторные одинаковые вызовы `resolveTheme` обслуживаются из внутреннего кэша.
+Создаёт движок **без** словаря ролей: до `loadConfig` любой вызов `resolveTheme` отклоняется ошибкой `config_required`. Повторные одинаковые вызовы `resolveTheme` обслуживаются из внутреннего кэша (кэш-пространство привязано к отпечатку конфига).
 
 ---
 
@@ -147,6 +151,7 @@ type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 | Код ошибки | Причина |
 |------------|---------|
+| `config_required` | конфиг ещё не загружен (`loadConfig` не вызывался) |
 | `invalid_background` | `bgHex` не является `#RGB` или `#RRGGBB` |
 | `unknown_theme` | `theme` не входит в список допустимых |
 
@@ -154,7 +159,7 @@ type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 ### `engine.loadConfig(json): string`
 
-Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`) — главная фича конфиг-границы: движок начинает эмитить роли и подтон конфига вместо встроенной таблицы. Полный preflight: невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight: невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
 
 ---
 
