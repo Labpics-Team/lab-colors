@@ -95,9 +95,7 @@ fn cam16_module_header_cites_sources() {
 
 #[test]
 fn vc_module_header_cites_sources() {
-    let header = module_header(&read(
-        crate_root().join("src").join("spaces").join("vc.rs"),
-    ));
+    let header = module_header(&read(crate_root().join("src").join("spaces").join("vc.rs")));
     assert!(
         header.contains("CIECAM16 Table 1"),
         "vc.rs module header (`//!`) no longer attributes the surround \
