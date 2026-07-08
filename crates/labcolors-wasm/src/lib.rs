@@ -149,7 +149,45 @@ export interface GlowRole {
   readonly css: string;
 }
 
-export type RoleResult = SolvedColor | TranslucentRole | GlowRole | NoneRole | UnreachableRole;
+/** Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) над
+ *  опаковой базой `02`, обе — один тон. `vars` несёт --lab-<role> (солид-канон,
+ *  опаковый), --lab-<role>-01 (тинт oklch/α) и --lab-<role>-02 (база, опаковая).
+ *  Композит-гарантия читаемости пересчитываема из toneHex/alpha (α-граница). */
+export interface MaterialRole {
+  readonly kind: "material";
+  readonly cssVar: string;
+  /** Тон #RRGGBB: тинт 01, база 02 и солид-канон одновременно (равны). */
+  readonly toneHex: string;
+  /** Выведенная альфа тинта 01, (0, 1]. */
+  readonly alpha: number;
+  /** Худший WCAG-контраст коммит-полюса по коридору [чёрный, белый]. */
+  readonly worstContrast: number;
+  /** WCAG-пол читаемости, который держит α (4.5 / 3.0). */
+  readonly floor: number;
+  /** Гарантия выполнена: worstContrast ≥ floor. `false` — пол недостижим даже
+   *  при α = 1 (честная деградация, α = 1 как ближайшая достижимая). */
+  readonly guaranteed: boolean;
+  /** Коммит-полюс поверхности белый (true, тёмный тон) или чёрный (false). */
+  readonly poleWhite: boolean;
+  /** Фактический |ΔJ'| тона-базы от фона — различимость поверхности. */
+  readonly achievedDj: number;
+  /** Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002). */
+  readonly toneCompressed: boolean;
+  /** Оттенок семьи выродился у края гамута (честный флаг; false у нейтрали). */
+  readonly hueVanished: boolean;
+  /** Солид-канон отличим от фона резолва на 8-битной сетке. */
+  readonly distinct: boolean;
+  /** Ready-to-serve CSS value солид-канона: "oklch(L% C H)". */
+  readonly css: string;
+}
+
+export type RoleResult =
+  | SolvedColor
+  | TranslucentRole
+  | GlowRole
+  | MaterialRole
+  | NoneRole
+  | UnreachableRole;
 
 /** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
 export interface ThemeAnchors {
@@ -176,6 +214,7 @@ export type RoleRecipe =
   | { kind: "pair-fill"; source: LadderSource }
   | { kind: "pair-label"; source: LadderSource; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
+  | { kind: "material"; source: LadderSource; tone_light: number; tone_dark: number; floor: "aa-text" | "aa-ui" }
   | { kind: "zero" };
 
 /** Полный конфиг дизайн-системы клиента — вход loadConfig (JSON.stringify(config)). */

@@ -98,6 +98,30 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                     &format!("{:.4}", g.alpha),
                 );
             }
+            RoleOutcome::Material(m) => {
+                // Материал (#89): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
+                // --lab-<role> несёт солид-канон (= тон, опаковый) как SOLID-
+                // фолбэк; --lab-<role>-01 — тинт со слэш-альфой; --lab-<role>-02 —
+                // база. Тон/01/02 несут один тон (композит T над T есть T).
+                field_str(&mut roles, "kind", "material");
+                field_str(&mut roles, "toneHex", &m.tone_hex);
+                field_num(&mut roles, "alpha", m.alpha)?;
+                field_num(&mut roles, "worstContrast", m.worst_contrast)?;
+                field_num(&mut roles, "floor", m.floor)?;
+                field_bool(&mut roles, "guaranteed", m.guaranteed);
+                field_bool(&mut roles, "poleWhite", m.pole_white);
+                field_num(&mut roles, "achievedDj", m.achieved_dj)?;
+                field_bool(&mut roles, "toneCompressed", m.tone_compressed);
+                field_bool(&mut roles, "hueVanished", m.hue_vanished);
+                field_bool(&mut roles, "distinct", m.distinct);
+                let solid_css = oklch_css(&m.tone_hex, None)?;
+                let tint_css = oklch_css(&m.tone_hex, Some(m.alpha))?;
+                field_str(&mut roles, "css", &solid_css);
+                // --lab-<role> = солид-канон; -01 = тинт (α); -02 = опаковая база.
+                push_var(&mut vars, &css_var, &solid_css);
+                push_var(&mut vars, &format!("{css_var}-01"), &tint_css);
+                push_var(&mut vars, &format!("{css_var}-02"), &solid_css);
+            }
             RoleOutcome::None => {
                 field_str(&mut roles, "kind", "none");
             }
@@ -315,6 +339,67 @@ mod tests {
             core = css_core,
         );
         assert_eq!(json, expected);
+    }
+
+    /// Материал (#89) проецируется в контрактные CSS-переменные: `--lab-<role>` =
+    /// солид-канон (oklch), `--lab-<role>-01` = тинт (oklch со слэш-альфой),
+    /// `--lab-<role>-02` = опаковая база (oklch). Плюс полный набор полей исхода.
+    /// Пин ИМЁН переменных — та поверхность, что потребляет labui-material.css.
+    #[test]
+    fn material_projects_two_layer_css_vars() {
+        use crate::dto::MaterialColor;
+        let theme = ResolvedTheme {
+            theme: "light",
+            background: "#FFFFFF".to_string(),
+            roles: vec![RoleEntry {
+                role_key: "bg-material-base".to_string(),
+                outcome: RoleOutcome::Material(MaterialColor {
+                    tone_hex: "#B4B4BC".to_string(),
+                    alpha: 0.6375,
+                    worst_contrast: 4.61,
+                    floor: 4.5,
+                    guaranteed: true,
+                    pole_white: false,
+                    achieved_dj: 18.25,
+                    tone_compressed: false,
+                    hue_vanished: false,
+                    distinct: true,
+                }),
+            }],
+        };
+        let json = resolved_json(&theme).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // Три контрактные переменные: солид-канон, тинт 01 (α), база 02.
+        let solid = labcolors_core::oklch_css_from_hex("#B4B4BC", None).unwrap();
+        let tint = labcolors_core::oklch_css_from_hex("#B4B4BC", Some(0.6375)).unwrap();
+        assert_eq!(v["vars"]["--lab-bg-material-base"].as_str().unwrap(), solid);
+        assert_eq!(
+            v["vars"]["--lab-bg-material-base-01"].as_str().unwrap(),
+            tint,
+            "-01 обязан нести тинт oklch со слэш-альфой"
+        );
+        assert_eq!(
+            v["vars"]["--lab-bg-material-base-02"].as_str().unwrap(),
+            solid,
+            "-02 обязан нести опаковую базу"
+        );
+
+        // Полный набор полей исхода.
+        let r = &v["roles"]["bg-material-base"];
+        assert_eq!(r["kind"], "material");
+        assert_eq!(r["cssVar"], "--lab-bg-material-base");
+        assert_eq!(r["toneHex"], "#B4B4BC");
+        assert_eq!(r["alpha"].as_f64().unwrap(), 0.6375);
+        assert_eq!(r["worstContrast"].as_f64().unwrap(), 4.61);
+        assert_eq!(r["floor"].as_f64().unwrap(), 4.5);
+        assert_eq!(r["guaranteed"], true);
+        assert_eq!(r["poleWhite"], false);
+        assert_eq!(r["achievedDj"].as_f64().unwrap(), 18.25);
+        assert_eq!(r["toneCompressed"], false);
+        assert_eq!(r["hueVanished"], false);
+        assert_eq!(r["distinct"], true);
+        assert_eq!(r["css"].as_str().unwrap(), solid);
     }
 
     /// Числа переживают декаду через кратчайшую десятичную запись: биты double

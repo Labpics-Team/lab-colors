@@ -53,6 +53,11 @@ pub enum RoleOutcome {
     /// `mix-blend-mode: screen`; `--lab-<role>` несёт halo, `--lab-<role>-core`
     /// — слой пересвета, `--lab-<role>-alpha` — интенсивность числом.
     Glow(GlowColor),
+    /// Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) +
+    /// опаковая база `02`, обе — один тон. `--lab-<role>-01` несёт
+    /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
+    /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
+    Material(MaterialColor),
     /// No colour can satisfy this role on this background, with the reason.
     Unreachable {
         /// A stable machine code for the unreachability reason.
@@ -75,6 +80,36 @@ pub struct GlowColor {
     pub achieved_dj: f64,
     /// Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2).
     pub degraded: bool,
+}
+
+/// Двухслойный материал (kind material): тон + выведенная α + вердикт гарантии.
+///
+/// Тинт `01`, база `02` и солид-канон равны тону по построению (композит `T` над
+/// `T` есть `T`), поэтому один `tone_hex`. `alpha` выведена как минимальная
+/// плотность, при которой композит тона над худшим фоном коридора держит `floor`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialColor {
+    /// Тон `#RRGGBB`: тинт `01`, база `02` и солид-канон одновременно.
+    pub tone_hex: String,
+    /// Выведенная альфа тинта `01`, `(0, 1]`.
+    pub alpha: f64,
+    /// Худший WCAG-контраст коммит-полюса по коридору `[чёрный, белый]`.
+    pub worst_contrast: f64,
+    /// WCAG-пол читаемости, который держит α (4.5 / 3.0).
+    pub floor: f64,
+    /// Гарантия выполнена: `worst_contrast ≥ floor`. `false` — пол недостижим
+    /// даже при α = 1 (честная деградация, α = 1 как ближайшая достижимая).
+    pub guaranteed: bool,
+    /// Коммит-полюс поверхности белый (`true`, тёмный тон) или чёрный (`false`).
+    pub pole_white: bool,
+    /// Фактический |ΔJ'| тона-базы от фона резолва — различимость поверхности.
+    pub achieved_dj: f64,
+    /// Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002).
+    pub tone_compressed: bool,
+    /// Оттенок семьи выродился у края гамута (честный флаг; `false` у нейтрали).
+    pub hue_vanished: bool,
+    /// Солид-канон отличим от фона резолва на 8-битной сетке дисплея.
+    pub distinct: bool,
 }
 
 /// A semi-transparent emission and the contrasts its composite achieves.

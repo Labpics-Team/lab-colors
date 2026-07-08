@@ -11,6 +11,7 @@ pub mod hash;
 pub mod ladder;
 pub mod lcs;
 pub mod lpc;
+pub mod material;
 pub mod neutral;
 pub mod pair;
 pub mod scale;
@@ -85,6 +86,10 @@ pub use glow::{
 pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
+pub use material::{
+    BackdropBox, MaterialAlpha, Pole, committed_pole_encoded, solve_material_alpha_encoded,
+    solve_material_alpha_hex, worst_contrast_encoded,
+};
 pub use semantic::{
     NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor, TranslucentResolved,
     measure_contrast, recheck_against, recheck_against_multi, resolve_named_set,

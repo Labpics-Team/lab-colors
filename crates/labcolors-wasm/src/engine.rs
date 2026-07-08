@@ -282,6 +282,19 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             achieved_dj: g.achieved_dj(),
             degraded: g.degraded(),
         }),
+        // Двухслойный материал (#89): тинт 01 (oklch/α) + опаковая база 02.
+        Resolved::Material(m) => RoleOutcome::Material(crate::dto::MaterialColor {
+            tone_hex: m.tint_hex().to_string(),
+            alpha: m.alpha(),
+            worst_contrast: m.worst_contrast(),
+            floor: m.floor(),
+            guaranteed: m.guaranteed(),
+            pole_white: matches!(m.pole(), labcolors_core::Pole::White),
+            achieved_dj: m.achieved_dj(),
+            tone_compressed: m.tone_compressed(),
+            hue_vanished: m.hue_vanished(),
+            distinct: m.distinct(),
+        }),
         // ОСОЗНАННЫЙ ДОЛГ: `Resolved` — `#[non_exhaustive]`, поэтому catch-all
         // обязателен для будущих вариантов ядра. Пока маппит в стабильный код,
         // а не молча роняет неверный цвет; при экспорте rgba-границы каждый
@@ -703,6 +716,18 @@ mod tests {
                             entry.role_key
                         );
                     }
+                    RoleOutcome::Material(m) => {
+                        assert!(
+                            m.tone_hex.starts_with('#') && m.tone_hex.len() == 7,
+                            "{bg} {}: тон материала — #RRGGBB",
+                            entry.role_key
+                        );
+                        assert!(
+                            m.alpha > 0.0 && m.alpha <= 1.0,
+                            "{bg} {}: α материала в (0,1]",
+                            entry.role_key
+                        );
+                    }
                     RoleOutcome::None => {}
                     RoleOutcome::Unreachable { .. } => {}
                 }
@@ -918,6 +943,38 @@ mod tests {
                     assert_eq!(g.halo_hex(), o.halo_hex, "{name}: glow halo");
                     assert_eq!(g.alpha(), o.alpha, "{name}: glow alpha");
                     assert_eq!(g.degraded(), o.degraded, "{name}: glow degraded");
+                }
+                (Resolved::Material(m), RoleOutcome::Material(o)) => {
+                    assert_eq!(m.tint_hex(), o.tone_hex, "{name}: material tone");
+                    assert_eq!(m.alpha(), o.alpha, "{name}: material alpha");
+                    assert_eq!(
+                        m.worst_contrast(),
+                        o.worst_contrast,
+                        "{name}: material worst_contrast"
+                    );
+                    assert_eq!(m.floor(), o.floor, "{name}: material floor");
+                    assert_eq!(m.guaranteed(), o.guaranteed, "{name}: material guaranteed");
+                    assert_eq!(
+                        matches!(m.pole(), labcolors_core::Pole::White),
+                        o.pole_white,
+                        "{name}: material pole_white"
+                    );
+                    assert_eq!(
+                        m.achieved_dj(),
+                        o.achieved_dj,
+                        "{name}: material achieved_dj"
+                    );
+                    assert_eq!(
+                        m.tone_compressed(),
+                        o.tone_compressed,
+                        "{name}: material tone_compressed"
+                    );
+                    assert_eq!(
+                        m.hue_vanished(),
+                        o.hue_vanished,
+                        "{name}: material hue_vanished"
+                    );
+                    assert_eq!(m.distinct(), o.distinct, "{name}: material distinct");
                 }
                 (Resolved::None, RoleOutcome::None) => {}
                 (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),

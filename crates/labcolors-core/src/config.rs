@@ -233,6 +233,10 @@ pub enum ConfigError {
     /// ЗАГРУЗКЕ (`#[serde(default)]` на `roles` на границе WASM разрешает ОПУСТИТЬ
     /// словарь синтаксически, но не остаться совсем без контракта).
     EmptyContract,
+    /// `material`-рецепту передан `floor: zero` — у материала нет цели для вывода
+    /// альфы без пола читаемости. Отказ на загрузке (а не молчаливая невидимая
+    /// роль): материал обязан нести `aa-text` или `aa-ui`.
+    MaterialFloorRequired { role: String },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -296,6 +300,10 @@ impl std::fmt::Display for ConfigError {
                 "рецепт `{recipe}` (роль `{role}`) ещё не реализован ядром"
             ),
             ConfigError::EmptyContract => write!(f, "контракт пуст: передайте roles"),
+            ConfigError::MaterialFloorRequired { role } => write!(
+                f,
+                "material-роль `{role}` требует пол читаемости (aa-text/aa-ui), получен zero-floor"
+            ),
         }
     }
 }
@@ -563,6 +571,28 @@ pub enum RoleRecipe {
         of: LadderSource,
         /// Запрошенная альфа `(0, 1]` (поднимается до `α_min`, если ниже).
         alpha: f64,
+    },
+    /// Двухслойный материал (стекло/акрил, #89): пара «тинт `01` (с выведенной α)
+    /// и опаковая база `02`». База — семейно-оттеночная поверхность на целевом
+    /// перцептивном шаге тира; тинт — тот же тон, а альфа выведена из
+    /// композит-неравенства над коридором фонов. Компилируется в
+    /// [`RoleSpec::Material`].
+    ///
+    /// Тир (`base/muted/soft/subtle`) — величина `tone` (|ΔJ'|): крупнее =
+    /// заметнее/плотнее. Семья — `source`: [`Neutral`](LadderSource::Neutral) даёт
+    /// нейтральный материал (подтон таблицы), остальные — семейно-оттеночный
+    /// (акцент-стекло/сентимент).
+    Material {
+        /// Источник ОТТЕНКА семьи: бренд/семейство/сентимент/нейтраль. Нейтраль →
+        /// нейтральный материал; иное → семейно-оттеночный.
+        source: LadderSource,
+        /// Целевой |ΔJ'| тона-базы под светлое окружение (`> 0`).
+        tone_light: f64,
+        /// Целевой |ΔJ'| тона-базы под тёмное окружение (`> 0`).
+        tone_dark: f64,
+        /// WCAG-пол читаемости, который держит выведенная α (`AaText`/`AaUi`;
+        /// `None` невалиден — валидатор ловит [`ConfigError::MaterialFloorRequired`]).
+        floor: Floor,
     },
     /// Явный ноль: «нет цвета здесь» ([`RoleSpec::Zero`]).
     Zero,
@@ -1056,6 +1086,33 @@ impl ThemeConfig {
                     "0 < alpha ≤ 1 (запрошенная альфа альфа-аналога)",
                 )
             }
+            RoleRecipe::Material {
+                source,
+                tone_light,
+                tone_dark,
+                floor,
+            } => {
+                self.check_ladder_source(role, source)?;
+                check_gt(
+                    &format!("roles.{role}.tone_light"),
+                    *tone_light,
+                    DJ_MIN_EXCLUSIVE,
+                    "dj > 0 (перцептивный шаг тона; ≤ 0 = нет различимой поверхности)",
+                )?;
+                check_gt(
+                    &format!("roles.{role}.tone_dark"),
+                    *tone_dark,
+                    DJ_MIN_EXCLUSIVE,
+                    "dj > 0 (перцептивный шаг тона; ≤ 0 = нет различимой поверхности)",
+                )?;
+                // Материал обязан нести пол читаемости — без него α не выводима.
+                if matches!(floor, Floor::None) {
+                    return Err(ConfigError::MaterialFloorRequired {
+                        role: role.to_string(),
+                    });
+                }
+                Ok(())
+            }
             RoleRecipe::Zero => Ok(()),
         }
     }
@@ -1203,6 +1260,24 @@ impl ThemeConfig {
                 of: self.compile_ladder_tint(role, of)?,
                 alpha: *alpha,
             }),
+            RoleRecipe::Material {
+                source,
+                tone_light,
+                tone_dark,
+                floor,
+            } => {
+                // Нейтральный источник → нейтральный материал (`hue = None`, подтон
+                // ТАБЛИЦЫ); семейный → оттенок якоря подставляется в резолве.
+                let hue = match source {
+                    LadderSource::Neutral(_) => None,
+                    _ => Some(self.compile_ladder_tint(role, source)?),
+                };
+                Ok(RoleSpec::Material {
+                    hue,
+                    tone: DjMagnitude::new(*tone_light, *tone_dark),
+                    floor: *floor,
+                })
+            }
             RoleRecipe::PairFill { source } => Ok(RoleSpec::PairFill {
                 tint: self.compile_ladder_tint(role, source)?,
             }),
