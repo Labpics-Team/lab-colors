@@ -9,7 +9,7 @@
     "outcome": {
       "kind": "solved",
       "hex": "#767676",
-      "lc": 66.73969133581068,
+      "lc": 68.24672742721279,
       "wcagRatio": 4.542224959605253,
       "floorOverride": true
     }
@@ -24,7 +24,7 @@
     "outcome": {
       "kind": "solved",
       "hex": "#949494",
-      "lc": 52.675353869603114,
+      "lc": 54.32862031863287,
       "wcagRatio": 3.0334698257384747,
       "floorOverride": true
     }
@@ -39,9 +39,9 @@
     "theme": "light",
     "outcome": {
       "kind": "solved",
-      "hex": "#C1C1C1",
-      "lc": 29.785880491256368,
-      "wcagRatio": 1.8001756847703523,
+      "hex": "#C4C4C4",
+      "lc": 30.05152117087817,
+      "wcagRatio": 1.7441530133197485,
       "floorOverride": false
     }
   },
