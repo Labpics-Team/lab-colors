@@ -1,0 +1,10 @@
+name: billing-probe (throwaway)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "github-hosted runner works"
