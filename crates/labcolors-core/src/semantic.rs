@@ -295,31 +295,38 @@ pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 
 // ── Доли текстовой иерархии (Labels) ────────────────────────────────────────────
 //
-// Каждая доля = Figma-якорь Lc роли на белом ÷ максимально достижимый Lc ≈ 106
-// (Labels/Neutral): 102.6/106≈0.968, 66.5/106≈0.627, 48.9/106≈0.461,
-// 29.3/106≈0.276. Якоря и вывод долей задокументированы в rustdoc
-// `Default for RoleTable` ниже (таблица «Role | Figma Lc | fraction of max»).
-// Это «якорный принцип»: роль держит почти максимум, что позволяет фон, а не
-// фиксированную дельту. Значения 1:1 с прежними ролями text-* (byte-identity);
-// финальная перцептивная калибровка долей — за владельцем.
+// Каждая доля = Ys-якорь Lc роли на белом ÷ максимально достижимый Ys-Lc
+// 106.0407 (чёрный на белом). Якоря перенесены из генезис-домена Y_hk
+// (Figma-замеры 102.6/66.5/48.9/29.3) при миграции мерила читаемости на Ys:
+// инвариант переноса — ЦВЕТ, не Lc-число. Primary/secondary/quaternary — это
+// Ys-замер принятых владельцем hex'ов лестницы (#141414/#767676/#C2C2C2), что
+// гарантирует байт-идентичность эмиссии; tertiary эмиссией защищён полом 3:1
+// (#949494), его якорь восстановлен побайтовой инверсией генезис-числа 48.9 →
+// #9C9C9C → Ys 50.446. Вывод задокументирован в rustdoc `Default for
+// RoleTable` ниже. Это «якорный принцип»: роль держит почти максимум, что
+// позволяет фон, а не фиксированную дельту; финальная перцептивная
+// калибровка долей — за владельцем.
 
-/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`): 102.6/106 ≈ 0.968.
+/// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`):
+/// Ys(#141414)/Ys(max) = 103.2157/106.0407.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_PRIMARY_FRACTION: f64 = 0.968;
-/// Доля максимального Lc для `LabelSecondary`: 66.5/106 ≈ 0.627.
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_PRIMARY_FRACTION: f64 = 0.97335917;
+/// Доля максимального Lc для `LabelSecondary`: Ys(#767676)/Ys(max) = 68.2467/106.0407.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_SECONDARY_FRACTION: f64 = 0.627;
-/// Доля максимального Lc для `LabelTertiary`: 48.9/106 ≈ 0.461. (Иконки —
-/// глифы: красятся `label-tertiary`; отдельной роли `icon` в словаре нет.)
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_SECONDARY_FRACTION: f64 = 0.64359014;
+/// Доля максимального Lc для `LabelTertiary`:
+/// Ys(#9C9C9C)/Ys(max) = 50.4459/106.0407 (инверсия генезис-якоря 48.9). Иконки —
+/// глифы: красятся `label-tertiary`; отдельной роли `icon` в словаре нет.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_TERTIARY_FRACTION: f64 = 0.461;
-/// Доля максимального Lc для `LabelQuaternary` (disabled): 29.3/106 ≈ 0.276.
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_TERTIARY_FRACTION: f64 = 0.47572199;
+/// Доля максимального Lc для `LabelQuaternary` (disabled):
+/// Ys(#C2C2C2)/Ys(max) = 31.1081/106.0407.
 #[cfg(test)]
-// SSOT-TRACKED — доля Figma-якоря Lc / max Lc ≈ 106, см. docs/empirical-inventory.md.
-const LABEL_QUATERNARY_FRACTION: f64 = 0.276;
+// SSOT-TRACKED — доля Ys-якоря Lc / max Ys-Lc 106.0407, см. docs/empirical-inventory.md.
+const LABEL_QUATERNARY_FRACTION: f64 = 0.29335999;
 
 /// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
 /// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
@@ -373,13 +380,13 @@ pub enum Role {
     /// Body / primary label text — anchored near the strongest contrast the
     /// background allows, so it reads black-on-light or white-on-dark. HIG
     /// "Labels/Primary" (`N12`-strength). Was `text-primary` before the HIG
-    /// taxonomy rename; the contract (0.968 of max, AA-text floor) is unchanged.
+    /// taxonomy rename; the contract (0.9734 of max, AA-text floor) is unchanged.
     LabelPrimary,
     /// Secondary label text — clearly subordinate to primary, still comfortably
     /// readable. HIG "Labels/Secondary". Was `text-secondary`.
     LabelSecondary,
     /// Tertiary label text — the weakest label still meant to be read. HIG
-    /// "Labels/Tertiary". Was `text-muted`; same 0.461 / AA-UI contract.
+    /// "Labels/Tertiary". Was `text-muted`; same 0.4757 / AA-UI contract.
     LabelTertiary,
     /// Quaternary label text — deliberately low contrast; not for reading, so it
     /// carries no readability floor (WCAG excludes inactive controls). HIG
@@ -393,7 +400,7 @@ pub enum Role {
     /// Strong container outline — the strongest border. HIG "Border/Strong" =
     /// `N12`, the same strength as [`LabelPrimary`](Role::LabelPrimary), so it is
     /// an *anchored* role (not a JND placeholder): it carries the label-primary
-    /// contract (0.968 of max, AA-text floor), giving a crisp `N12`-weight edge.
+    /// contract (0.9734 of max, AA-text floor), giving a crisp `N12`-weight edge.
     BorderStrong,
     /// Base container outline — the default border weight. HIG "Border/Base". A
     /// dJ' step at the owner's literal anchor (light 6.41 / dark 10.12).
@@ -1389,16 +1396,25 @@ impl Default for RoleTable {
     /// The v1 role table.
     ///
     /// Text fractions are calibrated against Daniel's Figma "Labels/Neutral"
-    /// anchors on white, where the maximum achievable contrast is ~106 Lc:
+    /// anchors on white, transferred into the Ys readability metric (the
+    /// genesis anchors were measured in the legacy Y_hk metric; the transfer
+    /// invariant is the COLOUR, not the Lc number). Maximum achievable
+    /// contrast on white is 106.0407 Ys-Lc (black on white):
     ///
-    /// | Role | Figma Lc (light) | fraction of max |
-    /// |------|------------------|-----------------|
-    /// | primary | 102.6 | 0.968 |
-    /// | secondary | 66.5 | 0.627 |
-    /// | muted (tertiary) | 48.9 | 0.461 |
-    /// | disabled (quaternary) | 29.3 | 0.276 |
+    /// | Role | genesis Lc (Y_hk) | anchor colour | Ys Lc | fraction of max |
+    /// |------|-------------------|---------------|-------|-----------------|
+    /// | primary | 102.6 | `#141414` (accepted) | 103.2157 | 0.97335917 |
+    /// | secondary | 66.5 | `#767676` (accepted) | 68.2467 | 0.64359014 |
+    /// | muted (tertiary) | 48.9 | `#9C9C9C` (inverted) | 50.4459 | 0.47572199 |
+    /// | disabled (quaternary) | 29.3 | `#C2C2C2` (accepted) | 31.1081 | 0.29335999 |
     ///
-    /// Primary's 0.968 makes it "almost the maximum the background allows" — the
+    /// "Accepted" anchor colours are the ladder hexes Daniel signed off
+    /// (byte-identity is the review acceptance criterion), so solver
+    /// quantisation lands exactly back on them; tertiary's emission is
+    /// protected by the 3:1 floor (`#949494`), so its anchor is the byte-level
+    /// inversion of the genesis 48.9 instead.
+    ///
+    /// Primary's 0.973 makes it "almost the maximum the background allows" — the
     /// anchor principle, not a fixed delta — so it reads black/white on the
     /// extremes rather than grey. The fractions are equal across polarities by
     /// design, which is the deliberate correction of the asymmetry in the
@@ -1419,8 +1435,9 @@ impl Default for RoleTable {
         Self {
             specs: [
                 // Labels — the text ladder, renamed from text-* to the owner's HIG
-                // names. The contracts are carried over 1:1 (0.968 / 0.627 / 0.461
-                // / 0.276 with the same AaText/AaText/AaUi/None floors), so the
+                // names. The contracts are carried over 1:1 (0.97335917 /
+                // 0.64359014 / 0.47572199 / 0.29335999 with the same
+                // AaText/AaText/AaUi/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
                 (
                     Role::LabelPrimary,
@@ -2688,8 +2705,9 @@ pub fn resolve_named_set(
 /// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
 /// achieves against a background — the cheap **recheck** primitive.
 ///
-/// Both colours are **linear** sRGB; the result is `(lc, wcag_ratio)`. It costs
-/// one CAM16 forward per colour plus WCAG arithmetic — **no solve**. The reactive
+/// Both colours are **linear** sRGB; the result is `(lc, wcag_ratio)`. С
+/// активации ADR-0003 (глава #64) замер полностью display-доменный — ни
+/// одного CAM16-форварда, только WCAG-арифметика — **no solve**. The reactive
 /// runtime calls this per frame to decide whether already-resolved colours still
 /// pass their contract against a *changed* background, re-solving (and easing)
 /// only when they stably do not, instead of re-solving every frame.
@@ -2702,18 +2720,19 @@ pub fn resolve_named_set(
 pub fn measure_contrast(
     bg_linear: [f64; 3],
     fg_linear: [f64; 3],
-    vc: &ViewingConditions,
+    _vc: &ViewingConditions,
 ) -> (f64, f64) {
-    let y_bg = crate::solve::bg_luma(bg_linear, vc);
-    let y_fg = crate::solve::bg_luma(fg_linear, vc);
-    let lc = crate::lpc::contrast_core(y_fg, y_bg);
-    // WCAG is defined on the *display* (gamma-encoded, 8-bit) colour, exactly as
+    // Обе метрики — перцептивный `Lc` и легальный WCAG — читают ОДНУ люминансу
+    // квантованного display-цвета (ось читаемости в `Ys`, ADR-0003), exactly as
     // the solver measures it (`finish` → `quantised_display`), so the recheck
-    // reproduces the solver's reported `wcag_ratio` bit-for-bit.
-    let wcag = crate::wcag::contrast_ratio(
-        crate::solve::quantised_display(fg_linear),
-        crate::solve::quantised_display(bg_linear),
+    // reproduces the solver's reported `lc`/`wcag_ratio` bit-for-bit.
+    let fg_disp = crate::solve::quantised_display(fg_linear);
+    let bg_disp = crate::solve::quantised_display(bg_linear);
+    let lc = crate::lpc::contrast_core(
+        crate::wcag::relative_luminance(fg_disp),
+        crate::wcag::relative_luminance(bg_disp),
     );
+    let wcag = crate::wcag::contrast_ratio(fg_disp, bg_disp);
     (lc, wcag)
 }
 
@@ -2721,51 +2740,47 @@ pub fn measure_contrast(
 /// **shared** background hex, under `vc`. The per-frame primitive the reactive
 /// runtime calls.
 ///
-/// The background's H-K luminance and display value are computed **once** for the
-/// whole batch, so the cost is one CAM16 forward for the background plus one per
-/// foreground — not two per foreground as [`measure_contrast`] (single pair)
-/// would cost. That sharing is what makes "recheck every role each frame" cheap
-/// enough to replace "re-solve every role each frame": the controller keeps the
-/// current colours while they still pass and only re-solves the rare role that
-/// stably fails.
+/// The background's luminance is computed **once** for the whole batch. С
+/// активации ADR-0003 форвард цвета — это ОДНА `relative_luminance` его
+/// display-байтов (ни одного CAM16), so "recheck every role each frame" is
+/// cheaper still than "re-solve every role each frame": the controller keeps
+/// the current colours while they still pass and only re-solves the rare role
+/// that stably fails.
 ///
 /// Each result equals what the solver's `finish` measured for that fg/bg pair, so
 /// a freshly-resolved set re-checks to its own reported contrasts. Returns `Err`
 /// if any hex is invalid (only `#RRGGBB` or bare `RRGGBB` is accepted).
-/// One colour's two recheck ingredients from its hex: the H-K luminance `y`
-/// (for the perceptual `Lc`) and the WCAG relative luminance `rl`.
+/// One colour's recheck ingredient from its hex: the WCAG relative luminance
+/// `rl` of its display bytes — с активации ADR-0003 перцептивный `Lc` и
+/// легальный WCAG читают ОДНУ и ту же люминансу, бывшая пара `(y_hk, rl)`
+/// схлопнулась в один скаляр, а recheck стал VC-независимым (display-домен).
 ///
 /// SINGLE SOURCE OF TRUTH for the forward, shared by [`recheck_against`] and
 /// [`recheck_against_multi`] so they cannot drift — the byte-identity both
 /// functions promise now holds *by construction*, not by two copies staying in
-/// sync. Both hot-path economies live here:
-///   1. The WCAG display value is taken straight from the byte (`byte/255`) by
-///      `srgb_linear_and_display_from_hex`, so the per-channel `quantised_display`
-///      encode `powf` is gone — `byte/255 == quantised_display(decode(byte))`
-///      exactly (pinned in `spaces::srgb::display_equals_quantised_display_on_every_byte`).
-///   2. `y` and `rl` are both derived from one parse of the hex, no second decode.
-fn hex_forward(hex: &str, vc: &ViewingConditions) -> Result<(f64, f64), String> {
-    let (linear, disp) = crate::spaces::srgb::srgb_linear_and_display_from_hex(hex)?;
-    let y = crate::solve::bg_luma(linear, vc);
-    let rl = crate::wcag::relative_luminance(disp);
-    Ok((y, rl))
+/// sync. The hot-path economy lives here: the WCAG display value is taken
+/// straight from the byte (`byte/255`) by `srgb_encoded_from_hex`, so the
+/// per-channel `quantised_display` encode `powf` is gone —
+/// `byte/255 == quantised_display(decode(byte))` exactly (pinned in
+/// `spaces::srgb::display_equals_quantised_display_on_every_byte`).
+fn hex_forward(hex: &str) -> Result<f64, String> {
+    let disp = crate::spaces::srgb::srgb_encoded_from_hex(hex)?;
+    Ok(crate::wcag::relative_luminance(disp))
 }
 
 pub fn recheck_against(
     bg_hex: &str,
     fg_hexes: &[&str],
-    vc: &ViewingConditions,
+    _vc: &ViewingConditions,
 ) -> Result<Vec<(f64, f64)>, String> {
-    // The background's forward is loop-invariant — computed once — and its WCAG
-    // relative luminance is therefore linearised once, not re-linearised inside
-    // every foreground's ratio. The remaining per-colour WCAG cost is a single
-    // `relative_luminance` on the exact display value the solver measured.
-    let (y_bg, rl_bg) = hex_forward(bg_hex, vc)?;
+    // The background's forward is loop-invariant — computed once. Один скаляр
+    // на цвет: та же люминанса кормит и `contrast_core`, и WCAG-ратио.
+    let rl_bg = hex_forward(bg_hex)?;
     fg_hexes
         .iter()
         .map(|fg_hex| {
-            let (y_fg, rl_fg) = hex_forward(fg_hex, vc)?;
-            let lc = crate::lpc::contrast_core(y_fg, y_bg);
+            let rl_fg = hex_forward(fg_hex)?;
+            let lc = crate::lpc::contrast_core(rl_fg, rl_bg);
             let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
             Ok((lc, wcag))
         })
@@ -2773,14 +2788,14 @@ pub fn recheck_against(
 }
 
 /// Multi-background recheck: the `(lc, wcag_ratio)` each foreground achieves
-/// against EACH of several background samples, sharing every foreground's CAM16
-/// forward across all samples. The reactive controller's worst-case loop rechecks
-/// the SAME foreground set against N backdrop samples (a gradient / image), and
-/// the dominant cost — one CAM16 forward per foreground — does not depend on the
-/// background, so it is wasted N−1 times when each sample is a separate
-/// [`recheck_against`] call. Here each foreground's `(y_fg, rl_fg)` is computed
-/// ONCE and reused for every sample; only the per-background luminances and the
-/// two cheap combine steps (`contrast_core`, `ratio_from_luminances`) repeat.
+/// against EACH of several background samples, sharing every foreground's
+/// forward across all samples. The reactive controller's worst-case loop
+/// rechecks the SAME foreground set against N backdrop samples (a gradient /
+/// image); each foreground's `rl_fg` is computed ONCE and reused for every
+/// sample — с активации ADR-0003 форвард подешевел до одной
+/// `relative_luminance` display-байтов (CAM16 ушёл с оси читаемости), но
+/// хойстинг сохранён: он несёт контракт byte-identity двух входов, не только
+/// экономию.
 ///
 /// The result is **byte-identical**, pair for pair, to calling [`recheck_against`]
 /// once per background: the same float operations run in the same order, only the
@@ -2791,21 +2806,21 @@ pub fn recheck_against(
 pub fn recheck_against_multi(
     bg_hexes: &[&str],
     fg_hexes: &[&str],
-    vc: &ViewingConditions,
+    _vc: &ViewingConditions,
 ) -> Result<Vec<f64>, String> {
     // Precompute each foreground's background-independent forward exactly once,
     // through the SAME `hex_forward` `recheck_against` uses — so the shared-forward
     // path guarantees byte-identity between the two entry points by construction.
-    let fg_pre: Vec<(f64, f64)> = fg_hexes
+    let fg_pre: Vec<f64> = fg_hexes
         .iter()
-        .map(|fg_hex| hex_forward(fg_hex, vc))
+        .map(|fg_hex| hex_forward(fg_hex))
         .collect::<Result<_, String>>()?;
 
     let mut out = Vec::with_capacity(bg_hexes.len() * fg_hexes.len() * 2);
     for bg_hex in bg_hexes {
-        let (y_bg, rl_bg) = hex_forward(bg_hex, vc)?;
-        for &(y_fg, rl_fg) in &fg_pre {
-            out.push(crate::lpc::contrast_core(y_fg, y_bg));
+        let rl_bg = hex_forward(bg_hex)?;
+        for &rl_fg in &fg_pre {
+            out.push(crate::lpc::contrast_core(rl_fg, rl_bg));
             out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
         }
     }
@@ -4137,32 +4152,36 @@ mod tests {
 
     #[test]
     fn primary_matches_figma_light_anchor_within_tolerance() {
-        // Snapshot: primary on white should land near Daniel's Figma anchor
-        // 102.6 Lc (the 0.968 fraction of ~106). A few Lc of tolerance absorbs
-        // quantisation and the max-probe.
+        // Snapshot: primary on white should land near the transferred anchor
+        // 103.22 Ys-Lc (the 0.97335917 fraction of 106.0407; genesis Figma
+        // anchor 102.6 in the legacy Y_hk metric). A few Lc of tolerance
+        // absorbs quantisation and the max-probe.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let lc = solved_lc(&bg, Role::LabelPrimary, &vc);
         assert!(
-            (lc - 102.6).abs() <= 2.5,
-            "primary on white {lc} should match Figma anchor 102.6 within 2.5"
+            (lc - 103.22).abs() <= 2.5,
+            "primary on white {lc} should match transferred Figma anchor 103.22 within 2.5"
         );
     }
 
     #[test]
     fn light_ladder_matches_figma_anchors() {
         // Snapshot: the light text ladder lands near Daniel's Figma "Labels"
-        // anchors. Primary/disabled match closely (no floor in play); secondary
-        // and muted sit a few Lc *above* their anchor because the WCAG AA floor
-        // legitimately lifts them on white (see `dark_ladder_is_symmetric_…`),
-        // so they get a wider tolerance — an explained shift, not silent drift.
+        // anchors, transferred into Ys (anchor = Ys of the accepted ladder hex;
+        // tertiary = byte-inversion of the genesis 48.9, see the fraction
+        // consts). Primary/secondary/disabled match closely (targets sit
+        // exactly on the accepted hexes); muted sits a few Lc *above* its
+        // anchor because the WCAG 3:1 floor legitimately lifts it on white
+        // (see `dark_ladder_is_symmetric_…`) — an explained shift, not silent
+        // drift.
         let vc = ViewingConditions::srgb();
         let white = BgInput::solid("#FFFFFF").unwrap();
         let anchors = [
-            (Role::LabelPrimary, 102.6, 2.5),
-            (Role::LabelSecondary, 66.5, 1.0),
-            (Role::LabelTertiary, 48.9, 4.5), // floored up to ~52.7 to clear 3:1
-            (Role::LabelQuaternary, 29.3, 1.0),
+            (Role::LabelPrimary, 103.22, 2.5),
+            (Role::LabelSecondary, 68.25, 1.0),
+            (Role::LabelTertiary, 50.45, 4.5), // floored up to ~54.3 to clear 3:1
+            (Role::LabelQuaternary, 31.11, 1.0),
         ];
         for (role, anchor, tol) in anchors {
             let lc = solved_lc(&white, role, &vc);
@@ -5528,12 +5547,12 @@ mod tests {
         //     Lc `Decorative` (the owner's shadow anchors are alpha opacities,
         //     not dJ' steps); frozen so a refactor cannot move them.
         const GOLDEN: [(&str, &str, &str, &str); 228] = [
-            ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
-            ("srgb", "#FFFFFF", "label-secondary", "#71717A"),
+            ("srgb", "#FFFFFF", "label-primary", "#14131A"),
+            ("srgb", "#FFFFFF", "label-secondary", "#75757E"),
             ("srgb", "#FFFFFF", "label-tertiary", "#94949E"),
-            ("srgb", "#FFFFFF", "label-quaternary", "#BDBDC7"),
-            ("srgb", "#FFFFFF", "separator", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "border-strong", "#0A0A10"),
+            ("srgb", "#FFFFFF", "label-quaternary", "#C1C1CB"),
+            ("srgb", "#FFFFFF", "separator", "#EBECF6"),
+            ("srgb", "#FFFFFF", "border-strong", "#14131A"),
             ("srgb", "#FFFFFF", "border-base", "#E8E8F3"),
             ("srgb", "#FFFFFF", "border-soft", "#F3F3FE"),
             ("srgb", "#FFFFFF", "border-none", "none"),
@@ -5542,17 +5561,17 @@ mod tests {
             ("srgb", "#FFFFFF", "fill-tertiary", "#EEEEF9"),
             ("srgb", "#FFFFFF", "fill-quaternary", "#F3F3FE"),
             ("srgb", "#FFFFFF", "fill-none", "none"),
-            ("srgb", "#FFFFFF", "shadow-minor", "#E5E5EE"),
-            ("srgb", "#FFFFFF", "shadow-ambient", "#E2E2EC"),
-            ("srgb", "#FFFFFF", "shadow-penumbra", "#DEDEE8"),
-            ("srgb", "#FFFFFF", "shadow-major", "#DADAE3"),
+            ("srgb", "#FFFFFF", "shadow-minor", "#EBECF6"),
+            ("srgb", "#FFFFFF", "shadow-ambient", "#E9E9F3"),
+            ("srgb", "#FFFFFF", "shadow-penumbra", "#E5E5EF"),
+            ("srgb", "#FFFFFF", "shadow-major", "#E1E1EA"),
             ("srgb", "#FFFFFF", "none", "none"),
-            ("srgb", "#F2F2F7", "label-primary", "#09090F"),
-            ("srgb", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("srgb", "#F2F2F7", "label-primary", "#131219"),
+            ("srgb", "#F2F2F7", "label-secondary", "#6F6E77"),
             ("srgb", "#F2F2F7", "label-tertiary", "#8B8B95"),
             ("srgb", "#F2F2F7", "label-quaternary", "#B8B8C1"),
-            ("srgb", "#F2F2F7", "separator", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "border-strong", "#09090F"),
+            ("srgb", "#F2F2F7", "separator", "#DFDFE8"),
+            ("srgb", "#F2F2F7", "border-strong", "#131219"),
             ("srgb", "#F2F2F7", "border-base", "#DCDDE6"),
             ("srgb", "#F2F2F7", "border-soft", "#E7E7F0"),
             ("srgb", "#F2F2F7", "border-none", "none"),
@@ -5561,17 +5580,17 @@ mod tests {
             ("srgb", "#F2F2F7", "fill-tertiary", "#E2E2EC"),
             ("srgb", "#F2F2F7", "fill-quaternary", "#E7E7F0"),
             ("srgb", "#F2F2F7", "fill-none", "none"),
-            ("srgb", "#F2F2F7", "shadow-minor", "#DDDDE7"),
-            ("srgb", "#F2F2F7", "shadow-ambient", "#DADAE4"),
-            ("srgb", "#F2F2F7", "shadow-penumbra", "#D7D7E0"),
-            ("srgb", "#F2F2F7", "shadow-major", "#D2D2DC"),
+            ("srgb", "#F2F2F7", "shadow-minor", "#DFDFE8"),
+            ("srgb", "#F2F2F7", "shadow-ambient", "#DCDCE6"),
+            ("srgb", "#F2F2F7", "shadow-penumbra", "#D8D9E2"),
+            ("srgb", "#F2F2F7", "shadow-major", "#D4D4DD"),
             ("srgb", "#F2F2F7", "none", "none"),
-            ("srgb", "#7F7F7F", "label-primary", "#010103"),
+            ("srgb", "#7F7F7F", "label-primary", "#08070E"),
             ("srgb", "#7F7F7F", "label-secondary", "#16151C"),
             ("srgb", "#7F7F7F", "label-tertiary", "#36353D"),
-            ("srgb", "#7F7F7F", "label-quaternary", "#5B5B63"),
-            ("srgb", "#7F7F7F", "separator", "#63636B"),
-            ("srgb", "#7F7F7F", "border-strong", "#010103"),
+            ("srgb", "#7F7F7F", "label-quaternary", "#5F5F67"),
+            ("srgb", "#7F7F7F", "separator", "#686870"),
+            ("srgb", "#7F7F7F", "border-strong", "#08070E"),
             ("srgb", "#7F7F7F", "border-base", "#6F6F77"),
             ("srgb", "#7F7F7F", "border-soft", "#76767F"),
             ("srgb", "#7F7F7F", "border-none", "none"),
@@ -5580,17 +5599,17 @@ mod tests {
             ("srgb", "#7F7F7F", "fill-tertiary", "#73737B"),
             ("srgb", "#7F7F7F", "fill-quaternary", "#76767F"),
             ("srgb", "#7F7F7F", "fill-none", "none"),
-            ("srgb", "#7F7F7F", "shadow-minor", "#63636B"),
-            ("srgb", "#7F7F7F", "shadow-ambient", "#5F5F68"),
-            ("srgb", "#7F7F7F", "shadow-penumbra", "#5B5B63"),
-            ("srgb", "#7F7F7F", "shadow-major", "#54545D"),
+            ("srgb", "#7F7F7F", "shadow-minor", "#686870"),
+            ("srgb", "#7F7F7F", "shadow-ambient", "#64646D"),
+            ("srgb", "#7F7F7F", "shadow-penumbra", "#606068"),
+            ("srgb", "#7F7F7F", "shadow-major", "#5A5A62"),
             ("srgb", "#7F7F7F", "none", "none"),
-            ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
-            ("srgb", "#1C1C1E", "label-secondary", "#B6B6BF"),
-            ("srgb", "#1C1C1E", "label-tertiary", "#95959E"),
-            ("srgb", "#1C1C1E", "label-quaternary", "#6D6C75"),
-            ("srgb", "#1C1C1E", "separator", "#38383F"),
-            ("srgb", "#1C1C1E", "border-strong", "#F1F1FD"),
+            ("srgb", "#1C1C1E", "label-primary", "#FAFAFF"),
+            ("srgb", "#1C1C1E", "label-secondary", "#C0C0C9"),
+            ("srgb", "#1C1C1E", "label-tertiary", "#9F9FA8"),
+            ("srgb", "#1C1C1E", "label-quaternary", "#77777F"),
+            ("srgb", "#1C1C1E", "separator", "#3E3E45"),
+            ("srgb", "#1C1C1E", "border-strong", "#FAFAFF"),
             ("srgb", "#1C1C1E", "border-base", "#2B2B32"),
             ("srgb", "#1C1C1E", "border-soft", "#23232A"),
             ("srgb", "#1C1C1E", "border-none", "none"),
@@ -5599,17 +5618,17 @@ mod tests {
             ("srgb", "#1C1C1E", "fill-tertiary", "#26262E"),
             ("srgb", "#1C1C1E", "fill-quaternary", "#23232A"),
             ("srgb", "#1C1C1E", "fill-none", "none"),
-            ("srgb", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("srgb", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("srgb", "#1C1C1E", "shadow-penumbra", "#42424A"),
-            ("srgb", "#1C1C1E", "shadow-major", "#494950"),
+            ("srgb", "#1C1C1E", "shadow-minor", "#3E3E45"),
+            ("srgb", "#1C1C1E", "shadow-ambient", "#42424A"),
+            ("srgb", "#1C1C1E", "shadow-penumbra", "#48484F"),
+            ("srgb", "#1C1C1E", "shadow-major", "#4F4F57"),
             ("srgb", "#1C1C1E", "none", "none"),
-            ("srgb", "#101012", "label-primary", "#F2F2FC"),
-            ("srgb", "#101012", "label-secondary", "#B4B4BE"),
-            ("srgb", "#101012", "label-tertiary", "#93939C"),
-            ("srgb", "#101012", "label-quaternary", "#696972"),
-            ("srgb", "#101012", "separator", "#323239"),
-            ("srgb", "#101012", "border-strong", "#F2F2FC"),
+            ("srgb", "#101012", "label-primary", "#FAFAFF"),
+            ("srgb", "#101012", "label-secondary", "#BEBEC8"),
+            ("srgb", "#101012", "label-tertiary", "#9D9DA6"),
+            ("srgb", "#101012", "label-quaternary", "#74747C"),
+            ("srgb", "#101012", "separator", "#393940"),
+            ("srgb", "#101012", "border-strong", "#FAFAFF"),
             ("srgb", "#101012", "border-base", "#1F1F27"),
             ("srgb", "#101012", "border-soft", "#18171E"),
             ("srgb", "#101012", "border-none", "none"),
@@ -5618,17 +5637,17 @@ mod tests {
             ("srgb", "#101012", "fill-tertiary", "#1B1B21"),
             ("srgb", "#101012", "fill-quaternary", "#18171E"),
             ("srgb", "#101012", "fill-none", "none"),
-            ("srgb", "#101012", "shadow-minor", "#323239"),
-            ("srgb", "#101012", "shadow-ambient", "#36363E"),
-            ("srgb", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("srgb", "#101012", "shadow-major", "#43434B"),
+            ("srgb", "#101012", "shadow-minor", "#393940"),
+            ("srgb", "#101012", "shadow-ambient", "#3D3D44"),
+            ("srgb", "#101012", "shadow-penumbra", "#43434A"),
+            ("srgb", "#101012", "shadow-major", "#4A4A52"),
             ("srgb", "#101012", "none", "none"),
-            ("srgb", "#3478F6", "label-primary", "#020205"),
+            ("srgb", "#3478F6", "label-primary", "#08070D"),
             ("srgb", "#3478F6", "label-secondary", "#14141B"),
             ("srgb", "#3478F6", "label-tertiary", "#35343C"),
-            ("srgb", "#3478F6", "label-quaternary", "#707078"),
-            ("srgb", "#3478F6", "separator", "#7F7F88"),
-            ("srgb", "#3478F6", "border-strong", "#020205"),
+            ("srgb", "#3478F6", "label-quaternary", "#5E5E67"),
+            ("srgb", "#3478F6", "separator", "#67676F"),
+            ("srgb", "#3478F6", "border-strong", "#08070D"),
             ("srgb", "#3478F6", "border-base", "#6E6E76"),
             ("srgb", "#3478F6", "border-soft", "#76767E"),
             ("srgb", "#3478F6", "border-none", "none"),
@@ -5637,17 +5656,17 @@ mod tests {
             ("srgb", "#3478F6", "fill-tertiary", "#72727B"),
             ("srgb", "#3478F6", "fill-quaternary", "#76767E"),
             ("srgb", "#3478F6", "fill-none", "none"),
-            ("srgb", "#3478F6", "shadow-minor", "#7F7F88"),
-            ("srgb", "#3478F6", "shadow-ambient", "#7C7C85"),
-            ("srgb", "#3478F6", "shadow-penumbra", "#787880"),
-            ("srgb", "#3478F6", "shadow-major", "#72727A"),
+            ("srgb", "#3478F6", "shadow-minor", "#67676F"),
+            ("srgb", "#3478F6", "shadow-ambient", "#63636B"),
+            ("srgb", "#3478F6", "shadow-penumbra", "#5E5E67"),
+            ("srgb", "#3478F6", "shadow-major", "#585861"),
             ("srgb", "#3478F6", "none", "none"),
-            ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
-            ("dim", "#FFFFFF", "label-secondary", "#707079"),
+            ("dim", "#FFFFFF", "label-primary", "#141419"),
+            ("dim", "#FFFFFF", "label-secondary", "#75757E"),
             ("dim", "#FFFFFF", "label-tertiary", "#94949D"),
-            ("dim", "#FFFFFF", "label-quaternary", "#BCBCC6"),
-            ("dim", "#FFFFFF", "separator", "#E3E3ED"),
-            ("dim", "#FFFFFF", "border-strong", "#0D0D12"),
+            ("dim", "#FFFFFF", "label-quaternary", "#C1C1CB"),
+            ("dim", "#FFFFFF", "separator", "#ECECF5"),
+            ("dim", "#FFFFFF", "border-strong", "#141419"),
             ("dim", "#FFFFFF", "border-base", "#D7D7E0"),
             ("dim", "#FFFFFF", "border-soft", "#E7E7F0"),
             ("dim", "#FFFFFF", "border-none", "none"),
@@ -5656,17 +5675,17 @@ mod tests {
             ("dim", "#FFFFFF", "fill-tertiary", "#D0D0DA"),
             ("dim", "#FFFFFF", "fill-quaternary", "#DEDEE7"),
             ("dim", "#FFFFFF", "fill-none", "none"),
-            ("dim", "#FFFFFF", "shadow-minor", "#E3E3ED"),
-            ("dim", "#FFFFFF", "shadow-ambient", "#E0E0EA"),
-            ("dim", "#FFFFFF", "shadow-penumbra", "#DDDDE6"),
-            ("dim", "#FFFFFF", "shadow-major", "#D8D9E2"),
+            ("dim", "#FFFFFF", "shadow-minor", "#ECECF5"),
+            ("dim", "#FFFFFF", "shadow-ambient", "#E9E9F2"),
+            ("dim", "#FFFFFF", "shadow-penumbra", "#E5E5EF"),
+            ("dim", "#FFFFFF", "shadow-major", "#E1E1EA"),
             ("dim", "#FFFFFF", "none", "none"),
-            ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
-            ("dim", "#F2F2F7", "label-secondary", "#6E6E76"),
+            ("dim", "#F2F2F7", "label-primary", "#131218"),
+            ("dim", "#F2F2F7", "label-secondary", "#6F6E77"),
             ("dim", "#F2F2F7", "label-tertiary", "#8B8B94"),
             ("dim", "#F2F2F7", "label-quaternary", "#B8B8C1"),
-            ("dim", "#F2F2F7", "separator", "#DEDEE7"),
-            ("dim", "#F2F2F7", "border-strong", "#0C0C12"),
+            ("dim", "#F2F2F7", "separator", "#DFDFE8"),
+            ("dim", "#F2F2F7", "border-strong", "#131218"),
             ("dim", "#F2F2F7", "border-base", "#CCCCD5"),
             ("dim", "#F2F2F7", "border-soft", "#DBDBE5"),
             ("dim", "#F2F2F7", "border-none", "none"),
@@ -5675,17 +5694,17 @@ mod tests {
             ("dim", "#F2F2F7", "fill-tertiary", "#C5C5CF"),
             ("dim", "#F2F2F7", "fill-quaternary", "#D3D3DC"),
             ("dim", "#F2F2F7", "fill-none", "none"),
-            ("dim", "#F2F2F7", "shadow-minor", "#DEDEE7"),
-            ("dim", "#F2F2F7", "shadow-ambient", "#DBDBE4"),
-            ("dim", "#F2F2F7", "shadow-penumbra", "#D7D7E1"),
-            ("dim", "#F2F2F7", "shadow-major", "#D3D3DC"),
+            ("dim", "#F2F2F7", "shadow-minor", "#DFDFE8"),
+            ("dim", "#F2F2F7", "shadow-ambient", "#DCDCE6"),
+            ("dim", "#F2F2F7", "shadow-penumbra", "#D8D9E2"),
+            ("dim", "#F2F2F7", "shadow-major", "#D4D4DD"),
             ("dim", "#F2F2F7", "none", "none"),
-            ("dim", "#7F7F7F", "label-primary", "#030305"),
+            ("dim", "#7F7F7F", "label-primary", "#08080C"),
             ("dim", "#7F7F7F", "label-secondary", "#16161B"),
             ("dim", "#7F7F7F", "label-tertiary", "#36353D"),
-            ("dim", "#7F7F7F", "label-quaternary", "#5C5C64"),
-            ("dim", "#7F7F7F", "separator", "#64646D"),
-            ("dim", "#7F7F7F", "border-strong", "#030305"),
+            ("dim", "#7F7F7F", "label-quaternary", "#5F5F67"),
+            ("dim", "#7F7F7F", "separator", "#686870"),
+            ("dim", "#7F7F7F", "border-strong", "#08080C"),
             ("dim", "#7F7F7F", "border-base", "#64646C"),
             ("dim", "#7F7F7F", "border-soft", "#6F6F77"),
             ("dim", "#7F7F7F", "border-none", "none"),
@@ -5694,17 +5713,17 @@ mod tests {
             ("dim", "#7F7F7F", "fill-tertiary", "#5F5F67"),
             ("dim", "#7F7F7F", "fill-quaternary", "#696971"),
             ("dim", "#7F7F7F", "fill-none", "none"),
-            ("dim", "#7F7F7F", "shadow-minor", "#64646D"),
-            ("dim", "#7F7F7F", "shadow-ambient", "#616169"),
-            ("dim", "#7F7F7F", "shadow-penumbra", "#5D5D64"),
-            ("dim", "#7F7F7F", "shadow-major", "#57575E"),
+            ("dim", "#7F7F7F", "shadow-minor", "#686870"),
+            ("dim", "#7F7F7F", "shadow-ambient", "#64646D"),
+            ("dim", "#7F7F7F", "shadow-penumbra", "#606068"),
+            ("dim", "#7F7F7F", "shadow-major", "#5A5A61"),
             ("dim", "#7F7F7F", "none", "none"),
-            ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
-            ("dim", "#1C1C1E", "label-secondary", "#B5B5BE"),
-            ("dim", "#1C1C1E", "label-tertiary", "#94949D"),
-            ("dim", "#1C1C1E", "label-quaternary", "#6C6C74"),
-            ("dim", "#1C1C1E", "separator", "#38383F"),
-            ("dim", "#1C1C1E", "border-strong", "#F0F1FA"),
+            ("dim", "#1C1C1E", "label-primary", "#FAFAFF"),
+            ("dim", "#1C1C1E", "label-secondary", "#C0C0C9"),
+            ("dim", "#1C1C1E", "label-tertiary", "#9F9FA8"),
+            ("dim", "#1C1C1E", "label-quaternary", "#77777F"),
+            ("dim", "#1C1C1E", "separator", "#3E3E45"),
+            ("dim", "#1C1C1E", "border-strong", "#FAFAFF"),
             ("dim", "#1C1C1E", "border-base", "#313137"),
             ("dim", "#1C1C1E", "border-soft", "#28282E"),
             ("dim", "#1C1C1E", "border-none", "none"),
@@ -5713,17 +5732,17 @@ mod tests {
             ("dim", "#1C1C1E", "fill-tertiary", "#35353C"),
             ("dim", "#1C1C1E", "fill-quaternary", "#2D2D33"),
             ("dim", "#1C1C1E", "fill-none", "none"),
-            ("dim", "#1C1C1E", "shadow-minor", "#38383F"),
-            ("dim", "#1C1C1E", "shadow-ambient", "#3C3C44"),
-            ("dim", "#1C1C1E", "shadow-penumbra", "#424249"),
-            ("dim", "#1C1C1E", "shadow-major", "#494950"),
+            ("dim", "#1C1C1E", "shadow-minor", "#3E3E45"),
+            ("dim", "#1C1C1E", "shadow-ambient", "#42424A"),
+            ("dim", "#1C1C1E", "shadow-penumbra", "#48484F"),
+            ("dim", "#1C1C1E", "shadow-major", "#4F4F56"),
             ("dim", "#1C1C1E", "none", "none"),
-            ("dim", "#101012", "label-primary", "#F0F0FA"),
-            ("dim", "#101012", "label-secondary", "#B3B3BD"),
-            ("dim", "#101012", "label-tertiary", "#92929B"),
-            ("dim", "#101012", "label-quaternary", "#686871"),
-            ("dim", "#101012", "separator", "#323239"),
-            ("dim", "#101012", "border-strong", "#F0F0FA"),
+            ("dim", "#101012", "label-primary", "#FAFAFF"),
+            ("dim", "#101012", "label-secondary", "#BEBEC8"),
+            ("dim", "#101012", "label-tertiary", "#9D9DA6"),
+            ("dim", "#101012", "label-quaternary", "#74747C"),
+            ("dim", "#101012", "separator", "#393940"),
+            ("dim", "#101012", "border-strong", "#FAFAFF"),
             ("dim", "#101012", "border-base", "#25252B"),
             ("dim", "#101012", "border-soft", "#1C1C22"),
             ("dim", "#101012", "border-none", "none"),
@@ -5732,17 +5751,17 @@ mod tests {
             ("dim", "#101012", "fill-tertiary", "#29292F"),
             ("dim", "#101012", "fill-quaternary", "#212127"),
             ("dim", "#101012", "fill-none", "none"),
-            ("dim", "#101012", "shadow-minor", "#323239"),
-            ("dim", "#101012", "shadow-ambient", "#36363E"),
-            ("dim", "#101012", "shadow-penumbra", "#3C3C44"),
-            ("dim", "#101012", "shadow-major", "#43434B"),
+            ("dim", "#101012", "shadow-minor", "#393940"),
+            ("dim", "#101012", "shadow-ambient", "#3D3D44"),
+            ("dim", "#101012", "shadow-penumbra", "#43434A"),
+            ("dim", "#101012", "shadow-major", "#4A4A51"),
             ("dim", "#101012", "none", "none"),
-            ("dim", "#3478F6", "label-primary", "#040408"),
+            ("dim", "#3478F6", "label-primary", "#08070C"),
             ("dim", "#3478F6", "label-secondary", "#15141A"),
             ("dim", "#3478F6", "label-tertiary", "#35343B"),
-            ("dim", "#3478F6", "label-quaternary", "#707079"),
-            ("dim", "#3478F6", "separator", "#808088"),
-            ("dim", "#3478F6", "border-strong", "#040408"),
+            ("dim", "#3478F6", "label-quaternary", "#5E5E67"),
+            ("dim", "#3478F6", "separator", "#67676F"),
+            ("dim", "#3478F6", "border-strong", "#08070C"),
             ("dim", "#3478F6", "border-base", "#63636C"),
             ("dim", "#3478F6", "border-soft", "#6E6E76"),
             ("dim", "#3478F6", "border-none", "none"),
@@ -5751,10 +5770,10 @@ mod tests {
             ("dim", "#3478F6", "fill-tertiary", "#5F5F67"),
             ("dim", "#3478F6", "fill-quaternary", "#686870"),
             ("dim", "#3478F6", "fill-none", "none"),
-            ("dim", "#3478F6", "shadow-minor", "#808088"),
-            ("dim", "#3478F6", "shadow-ambient", "#7D7D85"),
-            ("dim", "#3478F6", "shadow-penumbra", "#787881"),
-            ("dim", "#3478F6", "shadow-major", "#73737B"),
+            ("dim", "#3478F6", "shadow-minor", "#67676F"),
+            ("dim", "#3478F6", "shadow-ambient", "#63636B"),
+            ("dim", "#3478F6", "shadow-penumbra", "#5E5E67"),
+            ("dim", "#3478F6", "shadow-major", "#585860"),
             ("dim", "#3478F6", "none", "none"),
         ];
 

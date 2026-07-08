@@ -1,26 +1,29 @@
 //! Inverse perceptual-contrast solver: `solve(bg, contract, …) → colour`.
 //!
-//! The forward path maps a colour to its H-K-corrected luminance `Y_hk` and
-//! through [`contrast_core`](crate::lpc) to a contrast value `Lc`. This module
-//! runs that path backwards: given a background and a target contrast it
-//! recovers the foreground luminance analytically (the contrast core is
-//! invertible), then searches `(lightness, chroma, hue)` for an in-gamut colour
-//! whose H-K-corrected lightness reproduces that luminance.
+//! The forward path maps a colour to the WCAG relative luminance `Ys` of its
+//! quantised display value and through [`contrast_core`](crate::lpc) to a
+//! contrast value `Lc` — ось читаемости считает в домене `Ys`, в котором
+//! определены константы SAPC-8 (ADR-0003; активировано главой #64). This
+//! module runs that path backwards: given a background and a target contrast
+//! it recovers the foreground luminance analytically (the contrast core is
+//! invertible), then searches `(lightness, chroma, hue)` for an in-gamut
+//! colour whose display luminance reproduces that target.
 //!
 //! ## Algorithm
 //!
 //! 1. **Background → luminance interval.** [`BgInput`] reduces to `[Y_lo, Y_hi]`
-//!    in `Y_hk` space; a [`Solid`](BgInput::Solid) colour is the degenerate
-//!    interval `[Y, Y]`. The contract is checked at both ends.
+//!    in `Ys` space (WCAG relative luminance of the quantised display colour);
+//!    a [`Solid`](BgInput::Solid) colour is the degenerate interval `[Y, Y]`.
+//!    The contract is checked at both ends.
 //! 2. **Invert the contrast core.** From the target `Lc` and a background
 //!    luminance, recover the clamped foreground luminance for the matching
-//!    polarity, then invert the soft black clamp to a raw `Y_hk` — using the
+//!    polarity, then invert the soft black clamp to a raw `Ys` — using the
 //!    same canonical constants the forward curve uses (no duplicated literals).
-//! 3. **`Y_hk` → `J_HK`.** [`grey_j`](crate::lpc) is the exact inverse of the
-//!    forward `y_hk` binary search, so this step is analytic.
-//! 4. **`J_HK` → colour.** Bisect Oklab lightness so that, after the H-K
-//!    correction and the chroma the policy requests (capped at the in-gamut
-//!    maximum via [`max_chroma`](crate::scale)), the colour lands on `J_HK`.
+//! 3. **`Ys` → colour.** Bisect Oklab lightness so that, after the chroma the
+//!    policy requests (capped at the in-gamut maximum via
+//!    [`max_chroma`](crate::scale)), the display encoding of the colour lands
+//!    on `Ys`. The step is VC-free and CAM16-free: WCAG luminance is a
+//!    display-domain quantity.
 //!
 //! An unreachable contract returns [`Unreachable`] with a reason — never a
 //! silent clip.
@@ -251,27 +254,31 @@ impl BgInput {
         Ok(Self::Solid(rgb))
     }
 
-    /// Reduce the descriptor to its `Y_hk` luminance interval under `vc`.
+    /// Reduce the descriptor to its readability luminance interval — `Ys`,
+    /// WCAG relative luminance of the quantised display colour (ADR-0003:
+    /// ось читаемости считает в `Ys`; активировано главой #64).
     ///
     /// New variants plug in here without touching `solve`'s signature (SEAM a).
     ///
     /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
-    /// the background **only** through three scalars derived here from `bg` — the
-    /// H-K-corrected perceptual luminance `Y_hk` (this interval), the WCAG 2.1
-    /// relative luminance `Y_wcag` of the quantised display colour (polarity +
-    /// the legal floor), and the CAM16-UCS lightness `J'_bg` (needed only by the
-    /// dJ' roles, and free from the same forward that yields `Y_hk`). Verified by
-    /// an exhaustive trace of every `bg` read on the `resolve_set_live` path: each
-    /// is one of those three, never a raw hue/chroma read. This is what lets the
-    /// grey fast path (256 codes) and the chromatic memo (keyed on the exact
-    /// display colour, a superset of the three) stay bit-identical to the solver.
+    /// the background **only** through two scalars derived here from `bg` — the
+    /// WCAG 2.1 relative luminance `Y_wcag` of the quantised display colour
+    /// (readability contract + polarity + the legal floor: один домен, одно
+    /// число) and the CAM16-UCS lightness `J'_bg` (needed only by the dJ'
+    /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — покинул ось
+    /// читаемости вместе с ADR-0003 и живёт только на яркостной оси
+    /// ([`bg_luma`]: сторона пары, свечение, сентимент). Verified by an
+    /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
+    /// This is what lets the grey fast path (256 codes) and the chromatic memo
+    /// (keyed on the exact display colour, a superset of the two) stay
+    /// bit-identical to the solver.
     pub(crate) fn luma_interval(
         &self,
-        vc: &ViewingConditions,
+        _vc: &ViewingConditions,
     ) -> Result<LumaInterval, Unreachable> {
         match self {
             BgInput::Solid(rgb) => {
-                let y = bg_luma(*rgb, vc);
+                let y = wcag::relative_luminance(quantised_display(*rgb));
                 Ok(LumaInterval { lo: y, hi: y })
             }
         }
@@ -303,7 +310,8 @@ impl BgInput {
     }
 }
 
-/// A background luminance interval in `Y_hk` space (H-K-corrected luminance).
+/// A background luminance interval in `Ys` space (WCAG relative luminance of
+/// the quantised display colour — домен оси читаемости, ADR-0003).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LumaInterval {
     lo: f64,
@@ -576,7 +584,7 @@ pub(crate) fn solve_in(
 
     // Stage 1 — perceptual target. Invert the LPC core for the Oklab lightness
     // that reproduces the contract's target against the governing endpoint.
-    let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy, vc)?;
+    let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy)?;
 
     // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
     // perceptual solution falls short of it, push the colour until it clears the
@@ -753,17 +761,16 @@ fn solve_quantization_neighbor(
 }
 
 /// Stage 1: invert the LPC core to the Oklab lightness reproducing `target`
-/// against a single background luminance.
+/// against a single background luminance (`Ys` domain, ADR-0003). VC-free:
+/// обе стороны инверсии — display-доменные величины.
 fn solve_lpc_lightness(
     y_bg: f64,
     target: f64,
     hue: Hue,
     chroma_policy: ChromaPolicy,
-    vc: &ViewingConditions,
 ) -> Result<f64, Unreachable> {
     let y_fg = invert_contrast(y_bg, target)?;
-    let target_j_hk = lpc::grey_j(y_fg, vc);
-    Ok(match_lightness(target_j_hk, hue, chroma_policy, vc))
+    Ok(match_lightness_ys(y_fg, hue, chroma_policy))
 }
 
 /// The CAM16-UCS lightness `J'` of a **linear**-sRGB colour under `vc`.
@@ -1099,131 +1106,72 @@ fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
     }
 }
 
-/// Recover the Oklab lightness whose H-K-corrected lightness equals
-/// `target_j_hk`, applying `chroma_policy` at `hue`.
+/// Recover the Oklab lightness whose display-encoded WCAG relative luminance
+/// equals `target_ys`, applying `chroma_policy` at `hue`.
 ///
-/// `J_HK` runs from ~0 at black to ~100 at white and is strictly monotone in
-/// `l_ok`, so the lightness endpoints bracket the target and a search on the
-/// continuous curve converges to the reproducing lightness. Returns the Oklab
-/// lightness; the colour itself is built from it via [`build_color`].
+/// `Ys` runs from 0 at black to 1 at white and is monotone in `l_ok` along a
+/// hue line under the policy's chroma profile, so the lightness endpoints
+/// bracket the target and the bisection converges to the reproducing
+/// lightness. Returns the Oklab lightness; the colour itself is built from it
+/// via [`build_color`].
 ///
-/// ## Fast path: grey-axis LUT seed
-///
-/// For the neutral core — `ChromaPolicy::Neutral`, or a small undertone
-/// (`ratio ≤ `[`MAX_LUT_CHROMA`](crate::lut::MAX_LUT_CHROMA)) under one of the
-/// two precompiled viewing conditions — [`seed_bracket`](crate::lut::seed_bracket)
-/// supplies a *validated* lightness bracket from the precompiled grey-axis table
-/// (see [`crate::lut`]). Refining inside that narrow bracket reaches full
-/// precision in a handful of bisection steps instead of 64, collapsing the
-/// per-`solve` cost from ~64 CAM16 forward passes to a few. The result is
-/// bit-compatible with the cold bisection: the seed is only a starting bracket,
-/// the refinement converges the same root, and the empirical final-`Lc` delta
-/// over the solver grid is `0.00000` — gated `< 0.01 Lc` by the LUT golden
-/// tests (`lut_adds_…`, `lut_bracket_path_…`), ten times tighter than the
-/// solver's `0.1 Lc` budget.
-///
-/// ## Slow path: cold bisection
-///
-/// Any other viewing condition, or a chroma past the LUT threshold, takes the
-/// original full-`[0, 1]` 64-iteration bisection verbatim — correctness is
-/// never traded for the seed, only speed. The threshold is a performance gate;
-/// the bracket [`seed_bracket`](crate::lut::seed_bracket) returns is
-/// re-validated against the real (possibly tinted) curve before use, so the
-/// fast path is taken only when the bracket provably contains the root.
-fn match_lightness(
-    target_j_hk: f64,
-    hue: Hue,
-    chroma_policy: ChromaPolicy,
-    vc: &ViewingConditions,
-) -> f64 {
-    let j_hk_of =
-        |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
-
-    match crate::lut::seed_bracket(target_j_hk, hue, chroma_policy, vc) {
-        // Pure neutral: the direct table inverse is the answer.
-        Some(crate::lut::LutSeed::Exact(l_ok)) => l_ok,
-        // Small chroma: refine the validated bracket on the real curve.
-        Some(crate::lut::LutSeed::Bracket(bracket)) => {
-            refine_in_bracket(target_j_hk, bracket, j_hk_of)
-        }
-        // Unsupported VC or large chroma: the original cold bisection.
-        None => cold_bisect(target_j_hk, j_hk_of),
-    }
+/// The search is **VC-free and CAM16-free**: WCAG luminance is a
+/// display-domain quantity (ADR-0003 — ось читаемости в `Ys`), so each probe
+/// costs one Oklab→sRGB conversion plus gamma-encode and a dot product. Это
+/// сняло смысл grey-axis LUT (бывший `crate::lut`, удалён этой главой #64):
+/// таблица существовала, чтобы не платить ~64 CAM16-форварда за бисекцию
+/// `J_HK`; бисекция `Ys` дешевле обслуживания самой таблицы, а её
+/// bit-identity-мост стал безпредметен вместе с доменом.
+fn match_lightness_ys(target_ys: f64, hue: Hue, chroma_policy: ChromaPolicy) -> f64 {
+    let ys_of = |l_ok: f64| {
+        let rgb = build_color(l_ok, hue, chroma_policy);
+        wcag::relative_luminance([srgb_gamma(rgb[0]), srgb_gamma(rgb[1]), srgb_gamma(rgb[2])])
+    };
+    cold_bisect(target_ys, ys_of)
 }
 
-/// The Oklab-lightness resolution the bracket refinement converges to. At
-/// `1e-12` the residual is far below one 8-bit output step (`≈ 3.9e-3`), so the
-/// emitted hex — and the measured `Solved.lc()` — matches the cold bisection;
-/// validated to a `0.00000` final-`Lc` delta on the solver grid. The `64`-step
-/// cap mirrors the cold path so a degenerate bracket can never spin.
-const L_OK_EPSILON: f64 = 1e-12;
-
-/// Refine a LUT-seeded lightness bracket to [`L_OK_EPSILON`] by bisection on the
-/// real curve. The bracket is guaranteed to contain the root, so this only
-/// tightens it — typically in far fewer than 64 steps.
-fn refine_in_bracket(
-    target_j_hk: f64,
-    bracket: crate::lut::LightnessBracket,
-    j_hk_of: impl Fn(f64) -> f64,
-) -> f64 {
-    let mut lo = bracket.lo;
-    let mut hi = bracket.hi;
-    // Endpoint short-circuits mirror the cold path's, so a target at or beyond
-    // the gamut extremes returns the same boundary lightness.
-    if target_j_hk <= j_hk_of(lo) {
-        return lo;
-    }
-    if target_j_hk >= j_hk_of(hi) {
-        return hi;
-    }
-    let mut iterations = 0;
-    while hi - lo > L_OK_EPSILON && iterations < 64 {
-        let mid = (lo + hi) * 0.5;
-        if j_hk_of(mid) < target_j_hk {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-        iterations += 1;
-    }
-    (lo + hi) * 0.5
-}
-
-/// The original cold bisection over the full `[0, 1]` lightness range, used when
-/// no LUT seed applies. Kept byte-for-byte equivalent to the pre-LUT solver so
-/// unsupported-VC and large-chroma results are unchanged.
-fn cold_bisect(target_j_hk: f64, j_hk_of: impl Fn(f64) -> f64) -> f64 {
+/// Full-range `[0, 1]` lightness bisection over a monotone luminance curve.
+/// 64 halvings take the interval far beyond the 8-bit output grid; endpoint
+/// short-circuits return the boundary lightness for out-of-gamut targets.
+fn cold_bisect(target: f64, curve_of: impl Fn(f64) -> f64) -> f64 {
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
-    if target_j_hk <= j_hk_of(lo) {
+    if target <= curve_of(lo) {
         return lo;
     }
-    if target_j_hk >= j_hk_of(hi) {
+    if target >= curve_of(hi) {
         return hi;
     }
     for _ in 0..64 {
         let mid = (lo + hi) * 0.5;
-        if j_hk_of(mid) < target_j_hk {
+        if curve_of(mid) < target {
             lo = mid;
         } else {
             hi = mid;
         }
     }
     (lo + hi) * 0.5
-}
-
-/// Crate-internal re-export of [`build_color`] for the grey-axis LUT generator
-/// and its small-chroma bracket validation. Keeps the table bound to the *same*
-/// forward path `solve` uses, so the LUT can never tabulate a different colour
-/// than the one the solver emits (single source of truth, issue #29).
-pub(crate) fn build_color_for_lut(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
-    build_color(l_ok, hue, chroma_policy)
 }
 
 /// Build the in-gamut linear-sRGB colour at Oklab lightness `l_ok`, applying
 /// `chroma_policy` at `hue`. Chroma is capped at [`max_chroma`], so the result
 /// is always inside the sRGB gamut.
 fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
+    if matches!(chroma_policy, ChromaPolicy::Neutral) {
+        // Ахроматика — байт-точный серый ПО ПОСТРОЕНИЮ, не по float-совпадению.
+        // Математика точная: при a = b = 0 инверсия Oklab даёт l' = m' = s' = L
+        // (прибавляются точные нули), LMS = L³ поканально, а строки матрицы
+        // LMS→linear-sRGB суммируются ровно в 1 — линейный серый есть L³ в
+        // каждом канале. Прогон через матрицу вносил пер-строчную ошибку ~1 ulp
+        // с РАЗНЫМ знаком по каналам; бисекция `apply_floor`, честно меряющая
+        // квантованный hex, сходится ровно на байтовый обрыв (x.5/255), где эта
+        // асимметрия расщепляет «серый» на целый байт: floored-tertiary на белом
+        // эмитил #949595 (148,149,149; ratio 3.0036) вместо документированного
+        // #949494. Один общий float на все три канала закрывает класс целиком:
+        // любой обрыв флипает каналы синхронно.
+        let v = (l_ok * l_ok * l_ok).clamp(0.0, 1.0);
+        return [v, v, v];
+    }
     let h = hue.degrees();
     let hr = h.to_radians();
     let chroma = match chroma_policy {
@@ -1241,8 +1189,11 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
 
 /// Quantise the ideal colour to hex and report both contrasts it actually
 /// achieves — what the caller gets, not the pre-quantisation ideal. The
-/// perceptual `lc` is measured in `Y_hk` space against `y_bg`; the legal
-/// `wcag_ratio` on the quantised display colour against `bg_disp`.
+/// perceptual `lc` is measured in `Ys` space (WCAG relative luminance of the
+/// quantised display colour — ADR-0003) against `y_bg`; the legal `wcag_ratio`
+/// on the same display colour against `bg_disp`. Обе метрики читают ОДНУ
+/// люминансу — домен-мисматч оси читаемости закрыт конструкцией. The CAM16
+/// forward remains solely for the returned [`LcsColor`] appearance correlates.
 fn finish(
     rgb_ideal: [f64; 3],
     y_bg: f64,
@@ -1251,21 +1202,14 @@ fn finish(
     vc: &ViewingConditions,
 ) -> Result<Solved, Unreachable> {
     let hex = hex_from_srgb(rgb_ideal);
-    // The quantised colour, decoded once to linear sRGB, drives both perceptual
-    // measurements that follow — the H-K luminance and the CAM16 appearance
-    // correlates. Both previously ran the CIECAM16 forward on this *same* XYZ
-    // independently (`from_xyz_with_hok` and `bg_luma` → `j_hk_from_xyz`),
-    // doubling the hottest pass on every candidate. Run the forward once and feed
-    // both: `LcsColor::from_cam16` is exactly what `from_xyz_with_hok` builds, and
-    // `j_hk_from_cam16` is the same `J_HK` `bg_luma` derives — bit-identical, one
-    // forward instead of two.
     let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
     let xyz = srgb_to_xyz(rgb_quantised);
     let (j, m, h) = crate::spaces::cam16::forward(xyz, vc);
     let color = LcsColor::from_cam16(j, m, h, oklab_hue(rgb_quantised));
-    let y_fg = lpc::y_hk(lpc::j_hk_from_cam16(j, m, h, vc).max(0.0), vc);
+    let disp = quantised_display(rgb_ideal);
+    let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    let wcag_ratio = wcag::contrast_ratio(quantised_display(rgb_ideal), bg_disp);
+    let wcag_ratio = wcag::contrast_ratio(disp, bg_disp);
     Ok(Solved {
         color,
         hex,
@@ -1294,21 +1238,27 @@ fn meets_floor_lc(lc: f64, target: f64) -> bool {
 /// intervals. Re-measures the contrast on the *quantised* hex — the value the
 /// caller actually gets — so the gate reflects the emitted colour, not the
 /// pre-quantisation ideal.
-fn meets_floor(solved: &Solved, y_bg: f64, target: f64, vc: &ViewingConditions) -> bool {
-    let Ok(rgb) = srgb_from_hex(solved.hex()) else {
+fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions) -> bool {
+    let Ok(disp) = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) else {
         // `solved.hex()` is produced by `hex_from_srgb`, so it always parses;
         // an unparsable hex here is a contradiction — treat it as not meeting.
         return false;
     };
-    let y_fg = bg_luma(rgb, vc);
+    // `byte/255 == quantised_display(decode(byte))` точно (пин
+    // `display_equals_quantised_display_on_every_byte`) — читаем ту же `Ys`,
+    // которую замерил `finish`.
+    let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
     meets_floor_lc(lc, target)
 }
 
-/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus. Named for its
-/// commonest caller (the background), but it is purely `colour → Y_hk`; the
-/// reactive recheck primitive ([`semantic::measure_contrast`]) reuses it for the
-/// foreground too.
+/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus — воспринимаемая
+/// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).
+///
+/// После активации ADR-0003 (глава #64) ось читаемости это НЕ читает: контракт
+/// контраста, полы и recheck меряются в `Ys`. Потребители — яркостная ось:
+/// выбор стороны пары ([`crate::pair::pair_side`] — H-K-сдвиг кроссовера на
+/// насыщенных фонах) и яркостные подсистемы.
 pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
     lpc::y_hk(j_hk, vc)
@@ -1419,22 +1369,23 @@ mod tests {
 
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
         //
-        // Counts on the MERGED tree: the per-set forward cache
-        // (`cam16::ForwardCacheGuard`, #62 — counter records only *distinct*
-        // CIECAM16 computations, repeats within a set elided) AND the dJ'
-        // decorative contract (role-taxonomy-hig — base/soft borders + four fills
-        // moved off the Lc `Decorative` contrast inversion onto the analytic
-        // `solve_dj`). Both forces push the counts down versus either side alone,
-        // so the pins below were re-measured against this merged tree, not carried
-        // over from #62 (cache-only) or the role branch (no cache). Re-measured
-        // 2026-06-13.
+        // RE-MEASURED for the readability→`Ys` activation (глава #64, ADR-0003).
+        // Ось читаемости покинула домен `Y_hk`: обратный солвер инвертирует `Ys`
+        // напрямую (`match_lightness_ys`), и весь CAM16-раундтрип `grey_j ↔ y_hk`
+        // на пути читаемости ОТПАЛ — это ровно предсказанный ADR blast radius
+        // («solve.rs упростится … отпадает CAM16-раундтрип для читаемости»).
+        // Оставшиеся форварды — работа ЯРКОСТНЫХ осей (нейтральная лестница,
+        // сентимент, свечение), которые H-K сохраняют; потому dim/тёмные фоны
+        // дороже (лестница в dim делает больше H-K-работы). Падение ~10-40×
+        // против прежних пинов — не регрессия покрытия, а снятие лишнего домена.
+        // Re-measured 2026-07-08 (глава #64 merge).
         let expected = [
-            (("srgb", "#FFFFFF"), (1202u64, 1080u64)),
-            (("srgb", "#7F7F7F"), (935, 794)),
-            (("srgb", "#101012"), (1007, 858)),
-            (("dim", "#FFFFFF"), (1143, 996)),
-            (("dim", "#7F7F7F"), (887, 737)),
-            (("dim", "#101012"), (1031, 825)),
+            (("srgb", "#FFFFFF"), (103u64, 26u64)),
+            (("srgb", "#7F7F7F"), (126, 24)),
+            (("srgb", "#101012"), (129, 25)),
+            (("dim", "#FFFFFF"), (128, 29)),
+            (("dim", "#7F7F7F"), (144, 25)),
+            (("dim", "#101012"), (192, 30)),
         ];
 
         for (vc, name) in vcs() {
@@ -1467,8 +1418,25 @@ mod tests {
         }
     }
 
+    /// Independent re-measure of an emitted hex's signed perceptual contrast in
+    /// the READABILITY domain (`Ys`) the solver targets since глава #64. Заменяет
+    /// Y_hk-мерило `lpc_with_vc` в round-trip проверках ВЕЛИЧИНЫ (сверять надо в
+    /// домене цели; signum-проверки домен-агностичны и остаются на `lpc_with_vc`).
+    fn readability_lc(fg_hex: &str, bg_hex: &str) -> f64 {
+        let fg = crate::spaces::srgb::srgb_encoded_from_hex(fg_hex).expect("valid emitted hex");
+        let bg = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex).expect("valid bg hex");
+        crate::lpc::lpc_readability_ys(fg, bg)
+    }
+
     /// Solve and return both the solved value and the contrast measured
-    /// independently through the public `lpc_with_vc` on the resolved hex.
+    /// independently on the resolved hex — in the SAME readability domain the
+    /// solver now targets (`Ys`, ADR-0003 глава #64): `lpc_readability_ys` on the
+    /// display bytes. Меряться через `lpc_with_vc` (домен `Y_hk`, apparent
+    /// contrast) здесь БОЛЬШЕ НЕЛЬЗЯ: ось читаемости переехала в `Ys`, и
+    /// round-trip обязан сверяться в домене цели, иначе Ys≈Y_hk-разрыв на серости
+    /// (CAM16-лайтнесс ≠ WCAG-люминанс даже при C=0) даёт ложный недолёт. Третий
+    /// ассерт вызывающих (`solved.lc() == measured` до 1e-9) фиксирует именно это:
+    /// `solved.lc()` — Ys-замер `finish`, и независимый пересчёт обязан совпасть.
     fn solve_and_measure(
         bg_hex: &str,
         target: f64,
@@ -1485,7 +1453,11 @@ mod tests {
             vc,
             Gamut::Srgb,
         )?;
-        let measured = lpc_with_vc(solved.hex(), bg_hex, vc);
+        let fg_disp = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
+            .expect("solved hex is produced by hex_from_srgb → always parses");
+        let bg_disp = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex)
+            .expect("test bg hex is a valid literal");
+        let measured = crate::lpc::lpc_readability_ys(fg_disp, bg_disp);
         Ok((solved, measured))
     }
 
@@ -1868,7 +1840,7 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap();
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!(
             (measured - target).abs() <= TOL,
             "chromatic target {target}, measured {measured}, hex {}",
@@ -1967,10 +1939,86 @@ mod tests {
         .unwrap();
         assert!(solved.floor_override(), "floor must override Lc 15");
         assert!(solved.wcag_ratio() >= 4.5 - 1e-9);
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!(
             measured > 15.0,
             "pushed darker means more contrast, got {measured}"
+        );
+    }
+
+    #[test]
+    fn neutral_policy_emits_byte_exact_grey_everywhere() {
+        // Класс-инвариант ахроматики: ChromaPolicy::Neutral обязан эмитить
+        // байт-точный серый (R==G==B) на ЛЮБОМ достижимом контракте — включая
+        // подъём законным полом и цели на границе округления байта. Регресс
+        // главы #64 (снос grey-LUT): ахроматика пошла через матричный
+        // roundtrip Oklab→sRGB, чья микро-асимметрия каналов у целей на
+        // ~x.5/255 расщепляет серый (#949595 у floored-tertiary на белом,
+        // Y=0.30 → 148.5/255). Инвариант держится конструкцией, не допуском.
+        let vc = ViewingConditions::srgb();
+        let mut reachable = 0;
+        let mut floored = 0;
+        for bg_hex in ["#FFFFFF", "#F4F4F4", "#767676", "#101012", "#000000"] {
+            for sign in [1.0_f64, -1.0] {
+                let mut m = 5.0_f64;
+                while m <= 100.0 {
+                    for ui in [false, true] {
+                        let bg = BgInput::solid(bg_hex).unwrap();
+                        let contract = if ui {
+                            Contract::ui(sign * m)
+                        } else {
+                            Contract::text(sign * m)
+                        };
+                        if let Ok(solved) = solve(
+                            bg,
+                            contract,
+                            Hue::deg(0.0),
+                            ChromaPolicy::Neutral,
+                            &vc,
+                            Gamut::Srgb,
+                        ) {
+                            reachable += 1;
+                            floored += solved.floor_override() as u32;
+                            let hex = solved.hex();
+                            assert!(
+                                hex[1..3] == hex[3..5] && hex[3..5] == hex[5..7],
+                                "{bg_hex} target {:+.1} (ui={ui}): Neutral эмитит не-серый {hex}",
+                                sign * m
+                            );
+                        }
+                    }
+                    m += 2.5;
+                }
+            }
+        }
+        // Свип обязан реально проходить и обычный, и floored-режим — иначе
+        // тест не сторожит заявленный инвариант.
+        assert!(reachable >= 100, "too few reachable combos: {reachable}");
+        assert!(floored > 0, "floor-lift режим не задет свипом");
+
+        // Прицельный обрыв: якорный таргет tertiary (0.47572199·max ≈ Lc 50.45,
+        // пол 3:1 на белом) кладёт бисекцию `apply_floor` ровно на байтовую
+        // границу 148.5/255, где 149-серый ещё падает (2.996 < 3), а флип ОДНОГО
+        // канала уже проходит (148,149,149 → 3.0036). Свип шагом 2.5 эту цель
+        // минует — регресс #949595 ловится только точным таргетом.
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let cliff = solve(
+            bg,
+            Contract::ui(50.4459),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            Gamut::Srgb,
+        )
+        .unwrap();
+        assert!(
+            cliff.floor_override(),
+            "пол 3:1 обязан включиться на Lc 50.45 (белый фон)"
+        );
+        let hex = cliff.hex();
+        assert!(
+            hex[1..3] == hex[3..5] && hex[3..5] == hex[5..7],
+            "floored-tertiary на белом: Neutral эмитит не-серый {hex}"
         );
     }
 
@@ -2018,7 +2066,7 @@ mod tests {
         )
         .unwrap();
         assert!(!solved.floor_override());
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!((measured - 15.0).abs() <= TOL);
         assert!(solved.wcag_ratio() < 4.5);
     }
@@ -2039,7 +2087,7 @@ mod tests {
         .unwrap();
         assert!(!solved.floor_override());
         assert!(solved.wcag_ratio() >= 4.5);
-        let measured = lpc_with_vc(solved.hex(), "#FFFFFF", &vc);
+        let measured = readability_lc(solved.hex(), "#FFFFFF");
         assert!((measured - 90.0).abs() <= TOL);
     }
 
@@ -2157,9 +2205,15 @@ mod tests {
     #[test]
     fn quantization_gap_target_resolves_via_neighbor_step() {
         // Issue #44: target Lc 7.31 on white. The analytic foreground quantises
-        // to a hex inside the low-contrast dead zone (Lc 0), but the next darker
-        // grid step (#E9E9E9, Lc ≈ 7.85) is within the ±1 budget. The neighbour
-        // walk must find it instead of returning a (lying) ExceedsRange.
+        // to a hex inside the low-contrast dead zone (Lc 0); the floor sits at
+        // ≈7.3 and the first valid darker grid step is #EDEDED (Lc ≈ 7.604 в
+        // домене `Ys`), within the ±1 budget. The neighbour walk must find it
+        // instead of returning a (lying) ExceedsRange — механизм issue #44 жив.
+        // ГЛАВА #64 (ADR-0003): ось читаемости перешла в `Ys`, и мерило `Lc`
+        // hex'а пересчиталось — прежний Y_hk-шаг #E9E9E9 (Lc ≈ 7.85) сменился на
+        // #EDEDED (Lc ≈ 7.604). Между полом 7.3 и #EDEDED валидных шагов нет,
+        // потому цель 7.31 ГАРАНТИРОВАННО падает в мёртвую зону и обслуживается
+        // именно neighbour-walk'ом (не аналитикой) — тест не выхолостился.
         let vc = ViewingConditions::srgb();
         let (solved, measured) =
             solve_and_measure("#FFFFFF", 7.31, &vc).expect("7.31 on white is on-grid reachable");
@@ -2170,7 +2224,7 @@ mod tests {
         );
         assert_eq!(
             solved.hex(),
-            "#E9E9E9",
+            "#EDEDED",
             "expected the first darker on-grid step, got {}",
             solved.hex()
         );
@@ -2320,308 +2374,62 @@ mod tests {
         );
     }
 
-    // ── Grey-axis LUT: bit-compatibility with the cold bisection ──────────────
+    // ── `match_lightness_ys`: инверсия оси читаемости (ADR-0003, глава #64) ──
 
-    /// Reference: the pre-LUT cold bisection of `match_lightness`, kept here as
-    /// the golden oracle the LUT path is measured against. Bit-identical to the
-    /// loop `match_lightness` falls back to when no LUT seed applies.
-    fn reference_match_lightness(
-        target_j_hk: f64,
-        hue: Hue,
-        chroma_policy: ChromaPolicy,
-        vc: &ViewingConditions,
-    ) -> f64 {
-        let j_hk_of =
-            |l_ok: f64| lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l_ok, hue, chroma_policy)), vc);
-        cold_bisect(target_j_hk, j_hk_of)
-    }
-
+    /// Round-trip lock on the `Ys` matcher that replaced the CAM16 `J_HK`
+    /// bisection + grey-axis LUT (глава #64). For a dense lightness grid along
+    /// both production chroma profiles, the WCAG relative luminance of the
+    /// built colour must be recovered to bisection precision, and out-of-gamut
+    /// targets must short-circuit to the gamut endpoints.
+    ///
+    /// Это единственное место, где солвер инвертирует ось читаемости; тест
+    /// охраняет строгую монотонность `Ys` вдоль тонированной кривой
+    /// (`build_color` при фиксированных hue/policy), на которой держится
+    /// корректность бисекции: плато или излом кривой развалили бы
+    /// единственность корня и провалили round-trip задолго до 1e-9.
     #[test]
-    fn lut_match_lightness_matches_bisection_on_the_grey_grid() {
-        // Golden: across a dense l_ok grid under both precompiled VCs, the LUT
-        // `match_lightness` (neutral → direct interp; the fast path) reproduces
-        // the cold bisection's lightness to within the interpolation bound, and
-        // wherever the 8-bit hex differs the perceptual Lc cost stays under the
-        // tightened `MAX_LC_AT_MISMATCH` gate. (A handful of grid points sit
-        // exactly on an 8-bit rounding boundary, where the sub-3e-4 lightness
-        // difference flips one hex step either way — both colours are within
-        // budget; the boundary assignment is not a regression.)
-        const MAX_L_INTERP: f64 = 5e-4; // K=257 inverse-interp bound, with margin
-        // Measured worst case is 0.0003 Lc at one of those boundary flips; gate
-        // at 0.01 — ~33× the fact, 10× tighter than the old 0.1 budget — so a
-        // regression that crept the cost toward 0.1 fails instead of passing
-        // green. The eprintln still reports the exact measured number.
-        const MAX_LC_AT_MISMATCH: f64 = 0.01;
-        for (vc, vc_name) in vcs() {
+    fn match_lightness_ys_round_trips_on_both_chroma_profiles() {
+        // 64 halvings shrink the bracket to ~5.4e-20; the gate sits at 1e-9 —
+        // ~11 decades of headroom, yet any monotonicity break or a bisection
+        // that stops short blows past it immediately.
+        const MAX_L_ERR: f64 = 1e-9;
+        let cases = [
+            (Hue::deg(0.0), ChromaPolicy::Neutral),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.05)),
+            (Hue::deg(286.0), ChromaPolicy::Relative(0.10)),
+            (Hue::deg(30.0), ChromaPolicy::Relative(0.10)),
+        ];
+        let n = 1024usize;
+        for (hue, policy) in cases {
             let mut max_l_err = 0.0_f64;
-            let mut max_lc_at_mismatch = 0.0_f64;
-            let mut hex_mismatches = 0usize;
-            let n = 4096usize;
             for i in 0..=n {
                 let l = i as f64 / n as f64;
-                let target_j_hk = lpc::j_hk_from_xyz(
-                    srgb_to_xyz(build_color(l, Hue::deg(0.0), ChromaPolicy::Neutral)),
-                    &vc,
-                );
-                let l_lut = match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &vc);
-                let l_ref = reference_match_lightness(
-                    target_j_hk,
-                    Hue::deg(0.0),
-                    ChromaPolicy::Neutral,
-                    &vc,
-                );
-                max_l_err = max_l_err.max((l_lut - l_ref).abs());
-
-                let rgb_lut = build_color(l_lut, Hue::deg(0.0), ChromaPolicy::Neutral);
-                let rgb_ref = build_color(l_ref, Hue::deg(0.0), ChromaPolicy::Neutral);
-                if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
-                    hex_mismatches += 1;
-                    // Cost of the boundary flip, measured against a fixed white
-                    // reference in this VC — bounds the Lc the caller could see.
-                    let y_lut = bg_luma(rgb_lut, &vc);
-                    let y_ref = bg_luma(rgb_ref, &vc);
-                    let lc_lut = lpc::contrast_core(y_lut, 1.0);
-                    let lc_ref = lpc::contrast_core(y_ref, 1.0);
-                    max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
-                }
+                let rgb = build_color(l, hue, policy);
+                let target_ys = wcag::relative_luminance([
+                    srgb_gamma(rgb[0]),
+                    srgb_gamma(rgb[1]),
+                    srgb_gamma(rgb[2]),
+                ]);
+                let l_back = match_lightness_ys(target_ys, hue, policy);
+                max_l_err = max_l_err.max((l_back - l).abs());
             }
-            eprintln!(
-                "[{vc_name}] LUT vs bisection: max|Δl_ok|={max_l_err:.2e}, hex mismatches={hex_mismatches}/{} (max ΔLc at mismatch {max_lc_at_mismatch:.4})",
-                n + 1
-            );
+            eprintln!("[{hue:?} {policy:?}] Ys round-trip: max|Δl_ok|={max_l_err:.2e}");
             assert!(
-                max_l_err < MAX_L_INTERP,
-                "{vc_name}: LUT lightness drifted {max_l_err} from bisection (> {MAX_L_INTERP})"
-            );
-            assert!(
-                max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
-                "{vc_name}: a hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+                max_l_err < MAX_L_ERR,
+                "{hue:?} {policy:?}: Ys round-trip drifted {max_l_err:.2e} (> {MAX_L_ERR:.0e})"
             );
         }
-    }
-
-    #[test]
-    fn lut_adds_under_a_tenth_of_an_lc_across_the_solver_grid() {
-        // The contract tolerance the task pins: the LUT must not widen the
-        // solver's error budget. Run the REAL solve path and compare the final
-        // `Solved.lc()` against a run that forces the cold bisection, over the
-        // full neutral background × magnitude × polarity × VC grid. The added
-        // error is empirically 0.00000 Lc; the gate is pinned at 0.01 — 10×
-        // tighter than the old 0.1 budget — so any nonzero regression in the
-        // emitted hex fails here instead of passing under 0.1. The exact
-        // measured add is still reported via eprintln below.
-        const MAX_ADD: f64 = 0.01;
-        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
-        let mut max_add = 0.0_f64;
-        let mut compared = 0usize;
-        for (vc, vc_name) in vcs() {
-            for bg_hex in backgrounds {
-                let bg = BgInput::solid(bg_hex).unwrap();
-                for magnitude in MAGNITUDES {
-                    for target in [magnitude, -magnitude] {
-                        // The live solver uses the LUT path internally.
-                        let lut = solve(
-                            bg.clone(),
-                            Contract::text(target).with_conformance(Floor::None),
-                            Hue::deg(0.0),
-                            ChromaPolicy::Neutral,
-                            &vc,
-                            Gamut::Srgb,
-                        );
-                        // Reference: reconstruct the same solve but resolve the
-                        // lightness with the cold bisection oracle, then finish
-                        // through the identical quantise/measure path.
-                        let interval = bg.luma_interval(&vc).unwrap();
-                        let y_gov = interval.governing(target);
-                        let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
-                            let tj = lpc::grey_j(y_fg, &vc);
-                            let l = reference_match_lightness(
-                                tj,
-                                Hue::deg(0.0),
-                                ChromaPolicy::Neutral,
-                                &vc,
-                            );
-                            finish(
-                                build_color(l, Hue::deg(0.0), ChromaPolicy::Neutral),
-                                y_gov,
-                                bg.governing_display(target),
-                                false,
-                                &vc,
-                            )
-                            .map(|s| s.lc())
-                        });
-                        if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
-                            let add = (s_lut.lc() - lc_ref).abs();
-                            max_add = max_add.max(add);
-                            compared += 1;
-                            assert!(
-                                add < MAX_ADD,
-                                "{vc_name} {bg_hex} t={target}: LUT added {add} Lc (> {MAX_ADD} gate)"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        eprintln!("LUT final-Lc add over {compared} solver cases: max={max_add:.5}");
-        assert!(compared >= 30, "grid exercised too few cases: {compared}");
-    }
-
-    #[test]
-    fn lut_bracket_path_matches_bisection_at_small_chroma() {
-        // Golden for the small-chroma SEED path (`LutSeed::Bracket` →
-        // `refine_in_bracket`), the branch the neutral tests above never reach:
-        // both `lut_adds…` and `lut_match_lightness…` run `ChromaPolicy::Neutral`
-        // (ratio = 0), which only exercises the direct-interp `Exact` arm. The
-        // main default role policy is tinted (hue 286°, ratio 0.10), so the
-        // Bracket arm is the production hot path — and until now it was checked
-        // only indirectly. Two arms drive it directly:
-        //   1. UNIT: a dense l_ok grid × {srgb, dim} × {Relative(0.05),
-        //      Relative(0.10)} at hue 286° asserts the LUT-seeded
-        //      `match_lightness` reproduces the cold bisection bit-for-bit on the
-        //      emitted hex wherever it can, any 8-bit flip costing under gate.
-        //   2. END-TO-END: the real `solve` with BOTH polarities (+mag, -mag)
-        //      across the background grid, final `Solved.lc()` vs the
-        //      cold-bisection oracle — the same shape as `lut_adds_…`, for the
-        //      Bracket arm.
-        //
-        // Both paths bisect the SAME real tinted curve to `L_OK_EPSILON` (1e-12);
-        // the seed only changes the starting bracket, not the root. So the
-        // measured agreement is far tighter than the neutral `Exact` path's
-        // interp bound: max|Δl_ok| ≈ 5e-13 (a couple of bisection ULPs), with
-        // ZERO 8-bit hex mismatches over the grid — hence max ΔLc at mismatch is
-        // a hard 0.0000. The two gates are pinned just above those measured
-        // facts so a real seed regression (a mis-padded bracket, a refine that
-        // stops short, a bracket that excludes the root) fails them, instead of
-        // sliding under the old 0.1 budget:
-        //   * MAX_L_BRACKET = 1e-9: ~2000× the measured 5e-13, still 5e5× under
-        //     the `Exact` interp bound — a bracket off by even one node would
-        //     blow past it.
-        //   * MAX_LC_AT_MISMATCH = 0.01: 10× tighter than the old 0.1; with zero
-        //     mismatches today, any future hex flip is gated hard.
-        const MAX_L_BRACKET: f64 = 1e-9;
-        const MAX_LC_AT_MISMATCH: f64 = 0.01;
-        let hue = Hue::deg(286.0);
-        let policies = [ChromaPolicy::Relative(0.05), ChromaPolicy::Relative(0.10)];
-        let mut max_l_err = 0.0_f64;
-        let mut max_lc_at_mismatch = 0.0_f64;
-        let mut hex_mismatches = 0usize;
-        let mut compared = 0usize;
-        let n = 1024usize;
-        for (vc, vc_name) in vcs() {
-            for policy in policies {
-                let mut took_bracket = false;
-                for i in 0..=n {
-                    let l = i as f64 / n as f64;
-                    // Build the target J_HK on the *tinted* curve so the root the
-                    // solver must invert genuinely sits on the small-chroma path,
-                    // not the neutral axis. This grid is the unit check on
-                    // `match_lightness`; the end-to-end both-polarity arm below
-                    // drives the same Bracket path through the real `solve`.
-                    let target_j_hk =
-                        lpc::j_hk_from_xyz(srgb_to_xyz(build_color(l, hue, policy)), &vc);
-
-                    // Confirm this case actually takes the Bracket arm — otherwise
-                    // the test would silently pass on the cold path and prove
-                    // nothing about the seed. (Endpoints can fall through to the
-                    // cold bisection via the bracket-widening guard; interior
-                    // targets must seed.)
-                    if matches!(
-                        crate::lut::seed_bracket(target_j_hk, hue, policy, &vc),
-                        Some(crate::lut::LutSeed::Bracket(_))
-                    ) {
-                        took_bracket = true;
-                    }
-
-                    let l_lut = match_lightness(target_j_hk, hue, policy, &vc);
-                    let l_ref = reference_match_lightness(target_j_hk, hue, policy, &vc);
-                    max_l_err = max_l_err.max((l_lut - l_ref).abs());
-                    compared += 1;
-
-                    let rgb_lut = build_color(l_lut, hue, policy);
-                    let rgb_ref = build_color(l_ref, hue, policy);
-                    if hex_from_srgb(rgb_lut) != hex_from_srgb(rgb_ref) {
-                        hex_mismatches += 1;
-                        let y_lut = bg_luma(rgb_lut, &vc);
-                        let y_ref = bg_luma(rgb_ref, &vc);
-                        let lc_lut = lpc::contrast_core(y_lut, 1.0);
-                        let lc_ref = lpc::contrast_core(y_ref, 1.0);
-                        max_lc_at_mismatch = max_lc_at_mismatch.max((lc_lut - lc_ref).abs());
-                    }
-                }
-                assert!(
-                    took_bracket,
-                    "{vc_name} {policy:?}: no grid point took the Bracket seed — the test is not exercising the small-chroma path it claims to"
-                );
-            }
-        }
-
-        // End-to-end arm: drive the SAME Bracket path through the real `solve`
-        // with BOTH polarities (+mag light-on-dark, -mag dark-on-light) at the
-        // tinted policies, and compare the final `Solved.lc()` against the
-        // cold-bisection oracle finished through the identical quantise/measure
-        // path — exactly the comparison `lut_adds_…` makes for the neutral arm,
-        // here for the small-chroma Bracket arm the production default uses.
-        let backgrounds = ["#FFFFFF", "#E8E8E8", "#BFBFBF", "#5A5A5A", "#101012"];
-        let mut max_add = 0.0_f64;
-        let mut e2e_compared = 0usize;
-        for (vc, vc_name) in vcs() {
-            for policy in policies {
-                for bg_hex in backgrounds {
-                    let bg = BgInput::solid(bg_hex).unwrap();
-                    for magnitude in MAGNITUDES {
-                        for target in [magnitude, -magnitude] {
-                            let lut = solve(
-                                bg.clone(),
-                                Contract::text(target).with_conformance(Floor::None),
-                                hue,
-                                policy,
-                                &vc,
-                                Gamut::Srgb,
-                            );
-                            let interval = bg.luma_interval(&vc).unwrap();
-                            let y_gov = interval.governing(target);
-                            let reference = invert_contrast(y_gov, target).ok().map(|y_fg| {
-                                let tj = lpc::grey_j(y_fg, &vc);
-                                let l = reference_match_lightness(tj, hue, policy, &vc);
-                                finish(
-                                    build_color(l, hue, policy),
-                                    y_gov,
-                                    bg.governing_display(target),
-                                    false,
-                                    &vc,
-                                )
-                                .map(|s| s.lc())
-                            });
-                            if let (Ok(s_lut), Some(Ok(lc_ref))) = (lut, reference) {
-                                let add = (s_lut.lc() - lc_ref).abs();
-                                max_add = max_add.max(add);
-                                e2e_compared += 1;
-                                assert!(
-                                    add < MAX_LC_AT_MISMATCH,
-                                    "{vc_name} {bg_hex} {policy:?} t={target}: Bracket-path solve added {add} Lc (> {MAX_LC_AT_MISMATCH} gate)"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            e2e_compared >= 60,
-            "end-to-end Bracket arm exercised too few cases: {e2e_compared}"
+        // Endpoint short-circuits: targets outside the reachable luminance
+        // range clamp to the gamut edge instead of oscillating.
+        assert_eq!(
+            match_lightness_ys(-0.5, Hue::deg(0.0), ChromaPolicy::Neutral),
+            0.0,
+            "below-black target must clamp to l_ok = 0"
         );
-
-        eprintln!(
-            "Bracket-path LUT vs bisection: max|Δl_ok|={max_l_err:.2e} over {compared} cases, hex mismatches={hex_mismatches} (max ΔLc at mismatch {max_lc_at_mismatch:.4}); end-to-end both-polarity max add={max_add:.5} over {e2e_compared} solve cases"
-        );
-        assert!(
-            max_l_err < MAX_L_BRACKET,
-            "Bracket-path lightness drifted {max_l_err} from bisection (> {MAX_L_BRACKET})"
-        );
-        assert!(
-            max_lc_at_mismatch < MAX_LC_AT_MISMATCH,
-            "a Bracket-path hex boundary flip cost {max_lc_at_mismatch} Lc (> {MAX_LC_AT_MISMATCH} gate)"
+        assert_eq!(
+            match_lightness_ys(1.5, Hue::deg(0.0), ChromaPolicy::Neutral),
+            1.0,
+            "above-white target must clamp to l_ok = 1"
         );
     }
 
@@ -2651,30 +2459,30 @@ mod tests {
     /// so the line shape moved with it — colours did not change (`icon` was a byte
     /// dup of `label-tertiary`, `border-none` is the same honest zero).
     const RESOLVE_SET_GOLDEN: &[&str] = &[
-        "srgb|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,separator=#E9E9E9,border-strong=#141414,border-base=#E9E9E9,border-soft=#F4F4F4,border-none=none,fill-primary=#E4E4E4,fill-secondary=#E9E9E9,fill-tertiary=#EFEFEF,fill-quaternary=#F4F4F4,fill-none=none,shadow-minor=#E9E9E9,shadow-ambient=#E6E6E6,shadow-penumbra=#E3E3E3,shadow-major=#DEDEDE,none=none",
-        "srgb|#FFFFFF|Tinted|label-primary=#0C0C11,label-secondary=#6D6D7E,label-tertiary=#9493A0,label-quaternary=#BEBEC6,separator=#E8E8EA,border-strong=#0C0C11,border-base=#E9E9EB,border-soft=#F4F4F5,border-none=none,fill-primary=#E4E4E7,fill-secondary=#E9E9EB,fill-tertiary=#EFEFF1,fill-quaternary=#F4F4F5,fill-none=none,shadow-minor=#E8E8EA,shadow-ambient=#E5E5E8,shadow-penumbra=#E1E1E4,shadow-major=#DCDCE0,none=none",
-        "srgb|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,separator=#E1E1E1,border-strong=#131313,border-base=#DDDDDD,border-soft=#E8E8E8,border-none=none,fill-primary=#D9D9D9,fill-secondary=#DDDDDD,fill-tertiary=#E3E3E3,fill-quaternary=#E8E8E8,fill-none=none,shadow-minor=#E1E1E1,shadow-ambient=#DFDFDF,shadow-penumbra=#DBDBDB,shadow-major=#D7D7D7,none=none",
-        "srgb|#F2F2F7|Tinted|label-primary=#0C0C10,label-secondary=#69697B,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,separator=#E0E0E3,border-strong=#0C0C10,border-base=#DDDDE1,border-soft=#E8E8EA,border-none=none,fill-primary=#D8D8DD,fill-secondary=#DDDDE1,fill-tertiary=#E3E3E6,fill-quaternary=#E8E8EA,fill-none=none,shadow-minor=#E0E0E3,shadow-ambient=#DDDDE1,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
-        "srgb|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,separator=#696969,border-strong=#070707,border-base=#6F6F6F,border-soft=#777777,border-none=none,fill-primary=#6C6C6C,fill-secondary=#6F6F6F,fill-tertiary=#747474,fill-quaternary=#777777,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#616161,shadow-major=#5B5B5B,none=none",
-        "srgb|#7F7F7F|Tinted|label-primary=#030304,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#575667,separator=#5F5E70,border-strong=#030304,border-base=#6E6E7F,border-soft=#767686,border-none=none,fill-primary=#6A6A7C,fill-secondary=#6E6E7F,fill-tertiary=#727283,fill-quaternary=#767686,fill-none=none,shadow-minor=#5F5E70,shadow-ambient=#5B5B6C,shadow-penumbra=#575667,shadow-major=#515060,none=none",
-        "srgb|#1C1C1E|Neutral|label-primary=#F6F6F6,label-secondary=#BABABA,label-tertiary=#9A9A9A,label-quaternary=#727272,separator=#3F3F3F,border-strong=#F6F6F6,border-base=#2B2B2B,border-soft=#242424,border-none=none,fill-primary=#2F2F2F,fill-secondary=#2B2B2B,fill-tertiary=#272727,fill-quaternary=#242424,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
-        "srgb|#1C1C1E|Tinted|label-primary=#F6F6F7,label-secondary=#B6B6BF,label-tertiary=#9494A0,label-quaternary=#68687A,separator=#363541,border-strong=#F6F6F7,border-base=#2A2A34,border-soft=#23232B,border-none=none,fill-primary=#2E2E38,fill-secondary=#2A2A34,fill-tertiary=#26262F,fill-quaternary=#23232B,fill-none=none,shadow-minor=#363541,shadow-ambient=#3A3945,shadow-penumbra=#3F3F4B,shadow-major=#454553,none=none",
-        "srgb|#101012|Neutral|label-primary=#F6F6F6,label-secondary=#B9B9B9,label-tertiary=#989898,label-quaternary=#6F6F6F,separator=#393939,border-strong=#F6F6F6,border-base=#202020,border-soft=#181818,border-none=none,fill-primary=#242424,fill-secondary=#202020,fill-tertiary=#1C1C1C,fill-quaternary=#181818,fill-none=none,shadow-minor=#393939,shadow-ambient=#3D3D3D,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
-        "srgb|#101012|Tinted|label-primary=#F6F6F7,label-secondary=#B5B5BD,label-tertiary=#91919E,label-quaternary=#646477,separator=#30303A,border-strong=#F6F6F7,border-base=#1F1F27,border-soft=#18171E,border-none=none,fill-primary=#23232B,fill-secondary=#1F1F27,fill-tertiary=#1B1B22,fill-quaternary=#18171E,fill-none=none,shadow-minor=#30303A,shadow-ambient=#34343F,shadow-penumbra=#3A3945,shadow-major=#40404D,none=none",
-        "srgb|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,separator=#848484,border-strong=#0A0A0A,border-base=#6F6F6F,border-soft=#777777,border-none=none,fill-primary=#6B6B6B,fill-secondary=#6F6F6F,fill-tertiary=#737373,fill-quaternary=#777777,fill-none=none,shadow-minor=#848484,shadow-ambient=#818181,shadow-penumbra=#7D7D7D,shadow-major=#777777,none=none",
-        "srgb|#3478F6|Tinted|label-primary=#050406,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7D,separator=#7C7C8C,border-strong=#050406,border-base=#6D6D7E,border-soft=#757585,border-none=none,fill-primary=#69697B,fill-secondary=#6D6D7E,fill-tertiary=#717182,fill-quaternary=#757585,fill-none=none,shadow-minor=#7C7C8C,shadow-ambient=#797989,shadow-penumbra=#747484,shadow-major=#6E6E7F,none=none",
-        "dim|#FFFFFF|Neutral|label-primary=#131313,label-secondary=#757575,label-tertiary=#949494,label-quaternary=#C0C0C0,separator=#E7E7E7,border-strong=#131313,border-base=#D8D8D8,border-soft=#E8E8E8,border-none=none,fill-primary=#BEBEBE,fill-secondary=#C4C4C4,fill-tertiary=#D1D1D1,fill-quaternary=#DFDFDF,fill-none=none,shadow-minor=#E7E7E7,shadow-ambient=#E4E4E4,shadow-penumbra=#E0E0E0,shadow-major=#DCDCDC,none=none",
-        "dim|#FFFFFF|Tinted|label-primary=#0E0E12,label-secondary=#6D6C7E,label-tertiary=#9493A0,label-quaternary=#BDBDC5,separator=#E6E6E8,border-strong=#0E0E12,border-base=#D7D7DC,border-soft=#E8E8EA,border-none=none,fill-primary=#BDBDC4,fill-secondary=#C3C3CA,fill-tertiary=#D1D1D6,fill-quaternary=#DEDFE2,fill-none=none,shadow-minor=#E6E6E8,shadow-ambient=#E3E3E6,shadow-penumbra=#DFDFE3,shadow-major=#DADADF,none=none",
-        "dim|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#BCBCBC,separator=#E1E1E1,border-strong=#131313,border-base=#CDCDCD,border-soft=#DCDCDC,border-none=none,fill-primary=#B3B3B3,fill-secondary=#B9B9B9,fill-tertiary=#C6C6C6,fill-quaternary=#D3D3D3,fill-none=none,shadow-minor=#E1E1E1,shadow-ambient=#DEDEDE,shadow-penumbra=#DBDBDB,shadow-major=#D6D6D6,none=none",
-        "dim|#F2F2F7|Tinted|label-primary=#0D0D12,label-secondary=#6A6A7B,label-tertiary=#8C8B99,label-quaternary=#B8B8C1,separator=#E0E0E3,border-strong=#0D0D12,border-base=#CCCCD2,border-soft=#DCDCE0,border-none=none,fill-primary=#B2B2BB,fill-secondary=#B9B9C1,fill-tertiary=#C6C6CC,fill-quaternary=#D3D3D8,fill-none=none,shadow-minor=#E0E0E3,shadow-ambient=#DDDDE1,shadow-penumbra=#D9D9DE,shadow-major=#D5D5D9,none=none",
-        "dim|#7F7F7F|Neutral|label-primary=#070707,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#616161,separator=#696969,border-strong=#070707,border-base=#656565,border-soft=#707070,border-none=none,fill-primary=#525252,fill-secondary=#575757,fill-tertiary=#606060,fill-quaternary=#696969,fill-none=none,shadow-minor=#696969,shadow-ambient=#666666,shadow-penumbra=#616161,shadow-major=#5B5B5B,none=none",
-        "dim|#7F7F7F|Tinted|label-primary=#040406,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#585868,separator=#606072,border-strong=#040406,border-base=#636375,border-soft=#6E6E7F,border-none=none,fill-primary=#515160,fill-secondary=#555565,fill-tertiary=#5E5E70,fill-quaternary=#68677A,fill-none=none,shadow-minor=#606072,shadow-ambient=#5D5C6E,shadow-penumbra=#585869,shadow-major=#525262,none=none",
-        "dim|#1C1C1E|Neutral|label-primary=#F4F4F4,label-secondary=#B8B8B8,label-tertiary=#989898,label-quaternary=#707070,separator=#3D3D3D,border-strong=#F4F4F4,border-base=#323232,border-soft=#282828,border-none=none,fill-primary=#424242,fill-secondary=#3E3E3E,fill-tertiary=#363636,fill-quaternary=#2E2E2E,fill-none=none,shadow-minor=#3D3D3D,shadow-ambient=#424242,shadow-penumbra=#474747,shadow-major=#4E4E4E,none=none",
-        "dim|#1C1C1E|Tinted|label-primary=#F3F3F5,label-secondary=#B5B5BD,label-tertiary=#93939F,label-quaternary=#686779,separator=#363641,border-strong=#F3F3F5,border-base=#31313B,border-soft=#282730,border-none=none,fill-primary=#41414E,fill-secondary=#3D3D49,fill-tertiary=#353540,fill-quaternary=#2D2C36,fill-none=none,shadow-minor=#363641,shadow-ambient=#3A3A46,shadow-penumbra=#3F3F4C,shadow-major=#464553,none=none",
-        "dim|#101012|Neutral|label-primary=#F4F4F4,label-secondary=#B7B7B7,label-tertiary=#969696,label-quaternary=#6D6D6D,separator=#373737,border-strong=#F4F4F4,border-base=#252525,border-soft=#1C1C1C,border-none=none,fill-primary=#353535,fill-secondary=#313131,fill-tertiary=#292929,fill-quaternary=#212121,fill-none=none,shadow-minor=#373737,shadow-ambient=#3C3C3C,shadow-penumbra=#414141,shadow-major=#484848,none=none",
-        "dim|#101012|Tinted|label-primary=#F3F3F5,label-secondary=#B3B3BC,label-tertiary=#90909D,label-quaternary=#646476,separator=#30303A,border-strong=#F3F3F5,border-base=#25242D,border-soft=#1C1C22,border-none=none,fill-primary=#34343F,fill-secondary=#30303B,fill-tertiary=#282831,fill-quaternary=#212028,fill-none=none,shadow-minor=#30303A,shadow-ambient=#34343F,shadow-penumbra=#3A3945,shadow-major=#40404D,none=none",
-        "dim|#3478F6|Neutral|label-primary=#0A0A0A,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#757575,separator=#848484,border-strong=#0A0A0A,border-base=#646464,border-soft=#6F6F6F,border-none=none,fill-primary=#525252,fill-secondary=#565656,fill-tertiary=#5F5F5F,fill-quaternary=#696969,fill-none=none,shadow-minor=#848484,shadow-ambient=#818181,shadow-penumbra=#7D7D7D,shadow-major=#777777,none=none",
-        "dim|#3478F6|Tinted|label-primary=#060608,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#6C6C7E,separator=#7D7D8C,border-strong=#060608,border-base=#626275,border-soft=#6D6D7E,border-none=none,fill-primary=#505060,fill-secondary=#555465,fill-tertiary=#5E5D6F,fill-quaternary=#676779,fill-none=none,shadow-minor=#7D7D8C,shadow-ambient=#797989,shadow-penumbra=#757585,shadow-major=#6F6F80,none=none",
+        "srgb|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,separator=#ECECEC,border-strong=#141414,border-base=#E9E9E9,border-soft=#F4F4F4,border-none=none,fill-primary=#E4E4E4,fill-secondary=#E9E9E9,fill-tertiary=#EFEFEF,fill-quaternary=#F4F4F4,fill-none=none,shadow-minor=#ECECEC,shadow-ambient=#EAEAEA,shadow-penumbra=#E6E6E6,shadow-major=#E2E2E2,none=none",
+        "srgb|#FFFFFF|Tinted|label-primary=#141419,label-secondary=#757585,label-tertiary=#9493A0,label-quaternary=#C1C1C9,separator=#ECECEE,border-strong=#141419,border-base=#E9E9EB,border-soft=#F4F4F5,border-none=none,fill-primary=#E4E4E7,fill-secondary=#E9E9EB,fill-tertiary=#EFEFF1,fill-quaternary=#F4F4F5,fill-none=none,shadow-minor=#ECECEE,shadow-ambient=#E9E9EC,shadow-penumbra=#E6E6E9,shadow-major=#E1E1E5,none=none",
+        "srgb|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#B8B8B8,separator=#E0E0E0,border-strong=#131313,border-base=#DDDDDD,border-soft=#E8E8E8,border-none=none,fill-primary=#D9D9D9,fill-secondary=#DDDDDD,fill-tertiary=#E3E3E3,fill-quaternary=#E8E8E8,fill-none=none,shadow-minor=#E0E0E0,shadow-ambient=#DDDDDD,shadow-penumbra=#D9D9D9,shadow-major=#D5D5D5,none=none",
+        "srgb|#F2F2F7|Tinted|label-primary=#131218,label-secondary=#6E6D7F,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,separator=#DFDFE3,border-strong=#131218,border-base=#DDDDE1,border-soft=#E8E8EA,border-none=none,fill-primary=#D8D8DD,fill-secondary=#DDDDE1,fill-tertiary=#E3E3E6,fill-quaternary=#E8E8EA,fill-none=none,shadow-minor=#DFDFE3,shadow-ambient=#DDDDE0,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
+        "srgb|#7F7F7F|Neutral|label-primary=#080808,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#606060,separator=#696969,border-strong=#080808,border-base=#6F6F6F,border-soft=#777777,border-none=none,fill-primary=#6C6C6C,fill-secondary=#6F6F6F,fill-tertiary=#747474,fill-quaternary=#777777,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#606060,shadow-major=#5A5A5A,none=none",
+        "srgb|#7F7F7F|Tinted|label-primary=#08080B,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#5F5E70,separator=#676779,border-strong=#08080B,border-base=#6E6E7F,border-soft=#767686,border-none=none,fill-primary=#6A6A7C,fill-secondary=#6E6E7F,fill-tertiary=#727283,fill-quaternary=#767686,fill-none=none,shadow-minor=#676779,shadow-ambient=#646376,shadow-penumbra=#5F5F71,shadow-major=#59596A,none=none",
+        "srgb|#1C1C1E|Neutral|label-primary=#FBFBFB,label-secondary=#C0C0C0,label-tertiary=#9F9F9F,label-quaternary=#787878,separator=#3F3F3F,border-strong=#FBFBFB,border-base=#2B2B2B,border-soft=#242424,border-none=none,fill-primary=#2F2F2F,fill-secondary=#2B2B2B,fill-tertiary=#272727,fill-quaternary=#242424,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
+        "srgb|#1C1C1E|Tinted|label-primary=#FBFBFB,label-secondary=#C0C0C7,label-tertiary=#9E9EAA,label-quaternary=#767686,separator=#3E3D4A,border-strong=#FBFBFB,border-base=#2A2A34,border-soft=#23232B,border-none=none,fill-primary=#2E2E38,fill-secondary=#2A2A34,fill-tertiary=#26262F,fill-quaternary=#23232B,fill-none=none,shadow-minor=#3E3D4A,shadow-ambient=#42424F,shadow-penumbra=#474755,shadow-major=#4E4E5D,none=none",
+        "srgb|#101012|Neutral|label-primary=#FAFAFA,label-secondary=#BFBFBF,label-tertiary=#9D9D9D,label-quaternary=#757575,separator=#393939,border-strong=#FAFAFA,border-base=#202020,border-soft=#181818,border-none=none,fill-primary=#242424,fill-secondary=#202020,fill-tertiary=#1C1C1C,fill-quaternary=#181818,fill-none=none,shadow-minor=#393939,shadow-ambient=#3E3E3E,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
+        "srgb|#101012|Tinted|label-primary=#FAFAFB,label-secondary=#BFBFC6,label-tertiary=#9D9DA8,label-quaternary=#737384,separator=#383844,border-strong=#FAFAFB,border-base=#1F1F27,border-soft=#18171E,border-none=none,fill-primary=#23232B,fill-secondary=#1F1F27,fill-tertiary=#1B1B22,fill-quaternary=#18171E,fill-none=none,shadow-minor=#383844,shadow-ambient=#3D3D49,shadow-penumbra=#434250,shadow-major=#494958,none=none",
+        "srgb|#3478F6|Neutral|label-primary=#080808,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#5F5F5F,separator=#676767,border-strong=#080808,border-base=#6F6F6F,border-soft=#777777,border-none=none,fill-primary=#6B6B6B,fill-secondary=#6F6F6F,fill-tertiary=#737373,fill-quaternary=#777777,fill-none=none,shadow-minor=#676767,shadow-ambient=#646464,shadow-penumbra=#5F5F5F,shadow-major=#595959,none=none",
+        "srgb|#3478F6|Tinted|label-primary=#08080B,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#5E5D6F,separator=#666678,border-strong=#08080B,border-base=#6D6D7E,border-soft=#757585,border-none=none,fill-primary=#69697B,fill-secondary=#6D6D7E,fill-tertiary=#717182,fill-quaternary=#757585,fill-none=none,shadow-minor=#666678,shadow-ambient=#636275,shadow-penumbra=#5E5E6F,shadow-major=#585868,none=none",
+        "dim|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,separator=#ECECEC,border-strong=#141414,border-base=#D8D8D8,border-soft=#E8E8E8,border-none=none,fill-primary=#BEBEBE,fill-secondary=#C4C4C4,fill-tertiary=#D1D1D1,fill-quaternary=#DFDFDF,fill-none=none,shadow-minor=#ECECEC,shadow-ambient=#EAEAEA,shadow-penumbra=#E6E6E6,shadow-major=#E2E2E2,none=none",
+        "dim|#FFFFFF|Tinted|label-primary=#141419,label-secondary=#757585,label-tertiary=#9493A0,label-quaternary=#C1C1C9,separator=#ECECEE,border-strong=#141419,border-base=#D7D7DC,border-soft=#E8E8EA,border-none=none,fill-primary=#BDBDC4,fill-secondary=#C3C3CA,fill-tertiary=#D1D1D6,fill-quaternary=#DEDFE2,fill-none=none,shadow-minor=#ECECEE,shadow-ambient=#E9E9EC,shadow-penumbra=#E6E6E9,shadow-major=#E1E1E5,none=none",
+        "dim|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#B8B8B8,separator=#E0E0E0,border-strong=#131313,border-base=#CDCDCD,border-soft=#DCDCDC,border-none=none,fill-primary=#B3B3B3,fill-secondary=#B9B9B9,fill-tertiary=#C6C6C6,fill-quaternary=#D3D3D3,fill-none=none,shadow-minor=#E0E0E0,shadow-ambient=#DDDDDD,shadow-penumbra=#D9D9D9,shadow-major=#D5D5D5,none=none",
+        "dim|#F2F2F7|Tinted|label-primary=#131218,label-secondary=#6E6D7F,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,separator=#DFDFE3,border-strong=#131218,border-base=#CCCCD2,border-soft=#DCDCE0,border-none=none,fill-primary=#B2B2BB,fill-secondary=#B9B9C1,fill-tertiary=#C6C6CC,fill-quaternary=#D3D3D8,fill-none=none,shadow-minor=#DFDFE3,shadow-ambient=#DDDDE0,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
+        "dim|#7F7F7F|Neutral|label-primary=#080808,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#606060,separator=#696969,border-strong=#080808,border-base=#656565,border-soft=#707070,border-none=none,fill-primary=#525252,fill-secondary=#575757,fill-tertiary=#606060,fill-quaternary=#696969,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#606060,shadow-major=#5A5A5A,none=none",
+        "dim|#7F7F7F|Tinted|label-primary=#08080B,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#5F5E70,separator=#676779,border-strong=#08080B,border-base=#636375,border-soft=#6E6E7F,border-none=none,fill-primary=#515160,fill-secondary=#555565,fill-tertiary=#5E5E70,fill-quaternary=#68677A,fill-none=none,shadow-minor=#676779,shadow-ambient=#646376,shadow-penumbra=#5F5F71,shadow-major=#59596A,none=none",
+        "dim|#1C1C1E|Neutral|label-primary=#FBFBFB,label-secondary=#C0C0C0,label-tertiary=#9F9F9F,label-quaternary=#787878,separator=#3F3F3F,border-strong=#FBFBFB,border-base=#323232,border-soft=#282828,border-none=none,fill-primary=#424242,fill-secondary=#3E3E3E,fill-tertiary=#363636,fill-quaternary=#2E2E2E,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
+        "dim|#1C1C1E|Tinted|label-primary=#FBFBFB,label-secondary=#C0C0C7,label-tertiary=#9E9EAA,label-quaternary=#767686,separator=#3E3D4A,border-strong=#FBFBFB,border-base=#31313B,border-soft=#282730,border-none=none,fill-primary=#41414E,fill-secondary=#3D3D49,fill-tertiary=#353540,fill-quaternary=#2D2C36,fill-none=none,shadow-minor=#3E3D4A,shadow-ambient=#42424F,shadow-penumbra=#474755,shadow-major=#4E4E5D,none=none",
+        "dim|#101012|Neutral|label-primary=#FAFAFA,label-secondary=#BFBFBF,label-tertiary=#9D9D9D,label-quaternary=#757575,separator=#393939,border-strong=#FAFAFA,border-base=#252525,border-soft=#1C1C1C,border-none=none,fill-primary=#353535,fill-secondary=#313131,fill-tertiary=#292929,fill-quaternary=#212121,fill-none=none,shadow-minor=#393939,shadow-ambient=#3E3E3E,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
+        "dim|#101012|Tinted|label-primary=#FAFAFB,label-secondary=#BFBFC6,label-tertiary=#9D9DA8,label-quaternary=#737384,separator=#383844,border-strong=#FAFAFB,border-base=#25242D,border-soft=#1C1C22,border-none=none,fill-primary=#34343F,fill-secondary=#30303B,fill-tertiary=#282831,fill-quaternary=#212028,fill-none=none,shadow-minor=#383844,shadow-ambient=#3D3D49,shadow-penumbra=#434250,shadow-major=#494958,none=none",
+        "dim|#3478F6|Neutral|label-primary=#080808,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#5F5F5F,separator=#676767,border-strong=#080808,border-base=#646464,border-soft=#6F6F6F,border-none=none,fill-primary=#525252,fill-secondary=#565656,fill-tertiary=#5F5F5F,fill-quaternary=#696969,fill-none=none,shadow-minor=#676767,shadow-ambient=#646464,shadow-penumbra=#5F5F5F,shadow-major=#595959,none=none",
+        "dim|#3478F6|Tinted|label-primary=#08080B,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#5E5D6F,separator=#666678,border-strong=#08080B,border-base=#626275,border-soft=#6D6D7E,border-none=none,fill-primary=#505060,fill-secondary=#555465,fill-tertiary=#5E5D6F,fill-quaternary=#676779,fill-none=none,shadow-minor=#666678,shadow-ambient=#636275,shadow-penumbra=#5E5E6F,shadow-major=#585868,none=none",
     ];
 
     /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.
@@ -2875,24 +2683,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn unsupported_vc_takes_the_cold_path_unchanged() {
-        // A third surround (neither srgb nor dim) has no table, so the LUT must
-        // step aside and the cold bisection governs — identical to pre-LUT.
-        let dark = ViewingConditions::dark_surround();
-        let target_j_hk = lpc::j_hk_from_xyz(
-            srgb_to_xyz(build_color(0.5, Hue::deg(0.0), ChromaPolicy::Neutral)),
-            &dark,
-        );
-        let l_lut = match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &dark);
-        let l_ref =
-            reference_match_lightness(target_j_hk, Hue::deg(0.0), ChromaPolicy::Neutral, &dark);
-        assert_eq!(
-            l_lut, l_ref,
-            "unsupported VC must yield the identical cold-bisection lightness"
-        );
     }
 }
 

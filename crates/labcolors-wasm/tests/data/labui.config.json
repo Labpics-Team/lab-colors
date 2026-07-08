@@ -185,7 +185,7 @@
       "name": "label-primary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-text"
       }
     },
@@ -193,7 +193,7 @@
       "name": "label-secondary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.627,
+        "fraction": 0.64359014,
         "floor": "aa-text"
       }
     },
@@ -201,7 +201,7 @@
       "name": "label-tertiary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.461,
+        "fraction": 0.47572199,
         "floor": "aa-ui"
       }
     },
@@ -209,7 +209,7 @@
       "name": "label-quaternary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.276,
+        "fraction": 0.29335999,
         "floor": "none"
       }
     },
@@ -217,7 +217,7 @@
       "name": "border-strong",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-ui"
       }
     },
@@ -353,7 +353,7 @@
       "name": "label-brand-primary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
           "kind": "brand"
@@ -364,7 +364,7 @@
       "name": "label-brand-secondary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.627,
+        "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
           "kind": "brand"
@@ -375,7 +375,7 @@
       "name": "label-brand-tertiary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.461,
+        "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
           "kind": "brand"
@@ -386,7 +386,7 @@
       "name": "label-brand-quaternary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.276,
+        "fraction": 0.29335999,
         "floor": "none",
         "hue": {
           "kind": "brand"
@@ -468,7 +468,7 @@
       "name": "label-danger-primary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -480,7 +480,7 @@
       "name": "label-danger-secondary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.627,
+        "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -492,7 +492,7 @@
       "name": "label-danger-tertiary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.461,
+        "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
           "kind": "sentiment",
@@ -504,7 +504,7 @@
       "name": "label-danger-quaternary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.276,
+        "fraction": 0.29335999,
         "floor": "none",
         "hue": {
           "kind": "sentiment",
@@ -594,7 +594,7 @@
       "name": "label-warning-primary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -606,7 +606,7 @@
       "name": "label-warning-secondary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.627,
+        "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -618,7 +618,7 @@
       "name": "label-warning-tertiary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.461,
+        "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
           "kind": "sentiment",
@@ -630,7 +630,7 @@
       "name": "label-warning-quaternary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.276,
+        "fraction": 0.29335999,
         "floor": "none",
         "hue": {
           "kind": "sentiment",
@@ -720,7 +720,7 @@
       "name": "label-success-primary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -732,7 +732,7 @@
       "name": "label-success-secondary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.627,
+        "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -744,7 +744,7 @@
       "name": "label-success-tertiary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.461,
+        "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
           "kind": "sentiment",
@@ -756,7 +756,7 @@
       "name": "label-success-quaternary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.276,
+        "fraction": 0.29335999,
         "floor": "none",
         "hue": {
           "kind": "sentiment",
@@ -846,7 +846,7 @@
       "name": "label-info-primary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.968,
+        "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -858,7 +858,7 @@
       "name": "label-info-secondary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.627,
+        "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
           "kind": "sentiment",
@@ -870,7 +870,7 @@
       "name": "label-info-tertiary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.461,
+        "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
           "kind": "sentiment",
@@ -882,7 +882,7 @@
       "name": "label-info-quaternary",
       "recipe": {
         "kind": "text-anchor",
-        "fraction": 0.276,
+        "fraction": 0.29335999,
         "floor": "none",
         "hue": {
           "kind": "sentiment",

@@ -165,6 +165,12 @@ pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
 /// the linear colour (for the CAM16/LPC forward) and the WCAG display value (for
 /// the contrast ratio) gets the display value for free — no `srgb_gamma` on the
 /// hot path — while staying byte-identical to the `quantised_display` path.
+///
+/// С главы #64 (level-3) путь читаемости стал полностью display-доменным
+/// ([`crate::semantic::measure_contrast`] — ноль CAM16-форвардов), потому
+/// продакшн-потребитель этого хелпера ушёл; остаётся якорь-тест байт-тождества
+/// (`display_equals_quantised_display_on_every_byte`), потому `#[cfg(test)]`.
+#[cfg(test)]
 pub(crate) fn srgb_linear_and_display_from_hex(hex: &str) -> Result<([f64; 3], [f64; 3]), String> {
     let [r, g, b] = hex_bytes(hex)?;
     let linear = [decode_8bit(r), decode_8bit(g), decode_8bit(b)];

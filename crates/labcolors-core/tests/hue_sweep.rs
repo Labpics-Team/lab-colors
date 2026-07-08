@@ -32,10 +32,24 @@
 //! a malformed-input panic — and a moderate +45 target on pure white, which the
 //! background can clearly host, must NOT come back ExceedsRange.
 
-use labcolors_core::lpc::lpc_with_vc;
+use labcolors_core::lpc::{lpc_readability_ys, lpc_with_vc};
 use labcolors_core::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Unreachable, ViewingConditions, solve,
+    srgb_encoded_from_hex,
 };
+
+/// Independent re-measure of an emitted hex's `|Lc|` MAGNITUDE in the readability
+/// domain the solver targets since глава #64 (ADR-0003): `Ys` (WCAG relative
+/// luminance of the display bytes). Меряться через `lpc_with_vc` (домен `Y_hk`,
+/// apparent contrast) в round-trip ВЕЛИЧИНЫ больше нельзя — ось читаемости
+/// переехала в `Ys`, и сверять надо в домене цели, иначе Ys≈Y_hk-разрыв на
+/// хроме даёт ложный недолёт (signum-проверки домен-агностичны, остаются на
+/// `lpc_with_vc`).
+fn readability_lc(fg_hex: &str, bg_hex: &str) -> f64 {
+    let fg = srgb_encoded_from_hex(fg_hex).expect("valid emitted hex");
+    let bg = srgb_encoded_from_hex(bg_hex).expect("valid bg hex");
+    lpc_readability_ys(fg, bg)
+}
 
 /// The solver's own quantization budget (mirrors `solve::QUANT_BUDGET` / the
 /// `TOL` in its inline tests): a reachable target is hit within 1 Lc.
@@ -82,13 +96,15 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                     Ok(solved) => {
                         reachable += 1;
                         // Re-measure independently on the emitted hex; never trust
-                        // the reported lc().
-                        let measured = lpc_with_vc(solved.hex(), bg_hex, &vc);
+                        // the reported lc(). SIGN (polarity) — домен-агностично,
+                        // остаётся на `lpc_with_vc`; MAGNITUDE (err) — в домене
+                        // цели `Ys` (глава #64), иначе round-trip врёт на хроме.
+                        let sign_ref = lpc_with_vc(solved.hex(), bg_hex, &vc);
                         assert_eq!(
-                            measured > 0.0,
+                            sign_ref > 0.0,
                             target > 0.0,
                             "{vc_name} {bg_hex} hue {hue_deg}: polarity sign mismatch, \
-                             measured {measured} for target {target}",
+                             measured {sign_ref} for target {target}",
                         );
                         // With Floor::None there is no override, so the tight ±1
                         // perceptual budget must hold at every hue.
@@ -96,6 +112,7 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                             !solved.floor_override(),
                             "{vc_name} {bg_hex} hue {hue_deg}: Floor::None must never override",
                         );
+                        let measured = readability_lc(solved.hex(), bg_hex);
                         let err = (measured - target).abs();
                         max_err = max_err.max(err);
                         assert!(

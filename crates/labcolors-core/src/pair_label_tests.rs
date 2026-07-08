@@ -5,7 +5,7 @@
 //! решаются против ФОНА СТРАНИЦЫ и достигают своего WCAG-пола там; тинт-бейдж
 //! (`labui/lab-badge.ts`, `type=tinted`) кладёт их на `fill-*-primary` (@12
 //! семейный тинт) — на этой подложке контраст ниже, и для warning/success
-//! «цветной» лейбл (доля 0.461, как `label-*-tertiary`) оседает к ~2.8:1 < 3:1.
+//! «цветной» лейбл (доля 0.4757, как `label-*-tertiary`) оседает к ~2.9:1 < 3:1.
 //! `PairLabel` решает оттеночный лейбл ПРОТИВ тинт-поверхности, поэтому пол
 //! гарантирован по построению; при недостижимости тон клампится (флаг
 //! `compressed`, ADR-0002), а не молча остаётся нечитаемым.
@@ -17,7 +17,7 @@
 //!  2. `pair_label_*` — новая роль держит пол против тинт-поверхности во всех
 //!     сентимент-категориях × light/dark (± IC).
 //!  3. `pair_label_beats_page_resolved_label` — дифференциальный RED-proof:
-//!     ТОТ ЖЕ контракт (доля 0.461, `AaUi`), решённый против страницы
+//!     ТОТ ЖЕ контракт (доля 0.4757, `AaUi`), решённый против страницы
 //!     (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success,
 //!     а `PairLabel` (против поверхности) — держит. Разница ТОЛЬКО в подложке
 //!     резолва: если бы `resolve_pair_label` целил фон страницы, тест бы упал.
@@ -91,8 +91,9 @@ fn ratio_on_tint(set: &[(String, Resolved)], role: &str, fam: &str) -> f64 {
     crate::wcag::contrast_ratio(enc(&solid_hex(set, role)), enc(&surface_hex(set, fam)))
 }
 
-/// Конфиг labui + добавленные роли `badge-label-<fam>` (`PairLabel`, доля 0.461
-/// «цветного» уровня, пол `AaUi`) — форма, которую тинт-бейдж должен потреблять.
+/// Конфиг labui + добавленные роли `badge-label-<fam>` (`PairLabel`, доля
+/// 0.47572199 «цветного» уровня = `label-*-tertiary`, пол `AaUi`) — форма,
+/// которую тинт-бейдж должен потреблять.
 fn labui_with_badge_labels() -> crate::NamedRoleTable {
     let mut cfg = labui_reference();
     for (fam, source) in families() {
@@ -100,7 +101,7 @@ fn labui_with_badge_labels() -> crate::NamedRoleTable {
             format!("badge-label-{fam}"),
             RoleRecipe::PairLabel {
                 source,
-                fraction: 0.461,
+                fraction: 0.47572199,
                 floor: Floor::AaUi,
             },
         ));
@@ -184,7 +185,7 @@ fn pair_label_stays_hued_not_near_black() {
 
 // ── 3. Дифференциальный RED-proof: подложка резолва — и есть констрейнт ────────
 
-/// ТОТ ЖЕ контракт (доля 0.461, `AaUi`), решённый против СТРАНИЦЫ
+/// ТОТ ЖЕ контракт (доля 0.4757, `AaUi`), решённый против СТРАНИЦЫ
 /// (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success в light;
 /// `PairLabel` (против ПОВЕРХНОСТИ) — держит. Единственная разница — подложка
 /// резолва: если `resolve_pair_label` целил бы фон страницы, «after» совпал бы с

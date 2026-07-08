@@ -145,21 +145,25 @@ fn r3_sample_hex_13_sentiment_info_byte_identity() {
 /// `label-primary` is chosen as the representative because it is the highest-
 /// contrast text role and the most sensitive canary for a lightness-shift.
 const R3_RESOLVE_SET_SPOTS: [(&str, &str, &str, &str); 12] = [
-    // sRGB viewing conditions — sourced verbatim from the 240-cell GOLDEN in
-    // semantic.rs::resolve_set_golden_hex_is_byte_for_byte_stable at main@f21aac7.
-    ("srgb", "#FFFFFF", "label-primary", "#0A0A10"),
-    ("srgb", "#F2F2F7", "label-primary", "#09090F"),
-    ("srgb", "#7F7F7F", "label-primary", "#010103"),
-    ("srgb", "#1C1C1E", "label-primary", "#F1F1FD"),
-    ("srgb", "#101012", "label-primary", "#F2F2FC"),
-    ("srgb", "#3478F6", "label-primary", "#020205"),
+    // sRGB viewing conditions — regenerated for the readability→`Ys` activation
+    // (глава #64, ADR-0003): ось читаемости перешла в люминансный домен `Ys`, и
+    // текстовая лестница пересобрана на принятые владельцем hex'ы (#141414 и
+    // тонированный дефолт). Owner sign-off = ADR-0003 (Принято, делегация
+    // владельца). Значения совпадают с 240-cell GOLDEN в semantic.rs (тот же
+    // тонированный дефолт RoleTable).
+    ("srgb", "#FFFFFF", "label-primary", "#14131A"),
+    ("srgb", "#F2F2F7", "label-primary", "#131219"),
+    ("srgb", "#7F7F7F", "label-primary", "#08070E"),
+    ("srgb", "#1C1C1E", "label-primary", "#FAFAFF"),
+    ("srgb", "#101012", "label-primary", "#FAFAFF"),
+    ("srgb", "#3478F6", "label-primary", "#08070D"),
     // Dim (display / dark-room) viewing conditions — same source.
-    ("dim", "#FFFFFF", "label-primary", "#0D0D12"),
-    ("dim", "#F2F2F7", "label-primary", "#0C0C12"),
-    ("dim", "#7F7F7F", "label-primary", "#030305"),
-    ("dim", "#1C1C1E", "label-primary", "#F0F1FA"),
-    ("dim", "#101012", "label-primary", "#F0F0FA"),
-    ("dim", "#3478F6", "label-primary", "#040408"),
+    ("dim", "#FFFFFF", "label-primary", "#141419"),
+    ("dim", "#F2F2F7", "label-primary", "#131218"),
+    ("dim", "#7F7F7F", "label-primary", "#08080C"),
+    ("dim", "#1C1C1E", "label-primary", "#FAFAFF"),
+    ("dim", "#101012", "label-primary", "#FAFAFF"),
+    ("dim", "#3478F6", "label-primary", "#08070C"),
 ];
 
 /// R3: the representative cells from the 240-cell resolve_set grid are

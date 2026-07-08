@@ -147,19 +147,26 @@ fn hex(set: &[(String, Resolved)], name: &str) -> String {
 
 #[test]
 fn hierarchy_pass_fires_and_flags_when_ladder_is_squeezed() {
-    // `#747474` — a near-AA mid-grey where the readable window is narrower than the
+    // `#767676` — a near-AA mid-grey where the readable window is narrower than the
     // label steps: primary and secondary are floored onto one colour. The pass
     // makes that HONEST (compressed flag), not a silent collapse. A neutral anchor
     // is flagged compressed ONLY by the pass (`Resolved::color` => compressed:false),
     // so this is the RED-proof: disabling the pass drops the flag.
+    //
+    // Was `#747474` before the constructive-grey fix in `build_color`: the
+    // synchronized neutral anchor moved primary two quanta stronger there
+    // (#FAFBFF→#FCFCFF), which re-opened a distinguishable legal step — the
+    // squeeze band shifted to {#757575,#767676} (light-on-dark) /
+    // {#777777,#787878} (dark-on-light). Mid-band keeps the copy-collapse
+    // branch (`demote_below` → None → copy of the senior) under test.
     let table = labui_reference().compile_named_role_table().unwrap();
-    let bg = BgInput::solid("#747474").unwrap();
+    let bg = BgInput::solid("#767676").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
 
     assert_eq!(
         hex(&set, "label-primary"),
         hex(&set, "label-secondary"),
-        "on #747474 secondary is expected floored onto primary"
+        "on #767676 secondary is expected floored onto primary"
     );
     assert!(
         compressed(&set, "label-secondary"),
@@ -180,12 +187,14 @@ fn hierarchy_pass_fires_and_flags_when_ladder_is_squeezed() {
 
 #[test]
 fn hierarchy_pass_does_not_sweep_in_lone_anchors() {
-    // `border-strong` (0.968) is a lone anchor, not a label-ladder rung: the
+    // `border-strong` (0.9734) is a lone anchor, not a label-ladder rung: the
     // grouping reads strictly-descending runs off the config, so it is never
     // compressed. (`icon` был вторым lone-anchor; канон #92 снёс роль — глиф
-    // теперь label-tertiary, штатный rung лестницы.)
+    // теперь label-tertiary, штатный rung лестницы.) `#767676` sits mid squeeze
+    // band (see `hierarchy_pass_fires_and_flags_when_ladder_is_squeezed`), so the
+    // pass demonstrably fires on the labels while leaving `border-strong` alone.
     let table = labui_reference().compile_named_role_table().unwrap();
-    let bg = BgInput::solid("#747474").unwrap();
+    let bg = BgInput::solid("#767676").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
     assert!(
         !compressed(&set, "border-strong"),

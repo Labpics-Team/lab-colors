@@ -11,7 +11,6 @@ pub mod hash;
 pub mod ladder;
 pub mod lcs;
 pub mod lpc;
-pub(crate) mod lut;
 pub mod neutral;
 pub mod pair;
 pub mod scale;
