@@ -125,6 +125,28 @@ impl AccentCurve {
         LcsColor::new(jp_actual, h_ok, s.max(0.0), h_cam)
     }
 
+    /// `n` равноотстоящих точек рампы, концы включительно; `n == 1` — середина
+    /// (t = 0.5). Та же семантика, что у [`NeutralCurve::sample`], — лестницы
+    /// акцентов и нейтрали обязаны сэмплироваться идентичной сеткой.
+    pub fn sample(&self, n: usize) -> Vec<LcsColor> {
+        if n == 0 {
+            return Vec::new();
+        }
+        if n == 1 {
+            return vec![self.at(0.5)];
+        }
+        (0..n).map(|i| self.at(i as f64 / (n - 1) as f64)).collect()
+    }
+
+    /// Как [`AccentCurve::sample`], но сразу в hex через VC кривой — чтобы
+    /// вызывающий не сконвертировал под чужие viewing conditions.
+    pub fn sample_hex(&self, n: usize) -> Vec<String> {
+        self.sample(n)
+            .iter()
+            .map(|c| c.to_hex_with_vc(&self.vc))
+            .collect()
+    }
+
     /// The viewing conditions inherited from the neutral curve.
     pub fn vc(&self) -> &ViewingConditions {
         &self.vc
@@ -841,7 +863,6 @@ impl crate::curve::ColorCurve for AccentCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::ColorCurve;
 
     fn default_neutral() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()
