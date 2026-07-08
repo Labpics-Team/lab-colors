@@ -12,6 +12,7 @@
 //! Run: `cargo bench -p labcolors-core --bench jp_inv`.
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use labcolors_core::ColorCurve;
 use labcolors_core::ViewingConditions;
 use labcolors_core::neutral::NeutralCurve;
 use labcolors_core::scale::AccentCurve;

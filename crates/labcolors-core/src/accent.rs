@@ -187,6 +187,7 @@ pub(crate) fn oklab_hue_of(hex: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::ColorCurve;
 
     fn neutral() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012")
