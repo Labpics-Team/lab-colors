@@ -463,16 +463,16 @@ Warning от сползания в красную (danger) зону. Полны�
 | Константа | Значение | Модуль | Статус источника |
 |---|---|---|---|
 | `WARNING_HUE_FLOOR_DEG` | 45.0 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | **DECLARED-CALIBRATION** (design-choice): консервативный категориальный пол между danger 28.66° и warning 68.61°, дремлющий для labui (прототип > пола); прежняя привязка к «натуральному минимуму» относилась к brand-displacement, убранному Волной 1 (§3.4) |
-| `CHROMA_FRACTION` | 0.88 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | ручка силы рампы: доля гамутного максимума, единая для всех hue |
+| `CHROMA_FRACTION` | 0.88 | [`sentiment.rs`](../crates/labcolors-core/src/sentiment.rs) | ручка силы рампы: доля гамутного максимума, единая для всех hue; терминал **(e)** design-choice (labui=1.0; sensitivity max ΔE_ok 0.0421 по [0.70,1.0], Волна 2) |
 | `QUANT_BUDGET` | 1.0 | [`solve.rs`](../crates/labcolors-core/src/solve.rs) | терминал **(c) interval-insensitive**: допуск приёмки Lc, ±1 шаг сетки; экспозиция 1.84% (доказанный ratio-band над медианным шагом) |
 | `DECORATIVE_FLOOR_MIN` | 7.5 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **выведен** = `MODEL_LC_FLOOR` 7.3 (клип APCA `0.0.98G-4g`) + `QUANT_GUARD` 0.2 (issue #44) |
 | `IC_DECORATIVE_FLOOR_MIN` | 15.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | **заземлён** — APCA-уровень Lc 15 (различимость не-текста; draft/single-origin, не WCAG 3) |
 | `PAIR_CROSSOVER_Y` | 0.341955 | [`pair.rs`](../crates/labcolors-core/src/pair.rs) | **выведен** — перелом чисто-люминансного ядра `contrast_core` (бисекция), домен решения `pair_side`; ∈ интервал якорей (0.246, 0.423), смена с 0.30 байт-идентична для labui; терминал **(a) DERIVED** (владелец 2026-07-07) |
 | `HUE_PURITY_EXPONENT` | 0.6 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) | экспонента веса чистоты оттенка; форма мотивирована Abney (1909; K-S-S 1984), магнитуда — дизайн-ручка, терминал **(e)** (хроматические якоря инвариантны) |
-| `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона |
+| `NEUTRAL_TINT_RATIO` | 0.10 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | ручка нейтрального подтона; терминал **(e)** design-choice (opt-in v1-политика; sensitivity max ΔE_ok 0.0288 по [0,0.2], Волна 2) |
 | `TINT_TARGET_MP` | 6.1 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | целевая перцептивная красочность подтона |
-| `TINT_HUE_STIFFNESS` | 9.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | жёсткость притяжения оттенка подтона |
-| `gamma_light` / `gamma_dark` | 1.75 / 1.5 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) (`CurveParams::default`) | дефолты степенной интерполяции |
+| `TINT_HUE_STIFFNESS` | 9.0 | [`semantic.rs`](../crates/labcolors-core/src/semantic.rs) | жёсткость притяжения оттенка подтона; терминал **(c) interval-insensitive** (Волна 2): выше порога пиннинга ≈0.36 выход байт-инвариантен по [1,100], дефолт 9.0 = 25× порога |
+| `gamma_light` / `gamma_dark` | 1.75 / 1.5 | [`neutral.rs`](../crates/labcolors-core/src/neutral.rs) (`CurveParams::default`) | дефолты степенной интерполяции; терминал **(e)** design-choice (sensitivity max ΔE_ok 0.0466 / 0.0325, Волна 2) |
 | доли текста | 0.968 / 0.627 / 0.461 / 0.276 | пресет labui | калиброваны по Figma-якорям 102.6 / 66.5 / 48.9 / 29.3 при максимуме ~106; «калибруется» до визуальной приёмки ([`README.md`](../README.md)) |
 
 ### 4.3. Честная классификация происхождения
@@ -488,12 +488,14 @@ Warning от сползания в красную (danger) зону. Полны�
   явной оговоркой draft/single-origin) — в отличие от жёстких стандартов
   (Hellwig/WCAG/D65), которые вне инвентаря по построению (INV-3);
 - **интервал-нечувствительные** (терминал (c), ре-аудит `science/reclassify-e-buckets`
-  2026-07-07; 6 констант — `TINT_PERCEPTIBLE_MP_FLOOR`, `HUE_SEARCH_HALF_WINDOW`,
-  `ACHROMATIC_MP_THRESHOLD`, `QUANT_BUDGET`, `DJ_BUDGET`, `QUANT_GUARD`) — точное
+  2026-07-07 + `science/wave2-e-terminal` 2026-07-08; **7 констант** —
+  `TINT_PERCEPTIBLE_MP_FLOOR`, `HUE_SEARCH_HALF_WINDOW`, `ACHROMATIC_MP_THRESHOLD`,
+  `QUANT_BUDGET`, `DJ_BUDGET`, `QUANT_GUARD`, `TINT_HUE_STIFFNESS`) — точное
   значение ДОКАЗУЕМО не влияет на выход: измеренная низкая экспозиция (≤ ~2%
-  гаммы) плюс тест/лок, подтверждающий инвариантность выхода по интервалу. Это
-  СИЛЬНЕЕ «design-choice» — утверждение о поведении, не о происхождении числа;
-  полный разбор — `docs/empirical-residue.md`;
+  гаммы, для `TINT_HUE_STIFFNESS` — 0% флипа выше порога пиннинга ≈0.36) плюс
+  тест/лок, подтверждающий инвариантность выхода по интервалу. Это СИЛЬНЕЕ
+  «design-choice» — утверждение о поведении, не о происхождении числа; полный
+  разбор — `docs/empirical-residue.md`;
 - **калибровки к референсу владельца** (Figma-якоря labui; доли текста) —
   воспроизводят конкретную дизайн-практику, а не независимые психофизические
   измерения;
