@@ -108,18 +108,25 @@ impl LcsColor {
         let j = cam16::ucs_j_inv(self.jp);
         let m = cam16::ucs_m_inv(self.mp());
         let hr = self.h_cam.to_radians();
+        // `hr.cos()` / `hr.sin()` ниже вычислялись дважды каждый; считаем один раз
+        // и переиспользуем — байт-идентичный CSE (тот же аргумент, тот же
+        // libm-вызов). `e_hue` берёт другой аргумент (`hr + 2.0`) и не трогается.
+        let cos_hr = hr.cos();
+        let sin_hr = hr.sin();
 
         let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
-        let t_inner = (1.64 - 0.29_f64.powf(vc.n)).powf(0.73);
-        let t = (m / ((j / 100.0).sqrt() * t_inner * vc.fl.powf(0.25))).powf(1.0 / 0.9);
+        // `vc.t_inner` == `(1.64 - 0.29^n)^0.73`, `vc.fl_pow_025` == `fl^0.25`: те
+        // же пер-VC константы, что и в прямом ходе, вынесенные из пер-цветовой
+        // инверсии. Порядок умножения сохранён → байт-идентично прежнему инлайну
+        // `t_inner * vc.fl.powf(0.25)`.
+        let t = (m / ((j / 100.0).sqrt() * vc.t_inner * vc.fl_pow_025)).powf(1.0 / 0.9);
 
         let p1 = e_hue * (50000.0 / 13.0) * vc.nc * vc.nbb;
         let p2 = (vc.aw * (j / 100.0).powf(1.0 / (vc.c * vc.z))) / vc.nbb;
-        let gamma =
-            23.0 * (p2 + 0.305) * t / (23.0 * p1 + 11.0 * t * hr.cos() + 108.0 * t * hr.sin());
+        let gamma = 23.0 * (p2 + 0.305) * t / (23.0 * p1 + 11.0 * t * cos_hr + 108.0 * t * sin_hr);
 
-        let a = gamma * hr.cos();
-        let b = gamma * hr.sin();
+        let a = gamma * cos_hr;
+        let b = gamma * sin_hr;
 
         let r_a = (460.0 * p2 + 451.0 * a + 288.0 * b) / 1403.0;
         let g_a = (460.0 * p2 - 891.0 * a - 261.0 * b) / 1403.0;

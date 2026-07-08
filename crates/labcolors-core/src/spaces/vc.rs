@@ -28,6 +28,21 @@ pub struct ViewingConditions {
     pub rgb_d: [f64; 3],
     /// Whether these conditions enforce increased contrast (IC).
     pub high_contrast: bool,
+    /// Предвычисленный `F_L^0.25`. Пер-VC константа, которую прямой ход CIECAM16
+    /// (множитель колорфулнесс `M`) и H-K-хрома иначе пересчитывали бы на КАЖДЫЙ
+    /// цвет, хотя она зависит только от условий просмотра — фиксированных на все
+    /// сотни forward'ов одного резолва. Вынесена сюда единожды (в `build`).
+    /// Байт-идентична инлайновому `fl.powf(0.25)`, который заменяет: тот же
+    /// libm-вызов на том же операнде, под гейтом bit-identity оракула
+    /// `cam16::forward`. Производное состояние (чистая функция `fl`),
+    /// синхронизируется только через `build`.
+    pub fl_pow_025: f64,
+    /// Предвычисленный `(1.64 − 0.29^n)^0.73` — пер-VC префактор колорфулнесс,
+    /// общий для прямого `M` и обратного `t`. Хранится, а не перепечатывается на
+    /// каждый цвет, по той же причине и под тем же гейтом bit-identity, что и
+    /// [`fl_pow_025`](Self::fl_pow_025). Производное состояние (чистая функция
+    /// `n`), синхронизируется только через `build`.
+    pub t_inner: f64,
 }
 
 impl Default for ViewingConditions {
@@ -161,6 +176,15 @@ impl ViewingConditions {
         ];
         let aw = (2.0 * rgb_aw[0] + rgb_aw[1] + rgb_aw[2] / 20.0) * nbb;
 
+        // Пер-VC константы колорфулнесс, вынесенные из пер-цветового прямого и
+        // обратного хода. Считаются здесь ровно на тех операндах, что использовали
+        // инлайн-места (`fl`, `n`), поэтому сохранённые биты равны пересчитанным —
+        // это устранение общего подвыражения (CSE), а не численное изменение
+        // (пинится `derived_constants_are_bit_identical_to_inline_recompute` и,
+        // ниже по потоку, bit-identity оракулом `cam16::forward`).
+        let fl_pow_025 = fl.powf(0.25);
+        let t_inner = (1.64 - 0.29_f64.powf(n)).powf(0.73);
+
         Self {
             n,
             aw,
@@ -172,6 +196,8 @@ impl ViewingConditions {
             nc,
             rgb_d,
             high_contrast: false,
+            fl_pow_025,
+            t_inner,
         }
     }
 
@@ -254,9 +280,20 @@ impl ViewingConditions {
             nc,
             rgb_d: [d0, d1, d2],
             high_contrast,
+            fl_pow_025,
+            t_inner,
         } = self;
+        // `fl_pow_025` и `t_inner` — чистые функции уже хешируемых полей (`fl`,
+        // `n`), так что для разделимости их вклад избыточен. Но деструктуризация
+        // без `..` выше обязывает связать каждое поле, а дисциплина крейта —
+        // хешировать каждое связанное поле, а не сбрасывать его через `: _` (чтобы
+        // по-настоящему независимое новое поле нельзя было молча потерять). Равные
+        // исходные поля ⇒ равные производные ⇒ равный отпечаток, поэтому контракт
+        // «равный отпечаток ⇒ байт-идентичный выход» сохраняется.
         let mut h = 0xcbf2_9ce4_8422_2325u64;
-        for f in [n, aw, nbb, ncb, fl, z, c, nc, d0, d1, d2] {
+        for f in [
+            n, aw, nbb, ncb, fl, z, c, nc, d0, d1, d2, fl_pow_025, t_inner,
+        ] {
             h ^= f.to_bits();
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
@@ -273,6 +310,35 @@ impl ViewingConditions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derived_constants_are_bit_identical_to_inline_recompute() {
+        // BIT-IDENTITY ГЕЙТ для хоистинга VC-констант: сохранённые `fl_pow_025`
+        // и `t_inner` обязаны равняться инлайн-выражениям, которые они заменили в
+        // прямом ходе (`cam16`), обратном (`lcs::to_xyz`) и H-K-хроме (`lpc`) — до
+        // последнего ULP, не «в пределах допуска». Любой дрейф здесь молча сдвинул
+        // бы все нижележащие golden'ы; тест ловит это в источнике.
+        for vc in [
+            ViewingConditions::srgb(),
+            ViewingConditions::dim_surround(),
+            ViewingConditions::srgb_high_contrast(),
+            ViewingConditions::dim_surround_high_contrast(),
+            ViewingConditions::dark_surround(),
+            ViewingConditions::srgb_with_yb(5.0),
+            ViewingConditions::dim_surround_with_yb(60.0),
+        ] {
+            assert_eq!(
+                vc.fl_pow_025.to_bits(),
+                vc.fl.powf(0.25).to_bits(),
+                "fl_pow_025 drifted from the inline fl.powf(0.25)"
+            );
+            assert_eq!(
+                vc.t_inner.to_bits(),
+                (1.64 - 0.29_f64.powf(vc.n)).powf(0.73).to_bits(),
+                "t_inner drifted from the inline (1.64 - 0.29^n)^0.73"
+            );
+        }
+    }
 
     #[test]
     fn srgb_c_is_069() {

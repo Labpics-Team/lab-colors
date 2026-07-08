@@ -366,7 +366,9 @@ pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
 /// also needs the `LcsColor`) derive `J_HK` from the same forward pass instead
 /// of running a second identical one on the same stimulus.
 pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) -> f64 {
-    let chroma = m / vc.fl.powf(0.25);
+    // `vc.fl_pow_025` == инлайновый `vc.fl.powf(0.25)` (пер-VC константа,
+    // вынесенная в `ViewingConditions::build`), так что `chroma` байт-идентична.
+    let chroma = m / vc.fl_pow_025;
     j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }
 
@@ -479,7 +481,8 @@ pub fn lpc_lcs_with_vc(
 fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
     let j = cam16::ucs_j_inv(c.jp);
     let m = cam16::ucs_m_inv(c.mp());
-    let chroma = m / vc.fl.powf(0.25);
+    // `vc.fl_pow_025` == инлайновый `vc.fl.powf(0.25)`; байт-идентичная `chroma`.
+    let chroma = m / vc.fl_pow_025;
     let j_hk = j + hk_coeff(c.h_cam()) * chroma.powf(HK_CHROMA_EXPONENT);
     y_hk(j_hk.max(0.0), vc)
 }

@@ -192,10 +192,12 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     // sets `ncb: nbb`), so `vc.ncb` is byte-identical to the prior `vc.nbb`.
     let t = (50000.0 / 13.0) * e_hue * vc.nc * vc.ncb * u
         / (lms_aa[0] + lms_aa[1] + 1.05 * lms_aa[2] + 0.305);
-    let m = t.powf(0.9)
-        * (j / 100.0).sqrt()
-        * (1.64 - 0.29_f64.powf(vc.n)).powf(0.73)
-        * vc.fl.powf(0.25);
+    // `vc.t_inner` == `(1.64 - 0.29^n)^0.73`, `vc.fl_pow_025` == `fl^0.25` — обе
+    // вынесены в `ViewingConditions::build` (пер-VC константы, считаются раз на
+    // резолв, а не на каждый цвет). Те же операнды, тот же порядок умножения
+    // слева-направо → байт-идентично инлайн-форме, которую оракул ниже
+    // (`forward_reference`) по-прежнему расписывает явно.
+    let m = t.powf(0.9) * (j / 100.0).sqrt() * vc.t_inner * vc.fl_pow_025;
 
     (j, m, h)
 }
