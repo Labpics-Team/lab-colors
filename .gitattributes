@@ -17,3 +17,8 @@ packages/colors/test/data/*.txt text eol=lf
 # тестами построчно; пин к LF, чтобы core.autocrlf-чекаут (Windows) не превращал
 # ";\n" в ";\r\n" и не ронял поиск в тестах. Тот же класс, что фикстуры выше.
 experiments/psychophysics/runner/template.html text eol=lf
+
+# Векторы conformance-пака: генерируются с LF, сверяются раннером-референсом и
+# Swift-биндингом, дайджест считается над сырыми байтами. Пин к LF, чтобы
+# core.autocrlf-чекаут не вносил CR и не ломал дайджест/сравнение.
+conformance/vectors/*.json text eol=lf

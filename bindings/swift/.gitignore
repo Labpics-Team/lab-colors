@@ -1,0 +1,14 @@
+# Сгенерированные UniFFI-биндинги — производный артефакт, генерируется в CI
+# (uniffi-bindgen) ПЕРЕД `swift test`. В репозитории каталоги несут лишь .gitkeep.
+Sources/LabColors/*.swift
+Sources/labcolorsFFI/*.h
+Sources/labcolorsFFI/module.modulemap
+Sources/labcolorsFFI/*.modulemap
+
+# Промежуточный каталог генерации в CI (uniffi-bindgen --out-dir).
+generated/
+
+# SwiftPM build
+.build/
+*.xcodeproj
+Package.resolved

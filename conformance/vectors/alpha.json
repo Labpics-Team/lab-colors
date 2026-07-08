@@ -1,0 +1,44 @@
+[
+  {
+    "tint": "#787880",
+    "alpha": 0.2,
+    "bg": "#FFFFFF",
+    "composite": "#E4E4E6",
+    "minAlpha": 0.5294117647058824
+  },
+  {
+    "tint": "#787880",
+    "alpha": 0.122,
+    "bg": "#FFFFFF",
+    "composite": "#EFEFF0",
+    "minAlpha": 0.5294117647058824
+  },
+  {
+    "tint": "#787880",
+    "alpha": 0.361,
+    "bg": "#101012",
+    "composite": "#36363A",
+    "minAlpha": 0.4641350210970464
+  },
+  {
+    "tint": "#007AFF",
+    "alpha": 0.122,
+    "bg": "#FFFFFF",
+    "composite": "#E0EFFF",
+    "minAlpha": 1.0
+  },
+  {
+    "tint": "#101012",
+    "alpha": 0.122,
+    "bg": "#FFFFFF",
+    "composite": "#E2E2E2",
+    "minAlpha": 0.9372549019607843
+  },
+  {
+    "tint": "#FFFFFF",
+    "alpha": 0.5,
+    "bg": "#007AFF",
+    "composite": "#80BDFF",
+    "minAlpha": 1.0
+  }
+]

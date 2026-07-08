@@ -1,0 +1,637 @@
+//! Платформо-нейтральный **conformance-пак** движка `labcolors`.
+//!
+//! # Что это и зачем
+//!
+//! Ядро (`labcolors-core`) детерминировано: один вход → байт-идентичный выход.
+//! Но у движка теперь НЕСКОЛЬКО поверхностей — WASM (`@labpics/colors`), а с
+//! этой задачи и нативная (Swift через UniFFI). «Динамичность» архитектуры
+//! (рантайм-ядро на каждой платформе) держится ровно до тех пор, пока КАЖДАЯ
+//! поверхность отдаёт ОДНИ И ТЕ ЖЕ числа. Пак — исполняемый контракт этого
+//! равенства: набор детерминированных векторов «вход → канонический выход»,
+//! которые обязан воспроизвести любой биндинг, чтобы называться conformant.
+//!
+//! # Честность конструкции
+//!
+//! Векторы не вписаны руками — они ДЕРИВИРОВАНЫ из публичного API ядра
+//! генератором ([`bin/gen`](../gen/index.html)) и закоммичены. Ожидаемые
+//! значения — это то, что выдаёт ядро, а не то, что «должно бы». Внешняя правда
+//! (опубликованные WCAG-якоря) сверяется ОТДЕЛЬНО раннером-референсом
+//! (`tests/reference_runner.rs`), замыкая цепочку: закоммиченные векторы ==
+//! выход генератора == математика ядра == опубликованный стандарт.
+//!
+//! # Семейства векторов
+//!
+//! | Файл | Что фиксирует | Источник в ядре |
+//! |------|---------------|-----------------|
+//! | `contrasts.json` | (fg, bg, тема) → (Lc, WCAG) | `recheck_against` |
+//! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
+//! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
+//! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
+//! | `muddiness.json` | hex → мутность | `cleanliness::muddiness_from_hex` |
+//! | `manifest.json` | версии пака/ядра, дайджест, счётчики | — |
+//!
+//! Версия пака ([`PACK_VERSION`]) привязана к версии ядра ([`core_version`]):
+//! при легитимной смене канона генератор перегенерирует векторы, а
+//! раннер-референс ловит любой дрейф.
+
+use serde::{Deserialize, Serialize};
+
+use labcolors_core::alpha::{composite_hex, min_alpha_hex};
+use labcolors_core::cleanliness::muddiness_from_hex;
+use labcolors_core::{
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, Theme, ViewingConditions,
+    fnv1a_32, recheck_against, solve,
+};
+
+/// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
+/// состава векторов; значения векторов при этом диктует канон ядра.
+pub const PACK_VERSION: &str = "1.0.0";
+
+/// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
+/// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
+/// крейта тождественна версии `labcolors-core` — при релизном бампе они
+/// двигаются в ногу.
+#[must_use]
+pub fn core_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Тема → условия просмотра. Каноническая карта живёт в ядре (`Theme`); здесь —
+// только разбор kebab-ключа вектора, чтобы биндинги и генератор говорили одним
+// словарём тем ("light" | "dark" | "light-ic" | "dark-ic").
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Условия просмотра для kebab-ключа темы. Паникует на неизвестной теме —
+/// ключи в паке контролируются генератором, внешний вход сюда не попадает.
+fn vc_for_theme(theme_key: &str) -> ViewingConditions {
+    Theme::parse(theme_key)
+        .expect("ключ темы в паке всегда канонический")
+        .viewing_conditions()
+}
+
+/// Все четыре канонические темы в стабильном порядке.
+const THEMES: [&str; 4] = ["light", "dark", "light-ic", "dark-ic"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Семейство: контрасты
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Один контраст-вектор: перцептивный `Lc` и юридический WCAG-ratio переднего
+/// плана на фоне под темой. Два числа отчитываются РАЗДЕЛЬНО — они измеряют
+/// разное и никогда не смешиваются (инвариант ядра).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContrastVector {
+    /// Передний план, `#RRGGBB`.
+    pub fg: String,
+    /// Фон, `#RRGGBB`.
+    pub bg: String,
+    /// Тема просмотра (kebab-ключ).
+    pub theme: String,
+    /// Знаковый перцептивный контраст (LPC `Lc`).
+    pub lc: f64,
+    /// Контраст-ratio WCAG 2.1 (1–21).
+    pub wcag_ratio: f64,
+}
+
+/// Курированный набор пар (fg, bg): опубликованные WCAG-якоря (чёрное/белое =
+/// 21:1, граница AA-текста `#767676`, шаг ниже `#777777`), бренд и нейтрали.
+/// Пары — ВХОД; ожидаемые числа диктует ядро.
+const CONTRAST_PAIRS: [(&str, &str); 10] = [
+    ("#000000", "#FFFFFF"), // предельный 21:1
+    ("#FFFFFF", "#000000"), // симметричный предел
+    ("#767676", "#FFFFFF"), // учебниковая граница AA-текста ≈ 4.54:1
+    ("#777777", "#FFFFFF"), // на один 8-битный шаг светлее — уже < 4.5:1
+    ("#007AFF", "#FFFFFF"), // бренд на белом
+    ("#FFFFFF", "#007AFF"), // белое на бренде
+    ("#0A0A10", "#FFFFFF"), // near-black label на near-white
+    ("#F7F7FF", "#101012"), // near-white на near-black (тёмная тема)
+    ("#71717A", "#FFFFFF"), // вторичный лейбл labui
+    ("#007AFF", "#101012"), // бренд на тёмном
+];
+
+/// Дериватор контраст-векторов: полное декартово произведение пар × темы.
+#[must_use]
+pub fn generate_contrasts() -> Vec<ContrastVector> {
+    let mut out = Vec::with_capacity(CONTRAST_PAIRS.len() * THEMES.len());
+    for &(fg, bg) in &CONTRAST_PAIRS {
+        for &theme in &THEMES {
+            let vc = vc_for_theme(theme);
+            let pair = recheck_against(bg, &[fg], &vc)
+                .expect("фикстуры пака — валидные hex")
+                .pop()
+                .expect("ровно один передний план");
+            out.push(ContrastVector {
+                fg: fg.to_string(),
+                bg: bg.to_string(),
+                theme: theme.to_string(),
+                lc: pair.0,
+                wcag_ratio: pair.1,
+            });
+        }
+    }
+    out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Семейство: лестницы
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Один вектор лестницы: стабильный ключ позиции и её пер-темная пара альф.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LadderVector {
+    /// Kebab-ключ позиции (`label-primary`, `fill-secondary`, …).
+    pub position: String,
+    /// Альфа в светлых темах (light / light-ic).
+    pub alpha_light: f64,
+    /// Альфа в тёмных темах (dark / dark-ic).
+    pub alpha_dark: f64,
+}
+
+/// Дериватор лестниц: каждая каноническая позиция и её `(light, dark)`-альфы.
+#[must_use]
+pub fn generate_ladders() -> Vec<LadderVector> {
+    LadderPosition::ALL
+        .iter()
+        .map(|&p| {
+            let (light, dark) = p.alpha_pair();
+            LadderVector {
+                position: p.key().to_string(),
+                alpha_light: light,
+                alpha_dark: dark,
+            }
+        })
+        .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Семейство: подложка → α
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Один вектор альфа-алгебры: прямой ход (композит тинта при α над фоном) и
+/// нижняя граница разрешимости (α_min тинта над фоном).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlphaVector {
+    /// Тинт (кроющий цвет), `#RRGGBB`.
+    pub tint: String,
+    /// Запрошенная альфа, `[0,1]`.
+    pub alpha: f64,
+    /// Фон (подложка), `#RRGGBB`.
+    pub bg: String,
+    /// Композит `α·tint + (1−α)·bg`, квантованный до `#RRGGBB`.
+    pub composite: String,
+    /// Минимально разрешимая α, при которой тинт остаётся в гамуте над этим
+    /// фоном (нижняя граница инверсии композита).
+    pub min_alpha: f64,
+}
+
+/// Тройки (тинт, α, фон) для альфа-алгебры: нейтральный тинт labui над светлым
+/// и тёмным фоном на разных уровнях лестницы, плюс бренд.
+const ALPHA_CASES: [(&str, f64, &str); 6] = [
+    ("#787880", 0.2, "#FFFFFF"),   // нейтральная заливка @20 на белом
+    ("#787880", 0.122, "#FFFFFF"), // граница @12 на белом
+    ("#787880", 0.361, "#101012"), // нейтральная заливка @36 на тёмном
+    ("#007AFF", 0.122, "#FFFFFF"), // бренд-заливка @12 на белом
+    ("#101012", 0.122, "#FFFFFF"), // тень @12 на белом
+    ("#FFFFFF", 0.5, "#007AFF"),   // белый полупрозрачный на бренде
+];
+
+/// Дериватор альфа-векторов.
+#[must_use]
+pub fn generate_alpha() -> Vec<AlphaVector> {
+    ALPHA_CASES
+        .iter()
+        .map(|&(tint, alpha, bg)| {
+            let composite = composite_hex(tint, alpha, bg).expect("валидные hex/α");
+            let min_alpha = min_alpha_hex(tint, bg).expect("валидные hex");
+            AlphaVector {
+                tint: tint.to_string(),
+                alpha,
+                bg: bg.to_string(),
+                composite,
+                min_alpha,
+            }
+        })
+        .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Семейство: резолв (снапшоты токенов)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Тип контракта резолва — параметризованный, в терминах публичного API ядра.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ContractSpec {
+    /// Контраст текста: цель `Lc`, юридический пол WCAG AA-text (4.5:1).
+    Text {
+        /// Целевой перцептивный `Lc`.
+        lc: f64,
+    },
+    /// Контраст UI-элемента: цель `Lc`, пол WCAG AA-UI (3:1).
+    Ui {
+        /// Целевой перцептивный `Lc`.
+        lc: f64,
+    },
+    /// Декоративная полоса `[floor, ceiling]` без юридического пола.
+    Range {
+        /// Нижняя граница `Lc`.
+        floor: f64,
+        /// Верхняя граница `Lc`.
+        ceiling: f64,
+    },
+}
+
+impl ContractSpec {
+    /// В [`Contract`] ядра.
+    fn to_core(self) -> Contract {
+        match self {
+            ContractSpec::Text { lc } => Contract::text(lc),
+            ContractSpec::Ui { lc } => Contract::ui(lc),
+            ContractSpec::Range { floor, ceiling } => Contract::range(floor, ceiling),
+        }
+    }
+}
+
+/// Исход резолва: успешный цвет или ЧЕСТНЫЙ отказ со стабильным кодом. Коды
+/// тождественны кодам WASM-биндинга — все поверхности классифицируют
+/// недостижимость одинаково.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SolveOutcome {
+    /// Контракт удовлетворён.
+    Solved {
+        /// Резолвнутый цвет, `#RRGGBB`.
+        hex: String,
+        /// Знаковый перцептивный `Lc` на отданном hex.
+        lc: f64,
+        /// WCAG-ratio на отданном hex.
+        wcag_ratio: f64,
+        /// Юридический пол переопределил перцептивную цель.
+        floor_override: bool,
+    },
+    /// Ни один цвет не удовлетворяет контракт; `code` — стабильная причина.
+    Unreachable {
+        /// Стабильный машинный код (`floor_unreachable`, `exceeds_range`, …).
+        code: String,
+    },
+}
+
+/// Стабильный код недостижимости. Тождественен маппингу WASM-границы
+/// (`labcolors-wasm/src/engine.rs`) — контракт имён общий для всех биндингов.
+#[must_use]
+pub fn unreachable_code(err: &labcolors_core::Unreachable) -> &'static str {
+    use labcolors_core::Unreachable as U;
+    match err {
+        U::BelowContrastFloor { .. } => "below_contrast_floor",
+        U::ExceedsRange { .. } => "exceeds_range",
+        U::QuantizationGap { .. } => "quantization_gap",
+        U::FloorUnreachable { .. } => "floor_unreachable",
+        U::PolarityMismatch { .. } => "polarity_mismatch",
+        U::GamutUnsupported => "gamut_unsupported",
+        U::InvalidInput(_) => "invalid_input",
+        // `Unreachable` помечен `#[non_exhaustive]`; forward-compat-арм
+        // тождествен WASM-границе (`labcolors-wasm/src/engine.rs`).
+        _ => "unreachable",
+    }
+}
+
+/// Один вектор резолва: вход (bg, контракт, тема) и канонический исход.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolveVector {
+    /// Фон, `#RRGGBB`.
+    pub bg: String,
+    /// Контракт резолва.
+    pub contract: ContractSpec,
+    /// Тема просмотра (kebab-ключ).
+    pub theme: String,
+    /// Канонический исход.
+    pub outcome: SolveOutcome,
+}
+
+/// Кейсы резолва: достижимые контракты на светлом/тёмном/брендовом фоне под
+/// разными темами плюс один намеренно недостижимый (демонстрация честного
+/// отказа, а не тихого клипа).
+const SOLVE_CASES: [(&str, ContractSpec, &str); 6] = [
+    ("#FFFFFF", ContractSpec::Text { lc: 60.0 }, "light"),
+    ("#FFFFFF", ContractSpec::Ui { lc: 45.0 }, "light"),
+    (
+        "#FFFFFF",
+        ContractSpec::Range {
+            floor: 30.0,
+            ceiling: 60.0,
+        },
+        "light",
+    ),
+    ("#101012", ContractSpec::Text { lc: 75.0 }, "dark"),
+    ("#007AFF", ContractSpec::Text { lc: 60.0 }, "light"),
+    // Намеренно недостижимо: цель Lc 150 превышает всё, что белый фон способен
+    // дать (макс ≈ 107 у чёрного) → честный ExceedsRange, не клип.
+    ("#FFFFFF", ContractSpec::Text { lc: 150.0 }, "light"),
+];
+
+/// Дериватор резолв-векторов. Нейтральная (серая) хрома — резолв
+/// хью-независим, вектор детерминирован; хью/хрома — естественное расширение
+/// среза (см. PR).
+#[must_use]
+pub fn generate_solve() -> Vec<SolveVector> {
+    SOLVE_CASES
+        .iter()
+        .map(|&(bg, contract, theme)| {
+            let vc = vc_for_theme(theme);
+            let bg_input = BgInput::solid(bg).expect("валидный hex фона");
+            let outcome = match solve(
+                bg_input,
+                contract.to_core(),
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                Gamut::Srgb,
+            ) {
+                Ok(s) => SolveOutcome::Solved {
+                    hex: s.hex().to_string(),
+                    lc: s.lc(),
+                    wcag_ratio: s.wcag_ratio(),
+                    floor_override: s.floor_override(),
+                },
+                Err(e) => SolveOutcome::Unreachable {
+                    code: unreachable_code(&e).to_string(),
+                },
+            };
+            SolveVector {
+                bg: bg.to_string(),
+                contract,
+                theme: theme.to_string(),
+                outcome,
+            }
+        })
+        .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Семейство: мутность
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Один вектор мутности: hex и его оценка «грязи» `[0,1]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuddinessVector {
+    /// Цвет, `#RRGGBB`.
+    pub hex: String,
+    /// Оценка мутности `[0,1]` (0 — чистый, 1 — грязный).
+    pub score: f64,
+}
+
+/// Цвета для мутности: грязная олива, чистый серый, чистый бренд, грязный хаки.
+const MUDDINESS_CASES: [&str; 4] = ["#6B6B2E", "#808080", "#007AFF", "#8A7A50"];
+
+/// Дериватор векторов мутности.
+#[must_use]
+pub fn generate_muddiness() -> Vec<MuddinessVector> {
+    MUDDINESS_CASES
+        .iter()
+        .map(|&hex| MuddinessVector {
+            hex: hex.to_string(),
+            score: muddiness_from_hex(hex).expect("валидный hex"),
+        })
+        .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Агрегат пака + сериализация + дайджест
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Имя файла манифеста в каталоге векторов.
+pub const MANIFEST_FILE: &str = "manifest.json";
+
+/// Имена файлов семейств в КАНОНИЧЕСКОМ порядке — единый источник порядка для
+/// генератора, дайджеста и раннера-референса (дайджест зависит от порядка).
+pub const FAMILY_FILES: [&str; 5] = [
+    "contrasts.json",
+    "ladders.json",
+    "alpha.json",
+    "solve.json",
+    "muddiness.json",
+];
+
+/// Каноническая кросс-платформенная толерантность сравнения f64 — тождественна
+/// `DRIFT_TOL` ядра (`labcolors-core/src/lut.rs`). Наблюдаемый libm-шум
+/// (`powf`/`atan2`/`ln` расходятся на несколько ULP между платформами) —
+/// порядка `1e-13`; реальный дрейф (не тот surround, опечатка в матрице,
+/// путаница единиц) сдвигает значения на целые единицы. `1e-6` заведомо выше
+/// шума и заведомо ниже любой настоящей регрессии. Байт-точность f64
+/// кросс-платформенно НЕВОЗМОЖНА — поэтому conformant-ность числовых полей
+/// определяется этой толерантностью (hex/enum/строки — точно).
+pub const DRIFT_TOL: f64 = 1e-6;
+
+/// Счётчики векторов по семействам — для манифеста и отчёта PR.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Counts {
+    /// Контраст-векторы.
+    pub contrasts: usize,
+    /// Векторы лестниц.
+    pub ladders: usize,
+    /// Альфа-векторы.
+    pub alpha: usize,
+    /// Резолв-векторы.
+    pub solve: usize,
+    /// Векторы мутности.
+    pub muddiness: usize,
+    /// Итого.
+    pub total: usize,
+}
+
+/// Манифест пака: версии, дайджест и счётчики. `packDigest` — FNV-1a-32
+/// (примитив ядра) над каноническими байтами всех семейств; любой дрейф
+/// значений или состава меняет дайджест.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Manifest {
+    /// Версия схемы/состава пака ([`PACK_VERSION`]).
+    pub pack_version: String,
+    /// Версия ядра, к которой привязан пак ([`core_version`]).
+    pub core_version: String,
+    /// FNV-1a-32 над каноническими байтами семейств, 8 hex-символов.
+    pub pack_digest: String,
+    /// Счётчики по семействам.
+    pub counts: Counts,
+}
+
+/// Весь пак в памяти. `serialize_family` даёт КАНОНИЧЕСКИЕ байты каждого файла
+/// (pretty JSON, LF), из которых считается дайджест и которые пишет `gen`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pack {
+    /// Контраст-векторы.
+    pub contrasts: Vec<ContrastVector>,
+    /// Векторы лестниц.
+    pub ladders: Vec<LadderVector>,
+    /// Альфа-векторы.
+    pub alpha: Vec<AlphaVector>,
+    /// Резолв-векторы.
+    pub solve: Vec<SolveVector>,
+    /// Векторы мутности.
+    pub muddiness: Vec<MuddinessVector>,
+}
+
+impl Pack {
+    /// Сгенерировать весь пак из канона ядра.
+    #[must_use]
+    pub fn generate() -> Self {
+        Pack {
+            contrasts: generate_contrasts(),
+            ladders: generate_ladders(),
+            alpha: generate_alpha(),
+            solve: generate_solve(),
+            muddiness: generate_muddiness(),
+        }
+    }
+
+    /// Счётчики семейств.
+    #[must_use]
+    pub fn counts(&self) -> Counts {
+        let contrasts = self.contrasts.len();
+        let ladders = self.ladders.len();
+        let alpha = self.alpha.len();
+        let solve = self.solve.len();
+        let muddiness = self.muddiness.len();
+        Counts {
+            contrasts,
+            ladders,
+            alpha,
+            solve,
+            muddiness,
+            total: contrasts + ladders + alpha + solve + muddiness,
+        }
+    }
+
+    /// Дайджест пака: FNV-1a-32 над конкатенацией канонических байтов всех
+    /// семейств в порядке [`FAMILY_FILES`]. 8 hex-символов. Значение зависит от
+    /// платформы генерации (последний ULP f64 в сериализации) — это отпечаток
+    /// КОНКРЕТНОГО закоммиченного артефакта, а не кросс-платформенный инвариант.
+    #[must_use]
+    pub fn digest(&self) -> String {
+        let mut buf = String::new();
+        for (_name, bytes) in self.families() {
+            buf.push_str(&bytes);
+        }
+        format!("{:08x}", fnv1a_32(buf.as_bytes()))
+    }
+
+    /// Манифест пака (версии, дайджест, счётчики).
+    #[must_use]
+    pub fn manifest(&self) -> Manifest {
+        Manifest {
+            pack_version: PACK_VERSION.to_string(),
+            core_version: core_version().to_string(),
+            pack_digest: self.digest(),
+            counts: self.counts(),
+        }
+    }
+
+    /// Пары `(имя_файла, канонические_байты)` каждого семейства в порядке
+    /// [`FAMILY_FILES`]. Канонические байты — pretty JSON с LF-переводами строк.
+    #[must_use]
+    pub fn families(&self) -> Vec<(&'static str, String)> {
+        vec![
+            (FAMILY_FILES[0], to_canonical_json(&self.contrasts)),
+            (FAMILY_FILES[1], to_canonical_json(&self.ladders)),
+            (FAMILY_FILES[2], to_canonical_json(&self.alpha)),
+            (FAMILY_FILES[3], to_canonical_json(&self.solve)),
+            (FAMILY_FILES[4], to_canonical_json(&self.muddiness)),
+        ]
+    }
+}
+
+/// Канонический JSON: pretty-печать (2 пробела) + завершающий перевод строки,
+/// LF везде. Детерминирован по построению (serde_json + ryu), одинаков на любой
+/// платформе — основа для дайджеста и чистого diff.
+#[must_use]
+pub fn to_canonical_json<T: Serialize>(value: &T) -> String {
+    let mut s = serde_json::to_string_pretty(value).expect("векторы пака всегда сериализуемы");
+    s.push('\n');
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generation_is_deterministic() {
+        // Дважды сгенерированный пак байт-идентичен — вход всегда даёт тот же
+        // выход (детерминизм канона, перенесённый в пак).
+        let a = Pack::generate();
+        let b = Pack::generate();
+        assert_eq!(a, b, "генерация пака недетерминирована");
+        assert_eq!(a.digest(), b.digest(), "дайджест недетерминирован");
+    }
+
+    #[test]
+    fn counts_are_nonempty_and_consistent() {
+        let pack = Pack::generate();
+        let c = pack.counts();
+        assert!(c.total > 0, "пустой пак бессмыслен");
+        assert_eq!(
+            c.total,
+            c.contrasts + c.ladders + c.alpha + c.solve + c.muddiness,
+            "итог не сходится с семействами"
+        );
+        // Лестниц ровно столько, сколько канонических позиций.
+        assert_eq!(c.ladders, LadderPosition::ALL.len());
+    }
+
+    #[test]
+    fn canonical_json_serialization_is_deterministic() {
+        // Канонический JSON — чистая функция структуры (serde_json + ryu):
+        // дважды сериализованное семейство БАЙТ-идентично. Это фундамент
+        // байт-точного гейта дрейфа и дайджеста (сравнение по СЕРИАЛИЗАЦИИ, не
+        // по parse — парсер serde_json по умолчанию не round-trip-точен для
+        // f64, поэтому опираемся на детерминизм сериализации, а не парсинга).
+        let pack = Pack::generate();
+        assert_eq!(
+            to_canonical_json(&pack.contrasts),
+            to_canonical_json(&pack.contrasts)
+        );
+        assert_eq!(
+            to_canonical_json(&pack.solve),
+            to_canonical_json(&pack.solve)
+        );
+        // Разбор валиден структурно (форма контракта), даже если последний ULP
+        // f64 может отличаться — семантическую точность держит tolerance пака.
+        let _parsed: Vec<ContrastVector> =
+            serde_json::from_str(&to_canonical_json(&pack.contrasts)).unwrap();
+    }
+
+    #[test]
+    fn solve_pack_contains_reachable_and_unreachable() {
+        // Пак честен: есть и успешный резолв, и намеренный отказ с кодом.
+        let solve = generate_solve();
+        assert!(
+            solve
+                .iter()
+                .any(|v| matches!(v.outcome, SolveOutcome::Solved { .. })),
+            "нет ни одного успешного резолва"
+        );
+        let unreachable = solve
+            .iter()
+            .find_map(|v| match &v.outcome {
+                SolveOutcome::Unreachable { code } => Some(code.clone()),
+                SolveOutcome::Solved { .. } => None,
+            })
+            .expect("нет ни одного честного отказа");
+        assert_eq!(unreachable, "exceeds_range", "код отказа сменился");
+    }
+}

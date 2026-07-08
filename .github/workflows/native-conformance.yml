@@ -1,0 +1,82 @@
+name: Native conformance (Swift)
+
+# Нативная стратегия (#84): доказательство ДИНАМИЧНОГО рантайм-ядра на Apple.
+# Ядро Rust компилируется под aarch64-apple-darwin, из него uniffi-bindgen
+# генерит Swift-биндинги, и `swift test` прогоняет conformance-пак против выхода
+# FFI. Джоба живёт на GitHub-hosted macos-раннере (на self-hosted Linux-ферме
+# Swift-тулчейна нет) — отдельным workflow, чтобы не трогать семантику ci.yml.
+#
+# Линтеры/аудит/wasm/основной `cargo test --workspace` (включая толерантный
+# раннер-референс conformance-пака на Linux) остаются в ci.yml — здесь ДОБАВОЧНЫЙ
+# кросс-платформенный слой: тот же пак воспроизводится ядром на macOS/arm64 и
+# на Swift-стороне.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # В ногу с ci.yml.
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  swift-conformance:
+    name: swift test (macOS arm64) + Rust reference runner
+    # GitHub-hosted arm64-раннер. Swift-тулчейн предустановлен.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # Хост macos-15 уже aarch64-apple-darwin — отдельный target не нужен.
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: swift / toolchain versions
+        run: |
+          swift --version
+          rustc --version
+
+      # 1. Кросс-платформенный раннер-референс: ядро на macOS/arm64 воспроизводит
+      #    закоммиченный пак (сгенерирован на другой платформе) в пределах
+      #    DRIFT_TOL. Плюс Rust-юниты FFI-биндинга.
+      - name: cargo test (conformance reference runner + ffi units)
+        run: cargo test -p labcolors-conformance -p labcolors-ffi
+
+      # 2. Сборка нативной библиотеки: staticlib (линкуется в Swift) + cdylib
+      #    (из него bindgen читает метаданные) + бинарь uniffi-bindgen (фича cli).
+      - name: build labcolors-ffi (+ bindgen bin)
+        run: cargo build -p labcolors-ffi --features cli
+
+      # 3. Генерация Swift-биндингов из скомпилированной библиотеки (library-mode
+      #    — поддерживает proc-macro). Даёт labcolors.swift / labcolorsFFI.h /
+      #    labcolorsFFI.modulemap.
+      - name: generate Swift bindings
+        run: |
+          cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- \
+            generate --library target/debug/liblabcolors.dylib \
+            --language swift --out-dir bindings/swift/generated
+
+      # 4. Раскладка в layout SwiftPM: заголовок + module.modulemap в системный
+      #    модуль, swift-обёртка в Swift-таргет.
+      - name: arrange generated bindings into the SwiftPM package
+        run: |
+          set -euo pipefail
+          gen=bindings/swift/generated
+          cp "$gen/labcolors.swift"        bindings/swift/Sources/LabColors/labcolors.swift
+          cp "$gen/labcolorsFFI.h"         bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
+          cp "$gen/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
+          echo "--- module.modulemap ---"; cat bindings/swift/Sources/labcolorsFFI/module.modulemap
+
+      # 5. swift test: линкует liblabcolors.a (относительный -L в Package.swift +
+      #    абсолютный на всякий случай) и прогоняет conformance-пак против FFI.
+      - name: swift test (conformance pack vs FFI)
+        working-directory: bindings/swift
+        run: swift test -Xlinker -L"$GITHUB_WORKSPACE/target/debug"
