@@ -15,24 +15,26 @@
 - `Tests/LabColorsConformanceTests` — прогон закоммиченного пака
   `conformance/vectors/*.json` против выхода FFI.
 
-## Сборка и тест (только macOS)
+## Сборка и тест
 
-На Windows/Linux Swift-стороны нет — сборка и `swift test` идут в CI-джобе на
-macos-раннере (`.github/workflows/native-conformance.yml`). Локально на macOS:
+Платные GitHub-hosted macOS-раннеры исключены владельцем — Swift валидируется в
+официальном **swift-контейнере на Linux x86_64** (тот же UniFFI-биндинг, тот же
+пак, ядро под `x86_64-unknown-linux-gnu`; кросс-платформа держится толерантностью
+`DRIFT_TOL`). Единый скрипт — `ci/run-conformance.sh` — используют и локальный
+прогон, и self-hosted CI-джоба (`.github/workflows/native-conformance.yml`).
+
+Локально (нужен Docker):
 
 ```sh
 # из корня репозитория
-cargo build -p labcolors-ffi --features cli
-cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- \
-    generate --library target/debug/liblabcolors.dylib --language swift \
-    --out-dir /tmp/gen
-# разложить сгенерированное в пакет
-cp /tmp/gen/labcolors.swift          bindings/swift/Sources/LabColors/
-cp /tmp/gen/labcolorsFFI.h           bindings/swift/Sources/labcolorsFFI/
-cp /tmp/gen/labcolorsFFI.modulemap   bindings/swift/Sources/labcolorsFFI/module.modulemap
-# тест
-cd bindings/swift && swift test
+docker run --rm -v "$PWD":/src:ro swift:6.1 \
+    bash /src/bindings/swift/ci/run-conformance.sh
 ```
+
+Аттестация последнего зелёного прогона (числа, версии, платформа):
+`docs/conformance/local-swift-attestation.md`. На нативном macOS (если появится
+БЕСПЛАТНЫЙ раннер) — джоба `swift-conformance-macos-reference` (ручной
+`workflow_dispatch`) в том же workflow.
 
 ## Толерантность conformance
 

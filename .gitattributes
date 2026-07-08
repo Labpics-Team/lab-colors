@@ -22,3 +22,7 @@ experiments/psychophysics/runner/template.html text eol=lf
 # Swift-биндингом, дайджест считается над сырыми байтами. Пин к LF, чтобы
 # core.autocrlf-чекаут не вносил CR и не ломал дайджест/сравнение.
 conformance/vectors/*.json text eol=lf
+
+# Bash-скрипт Swift-conformance исполняется в контейнере через `bash <файл>`.
+# Пин к LF: CR в shebang/командах ломает исполнение на Linux.
+bindings/swift/ci/*.sh text eol=lf
