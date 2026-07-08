@@ -164,6 +164,12 @@ type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 ---
 
+### `engine.recheckContrastMulti(bgHexes, fgHexes, theme): Float64Array`
+
+Батч-вариант `recheckContrast` для меняющегося фона (градиент / картинка / bg-blur / стекло): проверяет один набор `fgHexes` сразу против НЕСКОЛЬКИХ сэмплов фона `bgHexes` за один вызов, разделяя прямой ход модели каждого переднего плана между всеми сэмплами (он от фона не зависит). Байт-в-байт равен N отдельным вызовам `recheckContrast`, пара за парой — это закреплено parity-тестом границы, — только быстрее: ~2.5× на 3 сэмплах. Возвращает плоский background-major `Float64Array`: сэмпл `s`, цвет `i` лежит в `(s · fgHexes.length + i) · 2` (`lc`) и `+1` (`wcagRatio`). Именно этим вызовом `adaptTheme` схлопывает worst-case цикл по сэмплам в одно обращение к движку; на одном сэмпле выигрыша нет — контроллер остаётся на `recheckContrast`.
+
+---
+
 ### `engine.muddiness(hex): number` · `engine.confidence(hex): number`
 
 `muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи). `confidence` — надёжность этой оценки: `0` означает, что оценке нельзя доверять (у границы решения или серого фронтира), выше — увереннее. Верхний потолок — деталь калибровки, не контракт: не хардкодить.
