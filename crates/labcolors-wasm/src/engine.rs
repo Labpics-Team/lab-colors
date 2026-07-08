@@ -952,12 +952,29 @@ mod tests {
                         o.worst_contrast,
                         "{name}: material worst_contrast"
                     );
+                    assert_eq!(m.floor(), o.floor, "{name}: material floor");
                     assert_eq!(m.guaranteed(), o.guaranteed, "{name}: material guaranteed");
+                    assert_eq!(
+                        matches!(m.pole(), labcolors_core::Pole::White),
+                        o.pole_white,
+                        "{name}: material pole_white"
+                    );
                     assert_eq!(
                         m.achieved_dj(),
                         o.achieved_dj,
                         "{name}: material achieved_dj"
                     );
+                    assert_eq!(
+                        m.tone_compressed(),
+                        o.tone_compressed,
+                        "{name}: material tone_compressed"
+                    );
+                    assert_eq!(
+                        m.hue_vanished(),
+                        o.hue_vanished,
+                        "{name}: material hue_vanished"
+                    );
+                    assert_eq!(m.distinct(), o.distinct, "{name}: material distinct");
                 }
                 (Resolved::None, RoleOutcome::None) => {}
                 (a, b) => panic!("расхождение форм {name}: ядро {a:?} vs граница {b:?}"),

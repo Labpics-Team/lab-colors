@@ -2197,6 +2197,8 @@ fn resolve_spec_in(
                     let hue_deg = crate::accent::oklab_hue_of(
                         &crate::spaces::srgb::hex_from_srgb_encoded(hue_tint.for_vc(vc)),
                     );
+                    // Оттенок семьи подставляется в НЕСУЩИЙ ОТТЕНОК подтон таблицы,
+                    // красочность (`target_mp`/`hue_stiffness` / `ratio`) — от неё же.
                     match chroma {
                         RoleChroma::Curve {
                             target_mp,
@@ -2207,7 +2209,17 @@ fn resolve_spec_in(
                             target_mp,
                             hue_stiffness,
                         },
-                        other => other,
+                        RoleChroma::Tinted { ratio, .. } => RoleChroma::Tinted { hue_deg, ratio },
+                        // Ахроматичный (или будущий) подтон не несёт оттенка —
+                        // семейный материал на нём невыразим. Честный отказ, НЕ тихая
+                        // подмена нейтральным тоном при флаге `family_hued=true`.
+                        RoleChroma::Neutral => {
+                            return Resolved::Unreachable(Unreachable::InvalidInput(
+                                "семейный материал требует хроматического подтона \
+                                 таблицы (curve/tinted), у таблицы — ахроматический"
+                                    .to_string(),
+                            ));
+                        }
                     }
                 }
             };
