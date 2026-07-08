@@ -3,8 +3,15 @@
 import type { LabColors, ThemeName } from "./pkg/labcolors.js";
 
 export interface AdaptThemeOptions {
-  /** An initialised engine — needs `resolveTheme` AND `recheckContrast`. */
-  colors: Pick<LabColors, "resolveTheme" | "recheckContrast">;
+  /**
+   * An initialised engine — needs `resolveTheme` AND `recheckContrast`.
+   * `recheckContrastMulti` is optional: when present, a multi-sample backdrop
+   * is rechecked in ONE batched call per frame (byte-identical to the
+   * per-sample loop, locked by the wasm boundary parity test); when absent,
+   * the controller falls back to N `recheckContrast` calls.
+   */
+  colors: Pick<LabColors, "resolveTheme" | "recheckContrast"> &
+    Partial<Pick<LabColors, "recheckContrastMulti">>;
   theme: ThemeName;
   /**
    * Explicit effective background, overriding the ancestor-composite. A single

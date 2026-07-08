@@ -546,3 +546,115 @@ test("rejects a colours engine missing recheckContrast", () => {
     TypeError,
   );
 });
+
+// ── batch recheck (recheckContrastMulti) wiring ──────────────────────────────
+// The controller collapses the multi-sample worst-case loop into ONE engine call
+// when the engine exposes `recheckContrastMulti`. These tests prove the batch
+// path is BEHAVIOURALLY identical to the per-sample fallback (same worstIdx, same
+// re-solve target, same applied DOM), and that the batch method is actually used.
+
+// A batch-capable fake: same per-bg Lc data as `fakeColors`, plus a
+// `recheckContrastMulti` that assembles the background-major flat buffer the WASM
+// engine returns. Records how many per-sample vs batch calls it served, so a test
+// can prove the multi path (not the loop) ran.
+function fakeColorsBatch(initial) {
+  const base = fakeColors(initial);
+  let perSampleCalls = 0;
+  let multiCalls = 0;
+  const perSample = base.recheckContrast;
+  return {
+    ...base,
+    perSampleCalls: () => perSampleCalls,
+    multiCalls: () => multiCalls,
+    recheckContrast(bg, fgs, theme) {
+      perSampleCalls++;
+      return perSample(bg, fgs, theme);
+    },
+    // Background-major: sample s, foreground i at (s * fgs.length + i) * 2.
+    recheckContrastMulti(bgs, fgs, theme) {
+      multiCalls++;
+      const out = [];
+      for (const bg of bgs) {
+        const flat = perSample(bg, fgs, theme);
+        for (const v of flat) out.push(v);
+      }
+      return out;
+    },
+  };
+}
+
+function batchHarness(colors, opts = {}) {
+  const el = fakeElement();
+  let bg = opts.background ? undefined : "#FFFFFF";
+  let now = 1000;
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: opts.background ?? (() => bg),
+    target: el,
+    now: () => now,
+    win: {},
+    easeMs: 100,
+    sustainMs: 120,
+    dwellMs: 250,
+    dropFraction: 0.2,
+    ...opts,
+  });
+  return { ctrl, colors, el, setNow: (n) => (now = n), advance: (ms) => (now += ms) };
+}
+
+test("batch engine uses recheckContrastMulti for a multi-sample frame, not the per-sample loop", () => {
+  let samples = ["#FFFFFF", "#FAFAFA"];
+  const colors = fakeColorsBatch(oneRole("#000000", 100));
+  const h = batchHarness(colors, { background: () => samples });
+  const perAtStart = colors.perSampleCalls();
+  const multiAtStart = colors.multiCalls();
+  // A frame that rechecks a >1-sample backdrop must go through the batch call.
+  samples = ["#FFFFFF", "#202020"];
+  h.ctrl.tick();
+  assert.ok(colors.multiCalls() > multiAtStart, "multi-sample recheck must call recheckContrastMulti");
+  assert.equal(
+    colors.perSampleCalls(),
+    perAtStart,
+    "multi-sample recheck must NOT fall back to the per-sample recheckContrast loop",
+  );
+});
+
+test("batch path is byte-identical to the fallback loop: same worstIdx, re-solve target, applied DOM", () => {
+  // Same scenario, two engines: one batch-capable, one fallback-only. The chosen
+  // worst sample, the re-solve background, and the final applied vars must match.
+  const scenario = (colors) => {
+    let samples = ["#FFFFFF", "#FAFAFA"];
+    const h = batchHarness(colors, { background: () => samples });
+    // A varying backdrop where the SECOND-position sample is the hardest.
+    colors.setRecheckByBg({ "#FFFFFF": [100], "#101010": [40] });
+    samples = ["#FFFFFF", "#101010"];
+    h.ctrl.tick(); // sustain window not yet elapsed
+    h.advance(400); // clear sustainMs + dwellMs
+    h.ctrl.tick(); // sustained breach → re-solve against the worst sample
+    return {
+      resolveBg: colors.lastResolveBg(),
+      resolveCount: colors.resolveCount(),
+      applied: h.el.props.get("--lab-label-primary"),
+    };
+  };
+  const batch = scenario(fakeColorsBatch(oneRole("#000000", 100)));
+  const fallback = scenario(fakeColors(oneRole("#000000", 100)));
+  assert.equal(batch.resolveBg, fallback.resolveBg, "same re-solve target (same worstIdx chosen)");
+  assert.equal(batch.resolveBg, "#101010", "re-solve targets the hardest sample");
+  assert.equal(batch.resolveCount, fallback.resolveCount, "same number of re-solves");
+  assert.equal(batch.applied, fallback.applied, "same applied var after the re-solve");
+});
+
+test("batch engine still uses the per-sample path for a single-sample backdrop", () => {
+  const colors = fakeColorsBatch(oneRole("#000000", 100));
+  const h = batchHarness(colors, { background: () => ["#FFFFFF"] });
+  const multiAtStart = colors.multiCalls();
+  colors.setRecheckLc([95]);
+  h.ctrl.tick();
+  assert.equal(
+    colors.multiCalls(),
+    multiAtStart,
+    "one sample must not use the batch call (nothing to collapse)",
+  );
+});

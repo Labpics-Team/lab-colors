@@ -5,8 +5,9 @@
 // asserts every `recheckContrast` result is bit-for-bit what the pre-change
 // engine produced — the lock that the transcendental-eliding fast path (WCAG from
 // the linear decode) changed performance and nothing else. It also checks that
-// the `_recheckContrastMulti` prototype equals per-sample `recheckContrast`
-// exactly, and that a handful of `resolveTheme` vars are unmoved (the
+// the public `recheckContrastMulti` batch call equals N per-sample
+// `recheckContrast` calls exactly (the byte-identity the controller's batch path
+// relies on), and that a handful of `resolveTheme` vars are unmoved (the
 // `contrast_ratio` refactor must not shift solver output).
 //
 // Requires the built `pkg/` (CI runs `npm test` after `wasm-pack build`). Skips
@@ -54,26 +55,31 @@ test("wasm recheck boundary is byte-identical to the pre-optimisation golden", a
     }
   }
 
-  // (2) The `_recheckContrastMulti` prototype (if present — it is an unlisted,
-  //     owner-decision method that may be removed) must equal per-sample recheck,
-  //     byte-for-byte, over a 3-sample backdrop of the resolved role set.
+  // (2) The public `recheckContrastMulti` batch call must equal per-sample
+  //     `recheckContrast`, byte-for-byte, over a 3-sample backdrop of the resolved
+  //     role set. This is the byte-identity the controller's batch path depends on,
+  //     so it is a hard assertion (not an `if present` skip) — the promoted method
+  //     is part of the public engine surface.
   const res = engine.resolveTheme("#3A3A3C", "dark");
   const fgSet = Object.values(res.roles)
     .filter((r) => r.kind === "color")
     .map((r) => r.hex);
   const samples = ["#38383A", "#404042", "#2E2E30"];
-  if (typeof engine._recheckContrastMulti === "function") {
-    const multi = engine._recheckContrastMulti(samples, fgSet, "dark");
-    assert.equal(multi.length, samples.length * fgSet.length * 2);
-    for (let s = 0; s < samples.length; s++) {
-      const per = engine.recheckContrast(samples[s], fgSet, "dark");
-      for (let i = 0; i < per.length; i++) {
-        const base = s * fgSet.length * 2 + i;
-        assert.ok(
-          Object.is(multi[base], per[i]),
-          `multi sample ${s} index ${i}: ${per[i]} vs ${multi[base]}`,
-        );
-      }
+  assert.equal(
+    typeof engine.recheckContrastMulti,
+    "function",
+    "engine must expose the public recheckContrastMulti batch method",
+  );
+  const multi = engine.recheckContrastMulti(samples, fgSet, "dark");
+  assert.equal(multi.length, samples.length * fgSet.length * 2);
+  for (let s = 0; s < samples.length; s++) {
+    const per = engine.recheckContrast(samples[s], fgSet, "dark");
+    for (let i = 0; i < per.length; i++) {
+      const base = s * fgSet.length * 2 + i;
+      assert.ok(
+        Object.is(multi[base], per[i]),
+        `multi sample ${s} index ${i}: ${per[i]} vs ${multi[base]}`,
+      );
     }
   }
 

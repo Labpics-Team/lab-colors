@@ -101,11 +101,10 @@ const recheck3 = () => {
   for (let s = 0; s < 3; s++) last = engine.recheckContrast(SAMPLES[s], FGS, THEME);
   return last;
 };
-// PROTOTYPE: the same 3-sample frame as `recheck3`, but batched into ONE call so
-// each foreground's CAM16 forward is computed once and shared across samples.
-// Byte-identical to `recheck3`; measured to size the win of a batch API (owner
-// decision — not wired to any runtime).
-const recheckMulti3 = () => engine._recheckContrastMulti(SAMPLES, FGS, THEME);
+// The same 3-sample frame as `recheck3`, but batched into ONE call so each
+// foreground's CAM16 forward is computed once and shared across samples.
+// Byte-identical to `recheck3`; the public batch API the controller now uses.
+const recheckMulti3 = () => engine.recheckContrastMulti(SAMPLES, FGS, THEME);
 // Re-solve, cache HIT (same bg repeatedly): pays only the JS-object projection.
 const resolveHit = () => engine.resolveTheme(SOLVE_BG, THEME);
 // Re-solve, cache MISS (distinct bg each call): full solve + projection. Sweep
@@ -130,7 +129,7 @@ console.log("call                              median ns   min ns   ns/role   al
 const plan = [
   ["recheckContrast ×1 (28 roles)", recheck1, 40, 20000, 40000, FGS.length],
   ["recheckContrast ×3 (28 roles)", recheck3, 40, 7000, 15000, FGS.length * 3],
-  ["_recheckMulti 3bg (proto)", recheckMulti3, 40, 7000, 15000, FGS.length * 3],
+  ["recheckContrastMulti 3bg", recheckMulti3, 40, 7000, 15000, FGS.length * 3],
   ["resolveTheme cache-hit", resolveHit, 25, 4000, 8000, 0],
   ["resolveTheme cache-miss", resolveMiss, 20, 1500, 4000, 0],
 ];
