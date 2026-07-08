@@ -885,6 +885,7 @@ mod wave2_e_locks {
 #[cfg(test)]
 mod whittle_crispening_metric {
     use super::{CurveParams, NeutralCurve};
+    use crate::curve::ColorCurve;
     use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
 
     /// Физическая люминанса Y (CIE XYZ, D65) hex-цвета — величина, над которой
