@@ -1,3 +1,13 @@
+//! Viewing conditions (surround parameters) for the CIECAM16 forward pass.
+//!
+//! Holds the per-observer constants — adapting luminance, background factor,
+//! and the surround triplet `(F, c, N_c)` — that [`crate::spaces::cam16`]
+//! consumes. The surround presets are CIECAM16 Table 1 (average
+//! `[1.0, 0.69, 1.0]`, dim `[0.9, 0.59, 0.9]`), as tabulated in Li et al.
+//! 2017, DOI [10.1002/col.22131](https://doi.org/10.1002/col.22131) and
+//! CIE 248:2022. Values are transcribed directly into the source; there is no
+//! runtime dependency on a colour-science crate.
+
 use crate::spaces::srgb::D65_WHITE;
 // `OnceLock` кеширует фингерпринты пресетов только внутри `preset_index`, который
 // с главы #64 стал test-only (единственный продакшн-потребитель, grey-axis LUT,

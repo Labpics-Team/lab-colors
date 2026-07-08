@@ -4,6 +4,14 @@
 //! to cone responses after chromatic adaptation, plus the single CIECAM16
 //! forward pass `XYZ → (J, M, h)` that both [`crate::lcs`] and [`crate::lpc`]
 //! build on, and the CAM16-UCS rescaling helpers (`J ↔ J'`, `M ↔ M'`).
+//!
+//! Source: the CAM16 post-adaptation compression of Li et al. 2017,
+//! "Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS",
+//! DOI [10.1002/col.22131](https://doi.org/10.1002/col.22131), later
+//! formalised as the CIECAM16 model in CIE 248:2022. (Not CIE 170-2:2015,
+//! which is the cone-fundamental standard and does not specify CAM16.) The
+//! constants are transcribed directly into the source; there is no runtime
+//! dependency on a colour-science crate.
 
 use crate::spaces::cat16;
 use crate::spaces::vc::ViewingConditions;
