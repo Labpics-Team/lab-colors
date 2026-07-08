@@ -276,6 +276,27 @@ impl NeutralCurve {
         LcsColor::new(jp, h_ok, s, h_cam)
     }
 
+    /// `n` равноотстоящих точек кривой, концы включительно; `n == 1` даёт
+    /// базовый якорь (t = 0.5) — середина полезнее произвольного конца.
+    pub fn sample(&self, n: usize) -> Vec<LcsColor> {
+        if n == 0 {
+            return Vec::new();
+        }
+        if n == 1 {
+            return vec![self.at(0.5)];
+        }
+        (0..n).map(|i| self.at(i as f64 / (n - 1) as f64)).collect()
+    }
+
+    /// Как [`NeutralCurve::sample`], но сразу в hex через viewing conditions
+    /// кривой — чтобы вызывающий не мог случайно сконвертировать под чужие VC.
+    pub fn sample_hex(&self, n: usize) -> Vec<String> {
+        self.sample(n)
+            .iter()
+            .map(|c| c.to_hex_with_vc(&self.vc))
+            .collect()
+    }
+
     /// The viewing conditions used to build this curve.
     pub fn vc(&self) -> &ViewingConditions {
         &self.vc
@@ -381,7 +402,6 @@ impl crate::curve::ColorCurve for NeutralCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::ColorCurve;
 
     fn default_curve() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()
@@ -802,7 +822,6 @@ mod exposure_locks {
 #[cfg(test)]
 mod wave2_e_locks {
     use super::{CurveParams, NeutralCurve};
-    use crate::curve::ColorCurve;
     use crate::spaces::oklab::srgb_linear_to_oklab;
     use crate::spaces::srgb::srgb_from_hex;
 

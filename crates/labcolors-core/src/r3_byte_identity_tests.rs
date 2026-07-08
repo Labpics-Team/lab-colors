@@ -44,7 +44,6 @@
 
 use crate::{
     BgInput, Resolved, Role, RoleTable, ViewingConditions,
-    curve::ColorCurve,
     neutral::NeutralCurve,
     resolve_set,
     scale::AccentCurve,
