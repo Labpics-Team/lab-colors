@@ -1,0 +1,41 @@
+[package]
+name = "labcolors-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Нативный (UniFFI) биндинг поверх ядра labcolors-core — доказательство ДИНАМИЧНОГО рантайм-ядра на Apple-платформах. Экспортирует рантайм-контраст-ядро (контраст/резолв/лестницы/подложка→α/мутность) в Swift."
+
+[lib]
+# Имя lib-артефакта (без префикса пакета): даёт `liblabcolors.{a,dylib}` и
+# чистый UniFFI-namespace `labcolors` (setup_scaffolding! по имени крейта) →
+# генерённые `labcolors.swift` / `labcolorsFFI.h`, а не `labcolors_ffi*`.
+name = "labcolors"
+# staticlib — линкуется в Swift (.a, без рантайм-поиска dylib при `swift test`);
+# cdylib — из него uniffi-bindgen генерит биндинги в library-mode (поддерживает
+# proc-macro); lib — держит крейт нативно тестируемым `cargo test`.
+crate-type = ["staticlib", "cdylib", "lib"]
+
+# Бинарь генерации биндингов. `uniffi_bindgen_main` доступен только при фиче
+# `uniffi/cli`, поэтому bin собирается лишь с `--features=uniffi/cli` на момент
+# генерации — clap НЕ попадает в постоянный cdylib.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi_bindgen.rs"
+
+[dependencies]
+labcolors-core = { path = "../labcolors-core" }
+# Нативная FFI-обвязка. Библиотечная зависимость БЕЗ фичи cli (иначе clap течёт
+# в артефакт); cli включается только через passthrough-фичу ниже на генерации.
+uniffi = { version = "0.32" }
+# Derive-only proc-macro: даёт `ColorError` реализацию `std::error::Error`
+# (требование `uniffi::Error`) без рантайм-кода. thiserror УЖЕ в дереве (wasm).
+thiserror = "2"
+
+[features]
+# Passthrough к `uniffi/cli`: включает CLI-бинарь `uniffi-bindgen` (тянет clap).
+# ВЫКЛ по умолчанию, поэтому воркспейс-гейты CI (build/clippy/test --workspace)
+# собирают bin как заглушку и НЕ тянут clap. Генерация биндингов включает её:
+# `cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- generate …`.
+cli = ["uniffi/cli"]

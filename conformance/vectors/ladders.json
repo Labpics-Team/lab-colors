@@ -1,0 +1,127 @@
+[
+  {
+    "position": "label-primary",
+    "alphaLight": 1.0,
+    "alphaDark": 1.0
+  },
+  {
+    "position": "label-secondary",
+    "alphaLight": 0.722,
+    "alphaDark": 0.722
+  },
+  {
+    "position": "label-tertiary",
+    "alphaLight": 0.522,
+    "alphaDark": 0.522
+  },
+  {
+    "position": "label-quaternary",
+    "alphaLight": 0.322,
+    "alphaDark": 0.322
+  },
+  {
+    "position": "fill-primary",
+    "alphaLight": 0.122,
+    "alphaDark": 0.122
+  },
+  {
+    "position": "fill-secondary",
+    "alphaLight": 0.078,
+    "alphaDark": 0.078
+  },
+  {
+    "position": "fill-tertiary",
+    "alphaLight": 0.039,
+    "alphaDark": 0.039
+  },
+  {
+    "position": "fill-quaternary",
+    "alphaLight": 0.02,
+    "alphaDark": 0.02
+  },
+  {
+    "position": "border-base",
+    "alphaLight": 0.2,
+    "alphaDark": 0.2
+  },
+  {
+    "position": "border-soft",
+    "alphaLight": 0.122,
+    "alphaDark": 0.122
+  },
+  {
+    "position": "border-strong",
+    "alphaLight": 1.0,
+    "alphaDark": 1.0
+  },
+  {
+    "position": "focus-ring",
+    "alphaLight": 1.0,
+    "alphaDark": 1.0
+  },
+  {
+    "position": "glow",
+    "alphaLight": 0.522,
+    "alphaDark": 0.522
+  },
+  {
+    "position": "skeleton-base",
+    "alphaLight": 0.078,
+    "alphaDark": 0.122
+  },
+  {
+    "position": "skeleton-highlight",
+    "alphaLight": 0.039,
+    "alphaDark": 0.039
+  },
+  {
+    "position": "neutral-fill-primary",
+    "alphaLight": 0.2,
+    "alphaDark": 0.361
+  },
+  {
+    "position": "neutral-fill-secondary",
+    "alphaLight": 0.161,
+    "alphaDark": 0.322
+  },
+  {
+    "position": "neutral-fill-tertiary",
+    "alphaLight": 0.122,
+    "alphaDark": 0.239
+  },
+  {
+    "position": "neutral-fill-quaternary",
+    "alphaLight": 0.078,
+    "alphaDark": 0.161
+  },
+  {
+    "position": "neutral-border-base",
+    "alphaLight": 0.161,
+    "alphaDark": 0.2
+  },
+  {
+    "position": "neutral-border-soft",
+    "alphaLight": 0.078,
+    "alphaDark": 0.122
+  },
+  {
+    "position": "shadow-minor",
+    "alphaLight": 0.012,
+    "alphaDark": 0.02
+  },
+  {
+    "position": "shadow-ambient",
+    "alphaLight": 0.02,
+    "alphaDark": 0.039
+  },
+  {
+    "position": "shadow-penumbra",
+    "alphaLight": 0.039,
+    "alphaDark": 0.122
+  },
+  {
+    "position": "shadow-major",
+    "alphaLight": 0.122,
+    "alphaDark": 0.2
+  }
+]

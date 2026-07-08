@@ -1,0 +1,87 @@
+name: Native conformance (Swift)
+
+# Нативная стратегия (#84): доказательство ДИНАМИЧНОГО рантайм-ядра.
+# Swift зовёт ядро Rust В РАНТАЙМЕ через UniFFI; conformance-пак прогоняется
+# против выхода FFI.
+#
+# ВАЖНО (владелец, 2026-07-08): GitHub-hosted macOS-раннеры платные и ИСКЛЮЧЕНЫ
+# навсегда — биллинг чиниться не будет. Поэтому Swift валидируется на
+# self-hosted Linux-раннере (de-02) в официальном swift-контейнере — тот же
+# UniFFI-биндинг, тот же пак, ядро под x86_64-unknown-linux-gnu. Кросс-платформа
+# держится толерантностью DRIFT_TOL=1e-6 (см. conformance/README.md).
+#
+# Линтеры/аудит/wasm/основной `cargo test --workspace` (включая толерантный
+# раннер-референс пака на Linux) — в ci.yml. Здесь — Swift-слой.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # АКТИВНЫЙ ГЕЙТ: Swift-conformance на self-hosted Linux через swift-контейнер.
+  # Зеркало проверенного локального прогона (bindings/swift/ci/run-conformance.sh).
+  swift-conformance-linux:
+    name: swift conformance (self-hosted Linux, swift container)
+    runs-on: [self-hosted, Linux, X64]
+    # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
+    # Форк-PR пропускается; push в main и same-repo PR — гоняются.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Официальный swift:6.1 (Ubuntu). Внутри ставится rustup, ядро собирается
+      # под Linux, генерятся Swift-биндинги, swift test прогоняет пак. Скрипт —
+      # единый источник с локальным прогоном (bindings/swift/ci/run-conformance.sh).
+      # $GITHUB_WORKSPACE монтируется read-only; сборка идёт в /work в контейнере.
+      - name: swift conformance in swift:6.1 container
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/src:ro \
+            swift:6.1 \
+            bash /src/bindings/swift/ci/run-conformance.sh
+
+  # ССЫЛОЧНАЯ джоба (НЕ активный гейт): нативный macOS/arm64. Требует ПЛАТНЫХ
+  # GitHub-hosted macOS-минут, которые владелец исключил навсегда — поэтому
+  # гейтирована `workflow_dispatch` и НЕ запускается на PR/push (не блокирует).
+  # Оставлена как задокументированный путь на случай появления бесплатного
+  # macOS-раннера (напр. self-hosted Mac). Активная валидация — job выше.
+  swift-conformance-macos-reference:
+    name: swift test (macOS arm64 — ручной запуск, платные раннеры off)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: versions
+        run: |
+          swift --version
+          rustc --version
+      - name: cargo test (reference runner + ffi units)
+        run: cargo test -p labcolors-conformance -p labcolors-ffi
+      - name: build labcolors-ffi (+ bindgen bin)
+        run: cargo build -p labcolors-ffi --features cli
+      - name: generate Swift bindings
+        run: |
+          cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- \
+            generate --library target/debug/liblabcolors.dylib \
+            --language swift --out-dir bindings/swift/generated
+      - name: arrange generated bindings
+        run: |
+          set -euo pipefail
+          gen=bindings/swift/generated
+          cp "$gen/labcolors.swift"        bindings/swift/Sources/LabColors/labcolors.swift
+          cp "$gen/labcolorsFFI.h"         bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
+          cp "$gen/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
+      - name: swift test (conformance pack vs FFI)
+        working-directory: bindings/swift
+        run: swift test -Xlinker -L"$GITHUB_WORKSPACE/target/debug"
