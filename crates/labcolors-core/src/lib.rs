@@ -34,6 +34,9 @@ mod agnostic_gates;
 #[cfg(test)]
 mod one_levelness_tests;
 
+#[cfg(test)]
+mod lcs_hue_dimensionality_tests;
+
 // Built-in-showcase behaviour tests, relocated in-crate (ADR-0001 PR-c): the
 // built-in `Role`/`RoleTable`/`resolve_set` cluster is now `#[cfg(test)]`-only,
 // so these tests — which exercise it as the byte-identity oracle — must live
