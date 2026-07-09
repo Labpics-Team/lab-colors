@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Framework-agnostic contrast engine: resolve accessible, perceptually-anchored colour roles for any background. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT",
