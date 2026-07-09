@@ -118,14 +118,24 @@ fn hk_lifts_saturated_blue_via_public_lpc() {
 // Oklab — Ottosson (2020) / CSS Color 4 published landmarks (public `oklch_from_hex`).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// sRGB white maps to Oklab `L = 1`, chroma ≈ 0 — Ottosson's defining constraint
-/// (XYZ→Oklab table row 1). The published model leaves a ~6.5e-9 offset in L, so
-/// the tolerance is 1e-6, not exact.
+/// Белый sRGB переходит в Oklab `L = 1`, `C = 0` — определяющий инвариант
+/// Ottosson (первая строка таблицы XYZ→Oklab). Согласованная матричная пара
+/// оставляет только ошибку округления одной операции f64, а не систематическое
+/// расхождение независимо округлённых таблиц.
 #[test]
 fn oklab_white_is_l1_c0() {
-    let [l, c, _h] = oklch_from_hex("#FFFFFF").expect("white is valid");
-    assert!((l - 1.0).abs() < 1e-6, "white L must be 1, got {l}");
-    assert!(c < 1e-3, "white chroma must be ≈0, got {c}");
+    let coordinates = oklch_from_hex("#FFFFFF").expect("white is valid");
+    assert!(
+        (coordinates.l - 1.0).abs() <= f64::EPSILON,
+        "L белого должна быть 1, получено {}",
+        coordinates.l
+    );
+    assert!(
+        coordinates.c <= f64::EPSILON,
+        "хрома белого должна быть 0, получено {}",
+        coordinates.c
+    );
+    assert_eq!(coordinates.h_deg, None, "hue белого не определена");
 }
 
 /// The Oklab hue angles of the sRGB primaries are the published canonical values
@@ -135,7 +145,10 @@ fn oklab_white_is_l1_c0() {
 #[test]
 fn oklch_primary_hues() {
     for (hex, want_h) in [("#FF0000", 29.23), ("#00FF00", 142.5), ("#0000FF", 264.05)] {
-        let h = oklch_from_hex(hex).expect("primary is valid")[2];
+        let h = oklch_from_hex(hex)
+            .expect("primary is valid")
+            .h_deg
+            .expect("primary has hue");
         let dh = ((h - want_h + 180.0).rem_euclid(360.0) - 180.0).abs();
         assert!(
             dh < 1.0,
@@ -143,9 +156,11 @@ fn oklch_primary_hues() {
         );
     }
     // Sign contract per Ottosson: red has a>0, blue has b<0.
-    let [_, cr, hr] = oklch_from_hex("#FF0000").unwrap();
+    let red = oklch_from_hex("#FF0000").unwrap();
+    let (cr, hr) = (red.c, red.h_deg.unwrap());
     assert!(cr * hr.to_radians().cos() > 0.0, "red must have a > 0");
-    let [_, cb, hb] = oklch_from_hex("#0000FF").unwrap();
+    let blue = oklch_from_hex("#0000FF").unwrap();
+    let (cb, hb) = (blue.c, blue.h_deg.unwrap());
     assert!(cb * hb.to_radians().sin() < 0.0, "blue must have b < 0");
 }
 
@@ -352,9 +367,9 @@ fn render_fixture() -> String {
     s
 }
 
-/// GENERATOR (run once with `--ignored`): writes the committed JS-parity fixture
-/// from the live core emitter. The committed file is the artifact; the anti-drift
-/// test below guards it, and `reference-vectors.test.mjs` consumes it.
+/// Генератор (запускается вручную с `--ignored`) записывает JS-фикстуру из
+/// текущего эмиттера ядра. Зафиксированный файл остаётся проверяемым артефактом:
+/// тест ниже ловит его дрейф, а `reference-vectors.test.mjs` проверяет декодирование.
 ///
 /// `cargo test -p labcolors-core --test reference_vectors emit_oklch_core_vectors_fixture -- --ignored`
 #[test]
@@ -371,10 +386,14 @@ struct FxLine {
     atok: String,
     l: f64,
     c: f64,
-    h: f64,
+    h: Option<f64>,
 }
 
-/// Parse one `#RRGGBB|atok|oklch(L% C H[ / A])` fixture line.
+/// Разбирает одну строку `#RRGGBB|atok|oklch(L% C H[ / A])`.
+///
+/// Hue хранится как `Option`: CSS Color 4 требует `none` у автоматически
+/// полученного powerless-компонента. Подмена `none` числом скрыла бы различие
+/// между неопределённым оттенком ахромата и настоящим направлением 0°.
 fn parse_fixture_line(line: &str) -> FxLine {
     let mut parts = line.splitn(3, '|');
     let hex = parts.next().expect("hex field").to_string();
@@ -386,39 +405,40 @@ fn parse_fixture_line(line: &str) -> FxLine {
         .unwrap_or_else(|| panic!("malformed css: {css}"));
     // Drop the alpha suffix (validated separately via `atok`).
     let lch = inner.split(" / ").next().unwrap();
-    let nums: Vec<f64> = lch
-        .split_whitespace()
-        .map(|t| {
-            t.trim_end_matches('%')
+    let mut components = lch.split_whitespace();
+    let l = components
+        .next()
+        .expect("компонент L")
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .expect("числовой компонент L");
+    let c = components
+        .next()
+        .expect("компонент C")
+        .parse::<f64>()
+        .expect("числовой компонент C");
+    let h_token = components.next().expect("компонент H");
+    assert!(components.next().is_none(), "ожидались ровно L C H в {css}");
+    let h = if h_token == "none" {
+        None
+    } else {
+        Some(
+            h_token
                 .parse::<f64>()
-                .expect("numeric component")
-        })
-        .collect();
-    assert_eq!(nums.len(), 3, "expected L C H in {css}");
-    FxLine {
-        hex,
-        atok,
-        l: nums[0],
-        c: nums[1],
-        h: nums[2],
-    }
+                .expect("числовой компонент H или none"),
+        )
+    };
+    FxLine { hex, atok, l, c, h }
 }
 
-/// ANTI-DRIFT: the committed fixture must match a fresh render from the live
-/// `oklch_css_from_hex` — same count, same order, same seed hexes and alpha
-/// tokens, and numeric components equal to within one printed-digit step.
+/// Защита от дрейфа: фикстура обязана совпадать со свежей эмиссией
+/// `oklch_css_from_hex` по числу, порядку, исходным hex, alpha и состоянию hue.
 ///
-/// Structural fields (hex, alpha token, line count/order) are compared EXACTLY.
-/// The numeric L/C/H are compared with a tolerance of 2× the emitter's printed
-/// granularity (L% `.5f`→2e-5, C `.6f`→2e-6, H `.3f`→2e-3): the ONLY thing that
-/// can move a value inside that band is a last-digit rounding flip from a 1-ULP
-/// `cbrt`/`atan2`/`powf` difference between the platform that generated the
-/// committed file and the platform running CI — never a real change (a formula
-/// or precision regression moves values by orders more, well outside the band).
-/// The HARD correctness gate stays exact: `oklch::round_trip_is_byte_exact_*`
-/// (Rust) and `reference-vectors.test.mjs` (JS decodes each committed string to
-/// the seed bytes, platform-independently). If this fails, regenerate with
-/// `emit_oklch_core_vectors_fixture --ignored` and re-run the JS parity.
+/// Структурные поля и `None`/числовой hue сравниваются точно. Числа L/C/H — с
+/// допуском двух единиц последнего печатаемого разряда: этого достаточно только
+/// для межплатформенного переворота округления на последней цифре, но не для
+/// изменения формулы. Жёсткую корректность отдельно держат байтовые round-trip
+/// тесты Rust и JS.
 #[test]
 fn oklch_core_vectors_fixture_is_fresh() {
     let path = format!("{}{FIXTURE_REL}", env!("CARGO_MANIFEST_DIR"));
@@ -441,15 +461,25 @@ fn oklch_core_vectors_fixture_is_fresh() {
     for (i, (a, b)) in c.iter().zip(f.iter()).enumerate() {
         let (ca, cb) = (parse_fixture_line(a), parse_fixture_line(b));
         let n = i + 1;
-        // Structure: exact.
-        assert_eq!(ca.hex, cb.hex, "line {n}: seed hex drifted");
-        assert_eq!(ca.atok, cb.atok, "line {n}: alpha token drifted");
-        // Numeric: within one printed-digit step (cross-platform ULP guard).
+        // Структура сравнивается точно: она не зависит от округления f64.
+        assert_eq!(ca.hex, cb.hex, "строка {n}: изменился исходный hex");
+        assert_eq!(ca.atok, cb.atok, "строка {n}: изменился alpha-токен");
+        // Для чисел разрешён только межплатформенный переворот последней цифры.
         assert!(
             (ca.l - cb.l).abs() < 2e-5,
-            "line {n}: L% drifted {a} vs {b}"
+            "строка {n}: изменился L%: {a} против {b}"
         );
-        assert!((ca.c - cb.c).abs() < 2e-6, "line {n}: C drifted {a} vs {b}");
-        assert!((ca.h - cb.h).abs() < 2e-3, "line {n}: H drifted {a} vs {b}");
+        assert!(
+            (ca.c - cb.c).abs() < 2e-6,
+            "строка {n}: изменилась C: {a} против {b}"
+        );
+        match (ca.h, cb.h) {
+            (None, None) => {}
+            (Some(left), Some(right)) => assert!(
+                (left - right).abs() < 2e-3,
+                "строка {n}: изменился H: {a} против {b}"
+            ),
+            _ => panic!("строка {n}: изменилось состояние powerless hue: {a} против {b}"),
+        }
     }
 }

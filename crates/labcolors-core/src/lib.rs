@@ -70,7 +70,11 @@ pub use accent_surface::{
 };
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
-    DefectContext, Theme, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
+    ContextualSrgbGamutAnalysisV1, DefectContext, DirtAnalysisV2, DirtApplicability, DirtClassV2,
+    MutednessComparisonV2, MutednessRelationV2, SrgbGamutGeometryV1, Theme,
+    analyze_dirt_for_theme_v2, analyze_dirt_v2, analyze_srgb_gamut_hex_in_context_v1,
+    analyze_srgb_gamut_hex_v1, analyze_srgb_gamut_linear_v1, analyze_srgb_gamut_oklch_v1,
+    compare_mutedness_v2, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
     muddiness_in_context, muddiness_oklch, n_pure,
 };
 pub use config::{
@@ -80,8 +84,8 @@ pub use config::{
 };
 pub use curve::ColorCurve;
 pub use glow::{
-    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_SUBTLE_DJ, GlowSolve, glow_layers_from_source,
-    screen_layer_over_encoded, solve_screen_alpha_for_dj,
+    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_SUBTLE_DJ, GlowLayers, GlowSolve, glow_layers_from_source,
+    glow_layers_report_from_source, screen_layer_over_encoded, solve_screen_alpha_for_dj,
 };
 pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
@@ -105,7 +109,9 @@ pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
     Unreachable, solve, solve_many,
 };
-pub use spaces::oklch::{oklch_css_from_hex, oklch_from_hex};
+pub use spaces::oklch::{
+    OKLCH_POWERLESS_CHROMA, OklchCoordinates, oklch_css_from_hex, oklch_from_hex,
+};
 pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
 pub use spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 pub use spaces::vc::ViewingConditions;

@@ -149,7 +149,8 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
     Ok(out)
 }
 
-/// Единая CSS-форма эмиссии: `oklch(L% C H)` / `oklch(L% C H / A)`.
+/// Единая CSS-форма эмиссии: hue — число только у цветного стимула, а у
+/// powerless chroma третья компонента честно равна `none`; альфа добавляет `/ A`.
 /// Байт-точность реконструкции доказана round-trip тестом ядра на решётке
 /// куба. Hex к этому месту валиден по построению (солвер/лестница), но при
 /// невозможном парсе — честная структурная ошибка, НЕ тихая подмена формы:
@@ -339,6 +340,20 @@ mod tests {
             core = css_core,
         );
         assert_eq!(json, expected);
+    }
+
+    /// Ахроматический hue отсутствует физически, поэтому WASM-граница обязана
+    /// сохранить `none` ядра и не превращать missing-компоненту обратно в ноль.
+    #[test]
+    fn achromatic_css_keeps_missing_hue() {
+        assert_eq!(
+            oklch_css("#FFFFFF", None).unwrap(),
+            "oklch(100.00000% 0.000000 none)"
+        );
+        assert_eq!(
+            oklch_css("#000000", Some(0.5)).unwrap(),
+            "oklch(0.00000% 0.000000 none / 0.5)"
+        );
     }
 
     /// Материал (#89) проецируется в контрактные CSS-переменные: `--lab-<role>` =

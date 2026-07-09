@@ -1,115 +1,161 @@
-//! A contract cache for resolved theme sets, keyed by `(bgHex, theme, table
-//! fingerprint)`.
+//! Контрактный кэш последнего резолва в каждом публичном слоте темы.
 //!
-//! Re-solving the same background under the same theme is the common case while
-//! a tool tweaks a colour, and a resolve sweep is real work. The cache returns
-//! the byte-identical prior result for a repeated key. It is *contractual*: the
-//! key carries every input that can change the output, so a hit is always
-//! correct, never stale.
+//! Полный результат содержит весь набор ролей и его JSON-проекцию, поэтому
+//! число произвольных фонов нельзя превращать в число одновременно живых
+//! результатов. Здесь нет лимита «на глаз» и порога массовой очистки: структура
+//! имеет ровно по одному слоту на каждый вариант [`Theme`]. Новый фон заменяет
+//! предыдущий результат только своей темы, а остальные темы не охлаждаются.
 //!
-//! The table fingerprint is the third key component. A loaded config
-//! (`loadConfig`) carries a real fingerprint — an FNV-1a over its canonical DTO,
-//! computed in the engine and threaded into the key. Correctness across a config
-//! switch does not rest on that fingerprint being unique, though: `loadConfig`
-//! wholesale-clears the cache (see [`ContractCache::clear`]), so exactly one key
-//! namespace is ever live and a stale entry from another config cannot be served.
+//! Ключ хранит все входы, способные изменить результат. При успешной загрузке
+//! конфига движок дополнительно очищает все слоты, поэтому корректность при
+//! смене контракта не зависит от отсутствия коллизий 64-битного отпечатка.
 //!
-//! Single-threaded by design: WASM has no threads, so a `RefCell` interior is
-//! the right shared-mutability tool — no lock, no contention, no `Send` bound.
+//! WASM-движок однопоточный, поэтому `RefCell` даёт нужную внутреннюю
+//! изменяемость без блокировок и ложной гарантии `Send`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use crate::theme::Theme;
 
-/// A stable, arbitrary fingerprint used by the cache's own unit tests as a
-/// single key namespace. Production keys always carry a real config fingerprint
-/// (an FNV-1a over the canonical DTO, computed in the engine); this constant
-/// exists only so the cache tests can key on a fixed value.
+/// Стабильное пространство ключей для модульных тестов самого кэша.
 #[cfg(test)]
 pub(crate) const DEFAULT_TABLE_FINGERPRINT: u64 = 0;
 
-/// The full key of a cached resolve: every input that can change the output.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Полный ключ резолва внутри одного загруженного контракта.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheKey {
     bg_hex: String,
-    theme: &'static str,
+    theme: Theme,
     table_fingerprint: u64,
 }
 
 impl CacheKey {
-    /// Build a key from a normalised background hex, a theme, and a table
-    /// fingerprint. The hex is normalised by the caller (uppercased, `#`-led)
-    /// so `#fff` and `#FFFFFF` never split the cache once expanded upstream.
+    /// Создать ключ из уже нормализованного фона, темы и отпечатка таблицы.
+    /// Нормализация выполняется до обращения к кэшу, чтобы разные записи одного
+    /// `#RRGGBB` не занимали разные состояния.
     pub fn new(bg_hex: String, theme: Theme, table_fingerprint: u64) -> Self {
         Self {
             bg_hex,
-            theme: theme.key(),
+            theme,
             table_fingerprint,
         }
     }
 }
 
-/// A bounded, single-threaded memo from [`CacheKey`] to a cached value `V`.
+struct CacheEntry<V> {
+    key: CacheKey,
+    value: V,
+}
+
+/// Именованные поля намеренно повторяют варианты `Theme`: так ограничение
+/// памяти проверяется компилятором при каждом `match`, а не спрятано в числе.
+struct ThemeSlots<V> {
+    light: Option<CacheEntry<V>>,
+    dark: Option<CacheEntry<V>>,
+    light_ic: Option<CacheEntry<V>>,
+    dark_ic: Option<CacheEntry<V>>,
+}
+
+impl<V> ThemeSlots<V> {
+    fn empty() -> Self {
+        Self {
+            light: None,
+            dark: None,
+            light_ic: None,
+            dark_ic: None,
+        }
+    }
+
+    fn get(&self, theme: Theme) -> &Option<CacheEntry<V>> {
+        match theme {
+            Theme::Light => &self.light,
+            Theme::Dark => &self.dark,
+            Theme::LightIc => &self.light_ic,
+            Theme::DarkIc => &self.dark_ic,
+        }
+    }
+
+    fn get_mut(&mut self, theme: Theme) -> &mut Option<CacheEntry<V>> {
+        match theme {
+            Theme::Light => &mut self.light,
+            Theme::Dark => &mut self.dark,
+            Theme::LightIc => &mut self.light_ic,
+            Theme::DarkIc => &mut self.dark_ic,
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        [
+            self.light.is_some(),
+            self.dark.is_some(),
+            self.light_ic.is_some(),
+            self.dark_ic.is_some(),
+        ]
+        .into_iter()
+        .filter(|occupied| *occupied)
+        .count()
+    }
+}
+
+/// Однопоточный memo: один последний ключ и результат на каждую тему.
 ///
-/// Bounded memory is a correctness property under sustained load (ZERO
-/// SURPRISES): an unbounded map keyed on arbitrary backgrounds could grow
-/// without limit. At capacity the cache is cleared wholesale — a cold rebuild,
-/// never a wrong answer. `V` is cloned on a hit, so callers pass a cheaply
-/// cloneable value (e.g. an `Rc`-backed or already-serialised result).
+/// Объём служебной структуры постоянен, а число тяжёлых значений не может
+/// превысить число вариантов `Theme`. Поэтому последовательность из миллионов
+/// уникальных фонов не создаёт ни линейного роста, ни скачка очистки на N+1.
 pub struct ContractCache<V> {
-    entries: RefCell<HashMap<CacheKey, V>>,
-    capacity: usize,
+    slots: RefCell<ThemeSlots<V>>,
 }
 
 impl<V: Clone> ContractCache<V> {
-    /// A cache holding up to `capacity` distinct keys before a wholesale clear.
-    ///
-    /// `capacity` must be at least 1; a zero-capacity cache is a configuration
-    /// error (it could never hold the entry it just built), so it is rejected
-    /// up front rather than degrading silently.
-    pub fn new(capacity: usize) -> Self {
-        assert!(capacity > 0, "ContractCache capacity must be at least 1");
+    /// Создать пустые тематические слоты.
+    pub fn new() -> Self {
         Self {
-            entries: RefCell::new(HashMap::new()),
-            capacity,
+            slots: RefCell::new(ThemeSlots::empty()),
         }
     }
 
-    /// Return the cached value for `key`, computing and storing it with `build`
-    /// on a miss. `build` runs at most once per distinct key between clears.
+    /// Вернуть результат по ключу или вычислить и сохранить его при промахе.
+    /// Ошибка построения не занимает слот и не вытесняет предыдущий корректный
+    /// результат: это важно для атомарности невозможной/невалидной проекции.
     ///
-    /// # Reentrancy
-    /// `build` must not call `get_or_insert_with` on this same cache with the
-    /// same `key` — the entry is not inserted until `build` returns, so a
-    /// same-key re-entry would recurse without end. A different key is safe.
-    /// In this crate `build` only calls `core::resolve_named_set`, which never
-    /// re-enters the cache, so the constraint holds by construction.
-    pub fn get_or_insert_with(&self, key: CacheKey, build: impl FnOnce() -> V) -> V {
-        if let Some(hit) = self.entries.borrow().get(&key) {
-            return hit.clone();
+    /// Замыкание выполняется без активного заимствования `RefCell`, поэтому
+    /// может безопасно обращаться к другому слоту этого же кэша. Повторный вход
+    /// с тем же ключом остаётся логической ошибкой вызывающего: значение ещё не
+    /// построено, и рекурсия не сможет завершиться.
+    pub fn get_or_try_insert_with<E>(
+        &self,
+        key: CacheKey,
+        build: impl FnOnce() -> Result<V, E>,
+    ) -> Result<V, E> {
+        let theme = key.theme;
+        if let Some(hit) = self
+            .slots
+            .borrow()
+            .get(theme)
+            .as_ref()
+            .filter(|entry| entry.key == key)
+        {
+            return Ok(hit.value.clone());
         }
-        let value = build();
-        let mut entries = self.entries.borrow_mut();
-        if entries.len() >= self.capacity {
-            entries.clear();
-        }
-        entries.insert(key, value.clone());
-        value
+
+        let value = build()?;
+        *self.slots.borrow_mut().get_mut(theme) = Some(CacheEntry {
+            key,
+            value: value.clone(),
+        });
+        Ok(value)
     }
 
-    /// Очистить кэш целиком. Смена таблицы (загрузка конфига) обязана снести
-    /// прошлое пространство записей: одновременно в кэше живёт ровно ОДНО
-    /// пространство ключей, и корректность не опирается на вероятностную
-    /// уникальность отпечатка.
+    /// Очистить все тематические слоты после успешной смены контракта.
     pub fn clear(&self) {
-        self.entries.borrow_mut().clear();
+        *self.slots.borrow_mut() = ThemeSlots::empty();
     }
 
-    /// Number of live entries — for tests and introspection.
+    /// Число живых полных результатов; доступно только проверкам инварианта.
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.entries.borrow().len()
+        self.slots.borrow().len()
     }
 }
 
@@ -118,65 +164,167 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
+    fn key(bg: &str, theme: Theme, fingerprint: u64) -> CacheKey {
+        CacheKey::new(bg.to_owned(), theme, fingerprint)
+    }
+
     #[test]
-    fn builds_once_then_serves_from_cache() {
-        let cache: ContractCache<u32> = ContractCache::new(8);
+    fn повторный_ключ_строится_ровно_один_раз() {
+        let cache: ContractCache<u32> = ContractCache::new();
         let calls = Cell::new(0);
-        let key = || CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
 
-        let first = cache.get_or_insert_with(key(), || {
-            calls.set(calls.get() + 1);
-            42
-        });
-        let second = cache.get_or_insert_with(key(), || {
-            calls.set(calls.get() + 1);
-            99
-        });
+        let first = cache
+            .get_or_try_insert_with::<()>(
+                key("#FFFFFF", Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(42)
+                },
+            )
+            .unwrap();
+        let second = cache
+            .get_or_try_insert_with::<()>(
+                key("#FFFFFF", Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(99)
+                },
+            )
+            .unwrap();
 
-        assert_eq!(first, 42);
-        assert_eq!(second, 42, "second call must hit the cache, not rebuild");
-        assert_eq!(calls.get(), 1);
+        assert_eq!((first, second), (42, 42));
+        assert_eq!(calls.get(), 1, "попадание не должно запускать построитель");
     }
 
     #[test]
-    fn distinct_keys_do_not_collide() {
-        let cache: ContractCache<&str> = ContractCache::new(8);
-        let light = cache.get_or_insert_with(
-            CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
-            || "light",
+    fn тема_хранит_только_свой_последний_фон() {
+        let cache: ContractCache<&str> = ContractCache::new();
+        cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Light, 1), || Ok("white"))
+            .unwrap();
+        cache
+            .get_or_try_insert_with::<()>(key("#000000", Theme::Light, 1), || Ok("black"))
+            .unwrap();
+
+        let rebuilt = Cell::new(false);
+        let value = cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Light, 1), || {
+                rebuilt.set(true);
+                Ok("white-again")
+            })
+            .unwrap();
+        assert!(
+            rebuilt.get(),
+            "первый фон обязан быть вытеснен новым фоном той же темы"
         );
-        let dark = cache.get_or_insert_with(
-            CacheKey::new("#FFFFFF".into(), Theme::Dark, DEFAULT_TABLE_FINGERPRINT),
-            || "dark",
-        );
-        assert_eq!(light, "light");
-        assert_eq!(dark, "dark");
-        assert_eq!(cache.len(), 2);
+        assert_eq!(value, "white-again");
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
-    fn clears_wholesale_at_capacity() {
-        let cache: ContractCache<u32> = ContractCache::new(2);
-        for i in 0..2 {
-            cache.get_or_insert_with(
-                CacheKey::new(
-                    format!("#00000{i}"),
-                    Theme::Light,
-                    DEFAULT_TABLE_FINGERPRINT,
-                ),
-                || i,
-            );
+    fn четыре_темы_не_вытесняют_друг_друга() {
+        let cache: ContractCache<Theme> = ContractCache::new();
+        let themes = [Theme::Light, Theme::Dark, Theme::LightIc, Theme::DarkIc];
+        for theme in themes {
+            cache
+                .get_or_try_insert_with::<()>(key("#808080", theme, 7), || Ok(theme))
+                .unwrap();
         }
-        assert_eq!(cache.len(), 2);
-        // The third distinct key trips the cap → wholesale clear, then insert.
-        cache.get_or_insert_with(
-            CacheKey::new("#0000FF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
-            || 3,
-        );
+        for theme in themes {
+            let built = Cell::new(false);
+            let value = cache
+                .get_or_try_insert_with::<()>(key("#808080", theme, 7), || {
+                    built.set(true);
+                    Ok(theme)
+                })
+                .unwrap();
+            assert!(
+                !built.get(),
+                "слот {theme:?} должен пережить обращения к другим темам"
+            );
+            assert_eq!(value, theme);
+        }
+        assert_eq!(cache.len(), themes.len());
+    }
+
+    #[test]
+    fn произвольный_поток_ключей_не_увеличивает_число_тяжёлых_значений() {
+        let cache: ContractCache<std::rc::Rc<usize>> = ContractCache::new();
+        let themes = [Theme::Light, Theme::Dark, Theme::LightIc, Theme::DarkIc];
+        let mut payloads = Vec::new();
+
+        for i in 0..10_000 {
+            let theme = themes[i % themes.len()];
+            let payload = std::rc::Rc::new(i);
+            payloads.push(std::rc::Rc::downgrade(&payload));
+            cache
+                .get_or_try_insert_with::<()>(key(&format!("#{i:06X}"), theme, 11), || {
+                    Ok(std::rc::Rc::clone(&payload))
+                })
+                .unwrap();
+        }
+
         assert_eq!(
             cache.len(),
-            1,
-            "cap trips a wholesale clear, never unbounded growth"
+            themes.len(),
+            "длина определяется словарём тем, а не числом входных фонов"
         );
+        assert_eq!(
+            payloads
+                .into_iter()
+                .filter(|payload| payload.upgrade().is_some())
+                .count(),
+            themes.len(),
+            "кэш обязан освободить вытесненные payload, а не только скрыть их из len()"
+        );
+    }
+
+    #[test]
+    fn другой_отпечаток_не_может_попасть_в_старую_запись() {
+        let cache: ContractCache<&str> = ContractCache::new();
+        cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Light, 1), || Ok("config-a"))
+            .unwrap();
+        let value = cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Light, 2), || Ok("config-b"))
+            .unwrap();
+        assert_eq!(value, "config-b");
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn ошибка_не_вытесняет_последний_корректный_результат() {
+        let cache: ContractCache<&str> = ContractCache::new();
+        cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Dark, 3), || Ok("valid"))
+            .unwrap();
+        let failed = cache.get_or_try_insert_with(
+            key("#000000", Theme::Dark, 3),
+            || -> Result<&str, &'static str> { Err("projection failed") },
+        );
+        assert_eq!(failed, Err("projection failed"));
+
+        let built = Cell::new(false);
+        let old = cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Dark, 3), || {
+                built.set(true);
+                Ok("wrong")
+            })
+            .unwrap();
+        assert!(!built.get());
+        assert_eq!(old, "valid");
+    }
+
+    #[test]
+    fn clear_сбрасывает_всё_пространство_контракта() {
+        let cache: ContractCache<u8> = ContractCache::new();
+        cache
+            .get_or_try_insert_with::<()>(key("#FFFFFF", Theme::Light, 1), || Ok(1))
+            .unwrap();
+        cache
+            .get_or_try_insert_with::<()>(key("#000000", Theme::Dark, 1), || Ok(2))
+            .unwrap();
+        cache.clear();
+        assert_eq!(cache.len(), 0);
     }
 }

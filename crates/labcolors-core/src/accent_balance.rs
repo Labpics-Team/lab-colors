@@ -12,25 +12,23 @@
 //!
 //! Разрешение конфликта одно: найти светлоту `L`, удовлетворяющую ФУНКЦИИ, и на
 //! ней взять **МАКСИМАЛЬНУЮ** хрому оттенка (`max_chroma` — стена гамута).
-//! Тогда идентичность держится ровно так сильно, как позволяет гамут на нужной
-//! светлоте, а не срезается произвольной долей. Если даже стена гамута на этой
-//! `L` оставляет красочность ниже перцептивного пола — оттенок физически
-//! вырожден, и это объявляется ЧЕСТНЫМ флагом [`BalancedAccent::hue_vanished`],
-//! не молчанием.
+//! Тогда этот примитив отвечает на узкий геометрический вопрос: какой максимум
+//! данного направления допускает sRGB на требуемой светлоте. Он не утверждает,
+//! что максимум красивее или лучше сохраняет конкретный клиентский якорь.
+//! Потеря оттенка фиксируется только как точное состояние выходной решётки:
+//! эмитированный `#RRGGBB` стал ахроматическим (`R = G = B`). Перцептивный порог
+//! без эксперимента с наблюдателями здесь не выдумывается.
 //!
 //! # Строгая агностичность (frozen northInvariant)
 //!
 //! Ноль labui-имён ролей, ноль хардкод-оттенков, ноль резерваций
 //! (сентимент→оттенок): целевая светлота, оттенок и тема приходят ПАРАМЕТРАМИ.
-//! Порог вырождения — НЕ новая ручка, а уже заземлённый перцептивный пол крейта
-//! `TINT_PERCEPTIBLE_MP_FLOOR` (`M' = 1.5`, тот же, которым
-//! [`crate::semantic`] объявляет `hue_vanished` у лейблов). Провенанс нового
-//! кода: единственная новая величина — этот примитив — не несёт НИ ОДНОЙ новой
-//! числовой константы (переиспользует `max_chroma` и существующий пол).
+//! Модуль не содержит порога «видимости оттенка»: такой порог был бы свойством
+//! психофизического протокола, а не геометрии гамута. Флаг ниже выводится из
+//! конечного sRGB8-результата без коэффициента и epsilon.
 
 use crate::lcs::LcsColor;
 use crate::scale::{lcs_from_oklab_lch, max_chroma};
-use crate::semantic::TINT_PERCEPTIBLE_MP_FLOOR;
 use crate::spaces::vc::ViewingConditions;
 
 /// Результат применения закона баланса на требуемой светлоте.
@@ -44,11 +42,20 @@ pub struct BalancedAccent {
     pub hue_deg: f64,
     /// Отрисованный цвет ([`LcsColor`] под переданными `vc`).
     pub color: LcsColor,
-    /// Честный флаг вырождения: на этой светлоте даже МАКСИМАЛЬНАЯ хрома
-    /// оставляет красочность `M'` ниже `TINT_PERCEPTIBLE_MP_FLOOR` — оттенок
-    /// физически потерян (near-white/near-black), функция задавила
-    /// идентичность. Вызывающий видит потерю цвета флагом, а не тихо.
+    /// Точный флаг вырождения на выходе: после реальной sRGB8-квантизации цвет
+    /// имеет одинаковые байты `R = G = B`, поэтому направления hue у
+    /// эмитируемого значения уже нет. Это не заявление о пороге восприятия.
     pub hue_vanished: bool,
+}
+
+/// Проверяет потерю hue на том представлении, которое действительно получит
+/// клиент. Сравнивать `M'` с придуманным epsilon нельзя: CAM16 может оставить
+/// числовой opponent-шум у серого, тогда как равенство трёх байтов однозначно.
+pub(crate) fn hue_vanished_on_srgb8(color: &LcsColor, vc: &ViewingConditions) -> bool {
+    let hex = color.to_hex_with_vc(vc);
+    let encoded = crate::spaces::srgb::srgb_encoded_from_hex(&hex)
+        .expect("hex, эмитированный LcsColor, обязан разбираться ядром");
+    encoded[0] == encoded[1] && encoded[1] == encoded[2]
 }
 
 /// Закон баланса акцента: на требуемой Oklab-светлоте `target_l_ok` взять
@@ -65,7 +72,7 @@ pub fn accent_balanced(target_l_ok: f64, hue_deg: f64, vc: &ViewingConditions) -
     // ЗАКОН: максимум хромы на требуемой светлоте (не фикс-доля источника).
     let c_ok = max_chroma(target_l_ok, hue_deg);
     let color = lcs_from_oklab_lch(target_l_ok, c_ok, hue_deg, vc);
-    let hue_vanished = color.mp() < TINT_PERCEPTIBLE_MP_FLOOR;
+    let hue_vanished = hue_vanished_on_srgb8(&color, vc);
     BalancedAccent {
         l_ok: target_l_ok,
         c_ok,
@@ -78,13 +85,6 @@ pub fn accent_balanced(target_l_ok: f64, hue_deg: f64, vc: &ViewingConditions) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scale::jp_to_oklab_l;
-
-    /// Функциональный пол яркости центра свечения из светлоты источника: полпути
-    /// к белому по J' (пересвет центра — та же деривация, что в [`crate::glow`]).
-    fn glow_core_l(src_jp: f64, vc: &ViewingConditions) -> f64 {
-        jp_to_oklab_l((src_jp + 100.0) * 0.5, vc)
-    }
 
     /// ЯКОРЬ ЗАКОНА (и RED-proof primary): на ЛЮБОЙ светлоте и оттенке баланс
     /// берёт РОВНО стену гамута — не долю. Мутация примитива к фикс-дельте
@@ -109,51 +109,36 @@ mod tests {
         }
     }
 
-    /// ГЛАВНОЕ СВОЙСТВО (RED-proof): на ФУНКЦИОНАЛЬНОМ ПОЛУ glow-центра для
-    /// каждого оттенка баланс держит красочность выше порога вырождения —
-    /// оттенок НЕ вымывается. Пол намеренно яркий (пересвет центра), это
-    /// маргинальный режим: под фикс-дельтой (`0.5 × max_chroma`) красочность
-    /// падает ниже пола и `hue_vanished` краснит; под законом (полная стена) —
-    /// держится. Мутация примитива к доле → тест краснит.
+    /// Флаг обязан быть тождественен ахроматичности эмитированного sRGB8, а не
+    /// зависеть от CAM16-шума или скрытого порога.
     #[test]
-    fn hue_survives_at_glow_core_functional_floor() {
+    fn hue_flag_equals_emitted_byte_achromaticity() {
         for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
-            // Умеренно-светлый источник (J'≈52) — типовой акцент; центр ≈ J'76.
-            let l = glow_core_l(52.0, &vc);
-            for h_step in 0..72 {
-                let h = f64::from(h_step) * 5.0;
-                let b = accent_balanced(l, h, &vc);
-                assert!(
-                    !b.hue_vanished,
-                    "оттенок {h}° вымылся на функциональном полу glow-центра \
-                     (M'={:.3} < {TINT_PERCEPTIBLE_MP_FLOOR}), L={l:.4}",
-                    b.color.mp()
-                );
-                assert!(
-                    b.color.mp() >= TINT_PERCEPTIBLE_MP_FLOOR,
-                    "красочность выше порога вырождения: оттенок {h}°"
-                );
+            for l_step in 0..=10 {
+                let l = f64::from(l_step) / 10.0;
+                for h_step in 0..72 {
+                    let h = f64::from(h_step) * 5.0;
+                    let balanced = accent_balanced(l, h, &vc);
+                    assert_eq!(
+                        balanced.hue_vanished,
+                        hue_vanished_on_srgb8(&balanced.color, &vc),
+                        "L={l}, h={h}"
+                    );
+                }
             }
         }
     }
 
-    /// ЧЕСТНОСТЬ ФЛАГА (обе стороны): у самой стены белого даже МАКСИМАЛЬНАЯ
-    /// хрома оставляет цвет near-white — `hue_vanished` обязан краснеть (не
-    /// молчать). Ловит примитив, который никогда не выставляет флаг.
+    /// В точках чёрного и белого радиус гамута равен нулю, поэтому выходной hue
+    /// отсутствует точно, без понятия «почти исчез».
     #[test]
-    fn flag_fires_when_hue_physically_degenerates() {
+    fn flag_fires_at_exact_achromatic_endpoints() {
         let vc = ViewingConditions::srgb();
-        let l = 0.9999; // у самой вершины гамута: стена хромы → 0, красочность гаснет
-        let mut any_vanished = false;
-        for h_step in 0..72 {
-            let h = f64::from(h_step) * 5.0;
-            if accent_balanced(l, h, &vc).hue_vanished {
-                any_vanished = true;
+        for l in [0.0, 1.0] {
+            for h_step in 0..72 {
+                let h = f64::from(h_step) * 5.0;
+                assert!(accent_balanced(l, h, &vc).hue_vanished, "L={l}, h={h}");
             }
         }
-        assert!(
-            any_vanished,
-            "у стены белого (L={l}) оттенок физически вырожден — флаг обязан краснеть"
-        );
     }
 }

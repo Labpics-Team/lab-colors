@@ -21,59 +21,56 @@
 //!   гаснет; на тёмном цветёт. Среда свечения — тёмная тема (закон
 //!   асимметрии ADR-0002 §1).
 //!
-//! # Контрактные ступени (зеркальная деривация)
+//! # Клиентские измерения LabUI
 //!
 //! **glow-k (dark) := фактический композит-шаг shadow-k (light)** — свечение
 //! на тёмном обязано давать тот же перцептивный шаг |ΔJ'|, что тень на
-//! светлом. Значения ИЗМЕРЕНЫ от
-//! владельческих альф стека теней; отображение subtle:=minor, base:=ambient,
-//! bloom:=major (penumbra — анатомическая ступень именно тени, у излучения
-//! света полутени нет). Ноль придуманных чисел.
+//! светлом в конкретном клиентском пресете LabUI. Значения `GLOW_*` измерены
+//! от его альф стека теней; это не универсальная шкала свечения библиотеки.
+//! Для другого клиента целевой |ΔJ'| передаётся прямо в
+//! [`solve_screen_alpha_for_dj`].
 //!
 //! # Анатомия (двухслойный bloom)
 //!
-//! core — малый радиус, светлота поднята к белому (пересвет центра — сигнатура
-//! реального света); halo — большой радиус, оттенок источника на его светлоте.
-//! Оттенок оба слоя наследуют от источника: свечение не имеет собственного
-//! цвета.
+//! halo — большой радиус и точный цвет источника. core — малый пересвеченный
+//! радиус в точном белом пределе sRGB8. Из формулы screen приращение канала по
+//! `G` равно `α·(1−bg) ≥ 0`; поэтому `[255, 255, 255]` — единственный
+//! универсальный покомпонентный максимум конечной сетки, а не эстетическая
+//! смесь со свободным коэффициентом. Целевой |ΔJ'| задаёт не цвет core, а
+//! явный солвер прозрачности.
 //!
-//! Центр подчинён ЕДИНОМУ ЗАКОНУ БАЛАНСА ([`crate::accent_balance`]): его
-//! светлота — функциональный пол (полпути к белому по J'), а хрома на этой
-//! светлоте — НЕ фикс-доля источника, а МАКСИМАЛЬНАЯ в гамуте
-//! (`max_chroma`). Прежняя фикс-дельта «половина M'» размывала
-//! центр к серому у пересвета (оттенок терялся); закон держит идентичность так
-//! сильно, как позволяет гамут, а вырождение у стены белого честно флагуется
-//! примитивом. Ноль новых констант: пол яркости — та же деривация «полпути к
-//! белому», хрома — существующий `max_chroma`.
+//! У точного серого источника hue отсутствует как состояние, а не хранится
+//! фиктивным углом. У хроматического источника белый предел честно отмечается
+//! как коллапс hue в структурированном отчёте.
 
 use crate::lcs::LcsColor;
 use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 use crate::spaces::vc::ViewingConditions;
 
-/// Контрактный шаг glow-subtle (|ΔJ'| композита от фона): зеркало
-/// стек-композита fx-shadow-minor на светлом якоре labui.
-// SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
+/// Клиентское измерение LabUI для glow-subtle: |ΔJ'| зеркала
+/// fx-shadow-minor на светлом якоре этого пресета.
+// Значение принадлежит пресету LabUI; универсальный API принимает явный target_dj.
 pub const GLOW_SUBTLE_DJ: f64 = 0.8563;
-/// Контрактный шаг glow-base: зеркало стек-композита fx-shadow-ambient.
-// SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
+/// Клиентское измерение LabUI для glow-base: зеркало fx-shadow-ambient.
+// Значение принадлежит пресету LabUI; универсальный API принимает явный target_dj.
 pub const GLOW_BASE_DJ: f64 = 2.3006;
-/// Контрактный шаг glow-bloom: зеркало стек-композита fx-shadow-major.
-// SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
+/// Клиентское измерение LabUI для glow-bloom: зеркало fx-shadow-major.
+// Значение принадлежит пресету LabUI; универсальный API принимает явный target_dj.
 pub const GLOW_BLOOM_DJ: f64 = 13.3251;
 
-/// Ступень контрактного стека свечения (зеркальная деривация, см. шапку).
+/// Ступень клиентского пресета LabUI (зеркальная деривация, см. шапку).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlowStep {
-    /// subtle := зеркало fx-shadow-minor.
+    /// LabUI subtle := зеркало fx-shadow-minor.
     Subtle,
-    /// base := зеркало fx-shadow-ambient.
+    /// LabUI base := зеркало fx-shadow-ambient.
     Base,
-    /// bloom := зеркало fx-shadow-major.
+    /// LabUI bloom := зеркало fx-shadow-major.
     Bloom,
 }
 
 impl GlowStep {
-    /// Целевой перцептивный шаг |ΔJ'| композита ступени.
+    /// Измеренный для LabUI перцептивный шаг |ΔJ'| композита ступени.
     pub fn target_dj(self) -> f64 {
         match self {
             GlowStep::Subtle => GLOW_SUBTLE_DJ,
@@ -195,25 +192,57 @@ pub fn solve_screen_alpha_for_dj(
     })
 }
 
-/// Двухслойная анатомия свечения от источника: `(core_hex, halo_hex)`.
+/// Точный покомпонентный максимум конечной сетки sRGB8 для screen-эмиссии.
+const EMISSIVE_CLIP_CORE_HEX: &str = "#FFFFFF";
+
+/// Структурированный отчёт о двух слоях свечения.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlowLayers {
+    /// Пересвеченный центр: точный эмиссионный предел sRGB8.
+    pub core_hex: String,
+    /// Большой ореол: исходный цвет без перекодирования и дрейфа байтов.
+    pub halo_hex: String,
+    /// `true`, только если у источника был hue, а белый core его утратил.
+    /// Для серого источника `false`: отсутствовавший hue не мог коллапсировать.
+    pub hue_collapsed: bool,
+}
+
+/// Строит структурированный отчёт о слоях свечения от источника.
 ///
-/// halo — сам источник (его оттенок на его светлоте); core — переэкспонирование
-/// по ЗАКОНУ БАЛАНСА: светлота = функциональный пол «полпути к белому по J'»
-/// (`J'core = (J'src + 100)/2`), а хрома на ней — МАКСИМАЛЬНАЯ в гамуте для
-/// оттенка источника ([`crate::accent_balance::accent_balanced`]), не фикс-доля.
-/// Оттенок (h_ok) — источника: свечение не имеет собственного цвета.
+/// Core равен точному белому пределу: на конечной сетке sRGB8 он максимизирует
+/// каждый множитель `G` в screen-формуле и тем самым не прячет произвольную
+/// долю яркости. Требуемый |ΔJ'| решается отдельно через прозрачность.
+pub fn glow_layers_report_from_source(
+    source_hex: &str,
+    vc: &ViewingConditions,
+) -> Result<GlowLayers, String> {
+    let encoded = srgb_encoded_from_hex(source_hex)?;
+    // Равенство точное: все три значения получены из целых байтов делением на
+    // один знаменатель. Поэтому серый код не нуждается ни в epsilon, ни в hue.
+    let source_hue_deg = if encoded[0] == encoded[1] && encoded[1] == encoded[2] {
+        None
+    } else {
+        Some(LcsColor::from_hex_with_vc(source_hex, vc)?.h_ok)
+    };
+
+    Ok(GlowLayers {
+        core_hex: EMISSIVE_CLIP_CORE_HEX.to_string(),
+        halo_hex: source_hex.to_string(),
+        // Белый core ахроматичен по построению; коллапс возможен только тогда,
+        // когда у исходного стимула действительно существовало направление hue.
+        hue_collapsed: source_hue_deg.is_some(),
+    })
+}
+
+/// Совместимый адаптер для производственного вызывающего кода, который
+/// исторически принимает кортеж. Новый код должен брать [`GlowLayers`] через
+/// [`glow_layers_report_from_source`], чтобы не терять состояние оттенка.
 pub fn glow_layers_from_source(
     source_hex: &str,
     vc: &ViewingConditions,
 ) -> Result<(String, String), String> {
-    let src = LcsColor::from_hex_with_vc(source_hex, vc)?;
-    // Функциональный пол яркости центра: полпути к белому по J' (пересвет).
-    let jp_core = (src.jp + 100.0) * 0.5;
-    let l_core = crate::scale::jp_to_oklab_l(jp_core, vc);
-    // ЗАКОН БАЛАНСА: на этой яркости — максимум хромы оттенка источника (не ×0.5,
-    // размывавшая центр к серому). Идентичность держится, вырождение — флагом.
-    let core = crate::accent_balance::accent_balanced(l_core, src.h_ok, vc).color;
-    Ok((core.to_hex_with_vc(vc), source_hex.to_string()))
+    let report = glow_layers_report_from_source(source_hex, vc)?;
+    Ok((report.core_hex, report.halo_hex))
 }
 
 #[cfg(test)]
@@ -291,41 +320,59 @@ mod tests {
         assert_eq!(g.composite_hex, "#FFFFFF", "screen над белым — тождество");
     }
 
-    /// Анатомия core по ЗАКОНУ БАЛАНСА: светлее источника (пересвет), оттенок
-    /// унаследован, цвет центра ВЗЯТ ИЗ примитива баланса (не своя фикс-дельта),
-    /// насыщенный источник не вырождается, и хрома центра ПО ПОСТРОЕНИЮ в гамуте
-    /// (стена гамута — без тихого клипа, класс бага прежней ×0.5-доли).
+    /// Пересвеченный core — точный белый предел sRGB8, а не эстетическая смесь.
+    /// Хроматический источник честно сообщает о потере hue в этом пределе.
     #[test]
-    fn core_is_balanced_overexposed_source() {
+    fn core_is_exact_emissive_endpoint_and_reports_hue_collapse() {
         let vc = ViewingConditions::dim_surround();
-        let (core_hex, halo_hex) = glow_layers_from_source("#FF3B30", &vc).unwrap();
-        assert_eq!(halo_hex, "#FF3B30", "halo — сам источник");
-        let src = LcsColor::from_hex_with_vc("#FF3B30", &vc).unwrap();
-        let core = LcsColor::from_hex_with_vc(&core_hex, &vc).unwrap();
-        assert!(core.jp > src.jp, "core светлее источника (пересвет)");
-        let dh = (core.h_ok - src.h_ok + 180.0).rem_euclid(360.0) - 180.0;
-        assert!(dh.abs() < 6.0, "оттенок унаследован: Δh = {dh:.2}°");
+        let report = glow_layers_report_from_source("#FF3B30", &vc).unwrap();
 
-        // Центр ВЗЯТ из примитива баланса — доказательство wiring'а.
-        let l_core = crate::scale::jp_to_oklab_l((src.jp + 100.0) * 0.5, &vc);
-        let balanced = crate::accent_balance::accent_balanced(l_core, src.h_ok, &vc);
+        assert_eq!(report.core_hex, "#FFFFFF", "core — предел эмиссии sRGB8");
+        assert_eq!(report.halo_hex, "#FF3B30", "halo — сам источник");
+        assert!(
+            report.hue_collapsed,
+            "у хроматического источника hue исчезает в белой точке"
+        );
+
+        let compatible = glow_layers_from_source("#FF3B30", &vc).unwrap();
         assert_eq!(
-            core_hex,
-            balanced.color.to_hex_with_vc(&vc),
-            "центр glow обязан быть цветом примитива баланса"
+            compatible,
+            (report.core_hex, report.halo_hex),
+            "совместимый tuple-адаптер обязан сохранять оба цвета отчёта"
         );
-        assert!(
-            !balanced.hue_vanished,
-            "насыщенный источник не вырождается в центре"
-        );
+    }
 
-        // Хрома баланса = стена гамута ⇒ эмиссия в гамуте, без тихого клипа
-        // (прежняя ×0.5-доля могла запросить недостижимую красочность и молча
-        // срезаться в to_hex). Round-trip красочности центра стабилен.
-        let core_reparsed = LcsColor::from_hex_with_vc(&core_hex, &vc).unwrap();
-        assert!(
-            (core_reparsed.mp() - core.mp()).abs() < 0.5,
-            "центр в гамуте: round-trip красочности стабилен (без тихого клипа)"
-        );
+    /// Любой точный серый код идёт по ахроматической ветви: угол hue для него
+    /// не создаётся, а белый core остаётся ахроматическим на всей сетке sRGB8.
+    #[test]
+    fn every_gray_source_stays_achromatic_without_fictitious_hue() {
+        let vc = ViewingConditions::dim_surround();
+
+        for byte in 0_u8..=u8::MAX {
+            let source_hex = format!("#{byte:02X}{byte:02X}{byte:02X}");
+            let report = glow_layers_report_from_source(&source_hex, &vc).unwrap();
+            let core = srgb_encoded_from_hex(&report.core_hex).unwrap();
+
+            assert_eq!(
+                report.core_hex, "#FFFFFF",
+                "серый {source_hex}: неверный core"
+            );
+            assert_eq!(
+                report.halo_hex, source_hex,
+                "halo обязан сохранить источник"
+            );
+            assert!(
+                !report.hue_collapsed,
+                "серый {source_hex} не имел hue, поэтому коллапс невозможен"
+            );
+            assert_eq!(
+                core[0], core[1],
+                "серый {source_hex}: core получил цветность"
+            );
+            assert_eq!(
+                core[1], core[2],
+                "серый {source_hex}: core получил цветность"
+            );
+        }
     }
 }

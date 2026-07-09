@@ -38,19 +38,19 @@ const FIXTURES = `
 #FF0000|-|oklch(62.79554% 0.257683 29.234)
 #00FF00|-|oklch(86.64396% 0.294827 142.495)
 #0000FF|-|oklch(45.20137% 0.313214 264.052)
-#FFFFFF|-|oklch(100.00000% 0.000000 89.876)
-#000000|-|oklch(0.00000% 0.000000 0.000)
-#808080|-|oklch(59.98708% 0.000000 89.876)
+#FFFFFF|-|oklch(100.00000% 0.000000 none)
+#000000|-|oklch(0.00000% 0.000000 none)
+#808080|-|oklch(59.98708% 0.000000 none)
 #787880|-|oklch(57.53363% 0.012136 286.012)
 #3E87FF|-|oklch(64.04613% 0.193058 259.892)
 #FF3B30|-|oklch(65.42146% 0.232135 28.659)
 #FFD700|-|oklch(88.67711% 0.182186 95.330)
 #2563EB|-|oklch(54.61497% 0.215208 262.881)
-#1A1A1A|-|oklch(21.77865% 0.000000 89.876)
-#101012|0.122|oklch(17.39406% 0.004094 285.967 / 0.122)
+#1A1A1A|-|oklch(21.77865% 0.000000 none)
+#101012|0.122|oklch(17.39406% 0.004094 285.966 / 0.122)
 #3E87FF|0.8|oklch(64.04613% 0.193058 259.892 / 0.8)
-#FFFFFF|0.5|oklch(100.00000% 0.000000 89.876 / 0.5)
-#000000|0.361|oklch(0.00000% 0.000000 0.000 / 0.361)`
+#FFFFFF|0.5|oklch(100.00000% 0.000000 none / 0.5)
+#000000|0.361|oklch(0.00000% 0.000000 none / 0.361)`
   .trim()
   .split("\n")
   .map((line) => {
@@ -95,8 +95,10 @@ test("effectiveBackground composites oklch layers (translucent over opaque)", ()
   // A translucent white oklch panel over an opaque near-black oklch base — the
   // exact self-composed case the package produces. Oracle is independent of
   // oklch parsing: compositeOver + toHex on the KNOWN source bytes.
-  const leaf = "oklch(100.00000% 0.000000 89.876 / 0.5)"; // #FFFFFF @ 0.5
-  const base = "oklch(21.77865% 0.000000 89.876)"; // #1A1A1A opaque
+  // Эти строки взяты у текущего emitter: у ахромата нет измеримого угла,
+  // поэтому CSS несёт missing-компонент `none`, а не фиктивное число.
+  const leaf = "oklch(100.00000% 0.000000 none / 0.5)";
+  const base = "oklch(21.77865% 0.000000 none)";
   const tree = fakeTree([leaf, base]);
   const expected = toHex(compositeOver([255, 255, 255, 0.5], [26, 26, 26, 1]));
   assert.equal(effectiveBackground(tree.leaf, tree), expected);

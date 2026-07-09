@@ -90,8 +90,8 @@
 | 15 | `TINT_HUE_STIFFNESS` | 9.0 | **(c)** | **Волна 2 (e)→(c):** замер `cusp_attracted_hue` — выше порога пиннинга ≈0.36 выход байт-инвариантен по полосе [1,100] (dev=0°), дефолт 9.0 = 25× порога | `stiffness_pins_hue_to_canonical_above_threshold`, `hue_stiffness_negative_is_rejected` |
 | 13 | `NEUTRAL_TINT_RATIO` | 0.10 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0288 по [0,0.2]; opt-in v1-политика; диапазон [0,1] | `neutral_tint_ratio_sensitivity_is_bounded`, `custom_tint_overrides_hue_and_ratio` |
 | 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | измер. якорь; Волна 2: байт-инвариант по разбросу [285.78,286.01], ±20°→0.0114 (~1 JND) | `neutral_hue_emits_byte_invariant_across_measured_family_spread`, `custom_tint_overrides_hue_and_ratio` |
-| 21 | `CHROMA_FRACTION` | 0.88 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0421 по [0.70,1.0]; labui=1.0; диапазон (0,1] | `chroma_fraction_sensitivity_is_bounded`, `chroma_fraction_out_of_bounds_is_rejected` |
-| ~~20~~ | ~~`DEFAULT_HARDNESS`~~ | — | — | **УДАЛЁН Волной 1** (снесён механизм p-нормы brand-displacement; config-поле `hardness` живо как vestigial, тест `hardness_below_one_is_rejected` держит его границу) | — |
+| ~~21~~ | ~~`CHROMA_FRACTION`~~ | — | — | **УДАЛЁН В V2**: материальная дизайн-ручка не является универсальным законом; клиентский anchor сохраняется без скрытого кэпа | — |
+| ~~20~~ | ~~`DEFAULT_HARDNESS`~~ | — | — | **УДАЛЁН** вместе с p-нормой; legacy-поле `hardness` теперь только вызывает явную ошибку миграции DTO | — |
 | 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0466 по [1.3,2.2]; диапазон >0 | `curve_params_sensitivity_is_bounded` |
 | 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0325 по [1.2,1.9]; диапазон >0 | `curve_params_sensitivity_is_bounded` |
 | 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0042 по [0.2,0.5] (низшая); диапазон (0,0.5] | `curve_params_sensitivity_is_bounded` |

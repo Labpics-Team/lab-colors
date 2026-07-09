@@ -288,11 +288,7 @@ fn acme_config() -> ThemeConfig {
             categories: vec![SentimentCategory {
                 name: "alert".to_string(),
                 family: "crimson".to_string(),
-                hue_floor_deg: None,
-                preferred_side: None,
             }],
-            hardness: 5.0,
-            chroma_fraction: 0.88,
         },
         themes: ThemesConfig {
             entries: vec![

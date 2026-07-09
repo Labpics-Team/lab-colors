@@ -27,7 +27,7 @@
 //! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
-//! | `muddiness.json` | hex → мутность | `cleanliness::muddiness_from_hex` |
+//! | `muddiness.json` | замороженная характеристика Закона Грязи V1 | `cleanliness::muddiness_from_hex` |
 //! | `manifest.json` | версии пака/ядра, дайджест, счётчики | — |
 //!
 //! Версия пака ([`PACK_VERSION`]) привязана к версии ядра ([`core_version`]):
@@ -384,17 +384,17 @@ pub fn generate_solve() -> Vec<SolveVector> {
 // Семейство: мутность
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Один вектор мутности: hex и его оценка «грязи» `[0,1]`.
+/// Один замороженный вектор воспроизводимости исторической модели V1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MuddinessVector {
     /// Цвет, `#RRGGBB`.
     pub hex: String,
-    /// Оценка мутности `[0,1]` (0 — чистый, 1 — грязный).
+    /// Историческое значение V1 `[0,1]`; не вероятность наблюдателя.
     pub score: f64,
 }
 
-/// Цвета для мутности: грязная олива, чистый серый, чистый бренд, грязный хаки.
+/// Исторические стимулы V1; названия классов не являются научным оракулом.
 const MUDDINESS_CASES: [&str; 4] = ["#6B6B2E", "#808080", "#007AFF", "#8A7A50"];
 
 /// Дериватор векторов мутности.
