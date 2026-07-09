@@ -63,5 +63,19 @@
     "typescript": "^5.5.0"
   },
   "types": "./index.d.ts",
-  "sideEffects": false
+  "sideEffects": false,
+  "keywords": [
+    "color",
+    "oklch",
+    "contrast",
+    "apca",
+    "wcag",
+    "theme",
+    "design-tokens",
+    "wasm",
+    "labpics"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
 }
