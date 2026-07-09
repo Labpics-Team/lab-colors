@@ -25,7 +25,8 @@ import { performance } from "node:perf_hooks";
 import { initSync, LabColors } from "../pkg/labcolors.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-initSync({ module: readFileSync(resolve(here, "../pkg/labcolors_bg.wasm")) });
+const wasm = initSync({ module: readFileSync(resolve(here, "../pkg/labcolors_bg.wasm")) });
+const initialWasmBytes = wasm.memory.buffer.byteLength;
 
 const CONFIG = readFileSync(
   resolve(here, "../../../crates/labcolors-wasm/tests/data/labui.config.json"),
@@ -105,14 +106,32 @@ const recheck3 = () => {
 // foreground's CAM16 forward is computed once and shared across samples.
 // Byte-identical to `recheck3`; the public batch API the controller now uses.
 const recheckMulti3 = () => engine.recheckContrastMulti(SAMPLES, FGS, THEME);
-// Re-solve, cache HIT (same bg repeatedly): pays only the JS-object projection.
+// Честное попадание: один и тот же ключ остаётся последним в своём тематическом
+// слоте. Движок повторно использует и DTO, и готовую JSON-строку.
 const resolveHit = () => engine.resolveTheme(SOLVE_BG, THEME);
-// Re-solve, cache MISS (distinct bg each call): full solve + projection. Sweep
-// 4096 distinct backgrounds so we never repeat within the cache window.
-let missTone = 0;
+
+// Чередование двух реально независимых тематических слотов. Этот сценарий
+// ловит рассогласование, при котором решатель попадал в многозаписный кэш, а
+// одноячеечная сериализация промахивалась на каждом вызове.
+const ALTERNATING_SLOTS = [
+  ["#F7F8FA", "light"],
+  ["#101012", "dark"],
+];
+for (const [bg, theme] of ALTERNATING_SLOTS) engine.resolveTheme(bg, theme);
+let alternatingSlot = 0;
+const resolveAlternatingHit = () => {
+  const [bg, theme] = ALTERNATING_SLOTS[alternatingSlot++ & 1];
+  return engine.resolveTheme(bg, theme);
+};
+
+// Честный промах контрактного кэша: счётчик не зацикливается внутри всего
+// запуска benchmark, поэтому прогрев, измерение и allocation-proxy никогда не
+// повторяют сгенерированный ключ. Старый 12-битный `& 0xfff` незаметно делал
+// большую часть заявленных промахов попаданиями после прогрева.
+let missRgb = 0;
 const resolveMiss = () => {
-  const t = missTone++ & 0xfff;
-  const hex = `#${(0x100000 + t * 17).toString(16).slice(-6).toUpperCase()}`;
+  if (missRgb > 0xffffff) throw new Error("исчерпано пространство уникальных sRGB8");
+  const hex = `#${(missRgb++).toString(16).padStart(6, "0").toUpperCase()}`;
   return engine.resolveTheme(hex, THEME);
 };
 
@@ -130,8 +149,9 @@ const plan = [
   ["recheckContrast ×1 (28 roles)", recheck1, 40, 20000, 40000, FGS.length],
   ["recheckContrast ×3 (28 roles)", recheck3, 40, 7000, 15000, FGS.length * 3],
   ["recheckContrastMulti 3bg", recheckMulti3, 40, 7000, 15000, FGS.length * 3],
-  ["resolveTheme cache-hit", resolveHit, 25, 4000, 8000, 0],
-  ["resolveTheme cache-miss", resolveMiss, 20, 1500, 4000, 0],
+  ["resolveTheme hit (one slot)", resolveHit, 25, 4000, 8000, 0],
+  ["resolveTheme hit (2 themes)", resolveAlternatingHit, 25, 4000, 8000, 0],
+  ["resolveTheme honest miss", resolveMiss, 20, 1500, 4000, 0],
 ];
 
 for (const [label, fn, batches, inner, allocN, perRoleDiv] of plan) {
@@ -171,3 +191,10 @@ const vfp = (() => {
 console.log("");
 console.log(`recheck fingerprint: ${fp.toString(16).padStart(8, "0")}`);
 console.log(`resolve vars fingerprint: ${vfp.toString(16).padStart(8, "0")}`);
+// Линейная память WASM не уменьшается обратно, поэтому её high-water после
+// полного прогона честных промахов непосредственно показывает, удерживал ли
+// кэш тысячи полных тем или переиспользовал ограниченное число слотов.
+const finalWasmBytes = wasm.memory.buffer.byteLength;
+console.log(
+  `wasm linear memory: ${(initialWasmBytes / 1048576).toFixed(3)} → ${(finalWasmBytes / 1048576).toFixed(3)} MiB`,
+);

@@ -73,18 +73,34 @@ pub struct FamilyDto {
 pub struct SentimentCategoryDto {
     pub name: String,
     pub family: String,
+    /// Поле схемы V1 читается только ради точной миграционной ошибки. V2 не
+    /// интерпретирует его как физику категории.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hue_floor_deg: Option<f64>,
+    /// Поле схемы V1 читается только ради точной миграционной ошибки.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_side: Option<i8>,
 }
 
-/// Сентимент-политика.
+/// Версия геометрии сентиментов. Новая семантика никогда не прячется за
+/// прежними числовыми полями.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SentimentGeometryDto {
+    #[default]
+    AnchorDistanceV2,
+}
+
+/// Сентимент-политика V2 и читаемые миграционные поля V1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SentimentsDto {
+    #[serde(default)]
+    pub geometry: SentimentGeometryDto,
     pub categories: Vec<SentimentCategoryDto>,
-    pub hardness: f64,
-    pub chroma_fraction: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardness: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chroma_fraction: Option<f64>,
 }
 
 /// VC-пресет закрытого меню.
@@ -424,20 +440,29 @@ impl TryFrom<ConfigDto> for ThemeConfig {
                 anchors: f.anchors.into(),
             })
             .collect();
+        if dto.sentiments.hardness.is_some() || dto.sentiments.chroma_fraction.is_some() {
+            return Err(format!(
+                "sentiments: поля hardness/chroma_fraction удалены; \
+                 используйте geometry=`{}` и клиентские anchors",
+                labcolors_core::sentiment::SENTIMENT_GEOMETRY_V2
+            ));
+        }
+        let mut sentiment_categories = Vec::with_capacity(dto.sentiments.categories.len());
+        for category in dto.sentiments.categories {
+            if category.hue_floor_deg.is_some() || category.preferred_side.is_some() {
+                return Err(format!(
+                    "sentiments.{}: hue_floor_deg/preferred_side удалены; \
+                     различимость V2 выводится из pairwise anchor distance",
+                    category.name
+                ));
+            }
+            sentiment_categories.push(SentimentCategory {
+                name: category.name,
+                family: category.family,
+            });
+        }
         let sentiments = SentimentsConfig {
-            categories: dto
-                .sentiments
-                .categories
-                .into_iter()
-                .map(|c| SentimentCategory {
-                    name: c.name,
-                    family: c.family,
-                    hue_floor_deg: c.hue_floor_deg,
-                    preferred_side: c.preferred_side,
-                })
-                .collect(),
-            hardness: dto.sentiments.hardness,
-            chroma_fraction: dto.sentiments.chroma_fraction,
+            categories: sentiment_categories,
         };
         let themes = ThemesConfig {
             entries: dto
@@ -601,6 +626,7 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
                 })
                 .collect(),
             sentiments: SentimentsDto {
+                geometry: SentimentGeometryDto::AnchorDistanceV2,
                 categories: cfg
                     .sentiments
                     .categories
@@ -608,12 +634,12 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
                     .map(|c| SentimentCategoryDto {
                         name: c.name.clone(),
                         family: c.family.clone(),
-                        hue_floor_deg: c.hue_floor_deg,
-                        preferred_side: c.preferred_side,
+                        hue_floor_deg: None,
+                        preferred_side: None,
                     })
                     .collect(),
-                hardness: cfg.sentiments.hardness,
-                chroma_fraction: cfg.sentiments.chroma_fraction,
+                hardness: None,
+                chroma_fraction: None,
             },
             themes: cfg
                 .themes
@@ -693,6 +719,35 @@ mod tests {
         restored
             .compile_named_role_table()
             .expect("восстановленный конфиг компилируется");
+    }
+
+    /// Поля V1 читаются serde-границей намеренно: потребитель получает точную
+    /// миграционную ошибку, а не успешный конфиг с неработающей ручкой.
+    #[test]
+    fn legacy_sentiment_fields_are_rejected_explicitly() {
+        let mut global = labui_dto();
+        global.sentiments.hardness = Some(5.0);
+        let error = ThemeConfig::try_from(global).unwrap_err();
+        assert!(error.contains("hardness/chroma_fraction"), "{error}");
+
+        let mut category = labui_dto();
+        category.sentiments.categories[0].preferred_side = Some(1);
+        let error = ThemeConfig::try_from(category).unwrap_err();
+        assert!(error.contains("hue_floor_deg/preferred_side"), "{error}");
+    }
+
+    #[test]
+    fn v2_serialization_names_the_geometry_and_omits_v1_fields() {
+        let cfg = ThemeConfig::try_from(labui_dto()).unwrap();
+        let json = serde_json::to_value(ConfigDto::try_from(&cfg).unwrap()).unwrap();
+        let sentiments = &json["sentiments"];
+        assert_eq!(sentiments["geometry"], "anchor-distance-v2");
+        assert!(sentiments.get("hardness").is_none());
+        assert!(sentiments.get("chroma_fraction").is_none());
+        for category in sentiments["categories"].as_array().unwrap() {
+            assert!(category.get("hue_floor_deg").is_none());
+            assert!(category.get("preferred_side").is_none());
+        }
     }
 
     /// Рецепт `pair-label` (лейбл тинт-бейджа, task #29) гоняется через JSON без
@@ -782,14 +837,16 @@ mod tests {
     /// 0.276 → 0.97335917/0.64359014/0.47572199/0.29335999, инвариант переноса —
     /// принятые владельцем hex'ы #141414/#767676/#C2C2C2). Это ЛЕГИТИМНАЯ смена
     /// паспорта (ADR помечает её semver-major), потому пин обновлён
-    /// 5013ba77a61f58ff → f2a892a62f7bc91e. Прочая структура (снятие роли `icon`
-    /// каноном #92) уже была в main до этой главы — дельта только в долях.
+    /// 5013ba77a61f58ff → f2a892a62f7bc91e. Переход сентиментов на явно
+    /// версионированную геометрию `anchor-distance-v2` удалил четыре поля V1,
+    /// которые больше не имеют физического смысла, и изменил пин на
+    /// d23b8aee324e7d1a.
     #[test]
     fn full_labui_fingerprint_pin_current_main() {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "f2a892a62f7bc91e",
+            "d23b8aee324e7d1a",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }

@@ -1,31 +1,32 @@
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz, xyz_to_srgb};
 use crate::spaces::{cam16, cat16, oklab, vc::ViewingConditions};
 
-/// All hue fields (`h_ok`, `h_cam`) are stored in **degrees** `[0, 360)`.
-/// Convert to radians only at trigonometric call sites — never store radians.
+/// Все поля hue (`h_ok`, `h_cam`) хранятся в **градусах** `[0, 360)`.
+/// Радианы создаются только в месте тригонометрического вызова, чтобы единицы
+/// нельзя было спутать в состоянии цвета.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LcsColor {
     pub jp: f64,
     pub h_ok: f64,
-    /// Internal reparameterisation of CAM16-UCS colourfulness `M′`:
+    /// Внутренняя репараметризация красочности CAM16-UCS `M′`:
     /// `s = M′ / (J′ + 1)`. The `+ 1` is a regulariser against division by zero
-    /// as `J′ → 0`; it is lossless — `LcsColor::mp` recovers `M′` exactly as
+    /// при `J′ → 0`; преобразование обратимо — `LcsColor::mp` восстанавливает `M′` как
     /// `s · (J′ + 1)`. This is NOT the CAM16 saturation correlate.
     pub s: f64,
     h_cam: f64,
 }
 
 impl LcsColor {
-    /// Parse from hex using standard sRGB viewing conditions (average surround).
+    /// Декодирует hex в стандартных условиях sRGB со средним окружением.
     pub fn from_hex(hex: &str) -> Result<Self, String> {
         Self::from_hex_with_vc(hex, &ViewingConditions::srgb())
     }
 
-    /// Parse from hex using the given viewing conditions.
+    /// Декодирует hex при заданных условиях просмотра.
     ///
-    /// The resulting J', saturation, and CAM16 hue reflect perception under
-    /// the provided VC (e.g. [`ViewingConditions::dim_surround`] for dark
-    /// themes).
+    /// Результат зависит от условий просмотра: тёмная тема, например, должна
+    /// передать [`ViewingConditions::dim_surround`], а не переиспользовать
+    /// координаты светлого окружения.
     pub fn from_hex_with_vc(hex: &str, vc: &ViewingConditions) -> Result<Self, String> {
         let rgb = srgb_from_hex(hex)?;
         let xyz = srgb_to_xyz(rgb);
@@ -33,68 +34,113 @@ impl LcsColor {
         Ok(Self::from_xyz_with_hok(xyz, h_ok, vc))
     }
 
-    /// Convert to hex using standard sRGB viewing conditions.
+    /// Кодирует в hex в стандартных условиях просмотра sRGB.
     pub fn to_hex(&self) -> String {
         self.to_hex_with_vc(&ViewingConditions::srgb())
     }
 
-    /// Convert to hex using the given viewing conditions.
+    /// Кодирует в hex при заданных условиях просмотра.
     ///
-    /// Must use the same VC that was used to construct this colour, otherwise
-    /// the round-trip will introduce drift.
+    /// Условия должны совпадать с условиями построения цвета, иначе round-trip
+    /// закономерно представит другой воспринимаемый стимул.
     pub fn to_hex_with_vc(&self, vc: &ViewingConditions) -> String {
         let xyz = self.to_xyz(vc);
         let rgb = xyz_to_srgb(xyz);
         hex_from_srgb(rgb)
     }
 
-    /// Raw constructor from already-valid coordinates (curves, solver).
-    /// No validation here: inputs come from our own maths, not user input.
+    /// Конструктор для уже проверенных координат кривых и решателя.
+    /// Пользовательский ввод сюда не попадает, поэтому повторная валидация не нужна.
     pub(crate) fn new(jp: f64, h_ok: f64, s: f64, h_cam: f64) -> Self {
         Self { jp, h_ok, s, h_cam }
     }
 
-    /// CAM16-UCS colourfulness `M'`, recovered losslessly from the stored
-    /// reparameterisation (see the `s` field doc).
+    /// Декартовы координаты CAM16-UCS `[J′, a′, b′]`.
+    ///
+    /// Евклидова метрика CAM16-UCS определена через
+    /// `a′ = M′ cos(h_cam)` and `b′ = M′ sin(h_cam)`.  In particular, the
+    /// Направление обязано быть CAM16 hue, сопряжённым с величиной CAM16-UCS.
+    /// Сочетание `M′` с Oklab hue не принадлежит ни одной из моделей и не имеет
+    /// корректной интерпретации евклидова расстояния.
+    pub fn ucs_cartesian(&self) -> [f64; 3] {
+        let h = self.h_cam.to_radians();
+        let mp = self.mp();
+        [self.jp, mp * h.cos(), mp * h.sin()]
+    }
+
+    /// Стандартная евклидова цветовая разность CAM16-UCS до `other`.
+    pub fn delta_e_ucs(&self, other: &Self) -> f64 {
+        let a = self.ucs_cartesian();
+        let b = other.ucs_cartesian();
+        let dj = a[0] - b[0];
+        let da = a[1] - b[1];
+        let db = a[2] - b[2];
+        dj.hypot(da).hypot(db)
+    }
+
+    /// Красочность CAM16-UCS `M'`, обратимо восстановленная из `s`.
     pub(crate) fn mp(&self) -> f64 {
         self.s * (self.jp + 1.0)
     }
 
-    /// The CAM16-UCS colourfulness `M'` of an in-gamut **linear** sRGB colour,
-    /// computed straight through the forward CAM16 path with no hex round-trip.
+    /// Красочность CAM16-UCS `M'` допустимого **линейного** sRGB без hex round-trip.
     ///
-    /// `M'` does not depend on the Oklab hue carried alongside it, so this skips
-    /// the `oklab_hue` step too: it is purely `rgb → XYZ → CAM16 → M'`. It is the
-    /// allocation-free equivalent of `from_hex_with_vc(hex_from_srgb(rgb))?.mp()`
-    /// for callers that have already quantised `rgb` to the display grid.
+    /// `M'` не зависит от сопровождающего Oklab hue, поэтому путь ограничен
+    /// `rgb → XYZ → CAM16 → M'`. Это безаллокационный эквивалент hex-round-trip
+    /// для уже квантованного `rgb`.
     pub(crate) fn mp_of_linear_srgb(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
         let xyz = srgb_to_xyz(rgb);
-        // h_ok is irrelevant to M'; pass 0.0 to avoid the oklab_hue computation.
+        // `h_ok` не влияет на M′, поэтому ноль исключает лишний расчёт Oklab hue.
         Self::from_xyz_with_hok(xyz, 0.0, vc).mp()
     }
 
-    /// CAM16 hue in degrees. Field is private (accessor-only) so the two hue
-    /// spaces can't be mixed up: `h_ok` (Oklab) is the geometric hue, `h_cam`
-    /// feeds only CAM16 inverse/appearance maths.
+    /// CAM16 hue в градусах. Приватность поля не даёт случайно смешать его с
+    /// `h_ok`: первый обслуживает CAM16, второй — геометрию Oklab.
     pub(crate) fn h_cam(&self) -> f64 {
         self.h_cam
     }
 
+    /// Строит согласованное LCS-значение из полярных координат CAM16-UCS.
+    ///
+    /// `h_ok` выводится из результата обратного CAM16. Так вызывающий код не
+    /// сможет независимо интерполировать два hue-трека и создать состояние, где
+    /// публичный геометрический hue описывает не тот цвет, что [`Self::to_xyz`].
+    pub(crate) fn from_ucs_polar(jp: f64, mp: f64, h_cam: f64, vc: &ViewingConditions) -> Self {
+        let jp = jp.max(0.0);
+        let mp = mp.max(0.0);
+        let h_cam = h_cam.rem_euclid(360.0);
+        let s = if jp + 1.0 > 0.0 { mp / (jp + 1.0) } else { 0.0 };
+        let mut out = Self {
+            jp,
+            h_ok: 0.0,
+            s,
+            h_cam,
+        };
+        if mp > 0.0 && jp > 0.0 {
+            let rgb = xyz_to_srgb(out.to_xyz(vc));
+            out.h_ok = oklab::oklab_hue(rgb);
+        }
+        out
+    }
+
+    /// Линейные координаты sRGB без clipping, представленные этим значением.
+    pub(crate) fn to_linear_srgb(self, vc: &ViewingConditions) -> [f64; 3] {
+        xyz_to_srgb(self.to_xyz(vc))
+    }
+
     pub(crate) fn from_xyz_with_hok(xyz: [f64; 3], h_ok: f64, vc: &ViewingConditions) -> Self {
-        // Single shared CIECAM16 forward pass (issue #19); the UCS rescale is the
-        // only step `lcs` adds on top of it.
+        // Единый прямой проход CIECAM16 не даёт двум потребителям разойтись в
+        // формулах; LCS добавляет только UCS-масштабирование.
         let (j, m, h) = cam16::forward(xyz, vc);
         Self::from_cam16(j, m, h, h_ok)
     }
 
-    /// Build from already-computed CIECAM16 correlates `(J, M, h_cam)` plus the
-    /// Oklab hue. The UCS rescale is the only work here — no forward pass — so a
-    /// caller that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s
-    /// `finish`) reuses that result instead of recomputing it.
+    /// Строит цвет из готовых коррелятов CIECAM16 `(J, M, h_cam)` и Oklab hue.
+    /// Повторный forward не выполняется, чтобы решатель переиспользовал один и
+    /// тот же физический расчёт без численного расхождения.
     pub(crate) fn from_cam16(j: f64, m: f64, h_cam: f64, h_ok: f64) -> Self {
-        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131): maps raw
-        // CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads as
-        // half-lightness). Inverse in `to_xyz` via the same helpers.
+        // Масштабирование CAM16-UCS (Li et al. 2017, DOI 10.1002/col.22131)
+        // вынесено в общие функции, чтобы прямой и обратный пути не расходились.
         let jp = cam16::ucs_j(j);
         let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
@@ -103,10 +149,20 @@ impl LcsColor {
     }
 
     pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
-        // Inverse CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131),
-        // single source of truth in `cam16`.
+        // Обратное масштабирование берётся из того же SSOT в `cam16`.
         let j = cam16::ucs_j_inv(self.jp);
         let m = cam16::ucs_m_inv(self.mp());
+
+        // В физическом чёрном J=M=0, а общая обратная формула содержит
+        // `M / sqrt(J)`. Аналитическая ветвь исключает искусственный 0/0 и
+        // последующий NaN-clipping; M>0 при J=0 лежал бы вне цветового тела.
+        if j <= 0.0 {
+            debug_assert!(
+                m == 0.0,
+                "positive CAM16 colourfulness at J=0 is unrealizable"
+            );
+            return [0.0, 0.0, 0.0];
+        }
         let hr = self.h_cam.to_radians();
         // `hr.cos()` / `hr.sin()` ниже вычислялись дважды каждый; считаем один раз
         // и переиспользуем — байт-идентичный CSE (тот же аргумент, тот же

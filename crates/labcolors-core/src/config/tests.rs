@@ -5,7 +5,7 @@
 //! 3. Валидатор: за-предельное значение КАЖДОЙ ручки даёт `ConfigError` +
 //!    RED-proof мутацией предела (валидный vs невалидный на границе).
 //! 4. Лестница/альфа: Ladder/AlphaAnalog компилируются в полупрозрачные специи;
-//!    diff=пусто против consumedRoles; S_PERC_MIN-идентичность; значенческая
+//!    diff=пусто против consumedRoles; попарный anchor-контракт; значенческая
 //!    сверка со стабом labui (light+dark) + RED-proof мутаций.
 
 use super::fixture::labui_reference;
@@ -371,129 +371,6 @@ fn hue_stiffness_negative_is_rejected() {
     let mut zero = labui_reference();
     zero.neutral.tint.hue_stiffness = 0.0;
     assert_eq!(zero.validate(), Ok(()));
-}
-
-#[test]
-fn hardness_below_one_is_rejected() {
-    let mut cfg = labui_reference();
-    cfg.sentiments.hardness = 0.5;
-    assert!(matches!(
-        cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "sentiments.hardness"
-    ));
-    // RED-proof: ровно 1.0 валиден.
-    let mut at = labui_reference();
-    at.sentiments.hardness = 1.0;
-    assert_eq!(at.validate(), Ok(()));
-}
-
-#[test]
-fn chroma_fraction_out_of_bounds_is_rejected() {
-    let mut over = labui_reference();
-    over.sentiments.chroma_fraction = 1.01;
-    assert!(over.validate().is_err());
-    let mut zero = labui_reference();
-    zero.sentiments.chroma_fraction = 0.0;
-    assert!(zero.validate().is_err());
-    // RED-proof: ровно 1.0 валиден.
-    let mut at = labui_reference();
-    at.sentiments.chroma_fraction = 1.0;
-    assert_eq!(at.validate(), Ok(()));
-}
-
-/// Class-B differential-регресс: живость ПРОВОДКИ `sentiments.chroma_fraction`.
-///
-/// # Закрываемая дыра (диагноз debugger 2026-07-04)
-///
-/// Поле `config.sentiments.chroma_fraction` ЖИВОЕ — долетает до эмитируемого
-/// байта: `resolve_config_sentiment_solid_among` передаёт его в
-/// `sentiment::capped_chroma` = `min(c_якоря, f · C_max(L, h))` (анти-неоновый
-/// потолок). Но валидатор (`chroma_fraction_out_of_bounds_is_rejected`) проверяет
-/// лишь ГРАНИЦЫ, а байт-в-байт golden упражняет фикстуру с `chroma_fraction = 1.0`,
-/// при котором на якорях labui потолок ВЫРОЖДАЕТСЯ в no-op (`min(c, 1·C_max) = c`)
-/// → эффект ручки не эмитируется. Значит регресс к ИНЕРТНОСТИ (константа вместо
-/// поля в проводке ИЛИ игнор параметра `fraction` в `capped_chroma`) прошёл бы
-/// ВСЕ существующие гейты зелёным. Этот тест пинает саму проводку.
-///
-/// # Differential-механизм
-///
-/// Один паспорт (`labui_reference`), одна НАСЫЩЕННАЯ сентимент-роль — danger,
-/// якорь `#FF3B30` (`c_якоря > 0.88·C_max`, потолок реально кусается), три
-/// значения `chroma_fraction`. Доля меняет ТОЛЬКО ось хромы: `resolved_hue` и
-/// `L` от неё не зависят, поэтому `C_max(L, h)` общий для всех трёх прогонов →
-/// потолок обязан дать строгий порядок `chroma(0.5) < chroma(0.88)` и no-op на
-/// границе `chroma(1.0) = c_якоря`. Инертная проводка уравнивает три хромы —
-/// строгие `<` падают (см. RED-proof в PR-описании).
-#[test]
-fn chroma_fraction_wiring_bites_on_a_saturated_sentiment_anchor() {
-    // Насыщенный danger-солид под условия светлой темы (якорь #FF3B30).
-    let vc = ViewingConditions::srgb();
-    let danger_chroma_at = |fraction: f64| -> f64 {
-        let mut cfg = labui_reference();
-        cfg.sentiments.chroma_fraction = fraction;
-        let tint = cfg
-            .compile_sentiment_tint("diff-probe", "danger")
-            .expect("danger компилируется при валидной доле хромы");
-        let hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
-        oklab_chroma_of_hex(&hex)
-    };
-
-    let c_050 = danger_chroma_at(0.50);
-    let c_088 = danger_chroma_at(0.88);
-    let c_100 = danger_chroma_at(1.00);
-
-    // Ручка кусается: строго меньшая доля → строго меньшая выходная хрома.
-    assert!(
-        c_050 < c_088,
-        "проводка chroma_fraction ИНЕРТНА: доля 0.50 дала хрому {c_050:.4}, \
-         не строго меньше доли 0.88 ({c_088:.4}) — потолок не долетел до выхода"
-    );
-    assert!(
-        c_088 < c_100,
-        "проводка chroma_fraction ИНЕРТНА: доля 0.88 дала хрому {c_088:.4}, \
-         не строго меньше доли 1.00 ({c_100:.4})"
-    );
-
-    // Граница: доля 1.0 = no-op (потолок на стене гамута) ⇒ выходная хрома ==
-    // хроме сырого якоря #FF3B30 (в пределах 8-бит квантизации эмиссии).
-    let anchor_chroma = oklab_chroma_of_hex("#FF3B30");
-    assert!(
-        (c_100 - anchor_chroma).abs() < 0.02 * anchor_chroma,
-        "доля 1.0 обязана быть no-op: выходная хрома {c_100:.4} разошлась с \
-         сырым якорем #FF3B30 ({anchor_chroma:.4}) больше 2%"
-    );
-}
-
-#[test]
-fn hue_floor_out_of_range_is_rejected() {
-    let mut over = labui_reference();
-    over.sentiments.categories[1].hue_floor_deg = Some(360.0);
-    assert!(
-        over.validate().is_err(),
-        "360° ≡ 0°, за полуинтервалом [0,360)"
-    );
-    let mut neg = labui_reference();
-    neg.sentiments.categories[1].hue_floor_deg = Some(-1.0);
-    assert!(neg.validate().is_err());
-    // RED-proof: 0.0 валиден (ничего не исключает — компилируется).
-    let mut lo = labui_reference();
-    lo.sentiments.categories[1].hue_floor_deg = Some(0.0);
-    assert_eq!(lo.validate(), Ok(()));
-    // 359.999 проходит проверку ДИАПАЗОНА (не OutOfBounds), но полный
-    // preflight честно ловит деривационную коллизию: такой пол исключает
-    // почти весь круг (`h < f` нелегален) — легальная дуга сентимента пуста.
-    // Ассерт `Ok` здесь был бы ложноположительным preflight-ом (validate =
-    // компиляция по построению, деривационные ошибки видит).
-    let mut hi = labui_reference();
-    hi.sentiments.categories[1].hue_floor_deg = Some(359.999);
-    assert!(
-        !matches!(hi.validate(), Err(ConfigError::OutOfBounds { .. })),
-        "359.999 внутри полуинтервала [0,360) — диапазонная проверка проходит"
-    );
-    assert!(
-        hi.validate().is_err(),
-        "пол 359.999 опустошает легальную дугу — деривационная ошибка"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -933,79 +810,18 @@ fn matches_collapsed_pattern(name: &str, pattern: &str) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// S_PERC_MIN — деривационная идентичность из конфиг-якорей.
+// Сентимент V2 — идентичность клиентских anchors.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `S_PERC_MIN`, пересчитанный из хром 4 сентимент-якорей labui, совпадает с
-/// замороженной константой (`0.068_703_9`, допуск 1e-4) — закон
-/// `2·C_rep·sin(20°/2)` остаётся законом, сегодняшнее значение — его частный
-/// случай при labui-якорях.
+/// Имя категории и оттенок бренда не являются геометрическими входами.
+/// Поэтому каждый сентимент-тинт обязан совпадать с сырым anchor назначенного
+/// клиентом семейства, включая Info рядом с брендовым синим.
 #[test]
-fn s_perc_min_recomputed_from_config_anchors_matches_frozen() {
-    let recomputed = labui_reference()
-        .sentiment_s_perc_min()
-        .expect("фикстура валидна");
-    let frozen = crate::sentiment::s_perc_min_frozen();
-    assert!(
-        (recomputed - frozen).abs() < 1e-4,
-        "S_PERC_MIN(labui-якоря) = {recomputed} != замороженной {frozen} (допуск 1e-4)"
-    );
-    // Нетавтологичный пин самой замороженной величины.
-    assert!(
-        (recomputed - 0.068_703_9).abs() < 1e-4,
-        "S_PERC_MIN = {recomputed} != 0.068_703_9 (Witzel 2013 · 20°)"
-    );
-}
-
-/// RED-proof пересчёта: подмена якоря сентимента (danger red → зелёный, иная
-/// хрома) сдвигает `S_PERC_MIN` — иначе пересчёт был бы слеп к якорям.
-#[test]
-fn s_perc_min_recompute_bites_on_anchor_mutation() {
-    let base = labui_reference()
-        .sentiment_s_perc_min()
-        .expect("фикстура валидна");
-    let mut cfg = labui_reference();
-    // Danger маппится на red; подменим red-якорь на серый (низкая хрома) →
-    // C_rep падает → S_PERC_MIN падает.
-    for fam in &mut cfg.palette {
-        if fam.key == "red" {
-            fam.anchors.light = "#808080".to_string();
-        }
-    }
-    let mutated = cfg
-        .sentiment_s_perc_min()
-        .expect("мутация якоря сохраняет валидность");
-    assert!(
-        (base - mutated).abs() > 1e-3,
-        "RED-proof провален: подмена якоря НЕ сдвинула S_PERC_MIN ({base} vs {mutated})"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Сентимент — деривационная идентичность (тинт == сырой якорь при
-// labui-бренде).
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Деривационная идентичность: при бренде labui сентимент-тинт совпадает с СЫРЫМ
-/// якорем семейства — под законом категориальных зон (Волна 1) это держится для
-/// ВСЕХ сентиментов, ВКЛЮЧАЯ Info, ПОТОМУ ЧТО бренд оттенок больше не смещает
-/// (сентимент отдыхает на фокусе своей категории).
-///
-/// ИСТОРИЯ (Волна 1 перевернула это): прежде для Danger/Success/Warning
-/// идентичность держалась (их семейства далеки от синего бренда), а Info НЕ
-/// держался — brand-separation уводил его в пурпур, т.к. Info→Blue (h≈259.9°) был
-/// лишь ≈2.5° от синего бренда labui. ИМЕННО ЭТО и был баг. Категориальный закон
-/// убрал brand-separation — теперь Info ТОЖЕ отдыхает на сыром синем якоре (включён
-/// в кейсы ниже; пер-темный «покой» пинит [`labui_info_sentiment_rests_on_blue_focus`]).
-#[test]
-fn sentiment_tint_is_raw_family_anchor_under_categorical_zones() {
+fn sentiment_tint_preserves_raw_family_anchor() {
     let cfg = labui_reference();
     let table = cfg.compile_named_role_table().unwrap();
 
-    // Под законом зон бренд оттенок НЕ смещает — ВСЕ сентименты (включая Info)
-    // отдыхают на сыром якоре семейства. Проверяем на светлой теме (канонический
-    // кейс, бренд labui = светлый `#007AFF`); пер-темные режимы покрыты
-    // `labui_info_sentiment_rests_on_blue_focus` и байт-гейтом эмиссии.
+    // Проверяем светлый режим; остальные режимы покрывает следующий тест.
     let cases: &[(&str, &str)] = &[
         ("fill-danger-primary", "red"),
         ("fill-success-primary", "green"),
@@ -1033,20 +849,11 @@ fn sentiment_tint_is_raw_family_anchor_under_categorical_zones() {
     }
 }
 
-/// ФИКС, ВИДИМЫЙ ВЛАДЕЛЬЦУ (РЕФРЕЙМ Волны 1). Прежний тест
-/// `info_is_displaced_from_blue_brand_by_design` УТВЕРЖДАЛ обратное — что Info
-/// смещён от синего бренда (`assert_ne!(got, "#3E87FF")`). ИМЕННО ЭТО и был баг:
-/// info-заливка labui уезжала в пурпур (#7579FE и т.п.) вместо своего синего
-/// якоря. Закон категориальных зон (Волна 1) его убрал — совпадение info с
-/// брендовым синим внутри синей категории легитимно (Kay & McDaniel 1978).
-///
-/// Проверяем через ПОЛНЫЙ config-путь (`fill-info-primary` Ladder-тинт) во всех
-/// 4 режимах: эмитируемый info-тинт обязан ОТДЫХАТЬ на синем якоре СВОЕГО режима
-/// (деривационная идентичность — бренд оттенок не смещает), а его Oklab-hue —
-/// в пределах 2° от синего фокуса. Для light-режима это 259.89° (Figma Accent/Blue
-/// `#3E87FF`), как заявил владелец.
+/// Полный config-путь сохраняет blue-anchor Info отдельно во всех четырёх
+/// режимах. Проверка точного hex ниже первична; угловая проверка остаётся лишь
+/// диагностикой того же равенства, а не универсальной «синей зоны».
 #[test]
-fn labui_info_sentiment_rests_on_blue_focus() {
+fn labui_info_sentiment_preserves_blue_anchor_in_every_mode() {
     let cfg = labui_reference();
     let table = cfg.compile_named_role_table().unwrap();
     let (_, spec) = table
@@ -1082,25 +889,11 @@ fn labui_info_sentiment_rests_on_blue_focus() {
     ];
     for (name, vc, anchor_hex) in modes {
         let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
-        let got_hue = crate::accent::oklab_hue_of(&got_hex);
-        let focus = crate::accent::oklab_hue_of(anchor_hex);
-        assert!(
-            crate::sentiment::angular_distance(got_hue, focus) <= 2.0,
-            "режим {name}: Info-тинт {got_hex} (h={got_hue:.2}°) обязан ОТДЫХАТЬ на синем \
-             фокусе {anchor_hex} (h={focus:.2}°) — бренд оттенок не смещает (Волна 1); \
-             отклонение {:.2}° > 2°",
-            crate::sentiment::angular_distance(got_hue, focus)
+        assert_eq!(
+            got_hex, anchor_hex,
+            "режим {name}: Info-тинт обязан сохранить клиентский blue-anchor"
         );
     }
-    // Light-режим — заявленный владельцем синий фокус 259.89°.
-    let light_hex =
-        crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&ViewingConditions::srgb()));
-    let light_hue = crate::accent::oklab_hue_of(&light_hex);
-    assert!(
-        (light_hue - 259.89).abs() <= 2.0,
-        "light Info-тинт h={light_hue:.2}° обязан лежать в пределах 2° от синего фокуса 259.89° \
-         ({light_hex})"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1577,22 +1370,6 @@ fn validator_rejects_duplicate_dictionary_keys() {
     ));
 }
 
-/// preferred_side — закрытое меню {-1, +1}: 0 и 2 отвергаются.
-#[test]
-fn validator_rejects_preferred_side_outside_closed_menu() {
-    for bad in [0i8, 2, -3] {
-        let mut c = labui_reference();
-        c.sentiments.categories[0].preferred_side = Some(bad);
-        assert!(
-            matches!(c.validate(), Err(ConfigError::OutOfBounds { .. })),
-            "preferred_side={bad} обязан быть отвергнут"
-        );
-    }
-    let mut c = labui_reference();
-    c.sentiments.categories[0].preferred_side = Some(-1);
-    assert!(c.validate().is_ok(), "-1 легален");
-}
-
 /// Неконечные значения ручек (∞/NaN) отвергаются и open-сверху пределами.
 #[test]
 fn validator_rejects_non_finite_handles() {
@@ -1853,22 +1630,6 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
     }
 }
 
-/// Ошибка сентимент-солвера наружу — СВОИМ вариантом, не [`ConfigError::InvalidHex`]:
-/// потребитель матчится по вариантам, и ошибка политики/геометрии под маской
-/// ошибки парсинга hex ломала бы это различение. Пустая легальная дуга
-/// (пол 359.999 у категории) — ровно такой случай.
-#[test]
-fn sentiment_solver_errors_surface_as_their_own_variant() {
-    let mut c = labui_reference();
-    c.sentiments.categories[1].hue_floor_deg = Some(359.999);
-    match c.compile_named_role_table() {
-        Err(ConfigError::SentimentResolution { sentiment, .. }) => {
-            assert_eq!(sentiment, c.sentiments.categories[1].name);
-        }
-        other => panic!("ждали SentimentResolution, получено {other:?}"),
-    }
-}
-
 /// Ахроматичные источники оттенка: серая нейтраль без override — ошибка;
 /// серый бренд — сентимент честно равен сырому якорю (разведение отключено).
 #[test]
@@ -2044,30 +1805,16 @@ fn glow_roles_resolve_screen_layers() {
     }
 }
 
-/// Попарная различимость сентиментов между СОБОЙ (аудит 2026-07-03).
-///
-/// Модель разводит каждый сентимент от БРЕНДА (`s_min` — хорда до бренда);
-/// попарные дистанции сентиментов между собой ею прямо не гарантируются
-/// (Warning↔Danger держит только категориальный пол). Этот тест ЗАМЕРЯЕТ
-/// попарные Oklab-ab-дистанции решённых labui-солидов по всем четырём
-/// режимам против конфиг-порога `s_perc_min` — того же порога перцептивной
-/// различимости, что закон применяет к бренду.
-///
-/// ИСТОРИЯ: находка S-02 (2026-07-03) — light-ic Warning↔Success слипались
-/// (ab ≈ 0.042 < 0.0687): flip-ветка при ДАЛЁКОМ бренде зеркалила Warning
-/// через полкруга в зелень к Success. ВЫЛЕЧЕНО тем же днём многотельной
-/// легальностью (двухфазная оккупация, `sentiment_solid_for_mode`):
-/// покоящиеся сентименты — неподвижные оккупанты (идентичность якорей цела),
-/// смещённые держат выведенный угловой отступ от их зон — Warning light-ic
-/// ложится в янтарную дугу у пола вместо зелени. Тест держит закон:
-/// ВСЕ пары ≥ порога во всех режимах, без исключений.
+/// V2 не навязывает сентиментам универсальный порог или именованные зоны.
+/// Для каждой пары её минимальная допустимая Oklab-ab-дистанция равна
+/// дистанции именно её клиентских anchors в том же режиме. Финальная эмиссия
+/// не вправе уменьшить ни одну из этих попарных дистанций.
 #[test]
-fn labui_sentiment_solids_keep_pairwise_ab_distance() {
+fn sentiment_v2_preserves_every_pair_specific_anchor_distance() {
     use crate::spaces::oklab::srgb_linear_to_oklab;
     use crate::spaces::srgb::srgb_gamma_inv;
 
     let cfg = labui_reference();
-    let s_perc_min = cfg.sentiment_s_perc_min().expect("порог из якорей labui");
     let vcs = [
         crate::spaces::vc::ViewingConditions::srgb(),
         crate::spaces::vc::ViewingConditions::dim_surround(),
@@ -2075,58 +1822,63 @@ fn labui_sentiment_solids_keep_pairwise_ab_distance() {
         crate::spaces::vc::ViewingConditions::dim_surround_high_contrast(),
     ];
     for (mode_idx, vc) in vcs.iter().enumerate() {
-        let mut solids: Vec<(String, [f64; 3])> = Vec::new();
+        let to_lab = |encoded: [f64; 3]| {
+            srgb_linear_to_oklab([
+                srgb_gamma_inv(encoded[0]),
+                srgb_gamma_inv(encoded[1]),
+                srgb_gamma_inv(encoded[2]),
+            ])
+        };
+        let mut pairs: Vec<(String, [f64; 3], [f64; 3])> = Vec::new();
         for cat in &cfg.sentiments.categories {
+            let family = cfg
+                .palette
+                .iter()
+                .find(|family| family.key == cat.family)
+                .expect("семейство категории существует");
+            let source = to_lab(
+                crate::spaces::srgb::srgb_encoded_from_hex(family.anchors.for_vc(vc))
+                    .expect("anchor валиден"),
+            );
             let tint = cfg
                 .compile_sentiment_tint("pairwise-probe", &cat.name)
                 .expect("labui-сентимент компилируется");
-            let e = tint.for_vc(vc);
-            let lab = srgb_linear_to_oklab([
-                srgb_gamma_inv(e[0]),
-                srgb_gamma_inv(e[1]),
-                srgb_gamma_inv(e[2]),
-            ]);
-            solids.push((cat.name.clone(), lab));
+            let resolved = to_lab(tint.for_vc(vc));
+            pairs.push((cat.name.clone(), source, resolved));
         }
-        for i in 0..solids.len() {
-            for j in (i + 1)..solids.len() {
-                let (na, a) = &solids[i];
-                let (nb, b) = &solids[j];
-                let d_ab = ((a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+
+        for i in 0..pairs.len() {
+            for j in (i + 1)..pairs.len() {
+                let (name_a, source_a, resolved_a) = &pairs[i];
+                let (name_b, source_b, resolved_b) = &pairs[j];
+                let source_d2 =
+                    (source_a[1] - source_b[1]).powi(2) + (source_a[2] - source_b[2]).powi(2);
+                let resolved_d2 = (resolved_a[1] - resolved_b[1]).powi(2)
+                    + (resolved_a[2] - resolved_b[2]).powi(2);
                 assert!(
-                    d_ab >= s_perc_min,
-                    "режим {mode_idx}: сентименты `{na}` и `{nb}` перцептивно слиплись: \
-                     ab-дистанция {d_ab:.4} < порога {s_perc_min:.4}"
+                    resolved_d2 >= source_d2,
+                    "режим {mode_idx}: пара `{name_a}`/`{name_b}` потеряла дистанцию: \
+                     D²_out={resolved_d2:.12} < D²_anchor={source_d2:.12}"
                 );
             }
         }
     }
 }
 
-/// Warning light-ic лежит в янтарной дуге, а не в зелени.
+/// Имя `warning` не перекрашивает клиентский light-ic anchor.
 ///
-/// РЕФРЕЙМ Волны 1 (закон категориальных зон). Прежде это был RED-proof лечения
-/// S-02: брендоцентричный однотельный закон зеркалил IC-Warning далёким брендом в
-/// зелень (~127°), а многотельный лечил в янтарь. Под новым законом
-/// brand-displacement УБРАН целиком — Warning всегда ОТДЫХАЕТ на своём оранжевом
-/// прототипе (для light-ic якорь orange `#C93400`), поэтому зелени неоткуда взяться
-/// и однотельного контр-примера больше не существует. Инвариант «warning light-ic
-/// в янтаре» ОСТАЁТСЯ валидным следствием закона и сохранён как страж; мёртвый
-/// RED-proof (однотельный→зелень) удалён.
+/// Раньше тест навязывал универсальную янтарную дугу от 45°. V2 проверяет более
+/// сильный и объективный инвариант: эмитируется именно anchor семейства, а его
+/// попарная различимость проверяется относительно остальных anchors режима.
 #[test]
-fn warning_light_ic_rests_in_amber_arc() {
+fn warning_light_ic_preserves_the_client_anchor() {
     let cfg = labui_reference();
     let tint = cfg
         .compile_sentiment_tint("warning-amber-probe", "warning")
         .expect("warning компилируется");
     let vc_ic = crate::spaces::vc::ViewingConditions::srgb_high_contrast();
-    let healed = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc_ic));
-    let healed_hue = crate::accent::oklab_hue_of(&healed);
-    // Янтарная дуга: над полом Warning (45°), заведомо ниже зелени (< 90°).
-    assert!(
-        (45.0..90.0).contains(&healed_hue),
-        "warning light-ic обязан лечь в янтарь [45°, 90°), получено {healed_hue:.2}° ({healed})"
-    );
+    let resolved = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc_ic));
+    assert_eq!(resolved, "#C93400");
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Пустой контракт отклоняется на загрузке.

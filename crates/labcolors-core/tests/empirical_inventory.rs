@@ -86,18 +86,10 @@ const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutra
 /// (with a marker + inventory row), so it surfaces through GATE-1/2/3. Each entry
 /// is a reviewable assertion that the value is not a tunable perceptual threshold:
 const BARE_FLOAT_ALLOWLIST: &[&str] = &[
-    "0.0",  // additive identity / origin / degenerate lower clamp bound.
-    "0.5",  // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
-    "1.0",  // multiplicative identity / unit upper clamp bound / purity ceiling.
-    "2.0",  // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
-    "0.05", // hue-search STEP granularity (numerical resolution of the sentiment
-    // hue sweep), not a perceptual threshold — the continuous analogue of the
-    // `STRUCTURAL_NONPOLICY_ALLOWLIST` iteration counts.
-    "20.0", // cited categorical-hue-perception threshold (20°, Witzel & Gegenfurtner
-    // 2013) that recomputes the `S_PERC_MIN` DERIVATION-IDENTITY inline
-    // (`2·C_rep·sin(20°/2)`, see sentiment.rs `s_perc_min_from_chromas`). Excluded on
-    // the SAME grounds `NUMERIC_METHOD_ALLOWLIST` excludes `S_PERC_MIN` — recomputed /
-    // cited, not a new tunable policy literal (provenance held by the `S_PERC_MIN` doc).
+    "0.0",   // additive identity / origin / degenerate lower clamp bound.
+    "0.5",   // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
+    "1.0",   // multiplicative identity / unit upper clamp bound / purity ceiling.
+    "2.0",   // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
     "100.0", // CAM16 J lightness scale (0..100) / percent normalisation.
     "180.0", // half-turn in degrees (shortest-arc hue wrap: (Δ+180)%360−180).
     "255.0", // 8-bit sRGB channel quantisation (round·255 / 255).
@@ -118,8 +110,6 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     // APCA / WCAG standard scaling + identities (lpc.rs).
     "LC_SCALE",
     "DELTA_Y_MIN",
-    // Derivation-identity (R2), recomputed not policy (sentiment.rs).
-    "S_PERC_MIN",
     // Pure numeric epsilons — non-perceptual.
     "RATIO_BISECT_EPS",
     "RATIO_EPS",
@@ -158,7 +148,6 @@ const FORBIDDEN_STANDARD_ROW_NAMES: &[&str] = &[
     "HK_CHROMA_EXPONENT", // Hellwig 0.587
     "LC_SCALE",           // APCA
     "DELTA_Y_MIN",        // APCA
-    "S_PERC_MIN",         // derivation-identity
     "RATIO_BISECT_EPS",   // numeric EPS
     "AA_TEXT_RATIO",      // WCAG
     "L_A",                // CIECAM16 L_A=64
@@ -1053,14 +1042,13 @@ fn read_workspace_doc(rel: &str) -> Option<String> {
 //
 // BUG CLASS this closes: the GATE-1/2/3 integer-row parser SKIPS the `M-` rows
 // (their first cell `M-01` is not a bare integer), so the Muddiness-Law constants
-// of `cleanliness.rs` had NO in-repo gate — the SSOT once deferred them to
+// из `cleanliness_legacy.rs` раньше не имели локального гейта: SSOT ссылался на
 // `.agents/tools/mud-oracle/verify_inventory.js`, which does not exist on this
-// tree. This auditor pulls that check IN-TREE: every non-REMOVED `M-` row must
-// join to a `pub const` in `cleanliness.rs` whose value equals the documented
-// value at the row's DISPLAYED precision (the SSOT shows a rounded value; the
-// const carries full precision, so the comparison is numeric-with-display-tol, not
-// string-equality). `CUSP_L_TABLE` (M-13, value "see code") is checked for
-// existence and its declared length 361. REMOVED rows are NOT re-checked here —
+// отсутствующий внешний скрипт. Локальный аудитор связывает каждую активную
+// M-строку с `pub const` в `cleanliness_legacy.rs` и сравнивает значение с
+// точностью, показанной в SSOT. Это сохраняет полную точность кода и разрешает
+// только документированное округление. Для `CUSP_L_TABLE` проверяется длина 361;
+// удалённые строки здесь повторно не проверяются.
 // their absence is enforced by `cal_t_cal_b_absent_from_shipping_code` in
 // `cleanliness.rs` (no duplication). Shared verbatim by the gate and the RED-proof.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1121,8 +1109,8 @@ fn parse_mud_rows(text: &str) -> Vec<MudRow> {
 }
 
 /// Extract `name -> value` for every `pub const … : f64 = …;` in the PRODUCTION
-/// part of `cleanliness.rs` (everything before the first `#[cfg(test)]`), so a
-/// test-only const can never satisfy an M-row.
+/// продуктивной части `cleanliness_legacy.rs` до первого `#[cfg(test)]`, чтобы
+/// тестовая константа не могла ложно удовлетворить M-строку.
 fn cleanliness_const_values(src: &str) -> std::collections::BTreeMap<String, f64> {
     let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
     let mut map = std::collections::BTreeMap::new();
@@ -1154,7 +1142,7 @@ fn mud_row_defects(rows: &[MudRow], cleanliness_src: &str) -> Vec<String> {
             if !cleanliness_src.contains("CUSP_L_TABLE: [f64; 361]") {
                 defects.push(format!(
                     "M-row `{}`: `CUSP_L_TABLE: [f64; 361]` not found in cleanliness.rs \
-                     (missing table or wrong declared length)",
+                     (missing frozen table or wrong declared length)",
                     r.name
                 ));
             }
@@ -1162,7 +1150,7 @@ fn mud_row_defects(rows: &[MudRow], cleanliness_src: &str) -> Vec<String> {
         }
         let Some(&src_val) = consts.get(&r.name) else {
             defects.push(format!(
-                "M-row `{}`: no `pub const {}` in cleanliness.rs production code \
+                "M-row `{}`: no `pub const {}` in cleanliness_legacy.rs production code \
                  (active row resolves to no source const)",
                 r.name, r.name
             ));
@@ -1259,11 +1247,11 @@ fn mud_rows_match_cleanliness_source() {
         active > 0,
         "mud auditor parsed zero ACTIVE M-rows — the parser is mis-scoped (a vacuous gate)."
     );
-    let src = read_module("cleanliness.rs");
+    let src = read_module("cleanliness_legacy.rs");
     let defects = mud_row_defects(&rows, &src);
     assert!(
         defects.is_empty(),
-        "Muddiness-Law auditor FAILED — {} M-row(s) do not join to cleanliness.rs at the \
+        "Muddiness-Law V1 auditor FAILED — {} M-row(s) do not join to cleanliness_legacy.rs at the \
          documented value/precision:\n  {}",
         defects.len(),
         defects.join("\n  ")
@@ -1837,14 +1825,14 @@ fn red_proof_audit_probe() {
     //    ACTIVE M-row's value in an IN-MEMORY copy of the SSOT and run the *same*
     //    `mud_row_defects` the live gate runs (INV-4), so a mutation to the auditor
     //    is caught here, not green-from-birth.
-    let cleanliness_src = read_module("cleanliness.rs");
+    let cleanliness_src = read_module("cleanliness_legacy.rs");
     let mud_probe = "H_Y_DEG";
     // Floor: the UNMUTATED SSOT must be GREEN against the source, so the drift below
     // is provably caused by the splice.
     let mud_baseline = mud_row_defects(&parse_mud_rows(&real_ssot), &cleanliness_src);
     assert!(
         mud_baseline.is_empty(),
-        "RED-proof FAILED — real SSOT M-rows are NOT GREEN against cleanliness.rs; the probe \
+        "RED-proof FAILED — real SSOT M-rows are NOT GREEN against cleanliness_legacy.rs; the probe \
          cannot prove 'mutation flips green→red' until they are in sync:\n  {}",
         mud_baseline.join("\n  ")
     );

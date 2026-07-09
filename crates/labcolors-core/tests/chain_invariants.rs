@@ -98,11 +98,7 @@ fn plain_neutral() -> NeutralConfig {
 }
 
 fn plain_sentiments() -> SentimentsConfig {
-    SentimentsConfig {
-        categories: vec![],
-        hardness: 5.0,
-        chroma_fraction: 0.88,
-    }
+    SentimentsConfig { categories: vec![] }
 }
 
 /// Проверить, что таблица ТОТАЛЬНА на всех экстремальных фонах × VC: каждый
@@ -195,7 +191,8 @@ fn assert_valid_hex(hex: &str, label: &str, name: &str, bg: &str) {
     );
 }
 
-/// Компоненты `oklch(L% C H[ / A])` — конечные числа (браузер их так и прочтёт).
+/// Числовые компоненты `oklch(L% C H[ / A])` конечны; `H=none` — нормативное
+/// состояние отсутствующего hue у ахромата, а не нечисловая ошибка.
 fn assert_oklch_components_finite(css: &str, label: &str, name: &str, bg: &str) {
     let inner = css
         .strip_prefix("oklch(")
@@ -206,6 +203,9 @@ fn assert_oklch_components_finite(css: &str, label: &str, name: &str, bg: &str) 
         None => (inner, None),
     };
     for part in lch.split_whitespace() {
+        if part == "none" {
+            continue;
+        }
         let v: f64 = part
             .trim_end_matches('%')
             .parse()
@@ -330,30 +330,20 @@ fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
     }
 }
 
-/// Экстремальный СЕНТИМЕНТ (chroma_fraction у краёв (0,1], жёсткость у краёв) на
-/// вырожденной палитре: pair-fill/dj роли не роняют резолв нечислом.
+/// Сентимент на вырожденной одноцветной палитре не роняет резолв нечислом.
 #[test]
-fn extreme_sentiment_knobs_never_panic_or_emit_nonfinite() {
+fn sentiment_anchor_never_panics_or_emits_nonfinite() {
     let family = PaletteFamily {
         key: "fam".to_string(),
         anchors: flat_anchors("#FF3B30"),
     };
-    let knob_sets = [
-        (0.001, 1.0),   // почти нулевая хрома, самая мягкая жёсткость
-        (1.0, 5.0),     // полная хрома (стена гамута)
-        (0.88, 1000.0), // экстремальная жёсткость
-    ];
-    for (chroma_fraction, hardness) in knob_sets {
-        let sentiments = SentimentsConfig {
-            categories: vec![SentimentCategory {
-                name: "alert".to_string(),
-                family: "fam".to_string(),
-                hue_floor_deg: None,
-                preferred_side: None,
-            }],
-            hardness,
-            chroma_fraction,
-        };
+    let sentiments = SentimentsConfig {
+        categories: vec![SentimentCategory {
+            name: "alert".to_string(),
+            family: "fam".to_string(),
+        }],
+    };
+    {
         let cfg = scaffold(
             plain_neutral(),
             sentiments,
@@ -369,10 +359,7 @@ fn extreme_sentiment_knobs_never_panic_or_emit_nonfinite() {
         );
         if let Ok(table) = cfg.compile_named_role_table() {
             // Чистый гард тотальности/не-паники (как neutral выше).
-            let _ = assert_table_is_total(
-                &table,
-                &format!("sentiment(cf={chroma_fraction},h={hardness})"),
-            );
+            let _ = assert_table_is_total(&table, "sentiment(anchor-v2)");
         }
     }
 }

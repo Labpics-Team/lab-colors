@@ -123,6 +123,7 @@
     }
   ],
   "sentiments": {
+    "geometry": "anchor-distance-v2",
     "categories": [
       {
         "name": "danger",
@@ -130,9 +131,7 @@
       },
       {
         "name": "warning",
-        "family": "orange",
-        "hue_floor_deg": 45.0,
-        "preferred_side": 1
+        "family": "orange"
       },
       {
         "name": "success",
@@ -142,9 +141,7 @@
         "name": "info",
         "family": "blue"
       }
-    ],
-    "hardness": 5.0,
-    "chroma_fraction": 1.0
+    ]
   },
   "themes": [
     {

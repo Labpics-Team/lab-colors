@@ -106,10 +106,9 @@ test("Chrome computed form (L as 0..1) decodes to the same core bytes", () => {
 });
 
 test("`none` components decode to the core's achromatic bytes (CSS Color 4)", () => {
-  // Per CSS Color 4 a missing component (`none`) is 0. A core-emitted grey is
-  // `oklch(L% 0.000000 <hue>)`; the `none`-chroma/hue spelling must land on the
-  // same bytes (C=0 makes hue powerless). Validates the parser's `none` path
-  // against the core's grey emissions.
+  // Ядро само эмитирует missing hue как `none`: числовой угол на оси C=0 не
+  // является свойством цвета. Подмена также и C на `none` обязана сохранить
+  // байты, поскольку CSS Color 4 вычисляет обе missing-компоненты как ноль.
   const greys = VECTORS.filter((v) => v.alpha === "-" && /^#(..)\1\1$/.test(v.hex));
   assert.ok(greys.length >= 200, "need the grey axis for the none check");
   for (const { css, bytes } of greys) {

@@ -44,9 +44,9 @@ pub enum RoleOutcome {
     Color(SolvedColor),
     /// The explicit zero token (`Role::None`): no colour here, by design.
     None,
-    /// A semi-transparent ladder / alpha-analog role: the emission is
-    /// `oklch(L% C H / A)` and the browser composites it; the measured
-    /// contrasts are those of the composite on the resolve background.
+    /// Полупрозрачная роль: браузер композитит `oklch(L% C H / A)`, а при
+    /// powerless chroma вместо фиктивного угла получает missing-токен `none`.
+    /// Контрасты относятся к композиту на фоне резолва.
     Translucent(RgbaColor),
     /// Свечение (kind glow, labui ADR-0002 §5): screen-слои цвета источника +
     /// решённая интенсивность. Потребитель красит слои с

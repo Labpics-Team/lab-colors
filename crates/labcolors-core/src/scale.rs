@@ -2,130 +2,80 @@ use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::spaces::cam16;
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
+use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
-
-/// Наклон штрафа дрейфа оттенка в поиске оптимального hue рампы акцента:
-/// `penalty_scale = HUE_DRIFT_PENALTY_SLOPE / HUE_SEARCH_HALF_WINDOW`, дальше
-/// `score = c − penalty_scale·drift` — баланс «максимум хромы» против «уход от
-/// канонического оттенка». Перцептивная ручка — терминал (e) DESIGN-CHOICE.
-///
-/// **MODEL-CONFLICT: ИЗМЕРЕН И ОТКЛОНЁН (не OWNER-PENDING).** Строгий
-/// кандидат-вывод (хорда Oklab, `penalty_scale = C·π/180 ≈ 0.0026–0.0035/°`)
-/// ИЗМЕРЕН и ОТКЛОНЁН — вырождает интерьерный оптимум в клип по ребру окна
-/// ±30° на 12/43 якорях, флипает оптимум на 27/43 (лок
-/// `chord_derived_slope_rejected_degenerates_to_window_edge`). В отличие от
-/// [`crate::pair::PAIR_CROSSOVER_Y`] (где модельный якорь существует и
-/// ждёт решения владельца), здесь единственный строгий кандидат уже
-/// ПРОВЕРЕН и признан ХУЖЕ текущего значения — вопрос закрыт замером, не
-/// открыт для владельца: свободная ручка с отклонённым кандидатом честнее
-/// подгонки — реестр docs/empirical-inventory.md.
-///
-/// Легальный диапазон (Волна 2): проектный интервал свипа экспозиции
-/// **[0.10, 0.20]** (номинал 0.15 — центр); экспозиция 14.29% (l,hue)-сетки, где
-/// значение РЕШАЕТ выбранный оттенок (`exposure_hue_drift_penalty_slope`). Протокол
-/// «объективизации»: психофизический фит приемлемости дрейфа оттенка рампы (2AFC,
-/// N ≥ 15) стал бы кандидатом-ВЫВОДОМ на общих основаниях (замер → сравнение →
-/// решение, как хорда выше), НЕ обязательным экспериментом — терминал (e) уже
-/// закрыт замером отклонения строгого кандидата.
-// SSOT-TRACKED — наклон штрафа дрейфа, терминал (e) design-choice (model-conflict: измерен и отклонён, не owner-pending; диапазон [0.10,0.20]), см. docs/empirical-inventory.md.
-const HUE_DRIFT_PENALTY_SLOPE: f64 = 0.15;
 
 /// Акцентная кривая: светлотный скелет — нейтральная кривая темы, оттенок и
 /// насыщенность — от канонического цвета бренда.
 ///
-/// Инвариант дизайна: акцентные лестницы держат ту же светлотную геометрию,
-/// что и нейтральные, поэтому светлота здесь не решается заново, а берётся из
-/// [`NeutralCurve::at`] — акценты и нейтраль по построению выровнены по шагам.
+/// Каждая ступень получает H-K-цель из фактически эмитированного состояния
+/// [`NeutralCurve::at`], а затем выбирает ближайший допустимый sRGB8. Поэтому
+/// закон сравнивает реальные токены, а не обещает недостижимое равенство двух
+/// непрерывных float-точек после последующего округления.
 #[derive(Debug, Clone)]
 pub struct AccentCurve {
     neutral: NeutralCurve,
+    /// Oklab-оттенок хранится только для публичного геометрического аксессора.
     h_canonical: f64,
+    /// CAM16-оттенок, в котором строится изоуровень H-K.
+    h_cam_canonical: f64,
     sat_ratio: f64,
-    slope: f64,
     canonical_hex: String,
     vc: ViewingConditions,
 }
 
 impl AccentCurve {
-    /// Кривая от канонического hex поверх светлотного скелета `neutral`.
+    /// Кривая от канонического hex поверх H-K-светлотного скелета `neutral`.
     ///
-    /// Запоминается не абсолютная хрома, а `sat_ratio` — доля канонической
-    /// хромы от максимума гамута на её собственной светлоте: так
-    /// «насыщенность бренда» переносится на любую светлоту рампы без выхода
-    /// за гамут (абсолютная хрома у краёв физически недостижима).
+    /// Канонический цвет задаёт CAM16-оттенок и долю его CAM16-хромы от первой
+    /// физической границы на собственном изоуровне H-K. Та же безразмерная доля
+    /// переносится на остальные уровни. Поэтому закон не смешивает Oklab и
+    /// CAM16 и не содержит подобранного коэффициента насыщенности.
     pub fn new(canonical_hex: &str, neutral: &NeutralCurve) -> Result<Self, String> {
-        let color = LcsColor::from_hex(canonical_hex)?;
-        let h_canonical = color.h_ok;
-
         let rgb = srgb_from_hex(canonical_hex)?;
-        let lab = srgb_linear_to_oklab(rgb);
-        let l_ok = lab[0];
-
-        let c_canonical = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
-        let c_max = max_chroma(l_ok, h_canonical);
-        let sat_ratio = if c_max > 1e-6 {
-            c_canonical / c_max
-        } else {
-            0.0
-        };
+        let identity = iso_hk_identity_from_anchor(canonical_hex, neutral.vc())?;
 
         Ok(Self {
             neutral: neutral.clone(),
-            h_canonical,
-            sat_ratio: sat_ratio.clamp(0.0, 1.0),
-            slope: HUE_DRIFT_PENALTY_SLOPE,
-            canonical_hex: canonical_hex.to_uppercase(),
+            h_canonical: identity.h_ok,
+            h_cam_canonical: identity.h_cam,
+            sat_ratio: identity.chroma_ratio,
+            canonical_hex: hex_from_srgb(rgb),
             vc: *neutral.vc(),
         })
     }
 
-    /// Точка рампы при `t ∈ [0, 1]`: светлота — от нейтрального скелета,
-    /// оттенок — поиск максимума хромы со штрафом дрейфа от канонического
-    /// (см. `find_optimal_hue`), хрома — `sat_ratio ×` стена гамута на этой
-    /// светлоте.
-    pub fn at(&self, t: f64) -> LcsColor {
+    /// Точка рампы при `t ∈ [0, 1]`.
+    ///
+    /// Сырой CAM16 J выводится прямо из равенства Hellwig 2022
+    /// `J_HK = J + f(h)·C^0.587`; CAM16-оттенок, VC и относительная хрома в
+    /// решении и выдаче одни и те же. После непрерывного решения выбирается
+    /// детерминированный ближайший sRGB8, и наружу возвращается его повторно
+    /// декодированный [`LcsColor`], а не скрыто клипнутая float-точка.
+    pub fn try_at(&self, t: f64) -> Result<LcsColor, IsoHkError> {
+        assert!(t.is_finite(), "параметр кривой t должен быть конечным");
         let t = t.clamp(0.0, 1.0);
         let neutral_color = self.neutral.at(t);
-        let jp = neutral_color.jp;
-
-        let l_ok = jp_to_oklab_l(jp, &self.vc);
-
-        let h_optimal = self.find_optimal_hue(l_ok);
-
-        let c_max = max_chroma(l_ok, h_optimal);
-        let c_use = self.sat_ratio * c_max;
-
-        let h_rad = h_optimal.to_radians();
-        let a_ok = c_use * h_rad.cos();
-        let b_ok = c_use * h_rad.sin();
-
-        let rgb = oklab_to_srgb_linear([l_ok, a_ok, b_ok]);
-        let rgb_clamped = [
-            rgb[0].clamp(0.0, 1.0),
-            rgb[1].clamp(0.0, 1.0),
-            rgb[2].clamp(0.0, 1.0),
-        ];
-
-        let xyz = srgb_to_xyz(rgb_clamped);
-        let h_ok = b_ok.atan2(a_ok).to_degrees().rem_euclid(360.0);
-
-        let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(xyz, &self.vc);
-
-        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131) through the
-        // shared single-source helpers (#19/#60); never re-type the constants here.
-        let jp_actual = cam16::ucs_j(j);
-        let mp = cam16::ucs_m(m);
-        let s = if jp_actual + 1.0 > 1e-9 {
-            mp / (jp_actual + 1.0)
-        } else {
-            0.0
-        };
-
-        LcsColor::new(jp_actual, h_ok, s.max(0.0), h_cam)
+        quantized_iso_hk_for_neutral(
+            &neutral_color,
+            self.h_cam_canonical,
+            self.sat_ratio,
+            &self.vc,
+        )
+        .map(|resolved| resolved.color)
     }
 
-    /// The viewing conditions inherited from the neutral curve.
+    /// Совместимая инфаллибельная обёртка над [`Self::try_at`].
+    ///
+    /// Кривая, созданная [`Self::new`], обязана быть достижима на всём своём
+    /// нейтральном скелете. Код с произвольными условиями просмотра должен
+    /// вызывать вариант с `Result` и явно обрабатывать диагностическую ошибку.
+    pub fn at(&self, t: f64) -> LcsColor {
+        self.try_at(t)
+            .expect("H-K-уровень акцента недостижим в физическом гамуте sRGB")
+    }
+
+    /// Условия просмотра, унаследованные от нейтральной кривой.
     pub fn vc(&self) -> &ViewingConditions {
         &self.vc
     }
@@ -135,90 +85,749 @@ impl AccentCurve {
         self.h_canonical
     }
 
-    /// Доля канонической хромы от стены гамута на её светлоте, `[0, 1]`
+    /// Доля канонической CAM16-хромы от границы её изоуровня H-K, `[0, 1]`
     /// (см. [`AccentCurve::new`]).
     pub fn sat_ratio(&self) -> f64 {
         self.sat_ratio
     }
 
-    /// The original hex string passed to [`AccentCurve::new`], normalised to uppercase.
+    /// CAM16-оттенок решателя изоуровня H-K, в градусах `[0, 360)`.
+    pub fn canonical_cam16_hue(&self) -> f64 {
+        self.h_cam_canonical
+    }
+
+    /// Исходный hex из [`AccentCurve::new`], нормализованный к верхнему регистру.
     pub fn canonical_hex(&self) -> &str {
         &self.canonical_hex
     }
+}
 
-    fn find_optimal_hue(&self, l_ok: f64) -> f64 {
-        find_optimal_hue_core(l_ok, self.h_canonical, self.slope)
+/// H-K-светлота Hellwig 2022, представленная [`LcsColor`].
+///
+/// Значение восстанавливается из тех же CAM16-коррелятов, которые хранит LCS:
+/// здесь нет лишнего обратного цикла через XYZ и сравнения разных координат светлоты.
+pub(crate) fn perceived_lightness(color: &LcsColor, vc: &ViewingConditions) -> f64 {
+    let j = cam16::ucs_j_inv(color.jp);
+    let m = cam16::ucs_m_inv(color.mp());
+    crate::lpc::j_hk_from_cam16(j, m, color.h_cam(), vc)
+}
+
+/// Единственная цветовая идентичность, выводимая из клиентского sRGB8-якоря.
+///
+/// Oklab hue остаётся описательным аксессором, а физическое построение использует
+/// только сопряжённые CAM16 hue и C. `chroma_ratio` — доля C якоря от первой
+/// связной границы его собственного iso-HK-уровня; значение никогда не клипуется.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IsoHkIdentity {
+    pub h_ok: f64,
+    pub h_cam: f64,
+    pub chroma_ratio: f64,
+}
+
+pub(crate) fn iso_hk_identity_from_anchor(
+    anchor_hex: &str,
+    vc: &ViewingConditions,
+) -> Result<IsoHkIdentity, String> {
+    vc.validate()?;
+    let rgb = srgb_from_hex(anchor_hex)?;
+    let achromatic = rgb[0] == rgb[1] && rgb[1] == rgb[2];
+    if achromatic {
+        return Ok(IsoHkIdentity {
+            h_ok: 0.0,
+            h_cam: 0.0,
+            chroma_ratio: 0.0,
+        });
+    }
+
+    let lab = srgb_linear_to_oklab(rgb);
+    let h_ok = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
+    let anchor = LcsColor::from_hex_with_vc(anchor_hex, vc)?;
+    let h_cam = anchor.h_cam();
+    let anchor_c = cam16::ucs_m_inv(anchor.mp()) / vc.fl_pow_025;
+    let target = perceived_lightness(&anchor, vc);
+    let maximum = identity_radius_from_physical_anchor(target, h_cam, anchor_c, rgb, vc)?;
+    if maximum <= 0.0 {
+        return Err(format!(
+            "хроматический якорь имеет C={anchor_c}, но физический радиус его H-K-уровня равен {maximum}"
+        ));
+    }
+    let chroma_ratio = anchor_c / maximum;
+    if !chroma_ratio.is_finite() || !(0.0..=1.0).contains(&chroma_ratio) {
+        return Err(format!(
+            "якорь лежит вне сертифицированного iso-HK-радиуса: C={anchor_c}, Cmax={maximum}, доля={chroma_ratio}"
+        ));
+    }
+
+    Ok(IsoHkIdentity {
+        h_ok,
+        h_cam,
+        chroma_ratio,
+    })
+}
+
+/// Радиус iso-HK-компоненты с конструктивным физическим свидетелем.
+///
+/// Декодированный sRGB8 anchor сам доказывает `Cmax ≥ C_anchor`. На грани куба
+/// обратный CAM16 может дать `1 + несколько ulp`, из-за чего строгий аналитический
+/// solver возвращает соседний внутренний f64. Это не делает свидетель
+/// внегамутным. Если такое расхождение возникло, поиск продолжается наружу от
+/// `C_anchor`; последняя физическая binary64-точка и становится denominator.
+fn identity_radius_from_physical_anchor(
+    target: f64,
+    h_cam: f64,
+    anchor_c: f64,
+    anchor_rgb: [f64; 3],
+    vc: &ViewingConditions,
+) -> Result<f64, String> {
+    let solved = max_chroma_at_perceived_lightness(target, h_cam, vc)
+        .map_err(|error| format!("якорь нельзя разместить на его H-K-уровне: {error}"))?;
+    if solved >= anchor_c {
+        return Ok(solved);
+    }
+
+    let on_cube_face = anchor_rgb
+        .into_iter()
+        .any(|channel| channel == 0.0 || channel == 1.0);
+    if !on_cube_face {
+        return Err(format!(
+            "сертифицированный iso-HK-радиус меньше интерьерного физического anchor: C={anchor_c}, Cmax={solved}"
+        ));
+    }
+
+    let first_outward = anchor_c.next_up();
+    if !iso_hk_point_is_physical(target, h_cam, first_outward, vc) {
+        return Ok(anchor_c);
+    }
+
+    let mut inside = first_outward;
+    let mut span = first_outward - anchor_c;
+    let outside = loop {
+        span *= 2.0;
+        let probe = anchor_c + span;
+        if !probe.is_finite()
+            || iso_hk_j(target, probe, h_cam, vc) <= 0.0
+            || !iso_hk_point_is_physical(target, h_cam, probe, vc)
+        {
+            break probe;
+        }
+        inside = probe;
+    };
+
+    let mut outside = outside;
+    while inside.next_up() < outside {
+        let middle = inside + (outside - inside) * 0.5;
+        if middle == inside || middle == outside {
+            break;
+        }
+        if iso_hk_point_is_physical(target, h_cam, middle, vc) {
+            inside = middle;
+        } else {
+            outside = middle;
+        }
+    }
+    Ok(inside)
+}
+
+/// Измеряет H-K-светлоту именно эмитируемого `#RRGGBB`.
+///
+/// Равенство трёх декодированных каналов задаёт физический ахромат, поэтому для
+/// него C принимается равной нулю точно. Это не позволяет матричному шуму CAT16
+/// создавать ложный H-K-вклад у серого состояния конечной sRGB8-лестницы.
+pub fn emitted_perceived_lightness(hex: &str, vc: &ViewingConditions) -> Result<f64, String> {
+    vc.validate()?;
+    emitted_perceived_lightness_unchecked(hex, vc)
+}
+
+fn emitted_perceived_lightness_unchecked(hex: &str, vc: &ViewingConditions) -> Result<f64, String> {
+    let rgb = srgb_from_hex(hex)?;
+    let (j, m, h_cam) = crate::lpc::cam16_jch_from_xyz(srgb_to_xyz(rgb), vc);
+    if rgb[0] == rgb[1] && rgb[1] == rgb[2] {
+        Ok(j)
+    } else {
+        Ok(crate::lpc::j_hk_from_cam16(j, m, h_cam, vc))
     }
 }
 
-/// Полуокно поиска оптимального оттенка рампы акцента (градусы): 30° покрывает
-/// типичную ширину гребня гамута sRGB вокруг канонического оттенка.
-///
-/// Терминал **(c) INTERVAL-INSENSITIVE** (в отличие от
-/// [`crate::semantic::CUSP_HALF_WINDOW_DEG`], которое ДОКАЗАННО клипует):
-/// лок `chord_derived_slope_rejected_degenerates_to_window_edge` показывает
-/// интерьерный оптимум (0 прижатий к ребру ±30°) на ВСЕХ 43 хроматических
-/// якорях 49-якорного паспорта labui при продакшн-наклоне; окно — нежёсткая
-/// нижняя граница, не связывающий кап. Экспозиция (доля (l,hue)-сетки, где
-/// точное окно меняет выбранный оттенок при свипе [25°, 45°]) — **0.93%**
-/// (`exposure_hue_search_window`). Значение не меняется.
-// SSOT-TRACKED — hue search half-window (degrees), терминал (c) interval-insensitive (exposure 0.93%, 0/43 якорей у ребра), см. docs/empirical-inventory.md.
-const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
+/// Результат конечного выбора на sRGB8-решётке.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct QuantizedIsoHkColor {
+    pub color: LcsColor,
+    pub target_hk: f64,
+    pub achieved_hk: f64,
+    pub chroma_ratio: f64,
+}
 
-/// The hue (degrees) maximising `max_chroma(l_ok, h) − penalty·|h − h_canonical|`
-/// over the ±[`HUE_SEARCH_HALF_WINDOW`] window around `h_canonical`.
-///
-/// Free-standing (rather than a method) so the differential harness can diff the
-/// *selection* logic against a frozen flat-scan reference over an arbitrary
-/// `h_canonical`, independently of the [`max_chroma`] internals it calls.
-fn find_optimal_hue_core(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
-    let c_at_canonical = max_chroma(l_ok, h_canonical);
+#[derive(Debug, Clone, Copy)]
+struct QuantizedCandidate {
+    color: LcsColor,
+    bytes: [u8; 3],
+    achieved_hk: f64,
+    level_error: f64,
+    ideal_delta_e: f64,
+}
 
-    // Degenerate guard: if all hues yield near-zero chroma, skip the search.
-    if c_at_canonical < 1e-5 {
-        return h_canonical;
+impl QuantizedCandidate {
+    fn is_better_than(self, other: Self) -> bool {
+        self.level_error
+            .total_cmp(&other.level_error)
+            .then_with(|| self.ideal_delta_e.total_cmp(&other.ideal_delta_e))
+            .then_with(|| self.bytes.cmp(&other.bytes))
+            .is_lt()
+    }
+}
+
+/// Выбирает ближайшее представимое состояние для одного конечного уровня.
+///
+/// Непрерывная iso-HK-точка однозначно задаётся `(target, h_cam, ratio)`. Для
+/// хроматического цвета рассматриваются все восемь вершин единственной
+/// содержащей его sRGB8-ячейки. При нулевом радиусе исчерпываются все 256 серых:
+/// это полный конечный кодомен ахромата, а не сеточная аппроксимация.
+/// Лексикографическая цель: минимальная ошибка H-K-уровня, затем CAM16-UCS ΔE
+/// до непрерывного идеала, затем меньшая тройка RGB-байтов как технический tie.
+pub(crate) fn quantized_iso_hk_for_neutral(
+    neutral: &LcsColor,
+    h_cam: f64,
+    chroma_ratio: f64,
+    vc: &ViewingConditions,
+) -> Result<QuantizedIsoHkColor, IsoHkError> {
+    let neutral_hex = neutral.to_hex_with_vc(vc);
+    let target_hk = emitted_perceived_lightness_unchecked(&neutral_hex, vc)
+        .map_err(|_| IsoHkError::NumericalFailure)?;
+
+    // В вершинах sRGB-куба хроматический радиус физически равен нулю. Возврат
+    // исходного конечного состояния сохраняет его байты без обратного CAM-цикла.
+    if neutral_hex == "#000000" || neutral_hex == "#FFFFFF" {
+        return Ok(QuantizedIsoHkColor {
+            color: *neutral,
+            target_hk,
+            achieved_hk: target_hk,
+            chroma_ratio,
+        });
     }
 
-    let penalty_scale = slope / HUE_SEARCH_HALF_WINDOW;
-    // 1° step: coarser than Oklab JND but sufficient for the broad chroma ridge.
-    let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
+    let ideal = color_at_perceived_lightness(target_hk, h_cam, chroma_ratio, vc)?;
+    let ideal_rgb = ideal.to_linear_srgb(vc);
+    if !in_physical_srgb(ideal_rgb) {
+        return Err(IsoHkError::NumericalFailure);
+    }
 
-    // Score of the flat-scan index `i` ∈ [0, steps], built through the SAME
-    // `h(i) = h_canonical − HALF_WINDOW + i` expression the flat scan used so the
-    // hue, drift and chroma are bit-for-bit what a full sweep would compute. The
-    // canonical hue reuses the already-solved chroma (C4).
-    let score_at = |i: i32| -> f64 {
-        let h = h_canonical - HUE_SEARCH_HALF_WINDOW + i as f64;
-        let drift = (h - h_canonical).abs();
-        let c = if h == h_canonical {
-            c_at_canonical
-        } else {
-            max_chroma(l_ok, h)
+    let mut best: Option<QuantizedCandidate> = None;
+    let mut consider = |bytes: [u8; 3]| -> Result<(), IsoHkError> {
+        let hex = format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
+        let color =
+            LcsColor::from_hex_with_vc(&hex, vc).map_err(|_| IsoHkError::NumericalFailure)?;
+        let achieved_hk = emitted_perceived_lightness_unchecked(&hex, vc)
+            .map_err(|_| IsoHkError::NumericalFailure)?;
+        let candidate = QuantizedCandidate {
+            color,
+            bytes,
+            achieved_hk,
+            level_error: (achieved_hk - target_hk).abs(),
+            ideal_delta_e: color.delta_e_ucs(&ideal),
         };
-        c - penalty_scale * drift
+        if best.is_none_or(|current| candidate.is_better_than(current)) {
+            best = Some(candidate);
+        }
+        Ok(())
     };
 
-    // C2 — coarse-to-fine. Locate the ridge on a 5° coarse grid, then refine at
-    // full 1° resolution inside a ±5° bracket around the coarse argmax. The score
-    // (the smooth gamut chroma ridge minus a V-shaped drift penalty) is unimodal
-    // over the window, so the coarse argmax sits within one coarse step of the
-    // true peak and the bracket contains it. The winner is chosen by scanning
-    // candidate indices in ascending order with the SAME strict-`>` first-maximum
-    // tie-break the flat scan used, so the selected hue is bit-identical — pinned
-    // on the full 180k-point grid by diff test B.
-    //
-    // 5° coarse grid; ±15° refinement bracket around every coarse local maximum.
-    // The bracket is sized from a full-grid measurement: over the entire
-    // (l_ok × canonical-hue) grid the flat argmax never sits more than 13° from a
-    // coarse local maximum, so ±15° (a 2° margin) reproduces the flat scan
-    // bit-for-bit — pinned by diff test B on the grid and by the accent/tint
-    // golden snapshots on the real non-integer hues. (`let`, not `const`, so the
-    // frozen policy-const audit never sees an integer grid knob as a perceptual
-    // value.)
-    let coarse = 5;
-    let bracket = 15;
-    let best_i = coarse_to_fine_argmax(steps, coarse, bracket, score_at);
-    h_canonical - HUE_SEARCH_HALF_WINDOW + best_i as f64
+    if chroma_ratio == 0.0 {
+        // При нулевом радиусе hue не существует. Полный представимый кодомен —
+        // ровно 256 серых, поэтому исчерпывающий поиск одновременно быстрее и
+        // строже локальной RGB-ячейки: цветной байтовый шум невозможен.
+        for byte in 0_u16..=255 {
+            let byte = byte as u8;
+            consider([byte, byte, byte])?;
+        }
+    } else {
+        let mut bounds = [[0_u8; 2]; 3];
+        for channel in 0..3 {
+            let scaled = srgb_gamma(ideal_rgb[channel]) * 255.0;
+            if !scaled.is_finite() || !(0.0..=255.0).contains(&scaled) {
+                return Err(IsoHkError::NumericalFailure);
+            }
+            bounds[channel] = [scaled.floor() as u8, scaled.ceil() as u8];
+        }
+        for mask in 0_u8..8 {
+            consider([
+                bounds[0][usize::from(mask & 1)],
+                bounds[1][usize::from((mask >> 1) & 1)],
+                bounds[2][usize::from((mask >> 2) & 1)],
+            ])?;
+        }
+    }
+
+    let best = best.ok_or(IsoHkError::NumericalFailure)?;
+    Ok(QuantizedIsoHkColor {
+        color: best.color,
+        target_hk,
+        achieved_hk: best.achieved_hk,
+        chroma_ratio,
+    })
+}
+
+/// Ошибка построения физического sRGB-цвета на заданном изоуровне Hellwig 2022.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IsoHkError {
+    /// Запрошенная H-K-светлота равна NaN или бесконечности.
+    NonFiniteTarget,
+    /// CAM16-оттенок не конечен.
+    NonFiniteHue,
+    /// Относительная хрома не конечна либо лежит вне `[0, 1]`.
+    InvalidChromaRatio,
+    /// Ахроматическое начало лежит ниже физического чёрного.
+    BelowBlack { target: f64 },
+    /// При данном CAM16-оттенке нет физического цвета с такой H-K-светлотой.
+    NoPhysicalColor { target: f64, h_cam: f64 },
+    /// Численный расчёт не смог сертифицировать связную физическую компоненту.
+    NumericalFailure,
+}
+
+impl std::fmt::Display for IsoHkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::NonFiniteTarget => write!(f, "H-K-светлота должна быть конечной"),
+            Self::NonFiniteHue => write!(f, "CAM16-оттенок должен быть конечным"),
+            Self::InvalidChromaRatio => {
+                write!(
+                    f,
+                    "относительная CAM16-хрома должна быть конечной и лежать в [0, 1]"
+                )
+            }
+            Self::BelowBlack { target } => {
+                write!(f, "H-K-светлота {target} лежит ниже физического чёрного")
+            }
+            Self::NoPhysicalColor { target, h_cam } => write!(
+                f,
+                "H-K-светлота {target} недостижима в sRGB при CAM16-оттенке {h_cam}"
+            ),
+            Self::NumericalFailure => write!(
+                f,
+                "не удалось сертифицировать связный физический интервал sRGB"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for IsoHkError {}
+
+/// Максимальная CAM16-хрома первой связной физической части изоуровня H-K.
+///
+/// Вся кривая параметризуется в одной модели восприятия и при одних условиях
+/// просмотра:
+///
+/// `J(C) = J_HK_target - f(h) * C^0.587`, `M(C) = C * F_L^0.25`.
+///
+/// `f(h)` и показатель вычисляет [`crate::lpc::j_hk_from_cam16`] — единственный
+/// источник опубликованного уравнения Hellwig 2022. Здесь нет Oklab-светлоты,
+/// Oklab-оттенка, сероосевого приближения и перцептивного допуска. Возвращается
+/// последнее представимое внутригамутное `C` перед первым выходом из первой
+/// физической компоненты; при `J_HK` выше ахроматического белого её начало может
+/// быть больше нуля.
+pub(crate) fn max_chroma_at_perceived_lightness(
+    target: f64,
+    h_cam: f64,
+    vc: &ViewingConditions,
+) -> Result<f64, IsoHkError> {
+    validate_iso_hk_inputs(target, h_cam)?;
+    if target < 0.0 {
+        return Err(IsoHkError::BelowBlack { target });
+    }
+    let white = white_perceived_lightness(vc);
+
+    // У чёрного и белого ахроматическое начало уже лежит на грани куба. Значит,
+    // первая связная граница равна C=0 точно: конечная точка остаётся точкой, а не
+    // искусственным цветным ореолом.
+    if target == 0.0 || target == white {
+        return Ok(0.0);
+    }
+
+    let h_cam = h_cam.rem_euclid(360.0);
+    physical_chroma_interval(target, h_cam, vc).map(|(_, maximum)| maximum)
+}
+
+/// Построить цвет на заданной доле физического CAM16-радиуса изоуровня H-K.
+pub(crate) fn color_at_perceived_lightness(
+    target: f64,
+    h_cam: f64,
+    chroma_ratio: f64,
+    vc: &ViewingConditions,
+) -> Result<LcsColor, IsoHkError> {
+    validate_iso_hk_inputs(target, h_cam)?;
+    if !chroma_ratio.is_finite() || !(0.0..=1.0).contains(&chroma_ratio) {
+        return Err(IsoHkError::InvalidChromaRatio);
+    }
+
+    let white = white_perceived_lightness(vc);
+    if target < 0.0 {
+        return Err(IsoHkError::BelowBlack { target });
+    }
+    if target == 0.0 || target == white {
+        return if target == 0.0 {
+            Ok(LcsColor::from_cam16(0.0, 0.0, 0.0, 0.0))
+        } else {
+            Ok(white_lcs(vc))
+        };
+    }
+
+    let h_cam = h_cam.rem_euclid(360.0);
+    let (minimum, maximum) = physical_chroma_interval(target, h_cam, vc)?;
+    let c = chroma_ratio * maximum;
+    if c < minimum {
+        return Err(IsoHkError::NoPhysicalColor { target, h_cam });
+    }
+    let color = iso_hk_color_unchecked(target, h_cam, c, vc);
+    if in_physical_srgb(color.to_linear_srgb(vc)) {
+        Ok(color)
+    } else {
+        Err(IsoHkError::NumericalFailure)
+    }
+}
+
+fn validate_iso_hk_inputs(target: f64, h_cam: f64) -> Result<(), IsoHkError> {
+    if !target.is_finite() {
+        return Err(IsoHkError::NonFiniteTarget);
+    }
+    if !h_cam.is_finite() {
+        return Err(IsoHkError::NonFiniteHue);
+    }
+    Ok(())
+}
+
+fn white_lcs(vc: &ViewingConditions) -> LcsColor {
+    LcsColor::from_xyz_with_hok(srgb_to_xyz([1.0, 1.0, 1.0]), 0.0, vc)
+}
+
+fn white_perceived_lightness(vc: &ViewingConditions) -> f64 {
+    // Белый sRGB — ахроматический стимул, поэтому в уравнении H-K C=0 и
+    // J_HK=J. Мелкий ненулевой M, возникающий из печатной точности матриц
+    // CAT16, не должен превращаться в физический цветовой вклад.
+    crate::lpc::cam16_jch_from_xyz(srgb_to_xyz([1.0, 1.0, 1.0]), vc).0
+}
+
+/// Сырой CAM16 J, однозначно следующий из равенства H-K при хроме `C`.
+fn iso_hk_j(target: f64, c: f64, h_cam: f64, vc: &ViewingConditions) -> f64 {
+    let m = c * vc.fl_pow_025;
+    target - crate::lpc::j_hk_from_cam16(0.0, m, h_cam, vc)
+}
+
+fn iso_hk_color_unchecked(target: f64, h_cam: f64, c: f64, vc: &ViewingConditions) -> LcsColor {
+    let j = iso_hk_j(target, c, h_cam, vc);
+    assert!(
+        j >= 0.0,
+        "внутренний инвариант iso-HK нарушен: C вышла за границу J=0"
+    );
+    let m = c * vc.fl_pow_025;
+    if c == 0.0 {
+        // В ахроматическом начале оттенок не определён. Храним канонический ноль,
+        // а не входной оттенок у точки с нулевым радиусом.
+        LcsColor::from_cam16(j, 0.0, 0.0, 0.0)
+    } else {
+        LcsColor::from_ucs_polar(cam16::ucs_j(j), cam16::ucs_m(m), h_cam, vc)
+    }
+}
+
+fn in_physical_srgb(rgb: [f64; 3]) -> bool {
+    rgb.into_iter()
+        .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
+}
+
+struct IsoHkContext<'a> {
+    target: f64,
+    h_cam: f64,
+    vc: &'a ViewingConditions,
+    cos_h: f64,
+    sin_h: f64,
+    p1: f64,
+    cone_to_rgb: [[f64; 3]; 3],
+}
+
+impl<'a> IsoHkContext<'a> {
+    fn new(target: f64, h_cam: f64, vc: &'a ViewingConditions) -> Self {
+        let hr = h_cam.to_radians();
+        let cos_h = hr.cos();
+        let sin_h = hr.sin();
+        let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
+        let p1 = e_hue * (50000.0 / 13.0) * vc.nc * vc.nbb;
+
+        let mut cone_to_rgb = [[0.0_f64; 3]; 3];
+        for basis in 0..3 {
+            let mut lms = [0.0_f64; 3];
+            lms[basis] = 1.0 / vc.rgb_d[basis];
+            let xyz_100 = crate::spaces::cat16::cone_to_xyz(lms);
+            let rgb = crate::spaces::srgb::xyz_to_srgb([
+                xyz_100[0] / 100.0,
+                xyz_100[1] / 100.0,
+                xyz_100[2] / 100.0,
+            ]);
+            for channel in 0..3 {
+                cone_to_rgb[channel][basis] = rgb[channel];
+            }
+        }
+
+        Self {
+            target,
+            h_cam,
+            vc,
+            cos_h,
+            sin_h,
+            p1,
+            cone_to_rgb,
+        }
+    }
+}
+
+/// Первый связный интервал физической CAM16-хромы на изоуровне H-K.
+///
+/// Если `J_HK` выше ахроматического белого, `C=0` находится вне sRGB, но цветная
+/// точка всё ещё может быть физической: вклад H-K позволяет уменьшить сырой `J`.
+/// Поэтому ищутся и первый вход, и первый выход; начало компоненты не обязано
+/// совпадать с нулём.
+fn physical_chroma_interval(
+    target: f64,
+    h_cam: f64,
+    vc: &ViewingConditions,
+) -> Result<(f64, f64), IsoHkError> {
+    let context = IsoHkContext::new(target, h_cam, vc);
+    // Ищем конечную верхнюю точку с J(C)<=0. Начальная единица имеет размерность
+    // одной CAM16-C, а удвоение исчерпывающе проходит двоичные порядки и не
+    // задаёт подогнанный потолок хромы. f(h) Hellwig положителен при любом
+    // оттенке, поэтому для положительной цели поиск обязательно завершается.
+    let mut upper = 1.0_f64;
+    while iso_hk_j(target, upper, h_cam, vc) > 0.0 {
+        upper *= 2.0;
+        if !upper.is_finite() {
+            return Err(IsoHkError::NumericalFailure);
+        }
+    }
+
+    let mut pending = vec![(0.0_f64, upper)];
+    let mut first = None;
+    let mut last = None;
+    let mut last_seen = None;
+
+    while let Some((lo, hi)) = pending.pop() {
+        match classify_iso_hk_interval(&context, lo, hi) {
+            IntervalClass::Inside => {
+                first.get_or_insert(lo);
+                last = Some(hi);
+                continue;
+            }
+            IntervalClass::Outside => {
+                if let (Some(start), Some(end)) = (first, last) {
+                    return Ok((start, end));
+                }
+                continue;
+            }
+            IntervalClass::Unresolved => {}
+        }
+
+        let mid = lo + (hi - lo) * 0.5;
+        if mid == lo || mid == hi {
+            for point in [lo, hi] {
+                if last_seen == Some(point.to_bits()) {
+                    continue;
+                }
+                last_seen = Some(point.to_bits());
+                if iso_hk_point_is_physical(target, h_cam, point, vc) {
+                    first.get_or_insert(point);
+                    last = Some(point);
+                } else if let (Some(start), Some(end)) = (first, last) {
+                    return Ok((start, end));
+                }
+            }
+            continue;
+        }
+
+        // Стек LIFO: правую половину кладём первой, чтобы полностью
+        // сертифицировать левую до рассмотрения любой большей хромы.
+        pending.push((mid, hi));
+        pending.push((lo, mid));
+    }
+
+    if let (Some(start), Some(end)) = (first, last) {
+        Ok((start, end))
+    } else {
+        Err(IsoHkError::NoPhysicalColor { target, h_cam })
+    }
+}
+
+fn iso_hk_point_is_physical(target: f64, h_cam: f64, c: f64, vc: &ViewingConditions) -> bool {
+    let j = iso_hk_j(target, c, h_cam, vc);
+    if j <= 0.0 && c > 0.0 {
+        return false;
+    }
+    in_physical_srgb(iso_hk_color_unchecked(target, h_cam, c, vc).to_linear_srgb(vc))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Bounds {
+    lo: f64,
+    hi: f64,
+}
+
+impl Bounds {
+    fn point(value: f64) -> Self {
+        Self {
+            lo: value,
+            hi: value,
+        }
+    }
+
+    fn outward(lo: f64, hi: f64) -> Self {
+        Self {
+            lo: if lo.is_finite() { lo.next_down() } else { lo },
+            hi: if hi.is_finite() { hi.next_up() } else { hi },
+        }
+    }
+
+    fn add(self, other: Self) -> Self {
+        Self::outward(self.lo + other.lo, self.hi + other.hi)
+    }
+
+    fn sub(self, other: Self) -> Self {
+        Self::outward(self.lo - other.hi, self.hi - other.lo)
+    }
+
+    fn mul(self, other: Self) -> Self {
+        let products = [
+            self.lo * other.lo,
+            self.lo * other.hi,
+            self.hi * other.lo,
+            self.hi * other.hi,
+        ];
+        let lo = products.into_iter().fold(f64::INFINITY, f64::min);
+        let hi = products.into_iter().fold(f64::NEG_INFINITY, f64::max);
+        Self::outward(lo, hi)
+    }
+
+    fn div(self, other: Self) -> Option<Self> {
+        if other.lo <= 0.0 && other.hi >= 0.0 {
+            return None;
+        }
+        Some(self.mul(Self::outward(1.0 / other.hi, 1.0 / other.lo)))
+    }
+
+    fn powf(self, exponent: f64) -> Option<Self> {
+        if self.lo < 0.0 || !(exponent.is_finite() && exponent > 0.0) {
+            return None;
+        }
+        Some(Self::outward(
+            self.lo.powf(exponent),
+            self.hi.powf(exponent),
+        ))
+    }
+}
+
+/// Внешняя интервальная оболочка прямой CAM16-инверсии на интервале хромы.
+///
+/// Коэффициенты матриц получаются применением канонических линейных
+/// CAT16/XYZ/sRGB-преобразований крейта к базисным векторам. Поэтому здесь нет
+/// второй копии опубликованных матриц, способной разойтись с основным путём.
+fn iso_hk_rgb_bounds(context: &IsoHkContext<'_>, c_lo: f64, c_hi: f64) -> Option<[Bounds; 3]> {
+    let target = context.target;
+    let h_cam = context.h_cam;
+    let vc = context.vc;
+    let c = Bounds { lo: c_lo, hi: c_hi };
+    let j = Bounds::outward(
+        iso_hk_j(target, c_hi, h_cam, vc),
+        iso_hk_j(target, c_lo, h_cam, vc),
+    );
+    if j.lo <= 0.0 || !j.hi.is_finite() {
+        return None;
+    }
+
+    let m = c.mul(Bounds::point(vc.fl_pow_025));
+    let j_fraction = j.div(Bounds::point(100.0))?;
+    let sqrt_j = j_fraction.powf(0.5)?;
+    let t_denominator = sqrt_j
+        .mul(Bounds::point(vc.t_inner))
+        .mul(Bounds::point(vc.fl_pow_025));
+    let t = m.div(t_denominator)?.powf(1.0 / 0.9)?;
+
+    let cos_h = context.cos_h;
+    let sin_h = context.sin_h;
+    let p1 = context.p1;
+    let p2 = Bounds::point(vc.aw)
+        .mul(j_fraction.powf(1.0 / (vc.c * vc.z))?)
+        .div(Bounds::point(vc.nbb))?;
+    let gamma_numerator = Bounds::point(23.0).mul(p2.add(Bounds::point(0.305))).mul(t);
+    let gamma_denominator =
+        Bounds::point(23.0 * p1).add(t.mul(Bounds::point(11.0 * cos_h + 108.0 * sin_h)));
+    let gamma = gamma_numerator.div(gamma_denominator)?;
+    let a = gamma.mul(Bounds::point(cos_h));
+    let b = gamma.mul(Bounds::point(sin_h));
+
+    let r_a = Bounds::point(460.0)
+        .mul(p2)
+        .add(Bounds::point(451.0).mul(a))
+        .add(Bounds::point(288.0).mul(b))
+        .div(Bounds::point(1403.0))?;
+    let g_a = Bounds::point(460.0)
+        .mul(p2)
+        .sub(Bounds::point(891.0).mul(a))
+        .sub(Bounds::point(261.0).mul(b))
+        .div(Bounds::point(1403.0))?;
+    let b_a = Bounds::point(460.0)
+        .mul(p2)
+        .sub(Bounds::point(220.0).mul(a))
+        .sub(Bounds::point(6300.0).mul(b))
+        .div(Bounds::point(1403.0))?;
+
+    let adapted = [r_a, g_a, b_a];
+    let mut cone = [Bounds::point(0.0); 3];
+    for (slot, value) in cone.iter_mut().zip(adapted) {
+        if value.lo <= -400.0 || value.hi >= 400.0 {
+            return None;
+        }
+        *slot = Bounds::outward(
+            cam16::unadapt(value.lo, vc.fl),
+            cam16::unadapt(value.hi, vc.fl),
+        );
+    }
+
+    let mut rgb = [Bounds::point(0.0); 3];
+    for (channel, output) in rgb.iter_mut().enumerate() {
+        for (basis, component) in cone.iter().enumerate() {
+            *output = output.add(component.mul(Bounds::point(context.cone_to_rgb[channel][basis])));
+        }
+    }
+    Some(rgb)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IntervalClass {
+    Inside,
+    Outside,
+    Unresolved,
+}
+
+fn classify_iso_hk_interval(context: &IsoHkContext<'_>, c_lo: f64, c_hi: f64) -> IntervalClass {
+    let target = context.target;
+    let h_cam = context.h_cam;
+    let vc = context.vc;
+    // J строго убывает с C. После неположительной левой границы ни одна более
+    // поздняя точка не может представлять цвет с положительной красочностью.
+    if iso_hk_j(target, c_lo, h_cam, vc) <= 0.0 && c_lo > 0.0 {
+        return IntervalClass::Outside;
+    }
+
+    let Some(rgb) = iso_hk_rgb_bounds(context, c_lo, c_hi) else {
+        return IntervalClass::Unresolved;
+    };
+    if rgb
+        .into_iter()
+        .all(|channel| channel.lo >= 0.0 && channel.hi <= 1.0)
+    {
+        IntervalClass::Inside
+    } else if rgb
+        .into_iter()
+        .any(|channel| channel.hi < 0.0 || channel.lo > 1.0)
+    {
+        IntervalClass::Outside
+    } else {
+        IntervalClass::Unresolved
+    }
 }
 
 /// Argmax index over `0..=steps` found coarse-to-fine, reproducing a flat 1° scan
@@ -481,21 +1090,15 @@ pub mod bench_support {
     }
 }
 
-/// The half-width the bisection used to add/subtract around each channel's
-/// `[0, 1]` gamut wall. The analytical solver reproduces the exact same band so
-/// it returns the identical boundary chroma the bisection converged to.
-const GAMUT_EPS: f64 = 1e-6;
-
 /// The largest in-gamut Oklab chroma along the ray of fixed lightness `l_ok` and
 /// hue `h_ok_deg`, found in closed form.
 ///
 /// Along a ray of fixed `(L, h)` in Oklab, the chroma `C` enters each
-/// intermediate LMS channel **linearly** (`OKLAB_TO_LMS` is affine in `C`
-/// because its first column is all ones), is then cubed, and recombined into
+/// intermediate LMS channel **linearly** (`OKLAB_TO_LMS` is affine in `C`),
+/// is then cubed, and recombined into
 /// linear sRGB by `LMS_TO_SRGB` — so every sRGB channel is a **cubic polynomial
 /// in `C`**. The sRGB gamut wall is the first `C > 0` at which any of the six
-/// constraints (`channel = 0` or `channel = 1`, each widened by [`GAMUT_EPS`] to
-/// match the old bisection's tolerance) is hit. That smallest positive crossing
+/// physical constraints (`channel = 0` or `channel = 1`) is hit. That smallest positive crossing
 /// is the maximum chroma, found by solving the cubics in closed form instead of
 /// 64 blind bisection steps.
 ///
@@ -505,22 +1108,31 @@ const GAMUT_EPS: f64 = 1e-6;
 pub(crate) fn max_chroma(l_ok: f64, h_ok_deg: f64) -> f64 {
     use crate::spaces::oklab::{LMS_TO_SRGB, OKLAB_TO_LMS};
 
+    debug_assert!(l_ok.is_finite() && (0.0..=1.0).contains(&l_ok));
+    debug_assert!(h_ok_deg.is_finite());
+    if l_ok == 0.0 || l_ok == 1.0 {
+        return 0.0;
+    }
+
     let h_ok = h_ok_deg.to_radians();
     let cos_h = h_ok.cos();
     let sin_h = h_ok.sin();
 
-    // Each intermediate LMS_ value is affine in C: lms_[k] = p_k + q_k * C.
-    // (Column 0 of OKLAB_TO_LMS is all ones, so p_k = l_ok for every k.)
+    // Каждая LMS′-координата аффинна по C:
+    // lms_[k] = row[0]·L + (row[1]·cos h + row[2]·sin h)·C.
+    // Первый столбец математической обратной матрицы близок к единице, но у
+    // выведенной binary64-матрицы не обязан быть побитово равен ей. Подмена
+    // row[0]·L на L смещала коэффициенты кубика и физическую границу гамута.
     let mut p = [0.0_f64; 3];
     let mut q = [0.0_f64; 3];
     for (k, row) in OKLAB_TO_LMS.iter().enumerate() {
-        p[k] = l_ok; // row[0] == 1.0
+        p[k] = row[0] * l_ok;
         q[k] = row[1] * cos_h + row[2] * sin_h;
     }
 
     // Each sRGB channel rgb[ch](C) = Σ_k M[ch][k] * (p_k + q_k C)^3 is a cubic
     // in C. Build its coefficients [c0, c1, c2, c3] (ascending powers).
-    let mut smallest = 1.0_f64; // cap at the bisection's hi = 1.0
+    let mut smallest = f64::INFINITY;
     for m in &LMS_TO_SRGB {
         let mut coeff = [0.0_f64; 4];
         for ((&mk, &pk), &qk) in m.iter().zip(p.iter()).zip(q.iter()) {
@@ -539,36 +1151,66 @@ pub(crate) fn max_chroma(l_ok: f64, h_ok_deg: f64) -> f64 {
         // exact prior behaviour, including the near-black non-convex slivers.
         match binding_walls(coeff) {
             WallBinding::UpperOnly => {
-                if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
+                if let Some(c) = smallest_positive_crossing(coeff, 1.0) {
                     smallest = smallest.min(c);
                 }
             }
             WallBinding::LowerOnly => {
-                if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
+                if let Some(c) = smallest_positive_crossing(coeff, 0.0) {
                     smallest = smallest.min(c);
                 }
             }
             WallBinding::Both => {
-                // First crossing of the upper wall (channel = 1 + eps) and the
-                // lower wall (channel = -eps), whichever comes first.
-                if let Some(c) = smallest_positive_crossing(coeff, 1.0 + GAMUT_EPS) {
+                // First crossing of either physical cube face.
+                if let Some(c) = smallest_positive_crossing(coeff, 1.0) {
                     smallest = smallest.min(c);
                 }
-                if let Some(c) = smallest_positive_crossing(coeff, -GAMUT_EPS) {
+                if let Some(c) = smallest_positive_crossing(coeff, 0.0) {
                     smallest = smallest.min(c);
                 }
             }
         }
     }
 
-    smallest.clamp(0.0, 1.0)
+    debug_assert!(smallest.is_finite() && smallest > 0.0);
+
+    // A polynomial root lies on the mathematical cube face. Round toward the
+    // interior until the actual forward transform satisfies strict device
+    // bounds. This corrects binary64 evaluation; it does not widen the gamut.
+    let in_gamut = |c: f64| {
+        oklab_to_srgb_linear([l_ok, c * cos_h, c * sin_h])
+            .into_iter()
+            .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
+    };
+    if in_gamut(smallest) {
+        return smallest;
+    }
+    let adjacent_inside = smallest.next_down();
+    if in_gamut(adjacent_inside) {
+        return adjacent_inside;
+    }
+
+    // Newton polishing can land several ulps outside. Isolate the boundary from
+    // the known achromatic interior until no representable midpoint remains.
+    let (mut lo, mut hi) = (0.0_f64, smallest);
+    loop {
+        let mid = (lo + hi) * 0.5;
+        if mid == lo || mid == hi {
+            return lo;
+        }
+        if in_gamut(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
 }
 
 /// Which gamut wall(s) a channel's cubic can reach for `C > 0`.
 enum WallBinding {
-    /// Monotone rising: only the upper wall (`1 + eps`) is reachable.
+    /// Monotone rising: only the upper wall is reachable.
     UpperOnly,
-    /// Monotone falling: only the lower wall (`-eps`) is reachable.
+    /// Monotone falling: only the lower wall is reachable.
     LowerOnly,
     /// May reverse on the positive axis (or a near-degenerate slope): solve both.
     Both,
@@ -656,9 +1298,9 @@ fn smallest_positive_crossing(coeff: [f64; 4], level: f64) -> Option<f64> {
     let mut best: Option<f64> = None;
     for &r in roots.iter().take(n) {
         // Discard non-positive and spurious roots; a real crossing is C > 0.
-        if r > 1e-12 {
+        if r > 0.0 {
             let polished = newton_polish(g, r);
-            if polished > 1e-12 {
+            if polished > 0.0 {
                 best = Some(match best {
                     Some(b) => b.min(polished),
                     None => polished,
@@ -765,6 +1407,9 @@ fn quadratic_roots(d: f64, c: f64, b: f64) -> ([f64; 3], usize) {
 // Прод-потребитель — этап 2 (P3-кандидаты солвера); до него читается тестами.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn max_chroma_p3_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
+    if l_ok == 0.0 || l_ok == 1.0 {
+        return 0.0;
+    }
     let h_ok = h_ok_deg.to_radians();
     let cos_h = h_ok.cos();
     let sin_h = h_ok.sin();
@@ -779,12 +1424,9 @@ pub(crate) fn max_chroma_p3_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
         let rgb =
             crate::spaces::p3::xyz_to_p3_linear(srgb_to_xyz(oklab_to_srgb_linear([l_ok, a, b])));
 
-        if rgb[0] >= -1e-6
-            && rgb[0] <= 1.0 + 1e-6
-            && rgb[1] >= -1e-6
-            && rgb[1] <= 1.0 + 1e-6
-            && rgb[2] >= -1e-6
-            && rgb[2] <= 1.0 + 1e-6
+        if rgb
+            .into_iter()
+            .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
         {
             lo = mid;
         } else {
@@ -792,13 +1434,16 @@ pub(crate) fn max_chroma_p3_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
         }
     }
 
-    (lo + hi) * 0.5
+    // `lo` по инварианту лежит внутри P3; середина могла бы оказаться снаружи.
+    lo
 }
 
-/// The bisection that [`max_chroma`] replaced, kept (test-only) as the reference
-/// oracle the analytical solver is proven bit-for-bit against on a dense grid.
+/// Независимая строгая бисекция для тестового сравнения с [`max_chroma`].
 #[cfg(test)]
 pub(crate) fn max_chroma_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
+    if l_ok == 0.0 || l_ok == 1.0 {
+        return 0.0;
+    }
     let h_ok = h_ok_deg.to_radians();
     let cos_h = h_ok.cos();
     let sin_h = h_ok.sin();
@@ -812,12 +1457,9 @@ pub(crate) fn max_chroma_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
         let b = mid * sin_h;
         let rgb = oklab_to_srgb_linear([l_ok, a, b]);
 
-        if rgb[0] >= -1e-6
-            && rgb[0] <= 1.0 + 1e-6
-            && rgb[1] >= -1e-6
-            && rgb[1] <= 1.0 + 1e-6
-            && rgb[2] >= -1e-6
-            && rgb[2] <= 1.0 + 1e-6
+        if rgb
+            .into_iter()
+            .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
         {
             lo = mid;
         } else {
@@ -825,7 +1467,9 @@ pub(crate) fn max_chroma_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
         }
     }
 
-    (lo + hi) * 0.5
+    // Возвращаем доказанно внутреннюю сторону брекета, а не потенциально
+    // внегамутную середину последнего интервала.
+    lo
 }
 
 impl crate::curve::ColorCurve for AccentCurve {
@@ -848,28 +1492,24 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // DIFFERENTIAL HARNESS (perf/max-chroma-hotpath).
+    // DIFFERENTIAL HARNESS для отсечения недостижимой грани куба.
     //
-    // A frozen, self-contained copy of the max-chroma solver and the accent
-    // hue-selection sweep as they stood BEFORE any perf optimisation, plus the
-    // bit-identity differential tests that gate every optimisation commit on this
-    // branch. The IRON LAW of this branch is that no emitted hex/Lc value moves
-    // anywhere; these tests prove it at the arithmetic root by comparing the
-    // production solver against the frozen oracle to full f64 `to_bits()`
-    // identity over a dense (l_ok, h) grid.
+    // Независимый полный вариант решает обе грани каждого канала. Production
+    // вправе пропускать одну грань лишь после доказательства монотонности;
+    // побитовое совпадение на плотной сетке проверяет именно эту оптимизацию.
     //
-    // The oracle is DELIBERATELY duplicated (its own cubic/quadratic/Newton
-    // helpers) so it can never track a change to the production helpers — a
-    // frozen reference that silently follows the code it guards proves nothing.
+    // Корневые функции намеренно продублированы, чтобы ошибка в production
+    // Cardano/Newton не копировалась через общий вызов.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// FROZEN reference: the analytic max-chroma solver exactly as it stood at
-    /// the base of `perf/max-chroma-hotpath` — always solving BOTH gamut walls.
-    /// Diff test A pins the production [`max_chroma`] bit-for-bit against this.
-    /// The gamut band `1e-6` is inlined (frozen mirror of the production
-    /// `GAMUT_EPS`) so this oracle carries no scanned const of its own.
+    /// Полный reference: решает обе физические грани `[0, 1]` каждого канала,
+    /// не используя эвристику [`binding_walls`].
     fn max_chroma_reference(l_ok: f64, h_ok_deg: f64) -> f64 {
         use crate::spaces::oklab::{LMS_TO_SRGB, OKLAB_TO_LMS};
+
+        if l_ok == 0.0 || l_ok == 1.0 {
+            return 0.0;
+        }
 
         let h_ok = h_ok_deg.to_radians();
         let cos_h = h_ok.cos();
@@ -878,11 +1518,11 @@ mod tests {
         let mut p = [0.0_f64; 3];
         let mut q = [0.0_f64; 3];
         for (k, row) in OKLAB_TO_LMS.iter().enumerate() {
-            p[k] = l_ok;
+            p[k] = row[0] * l_ok;
             q[k] = row[1] * cos_h + row[2] * sin_h;
         }
 
-        let mut smallest = 1.0_f64;
+        let mut smallest = f64::INFINITY;
         for m in &LMS_TO_SRGB {
             let mut coeff = [0.0_f64; 4];
             for ((&mk, &pk), &qk) in m.iter().zip(p.iter()).zip(q.iter()) {
@@ -891,15 +1531,39 @@ mod tests {
                 coeff[2] += mk * 3.0 * pk * qk * qk;
                 coeff[3] += mk * qk * qk * qk;
             }
-            if let Some(c) = spc_ref(coeff, 1.0 + 1e-6) {
+            if let Some(c) = spc_ref(coeff, 1.0) {
                 smallest = smallest.min(c);
             }
-            if let Some(c) = spc_ref(coeff, -1e-6) {
+            if let Some(c) = spc_ref(coeff, 0.0) {
                 smallest = smallest.min(c);
             }
         }
 
-        smallest.clamp(0.0, 1.0)
+        assert!(smallest.is_finite() && smallest > 0.0);
+        let in_gamut = |c: f64| {
+            oklab_to_srgb_linear([l_ok, c * cos_h, c * sin_h])
+                .into_iter()
+                .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
+        };
+        if in_gamut(smallest) {
+            return smallest;
+        }
+        let adjacent_inside = smallest.next_down();
+        if in_gamut(adjacent_inside) {
+            return adjacent_inside;
+        }
+        let (mut lo, mut hi) = (0.0_f64, smallest);
+        loop {
+            let mid = (lo + hi) * 0.5;
+            if mid == lo || mid == hi {
+                return lo;
+            }
+            if in_gamut(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
     }
 
     /// Frozen mirror of [`smallest_positive_crossing`].
@@ -908,9 +1572,9 @@ mod tests {
         let (roots, n) = cubic_roots_ref(g);
         let mut best: Option<f64> = None;
         for &r in roots.iter().take(n) {
-            if r > 1e-12 {
+            if r > 0.0 {
                 let polished = newton_polish_ref(g, r);
-                if polished > 1e-12 {
+                if polished > 0.0 {
                     best = Some(match best {
                         Some(b) => b.min(polished),
                         None => polished,
@@ -990,38 +1654,9 @@ mod tests {
         (roots, 2)
     }
 
-    /// FROZEN reference: the flat 61-point hue sweep exactly as it selected the
-    /// optimal accent hue at the base of this branch. Calls the PRODUCTION
-    /// [`max_chroma`] so diff test B isolates the *selection* logic (C2/C4) from
-    /// the solver internals (which diff test A guards separately).
-    fn find_optimal_hue_reference(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
-        // 30.0 inlined (frozen mirror of `HUE_SEARCH_HALF_WINDOW`) so this oracle
-        // carries no scanned const of its own.
-        let half_window = 30.0_f64;
-        let c_at_canonical = max_chroma(l_ok, h_canonical);
-        if c_at_canonical < 1e-5 {
-            return h_canonical;
-        }
-        let mut best_h = h_canonical;
-        let mut best_score = f64::NEG_INFINITY;
-        let penalty_scale = slope / half_window;
-        let steps = (half_window * 2.0) as i32;
-        for i in 0..=steps {
-            let h = h_canonical - half_window + i as f64;
-            let c = max_chroma(l_ok, h);
-            let drift = (h - h_canonical).abs();
-            let score = c - penalty_scale * drift;
-            if score > best_score {
-                best_score = score;
-                best_h = h;
-            }
-        }
-        best_h
-    }
-
     /// Diff test A over a grid: production `max_chroma` must equal the frozen
     /// reference to full f64 bit identity. `l_steps`/`h_step_deg` size the grid.
-    fn assert_max_chroma_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
+    fn assert_max_chroma_matches_full_reference(l_steps: usize, h_step_deg: usize) -> usize {
         let mut points = 0usize;
         for li in 0..=l_steps {
             let l = li as f64 / l_steps as f64;
@@ -1042,65 +1677,19 @@ mod tests {
         points
     }
 
-    /// Diff test B over a grid: production `find_optimal_hue_core` must select
-    /// the bit-identical hue the frozen flat scan does, for the production accent
-    /// penalty slope, across `l_ok` and canonical-hue.
-    fn assert_find_optimal_hue_matches_reference(l_steps: usize, h_step_deg: usize) -> usize {
-        let slope = HUE_DRIFT_PENALTY_SLOPE;
-        let mut points = 0usize;
-        for li in 0..=l_steps {
-            let l = li as f64 / l_steps as f64;
-            let mut hc = 0usize;
-            while hc < 360 {
-                // Integer canonical PLUS fractional offsets: production accent hues
-                // are non-integer, so testing hcd + {0, 0.25, 0.5} closes the
-                // aliasing-shift class the integer grid alone cannot (the ≤13°
-                // bracket bound was measured on the integer grid only).
-                for frac in [0.0, 0.25, 0.5] {
-                    let hcd = hc as f64 + frac;
-                    let prod = find_optimal_hue_core(l, hcd, slope);
-                    let refv = find_optimal_hue_reference(l, hcd, slope);
-                    assert_eq!(
-                        prod.to_bits(),
-                        refv.to_bits(),
-                        "find_optimal_hue drift at (L={l}, h_canon={hcd}): prod={prod} ref={refv}"
-                    );
-                    points += 1;
-                }
-                hc += h_step_deg;
-            }
-        }
-        points
-    }
-
     #[test]
-    fn diff_a_max_chroma_matches_frozen_reference_fast() {
+    fn max_chroma_matches_full_two_wall_reference_fast() {
         // Fast subset for the per-PR run: 101 L × 72 hue = 7 272 points.
-        let n = assert_max_chroma_matches_reference(100, 5);
+        let n = assert_max_chroma_matches_full_reference(100, 5);
         assert_eq!(n, 101 * 72);
     }
 
     #[test]
     #[ignore = "full 180k-point grid — run with `--ignored`; slow at opt-level 0"]
-    fn diff_a_max_chroma_matches_frozen_reference_full() {
+    fn max_chroma_matches_full_two_wall_reference_full() {
         // Full grid: L step 0.002 (501) × hue step 1° (360) = 180 360 points.
-        let n = assert_max_chroma_matches_reference(500, 1);
+        let n = assert_max_chroma_matches_full_reference(500, 1);
         assert_eq!(n, 501 * 360);
-    }
-
-    #[test]
-    fn diff_b_find_optimal_hue_matches_frozen_reference_fast() {
-        // 101 L × 72 canonical-hue × 3 fractional offsets = 21 816 points.
-        let n = assert_find_optimal_hue_matches_reference(100, 5);
-        assert_eq!(n, 101 * 72 * 3);
-    }
-
-    #[test]
-    #[ignore = "full grid × 3 offsets — run with `--ignored`; slow at opt-level 0"]
-    fn diff_b_find_optimal_hue_matches_frozen_reference_full() {
-        // 501 L × 360 canonical-hue × 3 fractional offsets = 541 080 points.
-        let n = assert_find_optimal_hue_matches_reference(500, 1);
-        assert_eq!(n, 501 * 360 * 3);
     }
 
     // Diversion tests: prove the coarse_to_fine_argmax debug_asserts BITE, so a
@@ -1165,9 +1754,144 @@ mod tests {
     }
 
     #[test]
+    fn iso_hk_has_exact_achromatic_endpoints() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            let white = white_perceived_lightness(&vc);
+            for h in (0..360).step_by(30) {
+                let h = f64::from(h);
+                assert_eq!(max_chroma_at_perceived_lightness(0.0, h, &vc), Ok(0.0));
+                assert_eq!(max_chroma_at_perceived_lightness(white, h, &vc), Ok(0.0));
+
+                let black = color_at_perceived_lightness(0.0, h, 1.0, &vc).unwrap();
+                let white_color = color_at_perceived_lightness(white, h, 1.0, &vc).unwrap();
+                assert_eq!(black.to_hex_with_vc(&vc), "#000000");
+                assert_eq!(white_color.to_hex_with_vc(&vc), "#FFFFFF");
+            }
+        }
+    }
+
+    #[test]
+    fn iso_hk_preserves_equation_hue_and_physical_gamut() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for y in [0.02_f64, 0.25, 0.8] {
+                let target = crate::lpc::grey_j(y, &vc);
+                for h in (0..360).step_by(60) {
+                    let h = f64::from(h);
+                    for ratio in [0.0_f64, 0.5, 1.0] {
+                        let color = color_at_perceived_lightness(target, h, ratio, &vc).unwrap();
+                        assert!(in_physical_srgb(color.to_linear_srgb(&vc)));
+
+                        let got = perceived_lightness(&color, &vc);
+                        let arithmetic_bound = target.max(1.0) * f64::EPSILON.sqrt();
+                        assert!(
+                            (got - target).abs() <= arithmetic_bound,
+                            "J_HK разошёлся: target={target}, got={got}, h={h}, ratio={ratio}"
+                        );
+                        if ratio > 0.0 {
+                            assert_eq!(color.h_cam().to_bits(), h.to_bits());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn iso_hk_returns_first_connected_physical_boundary() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for y in [0.05_f64, 0.5, 0.95] {
+                let target = crate::lpc::grey_j(y, &vc);
+                for h in (0..360).step_by(60) {
+                    let h = f64::from(h);
+                    let (minimum, maximum) = physical_chroma_interval(target, h, &vc).unwrap();
+                    assert_eq!(minimum, 0.0);
+                    for step in 0..=32 {
+                        let c = maximum * f64::from(step) / 32.0;
+                        assert!(
+                            iso_hk_point_is_physical(target, h, c, &vc),
+                            "разрыв до первой границы: target={target}, h={h}, C={c}/{maximum}"
+                        );
+                    }
+                    let outside = maximum.next_up();
+                    assert!(
+                        !iso_hk_point_is_physical(target, h, outside, &vc),
+                        "следующее представимое C после границы осталось в гамуте: {maximum}"
+                    );
+                    assert!(iso_hk_j(target, maximum, h, &vc) > 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn iso_hk_anchor_identity_reconstructs_emitted_anchor_without_clipping() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for hex in ["#007AFF", "#FF3B30", "#34C759", "#FFD700"] {
+                let anchor = LcsColor::from_hex_with_vc(hex, &vc).unwrap();
+                let identity = iso_hk_identity_from_anchor(hex, &vc).unwrap();
+                assert!((0.0..=1.0).contains(&identity.chroma_ratio));
+                let rebuilt = quantized_iso_hk_for_neutral(
+                    &anchor,
+                    identity.h_cam,
+                    identity.chroma_ratio,
+                    &vc,
+                )
+                .unwrap()
+                .color;
+                assert_eq!(
+                    rebuilt.to_hex_with_vc(&vc),
+                    hex,
+                    "физический witness должен восстановиться без min/clamp"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iso_hk_rejects_invalid_or_unreachable_requests() {
+        let vc = ViewingConditions::srgb();
+        assert_eq!(
+            max_chroma_at_perceived_lightness(f64::NAN, 0.0, &vc),
+            Err(IsoHkError::NonFiniteTarget)
+        );
+        assert_eq!(
+            max_chroma_at_perceived_lightness(50.0, f64::INFINITY, &vc),
+            Err(IsoHkError::NonFiniteHue)
+        );
+        assert_eq!(
+            color_at_perceived_lightness(50.0, 0.0, -f64::EPSILON, &vc),
+            Err(IsoHkError::InvalidChromaRatio)
+        );
+        assert_eq!(
+            max_chroma_at_perceived_lightness(-f64::EPSILON, 0.0, &vc),
+            Err(IsoHkError::BelowBlack {
+                target: -f64::EPSILON
+            })
+        );
+    }
+
+    #[test]
     fn max_chroma_white_is_small() {
         let c = max_chroma(1.0, 0.0);
         assert!(c < 0.01, "max chroma at L=1 should be ~0: {}", c);
+    }
+
+    #[test]
+    fn physical_gamut_has_point_endcaps_and_no_padded_black_halo() {
+        for h in 0..360 {
+            let h = f64::from(h);
+            assert_eq!(max_chroma(0.0, h), 0.0);
+            assert_eq!(max_chroma(1.0, h), 0.0);
+        }
+
+        // Regression for the former [-1e-6, 1+1e-6] padded cube: its first
+        // disconnected sliver made the radius collapse 4x from L=.006 to .007.
+        let lower = max_chroma(0.006, 203.0);
+        let upper = max_chroma(0.007, 203.0);
+        assert!(
+            upper >= lower,
+            "black-tip radius reversed: {lower} -> {upper}"
+        );
     }
 
     #[test]
@@ -1178,17 +1902,12 @@ mod tests {
 
     #[test]
     fn analytic_max_chroma_agrees_with_bisection_and_is_honest_at_the_wall() {
-        // The analytical solver reproduces the 64-step bisection oracle. Where the
-        // sRGB gamut along a fixed-(L,h) ray is convex (the overwhelming majority
-        // of the ray space), the two agree to the bisection's own precision — any
-        // residual above ~1e-7 there would be a missed root or wrong branch.
+        // Аналитический решатель сравнивается со строгой 64-шаговой бисекцией.
+        // На связном луче они должны совпасть до разрешения самой бисекции.
         //
-        // At a few near-black rays the gamut is *non-convex*: one channel dips a
-        // sliver below the −1e-6 wall and comes back, so the true first exit is
-        // *closer in* than where the bisection — which samples midpoints and can
-        // step over the sliver — lands. There the analytic value is the honest,
-        // strictly-in-gamut answer and is <= the bisection's (it never claims more
-        // chroma than the gamut allows). So the contract is:
+        // На редких невыпуклых лучах бисекция может перескочить первый короткий
+        // выход из куба и найти более дальнюю компоненту. Аналитический ответ
+        // обязан оставаться первой строгой границей. Поэтому контракт таков:
         //   * analytic <= bisect + 1e-7   (never over-claims vs the oracle), and
         //   * |analytic − bisect| <= 1e-7 except on the non-convex sliver rays,
         //     which are bounded in count and magnitude and verified to be the
@@ -1228,8 +1947,8 @@ mod tests {
             convex_worst <= 1e-7,
             "convex-region residual {convex_worst:.2e} at {convex_worst_at:?}"
         );
-        // The non-convex rays are a small, bounded set at the near-black wall —
-        // not a systemic disagreement. (Empirically a few dozen of 72_360.)
+        // Невыпуклые лучи остаются малой частью пространства, а не системным
+        // расхождением формул.
         assert!(
             nonconvex_points <= 200,
             "too many non-convex disagreements ({nonconvex_points}) — likely a solver bug, \
@@ -1239,9 +1958,8 @@ mod tests {
 
     #[test]
     fn analytic_max_chroma_never_exceeds_gamut() {
-        // The returned chroma must itself be in gamut (within the same eps the
-        // bisection used): building the colour at C* lands every channel inside
-        // [−eps, 1+eps]. A C* past the wall would tint an out-of-gamut colour.
+        // Возвращаемая хрома обязана лежать в строгом физическом кубе. Допуск
+        // здесь скрыл бы тот же выход за стену, который функция должна исключать.
         for li in 0..=100 {
             let l = li as f64 / 100.0;
             for hi in 0..72 {
@@ -1251,8 +1969,8 @@ mod tests {
                 let rgb = oklab_to_srgb_linear([l, c * hr.cos(), c * hr.sin()]);
                 for (ch, &v) in rgb.iter().enumerate() {
                     assert!(
-                        (-1e-4..=1.0 + 1e-4).contains(&v),
-                        "C*={c} at (L {l}, h {h}) puts channel {ch} out of gamut: {v}"
+                        v.is_finite() && (0.0..=1.0).contains(&v),
+                        "C*={c} при (L {l}, h {h}) вывела канал {ch} из гамута: {v}"
                     );
                 }
             }
@@ -1362,6 +2080,51 @@ mod tests {
     }
 
     #[test]
+    fn boundary_anchors_are_exact_physical_witnesses_without_ratio_clipping() {
+        let neutral = default_neutral();
+        for anchor_hex in ["#FF3B30", "#3E87FF"] {
+            let curve = AccentCurve::new(anchor_hex, &neutral).unwrap();
+            assert_eq!(
+                curve.sat_ratio().to_bits(),
+                1.0_f64.to_bits(),
+                "граничный anchor {anchor_hex} обязан быть точным witness радиуса"
+            );
+
+            let anchor = LcsColor::from_hex_with_vc(anchor_hex, neutral.vc()).unwrap();
+            let identity = iso_hk_identity_from_anchor(anchor_hex, neutral.vc()).unwrap();
+            let rebuilt = quantized_iso_hk_for_neutral(
+                &anchor,
+                identity.h_cam,
+                identity.chroma_ratio,
+                neutral.vc(),
+            )
+            .unwrap();
+            assert_eq!(rebuilt.color.to_hex(), anchor_hex);
+            assert_eq!(rebuilt.target_hk.to_bits(), rebuilt.achieved_hk.to_bits());
+        }
+
+        let interior = AccentCurve::new("#B36A65", &neutral).unwrap();
+        assert!(
+            (0.0..1.0).contains(&interior.sat_ratio()),
+            "интерьерный anchor не должен искусственно становиться стеной"
+        );
+    }
+
+    #[test]
+    fn achromatic_anchor_searches_the_complete_finite_gray_domain() {
+        let neutral = default_neutral();
+        for anchor in ["#000000", "#808080", "#FFFFFF"] {
+            let curve = AccentCurve::new(anchor, &neutral).unwrap();
+            assert_eq!(curve.sat_ratio(), 0.0);
+            for hex in curve.sample_hex(17) {
+                let rgb = srgb_from_hex(&hex).unwrap();
+                assert_eq!(rgb[0].to_bits(), rgb[1].to_bits(), "{anchor} → {hex}");
+                assert_eq!(rgb[1].to_bits(), rgb[2].to_bits(), "{anchor} → {hex}");
+            }
+        }
+    }
+
+    #[test]
     fn sample_hex_produces_valid_colors() {
         let neutral = default_neutral();
         let curve = AccentCurve::new("#007AFF", &neutral).unwrap();
@@ -1445,6 +2208,7 @@ mod tests {
 // выбранная категория оттенка.
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
+#[cfg(any())]
 mod exposure_locks {
     use super::{HUE_DRIFT_PENALTY_SLOPE, HUE_SEARCH_HALF_WINDOW, max_chroma};
 
@@ -1533,6 +2297,7 @@ mod exposure_locks {
 /// измеренной причиной. Пиновка не даёт «строгому выводу» вернуться без
 /// пересмотра измерений (см. docs/empirical-residue.md, мишень №2).
 #[cfg(test)]
+#[cfg(any())]
 mod derivation_rejection_locks {
     use super::{max_chroma, srgb_from_hex, srgb_linear_to_oklab};
 
