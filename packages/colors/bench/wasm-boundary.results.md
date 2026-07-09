@@ -58,11 +58,32 @@ the forwards — a ~2.5x win at 3 samples. `adaptTheme` now feature-detects the
 method and calls it once per multi-sample frame, falling back to the per-sample
 `recheckContrast` loop for single samples or engines that do not expose it.
 
-## resolveTheme (on-breach re-solve; NOT touched by this work)
+## `resolveTheme`: ограниченный и согласованный контрактный кэш
 
-Measured separately, unchanged: cache-hit ≈ 657µs, cache-miss ≈ 1303µs. Both are
-dominated by the JS-object projection (`project_resolved` builds ~106 role objects
-via hundreds of `Reflect.set` FFI calls) — reruns on every call even on a cache
-hit. Off the per-frame path (`resolveTheme` fires only on a sustained, debounced
-breach), but the projection is the obvious next target if resolve latency ever
-matters; flagged for the owner, not addressed here.
+Повторный аудит 2026-07-10 исправил сам сценарий измерения: прежний генератор
+использовал `& 0xfff`, поэтому после прогрева повторял 4096 фонов и называл
+попадания промахами. Текущий benchmark не повторяет ни одного sRGB8-ключа за
+весь запуск, отдельно измеряет чередование двух тем и печатает high-water
+линейной памяти WASM.
+
+Одинаковый сценарий на Node v24.15.0, `wasm -Oz`, median после прогрева:
+
+| сценарий | прежний кэш | тематические слоты | изменение |
+|---|---:|---:|---:|
+| один и тот же ключ | 70,6 µs | 76,3 µs | минимум обоих прогонов ≈67 µs |
+| чередование двух тем | 279,1 µs | 81,3 µs | 3,43× быстрее |
+| честный уникальный промах | 2,582 ms | 3,052 ms | не относится к ускорению hit-пути |
+| память после полного прогона | 68,563 MiB | 1,438 MiB | в 47,7× ниже high-water |
+
+Почему память теперь ограничена доказуемо: вместо `HashMap` на 4096 полных тем
+структура содержит по одному именованному слоту на каждый вариант публичного
+`Theme`. DTO и его JSON лежат в одном `ResolvedSnapshot`, поэтому попадание
+решателя не может одновременно быть промахом сериализации. Поток произвольной
+длины удерживает не более четырёх payload; это отдельно проверяется через
+`Weak`, а не только через счётчик записей.
+
+Число честного промаха приведено для полноты, но не трактуется как A/B самого
+кэша: между сборками менялась математика core, и fingerprint `resolve vars`
+изменился (`06ea61dc` → `6f222912`). Recheck-физика осталась байт-идентичной
+(`2806bf67` в обоих прогонах). Кэш не должен маскировать стоимость настоящего
+solve; его контракт — быстрый точный hit и ограниченная память.

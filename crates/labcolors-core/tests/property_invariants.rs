@@ -93,7 +93,7 @@ fn vc_of(i: usize) -> ViewingConditions {
 fn wcag_ratio_from_hex(fg: &str, bg: &str) -> f64 {
     fn channel(byte: u8) -> f64 {
         let c = f64::from(byte) / 255.0;
-        if c <= 0.039_28 {
+        if c <= 0.040_45 {
             c / 12.92
         } else {
             ((c + 0.055) / 1.055).powf(2.4)
@@ -337,11 +337,7 @@ fn base_config(
             categories: vec![SentimentCategory {
                 name: "alert".to_string(),
                 family: "fam".to_string(),
-                hue_floor_deg: None,
-                preferred_side: None,
             }],
-            hardness: 5.0,
-            chroma_fraction: 0.88,
         },
         ThemesConfig {
             entries: vec![
@@ -517,9 +513,14 @@ fn hued_brand_label_preserves_family_hue_where_it_has_chroma() {
     // Оттенок семьи бренда — из ФАКТИЧЕСКИ построенных светлого и тёмного якорей
     // (та же lighten/darken, что в base_config), берём оба края семьи.
     let (br, bg_, bb) = brand;
-    let brand_hue_light =
-        oklch_from_hex(&hex_of(lighten(br), lighten(bg_), lighten(bb))).unwrap()[2];
-    let brand_hue_dark = oklch_from_hex(&hex_of(darken(br), darken(bg_), darken(bb))).unwrap()[2];
+    let brand_hue_light = oklch_from_hex(&hex_of(lighten(br), lighten(bg_), lighten(bb)))
+        .unwrap()
+        .h_deg
+        .expect("цветной светлый якорь имеет hue");
+    let brand_hue_dark = oklch_from_hex(&hex_of(darken(br), darken(bg_), darken(bb)))
+        .unwrap()
+        .h_deg
+        .expect("цветной тёмный якорь имеет hue");
 
     check(
         400,
@@ -530,15 +531,17 @@ fn hued_brand_label_preserves_family_hue_where_it_has_chroma() {
             let set = resolve_named_set(&bg, &table, &vc);
             let label = set.iter().find(|(n, _)| n == "brand-label").map(|(_, r)| r);
             if let Some(Resolved::Color { solved, .. }) = label {
-                let [_, chroma, hue] = oklch_from_hex(solved.hex()).unwrap();
+                let coordinates = oklch_from_hex(solved.hex()).unwrap();
                 // Только там, где есть реальный цвет (иначе оттенок численно шумит).
-                if chroma > 0.03 {
+                if coordinates.c > 0.03 {
+                    let hue = coordinates.h_deg.expect("цвет выше порога имеет hue");
                     let dist =
                         hue_distance(brand_hue_light, hue).min(hue_distance(brand_hue_dark, hue));
                     prop_assert!(
                         dist <= 35.0,
-                        "бренд-лейбл на {} ушёл {dist:.1}° от семьи (hue {hue:.1}°, C={chroma:.3}, hex {})",
+                        "бренд-лейбл на {} ушёл {dist:.1}° от семьи (hue {hue:.1}°, C={:.3}, hex {})",
                         hex_of(r, g, b),
+                        coordinates.c,
                         solved.hex()
                     );
                 }

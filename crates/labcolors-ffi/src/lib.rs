@@ -312,7 +312,10 @@ pub fn min_alpha(tint: String, bg: String) -> Result<f64, ColorError> {
     min_alpha_hex(&tint, &bg).map_err(|reason| ColorError::InvalidColor { reason })
 }
 
-/// Оценка мутности («грязи») цвета `[0,1]`: 0 — чистый, 1 — грязный.
+/// Замороженная историческая гипотеза Dirt Law V1 в диапазоне `[0,1]`.
+///
+/// Имя сохранено для совместимости. Результат не является вероятностью и не
+/// выдаётся за универсальную психофизическую классификацию наблюдателей.
 ///
 /// # Errors
 ///
@@ -388,13 +391,13 @@ mod tests {
     }
 
     #[test]
-    fn muddiness_orders_olive_above_clean_gray() {
+    fn legacy_muddiness_preserves_frozen_vector_order() {
         // Значения — факт ядра (см. conformance/vectors/muddiness.json): серый
         // почти чист, олива заметно мутнее. Проверяем ПОРЯДОК и чистоту серого,
         // не магическое число.
         let olive = muddiness("#6B6B2E".into()).unwrap();
         let gray = muddiness("#808080".into()).unwrap();
-        assert!(gray < 0.05, "серый должен быть чистым, получено {gray}");
-        assert!(olive > gray, "олива должна быть мутнее серого");
+        assert!(gray < 0.05, "замороженный V1 grey-вектор изменился: {gray}");
+        assert!(olive > gray, "замороженный порядок V1-векторов изменился");
     }
 }

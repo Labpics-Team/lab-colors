@@ -372,14 +372,12 @@ pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) ->
     j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }
 
-fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
-    // Невалидный hex деградирует к чёрному, а не к Err: публичный LPC-API
-    // (`lpc`, `lpc_with_vc`) намеренно infallible (f64, не Result) — hex
-    // валидируются на границах (config/wasm), здесь только детерминированный
-    // фолбэк вместо паники.
-    let rgb = srgb_from_hex(hex).unwrap_or([0.0, 0.0, 0.0]);
+fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> Result<f64, String> {
+    // Невалидный текст нельзя переинтерпретировать как чёрный: это превращает
+    // ошибку границы в правдоподобный, но ложный контрастный результат.
+    let rgb = srgb_from_hex(hex)?;
     let xyz = srgb_to_xyz(rgb);
-    y_hk(j_hk_from_xyz(xyz, vc).max(0.0), vc)
+    Ok(y_hk(j_hk_from_xyz(xyz, vc).max(0.0), vc))
 }
 
 /// Perceptual-contrast (LPC) between a foreground and background hex colour
@@ -390,7 +388,13 @@ fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
 /// [`ViewingConditions::dim_surround`] (dim surround компенсирует эффект
 /// Бартлесона–Бренемана; параметры окружения — CIE 159:2004 Table 1 / CIE 248:2022).
 pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
-    lpc_with_vc(fg_hex, bg_hex, &ViewingConditions::srgb())
+    try_lpc(fg_hex, bg_hex)
+        .expect("lpc получил невалидный цвет; на границе ввода используйте try_lpc")
+}
+
+/// Проверяемый перцептивный контраст в стандартных условиях просмотра.
+pub fn try_lpc(fg_hex: &str, bg_hex: &str) -> Result<f64, String> {
+    try_lpc_with_vc(fg_hex, bg_hex, &ViewingConditions::srgb())
 }
 
 /// Perceptual-contrast (LPC) between a foreground and background hex colour
@@ -409,9 +413,15 @@ pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
 /// NOT DOI 10.1002/col.22793, which is the Helmholtz–Kohlrausch paper cited by
 /// `hk_coeff` — that DOI was previously misattached to the surround params.)
 pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
-    let y_fg = hex_to_y_hk(fg_hex, vc);
-    let y_bg = hex_to_y_hk(bg_hex, vc);
-    contrast_core(y_fg, y_bg)
+    try_lpc_with_vc(fg_hex, bg_hex, vc)
+        .expect("lpc_with_vc получил невалидный цвет; используйте try_lpc_with_vc")
+}
+
+/// Проверяемый перцептивный контраст при явных условиях просмотра.
+pub fn try_lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> Result<f64, String> {
+    let y_fg = hex_to_y_hk(fg_hex, vc)?;
+    let y_bg = hex_to_y_hk(bg_hex, vc)?;
+    Ok(contrast_core(y_fg, y_bg))
 }
 
 /// LPC surface distance between two hex colours under standard sRGB viewing
@@ -420,7 +430,13 @@ pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
 /// Shortcut for [`lpc_surface_with_vc`] with [`ViewingConditions::srgb`]; use
 /// [`ViewingConditions::dim_surround`] for dark themes.
 pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
-    lpc_surface_with_vc(c1_hex, c2_hex, &ViewingConditions::srgb())
+    try_lpc_surface(c1_hex, c2_hex)
+        .expect("lpc_surface получил невалидный цвет; используйте try_lpc_surface")
+}
+
+/// Проверяемое расстояние поверхности CAM16-UCS в стандартных условиях.
+pub fn try_lpc_surface(c1_hex: &str, c2_hex: &str) -> Result<f64, String> {
+    try_lpc_surface_with_vc(c1_hex, c2_hex, &ViewingConditions::srgb())
 }
 
 /// LPC surface distance between two hex colours under the given viewing
@@ -430,18 +446,19 @@ pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
 /// the dim-surround space. Use [`ViewingConditions::srgb`] for light themes and
 /// [`ViewingConditions::dim_surround`] for dark themes.
 pub fn lpc_surface_with_vc(c1_hex: &str, c2_hex: &str, vc: &ViewingConditions) -> f64 {
-    // `.expect()` on the parse is intentionally left in place here: the
-    // fallible-public-API redesign is tracked separately (issue #41).
-    let c1 = crate::lcs::LcsColor::from_hex_with_vc(c1_hex, vc).expect("invalid hex");
-    let c2 = crate::lcs::LcsColor::from_hex_with_vc(c2_hex, vc).expect("invalid hex");
-    let dj = c1.jp - c2.jp;
-    let m1 = c1.s * (c1.jp + 1.0);
-    let m2 = c2.s * (c2.jp + 1.0);
-    let h1 = c1.h_ok.to_radians();
-    let h2 = c2.h_ok.to_radians();
-    let da = m1 * h1.cos() - m2 * h2.cos();
-    let db = m1 * h1.sin() - m2 * h2.sin();
-    (dj * dj + da * da + db * db).sqrt()
+    try_lpc_surface_with_vc(c1_hex, c2_hex, vc)
+        .expect("lpc_surface_with_vc получил невалидный цвет; используйте try_lpc_surface_with_vc")
+}
+
+/// Проверяемое расстояние поверхности CAM16-UCS при явных условиях просмотра.
+pub fn try_lpc_surface_with_vc(
+    c1_hex: &str,
+    c2_hex: &str,
+    vc: &ViewingConditions,
+) -> Result<f64, String> {
+    let c1 = crate::lcs::LcsColor::from_hex_with_vc(c1_hex, vc)?;
+    let c2 = crate::lcs::LcsColor::from_hex_with_vc(c2_hex, vc)?;
+    Ok(c1.delta_e_ucs(&c2))
 }
 
 /// LPC contrast between two [`crate::lcs::LcsColor`] values under standard sRGB

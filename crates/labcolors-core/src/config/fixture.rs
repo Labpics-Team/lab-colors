@@ -72,22 +72,11 @@ pub fn labui_reference() -> ThemeConfig {
         ],
         sentiments: SentimentsConfig {
             categories: vec![
-                sentiment("danger", "red", None, None),
-                sentiment(
-                    "warning",
-                    "orange",
-                    Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
-                    Some(1),
-                ),
-                sentiment("success", "green", None, None),
-                sentiment("info", "blue", None, None),
+                sentiment("danger", "red"),
+                sentiment("warning", "orange"),
+                sentiment("success", "green"),
+                sentiment("info", "blue"),
             ],
-            hardness: 5.0,
-            // 1.0 = потолок на чистой стене гамута: якоря labui — авторитет
-            // идентичности (Figma-калибровка, danger #FF3B30 сидит ВЫШЕ
-            // 0.88·C_max — доля 0.88 съедала бы клиентский красный).
-            // Реестровый дефолт для клиентов без якорной калибровки — 0.88.
-            chroma_fraction: 1.0,
         },
         themes: ThemesConfig {
             entries: vec![
@@ -121,16 +110,9 @@ fn fam(key: &str, light: &str, dark: &str, light_ic: &str, dark_ic: &str) -> Pal
 }
 
 /// Краткий конструктор сентимент-категории для фикстуры.
-fn sentiment(
-    name: &str,
-    family: &str,
-    hue_floor_deg: Option<f64>,
-    preferred_side: Option<i8>,
-) -> SentimentCategory {
+fn sentiment(name: &str, family: &str) -> SentimentCategory {
     SentimentCategory {
         name: name.to_string(),
         family: family.to_string(),
-        hue_floor_deg,
-        preferred_side,
     }
 }

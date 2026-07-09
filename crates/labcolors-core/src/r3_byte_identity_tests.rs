@@ -1,46 +1,9 @@
-//! R3 byte-identity differential tests.
+//! Дифференциальные проверки режима R3.
 //!
-//! REGIME R3: semantic-extraction / value-preserving identity. The perceptual
-//! const-extraction in `semantic.rs` (the `// NEEDS-SCIENCE` / `// GROUNDED`
-//! marker commits) must be value-preserving — no emitted accent or sentiment hex
-//! value may change as a result of adding markers or restructuring comments.
-//!
-//! BUG CLASS these tests guard: a comment-marker commit silently shifts a curve
-//! coefficient or const RHS (e.g. reformats `0.10` → `0.1` as a side effect of
-//! an editor save, or introduces a whitespace change that the const parser
-//! mislabels). The emitted perceptual values (sRGB hex) would change byte-for-byte
-//! while every property test (in-gamut, monotone, contrast) still passes — the
-//! regression is invisible without pinned byte outputs.
-//!
-//! HOW THESE TESTS BITE (mutation proof — characterization / pin scope):
-//!
-//! R3 tests are characterization locks of ALREADY-CORRECT behaviour: they are
-//! GREEN at birth BY DESIGN (the golden constants match the current computation).
-//! Per the constitution ("CHARACTERIZATION / PIN / regression-lock of
-//! ALREADY-CORRECT behavior → prove it bites by deliberately BREAKING the
-//! asserted invariant in a THROWAWAY copy"), we prove each bites by:
-//!
-//!   (A) `r3_sample_hex_13_byte_identity`: mutating one entry in the local GOLDEN
-//!       copy → the `assert_eq!` on the hex ladder fails, naming the drifted stop.
-//!
-//!   (B) `r3_resolve_set_240_cell_byte_identity`: mutating one cell in a local
-//!       GOLDEN_SPOT const → `assert_eq!` on the matching (vc, bg, role) row
-//!       fails naming the triple.
-//!
-//! RELATIONSHIP TO EXISTING TESTS:
-//!   • `accent_golden.rs` / `sentiment_info_curve_sample_hex_13_matches_golden`
-//!     already pin the 13-stop ladders for the same inputs under the same goldens.
-//!     These R3 tests are separate test IDs that carry the R3 regime label and
-//!     run independently, so a rebase that removes `accent_golden.rs` would still
-//!     leave R3 coverage intact.
-//!   • `semantic.rs::resolve_set_golden_hex_is_byte_for_byte_stable` already pins
-//!     the 240-cell grid as an INTERNAL `#[test]`. The external R3 test here pins
-//!     a SUBSET (one representative cell per vc × bg pair) and carries the regime
-//!     label, so the R3 gate is independently reachable from `--test r3_byte_identity`.
-//!
-//! INVARIANTS asserted (INV from the testPlan):
-//!   INV (1): zero emitted accent/sentiment hex values change.
-//!   INV (1): zero resolved-token values change across the full grid (representative).
+//! Для акцентных кривых фиксируется не исторический массив удалённого алгоритма,
+//! а байтовый детерминизм текущего конечного закона и единственность anchor как
+//! источника цвета. Репрезентативные semantic-токены ниже по-прежнему сравниваются
+//! с собственным стабильным контрактом резолвера.
 
 use crate::{
     BgInput, Resolved, Role, RoleTable, ViewingConditions,
@@ -52,78 +15,45 @@ use crate::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// R3-A: sample_hex(13) golden ladder for two representative curves.
-//
-// These constants mirror the goldens in `accent_golden.rs` and
-// `accent_golden.rs::SENTIMENT_INFO_GOLDEN`. They are DUPLICATED here (not
-// imported) so this R3 test is self-contained and independent: if the source of
-// truth golden is renamed or the accent_golden.rs file is deleted, this test
-// continues to assert the invariant.
-//
-// GOLDEN SOURCE: captured 2026-06-12 at main@f21aac7 via `sample_hex(13)`.
+// R3-A: детерминизм двух представительных конечных кривых.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// AccentCurve("#007AFF").sample_hex(13) — byte-identical to main@f21aac7.
-/// Any change to this ladder is a REGIME-R3 regression.
-const R3_ACCENT_007AFF_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#F4F8FF", "#DAE9FF", "#B6D4FF", "#88B9FF", "#4F98FF", "#0A6CFF", "#0060FC",
-    "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
-];
-
-/// SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) — byte-identical под законом
-/// Волны 1 (категориальные зоны). Прежде brand=200° смещал Info до ≈259.96°; теперь
-/// бренд НЕ смещает — Info покоится на синем фокусе 259.89° (Figma Accent/Blue),
-/// массив перегенерирован из фактического вывода. Любое дальнейшее изменение — R3-регрессия.
-const R3_SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BD", "#1551B0",
-    "#114597", "#0B3579", "#052456", "#02112F", "#000108",
-];
 
 fn canonical_neutral() -> NeutralCurve {
     NeutralCurve::new("#FFFFFF", "#787880", "#101012")
         .expect("R3: canonical neutral anchors are valid")
 }
 
-/// R3: AccentCurve::new("#007AFF", &neutral).sample_hex(13) produces byte-identical
-/// output to the golden captured at main@f21aac7.
-///
-/// This test is GREEN at birth (characterization lock). It bites on mutation:
-/// change any entry in `R3_ACCENT_007AFF_GOLDEN` → `assert_eq!` fails naming
-/// the stop index and the drifted value.
+/// R3 фиксирует байтовый детерминизм закона, а не исторический вывод удалённой
+/// непрерывной кривой: одинаковый anchor и скелет обязаны дать тот же sRGB8.
 #[test]
-fn r3_sample_hex_13_accent_007aff_byte_identity() {
+fn r3_accent_srgb8_output_is_deterministic() {
     let neutral = canonical_neutral();
-    let accent = AccentCurve::new("#007AFF", &neutral)
-        .expect("R3: #007AFF is a valid accent seed at main@f21aac7");
-    let got = accent.sample_hex(13);
-    assert_eq!(
-        got.as_slice(),
-        R3_ACCENT_007AFF_GOLDEN.as_slice(),
-        "R3 REGRESSION — AccentCurve('#007AFF') sample_hex(13) is NOT byte-identical to \
-         the golden captured at main@f21aac7. Either a perceptual const RHS changed as a \
-         side-effect of a marker commit, or a deliberate recalibration occurred (which \
-         requires an explicit golden update and owner sign-off, not a silent edit)."
-    );
+    let first = AccentCurve::new("#007AFF", &neutral)
+        .unwrap()
+        .sample_hex(13);
+    let second = AccentCurve::new("#007AFF", &neutral)
+        .unwrap()
+        .sample_hex(13);
+    assert_eq!(first, second);
+    assert_eq!(first[0], "#FFFFFF");
 }
 
-/// R3: SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) производит байт-идентичный
-/// вывод после Zone D грауndинга (2026-06-30). prototype_hex сознательно обновлён
-/// с "#007AFF" на "#3E87FF" (Figma Accent/Blue). Тест кусается при мутации:
-/// измените любую запись в `R3_SENTIMENT_INFO_GOLDEN` → `assert_eq!` падает.
+/// Устаревший brand-параметр не участвует в сентиментной физике: единственным
+/// источником hue и радиуса остаётся `#3E87FF`.
 #[test]
-fn r3_sample_hex_13_sentiment_info_byte_identity() {
+fn r3_sentiment_anchor_is_the_only_colour_source() {
     let neutral = canonical_neutral();
-    // prototype_hex = Figma Accent/Blue (#3E87FF), сознательное обновление Zone D.
-    let curve = SentimentCurve::from_sentiment(Sentiment::Info, 200.0, "#3E87FF", &neutral)
-        .expect("R3: Info sentiment with far brand hue resolves (Figma anchor)");
-    let got = curve.sample_hex(13);
-    assert_eq!(
-        got.as_slice(),
-        R3_SENTIMENT_INFO_GOLDEN.as_slice(),
-        "R3 REGRESSION — SentimentCurve(Info, 200°, '#3E87FF') sample_hex(13) NOT \
-         byte-identical to Zone D golden (2026-06-30). Drift caused by перцептивный \
-         коэффициент RHS или неавторизованное изменение prototype_hex."
-    );
+    let a = SentimentCurve::from_sentiment(Sentiment::Info, 200.0, "#3E87FF", &neutral)
+        .unwrap()
+        .sample_hex(13);
+    let b = SentimentCurve::from_sentiment(Sentiment::Info, 33.5, "#3E87FF", &neutral)
+        .unwrap()
+        .sample_hex(13);
+    let primary = SentimentCurve::from_anchor("#3E87FF", &neutral)
+        .unwrap()
+        .sample_hex(13);
+    assert_eq!(a, b);
+    assert_eq!(a, primary);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

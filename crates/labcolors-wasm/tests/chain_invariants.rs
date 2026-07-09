@@ -142,7 +142,7 @@ fn fingerprint_is_invariant_to_json_key_order() {
         "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
       },
       "palette": [],
-      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+      "sentiments": {"geometry": "anchor-distance-v2", "categories": []},
       "themes": [{"name": "light", "preset": "srgb"}],
       "roles": [
         {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
@@ -154,7 +154,7 @@ fn fingerprint_is_invariant_to_json_key_order() {
         {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
       ],
       "themes": [{"name": "light", "preset": "srgb"}],
-      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+      "sentiments": {"geometry": "anchor-distance-v2", "categories": []},
       "palette": [],
       "neutral": {
         "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0},

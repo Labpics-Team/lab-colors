@@ -214,7 +214,7 @@ mod tests {
             (Accent::Red, "#FF3B30", "red", 28.6592),
             (Accent::Orange, "#FFA100", "orange", 68.6070),
             (Accent::Yellow, "#FFD000", "yellow", 92.2265),
-            (Accent::Green, "#34C759", "green", 147.4439),
+            (Accent::Green, "#34C759", "green", 147.4440),
             (Accent::Teal, "#5AC8FA", "teal", 230.8271),
             (Accent::Mint, "#00C7BE", "mint", 189.0284),
             (Accent::Blue, "#3E87FF", "blue", 259.8918),

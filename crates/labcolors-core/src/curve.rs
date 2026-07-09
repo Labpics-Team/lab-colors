@@ -87,11 +87,14 @@ mod tests {
             &vc,
         )
         .expect("NeutralCurve::with_vc should succeed for valid dim-surround anchors");
+        let base_t = curve.base_position();
         let curve: &dyn ColorCurve = &curve;
 
         let hexes = curve.sample_hex(13);
         assert_eq!(hexes[0].to_uppercase(), "#FFFFFF");
-        assert_eq!(hexes[6].to_uppercase(), "#787880");
         assert_eq!(hexes[12].to_uppercase(), "#101012");
+        // База конечной sRGB8-полилинии выводится из фактических длин её рёбер
+        // и потому не обязана совпадать с арифметической серединой `t = 0.5`.
+        assert_eq!(curve.at(base_t).to_hex_with_vc(curve.vc()), "#787880");
     }
 }

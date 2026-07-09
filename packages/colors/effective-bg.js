@@ -97,17 +97,14 @@ function clamp255(v) {
 }
 
 /**
- * Parse the inside of an `oklch(...)` (the part between the parens) into sRGB
- * `[r, g, b, a]`, or `null` on any malformed component.
+ * Разбирает содержимое `oklch(...)` в sRGB `[r, g, b, a]` либо возвращает
+ * `null`, если хотя бы одна компонента синтаксически некорректна.
  *
- * The engine emits `oklch(L% C H)` / `oklch(L% C H / A)`; a browser's computed
- * form is `oklch(<L 0..1> C H [/ A])`. Components are whitespace-separated with
- * an optional `/`-separated alpha, exactly like `rgb()`'s modern syntax.
- * oklch → Oklab is `a = C·cos(H)`, `b = C·sin(H)`; then the file's own
- * `oklabToLinearRgb` + `linearToSrgb` land it in sRGB — the SAME transform (and
- * the SAME clamp-then-round the core uses in `hex_from_srgb`) that carries the
- * emitter's byte-exact round-trip, so an emitted string decodes to its source
- * bytes. Out-of-gamut channels clamp per channel, matching `oklabLerp`/`toHex`.
+ * Движок эмитирует `oklch(L% C H)` либо `oklch(L% C none)` у powerless hue;
+ * альфа добавляется через `/ A`. `none` декодируется как missing-компонента и
+ * численно равен нулю по CSS Color 4, поэтому ахромату не приписывается угол.
+ * Преобразование Oklch → Oklab → sRGB повторяет путь ядра и сохраняет
+ * байт-точный round-trip его строк; внегамутные каналы клампятся поканально.
  *
  * @param {string} inner  the text between `oklch(` and `)`
  * @returns {Rgba | null}
@@ -326,12 +323,12 @@ export function parseCssColorCached(css) {
   return hit;
 }
 
-/** WCAG 2.1 relative luminance of r,g,b channels (0..255) — the normative
- *  0.03928 / 12.92 / 2.4 constants, matching `adapt-theme`'s floor semantics. */
+/** Относительная яркость WCAG для каналов 0..255. Те же нормативные константы
+ *  0.04045 / 12.92 / 2.4 не дают этой границе разойтись с `adapt-theme`. */
 function wcagLumChannels(r, g, b) {
   const lin = (c) => {
     const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
   };
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
