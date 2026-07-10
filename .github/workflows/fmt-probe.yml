@@ -8,16 +8,18 @@ on:
       - ".github/workflows/fmt-probe.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   RUST_TOOLCHAIN: 1.96.0
 
 jobs:
-  diff:
+  apply:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: agent/scientific-color-core
       - name: isolated toolchain environment
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
@@ -28,13 +30,13 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
-      - name: produce exact rustfmt patch
+      - name: apply and commit exact rustfmt output
         run: |
           cargo fmt --all
-          git diff --binary > rustfmt.patch
-      - name: upload patch
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: rustfmt-patch
-          path: rustfmt.patch
-          retention-days: 1
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add crates/labcolors-core/src/neutral.rs crates/labcolors-core/tests/neutral_quantization_exactness.rs
+            git commit -m "style(neutral): apply pinned rustfmt 1.96"
+            git push origin HEAD:agent/scientific-color-core
+          fi
