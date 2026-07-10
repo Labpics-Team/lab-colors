@@ -13,7 +13,7 @@ env:
 
 jobs:
   export:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -29,9 +29,9 @@ jobs:
           python3 - <<'PY'
           from __future__ import annotations
 
+          import os
           import pathlib
           import subprocess
-          import os
 
           root = pathlib.Path.cwd()
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'comment-audit' / 'tracked-files.txt'
