@@ -1,0 +1,56 @@
+name: comment-audit-export
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/comment-audit-export.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: c72fbc75379d5ef63693a793a5881725f25ff598
+          fetch-depth: 0
+      - name: archive exact audited tree
+        shell: bash
+        run: |
+          git archive --format=tar.gz --output=lab-colors-main-c72fbc7.tar.gz HEAD
+          git ls-files -z | python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          raw = sys.stdin.buffer.read().split(b"\0")
+          rows = []
+          for item in raw:
+              if not item:
+                  continue
+              path = Path(item.decode("utf-8"))
+              try:
+                  data = path.read_bytes()
+              except OSError:
+                  continue
+              if b"\0" in data:
+                  continue
+              try:
+                  text = data.decode("utf-8")
+              except UnicodeDecodeError:
+                  continue
+              lines = text.splitlines()
+              rows.append(f"===== FILE {path} ({len(lines)} lines) =====")
+              rows.extend(f"{i:06d}: {line}" for i, line in enumerate(lines, 1))
+          Path("all-tracked-text-with-lines.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
+          PY
+      - name: upload audited snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: comment-audit-main-c72fbc7
+          path: |
+            lab-colors-main-c72fbc7.tar.gz
+            all-tracked-text-with-lines.txt
+          retention-days: 1
