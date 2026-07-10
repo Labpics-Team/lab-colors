@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::lcs::LcsColor;
-use crate::spaces::srgb::{srgb_encoded_from_hex, srgb_from_hex, srgb_gamma_inv};
+use crate::spaces::srgb::{
+    quantise_srgb, srgb_encoded_from_hex, srgb_from_hex, srgb_gamma_inv,
+};
 use crate::spaces::vc::ViewingConditions;
 
 /// Маркер бескоэффициентного построения нейтральной кривой.
@@ -25,10 +27,15 @@ struct QuantizedState {
 /// Конечная цветовая полилиния через светлый, базовый и тёмный якоря.
 ///
 /// Между соседними якорями строится выпуклый отрезок в **линейном свете sRGB**.
-/// Затем без сеточного шага перечисляются все его состояния после реальной
-/// 8-битной sRGB-квантизации: событиями служат все пересечённые полубайтовые
-/// границы каждого канала. Длина пути — сумма CAM16-UCS расстояний между этими
-/// реальными `#RRGGBB`, а не длина непрерывной кривой до квантования.
+/// Затем перечисляются все состояния, которые фактически выдаёт общий
+/// `encode → clamp → round → decode`-квантизатор sRGB8. Для каждого следующего
+/// кода канала ищется первое представимое `f64 t`, на котором переключается
+/// production-квантование; аналитическая half-byte граница не считается
+/// эквивалентной живому пути из-за округления и `libm`.
+///
+/// Длина пути — сумма CAM16-UCS расстояний между реальными `#RRGGBB`, а не длина
+/// непрерывной кривой до квантования. Побитовая межплатформенная идентичность
+/// трансцендентного encode-пути отдельно сертифицируется задачей #223.
 ///
 /// Поэтому [`Self::at`] — ступенчатая функция и близкие значения `t` закономерно
 /// могут вернуть один цвет. «Равномерность» здесь означает только ближайшее по
@@ -244,12 +251,58 @@ struct Boundary {
     next_byte: u8,
 }
 
-/// Перечисляет состояния сегмента по всем пересечениям границ квантования.
+/// Первое представимое `t ∈ (0, 1]`, на котором production-квантование канала
+/// достигает следующего кода.
 ///
-/// Для канала граница кодов `k` и `k + 1` лежит в кодированном sRGB ровно на
-/// `(k + 1/2) / 255`; обратная передаточная функция переносит её в линейный
-/// свет. Таким образом, число событий конечно и выводится из самих байтов, а не
-/// из плотности выборки или визуального epsilon.
+/// Для неотрицательных finite `f64` порядок битовых представлений совпадает с
+/// числовым, поэтому бинарный поиск охватывает весь кодомен `t`, а не выборочную
+/// сетку. Проверяется именно общий [`quantise_srgb`], чтобы перечисление и
+/// финальная эмиссия не имели двух версий правила округления.
+fn first_transition_t(
+    start: f64,
+    end: f64,
+    target_byte: u8,
+    increasing: bool,
+) -> Result<f64, String> {
+    let target = srgb_gamma_inv(f64::from(target_byte) / 255.0);
+    let crossed = |t: f64| {
+        let linear = start + (end - start) * t;
+        let quantized = quantise_srgb([linear, 0.0, 0.0])[0];
+        if increasing {
+            quantized >= target
+        } else {
+            quantized <= target
+        }
+    };
+
+    if crossed(0.0) || !crossed(1.0) {
+        return Err(format!(
+            "квантователь не образует переход к коду {target_byte} внутри сегмента"
+        ));
+    }
+
+    let mut lo = 0.0_f64.to_bits();
+    let mut hi = 1.0_f64.to_bits();
+    while lo + 1 < hi {
+        let mid = lo + (hi - lo) / 2;
+        if crossed(f64::from_bits(mid)) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+
+    let t = f64::from_bits(hi);
+    if t.is_finite() && 0.0 < t && t <= 1.0 {
+        Ok(t)
+    } else {
+        Err(format!(
+            "переход к коду {target_byte} дал недопустимый параметр t={t}"
+        ))
+    }
+}
+
+/// Перечисляет все состояния сегмента, реально достижимые общим sRGB8-квантователем.
 fn enumerate_segment(from: [u8; 3], to: [u8; 3]) -> Result<Vec<[u8; 3]>, String> {
     let from_rgb = srgb_from_hex(&hex_from_bytes(from))?;
     let to_rgb = srgb_from_hex(&hex_from_bytes(to))?;
@@ -258,31 +311,36 @@ fn enumerate_segment(from: [u8; 3], to: [u8; 3]) -> Result<Vec<[u8; 3]>, String>
     for channel in 0..3 {
         let from_byte = from[channel];
         let to_byte = to[channel];
-        if from_byte == to_byte {
-            continue;
-        }
-
-        let first_lower = from_byte.min(to_byte);
-        let last_lower = from_byte.max(to_byte);
-        for lower in first_lower..last_lower {
-            let encoded_wall = (f64::from(lower) + 0.5) / 255.0;
-            let linear_wall = srgb_gamma_inv(encoded_wall);
-            let t = (linear_wall - from_rgb[channel]) / (to_rgb[channel] - from_rgb[channel]);
-            if !(t.is_finite() && 0.0 < t && t < 1.0) {
-                return Err(format!(
-                    "граница sRGB8 канала {channel} не попала внутрь линейного сегмента"
-                ));
+        match to_byte.cmp(&from_byte) {
+            std::cmp::Ordering::Greater => {
+                for next_byte in (from_byte + 1)..=to_byte {
+                    boundaries.push(Boundary {
+                        t: first_transition_t(
+                            from_rgb[channel],
+                            to_rgb[channel],
+                            next_byte,
+                            true,
+                        )?,
+                        channel,
+                        next_byte,
+                    });
+                }
             }
-            let next_byte = if to_byte > from_byte {
-                lower + 1
-            } else {
-                lower
-            };
-            boundaries.push(Boundary {
-                t,
-                channel,
-                next_byte,
-            });
+            std::cmp::Ordering::Less => {
+                for next_byte in to_byte..from_byte {
+                    boundaries.push(Boundary {
+                        t: first_transition_t(
+                            from_rgb[channel],
+                            to_rgb[channel],
+                            next_byte,
+                            false,
+                        )?,
+                        channel,
+                        next_byte,
+                    });
+                }
+            }
+            std::cmp::Ordering::Equal => {}
         }
     }
 
@@ -303,7 +361,7 @@ fn enumerate_segment(from: [u8; 3], to: [u8; 3]) -> Result<Vec<[u8; 3]>, String>
     }
 
     if bytes != to {
-        return Err("перечисление границ sRGB8 не достигло конечного якоря".into());
+        return Err("перечисление живого sRGB8-квантователя не достигло конечного якоря".into());
     }
     Ok(states)
 }
