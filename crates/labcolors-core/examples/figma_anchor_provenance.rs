@@ -74,6 +74,7 @@ fn srgb_gamma_encode(v: f64) -> f64 {
 /// потребляет её, а не держит вторую копию формулы.
 fn composite_gamma(fg: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64; 3] {
     labcolors_core::alpha::composite_over_encoded(fg, alpha, bg)
+        .expect("данные provenance-примера лежат в encoded-sRGB домене")
 }
 
 /// Композит в линейном свете: каналы декодируются из gamma, смешиваются,

@@ -1722,8 +1722,13 @@ pub struct GlowResolved {
     core_hex: String,
     halo_hex: String,
     alpha: f64,
-    achieved_dj: f64,
-    degraded: bool,
+    alpha_css: String,
+    target_dj: f64,
+    halo_composite_hex: String,
+    halo_achieved_dj: f64,
+    core_composite_hex: String,
+    core_achieved_dj: f64,
+    target_status: crate::glow::GlowTargetStatus,
 }
 
 impl GlowResolved {
@@ -1739,13 +1744,49 @@ impl GlowResolved {
     pub fn alpha(&self) -> f64 {
         self.alpha
     }
-    /// Фактический |ΔJ'| композита от фона (замер на эмитируемом hex).
-    pub fn achieved_dj(&self) -> f64 {
-        self.achieved_dj
+    /// Каноническая CSS-запись alpha с точным обратным чтением в тот же `f64`.
+    pub fn alpha_css(&self) -> &str {
+        &self.alpha_css
     }
-    /// Цель недостижима — возвращён ближайший достижимый шаг (ADR-0002).
+    /// Целевой |ΔJ′| изолированного halo-композита.
+    pub fn target_dj(&self) -> f64 {
+        self.target_dj
+    }
+    /// Версия конечного reference-домена point-расчёта.
+    pub fn reference_profile(&self) -> &'static str {
+        crate::glow::GLOW_REFERENCE_PROFILE
+    }
+    /// Слой, по которому решалась целевая ступень.
+    pub fn constraint_layer(&self) -> crate::glow::GlowConstraintLayer {
+        crate::glow::GlowConstraintLayer::Halo
+    }
+    /// Типизированный исход проверки цели.
+    pub fn target_status(&self) -> crate::glow::GlowTargetStatus {
+        self.target_status
+    }
+    /// Reference-композит изолированного halo на фоне резолва.
+    pub fn halo_composite_hex(&self) -> &str {
+        &self.halo_composite_hex
+    }
+    /// Фактический |ΔJ′| изолированного halo-композита.
+    pub fn halo_achieved_dj(&self) -> f64 {
+        self.halo_achieved_dj
+    }
+    /// Reference-композит изолированного core на том же фоне и alpha.
+    pub fn core_composite_hex(&self) -> &str {
+        &self.core_composite_hex
+    }
+    /// Фактический |ΔJ′| изолированного core-композита.
+    pub fn core_achieved_dj(&self) -> f64 {
+        self.core_achieved_dj
+    }
+    /// Alias совместимости: прежнее поле измеряло именно halo.
+    pub fn achieved_dj(&self) -> f64 {
+        self.halo_achieved_dj
+    }
+    /// Alias совместимости прежнего boolean-контракта.
     pub fn degraded(&self) -> bool {
-        self.degraded
+        self.target_status == crate::glow::GlowTargetStatus::Unreachable
     }
 }
 
@@ -2214,13 +2255,31 @@ fn resolve_spec_in(
                 step.target_dj(),
                 vc,
             ) {
-                Ok(g) => Resolved::Glow(GlowResolved {
-                    core_hex,
-                    halo_hex,
-                    alpha: g.alpha,
-                    achieved_dj: g.achieved_dj,
-                    degraded: g.degraded,
-                }),
+                Ok(g) => {
+                    let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
+                        &core_hex,
+                        &bg_hex,
+                        g.alpha(),
+                        vc,
+                    ) {
+                        Ok(measurement) => measurement,
+                        Err(e) => {
+                            return Resolved::Unreachable(Unreachable::InvalidInput(e));
+                        }
+                    };
+                    Resolved::Glow(GlowResolved {
+                        core_hex,
+                        halo_hex,
+                        alpha: g.alpha(),
+                        alpha_css: g.alpha_css().to_string(),
+                        target_dj: g.target_dj(),
+                        halo_composite_hex: g.composite_hex().to_string(),
+                        halo_achieved_dj: g.achieved_dj(),
+                        core_composite_hex: core_measurement.composite_hex,
+                        core_achieved_dj: core_measurement.achieved_dj,
+                        target_status: g.status(),
+                    })
+                }
                 Err(e) => Resolved::Unreachable(Unreachable::InvalidInput(e)),
             };
         }
@@ -2334,13 +2393,11 @@ fn resolve_rgba_direct(
         ));
     }
     let bg_encoded = bg.encoded_display();
-    // Тинт квантуется ДО композита: наружу уходит 8-битный tint_hex, и браузер
-    // скомпозитит именно его — замер обязан считаться из эмитируемого значения,
-    // иначе composite_hex/Lc/WCAG расходились бы с CSS-результатом на LSB.
+    // Тинт квантуется ДО композита: сертификат и эмиссия обязаны ссылаться на
+    // один и тот же encoded-sRGB8 reference-пиксель.
     let tint_q = quantise_encoded(tint_encoded);
-    let composite = crate::alpha::composite_over_encoded(tint_q, alpha, bg_encoded);
     // Прямая лестница эмитит запрошенную α как есть — коэрсии нет по построению.
-    finish_rgba(tint_q, alpha, composite, bg_encoded, vc, false, false)
+    finish_rgba(tint_q, alpha, bg_encoded, vc, false, false)
 }
 
 /// Резолв ЦВЕТНОГО текст/UI-лейбла (ратификация ch5c, M1).
@@ -2487,8 +2544,7 @@ fn resolve_solid_with_ui_floor(
         Ok(solved) => {
             let shifted = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
                 .expect("hex собственного солвера всегда валиден");
-            let composite = crate::alpha::composite_over_encoded(shifted, 1.0, bg_encoded);
-            finish_rgba(shifted, 1.0, composite, bg_encoded, vc, false, true)
+            finish_rgba(shifted, 1.0, bg_encoded, vc, false, true)
         }
         Err(reason) => Resolved::Unreachable(reason),
     }
@@ -2523,17 +2579,18 @@ fn resolve_pair_label(
     } else {
         surface_alpha_light
     };
-    // Тинт квантуется ДО композита — браузер красит 8-битный tint, поэтому
-    // подложка обязана считаться из отдаваемого значения (тот же закон, что в
-    // resolve_rgba_direct). Композит квантуется тем же форматтером: лейбл решается
-    // против ТОГО ЖЕ пикселя, что уйдёт наружу.
+    // Тинт квантуется ДО композита: подложка обязана считаться из отдаваемого
+    // значения в едином encoded-sRGB8 reference-домене.
     let tint_q = quantise_encoded(tint.for_vc(vc));
-    let surface = quantise_encoded(crate::alpha::composite_over_encoded(
-        tint_q,
-        alpha,
-        bg.encoded_display(),
-    ));
-    let surface_hex = crate::spaces::srgb::hex_from_srgb_encoded(surface);
+    let surface_hex =
+        match crate::alpha::composite_hex_from_encoded(tint_q, alpha, bg.encoded_display()) {
+            Ok(hex) => hex,
+            Err(error) => {
+                return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+                    "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
+                )));
+            }
+        };
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
         // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
         // отказ, чем правдоподобный мусор (RoleSpec публичен).
@@ -2549,10 +2606,8 @@ fn resolve_pair_label(
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
-/// инвертируется в `(tint, фактическая α)` через [`crate::alpha::resolve_alpha_analog`].
-/// Композит фактической пары равен солиду ПО ПОСТРОЕНИЮ, поэтому контраст
-/// наследуется солидом; замер идёт на этом композите. `None`-инверсия
-/// (вход вне гамута) физически недостижима — солид-тинт по теме всегда в гамуте.
+/// инвертируется в `(tint, фактическая α)`. Перед инверсией цель квантуется до
+/// эмитируемой sRGB8-сетки; production-композитор обязан побайтно вернуть её.
 fn resolve_rgba_inverted(
     solid_encoded: [f64; 3],
     requested_alpha: f64,
@@ -2569,41 +2624,26 @@ fn resolve_rgba_inverted(
         ));
     }
     let bg_encoded = bg.encoded_display();
-    let Some(analog) =
-        crate::alpha::resolve_alpha_analog(solid_encoded, requested_alpha, bg_encoded)
-    else {
-        // Тинт источника по теме — валидный кодированный цвет byte/255, поэтому
-        // домен инверсии не нарушается; None здесь означал бы мусорный вход.
-        return Resolved::Unreachable(Unreachable::InvalidInput(
-            "alpha-analog source out of encoded sRGB domain".to_string(),
-        ));
-    };
-    // Тинт инверсии квантуется до композита (см. resolve_rgba_direct: замер из
-    // эмитируемого значения — браузер скомпозитит 8-битный tint_hex). Композит
-    // пересчитывается от квантованного тинта; равенство солиду держится в
-    // пределах LSB-границы квантования (#119).
-    let tint_q = quantise_encoded(analog.tint);
-    let composite = crate::alpha::composite_over_encoded(tint_q, analog.alpha, bg_encoded);
-    // Коэрсия α: фактическая (`analog.alpha`) строго выше запрошенной ⇔ пол
-    // `α_min` перекрыл запрошенную. `resolve_alpha_analog`: α =
-    // req.clamp(0,1).max(floor); под гардом `rgba_input_valid` (req ∈ (0,1])
-    // clamp — no-op, т.е. α = req.max(floor). При floor ≤ req значения побайтно
-    // равны, при floor > req — строго больше. Сравнение точное, эпсилон не нужен:
-    // `max` возвращает либо тот же f64, либо floor.
-    let alpha_coerced = analog.alpha > requested_alpha;
-    finish_rgba(
-        tint_q,
-        analog.alpha,
-        composite,
-        bg_encoded,
-        vc,
-        alpha_coerced,
-        false,
-    )
+    let solid_q = quantise_encoded(solid_encoded);
+    let analog =
+        match crate::alpha::resolve_alpha_analog_srgb8(solid_q, requested_alpha, bg_encoded) {
+            Ok(Some(analog)) => analog,
+            Ok(None) => {
+                return Resolved::Unreachable(Unreachable::InvalidInput(
+                    "alpha-analog не удалось разрешить в конечном числовом домене".to_string(),
+                ));
+            }
+            Err(error) => return Resolved::Unreachable(Unreachable::InvalidInput(error)),
+        };
+    let (tint_srgb8, actual_alpha) = analog;
+    let tint_q = tint_srgb8.map(|channel| f64::from(channel) / 255.0);
+    // Резолвер возвращает тот же binary64 либо строго больший точный пол.
+    let alpha_coerced = actual_alpha > requested_alpha;
+    finish_rgba(tint_q, actual_alpha, bg_encoded, vc, alpha_coerced, false)
 }
 
-/// Собрать [`Resolved::Translucent`] из тинта, альфы и композита: квантовать тинт и
-/// композит до hex, замерить контраст композита против фона резолва.
+/// Собрать [`Resolved::Translucent`] из эмитируемых тинта и альфы: вывести их
+/// encoded-sRGB8 reference-композит и замерить его против фона резолва.
 ///
 /// Контраст меряется в тех же метриках, что и у солид-роли: перцептивный `Lc`
 /// на линейном свете ([`measure_contrast`]) и WCAG на кодированном дисплее — так
@@ -2611,17 +2651,23 @@ fn resolve_rgba_inverted(
 fn finish_rgba(
     tint_encoded: [f64; 3],
     alpha: f64,
-    composite_encoded: [f64; 3],
     bg_encoded: [f64; 3],
     vc: &ViewingConditions,
     alpha_coerced: bool,
     floor_coerced: bool,
 ) -> Resolved {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
-    // Замер идёт по КВАНТОВАННОМУ композиту — тому же 8-битному hex, который
-    // уходит наружу (закон движка: честный dJ' меряется на отданном цвете,
-    // как в solve_dj; неквантованный замер расходился бы с отданным на LSB).
-    let composite_hex = hex_from_srgb_encoded(composite_encoded);
+    // Единый byte-domain SSOT нужен и для hex, и для обеих метрик: нормализация
+    // `(byte/255)·255` способна изменить half-tie на один LSB.
+    let composite_hex =
+        match crate::alpha::composite_hex_from_encoded(tint_encoded, alpha, bg_encoded) {
+            Ok(hex) => hex,
+            Err(error) => {
+                return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+                    "rgba-композит вне encoded-sRGB8 reference-домена: {error}"
+                )));
+            }
+        };
     let composite_q =
         srgb_encoded_from_hex(&composite_hex).expect("hex собственного форматтера всегда валиден");
     // Линейный свет из кодированного (per-channel gamma-декод) для перцептивного Lc.

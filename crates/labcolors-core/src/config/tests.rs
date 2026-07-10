@@ -1577,6 +1577,154 @@ fn validator_rejects_duplicate_dictionary_keys() {
     ));
 }
 
+/// Имена конфига — не весь namespace эмиссии: Glow добавляет `-core/-alpha`,
+/// Material — `-01/-02`. Роль или алиас с таким именем раньше проходили
+/// preflight, а JSON-проекция молча записывала один `--lab-*` дважды; последний
+/// писатель менял тип значения (например, alpha-число превращалось в цвет).
+#[test]
+fn validator_rejects_role_and_alias_collisions_with_emitted_satellites() {
+    let assert_collision = |cfg: ThemeConfig, expected_stem: &str| {
+        let expected = format!("--lab-{expected_stem}");
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(ConfigError::DuplicateKey {
+                    dictionary: "emitted CSS variables",
+                    key,
+                }) if key == expected
+            ),
+            "коллизия эмитируемого ключа {expected} обязана быть отвергнута"
+        );
+    };
+
+    // Реальный класс регрессии: существующий glow владеет двумя сателлитами.
+    for suffix in ["-core", "-alpha"] {
+        let colliding = format!("fx-glow-brand{suffix}");
+
+        let mut role_cfg = labui_reference();
+        let ordinary_recipe = role_cfg
+            .roles
+            .iter()
+            .find(|(name, _)| name == "label-primary")
+            .expect("фикстура несёт label-primary")
+            .1
+            .clone();
+        role_cfg.roles.push((colliding.clone(), ordinary_recipe));
+        assert_collision(role_cfg, &colliding);
+
+        let mut alias_cfg = labui_reference();
+        alias_cfg
+            .aliases
+            .push((colliding.clone(), "label-primary".to_string()));
+        assert_collision(alias_cfg, &colliding);
+    }
+
+    // Тот же закон обязан закрывать второй многоключевой outcome, а не только
+    // конкретный найденный суффикс glow.
+    for suffix in ["-01", "-02"] {
+        let colliding = format!("probe-material{suffix}");
+
+        let mut role_cfg = labui_reference();
+        role_cfg.roles.push((
+            "probe-material".to_string(),
+            neutral_material(10.0, Floor::AaText),
+        ));
+        let ordinary_recipe = role_cfg
+            .roles
+            .iter()
+            .find(|(name, _)| name == "label-primary")
+            .expect("фикстура несёт label-primary")
+            .1
+            .clone();
+        role_cfg.roles.push((colliding.clone(), ordinary_recipe));
+        assert_collision(role_cfg, &colliding);
+
+        let mut alias_cfg = labui_reference();
+        alias_cfg.roles.push((
+            "probe-material".to_string(),
+            neutral_material(10.0, Floor::AaText),
+        ));
+        alias_cfg
+            .aliases
+            .push((colliding.clone(), "label-primary".to_string()));
+        assert_collision(alias_cfg, &colliding);
+    }
+
+    // Алиас многоключевой цели сам становится владельцем полного shape. Это
+    // отдельная ветвь: проверка только рецептов ролей пропустила бы её.
+    for suffix in ["-core", "-alpha"] {
+        let owner = "probe-glow-alias";
+        let colliding = format!("{owner}{suffix}");
+        let mut cfg = labui_reference();
+        cfg.aliases
+            .push((owner.to_string(), "fx-glow-brand".to_string()));
+        let ordinary_recipe = cfg
+            .roles
+            .iter()
+            .find(|(name, _)| name == "label-primary")
+            .expect("фикстура несёт label-primary")
+            .1
+            .clone();
+        cfg.roles.push((colliding.clone(), ordinary_recipe));
+        assert_collision(cfg, &colliding);
+    }
+
+    for suffix in ["-01", "-02"] {
+        let owner = "probe-material-alias";
+        let colliding = format!("{owner}{suffix}");
+        let mut cfg = labui_reference();
+        cfg.roles.push((
+            "probe-material".to_string(),
+            neutral_material(10.0, Floor::AaText),
+        ));
+        cfg.aliases
+            .push((owner.to_string(), "probe-material".to_string()));
+        cfg.aliases
+            .push((colliding.clone(), "label-primary".to_string()));
+        assert_collision(cfg, &colliding);
+    }
+}
+
+/// Сегодняшние суффиксы не пересекаются друг с другом, но сам примитив
+/// namespace не должен полагаться на это случайное свойство. Синтетические
+/// shapes доказывают derived↔derived ветвь: два разных владельца строят один
+/// итоговый ключ, и второй резерв немедленно падает.
+#[test]
+fn emitted_namespace_primitive_rejects_satellite_to_satellite_collision() {
+    let mut emitted = std::collections::BTreeSet::new();
+    reserve_emitted_css_names(&mut emitted, "probe", &["-outer-inner"])
+        .expect("первый сателлит свободен");
+    let error = reserve_emitted_css_names(&mut emitted, "probe-outer", &["-inner"])
+        .expect_err("derived↔derived коллизия обязана быть отвергнута");
+
+    assert!(matches!(
+        error,
+        ConfigError::DuplicateKey {
+            dictionary: "emitted CSS variables",
+            key,
+        } if key == "--lab-probe-outer-inner"
+    ));
+}
+
+/// Гард не должен превращаться в запрет похожих префиксов: резервируются ровно
+/// фактически эмитируемые имена, а не все строки, начинающиеся с имени роли.
+#[test]
+fn emitted_namespace_allows_non_colliding_near_misses() {
+    let mut cfg = labui_reference();
+    cfg.aliases.push((
+        "fx-glow-brand-alpha-extra".to_string(),
+        "label-primary".to_string(),
+    ));
+    cfg.roles.push((
+        "probe-material".to_string(),
+        neutral_material(10.0, Floor::AaText),
+    ));
+    cfg.aliases
+        .push(("probe-material-03".to_string(), "label-primary".to_string()));
+
+    assert_eq!(cfg.validate(), Ok(()));
+}
+
 /// preferred_side — закрытое меню {-1, +1}: 0 и 2 отвергаются.
 #[test]
 fn validator_rejects_preferred_side_outside_closed_menu() {
@@ -1965,7 +2113,8 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
             .unwrap_or_else(|| panic!("{name} должен быть Translucent"));
         let tint = srgb_encoded_from_hex(t.tint_hex()).unwrap();
         let prev_hex = hex_from_srgb_encoded(state);
-        state = composite_over_encoded(tint, t.alpha(), state);
+        state = composite_over_encoded(tint, t.alpha(), state)
+            .expect("эмитированные tint/alpha и предыдущий композит лежат в домене");
         let state_hex = hex_from_srgb_encoded(state);
         // (1) слой меняет пиксели поверх уже наслоённого стека.
         assert_ne!(
@@ -2244,8 +2393,10 @@ fn material_guarantee_recomputable_over_worst_backdrop() {
     let tint = crate::spaces::srgb::srgb_encoded_from_hex(m.tint_hex()).unwrap();
     // ЭКСАКТНЫЙ композит квантованного тинта (как ядро и потребитель), без
     // переквантования — над двумя углами полного коридора.
-    let over_black = crate::alpha::composite_over_encoded(tint, m.alpha(), [0.0; 3]);
-    let over_white = crate::alpha::composite_over_encoded(tint, m.alpha(), [1.0; 3]);
+    let over_black = crate::alpha::composite_over_encoded(tint, m.alpha(), [0.0; 3])
+        .expect("эмитированный материал лежит в домене композитора");
+    let over_white = crate::alpha::composite_over_encoded(tint, m.alpha(), [1.0; 3])
+        .expect("эмитированный материал лежит в домене композитора");
     let pole_lum = if matches!(m.pole(), crate::material::Pole::White) {
         1.0
     } else {

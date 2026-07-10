@@ -398,13 +398,13 @@ pub fn resolve_alpha_analog(
     let floor = min_alpha_encoded(solid, bg)?; // None только на мусор-входах
     // Если запрошенная binary64-пара уже является точной обратной к нашему
     // прямому ходу (включая честную gamut-границу), не поднимаем прозрачность.
-    if requested_alpha > 0.0 {
-        if let Some(tint) = invert_composite_encoded(solid, requested_alpha, bg) {
-            return Some(AlphaAnalog {
-                tint,
-                alpha: requested_alpha,
-            });
-        }
+    if requested_alpha > 0.0
+        && let Some(tint) = invert_composite_encoded(solid, requested_alpha, bg)
+    {
+        return Some(AlphaAnalog {
+            tint,
+            alpha: requested_alpha,
+        });
     }
     let alpha = requested_alpha.max(floor);
     // При α == floor == 0 солид равен фону: любой видимый эффект отсутствует,

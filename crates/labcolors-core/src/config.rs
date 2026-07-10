@@ -192,8 +192,9 @@ pub enum ConfigError {
     },
     /// Ссылка (алиас/alpha_analog) на роль, которой нет в `roles`.
     UnknownRole { referenced_by: String, role: String },
-    /// Дубликат ключа в словаре конфига: повтор имени сделал бы lookup и
-    /// эмиссию неоднозначными (какая запись выиграла — вопрос порядка, тихо).
+    /// Дубликат ключа в словаре конфига или итоговом CSS-namespace: повтор имени
+    /// сделал бы lookup/эмиссию неоднозначными (какая запись выиграла — вопрос
+    /// порядка, тихо).
     DuplicateKey {
         dictionary: &'static str,
         key: String,
@@ -596,6 +597,47 @@ pub enum RoleRecipe {
     },
     /// Явный ноль: «нет цвета здесь» ([`RoleSpec::Zero`]).
     Zero,
+}
+
+/// Суффиксы CSS-переменных, которые один успешно решённый рецепт резервирует.
+///
+/// Namespace выводится из типа outcome до резолва: иначе коллизия могла бы
+/// зависеть от фона (на одном роль unreachable и «всё работает», на другом два
+/// писателя молча делят один `--lab-*`). `Zero` переменных не эмитит никогда.
+fn emitted_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
+    const PRIMARY: &[&str] = &[""];
+    const GLOW: &[&str] = &["", "-core", "-alpha"];
+    const MATERIAL: &[&str] = &["", "-01", "-02"];
+    const NONE: &[&str] = &[];
+
+    match recipe {
+        RoleRecipe::Glow { .. } => GLOW,
+        RoleRecipe::Material { .. } => MATERIAL,
+        RoleRecipe::Zero => NONE,
+        _ => PRIMARY,
+    }
+}
+
+/// Зарезервировать один shape эмиссии в общем namespace.
+///
+/// Отдельный примитив не знает сегодняшних суффиксов и потому не опирается на
+/// случайное свойство, что `-core/-alpha/-01/-02` пока не пересекаются друг с
+/// другом: будущая derived↔derived коллизия попадёт в тот же гард.
+fn reserve_emitted_css_names(
+    emitted: &mut std::collections::BTreeSet<String>,
+    name: &str,
+    suffixes: &[&str],
+) -> Result<(), ConfigError> {
+    for suffix in suffixes {
+        let key = format!("--lab-{name}{suffix}");
+        if !emitted.insert(key.clone()) {
+            return Err(ConfigError::DuplicateKey {
+                dictionary: "emitted CSS variables",
+                key,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Источник тинта лестницы/альфа-аналога: откуда берётся якорный цвет.
@@ -1017,6 +1059,30 @@ impl ThemeConfig {
                     role: target.clone(),
                 });
             }
+        }
+
+        // Роль резервирует не только собственный `--lab-{name}`: Glow и Material
+        // создают сателлиты. Алиас клонирует outcome цели и потому создаёт тот же
+        // набор уже под СВОИМ именем. Проверяем итоговый namespace целиком до
+        // резолва/JSON, чтобы порядок писателей никогда не решал, чьё значение
+        // молча победит. Один общий set ловит role↔satellite, alias↔satellite и
+        // любые будущие satellite↔satellite пересечения без списка частных пар.
+        let mut emitted = std::collections::BTreeSet::new();
+
+        for (name, recipe) in &self.roles {
+            reserve_emitted_css_names(&mut emitted, name, emitted_css_suffixes(recipe))?;
+        }
+        for (alias, target) in &self.aliases {
+            let target_recipe = self
+                .roles
+                .iter()
+                .find(|(name, _)| name == target)
+                .map(|(_, recipe)| recipe)
+                .ok_or_else(|| ConfigError::UnknownRole {
+                    referenced_by: format!("aliases.{alias}"),
+                    role: target.clone(),
+                })?;
+            reserve_emitted_css_names(&mut emitted, alias, emitted_css_suffixes(target_recipe))?;
         }
 
         Ok(())

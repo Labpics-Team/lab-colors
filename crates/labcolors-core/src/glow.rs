@@ -39,10 +39,11 @@
 //! — исходный цвет. Радиусы и blur здесь отсутствуют: названия обозначают
 //! назначение слоёв у потребителя, а не измеренную геометрию.
 //!
-//! Core строится существующей policy [`crate::accent_balance`]: J′ берётся
-//! посередине между источником и 100, chroma — на sRGB-границе данного hue.
-//! Это явный versioned recipe, а не оптимум, проверенный на наблюдателях. Point-метрики
-//! core и halo поэтому возвращаются раздельно.
+//! Core строится существующей policy [`crate::accent_balance`]: midpoint J′
+//! задаёт seed Oklab-светлоты, chroma берётся на sRGB-границе данного hue.
+//! После хроматического преобразования и sRGB8-квантования итоговый J′ не
+//! объявляется равным seed — фактическая point-метрика core возвращается
+//! отдельно. Это versioned recipe, а не оптимум, проверенный на наблюдателях.
 
 use crate::lcs::LcsColor;
 use crate::spaces::srgb::{decode_8bit, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_to_xyz};
@@ -93,28 +94,6 @@ pub enum GlowTargetStatus {
     /// Цель не держит ни один state; возвращён глобальный максимум |ΔJ′|, а
     /// при точном равенстве максимумов — первый state по alpha.
     Unreachable,
-}
-
-/// Статус представления midpoint-core на конечной сетке sRGB8.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GlowCoreStatus {
-    /// Эмитированный цвет сохранил целевой J′ побитно в арифметике движка.
-    Exact,
-    /// Непрерывный корень найден, но `#RRGGBB` неизбежно изменил J′.
-    Quantized,
-}
-
-/// Проверяемый результат двухслойного recipe.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GlowLayers {
-    pub core_hex: String,
-    pub halo_hex: String,
-    pub target_jp: f64,
-    pub continuous_jp: f64,
-    pub continuous_error: f64,
-    pub emitted_jp: f64,
-    pub emitted_error: f64,
-    pub status: GlowCoreStatus,
 }
 
 impl GlowTargetStatus {
@@ -643,75 +622,25 @@ pub fn solve_screen_alpha_for_dj(
 
 /// Версионированный двухслойный recipe от источника: `(core_hex, halo_hex)`.
 ///
-/// В recipe v1 halo буквально равен источнику. Для core координата J′ берётся
-/// арифметической серединой между J′ источника и 100, а chroma — на sRGB-границе
-/// его Oklab hue через [`crate::accent_balance::accent_balanced`]. Это точное
-/// описание алгоритма, но не проверенный на наблюдателях оптимум и не модель
-/// геометрии свечения.
+/// В recipe v1 halo буквально равен источнику. Для core арифметическая середина
+/// J′ источника и 100 задаёт seed Oklab-светлоты, а chroma — sRGB-границу его
+/// Oklab hue через [`crate::accent_balance::accent_balanced`]. Фактический J′
+/// эмитированного core измеряется вызывающим кодом: он не обязан совпасть с seed
+/// после смены координат и sRGB8-квантования. Это recipe, не наблюдательная
+/// модель красоты или геометрии свечения.
 pub fn glow_layers_from_source(
     source_hex: &str,
     vc: &ViewingConditions,
 ) -> Result<(String, String), String> {
-    let layers = glow_layers_from_source_certified(source_hex, vc)?;
-    Ok((layers.core_hex, layers.halo_hex))
-}
-
-/// Строит core как ближайший binary64-корень фактической траектории
-/// `accent_balanced(L,h).J′`, а не как сероосевой seed.
-///
-/// Цель recipe остаётся явно версионированной арифметической серединой между
-/// J′ источника и J′ белого. Сертификат отдельно сообщает непрерывный и
-/// эмитированный остатки, не пряча квантизацию за допуском.
-pub fn glow_layers_from_source_certified(
-    source_hex: &str,
-    vc: &ViewingConditions,
-) -> Result<GlowLayers, String> {
     validate_viewing_numerics(vc)?;
     let source_encoded = srgb_encoded_from_hex(source_hex)?;
     let canonical_source_hex = hex_from_srgb_encoded(source_encoded);
     let src = LcsColor::from_hex_with_vc(&canonical_source_hex, vc)?;
-    let white = LcsColor::from_hex_with_vc("#FFFFFF", vc)?;
-    let target_jp = (src.jp() + white.jp()) * 0.5;
-    let hue = src.h_ok();
-
-    let at = |l: f64| crate::accent_balance::accent_balanced(l, hue, vc);
-    let mut lo = 0.0_f64;
-    let mut hi = 1.0_f64;
-    while hi.to_bits() - lo.to_bits() > 1 {
-        let mid = f64::from_bits((lo.to_bits() + hi.to_bits()) / 2);
-        if at(mid)?.color.jp() < target_jp {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let lo_color = at(lo)?.color;
-    let hi_color = at(hi)?.color;
-    let core = if (lo_color.jp() - target_jp).abs() <= (hi_color.jp() - target_jp).abs() {
-        lo_color
-    } else {
-        hi_color
-    };
-    let continuous_jp = core.jp();
+    let jp_core = (src.jp + 100.0) * 0.5;
+    let l_core = crate::scale::jp_to_oklab_l(jp_core, vc);
+    let core = crate::accent_balance::accent_balanced(l_core, src.h_ok, vc).color;
     let core_hex = core.to_hex_with_vc(vc);
-    let emitted_jp = LcsColor::from_hex_with_vc(&core_hex, vc)?.jp();
-    let continuous_error = continuous_jp - target_jp;
-    let emitted_error = emitted_jp - target_jp;
-    let status = if emitted_error == 0.0 {
-        GlowCoreStatus::Exact
-    } else {
-        GlowCoreStatus::Quantized
-    };
-    Ok(GlowLayers {
-        core_hex,
-        halo_hex: canonical_source_hex,
-        target_jp,
-        continuous_jp,
-        continuous_error,
-        emitted_jp,
-        emitted_error,
-        status,
-    })
+    Ok((core_hex, canonical_source_hex))
 }
 
 #[cfg(test)]
@@ -827,12 +756,12 @@ mod tests {
             for byte in 0_u16..=255 {
                 let hex = format!("#{byte:02X}{byte:02X}{byte:02X}");
                 let lean = jp_from_hex(&hex, &vc).unwrap();
-                let full = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp();
+                let full = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp;
                 assert_eq!(lean.to_bits(), full.to_bits(), "{hex}");
             }
             for hex in ["#007AFF", "#FF3B30", "#34C759", "#FFD000", "#3E87FF"] {
                 let lean = jp_from_hex(hex, &vc).unwrap();
-                let full = LcsColor::from_hex_with_vc(hex, &vc).unwrap().jp();
+                let full = LcsColor::from_hex_with_vc(hex, &vc).unwrap().jp;
                 assert_eq!(lean.to_bits(), full.to_bits(), "{hex}");
             }
         }
@@ -1086,31 +1015,13 @@ mod tests {
     #[test]
     fn core_is_balanced_overexposed_source() {
         let vc = ViewingConditions::dim_surround();
-        let layers = glow_layers_from_source_certified("#FF3B30", &vc).unwrap();
-        let core_hex = layers.core_hex.clone();
-        assert_eq!(layers.halo_hex, "#FF3B30", "halo — сам источник");
+        let (core_hex, halo_hex) = glow_layers_from_source("#FF3B30", &vc).unwrap();
+        assert_eq!(halo_hex, "#FF3B30", "halo — сам источник");
         let src = LcsColor::from_hex_with_vc("#FF3B30", &vc).unwrap();
         let core = LcsColor::from_hex_with_vc(&core_hex, &vc).unwrap();
-        assert!(core.jp() > src.jp(), "core светлее источника (пересвет)");
-        let dh = (core.h_ok() - src.h_ok() + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(core.jp > src.jp, "core светлее источника (пересвет)");
+        let dh = (core.h_ok - src.h_ok + 180.0).rem_euclid(360.0) - 180.0;
         assert!(dh.abs() < 6.0, "оттенок унаследован: Δh = {dh:.2}°");
-
-        // Сертификат пересчитывается из эмитированного hex и не смешивает
-        // непрерывный корень с ошибкой конечного представления.
-        let white = LcsColor::from_hex_with_vc("#FFFFFF", &vc).unwrap();
-        assert_eq!(
-            layers.target_jp.to_bits(),
-            ((src.jp() + white.jp()) * 0.5).to_bits()
-        );
-        assert_eq!(layers.emitted_jp.to_bits(), core.jp().to_bits());
-        assert_eq!(
-            layers.emitted_error.to_bits(),
-            (layers.emitted_jp - layers.target_jp).to_bits()
-        );
-        assert_eq!(
-            layers.status == GlowCoreStatus::Exact,
-            layers.emitted_error == 0.0
-        );
 
         // Хрома баланса = стена гамута ⇒ эмиссия в гамуте, без тихого клипа
         // (прежняя ×0.5-доля могла запросить недостижимую красочность и молча
@@ -1125,9 +1036,9 @@ mod tests {
     #[test]
     fn layer_recipe_canonicalises_the_public_source_hex() {
         let vc = ViewingConditions::srgb();
-        let layers = glow_layers_from_source_certified("ff3b30", &vc).unwrap();
-        assert_eq!(layers.halo_hex, "#FF3B30");
-        assert!(layers.core_hex.starts_with('#'));
-        assert_eq!(layers.core_hex.len(), 7);
+        let (core_hex, halo_hex) = glow_layers_from_source("ff3b30", &vc).unwrap();
+        assert_eq!(halo_hex, "#FF3B30");
+        assert!(core_hex.starts_with('#'));
+        assert_eq!(core_hex.len(), 7);
     }
 }

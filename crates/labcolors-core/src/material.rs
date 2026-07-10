@@ -313,7 +313,8 @@ mod tests {
             let t = enc(hex);
             let tq = quantise(t);
             for alpha in [0.01, 0.1, 0.5, 0.837, 1.0] {
-                let solid = composite_over_encoded(tq, alpha, tq);
+                let solid = composite_over_encoded(tq, alpha, tq)
+                    .expect("тестовые sRGB-каналы и alpha лежат в домене");
                 assert_eq!(
                     hex_from_srgb_encoded(solid),
                     hex_from_srgb_encoded(tq),
@@ -381,8 +382,10 @@ mod tests {
             let m = solve_material_alpha_hex(hex, AA_TEXT).unwrap();
             let tint_q = quantise(enc(hex));
             // Пересчёт «в лоб» как у потребителя: композит над двумя углами.
-            let over_black = composite_over_encoded(tint_q, m.alpha, [0.0; 3]);
-            let over_white = composite_over_encoded(tint_q, m.alpha, [1.0; 3]);
+            let over_black = composite_over_encoded(tint_q, m.alpha, [0.0; 3])
+                .expect("решённый материал лежит в домене композитора");
+            let over_white = composite_over_encoded(tint_q, m.alpha, [1.0; 3])
+                .expect("решённый материал лежит в домене композитора");
             let pole_lum = m.pole.luminance();
             let recomputed = ratio_from_luminances(pole_lum, relative_luminance(over_black)).min(
                 ratio_from_luminances(pole_lum, relative_luminance(over_white)),

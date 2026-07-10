@@ -87,7 +87,9 @@ CSS-переменная alpha копирует её буквально. Пов�
 `referenceProfile`. Совместный blur/overlap/backdrop/HDR-эффект без геометрии не
 сертифицируется; это отдельный `SpatialField` из #221.
 
-Midpoint J′ и gamut-boundary chroma для core — версионированный recipe v1, а не
+Midpoint J′ используется только как seed Oklab-светлоты, а gamut-boundary
+chroma — как recipe core v1. Эмитированный core отдельно измеряется и не
+объявляется точным midpoint после смены координат и sRGB8-квантования. Это не
 проверенный на наблюдателях «закон красивого свечения».
 
 ### 5. Доказательства являются исполняемыми
@@ -122,7 +124,8 @@ WASM/TypeScript:
 - legacy `achievedDj` и `degraded` остаются точными aliases на период миграции;
 - изменение строк alpha и соответствующих golden ожидаемо.
 
-Общий conformance pack повышен до `2.0.0`: alpha-family содержит half-tie
+При выпуске breaking-версии по #259 общий conformance pack должен быть повышен
+до `2.0.0`: alpha-family должна содержать half-tie
 `#C0B2FA @ 0.122` над чёрным, поэтому Rust FFI и все нативные биндинги обязаны
 вернуть `#17161F`, а старый нормализованный путь больше не считается conformant.
 
