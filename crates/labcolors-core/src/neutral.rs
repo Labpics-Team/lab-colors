@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use crate::lcs::LcsColor;
-use crate::spaces::srgb::{
-    quantise_srgb, srgb_encoded_from_hex, srgb_from_hex, srgb_gamma_inv,
-};
+use crate::spaces::srgb::{quantise_srgb, srgb_encoded_from_hex, srgb_from_hex, srgb_gamma_inv};
 use crate::spaces::vc::ViewingConditions;
 
 /// Маркер бескоэффициентного построения нейтральной кривой.
@@ -315,12 +313,7 @@ fn enumerate_segment(from: [u8; 3], to: [u8; 3]) -> Result<Vec<[u8; 3]>, String>
             std::cmp::Ordering::Greater => {
                 for next_byte in (from_byte + 1)..=to_byte {
                     boundaries.push(Boundary {
-                        t: first_transition_t(
-                            from_rgb[channel],
-                            to_rgb[channel],
-                            next_byte,
-                            true,
-                        )?,
+                        t: first_transition_t(from_rgb[channel], to_rgb[channel], next_byte, true)?,
                         channel,
                         next_byte,
                     });
