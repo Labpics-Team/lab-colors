@@ -60,6 +60,7 @@ fn count_policy_consts_approx(source: &str) -> usize {
         // Structural non-policy
         "CURVE_PLAN_CACHE_CAP",
         "CURVE_REFINE_STEPS",
+        "LIGHTNESS_SETTLE",
     ];
 
     let mut count = 0;

@@ -129,6 +129,9 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     // RATIO_BISECT_EPS.
     "FLOOR_BISECT_EPS",
     "GAMUT_EPS",
+    // Legacy-эпсилон уточнения кривой ограничивает путь совместимости, но не
+    // является перцептивным порогом и не сертифицирует неподвижную точку sRGB8.
+    "LIGHTNESS_SETTLE",
     // L'-axis convergence epsilon in the quantisation solver — numeric, non-perceptual (solve.rs).
     "L_OK_EPSILON",
     // Algorithmic search-PROBE step of the quantisation-gap search — a numerical

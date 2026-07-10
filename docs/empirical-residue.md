@@ -69,7 +69,6 @@
 | # | константа | знач. | класс | провенанс / статус | лок / тест |
 |---|-----------|-------|-------|--------------------|------------|
 | 38 | `ACHROMATIC_CHROMA_EPS` | 1e-7 | (a) | представимость: шум 3.7e-8 < EPS < мин.хрома 1.06e-3 | `achromatic_eps_between_f64_noise_and_min_representable_chroma` |
-| 18 | `LIGHTNESS_SETTLE` | 0.002 | (a) | меньше 1/256 (мин. шаг 8-бит сетки) | `lightness_settle_is_below_min_grid_step` |
 | 39 | `HUE_DOMAIN_MIN_INCLUSIVE` | 0.0 | (a) | определение угла mod 360 | `hue_domain_is_the_circle_modulus_codomain` |
 | 40 | `HUE_DOMAIN_MAX_EXCLUSIVE` | 360.0 | (a) | определение угла mod 360 | `hue_domain_is_the_circle_modulus_codomain` |
 | 16 | `TINT_PERCEPTIBLE_MP_FLOOR` | 1.5 | **(c)** | ре-аудит 2026-07-07 (было (e)): доказанно immaterial — потолок ахром. M-prime шума; экспозиция **0.07%** (самая низкая в реестре) | `tint_floor_tracks_achromatic_mp_noise_ceiling`, `exposure_tint_perceptible_mp_floor` |
