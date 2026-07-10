@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
 
+# Одноразовый редактор точной строки; удаляется после успешного push.
 jobs:
   apply:
     runs-on: [self-hosted, Linux, X64]
