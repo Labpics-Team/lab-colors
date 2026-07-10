@@ -39,3 +39,7 @@ harness = false
 [[bench]]
 name = "forward"
 harness = false
+
+[[bench]]
+name = "glow_alpha"
+harness = false

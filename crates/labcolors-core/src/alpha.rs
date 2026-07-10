@@ -1,14 +1,14 @@
 //! Альфа-аналог солидного цвета: прямой и обратный ход straight-alpha
 //! композита в ГАММА-КОДИРОВАННОМ sRGB.
 //!
-//! Пространство закона — измеренный факт, не выбор: Figma композитит на
-//! канвасе попарно по кодированным каналам `c = α·t + (1−α)·b`, и ровно этот
-//! путь воспроизводит все 12 семантических dJ'-якорей движка
+//! Кодированный домен заземлён измерением: модель `c = α·t + (1−α)·b`
+//! воспроизводит все 12 семантических Figma-якорей движка
 //! (`reference/labui-figma-structure.md` §3–§4, воспроизводимо
-//! `cargo run -p labcolors-core --example figma_anchor_provenance`); браузерный
-//! композитинг CSS-альфы живёт в том же device-пространстве. Линейный свет
-//! (внутренний `srgb_from_hex`) здесь не участвует — он для колориметрии, не
-//! для наложения.
+//! `cargo run -p labcolors-core --example figma_anchor_provenance`). Для
+//! эмиссии контракт дополнительно фиксирует **encoded-sRGB8 source-over
+//! reference**: арифметика идёт на байтах `0..255` с одним итоговым round.
+//! Совпадение конкретного renderer зависит от его color-management профиля и
+//! проверяется отдельно; линейный свет здесь только для последующей колориметрии.
 //!
 //! # Зачем обратный ход
 //!
@@ -19,10 +19,12 @@
 //! t = (c − (1−α)·b) / α        (по каналам, кодированные значения)
 //! ```
 //!
-//! Композит инверсии равен солиду ПО ПОСТРОЕНИЮ, поэтому контраст, dJ' и
-//! WCAG-статус альфа-аналога на каноническом фоне тождественны солиду —
-//! AA-корректность наследуется алгеброй, а не проверяется заново (теорема
-//! запинена тестом `inversion_identity_is_exact_on_continuous_values`).
+//! В вещественной алгебре continuous encoded-sRGB композит инверсии равен
+//! солиду тождественно. Реализация на `binary64` честно отделена: ошибка
+//! round-trip ограничена выведенной оценкой `8·ε/α` и проверяется тестом
+//! `inversion_identity_respects_derived_binary64_error_bound`. После эмиссии тинт уже
+//! лежит на sRGB8-сетке; побайтовый контракт ниже доказывается и проверяется
+//! отдельно, а не приписывается непрерывной функции.
 //! На ином фоне композит другой — это и есть смысл альфы (адаптация к
 //! подложке), гарантия формулируется для фона, на котором решён солид.
 //!
@@ -35,17 +37,28 @@
 //! t ≤ 1  ⇔  α ≥ (c − b) / (1 − b)  (канал с c > b; при b = 1 симметрично)
 //! ```
 //!
-//! [`min_alpha_encoded`] — максимум этих границ по каналам; ниже него
-//! [`invert_composite_encoded`] честно возвращает `None`, а не клампит
-//! (кламп молча сдвинул бы композит — подмена запрещена).
+//! [`min_alpha_encoded`] начинает с максимума этих алгебраических границ, затем
+//! возвращает первый `binary64`, на котором строгая binary64-инверсия реально
+//! лежит в `[0,1]³`. [`invert_composite_encoded`] может также принять более
+//! раннюю граничную пару только если повторный binary64-композит побитно равен
+//! входному solid; глобального epsilon и безусловного clamp нет. Это не минимальная α
+//! дискретного sRGB8-композита: `#010000` над чёрным уже округляется из белого
+//! красного канала при `α=0.5/255`, тогда как strict-binary64 пол равен `1/255`.
 //!
-//! Квантование: солид, прочитанный из 8-битного hex, несёт ошибку ≤ 0.5/255 на
-//! канал; инверсия масштабирует её в 1/α раз, поэтому восстановленный тинт
-//! отклоняется от истинного не более чем на `0.5/(255·α)` на канал. Граница
-//! запинена тестом `quantisation_error_bound_is_honoured`; при малых α точное
-//! побайтное восстановление тинта не гарантируется — гарантируется прямой ход
-//! (композит канонического тинта воспроизводит опорный hex побайтно, 12/12
-//! Figma-пар в `figma_neutral_ladder_pairs_roundtrip`).
+//! Для побайтового пути сначала квантуются солид и фон. Пусть их канал — целые
+//! `S, B`, непрерывная инверсия дала `T`, а эмитируемый тинт —
+//! `Q = round(T)`. Тогда до итогового round композит равен
+//! `S + α·(Q−T)`. При `α < 1` его отклонение строго меньше половины байта;
+//! при `α = 1` имеем `T = S` и `Q = S`. Поэтому итоговый
+//! [`composite_over_srgb8`] возвращает ровно `S`. Теорема исчерпывающе проверена
+//! на всех 65 536 парах `(S, B)` для нескольких α, включая ближайшую к единице
+//! снизу. Production-путь всё равно проверяет равенство после композиции и
+//! отказывается эмитировать пару при нарушении инварианта: ошибка float не
+//! должна превращаться в правдоподобно неверный цвет.
+//!
+//! Это не обещает восстановить исходный тинт: солид из 8-битного hex несёт
+//! ошибку ≤ 0.5/255, которую инверсия масштабирует в `1/α` раз. Граница
+//! `0.5/(255·α)` запинена тестом `quantisation_error_bound_is_honoured`.
 
 use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 
@@ -56,17 +69,14 @@ fn is_encoded_rgb(v: [f64; 3]) -> bool {
         .all(|x| x.is_finite() && (0.0..=1.0).contains(&x))
 }
 
-/// Прямой ход: straight-alpha композит `α·tint + (1−α)·bg` по кодированным
-/// каналам — закон Figma/браузера (см. модульную документацию).
-///
-/// Домен: `tint`/`bg` — кодированные цвета в `[0,1]³`, `alpha ∈ [0,1]`;
-/// вне домена — `debug_assert` (горячий путь чистой алгебры не платит за
-/// проверки в релизе; строгие Option-контракты — у инверсии и `min_alpha`).
-pub fn composite_over_encoded(tint: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64; 3] {
-    debug_assert!(
-        is_encoded_rgb(tint) && is_encoded_rgb(bg) && (0.0..=1.0).contains(&alpha),
-        "composite_over_encoded: вход вне домена кодированного sRGB"
-    );
+/// Непрерывная алгебра straight-alpha до квантования. Она нужна инверсии и
+/// материалам; путь эмитируемого 8-битного пикселя использует
+/// [`composite_over_srgb8`], чтобы нормализация `byte/255` не сдвигала half-tie.
+pub(crate) fn composite_over_encoded_unchecked(
+    tint: [f64; 3],
+    alpha: f64,
+    bg: [f64; 3],
+) -> [f64; 3] {
     [
         alpha * tint[0] + (1.0 - alpha) * bg[0],
         alpha * tint[1] + (1.0 - alpha) * bg[1],
@@ -74,34 +84,168 @@ pub fn composite_over_encoded(tint: [f64; 3], alpha: f64, bg: [f64; 3]) -> [f64;
     ]
 }
 
+/// Прямой непрерывный ход: `α·tint + (1−α)·bg` по кодированным каналам.
+///
+/// Это алгебра над `[0,1]`, не финальное округление sRGB8-reference. Для
+/// эмитированных sRGB8-цветов используй [`composite_over_srgb8`].
+///
+/// # Errors
+///
+/// `Err`, если канал не конечен/вне `[0,1]` либо `alpha` не конечна/вне
+/// `[0,1]`. Публичная граница не зажимает мусор и одинакова в debug/release.
+pub fn composite_over_encoded(
+    tint: [f64; 3],
+    alpha: f64,
+    bg: [f64; 3],
+) -> Result<[f64; 3], String> {
+    if !is_encoded_rgb(tint) {
+        return Err(format!("tint вне конечного encoded-sRGB [0,1]: {tint:?}"));
+    }
+    if !is_encoded_rgb(bg) {
+        return Err(format!("bg вне конечного encoded-sRGB [0,1]: {bg:?}"));
+    }
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
+    }
+    Ok(composite_over_encoded_unchecked(tint, alpha, bg))
+}
+
+/// Straight-alpha непрозрачного sRGB8-фона в шкале `0..255`, которую несут
+/// каналы эмитированного CSS-цвета.
+///
+/// Округление выполняется один раз, после композиции. Это существенно на
+/// half-tie: `(250/255)·0.122·255` может стать `30.499…`, хотя эталонная
+/// byte-reference `250·0.122` равен `30.5` и по round-half-up даёт байт 31.
+///
+/// # Errors
+///
+/// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
+pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
+    }
+    let channel = |index: usize| {
+        (f64::from(tint[index]) * alpha + f64::from(bg[index]) * (1.0 - alpha)).round() as u8
+    };
+    Ok([channel(0), channel(1), channel(2)])
+}
+
+fn encoded_to_srgb8(rgb: [f64; 3], label: &str) -> Result<[u8; 3], String> {
+    if !is_encoded_rgb(rgb) {
+        return Err(format!("{label} вне конечного encoded-sRGB [0,1]: {rgb:?}"));
+    }
+    Ok(rgb.map(|channel| (channel * 255.0).round() as u8))
+}
+
+fn hex_from_srgb8(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+/// Общий внутренний путь для semantic-метрик: вход уже квантован для эмиссии,
+/// но повторная проверка не позволяет новому call site протащить NaN или clamp.
+pub(crate) fn composite_srgb8_from_encoded(
+    tint: [f64; 3],
+    alpha: f64,
+    bg: [f64; 3],
+) -> Result<[u8; 3], String> {
+    composite_over_srgb8(
+        encoded_to_srgb8(tint, "tint")?,
+        alpha,
+        encoded_to_srgb8(bg, "bg")?,
+    )
+}
+
+pub(crate) fn composite_hex_from_encoded(
+    tint: [f64; 3],
+    alpha: f64,
+    bg: [f64; 3],
+) -> Result<String, String> {
+    composite_srgb8_from_encoded(tint, alpha, bg).map(hex_from_srgb8)
+}
+
 /// Обратный ход: тинт, чей композит с `alpha` на `bg` равен `solid`.
 ///
 /// `None`, если вход вне домена (`solid`/`bg` не кодированные цвета `[0,1]³`
 /// или не конечные), `alpha` не в `(0, 1]` (при α=0 инверсия вырождена —
 /// композит не зависит от тинта), либо хотя бы один канал тинта выходит из
-/// гамута `[0,1]` (α ниже [`min_alpha_encoded`]).
+/// гамута `[0,1]`. Значение за границей канонизируется в 0/1 только при
+/// побитном постусловии прямого binary64-хода; иначе возвращается `None`.
 pub fn invert_composite_encoded(solid: [f64; 3], alpha: f64, bg: [f64; 3]) -> Option<[f64; 3]> {
     if !(is_encoded_rgb(solid) && is_encoded_rgb(bg) && alpha > 0.0 && alpha <= 1.0) {
         return None;
     }
     let mut tint = [0.0; 3];
+    let mut projected_boundary = [false; 3];
     for c in 0..3 {
-        let t = (solid[c] - (1.0 - alpha) * bg[c]) / alpha;
-        // EPS: допуск на плавающую арифметику самой инверсии (не на квантование
-        // входа) — значения, вышедшие за [0,1] на машинный шум, клампятся к
-        // границе; настоящий выход из гамута отвергается.
-        const EPS: f64 = 1e-12;
-        if !(-EPS..=1.0 + EPS).contains(&t) {
+        let t = bg[c] + (solid[c] - bg[c]) / alpha;
+        if (0.0..=1.0).contains(&t) {
+            tint[c] = t;
+        } else {
+            // Никакого epsilon: пробуем только математическую границу gamut.
+            // Она допустима лишь когда ТОТ ЖЕ binary64-прямой ход побитно
+            // воспроизводит входной solid; иначе это была бы подмена цвета.
+            tint[c] = if t < 0.0 { 0.0 } else { 1.0 };
+            projected_boundary[c] = true;
+        }
+    }
+    if projected_boundary.into_iter().any(|projected| projected) {
+        let recomposed = composite_over_encoded_unchecked(tint, alpha, bg);
+        if (0..3).any(|c| projected_boundary[c] && recomposed[c].to_bits() != solid[c].to_bits()) {
             return None;
         }
-        tint[c] = t.clamp(0.0, 1.0);
     }
     Some(tint)
 }
 
-/// Минимальная α, при которой инверсия `solid` над `bg` разрешима в гамуте
-/// (все каналы тинта в `[0,1]`). Для `solid == bg` равна 0 (любой видимый
-/// эффект отсутствует, тинт = фон при любой α).
+/// Строгая binary64-инверсия уже проверенного домена.
+///
+/// Форма `bg + (solid-bg)/alpha` уменьшает отмену близких величин. Для каждого
+/// знака `solid-bg` правильно округлённые IEEE-операции монотонны по alpha;
+/// поэтому предикат попадания в `[0,1]` пригоден для exact lower-bound ниже.
+fn invert_composite_strict(solid: [f64; 3], alpha: f64, bg: [f64; 3]) -> Option<[f64; 3]> {
+    let mut tint = [0.0; 3];
+    for c in 0..3 {
+        let t = bg[c] + (solid[c] - bg[c]) / alpha;
+        if !(0.0..=1.0).contains(&t) {
+            return None;
+        }
+        tint[c] = t;
+    }
+    Some(tint)
+}
+
+/// Binary64-вычисление алгебраической границы непрерывной инверсии.
+///
+/// Это только стартовая точка поиска: округление деления может поставить её
+/// как выше, так и ниже первого `binary64`, проходящего фактический строгий
+/// предикат [`invert_composite_strict`].
+fn analytic_alpha_candidate(solid: [f64; 3], bg: [f64; 3]) -> f64 {
+    let mut lo = 0.0f64;
+    for c in 0..3 {
+        let (s, b) = (solid[c], bg[c]);
+        let bound = if s < b {
+            (b - s) / b
+        } else if s > b {
+            (s - b) / (1.0 - b)
+        } else {
+            0.0
+        };
+        lo = lo.max(bound);
+    }
+    lo.clamp(0.0, 1.0)
+}
+
+/// Первый `binary64`, на котором строгая binary64-инверсия `solid` над `bg`
+/// возвращает тинт в `[0,1]³`. Для `solid == bg` по определению равен 0.
+/// Предыдущее представимое число обязательно не проходит тот же предикат.
+/// Это точный дискретный минимум реализации, но не точный вещественный инфимум:
+/// округление операций способно сдвинуть его относительно алгебраической
+/// границы в обе стороны.
+///
+/// Это также не минимальная α на sRGB8-сетке: итоговый round иногда делает
+/// целевой байт достижимым раньше.
+/// Например, `solid=1/255`, `bg=0` даёт здесь `1/255`, хотя tint byte 255 при
+/// `α=0.5/255` уже композитится в byte 1.
 ///
 /// `None` при входе вне домена (не кодированный цвет `[0,1]³` / не конечный) —
 /// молчаливый ответ на мусор был бы ложным обещанием разрешимости.
@@ -109,38 +253,69 @@ pub fn min_alpha_encoded(solid: [f64; 3], bg: [f64; 3]) -> Option<f64> {
     if !is_encoded_rgb(solid) || !is_encoded_rgb(bg) {
         return None;
     }
-    let mut lo = 0.0f64;
-    for c in 0..3 {
-        let (s, b) = (solid[c], bg[c]);
-        let bound = if s < b {
-            (b - s) / b // b > s ≥ 0 ⇒ b > 0, деление определено
-        } else if s > b {
-            (s - b) / (1.0 - b) // s > b ⇒ b < 1, деление определено
-        } else {
-            0.0
-        };
-        lo = lo.max(bound);
+    if solid == bg {
+        return Some(0.0);
     }
-    Some(lo.clamp(0.0, 1.0))
+    let analytic = analytic_alpha_candidate(solid, bg);
+    debug_assert!(analytic > 0.0);
+
+    // Положительные finite f64 упорядочены unsigned-битами. Сначала
+    // экспоненциально находим ближайшую пару «не проходит / проходит» вокруг
+    // аналитического кандидата; так обычный случай занимает несколько проб,
+    // но ответ не зависит от эвристического лимита числа ULP.
+    let analytic_bits = analytic.to_bits();
+    let one_bits = 1.0f64.to_bits();
+    let (mut failing_bits, mut passing_bits) =
+        if invert_composite_strict(solid, analytic, bg).is_some() {
+            let mut passing = analytic_bits;
+            let mut step = 1_u64;
+            loop {
+                let candidate = passing.saturating_sub(step);
+                if invert_composite_strict(solid, f64::from_bits(candidate), bg).is_none() {
+                    break (candidate, passing);
+                }
+                passing = candidate;
+                step = step.saturating_mul(2);
+            }
+        } else {
+            let mut failing = analytic_bits;
+            let mut step = 1_u64;
+            loop {
+                let candidate = failing.saturating_add(step).min(one_bits);
+                if invert_composite_strict(solid, f64::from_bits(candidate), bg).is_some() {
+                    break (failing, candidate);
+                }
+                failing = candidate;
+                step = step.saturating_mul(2);
+            }
+        };
+
+    // Монотонность строгой формы превращает найденный интервал в обычный
+    // exact lower-bound по целочисленным битам — epsilon и float-midpoint не
+    // участвуют.
+    while passing_bits - failing_bits > 1 {
+        let mid_bits = failing_bits + (passing_bits - failing_bits) / 2;
+        let mid = f64::from_bits(mid_bits);
+        if invert_composite_strict(solid, mid, bg).is_some() {
+            passing_bits = mid_bits;
+        } else {
+            failing_bits = mid_bits;
+        }
+    }
+    Some(f64::from_bits(passing_bits))
 }
 
 /// Hex-обёртка прямого хода: композит `tint_hex @ alpha` над `bg_hex`,
-/// квантованный до 8-битного hex — цвет, который реально покажет дисплей.
+/// квантованный до 8-битного hex — канонический source-over reference-композит.
 ///
 /// # Errors
 ///
-/// `Err` при невалидном hex на любом входе или `alpha` вне `[0,1]`/NaN —
-/// публичная поверхность не пропускает мусор в release-алгебру (внутри только
-/// `debug_assert`).
+/// `Err` при невалидном hex на любом входе либо неконечной/внедиапазонной
+/// `alpha`; ни одна сборка не подменяет такой ввод clamp-результатом.
 pub fn composite_hex(tint_hex: &str, alpha: f64, bg_hex: &str) -> Result<String, String> {
-    if !(alpha.is_finite() && (0.0..=1.0).contains(&alpha)) {
-        return Err(format!("alpha must be in [0,1], got {alpha}"));
-    }
     let tint = srgb_encoded_from_hex(tint_hex)?;
     let bg = srgb_encoded_from_hex(bg_hex)?;
-    Ok(hex_from_srgb_encoded(composite_over_encoded(
-        tint, alpha, bg,
-    )))
+    composite_hex_from_encoded(tint, alpha, bg)
 }
 
 /// Hex-обёртка обратного хода: тинт для `solid_hex @ alpha` над `bg_hex`,
@@ -148,18 +323,25 @@ pub fn composite_hex(tint_hex: &str, alpha: f64, bg_hex: &str) -> Result<String,
 ///
 /// # Errors
 ///
-/// `Err` при невалидном hex на любом входе.
+/// `Err` при невалидном hex на любом входе либо при неконечной/внедиапазонной
+/// `alpha`. `Ok(None)` зарезервирован для корректного домена: нулевой α или
+/// отсутствия тинта в continuous encoded-sRGB gamut.
 pub fn invert_composite_hex(
     solid_hex: &str,
     alpha: f64,
     bg_hex: &str,
 ) -> Result<Option<String>, String> {
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
+    }
     let solid = srgb_encoded_from_hex(solid_hex)?;
     let bg = srgb_encoded_from_hex(bg_hex)?;
     Ok(invert_composite_encoded(solid, alpha, bg).map(hex_from_srgb_encoded))
 }
 
-/// Hex-обёртка [`min_alpha_encoded`].
+/// Hex-обёртка strict-binary64 пола [`min_alpha_encoded`]. Значение не следует
+/// интерпретировать как вещественный инфимум или минимальную α дискретного
+/// sRGB8-композита.
 ///
 /// # Errors
 ///
@@ -172,16 +354,19 @@ pub fn min_alpha_hex(solid_hex: &str, bg_hex: &str) -> Result<f64, String> {
     .expect("hex-вход всегда в домене byte/255 — None недостижим по построению"))
 }
 
-/// Альфа-аналог солида: тинт + ФАКТИЧЕСКАЯ α.
+/// Непрерывный альфа-аналог солида: тинт + ФАКТИЧЕСКАЯ α.
 ///
 /// Продуктовый слой поверх строгого закона: потребитель всегда получает
-/// пригодный ответ, и ответ никогда не врёт о цвете.
+/// пригодный ответ без подмены цели клампом. Вещественная формула сохраняет
+/// заданный цвет, а ошибка её binary64-вычисления ограничена доказанной выше
+/// оценкой. Побайтовая эмиссия в hex/semantic использует отдельный проверяющий
+/// sRGB8-путь с точным постусловием по байтам.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AlphaAnalog {
     /// Кодированный тинт `[0,1]³`.
     pub tint: [f64; 3],
-    /// Фактическая α: запрошенная, если она разрешима, иначе минимально
-    /// разрешимая (композит при ней остаётся точно равным солиду).
+    /// Фактическая α: запрошенная, если она разрешима, иначе strict-binary64
+    /// пол (не вещественный инфимум и не минимальная byte-grid α).
     pub alpha: f64,
 }
 
@@ -189,25 +374,39 @@ pub struct AlphaAnalog {
 ///
 /// «Приблизить» можно двумя способами, и только один честен: кламп тинта при
 /// запрошенной α тихо сдвинул бы композит (система соврала бы о цвете —
-/// запрещённая подмена), а подъём α до [`min_alpha_encoded`] сохраняет
-/// композит ПОБАЙТНО равным солиду — двигается только прозрачность, и
-/// фактическая α возвращается явно ([`AlphaAnalog::alpha`]). Запрошенная α
-/// клампится в `[0,1]` (α=0 вырожденна и поднимается до α_min как «слишком
-/// низкая»).
+/// запрещённая подмена), а подъём α до strict-binary64 пола
+/// [`min_alpha_encoded`] сохраняет исходную цель вещественной инверсии; в
+/// binary64 остаётся только ограниченная ошибка округления, а не произвольный
+/// цветовой сдвиг. Двигается прозрачность, и
+/// фактическая α возвращается явно ([`AlphaAnalog::alpha`]). Запрошенная α вне
+/// `[0,1]` отвергается: clamp скрыл бы ошибку вызывающего кода. `α=0` входит в
+/// библиотечный домен и поднимается до strict-binary64 пола, если solid
+/// отличается от фона; при `solid == bg` возвращается вырожденная пара
+/// `tint=bg, α=0`.
 ///
-/// `None` — только на входе вне домена (не кодированный цвет `[0,1]³` /
-/// не конечный); для валидных цветов ответ существует всегда (в худшем
-/// случае α=1, тинт=солид).
+/// `None` — только на входе вне домена (цвет не конечен/не в `[0,1]³` либо
+/// запрошенная α не конечна/не в `[0,1]`). Для валидного входа ответ существует
+/// всегда (в худшем случае α=1, тинт=солид).
 pub fn resolve_alpha_analog(
     solid: [f64; 3],
     requested_alpha: f64,
     bg: [f64; 3],
 ) -> Option<AlphaAnalog> {
-    let floor = min_alpha_encoded(solid, bg)?; // None только на мусор-входах
-    if !requested_alpha.is_finite() {
+    if !requested_alpha.is_finite() || !(0.0..=1.0).contains(&requested_alpha) {
         return None;
     }
-    let alpha = requested_alpha.clamp(0.0, 1.0).max(floor);
+    let floor = min_alpha_encoded(solid, bg)?; // None только на мусор-входах
+    // Если запрошенная binary64-пара уже является точной обратной к нашему
+    // прямому ходу (включая честную gamut-границу), не поднимаем прозрачность.
+    if requested_alpha > 0.0 {
+        if let Some(tint) = invert_composite_encoded(solid, requested_alpha, bg) {
+            return Some(AlphaAnalog {
+                tint,
+                alpha: requested_alpha,
+            });
+        }
+    }
+    let alpha = requested_alpha.max(floor);
     // При α == floor == 0 солид равен фону: любой видимый эффект отсутствует,
     // тинт = фон (инверсия при α=0 вырожденна — отвечаем без неё).
     if alpha == 0.0 {
@@ -218,11 +417,68 @@ pub fn resolve_alpha_analog(
     Some(AlphaAnalog { tint, alpha })
 }
 
-/// Hex-обёртка [`resolve_alpha_analog`]: `(tint_hex, фактическая α)`.
+/// Эмиссионный sRGB8-путь альфа-аналога.
+///
+/// Входные цвета сначала квантуются до той же byte-сетки, в которой будет
+/// эмитирован тинт. Затем выполняется непрерывная инверсия, тинт квантуется и
+/// итог проверяется через production-композитор [`composite_over_srgb8`]. Это
+/// отделяет continuous API от более сильного побайтового контракта hex/semantic.
+///
+/// Недоменная запрошенная α и нарушение точного постусловия возвращаются как
+/// `Err`: такой результат нельзя отдавать наружу. `Ok(None)` сохранён в форме
+/// внутреннего API как защитный исход, но при валидных цветах и α недостижим.
+pub(crate) fn resolve_alpha_analog_srgb8(
+    solid: [f64; 3],
+    requested_alpha: f64,
+    bg: [f64; 3],
+) -> Result<Option<([u8; 3], f64)>, String> {
+    if !requested_alpha.is_finite() || !(0.0..=1.0).contains(&requested_alpha) {
+        return Err(format!(
+            "requested_alpha вне конечного [0,1]: {requested_alpha}"
+        ));
+    }
+    let solid_srgb8 = encoded_to_srgb8(solid, "solid")?;
+    let bg_srgb8 = encoded_to_srgb8(bg, "bg")?;
+    let to_encoded = |rgb: [u8; 3]| rgb.map(|channel| f64::from(channel) / 255.0);
+
+    let Some(analog) = resolve_alpha_analog(
+        to_encoded(solid_srgb8),
+        requested_alpha,
+        to_encoded(bg_srgb8),
+    ) else {
+        return Ok(None);
+    };
+    let tint_srgb8 = encoded_to_srgb8(analog.tint, "resolved tint")?;
+    verify_srgb8_alpha_analog(solid_srgb8, tint_srgb8, analog.alpha, bg_srgb8)?;
+    Ok(Some((tint_srgb8, analog.alpha)))
+}
+
+/// Глубинная проверка постусловия именно в эмитируемой byte-арифметике.
+/// Отдельная функция нужна, чтобы тест мог доказать: неверная пара отвергается,
+/// а не только что текущий солвер обычно выдаёт верную.
+fn verify_srgb8_alpha_analog(
+    solid: [u8; 3],
+    tint: [u8; 3],
+    alpha: f64,
+    bg: [u8; 3],
+) -> Result<(), String> {
+    let composite = composite_over_srgb8(tint, alpha, bg)?;
+    if composite != solid {
+        return Err(format!(
+            "alpha-analog не воспроизвёл sRGB8-цель: solid={solid:?}, tint={tint:?}, alpha={alpha}, bg={bg:?}, composite={composite:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Hex-обёртка эмиссионного sRGB8-резолвера: `(tint_hex, фактическая α)`.
+/// Возвращённая пара побайтно воспроизводит
+/// `solid_hex` через [`composite_over_srgb8`]; постусловие проверено до возврата.
 ///
 /// # Errors
 ///
-/// `Err` при невалидном hex на любом входе.
+/// `Err` при невалидном hex, неконечной/внедиапазонной запрошенной α либо при
+/// нарушении точного sRGB8-постусловия (защитная ветка против численного дрейфа).
 pub fn resolve_alpha_analog_hex(
     solid_hex: &str,
     requested_alpha: f64,
@@ -230,8 +486,8 @@ pub fn resolve_alpha_analog_hex(
 ) -> Result<Option<(String, f64)>, String> {
     let solid = srgb_encoded_from_hex(solid_hex)?;
     let bg = srgb_encoded_from_hex(bg_hex)?;
-    Ok(resolve_alpha_analog(solid, requested_alpha, bg)
-        .map(|a| (hex_from_srgb_encoded(a.tint), a.alpha)))
+    Ok(resolve_alpha_analog_srgb8(solid, requested_alpha, bg)?
+        .map(|(tint, alpha)| (hex_from_srgb8(tint), alpha)))
 }
 
 #[cfg(test)]
@@ -273,6 +529,84 @@ mod tests {
         }
     }
 
+    /// Контрпример на точной половине байта: source-over reference считает
+    /// каналы в шкале 0..255, поэтому `250 × 0.122 = 30.5` даёт 31.
+    /// Нормализация через `(250/255)×255` теряла tie и давала 30.
+    #[test]
+    fn emitted_composite_uses_byte_reference_arithmetic_at_half_tie() {
+        assert_eq!(
+            composite_hex("#C0B2FA", 0.122, "#000000").unwrap(),
+            "#17161F"
+        );
+    }
+
+    /// Теорема для всей одноканальной области известной α: эталон считается
+    /// целыми как `(122·t + 878·b)/1000`, поэтому тест не повторяет f64-путь
+    /// production-кода и ловит нормализацию через `/255·255` на всех half-tie.
+    #[test]
+    fn byte_reference_alpha_0122_matches_exact_rational_for_all_channel_pairs() {
+        for tint in u8::MIN..=u8::MAX {
+            for bg in u8::MIN..=u8::MAX {
+                let got = composite_over_srgb8([tint, 0, 0], 0.122, [bg, 0, 0]).unwrap()[0];
+                let numerator = 122_u32 * u32::from(tint) + 878_u32 * u32::from(bg);
+                let expected = ((numerator + 500) / 1_000) as u8;
+                assert_eq!(got, expected, "tint={tint}, bg={bg}");
+            }
+        }
+    }
+
+    /// Конечная sRGB8-теорема альфа-аналога: для каждой из 65 536 пар
+    /// `(solid, bg)` и каждой представительной запрошенной α проверяющий
+    /// production-резолвер обязан вернуть тинт, который публичный byte-
+    /// композитор складывает ТОЧНО в исходный solid. `near_one` — соседнее
+    /// представимое число перед `1.0`; оно закрывает минимальный запас до
+    /// половины байта, где float-дрейф опаснее всего.
+    #[test]
+    fn srgb8_alpha_analog_is_exact_for_every_channel_pair() {
+        let near_one = f64::from_bits(1.0_f64.to_bits() - 1);
+        for requested_alpha in [0.0, 0.01, 0.122, 0.5, 0.9, near_one, 1.0] {
+            for solid in u8::MIN..=u8::MAX {
+                for bg in u8::MIN..=u8::MAX {
+                    let solid_encoded = [f64::from(solid) / 255.0; 3];
+                    let bg_encoded = [f64::from(bg) / 255.0; 3];
+                    let (tint, actual_alpha) =
+                        resolve_alpha_analog_srgb8(solid_encoded, requested_alpha, bg_encoded)
+                            .unwrap_or_else(|error| {
+                                panic!(
+                                    "solid={solid}, bg={bg}, requested={requested_alpha}: {error}"
+                                )
+                            })
+                            .expect("конечная α и sRGB8-цвета всегда разрешимы");
+                    let got = composite_over_srgb8(tint, actual_alpha, [bg; 3])
+                        .expect("резолвер возвращает α в [0,1]");
+                    assert_eq!(
+                        got, [solid; 3],
+                        "solid={solid}, bg={bg}, requested={requested_alpha}, actual={actual_alpha}, tint={tint:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Контрпример прежнего смешения доменов: `0.25/255` квантуется в byte 0,
+    /// но инверсия НЕквантованной цели при α=0.5 дала tint byte 1, чей
+    /// production-композит равен 1. Эмиссионный путь обязан сначала квантовать
+    /// цель, а глубинная проверка — отвергать заведомо неверную пару.
+    #[test]
+    fn srgb8_resolver_quantises_target_before_inversion_and_guard_rejects_drift() {
+        let off_grid_solid = [0.25 / 255.0; 3];
+        let (tint, alpha) = resolve_alpha_analog_srgb8(off_grid_solid, 0.5, [0.0; 3])
+            .expect("валидный числовой домен")
+            .expect("конечная α разрешима");
+        assert_eq!(tint, [0; 3]);
+        assert_eq!(composite_over_srgb8(tint, alpha, [0; 3]).unwrap(), [0; 3]);
+
+        assert!(
+            verify_srgb8_alpha_analog([0; 3], [1; 3], 0.5, [0; 3]).is_err(),
+            "пара из старого off-grid пути обязана быть отвергнута"
+        );
+    }
+
     /// Обратный ход на живых парах: восстановленный тинт отклоняется от
     /// канонического не более чем на границу квантования 0.5/(255·α) на канал,
     /// а его композит воспроизводит опорный hex побайтно (что и является
@@ -293,18 +627,19 @@ mod tests {
                     (tint[c] - true_tint[c]).abs()
                 );
             }
-            // Продуктовая гарантия: композит восстановленного тинта == опорный hex.
-            let recomposed = hex_from_srgb_encoded(composite_over_encoded(tint, *alpha, b));
+            // Продуктовая гарантия проверяется production byte-композитором,
+            // а не повторением непрерывной алгебры инверсии.
+            let recomposed = composite_hex_from_encoded(tint, *alpha, b).unwrap();
             assert_eq!(&recomposed, solid, "{solid}@{alpha}: re-композит разошёлся");
         }
     }
 
-    /// Теорема тождества на непрерывных значениях: инверсия прямого хода
-    /// возвращает исходный тинт с машинной точностью для любых α ≥ α_min —
-    /// значит контраст альфа-аналога на каноническом фоне тождественен солиду
-    /// по построению. Свип — детерминированная сетка кодированных значений.
+    /// Алгебраическое тождество на непрерывных значениях с явной binary64-
+    /// границей ошибки. Прямой ход содержит три базовые операции, обратный —
+    /// ещё три; стандартная first-order оценка каждой правильно округлённой
+    /// операции даёт консервативные `8·ε/α` на восстановленный канал.
     #[test]
-    fn inversion_identity_is_exact_on_continuous_values() {
+    fn inversion_identity_respects_derived_binary64_error_bound() {
         let grid: Vec<f64> = (0..=10).map(|i| f64::from(i) / 10.0).collect();
         for &tr in &grid {
             for &tb in &grid {
@@ -312,16 +647,16 @@ mod tests {
                     let tint = [tr, 0.5, tb];
                     let bg = [br, 0.25, 0.9];
                     for alpha in [0.05, 0.2, 0.5, 0.85, 1.0] {
-                        let solid = composite_over_encoded(tint, alpha, bg);
-                        let back = invert_composite_encoded(solid, alpha, bg)
-                            .expect("прямой ход всегда обратим при той же α");
+                        let solid = composite_over_encoded_unchecked(tint, alpha, bg);
+                        let back = invert_composite_encoded(solid, alpha, bg).unwrap_or_else(|| {
+                            panic!(
+                                "прямой ход не обратим: tint={tint:?}, bg={bg:?}, alpha={alpha}, solid={solid:?}"
+                            )
+                        });
                         for c in 0..3 {
-                            assert!(
-                                (back[c] - tint[c]).abs() < 1e-9,
-                                "identity: канал {c}: {} != {}",
-                                back[c],
-                                tint[c]
-                            );
+                            let error = (back[c] - tint[c]).abs();
+                            let bound = 8.0 * f64::EPSILON / alpha;
+                            assert!(error <= bound, "канал {c}: error={error} > {bound}");
                         }
                     }
                 }
@@ -329,32 +664,60 @@ mod tests {
         }
     }
 
-    /// Аналитика α_min: на границе инверсия разрешима, чуть ниже — нет.
-    /// Свип по сетке пар (solid, bg), исключая вырожденный случай solid == bg
-    /// (там α_min = 0 и «чуть ниже» не существует).
+    /// Полный одноканальный sRGB8-домен фиксирует точное определение пола:
+    /// возвращённый `binary64` проходит строгую инверсию, а непосредственно
+    /// предшествующий — нет. Проверка predecessor принципиальна: округлённый
+    /// аналитический кандидат нередко проходит вместе с несколькими числами
+    /// перед ним, поэтому простого `candidate is feasible` недостаточно.
     #[test]
-    fn min_alpha_is_the_exact_feasibility_boundary() {
-        let grid: Vec<f64> = (0..=8).map(|i| f64::from(i) / 8.0).collect();
-        for &s in &grid {
-            for &b in &grid {
-                if (s - b).abs() < 1e-15 {
+    fn min_alpha_is_first_passing_binary64_for_every_srgb8_channel_pair() {
+        for solid_byte in u8::MIN..=u8::MAX {
+            for bg_byte in u8::MIN..=u8::MAX {
+                let s = f64::from(solid_byte) / 255.0;
+                let b = f64::from(bg_byte) / 255.0;
+                let solid = [s, 0.25, 0.75];
+                let bg = [b, 0.25, 0.75];
+                let floor = min_alpha_encoded(solid, bg).expect("sRGB8 всегда в домене");
+
+                if solid_byte == bg_byte {
+                    assert_eq!(floor.to_bits(), 0.0_f64.to_bits());
                     continue;
                 }
-                let solid = [s, 0.3, 0.7];
-                let bg = [b, 0.3, 0.7];
-                let a_min = min_alpha_encoded(solid, bg).expect("вход в домене");
+
                 assert!(
-                    invert_composite_encoded(solid, a_min.max(1e-9), bg).is_some(),
-                    "solid={s}, bg={b}: неразрешимо на собственной α_min={a_min}"
+                    invert_composite_strict(solid, floor, bg).is_some(),
+                    "solid={solid_byte}, bg={bg_byte}: floor={floor} не проходит"
                 );
-                if a_min > 1e-6 {
-                    assert!(
-                        invert_composite_encoded(solid, a_min * 0.999, bg).is_none(),
-                        "solid={s}, bg={b}: разрешимо НИЖЕ α_min={a_min} — граница не точна"
-                    );
-                }
+                let predecessor = f64::from_bits(floor.to_bits() - 1);
+                assert!(
+                    invert_composite_strict(solid, predecessor, bg).is_none(),
+                    "solid={solid_byte}, bg={bg_byte}: predecessor={predecessor} тоже проходит; floor={floor} не минимален"
+                );
             }
         }
+    }
+
+    /// `min_alpha_encoded` нельзя называть минимумом sRGB8-композита:
+    /// финальное округление расширяет достижимое множество на половину кода.
+    /// Контрпример также защищает смысл `alphaCoerced`: это сознательно
+    /// отдельный strict-binary64 пол.
+    #[test]
+    fn strict_binary64_floor_is_not_the_byte_grid_minimum() {
+        let solid = [1.0 / 255.0, 0.0, 0.0];
+        let bg = [0.0; 3];
+        let strict_floor = min_alpha_encoded(solid, bg).unwrap();
+        let byte_alpha = 0.5 / 255.0;
+
+        assert_eq!(strict_floor, 1.0 / 255.0);
+        assert!(byte_alpha < strict_floor);
+        assert_eq!(
+            composite_over_srgb8([255, 0, 0], byte_alpha, [0; 3]).unwrap(),
+            [1, 0, 0]
+        );
+        assert!(
+            invert_composite_encoded(solid, byte_alpha, bg).is_none(),
+            "byte достижим округлением, но continuous-тинт был бы вне gamut"
+        );
     }
 
     /// Вырожденные α честно отвергаются, кламп не подменяет ответ.
@@ -369,10 +732,20 @@ mod tests {
         assert_eq!(invert_composite_encoded(s, 1.0, b), Some(s));
     }
 
-    /// Продуктовый резолвер никогда не врёт о цвете: при разрешимой
+    /// Выход из gamut даже на доли триллионной не является «машинным шумом»:
+    /// глобальный epsilon раньше превращал неразрешимую пару в ложный ответ.
+    #[test]
+    fn inversion_never_expands_gamut_with_epsilon() {
+        let alpha = 1.0 - 5e-13;
+        assert!(alpha < min_alpha_encoded([0.0; 3], [1.0; 3]).unwrap());
+        assert!(invert_composite_encoded([0.0; 3], alpha, [1.0; 3]).is_none());
+    }
+
+    /// Непрерывный резолвер не подменяет целевой цвет: при разрешимой
     /// запрошенной α возвращает её саму; при неразрешимой — поднимает α ровно
-    /// до α_min, и композит остаётся ТОЧНО равным солиду (двигается
-    /// прозрачность, не цвет). Кламп-подмена тинта не происходит.
+    /// до α_min. Ошибка binary64-композита остаётся внутри доказанной оценки
+    /// (двигается прозрачность, не целевой цвет). Побайтовый постусловный тест живёт отдельно в
+    /// `srgb8_alpha_analog_is_exact_for_every_channel_pair`.
     #[test]
     fn resolver_moves_alpha_never_the_colour() {
         let grid: Vec<f64> = (0..=8).map(|i| f64::from(i) / 8.0).collect();
@@ -382,24 +755,35 @@ mod tests {
                 let bg = [b, 0.4, 0.6];
                 let floor = min_alpha_encoded(solid, bg).expect("в домене");
                 for requested in [0.0, 0.05, 0.3, 0.9, 1.0] {
+                    let requested_is_exact =
+                        requested > 0.0 && invert_composite_encoded(solid, requested, bg).is_some();
                     let a = resolve_alpha_analog(solid, requested, bg).expect("в домене");
-                    // Фактическая α: запрошенная, если разрешима, иначе ровно α_min.
-                    let want = requested.max(floor);
-                    assert!(
-                        (a.alpha - want).abs() < 1e-12,
+                    // Фактическая α: запрошенная, если строгая или побитно-точная
+                    // граничная инверсия разрешима; иначе ровно conservative floor.
+                    let want = if requested_is_exact {
+                        requested
+                    } else {
+                        requested.max(floor)
+                    };
+                    assert_eq!(
+                        a.alpha.to_bits(),
+                        want.to_bits(),
                         "solid={s},bg={b},req={requested}: α={} != {want}",
                         a.alpha
                     );
-                    // Композит НИКОГДА не отклоняется от солида.
+                    // Отклонение — только ограниченная ошибка binary64, а не
+                    // результат клампа или смены целевого цвета.
                     let c = if a.alpha == 0.0 {
                         bg // вырожденный случай solid==bg
                     } else {
-                        composite_over_encoded(a.tint, a.alpha, bg)
+                        composite_over_encoded_unchecked(a.tint, a.alpha, bg)
                     };
                     for ch in 0..3 {
+                        let error = (c[ch] - solid[ch]).abs();
+                        let bound = 8.0 * f64::EPSILON;
                         assert!(
-                            (c[ch] - solid[ch]).abs() < 1e-9,
-                            "solid={s},bg={b},req={requested}: композит уехал на канале {ch}"
+                            error <= bound,
+                            "solid={s},bg={b},req={requested}: канал {ch}, error={error} > {bound}"
                         );
                     }
                 }
@@ -418,6 +802,23 @@ mod tests {
         }
     }
 
+    /// Обе публичные прямые границы одинаково отвергают мусор в debug/release;
+    /// непрерывная алгебра не доступна как panic/clamp-лазейка.
+    #[test]
+    fn public_compositors_reject_invalid_numeric_inputs() {
+        let valid = [0.25, 0.5, 0.75];
+        for alpha in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.1] {
+            assert!(composite_over_encoded(valid, alpha, valid).is_err());
+            assert!(composite_over_srgb8([1, 2, 3], alpha, [4, 5, 6]).is_err());
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.1] {
+            let mut rgb = valid;
+            rgb[0] = bad;
+            assert!(composite_over_encoded(rgb, 0.5, valid).is_err());
+            assert!(composite_over_encoded(valid, 0.5, rgb).is_err());
+        }
+    }
+
     /// Все три hex-обёртки публичной поверхности: roundtrip на живой Figma-паре,
     /// плюс честный Err (не паника) на невалидном hex — .expect в min_alpha_hex
     /// недостижим, парсинг падает раньше через `?`.
@@ -431,7 +832,8 @@ mod tests {
         // min_alpha_hex: для равных цветов пол = 0; для контрастной пары > 0.
         assert_eq!(min_alpha_hex("#FFFFFF", "#FFFFFF").unwrap(), 0.0);
         assert!(min_alpha_hex("#101012", "#FFFFFF").unwrap() > 0.9);
-        // resolve_alpha_analog_hex: неразрешимая α поднимается, композит равен солиду.
+        // Hex-путь: неразрешимая α поднимается, а итоговый sRGB8-композит
+        // побайтно равен солиду.
         let (tint2, actual) = resolve_alpha_analog_hex("#101012", 0.05, "#FFFFFF")
             .expect("валидный hex")
             .expect("цвета в домене");
@@ -445,19 +847,52 @@ mod tests {
         ] {
             assert!(f.is_some(), "невалидный hex обязан дать Err");
         }
+
+        // Ошибка вызывающего кода не должна выглядеть как физическая
+        // неразрешимость корректной пары цветов.
+        for bad in [
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -f64::EPSILON,
+            1.0 + f64::EPSILON,
+        ] {
+            assert!(
+                invert_composite_hex("#808080", bad, "#FFFFFF").is_err(),
+                "alpha={bad} обязана дать Err, а не Ok(None)"
+            );
+        }
+        assert_eq!(
+            invert_composite_hex("#808080", 0.0, "#FFFFFF").unwrap(),
+            None,
+            "нулевая alpha валидна, но обратный ход вырожден"
+        );
     }
 
-    /// Резолвер отвергает только мусор; NaN-α — тоже мусор, не «поднять до α_min».
+    /// Резолвер строго отвергает α вне `[0,1]`: ни NaN, ни конечное значение за
+    /// границей не должны превращаться clamp-ом в правдоподобный ответ.
     #[test]
-    fn resolver_rejects_only_out_of_domain() {
+    fn resolver_rejects_every_out_of_domain_alpha() {
         let ok = [0.5, 0.5, 0.5];
         assert!(resolve_alpha_analog([1.5, 0.0, 0.0], 0.5, ok).is_none());
-        assert!(resolve_alpha_analog(ok, f64::NAN, ok).is_none());
-        // Запрошенная α вне [0,1] клампится, не отвергается (пригодный ответ).
-        assert_eq!(
-            resolve_alpha_analog(ok, 5.0, ok).map(|a| a.alpha),
-            Some(1.0)
-        );
+        for bad in [
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -f64::EPSILON,
+            1.0 + f64::EPSILON,
+            -1.0,
+            5.0,
+        ] {
+            assert!(
+                resolve_alpha_analog(ok, bad, ok).is_none(),
+                "requested α={bad} обязана быть отвергнута"
+            );
+            assert!(
+                resolve_alpha_analog_hex("#808080", bad, "#808080").is_err(),
+                "hex-граница обязана вернуть Err для α={bad}"
+            );
+        }
     }
 
     /// Домен ядра закреплён: внегамутные и неконечные входы отвергаются
@@ -499,7 +934,7 @@ mod tests {
         let tint = [0.4, 0.6, 0.2];
         let bg = [1.0, 1.0, 1.0];
         for alpha in [0.08, 0.2, 0.5] {
-            let solid = composite_over_encoded(tint, alpha, bg);
+            let solid = composite_over_encoded_unchecked(tint, alpha, bg);
             let shifted = [solid[0] + 0.5 / 255.0, solid[1], solid[2]];
             let back = invert_composite_encoded(shifted, alpha, bg)
                 .expect("сдвиг на пол-кода не выбивает из гамута на этих значениях");
