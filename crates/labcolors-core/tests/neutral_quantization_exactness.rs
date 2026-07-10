@@ -1,4 +1,5 @@
-use labcolors_core::{LcsColor, NeutralCurve};
+use labcolors_core::LcsColor;
+use labcolors_core::neutral::NeutralCurve;
 
 fn srgb_decode(encoded: f64) -> f64 {
     if encoded <= 0.040_45 {
