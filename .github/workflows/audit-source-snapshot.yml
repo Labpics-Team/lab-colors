@@ -1,0 +1,24 @@
+name: audit-source-snapshot
+
+on:
+  push:
+    branches:
+      - audit/full-source-snapshot-20260710
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: archive tracked source
+        run: |
+          git ls-files -z | tar --null -T - -czf lab-colors-source.tar.gz
+      - name: upload source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lab-colors-source
+          path: lab-colors-source.tar.gz
+          retention-days: 1
