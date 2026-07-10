@@ -68,7 +68,7 @@
 дополнительно исключил `#18 LIGHTNESS_SETTLE`: контрпример опроверг его класс
 (a), а численная legacy-эвристика не является перцептивной policy-константой.
 Поэтому актуальный итог — 25, а не 26 или 27.
-Незакрытых мишеней нет; строк «нужен эксперимент» — ноль.
+Внутри прежней классификации констант нет безымянных строк, но это не означает, что корневая модель neutral progression найдена: gamma-строки остаются frozen legacy baselines и открыты в #219/#261.
 
 ## Классификация текущих 25 policy-констант
 
@@ -101,8 +101,8 @@
 | 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | измер. якорь; Волна 2: байт-инвариант по разбросу [285.78,286.01], ±20°→0.0114 (~1 JND) | `neutral_hue_emits_byte_invariant_across_measured_family_spread`, `custom_tint_overrides_hue_and_ratio` |
 | 21 | `CHROMA_FRACTION` | 0.88 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0421 по [0.70,1.0]; labui=1.0; диапазон (0,1] | `chroma_fraction_sensitivity_is_bounded`, `chroma_fraction_out_of_bounds_is_rejected` |
 | ~~20~~ | ~~`DEFAULT_HARDNESS`~~ | — | — | **УДАЛЁН Волной 1** (снесён механизм p-нормы brand-displacement; config-поле `hardness` живо как vestigial, тест `hardness_below_one_is_rejected` держит его границу) | — |
-| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0466 по [1.3,2.2]; диапазон >0 | `curve_params_sensitivity_is_bounded` |
-| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0325 по [1.2,1.9]; диапазон >0 | `curve_params_sensitivity_is_bounded` |
+| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | **OPEN** | frozen legacy baseline; four scalar explanations, including direct Whittle/crispening, are refuted by magnitude/degeneracy; context-conditioned progression or removal of gamma is owned by #219/#261 | `curve_params_sensitivity_is_bounded`, gamma derivation regressions |
+| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | **OPEN** | frozen legacy baseline; four scalar explanations, including direct Whittle/crispening, are refuted, with especially strong failure near the dark anchor; context-conditioned progression or removal of gamma is owned by #219/#261 | `curve_params_sensitivity_is_bounded`, gamma derivation regressions |
 | 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0042 по [0.2,0.5] (низшая); диапазон (0,0.5] | `curve_params_sensitivity_is_bounded` |
 
 **(b) после follow-on = 1 (было 0) — честно.** `IC_DECORATIVE_FLOOR_MIN` = 15.0
