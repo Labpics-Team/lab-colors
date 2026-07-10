@@ -1,9 +1,11 @@
 name: audit-source-snapshot
 
 on:
-  push:
+  pull_request:
     branches:
-      - audit/full-source-snapshot-20260710
+      - main
+    paths:
+      - .github/workflows/audit-source-snapshot.yml
 
 permissions:
   contents: read
