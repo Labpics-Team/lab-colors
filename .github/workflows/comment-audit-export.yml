@@ -20,12 +20,11 @@ jobs:
         shell: bash
         run: |
           git archive --format=tar.gz --output=lab-colors-main-c72fbc7.tar.gz HEAD
-          git ls-files -z | python3 - <<'PY'
-          import os
-          import sys
+          python3 - <<'PY'
+          import subprocess
           from pathlib import Path
 
-          raw = sys.stdin.buffer.read().split(b"\0")
+          raw = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
           rows = []
           for item in raw:
               if not item:
