@@ -85,18 +85,42 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 field_str(&mut roles, "coreHex", &g.core_hex);
                 field_str(&mut roles, "haloHex", &g.halo_hex);
                 field_num(&mut roles, "alpha", g.alpha)?;
-                field_num(&mut roles, "achievedDj", g.achieved_dj)?;
-                field_bool(&mut roles, "degraded", g.degraded);
+                let canonical_alpha =
+                    labcolors_core::css_alpha_value(g.alpha).map_err(|reason| {
+                        BindingError::Internal {
+                            reason: format!("glow alpha не сериализуется: {reason}"),
+                        }
+                    })?;
+                if canonical_alpha != g.alpha_css {
+                    return Err(BindingError::Internal {
+                        reason: format!(
+                            "glow alphaCss рассинхронизирован: ожидался {canonical_alpha}, получен {}",
+                            g.alpha_css
+                        ),
+                    });
+                }
+                field_str(&mut roles, "alphaCss", &g.alpha_css);
+                field_str(&mut roles, "referenceProfile", g.reference_profile);
+                field_str(&mut roles, "constraintLayer", g.constraint_layer.key());
+                field_num(&mut roles, "targetDj", g.target_dj)?;
+                field_str(&mut roles, "targetStatus", g.target_status.key());
+                field_str(&mut roles, "haloCompositeHex", &g.halo_composite_hex);
+                field_num(&mut roles, "haloAchievedDj", g.halo_achieved_dj)?;
+                field_str(&mut roles, "coreCompositeHex", &g.core_composite_hex);
+                field_num(&mut roles, "coreAchievedDj", g.core_achieved_dj)?;
+                // Aliases совместимости старого неоднозначного контракта.
+                field_num(&mut roles, "achievedDj", g.halo_achieved_dj)?;
+                field_bool(
+                    &mut roles,
+                    "degraded",
+                    g.target_status == labcolors_core::GlowTargetStatus::Unreachable,
+                );
                 let halo_css = oklch_css(&g.halo_hex, None)?;
                 let core_css = oklch_css(&g.core_hex, None)?;
                 field_str(&mut roles, "css", &halo_css);
                 push_var(&mut vars, &css_var, &halo_css);
                 push_var(&mut vars, &format!("{css_var}-core"), &core_css);
-                push_var(
-                    &mut vars,
-                    &format!("{css_var}-alpha"),
-                    &format!("{:.4}", g.alpha),
-                );
+                push_var(&mut vars, &format!("{css_var}-alpha"), &g.alpha_css);
             }
             RoleOutcome::Material(m) => {
                 // Материал (#89): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
@@ -280,11 +304,18 @@ mod tests {
                 RoleEntry {
                     role_key: "pulse".to_string(),
                     outcome: RoleOutcome::Glow(GlowColor {
-                        core_hex: "#FFF1CC".to_string(),
-                        halo_hex: "#FFB300".to_string(),
-                        alpha: 0.5,
-                        achieved_dj: 12.0625,
-                        degraded: false,
+                        core_hex: "#A0C5FF".to_string(),
+                        halo_hex: "#4A8FFF".to_string(),
+                        alpha: 0.036_045_459_685_627_89,
+                        alpha_css: "0.03604545968562789".to_string(),
+                        target_dj: 2.3006,
+                        reference_profile: labcolors_core::GLOW_REFERENCE_PROFILE,
+                        constraint_layer: labcolors_core::GlowConstraintLayer::Halo,
+                        target_status: labcolors_core::GlowTargetStatus::Reached,
+                        halo_composite_hex: "#13151B".to_string(),
+                        halo_achieved_dj: 2.373_123_785_729_128,
+                        core_composite_hex: "#15171B".to_string(),
+                        core_achieved_dj: 3.235_504_076_619_437,
                     }),
                 },
                 RoleEntry {
@@ -305,8 +336,8 @@ mod tests {
         let json = resolved_json(&fixture()).unwrap();
         let css_label = labcolors_core::oklch_css_from_hex("#D5D5D7", None).unwrap();
         let css_veil = labcolors_core::oklch_css_from_hex("#89CFF0", Some(0.35)).unwrap();
-        let css_halo = labcolors_core::oklch_css_from_hex("#FFB300", None).unwrap();
-        let css_core = labcolors_core::oklch_css_from_hex("#FFF1CC", None).unwrap();
+        let css_halo = labcolors_core::oklch_css_from_hex("#4A8FFF", None).unwrap();
+        let css_core = labcolors_core::oklch_css_from_hex("#A0C5FF", None).unwrap();
         let expected = format!(
             concat!(
                 "{{\"theme\":\"dark\",\"background\":\"#3A3A3C\",\"vars\":{{",
@@ -314,7 +345,7 @@ mod tests {
                 "\"--lab-veil\":\"{veil}\",",
                 "\"--lab-pulse\":\"{halo}\",",
                 "\"--lab-pulse-core\":\"{core}\",",
-                "\"--lab-pulse-alpha\":\"0.5000\"",
+                "\"--lab-pulse-alpha\":\"0.03604545968562789\"",
                 "}},\"roles\":{{",
                 "\"label-primary\":{{\"cssVar\":\"--lab-label-primary\",\"kind\":\"color\",",
                 "\"hex\":\"#D5D5D7\",\"lc\":62.375,\"wcagRatio\":7.25,\"compressed\":false,",
@@ -326,8 +357,13 @@ mod tests {
                 "\"compositeLc\":-41.5,\"compositeWcag\":3.125,\"alphaCoerced\":true,",
                 "\"floorCoerced\":false,\"css\":\"{veil}\"}},",
                 "\"pulse\":{{\"cssVar\":\"--lab-pulse\",\"kind\":\"glow\",",
-                "\"coreHex\":\"#FFF1CC\",\"haloHex\":\"#FFB300\",\"alpha\":0.5,",
-                "\"achievedDj\":12.0625,\"degraded\":false,\"css\":\"{halo}\"}},",
+                "\"coreHex\":\"#A0C5FF\",\"haloHex\":\"#4A8FFF\",",
+                "\"alpha\":0.03604545968562789,\"alphaCss\":\"0.03604545968562789\",",
+                "\"referenceProfile\":\"encoded-srgb8-screen-cam16ucs-jprime-v1\",",
+                "\"constraintLayer\":\"halo\",\"targetDj\":2.3006,\"targetStatus\":\"reached\",",
+                "\"haloCompositeHex\":\"#13151B\",\"haloAchievedDj\":2.373123785729128,",
+                "\"coreCompositeHex\":\"#15171B\",\"coreAchievedDj\":3.235504076619437,",
+                "\"achievedDj\":2.373123785729128,\"degraded\":false,\"css\":\"{halo}\"}},",
                 "\"impossible\":{{\"cssVar\":\"--lab-impossible\",\"kind\":\"unreachable\",",
                 "\"code\":\"gamut_exhausted\",",
                 "\"message\":\"нет цвета: \\\"предел\\\"\\nвторая строка\"}}",

@@ -70,16 +70,32 @@ pub enum RoleOutcome {
 /// Слои свечения и решённая интенсивность (kind glow).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlowColor {
-    /// Слой пересвета (малый радиус), `#RRGGBB`.
+    /// Core-слой, предназначенный потребителем для меньшего blur, `#RRGGBB`;
+    /// сам движок геометрию не моделирует.
     pub core_hex: String,
-    /// Слой ореола — источник, `#RRGGBB`.
+    /// Halo-слой, предназначенный потребителем для большего blur, `#RRGGBB`;
+    /// в recipe v1 равен источнику.
     pub halo_hex: String,
     /// Интенсивность screen-слоя `(0, 1]`.
     pub alpha: f64,
-    /// Фактический |ΔJ'| композита от фона.
-    pub achieved_dj: f64,
-    /// Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2).
-    pub degraded: bool,
+    /// Каноническая CSS-запись той же alpha без повторного округления.
+    pub alpha_css: String,
+    /// Целевой |ΔJ′| изолированного halo-композита.
+    pub target_dj: f64,
+    /// Версия конечного reference-домена point-расчёта.
+    pub reference_profile: &'static str,
+    /// Слой, по которому решалась цель.
+    pub constraint_layer: labcolors_core::GlowConstraintLayer,
+    /// Типизированный результат target-проверки.
+    pub target_status: labcolors_core::GlowTargetStatus,
+    /// Reference-композит изолированного halo.
+    pub halo_composite_hex: String,
+    /// Фактический |ΔJ′| изолированного halo-композита.
+    pub halo_achieved_dj: f64,
+    /// Reference-композит изолированного core с той же alpha.
+    pub core_composite_hex: String,
+    /// Фактический |ΔJ′| изолированного core-композита.
+    pub core_achieved_dj: f64,
 }
 
 /// Двухслойный материал (kind material): тон + выведенная α + вердикт гарантии.

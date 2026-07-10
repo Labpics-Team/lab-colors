@@ -135,17 +135,35 @@ export interface TranslucentRole {
 export interface GlowRole {
   readonly kind: "glow";
   readonly cssVar: string;
-  /** Слой пересвета (малый радиус), #RRGGBB. */
+  /** Core, предназначенный потребителем для меньшего blur; геометрия не моделируется. */
   readonly coreHex: string;
-  /** Слой ореола — источник, #RRGGBB. */
+  /** Halo, предназначенный потребителем для большего blur; в recipe v1 это источник. */
   readonly haloHex: string;
   /** Интенсивность screen-слоя, (0, 1]. */
   readonly alpha: number;
-  /** Фактический |ΔJ'| композита от фона. */
+  /** Каноническая CSS-запись той же alpha; vars использует буквально её. */
+  readonly alphaCss: string;
+  /** Конечный reference-домен point-расчёта; не сертификат renderer-а или дисплея. */
+  readonly referenceProfile: "encoded-srgb8-screen-cam16ucs-jprime-v1";
+  /** Цель решается только по изолированному halo. */
+  readonly constraintLayer: "halo";
+  /** Запрошенный |ΔJ'| halo-композита. */
+  readonly targetDj: number;
+  /** Результат проверки цели во всём конечном reference-домене. */
+  readonly targetStatus: "reached" | "unreachable";
+  /** Reference-композит изолированного halo на фоне резолва. */
+  readonly haloCompositeHex: string;
+  /** Фактический |ΔJ'| изолированного halo-композита. */
+  readonly haloAchievedDj: number;
+  /** Reference-композит изолированного core с той же alpha. */
+  readonly coreCompositeHex: string;
+  /** Фактический |ΔJ'| изолированного core-композита. */
+  readonly coreAchievedDj: number;
+  /** @deprecated Alias `haloAchievedDj` для совместимости. */
   readonly achievedDj: number;
-  /** Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2). */
+  /** @deprecated Используйте targetStatus === "unreachable". */
   readonly degraded: boolean;
-  /** Ready-to-serve CSS value халo: "oklch(L% C H)". */
+  /** CSS-значение halo: `oklch(L% C H)`. */
   readonly css: string;
 }
 

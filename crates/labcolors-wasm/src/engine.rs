@@ -279,8 +279,15 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             core_hex: g.core_hex().to_string(),
             halo_hex: g.halo_hex().to_string(),
             alpha: g.alpha(),
-            achieved_dj: g.achieved_dj(),
-            degraded: g.degraded(),
+            alpha_css: g.alpha_css().to_string(),
+            target_dj: g.target_dj(),
+            reference_profile: g.reference_profile(),
+            constraint_layer: g.constraint_layer(),
+            target_status: g.target_status(),
+            halo_composite_hex: g.halo_composite_hex().to_string(),
+            halo_achieved_dj: g.halo_achieved_dj(),
+            core_composite_hex: g.core_composite_hex().to_string(),
+            core_achieved_dj: g.core_achieved_dj(),
         }),
         // Двухслойный материал (#89): тинт 01 (oklch/α) + опаковая база 02.
         Resolved::Material(m) => RoleOutcome::Material(crate::dto::MaterialColor {
@@ -942,7 +949,20 @@ mod tests {
                     assert_eq!(g.core_hex(), o.core_hex, "{name}: glow core");
                     assert_eq!(g.halo_hex(), o.halo_hex, "{name}: glow halo");
                     assert_eq!(g.alpha(), o.alpha, "{name}: glow alpha");
-                    assert_eq!(g.degraded(), o.degraded, "{name}: glow degraded");
+                    assert_eq!(g.alpha_css(), o.alpha_css, "{name}: glow alpha_css");
+                    assert_eq!(g.target_dj(), o.target_dj, "{name}: glow target_dj");
+                    assert_eq!(g.reference_profile(), o.reference_profile);
+                    assert_eq!(g.constraint_layer(), o.constraint_layer);
+                    assert_eq!(g.target_status(), o.target_status);
+                    assert_eq!(g.halo_composite_hex(), o.halo_composite_hex);
+                    assert_eq!(g.halo_achieved_dj(), o.halo_achieved_dj);
+                    assert_eq!(g.core_composite_hex(), o.core_composite_hex);
+                    assert_eq!(g.core_achieved_dj(), o.core_achieved_dj);
+                    assert_eq!(
+                        g.degraded(),
+                        o.target_status == labcolors_core::GlowTargetStatus::Unreachable
+                    );
+                    assert_eq!(g.achieved_dj().to_bits(), o.halo_achieved_dj.to_bits());
                 }
                 (Resolved::Material(m), RoleOutcome::Material(o)) => {
                     assert_eq!(m.tint_hex(), o.tone_hex, "{name}: material tone");
@@ -1032,5 +1052,30 @@ mod tests {
         // Состояние прежнее: контракт acme жив.
         let set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
         assert!(set.roles.iter().any(|r| r.role_key == "accent-fill"));
+    }
+
+    /// Публичная JSON-граница обязана применять полный namespace-preflight
+    /// ядра: иначе алиас мог затереть числовой `-alpha` цветовой строкой уже в
+    /// `vars`, хотя оба отдельных имени выглядели валидными.
+    #[test]
+    fn load_config_rejects_alias_colliding_with_glow_satellite() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&labui_json()).expect("паспорт labui — валидный JSON");
+        value["aliases"]
+            .as_array_mut()
+            .expect("aliases — массив")
+            .push(serde_json::json!({
+                "alias": "fx-glow-brand-alpha",
+                "target": "label-primary"
+            }));
+
+        let mut engine = Engine::new();
+        match engine.load_config(&value.to_string()) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(reason.contains("--lab-fx-glow-brand-alpha"), "{reason}");
+                assert!(reason.contains("emitted CSS variables"), "{reason}");
+            }
+            other => panic!("коллизия производного имени обязана быть отвергнута: {other:?}"),
+        }
     }
 }

@@ -137,13 +137,21 @@ interface ResolvedTheme {
   roles: Record<string, RoleResult>;      // все роли с деталями
 }
 
-type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
+type RoleResult =
+  | SolvedColor
+  | TranslucentRole
+  | GlowRole
+  | MaterialRole
+  | NoneRole
+  | UnreachableRole;
 ```
 
-Каждая роль — одно из четырёх состояний:
+Каждая роль — одно из шести состояний:
 
 - `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
-- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — солид-композит на фоне резолва и его контраст (браузер композитит тинт на живой подложке).
+- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — exact encoded-sRGB8 reference-композит на фоне резолва и его контраст. Конкретный renderer и color-management pipeline проверяются отдельно.
+- `GlowRole` — два цвета для `mix-blend-mode: screen`: `cssVar` несёт halo, `${cssVar}-core` — core, `${cssVar}-alpha` — каноническую `alphaCss`. Цель относится только к изолированному halo; `targetStatus`, оба `*CompositeHex` и оба `*AchievedDj` не выдают point-расчёт за полный blur/overlap-эффект. `referenceProfile` фиксирует конечный расчётный домен, а не гарантирует любой браузер или дисплей.
+- `MaterialRole` — тон двухслойного материала и выведенная alpha: primary — солид-канон, `-01` — тинт, `-02` — опаковая база; поля результата явно сообщают гарантию и её границы.
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
 
@@ -159,7 +167,7 @@ type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 ### `engine.loadConfig(json): string`
 
-Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight: невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight проверяет не только имена ролей, но и итоговый CSS-namespace: `-core`/`-alpha` Glow и `-01`/`-02` Material не могут быть затёрты другой ролью или алиасом. Невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
 
 ---
 

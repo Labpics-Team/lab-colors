@@ -15,6 +15,8 @@ export type {
   ThemeName,
   SolvedColor,
   TranslucentRole,
+  GlowRole,
+  MaterialRole,
   NoneRole,
   UnreachableRole,
   RoleResult,

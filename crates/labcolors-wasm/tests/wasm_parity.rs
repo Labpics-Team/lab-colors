@@ -78,6 +78,18 @@ fn get_obj(obj: &JsValue, key: &str) -> JsValue {
     js_sys::Reflect::get(obj, &JsValue::from_str(key)).expect("property present")
 }
 
+fn get_num(obj: &JsValue, key: &str) -> f64 {
+    get_obj(obj, key)
+        .as_f64()
+        .unwrap_or_else(|| panic!("{key} must be a number"))
+}
+
+fn get_bool(obj: &JsValue, key: &str) -> bool {
+    get_obj(obj, key)
+        .as_bool()
+        .unwrap_or_else(|| panic!("{key} must be a boolean"))
+}
+
 /// Read the `message` of a rejected `JsError`. A `JsError` crosses as a JS
 /// `Error` object, so the human text (carrying our stable code) is its
 /// `.message` property, not the value's own string form.
@@ -160,6 +172,53 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                     get_str(&entry, "coreHex").as_deref(),
                     Some(g.core_hex()),
                     "{name} glow core must match native"
+                );
+                assert_eq!(
+                    get_str(&entry, "haloHex").as_deref(),
+                    Some(g.halo_hex()),
+                    "{name} glow halo must match native"
+                );
+                assert_eq!(get_num(&entry, "alpha").to_bits(), g.alpha().to_bits());
+                assert_eq!(get_str(&entry, "alphaCss").as_deref(), Some(g.alpha_css()));
+                assert_eq!(
+                    get_str(&entry, "referenceProfile").as_deref(),
+                    Some(g.reference_profile())
+                );
+                assert_eq!(
+                    get_str(&entry, "constraintLayer").as_deref(),
+                    Some(g.constraint_layer().key())
+                );
+                assert_eq!(
+                    get_num(&entry, "targetDj").to_bits(),
+                    g.target_dj().to_bits()
+                );
+                assert_eq!(
+                    get_str(&entry, "targetStatus").as_deref(),
+                    Some(g.target_status().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "haloCompositeHex").as_deref(),
+                    Some(g.halo_composite_hex())
+                );
+                assert_eq!(
+                    get_num(&entry, "haloAchievedDj").to_bits(),
+                    g.halo_achieved_dj().to_bits()
+                );
+                assert_eq!(
+                    get_str(&entry, "coreCompositeHex").as_deref(),
+                    Some(g.core_composite_hex())
+                );
+                assert_eq!(
+                    get_num(&entry, "coreAchievedDj").to_bits(),
+                    g.core_achieved_dj().to_bits()
+                );
+                assert_eq!(
+                    get_num(&entry, "achievedDj").to_bits(),
+                    g.halo_achieved_dj().to_bits()
+                );
+                assert_eq!(
+                    get_bool(&entry, "degraded"),
+                    g.target_status() == labcolors_core::GlowTargetStatus::Unreachable
                 );
             }
             // `Resolved` is `#[non_exhaustive]`: a future core variant must be
