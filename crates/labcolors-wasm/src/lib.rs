@@ -24,12 +24,8 @@ mod error;
 mod projection;
 mod theme;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use wasm_bindgen::prelude::*;
 
-use crate::dto::ResolvedTheme;
 use crate::engine::Engine;
 use crate::error::BindingError;
 
@@ -48,7 +44,7 @@ export interface SolvedColor {
   readonly cssVar: string;
   /** The resolved colour as #RRGGBB (data; `css`/`vars` carry oklch). */
   readonly hex: string;
-  /** Ready-to-serve CSS value: "oklch(L% C H)". `vars` carries the same string. */
+  /** Готовое CSS-значение. При powerless chroma вместо выдуманного H стоит `none`; `vars` несёт ту же строку. */
   readonly css: string;
   /** Signed perceptual contrast (Lc) against the background. */
   readonly lc: number;
@@ -94,7 +90,7 @@ export interface UnreachableRole {
   readonly message: string;
 }
 
-/** A semi-transparent ladder / alpha-analog emission: the CSS carries oklch(L% C H / A), the browser composites it. */
+/** Полупрозрачная эмиссия: CSS несёт oklch(L% C (H или none) / A), а браузер композитит её. */
 export interface TranslucentRole {
   readonly kind: "translucent";
   readonly cssVar: string;
@@ -125,7 +121,7 @@ export interface TranslucentRole {
    * direct ladder emission and for legal family solids.
    */
   readonly floorCoerced: boolean;
-  /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
+  /** Готовое CSS-значение; powerless hue сериализуется как `none`. `vars` несёт ту же строку. */
   readonly css: string;
 }
 
@@ -145,7 +141,7 @@ export interface GlowRole {
   readonly achievedDj: number;
   /** Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2). */
   readonly degraded: boolean;
-  /** Ready-to-serve CSS value халo: "oklch(L% C H)". */
+  /** Готовое CSS-значение halo; у ахромата H отсутствует и записывается как `none`. */
   readonly css: string;
 }
 
@@ -177,7 +173,7 @@ export interface MaterialRole {
   readonly hueVanished: boolean;
   /** Солид-канон отличим от фона резолва на 8-битной сетке. */
   readonly distinct: boolean;
-  /** Ready-to-serve CSS value солид-канона: "oklch(L% C H)". */
+  /** Готовое CSS-значение солид-канона; powerless hue записывается как `none`. */
   readonly css: string;
 }
 
@@ -233,14 +229,11 @@ export interface ThemeConfig {
   };
   readonly palette: ReadonlyArray<{ key: string; anchors: ThemeAnchors }>;
   readonly sentiments: {
+    readonly geometry?: "anchor-distance-v2";
     readonly categories: ReadonlyArray<{
       name: string;
       family: string;
-      hue_floor_deg?: number;
-      preferred_side?: -1 | 1;
     }>;
-    readonly hardness: number;
-    readonly chroma_fraction: number;
   };
   readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
   /** Словарь ролей дизайн-системы. Конфиг обязан нести собственные роли; пустой
@@ -249,20 +242,16 @@ export interface ThemeConfig {
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }
 
-/** The full result of resolving one background under one theme. */
+/** Полный результат резолва одного фона в одной теме. */
 export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
   /**
-   * Reachable roles only. Values are ready-to-serve CSS in ONE form:
-   * "oklch(L% C H)" for solid roles, "oklch(L% C H / A)" for semi-transparent
-   * ladder/alpha-analog roles. Solved in the sRGB gamut (oklch is the
-   * notation, not a gamut extension); byte-exact vs `SolvedColor.hex` and
-   * `TranslucentRole.tintHex` (`compositeHex` is the background-specific
-   * composite, not the emitted token).
-   * Scope: this is resolveTheme's contract (applyTheme/watchTheme inject it
-   * verbatim); adaptTheme's per-frame easing writes concrete interpolated
-   * colours and is not bound by the emission form.
+   * Только достижимые роли. Значение — готовый CSS Oklch; у powerless chroma
+   * компонент H записан как `none`, у полупрозрачной роли добавлена `/ A`.
+   * Цвет решён в sRGB: Oklch здесь форма записи, а не расширение gamut.
+   * Строка байт-точна относительно `SolvedColor.hex` или tintHex; compositeHex
+   * описывает уже композит на фоне и не является эмитированным токеном.
    */
   readonly vars: Record<string, string>;
   /** Every role, keyed by its stable role key (without the --lab- prefix). */
@@ -276,20 +265,11 @@ extern "C" {
     pub type JsResolvedTheme;
 }
 
-/// A contrast engine over a consumer-supplied design system. Construct with
-/// [`LabColors::new`], load a config with [`loadConfig`](LabColors::load_config),
-/// then call [`resolve_theme`](LabColors::resolve_theme) many times; identical
-/// calls are served from the contract cache.
+/// Движок контраста над дизайн-системой потребителя. После загрузки конфига
+/// одинаковые вызовы получают готовый снимок из тематического слота кэша.
 #[wasm_bindgen]
 pub struct LabColors {
     inner: Engine,
-    /// Одноячеечный мемо сериализации последнего резолва: кэш-хит движка
-    /// возвращает тот же `Rc`, значит его JSON можно не пересобирать —
-    /// hit-путь `resolveTheme` платит только `JSON.parse`. Ячейка держит
-    /// сильный `Rc`, поэтому `Rc::ptr_eq` не может ложно совпасть с новой
-    /// аллокацией (наша жива — адрес занят); смена конфига даёт новые `Rc`,
-    /// и мемо промахивается честно.
-    proj_memo: RefCell<Option<(Rc<ResolvedTheme>, Rc<str>)>>,
 }
 
 #[wasm_bindgen]
@@ -303,7 +283,6 @@ impl LabColors {
     pub fn new() -> LabColors {
         LabColors {
             inner: Engine::new(),
-            proj_memo: RefCell::new(None),
         }
     }
 
@@ -323,27 +302,13 @@ impl LabColors {
             .inner
             .resolve_theme(bg_hex, theme)
             .map_err(to_js_error)?;
-        // Одна «широкая» FFI-строка + нативный JSON.parse вместо ~тысячи
-        // Reflect::set (почему — в док-комменте модуля `projection`); мемо
-        // снимает с кэш-хита ещё и пересборку строки. Каждый вызов по-прежнему
-        // отдаёт СВЕЖИЙ объект — семантика для мутирующего потребителя не
-        // меняется.
-        let json: Rc<str> = {
-            let mut memo = self.proj_memo.borrow_mut();
-            match memo.as_ref() {
-                Some((rc, s)) if Rc::ptr_eq(rc, &resolved) => Rc::clone(s),
-                _ => {
-                    let s: Rc<str> = crate::projection::resolved_json(&resolved)
-                        .map_err(to_js_error)?
-                        .into();
-                    *memo = Some((Rc::clone(&resolved), Rc::clone(&s)));
-                    s
-                }
-            }
-        };
+        // DTO и строка имеют один кэш-ключ и живут в одном снимке. Поэтому
+        // чередование тем не превращает попадание решателя в промах проекции.
+        // `JSON.parse` всё равно создаёт свежий объект: мутация результата в JS
+        // не меняет ни кэш, ни следующий ответ.
         // По построению строка — валидный JSON; невозможный отказ парсера —
         // честная внутренняя ошибка, не паника.
-        let parsed = js_sys::JSON::parse(&json).map_err(|_| {
+        let parsed = js_sys::JSON::parse(resolved.json()).map_err(|_| {
             to_js_error(BindingError::Internal {
                 reason: "проекция не распарсилась как JSON".to_string(),
             })
@@ -356,7 +321,7 @@ impl LabColors {
     /// Полный preflight движка: невалидный конфиг отклоняется структурной
     /// ошибкой `invalid_config: …` и НЕ меняет состояние. После успешной
     /// загрузки `resolveTheme` эмитит роли конфига (включая полупрозрачные
-    /// роли лестницы — эмиссия `oklch(L% C H / α)`). Возвращает отпечаток
+    /// роли лестницы — эмиссия `oklch(L% C (H|none) / α)`). Возвращает отпечаток
     /// конфига — 16 hex-символов;
     /// разные конфиги дают разные отпечатки (и разные кэш-пространства).
     #[wasm_bindgen(js_name = loadConfig)]
@@ -388,7 +353,10 @@ impl LabColors {
             .map_err(to_js_error)
     }
 
-    /// Calculate the muddiness score (0 to 1) of an sRGB hex colour.
+    /// Вычисляет замороженную историческую характеристику Закона Грязи V1.
+    ///
+    /// Исходное имя сохраняет совместимость API, но результат не является
+    /// вероятностью для популяции и не подменяет контекстную модель V2.
     #[wasm_bindgen(js_name = muddiness)]
     pub fn muddiness(&self, hex: &str) -> Result<f64, JsError> {
         labcolors_core::cleanliness::muddiness_from_hex(hex)
@@ -445,12 +413,12 @@ mod tests {
     fn test_wasm_muddiness() {
         let colors = LabColors::new();
 
-        // Olive is highly muddy
+        // Исторический порядок V1 закреплён ради совместимости, а не как научный oracle.
         let olive_mud = colors.muddiness("#6B6B2E").unwrap();
         assert!(olive_mud > 0.80);
         assert!((olive_mud - 0.8699).abs() < 1e-3);
 
-        // Gray is clean
+        // Серый вектор также проверяет именно воспроизводимость V1.
         let gray_mud = colors.muddiness("#808080").unwrap();
         assert!(gray_mud < 0.05);
 

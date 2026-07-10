@@ -1,21 +1,18 @@
-//! Criterion bench of the solve cache-MISS path,
-//! `labcolors_core::resolve_named_set` on the real labui role table.
-//! Permanent counterpart of labcolors-core's `forward` bench: guards the
-//! realtime resolve budget (`apply_floor` bisection is the dominant term).
+//! Criterion-измерение стоимости самого `labcolors_core::resolve_named_set` на
+//! реальной таблице ролей labui.
 //!
-//! The table is compiled through the SAME path `load_config` uses: the frozen
-//! `labui.config.json` passport → `ConfigDto` → `ThemeConfig` → compile. So the
-//! bench measures the honest live sweep a `resolveTheme` cache-MISS runs, over
-//! the real 100-role labui contract — not a synthetic table.
+//! Таблица компилируется тем же путём, что использует `load_config`: паспорт
+//! `labui.config.json` → `ConfigDto` → `ThemeConfig` → compile. Здесь намеренно
+//! нет утверждений о попадании контрактного кэша: этот benchmark вызывает ядро
+//! напрямую и измеряет работу, лежащую под кэшем. Настоящие hit/miss всей
+//! WASM-границы измеряет `packages/colors/bench/wasm-boundary.bench.mjs`.
 //!
-//! Two scenarios:
-//! * `fixed_bg` — one background, re-resolved. After iteration 1 the process
-//!   curve-plan cache is warm; this is steady-state cost.
-//! * `rotating_bg` — a rotating set of realistic design-system backgrounds
-//!   (glass/blur/gradient averages), each a genuine curve-plan cache-MISS. This
-//!   is the realtime "background varies constantly" cost the task targets.
+//! Два сценария не маскируют повторения:
+//! * `fixed_bg` — один фон принудительно решается заново на каждой итерации;
+//! * `rotating_bg` — циклическая нагрузка из нескольких реальных фонов. После
+//!   первого круга значения повторяются, поэтому это workload, а не «промах».
 //!
-//! Run: `cargo +1.96.0 bench -p labcolors-wasm --bench resolve`.
+//! Запуск: `cargo bench -p labcolors-wasm --bench resolve`.
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use labcolors_core::{BgInput, NamedRoleTable, ViewingConditions, resolve_named_set};
@@ -28,10 +25,8 @@ fn labui_table() -> NamedRoleTable {
     cfg.compile_named_role_table().expect("labui compiles")
 }
 
-/// Realistic design-system backgrounds a reactive surface varies across: solid
-/// greys, tinted glass averages, gradient midpoints, image-sample means. Each is
-/// a distinct curve-plan cache key, so rotating through them is a cache-MISS on
-/// every iteration — the realtime scenario.
+/// Реальные типы подложек: нейтрали, средние glass/gradient и выборки изображения.
+/// Массив конечен и цикличен; это свойство явно учитывается в интерпретации цифр.
 const ROTATING_BGS: [&str; 12] = [
     "#FFFFFF", "#F7F8FA", "#EEF1F5", "#DCE3EC", "#B8C2D0", "#8A94A6", "#5C6472", "#3A3F4B",
     "#22262E", "#14171C", "#0B0D10", "#101012",
@@ -44,7 +39,7 @@ fn bench_resolve(c: &mut Criterion) {
         ("dim", ViewingConditions::dim_surround()),
     ];
 
-    // Scenario A: fixed background, steady-state (WARM curve-plan cache).
+    // Фиксированный вход отделяет стоимость повторного solve от вариативности фона.
     let mut fixed = c.benchmark_group("resolve_named_set/fixed_bg");
     for (label, vc) in &vcs {
         for bg_hex in ["#FFFFFF", "#787880", "#101012"] {
@@ -60,7 +55,7 @@ fn bench_resolve(c: &mut Criterion) {
     }
     fixed.finish();
 
-    // Scenario B: rotating backgrounds, cache-MISS on every resolve (realtime).
+    // Циклический workload показывает цену смены входа, но не называется промахом.
     let mut rot = c.benchmark_group("resolve_named_set/rotating_bg");
     let bgs: Vec<BgInput> = ROTATING_BGS
         .iter()

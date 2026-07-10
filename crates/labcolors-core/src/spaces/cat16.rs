@@ -15,19 +15,43 @@ const XYZ_TO_CONE: [[f64; 3]; 3] = [
     [-0.002079,  0.048952,  0.953127],
 ];
 
-/// Inverse CAT16: cone responses → CIE XYZ.
+/// Обращает опубликованную невырожденную матрицу CAT16 при компиляции.
 ///
-/// The *printed* inverse from Li et al. 2017 (8-decimal published values), not a
-/// runtime re-inversion of `XYZ_TO_CONE`. The residual of the printed pair,
-/// `max|CONE_TO_XYZ · XYZ_TO_CONE − I|`, is ≈5.4e-9 — far below the 8-bit output
-/// quantum (1/255 ≈ 3.9e-3), so it is absorbed by 8-bit quantisation and the
-/// sRGB round-trip test (`srgb` roundtrip) passes exactly.
-#[rustfmt::skip]
-const CONE_TO_XYZ: [[f64; 3]; 3] = [
-    [ 1.86206786, -1.01125463,  0.14918677],
-    [ 0.38752654,  0.62144744, -0.00897398],
-    [-0.01584150, -0.03412294,  1.04996444],
-];
+/// Отдельно напечатанный восьмизначный inverse оставлял остаток около 5.4e-9.
+/// На грани гамута CAM16 round-trip усиливал его до ложного выхода канала за
+/// `[0,1]`. Математическое определение обратного преобразования — именно inverse
+/// forward-матрицы, поэтому второй независимо округлённый набор не нужен.
+const fn inverse_3x3(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let a = m[0][0];
+    let b = m[0][1];
+    let c = m[0][2];
+    let d = m[1][0];
+    let e = m[1][1];
+    let f = m[1][2];
+    let g = m[2][0];
+    let h = m[2][1];
+    let i = m[2][2];
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    [
+        [
+            (e * i - f * h) / determinant,
+            (c * h - b * i) / determinant,
+            (b * f - c * e) / determinant,
+        ],
+        [
+            (f * g - d * i) / determinant,
+            (a * i - c * g) / determinant,
+            (c * d - a * f) / determinant,
+        ],
+        [
+            (d * h - e * g) / determinant,
+            (b * g - a * h) / determinant,
+            (a * e - b * d) / determinant,
+        ],
+    ]
+}
+
+const CONE_TO_XYZ: [[f64; 3]; 3] = inverse_3x3(XYZ_TO_CONE);
 
 fn mat_vec_mul(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
     [
@@ -45,4 +69,29 @@ pub(crate) fn xyz_to_cone(xyz: [f64; 3]) -> [f64; 3] {
 /// LMS cone responses → CIE XYZ.
 pub(crate) fn cone_to_xyz(lms: [f64; 3]) -> [f64; 3] {
     mat_vec_mul(CONE_TO_XYZ, lms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_inverse_closes_cat16_to_f64_precision() {
+        let mut maximum: f64 = 0.0;
+        for (row_index, inverse_row) in CONE_TO_XYZ.iter().enumerate() {
+            for (column_index, _) in XYZ_TO_CONE[0].iter().enumerate() {
+                let product = inverse_row
+                    .iter()
+                    .zip(XYZ_TO_CONE.iter())
+                    .map(|(left, forward_row)| left * forward_row[column_index])
+                    .sum::<f64>();
+                let expected = if row_index == column_index { 1.0 } else { 0.0 };
+                maximum = maximum.max((product - expected).abs());
+            }
+        }
+        assert!(
+            maximum <= 4.0 * f64::EPSILON,
+            "остаток CAT16 inverse равен {maximum:e}"
+        );
+    }
 }

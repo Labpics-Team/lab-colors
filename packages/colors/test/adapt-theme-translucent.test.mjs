@@ -68,7 +68,7 @@ function fakeColors(initial) {
   };
 }
 
-const LIGHT = makeResult("#1A1A1A", "oklch(20.000% 0 0)", "oklch(96.000% 0.01 260 / 0.6)");
+const LIGHT = makeResult("#1A1A1A", "oklch(20.000% 0 none)", "oklch(96.000% 0.01 260 / 0.6)");
 
 function harness(opts = {}) {
   const colors = fakeColors(LIGHT);
@@ -95,16 +95,16 @@ test("initial apply keeps the translucent role's var present (canonical form)", 
   const h = harness();
   assert.equal(h.el.props.get("--lab-panel"), "oklch(96.000% 0.01 260 / 0.6)");
   // The color role is written in its canonical (vars) form, not a raw hex.
-  assert.equal(h.el.props.get("--lab-label"), "oklch(20.000% 0 0)");
+  assert.equal(h.el.props.get("--lab-label"), "oklch(20.000% 0 none)");
 });
 
 test("setTheme updates the translucent role's var to the new theme", () => {
   const h = harness();
-  const DARK = makeResult("#E5E5E5", "oklch(90.000% 0 0)", "oklch(30.000% 0.02 260 / 0.6)");
+  const DARK = makeResult("#E5E5E5", "oklch(90.000% 0 none)", "oklch(30.000% 0.02 260 / 0.6)");
   h.colors.setResolve(DARK);
   h.ctrl.setTheme("dark");
   assert.equal(h.el.props.get("--lab-panel"), "oklch(30.000% 0.02 260 / 0.6)");
-  assert.equal(h.el.props.get("--lab-label"), "oklch(90.000% 0 0)");
+  assert.equal(h.el.props.get("--lab-label"), "oklch(90.000% 0 none)");
 });
 
 test("an in-flight ease frame does not erase the translucent var", () => {
@@ -113,7 +113,7 @@ test("an in-flight ease frame does not erase the translucent var", () => {
   h.colors.setRecheckLc([10]);
   h.setBg("#202020");
   h.ctrl.tick(); // breachSince = 1000
-  h.colors.setResolve(makeResult("#F0F0F0", "oklch(94.000% 0 0)", "oklch(94.000% 0.01 260 / 0.6)"));
+  h.colors.setResolve(makeResult("#F0F0F0", "oklch(94.000% 0 none)", "oklch(94.000% 0.01 260 / 0.6)"));
   h.setNow(1300); // past sustain (120) + dwell (250 vs lastSolveAt 1000)
   h.setBg("#202021");
   h.ctrl.tick(); // re-solve + begin ease (#1A1A1A → #F0F0F0)
@@ -134,7 +134,7 @@ test("when the ease completes, color vars revert to canonical oklch (not stuck i
   h.colors.setRecheckLc([10]);
   h.setBg("#202020");
   h.ctrl.tick(); // arm
-  h.colors.setResolve(makeResult("#F0F0F0", "oklch(94.000% 0 0)", "oklch(94.000% 0.01 260 / 0.6)"));
+  h.colors.setResolve(makeResult("#F0F0F0", "oklch(94.000% 0 none)", "oklch(94.000% 0.01 260 / 0.6)"));
   h.setNow(1300);
   h.setBg("#202021");
   h.ctrl.tick(); // re-solve + begin ease
@@ -145,7 +145,7 @@ test("when the ease completes, color vars revert to canonical oklch (not stuck i
   h.ctrl.tick();
   assert.equal(
     h.el.props.get("--lab-label"),
-    "oklch(94.000% 0 0)",
+    "oklch(94.000% 0 none)",
     "settled color role returns to canonical oklch form",
   );
   assert.equal(h.el.props.get("--lab-panel"), "oklch(94.000% 0.01 260 / 0.6)");
@@ -155,7 +155,7 @@ test("current() reports the full applied picture, including translucent roles", 
   const h = harness();
   const snap = h.ctrl.current();
   assert.equal(snap["--lab-panel"], "oklch(96.000% 0.01 260 / 0.6)");
-  assert.equal(snap["--lab-label"], "oklch(20.000% 0 0)");
+  assert.equal(snap["--lab-label"], "oklch(20.000% 0 none)");
 });
 
 // baseVars is a REPLACE of the last solve's vars, never a merge. These lock the
@@ -165,7 +165,7 @@ test("current() reports the full applied picture, including translucent roles", 
 // the role set constant, so it is pinned explicitly here.
 const THREE = {
   vars: {
-    "--lab-label": "oklch(20.000% 0 0)",
+    "--lab-label": "oklch(20.000% 0 none)",
     "--lab-panel": "oklch(96.000% 0.01 260 / 0.6)",
     "--lab-extra": "oklch(50.000% 0.1 120 / 0.4)",
   },
@@ -176,14 +176,14 @@ const THREE = {
   },
 };
 const TWO = {
-  vars: { "--lab-label": "oklch(90.000% 0 0)", "--lab-panel": "oklch(30.000% 0.02 260 / 0.6)" },
+  vars: { "--lab-label": "oklch(90.000% 0 none)", "--lab-panel": "oklch(30.000% 0.02 260 / 0.6)" },
   roles: {
     label: { kind: "color", cssVar: "--lab-label", hex: "#E5E5E5", lc: 100, legalFloor: null },
     panel: { kind: "translucent", cssVar: "--lab-panel" },
   },
 };
 const ONE = {
-  vars: { "--lab-label": "oklch(20.000% 0 0)" },
+  vars: { "--lab-label": "oklch(20.000% 0 none)" },
   roles: { label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null } },
 };
 
@@ -198,7 +198,7 @@ test("a later solve that DROPS a role removes its var from target and current()"
   assert.ok(!("--lab-extra" in ctrl.current()), "and be absent from current()");
   // The surviving roles are updated (not stale).
   assert.equal(el.props.get("--lab-panel"), "oklch(30.000% 0.02 260 / 0.6)");
-  assert.equal(el.props.get("--lab-label"), "oklch(90.000% 0 0)");
+  assert.equal(el.props.get("--lab-label"), "oklch(90.000% 0 none)");
 });
 
 test("a later solve that ADDS a role writes its new var", () => {
@@ -222,10 +222,10 @@ test("a later solve that ADDS a role writes its new var", () => {
 // two colours in each representation, so a correct parse makes the two runs
 // bit-identical. Two solid fixtures, live-emitted: #1A1A1A / #000000.
 const BG_HEX = ["#1A1A1A", "#000000"];
-const BG_OKLCH = ["oklch(21.77865% 0.000000 89.876)", "oklch(0.00000% 0.000000 0.000)"];
+const BG_OKLCH = ["oklch(21.77865% 0.000000 none)", "oklch(0.00000% 0.000000 none)"];
 
 function strictEasePaints(seq) {
-  const colors = fakeColors(makeResult("#000000", "oklch(0.000% 0 0)", "oklch(96.000% 0.01 260 / 0.6)", 4.5));
+  const colors = fakeColors(makeResult("#000000", "oklch(0.000% 0 none)", "oklch(96.000% 0.01 260 / 0.6)", 4.5));
   const el = fakeElement();
   let now = 2000;
   let i = 0; // constructor reads seq[0]; each tick advances first
@@ -242,7 +242,7 @@ function strictEasePaints(seq) {
     dwellMs: 250,
   });
   colors.setRecheckLc([10]); // black fails on the dark bg → will breach
-  colors.setResolve(makeResult("#FFFFFF", "oklch(100.000% 0 0)", "oklch(30.000% 0.02 260 / 0.6)", 4.5));
+  colors.setResolve(makeResult("#FFFFFF", "oklch(100.000% 0 none)", "oklch(30.000% 0.02 260 / 0.6)", 4.5));
   const tickAt = (t) => {
     i++;
     now = t;

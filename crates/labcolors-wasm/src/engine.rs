@@ -1,17 +1,15 @@
-//! The application core of the bindings: resolve a background under a theme,
-//! generically over whatever role set a loaded config provides.
+//! Прикладное ядро WASM-границы: резолвит фон для набора ролей из загруженного
+//! конфига и не знает о `wasm-bindgen`.
 //!
-//! This layer knows the core and the DTOs; it does NOT know wasm-bindgen. It
-//! holds the compiled config table (supplied by `load_config`) and the contract
-//! cache, runs the core resolve, and maps the resolved vector into
-//! [`ResolvedTheme`]. The engine is agnostic (ADR-0001 PR-c): it carries no
-//! built-in design system, so `resolve_theme` needs a config first. The mapping
-//! never enumerates roles — it walks whatever the core returns and keys each
-//! entry by the config's own role name — so role growth flows through on a
-//! rebuild.
+//! Движок хранит последний полный снимок каждой публичной темы. В снимок входят
+//! и типизированный [`ResolvedTheme`], и его готовая JSON-проекция: один ключ
+//! означает одно попадание на обоих дорогих уровнях, поэтому чередование тем не
+//! заставляет заново сериализовать уже решённый контракт. Роли не перечислены в
+//! коде границы — результат строится из таблицы потребителя.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::rc::Rc;
 
 use labcolors_core::config::ThemeConfig;
@@ -24,22 +22,39 @@ use crate::dto::{ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
 use crate::error::BindingError;
 use crate::theme::Theme;
 
-/// How many distinct `(bg, theme, table)` resolves the cache holds before a
-/// wholesale clear. A few thousand entries at well under 1 MB — generous for a
-/// design tool sweeping backgrounds, bounded so memory cannot run away.
-const CACHE_CAPACITY: usize = 4096;
-
-/// A caching contrast engine over a consumer-supplied design system.
+/// Полный неизменяемый снимок одного тематического слота.
 ///
-/// Construct once (`init`), load a config (`load_config`), then call
-/// [`resolve_theme`](Self::resolve_theme) many times. The engine is agnostic —
-/// it has no built-in role table — so a resolve before `load_config` returns
-/// [`BindingError::ConfigRequired`], never a panic or a silent default. The
-/// result is cached behind an `Rc` so a cache hit is a cheap reference-count
-/// bump, not a re-clone of the whole set.
+/// JSON лежит рядом с DTO, потому что они имеют один ключ и один срок жизни.
+/// Раздельные кэши дали бы ложное попадание решателя с повторной сериализацией.
+pub(crate) struct ResolvedSnapshot {
+    resolved: ResolvedTheme,
+    json: Box<str>,
+}
+
+impl ResolvedSnapshot {
+    /// Готовая проекция; каждый вызов границы парсит её в свежий JS-объект,
+    /// поэтому мутации потребителя не протекают в следующий результат.
+    pub(crate) fn json(&self) -> &str {
+        &self.json
+    }
+}
+
+impl Deref for ResolvedSnapshot {
+    type Target = ResolvedTheme;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resolved
+    }
+}
+
+/// Кэширующий движок над дизайн-системой, полностью заданной потребителем.
+///
+/// До `load_config` встроенного контракта нет: попытка резолва возвращает
+/// [`BindingError::ConfigRequired`]. Попадание возвращает дешёвый клон `Rc`,
+/// не копируя роли и строку проекции.
 pub struct Engine {
     named: Option<NamedState>,
-    cache: ContractCache<Rc<ResolvedTheme>>,
+    cache: ContractCache<Rc<ResolvedSnapshot>>,
 }
 
 /// Загруженный конфиг потребителя: скомпилированная таблица + её отпечаток
@@ -59,13 +74,11 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// A fresh engine with no config loaded yet. [`resolve_theme`](Self::resolve_theme)
-    /// returns [`BindingError::ConfigRequired`] until [`load_config`](Self::load_config)
-    /// supplies a design system.
+    /// Создать движок без неявной дизайн-системы.
     pub fn new() -> Self {
         Self {
             named: None,
-            cache: ContractCache::new(CACHE_CAPACITY),
+            cache: ContractCache::new(),
         }
     }
 
@@ -113,19 +126,18 @@ impl Engine {
         Ok(fp)
     }
 
-    /// Resolve every role for `bg_hex` under `theme`, returning the shared
-    /// result. Repeated identical calls hit the contract cache.
-    ///
-    /// Errors (bad hex, unknown theme) are returned, never
-    /// panicked. Per-role unreachability is part of a *successful* result.
+    /// Резолвить все роли для фона и темы и вернуть общий неизменяемый снимок.
+    /// Повтор точного ключа использует и готовые роли, и готовую сериализацию.
+    /// Ошибка всего вызова возвращается явно; недостижимость отдельной роли
+    /// остаётся частью успешного результата.
     pub fn resolve_theme(
         &self,
         bg_hex: &str,
         theme: Theme,
-    ) -> Result<Rc<ResolvedTheme>, BindingError> {
+    ) -> Result<Rc<ResolvedSnapshot>, BindingError> {
         let vc = theme.viewing_conditions();
-        // Validate and normalise the background once, before the cache lookup,
-        // so an invalid hex fails fast and the cache key is canonical.
+        // Ключ должен описывать цвет, а не его написание: нормализация до
+        // поиска одновременно сохраняет быстрый отказ для невалидного ввода.
         let normalised = normalise_hex(bg_hex)?;
         let bg = BgInput::solid(&normalised).map_err(|u| BindingError::InvalidBackground {
             reason: u.to_string(),
@@ -135,7 +147,7 @@ impl Engine {
         // физикой; отпечаток в ключе разводит кэш-пространства конфигов.
         if let Some(named) = &self.named {
             let key = CacheKey::new(normalised.clone(), theme, named.fingerprint);
-            let result = self.cache.get_or_insert_with(key, || {
+            let result = self.cache.get_or_try_insert_with(key, || {
                 let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc);
                 let mut roles: Vec<RoleEntry> = set
                     .into_iter()
@@ -159,17 +171,20 @@ impl Engine {
                         });
                     }
                 }
-                Rc::new(ResolvedTheme {
+                let resolved = ResolvedTheme {
                     theme: theme.key(),
                     background: normalised.clone(),
                     roles,
-                })
-            });
+                };
+                // Проекция вычисляется до публикации записи. Если нарушен её
+                // числовой инвариант, старый корректный слот не вытесняется.
+                let json = crate::projection::resolved_json(&resolved)?.into_boxed_str();
+                Ok(Rc::new(ResolvedSnapshot { resolved, json }))
+            })?;
             return Ok(result);
         }
 
-        // Agnostic engine: no config, nothing to emit. An honest, matchable
-        // failure — the boundary refuses rather than inventing a built-in system.
+        // Агностичный движок не изобретает таблицу ролей при отсутствии конфига.
         Err(BindingError::ConfigRequired)
     }
 
@@ -263,8 +278,9 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> RoleOutcome {
             message: reason.to_string(),
         },
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
-        // наружу уходит oklch(L% C H / α), браузер композитит; контраст —
-        // свойство композита на фоне резолва (закон лестницы ядра).
+        // Наружу уходит Oklch со слэш-альфой; у ахромата H равен `none`, чтобы
+        // граница не превращала отсутствующий угол в выдуманное число. Контраст
+        // остаётся свойством композита на фоне резолва.
         Resolved::Translucent(rgba) => RoleOutcome::Translucent(RgbaColor {
             tint_hex: rgba.tint_hex().to_string(),
             alpha: rgba.alpha(),
@@ -402,6 +418,14 @@ mod tests {
         engine
             .load_config(&labui_json())
             .expect("labui passport loads");
+        engine
+    }
+
+    /// Кэш-инварианты не должны зависеть от размера или конкретных ролей labui,
+    /// поэтому их изолированные проверки используют минимальный второй клиент.
+    fn engine_with_acme() -> Engine {
+        let mut engine = Engine::new();
+        engine.load_config(&acme_json()).expect("acme валиден");
         engine
     }
 
@@ -616,6 +640,68 @@ mod tests {
     }
 
     #[test]
+    fn чередование_тем_попадает_в_единые_снимки_dto_и_json() {
+        let engine = engine_with_acme();
+        let light = engine.resolve_theme("#F7F8FA", Theme::Light).unwrap();
+        let dark = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+        let light_json = light.json().as_ptr();
+        let dark_json = dark.json().as_ptr();
+
+        for _ in 0..8 {
+            let light_again = engine.resolve_theme("#F7F8FA", Theme::Light).unwrap();
+            let dark_again = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+            assert!(Rc::ptr_eq(&light, &light_again));
+            assert!(Rc::ptr_eq(&dark, &dark_again));
+            assert_eq!(light_again.json().as_ptr(), light_json);
+            assert_eq!(dark_again.json().as_ptr(), dark_json);
+        }
+        assert_eq!(
+            engine.cache.len(),
+            2,
+            "чередование не должно создавать новые записи или проекции"
+        );
+    }
+
+    #[test]
+    fn новый_фон_заменяет_только_последний_снимок_своей_темы() {
+        let engine = engine_with_acme();
+        let first = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let dark = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+        engine.resolve_theme("#F7F8FA", Theme::Light).unwrap();
+        let first_again = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let dark_again = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+
+        assert!(
+            !Rc::ptr_eq(&first, &first_again),
+            "возврат к вытесненному фону обязан быть честным промахом"
+        );
+        assert!(
+            Rc::ptr_eq(&dark, &dark_again),
+            "промах светлой темы не должен охлаждать тёмный слот"
+        );
+        assert_eq!(engine.cache.len(), 2);
+    }
+
+    #[test]
+    fn повторная_загрузка_того_же_отпечатка_всё_равно_меняет_пространство_снимков() {
+        let mut engine = Engine::new();
+        let json = acme_json();
+        let first_fp = engine.load_config(&json).unwrap();
+        let first = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let second_fp = engine.load_config(&json).unwrap();
+        let second = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+
+        assert_eq!(
+            first_fp, second_fp,
+            "одинаковый конфиг имеет тот же паспорт"
+        );
+        assert!(
+            !Rc::ptr_eq(&first, &second),
+            "корректность смены контракта должна обеспечиваться очисткой, а не уникальностью fingerprint"
+        );
+    }
+
+    #[test]
     fn cache_key_is_hex_normalised() {
         let engine = engine_with_labui();
         let canonical = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
@@ -766,7 +852,7 @@ mod tests {
             "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
           },
           "palette": [],
-          "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+          "sentiments": {"geometry": "anchor-distance-v2", "categories": []},
           "themes": [{"name": "light", "preset": "srgb"}, {"name": "dark", "preset": "dim"}],
           "roles": [
             {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},

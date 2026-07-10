@@ -31,8 +31,7 @@
 //! поэтому провенанс держится этой doc-строкой + тестом лестницы, а не строкой
 //! реестра (как якорные hex палитры, `accent.rs`).
 
-use crate::spaces::oklab::srgb_linear_to_oklab;
-use crate::spaces::srgb::{srgb_encoded_from_hex, srgb_gamma_inv};
+use crate::spaces::srgb::srgb_encoded_from_hex;
 use crate::spaces::vc::ViewingConditions;
 
 /// Пер-темная четвёрка якорных hex (`light` / `dark` / `light-ic` / `dark-ic`).
@@ -133,21 +132,6 @@ impl LadderTint {
     /// [`ThemeAnchors::for_vc`]).
     pub fn for_vc(&self, vc: &ViewingConditions) -> [f64; 3] {
         self.quad[vc_slot(vc)]
-    }
-
-    /// Oklab-хрома светлого якоря тинта — вход в пересчёт `S_PERC_MIN`
-    /// (среднее по четырём сентимент-якорям конфига, [`crate::sentiment`]).
-    pub fn light_oklab_chroma(&self) -> f64 {
-        // Кодированный тинт → линейный свет (per-channel gamma-декод, тот же, что
-        // в srgb_from_hex), затем Oklab-хрома = |(a, b)|.
-        let e = self.quad[0];
-        let lin = [
-            srgb_gamma_inv(e[0]),
-            srgb_gamma_inv(e[1]),
-            srgb_gamma_inv(e[2]),
-        ];
-        let lab = srgb_linear_to_oklab(lin);
-        (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
     }
 }
 

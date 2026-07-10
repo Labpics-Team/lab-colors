@@ -115,33 +115,6 @@ const TARGET_MP_MIN_EXCLUSIVE: f64 = 0.0;
 /// нефизично.
 const HUE_STIFFNESS_MIN_INCLUSIVE: f64 = 0.0;
 
-/// Нижняя граница валидации поля `sentiments.hardness` (`≥ 1`).
-///
-/// ⚠️ VESTIGIAL после Волны 1: поле `hardness` задавало p-норму brand-displacement
-/// (Sticky Potential Well, #55), но закон категориальных зон снёс этот механизм —
-/// поле больше НЕ влияет на выход (см. док `SentimentsConfig.hardness`). Граница
-/// `≥ 1` сохранена как контракт схемы конфига: значение всё ещё валидируется
-/// (мусор отвергается), но законом оттенка не потребляется. Историческая
-/// семантика: `p < 1` выводило p-норму из корректной области.
-const HARDNESS_MIN_INCLUSIVE: f64 = 1.0;
-
-/// Доля хромы сентимент-цвета (`sentiments.chroma_fraction`) обязана лежать в
-/// `(0, 1]`.
-///
-/// `≤ 0` — обесцвеченный (не сентимент), `> 1` — за стеной гамута (неон/недостижимо).
-/// Дефолт реестра — `0.88` (держится `< 1`, чтобы сидеть внутри стены гамута, не
-/// читаясь как неон).
-///
-/// СЕМАНТИКА (применена 2026-07-03; тем самым закрыт слайс «инертной ручки»
-/// аудита): в продакшн-тинте (`resolve_config_sentiment_solid`) ручка —
-/// АНТИ-НЕОНОВЫЙ ПОТОЛОК: `c = min(c_якоря, f · C_max(L, h_решённый))`.
-/// Хрома якоря клиента — авторитет идентичности и сохраняется, пока не
-/// упирается в долю гамутного максимума; усечение идёт по оси хромы
-/// (оттенок сохранён — прежний канальный клип sRGB искажал оттенок).
-const CHROMA_FRACTION_MIN_EXCLUSIVE: f64 = 0.0;
-/// Верхний предел доли хромы сентимента (включительно).
-const CHROMA_FRACTION_MAX_INCLUSIVE: f64 = 1.0;
-
 /// Запрошенная альфа альфа-аналога (`roles.*.alpha`) обязана лежать в `(0, 1]`.
 ///
 /// `≤ 0` — невидимая роль (вырождение), `> 1` — не альфа. Резолвер поднимает
@@ -390,48 +363,24 @@ pub struct PaletteFamily {
     pub anchors: ThemeAnchors,
 }
 
-/// Политика одной семантической категории потребителя: маппинг на семейство
-/// палитры + категориальные ручки.
+/// Одна семантическая категория: имя и клиентское семейство-якорь.
+///
+/// В типе намеренно нет hue-пола и направления смещения. Имя категории не
+/// определяет универсальную цветовую область; физику несут только anchors
+/// выбранного семейства.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentimentCategory {
     /// Семантическое имя категории (`danger`, `warning`, …); `[a-z0-9-]+`.
     pub name: String,
     /// Ключ семейства палитры, на которое отображается категория.
     pub family: String,
-    /// Минимальный угол оттенка категории (градусы, `[0, 360)`), если задан.
-    pub hue_floor_deg: Option<f64>,
-    /// Предпочтительная сторона смещения оттенка (`+1` / `-1`), если задана.
-    ///
-    /// # МЁРТВАЯ РУЧКА после Волны 1 (закон категориальных зон)
-    ///
-    /// Прежде применялась в вырожденном шве `brand == prototype` p-норм-резолвера.
-    /// Волна 1 убрала brand-displacement ЦЕЛИКОМ, поэтому шва больше НЕ существует
-    /// и ручка ничего не смещает. Поле СОХРАНЕНО ради стабильности схемы конфига
-    /// (течёт в wasm-DTO, JSON-фикстуры, JS-golden) и по-прежнему ВАЛИДИРУЕТСЯ
-    /// (`preferred_side ∈ {-1, +1}`) как контракт границы — но законом оттенка
-    /// БОЛЬШЕ НЕ ПОТРЕБЛЯЕТСЯ (прецедент «задокументированной мёртвой ручки»
-    /// сохранён). Вайринг/удаление — отдельное решение оркестратора.
-    pub preferred_side: Option<i8>,
 }
 
-/// Конфиг сентиментов: категории + общие ручки различимости.
+/// Конфиг сентиментов V2: только категории и их клиентские anchors.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentimentsConfig {
     /// Категории потребителя.
     pub categories: Vec<SentimentCategory>,
-    /// Жёсткость p-нормы Sticky Potential Well (`≥ 1`).
-    ///
-    /// # МЁРТВАЯ РУЧКА после Волны 1 (закон категориальных зон)
-    ///
-    /// p-норма настраивала brand-displacement — смещение сентимента ОТ бренда.
-    /// Категориальный закон убрал brand-displacement ЦЕЛИКОМ (сентимент отдыхает на
-    /// фокусе своей категории), поэтому ручка БОЛЬШЕ НЕ ПОТРЕБЛЯЕТСЯ законом
-    /// оттенка. Поле СОХРАНЕНО ради стабильности схемы конфига (течёт в wasm-DTO,
-    /// JSON-фикстуры, JS-golden) и по-прежнему ВАЛИДИРУЕТСЯ (`≥ 1`) как контракт
-    /// границы — но эмитируемые байты больше не двигает.
-    pub hardness: f64,
-    /// Доля хромы сентимент-цвета от максимума гамута (`(0, 1]`).
-    pub chroma_fraction: f64,
 }
 
 /// Пресет условий просмотра из ЗАКРЫТОГО физического меню движка.
@@ -900,20 +849,9 @@ impl ThemeConfig {
             check_theme_anchors(&anchors_field, &fam.anchors)?;
         }
 
-        // Сентименты: ручки + категории (маппинг на существующее семейство).
-        check_ge(
-            "sentiments.hardness",
-            self.sentiments.hardness,
-            HARDNESS_MIN_INCLUSIVE,
-            "hardness ≥ 1 (vestigial-контракт схемы; прежде p-норма brand-displacement, снесена Волной 1)",
-        )?;
-        check_in_excl_incl(
-            "sentiments.chroma_fraction",
-            self.sentiments.chroma_fraction,
-            CHROMA_FRACTION_MIN_EXCLUSIVE,
-            CHROMA_FRACTION_MAX_INCLUSIVE,
-            "0 < chroma_fraction ≤ 1 (доля хромы сентимента; >1 = за стеной гамута)",
-        )?;
+        // Сентименты: имена и связи с существующими клиентскими семействами.
+        // Универсальных hue-зон и числовых ручек здесь нет: pairwise-контракт
+        // выводится из фактических anchors при компиляции каждого режима.
         for cat in &self.sentiments.categories {
             let name_field = format!("sentiments.{}.name", cat.name);
             check_name(&name_field, &cat.name)?;
@@ -922,27 +860,6 @@ impl ThemeConfig {
                     referenced_by: format!("sentiments.{}", cat.name),
                     family: cat.family.clone(),
                 });
-            }
-            if let Some(side) = cat.preferred_side
-                && side != 1
-                && side != -1
-            {
-                return Err(ConfigError::OutOfBounds {
-                    handle: format!("sentiments.{}.preferred_side", cat.name),
-                    value: f64::from(side),
-                    bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
-                });
-            }
-            if let Some(hue) = cat.hue_floor_deg {
-                let field = format!("sentiments.{}.hue_floor_deg", cat.name);
-                // Полуинтервал `[0, 360)`: угол по модулю 360°, где 360° ≡ 0°.
-                if !(HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue) {
-                    return Err(ConfigError::OutOfBounds {
-                        handle: field,
-                        value: hue,
-                        bound: "0 ≤ hue_floor_deg < 360 (угол оттенка по модулю 360°)",
-                    });
-                }
             }
         }
 
@@ -1386,11 +1303,12 @@ impl ThemeConfig {
             })
     }
 
-    /// Пер-темный сентимент-солид: для каждой темы взять якорь семейства категории
-    /// и разрешить его оттенок законом категориальных зон (покой на прототипе;
-    /// пол/зоны — исключения), сохранив светлоту/хрому якоря. Бренд оттенок больше
-    /// НЕ смещает (Волна 1). `s_perc_min` — пересчёт из хром якорей сентиментов
-    /// конфига (питает попарные зоны фазы-2, не зависит от labui-констант).
+    /// Пер-темный сентимент-солид из клиентского anchor семейства.
+    ///
+    /// Для каждого режима весь набор категорий проверяется одним симметричным
+    /// pairwise-контрактом. Имя сентимента, бренд и порядок массива не двигают
+    /// цвет; различимость задаётся отдельной исходной `a/b`-дистанцией каждой
+    /// пары клиентских anchors.
     fn compile_sentiment_tint(&self, role: &str, name: &str) -> Result<LadderTint, ConfigError> {
         // Существование категории проверяется до пофазного резолва, чтобы
         // неизвестное имя дало свою ошибку, а не «семья не найдена».
@@ -1413,175 +1331,52 @@ impl ThemeConfig {
         })
     }
 
-    /// Солид сентимента `name` в режиме `mode_idx` (0 light / 1 dark /
-    /// 2 light-ic / 3 dark-ic) под законом категориальных зон (Волна 1).
+    /// Солид сентимента `name` в одном режиме темы.
     ///
-    /// Оркестрация ДВУХФАЗНАЯ (сохранена), но БРЕНД-СВОБОДНАЯ — бренд оттенок
-    /// больше не смещает; двигать его может только пол и попарные зоны соседей:
-    ///
-    /// 1. каждая категория решается на СВОЁМ прототипе с полом (без бренда,
-    ///    `resolve_config_sentiment_solid_among` с пустыми зонами);
-    ///    ПОКОЯЩИЕСЯ (решённый оттенок = оттенок прототипа, ≤ 0.5°) объявляются
-    ///    неподвижными оккупантами — деривационная идентичность якорей клиента
-    ///    не нарушается по построению (для labui-якорей ВСЕ покоятся);
-    /// 2. СМЕЩЁННЫЕ (пол клампанул оттенок) перерешиваются по порядку конфига с
-    ///    зонами оккупантов: угловой отступ от каждой зоны — инверсия хорды
-    ///    `s_perc_min` при средней хроме пары (тот же закон различимости
-    ///    сентиментов между собой; СОХРАНЁН). Решённый смещённый сам становится
-    ///    оккупантом для следующих.
-    ///
-    /// Ахроматичные оккупанты (C < ε) зон не несут — у серого нет оттенка.
-    /// Ахроматичный ЯКОРЬ обрабатывается внутри солвера (сырой якорь).
+    /// Все категории передаются наборному V2-резолверу одновременно. Он
+    /// индексирует их по имени и финально перепроверяет каждую неупорядоченную
+    /// пару, поэтому перестановка массива конфига не может изменить результат.
+    /// Отдельный вызов для цели после жадного размещения соседей запрещён именно
+    /// здесь: он и создавал порядок-зависимые столкновения.
     fn sentiment_solid_for_mode(
         &self,
         role: &str,
         name: &str,
         mode_idx: usize,
     ) -> Result<[f64; 3], ConfigError> {
-        // s_perc_min нужен ТОЛЬКО для попарных зон фазы-2 (различимость
-        // сентиментов между собой) — brand-разведение убрано Волной 1.
-        let s_perc_min = self.sentiment_s_perc_min()?;
-        let pick = |a: &ThemeAnchors| -> String {
+        let pick = |anchors: &ThemeAnchors| -> String {
             match mode_idx {
-                0 => a.light.clone(),
-                1 => a.dark.clone(),
-                2 => a.light_ic.clone(),
-                _ => a.dark_ic.clone(),
+                0 => anchors.light.clone(),
+                1 => anchors.dark.clone(),
+                2 => anchors.light_ic.clone(),
+                _ => anchors.dark_ic.clone(),
             }
         };
-
-        let anchor_of = |cat: &SentimentCategory| -> Result<String, ConfigError> {
-            Ok(pick(self.family_anchors(role, &cat.family)?))
-        };
-
-        // Закон категориальных зон: оттенок семейства ОТДЫХАЕТ на своём прототипе,
-        // бренд его не смещает (ахроматичный якорь обрабатывается внутри солвера).
-        // Пол/зоны — единственные исключения.
-        let solve = |cat: &SentimentCategory,
-                     anchor_hex: &str,
-                     zones: &[crate::sentiment::NeighborZone]|
-         -> Result<String, ConfigError> {
-            crate::sentiment::resolve_config_sentiment_solid_among(
-                anchor_hex,
-                self.sentiments.chroma_fraction,
-                cat.hue_floor_deg,
-                zones,
-            )
-            .map_err(|reason| ConfigError::SentimentResolution {
+        let mut anchors = Vec::with_capacity(self.sentiments.categories.len());
+        for category in &self.sentiments.categories {
+            anchors.push((
+                category.name.clone(),
+                pick(self.family_anchors(role, &category.family)?),
+            ));
+        }
+        let resolved = crate::sentiment::resolve_anchor_palette_v2(&anchors).map_err(|reason| {
+            ConfigError::SentimentResolution {
                 role: role.to_string(),
-                sentiment: cat.name.clone(),
+                sentiment: name.to_string(),
                 reason,
-            })
-        };
-
-        // Фаза 1: резолв всех категорий на прототипе с полом; классификация покоя.
-        // (hue, chroma) занятых зон меряются на РЕШЁННОМ солиде — честный
-        // оккупант, не идеал.
-        let mut occupied: Vec<(f64, f64)> = Vec::new();
-        let mut displaced: Vec<(usize, String)> = Vec::new(); // (index, anchor)
-        let mut target_phase1: Option<String> = None;
-        for (i, cat) in self.sentiments.categories.iter().enumerate() {
-            let anchor_hex = anchor_of(cat)?;
-            let solid = solve(cat, &anchor_hex, &[])?;
-            let proto_hue = crate::accent::oklab_hue_of(&anchor_hex);
-            let solid_hue = crate::accent::oklab_hue_of(&solid);
-            let solid_chroma = oklab_chroma_of_hex(&solid);
-            let rested = crate::sentiment::angular_distance(solid_hue, proto_hue) <= 0.5
-                || solid_chroma < ACHROMATIC_CHROMA_EPS;
-            if rested {
-                if solid_chroma >= ACHROMATIC_CHROMA_EPS {
-                    occupied.push((solid_hue, solid_chroma));
-                }
-                if cat.name == name {
-                    target_phase1 = Some(solid);
-                }
-            } else {
-                displaced.push((i, anchor_hex));
             }
-        }
-        if let Some(solid) = target_phase1 {
-            // Покоящаяся цель неподвижна по построению — байт-в-байт фаза 1.
-            return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
-                ConfigError::InvalidHex {
-                    field: format!("roles.{role} (сентимент-солид)"),
-                    value: solid,
-                }
-            });
-        }
-
-        // Фаза 2: смещённые перерешиваются с зонами оккупантов, по порядку.
-        for (i, anchor_hex) in displaced {
-            let cat = &self.sentiments.categories[i];
-            let c_self = oklab_chroma_of_hex(&anchor_hex);
-            let mut zones = Vec::with_capacity(occupied.len());
-            for &(hue, c_other) in &occupied {
-                let pair_chroma = (c_self + c_other) / 2.0;
-                let min_sep = crate::sentiment::s_min_deg_from_chord(s_perc_min, pair_chroma)
-                    .map_err(|reason| ConfigError::SentimentResolution {
-                        role: role.to_string(),
-                        sentiment: cat.name.clone(),
-                        reason,
-                    })?;
-                // Сатурация (маркер 180° из s_min_deg_from_chord): пара так
-                // приглушена, что категориальная хорда недостижима при любом угле —
-                // перцептивно НЕРАЗДЕЛИМА. Отступ бессмыслен, зону пропускаем: иначе
-                // legalize искал бы точный антипод (мера нуль) и вернул ложный
-                // «пустая дуга». Дормантно для labui (все сентименты хромны).
-                if min_sep >= 180.0 {
-                    continue;
-                }
-                zones.push(crate::sentiment::NeighborZone {
-                    hue_deg: hue,
-                    min_sep_deg: min_sep,
-                });
-            }
-            let solid = solve(cat, &anchor_hex, &zones)?;
-            if cat.name == name {
-                return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
-                    ConfigError::InvalidHex {
-                        field: format!("roles.{role} (сентимент-солид)"),
-                        value: solid,
-                    }
-                });
-            }
-            let solid_hue = crate::accent::oklab_hue_of(&solid);
-            let solid_chroma = oklab_chroma_of_hex(&solid);
-            if solid_chroma >= ACHROMATIC_CHROMA_EPS {
-                occupied.push((solid_hue, solid_chroma));
-            }
-        }
-        unreachable!("категория `{name}` обязана быть покоящейся или смещённой")
-    }
-
-    /// `S_PERC_MIN`, пересчитанный из Oklab-хром светлых якорей 4 (или скольких
-    /// есть) сентимент-категорий конфига — закон `2·C_rep·sin(20°/2)`.
-    /// При labui-якорях == замороженная константа (тест-идентичность).
-    /// # Errors
-    ///
-    /// `Err`, если категория ссылается на несуществующее семейство или якорь
-    /// семейства — невалидный hex: порог разделения, посчитанный по НЕПОЛНОМУ
-    /// набору категорий, был бы тихой математической ложью.
-    pub fn sentiment_s_perc_min(&self) -> Result<f64, ConfigError> {
-        let mut chromas = Vec::with_capacity(self.sentiments.categories.len());
-        for c in &self.sentiments.categories {
-            let fam = self
-                .palette
-                .iter()
-                .find(|f| f.key == c.family)
-                .ok_or_else(|| ConfigError::UnknownFamily {
-                    referenced_by: format!("sentiments.{}", c.name),
-                    family: c.family.clone(),
-                })?;
-            let lin = crate::spaces::srgb::srgb_from_hex(&fam.anchors.light).map_err(|_| {
-                ConfigError::InvalidHex {
-                    field: format!("palette.{}.anchors.light", fam.key),
-                    value: fam.anchors.light.clone(),
-                }
+        })?;
+        let solid = resolved
+            .into_iter()
+            .find_map(|(category, hex)| (category == name).then_some(hex))
+            .ok_or_else(|| ConfigError::UnknownSentiment {
+                referenced_by: format!("roles.{role}"),
+                sentiment: name.to_string(),
             })?;
-            let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
-            chromas.push((lab[1] * lab[1] + lab[2] * lab[2]).sqrt());
-        }
-        Ok(crate::sentiment::s_perc_min_from_chromas(&chromas))
+        crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| ConfigError::InvalidHex {
+            field: format!("roles.{role} (сентимент-солид)"),
+            value: solid,
+        })
     }
 }
 

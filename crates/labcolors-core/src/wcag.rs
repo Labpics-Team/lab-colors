@@ -23,13 +23,13 @@ pub(crate) const AA_TEXT_RATIO: f64 = 4.5;
 /// (success criterion 1.4.11).
 pub(crate) const AA_UI_RATIO: f64 = 3.0;
 
-/// Linearise one gamma-encoded sRGB channel in `[0, 1]`, per WCAG 2.1 §1.4.3.
+/// Линеаризует gamma-кодированный канал sRGB `[0, 1]` по текущему тексту WCAG.
 ///
-/// The 0.03928 threshold is the value normatively fixed by WCAG; for 8-bit
-/// inputs it selects the same piecewise branch as the IEC sRGB transfer
-/// function, so quantised colours linearise identically either way.
+/// Порог `0.04045` одновременно задан действующим WCAG и стыком передаточной
+/// функции IEC sRGB. Erratum заменил им устаревший `0.03928`: на 8-битных входах
+/// ветвь совпадает случайно, а непрерывный API обязан следовать актуальной норме.
 fn linearise(channel: f64) -> f64 {
-    if channel <= 0.039_28 {
+    if channel <= 0.040_45 {
         channel / 12.92
     } else {
         ((channel + 0.055) / 1.055).powf(2.4)

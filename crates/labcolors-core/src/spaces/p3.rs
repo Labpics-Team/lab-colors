@@ -286,17 +286,20 @@ mod tests {
         }
     }
 
-    /// Политика альфы — единая с oklch-эмиссией (общий дом css_alpha_suffix):
-    /// NaN/грубый выход — ошибка, шум у краёв — кламп.
+    /// Политика альфы едина с oklch-эмиссией: любое значение вне `[0, 1]`
+    /// отвергается, потому что доказанной полосы допустимой ошибки нет.
     #[test]
     fn alpha_guard_shared_with_oklch() {
         assert!(p3_css_from_hex("#101012", Some(f64::NAN)).is_err());
         assert!(p3_css_from_hex("#101012", Some(-10.0)).is_err());
         assert!(p3_css_from_hex("#101012", Some(2.0)).is_err());
-        let noisy = p3_css_from_hex("#101012", Some(-1e-7)).unwrap();
-        assert!(noisy.ends_with(" / 0)"), "шум у нуля клампится: {noisy}");
-        let over = p3_css_from_hex("#101012", Some(1.0 + 1e-9)).unwrap();
-        assert!(over.ends_with(" / 1)"), "шум у единицы клампится: {over}");
+        assert!(p3_css_from_hex("#101012", Some(-1e-7)).is_err());
+        assert!(p3_css_from_hex("#101012", Some(1.0 + 1e-9)).is_err());
+        let negative_zero = p3_css_from_hex("#101012", Some(-0.0)).unwrap();
+        assert!(
+            negative_zero.ends_with(" / 0)"),
+            "знаковый ноль канонизируется: {negative_zero}"
+        );
     }
 
     /// Форма строки — контракт потребителя: `color(display-p3 R G B [/ A])`,

@@ -353,7 +353,7 @@ fn config_boundary_two_configs_diverge() {
         "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
       },
       "palette": [],
-      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
+      "sentiments": {"geometry": "anchor-distance-v2", "categories": []},
       "themes": [{"name": "light", "preset": "srgb"}],
       "roles": [
         {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},

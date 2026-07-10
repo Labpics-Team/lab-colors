@@ -67,14 +67,14 @@ function easeOut(t) {
   return 1 - u * u * u;
 }
 
-/** WCAG 2.1 relative luminance of `#RRGGBB` — a faithful transcription of the
- * normative definition (0.03928 split, 2.4 exponent), so the strict floor-clamp
- * agrees byte-for-byte with the core's `legalFloor` semantics. */
+/** Относительная яркость WCAG для `#RRGGBB`. Формула продублирована на JS-границе,
+ * поэтому действующий порог 0.04045 закреплён здесь явно: floor-clamp обязан
+ * побайтно совпадать с `legalFloor` ядра. */
 function relativeLuminanceHex(hex) {
   const rgb = parseCssColor(hex) ?? [0, 0, 0, 1];
   const lin = (c) => {
     const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
   };
   return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
 }

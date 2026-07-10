@@ -66,6 +66,110 @@ impl Default for ViewingConditions {
 }
 
 impl ViewingConditions {
+    /// Проверяет, что публично изменяемое состояние описывает согласованный
+    /// набор условий просмотра, а не смесь первичных и устаревших производных.
+    ///
+    /// CAM16 многократно делит на эти величины и возводит их в дробные степени,
+    /// поэтому конечность сама по себе недостаточна: физические масштабы должны
+    /// быть положительны, `n` обязан оставаться долей фонового белого, а
+    /// предвычисленные поля — побитово совпадать со своими исходными выражениями.
+    /// Точное сравнение здесь намеренно: все производные строятся теми же
+    /// операциями в [`Self::build`], поэтому допуск лишь разрешил бы внутренне
+    /// противоречивым условиям давать зависящий от пути результат.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("n", self.n),
+            ("aw", self.aw),
+            ("nbb", self.nbb),
+            ("ncb", self.ncb),
+            ("fl", self.fl),
+            ("z", self.z),
+            ("c", self.c),
+            ("nc", self.nc),
+            ("fl_pow_025", self.fl_pow_025),
+            ("t_inner", self.t_inner),
+        ] {
+            if !value.is_finite() {
+                return Err(format!("ViewingConditions.{name} должен быть конечным"));
+            }
+        }
+        for (channel, value) in self.rgb_d.into_iter().enumerate() {
+            if !value.is_finite() {
+                return Err(format!(
+                    "ViewingConditions.rgb_d[{channel}] должен быть конечным"
+                ));
+            }
+            if value <= 0.0 {
+                return Err(format!(
+                    "ViewingConditions.rgb_d[{channel}] должен быть положительным"
+                ));
+            }
+        }
+
+        if !(0.0 < self.n && self.n <= 1.0) {
+            return Err("ViewingConditions.n должен принадлежать интервалу (0, 1]".into());
+        }
+        for (name, value) in [
+            ("aw", self.aw),
+            ("nbb", self.nbb),
+            ("ncb", self.ncb),
+            ("fl", self.fl),
+            ("z", self.z),
+            ("fl_pow_025", self.fl_pow_025),
+            ("t_inner", self.t_inner),
+        ] {
+            if value <= 0.0 {
+                return Err(format!(
+                    "ViewingConditions.{name} должен быть положительным"
+                ));
+            }
+        }
+        for (name, value) in [("c", self.c), ("nc", self.nc)] {
+            if !(0.0 < value && value <= 1.0) {
+                return Err(format!(
+                    "ViewingConditions.{name} должен принадлежать интервалу (0, 1]"
+                ));
+            }
+        }
+
+        let expected_nbb = 0.725_f64 * self.n.powf(-0.2);
+        if self.nbb.to_bits() != expected_nbb.to_bits() {
+            return Err("ViewingConditions.nbb не согласован с n".into());
+        }
+        if self.ncb.to_bits() != self.nbb.to_bits() {
+            return Err("ViewingConditions.ncb должен побитово совпадать с nbb".into());
+        }
+        let expected_z = 1.48_f64 + self.n.sqrt();
+        if self.z.to_bits() != expected_z.to_bits() {
+            return Err("ViewingConditions.z не согласован с n".into());
+        }
+        let expected_fl_pow_025 = self.fl.powf(0.25);
+        if self.fl_pow_025.to_bits() != expected_fl_pow_025.to_bits() {
+            return Err("ViewingConditions.fl_pow_025 не согласован с fl".into());
+        }
+        let expected_t_inner = (1.64 - 0.29_f64.powf(self.n)).powf(0.73);
+        if self.t_inner.to_bits() != expected_t_inner.to_bits() {
+            return Err("ViewingConditions.t_inner не согласован с n".into());
+        }
+
+        let rgb_w = xyz_to_cone([
+            D65_WHITE[0] * 100.0,
+            D65_WHITE[1] * 100.0,
+            D65_WHITE[2] * 100.0,
+        ]);
+        let rgb_aw = [
+            adapt(rgb_w[0] * self.rgb_d[0], self.fl),
+            adapt(rgb_w[1] * self.rgb_d[1], self.fl),
+            adapt(rgb_w[2] * self.rgb_d[2], self.fl),
+        ];
+        let expected_aw = (2.0 * rgb_aw[0] + rgb_aw[1] + rgb_aw[2] / 20.0) * self.nbb;
+        if self.aw.to_bits() != expected_aw.to_bits() {
+            return Err("ViewingConditions.aw не согласован с fl, nbb и rgb_d".into());
+        }
+
+        Ok(())
+    }
+
     /// Standard sRGB viewing conditions (average surround).
     ///
     /// Parameters: D65 illuminant, L_A = 64 cd/m², Y_b = 20 %,
