@@ -1,0 +1,104 @@
+name: reconcile-auto-first-research
+
+on:
+  push:
+    branches:
+      - docs/auto-first-research-ssot
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: docs/auto-first-research-ssot
+      - name: reconcile research SSOT
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_prefixed_line(path: str, prefix: str, replacement: str) -> None:
+              file = Path(path)
+              lines = file.read_text(encoding="utf-8").splitlines()
+              matches = [i for i, line in enumerate(lines) if line.lstrip().startswith(prefix)]
+              if len(matches) != 1:
+                  raise SystemExit(f"{path}: expected one line with {prefix!r}, got {len(matches)}")
+              i = matches[0]
+              indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+              lines[i] = indent + replacement
+              file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          inventory = "docs/empirical-inventory.md"
+          replace_prefixed_line(
+              inventory,
+              "| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT`",
+              "| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | `1.75` | `neutral.rs` | SSOT-TRACKED | **OPEN ROOT MODEL — scalar gamma rejected.** `1.75` remains only as the frozen legacy-output baseline. Equal-step fits in Oklab, encoded sRGB and surround-CAM16 J′ miss the shipped magnitude; the direct Whittle/crispening fit is also refuted because it becomes affine above `L_b` and singular toward the dark anchor. It is neither an admitted universal law nor an active Whittle hypothesis. Owner #219/#261 must derive a context-conditioned progression or remove gamma parameterisation. Sensitivity: [1.3,2.2] changes emitted output materially (max ΔE_ok≈0.0466). |",
+          )
+          replace_prefixed_line(
+              inventory,
+              "| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK`",
+              "| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | `1.5` | `neutral.rs` | SSOT-TRACKED | **OPEN ROOT MODEL — scalar gamma rejected.** `1.5` remains only as the frozen legacy-output baseline. Equal-step Oklab/sRGB/CAM16-J′ fits and the direct Whittle/crispening fit all fail by a large margin; the latter runs away from the near-black singularity instead of explaining the progression. Owner #219/#261 must derive a context-conditioned progression or remove gamma parameterisation. Sensitivity: [1.2,1.9] changes emitted output materially (max ΔE_ok≈0.0325). |",
+          )
+
+          residue = "docs/empirical-residue.md"
+          replace_prefixed_line(
+              residue,
+              "| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT`",
+              "| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | **OPEN** | frozen legacy baseline; four scalar explanations, including direct Whittle/crispening, are refuted by magnitude/degeneracy; context-conditioned progression or removal of gamma is owned by #219/#261 | `curve_params_sensitivity_is_bounded`, gamma derivation regressions |",
+          )
+          replace_prefixed_line(
+              residue,
+              "| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK`",
+              "| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | **OPEN** | frozen legacy baseline; four scalar explanations, including direct Whittle/crispening, are refuted, with especially strong failure near the dark anchor; context-conditioned progression or removal of gamma is owned by #219/#261 | `curve_params_sensitivity_is_bounded`, gamma derivation regressions |",
+          )
+          residue_path = Path(residue)
+          residue_text = residue_path.read_text(encoding="utf-8")
+          old = "Незакрытых мишеней нет; строк «нужен эксперимент» — ноль."
+          new = (
+              "Внутри прежней классификации констант нет безымянных строк, но это не "
+              "означает, что корневая модель neutral progression найдена: gamma-строки "
+              "остаются frozen legacy baselines и открыты в #219/#261."
+          )
+          if residue_text.count(old) != 1:
+              raise SystemExit("empirical-residue: stale unresolved-target sentence not found exactly once")
+          residue_path.write_text(residue_text.replace(old, new), encoding="utf-8")
+
+          neutral = Path("crates/labcolors-core/src/neutral.rs")
+          neutral_text = neutral.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"/// Форм-параметры нейтральной кривой:.*?(?=#\[derive\(Debug, Clone, Copy, PartialEq\)\])",
+              re.S,
+          )
+          block = """/// Legacy-параметры формы нейтральной кривой.\n///\n/// Значения сохраняют текущую эмиссию до замены construction policy, но не являются\n/// универсальной психофизикой или пользовательскими осями намерения. Равномерные\n/// Oklab/sRGB/CAM16-J′ шаги и прямое Whittle/crispening-прочтение уже опровергнуты\n/// по магнитуде; тёмная ветвь дополнительно вырождается у near-black. Корневая\n/// задача #219/#261 должна вывести контекстную progression либо удалить gamma-\n/// параметризацию. Новые production-механизмы не должны зависеть от этих чисел.\n"""
+          neutral_text, count = pattern.subn(block, neutral_text, count=1)
+          if count != 1:
+              raise SystemExit(f"neutral.rs: expected one CurveParams doc block, got {count}")
+          neutral.write_text(neutral_text, encoding="utf-8")
+
+          replace_prefixed_line(
+              str(neutral),
+              "// SSOT-TRACKED — гамма светлой ветви",
+              "// SSOT-TRACKED — frozen legacy gamma; root progression model open in #219/#261.",
+          )
+          replace_prefixed_line(
+              str(neutral),
+              "// SSOT-TRACKED — гамма тёмной ветви",
+              "// SSOT-TRACKED — frozen legacy gamma; root progression model open in #219/#261.",
+          )
+          replace_prefixed_line(
+              str(neutral),
+              "// SSOT-TRACKED — положение пика хромы",
+              "// SSOT-TRACKED — frozen legacy scalar; context hue-function research belongs to #219/#261.",
+          )
+          PY
+
+          git rm .github/workflows/reconcile-auto-first.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/empirical-inventory.md docs/empirical-residue.md crates/labcolors-core/src/neutral.rs
+          git commit -m "docs(science): reconcile neutral progression research status (#219)"
+          git push origin HEAD:docs/auto-first-research-ssot
