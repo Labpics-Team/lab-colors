@@ -25,8 +25,7 @@ pub const COLOR_QUALITY_AUDIT_MODEL_V1: &str = "lab-screen-color-quality-audit-v
 ///
 /// Формула сохранена для фальсификации и сравнения с будущими данными. Идентификатор
 /// не содержит слова `dirt`: модель не является человеческой шкалой чистоты.
-pub const WARM_DARK_INTERACTION_MODEL_V2: &str =
-    "lab-warm-dark-interaction-cam16ucs-v2";
+pub const WARM_DARK_INTERACTION_MODEL_V2: &str = "lab-warm-dark-interaction-cam16ucs-v2";
 
 /// Версия относительного сравнения хроматичности с семейным якорем.
 pub const MUTEDNESS_MODEL_V2: &str = "lab-relative-mutedness-cam16ucs-v2";
@@ -461,8 +460,7 @@ fn warm_dark_report_from_rgb(
             WarmDarkInteractionStatusV2::InteractionZero(
                 WarmDarkZeroReasonV2::AchromaticForeground,
             ),
-            (background.radius > 0.0)
-                .then_some((foreground.radius / background.radius).min(1.0)),
+            (background.radius > 0.0).then_some((foreground.radius / background.radius).min(1.0)),
             Some(0.0),
         )
     } else if yellow_direction_cosine == 0.0 {
@@ -470,21 +468,14 @@ fn warm_dark_report_from_rgb(
             WarmDarkInteractionStatusV2::InteractionZero(
                 WarmDarkZeroReasonV2::NonPositiveWarmComponent,
             ),
-            (background.radius > 0.0)
-                .then_some((foreground.radius / background.radius).min(1.0)),
+            (background.radius > 0.0).then_some((foreground.radius / background.radius).min(1.0)),
             Some(0.0),
         )
     } else if background.radius == 0.0 {
-        (
-            WarmDarkInteractionStatusV2::InsufficientContext,
-            None,
-            None,
-        )
+        (WarmDarkInteractionStatusV2::InsufficientContext, None, None)
     } else if foreground.radius >= background.radius {
         (
-            WarmDarkInteractionStatusV2::InteractionZero(
-                WarmDarkZeroReasonV2::NoRelativeDarkening,
-            ),
+            WarmDarkInteractionStatusV2::InteractionZero(WarmDarkZeroReasonV2::NoRelativeDarkening),
             Some(1.0),
             Some(0.0),
         )
@@ -577,8 +568,7 @@ pub fn audit_color_quality_v1(
             ))
         })
         .transpose()?;
-    let warm_dark_interaction =
-        warm_dark_report_from_rgb(foreground_rgb, background_rgb, context);
+    let warm_dark_interaction = warm_dark_report_from_rgb(foreground_rgb, background_rgb, context);
 
     Ok(ColorQualityAuditV1 {
         model: COLOR_QUALITY_AUDIT_MODEL_V1,
@@ -707,10 +697,8 @@ mod tests {
 
     #[test]
     fn all_encoded_grays_have_no_warm_dark_interaction() {
-        let context = AppearanceContextV1::nominal(
-            AppearanceMode::SurfaceLike,
-            ViewingConditions::srgb(),
-        );
+        let context =
+            AppearanceContextV1::nominal(AppearanceMode::SurfaceLike, ViewingConditions::srgb());
         for byte in 0_u8..=u8::MAX {
             let hex = format!("#{byte:02X}{byte:02X}{byte:02X}");
             let report = analyze_warm_dark_interaction_v2(&hex, "#FFFFFF", &context).unwrap();
@@ -754,18 +742,10 @@ mod tests {
 
     #[test]
     fn audit_keeps_reference_relative_and_optional() {
-        let context = AppearanceContextV1::nominal(
-            AppearanceMode::EmissiveUi,
-            ViewingConditions::srgb(),
-        );
+        let context =
+            AppearanceContextV1::nominal(AppearanceMode::EmissiveUi, ViewingConditions::srgb());
         let without = audit_color_quality_v1("#6B6B2E", "#FFFFFF", None, &context).unwrap();
-        let with = audit_color_quality_v1(
-            "#6B6B2E",
-            "#FFFFFF",
-            Some("#FFD60A"),
-            &context,
-        )
-        .unwrap();
+        let with = audit_color_quality_v1("#6B6B2E", "#FFFFFF", Some("#FFD60A"), &context).unwrap();
         assert!(without.relative_mutedness.is_none());
         assert!(with.relative_mutedness.is_some());
     }

@@ -74,17 +74,16 @@ pub use accent_surface::{
 };
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
-    DefectContext, Theme, drab, drab_in_context, muddiness_from_hex,
-    muddiness_from_linear_srgb, muddiness_in_context, muddiness_oklch, n_pure,
+    DefectContext, Theme, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
+    muddiness_in_context, muddiness_oklch, n_pure,
 };
 pub use color_quality::{
-    AppearanceContextV1, AppearanceMode, AppearanceProfileV1, ColorQualityAuditV1,
-    ContextualSrgbGamutAnalysisV1, DisplayConditionsV1, ModelProvenance,
-    MutednessComparisonV2, MutednessRelationV2, SpatialContextV1, SrgbGamutGeometryV1,
-    WarmDarkInteractionReportV2, WarmDarkInteractionStatusV2, WarmDarkZeroReasonV2,
-    COLOR_QUALITY_AUDIT_MODEL_V1, MUTEDNESS_MODEL_V2, WARM_DARK_INTERACTION_MODEL_V2,
-    analyze_srgb_gamut_hex_in_context_v1, analyze_srgb_gamut_hex_v1,
-    analyze_srgb_gamut_linear_v1, analyze_srgb_gamut_oklch_v1,
+    AppearanceContextV1, AppearanceMode, AppearanceProfileV1, COLOR_QUALITY_AUDIT_MODEL_V1,
+    ColorQualityAuditV1, ContextualSrgbGamutAnalysisV1, DisplayConditionsV1, MUTEDNESS_MODEL_V2,
+    ModelProvenance, MutednessComparisonV2, MutednessRelationV2, SpatialContextV1,
+    SrgbGamutGeometryV1, WARM_DARK_INTERACTION_MODEL_V2, WarmDarkInteractionReportV2,
+    WarmDarkInteractionStatusV2, WarmDarkZeroReasonV2, analyze_srgb_gamut_hex_in_context_v1,
+    analyze_srgb_gamut_hex_v1, analyze_srgb_gamut_linear_v1, analyze_srgb_gamut_oklch_v1,
     analyze_warm_dark_interaction_v2, audit_color_quality_v1, compare_mutedness_v2,
 };
 pub use config::{
