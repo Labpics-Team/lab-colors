@@ -1,0 +1,40 @@
+name: fmt-probe
+
+on:
+  pull_request:
+    paths:
+      - "crates/labcolors-core/src/neutral.rs"
+      - "crates/labcolors-core/tests/neutral_quantization_exactness.rs"
+      - ".github/workflows/fmt-probe.yml"
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  diff:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: isolated toolchain environment
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - name: produce exact rustfmt patch
+        run: |
+          cargo fmt --all
+          git diff --binary > rustfmt.patch
+      - name: upload patch
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rustfmt-patch
+          path: rustfmt.patch
+          retention-days: 1
