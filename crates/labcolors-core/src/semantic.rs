@@ -6324,8 +6324,10 @@ mod derivator_locks {
         use crate::spaces::oklab::srgb_linear_to_oklab;
         use crate::spaces::srgb::srgb_from_hex;
 
-        let almost_yellow = srgb_linear_to_oklab(srgb_from_hex("#FFFF01").unwrap())[0];
-        let yellow = srgb_linear_to_oklab(srgb_from_hex("#FFFF00").unwrap())[0];
+        let almost_yellow_rgb = srgb_from_hex("#FFFF01").unwrap();
+        let yellow_rgb = srgb_from_hex("#FFFF00").unwrap();
+        let almost_yellow = srgb_linear_to_oklab(almost_yellow_rgb)[0];
+        let yellow = srgb_linear_to_oklab(yellow_rgb)[0];
         let delta = (almost_yellow - yellow).abs();
 
         assert!(
@@ -6333,7 +6335,7 @@ mod derivator_locks {
             "контрпример обязан лежать ниже legacy-порога: {delta}"
         );
         assert_ne!(
-            "#FFFF01", "#FFFF00",
+            almost_yellow_rgb, yellow_rgb,
             "разные байты нельзя объявлять одним состоянием"
         );
     }
