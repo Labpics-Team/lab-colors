@@ -1691,7 +1691,8 @@ fn translucent_resolve_rejects_out_of_domain_spec() {
             )],
             vec![],
             RoleChroma::Neutral,
-        );
+        )
+        .expect("нейтральная policy валидна");
         let set = resolve_named_set(
             &BgInput::solid("#FFFFFF").unwrap(),
             &table,
@@ -1843,7 +1844,8 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
             )],
             vec![],
             RoleChroma::Neutral,
-        );
+        )
+        .expect("нейтральная policy валидна");
         let set = crate::semantic::resolve_named_set(&bg, &table, &ViewingConditions::srgb());
         let (_, r) = set.iter().find(|(n, _)| n == "probe").expect("роль есть");
         assert!(

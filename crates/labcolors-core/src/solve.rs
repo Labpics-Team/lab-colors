@@ -2219,6 +2219,48 @@ mod tests {
     }
 
     #[test]
+    fn solve_many_validates_each_chroma_ratio_without_shifting_positions() {
+        let vc = ViewingConditions::srgb();
+        let jobs = [
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(0.0),
+            },
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(-f64::EPSILON),
+            },
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(1.0 + f64::EPSILON),
+            },
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(1.0),
+            },
+        ];
+
+        let results = solve_many(BgInput::solid("#FFFFFF").unwrap(), &jobs, &vc, Gamut::Srgb)
+            .expect("валидный общий фон не должен ронять весь batch");
+
+        assert_eq!(results.len(), jobs.len());
+        assert!(results[0].is_ok(), "первая валидная job потеряна");
+        assert!(
+            matches!(&results[1], Err(Unreachable::InvalidInput(_))),
+            "отрицательный ratio обязан остаться ошибкой в своей позиции"
+        );
+        assert!(
+            matches!(&results[2], Err(Unreachable::InvalidInput(_))),
+            "ratio выше единицы обязан остаться ошибкой в своей позиции"
+        );
+        assert!(results[3].is_ok(), "последняя валидная job потеряна");
+    }
+
+    #[test]
     fn exceeds_range_reports_the_true_forward_curve_maximum() {
         // Normal polarity on white: the most the background can supply is the
         // canonical black-on-white value, not the un-clamped analytic bound.

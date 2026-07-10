@@ -2928,9 +2928,28 @@ impl NamedRoleTable {
     /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
     /// constructor does not validate names — the config validator
     /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
-    /// Численный домен `chroma` повторно проверяется на границе
-    /// [`resolve_named_set`], потому что таблицу можно собрать без конфига.
+    /// Численный домен `chroma` проверяется здесь, потому что таблицу можно
+    /// собрать без конфига. Поэтому невалидная глобальная policy не существует
+    /// даже у пустой таблицы, где per-role ошибка была бы некуда записать.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable::InvalidInput`], если параметры `chroma` не конечны или
+    /// выходят из физического домена своей политики.
     pub fn new(
+        entries: Vec<(String, RoleSpec)>,
+        aliases: Vec<(String, String)>,
+        chroma: RoleChroma,
+    ) -> Result<Self, Unreachable> {
+        chroma.validate()?;
+        Ok(Self::from_validated_parts(entries, aliases, chroma))
+    }
+
+    /// Собирает таблицу из частей, уже проверенных [`ThemeConfig::validate`].
+    /// Отдельный crate-private путь не заставляет конфиг переводить одну и ту же
+    /// ошибку между двумя error-типами, но не позволяет внешнему коду представить
+    /// невалидную глобальную policy.
+    pub(crate) fn from_validated_parts(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
@@ -3887,7 +3906,7 @@ mod tests {
     }
 
     #[test]
-    fn target_mp_below_legacy_floor_remains_a_distinct_client_request() {
+    fn target_mp_is_not_artificially_raised_to_the_perceptibility_floor() {
         let vc = ViewingConditions::srgb();
         let l = 0.62;
         let h = NEUTRAL_HUE_DEG;
@@ -3896,7 +3915,7 @@ mod tests {
 
         assert!(
             low < higher,
-            "target_mp=0.5 и target_mp=1.5 не должны молча превращаться в одну policy: {low} vs {higher}"
+            "представимые target_mp=0.5 и target_mp=1.5 не должны молча превращаться в одну policy: {low} vs {higher}"
         );
     }
 
@@ -3904,17 +3923,16 @@ mod tests {
     fn named_table_rejects_invalid_chroma_policies_without_partial_output() {
         let bg = BgInput::solid("#FFFFFF").expect("контрольный фон валиден");
         let vc = ViewingConditions::srgb();
-        let resolve = |chroma| {
-            let table = NamedRoleTable::new(
-                vec![("none".to_owned(), RoleSpec::Zero)],
-                Vec::new(),
-                chroma,
-            );
+        let entries = || {
+            vec![
+                ("first".to_owned(), RoleSpec::Zero),
+                ("second".to_owned(), RoleSpec::Zero),
+            ]
+        };
+        let resolve_valid = |chroma| {
+            let table = NamedRoleTable::new(entries(), Vec::new(), chroma)
+                .expect("контрольная policy валидна");
             resolve_named_set(&bg, &table, &vc)
-                .into_iter()
-                .next()
-                .expect("контрольная таблица содержит одну роль")
-                .1
         };
 
         let invalid = [
@@ -3960,10 +3978,30 @@ mod tests {
         for chroma in invalid {
             assert!(
                 matches!(
-                    resolve(chroma),
-                    Resolved::Unreachable(Unreachable::InvalidInput(_))
+                    NamedRoleTable::new(Vec::new(), Vec::new(), chroma),
+                    Err(Unreachable::InvalidInput(_))
                 ),
-                "некорректная политика обязана дать структурированную ошибку: {chroma:?}"
+                "даже пустая таблица не должна скрывать некорректную policy: {chroma:?}"
+            );
+
+            // Defense in depth для crate-internal validated-пути: если его
+            // инвариант когда-либо будет нарушен, резолв не вернёт частичный
+            // правдоподобный набор.
+            let bypassed = NamedRoleTable::from_validated_parts(entries(), Vec::new(), chroma);
+            let outcomes = resolve_named_set(&bg, &bypassed, &vc);
+            assert_eq!(
+                outcomes
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+                ["first", "second"]
+            );
+            assert!(
+                outcomes.iter().all(|(_, outcome)| matches!(
+                    outcome,
+                    Resolved::Unreachable(Unreachable::InvalidInput(_))
+                )),
+                "глобальная ошибка не должна оставлять частично решённые роли: {outcomes:?}"
             );
         }
 
@@ -3982,9 +4020,10 @@ mod tests {
                 hue_stiffness: 0.0,
             },
         ] {
-            assert_eq!(
-                resolve(chroma),
-                Resolved::None,
+            assert!(
+                resolve_valid(chroma)
+                    .iter()
+                    .all(|(_, outcome)| *outcome == Resolved::None),
                 "валидная граница отвергнута"
             );
         }
@@ -6316,9 +6355,10 @@ mod derivator_locks {
         format!("#{i:02X}{i:02X}{i:02X}")
     }
 
-    /// Контрпример закрывает весь класс ложных float-порогов: даже очень малая
-    /// разница Oklab L может пересекать границу конечного кодируемого состояния.
-    /// Поэтому сходимость проверяется по эмитированным байтам, а не по ε.
+    /// Контрпример закрывает весь класс ложных float-доказательств: даже очень
+    /// малая разница Oklab L может пересекать границу конечного кодируемого
+    /// состояния. Текущая legacy-эвристика поэтому остаётся незаверенной;
+    /// будущая конечная замена #218 обязана сравнивать эмитированные состояния.
     #[test]
     fn oklab_lightness_distance_cannot_certify_equal_srgb8_output() {
         use crate::spaces::oklab::srgb_linear_to_oklab;
