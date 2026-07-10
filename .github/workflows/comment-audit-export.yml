@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  AUDIT_SHA: c72fbc75379d5ef63693a793a5881725f25ff598
+  AUDIT_SHA: 9ce2a1f8c6100e313138c50572dadf67d1a02296
 
 jobs:
   export:
@@ -31,9 +31,10 @@ jobs:
 
           import pathlib
           import subprocess
+          import os
 
           root = pathlib.Path.cwd()
-          out = pathlib.Path(__import__('os').environ['RUNNER_TEMP']) / 'comment-audit' / 'tracked-files.txt'
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'comment-audit' / 'tracked-files.txt'
           paths = subprocess.check_output(['git', 'ls-files', '-z']).split(b'\0')
           text_paths: list[str] = []
           for raw in paths:
