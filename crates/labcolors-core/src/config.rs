@@ -1208,7 +1208,11 @@ impl ThemeConfig {
             hue_stiffness: self.neutral.tint.hue_stiffness,
         };
 
-        Ok(NamedRoleTable::new(entries, self.aliases.clone(), chroma))
+        Ok(NamedRoleTable::from_validated_parts(
+            entries,
+            self.aliases.clone(),
+            chroma,
+        ))
     }
 
     /// Скомпилировать один рецепт в [`RoleSpec`]. Ladder/AlphaAnalog раскладывают

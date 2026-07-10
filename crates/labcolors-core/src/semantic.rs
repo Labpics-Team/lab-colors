@@ -979,6 +979,51 @@ pub enum RoleChroma {
 }
 
 impl RoleChroma {
+    /// Проверяет численный домен политики до дорогостоящего построения кривой.
+    /// `NamedRoleTable` можно собрать напрямую, в обход конфиг-валидатора, поэтому
+    /// граница резолва обязана отвергать такой ввод сама, а не получать из NaN
+    /// правдоподобный серый цвет через особенности сравнений `f64`.
+    fn validate(self) -> Result<(), Unreachable> {
+        match self {
+            RoleChroma::Neutral => Ok(()),
+            RoleChroma::Tinted { hue_deg, ratio } => {
+                if !hue_deg.is_finite() {
+                    return Err(Unreachable::InvalidInput(format!(
+                        "undertone hue must be finite, got {hue_deg}"
+                    )));
+                }
+                if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
+                    return Err(Unreachable::InvalidInput(format!(
+                        "undertone chroma ratio must be finite and inside [0, 1], got {ratio}"
+                    )));
+                }
+                Ok(())
+            }
+            RoleChroma::Curve {
+                canonical_hue_deg,
+                target_mp,
+                hue_stiffness,
+            } => {
+                if !canonical_hue_deg.is_finite() {
+                    return Err(Unreachable::InvalidInput(format!(
+                        "curve canonical hue must be finite, got {canonical_hue_deg}"
+                    )));
+                }
+                if !target_mp.is_finite() || target_mp <= 0.0 {
+                    return Err(Unreachable::InvalidInput(format!(
+                        "curve target M' must be finite and greater than zero, got {target_mp}"
+                    )));
+                }
+                if !hue_stiffness.is_finite() || hue_stiffness < 0.0 {
+                    return Err(Unreachable::InvalidInput(format!(
+                        "curve hue stiffness must be finite and non-negative, got {hue_stiffness}"
+                    )));
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// The v1 flat-ratio neutral undertone, kept as an explicit opt-in.
     ///
     /// The default table moved to [`Curve`](RoleChroma::Curve); a caller who
@@ -1177,7 +1222,7 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 /// the gamut allows (honestly below target, toward
 /// `TINT_PERCEPTIBLE_MP_FLOOR` at the pinched extremes) rather than fake it.
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
-    let target = target_mp.max(TINT_PERCEPTIBLE_MP_FLOOR);
+    let target = target_mp;
     // The in-gamut max chroma depends only on `(l_ok, hue_deg)`, both fixed across
     // the ratio bisection — solve it once here instead of re-solving it on every
     // `mp_at` iteration (the bisection ran it ~30× per call). Bit-identical: the
@@ -2695,16 +2740,18 @@ fn solve_with_chroma(
         // Probe — discover the contrast-solved lightness achromatically.
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
         let probe = solve::solve_in(bg, contract, probe_hue, probe_chroma, vc, interval)?;
-        let mut l_plan = solved_oklab_lightness(&probe);
+        let mut l_plan = solved_oklab_lightness(&probe)?;
         let mut solved = probe;
-        // Fixed-point: re-plan at the lightness the last solve actually produced.
-        // Two refinements suffice — the undertone shifts lightness by well under
-        // one 8-bit step except at the gamut wall, where the second pass settles
-        // it. `LIGHTNESS_SETTLE` stops as soon as the move is perceptually nil.
+        // Legacy-уточнение сохранено побайтно: этот узкий срез исправляет
+        // валидацию входа, а не меняет алгоритм построения палитры.
+        // `LIGHTNESS_SETTLE` — только ограниченная численная эвристика остановки:
+        // она не доказывает неподвижную точку в sRGB8, и здесь возможен цикл из
+        // двух состояний. Точная конечная замена принадлежит контракту solver-а
+        // (issues #218 и #253).
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
             solved = solve::solve_in(bg, contract, hue, policy, vc, interval)?;
-            let l_new = solved_oklab_lightness(&solved);
+            let l_new = solved_oklab_lightness(&solved)?;
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
             }
@@ -2739,12 +2786,12 @@ fn resolve_dj(
     if let RoleChroma::Curve { .. } = chroma {
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
         let probe = solve::solve_dj(bg, magnitude_dj, sign, probe_hue, probe_chroma, vc)?;
-        let mut l_plan = solved_oklab_lightness(&probe.solved);
+        let mut l_plan = solved_oklab_lightness(&probe.solved)?;
         let mut solved = probe;
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
             solved = solve::solve_dj(bg, magnitude_dj, sign, hue, policy, vc)?;
-            let l_new = solved_oklab_lightness(&solved.solved);
+            let l_new = solved_oklab_lightness(&solved.solved)?;
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
             }
@@ -2757,27 +2804,27 @@ fn resolve_dj(
     }
 }
 
-/// Maximum curve-plan refinements after the achromatic probe. The undertone moves
-/// lightness by well under one 8-bit step except against the white/black wall;
-/// two refinements settle even that case (issue: near-white primary on a dark bg).
+/// Legacy-предел числа уточнений после ахроматической пробы. Он ограничивает
+/// работу, но не доказывает сходимость конечного отображения эмитируемых
+/// состояний (см. issues #218 и #253).
 const CURVE_REFINE_STEPS: u32 = 3;
 
-/// The fixed-point stops once a re-plan moves the solved Oklab lightness by less
-/// than this — comfortably below one 8-bit grid step, so further passes cannot
-/// change the emitted hex.
-// SSOT-TRACKED — fixed-point convergence threshold.
+/// Legacy-эвристика остановки во float-пространстве, сохранённая ради
+/// совместимости выхода. Малый сдвиг Oklab L всё ещё может пересечь байтовую
+/// границу sRGB8, поэтому это значение нельзя называть сертификатом сходимости.
 const LIGHTNESS_SETTLE: f64 = 0.002;
 
 /// The Oklab lightness of a solved colour, read back from its emitted hex.
-fn solved_oklab_lightness(solved: &Solved) -> f64 {
+fn solved_oklab_lightness(solved: &Solved) -> Result<f64, Unreachable> {
     use crate::spaces::oklab::srgb_linear_to_oklab;
     use crate::spaces::srgb::srgb_from_hex;
-    match srgb_from_hex(solved.hex()) {
-        Ok(rgb) => srgb_linear_to_oklab(rgb)[0],
-        // `solved.hex()` is engine-emitted and always parses; on the impossible
-        // failure fall back to mid lightness so the curve still produces a colour.
-        Err(_) => 0.5,
-    }
+    srgb_from_hex(solved.hex())
+        .map(|rgb| srgb_linear_to_oklab(rgb)[0])
+        .map_err(|reason| {
+            Unreachable::InvalidInput(format!(
+                "engine emitted an invalid sRGB hex during curve refinement: {reason}"
+            ))
+        })
 }
 
 /// Resolve every `Role` in [`Role::ALL`] against `bg` in one sweep, in strict
@@ -2879,9 +2926,30 @@ impl RoleSpec {
 impl NamedRoleTable {
     /// Build a named table from its `(name, recipe)` entries and an undertone
     /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
-    /// constructor does not validate them — the config validator
+    /// constructor does not validate names — the config validator
     /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
+    /// Численный домен `chroma` проверяется здесь, потому что таблицу можно
+    /// собрать без конфига. Поэтому невалидная глобальная policy не существует
+    /// даже у пустой таблицы, где per-role ошибка была бы некуда записать.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable::InvalidInput`], если параметры `chroma` не конечны или
+    /// выходят из физического домена своей политики.
     pub fn new(
+        entries: Vec<(String, RoleSpec)>,
+        aliases: Vec<(String, String)>,
+        chroma: RoleChroma,
+    ) -> Result<Self, Unreachable> {
+        chroma.validate()?;
+        Ok(Self::from_validated_parts(entries, aliases, chroma))
+    }
+
+    /// Собирает таблицу из частей, уже проверенных [`ThemeConfig::validate`].
+    /// Отдельный crate-private путь не заставляет конфиг переводить одну и ту же
+    /// ошибку между двумя error-типами, но не позволяет внешнему коду представить
+    /// невалидную глобальную policy.
+    pub(crate) fn from_validated_parts(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
@@ -2929,6 +2997,16 @@ pub fn resolve_named_set(
     table: &NamedRoleTable,
     vc: &ViewingConditions,
 ) -> Vec<(String, Resolved)> {
+    if let Err(reason) = table.chroma.validate() {
+        // Политика общая для всей таблицы. Частичный правдоподобный результат
+        // скрыл бы ошибку вызывающего кода, поэтому каждый объявленный outcome
+        // получает одну и ту же структурированную причину.
+        return table
+            .entries
+            .iter()
+            .map(|(name, _)| (name.clone(), Resolved::Unreachable(reason.clone())))
+            .collect();
+    }
     // One CIECAM16 forward-cache for the span of this sweep, mirroring
     // `resolve_set_live`: the curve refine fixed-point and repeated lightnesses
     // across roles hit the cache instead of recomputing.
@@ -3825,6 +3903,130 @@ mod tests {
             .unwrap()
             .mp();
         (curve_hue, curve_mp)
+    }
+
+    #[test]
+    fn target_mp_is_not_artificially_raised_to_the_perceptibility_floor() {
+        let vc = ViewingConditions::srgb();
+        let l = 0.62;
+        let h = NEUTRAL_HUE_DEG;
+        let low = ratio_for_target_mp(l, h, 0.5, &vc);
+        let higher = ratio_for_target_mp(l, h, 1.5, &vc);
+
+        assert!(
+            low < higher,
+            "представимые target_mp=0.5 и target_mp=1.5 не должны молча превращаться в одну policy: {low} vs {higher}"
+        );
+    }
+
+    #[test]
+    fn named_table_rejects_invalid_chroma_policies_without_partial_output() {
+        let bg = BgInput::solid("#FFFFFF").expect("контрольный фон валиден");
+        let vc = ViewingConditions::srgb();
+        let entries = || {
+            vec![
+                ("first".to_owned(), RoleSpec::Zero),
+                ("second".to_owned(), RoleSpec::Zero),
+            ]
+        };
+        let resolve_valid = |chroma| {
+            let table = NamedRoleTable::new(entries(), Vec::new(), chroma)
+                .expect("контрольная policy валидна");
+            resolve_named_set(&bg, &table, &vc)
+        };
+
+        let invalid = [
+            RoleChroma::Tinted {
+                hue_deg: f64::NAN,
+                ratio: 0.5,
+            },
+            RoleChroma::Tinted {
+                hue_deg: 0.0,
+                ratio: -f64::EPSILON,
+            },
+            RoleChroma::Tinted {
+                hue_deg: 0.0,
+                ratio: 1.0 + f64::EPSILON,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: f64::INFINITY,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 0.0,
+                target_mp: 0.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 0.0,
+                target_mp: f64::NAN,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 0.0,
+                target_mp: 1.0,
+                hue_stiffness: -f64::EPSILON,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 0.0,
+                target_mp: 1.0,
+                hue_stiffness: f64::INFINITY,
+            },
+        ];
+
+        for chroma in invalid {
+            assert!(
+                matches!(
+                    NamedRoleTable::new(Vec::new(), Vec::new(), chroma),
+                    Err(Unreachable::InvalidInput(_))
+                ),
+                "даже пустая таблица не должна скрывать некорректную policy: {chroma:?}"
+            );
+
+            // Defense in depth для crate-internal validated-пути: если его
+            // инвариант когда-либо будет нарушен, резолв не вернёт частичный
+            // правдоподобный набор.
+            let bypassed = NamedRoleTable::from_validated_parts(entries(), Vec::new(), chroma);
+            let outcomes = resolve_named_set(&bg, &bypassed, &vc);
+            assert_eq!(
+                outcomes
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+                ["first", "second"]
+            );
+            assert!(
+                outcomes.iter().all(|(_, outcome)| matches!(
+                    outcome,
+                    Resolved::Unreachable(Unreachable::InvalidInput(_))
+                )),
+                "глобальная ошибка не должна оставлять частично решённые роли: {outcomes:?}"
+            );
+        }
+
+        for chroma in [
+            RoleChroma::Tinted {
+                hue_deg: 0.0,
+                ratio: 0.0,
+            },
+            RoleChroma::Tinted {
+                hue_deg: 359.999,
+                ratio: 1.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 0.0,
+                target_mp: f64::MIN_POSITIVE,
+                hue_stiffness: 0.0,
+            },
+        ] {
+            assert!(
+                resolve_valid(chroma)
+                    .iter()
+                    .all(|(_, outcome)| *outcome == Resolved::None),
+                "валидная граница отвергнута"
+            );
+        }
     }
 
     #[test]
@@ -6153,16 +6355,28 @@ mod derivator_locks {
         format!("#{i:02X}{i:02X}{i:02X}")
     }
 
-    /// LIGHTNESS_SETTLE (0.002) < минимальный шаг выходной 8-бит сетки (1/256 ≈
-    /// 0.00391). Единственная из четвёрки, где вывод держится СТРОГО: порог
-    /// сходимости лежит ниже наименьшего представимого шага сетки, поэтому
-    /// не может «застрять» на различимой ступени.
+    /// Контрпример закрывает весь класс ложных float-доказательств: даже очень
+    /// малая разница Oklab L может пересекать границу конечного кодируемого
+    /// состояния. Текущая legacy-эвристика поэтому остаётся незаверенной;
+    /// будущая конечная замена #218 обязана сравнивать эмитированные состояния.
     #[test]
-    fn lightness_settle_is_below_min_grid_step() {
-        let min_grid_step = 1.0 / 256.0;
+    fn oklab_lightness_distance_cannot_certify_equal_srgb8_output() {
+        use crate::spaces::oklab::srgb_linear_to_oklab;
+        use crate::spaces::srgb::srgb_from_hex;
+
+        let almost_yellow_rgb = srgb_from_hex("#FFFF01").unwrap();
+        let yellow_rgb = srgb_from_hex("#FFFF00").unwrap();
+        let almost_yellow = srgb_linear_to_oklab(almost_yellow_rgb)[0];
+        let yellow = srgb_linear_to_oklab(yellow_rgb)[0];
+        let delta = (almost_yellow - yellow).abs();
+
         assert!(
-            LIGHTNESS_SETTLE < min_grid_step,
-            "LIGHTNESS_SETTLE={LIGHTNESS_SETTLE} должен быть ниже минимального шага сетки {min_grid_step}"
+            delta < LIGHTNESS_SETTLE,
+            "контрпример обязан лежать ниже legacy-порога: {delta}"
+        );
+        assert_ne!(
+            almost_yellow_rgb, yellow_rgb,
+            "разные байты нельзя объявлять одним состоянием"
         );
     }
 

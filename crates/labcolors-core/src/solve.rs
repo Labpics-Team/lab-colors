@@ -555,12 +555,17 @@ fn validate_job(
             "hue is not finite: {hue_deg}"
         )));
     }
-    if let ChromaPolicy::Relative(ratio) = chroma_policy
-        && !ratio.is_finite()
-    {
-        return Err(Unreachable::InvalidInput(format!(
-            "chroma ratio is not finite: {ratio}"
-        )));
+    if let ChromaPolicy::Relative(ratio) = chroma_policy {
+        if !ratio.is_finite() {
+            return Err(Unreachable::InvalidInput(format!(
+                "chroma ratio is not finite: {ratio}"
+            )));
+        }
+        if !(0.0..=1.0).contains(&ratio) {
+            return Err(Unreachable::InvalidInput(format!(
+                "chroma ratio must be inside [0, 1], got {ratio}"
+            )));
+        }
     }
     Ok(())
 }
@@ -1215,7 +1220,7 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
     let hr = h.to_radians();
     let chroma = match chroma_policy {
         ChromaPolicy::Neutral => 0.0,
-        ChromaPolicy::Relative(ratio) => ratio.clamp(0.0, 1.0) * max_chroma(l_ok, h),
+        ChromaPolicy::Relative(ratio) => ratio * max_chroma(l_ok, h),
     };
     let lab = [l_ok, chroma * hr.cos(), chroma * hr.sin()];
     let rgb = oklab_to_srgb_linear(lab);
@@ -2173,10 +2178,18 @@ mod tests {
     }
 
     #[test]
-    fn non_finite_chroma_ratio_is_rejected() {
+    fn chroma_ratio_outside_declared_unit_interval_is_rejected() {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
-        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for bad in [
+            f64::NEG_INFINITY,
+            -1.0,
+            -f64::EPSILON,
+            1.0 + f64::EPSILON,
+            2.0,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
             let err = solve(
                 bg.clone(),
                 Contract::text(60.0),
@@ -2188,6 +2201,63 @@ mod tests {
             .unwrap_err();
             assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
         }
+
+        for edge in [0.0, 1.0] {
+            let result = solve(
+                bg.clone(),
+                Contract::text(60.0),
+                Hue::deg(250.0),
+                ChromaPolicy::Relative(edge),
+                &vc,
+                Gamut::Srgb,
+            );
+            assert!(
+                result.is_ok(),
+                "граница ratio={edge} обязана быть допустимой: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn solve_many_validates_each_chroma_ratio_without_shifting_positions() {
+        let vc = ViewingConditions::srgb();
+        let jobs = [
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(0.0),
+            },
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(-f64::EPSILON),
+            },
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(1.0 + f64::EPSILON),
+            },
+            SolveJob {
+                contract: Contract::text(60.0),
+                hue: Hue::deg(250.0),
+                chroma_policy: ChromaPolicy::Relative(1.0),
+            },
+        ];
+
+        let results = solve_many(BgInput::solid("#FFFFFF").unwrap(), &jobs, &vc, Gamut::Srgb)
+            .expect("валидный общий фон не должен ронять весь batch");
+
+        assert_eq!(results.len(), jobs.len());
+        assert!(results[0].is_ok(), "первая валидная job потеряна");
+        assert!(
+            matches!(&results[1], Err(Unreachable::InvalidInput(_))),
+            "отрицательный ratio обязан остаться ошибкой в своей позиции"
+        );
+        assert!(
+            matches!(&results[2], Err(Unreachable::InvalidInput(_))),
+            "ratio выше единицы обязан остаться ошибкой в своей позиции"
+        );
+        assert!(results[3].is_ok(), "последняя валидная job потеряна");
     }
 
     #[test]
