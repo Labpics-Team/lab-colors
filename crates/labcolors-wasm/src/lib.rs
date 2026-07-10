@@ -109,12 +109,11 @@ export interface TranslucentRole {
   /** WCAG 2.1 ratio of the composite. */
   readonly compositeWcag: number;
   /**
-   * `true` when the requested alpha was raised to the smallest resolvable value
-   * (α_min) because the requested transparency is not reproducible in gamut — an
-   * honest, flagged contract degradation (mirrors `SolvedColor.compressed` /
-   * `GlowRole.degraded`). The colour never lies: the composite still equals the
-   * target solid byte-for-byte; only `alpha` differs from what was asked. Always
-   * `false` for a direct ladder emission.
+   * `true`, если запрошенная alpha не допускает ни одного byte-тинта,
+   * воспроизводящего цель в affine encoded-sRGB8 reference, и потому поднята до
+   * первого проходящего `binary64`. Композит остаётся побайтно равен целевому
+   * солиду; меняется только явно возвращённая `alpha`. У прямой лестницы всегда
+   * `false`.
    */
   readonly alphaCoerced: boolean;
   /**

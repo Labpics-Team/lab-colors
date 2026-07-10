@@ -1,7 +1,7 @@
 // Behaviour tests for the framework-free runtime — pure logic + the reactive
 // controller driven through injected fakes, so they run under plain `node --test`
-// with no browser and no WASM. (The WASM↔native parity is covered separately by
-// the headless-Chrome `wasm_parity` test.)
+// with no browser and no WASM. JS-boundary↔core parity внутри одного wasm runtime
+// отдельно проверяет headless-Chrome `wasm_parity` test.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -37,6 +37,20 @@ test("compositeOver is true source-over alpha", () => {
   assert.equal(r[3], 1);
   // Fully transparent top → bottom unchanged.
   assert.deepEqual(compositeOver([9, 9, 9, 0], [40, 50, 60, 1]), [40, 50, 60, 1]);
+
+  // Half-seam из Rust-регрессора: фиксирует тот же порядок binary64-операций,
+  // чтобы reference-композит и официальный потребитель не разошлись на LSB.
+  assert.equal(toHex(compositeOver([0, 5, 5, 0.1], [5, 5, 5, 1])), "#050505");
+
+  // Expanded-форма на этих соседних alpha давала 208→207→208. Affine-
+  // reference обязан быть монотонным, иначе first-passing alpha недоказуема.
+  const centre = 0.812992125984252;
+  const predecessor = centre - Number.EPSILON / 2;
+  const successor = centre + Number.EPSILON / 2;
+  const seam = [predecessor, centre, successor].map(
+    (alpha) => compositeOver([255, 0, 0, alpha], [1, 0, 0, 1])[0],
+  );
+  assert.ok(seam[0] <= seam[1] && seam[1] <= seam[2], String(seam));
 });
 
 test("toHex rounds and clamps", () => {

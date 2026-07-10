@@ -183,9 +183,15 @@ function oklchAlpha(tok) {
 export function compositeOver(top, bottom) {
   const at = top[3];
   const ab = bottom[3];
-  const a = at + ab * (1 - at);
+  // Affine-форма математически равна expanded source-over, но монотонна по
+  // top alpha в binary64. Expanded `at + ab*(1-at)` и две цветовые ветви могут
+  // дать PASS→FAIL→PASS на соседних ULP и разрушить конечный alpha lower-bound.
+  const a = ab + at * (1 - ab);
   if (a === 0) return [0, 0, 0, 0];
-  const c = (i) => (top[i] * at + bottom[i] * ab * (1 - at)) / a;
+  const c = (i) => {
+    const bottomPremultiplied = bottom[i] * ab;
+    return (bottomPremultiplied + at * (top[i] - bottomPremultiplied)) / a;
+  };
   return [c(0), c(1), c(2), a];
 }
 

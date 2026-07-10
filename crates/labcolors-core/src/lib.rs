@@ -85,7 +85,7 @@ pub use curve::ColorCurve;
 pub use glow::{
     GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_REFERENCE_PROFILE, GLOW_SUBTLE_DJ, GlowConstraintLayer,
     GlowSolve, GlowTargetStatus, glow_layers_from_source, screen_layer_over_encoded,
-    solve_screen_alpha_for_dj,
+    screen_layer_over_srgb8, solve_screen_alpha_for_dj,
 };
 pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};

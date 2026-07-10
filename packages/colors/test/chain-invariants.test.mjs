@@ -9,11 +9,12 @@
 // внутри солвера, и без параллельной копии физики контраста.
 //
 // Что уже закрыто в другом месте (НЕ дублируем):
-// - core `oklch.rs::round_trip_is_byte_exact_*` — emit↔parse байт-точны на КУБЕ;
+// - core `oklch.rs::round_trip_is_byte_exact_*` — emit↔parse байт-точны на
+//   решётке шага 5 и полном сером ramp (не объявлен полный куб);
 // - `oklch-parse.test.mjs` — parseCssColor декодит эмиссию на 16 фикстурах;
 // - core `property_invariants.rs::every_floored_role_clears_its_wcag_floor…` —
 //   пол на СОБСТВЕННОМ hex солвера (не на репарснутой строке);
-// - wasm `wasm_parity.rs` — граница == нативный резолв, роль-в-роль.
+// - wasm `wasm_parity.rs` — JS-граница == core-оракул внутри того же wasm runtime.
 // Дыра: КОМПОЗИЦИЯ этих доказательств на ЖИВОМ корпусе ролей — «цвет, который
 // браузер соберёт из emitted vars, всё ещё проходит свой пол/таргет» — как
 // единая цепочка, а не транзитивность двух изолированных проверок. Для
@@ -248,8 +249,10 @@ test("glow roles emit halo primary + -core/-alpha satellites, all well-formed", 
         const [br, bgc, bb] = parseCssColor(bg);
         const screenHex = (layerCss) => {
           const [lr, lg, lb] = parseCssColor(layerCss);
+          // Тот же конечный byte-reference, что у ядра: нормализация
+          // byte/255 перед обратным умножением сдвигает точные half-tie.
           const channel = (background, layer) =>
-            (background / 255 + a * (layer / 255) * (1 - background / 255)) * 255;
+            background + a * layer * (255 - background) / 255;
           return toHex([channel(br, lr), channel(bgc, lg), channel(bb, lb)]);
         };
         assert.equal(screenHex(res.vars[role.cssVar]), role.haloCompositeHex);

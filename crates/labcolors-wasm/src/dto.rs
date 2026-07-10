@@ -141,13 +141,11 @@ pub struct RgbaColor {
     pub composite_lc: f64,
     /// The WCAG 2.1 ratio of the composite.
     pub composite_wcag: f64,
-    /// `true` when the requested alpha was raised to the smallest resolvable
-    /// value (`α_min`) because the requested transparency is not reproducible in
-    /// gamut — an honest, flagged degradation of the role contract (mirrors
-    /// `SolvedColor::compressed` / `GlowColor::degraded`). The colour never lies:
-    /// the composite still equals the target solid byte-for-byte; only the
-    /// alpha carried in `alpha` differs from what was asked. Always `false` for a
-    /// direct ladder emission.
+    /// `true`, если запрошенная alpha не допускает ни одного byte-тинта,
+    /// воспроизводящего цель в affine encoded-sRGB8 reference, и потому поднята
+    /// до первого проходящего `binary64`. Композит остаётся побайтно равен
+    /// целевому солиду; меняется только явно возвращённая `alpha`. У прямой
+    /// лестницы всегда `false`.
     pub alpha_coerced: bool,
     /// `true` when a solid family border (`border-<family>-strong`, M2 ch5c) was
     /// darkened along the family curve to meet the AA UI floor (3:1), because the

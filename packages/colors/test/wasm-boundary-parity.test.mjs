@@ -39,6 +39,12 @@ test("wasm recheck boundary is byte-identical to the pre-optimisation golden", a
     "utf8",
   );
   const golden = JSON.parse(readFileSync(goldenPath, "utf8"));
+  const metaText = JSON.stringify(golden._meta);
+  assert.doesNotMatch(
+    metaText,
+    /\?{3,}|\uFFFD/u,
+    "golden provenance не должен содержать следы потери UTF-8",
+  );
 
   const engine = new LabColors();
   engine.loadConfig(CONFIG);

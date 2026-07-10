@@ -39,14 +39,19 @@
 //! — исходный цвет. Радиусы и blur здесь отсутствуют: названия обозначают
 //! назначение слоёв у потребителя, а не измеренную геометрию.
 //!
-//! Core строится существующей policy [`crate::accent_balance`]: midpoint J′
-//! задаёт seed Oklab-светлоты, chroma берётся на sRGB-границе данного hue.
+//! Для хроматического источника core строится существующей policy
+//! [`crate::accent_balance`]: midpoint J′ задаёт seed Oklab-светлоты, chroma
+//! берётся на sRGB-границе данного hue. Точный sRGB8-нейтраль остаётся
+//! нейтральным: у него нет hue, который можно было бы честно «усилить».
 //! После хроматического преобразования и sRGB8-квантования итоговый J′ не
 //! объявляется равным seed — фактическая point-метрика core возвращается
 //! отдельно. Это versioned recipe, а не оптимум, проверенный на наблюдателях.
 
 use crate::lcs::LcsColor;
-use crate::spaces::srgb::{decode_8bit, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_to_xyz};
+use crate::spaces::oklab::oklab_to_srgb_linear;
+use crate::spaces::srgb::{
+    decode_8bit, hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_to_xyz,
+};
 use crate::spaces::vc::ViewingConditions;
 use std::cmp::Ordering;
 
@@ -190,6 +195,37 @@ fn validate_viewing_numerics(vc: &ViewingConditions) -> Result<(), String> {
             ));
         }
     }
+    // Эти поля задокументированы как производные и должны меняться только
+    // вместе с исходником. `ViewingConditions` пока имеет публичные поля, так
+    // что проверяем инвариант на внешней границе вместо доверия структуре.
+    for (name, actual, expected) in [
+        ("fl_pow_025", vc.fl_pow_025, vc.fl.powf(0.25)),
+        (
+            "t_inner",
+            vc.t_inner,
+            (1.64 - 0.29_f64.powf(vc.n)).powf(0.73),
+        ),
+    ] {
+        if actual.to_bits() != expected.to_bits() {
+            return Err(format!(
+                "ViewingConditions.{name} не согласован с исходными полями: {actual} != {expected}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_lcs_numerics(label: &str, color: &LcsColor) -> Result<(), String> {
+    for (name, value) in [
+        ("jp", color.jp),
+        ("h_ok", color.h_ok),
+        ("s", color.s),
+        ("h_cam", color.h_cam()),
+    ] {
+        if !value.is_finite() {
+            return Err(format!("{label}.{name} не конечен: {value}"));
+        }
+    }
     Ok(())
 }
 
@@ -215,9 +251,9 @@ fn jp_from_hex(hex: &str, vc: &ViewingConditions) -> Result<f64, String> {
     jp_from_srgb8(encoded_bytes(encoded), vc)
 }
 
-/// Screen-слой над непрозрачным фоном: `bg + α·G·(1−bg)` покомпонентно
-/// в reference-домене encoded sRGB. Функция не утверждает, что неизвестный
-/// renderer использует тот же compositing/output profile.
+/// Непрерывный screen-слой над непрозрачным фоном: `bg + α·G·(1−bg)`
+/// покомпонентно в encoded sRGB. Это алгебра до финального sRGB8-round; для
+/// эмитируемого reference-пикселя используй [`screen_layer_over_srgb8`].
 ///
 /// # Errors
 ///
@@ -241,6 +277,29 @@ pub fn screen_layer_over_encoded(
     ])
 }
 
+/// Screen-слой в конечном encoded-sRGB8 reference-домене.
+///
+/// Формула вычисляется прямо в шкале байтов и округляется ровно один раз:
+/// `round(bg + α·glow·(255−bg)/255)`. Указанный слева направо порядок
+/// binary64-операций является частью reference-профиля и совпадает с JS-
+/// проверкой официального пакета. Нормализация `byte/255` перед обратным
+/// умножением способна сдвинуть half-tie на соседний LSB.
+///
+/// # Errors
+///
+/// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
+pub fn screen_layer_over_srgb8(glow: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
+    }
+    let channel = |index: usize| {
+        (f64::from(bg[index])
+            + alpha * f64::from(glow[index]) * f64::from(u8::MAX - bg[index]) / f64::from(u8::MAX))
+        .round() as u8
+    };
+    Ok([channel(0), channel(1), channel(2)])
+}
+
 /// Изолированный point-замер одного screen-слоя в reference-профиле glow.
 /// Пространственное перекрытие core/halo сюда намеренно не входит: без
 /// геометрии и порядка слоёв его нельзя восстановить честно.
@@ -256,9 +315,9 @@ pub(crate) fn measure_screen_layer_at_alpha(
     vc: &ViewingConditions,
 ) -> Result<ScreenLayerMeasurement, String> {
     validate_viewing_numerics(vc)?;
-    let tint = srgb_encoded_from_hex(tint_hex)?;
-    let bg = srgb_encoded_from_hex(bg_hex)?;
-    let composite_hex = hex_from_srgb_encoded(screen_layer_over_encoded(tint, alpha, bg)?);
+    let tint = encoded_bytes(srgb_encoded_from_hex(tint_hex)?);
+    let bg = encoded_bytes(srgb_encoded_from_hex(bg_hex)?);
+    let composite_hex = composite_hex(screen_layer_over_srgb8(tint, alpha, bg)?);
     let bg_jp = jp_from_hex(bg_hex, vc)?;
     let composite_jp = jp_from_hex(&composite_hex, vc)?;
     let achieved_dj = (composite_jp - bg_jp).abs();
@@ -596,17 +655,17 @@ pub fn solve_screen_alpha_for_dj(
             best.ok_or_else(|| "конечное множество композитов оказалось пустым".to_string())?;
         (state, achieved_dj, GlowTargetStatus::Unreachable)
     };
-    let composite_hex = composite_hex(state.bytes);
+    let selected_hex = composite_hex(state.bytes);
     let alpha = state.lower.midpoint(state.upper);
 
     // Канонический CSS-сериализатор хранит ту же binary64 alpha. Production-проверка
     // повторно композитит исходное число; строковый parse-round-trip проверяют
     // граничные и межъязыковые тесты, не затягивая dec2flt-парсер в WASM.
     let alpha_css = crate::css_alpha_value(alpha)?;
-    let roundtrip_hex = hex_from_srgb_encoded(screen_layer_over_encoded(glow, alpha, bg)?);
-    if roundtrip_hex != composite_hex {
+    let roundtrip_hex = composite_hex(screen_layer_over_srgb8(glow_bytes, alpha, bg_bytes)?);
+    if roundtrip_hex != selected_hex {
         return Err(format!(
-            "выбранная alpha не воспроизвела state: ожидался {composite_hex}, получен {roundtrip_hex}"
+            "выбранная alpha не воспроизвела state: ожидался {selected_hex}, получен {roundtrip_hex}"
         ));
     }
 
@@ -615,7 +674,7 @@ pub fn solve_screen_alpha_for_dj(
         alpha_css,
         target_dj,
         achieved_dj,
-        composite_hex,
+        composite_hex: selected_hex,
         status,
     })
 }
@@ -623,8 +682,10 @@ pub fn solve_screen_alpha_for_dj(
 /// Версионированный двухслойный recipe от источника: `(core_hex, halo_hex)`.
 ///
 /// В recipe v1 halo буквально равен источнику. Для core арифметическая середина
-/// J′ источника и 100 задаёт seed Oklab-светлоты, а chroma — sRGB-границу его
-/// Oklab hue через [`crate::accent_balance::accent_balanced`]. Фактический J′
+/// J′ источника и 100 задаёт seed Oklab-светлоты. У хроматического источника
+/// chroma — sRGB-граница его Oklab hue через
+/// [`crate::accent_balance::accent_balanced`]; у точного sRGB8-нейтраля chroma
+/// остаётся нулевой, потому его численный hue не несёт цветового смысла. Фактический J′
 /// эмитированного core измеряется вызывающим кодом: он не обязан совпасть с seed
 /// после смены координат и sRGB8-квантования. Это recipe, не наблюдательная
 /// модель красоты или геометрии свечения.
@@ -634,12 +695,46 @@ pub fn glow_layers_from_source(
 ) -> Result<(String, String), String> {
     validate_viewing_numerics(vc)?;
     let source_encoded = srgb_encoded_from_hex(source_hex)?;
+    let source_bytes = encoded_bytes(source_encoded);
     let canonical_source_hex = hex_from_srgb_encoded(source_encoded);
     let src = LcsColor::from_hex_with_vc(&canonical_source_hex, vc)?;
+    validate_lcs_numerics("source", &src)?;
     let jp_core = (src.jp + 100.0) * 0.5;
+    if !jp_core.is_finite() {
+        return Err(format!("core J′ seed не конечен: {jp_core}"));
+    }
     let l_core = crate::scale::jp_to_oklab_l(jp_core, vc);
-    let core = crate::accent_balance::accent_balanced(l_core, src.h_ok, vc).color;
-    let core_hex = core.to_hex_with_vc(vc);
+    if !l_core.is_finite() || !(0.0..=1.0).contains(&l_core) {
+        return Err(format!("core Oklab L вне конечного [0,1]: {l_core}"));
+    }
+
+    let core_rgb = if source_bytes[0] == source_bytes[1] && source_bytes[1] == source_bytes[2] {
+        // У точного sRGB8-нейтраля оттенка нет. Число atan2 от матричного шума
+        // нельзя превращать в насыщенный core: hue-отсутствие сохраняется.
+        oklab_to_srgb_linear([l_core, 0.0, 0.0])
+    } else {
+        let balanced = crate::accent_balance::accent_balanced(l_core, src.h_ok, vc);
+        validate_lcs_numerics("core", &balanced.color)?;
+        for (name, value) in [
+            ("l_ok", balanced.l_ok),
+            ("c_ok", balanced.c_ok),
+            ("hue_deg", balanced.hue_deg),
+        ] {
+            if !value.is_finite() {
+                return Err(format!("balanced core {name} не конечен: {value}"));
+            }
+        }
+        let hue = balanced.hue_deg.to_radians();
+        oklab_to_srgb_linear([
+            balanced.l_ok,
+            balanced.c_ok * hue.cos(),
+            balanced.c_ok * hue.sin(),
+        ])
+    };
+    if core_rgb.into_iter().any(|channel| !channel.is_finite()) {
+        return Err(format!("core linear-sRGB не конечен: {core_rgb:?}"));
+    }
+    let core_hex = hex_from_srgb(core_rgb);
     Ok((core_hex, canonical_source_hex))
 }
 
@@ -684,7 +779,7 @@ mod tests {
                 continue;
             }
             let alpha = window[0] + (window[1] - window[0]) * 0.5;
-            let hex = hex_from_srgb_encoded(screen_layer_over_encoded(tint, alpha, bg).unwrap());
+            let hex = composite_hex(screen_layer_over_srgb8(tint_bytes, alpha, bg_bytes).unwrap());
             if states
                 .last()
                 .is_some_and(|(_, previous, _)| previous == &hex)
@@ -697,7 +792,7 @@ mod tests {
         // Отдельный endpoint не даёт оракулу молча потерять состояние, которое
         // теоретически могло бы существовать только при полностью непрозрачном слое.
         let alpha = 1.0;
-        let hex = hex_from_srgb_encoded(screen_layer_over_encoded(tint, alpha, bg).unwrap());
+        let hex = composite_hex(screen_layer_over_srgb8(tint_bytes, alpha, bg_bytes).unwrap());
         if states
             .last()
             .is_none_or(|(_, previous, _)| previous != &hex)
@@ -739,6 +834,7 @@ mod tests {
         let valid = [0.25, 0.5, 0.75];
         for alpha in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.1] {
             assert!(screen_layer_over_encoded(valid, alpha, valid).is_err());
+            assert!(screen_layer_over_srgb8([1, 2, 3], alpha, [4, 5, 6]).is_err());
         }
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.1] {
             let mut rgb = valid;
@@ -748,6 +844,8 @@ mod tests {
         }
         assert!(screen_layer_over_encoded(valid, 0.0, valid).is_ok());
         assert!(screen_layer_over_encoded(valid, 1.0, valid).is_ok());
+        assert!(screen_layer_over_srgb8([1, 2, 3], 0.0, [4, 5, 6]).is_ok());
+        assert!(screen_layer_over_srgb8([1, 2, 3], 1.0, [4, 5, 6]).is_ok());
     }
 
     #[test]
@@ -772,12 +870,10 @@ mod tests {
     /// рациональную группировку непредставимой стенки трёх каналов.
     #[test]
     fn exact_walls_follow_round_half_up_without_binary_boundary_assumptions() {
-        let red = [1.0 / 255.0, 0.0, 0.0];
-        let black = [0.0; 3];
-        let at_half = hex_from_srgb_encoded(screen_layer_over_encoded(red, 0.5, black).unwrap());
+        let at_half = composite_hex(screen_layer_over_srgb8([1, 0, 0], 0.5, [0; 3]).unwrap());
         let just_below_half = f64::from_bits(0.5_f64.to_bits() - 1);
         let below =
-            hex_from_srgb_encoded(screen_layer_over_encoded(red, just_below_half, black).unwrap());
+            composite_hex(screen_layer_over_srgb8([1, 0, 0], just_below_half, [0; 3]).unwrap());
         assert_eq!(below, "#000000");
         assert_eq!(at_half, "#010000", "round(0.5) обязан выбрать верхний байт");
 
@@ -802,6 +898,61 @@ mod tests {
         assert_eq!(white_states[1].bytes, [1; 3]);
     }
 
+    /// Известная десятичная alpha проверяется независимой целочисленной
+    /// формулой на всей одноканальной области. Это ловит нормализацию
+    /// `byte/255 → *255`, которая на `250 × 0.122` теряет точную половину.
+    #[test]
+    fn byte_reference_screen_alpha_0122_matches_exact_rational_for_all_channel_pairs() {
+        const ALPHA_NUMERATOR: u64 = 61;
+        const ALPHA_DENOMINATOR: u64 = 500;
+        const BYTE_MAX: u64 = 255;
+        let denominator = ALPHA_DENOMINATOR * BYTE_MAX;
+
+        for glow in 0_u16..=255 {
+            for bg in 0_u16..=255 {
+                let glow = u64::from(glow);
+                let bg = u64::from(bg);
+                let numerator = bg * denominator + ALPHA_NUMERATOR * glow * (BYTE_MAX - bg);
+                let expected = ((2 * numerator + denominator) / (2 * denominator)) as u8;
+                let actual = screen_layer_over_srgb8([glow as u8, 0, 0], 0.122, [bg as u8, 0, 0])
+                    .unwrap()[0];
+                assert_eq!(actual, expected, "glow={glow}, bg={bg}");
+            }
+        }
+
+        assert_eq!(
+            screen_layer_over_srgb8([192, 178, 250], 0.122, [0; 3]).unwrap(),
+            [23, 22, 31]
+        );
+        let measurement =
+            measure_screen_layer_at_alpha("#C0B2FA", "#000000", 0.122, &ViewingConditions::srgb())
+                .unwrap();
+        assert_eq!(measurement.composite_hex, "#17161F");
+    }
+
+    /// На этой границе точное вещественное сравнение binary64 и фиксированный
+    /// порядок binary64-операций дают разные классификации. Reference намеренно
+    /// фиксирует второй вариант — тот же, который выполняет JS-потребитель;
+    /// солвер выбирает внутренние точки интервалов и перепроверяет результат.
+    #[test]
+    fn byte_screen_pins_reference_operation_order_at_float_wall() {
+        let below_wall = 0.501_968_503_937_007_9_f64;
+        let predecessor = f64::from_bits(below_wall.to_bits() - 1);
+        let successor = f64::from_bits(below_wall.to_bits() + 1);
+        assert_eq!(
+            screen_layer_over_srgb8([1, 0, 0], predecessor, [1, 0, 0]).unwrap()[0],
+            2
+        );
+        assert_eq!(
+            screen_layer_over_srgb8([1, 0, 0], below_wall, [1, 0, 0]).unwrap()[0],
+            2
+        );
+        assert_eq!(
+            screen_layer_over_srgb8([1, 0, 0], successor, [1, 0, 0]).unwrap()[0],
+            2
+        );
+    }
+
     /// Исчерпывающая теорема для одного канала: рациональное разбиение обязано
     /// совпадать с публичной формулой для всех 65 536 пар `(background, glow)`.
     /// Три канала независимы по определению screen, поэтому этот перебор
@@ -813,13 +964,7 @@ mod tests {
                 let b = background as u8;
                 let g = glow as u8;
                 let states = quantised_composites([g, 0, 0], [b, 0, 0]).unwrap();
-                let at_one = screen_layer_over_encoded(
-                    [f64::from(g) / 255.0, 0.0, 0.0],
-                    1.0,
-                    [f64::from(b) / 255.0, 0.0, 0.0],
-                )
-                .unwrap();
-                let final_byte = (at_one[0] * 255.0).round() as u8;
+                let final_byte = screen_layer_over_srgb8([g, 0, 0], 1.0, [b, 0, 0]).unwrap()[0];
 
                 assert_eq!(states.first().unwrap().bytes[0], b);
                 assert_eq!(states.last().unwrap().bytes[0], final_byte);
@@ -833,15 +978,9 @@ mod tests {
                     }
 
                     let alpha = state.lower.midpoint(state.upper);
-                    let out = screen_layer_over_encoded(
-                        [f64::from(g) / 255.0, 0.0, 0.0],
-                        alpha,
-                        [f64::from(b) / 255.0, 0.0, 0.0],
-                    )
-                    .unwrap();
+                    let out = screen_layer_over_srgb8([g, 0, 0], alpha, [b, 0, 0]).unwrap();
                     assert_eq!(
-                        (out[0] * 255.0).round() as u8,
-                        state.bytes[0],
+                        out[0], state.bytes[0],
                         "B={b}, G={g}, state={index}, alpha={alpha}"
                     );
                 }
@@ -872,11 +1011,11 @@ mod tests {
     #[test]
     fn serialised_alpha_keeps_the_quantised_target() {
         let vc = ViewingConditions::dim_surround();
-        let tint = srgb_encoded_from_hex("#4A8FFF").unwrap();
-        let bg = srgb_encoded_from_hex("#101012").unwrap();
+        let tint = encoded_bytes(srgb_encoded_from_hex("#4A8FFF").unwrap());
+        let bg = encoded_bytes(srgb_encoded_from_hex("#101012").unwrap());
         let bg_jp = LcsColor::from_hex_with_vc("#101012", &vc).unwrap().jp;
         let measured_at = |alpha: f64| {
-            let hex = hex_from_srgb_encoded(screen_layer_over_encoded(tint, alpha, bg).unwrap());
+            let hex = composite_hex(screen_layer_over_srgb8(tint, alpha, bg).unwrap());
             let jp = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp;
             ((jp - bg_jp).abs(), hex)
         };
@@ -947,11 +1086,11 @@ mod tests {
                             solved.alpha().to_bits(),
                             "CSS round-trip обязан сохранять binary64: tint={tint_hex}, bg={bg_hex}, target={target}"
                         );
-                        let recomposed = hex_from_srgb_encoded(
-                            screen_layer_over_encoded(
-                                srgb_encoded_from_hex(tint_hex).unwrap(),
+                        let recomposed = composite_hex(
+                            screen_layer_over_srgb8(
+                                encoded_bytes(srgb_encoded_from_hex(tint_hex).unwrap()),
                                 emitted_alpha,
-                                srgb_encoded_from_hex(bg_hex).unwrap(),
+                                encoded_bytes(srgb_encoded_from_hex(bg_hex).unwrap()),
                             )
                             .unwrap(),
                         );
@@ -1040,5 +1179,32 @@ mod tests {
         assert_eq!(halo_hex, "#FF3B30");
         assert!(core_hex.starts_with('#'));
         assert_eq!(core_hex.len(), 7);
+    }
+
+    /// У sRGB8-серого нет определённого hue. Матричный шум Oklab не должен
+    /// превращаться в насыщенный core ни на одном байте и ни в одной штатной VC.
+    #[test]
+    fn exact_achromatic_sources_never_receive_an_invented_core_hue() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for byte in u8::MIN..=u8::MAX {
+                let source = format!("#{byte:02X}{byte:02X}{byte:02X}");
+                let (core, halo) = glow_layers_from_source(&source, &vc).unwrap();
+                let [r, g, b] = encoded_bytes(srgb_encoded_from_hex(&core).unwrap());
+                assert_eq!(halo, source);
+                assert_eq!(r, g, "{source} дал цветной core {core}");
+                assert_eq!(g, b, "{source} дал цветной core {core}");
+            }
+        }
+    }
+
+    /// Публичные поля VC позволяют внешнему коду создать несогласованное
+    /// производное состояние. Такое состояние раньше протаскивало NaN через
+    /// CAM16 и маскировало его квантизацией в правдоподобный `#000000`.
+    #[test]
+    fn layer_recipe_rejects_numerically_degenerate_viewing_conditions() {
+        let mut vc = ViewingConditions::srgb();
+        vc.fl = 1.0e308;
+        vc.fl_pow_025 = 1.0e308;
+        assert!(glow_layers_from_source("#4A8FFF", &vc).is_err());
     }
 }

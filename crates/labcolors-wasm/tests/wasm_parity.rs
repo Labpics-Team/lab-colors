@@ -1,5 +1,5 @@
-//! Headless-browser parity smoke: the binding's resolve must equal the native
-//! `resolve_named_set` it wraps, role for role.
+//! Headless-browser contract smoke: JS-binding resolve must equal the core
+//! `resolve_named_set` it wraps, role for role, внутри одного wasm runtime.
 //!
 //! Run with `wasm-pack test --headless --chrome` (D1 default from the chapter).
 //! The engine is agnostic (ADR-0001 PR-c): it has no built-in table, so parity
@@ -21,7 +21,7 @@ use wasm_bindgen_test::*;
 wasm_bindgen_test_configure!(run_in_browser);
 
 /// The frozen labui passport — the config the built-in default table used to
-/// hardcode. Both the boundary (via `loadConfig`) and the native expectation
+/// hardcode. Both the boundary (via `loadConfig`) and the core expectation
 /// (via `ConfigDto` → `ThemeConfig` → `compile_named_role_table`) read this one
 /// SSOT, so the two sides cannot diverge on their input.
 ///
@@ -40,18 +40,18 @@ const LABUI_JSON: &str = include_str!("data/labui.config.json");
 /// real consumer uses must hold parity. Refresh on passport changes.
 const LABUI_PROD_JSON: &str = include_str!("data/labui.config.prod.json");
 
-/// Build the native role table for a passport through the same public path
+/// Build the core role table for a passport through the same public path
 /// `loadConfig` uses, so the parity oracle is the core's own compile, not a
 /// parallel copy.
-fn native_table(passport: &str) -> NamedRoleTable {
+fn core_table(passport: &str) -> NamedRoleTable {
     let dto: ConfigDto = serde_json::from_str(passport).expect("passport parses");
     let cfg = ThemeConfig::try_from(dto).expect("DTO → ThemeConfig");
     cfg.compile_named_role_table().expect("passport compiles")
 }
 
-/// Build the native labui role table (canonical fixture).
-fn native_labui_table() -> NamedRoleTable {
-    native_table(LABUI_JSON)
+/// Build the core labui role table (canonical fixture).
+fn core_labui_table() -> NamedRoleTable {
+    core_table(LABUI_JSON)
 }
 
 /// A boundary engine with the given passport loaded.
@@ -101,9 +101,9 @@ fn error_message(err: wasm_bindgen::JsError) -> String {
 }
 
 /// Shared parity assertion: for a passport, the binding's `resolveTheme`
-/// must reproduce the native `resolve_named_set`, role for role. Expectations
+/// must reproduce the core `resolve_named_set`, role for role. Expectations
 /// come straight from the core inside the same wasm runtime — never hand-typed.
-/// The native side derives its ViewingConditions from the SAME core enum the
+/// The core side derives its ViewingConditions from the SAME enum the
 /// boundary resolves through (`Theme::viewing_conditions()`): a hardcoded
 /// `srgb()` here silently diverges on any non-srgb theme (dark = dim surround)
 /// — exactly the miss that kept the old light-only test blind to dim parity.
@@ -122,9 +122,9 @@ fn theme_vc(theme: &str) -> ViewingConditions {
 
 fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
     let bg = BgInput::solid(bg_hex).expect("bg is valid");
-    let table = native_table(passport);
+    let table = core_table(passport);
     let vc = theme_vc(theme);
-    let native = resolve_named_set(&bg, &table, &vc);
+    let core_resolved = resolve_named_set(&bg, &table, &vc);
 
     // The binding result for the same inputs, from a loaded config.
     let engine = boundary_with(passport);
@@ -140,7 +140,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
         "theme echoed back"
     );
 
-    for (name, resolved) in &native {
+    for (name, resolved) in &core_resolved {
         let entry = get_obj(&roles, name);
         let kind = get_str(&entry, "kind").expect("every role has a kind");
         match resolved {
@@ -149,7 +149,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 assert_eq!(
                     get_str(&entry, "hex").as_deref(),
                     Some(solved.hex()),
-                    "{name} hex must match native"
+                    "{name} hex must match core"
                 );
             }
             Resolved::None => {
@@ -163,7 +163,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 assert_eq!(
                     get_str(&entry, "tintHex").as_deref(),
                     Some(r.tint_hex()),
-                    "{name} tint must match native"
+                    "{name} tint must match core"
                 );
             }
             Resolved::Glow(g) => {
@@ -171,12 +171,12 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 assert_eq!(
                     get_str(&entry, "coreHex").as_deref(),
                     Some(g.core_hex()),
-                    "{name} glow core must match native"
+                    "{name} glow core must match core"
                 );
                 assert_eq!(
                     get_str(&entry, "haloHex").as_deref(),
                     Some(g.halo_hex()),
-                    "{name} glow halo must match native"
+                    "{name} glow halo must match core"
                 );
                 assert_eq!(get_num(&entry, "alpha").to_bits(), g.alpha().to_bits());
                 assert_eq!(get_str(&entry, "alphaCss").as_deref(), Some(g.alpha_css()));
@@ -230,7 +230,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
 
 /// Canonical labui passport (target M1 text-anchor style), white/light.
 #[wasm_bindgen_test]
-fn resolve_theme_matches_native_named_resolve() {
+fn resolve_theme_matches_core_named_resolve() {
     assert_parity(LABUI_JSON, "#FFFFFF", "light");
 }
 
@@ -238,7 +238,7 @@ fn resolve_theme_matches_native_named_resolve() {
 /// path labui takes today must hold parity on both of its theme anchors.
 /// Guards the class: "a recipe style a real consumer uses is untested in wasm".
 #[wasm_bindgen_test]
-fn resolve_theme_matches_native_on_prod_passport() {
+fn resolve_theme_matches_core_on_prod_passport() {
     assert_parity(LABUI_PROD_JSON, "#FFFFFF", "light");
     assert_parity(LABUI_PROD_JSON, "#101012", "dark");
 }
@@ -286,19 +286,19 @@ fn vars_mirror_reachable_roles_in_oklch() {
 }
 
 /// `recheckContrast` across the wasm boundary: the returned `Float64Array`
-/// reproduces the native `resolve_named_set`'s own `(lc, wcag)` per role, accepts
+/// reproduces the core `resolve_named_set`'s own `(lc, wcag)` per role, accepts
 /// the same shorthand hex forms as `resolveTheme`, and rejects a bad foreground.
 #[wasm_bindgen_test]
 fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     let bg = "#FFFFFF";
-    let native = resolve_named_set(
+    let core_resolved = resolve_named_set(
         &BgInput::solid(bg).expect("white is valid"),
-        &native_labui_table(),
+        &core_labui_table(),
         &ViewingConditions::srgb(),
     );
     let mut fgs: Vec<String> = Vec::new();
     let mut want: Vec<(f64, f64)> = Vec::new();
-    for (_name, resolved) in &native {
+    for (_name, resolved) in &core_resolved {
         if let Resolved::Color { solved, .. } = resolved {
             fgs.push(solved.hex().to_string());
             want.push((solved.lc(), solved.wcag_ratio()));

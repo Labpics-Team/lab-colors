@@ -272,19 +272,23 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-| Артефакт | raw | gzip |
-|----------|-----|------|
-| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ |
-| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ |
+Размер не закреплён в документации приблизительным числом: оно устаревает при
+любом изменении солвера. SSOT — шаг CI `report bundle size (gzip)` в `ci.yml`,
+который для каждого коммита печатает точные raw-байты и результат `gzip -9`
+отдельно для `labcolors_bg.wasm` и wasm-bindgen-обёртки `labcolors.js`.
 
-Замер CI-шага `report bundle size` (ci.yml) — raw и gzip.
-
-Это ВЕСЬ движок: перцептивная модель CAM16, солверы контраста, лестницы, граница конфига. `.wasm` — не JS-байты бандла, а ассет: он **не на критическом пути рендера** — грузится параллельно, компилируется потоково вне главного треда, кэшируется браузером после первой загрузки. Вспомогательные функции (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) — несколько сотен байт чистого JavaScript с tree-shaking через именованные экспорты.
+Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
+поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого
+рендера, определяет интеграция: до первого `resolveTheme` инициализация обязана
+завершиться; приложение может preload/кэшировать модуль. JS-хелперы
+(`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) имеют
+именованные экспорты и допускают tree-shaking, но их размер также следует мерить
+сборкой, а не описывать приблизительно.
 
 Требует современных браузеров (2023+): сборщики Vite / webpack 5 / Next штатно понимают `new URL('….wasm', import.meta.url)` (вывод wasm-pack). В node передавайте wasm-байты напрямую в `init({ module_or_path })`.
 
 ### Для аудиторов цепочки поставки
 
 - **Network access (Socket и др.):** единственный `fetch` в пакете (`pkg/labcolors.js`) загружает СОБСТВЕННЫЙ `.wasm`-файл пакета при `init(url)` — стандартный лоадер wasm-bindgen. Ни внешних адресов, ни отправки данных, ни исполнения при импорте. В node-пути (передача байтов) `fetch` не вызывается.
-- **Bundlephobia `BuildError`:** их webpack-конвейер не умеет `.wasm`-ассеты («loader customization needed») — так падает почти любой WASM-пакет. Реальные размеры — в таблице выше (замер CI-шага `report bundle size`).
-- **Zero runtime JS-dependencies:** npm-поле `dependencies` пусто — транзитивной JS/npm-цепочки поставки нет. Rust-крейты сборки (`serde`, `serde_json` и др.) компилируются ВНУТРЬ `.wasm` (учтены в его размере выше); их цепочка аудируется на стороне сборки — `cargo audit` (RustSec) в CI lab-colors.
+- **Bundlephobia `BuildError`:** их webpack-конвейер не умеет `.wasm`-ассеты («loader customization needed») — так падает почти любой WASM-пакет. Реальный размер конкретного коммита показывает CI-шаг `report bundle size (gzip)`.
+- **Zero runtime JS-dependencies:** npm-поле `dependencies` пусто — транзитивной JS/npm-цепочки поставки нет. Rust-крейты сборки (`serde`, `serde_json` и др.) компилируются ВНУТРЬ `.wasm` (учтены CI-замером); их цепочка аудируется на стороне сборки — `cargo audit` (RustSec) в CI lab-colors.

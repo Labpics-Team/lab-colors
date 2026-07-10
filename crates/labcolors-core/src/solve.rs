@@ -295,9 +295,10 @@ impl BgInput {
         }
     }
 
-    /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — то самое
-    /// device-пространство, в котором Figma/браузер композитят straight-alpha
-    /// ([`crate::alpha`]). Альфа-роль ([`crate::semantic::RoleSpec::Ladder`] /
+    /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — домен
+    /// reference-профиля [`crate::alpha`], заземлённого Figma-якорями без
+    /// универсального обещания browser pipeline. Альфа-роль
+    /// ([`crate::semantic::RoleSpec::Ladder`] /
     /// [`AlphaAnalog`](crate::semantic::RoleSpec::AlphaAnalog)) композитит свой
     /// тинт на этом фоне для честного замера контраста солид-эквивалента. Для
     /// [`Solid`](BgInput::Solid) это квантованный дисплей-цвет фона; будущие
