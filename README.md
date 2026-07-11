@@ -2,7 +2,7 @@
 
 Контекстный компилятор цветовых токенов для дизайн-систем.
 
-Lab Colors принимает конфиг клиента, компилирует его в `NamedRoleTable` и решает всю таблицу для одного локального фона и темы. Зависимые роли, которые уже представлены специальными рецептами, используют фактически полученные композиты. Браузерные помощники применяют результат, перепроверяют его при изменении окружения и при необходимости запускают новый resolve.
+Lab Colors принимает конфиг клиента, компилирует его в `NamedRoleTable` и решает всю таблицу для одного локального фона и темы. Зависимые роли, уже представленные специальными рецептами, используют фактически полученные композиты. Браузерные помощники применяют результат, перепроверяют его при изменении окружения и при необходимости запускают новый resolve.
 
 ```text
 ThemeConfig клиента
@@ -26,18 +26,18 @@ NamedRoleTable
 - **Клиентский словарь.** Имена ролей, тем и алиасов приходят из `ThemeConfig`. Core не выводит смысл из слов `primary`, `danger`, `hover` или имени компонента.
 - **Контекстный resolve.** Одна таблица решается заново для переданного локального фона и темы.
 - **Специализированные зависимости.** Например, `PairLabel` решается против эмитированного композита своей `PairFill`, а не против фона страницы.
-- **Несколько видов результата.** Роль может вернуть solid, translucent, material, point-glow, явное отсутствие значения или недостижимость.
+- **Несколько видов результата.** Роль может вернуть solid, translucent, material, точечный glow, явное отсутствие значения или недостижимость.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
-- **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальным DOM-scope.
+- **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальной областью DOM.
 
 ## Что не следует приписывать текущей реализации
 
-- Произвольный generic dependency graph и совместный SCC-solver ещё не являются публичным API. Сейчас есть whole-table resolve и отдельные специализированные пути зависимостей.
-- Текущие CAM16, CAM16-UCS, Oklab и LPC-решения не доказаны как битово-точные на всех runtime и платформах.
-- DOM traversal не является измерением фактически нарисованных пикселей браузера.
-- Point-glow и point-material не являются сертификатом blur, spatial field, HDR или физического дисплея.
+- Произвольный generic dependency graph и совместный SCC-solver ещё не являются публичным API. Сейчас есть resolve всей таблицы и отдельные специализированные пути зависимостей.
+- Текущие решения на основе CAM16, CAM16-UCS, Oklab и LPC не доказаны как битово-точные на всех средах выполнения и платформах.
+- Обход DOM не является измерением фактически нарисованных пикселей браузера.
+- Точечные Glow и Material не являются сертификатом blur, пространственного поля, HDR или физического дисплея.
 - Автоматический выбор человечески «лучшего», «чистого», «похожего на бренд» или культурно правильного цвета не является частью обязательного базового resolve.
-- P3, HDR, individual-observer appearance и неизвестный user-agent override нельзя молча сводить к sRGB.
+- P3, HDR, индивидуальное восприятие и неизвестное вмешательство user agent нельзя молча сводить к sRGB.
 
 ## Быстрый старт
 
@@ -51,29 +51,37 @@ npm install @labpics/colors
 
 ```ts
 import init, { LabColors, applyTheme } from "@labpics/colors";
-import themeConfig from "./theme.config.json";
 
 await init();
 
+const response = await fetch("/theme.config.json");
+if (!response.ok) {
+  throw new Error(`Не удалось загрузить конфиг: ${response.status}`);
+}
+
 const colors = new LabColors();
-colors.loadConfig(JSON.stringify(themeConfig));
+colors.loadConfig(await response.text());
 
 const result = colors.resolveTheme("#FFFFFF", "light");
 applyTheme(document.documentElement, result);
 ```
 
-Имена тем должны поддерживаться загруженным конфигом и текущей platform-границей. Имена CSS-переменных определяются клиентской схемой.
+Имена тем должны поддерживаться загруженным конфигом и текущей платформенной границей. Имена CSS-переменных определяются клиентской схемой.
 
 Для локального элемента:
 
 ```ts
 import init, { LabColors, watchTheme } from "@labpics/colors";
-import themeConfig from "./theme.config.json";
 
 await init();
 
+const response = await fetch("/theme.config.json");
+if (!response.ok) {
+  throw new Error(`Не удалось загрузить конфиг: ${response.status}`);
+}
+
 const colors = new LabColors();
-colors.loadConfig(JSON.stringify(themeConfig));
+colors.loadConfig(await response.text());
 
 const panel = document.querySelector(".panel");
 if (!(panel instanceof HTMLElement)) {
@@ -98,16 +106,16 @@ TypeScript-путь `loadConfig → resolveTheme → applyTheme/watchTheme` пр
 
 - именами токенов;
 - названиями уровней;
-- semantic categories;
-- component state names;
-- aliases;
-- темами и modes;
+- семантическими категориями;
+- названиями состояний компонентов;
+- алиасами;
+- темами и режимами;
 - тем, какие роли связаны между собой;
-- non-color cues.
+- нецветовыми признаками смысла.
 
 Core владеет:
 
-- цветовыми пространствами и поддерживаемыми output domains;
+- цветовыми пространствами и поддерживаемыми выходными доменами;
 - построением производных цветов;
 - контрастом и композитингом;
 - конечной эмиссией;
@@ -124,10 +132,10 @@ Core владеет:
 | `DjAnchor` | заданный шаг appearance-коррелята | читаемость или WCAG |
 | `DecorativeLc` | декоративную контрастную величину | нормативную доступность текста |
 | `Ladder` | клиентский preset тинта и alpha | общий закон уровней core |
-| `AlphaAnalog` | point-композит заданной solid-цели | воспринимаемую глубину |
+| `AlphaAnalog` | точечный композит заданной solid-цели | воспринимаемую глубину |
 | `PairFill` / `PairLabel` | вложенную пару fill → composite → label | произвольный generic graph |
-| `Material` | объявленную многослойную point-композицию | blur, refraction или physical glass |
-| `Glow` | point-effect recipe | spatial glow после blur |
+| `Material` | объявленную многослойную точечную композицию | blur, преломление или физическое стекло |
+| `Glow` | рецепт точечного эффекта | пространственный glow после blur |
 | `Zero` | явное отсутствие цветового значения | пропущенный ключ |
 
 ## Численные гарантии
@@ -138,36 +146,36 @@ Core владеет:
 
 | Вид | Что означает |
 |---|---|
-| **Reference exact** | результат точен только для зафиксированной арифметики и reference-profile Lab Colors |
-| **Browser observed** | пиксель подтверждён конкретным browser/renderer capture |
+| **Reference exact** | результат точен только для зафиксированной арифметики и эталонного профиля Lab Colors |
+| **Browser observed** | пиксель подтверждён снимком конкретного браузера и renderer-контекста |
 | **Display measured** | результат подтверждён измерительной сессией на физическом дисплее |
 
-CSS-строка, CSSOM и DOM traversal сами по себе не повышают результат до `Browser observed` или `Display measured`.
+CSS-строка, CSSOM и обход DOM сами по себе не повышают результат до `Browser observed` или `Display measured`.
 
-### Матрица capability
+### Матрица возможностей
 
 | Класс | Текущий смысл |
 |---|---|
-| **Supported point sRGB path** | encoded sRGB input/output, client config, whole-table resolve и специализированные recipes в заявленной версии пакета |
-| **Legacy platform-characterized** | target-driven CAM16/CAM16-UCS/Oklab/LPC, neutral/accent/sentiment policies и связанные float-search решения; они работают как compatibility behavior, но не являются cross-runtime bit-exact guarantee |
-| **Capability-specific reference exact** | только операции, для которых конкретный release возвращает/документирует reference profile и проверяемый конечный контракт |
-| **Explicitly unsupported as stable guarantee** | Display-P3 solving, HDR/PQ/HLG, spatial glow/material field, individual-observer appearance, неизвестный browser/display pipeline |
+| **Поддерживаемый точечный путь sRGB** | encoded sRGB input/output, клиентский конфиг, resolve всей таблицы и специализированные рецепты в заявленной версии пакета |
+| **Унаследованное платформенно охарактеризованное поведение** | target-driven CAM16/CAM16-UCS/Oklab/LPC, neutral/accent/sentiment policies и связанные поиски по `f64`; они поддерживают совместимость, но не дают cross-runtime bit-exact guarantee |
+| **Точность в отдельном эталонном профиле** | только операции, для которых конкретный release объявляет эталонный профиль и проверяемый конечный контракт |
+| **Явно не поддержано как стабильная гарантия** | Display-P3 solving, HDR/PQ/HLG, пространственное поле Glow/Material, индивидуальное восприятие, неизвестный browser/display pipeline |
 
-До появления machine-readable numerical profile нельзя повышать legacy float-result до `BitExact`, `ProvenOptimal` или `ProvenInfeasible` только потому, что тесты на одной платформе зелёные.
+До появления машинно читаемого численного профиля нельзя повышать legacy-результат до `BitExact`, `ProvenOptimal` или `ProvenInfeasible` только потому, что тесты на одной платформе зелёные.
 
 ## Источники и производные значения
 
-Exact anchors и literals являются входными данными клиента. Solver не должен незаметно использовать их как свободные переменные.
+Точные anchors и literals являются входными данными клиента. Solver не должен незаметно использовать их как свободные переменные.
 
 Производный цвет может зависеть от:
 
 - текущего локального фона;
 - темы;
-- output profile;
-- специализированного зависимого recipe;
-- явно выбранного client/compatibility profile.
+- выходного профиля;
+- специализированного зависимого рецепта;
+- явно выбранного клиентского профиля или профиля совместимости.
 
-Полная provenance-модель развивается отдельно. Отсутствие provenance metadata в старом результате нельзя компенсировать догадкой по имени роли.
+Полная модель происхождения данных развивается отдельно. Отсутствие provenance metadata в старом результате нельзя компенсировать догадкой по имени роли.
 
 ## Непрерывные семейства и конечный output
 
@@ -183,15 +191,15 @@ anchors
 
 - `t` не является встроенным словарём `Primary / Secondary / ...`.
 - Одинаковый клиентский уровень разных семейств не обязан иметь одинаковый `t`.
-- Непрерывный результат не доказывает конечную output-оптимальность.
-- Текущие gamma, chroma и hue policies являются compatibility/product policies, пока более сильный статус не доказан.
-- Stable finite runtime в целевой архитектуре использует заранее скомпилированный конечный набор состояний, а не семантическое ветвление по произвольному `ColorCurve::at(f64)`.
+- Непрерывный результат не доказывает оптимальность на конечном выходном домене.
+- Текущие gamma, chroma и hue policies являются политиками совместимости или продукта, пока более сильный статус не доказан.
+- Стабильный конечный runtime в целевой архитектуре использует заранее скомпилированный набор состояний, а не семантическое ветвление по произвольному `ColorCurve::at(f64)`.
 
 ## Контраст и доступность
 
 Нормативный контраст и экспериментальные метрики разделены.
 
-- Нормативный floor применяется только там, где его требует клиентский/component contract.
+- Нормативный floor применяется только там, где его требует контракт клиента или компонента.
 - Core не определяет размер текста, essentialness, disabled/decorative status по имени роли.
 - Экспериментальный LPC/APCA-shaped или appearance-результат не меняет WCAG pass/fail.
 - До миграции на единый versioned WCAG 2.2 profile старое поле `wcagRatio` нельзя автоматически рекламировать как `Wcag22`.
@@ -201,31 +209,31 @@ anchors
 
 ### `effectiveBackground`
 
-Текущая функция — convenience/reference estimate для поддерживаемой цепочки CSS-цветов, а не доказательство того, что пользователь видит именно этот пиксель.
+Текущая функция — вспомогательная эталонная оценка для поддерживаемой цепочки CSS-цветов, а не доказательство того, что пользователь видит именно этот пиксель.
 
 Критические ограничения:
 
-- image, gradient, video, blend mode, filter и backdrop-filter требуют явных samples или capture;
-- неизвестный/неподдерживаемый CSS нельзя считать прозрачным слоем;
-- отсутствие непрозрачной базы, предел обхода и ошибка style API должны рассматриваться как неизвестный контекст, а не как белый/чёрный fallback;
-- engine-owned output предпочтительно передавать байтами, а не повторно декодировать из CSS-строки.
+- image, gradient, video, blend mode, filter и backdrop-filter требуют явных образцов или снимка;
+- неизвестный или неподдерживаемый CSS нельзя считать прозрачным слоем;
+- отсутствие непрозрачной базы, предел обхода и ошибка style API должны рассматриваться как неизвестный контекст, а не как белый или чёрный fallback;
+- эмитированные движком значения предпочтительно передавать байтами, а не повторно декодировать из CSS-строки.
 
-Текущий legacy helper ещё не реализует весь строгий typed-observation контракт. Его bare hex нельзя использовать как browser/display certificate.
+Текущий helper совместимости ещё не реализует весь строгий типизированный контракт наблюдения. Его bare hex нельзя использовать как сертификат браузера или дисплея.
 
 ### `watchTheme`
 
-Обслуживает изменения, которые видит текущий DOM adapter. `MutationObserver` не гарантирует обнаружение любого изменения computed style, media environment или layout.
+Обслуживает изменения, которые видит текущий DOM-adapter. `MutationObserver` не гарантирует обнаружение любого изменения computed style, media environment или layout.
 
 ### `adaptTheme`
 
-Текущий контроллер является совместимым legacy runtime-механизмом. Он не должен описываться как уже доказанная гарантия нормативного floor на каждом промежуточном кадре и на всех samples.
+Текущий контроллер является унаследованным механизмом совместимости. Он не должен описываться как уже доказанная гарантия нормативного floor на каждом промежуточном кадре и на всех образцах.
 
 Нормативный целевой контракт строже:
 
 ```text
 известный набор фонов
 → решить candidate
-→ проверить конечные emitted values на каждом обязательном sample
+→ проверить конечные emitted values на каждом обязательном образце
 → только затем записать
 ```
 
@@ -233,19 +241,19 @@ anchors
 
 ## Темы и platform overrides
 
-- Точный theme-specific anchor имеет приоритет.
-- Current adapter может поддерживать более узкий список theme IDs, чем client-agnostic core architecture.
+- Точный anchor конкретной темы имеет приоритет.
+- Текущий адаптер может поддерживать более узкий список theme IDs, чем клиент-агностичная архитектура core.
 - Product increased-contrast theme, `prefers-contrast` и forced colors — разные сущности.
-- Authored token value не является сертификатом фактического used color после неизвестного UA override.
-- Forced Colors может удалить shadow/background-image; point Glow/Material result тогда может не быть нарисован вовсе.
+- Авторское значение токена не является сертификатом фактического used color после неизвестного UA override.
+- Forced Colors может удалить shadow/background-image; точечный результат Glow/Material тогда может не быть нарисован вовсе.
 
 ## Optional Screen ColorQuality
 
-`Preserve / Audit / Project` — зафиксированная архитектурная политика отдельного optional layer, а не обещание, что observer-backed projector уже доступен в stable package.
+`Preserve / Audit / Project` — зафиксированная архитектурная политика отдельного необязательного слоя, а не обещание, что observer-backed projector уже доступен в stable package.
 
-- `Preserve` не выполняет optional semantic mutation.
+- `Preserve` не выполняет дополнительную семантическую мутацию.
 - `Audit` добавляет анализ, не меняя candidate.
-- `Project` допустим только с admitted model/profile, `NoChange`, uncertainty и final-state certificate.
+- `Project` допустим только с допущенной моделью или профилем, `NoChange`, семантикой неопределённости и сертификатом конечного результата.
 
 Базовый context-dependent resolve от этого слоя не зависит.
 
@@ -319,5 +327,5 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```text
 Дизайн-система задаёт язык, источники и намерения.
 Lab Colors компилирует их в проверяемые цветовые контракты.
-Runtime поддерживает эти контракты в пределах явно заявленных capabilities.
+Runtime поддерживает эти контракты в пределах явно заявленных возможностей.
 ```
