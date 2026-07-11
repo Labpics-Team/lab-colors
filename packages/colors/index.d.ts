@@ -11,15 +11,28 @@ export {
   LabColors,
 } from "./pkg/labcolors.js";
 
+// Curated public schema/result surface. wasm-bindgen's InitOutput and raw
+// __wbg_* ABI helpers remain implementation details.
 export type {
   ThemeName,
   SolvedColor,
-  TranslucentRole,
-  GlowRole,
-  MaterialRole,
   NoneRole,
   UnreachableRole,
+  TranslucentRole,
+  GlowDecisionProfileV1,
+  NumericalIndeterminacyV1,
+  GlowDecisionGuaranteeV1,
+  GlowDeterminateRole,
+  GlowIndeterminateRoleBase,
+  GlowIndeterminateRole,
+  GlowRole,
+  MaterialRole,
   RoleResult,
+  ThemeAnchors,
+  LadderSource,
+  LadderPositionV1,
+  RoleRecipe,
+  ThemeConfig,
   ResolvedTheme,
 } from "./pkg/labcolors.js";
 

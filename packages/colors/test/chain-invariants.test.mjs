@@ -26,6 +26,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { initSync, LabColors } from "../pkg/labcolors.js";
+import { applyTheme } from "../apply-theme.js";
 import { parseCssColor, compositeOver, toHex } from "../effective-bg.js";
 
 // Инициализация wasm в node: pkg собран под `--target web` (fetch по URL), а в
@@ -234,7 +235,13 @@ test("glow roles emit halo primary + -core/-alpha satellites, all well-formed", 
         assert.ok(Object.is(a, role.alpha), `${theme}/${bg}/${key}: alpha lost binary64 bits`);
 
         assert.equal(role.constraintLayer, "halo");
-        assert.equal(role.referenceProfile, "encoded-srgb8-screen-cam16ucs-jprime-v1");
+        assert.equal(role.compositeProfile, "encoded-srgb8-screen-v1");
+        assert.equal(role.compositeGuarantee, "bit-exact");
+        assert.equal(role.diagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+        assert.equal(role.decisionProfile, "legacy-platform-dependent-v1");
+        assert.deepEqual(role.decisionGuarantee, {
+          kind: "legacy-platform-dependent-v1",
+        });
         assert.ok(["reached", "unreachable"].includes(role.targetStatus));
         assert.equal(role.degraded, role.targetStatus === "unreachable");
         assert.ok(Object.is(role.achievedDj, role.haloAchievedDj));
@@ -261,6 +268,43 @@ test("glow roles emit halo primary + -core/-alpha satellites, all well-formed", 
     }
   }
   assert.ok(glowChecked > 0, "no glow roles exercised — passport should carry glows");
+});
+
+test("stable glow indeterminate emits no fallback vars and clears previous legacy satellites", () => {
+  const legacy = engine().resolveTheme("#101012", "dark");
+  assert.ok(legacy.vars["--lab-fx-glow-brand"]);
+
+  const stablePassport = structuredClone(PASSPORT_OBJ);
+  const brandGlow = stablePassport.roles.find(({ name }) => name === "fx-glow-brand");
+  assert.ok(brandGlow, "anti-vacuum: passport must contain fx-glow-brand");
+  brandGlow.recipe.decision_profile = "stable-v1";
+  const stableEngine = new LabColors();
+  stableEngine.loadConfig(JSON.stringify(stablePassport));
+  const stable = stableEngine.resolveTheme("#101012", "dark");
+  const role = stable.roles["fx-glow-brand"];
+  assert.equal(role.kind, "glow-indeterminate");
+  assert.equal(role.numericalSiteId, "glow-target-or-maximum-v1");
+  assert.equal(role.reason, "sound-bound-unavailable");
+  assert.equal(role.bounds.kind, "unavailable");
+  for (const key of [role.cssVar, `${role.cssVar}-core`, `${role.cssVar}-alpha`]) {
+    assert.equal(stable.vars[key], undefined, `${key}: no implicit legacy fallback`);
+  }
+
+  const props = new Map();
+  const element = {
+    style: {
+      get length() { return props.size; },
+      item(index) { return [...props.keys()][index] ?? ""; },
+      setProperty(key, value) { props.set(key, value); },
+      removeProperty(key) { props.delete(key); },
+    },
+  };
+  applyTheme(element, legacy);
+  assert.ok(props.has("--lab-fx-glow-brand-alpha"));
+  applyTheme(element, stable);
+  assert.ok(!props.has("--lab-fx-glow-brand"));
+  assert.ok(!props.has("--lab-fx-glow-brand-core"));
+  assert.ok(!props.has("--lab-fx-glow-brand-alpha"));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -15,9 +15,9 @@
 | --- | --- |
 | членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
 | крейтов семейства в crates/ | 5 |
-| экспорт-субпутей package.json @labpics/colors | 7 |
+| экспорт-субпутей package.json @labpics/colors | 8 |
 | python-скриптов scripts/*.py | 2 |
-| маркдаун-доков docs/**/*.md (включая этот канон) | 11 |
+| маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 6 |
 | файлов вне закона имён | 4 |
 
@@ -55,6 +55,8 @@
   `./adapt-theme`, `./effective-bg`. Каждый субпуть разрешается в исходник
   packages/colors (exports без кода запрещены — сверяет typecheck пакета).
 - Служебный субпуть `./package.json` — стандарт npm, разрешён законом.
+- Служебный субпуть `./build-metadata.json` — versioned machine-readable build
+  metadata опубликованных байтов; расширение фиксирует JSON-формат контракта.
 - Артефактный субпуть `./pkg/labcolors_bg.wasm` — см. «Известные отступления».
 - Файлы пакета — kebab-case (`apply-theme.js` + `apply-theme.d.ts`).
 
@@ -71,6 +73,8 @@
   `verification-map.md`); канонам разрешён КАПС-стем (`NAMING.md`).
 - ADR в docs/decisions/ — `NNNN-kebab-тема.md` (`0001-config-boundary.md`);
   номер сквозной, тема — kebab.
+- Миграции в docs/migrations/ — kebab-case по предмету breaking-контракта
+  (`exact-alpha-glow.md`); одна дока обязана покрывать upgrade и rollback.
 - Векторы конформанса — conformance/vectors/`<домен>.json`, домен — одно
   kebab-слово (alpha, contrasts, ladders, muddiness, solve) + manifest.json.
 
@@ -87,6 +91,9 @@
 - `./pkg/labcolors_bg.wasm` — субпуть-артефакт wasm-pack: имя `labcolors_bg.wasm`
   генерирует wasm-bindgen из `--out-name labcolors`, snake_case продиктован
   тулингом и руками не переименовывается.
+- `./build-metadata.json` — служебный JSON-контракт build metadata; расширение
+  намеренно остаётся частью subpath, чтобы формат был явным и потребитель не
+  принимал его за исполняемый JS entrypoint.
 - `crates/labcolors-core/tests/data/labui_emission_golden.txt` — golden-фикстура
   Rust-теста, snake_case в тон соседним `.rs` (данные теста наследуют закон
   своего потребителя).

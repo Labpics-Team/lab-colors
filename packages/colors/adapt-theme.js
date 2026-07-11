@@ -123,7 +123,7 @@ function segLum(seg, t) {
  *
  * @param {*} element
  * @param {object} options
- * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:string,fgs:string[],theme:string)=>ArrayLike<number> }} options.colors
+ * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:string,fgs:string[],theme:string)=>ArrayLike<number>, isStableGlowPointNoop?:(tint:string,bg:string)=>boolean }} options.colors
  * @param {string} options.theme
  * @param {string | string[] | (() => string | string[])} [options.background]
  *   explicit effective background. An ARRAY (or a function returning one) is a
@@ -171,6 +171,11 @@ export function adaptTheme(element, options) {
   let theme = options.theme;
   /** @type {{ cssVar: string, key: string, lc: number, hex: string, legalFloor: number|null }[]} stable role order */
   let roles = [];
+  /** Stable Glow roles need an exact class recheck in addition to color
+   * contrast rechecks. The only determinate stable state is the core-certified
+   * quantised screen point no-op; every other state is typed Indeterminate and must have
+   * no halo/core/alpha vars. */
+  let stableGlows = [];
   /** Full canonical var set from the last solve — the `result.vars` of EVERY
    * reachable role (color AND translucent), each an oklch string. Every apply is
    * `applyTheme(target, {...baseVars, ...easedColorOverlay})`, so translucent
@@ -254,9 +259,78 @@ export function adaptTheme(element, options) {
     return { breached, worstIdx };
   };
 
-  // Resolve a fresh set and adopt it as the current colours (no ease).
-  const solveAndAdopt = (bg, now) => {
-    const result = colors.resolveTheme(bg, theme);
+  const stableGlowsFrom = (result) => {
+    const out = [];
+    for (const [key, role] of Object.entries(result.roles ?? {})) {
+      if (!role) continue;
+      const isGlow = role.kind === "glow" || role.kind === "glow-indeterminate";
+      if (!isGlow) {
+        if (role.decisionProfile !== undefined) {
+          throw new TypeError(`adaptTheme: decision profile on non-Glow role '${key}'`);
+        }
+        continue;
+      }
+      if (role.decisionProfile === "legacy-platform-dependent-v1") {
+        if (role.kind !== "glow") {
+          throw new TypeError(
+            `adaptTheme: legacy Glow '${key}' cannot be Indeterminate`,
+          );
+        }
+        continue;
+      }
+      if (role.decisionProfile !== "stable-v1") {
+        throw new TypeError(`adaptTheme: Glow '${key}' lacks an explicit known decisionProfile`);
+      }
+      if (typeof role.cssVar !== "string") {
+        throw new TypeError(`adaptTheme: stable Glow '${key}' lacks cssVar`);
+      }
+      const emittedKeys = [role.cssVar, `${role.cssVar}-core`, `${role.cssVar}-alpha`];
+      if (role.kind === "glow") {
+        if (
+          role.decisionGuarantee?.kind !== "bit-exact" ||
+          role.compositeProfile !== "encoded-srgb8-screen-v1" ||
+          role.compositeGuarantee !== "bit-exact" ||
+          role.diagnosticProfile !== null ||
+          role.constraintLayer !== "halo" ||
+          role.targetStatus !== "unreachable" ||
+          typeof role.haloHex !== "string" ||
+          emittedKeys.some((emittedKey) => typeof result.vars?.[emittedKey] !== "string")
+        ) {
+          throw new TypeError(`adaptTheme: stable Glow '${key}' lacks BitExact evidence`);
+        }
+        out.push({ key, cssVar: role.cssVar, sourceHex: role.haloHex, indeterminate: false });
+        continue;
+      }
+      if (role.kind === "glow-indeterminate") {
+        const expectedSite =
+          role.numericalSiteId === "glow-target-or-maximum-v1" &&
+          role.constraintLayer === "halo";
+        const unavailable =
+          role.reason === "sound-bound-unavailable" && role.bounds?.kind === "unavailable";
+        const soundOverlap =
+          role.reason === "interval-overlap" &&
+          role.bounds?.kind === "outward" &&
+          Number.isFinite(role.bounds.lower) &&
+          Number.isFinite(role.bounds.upper) &&
+          role.bounds.lower <= role.bounds.upper;
+        const lawfulEvidence = expectedSite && (unavailable || soundOverlap);
+        if (
+          !lawfulEvidence ||
+          typeof role.sourceHex !== "string" ||
+          emittedKeys.some((emittedKey) => Object.hasOwn(result.vars ?? {}, emittedKey))
+        ) {
+          throw new TypeError(`adaptTheme: stable Glow '${key}' lacks lawful Indeterminate evidence`);
+        }
+        out.push({ key, cssVar: role.cssVar, sourceHex: role.sourceHex, indeterminate: true });
+        continue;
+      }
+      throw new TypeError(`adaptTheme: stable decision profile on unknown Glow role '${key}'`);
+    }
+    return out;
+  };
+
+  // Adopt one already-resolved set as the current colours (no ease).
+  const adoptResolved = (result, now) => {
     // Carry the FULL canonical var set (color + translucent) so no reachable
     // role is dropped by a subsequent apply; only color roles feed the ease.
     baseVars = result.vars && typeof result.vars === "object" ? result.vars : {};
@@ -269,6 +343,7 @@ export function adaptTheme(element, options) {
         hex: r.hex,
         legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
       }));
+    stableGlows = stableGlowsFrom(result);
     fgsCache = roles.map((r) => r.hex);
     // The adopt may change the var/role KEY SET — force the next write through
     // `applyTheme`'s full clear-then-write instead of the mid-ease diff path.
@@ -277,6 +352,9 @@ export function adaptTheme(element, options) {
     breachSince = null;
     return result;
   };
+
+  // Resolve a fresh set and adopt it as the current colours (no ease).
+  const solveAndAdopt = (bg, now) => adoptResolved(colors.resolveTheme(bg, theme), now);
 
   // Solve+adopt against the hardest of `samples`. With one sample this is a
   // single solve; with several it does a provisional solve to learn the role
@@ -327,6 +405,97 @@ export function adaptTheme(element, options) {
   // Apply the canonical set as-is (no ease in flight): color roles show their
   // oklch form, translucent roles their tint+alpha.
   const applyRolesDirect = () => applyHexes({});
+
+  const stableVarKeys = (role) => [
+    role.cssVar,
+    `${role.cssVar}-core`,
+    `${role.cssVar}-alpha`,
+  ];
+
+  /**
+   * Recheck the background-dependent stable Glow decision class. This is not a
+   * contrast surplus and therefore never passes through sustain/dwell/easing.
+   * A stable Glow result requires the core-owned exact predicate. Missing
+   * capability is a typed integration error, never a hidden full-solve loop.
+   */
+  const reconcileStableGlows = (samples) => {
+    if (stableGlows.length === 0) return false;
+
+    if (typeof colors.isStableGlowPointNoop !== "function") {
+      throw new TypeError(
+        "adaptTheme: stable Glow requires colors.isStableGlowPointNoop",
+      );
+    }
+    const desired = new Map();
+    for (const role of stableGlows) {
+      desired.set(
+        role.key,
+        samples.some((bg) => !colors.isStableGlowPointNoop(role.sourceHex, bg)),
+      );
+    }
+
+    const changed = stableGlows.some(
+      (role) => desired.get(role.key) !== role.indeterminate,
+    );
+    if (!changed) return false;
+
+    // Re-resolve exactly once to refresh certificates/source metadata. Only
+    // stable Glow satellites are adopted; color/translucent roles remain under
+    // the existing adaptive contrast controller and do not snap.
+    const fresh = colors.resolveTheme(samples[0], theme);
+    const freshStable = stableGlowsFrom(fresh);
+    const freshByKey = new Map(freshStable.map((role) => [role.key, role]));
+    const nextVars = { ...baseVars };
+    for (const previous of stableGlows) {
+      const current = freshByKey.get(previous.key);
+      if (!current) {
+        throw new TypeError(`adaptTheme: stable Glow role '${previous.key}' disappeared`);
+      }
+      for (const key of stableVarKeys(previous)) delete nextVars[key];
+      const indeterminate = desired.get(previous.key);
+      if (!indeterminate) {
+        for (const key of stableVarKeys(current)) {
+          if (typeof fresh.vars?.[key] !== "string") {
+            throw new TypeError(
+              `adaptTheme: determinate stable Glow '${previous.key}' lacks '${key}'`,
+            );
+          }
+          nextVars[key] = fresh.vars[key];
+        }
+      }
+      current.indeterminate = indeterminate;
+    }
+
+    const previousVars = baseVars;
+    baseVars = nextVars;
+    stableGlows = freshStable.map((role) => {
+      const state = desired.get(role.key);
+      return state === undefined ? role : { ...role, indeterminate: state };
+    });
+    if (written !== null) {
+      // A stable certificate transition may coincide with an in-flight color
+      // ease. Patch only Glow satellites so the already-painted color overlay
+      // remains continuous; resetting `written`/`easing` here would snap every
+      // color role to its canonical destination.
+      const nextWritten = { ...written };
+      const stableKeys = new Set(
+        stableGlows.flatMap((role) => stableVarKeys(role)),
+      );
+      for (const key of stableKeys) {
+        if (typeof nextVars[key] === "string") {
+          if (previousVars[key] !== nextVars[key] || written[key] !== nextVars[key]) {
+            target.style.setProperty(key, nextVars[key]);
+          }
+          nextWritten[key] = nextVars[key];
+        } else {
+          target.style.removeProperty(key);
+          delete nextWritten[key];
+        }
+      }
+      written = nextWritten;
+    }
+    return true;
+  };
 
   // Begin an ease from the currently-applied colours toward the role colours.
   // `held` latches the per-role displayed blend so it only ever advances toward
@@ -480,6 +649,7 @@ export function adaptTheme(element, options) {
     // backdrop, so the sustain timer can fire on one that changed once to a
     // failing value and then held.
     if (key === lastKey && easing.size === 0 && breachSince === null) return;
+    if (key !== lastKey) reconcileStableGlows(samples);
     lastKey = key;
     if (roles.length === 0) return;
 
@@ -501,6 +671,7 @@ export function adaptTheme(element, options) {
     // reintroducing flicker when a re-solve overlaps a previous ease.
     const fromByVar = paintedNow(now, samples, key);
     solveAndAdopt(samples[worstIdx], now);
+    reconcileStableGlows(samples);
     beginEase(fromByVar, now);
     stepEase(now, samples, key);
   };
@@ -516,6 +687,7 @@ export function adaptTheme(element, options) {
     const samples = readSamples();
     lastKey = samples.join("|");
     solveAndAdoptWorst(samples, clock());
+    reconcileStableGlows(samples);
     applyRolesDirect();
   }
 
@@ -527,6 +699,7 @@ export function adaptTheme(element, options) {
       lastKey = samples.join("|");
       easing = new Map();
       solveAndAdoptWorst(samples, clock());
+      reconcileStableGlows(samples);
       applyRolesDirect(); // instant — a theme switch is intent, not drift
     },
     start() {

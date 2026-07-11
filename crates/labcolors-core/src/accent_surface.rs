@@ -122,8 +122,7 @@ pub fn render_surface(
         SurfaceMaterial::Solid => Ok(AccentSurface::Solid { hex: solid_hex }),
         SurfaceMaterial::Alpha => {
             let (tint_hex, alpha) =
-                resolve_alpha_analog_hex(&solid_hex, requested_alpha, base_hex)?
-                    .expect("солид/база из валидных hex ⇒ альфа-аналог разрешим");
+                resolve_alpha_analog_hex(&solid_hex, requested_alpha, base_hex)?;
             Ok(AccentSurface::Alpha { tint_hex, alpha })
         }
     }

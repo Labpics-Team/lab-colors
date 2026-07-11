@@ -414,13 +414,13 @@ pub fn resolve_alpha_analog(
     let floor = min_alpha_encoded(solid, bg)?; // None только на мусор-входах
     // Если запрошенная binary64-пара уже является точной обратной к нашему
     // прямому ходу (включая честную gamut-границу), не поднимаем прозрачность.
-    if requested_alpha > 0.0
-        && let Some(tint) = invert_composite_encoded(solid, requested_alpha, bg)
-    {
-        return Some(AlphaAnalog {
-            tint,
-            alpha: requested_alpha,
-        });
+    if requested_alpha > 0.0 {
+        if let Some(tint) = invert_composite_encoded(solid, requested_alpha, bg) {
+            return Some(AlphaAnalog {
+                tint,
+                alpha: requested_alpha,
+            });
+        }
     }
     let alpha = requested_alpha.max(floor);
     // При α == floor == 0 солид равен фону: любой видимый эффект отсутствует,
@@ -557,13 +557,13 @@ fn srgb8_tint_at_alpha(solid: [u8; 3], alpha: f64, bg: [u8; 3]) -> Option<[u8; 3
 /// сильный контракт, чем continuous-инверсия [`resolve_alpha_analog`].
 ///
 /// Недоменная запрошенная α и нарушение точного постусловия возвращаются как
-/// `Err`: такой результат нельзя отдавать наружу. `Ok(None)` сохранён в форме
-/// внутреннего API как защитный исход, но при валидных цветах и α недостижим.
+/// `Err`: такой результат нельзя отдавать наружу. Для любого валидного домена
+/// результат тотален — в худшем случае α=1 и byte-тинт равен цели.
 pub(crate) fn resolve_alpha_analog_srgb8(
     solid: [f64; 3],
     requested_alpha: f64,
     bg: [f64; 3],
-) -> Result<Option<([u8; 3], f64)>, String> {
+) -> Result<([u8; 3], f64), String> {
     if !requested_alpha.is_finite() || !(0.0..=1.0).contains(&requested_alpha) {
         return Err(format!(
             "requested_alpha вне конечного [0,1]: {requested_alpha}"
@@ -573,7 +573,7 @@ pub(crate) fn resolve_alpha_analog_srgb8(
     let bg_srgb8 = encoded_to_srgb8(bg, "bg")?;
     if let Some(tint) = srgb8_tint_at_alpha(solid_srgb8, requested_alpha, bg_srgb8) {
         verify_srgb8_alpha_analog(solid_srgb8, tint, requested_alpha, bg_srgb8)?;
-        return Ok(Some((tint, requested_alpha)));
+        return Ok((tint, requested_alpha));
     }
 
     let floor = first_srgb8_alpha(solid_srgb8, bg_srgb8);
@@ -581,7 +581,7 @@ pub(crate) fn resolve_alpha_analog_srgb8(
     let tint = srgb8_tint_at_alpha(solid_srgb8, floor, bg_srgb8)
         .ok_or_else(|| "первая sRGB8-alpha не дала допустимый byte-тинт".to_string())?;
     verify_srgb8_alpha_analog(solid_srgb8, tint, floor, bg_srgb8)?;
-    Ok(Some((tint, floor)))
+    Ok((tint, floor))
 }
 
 /// Глубинная проверка постусловия именно в эмитируемой byte-арифметике.
@@ -614,11 +614,11 @@ pub fn resolve_alpha_analog_hex(
     solid_hex: &str,
     requested_alpha: f64,
     bg_hex: &str,
-) -> Result<Option<(String, f64)>, String> {
+) -> Result<(String, f64), String> {
     let solid = srgb_encoded_from_hex(solid_hex)?;
     let bg = srgb_encoded_from_hex(bg_hex)?;
-    Ok(resolve_alpha_analog_srgb8(solid, requested_alpha, bg)?
-        .map(|(tint, alpha)| (hex_from_srgb8(tint), alpha)))
+    let (tint, alpha) = resolve_alpha_analog_srgb8(solid, requested_alpha, bg)?;
+    Ok((hex_from_srgb8(tint), alpha))
 }
 
 #[cfg(test)]
@@ -676,9 +676,7 @@ mod tests {
     #[test]
     fn source_over_half_seam_matches_the_official_js_operation_order() {
         assert_eq!(composite_hex("#000505", 0.1, "#050505").unwrap(), "#050505");
-        let (tint, actual) = resolve_alpha_analog_hex("#040505", 0.1, "#050505")
-            .unwrap()
-            .unwrap();
+        let (tint, actual) = resolve_alpha_analog_hex("#040505", 0.1, "#050505").unwrap();
         assert!(
             actual > 0.1,
             "запрошенная пара не воспроизводит красный байт 4"
@@ -740,8 +738,7 @@ mod tests {
                                 panic!(
                                     "solid={solid}, bg={bg}, requested={requested_alpha}: {error}"
                                 )
-                            })
-                            .expect("конечная α и sRGB8-цвета всегда разрешимы");
+                            });
                     let got = composite_over_srgb8(tint, actual_alpha, [bg; 3])
                         .expect("резолвер возвращает α в [0,1]");
                     assert_eq!(
@@ -773,9 +770,7 @@ mod tests {
     fn byte_grid_resolver_preserves_every_already_feasible_requested_alpha() {
         let tiny_red_alpha = 0.5 / 255.0;
         let (tiny_tint, tiny_actual) =
-            resolve_alpha_analog_hex("#010000", tiny_red_alpha, "#000000")
-                .unwrap()
-                .unwrap();
+            resolve_alpha_analog_hex("#010000", tiny_red_alpha, "#000000").unwrap();
         assert_eq!(tiny_tint, "#FF0000");
         assert_eq!(tiny_actual.to_bits(), tiny_red_alpha.to_bits());
         assert_eq!(
@@ -783,9 +778,7 @@ mod tests {
             "#010000"
         );
 
-        let (tint, actual) = resolve_alpha_analog_hex("#1F0000", 0.12, "#000000")
-            .unwrap()
-            .unwrap();
+        let (tint, actual) = resolve_alpha_analog_hex("#1F0000", 0.12, "#000000").unwrap();
         assert_eq!(tint, "#FF0000");
         assert_eq!(actual.to_bits(), 0.12_f64.to_bits());
         assert_eq!(composite_hex(&tint, actual, "#000000").unwrap(), "#1F0000");
@@ -797,9 +790,7 @@ mod tests {
     #[test]
     fn byte_grid_resolver_handles_tiny_normal_and_subnormal_alpha() {
         for requested in [2_f64.powi(-100), f64::from_bits(1)] {
-            let (tint, actual) = resolve_alpha_analog_hex("#010000", requested, "#000000")
-                .unwrap()
-                .unwrap();
+            let (tint, actual) = resolve_alpha_analog_hex("#010000", requested, "#000000").unwrap();
             assert!(actual > requested);
             assert_eq!(composite_hex(&tint, actual, "#000000").unwrap(), "#010000");
             let predecessor = f64::from_bits(actual.to_bits() - 1);
@@ -840,9 +831,9 @@ mod tests {
     #[test]
     fn srgb8_resolver_quantises_target_before_inversion_and_guard_rejects_drift() {
         let off_grid_solid = [0.25 / 255.0; 3];
-        let (tint, alpha) = resolve_alpha_analog_srgb8(off_grid_solid, 0.5, [0.0; 3])
-            .expect("валидный числовой домен")
-            .expect("конечная α разрешима");
+        let resolved: Result<([u8; 3], f64), String> =
+            resolve_alpha_analog_srgb8(off_grid_solid, 0.5, [0.0; 3]);
+        let (tint, alpha) = resolved.expect("валидный домен всегда имеет конечный sRGB8-ответ");
         assert_eq!(tint, [0; 3]);
         assert_eq!(composite_over_srgb8(tint, alpha, [0; 3]).unwrap(), [0; 3]);
 
@@ -1080,8 +1071,7 @@ mod tests {
         // Hex-путь: неразрешимая α поднимается, а итоговый sRGB8-композит
         // побайтно равен солиду.
         let (tint2, actual) = resolve_alpha_analog_hex("#101012", 0.05, "#FFFFFF")
-            .expect("валидный hex")
-            .expect("цвета в домене");
+            .expect("валидный домен всегда имеет конечный ответ");
         assert!(actual > 0.05, "α обязана подняться до разрешимой");
         assert_eq!(composite_hex(&tint2, actual, "#FFFFFF").unwrap(), "#101012");
         // Невалидный hex — Err на каждой обёртке (никаких паник).

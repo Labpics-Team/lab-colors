@@ -3,8 +3,8 @@
 //! Четыре независимых слоя, каждый ловит свой класс дрейфа:
 //!
 //! 1. **Гейт дрейфа (толерантный)** — ядро воспроизводит КАЖДЫЙ закоммиченный
-//!    вектор: числовые поля в пределах [`DRIFT_TOL`] (`1e-6`, канон ядра —
-//!    `labcolors-core/src/lut.rs`), hex/строки/enum/bool — точно. Байт-точность
+//!    вектор: числовые поля в пределах [`DRIFT_TOL`] (`1e-6`, SSOT пака —
+//!    `labcolors-conformance/src/lib.rs`), hex/строки/enum/bool — точно. Байт-точность
 //!    f64 кросс-платформенно НЕВОЗМОЖНА: `powf`/`atan2`/`ln` расходятся на
 //!    несколько ULP между libm разных ОС (векторы генерятся на одной, CI бежит
 //!    на другой). Реальный дрейф (не тот surround, опечатка в матрице) сдвигает
@@ -202,6 +202,10 @@ fn manifest_metadata_matches_core() {
     assert_eq!(committed.pack_version, fresh.pack_version, "версия пака");
     assert_eq!(committed.core_version, fresh.core_version, "версия ядра");
     assert_eq!(committed.counts, fresh.counts, "счётчики семейств");
+    assert_eq!(
+        committed.numerical_sites, fresh.numerical_sites,
+        "numerical registry обязан быть exact copy core SSOT"
+    );
 }
 
 // ── Слой 3: согласованность дайджеста над сырыми байтами ──────────────────────

@@ -1,10 +1,12 @@
 [package]
 name = "labcolors-wasm"
+publish = false
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 description = "WASM bindings for the labcolors-core contrast engine, packaged as @labpics/colors."
 
 [lib]
@@ -29,6 +31,7 @@ serde_json = "1"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+labcolors-conformance = { path = "../labcolors-conformance" }
 # Native criterion bench of the solve cache-MISS path (`benches/resolve.rs`),
 # over the real labui config via the same load_config path. Mirrors
 # labcolors-core's `forward` bench. dev-only — never in the WASM bundle.

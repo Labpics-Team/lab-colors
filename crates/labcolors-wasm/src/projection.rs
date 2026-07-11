@@ -100,7 +100,38 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                     });
                 }
                 field_str(&mut roles, "alphaCss", &g.alpha_css);
-                field_str(&mut roles, "referenceProfile", g.reference_profile);
+                field_str(&mut roles, "compositeProfile", g.composite_profile.key());
+                field_str(
+                    &mut roles,
+                    "compositeGuarantee",
+                    g.composite_guarantee.key(),
+                );
+                field_opt_str(
+                    &mut roles,
+                    "diagnosticProfile",
+                    g.diagnostic_profile.map(|profile| profile.key()),
+                );
+                field_str(&mut roles, "decisionProfile", g.decision_profile.key());
+                roles.push_str(",\"decisionGuarantee\":{\"kind\":");
+                match g.decision_guarantee {
+                    labcolors_core::DecisionGuaranteeV1::BitExact => {
+                        push_str_lit(&mut roles, "bit-exact");
+                    }
+                    labcolors_core::DecisionGuaranteeV1::OutwardIntervalV1(interval) => {
+                        push_str_lit(&mut roles, "outward-interval-v1");
+                        field_num(&mut roles, "lower", interval.lower())?;
+                        field_num(&mut roles, "upper", interval.upper())?;
+                    }
+                    labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1 => {
+                        push_str_lit(&mut roles, "legacy-platform-dependent-v1");
+                    }
+                    _ => {
+                        return Err(BindingError::Internal {
+                            reason: "проекция: неизвестный DecisionGuaranteeV1".to_string(),
+                        });
+                    }
+                }
+                roles.push('}');
                 field_str(&mut roles, "constraintLayer", g.constraint_layer.key());
                 field_num(&mut roles, "targetDj", g.target_dj)?;
                 field_str(&mut roles, "targetStatus", g.target_status.key());
@@ -121,6 +152,35 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 push_var(&mut vars, &css_var, &halo_css);
                 push_var(&mut vars, &format!("{css_var}-core"), &core_css);
                 push_var(&mut vars, &format!("{css_var}-alpha"), &g.alpha_css);
+            }
+            RoleOutcome::GlowIndeterminate(g) => {
+                field_str(&mut roles, "kind", "glow-indeterminate");
+                field_str(&mut roles, "sourceHex", &g.source_hex);
+                field_num(&mut roles, "targetDj", g.target_dj)?;
+                field_str(&mut roles, "constraintLayer", g.constraint_layer.key());
+                field_str(&mut roles, "decisionProfile", g.decision_profile.key());
+                field_str(&mut roles, "numericalSiteId", g.site_id.key());
+                field_str(&mut roles, "reason", g.evidence.reason_key());
+                roles.push_str(",\"bounds\":{\"kind\":");
+                match g.evidence {
+                    labcolors_core::NumericalIndeterminacyV1::SoundBoundUnavailable => {
+                        push_str_lit(&mut roles, "unavailable");
+                    }
+                    labcolors_core::NumericalIndeterminacyV1::IntervalOverlap(interval) => {
+                        push_str_lit(&mut roles, "outward");
+                        field_num(&mut roles, "lower", interval.lower())?;
+                        field_num(&mut roles, "upper", interval.upper())?;
+                    }
+                    _ => {
+                        return Err(BindingError::Internal {
+                            reason: "проекция: неизвестный NumericalIndeterminacyV1".to_string(),
+                        });
+                    }
+                }
+                roles.push('}');
+                // Stable Indeterminate emits no halo/core/alpha vars. The
+                // caller sees a typed terminal outcome instead of a stale or
+                // platform-selected fallback colour.
             }
             RoleOutcome::Material(m) => {
                 // Материал (#89): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
@@ -204,6 +264,19 @@ fn field_str(out: &mut String, name: &str, value: &str) {
     push_str_lit(out, value);
 }
 
+/// Опциональная строка: `None` эмитится как явный `null`, чтобы отсутствие
+/// выполненной диагностики нельзя было спутать с потерянным полем контракта.
+fn field_opt_str(out: &mut String, name: &str, value: Option<&str>) {
+    match value {
+        Some(value) => field_str(out, name, value),
+        None => {
+            out.push_str(",\"");
+            out.push_str(name);
+            out.push_str("\":null");
+        }
+    }
+}
+
 /// Поле-число. НЕ-конечное значение — нарушение инварианта солвера: честная
 /// ошибка вместо невалидного JSON или тихой подмены.
 fn field_num(out: &mut String, name: &str, value: f64) -> Result<(), BindingError> {
@@ -261,7 +334,10 @@ fn push_str_lit(out: &mut String, s: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dto::{GlowColor, ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
+    use crate::dto::{
+        GlowColor, GlowIndeterminateColor, ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome,
+        SolvedColor,
+    };
 
     fn color_entry(key: &str) -> RoleEntry {
         RoleEntry {
@@ -309,7 +385,16 @@ mod tests {
                         alpha: 0.036_045_459_685_627_89,
                         alpha_css: "0.03604545968562789".to_string(),
                         target_dj: 2.3006,
-                        reference_profile: labcolors_core::GLOW_REFERENCE_PROFILE,
+                        composite_profile:
+                            labcolors_core::GlowCompositeProfileV1::EncodedSrgb8ScreenV1,
+                        composite_guarantee: labcolors_core::GlowCompositeGuaranteeV1::BitExact,
+                        diagnostic_profile: Some(
+                            labcolors_core::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
+                        ),
+                        decision_profile:
+                            labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1,
+                        decision_guarantee:
+                            labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1,
                         constraint_layer: labcolors_core::GlowConstraintLayer::Halo,
                         target_status: labcolors_core::GlowTargetStatus::Reached,
                         halo_composite_hex: "#13151B".to_string(),
@@ -359,7 +444,11 @@ mod tests {
                 "\"pulse\":{{\"cssVar\":\"--lab-pulse\",\"kind\":\"glow\",",
                 "\"coreHex\":\"#A0C5FF\",\"haloHex\":\"#4A8FFF\",",
                 "\"alpha\":0.03604545968562789,\"alphaCss\":\"0.03604545968562789\",",
-                "\"referenceProfile\":\"encoded-srgb8-screen-cam16ucs-jprime-v1\",",
+                "\"compositeProfile\":\"encoded-srgb8-screen-v1\",",
+                "\"compositeGuarantee\":\"bit-exact\",",
+                "\"diagnosticProfile\":\"cam16-ucs-jprime-li2017-v1\",",
+                "\"decisionProfile\":\"legacy-platform-dependent-v1\",",
+                "\"decisionGuarantee\":{{\"kind\":\"legacy-platform-dependent-v1\"}},",
                 "\"constraintLayer\":\"halo\",\"targetDj\":2.3006,\"targetStatus\":\"reached\",",
                 "\"haloCompositeHex\":\"#13151B\",\"haloAchievedDj\":2.373123785729128,",
                 "\"coreCompositeHex\":\"#15171B\",\"coreAchievedDj\":3.235504076619437,",
@@ -375,6 +464,39 @@ mod tests {
             core = css_core,
         );
         assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn outward_interval_certificates_survive_json_projection() {
+        let interval = labcolors_core::OutwardIntervalV1::try_new(0.9, 1.1).unwrap();
+        let mut theme = fixture();
+        let RoleOutcome::Glow(glow) = &mut theme.roles[3].outcome else {
+            panic!("fixture pulse must be Glow");
+        };
+        glow.decision_guarantee = labcolors_core::DecisionGuaranteeV1::OutwardIntervalV1(interval);
+        theme.roles.push(RoleEntry {
+            role_key: "uncertain-pulse".to_string(),
+            outcome: RoleOutcome::GlowIndeterminate(GlowIndeterminateColor {
+                source_hex: "#4A8FFF".to_string(),
+                target_dj: 2.3006,
+                decision_profile: labcolors_core::GlowDecisionProfileV1::StableV1,
+                site_id: labcolors_core::NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                evidence: labcolors_core::NumericalIndeterminacyV1::IntervalOverlap(interval),
+                constraint_layer: labcolors_core::GlowConstraintLayer::Halo,
+            }),
+        });
+
+        let value: serde_json::Value =
+            serde_json::from_str(&resolved_json(&theme).unwrap()).unwrap();
+        let guarantee = &value["roles"]["pulse"]["decisionGuarantee"];
+        assert_eq!(guarantee["kind"], "outward-interval-v1");
+        assert_eq!(guarantee["lower"].as_f64(), Some(0.9));
+        assert_eq!(guarantee["upper"].as_f64(), Some(1.1));
+        let uncertain = &value["roles"]["uncertain-pulse"];
+        assert_eq!(uncertain["reason"], "interval-overlap");
+        assert_eq!(uncertain["bounds"]["kind"], "outward");
+        assert_eq!(uncertain["bounds"]["lower"].as_f64(), Some(0.9));
+        assert_eq!(uncertain["bounds"]["upper"].as_f64(), Some(1.1));
     }
 
     /// Материал (#89) проецируется в контрактные CSS-переменные: `--lab-<role>` =

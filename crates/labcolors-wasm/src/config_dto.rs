@@ -164,6 +164,7 @@ pub enum RoleRecipeDto {
     Glow {
         source: LadderSourceDto,
         step: String,
+        decision_profile: String,
     },
     PairFill {
         source: LadderSourceDto,
@@ -333,10 +334,16 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
 
     fn try_from(r: RoleRecipeDto) -> Result<Self, String> {
         Ok(match r {
-            RoleRecipeDto::Glow { source, step } => RoleRecipe::Glow {
+            RoleRecipeDto::Glow {
+                source,
+                step,
+                decision_profile,
+            } => RoleRecipe::Glow {
                 source: source.into(),
                 step: labcolors_core::glow::GlowStep::parse(&step)
                     .map_err(|bad| format!("roles.*.step: неизвестная ступень glow `{bad}` (ожидается subtle|base|bloom)"))?,
+                decision_profile: labcolors_core::GlowDecisionProfileV1::parse(&decision_profile)
+                    .map_err(|bad| format!("roles.*.decision_profile: неизвестный профиль glow `{bad}` (ожидается stable-v1|legacy-platform-dependent-v1)"))?,
             },
             RoleRecipeDto::TextAnchor {
                 fraction,
@@ -502,9 +509,14 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
 
     fn try_from(r: &RoleRecipe) -> Result<Self, String> {
         Ok(match r {
-            RoleRecipe::Glow { source, step } => RoleRecipeDto::Glow {
+            RoleRecipe::Glow {
+                source,
+                step,
+                decision_profile,
+            } => RoleRecipeDto::Glow {
                 source: source.try_into()?,
                 step: step.key().to_string(),
+                decision_profile: decision_profile.key().to_string(),
             },
             RoleRecipe::TextAnchor {
                 fraction,
@@ -745,6 +757,45 @@ mod tests {
         assert!(re.contains(r#""floor":"aa-text""#), "пол цел: {re}");
     }
 
+    #[test]
+    fn glow_recipe_requires_and_fingerprints_explicit_decision_profile() {
+        let missing = r#"{"kind":"glow","source":{"kind":"brand"},"step":"base"}"#;
+        assert!(
+            serde_json::from_str::<RoleRecipeDto>(missing).is_err(),
+            "implicit legacy/default profile запрещён schema-границей"
+        );
+
+        let legacy = r#"{"kind":"glow","source":{"kind":"brand"},"step":"base","decision_profile":"legacy-platform-dependent-v1"}"#;
+        let dto: RoleRecipeDto = serde_json::from_str(legacy).expect("explicit legacy парсится");
+        let core = RoleRecipe::try_from(dto).expect("known profile компилируется");
+        assert!(matches!(
+            core,
+            RoleRecipe::Glow {
+                decision_profile: labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1,
+                ..
+            }
+        ));
+
+        let mut stable = labui_dto();
+        let role = stable
+            .roles
+            .iter_mut()
+            .find(|role| matches!(role.recipe, RoleRecipeDto::Glow { .. }))
+            .expect("anti-vacuum: в паспорте есть glow");
+        let RoleRecipeDto::Glow {
+            decision_profile, ..
+        } = &mut role.recipe
+        else {
+            unreachable!("find выше сузил variant")
+        };
+        *decision_profile = "stable-v1".to_string();
+        assert_ne!(
+            fingerprint(&labui_dto()),
+            fingerprint(&stable),
+            "decision profile обязан входить в canonical config identity"
+        );
+    }
+
     /// Отпечаток: детерминирован для одного конфига (включая нормализацию
     /// пробелов/порядка через парсинг) и различает разные конфиги.
     #[test]
@@ -782,14 +833,16 @@ mod tests {
     /// 0.276 → 0.97335917/0.64359014/0.47572199/0.29335999, инвариант переноса —
     /// принятые владельцем hex'ы #141414/#767676/#C2C2C2). Это ЛЕГИТИМНАЯ смена
     /// паспорта (ADR помечает её semver-major), потому пин обновлён
-    /// 5013ba77a61f58ff → f2a892a62f7bc91e. Прочая структура (снятие роли `icon`
-    /// каноном #92) уже была в main до этой главы — дельта только в долях.
+    /// 5013ba77a61f58ff → f2a892a62f7bc91e. Глава #282 добавила обязательный
+    /// `decision_profile` в каждый Glow recipe: explicit legacy сохраняет
+    /// прежнюю эмиссию, но profile обязан менять cache/config identity, поэтому
+    /// пин легитимно стал c51445fcd167781a.
     #[test]
     fn full_labui_fingerprint_pin_current_main() {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "f2a892a62f7bc91e",
+            "c51445fcd167781a",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }

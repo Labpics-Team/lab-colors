@@ -4,14 +4,19 @@
 # набора). Запускается ночным workflow `.github/workflows/mutation.yml`.
 #
 # СКОУП: параметр-свободное ЯДРО МАТЕМАТИКИ — самый критичный, детерминированный,
-# перцептивно-обоснованный код. Гигантские config.rs/solve.rs/semantic.rs НЕ
+# включая exact alpha/composite и typed numerical decisions. Гигантские
+# config.rs/solve.rs/semantic.rs НЕ
 # мутируются по умолчанию (часы прогона, малая маржинальная ценность на orchestration-
 # коде). Полный workspace-прогон — отдельный ручной/расширенный запуск (см. workflow).
 #
 # ЧТО ПРОВЕРЯЕТ: что property/golden/characterization тесты РЕАЛЬНО кусаются —
 # выживший мутант = молчаливая дыра в наборе (coverage=пол, mutation=правда).
 examine_globs = [
+    "crates/labcolors-core/src/alpha.rs",
     "crates/labcolors-core/src/cleanliness.rs",
+    "crates/labcolors-core/src/glow.rs",
+    "crates/labcolors-core/src/material.rs",
+    "crates/labcolors-core/src/numerics.rs",
     "crates/labcolors-core/src/pair.rs",
 ]
 

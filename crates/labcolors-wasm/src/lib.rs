@@ -30,7 +30,7 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 use crate::dto::ResolvedTheme;
-use crate::engine::Engine;
+use crate::engine::{Engine, hex_for_recheck};
 use crate::error::BindingError;
 
 /// TypeScript shapes for the values `resolveTheme` returns. wasm-bindgen emits
@@ -131,7 +131,30 @@ export interface TranslucentRole {
 /** Свечение (kind glow, labui ADR-0002 §5): screen-слои + решённая интенсивность.
  *  Потребитель красит слои с mix-blend-mode: screen; `vars` несёт
  *  --lab-<role> (halo, oklch), --lab-<role>-core и --lab-<role>-alpha. */
-export interface GlowRole {
+export type GlowDecisionProfileV1 = "stable-v1" | "legacy-platform-dependent-v1";
+export type NumericalIndeterminacyV1 =
+  | {
+      readonly reason: "sound-bound-unavailable";
+      readonly bounds: { readonly kind: "unavailable" };
+    }
+  | {
+      readonly reason: "interval-overlap";
+      readonly bounds: {
+        readonly kind: "outward";
+        readonly lower: number;
+        readonly upper: number;
+      };
+    };
+export type GlowDecisionGuaranteeV1 =
+  | { readonly kind: "bit-exact" }
+  | {
+      readonly kind: "outward-interval-v1";
+      readonly lower: number;
+      readonly upper: number;
+    }
+  | { readonly kind: "legacy-platform-dependent-v1" };
+
+export interface GlowDeterminateRole {
   readonly kind: "glow";
   readonly cssVar: string;
   /** Core, предназначенный потребителем для меньшего blur; геометрия не моделируется. */
@@ -142,8 +165,14 @@ export interface GlowRole {
   readonly alpha: number;
   /** Каноническая CSS-запись той же alpha; vars использует буквально её. */
   readonly alphaCss: string;
-  /** Конечный reference-домен point-расчёта; не сертификат renderer-а или дисплея. */
-  readonly referenceProfile: "encoded-srgb8-screen-cam16ucs-jprime-v1";
+  /** Exact reference-домен point-композита; не renderer/display certificate. */
+  readonly compositeProfile: "encoded-srgb8-screen-v1";
+  readonly compositeGuarantee: "bit-exact";
+  /** Diagnostic model, либо null когда exact verdict не вызывал appearance math. */
+  readonly diagnosticProfile: "cam16-ucs-jprime-li2017-v1" | null;
+  readonly decisionProfile: GlowDecisionProfileV1;
+  /** Tagged certificate; an outward guarantee cannot lose its proven interval. */
+  readonly decisionGuarantee: GlowDecisionGuaranteeV1;
   /** Цель решается только по изолированному halo. */
   readonly constraintLayer: "halo";
   /** Запрошенный |ΔJ'| halo-композита. */
@@ -165,6 +194,21 @@ export interface GlowRole {
   /** CSS-значение halo: `oklch(L% C H)`. */
   readonly css: string;
 }
+
+/** Stable terminal outcome: no sound target/max decision, therefore no CSS vars. */
+export interface GlowIndeterminateRoleBase {
+  readonly kind: "glow-indeterminate";
+  readonly cssVar: string;
+  readonly sourceHex: string;
+  readonly targetDj: number;
+  readonly constraintLayer: "halo";
+  readonly decisionProfile: "stable-v1";
+  readonly numericalSiteId: "glow-target-or-maximum-v1";
+}
+
+export type GlowIndeterminateRole = GlowIndeterminateRoleBase & NumericalIndeterminacyV1;
+
+export type GlowRole = GlowDeterminateRole | GlowIndeterminateRole;
 
 /** Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) над
  *  опаковой базой `02`, обе — один тон. `vars` несёт --lab-<role> (солид-канон,
@@ -221,13 +265,56 @@ export type LadderSource =
   | { kind: "sentiment"; name: string }
   | { kind: "neutral"; pick: "mid" | "edge" | "inverted" | "light" | "dark" };
 
+/** Closed physical ladder menu accepted by the config compiler. */
+export type LadderPositionV1 =
+  | "label-primary"
+  | "label-secondary"
+  | "label-tertiary"
+  | "label-quaternary"
+  | "fill-primary"
+  | "fill-secondary"
+  | "fill-tertiary"
+  | "fill-quaternary"
+  | "border-base"
+  | "border-soft"
+  | "border-strong"
+  | "focus-ring"
+  | "glow"
+  | "skeleton-base"
+  | "skeleton-highlight"
+  | "neutral-fill-primary"
+  | "neutral-fill-secondary"
+  | "neutral-fill-tertiary"
+  | "neutral-fill-quaternary"
+  | "neutral-border-base"
+  | "neutral-border-soft"
+  | "shadow-minor"
+  | "shadow-ambient"
+  | "shadow-penumbra"
+  | "shadow-major";
+
 /** Рецепт роли из физического меню движка. */
 export type RoleRecipe =
-  | { kind: "text-anchor"; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
+  | {
+      kind: "text-anchor";
+      fraction: number;
+      floor: "aa-text" | "aa-ui" | "none";
+      hue?: LadderSource;
+    }
   | { kind: "dj-anchor"; light: number; dark: number }
   | { kind: "decorative-lc"; magnitude: number }
-  | { kind: "ladder"; source: LadderSource; position: string }
-  | { kind: "glow"; source: LadderSource; step: "subtle" | "base" | "bloom" }
+  | {
+      kind: "ladder";
+      source: LadderSource;
+      position: LadderPositionV1;
+      floor?: "aa-text" | "aa-ui" | "none";
+    }
+  | {
+      kind: "glow";
+      source: LadderSource;
+      step: "subtle" | "base" | "bloom";
+      decision_profile: GlowDecisionProfileV1;
+    }
   | { kind: "pair-fill"; source: LadderSource }
   | { kind: "pair-label"; source: LadderSource; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
@@ -262,7 +349,7 @@ export interface ThemeConfig {
   readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
   /** Словарь ролей дизайн-системы. Конфиг обязан нести собственные роли; пустой
    *  контракт (без `roles` и `aliases`) отклоняется на загрузке. */
-  readonly roles?: ReadonlyArray<{ name: string; recipe: RoleRecipe }>;
+  readonly roles: ReadonlyArray<{ name: string; recipe: RoleRecipe }>;
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }
 
@@ -405,11 +492,29 @@ impl LabColors {
             .map_err(to_js_error)
     }
 
+    /// Exact stable-Glow runtime recheck. Returns whether the point screen
+    /// layer is a byte-for-byte no-op for every alpha under encoded sRGB8.
+    /// `adaptTheme` uses this cheap core-owned predicate to detect the only
+    /// stable determinate/indeterminate class transition without running CAM16
+    /// or re-solving on every animated-background frame.
+    #[wasm_bindgen(js_name = isStableGlowPointNoop)]
+    pub fn is_stable_glow_point_noop(&self, tint_hex: &str, bg_hex: &str) -> Result<bool, JsError> {
+        let tint = hex_for_recheck(tint_hex).map_err(|error| match error {
+            BindingError::InvalidBackground { reason } => {
+                to_js_error(BindingError::InvalidColor { reason })
+            }
+            other => to_js_error(other),
+        })?;
+        let background = hex_for_recheck(bg_hex).map_err(to_js_error)?;
+        labcolors_core::screen_point_is_exact_noop(tint.as_ref(), background.as_ref())
+            .map_err(|reason| to_js_error(BindingError::InvalidColor { reason }))
+    }
+
     /// Calculate the muddiness score (0 to 1) of an sRGB hex colour.
     #[wasm_bindgen(js_name = muddiness)]
     pub fn muddiness(&self, hex: &str) -> Result<f64, JsError> {
         labcolors_core::cleanliness::muddiness_from_hex(hex)
-            .map_err(|reason| to_js_error(BindingError::InvalidBackground { reason }))
+            .map_err(|reason| to_js_error(BindingError::InvalidColor { reason }))
     }
 
     /// Recheck one foreground set against MANY background samples in a single
@@ -452,6 +557,67 @@ impl Default for LabColors {
 /// that path would drop the stable code. This keeps the code in the message.
 fn to_js_error(err: BindingError) -> JsError {
     JsError::new(&format!("{}: {}", err.code(), err))
+}
+
+#[cfg(test)]
+mod native_contract_tests {
+    use super::*;
+
+    #[test]
+    fn generated_config_types_cover_the_closed_ladder_menu_and_dto_fields() {
+        let source = include_str!("lib.rs");
+        let types = source
+            .split_once("const TS_RESULT_TYPES: &'static str = r##\"")
+            .and_then(|(_, tail)| tail.split_once("\"##;").map(|(types, _)| types))
+            .expect("custom TypeScript section is extractable");
+        let block = types
+            .split_once("export type LadderPositionV1 =")
+            .and_then(|(_, tail)| tail.split_once(';').map(|(block, _)| block))
+            .expect("LadderPositionV1 union exists");
+        let declared: Vec<&str> = block
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("| \"")
+                    .and_then(|value| value.strip_suffix('"'))
+            })
+            .collect();
+        let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
+        let core_set: std::collections::HashSet<&str> = labcolors_core::LadderPosition::ALL
+            .iter()
+            .map(|position| position.key())
+            .collect();
+        assert_eq!(
+            declared.len(),
+            declared_set.len(),
+            "duplicate TS ladder literal"
+        );
+        assert_eq!(declared_set, core_set, "TS ladder menu must equal core ALL");
+        assert!(types.contains("hue?: LadderSource"));
+        assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\" | \"none\""));
+        assert!(types.contains("readonly roles: ReadonlyArray"));
+    }
+
+    #[test]
+    fn stable_glow_noop_boundary_normalises_the_resolve_hex_vocabulary() {
+        let colors = LabColors::new();
+        assert_eq!(
+            colors.is_stable_glow_point_noop("#001", "fff").unwrap(),
+            colors
+                .is_stable_glow_point_noop("#000011", "#FFFFFF")
+                .unwrap()
+        );
+        assert!(
+            colors
+                .is_stable_glow_point_noop("#010000", "#FE0000")
+                .unwrap()
+        );
+        assert!(
+            !colors
+                .is_stable_glow_point_noop("#800000", "#FE0000")
+                .unwrap()
+        );
+    }
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]

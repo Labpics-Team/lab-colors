@@ -1018,7 +1018,8 @@
         "source": {
           "kind": "brand"
         },
-        "step": "base"
+        "step": "base",
+        "decision_profile": "legacy-platform-dependent-v1"
       }
     },
     {
@@ -1029,7 +1030,8 @@
           "kind": "sentiment",
           "name": "danger"
         },
-        "step": "base"
+        "step": "base",
+        "decision_profile": "legacy-platform-dependent-v1"
       }
     },
     {
@@ -1040,7 +1042,8 @@
           "kind": "sentiment",
           "name": "warning"
         },
-        "step": "base"
+        "step": "base",
+        "decision_profile": "legacy-platform-dependent-v1"
       }
     },
     {
@@ -1051,7 +1054,8 @@
           "kind": "neutral",
           "pick": "light"
         },
-        "step": "base"
+        "step": "base",
+        "decision_profile": "legacy-platform-dependent-v1"
       }
     },
     {

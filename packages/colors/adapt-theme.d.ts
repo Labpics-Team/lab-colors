@@ -4,14 +4,16 @@ import type { LabColors, ThemeName } from "./pkg/labcolors.js";
 
 export interface AdaptThemeOptions {
   /**
-   * An initialised engine — needs `resolveTheme` AND `recheckContrast`.
+   * An initialised engine — needs resolve + contrast recheck. The exact
+   * `isStableGlowPointNoop` capability is conditionally required when a result
+   * contains a stable Glow role; its absence then fails explicitly.
    * `recheckContrastMulti` is optional: when present, a multi-sample backdrop
    * is rechecked in ONE batched call per frame (byte-identical to the
    * per-sample loop, locked by the wasm boundary parity test); when absent,
    * the controller falls back to N `recheckContrast` calls.
    */
   colors: Pick<LabColors, "resolveTheme" | "recheckContrast"> &
-    Partial<Pick<LabColors, "recheckContrastMulti">>;
+    Partial<Pick<LabColors, "recheckContrastMulti" | "isStableGlowPointNoop">>;
   theme: ThemeName;
   /**
    * Explicit effective background, overriding the ancestor-composite. A single

@@ -7,7 +7,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { join } from 'node:path';
 
 import {
   ROOT,
@@ -203,4 +205,100 @@ test('auditRepo на текущем дереве: ноль ошибок (док�
 
 test('collectInventory детерминирован (двойной прогон байт-в-байт)', () => {
   assert.deepEqual(collectInventory(ROOT), collectInventory(ROOT));
+});
+
+test('empirical residue: каждая живая policy-константа имеет terminal provenance class', () => {
+  const text = readFileSync(join(ROOT, 'docs', 'empirical-residue.md'), 'utf8');
+  const inventory = readFileSync(join(ROOT, 'docs', 'empirical-inventory.md'), 'utf8');
+  const table = text
+    .split('## Классификация текущих 25 policy-констант')[1]
+    ?.split('\n**(b) после follow-on')[0];
+  assert.ok(table, 'таблица текущей terminal-классификации должна существовать');
+
+  const rows = table
+    .split('\n')
+    .filter((line) => /^\|\s*(?:\*\*)?(?:~~)?\d/.test(line))
+    .filter((line) => !line.includes('~~20~~'));
+  assert.equal(rows.length, 25, 'anti-vacuum: ожидаются ровно 25 живых policy-констант');
+
+  const counts = new Map([
+    ['a', 0],
+    ['b', 0],
+    ['c', 0],
+    ['e', 0],
+  ]);
+  for (const row of rows) {
+    const cells = row.split('|').slice(1, -1).map((cell) => cell.trim());
+    const terminal = cells[3]?.match(/\(([abce])\)/)?.[1];
+    assert.ok(
+      terminal,
+      `строка ${cells[0]} ${cells[1]} смешивает scientific status с terminal class: ${cells[3]}`,
+    );
+    counts.set(terminal, counts.get(terminal) + 1);
+  }
+  assert.deepEqual(Object.fromEntries(counts), { a: 6, b: 1, c: 7, e: 11 });
+
+  for (const gamma of ['NEUTRAL_DEFAULT_GAMMA_LIGHT', 'NEUTRAL_DEFAULT_GAMMA_DARK']) {
+    const row = rows.find((line) => line.includes(`\`${gamma}\``));
+    assert.ok(row, `${gamma} должен присутствовать в таблице`);
+    assert.match(row, /\*\*\(e\)\*\*/);
+    assert.match(
+      row,
+      /НАУЧНАЯ ЗАМЕНА: OPEN/,
+      `${gamma}: frozen compatibility provenance и open scientific replacement — разные поля`,
+    );
+
+    const inventoryRow = inventory
+      .split('\n')
+      .find((line) => line.startsWith('|') && line.includes(`\`${gamma}\``));
+    assert.ok(inventoryRow, `${gamma} должен присутствовать в основном инвентаре`);
+    assert.match(inventoryRow, /\*\*\(e\) DESIGN-CHOICE \/ COMPATIBILITY POLICY\*\*/);
+    assert.match(
+      inventoryRow,
+      /НАУЧНАЯ ЗАМЕНА: OPEN/,
+      `${gamma}: основной инвентарь обязан разделять terminal provenance и scientific status`,
+    );
+  }
+});
+
+test('issue-ссылки не превращаются в ATX headings ни в одном docs markdown', () => {
+  const malformed = collectInventory(ROOT).docsMd.flatMap((path) =>
+    readFileSync(join(ROOT, 'docs', path), 'utf8')
+      .split('\n')
+      .map((line, index) => ({ path, line, number: index + 1 }))
+      .filter(({ line }) => /^#\d/.test(line)),
+  );
+  assert.deepEqual(malformed, []);
+});
+
+test('breaking exact-alpha/glow контракт имеет migration и не оставляет единый live profile', () => {
+  const migration = readFileSync(
+    join(ROOT, 'docs', 'migrations', 'exact-alpha-glow.md'),
+    'utf8',
+  );
+  const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const readme = readFileSync(join(ROOT, 'packages', 'colors', 'README.md'), 'utf8');
+  const adr = readFileSync(
+    join(ROOT, 'docs', 'decisions', '0004-finite-alpha-glow-reference.md'),
+    'utf8',
+  );
+
+  for (const required of [
+    '@labpics/colors` 0.10.0',
+    'Rust workspace | 0.1.0 | 0.2.0',
+    'decision_profile',
+    'stable-v1',
+    'legacy-platform-dependent-v1',
+    'glow-indeterminate',
+    'sound-bound-unavailable',
+    'compositeProfile',
+    'diagnosticProfile',
+    'resolve_alpha_analog_hex',
+    'Rollback',
+  ]) {
+    assert.ok(migration.includes(required), `migration не содержит ${required}`);
+  }
+  assert.match(changelog, /@labpics\/colors 0\.10\.0 \/ Rust 0\.2\.0/);
+  assert.doesNotMatch(readme, /referenceProfile/);
+  assert.doesNotMatch(adr, /referenceProfile/);
 });

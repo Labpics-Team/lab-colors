@@ -297,10 +297,10 @@ impl Manifest {
 pub fn families_or_fallback() -> Vec<Family> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
     let path = format!("{root}{}", crate::passport::default_passport_relpath());
-    if let Ok(text) = std::fs::read_to_string(&path)
-        && let Ok(f) = crate::passport::families_from_passport(&text)
-    {
-        return f;
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Ok(families) = crate::passport::families_from_passport(&text) {
+            return families;
+        }
     }
     ["#FF3B30", "#FFA100", "#34C759", "#007AFF"]
         .iter()

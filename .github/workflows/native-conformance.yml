@@ -7,8 +7,10 @@ name: Native conformance (Swift)
 # ВАЖНО (владелец, 2026-07-08): GitHub-hosted macOS-раннеры платные и ИСКЛЮЧЕНЫ
 # навсегда — биллинг чиниться не будет. Поэтому Swift валидируется на
 # self-hosted Linux-раннере (de-02) в официальном swift-контейнере — тот же
-# UniFFI-биндинг, тот же пак, ядро под x86_64-unknown-linux-gnu. Кросс-платформа
-# держится толерантностью DRIFT_TOL=1e-6 (см. conformance/README.md).
+# UniFFI-биндинг, тот же пак, ядро под x86_64-unknown-linux-gnu. Числовые
+# семейства пака держатся толерантностью DRIFT_TOL=1e-6
+# (см. conformance/README.md). Glow stable проверяется как типизированный
+# Indeterminate; для legacy CAM16 bit parity не заявляется.
 #
 # Линтеры/аудит/wasm/основной `cargo test --workspace` (включая толерантный
 # раннер-референс пака на Linux) — в ci.yml. Здесь — Swift-слой.
@@ -21,6 +23,10 @@ on:
 
 permissions:
   contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+  SWIFT_CONTAINER: swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394
 
 jobs:
   # АКТИВНЫЙ ГЕЙТ: Swift-conformance на self-hosted Linux через swift-контейнер.
@@ -36,15 +42,16 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      # Официальный swift:6.1 (Ubuntu). Внутри ставится rustup, ядро собирается
+      # Официальный Swift 6.1.3 (Ubuntu), pinned по manifest-list digest.
+      # Внутри ставится pinned Rust, ядро собирается
       # под Linux, генерятся Swift-биндинги, swift test прогоняет пак. Скрипт —
       # единый источник с локальным прогоном (bindings/swift/ci/run-conformance.sh).
       # $GITHUB_WORKSPACE монтируется read-only; сборка идёт в /work в контейнере.
-      - name: swift conformance in swift:6.1 container
+      - name: swift conformance in swift:6.1.3 container
         run: |
           docker run --rm \
             -v "$GITHUB_WORKSPACE":/src:ro \
-            swift:6.1 \
+            "$SWIFT_CONTAINER" \
             bash /src/bindings/swift/ci/run-conformance.sh
 
   # ССЫЛОЧНАЯ джоба (НЕ активный гейт): нативный macOS/arm64. Требует ПЛАТНЫХ
@@ -60,19 +67,19 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
-          toolchain: 1.96.0
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: versions
         run: |
           swift --version
           rustc --version
       - name: cargo test (reference runner + ffi units)
-        run: cargo test -p labcolors-conformance -p labcolors-ffi
+        run: cargo +${{ env.RUST_TOOLCHAIN }} test -p labcolors-conformance -p labcolors-ffi --locked
       - name: build labcolors-ffi (+ bindgen bin)
-        run: cargo build -p labcolors-ffi --features cli
+        run: cargo +${{ env.RUST_TOOLCHAIN }} build -p labcolors-ffi --features cli --locked
       - name: generate Swift bindings
         run: |
-          cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- \
+          cargo +${{ env.RUST_TOOLCHAIN }} run -p labcolors-ffi --features cli --bin uniffi-bindgen --locked -- \
             generate --library target/debug/liblabcolors.dylib \
             --language swift --out-dir bindings/swift/generated
       - name: arrange generated bindings

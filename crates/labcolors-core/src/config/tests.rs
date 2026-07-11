@@ -38,6 +38,7 @@ fn repr(res: &Resolved) -> String {
         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
         // Свечение: слои + α — стабильное представление для голденов.
         Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
+        Resolved::GlowIndeterminate(_) => "GLOW_INDETERMINATE".to_string(),
         // Материал: тон + выведенная α — стабильное представление.
         Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
         Resolved::None => "none".to_string(),

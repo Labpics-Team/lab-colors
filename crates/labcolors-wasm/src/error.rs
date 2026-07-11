@@ -25,6 +25,13 @@ pub enum BindingError {
         reason: String,
     },
 
+    /// A non-background colour argument was not valid encoded sRGB hex.
+    #[error("invalid colour: {reason}")]
+    InvalidColor {
+        /// The core parse/domain reason.
+        reason: String,
+    },
+
     /// The config JSON was rejected: parse error, unknown menu item, or a
     /// core validation/compile error (the full preflight message is carried).
     #[error("invalid config: {reason}")]
@@ -64,6 +71,7 @@ impl BindingError {
     pub fn code(&self) -> &'static str {
         match self {
             BindingError::InvalidBackground { .. } => "invalid_background",
+            BindingError::InvalidColor { .. } => "invalid_color",
             BindingError::InvalidConfig { .. } => "invalid_config",
             BindingError::ConfigRequired => "config_required",
             BindingError::UnknownTheme { .. } => "unknown_theme",
@@ -80,6 +88,7 @@ mod tests {
     fn codes_are_stable_and_distinct() {
         let errors = [
             BindingError::InvalidBackground { reason: "x".into() },
+            BindingError::InvalidColor { reason: "x".into() },
             BindingError::InvalidConfig { reason: "x".into() },
             BindingError::ConfigRequired,
             BindingError::UnknownTheme {
@@ -92,6 +101,7 @@ mod tests {
             codes,
             [
                 "invalid_background",
+                "invalid_color",
                 "invalid_config",
                 "config_required",
                 "unknown_theme",

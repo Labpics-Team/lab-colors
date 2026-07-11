@@ -15,8 +15,38 @@ env:
   # To update: pick the new stable from https://forge.rust-lang.org/ and change
   # this single value — every job below consumes it via the `toolchain` input.
   RUST_TOOLCHAIN: 1.96.0
+  # Public minimum, tested independently from the development toolchain.
+  MSRV_TOOLCHAIN: 1.85.0
+  # Pins npm 11.9.0 as part of the official Node distribution. npm tar format
+  # is release input, so a floating runner-provided npm is not reproducible.
+  NODE_TOOLCHAIN: 24.14.0
+  # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
+  CHROME_FOR_TESTING_VERSION: 150.0.7871.115
+  CHROME_FOR_TESTING_SHA256: 1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
+  CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
 
 jobs:
+  msrv:
+    name: MSRV workspace check
+    runs-on: [self-hosted, Linux, X64]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: toolchain env (runner.temp)
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.MSRV_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo check on declared MSRV
+        run: cargo check --workspace --all-targets --locked
+
   lint:
     name: clippy + rustfmt
     runs-on: [self-hosted, Linux, X64]
@@ -58,7 +88,7 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   docs:
     name: cargo doc (intra-doc links)
@@ -94,7 +124,29 @@ jobs:
         # --no-deps keeps the gate on our own crates only. This stops a stale doc
         # reference from merging silently (main was green with ~81 broken links
         # because cargo doc was never gated — #26).
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+      - name: package labcolors-core and run extracted package doctests
+        run: |
+          set -euo pipefail
+          test -L crates/labcolors-core/LICENSE
+          test "$(readlink crates/labcolors-core/LICENSE)" = "../../LICENSE"
+          cmp LICENSE crates/labcolors-core/LICENSE
+          cargo package -p labcolors-core --locked
+          crate_version="$(cargo pkgid -p labcolors-core | sed 's/.*#//')"
+          package_root="$RUNNER_TEMP/labcolors-core-package-$GITHUB_RUN_ID"
+          mkdir "$package_root"
+          tar -xzf "target/package/labcolors-core-${crate_version}.crate" -C "$package_root"
+          crate_dir="$package_root/labcolors-core-${crate_version}"
+          test -f "$crate_dir/README.md"
+          test -f "$crate_dir/LICENSE"
+          test ! -L "$crate_dir/LICENSE"
+          cmp LICENSE "$crate_dir/LICENSE"
+          grep -q '^license = "MIT"$' "$crate_dir/Cargo.toml"
+          if grep -q '^license-file[[:space:]]*=' "$crate_dir/Cargo.toml"; then
+            echo "packaged manifest must not carry both SPDX license and license-file" >&2
+            exit 1
+          fi
+          cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked
 
   test:
     name: test
@@ -129,7 +181,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   audit:
     name: cargo audit (rustsec)
@@ -196,11 +248,12 @@ jobs:
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB" >> "$GITHUB_ENV"
           # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
           # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
           # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -220,7 +273,12 @@ jobs:
       - name: wasm-pack build (release)
         # The release bundle: panic=abort, no panic hook, wasm-opt -Oz. This is
         # the artifact @labpics/colors ships, so the size measured below is real.
-        run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors
+        run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+          cache: npm
+          cache-dependency-path: packages/colors/package-lock.json
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve
         # against the *real* wasm-bindgen declarations — so the type-level smoke
@@ -233,13 +291,30 @@ jobs:
           npm ci
           npm run typecheck
           npm test
+      - name: verify byte-exact npm release artifact
+        id: verified-release
+        working-directory: packages/colors
+        run: npm run release:verify
+      # Upload the already verified release input before the pinned browser
+      # dependency is fetched. A Chrome outage therefore cannot destroy the
+      # evidence, while this `wasm` job still has to finish successfully before
+      # publish.yml will accept its canonical workflow run.
+      - name: upload verified npm tarball and manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ steps.verified-release.outputs.tarball }}
+            ${{ steps.verified-release.outputs.manifest }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
         # Self-hosted WSL runners lack Chrome and passwordless sudo.
         # Strategy:
-        #  1. Download CfT (Chrome for Testing) — stable channel; chrome + chromedriver.
-        #     wasm-pack reads CHROME_PATH to locate the browser; CHROMEDRIVER for driver.
-        #     wasm-pack 0.13.1 ignores CHROMEDRIVER in cargo-test invocation and downloads
-        #     its own chromedriver, but LD_LIBRARY_PATH covers that binary too.
+        #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
+        #     wasm-pack reads CHROME_PATH for the browser but ignores a CHROMEDRIVER
+        #     variable, so the matching driver is passed through --chromedriver.
         #  2. Extract required shared libs (.so) from Ubuntu .deb packages without sudo:
         #     `apt-get download` fetches .deb; `dpkg --extract` unpacks without root.
         #     Chrome/chromedriver need libnspr4, libnss3, libasound2t64, libgbm1
@@ -248,24 +323,29 @@ jobs:
         run: |
           set -euo pipefail
           # -- CfT chrome + chromedriver --
-          CfT_VERSION=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
-            | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);console.log(j.channels.Stable.version);});")
-          BASE_URL="https://storage.googleapis.com/chrome-for-testing-public/${CfT_VERSION}/linux64"
-          mkdir -p "$HOME/.chrome-for-testing"
-          curl -sSL "${BASE_URL}/chrome-linux64.zip" -o "$HOME/.chrome-for-testing/chrome-linux64.zip"
-          curl -sSL "${BASE_URL}/chromedriver-linux64.zip" -o "$HOME/.chrome-for-testing/chromedriver-linux64.zip"
-          unzip -q -o "$HOME/.chrome-for-testing/chrome-linux64.zip" -d "$HOME/.chrome-for-testing/"
-          unzip -q -o "$HOME/.chrome-for-testing/chromedriver-linux64.zip" -d "$HOME/.chrome-for-testing/"
-          CHROME_BIN="$HOME/.chrome-for-testing/chrome-linux64/chrome"
-          CHROMEDRIVER_BIN="$HOME/.chrome-for-testing/chromedriver-linux64/chromedriver"
+          BASE_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64"
+          CHROME_ROOT="$RUNNER_TEMP/chrome-$GITHUB_JOB"
+          mkdir -p "$CHROME_ROOT"
+          curl --fail-with-body --silent --show-error --location \
+            "${BASE_URL}/chrome-linux64.zip" -o "$CHROME_ROOT/chrome-linux64.zip"
+          curl --fail-with-body --silent --show-error --location \
+            "${BASE_URL}/chromedriver-linux64.zip" -o "$CHROME_ROOT/chromedriver-linux64.zip"
+          printf '%s  %s\n' "$CHROME_FOR_TESTING_SHA256" "$CHROME_ROOT/chrome-linux64.zip" \
+            | sha256sum --check --strict
+          printf '%s  %s\n' "$CHROMEDRIVER_FOR_TESTING_SHA256" "$CHROME_ROOT/chromedriver-linux64.zip" \
+            | sha256sum --check --strict
+          unzip -q -o "$CHROME_ROOT/chrome-linux64.zip" -d "$CHROME_ROOT"
+          unzip -q -o "$CHROME_ROOT/chromedriver-linux64.zip" -d "$CHROME_ROOT"
+          CHROME_BIN="$CHROME_ROOT/chrome-linux64/chrome"
+          CHROMEDRIVER_BIN="$CHROME_ROOT/chromedriver-linux64/chromedriver"
           chmod +x "$CHROME_BIN" "$CHROMEDRIVER_BIN"
           echo "CHROME_PATH=$CHROME_BIN" >> "$GITHUB_ENV"
-          echo "CfT_CHROMEDRIVER=$CHROMEDRIVER_BIN" >> "$GITHUB_ENV"
-          echo "Chrome for Testing $CfT_VERSION installed"
+          echo "CHROMEDRIVER_PATH=$CHROMEDRIVER_BIN" >> "$GITHUB_ENV"
+          echo "Chrome for Testing $CHROME_FOR_TESTING_VERSION installed"
 
           # -- Extract Chrome shared-lib dependencies from Ubuntu .deb (no sudo needed) --
-          DEPS_DIR="$HOME/.chromedeps"
-          DEBS_DIR="$HOME/.chromedeps/debs"
+          DEPS_DIR="$RUNNER_TEMP/chrome-deps-$GITHUB_JOB"
+          DEBS_DIR="$DEPS_DIR/debs"
           mkdir -p "$DEBS_DIR"
           # libnspr4/libnss3: NSS/NSPR crypto deps for Chrome and chromedriver.
           # libasound2t64: ALSA (renamed from libasound2 in Ubuntu 24.04 noble).
@@ -279,33 +359,19 @@ jobs:
           echo "Chrome deps: $DEPS_LIB"
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version || true
 
-          # -- Pre-seed wasm-pack chromedriver cache with our verified CfT chromedriver --
-          # wasm-pack 0.13.1 caches chromedriver at ~/.cache/.wasm-pack/chromedriver-{hash}/
-          # and SKIPS download if binary exists (checked by path existence). Our diagnostic
-          # confirmed that our CfT chromedriver works while wasm-pack's download fails.
-          # Pre-seed ALL possible hash slots so wasm-pack uses ours regardless of which
-          # Chrome version it expects. Hash bb6facf4ea9511f6 observed for 150.0.7871.24.
-          WASM_PACK_CACHE="$HOME/.cache/.wasm-pack"
-          mkdir -p "$WASM_PACK_CACHE"
-          # Seed the known hash slot first, then create a guard for any new version:
-          for hash_dir in "chromedriver-bb6facf4ea9511f6"; do
-            mkdir -p "$WASM_PACK_CACHE/$hash_dir"
-            cp "$CHROMEDRIVER_BIN" "$WASM_PACK_CACHE/$hash_dir/chromedriver"
-            chmod +x "$WASM_PACK_CACHE/$hash_dir/chromedriver"
-          done
-          echo "Pre-seeded wasm-pack chromedriver cache with CfT binary"
-
           # -- Make Chrome discoverable by chromedriver without explicit binary path --
           # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium
           # When CHROME_PATH/binary is not passed by wasm-bindgen-test-runner, chromedriver
-          # needs to find Chrome in PATH. Add ~/bin to PATH with our CfT binary linked.
-          mkdir -p "$HOME/bin"
-          ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome"
-          ln -sf "$CHROME_BIN" "$HOME/bin/google-chrome-stable"
+          # needs to find Chrome in PATH. Add an isolated runner.temp bin directory
+          # with Chrome aliases; wasm-pack receives the driver path explicitly.
+          CHROME_BIN_DIR="$RUNNER_TEMP/chrome-bin-$GITHUB_JOB"
+          mkdir -p "$CHROME_BIN_DIR"
+          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome"
+          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome-stable"
           # Use GITHUB_PATH (step-scoped prepend) rather than PATH in GITHUB_ENV
           # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
-          echo "$HOME/bin" >> "$GITHUB_PATH"
-          echo "Linked CfT Chrome as google-chrome in ~/bin (for chromedriver path discovery)"
+          echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
+          echo "Linked CfT Chrome under runner.temp"
 
           # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
           # Note: LD_LIBRARY_PATH in $GITHUB_ENV is not active in this step yet;
@@ -350,7 +416,7 @@ jobs:
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
-        run: wasm-pack test --headless --chrome crates/labcolors-wasm
+        run: wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
       - name: report bundle size (gzip)
         # Size is part of the perf story (perf-bench). Not a hard gate yet — a
         # budget gate lands with perf-bench; here we surface the number in logs.
@@ -359,7 +425,6 @@ jobs:
           glue="packages/colors/pkg/labcolors.js"
           echo "wasm: raw=$(wc -c <"$wasm")B gzip=$(gzip -9 -c "$wasm" | wc -c)B"
           echo "glue: raw=$(wc -c <"$glue")B gzip=$(gzip -9 -c "$glue" | wc -c)B"
-
   docs-drift:
     name: docs-drift (нейминг-канон)
     runs-on: [self-hosted, Linux, X64]
@@ -371,9 +436,9 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # Гейт «доки == реальность» (порт эталона labui#150 / lab-icons#53 /
       # lab-motion): docs/NAMING.md сверяется с фактами ФС. Node уже стоит на
-      # self-hosted раннерах (job `wasm` зовёт node/npm без setup-node);
-      # Rust-тулчейн не нужен — гейт читает только ФС, поэтому джоба лёгкая
-      # и не трогает RUSTUP_HOME/CARGO_HOME-изоляцию остальных джоб.
+      # self-hosted раннерах; точная версия npm здесь не release input, потому
+      # setup-node не нужен. Rust-тулчейн тоже не нужен — гейт читает только ФС,
+      # поэтому джоба лёгкая и не трогает изоляцию остальных джоб.
       - name: юниты гейта
         run: node --test scripts/docs-drift.test.mjs
       - name: check-docs-drift (docs/NAMING.md == факты ФС)

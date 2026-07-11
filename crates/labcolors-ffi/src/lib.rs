@@ -1,5 +1,7 @@
-//! Нативный биндинг ядра `labcolors-core` через UniFFI — **доказательство
-//! динамического рантайм-ядра** на Apple-платформах.
+//! Нативная ABI-граница ядра `labcolors-core` через UniFFI. Сгенерированная
+//! Swift-поверхность доказывает динамический вызов ядра в текущем активном
+//! Linux x86_64 conformance-гейте; Apple ABI, macOS/arm64 и iOS этим прогоном
+//! не аттестованы.
 //!
 //! # Архитектурный закон
 //!
@@ -23,6 +25,12 @@
 //! | [`muddiness`] | `muddiness` | `cleanliness::muddiness_from_hex` |
 //! | [`core_version`] | `manifest` | версия ядра |
 //!
+//! [`solve_glow_point`] — отдельный low-level contract test нативной границы:
+//! stable-профиль переносит `Indeterminate` с site + typed evidence без fallback,
+//! legacy выбирается только явно. Его CAM16-диагностика не объявлена
+//! bit-exact между платформами; `bit-exact` относится лишь к certificate
+//! encoded-sRGB8 screen-композитора.
+//!
 //! Резолв полной темы из JSON-конфига (агностичный движок) СОЗНАТЕЛЬНО вне
 //! среза: он требует serde-границы конфига (живёт в WASM-крейте) — перенос её
 //! в нативный крейт либо дублировал бы её (риск дрейфа), либо тянул бы
@@ -35,8 +43,11 @@
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, Theme as CoreTheme,
-    ViewingConditions, recheck_against, solve,
+    BgInput, ChromaPolicy, Contract, DecisionGuaranteeV1, Gamut, GlowCompositeGuaranteeV1,
+    GlowCompositeProfileV1, GlowDecisionProfileV1, GlowDiagnosticProfileV1,
+    GlowTargetStatus as CoreGlowTargetStatus, Hue, LadderPosition, NumericalDecisionV1,
+    NumericalIndeterminacyV1, NumericalSiteIdV1, Theme as CoreTheme, ViewingConditions,
+    recheck_against, solve, solve_screen_alpha_for_dj,
 };
 
 // Регистрирует UniFFI-scaffolding под namespace = имя крейта (`labcolors`).
@@ -131,6 +142,130 @@ pub struct Solved {
     pub floor_override: bool,
 }
 
+/// Explicit profile numerical Glow decision; default намеренно отсутствует.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GlowDecisionProfile {
+    /// Stable path: без sound bound возвращает Indeterminate.
+    StableV1,
+    /// Явный прежний CAM16/libm-dependent runtime path.
+    LegacyPlatformDependentV1,
+}
+
+impl GlowDecisionProfile {
+    fn to_core(self) -> GlowDecisionProfileV1 {
+        match self {
+            Self::StableV1 => GlowDecisionProfileV1::StableV1,
+            Self::LegacyPlatformDependentV1 => GlowDecisionProfileV1::LegacyPlatformDependentV1,
+        }
+    }
+}
+
+/// Guarantee semantic target/max decision с неразделимым evidence.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum GlowDecisionGuarantee {
+    /// Decision следует из exact integer/rational state.
+    BitExact,
+    /// Decision следует из доказанного непересекающегося outward interval.
+    OutwardIntervalV1 {
+        /// Нижняя граница.
+        lower: f64,
+        /// Верхняя граница.
+        upper: f64,
+    },
+    /// Explicit legacy CAM16/libm-dependent path.
+    LegacyPlatformDependentV1,
+}
+
+/// Exact point-composite profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GlowCompositeProfile {
+    /// Encoded sRGB8 screen v1.
+    EncodedSrgb8ScreenV1,
+}
+
+/// Exact point-composite guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GlowCompositeGuarantee {
+    /// Byte-exact certificate.
+    BitExact,
+}
+
+/// Appearance diagnostic identity; не decision guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GlowDiagnosticProfile {
+    /// CAM16-UCS J-prime transcription from Li et al. 2017.
+    Cam16UcsJPrimeLi2017V1,
+}
+
+/// Результат проверки target по конечному point-composite домену.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GlowTargetStatus {
+    /// Target достигнут.
+    Reached,
+    /// Target недостижим; выбран максимум только в explicit legacy profile.
+    Unreachable,
+}
+
+/// Зарегистрированный branch-sensitive site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NumericalSiteId {
+    /// Glow target-or-maximum selection.
+    GlowTargetOrMaximumV1,
+}
+
+/// Неразделимая причина Indeterminate вместе с её evidence.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum NumericalIndeterminacy {
+    /// Для site нет sound error bound.
+    SoundBoundUnavailable,
+    /// Sound outward interval пересекает semantic boundary.
+    IntervalOverlap {
+        /// Нижняя доказанная граница.
+        lower: f64,
+        /// Верхняя доказанная граница.
+        upper: f64,
+    },
+}
+
+/// Low-level point Glow decision, одинаково типизированный для Rust/Swift/WASM.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum GlowPointDecision {
+    /// Selected state с раздельными decision/composite guarantees.
+    Determinate {
+        /// Explicit request profile.
+        decision_profile: GlowDecisionProfile,
+        /// Guarantee semantic target/max decision.
+        decision_guarantee: GlowDecisionGuarantee,
+        /// Exact composite profile.
+        composite_profile: GlowCompositeProfile,
+        /// Exact composite guarantee.
+        composite_guarantee: GlowCompositeGuarantee,
+        /// Diagnostic appearance identity.
+        diagnostic_profile: Option<GlowDiagnosticProfile>,
+        /// Canonical layer alpha.
+        alpha: f64,
+        /// Shortest-roundtrip CSS alpha.
+        alpha_css: String,
+        /// Requested target.
+        target_dj: f64,
+        /// Legacy/exact target status.
+        target_status: GlowTargetStatus,
+        /// Diagnostic achieved value.
+        achieved_dj: f64,
+        /// Exact point composite.
+        composite_hex: String,
+    },
+    /// No selected state; caller gets typed site + evidence and no fallback.
+    Indeterminate {
+        /// Explicit request profile.
+        decision_profile: GlowDecisionProfile,
+        /// Registered site.
+        site_id: NumericalSiteId,
+        /// Typed reason and its sound interval, if present.
+        evidence: NumericalIndeterminacy,
+    },
+}
+
 /// Ошибки границы — сматчиваемые на Swift-стороне (бросаются как исключения).
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum ColorError {
@@ -158,6 +293,12 @@ pub enum ColorError {
     Unreachable {
         /// Стабильный машинный код причины.
         code: String,
+    },
+    /// Невалидный low-level Glow request или неизвестный forward variant.
+    #[error("невалидный glow request: {reason}")]
+    InvalidGlowRequest {
+        /// Человекочитаемая причина.
+        reason: String,
     },
 }
 
@@ -312,6 +453,144 @@ pub fn min_alpha(tint: String, bg: String) -> Result<f64, ColorError> {
     min_alpha_hex(&tint, &bg).map_err(|reason| ColorError::InvalidColor { reason })
 }
 
+/// Point Glow solve с обязательным numerical profile. Stable uncertainty
+/// возвращается data-вариантом `Indeterminate`, не ошибкой и не fallback.
+///
+/// # Errors
+///
+/// [`ColorError::InvalidGlowRequest`] на недоменном input/internal variant.
+fn unknown_glow_variant(name: &str) -> ColorError {
+    ColorError::InvalidGlowRequest {
+        reason: format!("unknown core {name} variant"),
+    }
+}
+
+fn decision_guarantee_to_ffi(
+    guarantee: DecisionGuaranteeV1,
+) -> Result<GlowDecisionGuarantee, ColorError> {
+    match guarantee {
+        DecisionGuaranteeV1::BitExact => Ok(GlowDecisionGuarantee::BitExact),
+        DecisionGuaranteeV1::OutwardIntervalV1(interval) => {
+            Ok(GlowDecisionGuarantee::OutwardIntervalV1 {
+                lower: interval.lower(),
+                upper: interval.upper(),
+            })
+        }
+        DecisionGuaranteeV1::LegacyPlatformDependentV1 => {
+            Ok(GlowDecisionGuarantee::LegacyPlatformDependentV1)
+        }
+        _ => Err(unknown_glow_variant("DecisionGuaranteeV1")),
+    }
+}
+
+fn composite_profile_to_ffi(
+    profile: GlowCompositeProfileV1,
+) -> Result<GlowCompositeProfile, ColorError> {
+    match profile {
+        GlowCompositeProfileV1::EncodedSrgb8ScreenV1 => {
+            Ok(GlowCompositeProfile::EncodedSrgb8ScreenV1)
+        }
+        _ => Err(unknown_glow_variant("GlowCompositeProfileV1")),
+    }
+}
+
+fn composite_guarantee_to_ffi(
+    guarantee: GlowCompositeGuaranteeV1,
+) -> Result<GlowCompositeGuarantee, ColorError> {
+    match guarantee {
+        GlowCompositeGuaranteeV1::BitExact => Ok(GlowCompositeGuarantee::BitExact),
+        _ => Err(unknown_glow_variant("GlowCompositeGuaranteeV1")),
+    }
+}
+
+fn diagnostic_profile_to_ffi(
+    profile: GlowDiagnosticProfileV1,
+) -> Result<GlowDiagnosticProfile, ColorError> {
+    match profile {
+        GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1 => {
+            Ok(GlowDiagnosticProfile::Cam16UcsJPrimeLi2017V1)
+        }
+        _ => Err(unknown_glow_variant("GlowDiagnosticProfileV1")),
+    }
+}
+
+fn target_status_to_ffi(status: CoreGlowTargetStatus) -> Result<GlowTargetStatus, ColorError> {
+    match status {
+        CoreGlowTargetStatus::Reached => Ok(GlowTargetStatus::Reached),
+        CoreGlowTargetStatus::Unreachable => Ok(GlowTargetStatus::Unreachable),
+        _ => Err(unknown_glow_variant("GlowTargetStatus")),
+    }
+}
+
+fn numerical_site_to_ffi(site: NumericalSiteIdV1) -> Result<NumericalSiteId, ColorError> {
+    match site {
+        NumericalSiteIdV1::GlowTargetOrMaximumV1 => Ok(NumericalSiteId::GlowTargetOrMaximumV1),
+        _ => Err(unknown_glow_variant("NumericalSiteIdV1")),
+    }
+}
+
+fn indeterminacy_to_ffi(
+    evidence: NumericalIndeterminacyV1,
+) -> Result<NumericalIndeterminacy, ColorError> {
+    match evidence {
+        NumericalIndeterminacyV1::SoundBoundUnavailable => {
+            Ok(NumericalIndeterminacy::SoundBoundUnavailable)
+        }
+        NumericalIndeterminacyV1::IntervalOverlap(interval) => {
+            Ok(NumericalIndeterminacy::IntervalOverlap {
+                lower: interval.lower(),
+                upper: interval.upper(),
+            })
+        }
+        _ => Err(unknown_glow_variant("NumericalIndeterminacyV1")),
+    }
+}
+
+#[uniffi::export]
+pub fn solve_glow_point(
+    tint: String,
+    background: String,
+    target_dj: f64,
+    theme: Theme,
+    profile: GlowDecisionProfile,
+) -> Result<GlowPointDecision, ColorError> {
+    let core_profile = profile.to_core();
+    let decision =
+        solve_screen_alpha_for_dj(&tint, &background, target_dj, core_profile, &theme.vc())
+            .map_err(|reason| ColorError::InvalidGlowRequest { reason })?;
+    match decision {
+        NumericalDecisionV1::Determinate { value, guarantee } => {
+            let certificate = value.composite_certificate();
+            Ok(GlowPointDecision::Determinate {
+                decision_profile: profile,
+                decision_guarantee: decision_guarantee_to_ffi(guarantee)?,
+                composite_profile: composite_profile_to_ffi(certificate.profile())?,
+                composite_guarantee: composite_guarantee_to_ffi(certificate.guarantee())?,
+                diagnostic_profile: value
+                    .diagnostic_profile()
+                    .map(diagnostic_profile_to_ffi)
+                    .transpose()?,
+                alpha: value.alpha(),
+                alpha_css: value.alpha_css().to_string(),
+                target_dj: value.target_dj(),
+                target_status: target_status_to_ffi(value.status())?,
+                achieved_dj: value.achieved_dj(),
+                composite_hex: value.composite_hex().to_string(),
+            })
+        }
+        NumericalDecisionV1::Indeterminate { site_id, evidence } => {
+            Ok(GlowPointDecision::Indeterminate {
+                decision_profile: profile,
+                site_id: numerical_site_to_ffi(site_id)?,
+                evidence: indeterminacy_to_ffi(evidence)?,
+            })
+        }
+        _ => Err(ColorError::InvalidGlowRequest {
+            reason: "unknown NumericalDecisionV1".to_string(),
+        }),
+    }
+}
+
 /// Оценка мутности («грязи») цвета `[0,1]`: 0 — чистый, 1 — грязный.
 ///
 /// # Errors
@@ -325,6 +604,25 @@ pub fn muddiness(hex: String) -> Result<f64, ColorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outward_interval_evidence_survives_the_ffi_mapping() {
+        let interval = labcolors_core::OutwardIntervalV1::try_new(0.9, 1.1).unwrap();
+        assert_eq!(
+            decision_guarantee_to_ffi(DecisionGuaranteeV1::OutwardIntervalV1(interval)).unwrap(),
+            GlowDecisionGuarantee::OutwardIntervalV1 {
+                lower: 0.9,
+                upper: 1.1,
+            }
+        );
+        assert_eq!(
+            indeterminacy_to_ffi(NumericalIndeterminacyV1::IntervalOverlap(interval)).unwrap(),
+            NumericalIndeterminacy::IntervalOverlap {
+                lower: 0.9,
+                upper: 1.1,
+            }
+        );
+    }
 
     #[test]
     fn contrast_black_on_white_is_21_wcag() {
@@ -396,5 +694,108 @@ mod tests {
         let gray = muddiness("#808080".into()).unwrap();
         assert!(gray < 0.05, "серый должен быть чистым, получено {gray}");
         assert!(olive > gray, "олива должна быть мутнее серого");
+    }
+
+    #[test]
+    fn glow_stable_indeterminate_and_legacy_guarantees_do_not_collapse() {
+        let stable = solve_glow_point(
+            "#C0B2FA".into(),
+            "#000000".into(),
+            2.3006,
+            Theme::Light,
+            GlowDecisionProfile::StableV1,
+        )
+        .unwrap();
+        assert!(matches!(
+            stable,
+            GlowPointDecision::Indeterminate {
+                decision_profile: GlowDecisionProfile::StableV1,
+                site_id: NumericalSiteId::GlowTargetOrMaximumV1,
+                evidence: NumericalIndeterminacy::SoundBoundUnavailable,
+            }
+        ));
+
+        let legacy = solve_glow_point(
+            "#C0B2FA".into(),
+            "#000000".into(),
+            2.3006,
+            Theme::Light,
+            GlowDecisionProfile::LegacyPlatformDependentV1,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            GlowPointDecision::Determinate {
+                decision_profile: GlowDecisionProfile::LegacyPlatformDependentV1,
+                decision_guarantee: GlowDecisionGuarantee::LegacyPlatformDependentV1,
+                composite_profile: GlowCompositeProfile::EncodedSrgb8ScreenV1,
+                composite_guarantee: GlowCompositeGuarantee::BitExact,
+                diagnostic_profile: Some(GlowDiagnosticProfile::Cam16UcsJPrimeLi2017V1),
+                ..
+            }
+        ));
+
+        let stable_noop = solve_glow_point(
+            "#C0B2FA".into(),
+            "#FFFFFF".into(),
+            2.3006,
+            Theme::Light,
+            GlowDecisionProfile::StableV1,
+        )
+        .unwrap();
+        assert!(matches!(
+            stable_noop,
+            GlowPointDecision::Determinate {
+                decision_profile: GlowDecisionProfile::StableV1,
+                decision_guarantee: GlowDecisionGuarantee::BitExact,
+                diagnostic_profile: None,
+                ref composite_hex,
+                ..
+            } if composite_hex == "#FFFFFF"
+        ));
+    }
+
+    #[test]
+    fn stable_glow_noop_uses_the_quantised_endpoint_not_a_white_special_case() {
+        let sub_lsb = solve_glow_point(
+            "#010000".into(),
+            "#FE0000".into(),
+            2.3006,
+            Theme::Light,
+            GlowDecisionProfile::StableV1,
+        )
+        .unwrap();
+        assert!(matches!(
+            sub_lsb,
+            GlowPointDecision::Determinate {
+                decision_profile: GlowDecisionProfile::StableV1,
+                decision_guarantee: GlowDecisionGuarantee::BitExact,
+                composite_profile: GlowCompositeProfile::EncodedSrgb8ScreenV1,
+                composite_guarantee: GlowCompositeGuarantee::BitExact,
+                diagnostic_profile: None,
+                target_status: GlowTargetStatus::Unreachable,
+                achieved_dj,
+                ref composite_hex,
+                ..
+            } if achieved_dj.to_bits() == 0.0_f64.to_bits()
+                && composite_hex == "#FE0000"
+        ));
+
+        let crossing = solve_glow_point(
+            "#800000".into(),
+            "#FE0000".into(),
+            2.3006,
+            Theme::Light,
+            GlowDecisionProfile::StableV1,
+        )
+        .unwrap();
+        assert!(matches!(
+            crossing,
+            GlowPointDecision::Indeterminate {
+                decision_profile: GlowDecisionProfile::StableV1,
+                site_id: NumericalSiteId::GlowTargetOrMaximumV1,
+                evidence: NumericalIndeterminacy::SoundBoundUnavailable,
+            }
+        ));
     }
 }

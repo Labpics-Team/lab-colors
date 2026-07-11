@@ -1,37 +1,21 @@
 # Публикация @labpics/colors в npm по тегу colors-vX.Y.Z.
 #
-# БЕЗ ТОКЕНОВ: аутентификация — Trusted Publishing (OIDC): npm доверяет
-# именно этому workflow этого репозитория (настройка — страница пакета
-# npmjs.com → Settings → Trusted publishing; привязка включает environment
-# npm-publish — второй фактор доверия поверх имени workflow). Требования
-# OIDC: npm ≥ 11.5.1, Node ≥ 22.14 — Node 24 несёт npm 11.x из коробки.
+# Self-hosted runner публикует через explicit granular token: npm не поддерживает
+# безтокенный trust flow на self-hosted runners. Secret `NPM_TOKEN` хранится в
+# environment `npm-publish`, выдаёт write только пакету @labpics/colors и
+# передаётся ровно publish-step.
 #
-# Provenance-аттестация ОТКЛЮЧЕНА (package.json publishConfig.provenance:false):
-# npm выдаёт sigstore-provenance ТОЛЬКО публичным репозиториям (E422 на
-# приватном). При открытии lab-colors публично — вернуть provenance:true
-# (аттестация «собрано этим workflow из этого репо» усилит сигналы Socket).
+# Publish ничего не собирает и не перепаковывает. Он принимает только immutable
+# attempt-scoped artifact `colors-release-$GITHUB_SHA-attempt-$RUN_ATTEMPT` из
+# canonical successful push-run
+# `.github/workflows/ci.yml` для exact tag SHA. Отдельно требуется canonical
+# successful push-run `.github/workflows/native-conformance.yml`. Имена jobs
+# проверяются только внутри выбранных run IDs, поэтому чужой check-run с таким
+# же display name не может удовлетворить gate.
 #
-# Self-hosted раннер — ВРЕМЕННО, по решению владельца (2026-07-04): публикация
-# 0.6.0 не стартовала на github-hosted («account payments have failed»,
-# run 28689086170), платные минуты закрыты.
-#
-# Границы гарда «тег достижим из origin/main» (честно, по ревью):
-# — закрывает: rogue-тег, переиспользующий ЭТОТ workflow, — код вне истории
-#   main (PR-only + зелёный CI) отклоняется до любых установок из сети;
-# — НЕ закрывает: тег на коммит с переписанным publish.yml (событие тега
-#   исполняет workflow из коммита тега). Полный гейт — required reviewers
-#   на environment npm-publish — на текущем биллинг-плане НЕДОСТУПЕН
-#   (HTTP 422 при попытке включить, 2026-07-04).
-# Почему это не расширение поверхности: (а) ci.yml уже исполняет произвольный
-# код ЛЮБОЙ ветки write-холдера на том же self-hosted раннере — крафт-тег не
-# добавляет нового; (б) вектор «крафт-publish.yml + OIDC-паблиш» существовал
-# и на github-hosted. Дельта self-hosted-перехода = 0 при текущем круге write
-# (владелец + агент). Остаточный класс — co-tenancy de-02; закрывается
-# выделенным CI-узлом (эпик изоляции раннеров). Вернуть github-hosted /
-# включить required reviewers, когда починен биллинг.
-#
-# Гард «версия пакета == тег» стоит ДО любых установок из сети: fail-fast
-# на расхождении, публикация «тег v0.2.0 / пакет 0.1.0» невозможна.
+# Provenance-аттестация отключена (package.json publishConfig.provenance:false):
+# npm выдаёт sigstore provenance только публичным репозиториям. При открытии
+# репозитория вернуть provenance и короткоживущую аутентификацию.
 name: publish
 
 on:
@@ -39,11 +23,13 @@ on:
     tags: ["colors-v*"]
 
 env:
-  RUST_TOOLCHAIN: "1.96.0"
+  # Node 24.14.0 ships the npm 11.9.0 release packer/publisher contract.
+  NODE_TOOLCHAIN: "24.14.0"
+  NPM_TOOLCHAIN: "11.9.0"
 
 permissions:
   contents: read
-  id-token: write # OIDC для Trusted Publishing
+  actions: read
 
 jobs:
   publish:
@@ -52,45 +38,274 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          # Полная история: гард ниже проверяет достижимость тега из main
-          # через merge-base, shallow-клон дал бы ложный отказ.
+          # Full history is required by the anti-rogue-tag ancestry guard.
           fetch-depth: 0
-      - name: гард — тег из истории main (anti-rogue-tag, до установок из сети)
+      - name: isolated publish env (runner.temp)
         run: |
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "NPM_CONFIG_CACHE=$RUNNER_TEMP/npm-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/npm-$GITHUB_JOB"
+      - name: guard — exact tag SHA is in origin/main
+        run: |
+          set -euo pipefail
+          checked_out="$(git rev-parse HEAD)"
+          if [ "$checked_out" != "$GITHUB_SHA" ]; then
+            echo "checkout HEAD $checked_out != tag SHA $GITHUB_SHA" >&2
+            exit 1
+          fi
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "тег $GITHUB_REF_NAME указывает вне истории origin/main — публикация запрещена" >&2
+            echo "tag $GITHUB_REF_NAME points outside origin/main history" >&2
             exit 1
           fi
-      - name: версия пакета == тег (fail-fast, до установок из сети)
-        working-directory: packages/colors
+      - name: guard — canonical exact-SHA workflow runs and their own jobs
+        id: canonical-runs
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF_NAME#colors-v}"
-          version="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$version" ]; then
-            echo "тег colors-v$tag != package.json $version" >&2
-            exit 1
-          fi
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27 (у action нет релизных тегов; бамп сверять с историей master)
+          node <<'NODE'
+          const { appendFileSync } = require("node:fs");
+
+          const repository = process.env.GITHUB_REPOSITORY;
+          const expectedSha = process.env.GITHUB_SHA;
+          const apiRoot = process.env.GITHUB_API_URL;
+          const output = process.env.GITHUB_OUTPUT;
+          const token = process.env.GH_READ_TOKEN;
+          if (!repository || !expectedSha || !apiRoot || !output || !token) {
+            throw new Error("canonical-run guard is missing required GitHub environment");
+          }
+
+          const workflows = [
+            {
+              key: "ci",
+              file: "ci.yml",
+              path: ".github/workflows/ci.yml",
+              requiredJobs: [
+                "MSRV workspace check",
+                "clippy + rustfmt",
+                "cargo doc (intra-doc links)",
+                "test",
+                "cargo audit (rustsec)",
+                "wasm build + headless test + size",
+                "docs-drift (нейминг-канон)",
+              ],
+            },
+            {
+              key: "native",
+              file: "native-conformance.yml",
+              path: ".github/workflows/native-conformance.yml",
+              requiredJobs: [
+                "swift conformance (self-hosted Linux, swift container)",
+              ],
+            },
+          ];
+
+          async function api(path) {
+            const response = await fetch(`${apiRoot}/repos/${repository}${path}`, {
+              headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`GitHub API ${response.status} for ${path}: ${await response.text()}`);
+            }
+            return response.json();
+          }
+
+          async function paginated(path, field) {
+            const values = [];
+            for (let page = 1; page <= 10; page += 1) {
+              const separator = path.includes("?") ? "&" : "?";
+              const payload = await api(`${path}${separator}per_page=100&page=${page}`);
+              if (!Array.isArray(payload[field])) {
+                throw new Error(`GitHub API response has no ${field} array for ${path}`);
+              }
+              values.push(...payload[field]);
+              if (payload[field].length < 100) return values;
+            }
+            throw new Error(`GitHub API pagination exceeded 1000 ${field} records for ${path}`);
+          }
+
+          async function canonicalRun(spec) {
+            const query = new URLSearchParams({
+              branch: "main",
+              event: "push",
+              head_sha: expectedSha,
+            });
+            const runs = await paginated(
+              `/actions/workflows/${encodeURIComponent(spec.file)}/runs?${query}`,
+              "workflow_runs",
+            );
+            const candidates = runs
+              .filter((run) =>
+                run.path === spec.path &&
+                run.head_sha === expectedSha &&
+                run.head_branch === "main" &&
+                run.event === "push")
+              .sort((left, right) => Number(right.id) - Number(left.id));
+            const run = candidates[0];
+            if (!run) throw new Error(`${spec.path}: no canonical push run for ${expectedSha}`);
+            if (!(run.status === "completed" && run.conclusion === "success")) {
+              throw new Error(`${spec.path} run ${run.id}: ${run.status}/${run.conclusion ?? "none"}`);
+            }
+            return run;
+          }
+
+          async function requireSuccessfulJobs(spec, run) {
+            const jobs = await paginated(
+              `/actions/runs/${run.id}/jobs?filter=latest`,
+              "jobs",
+            );
+            const failures = [];
+            for (const name of spec.requiredJobs) {
+              const matches = jobs.filter((job) =>
+                job.name === name && Number(job.run_id) === Number(run.id));
+              if (matches.length !== 1) {
+                failures.push(`${name}: expected one job in run ${run.id}, got ${matches.length}`);
+                continue;
+              }
+              const job = matches[0];
+              if (!(job.status === "completed" && job.conclusion === "success")) {
+                failures.push(`${name}: ${job.status}/${job.conclusion ?? "none"}`);
+              }
+            }
+            if (failures.length > 0) {
+              throw new Error(`${spec.path} failed job gate:\n${failures.join("\n")}`);
+            }
+          }
+
+          (async () => {
+            const outputs = [];
+            for (const spec of workflows) {
+              const run = await canonicalRun(spec);
+              await requireSuccessfulJobs(spec, run);
+              outputs.push(`${spec.key}_run_id=${run.id}`);
+              if (spec.key === "ci") {
+                if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) {
+                  throw new Error(`${spec.path} run ${run.id}: invalid run_attempt`);
+                }
+                outputs.push(`ci_run_attempt=${run.run_attempt}`);
+              }
+              console.log(`${spec.path}: canonical successful push run ${run.id}`);
+            }
+            appendFileSync(output, `${outputs.join("\n")}\n`, "utf8");
+          })().catch((error) => {
+            console.error(error instanceof Error ? error.stack : String(error));
+            process.exitCode = 1;
+          });
+          NODE
+      - name: download immutable exact-SHA release artifact from canonical CI run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: install wasm-pack
-        run: cargo install wasm-pack --version 0.13.1 --locked
-      - name: wasm-pack build (release)
-        # Тот же артефакт, что гейтится в ci.yml (panic=abort, wasm-opt -Oz).
-        run: wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors
+          name: colors-release-${{ github.sha }}-attempt-${{ steps.canonical-runs.outputs.ci_run_attempt }}
+          path: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ steps.canonical-runs.outputs.ci_run_attempt }}
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.canonical-runs.outputs.ci_run_id }}
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_TOOLCHAIN }}
           registry-url: "https://registry.npmjs.org"
-      - name: гейт перед публикацией — typecheck + runtime-тесты пакета
-        working-directory: packages/colors
+      - name: validate manifest identity and byte-exact tarball
+        id: verified-artifact
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ steps.canonical-runs.outputs.ci_run_attempt }}
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_TAG: ${{ github.ref_name }}
+          EXPECTED_NODE: ${{ env.NODE_TOOLCHAIN }}
+          EXPECTED_NPM: ${{ env.NPM_TOOLCHAIN }}
         run: |
-          npm ci
-          npm run typecheck
-          npm test
-      - name: npm publish (OIDC, без токена)
-        working-directory: packages/colors
-        run: npm publish
+          node <<'NODE'
+          const { createHash } = require("node:crypto");
+          const { execFileSync } = require("node:child_process");
+          const {
+            appendFileSync,
+            lstatSync,
+            readFileSync,
+            readdirSync,
+          } = require("node:fs");
+          const { basename, join } = require("node:path");
+
+          function fail(message) {
+            throw new Error(`release artifact rejected: ${message}`);
+          }
+
+          function walk(directory, files = []) {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+              const path = join(directory, entry.name);
+              const stat = lstatSync(path);
+              if (stat.isSymbolicLink()) fail(`symlink is forbidden: ${path}`);
+              if (stat.isDirectory()) walk(path, files);
+              else if (stat.isFile()) files.push(path);
+              else fail(`non-regular artifact entry: ${path}`);
+            }
+            return files;
+          }
+
+          const artifactDir = process.env.ARTIFACT_DIR;
+          const expectedSha = process.env.EXPECTED_SHA;
+          const expectedTag = process.env.EXPECTED_TAG;
+          const expectedNode = process.env.EXPECTED_NODE;
+          const expectedNpm = process.env.EXPECTED_NPM;
+          const output = process.env.GITHUB_OUTPUT;
+          if (!artifactDir || !expectedSha || !expectedTag || !expectedNode || !expectedNpm || !output) {
+            fail("validator is missing required environment");
+          }
+          if (process.versions.node !== expectedNode) {
+            fail(`Node ${process.versions.node} != ${expectedNode}`);
+          }
+          const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+          if (npmVersion !== expectedNpm) fail(`npm ${npmVersion} != ${expectedNpm}`);
+          if (!/^colors-v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(expectedTag)) {
+            fail(`invalid release tag ${expectedTag}`);
+          }
+
+          const files = walk(artifactDir);
+          const manifests = files.filter((path) => basename(path) === "release-manifest.json");
+          const tarballs = files.filter((path) => path.endsWith(".tgz"));
+          if (files.length !== 2 || manifests.length !== 1 || tarballs.length !== 1) {
+            fail(`expected exactly one manifest and one tarball, got ${files.length} files`);
+          }
+
+          const manifest = JSON.parse(readFileSync(manifests[0], "utf8"));
+          const expectedVersion = expectedTag.slice("colors-v".length);
+          if (manifest.schemaVersion !== 1) fail(`manifest schema ${manifest.schemaVersion}`);
+          if (manifest.sourceSha !== expectedSha) {
+            fail(`manifest sourceSha ${manifest.sourceSha} != ${expectedSha}`);
+          }
+          if (manifest.npm !== expectedVersion) {
+            fail(`manifest npm ${manifest.npm} != tag version ${expectedVersion}`);
+          }
+
+          const tarball = tarballs[0];
+          const bytes = readFileSync(tarball);
+          const evidence = manifest.artifacts?.tarball;
+          if (!evidence || evidence.path !== `.release/${basename(tarball)}`) {
+            fail("manifest tarball path does not identify the downloaded tarball");
+          }
+          if (!Number.isSafeInteger(evidence.bytes) || evidence.bytes !== bytes.length) {
+            fail(`tarball bytes ${bytes.length} != manifest ${evidence.bytes}`);
+          }
+          const digest = createHash("sha256").update(bytes).digest("hex");
+          if (!/^[0-9a-f]{64}$/u.test(evidence.sha256) || evidence.sha256 !== digest) {
+            fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
+          }
+
+          const packedPackage = JSON.parse(
+            execFileSync("tar", ["-xOzf", tarball, "package/package.json"], {
+              encoding: "utf8",
+            }),
+          );
+          if (packedPackage.name !== "@labpics/colors" || packedPackage.version !== expectedVersion) {
+            fail(`packed identity ${packedPackage.name}@${packedPackage.version}`);
+          }
+
+          if (tarball.includes("\n") || tarball.includes("\r")) fail("unsafe tarball path");
+          appendFileSync(output, `tarball=${tarball}\n`, "utf8");
+          console.log(`verified ${basename(tarball)}: ${bytes.length} bytes, sha256 ${digest}`);
+          NODE
+      - name: npm publish verified CI tarball (granular token, no rebuild/repack)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --ignore-scripts "${{ steps.verified-artifact.outputs.tarball }}"

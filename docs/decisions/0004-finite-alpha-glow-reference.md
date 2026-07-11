@@ -2,7 +2,9 @@
 
 - Статус: принято
 - Дата: 2026-07-10
-- Связанные задачи: #41, #218, #221, #223, #233, #241, #258, #259
+- Дополнение numerical-decision boundary: 2026-07-11
+- Связанные задачи: #41, #218, #221, #223, #233, #241, #258, #259, #281,
+  #282
 
 ## Контекст
 
@@ -63,7 +65,12 @@ Source-over affine-форма алгебраически равна операт
 сохраняют прежний `Option`-контракт до отдельной миграции #41. Различная
 семантика debug/release запрещена.
 
-### 2. Glow перечисляет все достижимые состояния
+Эмиссионная hex-обёртка `resolve_alpha_analog_hex` сильнее continuous API: для
+валидных hex и `requested_alpha ∈ [0,1]` ответ существует всегда, поэтому её
+тип — `Result<(String, f64), String>` без внутреннего `Option`. Некорректная
+alpha не клампится в другой запрос, а возвращает `Err`.
+
+### 2. Glow перечисляет exact states, а semantic decision профилирован
 
 Для каждого канала screen переход в новый байт `v` начинается на рациональной
 стенке:
@@ -73,8 +80,13 @@ Source-over affine-форма алгебраически равна операт
 ```
 
 Три уже упорядоченных потока канальных стенок сливаются точным перекрёстным
-умножением целых без общей сортировки и промежуточных коллекций. Солвер
-проверяет все достижимые RGB-состояния в порядке alpha и выбирает:
+умножением целых без общей сортировки и промежуточных коллекций. Это даёт exact
+множество достижимых RGB-состояний и bit-exact certificate каждого выбранного
+point-композита. Однако порядок этих states по диагностическому CAM16-UCS J′ —
+другая задача: она содержит `powf`/libm и влияет на semantic branch.
+
+Compatibility profile `legacy-platform-dependent-v1` проверяет states в
+порядке alpha и выбирает:
 
 1. первое состояние, где `|ΔJ′| >= target`;
 2. если такого нет — глобальный максимум `|ΔJ′|`;
@@ -86,9 +98,22 @@ Source-over affine-форма алгебраически равна операт
 стенку по-разному, поэтому production-alpha берётся только из внутренности
 интервала и перед возвратом обязана воспроизвести выбранный state.
 
-Так выбор не зависит от предположения о монотонности J′. CAM16-UCS остаётся
-binary64-метрикой текущей реализации; cross-runtime границы и интервальные
-гарантии принадлежат #223.
+Этот legacy-выбор не зависит от предположения о монотонности J′, но остаётся
+platform/libm-dependent: точного эталона или sound outward bound для CAM16-
+ветвления пока нет. Поэтому `stable-v1` на нетривиальном site
+`glow-target-or-maximum-v1` не выбирает state и возвращает
+`NumericalDecisionV1::Indeterminate { site_id, evidence }`, где evidence —
+`SoundBoundUnavailable`. WASM-проекция выводит из этого варианта согласованную
+пару `reason: sound-bound-unavailable` + `bounds: unavailable`. Legacy не
+включается как fallback — его обязан явно выбрать клиентский контракт.
+
+Единственное stable-исключение не является специальной цветовой эвристикой:
+если point screen-композит не может изменить ни один байт при любой alpha,
+`ΔJ′ = 0` следует из равенства byte-state. Такой no-op determinate имеет
+`bit-exact` guarantee без вызова CAM16. Реестр уже мигрированных
+branch-sensitive sites и классов гарантий является публичными данными
+`numerical_registry_v1()` (#281); он не объявляет полный аудит исторических
+`f64`-ветвлений, которым владеет #291.
 
 ### 3. Alpha канонизируется внутри выбранного интервала
 
@@ -105,9 +130,16 @@ CSS-переменная alpha копирует её буквально. Пов�
 ### 4. Point-метрики не подменяют spatial effect
 
 Цель glow относится только к изолированному halo. Результат отдельно сообщает
-композит и `|ΔJ′|` для halo и core, `targetStatus`, `constraintLayer` и
-`referenceProfile`. Совместный blur/overlap/backdrop/HDR-эффект без геометрии не
-сертифицируется; это отдельный `SpatialField` из #221.
+композит и `|ΔJ′|` для halo и core, `targetStatus` и `constraintLayer`.
+`compositeProfile=encoded-srgb8-screen-v1` вместе с
+`compositeGuarantee=bit-exact` описывает только конечный point-композитор.
+`diagnosticProfile=cam16-ucs-jprime-li2017-v1` идентифицирует реально
+выполненную appearance-диагностику; exact no-op возвращает `null`, потому что
+CAM16 в этом пути не вызывается. `decisionProfile` / `decisionGuarantee`
+отдельно сообщают, на каком основании принят semantic target/max verdict. Один общий profile был бы
+ложным повышением диагностической модели до exact-гарантии. Совместный
+blur/overlap/backdrop/HDR-эффект без геометрии не сертифицируется; это отдельный
+`SpatialField` из #221.
 
 Midpoint J′ используется только как seed Oklab-светлоты, а gamut-boundary
 chroma — как recipe core v1. Эмитированный core отдельно измеряется и не
@@ -117,17 +149,20 @@ chroma — как recipe core v1. Эмитированный core отдельн
 ### 5. Доказательства являются исполняемыми
 
 - все 65 536 пар одного screen-канала проверяют рациональное разбиение;
-- независимый finite-state oracle проверяет выбор reached/unreachable;
+- независимый finite-state oracle проверяет legacy-выбор reached/unreachable;
 - source-over и screen при `alpha=0.122` сверяются с независимой точной
   рациональной формулой на всех 65 536 парах байтов каждый;
 - JS chain требует нулевого расхождения engine ↔ официальный consumer;
+- stable-путь на нетривиальном site возвращает typed `Indeterminate`, не
+  обращается к CAM16 и не эмитит CSS-переменные; exact no-op остаётся
+  determinate с `bit-exact` guarantee;
 - OKLCH и Display P3 проходят решётку с шагом 5 по каждому каналу (около
   140 тысяч цветов на путь, включая края) и полный серый ramp;
 - изменение precision имеет быстрые mutation-killer sentinels.
 
 Полный куб из 16 777 216 входов не заявляется пройденным: выборочная решётка не
 подменяет exhaustive-доказательство. Дальнейший conformance-gate отслеживает
-#258 и обязан фиксировать target/toolchain, если такой перебор будет добавлен.
+`#258` и обязан фиксировать target/toolchain, если такой перебор будет добавлен.
 
 ## Последствия и миграция
 
@@ -139,13 +174,24 @@ Rust:
 - для финального байтового reference используется `composite_over_srgb8(...)`;
 - `screen_layer_over_encoded(...)` остаётся непрерывной алгеброй, а финальный
   point-пиксель вычисляет `screen_layer_over_srgb8(...)`;
+- `resolve_alpha_analog_hex(...)` возвращает тотальный для валидного домена
+  `Result<(String, f64), String>` вместо `Result<Option<...>, String>`;
 - поля `GlowSolve` читаются через getters;
-- alpha берётся из `alpha_css()`, статус — из `status()`.
+- `solve_screen_alpha_for_dj(...)` требует `GlowDecisionProfileV1` и возвращает
+  `NumericalDecisionV1<GlowSolve>`;
+- alpha берётся из `alpha_css()`, статус — из `status()`, exact composite — из
+  `composite_certificate()`.
 
 WASM/TypeScript:
 
-- mocks и exhaustive unions обязаны добавить `alphaCss`, `referenceProfile`,
-  `constraintLayer`, `targetDj`, `targetStatus`, оба composite и оба `achievedDj`;
+- каждый Glow-рецепт обязан явно нести `decision_profile`; отсутствие и
+  неизвестная строка отвергаются при `loadConfig`, а профиль входит в fingerprint;
+- determinate mocks обязаны добавить `alphaCss`, `constraintLayer`, `targetDj`,
+  `targetStatus`, оба composite, оба `achievedDj`, а также раздельные
+  `compositeProfile`, `compositeGuarantee`, nullable `diagnosticProfile`,
+  `decisionProfile`, `decisionGuarantee`;
+- exhaustive union обязан обрабатывать `kind: "glow-indeterminate"`; этот
+  terminal outcome несёт site/reason/bounds, но не создаёт halo/core/alpha vars;
 - legacy `achievedDj` и `degraded` остаются точными aliases на период миграции;
 - изменение строк alpha и соответствующих golden ожидаемо.
 
@@ -154,6 +200,7 @@ WASM/TypeScript:
 `#C0B2FA @ 0.122` над чёрным, поэтому Rust FFI и все нативные биндинги обязаны
 вернуть `#17161F`, а старый нормализованный путь больше не считается conformant.
 
-Открытыми остаются: полный viewing/context contract (#230), cross-runtime
-численные гарантии (#223), фактический renderer/output pipeline (#233/#241) и
+Полный переход и rollback описаны в `docs/migrations/exact-alpha-glow.md`.
+Открытыми остаются: полный viewing/context contract (#230), sound cross-runtime
+CAM16 bounds (#223/#281), фактический renderer/output pipeline (#233/#241) и
 пространственная модель glow (#221).

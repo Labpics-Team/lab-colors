@@ -36,8 +36,8 @@ pub struct RoleEntry {
     pub outcome: RoleOutcome,
 }
 
-/// The four honest outcomes of resolving a role, mirroring the core's
-/// `Resolved` without leaking the core type across the boundary.
+/// The honest outcome union for one role, mirroring the core's `Resolved`
+/// without leaking the core type across the boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleOutcome {
     /// A solved colour with its measured contrasts and degradation flags.
@@ -53,6 +53,8 @@ pub enum RoleOutcome {
     /// `mix-blend-mode: screen`; `--lab-<role>` несёт halo, `--lab-<role>-core`
     /// — слой пересвета, `--lab-<role>-alpha` — интенсивность числом.
     Glow(GlowColor),
+    /// Stable Glow terminal result: no sound numerical decision, no CSS vars.
+    GlowIndeterminate(GlowIndeterminateColor),
     /// Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) +
     /// опаковая база `02`, обе — один тон. `--lab-<role>-01` несёт
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
@@ -82,8 +84,16 @@ pub struct GlowColor {
     pub alpha_css: String,
     /// Целевой |ΔJ′| изолированного halo-композита.
     pub target_dj: f64,
-    /// Версия конечного reference-домена point-расчёта.
-    pub reference_profile: &'static str,
+    /// Exact point-composite profile, независимо от target/max decision.
+    pub composite_profile: labcolors_core::GlowCompositeProfileV1,
+    /// Exact point-composite guarantee.
+    pub composite_guarantee: labcolors_core::GlowCompositeGuaranteeV1,
+    /// Diagnostic appearance model, если solve реально её вызвал.
+    pub diagnostic_profile: Option<labcolors_core::GlowDiagnosticProfileV1>,
+    /// Explicit client-selected decision profile.
+    pub decision_profile: labcolors_core::GlowDecisionProfileV1,
+    /// Guarantee target/max decision.
+    pub decision_guarantee: labcolors_core::DecisionGuaranteeV1,
     /// Слой, по которому решалась цель.
     pub constraint_layer: labcolors_core::GlowConstraintLayer,
     /// Типизированный результат target-проверки.
@@ -96,6 +106,23 @@ pub struct GlowColor {
     pub core_composite_hex: String,
     /// Фактический |ΔJ′| изолированного core-композита.
     pub core_achieved_dj: f64,
+}
+
+/// Stable Glow result without a selected semantic state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlowIndeterminateColor {
+    /// Canonical source anchor; not emitted as CSS without a decision.
+    pub source_hex: String,
+    /// Requested diagnostic target.
+    pub target_dj: f64,
+    /// Explicit stable profile.
+    pub decision_profile: labcolors_core::GlowDecisionProfileV1,
+    /// Registered branch-sensitive site.
+    pub site_id: labcolors_core::NumericalSiteIdV1,
+    /// Неразделимая причина вместе с sound interval, если он существует.
+    pub evidence: labcolors_core::NumericalIndeterminacyV1,
+    /// Layer whose target could not be classified.
+    pub constraint_layer: labcolors_core::GlowConstraintLayer,
 }
 
 /// Двухслойный материал (kind material): тон + выведенная α + вердикт гарантии.

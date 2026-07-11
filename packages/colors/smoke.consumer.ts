@@ -12,9 +12,13 @@ import init, {
 } from "./index.js";
 import type { ResolvedTheme, RoleResult, ThemeName } from "./index.js";
 
-async function consume(): Promise<void> {
+async function consume(clientConfigJson: string): Promise<void> {
   await init();
   const engine = new LabColors();
+
+  // A client config must be loaded before resolving client-owned role names.
+  const configFingerprint: string = engine.loadConfig(clientConfigJson);
+  void configFingerprint;
 
   const theme: ThemeName = "light";
   const result: ResolvedTheme = engine.resolveTheme("#FFFFFF", theme);
@@ -39,18 +43,24 @@ async function consume(): Promise<void> {
     void cssVar;
   }
 
-  // vars is a string→string map of reachable roles.
   const bg: string = result.background;
   void bg;
 
-  // The vanilla helper accepts the result directly.
+  const glow: RoleResult = result.roles["fx-glow-brand"];
+  if (glow.kind === "glow") {
+    const diagnosticProfile: "cam16-ucs-jprime-li2017-v1" | null =
+      glow.diagnosticProfile;
+    void diagnosticProfile;
+  }
+
   applyTheme(document.documentElement, result);
 
-  // The effective-background resolver returns a solid hex.
+  // Current effectiveBackground returns the legacy solid reference estimate,
+  // not evidence of the browser's actually rendered pixel.
   const effBg: string = effectiveBackground(document.documentElement);
   void effBg;
 
-  // The perceptual interpolation helper blends two hexes in Oklab.
+  // The interpolation helper is an explicit Oklab construction primitive.
   const blended: string = oklabLerp("#101012", effBg, 0.5);
   void blended;
 
@@ -68,7 +78,8 @@ async function consume(): Promise<void> {
   void bgHex;
   controller.stop();
 
-  // The adaptive (hysteresis) controller: lazy re-check + eased re-solve.
+  // Current adaptive API remains a legacy characterised controller. Its types
+  // are smoke-tested here without promoting it to a universal safety proof.
   const adaptive = adaptTheme(surface, {
     colors: engine,
     theme,
@@ -84,7 +95,7 @@ async function consume(): Promise<void> {
   void appliedVars;
   adaptive.stop();
 
-  // A varying backdrop: the background may be a set of worst-case samples.
+  // A varying backdrop can be supplied as an explicit sample set.
   const adaptiveBackdrop = adaptTheme(surface, {
     colors: engine,
     theme,

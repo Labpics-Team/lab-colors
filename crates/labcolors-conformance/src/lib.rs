@@ -2,13 +2,12 @@
 //!
 //! # Что это и зачем
 //!
-//! Ядро (`labcolors-core`) детерминировано: один вход → байт-идентичный выход.
-//! Но у движка теперь НЕСКОЛЬКО поверхностей — WASM (`@labpics/colors`), а с
-//! этой задачи и нативная (Swift через UniFFI). «Динамичность» архитектуры
-//! (рантайм-ядро на каждой платформе) держится ровно до тех пор, пока КАЖДАЯ
-//! поверхность отдаёт ОДНИ И ТЕ ЖЕ числа. Пак — исполняемый контракт этого
-//! равенства: набор детерминированных векторов «вход → канонический выход»,
-//! которые обязан воспроизвести любой биндинг, чтобы называться conformant.
+//! Ядро (`labcolors-core`) задаёт канонический выход, но не все его поля имеют
+//! byte-exact cross-runtime guarantee: трансцендентные `f64` сравниваются по
+//! [`DRIFT_TOL`], exact hex/enum — точно. У движка несколько поверхностей — WASM
+//! (`@labpics/colors`) и Swift через UniFFI. Пак задаёт исполняемый контракт:
+//! набор векторов «вход → канонический выход» и правила сравнения, которые
+//! обязан пройти конкретный биндинг, прежде чем называться conformant.
 //!
 //! # Честность конструкции
 //!
@@ -28,11 +27,13 @@
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
 //! | `muddiness.json` | hex → мутность | `cleanliness::muddiness_from_hex` |
-//! | `manifest.json` | версии пака/ядра, дайджест, счётчики | — |
+//! | `manifest.json` | версии, дайджест, счётчики, migrated numerical sites | `numerical_registry_v1` |
 //!
 //! Версия пака ([`PACK_VERSION`]) привязана к версии ядра ([`core_version`]):
 //! при легитимной смене канона генератор перегенерирует векторы, а
 //! раннер-референс ловит любой дрейф.
+//! `manifest.numericalSites` перечисляет только уже мигрированные typed-decision
+//! sites; полнота аудита исторических `f64` branches остаётся в #291.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,12 +41,12 @@ use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
     BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, Theme, ViewingConditions,
-    fnv1a_32, recheck_against, solve,
+    fnv1a_32, numerical_registry_v1, recheck_against, solve,
 };
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "1.0.0";
+pub const PACK_VERSION: &str = "2.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -189,14 +190,16 @@ pub struct AlphaVector {
 }
 
 /// Тройки (тинт, α, фон) для альфа-алгебры: нейтральный тинт labui над светлым
-/// и тёмным фоном на разных уровнях лестницы, плюс бренд.
-const ALPHA_CASES: [(&str, f64, &str); 6] = [
+/// и тёмным фоном на разных уровнях лестницы, бренд и обязательный v2 half-tie
+/// из ADR-0004, различающий byte-reference от старого нормализованного пути.
+const ALPHA_CASES: [(&str, f64, &str); 7] = [
     ("#787880", 0.2, "#FFFFFF"),   // нейтральная заливка @20 на белом
     ("#787880", 0.122, "#FFFFFF"), // граница @12 на белом
     ("#787880", 0.361, "#101012"), // нейтральная заливка @36 на тёмном
     ("#007AFF", 0.122, "#FFFFFF"), // бренд-заливка @12 на белом
     ("#101012", 0.122, "#FFFFFF"), // тень @12 на белом
     ("#FFFFFF", 0.5, "#007AFF"),   // белый полупрозрачный на бренде
+    ("#C0B2FA", 0.122, "#000000"), // half-tie: канал 250 × .122 = 30.5 → 31
 ];
 
 /// Дериватор альфа-векторов.
@@ -426,8 +429,8 @@ pub const FAMILY_FILES: [&str; 5] = [
     "muddiness.json",
 ];
 
-/// Каноническая кросс-платформенная толерантность сравнения f64 — тождественна
-/// `DRIFT_TOL` ядра (`labcolors-core/src/lut.rs`). Наблюдаемый libm-шум
+/// Каноническая кросс-платформенная толерантность сравнения f64 для conformance-
+/// пака. Эта константа — SSOT правила сравнения. Наблюдаемый libm-шум
 /// (`powf`/`atan2`/`ln` расходятся на несколько ULP между платформами) —
 /// порядка `1e-13`; реальный дрейф (не тот surround, опечатка в матрице,
 /// путаница единиц) сдвигает значения на целые единицы. `1e-6` заведомо выше
@@ -454,6 +457,58 @@ pub struct Counts {
     pub total: usize,
 }
 
+/// Exact copy of one core-owned migrated branch-sensitive registry row.
+/// The release verifier consumes this generated list instead of maintaining a
+/// second hand-written semantic registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NumericalSiteManifest {
+    /// Stable site identity.
+    pub site_id: String,
+    /// Branch-sensitive operations.
+    pub operations: String,
+    /// Input/output domain.
+    pub domain: String,
+    /// Semantic branch affected by the value.
+    pub branch_effect: String,
+    /// Lawful outcomes of the stable profile.
+    pub stable_outcomes: Vec<String>,
+    /// Sound-bound availability.
+    pub bound_status: String,
+    /// Executable boundary corpus identifiers.
+    pub boundary_corpus: String,
+    /// Required cross-runtime comparison scope.
+    pub runtime_matrix: String,
+    /// Fallback status.
+    pub fallback_status: String,
+    /// Explicit compatibility profile, if present.
+    pub legacy_profile: Option<String>,
+}
+
+/// Generate the release-facing registry directly from the core SSOT.
+#[must_use]
+pub fn generate_numerical_sites() -> Vec<NumericalSiteManifest> {
+    numerical_registry_v1()
+        .iter()
+        .map(|row| NumericalSiteManifest {
+            site_id: row.site_id.key().to_string(),
+            operations: row.operations.to_string(),
+            domain: row.domain.to_string(),
+            branch_effect: row.branch_effect.to_string(),
+            stable_outcomes: row
+                .stable_outcomes
+                .iter()
+                .map(|outcome| outcome.key().to_string())
+                .collect(),
+            bound_status: row.bound_status.key().to_string(),
+            boundary_corpus: row.boundary_corpus.to_string(),
+            runtime_matrix: row.runtime_matrix.to_string(),
+            fallback_status: row.fallback_status.key().to_string(),
+            legacy_profile: row.legacy_profile.map(str::to_string),
+        })
+        .collect()
+}
+
 /// Манифест пака: версии, дайджест и счётчики. `packDigest` — FNV-1a-32
 /// (примитив ядра) над каноническими байтами всех семейств; любой дрейф
 /// значений или состава меняет дайджест.
@@ -468,6 +523,8 @@ pub struct Manifest {
     pub pack_digest: String,
     /// Счётчики по семействам.
     pub counts: Counts,
+    /// Core-owned registry migrated typed-decision numerical sites.
+    pub numerical_sites: Vec<NumericalSiteManifest>,
 }
 
 /// Весь пак в памяти. `serialize_family` даёт КАНОНИЧЕСКИЕ байты каждого файла
@@ -538,6 +595,7 @@ impl Pack {
             core_version: core_version().to_string(),
             pack_digest: self.digest(),
             counts: self.counts(),
+            numerical_sites: generate_numerical_sites(),
         }
     }
 
@@ -591,6 +649,56 @@ mod tests {
         );
         // Лестниц ровно столько, сколько канонических позиций.
         assert_eq!(c.ladders, LadderPosition::ALL.len());
+    }
+
+    #[test]
+    fn manifest_numerical_registry_is_generated_from_core_ssot() {
+        let manifest = Pack::generate().manifest();
+        assert_eq!(manifest.numerical_sites, generate_numerical_sites());
+        assert_eq!(
+            manifest.numerical_sites.len(),
+            numerical_registry_v1().len()
+        );
+        assert!(manifest.numerical_sites.iter().any(|site| {
+            site.site_id == "glow-target-or-maximum-v1"
+                && site.stable_outcomes == ["bit-exact", "indeterminate"]
+                && site.bound_status == "unavailable"
+                && site.fallback_status == "none"
+                && site.legacy_profile.as_deref() == Some("legacy-platform-dependent-v1")
+        }));
+    }
+
+    #[test]
+    fn pack_v2_contains_the_exact_source_over_half_tie() {
+        // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
+        // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
+        // соседний LSB. Проверка одновременно убивает вакуумные изменения
+        // версии/счётчика без обязательного доказательного вектора.
+        let pack = Pack::generate();
+        let manifest = pack.manifest();
+        assert_eq!(PACK_VERSION, "2.0.0", "half-tie требует pack v2");
+        assert_eq!(manifest.pack_version, PACK_VERSION);
+        assert_eq!(
+            manifest.core_version, "0.2.0",
+            "pack v2 обязан быть сгенерирован breaking-версией ядра"
+        );
+        assert_eq!(
+            pack.alpha.len(),
+            7,
+            "alpha-family v2 обязана иметь 7 векторов"
+        );
+        assert_eq!(manifest.counts.alpha, pack.alpha.len());
+        assert_eq!(manifest.counts.total, 82, "состав pack v2 изменился");
+
+        let half_tie = pack
+            .alpha
+            .iter()
+            .find(|v| v.tint == "#C0B2FA" && v.alpha == 0.122 && v.bg == "#000000")
+            .expect("в pack v2 нет обязательного half-tie из ADR-0004");
+        assert_eq!(
+            half_tie.composite, "#17161F",
+            "byte-reference round-half-up должен выбрать верхний LSB"
+        );
     }
 
     #[test]

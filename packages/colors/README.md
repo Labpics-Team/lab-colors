@@ -20,6 +20,14 @@ npm install @labpics/colors
 npm run build   # → pkg/ (wasm + JS-обёртка + .d.ts)
 ```
 
+Пакет экспортирует `@labpics/colors/build-metadata.json` — self-declared
+machine-readable metadata конкретной сборки: npm/core versions, exact source
+SHA, digest и SHA-256 conformance manifest/family set, а также размер и SHA-256
+WASM-байтов. Release-gate сверяет объект целиком с исходными файлами и повторяет
+проверку после чистой установки tarball. Это integrity metadata внутри
+артефакта, не криптографическая provenance/Sigstore-аттестация, не runtime
+telemetry и не сетевой запрос.
+
 ---
 
 ## Как использовать
@@ -146,11 +154,22 @@ type RoleResult =
   | UnreachableRole;
 ```
 
-Каждая роль — одно из шести состояний:
+Каждая роль — одна из шести категорий результата; у Glow есть два терминальных
+состояния:
 
 - `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
 - `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — exact encoded-sRGB8 reference-композит на фоне резолва и его контраст. Конкретный renderer и color-management pipeline проверяются отдельно.
-- `GlowRole` — два цвета для `mix-blend-mode: screen`: `cssVar` несёт halo, `${cssVar}-core` — core, `${cssVar}-alpha` — каноническую `alphaCss`. Цель относится только к изолированному halo; `targetStatus`, оба `*CompositeHex` и оба `*AchievedDj` не выдают point-расчёт за полный blur/overlap-эффект. `referenceProfile` фиксирует конечный расчётный домен, а не гарантирует любой браузер или дисплей.
+- `GlowRole` — discriminated union. `kind: "glow"` несёт два цвета для
+  `mix-blend-mode: screen`: `cssVar` — halo, `${cssVar}-core` — core,
+  `${cssVar}-alpha` — каноническая `alphaCss`. `compositeProfile` /
+  `compositeGuarantee` описывают exact point-композит отдельно от
+  `diagnosticProfile` и `decisionGuarantee`. `diagnosticProfile` равен
+  `"cam16-ucs-jprime-li2017-v1"`, только если solve реально выполнил эту
+  диагностику; exact no-op возвращает `null`. `kind: "glow-indeterminate"`
+  означает, что профиль `stable-v1` не выбрал target/max state без sound bound;
+  для такой роли CSS-переменные не эмитятся и legacy fallback не применяется.
+  Цель и все `*CompositeHex` / `*AchievedDj` относятся только к изолированным
+  point-слоям, а не к полному blur/overlap-эффекту, браузеру или дисплею.
 - `MaterialRole` — тон двухслойного материала и выведенная alpha: primary — солид-канон, `-01` — тинт, `-02` — опаковая база; поля результата явно сообщают гарантию и её границы.
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
@@ -169,6 +188,25 @@ type RoleResult =
 
 Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight проверяет не только имена ролей, но и итоговый CSS-namespace: `-core`/`-alpha` Glow и `-01`/`-02` Material не могут быть затёрты другой ролью или алиасом. Невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
 
+Каждый Glow-рецепт обязан явно выбрать numerical-decision profile; default и
+неявного legacy-пути нет:
+
+```json
+{
+  "kind": "glow",
+  "source": { "kind": "brand" },
+  "step": "base",
+  "decision_profile": "stable-v1"
+}
+```
+
+`stable-v1` возвращает typed `glow-indeterminate`, когда sound bound для
+нетривиального CAM16 target/max-решения недоступен. Если существующая интеграция
+обязана пока сохранить прежнюю CSS-эмиссию, укажите
+`legacy-platform-dependent-v1` явно и обрабатывайте его как compatibility
+profile, а не как численную гарантию. Полная миграция с rollback-порядком — в
+[гайде exact alpha / typed Glow](https://github.com/Labpics-Team/lab-colors/blob/main/docs/migrations/exact-alpha-glow.md).
+
 ---
 
 ### `engine.recheckContrast(bgHex, fgHexes, theme): Float64Array`
@@ -183,9 +221,9 @@ type RoleResult =
 
 ---
 
-### `engine.muddiness(hex): number` · `engine.confidence(hex): number`
+### `engine.muddiness(hex): number`
 
-`muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи). `confidence` — надёжность этой оценки: `0` означает, что оценке нельзя доверять (у границы решения или серого фронтира), выше — увереннее. Верхний потолок — деталь калибровки, не контракт: не хардкодить.
+`muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи).
 
 ---
 
@@ -224,7 +262,7 @@ interface WatchController {
 
 ### `adaptTheme(element, options): AdaptController`
 
-Режим с гистерезисом: дешёвая проверка каждый кадр, пересчёт и плавный переход только при устойчивом ухудшении контраста. Применяет немедленно и возвращает контроллер.
+Режим с dwell-фильтром: дешёвая проверка каждый кадр, пересчёт и плавный переход только при устойчивом ухудшении контраста. Это один порог с выдержкой, не двухпороговый гистерезис. Применяет немедленно и возвращает контроллер.
 
 ```ts
 interface AdaptThemeOptions {
@@ -285,10 +323,17 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 именованные экспорты и допускают tree-shaking, но их размер также следует мерить
 сборкой, а не описывать приблизительно.
 
-Требует современных браузеров (2023+): сборщики Vite / webpack 5 / Next штатно понимают `new URL('….wasm', import.meta.url)` (вывод wasm-pack). В node передавайте wasm-байты напрямую в `init({ module_or_path })`.
+Активно проверенная release-матрица: Node 24.14 с прямой передачей wasm-байтов
+в `init({ module_or_path })` и headless Chrome из CI. ESM/URL-обёртка генерируется
+wasm-pack, но совместимость с конкретной версией Vite, webpack, Next или другим
+браузером не заявляется без отдельного smoke-гейта.
 
 ### Для аудиторов цепочки поставки
 
+- **Build metadata:** экспорт `@labpics/colors/build-metadata.json` декларирует
+  source SHA и conformance pack для установленного WASM; verifier отклоняет
+  любое лишнее, отсутствующее или несовпадающее поле. Объект не подписан и не
+  заменяет отключённую npm/Sigstore provenance-аттестацию.
 - **Network access (Socket и др.):** единственный `fetch` в пакете (`pkg/labcolors.js`) загружает СОБСТВЕННЫЙ `.wasm`-файл пакета при `init(url)` — стандартный лоадер wasm-bindgen. Ни внешних адресов, ни отправки данных, ни исполнения при импорте. В node-пути (передача байтов) `fetch` не вызывается.
 - **Bundlephobia `BuildError`:** их webpack-конвейер не умеет `.wasm`-ассеты («loader customization needed») — так падает почти любой WASM-пакет. Реальный размер конкретного коммита показывает CI-шаг `report bundle size (gzip)`.
 - **Zero runtime JS-dependencies:** npm-поле `dependencies` пусто — транзитивной JS/npm-цепочки поставки нет. Rust-крейты сборки (`serde`, `serde_json` и др.) компилируются ВНУТРЬ `.wasm` (учтены CI-замером); их цепочка аудируется на стороне сборки — `cargo audit` (RustSec) в CI lab-colors.

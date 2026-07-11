@@ -254,6 +254,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     let glow = |source: LadderSource| RoleRecipe::Glow {
         source,
         step: crate::glow::GlowStep::Base,
+        decision_profile: crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1,
     };
     roles.push(("fx-glow-brand".to_string(), glow(LadderSource::Brand)));
     roles.push((

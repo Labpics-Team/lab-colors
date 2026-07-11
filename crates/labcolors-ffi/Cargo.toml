@@ -1,11 +1,13 @@
 [package]
 name = "labcolors-ffi"
+publish = false
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Нативный (UniFFI) биндинг поверх ядра labcolors-core — доказательство ДИНАМИЧНОГО рантайм-ядра на Apple-платформах. Экспортирует рантайм-контраст-ядро (контраст/резолв/лестницы/подложка→α/мутность) в Swift."
+rust-version.workspace = true
+description = "Native UniFFI boundary over labcolors-core with a generated Swift surface and explicit-profile Glow point decisions."
 
 [lib]
 # Имя lib-артефакта (без префикса пакета): даёт `liblabcolors.{a,dylib}` и
@@ -28,7 +30,7 @@ path = "src/bin/uniffi_bindgen.rs"
 labcolors-core = { path = "../labcolors-core" }
 # Нативная FFI-обвязка. Библиотечная зависимость БЕЗ фичи cli (иначе clap течёт
 # в артефакт); cli включается только через passthrough-фичу ниже на генерации.
-uniffi = { version = "0.32" }
+uniffi = { version = "0.32", default-features = false }
 # Derive-only proc-macro: даёт `ColorError` реализацию `std::error::Error`
 # (требование `uniffi::Error`) без рантайм-кода. thiserror УЖЕ в дереве (wasm).
 thiserror = "2"

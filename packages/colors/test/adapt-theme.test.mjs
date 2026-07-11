@@ -130,6 +130,414 @@ test("applies the resolved set immediately on creation", () => {
   assert.equal(h.el.props.get("--lab-label-primary"), "#000000");
 });
 
+test("stable Glow class changes re-resolve and clear/restore satellites synchronously", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let resolveCount = 0;
+  const cssVar = "--lab-fx";
+  const determinate = {
+    vars: {
+      [cssVar]: "oklch(70% 0.1 280)",
+      [`${cssVar}-core`]: "oklch(80% 0.1 280)",
+      [`${cssVar}-alpha`]: "0.5",
+    },
+    roles: {
+      fx: {
+        kind: "glow",
+        cssVar,
+        haloHex: "#C0B2FA",
+        decisionProfile: "stable-v1",
+        decisionGuarantee: { kind: "bit-exact" },
+        compositeProfile: "encoded-srgb8-screen-v1",
+        compositeGuarantee: "bit-exact",
+        diagnosticProfile: null,
+        constraintLayer: "halo",
+        targetStatus: "unreachable",
+      },
+    },
+  };
+  const indeterminate = {
+    vars: {},
+    roles: {
+      fx: {
+        kind: "glow-indeterminate",
+        cssVar,
+        sourceHex: "#C0B2FA",
+        decisionProfile: "stable-v1",
+        numericalSiteId: "glow-target-or-maximum-v1",
+        constraintLayer: "halo",
+        reason: "sound-bound-unavailable",
+        bounds: { kind: "unavailable" },
+      },
+    },
+  };
+  const colors = {
+    resolveTheme(background) {
+      resolveCount++;
+      return background === "#FFFFFF" ? determinate : indeterminate;
+    },
+    recheckContrast() {
+      return [];
+    },
+    isStableGlowPointNoop(_source, background) {
+      return background === "#FFFFFF";
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => 1000,
+    win: {},
+    sustainMs: 10_000,
+    dwellMs: 10_000,
+  });
+  assert.equal(resolveCount, 1);
+  for (const key of [cssVar, `${cssVar}-core`, `${cssVar}-alpha`]) {
+    assert.ok(el.props.has(key), `${key} present for exact no-op`);
+  }
+
+  bg = "#FEFEFE";
+  ctrl.tick();
+  assert.equal(resolveCount, 2, "class transition bypasses contrast sustain/dwell");
+  for (const key of [cssVar, `${cssVar}-core`, `${cssVar}-alpha`]) {
+    assert.equal(el.props.has(key), false, `${key} cleared in the same tick`);
+  }
+
+  bg = "#FDFDFD";
+  ctrl.tick();
+  assert.equal(resolveCount, 2, "same Indeterminate class keeps the cheap adaptive path");
+
+  bg = "#FFFFFF";
+  ctrl.tick();
+  assert.equal(resolveCount, 3, "return to exact no-op selectively re-resolves");
+  for (const key of [cssVar, `${cssVar}-core`, `${cssVar}-alpha`]) {
+    assert.ok(el.props.has(key), `${key} restored synchronously`);
+  }
+});
+
+test("stable Glow rejects a missing exact recheck capability or malformed evidence", () => {
+  const stable = {
+    vars: {
+      "--lab-fx": "oklch(70% 0.1 280)",
+      "--lab-fx-core": "oklch(80% 0.1 280)",
+      "--lab-fx-alpha": "0.5",
+    },
+    roles: {
+      fx: {
+        kind: "glow",
+        cssVar: "--lab-fx",
+        haloHex: "#C0B2FA",
+        decisionProfile: "stable-v1",
+        decisionGuarantee: { kind: "bit-exact" },
+        compositeProfile: "encoded-srgb8-screen-v1",
+        compositeGuarantee: "bit-exact",
+        diagnosticProfile: null,
+        constraintLayer: "halo",
+        targetStatus: "unreachable",
+      },
+    },
+  };
+  const options = {
+    theme: "light",
+    background: () => "#FFFFFF",
+    win: {},
+  };
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: { resolveTheme: () => stable, recheckContrast: () => [] },
+      }),
+    /isStableGlowPointNoop/u,
+  );
+
+  const malformed = structuredClone(stable);
+  malformed.roles.fx.decisionGuarantee = { kind: "legacy-platform-dependent-v1" };
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => malformed,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => true,
+        },
+      }),
+    /lacks BitExact evidence/u,
+  );
+
+  const falseDiagnostic = structuredClone(stable);
+  falseDiagnostic.roles.fx.diagnosticProfile = "cam16-ucs-jprime-li2017-v1";
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => falseDiagnostic,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => true,
+        },
+      }),
+    /lacks BitExact evidence/u,
+  );
+
+  const incomplete = structuredClone(stable);
+  delete incomplete.vars["--lab-fx-alpha"];
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => incomplete,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => true,
+        },
+      }),
+    /lacks BitExact evidence/u,
+  );
+
+  const wrongSite = {
+    vars: {},
+    roles: {
+      fx: {
+        kind: "glow-indeterminate",
+        cssVar: "--lab-fx",
+        sourceHex: "#C0B2FA",
+        decisionProfile: "stable-v1",
+        numericalSiteId: "some-future-site",
+        constraintLayer: "halo",
+        reason: "sound-bound-unavailable",
+        bounds: { kind: "unavailable" },
+      },
+    },
+  };
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => wrongSite,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => false,
+        },
+      }),
+    /lacks lawful Indeterminate evidence/u,
+  );
+
+  for (const decisionProfile of [undefined, "stable-v2", "stable-v1-typo"]) {
+    const unknownProfile = structuredClone(stable);
+    if (decisionProfile === undefined) delete unknownProfile.roles.fx.decisionProfile;
+    else unknownProfile.roles.fx.decisionProfile = decisionProfile;
+    assert.throws(
+      () =>
+        adaptTheme(fakeElement(), {
+          ...options,
+          colors: {
+            resolveTheme: () => unknownProfile,
+            recheckContrast: () => [],
+            isStableGlowPointNoop: () => true,
+          },
+        }),
+      /lacks an explicit known decisionProfile/u,
+      `unknown profile ${String(decisionProfile)} must not retain un-rechecked Glow vars`,
+    );
+  }
+
+  const legacyIndeterminate = structuredClone(wrongSite);
+  legacyIndeterminate.roles.fx.decisionProfile = "legacy-platform-dependent-v1";
+  legacyIndeterminate.roles.fx.numericalSiteId = "glow-target-or-maximum-v1";
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => legacyIndeterminate,
+          recheckContrast: () => [],
+        },
+      }),
+    /legacy Glow 'fx' cannot be Indeterminate/u,
+  );
+});
+
+test("stable Glow invalidation does not snap an in-flight color ease", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let now = 1000;
+  let labelHex = "#000000";
+  const cssVar = "--lab-fx";
+  const isWhite = (value) => value.replace(/^#/u, "").toUpperCase() === "FFFFFF";
+  const colors = {
+    resolveTheme(background) {
+      const noop = isWhite(background);
+      return {
+        vars: {
+          "--lab-label": labelHex,
+          ...(noop
+            ? {
+                [cssVar]: "oklch(70% 0.1 280)",
+                [`${cssVar}-core`]: "oklch(80% 0.1 280)",
+                [`${cssVar}-alpha`]: "0.5",
+              }
+            : {}),
+        },
+        roles: {
+          label: {
+            kind: "color",
+            cssVar: "--lab-label",
+            hex: labelHex,
+            lc: 100,
+          },
+          fx: noop
+            ? {
+                kind: "glow",
+                cssVar,
+                haloHex: "#C0B2FA",
+                decisionProfile: "stable-v1",
+                decisionGuarantee: { kind: "bit-exact" },
+                compositeProfile: "encoded-srgb8-screen-v1",
+                compositeGuarantee: "bit-exact",
+                diagnosticProfile: null,
+                constraintLayer: "halo",
+                targetStatus: "unreachable",
+              }
+            : {
+                kind: "glow-indeterminate",
+                cssVar,
+                sourceHex: "#C0B2FA",
+                decisionProfile: "stable-v1",
+                numericalSiteId: "glow-target-or-maximum-v1",
+                constraintLayer: "halo",
+                reason: "sound-bound-unavailable",
+                bounds: { kind: "unavailable" },
+              },
+        },
+      };
+    },
+    recheckContrast() {
+      return [10, 10];
+    },
+    isStableGlowPointNoop(_source, background) {
+      return isWhite(background);
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    easeMs: 100,
+    sustainMs: 120,
+    dwellMs: 250,
+  });
+
+  bg = "FFFFFF";
+  ctrl.tick(); // arm contrast breach while stable Glow remains exact no-op
+  labelHex = "#F0F0F0";
+  now = 1300;
+  bg = "#fff";
+  ctrl.tick(); // sustained color breach -> begin ease
+
+  now = 1350;
+  bg = "#FEFEFE";
+  ctrl.tick(); // paint midpoint, then synchronously invalidate only Glow
+  const painted = el.props.get("--lab-label");
+  assert.match(painted, /^#[0-9A-Fa-f]{6}$/u);
+  assert.notEqual(painted, "#000000");
+  assert.notEqual(painted, "#F0F0F0", "stable invalidation must preserve painted midpoint");
+  for (const key of [cssVar, `${cssVar}-core`, `${cssVar}-alpha`]) {
+    assert.equal(el.props.has(key), false, `${key} cleared without snapping label`);
+  }
+});
+
+test("a color re-solve cannot reintroduce stable Glow vars unsafe for another sample", () => {
+  const el = fakeElement();
+  let samples = ["#FFFFFF", "#FEFEFE"];
+  let now = 1000;
+  let failing = false;
+  const cssVar = "--lab-fx";
+  const colors = {
+    resolveTheme(background) {
+      const noop = background === "#FFFFFF";
+      return {
+        vars: {
+          "--lab-label": "#000000",
+          ...(noop
+            ? {
+                [cssVar]: "oklch(70% 0.1 280)",
+                [`${cssVar}-core`]: "oklch(80% 0.1 280)",
+                [`${cssVar}-alpha`]: "0.5",
+              }
+            : {}),
+        },
+        roles: {
+          label: {
+            kind: "color",
+            cssVar: "--lab-label",
+            hex: "#000000",
+            lc: 100,
+          },
+          fx: noop
+            ? {
+                kind: "glow",
+                cssVar,
+                haloHex: "#C0B2FA",
+                decisionProfile: "stable-v1",
+                decisionGuarantee: { kind: "bit-exact" },
+                compositeProfile: "encoded-srgb8-screen-v1",
+                compositeGuarantee: "bit-exact",
+                diagnosticProfile: null,
+                constraintLayer: "halo",
+                targetStatus: "unreachable",
+              }
+            : {
+                kind: "glow-indeterminate",
+                cssVar,
+                sourceHex: "#C0B2FA",
+                decisionProfile: "stable-v1",
+                numericalSiteId: "glow-target-or-maximum-v1",
+                constraintLayer: "halo",
+                reason: "sound-bound-unavailable",
+                bounds: { kind: "unavailable" },
+              },
+        },
+      };
+    },
+    recheckContrast(background) {
+      return [failing && background === "#FFFFFF" ? 10 : 100, 10];
+    },
+    isStableGlowPointNoop(_source, background) {
+      return background === "#FFFFFF";
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 120,
+    dwellMs: 250,
+    easeMs: 100,
+  });
+  for (const key of [cssVar, `${cssVar}-core`, `${cssVar}-alpha`]) {
+    assert.equal(el.props.has(key), false, `${key} unsafe for the second initial sample`);
+  }
+
+  samples = ["#FFFFFF", "#FDFDFD"];
+  failing = true;
+  ctrl.tick(); // arm color breach; stable class remains aggregate Indeterminate
+  now = 1300;
+  ctrl.tick(); // color worstIdx=0 (white) -> must reconcile second sample again
+  for (const key of [cssVar, `${cssVar}-core`, `${cssVar}-alpha`]) {
+    assert.equal(el.props.has(key), false, `${key} must not reappear after color re-solve`);
+  }
+});
+
 test("holds (no re-solve) while colours still pass; the dropFraction margin tolerates small drops", () => {
   const h = harness();
   // A small drop (95 of 100; tolerance keeps to 80) → still passing → hold.

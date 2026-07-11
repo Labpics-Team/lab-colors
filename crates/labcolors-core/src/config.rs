@@ -530,6 +530,8 @@ pub enum RoleRecipe {
         source: LadderSource,
         /// Контрактная ступень стека: subtle | base | bloom.
         step: crate::glow::GlowStep,
+        /// Обязательный numerical-decision profile; implicit legacy запрещён.
+        decision_profile: crate::glow::GlowDecisionProfileV1,
     },
     /// Заливка пары «поверхность × лейбл» ([`crate::pair`]): якорь источника,
     /// минимально сдвинутый по светлоте до победы перцептивно правильной
@@ -965,15 +967,14 @@ impl ThemeConfig {
                     family: cat.family.clone(),
                 });
             }
-            if let Some(side) = cat.preferred_side
-                && side != 1
-                && side != -1
-            {
-                return Err(ConfigError::OutOfBounds {
-                    handle: format!("sentiments.{}.preferred_side", cat.name),
-                    value: f64::from(side),
-                    bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
-                });
+            if let Some(side) = cat.preferred_side {
+                if side != 1 && side != -1 {
+                    return Err(ConfigError::OutOfBounds {
+                        handle: format!("sentiments.{}.preferred_side", cat.name),
+                        value: f64::from(side),
+                        bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
+                    });
+                }
             }
             if let Some(hue) = cat.hue_floor_deg {
                 let field = format!("sentiments.{}.hue_floor_deg", cat.name);
@@ -988,15 +989,16 @@ impl ThemeConfig {
             }
         }
 
-        if let Some(hue) = self.neutral.tint.hue_override_deg
-            && !(hue.is_finite()
+        if let Some(hue) = self.neutral.tint.hue_override_deg {
+            if !(hue.is_finite()
                 && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue))
-        {
-            return Err(ConfigError::OutOfBounds {
-                handle: "neutral.tint.hue_override_deg".to_string(),
-                value: hue,
-                bound: "0 ≤ hue < 360 (явный оттенок подтона по модулю 360°)",
-            });
+            {
+                return Err(ConfigError::OutOfBounds {
+                    handle: "neutral.tint.hue_override_deg".to_string(),
+                    value: hue,
+                    bound: "0 ≤ hue < 360 (явный оттенок подтона по модулю 360°)",
+                });
+            }
         }
 
         // Дубликаты ключей всех словарей: повтор имени = неоднозначный lookup.
@@ -1309,9 +1311,14 @@ impl ThemeConfig {
                 magnitude: *magnitude,
             }),
             RoleRecipe::Zero => Ok(RoleSpec::Zero),
-            RoleRecipe::Glow { source, step } => Ok(RoleSpec::Glow {
+            RoleRecipe::Glow {
+                source,
+                step,
+                decision_profile,
+            } => Ok(RoleSpec::Glow {
                 tint: self.compile_ladder_tint(role, source)?,
                 step: *step,
+                decision_profile: *decision_profile,
             }),
             RoleRecipe::Ladder {
                 source,

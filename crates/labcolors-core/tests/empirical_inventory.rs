@@ -503,22 +503,21 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
         }
 
         // 3. Default-field float literals (scoped to a `fn default()` body).
-        if in_default_body
-            && default_brace_depth > 0
-            && let Some((field, value)) = parse_default_field_literal(line)
-        {
-            let name = format!("{module_stem}_DEFAULT_{}", field.to_ascii_uppercase());
-            if !allowlist.contains(&name.as_str()) {
-                let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
-                out.push(DetectedConst {
-                    module: module.to_string(),
-                    line: prod[idx].0,
-                    name,
-                    value,
-                    has_marker,
-                    needs_science,
-                    marker_line,
-                });
+        if in_default_body && default_brace_depth > 0 {
+            if let Some((field, value)) = parse_default_field_literal(line) {
+                let name = format!("{module_stem}_DEFAULT_{}", field.to_ascii_uppercase());
+                if !allowlist.contains(&name.as_str()) {
+                    let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
+                    out.push(DetectedConst {
+                        module: module.to_string(),
+                        line: prod[idx].0,
+                        name,
+                        value,
+                        has_marker,
+                        needs_science,
+                        marker_line,
+                    });
+                }
             }
         }
 
@@ -1130,10 +1129,10 @@ fn cleanliness_const_values(src: &str) -> std::collections::BTreeMap<String, f64
     let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
     let mut map = std::collections::BTreeMap::new();
     for line in prod.lines() {
-        if let Some(ConstDecl::Numeric { name, value, .. }) = parse_const_decl(line)
-            && let Ok(v) = value.parse::<f64>()
-        {
-            map.insert(name, v);
+        if let Some(ConstDecl::Numeric { name, value, .. }) = parse_const_decl(line) {
+            if let Ok(v) = value.parse::<f64>() {
+                map.insert(name, v);
+            }
         }
     }
     map

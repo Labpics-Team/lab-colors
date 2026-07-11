@@ -452,10 +452,10 @@ fn legalize_hue_among(
 /// Оттенок легален, если он на уровне пола или выше (где пол задан). Разведение от
 /// бренда Волной 1 УБРАНО — единственное исключение здесь категориальный пол.
 fn is_legal_hue(h: f64, floor: Option<f64>) -> bool {
-    if let Some(f) = floor
-        && normalize_hue(h) < f
-    {
-        return false;
+    if let Some(f) = floor {
+        if normalize_hue(h) < f {
+            return false;
+        }
     }
     true
 }
@@ -473,11 +473,12 @@ fn is_legal_hue_among(h: f64, floor: Option<f64>, zones: &[NeighborZone]) -> boo
 /// (валидатор конфига и солвер) — дублированный блок разошёлся бы тихо,
 /// ровно как разошлись бы независимые литералы одного домена.
 fn check_hue_floor_domain(hue_floor: Option<f64>) -> Result<(), String> {
-    if let Some(floor) = hue_floor
-        && !(floor.is_finite()
+    if let Some(floor) = hue_floor {
+        if !(floor.is_finite()
             && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&floor))
-    {
-        return Err(format!("hue_floor вне домена [0, 360): {floor}"));
+        {
+            return Err(format!("hue_floor вне домена [0, 360): {floor}"));
+        }
     }
     Ok(())
 }

@@ -5,10 +5,13 @@ import XCTest
 
 /// Conformance-прогон нативного (Swift/UniFFI) биндинга против закоммиченного
 /// пака `conformance/vectors/*.json`. Доказывает: рантайм-ядро Rust, вызванное
-/// с Swift-стороны, воспроизводит канон. Числовые поля сверяются в пределах
-/// `driftTol` (= `DRIFT_TOL` ядра, 1e-6: кросс-платформенный libm-шум ~1e-13,
-/// реальный дрейф — целые единицы). Композит-hex — чистая IEEE-алгебра, точен;
-/// solve-hex — квантование трансцендентного резолва, допускается ±1 LSD/канал.
+/// с Swift-стороны, воспроизводит зафиксированный conformance-пак. Числовые
+/// поля сверяются в пределах `driftTol` (= `DRIFT_TOL` conformance-пака, 1e-6:
+/// кросс-платформенный libm-шум ~1e-13, реальный дрейф — целые единицы).
+/// Композит-hex — чистая IEEE-алгебра, точен; solve-hex — квантование
+/// трансцендентного резолва, допускается ±1 LSD/канал.
+/// Glow-проверка ниже намеренно НЕ утверждает bit-parity CAM16: она проверяет
+/// типизированный класс решения и точный certificate композитинга отдельно.
 final class ConformanceTests: XCTestCase {
 
     static let driftTol = 1e-6
@@ -58,6 +61,21 @@ final class ConformanceTests: XCTestCase {
             let end = s.index(start, offsetBy: 2)
             return Int(s[start..<end], radix: 16)!
         }
+    }
+
+    /// Independent encoded-sRGB8 screen oracle. It intentionally does not call
+    /// the source-over FFI primitive: on black those operators coincide and
+    /// would make the Glow certificate assertion vacuous.
+    func screenComposite(tint: String, alpha: Double, background: String) -> String {
+        let glow = channels(tint)
+        let bg = channels(background)
+        let result = (0..<3).map { channel in
+            Int(floor(
+                Double(bg[channel])
+                    + alpha * Double(glow[channel]) * Double(255 - bg[channel]) / 255.0
+                    + 0.5))
+        }
+        return String(format: "#%02X%02X%02X", result[0], result[1], result[2])
     }
 
     /// Квантованный цвет conformant в пределах ±1 LSB на канал (кросс-платформенно).
@@ -117,6 +135,123 @@ final class ConformanceTests: XCTestCase {
             XCTAssertEqual(comp, v.composite, "композит \(v.tint)@\(v.alpha) на \(v.bg)")
             let m = try minAlpha(tint: v.tint, bg: v.bg)
             XCTAssertEqual(m, v.minAlpha, accuracy: Self.driftTol, "min_alpha \(v.tint)/\(v.bg)")
+        }
+    }
+
+    // MARK: - Low-level Glow decision contract
+
+    func testGlowDecisionProfilesRemainExplicitAndDoNotCollapse() throws {
+        let tint = "#C0B2FA"
+        let background = "#101012"
+        let targetDj = 2.3006
+
+        let stable = try solveGlowPoint(
+            tint: tint,
+            background: background,
+            targetDj: targetDj,
+            theme: .light,
+            profile: .stableV1)
+        switch stable {
+        case let .indeterminate(decisionProfile, siteId, evidence):
+            XCTAssertEqual(decisionProfile, .stableV1)
+            XCTAssertEqual(siteId, .glowTargetOrMaximumV1)
+            guard case .soundBoundUnavailable = evidence else {
+                return XCTFail("stable-v1 обязан вернуть typed unavailable-bound evidence")
+            }
+        case .determinate:
+            XCTFail("stable-v1 не должен выбирать состояние без sound bound")
+        }
+
+        let legacy = try solveGlowPoint(
+            tint: tint,
+            background: background,
+            targetDj: targetDj,
+            theme: .light,
+            profile: .legacyPlatformDependentV1)
+        switch legacy {
+        case let .determinate(
+            decisionProfile,
+            decisionGuarantee,
+            compositeProfile,
+            compositeGuarantee,
+            diagnosticProfile,
+            alpha,
+            _,
+            _,
+            _,
+            _,
+            compositeHex
+        ):
+            XCTAssertEqual(decisionProfile, .legacyPlatformDependentV1)
+            XCTAssertEqual(decisionGuarantee, .legacyPlatformDependentV1)
+            XCTAssertEqual(compositeProfile, .encodedSrgb8ScreenV1)
+            XCTAssertEqual(compositeGuarantee, .bitExact)
+            XCTAssertEqual(diagnosticProfile, Optional(.cam16UcsJPrimeLi2017V1))
+            let recomposite = screenComposite(tint: tint, alpha: alpha, background: background)
+            XCTAssertEqual(
+                recomposite,
+                compositeHex,
+                "bit-exact относится к композитору, не к CAM16 decision")
+            XCTAssertNotEqual(
+                try composite(tint: tint, alpha: alpha, bg: background),
+                compositeHex,
+                "anti-vacuum: source-over обязан отличаться от screen на этом fixture")
+        case .indeterminate:
+            XCTFail("explicit legacy profile обязан сохранять прежний determinate path")
+        }
+
+        func assertStableNoop(tint: String, background: String, composite expected: String) throws {
+            let decision = try solveGlowPoint(
+                tint: tint,
+                background: background,
+                targetDj: targetDj,
+                theme: .light,
+                profile: .stableV1)
+            switch decision {
+            case let .determinate(
+                decisionProfile,
+                decisionGuarantee,
+                compositeProfile,
+                compositeGuarantee,
+                diagnosticProfile,
+                _,
+                _,
+                _,
+                targetStatus,
+                achievedDj,
+                compositeHex
+            ):
+                XCTAssertEqual(decisionProfile, .stableV1)
+                XCTAssertEqual(decisionGuarantee, .bitExact)
+                XCTAssertEqual(compositeProfile, .encodedSrgb8ScreenV1)
+                XCTAssertEqual(compositeGuarantee, .bitExact)
+                XCTAssertNil(diagnosticProfile)
+                XCTAssertEqual(targetStatus, .unreachable)
+                XCTAssertEqual(achievedDj, 0.0)
+                XCTAssertEqual(compositeHex, expected)
+            case .indeterminate:
+                XCTFail("exact screen no-op обязан быть determinate без CAM16")
+            }
+        }
+
+        try assertStableNoop(tint: tint, background: "#FFFFFF", composite: "#FFFFFF")
+        try assertStableNoop(tint: "#010000", background: "#FE0000", composite: "#FE0000")
+
+        let crossing = try solveGlowPoint(
+            tint: "#800000",
+            background: "#FE0000",
+            targetDj: targetDj,
+            theme: .light,
+            profile: .stableV1)
+        switch crossing {
+        case let .indeterminate(decisionProfile, siteId, evidence):
+            XCTAssertEqual(decisionProfile, .stableV1)
+            XCTAssertEqual(siteId, .glowTargetOrMaximumV1)
+            guard case .soundBoundUnavailable = evidence else {
+                return XCTFail("first crossing обязан сохранить typed unavailable-bound evidence")
+            }
+        case .determinate:
+            XCTFail("#800000 над #FE0000 пересекает первый half-LSB wall")
         }
     }
 

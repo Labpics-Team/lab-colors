@@ -54,7 +54,8 @@ jobs:
           cargo install cargo-mutants --version 25.0.0 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       - name: cargo mutants (математ-ядро — скоуп из .cargo/mutants.toml)
-        # Без флагов скоуп берётся из .cargo/mutants.toml (cleanliness.rs + pair.rs).
+        # Без флагов скоуп берётся из .cargo/mutants.toml (alpha/cleanliness/
+        # glow/material/numerics/pair).
         # workflow_dispatch с full_workspace=true снимает скоуп (--file '**/*.rs').
         run: |
           if [ "${{ inputs.full_workspace }}" = "true" ]; then

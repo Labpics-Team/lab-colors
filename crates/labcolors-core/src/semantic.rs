@@ -190,12 +190,15 @@ const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 /// меняет ни одного реального эмитируемого контраста. Ре-аудит
 /// `science/reclassify-e-buckets` 2026-07-07 — реестр
 /// docs/empirical-inventory.md.
+// Rust 1.85 не считает использование только в const-assert/test runtime-use;
+// это provenance decomposition, а не отдельная production policy.
+#[allow(dead_code)]
 // SSOT-TRACKED — квант-guard декоративного пола (issue #44), терминал (c) interval-insensitive, см. docs/empirical-inventory.md.
 const QUANT_GUARD: f64 = 0.2;
 
 // Компайл-тайм пиннинг деривации: DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR +
-// QUANT_GUARD в пределах f64-шума суммирования. Заодно ИСПОЛЬЗУЕТ обе константы в
-// продакшене (не dead_code); сам литерал 7.5 при этом НЕ меняется (байт-идентичность).
+// QUANT_GUARD в пределах f64-шума суммирования. Это compile-time provenance
+// lock; сам shipping-литерал 7.5 при этом НЕ меняется (байт-идентичность).
 const _: () = {
     let derived = crate::lpc::MODEL_LC_FLOOR + QUANT_GUARD;
     let d = DECORATIVE_FLOOR_MIN - derived;
@@ -667,6 +670,8 @@ pub enum RoleSpec {
         tint: crate::ladder::LadderTint,
         /// Контрактная ступень стека.
         step: crate::glow::GlowStep,
+        /// Explicit numerical-decision profile из client contract.
+        decision_profile: crate::glow::GlowDecisionProfileV1,
     },
     /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
     /// перцептивной стороны лейбла в штатной полярности; солид-эмиссия.
@@ -1598,6 +1603,9 @@ pub enum Resolved {
     /// Свечение: screen-слои (core, halo) + решённая интенсивность
     /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
     Glow(GlowResolved),
+    /// Stable Glow request, для которого sound numerical bound отсутствует:
+    /// semantic winner не выбран и CSS emission отсутствует.
+    GlowIndeterminate(GlowIndeterminateResolved),
     /// Двухслойный материал (стекло/акрил): полупрозрачный тинт `01` + опаковая
     /// база `02`, обе — один тон, с ВЫВЕДЕННОЙ альфой (композит-гарантия над
     /// коридором фонов). См. [`MaterialResolved`] и [`crate::material`].
@@ -1732,6 +1740,11 @@ pub struct GlowResolved {
     core_composite_hex: String,
     core_achieved_dj: f64,
     target_status: crate::glow::GlowTargetStatus,
+    diagnostic_profile: Option<crate::glow::GlowDiagnosticProfileV1>,
+    decision_profile: crate::glow::GlowDecisionProfileV1,
+    decision_guarantee: crate::numerics::DecisionGuaranteeV1,
+    halo_composite_certificate: crate::glow::GlowCompositeCertificateV1,
+    core_composite_certificate: crate::glow::GlowCompositeCertificateV1,
 }
 
 impl GlowResolved {
@@ -1755,9 +1768,21 @@ impl GlowResolved {
     pub fn target_dj(&self) -> f64 {
         self.target_dj
     }
-    /// Версия конечного reference-домена point-расчёта.
-    pub fn reference_profile(&self) -> &'static str {
-        crate::glow::GLOW_REFERENCE_PROFILE
+    /// Exact composite profile, отдельно от diagnostic/decision guarantee.
+    pub fn composite_profile(&self) -> crate::glow::GlowCompositeProfileV1 {
+        self.halo_composite_certificate.profile()
+    }
+    /// Diagnostic appearance profile, только если solve реально вызвал модель.
+    pub fn diagnostic_profile(&self) -> Option<crate::glow::GlowDiagnosticProfileV1> {
+        self.diagnostic_profile
+    }
+    /// Явно выбранный client numerical profile.
+    pub fn decision_profile(&self) -> crate::glow::GlowDecisionProfileV1 {
+        self.decision_profile
+    }
+    /// Guarantee semantic target/max decision.
+    pub fn decision_guarantee(&self) -> crate::numerics::DecisionGuaranteeV1 {
+        self.decision_guarantee
     }
     /// Слой, по которому решалась целевая ступень.
     pub fn constraint_layer(&self) -> crate::glow::GlowConstraintLayer {
@@ -1783,6 +1808,14 @@ impl GlowResolved {
     pub fn core_achieved_dj(&self) -> f64 {
         self.core_achieved_dj
     }
+    /// Exact halo-composite evidence.
+    pub fn halo_composite_certificate(&self) -> &crate::glow::GlowCompositeCertificateV1 {
+        &self.halo_composite_certificate
+    }
+    /// Exact core-composite evidence.
+    pub fn core_composite_certificate(&self) -> &crate::glow::GlowCompositeCertificateV1 {
+        &self.core_composite_certificate
+    }
     /// Alias совместимости: прежнее поле измеряло именно halo.
     pub fn achieved_dj(&self) -> f64 {
         self.halo_achieved_dj
@@ -1790,6 +1823,43 @@ impl GlowResolved {
     /// Alias совместимости прежнего boolean-контракта.
     pub fn degraded(&self) -> bool {
         self.target_status == crate::glow::GlowTargetStatus::Unreachable
+    }
+}
+
+/// Stable Glow terminal outcome when no sound target/max bound exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlowIndeterminateResolved {
+    source_hex: String,
+    target_dj: f64,
+    decision_profile: crate::glow::GlowDecisionProfileV1,
+    site_id: crate::numerics::NumericalSiteIdV1,
+    evidence: crate::numerics::NumericalIndeterminacyV1,
+}
+
+impl GlowIndeterminateResolved {
+    /// Канонический source/halo anchor; он не эмитится без decision.
+    pub fn source_hex(&self) -> &str {
+        &self.source_hex
+    }
+    /// Запрошенная diagnostic target magnitude.
+    pub fn target_dj(&self) -> f64 {
+        self.target_dj
+    }
+    /// Explicit stable profile из client contract.
+    pub fn decision_profile(&self) -> crate::glow::GlowDecisionProfileV1 {
+        self.decision_profile
+    }
+    /// Registered branch-sensitive site.
+    pub fn site_id(&self) -> crate::numerics::NumericalSiteIdV1 {
+        self.site_id
+    }
+    /// Неразделимая причина вместе с её sound interval, если он существует.
+    pub fn evidence(&self) -> crate::numerics::NumericalIndeterminacyV1 {
+        self.evidence
+    }
+    /// Target belongs to the halo point layer.
+    pub fn constraint_layer(&self) -> crate::glow::GlowConstraintLayer {
+        crate::glow::GlowConstraintLayer::Halo
     }
 }
 
@@ -1961,7 +2031,7 @@ impl Resolved {
             Resolved::Color { solved, .. } => Some(solved.lc()),
             Resolved::Translucent(r) => Some(r.composite_lc),
             // Свечение — не контраст-роль: его контракт — |ΔJ'| ступени, не Lc.
-            Resolved::Glow(_) => Option::None,
+            Resolved::Glow(_) | Resolved::GlowIndeterminate(_) => Option::None,
             // Материал — поверхность, не контраст-роль: его контракт — WCAG
             // α-гарантия читаемости + |ΔJ'| различимость тона, не единый Lc.
             Resolved::Material(_) => Option::None,
@@ -2235,30 +2305,50 @@ fn resolve_spec_in(
             // держать юр. пол UI (3:1). Пол применим лишь к солиду — у
             // полупрозрачной позиции контраст определяется композитом, а не
             // тинтом, и притемнять тинт бессмысленно.
-            if let Some(floor) = floor
-                && (alpha - 1.0).abs() < f64::EPSILON
-            {
-                return resolve_solid_with_ui_floor(tint.for_vc(vc), floor, bg, vc, ctx);
+            if let Some(floor) = floor {
+                if (alpha - 1.0).abs() < f64::EPSILON {
+                    return resolve_solid_with_ui_floor(tint.for_vc(vc), floor, bg, vc, ctx);
+                }
             }
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
         }
-        RoleSpec::Glow { tint, step } => {
+        RoleSpec::Glow {
+            tint,
+            step,
+            decision_profile,
+        } => {
             // Свечение: halo = якорь источника по теме; core — пересвет;
             // интенсивность решается под контрактную ступень на фоне резолва.
             let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
-            let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc) {
-                Ok(pair) => pair,
-                Err(e) => return Resolved::Unreachable(Unreachable::InvalidInput(e)),
-            };
             let bg_hex =
                 crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
             return match crate::glow::solve_screen_alpha_for_dj(
                 &halo_hex,
                 &bg_hex,
                 step.target_dj(),
+                decision_profile,
                 vc,
             ) {
-                Ok(g) => {
+                Ok(crate::numerics::NumericalDecisionV1::Indeterminate { site_id, evidence }) => {
+                    Resolved::GlowIndeterminate(GlowIndeterminateResolved {
+                        source_hex: halo_hex,
+                        target_dj: step.target_dj(),
+                        decision_profile,
+                        site_id,
+                        evidence,
+                    })
+                }
+                Ok(crate::numerics::NumericalDecisionV1::Determinate {
+                    value: g,
+                    guarantee,
+                }) => {
+                    let (core_hex, halo_hex) =
+                        match crate::glow::glow_layers_from_source(&halo_hex, vc) {
+                            Ok(pair) => pair,
+                            Err(e) => {
+                                return Resolved::Unreachable(Unreachable::InvalidInput(e));
+                            }
+                        };
                     let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
                         &core_hex,
                         &bg_hex,
@@ -2281,6 +2371,11 @@ fn resolve_spec_in(
                         core_composite_hex: core_measurement.composite_hex,
                         core_achieved_dj: core_measurement.achieved_dj,
                         target_status: g.status(),
+                        diagnostic_profile: g.diagnostic_profile(),
+                        decision_profile,
+                        decision_guarantee: guarantee,
+                        halo_composite_certificate: g.composite_certificate().clone(),
+                        core_composite_certificate: core_measurement.certificate,
                     })
                 }
                 Err(e) => Resolved::Unreachable(Unreachable::InvalidInput(e)),
@@ -2618,9 +2713,9 @@ fn resolve_rgba_inverted(
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Resolved {
-    // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен, а резолвер
-    // инверсии клампит запрошенную α — недоменная спека, собранная в обход
-    // валидатора конфига, стала бы правдоподобным hex вместо честного отказа.
+    // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен. Без него
+    // недоменная спека, собранная в обход валидатора конфига, дошла бы до
+    // численного пути вместо честного typed-исхода.
     if !rgba_input_valid(solid_encoded, requested_alpha) {
         return Resolved::Unreachable(Unreachable::InvalidInput(
             "alpha-analog-спека вне домена (солид [0,1], α (0,1]) — сборка в обход валидатора"
@@ -2631,12 +2726,7 @@ fn resolve_rgba_inverted(
     let solid_q = quantise_encoded(solid_encoded);
     let analog =
         match crate::alpha::resolve_alpha_analog_srgb8(solid_q, requested_alpha, bg_encoded) {
-            Ok(Some(analog)) => analog,
-            Ok(None) => {
-                return Resolved::Unreachable(Unreachable::InvalidInput(
-                    "alpha-analog не удалось разрешить в конечном числовом домене".to_string(),
-                ));
-            }
+            Ok(analog) => analog,
             Err(error) => return Resolved::Unreachable(Unreachable::InvalidInput(error)),
         };
     let (tint_srgb8, actual_alpha) = analog;
@@ -5217,7 +5307,7 @@ mod tests {
                 let set = resolve_set(&bg, &table, &vc);
                 let no_silent_clip = set.iter().all(|(role, r)| match r {
                     // Свечение не участвует в dJ'-клип-инварианте (не контраст-роль).
-                    Resolved::Glow(_) => true,
+                    Resolved::Glow(_) | Resolved::GlowIndeterminate(_) => true,
                     Resolved::Color { solved, .. } => {
                         if matches!(table.spec(*role), RoleSpec::DecorativeDj { .. }) {
                             let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
@@ -6307,6 +6397,7 @@ mod tests {
                         // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо.
                         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                         Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
+                        Resolved::GlowIndeterminate(_) => "GLOW_INDETERMINATE".to_string(),
                         Resolved::Material(m) => {
                             format!("material({},{:.4})", m.tint_hex(), m.alpha())
                         }

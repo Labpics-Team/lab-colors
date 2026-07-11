@@ -89,6 +89,15 @@ impl BackdropBox {
         min: [0.0, 0.0, 0.0],
         max: [1.0, 1.0, 1.0],
     };
+
+    /// Короб пригоден для расчёта: оба угла лежат в encoded-sRGB и минимум
+    /// поканально не превышает максимум. Перепутанные углы отвергаются, а не
+    /// нормализуются: swap изменил бы контракт входного множества молча.
+    pub fn is_valid(&self) -> bool {
+        is_encoded_rgb(self.min)
+            && is_encoded_rgb(self.max)
+            && (0..3).all(|channel| self.min[channel] <= self.max[channel])
+    }
 }
 
 /// Результат вывода альфы материала: плотность + вердикт гарантии.
@@ -181,7 +190,8 @@ fn worst_contrast_of_band(pole: Pole, lo: f64, hi: f64) -> f64 {
 /// Худший WCAG-контраст коммит-полюса тинта `tone` при `alpha` над коридором.
 ///
 /// Тон квантуется (эмитируемый `01`); композит над углами берётся точно.
-/// `None` — мусор-вход (не кодированный тон / `alpha` вне `[0,1]`).
+/// `None` — мусор-вход (не кодированный тон, неупорядоченный короб или `alpha`
+/// вне `[0,1]`).
 pub fn worst_contrast_encoded(
     tone: [f64; 3],
     alpha: f64,
@@ -189,8 +199,7 @@ pub fn worst_contrast_encoded(
     pole: Pole,
 ) -> Option<f64> {
     if !(is_encoded_rgb(tone)
-        && is_encoded_rgb(backdrop.min)
-        && is_encoded_rgb(backdrop.max)
+        && backdrop.is_valid()
         && alpha.is_finite()
         && (0.0..=1.0).contains(&alpha))
     {
@@ -209,8 +218,8 @@ pub fn worst_contrast_encoded(
 /// `worst_contrast ≥ floor_ratio` на возвращённой `α`. При недостижимости пола
 /// даже на `α = 1` — честный `degraded` (не ошибка, не молчание).
 ///
-/// `None` — вход вне домена: не кодированный `tone` / `floor_ratio` не в
-/// `[1, 21]` (WCAG-отношение); ЛИБО тон лежит ВНЕ короба коридора со стороны
+/// `None` — вход вне домена: не кодированный `tone`, неупорядоченный короб,
+/// `floor_ratio` не в `[1, 21]` (WCAG-отношение); ЛИБО тон лежит ВНЕ короба со стороны
 /// полюса, где худший контраст НЕ монотонен по `α` и бисекция неприменима (см.
 /// ниже). Материальный путь (полный коридор `[чёрный, белый]`) в этот `None`
 /// никогда не попадает — тон всегда в кубе.
@@ -220,8 +229,7 @@ pub fn solve_material_alpha_encoded(
     floor_ratio: f64,
 ) -> Option<MaterialAlpha> {
     if !(is_encoded_rgb(tone)
-        && is_encoded_rgb(backdrop.min)
-        && is_encoded_rgb(backdrop.max)
+        && backdrop.is_valid()
         && floor_ratio.is_finite()
         && (1.0..=21.0).contains(&floor_ratio))
     {
@@ -538,6 +546,44 @@ mod tests {
     /// обещанием разрешимости).
     #[test]
     fn out_of_domain_is_rejected() {
+        let reversed = BackdropBox {
+            min: [1.0, 0.0, 0.0],
+            max: [0.0, 1.0, 1.0],
+        };
+        assert!(worst_contrast_encoded([1.0; 3], 0.5, &reversed, Pole::Black).is_none());
+        assert!(solve_material_alpha_encoded([1.0; 3], &reversed, AA_TEXT).is_none());
+
+        for invalid_endpoint in [
+            BackdropBox {
+                min: [0.0; 3],
+                max: [f64::NAN, 1.0, 1.0],
+            },
+            BackdropBox {
+                min: [0.0; 3],
+                max: [1.01, 1.0, 1.0],
+            },
+            BackdropBox {
+                min: [f64::NAN, 0.0, 0.0],
+                max: [1.0; 3],
+            },
+            BackdropBox {
+                min: [-0.01, 0.0, 0.0],
+                max: [1.0; 3],
+            },
+        ] {
+            assert!(!invalid_endpoint.is_valid());
+            assert!(
+                worst_contrast_encoded([0.5; 3], 0.5, &invalid_endpoint, Pole::Black).is_none()
+            );
+            assert!(solve_material_alpha_encoded([0.5; 3], &invalid_endpoint, AA_TEXT).is_none());
+        }
+
+        let point = BackdropBox {
+            min: [0.25, 0.5, 0.75],
+            max: [0.25, 0.5, 0.75],
+        };
+        assert!(worst_contrast_encoded([1.0; 3], 0.5, &point, Pole::Black).is_some());
+
         assert!(
             solve_material_alpha_encoded([1.5, 0.0, 0.0], &BackdropBox::FULL, AA_TEXT).is_none()
         );
