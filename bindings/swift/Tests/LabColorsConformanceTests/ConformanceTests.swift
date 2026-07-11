@@ -149,6 +149,16 @@ final class ConformanceTests: XCTestCase {
         let background = "#101012"
         let targetDj = 2.3006
 
+        // Independent exact-rational anti-vacuum probe: at alpha 1/2 the two
+        // encoded operators differ by two bytes in R/G. Keeping this fixture
+        // independent from the solver-selected alpha prevents an accidental
+        // same-hex quantisation from weakening the oracle.
+        let screenProbe = screenComposite(tint: tint, alpha: 0.5, background: background)
+        let sourceOverProbe = try composite(tint: tint, alpha: 0.5, bg: background)
+        XCTAssertEqual(screenProbe, "#6A6386")
+        XCTAssertEqual(sourceOverProbe, "#686186")
+        XCTAssertNotEqual(screenProbe, sourceOverProbe)
+
         let stable = try solveGlowPoint(
             tint: tint,
             background: background,
@@ -196,10 +206,6 @@ final class ConformanceTests: XCTestCase {
                 recomposite,
                 compositeHex,
                 "bit-exact относится к композитору, не к CAM16 decision")
-            XCTAssertNotEqual(
-                try composite(tint: tint, alpha: alpha, bg: background),
-                compositeHex,
-                "anti-vacuum: source-over обязан отличаться от screen на этом fixture")
         case .indeterminate:
             XCTFail("explicit legacy profile обязан сохранять прежний determinate path")
         }
