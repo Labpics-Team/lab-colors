@@ -3,13 +3,14 @@
 // `labcolors` resolves roles against a *solid* background. A real UI surface is
 // often translucent (a panel at `rgba(…, .8)` over its parents) or has no
 // background of its own (inheriting whatever is behind it). To resolve such a
-// surface honestly you need the **effective** background: the opaque colour a
-// viewer actually sees behind the element's own content.
+// surface you need a background observation. This legacy helper produces a
+// reference estimate for the subset it understands; it is not a browser pixel
+// capture or a claim about what a viewer actually sees.
 //
 // This module computes it by walking the ancestor chain and **alpha-compositing**
 // each element's `background-color` (front-to-back) until the stack is opaque,
-// over an opaque fallback (white by default). It is the bridge from the DOM's
-// layered, translucent reality to the single solid hex the WASM core consumes.
+// over an opaque fallback (white by default), yielding one solid reference hex
+// the WASM core can consume.
 //
 // HONEST LIMIT: this composites solid/translucent `background-color` layers only.
 // It does NOT sample `background-image`s, gradients, blurred backdrops, video, or
@@ -24,9 +25,10 @@
 // and `oklch()` (the engine's OWN emission form since 0.4.0, and what a browser
 // serialises `background-color` back to for an oklch-painted surface). Other
 // modern forms — `lab()`, `lch()`, `color(srgb …)`, `color-mix()`, `hsl()`,
-// named colours beyond `transparent` — are NOT parsed and return `null` (a
-// dropped layer). If a surface's background is authored in one of those, pass the
-// effective background explicitly via the `background` option.
+// named colours beyond `transparent` — are NOT parsed and currently become a
+// dropped layer for compatibility. That is not safe evidence: pass the
+// background explicitly. Issue #283 owns the typed `Unknown` replacement for
+// unsupported syntax, missing opaque bases and incomplete traversal.
 
 /** @typedef {[number, number, number, number]} Rgba  r,g,b in 0..255, a in 0..1 */
 
@@ -183,9 +185,16 @@ function oklchAlpha(tok) {
 export function compositeOver(top, bottom) {
   const at = top[3];
   const ab = bottom[3];
-  const a = at + ab * (1 - at);
+  // Affine-форма математически равна expanded source-over и фиксирует
+  // объявленный byte-scale binary64 operation order. Это numerical profile,
+  // не утверждение глобальной монотонности: округление может менять локальный
+  // порядок соседних значений, а legacy WCAG EOTF дополнительно имеет seam.
+  const a = ab + at * (1 - ab);
   if (a === 0) return [0, 0, 0, 0];
-  const c = (i) => (top[i] * at + bottom[i] * ab * (1 - at)) / a;
+  const c = (i) => {
+    const bottomPremultiplied = bottom[i] * ab;
+    return (bottomPremultiplied + at * (top[i] - bottomPremultiplied)) / a;
+  };
   return [c(0), c(1), c(2), a];
 }
 
@@ -326,8 +335,8 @@ export function parseCssColorCached(css) {
   return hit;
 }
 
-/** WCAG 2.1 relative luminance of r,g,b channels (0..255) — the normative
- *  0.03928 / 12.92 / 2.4 constants, matching `adapt-theme`'s floor semantics. */
+/** Relative luminance of r,g,b channels (0..255) in the frozen original WCAG
+ *  2.1 (2018) profile: 0.03928 / 12.92 / 2.4, matching `adapt-theme`. */
 function wcagLumChannels(r, g, b) {
   const lin = (c) => {
     const s = c / 255;
@@ -402,10 +411,10 @@ export function lerpPairHex(pair, t) {
   return toHex([linearToSrgb(lin[0]) * 255, linearToSrgb(lin[1]) * 255, linearToSrgb(lin[2]) * 255]);
 }
 
-/** WCAG relative luminance of `lerpPairHex(pair, t)` WITHOUT the `#RRGGBB`
- *  round-trip: channels are quantised to the exact bytes `toHex` would emit,
- *  then fed to the normative formula — so strict-mode bisection over `t` is
- *  ~20 flops instead of serialise + re-parse, at identical results. */
+/** Relative luminance of `lerpPairHex(pair, t)` in the frozen legacy WCAG 2.1
+ *  (2018) profile, WITHOUT the `#RRGGBB` round-trip: channels are quantised to
+ *  the exact bytes `toHex` would emit, then fed to the same profile formula.
+ *  This preserves value parity; it does not prove bisection monotonicity. */
 export function lerpPairLuminance(pair, t) {
   if (t <= 0) return wcagLumChannels(pair.aBytes[0], pair.aBytes[1], pair.aBytes[2]);
   if (t >= 1) return wcagLumChannels(pair.bBytes[0], pair.bBytes[1], pair.bBytes[2]);
@@ -442,13 +451,13 @@ export function compositeStackToHex(layersFrontToBack, opaqueBase) {
 }
 
 /**
- * The opaque effective background `#RRGGBB` visible behind `element`'s own
- * content, by walking ancestors and compositing their `background-color`s.
+ * Legacy opaque reference-background estimate for the supported
+ * `background-color` subset. This is not a browser pixel observation.
  *
  * Walks from `element` upward, collecting each `background-color` layer, and
  * stops at the first fully-opaque layer (which becomes the base). If the chain
- * reaches the root without an opaque layer, `fallback` (default white) is the
- * base — matching how a browser shows the page's default canvas.
+ * reaches the root without an opaque layer, `fallback` (default white) is used
+ * as an explicit compatibility assumption; it is not evidence of the canvas.
  *
  * Pure and injectable: pass `getStyle` and `parentOf` to test without a DOM; in
  * the browser they default to `getComputedStyle` and `el.parentElement`.

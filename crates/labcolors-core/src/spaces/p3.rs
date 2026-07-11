@@ -28,8 +28,9 @@
 //! [`super::srgb::srgb_gamma_inv`], вторых копий кривой нет.
 //!
 //! Точность цифр подобрана под БАЙТ-ТОЧНЫЙ round-trip: `p3_css_from_hex` →
-//! парс → XYZ → sRGB даёт исходные 8-битные байты на решётке всего куба
-//! (доказательство — тест `round_trip_is_byte_exact_on_lattice`).
+//! парс → XYZ → sRGB даёт исходные 8-битные байты на решётке с шагом 5 по
+//! каждому каналу (около 140 тысяч цветов, включая края; тест
+//! `round_trip_is_byte_exact_on_lattice`). Это не полный перебор куба.
 
 use super::srgb::{srgb_from_hex, srgb_gamma, srgb_to_xyz};
 
@@ -113,12 +114,12 @@ pub fn p3_from_hex(hex: &str) -> Result<[f64; 3], String> {
 ///
 /// Точность: 6 знаков на компоненту — ошибка квантования печати ≤ 5·10⁻⁷ при
 /// полушаге 8-битного канала ≈ 2·10⁻³, запас > 3 порядков; байт-точность
-/// round-trip доказана тестом на решётке всего куба. Политика альфы — единая
+/// round-trip проверена тестом на решётке с шагом 5. Политика альфы — единая
 /// (`super::oklch::css_alpha_suffix`): та же, что у oklch-эмиссии.
 ///
 /// # Errors
 ///
-/// `Err` — невалидный hex либо альфа вне [0, 1] сверх шумового эпсилона.
+/// `Err` — невалидный hex, неконечная альфа либо альфа вне `[0, 1]`.
 pub fn p3_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, String> {
     let [r, g, b] = p3_from_hex(hex)?;
     let suffix = super::oklch::css_alpha_suffix(alpha)?;
@@ -286,17 +287,26 @@ mod tests {
         }
     }
 
-    /// Политика альфы — единая с oklch-эмиссией (общий дом css_alpha_suffix):
-    /// NaN/грубый выход — ошибка, шум у краёв — кламп.
+    /// Политика alpha едина с oklch-эмиссией: любое недоменное значение —
+    /// ошибка. Даже малый clamp изменил бы публичное число и мог бы выдать
+    /// соседний конечный композит за сертифицированный.
     #[test]
     fn alpha_guard_shared_with_oklch() {
         assert!(p3_css_from_hex("#101012", Some(f64::NAN)).is_err());
         assert!(p3_css_from_hex("#101012", Some(-10.0)).is_err());
         assert!(p3_css_from_hex("#101012", Some(2.0)).is_err());
-        let noisy = p3_css_from_hex("#101012", Some(-1e-7)).unwrap();
-        assert!(noisy.ends_with(" / 0)"), "шум у нуля клампится: {noisy}");
-        let over = p3_css_from_hex("#101012", Some(1.0 + 1e-9)).unwrap();
-        assert!(over.ends_with(" / 1)"), "шум у единицы клампится: {over}");
+        assert!(p3_css_from_hex("#101012", Some(-1e-7)).is_err());
+        assert!(p3_css_from_hex("#101012", Some(1.0 + 1e-9)).is_err());
+        assert!(
+            p3_css_from_hex("#101012", Some(0.0))
+                .unwrap()
+                .ends_with(" / 0)")
+        );
+        assert!(
+            p3_css_from_hex("#101012", Some(1.0))
+                .unwrap()
+                .ends_with(" / 1)")
+        );
     }
 
     /// Форма строки — контракт потребителя: `color(display-p3 R G B [/ A])`,

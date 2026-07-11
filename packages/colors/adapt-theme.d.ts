@@ -4,14 +4,16 @@ import type { LabColors, ThemeName } from "./pkg/labcolors.js";
 
 export interface AdaptThemeOptions {
   /**
-   * An initialised engine — needs `resolveTheme` AND `recheckContrast`.
+   * An initialised engine — needs resolve + contrast recheck. The exact
+   * `isStableGlowPointNoop` capability is conditionally required when a result
+   * contains a stable Glow role; its absence then fails explicitly.
    * `recheckContrastMulti` is optional: when present, a multi-sample backdrop
    * is rechecked in ONE batched call per frame (byte-identical to the
    * per-sample loop, locked by the wasm boundary parity test); when absent,
    * the controller falls back to N `recheckContrast` calls.
    */
   colors: Pick<LabColors, "resolveTheme" | "recheckContrast"> &
-    Partial<Pick<LabColors, "recheckContrastMulti">>;
+    Partial<Pick<LabColors, "recheckContrastMulti" | "isStableGlowPointNoop">>;
   theme: ThemeName;
   /**
    * Explicit effective background, overriding the ancestor-composite. A single
@@ -34,10 +36,10 @@ export interface AdaptThemeOptions {
   /** Crossfade duration in ms. Default `280` (capped to a short fade under reduced motion). */
   easeMs?: number;
   /**
-   * Hold each role's WCAG legal floor every frame of the ease: an interpolated
-   * colour is only shown while it still clears the role's `legalFloor` against
-   * the live background (for text on animated content / `prefers-contrast`).
-   * Default `false` (the free ease — brief surplus dips, destination always legal).
+   * Enable the legacy characterized per-frame clamp. The current
+   * Oklab→clip→sRGB8 path is not globally monotone, so this option is not a
+   * universal floor/least-blend certificate; #287 owns the finite replacement.
+   * Default `false`.
    */
   strict?: boolean;
   /** Override reduced-motion detection (default reads `matchMedia`). */

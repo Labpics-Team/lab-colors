@@ -133,9 +133,10 @@ fn polarity_break_zone_is_one_step_wide_and_vc_independent() {
             if let (Some(a), Some(b)) = (
                 role_lc(&bg0, &table, &vc, Role::LabelPrimary),
                 role_lc(&bg1, &table, &vc, Role::LabelPrimary),
-            ) && a.signum() != b.signum()
-            {
-                flip_steps.push((g, g + 1));
+            ) {
+                if a.signum() != b.signum() {
+                    flip_steps.push((g, g + 1));
+                }
             }
         }
         assert_eq!(

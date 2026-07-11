@@ -7,6 +7,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 
 # Zero runtime dependencies — по конституции репо (issue #29). Генератор стимулов,
 # логистическая MLE, bootstrap и минимальный JSON написаны руками на `std`, поэтому

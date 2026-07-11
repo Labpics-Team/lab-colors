@@ -1,6 +1,6 @@
 //! Viewing conditions (surround parameters) for the CIECAM16 forward pass.
 //!
-//! Holds the per-observer constants — adapting luminance, background factor,
+//! Holds model viewing-condition inputs — adapting luminance, background factor,
 //! and the surround triplet `(F, c, N_c)` — that [`crate::spaces::cam16`]
 //! consumes. The surround presets are CIECAM16 Table 1 (average
 //! `[1.0, 0.69, 1.0]`, dim `[0.9, 0.59, 0.9]`), as tabulated in Li et al.
@@ -98,21 +98,15 @@ impl ViewingConditions {
     /// but with reduced surround contrast per CIECAM16 Table 1:
     /// F = 0.9, c = 0.59, N_c = 0.9.
     ///
-    /// Produces lower J' for the same stimulus compared to average surround,
-    /// which matches human perception in darkened viewing environments.
+    /// Produces lower model J for the same stimulus than the average-surround preset.
     ///
     /// # Why dim (F = 0.9), not dark (F = 0.8), for a dark-theme UI?
     ///
-    /// A dark-theme UI (phone at night, monitor in night mode) is formally
-    /// closer to the *dark* surround, whose triplet (F = 0.8, c = 0.525,
-    /// N_c = 0.8) models a projector in *complete* darkness, where the stimulus
-    /// is the only light in the field. A screen in a dim room is different: it is
-    /// a self-luminous panel plus residual ambient light from the room, so its
-    /// effective surround never reaches that projector limit. The *dim* working
-    /// point (F = 0.9) sits between average and dark and is the better match for
-    /// that reality. This is a deliberate engine choice, not a strict CIE
-    /// mandate; the test-only `dark_surround` constructor keeps the F = 0.8
-    /// endpoint available so it can still be exercised in comparisons and tests.
+    /// A CSS/product theme label does not determine the user's measured surround.
+    /// Lab Colors therefore freezes *dim* (F = 0.9) as an engine compatibility
+    /// preset, not as a universal observer claim or CIE mandate. The test-only
+    /// `dark_surround` constructor keeps the F = 0.8 endpoint available for
+    /// comparisons and tests.
     ///
     /// The documented dim triplet is asserted here so a silent regression to the
     /// dark parameters — the choice this rationale rejects — fails the doctest:
@@ -149,8 +143,8 @@ impl ViewingConditions {
     /// чёрный фон (#000000, Y=0.0%) clampится к 0.5 % без значимого влияния на
     /// итоговый J: разница J(Yb=0.5) − J(Yb≈0) пренебрежимо мала на практике.
     ///
-    /// Используется в surround-aware оценке дефектов (`cleanliness`), где фон цвета
-    /// известен из дизайн-контекста — источник: CIECAM16 (Li et al. 2017).
+    /// Используется legacy `cleanliness` compatibility proxy как partial input
+    /// `Yb + theme`. Это не полный visual context и не observer verdict.
     pub fn srgb_with_yb(y_b_pct: f64) -> Self {
         // average surround: F=1.0, c=0.69, N_c=1.0 — CIECAM02/16 Table 1
         Self::build(64.0, y_b_pct.clamp(0.5, 100.0), 1.0, 0.69, 1.0)
@@ -161,7 +155,8 @@ impl ViewingConditions {
     /// Аналогичен [`dim_surround`](Self::dim_surround), но параметр `Yb` задаётся явно.
     /// Диапазон ограничен [0.5, 100.0] — нижняя граница по той же причине, что в
     /// [`srgb_with_yb`](Self::srgb_with_yb): Yb=0 вырождает CIECAM16 (nbb→∞).
-    /// Используется в surround-aware оценке дефектов.
+    /// Используется legacy compatibility proxy как partial `Yb + theme` input;
+    /// это не полная surround/observer model.
     pub fn dim_surround_with_yb(y_b_pct: f64) -> Self {
         // dim surround: F=0.9, c=0.59, N_c=0.9 — CIECAM02/16 Table 1
         Self::build(64.0, y_b_pct.clamp(0.5, 100.0), 0.9, 0.59, 0.9)

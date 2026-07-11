@@ -1,5 +1,5 @@
-//! Headless-browser parity smoke: the binding's resolve must equal the native
-//! `resolve_named_set` it wraps, role for role.
+//! Headless-browser contract smoke: JS-binding resolve must equal the core
+//! `resolve_named_set` it wraps, role for role, внутри одного wasm runtime.
 //!
 //! Run with `wasm-pack test --headless --chrome` (D1 default from the chapter).
 //! The engine is agnostic (ADR-0001 PR-c): it has no built-in table, so parity
@@ -10,6 +10,10 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use labcolors_conformance::{
+    AlphaVector, ContrastVector, DRIFT_TOL, LadderVector, Manifest, MuddinessVector, Pack,
+    SolveOutcome, SolveVector,
+};
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
 use labcolors_core::{BgInput, Resolved, ViewingConditions, resolve_named_set};
@@ -21,7 +25,7 @@ use wasm_bindgen_test::*;
 wasm_bindgen_test_configure!(run_in_browser);
 
 /// The frozen labui passport — the config the built-in default table used to
-/// hardcode. Both the boundary (via `loadConfig`) and the native expectation
+/// hardcode. Both the boundary (via `loadConfig`) and the core expectation
 /// (via `ConfigDto` → `ThemeConfig` → `compile_named_role_table`) read this one
 /// SSOT, so the two sides cannot diverge on their input.
 ///
@@ -40,18 +44,18 @@ const LABUI_JSON: &str = include_str!("data/labui.config.json");
 /// real consumer uses must hold parity. Refresh on passport changes.
 const LABUI_PROD_JSON: &str = include_str!("data/labui.config.prod.json");
 
-/// Build the native role table for a passport through the same public path
+/// Build the core role table for a passport through the same public path
 /// `loadConfig` uses, so the parity oracle is the core's own compile, not a
 /// parallel copy.
-fn native_table(passport: &str) -> NamedRoleTable {
+fn core_table(passport: &str) -> NamedRoleTable {
     let dto: ConfigDto = serde_json::from_str(passport).expect("passport parses");
     let cfg = ThemeConfig::try_from(dto).expect("DTO → ThemeConfig");
     cfg.compile_named_role_table().expect("passport compiles")
 }
 
-/// Build the native labui role table (canonical fixture).
-fn native_labui_table() -> NamedRoleTable {
-    native_table(LABUI_JSON)
+/// Build the core labui role table (canonical fixture).
+fn core_labui_table() -> NamedRoleTable {
+    core_table(LABUI_JSON)
 }
 
 /// A boundary engine with the given passport loaded.
@@ -78,6 +82,18 @@ fn get_obj(obj: &JsValue, key: &str) -> JsValue {
     js_sys::Reflect::get(obj, &JsValue::from_str(key)).expect("property present")
 }
 
+fn get_num(obj: &JsValue, key: &str) -> f64 {
+    get_obj(obj, key)
+        .as_f64()
+        .unwrap_or_else(|| panic!("{key} must be a number"))
+}
+
+fn get_bool(obj: &JsValue, key: &str) -> bool {
+    get_obj(obj, key)
+        .as_bool()
+        .unwrap_or_else(|| panic!("{key} must be a boolean"))
+}
+
 /// Read the `message` of a rejected `JsError`. A `JsError` crosses as a JS
 /// `Error` object, so the human text (carrying our stable code) is its
 /// `.message` property, not the value's own string form.
@@ -88,10 +104,158 @@ fn error_message(err: wasm_bindgen::JsError) -> String {
     get_str(&value, "message").expect("JsError must carry a .message property")
 }
 
+fn approx_pack_number(actual: f64, expected: f64, context: &str) {
+    assert!(
+        (actual - expected).abs() <= DRIFT_TOL,
+        "{context}: {actual} != {expected} within {DRIFT_TOL}"
+    );
+}
+
+fn assert_hex_within_one(actual: &str, expected: &str, context: &str) {
+    let channels = |hex: &str| {
+        [1, 3, 5].map(|offset| u8::from_str_radix(&hex[offset..offset + 2], 16).unwrap())
+    };
+    for (actual, expected) in channels(actual).into_iter().zip(channels(expected)) {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "{context}: {actual} differs from {expected} by more than one LSB"
+        );
+    }
+}
+
+/// The committed 82-vector pack is replayed inside the actual wasm32 runtime.
+/// Same-runtime core/boundary parity alone cannot detect a platform-specific
+/// libm drift, so this anchors wasm32 independently to committed bytes/values.
+#[wasm_bindgen_test]
+fn committed_conformance_pack_replays_in_wasm32() {
+    let fresh = Pack::generate().expect("canonical pack generation");
+    let contrasts: Vec<ContrastVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/contrasts.json")).unwrap();
+    assert_eq!(contrasts.len(), fresh.contrasts.len());
+    for (committed, actual) in contrasts.iter().zip(&fresh.contrasts) {
+        assert_eq!(
+            (&committed.fg, &committed.bg, &committed.theme),
+            (&actual.fg, &actual.bg, &actual.theme)
+        );
+        approx_pack_number(actual.lc, committed.lc, "contrast lc");
+        approx_pack_number(actual.wcag_ratio, committed.wcag_ratio, "contrast wcag");
+    }
+
+    let ladders: Vec<LadderVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/ladders.json")).unwrap();
+    assert_eq!(ladders.len(), fresh.ladders.len());
+    for (committed, actual) in ladders.iter().zip(&fresh.ladders) {
+        assert_eq!(committed.position, actual.position);
+        approx_pack_number(actual.alpha_light, committed.alpha_light, "ladder light");
+        approx_pack_number(actual.alpha_dark, committed.alpha_dark, "ladder dark");
+    }
+
+    let alpha: Vec<AlphaVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/alpha.json")).unwrap();
+    assert_eq!(alpha.len(), fresh.alpha.len());
+    for (committed, actual) in alpha.iter().zip(&fresh.alpha) {
+        assert_eq!((&committed.tint, &committed.bg), (&actual.tint, &actual.bg));
+        approx_pack_number(actual.alpha, committed.alpha, "alpha input");
+        assert_eq!(actual.composite, committed.composite);
+        approx_pack_number(actual.min_alpha, committed.min_alpha, "alpha minimum");
+    }
+
+    let solve: Vec<SolveVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/solve.json")).unwrap();
+    assert_eq!(solve.len(), fresh.solve.len());
+    for (committed, actual) in solve.iter().zip(&fresh.solve) {
+        assert_eq!(
+            (&committed.bg, committed.contract, &committed.theme),
+            (&actual.bg, actual.contract, &actual.theme)
+        );
+        match (&committed.outcome, &actual.outcome) {
+            (
+                SolveOutcome::Solved {
+                    hex: committed_hex,
+                    lc: committed_lc,
+                    wcag_ratio: committed_wcag,
+                    floor_override: committed_floor,
+                },
+                SolveOutcome::Solved {
+                    hex: actual_hex,
+                    lc: actual_lc,
+                    wcag_ratio: actual_wcag,
+                    floor_override: actual_floor,
+                },
+            ) => {
+                assert_hex_within_one(actual_hex, committed_hex, "solve hex");
+                approx_pack_number(*actual_lc, *committed_lc, "solve lc");
+                approx_pack_number(*actual_wcag, *committed_wcag, "solve wcag");
+                assert_eq!(actual_floor, committed_floor);
+            }
+            (
+                SolveOutcome::Unreachable {
+                    code: committed_code,
+                },
+                SolveOutcome::Unreachable { code: actual_code },
+            ) => assert_eq!(actual_code, committed_code),
+            pair => panic!("solve outcome class drift: {pair:?}"),
+        }
+    }
+
+    let muddiness: Vec<MuddinessVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/muddiness.json")).unwrap();
+    assert_eq!(muddiness.len(), fresh.muddiness.len());
+    for (committed, actual) in muddiness.iter().zip(&fresh.muddiness) {
+        assert_eq!(actual.hex, committed.hex);
+        approx_pack_number(actual.score, committed.score, "muddiness");
+    }
+
+    let committed_manifest: Manifest =
+        serde_json::from_str(include_str!("../../../conformance/vectors/manifest.json")).unwrap();
+    let fresh_manifest = fresh.manifest();
+    assert_eq!(committed_manifest.pack_version, fresh_manifest.pack_version);
+    assert_eq!(committed_manifest.core_version, fresh_manifest.core_version);
+    assert_eq!(committed_manifest.counts, fresh_manifest.counts);
+    assert_eq!(
+        committed_manifest.numerical_sites,
+        fresh_manifest.numerical_sites
+    );
+    assert_eq!(committed_manifest.counts.total, 82, "anti-vacuum pack size");
+}
+
+/// The public WASM compatibility proxy is wired to the same frozen vectors as
+/// every other delivery surface. The committed file is the oracle: this test
+/// intentionally carries no second hand-written semantic threshold or score.
+#[wasm_bindgen_test]
+fn public_muddiness_binding_matches_committed_conformance_vectors() {
+    let committed: Vec<MuddinessVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/muddiness.json")).unwrap();
+    let manifest: Manifest =
+        serde_json::from_str(include_str!("../../../conformance/vectors/manifest.json")).unwrap();
+    assert!(
+        manifest.counts.muddiness > 0,
+        "compatibility corpus must be non-vacuous"
+    );
+    assert_eq!(committed.len(), manifest.counts.muddiness);
+
+    let colors = LabColors::new();
+    for vector in committed {
+        let actual = colors
+            .muddiness(&vector.hex)
+            .unwrap_or_else(|error| panic!("{} must remain accepted: {error:?}", vector.hex));
+        approx_pack_number(
+            actual,
+            vector.score,
+            &format!("public muddiness {}", vector.hex),
+        );
+    }
+
+    assert!(
+        colors.muddiness("not_a_hex").is_err(),
+        "invalid public input must reject rather than panic or fabricate a score"
+    );
+}
+
 /// Shared parity assertion: for a passport, the binding's `resolveTheme`
-/// must reproduce the native `resolve_named_set`, role for role. Expectations
+/// must reproduce the core `resolve_named_set`, role for role. Expectations
 /// come straight from the core inside the same wasm runtime — never hand-typed.
-/// The native side derives its ViewingConditions from the SAME core enum the
+/// The core side derives its ViewingConditions from the SAME enum the
 /// boundary resolves through (`Theme::viewing_conditions()`): a hardcoded
 /// `srgb()` here silently diverges on any non-srgb theme (dark = dim surround)
 /// — exactly the miss that kept the old light-only test blind to dim parity.
@@ -110,9 +274,9 @@ fn theme_vc(theme: &str) -> ViewingConditions {
 
 fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
     let bg = BgInput::solid(bg_hex).expect("bg is valid");
-    let table = native_table(passport);
+    let table = core_table(passport);
     let vc = theme_vc(theme);
-    let native = resolve_named_set(&bg, &table, &vc);
+    let core_resolved = resolve_named_set(&bg, &table, &vc);
 
     // The binding result for the same inputs, from a loaded config.
     let engine = boundary_with(passport);
@@ -128,7 +292,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
         "theme echoed back"
     );
 
-    for (name, resolved) in &native {
+    for (name, resolved) in &core_resolved {
         let entry = get_obj(&roles, name);
         let kind = get_str(&entry, "kind").expect("every role has a kind");
         match resolved {
@@ -137,7 +301,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 assert_eq!(
                     get_str(&entry, "hex").as_deref(),
                     Some(solved.hex()),
-                    "{name} hex must match native"
+                    "{name} hex must match core"
                 );
             }
             Resolved::None => {
@@ -151,7 +315,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 assert_eq!(
                     get_str(&entry, "tintHex").as_deref(),
                     Some(r.tint_hex()),
-                    "{name} tint must match native"
+                    "{name} tint must match core"
                 );
             }
             Resolved::Glow(g) => {
@@ -159,7 +323,94 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 assert_eq!(
                     get_str(&entry, "coreHex").as_deref(),
                     Some(g.core_hex()),
-                    "{name} glow core must match native"
+                    "{name} glow core must match core"
+                );
+                assert_eq!(
+                    get_str(&entry, "haloHex").as_deref(),
+                    Some(g.halo_hex()),
+                    "{name} glow halo must match core"
+                );
+                assert_eq!(get_num(&entry, "alpha").to_bits(), g.alpha().to_bits());
+                assert_eq!(get_str(&entry, "alphaCss").as_deref(), Some(g.alpha_css()));
+                assert_eq!(
+                    get_str(&entry, "compositeProfile").as_deref(),
+                    Some(g.composite_profile().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "compositeGuarantee").as_deref(),
+                    Some(g.halo_composite_certificate().guarantee().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "layerRecipeProfile").as_deref(),
+                    Some(g.layer_recipe_profile().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "appearanceDiagnosticProfile").as_deref(),
+                    Some(g.appearance_diagnostic_profile().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "selectionDiagnosticProfile").as_deref(),
+                    g.selection_diagnostic_profile()
+                        .map(|profile| profile.key())
+                );
+                assert_eq!(
+                    get_str(&entry, "decisionProfile").as_deref(),
+                    Some(g.decision_profile().key())
+                );
+                let decision_guarantee = get_obj(&entry, "decisionGuarantee");
+                assert_eq!(
+                    get_str(&decision_guarantee, "kind").as_deref(),
+                    Some(g.decision_guarantee().key())
+                );
+                if let Some(interval) = g.decision_guarantee().interval() {
+                    assert_eq!(
+                        get_num(&decision_guarantee, "lower").to_bits(),
+                        interval.lower().to_bits()
+                    );
+                    assert_eq!(
+                        get_num(&decision_guarantee, "upper").to_bits(),
+                        interval.upper().to_bits()
+                    );
+                }
+                assert_eq!(
+                    get_str(&entry, "constraintLayer").as_deref(),
+                    Some(g.constraint_layer().key())
+                );
+                assert_eq!(
+                    get_num(&entry, "targetDj").to_bits(),
+                    g.target_dj().to_bits()
+                );
+                assert_eq!(
+                    get_str(&entry, "targetStatus").as_deref(),
+                    Some(g.target_status().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "haloCompositeHex").as_deref(),
+                    Some(g.halo_composite_hex())
+                );
+                assert_eq!(
+                    get_num(&entry, "haloAchievedDj").to_bits(),
+                    g.halo_achieved_dj().to_bits()
+                );
+                assert_eq!(
+                    get_str(&entry, "coreCompositeHex").as_deref(),
+                    Some(g.core_composite_hex())
+                );
+                assert_eq!(
+                    get_num(&entry, "coreAchievedDj").to_bits(),
+                    g.core_achieved_dj().to_bits()
+                );
+                assert_eq!(
+                    get_num(&entry, "achievedDj").to_bits(),
+                    g.halo_achieved_dj().to_bits()
+                );
+                assert_eq!(
+                    get_bool(&entry, "degraded"),
+                    matches!(
+                        g.target_status(),
+                        labcolors_core::GlowTargetStatus::ExactNoopUnreachable
+                            | labcolors_core::GlowTargetStatus::LegacyUnreachable
+                    )
                 );
             }
             // `Resolved` is `#[non_exhaustive]`: a future core variant must be
@@ -171,7 +422,7 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
 
 /// Canonical labui passport (target M1 text-anchor style), white/light.
 #[wasm_bindgen_test]
-fn resolve_theme_matches_native_named_resolve() {
+fn resolve_theme_matches_core_named_resolve() {
     assert_parity(LABUI_JSON, "#FFFFFF", "light");
 }
 
@@ -179,7 +430,7 @@ fn resolve_theme_matches_native_named_resolve() {
 /// path labui takes today must hold parity on both of its theme anchors.
 /// Guards the class: "a recipe style a real consumer uses is untested in wasm".
 #[wasm_bindgen_test]
-fn resolve_theme_matches_native_on_prod_passport() {
+fn resolve_theme_matches_core_on_prod_passport() {
     assert_parity(LABUI_PROD_JSON, "#FFFFFF", "light");
     assert_parity(LABUI_PROD_JSON, "#101012", "dark");
 }
@@ -227,19 +478,19 @@ fn vars_mirror_reachable_roles_in_oklch() {
 }
 
 /// `recheckContrast` across the wasm boundary: the returned `Float64Array`
-/// reproduces the native `resolve_named_set`'s own `(lc, wcag)` per role, accepts
+/// reproduces the core `resolve_named_set`'s own `(lc, wcag)` per role, accepts
 /// the same shorthand hex forms as `resolveTheme`, and rejects a bad foreground.
 #[wasm_bindgen_test]
 fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     let bg = "#FFFFFF";
-    let native = resolve_named_set(
+    let core_resolved = resolve_named_set(
         &BgInput::solid(bg).expect("white is valid"),
-        &native_labui_table(),
+        &core_labui_table(),
         &ViewingConditions::srgb(),
     );
     let mut fgs: Vec<String> = Vec::new();
     let mut want: Vec<(f64, f64)> = Vec::new();
-    for (_name, resolved) in &native {
+    for (_name, resolved) in &core_resolved {
         if let Resolved::Color { solved, .. } = resolved {
             fgs.push(solved.hex().to_string());
             want.push((solved.lc(), solved.wcag_ratio()));
@@ -288,6 +539,104 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
         error_message(err).contains("invalid_background"),
         "bad foreground must carry the stable code"
     );
+}
+
+#[wasm_bindgen_test]
+fn stable_glow_exact_noop_recheck_crosses_the_wasm_boundary() {
+    let engine = LabColors::new();
+    assert!(
+        engine
+            .is_stable_glow_point_noop("#010000", "#FE0000")
+            .expect("sub-LSB endpoint is exact")
+    );
+    assert!(
+        engine
+            .is_stable_glow_point_noop("#001", "fff")
+            .expect("#RGB and bare spelling share resolveTheme normalization")
+    );
+    assert!(
+        !engine
+            .is_stable_glow_point_noop("#800000", "#FE0000")
+            .expect("first crossing endpoint is non-noop")
+    );
+
+    let tint_error = engine
+        .is_stable_glow_point_noop("xyz", "#FFFFFF")
+        .expect_err("invalid tint rejects");
+    assert!(error_message(tint_error).contains("invalid_color"));
+    let background_error = engine
+        .is_stable_glow_point_noop("#000000", "bad-background")
+        .expect_err("invalid background rejects");
+    assert!(error_message(background_error).contains("invalid_background"));
+}
+
+#[wasm_bindgen_test]
+fn stable_glow_both_lawful_outcomes_cross_the_wasm_boundary() {
+    let stable_json = LABUI_JSON.replacen("legacy-platform-dependent-v1", "stable-v1", 1);
+    let engine = boundary_with(&stable_json);
+
+    let white: JsValue = engine
+        .resolve_theme("#FFFFFF", "light")
+        .expect("exact no-op resolves")
+        .into();
+    let white_roles = get_obj(&white, "roles");
+    let white_vars = get_obj(&white, "vars");
+    let glow = get_obj(&white_roles, "fx-glow-brand");
+    assert_eq!(get_str(&glow, "kind").as_deref(), Some("glow"));
+    assert_eq!(
+        get_str(&glow, "decisionProfile").as_deref(),
+        Some("stable-v1")
+    );
+    assert_eq!(
+        get_str(&glow, "layerRecipeProfile").as_deref(),
+        Some("cam16-jprime-oklab-cusp-v1")
+    );
+    assert_eq!(
+        get_str(&glow, "appearanceDiagnosticProfile").as_deref(),
+        Some("cam16-ucs-jprime-li2017-v1"),
+        "full resolved Glow must identify its core appearance measurement"
+    );
+    assert_eq!(
+        get_str(&glow, "selectionDiagnosticProfile"),
+        None,
+        "exact no-op must not claim a selection diagnostic"
+    );
+    assert_eq!(
+        get_str(&glow, "targetStatus").as_deref(),
+        Some("exact-noop-unreachable")
+    );
+    let guarantee = get_obj(&glow, "decisionGuarantee");
+    assert_eq!(get_str(&guarantee, "kind").as_deref(), Some("bit-exact"));
+    for key in [
+        "--lab-fx-glow-brand",
+        "--lab-fx-glow-brand-core",
+        "--lab-fx-glow-brand-alpha",
+    ] {
+        assert!(get_str(&white_vars, key).is_some(), "missing {key}");
+    }
+
+    let dark: JsValue = engine
+        .resolve_theme("#101012", "dark")
+        .expect("nontrivial stable point is a terminal outcome")
+        .into();
+    let dark_roles = get_obj(&dark, "roles");
+    let dark_vars = get_obj(&dark, "vars");
+    let indeterminate = get_obj(&dark_roles, "fx-glow-brand");
+    assert_eq!(
+        get_str(&indeterminate, "kind").as_deref(),
+        Some("glow-indeterminate")
+    );
+    assert_eq!(
+        get_str(&indeterminate, "reason").as_deref(),
+        Some("sound-bound-unavailable")
+    );
+    for key in [
+        "--lab-fx-glow-brand",
+        "--lab-fx-glow-brand-core",
+        "--lab-fx-glow-brand-alpha",
+    ] {
+        assert!(get_str(&dark_vars, key).is_none(), "unsafe {key}");
+    }
 }
 
 /// `resolveTheme` before any `loadConfig` rejects with the stable

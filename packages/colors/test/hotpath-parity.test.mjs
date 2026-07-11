@@ -177,8 +177,9 @@ const hasCompiled =
   typeof ebg.lerpPairHex === "function" &&
   typeof ebg.lerpPairLuminance === "function";
 
-/** Reference WCAG relative luminance — a verbatim copy of the string path the
- *  runtime used pre-optimisation (normative 0.03928/12.92/2.4 constants). */
+/** Reference relative luminance — a verbatim copy of the string path the
+ *  runtime used pre-optimisation (frozen WCAG 2.1 2018 profile:
+ *  0.03928/12.92/2.4). */
 function refLuminance(css) {
   const rgb = parseCssColor(css) ?? [0, 0, 0, 1];
   const lin = (c) => {

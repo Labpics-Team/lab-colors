@@ -53,7 +53,7 @@
 
 Итог волны objectivization (историческая рамка): (a)=4, (b)=0, (c)=7, (d)=6,
 (e)=8. **После follow-on `science/floor-derivation` (мишени #3/#4, +`QUANT_GUARD`
-#53, +`MODEL_LC_FLOOR` #54), `science/crossover-terminal-e` (#52 → (e)),
+`#53`, +`MODEL_LC_FLOOR` #54), `science/crossover-terminal-e` (#52 → (e)),
 `science/purity-terminal-e` (#48/#49 → (e)), `science/registry-coherence`
 (#37 → (e), остальные (c) → (e), временно), `science/reclassify-e-buckets`
 (6 бывших (c)-строк ВОЗВРАЩЕНЫ в (c) по измерению; #37 несёт MODEL-CONFLICT-пометку)
@@ -68,7 +68,11 @@
 дополнительно исключил `#18 LIGHTNESS_SETTLE`: контрпример опроверг его класс
 (a), а численная legacy-эвристика не является перцептивной policy-константой.
 Поэтому актуальный итог — 25, а не 26 или 27.
-Внутри прежней классификации констант нет безымянных строк, но это не означает, что корневая модель neutral progression найдена: gamma-строки остаются frozen legacy baselines и открыты в #219/#261.
+В прежней классификации констант нет безымянных строк, но это не означает, что
+корневая модель нейтральной прогрессии найдена. Значения gamma имеют терминальный
+провенанс **(e) COMPATIBILITY POLICY**: они заморожены для прежней эмиссии.
+Отдельный научный вопрос о возможной человеко-ориентированной замене остаётся
+OPEN в #219/#261 и не является блокером для generic fact-only pipeline.
 
 ## Классификация текущих 25 policy-констант
 
@@ -101,8 +105,8 @@
 | 12 | `NEUTRAL_HUE_DEG` | 286.0 | (e) | измер. якорь; Волна 2: байт-инвариант по разбросу [285.78,286.01], ±20°→0.0114 (~1 JND) | `neutral_hue_emits_byte_invariant_across_measured_family_spread`, `custom_tint_overrides_hue_and_ratio` |
 | 21 | `CHROMA_FRACTION` | 0.88 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0421 по [0.70,1.0]; labui=1.0; диапазон (0,1] | `chroma_fraction_sensitivity_is_bounded`, `chroma_fraction_out_of_bounds_is_rejected` |
 | ~~20~~ | ~~`DEFAULT_HARDNESS`~~ | — | — | **УДАЛЁН Волной 1** (снесён механизм p-нормы brand-displacement; config-поле `hardness` живо как vestigial, тест `hardness_below_one_is_rejected` держит его границу) | — |
-| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | **OPEN** | frozen legacy baseline; four scalar explanations, including direct Whittle/crispening, are refuted by magnitude/degeneracy; context-conditioned progression or removal of gamma is owned by #219/#261 | `curve_params_sensitivity_is_bounded`, gamma derivation regressions |
-| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | **OPEN** | frozen legacy baseline; four scalar explanations, including direct Whittle/crispening, are refuted, with especially strong failure near the dark anchor; context-conditioned progression or removal of gamma is owned by #219/#261 | `curve_params_sensitivity_is_bounded`, gamma derivation regressions |
+| 22 | `NEUTRAL_DEFAULT_GAMMA_LIGHT` | 1.75 | **(e)** | **COMPATIBILITY POLICY:** зафиксированная база прежней эмиссии; **НАУЧНАЯ ЗАМЕНА: OPEN** — четыре скалярных объяснения, включая прямое прочтение метрики Уиттла, опровергнуты по магнитуде/вырождению; #219/#261 могут исследовать человеко-ориентированную замену, но не блокируют generic fact-only pipeline | `curve_params_sensitivity_is_bounded`, регрессионные тесты дериваций gamma |
+| 23 | `NEUTRAL_DEFAULT_GAMMA_DARK` | 1.5 | **(e)** | **COMPATIBILITY POLICY:** зафиксированная база прежней эмиссии; **НАУЧНАЯ ЗАМЕНА: OPEN** — четыре скалярных объяснения, включая прямое прочтение метрики Уиттла, опровергнуты, особенно сильно около тёмного якоря; #219/#261 могут исследовать человеко-ориентированную замену, но не блокируют generic fact-only pipeline | `curve_params_sensitivity_is_bounded`, регрессионные тесты дериваций gamma |
 | 24 | `NEUTRAL_DEFAULT_CHROMA_PEAK_T` | 0.35 | (e) | genuine; Волна 2: sensitivity max ΔE_ok 0.0042 по [0.2,0.5] (низшая); диапазон (0,0.5] | `curve_params_sensitivity_is_bounded` |
 
 **(b) после follow-on = 1 (было 0) — честно.** `IC_DECORATIVE_FLOOR_MIN` = 15.0
@@ -112,9 +116,10 @@
 JND. `DECORATIVE_FLOOR_MIN` (7.5) — не (b), а (a): выводится алгебраически из
 GROUNDED APCA-клипа, а не из отдельного опубликованного измерения. Прочие
 калибровочные константы прямого опубликованного измерения ИМЕННО своего значения
-по-прежнему не имеют; литературно-заземляемые `B0`/`BW`/`H_Y_DEG` — это M-строки
-`cleanliness.rs` (волна Zone B), вне этого набора. Выдумывать цитату под
-остальные — подлог.
+по-прежнему не имеют. `B0`/`BW`/`H_Y_DEG` — замороженные compatibility values
+M-строк `cleanliness.rs` (волна Zone B), вне этого набора: прежние
+literature-grounded / universal-observer claims отклонены, а не доказаны.
+Выдумывать цитату под остальные — подлог.
 
 ## EXPOSURE-анализ
 
@@ -352,13 +357,14 @@ GROUNDED APCA-клипа, а не из отдельного опубликова
   замером, не требует решения владельца. Разница с #52: там модельный якорь ЖДЁТ
   выбора, здесь альтернатива уже дисквалифицирована экспериментом.
 
-**Генуинные (e) на конец `reclassify-e-buckets`, 9 явных** (плюс #17, #19 из
+**Терминалы (e) на конец `reclassify-e-buckets`, 9 явных** (плюс #17, #19 из
 блока «две ложные кандидатуры» выше = 11 всего): `NEUTRAL_HUE_DEG`
 (#12), `NEUTRAL_TINT_RATIO` (#13), ~~`TINT_HUE_STIFFNESS` (#15)~~,
 `CHROMA_FRACTION` (#21), `NEUTRAL_DEFAULT_GAMMA_LIGHT` (#22),
 `NEUTRAL_DEFAULT_GAMMA_DARK` (#23), `NEUTRAL_DEFAULT_CHROMA_PEAK_T` (#24),
-`HUE_PURITY_MP_REF_RATIO` (#48), `HUE_PURITY_EXPONENT` (#49) — ни для одного не
-существует модельного якоря; провенанс формы там, где он есть (`HUE_PURITY_*`),
+`HUE_PURITY_MP_REF_RATIO` (#48), `HUE_PURITY_EXPONENT` (#49). Для gamma это
+замороженная compatibility policy, а не генуинная свободная ручка; для остальных
+не существует модельного якоря. Провенанс формы там, где он есть (`HUE_PURITY_*`),
 не покрывает магнитуду (ADR-0002/INV-2 против фейкового (b)), и та же пара
 показывает материальный дрейф (max|Δpurity|=0.148) — магнитуда НЕ immaterial,
 честный терминал (e), не (c). **⚠️ Волна 2 (2026-07-08) ВЫВЕЛА `#15 TINT_HUE_STIFFNESS`

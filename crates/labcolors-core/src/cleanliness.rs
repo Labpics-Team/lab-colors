@@ -1,42 +1,59 @@
-//! Порт финального «Закона Грязи» (Muddiness Law) системы `labcolors`.
+//! Замороженная legacy research-coordinate системы `labcolors`.
+//!
+//! Исторические имена модуля и функций (`cleanliness`, `muddiness`, `drab`,
+//! `n_pure`) — только идентификаторы API. Результат — **experimental compatibility proxy**,
+//! а не observer-validated cleanliness/murkiness,
+//! эстетическая оценка, human verdict или product contract. Компилятор и
+//! runtime-resolver токенов эту координату не используют.
+//!
+//! Формула и frozen conformance corpus воспроизводимы; это не валидирует
+//! человеческий смысл названий. `C0`, `JND`, `B0` и `BW` остаются legacy
+//! compatibility constants: опубликованный вывод их точных Oklab-значений и
+//! универсальная применимость не установлены. Hanning-форма `hue_weight` —
+//! эвристика; эффект Бецольда—Брюкке её не выводит. `H_Y_DEG` воспроизводит
+//! арифметическое преобразование выбранного 578 nm reference в Oklab, но не
+//! является универсальным unique-yellow наблюдателя.
+//!
+//! Полный эпистемический статус и владельцы миграции: `docs/empirical-inventory.md`
+//! (M-01…M-14) и Issue #231.
 //!
 //! # Уравнения
 //!
 //! ```text
 //! raw = neutral_gate(C) * hue_weight(h) * depth_mod(L, C, h)
-//! mud = raw                   ← параметр-свободная монотонная нормировка (Zone B, 2026-06-30)
+//! mud = raw                   ← замороженный legacy-идентификатор результата
 //! ```
 //!
 //! Platt-звено (логарифм raw + eps → sigmoid с двумя подогнанными скалярами) **удалено полностью**
 //! в Zone B slice 3: оба скаляра (M-07/M-08) подогнаны на авторском датасете 738 меток
 //! (наблюдатель-фит) и нарушали инвариант «ZERO observer-fit» (North).  mud = raw_chromatic напрямую:
 //! - параметр-свободно (нет новых констант);
-//! - монотонно (произведение монотонных сигмоидных факторов ∈ \[0,1\]);
 //! - ограничено \[0,1\] точно (каждый множитель ∈ \[0,1\]);
-//! - JND-относительно по конструкции (gate N(C) выровнен по M-02 JND).
+//! - масштаб logistic gate задаётся замороженной шириной M-02; это не заявление
+//!   о perceptual threshold или универсальном JND.
 //!
 //! Бывший light-escape порог M-03 (DECLARED-CALIBRATION скаляр) и его escape-член
 //! в `neutral_gate` **удалены целиком** (Zone B, 2026-07-01): escape-член протекал
 //! ось L в функцию, документированную как чисто-хроматический hue-agnostic гейт —
 //! нарушение независимости осей. `neutral_gate(c, c0, jnd) = sigmoid((c - c0) / jnd)`.
 //!
-//! # Инвентарь параметров (раздел Muddiness Law)
+//! # Инвентарь legacy-параметров
 //!
 //! | const           | mud-id | статус                         | значение                    |
 //! |-----------------|--------|--------------------------------|-----------------------------|
-//! | `C0`            | M-01   | cited-and-kept                 | 0.0395 (граница серого sRGB; Evans/Xie-Fairchild yellow zero-grayness frontier) |
-//! | `JND`           | M-02   | cited-and-kept                 | 0.01228 (Oklab chroma JND; Oklab perceptual measurement) |
-//! | `B0`            | M-04   | cited-measured                 | 0.036 (центр диапазона [0.030, 0.044]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
-//! | `BW`            | M-05   | cited-measured                 | 0.017 (центр диапазона [0.013, 0.020]; Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975) |
+//! | `C0`            | M-01   | Indeterminate provenance       | 0.0395 frozen compatibility value; exact Oklab derivation not established |
+//! | `JND`           | M-02   | universal JND Rejected; value Indeterminate | 0.01228 frozen gate width; reference point/domain not specified |
+//! | `B0`            | M-04   | Rejected provenance; Indeterminate value | 0.036 frozen positive-b gate centre; cited Oklab range was not derived by the named sources |
+//! | `BW`            | M-05   | Rejected provenance; Indeterminate value | 0.017 frozen positive-b gate width; cited Oklab range was not derived by the named sources |
 //! | ~~`CAL_EPS`~~   | M-06   | УДАЛЁН (Zone B slice 3)        | был 0.01; log-регуляризатор для Platt — более не нужен |
 //! | ~~`CAL_T`~~     | M-07   | УДАЛЁН (Zone B slice 3)        | был 2.356978; Platt-скаляр, подогнанный на 738 авторских метках — нарушал ZERO observer-fit |
 //! | ~~`CAL_B`~~     | M-08   | УДАЛЁН (Zone B slice 3)        | был 6.445168; Platt-смещение — нарушало ZERO observer-fit |
 //! | ~~`M_W`~~       | M-09   | УДАЛЁН (Front B, 2026-07-04)    | был 0.181527; полуширина доверительного поля confidence-слоя — субъективная калибровка владельца без модели надёжности, вне пути эмиссии — удалён целиком |
 //! | ~~`KAPPA_CORE`~~ | M-10  | УДАЛЁН (Front B, 2026-07-04)    | был 0.34; потолок уверенности ядра — та же субъективная калибровка — удалён вместе с confidence-слоем |
 //! | ~~`KAPPA_INTERIOR`~~ | M-11 | УДАЛЁН (Front B, 2026-07-04)  | был 0.10; пол уверенности спорной полосы — удалён вместе с confidence-слоем |
-//! | `H_Y_DEG`       | M-12   | cited-derived (Zone B slice 5) | 90.4011° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65, XYZ→Oklab напрямую); hue_weight = (1+cos(h−H_Y))/2 |
+//! | `H_Y_DEG`       | M-12   | arithmetic admitted; observer claim Rejected | 90.4011° — выбранный 578 nm reference → Oklab; не universal unique yellow и не вывод Hanning-семантики |
 //! | ~~`W_HUE[8]`~~  | M-12   | УДАЛЁН (Zone B slice 4)        | был: подогнанный K=3 Fourier-вектор логистической регрессии — нарушал ZERO observer-fit |
-//! | `CUSP_L_TABLE`  | M-13   | cited-and-kept                 | (чистая геометрия гамута Oklab, верифицирована до f64 — kept as-is) |
+//! | `CUSP_L_TABLE`  | M-13   | geometry admitted              | геометрия гамута Oklab; не человеческая граница cleanliness |
 //! | ~~`CEIL_N_TABLE`~~ | M-14 | УДАЛЕНА (Zone B slice 4)       | была: Fourier CEIL_N, подогнана на датасете v3 — более не нужна после BB-замены |
 
 #![allow(clippy::excessive_precision)]
@@ -92,25 +109,28 @@ pub(crate) static CUSP_L_TABLE: [f64; 361] = [
 
 // CEIL_N_TABLE удалена (Zone B slice 4, 2026-06-30):
 // K=3 Fourier-базис CEIL_N использовался в hue_basis() для dot-product c W_HUE.
-// После замены hue_weight на Hanning-окно BB ни hue_basis, ни CEIL_N_TABLE
+// После замены hue_weight на замороженное Hanning-окно ни hue_basis, ни CEIL_N_TABLE
 // не нужны в продуктивном коде.
 
 // High-precision frozen parameter constants
 pub const C0: f64 = 0.0395000000000000;
-/// JND reuse rationale: this constant is the cited Oklab chroma just-noticeable-difference
-/// (Oklab perceptual measurement, M-02 cited-and-kept). It is used as the sigmoid gate width
-/// throughout the module because JND is the natural perceptual scale for a logistic boundary —
-/// a ±1 JND band captures the transition from sub-threshold to supra-threshold chroma presence.
-/// No new fit is performed; this is the same cited value reused as a scale parameter.
-/// The applicability of a chroma JND as the gate width is a design assumption; if a future
-/// study finds a different gate width is warranted, M-02 should be split into separate cited
-/// values (one for detection threshold, one for gate width).  Flagged OPEN as an assumption.
+/// Frozen width of the legacy sigmoid gate (M-02).
+///
+/// The historical name is retained for API compatibility. A universal Oklab
+/// just-noticeable difference is rejected: no reference point, direction,
+/// viewing protocol, or observer population establishes this exact value.
+/// Therefore this constant must not be interpreted as a detection threshold.
+/// See `docs/empirical-inventory.md` and Issue #242.
 pub const JND: f64 = 0.0122779190541810;
 // M-03 (former light-escape calibration threshold, DECLARED-CALIBRATION) removed
 // entirely (Zone B, 2026-07-01): its escape term leaked the lightness axis into
 // what is documented as a hue-agnostic, chroma-only gate (see `neutral_gate` above).
-pub const B0: f64 = 0.036; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.030, 0.044]
-pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975); range [0.013, 0.020]
+/// Frozen centre of the legacy positive-b gate (M-04).
+/// The former cited-measured provenance claim is rejected; this is compatibility state.
+pub const B0: f64 = 0.036;
+/// Frozen width of the legacy positive-b gate (M-05).
+/// The former cited-measured provenance claim is rejected; this is compatibility state.
+pub const BW: f64 = 0.017;
 // CAL_EPS / CAL_T / CAL_B удалены (Zone B slice 3, 2026-06-30):
 // Platt-звено sigmoid(CAL_T*ln(raw+eps)+CAL_B) было observer-fit на 738 авторских метках
 // (нарушение ZERO observer-fit, North).  Заменено параметр-свободным mud = raw_chromatic.
@@ -121,14 +141,15 @@ pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 194
 
 // W_HUE[8] удалён (Zone B slice 4, 2026-06-30):
 // Подогнанный вектор K=3 Фурье-регрессии (логистическая регрессия на 738 авторских
-// метках, M-12) заменён выведенным Hanning-окном Бецольда-Брюкке.
+// метках, M-12) заменён замороженной параметр-свободной Hanning-эвристикой.
 // Формула: hue_weight(h) = (1 + cos(h − H_Y_DEG)) / 2
-// Провенанс: инвариантная точка жёлтого BB 578nm (Purdy 1937; Jacobs & Wascher 1967,
-// J. Opt. Soc. Am. 57, 1155–1156) × Oklab (Ottosson 2020).
+// H_Y_DEG воспроизводит арифметическое преобразование выбранного 578nm reference
+// в Oklab. Эффект Бецольда—Брюкке не выводит эту Hanning-форму и не придаёт ей
+// универсальный observer meaning.
 // Инварианты: hue_weight(H_Y_DEG) = 1.0 точно; hue_weight(H_Y_DEG ± 180°) = 0.0 точно;
 // строго монотонное убывание при |h − H_Y_DEG| растёт от 0 до 180°.
 
-/// Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель, D65).
+/// Oklab hue выбранного спектрального reference λ=578nm (CIE 1931 2° CMF).
 ///
 /// Вывод (Zone B slice 5, 2026-07-03 — исправление ошибочной деривации slice 4):
 ///   1. CMF при 578nm — линейная интерп. официальной CIE 1931 2° 5нм-таблицы:
@@ -150,13 +171,13 @@ pub const BW: f64 = 0.017; // cited-measured central (Newhall-Nickerson-Judd 194
 ///     сохраняет оттенок: без клэмпа тот же XYZ давал h=69.7°, после клэмпа 96.9°.
 ///     Значение 96.9172° было артефактом клэмпа поверх неверного XYZ.
 ///
-/// Выбор λ=578nm: инвариантная точка жёлтого Бецольда-Брюкке (Purdy 1937,
-/// Am. J. Psychol. 49, 313–315; подтверждено Jacobs & Wascher 1967,
-/// J. Opt. Soc. Am. 57, 1155–1156). Прежняя цитата «Parry (1967) JOSA 57,
+/// Арифметика выбранного λ=578nm допускается и воспроизводима. Заявление, что
+/// это универсальный unique-yellow наблюдателя, отвергнуто: результат зависит
+/// от наблюдателя, яркости и метода. Прежняя цитата «Parry (1967) JOSA 57,
 /// 1130–1134» не существует в литературе и удалена.
 ///
 /// Использование: центр Hanning-окна `hue_weight(h)` (M-12).
-/// Константа выводная, не подогнана; воспроизводится скриптом деривации из CMF.
+/// Число не подогнано; воспроизводится скриптом арифметического преобразования CMF.
 pub const H_Y_DEG: f64 = 90.4011;
 
 #[inline]
@@ -181,18 +202,19 @@ pub fn cusp_l_of(h_deg: f64) -> f64 {
     y0 + fract * (y1 - y0)
 }
 
-/// Depth term: how far below the hue's clean cusp the colour sits, normalized by cusp L.
-/// Ranges from 0.0 (at/above cusp) to 1.0 (deep in the basement).
+/// Geometric depth below the hue-dependent sRGB/Oklab gamut cusp, normalized by cusp L.
+/// Ranges from 0.0 (at/above cusp) to 1.0 (furthest below it); no human meaning follows.
 pub fn depth_term(l: f64, h_deg: f64) -> f64 {
     let cusp_l = cusp_l_of(h_deg);
     let below = (cusp_l - l) / cusp_l.max(1e-6);
     below.clamp(0.0, 1.0)
 }
 
-/// Hue-agnostic chroma-confidence gate: checks if the color is chromatic at all, or reads grey/beige.
+/// Frozen hue-agnostic logistic coordinate over Oklab chroma.
 ///
-/// `neutral_gate(c, c0, jnd) = sigmoid((c - c0) / jnd)` — a pure JND-relative
-/// chroma-presence gate. The former light-escape term (a product of two
+/// `neutral_gate(c, c0, jnd) = sigmoid((c - c0) / jnd)`. The parameter named
+/// `jnd` is a compatibility width, not a detection probability or universal
+/// perceptual threshold. The former light-escape term (a product of two
 /// sigmoids gated on lightness and chroma) depended on a DECLARED-CALIBRATION
 /// threshold (M-03, a Platt-fit scalar on the v3 dataset) and leaked the
 /// lightness axis into a function documented as hue-agnostic and chroma-only —
@@ -201,44 +223,34 @@ pub fn neutral_gate(c: f64, c0: f64, jnd: f64) -> f64 {
     sigmoid((c - c0) / jnd)
 }
 
-/// Opponent b-gate (warm/clean filter): gates the geometric depth term. Warm -> 1.0, cool -> 0.0.
+/// Frozen positive-b logistic gate multiplied by the geometric depth term.
+/// Its historical parameter values have no admitted human clean/dirty semantics.
 pub fn depth_mod(l: f64, c: f64, h_deg: f64, b0: f64, bw: f64) -> f64 {
     let dp = depth_term(l, h_deg);
     let s = sigmoid((b_of(c, h_deg) - b0) / bw);
     dp * s
 }
 
-/// Весовой множитель оттенка — Hanning-окно Бецольда-Брюкке (Zone B slice 4, 2026-06-30).
+/// Замороженная Hanning-эвристика над Oklab hue (Zone B slice 4, 2026-06-30).
 ///
-/// Заменяет подогнанный вектор W_HUE\[8\] (M-12, удалён в Zone B slice 4) на выводную формулу.
+/// Заменяет подогнанный вектор W_HUE\[8\] (M-12, удалён в Zone B slice 4)
+/// параметр-свободной формулой.
 ///
-/// # Вывод формулы
+/// # Эпистемический статус
 ///
-/// Эффект Бецольда-Брюкке — реальный психофизический феномен (уникальный жёлтый и его
-/// инвариантная точка заземлены в этом же файле через Purdy 1937, см. [`H_Y_DEG`]): при
-/// росте яркости оттенки смещаются к уникальному жёлтому (h_Y) и уникальному синему.
-/// Косинусная модель плотности конвергенции ниже — ЭВРИСТИКА (параметрическая форма
-/// Hanning-окна); железный первоисточник ИМЕННО ЭТОЙ формы не установлен. Прежняя ссылка
-/// «Parry (1967) JOSA 57, 1130–1134» не существует в литературе (отозвана у [`H_Y_DEG`])
-/// и удалена. Производная смещения по Oklab-оттенку:
-///
-///   dΔH_BB/dh = A_BB · cos(h − h_Y)
-///
-/// — плотность конвергенции оттенков к h_Y.  Максимальна при h = h_Y (все ближние оттенки
-/// сходятся к уникальному жёлтому, зона максимальной «грязи»); обнуляется при |h − h_Y| = 90°;
-/// минимальна при |h − h_Y| = 180° (противоположное направление).
-///
-/// Нормируем в [0, 1]:
+/// Эффект Бецольда—Брюкке реален, но не выводит эту косинусную функцию,
+/// её центр или human cleanliness semantics. Формула ниже — frozen heuristic;
+/// доказаны только её математические свойства. `H_Y_DEG` — арифметика выбранного
+/// 578nm reference, не универсальный unique-yellow наблюдателя.
 ///
 ///   hue_weight(h) = (1 + cos(h − H_Y_DEG)) / 2   [Hanning-окно]
 ///
 /// # Провенанс констант
 ///
-/// - `H_Y_DEG = 90.4011°` — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° D65).
+/// - `H_Y_DEG = 90.4011°` — Oklab hue выбранного λ=578nm reference по CIE 1931 2° CMF.
 ///   Вывод: CMF → XYZ → Oklab напрямую (Ottosson 2020) → atan2(b, a); без sRGB-клэмпа
 ///   (клэмп не сохраняет hue — см. историю slice 4 в доке H_Y_DEG).
-///   Цитата: Purdy (1937) — инвариантная точка жёлтого 578nm; Jacobs & Wascher (1967)
-///   J. Opt. Soc. Am. 57, 1155–1156.
+///   Это не observer-validated invariant; см. M-12 в empirical inventory.
 ///
 /// # Инварианты (проверены тестами)
 ///
@@ -270,7 +282,7 @@ pub fn hue_weight(h_deg: f64) -> f64 {
     }
 }
 
-/// Сырой хроматический счёт грязи (без масштабирования).
+/// Сырая experimental compatibility proxy coordinate (legacy API identifier).
 ///
 /// raw = N(C) × hue_weight_BB(h) × depth_mod(L, C, h)
 ///
@@ -282,29 +294,31 @@ pub fn raw_chromatic(l: f64, c: f64, h_deg: f64) -> f64 {
     cc * hw * dpm
 }
 
-/// Параметр-свободная монотонная цена грязи (Zone B slices 3+4, 2026-06-30).
+/// Frozen experimental compatibility proxy (Zone B slices 3+4, 2026-06-30).
 ///
-/// mud = raw_chromatic(l, c, h) — прямое произведение трёх перцептивно-обоснованных
-/// факторов из геометрии Oklab и поворота Бецольда-Брюкке:
-///   N(C) = sigmoid((C - C0) / JND)              — JND-взвешенное присутствие хромы (M-01/M-02)
-///   hue_weight(h) = (1+cos(h−H_Y_DEG))/2        — Hanning-окно BB (M-12, Zone B slice 4)
-///   depth_mod(L, C, h)                           — глубина под cusp-L, взвешенная b-гейтом (M-04/M-05)
+/// `mud = raw_chromatic(l, c, h)` is a deterministic product of three legacy factors:
+///   `N(C) = sigmoid((C - C0) / JND)`             — frozen logistic gate (M-01/M-02)
+///   `hue_weight(h) = (1+cos(h-H_Y_DEG))/2`       — Hanning heuristic (M-12)
+///   `depth_mod(L, C, h)`                          — gamut geometry × positive-b gate (M-04/M-05)
+///
+/// The historical name does not make the output an observer-validated cleanliness,
+/// murkiness, aesthetic, or production decision. The compiler/resolver does not use it.
 ///
 /// Свойства:
-///   - Выводных констант: только H_Y_DEG = 90.4° (CIE D65 unique yellow 578nm, Purdy 1937)
+///   - `H_Y_DEG` reproduces the selected 578nm-to-Oklab arithmetic
 ///   - Нет подогнанных скаляров: W_HUE/CEIL_N_TABLE/CAL_T/CAL_B — все удалены
 ///   - raw ∈ \[0,1\] точно (произведение ∈ \[0,1\] множителей)
 ///   - Монотонно в C только на ТЁПЛОЙ полуплоскости (h∈[0°,180°], sin h ≥ 0):
 ///     N(C) растёт, b-гейт depth_mod не убывает. На холодных (sin h < 0) b-гейт
 ///     `sigmoid((c·sin h − B0)/BW)` убывает в C → НЕ глобально монотонно
 ///     (запинено `property_invariants`: warm-инвариант + cool-characterization)
-///   - JND-нормировано по конструкции через M-02
+///   - logistic width is the frozen M-02 compatibility value
 ///   - .clamp(0.0, 1.0) — safety no-op при f64-округлении
 pub fn muddiness_oklch(l: f64, c: f64, h_deg: f64) -> f64 {
     raw_chromatic(l, c, h_deg).clamp(0.0, 1.0)
 }
 
-/// Compute muddiness from linear sRGB values [r, g, b] in [0, 1].
+/// Compute the legacy experimental compatibility proxy from linear sRGB in [0, 1].
 pub fn muddiness_from_linear_srgb(rgb: [f64; 3]) -> f64 {
     let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
     let l = lab[0];
@@ -313,17 +327,17 @@ pub fn muddiness_from_linear_srgb(rgb: [f64; 3]) -> f64 {
     muddiness_oklch(l, c, h)
 }
 
-/// Compute muddiness from an sRGB hex color string like "#6B6B2E".
+/// Compute the legacy experimental compatibility proxy from an sRGB hex string.
 pub fn muddiness_from_hex(hex: &str) -> Result<f64, String> {
     let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
     Ok(muddiness_from_linear_srgb(rgb))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Drab defect head (Zone B slice 2 — second INDEPENDENT output)
+// Legacy `drab` coordinate (Zone B slice 2 — second INDEPENDENT output)
 //
 // `n_pure` and `drab` are a SEPARATE defect axis from mud/muddiness_oklch.
-// They share ONLY the cited gate constants C0 / JND as INPUTS.
+// They share ONLY the frozen compatibility constants C0 / JND as INPUTS.
 // They are NEVER called inside `raw_chromatic`, `muddiness_oklch`, or any
 // other mud code path — the two axes are provably independent (the curl /
 // integrability two-axes result from the paradigm North).
@@ -332,32 +346,34 @@ pub fn muddiness_from_hex(hex: &str) -> Result<f64, String> {
 //         = 1 - sigmoid((C   - C0) / JND)   [= 1 - n_pure(C)]
 //
 // Constants reused (zero new parameters):
-//   C0  = 0.0395  (cited-and-kept, M-01, Evans/Xie-Fairchild yellow zero-grayness frontier)
-//   JND = 0.0122779190541810 (cited-and-kept, M-02, Oklab chroma JND)
+//   C0  = 0.0395 (M-01, provenance Indeterminate)
+//   JND = 0.0122779190541810 (M-02, universal JND Rejected)
 //
-// Статус (актуально на 2026-07-01): W_HUE[8] удалён и заменён выведенным Hanning-окном
-// Бецольда-Брюкке (Zone B slice 4, M-12 cited-derived, см. таблицу инвентаря выше);
+// Статус (актуально на 2026-07-11): W_HUE[8] удалён и заменён замороженной
+// Hanning-эвристикой (Zone B slice 4, M-12, см. таблицу инвентаря выше);
 // Platt CAL_T/CAL_B удалены (Zone B slice 3). Открытых наблюдатель-фит параметров
 // в этом блоке не осталось.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pure chroma-presence gate: N_pure(C) = sigmoid((C - C0) / JND).
+/// Historical `n_pure` coordinate: `sigmoid((C - C0) / JND)`.
 ///
 /// This is the shared gate that enters both mud (as `neutral_gate`) and drab
 /// (as 1 - N_pure).  It is kept as a standalone `pub fn` so callers can
 /// compose the two heads independently without re-implementing the gate.
 ///
-/// Parameters: cited-and-kept C0 (M-01) and JND (M-02).  Zero new parameters.
+/// The name is a compatibility identifier, not an observer estimate of purity.
+/// Parameters are frozen C0 (M-01) and JND (M-02); zero new parameters.
 #[inline]
 pub fn n_pure(c: f64) -> f64 {
     sigmoid((c - C0) / JND)
 }
 
-/// Drab defect head: D(C) = 1 − N_pure(C).
+/// Historical `drab` coordinate: `D(C) = 1 - N_pure(C)`.
 ///
-/// Measures chroma ABSENCE — the complement of the cited chroma-presence gate.
+/// This is the arithmetic complement of the frozen `n_pure` logistic coordinate.
 /// Returns 1.0 for achromatic colours (C ≈ 0, deeply grey/beige) and 0.0 for
-/// strongly chromatic colours (C >> C0).
+/// strongly chromatic colours (C >> C0), but it is not an observer-validated
+/// estimate of dullness, drabness, purity, or any other human judgement.
 ///
 /// Implementation: `1.0 - n_pure(c)` — exact f64 arithmetic complement.
 /// This guarantees `drab(C) + n_pure(C) == 1.0` exactly in IEEE 754, which
@@ -379,7 +395,7 @@ pub fn drab(c: f64) -> f64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Surround-aware оценка дефектов (Zone G)
+// Context-parameterized legacy coordinates (Zone G)
 //
 // Тема снаружи (light / dark / light-ic / dark-ic) маппируется на ViewingConditions
 // по таблице CIECAM16 (Li et al. 2017, Table 1):
@@ -390,21 +406,22 @@ pub fn drab(c: f64) -> f64 {
 //
 // Фон bg_hex даёт яркость Yb (Y-компонент фона в % от D65-белого), которая
 // подставляется в ViewingConditions::srgb_with_yb / dim_surround_with_yb.
-// Это единственный канал влияния фона на дефект — через CAM16 J (apparent lightness)
-// цвета под данным Yb+surround.
+// Это единственный канал влияния фона на legacy coordinate — через CAM16 J
+// цвета под данным Yb+surround. `bg_hex + theme` не описывают полный visual context:
+// отсутствуют spatial distribution, surround variance, geometry, observer и adaptation history.
 //
-// mud и drab считаются на (l_app=J/100, C_oklab, h_oklab):
+// legacy `mud` и `drab` считаются на (l_app=J/100, C_oklab, h_oklab):
 //   - C_oklab, h_oklab — Oklab-координаты исходного цвета (не меняются от surround)
 //   - l_app = J/100 — CAM16 apparent lightness под фоном+темой, нормирован в [0,1]
 //
 // Это заменяет Oklab L в depth_term(l, h) (определяет положение цвета под cusp),
-// делая оценку surround-aware: цвет на тёмном фоне «воспринимается светлее»,
-// лежит ближе к cusp-L и получает меньший depth_term → меньшую грязь.
+// делая координату чувствительной к локальным Yb+theme inputs. Это не полная
+// appearance model и не observer-validated оценка; полный context owner — Issue #230.
 //
 // Ноль новых параметров: все VC-параметры — таблица CIECAM16 (Li et al. 2017).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Тема просмотра — определяет условия окружения (surround) для оценки дефектов.
+/// Compatibility theme input used to select the frozen CAM16 viewing conditions.
 ///
 /// Соответствие CIECAM16 (Li et al. 2017, Table 1):
 /// - `Light` → average surround (F=1.0, c=0.69, Nc=1.0)
@@ -412,13 +429,13 @@ pub fn drab(c: f64) -> f64 {
 /// - `LightIc` / `DarkIc` — то же, но с флагом повышенного контраста
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
-    /// Светлая тема: average surround (CIECAM16 Table 1).
+    /// Light compatibility context: average surround (CIECAM16 Table 1).
     Light,
-    /// Тёмная тема: dim surround (CIECAM16 Table 1).
+    /// Dark compatibility context: dim surround (CIECAM16 Table 1).
     Dark,
-    /// Светлая тема с повышенным контрастом (IC).
+    /// Light compatibility context with the increased-contrast flag (IC).
     LightIc,
-    /// Тёмная тема с повышенным контрастом (IC).
+    /// Dark compatibility context with the increased-contrast flag (IC).
     DarkIc,
 }
 
@@ -466,7 +483,8 @@ impl Theme {
     /// dark-темы — dim, IC-темы поднимают флаг повышенного контраста. Обе
     /// точки входа (дефолтный Yb на границе, Yb-от-фона в контексте дефектов)
     /// обязаны выбирать surround здесь — вторая копия карты в цветовом коде
-    /// расходилась бы тихо при добавлении темы.
+    /// расходилась бы тихо при добавлении темы. Эта карта не утверждает полноту
+    /// perceptual context; она только сохраняет legacy boundary contract.
     fn vc_by(
         self,
         srgb: impl FnOnce() -> crate::spaces::vc::ViewingConditions,
@@ -483,9 +501,11 @@ impl Theme {
     }
 }
 
-/// Контекст просмотра для surround-aware оценки дефектов.
+/// Partial context input for the legacy experimental compatibility proxy.
 ///
-/// Сочетает фон (hex-строка, задаёт яркость Yb) и тему (определяет surround).
+/// Сочетает один фон (hex-строка, задаёт mean Yb) и тему (выбирает CAM16 surround).
+/// Это не полный appearance context: variance, geometry, adaptation history and
+/// observer state отсутствуют. Не использовать как human cleanliness verdict.
 /// Передаётся в `muddiness_in_context` / `drab_in_context`.
 #[derive(Debug, Clone, Copy)]
 pub struct DefectContext<'a> {
@@ -521,7 +541,10 @@ fn vc_for_context(theme: Theme, y_b_pct: f64) -> crate::spaces::vc::ViewingCondi
     )
 }
 
-/// Surround-aware оценка грязи цвета в заданном контексте просмотра.
+/// Compute the legacy experimental compatibility proxy with local Yb+theme inputs.
+///
+/// This is context-parameterized, not fully surround-aware: it does not model
+/// spatial distribution, surround variance, geometry, adaptation history, or observers.
 ///
 /// # Алгоритм
 ///
@@ -530,13 +553,13 @@ fn vc_for_context(theme: Theme, y_b_pct: f64) -> crate::spaces::vc::ViewingCondi
 /// 3. Строим `ViewingConditions` для темы `ctx.theme` с данным Yb (CIECAM16 Table 1).
 /// 4. Из `hex` → XYZ → CAM16 `J` (apparent lightness под фоном+temой).
 /// 5. `l_app = J / 100` — нормированный apparent lightness ∈ [0, 1].
-/// 6. mud = `raw_chromatic(l_app, C_oklab, h_oklab)` — формула без изменений,
+/// 6. legacy proxy = `raw_chromatic(l_app, C_oklab, h_oklab)` — формула без изменений,
 ///    но `l_app` учитывает surround и фон вместо Oklab L.
 ///
 /// # Провенанс
 ///
 /// VC-параметры: CIECAM16, Li et al. 2017, DOI 10.1002/col.22131, Table 1.
-/// Формула mud — без изменений (Zone B slices 3+4; H_Y_DEG, B0, BW цитированы).
+/// Legacy formula is unchanged; provenance statuses are recorded in the empirical inventory.
 pub fn muddiness_in_context(hex: &str, ctx: DefectContext<'_>) -> Result<f64, String> {
     // Oklab-координаты: C и h не зависят от viewing conditions
     let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
@@ -554,16 +577,14 @@ pub fn muddiness_in_context(hex: &str, ctx: DefectContext<'_>) -> Result<f64, St
     Ok(raw_chromatic(l_app, c_oklab, h_oklab).clamp(0.0, 1.0))
 }
 
-/// Surround-aware оценка тусклости цвета в заданном контексте просмотра.
+/// Compute the historical `drab` compatibility coordinate while accepting the same context shape.
 ///
-/// Тусклость `drab(C) = 1 − N_pure(C)` не зависит от lightness — только от
-/// Oklab chroma C, которая инвариантна к surround. Тем не менее функция принимает
-/// контекст для симметрии API и будущего расширения (например, gamut-aware chroma).
+/// `drab(C) = 1 - N_pure(C)` depends only on Oklab chroma C. It is not an
+/// observer-validated dullness estimate. Context is accepted only for API symmetry.
 ///
-/// Возвращает то же значение, что `drab(C_oklab)` — surround-aware путь mud
-/// не меняет drab, только grязь через depth_term зависит от J.
+/// Returns the same value as `drab(C_oklab)`; local context inputs are ignored explicitly.
 pub fn drab_in_context(hex: &str, ctx: DefectContext<'_>) -> Result<f64, String> {
-    // drab зависит только от C_oklab — surround не меняет chroma в Oklab
+    // Historical formula depends only on C_oklab; context is not part of this coordinate.
     let _ = ctx; // принимается для симметрии API
     let rgb = crate::spaces::srgb::srgb_from_hex(hex)?;
     let lab = crate::spaces::oklab::srgb_linear_to_oklab(rgb);
@@ -575,182 +596,64 @@ pub fn drab_in_context(hex: &str, ctx: DefectContext<'_>) -> Result<f64, String>
 mod tests {
     use super::*;
 
-    // ─── Smoke / class-membership reference values ────────────────────────────
-    //
-    // Обновлено в Zone B slice 4 (2026-06-30): W_HUE заменён выведенным Hanning-окном
-    // Бецольда-Брюкке. Диапазон mud значительно расширился: [0, ~0.41] вместо [0.00..0.14].
-    // Это ожидаемо — BB-формула даёт hue_weight ≈ 1.0 в широком тёплом секторе вместо
-    // узкого sigmoid-пика из логистической регрессии W_HUE.
-    //
-    // Ранговый порядок грязности: olive > babypoop > gold2 > gold1 > puke
-    // (прим.: gold2 > gold1 — артефакт подогнанного W_HUE исчез; теперь глубина
-    // под cusp-L побеждает, что физически более верно).
-    //
-    // Класс теста: class A (unit + reference), Фаулер.
-    // TDD: RED до коммита 2 (W_HUE → BB), GREEN после.
-    #[test]
-    fn test_muddiness_v3_reference_values() {
-        // Olive #6B6B2E (Наиболее грязный — максимальный raw)
-        // Провенанс golden: mud = N(C) * hue_weight_BB(h) * depth_mod(L, C, h),
-        // hue_weight_BB(109°) = (1 + cos(109° - 90.4°)) / 2 ≈ 0.974.
-        let olive_mud = muddiness_from_hex("#6B6B2E").unwrap();
-        assert!(
-            olive_mud > 0.30,
-            "olive mud is {olive_mud:.6}, expected > 0.30 (BB-диапазон)"
-        );
-        assert!(
-            (olive_mud - 0.40640072).abs() < 1e-5,
-            "olive mud {olive_mud:.8} != 0.40640072 (Zone B slice 5 H_Y golden)"
-        );
-
-        // Babypoop #937C00 (Очень грязный)
-        // hue_weight_BB(96°) = (1 + cos(96° - 90.4°)) / 2 ≈ 0.998.
-        let babypoop_mud = muddiness_from_hex("#937C00").unwrap();
-        assert!(
-            babypoop_mud > 0.20,
-            "babypoop mud is {babypoop_mud:.6}, expected > 0.20"
-        );
-        assert!(
-            (babypoop_mud - 0.33220155).abs() < 1e-5,
-            "babypoop mud {babypoop_mud:.8} != 0.33220155"
-        );
-
-        // Puke #9AAE07 (Умеренно грязный)
-        let puke_mud = muddiness_from_hex("#9AAE07").unwrap();
-        assert!(
-            (puke_mud - 0.23449461).abs() < 1e-5,
-            "puke mud {puke_mud:.8} != 0.23449461"
-        );
-
-        // Золотые (средний диапазон)
-        let gold1_mud = muddiness_from_hex("#9e6c00").unwrap();
-        assert!(
-            (gold1_mud - 0.29296999).abs() < 1e-5,
-            "gold1 mud {gold1_mud:.8} != 0.29296999"
-        );
-
-        let gold2_mud = muddiness_from_hex("#8f6424").unwrap();
-        assert!(
-            (gold2_mud - 0.30971375).abs() < 1e-5,
-            "gold2 mud {gold2_mud:.8} != 0.30971375"
-        );
-
-        // Ранговый порядок: olive > babypoop > gold2 > gold1 > puke >> achromatic
-        // Примечание: gold2 > gold1 (BB-формула; прежний порядок gold1 > gold2 был
-        // артефактом подогнанного W_HUE, не геометрическим свойством Oklab).
-        assert!(
-            olive_mud > babypoop_mud,
-            "olive должен быть грязнее babypoop: {olive_mud:.6} vs {babypoop_mud:.6}"
-        );
-        assert!(
-            babypoop_mud > gold1_mud && babypoop_mud > gold2_mud,
-            "babypoop должен быть грязнее золотых: {babypoop_mud:.6} vs gold1={gold1_mud:.6} gold2={gold2_mud:.6}"
-        );
-        assert!(
-            gold2_mud > gold1_mud,
-            "gold2 должен быть грязнее gold1 по BB-формуле: gold2={gold2_mud:.8} vs gold1={gold1_mud:.8}"
-        );
-        assert!(
-            gold1_mud > puke_mud && gold2_mud > puke_mud,
-            "золотые должны быть грязнее puke: gold1={gold1_mud:.6} gold2={gold2_mud:.6} vs puke={puke_mud:.6}"
-        );
-
-        // Pure grey #808080 (Чистый — achromatic, N(C) → 0)
-        let grey_mud = muddiness_from_hex("#808080").unwrap();
-        assert!(
-            grey_mud < 0.005,
-            "grey mud is {grey_mud:.6}, expected < 0.005 (N(C) подавляет)"
-        );
-
-        // Teal #008080 (прохладный — b < B0, depth_mod → почти 0)
-        let teal_mud = muddiness_from_hex("#008080").unwrap();
-        assert!(
-            teal_mud < 0.01,
-            "teal mud is {teal_mud:.6}, expected < 0.01 (depth_mod b-гейт)"
-        );
-        assert!(
-            (teal_mud - 0.00430967).abs() < 1e-5,
-            "teal mud {teal_mud:.8} != 0.00430967 (Zone B slice 5 H_Y golden)"
-        );
-
-        // Navy Blue #000080 (Чистый — синий, depth_mod → 0 через b-гейт)
-        let navy_mud = muddiness_from_hex("#000080").unwrap();
-        assert!(
-            navy_mud < 0.001,
-            "navy mud is {navy_mud:.8}, expected < 0.001"
-        );
-    }
-
     // ─── Characterization golden test (Zone B slice 4, Fowler class B) ─────────
     //
-    // Фиксирует таблицу mud(L,C,h) после замены W_HUE на Hanning-окно BB.
-    // mud = N(C) * hue_weight_BB(h) * depth_mod(L, C, h)
-    //   где hue_weight_BB(h) = (1 + cos(h − H_Y_DEG)) / 2
+    // Фиксирует таблицу legacy coordinate после замены W_HUE на Hanning-эвристику.
+    // mud = N(C) * hue_weight(h) * depth_mod(L, C, h)
+    //   где hue_weight(h) = (1 + cos(h - H_Y_DEG)) / 2
     //
     // Golden-значения получены из фактического кода после коммита 2 (Zone B slice 4)
     // и зафиксированы как regression anchor.  Tolerance: ±5e-6 (точность f64).
     //
     // Класс теста: B (characterization/golden, Фаулер) — якорь регрессии.
     // История: Zone B slice 3 (Platt-удаление) имела диапазон [0.00..0.14];
-    //          Zone B slice 4 (BB-замена) расширила до [0.00..0.41] — ожидаемо
-    //          (hue_weight_BB ≈ 1.0 шире, чем узкий sigmoid-пик W_HUE).
+    //          Zone B slice 4 (Hanning-замена) расширила до [0.00..0.41].
     #[test]
-    fn characterization_mud_golden_cited() {
+    fn characterization_proxy_golden() {
         struct Case {
             hex: &'static str,
-            label: &'static str,
             expected: f64,
         }
-        // Значения = muddiness_oklch(l,c,h) (BB-путь, Zone B slice 4)
+        // Значения = muddiness_oklch(l,c,h) (frozen compatibility path).
         let cases = [
             Case {
                 hex: "#6B6B2E",
-                label: "olive",
                 expected: 0.40640072,
             },
             Case {
                 hex: "#937C00",
-                label: "babypoop",
                 expected: 0.33220155,
             },
             Case {
                 hex: "#9AAE07",
-                label: "puke",
                 expected: 0.23449461,
             },
             Case {
                 hex: "#9e6c00",
-                label: "gold1",
                 expected: 0.29296999,
             },
             Case {
                 hex: "#8f6424",
-                label: "gold2",
                 expected: 0.30971375,
             },
             Case {
                 hex: "#808080",
-                label: "grey",
                 expected: 0.00125988,
             },
             Case {
                 hex: "#008080",
-                label: "teal",
                 expected: 0.00430967,
             },
             Case {
                 hex: "#000080",
-                label: "navy",
                 expected: 0.00000000,
             },
             Case {
                 hex: "#FF0000",
-                label: "red",
                 expected: 0.00133634,
             },
             Case {
                 hex: "#0000FF",
-                label: "blue",
                 expected: 0.00000000,
             },
         ];
@@ -758,8 +661,7 @@ mod tests {
             let got = muddiness_from_hex(c.hex).unwrap();
             assert!(
                 (got - c.expected).abs() < 5e-6,
-                "characterization_mud_golden_cited: {} {}: got={:.8} expected={:.8} delta={:.2e}",
-                c.label,
+                "characterization_proxy_golden: {}: got={:.8} expected={:.8} delta={:.2e}",
                 c.hex,
                 got,
                 c.expected,
@@ -912,71 +814,59 @@ mod tests {
         );
     }
 
-    // ─── Zone B slice 4: W_HUE absent + Бецольд-Брюкке инварианты (TDD RED-first) ──
+    // ─── Zone B slice 4: W_HUE absent + Hanning invariants (TDD RED-first) ──
     //
-    // Три теста закрывают КЛАСС дефектов: «подогнанный вектор вместо выведенной формулы».
+    // Тесты закрывают класс дефектов: fitted vector вместо frozen parameter-free formula.
     //
     // (1) w_hue_fitted_vector_absent_from_shipping — RED: `pub static W_HUE` ещё
     //     существует в продуктивном коде (и hue_basis, hue_weight ещё опираются на него).
     //     GREEN после коммита 2: W_HUE убран, hue_weight переписан.
     //
-    // (2) bezold_brucke_at_unique_yellow_is_one — RED: текущий hue_weight(97°) ≈ 0.2
-    //     (sigmoid(dot(W_HUE, basis(97°))) ≠ 1.0).  GREEN после коммита 2:
-    //     выведенная формула (1 + cos(0)) / 2 == 1.0 точно.
+    // (2) hanning_at_reference_hue_is_one — formula equals 1 at its frozen centre.
     //
-    // (3) bezold_brucke_at_opposite_is_zero — RED: текущий hue_weight(277°) ≈ 0.015
-    //     (sigmoid(dot) ≠ 0.0).  GREEN после коммита 2:
-    //     (1 + cos(π)) / 2 == 0.0 точно.
+    // (3) hanning_at_opposite_hue_is_zero — formula equals 0 at the opposite hue.
     //
-    // (4) bezold_brucke_monotone_from_unique_yellow — RED: текущая формула не является
-    //     Hanning-окном и нарушает монотонное убывание от h_Y по обе стороны.
-    //     GREEN после коммита 2: cos(δ) монотонно убывает при |δ| растёт от 0 до π.
+    // (4) hanning_monotone_from_reference_hue — cosine decreases as |delta| grows.
     //
-    // Класс багов: fitted-вектор не имеет гарантированных инвариантов hue_weight(h_Y) = 1,
-    // hue_weight(h_Y + 180°) = 0 и монотонности; выведенная формула доказывает их аналитически.
+    // The invariants are mathematical only; they do not validate observer semantics.
     //
-    // Провенанс:
-    //   H_Y_DEG = 90.4011° — Oklab hue уникального жёлтого (λ=578nm, CIE 1931 2° наблюдатель,
-    //   D65).  Derivation (slice 5): CMF при 578nm — линейная интерполяция CIE 5нм-таблицы
+    // Arithmetic provenance:
+    //   H_Y_DEG = 90.4011° — Oklab hue of the selected λ=578nm reference using
+    //   CIE 1931 2° CMFs. Derivation (slice 5): linear interpolation of the 5nm table
     //   (575nm: 0.8425/0.9154/0.0018; 580nm: 0.9163/0.8700/0.00165) → (0.886780, 0.888160,
     //   0.001710), → XYZ/Y = (0.998446, 1, 0.001925), → Oklab напрямую (Ottosson 2020, M1/M2;
     //   hue инвариантен к радиансности, sRGB-клэмп не нужен и не hue-сохраняющ),
     //   → atan2(b, a) = 90.4011°. Неопределённость 5нм-интерполяции: ±0.01°
     //   (1нм-таблица CIE даёт 90.3925° — расхождение 0.009°, на 4 порядка ниже
     //   ширины Hanning-окна; центр объявлен по официальной 5нм-таблице).
-    //   Формула (1 + cos(h − h_Y)) / 2 — Hanning-окно, выведенное из производной
-    //   поворота Бецольда-Брюкке: dΔH_BB/dh = A_BB · cos(h − h_Y), нормированная
-    //   в [0, 1].  Цитаты: Purdy (1937) Am. J. Psychol. 49, 313–315 (инвариант 578nm);
-    //   Jacobs & Wascher (1967) J. Opt. Soc. Am. 57, 1155–1156.
+    //   This arithmetic does not establish a universal unique-yellow observer point.
+    //   The Hanning formula is a heuristic and is not derived from Bezold-Brucke.
 
     #[test]
     fn w_hue_fitted_vector_absent_from_shipping() {
         // RED пока pub static W_HUE присутствует в продуктивном коде.
-        // GREEN после замены на выведенную BB-формулу.
+        // GREEN после замены на frozen Hanning formula.
         let source = include_str!("cleanliness.rs");
         let prod_code = source.split("#[cfg(test)]").next().unwrap_or(source);
         assert!(
             !prod_code.contains("pub static W_HUE"),
             "pub static W_HUE найден в продуктивном коде — подогнанный вектор (M-12) не удалён. \
-             Ожидается выведенная формула Бецольда-Брюкке."
+             Ожидается frozen Hanning formula."
         );
         // Дополнительно: hue_basis (вспомогательная функция для dot-product) тоже должна уйти
         assert!(
             !prod_code.contains("fn hue_basis("),
             "fn hue_basis( найдена в продуктивном коде — K=3 Фурье-базис больше не нужен \
-             после перехода на BB-формулу."
+             после перехода на Hanning formula."
         );
     }
 
     #[test]
-    fn bezold_brucke_at_unique_yellow_is_one() {
+    fn hanning_at_reference_hue_is_one() {
         // Hanning-окно: (1 + cos(h − h_Y)) / 2 == 1.0 точно при h == h_Y.
-        // RED: текущий sigmoid(dot(W_HUE, basis(H_Y_DEG))) ≠ 1.0.
-        // GREEN: выведенная BB-формула гарантирует (1 + cos(0)) / 2 == 1.0.
+        // The frozen formula guarantees (1 + cos(0)) / 2 == 1.0.
         //
-        // Значение H_Y_DEG определяется из CIE 1931 2° (D65) → derivation в
-        // комментарии к тест-блоку выше.  Мы тестируем через публичный `hue_weight`:
-        // если формула выведена верно, hue_weight(H_Y_DEG) == 1.0 ТОЧНО (не ≈).
+        // H_Y_DEG is the selected arithmetic reference documented above.
         let hw = hue_weight(H_Y_DEG);
         assert_eq!(
             hw, 1.0,
@@ -986,10 +876,9 @@ mod tests {
     }
 
     #[test]
-    fn bezold_brucke_at_opposite_is_zero() {
+    fn hanning_at_opposite_hue_is_zero() {
         // Hanning-окно: (1 + cos(π)) / 2 == 0.0 ТОЧНО при h == h_Y + 180°.
-        // RED: текущий sigmoid(dot) ≈ 0.015, не равен 0.0.
-        // GREEN: выведенная формула гарантирует нулевой вес на противоположном оттенке.
+        // The frozen formula guarantees zero at the opposite hue.
         let hw = hue_weight(H_Y_DEG + 180.0);
         assert_eq!(
             hw,
@@ -1001,10 +890,9 @@ mod tests {
     }
 
     #[test]
-    fn bezold_brucke_monotone_from_unique_yellow() {
+    fn hanning_monotone_from_reference_hue() {
         // Hanning-окно строго монотонно убывает при |δ| растёт от 0 до π.
-        // RED: текущая sigmoid(dot(W_HUE,...)) — не монотонное Hanning-окно.
-        // GREEN: (1 + cos(δ)) / 2 монотонно убывает по обе стороны от h_Y.
+        // (1 + cos(delta)) / 2 decreases on both sides of its reference hue.
         //
         // Тест: для 360 равномерных шагов δ от 0 до 180° включительно,
         // hue_weight(h_Y + δ) должен строго убывать.
@@ -1038,69 +926,34 @@ mod tests {
         }
     }
 
-    // ─── Provenance-range guard (Zone B, Fowler class A — property test) ─────
+    // ─── Zone G: local-context sensitivity tests (Fowler class A) ─────────────
     //
-    // Asserts B0 lies in [0.030, 0.044] and BW lies in [0.013, 0.020] — the
-    // cited-measured ranges (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014
-    // PNAS; Boynton 1975).  This test was RED against the pre-swap fitted
-    // values (B0=0.02869 < 0.030, BW=0.02024 > 0.020) and turned GREEN after
-    // the swap — proving it bites (TDD RED-first; verified in git history as
-    // the compile-failing state at commit 1 HEAD).
-    //
-    // Uses `const { assert!(..) }` so the range check is enforced at COMPILE
-    // TIME (clippy::assertions_on_constants, Rust ≥1.96).  A future constant
-    // edit outside the cited range will be caught at `cargo build`, not just
-    // at test time.
-    #[test]
-    fn provenance_range_guard_b0_bw() {
-        const {
-            assert!(
-                B0 >= 0.030 && B0 <= 0.044,
-                "B0 is outside the cited range [0.030, 0.044] \
-             (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975). \
-             M-04 must be cited-measured."
-            )
-        };
-        const {
-            assert!(
-                BW >= 0.013 && BW <= 0.020,
-                "BW is outside the cited range [0.013, 0.020] \
-             (Newhall-Nickerson-Judd 1943; Lindsey-Brown 2014 PNAS; Boynton 1975). \
-             M-05 must be cited-measured."
-            )
-        };
-    }
-
-    // ─── Zone G: surround-aware кейс-тесты (Fowler class A, TDD RED-first) ────
-    //
-    // Условие успеха (Зона G exit-criteria):
-    //   (1) Серый (#808080) на пастельном фоне (#FFE4E1) даёт более высокую грязь,
-    //       чем тот же серый на нейтральном (#808080) — разница строго по знаку.
-    //   (2) Тёмный розовый (#C2185B) на чёрном фоне (#000000) даёт более низкую грязь,
-    //       чем тот же цвет на белом фоне (#FFFFFF) — направление дельты строго.
+    // Characterization contract: changing the supplied Yb+theme inputs changes
+    // CAM16 J and therefore the frozen proxy in the recorded directions.
+    // This proves wiring and regression sensitivity, not human cleanliness truth
+    // or completeness of the visual context model.
     //
     // Почему тест кусается (mutation-bite):
-    //   Если заменить l_app = J/100 на l_app = Oklab-L (т.е. убрать surround-aware путь),
+    //   Если заменить l_app = J/100 на l_app = Oklab-L (убрать local-context path),
     //   оба теста провалятся: без учёта Yb фона CAM16 J не меняется при смене bg_hex,
     //   поэтому muddiness_in_context вернёт одинаковое значение для обоих фонов.
     //
     // TDD RED-first: до добавления `muddiness_in_context` в файл эти тесты не
     // компилировались (функция не существовала) — RED доказан структурно.
     //
-    // Провенанс: параметры CAM16 — Li et al. 2017 Table 1 (cited); mud-формула —
-    // Zone B slices 3+4 (BB Hanning, B0/BW, C0/JND — все cited).
+    // CAM16 viewing-condition parameters: Li et al. 2017 Table 1. Legacy proxy
+    // parameter statuses are separate and recorded in the empirical inventory.
 
     use super::{DefectContext, Theme, drab_in_context, muddiness_in_context};
 
-    /// Серый на пастельном фоне грязнее, чем тот же серый на нейтральном.
+    /// The frozen proxy is higher for #808080 with the supplied pastel background.
     ///
-    /// Физика: пастельный фон (#FFE4E1, Yb≈82%) повышает адаптацию → сдвигает
-    /// CAM16 J серого (#808080, Yb≈22%) вниз от cusp-L → depth_term растёт →
-    /// mud растёт. На нейтральном фоне (#808080, Yb≈22%) адаптация стандартная.
+    /// In this partial model, #FFE4E1 supplies a higher Yb than #808080, changing
+    /// CAM16 J and the geometric depth input. No observer judgement is asserted.
     ///
     /// Направление дельты: mud_on_pastel > mud_on_neutral — строго.
     #[test]
-    fn grey_on_pastel_is_muddier_than_grey_on_neutral() {
+    fn proxy_for_grey_is_higher_with_pastel_yb_than_neutral_yb() {
         let grey = "#808080";
         let pastel_bg = "#FFE4E1"; // розово-белёсый, Yb≈82%
         let neutral_bg = "#808080"; // нейтральный серый, Yb≈22%
@@ -1125,22 +978,19 @@ mod tests {
 
         assert!(
             mud_on_pastel > mud_on_neutral,
-            "Серый на пастельном фоне должен быть грязнее, чем на нейтральном: \
-             mud_on_pastel={mud_on_pastel:.6} должно быть > mud_on_neutral={mud_on_neutral:.6}. \
-             Если равны — surround-aware путь не работает (J не учитывает Yb фона)."
+            "local-context proxy ordering changed: pastel={mud_on_pastel:.6} \
+             must be > neutral={mud_on_neutral:.6}; equality means Yb no longer reaches CAM16 J"
         );
     }
 
-    /// Тёмный розовый чист (низкая грязь) на чёрном и грязнее на белом.
+    /// The frozen proxy is lower for #C2185B with black than with white inputs.
     ///
-    /// Физика: на белом фоне (#FFFFFF, Yb≈100%) CAM16 J тёмного розового (#C2185B)
-    /// ниже, чем на чёрном (#000000, Yb≈0.5%), — он выглядит тёмным относительно
-    /// светлого окружения, глубже под cusp-L → depth_term растёт → mud растёт.
-    /// На чёрном фоне адаптация к темноте, J цвета выше → depth_term меньше → mud меньше.
+    /// In this partial model the two Yb+theme inputs produce different CAM16 J
+    /// and geometric depth values. No human clean/dirty direction is asserted.
     ///
     /// Направление дельты: mud_on_black < mud_on_white — строго.
     #[test]
-    fn dark_pink_is_cleaner_on_black_than_on_white() {
+    fn proxy_for_dark_pink_is_lower_with_black_input_than_white_input() {
         let dark_pink = "#C2185B"; // тёмно-розовый (Material Design Pink 800)
         let black_bg = "#000000";
         let white_bg = "#FFFFFF";
@@ -1165,19 +1015,18 @@ mod tests {
 
         assert!(
             mud_on_black < mud_on_white,
-            "Тёмный розовый должен быть чище (меньше грязи) на чёрном фоне, чем на белом: \
-             mud_on_black={mud_on_black:.6} должно быть < mud_on_white={mud_on_white:.6}. \
-             Если равны — surround-aware путь не работает."
+            "local-context proxy ordering changed: black={mud_on_black:.6} \
+             must be < white={mud_on_white:.6}; equality means context no longer reaches the formula"
         );
     }
 
-    /// Mutation-bite: подмена l_app на фиксированное значение (убираем surround-aware путь)
+    /// Mutation-bite: replacing l_app with a fixed value removes local-context sensitivity
     /// должна РОНЯТЬ первый кейс-тест. Проверяем здесь что тест различает два значения.
     ///
     /// Реализация: вычисляем mud дважды — с пастельным и нейтральным фоном.
     /// Разница строго ненулевая → epsilon-тест подтверждает укус.
     #[test]
-    fn surround_aware_mud_differs_across_backgrounds_epsilon() {
+    fn compatibility_proxy_differs_across_local_background_inputs() {
         let grey = "#808080";
         let pastel_bg = "#FFE4E1";
         let neutral_bg = "#808080";
@@ -1202,19 +1051,20 @@ mod tests {
         // Разница должна быть не менее 1e-4 — иначе тест не кусается
         assert!(
             (mud_pastel - mud_neutral).abs() > 1e-4,
-            "surround-aware mud разница < 1e-4: pastel={mud_pastel:.8} neutral={mud_neutral:.8} \
+            "local-context proxy delta < 1e-4: pastel={mud_pastel:.8} neutral={mud_neutral:.8} \
              delta={:.2e} — тест не кусается (mutation-bite провален).",
             (mud_pastel - mud_neutral).abs()
         );
     }
 
-    /// API-test: drab_in_context принимает контекст и возвращает то же значение, что drab(C).
+    /// API-test: `drab_in_context` preserves the context-independent legacy coordinate.
     ///
-    /// Тест закрывает класс: drab не должен молча игнорировать контекст и возвращать ноль.
+    /// The boundary accepts context for compatibility, ignores it explicitly, and must not
+    /// fabricate zero instead of returning the historical arithmetic result.
     #[test]
     fn drab_in_context_matches_bare_drab() {
         use super::n_pure;
-        let hex = "#937C00"; // babypoop — умеренная хрома
+        let hex = "#937C00"; // frozen conformance fixture
 
         let ctx_light = DefectContext {
             bg_hex: "#FFFFFF",
@@ -1243,21 +1093,20 @@ mod tests {
         assert_eq!(
             d_light + n_pure(c_oklab),
             1.0,
-            "drab_in_context(babypoop) + n_pure должно быть ровно 1.0 (D+N=1 инвариант)"
+            "drab_in_context({hex}) + n_pure должно быть ровно 1.0 (D+N=1 инвариант)"
         );
-        // babypoop (#937C00) — сильно хроматический цвет: C >> C0=0.0395,
-        // поэтому drab(C) = 1 - N_pure(C) ≈ 0 (т.е. < 0.1 — почти нет тусклости).
+        // For this fixture C >> C0, so the frozen arithmetic complement is < 0.1.
         assert!(
             d_light < 0.1,
-            "drab_in_context(babypoop) = {d_light:.6} ожидается < 0.1 \
-             (babypoop сильно хроматичен, drab → 0)"
+            "drab_in_context({hex}) = {d_light:.6} ожидается < 0.1 \
+             (fixture C >> C0, so the compatibility coordinate approaches 0)"
         );
     }
 
     /// IC-тема компилируется и возвращает корректный результат.
     #[test]
     fn ic_themes_compile_and_return_finite_value() {
-        let hex = "#6B6B2E"; // olive
+        let hex = "#6B6B2E"; // frozen conformance fixture
         let ctx_lic = DefectContext {
             bg_hex: "#FFFFFF",
             theme: Theme::LightIc,

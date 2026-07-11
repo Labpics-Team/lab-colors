@@ -9,11 +9,12 @@
 // внутри солвера, и без параллельной копии физики контраста.
 //
 // Что уже закрыто в другом месте (НЕ дублируем):
-// - core `oklch.rs::round_trip_is_byte_exact_*` — emit↔parse байт-точны на КУБЕ;
+// - core `oklch.rs::round_trip_is_byte_exact_*` — emit↔parse байт-точны на
+//   решётке шага 5 и полном сером ramp (не объявлен полный куб);
 // - `oklch-parse.test.mjs` — parseCssColor декодит эмиссию на 16 фикстурах;
 // - core `property_invariants.rs::every_floored_role_clears_its_wcag_floor…` —
 //   пол на СОБСТВЕННОМ hex солвера (не на репарснутой строке);
-// - wasm `wasm_parity.rs` — граница == нативный резолв, роль-в-роль.
+// - wasm `wasm_parity.rs` — JS-граница == core-оракул внутри того же wasm runtime.
 // Дыра: КОМПОЗИЦИЯ этих доказательств на ЖИВОМ корпусе ролей — «цвет, который
 // браузер соберёт из emitted vars, всё ещё проходит свой пол/таргет» — как
 // единая цепочка, а не транзитивность двух изолированных проверок. Для
@@ -25,6 +26,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { initSync, LabColors } from "../pkg/labcolors.js";
+import { applyTheme } from "../apply-theme.js";
 import { parseCssColor, compositeOver, toHex } from "../effective-bg.js";
 
 // Инициализация wasm в node: pkg собран под `--target web` (fetch по URL), а в
@@ -33,13 +35,6 @@ import { parseCssColor, compositeOver, toHex } from "../effective-bg.js";
 initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
 });
-
-/// Максимальная поканальная дельта двух `#RRGGBB` в LSB (8-бит ступенях).
-function channelDelta(hexA, hexB) {
-  const a = parseCssColor(hexA);
-  const b = parseCssColor(hexB);
-  return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]));
-}
 
 // Замороженный SSOT-паспорт labui — тот же, что читает wasm-parity. Единый вход
 // и для движка, и для декларации алиасов ниже, чтобы стороны не разошлись.
@@ -123,39 +118,13 @@ test("legality survives serialization: each solid role's emitted var reparses to
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ЛЕГАЛЬНОСТЬ НАСКВОЗЬ — полупрозрачные роли (композит, как его соберёт браузер)
+// ЛЕГАЛЬНОСТЬ НАСКВОЗЬ — полупрозрачные роли (encoded-sRGB8 reference)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// НАХОДКА (репро ниже, зафиксирована в PR; причина заземлена на исходники
-// labcolors-core): для 3 из 1699 полупрозрачных сэмплов корпуса (все — тинт
-// #C0B2FA при низкой α над чистым чёрным в dark-ic) композит, СОБРАННЫЙ
-// браузером из эмитированной строки, расходится с движковым `compositeHex`
-// ровно на 1 LSB (#17161F vs #17161E и т.п.).
-// ПРИЧИНА — РАЗНОЕ ПРОСТРАНСТВО АРИФМЕТИКИ, не потеря точности тинта: тинт
-// КВАНТУЕТСЯ в 8 бит В ОБОИХ путях (semantic.rs:1977 `quantise_encoded` ДО
-// `composite_over_encoded`), α одна. Но движок композитит в нормализованном
-// encoded-[0,1] (`α·(byte/255)`), затем hex_from_srgb_encoded делает `·255·round`
-// (srgb.rs:196); браузер (`compositeOver`) — в 0–255 (`α·byte`). На α·byte ровно
-// = 30.5 (тинт-канал 250, α=0.122): движок `0.122·(250/255)·255 = 30.4999… →
-// round → 30` (#…1E), браузер `250·0.122 = 30.5 → round → 31` (#…1F). Округление
-// точной половины расходится, потому что ÷255·255 стягивает 30.5 к 30.4999.
-// Следствие: обещанный `compositeHex`/Lc/WCAG считаны в другом пространстве,
-// чем то, что реально отрендерит браузер (суб-JND, но реальный выходной gap).
-// Живёт в эмиссии labcolors-core — не чиним здесь (зона солвера), фиксируем
-// границей. Возможный фикс ядра: композитить в том же (байтовом) пространстве,
-// что и браузер, — тогда обещанное == отрендеренное. Инвариант ниже строгий на
-// том, что ЭМИССИЯ СТРОКИ (тинт/α) ничего не теряет побайтно, и держит композит
-// в истинной границе ≤1 LSB — дрейф ≥2 LSB или потеря тинта/α упадёт RED.
-const COMPOSITE_QUANT_LSB = 1;
-// Известная верхняя граница числа расхождений на текущем корпусе (THEMES×
-// BACKGROUNDS×паспорт). Пин: разрастание gap (в другие темы/фоны/роли) поднимет
-// число выше и упадёт RED — характеризация защищает и КОЛИЧЕСТВО, и ЛОКАЦИЮ.
-// Волна 1 (закон категориальных зон) сменила info-сентимент с пурпура на синий
-// фокус — прежние 3 near-black dark-ic расхождения исчезли, осталась РОВНО 1
-// benign ≤1-LSB точка (см. локацию ниже). Число снижено 3 → 1.
-const KNOWN_COMPOSITE_DIVERGENCES = 1;
-
-test("translucent serialization fidelity: emitted tint+alpha round-trip exactly; browser composite matches the promise within the ≤1-LSB quantization bound", () => {
+// Численный контракт здесь — encoded-sRGB8 source-over reference, реализованный
+// штатным consumer-кодом. Это проверка единства engine↔package, а не заявление,
+// что любой renderer без явно заданного color-management профиля совпадёт с ним.
+test("translucent serialization fidelity: emitted tint+alpha, reference composite and reported metrics agree exactly", () => {
   const e = engine();
   let translucentChecked = 0;
 
@@ -185,18 +154,20 @@ test("translucent serialization fidelity: emitted tint+alpha round-trip exactly;
           role.tintHex,
           `${theme}/${bg}/${key}: reparsed tint != reported tintHex (serialization loss)`,
         );
-        // HARD: α реконструируется в пределах точности эмиссии (4 знака).
+        // Вычисленная α — часть сертификата композита: строка обязана вернуть
+        // тот же binary64, а не близкое округлённое значение.
         assert.ok(
-          Math.abs(alpha - role.alpha) < 5e-5,
-          `${theme}/${bg}/${key}: reparsed alpha ${alpha} drifted from ${role.alpha}`,
+          Object.is(alpha, role.alpha),
+          `${theme}/${bg}/${key}: reparsed alpha ${alpha} != reported ${role.alpha}`,
         );
 
-        // Композит, собранный браузером из ЭМИТИРОВАННОГО тинта, — в истинной
-        // границе ≤1 LSB от обещанного (см. находку выше). Дрейф ≥2 = регрессия.
+        // Reference-композит из эмитированных значений обязан совпасть с
+        // сертификатом побайтно: допуск скрыл бы другой цвет и другие метрики.
         const compHex = toHex(compositeOver(parsed, [bgParsed[0], bgParsed[1], bgParsed[2], 1]));
-        assert.ok(
-          channelDelta(compHex, role.compositeHex) <= COMPOSITE_QUANT_LSB,
-          `${theme}/${bg}/${key}: composite ${compHex} drifts >${COMPOSITE_QUANT_LSB} LSB from promised ${role.compositeHex}`,
+        assert.equal(
+          compHex,
+          role.compositeHex,
+          `${theme}/${bg}/${key}: reference composite ${compHex} != promised ${role.compositeHex}`,
         );
 
         // Самосогласованность движка: перепроверка ЕГО ЖЕ compositeHex
@@ -214,58 +185,6 @@ test("translucent serialization fidelity: emitted tint+alpha round-trip exactly;
     }
   }
   assert.ok(translucentChecked > 0, "no translucent roles exercised — sweep is vacuous");
-});
-
-// Характеризация НАХОДКИ: пин ТЕКУЩЕГО поведения по трём осям — ВЕЛИЧИНА (≤1 LSB),
-// КОЛИЧЕСТВО (≤ известного) и ЛОКАЦИЯ (единственная info-заливка light-ic/#FFFFFF;
-// Волна 1 сместила её с near-black dark-ic). Тест НЕ узаконивает баг:
-//   • починят движок (композит в байтовом пространстве) → расхождения исчезнут,
-//     `divergent.length > 0` упадёт → форс-ревью;
-//   • разрастётся gap (другие темы/фоны/роли или >1 LSB) → величина/количество/
-//     локация превысят пин → RED.
-// Без пина количества и локации регрессия, размазавшая тот же ≤1-LSB зазор на
-// сотню сэмплов или в light-темы, прошла бы зелёной — находка тихо сгнила бы.
-test("characterization: the composite quantization gap is real, bounded to ≤1 LSB, count-capped, and confined to the light-ic info fill (pins current behaviour)", () => {
-  const e = engine();
-  let maxObservedDelta = 0;
-  const divergent = [];
-  for (const theme of THEMES) {
-    for (const bg of BACKGROUNDS) {
-      const res = e.resolveTheme(bg, theme);
-      const bgP = parseCssColor(bg);
-      for (const [key, role] of Object.entries(res.roles)) {
-        if (role.kind !== "translucent") continue;
-        const parsed = parseCssColor(res.vars[role.cssVar]);
-        const compHex = toHex(compositeOver(parsed, [bgP[0], bgP[1], bgP[2], 1]));
-        const d = channelDelta(compHex, role.compositeHex);
-        maxObservedDelta = Math.max(maxObservedDelta, d);
-        if (d > 0) divergent.push(`${theme}/${bg}/${key}`);
-      }
-    }
-  }
-  // ВЕЛИЧИНА: никогда больше 1 LSB.
-  assert.ok(maxObservedDelta <= 1, `composite quantization gap exceeded 1 LSB: ${maxObservedDelta}`);
-  // СУЩЕСТВОВАНИЕ: расхождение реально сегодня (иначе движок, вероятно, починили).
-  assert.ok(
-    divergent.length > 0,
-    "composite gap no longer reproduces — engine may compose in byte space now; revisit the PR finding",
-  );
-  // КОЛИЧЕСТВО: не больше известной верхней границы — разрастание gap → RED.
-  assert.ok(
-    divergent.length <= KNOWN_COMPOSITE_DIVERGENCES,
-    `composite gap spread: ${divergent.length} divergences > known ${KNOWN_COMPOSITE_DIVERGENCES} — ${divergent.join(", ")}`,
-  );
-  // ЛОКАЦИЯ: единственное расхождение — низкоальфовая info-заливка на белом в
-  // light-ic (`fill-info-quaternary`, α≈0.02). Волна 1 (закон категориальных зон)
-  // сменила info-сентимент с пурпура на синий фокус — та же природа зазора
-  // (8-бит квантование браузерного композита), новая точка от нового цвета.
-  // Утечка в другую роль/тему/фон = смена природы находки → форс-ревью.
-  for (const loc of divergent) {
-    assert.ok(
-      loc === "light-ic/#FFFFFF/fill-info-quaternary",
-      `composite gap escaped the known info-fill point: ${loc}`,
-    );
-  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,22 +209,104 @@ test("glow roles emit halo primary + -core/-alpha satellites, all well-formed", 
           `${theme}/${bg}/${key}: primary var must mirror halo css`,
         );
         assert.ok(parseCssColor(res.vars[role.cssVar]), `${theme}/${bg}/${key}: halo must parse`);
+        assert.equal(
+          toHex(rgb(parseCssColor(res.vars[role.cssVar]))),
+          role.haloHex,
+          `${theme}/${bg}/${key}: halo css must reconstruct haloHex`,
+        );
 
         // Сателлит -core: валидная oklch-строка.
         const core = res.vars[`${role.cssVar}-core`];
         assert.ok(core && parseCssColor(core), `${theme}/${bg}/${key}: -core must be valid oklch`);
+        assert.equal(
+          toHex(rgb(parseCssColor(core))),
+          role.coreHex,
+          `${theme}/${bg}/${key}: core css must reconstruct coreHex`,
+        );
 
-        // Сателлит -alpha: конечное число в (0,1].
+        // Сателлит -alpha — буквальный SSOT, не повторное округление числа.
         const alphaVar = res.vars[`${role.cssVar}-alpha`];
         const a = Number(alphaVar);
         assert.ok(
           Number.isFinite(a) && a > 0 && a <= 1,
           `${theme}/${bg}/${key}: -alpha must be a number in (0,1]: ${alphaVar}`,
         );
+        assert.equal(alphaVar, role.alphaCss, `${theme}/${bg}/${key}: alpha var != alphaCss`);
+        assert.ok(Object.is(a, role.alpha), `${theme}/${bg}/${key}: alpha lost binary64 bits`);
+
+        assert.equal(role.constraintLayer, "halo");
+        assert.equal(role.compositeProfile, "encoded-srgb8-screen-v1");
+        assert.equal(role.compositeGuarantee, "bit-exact");
+        assert.equal(role.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
+        assert.equal(role.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+        assert.equal(role.selectionDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+        assert.equal(role.decisionProfile, "legacy-platform-dependent-v1");
+        assert.deepEqual(role.decisionGuarantee, {
+          kind: "legacy-platform-dependent-v1",
+        });
+        assert.ok(["legacy-reached", "legacy-unreachable"].includes(role.targetStatus));
+        assert.equal(role.degraded, role.targetStatus === "legacy-unreachable");
+        assert.ok(Object.is(role.achievedDj, role.haloAchievedDj));
+        if (role.targetStatus === "legacy-reached") {
+          assert.ok(role.haloAchievedDj >= role.targetDj);
+        } else {
+          assert.ok(role.haloAchievedDj < role.targetDj);
+        }
+
+        // Оба поля — point-reference замеры ИЗОЛИРОВАННЫХ слоёв. Полный
+        // spatial stack без геометрии здесь намеренно не реконструируется.
+        const [br, bgc, bb] = parseCssColor(bg);
+        const screenHex = (layerCss) => {
+          const [lr, lg, lb] = parseCssColor(layerCss);
+          // Тот же конечный byte-reference, что у ядра: нормализация
+          // byte/255 перед обратным умножением сдвигает точные half-tie.
+          const channel = (background, layer) =>
+            background + a * layer * (255 - background) / 255;
+          return toHex([channel(br, lr), channel(bgc, lg), channel(bb, lb)]);
+        };
+        assert.equal(screenHex(res.vars[role.cssVar]), role.haloCompositeHex);
+        assert.equal(screenHex(core), role.coreCompositeHex);
       }
     }
   }
   assert.ok(glowChecked > 0, "no glow roles exercised — passport should carry glows");
+});
+
+test("stable glow indeterminate emits no fallback vars and clears previous legacy satellites", () => {
+  const legacy = engine().resolveTheme("#101012", "dark");
+  assert.ok(legacy.vars["--lab-fx-glow-brand"]);
+
+  const stablePassport = structuredClone(PASSPORT_OBJ);
+  const brandGlow = stablePassport.roles.find(({ name }) => name === "fx-glow-brand");
+  assert.ok(brandGlow, "anti-vacuum: passport must contain fx-glow-brand");
+  brandGlow.recipe.decision_profile = "stable-v1";
+  const stableEngine = new LabColors();
+  stableEngine.loadConfig(JSON.stringify(stablePassport));
+  const stable = stableEngine.resolveTheme("#101012", "dark");
+  const role = stable.roles["fx-glow-brand"];
+  assert.equal(role.kind, "glow-indeterminate");
+  assert.equal(role.numericalSiteId, "glow-target-or-maximum-v1");
+  assert.equal(role.reason, "sound-bound-unavailable");
+  assert.equal(role.bounds.kind, "unavailable");
+  for (const key of [role.cssVar, `${role.cssVar}-core`, `${role.cssVar}-alpha`]) {
+    assert.equal(stable.vars[key], undefined, `${key}: no implicit legacy fallback`);
+  }
+
+  const props = new Map();
+  const element = {
+    style: {
+      get length() { return props.size; },
+      item(index) { return [...props.keys()][index] ?? ""; },
+      setProperty(key, value) { props.set(key, value); },
+      removeProperty(key) { props.delete(key); },
+    },
+  };
+  applyTheme(element, legacy);
+  assert.ok(props.has("--lab-fx-glow-brand-alpha"));
+  applyTheme(element, stable);
+  assert.ok(!props.has("--lab-fx-glow-brand"));
+  assert.ok(!props.has("--lab-fx-glow-brand-core"));
+  assert.ok(!props.has("--lab-fx-glow-brand-alpha"));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

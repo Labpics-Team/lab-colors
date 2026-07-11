@@ -13,6 +13,7 @@ pub mod lcs;
 pub mod lpc;
 pub mod material;
 pub mod neutral;
+pub mod numerics;
 pub mod pair;
 pub mod scale;
 pub mod semantic;
@@ -83,19 +84,31 @@ pub use config::{
 };
 pub use curve::ColorCurve;
 pub use glow::{
-    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_SUBTLE_DJ, GlowSolve, glow_layers_from_source,
-    screen_layer_over_encoded, solve_screen_alpha_for_dj,
+    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_COMPOSITE_PROFILE, GLOW_DIAGNOSTIC_PROFILE,
+    GLOW_LAYER_RECIPE_PROFILE, GLOW_SUBTLE_DJ, GlowCompositeCertificateV1,
+    GlowCompositeGuaranteeV1, GlowCompositeProfileV1, GlowConstraintLayer, GlowDecisionProfileV1,
+    GlowDiagnosticProfileV1, GlowLayerRecipeProfileV1, GlowSolve, GlowTargetStatus,
+    glow_layers_from_source, screen_layer_over_encoded, screen_layer_over_srgb8,
+    screen_point_is_exact_noop, solve_screen_alpha_for_dj,
 };
 pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use material::{
-    BackdropBox, MaterialAlpha, Pole, committed_pole_encoded, solve_material_alpha_encoded,
+    BackdropBoundV1, BackdropBox, BackdropBoxErrorV1, EncodedRgbErrorV1, MaterialAlpha,
+    MaterialAlphaGuaranteeV1, MaterialAlphaStatusV1, MaterialNumericalProfileV1,
+    MaterialSolveErrorV1, Pole, RgbChannelV1, committed_pole_encoded, solve_material_alpha_encoded,
     solve_material_alpha_hex, worst_contrast_encoded,
 };
+pub use numerics::{
+    AtLeastDecisionV1, DecisionGuaranteeV1, NumericalBoundStatusV1, NumericalDecisionV1,
+    NumericalFallbackStatusV1, NumericalIndeterminacyV1, NumericalSiteIdV1, NumericalSiteRecordV1,
+    OutwardIntervalV1, StableNumericalOutcomeV1, classify_at_least_v1, numerical_registry_v1,
+};
 pub use semantic::{
-    NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor, TranslucentResolved,
-    measure_contrast, recheck_against, recheck_against_multi, resolve_named_set,
+    GlowIndeterminateResolved, NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor,
+    TranslucentResolved, measure_contrast, recheck_against, recheck_against_multi,
+    resolve_named_set,
 };
 // The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no
 // longer part of the production API (ADR-0001 PR-c): the agnostic engine ships
@@ -108,14 +121,14 @@ pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
     Unreachable, solve, solve_many,
 };
-pub use spaces::oklch::{oklch_css_from_hex, oklch_from_hex};
+pub use spaces::oklch::{css_alpha_value, oklch_css_from_hex, oklch_from_hex};
 pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
 pub use spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 pub use spaces::vc::ViewingConditions;
 
-/// Компилирует rust-блоки корневого README как doctest-ы: их API-примеры
-/// обязаны собираться на каждом `cargo test --doc`, иначе README тихо
-/// разъедется с кодом. Тип существует только под `--test`, в бинарь не входит.
+/// Компилирует rust-блоки package-local README как doctest-ы: опубликованный
+/// crate обязан нести и исполнять собственную документацию без файлов выше
+/// package root. Тип существует только под `--test`, в бинарь не входит.
 #[cfg(doctest)]
-#[doc = include_str!("../../../README.md")]
+#[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;

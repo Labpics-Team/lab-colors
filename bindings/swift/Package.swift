@@ -1,10 +1,12 @@
 // swift-tools-version:5.9
 // SwiftPM-пакет нативного биндинга labcolors. Линкует СТАТИЧЕСКУЮ Rust-библиотеку
 // (`liblabcolors.a`) + сгенерированные UniFFI Swift-биндинги, и прогоняет
-// conformance-пак против рантайм-ядра. Собирается ТОЛЬКО на macOS в CI: файлы
-// в `Sources/LabColors` и `Sources/labcolorsFFI` генерирует uniffi-bindgen
-// ПЕРЕД `swift test` (см. .github/workflows/native-conformance.yml). В репозитории
-// эти каталоги несут лишь .gitkeep — сгенерированное не коммитится.
+// conformance-пак против рантайм-ядра. Активный CI-гейт собирает пакет в pinned
+// Swift-контейнере на Linux x86_64; ручной macOS/arm64 path не является
+// достигнутой аттестацией. Файлы в `Sources/LabColors` и
+// `Sources/labcolorsFFI` генерирует uniffi-bindgen ПЕРЕД `swift test` (см.
+// .github/workflows/native-conformance.yml). В репозитории эти каталоги несут
+// лишь .gitkeep — сгенерированное не коммитится.
 import PackageDescription
 
 let package = Package(
@@ -23,8 +25,9 @@ let package = Package(
             dependencies: ["labcolorsFFI"],
             path: "Sources/LabColors"
         ),
-        // Conformance-тесты: грузят закоммиченные векторы из ../../conformance и
-        // сверяют с выходом FFI. Линкуют статическую Rust-библиотеку из
+        // Conformance-тесты: грузят закоммиченные векторы из ../../conformance,
+        // сверяют их с выходом FFI и отдельно проверяют типизированный Glow
+        // decision contract. Линкуют статическую Rust-библиотеку из
         // target/debug (путь относительно корня пакета bindings/swift).
         .testTarget(
             name: "LabColorsConformanceTests",

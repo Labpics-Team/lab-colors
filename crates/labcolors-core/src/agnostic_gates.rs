@@ -11,6 +11,7 @@
 //!    changes: the proof that any company plugs in its own design system.
 
 use crate::config::fixture::labui_reference;
+use crate::config::test_support::resolved_repr as repr;
 use crate::ladder::{LadderPosition, ThemeAnchors};
 use crate::solve::Floor;
 use crate::{
@@ -34,18 +35,6 @@ fn grid() -> ([(ViewingConditions, &'static str); 2], [&'static str; 6]) {
             "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
         ],
     )
-}
-
-/// Canonical stable representation of a resolved role.
-fn repr(res: &Resolved) -> String {
-    match res {
-        Resolved::Color { solved, .. } => solved.hex().to_string(),
-        Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
-        Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
-        Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
-        Resolved::None => "none".to_string(),
-        Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,10 +94,18 @@ fn labui_fixture_emission_is_byte_identical_to_frozen_golden() {
         golden.lines().count(),
         "labui emission line count drifted — a role/alias/grid point changed"
     );
-    assert_eq!(
-        got, golden,
+    let changed: Vec<String> = got
+        .lines()
+        .zip(golden.lines())
+        .enumerate()
+        .filter(|(_, (actual, expected))| actual != expected)
+        .map(|(index, (actual, expected))| format!("line {}\n- {expected}\n+ {actual}", index + 1))
+        .collect();
+    assert!(
+        changed.is_empty(),
         "labui fixture emission drifted from the frozen golden \
-         (regenerate with BLESS_LABUI_GOLDEN=1 only for a reviewed change)"
+         (regenerate only for a reviewed change):\n{}",
+        changed.join("\n")
     );
 }
 

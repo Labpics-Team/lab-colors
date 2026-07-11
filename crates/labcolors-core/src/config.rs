@@ -192,8 +192,9 @@ pub enum ConfigError {
     },
     /// Ссылка (алиас/alpha_analog) на роль, которой нет в `roles`.
     UnknownRole { referenced_by: String, role: String },
-    /// Дубликат ключа в словаре конфига: повтор имени сделал бы lookup и
-    /// эмиссию неоднозначными (какая запись выиграла — вопрос порядка, тихо).
+    /// Дубликат ключа в словаре конфига или итоговом CSS-namespace: повтор имени
+    /// сделал бы lookup/эмиссию неоднозначными (какая запись выиграла — вопрос
+    /// порядка, тихо).
     DuplicateKey {
         dictionary: &'static str,
         key: String,
@@ -529,6 +530,8 @@ pub enum RoleRecipe {
         source: LadderSource,
         /// Контрактная ступень стека: subtle | base | bloom.
         step: crate::glow::GlowStep,
+        /// Обязательный numerical-decision profile; implicit legacy запрещён.
+        decision_profile: crate::glow::GlowDecisionProfileV1,
     },
     /// Заливка пары «поверхность × лейбл» ([`crate::pair`]): якорь источника,
     /// минимально сдвинутый по светлоте до победы перцептивно правильной
@@ -596,6 +599,56 @@ pub enum RoleRecipe {
     },
     /// Явный ноль: «нет цвета здесь» ([`RoleSpec::Zero`]).
     Zero,
+}
+
+/// Суффиксы CSS-переменных, которые один объявленный рецепт резервирует.
+///
+/// Основное имя принадлежит клиентскому токену даже тогда, когда `Zero` не
+/// эмитит значения: projection всё равно публикует его `cssVar`, и сателлит
+/// другой роли не вправе занять это имя. Остальной shape выводится из рецепта
+/// до резолва, иначе коллизия могла бы зависеть от фона (на одном роль
+/// unreachable и «всё работает», на другом два писателя молча делят один
+/// `--lab-*`). Исчерпывающий match заставляет каждый новый рецепт явно выбрать
+/// свой namespace shape.
+fn reserved_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
+    const PRIMARY: &[&str] = &[""];
+    const GLOW: &[&str] = &["", "-core", "-alpha"];
+    const MATERIAL: &[&str] = &["", "-01", "-02"];
+
+    match recipe {
+        RoleRecipe::Glow { .. } => GLOW,
+        RoleRecipe::Material { .. } => MATERIAL,
+        RoleRecipe::TextAnchor { .. }
+        | RoleRecipe::DjAnchor { .. }
+        | RoleRecipe::DecorativeLc { .. }
+        | RoleRecipe::Ladder { .. }
+        | RoleRecipe::PairFill { .. }
+        | RoleRecipe::PairLabel { .. }
+        | RoleRecipe::AlphaAnalog { .. }
+        | RoleRecipe::Zero => PRIMARY,
+    }
+}
+
+/// Зарезервировать один shape эмиссии в общем namespace.
+///
+/// Отдельный примитив не знает сегодняшних суффиксов и потому не опирается на
+/// случайное свойство, что `-core/-alpha/-01/-02` пока не пересекаются друг с
+/// другом: будущая derived↔derived коллизия попадёт в тот же гард.
+fn reserve_css_names(
+    reserved: &mut std::collections::BTreeSet<String>,
+    name: &str,
+    suffixes: &[&str],
+) -> Result<(), ConfigError> {
+    for suffix in suffixes {
+        let key = format!("--lab-{name}{suffix}");
+        if !reserved.insert(key.clone()) {
+            return Err(ConfigError::DuplicateKey {
+                dictionary: "reserved CSS namespace",
+                key,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Источник тинта лестницы/альфа-аналога: откуда берётся якорный цвет.
@@ -923,15 +976,14 @@ impl ThemeConfig {
                     family: cat.family.clone(),
                 });
             }
-            if let Some(side) = cat.preferred_side
-                && side != 1
-                && side != -1
-            {
-                return Err(ConfigError::OutOfBounds {
-                    handle: format!("sentiments.{}.preferred_side", cat.name),
-                    value: f64::from(side),
-                    bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
-                });
+            if let Some(side) = cat.preferred_side {
+                if side != 1 && side != -1 {
+                    return Err(ConfigError::OutOfBounds {
+                        handle: format!("sentiments.{}.preferred_side", cat.name),
+                        value: f64::from(side),
+                        bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
+                    });
+                }
             }
             if let Some(hue) = cat.hue_floor_deg {
                 let field = format!("sentiments.{}.hue_floor_deg", cat.name);
@@ -946,15 +998,16 @@ impl ThemeConfig {
             }
         }
 
-        if let Some(hue) = self.neutral.tint.hue_override_deg
-            && !(hue.is_finite()
+        if let Some(hue) = self.neutral.tint.hue_override_deg {
+            if !(hue.is_finite()
                 && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue))
-        {
-            return Err(ConfigError::OutOfBounds {
-                handle: "neutral.tint.hue_override_deg".to_string(),
-                value: hue,
-                bound: "0 ≤ hue < 360 (явный оттенок подтона по модулю 360°)",
-            });
+            {
+                return Err(ConfigError::OutOfBounds {
+                    handle: "neutral.tint.hue_override_deg".to_string(),
+                    value: hue,
+                    bound: "0 ≤ hue < 360 (явный оттенок подтона по модулю 360°)",
+                });
+            }
         }
 
         // Дубликаты ключей всех словарей: повтор имени = неоднозначный lookup.
@@ -1017,6 +1070,30 @@ impl ThemeConfig {
                     role: target.clone(),
                 });
             }
+        }
+
+        // Роль резервирует не только собственный `--lab-{name}`: Glow и Material
+        // создают сателлиты. Алиас клонирует outcome цели и потому создаёт тот же
+        // набор уже под СВОИМ именем. Проверяем итоговый namespace целиком до
+        // резолва/JSON, чтобы порядок писателей никогда не решал, чьё значение
+        // молча победит. Один общий set ловит role↔satellite, alias↔satellite и
+        // любые будущие satellite↔satellite пересечения без списка частных пар.
+        let mut reserved = std::collections::BTreeSet::new();
+
+        for (name, recipe) in &self.roles {
+            reserve_css_names(&mut reserved, name, reserved_css_suffixes(recipe))?;
+        }
+        for (alias, target) in &self.aliases {
+            let target_recipe = self
+                .roles
+                .iter()
+                .find(|(name, _)| name == target)
+                .map(|(_, recipe)| recipe)
+                .ok_or_else(|| ConfigError::UnknownRole {
+                    referenced_by: format!("aliases.{alias}"),
+                    role: target.clone(),
+                })?;
+            reserve_css_names(&mut reserved, alias, reserved_css_suffixes(target_recipe))?;
         }
 
         Ok(())
@@ -1243,9 +1320,14 @@ impl ThemeConfig {
                 magnitude: *magnitude,
             }),
             RoleRecipe::Zero => Ok(RoleSpec::Zero),
-            RoleRecipe::Glow { source, step } => Ok(RoleSpec::Glow {
+            RoleRecipe::Glow {
+                source,
+                step,
+                decision_profile,
+            } => Ok(RoleSpec::Glow {
                 tint: self.compile_ladder_tint(role, source)?,
                 step: *step,
+                decision_profile: *decision_profile,
             }),
             RoleRecipe::Ladder {
                 source,
@@ -1602,6 +1684,10 @@ pub(crate) mod preset;
 /// тянет из [`preset`]; эмиссия заморожена байт-гейтом (`crate::agnostic_gates`).
 #[cfg(test)]
 pub(crate) mod fixture;
+
+/// Общая строковая форма `Resolved` для in-crate characterization/golden-тестов.
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests;

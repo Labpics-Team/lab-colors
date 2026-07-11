@@ -36,8 +36,8 @@ pub struct RoleEntry {
     pub outcome: RoleOutcome,
 }
 
-/// The four honest outcomes of resolving a role, mirroring the core's
-/// `Resolved` without leaking the core type across the boundary.
+/// The honest outcome union for one role, mirroring the core's `Resolved`
+/// without leaking the core type across the boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleOutcome {
     /// A solved colour with its measured contrasts and degradation flags.
@@ -53,6 +53,8 @@ pub enum RoleOutcome {
     /// `mix-blend-mode: screen`; `--lab-<role>` несёт halo, `--lab-<role>-core`
     /// — слой пересвета, `--lab-<role>-alpha` — интенсивность числом.
     Glow(GlowColor),
+    /// Stable Glow terminal result: no sound numerical decision, no CSS vars.
+    GlowIndeterminate(GlowIndeterminateColor),
     /// Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) +
     /// опаковая база `02`, обе — один тон. `--lab-<role>-01` несёт
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
@@ -70,36 +72,85 @@ pub enum RoleOutcome {
 /// Слои свечения и решённая интенсивность (kind glow).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlowColor {
-    /// Слой пересвета (малый радиус), `#RRGGBB`.
+    /// Core-слой, предназначенный потребителем для меньшего blur, `#RRGGBB`;
+    /// сам движок геометрию не моделирует.
     pub core_hex: String,
-    /// Слой ореола — источник, `#RRGGBB`.
+    /// Halo-слой, предназначенный потребителем для большего blur, `#RRGGBB`;
+    /// в recipe v1 равен источнику.
     pub halo_hex: String,
     /// Интенсивность screen-слоя `(0, 1]`.
     pub alpha: f64,
-    /// Фактический |ΔJ'| композита от фона.
-    pub achieved_dj: f64,
-    /// Цель недостижима — ближайший достижимый шаг (ADR-0002, закон 2).
-    pub degraded: bool,
+    /// Каноническая CSS-запись той же alpha без повторного округления.
+    pub alpha_css: String,
+    /// Целевой |ΔJ′| изолированного halo-композита.
+    pub target_dj: f64,
+    /// Exact point-composite profile, независимо от target/max decision.
+    pub composite_profile: labcolors_core::GlowCompositeProfileV1,
+    /// Exact point-composite guarantee.
+    pub composite_guarantee: labcolors_core::GlowCompositeGuaranteeV1,
+    /// Версионированный алгоритм, построивший анатомию core/halo.
+    pub layer_recipe_profile: labcolors_core::GlowLayerRecipeProfileV1,
+    /// Диагностика внешнего вида полного результата Glow. Обязательна, потому что
+    /// `core_achieved_dj` реально вычисляется через CAM16-UCS J′.
+    pub appearance_diagnostic_profile: labcolors_core::GlowDiagnosticProfileV1,
+    /// Диагностическая модель, участвовавшая именно в выборе target/max. `None` у
+    /// точного no-op профиля stable, который не выполняет выбор по внешнему виду.
+    pub selection_diagnostic_profile: Option<labcolors_core::GlowDiagnosticProfileV1>,
+    /// Explicit client-selected decision profile.
+    pub decision_profile: labcolors_core::GlowDecisionProfileV1,
+    /// Guarantee target/max decision.
+    pub decision_guarantee: labcolors_core::DecisionGuaranteeV1,
+    /// Слой, по которому решалась цель.
+    pub constraint_layer: labcolors_core::GlowConstraintLayer,
+    /// Типизированный результат target-проверки.
+    pub target_status: labcolors_core::GlowTargetStatus,
+    /// Reference-композит изолированного halo.
+    pub halo_composite_hex: String,
+    /// Фактический |ΔJ′| изолированного halo-композита.
+    pub halo_achieved_dj: f64,
+    /// Reference-композит изолированного core с той же alpha.
+    pub core_composite_hex: String,
+    /// Фактический |ΔJ′| изолированного core-композита.
+    pub core_achieved_dj: f64,
+}
+
+/// Stable Glow result without a selected semantic state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlowIndeterminateColor {
+    /// Canonical source anchor; not emitted as CSS without a decision.
+    pub source_hex: String,
+    /// Requested diagnostic target.
+    pub target_dj: f64,
+    /// Explicit stable profile.
+    pub decision_profile: labcolors_core::GlowDecisionProfileV1,
+    /// Registered branch-sensitive site.
+    pub site_id: labcolors_core::NumericalSiteIdV1,
+    /// Неразделимая причина вместе с sound interval, если он существует.
+    pub evidence: labcolors_core::NumericalIndeterminacyV1,
+    /// Layer whose target could not be classified.
+    pub constraint_layer: labcolors_core::GlowConstraintLayer,
 }
 
 /// Двухслойный материал (kind material): тон + выведенная α + вердикт гарантии.
 ///
 /// Тинт `01`, база `02` и солид-канон равны тону по построению (композит `T` над
-/// `T` есть `T`), поэтому один `tone_hex`. `alpha` выведена как минимальная
-/// плотность, при которой композит тона над худшим фоном коридора держит `floor`.
+/// `T` есть `T`), поэтому один `tone_hex`. `alpha` — повторно проверенная верхняя
+/// граница платформенно охарактеризованного поиска; численное свидетельство
+/// лежит рядом.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialColor {
     /// Тон `#RRGGBB`: тинт `01`, база `02` и солид-канон одновременно.
     pub tone_hex: String,
-    /// Выведенная альфа тинта `01`, `(0, 1]`.
+    /// Выбранная альфа тинта `01`, `[0, 1]`.
     pub alpha: f64,
     /// Худший WCAG-контраст коммит-полюса по коридору `[чёрный, белый]`.
     pub worst_contrast: f64,
-    /// WCAG-пол читаемости, который держит α (4.5 / 3.0).
+    /// Платформенно охарактеризованное свидетельство выбора границы alpha.
+    pub alpha_guarantee: labcolors_core::MaterialAlphaGuaranteeV1,
+    /// Типизированный исход проверки пола; от него выведен булев псевдоним совместимости.
+    pub alpha_status: labcolors_core::MaterialAlphaStatusV1,
+    /// Запрошенный WCAG-пол (4.5 / 3.0); держится только при `Satisfied`.
     pub floor: f64,
-    /// Гарантия выполнена: `worst_contrast ≥ floor`. `false` — пол недостижим
-    /// даже при α = 1 (честная деградация, α = 1 как ближайшая достижимая).
-    pub guaranteed: bool,
     /// Коммит-полюс поверхности белый (`true`, тёмный тон) или чёрный (`false`).
     pub pole_white: bool,
     /// Фактический |ΔJ'| тона-базы от фона резолва — различимость поверхности.
@@ -125,13 +176,11 @@ pub struct RgbaColor {
     pub composite_lc: f64,
     /// The WCAG 2.1 ratio of the composite.
     pub composite_wcag: f64,
-    /// `true` when the requested alpha was raised to the smallest resolvable
-    /// value (`α_min`) because the requested transparency is not reproducible in
-    /// gamut — an honest, flagged degradation of the role contract (mirrors
-    /// `SolvedColor::compressed` / `GlowColor::degraded`). The colour never lies:
-    /// the composite still equals the target solid byte-for-byte; only the
-    /// alpha carried in `alpha` differs from what was asked. Always `false` for a
-    /// direct ladder emission.
+    /// `true`, если запрошенная alpha не допускает ни одного byte-тинта,
+    /// воспроизводящего цель в affine encoded-sRGB8 reference, и потому поднята
+    /// до первого проходящего `binary64`. Композит остаётся побайтно равен
+    /// целевому солиду; меняется только явно возвращённая `alpha`. У прямой
+    /// лестницы всегда `false`.
     pub alpha_coerced: bool,
     /// `true` when a solid family border (`border-<family>-strong`, M2 ch5c) was
     /// darkened along the family curve to meet the AA UI floor (3:1), because the

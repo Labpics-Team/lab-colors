@@ -8,8 +8,12 @@
 #
 # Ожидает исходники репозитория в /src (read-only bind-mount); собирает в /work.
 # Запуск:
-#   docker run --rm -v "<repo>":/src:ro swift:6.1 bash /src/bindings/swift/ci/run-conformance.sh
+#   docker run --rm -v "<repo>":/src:ro \
+#     swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394 \
+#     bash /src/bindings/swift/ci/run-conformance.sh
 set -euo pipefail
+
+readonly RUST_TOOLCHAIN=1.96.0
 
 echo "==================== ПЛАТФОРМА / SWIFT ===================="
 uname -a
@@ -19,11 +23,12 @@ echo "==================== УСТАНОВКА RUST ===================="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl build-essential pkg-config >/dev/null
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+  -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
 # shellcheck disable=SC1091
 source "$HOME/.cargo/env"
-rustc --version
-cargo --version
+rustc +"$RUST_TOOLCHAIN" --version
+cargo +"$RUST_TOOLCHAIN" --version
 
 echo "==================== КОПИЯ ИСХОДНИКОВ (без target/.git) ===================="
 mkdir -p /work
@@ -35,14 +40,14 @@ tar -C /src \
 cd /work
 
 echo "==================== СБОРКА labcolors-ffi (Linux) + bindgen ===================="
-cargo build -p labcolors-ffi --features cli
+cargo +"$RUST_TOOLCHAIN" build -p labcolors-ffi --features cli --locked
 ls -la target/debug/liblabcolors.*
 
 echo "==================== РАННЕР-РЕФЕРЕНС (ядро на Linux воспроизводит пак) ===================="
-cargo test -p labcolors-conformance -p labcolors-ffi
+cargo +"$RUST_TOOLCHAIN" test -p labcolors-conformance -p labcolors-ffi --locked
 
 echo "==================== ГЕНЕРАЦИЯ SWIFT-БИНДИНГОВ (из .so) ===================="
-cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- \
+cargo +"$RUST_TOOLCHAIN" run -p labcolors-ffi --features cli --bin uniffi-bindgen --locked -- \
   generate --library target/debug/liblabcolors.so \
   --language swift --out-dir bindings/swift/generated
 

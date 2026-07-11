@@ -41,8 +41,9 @@ export declare function oklabLerp(from: string, to: string, t: number): string;
 export declare function compositeStackToHex(layersFrontToBack: Rgba[], opaqueBase: Rgba): string;
 
 /**
- * The opaque effective background `#RRGGBB` visible behind `element`'s content,
- * by walking ancestors and alpha-compositing their `background-color`s.
+ * Legacy opaque reference-background estimate for the supported
+ * `background-color` subset. This is not a browser pixel observation; use an
+ * explicit sampled background when correctness depends on unsupported layers.
  */
 export declare function effectiveBackground(
   element: unknown,

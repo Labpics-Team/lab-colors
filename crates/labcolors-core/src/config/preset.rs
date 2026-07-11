@@ -251,9 +251,17 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // (зеркало fx-shadow-ambient) на фактическом фоне. Прежние Ladder@52
     // (фикс-альфа, нормальная композиция) вырождались на одноимённых фонах;
     // physics свечения — добавление света, не наложение краски.
+    // Этот characterization-пресет явно выбирает legacy-профиль только ради
+    // совместимости с frozen byte-контрактом прежней glow-эмиссии; сам legacy-
+    // профиль не превращается от этого в cross-runtime гарантию. `StableV1` без
+    // sound CAM16 bound честно вернул бы `GlowIndeterminate` для каждого
+    // нетривиального свечения и тем самым намеренно изменил бы frozen output;
+    // implicit fallback здесь отсутствует, а новые клиентские схемы обязаны
+    // выбрать профиль сами.
     let glow = |source: LadderSource| RoleRecipe::Glow {
         source,
         step: crate::glow::GlowStep::Base,
+        decision_profile: crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1,
     };
     roles.push(("fx-glow-brand".to_string(), glow(LadderSource::Brand)));
     roles.push((

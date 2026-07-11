@@ -34,6 +34,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: toolchain env (runner.temp)
         # Изоляция RUSTUP_HOME/CARGO_HOME/TMPDIR per job под runner.temp — тот же
         # приём, что во всех джобах ci.yml (класс утечки /tmp закрыт, история #143).
@@ -54,7 +56,8 @@ jobs:
           cargo install cargo-mutants --version 25.0.0 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       - name: cargo mutants (математ-ядро — скоуп из .cargo/mutants.toml)
-        # Без флагов скоуп берётся из .cargo/mutants.toml (cleanliness.rs + pair.rs).
+        # Без флагов скоуп берётся из .cargo/mutants.toml (alpha/cleanliness/
+        # glow/material/numerics/pair).
         # workflow_dispatch с full_workspace=true снимает скоуп (--file '**/*.rs').
         run: |
           if [ "${{ inputs.full_workspace }}" = "true" ]; then

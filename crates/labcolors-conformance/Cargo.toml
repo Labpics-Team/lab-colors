@@ -1,10 +1,12 @@
 [package]
 name = "labcolors-conformance"
+publish = false
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 description = "Платформо-нейтральный conformance-пак движка labcolors: детерминированные тест-векторы канона (лестницы, подложка→α, контрасты, резолв) плюс Rust-раннер-референс. Любой биндинг (WASM, Swift, …) обязан их воспроизвести."
 
 [dependencies]

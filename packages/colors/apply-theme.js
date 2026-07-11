@@ -12,10 +12,11 @@ const LAB_VAR_PREFIX = "--lab-";
  *
  * First clears every inline `--lab-*` custom property a previous call set on
  * this element, then writes every reachable role from `result.vars` via
- * `setProperty`. Unreachable and zero-token (`none`) roles carry no colour, so
- * they are absent from `vars` and are not written — the caller's CSS fallbacks
- * stay in effect for those, including across theme re-application (a role
- * reachable in the previous theme but not in the new one does not linger).
+ * `setProperty`. Unreachable, zero-token (`none`), and stable
+ * `glow-indeterminate` roles carry no selected CSS value, so they are absent
+ * from `vars` and are not written — the caller's CSS fallbacks stay in effect
+ * for those, including across theme re-application (a role reachable in the
+ * previous theme but not in the new one does not linger).
  *
  * @param {HTMLElement} element - The target element (e.g. `document.documentElement`).
  * @param {{ vars: Record<string, string> }} result - A `resolveTheme(...)` result.

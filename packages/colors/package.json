@@ -1,7 +1,8 @@
 {
   "name": "@labpics/colors",
-  "version": "0.9.1",
-  "description": "Framework-agnostic contrast engine: resolve accessible, perceptually-anchored colour roles for any background. WASM core, zero runtime dependencies.",
+  "version": "0.10.0",
+  "packageManager": "npm@11.9.0",
+  "description": "Contextual compiler and runtime resolver for client-owned color-token contracts. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -35,9 +36,12 @@
       "default": "./effective-bg.js"
     },
     "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
+    "./build-metadata.json": "./build-metadata.json",
     "./package.json": "./package.json"
   },
   "files": [
+    "LICENSE",
+    "build-metadata.json",
     "index.js",
     "index.d.ts",
     "apply-theme.js",
@@ -55,9 +59,11 @@
   ],
   "scripts": {
     "//build": "wasm-pack resolves --out-dir relative to the CRATE dir (crates/labcolors-wasm), not the cwd, so the ../../packages path is correct and unambiguous regardless of where npm runs it.",
-    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors",
+    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test"
+    "test": "node --test",
+    "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",
+    "release:verify": "node ../../scripts/verify-package-release.mjs"
   },
   "devDependencies": {
     "typescript": "^5.5.0"
@@ -76,6 +82,6 @@
     "labpics"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.11.0"
   }
 }

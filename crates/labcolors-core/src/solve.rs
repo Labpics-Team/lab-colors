@@ -295,9 +295,10 @@ impl BgInput {
         }
     }
 
-    /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — то самое
-    /// device-пространство, в котором Figma/браузер композитят straight-alpha
-    /// ([`crate::alpha`]). Альфа-роль ([`crate::semantic::RoleSpec::Ladder`] /
+    /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — домен
+    /// reference-профиля [`crate::alpha`], заземлённого Figma-якорями без
+    /// универсального обещания browser pipeline. Альфа-роль
+    /// ([`crate::semantic::RoleSpec::Ladder`] /
     /// [`AlphaAnalog`](crate::semantic::RoleSpec::AlphaAnalog)) композитит свой
     /// тинт на этом фоне для честного замера контраста солид-эквивалента. Для
     /// [`Solid`](BgInput::Solid) это квантованный дисплей-цвет фона; будущие
@@ -384,7 +385,9 @@ impl Solved {
     }
 }
 
-/// Why a contract cannot be satisfied. Returned instead of silently clipping.
+/// Why a solve could not return a colour. Physical/domain variants explain a
+/// contract failure; [`Self::InternalInvariant`] reports core drift and must be
+/// failed closed by bindings rather than projected as a physical outcome.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Unreachable {
@@ -418,6 +421,11 @@ pub enum Unreachable {
     GamutUnsupported,
     /// Malformed input, such as an invalid hex colour or a non-finite target.
     InvalidInput(String),
+    /// A value produced and validated by the core later violated an internal
+    /// postcondition. This is never client-input blame: bindings must fail the
+    /// enclosing call closed instead of projecting it as a physical role
+    /// outcome.
+    InternalInvariant(String),
 }
 
 impl core::fmt::Display for Unreachable {
@@ -453,6 +461,7 @@ impl core::fmt::Display for Unreachable {
                 )
             }
             Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
+            Self::InternalInvariant(msg) => write!(f, "internal invariant failure: {msg}"),
         }
     }
 }
@@ -1313,6 +1322,13 @@ mod tests {
     use super::*;
     use crate::lpc::lpc_with_vc;
 
+    #[test]
+    fn internal_invariant_failure_is_not_reported_as_invalid_client_input() {
+        let error = Unreachable::InternalInvariant("generated fixture drift".into());
+        assert!(error.to_string().starts_with("internal invariant failure:"));
+        assert!(!error.to_string().starts_with("invalid input:"));
+    }
+
     /// D2(a) страж (аудит 2026-07-03): `Unreachable` не несёт never-constructed
     /// вариантов-заготовок. `UnsupportedBackground` («future inputs», 0 точек
     /// конструирования по grep всех крейтов — только объявление + Display + wasm-
@@ -1342,6 +1358,7 @@ mod tests {
             Unreachable::PolarityMismatch { target: 1.0 },
             Unreachable::GamutUnsupported,
             Unreachable::InvalidInput("x".to_string()),
+            Unreachable::InternalInvariant("x".to_string()),
         ];
         for u in &samples {
             assert!(!u.to_string().is_empty(), "Display пуст для {u:?}");
@@ -1354,7 +1371,8 @@ mod tests {
                 | Unreachable::FloorUnreachable { .. }
                 | Unreachable::PolarityMismatch { .. }
                 | Unreachable::GamutUnsupported
-                | Unreachable::InvalidInput(_) => {}
+                | Unreachable::InvalidInput(_)
+                | Unreachable::InternalInvariant(_) => {}
             }
         }
     }
@@ -2613,6 +2631,7 @@ mod tests {
                     // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо здесь.
                     Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
                     Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
+                    Resolved::GlowIndeterminate(_) => "glow-indeterminate".to_string(),
                     Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
                     Resolved::None => "none".to_string(),
                     Resolved::Unreachable(_) => "unreach".to_string(),

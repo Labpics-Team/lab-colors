@@ -581,15 +581,15 @@ mod level3_locks {
                 for step in 0..=120 {
                     let l = 0.02 + 0.96 * f64::from(step) / 120.0;
                     let side = pair_side(swatch(l, h, rel_c));
-                    if let Some(p) = prev
-                        && side != p
-                    {
-                        switches += 1;
-                        assert_eq!(
-                            (p, side),
-                            (PairSide::Light, PairSide::Ink),
-                            "hue {hue_step}, C_rel {rel_c}: только Light→Ink"
-                        );
+                    if let Some(p) = prev {
+                        if side != p {
+                            switches += 1;
+                            assert_eq!(
+                                (p, side),
+                                (PairSide::Light, PairSide::Ink),
+                                "hue {hue_step}, C_rel {rel_c}: только Light→Ink"
+                            );
+                        }
                     }
                     prev = Some(side);
                 }

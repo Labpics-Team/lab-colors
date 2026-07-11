@@ -503,22 +503,21 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
         }
 
         // 3. Default-field float literals (scoped to a `fn default()` body).
-        if in_default_body
-            && default_brace_depth > 0
-            && let Some((field, value)) = parse_default_field_literal(line)
-        {
-            let name = format!("{module_stem}_DEFAULT_{}", field.to_ascii_uppercase());
-            if !allowlist.contains(&name.as_str()) {
-                let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
-                out.push(DetectedConst {
-                    module: module.to_string(),
-                    line: prod[idx].0,
-                    name,
-                    value,
-                    has_marker,
-                    needs_science,
-                    marker_line,
-                });
+        if in_default_body && default_brace_depth > 0 {
+            if let Some((field, value)) = parse_default_field_literal(line) {
+                let name = format!("{module_stem}_DEFAULT_{}", field.to_ascii_uppercase());
+                if !allowlist.contains(&name.as_str()) {
+                    let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
+                    out.push(DetectedConst {
+                        module: module.to_string(),
+                        line: prod[idx].0,
+                        name,
+                        value,
+                        has_marker,
+                        needs_science,
+                        marker_line,
+                    });
+                }
             }
         }
 
@@ -1052,10 +1051,10 @@ fn read_workspace_doc(rel: &str) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Muddiness-Law (M-row) auditor — resurrects the retired external `mud-oracle`.
+// Legacy-proxy M-row auditor — resurrects the retired external `mud-oracle`.
 //
 // BUG CLASS this closes: the GATE-1/2/3 integer-row parser SKIPS the `M-` rows
-// (their first cell `M-01` is not a bare integer), so the Muddiness-Law constants
+// (their first cell `M-01` is not a bare integer), so the legacy-proxy constants
 // of `cleanliness.rs` had NO in-repo gate — the SSOT once deferred them to
 // `.agents/tools/mud-oracle/verify_inventory.js`, which does not exist on this
 // tree. This auditor pulls that check IN-TREE: every non-REMOVED `M-` row must
@@ -1068,7 +1067,7 @@ fn read_workspace_doc(rel: &str) -> Option<String> {
 // `cleanliness.rs` (no duplication). Shared verbatim by the gate and the RED-proof.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// One parsed Muddiness-Law row from the SSOT (`M-` keyed).
+/// One parsed legacy-proxy row from the SSOT (`M-` keyed).
 #[derive(Debug, Clone)]
 struct MudRow {
     /// Const name, markdown decoration stripped (backticks, `~~…~~`).
@@ -1088,7 +1087,7 @@ fn decimal_places(s: &str) -> usize {
     }
 }
 
-/// Parse the `M-` rows of the SSOT. A mud row is a `|`-row whose first cell starts
+/// Parse the `M-` rows of the SSOT. A legacy-proxy row is a `|`-row whose first cell starts
 /// with `M-`. Columns: `mud-id | name | value | module | status | rationale`.
 fn parse_mud_rows(text: &str) -> Vec<MudRow> {
     let mut rows = Vec::new();
@@ -1130,10 +1129,10 @@ fn cleanliness_const_values(src: &str) -> std::collections::BTreeMap<String, f64
     let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
     let mut map = std::collections::BTreeMap::new();
     for line in prod.lines() {
-        if let Some(ConstDecl::Numeric { name, value, .. }) = parse_const_decl(line)
-            && let Ok(v) = value.parse::<f64>()
-        {
-            map.insert(name, v);
+        if let Some(ConstDecl::Numeric { name, value, .. }) = parse_const_decl(line) {
+            if let Ok(v) = value.parse::<f64>() {
+                map.insert(name, v);
+            }
         }
     }
     map
@@ -1252,7 +1251,7 @@ fn rewrite_mud_row_value(text: &str, name: &str, new_value: &str) -> String {
 fn mud_rows_match_cleanliness_source() {
     let ssot = std::fs::read_to_string(inventory_path()).unwrap_or_else(|e| {
         panic!(
-            "mud auditor cannot read SSOT at {} ({e})",
+            "legacy-proxy M-row auditor cannot read SSOT at {} ({e})",
             inventory_path().display()
         )
     });
@@ -1260,13 +1259,13 @@ fn mud_rows_match_cleanliness_source() {
     let active = rows.iter().filter(|r| !r.removed).count();
     assert!(
         active > 0,
-        "mud auditor parsed zero ACTIVE M-rows — the parser is mis-scoped (a vacuous gate)."
+        "legacy-proxy M-row auditor parsed zero ACTIVE M-rows — the parser is mis-scoped (a vacuous gate)."
     );
     let src = read_module("cleanliness.rs");
     let defects = mud_row_defects(&rows, &src);
     assert!(
         defects.is_empty(),
-        "Muddiness-Law auditor FAILED — {} M-row(s) do not join to cleanliness.rs at the \
+        "legacy-proxy M-row auditor FAILED — {} M-row(s) do not join to cleanliness.rs at the \
          documented value/precision:\n  {}",
         defects.len(),
         defects.join("\n  ")
@@ -1836,7 +1835,7 @@ fn red_proof_audit_probe() {
         real_citation_defects.join("\n  ")
     );
 
-    // 8. Muddiness-Law auditor must flip RED on an M-row value drift. Mutate ONE
+    // 8. Legacy-proxy M-row auditor must flip RED on an M-row value drift. Mutate ONE
     //    ACTIVE M-row's value in an IN-MEMORY copy of the SSOT and run the *same*
     //    `mud_row_defects` the live gate runs (INV-4), so a mutation to the auditor
     //    is caught here, not green-from-birth.
@@ -1854,12 +1853,12 @@ fn red_proof_audit_probe() {
     let mud_drifted = rewrite_mud_row_value(&real_ssot, mud_probe, "196.9172");
     assert_ne!(
         mud_drifted, real_ssot,
-        "RED-proof setup wrong — mud value-drift splice did not change the SSOT (row `{mud_probe}` not found)."
+        "RED-proof setup wrong — legacy-proxy value-drift splice did not change the SSOT (row `{mud_probe}` not found)."
     );
     let mud_drift = mud_row_defects(&parse_mud_rows(&mud_drifted), &cleanliness_src);
     assert!(
         mud_drift.iter().any(|d| d.contains(mud_probe)),
-        "RED-proof FAILED (mud value-drift path) — drifting M-row `{mud_probe}` value to `196.9172` \
-         did NOT flip the auditor RED; the Muddiness-Law audit is green-from-birth. Saw: {mud_drift:?}"
+        "RED-proof FAILED (legacy-proxy value-drift path) — drifting M-row `{mud_probe}` value to `196.9172` \
+         did NOT flip the auditor RED; the legacy-proxy M-row audit is green-from-birth. Saw: {mud_drift:?}"
     );
 }

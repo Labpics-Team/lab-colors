@@ -27,13 +27,19 @@ NamedRoleTable
 - **Контекстный resolve.** Одна таблица решается заново для переданного локального фона и темы.
 - **Специализированные зависимости.** Например, `PairLabel` решается против эмитированного композита своей `PairFill`, а не против фона страницы.
 - **Несколько видов результата.** Роль может вернуть solid, translucent, material, точечный glow, явное отсутствие значения или недостижимость.
+- **Версионированные численные свидетельства.** Exact encoded-sRGB8
+  source-over/screen операции несут проверяемый профиль и `bit-exact`
+  сертификат; Glow требует явный decision profile и может завершиться
+  типизированным `Indeterminate` без CSS fallback.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
 - **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальной областью DOM.
 
 ## Что не следует приписывать текущей реализации
 
 - Произвольный generic dependency graph и совместный SCC-solver ещё не являются публичным API. Сейчас есть resolve всей таблицы и отдельные специализированные пути зависимостей.
-- Текущие решения на основе CAM16, CAM16-UCS, Oklab и LPC не доказаны как битово-точные на всех средах выполнения и платформах.
+- Legacy-решения на основе CAM16, CAM16-UCS, Oklab и LPC не доказаны как
+  битово-точные на всех средах выполнения и платформах. Exact-гарантия
+  распространяется только на явно зарегистрированные конечные операции.
 - Обход DOM не является измерением фактически нарисованных пикселей браузера.
 - Точечные Glow и Material не являются сертификатом blur, пространственного поля, HDR или физического дисплея.
 - Автоматический выбор человечески «лучшего», «чистого», «похожего на бренд» или культурно правильного цвета не является частью обязательного базового resolve.
@@ -157,11 +163,16 @@ CSS-строка, CSSOM и обход DOM сами по себе не повыш
 | Класс | Текущий смысл |
 |---|---|
 | **Поддерживаемый точечный путь sRGB** | encoded sRGB input/output, клиентский конфиг, resolve всей таблицы и специализированные рецепты в заявленной версии пакета |
+| **Exact encoded-sRGB8 операции** | конечные source-over/screen композиторы, выбранная binary64 alpha и её канонический CSS round-trip; сертификат относится к point-reference, не к renderer/display |
+| **Stable Glow decision** | exact point-no-op даёт `Determinate` / `bit-exact` без CAM16-профиля; нетривиальный target/max без sound bound даёт typed `Indeterminate`, не platform-selected fallback |
 | **Унаследованное платформенно охарактеризованное поведение** | target-driven CAM16/CAM16-UCS/Oklab/LPC, neutral/accent/sentiment policies и связанные поиски по `f64`; они поддерживают совместимость, но не дают cross-runtime bit-exact guarantee |
 | **Точность в отдельном эталонном профиле** | только операции, для которых конкретный release объявляет эталонный профиль и проверяемый конечный контракт |
 | **Явно не поддержано как стабильная гарантия** | Display-P3 solving, HDR/PQ/HLG, пространственное поле Glow/Material, индивидуальное восприятие, неизвестный browser/display pipeline |
 
-До появления машинно читаемого численного профиля нельзя повышать legacy-результат до `BitExact`, `ProvenOptimal` или `ProvenInfeasible` только потому, что тесты на одной платформе зелёные.
+Машинно читаемый реестр численных sites и их runtime-матрица входят в
+conformance manifest. Он не повышает незарегистрированный или explicit legacy
+результат до `BitExact`, `ProvenOptimal` или `ProvenInfeasible` только потому,
+что тесты на одной платформе зелёные.
 
 ## Источники и производные значения
 
@@ -226,7 +237,11 @@ anchors
 
 ### `adaptTheme`
 
-Текущий контроллер является унаследованным механизмом совместимости. Он не должен описываться как уже доказанная гарантия нормативного floor на каждом промежуточном кадре и на всех образцах.
+Текущий контроллер является охарактеризованным механизмом совместимости. Он
+валидирует stable Glow evidence и селективно перерешивает роль при переходе
+между exact-no-op и `Indeterminate`, не ломая уже идущую цветовую анимацию. Это
+не универсальная гарантия нормативного floor на каждом промежуточном кадре и
+на всех возможных образцах.
 
 Нормативный целевой контракт строже:
 
@@ -264,6 +279,9 @@ anchors
 - [Научный whitepaper](docs/whitepaper.md)
 - [Реестр коэффициентов и policies](docs/empirical-inventory.md)
 - [Правила именования и конформанса](docs/NAMING.md)
+- [Conformance и numerical registry](conformance/README.md)
+- [Миграция exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md)
+- [Changelog](CHANGELOG.md)
 
 Агент без контекста читает:
 
@@ -272,9 +290,9 @@ AGENTS.md
 → Issue #276
 → Issue #228
 → Issue #248
-→ Issue #281
-→ активный Issue / PR
 → актуальный main
+→ активный PR
+→ Owner Issue текущего correctness-root
 ```
 
 Roadmap, текущий SHA и активный PR хранятся только в Issues.
@@ -315,9 +333,9 @@ cargo tree -p labcolors-core --edges=no-dev
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
 Изменения browser/WASM/public wire contract дополнительно требуют сборки пакета, consumer-smoke, JS/browser tests и platform conformance. Обязательные gates определяются workflow-файлами и acceptance конкретного Issue.

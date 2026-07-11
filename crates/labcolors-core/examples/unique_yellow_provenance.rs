@@ -1,26 +1,30 @@
-//! Воспроизводимая деривация M-12 `H_Y_DEG` — Oklab hue уникального жёлтого.
+//! Воспроизводимая compatibility-арифметика M-12 `H_Y_DEG` для выбранного 578nm reference.
 //!
 //! Запуск: `cargo run -p labcolors-core --example unique_yellow_provenance`
 //!
-//! Метод (Zone B slice 5, 2026-07-03):
-//!   1. λ = 578nm — инвариантная точка жёлтого Бецольда-Брюкке
-//!      (Purdy 1937, Am. J. Psychol. 49, 313–315; Jacobs & Wascher 1967,
-//!      J. Opt. Soc. Am. 57, 1155–1156).
+//! Метод (Zone B slice 5, статус уточнён 2026-07-11):
+//!   1. λ = 578nm — замороженный spectral reference, а не универсальный
+//!      unique-yellow наблюдателя. Observer claim отклонён в M-12.
 //!   2. CMF при 578nm — линейная интерполяция официальной CIE 1931 2° 5нм-таблицы.
 //!   3. Нормировка к Y=1 (hue инвариантен к радиансности: масштабирование LMS′
 //!      множит a и b одинаково — отношение в atan2 не меняется; проверяется ниже).
-//!   4. XYZ → Oklab НАПРЯМУЮ через M1/M2 (Ottosson 2020) — БЕЗ проекции в sRGB:
+//!   4. XYZ → Oklab НАПРЯМУЮ через замороженные original-2020 M1/M2 — БЕЗ
+//!      проекции в sRGB:
 //!      покомпонентный гамут-клэмп не сохраняет оттенок (демонстрируется ниже).
 //!   5. h = atan2(b, a).
 //!
-//! Печатает также golden-значения muddiness для characterization-тестов.
+//! Это provenance именно frozen compatibility value `90.4011°`. Production sRGB
+//! path использует revised-2021 matrices (`spaces/oklab.rs`), поэтому результат
+//! version-sensitive. Скрипт не доказывает observer meaning или Hanning-эвристику.
 
 // CIE 1931 2° standard observer, 5nm table (x̄, ȳ, z̄)
 const CMF_575: [f64; 3] = [0.8425, 0.9154, 0.0018];
 const CMF_580: [f64; 3] = [0.9163, 0.8700, 0.00165];
 
-/// XYZ (D65) → LMS, Ottosson 2020 M1. Не входит в продуктивное ядро
-/// (ядро работает от sRGB), поэтому определена здесь, в скрипте провенанса.
+/// XYZ (D65 reference) → LMS, original Ottosson 2020 M1.
+///
+/// Эта version-frozen матрица не является SSOT production sRGB path; она
+/// сохранена только чтобы воспроизводить опубликованное compatibility value M-12.
 #[rustfmt::skip]
 const M1_XYZ_TO_LMS: [[f64; 3]; 3] = [
     [0.8189330101, 0.3618667424, -0.1288597137],
@@ -28,7 +32,7 @@ const M1_XYZ_TO_LMS: [[f64; 3]; 3] = [
     [0.0482003018, 0.2643662691,  0.6338517070],
 ];
 
-/// LMS′ → Oklab, Ottosson 2020 M2 (та же матрица, что в spaces/oklab.rs).
+/// LMS′ → Oklab, original Ottosson 2020 M2.
 #[rustfmt::skip]
 const M2_LMS_TO_OKLAB: [[f64; 3]; 3] = [
     [0.2104542553,  0.7936177850, -0.0040720468],
@@ -73,7 +77,7 @@ fn main() {
     let h = hue_deg(lab);
     println!("Oklab a={:+.10} b={:+.10}", lab[1], lab[2]);
     println!(
-        "H_Y = {h:.4}°  (константа M-12: {})",
+        "selected-578nm hue = {h:.4}°  (frozen M-12: {})",
         labcolors_core::cleanliness::H_Y_DEG
     );
 
@@ -93,22 +97,4 @@ fn main() {
         "slice-4 XYZ=(1.207,1,0) без клэмпа: {:.4}° (после sRGB-клэмпа было 96.9°)",
         hue_deg(lab_wrong)
     );
-
-    // Golden-значения muddiness для characterization-тестов (Fowler class B)
-    println!("\n— mud goldens (muddiness_from_hex) —");
-    for (label, hex) in [
-        ("olive", "#6B6B2E"),
-        ("babypoop", "#937C00"),
-        ("puke", "#9AAE07"),
-        ("gold1", "#9e6c00"),
-        ("gold2", "#8f6424"),
-        ("grey", "#808080"),
-        ("teal", "#008080"),
-        ("navy", "#000080"),
-        ("red", "#FF0000"),
-        ("blue", "#0000FF"),
-    ] {
-        let mud = labcolors_core::cleanliness::muddiness_from_hex(hex).unwrap();
-        println!("{label:9} {hex}  mud={mud:.8}");
-    }
 }

@@ -40,5 +40,12 @@
     "bg": "#007AFF",
     "composite": "#80BDFF",
     "minAlpha": 1.0
+  },
+  {
+    "tint": "#C0B2FA",
+    "alpha": 0.122,
+    "bg": "#000000",
+    "composite": "#17161F",
+    "minAlpha": 0.9803921568627451
   }
 ]

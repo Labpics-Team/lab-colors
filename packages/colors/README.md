@@ -20,6 +20,14 @@ npm install @labpics/colors
 npm run build   # → pkg/ (wasm + JS-обёртка + .d.ts)
 ```
 
+Пакет экспортирует `@labpics/colors/build-metadata.json` — self-declared
+machine-readable metadata конкретной сборки: npm/core versions, exact source
+SHA, digest и SHA-256 conformance manifest/family set, а также размер и SHA-256
+WASM-байтов. Release-gate сверяет объект целиком с исходными файлами и повторяет
+проверку после чистой установки tarball. Это integrity metadata внутри
+артефакта, не криптографическая provenance/Sigstore-аттестация, не runtime
+telemetry и не сетевой запрос.
+
 ---
 
 ## Как использовать
@@ -137,13 +145,51 @@ interface ResolvedTheme {
   roles: Record<string, RoleResult>;      // все роли с деталями
 }
 
-type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
+type RoleResult =
+  | SolvedColor
+  | TranslucentRole
+  | GlowRole
+  | MaterialRole
+  | NoneRole
+  | UnreachableRole;
 ```
 
-Каждая роль — одно из четырёх состояний:
+Каждая роль — одна из шести категорий результата; у Glow есть два терминальных
+состояния:
 
 - `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
-- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — солид-композит на фоне резолва и его контраст (браузер композитит тинт на живой подложке).
+- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — exact encoded-sRGB8 reference-композит на фоне резолва и его контраст. Конкретный renderer и color-management pipeline проверяются отдельно.
+- `GlowRole` — discriminated union. `kind: "glow"` несёт два цвета для
+  `mix-blend-mode: screen`: `cssVar` — halo, `${cssVar}-core` — core,
+  `${cssVar}-alpha` — каноническая `alphaCss`. `compositeProfile` /
+  `compositeGuarantee` описывают exact point-композит отдельно от
+  `decisionGuarantee`. `layerRecipeProfile` фиксирует общий рецепт слоёв
+  `"cam16-jprime-oklab-cusp-v1"`, а обязательный
+  `appearanceDiagnosticProfile` — CAM16 appearance-модель результата. Отдельный
+  `selectionDiagnosticProfile` сообщает, применялась ли CAM16-диагностика именно
+  при выборе состояния: для exact no-op он равен `null`, для legacy solve —
+  `"cam16-ucs-jprime-li2017-v1"`. `targetStatus` различает эти ветви явно:
+  `"exact-noop-unreachable"`, `"legacy-reached"` или
+  `"legacy-unreachable"`. Determinate-форма — union из этих трёх согласованных
+  ветвей: смешать stable/legacy profile, guarantee, selection diagnostic,
+  status и `degraded` на уровне TypeScript невозможно. Outward interval не
+  входит в Glow capability этого релиза. `kind: "glow-indeterminate"`
+  означает, что профиль `stable-v1` не выбрал target/max state без sound bound;
+  для такой роли CSS-переменные не эмитятся и legacy fallback не применяется.
+  Цель и все `*CompositeHex` / `*AchievedDj` относятся только к изолированным
+  point-слоям, а не к полному blur/overlap-эффекту, браузеру или дисплею.
+- `MaterialRole` — union трёх терминальных исходов: satisfied transparent
+  endpoint (`alpha = 0`), satisfied bisection bracket (`alpha` побитно равна
+  `upperAlpha`) и degraded opaque endpoint (`alpha = 1`). `alphaStatus`,
+  `alphaGuarantee` и compatibility-поле `guaranteed` согласованы типом. `floor`
+  — запрошенный пол; он держится только при `alphaStatus: "satisfied"`. Primary
+  остаётся солид-каноном, `-01` — тинтом, `-02` — опаковой базой. Численный
+  профиль явно фиксирует operation order:
+  `encoded-srgb-byte-scale-affine-platform-binary64-powf-v1`: original WCAG 2.1
+  (2018) split `0.03928`, conservative binary64 channel envelope и обе стороны
+  пересечённого EOTF seam. Bracket доступен только после directed-search guard;
+  это platform-characterization, а не двухугловая теорема, глобальная
+  монотонность, первый passing state или точная минимальная alpha.
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
 
@@ -159,7 +205,26 @@ type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 ### `engine.loadConfig(json): string`
 
-Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight: невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight проверяет не только имена ролей, но и итоговый CSS-namespace: `-core`/`-alpha` Glow и `-01`/`-02` Material не могут быть затёрты другой ролью или алиасом. Невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+
+Каждый Glow-рецепт обязан явно выбрать numerical-decision profile; default и
+неявного legacy-пути нет:
+
+```json
+{
+  "kind": "glow",
+  "source": { "kind": "brand" },
+  "step": "base",
+  "decision_profile": "stable-v1"
+}
+```
+
+`stable-v1` возвращает typed `glow-indeterminate`, когда sound bound для
+нетривиального CAM16 target/max-решения недоступен. Если существующая интеграция
+обязана пока сохранить прежнюю CSS-эмиссию, укажите
+`legacy-platform-dependent-v1` явно и обрабатывайте его как compatibility
+profile, а не как численную гарантию. Полная миграция с rollback-порядком — в
+[гайде exact alpha / typed Glow](https://github.com/Labpics-Team/lab-colors/blob/main/docs/migrations/exact-alpha-glow.md).
 
 ---
 
@@ -175,9 +240,13 @@ type RoleResult = SolvedColor | TranslucentRole | NoneRole | UnreachableRole;
 
 ---
 
-### `engine.muddiness(hex): number` · `engine.confidence(hex): number`
+### `engine.muddiness(hex): number`
 
-`muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи). `confidence` — надёжность этой оценки: `0` означает, что оценке нельзя доверять (у границы решения или серого фронтира), выше — увереннее. Верхний потолок — деталь калибровки, не контракт: не хардкодить.
+`muddiness` возвращает замороженный числовой выход исторической формулы. Это
+`experimental compatibility proxy`: legacy-имя сохранено для совместимости, но
+значение не является валидированным на наблюдателях человеческим вердиктом
+clean/dirty и не должно использоваться как production decision. Сам диапазон
+`[0, 1]` — свойство формулы, а не шкала человеческого восприятия.
 
 ---
 
@@ -216,7 +285,7 @@ interface WatchController {
 
 ### `adaptTheme(element, options): AdaptController`
 
-Режим с гистерезисом: дешёвая проверка каждый кадр, пересчёт и плавный переход только при устойчивом ухудшении контраста. Применяет немедленно и возвращает контроллер.
+Режим с dwell-фильтром: дешёвая проверка каждый кадр, пересчёт и плавный переход только при устойчивом ухудшении контраста. Это один порог с выдержкой, не двухпороговый гистерезис. Применяет немедленно и возвращает контроллер.
 
 ```ts
 interface AdaptThemeOptions {
@@ -230,7 +299,7 @@ interface AdaptThemeOptions {
   sustainMs?: number;                // минимальное время удержания нарушения (по умолчанию 120)
   dwellMs?: number;                  // минимальный интервал между пересчётами (по умолчанию 250)
   easeMs?: number;                   // длительность перехода (по умолчанию 280; уменьшается при reduced-motion)
-  strict?: boolean;                  // держать минимальный контраст на каждом кадре перехода (по умолчанию false)
+  strict?: boolean;                  // legacy characterized clamp; не universal floor certificate (по умолчанию false)
   reducedMotion?: boolean;           // переопределить системную настройку
 }
 
@@ -243,20 +312,37 @@ interface AdaptController {
 }
 ```
 
+`strict` сохраняет прежнее runtime-поведение, но не является доказательством
+минимального или проходящего состояния на каждом кадре: путь
+Oklab→gamut clip→sRGB8 немонотонен. Finite hard-floor-safe replacement ведётся в
+#287; до него этот флаг следует считать compatibility characterization.
+
 Управляйте через `start()` (внутренний rAF-цикл) или вызывайте `tick()` из собственного цикла. Смена темы применяется мгновенно — это осознанное намерение, а не дрейф.
+Перед применением результата контроллер проверяет provenance как stable-, так и
+legacy-ветвей Glow. Нетипизированный внешний mock с невозможным сочетанием
+profile/guarantee/diagnostic/status отклоняется `TypeError`; fallback-цвет из
+такого объекта не применяется.
 
 ---
 
 ### `effectiveBackground(element, options?): string`
 
-Возвращает непрозрачный `#RRGGBB` — цвет, который наблюдатель реально видит за содержимым `element`. Обходит цепочку предков и выполняет альфа-композитинг каждого `background-color` до получения непрозрачного результата, поверх `fallback` (по умолчанию белый).
+Возвращает непрозрачный reference-`#RRGGBB`, вычисленный для поддерживаемого
+подмножества DOM `background-color`. Это не browser pixel capture и не
+сертификат цвета, который реально видит наблюдатель. Helper обходит цепочку
+предков и композитит распознанные слои поверх `fallback` (по умолчанию белый).
 
 ```ts
 const bg = effectiveBackground(panel);                        // например "#0F1014"
 const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 ```
 
-**Честное ограничение:** работает только с сплошными и полупрозрачными `background-color` — не с `background-image`, градиентами, размытым фоном или видео. Для таких поверхностей передайте фон явно.
+**Честное ограничение:** работает только с поддерживаемыми сплошными и
+полупрозрачными `background-color`; неподдерживаемый CSS, неполная прозрачная
+цепочка, `background-image`, градиент, blur и video не дают полного наблюдения.
+Текущий compatibility helper ещё может отбросить неподдерживаемый слой или
+использовать fallback; для correctness передайте фон явно. Typed `Unknown`
+replacement принадлежит #283.
 
 Дополнительно экспортируются вспомогательные функции для работы со слоями: `parseCssColor`, `compositeOver`, `compositeStackToHex`, `toHex` и `oklabLerp` (перцептуально равномерная интерполяция между двумя hex-значениями — траектория цвета при переходе).
 
@@ -264,19 +350,32 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-| Артефакт | raw | gzip |
-|----------|-----|------|
-| `labcolors_bg.wasm` | ~313 КБ | ~138 КБ |
-| `labcolors.js` (JS-обёртка) | ~17 КБ | ~4 КБ |
+Размер не закреплён в документации приблизительным числом: оно устаревает при
+любом изменении солвера. SSOT — шаг CI `report bundle size (gzip)` в `ci.yml`,
+который для каждого коммита печатает точные raw-байты и результат `gzip -9`
+отдельно для `labcolors_bg.wasm` и wasm-bindgen-обёртки `labcolors.js`.
 
-Замер CI-шага `report bundle size` (ci.yml) — raw и gzip.
+Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
+поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого
+рендера, определяет интеграция: до первого `resolveTheme` инициализация обязана
+завершиться; приложение может preload/кэшировать модуль. JS-хелперы
+(`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) имеют
+именованные экспорты и допускают tree-shaking, но их размер также следует мерить
+сборкой, а не описывать приблизительно.
 
-Это ВЕСЬ движок: перцептивная модель CAM16, солверы контраста, лестницы, граница конфига. `.wasm` — не JS-байты бандла, а ассет: он **не на критическом пути рендера** — грузится параллельно, компилируется потоково вне главного треда, кэшируется браузером после первой загрузки. Вспомогательные функции (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) — несколько сотен байт чистого JavaScript с tree-shaking через именованные экспорты.
-
-Требует современных браузеров (2023+): сборщики Vite / webpack 5 / Next штатно понимают `new URL('….wasm', import.meta.url)` (вывод wasm-pack). В node передавайте wasm-байты напрямую в `init({ module_or_path })`.
+Release packer закреплён на Node 24.14/npm 11.9; это не consumer floor.
+Публичный контракт `Node >=22.11.0` независимо прогоняется отдельным CI job. Browser-
+матрица использует прямую передачу wasm-байтов в `init({ module_or_path })` и
+headless Chrome из CI. ESM/URL-обёртка генерируется wasm-pack, но совместимость
+с конкретной версией Vite, webpack, Next или другим браузером не заявляется без
+отдельного smoke-гейта.
 
 ### Для аудиторов цепочки поставки
 
+- **Build metadata:** экспорт `@labpics/colors/build-metadata.json` декларирует
+  source SHA и conformance pack для установленного WASM; verifier отклоняет
+  любое лишнее, отсутствующее или несовпадающее поле. Объект не подписан и не
+  заменяет отключённую npm/Sigstore provenance-аттестацию.
 - **Network access (Socket и др.):** единственный `fetch` в пакете (`pkg/labcolors.js`) загружает СОБСТВЕННЫЙ `.wasm`-файл пакета при `init(url)` — стандартный лоадер wasm-bindgen. Ни внешних адресов, ни отправки данных, ни исполнения при импорте. В node-пути (передача байтов) `fetch` не вызывается.
-- **Bundlephobia `BuildError`:** их webpack-конвейер не умеет `.wasm`-ассеты («loader customization needed») — так падает почти любой WASM-пакет. Реальные размеры — в таблице выше (замер CI-шага `report bundle size`).
-- **Zero runtime JS-dependencies:** npm-поле `dependencies` пусто — транзитивной JS/npm-цепочки поставки нет. Rust-крейты сборки (`serde`, `serde_json` и др.) компилируются ВНУТРЬ `.wasm` (учтены в его размере выше); их цепочка аудируется на стороне сборки — `cargo audit` (RustSec) в CI lab-colors.
+- **Bundlephobia `BuildError`:** их webpack-конвейер не умеет `.wasm`-ассеты («loader customization needed») — так падает почти любой WASM-пакет. Реальный размер конкретного коммита показывает CI-шаг `report bundle size (gzip)`.
+- **Zero runtime JS-dependencies:** npm-поле `dependencies` пусто — транзитивной JS/npm-цепочки поставки нет. Rust-крейты сборки (`serde`, `serde_json` и др.) компилируются ВНУТРЬ `.wasm` (учтены CI-замером); их цепочка аудируется на стороне сборки — `cargo audit` (RustSec) в CI lab-colors.
