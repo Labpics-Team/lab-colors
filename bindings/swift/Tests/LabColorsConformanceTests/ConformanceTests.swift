@@ -69,11 +69,15 @@ final class ConformanceTests: XCTestCase {
     func screenComposite(tint: String, alpha: Double, background: String) -> String {
         let glow = channels(tint)
         let bg = channels(background)
-        let result = (0..<3).map { channel in
-            Int(floor(
-                Double(bg[channel])
-                    + alpha * Double(glow[channel]) * Double(255 - bg[channel]) / 255.0
-                    + 0.5))
+        var result: [Int] = []
+        result.reserveCapacity(3)
+        for channel in 0..<3 {
+            let backgroundChannel = Double(bg[channel])
+            let glowChannel = Double(glow[channel])
+            let backgroundHeadroom = Double(255 - bg[channel])
+            let contribution = alpha * glowChannel * backgroundHeadroom / 255.0
+            let rounded = Int(floor(backgroundChannel + contribution + 0.5))
+            result.append(rounded)
         }
         return String(format: "#%02X%02X%02X", result[0], result[1], result[2])
     }

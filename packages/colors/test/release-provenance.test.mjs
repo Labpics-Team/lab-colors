@@ -39,24 +39,29 @@ test("prepack source guard is clean-tree and exact-SHA executable evidence", asy
     command("git", ["add", "."], fixture);
     command("git", ["commit", "--quiet", "-m", "fixture"], fixture);
 
-    const module = await import(pathToFileURL(join(scripts, "prepare-npm-package.mjs")));
-    const head = command("git", ["rev-parse", "HEAD"], fixture);
-    assert.equal(module.verifiedSourceSha(), head);
-
     const previousSha = process.env.GITHUB_SHA;
     try {
+      delete process.env.GITHUB_SHA;
+      const module = await import(pathToFileURL(join(scripts, "prepare-npm-package.mjs")));
+      const head = command("git", ["rev-parse", "HEAD"], fixture);
+      assert.equal(module.verifiedSourceSha(), head);
+
+      process.env.GITHUB_SHA = head;
+      assert.equal(module.verifiedSourceSha(), head);
+
       process.env.GITHUB_SHA = "0".repeat(40);
       assert.throws(
         () => module.verifiedSourceSha(),
         /does not equal checked-out HEAD/,
       );
+
+      delete process.env.GITHUB_SHA;
+      writeFileSync(join(fixture, "untracked.txt"), "must make the guard red\n");
+      assert.throws(() => module.verifiedSourceSha(), /source is dirty/);
     } finally {
       if (previousSha === undefined) delete process.env.GITHUB_SHA;
       else process.env.GITHUB_SHA = previousSha;
     }
-
-    writeFileSync(join(fixture, "untracked.txt"), "must make the guard red\n");
-    assert.throws(() => module.verifiedSourceSha(), /source is dirty/);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
