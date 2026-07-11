@@ -22,7 +22,7 @@ pub(crate) const AA_UI_RATIO: f64 = 3.0;
 const LEGACY_CHANNEL_SPLIT: f64 = 0.039_28;
 
 /// First binary64 value on the power branch of the legacy split.
-const LEGACY_CHANNEL_SPLIT_RIGHT: f64 = f64::from_bits(0x3fa4_1c82_16c6_1524);
+const LEGACY_CHANNEL_SPLIT_RIGHT: f64 = f64::from_bits(LEGACY_CHANNEL_SPLIT.to_bits() + 1);
 
 const RED_WEIGHT: f64 = 0.2126;
 const GREEN_WEIGHT: f64 = 0.7152;

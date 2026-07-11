@@ -1320,6 +1320,7 @@ pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lpc::lpc_with_vc;
 
     #[test]
     fn internal_invariant_failure_is_not_reported_as_invalid_client_input() {
@@ -1327,7 +1328,6 @@ mod tests {
         assert!(error.to_string().starts_with("internal invariant failure:"));
         assert!(!error.to_string().starts_with("invalid input:"));
     }
-    use crate::lpc::lpc_with_vc;
 
     /// D2(a) страж (аудит 2026-07-03): `Unreachable` не несёт never-constructed
     /// вариантов-заготовок. `UnsupportedBackground` («future inputs», 0 точек

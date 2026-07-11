@@ -395,6 +395,12 @@ pub fn screen_layer_over_encoded(
     ])
 }
 
+/// Один канал конечного encoded-sRGB8 screen reference-профиля.
+fn screen_channel_over_srgb8(glow: u8, alpha: f64, bg: u8) -> u8 {
+    (f64::from(bg) + alpha * f64::from(glow) * f64::from(u8::MAX - bg) / f64::from(u8::MAX)).round()
+        as u8
+}
+
 /// Screen-слой в конечном reference-домене encoded-sRGB8.
 ///
 /// Формула вычисляется прямо в шкале байтов и округляется ровно один раз:
@@ -407,11 +413,6 @@ pub fn screen_layer_over_encoded(
 /// # Errors
 ///
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
-fn screen_channel_over_srgb8(glow: u8, alpha: f64, bg: u8) -> u8 {
-    (f64::from(bg) + alpha * f64::from(glow) * f64::from(u8::MAX - bg) / f64::from(u8::MAX)).round()
-        as u8
-}
-
 pub fn screen_layer_over_srgb8(glow: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
         return Err(format!("alpha вне конечного [0,1]: {alpha}"));
@@ -928,6 +929,8 @@ pub fn solve_screen_alpha_for_dj(
         slopes,
     } = screen_point_inputs(glow_tint_hex, bg_hex)?;
     if slopes_are_exact_srgb8_noop(slopes) {
+        // Любая alpha из [0,1] даёт тот же байтовый composite; 0.5 —
+        // канонический средний представитель, а не измеренная величина.
         let alpha = 0.5;
         let alpha_css = crate::css_alpha_value(alpha)?;
         let composite_srgb8 = bg_bytes;
