@@ -196,8 +196,6 @@ Pure core и stateful runtime-controller остаются разными сло�
 
 ## Документация
 
-- [Карта документации](docs/README.md)
-- [Архитектура](docs/architecture.md)
 - [Browser/WASM API](packages/colors/README.md)
 - [ADR: конфиг-граница](docs/decisions/0001-config-boundary.md)
 - [Научный whitepaper](docs/whitepaper.md)
@@ -220,7 +218,6 @@ packages/
 └── colors                  — browser package и runtime helpers
 
 docs/
-├── architecture.md
 ├── decisions/
 ├── empirical-inventory.md
 ├── empirical-residue.md
