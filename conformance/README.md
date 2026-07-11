@@ -34,8 +34,13 @@
 | `ladders.json` | альфы позиции лестницы | `{position, alphaLight, alphaDark}` |
 | `alpha.json` | подложка→α | `{tint, alpha, bg, composite, minAlpha}` |
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
-| `muddiness.json` | мутность цвета | `{hex, score}` |
+| `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
 | `manifest.json` | метаданные и реестр мигрированных numerical sites | `{packVersion, coreVersion, packDigest, counts, numericalSites}` |
+
+`muddiness.json` — это `experimental compatibility proxy`: corpus доказывает
+воспроизводимость исторического числового API, но не валидированный на
+наблюдателях человеческий вердикт clean/dirty и не пригодность для production
+decision. Legacy-идентификаторы сохранены только для совместимости.
 
 - `theme` — kebab-ключ: `light` \| `dark` \| `light-ic` \| `dark-ic`.
 - `contract` (в `solve`): `{kind:"text", lc}` \| `{kind:"ui", lc}` \|
@@ -65,17 +70,25 @@ labels (канон labui): роли `icon` в словаре нет.
 совпадает с каноном по этим правилам:
 
 - **Числовые поля** (`lc`, `wcagRatio`, `score`, `alpha`, `minAlpha`, `alpha*`) —
-  в пределах `DRIFT_TOL = 1e-6` (абсолютная). Байт-точность f64 кросс-платформенно
-  НЕВОЗМОЖНА: `powf`/`atan2`/`ln` в libm разных ОС/архитектур расходятся на
-  несколько ULP (~1e-13); реальный дрейф (не тот surround, опечатка в матрице,
-  путаница единиц) сдвигает значения на целые единицы — на порядки выше
-  толерантности. Единственный источник этого значения для пака —
+  в пределах `DRIFT_TOL = 1e-6` (абсолютная). Для зависимых от libm путей
+  (`powf`/`atan2`/`ln`) битовая идентичность f64 между платформами не
+  гарантируется: реализации разных ОС/архитектур могут расходиться на несколько
+  ULP (~1e-13); реальный дрейф (не тот surround, опечатка в матрице, путаница
+  единиц) сдвигает значения на целые единицы — на порядки выше толерантности.
+  Единственный источник этого значения для пака —
   `crates/labcolors-conformance/src/lib.rs` (`DRIFT_TOL`).
-- **`composite` (hex)** — ТОЧНО. Композит — чистая IEEE-алгебра кодированного
-  sRGB (умножение/сложение) плюс квантование: бит-идентичен на всех платформах.
+- **`composite` (hex)** — ТОЧНО относительно объявленного encoded-sRGB8
+  operation profile: фиксированный порядок IEEE binary64
+  умножения/сложения и квантования задаёт byte-reference. Это контракт профиля,
+  а не заявление о доказанной идентичности произвольной платформы; исполняемое
+  evidence ограничено фактически аттестованной runtime-матрицей ниже.
 - **`solve.outcome.hex`** — в пределах **±1 LSB на канал**. Это квантование
   трансцендентного резолва: у границы 8-бит-ячейки libm-шум может качнуть
   результат на один шаг.
+
+Внутренняя ошибка core и неизвестный forward-вариант `Unreachable` не являются
+solve-векторами: `Pack::generate()` возвращает `PackGenerationError` и не пишет
+правдоподобный `{kind:"unreachable"}` fallback в сертификационный артефакт.
 - **Строки/enum/bool** (`theme`, `position`, `code`, `floorOverride`, `kind`) —
   ТОЧНО.
 

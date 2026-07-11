@@ -39,13 +39,11 @@
 //     usually sit on a substrate, so a brief dip of the aesthetic *surplus*
 //     during the ease is imperceptible while the freshly-solved destination is
 //     always legal.
-//   * Strict (`strict: true`): the WCAG legal floor is HELD every frame. For
-//     text directly on animated content or under `prefers-contrast`, an
-//     intermediate colour is only shown while it still clears the role's
-//     `legalFloor` against the live background; a role whose eased intermediate
-//     would dip below its floor is advanced (monotonically) to the least blend
-//     that stays legal — never below the line, never a backwards flicker. Roles
-//     with no legal floor (decorative) ease freely either way.
+//   * Strict (`strict: true`): requests the legacy per-frame floor clamp. The
+//     current Oklab→clip→sRGB8 path is characterized, but is not globally
+//     monotone and therefore does not prove a least/legal blend for every frame;
+//     #287 owns the finite hard-floor-safe replacement. Roles with no declared
+//     floor (decorative) ease freely either way.
 
 import { applyTheme } from "./apply-theme.js";
 import {
@@ -67,9 +65,9 @@ function easeOut(t) {
   return 1 - u * u * u;
 }
 
-/** WCAG 2.1 relative luminance of `#RRGGBB` — a faithful transcription of the
- * normative definition (0.03928 split, 2.4 exponent), so the strict floor-clamp
- * agrees byte-for-byte with the core's `legalFloor` semantics. */
+/** Relative luminance of `#RRGGBB` in the frozen original WCAG 2.1 (2018)
+ * profile (0.03928 split, 2.4 exponent), so the strict floor-clamp agrees
+ * byte-for-byte with the core's versioned `legalFloor` semantics. */
 function relativeLuminanceHex(hex) {
   const rgb = parseCssColor(hex) ?? [0, 0, 0, 1];
   const lin = (c) => {
@@ -136,8 +134,9 @@ function segLum(seg, t) {
  * @param {number} [options.sustainMs=120]  breach must persist this long
  * @param {number} [options.dwellMs=250]  minimum between re-solves
  * @param {number} [options.easeMs=280]  crossfade duration
- * @param {boolean} [options.strict=false]  hold each role's WCAG legal floor
- *   every frame of the ease (for text on animated content / `prefers-contrast`)
+ * @param {boolean} [options.strict=false]  enable the legacy characterized
+ *   per-frame clamp; the current non-monotone interpolation path is not a
+ *   universal floor certificate (replacement tracked by #287)
  * @param {boolean} [options.reducedMotion]  override; default reads matchMedia
  * @param {() => number} [options.now]  clock (default performance.now/Date.now)
  * @param {*} [options.win=globalThis]
@@ -259,7 +258,23 @@ export function adaptTheme(element, options) {
     return { breached, worstIdx };
   };
 
-  const stableGlowsFrom = (result) => {
+  const stableVarKeys = (role) => [
+    role.cssVar,
+    `${role.cssVar}-core`,
+    `${role.cssVar}-alpha`,
+  ];
+
+  const hasDeterminateGlowEnvelope = (result, role, emittedKeys) =>
+    role.compositeProfile === "encoded-srgb8-screen-v1" &&
+    role.compositeGuarantee === "bit-exact" &&
+    role.layerRecipeProfile === "cam16-jprime-oklab-cusp-v1" &&
+    role.appearanceDiagnosticProfile === "cam16-ucs-jprime-li2017-v1" &&
+    role.constraintLayer === "halo" &&
+    typeof role.coreHex === "string" &&
+    typeof role.haloHex === "string" &&
+    emittedKeys.every((emittedKey) => typeof result.vars?.[emittedKey] === "string");
+
+  const validatedStableGlowsFrom = (result) => {
     const out = [];
     for (const [key, role] of Object.entries(result.roles ?? {})) {
       if (!role) continue;
@@ -270,10 +285,31 @@ export function adaptTheme(element, options) {
         }
         continue;
       }
+      const expectedCssVar = `--lab-${key}`;
+      if (role.cssVar !== expectedCssVar) {
+        throw new TypeError(
+          `adaptTheme: Glow '${key}' has non-canonical cssVar`,
+        );
+      }
+      const emittedKeys = stableVarKeys(role);
       if (role.decisionProfile === "legacy-platform-dependent-v1") {
         if (role.kind !== "glow") {
           throw new TypeError(
             `adaptTheme: legacy Glow '${key}' cannot be Indeterminate`,
+          );
+        }
+        const reached =
+          role.targetStatus === "legacy-reached" && role.degraded === false;
+        const unreachable =
+          role.targetStatus === "legacy-unreachable" && role.degraded === true;
+        if (
+          !hasDeterminateGlowEnvelope(result, role, emittedKeys) ||
+          role.decisionGuarantee?.kind !== "legacy-platform-dependent-v1" ||
+          role.selectionDiagnosticProfile !== "cam16-ucs-jprime-li2017-v1" ||
+          (!reached && !unreachable)
+        ) {
+          throw new TypeError(
+            `adaptTheme: legacy Glow '${key}' lacks lawful legacy evidence`,
           );
         }
         continue;
@@ -281,20 +317,13 @@ export function adaptTheme(element, options) {
       if (role.decisionProfile !== "stable-v1") {
         throw new TypeError(`adaptTheme: Glow '${key}' lacks an explicit known decisionProfile`);
       }
-      if (typeof role.cssVar !== "string") {
-        throw new TypeError(`adaptTheme: stable Glow '${key}' lacks cssVar`);
-      }
-      const emittedKeys = [role.cssVar, `${role.cssVar}-core`, `${role.cssVar}-alpha`];
       if (role.kind === "glow") {
         if (
           role.decisionGuarantee?.kind !== "bit-exact" ||
-          role.compositeProfile !== "encoded-srgb8-screen-v1" ||
-          role.compositeGuarantee !== "bit-exact" ||
-          role.diagnosticProfile !== null ||
-          role.constraintLayer !== "halo" ||
-          role.targetStatus !== "unreachable" ||
-          typeof role.haloHex !== "string" ||
-          emittedKeys.some((emittedKey) => typeof result.vars?.[emittedKey] !== "string")
+          !hasDeterminateGlowEnvelope(result, role, emittedKeys) ||
+          role.selectionDiagnosticProfile !== null ||
+          role.targetStatus !== "exact-noop-unreachable" ||
+          role.degraded !== true
         ) {
           throw new TypeError(`adaptTheme: stable Glow '${key}' lacks BitExact evidence`);
         }
@@ -331,6 +360,7 @@ export function adaptTheme(element, options) {
 
   // Adopt one already-resolved set as the current colours (no ease).
   const adoptResolved = (result, now) => {
+    const nextStableGlows = validatedStableGlowsFrom(result);
     // Carry the FULL canonical var set (color + translucent) so no reachable
     // role is dropped by a subsequent apply; only color roles feed the ease.
     baseVars = result.vars && typeof result.vars === "object" ? result.vars : {};
@@ -343,7 +373,7 @@ export function adaptTheme(element, options) {
         hex: r.hex,
         legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
       }));
-    stableGlows = stableGlowsFrom(result);
+    stableGlows = nextStableGlows;
     fgsCache = roles.map((r) => r.hex);
     // The adopt may change the var/role KEY SET — force the next write through
     // `applyTheme`'s full clear-then-write instead of the mid-ease diff path.
@@ -406,12 +436,6 @@ export function adaptTheme(element, options) {
   // oklch form, translucent roles their tint+alpha.
   const applyRolesDirect = () => applyHexes({});
 
-  const stableVarKeys = (role) => [
-    role.cssVar,
-    `${role.cssVar}-core`,
-    `${role.cssVar}-alpha`,
-  ];
-
   /**
    * Recheck the background-dependent stable Glow decision class. This is not a
    * contrast surplus and therefore never passes through sustain/dwell/easing.
@@ -443,7 +467,7 @@ export function adaptTheme(element, options) {
     // stable Glow satellites are adopted; color/translucent roles remain under
     // the existing adaptive contrast controller and do not snap.
     const fresh = colors.resolveTheme(samples[0], theme);
-    const freshStable = stableGlowsFrom(fresh);
+    const freshStable = validatedStableGlowsFrom(fresh);
     const freshByKey = new Map(freshStable.map((role) => [role.key, role]));
     const nextVars = { ...baseVars };
     for (const previous of stableGlows) {
@@ -512,15 +536,12 @@ export function adaptTheme(element, options) {
     if (easing.size === 0) applyRolesDirect();
   };
 
-  // Strict mode: the least blend in [e, 1] whose interpolated colour clears
-  // `floor` against EVERY background sample in `bgLums`. The destination (`to`,
-  // blend 1) is a freshly-solved legal colour, so it anchors the search; we
-  // bisect toward it from the natural ease value `e`. Returns `e` unchanged when
-  // the eased colour is already legal everywhere (the common case — no
-  // intervention). The returned blend is always floor-legal against the worst
-  // sample, except in the unavoidable case where even `to` is illegal against a
-  // sample that drifted further this frame — then it returns 1 (the most-legal
-  // colour we have) and the recheck loop re-solves.
+  // Legacy strict clamp: fixed-step bisection from the natural ease value `e`
+  // toward the freshly-solved destination. Oklab→clip→sRGB8 legality is not
+  // globally monotone, so this is a characterized compatibility selector, not
+  // a proof of the least or universally legal blend. #287 owns the finite
+  // hard-floor-safe replacement. If even `to` fails after background drift, the
+  // selector returns 1 and the recheck loop requests another solve.
   const floorBlend = (seg, e, bgLums, floor) => {
     const legalAt = (blend) => {
       const lum = segLum(seg, blend);
@@ -587,8 +608,9 @@ export function adaptTheme(element, options) {
         // so on a frame where they drift favourably it could return a *lower*
         // blend than last frame — a backwards step toward the old colour, the
         // precise jarring reversal this mode exists to avoid. `held` clamps that
-        // out: the colour progresses monotonically from→to and never below the
-        // legal line on any sample.
+        // out: the scalar blend parameter never retreats. This latch alone is
+        // not a proof that the quantized colour stays above every floor; #287
+        // owns that finite-path guarantee.
         blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
         seg.held = blend;
       }
@@ -640,8 +662,9 @@ export function adaptTheme(element, options) {
     const now = nowArg ?? clock();
     const samples = readSamples();
     const key = samples.join("|");
-    // Advance any in-flight ease first (against the live samples, so strict mode
-    // holds the legal floor every frame as the backdrop keeps drifting under it).
+    // Advance any in-flight ease first against the live samples. Legacy strict
+    // mode applies its characterized clamp here; it is not a universal
+    // per-frame floor certificate (#287).
     if (easing.size > 0) stepEase(now, samples, key);
 
     // Steady state: a static backdrop with no in-flight ease and no pending

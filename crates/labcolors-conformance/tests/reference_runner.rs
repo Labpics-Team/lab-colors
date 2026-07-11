@@ -4,10 +4,10 @@
 //!
 //! 1. **Гейт дрейфа (толерантный)** — ядро воспроизводит КАЖДЫЙ закоммиченный
 //!    вектор: числовые поля в пределах [`DRIFT_TOL`] (`1e-6`, SSOT пака —
-//!    `labcolors-conformance/src/lib.rs`), hex/строки/enum/bool — точно. Байт-точность
-//!    f64 кросс-платформенно НЕВОЗМОЖНА: `powf`/`atan2`/`ln` расходятся на
-//!    несколько ULP между libm разных ОС (векторы генерятся на одной, CI бежит
-//!    на другой). Реальный дрейф (не тот surround, опечатка в матрице) сдвигает
+//!    `labcolors-conformance/src/lib.rs`), hex/строки/enum/bool — точно. Для
+//!    libm-dependent путей bit identity f64 между runtime не гарантируется:
+//!    `powf`/`atan2`/`ln` могут расходиться на несколько ULP между libm разных
+//!    ОС. Реальный дрейф (не тот surround, опечатка в матрице) сдвигает
 //!    значения на целые единицы — на десять порядков выше толерантности.
 //!    Та же толерантность гасит и неточность парсера f64 у `serde_json`.
 //!
@@ -142,7 +142,7 @@ fn core_reproduces_committed_alpha() {
 #[test]
 fn core_reproduces_committed_solve() {
     let committed: Vec<SolveVector> = parse("solve.json");
-    let fresh = generate_solve();
+    let fresh = generate_solve().expect("canonical solve vectors");
     assert_eq!(committed.len(), fresh.len(), "solve.json: изменился состав");
     for (c, f) in committed.iter().zip(&fresh) {
         assert_eq!(
@@ -188,7 +188,7 @@ fn core_reproduces_committed_muddiness() {
         "muddiness.json: изменился состав"
     );
     for (c, f) in committed.iter().zip(&fresh) {
-        assert_eq!(c.hex, f.hex, "ключ мутности");
+        assert_eq!(c.hex, f.hex, "legacy proxy key");
         approx(c.score, f.score, &format!("muddiness {}", c.hex));
     }
 }
@@ -198,7 +198,9 @@ fn core_reproduces_committed_muddiness() {
 #[test]
 fn manifest_metadata_matches_core() {
     let committed: Manifest = parse(MANIFEST_FILE);
-    let fresh = Pack::generate().manifest();
+    let fresh = Pack::generate()
+        .expect("canonical pack generation")
+        .manifest();
     assert_eq!(committed.pack_version, fresh.pack_version, "версия пака");
     assert_eq!(committed.core_version, fresh.core_version, "версия ядра");
     assert_eq!(committed.counts, fresh.counts, "счётчики семейств");

@@ -128,7 +128,7 @@ fn assert_hex_within_one(actual: &str, expected: &str, context: &str) {
 /// libm drift, so this anchors wasm32 independently to committed bytes/values.
 #[wasm_bindgen_test]
 fn committed_conformance_pack_replays_in_wasm32() {
-    let fresh = Pack::generate();
+    let fresh = Pack::generate().expect("canonical pack generation");
     let contrasts: Vec<ContrastVector> =
         serde_json::from_str(include_str!("../../../conformance/vectors/contrasts.json")).unwrap();
     assert_eq!(contrasts.len(), fresh.contrasts.len());
@@ -217,6 +217,39 @@ fn committed_conformance_pack_replays_in_wasm32() {
         fresh_manifest.numerical_sites
     );
     assert_eq!(committed_manifest.counts.total, 82, "anti-vacuum pack size");
+}
+
+/// The public WASM compatibility proxy is wired to the same frozen vectors as
+/// every other delivery surface. The committed file is the oracle: this test
+/// intentionally carries no second hand-written semantic threshold or score.
+#[wasm_bindgen_test]
+fn public_muddiness_binding_matches_committed_conformance_vectors() {
+    let committed: Vec<MuddinessVector> =
+        serde_json::from_str(include_str!("../../../conformance/vectors/muddiness.json")).unwrap();
+    let manifest: Manifest =
+        serde_json::from_str(include_str!("../../../conformance/vectors/manifest.json")).unwrap();
+    assert!(
+        manifest.counts.muddiness > 0,
+        "compatibility corpus must be non-vacuous"
+    );
+    assert_eq!(committed.len(), manifest.counts.muddiness);
+
+    let colors = LabColors::new();
+    for vector in committed {
+        let actual = colors
+            .muddiness(&vector.hex)
+            .unwrap_or_else(|error| panic!("{} must remain accepted: {error:?}", vector.hex));
+        approx_pack_number(
+            actual,
+            vector.score,
+            &format!("public muddiness {}", vector.hex),
+        );
+    }
+
+    assert!(
+        colors.muddiness("not_a_hex").is_err(),
+        "invalid public input must reject rather than panic or fabricate a score"
+    );
 }
 
 /// Shared parity assertion: for a passport, the binding's `resolveTheme`
@@ -308,8 +341,17 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                     Some(g.halo_composite_certificate().guarantee().key())
                 );
                 assert_eq!(
-                    get_str(&entry, "diagnosticProfile").as_deref(),
-                    g.diagnostic_profile().map(|profile| profile.key())
+                    get_str(&entry, "layerRecipeProfile").as_deref(),
+                    Some(g.layer_recipe_profile().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "appearanceDiagnosticProfile").as_deref(),
+                    Some(g.appearance_diagnostic_profile().key())
+                );
+                assert_eq!(
+                    get_str(&entry, "selectionDiagnosticProfile").as_deref(),
+                    g.selection_diagnostic_profile()
+                        .map(|profile| profile.key())
                 );
                 assert_eq!(
                     get_str(&entry, "decisionProfile").as_deref(),
@@ -364,7 +406,11 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                 );
                 assert_eq!(
                     get_bool(&entry, "degraded"),
-                    g.target_status() == labcolors_core::GlowTargetStatus::Unreachable
+                    matches!(
+                        g.target_status(),
+                        labcolors_core::GlowTargetStatus::ExactNoopUnreachable
+                            | labcolors_core::GlowTargetStatus::LegacyUnreachable
+                    )
                 );
             }
             // `Resolved` is `#[non_exhaustive]`: a future core variant must be
@@ -542,9 +588,22 @@ fn stable_glow_both_lawful_outcomes_cross_the_wasm_boundary() {
         Some("stable-v1")
     );
     assert_eq!(
-        get_str(&glow, "diagnosticProfile"),
+        get_str(&glow, "layerRecipeProfile").as_deref(),
+        Some("cam16-jprime-oklab-cusp-v1")
+    );
+    assert_eq!(
+        get_str(&glow, "appearanceDiagnosticProfile").as_deref(),
+        Some("cam16-ucs-jprime-li2017-v1"),
+        "full resolved Glow must identify its core appearance measurement"
+    );
+    assert_eq!(
+        get_str(&glow, "selectionDiagnosticProfile"),
         None,
-        "exact no-op must not claim an appearance diagnostic"
+        "exact no-op must not claim a selection diagnostic"
+    );
+    assert_eq!(
+        get_str(&glow, "targetStatus").as_deref(),
+        Some("exact-noop-unreachable")
     );
     let guarantee = get_obj(&glow, "decisionGuarantee");
     assert_eq!(get_str(&guarantee, "kind").as_deref(), Some("bit-exact"));

@@ -1,8 +1,8 @@
-//! Конечный point-reference примитив для screen-рецепта glow.
+//! Конечный точечный reference-примитив для screen-рецепта glow.
 //!
-//! Модуль рассчитывает encoded-композит двух слоёв. Он не моделирует
-//! физическое излучение, blur-поле или восприятие полного пространственного
-//! эффекта: эти утверждения требуют render/context-контракта #221.
+//! Модуль рассчитывает encoded-композит двух слоёв. Он не моделирует физическое
+//! излучение, поле размытия или восприятие полного пространственного эффекта:
+//! эти утверждения требуют контракта рендеринга и контекста #221.
 //!
 //! # Модель
 //!
@@ -22,30 +22,31 @@
 //! - **монотонно и ЛИНЕЙНО по α** на канал. Из этого НЕ следует монотонность
 //!   CAM16 J': солвер поэтому перебирает конечное множество реально эмитируемых
 //!   sRGB8-композитов, а не предполагает форму перцептивной функции;
-//! - на белом (1−bg)=0 слой является point-no-op именно по формуле screen;
+//! - на белом (1−bg)=0 слой является точечным no-op именно по формуле screen;
 //!   это численное свойство reference-профиля, не утверждение о физическом
-//!   свете или неизвестном renderer.
+//!   свете или неизвестном рендерере.
 //!
-//! # Lab UI preset ступеней
+//! # Ступени пресета Lab UI
 //!
-//! Текущие |ΔJ′| взяты из point-композитов клиентского стека теней Lab UI:
+//! Текущие |ΔJ′| взяты из точечных композитов клиентского стека теней Lab UI:
 //! `subtle:=minor`, `base:=ambient`, `bloom:=major`. Это воспроизводимая
-//! история preset, но не универсальный psychophysical law и не taxonomy
-//! generic core; перенос в client profile отслеживается #221.
+//! история пресета, но не универсальный психофизический закон и не таксономия
+//! обобщённого core; перенос в клиентский профиль отслеживается #221.
 //!
 //! # Анатомия (двухслойный bloom)
 //!
 //! В текущем клиентском recipe core — цвет с поднятой к белому светлотой, halo
-//! — исходный цвет. Радиусы и blur здесь отсутствуют: названия обозначают
+//! — исходный цвет. Радиусы и размытие здесь отсутствуют: названия обозначают
 //! назначение слоёв у потребителя, а не измеренную геометрию.
 //!
-//! Для хроматического источника core строится существующей policy
-//! [`crate::accent_balance`]: midpoint J′ задаёт seed Oklab-светлоты, chroma
-//! берётся на sRGB-границе данного hue. Точный sRGB8-нейтраль остаётся
-//! нейтральным: у него нет hue, который можно было бы честно «усилить».
+//! Для хроматического источника core строится существующей политикой
+//! [`crate::accent_balance`]: midpoint J′ задаёт начальную Oklab-светлоту, chroma
+//! берётся на sRGB-границе данного hue. Точная sRGB8-нейтраль остаётся
+//! нейтральной: у неё нет hue, который можно было бы честно «усилить».
 //! После хроматического преобразования и sRGB8-квантования итоговый J′ не
-//! объявляется равным seed — фактическая point-метрика core возвращается
-//! отдельно. Это versioned recipe, а не оптимум, проверенный на наблюдателях.
+//! объявляется равным начальному значению — фактическая точечная метрика core
+//! возвращается отдельно. Это версионированный recipe, а не оптимум,
+//! проверенный на наблюдателях.
 
 use crate::lcs::LcsColor;
 use crate::numerics::{
@@ -56,7 +57,6 @@ use crate::spaces::srgb::{
     decode_8bit, hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_to_xyz,
 };
 use crate::spaces::vc::ViewingConditions;
-use std::cmp::Ordering;
 
 /// Контрактный шаг glow-subtle (|ΔJ'| композита от фона): зеркало
 /// стек-композита fx-shadow-minor на светлом якоре labui.
@@ -69,26 +69,34 @@ pub const GLOW_BASE_DJ: f64 = 2.3006;
 // SSOT-TRACKED — зеркальная деривация от владельческих альф теней.
 pub const GLOW_BLOOM_DJ: f64 = 13.3251;
 
-/// Версия конечного reference-домена exact point-композита glow.
+/// Версия конечного reference-домена точного точечного композита glow.
 ///
-/// Это не сертификат конкретного браузера, дисплея, CAM16 decision или
+/// Это не сертификат конкретного браузера, дисплея или решения CAM16 и не
 /// пространственного поля: профиль фиксирует только encoded sRGB8 + screen.
 pub const GLOW_COMPOSITE_PROFILE: &str = "encoded-srgb8-screen-v1";
 
-/// Diagnostic appearance model для legacy target/max path. Он не является
-/// numerical decision guarantee и не повышает composite certificate.
+/// Диагностическая appearance-модель, используемая legacy-выбором и замерами
+/// полного двухслойного результата Glow. Она не является гарантией численного
+/// решения и не усиливает сертификат композита.
 pub const GLOW_DIAGNOSTIC_PROFILE: &str = "cam16-ucs-jprime-li2017-v1";
 
-/// Typed identity exact compositing profile.
+/// Версия recipe, строящего core-слой из начального CAM16-UCS J′ и Oklab cusp.
+///
+/// Профиль идентифицирует только алгоритм построения слоя. Он не является
+/// гарантией выбора, appearance-сертификатом или утверждением о пространстве
+/// либо браузере.
+pub const GLOW_LAYER_RECIPE_PROFILE: &str = "cam16-jprime-oklab-cusp-v1";
+
+/// Типизированный идентификатор профиля точного композитинга.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowCompositeProfileV1 {
-    /// Encoded sRGB8 point screen-composite.
+    /// Точечный screen-композит в encoded sRGB8.
     EncodedSrgb8ScreenV1,
 }
 
 impl GlowCompositeProfileV1 {
-    /// Стабильный wire/certificate key.
+    /// Стабильный wire-ключ сертификата.
     pub fn key(self) -> &'static str {
         match self {
             Self::EncodedSrgb8ScreenV1 => GLOW_COMPOSITE_PROFILE,
@@ -96,16 +104,16 @@ impl GlowCompositeProfileV1 {
     }
 }
 
-/// Guarantee exact compositing certificate, независимо от appearance decision.
+/// Гарантия точного сертификата композитинга, независимая от appearance-решения.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowCompositeGuaranteeV1 {
-    /// Integer/rational boundary + emitted binary64 alpha identity.
+    /// Фактический encoded-sRGB8 state и идентичность эмитированной binary64 alpha.
     BitExact,
 }
 
 impl GlowCompositeGuaranteeV1 {
-    /// Стабильный wire key.
+    /// Стабильный wire-ключ.
     pub fn key(self) -> &'static str {
         match self {
             Self::BitExact => "bit-exact",
@@ -113,7 +121,7 @@ impl GlowCompositeGuaranteeV1 {
     }
 }
 
-/// Appearance diagnostic identity. Значение не является decision guarantee.
+/// Идентификатор appearance-диагностики. Значение не является гарантией решения.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowDiagnosticProfileV1 {
@@ -122,7 +130,7 @@ pub enum GlowDiagnosticProfileV1 {
 }
 
 impl GlowDiagnosticProfileV1 {
-    /// Стабильный wire key.
+    /// Стабильный wire-ключ.
     pub fn key(self) -> &'static str {
         match self {
             Self::Cam16UcsJPrimeLi2017V1 => GLOW_DIAGNOSTIC_PROFILE,
@@ -130,27 +138,46 @@ impl GlowDiagnosticProfileV1 {
     }
 }
 
-/// Явно выбранный профиль numerical decision. `Default` намеренно отсутствует:
-/// legacy path никогда не должен появляться через fallback.
+/// Типизированный идентификатор текущего двухслойного recipe Glow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GlowLayerRecipeProfileV1 {
+    /// Начальный midpoint CAM16-UCS J′, переведённый в Oklab lightness;
+    /// хроматический core берёт ограниченную cusp chroma текущего Oklab hue,
+    /// halo равен источнику.
+    Cam16JPrimeOklabCuspV1,
+}
+
+impl GlowLayerRecipeProfileV1 {
+    /// Стабильный wire-ключ recipe.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Cam16JPrimeOklabCuspV1 => GLOW_LAYER_RECIPE_PROFILE,
+        }
+    }
+}
+
+/// Явно выбранный профиль численного решения. `Default` намеренно отсутствует:
+/// legacy-путь никогда не должен появляться через fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowDecisionProfileV1 {
-    /// Stable contract: без sound bound semantic branch не выбирается.
+    /// Стабильный контракт: без sound bound семантическая ветвь не выбирается.
     StableV1,
-    /// Прежний CAM16/libm-dependent selection, сохранённый только явно.
+    /// Прежний зависящий от CAM16/libm выбор, сохранённый только явно.
     LegacyPlatformDependentV1,
 }
 
 impl GlowDecisionProfileV1 {
-    /// Стабильный config/wire key.
-    pub fn key(self) -> &'static str {
+    /// Стабильный config/wire-ключ.
+    pub const fn key(self) -> &'static str {
         match self {
             Self::StableV1 => "stable-v1",
             Self::LegacyPlatformDependentV1 => "legacy-platform-dependent-v1",
         }
     }
 
-    /// Разбирает обязательный config key; неизвестный профиль не нормализуется.
+    /// Разбирает обязательный config-ключ; неизвестный профиль не нормализуется.
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
             "stable-v1" => Ok(Self::StableV1),
@@ -160,7 +187,7 @@ impl GlowDecisionProfileV1 {
     }
 }
 
-/// Слой, по которому point-солвер держит целевой ΔJ′.
+/// Слой, по которому точечный солвер держит целевой ΔJ′.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowConstraintLayer {
@@ -177,23 +204,27 @@ impl GlowConstraintLayer {
     }
 }
 
-/// Итог проверки target по конечному reference-домену.
+/// Итог проверки цели по конечному reference-домену.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowTargetStatus {
-    /// Найден первый по интенсивности sRGB8-state, держащий цель.
-    Reached,
-    /// Цель не держит ни один state; возвращён глобальный максимум |ΔJ′|, а
-    /// при точном равенстве максимумов — первый state по alpha.
-    Unreachable,
+    /// Стабильный точный no-op: все alpha дают байтовое состояние фона, поэтому
+    /// положительная цель точно недостижима без appearance-выбора.
+    ExactNoopUnreachable,
+    /// Явный legacy-выбор CAM16/libm нашёл первое состояние, держащее цель.
+    LegacyReached,
+    /// Явный legacy-выбор CAM16/libm не нашёл цель и вернул максимум |ΔJ′|,
+    /// а при равенстве максимумов — первое состояние по alpha.
+    LegacyUnreachable,
 }
 
 impl GlowTargetStatus {
     /// Стабильный wire-ключ.
     pub fn key(self) -> &'static str {
         match self {
-            Self::Reached => "reached",
-            Self::Unreachable => "unreachable",
+            Self::ExactNoopUnreachable => "exact-noop-unreachable",
+            Self::LegacyReached => "legacy-reached",
+            Self::LegacyUnreachable => "legacy-unreachable",
         }
     }
 }
@@ -210,7 +241,7 @@ pub enum GlowStep {
 }
 
 impl GlowStep {
-    /// Целевой модуль ΔJ′ CAM16-UCS изолированного halo point-композита.
+    /// Целевой модуль ΔJ′ CAM16-UCS изолированного точечного halo-композита.
     pub fn target_dj(self) -> f64 {
         match self {
             GlowStep::Subtle => GLOW_SUBTLE_DJ,
@@ -256,7 +287,7 @@ fn validate_encoded_rgb(label: &str, rgb: [f64; 3]) -> Result<(), String> {
 
 fn validate_viewing_numerics(vc: &ViewingConditions) -> Result<(), String> {
     // Это только числовая защита CAM16-пути. Она не доказывает полноту или
-    // физическую применимость viewing context: такая граница принадлежит #230.
+    // физическую применимость контекста просмотра: такая граница принадлежит #230.
     for (name, value) in [
         ("n", vc.n),
         ("aw", vc.aw),
@@ -317,8 +348,8 @@ fn validate_lcs_numerics(label: &str, color: &LcsColor) -> Result<(), String> {
 }
 
 /// Только J′ для горячего пути конечного солвера. Oklab-hue и M′ здесь не
-/// участвуют в objective, поэтому полный `LcsColor` был бы лишней работой на
-/// каждом из сотен sRGB8-state. Формула J′ остаётся тем же SSOT из `cam16`.
+/// участвуют в целевой функции, поэтому полный `LcsColor` был бы лишней работой
+/// на каждом из сотен состояний sRGB8. Формула J′ остаётся тем же SSOT из `cam16`.
 fn jp_from_srgb8(bytes: [u8; 3], vc: &ViewingConditions) -> Result<f64, String> {
     let rgb = bytes.map(decode_8bit);
     let (j, _, _) = crate::spaces::cam16::forward(srgb_to_xyz(rgb), vc);
@@ -339,7 +370,7 @@ fn jp_from_hex(hex: &str, vc: &ViewingConditions) -> Result<f64, String> {
 }
 
 /// Непрерывный screen-слой над непрозрачным фоном: `bg + α·G·(1−bg)`
-/// покомпонентно в encoded sRGB. Это алгебра до финального sRGB8-round; для
+/// покомпонентно в encoded sRGB. Это алгебра до финального округления sRGB8; для
 /// эмитируемого reference-пикселя используй [`screen_layer_over_srgb8`].
 ///
 /// # Errors
@@ -364,30 +395,33 @@ pub fn screen_layer_over_encoded(
     ])
 }
 
-/// Screen-слой в конечном encoded-sRGB8 reference-домене.
+/// Screen-слой в конечном reference-домене encoded-sRGB8.
 ///
 /// Формула вычисляется прямо в шкале байтов и округляется ровно один раз:
 /// `round(bg + α·glow·(255−bg)/255)`. Указанный слева направо порядок
 /// binary64-операций является частью reference-профиля и совпадает с JS-
 /// проверкой официального пакета. Нормализация `byte/255` перед обратным
-/// умножением способна сдвинуть half-tie на соседний LSB.
+/// умножением способна сдвинуть граничное значение половинного округления на
+/// соседний LSB.
 ///
 /// # Errors
 ///
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
+fn screen_channel_over_srgb8(glow: u8, alpha: f64, bg: u8) -> u8 {
+    (f64::from(bg) + alpha * f64::from(glow) * f64::from(u8::MAX - bg) / f64::from(u8::MAX)).round()
+        as u8
+}
+
 pub fn screen_layer_over_srgb8(glow: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
         return Err(format!("alpha вне конечного [0,1]: {alpha}"));
     }
-    let channel = |index: usize| {
-        (f64::from(bg[index])
-            + alpha * f64::from(glow[index]) * f64::from(u8::MAX - bg[index]) / f64::from(u8::MAX))
-        .round() as u8
-    };
-    Ok([channel(0), channel(1), channel(2)])
+    Ok(core::array::from_fn(|channel| {
+        screen_channel_over_srgb8(glow[channel], alpha, bg[channel])
+    }))
 }
 
-/// Exact certificate одного изолированного encoded-sRGB8 screen-композита.
+/// Точный сертификат одного изолированного screen-композита encoded-sRGB8.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlowCompositeCertificateV1 {
     tint_srgb8: [u8; 3],
@@ -398,27 +432,27 @@ pub struct GlowCompositeCertificateV1 {
 }
 
 impl GlowCompositeCertificateV1 {
-    /// Reference profile exact арифметики.
+    /// Reference-профиль точной арифметики.
     pub fn profile(&self) -> GlowCompositeProfileV1 {
         GlowCompositeProfileV1::EncodedSrgb8ScreenV1
     }
 
-    /// Exact guarantee не зависит от CAM16 diagnostic/selection.
+    /// Точная гарантия не зависит от диагностики или выбора CAM16.
     pub fn guarantee(&self) -> GlowCompositeGuaranteeV1 {
         GlowCompositeGuaranteeV1::BitExact
     }
 
-    /// Эмитируемый tint byte tuple.
+    /// Эмитируемая тройка байтов tint.
     pub fn tint_srgb8(&self) -> [u8; 3] {
         self.tint_srgb8
     }
 
-    /// Background byte tuple reference-запроса.
+    /// Тройка байтов фона reference-запроса.
     pub fn background_srgb8(&self) -> [u8; 3] {
         self.background_srgb8
     }
 
-    /// Точная binary64 identity alpha.
+    /// Точная binary64-идентичность alpha.
     pub fn alpha_bits(&self) -> u64 {
         self.alpha_bits
     }
@@ -428,7 +462,7 @@ impl GlowCompositeCertificateV1 {
         &self.alpha_css
     }
 
-    /// Exact composite byte tuple.
+    /// Точная тройка байтов композита.
     pub fn composite_srgb8(&self) -> [u8; 3] {
         self.composite_srgb8
     }
@@ -450,7 +484,7 @@ fn composite_certificate(
     }
 }
 
-/// Изолированный point-замер одного screen-слоя в reference-профиле glow.
+/// Изолированный точечный замер одного screen-слоя в reference-профиле glow.
 /// Пространственное перекрытие core/halo сюда намеренно не входит: без
 /// геометрии и порядка слоёв его нельзя восстановить честно.
 pub(crate) struct ScreenLayerMeasurement {
@@ -486,53 +520,39 @@ pub(crate) fn measure_screen_layer_at_alpha(
     })
 }
 
-/// Рациональная стенка квантования α. Целые здесь принципиальны: двоичная
-/// аппроксимация десятичной границы не должна решать, какой байт существует.
-#[derive(Debug, Clone, Copy)]
-struct AlphaWall {
-    numerator: u64,
-    denominator: u64,
-}
-
-impl AlphaWall {
-    const ZERO: Self = Self {
-        numerator: 0,
-        denominator: 1,
-    };
-    const ONE: Self = Self {
-        numerator: 1,
-        denominator: 1,
-    };
-
-    fn cmp(self, other: Self) -> Ordering {
-        (self.numerator * other.denominator).cmp(&(other.numerator * self.denominator))
-    }
-
-    fn same_value(self, other: Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-
-    fn as_f64(self) -> f64 {
-        self.numerator as f64 / self.denominator as f64
-    }
-
-    /// Центр интервала максимизирует запас до обеих стенок. Это канонизация
-    /// представления, а не утверждение о перцептивно «лучшей» непрозрачности.
-    fn midpoint(self, other: Self) -> f64 {
-        if self.same_value(other) {
-            return self.as_f64();
-        }
-        let numerator = self.numerator * other.denominator + other.numerator * self.denominator;
-        let denominator = 2 * self.denominator * other.denominator;
-        numerator as f64 / denominator as f64
-    }
-}
+const ALPHA_ZERO_BITS: u64 = 0.0_f64.to_bits();
+const ALPHA_ONE_BITS: u64 = 1.0_f64.to_bits();
+const MAX_QUANTISED_COMPOSITE_STATES: u16 = 766;
 
 #[derive(Debug, Clone, Copy)]
 struct QuantisedComposite {
     bytes: [u8; 3],
-    lower: AlphaWall,
-    upper: AlphaWall,
+    lower_bits: u64,
+    upper_bits: u64,
+    upper_inclusive: bool,
+}
+
+impl QuantisedComposite {
+    /// Выбирает внутреннюю representable alpha около численного центра state.
+    /// Если midpoint округлился на исключённую верхнюю границу, берётся её
+    /// непосредственный predecessor; singleton при alpha=1 остаётся допустим.
+    fn canonical_alpha(self) -> f64 {
+        let lower = f64::from_bits(self.lower_bits);
+        let upper = f64::from_bits(self.upper_bits);
+        if self.lower_bits == self.upper_bits {
+            debug_assert!(self.upper_inclusive);
+            return lower;
+        }
+
+        let midpoint = lower + (upper - lower) * 0.5;
+        let mut bits = midpoint.to_bits().max(self.lower_bits);
+        if self.upper_inclusive {
+            bits = bits.min(self.upper_bits);
+        } else if bits >= self.upper_bits {
+            bits = self.upper_bits - 1;
+        }
+        f64::from_bits(bits)
+    }
 }
 
 fn encoded_bytes(rgb: [f64; 3]) -> [u8; 3] {
@@ -543,106 +563,185 @@ fn composite_hex(bytes: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2])
 }
 
-/// Поток всех достижимых sRGB8-композитов без промежуточных коллекций.
+/// Поток всех состояний, достижимых representable binary64-alpha в объявленном
+/// operation order [`screen_layer_over_srgb8`].
 ///
-/// На каждом канале стенки строго возрастают, поэтому три уже упорядоченных
-/// потока достаточно слить тремя курсорами. Общая сортировка не добавляет
-/// математической информации, зато затягивает в WASM аллокатор и универсальную
-/// сортировку. Сравнение и группировка остаются рациональными: решение о байте
-/// никогда не зависит от погрешности binary64.
+/// Алгебраически равные рациональные стенки нельзя склеивать: разные
+/// факторизации `G·(255−B)` могут пересечь half-tie на разных `f64`. Поэтому
+/// каждый channel transition находит первый passing binary64 точным lower-bound
+/// по упорядоченным положительным битам. Каждый переход увеличивает хотя бы один
+/// байт, значит состояний не больше `1 + 3·255 = 766`; память остаётся O(1).
 struct QuantisedComposites {
+    glow: [u8; 3],
     background: [u8; 3],
-    slopes: [u64; 3],
-    next_values: [u16; 3],
+    final_bytes: [u8; 3],
     bytes: [u8; 3],
-    lower: AlphaWall,
+    next_boundaries: [Option<u64>; 3],
+    lower_bits: u64,
+    emitted_states: u16,
     finished: bool,
+}
+
+/// Binary64-округление рациональной half-wall, используемое только как seed
+/// экспоненциального поиска. Фактическую границу всегда определяет compositor.
+fn boundary_seed_bits(glow: u8, background: u8, next_value: u8) -> u64 {
+    let background = f64::from(background);
+    let numerator = (f64::from(next_value) - background - 0.5) * f64::from(u8::MAX);
+    let denominator = f64::from(glow) * (f64::from(u8::MAX) - background);
+    debug_assert!(denominator > 0.0);
+    (numerator / denominator).clamp(0.0, 1.0).to_bits()
 }
 
 impl QuantisedComposites {
     fn new(glow: [u8; 3], background: [u8; 3]) -> Self {
-        let slopes = core::array::from_fn(|channel| {
-            u64::from(glow[channel]) * (255 - u64::from(background[channel]))
+        let final_bytes = core::array::from_fn(|channel| {
+            screen_channel_over_srgb8(glow[channel], 1.0, background[channel])
         });
-        let next_values = background.map(|byte| u16::from(byte) + 1);
-        Self {
+        let mut stream = Self {
+            glow,
             background,
-            slopes,
-            next_values,
+            final_bytes,
             bytes: background,
-            lower: AlphaWall::ZERO,
+            next_boundaries: [None; 3],
+            lower_bits: ALPHA_ZERO_BITS,
+            emitted_states: 0,
             finished: false,
+        };
+        for channel in 0..3 {
+            stream.next_boundaries[channel] = stream.next_boundary(channel);
         }
+        stream
     }
 
-    /// На канале `B + α·G·(255−B)/255` новый байт `v` начинается ровно на
-    /// `255·(2(v−B)−1) / (2·G·(255−B))`. Все множители ограничены 8 битами,
-    /// поэтому точное перекрёстное сравнение стенок помещается в `u64`.
-    fn next_wall(&self, channel: usize) -> Option<AlphaWall> {
-        let slope = self.slopes[channel];
-        let value = self.next_values[channel];
-        if slope == 0 || value > u16::from(u8::MAX) {
+    fn next_boundary(&self, channel: usize) -> Option<u64> {
+        let next_value = self.bytes[channel].checked_add(1)?;
+        if self.final_bytes[channel] < next_value {
             return None;
         }
 
-        let base = u64::from(self.background[channel]);
-        let delta = u64::from(value) - base;
-        let wall = AlphaWall {
-            numerator: 255 * (2 * delta - 1),
-            denominator: 2 * slope,
+        debug_assert!(
+            screen_channel_over_srgb8(
+                self.glow[channel],
+                f64::from_bits(self.lower_bits),
+                self.background[channel],
+            ) < next_value,
+            "текущий state уже пересёк искомую channel boundary"
+        );
+        let passes = |bits| {
+            screen_channel_over_srgb8(
+                self.glow[channel],
+                f64::from_bits(bits),
+                self.background[channel],
+            ) >= next_value
         };
-        (wall.cmp(AlphaWall::ONE) != Ordering::Greater).then_some(wall)
+
+        // Рациональная half-wall служит только seed, а не определением state:
+        // фиксированный binary64 operation order может сдвинуть first-passing
+        // alpha относительно этого seed. Экспоненциальный поиск обязательно находит
+        // bracket между уже известными failing lower и passing 1, после чего
+        // обычный lower-bound остаётся точным независимо от качества seed.
+        let seed = boundary_seed_bits(self.glow[channel], self.background[channel], next_value)
+            .clamp(self.lower_bits.saturating_add(1), ALPHA_ONE_BITS);
+
+        let (mut failing, mut passing);
+        if passes(seed) {
+            passing = seed;
+            let mut stride = 1_u64;
+            loop {
+                let probe = passing.saturating_sub(stride).max(self.lower_bits);
+                if !passes(probe) {
+                    failing = probe;
+                    break;
+                }
+                passing = probe;
+                stride = stride.saturating_mul(2);
+            }
+        } else {
+            failing = seed;
+            let mut stride = 1_u64;
+            loop {
+                let probe = failing.saturating_add(stride).min(ALPHA_ONE_BITS);
+                if passes(probe) {
+                    passing = probe;
+                    break;
+                }
+                failing = probe;
+                stride = stride.saturating_mul(2);
+            }
+        }
+
+        while passing - failing > 1 {
+            let middle = failing + (passing - failing) / 2;
+            if passes(middle) {
+                passing = middle;
+            } else {
+                failing = middle;
+            }
+        }
+        Some(passing)
+    }
+
+    fn emit(&mut self, state: QuantisedComposite) -> Result<Option<QuantisedComposite>, String> {
+        self.emitted_states += 1;
+        if self.emitted_states > MAX_QUANTISED_COMPOSITE_STATES {
+            return Err(format!(
+                "binary64 Glow stream превысил доказанную границу {MAX_QUANTISED_COMPOSITE_STATES}"
+            ));
+        }
+        Ok(Some(state))
     }
 
     /// Возвращает очередной интервал `[lower, upper)`; последний интервал
-    /// замкнут справа и заканчивается на `1`. Стенки с одинаковым рациональным
-    /// значением поглощаются вместе, как в прежней сортированной реализации.
+    /// замкнут справа и заканчивается на `1`. Вместе поглощаются только
+    /// transition с одним и тем же первым passing `f64`, а не одинаковые
+    /// rational real-number walls.
     fn next_state(&mut self) -> Result<Option<QuantisedComposite>, String> {
         if self.finished {
             return Ok(None);
         }
 
-        let upper = (0..3)
-            .filter_map(|channel| self.next_wall(channel).map(|wall| (wall, channel)))
-            .min_by(|(left_wall, left_channel), (right_wall, right_channel)| {
-                left_wall
-                    .cmp(*right_wall)
-                    .then_with(|| left_channel.cmp(right_channel))
-            })
-            .map(|(wall, _)| wall);
+        let upper = self.next_boundaries.into_iter().flatten().min();
 
         let Some(upper) = upper else {
             self.finished = true;
-            return Ok(Some(QuantisedComposite {
+            return self.emit(QuantisedComposite {
                 bytes: self.bytes,
-                lower: self.lower,
-                upper: AlphaWall::ONE,
-            }));
+                lower_bits: self.lower_bits,
+                upper_bits: ALPHA_ONE_BITS,
+                upper_inclusive: true,
+            });
         };
 
         let state = QuantisedComposite {
             bytes: self.bytes,
-            lower: self.lower,
-            upper,
+            lower_bits: self.lower_bits,
+            upper_bits: upper,
+            upper_inclusive: false,
         };
-        for channel in 0..3 {
-            if self
-                .next_wall(channel)
-                .is_some_and(|wall| wall.same_value(upper))
-            {
-                self.bytes[channel] = self.bytes[channel].checked_add(1).ok_or_else(|| {
-                    format!("внутренняя стенка переполнила sRGB8-канал {channel}")
-                })?;
-                self.next_values[channel] += 1;
+        let previous = self.bytes;
+        self.bytes = screen_layer_over_srgb8(self.glow, f64::from_bits(upper), self.background)?;
+        self.lower_bits = upper;
+        for (channel, previous_byte) in previous.into_iter().enumerate() {
+            if self.bytes[channel] < previous_byte {
+                return Err(format!(
+                    "binary64 screen stream уменьшил канал {channel}: {} -> {}",
+                    previous_byte, self.bytes[channel]
+                ));
+            }
+            if self.bytes[channel] > previous_byte {
+                self.next_boundaries[channel] = self.next_boundary(channel);
+            } else if self.next_boundaries[channel] == Some(upper) {
+                return Err(format!(
+                    "channel {channel} не изменился на собственной first-passing boundary"
+                ));
             }
         }
-        self.lower = upper;
-        Ok(Some(state))
+        self.emit(state)
     }
 }
 
 /// Тестовый сборщик сохраняет удобный независимый оракул, но `Vec` и сортировка
-/// не входят в production-WASM.
+/// не входят в production-сборку WASM.
 #[cfg(test)]
 fn quantised_composites(
     glow: [u8; 3],
@@ -664,22 +763,22 @@ pub struct GlowSolve {
     /// численный запас до ближайшей границы квантования.
     alpha: f64,
     /// Каноническая CSS-запись той же alpha; хранится вместе с числом, чтобы
-    /// downstream не вводил собственную политику округления.
+    /// нижележащий потребитель не вводил собственную политику округления.
     alpha_css: String,
-    /// Запрошенный |ΔJ′| point-композита halo.
+    /// Запрошенный |ΔJ′| точечного композита halo.
     target_dj: f64,
     /// Фактический |ΔJ'| композита от фона, замерен на эмитируемом hex.
     achieved_dj: f64,
     /// Композит `screen(tint, α)` над фоном, `#RRGGBB`.
     composite_hex: String,
-    /// Exact compositing evidence, независимо от legacy appearance decision.
+    /// Точное свидетельство композитинга, независимое от legacy appearance-решения.
     composite_certificate: GlowCompositeCertificateV1,
-    /// Appearance diagnostic реально выполнялся либо exact decision обошёл его.
-    diagnostic_profile: Option<GlowDiagnosticProfileV1>,
-    /// Деградация: ни один достижимый sRGB8-композит не держит цель (например,
-    /// над белым фоном слой является point-no-op в этом reference-профиле);
-    /// возвращён глобальный максимум |ΔJ'| с честным флагом, НЕ ошибка и НЕ
-    /// молчание.
+    /// Appearance-диагностика, реально использованная только для выбора.
+    /// Точный no-op полностью её обходит.
+    selection_diagnostic_profile: Option<GlowDiagnosticProfileV1>,
+    /// Исход проверки цели с provenance. Точный no-op объявляет точную
+    /// недостижимость по одному байтовому состоянию; явный legacy-путь объявляет
+    /// достижение либо возвращает выбранный CAM16 максимум с legacy-маркером.
     status: GlowTargetStatus,
 }
 
@@ -709,19 +808,23 @@ impl GlowSolve {
         &self.composite_hex
     }
 
-    /// Exact point-composite certificate выбранного state.
+    /// Точный сертификат точечного композита выбранного состояния.
     pub fn composite_certificate(&self) -> &GlowCompositeCertificateV1 {
         &self.composite_certificate
     }
 
-    /// Типизированный результат target-проверки.
+    /// Типизированный результат проверки цели.
     pub fn status(&self) -> GlowTargetStatus {
         self.status
     }
 
-    /// Геттер совместимости прежнего boolean-контракта.
+    /// Геттер совместимости прежнего булева контракта: цель недостижима как при
+    /// точном no-op, так и при явном legacy-исходе с максимумом.
     pub fn degraded(&self) -> bool {
-        self.status == GlowTargetStatus::Unreachable
+        matches!(
+            self.status,
+            GlowTargetStatus::ExactNoopUnreachable | GlowTargetStatus::LegacyUnreachable
+        )
     }
 
     /// Слой, по которому решалась цель.
@@ -729,14 +832,15 @@ impl GlowSolve {
         GlowConstraintLayer::Halo
     }
 
-    /// Exact composite profile; appearance diagnostic identity читается отдельно.
+    /// Точный профиль композита; идентификатор диагностики выбора читается отдельно.
     pub fn composite_profile(&self) -> GlowCompositeProfileV1 {
         self.composite_certificate.profile()
     }
 
-    /// Appearance diagnostic identity, только если этот solve реально его вызвал.
-    pub fn diagnostic_profile(&self) -> Option<GlowDiagnosticProfileV1> {
-        self.diagnostic_profile
+    /// Идентификатор диагностики выбора, только если точечный солвер действительно
+    /// вызвал эту модель для выбора target/max.
+    pub fn selection_diagnostic_profile(&self) -> Option<GlowDiagnosticProfileV1> {
+        self.selection_diagnostic_profile
     }
 }
 
@@ -746,7 +850,7 @@ struct ScreenPointInputs {
     slopes: [u16; 3],
 }
 
-/// Parse the exact encoded-sRGB8 point inputs and derive their channel slopes.
+/// Разобрать точные точечные входы encoded-sRGB8 и вывести наклоны их каналов.
 fn screen_point_inputs(glow_tint_hex: &str, bg_hex: &str) -> Result<ScreenPointInputs, String> {
     let glow_bytes = encoded_bytes(srgb_encoded_from_hex(glow_tint_hex)?);
     let bg_bytes = encoded_bytes(srgb_encoded_from_hex(bg_hex)?);
@@ -761,41 +865,43 @@ fn screen_point_inputs(glow_tint_hex: &str, bg_hex: &str) -> Result<ScreenPointI
 }
 
 fn slopes_are_exact_srgb8_noop(slopes: [u16; 3]) -> bool {
-    // Screen is monotone in alpha. Therefore every alpha quantises to the
-    // background iff the alpha=1 endpoint remains strictly below the first
-    // half-LSB wall: G*(255-B)/255 < 1/2.
+    // Screen монотонен по alpha. Поэтому каждая alpha квантуется в фон тогда и
+    // только тогда, когда endpoint при alpha=1 остаётся строго ниже первой
+    // стенки половины LSB: G*(255-B)/255 < 1/2.
     slopes
         .into_iter()
         .all(|slope| 2 * u32::from(slope) < u32::from(u8::MAX))
 }
 
-/// Exact recheck predicate for the stable Glow point decision.
+/// Предикат точной повторной проверки стабильного точечного решения Glow.
 ///
-/// Returns `true` exactly when the monotone encoded-sRGB8 screen endpoint at
-/// alpha=1 stays below the first half-LSB wall in every channel. This includes
-/// zero slopes and non-zero sub-LSB slopes. No appearance model or epsilon
-/// participates.
+/// Возвращает `true` тогда и только тогда, когда монотонный screen-endpoint
+/// encoded-sRGB8 при alpha=1 остаётся ниже первой стенки половины LSB в каждом
+/// канале. Сюда входят нулевые наклоны и ненулевые наклоны меньше LSB.
+/// Appearance-модель и epsilon в проверке не участвуют.
 ///
 /// # Errors
 ///
-/// Returns `Err` for an invalid tint/background instead of normalising it.
+/// Возвращает `Err` для невалидного tint или фона вместо их нормализации.
 pub fn screen_point_is_exact_noop(glow_tint_hex: &str, bg_hex: &str) -> Result<bool, String> {
     let inputs = screen_point_inputs(glow_tint_hex, bg_hex)?;
     Ok(slopes_are_exact_srgb8_noop(inputs.slopes))
 }
 
-/// Решить интенсивность screen-слоя с явным numerical-decision profile.
+/// Решить интенсивность screen-слоя с явным профилем численного решения.
 ///
-/// `StableV1` не вызывает CAM16 для non-trivial target/max site, пока для него
-/// нет sound bound, и возвращает typed `Indeterminate`. Единственный exact
-/// determinate stable case — point-no-op: все alpha дают тот же background,
-/// поэтому `ΔJ′ = 0` следует из равенства byte-state без appearance math.
-/// `LegacyPlatformDependentV1` сохраняет прежний runtime явно и помечает его
-/// guarantee; implicit legacy wrapper отсутствует.
+/// `StableV1` не вызывает CAM16 для нетривиального участка target/max, пока для
+/// него нет sound bound, и возвращает типизированный `Indeterminate`.
+/// Единственный точный определённый стабильный случай — точечный no-op: все
+/// alpha дают тот же фон, поэтому `ΔJ′ = 0` следует из равенства байтовых
+/// состояний без appearance-математики. `LegacyPlatformDependentV1` явно
+/// сохраняет прежний runtime и помечает его гарантию; неявная legacy-обёртка
+/// отсутствует.
 ///
 /// # Errors
 ///
-/// `Err` — невалидный hex/target либо internal postcondition legacy path.
+/// `Err` — невалидный hex или target либо нарушенное внутреннее постусловие
+/// legacy-пути.
 pub fn solve_screen_alpha_for_dj(
     glow_tint_hex: &str,
     bg_hex: &str,
@@ -822,7 +928,7 @@ pub fn solve_screen_alpha_for_dj(
         slopes,
     } = screen_point_inputs(glow_tint_hex, bg_hex)?;
     if slopes_are_exact_srgb8_noop(slopes) {
-        let alpha = AlphaWall::ZERO.midpoint(AlphaWall::ONE);
+        let alpha = 0.5;
         let alpha_css = crate::css_alpha_value(alpha)?;
         let composite_srgb8 = bg_bytes;
         return Ok(NumericalDecisionV1::Determinate {
@@ -839,8 +945,8 @@ pub fn solve_screen_alpha_for_dj(
                     alpha_css,
                     composite_srgb8,
                 ),
-                diagnostic_profile: None,
-                status: GlowTargetStatus::Unreachable,
+                selection_diagnostic_profile: None,
+                status: GlowTargetStatus::ExactNoopUnreachable,
             },
             guarantee: DecisionGuaranteeV1::BitExact,
         });
@@ -852,13 +958,14 @@ pub fn solve_screen_alpha_for_dj(
     })
 }
 
-/// Explicit legacy CAM16/libm-dependent target/max path.
+/// Явный зависящий от CAM16/libm legacy-путь target/max.
 ///
-/// Канальные переходы screen выводятся как рациональные стенки округления до
-/// sRGB8. Солвер проверяет все достижимые композиты в порядке α и потому не
-/// предполагает монотонность CAM16 J'. Если цель недостижима, возвращается
-/// глобальный максимум |ΔJ'| среди достижимых состояний; равные максимумы
-/// детерминированно разрешаются первым state по alpha.
+/// Канальные переходы screen находятся как first-passing binary64 границы того
+/// же operation order, который исполняет публичный compositor. Солвер проверяет
+/// все достижимые композиты в порядке α и потому не предполагает монотонность
+/// CAM16 J'. Если цель недостижима, возвращается глобальный максимум |ΔJ'| среди
+/// достижимых состояний; равные максимумы детерминированно разрешаются первым
+/// состоянием по alpha.
 ///
 /// # Errors
 ///
@@ -913,18 +1020,18 @@ fn solve_screen_alpha_for_dj_legacy(
 
     let (state, achieved_dj, status) = if let Some(selected) = selected {
         let (state, achieved_dj) = selected;
-        (state, achieved_dj, GlowTargetStatus::Reached)
+        (state, achieved_dj, GlowTargetStatus::LegacyReached)
     } else {
         let (state, achieved_dj) =
             best.ok_or_else(|| "конечное множество композитов оказалось пустым".to_string())?;
-        (state, achieved_dj, GlowTargetStatus::Unreachable)
+        (state, achieved_dj, GlowTargetStatus::LegacyUnreachable)
     };
     let selected_hex = composite_hex(state.bytes);
-    let alpha = state.lower.midpoint(state.upper);
+    let alpha = state.canonical_alpha();
 
-    // Канонический CSS-сериализатор хранит ту же binary64 alpha. Production-проверка
-    // повторно композитит исходное число; строковый parse-round-trip проверяют
-    // граничные и межъязыковые тесты, не затягивая dec2flt-парсер в WASM.
+    // Канонический CSS-сериализатор хранит ту же binary64 alpha. Production-
+    // проверка повторно композитит исходное число; обратное чтение строки
+    // проверяют граничные и межъязыковые тесты, не затягивая dec2flt-парсер в WASM.
     let alpha_css = crate::css_alpha_value(alpha)?;
     let roundtrip_srgb8 = screen_layer_over_srgb8(glow_bytes, alpha, bg_bytes)?;
     let roundtrip_hex = composite_hex(roundtrip_srgb8);
@@ -947,7 +1054,7 @@ fn solve_screen_alpha_for_dj_legacy(
             alpha_css,
             roundtrip_srgb8,
         ),
-        diagnostic_profile: Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
+        selection_diagnostic_profile: Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
         status,
     })
 }
@@ -955,13 +1062,13 @@ fn solve_screen_alpha_for_dj_legacy(
 /// Версионированный двухслойный recipe от источника: `(core_hex, halo_hex)`.
 ///
 /// В recipe v1 halo буквально равен источнику. Для core арифметическая середина
-/// J′ источника и 100 задаёт seed Oklab-светлоты. У хроматического источника
+/// J′ источника и 100 задаёт начальную Oklab-светлоту. У хроматического источника
 /// chroma — sRGB-граница его Oklab hue через
 /// [`crate::accent_balance::accent_balanced`]; у точного sRGB8-нейтраля chroma
-/// остаётся нулевой, потому его численный hue не несёт цветового смысла. Фактический J′
-/// эмитированного core измеряется вызывающим кодом: он не обязан совпасть с seed
-/// после смены координат и sRGB8-квантования. Это recipe, не наблюдательная
-/// модель красоты или геометрии свечения.
+/// остаётся нулевой, потому его численный hue не несёт цветового смысла.
+/// Фактический J′ эмитированного core измеряется вызывающим кодом: он не обязан
+/// совпасть с начальным значением после смены координат и sRGB8-квантования.
+/// Это recipe, а не наблюдательная модель красоты или геометрии свечения.
 pub fn glow_layers_from_source(
     source_hex: &str,
     vc: &ViewingConditions,
@@ -1014,6 +1121,23 @@ pub fn glow_layers_from_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_and_recipe_keys_preserve_their_provenance() {
+        assert_eq!(
+            GlowTargetStatus::ExactNoopUnreachable.key(),
+            "exact-noop-unreachable"
+        );
+        assert_eq!(GlowTargetStatus::LegacyReached.key(), "legacy-reached");
+        assert_eq!(
+            GlowTargetStatus::LegacyUnreachable.key(),
+            "legacy-unreachable"
+        );
+        assert_eq!(
+            GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1.key(),
+            "cam16-jprime-oklab-cusp-v1"
+        );
+    }
 
     fn solve_legacy(
         tint: &str,
@@ -1109,7 +1233,8 @@ mod tests {
         else {
             panic!("exact point no-op must be a BitExact determinate decision");
         };
-        assert_eq!(value.status(), GlowTargetStatus::Unreachable);
+        assert_eq!(value.status(), GlowTargetStatus::ExactNoopUnreachable);
+        assert!(value.selection_diagnostic_profile().is_none());
         assert_eq!(value.achieved_dj().to_bits(), 0.0_f64.to_bits());
         assert_eq!(value.composite_hex(), "#FFFFFF");
         assert_eq!(value.composite_certificate().composite_srgb8(), [255; 3]);
@@ -1121,10 +1246,10 @@ mod tests {
         invalid_vc.n = f64::NAN;
         for (tint, background) in [
             ("#000000", "#123456"),
-            // Every channel has G*(255-B)=0, but neither operand is a
-            // uniform endpoint: R/B use G=0 and G uses B=255.
+            // Каждый канал имеет G*(255-B)=0, но ни один операнд не является
+            // однородным endpoint: R/B используют G=0, а G использует B=255.
             ("#00FF00", "#12FF34"),
-            // Non-zero red slope 1 stays below the exact half-LSB wall.
+            // Ненулевой красный наклон 1 остаётся ниже точной стенки половины LSB.
             ("#010000", "#FE0000"),
         ] {
             assert!(screen_point_is_exact_noop(tint, background).unwrap());
@@ -1141,10 +1266,10 @@ mod tests {
                 NumericalDecisionV1::Determinate {
                     value,
                     guarantee: DecisionGuaranteeV1::BitExact,
-                } if value.status() == GlowTargetStatus::Unreachable
+                } if value.status() == GlowTargetStatus::ExactNoopUnreachable
                     && value.achieved_dj().to_bits() == 0.0_f64.to_bits()
                     && value.composite_hex() == background
-                    && value.diagnostic_profile().is_none()
+                    && value.selection_diagnostic_profile().is_none()
             ));
         }
         assert!(screen_point_is_exact_noop("#7F0000", "#FE0000").unwrap());
@@ -1169,9 +1294,10 @@ mod tests {
         }
     }
 
-    /// Независимый оракул не меняет байты по событиям production-алгоритма:
-    /// он строит открытые промежутки обычной формулой, пробует их середины через
-    /// публичный композитор и удаляет только соседние дубликаты hex.
+    /// Независимый оракул не использует production cursor/boundary helper. Для
+    /// каждого следующего channel byte он отдельно делает lower-bound по всему
+    /// диапазону положительных `f64` через публичный композитор, затем объединяет
+    /// найденные bit-boundaries и удаляет только соседние дубликаты hex.
     fn oracle_states(
         tint_hex: &str,
         bg_hex: &str,
@@ -1181,31 +1307,34 @@ mod tests {
         let bg = srgb_encoded_from_hex(bg_hex).unwrap();
         let tint_bytes = encoded_bytes(tint);
         let bg_bytes = encoded_bytes(bg);
-        let mut walls = vec![0.0, 1.0];
+        let mut boundaries = vec![ALPHA_ZERO_BITS, ALPHA_ONE_BITS];
 
         for channel in 0..3 {
-            let slope = f64::from(tint_bytes[channel]) * f64::from(u8::MAX - bg_bytes[channel]);
-            if slope == 0.0 {
-                continue;
-            }
-            for value in (u16::from(bg_bytes[channel]) + 1)..=u16::from(u8::MAX) {
-                let wall = 255.0 * (f64::from(value) - f64::from(bg_bytes[channel]) - 0.5) / slope;
-                if wall > 1.0 {
-                    break;
+            let final_value = screen_layer_over_srgb8(tint_bytes, 1.0, bg_bytes).unwrap()[channel];
+            for value in (u16::from(bg_bytes[channel]) + 1)..=u16::from(final_value) {
+                let mut failing = ALPHA_ZERO_BITS;
+                let mut passing = ALPHA_ONE_BITS;
+                while passing - failing > 1 {
+                    let middle = failing + (passing - failing) / 2;
+                    let output =
+                        screen_layer_over_srgb8(tint_bytes, f64::from_bits(middle), bg_bytes)
+                            .unwrap()[channel];
+                    if output >= value as u8 {
+                        passing = middle;
+                    } else {
+                        failing = middle;
+                    }
                 }
-                walls.push(wall);
+                boundaries.push(passing);
             }
         }
-        walls.sort_unstable_by(f64::total_cmp);
-        walls.dedup();
+        boundaries.sort_unstable();
+        boundaries.dedup();
 
         let bg_jp = LcsColor::from_hex_with_vc(bg_hex, vc).unwrap().jp;
         let mut states: Vec<(f64, String, f64)> = Vec::new();
-        for window in walls.windows(2) {
-            if window[0] == window[1] {
-                continue;
-            }
-            let alpha = window[0] + (window[1] - window[0]) * 0.5;
+        for boundary in boundaries {
+            let alpha = f64::from_bits(boundary);
             let hex = composite_hex(screen_layer_over_srgb8(tint_bytes, alpha, bg_bytes).unwrap());
             if states
                 .last()
@@ -1213,17 +1342,6 @@ mod tests {
             {
                 continue;
             }
-            let jp = LcsColor::from_hex_with_vc(&hex, vc).unwrap().jp;
-            states.push((alpha, hex, (jp - bg_jp).abs()));
-        }
-        // Отдельный endpoint не даёт оракулу молча потерять состояние, которое
-        // теоретически могло бы существовать только при полностью непрозрачном слое.
-        let alpha = 1.0;
-        let hex = composite_hex(screen_layer_over_srgb8(tint_bytes, alpha, bg_bytes).unwrap());
-        if states
-            .last()
-            .is_none_or(|(_, previous, _)| previous != &hex)
-        {
             let jp = LcsColor::from_hex_with_vc(&hex, vc).unwrap().jp;
             states.push((alpha, hex, (jp - bg_jp).abs()));
         }
@@ -1292,11 +1410,10 @@ mod tests {
         }
     }
 
-    /// Точка `x.5` принадлежит новому байту. Проверка на представимой стенке
-    /// отделяет это правило от погрешности binary64, а `1/510` ниже проверяет
-    /// рациональную группировку непредставимой стенки трёх каналов.
+    /// Точка `x.5` принадлежит новому байту, а каждый state начинается ровно на
+    /// первом passing `f64` объявленного operation order.
     #[test]
-    fn exact_walls_follow_round_half_up_without_binary_boundary_assumptions() {
+    fn binary64_boundaries_follow_round_half_up_and_are_reproducible() {
         let at_half = composite_hex(screen_layer_over_srgb8([1, 0, 0], 0.5, [0; 3]).unwrap());
         let just_below_half = f64::from_bits(0.5_f64.to_bits() - 1);
         let below =
@@ -1307,36 +1424,125 @@ mod tests {
         let states = quantised_composites([1, 0, 0], [0; 3]).unwrap();
         assert_eq!(states.len(), 2);
         assert_eq!(states[0].bytes, [0; 3]);
-        assert!(states[0].upper.same_value(AlphaWall {
-            numerator: 1,
-            denominator: 2,
-        }));
+        assert_eq!(states[0].upper_bits, 0.5_f64.to_bits());
+        assert!(!states[0].upper_inclusive);
         assert_eq!(states[1].bytes, [1, 0, 0]);
-        assert!(states[1].lower.same_value(states[0].upper));
+        assert_eq!(states[1].lower_bits, states[0].upper_bits);
+        assert!(states[1].upper_inclusive);
 
         let white_states = quantised_composites([255; 3], [0; 3]).unwrap();
         assert_eq!(white_states.len(), 256);
-        let first_wall = AlphaWall {
-            numerator: 1,
-            denominator: 510,
-        };
-        assert!(white_states[0].upper.same_value(first_wall));
-        assert!(white_states[1].lower.same_value(first_wall));
+        let first_boundary = white_states[0].upper_bits;
+        assert_eq!(white_states[1].lower_bits, first_boundary);
+        assert_eq!(
+            screen_layer_over_srgb8([255; 3], f64::from_bits(first_boundary - 1), [0; 3]).unwrap(),
+            [0; 3]
+        );
+        assert_eq!(
+            screen_layer_over_srgb8([255; 3], f64::from_bits(first_boundary), [0; 3]).unwrap(),
+            [1; 3]
+        );
         assert_eq!(white_states[1].bytes, [1; 3]);
     }
 
     #[test]
-    fn rational_wall_cross_products_fit_the_declared_u64_domain() {
-        // The executable checked-arithmetic derivation is the repository-owned
-        // proof; a widened input domain must update these extrema.
-        let max_numerator = 255_u64 * (2 * 255 - 1);
-        let max_denominator = 2_u64 * 255 * 255;
-        assert_eq!(max_numerator, 129_795);
-        assert_eq!(max_denominator, 130_050);
-        assert_eq!(
-            max_numerator.checked_mul(max_denominator),
-            Some(16_879_839_750)
-        );
+    fn rationally_equal_walls_keep_distinct_binary64_seam_states() {
+        // Обе алгебраические стенки равны 255/508, но зафиксированный порядок
+        // binary64-операций переводит зелёный канал на 127 ULP раньше красного.
+        // Поэтому промежуточный RGB-state достижим и не может быть поглощён
+        // группировкой по равенству рациональных дробей.
+        let states = quantised_composites([1, 2, 0], [1, 128, 0]).unwrap();
+        let seam_index = states
+            .iter()
+            .position(|state| state.bytes == [1, 129, 0])
+            .expect("потерян достижимый binary64 seam-state #018100");
+        let seam = states[seam_index];
+        assert_eq!(seam.lower_bits, 4_602_696_549_879_841_156);
+        assert_eq!(seam.upper_bits, 4_602_696_549_879_841_283);
+        assert_eq!(seam.upper_bits - seam.lower_bits, 127);
+        assert_eq!(states[seam_index + 1].bytes, [2, 129, 0]);
+    }
+
+    #[test]
+    fn rational_seed_is_a_stable_performance_hint_not_a_state_definition() {
+        for (glow, background, next_value, expected_bits) in [
+            (1, 1, 2, 0x3fe0_1020_4081_0204),
+            (2, 128, 129, 0x3fe0_1020_4081_0204),
+            (33, 131, 132, 0x3f9f_e7f9_fe7f_9fe8),
+            (11, 0, 8, 0x3fe5_d174_5d17_45d1),
+            (255, 0, 255, 0x3fef_efef_efef_eff0),
+        ] {
+            assert_eq!(
+                boundary_seed_bits(glow, background, next_value),
+                expected_bits,
+                "glow={glow}, background={background}, next={next_value}",
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_alpha_pins_the_midpoint_of_the_actual_binary64_partition() {
+        let state = quantised_composites([255, 59, 48], [0; 3])
+            .unwrap()
+            .into_iter()
+            .find(|state| state.bytes == [3, 1, 1])
+            .expect("reference state #030101");
+        assert_eq!(state.lower_bits, 0x3f85_5555_5555_5555);
+        assert_eq!(state.upper_bits, 0x3f8c_1c1c_1c1c_1c1c);
+        assert_eq!(state.canonical_alpha().to_bits(), 0x3f88_b8b8_b8b8_b8b8);
+
+        // Если representable state содержит только lower, численный midpoint
+        // half-ULP округляется к чётной исключённой upper boundary. Канон обязан
+        // вернуть её непосредственного predecessor, то есть единственный state.
+        let lower_bits = 0.5_f64.to_bits() + 1;
+        let singleton = QuantisedComposite {
+            bytes: [0; 3],
+            lower_bits,
+            upper_bits: lower_bits + 1,
+            upper_inclusive: false,
+        };
+        assert_eq!(singleton.canonical_alpha().to_bits(), lower_bits);
+    }
+
+    /// Каждый transition увеличивает хотя бы один из трёх байтов. Поэтому их
+    /// суммарно не больше `3·255`, а states — не больше 766. Fixtures включают
+    /// длинный поток и ULP-seam, который ломал прежнюю rational grouping.
+    #[test]
+    fn binary64_stream_respects_the_766_state_bound() {
+        for (glow, background) in [
+            ([255, 255, 254], [0, 1, 1]),
+            ([1, 2, 0], [1, 128, 0]),
+            ([255; 3], [0; 3]),
+        ] {
+            let states = quantised_composites(glow, background).unwrap();
+            assert!(
+                states.len() <= usize::from(MAX_QUANTISED_COMPOSITE_STATES),
+                "glow={glow:?}, background={background:?}, states={}",
+                states.len()
+            );
+            for pair in states.windows(2) {
+                assert_eq!(pair[0].upper_bits, pair[1].lower_bits);
+                assert!(!pair[0].upper_inclusive);
+                assert!(
+                    pair[1]
+                        .bytes
+                        .into_iter()
+                        .zip(pair[0].bytes)
+                        .all(|(next, previous)| next >= previous)
+                );
+            }
+            assert!(states.last().unwrap().upper_inclusive);
+        }
+
+        let solved = solve_legacy(
+            "#FFFFFE",
+            "#000101",
+            101.0,
+            &ViewingConditions::dim_surround(),
+        )
+        .unwrap();
+        assert_eq!(solved.status(), GlowTargetStatus::LegacyUnreachable);
+        assert!(solved.achieved_dj() < 101.0);
     }
 
     /// Известная десятичная alpha проверяется независимой целочисленной
@@ -1377,29 +1583,28 @@ mod tests {
     /// солвер выбирает внутренние точки интервалов и перепроверяет результат.
     #[test]
     fn byte_screen_pins_reference_operation_order_at_float_wall() {
-        let below_wall = 0.501_968_503_937_007_9_f64;
-        let predecessor = f64::from_bits(below_wall.to_bits() - 1);
-        let successor = f64::from_bits(below_wall.to_bits() + 1);
+        let rounded_rational_wall = 0.501_968_503_937_007_9_f64;
+        let first_passing = f64::from_bits(rounded_rational_wall.to_bits() - 1);
+        let below_first = f64::from_bits(first_passing.to_bits() - 1);
         assert_eq!(
-            screen_layer_over_srgb8([1, 0, 0], predecessor, [1, 0, 0]).unwrap()[0],
+            screen_layer_over_srgb8([1, 0, 0], below_first, [1, 0, 0]).unwrap()[0],
+            1
+        );
+        assert_eq!(
+            screen_layer_over_srgb8([1, 0, 0], first_passing, [1, 0, 0]).unwrap()[0],
             2
         );
         assert_eq!(
-            screen_layer_over_srgb8([1, 0, 0], below_wall, [1, 0, 0]).unwrap()[0],
-            2
-        );
-        assert_eq!(
-            screen_layer_over_srgb8([1, 0, 0], successor, [1, 0, 0]).unwrap()[0],
+            screen_layer_over_srgb8([1, 0, 0], rounded_rational_wall, [1, 0, 0],).unwrap()[0],
             2
         );
     }
 
-    /// Исчерпывающая теорема для одного канала: рациональное разбиение обязано
-    /// совпадать с публичной формулой для всех 65 536 пар `(background, glow)`.
-    /// Три канала независимы по определению screen, поэтому этот перебор
-    /// закрывает полный класс стенок без случайной выборки RGB-троек.
+    /// Исчерпывающая теорема для одного канала: first-passing binary64
+    /// partition совпадает с публичной формулой для всех 65 536 пар
+    /// `(background, glow)`.
     #[test]
-    fn every_rational_channel_partition_matches_the_public_compositor() {
+    fn every_binary64_channel_partition_matches_the_public_compositor() {
         for background in 0_u16..=255 {
             for glow in 0_u16..=255 {
                 let b = background as u8;
@@ -1412,13 +1617,34 @@ mod tests {
                 assert_eq!(states.len(), usize::from(final_byte - b) + 1);
 
                 for (index, state) in states.iter().enumerate() {
-                    assert!(state.lower.cmp(state.upper) != Ordering::Greater);
+                    assert!(state.lower_bits <= state.upper_bits);
                     if let Some(next) = states.get(index + 1) {
-                        assert!(state.upper.same_value(next.lower));
+                        assert_eq!(state.upper_bits, next.lower_bits);
+                        assert!(!state.upper_inclusive);
                         assert_eq!(next.bytes[0], state.bytes[0] + 1);
+                        assert_eq!(
+                            screen_layer_over_srgb8(
+                                [g, 0, 0],
+                                f64::from_bits(next.lower_bits),
+                                [b, 0, 0],
+                            )
+                            .unwrap()[0],
+                            next.bytes[0],
+                            "B={b}, G={g}, state={index}: lower boundary must pass",
+                        );
+                        assert_eq!(
+                            screen_layer_over_srgb8(
+                                [g, 0, 0],
+                                f64::from_bits(next.lower_bits - 1),
+                                [b, 0, 0],
+                            )
+                            .unwrap()[0],
+                            state.bytes[0],
+                            "B={b}, G={g}, state={index}: predecessor must fail",
+                        );
                     }
 
-                    let alpha = state.lower.midpoint(state.upper);
+                    let alpha = state.canonical_alpha();
                     let out = screen_layer_over_srgb8([g, 0, 0], alpha, [b, 0, 0]).unwrap();
                     assert_eq!(
                         out[0], state.bytes[0],
@@ -1436,6 +1662,11 @@ mod tests {
         for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
             let g = solve_legacy("#3E87FF", "#101012", target, &vc).unwrap();
             assert!(!g.degraded(), "цель {target} недостижима на #101012");
+            assert_eq!(g.status(), GlowTargetStatus::LegacyReached);
+            assert_eq!(
+                g.selection_diagnostic_profile(),
+                Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1)
+            );
             // Первый достижимый sRGB8-композит обязан держать цель. Его
             // минимальность независимо проверяется sweep-оракулом ниже.
             assert!(
@@ -1493,8 +1724,8 @@ mod tests {
     #[test]
     fn solver_matches_independent_finite_state_oracle() {
         let vcs = [ViewingConditions::srgb(), ViewingConditions::dim_surround()];
-        for tint_hex in ["#000000", "#4A8FFF", "#FF3B30", "#FFFFFF"] {
-            for bg_hex in ["#000000", "#101012", "#808080", "#FFFFFF"] {
+        for tint_hex in ["#000000", "#010200", "#4A8FFF", "#FF3B30", "#FFFFFF"] {
+            for bg_hex in ["#000000", "#018000", "#101012", "#808080", "#FFFFFF"] {
                 for vc in vcs {
                     let oracle = oracle_states(tint_hex, bg_hex, &vc);
                     assert!(!oracle.is_empty());
@@ -1505,7 +1736,7 @@ mod tests {
                         }
                     }
 
-                    for target in [0.01, 1.0, 10.0, global_best.2 + 1.0] {
+                    for target in [0.01, 0.32, 1.0, 10.0, global_best.2 + 1.0] {
                         let solved = solve_legacy(tint_hex, bg_hex, target, &vc).unwrap();
                         let expected = oracle.iter().find(|state| state.2 >= target);
                         let (expected_state, degraded) = match expected {
@@ -1606,6 +1837,7 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let g = solve_legacy("#3E87FF", "#FFFFFF", GLOW_BASE_DJ, &vc).unwrap();
         assert!(g.degraded(), "над белым screen обязан быть point-no-op");
+        assert_eq!(g.status(), GlowTargetStatus::LegacyUnreachable);
         assert!(g.achieved_dj() < GLOW_BASE_DJ);
         assert_eq!(g.composite_hex(), "#FFFFFF", "screen над белым — тождество");
         assert_eq!(

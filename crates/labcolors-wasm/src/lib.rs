@@ -132,6 +132,12 @@ export interface TranslucentRole {
  *  Потребитель красит слои с mix-blend-mode: screen; `vars` несёт
  *  --lab-<role> (halo, oklch), --lab-<role>-core и --lab-<role>-alpha. */
 export type GlowDecisionProfileV1 = "stable-v1" | "legacy-platform-dependent-v1";
+export type GlowLayerRecipeProfileV1 = "cam16-jprime-oklab-cusp-v1";
+export type GlowDiagnosticProfileV1 = "cam16-ucs-jprime-li2017-v1";
+export type GlowTargetStatusV1 =
+  | "exact-noop-unreachable"
+  | "legacy-reached"
+  | "legacy-unreachable";
 export type NumericalIndeterminacyV1 =
   | {
       readonly reason: "sound-bound-unavailable";
@@ -145,16 +151,18 @@ export type NumericalIndeterminacyV1 =
         readonly upper: number;
       };
     };
+export interface GlowBitExactDecisionGuaranteeV1 {
+  readonly kind: "bit-exact";
+}
+export interface GlowLegacyDecisionGuaranteeV1 {
+  readonly kind: "legacy-platform-dependent-v1";
+}
 export type GlowDecisionGuaranteeV1 =
-  | { readonly kind: "bit-exact" }
-  | {
-      readonly kind: "outward-interval-v1";
-      readonly lower: number;
-      readonly upper: number;
-    }
-  | { readonly kind: "legacy-platform-dependent-v1" };
+  | GlowBitExactDecisionGuaranteeV1
+  | GlowLegacyDecisionGuaranteeV1;
 
-export interface GlowDeterminateRole {
+/** Поля, общие для трёх конструктивно допустимых определённых исходов Glow. */
+export interface GlowDeterminateRoleBase {
   readonly kind: "glow";
   readonly cssVar: string;
   /** Core, предназначенный потребителем для меньшего blur; геометрия не моделируется. */
@@ -168,17 +176,14 @@ export interface GlowDeterminateRole {
   /** Exact reference-домен point-композита; не renderer/display certificate. */
   readonly compositeProfile: "encoded-srgb8-screen-v1";
   readonly compositeGuarantee: "bit-exact";
-  /** Diagnostic model, либо null когда exact verdict не вызывал appearance math. */
-  readonly diagnosticProfile: "cam16-ucs-jprime-li2017-v1" | null;
-  readonly decisionProfile: GlowDecisionProfileV1;
-  /** Tagged certificate; an outward guarantee cannot lose its proven interval. */
-  readonly decisionGuarantee: GlowDecisionGuaranteeV1;
+  /** Версионированный алгоритм, построивший анатомию core/halo. */
+  readonly layerRecipeProfile: GlowLayerRecipeProfileV1;
+  /** Модель внешнего вида полного результата; обязательна, потому coreAchievedDj вычислен через CAM16. */
+  readonly appearanceDiagnosticProfile: GlowDiagnosticProfileV1;
   /** Цель решается только по изолированному halo. */
   readonly constraintLayer: "halo";
   /** Запрошенный |ΔJ'| halo-композита. */
   readonly targetDj: number;
-  /** Результат проверки цели во всём конечном reference-домене. */
-  readonly targetStatus: "reached" | "unreachable";
   /** Reference-композит изолированного halo на фоне резолва. */
   readonly haloCompositeHex: string;
   /** Фактический |ΔJ'| изолированного halo-композита. */
@@ -189,11 +194,44 @@ export interface GlowDeterminateRole {
   readonly coreAchievedDj: number;
   /** @deprecated Alias `haloAchievedDj` для совместимости. */
   readonly achievedDj: number;
-  /** @deprecated Используйте targetStatus === "unreachable". */
-  readonly degraded: boolean;
   /** CSS-значение halo: `oklch(L% C H)`. */
   readonly css: string;
 }
+
+/** Точный no-op: выбор не вызывает CAM16 и не может достигнуть положительную цель. */
+export interface GlowStableExactNoopRole extends GlowDeterminateRoleBase {
+  readonly decisionProfile: "stable-v1";
+  readonly decisionGuarantee: GlowBitExactDecisionGuaranteeV1;
+  readonly selectionDiagnosticProfile: null;
+  readonly targetStatus: "exact-noop-unreachable";
+  /** @deprecated Выведено из targetStatus. */
+  readonly degraded: true;
+}
+
+/** Legacy-выбор CAM16 достиг целевого |ΔJ'| в охарактеризованной среде исполнения. */
+export interface GlowLegacyReachedRole extends GlowDeterminateRoleBase {
+  readonly decisionProfile: "legacy-platform-dependent-v1";
+  readonly decisionGuarantee: GlowLegacyDecisionGuaranteeV1;
+  readonly selectionDiagnosticProfile: GlowDiagnosticProfileV1;
+  readonly targetStatus: "legacy-reached";
+  /** @deprecated Выведено из targetStatus. */
+  readonly degraded: false;
+}
+
+/** Legacy-выбор CAM16 вернул максимум, не достигший целевого |ΔJ'|. */
+export interface GlowLegacyUnreachableRole extends GlowDeterminateRoleBase {
+  readonly decisionProfile: "legacy-platform-dependent-v1";
+  readonly decisionGuarantee: GlowLegacyDecisionGuaranteeV1;
+  readonly selectionDiagnosticProfile: GlowDiagnosticProfileV1;
+  readonly targetStatus: "legacy-unreachable";
+  /** @deprecated Выведено из targetStatus. */
+  readonly degraded: true;
+}
+
+export type GlowDeterminateRole =
+  | GlowStableExactNoopRole
+  | GlowLegacyReachedRole
+  | GlowLegacyUnreachableRole;
 
 /** Stable terminal outcome: no sound target/max decision, therefore no CSS vars. */
 export interface GlowIndeterminateRoleBase {
@@ -210,24 +248,47 @@ export type GlowIndeterminateRole = GlowIndeterminateRoleBase & NumericalIndeter
 
 export type GlowRole = GlowDeterminateRole | GlowIndeterminateRole;
 
+/** Численное свидетельство выбора material-alpha. Оно характеризует повторно
+ * проверенный результат профиля, а не строгую межплатформенную границу
+ * минимальной alpha. */
+export interface MaterialAlphaGuaranteeBaseV1 {
+  /** Byte-scale affine binary64 compositor + original WCAG 2.1 (2018)
+   *  `0.03928` EOTF, with a conservative channel envelope and both crossed seam
+   *  sides. Platform-characterized because `powf` is not outward-bounded. */
+  readonly numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1";
+}
+/** Rechecked fail/pass endpoints from a fixed-step binary partition after the
+ *  directed-search guard. No global-monotonicity, first-state or minimum claim. */
+export interface MaterialBisectionBracketGuaranteeV1 extends MaterialAlphaGuaranteeBaseV1 {
+  readonly kind: "bisection-bracket-characterized-v1";
+  readonly iterations: number;
+  readonly lowerAlpha: number;
+  readonly upperAlpha: number;
+}
+export interface MaterialTransparentEndpointGuaranteeV1 extends MaterialAlphaGuaranteeBaseV1 {
+  readonly kind: "transparent-endpoint-characterized-v1";
+}
+export interface MaterialOpaqueEndpointGuaranteeV1 extends MaterialAlphaGuaranteeBaseV1 {
+  readonly kind: "opaque-endpoint-characterized-v1";
+}
+export type MaterialAlphaGuaranteeV1 =
+  | MaterialBisectionBracketGuaranteeV1
+  | MaterialTransparentEndpointGuaranteeV1
+  | MaterialOpaqueEndpointGuaranteeV1;
+
 /** Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) над
  *  опаковой базой `02`, обе — один тон. `vars` несёт --lab-<role> (солид-канон,
  *  опаковый), --lab-<role>-01 (тинт oklch/α) и --lab-<role>-02 (база, опаковая).
  *  Композит-гарантия читаемости пересчитываема из toneHex/alpha (α-граница). */
-export interface MaterialRole {
+export interface MaterialRoleBase {
   readonly kind: "material";
   readonly cssVar: string;
   /** Тон #RRGGBB: тинт 01, база 02 и солид-канон одновременно (равны). */
   readonly toneHex: string;
-  /** Выведенная альфа тинта 01, (0, 1]. */
-  readonly alpha: number;
   /** Худший WCAG-контраст коммит-полюса по коридору [чёрный, белый]. */
   readonly worstContrast: number;
-  /** WCAG-пол читаемости, который держит α (4.5 / 3.0). */
+  /** Запрошенный WCAG-пол (4.5 / 3.0); держится только при `alphaStatus: "satisfied"`. */
   readonly floor: number;
-  /** Гарантия выполнена: worstContrast ≥ floor. `false` — пол недостижим даже
-   *  при α = 1 (честная деградация, α = 1 как ближайшая достижимая). */
-  readonly guaranteed: boolean;
   /** Коммит-полюс поверхности белый (true, тёмный тон) или чёрный (false). */
   readonly poleWhite: boolean;
   /** Фактический |ΔJ'| тона-базы от фона — различимость поверхности. */
@@ -241,6 +302,35 @@ export interface MaterialRole {
   /** Ready-to-serve CSS value солид-канона: "oklch(L% C H)". */
   readonly css: string;
 }
+
+/** Уже прозрачная граничная точка держит запрошенный пол. */
+export interface MaterialSatisfiedTransparentRole extends MaterialRoleBase {
+  readonly alpha: 0;
+  readonly alphaGuarantee: MaterialTransparentEndpointGuaranteeV1;
+  readonly alphaStatus: "satisfied";
+  readonly guaranteed: true;
+}
+
+/** Повторно проверенная верхняя граница интервала держит запрошенный пол. */
+export interface MaterialSatisfiedBracketRole extends MaterialRoleBase {
+  readonly alpha: number;
+  readonly alphaGuarantee: MaterialBisectionBracketGuaranteeV1;
+  readonly alphaStatus: "satisfied";
+  readonly guaranteed: true;
+}
+
+/** Даже непрозрачная граничная точка не держит запрошенный пол; возвращается alpha 1. */
+export interface MaterialDegradedOpaqueRole extends MaterialRoleBase {
+  readonly alpha: 1;
+  readonly alphaGuarantee: MaterialOpaqueEndpointGuaranteeV1;
+  readonly alphaStatus: "degraded";
+  readonly guaranteed: false;
+}
+
+export type MaterialRole =
+  | MaterialSatisfiedTransparentRole
+  | MaterialSatisfiedBracketRole
+  | MaterialDegradedOpaqueRole;
 
 export type RoleResult =
   | SolvedColor
@@ -417,9 +507,9 @@ impl LabColors {
     /// Returns a `ResolvedTheme` object. Per-role unreachability is part of a
     /// successful result (each role carries its own `kind`); only whole-call
     /// failures reject (no config loaded yet as `config_required`, invalid hex,
-    /// unknown theme, and the by-construction-unreachable oklch serialisation
-    /// failure as `internal_error`) — as a structured `"<code>: <message>"`
-    /// error, never an unwound panic.
+    /// unknown theme, a core invariant failure, and the by-construction-
+    /// unreachable oklch serialisation failure as `internal_error`) — as a
+    /// structured `"<code>: <message>"` error, never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
         let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
@@ -507,10 +597,15 @@ impl LabColors {
         })?;
         let background = hex_for_recheck(bg_hex).map_err(to_js_error)?;
         labcolors_core::screen_point_is_exact_noop(tint.as_ref(), background.as_ref())
-            .map_err(|reason| to_js_error(BindingError::InvalidColor { reason }))
+            .map_err(|reason| to_js_error(stable_glow_recheck_core_error(reason)))
     }
 
-    /// Calculate the muddiness score (0 to 1) of an sRGB hex colour.
+    /// Return the frozen legacy `muddiness` coordinate for an sRGB hex colour.
+    ///
+    /// This is an experimental compatibility proxy: it reproduces the historic
+    /// numeric API, but is not an observer-validated human clean/dirty verdict
+    /// or a production decision. The legacy identifier is retained only for
+    /// compatibility.
     #[wasm_bindgen(js_name = muddiness)]
     pub fn muddiness(&self, hex: &str) -> Result<f64, JsError> {
         labcolors_core::cleanliness::muddiness_from_hex(hex)
@@ -557,6 +652,14 @@ impl Default for LabColors {
 /// that path would drop the stable code. This keeps the code in the message.
 fn to_js_error(err: BindingError) -> JsError {
     JsError::new(&format!("{}: {}", err.code(), err))
+}
+
+fn stable_glow_recheck_core_error(reason: String) -> BindingError {
+    BindingError::Internal {
+        reason: format!(
+            "stable Glow point recheck rejected core-generated validated hex values: {reason}"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -618,26 +721,11 @@ mod native_contract_tests {
                 .unwrap()
         );
     }
-}
-
-#[cfg(all(test, target_arch = "wasm32"))]
-mod tests {
-    use super::*;
 
     #[test]
-    fn test_wasm_muddiness() {
-        let colors = LabColors::new();
-
-        // Olive is highly muddy
-        let olive_mud = colors.muddiness("#6B6B2E").unwrap();
-        assert!(olive_mud > 0.80);
-        assert!((olive_mud - 0.8699).abs() < 1e-3);
-
-        // Gray is clean
-        let gray_mud = colors.muddiness("#808080").unwrap();
-        assert!(gray_mud < 0.05);
-
-        // Invalid hex returns an error
-        assert!(colors.muddiness("not_a_hex").is_err());
+    fn stable_glow_core_failure_after_boundary_validation_is_internal() {
+        let error = stable_glow_recheck_core_error("fixture drift".into());
+        assert!(matches!(error, BindingError::Internal { .. }));
+        assert_eq!(error.code(), "internal_error");
     }
 }

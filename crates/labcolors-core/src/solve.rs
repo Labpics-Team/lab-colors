@@ -385,7 +385,9 @@ impl Solved {
     }
 }
 
-/// Why a contract cannot be satisfied. Returned instead of silently clipping.
+/// Why a solve could not return a colour. Physical/domain variants explain a
+/// contract failure; [`Self::InternalInvariant`] reports core drift and must be
+/// failed closed by bindings rather than projected as a physical outcome.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Unreachable {
@@ -419,6 +421,11 @@ pub enum Unreachable {
     GamutUnsupported,
     /// Malformed input, such as an invalid hex colour or a non-finite target.
     InvalidInput(String),
+    /// A value produced and validated by the core later violated an internal
+    /// postcondition. This is never client-input blame: bindings must fail the
+    /// enclosing call closed instead of projecting it as a physical role
+    /// outcome.
+    InternalInvariant(String),
 }
 
 impl core::fmt::Display for Unreachable {
@@ -454,6 +461,7 @@ impl core::fmt::Display for Unreachable {
                 )
             }
             Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
+            Self::InternalInvariant(msg) => write!(f, "internal invariant failure: {msg}"),
         }
     }
 }
@@ -1312,6 +1320,13 @@ pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_invariant_failure_is_not_reported_as_invalid_client_input() {
+        let error = Unreachable::InternalInvariant("generated fixture drift".into());
+        assert!(error.to_string().starts_with("internal invariant failure:"));
+        assert!(!error.to_string().starts_with("invalid input:"));
+    }
     use crate::lpc::lpc_with_vc;
 
     /// D2(a) страж (аудит 2026-07-03): `Unreachable` не несёт never-constructed
@@ -1343,6 +1358,7 @@ mod tests {
             Unreachable::PolarityMismatch { target: 1.0 },
             Unreachable::GamutUnsupported,
             Unreachable::InvalidInput("x".to_string()),
+            Unreachable::InternalInvariant("x".to_string()),
         ];
         for u in &samples {
             assert!(!u.to_string().is_empty(), "Display пуст для {u:?}");
@@ -1355,7 +1371,8 @@ mod tests {
                 | Unreachable::FloorUnreachable { .. }
                 | Unreachable::PolarityMismatch { .. }
                 | Unreachable::GamutUnsupported
-                | Unreachable::InvalidInput(_) => {}
+                | Unreachable::InvalidInput(_)
+                | Unreachable::InternalInvariant(_) => {}
             }
         }
     }

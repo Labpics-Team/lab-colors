@@ -88,8 +88,14 @@ pub struct GlowColor {
     pub composite_profile: labcolors_core::GlowCompositeProfileV1,
     /// Exact point-composite guarantee.
     pub composite_guarantee: labcolors_core::GlowCompositeGuaranteeV1,
-    /// Diagnostic appearance model, если solve реально её вызвал.
-    pub diagnostic_profile: Option<labcolors_core::GlowDiagnosticProfileV1>,
+    /// Версионированный алгоритм, построивший анатомию core/halo.
+    pub layer_recipe_profile: labcolors_core::GlowLayerRecipeProfileV1,
+    /// Диагностика внешнего вида полного результата Glow. Обязательна, потому что
+    /// `core_achieved_dj` реально вычисляется через CAM16-UCS J′.
+    pub appearance_diagnostic_profile: labcolors_core::GlowDiagnosticProfileV1,
+    /// Диагностическая модель, участвовавшая именно в выборе target/max. `None` у
+    /// точного no-op профиля stable, который не выполняет выбор по внешнему виду.
+    pub selection_diagnostic_profile: Option<labcolors_core::GlowDiagnosticProfileV1>,
     /// Explicit client-selected decision profile.
     pub decision_profile: labcolors_core::GlowDecisionProfileV1,
     /// Guarantee target/max decision.
@@ -128,21 +134,23 @@ pub struct GlowIndeterminateColor {
 /// Двухслойный материал (kind material): тон + выведенная α + вердикт гарантии.
 ///
 /// Тинт `01`, база `02` и солид-канон равны тону по построению (композит `T` над
-/// `T` есть `T`), поэтому один `tone_hex`. `alpha` выведена как минимальная
-/// плотность, при которой композит тона над худшим фоном коридора держит `floor`.
+/// `T` есть `T`), поэтому один `tone_hex`. `alpha` — повторно проверенная верхняя
+/// граница платформенно охарактеризованного поиска; численное свидетельство
+/// лежит рядом.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialColor {
     /// Тон `#RRGGBB`: тинт `01`, база `02` и солид-канон одновременно.
     pub tone_hex: String,
-    /// Выведенная альфа тинта `01`, `(0, 1]`.
+    /// Выбранная альфа тинта `01`, `[0, 1]`.
     pub alpha: f64,
     /// Худший WCAG-контраст коммит-полюса по коридору `[чёрный, белый]`.
     pub worst_contrast: f64,
-    /// WCAG-пол читаемости, который держит α (4.5 / 3.0).
+    /// Платформенно охарактеризованное свидетельство выбора границы alpha.
+    pub alpha_guarantee: labcolors_core::MaterialAlphaGuaranteeV1,
+    /// Типизированный исход проверки пола; от него выведен булев псевдоним совместимости.
+    pub alpha_status: labcolors_core::MaterialAlphaStatusV1,
+    /// Запрошенный WCAG-пол (4.5 / 3.0); держится только при `Satisfied`.
     pub floor: f64,
-    /// Гарантия выполнена: `worst_contrast ≥ floor`. `false` — пол недостижим
-    /// даже при α = 1 (честная деградация, α = 1 как ближайшая достижимая).
-    pub guaranteed: bool,
     /// Коммит-полюс поверхности белый (`true`, тёмный тон) или чёрный (`false`).
     pub pole_white: bool,
     /// Фактический |ΔJ'| тона-базы от фона резолва — различимость поверхности.

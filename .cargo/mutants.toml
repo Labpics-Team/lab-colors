@@ -20,7 +20,7 @@ examine_globs = [
     "crates/labcolors-core/src/pair.rs",
 ]
 
-# Запас времени на мутант: закон грязи считается быстро, но набор в целом не
+# Запас времени на мутант: legacy proxy coordinate считается быстро, но набор в целом не
 # мгновенный; 3× базового прогона + пол в 60с гасит ложные timeout-«убийства».
 timeout_multiplier = 3.0
 minimum_test_timeout = 60

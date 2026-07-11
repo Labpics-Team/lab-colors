@@ -38,6 +38,29 @@ function workflowNodeScript(workflow, stepName) {
     .join("\n");
 }
 
+function assertCheckoutCredentialsAreEphemeral(workflow, name) {
+  const lines = workflow.split("\n");
+  const checkouts = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.trimStart().startsWith("- uses: actions/checkout@"));
+  assert.ok(checkouts.length > 0, `${name} has no checkout steps`);
+
+  for (const { line, index } of checkouts) {
+    const indentation = line.length - line.trimStart().length;
+    const step = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor++) {
+      const candidate = lines[cursor];
+      const candidateIndentation = candidate.length - candidate.trimStart().length;
+      if (candidate.trim().length > 0 && candidateIndentation <= indentation) break;
+      step.push(candidate);
+    }
+    assert.ok(
+      step.some((candidate) => candidate.trim() === "persist-credentials: false"),
+      `${name} checkout at line ${index + 1} persists the workflow token`,
+    );
+  }
+}
+
 test("breaking release metadata is one explicit 0.2.0/0.10.0 contract", () => {
   const workspace = read("Cargo.toml");
   assert.match(workspace, /\[workspace\.package\][\s\S]*\nversion = "0\.2\.0"/);
@@ -53,6 +76,8 @@ test("breaking release metadata is one explicit 0.2.0/0.10.0 contract", () => {
   assert.equal(packageJson.packageManager, "npm@11.9.0");
   assert.equal(packageLock.version, "0.10.0");
   assert.equal(packageLock.packages[""].version, "0.10.0");
+  assert.equal(packageJson.engines.node, ">=22.11.0");
+  assert.equal(packageLock.packages[""].engines.node, ">=22.11.0");
   assert.equal(
     packageJson.scripts.prepack,
     "npm run build && node ../../scripts/prepare-npm-package.mjs",
@@ -100,6 +125,11 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(ci, /^\s*MSRV_TOOLCHAIN: 1\.85\.0$/m);
   assert.match(ci, /^\s*NODE_TOOLCHAIN: 24\.14\.0$/m);
+  assert.match(ci, /^\s*NODE_CONSUMER_FLOOR: 22\.11\.0$/m);
+  assert.match(
+    ci,
+    /^\s*node-consumer-floor:[\s\S]*needs: wasm[\s\S]*node-version: \$\{\{ env\.NODE_CONSUMER_FLOOR \}\}[\s\S]*actions\/download-artifact@[0-9a-f]{40}[\s\S]*--runtime-smoke/m,
+  );
   assert.match(ci, /^\s*CHROME_FOR_TESTING_VERSION: 150\.0\.7871\.115$/m);
   assert.match(
     ci,
@@ -169,12 +199,29 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     ci,
     /wasm-pack test --headless --chrome --chromedriver "\$CHROMEDRIVER_PATH" crates\/labcolors-wasm --locked/,
   );
+  assertCheckoutCredentialsAreEphemeral(ci, "CI");
+  assertCheckoutCredentialsAreEphemeral(
+    read(".github", "workflows", "native-conformance.yml"),
+    "native conformance",
+  );
+  assertCheckoutCredentialsAreEphemeral(
+    read(".github", "workflows", "mutation.yml"),
+    "scheduled mutation",
+  );
+  assertCheckoutCredentialsAreEphemeral(
+    read(".github", "workflows", "publish.yml"),
+    "publish",
+  );
 });
 
 test("publish accepts only canonical exact-SHA workflow runs and their immutable CI artifact", () => {
   const publish = read(".github", "workflows", "publish.yml");
   assert.match(publish, /^\s*NODE_TOOLCHAIN: "24\.14\.0"$/m);
   assert.match(publish, /^\s*NPM_TOOLCHAIN: "11\.9\.0"$/m);
+  assert.match(
+    publish,
+    /^concurrency:\n  group: npm-publish\n  cancel-in-progress: false$/m,
+  );
   assert.match(publish, /permissions:\n  contents: read\n  actions: read\n/);
   assert.doesNotMatch(publish, /^\s*checks:/m);
   assert.doesNotMatch(publish, /id-token:/);
@@ -194,6 +241,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.doesNotMatch(publish, /^\s*cache: npm$/m);
 
   const requiredChecks = [
+    "Node 22 consumer floor",
     "MSRV workspace check",
     "clippy + rustfmt",
     "cargo doc (intra-doc links)",
@@ -239,7 +287,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.match(publish, /packedPackage\.name !== "@labpics\/colors"/);
   assert.match(
     publish,
-    /run: npm publish --ignore-scripts "\$\{\{ steps\.verified-artifact\.outputs\.tarball \}\}"/,
+    /TARBALL_PATH: \$\{\{ steps\.verified-artifact\.outputs\.tarball \}\}[\s\S]*run: npm publish --ignore-scripts "\$TARBALL_PATH"/,
   );
   assert.doesNotMatch(publish, /wasm-pack|npm ci|release:verify|actions\/upload-artifact|npm pack/);
 
@@ -265,6 +313,7 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
     "name: guard — canonical exact-SHA workflow runs and their own jobs",
   );
   const requiredCiJobs = [
+    "Node 22 consumer floor",
     "MSRV workspace check",
     "clippy + rustfmt",
     "cargo doc (intra-doc links)",
@@ -461,6 +510,11 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   assert.match(verifier, /reproducibility/);
   assert.match(verifier, /byteIdentical: true/);
   assert.match(verifier, /const npmVersion = lockedNpmVersion\(packageJson\)/);
+  assert.match(verifier, /consumerRuntime: \{/);
+  assert.match(verifier, /verifiedFloor: consumerNodeFloor/);
+  assert.match(verifier, /canonicalGate: "Node 22 consumer floor"/);
+  assert.match(verifier, /buildToolchain: \{/);
+  assert.match(verifier, /node: process\.versions\.node/);
   assert.match(verifier, /GITHUB_OUTPUT/);
   assert.match(verifier, /familySetSha256: sha256\(Buffer\.concat\(familyBuffers\)\)/);
   assert.match(verifier, /sha256: sha256\(familyBuffers\[index\]\)/);
@@ -482,6 +536,7 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.ok(packageJson.files.includes("build-metadata.json"));
 
   const prepare = read("scripts", "prepare-npm-package.mjs");
+  assert.match(prepare, /import \{ workspaceVersion \} from "\.\/cargo-workspace\.mjs";/);
   assert.match(prepare, /const BUILD_METADATA = resolve\(PACKAGE_DIR, "build-metadata\.json"\)/);
   assert.match(prepare, /sourceSha/);
   assert.ok(
@@ -500,6 +555,7 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(prepare, /wasm: \{ bytes: wasm\.length, sha256: sha256\(wasm\) \}/);
 
   const verifier = read("scripts", "verify-package-release.mjs");
+  assert.match(verifier, /import \{ workspaceVersion \} from "\.\/cargo-workspace\.mjs";/);
   assert.match(verifier, /function validateBuildMetadata/);
   assert.match(verifier, /isDeepStrictEqual\(metadata, expected\)/);
   assert.match(verifier, /require\.resolve\("@labpics\/colors\/build-metadata\.json"\)/);

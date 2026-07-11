@@ -47,13 +47,13 @@ pub enum BindingError {
     #[error("no config loaded: call load_config before resolve_theme")]
     ConfigRequired,
 
-    /// A resolved colour failed to serialise into the oklch emission form.
-    /// Unreachable by construction (solver/ladder hexes are valid) — carried
-    /// as a structured code so JS branching stays uniform even for the
-    /// impossible branch.
+    /// A core-generated value violated an internal postcondition or the adapter
+    /// could not represent a known/forward core variant without losing meaning.
+    /// Includes projection/oklch serialization failures and stable-Glow recheck
+    /// failures after public inputs were already validated. Never client blame.
     #[error("internal error: {reason}")]
     Internal {
-        /// What exactly failed to serialise.
+        /// The internal postcondition, projection, or contract mismatch.
         reason: String,
     },
 

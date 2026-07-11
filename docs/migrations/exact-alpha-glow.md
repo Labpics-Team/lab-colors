@@ -3,6 +3,10 @@
 > Роль: breaking-migration guide для `@labpics/colors` 0.10.0 и Rust workspace
 > 0.2.0 с предыдущих `@labpics/colors` 0.9.1 / Rust 0.1.0.
 
+Release artifact собирается закреплённым Node 24.14/npm 11.9, но это не
+consumer requirement: `@labpics/colors` поддерживает `Node >=22.11.0` (первый
+Node 22 LTS), и этот floor проверяется отдельным CI job.
+
 Эта версия разделяет два контракта, которые раньше выглядели одним:
 
 1. exact encoded-sRGB8 point-композит и его воспроизводимые байты;
@@ -109,7 +113,7 @@ determinate resolve; собственный DOM-adapter обязан обесп�
 
 `stable-v1` не означает «всегда Indeterminate». Если point screen-композит
 bit-exact не может изменить фон при любой alpha, target/max-branch не требует
-CAM16: результат determinate, `targetStatus: "unreachable"` и
+CAM16: результат determinate, `targetStatus: "exact-noop-unreachable"` и
 `decisionGuarantee: { kind: "bit-exact" }`.
 
 ### Determinate Glow
@@ -121,27 +125,30 @@ CAM16: результат determinate, `targetStatus: "unreachable"` и
 | --- | --- |
 | `alphaCss` | Каноническая shortest-roundtrip строка той же binary64 alpha; CSS var копирует её буквально. |
 | `constraintLayer` | Слой цели; сейчас `"halo"`. |
-| `targetDj` | Запрошенный point `|ΔJ′|`. |
-| `targetStatus` | `"reached"` либо `"unreachable"`. |
+| `targetDj` | Запрошенный point `\|ΔJ′\|`. |
+| `targetStatus` | `"exact-noop-unreachable"`, `"legacy-reached"` либо `"legacy-unreachable"`; provenance результата не теряется в общем boolean. |
 | `haloCompositeHex` | Exact reference point-композит halo. |
-| `haloAchievedDj` | Diagnostic `|ΔJ′|` этого halo-композита. |
+| `haloAchievedDj` | Diagnostic `\|ΔJ′\|` этого halo-композита. |
 | `coreCompositeHex` | Exact reference point-композит core при той же alpha. |
-| `coreAchievedDj` | Diagnostic `|ΔJ′|` этого core-композита. |
+| `coreAchievedDj` | Diagnostic `\|ΔJ′\|` этого core-композита. |
 | `compositeProfile` | `"encoded-srgb8-screen-v1"`. |
 | `compositeGuarantee` | `"bit-exact"`. |
-| `diagnosticProfile` | `"cam16-ucs-jprime-li2017-v1"` либо `null`; `null` у exact no-op, где appearance model не выполнялась. |
+| `layerRecipeProfile` | `"cam16-jprime-oklab-cusp-v1"`; identity алгоритма построения core/halo, не numerical guarantee. |
+| `appearanceDiagnosticProfile` | `"cam16-ucs-jprime-li2017-v1"`; non-null у полного resolved result, потому что `*AchievedDj` измеряются этой моделью. |
+| `selectionDiagnosticProfile` | `"cam16-ucs-jprime-li2017-v1"` только когда модель участвовала в target/max selection; `null` у exact no-op. |
 | `decisionProfile` | Профиль, явно выбранный конфигом. |
-| `decisionGuarantee` | Tagged certificate semantic verdict: `{kind:"bit-exact"}` для exact no-op, `{kind:"legacy-platform-dependent-v1"}` для compatibility path либо `{kind:"outward-interval-v1", lower, upper}` с самим доказанным outward interval. |
+| `decisionGuarantee` | Tagged certificate semantic verdict: `{kind:"bit-exact"}` для exact no-op либо `{kind:"legacy-platform-dependent-v1"}` для compatibility path. Outward determinate Glow capability в этом релизе не поддерживается. |
 
 `achievedDj` остаётся deprecated alias на `haloAchievedDj`, а `degraded` —
-deprecated alias на `targetStatus === "unreachable"`. Новый код должен читать
-типизированные поля.
+deprecated alias на status `exact-noop-unreachable` или `legacy-unreachable`.
+Новый код должен читать типизированные поля.
 
 В промежуточном pre-release контракте #269 девятым новым полем был единый
-`referenceProfile`. В финальном 0.10.0 его нет: замените его пятью отдельными
-полями `compositeProfile`, `compositeGuarantee`, `diagnosticProfile`,
-`decisionProfile`, `decisionGuarantee`. Иначе exact-гарантия композитора
-ошибочно распространяется на CAM16 decision.
+`referenceProfile`. В финальном 0.10.0 его нет: замените его семью отдельными
+полями `compositeProfile`, `compositeGuarantee`, `layerRecipeProfile`,
+`appearanceDiagnosticProfile`, `selectionDiagnosticProfile`, `decisionProfile`,
+`decisionGuarantee`. Иначе exact-гарантия композитора ошибочно распространяется
+на recipe, CAM16 diagnostics или semantic decision.
 
 ## 3. Обновите Rust alpha API
 
@@ -183,6 +190,42 @@ Continuous `resolve_alpha_analog` сохраняет `Option<AlphaAnalog>`, по
 Публичный ввод с NaN, infinity или значением вне домена отклоняется одинаково
 в debug и release. Не восстанавливайте прежнее поведение через локальный
 `clamp`.
+
+### Material alpha сообщает typed outcome и численную границу честно
+
+`BackdropBox` больше нельзя создать struct literal: поля закрыты, а
+`BackdropBox::try_new(min, max)` возвращает `BackdropBoxErrorV1` с отдельными
+вариантами для reversed, non-finite и out-of-range channel. Границы не
+переставляются и не клампятся. `worst_contrast_encoded`,
+`solve_material_alpha_encoded` и `solve_material_alpha_hex` возвращают
+`Result<_, MaterialSolveErrorV1>`; недостижимый floor остаётся typed domain
+outcome `MaterialAlphaStatusV1::Degraded`, а не ошибкой или fallback.
+
+У `MaterialAlpha` используйте getters `alpha()`, `worst_contrast()`, `pole()`,
+`status()` и `guarantee()`. Satisfied-результат несёт
+`MaterialAlphaGuaranteeV1::BisectionBracketCharacterizedV1`: после 60 шагов
+бисекции `lower_alpha` повторно измерен ниже floor, `upper_alpha` повторно
+проходит floor, а `alpha()` побитно равен `upper_alpha`. Перед поиском действует
+directed-search guard; неподдерживаемое отношение возвращает
+`UnsupportedDirectedSearchRelation`. Numerical profile явно равен
+`encoded-srgb-byte-scale-affine-platform-binary64-powf-v1`. Это
+platform-characterization, а не заявление глобальной монотонности, первого
+passing state, точной минимальной alpha, предшественника или sound cross-runtime
+bound. Degraded-результат аналогично
+несёт `OpaqueEndpointCharacterizedV1` для повторно проверенного `alpha = 1`.
+Если floor уже держится при `alpha = 0`, возвращается отдельный
+`TransparentEndpointCharacterizedV1`, а не фиктивный threshold bracket. На wire
+primary outcome — `alphaStatus`; прежний `guaranteed` остаётся только derived
+compatibility alias. `alphaGuarantee` сохраняет tagged evidence и profile.
+
+Если consumer независимо перепроверяет material, он обязан повторить именно
+byte-scale affine order `(B_byte + alpha·(T_byte−B_byte))/255`. Прежняя
+normalized expanded запись `alpha·T + (1−alpha)·B` алгебраически равна, но не
+принадлежит этому binary64 profile и расходится на известных WCAG-швах.
+Профиль фиксирует original WCAG 2.1 (2018) split `0.03928` (не текущий W3C
+`0.04045`). Для all-backdrop результата ядро расширяет фактические endpoint-
+композиты conservative binary64 channel envelope и включает обе стороны
+пересечённого EOTF seam; перепроверка только двух углов недостаточна.
 
 ## 4. Обновите Rust Glow API
 
@@ -233,20 +276,42 @@ tagged object, а не строкой:
 ```ts
 type GlowDecisionGuaranteeV1 =
   | { readonly kind: "bit-exact" }
-  | {
-      readonly kind: "outward-interval-v1";
-      readonly lower: number;
-      readonly upper: number;
-    }
   | { readonly kind: "legacy-platform-dependent-v1" };
 ```
 
-Нельзя отделять `lower`/`upper` от outward-варианта или принимать неизвестный
-`kind` как `bit-exact`.
+Generic core сохраняет `DecisionGuaranteeV1::OutwardIntervalV1` для других
+численных sites, но Glow-adapter не умеет построить соответствующий determinate
+outcome и возвращает структурную несовместимость. Не принимайте неизвестный
+`kind` как `bit-exact` или legacy.
+
+Low-level UniFFI/Swift поверхность не переносит flattened provenance-поля
+generic wire-формы. Её `GlowPointDecision` — algebraic sum ровно четырёх
+допустимых outcome: `stableExactNoop(value)`, `legacyReached(value)`,
+`legacyUnreachable(value)` и `indeterminate(siteId, evidence)`. Общий
+`GlowPointValue` хранит только alpha, target/achieved diagnostic, exact
+composite hex и composite profile/guarantee. Отдельные native-типы
+`GlowDecisionGuarantee`, `GlowTargetStatus`, `GlowDiagnosticProfile` и
+одноимённые независимые output-поля удалены: невозможный cross-product нельзя
+сконструировать. `GlowDecisionProfile` остаётся обязательным input функции, но
+не дублируется в output.
+
+Native adapter заранее валидирует tint, background и конечный `targetDj > 0`;
+только такой public input возвращает `ColorError.InvalidGlowRequest`. Если после
+успешной проверки core всё же возвращает `Err`, неизвестный forward variant,
+illegal provenance tuple либо generic `DecisionGuaranteeV1::OutwardIntervalV1`,
+граница возвращает `ColorError.IncompatibleCoreContract`. Тот же закон действует
+для нового неизвестного `Unreachable`: adapter не подменяет его строкой
+`"unreachable"`. `NumericalIndeterminacy.intervalOverlap` остаётся в Swift как
+законное outward evidence для `indeterminate`.
+
+В Swift замените прежний `case .determinate(...)` на exhaustive switch по этим
+четырём вариантам; `value` одинаков только по форме composite payload, а смысл
+ветки берётся из enum-case. Удалите mocks и helper-типы, которые продолжают
+принимать независимые native decision/status/diagnostic поля.
 
 Поля `GlowSolve` закрыты; используйте getters `alpha()`, `alpha_css()`,
 `target_dj()`, `achieved_dj()`, `composite_hex()`, `status()` и
-`composite_certificate()`. Exact certificate хранит tint/background bytes,
+`selection_diagnostic_profile()`, `composite_certificate()`. Exact certificate хранит tint/background bytes,
 binary64 identity alpha, каноническую CSS-строку и composite bytes. Он не
 сертифицирует браузер, дисплей, blur или пространственное перекрытие.
 
@@ -256,14 +321,21 @@ binary64 identity alpha, каноническую CSS-строку и composite 
 
 1. Добавьте `decision_profile` во все Glow-рецепты JSON и typed builders.
 2. Обновите exhaustive `RoleResult` switches для `glow-indeterminate`.
-3. Добавьте все 13 determinate-полей из таблицы выше; удалите
+3. Добавьте все 15 determinate-полей из таблицы выше; удалите
    `referenceProfile` из pre-release mocks.
 4. Для `stable-v1` проверяйте отсутствие трёх CSS vars, а не snapshot legacy-
    цвета.
 5. Сравнивайте alpha через `alphaCss` или побитный parse round-trip; не
    округляйте её до фиксированного числа знаков.
 6. Используйте conformance pack 2.0.0. Half-tie
-   `#C0B2FA @ 0.122` над `#000000` обязан дать `#17161F`.
+   `#C0B2FA @ 0.122` над `#000000` обязан дать `#17161F`. Обрабатывайте
+   `generate_solve()` / `Pack::generate()` как `Result`: internal core failure
+   теперь возвращает `PackGenerationError`, а не fake `unreachable` vector.
+7. Проверьте имена `Zero`-ролей и алиасов на них: их `cssVar` остаётся
+   client-owned namespace даже без эмитированного значения и не может совпадать
+   с производным ключом Glow (`-core`/`-alpha`) или Material (`-01`/`-02`).
+   Такой конфиг теперь честно отклоняется на preflight вместо зависимости от
+   порядка JSON-писателей.
 
 В закреплённом Lab UI regression corpus exact alpha меняет ровно 24 листа
 `resolveVars`: четыре `--lab-fx-glow-*-alpha` на шести записях. Все 1376 пар
@@ -304,7 +376,9 @@ Rollback выполняется парой runtime + config:
 ## Границы гарантии
 
 - `bit-exact` относится к объявленному encoded-sRGB8 point-композитору.
-- `cam16-ucs-jprime-li2017-v1` — identity диагностической модели, не error bound.
+- `cam16-jprime-oklab-cusp-v1` — identity layer recipe, не numerical guarantee.
+- `cam16-ucs-jprime-li2017-v1` — identity appearance/selection diagnostic,
+  не error bound; наличие в appearance measurement не доказывает selection.
 - `legacy-platform-dependent-v1` явно допускает зависимость semantic branch от
   platform/libm.
 - `stable-v1` сохраняет неопределённость вместо выдуманного epsilon или

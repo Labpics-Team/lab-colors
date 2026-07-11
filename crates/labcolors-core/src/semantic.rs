@@ -190,15 +190,16 @@ const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 /// меняет ни одного реального эмитируемого контраста. Ре-аудит
 /// `science/reclassify-e-buckets` 2026-07-07 — реестр
 /// docs/empirical-inventory.md.
-// Rust 1.85 не считает использование только в const-assert/test runtime-use;
-// это provenance decomposition, а не отдельная production policy.
+// Rust 1.85 не считает использованием обращение только из const-assert и тестов;
+// это разложение provenance, а не отдельная production-политика.
 #[allow(dead_code)]
 // SSOT-TRACKED — квант-guard декоративного пола (issue #44), терминал (c) interval-insensitive, см. docs/empirical-inventory.md.
 const QUANT_GUARD: f64 = 0.2;
 
 // Компайл-тайм пиннинг деривации: DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR +
-// QUANT_GUARD в пределах f64-шума суммирования. Это compile-time provenance
-// lock; сам shipping-литерал 7.5 при этом НЕ меняется (байт-идентичность).
+// QUANT_GUARD в пределах f64-шума суммирования. Это compile-time-фиксация
+// provenance; сам поставляемый литерал 7.5 при этом НЕ меняется
+// (байт-идентичность).
 const _: () = {
     let derived = crate::lpc::MODEL_LC_FLOOR + QUANT_GUARD;
     let d = DECORATIVE_FLOOR_MIN - derived;
@@ -670,7 +671,7 @@ pub enum RoleSpec {
         tint: crate::ladder::LadderTint,
         /// Контрактная ступень стека.
         step: crate::glow::GlowStep,
-        /// Explicit numerical-decision profile из client contract.
+        /// Явный профиль численного решения из клиентского контракта.
         decision_profile: crate::glow::GlowDecisionProfileV1,
     },
     /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
@@ -740,8 +741,9 @@ pub enum RoleSpec {
     /// Резолв — [`Resolved::Material`] ([`crate::material`], #89).
     ///
     /// Тон строится dj-anchor-солвером на светлоте `tone` от фона резолва в
-    /// оттенке семьи; α выводится как минимальная плотность, при которой композит
-    /// над худшим фоном коридора держит `floor` (читаемость коммит-полюса).
+    /// оттенке семьи; α выбирается охарактеризованным для платформы поиском
+    /// с фиксированным числом шагов и повторно проверяется как проходящее
+    /// состояние для `floor`.
     Material {
         /// Оттенок семьи тона. `None` — нейтральный материал (подтон таблицы, то
         /// же 286°, что и остальные нейтральные эмиссии). `Some(tint)` —
@@ -1565,12 +1567,14 @@ impl Default for RoleTable {
     }
 }
 
-/// The outcome of resolving one role: a solved colour, an honest zero, or a
-/// principled reason it is unreachable on this background.
+/// The outcome of resolving one role: a solved colour, an honest zero, a typed
+/// numerical indeterminacy, or a failure reason.
 ///
-/// Unreachability is surfaced per role, never masked — a role on an extreme
+/// Physical unreachability is surfaced per role, never masked — a role on an extreme
 /// background (e.g. muted text on a mid-grey that cannot supply enough contrast)
 /// returns [`Unreachable`], it is not silently clipped to a wrong colour.
+/// [`Unreachable::InternalInvariant`] has different provenance: bindings must
+/// turn it into a whole-call internal/incompatible-contract error.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Resolved {
@@ -1603,8 +1607,8 @@ pub enum Resolved {
     /// Свечение: screen-слои (core, halo) + решённая интенсивность
     /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
     Glow(GlowResolved),
-    /// Stable Glow request, для которого sound numerical bound отсутствует:
-    /// semantic winner не выбран и CSS emission отсутствует.
+    /// Стабильный запрос Glow, для которого отсутствует sound численная граница:
+    /// семантический победитель не выбран, CSS-эмиссия отсутствует.
     GlowIndeterminate(GlowIndeterminateResolved),
     /// Двухслойный материал (стекло/акрил): полупрозрачный тинт `01` + опаковая
     /// база `02`, обе — один тон, с ВЫВЕДЕННОЙ альфой (композит-гарантия над
@@ -1612,7 +1616,9 @@ pub enum Resolved {
     Material(MaterialResolved),
     /// The honest zero of the `Role::None` token: no colour, no contrast.
     None,
-    /// No colour can satisfy this role against this background, with the reason.
+    /// A physical/domain failure, or an internal core invariant failure. Bindings
+    /// project only physical variants as per-role outcomes and fail the whole
+    /// call closed for [`Unreachable::InternalInvariant`].
     Unreachable(Unreachable),
 }
 
@@ -1622,8 +1628,8 @@ pub enum Resolved {
 /// Потребитель красит `--lab-{role}: rgba(tint, α)` — браузер композитит на
 /// фактической подложке. `composite` — то, во что этот rgba складывается на
 /// ФОНЕ РЕЗОЛВА (`α·tint + (1−α)·bg`) в объявленном encoded-sRGB8 reference-
-/// профиле, заземлённом Figma-якорями, но не выдаваемом за универсальный browser
-/// pipeline; его контраст ([`TranslucentResolved::composite_lc`],
+/// профиле, заземлённом Figma-якорями, но не выдаваемом за универсальный
+/// браузерный pipeline; его контраст ([`TranslucentResolved::composite_lc`],
 /// [`composite_wcag`](TranslucentResolved::composite_wcag)) — то, что фаза 1 AA меряет
 /// (контраст полупрозрачной роли определён её композитом, не тинтом). На ином
 /// фоне композит другой — это и есть смысл альфы; гарантия сформулирована для
@@ -1632,7 +1638,7 @@ pub enum Resolved {
 pub struct TranslucentResolved {
     /// Тинт `#RRGGBB` — цвет, эмитируемый как `rgba(tint, α)` (без учёта α).
     tint_hex: String,
-    /// Фактическая α `(0, 1]` — запрошенная, если существует точный byte-тинт,
+    /// Фактическая α `(0, 1]` — запрошенная, если существует точный байтовый тинт,
     /// иначе первый проходящий `binary64` (у прямой лестницы = альфа позиции).
     alpha: f64,
     /// Солид-композит `rgba(tint, α)` над фоном резолва, `#RRGGBB`.
@@ -1650,7 +1656,8 @@ pub struct TranslucentResolved {
     /// молча). Параметр-свободный замер: сетка дисплея, не политика.
     composite_distinct: bool,
     /// Запрошенная α была поднята до первого разрешимого sRGB8-значения, потому
-    /// что ни один byte-тинт не воспроизводит цель — честный флаг деградации КОНТРАКТА
+    /// что ни один байтовый тинт не воспроизводит цель — честный флаг деградации
+    /// КОНТРАКТА
     /// РОЛИ (симметрия с `compressed`/`degraded`). Ставится только на пути
     /// альфа-аналога ([`resolve_rgba_inverted`]), где солид-цель фиксирована, а
     /// α выводится; у прямой лестницы ([`resolve_rgba_direct`]) всегда `false`.
@@ -1725,9 +1732,11 @@ impl TranslucentResolved {
 /// Слои — [`crate::glow::glow_layers_from_source`] (halo = источник, core =
 /// пересвет); α — [`crate::glow::solve_screen_alpha_for_dj`] под контрактную
 /// ступень на фактическом фоне; `degraded` — честный флаг закона 2 ADR-0002:
-/// цель не держит ни один достижимый sRGB8-state, поэтому возвращён глобально
-/// лучший state. На белом screen является point-no-op только в объявленном
-/// reference-профиле — это не утверждение о физическом свечении.
+/// цель не держит ни одно достижимое sRGB8-состояние, поэтому возвращено глобально
+/// лучшее состояние. На белом screen является точечным no-op только в объявленном
+/// reference-профиле — это не утверждение о физическом свечении. Recipe,
+/// appearance-диагностика, диагностика выбора и точный сертификат композита
+/// возвращаются раздельно: ни одно из них не повышает силу другого.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlowResolved {
     core_hex: String,
@@ -1740,7 +1749,9 @@ pub struct GlowResolved {
     core_composite_hex: String,
     core_achieved_dj: f64,
     target_status: crate::glow::GlowTargetStatus,
-    diagnostic_profile: Option<crate::glow::GlowDiagnosticProfileV1>,
+    layer_recipe_profile: crate::glow::GlowLayerRecipeProfileV1,
+    appearance_diagnostic_profile: crate::glow::GlowDiagnosticProfileV1,
+    selection_diagnostic_profile: Option<crate::glow::GlowDiagnosticProfileV1>,
     decision_profile: crate::glow::GlowDecisionProfileV1,
     decision_guarantee: crate::numerics::DecisionGuaranteeV1,
     halo_composite_certificate: crate::glow::GlowCompositeCertificateV1,
@@ -1768,19 +1779,29 @@ impl GlowResolved {
     pub fn target_dj(&self) -> f64 {
         self.target_dj
     }
-    /// Exact composite profile, отдельно от diagnostic/decision guarantee.
+    /// Точный профиль композита, отдельный от гарантии диагностики или решения.
     pub fn composite_profile(&self) -> crate::glow::GlowCompositeProfileV1 {
         self.halo_composite_certificate.profile()
     }
-    /// Diagnostic appearance profile, только если solve реально вызвал модель.
-    pub fn diagnostic_profile(&self) -> Option<crate::glow::GlowDiagnosticProfileV1> {
-        self.diagnostic_profile
+    /// Версионированный профиль, построивший анатомию core/halo.
+    pub fn layer_recipe_profile(&self) -> crate::glow::GlowLayerRecipeProfileV1 {
+        self.layer_recipe_profile
     }
-    /// Явно выбранный client numerical profile.
+    /// Appearance-профиль полного результата Glow. Он всегда присутствует: даже
+    /// выбор точного no-op вычисляет `core_achieved_dj` через CAM16-UCS J′.
+    pub fn appearance_diagnostic_profile(&self) -> crate::glow::GlowDiagnosticProfileV1 {
+        self.appearance_diagnostic_profile
+    }
+    /// Диагностический профиль, участвовавший именно в выборе target/max.
+    /// У стабильного точного no-op его нет.
+    pub fn selection_diagnostic_profile(&self) -> Option<crate::glow::GlowDiagnosticProfileV1> {
+        self.selection_diagnostic_profile
+    }
+    /// Явно выбранный клиентский численный профиль.
     pub fn decision_profile(&self) -> crate::glow::GlowDecisionProfileV1 {
         self.decision_profile
     }
-    /// Guarantee semantic target/max decision.
+    /// Гарантия семантического решения target/max.
     pub fn decision_guarantee(&self) -> crate::numerics::DecisionGuaranteeV1 {
         self.decision_guarantee
     }
@@ -1808,25 +1829,29 @@ impl GlowResolved {
     pub fn core_achieved_dj(&self) -> f64 {
         self.core_achieved_dj
     }
-    /// Exact halo-composite evidence.
+    /// Точное свидетельство halo-композита.
     pub fn halo_composite_certificate(&self) -> &crate::glow::GlowCompositeCertificateV1 {
         &self.halo_composite_certificate
     }
-    /// Exact core-composite evidence.
+    /// Точное свидетельство core-композита.
     pub fn core_composite_certificate(&self) -> &crate::glow::GlowCompositeCertificateV1 {
         &self.core_composite_certificate
     }
-    /// Alias совместимости: прежнее поле измеряло именно halo.
+    /// Алиас совместимости: прежнее поле измеряло именно halo.
     pub fn achieved_dj(&self) -> f64 {
         self.halo_achieved_dj
     }
-    /// Alias совместимости прежнего boolean-контракта.
+    /// Алиас совместимости: `true` для точного и legacy-исходов недостижимости.
     pub fn degraded(&self) -> bool {
-        self.target_status == crate::glow::GlowTargetStatus::Unreachable
+        matches!(
+            self.target_status,
+            crate::glow::GlowTargetStatus::ExactNoopUnreachable
+                | crate::glow::GlowTargetStatus::LegacyUnreachable
+        )
     }
 }
 
-/// Stable Glow terminal outcome when no sound target/max bound exists.
+/// Стабильный терминальный исход Glow при отсутствии sound-границы target/max.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlowIndeterminateResolved {
     source_hex: String,
@@ -1837,27 +1862,27 @@ pub struct GlowIndeterminateResolved {
 }
 
 impl GlowIndeterminateResolved {
-    /// Канонический source/halo anchor; он не эмитится без decision.
+    /// Канонический source/halo-якорь; он не эмитится без решения.
     pub fn source_hex(&self) -> &str {
         &self.source_hex
     }
-    /// Запрошенная diagnostic target magnitude.
+    /// Запрошенный модуль диагностической цели.
     pub fn target_dj(&self) -> f64 {
         self.target_dj
     }
-    /// Explicit stable profile из client contract.
+    /// Явный стабильный профиль из клиентского контракта.
     pub fn decision_profile(&self) -> crate::glow::GlowDecisionProfileV1 {
         self.decision_profile
     }
-    /// Registered branch-sensitive site.
+    /// Зарегистрированный чувствительный к ветвлению участок.
     pub fn site_id(&self) -> crate::numerics::NumericalSiteIdV1 {
         self.site_id
     }
-    /// Неразделимая причина вместе с её sound interval, если он существует.
+    /// Неразделимая причина вместе с её sound-интервалом, если он существует.
     pub fn evidence(&self) -> crate::numerics::NumericalIndeterminacyV1 {
         self.evidence
     }
-    /// Target belongs to the halo point layer.
+    /// Цель относится к точечному слою halo.
     pub fn constraint_layer(&self) -> crate::glow::GlowConstraintLayer {
         crate::glow::GlowConstraintLayer::Halo
     }
@@ -1873,19 +1898,21 @@ impl GlowIndeterminateResolved {
 /// [`base_hex`](Self::base_hex) и [`solid_hex`](Self::solid_hex) равны по
 /// построению (единственная решаемая величина — α).
 ///
-/// Гарантия читаемости — свойство GLASS-режима (тинт над живым фоном): α выведена
-/// как минимальная плотность, при которой коммит-полюс поверхности
+/// Гарантия читаемости — свойство GLASS-режима (тинт над живым фоном): α —
+/// повторно проверенный верхний кандидат, при котором коммит-полюс поверхности
 /// ([`pole`](Self::pole)) держит [`floor`](Self::floor) по всему коридору
 /// `[чёрный, белый]` ([`crate::material`]). [`worst_contrast`](Self::worst_contrast)
 /// и [`guaranteed`](Self::guaranteed) пересчитываемы потребителем из эмитированных
-/// `01`/`02` (та же α-граничная математика, `material-guarantee.ts`).
+/// `01`/`02`: ядро и официальный `packages/colors/effective-bg.js::compositeOver`
+/// используют один byte-scale affine order `B + α·(T−B)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialResolved {
     tone_hex: String,
     alpha: f64,
     worst_contrast: f64,
+    alpha_guarantee: crate::material::MaterialAlphaGuaranteeV1,
+    alpha_status: crate::material::MaterialAlphaStatusV1,
     floor: f64,
-    guaranteed: bool,
     pole: crate::material::Pole,
     achieved_dj: f64,
     tone_compressed: bool,
@@ -1912,7 +1939,7 @@ impl MaterialResolved {
         &self.tone_hex
     }
 
-    /// Выведенная альфа тинта `01`, `(0, 1]`.
+    /// Выбранная альфа тинта `01`, `[0, 1]`.
     pub fn alpha(&self) -> f64 {
         self.alpha
     }
@@ -1923,16 +1950,26 @@ impl MaterialResolved {
         self.worst_contrast
     }
 
-    /// WCAG-пол читаемости, который держит выведенная α (напр. 4.5 / 3.0).
+    /// Численный класс выбора alpha-границы; точные утверждения композитора
+    /// намеренно отделены от этого охарактеризованного для платформы свидетельства.
+    pub fn alpha_guarantee(&self) -> crate::material::MaterialAlphaGuaranteeV1 {
+        self.alpha_guarantee
+    }
+
+    /// Типизированный исход floor; недостижимость отделена от невалидного ввода.
+    pub fn alpha_status(&self) -> crate::material::MaterialAlphaStatusV1 {
+        self.alpha_status
+    }
+
+    /// Запрошенный WCAG-пол (например 4.5 / 3.0). Он выполнен только при
+    /// [`MaterialAlphaStatusV1::Satisfied`](crate::material::MaterialAlphaStatusV1::Satisfied).
     pub fn floor(&self) -> f64 {
         self.floor
     }
 
-    /// Гарантия выполнена: `worst_contrast ≥ floor` (α нашлась в `(0, 1]`).
-    /// `false` — пол недостижим даже при α = 1 (тогда α = 1 как ближайшая
-    /// достижимая, честная деградация — не молчание).
+    /// Предикат совместимости поверх [`Self::alpha_status`].
     pub fn guaranteed(&self) -> bool {
-        self.guaranteed
+        self.alpha_status == crate::material::MaterialAlphaStatusV1::Satisfied
     }
 
     /// Коммит-полюс поверхности: полюс максимального контраста на тоне (белый на
@@ -2346,7 +2383,9 @@ fn resolve_spec_in(
                         match crate::glow::glow_layers_from_source(&halo_hex, vc) {
                             Ok(pair) => pair,
                             Err(e) => {
-                                return Resolved::Unreachable(Unreachable::InvalidInput(e));
+                                return Resolved::Unreachable(Unreachable::InternalInvariant(
+                                    format!("generated Glow layer recipe was rejected: {e}"),
+                                ));
                             }
                         };
                     let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
@@ -2357,7 +2396,9 @@ fn resolve_spec_in(
                     ) {
                         Ok(measurement) => measurement,
                         Err(e) => {
-                            return Resolved::Unreachable(Unreachable::InvalidInput(e));
+                            return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                                "generated Glow core measurement was rejected: {e}"
+                            )));
                         }
                     };
                     Resolved::Glow(GlowResolved {
@@ -2371,14 +2412,20 @@ fn resolve_spec_in(
                         core_composite_hex: core_measurement.composite_hex,
                         core_achieved_dj: core_measurement.achieved_dj,
                         target_status: g.status(),
-                        diagnostic_profile: g.diagnostic_profile(),
+                        layer_recipe_profile:
+                            crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
+                        appearance_diagnostic_profile:
+                            crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
+                        selection_diagnostic_profile: g.selection_diagnostic_profile(),
                         decision_profile,
                         decision_guarantee: guarantee,
                         halo_composite_certificate: g.composite_certificate().clone(),
                         core_composite_certificate: core_measurement.certificate,
                     })
                 }
-                Err(e) => Resolved::Unreachable(Unreachable::InvalidInput(e)),
+                Err(e) => Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                    "generated Glow solve request was rejected: {e}"
+                ))),
             };
         }
         RoleSpec::AlphaAnalog { of, alpha } => {
@@ -2452,7 +2499,7 @@ fn resolve_spec_in(
 ///
 /// Композитинг straight-alpha живёт в версионированном encoded-sRGB8 reference-
 /// профиле, который воспроизводит измеренные Figma-якоря ([`crate::alpha`]), но
-/// не сертифицирует любой browser/color-management pipeline. Контраст меряется
+/// не сертифицирует любой pipeline браузера и управления цветом. Контраст меряется
 /// на КОМПОЗИТЕ (солид-эквивалент), не на тинте: контраст полупрозрачной роли
 /// определён тем, во что она складывается на подложке.
 /// Квантовать кодированный цвет до 8-битной сетки (hex-roundtrip без строки):
@@ -2715,7 +2762,7 @@ fn resolve_rgba_inverted(
 ) -> Resolved {
     // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен. Без него
     // недоменная спека, собранная в обход валидатора конфига, дошла бы до
-    // численного пути вместо честного typed-исхода.
+    // численного пути вместо честного типизированного исхода.
     if !rgba_input_valid(solid_encoded, requested_alpha) {
         return Resolved::Unreachable(Unreachable::InvalidInput(
             "alpha-analog-спека вне домена (солид [0,1], α (0,1]) — сборка в обход валидатора"
@@ -2751,8 +2798,9 @@ fn finish_rgba(
     floor_coerced: bool,
 ) -> Resolved {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
-    // Единый byte-domain SSOT нужен и для hex, и для обеих метрик: нормализация
-    // `(byte/255)·255` способна изменить half-tie на один LSB.
+    // Единый байтовый домен SSOT нужен и для hex, и для обеих метрик:
+    // нормализация `(byte/255)·255` способна изменить граничное значение
+    // половинного округления на один LSB.
     let composite_hex =
         match crate::alpha::composite_hex_from_encoded(tint_encoded, alpha, bg_encoded) {
             Ok(hex) => hex,
@@ -2778,7 +2826,7 @@ fn finish_rgba(
     let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
     // Отличимость в encoded-sRGB8 reference (ADR-0002): сравнение по тем же
     // 8-битным hex, из которых строится сертификат. Фон квантуется тем же
-    // форматтером; применимость к renderer проверяется отдельно (#241).
+    // форматтером; применимость к рендереру проверяется отдельно (#241).
     let composite_distinct = composite_hex != hex_from_srgb_encoded(bg_encoded);
     Resolved::Translucent(TranslucentResolved {
         tint_hex: hex_from_srgb_encoded(tint_encoded),
@@ -2797,9 +2845,9 @@ fn finish_rgba(
 ///
 /// Тон строится тем же dj-anchor-солвером, что декоративные |ΔJ'|-роли
 /// ([`resolve_dj`]), поэтому различимость поверхности от фона наследуется его
-/// физикой. Альфа тинта выводится [`crate::material::solve_material_alpha_hex`]
-/// как минимальная плотность, при которой композит тона над худшим фоном коридора
-/// `[чёрный, белый]` держит пол читаемости коммит-полюса. `family_hued` — оттенок
+/// физикой. Альфа тинта выбирается [`crate::material::solve_material_alpha_hex`]
+/// как проходящий верхний кандидат, при котором композит тона над худшим фоном
+/// коридора `[чёрный, белый]` держит пол. `family_hued` — оттенок
 /// семьи присутствует (флаг вырождения оттенка применим); у нейтрали `false`.
 fn resolve_material(
     bg: &BgInput,
@@ -2830,10 +2878,15 @@ fn resolve_material(
     // Вырождение оттенка семьи у края гамута — только у семейных материалов;
     // нейтраль ахроматична намеренно, не «выродилась».
     let hue_vanished = family_hued && dj.solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR;
-    // α: минимальная плотность под пол над коридором [чёрный, белый].
+    // α: повторно проверенный проходящий верхний кандидат над коридором
+    // [чёрный, белый].
     let m = match crate::material::solve_material_alpha_hex(&tone_hex, floor_ratio) {
         Ok(m) => m,
-        Err(e) => return Resolved::Unreachable(Unreachable::InvalidInput(e)),
+        Err(e) => {
+            return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                "generated Material solve request was rejected: {e}"
+            )));
+        }
     };
     // Различимость солид-канона (= тона) от фона резолва на 8-битной сетке (тот же
     // замер, что у полупрозрачных ролей; off-grid фон честно квантуется).
@@ -2841,11 +2894,12 @@ fn resolve_material(
     let distinct = tone_hex != bg_hex;
     Resolved::Material(MaterialResolved {
         tone_hex,
-        alpha: m.alpha,
-        worst_contrast: m.worst_contrast,
+        alpha: m.alpha(),
+        worst_contrast: m.worst_contrast(),
+        alpha_guarantee: m.guarantee(),
+        alpha_status: m.status(),
         floor: floor_ratio,
-        guaranteed: !m.degraded,
-        pole: m.pole,
+        pole: m.pole(),
         achieved_dj: dj.achieved_dj,
         tone_compressed: dj.degraded,
         hue_vanished,
@@ -3101,9 +3155,10 @@ impl NamedRoleTable {
         }
     }
 
-    /// Алиасы `(имя, цель)` — эмитируются потребителем как CSS-ссылка
-    /// `--lab-{имя}: var(--lab-{цель})` (одна истина значения, ноль копий);
-    /// без переноса сюда алиасные роли контракта терялись бы при компиляции.
+    /// Алиасы `(имя, цель)` сохраняются в скомпилированном контракте, чтобы
+    /// delivery boundary спроецировала resolved outcome цели под client-owned
+    /// именем алиаса. Алиас не запускает отдельный solve и не меняет физическое
+    /// значение; без переноса сюда алиасные роли терялись бы при компиляции.
     pub fn aliases(&self) -> &[(String, String)] {
         &self.aliases
     }
@@ -3729,6 +3784,78 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn one_glow_table(
+        source_hex: &str,
+        decision_profile: crate::glow::GlowDecisionProfileV1,
+    ) -> NamedRoleTable {
+        let source = crate::spaces::srgb::srgb_encoded_from_hex(source_hex).unwrap();
+        NamedRoleTable::new(
+            vec![(
+                "opaque-client-id".to_string(),
+                RoleSpec::Glow {
+                    tint: LadderTint::new([source; 4]).unwrap(),
+                    step: crate::glow::GlowStep::Base,
+                    decision_profile,
+                },
+            )],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn full_glow_separates_recipe_appearance_and_selection_diagnostics() {
+        let vc = ViewingConditions::srgb();
+
+        let exact = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &one_glow_table("#4A8FFF", crate::glow::GlowDecisionProfileV1::StableV1),
+            &vc,
+        );
+        let Resolved::Glow(exact) = &exact[0].1 else {
+            panic!("stable point no-op must resolve as a full Glow result");
+        };
+        assert_eq!(
+            exact.target_status(),
+            crate::glow::GlowTargetStatus::ExactNoopUnreachable
+        );
+        assert_eq!(
+            exact.layer_recipe_profile().key(),
+            "cam16-jprime-oklab-cusp-v1"
+        );
+        assert_eq!(
+            exact.appearance_diagnostic_profile(),
+            crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1
+        );
+        assert!(exact.selection_diagnostic_profile().is_none());
+
+        let legacy = resolve_named_set(
+            &BgInput::solid("#101012").unwrap(),
+            &one_glow_table(
+                "#4A8FFF",
+                crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1,
+            ),
+            &vc,
+        );
+        let Resolved::Glow(legacy) = &legacy[0].1 else {
+            panic!("explicit legacy selection must resolve as a full Glow result");
+        };
+        assert_eq!(
+            legacy.selection_diagnostic_profile(),
+            Some(crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1)
+        );
+        assert_eq!(
+            legacy.appearance_diagnostic_profile(),
+            crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1
+        );
+        assert!(matches!(
+            legacy.target_status(),
+            crate::glow::GlowTargetStatus::LegacyReached
+                | crate::glow::GlowTargetStatus::LegacyUnreachable
+        ));
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // DIFFERENTIAL HARNESS (perf/max-chroma-hotpath) — cusp-attracted hue.
@@ -5670,7 +5797,7 @@ mod tests {
             t_ok.alpha()
         );
 
-        // Byte-grid разрешимость сильнее continuous-инверсии: белый красный
+        // Разрешимость байтовой сетки сильнее непрерывной инверсии: белый красный
         // тинт @ 0.12 уже округляется в #1F0000, поэтому коэрсии быть не должно.
         let black = BgInput::solid("#000000").unwrap();
         let quantised_solid = srgb_encoded_from_hex("#1F0000").unwrap();

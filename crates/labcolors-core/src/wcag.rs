@@ -1,20 +1,11 @@
-//! WCAG 2.1 contrast ratio — the legal conformance floor.
+//! Legacy WCAG 2.1 (2018) relative-luminance profile.
 //!
-//! The European Accessibility Act (in force 2025-06-28) requires, through
-//! EN 301 549, WCAG 2.1 level AA: a contrast ratio of at least 4.5:1 for normal
-//! text (success criterion 1.4.3) and 3:1 for user-interface components and
-//! graphical objects (1.4.11). This is the *standard relative-luminance*
-//! contrast ratio — symmetric and chroma-blind — computed on the output sRGB
-//! colour. It is the legal minimum beneath the perceptual LPC target the solver
-//! aims for; it never replaces it (see [`crate::solve`]).
-//!
-//! The implementation below is a faithful, self-contained transcription of the
-//! W3C definitions, deliberately independent of the CAM16/LPC pipeline so it can
-//! be audited line-by-line against the spec:
-//! <https://www.w3.org/TR/WCAG21/#dfn-relative-luminance> and
-//! <https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio>. EN 301 549 (the harmonised
-//! standard invoking WCAG 2.1 AA):
-//! <https://www.etsi.org/deliver/etsi_en/301500_301599/301549/03.02.01_60/en_301549v030201p.pdf>.
+//! This module preserves the product's existing continuous `0.03928` profile
+//! while the canonical WCAG 2.2 finite-domain profile is implemented under
+//! issue #284. The current W3C Recommendation uses `0.04045`; therefore this
+//! module must not be described as current normative WCAG, cross-runtime exact,
+//! or a legal-applicability decision. It remains independent of CAM16/LPC so the
+//! technical formula can be audited and replaced as one unit.
 
 /// WCAG 2.1 AA minimum contrast ratio for normal text (success criterion 1.4.3).
 pub(crate) const AA_TEXT_RATIO: f64 = 4.5;
@@ -23,23 +14,91 @@ pub(crate) const AA_TEXT_RATIO: f64 = 4.5;
 /// (success criterion 1.4.11).
 pub(crate) const AA_UI_RATIO: f64 = 3.0;
 
-/// Linearise one gamma-encoded sRGB channel in `[0, 1]`, per WCAG 2.1 §1.4.3.
+/// Split used by the original WCAG 2.1 (2018) continuous formula.
 ///
-/// The 0.03928 threshold is the value normatively fixed by WCAG; for 8-bit
-/// inputs it selects the same piecewise branch as the IEC sRGB transfer
-/// function, so quantised colours linearise identically either way.
+/// The current WCAG Recommendation uses `0.04045`. Issue #284 owns that
+/// versioned migration; changing this constant in place would silently mutate a
+/// characterized numerical profile.
+const LEGACY_CHANNEL_SPLIT: f64 = 0.039_28;
+
+/// First binary64 value on the power branch of the legacy split.
+const LEGACY_CHANNEL_SPLIT_RIGHT: f64 = f64::from_bits(0x3fa4_1c82_16c6_1524);
+
+const RED_WEIGHT: f64 = 0.2126;
+const GREEN_WEIGHT: f64 = 0.7152;
+const BLUE_WEIGHT: f64 = 0.0722;
+
+/// Absolute headroom for the final three weighted binary64 operations in a
+/// luminance interval. The material path is still platform-characterized
+/// because `powf` has no repository-owned outward error bound.
+const LUMINANCE_RANGE_MARGIN: f64 = 8.0 * f64::EPSILON;
+
+/// Linearise one gamma-encoded sRGB channel in `[0, 1]` under the frozen legacy
+/// WCAG 2.1 (2018) profile.
 fn linearise(channel: f64) -> f64 {
-    if channel <= 0.039_28 {
+    if channel <= LEGACY_CHANNEL_SPLIT {
         channel / 12.92
     } else {
         ((channel + 0.055) / 1.055).powf(2.4)
     }
 }
 
-/// WCAG 2.1 relative luminance of a gamma-encoded sRGB colour `[r, g, b]` in
-/// `[0, 1]`: `0.2126·R + 0.7152·G + 0.0722·B` over the linearised channels.
+/// Characterized range of the legacy channel transfer over an ordered encoded
+/// interval.
+///
+/// The legacy constants create a small downward discontinuity immediately to
+/// the right of `0.03928`. Endpoint-only evaluation is therefore invalid. When
+/// the interval crosses the split, both the linear value at the split and the
+/// power-branch value at the first representable input above it participate in
+/// the extrema. `powf` remains platform-characterized rather than soundly
+/// outward-rounded.
+fn linearised_channel_range(encoded_lo: f64, encoded_hi: f64) -> (f64, f64) {
+    debug_assert!(
+        encoded_lo.is_finite()
+            && encoded_hi.is_finite()
+            && (0.0..=1.0).contains(&encoded_lo)
+            && (0.0..=1.0).contains(&encoded_hi)
+            && encoded_lo <= encoded_hi
+    );
+
+    let mut lo = linearise(encoded_lo).min(linearise(encoded_hi));
+    let mut hi = linearise(encoded_lo).max(linearise(encoded_hi));
+    if encoded_lo <= LEGACY_CHANNEL_SPLIT && encoded_hi > LEGACY_CHANNEL_SPLIT {
+        let at_split = linearise(LEGACY_CHANNEL_SPLIT);
+        let right_of_split = linearise(LEGACY_CHANNEL_SPLIT_RIGHT);
+        lo = lo.min(at_split).min(right_of_split);
+        hi = hi.max(at_split).max(right_of_split);
+    }
+    (lo, hi)
+}
+
+/// Separable characterized luminance enclosure for three ordered encoded-sRGB
+/// channel intervals.
+///
+/// All WCAG weights are positive, so channel minima and maxima combine without
+/// enumerating the eight RGB corners. A small final absolute pad covers the
+/// fixed binary64 multiply/add sequence; the branch-sensitive `powf` calls keep
+/// this a platform characterization rather than a cross-runtime proof.
+pub(crate) fn relative_luminance_range(encoded_lo: [f64; 3], encoded_hi: [f64; 3]) -> (f64, f64) {
+    let channels = core::array::from_fn::<_, 3, _>(|channel| {
+        linearised_channel_range(encoded_lo[channel], encoded_hi[channel])
+    });
+    let lower =
+        (RED_WEIGHT * channels[0].0 + GREEN_WEIGHT * channels[1].0) + BLUE_WEIGHT * channels[2].0;
+    let upper =
+        (RED_WEIGHT * channels[0].1 + GREEN_WEIGHT * channels[1].1) + BLUE_WEIGHT * channels[2].1;
+    (
+        (lower - LUMINANCE_RANGE_MARGIN).max(0.0),
+        (upper + LUMINANCE_RANGE_MARGIN).min(1.0),
+    )
+}
+
+/// Frozen legacy WCAG 2.1 (2018) relative luminance of a gamma-encoded sRGB
+/// colour `[r, g, b]` in `[0, 1]`.
 pub(crate) fn relative_luminance(srgb: [f64; 3]) -> f64 {
-    0.2126 * linearise(srgb[0]) + 0.7152 * linearise(srgb[1]) + 0.0722 * linearise(srgb[2])
+    RED_WEIGHT * linearise(srgb[0])
+        + GREEN_WEIGHT * linearise(srgb[1])
+        + BLUE_WEIGHT * linearise(srgb[2])
 }
 
 /// The `[1, 21]` WCAG ratio of two relative luminances:
@@ -50,7 +109,8 @@ pub(crate) fn ratio_from_luminances(la: f64, lb: f64) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
-/// WCAG 2.1 contrast ratio between two gamma-encoded sRGB colours, in `[1, 21]`.
+/// Frozen legacy WCAG 2.1 (2018) contrast ratio between two gamma-encoded sRGB
+/// colours, in `[1, 21]`.
 ///
 /// `(L_lighter + 0.05) / (L_darker + 0.05)`. Symmetric and polarity-agnostic by
 /// construction — unlike the signed perceptual LPC metric, which is why the two
@@ -129,6 +189,50 @@ mod tests {
             let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
             let inlined = (hi + 0.05) / (lo + 0.05);
             assert_eq!(contrast_ratio(a, b).to_bits(), inlined.to_bits());
+        }
+    }
+
+    #[test]
+    fn legacy_channel_range_contains_both_sides_of_the_eotf_seam() {
+        assert_eq!(
+            LEGACY_CHANNEL_SPLIT_RIGHT.to_bits(),
+            LEGACY_CHANNEL_SPLIT.to_bits() + 1
+        );
+        let linear_side = LEGACY_CHANNEL_SPLIT / 12.92;
+        let power_side = ((LEGACY_CHANNEL_SPLIT_RIGHT + 0.055) / 1.055).powf(2.4);
+        assert!(
+            power_side < linear_side,
+            "fixture must expose the legacy seam"
+        );
+
+        // A wide interval makes the power-side seam value an interior extremum;
+        // endpoint-only evaluation cannot satisfy this assertion.
+        let (lo, hi) = linearised_channel_range(LEGACY_CHANNEL_SPLIT, 0.5);
+        assert!(lo <= power_side, "lower range omitted power side");
+        assert!(hi >= linear_side, "upper range omitted linear side");
+    }
+
+    #[test]
+    fn luminance_range_is_separable_and_bounded() {
+        let (lo, hi) = relative_luminance_range(
+            [LEGACY_CHANNEL_SPLIT, 0.25, 0.75],
+            [LEGACY_CHANNEL_SPLIT_RIGHT, 0.5, 1.0],
+        );
+        assert!(lo.is_finite() && hi.is_finite());
+        assert!((0.0..=1.0).contains(&lo));
+        assert!((0.0..=1.0).contains(&hi));
+        assert!(lo <= hi);
+
+        for rgb in [
+            [LEGACY_CHANNEL_SPLIT, 0.25, 0.75],
+            [LEGACY_CHANNEL_SPLIT_RIGHT, 0.5, 1.0],
+            [LEGACY_CHANNEL_SPLIT_RIGHT, 0.25, 0.75],
+        ] {
+            let actual = relative_luminance(rgb);
+            assert!(
+                lo <= actual && actual <= hi,
+                "{actual} outside [{lo}, {hi}]"
+            );
         }
     }
 }

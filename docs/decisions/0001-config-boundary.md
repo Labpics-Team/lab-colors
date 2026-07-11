@@ -63,11 +63,13 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
 - `themes` — словарь `имя → пресет условий просмотра (VC)` из закрытого физического меню
   (`srgb | dim | srgb-ic | dim-ic`, kebab-контракт JSON); произвольных VC-чисел
   в конфиге нет.
-- `roles` — имя → рецепт из физического меню (6 вариантов; `kind` в JSON — kebab):
-  `text-anchor(fraction, floor)` · `dj-anchor(light, dark)` ·
+- `roles` — имя → рецепт из физического меню (10 вариантов; `kind` в JSON — kebab):
+  `text-anchor(fraction, floor, hue?)` · `dj-anchor(light, dark)` ·
   `decorative-lc(magnitude)` (Lc-величина, стек теней) ·
-  `ladder(brand|family|sentiment|neutral, position)` ·
-  `alpha-analog(of, alpha)` (композит-инверсия, alpha.rs) · `zero`.
+  `ladder(source, position, floor?)` · `glow(source, step, decision_profile)` ·
+  `pair-fill(source)` · `pair-label(source, fraction, floor)` ·
+  `alpha-analog(of, alpha)` (композит-инверсия, alpha.rs) ·
+  `material(source, tone_light, tone_dark, floor)` · `zero`.
   `position` — ЗАКРЫТОЕ меню позиций лестницы (label / fill P–Q / border /
   focus …); перечень зафиксирован приложением A. Рецепт `ladder` реализован
   (`RoleSpec::Ladder`, `crate::ladder`) и поглотил акцентный GAP #59; как и
@@ -75,9 +77,13 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
   `DjMagnitude`, `alpha.rs`).
 - `aliases` — компонентные алиасы на существующие роли.
 
-Имена ролей — произвольные строки (`[a-z0-9-]+`), эмиссия `--lab-{имя}`
-существующей механикой. Коллапс-контракт исполняется схемой: в конфиге labui
-нет `static-*/inverted-*/on-*/mat-*` — роли решаются от фактического фона.
+Имена ролей — произвольные строки (`[a-z0-9-]+`). Каждая роль и каждый алиас
+резервируют client-owned primary `--lab-{имя}` ещё до resolve; `Zero` сохраняет
+это имя в metadata, хотя значения не эмитит. Многоключевые outcomes дополнительно
+резервируют свой shape: Glow — `-core/-alpha`, Material — `-01/-02`. Поэтому
+порядок JSON-писателей или фон не могут решить коллизию молча. Коллапс-контракт
+исполняется схемой: в конфиге labui нет `static-*/inverted-*/on-*/mat-*` — роли
+решаются от фактического фона.
 
 ## API
 

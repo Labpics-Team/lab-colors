@@ -144,7 +144,57 @@ final class ConformanceTests: XCTestCase {
 
     // MARK: - Low-level Glow decision contract
 
-    func testGlowDecisionProfilesRemainExplicitAndDoNotCollapse() throws {
+    func testGeneratedGlowSurfaceContainsOnlyAtomicProvenanceVariants() throws {
+        var packageRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { packageRoot = packageRoot.deletingLastPathComponent() }
+        let generatedSource = packageRoot
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("LabColors")
+            .appendingPathComponent("labcolors.swift")
+        let source = try String(contentsOf: generatedSource, encoding: .utf8)
+
+        // Positive cases делают negative API-проверки невакуумными: читается
+        // именно сгенерированная algebraic Glow surface, а не пустой/чужой файл.
+        XCTAssertTrue(source.contains("public enum GlowPointDecision"))
+        XCTAssertTrue(source.contains("case stableExactNoop("))
+        XCTAssertTrue(source.contains("case legacyReached("))
+        XCTAssertTrue(source.contains("case legacyUnreachable("))
+        XCTAssertTrue(source.contains("case indeterminate("))
+        XCTAssertTrue(source.contains("public enum GlowDecisionProfile"))
+        XCTAssertTrue(source.contains("case IncompatibleCoreContract("))
+        XCTAssertFalse(source.contains("case determinate("))
+        XCTAssertFalse(source.contains("public enum GlowDecisionGuarantee"))
+        XCTAssertFalse(source.contains("public enum GlowTargetStatus"))
+        XCTAssertFalse(source.contains("public enum GlowDiagnosticProfile"))
+    }
+
+    func testInvalidPublicGlowInputsKeepPublicInputErrorTaxonomy() {
+        let invalidInputs: [(String, String, Double)] = [
+            ("not-a-color", "#000000", 2.3006),
+            ("#C0B2FA", "not-a-color", 2.3006),
+            ("#C0B2FA", "#000000", 0.0),
+            ("#C0B2FA", "#000000", -1.0),
+            ("#C0B2FA", "#000000", .nan),
+            ("#C0B2FA", "#000000", .infinity),
+        ]
+        for (tint, background, targetDj) in invalidInputs {
+            XCTAssertThrowsError(try solveGlowPoint(
+                tint: tint,
+                background: background,
+                targetDj: targetDj,
+                theme: .light,
+                profile: .stableV1
+            )) { error in
+                guard case let ColorError.InvalidGlowRequest(reason) = error else {
+                    return XCTFail(
+                        "public input error не должен становиться adapter incompatibility: \(error)")
+                }
+                XCTAssertFalse(reason.isEmpty)
+            }
+        }
+    }
+
+    func testGlowInputProfilesRemainExplicitAndOutputProvenanceIsAtomic() throws {
         let tint = "#C0B2FA"
         let background = "#101012"
         let targetDj = 2.3006
@@ -166,13 +216,12 @@ final class ConformanceTests: XCTestCase {
             theme: .light,
             profile: .stableV1)
         switch stable {
-        case let .indeterminate(decisionProfile, siteId, evidence):
-            XCTAssertEqual(decisionProfile, .stableV1)
+        case let .indeterminate(siteId, evidence):
             XCTAssertEqual(siteId, .glowTargetOrMaximumV1)
             guard case .soundBoundUnavailable = evidence else {
                 return XCTFail("stable-v1 обязан вернуть typed unavailable-bound evidence")
             }
-        case .determinate:
+        case .stableExactNoop, .legacyReached, .legacyUnreachable:
             XCTFail("stable-v1 не должен выбирать состояние без sound bound")
         }
 
@@ -183,31 +232,18 @@ final class ConformanceTests: XCTestCase {
             theme: .light,
             profile: .legacyPlatformDependentV1)
         switch legacy {
-        case let .determinate(
-            decisionProfile,
-            decisionGuarantee,
-            compositeProfile,
-            compositeGuarantee,
-            diagnosticProfile,
-            alpha,
-            _,
-            _,
-            _,
-            _,
-            compositeHex
-        ):
-            XCTAssertEqual(decisionProfile, .legacyPlatformDependentV1)
-            XCTAssertEqual(decisionGuarantee, .legacyPlatformDependentV1)
-            XCTAssertEqual(compositeProfile, .encodedSrgb8ScreenV1)
-            XCTAssertEqual(compositeGuarantee, .bitExact)
-            XCTAssertEqual(diagnosticProfile, Optional(.cam16UcsJPrimeLi2017V1))
-            let recomposite = screenComposite(tint: tint, alpha: alpha, background: background)
+        case let .legacyReached(value):
+            XCTAssertEqual(value.compositeProfile, .encodedSrgb8ScreenV1)
+            XCTAssertEqual(value.compositeGuarantee, .bitExact)
+            XCTAssertEqual(value.targetDj, targetDj)
+            let recomposite = screenComposite(
+                tint: tint, alpha: value.alpha, background: background)
             XCTAssertEqual(
                 recomposite,
-                compositeHex,
+                value.compositeHex,
                 "bit-exact относится к композитору, не к CAM16 decision")
-        case .indeterminate:
-            XCTFail("explicit legacy profile обязан сохранять прежний determinate path")
+        case .stableExactNoop, .legacyUnreachable, .indeterminate:
+            XCTFail("explicit legacy reached fixture обязан вернуть atomic legacyReached")
         }
 
         func assertStableNoop(tint: String, background: String, composite expected: String) throws {
@@ -218,34 +254,33 @@ final class ConformanceTests: XCTestCase {
                 theme: .light,
                 profile: .stableV1)
             switch decision {
-            case let .determinate(
-                decisionProfile,
-                decisionGuarantee,
-                compositeProfile,
-                compositeGuarantee,
-                diagnosticProfile,
-                _,
-                _,
-                _,
-                targetStatus,
-                achievedDj,
-                compositeHex
-            ):
-                XCTAssertEqual(decisionProfile, .stableV1)
-                XCTAssertEqual(decisionGuarantee, .bitExact)
-                XCTAssertEqual(compositeProfile, .encodedSrgb8ScreenV1)
-                XCTAssertEqual(compositeGuarantee, .bitExact)
-                XCTAssertNil(diagnosticProfile)
-                XCTAssertEqual(targetStatus, .unreachable)
-                XCTAssertEqual(achievedDj, 0.0)
-                XCTAssertEqual(compositeHex, expected)
-            case .indeterminate:
-                XCTFail("exact screen no-op обязан быть determinate без CAM16")
+            case let .stableExactNoop(value):
+                XCTAssertEqual(value.compositeProfile, .encodedSrgb8ScreenV1)
+                XCTAssertEqual(value.compositeGuarantee, .bitExact)
+                XCTAssertEqual(value.achievedDj, 0.0)
+                XCTAssertEqual(value.compositeHex, expected)
+            case .legacyReached, .legacyUnreachable, .indeterminate:
+                XCTFail("exact screen no-op обязан вернуть atomic stableExactNoop")
             }
         }
 
         try assertStableNoop(tint: tint, background: "#FFFFFF", composite: "#FFFFFF")
         try assertStableNoop(tint: "#010000", background: "#FE0000", composite: "#FE0000")
+
+        let legacyUnreachable = try solveGlowPoint(
+            tint: tint,
+            background: "#FFFFFF",
+            targetDj: targetDj,
+            theme: .light,
+            profile: .legacyPlatformDependentV1)
+        switch legacyUnreachable {
+        case let .legacyUnreachable(value):
+            XCTAssertEqual(value.compositeProfile, .encodedSrgb8ScreenV1)
+            XCTAssertEqual(value.compositeGuarantee, .bitExact)
+            XCTAssertEqual(value.compositeHex, "#FFFFFF")
+        case .stableExactNoop, .legacyReached, .indeterminate:
+            XCTFail("explicit legacy no-op обязан вернуть atomic legacyUnreachable")
+        }
 
         let crossing = try solveGlowPoint(
             tint: "#800000",
@@ -254,13 +289,12 @@ final class ConformanceTests: XCTestCase {
             theme: .light,
             profile: .stableV1)
         switch crossing {
-        case let .indeterminate(decisionProfile, siteId, evidence):
-            XCTAssertEqual(decisionProfile, .stableV1)
+        case let .indeterminate(siteId, evidence):
             XCTAssertEqual(siteId, .glowTargetOrMaximumV1)
             guard case .soundBoundUnavailable = evidence else {
                 return XCTFail("first crossing обязан сохранить typed unavailable-bound evidence")
             }
-        case .determinate:
+        case .stableExactNoop, .legacyReached, .legacyUnreachable:
             XCTFail("#800000 над #FE0000 пересекает первый half-LSB wall")
         }
     }
@@ -295,7 +329,7 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    // MARK: - Семейство: мутность
+    // MARK: - Семейство: legacy proxy coordinate
 
     func testMuddiness() throws {
         let vectors = try load("muddiness.json", as: [MuddinessVec].self)

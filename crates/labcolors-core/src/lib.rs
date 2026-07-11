@@ -84,17 +84,20 @@ pub use config::{
 };
 pub use curve::ColorCurve;
 pub use glow::{
-    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_COMPOSITE_PROFILE, GLOW_DIAGNOSTIC_PROFILE, GLOW_SUBTLE_DJ,
-    GlowCompositeCertificateV1, GlowCompositeGuaranteeV1, GlowCompositeProfileV1,
-    GlowConstraintLayer, GlowDecisionProfileV1, GlowDiagnosticProfileV1, GlowSolve,
-    GlowTargetStatus, glow_layers_from_source, screen_layer_over_encoded, screen_layer_over_srgb8,
+    GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_COMPOSITE_PROFILE, GLOW_DIAGNOSTIC_PROFILE,
+    GLOW_LAYER_RECIPE_PROFILE, GLOW_SUBTLE_DJ, GlowCompositeCertificateV1,
+    GlowCompositeGuaranteeV1, GlowCompositeProfileV1, GlowConstraintLayer, GlowDecisionProfileV1,
+    GlowDiagnosticProfileV1, GlowLayerRecipeProfileV1, GlowSolve, GlowTargetStatus,
+    glow_layers_from_source, screen_layer_over_encoded, screen_layer_over_srgb8,
     screen_point_is_exact_noop, solve_screen_alpha_for_dj,
 };
 pub use hash::fnv1a_32;
 pub use ladder::{LadderPosition, LadderTint, ThemeAnchors};
 pub use lcs::LcsColor;
 pub use material::{
-    BackdropBox, MaterialAlpha, Pole, committed_pole_encoded, solve_material_alpha_encoded,
+    BackdropBoundV1, BackdropBox, BackdropBoxErrorV1, EncodedRgbErrorV1, MaterialAlpha,
+    MaterialAlphaGuaranteeV1, MaterialAlphaStatusV1, MaterialNumericalProfileV1,
+    MaterialSolveErrorV1, Pole, RgbChannelV1, committed_pole_encoded, solve_material_alpha_encoded,
     solve_material_alpha_hex, worst_contrast_encoded,
 };
 pub use numerics::{

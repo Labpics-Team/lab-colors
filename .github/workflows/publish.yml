@@ -18,6 +18,10 @@
 # репозитория вернуть provenance и короткоживущую аутентификацию.
 name: publish
 
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 on:
   push:
     tags: ["colors-v*"]
@@ -38,8 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          # Full history is required by the anti-rogue-tag ancestry guard.
+          # Полная история нужна ancestry guard против постороннего тега.
           fetch-depth: 0
+          persist-credentials: false
       - name: isolated publish env (runner.temp)
         run: |
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
@@ -81,6 +86,7 @@ jobs:
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
               requiredJobs: [
+                "Node 22 consumer floor",
                 "MSRV workspace check",
                 "clippy + rustfmt",
                 "cargo doc (intra-doc links)",
@@ -308,4 +314,5 @@ jobs:
       - name: npm publish verified CI tarball (granular token, no rebuild/repack)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --ignore-scripts "${{ steps.verified-artifact.outputs.tarball }}"
+          TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}
+        run: npm publish --ignore-scripts "$TARBALL_PATH"

@@ -10,7 +10,155 @@ import init, {
   effectiveBackground,
   oklabLerp,
 } from "./index.js";
-import type { ResolvedTheme, RoleResult, ThemeName } from "./index.js";
+import type {
+  GlowDiagnosticProfileV1,
+  GlowDeterminateRole,
+  GlowDeterminateRoleBase,
+  GlowLayerRecipeProfileV1,
+  GlowTargetStatusV1,
+  MaterialRole,
+  MaterialRoleBase,
+  ResolvedTheme,
+  RoleResult,
+  ThemeName,
+} from "./index.js";
+
+declare const glowDeterminateCommon: GlowDeterminateRoleBase;
+const requireGlowDeterminate = (_role: GlowDeterminateRole): void => {};
+
+requireGlowDeterminate({
+  ...glowDeterminateCommon,
+  decisionProfile: "stable-v1",
+  decisionGuarantee: { kind: "bit-exact" },
+  selectionDiagnosticProfile: null,
+  targetStatus: "exact-noop-unreachable",
+  degraded: true,
+});
+requireGlowDeterminate({
+  ...glowDeterminateCommon,
+  decisionProfile: "legacy-platform-dependent-v1",
+  decisionGuarantee: { kind: "legacy-platform-dependent-v1" },
+  selectionDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+  targetStatus: "legacy-reached",
+  degraded: false,
+});
+requireGlowDeterminate({
+  ...glowDeterminateCommon,
+  decisionProfile: "legacy-platform-dependent-v1",
+  decisionGuarantee: { kind: "legacy-platform-dependent-v1" },
+  selectionDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+  targetStatus: "legacy-unreachable",
+  degraded: true,
+});
+
+// @ts-expect-error stable-профиль не может нести legacy-status.
+requireGlowDeterminate({ ...glowDeterminateCommon, decisionProfile: "stable-v1", decisionGuarantee: { kind: "bit-exact" }, selectionDiagnosticProfile: null, targetStatus: "legacy-reached", degraded: false });
+// @ts-expect-error legacy-профиль не может рекламировать bit-exact decision.
+requireGlowDeterminate({ ...glowDeterminateCommon, decisionProfile: "legacy-platform-dependent-v1", decisionGuarantee: { kind: "bit-exact" }, selectionDiagnosticProfile: "cam16-ucs-jprime-li2017-v1", targetStatus: "legacy-reached", degraded: false });
+// @ts-expect-error exact no-op не выполняет CAM16 selection diagnostic.
+requireGlowDeterminate({ ...glowDeterminateCommon, decisionProfile: "stable-v1", decisionGuarantee: { kind: "bit-exact" }, selectionDiagnosticProfile: "cam16-ucs-jprime-li2017-v1", targetStatus: "exact-noop-unreachable", degraded: true });
+// @ts-expect-error reached-ветвь не является degraded.
+requireGlowDeterminate({ ...glowDeterminateCommon, decisionProfile: "legacy-platform-dependent-v1", decisionGuarantee: { kind: "legacy-platform-dependent-v1" }, selectionDiagnosticProfile: "cam16-ucs-jprime-li2017-v1", targetStatus: "legacy-reached", degraded: true });
+// @ts-expect-error Glow API не поддерживает outward decision guarantee.
+requireGlowDeterminate({ ...glowDeterminateCommon, decisionProfile: "stable-v1", decisionGuarantee: { kind: "outward-interval-v1", lower: 0, upper: 1 }, selectionDiagnosticProfile: null, targetStatus: "exact-noop-unreachable", degraded: true });
+
+function narrowGlowDeterminate(role: GlowDeterminateRole): void {
+  if (role.decisionProfile === "stable-v1") {
+    const status: "exact-noop-unreachable" = role.targetStatus;
+    const guarantee: "bit-exact" = role.decisionGuarantee.kind;
+    const diagnostic: null = role.selectionDiagnosticProfile;
+    const degraded: true = role.degraded;
+    void status;
+    void guarantee;
+    void diagnostic;
+    void degraded;
+  } else if (role.targetStatus === "legacy-reached") {
+    const degraded: false = role.degraded;
+    void degraded;
+  } else {
+    const status: "legacy-unreachable" = role.targetStatus;
+    const degraded: true = role.degraded;
+    void status;
+    void degraded;
+  }
+}
+
+declare const materialCommon: MaterialRoleBase;
+const requireMaterial = (_role: MaterialRole): void => {};
+
+requireMaterial({
+  ...materialCommon,
+  alpha: 0,
+  alphaGuarantee: {
+    kind: "transparent-endpoint-characterized-v1",
+    numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
+  },
+  alphaStatus: "satisfied",
+  guaranteed: true,
+});
+requireMaterial({
+  ...materialCommon,
+  alpha: 0.5,
+  alphaGuarantee: {
+    kind: "bisection-bracket-characterized-v1",
+    iterations: 60,
+    lowerAlpha: 0.49,
+    upperAlpha: 0.5,
+    numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
+  },
+  alphaStatus: "satisfied",
+  guaranteed: true,
+});
+requireMaterial({
+  ...materialCommon,
+  alpha: 1,
+  alphaGuarantee: {
+    kind: "opaque-endpoint-characterized-v1",
+    numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
+  },
+  alphaStatus: "degraded",
+  guaranteed: false,
+});
+
+// @ts-expect-error degraded несовместим с transparent endpoint.
+requireMaterial({ ...materialCommon, alpha: 0, alphaGuarantee: { kind: "transparent-endpoint-characterized-v1", numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1" }, alphaStatus: "degraded", guaranteed: false });
+// @ts-expect-error satisfied несовместим с opaque endpoint.
+requireMaterial({ ...materialCommon, alpha: 1, alphaGuarantee: { kind: "opaque-endpoint-characterized-v1", numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1" }, alphaStatus: "satisfied", guaranteed: true });
+// @ts-expect-error compatibility boolean выводится из typed status.
+requireMaterial({ ...materialCommon, alpha: 0.5, alphaGuarantee: { kind: "bisection-bracket-characterized-v1", iterations: 60, lowerAlpha: 0.49, upperAlpha: 0.5, numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1" }, alphaStatus: "satisfied", guaranteed: false });
+// @ts-expect-error transparent endpoint конструктивно имеет alpha 0.
+requireMaterial({ ...materialCommon, alpha: 0.25, alphaGuarantee: { kind: "transparent-endpoint-characterized-v1", numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1" }, alphaStatus: "satisfied", guaranteed: true });
+// @ts-expect-error degraded opaque endpoint конструктивно имеет alpha 1.
+requireMaterial({ ...materialCommon, alpha: 0.9, alphaGuarantee: { kind: "opaque-endpoint-characterized-v1", numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1" }, alphaStatus: "degraded", guaranteed: false });
+
+function narrowMaterial(role: MaterialRole): void {
+  if (role.alphaStatus === "degraded") {
+    const alpha: 1 = role.alpha;
+    const guarantee: "opaque-endpoint-characterized-v1" = role.alphaGuarantee.kind;
+    const guaranteed: false = role.guaranteed;
+    void alpha;
+    void guarantee;
+    void guaranteed;
+    return;
+  }
+
+  const status: "satisfied" = role.alphaStatus;
+  const guaranteed: true = role.guaranteed;
+  void status;
+  void guaranteed;
+  if (role.alphaGuarantee.kind === "transparent-endpoint-characterized-v1") {
+    const guarantee: "transparent-endpoint-characterized-v1" = role.alphaGuarantee.kind;
+    void guarantee;
+  } else {
+    const guarantee: "bisection-bracket-characterized-v1" = role.alphaGuarantee.kind;
+    const upper: number = role.alphaGuarantee.upperAlpha;
+    void guarantee;
+    void upper;
+  }
+}
+
+void narrowGlowDeterminate;
+void narrowMaterial;
 
 async function consume(clientConfigJson: string): Promise<void> {
   await init();
@@ -48,9 +196,16 @@ async function consume(clientConfigJson: string): Promise<void> {
 
   const glow: RoleResult = result.roles["fx-glow-brand"];
   if (glow.kind === "glow") {
-    const diagnosticProfile: "cam16-ucs-jprime-li2017-v1" | null =
-      glow.diagnosticProfile;
-    void diagnosticProfile;
+    const layerRecipeProfile: GlowLayerRecipeProfileV1 = glow.layerRecipeProfile;
+    const appearanceDiagnosticProfile: GlowDiagnosticProfileV1 =
+      glow.appearanceDiagnosticProfile;
+    const selectionDiagnosticProfile: GlowDiagnosticProfileV1 | null =
+      glow.selectionDiagnosticProfile;
+    const targetStatus: GlowTargetStatusV1 = glow.targetStatus;
+    void layerRecipeProfile;
+    void appearanceDiagnosticProfile;
+    void selectionDiagnosticProfile;
+    void targetStatus;
   }
 
   applyTheme(document.documentElement, result);

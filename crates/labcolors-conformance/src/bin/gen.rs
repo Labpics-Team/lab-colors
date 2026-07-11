@@ -24,11 +24,11 @@ fn vectors_dir() -> PathBuf {
         .join("vectors")
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = vectors_dir();
     std::fs::create_dir_all(&dir)?;
 
-    let pack = Pack::generate();
+    let pack = Pack::generate()?;
 
     // Семейства.
     for (name, bytes) in pack.families() {

@@ -292,7 +292,9 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
     'glow-indeterminate',
     'sound-bound-unavailable',
     'compositeProfile',
-    'diagnosticProfile',
+    'layerRecipeProfile',
+    'appearanceDiagnosticProfile',
+    'selectionDiagnosticProfile',
     'resolve_alpha_analog_hex',
     'Rollback',
   ]) {
@@ -301,4 +303,63 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
   assert.match(changelog, /@labpics\/colors 0\.10\.0 \/ Rust 0\.2\.0/);
   assert.doesNotMatch(readme, /referenceProfile/);
   assert.doesNotMatch(adr, /referenceProfile/);
+  assert.doesNotMatch(readme, /\bdiagnosticProfile\b/);
+  assert.doesNotMatch(adr, /\bdiagnosticProfile\b/);
+});
+
+test('exact-alpha migration экранирует absolute-value pipes внутри Markdown tables', () => {
+  const migration = readFileSync(
+    join(ROOT, 'docs', 'migrations', 'exact-alpha-glow.md'),
+    'utf8',
+  );
+  const tableRows = migration.split('\n').filter((line) => line.startsWith('|'));
+  const malformed = tableRows.filter((line) => /`[^`]*\|ΔJ′\|[^`]*`/.test(line));
+  assert.deepEqual(malformed, []);
+  assert.equal(
+    tableRows.filter((line) => line.includes('`\\|ΔJ′\\|`')).length,
+    3,
+    'anti-vacuum: determinate Glow table содержит три |ΔJ′| cells',
+  );
+});
+
+test('legacy muddiness API quarantined as compatibility proxy, not human verdict', () => {
+  const paths = [
+    ['core', 'crates/labcolors-core/src/cleanliness.rs'],
+    ['wasm', 'crates/labcolors-wasm/src/lib.rs'],
+    ['ffi', 'crates/labcolors-ffi/src/lib.rs'],
+    ['conformance docs', 'conformance/README.md'],
+    ['conformance crate', 'crates/labcolors-conformance/src/lib.rs'],
+    ['npm docs', 'packages/colors/README.md'],
+    ['swift docs', 'bindings/swift/README.md'],
+  ];
+  const surfaces = paths.map(([label, path]) => [
+    label,
+    readFileSync(join(ROOT, ...path.split('/')), 'utf8'),
+  ]);
+
+  for (const [label, source] of surfaces) {
+    assert.match(
+      source,
+      /experimental compatibility proxy/i,
+      `${label}: legacy API must state its non-observer status`,
+    );
+  }
+
+  const publicText = surfaces.map(([, source]) => source).join('\n');
+  for (const forbidden of [
+    /Закон Грязи/u,
+    /Muddiness Law/u,
+    /0\s*[—-]\s*чистый,\s*1\s*[—-]\s*грязный/u,
+    /оценка [«"]грязи[»"]/u,
+  ]) {
+    assert.doesNotMatch(publicText, forbidden);
+  }
+
+  const inventory = readFileSync(join(ROOT, 'docs', 'empirical-inventory.md'), 'utf8');
+  assert.match(inventory, /M-01[^\n]*Indeterminate provenance/u);
+  assert.match(inventory, /M-02[^\n]*universal JND Rejected/u);
+  assert.match(inventory, /M-04[^\n]*Rejected provenance; Indeterminate value/u);
+  assert.match(inventory, /M-05[^\n]*Rejected provenance; Indeterminate value/u);
+  assert.match(inventory, /M-12[^\n]*observer claim Rejected/u);
+  assert.doesNotMatch(inventory, /M-0[45][^\n]*\| cited-measured \|/u);
 });

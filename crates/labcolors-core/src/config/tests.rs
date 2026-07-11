@@ -9,6 +9,7 @@
 //!    сверка со стабом labui (light+dark) + RED-proof мутаций.
 
 use super::fixture::labui_reference;
+use super::test_support::resolved_repr as repr;
 use super::*;
 use crate::ladder::LadderPosition;
 use crate::solve::Floor;
@@ -28,22 +29,6 @@ fn grid() -> ([(ViewingConditions, &'static str); 2], [&'static str; 6]) {
             "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
         ],
     )
-}
-
-/// Hex/none/UNREACHABLE-представление резолва — как в golden-тесте ядра.
-fn repr(res: &Resolved) -> String {
-    match res {
-        Resolved::Color { solved, .. } => solved.hex().to_string(),
-        // полупрозрачная роль: тинт + фактическая альфа — то, что эмитится `--lab-*`.
-        Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
-        // Свечение: слои + α — стабильное представление для голденов.
-        Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
-        Resolved::GlowIndeterminate(_) => "GLOW_INDETERMINATE".to_string(),
-        // Материал: тон + выведенная α — стабильное представление.
-        Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
-        Resolved::None => "none".to_string(),
-        Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
-    }
 }
 
 /// Собрать карту `role.key() -> hex` из дефолтной таблицы для (bg, vc).
@@ -1590,7 +1575,7 @@ fn validator_rejects_role_and_alias_collisions_with_emitted_satellites() {
             matches!(
                 cfg.validate(),
                 Err(ConfigError::DuplicateKey {
-                    dictionary: "emitted CSS variables",
+                    dictionary: "reserved CSS namespace",
                     key,
                 }) if key == expected
             ),
@@ -1686,22 +1671,74 @@ fn validator_rejects_role_and_alias_collisions_with_emitted_satellites() {
     }
 }
 
+/// `Zero` не эмитит значение, но его клиентское имя всё равно занято: иначе
+/// сателлит другой роли мог бы записать цвет в `cssVar` токена с `kind: "none"`.
+/// Закон одинаков для явной zero-роли и алиаса на неё, а также для каждого
+/// многоключевого shape, известного core.
+#[test]
+fn validator_reserves_zero_role_and_alias_primary_names() {
+    let assert_collision = |cfg: ThemeConfig, expected_stem: &str| {
+        let expected = format!("--lab-{expected_stem}");
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(ConfigError::DuplicateKey {
+                    dictionary: "reserved CSS namespace",
+                    key,
+                }) if key == expected
+            ),
+            "zero-токен обязан защищать зарезервированный CSS key {expected}"
+        );
+    };
+
+    let glow_recipe = labui_reference()
+        .roles
+        .into_iter()
+        .find(|(name, _)| name == "fx-glow-brand")
+        .expect("фикстура несёт fx-glow-brand")
+        .1;
+
+    for (owner, recipe, suffixes) in [
+        ("probe-glow", glow_recipe, &["-core", "-alpha"][..]),
+        (
+            "probe-material",
+            neutral_material(10.0, Floor::AaText),
+            &["-01", "-02"][..],
+        ),
+    ] {
+        for suffix in suffixes {
+            let zero_name = format!("{owner}{suffix}");
+
+            let mut role_cfg = labui_reference();
+            role_cfg.roles.push((owner.to_string(), recipe.clone()));
+            role_cfg.roles.push((zero_name.clone(), RoleRecipe::Zero));
+            assert_collision(role_cfg, &zero_name);
+
+            let mut alias_cfg = labui_reference();
+            alias_cfg.roles.push((owner.to_string(), recipe.clone()));
+            alias_cfg
+                .aliases
+                .push((zero_name.clone(), "none".to_string()));
+            assert_collision(alias_cfg, &zero_name);
+        }
+    }
+}
+
 /// Сегодняшние суффиксы не пересекаются друг с другом, но сам примитив
 /// namespace не должен полагаться на это случайное свойство. Синтетические
 /// shapes доказывают derived↔derived ветвь: два разных владельца строят один
 /// итоговый ключ, и второй резерв немедленно падает.
 #[test]
 fn emitted_namespace_primitive_rejects_satellite_to_satellite_collision() {
-    let mut emitted = std::collections::BTreeSet::new();
-    reserve_emitted_css_names(&mut emitted, "probe", &["-outer-inner"])
-        .expect("первый сателлит свободен");
-    let error = reserve_emitted_css_names(&mut emitted, "probe-outer", &["-inner"])
+    let mut reserved = std::collections::BTreeSet::new();
+    reserve_css_names(&mut reserved, "probe", &["-outer-inner"]).expect("первый сателлит свободен");
+    let error = reserve_css_names(&mut reserved, "probe-outer", &["-inner"])
         .expect_err("derived↔derived коллизия обязана быть отвергнута");
 
     assert!(matches!(
         error,
         ConfigError::DuplicateKey {
-            dictionary: "emitted CSS variables",
+            dictionary: "reserved CSS namespace",
             key,
         } if key == "--lab-probe-outer-inner"
     ));
@@ -2383,8 +2420,9 @@ fn material_two_layer_solid_canon_byte_exact_and_guaranteed() {
     assert!((m.floor() - 4.5).abs() < 1e-12, "AA-text пол = 4.5");
 }
 
-/// Гарантия читаемости пересчитываема потребителем из эмитированных `01`/`02`:
-/// композит квантованного тинта над чёрным/белым точно даёт худший контраст.
+/// Гарантия читаемости пересчитываема из эмитированных `01`/`02`: public core
+/// recheck побитно совпадает с сохранённым conservative verdict, а независимые
+/// byte-scale consumer probes не опускаются ниже него.
 #[test]
 fn material_guarantee_recomputable_over_worst_backdrop() {
     let res = material_on_white(15.0);
@@ -2392,29 +2430,47 @@ fn material_guarantee_recomputable_over_worst_backdrop() {
         panic!("ожидался Material");
     };
     let tint = crate::spaces::srgb::srgb_encoded_from_hex(m.tint_hex()).unwrap();
-    // ЭКСАКТНЫЙ композит квантованного тинта (как ядро и потребитель), без
-    // переквантования — над двумя углами полного коридора.
-    let over_black = crate::alpha::composite_over_encoded(tint, m.alpha(), [0.0; 3])
-        .expect("эмитированный материал лежит в домене композитора");
-    let over_white = crate::alpha::composite_over_encoded(tint, m.alpha(), [1.0; 3])
-        .expect("эмитированный материал лежит в домене композитора");
+    let recomputed = crate::material::worst_contrast_encoded(
+        tint,
+        m.alpha(),
+        &crate::material::BackdropBox::FULL,
+        m.pole(),
+    )
+    .unwrap();
+    assert_eq!(recomputed.to_bits(), m.worst_contrast().to_bits());
+
+    // Independent official scalar order. The old version of this test called
+    // alpha::composite_over_encoded, which is the normalized-expanded profile
+    // and therefore could not prove material consumer parity.
     let pole_lum = if matches!(m.pole(), crate::material::Pole::White) {
         1.0
     } else {
         0.0
     };
-    let recomputed =
-        crate::wcag::ratio_from_luminances(pole_lum, crate::wcag::relative_luminance(over_black))
-            .min(crate::wcag::ratio_from_luminances(
-                pole_lum,
-                crate::wcag::relative_luminance(over_white),
-            ));
+    let probes = [0.0, 0.039_28, 0.039_280_000_000_000_01, 0.5, 1.0];
+    let mut measured_min = f64::INFINITY;
+    for red in probes {
+        for green in probes {
+            for blue in probes {
+                let background = [red, green, blue];
+                let composite = core::array::from_fn(|channel| {
+                    let tint_byte = (tint[channel] * 255.0).round();
+                    let background_byte_scale = background[channel] * 255.0;
+                    (background_byte_scale + m.alpha() * (tint_byte - background_byte_scale))
+                        / 255.0
+                });
+                measured_min = measured_min.min(crate::wcag::ratio_from_luminances(
+                    pole_lum,
+                    crate::wcag::relative_luminance(composite),
+                ));
+            }
+        }
+    }
+    assert!(m.worst_contrast() <= measured_min);
     assert!(
-        (recomputed - m.worst_contrast()).abs() < 1e-9,
-        "пересчёт {recomputed} != вердикту {}",
-        m.worst_contrast()
+        m.worst_contrast() >= 4.5,
+        "conservative verdict ниже AA-пола"
     );
-    assert!(recomputed >= 4.5 - 1e-9, "пересчёт ниже AA-пола");
 }
 
 /// Нейтральный материал БАЙТ-в-байт переиспользует тон dj-anchor (та же физика

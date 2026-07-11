@@ -163,14 +163,33 @@ type RoleResult =
   `mix-blend-mode: screen`: `cssVar` — halo, `${cssVar}-core` — core,
   `${cssVar}-alpha` — каноническая `alphaCss`. `compositeProfile` /
   `compositeGuarantee` описывают exact point-композит отдельно от
-  `diagnosticProfile` и `decisionGuarantee`. `diagnosticProfile` равен
-  `"cam16-ucs-jprime-li2017-v1"`, только если solve реально выполнил эту
-  диагностику; exact no-op возвращает `null`. `kind: "glow-indeterminate"`
+  `decisionGuarantee`. `layerRecipeProfile` фиксирует общий рецепт слоёв
+  `"cam16-jprime-oklab-cusp-v1"`, а обязательный
+  `appearanceDiagnosticProfile` — CAM16 appearance-модель результата. Отдельный
+  `selectionDiagnosticProfile` сообщает, применялась ли CAM16-диагностика именно
+  при выборе состояния: для exact no-op он равен `null`, для legacy solve —
+  `"cam16-ucs-jprime-li2017-v1"`. `targetStatus` различает эти ветви явно:
+  `"exact-noop-unreachable"`, `"legacy-reached"` или
+  `"legacy-unreachable"`. Determinate-форма — union из этих трёх согласованных
+  ветвей: смешать stable/legacy profile, guarantee, selection diagnostic,
+  status и `degraded` на уровне TypeScript невозможно. Outward interval не
+  входит в Glow capability этого релиза. `kind: "glow-indeterminate"`
   означает, что профиль `stable-v1` не выбрал target/max state без sound bound;
   для такой роли CSS-переменные не эмитятся и legacy fallback не применяется.
   Цель и все `*CompositeHex` / `*AchievedDj` относятся только к изолированным
   point-слоям, а не к полному blur/overlap-эффекту, браузеру или дисплею.
-- `MaterialRole` — тон двухслойного материала и выведенная alpha: primary — солид-канон, `-01` — тинт, `-02` — опаковая база; поля результата явно сообщают гарантию и её границы.
+- `MaterialRole` — union трёх терминальных исходов: satisfied transparent
+  endpoint (`alpha = 0`), satisfied bisection bracket (`alpha` побитно равна
+  `upperAlpha`) и degraded opaque endpoint (`alpha = 1`). `alphaStatus`,
+  `alphaGuarantee` и compatibility-поле `guaranteed` согласованы типом. `floor`
+  — запрошенный пол; он держится только при `alphaStatus: "satisfied"`. Primary
+  остаётся солид-каноном, `-01` — тинтом, `-02` — опаковой базой. Численный
+  профиль явно фиксирует operation order:
+  `encoded-srgb-byte-scale-affine-platform-binary64-powf-v1`: original WCAG 2.1
+  (2018) split `0.03928`, conservative binary64 channel envelope и обе стороны
+  пересечённого EOTF seam. Bracket доступен только после directed-search guard;
+  это platform-characterization, а не двухугловая теорема, глобальная
+  монотонность, первый passing state или точная минимальная alpha.
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
 - `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
 
@@ -223,7 +242,11 @@ profile, а не как численную гарантию. Полная миг
 
 ### `engine.muddiness(hex): number`
 
-`muddiness` — оценка «грязи» цвета `hex` в диапазоне `[0, 1]` (Закон Грязи).
+`muddiness` возвращает замороженный числовой выход исторической формулы. Это
+`experimental compatibility proxy`: legacy-имя сохранено для совместимости, но
+значение не является валидированным на наблюдателях человеческим вердиктом
+clean/dirty и не должно использоваться как production decision. Сам диапазон
+`[0, 1]` — свойство формулы, а не шкала человеческого восприятия.
 
 ---
 
@@ -276,7 +299,7 @@ interface AdaptThemeOptions {
   sustainMs?: number;                // минимальное время удержания нарушения (по умолчанию 120)
   dwellMs?: number;                  // минимальный интервал между пересчётами (по умолчанию 250)
   easeMs?: number;                   // длительность перехода (по умолчанию 280; уменьшается при reduced-motion)
-  strict?: boolean;                  // держать минимальный контраст на каждом кадре перехода (по умолчанию false)
+  strict?: boolean;                  // legacy characterized clamp; не universal floor certificate (по умолчанию false)
   reducedMotion?: boolean;           // переопределить системную настройку
 }
 
@@ -289,20 +312,37 @@ interface AdaptController {
 }
 ```
 
+`strict` сохраняет прежнее runtime-поведение, но не является доказательством
+минимального или проходящего состояния на каждом кадре: путь
+Oklab→gamut clip→sRGB8 немонотонен. Finite hard-floor-safe replacement ведётся в
+#287; до него этот флаг следует считать compatibility characterization.
+
 Управляйте через `start()` (внутренний rAF-цикл) или вызывайте `tick()` из собственного цикла. Смена темы применяется мгновенно — это осознанное намерение, а не дрейф.
+Перед применением результата контроллер проверяет provenance как stable-, так и
+legacy-ветвей Glow. Нетипизированный внешний mock с невозможным сочетанием
+profile/guarantee/diagnostic/status отклоняется `TypeError`; fallback-цвет из
+такого объекта не применяется.
 
 ---
 
 ### `effectiveBackground(element, options?): string`
 
-Возвращает непрозрачный `#RRGGBB` — цвет, который наблюдатель реально видит за содержимым `element`. Обходит цепочку предков и выполняет альфа-композитинг каждого `background-color` до получения непрозрачного результата, поверх `fallback` (по умолчанию белый).
+Возвращает непрозрачный reference-`#RRGGBB`, вычисленный для поддерживаемого
+подмножества DOM `background-color`. Это не browser pixel capture и не
+сертификат цвета, который реально видит наблюдатель. Helper обходит цепочку
+предков и композитит распознанные слои поверх `fallback` (по умолчанию белый).
 
 ```ts
 const bg = effectiveBackground(panel);                        // например "#0F1014"
 const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 ```
 
-**Честное ограничение:** работает только с сплошными и полупрозрачными `background-color` — не с `background-image`, градиентами, размытым фоном или видео. Для таких поверхностей передайте фон явно.
+**Честное ограничение:** работает только с поддерживаемыми сплошными и
+полупрозрачными `background-color`; неподдерживаемый CSS, неполная прозрачная
+цепочка, `background-image`, градиент, blur и video не дают полного наблюдения.
+Текущий compatibility helper ещё может отбросить неподдерживаемый слой или
+использовать fallback; для correctness передайте фон явно. Typed `Unknown`
+replacement принадлежит #283.
 
 Дополнительно экспортируются вспомогательные функции для работы со слоями: `parseCssColor`, `compositeOver`, `compositeStackToHex`, `toHex` и `oklabLerp` (перцептуально равномерная интерполяция между двумя hex-значениями — траектория цвета при переходе).
 
@@ -323,10 +363,12 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 именованные экспорты и допускают tree-shaking, но их размер также следует мерить
 сборкой, а не описывать приблизительно.
 
-Активно проверенная release-матрица: Node 24.14 с прямой передачей wasm-байтов
-в `init({ module_or_path })` и headless Chrome из CI. ESM/URL-обёртка генерируется
-wasm-pack, но совместимость с конкретной версией Vite, webpack, Next или другим
-браузером не заявляется без отдельного smoke-гейта.
+Release packer закреплён на Node 24.14/npm 11.9; это не consumer floor.
+Публичный контракт `Node >=22.11.0` независимо прогоняется отдельным CI job. Browser-
+матрица использует прямую передачу wasm-байтов в `init({ module_or_path })` и
+headless Chrome из CI. ESM/URL-обёртка генерируется wasm-pack, но совместимость
+с конкретной версией Vite, webpack, Next или другим браузером не заявляется без
+отдельного smoke-гейта.
 
 ### Для аудиторов цепочки поставки
 

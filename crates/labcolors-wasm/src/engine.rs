@@ -116,8 +116,9 @@ impl Engine {
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
     /// result. Repeated identical calls hit the contract cache.
     ///
-    /// Errors (bad hex, unknown theme) are returned, never
-    /// panicked. Per-role unreachability is part of a *successful* result.
+    /// Errors (bad hex, unknown theme, or an internal core invariant failure)
+    /// are returned, never panicked. Physical per-role unreachability is part
+    /// of a *successful* result; internal provenance fails the whole call.
     pub fn resolve_theme(
         &self,
         bg_hex: &str,
@@ -259,7 +260,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
         )),
         Resolved::None => RoleOutcome::None,
         Resolved::Unreachable(reason) => RoleOutcome::Unreachable {
-            code: unreachable_code(&reason),
+            code: unreachable_code(&reason)?,
             message: reason.to_string(),
         },
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
@@ -283,7 +284,9 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             target_dj: g.target_dj(),
             composite_profile: g.composite_profile(),
             composite_guarantee: g.halo_composite_certificate().guarantee(),
-            diagnostic_profile: g.diagnostic_profile(),
+            layer_recipe_profile: g.layer_recipe_profile(),
+            appearance_diagnostic_profile: g.appearance_diagnostic_profile(),
+            selection_diagnostic_profile: g.selection_diagnostic_profile(),
             decision_profile: g.decision_profile(),
             decision_guarantee: g.decision_guarantee(),
             constraint_layer: g.constraint_layer(),
@@ -308,8 +311,9 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             tone_hex: m.tint_hex().to_string(),
             alpha: m.alpha(),
             worst_contrast: m.worst_contrast(),
+            alpha_guarantee: m.alpha_guarantee(),
+            alpha_status: m.alpha_status(),
             floor: m.floor(),
-            guaranteed: m.guaranteed(),
             pole_white: matches!(m.pole(), labcolors_core::Pole::White),
             achieved_dj: m.achieved_dj(),
             tone_compressed: m.tone_compressed(),
@@ -352,18 +356,18 @@ fn map_solved(
 /// of the JS-facing contract — a caller may branch on them — so they must not
 /// change silently (see `unreachable_codes_are_the_stable_js_contract`).
 ///
-/// `Unreachable` is `#[non_exhaustive]`, so the catch-all is mandatory and
-/// honest: a core variant we have not mapped yet reports `"unreachable"` rather
-/// than failing to compile against a future core. Known variants get a specific
-/// code so a JS caller can branch on the cause.
+/// `Unreachable` is `#[non_exhaustive]`, so the catch-all is mandatory. A future
+/// core variant is a structural adapter failure until this closed wire vocabulary
+/// maps it explicitly; it must never collapse into a physically-looking generic
+/// `Unreachable` result.
 ///
 /// Note: with the v1 default role table, `resolve_theme` never actually yields
 /// an unreachable role on any solid background (a wide sweep finds none) — every
 /// default role is reachable everywhere. This mapping is therefore a forward-
 /// compatible / defensive seam, exercised below by driving the core `solve`
 /// directly into the cases a custom table or a future gamut would surface.
-fn unreachable_code(reason: &Unreachable) -> &'static str {
-    match reason {
+fn unreachable_code(reason: &Unreachable) -> Result<&'static str, BindingError> {
+    let code = match reason {
         Unreachable::BelowContrastFloor { .. } => "below_contrast_floor",
         Unreachable::ExceedsRange { .. } => "exceeds_range",
         Unreachable::QuantizationGap { .. } => "quantization_gap",
@@ -371,7 +375,19 @@ fn unreachable_code(reason: &Unreachable) -> &'static str {
         Unreachable::PolarityMismatch { .. } => "polarity_mismatch",
         Unreachable::GamutUnsupported => "gamut_unsupported",
         Unreachable::InvalidInput(_) => "invalid_input",
-        _ => "unreachable",
+        Unreachable::InternalInvariant(reason) => {
+            return Err(BindingError::Internal {
+                reason: reason.clone(),
+            });
+        }
+        _ => return Err(unmapped_unreachable_reason()),
+    };
+    Ok(code)
+}
+
+fn unmapped_unreachable_reason() -> BindingError {
+    BindingError::Internal {
+        reason: "unmapped core Unreachable variant".to_string(),
     }
 }
 
@@ -437,6 +453,14 @@ mod tests {
             error,
             BindingError::Internal { ref reason }
                 if reason == "unmapped core Resolved variant"
+        ));
+        assert_eq!(error.code(), "internal_error");
+
+        let error = unmapped_unreachable_reason();
+        assert!(matches!(
+            error,
+            BindingError::Internal { ref reason }
+                if reason == "unmapped core Unreachable variant"
         ));
         assert_eq!(error.code(), "internal_error");
     }
@@ -579,7 +603,7 @@ mod tests {
             Gamut::DisplayP3,
         )
         .unwrap_err();
-        assert_eq!(unreachable_code(&gamut_err), "gamut_unsupported");
+        assert_eq!(unreachable_code(&gamut_err).unwrap(), "gamut_unsupported");
 
         // A non-finite target is rejected up front as invalid input.
         let invalid_err = solve(
@@ -591,7 +615,14 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap_err();
-        assert_eq!(unreachable_code(&invalid_err), "invalid_input");
+        assert_eq!(unreachable_code(&invalid_err).unwrap(), "invalid_input");
+
+        let internal = Unreachable::InternalInvariant("fixture drift".into());
+        let error = unreachable_code(&internal).unwrap_err();
+        assert!(matches!(
+            error,
+            BindingError::Internal { reason } if reason == "fixture drift"
+        ));
     }
 
     #[test]
@@ -1002,7 +1033,15 @@ mod tests {
                         g.halo_composite_certificate().guarantee(),
                         o.composite_guarantee
                     );
-                    assert_eq!(g.diagnostic_profile(), o.diagnostic_profile);
+                    assert_eq!(g.layer_recipe_profile(), o.layer_recipe_profile);
+                    assert_eq!(
+                        g.appearance_diagnostic_profile(),
+                        o.appearance_diagnostic_profile
+                    );
+                    assert_eq!(
+                        g.selection_diagnostic_profile(),
+                        o.selection_diagnostic_profile
+                    );
                     assert_eq!(g.decision_profile(), o.decision_profile);
                     assert_eq!(g.decision_guarantee(), o.decision_guarantee);
                     assert_eq!(g.constraint_layer(), o.constraint_layer);
@@ -1013,7 +1052,11 @@ mod tests {
                     assert_eq!(g.core_achieved_dj(), o.core_achieved_dj);
                     assert_eq!(
                         g.degraded(),
-                        o.target_status == labcolors_core::GlowTargetStatus::Unreachable
+                        matches!(
+                            o.target_status,
+                            labcolors_core::GlowTargetStatus::ExactNoopUnreachable
+                                | labcolors_core::GlowTargetStatus::LegacyUnreachable
+                        )
                     );
                     assert_eq!(g.achieved_dj().to_bits(), o.halo_achieved_dj.to_bits());
                 }
@@ -1033,7 +1076,16 @@ mod tests {
                         "{name}: material worst_contrast"
                     );
                     assert_eq!(m.floor(), o.floor, "{name}: material floor");
-                    assert_eq!(m.guaranteed(), o.guaranteed, "{name}: material guaranteed");
+                    assert_eq!(
+                        m.alpha_status(),
+                        o.alpha_status,
+                        "{name}: material alpha status"
+                    );
+                    assert_eq!(
+                        m.guaranteed(),
+                        o.alpha_status == labcolors_core::MaterialAlphaStatusV1::Satisfied,
+                        "{name}: material guaranteed compatibility alias"
+                    );
                     assert_eq!(
                         matches!(m.pole(), labcolors_core::Pole::White),
                         o.pole_white,
@@ -1181,10 +1233,16 @@ mod tests {
         assert_eq!(glow["kind"], "glow");
         assert_eq!(glow["decisionProfile"], "stable-v1");
         assert_eq!(glow["decisionGuarantee"]["kind"], "bit-exact");
+        assert_eq!(glow["targetStatus"], "exact-noop-unreachable");
+        assert_eq!(glow["layerRecipeProfile"], "cam16-jprime-oklab-cusp-v1");
         assert_eq!(
-            glow["diagnosticProfile"],
+            glow["appearanceDiagnosticProfile"], "cam16-ucs-jprime-li2017-v1",
+            "full Glow computes coreAchievedDj through CAM16"
+        );
+        assert_eq!(
+            glow["selectionDiagnosticProfile"],
             serde_json::Value::Null,
-            "exact no-op does not execute CAM16 and must not claim its profile"
+            "exact no-op selection does not execute CAM16"
         );
         assert_eq!(glow["haloCompositeHex"], "#FFFFFF");
         for key in [
@@ -1193,6 +1251,128 @@ mod tests {
             "--lab-fx-glow-brand-alpha",
         ] {
             assert!(projected["vars"].get(key).is_some(), "missing {key}");
+        }
+    }
+
+    /// `None` остаётся полноценным client-owned токеном в metadata, но ни сама
+    /// zero-роль, ни алиас на неё не получают CSS-значение. Это anti-vacuum
+    /// проверка ровно той границы, которую namespace preflight защищает.
+    #[test]
+    fn none_roles_and_aliases_publish_metadata_but_never_values() {
+        let mut engine = Engine::new();
+        engine.load_config(&labui_json()).expect("labui валиден");
+        let resolved = engine
+            .resolve_theme("#101012", Theme::Dark)
+            .expect("валидный контракт резолвится");
+        let projected: serde_json::Value =
+            serde_json::from_str(&crate::projection::resolved_json(&resolved).unwrap()).unwrap();
+
+        for name in ["none", "border-none", "fill-none", "border-ghost"] {
+            let css_var = format!("--lab-{name}");
+            let role = &projected["roles"][name];
+            assert_eq!(role["kind"], "none", "{name} обязан остаться none");
+            assert_eq!(role["cssVar"], css_var, "{name} сохраняет своё имя");
+            assert!(
+                projected["vars"].get(&css_var).is_none(),
+                "{name}: none-токен не имеет права получить CSS-значение"
+            );
+        }
+    }
+
+    /// Differential contract: берём фактические satellite keys из WASM-
+    /// проекции валидных Glow/Material outcomes и убеждаемся, что публичный
+    /// `load_config` не разрешает объявить ни zero-роль, ни zero-alias с любым
+    /// из этих имён. Тест не дублирует список суффиксов валидатора как oracle.
+    #[test]
+    fn load_config_rejects_zero_names_for_every_projected_satellite() {
+        let cases = [
+            (
+                "probe-glow",
+                serde_json::json!({
+                    "kind": "glow",
+                    "source": {"kind": "brand"},
+                    "step": "base",
+                    "decision_profile": "legacy-platform-dependent-v1"
+                }),
+            ),
+            (
+                "probe-material",
+                serde_json::json!({
+                    "kind": "material",
+                    "source": {"kind": "neutral", "pick": "mid"},
+                    "tone_light": 10.0,
+                    "tone_dark": 10.0,
+                    "floor": "aa-text"
+                }),
+            ),
+        ];
+
+        for (owner, recipe) in cases {
+            let mut valid: serde_json::Value =
+                serde_json::from_str(&labui_json()).expect("паспорт labui — валидный JSON");
+            valid["roles"]
+                .as_array_mut()
+                .expect("roles — массив")
+                .push(serde_json::json!({"name": owner, "recipe": recipe}));
+
+            let mut engine = Engine::new();
+            engine
+                .load_config(&valid.to_string())
+                .expect("контрольный многоключевой рецепт валиден");
+            let resolved = engine
+                .resolve_theme("#101012", Theme::Dark)
+                .expect("контрольный рецепт резолвится");
+            let projected: serde_json::Value =
+                serde_json::from_str(&crate::projection::resolved_json(&resolved).unwrap())
+                    .unwrap();
+            let prefix = format!("--lab-{owner}-");
+            let satellites: Vec<String> = projected["vars"]
+                .as_object()
+                .expect("vars — объект")
+                .keys()
+                .filter(|key| key.starts_with(&prefix))
+                .cloned()
+                .collect();
+            assert_eq!(satellites.len(), 2, "{owner}: ожидаются два сателлита");
+
+            for css_key in satellites {
+                let zero_name = css_key
+                    .strip_prefix("--lab-")
+                    .expect("проекция использует канонический prefix");
+
+                for as_alias in [false, true] {
+                    let mut colliding = valid.clone();
+                    if as_alias {
+                        colliding["aliases"]
+                            .as_array_mut()
+                            .expect("aliases — массив")
+                            .push(serde_json::json!({
+                                "alias": zero_name,
+                                "target": "none"
+                            }));
+                    } else {
+                        colliding["roles"]
+                            .as_array_mut()
+                            .expect("roles — массив")
+                            .push(serde_json::json!({
+                                "name": zero_name,
+                                "recipe": {"kind": "zero"}
+                            }));
+                    }
+
+                    let mut candidate = Engine::new();
+                    match candidate.load_config(&colliding.to_string()) {
+                        Err(BindingError::InvalidConfig { reason }) => {
+                            assert!(reason.contains(&css_key), "{reason}");
+                            assert!(reason.contains("reserved CSS namespace"), "{reason}");
+                        }
+                        other => panic!(
+                            "{css_key}: zero {} обязан быть отвергнут, получено {other:?}",
+                            if as_alias { "alias" } else { "role" }
+                        ),
+                    }
+                }
+            }
         }
     }
 
@@ -1215,7 +1395,7 @@ mod tests {
         match engine.load_config(&value.to_string()) {
             Err(BindingError::InvalidConfig { reason }) => {
                 assert!(reason.contains("--lab-fx-glow-brand-alpha"), "{reason}");
-                assert!(reason.contains("emitted CSS variables"), "{reason}");
+                assert!(reason.contains("reserved CSS namespace"), "{reason}");
             }
             other => panic!("коллизия производного имени обязана быть отвергнута: {other:?}"),
         }

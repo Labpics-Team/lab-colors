@@ -26,8 +26,13 @@
 //! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
-//! | `muddiness.json` | hex → мутность | `cleanliness::muddiness_from_hex` |
+//! | `muddiness.json` | hex → замороженная legacy-координата | `cleanliness::muddiness_from_hex` |
 //! | `manifest.json` | версии, дайджест, счётчики, migrated numerical sites | `numerical_registry_v1` |
+//!
+//! `muddiness.json` фиксирует только воспроизводимость исторического числового
+//! API. Это `experimental compatibility proxy`, а не валидированный на
+//! наблюдателях человеческий вердикт clean/dirty и не production decision;
+//! legacy-идентификаторы сохранены для совместимости.
 //!
 //! Версия пака ([`PACK_VERSION`]) привязана к версии ядра ([`core_version`]):
 //! при легитимной смене канона генератор перегенерирует векторы, а
@@ -291,22 +296,54 @@ pub enum SolveOutcome {
     },
 }
 
-/// Стабильный код недостижимости. Тождественен маппингу WASM-границы
-/// (`labcolors-wasm/src/engine.rs`) — контракт имён общий для всех биндингов.
-#[must_use]
-pub fn unreachable_code(err: &labcolors_core::Unreachable) -> &'static str {
+/// Ошибка построения conformance-пака. Генератор не имеет права превращать
+/// внутренний/неизвестный вариант ядра в физически правдоподобный solve outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PackGenerationError {
+    /// Core-generated data violated a core postcondition.
+    InternalCoreInvariant { reason: String },
+    /// The core introduced an `Unreachable` variant this pack does not know how
+    /// to encode. The adapter must be upgraded before regenerating artifacts.
+    IncompatibleCoreContract { reason: String },
+}
+
+impl core::fmt::Display for PackGenerationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InternalCoreInvariant { reason } => {
+                write!(f, "internal core invariant failure: {reason}")
+            }
+            Self::IncompatibleCoreContract { reason } => {
+                write!(f, "incompatible core contract: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PackGenerationError {}
+
+/// Стабильный код физической недостижимости. Тождественен маппингу WASM-
+/// границы (`labcolors-wasm/src/engine.rs`). Внутренняя ошибка или неизвестный
+/// forward-вариант возвращаются как [`PackGenerationError`] и не сериализуются.
+pub fn unreachable_code(
+    err: &labcolors_core::Unreachable,
+) -> Result<&'static str, PackGenerationError> {
     use labcolors_core::Unreachable as U;
     match err {
-        U::BelowContrastFloor { .. } => "below_contrast_floor",
-        U::ExceedsRange { .. } => "exceeds_range",
-        U::QuantizationGap { .. } => "quantization_gap",
-        U::FloorUnreachable { .. } => "floor_unreachable",
-        U::PolarityMismatch { .. } => "polarity_mismatch",
-        U::GamutUnsupported => "gamut_unsupported",
-        U::InvalidInput(_) => "invalid_input",
-        // `Unreachable` помечен `#[non_exhaustive]`; forward-compat-арм
-        // тождествен WASM-границе (`labcolors-wasm/src/engine.rs`).
-        _ => "unreachable",
+        U::BelowContrastFloor { .. } => Ok("below_contrast_floor"),
+        U::ExceedsRange { .. } => Ok("exceeds_range"),
+        U::QuantizationGap { .. } => Ok("quantization_gap"),
+        U::FloorUnreachable { .. } => Ok("floor_unreachable"),
+        U::PolarityMismatch { .. } => Ok("polarity_mismatch"),
+        U::GamutUnsupported => Ok("gamut_unsupported"),
+        U::InvalidInput(_) => Ok("invalid_input"),
+        U::InternalInvariant(reason) => Err(PackGenerationError::InternalCoreInvariant {
+            reason: reason.clone(),
+        }),
+        _ => Err(PackGenerationError::IncompatibleCoreContract {
+            reason: err.to_string(),
+        }),
     }
 }
 
@@ -348,59 +385,64 @@ const SOLVE_CASES: [(&str, ContractSpec, &str); 6] = [
 /// Дериватор резолв-векторов. Нейтральная (серая) хрома — резолв
 /// хью-независим, вектор детерминирован; хью/хрома — естественное расширение
 /// среза (см. PR).
-#[must_use]
-pub fn generate_solve() -> Vec<SolveVector> {
+pub fn generate_solve() -> Result<Vec<SolveVector>, PackGenerationError> {
     SOLVE_CASES
         .iter()
-        .map(|&(bg, contract, theme)| {
-            let vc = vc_for_theme(theme);
-            let bg_input = BgInput::solid(bg).expect("валидный hex фона");
-            let outcome = match solve(
-                bg_input,
-                contract.to_core(),
-                Hue::deg(0.0),
-                ChromaPolicy::Neutral,
-                &vc,
-                Gamut::Srgb,
-            ) {
-                Ok(s) => SolveOutcome::Solved {
-                    hex: s.hex().to_string(),
-                    lc: s.lc(),
-                    wcag_ratio: s.wcag_ratio(),
-                    floor_override: s.floor_override(),
-                },
-                Err(e) => SolveOutcome::Unreachable {
-                    code: unreachable_code(&e).to_string(),
-                },
-            };
-            SolveVector {
-                bg: bg.to_string(),
-                contract,
-                theme: theme.to_string(),
-                outcome,
-            }
-        })
+        .map(
+            |&(bg, contract, theme)| -> Result<SolveVector, PackGenerationError> {
+                let vc = vc_for_theme(theme);
+                let bg_input = BgInput::solid(bg).expect("валидный hex фона");
+                let outcome = match solve(
+                    bg_input,
+                    contract.to_core(),
+                    Hue::deg(0.0),
+                    ChromaPolicy::Neutral,
+                    &vc,
+                    Gamut::Srgb,
+                ) {
+                    Ok(s) => SolveOutcome::Solved {
+                        hex: s.hex().to_string(),
+                        lc: s.lc(),
+                        wcag_ratio: s.wcag_ratio(),
+                        floor_override: s.floor_override(),
+                    },
+                    Err(e) => SolveOutcome::Unreachable {
+                        code: unreachable_code(&e)?.to_string(),
+                    },
+                };
+                Ok(SolveVector {
+                    bg: bg.to_string(),
+                    contract,
+                    theme: theme.to_string(),
+                    outcome,
+                })
+            },
+        )
         .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Семейство: мутность
+// Семейство: legacy-координата muddiness
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Один вектор мутности: hex и его оценка «грязи» `[0,1]`.
+/// Один вектор замороженной legacy-координаты `muddiness`.
+///
+/// Это `experimental compatibility proxy`: вектор доказывает совпадение
+/// численного выхода, но не observer-validated human clean/dirty verdict и не
+/// пригодность значения для production decision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MuddinessVector {
     /// Цвет, `#RRGGBB`.
     pub hex: String,
-    /// Оценка мутности `[0,1]` (0 — чистый, 1 — грязный).
+    /// Замороженный числовой выход legacy-формулы.
     pub score: f64,
 }
 
-/// Цвета для мутности: грязная олива, чистый серый, чистый бренд, грязный хаки.
+/// Нейтральный corpus исторических sample inputs; названия не задают семантику.
 const MUDDINESS_CASES: [&str; 4] = ["#6B6B2E", "#808080", "#007AFF", "#8A7A50"];
 
-/// Дериватор векторов мутности.
+/// Дериватор compatibility-векторов legacy-координаты.
 #[must_use]
 pub fn generate_muddiness() -> Vec<MuddinessVector> {
     MUDDINESS_CASES
@@ -429,14 +471,15 @@ pub const FAMILY_FILES: [&str; 5] = [
     "muddiness.json",
 ];
 
-/// Каноническая кросс-платформенная толерантность сравнения f64 для conformance-
+/// Каноническая толерантность сравнения f64 для conformance-
 /// пака. Эта константа — SSOT правила сравнения. Наблюдаемый libm-шум
 /// (`powf`/`atan2`/`ln` расходятся на несколько ULP между платформами) —
 /// порядка `1e-13`; реальный дрейф (не тот surround, опечатка в матрице,
 /// путаница единиц) сдвигает значения на целые единицы. `1e-6` заведомо выше
-/// шума и заведомо ниже любой настоящей регрессии. Байт-точность f64
-/// кросс-платформенно НЕВОЗМОЖНА — поэтому conformant-ность числовых полей
-/// определяется этой толерантностью (hex/enum/строки — точно).
+/// наблюдавшегося шума и заведомо ниже настоящей регрессии из corpus. Для
+/// libm-dependent путей bit identity между runtime не гарантируется; evidence
+/// ограничено аттестованной матрицей. Поэтому conformant-ность числовых полей
+/// определяется этой толерантностью (hex/enum/строки — по своему профилю).
 pub const DRIFT_TOL: f64 = 1e-6;
 
 /// Счётчики векторов по семействам — для манифеста и отчёта PR.
@@ -451,7 +494,7 @@ pub struct Counts {
     pub alpha: usize,
     /// Резолв-векторы.
     pub solve: usize,
-    /// Векторы мутности.
+    /// Compatibility-векторы legacy-координаты `muddiness`.
     pub muddiness: usize,
     /// Итого.
     pub total: usize,
@@ -539,21 +582,20 @@ pub struct Pack {
     pub alpha: Vec<AlphaVector>,
     /// Резолв-векторы.
     pub solve: Vec<SolveVector>,
-    /// Векторы мутности.
+    /// Compatibility-векторы legacy-координаты `muddiness`.
     pub muddiness: Vec<MuddinessVector>,
 }
 
 impl Pack {
     /// Сгенерировать весь пак из канона ядра.
-    #[must_use]
-    pub fn generate() -> Self {
-        Pack {
+    pub fn generate() -> Result<Self, PackGenerationError> {
+        Ok(Pack {
             contrasts: generate_contrasts(),
             ladders: generate_ladders(),
             alpha: generate_alpha(),
-            solve: generate_solve(),
+            solve: generate_solve()?,
             muddiness: generate_muddiness(),
-        }
+        })
     }
 
     /// Счётчики семейств.
@@ -628,18 +670,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unreachable_code_mapping_is_fallible_without_generic_fallback() {
+        let error = solve(
+            BgInput::solid("#FFFFFF").unwrap(),
+            Contract::text(f64::NAN),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &ViewingConditions::srgb(),
+            Gamut::Srgb,
+        )
+        .unwrap_err();
+        assert_eq!(unreachable_code(&error).unwrap(), "invalid_input");
+
+        let internal = labcolors_core::Unreachable::InternalInvariant("fixture drift".into());
+        assert!(matches!(
+            unreachable_code(&internal),
+            Err(PackGenerationError::InternalCoreInvariant { reason })
+                if reason == "fixture drift"
+        ));
+    }
+
+    #[test]
     fn generation_is_deterministic() {
         // Дважды сгенерированный пак байт-идентичен — вход всегда даёт тот же
         // выход (детерминизм канона, перенесённый в пак).
-        let a = Pack::generate();
-        let b = Pack::generate();
+        let a = Pack::generate().expect("canonical pack generation");
+        let b = Pack::generate().expect("canonical pack generation");
         assert_eq!(a, b, "генерация пака недетерминирована");
         assert_eq!(a.digest(), b.digest(), "дайджест недетерминирован");
     }
 
     #[test]
     fn counts_are_nonempty_and_consistent() {
-        let pack = Pack::generate();
+        let pack = Pack::generate().expect("canonical pack generation");
         let c = pack.counts();
         assert!(c.total > 0, "пустой пак бессмыслен");
         assert_eq!(
@@ -653,7 +716,9 @@ mod tests {
 
     #[test]
     fn manifest_numerical_registry_is_generated_from_core_ssot() {
-        let manifest = Pack::generate().manifest();
+        let manifest = Pack::generate()
+            .expect("canonical pack generation")
+            .manifest();
         assert_eq!(manifest.numerical_sites, generate_numerical_sites());
         assert_eq!(
             manifest.numerical_sites.len(),
@@ -674,7 +739,7 @@ mod tests {
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
         // соседний LSB. Проверка одновременно убивает вакуумные изменения
         // версии/счётчика без обязательного доказательного вектора.
-        let pack = Pack::generate();
+        let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
         assert_eq!(PACK_VERSION, "2.0.0", "half-tie требует pack v2");
         assert_eq!(manifest.pack_version, PACK_VERSION);
@@ -708,7 +773,7 @@ mod tests {
         // байт-точного гейта дрейфа и дайджеста (сравнение по СЕРИАЛИЗАЦИИ, не
         // по parse — парсер serde_json по умолчанию не round-trip-точен для
         // f64, поэтому опираемся на детерминизм сериализации, а не парсинга).
-        let pack = Pack::generate();
+        let pack = Pack::generate().expect("canonical pack generation");
         assert_eq!(
             to_canonical_json(&pack.contrasts),
             to_canonical_json(&pack.contrasts)
@@ -726,7 +791,7 @@ mod tests {
     #[test]
     fn solve_pack_contains_reachable_and_unreachable() {
         // Пак честен: есть и успешный резолв, и намеренный отказ с кодом.
-        let solve = generate_solve();
+        let solve = generate_solve().expect("canonical solve vectors");
         assert!(
             solve
                 .iter()

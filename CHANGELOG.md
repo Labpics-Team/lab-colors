@@ -8,6 +8,9 @@ Rust различаются, потому что это разные delivery su
 Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. Пошаговый
 переход и rollback: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md).
 
+Release packer воспроизводимо закреплён на Node 24.14/npm 11.9; публичный
+consumer contract отделён и проверяется с первого Node 22 LTS — `22.11.0`.
+
 ### Breaking
 
 - Каждый client-owned Glow-рецепт требует explicit `decision_profile`; default
@@ -15,7 +18,8 @@ Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. 
 - `GlowRole` стал union из determinate `kind: "glow"` и typed terminal
   `kind: "glow-indeterminate"`. Indeterminate не эмитит halo/core/alpha CSS vars.
 - Единый `referenceProfile` из pre-release API заменён раздельными
-  `compositeProfile` / `compositeGuarantee`, `diagnosticProfile` и
+  `compositeProfile` / `compositeGuarantee`, `layerRecipeProfile`,
+  `appearanceDiagnosticProfile`, nullable `selectionDiagnosticProfile` и
   `decisionProfile` / `decisionGuarantee`.
 - `solve_screen_alpha_for_dj` принимает `GlowDecisionProfileV1` и возвращает
   `NumericalDecisionV1<GlowSolve>`; поля `GlowSolve` доступны через getters.
@@ -24,6 +28,12 @@ Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. 
   alpha возвращает `Err`, а не клампится.
 - Публичные continuous/point compositor-границы возвращают `Result` и одинаково
   отвергают нечисловой или внедиапазонный ввод в debug/release.
+- Поля `BackdropBox` закрыты; `try_new` и material-функции возвращают typed
+  validation/solve errors. `MaterialAlpha` сообщает typed status и numerical
+  guarantee вместо неявного `Option`/public fields.
+- `labcolors-conformance::generate_solve` и `Pack::generate` теперь возвращают
+  `Result<_, PackGenerationError>`: внутренний/неизвестный core failure нельзя
+  сериализовать как обычную физическую недостижимость.
 
 ### Added
 
@@ -32,8 +42,15 @@ Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. 
 - Machine-readable registry branch-sensitive numerical sites и typed
   `Determinate` / `Indeterminate` с причиной и sound bounds либо честным
   `bounds: unavailable`.
+- Material alpha несёт `BisectionBracketCharacterizedV1`: выбранный после 60
+  шагов upper candidate повторно проверен, lower candidate не держит floor, а
+  numerical profile равен
+  `encoded-srgb-byte-scale-affine-platform-binary64-powf-v1`.
+  Transparent/opaque endpoints имеют отдельные typed variants; wire несёт
+  primary `alphaStatus`.
 - Determinate Glow сообщает отдельные halo/core point-композиты и diagnostic
-  `|ΔJ′|`, target status, constraint layer и классы гарантий.
+  `|ΔJ′|`, provenance recipe/appearance/selection, target status, constraint
+  layer и классы гарантий.
 - Conformance pack 2.0.0 с alpha half-tie-вектором.
 - Публикуемый `labcolors-core` теперь несёт package-local README; CI проверяет
   реальный `.crate`, распаковывает его и исполняет doctest вне workspace tree.
@@ -45,15 +62,47 @@ Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. 
 
 - Source-over half-tie считается в byte-reference порядке: `#C0B2FA @ 0.122`
   над `#000000` даёт `#17161F`, без потери соседнего LSB при нормализации.
+- Glow перечисляет first-passing alpha фактического binary64 screen-композитора:
+  алгебраически равные rational walls больше не склеивают достижимый ULP-seam
+  state. Доказанная граница потока — ≤ 766 states; tight maximum не заявлен.
+- Material-alpha использует тот же byte-scale affine порядок
+  `B + α·(T−B)`, что официальный JS-потребитель. На seam fixtures
+  `#020202/floor=3` и `#000000/floor=7` прежний normalized-expanded upper
+  candidate не проходил повторную consumer-проверку на один шаг binary64.
+- Material all-backdrop recheck больше не полагается на ложную двухугловую
+  монотонность: conservative binary64 channel envelope включает обе стороны
+  downward seam frozen WCAG 2.1 (2018) EOTF `0.03928`. Directed-search guard
+  ограничивает область бисекции; первый passing state и точная минимальная alpha
+  не заявляются.
 - Glow alpha больше не округляется независимо от выбранного sRGB8-state:
   `alphaCss` round-trip восстанавливает ту же binary64 alpha и тот же композит.
 - Нетривиальный stable CAM16 target/max-site без sound error bound больше не
   получает правдоподобный platform-selected verdict: результат typed
   `Indeterminate`.
-- Exact stable no-op больше не маркируется как выполненная CAM16-диагностика:
-  `diagnosticProfile` честно равен `null` на всех delivery boundaries.
-- `BackdropBox` с reversed, non-finite или внедиапазонными bounds отклоняется
-  как недоменный public input (`None`) без swap, clamp или debug-паники.
+- Exact stable no-op больше не маркируется как CAM16-selected verdict:
+  `selectionDiagnosticProfile` равен `null`. Полный semantic result отдельно
+  сохраняет non-null `appearanceDiagnosticProfile`, потому что сообщает
+  CAM16-derived `coreAchievedDj`, и versioned `layerRecipeProfile`.
+- `BackdropBox::try_new` различает reversed, non-finite и out-of-range bounds
+  typed ошибками без swap, clamp или debug-паники.
+- Core-generated Glow/Material postcondition failures отделены от
+  `InvalidInput`: WASM возвращает whole-call `internal_error`, UniFFI —
+  `IncompatibleCoreContract`, conformance generation останавливается до записи
+  артефакта вместо generic `"unreachable"` fallback.
+- CSS namespace preflight теперь защищает основное имя каждого client-owned
+  токена, включая `Zero` и алиасы на него. Производные ключи Glow (`-core`,
+  `-alpha`) и Material (`-01`, `-02`) больше не могут молча записать цвет в
+  `cssVar` роли с `kind: "none"`; конфликтующий конфиг отклоняется до резолва.
+- Устаревший wasm32-only muddiness snapshot (`olive > 0.80`) больше не является
+  мёртвым `#[test]`: реальный headless-browser gate проверяет публичный WASM-
+  метод по единственному committed conformance corpus без второго semantic
+  threshold или hand-written score.
+- Исторические API `muddiness` / `drab` / `n_pure` и их conformance corpus
+  сохраняют численную совместимость, но явно помещены в quarantine как frozen
+  experimental compatibility proxy / research coordinate. Это не
+  observer-validated human cleanliness verdict и не сигнал базового compiler /
+  adaptive runtime; отклонённый provenance констант зафиксирован в inventory
+  под владельцами #231 / #242.
 
 ### Compatibility evidence
 
@@ -63,6 +112,9 @@ Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. 
   `resolveVars` (4 ключа на 6 записях); 1376 пар `(lc, wcag)` recheck остались
   байт-идентичны. Это ограниченное свидетельство для pinned corpus, не
   универсальная гарантия произвольного клиента.
+- После перехода с rational-wall midpoint на actual binary64 partition внутри
+  тех же 24 листов скорректированы 17 alpha-строк; в pinned corpus их point-
+  композиты и все остальные vars не изменились.
 
 ### Known limits
 
@@ -70,3 +122,8 @@ Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. 
   установлен; `stable-v1` намеренно возвращает `Indeterminate`.
 - Exact point-композит не является сертификатом browser color-management,
   дисплея/HDR или пространственного blur/overlap-эффекта.
+- Material-alpha bisection характеризует повторно проверенный fail/pass bracket
+  в указанном numerical profile; это не proof глобальной монотонности, первого
+  passing state, точной минимальной alpha, predecessor или sound cross-runtime
+  bound. Профиль фиксирует original WCAG 2.1 (2018) split `0.03928`; текущая
+  формула W3C с `0.04045` требует отдельной версионированной миграции (#284).

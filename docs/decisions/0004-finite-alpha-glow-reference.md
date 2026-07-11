@@ -70,20 +70,35 @@ Source-over affine-форма алгебраически равна операт
 тип — `Result<(String, f64), String>` без внутреннего `Option`. Некорректная
 alpha не клампится в другой запрос, а возвращает `Err`.
 
-### 2. Glow перечисляет exact states, а semantic decision профилирован
+### 2. Glow перечисляет actual binary64 states, а semantic decision профилирован
 
-Для каждого канала screen переход в новый байт `v` начинается на рациональной
-стенке:
-
-```text
-255 · (2(v − B) − 1) / (2 · G · (255 − B))
-```
-
-Три уже упорядоченных потока канальных стенок сливаются точным перекрёстным
-умножением целых без общей сортировки и промежуточных коллекций. Это даёт exact
-множество достижимых RGB-состояний и bit-exact certificate каждого выбранного
+Для каждого канала production-перечислитель находит первый representable
+binary64-alpha, переводящий публичный reference-композитор в следующий байт.
+Поиск — точный lower-bound по упорядоченным положительным `f64`-битам с вызовом
+того же `bg + alpha · glow · (255−bg) / 255`, который выполняет официальный
+потребитель. Аналитическая рациональная half-wall используется только как
+ускоряющий seed: экспоненциальный поиск строит bracket между уже известными
+failing/passing endpoints, затем bitwise lower-bound находит точную границу;
+корректность от качества seed не зависит. Канальные переходы сливаются только
+тогда, когда совпадают их фактические first-passing bits. Это даёт полное
+множество достижимых в данном численном профиле RGB-состояний и bit-exact
+certificate выбранного
 point-композита. Однако порядок этих states по диагностическому CAM16-UCS J′ —
 другая задача: она содержит `powf`/libm и влияет на semantic branch.
+
+Ранее рассмотренная рациональная группировка стенок отвергнута для production:
+алгебраически равные дроби при разных факторизациях выражения могут разойтись на
+несколько ULP. Контрпример `glow=#010200`, `background=#018000` создаёт
+достижимый промежуточный state `#018100`, который рациональная группировка
+теряла. Поэтому точное для рациональной модели число 763 не является границей
+фактического runtime-потока.
+
+Доказанная безопасная верхняя граница — **не более 766 состояний**: каждый
+переход увеличивает хотя бы один из трёх байтов, каждый байт может увеличиться
+не более 255 раз, плюс существует начальное состояние. Tightness этой границы
+не установлена и не требуется контракту. Рабочий перечислитель хранит текущий
+state и по одной следующей границе на канал, поэтому его вспомогательная память
+O(1); `Vec` остаётся только в тестовом оракуле под `#[cfg(test)]`.
 
 Compatibility profile `legacy-platform-dependent-v1` проверяет states в
 порядке alpha и выбирает:
@@ -92,11 +107,10 @@ Compatibility profile `legacy-platform-dependent-v1` проверяет states �
 2. если такого нет — глобальный максимум `|ΔJ′|`;
 3. при равном максимуме — первое состояние по alpha.
 
-Рациональные стенки задают алгебраическое разбиение; финальная проверка выполняет
-зафиксированное binary64-выражение в том же порядке, что официальный JS-
-потребитель. На отдельных ULP-швах эти определения могут классифицировать саму
-стенку по-разному, поэтому production-alpha берётся только из внутренности
-интервала и перед возвратом обязана воспроизвести выбранный state.
+Каждая граница уже определена зафиксированным binary64-выражением в том же
+порядке, что официальный JS-потребитель. Production-alpha берётся из
+representable внутренности фактического интервала (или из замкнутого singleton
+`alpha=1`) и перед возвратом обязана воспроизвести выбранный state.
 
 Этот legacy-выбор не зависит от предположения о монотонности J′, но остаётся
 platform/libm-dependent: точного эталона или sound outward bound для CAM16-
@@ -133,11 +147,14 @@ CSS-переменная alpha копирует её буквально. Пов�
 композит и `|ΔJ′|` для halo и core, `targetStatus` и `constraintLayer`.
 `compositeProfile=encoded-srgb8-screen-v1` вместе с
 `compositeGuarantee=bit-exact` описывает только конечный point-композитор.
-`diagnosticProfile=cam16-ucs-jprime-li2017-v1` идентифицирует реально
-выполненную appearance-диагностику; exact no-op возвращает `null`, потому что
-CAM16 в этом пути не вызывается. `decisionProfile` / `decisionGuarantee`
-отдельно сообщают, на каком основании принят semantic target/max verdict. Один общий profile был бы
-ложным повышением диагностической модели до exact-гарантии. Совместный
+`layerRecipeProfile=cam16-jprime-oklab-cusp-v1` идентифицирует алгоритм
+построения core/halo. `appearanceDiagnosticProfile=cam16-ucs-jprime-li2017-v1`
+идентифицирует модель reported `haloAchievedDj`/`coreAchievedDj` и потому
+присутствует у полного resolved result. `selectionDiagnosticProfile` называет
+модель только если она участвовала именно в target/max выборе; у exact no-op он
+равен `null`. `decisionProfile` / `decisionGuarantee` отдельно сообщают, на
+каком основании принят semantic verdict. Один общий profile был бы ложным
+повышением recipe или диагностической модели до exact-гарантии. Совместный
 blur/overlap/backdrop/HDR-эффект без геометрии не сертифицируется; это отдельный
 `SpatialField` из #221.
 
@@ -148,7 +165,9 @@ chroma — как recipe core v1. Эмитированный core отдельн
 
 ### 5. Доказательства являются исполняемыми
 
-- все 65 536 пар одного screen-канала проверяют рациональное разбиение;
+- все 65 536 пар одного screen-канала исчерпывающе проверяют first-passing
+  binary64-разбиение против публичного compositor; отдельный ULP-seam тест
+  запрещает склейку алгебраически равных рациональных стенок;
 - независимый finite-state oracle проверяет legacy-выбор reached/unreachable;
 - source-over и screen при `alpha=0.122` сверяются с независимой точной
   рациональной формулой на всех 65 536 парах байтов каждый;
@@ -188,7 +207,8 @@ WASM/TypeScript:
   неизвестная строка отвергаются при `loadConfig`, а профиль входит в fingerprint;
 - determinate mocks обязаны добавить `alphaCss`, `constraintLayer`, `targetDj`,
   `targetStatus`, оба composite, оба `achievedDj`, а также раздельные
-  `compositeProfile`, `compositeGuarantee`, nullable `diagnosticProfile`,
+  `compositeProfile`, `compositeGuarantee`, `layerRecipeProfile`,
+  `appearanceDiagnosticProfile`, nullable `selectionDiagnosticProfile`,
   `decisionProfile`, `decisionGuarantee`;
 - exhaustive union обязан обрабатывать `kind: "glow-indeterminate"`; этот
   terminal outcome несёт site/reason/bounds, но не создаёт halo/core/alpha vars;

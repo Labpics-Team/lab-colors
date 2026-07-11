@@ -13,6 +13,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { workspaceVersion } from "./cargo-workspace.mjs";
 import { PACKAGE_DIR, REPO_ROOT, prepareNpmPackage } from "./prepare-npm-package.mjs";
 
 const RELEASE_DIR = resolve(PACKAGE_DIR, ".release");
@@ -47,19 +48,29 @@ function fail(message) {
   throw new Error(message);
 }
 
-function command(commandName, args, cwd = REPO_ROOT) {
+export const RELEASE_COMMAND_TIMEOUT_MS = 5 * 60 * 1_000;
+
+export function command(
+  commandName,
+  args,
+  cwd = REPO_ROOT,
+  { timeoutMs = RELEASE_COMMAND_TIMEOUT_MS } = {},
+) {
   try {
     return execFileSync(commandName, args, {
       cwd,
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
+      timeout: timeoutMs,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
     const stderr = error?.stderr?.toString().trim();
     const stdout = error?.stdout?.toString().trim();
     const detail = [stderr, stdout].filter(Boolean).join("\n");
-    fail(`${commandName} ${args.join(" ")} failed${detail ? `:\n${detail}` : ""}`);
+    const outcome =
+      error?.code === "ETIMEDOUT" ? `timed out after ${timeoutMs} ms` : "failed";
+    fail(`${commandName} ${args.join(" ")} ${outcome}${detail ? `:\n${detail}` : ""}`);
   }
 }
 
@@ -80,15 +91,6 @@ async function readJson(path) {
   } catch (error) {
     fail(`${relative(REPO_ROOT, path)} is not valid JSON: ${error.message}`);
   }
-}
-
-function workspaceVersion(cargoSource) {
-  const workspacePackage = cargoSource.match(
-    /\[workspace\.package\]([\s\S]*?)(?=\n\[|$)/u,
-  )?.[1];
-  const version = workspacePackage?.match(/^version\s*=\s*"([^"]+)"\s*$/mu)?.[1];
-  if (!version) fail("Cargo.toml has no [workspace.package] version");
-  return version;
 }
 
 function sha256(bytes) {
@@ -378,6 +380,16 @@ const config = {
         decision_profile: "legacy-platform-dependent-v1",
       },
     },
+    {
+      name: "token-a11c",
+      recipe: {
+        kind: "material",
+        source: { kind: "brand" },
+        tone_light: 0.72,
+        tone_dark: 0.28,
+        floor: "aa-ui",
+      },
+    },
   ],
 };
 
@@ -402,7 +414,7 @@ assert.match(fingerprint, /^[0-9a-f]{16}$/u);
 
 const background = "#000000";
 const resolved = engine.resolveTheme(background, "light");
-assert.deepEqual(Object.keys(resolved.roles).sort(), ["token-7f3a", "token-92be"]);
+assert.deepEqual(Object.keys(resolved.roles).sort(), ["token-7f3a", "token-92be", "token-a11c"]);
 
 const alpha = resolved.roles["token-7f3a"];
 assert.equal(alpha.kind, "translucent");
@@ -413,19 +425,43 @@ assert.equal(alpha.alphaCoerced, false);
 assert.equal(sourceOver(alpha.tintHex, alpha.alpha, background), alpha.compositeHex);
 assert.match(alpha.css, /^oklch\(.+ \/ 0\.122\)$/u);
 
+const material = resolved.roles["token-a11c"];
+assert.equal(material.kind, "material");
+assert.equal(
+  material.alphaGuarantee.numericalProfile,
+  "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
+);
+if (material.alphaGuarantee.kind === "transparent-endpoint-characterized-v1") {
+  assert.equal(material.alpha, 0);
+  assert.equal(material.alphaStatus, "satisfied");
+  assert.equal(material.guaranteed, true);
+} else if (material.alphaGuarantee.kind === "bisection-bracket-characterized-v1") {
+  assert.equal(material.alpha, material.alphaGuarantee.upperAlpha);
+  assert.equal(material.alphaStatus, "satisfied");
+  assert.equal(material.guaranteed, true);
+} else {
+  assert.equal(material.alphaGuarantee.kind, "opaque-endpoint-characterized-v1");
+  assert.equal(material.alpha, 1);
+  assert.equal(material.alphaStatus, "degraded");
+  assert.equal(material.guaranteed, false);
+}
+assert.ok(Number.isFinite(material.floor));
+
 const glow = resolved.roles["token-92be"];
 assert.equal(glow.kind, "glow");
 assert.equal(glow.compositeProfile, "encoded-srgb8-screen-v1");
 assert.equal(glow.compositeGuarantee, "bit-exact");
-assert.equal(glow.diagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+assert.equal(glow.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
+assert.equal(glow.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+assert.equal(glow.selectionDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
 assert.equal(glow.decisionProfile, "legacy-platform-dependent-v1");
 assert.deepEqual(glow.decisionGuarantee, { kind: "legacy-platform-dependent-v1" });
 assert.equal(glow.constraintLayer, "halo");
-assert.ok(glow.targetStatus === "reached" || glow.targetStatus === "unreachable");
+assert.ok(glow.targetStatus === "legacy-reached" || glow.targetStatus === "legacy-unreachable");
 assert.ok(Number.isFinite(glow.alpha) && glow.alpha > 0 && glow.alpha <= 1);
 assert.equal(Number(glow.alphaCss), glow.alpha);
 assert.equal(glow.achievedDj, glow.haloAchievedDj);
-assert.equal(glow.degraded, glow.targetStatus === "unreachable");
+assert.equal(glow.degraded, glow.targetStatus === "legacy-unreachable");
 assert.equal(screen(glow.haloHex, glow.alpha, background), glow.haloCompositeHex);
 assert.equal(screen(glow.coreHex, glow.alpha, background), glow.coreCompositeHex);
 for (const value of [glow.targetDj, glow.haloAchievedDj, glow.coreAchievedDj]) {
@@ -457,6 +493,11 @@ const stableNoop = stableWhite.roles["token-92be"];
 assert.equal(stableNoop.kind, "glow");
 assert.equal(stableNoop.decisionProfile, "stable-v1");
 assert.deepEqual(stableNoop.decisionGuarantee, { kind: "bit-exact" });
+assert.equal(stableNoop.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
+assert.equal(stableNoop.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+assert.equal(stableNoop.selectionDiagnosticProfile, null);
+assert.equal(stableNoop.targetStatus, "exact-noop-unreachable");
+assert.equal(stableNoop.degraded, true);
 assert.equal(stableNoop.haloCompositeHex, "#FFFFFF");
 for (const key of [
   stableNoop.cssVar,
@@ -473,8 +514,13 @@ function typeSmokeSource() {
 import init, {
   LabColors,
   type GlowDecisionGuaranteeV1,
+  type GlowDeterminateRole,
+  type GlowDeterminateRoleBase,
   type GlowRole,
+  type GlowTargetStatusV1,
   type LadderPositionV1,
+  type MaterialRole,
+  type MaterialRoleBase,
   type NumericalIndeterminacyV1,
   type ResolvedTheme,
   type ThemeConfig,
@@ -549,7 +595,7 @@ function glowContract(
 ): readonly ["indeterminate", "glow-target-or-maximum-v1"] | readonly [
   "encoded-srgb8-screen-v1",
   "halo",
-  "reached" | "unreachable",
+  GlowTargetStatusV1,
   string,
   number,
 ] {
@@ -565,10 +611,8 @@ function glowContract(
   ] as const;
 }
 
-function decisionEvidence(guarantee: GlowDecisionGuaranteeV1): number | string {
-  return guarantee.kind === "outward-interval-v1"
-    ? guarantee.upper - guarantee.lower
-    : guarantee.kind;
+function decisionEvidence(guarantee: GlowDecisionGuaranteeV1): string {
+  return guarantee.kind;
 }
 
 function indeterminacyEvidence(evidence: NumericalIndeterminacyV1): number | string {
@@ -576,6 +620,64 @@ function indeterminacyEvidence(evidence: NumericalIndeterminacyV1): number | str
     ? evidence.bounds.upper - evidence.bounds.lower
     : evidence.bounds.kind;
 }
+
+function determinateGlowEvidence(role: GlowDeterminateRole): string {
+  if (role.decisionProfile === "stable-v1") {
+    const status: "exact-noop-unreachable" = role.targetStatus;
+    const selection: null = role.selectionDiagnosticProfile;
+    const degraded: true = role.degraded;
+    void selection;
+    void degraded;
+    return status;
+  }
+  if (role.targetStatus === "legacy-reached") {
+    const degraded: false = role.degraded;
+    void degraded;
+    return role.targetStatus;
+  }
+  const status: "legacy-unreachable" = role.targetStatus;
+  const degraded: true = role.degraded;
+  void degraded;
+  return status;
+}
+
+function materialEvidence(role: MaterialRole): number | boolean {
+  if (role.alphaStatus === "degraded") {
+    const alpha: 1 = role.alpha;
+    const guaranteed: false = role.guaranteed;
+    void alpha;
+    return guaranteed;
+  }
+  const guaranteed: true = role.guaranteed;
+  if (role.alphaGuarantee.kind === "bisection-bracket-characterized-v1") {
+    return role.alphaGuarantee.upperAlpha;
+  }
+  return guaranteed;
+}
+
+declare const glowBase: GlowDeterminateRoleBase;
+// @ts-expect-error stable profile не может нести legacy status.
+const impossibleGlow: GlowDeterminateRole = {
+  ...glowBase,
+  decisionProfile: "stable-v1",
+  decisionGuarantee: { kind: "bit-exact" },
+  selectionDiagnosticProfile: null,
+  targetStatus: "legacy-reached",
+  degraded: false,
+};
+
+declare const materialBase: MaterialRoleBase;
+// @ts-expect-error compatibility boolean выводится из material status/guarantee.
+const impossibleMaterial: MaterialRole = {
+  ...materialBase,
+  alpha: 1,
+  alphaGuarantee: {
+    kind: "opaque-endpoint-characterized-v1",
+    numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
+  },
+  alphaStatus: "degraded",
+  guaranteed: true,
+};
 
 void [
   initialise,
@@ -586,6 +688,10 @@ void [
   glowContract,
   decisionEvidence,
   indeterminacyEvidence,
+  determinateGlowEvidence,
+  materialEvidence,
+  impossibleGlow,
+  impossibleMaterial,
 ];
 `;
 }
@@ -677,6 +783,38 @@ async function verifyCleanConsumer(
   }
 }
 
+// Execute the same packed-package runtime smoke under the caller's Node binary.
+// CI uses this to prove the public consumer floor independently from the pinned
+// release packer.
+export async function smokePackedRuntime(tarballPath) {
+  const tarball = resolve(tarballPath);
+  const consumer = await mkdtemp(join(tmpdir(), "labcolors-runtime-smoke-"));
+  try {
+    await writeFile(
+      join(consumer, "package.json"),
+      `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
+    );
+    npm(
+      [
+        "install",
+        "--offline",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--no-package-lock",
+        "--save=false",
+        tarball,
+      ],
+      consumer,
+    );
+    const runtimePath = resolve(consumer, "smoke.mjs");
+    await writeFile(runtimePath, runtimeSmokeSource());
+    command(process.execPath, [runtimePath], consumer);
+  } finally {
+    await rm(consumer, { recursive: true, force: true });
+  }
+}
+
 export async function verifyPackageRelease() {
   const { sourceSha: source } = await prepareNpmPackage();
 
@@ -691,8 +829,9 @@ export async function verifyPackageRelease() {
   const npmVersion = lockedNpmVersion(packageJson);
   const lockRoot = packageLock.packages?.[""];
   if (packageJson.name !== "@labpics/colors") fail(`unexpected npm package name: ${packageJson.name}`);
-  if (typeof packageJson.engines?.node !== "string" || packageJson.engines.node.length === 0) {
-    fail("package.json must declare a non-empty engines.node release requirement");
+  const consumerNodeFloor = packageJson.engines?.node?.match(/^>=(\d+\.\d+\.\d+)$/u)?.[1];
+  if (!consumerNodeFloor) {
+    fail("package.json engines.node must declare one exact >=X.Y.Z consumer floor");
   }
   if (lockRoot?.name !== packageJson.name || lockRoot?.version !== packageJson.version) {
     fail("package.json and package-lock.json root identity differ");
@@ -774,8 +913,15 @@ export async function verifyPackageRelease() {
       byteIdentical: true,
     },
     requirements: {
-      node: packageJson.engines?.node,
-      npm: npmVersion,
+      consumerRuntime: {
+        node: packageJson.engines.node,
+        verifiedFloor: consumerNodeFloor,
+        canonicalGate: "Node 22 consumer floor",
+      },
+      buildToolchain: {
+        node: process.versions.node,
+        npm: npmVersion,
+      },
       typescript: {
         compiler: lockedTypescriptVersion(packageLock),
         target: "ES2022",
@@ -818,8 +964,20 @@ const invokedDirectly =
   process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
-  verifyPackageRelease()
+  const runtimeSmokeIndex = process.argv.indexOf("--runtime-smoke");
+  const action = runtimeSmokeIndex >= 0
+    ? (() => {
+        const tarball = process.argv[runtimeSmokeIndex + 1];
+        if (!tarball) fail("--runtime-smoke requires a tarball path");
+        return smokePackedRuntime(tarball).then(() => ({ runtimeSmoke: tarball }));
+      })()
+    : verifyPackageRelease();
+  action
     .then(async ({ manifest, tarball }) => {
+      if (runtimeSmokeIndex >= 0) {
+        console.log(`runtime smoke passed: ${resolve(process.argv[runtimeSmokeIndex + 1])}`);
+        return;
+      }
       await writeGithubOutputs({ manifest, tarball });
       console.log(`verified ${relative(REPO_ROOT, tarball).split(sep).join("/")}`);
       console.log(`wrote ${relative(REPO_ROOT, manifest).split(sep).join("/")}`);

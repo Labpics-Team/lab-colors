@@ -80,8 +80,8 @@ const floorRole = (hex, lc, legalFloor) => ({
   },
 });
 
-// WCAG 2.1 contrast ratio between two #RRGGBB — the exact normative transcription
-// (0.03928 split, 2.4 exponent), the yardstick the strict clamp must respect.
+// Contrast ratio between two #RRGGBB in the frozen original WCAG 2.1 (2018)
+// profile (0.03928 split, 2.4 exponent), matching the versioned core contract.
 function wcagContrast(fg, bg) {
   const lum = (hex) => {
     const n = parseInt(hex.slice(1), 16);
@@ -145,14 +145,18 @@ test("stable Glow class changes re-resolve and clear/restore satellites synchron
       fx: {
         kind: "glow",
         cssVar,
+        coreHex: "#D8CEFF",
         haloHex: "#C0B2FA",
         decisionProfile: "stable-v1",
         decisionGuarantee: { kind: "bit-exact" },
         compositeProfile: "encoded-srgb8-screen-v1",
         compositeGuarantee: "bit-exact",
-        diagnosticProfile: null,
+        layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+        appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        selectionDiagnosticProfile: null,
         constraintLayer: "halo",
-        targetStatus: "unreachable",
+        targetStatus: "exact-noop-unreachable",
+        degraded: true,
       },
     },
   };
@@ -228,14 +232,18 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
       fx: {
         kind: "glow",
         cssVar: "--lab-fx",
+        coreHex: "#D8CEFF",
         haloHex: "#C0B2FA",
         decisionProfile: "stable-v1",
         decisionGuarantee: { kind: "bit-exact" },
         compositeProfile: "encoded-srgb8-screen-v1",
         compositeGuarantee: "bit-exact",
-        diagnosticProfile: null,
+        layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+        appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        selectionDiagnosticProfile: null,
         constraintLayer: "halo",
-        targetStatus: "unreachable",
+        targetStatus: "exact-noop-unreachable",
+        degraded: true,
       },
     },
   };
@@ -268,14 +276,68 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
     /lacks BitExact evidence/u,
   );
 
-  const falseDiagnostic = structuredClone(stable);
-  falseDiagnostic.roles.fx.diagnosticProfile = "cam16-ucs-jprime-li2017-v1";
+  const falseSelectionDiagnostic = structuredClone(stable);
+  falseSelectionDiagnostic.roles.fx.selectionDiagnosticProfile =
+    "cam16-ucs-jprime-li2017-v1";
   assert.throws(
     () =>
       adaptTheme(fakeElement(), {
         ...options,
         colors: {
-          resolveTheme: () => falseDiagnostic,
+          resolveTheme: () => falseSelectionDiagnostic,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => true,
+        },
+      }),
+    /lacks BitExact evidence/u,
+  );
+
+  for (const field of [
+    "layerRecipeProfile",
+    "appearanceDiagnosticProfile",
+    "selectionDiagnosticProfile",
+  ]) {
+    const missingProfile = structuredClone(stable);
+    delete missingProfile.roles.fx[field];
+    assert.throws(
+      () =>
+        adaptTheme(fakeElement(), {
+          ...options,
+          colors: {
+            resolveTheme: () => missingProfile,
+            recheckContrast: () => [],
+            isStableGlowPointNoop: () => true,
+          },
+        }),
+      /lacks BitExact evidence/u,
+      `${field} must not collapse at the adaptive boundary`,
+    );
+  }
+
+  const genericStatus = structuredClone(stable);
+  genericStatus.roles.fx.targetStatus = "unreachable";
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => genericStatus,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => true,
+        },
+      }),
+    /lacks BitExact evidence/u,
+    "generic unreachable must not erase exact provenance",
+  );
+
+  const falseDegraded = structuredClone(stable);
+  falseDegraded.roles.fx.degraded = false;
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => falseDegraded,
           recheckContrast: () => [],
           isStableGlowPointNoop: () => true,
         },
@@ -326,6 +388,29 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
     /lacks lawful Indeterminate evidence/u,
   );
 
+  const mismatchedCssVar = structuredClone(wrongSite);
+  mismatchedCssVar.roles.fx.numericalSiteId = "glow-target-or-maximum-v1";
+  mismatchedCssVar.roles.fx.cssVar = "--lab-other";
+  mismatchedCssVar.vars = { "--lab-fx": "forbidden-fallback" };
+  const mismatchTarget = fakeElement();
+  assert.throws(
+    () =>
+      adaptTheme(mismatchTarget, {
+        ...options,
+        colors: {
+          resolveTheme: () => mismatchedCssVar,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => false,
+        },
+      }),
+    /non-canonical cssVar/u,
+  );
+  assert.equal(
+    mismatchTarget.props.size,
+    0,
+    "mismatched cssVar must not smuggle a fallback var into the target",
+  );
+
   for (const decisionProfile of [undefined, "stable-v2", "stable-v1-typo"]) {
     const unknownProfile = structuredClone(stable);
     if (decisionProfile === undefined) delete unknownProfile.roles.fx.decisionProfile;
@@ -361,6 +446,98 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
   );
 });
 
+test("legacy Glow validates correlated provenance before adopting external results", () => {
+  const cssVar = "--lab-fx";
+  const legacyReached = {
+    vars: {
+      [cssVar]: "oklch(70% 0.1 280)",
+      [`${cssVar}-core`]: "oklch(80% 0.1 280)",
+      [`${cssVar}-alpha`]: "0.5",
+    },
+    roles: {
+      fx: {
+        kind: "glow",
+        cssVar,
+        coreHex: "#D8CEFF",
+        haloHex: "#C0B2FA",
+        alpha: 0.5,
+        alphaCss: "0.5",
+        compositeProfile: "encoded-srgb8-screen-v1",
+        compositeGuarantee: "bit-exact",
+        layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+        appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        selectionDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        decisionProfile: "legacy-platform-dependent-v1",
+        decisionGuarantee: { kind: "legacy-platform-dependent-v1" },
+        constraintLayer: "halo",
+        targetDj: 2.3006,
+        targetStatus: "legacy-reached",
+        haloCompositeHex: "#C0B2FA",
+        haloAchievedDj: 2.4,
+        coreCompositeHex: "#D8CEFF",
+        coreAchievedDj: 3.1,
+        achievedDj: 2.4,
+        degraded: false,
+        css: "oklch(70% 0.1 280)",
+      },
+    },
+  };
+  const options = {
+    theme: "light",
+    background: () => "#FFFFFF",
+    win: {},
+  };
+  const colorsFor = (result) => ({
+    resolveTheme: () => result,
+    recheckContrast: () => [],
+  });
+
+  const accepted = fakeElement();
+  const controller = adaptTheme(accepted, {
+    ...options,
+    colors: colorsFor(legacyReached),
+  });
+  assert.equal(accepted.props.get(cssVar), legacyReached.vars[cssVar]);
+  controller.stop();
+
+  const legacyUnreachable = structuredClone(legacyReached);
+  legacyUnreachable.roles.fx.targetStatus = "legacy-unreachable";
+  legacyUnreachable.roles.fx.degraded = true;
+  const acceptedUnreachable = fakeElement();
+  adaptTheme(acceptedUnreachable, {
+    ...options,
+    colors: colorsFor(legacyUnreachable),
+  }).stop();
+  assert.equal(
+    acceptedUnreachable.props.get(cssVar),
+    legacyUnreachable.vars[cssVar],
+  );
+
+  const malformedCases = [
+    ["bit-exact legacy decision", (role) => (role.decisionGuarantee = { kind: "bit-exact" })],
+    ["null legacy selection", (role) => (role.selectionDiagnosticProfile = null)],
+    ["generic exact status", (role) => (role.targetStatus = "exact-noop-unreachable")],
+    ["reached marked degraded", (role) => (role.degraded = true)],
+    ["unknown recipe", (role) => (role.layerRecipeProfile = "future-recipe-v2")],
+    ["unknown composite", (role) => (role.compositeProfile = "browser-screen-v1")],
+  ];
+  for (const [name, mutate] of malformedCases) {
+    const malformed = structuredClone(legacyReached);
+    mutate(malformed.roles.fx);
+    const target = fakeElement();
+    assert.throws(
+      () =>
+        adaptTheme(target, {
+          ...options,
+          colors: colorsFor(malformed),
+        }),
+      /legacy Glow 'fx' lacks lawful legacy evidence/u,
+      name,
+    );
+    assert.equal(target.props.size, 0, `${name}: invalid result must not be applied`);
+  }
+});
+
 test("stable Glow invalidation does not snap an in-flight color ease", () => {
   const el = fakeElement();
   let bg = "#FFFFFF";
@@ -393,14 +570,18 @@ test("stable Glow invalidation does not snap an in-flight color ease", () => {
             ? {
                 kind: "glow",
                 cssVar,
+                coreHex: "#D8CEFF",
                 haloHex: "#C0B2FA",
                 decisionProfile: "stable-v1",
                 decisionGuarantee: { kind: "bit-exact" },
                 compositeProfile: "encoded-srgb8-screen-v1",
                 compositeGuarantee: "bit-exact",
-                diagnosticProfile: null,
+                layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+                appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+                selectionDiagnosticProfile: null,
                 constraintLayer: "halo",
-                targetStatus: "unreachable",
+                targetStatus: "exact-noop-unreachable",
+                degraded: true,
               }
             : {
                 kind: "glow-indeterminate",
@@ -484,14 +665,18 @@ test("a color re-solve cannot reintroduce stable Glow vars unsafe for another sa
             ? {
                 kind: "glow",
                 cssVar,
+                coreHex: "#D8CEFF",
                 haloHex: "#C0B2FA",
                 decisionProfile: "stable-v1",
                 decisionGuarantee: { kind: "bit-exact" },
                 compositeProfile: "encoded-srgb8-screen-v1",
                 compositeGuarantee: "bit-exact",
-                diagnosticProfile: null,
+                layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+                appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+                selectionDiagnosticProfile: null,
                 constraintLayer: "halo",
-                targetStatus: "unreachable",
+                targetStatus: "exact-noop-unreachable",
+                degraded: true,
               }
             : {
                 kind: "glow-indeterminate",
@@ -681,7 +866,7 @@ function easeContrasts({ strict }) {
   return { h, out };
 }
 
-test("strict floor-clamp holds the WCAG floor every frame of the ease", () => {
+test("legacy strict clamp holds the floor on the canonical polarity-crossing fixture", () => {
   const { h, out } = easeContrasts({ strict: true });
   assert.equal(h.colors.resolveCount(), 2);
   for (const c of out) {
@@ -691,7 +876,7 @@ test("strict floor-clamp holds the WCAG floor every frame of the ease", () => {
   assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
 });
 
-test("strict floor-clamp is monotone (contrast never steps backwards)", () => {
+test("legacy strict fixture has non-regressing sampled contrast", () => {
   const { out } = easeContrasts({ strict: true });
   for (let i = 1; i < out.length; i++) {
     assert.ok(
@@ -701,9 +886,9 @@ test("strict floor-clamp is monotone (contrast never steps backwards)", () => {
   }
 });
 
-test("strict floor-clamp never reverses the colour when the background drifts favourably", () => {
-  // The structural guarantee: the displayed colour only ever advances from→to,
-  // never retreats — even when a favourably-drifting (darkening) background would
+test("held latch never reverses the scalar blend when the background drifts favourably", () => {
+  // The structural guarantee is only on the scalar blend parameter: it advances
+  // from→to even when a favourably-drifting (darkening) background would
   // let the stateless floor solver pick a LOWER blend frame to frame. Without the
   // `held` latch the grey value would step back down; with it, it is monotone.
   const h = harness({ strict: true, easeMs: 400 }); // long ease so bg drift dominates
@@ -732,7 +917,7 @@ test("strict floor-clamp never reverses the colour when the background drifts fa
   }
 });
 
-test("the default (free) ease dips below the floor mid-transition — what strict fixes", () => {
+test("the default ease dips below the floor on the canonical strict comparison fixture", () => {
   const { out } = easeContrasts({ strict: false });
   assert.ok(
     out.some((c) => c < 4.5),
@@ -809,7 +994,7 @@ test("initial apply re-solves against the worst sample of a varying backdrop", (
   assert.equal(colors.lastResolveBg(), "#202020");
 });
 
-test("strict worst-case: the floor is held against the hardest sample every frame", () => {
+test("legacy strict clamp holds the canonical hardest-sample fixture", () => {
   let samples = ["#0A0A0A"]; // passing at construction
   const h = harness({ strict: true, easeMs: 100, background: () => samples });
   h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5));

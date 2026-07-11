@@ -237,15 +237,17 @@ test("glow roles emit halo primary + -core/-alpha satellites, all well-formed", 
         assert.equal(role.constraintLayer, "halo");
         assert.equal(role.compositeProfile, "encoded-srgb8-screen-v1");
         assert.equal(role.compositeGuarantee, "bit-exact");
-        assert.equal(role.diagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+        assert.equal(role.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
+        assert.equal(role.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
+        assert.equal(role.selectionDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
         assert.equal(role.decisionProfile, "legacy-platform-dependent-v1");
         assert.deepEqual(role.decisionGuarantee, {
           kind: "legacy-platform-dependent-v1",
         });
-        assert.ok(["reached", "unreachable"].includes(role.targetStatus));
-        assert.equal(role.degraded, role.targetStatus === "unreachable");
+        assert.ok(["legacy-reached", "legacy-unreachable"].includes(role.targetStatus));
+        assert.equal(role.degraded, role.targetStatus === "legacy-unreachable");
         assert.ok(Object.is(role.achievedDj, role.haloAchievedDj));
-        if (role.targetStatus === "reached") {
+        if (role.targetStatus === "legacy-reached") {
           assert.ok(role.haloAchievedDj >= role.targetDj);
         } else {
           assert.ok(role.haloAchievedDj < role.targetDj);

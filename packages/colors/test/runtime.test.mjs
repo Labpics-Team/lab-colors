@@ -43,7 +43,8 @@ test("compositeOver is true source-over alpha", () => {
   assert.equal(toHex(compositeOver([0, 5, 5, 0.1], [5, 5, 5, 1])), "#050505");
 
   // Expanded-форма на этих соседних alpha давала 208→207→208. Affine-
-  // reference обязан быть монотонным, иначе first-passing alpha недоказуема.
+  // reference фиксирует другой, объявленный operation order; этот конкретный
+  // seam характеризуется без утверждения глобальной монотонности.
   const centre = 0.812992125984252;
   const predecessor = centre - Number.EPSILON / 2;
   const successor = centre + Number.EPSILON / 2;
@@ -51,6 +52,73 @@ test("compositeOver is true source-over alpha", () => {
     (alpha) => compositeOver([255, 0, 0, alpha], [1, 0, 0, 1])[0],
   );
   assert.ok(seam[0] <= seam[1] && seam[1] <= seam[2], String(seam));
+});
+
+test("material alpha rechecks in the declared byte-scale affine legacy-WCAG profile", () => {
+  // Independent consumer oracle for the Rust material solver. The product's
+  // versioned profile freezes the original WCAG 2.1 (2018) 0.03928 split; it is
+  // not the current W3C formula and JS `**` is not a cross-runtime powf proof.
+  // These fixtures verify the emitted alpha in the declared JS operation order.
+  const srgbToLinear = (byte) => {
+    const encoded = byte / 255;
+    return encoded <= 0.03928
+      ? encoded / 12.92
+      : ((encoded + 0.055) / 1.055) ** 2.4;
+  };
+  const contrastAgainstWhite = (rgb) => {
+    const luminance =
+      0.2126 * srgbToLinear(rgb[0]) +
+      0.7152 * srgbToLinear(rgb[1]) +
+      0.0722 * srgbToLinear(rgb[2]);
+    return 1.05 / (luminance + 0.05);
+  };
+
+  for (const { tint, oldAlpha, selectedAlpha, floor } of [
+    {
+      tint: [2, 2, 2],
+      oldAlpha: 0.41945837958353488,
+      selectedAlpha: 0.41945837958353827,
+      floor: 3,
+    },
+    {
+      tint: [0, 0, 0],
+      oldAlpha: 0.65080978737170625,
+      selectedAlpha: 0.65080978737171102,
+      floor: 7,
+    },
+  ]) {
+    const bottom = [255, 255, 255, 1];
+    const oldContrast = contrastAgainstWhite(compositeOver([...tint, oldAlpha], bottom));
+    const selectedContrast = contrastAgainstWhite(
+      compositeOver([...tint, selectedAlpha], bottom),
+    );
+    assert.ok(oldContrast < floor, `old ${oldContrast} must miss ${floor}`);
+    assert.ok(selectedContrast >= floor, `selected ${selectedContrast} must hold ${floor}`);
+  }
+
+  // Endpoint-only evaluation used to accept the old alpha exactly at the
+  // requested floor, while an admissible interior backdrop crossed the
+  // downward 0.03928 EOTF seam and missed it. The selected alpha comes from the
+  // conservative channel envelope that includes both seam sides.
+  const seamFloor = 19.7963;
+  const oldSeamAlpha = 0.96071066801335769;
+  const selectedSeamAlpha = 0.96072042755466869;
+  const interiorByte = 0.9997624803942831 * 255;
+  const interior = [interiorByte, interiorByte, interiorByte, 1];
+  const oldInteriorContrast = contrastAgainstWhite(
+    compositeOver([0, 0, 0, oldSeamAlpha], interior),
+  );
+  const selectedInteriorContrast = contrastAgainstWhite(
+    compositeOver([0, 0, 0, selectedSeamAlpha], interior),
+  );
+  assert.ok(
+    oldInteriorContrast < seamFloor,
+    `endpoint-only alpha ${oldInteriorContrast} must expose the interior seam miss`,
+  );
+  assert.ok(
+    selectedInteriorContrast >= seamFloor,
+    `enveloped alpha ${selectedInteriorContrast} must hold ${seamFloor}`,
+  );
 });
 
 test("toHex rounds and clamps", () => {

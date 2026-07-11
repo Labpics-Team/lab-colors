@@ -4,6 +4,8 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { workspaceVersion } from "./cargo-workspace.mjs";
+
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 export const PACKAGE_DIR = resolve(REPO_ROOT, "packages/colors");
@@ -98,10 +100,7 @@ export async function prepareNpmPackage() {
     ]);
   const packageJson = JSON.parse(packageJsonSource);
   const conformance = JSON.parse(conformanceSource);
-  const coreVersion = cargoSource.match(
-    /\[workspace\.package\]([\s\S]*?)\nversion\s*=\s*"([^"]+)"/u,
-  )?.[2];
-  if (!coreVersion) throw new Error("workspace core version is absent");
+  const coreVersion = workspaceVersion(cargoSource);
   const metadata = {
     schemaVersion: 1,
     package: { name: packageJson.name, version: packageJson.version },

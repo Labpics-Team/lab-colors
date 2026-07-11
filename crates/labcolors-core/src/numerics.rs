@@ -150,7 +150,7 @@ define_numerical_registry_v1! {
         boundary_corpus: "glow stable-indeterminate; exact no-op; finite-state compositor; half-tie alpha",
         runtime_matrix: "active: native x86_64 + wasm32; native arm64 required before any cross-runtime CAM16 decision claim; exact bytes only for compositor",
         fallback_status: NumericalFallbackStatusV1::None,
-        legacy_profile: Some("legacy-platform-dependent-v1"),
+        legacy_profile: Some(crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1.key()),
     },
 }
 
@@ -372,7 +372,8 @@ mod tests {
                     ]
                 && row.bound_status == NumericalBoundStatusV1::Unavailable
                 && row.fallback_status == NumericalFallbackStatusV1::None
-                && row.legacy_profile == Some("legacy-platform-dependent-v1")
+                && row.legacy_profile
+                    == Some(crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1.key())
         }));
         for (index, row) in rows.iter().enumerate() {
             assert!(!row.operations.is_empty());

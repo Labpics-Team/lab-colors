@@ -36,10 +36,10 @@ export interface AdaptThemeOptions {
   /** Crossfade duration in ms. Default `280` (capped to a short fade under reduced motion). */
   easeMs?: number;
   /**
-   * Hold each role's WCAG legal floor every frame of the ease: an interpolated
-   * colour is only shown while it still clears the role's `legalFloor` against
-   * the live background (for text on animated content / `prefers-contrast`).
-   * Default `false` (the free ease — brief surplus dips, destination always legal).
+   * Enable the legacy characterized per-frame clamp. The current
+   * Oklab→clip→sRGB8 path is not globally monotone, so this option is not a
+   * universal floor/least-blend certificate; #287 owns the finite replacement.
+   * Default `false`.
    */
   strict?: boolean;
   /** Override reduced-motion detection (default reads `matchMedia`). */

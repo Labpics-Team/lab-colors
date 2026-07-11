@@ -9,7 +9,13 @@ fn bench_glow_alpha(c: &mut Criterion) {
     for (name, tint, background, target) in [
         ("base", "#4A8FFF", "#101012", 2.3006),
         ("bloom", "#FF3B30", "#101012", 13.3251),
-        ("unreachable", "#3E87FF", "#FFFFFF", 2.3006),
+        // Белый фон даёт точный no-op из одного состояния,
+        // а не наихудший случай перебора.
+        ("exact-noop", "#3E87FF", "#FFFFFF", 2.3006),
+        // Длинный поток в доказанной границе ≤ 766 состояний. Соседний модульный
+        // тест закрепляет недостижимость цели 101, поэтому legacy target/max
+        // обязан прочитать поток до конца; tight максимума отдельно не заявлен.
+        ("long-unreachable", "#FFFFFE", "#000101", 101.0),
     ] {
         group.bench_with_input(
             BenchmarkId::new("legacy", name),

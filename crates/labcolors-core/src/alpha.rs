@@ -273,7 +273,13 @@ pub fn min_alpha_encoded(solid: [f64; 3], bg: [f64; 3]) -> Option<f64> {
         return Some(0.0);
     }
     let analytic = analytic_alpha_candidate(solid, bg);
-    debug_assert!(analytic > 0.0);
+    // Для двух разных цветов хотя бы один канал различается. В валидном
+    // `[0,1]`-домене соответствующий знаменатель строго положителен, поэтому и
+    // его поканальная граница, и максимум границ обязаны быть больше нуля.
+    debug_assert!(
+        analytic > 0.0,
+        "solid != bg обязан давать положительную analytic alpha: solid={solid:?}, bg={bg:?}, analytic={analytic}"
+    );
 
     // Положительные finite f64 упорядочены unsigned-битами. Сначала
     // экспоненциально находим ближайшую пару «не проходит / проходит» вокруг
@@ -459,8 +465,17 @@ fn first_srgb8_alpha(solid: [u8; 3], bg: [u8; 3]) -> f64 {
     }
     let mut failing = 0.0_f64.to_bits();
     let mut passing = 1.0_f64.to_bits();
-    debug_assert!(!srgb8_target_is_feasible(solid, 0.0, bg));
-    debug_assert!(srgb8_target_is_feasible(solid, 1.0, bg));
+    // При alpha=0 композит равен bg при любом тинте, а при alpha=1 выбор
+    // tint=solid всегда достигает цели. После раннего `solid == bg` это строгая
+    // пара FAIL/PASS, необходимая двоичному lower-bound.
+    debug_assert!(
+        !srgb8_target_is_feasible(solid, 0.0, bg),
+        "разные solid/bg не могут быть достижимы при alpha=0: solid={solid:?}, bg={bg:?}"
+    );
+    debug_assert!(
+        srgb8_target_is_feasible(solid, 1.0, bg),
+        "alpha=1 обязана достигать любой sRGB8-цели через tint=solid: solid={solid:?}, bg={bg:?}"
+    );
 
     while passing - failing > 1 {
         let middle = failing + (passing - failing) / 2;
@@ -577,7 +592,13 @@ pub(crate) fn resolve_alpha_analog_srgb8(
     }
 
     let floor = first_srgb8_alpha(solid_srgb8, bg_srgb8);
-    debug_assert!(floor > requested_alpha);
+    // Запрошенная alpha уже не дала byte-тинт; тотальность канального поиска и
+    // монотонность reference-предиката означают, что первый PASS обязан быть
+    // строго правее неё. Равенство здесь выявляет рассогласование двух путей.
+    debug_assert!(
+        floor > requested_alpha,
+        "отвергнутая requested alpha обязана лежать ниже первого sRGB8 PASS: solid={solid_srgb8:?}, bg={bg_srgb8:?}, requested={requested_alpha}, floor={floor}"
+    );
     let tint = srgb8_tint_at_alpha(solid_srgb8, floor, bg_srgb8)
         .ok_or_else(|| "первая sRGB8-alpha не дала допустимый byte-тинт".to_string())?;
     verify_srgb8_alpha_analog(solid_srgb8, tint, floor, bg_srgb8)?;

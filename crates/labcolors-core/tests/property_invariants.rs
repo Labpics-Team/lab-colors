@@ -19,14 +19,15 @@
 //! или на границе вызова) роняет property с МИНИМИЗИРОВАННЫМ (shrunk) контрпримером.
 //! Зелёный-с-рождения запрещён (был бы театром). Механика инъекции описана в PR.
 //!
-//! # ЗАМЕЧАНИЕ ПО monotonicity (задокументированный vs фактический инвариант)
+//! # ЗАМЕЧАНИЕ ПО monotonicity
 //!
-//! `muddiness_oklch` документирован как «строго монотонный в C при фиксированных L,h».
-//! Это ВЕРНО только для ТЁПЛЫХ оттенков (`sin(h) ≥ 0`, h∈[0°,180°]): там оба зависящих
+//! Historical API identifier `muddiness_oklch` denotes an experimental compatibility
+//! proxy, not a human judgement. Its coordinate is nondecreasing in C only for warm
+//! hues (`sin(h) ≥ 0`, h∈[0°,180°]): там оба зависящих
 //! от C множителя — `neutral_gate(C)` и b-гейт `sigmoid((C·sin h − B0)/BW)` — растут в C.
 //! Для ХОЛОДНЫХ оттенков (`sin(h) < 0`, h∈(180°,360°)) b-гейт УБЫВАЕТ в C (b = C·sin h < 0
-//! уходит от B0), поэтому произведение НЕ монотонно — глобальное утверждение доки
-//! переусиливает. Property ниже проверяет ИСТИННЫЙ инвариант (тёплая полуплоскость);
+//! уходит от B0), поэтому произведение НЕ монотонно. Property ниже проверяет
+//! математический инвариант тёплой полуплоскости;
 //! холодный контрпример зафиксирован тестом `muddiness_cool_hue_is_not_monotone_finding`
 //! как characterization реального поведения (не одобрение — фиксация факта для владельца).
 
@@ -138,8 +139,8 @@ fn anchors_ld(light: String, dark: String) -> ThemeAnchors {
 // ─────────────────────────────────────────────────────────────────────────────
 // СВОЙСТВО 1 — muddiness_oklch монотонна в C (тёплая полуплоскость)
 //
-// КЛАСС: инвариант монотонности параметр-свободной цены грязи. Закрывает весь
-// класс «муддинес немонотонен по хроме для тёплого оттенка», не один вход.
+// КЛАСС: инвариант монотонности frozen compatibility coordinate. Закрывает
+// весь класс регрессий C-зависимости для тёплого оттенка, не один вход.
 // БЬЁТ НА МУТАЦИИ: замена `neutral_gate` sigmoid на константу / переворот знака
 // аргумента / отбрасывание C-зависимости → монотонность рушится → RED.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,13 +193,13 @@ fn muddiness_strictly_increases_in_chroma_in_the_steep_warm_band() {
 }
 
 /// Закрытие ДЫРЫ, найденной mutation-прогоном (survivor `cleanliness.rs:541:35
-/// replace + with * in muddiness_in_context`): surround-aware путь обязан считать
-/// РЕАЛЬНУЮ Oklab-хрому `√(a²+b²)`. Мутант `a²·b²` схлопывает хрому тёплых муддистых
-/// цветов почти в ноль (ниже C0) → mud падает с ~0.65 до ~0.03. Тёплые муддистые
-/// оливы обязаны читаться грязными (mud > 0.3) в контексте — это убивает мутанта.
+/// replace + with * in muddiness_in_context`): local-context path must calculate
+/// Euclidean Oklab chroma `sqrt(a²+b²)`. The `a²*b²` mutant collapses these
+/// fixtures below C0 and moves the frozen proxy from roughly 0.5-0.7 to ~0.03.
+/// The `> 0.3` boundary is mutation characterization, not a human verdict.
 /// Заземлено замером: #6B6B2E=0.651, #8A7A2E=0.622, #7A5A20=0.666, #B8860B=0.506.
 #[test]
-fn muddiness_in_context_reflects_real_oklab_chroma() {
+fn muddiness_in_context_uses_euclidean_oklab_chroma() {
     let ctx = DefectContext {
         bg_hex: "#FFFFFF",
         theme: Theme::Light,
@@ -207,16 +208,15 @@ fn muddiness_in_context_reflects_real_oklab_chroma() {
         let mud = muddiness_in_context(hex, ctx).unwrap();
         assert!(
             mud > 0.3,
-            "тёплый мутный {hex} обязан читаться грязным в контексте (√(a²+b²)); \
-             схлопнутая хрома дала бы ~0. Получено mud={mud}"
+            "fixture {hex} proxy must remain > 0.3 with Euclidean sqrt(a²+b²); \
+             collapsed chroma would approach zero. Got {mud}"
         );
     }
 }
 
-/// Characterization реального поведения: для ХОЛОДНОГО оттенка (h=270°, sin=−1)
-/// муддинес НЕ монотонен по C — сперва растёт, потом падает. Это фиксирует
-/// расхождение между глобальным утверждением доки и кодом (находка для владельца),
-/// НЕ одобряя его. Числа заземлены прямым вычислением ядра.
+/// Characterization: for a cool hue (h=270°, sin=-1), the compatibility
+/// coordinate is not monotone in C: it first rises, then falls. This records
+/// current mathematics without assigning perceptual meaning.
 #[test]
 fn muddiness_cool_hue_is_not_monotone_finding() {
     let l = 0.3;

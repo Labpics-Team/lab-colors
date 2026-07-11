@@ -601,22 +601,31 @@ pub enum RoleRecipe {
     Zero,
 }
 
-/// Суффиксы CSS-переменных, которые один успешно решённый рецепт резервирует.
+/// Суффиксы CSS-переменных, которые один объявленный рецепт резервирует.
 ///
-/// Namespace выводится из типа outcome до резолва: иначе коллизия могла бы
-/// зависеть от фона (на одном роль unreachable и «всё работает», на другом два
-/// писателя молча делят один `--lab-*`). `Zero` переменных не эмитит никогда.
-fn emitted_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
+/// Основное имя принадлежит клиентскому токену даже тогда, когда `Zero` не
+/// эмитит значения: projection всё равно публикует его `cssVar`, и сателлит
+/// другой роли не вправе занять это имя. Остальной shape выводится из рецепта
+/// до резолва, иначе коллизия могла бы зависеть от фона (на одном роль
+/// unreachable и «всё работает», на другом два писателя молча делят один
+/// `--lab-*`). Исчерпывающий match заставляет каждый новый рецепт явно выбрать
+/// свой namespace shape.
+fn reserved_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
     const PRIMARY: &[&str] = &[""];
     const GLOW: &[&str] = &["", "-core", "-alpha"];
     const MATERIAL: &[&str] = &["", "-01", "-02"];
-    const NONE: &[&str] = &[];
 
     match recipe {
         RoleRecipe::Glow { .. } => GLOW,
         RoleRecipe::Material { .. } => MATERIAL,
-        RoleRecipe::Zero => NONE,
-        _ => PRIMARY,
+        RoleRecipe::TextAnchor { .. }
+        | RoleRecipe::DjAnchor { .. }
+        | RoleRecipe::DecorativeLc { .. }
+        | RoleRecipe::Ladder { .. }
+        | RoleRecipe::PairFill { .. }
+        | RoleRecipe::PairLabel { .. }
+        | RoleRecipe::AlphaAnalog { .. }
+        | RoleRecipe::Zero => PRIMARY,
     }
 }
 
@@ -625,16 +634,16 @@ fn emitted_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
 /// Отдельный примитив не знает сегодняшних суффиксов и потому не опирается на
 /// случайное свойство, что `-core/-alpha/-01/-02` пока не пересекаются друг с
 /// другом: будущая derived↔derived коллизия попадёт в тот же гард.
-fn reserve_emitted_css_names(
-    emitted: &mut std::collections::BTreeSet<String>,
+fn reserve_css_names(
+    reserved: &mut std::collections::BTreeSet<String>,
     name: &str,
     suffixes: &[&str],
 ) -> Result<(), ConfigError> {
     for suffix in suffixes {
         let key = format!("--lab-{name}{suffix}");
-        if !emitted.insert(key.clone()) {
+        if !reserved.insert(key.clone()) {
             return Err(ConfigError::DuplicateKey {
-                dictionary: "emitted CSS variables",
+                dictionary: "reserved CSS namespace",
                 key,
             });
         }
@@ -1069,10 +1078,10 @@ impl ThemeConfig {
         // резолва/JSON, чтобы порядок писателей никогда не решал, чьё значение
         // молча победит. Один общий set ловит role↔satellite, alias↔satellite и
         // любые будущие satellite↔satellite пересечения без списка частных пар.
-        let mut emitted = std::collections::BTreeSet::new();
+        let mut reserved = std::collections::BTreeSet::new();
 
         for (name, recipe) in &self.roles {
-            reserve_emitted_css_names(&mut emitted, name, emitted_css_suffixes(recipe))?;
+            reserve_css_names(&mut reserved, name, reserved_css_suffixes(recipe))?;
         }
         for (alias, target) in &self.aliases {
             let target_recipe = self
@@ -1084,7 +1093,7 @@ impl ThemeConfig {
                     referenced_by: format!("aliases.{alias}"),
                     role: target.clone(),
                 })?;
-            reserve_emitted_css_names(&mut emitted, alias, emitted_css_suffixes(target_recipe))?;
+            reserve_css_names(&mut reserved, alias, reserved_css_suffixes(target_recipe))?;
         }
 
         Ok(())
@@ -1675,6 +1684,10 @@ pub(crate) mod preset;
 /// тянет из [`preset`]; эмиссия заморожена байт-гейтом (`crate::agnostic_gates`).
 #[cfg(test)]
 pub(crate) mod fixture;
+
+/// Общая строковая форма `Resolved` для in-crate characterization/golden-тестов.
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests;

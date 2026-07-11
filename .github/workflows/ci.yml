@@ -20,12 +20,42 @@ env:
   # Pins npm 11.9.0 as part of the official Node distribution. npm tar format
   # is release input, so a floating runner-provided npm is not reproducible.
   NODE_TOOLCHAIN: 24.14.0
+  # Минимальный consumer runtime проверяется отдельно от release packer.
+  # Node 22 остаётся поддерживаемой upstream LTS-веткой.
+  NODE_CONSUMER_FLOOR: 22.11.0
   # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
   CHROME_FOR_TESTING_VERSION: 150.0.7871.115
   CHROME_FOR_TESTING_SHA256: 1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
   CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
 
 jobs:
+  node-consumer-floor:
+    name: Node 22 consumer floor
+    runs-on: [self-hosted, Linux, X64]
+    needs: wasm
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: ${{ env.NODE_CONSUMER_FLOOR }}
+      - name: download exact artifact built by the canonical WASM job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-floor-artifact
+      - name: packed public runtime on declared Node floor
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/node-floor-artifact
+        run: |
+          mapfile -t tarballs < <(find "$ARTIFACT_DIR" -type f -name '*.tgz' -print)
+          test "${#tarballs[@]}" -eq 1
+          node scripts/verify-package-release.mjs --runtime-smoke "${tarballs[0]}"
+
   msrv:
     name: MSRV workspace check
     runs-on: [self-hosted, Linux, X64]
@@ -34,6 +64,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: toolchain env (runner.temp)
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
@@ -64,6 +96,8 @@ jobs:
     # filled it in ~12 jobs (ENOSPC cascade, 2026-07-03).
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
       # The toolchain VERSION is pinned via the explicit input below, not @stable,
       # so a new stable release cannot silently change CI behavior.
@@ -99,6 +133,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -157,6 +193,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -192,6 +230,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -240,6 +280,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -434,6 +476,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       # Гейт «доки == реальность» (порт эталона labui#150 / lab-icons#53 /
       # lab-motion): docs/NAMING.md сверяется с фактами ФС. Node уже стоит на
       # self-hosted раннерах; точная версия npm здесь не release input, потому
