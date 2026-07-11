@@ -37,8 +37,8 @@ Whitepaper не является roadmap. Каждое утверждение д
 
 - [Empirical inventory](empirical-inventory.md) — происхождение текущих коэффициентов и policies.
 - [Empirical residue](empirical-residue.md) — результаты проверок и оставшиеся научные вопросы.
-- `docs/psychophysics/` — протоколы и исследовательские материалы, если они применимы к актуальной версии.
-- `docs/experiments/` — исторические или воспроизводимые эксперименты с явной версией кода.
+- [`experiments/psychophysics/`](../experiments/psychophysics/) — протоколы и исследовательские материалы с явной версией.
+- [`experiments/`](../experiments/) — исторические или воспроизводимые эксперименты.
 
 Исторический артефакт не считается доказательством текущего release без привязки к commit, модели, данным и domain.
 
