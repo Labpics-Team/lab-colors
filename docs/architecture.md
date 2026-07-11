@@ -2,503 +2,363 @@
 
 ## Назначение
 
-Этот документ объясняет устойчивые границы системы. Он не хранит roadmap, текущий SHA, активный PR или статус исследований.
+Документ разделяет:
 
-Живое состояние разработки находится в GitHub Issue `#228`. Полный Definition of Done — в `#248`.
+1. фактически работающий продуктовый путь;
+2. устойчивые архитектурные инварианты;
+3. границы, которые нельзя выдавать за реализованную capability.
 
-## Система в одном предложении
+Текущий SHA, активный PR и roadmap здесь не хранятся. Живое состояние разработки находится в GitHub Issue `#228`; полный Definition of Done — в `#248`.
 
-Lab Colors компилирует клиентскую схему цветовых токенов в набор формальных контрактов, решает их для текущего локального контекста и поддерживает результат при изменении этого контекста.
+## Краткая модель
 
 ```text
-client schema
-→ compile
-→ compiled table / dependency model
-→ resolve(current context)
-→ emitted token values
-→ recheck
-→ selective re-resolve
+client ThemeConfig
+→ validate and compile
+→ NamedRoleTable
+
+NamedRoleTable
++ current local background
++ theme/profile supported by adapter
+→ resolve whole role set
+→ emitted values and per-role statuses
+
+runtime context change
+→ recheck current values
+→ keep while valid
+→ resolve again when required
 ```
 
-## Слои
+Lab Colors не присваивает клиентским словам математический смысл. Дизайн-система задаёт имена и отношения, core выполняет объявленные цветовые контракты.
 
-### 1. Клиентская дизайн-система
+## Что работает в текущем продукте
 
-Клиент владеет:
+### Compile boundary
 
-- именами токенов;
+`ThemeConfig`:
+
+- содержит источники, themes, roles, recipes и aliases;
+- валидируется до публикации;
+- компилируется в `NamedRoleTable`;
+- получает fingerprint для cache separation;
+- не заменяет активный корректный config при ошибке загрузки.
+
+Имена ролей принадлежат клиенту. Core не выбирает алгоритм по словам `primary`, `danger`, `hover` или имени компонента.
+
+### Contextual resolve
+
+`resolve_named_set` / `resolveTheme` решает полный набор ролей для одного локального background и theme/profile.
+
+В одном результате могут находиться:
+
+- решённые solid/translucent/material/glow values;
+- явное отсутствие значения;
+- физически недостижимая роль;
+- диагностические флаги конкретного recipe.
+
+Невалидный request и недостижимость одной валидной роли — разные события.
+
+### Специализированные recipes
+
+Текущая реализация содержит специализированные способы решения:
+
+| Recipe / примитив | Контракт |
+|---|---|
+| `TextAnchor` | foreground относительно текущего background |
+| `DjAnchor` | appearance-delta относительно background в объявленной модели |
+| `DecorativeLc` | декоративная контрастная величина без автоматического текстового floor |
+| `Ladder` | клиентский preset тинта/alpha |
+| `AlphaAnalog` | alpha-представление заданной solid-цели в объявленном compositing profile |
+| `PairFill` / `PairLabel` | вложенная зависимость «fill composite → dependent label» |
+| `Material` | объявленная многослойная композиция |
+| `Glow` | point-effect contract |
+| `Zero` | явное значение «нет цвета» |
+
+Эти имена описывают технический способ решения. Они не являются обязательным языком дизайн-системы.
+
+### Browser runtime
+
+- `applyTheme` применяет уже решённые CSS custom properties.
+- `effectiveBackground` композитит поддерживаемые `background-color` предков.
+- `watchTheme` обслуживает дискретные изменения, видимые текущему adapter.
+- `adaptTheme` перепроверяет текущие значения и запускает resolve после устойчивого нарушения заданного runtime contract.
+- Неоднородный фон передаётся вызывающей стороной как набор образцов.
+
+`watchTheme` и `adaptTheme` — stateful adapters. Математический resolve должен оставаться отдельной детерминированной операцией.
+
+## Граница ответственности
+
+### Клиент владеет
+
+- token IDs;
 - semantic roles;
 - названиями уровней;
 - component state names;
 - aliases;
-- темами и mode IDs;
-- тем, какие элементы связаны и встречаются вместе;
-- non-color cues и component semantics.
+- theme/mode IDs;
+- declared relations и composition topology;
+- non-color cues.
 
-Эти понятия не являются частью generic color core.
+### Core владеет
 
-Пример:
+- color spaces и output domains;
+- source/family construction;
+- contrast and compositing;
+- gamut/output mapping в поддерживаемом scope;
+- finite emission;
+- generic contracts;
+- resolve results и diagnostics.
 
-```text
-text.primary
-button.default.fill
-button.default.label
-button.pressed.fill
-status.critical.label
-```
+### Adapter владеет
 
-Для core это непрозрачные идентификаторы. Слова не запускают скрытую ветку алгоритма.
+- platform DTO;
+- наблюдением runtime state;
+- применением результата;
+- capability reporting.
 
-### 2. Compile boundary
+Adapter не должен повторно реализовывать color math или угадывать client semantics.
 
-`ThemeConfig` валидируется и компилируется в `NamedRoleTable`.
+## Источники и производные значения
 
-Compile stage отвечает за:
+### Exact source
 
-- корректность IDs и ссылок;
-- aliases;
-- допустимость рецептов и параметров;
-- theme/profile references;
-- canonical fingerprint;
-- атомарность: ошибочный конфиг не заменяет уже загруженный корректный.
+Exact anchor или literal:
 
-Compile stage не имеет права выдавать context-free значения токенов за универсальные цвета.
+- приходит от клиента;
+- сохраняет source provenance;
+- не меняется solver-ом без отдельной явной client operation.
 
-### 3. Pure resolve
-
-Resolve получает:
-
-- compiled table;
-- текущий фон;
-- theme/profile;
-- поддерживаемый output context.
-
-Он возвращает полный набор результатов для одного context scope.
-
-Pure resolve:
-
-- детерминирован;
-- не хранит скрытую runtime history;
-- не зависит от порядка словаря;
-- не изменяет exact sources;
-- возвращает недостижимость явно;
-- повторно измеряет конечный emitted state там, где контракт относится к output.
-
-### 4. Runtime controller
-
-Browser runtime управляет изменяющимся окружением:
-
-```text
-DOM / caller samples
-→ effective context
-→ recheck current values
-→ preserve while valid
-→ resolve when required
-→ update scoped CSS variables
-```
-
-`watchTheme` и `adaptTheme` являются stateful adapters над pure resolver, а не частью математического source of truth.
-
-### 5. Platform adapters
-
-WASM, JavaScript, Swift/FFI, CLI, CSS, DTCG, Tailwind и Figma integrations должны использовать один canonical core contract.
-
-Adapter может:
-
-- преобразовать DTO;
-- наблюдать platform state;
-- применить результат;
-- сообщить platform capability.
-
-Adapter не может:
-
-- повторно реализовать color math;
-- угадывать client semantics;
-- подставлять platform-specific fallback без статуса;
-- расширять scientific claim core.
-
-## Источники истины внутри цветовой модели
-
-### Exact sources
-
-Exact source:
-
-- задан клиентом;
-- имеет provenance;
-- сохраняется побайтно в объявленном source contract;
-- не становится solver variable.
-
-К exact sources относятся anchors и explicit literals.
-
-### Derived values
+### Derived value
 
 Derived value:
 
-- связан с source/family provenance;
-- строится по versioned recipe/profile;
-- зависит от контекста только через явно объявленный контракт;
-- может меняться при смене background/theme/output;
-- проверяется после final emission.
+- связан с source/family;
+- строится по объявленному recipe/profile;
+- может зависеть от background, theme и output context;
+- проверяется на фактически emitted state.
 
-### Coordinate views
+Alias — второе имя того же результата, а не новая независимо изменяемая копия.
 
-Oklab, CAM16, CAM16-UCS и другие координаты — представления одного стимула, а не независимые источники истины.
+## Один стимул, несколько координат
 
-Нельзя независимо задавать или интерполировать несколько hue-представлений одного цвета без материализации единого физически представимого состояния.
+Oklab, CAM16, CAM16-UCS и другие координаты — представления одного цветового состояния.
 
-У ахроматического состояния hue отсутствует. Числовой placeholder не считается измеренным направлением.
+Архитектурный инвариант:
 
-## Client semantics и физические контракты
+- нельзя независимо задавать несколько hue-представлений одного цвета;
+- операция должна материализовать один физически представимый working/emitted state;
+- остальные координаты вычисляются из него;
+- у ахромата hue отсутствует, а числовой placeholder не считается измеренным направлением.
 
-Клиентское слово само по себе не несёт математики.
+Это не требует выбрать одну «универсально правильную» hue-ось.
+
+## Клиентский уровень не равен одной координате
+
+Слово клиента:
 
 ```text
 secondary
 ```
 
-становится вычислимым только после отображения в конкретный contract bundle.
+не означает автоматически фиксированные `t`, `J′`, `Lc`, alpha или hex.
 
-Например:
+Пример отображения:
 
 ```text
-client token: text.secondary
-→ foreground readability contract
-→ floor
+text.secondary
+→ readability contract
+→ normative floor
 → ordering relation
 
-client token: border.secondary
-→ edge separation contract
+border.secondary
+→ edge-separation contract
 → ordering relation
 ```
 
-Оба token могут называться `secondary`, но не обязаны иметь одинаковый `Lc`, `J′`, alpha, `t` или hex.
+Оба токена сохраняют одно клиентское намерение, но решают разные физические задачи.
 
-## Специализированные примитивы текущей реализации
-
-### `TextAnchor`
-
-Решает foreground относительно текущего background.
-
-Контракт может включать:
-
-- долю доступного контраста;
-- нормативный floor;
-- polarity;
-- hierarchy ordering.
-
-Не является общей мерой силы любого объекта.
-
-### `DjAnchor`
-
-Решает appearance-delta относительно background в объявленной модели.
-
-Не является автоматически:
-
-- читаемостью;
-- WCAG;
-- prominence;
-- семантической различимостью.
-
-### `Ladder`
-
-Воспроизводит клиентский preset тинта/alpha.
-
-Текущие Figma alpha positions — измеренные данные конкретного клиента, а не generic уровни core.
-
-### `PairFill` / `PairLabel`
-
-Моделируют вложенную зависимость:
+## Непрерывные семейства и конечный output
 
 ```text
-parent background
-→ resolve fill
-→ compute emitted composite
-→ resolve label against that composite
-```
-
-Это ключевой пример того, почему токены образуют граф, а не независимый словарь.
-
-### `Material`
-
-Описывает объявленную многослойную композицию.
-
-Точная модель зависит от:
-
-- layer order;
-- source;
-- alpha association;
-- backdrop set;
-- output profile.
-
-Point material recipe не является полной моделью blur, refraction или physical glass.
-
-### `Glow`
-
-Текущий контракт относится к точечным цветовым слоям и их композитам.
-
-Spatial glow требует дополнительных данных:
-
-- kernel;
-- extent;
-- overlap;
-- backdrop field;
-- temporal context.
-
-Point result не сертифицирует spatial field.
-
-### `Zero`
-
-Явное значение «нет цветового результата». Это не пропущенная роль и не ошибка сериализации.
-
-## Dependency model
-
-Концептуально токены образуют ориентированный граф:
-
-```text
-source
-→ derived fill
-→ emitted composite
-→ dependent label
-```
-
-Другие связи:
-
-- exact alias;
-- immutable source;
-- ordering;
-- must-distinguish;
-- correspondence between contexts;
-- client-defined relation.
-
-Текущая implementation использует `NamedRoleTable` и специализированные recipes. Любое обобщение graph path обязано сначала воспроизвести существующее поведение дифференциальными тестами.
-
-### Циклы
-
-Односторонняя зависимость решается топологически.
-
-Цикл допустим только при явно определённом joint contract. Нельзя разрешать цикл случайным порядком итерации.
-
-### Incremental resolve
-
-Runtime может пересчитывать только затронутую dependency closure, если доказано равенство полному resolve.
-
-Иначе применяется полный resolve scope.
-
-## Continuous family и finite output
-
-Continuous family отвечает на вопрос:
-
-> Какие состояния принадлежат одному вычислительному семейству?
-
-Finite emission отвечает на вопрос:
-
-> Какое состояние реально можно отдать потребителю?
-
-```text
-anchors
-→ versioned continuous construction
-→ candidate selection by contract
-→ output mapping / quantization
+immutable anchors
+→ construction policy
+→ continuous family
+→ selection by current contract/context
+→ output mapping and quantization
 → final emitted state
 → postcondition measurement
 ```
 
-Правила:
+Инварианты:
 
 - anchors и construction — разные сущности;
-- параметр `t` не содержит client semantics;
-- одинаковый client level не означает одинаковый `t`;
-- непрерывная оптимальность не доказывает оптимальность на конечной output grid;
-- current gamma/hue/chroma parameters остаются compatibility policies, пока более сильный статус не доказан.
+- `t` не содержит client semantics;
+- continuous family остаётся first-class low-level mechanism;
+- непрерывный optimum не доказывает optimum на конечной output grid;
+- current gamma/hue/chroma constants не называются универсальными законами восприятия;
+- фактический output проверяется после emission.
 
-## Контраст и другие outcomes
+## Dependency model
 
-Система не использует один universal quality score.
+Текущая implementation использует `NamedRoleTable` и специализированные recipes. Уже существующая вложенная связь:
 
-Отдельные contracts:
+```text
+parent background
+→ PairFill
+→ emitted fill composite
+→ PairLabel resolved against that composite
+```
 
-- normative WCAG;
-- foreground legibility;
+показывает, что токены концептуально образуют dependency graph.
+
+Обобщение этого графа обязано:
+
+- сначала зафиксировать legacy behavior characterization tests;
+- вводить opaque node IDs;
+- не добавлять client taxonomy в core;
+- сравнивать legacy и generic path дифференциально;
+- переносить по одному production mechanism;
+- проверять relations после final emission.
+
+Пока generic graph не заменил специализированный путь, документация не должна выдавать его за полностью реализованный public API.
+
+## Контраст, appearance и другие outcomes
+
+Нет одного universal quality score.
+
+Отдельно существуют:
+
+- нормативный WCAG contract;
+- foreground readability;
 - appearance delta;
-- rendered composite separation;
+- rendered-composite separation;
 - family identity;
 - pairwise distinction;
 - optional observer estimate;
 - migration/recourse.
 
-Разные единицы нельзя складывать в один scalar без принятой модели.
+Разные outcomes и единицы не компенсируют друг друга без принятой модели. Hard contract проверяется отдельно.
 
-Hard contract проверяется отдельно и не компенсируется улучшением другого outcome.
+## Ошибки и статусы
 
-## Ошибки и результаты
-
-Нужно различать:
+Архитектурно различаются:
 
 ### Compile failure
 
-Схема или конфиг невалидны. Новый graph/table не публикуется.
+Config/schema невалидны; новый compiled artifact не публикуется.
 
-Примеры:
+### Per-role resolve outcome
 
-- неизвестная ссылка;
-- недопустимый параметр;
-- конфликт aliases;
-- противоречивый graph.
-
-### Resolve outcome
-
-Вызов корректен, но конкретная роль может быть физически недостижима в текущем context.
-
-Это результат роли, а не обязательно ошибка всего вызова.
+Request валиден, но отдельная роль может быть недостижима в текущем context.
 
 ### Runtime status
 
-Контроллер может:
+Controller может:
 
-- сохранить текущий certified state;
+- сохранить текущий result;
 - выполнить recheck без resolve;
-- начать новый resolve;
-- отменить stale generation;
-- остановиться;
+- выполнить новый resolve;
+- остановиться или отменить stale work;
 - сообщить недостаточный runtime context.
 
 ### Internal invariant failure
 
-Ошибка реализации. Её нельзя представлять как клиентский `Unreachable` или правдоподобный цвет.
+Ошибка реализации. Она не должна сериализоваться как `Unreachable` или правдоподобный цвет.
 
-## Runtime context
+Точные типы публичных ошибок эволюционируют отдельно; текст не должен обещать более богатую wire schema, чем фактически предоставляет текущий adapter.
+
+## Runtime context и ограничения
 
 ### `effectiveBackground`
 
-Поддерживает вычисление эффективного background из совместимых `background-color` предков.
+Автоматически учитывает поддерживаемую цепочку `background-color`.
 
-Не моделирует автоматически:
+Не следует считать, что он понимает:
 
-- background image;
-- gradient;
-- mix-blend-mode;
-- filter/backdrop-filter;
-- blur;
-- video;
-- HDR/WCG platform transform.
+- image/gradient/video;
+- blend modes;
+- filters и backdrop blur;
+- произвольный HDR/WCG transform;
+- весь фактически увиденный пользователем spatial field.
 
-Для неоднородного фона caller передаёт образцы или другой explicit context adapter.
+Для таких случаев caller передаёт explicit samples/context.
 
 ### `watchTheme`
 
-Подходит для дискретных изменений, которые наблюдает текущий adapter.
-
-Не следует считать, что `MutationObserver` видит любое изменение computed style, media environment или layout.
+Наблюдает изменения, поддерживаемые текущим DOM adapter. `MutationObserver` не гарантирует обнаружение любого изменения computed style, media environment или layout.
 
 ### `adaptTheme`
 
-Используется для частого изменения background.
+Разделяет:
 
-Правильная последовательность:
+- recheck;
+- sustained breach;
+- resolve;
+- применение результата.
 
-```text
-sample context
-→ recheck current result
-→ require sustained breach according to controller profile
-→ resolve
-→ apply safely
-```
+Sustain, dwell, ease и Schmitt hysteresis — разные механизмы. Документация использует точное имя фактически реализованной policy.
 
-Sustain, dwell и ease — разные механизмы. Один threshold с задержкой не следует называть Schmitt hysteresis.
+## Themes и platform overrides
 
-Pure resolver не зависит от controller history.
+Theme ID принадлежит клиентской схеме, но конкретный adapter может поддерживать более узкий набор IDs.
 
-## Themes
+Exact theme-specific anchor имеет приоритет.
 
-Theme ID принадлежит клиенту и adapter schema.
-
-Exact theme-specific anchor имеет приоритет и не меняется.
-
-Если derived state отсутствует, он может быть решён заново в target context по тому же client contract. Он не обязан быть инверсией или численной функцией already-emitted source-theme state.
-
-Product increased-contrast theme, `prefers-contrast` и forced colors — разные понятия.
+Product increased-contrast theme, `prefers-contrast`, forced colors и UA used-value replacement — разные сущности. Authored token result не является сертификатом фактического used color после неизвестного UA override.
 
 ## Optional Screen ColorQuality
 
-Base resolver не зависит от optional human-quality layer.
+`Preserve / Audit / Project` относятся к отдельному optional layer и не управляют обязательным base resolve.
 
-```text
-Preserve
-Audit
-Project
-```
+- `Preserve` — без optional semantic mutation.
+- `Audit` — анализ без изменения candidate.
+- `Project` — изменение только в admitted scope с `NoChange`, uncertainty и final-state certificate.
 
-управляет только дополнительной semantic mutation.
+Эти понятия не означают, что observer-backed projector уже реализован или допущен к default. Research proxy не является human verdict.
 
-- `Preserve`: не менять semantic candidate.
-- `Audit`: добавить факты/оценки без изменения candidate.
-- `Project`: изменить candidate только с admitted profile, uncertainty semantics, `NoChange` и final-state certificate.
+## Безопасная миграция
 
-Нет универсального `cleanColors: boolean`.
-
-Research proxy не становится human verdict.
-
-## Миграция архитектуры
-
-Любой специальный production path заменяется так:
+Специальный production path заменяется так:
 
 ```text
 characterization
-→ RED test for desired generic contract
+→ RED test
 → parallel legacy/new paths
 → differential comparison
 → switch one consumer
 → remove replaced orchestration
 ```
 
-Запрещён mega-refactor, который одновременно меняет:
+Не следует одновременно менять client schema, family construction, graph semantics, solver, runtime controller и wire format одним refactor.
 
-- client schema;
-- family construction;
-- graph semantics;
-- solver;
-- runtime controller;
-- wire format.
+## Требуемые инварианты
 
-## Кэш и идентичность результата
-
-Cache/certificate identity включает все данные, которые могут изменить решение:
-
-- compiled config/graph ID;
-- source/family profile IDs;
-- context/theme ID;
-- output profile;
-- model/numerical release;
-- runtime generation where applicable.
-
-Изменение любого semantic input не должно получать результат старого cache key.
-
-## Проверяемые инварианты
+Некоторые пункты ниже являются целевыми архитектурными gates, а не утверждением, что каждый уже полностью доказан в `main`:
 
 1. Перестановка client declarations не меняет результат.
 2. Exact sources и aliases сохраняются.
-3. Dependent label решается против final emitted composite dependency.
-4. Final relation проверяется после quantization/output mapping.
-5. Invalid compile не меняет active valid graph.
-6. Incremental resolve совпадает с full resolve.
-7. Stale runtime generation не пишет значения.
+3. Dependent role решается против final emitted dependency.
+4. Relation проверяется после output mapping.
+5. Invalid compile не меняет active valid config.
+6. Incremental resolve, если он используется, совпадает с full resolve.
+7. Stale runtime work не пишет значения в новый generation.
 8. Stop/cancel запрещает дальнейшие writes.
 9. Unsupported domain возвращает статус, а не fallback.
-10. Second-client fixture проходит без Lab UI vocabulary.
-11. Platform adapters дают эквивалентные decision classes и declared bytes.
-12. Documentation claim не сильнее теста, evidence или capability manifest.
+10. Second-client fixture не требует Lab UI vocabulary.
+11. Platform adapters сохраняют один contract.
+12. Документационный claim не сильнее кода, теста, evidence или capability manifest.
 
 ## Антипаттерны
 
 - Парсить семантику из имени токена.
 - Встраивать слова конкретной дизайн-системы в core.
-- Считать один цвет значением токена для всех фонов.
+- Считать один hex значением токена для всех фонов.
 - Использовать фиксированный `t` как semantic level.
 - Смешивать WCAG, preference и identity в weighted sum.
 - Исправлять связанные роли независимо.
 - Изменять source anchor ради оптимизации.
-- Выдавать current client preset за universal law.
+- Выдавать client preset за universal law.
 - Прятать ошибку под neutral/black/white fallback.
-- Дублировать цветовую математику в adapter.
+- Дублировать color math в adapter.
 - Считать screenshot единственным correctness oracle.
-- Документировать roadmap как долговечную архитектуру.
+- Описывать roadmap как уже реализованную архитектуру.
