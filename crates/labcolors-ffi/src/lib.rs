@@ -46,13 +46,12 @@
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Gamut, GlowCompositeGuaranteeV1,
-    GlowCompositeProfileV1, GlowDecisionProfileV1, GlowDiagnosticProfileV1,
-    GlowTargetStatus as CoreGlowTargetStatus, Hue, LadderPosition,
-    LegacyPlatformDependentV1, NumericalCompatibilityReleaseIdV1, NumericalDecisionEvidenceV1,
-    NumericalDecisionV1,
-    NumericalIndeterminacyV1, NumericalSiteIdV1, Theme as CoreTheme, ViewingConditions,
-    recheck_against, solve, solve_screen_alpha_for_dj, srgb_encoded_from_hex,
+    BgInput, ChromaPolicy, Contract, Gamut, GlowCompositeGuaranteeV1, GlowCompositeProfileV1,
+    GlowDecisionProfileV1, GlowDiagnosticProfileV1, GlowTargetStatus as CoreGlowTargetStatus, Hue,
+    LadderPosition, LegacyPlatformDependentV1, NumericalCompatibilityReleaseIdV1,
+    NumericalDecisionEvidenceV1, NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1,
+    Theme as CoreTheme, ViewingConditions, recheck_against, solve, solve_screen_alpha_for_dj,
+    srgb_encoded_from_hex,
 };
 
 // Регистрирует UniFFI-scaffolding под namespace = имя крейта (`labcolors`).
@@ -579,10 +578,7 @@ pub fn solve_glow_point(
                 || value.selection_diagnostic_profile().is_some()
             {
                 return Err(ColorError::IncompatibleCoreContract {
-                    reason: format!(
-                        "illegal stable Glow value state: {:?}",
-                        value.status()
-                    ),
+                    reason: format!("illegal stable Glow value state: {:?}", value.status()),
                 });
             }
             Ok(GlowPointDecision::StableExactNoop {

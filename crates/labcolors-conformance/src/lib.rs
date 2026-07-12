@@ -51,7 +51,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "2.0.0";
+pub const PACK_VERSION: &str = "3.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -500,56 +500,85 @@ pub struct Counts {
     pub total: usize,
 }
 
-/// Exact copy of one core-owned migrated branch-sensitive registry row.
-/// The release verifier consumes this generated list instead of maintaining a
-/// second hand-written semantic registry.
+/// Canonical numerical capability manifest (#289/#292): core registry
+/// projection c versioned schema, coverage и drift-checksum. Replaces the
+/// former `numericalSites[].legacyProfile` rows (pack 2.x); the verifier
+/// consumes this projection instead of a hand-written semantic registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NumericalSiteManifest {
-    /// Stable site identity.
-    pub site_id: String,
-    /// Branch-sensitive operations.
-    pub operations: String,
-    /// Input/output domain.
-    pub domain: String,
-    /// Semantic branch affected by the value.
-    pub branch_effect: String,
-    /// Lawful outcomes of the stable profile.
-    pub stable_outcomes: Vec<String>,
-    /// Sound-bound availability.
-    pub bound_status: String,
-    /// Executable boundary corpus identifiers.
-    pub boundary_corpus: String,
-    /// Required cross-runtime comparison scope.
-    pub runtime_matrix: String,
-    /// Fallback status.
-    pub fallback_status: String,
-    /// Explicit compatibility profile, if present.
-    pub legacy_profile: Option<String>,
+pub struct CapabilityManifestProjection {
+    /// Capability schema version (independent version domain).
+    pub schema_version: u32,
+    /// Registry coverage key (`migrated-sites-only-v1`).
+    pub coverage: String,
+    /// Capability rows sorted by UTF-8 `siteId` bytes.
+    pub sites: Vec<CapabilitySiteProjection>,
+    /// FNV-1a-32 drift-checksum canonical preimage, 8 lowercase hex.
+    pub checksum: String,
 }
 
-/// Generate the release-facing registry directly from the core SSOT.
+/// One site capability row (no selected mode; manifest describes the build).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilitySiteProjection {
+    /// Stable site identity key.
+    pub site_id: String,
+    /// Lawful stable outcome keys.
+    pub stable_outcomes: Vec<String>,
+    /// Registered compatibility release keys.
+    pub compatibility_releases: Vec<String>,
+    /// Mintable evidence class keys.
+    pub evidence_classes: Vec<String>,
+    /// Canonical finite artifact IDs (empty = no evidence, not implicit support).
+    pub artifact_ids: Vec<String>,
+    /// Registered error bound IDs (empty in V1).
+    pub bound_ids: Vec<String>,
+    /// Runtime attestation IDs (empty until #258).
+    pub runtime_attestations: Vec<String>,
+}
+
+/// Generate the release-facing capability manifest directly from the core SSOT.
 #[must_use]
-pub fn generate_numerical_sites() -> Vec<NumericalSiteManifest> {
-    numerical_registry_v1()
-        .iter()
-        .map(|row| NumericalSiteManifest {
-            site_id: row.site_id.key().to_string(),
-            operations: row.operations.to_string(),
-            domain: row.domain.to_string(),
-            branch_effect: row.branch_effect.to_string(),
-            stable_outcomes: row
-                .stable_outcomes
-                .iter()
-                .map(|outcome| outcome.key().to_string())
-                .collect(),
-            bound_status: row.bound_status.key().to_string(),
-            boundary_corpus: row.boundary_corpus.to_string(),
-            runtime_matrix: row.runtime_matrix.to_string(),
-            fallback_status: row.fallback_status.key().to_string(),
-            legacy_profile: row.legacy_profile.map(str::to_string),
-        })
-        .collect()
+pub fn generate_capability_manifest() -> CapabilityManifestProjection {
+    let manifest = labcolors_core::numerical_capability_manifest_v1();
+    CapabilityManifestProjection {
+        schema_version: manifest.schema_version,
+        coverage: manifest.coverage.key().to_string(),
+        sites: manifest
+            .sites
+            .iter()
+            .map(|site| CapabilitySiteProjection {
+                site_id: site.site_id.key().to_string(),
+                stable_outcomes: site
+                    .stable_outcomes
+                    .iter()
+                    .map(|v| v.key().to_string())
+                    .collect(),
+                compatibility_releases: site
+                    .compatibility_releases
+                    .iter()
+                    .map(|v| v.key().to_string())
+                    .collect(),
+                evidence_classes: site
+                    .evidence_classes
+                    .iter()
+                    .map(|v| v.key().to_string())
+                    .collect(),
+                artifact_ids: site
+                    .artifact_ids
+                    .iter()
+                    .map(|v| v.key().to_string())
+                    .collect(),
+                bound_ids: site.bound_ids.iter().map(|v| v.key().to_string()).collect(),
+                runtime_attestations: site
+                    .runtime_attestations
+                    .iter()
+                    .map(|v| v.key().to_string())
+                    .collect(),
+            })
+            .collect(),
+        checksum: manifest.checksum.hex(),
+    }
 }
 
 /// Манифест пака: версии, дайджест и счётчики. `packDigest` — FNV-1a-32
@@ -566,8 +595,8 @@ pub struct Manifest {
     pub pack_digest: String,
     /// Счётчики по семействам.
     pub counts: Counts,
-    /// Core-owned registry migrated typed-decision numerical sites.
-    pub numerical_sites: Vec<NumericalSiteManifest>,
+    /// Canonical numerical capability manifest (core registry projection).
+    pub numerical_capabilities: CapabilityManifestProjection,
 }
 
 /// Весь пак в памяти. `serialize_family` даёт КАНОНИЧЕСКИЕ байты каждого файла
@@ -637,7 +666,7 @@ impl Pack {
             core_version: core_version().to_string(),
             pack_digest: self.digest(),
             counts: self.counts(),
-            numerical_sites: generate_numerical_sites(),
+            numerical_capabilities: generate_capability_manifest(),
         }
     }
 
@@ -719,18 +748,25 @@ mod tests {
         let manifest = Pack::generate()
             .expect("canonical pack generation")
             .manifest();
-        assert_eq!(manifest.numerical_sites, generate_numerical_sites());
         assert_eq!(
-            manifest.numerical_sites.len(),
+            manifest.numerical_capabilities,
+            generate_capability_manifest()
+        );
+        assert_eq!(
+            manifest.numerical_capabilities.sites.len(),
             numerical_registry_v1().len()
         );
-        assert!(manifest.numerical_sites.iter().any(|site| {
+        assert!(manifest.numerical_capabilities.sites.iter().any(|site| {
             site.site_id == "glow-target-or-maximum-v1"
                 && site.stable_outcomes == ["bit-exact", "indeterminate"]
-                && site.bound_status == "unavailable"
-                && site.fallback_status == "none"
-                && site.legacy_profile.as_deref() == Some("legacy-platform-dependent-v1")
+                && site.compatibility_releases == ["glow-cam16-ucs-jprime-target-or-max-v1"]
+                && site.evidence_classes == ["bit-exact"]
+                && site.artifact_ids.is_empty()
+                && site.bound_ids.is_empty()
+                && site.runtime_attestations.is_empty()
         }));
+        // Checksum canonical projection: 8 hex, независимо пересчитываем в core.
+        assert_eq!(manifest.numerical_capabilities.checksum.len(), 8);
     }
 
     #[test]
