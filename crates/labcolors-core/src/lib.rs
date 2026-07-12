@@ -101,9 +101,11 @@ pub use material::{
     solve_material_alpha_hex, worst_contrast_encoded,
 };
 pub use numerics::{
-    AtLeastDecisionV1, DecisionGuaranteeV1, NumericalBoundStatusV1, NumericalDecisionV1,
-    NumericalFallbackStatusV1, NumericalIndeterminacyV1, NumericalSiteIdV1, NumericalSiteRecordV1,
-    OutwardIntervalV1, StableNumericalOutcomeV1, classify_at_least_v1, numerical_registry_v1,
+    AtLeastDecisionV1, CompiledNumericalPlanV1, DecisionGuaranteeV1, NumericalBoundStatusV1,
+    NumericalDecisionV1, NumericalFallbackStatusV1, NumericalIndeterminacyV1,
+    NumericalProfileRequestV1, NumericalSiteIdV1, NumericalSiteRecordV1, OutwardIntervalV1,
+    PlannedDecisionMethodV1, SoundIntervalEvidenceV1, StableNumericalOutcomeV1,
+    classify_at_least_v1, numerical_registry_v1,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor,

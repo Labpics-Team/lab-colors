@@ -83,6 +83,20 @@
 | `soft_clamp` / `soft_clamp_inv` | `lpc::tests::soft_clamp_boundaries_are_exact`, `..._matches_reference_bisection` | внутренняя тождественность |
 | `y_hk_analytic` (обратный `grey_j`) | `lpc::tests::y_hk_analytic_matches_bisection_on_grid` | внутренняя тождественность |
 
+## Численные решения — `numerics.rs` (#292)
+
+Три уровня контракта разделены типами: package capability (registry-строка) ≠
+compiled invocation plan (`CompiledNumericalPlanV1`) ≠ result evidence
+(запечатанный `SoundIntervalEvidenceV1`). Новой математики модуль не вводит —
+проверяется невозможность повышения caller-created значений до доказательств.
+
+| инвариант | чем верифицирован | оракул |
+|---|---|---|
+| план компилируется fail-closed из machine-readable строки: stable = [exact, refuse], legacy требует объявленного профиля | `numerics::tests::stable_plan_for_glow_site_admits_only_exact_check_and_refusal`, `legacy_plan_requires_a_declared_compatibility_profile` | внутренняя тождественность |
+| caller-created интервал не достигает determinate-гарантии: классификатор принимает только запечатанное свидетельство (конструктор приватен) | сигнатура `classify_at_least_v1` + `interval_evidence_carries_its_provenance_into_the_certificate` | тип-уровневая (компилятор) + внутренняя тождественность |
+| граница `>=` на интервале: Meets/Below/Overlap без tie-break, exact-касание цели детерминировано | `numerics::tests::interval_overlap_never_becomes_a_tie_break` | внутренняя тождественность |
+| production-ветви glow исполняются строго по плану (порядок методов — из registry, не из рукописного match) | glow-набор (32 теста) + пробная мутация плана (5 падений glow, 1 numerics) | дифференциальный (замороженное glow-поведение) |
+
 ## JS-дубликат — `packages/colors/effective-bg.js`
 
 | формула | чем верифицирована | оракул |

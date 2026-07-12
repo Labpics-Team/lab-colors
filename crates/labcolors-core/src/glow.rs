@@ -50,7 +50,8 @@
 
 use crate::lcs::LcsColor;
 use crate::numerics::{
-    DecisionGuaranteeV1, NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1,
+    CompiledNumericalPlanV1, DecisionGuaranteeV1, NumericalDecisionV1, NumericalIndeterminacyV1,
+    NumericalProfileRequestV1, NumericalSiteIdV1, PlannedDecisionMethodV1,
 };
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::{
@@ -910,55 +911,80 @@ pub fn solve_screen_alpha_for_dj(
     profile: GlowDecisionProfileV1,
     vc: &ViewingConditions,
 ) -> Result<NumericalDecisionV1<GlowSolve>, String> {
-    match profile {
+    // #292: порядок ветвей задаёт не рукописный match, а план, скомпилированный
+    // fail-closed из machine-readable capability-строки site — «что объявлено»
+    // и «что исполняется» связаны одним источником истины.
+    let request = match profile {
         GlowDecisionProfileV1::LegacyPlatformDependentV1 => {
-            return Ok(NumericalDecisionV1::Determinate {
-                value: solve_screen_alpha_for_dj_legacy(glow_tint_hex, bg_hex, target_dj, vc)?,
-                guarantee: DecisionGuaranteeV1::LegacyPlatformDependentV1,
-            });
+            NumericalProfileRequestV1::LegacyPlatformDependentV1
         }
-        GlowDecisionProfileV1::StableV1 => {}
+        GlowDecisionProfileV1::StableV1 => NumericalProfileRequestV1::StableExactV1,
+    };
+    let plan = CompiledNumericalPlanV1::compile(NumericalSiteIdV1::GlowTargetOrMaximumV1, request)?;
+
+    for method in plan.methods() {
+        match method {
+            PlannedDecisionMethodV1::LegacyPlatformDependentV1 => {
+                return Ok(NumericalDecisionV1::Determinate {
+                    value: solve_screen_alpha_for_dj_legacy(glow_tint_hex, bg_hex, target_dj, vc)?,
+                    guarantee: DecisionGuaranteeV1::LegacyPlatformDependentV1,
+                });
+            }
+            PlannedDecisionMethodV1::ExactFiniteStateV1 => {
+                if !target_dj.is_finite() || target_dj <= 0.0 {
+                    return Err(format!("целевой шаг вне домена: {target_dj}"));
+                }
+                let ScreenPointInputs {
+                    glow: glow_bytes,
+                    background: bg_bytes,
+                    slopes,
+                } = screen_point_inputs(glow_tint_hex, bg_hex)?;
+                if !slopes_are_exact_srgb8_noop(slopes) {
+                    // Точного конечно-состоянийного решения нет — следующий
+                    // метод плана (честный отказ), не молчаливая эвристика.
+                    continue;
+                }
+                // Любая alpha из [0,1] даёт тот же байтовый composite; 0.5 —
+                // канонический средний представитель, а не измеренная величина.
+                let alpha = 0.5;
+                let alpha_css = crate::css_alpha_value(alpha)?;
+                let composite_srgb8 = bg_bytes;
+                return Ok(NumericalDecisionV1::Determinate {
+                    value: GlowSolve {
+                        alpha,
+                        alpha_css: alpha_css.clone(),
+                        target_dj,
+                        achieved_dj: 0.0,
+                        composite_hex: composite_hex(composite_srgb8),
+                        composite_certificate: composite_certificate(
+                            glow_bytes,
+                            bg_bytes,
+                            alpha,
+                            alpha_css,
+                            composite_srgb8,
+                        ),
+                        selection_diagnostic_profile: None,
+                        status: GlowTargetStatus::ExactNoopUnreachable,
+                    },
+                    guarantee: DecisionGuaranteeV1::BitExact,
+                });
+            }
+            PlannedDecisionMethodV1::RefuseIndeterminateV1 => {
+                return Ok(NumericalDecisionV1::Indeterminate {
+                    site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                    evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                });
+            }
+        }
     }
 
-    if !target_dj.is_finite() || target_dj <= 0.0 {
-        return Err(format!("целевой шаг вне домена: {target_dj}"));
-    }
-    let ScreenPointInputs {
-        glow: glow_bytes,
-        background: bg_bytes,
-        slopes,
-    } = screen_point_inputs(glow_tint_hex, bg_hex)?;
-    if slopes_are_exact_srgb8_noop(slopes) {
-        // Любая alpha из [0,1] даёт тот же байтовый composite; 0.5 —
-        // канонический средний представитель, а не измеренная величина.
-        let alpha = 0.5;
-        let alpha_css = crate::css_alpha_value(alpha)?;
-        let composite_srgb8 = bg_bytes;
-        return Ok(NumericalDecisionV1::Determinate {
-            value: GlowSolve {
-                alpha,
-                alpha_css: alpha_css.clone(),
-                target_dj,
-                achieved_dj: 0.0,
-                composite_hex: composite_hex(composite_srgb8),
-                composite_certificate: composite_certificate(
-                    glow_bytes,
-                    bg_bytes,
-                    alpha,
-                    alpha_css,
-                    composite_srgb8,
-                ),
-                selection_diagnostic_profile: None,
-                status: GlowTargetStatus::ExactNoopUnreachable,
-            },
-            guarantee: DecisionGuaranteeV1::BitExact,
-        });
-    }
-
-    Ok(NumericalDecisionV1::Indeterminate {
-        site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
-        evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
-    })
+    // План непуст по построению и завершается терминальным методом; сюда
+    // попадает только дефект компилятора плана — типизированный отказ, не
+    // паника (функция публична).
+    Err(format!(
+        "план site {} исчерпан без терминального метода",
+        plan.site_id().key()
+    ))
 }
 
 /// Явный зависящий от CAM16/libm legacy-путь target/max.
