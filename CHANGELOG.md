@@ -3,6 +3,45 @@
 Все существенные изменения Lab Colors фиксируются в этом файле. Версии npm и
 Rust различаются, потому что это разные delivery surfaces одного контракта.
 
+## [Unreleased]
+
+Атомарная numerical-decision граница (#292). Wire/npm JSON, эмитируемые цвета,
+config fingerprint и `packDigest` conformance-векторов НЕ изменились; breaking
+только Rust API. Migration-note: [exact alpha / typed
+Glow](docs/migrations/exact-alpha-glow.md), дополнение ADR-0004 от 2026-07-12.
+
+### Breaking (Rust API)
+
+- Удалены `classify_at_least_v1`, `AtLeastDecisionV1` и `DecisionGuaranteeV1`:
+  сравнительная «сила гарантии» как данные допускала lossy-схлопывание
+  взаимоисключающих исходов.
+- `NumericalDecisionV1<T>` стал атомарным: `Determinate { evidence }` |
+  `Compatibility { release_id, provenance }` | `Indeterminate { evidence }`.
+  Legacy-исход — отдельный `Compatibility` с registered release
+  `glow-cam16-ucs-jprime-target-or-max-v1`, а не determinate со слабой
+  гарантией; stable outcome с legacy provenance непредставим в типе.
+- `NumericalDecisionEvidenceV1::BitExact` запечатан (приватное поле-печать):
+  внешний код матчит только с `..`, минт выполняет registry-owned конструктор
+  (закреплено compile-fail тестом).
+- `RoleSpec::Glow` несёт typed execution mode
+  (`NumericalExecutionModeV1::StableOnly` |
+  `ExplicitCompatibility { release_id }`); строковый `GlowDecisionProfileV1`
+  остался boundary-адаптером, прежние wire keys (`stable-v1`,
+  `legacy-platform-dependent-v1`, `bit-exact`) сохранены byte-for-byte.
+
+### Changed
+
+- Conformance pack 3.0.0: `manifest.numericalSites` заменён typed
+  `numericalCapabilities` — capability manifest ядра (schema v1, coverage
+  `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над canonical
+  length-prefixed preimage). Векторные семейства и `packDigest` не изменились.
+- Release manifest schema v2: секция `numericalSites` заменена на
+  `numericalCapabilities`; release verifier и Swift conformance-тесты
+  пересчитывают capability checksum независимо от Rust-кода.
+- Добавлен компилируемый numerical plan (`compile_numerical_plan_v1`) с
+  канонической invocation identity и checksum — типизированная проекция того,
+  какие site/mode заявляет сборка.
+
 ## [@labpics/colors 0.10.0 / Rust 0.2.0] - 2026-07-11
 
 Breaking release относительно `@labpics/colors` 0.9.1 / Rust 0.1.0. Пошаговый

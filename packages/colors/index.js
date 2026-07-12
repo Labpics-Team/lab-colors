@@ -6,7 +6,13 @@
 // effective-background resolver. The wasm glue is the generated `pkg/` artifact
 // (built by `npm run build`).
 
-export { default, default as init, initSync, LabColors } from "./pkg/labcolors.js";
+export {
+  default,
+  default as init,
+  initSync,
+  LabColors,
+  numericalCapabilityManifest,
+} from "./pkg/labcolors.js";
 
 export { applyTheme } from "./apply-theme.js";
 export { watchTheme } from "./watch-theme.js";

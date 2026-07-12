@@ -170,9 +170,12 @@ type RoleResult =
   при выборе состояния: для exact no-op он равен `null`, для legacy solve —
   `"cam16-ucs-jprime-li2017-v1"`. `targetStatus` различает эти ветви явно:
   `"exact-noop-unreachable"`, `"legacy-reached"` или
-  `"legacy-unreachable"`. Determinate-форма — union из этих трёх согласованных
-  ветвей: смешать stable/legacy profile, guarantee, selection diagnostic,
-  status и `degraded` на уровне TypeScript невозможно. Outward interval не
+  `"legacy-unreachable"`. Форма `kind: "glow"` — union из этих трёх
+  согласованных ветвей: смешать stable/legacy profile, guarantee, selection
+  diagnostic, status и `degraded` на уровне TypeScript невозможно. Legacy-ветви
+  (`decisionGuarantee: { kind: "legacy-platform-dependent-v1" }`) — это
+  compatibility-результат зарегистрированного алгоритма, а не determinate
+  численная гарантия. Outward interval не
   входит в Glow capability этого релиза. `kind: "glow-indeterminate"`
   означает, что профиль `stable-v1` не выбрал target/max state без sound bound;
   для такой роли CSS-переменные не эмитятся и legacy fallback не применяется.

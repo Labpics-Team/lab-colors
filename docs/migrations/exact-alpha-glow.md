@@ -327,7 +327,8 @@ binary64 identity alpha, каноническую CSS-строку и composite 
    цвета.
 5. Сравнивайте alpha через `alphaCss` или побитный parse round-trip; не
    округляйте её до фиксированного числа знаков.
-6. Используйте conformance pack 2.0.0. Half-tie
+6. Используйте актуальный conformance pack (3.0.0; half-tie введён в 2.0.0
+   и обязателен с тех пор). Half-tie
    `#C0B2FA @ 0.122` над `#000000` обязан дать `#17161F`. Обрабатывайте
    `generate_solve()` / `Pack::generate()` как `Result`: internal core failure
    теперь возвращает `PackGenerationError`, а не fake `unreachable` vector.
@@ -385,3 +386,30 @@ Rollback выполняется парой runtime + config:
   fallback.
 - Ни один из этих профилей не сертифицирует реальный browser color-management,
   HDR/display pipeline, blur, overlap или spatial glow field.
+
+## Migration-note: атомарный `NumericalDecisionV1` и pack 3.0.0 (#292)
+
+Последующий rework численной границы (см. дополнение ADR-0004 от 2026-07-12)
+намеренно НЕ меняет wire: прежние ключи сохранены byte-for-byte как
+boundary-адаптер, поэтому для JS/TS-потребителей и golden-снапшотов миграция
+не требуется.
+
+- `decision_profile` в конфиге по-прежнему принимает ровно `stable-v1` |
+  `legacy-platform-dependent-v1`; строка парсится адаптером
+  `GlowDecisionProfileV1` в typed execution mode
+  (`StableOnly` | `ExplicitCompatibility { release_id }`). Fingerprint конфига
+  не меняется.
+- Wire-ключи гарантий (`bit-exact`, `legacy-platform-dependent-v1`) и форма
+  resolved-ролей не изменились. Legacy-результат внутри ядра теперь атомарный
+  `Compatibility` с registered release
+  `glow-cam16-ucs-jprime-target-or-max-v1` — он никогда не был и не становится
+  determinate; адаптер лишь проецирует его в прежний wire-ключ.
+- Breaking только Rust API: удалены `classify_at_least_v1`,
+  `AtLeastDecisionV1`, `DecisionGuaranteeV1`; сопоставление по
+  `NumericalDecisionV1` обязано обрабатывать три варианта
+  (`Determinate`/`Compatibility`/`Indeterminate`), а `BitExact`-evidence
+  матчится только с `..` (sealed).
+- `conformance/vectors/manifest.json` — pack 3.0.0: `numericalSites` заменён
+  typed `numericalCapabilities` (coverage `migrated-sites-only-v1`,
+  FNV-1a-32 drift-checksum). Векторные семейства и `packDigest` не изменились;
+  потребители манифеста должны читать новую секцию.

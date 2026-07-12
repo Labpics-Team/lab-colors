@@ -17,6 +17,7 @@ examine_globs = [
     "crates/labcolors-core/src/cleanliness.rs",
     "crates/labcolors-core/src/glow.rs",
     "crates/labcolors-core/src/material.rs",
+    "crates/labcolors-core/src/numerical_plan.rs",
     "crates/labcolors-core/src/numerics.rs",
     "crates/labcolors-core/src/pair.rs",
 ]

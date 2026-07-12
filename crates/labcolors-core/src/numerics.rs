@@ -27,6 +27,30 @@
 //!   только как диагностический payload `Indeterminate::IntervalOverlap`;
 //! * незаконная комбинация (stable + legacy provenance и т. п.) непредставима
 //!   типами, а не запрещена соглашением.
+//!
+//! # Гарантии, закреплённые компилятором (#292)
+//!
+//! Прежний числовой классификатор `classify_at_least_v1` (вместе с
+//! `AtLeastDecisionV1`/`DecisionGuaranteeV1`) УДАЛЁН, а не deprecated: «сырое
+//! сравнение с порогом» больше не публичный закон, и его невозможно
+//! импортировать — регрессия ловится компилятором, не code review:
+//!
+//! ```compile_fail
+//! use labcolors_core::classify_at_least_v1;
+//! ```
+//!
+//! BitExact-evidence запечатан registry-owned минтером: печать
+//! [`EvidenceSeal`] несёт приватное поле, поэтому внешний struct-литерал
+//! варианта [`NumericalDecisionEvidenceV1::BitExact`] не компилируется —
+//! внешний код может лишь матчить вариант через `..`:
+//!
+//! ```compile_fail
+//! let forged = labcolors_core::NumericalDecisionEvidenceV1::BitExact {
+//!     reference_profile_id: labcolors_core::ReferenceProfileIdV1::EncodedSrgb8ScreenV1,
+//!     // Печать не изготовить снаружи: поле `_private` приватно (E0451).
+//!     _seal: labcolors_core::numerics::EvidenceSeal { _private: () },
+//! };
+//! ```
 
 /// Stable outcomes admitted for a migrated branch-sensitive site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

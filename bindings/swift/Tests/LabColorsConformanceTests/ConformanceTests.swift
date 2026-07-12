@@ -101,6 +101,86 @@ final class ConformanceTests: XCTestCase {
             "версия ядра биндинга разошлась с манифестом пака")
     }
 
+    // MARK: - Capability manifest (численные решения)
+
+    /// FNV-1a-32 (как `packDigest`) — независимая Swift-копия примитива ядра,
+    /// чтобы пересчёт checksum не опирался на проверяемый Rust-код.
+    func fnv1a32(_ bytes: [UInt8]) -> UInt32 {
+        var hash: UInt32 = 0x811c_9dc5
+        for byte in bytes {
+            hash ^= UInt32(byte)
+            hash = hash &* 0x0100_0193
+        }
+        return hash
+    }
+
+    /// Независимый пересчёт drift-checksum capability manifest по canonical
+    /// preimage ядра (labcolors-core/src/numerics.rs): length-prefixed (u32 LE
+    /// длина + байты) домен-сепаратор, u32 LE schema version, coverage key,
+    /// u32 LE счётчик sites (сортировка по сырым UTF-8 байтам siteId), на site —
+    /// siteId и шесть списков ключей; каждый список: u32 LE count (явный и для
+    /// пустого) + отсортированные length-prefixed ключи. Кодирование повторено
+    /// здесь НАМЕРЕННО: тест — оракул, он не должен переиспользовать encoder,
+    /// который проверяет.
+    func testCapabilityManifestChecksumRecomputes() throws {
+        let manifest = try load("manifest.json", as: Manifest.self)
+        let caps = manifest.numericalCapabilities
+        XCTAssertEqual(caps.coverage, "migrated-sites-only-v1", "coverage capability manifest")
+        XCTAssertFalse(caps.sites.isEmpty, "capability manifest без единого migrated site пуст")
+        for site in caps.sites {
+            XCTAssertFalse(site.siteId.isEmpty, "siteId обязан быть непустым")
+            XCTAssertFalse(
+                site.stableOutcomes.isEmpty,
+                "site \(site.siteId) обязан объявлять lawful stable outcome")
+        }
+
+        var preimage: [UInt8] = []
+        func pushU32LE(_ value: UInt32) {
+            preimage.append(contentsOf: [
+                UInt8(truncatingIfNeeded: value),
+                UInt8(truncatingIfNeeded: value >> 8),
+                UInt8(truncatingIfNeeded: value >> 16),
+                UInt8(truncatingIfNeeded: value >> 24),
+            ])
+        }
+        func pushLenPrefixed(_ key: String) {
+            let bytes = Array(key.utf8)
+            pushU32LE(UInt32(bytes.count))
+            preimage.append(contentsOf: bytes)
+        }
+        // Сортировка по сырым UTF-8 байтам (эквивалент sort_unstable по &[u8]
+        // в ядре), а не по Unicode-коллации String.
+        func pushSortedKeyList(_ keys: [String]) {
+            let sorted = keys.sorted {
+                Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8))
+            }
+            pushU32LE(UInt32(sorted.count))
+            for key in sorted { pushLenPrefixed(key) }
+        }
+
+        pushLenPrefixed("labcolors.numerical-capability.v1")
+        pushU32LE(caps.schemaVersion)
+        pushLenPrefixed(caps.coverage)
+        let sites = caps.sites.sorted {
+            Array($0.siteId.utf8).lexicographicallyPrecedes(Array($1.siteId.utf8))
+        }
+        pushU32LE(UInt32(sites.count))
+        for site in sites {
+            pushLenPrefixed(site.siteId)
+            pushSortedKeyList(site.stableOutcomes)
+            pushSortedKeyList(site.compatibilityReleases)
+            pushSortedKeyList(site.evidenceClasses)
+            pushSortedKeyList(site.artifactIds)
+            pushSortedKeyList(site.boundIds)
+            pushSortedKeyList(site.runtimeAttestations)
+        }
+
+        let recomputed = String(format: "%08x", fnv1a32(preimage))
+        XCTAssertEqual(
+            recomputed, caps.checksum,
+            "checksum capability manifest не сходится с независимым Swift-пересчётом")
+    }
+
     // MARK: - Семейство: контрасты
 
     func testContrasts() throws {
@@ -347,6 +427,29 @@ struct Manifest: Codable {
     let packVersion: String
     let coreVersion: String
     let packDigest: String
+    let numericalCapabilities: CapabilityManifest
+}
+
+/// Зеркало capability manifest (pack 3.0.0): typed-проекция core registry
+/// численных решений. Заменяет прозаический `numericalSites` из pack 2.x —
+/// биндинг сверяет typed rows и drift-checksum, а не research-тексты.
+struct CapabilityManifest: Codable {
+    let schemaVersion: UInt32
+    let coverage: String
+    let sites: [CapabilitySite]
+    let checksum: String
+}
+
+/// Одна capability-строка site. Пустой список — явная часть контракта
+/// («evidence отсутствует»), а не пропуск поля.
+struct CapabilitySite: Codable {
+    let siteId: String
+    let stableOutcomes: [String]
+    let compatibilityReleases: [String]
+    let evidenceClasses: [String]
+    let artifactIds: [String]
+    let boundIds: [String]
+    let runtimeAttestations: [String]
 }
 
 struct ContrastVec: Codable {

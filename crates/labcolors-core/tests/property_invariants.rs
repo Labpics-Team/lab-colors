@@ -32,8 +32,8 @@
 //! как characterization реального поведения (не одобрение — фиксация факта для владельца).
 
 use labcolors_core::{
-    BgInput, Brand, DefectContext, Floor, LadderPosition, LadderSource, NeutralAnchors,
-    NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe,
+    BgInput, Brand, DefectContext, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource,
+    NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe,
     SentimentCategory, SentimentsConfig, Theme, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset,
     ViewingConditions, muddiness_in_context, muddiness_oklch, oklch_from_hex, p3_from_hex,
     resolve_named_set, srgb_encoded_from_hex,
@@ -244,7 +244,12 @@ fn muddiness_cool_hue_is_not_monotone_finding() {
 /// Небольшая витрина ролей с легальными полами: сильный/слабый текст + цветной
 /// бренд-лейбл (все несут пол через `RoleSpec::legal_floor`).
 fn legality_table() -> labcolors_core::NamedRoleTable {
-    let cfg = base_config((0x30, 0x6A, 0xE0), (0x30, 0x6A, 0xE0), (0.968, 0.6, 0.3));
+    let cfg = base_config(
+        (0x30, 0x6A, 0xE0),
+        (0x30, 0x6A, 0xE0),
+        (0.968, 0.6, 0.3),
+        GlowDecisionProfileV1::StableV1,
+    );
     cfg.compile_named_role_table()
         .expect("витрина законности обязана компилироваться")
 }
@@ -291,11 +296,14 @@ fn every_floored_role_clears_its_wcag_floor_on_quantised_bytes() {
 
 /// Построить ВАЛИДНЫЙ конфиг из варьируемых скаляров (структура/имена фиксированы,
 /// оттенки бренда/семьи и текстовые доли — генерируемые). `hue_override_deg` задан
-/// явно ⇒ ахроматический якорь никогда не роняет компиляцию.
+/// явно ⇒ ахроматический якорь никогда не роняет компиляцию. `glow_profile` —
+/// обязательный numerical-decision профиль Glow-роли (#292): implicit legacy
+/// непредставим, поэтому генератор всегда выбирает один из двух явных.
 fn base_config(
     brand: (u8, u8, u8),
     family: (u8, u8, u8),
     fractions: (f64, f64, f64),
+    glow_profile: GlowDecisionProfileV1,
 ) -> ThemeConfig {
     let (br, bg, bb) = brand;
     let (fr, fg, fb) = family;
@@ -398,6 +406,17 @@ fn base_config(
                     hue: Some(LadderSource::Brand),
                 },
             ),
+            // Glow-роль (#292): единственный носитель numerical execution mode
+            // в конфиге — включена в генератор, чтобы property-законы (тотальность,
+            // детерминизм, план-проекция) покрывали и этот рецепт.
+            (
+                "brand-glow".to_string(),
+                RoleRecipe::Glow {
+                    source: LadderSource::Brand,
+                    step: labcolors_core::glow::GlowStep::Base,
+                    decision_profile: glow_profile,
+                },
+            ),
         ],
         // Цель алиаса ОБЯЗАНА существовать среди ролей (валидатор это проверяет).
         vec![("ring".to_string(), "brand-fill".to_string())],
@@ -406,13 +425,23 @@ fn base_config(
 
 /// Стратегия произвольного ВАЛИДНОГО конфига: доли строго в (0,1], убывающая
 /// текстовая лестница не требуется законом (иерархию движок сам сжимает).
+/// Glow-профиль — случайный из двух явных (#292): оба mode равноправно валидны,
+/// property-законы обязаны держаться для каждого.
 fn arb_config() -> impl Strategy<Value = ThemeConfig> {
     (
         (any::<u8>(), any::<u8>(), any::<u8>()),
         (any::<u8>(), any::<u8>(), any::<u8>()),
         (0.5f64..=1.0, 0.2f64..=0.7, 0.05f64..=0.4),
+        any::<bool>(),
     )
-        .prop_map(|(brand, family, fr)| base_config(brand, family, fr))
+        .prop_map(|(brand, family, fr, stable_glow)| {
+            let profile = if stable_glow {
+                GlowDecisionProfileV1::StableV1
+            } else {
+                GlowDecisionProfileV1::LegacyPlatformDependentV1
+            };
+            base_config(brand, family, fr, profile)
+        })
 }
 
 #[test]
@@ -498,6 +527,68 @@ fn resolve_named_set_is_deterministic() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// СВОЙСТВО 4b — numerical plan (#292): canonical-проекция инвариантна к
+// перестановке деклараций, а resolve-порядок entries() ей не подчинён.
+//
+// КЛАСС: «identity/checksum плана зависит от глобального порядка деклараций»
+// (глобальные индексы запрещены законом плана) и обратный класс — «план
+// переупорядочивает resolve-словарь». БЬЁТ НА МУТАЦИИ: подмена локального
+// ordinal глобальным индексом декларации → перестановка меняет canonical bytes
+// → checksum расходится → RED; сортировка entries() планом → порядок ролей
+// расходится с декларацией → RED.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn numerical_plan_checksum_is_permutation_invariant_and_entries_keep_order() {
+    check(128, arb_config(), |cfg| {
+        let declared: Vec<String> = cfg.roles.iter().map(|(n, _)| n.clone()).collect();
+        let mut permuted_cfg = cfg.clone();
+        permuted_cfg.roles.reverse();
+        let reversed: Vec<String> = permuted_cfg.roles.iter().map(|(n, _)| n.clone()).collect();
+
+        let table = cfg.compile_named_role_table().expect("валидный конфиг");
+        let permuted = permuted_cfg
+            .compile_named_role_table()
+            .expect("перестановка ролей не ломает валидность");
+
+        // resolve-порядок entries() = порядок деклараций КАЖДОЙ стороны:
+        // план не переупорядочивает словарь клиента.
+        let names = |t: &labcolors_core::NamedRoleTable| {
+            t.entries()
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect::<Vec<String>>()
+        };
+        prop_assert_eq!(
+            names(&table),
+            declared,
+            "entries() потерял порядок деклараций"
+        );
+        prop_assert_eq!(
+            names(&permuted),
+            reversed,
+            "entries() переставленной таблицы потерял свой порядок"
+        );
+
+        // План-checksum одинаков: canonical-проекция сортируется по identity
+        // bytes, а identity не содержит глобальных declaration-индексов.
+        let plan = table.numerical_plan_v1().expect("план компилируется");
+        let plan_permuted = permuted
+            .numerical_plan_v1()
+            .expect("план переставленной таблицы компилируется");
+        prop_assert_eq!(
+            plan.checksum,
+            plan_permuted.checksum,
+            "перестановка деклараций изменила план-checksum"
+        );
+        // Проекция непуста: в генераторе всегда есть Glow-роль — свойство не
+        // выполняется вакуумно.
+        prop_assert_eq!(plan.invocations().len(), 1);
+        Ok(())
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // СВОЙСТВО 5 — сохранение оттенка семьи цветным лейблом (M1)
 //
 // КЛАСС: «цветной лейбл дрейфует из своей цветовой семьи / стерильно сереет».
@@ -512,7 +603,12 @@ fn resolve_named_set_is_deterministic() {
 fn hued_brand_label_preserves_family_hue_where_it_has_chroma() {
     // Живой насыщенный бренд (яркий синий), лейбл держит его оттенок.
     let brand = (0x0Au8, 0x54u8, 0xF0u8);
-    let cfg = base_config(brand, brand, (0.968, 0.6, 0.3));
+    let cfg = base_config(
+        brand,
+        brand,
+        (0.968, 0.6, 0.3),
+        GlowDecisionProfileV1::StableV1,
+    );
     let table = cfg.compile_named_role_table().unwrap();
     // Оттенок семьи бренда — из ФАКТИЧЕСКИ построенных светлого и тёмного якорей
     // (та же lighten/darken, что в base_config), берём оба края семьи.

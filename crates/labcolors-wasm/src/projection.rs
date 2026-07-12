@@ -133,9 +133,9 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 field_str(
                     &mut roles,
                     "decisionProfile",
-                    glow_decision_profile_key(g.decision_profile)?,
+                    glow_decision_profile_key(g.decision_outcome.decision_profile())?,
                 );
-                field_glow_decision_guarantee(&mut roles, g.decision_guarantee)?;
+                field_glow_decision_guarantee(&mut roles, &g.decision_outcome)?;
                 field_str(
                     &mut roles,
                     "constraintLayer",
@@ -244,6 +244,79 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
     Ok(out)
 }
 
+/// Проекция canonical numerical capability manifest (#289/#292) в JSON с
+/// camelCase-полями ровно той же формы, что `CapabilityManifestProjection`
+/// conformance-крейта: `schemaVersion, coverage, sites[{siteId, stableOutcomes,
+/// compatibilityReleases, evidenceClasses, artifactIds, boundIds,
+/// runtimeAttestations}], checksum`. Построена ИЗ core SSOT
+/// (`numerical_capability_manifest_v1`), не из рукописной копии registry:
+/// adapter не имеет права держать второй список sites, иначе поверхности
+/// расходятся молча. Пустой список эмитится явным `[]` (пусто = отсутствие
+/// evidence, не implicit support).
+pub fn capability_manifest_json() -> String {
+    let manifest = labcolors_core::numerical_capability_manifest_v1();
+    let mut out = String::with_capacity(384);
+    out.push_str("{\"schemaVersion\":");
+    let _ = write!(out, "{}", manifest.schema_version);
+    out.push_str(",\"coverage\":");
+    push_str_lit(&mut out, manifest.coverage.key());
+    out.push_str(",\"sites\":[");
+    // sites уже отсортированы ядром по UTF-8 bytes site key (инвариант
+    // canonical checksum preimage) — проекция порядок не пересобирает.
+    for (index, site) in manifest.sites.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"siteId\":");
+        push_str_lit(&mut out, site.site_id.key());
+        push_key_array(
+            &mut out,
+            "stableOutcomes",
+            site.stable_outcomes.iter().map(|v| v.key()),
+        );
+        push_key_array(
+            &mut out,
+            "compatibilityReleases",
+            site.compatibility_releases.iter().map(|v| v.key()),
+        );
+        push_key_array(
+            &mut out,
+            "evidenceClasses",
+            site.evidence_classes.iter().map(|v| v.key()),
+        );
+        push_key_array(
+            &mut out,
+            "artifactIds",
+            site.artifact_ids.iter().map(|v| v.key()),
+        );
+        push_key_array(&mut out, "boundIds", site.bound_ids.iter().map(|v| v.key()));
+        push_key_array(
+            &mut out,
+            "runtimeAttestations",
+            site.runtime_attestations.iter().map(|v| v.key()),
+        );
+        out.push('}');
+    }
+    out.push_str("],\"checksum\":");
+    push_str_lit(&mut out, &manifest.checksum.hex());
+    out.push('}');
+    out
+}
+
+/// Массив статических wire-ключей: `,"name":["a","b"]`; пустой — явный `[]`.
+fn push_key_array<'a>(out: &mut String, name: &str, keys: impl Iterator<Item = &'a str>) {
+    out.push_str(",\"");
+    out.push_str(name);
+    out.push_str("\":[");
+    for (index, key) in keys.enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_str_lit(out, key);
+    }
+    out.push(']');
+}
+
 fn unknown_output_variant(type_name: &str) -> BindingError {
     BindingError::Internal {
         reason: format!("проекция: неизвестный вариант {type_name}"),
@@ -251,27 +324,36 @@ fn unknown_output_variant(type_name: &str) -> BindingError {
 }
 
 fn glow_degraded_from_provenance(glow: &GlowColor) -> Result<bool, BindingError> {
+    use labcolors_core::glow::GlowDecisionOutcomeV1;
+    // Атомарный decision_outcome (#292) уже делает незаконную пару
+    // profile × guarantee непредставимой; проекции осталось сверить его с
+    // селекционной диагностикой и статусом цели — они по-прежнему приходят
+    // отдельными полями, и их рассинхрон был бы порчей provenance выше.
     match (
-        glow.decision_profile,
-        glow.decision_guarantee,
+        &glow.decision_outcome,
         glow.selection_diagnostic_profile,
         glow.target_status,
     ) {
         (
-            labcolors_core::GlowDecisionProfileV1::StableV1,
-            labcolors_core::DecisionGuaranteeV1::BitExact,
+            GlowDecisionOutcomeV1::StableExactNoop { .. },
             None,
             labcolors_core::GlowTargetStatus::ExactNoopUnreachable,
         ) => Ok(true),
         (
-            labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1,
-            labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1,
+            GlowDecisionOutcomeV1::Compatibility {
+                release_id:
+                    labcolors_core::NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+                ..
+            },
             Some(labcolors_core::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
             labcolors_core::GlowTargetStatus::LegacyReached,
         ) => Ok(false),
         (
-            labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1,
-            labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1,
+            GlowDecisionOutcomeV1::Compatibility {
+                release_id:
+                    labcolors_core::NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+                ..
+            },
             Some(labcolors_core::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
             labcolors_core::GlowTargetStatus::LegacyUnreachable,
         ) => Ok(true),
@@ -421,24 +503,21 @@ fn material_numerical_profile_key(
 
 /// Поле сертификата определённого решения. Функция владеет всей вложенной
 /// формой контракта, чтобы новый вариант сертификата не усложнял проекцию роли.
+/// Wire-ключ (`bit-exact | legacy-platform-dependent-v1`) берётся из
+/// core-owned `guarantee_wire_key()` — единого migration-адаптера прежнего
+/// guarantee-словаря; enum non-exhaustive, поэтому неизвестный будущий вариант
+/// остаётся честной структурной ошибкой, а не тихим новым ключом на проводе.
 fn field_glow_decision_guarantee(
     out: &mut String,
-    guarantee: labcolors_core::DecisionGuaranteeV1,
+    outcome: &labcolors_core::glow::GlowDecisionOutcomeV1,
 ) -> Result<(), BindingError> {
-    let key = match guarantee {
-        labcolors_core::DecisionGuaranteeV1::BitExact => "bit-exact",
-        labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1 => {
-            "legacy-platform-dependent-v1"
-        }
-        labcolors_core::DecisionGuaranteeV1::OutwardIntervalV1(_) => {
-            return Err(BindingError::Internal {
-                reason: "проекция: неподдерживаемый Glow DecisionGuaranteeV1: outward-interval-v1"
-                    .to_string(),
-            });
-        }
+    use labcolors_core::glow::GlowDecisionOutcomeV1;
+    let key = match outcome {
+        GlowDecisionOutcomeV1::StableExactNoop { .. }
+        | GlowDecisionOutcomeV1::Compatibility { .. } => outcome.guarantee_wire_key(),
         _ => {
             return Err(BindingError::Internal {
-                reason: "проекция: неподдерживаемый Glow DecisionGuaranteeV1".to_string(),
+                reason: "проекция: неподдерживаемый GlowDecisionOutcomeV1".to_string(),
             });
         }
     };
@@ -638,6 +717,36 @@ mod tests {
         RoleOutcome, SolvedColor,
     };
 
+    /// Единственный конструируемый снаружи ядра атомарный legacy-исход:
+    /// registered release + provenance-маркер (оба публичны by design).
+    fn legacy_outcome() -> labcolors_core::glow::GlowDecisionOutcomeV1 {
+        labcolors_core::glow::GlowDecisionOutcomeV1::Compatibility {
+            release_id:
+                labcolors_core::NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+            provenance: labcolors_core::LegacyPlatformDependentV1,
+        }
+    }
+
+    /// Stable exact no-op из НАСТОЯЩЕГО core-решения: evidence запечатан
+    /// (приватная печать), поэтому тест берёт его у солвера на белом фоне —
+    /// там screen-слой побайтно no-op для любой alpha, решение Determinate.
+    fn stable_exact_noop_outcome() -> labcolors_core::glow::GlowDecisionOutcomeV1 {
+        let decision = labcolors_core::solve_screen_alpha_for_dj(
+            "#FFFFFF",
+            "#FFFFFF",
+            2.3006,
+            labcolors_core::NumericalExecutionModeV1::StableOnly,
+            &labcolors_core::ViewingConditions::srgb(),
+        )
+        .expect("stable solve на белом обязан вернуть решение");
+        match decision {
+            labcolors_core::NumericalDecisionV1::Determinate { evidence, .. } => {
+                labcolors_core::glow::GlowDecisionOutcomeV1::StableExactNoop { evidence }
+            }
+            other => panic!("белый screen-noop обязан быть Determinate, получено {other:?}"),
+        }
+    }
+
     fn color_entry(key: &str) -> RoleEntry {
         RoleEntry {
             role_key: key.to_string(),
@@ -694,10 +803,7 @@ mod tests {
                         selection_diagnostic_profile: Some(
                             labcolors_core::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
                         ),
-                        decision_profile:
-                            labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1,
-                        decision_guarantee:
-                            labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1,
+                        decision_outcome: legacy_outcome(),
                         constraint_layer: labcolors_core::GlowConstraintLayer::Halo,
                         target_status: labcolors_core::GlowTargetStatus::LegacyReached,
                         halo_composite_hex: "#13151B".to_string(),
@@ -810,22 +916,14 @@ mod tests {
         let numerical_profile = labcolors_core::MaterialNumericalProfileV1::EncodedSrgbByteScaleAffinePlatformBinary64PowfV1;
 
         let mut exact_decision = String::new();
-        field_glow_decision_guarantee(
-            &mut exact_decision,
-            labcolors_core::DecisionGuaranteeV1::BitExact,
-        )
-        .unwrap();
+        field_glow_decision_guarantee(&mut exact_decision, &stable_exact_noop_outcome()).unwrap();
         assert_eq!(
             exact_decision,
             ",\"decisionGuarantee\":{\"kind\":\"bit-exact\"}"
         );
 
         let mut legacy_decision = String::new();
-        field_glow_decision_guarantee(
-            &mut legacy_decision,
-            labcolors_core::DecisionGuaranteeV1::LegacyPlatformDependentV1,
-        )
-        .unwrap();
+        field_glow_decision_guarantee(&mut legacy_decision, &legacy_outcome()).unwrap();
         assert_eq!(
             legacy_decision,
             ",\"decisionGuarantee\":{\"kind\":\"legacy-platform-dependent-v1\"}"
@@ -972,18 +1070,112 @@ mod tests {
             "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1"
         );
 
-        let interval = labcolors_core::OutwardIntervalV1::try_new(0.9, 1.1).unwrap();
-        let mut unsupported = String::new();
-        let error = field_glow_decision_guarantee(
-            &mut unsupported,
-            labcolors_core::DecisionGuaranteeV1::OutwardIntervalV1(interval),
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            BindingError::Internal { reason }
-                if reason.contains("неподдерживаемый Glow DecisionGuaranteeV1")
-        ));
+        // Оба конструктивно допустимых атомарных исхода несут ровно прежние
+        // wire-ключи guarantee/profile — словарь на проводе не дрейфует.
+        assert_eq!(
+            stable_exact_noop_outcome().guarantee_wire_key(),
+            "bit-exact"
+        );
+        assert_eq!(
+            stable_exact_noop_outcome().decision_profile(),
+            labcolors_core::GlowDecisionProfileV1::StableV1
+        );
+        assert_eq!(
+            legacy_outcome().guarantee_wire_key(),
+            "legacy-platform-dependent-v1"
+        );
+        assert_eq!(
+            legacy_outcome().decision_profile(),
+            labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1
+        );
+    }
+
+    /// Capability-manifest проекция несёт camelCase-форму conformance-крейта и
+    /// checksum ядра (8 lowercase hex) — additive-поверхность WASM не имеет
+    /// права дрейфовать ни от core SSOT, ни от формы pack-манифеста.
+    #[test]
+    fn capability_manifest_json_mirrors_the_core_ssot() {
+        let value: serde_json::Value =
+            serde_json::from_str(&capability_manifest_json()).expect("валидный JSON");
+        let core = labcolors_core::numerical_capability_manifest_v1();
+
+        assert_eq!(
+            value["schemaVersion"].as_u64(),
+            Some(u64::from(core.schema_version))
+        );
+        assert_eq!(value["coverage"], core.coverage.key());
+        assert_eq!(value["checksum"], core.checksum.hex());
+        let checksum = value["checksum"].as_str().unwrap();
+        assert_eq!(checksum.len(), 8);
+        assert!(
+            checksum
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "checksum обязан быть 8 lowercase hex: {checksum}"
+        );
+
+        let sites = value["sites"].as_array().expect("sites — массив");
+        assert_eq!(sites.len(), core.sites.len());
+        for (projected, expected) in sites.iter().zip(core.sites.iter()) {
+            assert_eq!(projected["siteId"], expected.site_id.key());
+            let list = |name: &str| -> Vec<String> {
+                projected[name]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{name} — массив (пустой = явный [])"))
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_string())
+                    .collect()
+            };
+            let keys = |actual: Vec<String>, expected_keys: Vec<&str>, name: &str| {
+                assert_eq!(actual, expected_keys, "{name}");
+            };
+            keys(
+                list("stableOutcomes"),
+                expected.stable_outcomes.iter().map(|v| v.key()).collect(),
+                "stableOutcomes",
+            );
+            keys(
+                list("compatibilityReleases"),
+                expected
+                    .compatibility_releases
+                    .iter()
+                    .map(|v| v.key())
+                    .collect(),
+                "compatibilityReleases",
+            );
+            keys(
+                list("evidenceClasses"),
+                expected.evidence_classes.iter().map(|v| v.key()).collect(),
+                "evidenceClasses",
+            );
+            keys(
+                list("artifactIds"),
+                expected.artifact_ids.iter().map(|v| v.key()).collect(),
+                "artifactIds",
+            );
+            keys(
+                list("boundIds"),
+                expected.bound_ids.iter().map(|v| v.key()).collect(),
+                "boundIds",
+            );
+            keys(
+                list("runtimeAttestations"),
+                expected
+                    .runtime_attestations
+                    .iter()
+                    .map(|v| v.key())
+                    .collect(),
+                "runtimeAttestations",
+            );
+        }
+
+        // Non-vacuous: мигрированный glow-site реально присутствует.
+        assert!(
+            sites
+                .iter()
+                .any(|site| site["siteId"] == "glow-target-or-maximum-v1"),
+            "manifest обязан покрывать glow site"
+        );
     }
 
     /// Материал (#89) проецируется в контрактные CSS-переменные: `--lab-<role>` =
@@ -1146,7 +1338,10 @@ mod tests {
         let RoleOutcome::Glow(glow) = &mut glow_theme.roles[3].outcome else {
             panic!("fixture pulse must be Glow");
         };
-        glow.decision_profile = labcolors_core::GlowDecisionProfileV1::StableV1;
+        // Незаконная пара profile × guarantee непредставима атомарным
+        // decision_outcome; осталась представимой лишь рассинхронизация
+        // outcome ↔ status/selection — её проекция и обязана отвергать.
+        glow.decision_outcome = stable_exact_noop_outcome();
         let glow_error = resolved_json(&glow_theme).unwrap_err();
         assert!(matches!(
             glow_error,

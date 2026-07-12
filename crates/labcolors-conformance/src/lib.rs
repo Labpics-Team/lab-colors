@@ -27,7 +27,7 @@
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
 //! | `muddiness.json` | hex → замороженная legacy-координата | `cleanliness::muddiness_from_hex` |
-//! | `manifest.json` | версии, дайджест, счётчики, migrated numerical sites | `numerical_registry_v1` |
+//! | `manifest.json` | версии, дайджест, счётчики, capability manifest | `numerical_capability_manifest_v1` |
 //!
 //! `muddiness.json` фиксирует только воспроизводимость исторического числового
 //! API. Это `experimental compatibility proxy`, а не валидированный на
@@ -37,8 +37,10 @@
 //! Версия пака ([`PACK_VERSION`]) привязана к версии ядра ([`core_version`]):
 //! при легитимной смене канона генератор перегенерирует векторы, а
 //! раннер-референс ловит любой дрейф.
-//! `manifest.numericalSites` перечисляет только уже мигрированные typed-decision
-//! sites; полнота аудита исторических `f64` branches остаётся в #291.
+//! `manifest.numericalCapabilities` — это projection core-owned capability
+//! manifest (coverage `migrated-sites-only-v1`): перечислены только уже
+//! мигрированные typed-decision sites; полнота аудита исторических `f64`
+//! branches остаётся в #291.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,7 +48,7 @@ use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
     BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, Theme, ViewingConditions,
-    fnv1a_32, numerical_registry_v1, recheck_against, solve,
+    fnv1a_32, recheck_against, solve,
 };
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
@@ -697,6 +699,7 @@ pub fn to_canonical_json<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use labcolors_core::numerical_registry_v1;
 
     #[test]
     fn unreachable_code_mapping_is_fallible_without_generic_fallback() {
@@ -770,32 +773,37 @@ mod tests {
     }
 
     #[test]
-    fn pack_v2_contains_the_exact_source_over_half_tie() {
+    fn pack_v3_contains_the_exact_source_over_half_tie() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Проверка одновременно убивает вакуумные изменения
-        // версии/счётчика без обязательного доказательного вектора.
+        // соседний LSB. Обязательство унаследовано pack v3 (v3 менял только
+        // схему манифеста: numericalSites → numericalCapabilities, состав
+        // векторных семейств тот же). Проверка одновременно убивает вакуумные
+        // изменения версии/счётчика без обязательного доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
-        assert_eq!(PACK_VERSION, "2.0.0", "half-tie требует pack v2");
+        assert_eq!(PACK_VERSION, "3.0.0", "half-tie обязателен начиная с v2");
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v2 обязан быть сгенерирован breaking-версией ядра"
+            "pack v3 наследует векторные семейства, сгенерированные ядром 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
             7,
-            "alpha-family v2 обязана иметь 7 векторов"
+            "alpha-family v2+ обязана иметь 7 векторов"
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
-        assert_eq!(manifest.counts.total, 82, "состав pack v2 изменился");
+        assert_eq!(
+            manifest.counts.total, 82,
+            "состав векторных семейств изменился"
+        );
 
         let half_tie = pack
             .alpha
             .iter()
             .find(|v| v.tint == "#C0B2FA" && v.alpha == 0.122 && v.bg == "#000000")
-            .expect("в pack v2 нет обязательного half-tie из ADR-0004");
+            .expect("в паке нет обязательного half-tie из ADR-0004");
         assert_eq!(
             half_tie.composite, "#17161F",
             "byte-reference round-half-up должен выбрать верхний LSB"

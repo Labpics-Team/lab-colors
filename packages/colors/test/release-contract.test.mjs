@@ -654,7 +654,9 @@ test("publish artifact validator executes and rejects identity or byte drift", (
     const bytes = readFileSync(tarball);
     const expectedSha = "a".repeat(40);
     const manifest = {
-      schemaVersion: 1,
+      // Release-manifest schema v2: numericalCapabilities вместо numericalSites
+      // (см. verify-package-release.mjs); validator publish-workflow пиняет 2.
+      schemaVersion: 2,
       npm: "0.10.0",
       sourceSha: expectedSha,
       artifacts: {
@@ -717,11 +719,11 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   assert.match(verifier, /GITHUB_OUTPUT/);
   assert.match(verifier, /familySetSha256: sha256\(Buffer\.concat\(familyBuffers\)\)/);
   assert.match(verifier, /sha256: sha256\(familyBuffers\[index\]\)/);
-  assert.match(verifier, /numericalSites: conformance\.numericalSites/);
+  assert.match(verifier, /numericalCapabilities: conformance\.numericalCapabilities/);
   assert.doesNotMatch(
     verifier,
-    /numericalSites:\s*\[\s*\{/,
-    "release manifest must copy the generated conformance registry, not duplicate it",
+    /numericalCapabilities:\s*\{\s*"/,
+    "release manifest must copy the generated capability manifest, not duplicate it",
   );
 });
 
