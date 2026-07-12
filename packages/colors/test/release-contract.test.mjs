@@ -38,6 +38,22 @@ function workflowNodeScript(workflow, stepName) {
     .join("\n");
 }
 
+function workflowRunScript(workflow, stepName) {
+  const step = workflow.indexOf(stepName);
+  assert.ok(step >= 0, `workflow step not found: ${stepName}`);
+  const marker = "\n        run: |\n";
+  const start = workflow.indexOf(marker, step);
+  assert.ok(start >= 0, `run block not found after: ${stepName}`);
+  const bodyStart = start + marker.length;
+  const end = workflow.indexOf("\n      - ", bodyStart);
+  assert.ok(end >= 0, `next workflow step not found after: ${stepName}`);
+  return workflow
+    .slice(bodyStart, end)
+    .split("\n")
+    .map((line) => line.startsWith("          ") ? line.slice(10) : line)
+    .join("\n");
+}
+
 function assertCheckoutCredentialsAreEphemeral(workflow, name) {
   const lines = workflow.split("\n");
   const checkouts = lines
@@ -303,6 +319,189 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
       exactNode < validated &&
       validated < token,
     "network toolchain setup must happen only after canonical-run and artifact gates",
+  );
+});
+
+test("tag ancestry guard works after credential-free checkout and rejects non-ancestors", () => {
+  const publish = read(".github", "workflows", "publish.yml");
+  const fullGuard = workflowRunScript(
+    publish,
+    "name: guard — exact tag SHA is in origin/main",
+  );
+  assert.doesNotMatch(
+    fullGuard,
+    /\bgit\s+fetch\b/u,
+    "the credential-free ancestry step must not perform any private-repo git fetch",
+  );
+  assert.match(
+    publish,
+    /      - name: guard — exact tag SHA is in origin\/main\n        env:\n          GH_READ_TOKEN: \$\{\{ github\.token \}\}\n        run: \|/,
+    "the ancestry step must receive the job-scoped read token directly",
+  );
+  assert.match(
+    publish,
+    /checked_out="\$\(git rev-parse HEAD\)"[\s\S]*?"\$checked_out" != "\$GITHUB_SHA"/,
+    "the API ancestry proof must not replace exact checkout identity",
+  );
+  assert.match(
+    publish,
+    /fetch-depth: 1[\s\S]*?persist-credentials: false/,
+    "publish checkout should fetch only the tagged commit and persist no credential",
+  );
+
+  const guard = workflowNodeScript(
+    publish,
+    "name: guard — exact tag SHA is in origin/main",
+  );
+  const expectedSha = "a".repeat(40);
+  const fetchHarness = `
+    const fixture = JSON.parse(process.env.ANCESTRY_FIXTURE);
+    global.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const expectedPath =
+        "/repos/Labpics-Team/lab-colors/compare/${expectedSha}...main";
+      if (url.pathname !== expectedPath) {
+        return new Response("unexpected API path", { status: 404 });
+      }
+      if (init?.headers?.Authorization !== "Bearer test-token") {
+        return new Response("missing job-scoped token", { status: 401 });
+      }
+      if (
+        init.headers.Accept !== "application/vnd.github+json" ||
+        init.headers["X-GitHub-Api-Version"] !== "2022-11-28"
+      ) {
+        return new Response("missing pinned GitHub API contract", { status: 400 });
+      }
+      return new Response(JSON.stringify(fixture.body), {
+        status: fixture.httpStatus,
+        headers: { "content-type": "application/json" },
+      });
+    };
+  `;
+  const execute = (body, { httpStatus = 200, unset = [], overrides = {} } = {}) => {
+    const env = {
+      ...process.env,
+      ANCESTRY_FIXTURE: JSON.stringify({ body, httpStatus }),
+      GH_READ_TOKEN: "test-token",
+      GITHUB_API_URL: "https://api.github.test",
+      GITHUB_REPOSITORY: "Labpics-Team/lab-colors",
+      GITHUB_SHA: expectedSha,
+      ...overrides,
+    };
+    for (const key of unset) delete env[key];
+    return execFileSync(process.execPath, ["-e", `${fetchHarness}\n${guard}`], {
+      env,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  };
+
+  const shellFixture = mkdtempSync(join(tmpdir(), "labcolors-tag-head-"));
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: shellFixture });
+    writeFileSync(join(shellFixture, "fixture"), "exact tag checkout\n");
+    execFileSync("git", ["add", "fixture"], { cwd: shellFixture });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Release Guard Test",
+        "-c",
+        "user.email=release-guard@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+      ],
+      { cwd: shellFixture },
+    );
+    const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: shellFixture,
+      encoding: "utf8",
+    }).trim();
+    const fakeBin = join(shellFixture, "bin");
+    mkdirSync(fakeBin);
+    const fakeNode = join(fakeBin, "node");
+    writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeNode, 0o755);
+    const runShellGuard = (sha) =>
+      execFileSync("/bin/bash", ["-euo", "pipefail", "-c", fullGuard], {
+        cwd: shellFixture,
+        env: {
+          ...process.env,
+          GITHUB_SHA: sha,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+    assert.doesNotThrow(() => runShellGuard(checkedOutSha));
+    assert.throws(() => runShellGuard("b".repeat(40)), /Command failed/u);
+  } finally {
+    rmSync(shellFixture, { recursive: true, force: true });
+  }
+
+  const acceptedStatuses = ["identical", "ahead"];
+  assert.equal(acceptedStatuses.length, 2, "anti-vacuum: both legal compare states are covered");
+  for (const status of acceptedStatuses) {
+    assert.match(
+      execute({
+        status,
+        base_commit: { sha: expectedSha },
+        merge_base_commit: { sha: expectedSha },
+      }),
+      /verified tag commit is in main history/u,
+    );
+  }
+
+  const rejected = [
+    {
+      status: "behind",
+      base_commit: { sha: expectedSha },
+      merge_base_commit: { sha: expectedSha },
+    },
+    {
+      status: "diverged",
+      base_commit: { sha: expectedSha },
+      merge_base_commit: { sha: "b".repeat(40) },
+    },
+    {
+      status: "ahead",
+      base_commit: { sha: expectedSha },
+      merge_base_commit: { sha: "b".repeat(40) },
+    },
+    {
+      status: "ahead",
+      base_commit: { sha: "b".repeat(40) },
+      merge_base_commit: { sha: expectedSha },
+    },
+  ];
+  assert.equal(rejected.length, 4, "anti-vacuum: ancestry rejection matrix was reduced");
+  for (const fixture of rejected) {
+    assert.throws(() => execute(fixture), /Command failed/u);
+  }
+  assert.throws(
+    () => execute({ message: "forbidden" }, { httpStatus: 403 }),
+    /Command failed/u,
+  );
+  const requiredEnvironment = [
+    "GH_READ_TOKEN",
+    "GITHUB_API_URL",
+    "GITHUB_REPOSITORY",
+    "GITHUB_SHA",
+  ];
+  assert.equal(requiredEnvironment.length, 4, "anti-vacuum: required env matrix shrank");
+  for (const key of requiredEnvironment) {
+    assert.throws(
+      () => execute({}, { unset: [key] }),
+      /Command failed/u,
+      `missing ${key} must fail closed`,
+    );
+  }
+  assert.throws(
+    () => execute({}, { overrides: { GITHUB_SHA: "not-a-sha" } }),
+    /Command failed/u,
+    "malformed tag SHA must fail before the API call",
   );
 });
 
