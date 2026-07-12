@@ -188,7 +188,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
             }
             RoleOutcome::Material(m) => {
                 let guaranteed = material_guaranteed_from_provenance(m)?;
-                // Материал (#89): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
+                // Материал (whitepaper §3.7): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
                 // --lab-<role> несёт солид-канон (= тон, опаковый) как SOLID-
                 // фолбэк; --lab-<role>-01 — тинт со слэш-альфой; --lab-<role>-02 —
                 // база. Тон/01/02 несут один тон (композит T над T есть T).
@@ -1178,10 +1178,12 @@ mod tests {
         );
     }
 
-    /// Материал (#89) проецируется в контрактные CSS-переменные: `--lab-<role>` =
+    /// Материал (whitepaper §3.7) проецируется в контрактные CSS-переменные: `--lab-<role>` =
     /// солид-канон (oklch), `--lab-<role>-01` = тинт (oklch со слэш-альфой),
     /// `--lab-<role>-02` = опаковая база (oklch). Плюс полный набор полей исхода.
-    /// Пин ИМЁН переменных — та поверхность, что потребляет labui-material.css.
+    /// Пин ИМЁН переменных — публичный CSS-контракт сателлитов материала.
+    /// Канонический labui.config.json сейчас НЕ содержит Material-рецептов:
+    /// capability generic/synthetic и закреплена release/projection-фикстурами.
     #[test]
     fn material_projects_two_layer_css_vars() {
         let theme = ResolvedTheme {

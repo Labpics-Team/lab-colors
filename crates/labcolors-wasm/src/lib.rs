@@ -178,7 +178,7 @@ export interface GlowDeterminateRoleBase {
   readonly compositeGuarantee: "bit-exact";
   /** Версионированный алгоритм, построивший анатомию core/halo. */
   readonly layerRecipeProfile: GlowLayerRecipeProfileV1;
-  /** Модель внешнего вида полного результата; обязательна, потому coreAchievedDj вычислен через CAM16. */
+  /** Диагностика изолированных point-слоёв (не whole-effect); обязательна, потому coreAchievedDj вычислен через CAM16. */
   readonly appearanceDiagnosticProfile: GlowDiagnosticProfileV1;
   /** Цель решается только по изолированному halo. */
   readonly constraintLayer: "halo";
@@ -254,7 +254,7 @@ export type GlowRole = GlowDeterminateRole | GlowIndeterminateRole;
 export interface MaterialAlphaGuaranteeBaseV1 {
   /** Byte-scale affine binary64 compositor + original WCAG 2.1 (2018)
    *  `0.03928` EOTF, with a conservative channel envelope and both crossed seam
-   *  sides. Platform-characterized because `powf` is not outward-bounded. */
+   *  sides. Legacy-platform-dependent: `powf` не outward-bounded (attestation — #258). */
   readonly numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1";
 }
 /** Rechecked fail/pass endpoints from a fixed-step binary partition after the
@@ -276,7 +276,7 @@ export type MaterialAlphaGuaranteeV1 =
   | MaterialTransparentEndpointGuaranteeV1
   | MaterialOpaqueEndpointGuaranteeV1;
 
-/** Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) над
+/** Двухслойный материал (kind material; whitepaper §3.7): тинт `01` (с выведенной α) над
  *  опаковой базой `02`, обе — один тон. `vars` несёт --lab-<role> (солид-канон,
  *  опаковый), --lab-<role>-01 (тинт oklch/α) и --lab-<role>-02 (база, опаковая).
  *  Композит-гарантия читаемости пересчитываема из toneHex/alpha (α-граница). */

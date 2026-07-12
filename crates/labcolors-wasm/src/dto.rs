@@ -55,7 +55,7 @@ pub enum RoleOutcome {
     Glow(GlowColor),
     /// Stable Glow terminal result: no sound numerical decision, no CSS vars.
     GlowIndeterminate(GlowIndeterminateColor),
-    /// Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) +
+    /// Двухслойный материал (kind material; whitepaper §3.7): тинт `01` (с выведенной α) +
     /// опаковая база `02`, обе — один тон. `--lab-<role>-01` несёт
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
@@ -90,7 +90,8 @@ pub struct GlowColor {
     pub composite_guarantee: labcolors_core::GlowCompositeGuaranteeV1,
     /// Версионированный алгоритм, построивший анатомию core/halo.
     pub layer_recipe_profile: labcolors_core::GlowLayerRecipeProfileV1,
-    /// Диагностика внешнего вида полного результата Glow. Обязательна, потому что
+    /// Диагностика внешнего вида изолированных point-слоёв Glow (не whole-effect
+    /// сертификат). Обязательна, потому что
     /// `core_achieved_dj` реально вычисляется через CAM16-UCS J′.
     pub appearance_diagnostic_profile: labcolors_core::GlowDiagnosticProfileV1,
     /// Диагностическая модель, участвовавшая именно в выборе target/max. `None` у

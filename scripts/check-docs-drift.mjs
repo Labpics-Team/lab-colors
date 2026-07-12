@@ -25,7 +25,7 @@
  * (scripts/docs-drift.test.mjs, `node --test scripts/docs-drift.test.mjs`).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT, collectInventory } from './naming-inventory.mjs';
@@ -204,6 +204,79 @@ export function fileLawErrors(section, inv) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 9. Клейм-гигиена (#306): ложная provenance и завышенные claims       *
+ * ------------------------------------------------------------------ */
+
+/** Голый `#89` вне hex-цвета: реальный GitHub #89 — закрытый PR про toHex,
+ *  а не owner материала. Hex-цвета (`#89CFF0`, `#8944AB`) не совпадают. */
+export const BARE_MATERIAL_89 = /(^|[^0-9A-Fa-f])#89(?![0-9A-Fa-f])/;
+
+/** Ошибки клеймов одного файла. Правила:
+ *  1) голый `#89` — ложный Material-owner;
+ *  2) «полного результата» рядом с point-Glow evidence — завышение до
+ *     whole-effect (ядро меряет только изолированные point-слои);
+ *  3) `labui-material.css` — несуществующий потребитель;
+ *  4) строчное `platform-characterized` — сильнее фактического статуса
+ *     (typed `PlatformCharacterized` не конструируем до attestation registry
+ *     #258; текущий статус — legacy-platform-dependent). */
+export function claimErrorsInText(rel, text) {
+  const errs = [];
+  if (BARE_MATERIAL_89.test(text)) {
+    errs.push(
+      `${rel}: ложная Material-ссылка «#89» (реальный #89 — PR про toHex); канон — docs/whitepaper.md §3.7`,
+    );
+  }
+  // Контекстное правило: фраза запрещена только рядом с Glow-evidence —
+  // обычное русское словосочетание в другом контексте не флагается.
+  if (text.includes('полного результата') && /[Gg]low/.test(text)) {
+    errs.push(
+      `${rel}: point-Glow описан как «полного результата» — допустимы только изолированные point-замеры`,
+    );
+  }
+  if (text.includes('labui-material.css')) {
+    errs.push(`${rel}: несуществующий потребитель labui-material.css`);
+  }
+  // Дефисная форма в любой капитализации; typed CamelCase-имя
+  // `PlatformCharacterized` (без дефиса) остаётся законным deferred-термином.
+  if (/[Pp]latform-characterized/.test(text)) {
+    errs.push(
+      `${rel}: строчное «platform-characterized» сильнее статуса legacy-platform-dependent (attestation registry — #258)`,
+    );
+  }
+  return errs;
+}
+
+const CLAIM_EXT = /\.(rs|md|mjs|js|ts)$/;
+const CLAIM_SKIP = /node_modules|[\/]pkg[\/]|[\/]target[\/]|[\/]\.git[\/]|mutants\.out/;
+
+function walkClaimFiles(dir, acc) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (CLAIM_SKIP.test(full)) continue;
+    if (entry.isDirectory()) walkClaimFiles(full, acc);
+    else if (CLAIM_EXT.test(entry.name)) acc.push(full);
+  }
+}
+
+/** Скан клеймов по Rust/WASM/TS/докам (анти-вакуум #306: минимум три слоя). */
+export function claimHygieneErrors(root = ROOT) {
+  const errs = [];
+  const files = [];
+  for (const rel of ['crates', 'packages/colors', 'docs']) {
+    const dir = join(root, rel);
+    if (existsSync(dir)) walkClaimFiles(dir, files);
+  }
+  for (const rel of ['README.md', 'conformance/README.md', 'CHANGELOG.md']) {
+    const f = join(root, rel);
+    if (existsSync(f)) files.push(f);
+  }
+  for (const f of files) {
+    errs.push(...claimErrorsInText(f.slice(root.length + 1), readFileSync(f, 'utf8')));
+  }
+  return errs;
+}
+
+/* ------------------------------------------------------------------ *
  * Аудит целиком                                                       *
  * ------------------------------------------------------------------ */
 
@@ -230,6 +303,7 @@ export function auditRepo(root = ROOT) {
   errors.push(...subpathLawErrors(inv.subpaths, section));
   errors.push(...pyScriptErrors(text, inv.pyScripts));
   errors.push(...fileLawErrors(section, inv));
+  errors.push(...claimHygieneErrors(root));
 
   return { errors, inv };
 }

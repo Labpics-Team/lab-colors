@@ -29,7 +29,7 @@ const GREEN_WEIGHT: f64 = 0.7152;
 const BLUE_WEIGHT: f64 = 0.0722;
 
 /// Absolute headroom for the final three weighted binary64 operations in a
-/// luminance interval. The material path is still platform-characterized
+/// luminance interval. The material path is still legacy-platform-dependent
 /// because `powf` has no repository-owned outward error bound.
 const LUMINANCE_RANGE_MARGIN: f64 = 8.0 * f64::EPSILON;
 
@@ -50,7 +50,7 @@ fn linearise(channel: f64) -> f64 {
 /// the right of `0.03928`. Endpoint-only evaluation is therefore invalid. When
 /// the interval crosses the split, both the linear value at the split and the
 /// power-branch value at the first representable input above it participate in
-/// the extrema. `powf` remains platform-characterized rather than soundly
+/// the extrema. `powf` remains legacy-platform-dependent rather than soundly
 /// outward-rounded.
 fn linearised_channel_range(encoded_lo: f64, encoded_hi: f64) -> (f64, f64) {
     debug_assert!(
