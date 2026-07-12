@@ -671,8 +671,10 @@ pub enum RoleSpec {
         tint: crate::ladder::LadderTint,
         /// Контрактная ступень стека.
         step: crate::glow::GlowStep,
-        /// Явный профиль численного решения из клиентского контракта.
-        decision_profile: crate::glow::GlowDecisionProfileV1,
+        /// Typed execution mode compiled invocation (#292). Прежние
+        /// config/wire-ключи `stable-v1 | legacy-platform-dependent-v1` —
+        /// migration adapter на границе, не core-семантика.
+        mode: crate::numerical_plan::NumericalExecutionModeV1,
     },
     /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
     /// перцептивной стороны лейбла в штатной полярности; солид-эмиссия.
@@ -1752,8 +1754,7 @@ pub struct GlowResolved {
     layer_recipe_profile: crate::glow::GlowLayerRecipeProfileV1,
     appearance_diagnostic_profile: crate::glow::GlowDiagnosticProfileV1,
     selection_diagnostic_profile: Option<crate::glow::GlowDiagnosticProfileV1>,
-    decision_profile: crate::glow::GlowDecisionProfileV1,
-    decision_guarantee: crate::numerics::DecisionGuaranteeV1,
+    decision_outcome: crate::glow::GlowDecisionOutcomeV1,
     halo_composite_certificate: crate::glow::GlowCompositeCertificateV1,
     core_composite_certificate: crate::glow::GlowCompositeCertificateV1,
 }
@@ -1797,13 +1798,15 @@ impl GlowResolved {
     pub fn selection_diagnostic_profile(&self) -> Option<crate::glow::GlowDiagnosticProfileV1> {
         self.selection_diagnostic_profile
     }
-    /// Явно выбранный клиентский численный профиль.
+    /// Boundary-проекция прежнего клиентского профиля (migration adapter).
     pub fn decision_profile(&self) -> crate::glow::GlowDecisionProfileV1 {
-        self.decision_profile
+        self.decision_outcome.decision_profile()
     }
-    /// Гарантия семантического решения target/max.
-    pub fn decision_guarantee(&self) -> crate::numerics::DecisionGuaranteeV1 {
-        self.decision_guarantee
+    /// Атомарный исход решения: доказанный stable exact no-op либо явный
+    /// registered compatibility-алгоритм (#292). Незаконные комбинации
+    /// profile × guarantee непредставимы.
+    pub fn decision_outcome(&self) -> crate::glow::GlowDecisionOutcomeV1 {
+        self.decision_outcome
     }
     /// Слой, по которому решалась целевая ступень.
     pub fn constraint_layer(&self) -> crate::glow::GlowConstraintLayer {
@@ -2349,80 +2352,100 @@ fn resolve_spec_in(
             }
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
         }
-        RoleSpec::Glow {
-            tint,
-            step,
-            decision_profile,
-        } => {
+        RoleSpec::Glow { tint, step, mode } => {
             // Свечение: halo = якорь источника по теме; core — пересвет;
             // интенсивность решается под контрактную ступень на фоне резолва.
+            // Typed execution mode исполняется ПРЯМО из compiled spec (#292):
+            // никакого plan lookup или string policy selection в hot path.
             let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
             let bg_hex =
                 crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+            // Общая сборка полного Glow-результата из решённого состояния —
+            // одна для обоих атомарных законных исходов.
+            let assemble = |g: &crate::glow::GlowSolve,
+                            outcome: crate::glow::GlowDecisionOutcomeV1|
+             -> Resolved {
+                let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc)
+                {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                            "generated Glow layer recipe was rejected: {e}"
+                        )));
+                    }
+                };
+                let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
+                    &core_hex,
+                    &bg_hex,
+                    g.alpha(),
+                    vc,
+                ) {
+                    Ok(measurement) => measurement,
+                    Err(e) => {
+                        return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                            "generated Glow core measurement was rejected: {e}"
+                        )));
+                    }
+                };
+                Resolved::Glow(GlowResolved {
+                    core_hex,
+                    halo_hex,
+                    alpha: g.alpha(),
+                    alpha_css: g.alpha_css().to_string(),
+                    target_dj: g.target_dj(),
+                    halo_composite_hex: g.composite_hex().to_string(),
+                    halo_achieved_dj: g.achieved_dj(),
+                    core_composite_hex: core_measurement.composite_hex,
+                    core_achieved_dj: core_measurement.achieved_dj,
+                    target_status: g.status(),
+                    layer_recipe_profile:
+                        crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
+                    appearance_diagnostic_profile:
+                        crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
+                    selection_diagnostic_profile: g.selection_diagnostic_profile(),
+                    decision_outcome: outcome,
+                    halo_composite_certificate: g.composite_certificate().clone(),
+                    core_composite_certificate: core_measurement.certificate,
+                })
+            };
             return match crate::glow::solve_screen_alpha_for_dj(
                 &halo_hex,
                 &bg_hex,
                 step.target_dj(),
-                decision_profile,
+                mode,
                 vc,
             ) {
                 Ok(crate::numerics::NumericalDecisionV1::Indeterminate { site_id, evidence }) => {
                     Resolved::GlowIndeterminate(GlowIndeterminateResolved {
                         source_hex: halo_hex,
                         target_dj: step.target_dj(),
-                        decision_profile,
+                        decision_profile: crate::glow::GlowDecisionProfileV1::from_execution_mode(
+                            mode,
+                        ),
                         site_id,
                         evidence,
                     })
                 }
                 Ok(crate::numerics::NumericalDecisionV1::Determinate {
                     value: g,
-                    guarantee,
-                }) => {
-                    let (core_hex, halo_hex) =
-                        match crate::glow::glow_layers_from_source(&halo_hex, vc) {
-                            Ok(pair) => pair,
-                            Err(e) => {
-                                return Resolved::Unreachable(Unreachable::InternalInvariant(
-                                    format!("generated Glow layer recipe was rejected: {e}"),
-                                ));
-                            }
-                        };
-                    let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
-                        &core_hex,
-                        &bg_hex,
-                        g.alpha(),
-                        vc,
-                    ) {
-                        Ok(measurement) => measurement,
-                        Err(e) => {
-                            return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
-                                "generated Glow core measurement was rejected: {e}"
-                            )));
-                        }
-                    };
-                    Resolved::Glow(GlowResolved {
-                        core_hex,
-                        halo_hex,
-                        alpha: g.alpha(),
-                        alpha_css: g.alpha_css().to_string(),
-                        target_dj: g.target_dj(),
-                        halo_composite_hex: g.composite_hex().to_string(),
-                        halo_achieved_dj: g.achieved_dj(),
-                        core_composite_hex: core_measurement.composite_hex,
-                        core_achieved_dj: core_measurement.achieved_dj,
-                        target_status: g.status(),
-                        layer_recipe_profile:
-                            crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
-                        appearance_diagnostic_profile:
-                            crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
-                        selection_diagnostic_profile: g.selection_diagnostic_profile(),
-                        decision_profile,
-                        decision_guarantee: guarantee,
-                        halo_composite_certificate: g.composite_certificate().clone(),
-                        core_composite_certificate: core_measurement.certificate,
-                    })
-                }
+                    evidence,
+                    ..
+                }) => assemble(
+                    &g,
+                    crate::glow::GlowDecisionOutcomeV1::StableExactNoop { evidence },
+                ),
+                Ok(crate::numerics::NumericalDecisionV1::Compatibility {
+                    value: g,
+                    release_id,
+                    provenance,
+                    ..
+                }) => assemble(
+                    &g,
+                    crate::glow::GlowDecisionOutcomeV1::Compatibility {
+                        release_id,
+                        provenance,
+                    },
+                ),
                 Err(e) => Resolved::Unreachable(Unreachable::InternalInvariant(format!(
                     "generated Glow solve request was rejected: {e}"
                 ))),
@@ -3796,7 +3819,7 @@ mod tests {
                 RoleSpec::Glow {
                     tint: LadderTint::new([source; 4]).unwrap(),
                     step: crate::glow::GlowStep::Base,
-                    decision_profile,
+                    mode: decision_profile.execution_mode(),
                 },
             )],
             Vec::new(),

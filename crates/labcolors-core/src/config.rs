@@ -1327,7 +1327,10 @@ impl ThemeConfig {
             } => Ok(RoleSpec::Glow {
                 tint: self.compile_ladder_tint(role, source)?,
                 step: *step,
-                decision_profile: *decision_profile,
+                // Migration adapter (#292): прежний клиентский wire-ключ
+                // (`stable-v1 | legacy-platform-dependent-v1`) лоуверится в
+                // generic typed execution mode compiled invocation.
+                mode: decision_profile.execution_mode(),
             }),
             RoleRecipe::Ladder {
                 source,

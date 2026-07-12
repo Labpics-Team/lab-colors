@@ -13,6 +13,7 @@ pub mod lcs;
 pub mod lpc;
 pub mod material;
 pub mod neutral;
+pub mod numerical_plan;
 pub mod numerics;
 pub mod pair;
 pub mod scale;
@@ -100,12 +101,20 @@ pub use material::{
     MaterialSolveErrorV1, Pole, RgbChannelV1, committed_pole_encoded, solve_material_alpha_encoded,
     solve_material_alpha_hex, worst_contrast_encoded,
 };
+pub use numerical_plan::{
+    CompiledInvocationIdV1, CompiledNumericalInvocationV1, CompiledNumericalPlanV1,
+    NUMERICAL_PLAN_SCHEMA_VERSION_V1, NumericalExecutionModeV1, NumericalPlanChecksumV1,
+    NumericalPlanErrorV1, compile_numerical_plan_v1,
+};
 pub use numerics::{
-    AtLeastDecisionV1, CompiledNumericalPlanV1, DecisionGuaranteeV1, NumericalBoundStatusV1,
-    NumericalDecisionV1, NumericalFallbackStatusV1, NumericalIndeterminacyV1,
-    NumericalProfileRequestV1, NumericalSiteIdV1, NumericalSiteRecordV1, OutwardIntervalV1,
-    PlannedDecisionMethodV1, SoundIntervalEvidenceV1, StableNumericalOutcomeV1,
-    classify_at_least_v1, numerical_registry_v1,
+    LegacyPlatformDependentV1, NUMERICAL_CAPABILITY_SCHEMA_VERSION_V1, NumericalArtifactIdV1,
+    NumericalBoundStatusV1, NumericalCapabilityChecksumV1, NumericalCapabilityManifestV1,
+    NumericalCompatibilityReleaseIdV1, NumericalDecisionEvidenceV1, NumericalDecisionV1,
+    NumericalErrorBoundIdV1, NumericalEvidenceClassV1, NumericalFallbackStatusV1,
+    NumericalIndeterminacyV1, NumericalRegistryCoverageV1, NumericalRuntimeAttestationIdV1,
+    NumericalSiteCapabilityV1, NumericalSiteIdV1, NumericalSiteRecordV1, OutwardIntervalV1,
+    ReferenceProfileIdV1, StableNumericalOutcomeV1, numerical_capability_manifest_v1,
+    numerical_registry_v1,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor,

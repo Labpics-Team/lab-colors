@@ -27,7 +27,7 @@ fn bench_glow_alpha(c: &mut Criterion) {
                             black_box(tint),
                             black_box(background),
                             black_box(target),
-                            GlowDecisionProfileV1::LegacyPlatformDependentV1,
+                            GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
                             black_box(&vc),
                         )
                         .expect("benchmark inputs are valid"),
@@ -45,7 +45,7 @@ fn bench_glow_alpha(c: &mut Criterion) {
                             black_box(tint),
                             black_box(background),
                             black_box(target),
-                            GlowDecisionProfileV1::StableV1,
+                            GlowDecisionProfileV1::StableV1.execution_mode(),
                             black_box(&vc),
                         )
                         .expect("benchmark inputs are valid"),
