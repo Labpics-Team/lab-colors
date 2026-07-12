@@ -374,6 +374,31 @@ mod tests {
         assert_ne!(original.checksum, mode_flipped.checksum);
     }
 
+    /// Замороженный byte-вектор canonical encoding (versioned контракт v1).
+    ///
+    /// Encoding — внешний контракт (его независимо переигрывают adapter-оракулы),
+    /// поэтому дрейф даже СЕМАНТИЧЕСКИ эквивалентного поля (например, потеря
+    /// mode-tag, компенсируемая release-ключом) обязан менять schema version,
+    /// а не проходить молча. Вектор сгенерирован из этой же функции при
+    /// заморозке v1; изменение допустимо только вместе с bump
+    /// NUMERICAL_PLAN_SCHEMA_VERSION_V1 и новым вектором.
+    #[test]
+    fn canonical_plan_preimage_is_a_frozen_versioned_vector() {
+        let plan = compile_numerical_plan_v1([
+            (b"a".as_slice(), SITE, stable()),
+            (b"z".as_slice(), SITE, compatibility()),
+        ])
+        .unwrap();
+        let hex: String = plan
+            .canonical_checksum_preimage()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let frozen = "1b0000006c6162636f6c6f72732e6e756d65726963616c2d706c616e2e763101000000020000004f000000210000006c6162636f6c6f72732e6e756d65726963616c2d696e766f636174696f6e2e763101000000010000006119000000676c6f772d7461726765742d6f722d6d6178696d756d2d76310000000019000000676c6f772d7461726765742d6f722d6d6178696d756d2d76310b000000737461626c652d6f6e6c79000000004f000000210000006c6162636f6c6f72732e6e756d65726963616c2d696e766f636174696f6e2e763101000000010000007a19000000676c6f772d7461726765742d6f722d6d6178696d756d2d76310000000019000000676c6f772d7461726765742d6f722d6d6178696d756d2d7631160000006578706c696369742d636f6d7061746962696c69747926000000676c6f772d63616d31362d7563732d6a7072696d652d7461726765742d6f722d6d61782d7631";
+        assert_eq!(hex, frozen, "canonical plan encoding v1 заморожен");
+        assert_eq!(plan.checksum.hex(), "49e5b6b7");
+    }
+
     /// Fail-closed: незарегистрированный release отклоняется типизированно.
     #[test]
     fn unregistered_release_is_a_typed_compile_error() {
