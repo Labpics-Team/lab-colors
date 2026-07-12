@@ -205,9 +205,11 @@ impl GlowDecisionProfileV1 {
     pub fn from_execution_mode(mode: NumericalExecutionModeV1) -> Self {
         match mode {
             NumericalExecutionModeV1::StableOnly => Self::StableV1,
-            NumericalExecutionModeV1::ExplicitCompatibility { .. } => {
-                Self::LegacyPlatformDependentV1
-            }
+            // Точный release: будущий чужой release не должен молча
+            // проецироваться в Glow-профиль — компилятор потребует решения.
+            NumericalExecutionModeV1::ExplicitCompatibility {
+                release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+            } => Self::LegacyPlatformDependentV1,
         }
     }
 }

@@ -247,12 +247,9 @@ pub fn compile_numerical_plan_v1<'a>(
         });
     }
     // Canonical порядок проекции: identity bytes → site key.
-    invocations.sort_unstable_by(|a, b| {
-        a.invocation_id
-            .canonical_bytes()
-            .cmp(&b.invocation_id.canonical_bytes())
-            .then_with(|| a.site_id.key().cmp(b.site_id.key()))
-    });
+    // Ключ считается один раз на invocation (identity bytes уже содержат
+    // site key и ordinal, поэтому вторичный тайбрейкер был бы избыточен).
+    invocations.sort_by_cached_key(|invocation| invocation.invocation_id.canonical_bytes());
     if let Some(pair) = invocations
         .windows(2)
         .find(|pair| pair[0].invocation_id == pair[1].invocation_id)
@@ -399,9 +396,13 @@ mod tests {
         assert_eq!(plan.checksum.hex(), "49e5b6b7");
     }
 
-    /// Fail-closed: незарегистрированный release отклоняется типизированно.
+    /// Единственный зарегистрированный release компилируется; негативная
+    /// ветвь `UnregisteredCompatibilityRelease` сейчас НЕДОСТИЖИМА снаружи
+    /// (в enum один вариант, и он зарегистрирован) — она остаётся vacuous до
+    /// появления второго release/site и обязана получить настоящий негативный
+    /// тест вместе с ним (#291).
     #[test]
-    fn unregistered_release_is_a_typed_compile_error() {
+    fn single_registered_release_compiles_and_negative_branch_is_vacuous_for_now() {
         // Единственный зарегистрированный release Glow — проверяем контракт
         // через registry: сам вызов с ним обязан проходить.
         assert!(compile_numerical_plan_v1([(b"glow".as_slice(), SITE, compatibility())]).is_ok());

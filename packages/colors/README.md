@@ -170,18 +170,18 @@ type RoleResult =
   при выборе состояния: для exact no-op он равен `null`, для legacy solve —
   `"cam16-ucs-jprime-li2017-v1"`. `targetStatus` различает эти ветви явно:
   `"exact-noop-unreachable"`, `"legacy-reached"` или
-  `"legacy-unreachable"`. Форма `kind: "glow"` — union из этих трёх
-  согласованных ветвей: смешать stable/legacy profile, guarantee, selection
-  diagnostic, status и `degraded` на уровне TypeScript невозможно. Legacy-ветви
+  `"legacy-unreachable"`. Форма `kind: "glow"` — объединение этих трёх
+  согласованных ветвей: смешать stable/legacy профиль, гарантию, диагностику
+  выбора, статус и `degraded` на уровне TypeScript невозможно. Legacy-ветви
   (`decisionGuarantee: { kind: "legacy-platform-dependent-v1" }`) — это
-  compatibility-результат зарегистрированного алгоритма, а не determinate
-  численная гарантия. Outward interval не
-  входит в Glow capability этого релиза. `kind: "glow-indeterminate"`
+  результат совместимости зарегистрированного алгоритма, а не доказанная
+  численная гарантия. Интервал с внешним округлением не
+  входит в Glow-возможности этого релиза. `kind: "glow-indeterminate"`
   означает, что профиль `stable-v1` не выбрал target/max state без sound bound;
   для такой роли CSS-переменные не эмитятся и legacy fallback не применяется.
   Цель и все `*CompositeHex` / `*AchievedDj` относятся только к изолированным
   point-слоям, а не к полному blur/overlap-эффекту, браузеру или дисплею.
-- `MaterialRole` — union трёх терминальных исходов: satisfied transparent
+- `MaterialRole` — объединение трёх терминальных исходов: satisfied transparent
   endpoint (`alpha = 0`), satisfied bisection bracket (`alpha` побитно равна
   `upperAlpha`) и degraded opaque endpoint (`alpha = 1`). `alphaStatus`,
   `alphaGuarantee` и compatibility-поле `guaranteed` согласованы типом. `floor`

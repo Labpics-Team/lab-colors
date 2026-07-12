@@ -621,13 +621,22 @@ pub(crate) fn mint_bit_exact_evidence(
 ) -> Result<NumericalDecisionEvidenceV1, String> {
     let row = registry_row(site_id)
         .ok_or_else(|| format!("site {} отсутствует в registry V1", site_id.key()))?;
+    mint_bit_exact_for_row(row, reference_profile_id)
+}
+
+/// Row-уровневый минт — отделён от registry-lookup, чтобы отказная ветвь
+/// (row без объявленного BitExact) была проверяема на синтетической строке.
+fn mint_bit_exact_for_row(
+    row: &NumericalSiteRecordV1,
+    reference_profile_id: ReferenceProfileIdV1,
+) -> Result<NumericalDecisionEvidenceV1, String> {
     if !row
         .evidence_classes
         .contains(&NumericalEvidenceClassV1::BitExact)
     {
         return Err(format!(
             "site {} не объявляет evidence class bit-exact",
-            site_id.key()
+            row.site_id.key()
         ));
     }
     Ok(NumericalDecisionEvidenceV1::BitExact {
@@ -715,12 +724,19 @@ mod tests {
                 "duplicate numerical site: {}",
                 row.site_id.key()
             );
-            // Set-поля checksum-preimage не имеют дубликатов.
-            let keys: Vec<_> = row.stable_outcomes.iter().map(|v| v.key()).collect();
-            let mut sorted = keys.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted.len(), keys.len());
+            // ВСЕ set-поля checksum-preimage не имеют дубликатов.
+            let unique = |keys: Vec<&str>| {
+                let mut sorted = keys.clone();
+                sorted.sort_unstable();
+                sorted.dedup();
+                assert_eq!(sorted.len(), keys.len(), "дубликат в set-поле");
+            };
+            unique(row.stable_outcomes.iter().map(|v| v.key()).collect());
+            unique(row.compatibility_releases.iter().map(|v| v.key()).collect());
+            unique(row.evidence_classes.iter().map(|v| v.key()).collect());
+            unique(row.artifact_ids.iter().map(|v| v.key()).collect());
+            unique(row.bound_ids.iter().map(|v| v.key()).collect());
+            unique(row.runtime_attestations.iter().map(|v| v.key()).collect());
         }
     }
 
@@ -736,16 +752,24 @@ mod tests {
         );
     }
 
-    /// Минт отклоняет site без объявленного BitExact (registry-owned закон).
+    /// Минт отклоняет строку без объявленного BitExact (registry-owned
+    /// закон): отказная ветвь исполняется на синтетической строке, успешная —
+    /// на настоящем registry.
     #[test]
     fn bit_exact_mint_is_refused_without_declared_capability() {
-        // Единственный способ проверить отказ без второго site — прямой
-        // контракт минтера: он читает registry, не аргументы вызова.
         let minted = mint_bit_exact_evidence(
             NumericalSiteIdV1::GlowTargetOrMaximumV1,
             ReferenceProfileIdV1::EncodedSrgb8ScreenV1,
         );
         assert!(minted.is_ok(), "Glow объявляет bit-exact");
+
+        let mut orphan = *registry_row(NumericalSiteIdV1::GlowTargetOrMaximumV1).unwrap();
+        orphan.evidence_classes = &[];
+        let refused = mint_bit_exact_for_row(&orphan, ReferenceProfileIdV1::EncodedSrgb8ScreenV1);
+        assert!(
+            refused.is_err(),
+            "строка без BitExact обязана отклонять минт"
+        );
     }
 
     /// Checksum: детерминирован, чувствителен к содержимому canonical-полей и

@@ -100,6 +100,7 @@
 | production-миграция `PairLabel` байт-идентична замороженному legacy-пути (5 семей × 4 режима × 6 фонов + property + публичные отказы) | `pair_label_tests::migration_*` | дифференциальный (test-only legacy oracle) |
 
 Мутационный скоуп: модуль включён в `.cargo/mutants.toml` (`examine_globs`).
+
 ## Численные решения — `numerics.rs`, `numerical_plan.rs` (#292)
 
 Три уровня контракта разделены типами: package capability

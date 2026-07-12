@@ -125,6 +125,9 @@ final class ConformanceTests: XCTestCase {
     func testCapabilityManifestChecksumRecomputes() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
         let caps = manifest.numericalCapabilities
+        // Оракул реализует canonical preimage V1: другая версия схемы обязана
+        // падать здесь, а не молча проходить с пересчитанным checksum.
+        XCTAssertEqual(caps.schemaVersion, 1, "неподдерживаемая версия capability-схемы")
         XCTAssertEqual(caps.coverage, "migrated-sites-only-v1", "coverage capability manifest")
         XCTAssertFalse(caps.sites.isEmpty, "capability manifest без единого migrated site пуст")
         for site in caps.sites {
