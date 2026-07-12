@@ -42,8 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          # Полная история нужна ancestry guard против постороннего тега.
-          fetch-depth: 0
+          # Нужен только exact tag commit; ancestry доказывается read-only API
+          # без сохранения workflow credential в git config.
+          fetch-depth: 1
           persist-credentials: false
       - name: isolated publish env (runner.temp)
         run: |
@@ -51,6 +52,8 @@ jobs:
           echo "NPM_CONFIG_CACHE=$RUNNER_TEMP/npm-$GITHUB_JOB" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/npm-$GITHUB_JOB"
       - name: guard — exact tag SHA is in origin/main
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           checked_out="$(git rev-parse HEAD)"
@@ -58,11 +61,45 @@ jobs:
             echo "checkout HEAD $checked_out != tag SHA $GITHUB_SHA" >&2
             exit 1
           fi
-          git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "tag $GITHUB_REF_NAME points outside origin/main history" >&2
-            exit 1
-          fi
+          node <<'NODE'
+          const repository = process.env.GITHUB_REPOSITORY;
+          const expectedSha = process.env.GITHUB_SHA;
+          const apiRoot = process.env.GITHUB_API_URL;
+          const token = process.env.GH_READ_TOKEN;
+          if (!repository || !apiRoot || !token || !/^[0-9a-f]{40}$/u.test(expectedSha ?? "")) {
+            throw new Error("tag ancestry guard is missing valid GitHub environment");
+          }
+
+          const path = `/repos/${repository}/compare/${encodeURIComponent(expectedSha)}...main`;
+          (async () => {
+            const response = await fetch(`${apiRoot}${path}`, {
+              headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`GitHub API ${response.status} for ${path}: ${await response.text()}`);
+            }
+            const comparison = await response.json();
+            const statusAllowsAncestor =
+              comparison.status === "identical" || comparison.status === "ahead";
+            if (
+              !statusAllowsAncestor ||
+              comparison.base_commit?.sha !== expectedSha ||
+              comparison.merge_base_commit?.sha !== expectedSha
+            ) {
+              throw new Error(
+                `tag ${process.env.GITHUB_REF_NAME ?? expectedSha} points outside main history`,
+              );
+            }
+            console.log(`verified tag commit is in main history: ${expectedSha}`);
+          })().catch((error) => {
+            console.error(error instanceof Error ? error.stack : String(error));
+            process.exitCode = 1;
+          });
+          NODE
       - name: guard — canonical exact-SHA workflow runs and their own jobs
         id: canonical-runs
         env:
