@@ -305,7 +305,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
                 constraint_layer: g.constraint_layer(),
             })
         }
-        // Двухслойный материал (#89): тинт 01 (oklch/α) + опаковая база 02.
+        // Двухслойный материал (whitepaper §3.7): тинт 01 (oklch/α) + опаковая база 02.
         Resolved::Material(m) => RoleOutcome::Material(crate::dto::MaterialColor {
             tone_hex: m.tint_hex().to_string(),
             alpha: m.alpha(),

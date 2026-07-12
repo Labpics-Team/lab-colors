@@ -178,7 +178,7 @@ export interface GlowDeterminateRoleBase {
   readonly compositeGuarantee: "bit-exact";
   /** Версионированный алгоритм, построивший анатомию core/halo. */
   readonly layerRecipeProfile: GlowLayerRecipeProfileV1;
-  /** Модель внешнего вида полного результата; обязательна, потому coreAchievedDj вычислен через CAM16. */
+  /** Диагностика изолированных point-слоёв (не whole-effect); обязательна, потому coreAchievedDj вычислен через CAM16. */
   readonly appearanceDiagnosticProfile: GlowDiagnosticProfileV1;
   /** Цель решается только по изолированному halo. */
   readonly constraintLayer: "halo";
@@ -276,7 +276,7 @@ export type MaterialAlphaGuaranteeV1 =
   | MaterialTransparentEndpointGuaranteeV1
   | MaterialOpaqueEndpointGuaranteeV1;
 
-/** Двухслойный материал (kind material, #89): тинт `01` (с выведенной α) над
+/** Двухслойный материал (kind material; whitepaper §3.7): тинт `01` (с выведенной α) над
  *  опаковой базой `02`, обе — один тон. `vars` несёт --lab-<role> (солид-канон,
  *  опаковый), --lab-<role>-01 (тинт oklch/α) и --lab-<role>-02 (база, опаковая).
  *  Композит-гарантия читаемости пересчитываема из toneHex/alpha (α-граница). */

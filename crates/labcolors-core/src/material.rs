@@ -69,7 +69,8 @@ const MATERIAL_ALPHA_BISECTION_ITERATIONS: u32 = 60;
 /// can lose at most another `2^-53` to rounding. The combined requirement is
 /// `< 8.91e-16`. `8·EPSILON = 2^-49` is exactly `816/409 ≈ 1.995` times that
 /// requirement while remaining an absolute bound near zero. This covers
-/// compositor rounding only; WCAG `powf` remains platform-characterized.
+/// compositor rounding only; WCAG `powf` остаётся legacy-platform-dependent
+/// (immutable attestation отсутствует до #258).
 #[cfg(test)]
 const MATERIAL_COMPOSITE_SINGLE_EVALUATION_ERROR_BOUND: f64 =
     5.0 * (64.0 * f64::EPSILON) / 255.0 + 0.5 * f64::EPSILON;

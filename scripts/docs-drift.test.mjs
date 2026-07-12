@@ -35,6 +35,8 @@ import {
   pyScriptErrors,
   subpathLawErrors,
   subpathMentionErrors,
+  claimErrorsInText,
+  BARE_MATERIAL_89,
 } from './check-docs-drift.mjs';
 
 /* ---------------- инвентарь: закон имён ---------------- */
@@ -362,4 +364,22 @@ test('legacy muddiness API quarantined as compatibility proxy, not human verdict
   assert.match(inventory, /M-05[^\n]*Rejected provenance; Indeterminate value/u);
   assert.match(inventory, /M-12[^\n]*observer claim Rejected/u);
   assert.doesNotMatch(inventory, /M-0[45][^\n]*\| cited-measured \|/u);
+});
+
+/* Клейм-гигиена (#306) */
+test('голый #89 ловится, hex-цвета — нет', () => {
+  assert.equal(BARE_MATERIAL_89.test('Материал (#89): контракт'), true);
+  assert.equal(BARE_MATERIAL_89.test('цвет #89CFF0 и #8944AB'), false);
+  assert.equal(BARE_MATERIAL_89.test('п套 #189 и #890'), false);
+  const errs = claimErrorsInText('x.rs', 'см. #89.');
+  assert.equal(errs.length, 1);
+});
+
+test('whole-effect, labui-material.css и platform-characterized ловятся', () => {
+  assert.equal(claimErrorsInText('a.rs', 'профиль полного результата Glow').length, 1);
+  assert.equal(claimErrorsInText('b.rs', 'потребляет labui-material.css').length, 1);
+  assert.equal(claimErrorsInText('c.rs', 'remains platform-characterized').length, 1);
+  // Типовое имя (CamelCase, deferred) — НЕ нарушение.
+  assert.equal(claimErrorsInText('d.rs', 'PlatformCharacterized непредставим').length, 0);
+  assert.equal(claimErrorsInText('e.rs', 'изолированные point-слои').length, 0);
 });
