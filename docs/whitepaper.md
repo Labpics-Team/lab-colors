@@ -192,6 +192,35 @@ task #29). `RoleRecipe::PairLabel` решает лейбл штатным зак
 проваливает 3:1 на тинте — `pair_label_beats_page_resolved_label`
 ([`pair_label_tests.rs`](../crates/labcolors-core/src/pair_label_tests.rs)).
 
+С миграции #307 production-путь `PairLabel` не собирает derived-поверхность
+вручную: физическая схема компонента объявлена приватным **appearance-графом**
+([`appearance.rs`](../crates/labcolors-core/src/appearance.rs)) —
+
+```text
+непрозрачный источник + локальный контекст + объявленная альфа
+→ exact encoded-sRGB8 source-over (versioned profile, replayable certificate)
+→ derived-поверхность
+→ foreground occurrence против этой поверхности
+→ прежний foreground-резолвер
+```
+
+Граф не знает клиентских имён (`PairLabel`, `Warning` и т. п.): роль
+foreground/фон задаётся только топологией typed handles. Точной (Reference
+exact) здесь является **только** композиция поверхности в объявленном
+encoded-sRGB8 профиле; сам foreground-solve (LPC/якорная доля/семейная кривая)
+остаётся статусом **LegacyCompatibility** — охарактеризованное текущее
+поведение, не новая научная истина. Лейбл не несёт typography-фактов, поэтому
+никакой размер/вес текста здесь не учитывается и не обещается. Старая ручная
+композиция заморожена как test-only differential oracle; матрица
+5 семей × 4 режима × 6 фонов + property-тесты доказывают байт-идентичность
+production-пути ей (`migration_*`,
+[`pair_label_tests.rs`](../crates/labcolors-core/src/pair_label_tests.rs)).
+Для дизайнера: лейбл не «знает», что он warning или badge — клиент объявляет,
+на какой реально нарисованной поверхности стоит foreground; core сначала точно
+собирает эту поверхность из слоёв, затем решает foreground относительно неё.
+Нейтральный и цветной случаи проходят один физический закон; различается только
+входной контракт. Цвета этим PR не изменились — изменилась форма системы.
+
 ### 2.6. Сентименты: категориальные зоны хью
 
 Сентимент — семантическая роль (Danger/Warning/Success/Info), отображённая на

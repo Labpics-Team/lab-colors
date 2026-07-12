@@ -4,6 +4,7 @@ pub(crate) mod accent;
 pub mod accent_balance;
 pub mod accent_surface;
 pub mod alpha;
+pub(crate) mod appearance;
 pub mod cleanliness;
 pub mod config;
 pub mod glow;
@@ -31,6 +32,9 @@ mod golden_tests;
 
 #[cfg(test)]
 mod agnostic_gates;
+
+#[cfg(test)]
+mod appearance_graph_tests;
 
 #[cfg(test)]
 mod one_levelness_tests;
