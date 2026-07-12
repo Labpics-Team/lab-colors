@@ -377,8 +377,11 @@ test('голый #89 ловится, hex-цвета — нет', () => {
 
 test('whole-effect, labui-material.css и platform-characterized ловятся', () => {
   assert.equal(claimErrorsInText('a.rs', 'профиль полного результата Glow').length, 1);
+  // Вне Glow-контекста обычная фраза не флагается (контекстное правило).
+  assert.equal(claimErrorsInText('a2.rs', 'сводка полного результата аудита').length, 0);
   assert.equal(claimErrorsInText('b.rs', 'потребляет labui-material.css').length, 1);
   assert.equal(claimErrorsInText('c.rs', 'remains platform-characterized').length, 1);
+  assert.equal(claimErrorsInText('c2.rs', 'Platform-characterized: powf').length, 1);
   // Типовое имя (CamelCase, deferred) — НЕ нарушение.
   assert.equal(claimErrorsInText('d.rs', 'PlatformCharacterized непредставим').length, 0);
   assert.equal(claimErrorsInText('e.rs', 'изолированные point-слои').length, 0);

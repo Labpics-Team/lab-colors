@@ -254,7 +254,7 @@ export type GlowRole = GlowDeterminateRole | GlowIndeterminateRole;
 export interface MaterialAlphaGuaranteeBaseV1 {
   /** Byte-scale affine binary64 compositor + original WCAG 2.1 (2018)
    *  `0.03928` EOTF, with a conservative channel envelope and both crossed seam
-   *  sides. Platform-characterized because `powf` is not outward-bounded. */
+   *  sides. Legacy-platform-dependent: `powf` не outward-bounded (attestation — #258). */
   readonly numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1";
 }
 /** Rechecked fail/pass endpoints from a fixed-step binary partition after the

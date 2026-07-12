@@ -226,7 +226,9 @@ export function claimErrorsInText(rel, text) {
       `${rel}: ложная Material-ссылка «#89» (реальный #89 — PR про toHex); канон — docs/whitepaper.md §3.7`,
     );
   }
-  if (text.includes('полного результата')) {
+  // Контекстное правило: фраза запрещена только рядом с Glow-evidence —
+  // обычное русское словосочетание в другом контексте не флагается.
+  if (text.includes('полного результата') && /[Gg]low/.test(text)) {
     errs.push(
       `${rel}: point-Glow описан как «полного результата» — допустимы только изолированные point-замеры`,
     );
@@ -234,7 +236,9 @@ export function claimErrorsInText(rel, text) {
   if (text.includes('labui-material.css')) {
     errs.push(`${rel}: несуществующий потребитель labui-material.css`);
   }
-  if (/platform-characterized/.test(text)) {
+  // Дефисная форма в любой капитализации; typed CamelCase-имя
+  // `PlatformCharacterized` (без дефиса) остаётся законным deferred-термином.
+  if (/[Pp]latform-characterized/.test(text)) {
     errs.push(
       `${rel}: строчное «platform-characterized» сильнее статуса legacy-platform-dependent (attestation registry — #258)`,
     );
