@@ -136,9 +136,7 @@ pub fn composite_over_encoded(
 ///
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
 pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
-    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
-    }
+    validate_alpha(alpha)?;
     Ok([
         source_over_channel_srgb8(tint[0], alpha, bg[0]),
         source_over_channel_srgb8(tint[1], alpha, bg[1]),
@@ -146,14 +144,29 @@ pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u
     ])
 }
 
-fn encoded_to_srgb8(rgb: [f64; 3], label: &str) -> Result<[u8; 3], String> {
+/// SSOT-валидатор домена straight-alpha: конечная и в `[0,1]`. Единый и для
+/// композитора, и для графовых bindings — доменный отказ по альфе обязан
+/// звучать одинаково на всех путях (тексты отказов публично наблюдаемы).
+pub(crate) fn validate_alpha(alpha: f64) -> Result<(), String> {
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
+    }
+    Ok(())
+}
+
+/// Квантизация кодированного цвета в эмитируемые sRGB8-байты с доменной
+/// проверкой — тот же контракт, которым композитор готовит свои входы.
+/// `label` попадает в текст доменного отказа (`tint`/`bg` исторические).
+pub(crate) fn encoded_to_srgb8(rgb: [f64; 3], label: &str) -> Result<[u8; 3], String> {
     if !is_encoded_rgb(rgb) {
         return Err(format!("{label} вне конечного encoded-sRGB [0,1]: {rgb:?}"));
     }
     Ok(rgb.map(|channel| (channel * 255.0).round() as u8))
 }
 
-fn hex_from_srgb8(rgb: [u8; 3]) -> String {
+/// Форматирование эмитируемых sRGB8-байт в `#RRGGBB` — единая точка формата
+/// для композитора и потребителей его байтовых результатов (appearance-граф).
+pub(crate) fn hex_from_srgb8(rgb: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
 }
 
