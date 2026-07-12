@@ -313,7 +313,7 @@ jobs:
 
           const manifest = JSON.parse(readFileSync(manifests[0], "utf8"));
           const expectedVersion = expectedTag.slice("colors-v".length);
-          if (manifest.schemaVersion !== 1) fail(`manifest schema ${manifest.schemaVersion}`);
+          if (manifest.schemaVersion !== 2) fail(`manifest schema ${manifest.schemaVersion}`);
           if (manifest.sourceSha !== expectedSha) {
             fail(`manifest sourceSha ${manifest.sourceSha} != ${expectedSha}`);
           }

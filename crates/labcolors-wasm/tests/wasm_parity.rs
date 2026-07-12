@@ -213,8 +213,8 @@ fn committed_conformance_pack_replays_in_wasm32() {
     assert_eq!(committed_manifest.core_version, fresh_manifest.core_version);
     assert_eq!(committed_manifest.counts, fresh_manifest.counts);
     assert_eq!(
-        committed_manifest.numerical_sites,
-        fresh_manifest.numerical_sites
+        committed_manifest.numerical_capabilities,
+        fresh_manifest.numerical_capabilities
     );
     assert_eq!(committed_manifest.counts.total, 82, "anti-vacuum pack size");
 }
@@ -357,21 +357,14 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                     get_str(&entry, "decisionProfile").as_deref(),
                     Some(g.decision_profile().key())
                 );
+                // Атомарный исход (#292): wire-ключ guarantee проецируется из
+                // decision_outcome(); интервального determinate-варианта больше
+                // не существует (интервал живёт только в Indeterminate).
                 let decision_guarantee = get_obj(&entry, "decisionGuarantee");
                 assert_eq!(
                     get_str(&decision_guarantee, "kind").as_deref(),
-                    Some(g.decision_guarantee().key())
+                    Some(g.decision_outcome().guarantee_wire_key())
                 );
-                if let Some(interval) = g.decision_guarantee().interval() {
-                    assert_eq!(
-                        get_num(&decision_guarantee, "lower").to_bits(),
-                        interval.lower().to_bits()
-                    );
-                    assert_eq!(
-                        get_num(&decision_guarantee, "upper").to_bits(),
-                        interval.upper().to_bits()
-                    );
-                }
                 assert_eq!(
                     get_str(&entry, "constraintLayer").as_deref(),
                     Some(g.constraint_layer().key())

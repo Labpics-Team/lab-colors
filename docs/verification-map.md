@@ -101,6 +101,27 @@
 
 Мутационный скоуп: модуль включён в `.cargo/mutants.toml` (`examine_globs`).
 
+## Численные решения — `numerics.rs`, `numerical_plan.rs` (#292)
+
+Три уровня контракта разделены типами: package capability
+(`NumericalCapabilityManifestV1`, projection registry SSOT) ≠ compiled
+invocation plan (`CompiledNumericalPlanV1`) ≠ атомарный результат
+(`NumericalDecisionV1`: `Determinate`/`Compatibility`/`Indeterminate`).
+Новой математики модуль не вводит — проверяется невозможность повышения
+caller-created значений и legacy-исходов до доказательств.
+
+| инвариант | чем верифицирован | оракул |
+|---|---|---|
+| registry непустой, ключи уникальны, Glow site покрыт обоими stable outcomes и registered compatibility release | `numerics::tests::migrated_registry_is_non_vacuous_unique_and_covers_glow_site` | внутренняя тождественность |
+| capability manifest — каноническая projection registry: сортировка по UTF-8 `siteId`, coverage `migrated-sites-only-v1`, без выбранного mode | `numerics::tests::capability_manifest_is_canonical_registry_projection` | внутренняя тождественность |
+| drift-checksum канонический и tamper-чувствителен: смена schema version / удаление row меняет FNV-1a-32 preimage | `numerics::tests::capability_checksum_is_canonical_and_tamper_sensitive`; независимые пересчёты: JS (`scripts/verify-package-release.mjs`) и Swift (`ConformanceTests.testCapabilityManifestChecksumRecomputes`) | внутренняя тождественность + два независимых re-implementation оракула |
+| legacy-исход — атомарный `Compatibility` с registered release, не determinate evidence | `numerics::tests::legacy_result_is_compatibility_not_determinate_evidence` | тип-уровневая (взаимоисключающие варианты) + внутренняя тождественность |
+| BitExact-evidence минтится только registry-owned конструктором для site с объявленным классом; внешняя подделка не компилируется | `numerics::tests::bit_exact_evidence_is_registry_owned_and_sealed`, `bit_exact_mint_is_refused_without_declared_capability` + два compile-fail doctests в шапке `numerics.rs` (импорт удалённого `classify_at_least_v1`; struct-литерал `BitExact` с приватной печатью) | тип-уровневая (компилятор) |
+| диагностический интервал проверяет только форму (конечность, порядок) и не изготовляет determinate evidence | `numerics::tests::diagnostic_interval_validates_shape_only` | внутренняя тождественность |
+| invocation identity плана канонична: локальные ordinals внутри (node, site), перестановка деклараций не меняет ids/projection | `numerical_plan::tests::mixed_modes_coexist_and_ordinals_are_local`, `declaration_permutation_preserves_ids_and_canonical_projection` | внутренняя тождественность |
+| план tamper-чувствителен: переименование node/site меняет identity, смена mode меняет checksum; незарегистрированный release — typed ошибка компиляции плана | `numerical_plan::tests::rename_changes_identity_and_mode_mutation_changes_checksum`, `unregistered_release_is_a_typed_compile_error` | внутренняя тождественность |
+| conformance manifest публикует exact core projection (не рукописную копию) | `reference_runner::manifest_metadata_matches_core`, `labcolors_conformance::tests::manifest_numerical_registry_is_generated_from_core_ssot` | дифференциальный (закоммиченный артефакт против свежей генерации) |
+
 ## JS-дубликат — `packages/colors/effective-bg.js`
 
 | формула | чем верифицирована | оракул |

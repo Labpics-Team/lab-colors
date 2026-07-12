@@ -287,8 +287,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             layer_recipe_profile: g.layer_recipe_profile(),
             appearance_diagnostic_profile: g.appearance_diagnostic_profile(),
             selection_diagnostic_profile: g.selection_diagnostic_profile(),
-            decision_profile: g.decision_profile(),
-            decision_guarantee: g.decision_guarantee(),
+            decision_outcome: g.decision_outcome(),
             constraint_layer: g.constraint_layer(),
             target_status: g.target_status(),
             halo_composite_hex: g.halo_composite_hex().to_string(),
@@ -1042,8 +1041,12 @@ mod tests {
                         g.selection_diagnostic_profile(),
                         o.selection_diagnostic_profile
                     );
-                    assert_eq!(g.decision_profile(), o.decision_profile);
-                    assert_eq!(g.decision_guarantee(), o.decision_guarantee);
+                    assert_eq!(g.decision_outcome(), o.decision_outcome);
+                    assert_eq!(
+                        g.decision_profile(),
+                        o.decision_outcome.decision_profile(),
+                        "{name}: derived decision profile"
+                    );
                     assert_eq!(g.constraint_layer(), o.constraint_layer);
                     assert_eq!(g.target_status(), o.target_status);
                     assert_eq!(g.halo_composite_hex(), o.halo_composite_hex);
@@ -1221,8 +1224,10 @@ mod tests {
         assert!(matches!(
             role.outcome,
             RoleOutcome::Glow(ref g)
-                if g.decision_profile == labcolors_core::GlowDecisionProfileV1::StableV1
-                    && g.decision_guarantee == labcolors_core::DecisionGuaranteeV1::BitExact
+                if matches!(
+                    g.decision_outcome,
+                    labcolors_core::glow::GlowDecisionOutcomeV1::StableExactNoop { .. }
+                )
                     && g.halo_composite_hex == "#FFFFFF"
                     && g.core_composite_hex == "#FFFFFF"
         ));

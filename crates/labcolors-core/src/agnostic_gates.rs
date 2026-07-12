@@ -298,7 +298,7 @@ fn acme_config() -> ThemeConfig {
             ],
         },
         // A small but real role set: a text ladder, a neutral fill, a brand fill,
-        // a hued brand label, a brand focus ring.
+        // a hued brand label, a badge label, a brand focus ring, a brand glow.
         roles: vec![
             ("text-strong".to_string(), text(0.968, Floor::AaText)),
             ("text-weak".to_string(), text(0.461, Floor::AaUi)),
@@ -333,6 +333,18 @@ fn acme_config() -> ThemeConfig {
                 },
             ),
             ("focus".to_string(), brand_ladder(LadderPosition::FocusRing)),
+            // Свечение бренда (#292): numerical-decision профиль обязателен
+            // ЯВНО и у чужого клиента — implicit legacy непредставим; выбор
+            // Stable доказывает, что второй клиент получает typed execution
+            // mode тем же публичным конфиг-путём, без правок ядра.
+            (
+                "brand-glow".to_string(),
+                RoleRecipe::Glow {
+                    source: LadderSource::Brand,
+                    step: crate::glow::GlowStep::Base,
+                    decision_profile: crate::glow::GlowDecisionProfileV1::StableV1,
+                },
+            ),
         ],
         aliases: vec![("ring".to_string(), "focus".to_string())],
     }
@@ -346,8 +358,20 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         .expect("a well-formed foreign config must compile");
     assert_eq!(
         table.entries().len(),
-        7,
-        "acme declared seven roles; the table carries exactly them"
+        8,
+        "acme declared eight roles; the table carries exactly them"
+    );
+
+    // Численный план (#292) второго клиента — derived-проекция той же таблицы:
+    // ровно одна Glow-декларация ⇒ ровно один compiled invocation, имя роли —
+    // opaque node bytes (движок не знает словаря acme).
+    let plan = table
+        .numerical_plan_v1()
+        .expect("план второго клиента компилируется из registry SSOT");
+    assert_eq!(plan.invocations().len(), 1);
+    assert_eq!(
+        plan.invocations()[0].invocation_id.node_bytes(),
+        b"brand-glow"
     );
 
     // Emits a real, non-empty, physically-solved system on both a light and a dark
@@ -358,7 +382,7 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
     ] {
         let bg = BgInput::solid(bg_hex).unwrap();
         let set = resolve_named_set(&bg, &table, &vc);
-        assert_eq!(set.len(), 7, "every declared role resolves to an outcome");
+        assert_eq!(set.len(), 8, "every declared role resolves to an outcome");
 
         // The text ladder is real: strong is a solved colour that clears its AA
         // text floor and reads stronger than the weak rung.

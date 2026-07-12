@@ -46,11 +46,12 @@
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, DecisionGuaranteeV1, Gamut, GlowCompositeGuaranteeV1,
-    GlowCompositeProfileV1, GlowDecisionProfileV1, GlowDiagnosticProfileV1,
-    GlowTargetStatus as CoreGlowTargetStatus, Hue, LadderPosition, NumericalDecisionV1,
-    NumericalIndeterminacyV1, NumericalSiteIdV1, Theme as CoreTheme, ViewingConditions,
-    recheck_against, solve, solve_screen_alpha_for_dj, srgb_encoded_from_hex,
+    BgInput, ChromaPolicy, Contract, Gamut, GlowCompositeGuaranteeV1, GlowCompositeProfileV1,
+    GlowDecisionProfileV1, GlowDiagnosticProfileV1, GlowTargetStatus as CoreGlowTargetStatus, Hue,
+    LadderPosition, LegacyPlatformDependentV1, NumericalCompatibilityReleaseIdV1,
+    NumericalDecisionEvidenceV1, NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1,
+    Theme as CoreTheme, ViewingConditions, recheck_against, solve, solve_screen_alpha_for_dj,
+    srgb_encoded_from_hex,
 };
 
 // Регистрирует UniFFI-scaffolding под namespace = имя крейта (`labcolors`).
@@ -457,49 +458,6 @@ fn incompatible_core_variant(name: &str) -> ColorError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GlowDeterminateKind {
-    StableExactNoop,
-    LegacyReached,
-    LegacyUnreachable,
-}
-
-fn glow_determinate_kind(
-    requested_profile: GlowDecisionProfile,
-    guarantee: DecisionGuaranteeV1,
-    status: CoreGlowTargetStatus,
-    selection_diagnostic_profile: Option<GlowDiagnosticProfileV1>,
-) -> Result<GlowDeterminateKind, ColorError> {
-    match (
-        requested_profile,
-        guarantee,
-        status,
-        selection_diagnostic_profile,
-    ) {
-        (
-            GlowDecisionProfile::StableV1,
-            DecisionGuaranteeV1::BitExact,
-            CoreGlowTargetStatus::ExactNoopUnreachable,
-            None,
-        ) => Ok(GlowDeterminateKind::StableExactNoop),
-        (
-            GlowDecisionProfile::LegacyPlatformDependentV1,
-            DecisionGuaranteeV1::LegacyPlatformDependentV1,
-            CoreGlowTargetStatus::LegacyReached,
-            Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
-        ) => Ok(GlowDeterminateKind::LegacyReached),
-        (
-            GlowDecisionProfile::LegacyPlatformDependentV1,
-            DecisionGuaranteeV1::LegacyPlatformDependentV1,
-            CoreGlowTargetStatus::LegacyUnreachable,
-            Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
-        ) => Ok(GlowDeterminateKind::LegacyUnreachable),
-        illegal => Err(ColorError::IncompatibleCoreContract {
-            reason: format!("illegal Glow determinate provenance from core: {illegal:?}"),
-        }),
-    }
-}
-
 fn composite_profile_to_ffi(
     profile: GlowCompositeProfileV1,
 ) -> Result<GlowCompositeProfile, ColorError> {
@@ -598,33 +556,60 @@ pub fn solve_glow_point(
     profile: GlowDecisionProfile,
 ) -> Result<GlowPointDecision, ColorError> {
     validate_glow_request(&tint, &background, target_dj)?;
-    let core_profile = profile.to_core();
+    // Migration adapter: FFI-профиль → generic typed execution mode (#292).
+    let mode = profile.to_core().execution_mode();
     let decision = map_prevalidated_glow_core_result(solve_screen_alpha_for_dj(
         &tint,
         &background,
         target_dj,
-        core_profile,
+        mode,
         &theme.vc(),
     ))?;
+    // Атомарный core-результат маппится напрямую: cross-product реконструкция
+    // profile × guarantee × status удалена — незаконные комбинации
+    // непредставимы уже в core-типе (#292).
     match decision {
-        NumericalDecisionV1::Determinate { value, guarantee } => {
-            let kind = glow_determinate_kind(
-                profile,
-                guarantee,
-                value.status(),
-                value.selection_diagnostic_profile(),
-            )?;
+        NumericalDecisionV1::Determinate {
+            value,
+            evidence: NumericalDecisionEvidenceV1::BitExact { .. },
+            ..
+        } => {
+            if value.status() != CoreGlowTargetStatus::ExactNoopUnreachable
+                || value.selection_diagnostic_profile().is_some()
+            {
+                return Err(ColorError::IncompatibleCoreContract {
+                    reason: format!("illegal stable Glow value state: {:?}", value.status()),
+                });
+            }
+            Ok(GlowPointDecision::StableExactNoop {
+                value: glow_point_value_to_ffi(&value)?,
+            })
+        }
+        NumericalDecisionV1::Compatibility {
+            value,
+            release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+            provenance: LegacyPlatformDependentV1,
+            ..
+        } => {
+            if value.selection_diagnostic_profile()
+                != Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1)
+            {
+                return Err(ColorError::IncompatibleCoreContract {
+                    reason: "compatibility Glow value без selection diagnostic".to_string(),
+                });
+            }
+            let status = value.status();
             let value = glow_point_value_to_ffi(&value)?;
-            match kind {
-                GlowDeterminateKind::StableExactNoop => {
-                    Ok(GlowPointDecision::StableExactNoop { value })
-                }
-                GlowDeterminateKind::LegacyReached => {
+            match status {
+                CoreGlowTargetStatus::LegacyReached => {
                     Ok(GlowPointDecision::LegacyReached { value })
                 }
-                GlowDeterminateKind::LegacyUnreachable => {
+                CoreGlowTargetStatus::LegacyUnreachable => {
                     Ok(GlowPointDecision::LegacyUnreachable { value })
                 }
+                other => Err(ColorError::IncompatibleCoreContract {
+                    reason: format!("illegal compatibility Glow value state: {other:?}"),
+                }),
             }
         }
         NumericalDecisionV1::Indeterminate { site_id, evidence } => {
@@ -663,18 +648,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn illegal_glow_provenance_cross_product_is_rejected() {
-        let error = glow_determinate_kind(
-            GlowDecisionProfile::StableV1,
-            DecisionGuaranteeV1::LegacyPlatformDependentV1,
-            CoreGlowTargetStatus::LegacyReached,
-            Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
+    fn legacy_solve_maps_to_atomic_compatibility_variants() {
+        // Явный compatibility-mode: результат — атомарный LegacyReached/
+        // LegacyUnreachable, без реконструкции provenance на границе.
+        let decision = solve_glow_point(
+            "#C0B2FA".into(),
+            "#000000".into(),
+            2.3006,
+            Theme::Light,
+            GlowDecisionProfile::LegacyPlatformDependentV1,
         )
-        .unwrap_err();
+        .unwrap();
         assert!(matches!(
-            error,
-            ColorError::IncompatibleCoreContract { ref reason }
-                if reason.contains("illegal Glow determinate provenance")
+            decision,
+            GlowPointDecision::LegacyReached { .. } | GlowPointDecision::LegacyUnreachable { .. }
         ));
     }
 
@@ -777,21 +764,8 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_outward_decision_guarantee_is_an_incompatible_core_contract() {
+    fn interval_stays_a_lawful_indeterminate_payload() {
         let interval = labcolors_core::OutwardIntervalV1::try_new(0.9, 1.1).unwrap();
-        let error = glow_determinate_kind(
-            GlowDecisionProfile::StableV1,
-            DecisionGuaranteeV1::OutwardIntervalV1(interval),
-            CoreGlowTargetStatus::ExactNoopUnreachable,
-            None,
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            ColorError::IncompatibleCoreContract { ref reason }
-                if reason.contains("illegal Glow determinate provenance")
-        ));
-
         // Outward evidence остаётся законной частью typed Indeterminate:
         // запрещена только ложная Glow-specific determinate guarantee.
         assert_eq!(

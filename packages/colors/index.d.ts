@@ -9,6 +9,7 @@ export {
   default as init,
   initSync,
   LabColors,
+  numericalCapabilityManifest,
 } from "./pkg/labcolors.js";
 
 // Curated public schema/result surface. wasm-bindgen's InitOutput and raw
@@ -52,6 +53,8 @@ export type {
   RoleRecipe,
   ThemeConfig,
   ResolvedTheme,
+  NumericalCapabilitySiteV1,
+  NumericalCapabilityManifestV1,
 } from "./pkg/labcolors.js";
 
 export { applyTheme } from "./apply-theme.js";

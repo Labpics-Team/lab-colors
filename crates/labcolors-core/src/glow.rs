@@ -49,8 +49,11 @@
 //! проверенный на наблюдателях.
 
 use crate::lcs::LcsColor;
+use crate::numerical_plan::NumericalExecutionModeV1;
 use crate::numerics::{
-    DecisionGuaranteeV1, NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1,
+    LegacyPlatformDependentV1, NumericalCompatibilityReleaseIdV1, NumericalDecisionEvidenceV1,
+    NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1, ReferenceProfileIdV1,
+    mint_bit_exact_evidence, registry_row,
 };
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::{
@@ -183,6 +186,70 @@ impl GlowDecisionProfileV1 {
             "stable-v1" => Ok(Self::StableV1),
             "legacy-platform-dependent-v1" => Ok(Self::LegacyPlatformDependentV1),
             other => Err(other.to_string()),
+        }
+    }
+
+    /// Migration adapter (#292): прежние config/wire-ключи `stable-v1 |
+    /// legacy-platform-dependent-v1` отображаются в generic typed execution
+    /// mode. Они НЕ становятся новым общим profile enum.
+    pub fn execution_mode(self) -> NumericalExecutionModeV1 {
+        match self {
+            Self::StableV1 => NumericalExecutionModeV1::StableOnly,
+            Self::LegacyPlatformDependentV1 => NumericalExecutionModeV1::ExplicitCompatibility {
+                release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+            },
+        }
+    }
+
+    /// Обратная проекция generic mode в boundary-ключ (adapter-сторона).
+    pub fn from_execution_mode(mode: NumericalExecutionModeV1) -> Self {
+        match mode {
+            NumericalExecutionModeV1::StableOnly => Self::StableV1,
+            // Точный release: будущий чужой release не должен молча
+            // проецироваться в Glow-профиль — компилятор потребует решения.
+            NumericalExecutionModeV1::ExplicitCompatibility {
+                release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+            } => Self::LegacyPlatformDependentV1,
+        }
+    }
+}
+
+/// Атомарный исход решения Glow ПОСЛЕ выбора состояния: доказанный stable
+/// точный no-op либо явный registered compatibility-алгоритм. Незаконная
+/// комбинация (stable + legacy provenance и т. п.) непредставима типами;
+/// cross-product независимых полей profile/guarantee удалён (#292).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum GlowDecisionOutcomeV1 {
+    /// Stable exact no-op: решение доказано запечатанным BitExact-evidence.
+    StableExactNoop {
+        /// Запечатанное registry-owned evidence.
+        evidence: NumericalDecisionEvidenceV1,
+    },
+    /// Явно выбранный зарегистрированный прежний алгоритм.
+    Compatibility {
+        /// Registered release, реально исполнивший invocation.
+        release_id: NumericalCompatibilityReleaseIdV1,
+        /// Класс происхождения (не заменяет release identity).
+        provenance: LegacyPlatformDependentV1,
+    },
+}
+
+impl GlowDecisionOutcomeV1 {
+    /// Boundary-проекция прежнего wire-ключа guarantee
+    /// (`bit-exact | legacy-platform-dependent-v1`) — migration adapter.
+    pub fn guarantee_wire_key(&self) -> &'static str {
+        match self {
+            Self::StableExactNoop { evidence } => evidence.class_key(),
+            Self::Compatibility { provenance, .. } => provenance.key(),
+        }
+    }
+
+    /// Boundary-проекция прежнего client decision profile.
+    pub fn decision_profile(&self) -> GlowDecisionProfileV1 {
+        match self {
+            Self::StableExactNoop { .. } => GlowDecisionProfileV1::StableV1,
+            Self::Compatibility { .. } => GlowDecisionProfileV1::LegacyPlatformDependentV1,
         }
     }
 }
@@ -907,58 +974,81 @@ pub fn solve_screen_alpha_for_dj(
     glow_tint_hex: &str,
     bg_hex: &str,
     target_dj: f64,
-    profile: GlowDecisionProfileV1,
+    mode: NumericalExecutionModeV1,
     vc: &ViewingConditions,
 ) -> Result<NumericalDecisionV1<GlowSolve>, String> {
-    match profile {
-        GlowDecisionProfileV1::LegacyPlatformDependentV1 => {
-            return Ok(NumericalDecisionV1::Determinate {
+    // #292: resolver исполняет typed mode, сохранённый в compiled invocation;
+    // plan lookup/string policy selection в hot path отсутствуют.
+    const SITE: NumericalSiteIdV1 = NumericalSiteIdV1::GlowTargetOrMaximumV1;
+    match mode {
+        NumericalExecutionModeV1::ExplicitCompatibility { release_id } => {
+            // Fail closed: release обязан быть зарегистрирован для site —
+            // незарегистрированный выбор является load-ошибкой, не fallback.
+            let row = registry_row(SITE)
+                .ok_or_else(|| format!("site {} отсутствует в registry V1", SITE.key()))?;
+            if !row.compatibility_releases.contains(&release_id) {
+                return Err(format!(
+                    "release {} не зарегистрирован для site {}",
+                    release_id.key(),
+                    SITE.key()
+                ));
+            }
+            Ok(NumericalDecisionV1::Compatibility {
+                site_id: SITE,
+                release_id,
                 value: solve_screen_alpha_for_dj_legacy(glow_tint_hex, bg_hex, target_dj, vc)?,
-                guarantee: DecisionGuaranteeV1::LegacyPlatformDependentV1,
-            });
+                provenance: LegacyPlatformDependentV1,
+            })
         }
-        GlowDecisionProfileV1::StableV1 => {}
+        NumericalExecutionModeV1::StableOnly => {
+            if !target_dj.is_finite() || target_dj <= 0.0 {
+                return Err(format!("целевой шаг вне домена: {target_dj}"));
+            }
+            let ScreenPointInputs {
+                glow: glow_bytes,
+                background: bg_bytes,
+                slopes,
+            } = screen_point_inputs(glow_tint_hex, bg_hex)?;
+            if slopes_are_exact_srgb8_noop(slopes) {
+                // Любая alpha из [0,1] даёт тот же байтовый composite; 0.5 —
+                // канонический средний представитель, а не измеренная величина.
+                let alpha = 0.5;
+                let alpha_css = crate::css_alpha_value(alpha)?;
+                let composite_srgb8 = bg_bytes;
+                return Ok(NumericalDecisionV1::Determinate {
+                    site_id: SITE,
+                    value: GlowSolve {
+                        alpha,
+                        alpha_css: alpha_css.clone(),
+                        target_dj,
+                        achieved_dj: 0.0,
+                        composite_hex: composite_hex(composite_srgb8),
+                        composite_certificate: composite_certificate(
+                            glow_bytes,
+                            bg_bytes,
+                            alpha,
+                            alpha_css,
+                            composite_srgb8,
+                        ),
+                        selection_diagnostic_profile: None,
+                        status: GlowTargetStatus::ExactNoopUnreachable,
+                    },
+                    // BitExact минтится registry-owned минтером: доказательство
+                    // принадлежит точному байтовому screen-профилю.
+                    evidence: mint_bit_exact_evidence(
+                        SITE,
+                        ReferenceProfileIdV1::EncodedSrgb8ScreenV1,
+                    )?,
+                });
+            }
+            // Нетривиальный target/max без sound bound: честный typed-отказ,
+            // CAM16 selection не вызывается.
+            Ok(NumericalDecisionV1::Indeterminate {
+                site_id: SITE,
+                evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+            })
+        }
     }
-
-    if !target_dj.is_finite() || target_dj <= 0.0 {
-        return Err(format!("целевой шаг вне домена: {target_dj}"));
-    }
-    let ScreenPointInputs {
-        glow: glow_bytes,
-        background: bg_bytes,
-        slopes,
-    } = screen_point_inputs(glow_tint_hex, bg_hex)?;
-    if slopes_are_exact_srgb8_noop(slopes) {
-        // Любая alpha из [0,1] даёт тот же байтовый composite; 0.5 —
-        // канонический средний представитель, а не измеренная величина.
-        let alpha = 0.5;
-        let alpha_css = crate::css_alpha_value(alpha)?;
-        let composite_srgb8 = bg_bytes;
-        return Ok(NumericalDecisionV1::Determinate {
-            value: GlowSolve {
-                alpha,
-                alpha_css: alpha_css.clone(),
-                target_dj,
-                achieved_dj: 0.0,
-                composite_hex: composite_hex(composite_srgb8),
-                composite_certificate: composite_certificate(
-                    glow_bytes,
-                    bg_bytes,
-                    alpha,
-                    alpha_css,
-                    composite_srgb8,
-                ),
-                selection_diagnostic_profile: None,
-                status: GlowTargetStatus::ExactNoopUnreachable,
-            },
-            guarantee: DecisionGuaranteeV1::BitExact,
-        });
-    }
-
-    Ok(NumericalDecisionV1::Indeterminate {
-        site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
-        evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
-    })
 }
 
 /// Явный зависящий от CAM16/libm legacy-путь target/max.
@@ -1152,14 +1242,16 @@ mod tests {
             tint,
             background,
             target_dj,
-            GlowDecisionProfileV1::LegacyPlatformDependentV1,
+            GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
             vc,
         )? {
-            NumericalDecisionV1::Determinate {
+            NumericalDecisionV1::Compatibility {
                 value,
-                guarantee: DecisionGuaranteeV1::LegacyPlatformDependentV1,
+                release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+                provenance: LegacyPlatformDependentV1,
+                ..
             } => Ok(value),
-            other => Err(format!("explicit legacy profile дал {other:?}")),
+            other => Err(format!("explicit compatibility mode дал {other:?}")),
         }
     }
 
@@ -1170,7 +1262,7 @@ mod tests {
             "#C0B2FA",
             "#000000",
             GLOW_BASE_DJ,
-            GlowDecisionProfileV1::StableV1,
+            GlowDecisionProfileV1::StableV1.execution_mode(),
             &vc,
         )
         .expect("валидный запрос обязан дать typed numerical decision");
@@ -1192,7 +1284,7 @@ mod tests {
             "#C0B2FA",
             "#000000",
             GLOW_BASE_DJ,
-            GlowDecisionProfileV1::StableV1,
+            GlowDecisionProfileV1::StableV1.execution_mode(),
             &invalid_vc,
         )
         .expect("stable-v1 must stop before the unbounded CAM16 site");
@@ -1209,7 +1301,7 @@ mod tests {
                 "#C0B2FA",
                 "#000000",
                 GLOW_BASE_DJ,
-                GlowDecisionProfileV1::LegacyPlatformDependentV1,
+                GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
                 &invalid_vc,
             )
             .is_err()
@@ -1224,14 +1316,15 @@ mod tests {
             "#4A8FFF",
             "#FFFFFF",
             GLOW_BASE_DJ,
-            GlowDecisionProfileV1::StableV1,
+            GlowDecisionProfileV1::StableV1.execution_mode(),
             &invalid_vc,
         )
         .expect("white point screen composite is exact and does not need CAM16");
 
         let NumericalDecisionV1::Determinate {
             value,
-            guarantee: DecisionGuaranteeV1::BitExact,
+            evidence: NumericalDecisionEvidenceV1::BitExact { .. },
+            ..
         } = decision
         else {
             panic!("exact point no-op must be a BitExact determinate decision");
@@ -1260,7 +1353,7 @@ mod tests {
                 tint,
                 background,
                 GLOW_BASE_DJ,
-                GlowDecisionProfileV1::StableV1,
+                GlowDecisionProfileV1::StableV1.execution_mode(),
                 &invalid_vc,
             )
             .expect("quantised screen no-op is exact and must not consult CAM16");
@@ -1268,7 +1361,8 @@ mod tests {
                 decision,
                 NumericalDecisionV1::Determinate {
                     value,
-                    guarantee: DecisionGuaranteeV1::BitExact,
+                    evidence: NumericalDecisionEvidenceV1::BitExact { .. },
+                    ..
                 } if value.status() == GlowTargetStatus::ExactNoopUnreachable
                     && value.achieved_dj().to_bits() == 0.0_f64.to_bits()
                     && value.composite_hex() == background
@@ -1803,7 +1897,7 @@ mod tests {
                     "#4A8FFF",
                     "#101012",
                     target,
-                    GlowDecisionProfileV1::StableV1,
+                    GlowDecisionProfileV1::StableV1.execution_mode(),
                     &vc,
                 )
                 .is_err(),

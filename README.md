@@ -165,15 +165,17 @@ CSS-строка, CSSOM и обход DOM сами по себе не повыш
 |---|---|
 | **Поддерживаемый точечный путь sRGB** | encoded sRGB input/output, клиентский конфиг, resolve всей таблицы и специализированные рецепты в заявленной версии пакета |
 | **Exact encoded-sRGB8 операции** | конечные source-over/screen композиторы, выбранная binary64 alpha и её канонический CSS round-trip; сертификат относится к point-reference, не к renderer/display |
-| **Stable Glow decision** | exact point-no-op даёт `Determinate` / `bit-exact` без CAM16-профиля; нетривиальный target/max без sound bound даёт typed `Indeterminate`, не platform-selected fallback |
+| **Stable Glow decision** | exact point-no-op даёт `Determinate` с sealed `bit-exact` evidence без CAM16-профиля; нетривиальный target/max без sound bound даёт typed `Indeterminate`, не platform-selected fallback |
+| **Explicit compatibility (legacy)** | явный legacy execution mode даёт атомарный `Compatibility`-результат с registered release (`glow-cam16-ucs-jprime-target-or-max-v1`) и provenance-классом `legacy-platform-dependent-v1`; это НЕ determinate: результат идентифицирует воспроизводимый АЛГОРИТМ, а не cross-runtime bit-exact значение |
 | **Унаследованное платформенно охарактеризованное поведение** | target-driven CAM16/CAM16-UCS/Oklab/LPC, neutral/accent/sentiment policies и связанные поиски по `f64`; они поддерживают совместимость, но не дают cross-runtime bit-exact guarantee |
 | **Точность в отдельном эталонном профиле** | только операции, для которых конкретный release объявляет эталонный профиль и проверяемый конечный контракт |
 | **Явно не поддержано как стабильная гарантия** | Display-P3 solving, HDR/PQ/HLG, пространственное поле Glow/Material, индивидуальное восприятие, неизвестный browser/display pipeline |
 
-Машинно читаемый реестр численных sites и их runtime-матрица входят в
-conformance manifest. Он не повышает незарегистрированный или explicit legacy
-результат до `BitExact`, `ProvenOptimal` или `ProvenInfeasible` только потому,
-что тесты на одной платформе зелёные.
+Машинно читаемый capability manifest численных sites — typed-проекция core
+registry с независимо пересчитываемым drift-checksum — входит в conformance
+manifest. Он описывает возможности сборки и не повышает незарегистрированный
+или explicit `Compatibility`-результат до determinate только потому, что тесты
+на одной платформе зелёные.
 
 ## Источники и производные значения
 

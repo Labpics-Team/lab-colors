@@ -443,6 +443,40 @@ export interface ThemeConfig {
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }
 
+/** Capability одного зарегистрированного численного site (#289/#292): что
+ *  сборка УМЕЕТ (registry-проекция), не что выбрал клиент. Пустой массив —
+ *  явное отсутствие evidence, не implicit support. */
+export interface NumericalCapabilitySiteV1 {
+  /** Stable site identity key, например "glow-target-or-maximum-v1". */
+  readonly siteId: string;
+  /** Законные stable-исходы site. */
+  readonly stableOutcomes: ReadonlyArray<string>;
+  /** Зарегистрированные compatibility-releases. */
+  readonly compatibilityReleases: ReadonlyArray<string>;
+  /** Минтимые классы evidence. */
+  readonly evidenceClasses: ReadonlyArray<string>;
+  /** Canonical finite artifact IDs (пусто в V1). */
+  readonly artifactIds: ReadonlyArray<string>;
+  /** Registered error bound IDs (пусто в V1). */
+  readonly boundIds: ReadonlyArray<string>;
+  /** Runtime attestation IDs (пусто до #258). */
+  readonly runtimeAttestations: ReadonlyArray<string>;
+}
+
+/** Canonical numerical capability manifest: статическое свойство сборки,
+ *  спроецированное из core registry SSOT. Та же camelCase-форма, что
+ *  numericalCapabilities манифеста conformance-пака. */
+export interface NumericalCapabilityManifestV1 {
+  /** Версия capability-схемы (независимый домен версий). */
+  readonly schemaVersion: number;
+  /** Покрытие registry: "migrated-sites-only-v1". */
+  readonly coverage: string;
+  /** Capability rows, отсортированные по UTF-8 байтам siteId. */
+  readonly sites: ReadonlyArray<NumericalCapabilitySiteV1>;
+  /** FNV-1a-32 drift-checksum canonical preimage, 8 lowercase hex. */
+  readonly checksum: string;
+}
+
 /** The full result of resolving one background under one theme. */
 export interface ResolvedTheme {
   readonly theme: ThemeName;
@@ -468,6 +502,28 @@ export interface ResolvedTheme {
 extern "C" {
     #[wasm_bindgen(typescript_type = "ResolvedTheme")]
     pub type JsResolvedTheme;
+
+    #[wasm_bindgen(typescript_type = "NumericalCapabilityManifestV1")]
+    pub type JsNumericalCapabilityManifest;
+}
+
+/// Canonical numerical capability manifest текущей WASM-сборки (#289/#292).
+///
+/// Свободная функция, а не метод движка: манифест — статическое свойство
+/// сборки (core registry SSOT), он не зависит ни от загруженного конфига, ни
+/// от состояния кэша. Форма — camelCase-проекция `CapabilityManifestProjection`
+/// conformance-пака; `checksum` — FNV-1a-32 canonical preimage, 8 lowercase hex.
+#[wasm_bindgen(js_name = numericalCapabilityManifest)]
+pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifest, JsError> {
+    // Та же «широкая» схема границы, что у resolveTheme: одна UTF-8 строка +
+    // нативный JSON.parse вместо пообъектной сборки Reflect::set.
+    let json = crate::projection::capability_manifest_json();
+    let parsed = js_sys::JSON::parse(&json).map_err(|_| {
+        to_js_error(BindingError::Internal {
+            reason: "capability manifest не распарсился как JSON".to_string(),
+        })
+    })?;
+    Ok(parsed.unchecked_into())
 }
 
 /// A contrast engine over a consumer-supplied design system. Construct with

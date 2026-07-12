@@ -223,9 +223,110 @@ function fnv1a32(buffers) {
   return hash.toString(16).padStart(8, "0");
 }
 
+// Canonical checksum preimage capability-манифеста (ядро:
+// labcolors-core/src/numerics.rs, canonical_checksum_preimage). Домен-сепаратор
+// и length-prefixed кодирование повторены здесь НЕЗАВИСИМО: релизный гейт не
+// доверяет закоммиченному checksum, а пересчитывает его из тех же typed rows.
+const CAPABILITY_CHECKSUM_DOMAIN_V1 = "labcolors.numerical-capability.v1";
+// Поля-списки одного site в каноническом порядке preimage (порядок фиксирован
+// схемой v1 и не выводится из JSON, чтобы переименование ключа ломало гейт).
+const CAPABILITY_SITE_LIST_FIELDS = [
+  "stableOutcomes",
+  "compatibilityReleases",
+  "evidenceClasses",
+  "artifactIds",
+  "boundIds",
+  "runtimeAttestations",
+];
+
+function u32le(value) {
+  const buffer = Buffer.alloc(4);
+  buffer.writeUInt32LE(value >>> 0, 0);
+  return buffer;
+}
+
+function lenPrefixed(bytes) {
+  return [u32le(bytes.length), bytes];
+}
+
+// Сортировка по СЫРЫМ UTF-8 байтам (как sort_unstable по &[u8] в ядре), а не по
+// UTF-16 code units JS-строк — для не-ASCII ключей порядки расходятся.
+function compareUtf8(a, b) {
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+function capabilityChecksumPreimage(capabilities) {
+  const chunks = [];
+  chunks.push(...lenPrefixed(Buffer.from(CAPABILITY_CHECKSUM_DOMAIN_V1, "utf8")));
+  chunks.push(u32le(capabilities.schemaVersion));
+  chunks.push(...lenPrefixed(Buffer.from(capabilities.coverage, "utf8")));
+  const sites = [...capabilities.sites].sort((a, b) => compareUtf8(a.siteId, b.siteId));
+  chunks.push(u32le(sites.length));
+  for (const site of sites) {
+    chunks.push(...lenPrefixed(Buffer.from(site.siteId, "utf8")));
+    for (const field of CAPABILITY_SITE_LIST_FIELDS) {
+      // Пустой список кодируется явным count=0 — отсутствие evidence является
+      // частью контракта, а не пропуском.
+      const keys = [...site[field]].sort(compareUtf8);
+      chunks.push(u32le(keys.length));
+      for (const key of keys) chunks.push(...lenPrefixed(Buffer.from(key, "utf8")));
+    }
+  }
+  return chunks;
+}
+
+// Структурная (generic) валидация numericalCapabilities: форма, coverage и
+// независимый пересчёт drift-checksum. Никакого hardcode конкретного site —
+// точный состав rows держит exact-проекция ядра (reference_runner conformance-
+// крейта); релизный гейт проверяет, что закоммиченный manifest самосогласован.
+function validateCapabilityManifest(capabilities) {
+  if (typeof capabilities !== "object" || capabilities === null || Array.isArray(capabilities)) {
+    fail("conformance manifest has no numericalCapabilities object");
+  }
+  if (capabilities.schemaVersion !== 1) {
+    fail(
+      `numericalCapabilities schemaVersion ${capabilities.schemaVersion} is not the supported 1`,
+    );
+  }
+  if (capabilities.coverage !== "migrated-sites-only-v1") {
+    fail(`numericalCapabilities coverage must be migrated-sites-only-v1, got ${capabilities.coverage}`);
+  }
+  if (!Array.isArray(capabilities.sites) || capabilities.sites.length === 0) {
+    fail("numericalCapabilities must list at least one migrated site");
+  }
+  const isKeyList = (value) =>
+    Array.isArray(value) && value.every((key) => typeof key === "string" && key.length > 0);
+  const siteIds = new Set();
+  for (const site of capabilities.sites) {
+    if (typeof site.siteId !== "string" || site.siteId.length === 0) {
+      fail("numericalCapabilities site lacks a non-empty siteId");
+    }
+    if (siteIds.has(site.siteId)) fail(`duplicate numericalCapabilities siteId ${site.siteId}`);
+    siteIds.add(site.siteId);
+    for (const field of CAPABILITY_SITE_LIST_FIELDS) {
+      if (!isKeyList(site[field])) {
+        fail(`numericalCapabilities site ${site.siteId} has malformed ${field}`);
+      }
+    }
+    if (site.stableOutcomes.length === 0) {
+      fail(`numericalCapabilities site ${site.siteId} declares no lawful stable outcome`);
+    }
+  }
+  if (!/^[0-9a-f]{8}$/u.test(capabilities.checksum ?? "")) {
+    fail(`invalid numericalCapabilities checksum: ${capabilities.checksum}`);
+  }
+  const recomputed = fnv1a32(capabilityChecksumPreimage(capabilities));
+  if (recomputed !== capabilities.checksum) {
+    fail(
+      `numericalCapabilities checksum ${capabilities.checksum} does not bind the ` +
+        `canonical preimage (independent recompute: ${recomputed})`,
+    );
+  }
+}
+
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "2.0.0") {
-    fail(`release requires conformance pack 2.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "3.0.0") {
+    fail(`release requires conformance pack 3.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -270,21 +371,7 @@ async function validateConformance(conformance) {
   if (halfTie?.composite !== "#17161F") {
     fail("conformance pack lacks the exact source-over half-tie #C0B2FA@0.122 -> #17161F");
   }
-  if (!Array.isArray(conformance.numericalSites) || conformance.numericalSites.length === 0) {
-    fail("conformance manifest has no generated numericalSites registry");
-  }
-  const glowSite = conformance.numericalSites.find(
-    (site) => site.siteId === "glow-target-or-maximum-v1",
-  );
-  if (
-    JSON.stringify(glowSite?.stableOutcomes) !==
-      JSON.stringify(["bit-exact", "indeterminate"]) ||
-    glowSite?.boundStatus !== "unavailable" ||
-    glowSite?.fallbackStatus !== "none" ||
-    glowSite?.legacyProfile !== "legacy-platform-dependent-v1"
-  ) {
-    fail("generated Glow numerical registry does not describe both lawful stable outcomes");
-  }
+  validateCapabilityManifest(conformance.numericalCapabilities);
 
   const manifestBytes = await readFile(CONFORMANCE_MANIFEST);
   return {
@@ -897,7 +984,11 @@ export async function verifyPackageRelease() {
   );
 
   const manifest = {
-    schemaVersion: 1,
+    // Схема release-manifest v2: numericalSites (pack 2.x, прозаические
+    // research-поля) заменён на numericalCapabilities — typed capability
+    // projection ядра с независимо пересчитанным checksum. Read-back в
+    // publish-workflow пиняет ровно эту версию.
+    schemaVersion: 2,
     npm: packageJson.version,
     core: coreVersion,
     wire: {
@@ -934,7 +1025,7 @@ export async function verifyPackageRelease() {
       "exact-screen-composite-srgb8-v1",
       "typed-glow-indeterminate-v1",
     ],
-    numericalSites: conformance.numericalSites,
+    numericalCapabilities: conformance.numericalCapabilities,
     unsupported: [
       "embedded-wire-schema-version",
       "stable-cam16-glow-target-or-maximum-selection",

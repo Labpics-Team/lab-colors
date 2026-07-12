@@ -3,8 +3,9 @@
 - Статус: принято
 - Дата: 2026-07-10
 - Дополнение numerical-decision boundary: 2026-07-11
+- Дополнение атомарного результата и compatibility release: 2026-07-12
 - Связанные задачи: #41, #218, #221, #223, #233, #241, #258, #259, #281,
-  #282
+  #282, #292
 
 ## Контекст
 
@@ -224,3 +225,37 @@ WASM/TypeScript:
 Открытыми остаются: полный viewing/context contract (#230), sound cross-runtime
 CAM16 bounds (#223/#281), фактический renderer/output pipeline (#233/#241) и
 пространственная модель glow (#221).
+
+## Дополнение 2026-07-12: атомарный результат и registered compatibility release (#292)
+
+Первая typed-decision граница различала determinate/indeterminate, но
+legacy-исход всё ещё выглядел как «determinate со слабой гарантией». Это
+позволяло читателю типа повысить платформозависимый выбор до доказанного.
+Контракт ужесточён до атомарного результата:
+
+- `NumericalDecisionV1<T>` имеет ровно три взаимоисключающих варианта:
+  `Determinate { evidence }`, `Compatibility { release_id, provenance }` и
+  `Indeterminate { evidence }`. Legacy-исход — это `Compatibility`, отдельный
+  вариант, а НЕ determinate: он идентифицирует зарегистрированный воспроизводимый
+  АЛГОРИТМ (`NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1`,
+  key `glow-cam16-ucs-jprime-target-or-max-v1`), а не cross-runtime bit-exact
+  значение. Незаконная комбинация (stable outcome с legacy provenance)
+  непредставима в типе.
+- Determinate-evidence запечатан: у `NumericalDecisionEvidenceV1::BitExact`
+  приватное поле-печать, внешний код может только матчить с `..`, а минт
+  выполняет registry-owned конструктор, сверяющий capability site. Подделка
+  evidence вне ядра не компилируется (compile-fail тест).
+- Промежуточные «граничные» классификаторы (`classify_at_least_v1`,
+  `AtLeastDecisionV1`, `DecisionGuaranteeV1`) удалены: они кодировали
+  сравнительную силу гарантии как данные и тем самым допускали lossy-схлопывание
+  атомарных вариантов.
+- Клиентский выбор перенесён в typed execution mode
+  (`NumericalExecutionModeV1::StableOnly | ExplicitCompatibility { release_id }`),
+  который несёт `RoleSpec::Glow`. Строковый `GlowDecisionProfileV1` остался
+  boundary-адаптером: прежние wire keys (`stable-v1`,
+  `legacy-platform-dependent-v1`, `bit-exact`) сохранены byte-for-byte, wire/npm
+  JSON и fingerprint не изменились.
+- Conformance pack 3.0.0 публикует `numericalCapabilities` — typed capability
+  manifest ядра (coverage `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над
+  canonical length-prefixed preimage) вместо прозаического `numericalSites`;
+  release verifier и Swift-тесты пересчитывают checksum независимо.

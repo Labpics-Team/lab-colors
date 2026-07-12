@@ -14,6 +14,7 @@ pub mod lcs;
 pub mod lpc;
 pub mod material;
 pub mod neutral;
+pub mod numerical_plan;
 pub mod numerics;
 pub mod pair;
 pub mod scale;
@@ -90,9 +91,9 @@ pub use curve::ColorCurve;
 pub use glow::{
     GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_COMPOSITE_PROFILE, GLOW_DIAGNOSTIC_PROFILE,
     GLOW_LAYER_RECIPE_PROFILE, GLOW_SUBTLE_DJ, GlowCompositeCertificateV1,
-    GlowCompositeGuaranteeV1, GlowCompositeProfileV1, GlowConstraintLayer, GlowDecisionProfileV1,
-    GlowDiagnosticProfileV1, GlowLayerRecipeProfileV1, GlowSolve, GlowTargetStatus,
-    glow_layers_from_source, screen_layer_over_encoded, screen_layer_over_srgb8,
+    GlowCompositeGuaranteeV1, GlowCompositeProfileV1, GlowConstraintLayer, GlowDecisionOutcomeV1,
+    GlowDecisionProfileV1, GlowDiagnosticProfileV1, GlowLayerRecipeProfileV1, GlowSolve,
+    GlowTargetStatus, glow_layers_from_source, screen_layer_over_encoded, screen_layer_over_srgb8,
     screen_point_is_exact_noop, solve_screen_alpha_for_dj,
 };
 pub use hash::fnv1a_32;
@@ -104,10 +105,20 @@ pub use material::{
     MaterialSolveErrorV1, Pole, RgbChannelV1, committed_pole_encoded, solve_material_alpha_encoded,
     solve_material_alpha_hex, worst_contrast_encoded,
 };
+pub use numerical_plan::{
+    CompiledInvocationIdV1, CompiledNumericalInvocationV1, CompiledNumericalPlanV1,
+    NUMERICAL_PLAN_SCHEMA_VERSION_V1, NumericalExecutionModeV1, NumericalPlanChecksumV1,
+    NumericalPlanErrorV1, compile_numerical_plan_v1,
+};
 pub use numerics::{
-    AtLeastDecisionV1, DecisionGuaranteeV1, NumericalBoundStatusV1, NumericalDecisionV1,
-    NumericalFallbackStatusV1, NumericalIndeterminacyV1, NumericalSiteIdV1, NumericalSiteRecordV1,
-    OutwardIntervalV1, StableNumericalOutcomeV1, classify_at_least_v1, numerical_registry_v1,
+    LegacyPlatformDependentV1, NUMERICAL_CAPABILITY_SCHEMA_VERSION_V1, NumericalArtifactIdV1,
+    NumericalBoundStatusV1, NumericalCapabilityChecksumV1, NumericalCapabilityManifestV1,
+    NumericalCompatibilityReleaseIdV1, NumericalDecisionEvidenceV1, NumericalDecisionV1,
+    NumericalErrorBoundIdV1, NumericalEvidenceClassV1, NumericalFallbackStatusV1,
+    NumericalIndeterminacyV1, NumericalRegistryCoverageV1, NumericalRuntimeAttestationIdV1,
+    NumericalSiteCapabilityV1, NumericalSiteIdV1, NumericalSiteRecordV1, OutwardIntervalV1,
+    ReferenceProfileIdV1, StableNumericalOutcomeV1, numerical_capability_manifest_v1,
+    numerical_registry_v1,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor,

@@ -96,10 +96,11 @@ pub struct GlowColor {
     /// Диагностическая модель, участвовавшая именно в выборе target/max. `None` у
     /// точного no-op профиля stable, который не выполняет выбор по внешнему виду.
     pub selection_diagnostic_profile: Option<labcolors_core::GlowDiagnosticProfileV1>,
-    /// Explicit client-selected decision profile.
-    pub decision_profile: labcolors_core::GlowDecisionProfileV1,
-    /// Guarantee target/max decision.
-    pub decision_guarantee: labcolors_core::DecisionGuaranteeV1,
+    /// Атомарный исход решения (#292): доказанный stable exact no-op либо
+    /// явный registered compatibility-алгоритм. Прежняя пара независимых полей
+    /// profile/guarantee выводится из него boundary-проекциями, поэтому
+    /// незаконное сочетание profile × guarantee непредставимо уже в DTO.
+    pub decision_outcome: labcolors_core::glow::GlowDecisionOutcomeV1,
     /// Слой, по которому решалась цель.
     pub constraint_layer: labcolors_core::GlowConstraintLayer,
     /// Типизированный результат target-проверки.

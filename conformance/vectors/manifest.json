@@ -1,5 +1,5 @@
 {
-  "packVersion": "2.0.0",
+  "packVersion": "3.0.0",
   "coreVersion": "0.2.0",
   "packDigest": "64a68cbd",
   "counts": {
@@ -10,21 +10,27 @@
     "muddiness": 4,
     "total": 82
   },
-  "numericalSites": [
-    {
-      "siteId": "glow-target-or-maximum-v1",
-      "operations": "CAM16 forward powf; CAM16-UCS J-prime; abs; target >=; maximum ordering",
-      "domain": "encoded sRGB8 point screen states -> diagnostic CAM16-UCS delta J-prime",
-      "branchEffect": "first reached state versus global maximum and reached/unreachable status",
-      "stableOutcomes": [
-        "bit-exact",
-        "indeterminate"
-      ],
-      "boundStatus": "unavailable",
-      "boundaryCorpus": "glow stable-indeterminate; exact no-op; finite-state compositor; half-tie alpha",
-      "runtimeMatrix": "active: native x86_64 + wasm32; native arm64 required before any cross-runtime CAM16 decision claim; exact bytes only for compositor",
-      "fallbackStatus": "none",
-      "legacyProfile": "legacy-platform-dependent-v1"
-    }
-  ]
+  "numericalCapabilities": {
+    "schemaVersion": 1,
+    "coverage": "migrated-sites-only-v1",
+    "sites": [
+      {
+        "siteId": "glow-target-or-maximum-v1",
+        "stableOutcomes": [
+          "bit-exact",
+          "indeterminate"
+        ],
+        "compatibilityReleases": [
+          "glow-cam16-ucs-jprime-target-or-max-v1"
+        ],
+        "evidenceClasses": [
+          "bit-exact"
+        ],
+        "artifactIds": [],
+        "boundIds": [],
+        "runtimeAttestations": []
+      }
+    ],
+    "checksum": "5a3f6cbc"
+  }
 }

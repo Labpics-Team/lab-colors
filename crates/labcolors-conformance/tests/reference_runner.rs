@@ -205,8 +205,8 @@ fn manifest_metadata_matches_core() {
     assert_eq!(committed.core_version, fresh.core_version, "версия ядра");
     assert_eq!(committed.counts, fresh.counts, "счётчики семейств");
     assert_eq!(
-        committed.numerical_sites, fresh.numerical_sites,
-        "numerical registry обязан быть exact copy core SSOT"
+        committed.numerical_capabilities, fresh.numerical_capabilities,
+        "capability manifest обязан быть exact core registry projection"
     );
 }
 

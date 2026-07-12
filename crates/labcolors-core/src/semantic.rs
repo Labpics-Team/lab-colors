@@ -671,8 +671,10 @@ pub enum RoleSpec {
         tint: crate::ladder::LadderTint,
         /// Контрактная ступень стека.
         step: crate::glow::GlowStep,
-        /// Явный профиль численного решения из клиентского контракта.
-        decision_profile: crate::glow::GlowDecisionProfileV1,
+        /// Typed execution mode compiled invocation (#292). Прежние
+        /// config/wire-ключи `stable-v1 | legacy-platform-dependent-v1` —
+        /// migration adapter на границе, не core-семантика.
+        mode: crate::numerical_plan::NumericalExecutionModeV1,
     },
     /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
     /// перцептивной стороны лейбла в штатной полярности; солид-эмиссия.
@@ -1758,8 +1760,7 @@ pub struct GlowResolved {
     layer_recipe_profile: crate::glow::GlowLayerRecipeProfileV1,
     appearance_diagnostic_profile: crate::glow::GlowDiagnosticProfileV1,
     selection_diagnostic_profile: Option<crate::glow::GlowDiagnosticProfileV1>,
-    decision_profile: crate::glow::GlowDecisionProfileV1,
-    decision_guarantee: crate::numerics::DecisionGuaranteeV1,
+    decision_outcome: crate::glow::GlowDecisionOutcomeV1,
     halo_composite_certificate: crate::glow::GlowCompositeCertificateV1,
     core_composite_certificate: crate::glow::GlowCompositeCertificateV1,
 }
@@ -1803,13 +1804,15 @@ impl GlowResolved {
     pub fn selection_diagnostic_profile(&self) -> Option<crate::glow::GlowDiagnosticProfileV1> {
         self.selection_diagnostic_profile
     }
-    /// Явно выбранный клиентский численный профиль.
+    /// Boundary-проекция прежнего клиентского профиля (migration adapter).
     pub fn decision_profile(&self) -> crate::glow::GlowDecisionProfileV1 {
-        self.decision_profile
+        self.decision_outcome.decision_profile()
     }
-    /// Гарантия семантического решения target/max.
-    pub fn decision_guarantee(&self) -> crate::numerics::DecisionGuaranteeV1 {
-        self.decision_guarantee
+    /// Атомарный исход решения: доказанный stable exact no-op либо явный
+    /// registered compatibility-алгоритм (#292). Незаконные комбинации
+    /// profile × guarantee непредставимы.
+    pub fn decision_outcome(&self) -> crate::glow::GlowDecisionOutcomeV1 {
+        self.decision_outcome
     }
     /// Слой, по которому решалась целевая ступень.
     pub fn constraint_layer(&self) -> crate::glow::GlowConstraintLayer {
@@ -2355,80 +2358,100 @@ fn resolve_spec_in(
             }
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
         }
-        RoleSpec::Glow {
-            tint,
-            step,
-            decision_profile,
-        } => {
+        RoleSpec::Glow { tint, step, mode } => {
             // Свечение: halo = якорь источника по теме; core — пересвет;
             // интенсивность решается под контрактную ступень на фоне резолва.
+            // Typed execution mode исполняется ПРЯМО из compiled spec (#292):
+            // никакого plan lookup или string policy selection в hot path.
             let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
             let bg_hex =
                 crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+            // Общая сборка полного Glow-результата из решённого состояния —
+            // одна для обоих атомарных законных исходов.
+            let assemble = |g: &crate::glow::GlowSolve,
+                            outcome: crate::glow::GlowDecisionOutcomeV1|
+             -> Resolved {
+                let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc)
+                {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                            "generated Glow layer recipe was rejected: {e}"
+                        )));
+                    }
+                };
+                let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
+                    &core_hex,
+                    &bg_hex,
+                    g.alpha(),
+                    vc,
+                ) {
+                    Ok(measurement) => measurement,
+                    Err(e) => {
+                        return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                            "generated Glow core measurement was rejected: {e}"
+                        )));
+                    }
+                };
+                Resolved::Glow(GlowResolved {
+                    core_hex,
+                    halo_hex,
+                    alpha: g.alpha(),
+                    alpha_css: g.alpha_css().to_string(),
+                    target_dj: g.target_dj(),
+                    halo_composite_hex: g.composite_hex().to_string(),
+                    halo_achieved_dj: g.achieved_dj(),
+                    core_composite_hex: core_measurement.composite_hex,
+                    core_achieved_dj: core_measurement.achieved_dj,
+                    target_status: g.status(),
+                    layer_recipe_profile:
+                        crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
+                    appearance_diagnostic_profile:
+                        crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
+                    selection_diagnostic_profile: g.selection_diagnostic_profile(),
+                    decision_outcome: outcome,
+                    halo_composite_certificate: g.composite_certificate().clone(),
+                    core_composite_certificate: core_measurement.certificate,
+                })
+            };
             return match crate::glow::solve_screen_alpha_for_dj(
                 &halo_hex,
                 &bg_hex,
                 step.target_dj(),
-                decision_profile,
+                mode,
                 vc,
             ) {
                 Ok(crate::numerics::NumericalDecisionV1::Indeterminate { site_id, evidence }) => {
                     Resolved::GlowIndeterminate(GlowIndeterminateResolved {
                         source_hex: halo_hex,
                         target_dj: step.target_dj(),
-                        decision_profile,
+                        decision_profile: crate::glow::GlowDecisionProfileV1::from_execution_mode(
+                            mode,
+                        ),
                         site_id,
                         evidence,
                     })
                 }
                 Ok(crate::numerics::NumericalDecisionV1::Determinate {
                     value: g,
-                    guarantee,
-                }) => {
-                    let (core_hex, halo_hex) =
-                        match crate::glow::glow_layers_from_source(&halo_hex, vc) {
-                            Ok(pair) => pair,
-                            Err(e) => {
-                                return Resolved::Unreachable(Unreachable::InternalInvariant(
-                                    format!("generated Glow layer recipe was rejected: {e}"),
-                                ));
-                            }
-                        };
-                    let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
-                        &core_hex,
-                        &bg_hex,
-                        g.alpha(),
-                        vc,
-                    ) {
-                        Ok(measurement) => measurement,
-                        Err(e) => {
-                            return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
-                                "generated Glow core measurement was rejected: {e}"
-                            )));
-                        }
-                    };
-                    Resolved::Glow(GlowResolved {
-                        core_hex,
-                        halo_hex,
-                        alpha: g.alpha(),
-                        alpha_css: g.alpha_css().to_string(),
-                        target_dj: g.target_dj(),
-                        halo_composite_hex: g.composite_hex().to_string(),
-                        halo_achieved_dj: g.achieved_dj(),
-                        core_composite_hex: core_measurement.composite_hex,
-                        core_achieved_dj: core_measurement.achieved_dj,
-                        target_status: g.status(),
-                        layer_recipe_profile:
-                            crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
-                        appearance_diagnostic_profile:
-                            crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
-                        selection_diagnostic_profile: g.selection_diagnostic_profile(),
-                        decision_profile,
-                        decision_guarantee: guarantee,
-                        halo_composite_certificate: g.composite_certificate().clone(),
-                        core_composite_certificate: core_measurement.certificate,
-                    })
-                }
+                    evidence,
+                    ..
+                }) => assemble(
+                    &g,
+                    crate::glow::GlowDecisionOutcomeV1::StableExactNoop { evidence },
+                ),
+                Ok(crate::numerics::NumericalDecisionV1::Compatibility {
+                    value: g,
+                    release_id,
+                    provenance,
+                    ..
+                }) => assemble(
+                    &g,
+                    crate::glow::GlowDecisionOutcomeV1::Compatibility {
+                        release_id,
+                        provenance,
+                    },
+                ),
                 Err(e) => Resolved::Unreachable(Unreachable::InternalInvariant(format!(
                     "generated Glow solve request was rejected: {e}"
                 ))),
@@ -3362,6 +3385,42 @@ impl NamedRoleTable {
     pub fn chroma(&self) -> RoleChroma {
         self.chroma
     }
+
+    /// Canonical numerical execution plan таблицы (#292) — DERIVED-проекция
+    /// тех же деклараций `entries()`, а НЕ второй mutable map: единственный
+    /// источник mode — сама спека [`RoleSpec::Glow`], план лишь перечисляет её
+    /// compiled invocations. Проекция не участвует в resolve/frame path —
+    /// resolver исполняет typed mode, хранящийся в спеке, и не делает plan
+    /// lookup в hot path; план существует для boundary/manifest диагностики.
+    ///
+    /// Occurrences подаются в порядке деклараций (имя роли — opaque node
+    /// bytes, site — [`GlowTargetOrMaximumV1`](crate::numerics::NumericalSiteIdV1)),
+    /// поэтому локальные ordinals внутри пары `(node, site)` детерминированы;
+    /// canonical-сортировка — внутренний закон самого плана и порядок
+    /// `entries()` не переупорядочивает.
+    ///
+    /// # Errors
+    ///
+    /// Типизированная [`NumericalPlanErrorV1`](crate::numerical_plan::NumericalPlanErrorV1)
+    /// компиляции плана (незарегистрированный site/release) — fail closed, не
+    /// runtime fallback.
+    pub fn numerical_plan_v1(
+        &self,
+    ) -> Result<
+        crate::numerical_plan::CompiledNumericalPlanV1,
+        crate::numerical_plan::NumericalPlanErrorV1,
+    > {
+        crate::numerical_plan::compile_numerical_plan_v1(self.entries.iter().filter_map(
+            |(name, spec)| match spec {
+                RoleSpec::Glow { mode, .. } => Some((
+                    name.as_bytes(),
+                    crate::numerics::NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                    *mode,
+                )),
+                _ => None,
+            },
+        ))
+    }
 }
 
 /// Resolve every named role in `table` against `bg` under `vc`, in declaration
@@ -3986,7 +4045,7 @@ mod tests {
                 RoleSpec::Glow {
                     tint: LadderTint::new([source; 4]).unwrap(),
                     step: crate::glow::GlowStep::Base,
-                    decision_profile,
+                    mode: decision_profile.execution_mode(),
                 },
             )],
             Vec::new(),
@@ -4045,6 +4104,225 @@ mod tests {
             crate::glow::GlowTargetStatus::LegacyReached
                 | crate::glow::GlowTargetStatus::LegacyUnreachable
         ));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // RED-группа 1 Issue #292 — numerical_plan_v1: derived-проекция таблицы.
+    //
+    // Таблицы собираются напрямую через `NamedRoleTable::new` (как
+    // `one_glow_table`): план — свойство скомпилированной таблицы, не
+    // конфиг-валидатора, поэтому тесты не зависят от словаря клиента.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Glow-спека с непрозрачным для core именем-носителем задаётся снаружи;
+    /// здесь только рецепт: тинт + ступень + typed mode.
+    fn plan_glow_spec(
+        source_hex: &str,
+        mode: crate::numerical_plan::NumericalExecutionModeV1,
+    ) -> RoleSpec {
+        let source = crate::spaces::srgb::srgb_encoded_from_hex(source_hex).unwrap();
+        RoleSpec::Glow {
+            tint: LadderTint::new([source; 4]).unwrap(),
+            step: crate::glow::GlowStep::Base,
+            mode,
+        }
+    }
+
+    fn plan_stable_mode() -> crate::numerical_plan::NumericalExecutionModeV1 {
+        crate::numerical_plan::NumericalExecutionModeV1::StableOnly
+    }
+
+    fn plan_compat_mode() -> crate::numerical_plan::NumericalExecutionModeV1 {
+        crate::numerical_plan::NumericalExecutionModeV1::ExplicitCompatibility {
+            release_id:
+                crate::numerics::NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+        }
+    }
+
+    fn plan_table(entries: Vec<(String, RoleSpec)>) -> NamedRoleTable {
+        NamedRoleTable::new(entries, Vec::new(), RoleChroma::Neutral).unwrap()
+    }
+
+    /// (a)+(e) #292: биекция glow-ролей и invocations; каждый invocation
+    /// соответствует manifest-supported site (mode/release объявлены
+    /// capability-строкой); mixed modes сосуществуют в одном плане без
+    /// глобального профиля; не-glow роли и алиасы не порождают invocations
+    /// и остаются в `entries()` нетронутыми.
+    #[test]
+    fn red292_plan_is_bijective_with_glow_roles_and_manifest_supported() {
+        use crate::numerical_plan::NumericalExecutionModeV1;
+        let table = NamedRoleTable::new(
+            vec![
+                (
+                    "klient-uzel-alpha".to_string(),
+                    plan_glow_spec("#4A8FFF", plan_stable_mode()),
+                ),
+                // Не-glow роль между glow-декларациями: план обязан её пропустить.
+                ("plain-zero".to_string(), RoleSpec::Zero),
+                (
+                    "klient-uzel-beta".to_string(),
+                    plan_glow_spec("#FF6633", plan_compat_mode()),
+                ),
+            ],
+            vec![("ring".to_string(), "plain-zero".to_string())],
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+
+        let plan = table.numerical_plan_v1().unwrap();
+
+        // Биекция: ровно по одному invocation на каждую glow-роль, и ни одного
+        // на прочие роли/алиасы.
+        assert_eq!(plan.invocations().len(), 2);
+        for glow_name in ["klient-uzel-alpha", "klient-uzel-beta"] {
+            assert_eq!(
+                plan.invocations()
+                    .iter()
+                    .filter(|inv| inv.invocation_id.node_bytes() == glow_name.as_bytes())
+                    .count(),
+                1,
+                "glow-роль `{glow_name}` обязана дать ровно один invocation"
+            );
+        }
+        assert!(
+            plan.invocations()
+                .iter()
+                .all(|inv| inv.invocation_id.node_bytes() != b"plain-zero"
+                    && inv.invocation_id.node_bytes() != b"ring"),
+            "не-glow роль/алиас не порождают numerical invocations"
+        );
+        // Таблица (resolve-словарь) нетронута планом.
+        assert_eq!(
+            table
+                .entries()
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["klient-uzel-alpha", "plain-zero", "klient-uzel-beta"]
+        );
+
+        // Каждый invocation соответствует manifest-supported site: mode/release
+        // объявлены capability-строкой сборки (registry SSOT).
+        let manifest = crate::numerics::numerical_capability_manifest_v1();
+        for inv in plan.invocations() {
+            let site = manifest
+                .sites
+                .iter()
+                .find(|site| site.site_id == inv.site_id)
+                .expect("site каждого invocation присутствует в capability manifest");
+            match inv.mode {
+                NumericalExecutionModeV1::StableOnly => assert!(
+                    !site.stable_outcomes.is_empty(),
+                    "StableOnly требует объявленных stable outcomes"
+                ),
+                NumericalExecutionModeV1::ExplicitCompatibility { release_id } => assert!(
+                    site.compatibility_releases.contains(&release_id),
+                    "release {} обязан быть зарегистрирован для site {}",
+                    release_id.key(),
+                    inv.site_id.key()
+                ),
+            }
+        }
+
+        // (e) mixed modes сосуществуют в ОДНОМ плане: у каждой invocation свой
+        // typed mode, глобального профиля не существует.
+        assert!(
+            plan.invocations()
+                .iter()
+                .any(|inv| inv.mode == NumericalExecutionModeV1::StableOnly)
+                && plan.invocations().iter().any(|inv| matches!(
+                    inv.mode,
+                    NumericalExecutionModeV1::ExplicitCompatibility { .. }
+                ))
+        );
+    }
+
+    /// (b)+(c) #292: A=[z,a] и B=[a,z] дают одинаковые invocation
+    /// canonical_bytes и plan checksum (canonical-сортировка — закон плана),
+    /// а `entries()` каждой таблицы сохраняет СВОЙ порядок деклараций;
+    /// вставка третьего узла не меняет прежние canonical_bytes.
+    #[test]
+    fn red292_permutation_preserves_canonical_projection_and_declared_order() {
+        let z = || {
+            (
+                "z-glow".to_string(),
+                plan_glow_spec("#4A8FFF", plan_stable_mode()),
+            )
+        };
+        let a = || {
+            (
+                "a-glow".to_string(),
+                plan_glow_spec("#FF6633", plan_compat_mode()),
+            )
+        };
+        let m = || {
+            (
+                "m-glow".to_string(),
+                plan_glow_spec("#33CC88", plan_stable_mode()),
+            )
+        };
+
+        let table_a = plan_table(vec![z(), a()]);
+        let table_b = plan_table(vec![a(), z()]);
+
+        // resolve-порядок = порядок деклараций каждой стороны (план его не трогает).
+        let names = |t: &NamedRoleTable| {
+            t.entries()
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&table_a), ["z-glow", "a-glow"]);
+        assert_eq!(names(&table_b), ["a-glow", "z-glow"]);
+
+        let plan_a = table_a.numerical_plan_v1().unwrap();
+        let plan_b = table_b.numerical_plan_v1().unwrap();
+        let bytes = |plan: &crate::numerical_plan::CompiledNumericalPlanV1| {
+            plan.invocations()
+                .iter()
+                .map(|inv| inv.invocation_id.canonical_bytes())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bytes(&plan_a), bytes(&plan_b));
+        assert_eq!(plan_a.checksum, plan_b.checksum);
+
+        // (c) Вставка третьего узла: прежние identity bytes неподвижны
+        // (ordinal локален внутри (node, site), глобальных индексов нет).
+        let extended = plan_table(vec![z(), m(), a()]).numerical_plan_v1().unwrap();
+        let id_of = |plan: &crate::numerical_plan::CompiledNumericalPlanV1, node: &[u8]| {
+            plan.invocations()
+                .iter()
+                .find(|inv| inv.invocation_id.node_bytes() == node)
+                .map(|inv| inv.invocation_id.canonical_bytes())
+                .unwrap()
+        };
+        assert_eq!(id_of(&plan_a, b"z-glow"), id_of(&extended, b"z-glow"));
+        assert_eq!(id_of(&plan_a, b"a-glow"), id_of(&extended, b"a-glow"));
+        assert_ne!(plan_a.checksum, extended.checksum);
+    }
+
+    /// (d) #292: rename роли меняет invocation identity (имя — opaque node
+    /// bytes), но typed mode остаётся тем же — семантика исполнения не
+    /// привязана к клиентскому имени.
+    #[test]
+    fn red292_rename_changes_identity_but_not_mode() {
+        let old = plan_table(vec![(
+            "staroe-imya".to_string(),
+            plan_glow_spec("#4A8FFF", plan_compat_mode()),
+        )])
+        .numerical_plan_v1()
+        .unwrap();
+        let renamed = plan_table(vec![(
+            "novoe-imya".to_string(),
+            plan_glow_spec("#4A8FFF", plan_compat_mode()),
+        )])
+        .numerical_plan_v1()
+        .unwrap();
+        assert_ne!(
+            old.invocations()[0].invocation_id,
+            renamed.invocations()[0].invocation_id
+        );
+        assert_eq!(old.invocations()[0].mode, renamed.invocations()[0].mode);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
