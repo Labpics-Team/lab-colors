@@ -682,13 +682,19 @@ pub enum RoleSpec {
         /// Пер-темный кодированный якорь источника.
         tint: LadderTint,
     },
-    /// Лейбл ТИНТ-бейджа ([`crate::pair`], лейбл-сторона) — близнец
-    /// [`PairFill`](Self::PairFill). Семейно-оттеночный лейбл, чей WCAG-пол
-    /// энфорсится ПРОТИВ тинт-поверхности бейджа (композит `tint` при альфе
-    /// `fill-*-primary` над фоном резолва), а не против фона страницы. Резолв:
-    /// построить поверхность, затем решить оттеночный лейбл на ней ШТАТНЫМ законом
-    /// (`resolve_hued_anchor`) — пол поверхности гарантирован по построению, тон
-    /// клампится (флаг `compressed`) при недостижимости на кривой семьи.
+    /// Лейбл ТИНТ-бейджа ([`crate::pair`], лейбл-сторона). Семейно-оттеночный
+    /// лейбл, чей WCAG-пол энфорсится ПРОТИВ объявленной тинт-поверхности
+    /// (exact source-over композит declared `tint` при compatibility-альфе
+    /// позиции `fill-*-primary` над фоном резолва), а НЕ против фона страницы
+    /// и НЕ против эмитированного [`PairFill`](Self::PairFill) — у того своя,
+    /// отдельно сдвинутая солид-эмиссия; ребра `PairFill → PairLabel` не
+    /// существует. Резолв — compatibility-адаптер над одним generic-компонентом
+    /// appearance-графа (#307): скомпилированный граф точно собирает
+    /// поверхность и возвращает foreground occurrence против неё, затем
+    /// оттеночный foreground решается прежним законом (`resolve_hued_anchor…`,
+    /// статус LegacyCompatibility) — пол поверхности гарантирован по
+    /// построению, тон клампится (флаг `compressed`) при недостижимости на
+    /// кривой семьи.
     PairLabel {
         /// Пер-темный кодированный тинт-якорь семьи (как у лестницы).
         tint: LadderTint,
@@ -2598,6 +2604,26 @@ fn resolve_hued_anchor(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> Resolved {
+    resolve_hued_anchor_from_encoded_source(bg, anchor, hue_tint.for_vc(vc), vc, ctx)
+}
+
+/// Тот же цветной резолв, но источник оттенка — уже выбранный (по теме)
+/// кодированный стимул, а не [`LadderTint`]-пейлоад.
+///
+/// Отдельный вход нужен appearance-графу (#307): foreground occurrence несёт
+/// identity-ребро «что наблюдается», и потребитель обязан решать foreground из
+/// ВОЗВРАЩЁННОГО occurrence-источника (байты → byte/255 точно), а не повторно
+/// читать исходный пейлоад — иначе ребро идентичности было бы декоративным.
+/// Для квантованного источника оба пути дают один hex по построению
+/// ([`crate::spaces::srgb::hex_from_srgb_encoded`] округляет так же, как
+/// квантизация эмиссии), что закреплено differential-тестами миграции.
+fn resolve_hued_anchor_from_encoded_source(
+    bg: &BgInput,
+    anchor: TextAnchor,
+    source_encoded: [f64; 3],
+    vc: &ViewingConditions,
+    ctx: &ResolveContext,
+) -> Resolved {
     let contract = match ctx.anchored_contract(anchor) {
         Ok(c) => c,
         Err(reason) => return Resolved::Unreachable(reason),
@@ -2606,9 +2632,8 @@ fn resolve_hued_anchor(
         Ok(iv) => *iv,
         Err(reason) => return Resolved::Unreachable(reason.clone()),
     };
-    let hue_deg = crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(
-        hue_tint.for_vc(vc),
-    ));
+    let hue_deg =
+        crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(source_encoded));
     match solve::solve_in(
         bg,
         contract,
@@ -2719,22 +2744,102 @@ fn resolve_solid_with_ui_floor(
     }
 }
 
-/// Резолв лейбла ТИНТ-бейджа — жёсткий контраст `label ↔ tinted-fill`
-/// ([`crate::pair`], лейбл-сторона; близнец [`resolve_solid_with_ui_floor`], но
-/// пол энфорсится против ВЫВОДИМОЙ подложки, а не против фона страницы).
+/// Непрозрачные структурные handles компонента «derived source-over
+/// поверхность и foreground occurrence против неё» ([`crate::appearance`]).
+/// Значения произвольны и не участвуют в физике (инвариант закреплён
+/// graph-тестами); граф не знает ни одного клиентского имени — привязку к
+/// рецепту делает только этот модуль.
+const NESTED_SOURCE: crate::appearance::ColorInputId = crate::appearance::ColorInputId::new(0);
+const NESTED_CONTEXT: crate::appearance::ColorInputId = crate::appearance::ColorInputId::new(1);
+const NESTED_OPACITY: crate::appearance::OpacityInputId = crate::appearance::OpacityInputId::new(0);
+const NESTED_CONTEXT_SURFACE: crate::appearance::SurfaceId = crate::appearance::SurfaceId::new(0);
+const NESTED_DERIVED_SURFACE: crate::appearance::SurfaceId = crate::appearance::SurfaceId::new(1);
+const NESTED_FOREGROUND: crate::appearance::OccurrenceId = crate::appearance::OccurrenceId::new(0);
+
+/// Один статически скомпилированный generic-компонент вложенного foreground:
 ///
-/// Поверхность бейджа — композит семейного тинта при альфе `fill-*-primary` над
-/// фоном резолва (то же, во что складывается роль `fill-*-tinted`). Оттеночный
-/// лейбл решается ШТАТНЫМ законом ([`resolve_hued_anchor`]) НА ЭТОЙ ПОВЕРХНОСТИ:
-/// её собственный [`ResolveContext`] задаёт полярность/макс-контраст, поэтому
-/// WCAG-пол лейбла гарантирован против той подложки, на которой лейбл реально
-/// стоит, а не против белого/чёрного фона страницы (обычные `label-*` роли
-/// решаются против страницы, и на тинт-подложке их контраст проседает — класс,
-/// который закрывает эта роль). Недостижимость пола на кривой семьи клампит тон
-/// (`floor_override` → `compressed`), как у любой контраст-роли (ADR-0002 честный
-/// результат) — консервативный дефолт вместо тихой нечитаемости.
+/// ```text
+/// context input → context surface
+/// source + opacity + context surface → exact source-over derived surface
+/// foreground occurrence(identity = source) против derived surface
+/// ```
+///
+/// Компилируется один раз ([`OnceLock`](std::sync::OnceLock)); спека статична,
+/// поэтому ошибка компиляции недостижима по построению, но путь остаётся
+/// типизированным (RoleSpec публичен, паника на публичном входе запрещена).
+fn nested_foreground_component() -> Result<
+    &'static crate::appearance::CompiledAppearanceGraph,
+    &'static crate::appearance::GraphError,
+> {
+    use crate::appearance::{
+        AppearanceGraphSpec, CompiledAppearanceGraph, CompositionProfileV1, EvidenceClass,
+        ForegroundOccurrenceSpec, GraphError, SurfaceSpec,
+    };
+    static COMPONENT: std::sync::OnceLock<Result<CompiledAppearanceGraph, GraphError>> =
+        std::sync::OnceLock::new();
+    COMPONENT
+        .get_or_init(|| {
+            AppearanceGraphSpec::new(
+                vec![NESTED_SOURCE, NESTED_CONTEXT],
+                vec![NESTED_OPACITY],
+                vec![
+                    SurfaceSpec::Input {
+                        id: NESTED_CONTEXT_SURFACE,
+                        color: NESTED_CONTEXT,
+                    },
+                    SurfaceSpec::SourceOver {
+                        id: NESTED_DERIVED_SURFACE,
+                        source: NESTED_SOURCE,
+                        opacity: NESTED_OPACITY,
+                        backdrop: NESTED_CONTEXT_SURFACE,
+                        profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+                    },
+                ],
+                vec![ForegroundOccurrenceSpec {
+                    id: NESTED_FOREGROUND,
+                    identity_source: NESTED_SOURCE,
+                    against: NESTED_DERIVED_SURFACE,
+                    evidence: EvidenceClass::LegacyCompatibility,
+                }],
+            )
+            .compile()
+        })
+        .as_ref()
+}
+
+/// Доменный отказ сборки тинт-поверхности — прежний публичный текст дословно
+/// (тексты отказов наблюдаемы потребителем и заморожены миграцией #307).
+fn pair_label_surface_domain_error(error: &str) -> Resolved {
+    Resolved::Unreachable(Unreachable::InvalidInput(format!(
+        "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
+    )))
+}
+
+/// Резолв лейбла ТИНТ-бейджа — жёсткий контраст `label ↔ tinted-surface`
+/// ([`crate::pair`], лейбл-сторона; родственен [`resolve_solid_with_ui_floor`],
+/// но пол энфорсится против ВЫВОДИМОЙ подложки, а не против фона страницы).
+///
+/// С миграции #307 это compatibility-адаптер над одним generic-компонентом
+/// appearance-графа ([`nested_foreground_component`]): скомпилированный граф
+/// точно собирает derived-поверхность (объявленный тинт при compatibility-альфе
+/// позиции `fill-*-primary` над локальным фоном резолва — exact source-over в
+/// encoded-sRGB8 профиле) и возвращает foreground occurrence именно против неё.
+/// Поверхность НЕ является эмитированным [`RoleSpec::PairFill`] — у того своя,
+/// отдельно сдвинутая солид-эмиссия; никакого ребра `PairFill → PairLabel` нет.
+///
+/// Оттеночный foreground решается ПРЕЖНИМ законом
+/// ([`resolve_hued_anchor_from_encoded_source`], статус LegacyCompatibility —
+/// не новая научная истина) НА ЭТОЙ ПОВЕРХНОСТИ: её собственный
+/// [`ResolveContext`] задаёт полярность/макс-контраст, поэтому WCAG-пол лейбла
+/// гарантирован против той подложки, на которой foreground реально стоит
+/// (обычные `label-*` роли решаются против страницы, и на тинт-подложке их
+/// контраст проседает — класс, который закрывает эта роль). Недостижимость пола
+/// на кривой семьи клампит тон (`floor_override` → `compressed`), как у любой
+/// контраст-роли (ADR-0002 честный результат) — консервативный дефолт вместо
+/// тихой нечитаемости. Занимаемые графом typed handles структурны; клиентские
+/// имена в граф не передаются.
 #[allow(clippy::too_many_arguments)]
-fn resolve_pair_label(
+pub(crate) fn resolve_pair_label(
     bg: &BgInput,
     tint: crate::ladder::LadderTint,
     fraction: f64,
@@ -2749,7 +2854,96 @@ fn resolve_pair_label(
         surface_alpha_light
     };
     // Тинт квантуется ДО композита: подложка обязана считаться из отдаваемого
-    // значения в едином encoded-sRGB8 reference-домене.
+    // значения в едином encoded-sRGB8 reference-домене (контракт не изменён
+    // миграцией). Байты источника и локального фона готовятся ТЕМ ЖЕ
+    // квантизационным контрактом alpha-SSOT, что и внутри старого пути, —
+    // порядок доменных проверок (tint → bg → α) сохранён дословно.
+    let tint_q = quantise_encoded(tint.for_vc(vc));
+    let source_rgb = match crate::alpha::encoded_to_srgb8(tint_q, "tint") {
+        Ok(bytes) => bytes,
+        Err(error) => return pair_label_surface_domain_error(&error),
+    };
+    let context_rgb = match crate::alpha::encoded_to_srgb8(bg.encoded_display(), "bg") {
+        Ok(bytes) => bytes,
+        Err(error) => return pair_label_surface_domain_error(&error),
+    };
+    let graph = match nested_foreground_component() {
+        Ok(graph) => graph,
+        // Статическая спека не компилируется только при внутреннем дефекте —
+        // типизированный отказ честнее паники (RoleSpec публичен).
+        Err(defect) => {
+            return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+                "внутренний дефект компиляции компонента тинт-поверхности: {defect:?}"
+            )));
+        }
+    };
+    let bindings = crate::appearance::AppearanceBindings::new(
+        vec![(NESTED_SOURCE, source_rgb), (NESTED_CONTEXT, context_rgb)],
+        vec![(NESTED_OPACITY, alpha)],
+    );
+    let evaluation = match graph.evaluate(&bindings) {
+        Ok(evaluation) => evaluation,
+        // Доменный отказ по α несёт сообщение SSOT-валидатора дословно —
+        // публичный текст отказа совпадает со старым путём байт-в-байт.
+        Err(crate::appearance::GraphError::OpacityOutOfDomain { message, .. }) => {
+            return pair_label_surface_domain_error(&message);
+        }
+        // Прочие ошибки исполнения статического компонента структурно
+        // недостижимы (bindings собраны из объявленных handles); отказ
+        // остаётся типизированным вместо паники.
+        Err(defect) => {
+            return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+                "внутренний дефект исполнения компонента тинт-поверхности: {defect:?}"
+            )));
+        }
+    };
+    let Some(occurrence) = evaluation.occurrence(NESTED_FOREGROUND) else {
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "внутренний дефект компонента тинт-поверхности: occurrence отсутствует".into(),
+        ));
+    };
+    // Финальные байты РЕАЛЬНО собранной поверхности → прежний контекст резолва.
+    let surface_hex = crate::alpha::hex_from_srgb8(occurrence.backdrop);
+    let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
+        // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
+        // отказ, чем правдоподобный мусор (RoleSpec публичен).
+        return Resolved::Unreachable(Unreachable::InvalidInput(
+            "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
+        ));
+    };
+    // Свежий контекст ПОВЕРХНОСТИ: полярность/интервал/макс-контраст берутся от
+    // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
+    let surface_ctx = ResolveContext::new(&surface_bg, vc);
+    let anchor = TextAnchor::new(fraction, floor);
+    // Identity-ребро occurrence: foreground решается из ВОЗВРАЩЁННОГО
+    // источника (byte → byte/255 точно), а не повторного чтения `tint` —
+    // иначе объявленное ребро идентичности было бы декоративным.
+    let source_encoded = occurrence.source.map(|channel| f64::from(channel) / 255.0);
+    resolve_hued_anchor_from_encoded_source(&surface_bg, anchor, source_encoded, vc, &surface_ctx)
+}
+
+/// Замороженная ручная реализация `resolve_pair_label` ДО миграции #307 —
+/// независимый differential-oracle графового пути, НЕ production-дубликат.
+/// Композиция здесь идёт прежним `composite_hex_from_encoded`-маршрутом, а
+/// foreground — через [`resolve_hued_anchor`] по исходному пейлоаду тинта.
+/// Любой байтовый/статусный дрейф production-пути от этого оракула — дефект
+/// миграции (см. differential-матрицу в тестах PairLabel).
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_pair_label_legacy_oracle(
+    bg: &BgInput,
+    tint: crate::ladder::LadderTint,
+    fraction: f64,
+    floor: Floor,
+    surface_alpha_light: f64,
+    surface_alpha_dark: f64,
+    vc: &ViewingConditions,
+) -> Resolved {
+    let alpha = if vc.is_dark_theme() {
+        surface_alpha_dark
+    } else {
+        surface_alpha_light
+    };
     let tint_q = quantise_encoded(tint.for_vc(vc));
     let surface_hex =
         match crate::alpha::composite_hex_from_encoded(tint_q, alpha, bg.encoded_display()) {
@@ -2761,14 +2955,10 @@ fn resolve_pair_label(
             }
         };
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
-        // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
-        // отказ, чем правдоподобный мусор (RoleSpec публичен).
         return Resolved::Unreachable(Unreachable::InvalidInput(
             "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
         ));
     };
-    // Свежий контекст ПОВЕРХНОСТИ: полярность/интервал/макс-контраст берутся от
-    // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
     let anchor = TextAnchor::new(fraction, floor);
     resolve_hued_anchor(&surface_bg, anchor, tint, vc, &surface_ctx)

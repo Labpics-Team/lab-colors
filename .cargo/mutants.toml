@@ -13,6 +13,7 @@
 # выживший мутант = молчаливая дыра в наборе (coverage=пол, mutation=правда).
 examine_globs = [
     "crates/labcolors-core/src/alpha.rs",
+    "crates/labcolors-core/src/appearance.rs",
     "crates/labcolors-core/src/cleanliness.rs",
     "crates/labcolors-core/src/glow.rs",
     "crates/labcolors-core/src/material.rs",

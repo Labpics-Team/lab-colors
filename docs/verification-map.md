@@ -83,6 +83,23 @@
 | `soft_clamp` / `soft_clamp_inv` | `lpc::tests::soft_clamp_boundaries_are_exact`, `..._matches_reference_bisection` | внутренняя тождественность |
 | `y_hk_analytic` (обратный `grey_j`) | `lpc::tests::y_hk_analytic_matches_bisection_on_grid` | внутренняя тождественность |
 
+## Appearance-граф — `crates/labcolors-core/src/appearance.rs`
+
+Приватный компилятор/исполнитель физического компонента (#307). Модуль не несёт
+собственной численной политики: единственная операция — SSOT-композитор
+`alpha::composite_over_srgb8`; проверяется соответствие топологии и переносу
+байтов, а не новая математика.
+
+| формула/инвариант | чем верифицирована | оракул |
+|---|---|---|
+| source-over ребро графа ≡ `composite_over_srgb8` (весь домен байтов × α) | `appearance_graph_tests::graph_source_over_equals_the_independent_compositor_for_neutral_and_chromatic_inputs` (property) | дифференциальный (SSOT-композитор, сам верифицирован против reference-векторов `alpha.rs`) |
+| replayable-сертификат: независимое повторение операции из полей сертификата побайтно равно записанному выходу | `appearance_graph_tests::source_over_certificate_replays_to_the_exact_recorded_bytes` (property) | внутренняя тождественность |
+| канонизация: результат не зависит от порядка деклараций/значений typed handles | `appearance_graph_tests::compile_is_independent_of_declaration_order_for_the_same_handles`, `unrelated_opaque_handles_do_not_change_the_physics` | внутренняя тождественность |
+| fail-closed: дубликаты/missing refs/циклы/дефекты bindings/α вне `[0,1]` — типизированные отказы | `appearance_graph_tests::compile_rejects_*`, `evaluate_rejects_*`, `graph_rejects_missing_occurrence_backdrop_and_cycles` | внутренняя тождественность |
+| occurrence наблюдается против derived-поверхности, не страницы; identity-ребро не декоративно | `appearance_graph_tests::warning_occurrence_targets_the_rendered_surface_not_the_page` (+ trace-счётчики), `occurrence_source_follows_the_declared_identity_edge_not_the_composite_source` | внутренняя тождественность (witness) |
+| production-миграция `PairLabel` байт-идентична замороженному legacy-пути (5 семей × 4 режима × 6 фонов + property + публичные отказы) | `pair_label_tests::migration_*` | дифференциальный (test-only legacy oracle) |
+
+Мутационный скоуп: модуль включён в `.cargo/mutants.toml` (`examine_globs`).
 ## Численные решения — `numerics.rs` (#292)
 
 Три уровня контракта разделены типами: package capability (registry-строка) ≠
