@@ -36,10 +36,11 @@ GENERATOR_PATH = REPO_ROOT / "scripts/generate_wcag22_q55.py"
 VERIFIER_PATH = Path(__file__).resolve()
 RUST_ARTIFACT = REPO_ROOT / "crates/labcolors-core/src/wcag22/q55_data.rs"
 KERNEL_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22/kernel.rs"
-PARSER_SOURCE = REPO_ROOT / "crates/labcolors-core/src/srgb8.rs"
+SRGB8_ROUTE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/srgb8.rs"
 TERMINAL_EVIDENCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22_evidence.rs"
 FACADE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22.rs"
-CRATE_LIB_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lib.rs"
+CRATE_ROOT_ROUTE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lib.rs"
+CORE_MANIFEST = REPO_ROOT / "crates/labcolors-core/Cargo.toml"
 EVALUATOR_SOURCE = FACADE_SOURCE
 CANONICAL_BINARY_ARTIFACT = (
     REPO_ROOT / "crates/labcolors-core/contracts/wcag22-srgb8-q55-v1.bin"
@@ -84,18 +85,54 @@ EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
 )
 PARSER_ID = "encoded-srgb8-hex-parser-v1"
 EXPECTED_PARSER_SHA256 = (
-    "57cd2605e040a4d206a83c86cf01c5d6935e5bff9c45e556db0e4c6eaede7280"
+    "071ad416e4da1745d47bb1ed0d43c64306fc568db0336420f7a7f8ca62d20a5a"
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
     "8cecfaf660e896c5ac7c377ed286fa0377a0201e83f2b65f858e4136348397ef"
 )
-EXPECTED_CRATE_LIB_SHA256 = (
-    "40d926da94547201242ef3aaf01db4c7e3912e8034998ab9a11671882057a726"
-)
 DECLARED_OPERATION_LAW = (
     "final-srgb8-outward-q55-two-orientation-integer-threshold-v1"
 )
+SOURCE_BINDING_SCHEMA_VERSION = 1
+SOURCE_BINDING_LAW = "wcag22-rust-semantic-dependency-cone-v1"
+SOURCE_BINDING_DOMAIN = b"labcolors.wcag22-source-binding"
+
+
+def repository_path_bytes(path: Path) -> bytes:
+    """Encode one canonical repository-relative path for proof preimages."""
+    return path.relative_to(REPO_ROOT).as_posix().encode("utf-8")
+
+
+CANONICAL_CRATE_TARGET = repository_path_bytes(CRATE_ROOT_ROUTE_SOURCE)
+ROOT_ROUTE_BEGIN = b"// BEGIN WCAG22_SOURCE_ROUTES_V1"
+ROOT_ROUTE_END = b"// END WCAG22_SOURCE_ROUTES_V1"
+EXPECTED_ROOT_ROUTE_REGION = b"""// BEGIN WCAG22_SOURCE_ROUTES_V1
+const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
+pub mod numerics;
+pub(crate) mod srgb8;
+pub mod wcag22;
+#[doc(hidden)]
+pub mod wcag22_evidence;
+// END WCAG22_SOURCE_ROUTES_V1"""
+PARSER_ROUTE_BEGIN = b"// BEGIN WCAG22_PARSER_CAPSULE_V1"
+PARSER_ROUTE_END = b"// END WCAG22_PARSER_CAPSULE_V1"
+EXPECTED_PARSER_ROUTE_REGION = b"""// BEGIN WCAG22_PARSER_CAPSULE_V1
+const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag22_q55.py.
+/// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
+///
+/// Public APIs choose their own transport strictness before calling this SSOT.
+/// ASCII is checked before byte slicing, so arbitrary public Unicode input
+/// returns `Err` instead of panicking at a non-character boundary.
+pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 || !hex.is_ascii() {
+        return Err(format!("expected #RRGGBB, got #{hex}"));
+    }
+    let parse = |value: &str| u8::from_str_radix(value, 16).map_err(|error| error.to_string());
+    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
+}
+// END WCAG22_PARSER_CAPSULE_V1"""
 PROFILE_CHECKSUM_DOMAIN = b"labcolors.wcag22-srgb8-profile.v1"
 REGISTRY_ROW_BINDING_DOMAIN = b"labcolors.wcag22-registry-row.v1"
 REGISTRY_ROW_BINDING_SCHEMA_VERSION = 1
@@ -728,6 +765,67 @@ def verify_negative_controls(
     return controls
 
 
+def exact_source_region(
+    path: Path,
+    begin: bytes,
+    end: bytes,
+    expected: bytes,
+) -> bytes:
+    """Extract one sentinel capsule and require its reviewed exact bytes."""
+    source = path.read_bytes()
+    begins = list(re.finditer(rb"(?m)^" + re.escape(begin) + rb"$", source))
+    ends = list(re.finditer(rb"(?m)^" + re.escape(end) + rb"$", source))
+    assert len(begins) == 1 and len(ends) == 1, (
+        f"source-binding markers must occur exactly once in {path}"
+    )
+    start = begins[0].start()
+    assert start == 0, f"source-binding region must be the first source item in {path}"
+    stop = ends[0].end()
+    region = source[start:stop]
+    assert region == expected, f"canonical source-binding region drifted: {path}"
+    return region
+
+
+def verify_source_routes() -> str:
+    """Bind Cargo's lib target and the two exact WCAG route capsules."""
+    regions = (
+        (
+            repository_path_bytes(CORE_MANIFEST),
+            b"cargo-lib-target-v1",
+            verify_canonical_crate_target(),
+        ),
+        (
+            repository_path_bytes(CRATE_ROOT_ROUTE_SOURCE),
+            b"wcag22-source-routes-v1",
+            exact_source_region(
+                CRATE_ROOT_ROUTE_SOURCE,
+                ROOT_ROUTE_BEGIN,
+                ROOT_ROUTE_END,
+                EXPECTED_ROOT_ROUTE_REGION,
+            ),
+        ),
+        (
+            repository_path_bytes(SRGB8_ROUTE_SOURCE),
+            b"wcag22-parser-capsule-v1",
+            exact_source_region(
+                SRGB8_ROUTE_SOURCE,
+                PARSER_ROUTE_BEGIN,
+                PARSER_ROUTE_END,
+                EXPECTED_PARSER_ROUTE_REGION,
+            ),
+        ),
+    )
+    preimage = bytearray(length_prefixed(SOURCE_BINDING_DOMAIN))
+    preimage.extend(struct.pack("<I", SOURCE_BINDING_SCHEMA_VERSION))
+    preimage.extend(length_prefixed(SOURCE_BINDING_LAW.encode("utf-8")))
+    preimage.extend(struct.pack("<I", len(regions)))
+    for path, region_id, region in regions:
+        preimage.extend(length_prefixed(path))
+        preimage.extend(length_prefixed(region_id))
+        preimage.extend(length_prefixed(region))
+    return hashlib.sha256(bytes(preimage)).hexdigest()
+
+
 def verify_production_kernel() -> str:
     """Bind the proof to the exact complete Rust evaluator kernel."""
     source_bytes = KERNEL_SOURCE.read_bytes()
@@ -797,8 +895,16 @@ def verify_terminal_evidence() -> str:
 
 
 def verify_srgb8_parser() -> str:
-    """Bind the public hex transport to the exact shared byte parser."""
-    source_bytes = PARSER_SOURCE.read_bytes()
+    """Bind the exact production-only byte-parser capsule."""
+    assert not SRGB8_ROUTE_SOURCE.is_symlink(), (
+        "encoded sRGB8 parser source must not be a symlink"
+    )
+    source_bytes = exact_source_region(
+        SRGB8_ROUTE_SOURCE,
+        PARSER_ROUTE_BEGIN,
+        PARSER_ROUTE_END,
+        EXPECTED_PARSER_ROUTE_REGION,
+    )
     digest = hashlib.sha256(source_bytes).hexdigest()
     assert digest == EXPECTED_PARSER_SHA256, (
         f"encoded sRGB8 parser drifted: {digest} != {EXPECTED_PARSER_SHA256}"
@@ -816,10 +922,13 @@ def verify_srgb8_parser() -> str:
     assert "trim_start_matches" not in compact, (
         "encoded sRGB8 parser must remove at most one optional hash prefix"
     )
+    assert compact.count("fn hex_bytes(") == 1 and "mod tests" not in compact, (
+        "encoded sRGB8 parser capsule must contain only production parsing code"
+    )
     return digest
 
 
-def verify_public_facade() -> tuple[str, str]:
+def verify_public_facade() -> str:
     """Bind the public symbols to the kernel without a digest self-cycle."""
     source = FACADE_SOURCE.read_text(encoding="utf-8")
     normalized = source
@@ -847,19 +956,7 @@ def verify_public_facade() -> tuple[str, str]:
     for forbidden in ("fn evaluate_wcag22_hex", "fn evaluate_wcag22_srgb8"):
         assert forbidden not in source, f"public facade shadows kernel with {forbidden}"
 
-    crate_bytes = CRATE_LIB_SOURCE.read_bytes()
-    crate_digest = hashlib.sha256(crate_bytes).hexdigest()
-    assert crate_digest == EXPECTED_CRATE_LIB_SHA256, (
-        f"crate root drifted: {crate_digest} != {EXPECTED_CRATE_LIB_SHA256}"
-    )
-    crate_source = crate_bytes.decode("utf-8")
-    assert len(re.findall(r"(?m)^pub mod wcag22;$", crate_source)) == 1, (
-        "crate root must export the canonical wcag22 module exactly once"
-    )
-    assert not re.search(r'#\[path\s*=\s*"[^"]+"\]\s*pub mod wcag22;', crate_source), (
-        "crate root must not redirect the proof-bound wcag22 facade"
-    )
-    return digest, crate_digest
+    return digest
 
 
 def verify_evaluator_digest_bindings(
@@ -882,7 +979,11 @@ def verify_evaluator_digest_bindings(
 RUST_REGISTRY_PROBE = r"""
 use std::fmt::Write;
 
-use labcolors_core::{NumericalSiteIdV2, numerical_registry_v2};
+use labcolors_core::{NumericalDecisionEvidenceV1, NumericalSiteIdV2, numerical_registry_v2};
+use labcolors_core::wcag22::{
+    Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1,
+    Wcag22EvaluationErrorV1, evaluate_wcag22_hex, evaluate_wcag22_srgb8,
+};
 
 fn hex_key(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len() * 2);
@@ -902,7 +1003,76 @@ macro_rules! emit_keys {
     };
 }
 
+fn decision_and_evidence(
+    assessment: &Wcag22AssessmentV1,
+) -> (Wcag22ApplicableDecisionV1, NumericalDecisionEvidenceV1) {
+    let Wcag22AssessmentV1::Evaluated {
+        decision, evidence, ..
+    } = assessment else {
+        panic!("public WCAG route returned NotEvaluated");
+    };
+    (*decision, *evidence)
+}
+
+fn verify_public_route() {
+    let white = [255_u8; 3];
+    let grey_118 = [118_u8; 3];
+    let byte_path = evaluate_wcag22_srgb8(
+        grey_118,
+        white,
+        Wcag22CriterionV1::Sc143TextDefault,
+    ).expect("public byte route");
+    let hex_path = evaluate_wcag22_hex(
+        "#767676",
+        "#FFFFFF",
+        Wcag22CriterionV1::Sc143TextDefault,
+    ).expect("public hex route");
+    assert_eq!(byte_path, hex_path);
+    let (decision, evidence) = decision_and_evidence(&hex_path);
+    assert_eq!(decision, Wcag22ApplicableDecisionV1::Pass);
+    let NumericalDecisionEvidenceV1::CanonicalFiniteBounded(payload) = evidence else {
+        panic!("public WCAG route returned the wrong evidence class");
+    };
+    assert_eq!(payload.artifact_id().key(), "wcag22-srgb8-luminance-q55-v1");
+    assert_eq!(payload.bound_id().key(), "wcag22-srgb8-outward-q55-v1");
+    assert_eq!(payload.proof_id().key(), "wcag22-srgb8-full-domain-q55-v1");
+
+    let default_119 = evaluate_wcag22_hex(
+        "#777777",
+        "#FFFFFF",
+        Wcag22CriterionV1::Sc143TextDefault,
+    ).expect("4.5 public boundary");
+    assert_eq!(
+        decision_and_evidence(&default_119).0,
+        Wcag22ApplicableDecisionV1::Fail,
+    );
+    let large_119 = evaluate_wcag22_srgb8(
+        [119_u8; 3],
+        white,
+        Wcag22CriterionV1::Sc143TextLargeScale,
+    ).expect("3.0 criterion discriminator");
+    assert_eq!(
+        decision_and_evidence(&large_119).0,
+        Wcag22ApplicableDecisionV1::Pass,
+    );
+
+    for invalid in ["#GGGGGG", "#€€", "##000000"] {
+        assert!(matches!(
+            evaluate_wcag22_hex(
+                invalid,
+                "#FFFFFF",
+                Wcag22CriterionV1::Sc143TextDefault,
+            ),
+            Err(Wcag22EvaluationErrorV1::InvalidSrgb8 {
+                field: "foreground",
+                ..
+            })
+        ));
+    }
+}
+
 fn main() {
+    verify_public_route();
     let mut matches = numerical_registry_v2()
         .iter()
         .filter(|row| row.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1);
@@ -943,6 +1113,59 @@ def cargo_executable() -> str:
     raise AssertionError(
         "typed WCAG registry proof requires Cargo; set CARGO to its executable"
     )
+
+
+def verify_canonical_crate_target(
+    *,
+    manifest_path: Path = CORE_MANIFEST,
+    expected_source: Path = CRATE_ROOT_ROUTE_SOURCE,
+    logical_source: bytes = CANONICAL_CRATE_TARGET,
+) -> bytes:
+    """Use Cargo's own metadata model to reject a redirected library root."""
+    cargo = cargo_executable()
+    environment = os.environ.copy()
+    environment["PATH"] = (
+        str(Path(cargo).parent)
+        + os.pathsep
+        + environment.get("PATH", "")
+    )
+    completed = subprocess.run(
+        [
+            cargo,
+            "metadata",
+            "--format-version=1",
+            "--no-deps",
+            "--offline",
+            "--manifest-path",
+            str(manifest_path),
+        ],
+        cwd=manifest_path.parent,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    metadata = json.loads(completed.stdout)
+    canonical_manifest = manifest_path.resolve()
+    packages = [
+        package
+        for package in metadata["packages"]
+        if Path(package["manifest_path"]).resolve() == canonical_manifest
+    ]
+    assert len(packages) == 1, "Cargo metadata did not identify one core package"
+    library_targets = [
+        target
+        for target in packages[0]["targets"]
+        if "lib" in target["kind"]
+    ]
+    assert len(library_targets) == 1, "Cargo metadata did not identify one lib target"
+    actual_source = Path(library_targets[0]["src_path"])
+    assert not expected_source.is_symlink(), "canonical crate root must not be a symlink"
+    assert actual_source.resolve() == expected_source.resolve(), (
+        "crate root redirect: "
+        f"Cargo compiles {actual_source}, expected {expected_source}"
+    )
+    return logical_source
 
 
 def decode_registry_probe_key(encoded: str) -> str:
@@ -1205,7 +1428,8 @@ def main() -> int:
     kernel_digest = verify_production_kernel()
     terminal_evidence_digest = verify_terminal_evidence()
     parser_digest = verify_srgb8_parser()
-    facade_digest, crate_lib_digest = verify_public_facade()
+    facade_digest = verify_public_facade()
+    source_route_digest = verify_source_routes()
     registry_row, registry_transport_controls = load_live_registry_row()
     registry_row_digest = verify_registry_binding(registry_row)
     registry_negative_controls = verify_registry_negative_controls(registry_row)
@@ -1244,7 +1468,7 @@ def main() -> int:
             ]
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "profile_id": PROFILE["profileId"],
         "profile_checksum": profile_checksum(),
         "recommendation": PROFILE["recommendation"],
@@ -1263,7 +1487,9 @@ def main() -> int:
         "parser_source_sha256": parser_digest,
         "facade_id": FACADE_ID,
         "facade_normalized_sha256": facade_digest,
-        "crate_lib_source_sha256": crate_lib_digest,
+        "source_binding_schema_version": SOURCE_BINDING_SCHEMA_VERSION,
+        "source_binding_law": SOURCE_BINDING_LAW,
+        "source_route_sha256": source_route_digest,
         "registry_row_id": EXPECTED_WCAG_REGISTRY_ROW["site_id"],
         "registry_row_sha256": registry_row_digest,
         "registry_row_negative_controls": registry_negative_controls,

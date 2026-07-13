@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "budgetId": "labcolors-wasm-raw-issue-284-v1",
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
   "measurement": {
@@ -20,6 +20,10 @@
       "CARGO_HOME=/cargo-home"
     ],
     "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked"
+  },
+  "currentArtifact": {
+    "sha256": "58015ea92c539eec9a715dac79d80148f103b83c628be9d95ade63b87fc76533",
+    "recertificationIssue": 295
   },
   "policy": {
     "maxRawBytes": 454385,

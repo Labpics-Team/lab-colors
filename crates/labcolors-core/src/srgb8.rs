@@ -1,6 +1,6 @@
-//! Exact encoded-sRGB8 transport primitives shared by colour math and proofs.
-
-/// Parse optional-`#` `RRGGBB` into the exact three encoded bytes.
+// BEGIN WCAG22_PARSER_CAPSULE_V1
+const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag22_q55.py.
+/// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
 ///
 /// Public APIs choose their own transport strictness before calling this SSOT.
 /// ASCII is checked before byte slicing, so arbitrary public Unicode input
@@ -13,6 +13,7 @@ pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
     let parse = |value: &str| u8::from_str_radix(value, 16).map_err(|error| error.to_string());
     Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
 }
+// END WCAG22_PARSER_CAPSULE_V1
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,13 @@
-pub(crate) mod spaces;
+// BEGIN WCAG22_SOURCE_ROUTES_V1
+const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
+pub mod numerics;
 pub(crate) mod srgb8;
 pub mod wcag22;
 #[doc(hidden)]
 pub mod wcag22_evidence;
+// END WCAG22_SOURCE_ROUTES_V1
+
+pub(crate) mod spaces;
 
 pub(crate) mod accent;
 pub mod accent_balance;
@@ -19,7 +24,6 @@ pub mod lpc;
 pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
-pub mod numerics;
 pub mod pair;
 pub mod scale;
 pub mod semantic;

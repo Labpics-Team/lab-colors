@@ -753,7 +753,7 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
   const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
 
-  assert.equal(budget.schemaVersion, 1);
+  assert.equal(budget.schemaVersion, 2);
   assert.equal(budget.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(budget.measurement.issue, 284);
   assert.equal(budget.measurement.rustToolchain, "1.96.0");
@@ -767,6 +767,11 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
     budget.measurement.sha256,
     "94c61c1689fa2e1c10d79817864471f41c623463bd9b5b4e0dac2a850a58f09f",
   );
+  assert.equal(
+    budget.currentArtifact.sha256,
+    "58015ea92c539eec9a715dac79d80148f103b83c628be9d95ade63b87fc76533",
+  );
+  assert.equal(budget.currentArtifact.recertificationIssue, 295);
   assert.equal(budget.measurement.measurementPlatform, "linux-x64");
   assert.deepEqual(budget.measurement.rustPathRemap, [
     "GITHUB_WORKSPACE=/workspace/lab-colors",
@@ -809,6 +814,10 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
           sha256: createHash("sha256").update(bytes).digest("hex"),
           measurementPlatform: `${process.platform}-${process.arch}`,
         },
+        currentArtifact: {
+          ...budget.currentArtifact,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
         policy: { ...budget.policy, maxRawBytes: bytes.length },
       })}\n`,
     );
@@ -818,20 +827,47 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
       [checkerPath, "--wasm", wasm, "--budget", fixtureBudget],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
-    assert.match(run(), /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B/u);
+    assert.match(
+      run(),
+      /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B .*current-sha=match/u,
+    );
 
     const canonicalFixtureBudget = readFileSync(fixtureBudget, "utf8");
-    const wrongLengthBudget = JSON.parse(canonicalFixtureBudget);
-    wrongLengthBudget.measurement.rawBytes = bytes.length + 1;
-    wrongLengthBudget.policy.maxRawBytes = bytes.length + 1;
-    writeFileSync(fixtureBudget, `${JSON.stringify(wrongLengthBudget)}\n`);
-    assert.throws(
-      run,
-      (error) => {
-        assert.match(error.stderr.toString(), /canonical artifact raw-byte mismatch/u);
+    for (const [currentArtifact, expectedError] of [
+      [undefined, /currentArtifact\.sha256 must identify the exact current artifact/u],
+      [{ ...budget.currentArtifact, sha256: "0" }, /currentArtifact\.sha256/u],
+      [
+        { ...budget.currentArtifact, recertificationIssue: 0 },
+        /currentArtifact\.recertificationIssue must be a positive issue number/u,
+      ],
+    ]) {
+      const invalid = JSON.parse(canonicalFixtureBudget);
+      invalid.currentArtifact = currentArtifact;
+      writeFileSync(fixtureBudget, `${JSON.stringify(invalid)}\n`);
+      assert.throws(run, (error) => {
+        assert.match(error.stderr.toString(), expectedError);
         return true;
-      },
-      "canonical host must reject measurement metadata with the wrong raw length",
+      });
+    }
+
+    const independentlyRecertifiedBudget = JSON.parse(canonicalFixtureBudget);
+    independentlyRecertifiedBudget.measurement.sha256 = "0".repeat(64);
+    writeFileSync(fixtureBudget, `${JSON.stringify(independentlyRecertifiedBudget)}\n`);
+    assert.match(
+      run(),
+      /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B .*baseline-sha=different current-sha=match/u,
+      "current reproducibility attestation must not rewrite the immutable size baseline",
+    );
+
+    writeFileSync(fixtureBudget, canonicalFixtureBudget);
+    const largerHistoricalBaseline = JSON.parse(canonicalFixtureBudget);
+    largerHistoricalBaseline.measurement.rawBytes = bytes.length + 1;
+    largerHistoricalBaseline.policy.maxRawBytes = bytes.length + 1;
+    writeFileSync(fixtureBudget, `${JSON.stringify(largerHistoricalBaseline)}\n`);
+    assert.match(
+      run(),
+      /PASS raw=8B ceiling=9B remaining=1B gzip=\d+B .*current-sha=match/u,
+      "a smaller recertified artifact must not rewrite the historical size measurement",
     );
     writeFileSync(fixtureBudget, canonicalFixtureBudget);
 
@@ -841,13 +877,19 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
     assert.throws(
       run,
       (error) => {
-        assert.match(error.stderr.toString(), /canonical artifact SHA-256 mismatch/u);
+        assert.match(error.stderr.toString(), /current artifact SHA-256 mismatch/u);
         return true;
       },
       "canonical host must reject a same-size artifact with different bytes",
     );
 
-    writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
+    const oversizedArtifact = Buffer.concat([bytes, Buffer.from([0])]);
+    const oversizedBudget = JSON.parse(canonicalFixtureBudget);
+    oversizedBudget.currentArtifact.sha256 = createHash("sha256")
+      .update(oversizedArtifact)
+      .digest("hex");
+    writeFileSync(fixtureBudget, `${JSON.stringify(oversizedBudget)}\n`);
+    writeFileSync(wasm, oversizedArtifact);
     assert.throws(
       run,
       (error) => {
@@ -857,7 +899,7 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
       "canonical ceiling + 1 byte must hard-fail",
     );
 
-    const nonCanonicalBudget = JSON.parse(readFileSync(fixtureBudget, "utf8"));
+    const nonCanonicalBudget = JSON.parse(canonicalFixtureBudget);
     nonCanonicalBudget.measurement.measurementPlatform =
       `${process.platform}-${process.arch}` === "linux-x64"
         ? "darwin-arm64"
@@ -866,14 +908,14 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
     writeFileSync(wasm, sameSizeDifferentArtifact);
     assert.match(
       run(),
-      /DIAGNOSTIC raw=8B canonical-ceiling=8B delta=\+0B gzip=\d+B .*baseline-sha=different/u,
+      /DIAGNOSTIC raw=8B canonical-ceiling=8B delta=\+0B gzip=\d+B .*baseline-sha=different current-sha=different/u,
       "non-canonical host reports diagnostics without claiming byte identity",
     );
 
     writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
     assert.match(
       run(),
-      /DIAGNOSTIC raw=9B canonical-ceiling=8B delta=\+1B gzip=\d+B .*baseline-sha=different/u,
+      /DIAGNOSTIC raw=9B canonical-ceiling=8B delta=\+1B gzip=\d+B .*baseline-sha=different current-sha=different/u,
       "non-canonical bytes remain diagnostic even above the canonical host ceiling",
     );
   } finally {

@@ -40,8 +40,9 @@ function readBudget(path) {
     fail(`cannot read ${path}: ${error.message}`);
   }
   const measurement = budget?.measurement;
+  const currentArtifact = budget?.currentArtifact;
   const policy = budget?.policy;
-  if (budget?.schemaVersion !== 1) fail("supported schemaVersion is exactly 1");
+  if (budget?.schemaVersion !== 2) fail("supported schemaVersion is exactly 2");
   if (budget?.budgetId !== "labcolors-wasm-raw-issue-284-v1") {
     fail("unexpected budgetId");
   }
@@ -50,7 +51,16 @@ function readBudget(path) {
     fail("measurement.rawBytes must be a positive safe integer");
   }
   if (!/^[0-9a-f]{64}$/u.test(measurement?.sha256 ?? "")) {
-    fail("measurement.sha256 must identify the exact measured artifact");
+    fail("measurement.sha256 must identify the immutable measured baseline");
+  }
+  if (!/^[0-9a-f]{64}$/u.test(currentArtifact?.sha256 ?? "")) {
+    fail("currentArtifact.sha256 must identify the exact current artifact");
+  }
+  if (
+    !Number.isSafeInteger(currentArtifact?.recertificationIssue) ||
+    currentArtifact.recertificationIssue <= 0
+  ) {
+    fail("currentArtifact.recertificationIssue must be a positive issue number");
   }
   for (const field of [
     "rustToolchain",
@@ -113,6 +123,7 @@ const maxRawBytes = budget.policy.maxRawBytes;
 const gzipBytes = gzipSync(wasm, { level: 9 }).length;
 const sha256 = createHash("sha256").update(wasm).digest("hex");
 const baselineSha = sha256 === budget.measurement.sha256 ? "match" : "different";
+const currentSha = sha256 === budget.currentArtifact.sha256 ? "match" : "different";
 const currentPlatform = `${process.platform}-${process.arch}`;
 const isCanonicalPlatform = currentPlatform === budget.measurement.measurementPlatform;
 const artifact = relative(REPO_ROOT, wasmPath).replaceAll("\\", "/");
@@ -123,17 +134,10 @@ if (isCanonicalPlatform && rawBytes > maxRawBytes) {
       `by=${rawBytes - maxRawBytes}B; gzip=${gzipBytes}B diagnostic-only; sha256=${sha256}`,
   );
 }
-if (isCanonicalPlatform && rawBytes !== budget.measurement.rawBytes) {
+if (isCanonicalPlatform && currentSha !== "match") {
   fail(
-    `canonical artifact raw-byte mismatch on ${currentPlatform}: ` +
-      `expected=${budget.measurement.rawBytes}B actual=${rawBytes}B; ` +
-      `gzip=${gzipBytes}B diagnostic-only; sha256=${sha256}`,
-  );
-}
-if (isCanonicalPlatform && baselineSha !== "match") {
-  fail(
-    `canonical artifact SHA-256 mismatch on ${currentPlatform}: ` +
-      `expected=${budget.measurement.sha256} actual=${sha256}; ` +
+    `current artifact SHA-256 mismatch on ${currentPlatform}: ` +
+      `expected=${budget.currentArtifact.sha256} actual=${sha256}; ` +
       `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
   );
 }
@@ -145,5 +149,6 @@ const sizeStatus = isCanonicalPlatform
 
 console.log(
   `WASM size budget ${sizeStatus} gzip=${gzipBytes}B ` +
-    `diagnostic-only platform=${currentPlatform} baseline-sha=${baselineSha}`,
+    `diagnostic-only platform=${currentPlatform} ` +
+    `baseline-sha=${baselineSha} current-sha=${currentSha}`,
 );

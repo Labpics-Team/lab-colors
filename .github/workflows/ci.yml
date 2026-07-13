@@ -220,6 +220,8 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
+      - name: reject WCAG22 source-route redirects and proof vacuums
+        run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
         run: python3 scripts/verify_wcag22_q55.py
 
@@ -328,9 +330,9 @@ jobs:
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
       - name: enforce measured WASM raw-byte budget
-        # This Linux x64 release-equivalent build is the canonical Issue #284
-        # artifact: the checker binds its exact SHA-256 and raw-byte ceiling,
-        # without invented headroom. gzip is transport diagnostics only.
+        # Issue #284 owns the immutable measured ceiling baseline. The checker
+        # separately binds this current Linux x64 artifact's exact SHA-256 and
+        # rejects growth above that ceiling. gzip is transport diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve
