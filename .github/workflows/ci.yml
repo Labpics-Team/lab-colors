@@ -195,6 +195,9 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          # Benchmark admission replays the measured implementation commit,
+          # which precedes the committed evidence artifact (and a PR merge SHA).
+          fetch-depth: 0
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -220,10 +223,70 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
+      - name: prove core capability projection boundary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          metadata = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+              text=True,
+          ))
+          packages = {package["name"]: package for package in metadata["packages"]}
+          core = packages["labcolors-core"]
+          if core["features"].get("default") != ["wcag22-feasibility"]:
+              raise SystemExit("labcolors-core default capability set drifted")
+
+          dependencies = [
+              dependency
+              for dependency in packages["labcolors-wasm"]["dependencies"]
+              if dependency["name"] == "labcolors-core" and dependency["kind"] is None
+          ]
+          if len(dependencies) != 1:
+              raise SystemExit("labcolors-wasm must have one normal labcolors-core edge")
+          dependency = dependencies[0]
+          if dependency["uses_default_features"] or dependency["features"]:
+              raise SystemExit("labcolors-wasm enabled an unprojected core capability")
+          PY
+
+          feature_tree="$(cargo tree -p labcolors-wasm --edges normal -e features)"
+          if grep -Fq 'labcolors-core feature "wcag22-feasibility"' <<<"$feature_tree"; then
+            echo "labcolors-wasm resolved an unprojected core capability" >&2
+            exit 1
+          fi
+          echo "core capability projection: PASS"
       - name: reject WCAG22 source-route redirects and proof vacuums
         run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
         run: python3 scripts/verify_wcag22_q55.py
+      - name: independently recompute WCAG22 neutral-axis fixtures
+        run: python3 scripts/verify_wcag22_neutral_axis.py
+      - name: verify WCAG22 feasibility identity byte grammar
+        run: python3 scripts/verify_wcag22_feasibility_identity.py
+      - name: validate committed WCAG22 feasibility benchmark evidence
+        run: |
+          artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
+          protocol=(
+            --admit-revision fea99a1ea4148a5a72423c88220655f7f84213fe
+            --admit-rustc-release 1.96.0
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
+          if test "$GITHUB_EVENT_NAME" = pull_request; then
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$artifact" "${protocol[@]}" --self-test
+          fi
+          python3 scripts/check_wcag22_feasibility_benchmark.py \
+            "$artifact" "${protocol[@]}" \
+            --verify-current-subjects \
+            --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+            --self-test
 
   audit:
     name: cargo audit (rustsec)

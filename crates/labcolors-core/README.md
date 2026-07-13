@@ -31,3 +31,82 @@ Exact composite guarantees do not extend to an unknown renderer, display,
 spatial blur field or the explicit platform-dependent legacy Glow decision.
 See the repository migration guide and conformance pack for versioned boundary
 details.
+
+## Ограниченная проверка выполнимости WCAG 2.2
+
+`wcag22_feasibility` полностью проверяет конечный домен, но не выбирает и не
+ранжирует цвета. Клиент объявляет непрозрачные для Core идентификаторы связи и
+вхождения, применимый критерий WCAG 2.2 и точные соседние цвета sRGB8. Core
+канонизирует декларации, вычисляет каждую пару «кандидат × сосед» и возвращает
+один запечатанный терминал: `Feasible`, `Infeasible` либо декларационный
+`NotEvaluated`. `Infeasible` означает отсутствие решения только в выбранном
+зарегистрированном домене; это не утверждение об отсутствии цвета вне домена.
+
+Возможность Cargo `wcag22-feasibility` включена по умолчанию для прямых
+потребителей Core. Транспортные адаптеры отключают неэкспортируемые возможности
+и включают каждую возможность вместе с её публичным транспортом и контрактом
+соответствия.
+
+В версии 1 зарегистрирована нейтральная ось кодированной sRGB8: ровно 256 кодов
+`[v, v, v]`, где `v` принимает каждое целое значение от 0 до 255. Число 256 —
+мощность исчерпывающе перечисляемого 8-битного домена, а не эмпирический порог.
+Core не выводит размер текста, компонентную семантику или применимость из ID.
+Превышение ресурсов, противоречивая декларация, ошибка выделения памяти и
+нарушение инварианта вычислителя или компилятора возвращаются типизированными
+ошибками; частичного или запасного результата нет.
+
+```rust
+# #[cfg(feature = "wcag22-feasibility")]
+# fn feasibility_example() -> Result<(), Box<dyn std::error::Error>> {
+use labcolors_core::{
+    Srgb8,
+    wcag22::Wcag22CriterionV1,
+    wcag22_feasibility::{
+        DomainIdV1, OccurrenceId, RelationId, RelationV1, RequestV1,
+        ResourceProfileIdV1, evaluate,
+    },
+};
+
+let relation = RelationV1::applicable(
+    RelationId::try_new("label-on-surface")?,
+    OccurrenceId::try_new("button/label")?,
+    Wcag22CriterionV1::Sc143TextDefault,
+    vec![Srgb8::new([0; 3]), Srgb8::new([255; 3])],
+)?;
+let request = RequestV1::try_new(
+    DomainIdV1::Srgb8NeutralAxis,
+    vec![relation],
+    ResourceProfileIdV1::Compile,
+)?;
+
+let result = evaluate(request)?;
+assert!(result.is_feasible());
+if let Some(evaluated) = result.evaluated() {
+    let candidates: Vec<_> = evaluated
+        .feasible_candidates()
+        .map(|candidate| candidate.bytes())
+        .collect();
+    assert_eq!(candidates, vec![[0x75; 3], [0x76; 3]]);
+}
+# Ok(())
+# }
+# fn main() {}
+```
+
+В примере `Sc143TextDefault` означает явно объявленный клиентом критерий
+SC 1.4.3 для обычного текста с отношением 4.5:1; Core не угадывает его по ID или
+типографике. `0x75` и `0x76` — вычисленные граничные результаты именно для двух
+точных соседей `#000000` и `#FFFFFF`, а не константы конфигурации или
+универсальные значения воспринимаемой читаемости. Точное совместное множество
+решений равно `#757575…#767676`; соседние коды `#747474` и `#777777` уже не
+проходят оба ограничения одновременно.
+
+Роли доказательств разделены. Независимый Python-оракул
+`scripts/verify_wcag22_neutral_axis.py` пересчитывает множество рациональной
+арифметикой без производственного Q55 и Rust-вычислителя. Тест
+`exact_4_5_fixtures_are_7_2_and_proven_zero` фиксирует те же два кандидата через
+публичный производственный вычислитель, а
+`production_vectors_are_bound_to_the_exact_independent_oracle_fixture`
+фиксирует точные байты эталона по SHA-256. Изменение соседей, критерия либо
+зарегистрированного домена может изменить множество решений и требует
+повторного полного вычисления.
