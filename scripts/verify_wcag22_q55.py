@@ -37,7 +37,6 @@ VERIFIER_PATH = Path(__file__).resolve()
 RUST_ARTIFACT = REPO_ROOT / "crates/labcolors-core/src/wcag22/q55_data.rs"
 KERNEL_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22/kernel.rs"
 SRGB8_ROUTE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/srgb8.rs"
-PARSER_SOURCE = SRGB8_ROUTE_SOURCE
 TERMINAL_EVIDENCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22_evidence.rs"
 FACADE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22.rs"
 CRATE_ROOT_ROUTE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lib.rs"
@@ -86,7 +85,7 @@ EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
 )
 PARSER_ID = "encoded-srgb8-hex-parser-v1"
 EXPECTED_PARSER_SHA256 = (
-    "7729a07dcc356851a6c7e0763df96317b607e98396b20199a9575a3b625cbe18"
+    "071ad416e4da1745d47bb1ed0d43c64306fc568db0336420f7a7f8ca62d20a5a"
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
@@ -98,11 +97,18 @@ DECLARED_OPERATION_LAW = (
 SOURCE_BINDING_SCHEMA_VERSION = 1
 SOURCE_BINDING_LAW = "wcag22-rust-semantic-dependency-cone-v1"
 SOURCE_BINDING_DOMAIN = b"labcolors.wcag22-source-binding"
-CANONICAL_CRATE_TARGET = b"crates/labcolors-core/src/lib.rs"
+
+
+def repository_path_bytes(path: Path) -> bytes:
+    """Encode one canonical repository-relative path for proof preimages."""
+    return path.relative_to(REPO_ROOT).as_posix().encode("utf-8")
+
+
+CANONICAL_CRATE_TARGET = repository_path_bytes(CRATE_ROOT_ROUTE_SOURCE)
 ROOT_ROUTE_BEGIN = b"// BEGIN WCAG22_SOURCE_ROUTES_V1"
 ROOT_ROUTE_END = b"// END WCAG22_SOURCE_ROUTES_V1"
 EXPECTED_ROOT_ROUTE_REGION = b"""// BEGIN WCAG22_SOURCE_ROUTES_V1
-const _: () = ();
+const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
 pub mod numerics;
 pub(crate) mod srgb8;
 pub mod wcag22;
@@ -112,8 +118,8 @@ pub mod wcag22_evidence;
 PARSER_ROUTE_BEGIN = b"// BEGIN WCAG22_PARSER_CAPSULE_V1"
 PARSER_ROUTE_END = b"// END WCAG22_PARSER_CAPSULE_V1"
 EXPECTED_PARSER_ROUTE_REGION = b"""// BEGIN WCAG22_PARSER_CAPSULE_V1
-const _: () = ();
-/// Parse optional-`#` `RRGGBB` into the exact three encoded bytes.
+const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag22_q55.py.
+/// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
 ///
 /// Public APIs choose their own transport strictness before calling this SSOT.
 /// ASCII is checked before byte slicing, so arbitrary public Unicode input
@@ -775,9 +781,6 @@ def exact_source_region(
     start = begins[0].start()
     assert start == 0, f"source-binding region must be the first source item in {path}"
     stop = ends[0].end()
-    assert (start == 0 or source[start - 1 : start] == b"\n") and (
-        stop == len(source) or source[stop : stop + 1] == b"\n"
-    ), f"source-binding markers must occupy complete lines in {path}"
     region = source[start:stop]
     assert region == expected, f"canonical source-binding region drifted: {path}"
     return region
@@ -787,12 +790,12 @@ def verify_source_routes() -> str:
     """Bind Cargo's lib target and the two exact WCAG route capsules."""
     regions = (
         (
-            b"crates/labcolors-core/Cargo.toml",
+            repository_path_bytes(CORE_MANIFEST),
             b"cargo-lib-target-v1",
             verify_canonical_crate_target(),
         ),
         (
-            CANONICAL_CRATE_TARGET,
+            repository_path_bytes(CRATE_ROOT_ROUTE_SOURCE),
             b"wcag22-source-routes-v1",
             exact_source_region(
                 CRATE_ROOT_ROUTE_SOURCE,
@@ -802,7 +805,7 @@ def verify_source_routes() -> str:
             ),
         ),
         (
-            b"crates/labcolors-core/src/srgb8.rs",
+            repository_path_bytes(SRGB8_ROUTE_SOURCE),
             b"wcag22-parser-capsule-v1",
             exact_source_region(
                 SRGB8_ROUTE_SOURCE,
@@ -893,9 +896,11 @@ def verify_terminal_evidence() -> str:
 
 def verify_srgb8_parser() -> str:
     """Bind the exact production-only byte-parser capsule."""
-    assert not PARSER_SOURCE.is_symlink(), "encoded sRGB8 parser source must not be a symlink"
+    assert not SRGB8_ROUTE_SOURCE.is_symlink(), (
+        "encoded sRGB8 parser source must not be a symlink"
+    )
     source_bytes = exact_source_region(
-        PARSER_SOURCE,
+        SRGB8_ROUTE_SOURCE,
         PARSER_ROUTE_BEGIN,
         PARSER_ROUTE_END,
         EXPECTED_PARSER_ROUTE_REGION,

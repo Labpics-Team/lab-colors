@@ -403,9 +403,11 @@ replacement принадлежит #283.
 
 Raw-размер WASM — hard gate. Его versioned SSOT —
 `bench/wasm-size-budget-v1.json`: точное принятое измерение Issue #284 вместе
-с toolchain provenance, SHA-256 измеренного артефакта и ceiling без
-произвольного запаса. Канонический артефакт строит release-equivalent Linux x64
-CI: там checker требует одновременно точный SHA-256 и непревышение ceiling. На
+с toolchain provenance, SHA-256 измеренного baseline и ceiling без
+произвольного запаса. SHA текущего воспроизводимого артефакта хранится отдельно
+в `currentArtifact`, поэтому его recertification не переписывает происхождение
+лимита. Канонический артефакт строит release-equivalent Linux x64 CI: там
+checker требует одновременно точный текущий SHA-256 и неизменный ceiling. На
 других host-платформах тот же checker только сообщает raw/gzip/SHA-диагностику:
 host-native toolchain bytes не выдаются за канонический release artifact и не
 сравниваются с чужим ceiling. Каноническая сборка remap-ит mutable workspace и

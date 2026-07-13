@@ -1,6 +1,6 @@
 // BEGIN WCAG22_PARSER_CAPSULE_V1
-const _: () = ();
-/// Parse optional-`#` `RRGGBB` into the exact three encoded bytes.
+const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag22_q55.py.
+/// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
 ///
 /// Public APIs choose their own transport strictness before calling this SSOT.
 /// ASCII is checked before byte slicing, so arbitrary public Unicode input

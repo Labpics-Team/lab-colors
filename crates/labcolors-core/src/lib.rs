@@ -1,5 +1,5 @@
 // BEGIN WCAG22_SOURCE_ROUTES_V1
-const _: () = ();
+const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
 pub mod numerics;
 pub(crate) mod srgb8;
 pub mod wcag22;
