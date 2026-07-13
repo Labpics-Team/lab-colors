@@ -747,11 +747,11 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   assert.equal(budget.measurement.target, "wasm32-unknown-unknown");
   assert.equal(budget.measurement.cargoProfile, "release");
   assert.equal(budget.measurement.wasmOpt, "-Oz");
-  assert.equal(budget.measurement.rawBytes, 457815);
-  assert.equal(budget.policy.maxRawBytes, 457815);
+  assert.equal(budget.measurement.rawBytes, 454385);
+  assert.equal(budget.policy.maxRawBytes, 454385);
   assert.equal(
     budget.measurement.sha256,
-    "db534a3c00c099d1b0c7f117db691744cf3e560b414be86ca47719a23c6c1909",
+    "94c61c1689fa2e1c10d79817864471f41c623463bd9b5b4e0dac2a850a58f09f",
   );
   assert.equal(budget.measurement.measurementPlatform, "linux-x64");
   assert.deepEqual(budget.measurement.rustPathRemap, [
