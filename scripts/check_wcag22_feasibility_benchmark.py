@@ -4,6 +4,11 @@
 This checker intentionally does not admit or reject elapsed time. Native timing
 and allocator observations stay raw evidence; WebAssembly memory and serialized
 size are explicitly outside this artifact's claim boundary.
+
+Generation admission replays the measured revision while it is addressable.
+Durable repository verification instead proves that every current subject is
+byte-identical to the admitted measurement, so squash merging and deleting the
+source branch cannot turn valid evidence into an unreachable Git reference.
 """
 
 from __future__ import annotations
@@ -54,7 +59,14 @@ SOURCE_OBJECTS = (
     ("workspaceLock", "Cargo.lock"),
     ("coreCargo", "crates/labcolors-core/Cargo.toml"),
     ("coreSourceTree", "crates/labcolors-core/src"),
-    ("coreContractsTree", "crates/labcolors-core/contracts"),
+    (
+        "wcag22Srgb8Contract",
+        "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
+    ),
+    (
+        "wcag22Q55ProofContract",
+        "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
+    ),
     (
         "benchmarkHarness",
         "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
@@ -215,6 +227,7 @@ def check_hard_slo(payload: dict[str, Any]) -> None:
 
 
 def check_subject_manifest(payload: dict[str, Any]) -> None:
+    check_subject_git_bindings(SUBJECT_PATHS, SOURCE_OBJECTS)
     manifest = payload.get("subjectManifest")
     require(isinstance(manifest, list) and len(manifest) == len(SUBJECT_PATHS),
             "subjectManifest must bind every exact dependency-cone path")
@@ -225,6 +238,18 @@ def check_subject_manifest(payload: dict[str, Any]) -> None:
         expected = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
         require(entry.get("sha256") == expected,
                 f"subjectManifest source drift: {path}")
+
+
+def check_subject_git_bindings(
+    subject_paths: tuple[str, ...],
+    source_objects: tuple[tuple[str, str], ...],
+) -> None:
+    bound_paths = tuple(path for _, path in source_objects)
+    for subject in subject_paths:
+        require(
+            any(subject == bound or subject.startswith(f"{bound}/") for bound in bound_paths),
+            f"subject path lacks historical Git-object binding: {subject}",
+        )
 
 
 def check_samples(name: str, samples: Any, sample_count: int) -> None:
@@ -340,7 +365,12 @@ def git_rev_parse(specification: str) -> str:
     return value
 
 
-def check_source_objects(environment: dict[str, Any], revision: str, tree: str) -> None:
+def check_source_objects(
+    environment: dict[str, Any],
+    revision: str,
+    tree: str,
+    verify_current_subjects: bool,
+) -> None:
     values = environment.get("sourceObjects")
     require(isinstance(values, dict), "environment.sourceObjects must be an object")
     require(set(values) == {name for name, _ in SOURCE_OBJECTS},
@@ -361,6 +391,16 @@ def check_source_objects(environment: dict[str, Any], revision: str, tree: str) 
     if revision == "unavailable":
         require(tree == "unavailable",
                 "gitTree must be unavailable when complete revision provenance is unavailable")
+        require(not verify_current_subjects,
+                "current-subject verification requires complete measured provenance")
+        return
+
+    if verify_current_subjects:
+        require(tree != "unavailable",
+                "current-subject verification requires a recorded measurement tree")
+        for name, path in SOURCE_OBJECTS:
+            require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
+                    f"current Git subject differs from admitted measurement: {path}")
         return
 
     require(tree == git_rev_parse(f"{revision}^{{tree}}"),
@@ -371,7 +411,9 @@ def check_source_objects(environment: dict[str, Any], revision: str, tree: str) 
 
 
 def check_environment(
-    payload: dict[str, Any], protocol: AdmissionProtocol | None
+    payload: dict[str, Any],
+    protocol: AdmissionProtocol | None,
+    verify_current_subjects: bool,
 ) -> None:
     environment = payload.get("environment")
     require(isinstance(environment, dict) and environment.get("execution") == "native-process",
@@ -406,7 +448,7 @@ def check_environment(
         or (isinstance(tree, str) and GIT_OBJECT.fullmatch(tree) is not None),
         "environment.gitTree must be unavailable or one exact Git object ID",
     )
-    check_source_objects(environment, revision, tree)
+    check_source_objects(environment, revision, tree, verify_current_subjects)
 
     if protocol is None:
         return
@@ -444,7 +486,11 @@ def check_environment(
             "measured sample count differs from the pinned admission protocol")
 
 
-def check(payload: Any, protocol: AdmissionProtocol | None = None) -> None:
+def check(
+    payload: Any,
+    protocol: AdmissionProtocol | None = None,
+    verify_current_subjects: bool = False,
+) -> None:
     require(isinstance(payload, dict), "artifact root must be an object")
     require(payload.get("schemaVersion") == 1, "unsupported benchmark schemaVersion")
     require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v1",
@@ -464,7 +510,7 @@ def check(payload: Any, protocol: AdmissionProtocol | None = None) -> None:
         == "measurement-only-unless-admission-check-passes",
         "raw artifacts must not claim admission without an exact protocol check",
     )
-    check_environment(payload, protocol)
+    check_environment(payload, protocol, verify_current_subjects)
 
     sample_count = exact_nonnegative_int(payload.get("sampleCount"), "sampleCount")
     require(sample_count > 0, "sampleCount must be positive")
@@ -499,13 +545,15 @@ def check(payload: Any, protocol: AdmissionProtocol | None = None) -> None:
 
 
 def run_mutation_self_tests(
-    payload: dict[str, Any], protocol: AdmissionProtocol | None
+    payload: dict[str, Any],
+    protocol: AdmissionProtocol | None,
+    verify_current_subjects: bool,
 ) -> int:
     def rejected(mutator: Any, label: str) -> None:
         candidate = copy.deepcopy(payload)
         mutator(candidate)
         try:
-            check(candidate, protocol)
+            check(candidate, protocol, verify_current_subjects)
         except ValueError:
             return
         raise ValueError(f"checker mutation survived: {label}")
@@ -548,7 +596,14 @@ def run_mutation_self_tests(
         ),
         "source object ID shape",
     )
-    if payload["environment"]["gitRevision"] == "unavailable":
+    if verify_current_subjects:
+        rejected(
+            lambda value: value["environment"]["sourceObjects"]["coreCargo"].__setitem__(
+                "gitObject", "0" * 40
+            ),
+            "current source object replay",
+        )
+    elif payload["environment"]["gitRevision"] == "unavailable":
         rejected(
             lambda value: value["environment"].__setitem__(
                 "gitTree", "0" * 40
@@ -563,8 +618,23 @@ def run_mutation_self_tests(
 
     timing = copy.deepcopy(payload)
     timing["scenarios"][0]["samples"][0]["elapsedNs"] = 10**30
-    check(timing, protocol)
-    return 8
+    check(timing, protocol, verify_current_subjects)
+    try:
+        check_subject_git_bindings(
+            (*SUBJECT_PATHS, "unbound-subject"),
+            SOURCE_OBJECTS,
+        )
+    except ValueError:
+        pass
+    else:
+        raise ValueError("checker mutation survived: subject Git binding")
+    return 9
+
+
+def check_artifact_digest(payload_bytes: bytes, expected: str) -> None:
+    require_digest(expected, "--artifact-sha256")
+    require(hashlib.sha256(payload_bytes).hexdigest() == expected,
+            "artifact bytes differ from the admitted SHA-256")
 
 
 def main() -> int:
@@ -582,6 +652,16 @@ def main() -> int:
     parser.add_argument("--admit-target-arch")
     parser.add_argument("--admit-target-os")
     parser.add_argument("--admit-sample-count", type=int)
+    parser.add_argument(
+        "--verify-current-subjects",
+        action="store_true",
+        help=(
+            "verify current dependency-cone objects instead of resolving the "
+            "recorded measurement commit; requires all admission pins and "
+            "--artifact-sha256"
+        ),
+    )
+    parser.add_argument("--artifact-sha256")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     admission_values = (
@@ -597,6 +677,18 @@ def main() -> int:
         or all(value is not None for value in admission_values),
         "exact admission requires all --admit-* protocol pins together",
     )
+    require(
+        not args.verify_current_subjects or all(value is not None for value in admission_values),
+        "current-subject verification requires all --admit-* protocol pins",
+    )
+    require(
+        not args.verify_current_subjects or args.artifact_sha256 is not None,
+        "current-subject verification requires --artifact-sha256",
+    )
+    require(
+        args.artifact_sha256 is None or args.verify_current_subjects,
+        "--artifact-sha256 is reserved for durable current-subject verification",
+    )
     protocol = None
     if args.admit_revision is not None:
         require(GIT_OBJECT.fullmatch(args.admit_revision) is not None,
@@ -611,14 +703,30 @@ def main() -> int:
             target_os=args.admit_target_os,
             sample_count=args.admit_sample_count,
         )
-    payload = json.loads(args.artifact.read_text(encoding="utf-8"))
-    check(payload, protocol)
-    mutation_checks = run_mutation_self_tests(payload, protocol) if args.self_test else 0
+    payload_bytes = args.artifact.read_bytes()
+    digest_checks = 0
+    if args.artifact_sha256 is not None:
+        check_artifact_digest(payload_bytes, args.artifact_sha256)
+        if args.self_test:
+            try:
+                check_artifact_digest(payload_bytes + b"\n", args.artifact_sha256)
+            except ValueError:
+                digest_checks = 1
+            else:
+                raise ValueError("checker mutation survived: artifact SHA-256")
+    payload = json.loads(payload_bytes.decode("utf-8"))
+    check(payload, protocol, args.verify_current_subjects)
+    mutation_checks = (
+        run_mutation_self_tests(payload, protocol, args.verify_current_subjects)
+        if args.self_test
+        else 0
+    )
+    mutation_checks += digest_checks
     print(
         "WCAG22 feasibility benchmark artifact: PASS; "
         f"scenarios={len(REQUIRED_SCENARIOS)}; "
         f"samples={payload['sampleCount']}; "
-        f"mode={'admission' if protocol is not None else 'measurement'}; "
+        f"mode={'current-subjects' if args.verify_current_subjects else ('admission' if protocol is not None else 'measurement')}; "
         f"mutation_checks={mutation_checks}; timing_thresholds=none"
     )
     return 0

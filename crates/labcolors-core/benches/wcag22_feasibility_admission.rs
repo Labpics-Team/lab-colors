@@ -44,12 +44,22 @@ const PAGE_BYTES: u64 = 65_536;
 const DECISION_SLOT_BYTES: u64 = 32;
 const PARTITION_BYTES: u64 = 32;
 const MAX_APPLICABLE_EDGES: u64 = PAGE_BYTES / DECISION_SLOT_BYTES - 1;
-const SOURCE_OBJECTS: [(&str, &str); 7] = [
+// The committed result artifact lives under `contracts`, so binding that whole
+// tree would make durable verification self-referential. Bind the two contracts
+// the compiler actually consumes as exact blobs instead.
+const SOURCE_OBJECTS: [(&str, &str); 8] = [
     ("workspaceCargo", "Cargo.toml"),
     ("workspaceLock", "Cargo.lock"),
     ("coreCargo", "crates/labcolors-core/Cargo.toml"),
     ("coreSourceTree", "crates/labcolors-core/src"),
-    ("coreContractsTree", "crates/labcolors-core/contracts"),
+    (
+        "wcag22Srgb8Contract",
+        "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
+    ),
+    (
+        "wcag22Q55ProofContract",
+        "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
+    ),
     (
         "benchmarkHarness",
         "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
