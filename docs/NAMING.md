@@ -60,19 +60,21 @@
 - Артефактный субпуть `./pkg/labcolors_bg.wasm` — см. «Известные отступления».
 - Файлы пакета — kebab-case (`apply-theme.js` + `apply-theme.d.ts`).
 
-### Python-скрипты (golden-эталоны)
+### Python-скрипты (эталоны)
 
 - snake_case по PEP 8: `golden_ref.py` — эталон colour-science для CIECAM16;
   `jhk_golden_ref.py` — вариант с суффиксом-основой для J'a'b' (JHK).
-- `generate_wcag22_q55.py` детерминированно строит Rust-таблицу и canonical
-  little-endian Q55 artifact из профиля; `verify_wcag22_q55.py` независимо
-  сверяет обе формы и full-domain decision-totality;
-  `test_wcag22_source_binding.py` независимо мутирует proof-bound Rust-маршруты
-  и parser-capsule, проверяя, что посторонний source-текст не меняет digest.
-- `verify_wcag22_neutral_axis.py` независимо выводит exact neutral-axis fixtures;
-  `verify_wcag22_feasibility_identity.py` воспроизводит canonical preimages и
-  bit packing; `check_wcag22_feasibility_benchmark.py` fail-closed проверяет
-  первичное admission и post-squash тождество измеренного dependency cone.
+- `generate_wcag22_q55.py` детерминированно строит Rust-таблицу и канонический
+  артефакт Q55 с младшим байтом вперёд; `verify_wcag22_q55.py` независимо
+  сверяет обе формы и полноту решений во всём домене;
+  `test_wcag22_source_binding.py` независимо мутирует связанные с
+  доказательством Rust-маршруты и капсулу парсера, проверяя, что посторонний
+  исходный текст не меняет хэш.
+- `verify_wcag22_neutral_axis.py` независимо выводит точные фикстуры нейтральной
+  оси; `verify_wcag22_feasibility_identity.py` воспроизводит канонические
+  прообразы и упаковку битов; `check_wcag22_feasibility_benchmark.py` проверяет
+  с отказом при любом расхождении первичный допуск и тождество измеренного графа
+  зависимостей после объединения коммитов.
 - Скрипты живут только в scripts/; каждый упомянут в этом каноне — появление
   нового скрипта требует строчки здесь (иначе гейт красный).
 
