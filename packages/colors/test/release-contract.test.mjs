@@ -850,14 +850,14 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
     writeFileSync(wasm, sameSizeDifferentArtifact);
     assert.match(
       run(),
-      /PASS raw=8B ceiling=8B canonical-ceiling-delta=\+0B gzip=\d+B .*baseline-sha=different/u,
+      /DIAGNOSTIC raw=8B canonical-ceiling=8B delta=\+0B gzip=\d+B .*baseline-sha=different/u,
       "non-canonical host reports diagnostics without claiming byte identity",
     );
 
     writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
     assert.match(
       run(),
-      /PASS raw=9B ceiling=8B canonical-ceiling-delta=\+1B gzip=\d+B .*baseline-sha=different/u,
+      /DIAGNOSTIC raw=9B canonical-ceiling=8B delta=\+1B gzip=\d+B .*baseline-sha=different/u,
       "non-canonical bytes remain diagnostic even above the canonical host ceiling",
     );
   } finally {

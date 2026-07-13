@@ -137,12 +137,13 @@ if (isCanonicalPlatform && baselineSha !== "match") {
       `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
   );
 }
+const sizeDelta = rawBytes - maxRawBytes;
 const sizeStatus = isCanonicalPlatform
-  ? `remaining=${maxRawBytes - rawBytes}B`
-  : `canonical-ceiling-delta=${rawBytes - maxRawBytes >= 0 ? "+" : ""}${rawBytes - maxRawBytes}B`;
+  ? `PASS raw=${rawBytes}B ceiling=${maxRawBytes}B remaining=${-sizeDelta}B`
+  : `DIAGNOSTIC raw=${rawBytes}B canonical-ceiling=${maxRawBytes}B ` +
+    `delta=${sizeDelta >= 0 ? "+" : ""}${sizeDelta}B`;
 
 console.log(
-  `WASM size budget PASS raw=${rawBytes}B ceiling=${maxRawBytes}B ` +
-    `${sizeStatus} gzip=${gzipBytes}B ` +
+  `WASM size budget ${sizeStatus} gzip=${gzipBytes}B ` +
     `diagnostic-only platform=${currentPlatform} baseline-sha=${baselineSha}`,
 );
