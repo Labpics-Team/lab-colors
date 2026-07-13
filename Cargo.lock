@@ -523,13 +523,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "labcolors-preview"
-version = "0.2.0"
-dependencies = [
- "labcolors-core",
-]
-
-[[package]]
 name = "labcolors-wasm"
 version = "0.2.0"
 dependencies = [
