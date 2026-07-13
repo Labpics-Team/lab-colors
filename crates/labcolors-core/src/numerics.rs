@@ -52,6 +52,30 @@
 //!     _seal: labcolors_core::numerics::EvidenceSeal { _private: () },
 //! };
 //! ```
+//!
+//! Подлинное evidence также нельзя переиспользовать для другого site/result:
+//! каждый terminal-вариант запечатан целиком, а не только его evidence payload.
+//!
+//! ```compile_fail,E0639
+//! use labcolors_core::{NumericalDecisionV1, NumericalSiteIdV1};
+//! use labcolors_core::wcag22::{
+//!     Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
+//! };
+//!
+//! let genuine = evaluate_wcag22_srgb8(
+//!     [0, 0, 0],
+//!     [255, 255, 255],
+//!     Wcag22CriterionV1::Sc143TextDefault,
+//! ).unwrap();
+//! let Wcag22AssessmentV1::Evaluated { evidence, .. } = genuine else {
+//!     unreachable!()
+//! };
+//! let _forged: NumericalDecisionV1<&str> = NumericalDecisionV1::Determinate {
+//!     site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+//!     value: "forged cross-site result",
+//!     evidence,
+//! };
+//! ```
 
 /// Stable outcomes admitted for a migrated branch-sensitive site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -924,6 +948,7 @@ fn mint_bit_exact_for_row(
 #[non_exhaustive]
 pub enum NumericalDecisionV1<T> {
     /// Решение принято под запечатанным evidence.
+    #[non_exhaustive]
     Determinate {
         /// Зарегистрированный site.
         site_id: NumericalSiteIdV1,
@@ -933,6 +958,7 @@ pub enum NumericalDecisionV1<T> {
         evidence: NumericalDecisionEvidenceV1,
     },
     /// Явно выбранный зарегистрированный прежний алгоритм.
+    #[non_exhaustive]
     Compatibility {
         /// Зарегистрированный site.
         site_id: NumericalSiteIdV1,
@@ -944,6 +970,7 @@ pub enum NumericalDecisionV1<T> {
         provenance: LegacyPlatformDependentV1,
     },
     /// Stable branch не выбран.
+    #[non_exhaustive]
     Indeterminate {
         /// Зарегистрированный site.
         site_id: NumericalSiteIdV1,

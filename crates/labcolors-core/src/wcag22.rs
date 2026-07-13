@@ -21,10 +21,10 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "1af4eb510c59553f3fcb9779dcda676629f4d1727b91a03d8366532d77859e13";
+    "c4a35a902ea49729704d05c2a9a07530a1731ebd4ff7325b5e5baf261fbe7b9e";
 const PROOF_PAYLOAD_SHA256: &str =
-    "5f0c2df8a54faab1517466967943e1ebf7bf0b11753191b0e5ac0f54c29aa7a3";
-const VERIFIER_SHA256: &str = "5b2ec45a4ea1e2797ae7a451db8ab0d196484564bdeb561470e672c1f0425f0d";
+    "fa10908a1960e51b122a11ca0413083ab67749c79161c8b5d22a6c0c69ce71fb";
+const VERIFIER_SHA256: &str = "8757b348b99926700c6d9854ed4ae515d4c676b31c7924b0812a3745f2181221";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,8 +53,6 @@ pub struct Wcag22ProfileV1 {
     pub profile_id: Wcag22ProfileIdV1,
     /// Датированный normative source.
     pub recommendation: &'static str,
-    /// Raw canonical machine-readable profile.
-    pub source_json: &'static str,
     /// SHA-256 exact bytes [`Self::source_json`].
     pub source_sha256: &'static str,
     /// FNV-1a-32 of the typed, length-prefixed profile V1 preimage.
@@ -69,21 +67,38 @@ pub struct Wcag22ProfileV1 {
     pub bound_id: NumericalErrorBoundIdV2,
     /// Replayable full-domain proof identity.
     pub proof_id: NumericalProofIdV2,
-    /// Raw canonical proof artifact.
-    pub proof_json: &'static str,
     /// SHA-256 exact proof file bytes.
     pub proof_sha256: &'static str,
-    /// SHA-256 canonical proof payload before its self-authenticating field.
+    /// SHA-256 canonical proof payload before its embedded integrity digest.
     pub proof_payload_sha256: &'static str,
     /// SHA-256 independent verifier source.
     pub verifier_sha256: &'static str,
+}
+
+impl Wcag22ProfileV1 {
+    /// Raw canonical machine-readable profile for offline audit/replay.
+    ///
+    /// Kept behind a callable accessor so consumers that only evaluate colours
+    /// do not retain the whole document in their final binary.
+    #[must_use]
+    pub fn source_json(&self) -> &'static str {
+        PROFILE_SOURCE_JSON
+    }
+
+    /// Raw canonical full-domain proof artifact for offline audit/replay.
+    ///
+    /// The npm package also ships this byte-identical document under
+    /// `evidence/`; runtime evaluators need only the IDs and digests above.
+    #[must_use]
+    pub fn proof_json(&self) -> &'static str {
+        PROOF_SOURCE_JSON
+    }
 }
 
 static WCAG22_PROFILE_V1: Wcag22ProfileV1 = Wcag22ProfileV1 {
     schema_version: 1,
     profile_id: Wcag22ProfileIdV1::Wcag22Srgb8ContrastV1,
     recommendation: "https://www.w3.org/TR/2024/REC-WCAG22-20241212/",
-    source_json: PROFILE_SOURCE_JSON,
     source_sha256: q55_data::PROFILE_SOURCE_SHA256,
     profile_checksum: q55_data::PROFILE_CHECKSUM,
     artifact_id: NumericalArtifactIdV2::Wcag22Srgb8LuminanceQ55V1,
@@ -91,7 +106,6 @@ static WCAG22_PROFILE_V1: Wcag22ProfileV1 = Wcag22ProfileV1 {
     generator_sha256: q55_data::GENERATOR_SHA256,
     bound_id: NumericalErrorBoundIdV2::Wcag22Srgb8OutwardQ55V1,
     proof_id: NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1,
-    proof_json: PROOF_SOURCE_JSON,
     proof_sha256: PROOF_SOURCE_SHA256,
     proof_payload_sha256: PROOF_PAYLOAD_SHA256,
     verifier_sha256: VERIFIER_SHA256,
@@ -355,12 +369,12 @@ mod tests {
     fn profile_binds_canonical_sources_and_artifact() {
         let profile = wcag22_profile_v1();
         assert_eq!(profile.profile_id.key(), "wcag22-srgb8-contrast-v1");
-        assert_eq!(profile.source_json, PROFILE_SOURCE_JSON);
+        assert_eq!(profile.source_json(), PROFILE_SOURCE_JSON);
         assert_eq!(profile.source_sha256.len(), 64);
         assert_eq!(profile.profile_checksum, "152813fe");
         assert_eq!(profile.artifact_sha256.len(), 64);
         assert_eq!(profile.generator_sha256.len(), 64);
-        assert_eq!(profile.proof_json, PROOF_SOURCE_JSON);
+        assert_eq!(profile.proof_json(), PROOF_SOURCE_JSON);
         assert_eq!(profile.proof_sha256.len(), 64);
         assert_eq!(profile.proof_payload_sha256.len(), 64);
         assert_eq!(profile.verifier_sha256.len(), 64);

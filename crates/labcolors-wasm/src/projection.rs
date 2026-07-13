@@ -797,34 +797,47 @@ mod tests {
         RoleOutcome, SolvedColor,
     };
 
-    /// Единственный конструируемый снаружи ядра атомарный legacy-исход:
-    /// registered release + provenance-маркер (оба публичны by design).
-    fn legacy_outcome() -> labcolors_core::glow::GlowDecisionOutcomeV1 {
-        labcolors_core::glow::GlowDecisionOutcomeV1::Compatibility {
-            release_id:
-                labcolors_core::NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
-            provenance: labcolors_core::LegacyPlatformDependentV1,
-        }
+    /// Берёт атомарный outcome только из полного core-owned product path. Variant
+    /// sealed: boundary-тест не может переупаковать чужое genuine evidence.
+    fn core_glow_outcome(
+        background: &str,
+        profile: labcolors_core::GlowDecisionProfileV1,
+    ) -> labcolors_core::glow::GlowDecisionOutcomeV1 {
+        let tint =
+            labcolors_core::LadderTint::new([[74.0 / 255.0, 143.0 / 255.0, 1.0]; 4]).unwrap();
+        let table = labcolors_core::NamedRoleTable::new(
+            vec![(
+                "opaque-client-id".to_string(),
+                labcolors_core::RoleSpec::Glow {
+                    tint,
+                    step: labcolors_core::glow::GlowStep::Base,
+                    mode: profile.execution_mode(),
+                },
+            )],
+            Vec::new(),
+            labcolors_core::RoleChroma::Neutral,
+        )
+        .unwrap();
+        let resolved = labcolors_core::resolve_named_set(
+            &labcolors_core::BgInput::solid(background).unwrap(),
+            &table,
+            &labcolors_core::ViewingConditions::srgb(),
+        );
+        let labcolors_core::Resolved::Glow(glow) = &resolved[0].1 else {
+            panic!("core fixture must resolve to a terminal Glow outcome");
+        };
+        glow.decision_outcome()
     }
 
-    /// Stable exact no-op из НАСТОЯЩЕГО core-решения: evidence запечатан
-    /// (приватная печать), поэтому тест берёт его у солвера на белом фоне —
-    /// там screen-слой побайтно no-op для любой alpha, решение Determinate.
-    fn stable_exact_noop_outcome() -> labcolors_core::glow::GlowDecisionOutcomeV1 {
-        let decision = labcolors_core::solve_screen_alpha_for_dj(
-            "#FFFFFF",
-            "#FFFFFF",
-            2.3006,
-            labcolors_core::NumericalExecutionModeV1::StableOnly,
-            &labcolors_core::ViewingConditions::srgb(),
+    fn legacy_outcome() -> labcolors_core::glow::GlowDecisionOutcomeV1 {
+        core_glow_outcome(
+            "#101012",
+            labcolors_core::GlowDecisionProfileV1::LegacyPlatformDependentV1,
         )
-        .expect("stable solve на белом обязан вернуть решение");
-        match decision {
-            labcolors_core::NumericalDecisionV1::Determinate { evidence, .. } => {
-                labcolors_core::glow::GlowDecisionOutcomeV1::StableExactNoop { evidence }
-            }
-            other => panic!("белый screen-noop обязан быть Determinate, получено {other:?}"),
-        }
+    }
+
+    fn stable_exact_noop_outcome() -> labcolors_core::glow::GlowDecisionOutcomeV1 {
+        core_glow_outcome("#FFFFFF", labcolors_core::GlowDecisionProfileV1::StableV1)
     }
 
     fn color_entry(key: &str) -> RoleEntry {

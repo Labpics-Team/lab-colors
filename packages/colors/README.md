@@ -263,8 +263,9 @@ Core не выводит критерий из имени токена, CSS-кл
 Решение не использует epsilon, округлённый display-ratio или отдельную JS-
 формулу. Оно приходит из Rust core вместе с identity профиля, Q55-таблицы,
 bound-law и воспроизводимого full-domain proof. Файлы доказательства входят в
-npm-тарбол в `evidence/`. LPC/APCA-shaped diagnostics и legacy `wcagRatio` не
-могут изменить этот вердикт.
+npm-тарбол в `evidence/`; proof также SHA-256-связан с фактической typed
+registry-строкой, разрешающей Core минтить terminal evidence. LPC/APCA-shaped
+diagnostics и legacy `wcagRatio` не могут изменить этот вердикт.
 
 ---
 

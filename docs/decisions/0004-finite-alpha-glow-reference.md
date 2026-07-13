@@ -117,7 +117,7 @@ representable внутренности фактического интервал
 platform/libm-dependent: точного эталона или sound outward bound для CAM16-
 ветвления пока нет. Поэтому `stable-v1` на нетривиальном site
 `glow-target-or-maximum-v1` не выбирает state и возвращает
-`NumericalDecisionV1::Indeterminate { site_id, evidence }`, где evidence —
+`NumericalDecisionV1::Indeterminate { site_id, evidence, .. }`, где evidence —
 `SoundBoundUnavailable`. WASM-проекция выводит из этого варианта согласованную
 пару `reason: sound-bound-unavailable` + `bounds: unavailable`. Legacy не
 включается как fallback — его обязан явно выбрать клиентский контракт.
@@ -125,10 +125,11 @@ platform/libm-dependent: точного эталона или sound outward boun
 Единственное stable-исключение не является специальной цветовой эвристикой:
 если point screen-композит не может изменить ни один байт при любой alpha,
 `ΔJ′ = 0` следует из равенства byte-state. Такой no-op determinate имеет
-`bit-exact` guarantee без вызова CAM16. Реестр уже мигрированных
-branch-sensitive sites и классов гарантий является публичными данными
-`numerical_registry_v1()` (#281); он не объявляет полный аудит исторических
-`f64`-ветвлений, которым владеет #291.
+`bit-exact` guarantee без вызова CAM16. Публичная проекция уже мигрированных
+branch-sensitive sites и классов evidence —
+`numerical_capability_manifest_v2()` (#281/#284); internal registry остаётся
+Core-owned SSOT и не объявляет полный аудит исторических `f64`-ветвлений,
+которым владеет #291.
 
 ### 3. Alpha канонизируется внутри выбранного интервала
 
@@ -259,3 +260,17 @@ legacy-исход всё ещё выглядел как «determinate со сл�
   manifest ядра (coverage `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над
   canonical length-prefixed preimage) вместо прозаического `numericalSites`;
   release verifier и Swift-тесты пересчитывают checksum независимо.
+
+## Дополнение 2026-07-13: Core-owned terminal outcomes и capability V2 (#284)
+
+- Struct-like варианты `NumericalDecisionV1` и `GlowDecisionOutcomeV1`
+  запечатаны variant-level `#[non_exhaustive]`. Теперь внешний код не может
+  переупаковать подлинное evidence другого site как Glow/WCAG outcome; он
+  получает предметный результат только из Core-owned resolver-а.
+- Единственная public capability projection —
+  `numerical_capability_manifest_v2()`. Internal registry остаётся SSOT, а
+  WCAG admission дополнительно SHA-256-связан с десятью фактическими typed
+  полями, разрешающими минт bounded evidence.
+- Pack 4.0.0 добавляет отдельное `wcag22`-семейство. Это terminal standard
+  certificate для явно объявленного criterion, а не новая Glow-эвристика и не
+  замена LPC-перцептивной цели.

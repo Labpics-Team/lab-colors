@@ -192,7 +192,7 @@ pub struct Wcag22Evidence {
     pub proof_id: String,
     /// Exact committed proof-file digest.
     pub proof_sha256: String,
-    /// Canonical self-authenticated proof payload digest.
+    /// Canonical proof payload integrity digest.
     pub proof_payload_sha256: String,
     /// Exact generator source digest.
     pub generator_sha256: String,
@@ -818,7 +818,9 @@ pub fn solve_glow_point(
                 }),
             }
         }
-        NumericalDecisionV1::Indeterminate { site_id, evidence } => {
+        NumericalDecisionV1::Indeterminate {
+            site_id, evidence, ..
+        } => {
             if profile != GlowDecisionProfile::StableV1 {
                 return Err(ColorError::IncompatibleCoreContract {
                     reason: "legacy Glow profile returned an Indeterminate core outcome"

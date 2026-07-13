@@ -78,6 +78,10 @@ decision. Legacy-идентификаторы сохранены только д
   `labcolors.numerical-capability.v2`. Release verifier и Swift-тесты
   пересчитывают checksum НЕЗАВИСИМО от Rust-кода. Manifest содержит
   `glow-target-or-maximum-v1` и proof-bound `wcag22-srgb8-contrast-v1`.
+  Отдельно full-domain WCAG proof несёт SHA-256 private admission-row: ровно
+  десять live typed полей, которые разрешают mint terminal evidence, включая
+  `boundStatus` и `fallbackStatus`. Это site-local proof binding, а не новые
+  public capability-поля и не FNV checksum всего manifest.
 
 Словарь **позиций лестницы** (не ролей): `label-*`, `fill-*`, `border-*`,
 `focus-ring`, `glow`, `skeleton-*`, `neutral-fill-*`, `neutral-border-*`,

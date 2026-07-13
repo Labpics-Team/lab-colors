@@ -13,9 +13,14 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
+import os
 import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
+import textwrap
 import time
 from array import array
 from dataclasses import dataclass
@@ -36,7 +41,6 @@ TERMINAL_EVIDENCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22_evidenc
 FACADE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/wcag22.rs"
 CRATE_LIB_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lib.rs"
 EVALUATOR_SOURCE = FACADE_SOURCE
-NUMERICS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/numerics.rs"
 CANONICAL_BINARY_ARTIFACT = (
     REPO_ROOT / "crates/labcolors-core/contracts/wcag22-srgb8-q55-v1.bin"
 )
@@ -72,7 +76,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "daa10163830e2f15f13ab3ca26c5bae561397b39e641d35c68cae3fd5f1cb601"
+    "c97980c1ca2c7ea9cabff9c8d2fb7282773cca180ae15948391c29c9d6196040"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
@@ -84,7 +88,7 @@ EXPECTED_PARSER_SHA256 = (
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
-    "07abc87d428e26d793c306babdddb4fb1746a5ef7fff3698feee5a786ebc6b51"
+    "8cecfaf660e896c5ac7c377ed286fa0377a0201e83f2b65f858e4136348397ef"
 )
 EXPECTED_CRATE_LIB_SHA256 = (
     "40d926da94547201242ef3aaf01db4c7e3912e8034998ab9a11671882057a726"
@@ -93,6 +97,32 @@ DECLARED_OPERATION_LAW = (
     "final-srgb8-outward-q55-two-orientation-integer-threshold-v1"
 )
 PROFILE_CHECKSUM_DOMAIN = b"labcolors.wcag22-srgb8-profile.v1"
+REGISTRY_ROW_BINDING_DOMAIN = b"labcolors.wcag22-registry-row.v1"
+REGISTRY_ROW_BINDING_SCHEMA_VERSION = 1
+EXPECTED_REGISTRY_ROW_SHA256 = (
+    "c91c5e185c432ae4a9fb9ea03e9838bf2565f2aabff56019e190aae97bfaa0f1"
+)
+REGISTRY_ROW_SET_FIELDS = (
+    "stable_outcomes",
+    "compatibility_releases",
+    "evidence_classes",
+    "artifact_ids",
+    "bound_ids",
+    "proof_ids",
+    "runtime_attestations",
+)
+EXPECTED_WCAG_REGISTRY_ROW = {
+    "site_id": "wcag22-srgb8-contrast-v1",
+    "stable_outcomes": ("canonical-finite-bounded",),
+    "compatibility_releases": (),
+    "evidence_classes": ("canonical-finite-bounded",),
+    "artifact_ids": (ARTIFACT_ID,),
+    "bound_ids": (BOUND_ID,),
+    "proof_ids": (PROOF_ID,),
+    "runtime_attestations": (),
+    "bound_status": "available",
+    "fallback_status": "none",
+}
 PROFILE_CHECKSUM_FIELDS = (
     "profileId",
     "recommendation",
@@ -164,16 +194,17 @@ def fnv1a32(data: bytes) -> str:
     return f"{value:08x}"
 
 
-def profile_checksum() -> str:
-    def framed(value: bytes) -> bytes:
-        return struct.pack("<I", len(value)) + value
+def length_prefixed(value: bytes) -> bytes:
+    return struct.pack("<I", len(value)) + value
 
-    preimage = bytearray(framed(PROFILE_CHECKSUM_DOMAIN))
+
+def profile_checksum() -> str:
+    preimage = bytearray(length_prefixed(PROFILE_CHECKSUM_DOMAIN))
     preimage.extend(struct.pack("<I", PROFILE["schemaVersion"]))
     for key in PROFILE_CHECKSUM_FIELDS:
         value = str(PROFILE[key]).encode("utf-8")
-        preimage.extend(framed(key.encode("utf-8")))
-        preimage.extend(framed(value))
+        preimage.extend(length_prefixed(key.encode("utf-8")))
+        preimage.extend(length_prefixed(value))
     return fnv1a32(bytes(preimage))
 
 
@@ -208,6 +239,40 @@ THRESHOLDS = (
     threshold_from_profile("largeTextRatio"),
     threshold_from_profile("normalTextRatio"),
 )
+
+
+def verify_signed64_replay_envelope(max_interval_width: int) -> dict[str, int | str]:
+    """Prove every cleared-denominator Q55 term fits a signed 64-bit replay."""
+    outward_width_bound = len(WEIGHT_KEYS)
+    assert max_interval_width <= outward_width_bound, (
+        "Q55 proof exceeds the one-outward-unit-per-channel envelope"
+    )
+    maximum_luminance_upper = Q + outward_width_bound
+    maximum_threshold_term = max(
+        30 * maximum_luminance_upper + Q,
+        180 * maximum_luminance_upper + 7 * Q,
+    )
+    signed_64_max = (1 << 63) - 1
+    assert maximum_threshold_term <= signed_64_max
+
+    next_scale = Q * 2
+    next_scale_maximum_term = 180 * (
+        next_scale + outward_width_bound
+    ) + 7 * next_scale
+    assert next_scale_maximum_term > signed_64_max, (
+        "Q55 is no longer the maximal signed-64-safe binary scale"
+    )
+    return {
+        "carrier": "signed-64",
+        "observed_interval_width": max_interval_width,
+        "outward_interval_width_bound": outward_width_bound,
+        "maximum_luminance_upper": maximum_luminance_upper,
+        "maximum_threshold_term": maximum_threshold_term,
+        "carrier_maximum": signed_64_max,
+        "headroom": signed_64_max - maximum_threshold_term,
+        "next_scale_power": SCALE_POWER + 1,
+        "next_scale_maximum_threshold_term": next_scale_maximum_term,
+    }
 
 
 def ceil_div(numerator: int, denominator: int) -> int:
@@ -607,8 +672,9 @@ def scan_threshold(
 def verify_negative_controls(
     metadata: dict[str, int | str],
     committed_rows: list[tuple[int, int]],
-) -> None:
+) -> int:
     """Доказывает, что verifier действительно кусает digest, row и overlap."""
+    controls = 0
     bad_digest_metadata = metadata.copy()
     bad_digest_metadata["artifact_sha256"] = "0" * 64
     try:
@@ -617,6 +683,7 @@ def verify_negative_controls(
         pass
     else:
         raise AssertionError("negative control: digest tampering was accepted")
+    controls += 1
 
     mutated_rows = committed_rows.copy()
     lower, upper = mutated_rows[1]
@@ -637,6 +704,7 @@ def verify_negative_controls(
             ) from error
     else:
         raise AssertionError("negative control: non-tight row was accepted")
+    controls += 1
 
     # Q mod 10 != 0: этот synthetic L interval пересекает exact 3.0 boundary
     # для D=[0,3]. Scan обязан найти unresolved, иначе real zero неверифицируем.
@@ -656,6 +724,8 @@ def verify_negative_controls(
             raise
     else:
         raise AssertionError("negative control: synthetic overlap was accepted")
+    controls += 1
+    return controls
 
 
 def verify_production_kernel() -> str:
@@ -809,6 +879,301 @@ def verify_evaluator_digest_bindings(
         )
 
 
+RUST_REGISTRY_PROBE = r"""
+use std::fmt::Write;
+
+use labcolors_core::{NumericalSiteIdV2, numerical_registry_v2};
+
+fn hex_key(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len() * 2);
+    for byte in value.bytes() {
+        write!(&mut encoded, "{byte:02x}").expect("String writes are infallible");
+    }
+    encoded
+}
+
+macro_rules! emit_keys {
+    ($name:literal, $values:expr) => {
+        print!(concat!($name, "\t{}"), $values.len());
+        for value in $values {
+            print!("\t{}", hex_key(value.key()));
+        }
+        println!();
+    };
+}
+
+fn main() {
+    let mut matches = numerical_registry_v2()
+        .iter()
+        .filter(|row| row.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1);
+    let row = matches.next().expect("WCAG22 registry row");
+    assert!(matches.next().is_none(), "duplicate WCAG22 registry row");
+
+    println!("site_id\t{}", hex_key(row.site_id.key()));
+    emit_keys!("stable_outcomes", row.stable_outcomes);
+    emit_keys!("compatibility_releases", row.compatibility_releases);
+    emit_keys!("evidence_classes", row.evidence_classes);
+    emit_keys!("artifact_ids", row.artifact_ids);
+    emit_keys!("bound_ids", row.bound_ids);
+    emit_keys!("proof_ids", row.proof_ids);
+    emit_keys!("runtime_attestations", row.runtime_attestations);
+    println!("bound_status\t{}", hex_key(row.bound_status.key()));
+    println!("fallback_status\t{}", hex_key(row.fallback_status.key()));
+}
+"""
+
+
+def cargo_executable() -> str:
+    configured = os.environ.get("CARGO")
+    if configured:
+        return configured
+    discovered = shutil.which("cargo")
+    if discovered:
+        return discovered
+    candidates = [Path.home() / ".cargo/bin/cargo"]
+    candidates.extend(
+        sorted(
+            Path("/opt/homebrew/Cellar/rustup").glob("*/bin/cargo"),
+            reverse=True,
+        )
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise AssertionError(
+        "typed WCAG registry proof requires Cargo; set CARGO to its executable"
+    )
+
+
+def decode_registry_probe_key(encoded: str) -> str:
+    assert re.fullmatch(r"(?:[0-9a-f]{2})*", encoded), (
+        f"non-canonical typed registry key encoding: {encoded!r}"
+    )
+    try:
+        return bytes.fromhex(encoded).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AssertionError("typed registry key is not UTF-8") from error
+
+
+def parse_registry_probe_output(
+    output: str,
+) -> dict[str, str | tuple[str, ...]]:
+    expected_fields = (
+        "site_id",
+        *REGISTRY_ROW_SET_FIELDS,
+        "bound_status",
+        "fallback_status",
+    )
+    lines = output.splitlines()
+    assert len(lines) == len(expected_fields), (
+        f"typed registry probe line-count drifted: {len(lines)}"
+    )
+    row: dict[str, str | tuple[str, ...]] = {}
+    for expected_field, line in zip(expected_fields, lines):
+        parts = line.split("\t")
+        assert parts[0] == expected_field, (
+            f"typed registry probe field-order drift: {line!r}"
+        )
+        if expected_field in REGISTRY_ROW_SET_FIELDS:
+            assert len(parts) >= 2 and parts[1].isdigit(), (
+                f"malformed typed registry set line: {line!r}"
+            )
+            count = int(parts[1])
+            assert parts[1] == str(count) and len(parts) == count + 2, (
+                f"typed registry set count drift: {line!r}"
+            )
+            values = tuple(decode_registry_probe_key(value) for value in parts[2:])
+            assert len(values) == len(set(values)), (
+                f"duplicate typed registry key in {expected_field}: {values!r}"
+            )
+            row[expected_field] = values
+        else:
+            assert len(parts) == 2, f"malformed typed registry scalar line: {line!r}"
+            row[expected_field] = decode_registry_probe_key(parts[1])
+    return row
+
+
+def verify_registry_transport_negative_controls(output: str) -> int:
+    """The probe transport must preserve punctuation and reject extra items."""
+    controls = 0
+    lines = output.splitlines()
+    stable_index = 1
+
+    punctuation = lines.copy()
+    punctuation[stable_index] += "2c"
+    punctuation_row = parse_registry_probe_output("\n".join(punctuation) + "\n")
+    assert punctuation_row["stable_outcomes"] == (
+        "canonical-finite-bounded,",
+    )
+    controls += 1
+
+    trailing_empty = lines.copy()
+    trailing_empty[stable_index] += "\t"
+    try:
+        parse_registry_probe_output("\n".join(trailing_empty) + "\n")
+    except AssertionError as error:
+        if not str(error).startswith("typed registry set count drift:"):
+            raise AssertionError(
+                "registry transport mutation missed the count guard"
+            ) from error
+    else:
+        raise AssertionError("registry transport accepted a trailing empty item")
+    controls += 1
+    return controls
+
+
+def load_live_registry_row() -> tuple[
+    dict[str, str | tuple[str, ...]], int
+]:
+    """Read the runtime-expanded typed row; Python owns the proof encoding."""
+    with tempfile.TemporaryDirectory(prefix="labcolors-wcag22-registry-") as temp:
+        root = Path(temp)
+        source = root / "src"
+        source.mkdir()
+        core_path = REPO_ROOT / "crates/labcolors-core"
+        (root / "Cargo.toml").write_text(
+            textwrap.dedent(
+                f"""
+                [package]
+                name = "labcolors-wcag22-registry-probe"
+                version = "0.0.0"
+                edition = "2024"
+                publish = false
+
+                [workspace]
+
+                [dependencies]
+                labcolors-core = {{ path = {json.dumps(str(core_path))} }}
+                """
+            ).lstrip(),
+            encoding="utf-8",
+        )
+        (source / "main.rs").write_text(RUST_REGISTRY_PROBE, encoding="utf-8")
+        environment = os.environ.copy()
+        environment.setdefault(
+            "CARGO_TARGET_DIR",
+            str(REPO_ROOT / "target/wcag22-registry-probe"),
+        )
+        cargo = cargo_executable()
+        environment["PATH"] = (
+            str(Path(cargo).parent)
+            + os.pathsep
+            + environment.get("PATH", "")
+        )
+        command = [
+            cargo,
+            "run",
+            "--quiet",
+            "--offline",
+            "--manifest-path",
+            str(root / "Cargo.toml"),
+        ]
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert completed.returncode == 0, (
+            "typed WCAG registry probe failed: " + completed.stderr[-2000:]
+        )
+
+    row = parse_registry_probe_output(completed.stdout)
+    transport_controls = verify_registry_transport_negative_controls(
+        completed.stdout
+    )
+    return row, transport_controls
+
+
+def canonical_registry_row_preimage(
+    row: dict[str, str | tuple[str, ...]],
+) -> bytes:
+    preimage = bytearray(length_prefixed(REGISTRY_ROW_BINDING_DOMAIN))
+    preimage.extend(struct.pack("<I", REGISTRY_ROW_BINDING_SCHEMA_VERSION))
+    site_id = row["site_id"]
+    assert isinstance(site_id, str)
+    preimage.extend(length_prefixed(site_id.encode("utf-8")))
+    for field in REGISTRY_ROW_SET_FIELDS:
+        values = row[field]
+        assert isinstance(values, tuple)
+        assert len(values) == len(set(values)), f"duplicate registry key in {field}"
+        ordered = sorted(values, key=lambda value: value.encode("utf-8"))
+        preimage.extend(struct.pack("<I", len(ordered)))
+        for value in ordered:
+            preimage.extend(length_prefixed(value.encode("utf-8")))
+    for field in ("bound_status", "fallback_status"):
+        value = row[field]
+        assert isinstance(value, str)
+        preimage.extend(length_prefixed(value.encode("utf-8")))
+    return bytes(preimage)
+
+
+def verify_registry_binding(
+    row: dict[str, str | tuple[str, ...]],
+) -> str:
+    for field, expected in EXPECTED_WCAG_REGISTRY_ROW.items():
+        actual = row.get(field)
+        assert actual == expected, (
+            f"WCAG registry admission drift at {field}: "
+            f"actual={actual!r}, expected={expected!r}"
+        )
+    preimage = canonical_registry_row_preimage(row)
+
+    # Independent byte-law guards: set order is irrelevant and duplicates fail.
+    synthetic = dict(row)
+    synthetic["stable_outcomes"] = ("z", "a")
+    reversed_synthetic = dict(synthetic)
+    reversed_synthetic["stable_outcomes"] = ("a", "z")
+    assert canonical_registry_row_preimage(synthetic) == (
+        canonical_registry_row_preimage(reversed_synthetic)
+    )
+    duplicate = dict(row)
+    duplicate["stable_outcomes"] = ("duplicate", "duplicate")
+    try:
+        canonical_registry_row_preimage(duplicate)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("registry admission preimage accepted a duplicate key")
+
+    digest = hashlib.sha256(preimage).hexdigest()
+    assert digest == EXPECTED_REGISTRY_ROW_SHA256, (
+        f"WCAG registry admission preimage drifted: "
+        f"{digest} != {EXPECTED_REGISTRY_ROW_SHA256}"
+    )
+    return digest
+
+
+def verify_registry_negative_controls(
+    row: dict[str, str | tuple[str, ...]],
+) -> int:
+    """Every mint-relevant field must independently invalidate admission."""
+    controls = 0
+    for field, value in EXPECTED_WCAG_REGISTRY_ROW.items():
+        mutated = dict(row)
+        if isinstance(value, tuple):
+            mutated[field] = (*value, "negative-control")
+        else:
+            mutated[field] = f"{value}-negative-control"
+        try:
+            verify_registry_binding(mutated)
+        except AssertionError as error:
+            expected = f"WCAG registry admission drift at {field}:"
+            if not str(error).startswith(expected):
+                raise AssertionError(
+                    f"negative control for {field} missed admission comparison"
+                ) from error
+        else:
+            raise AssertionError(
+                f"negative control: WCAG registry {field} drift was accepted"
+            )
+        controls += 1
+    return controls
+
+
 def find_rgb_witnesses(
     tables: list[list[tuple[int, int]]], targets: set[int]
 ) -> dict[int, str]:
@@ -841,9 +1206,9 @@ def main() -> int:
     terminal_evidence_digest = verify_terminal_evidence()
     parser_digest = verify_srgb8_parser()
     facade_digest, crate_lib_digest = verify_public_facade()
-    registry_source = NUMERICS_SOURCE.read_text(encoding="utf-8")
-    for identity in (ARTIFACT_ID, BOUND_ID, PROOF_ID):
-        assert identity in registry_source, f"registry identity missing: {identity}"
+    registry_row, registry_transport_controls = load_live_registry_row()
+    registry_row_digest = verify_registry_binding(registry_row)
+    registry_negative_controls = verify_registry_negative_controls(registry_row)
     assert metadata["profile_source_sha256"] == profile_digest, (
         "profile digest drift: "
         f"artifact={metadata['profile_source_sha256']}, source={profile_digest}"
@@ -854,13 +1219,14 @@ def main() -> int:
     )
 
     tables, decimal_report = verify_rows(metadata, committed_rows)
-    verify_negative_controls(metadata, committed_rows)
+    numerical_negative_controls = verify_negative_controls(metadata, committed_rows)
     rows_elapsed = time.perf_counter() - started
 
     intervals, generated = build_unique_color_intervals(tables)
     domain_elapsed = time.perf_counter() - started
     max_width = sum(max(upper - lower for lower, upper in table) for table in tables)
     assert max_width <= PACK_WIDTH_MASK
+    integer_replay_envelope = verify_signed64_replay_envelope(max_width)
 
     results = [scan_threshold(intervals, max_width, threshold) for threshold in THRESHOLDS]
     targets = {
@@ -898,6 +1264,9 @@ def main() -> int:
         "facade_id": FACADE_ID,
         "facade_normalized_sha256": facade_digest,
         "crate_lib_source_sha256": crate_lib_digest,
+        "registry_row_id": EXPECTED_WCAG_REGISTRY_ROW["site_id"],
+        "registry_row_sha256": registry_row_digest,
+        "registry_row_negative_controls": registry_negative_controls,
         "declared_operation_law": DECLARED_OPERATION_LAW,
         "generator_sha256": generator_digest,
         "verifier_sha256": verifier_digest,
@@ -907,7 +1276,12 @@ def main() -> int:
         "colors": generated,
         "unique_intervals": len(intervals),
         "max_color_interval_width": max_width,
-        "negative_controls": 3,
+        "integer_replay_envelope": integer_replay_envelope,
+        "negative_controls": (
+            numerical_negative_controls
+            + registry_negative_controls
+            + registry_transport_controls
+        ),
         "full_domain_algorithm": "unique-q55-interval-monotone-boundary-v1",
         "thresholds": results,
     }

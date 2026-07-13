@@ -867,6 +867,25 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   }
 });
 
+test("runtime WASM does not duplicate separately shipped WCAG22 evidence documents", () => {
+  const wasm = readFileSync(
+    join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
+  );
+  for (const name of [
+    "wcag22-srgb8-v1.json",
+    "wcag22-srgb8-q55-proof-v1.json",
+  ]) {
+    const evidence = readFileSync(
+      join(root, "crates", "labcolors-core", "contracts", name),
+    );
+    assert.equal(
+      wasm.indexOf(evidence),
+      -1,
+      `${name} belongs in npm evidence/, not the runtime WASM`,
+    );
+  }
+});
+
 test("npm release carries and re-verifies the exact WCAG22 finite evidence", () => {
   const packageJson = JSON.parse(read("packages", "colors", "package.json"));
   const evidenceFiles = [

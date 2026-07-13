@@ -53,6 +53,11 @@ fn classify_orientation(
     let light_upper = u128::from(lighter.upper);
     let dark_lower = u128::from(darker.lower);
     let dark_upper = u128::from(darker.upper);
+    // All products are promoted to u128 before evaluation. Independently, the
+    // committed verifier proves the conservative worst Q55 term
+    // 180·(S+3)+7·S fits signed 64-bit with 2_485_986_994_308_513_251
+    // headroom, while Q56 does not; Q55 is therefore the maximal binary scale
+    // that remains replayable without wider integer arithmetic.
     // With S = Q55_SCALE, clearing denominators in
     // (L + 0.05S) / (D + 0.05S) gives
     // 3:1 => 10L >= 30D + S and 4.5:1 => 40L >= 180D + 7S.
