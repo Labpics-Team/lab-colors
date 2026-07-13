@@ -310,8 +310,7 @@ crates/
 ├── labcolors-core          — математика, конфиг, resolve и результаты
 ├── labcolors-wasm          — WASM-граница
 ├── labcolors-ffi           — нативная FFI-граница
-├── labcolors-conformance   — общие тест-векторы
-└── labcolors-preview       — вспомогательный рендер
+└── labcolors-conformance   — общие тест-векторы
 
 packages/
 └── colors                  — browser package и runtime helpers

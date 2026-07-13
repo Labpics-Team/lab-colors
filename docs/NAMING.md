@@ -13,8 +13,8 @@
 
 | Метрика | N |
 | --- | --- |
-| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
-| крейтов семейства в crates/ | 5 |
+| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 5 |
+| крейтов семейства в crates/ | 4 |
 | экспорт-субпутей package.json @labpics/colors | 8 |
 | python-скриптов scripts/*.py | 4 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
@@ -40,7 +40,7 @@
 
 - Имя крейта = `labcolors-<роль>`, kebab-case; роль — одно слово:
   `labcolors-core`, `labcolors-conformance`, `labcolors-ffi`,
-  `labcolors-preview`, `labcolors-wasm`. Директория `crates/<имя крейта>`.
+  `labcolors-wasm`. Директория `crates/<имя крейта>`.
 - Члены workspace объявлены в корневом Cargo.toml (`members`); глоб `crates/*`
   разворачивается по ФС, harness-члены вне crates/ перечислены поимённо
   (experiments/psychophysics — имя пакета без префикса: не публикуется,

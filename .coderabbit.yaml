@@ -24,11 +24,6 @@ reviews:
         - Viewing conditions propagation (не использовать to_hex() если кривая с dim_surround)
         - Error handling (unwrap_or/expect — только с явным обоснованием)
         - Отсутствие магических констант без комментариев
-    - path: "crates/labcolors-preview/**/*.rs"
-      instructions: |
-        Генератор SVG-превью. Проверяй:
-        - Соответствие визуала математической модели
-        - Чистоту SVG-вывода (без мусора, валидный XML)
     - path: "docs/**"
       instructions: |
         Документация на русском проверяется на:
