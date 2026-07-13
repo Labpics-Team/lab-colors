@@ -13,20 +13,23 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `3.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов. Bump 2.0.0 → 3.0.0 менял только схему
-  манифеста (`numericalSites` → `numericalCapabilities`); векторные семейства
-  и `packDigest` не изменились.
+- **Версия пака** (`manifest.packVersion`, сейчас `4.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов. Bump 3.0.0 → 4.0.0 перевёл
+  `numericalCapabilities` на proof-capable schema V2 и добавил семейство
+  `wcag22`; поэтому состав семейств и `packDigest` изменились. Предыдущий bump
+  2.0.0 → 3.0.0 менял только схему манифеста
+  (`numericalSites` → `numericalCapabilities`), без изменения векторных
+  семейств.
 - **Версия ядра** (`manifest.coreVersion`, для этого пака `0.2.0`) — версия
   `labcolors-core`, из канона которой сгенерированы значения. Пак действителен
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
   сдвигается.
-- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами семейств
-  (в порядке `contrasts, ladders, alpha, solve, muddiness`). Отпечаток
-  КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы генерации (последний
-  ULP f64 в сериализации) — не кросс-платформенный инвариант, а якорь
-  целостности файлов.
+- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами шести
+  семейств (в порядке `contrasts, ladders, alpha, solve, muddiness, wcag22`).
+  Отпечаток КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы
+  генерации (последний ULP f64 в сериализации) — не кросс-платформенный
+  инвариант, а якорь целостности файлов.
 
 ## Семейства векторов (`vectors/*.json`)
 
@@ -37,6 +40,7 @@
 | `alpha.json` | подложка→α | `{tint, alpha, bg, composite, minAlpha}` |
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
 | `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
+| `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
 `muddiness.json` — это `experimental compatibility proxy`: corpus доказывает

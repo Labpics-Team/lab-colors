@@ -19,6 +19,13 @@ use crate::wcag22::{
     Wcag22CriterionV1, evaluate_wcag22_srgb8, wcag22_profile_v1,
 };
 
+// This full-period modulo-2^64 LCG provides a reproducible PR-time sample.
+// It exercises public invariants; it does not replace the full-domain proof.
+const CROSS_COLOUR_CORPUS_SIZE: u32 = 100_000;
+const CROSS_COLOUR_CORPUS_SEED: u64 = 0xD1B5_4A32_D192_ED03;
+const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+const LCG_INCREMENT: u64 = 1_442_695_040_888_963_407;
+
 fn rgb(hex: u32) -> [u8; 3] {
     [(hex >> 16) as u8, (hex >> 8) as u8, hex as u8]
 }
@@ -115,12 +122,36 @@ fn same_pair_may_fail_text_and_pass_a_3_to_1_criterion() {
 
 #[test]
 fn not_evaluated_is_never_pass_and_requires_explicit_declaration() {
+    let reason_id = "decorative-divider";
+    let declaration = Wcag22ClientDeclaredNotApplicableV1::try_new(reason_id).unwrap();
+    assert_eq!(declaration.reason_id(), reason_id);
     let declared = Wcag22AssessmentV1::NotEvaluated {
         profile_id: wcag22_profile_v1().profile_id,
-        declaration: Wcag22ClientDeclaredNotApplicableV1::try_new("decorative-divider").unwrap(),
+        declaration,
     };
     // Тип не даёт достать Pass из NotEvaluated: вариант не несёт decision.
     assert!(matches!(declared, Wcag22AssessmentV1::NotEvaluated { .. }));
+}
+
+#[test]
+fn public_q55_accessors_preserve_exact_endpoint_bounds_and_scale() {
+    let assessment = evaluate_wcag22_srgb8(
+        rgb(0x000000),
+        rgb(0xFFFFFF),
+        Wcag22CriterionV1::Sc143TextDefault,
+    )
+    .expect("admitted sRGB8 domain обязан быть decision-total");
+    let Wcag22AssessmentV1::Evaluated { measurement, .. } = evaluated(&assessment) else {
+        unreachable!()
+    };
+    let scale = 1_u64 << 55;
+    assert_eq!(measurement.foreground_luminance.lower(), 0);
+    assert_eq!(measurement.foreground_luminance.upper(), 0);
+    // White sums three independently outward-rounded weighted rows; the
+    // canonical table therefore encloses exact Q as [Q-2, Q+1].
+    assert_eq!(measurement.background_luminance.lower(), scale - 2);
+    assert_eq!(measurement.background_luminance.upper(), scale + 1);
+    assert_eq!(crate::wcag22::Wcag22LuminanceBoundsQ55V1::scale(), scale);
 }
 
 #[test]
@@ -142,20 +173,17 @@ fn evidence_is_sealed_canonical_finite_bounded_with_registered_ids() {
 
 #[test]
 fn deterministic_cross_colour_sample_is_total_and_symmetric() {
-    // Independent deterministic corpus: 100k ordered pairs across the full RGB
-    // cube. This is not the full-domain proof artifact; it is a cheap PR-time
-    // property/anti-vacuum gate over the public evaluator.
-    let mut state = 0xD1B5_4A32_D192_ED03_u64;
+    let mut state = CROSS_COLOUR_CORPUS_SEED;
     let mut pass = 0_u32;
     let mut fail = 0_u32;
-    for index in 0..100_000_u32 {
+    for index in 0..CROSS_COLOUR_CORPUS_SIZE {
         state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+            .wrapping_mul(LCG_MULTIPLIER)
+            .wrapping_add(LCG_INCREMENT);
         let first = [state as u8, (state >> 8) as u8, (state >> 16) as u8];
         state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+            .wrapping_mul(LCG_MULTIPLIER)
+            .wrapping_add(LCG_INCREMENT);
         let second = [state as u8, (state >> 8) as u8, (state >> 16) as u8];
         let criterion = if index & 1 == 0 {
             Wcag22CriterionV1::Sc143TextDefault

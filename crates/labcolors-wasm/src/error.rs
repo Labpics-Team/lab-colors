@@ -1,13 +1,16 @@
 //! Structured, matchable errors for the binding boundary.
 //!
-//! This is a library crate, so errors are `thiserror` enums callers can match
-//! on — not opaque strings. They cross into JS as a *structured* error object
-//! (a `code` plus a human `message`), never as a thrown panic or an unwound
-//! stack. The engine's hot path returns these as values; the only `throw` is at
-//! the top-level wasm adapter for whole-call failures (bad hex, unknown theme),
-//! which is the JS-idiomatic place for a rejected input.
+//! Inside Rust, errors are `thiserror` enums callers can match on. At the JS
+//! boundary, whole-call failures become ordinary `Error` objects whose message
+//! has the stable `"<code>: <message>"` form; there is no separate JS `code`
+//! property. The top-level wasm adapter throws those errors for rejected input
+//! (bad hex, unknown theme) without unwinding a Rust panic across the boundary.
 
 use thiserror::Error;
+
+fn expected_wcag22_criterion_keys() -> &'static str {
+    labcolors_core::wcag22::Wcag22CriterionV1::WIRE_KEY_MENU
+}
 
 /// A reason a binding call could not produce a result.
 ///
@@ -66,7 +69,8 @@ pub enum BindingError {
 
     /// WCAG 2.2 criterion transport is outside the closed public menu.
     #[error(
-        "unknown WCAG22 criterion: '{requested}' (expected sc-1.4.3-text-default | sc-1.4.3-text-large-scale | sc-1.4.11-ui-component-or-state | sc-1.4.11-graphical-object)"
+        "unknown WCAG22 criterion: '{requested}' (expected {expected})",
+        expected = expected_wcag22_criterion_keys()
     )]
     UnknownWcag22Criterion {
         /// Unrecognised criterion key.
@@ -126,5 +130,18 @@ mod tests {
         // variant must not reuse an existing code.
         let unique: std::collections::HashSet<_> = codes.iter().collect();
         assert_eq!(unique.len(), codes.len(), "error codes must be distinct");
+    }
+
+    #[test]
+    fn unknown_wcag22_criterion_lists_the_core_wire_menu() {
+        let requested = "not-a-criterion";
+        let expected = expected_wcag22_criterion_keys();
+        let error = BindingError::UnknownWcag22Criterion {
+            requested: requested.into(),
+        };
+        assert_eq!(
+            error.to_string(),
+            format!("unknown WCAG22 criterion: '{requested}' (expected {expected})")
+        );
     }
 }

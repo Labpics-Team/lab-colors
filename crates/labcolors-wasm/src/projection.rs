@@ -68,23 +68,7 @@ pub fn wcag22_json(
     }
 
     let hex = |bytes: [u8; 3]| format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
-    let criterion = match criterion {
-        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault => "sc-1.4.3-text-default",
-        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextLargeScale => {
-            "sc-1.4.3-text-large-scale"
-        }
-        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411UiComponentOrState => {
-            "sc-1.4.11-ui-component-or-state"
-        }
-        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411GraphicalObject => {
-            "sc-1.4.11-graphical-object"
-        }
-        _ => {
-            return Err(BindingError::Internal {
-                reason: "unknown core WCAG22 criterion variant".to_string(),
-            });
-        }
-    };
+    let criterion = criterion.key();
     let decision = match decision {
         Wcag22ApplicableDecisionV1::Pass => "pass",
         Wcag22ApplicableDecisionV1::Fail => "fail",

@@ -532,9 +532,7 @@ const WCAG22_CASES: [(&str, &str, labcolors_core::wcag22::Wcag22CriterionV1); 6]
 /// reimplementing the formula in the conformance crate.
 pub fn generate_wcag22() -> Result<Vec<Wcag22Vector>, PackGenerationError> {
     use labcolors_core::NumericalDecisionEvidenceV1;
-    use labcolors_core::wcag22::{
-        Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1,
-    };
+    use labcolors_core::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1};
 
     WCAG22_CASES
         .iter()
@@ -567,17 +565,7 @@ pub fn generate_wcag22() -> Result<Vec<Wcag22Vector>, PackGenerationError> {
             let bound_id = evidence_payload.bound_id();
             let proof_id = evidence_payload.proof_id();
             let profile = labcolors_core::wcag22::wcag22_profile_v1();
-            let criterion = match assessed_criterion {
-                Wcag22CriterionV1::Sc143TextDefault => "sc-1.4.3-text-default",
-                Wcag22CriterionV1::Sc143TextLargeScale => "sc-1.4.3-text-large-scale",
-                Wcag22CriterionV1::Sc1411UiComponentOrState => "sc-1.4.11-ui-component-or-state",
-                Wcag22CriterionV1::Sc1411GraphicalObject => "sc-1.4.11-graphical-object",
-                _ => {
-                    return Err(PackGenerationError::IncompatibleCoreContract {
-                        reason: "unknown WCAG22 criterion".to_string(),
-                    });
-                }
-            };
+            let criterion = assessed_criterion.key();
             let decision = match decision {
                 Wcag22ApplicableDecisionV1::Pass => "pass",
                 Wcag22ApplicableDecisionV1::Fail => "fail",
@@ -871,6 +859,17 @@ pub fn to_canonical_json<T: Serialize>(value: &T) -> String {
 mod tests {
     use super::*;
     use labcolors_core::numerical_registry_v2;
+
+    #[test]
+    fn wcag22_vector_generator_has_no_private_wire_key_vocabulary() {
+        let private_prefix: String = ['"', 's', 'c', '-', '1', '.', '4', '.']
+            .into_iter()
+            .collect();
+        assert!(
+            !include_str!("lib.rs").contains(&private_prefix),
+            "WCAG22 vector keys must come from Wcag22CriterionV1::key()"
+        );
+    }
 
     #[test]
     fn unreachable_code_mapping_is_fallible_without_generic_fallback() {

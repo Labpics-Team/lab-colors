@@ -25,7 +25,6 @@ const ROOT_CARGO = resolve(REPO_ROOT, "Cargo.toml");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_MANIFEST = resolve(CONFORMANCE_DIR, "manifest.json");
 const WCAG22_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
-const PACKED_WCAG22_EVIDENCE_DIR = resolve(PACKAGE_DIR, "evidence");
 const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-v1.json",
   "wcag22-srgb8-q55-v1.bin",
@@ -111,17 +110,69 @@ async function hashedArtifact(path, displayPath) {
   return { path: displayPath, bytes: bytes.length, sha256: sha256(bytes) };
 }
 
+export async function validateWcag22EvidenceArtifacts(
+  root,
+  expectedArtifacts,
+  label,
+) {
+  const allowedPaths = WCAG22_EVIDENCE_FILES.map((file) => `evidence/${file}`);
+  if (!Array.isArray(expectedArtifacts) || expectedArtifacts.length !== allowedPaths.length) {
+    fail(`${label} WCAG22 evidence expectation must contain ${allowedPaths.length} artifacts`);
+  }
+  const expectedByPath = new Map();
+  for (const artifact of expectedArtifacts) {
+    if (
+      !allowedPaths.includes(artifact?.path) ||
+      !Number.isSafeInteger(artifact?.bytes) ||
+      artifact.bytes <= 0 ||
+      !/^[0-9a-f]{64}$/u.test(artifact?.sha256 ?? "") ||
+      expectedByPath.has(artifact.path)
+    ) {
+      fail(`${label} has malformed or duplicate WCAG22 evidence metadata`);
+    }
+    expectedByPath.set(artifact.path, artifact);
+  }
+
+  const actualArtifacts = [];
+  for (const file of WCAG22_EVIDENCE_FILES) {
+    const displayPath = `evidence/${file}`;
+    const expected = expectedByPath.get(displayPath);
+    if (!expected) fail(`${label} lacks expected WCAG22 evidence metadata: ${displayPath}`);
+    const [canonical, actual] = await Promise.all([
+      readFile(resolve(WCAG22_CONTRACT_DIR, file)),
+      readFile(resolve(root, "evidence", file)),
+    ]);
+    if (!actual.equals(canonical)) {
+      fail(`${label} WCAG22 evidence bytes differ from canonical source: ${displayPath}`);
+    }
+    const metadata = {
+      path: displayPath,
+      bytes: actual.length,
+      sha256: sha256(actual),
+    };
+    if (metadata.bytes !== expected.bytes || metadata.sha256 !== expected.sha256) {
+      fail(
+        `${label} WCAG22 evidence metadata differs for ${displayPath}: ` +
+          `expected ${expected.bytes}B/${expected.sha256}, ` +
+          `actual ${metadata.bytes}B/${metadata.sha256}`,
+      );
+    }
+    actualArtifacts.push(metadata);
+  }
+  return actualArtifacts;
+}
+
 async function validateWcag22Evidence() {
   const artifacts = [];
   for (const file of WCAG22_EVIDENCE_FILES) {
-    const canonical = await readFile(resolve(WCAG22_CONTRACT_DIR, file));
-    const packedPath = resolve(PACKED_WCAG22_EVIDENCE_DIR, file);
-    const packed = await readFile(packedPath);
-    if (!packed.equals(canonical)) {
-      fail(`packed WCAG22 evidence differs from canonical source: ${file}`);
-    }
-    artifacts.push(await hashedArtifact(packedPath, `evidence/${file}`));
+    artifacts.push(
+      await hashedArtifact(
+        resolve(WCAG22_CONTRACT_DIR, file),
+        `evidence/${file}`,
+      ),
+    );
   }
+  await validateWcag22EvidenceArtifacts(PACKAGE_DIR, artifacts, "staged package");
 
   const profilePath = resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[0]);
   const profileBytes = await readFile(profilePath);
@@ -290,6 +341,20 @@ async function packInto(destination, packageJson) {
   validatePackedFiles(packageJson, packResult);
 
   return { path: resolve(destination, tarballName), tarballName };
+}
+
+async function validatePackedWcag22Evidence(tarballPath, expectedArtifacts) {
+  const extracted = await mkdtemp(join(tmpdir(), "labcolors-packed-evidence-"));
+  try {
+    command("tar", ["-xzf", tarballPath, "-C", extracted]);
+    await validateWcag22EvidenceArtifacts(
+      resolve(extracted, "package"),
+      expectedArtifacts,
+      "npm tarball",
+    );
+  } finally {
+    await rm(extracted, { recursive: true, force: true });
+  }
 }
 
 function fnv1a32(buffers) {
@@ -930,6 +995,7 @@ async function verifyCleanConsumer(
   packageJson,
   packageLock,
   expectedBuildMetadata,
+  expectedWcag22Artifacts,
 ) {
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-release-consumer-"));
   try {
@@ -971,6 +1037,12 @@ async function verifyCleanConsumer(
           `expected ${packageJson.name}@${packageJson.version}`,
       );
     }
+
+    await validateWcag22EvidenceArtifacts(
+      installed,
+      expectedWcag22Artifacts,
+      "clean-installed package",
+    );
 
     const installedWasm = await readFile(resolve(installed, "pkg/labcolors_bg.wasm"));
     if (sha256(installedWasm) !== expectedBuildMetadata.wasm.sha256) {
@@ -1116,6 +1188,8 @@ export async function verifyPackageRelease() {
     await rm(reproductionDir, { recursive: true, force: true });
   }
 
+  await validatePackedWcag22Evidence(canonicalPack.path, wcag22Evidence.artifacts);
+
   const tarball = await hashedArtifact(
     canonicalPack.path,
     `.release/${canonicalPack.tarballName}`,
@@ -1125,6 +1199,7 @@ export async function verifyPackageRelease() {
     packageJson,
     packageLock,
     buildMetadataValue,
+    wcag22Evidence.artifacts,
   );
 
   const manifest = {

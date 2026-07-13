@@ -568,6 +568,7 @@ impl NumericalProofIdV2 {
 
 /// Runtime attestation identities admitted by V2. Empty until #258.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NumericalRuntimeAttestationIdV2 {}
 
 impl NumericalRuntimeAttestationIdV2 {
@@ -1010,6 +1011,14 @@ mod tests {
         assert_eq!(numerical_registry_v1().len(), 1);
         let rows = numerical_registry_v2();
         assert_eq!(rows.len(), 2);
+        let mut site_keys = std::collections::HashSet::new();
+        for row in rows {
+            assert!(
+                site_keys.insert(row.site_id.key()),
+                "duplicate V2 numerical site wire key: {}",
+                row.site_id.key()
+            );
+        }
         let wcag = rows
             .iter()
             .find(|row| row.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1)
@@ -1090,6 +1099,65 @@ mod tests {
             NumericalCapabilityChecksumV2::from_preimage(&emptied.canonical_checksum_preimage()),
             manifest.checksum
         );
+
+        // Tamper: удаление proof identity меняет checksum независимо от
+        // остальных capability-полей строки.
+        let mut proof_tampered = manifest.clone();
+        let wcag = proof_tampered
+            .sites
+            .iter_mut()
+            .find(|site| site.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1)
+            .expect("WCAG22 capability row");
+        wcag.proof_ids = &[];
+        assert_ne!(
+            NumericalCapabilityChecksumV2::from_preimage(
+                &proof_tampered.canonical_checksum_preimage()
+            ),
+            manifest.checksum
+        );
+    }
+
+    /// Exact independent oracle for the `proof_ids` list position and bytes.
+    /// This intentionally does not call either production encoding helper.
+    #[test]
+    fn proof_ids_have_independent_canonical_encoding_guard() {
+        fn push_expected_len_prefixed(buffer: &mut Vec<u8>, value: &[u8]) {
+            buffer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(value);
+        }
+
+        let manifest = NumericalCapabilityManifestV2 {
+            schema_version: 2,
+            coverage: NumericalRegistryCoverageV2::MigratedSitesOnlyV1,
+            sites: vec![NumericalSiteCapabilityV2 {
+                site_id: NumericalSiteIdV2::Wcag22Srgb8ContrastV1,
+                stable_outcomes: &[],
+                compatibility_releases: &[],
+                evidence_classes: &[],
+                artifact_ids: &[],
+                bound_ids: &[],
+                proof_ids: &[NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1],
+                runtime_attestations: &[],
+            }],
+            checksum: NumericalCapabilityChecksumV2(0),
+        };
+
+        let mut expected = Vec::new();
+        push_expected_len_prefixed(&mut expected, b"labcolors.numerical-capability.v2");
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        push_expected_len_prefixed(&mut expected, b"migrated-sites-only-v1");
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        push_expected_len_prefixed(&mut expected, b"wcag22-srgb8-contrast-v1");
+        // stable outcomes, releases, evidence, artifacts, then bounds.
+        for _ in 0..5 {
+            expected.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        push_expected_len_prefixed(&mut expected, b"wcag22-srgb8-full-domain-q55-v1");
+        // runtime attestations follow proof IDs.
+        expected.extend_from_slice(&0_u32.to_le_bytes());
+
+        assert_eq!(manifest.canonical_checksum_preimage(), expected);
     }
 }
 
@@ -1172,6 +1240,7 @@ mod red_292_tests {
         assert_eq!(site.evidence_classes, [NumericalEvidenceClassV2::BitExact]);
         assert!(site.artifact_ids.is_empty());
         assert!(site.bound_ids.is_empty());
+        assert!(site.proof_ids.is_empty());
         assert!(site.runtime_attestations.is_empty());
         // Checksum детерминирован и воспроизводим из canonical preimage.
         assert!(manifest.sites.iter().any(|site| {

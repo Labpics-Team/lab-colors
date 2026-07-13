@@ -497,7 +497,7 @@ pub fn evaluate_wcag22(
         Wcag22ApplicableDecisionV1::Fail => Wcag22Decision::Fail,
         _ => return Err(incompatible_core_variant("Wcag22ApplicableDecisionV1")),
     };
-    let criterion = match assessed_criterion {
+    let mapped_criterion = match assessed_criterion {
         labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault => {
             Wcag22Criterion::Sc143TextDefault
         }
@@ -512,9 +512,14 @@ pub fn evaluate_wcag22(
         }
         _ => return Err(incompatible_core_variant("Wcag22CriterionV1")),
     };
+    if mapped_criterion != criterion {
+        return Err(ColorError::IncompatibleCoreContract {
+            reason: "WCAG22 assessment criterion drifted from the requested criterion".to_string(),
+        });
+    }
     Ok(Wcag22Assessment {
         profile_id: profile_id.key().to_string(),
-        criterion,
+        criterion: mapped_criterion,
         foreground: hex(measurement.foreground),
         background: hex(measurement.background),
         foreground_luminance: Wcag22Q55Bounds {
@@ -868,6 +873,17 @@ mod tests {
             "wcag22-srgb8-full-domain-q55-v1"
         );
         assert_eq!(assessment.q55_scale, 1_u64 << 55);
+    }
+
+    #[test]
+    fn wcag22_transport_maps_core_pass() {
+        let assessment = evaluate_wcag22(
+            "#000000".into(),
+            "#FFFFFF".into(),
+            Wcag22Criterion::Sc143TextDefault,
+        )
+        .unwrap();
+        assert_eq!(assessment.decision, Wcag22Decision::Pass);
     }
 
     #[test]

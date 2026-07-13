@@ -53,6 +53,11 @@ fn classify_orientation(
     let light_upper = u128::from(lighter.upper);
     let dark_lower = u128::from(darker.lower);
     let dark_upper = u128::from(darker.upper);
+    // With S = Q55_SCALE, clearing denominators in
+    // (L + 0.05S) / (D + 0.05S) gives
+    // 3:1 => 10L >= 30D + S and 4.5:1 => 40L >= 180D + 7S.
+    // Pass uses L_lower/D_upper; Fail uses the strict reverse inequality with
+    // L_upper/D_lower, so neither branch relies on rounded display ratios.
     let (passes, fails) = match threshold {
         ThresholdV1::Three => (
             10 * light_lower >= 30 * dark_upper + scale,

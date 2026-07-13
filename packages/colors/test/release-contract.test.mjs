@@ -18,6 +18,8 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { validateWcag22EvidenceArtifacts } from "../../../scripts/verify-package-release.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
@@ -896,8 +898,82 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
   assert.match(verifier, /WCAG22_EVIDENCE_FILES/);
   const numericalVerifier = read("scripts", "verify_wcag22_q55.py");
   assert.match(numericalVerifier, /NORMATIVE_PROFILE_V1/);
+  assert.ok(
+    numericalVerifier.includes(String.raw`r'\1"<self-digest>"'`),
+    "facade normalization must preserve the literal regex backreference",
+  );
+  assert.ok(
+    !numericalVerifier.includes(String.raw`rf'\1"<self-digest>"'`),
+    "a replacement without interpolation must not use an f-string",
+  );
+  const conformanceReadme = read("conformance", "README.md");
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `4\.0\.0`/u);
+  assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
+  assert.match(conformanceReadme, /`wcag22\.json`/u);
+  assert.match(
+    conformanceReadme,
+    /contrasts, ladders, alpha, solve, muddiness, wcag22/u,
+  );
+  assert.doesNotMatch(conformanceReadme, /сейчас `3\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
+});
+
+test("packed and clean-installed WCAG22 evidence stays byte-exact", async () => {
+  const names = [
+    "wcag22-srgb8-v1.json",
+    "wcag22-srgb8-q55-v1.bin",
+    "wcag22-srgb8-q55-proof-v1.json",
+  ];
+  const contents = names.map((name) =>
+    readFileSync(join(root, "crates", "labcolors-core", "contracts", name))
+  );
+  const expected = names.map((name, index) => ({
+    path: `evidence/${name}`,
+    bytes: contents[index].length,
+    sha256: createHash("sha256").update(contents[index]).digest("hex"),
+  }));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-evidence-boundary-"));
+  try {
+    const evidenceDir = join(temporary, "evidence");
+    mkdirSync(evidenceDir);
+    for (const [index, name] of names.entries()) {
+      writeFileSync(join(evidenceDir, name), contents[index]);
+    }
+    await assert.doesNotReject(
+      validateWcag22EvidenceArtifacts(temporary, expected, "fixture"),
+    );
+
+    const corrupted = Buffer.from(contents[0]);
+    corrupted[0] ^= 1;
+    writeFileSync(join(evidenceDir, names[0]), corrupted);
+    await assert.rejects(
+      validateWcag22EvidenceArtifacts(temporary, expected, "fixture"),
+      /fixture WCAG22 evidence bytes differ/u,
+      "same-length evidence corruption must fail",
+    );
+
+    writeFileSync(join(evidenceDir, names[0]), contents[0]);
+    const wrongDigest = structuredClone(expected);
+    wrongDigest[0].sha256 = "0".repeat(64);
+    await assert.rejects(
+      validateWcag22EvidenceArtifacts(temporary, wrongDigest, "fixture"),
+      /fixture WCAG22 evidence metadata differs/u,
+      "expected digest drift must fail independently of the byte comparison",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+
+  const verifier = read("scripts", "verify-package-release.mjs");
+  assert.match(
+    verifier,
+    /validatePackedWcag22Evidence\(canonicalPack\.path, wcag22Evidence\.artifacts\)/u,
+  );
+  assert.match(
+    verifier,
+    /verifyCleanConsumer\([\s\S]*?wcag22Evidence\.artifacts[\s\S]*?\);/u,
+  );
 });
 
 test("Swift capability mirror transports proof IDs in the canonical checksum order", () => {

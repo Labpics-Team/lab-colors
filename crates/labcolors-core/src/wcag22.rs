@@ -21,16 +21,17 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "56b73b0eac677f47885897c05f8bc5fb2a6c5eb4c162dd574f84a975a167122f";
+    "1af4eb510c59553f3fcb9779dcda676629f4d1727b91a03d8366532d77859e13";
 const PROOF_PAYLOAD_SHA256: &str =
-    "6f72876b525cc435030f61809a42f4e7719ac778106485f75723a914df517532";
-const VERIFIER_SHA256: &str = "5146e9a79d462961fe607919f946508f009f441b9cdba2ec5208206b1853d3a0";
+    "5f0c2df8a54faab1517466967943e1ebf7bf0b11753191b0e5ac0f54c29aa7a3";
+const VERIFIER_SHA256: &str = "5b2ec45a4ea1e2797ae7a451db8ab0d196484564bdeb561470e672c1f0425f0d";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Wcag22ProfileIdV1 {
-    /// WCAG 2.2 Recommendation 2024-12-12 over final encoded sRGB8 bytes.
+    /// Project profile applying the WCAG 2.2 Recommendation 2024-12-12 to
+    /// final encoded-sRGB8 bytes supplied by the client.
     Wcag22Srgb8ContrastV1,
 }
 
@@ -114,6 +115,41 @@ pub enum Wcag22CriterionV1 {
     Sc1411UiComponentOrState,
     /// SC 1.4.11, required visual information of a graphical object: 3:1.
     Sc1411GraphicalObject,
+}
+
+impl Wcag22CriterionV1 {
+    /// Every criterion admitted by this version of the evaluator, in stable
+    /// wire order.
+    pub const ALL: [Self; 4] = [
+        Self::Sc143TextDefault,
+        Self::Sc143TextLargeScale,
+        Self::Sc1411UiComponentOrState,
+        Self::Sc1411GraphicalObject,
+    ];
+
+    /// Stable human-readable menu for boundary error messages.
+    pub const WIRE_KEY_MENU: &str = "sc-1.4.3-text-default | sc-1.4.3-text-large-scale | sc-1.4.11-ui-component-or-state | sc-1.4.11-graphical-object";
+
+    /// Stable wire key.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Sc143TextDefault => "sc-1.4.3-text-default",
+            Self::Sc143TextLargeScale => "sc-1.4.3-text-large-scale",
+            Self::Sc1411UiComponentOrState => "sc-1.4.11-ui-component-or-state",
+            Self::Sc1411GraphicalObject => "sc-1.4.11-graphical-object",
+        }
+    }
+
+    /// Parse an exact stable wire key without aliases or fallback.
+    pub fn parse(key: &str) -> Option<Self> {
+        match key {
+            "sc-1.4.3-text-default" => Some(Self::Sc143TextDefault),
+            "sc-1.4.3-text-large-scale" => Some(Self::Sc143TextLargeScale),
+            "sc-1.4.11-ui-component-or-state" => Some(Self::Sc1411UiComponentOrState),
+            "sc-1.4.11-graphical-object" => Some(Self::Sc1411GraphicalObject),
+            _ => None,
+        }
+    }
 }
 
 /// Q55 outward enclosure of one final colour's relative luminance.
@@ -297,6 +333,23 @@ impl std::error::Error for Wcag22EvaluationErrorV1 {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn criterion_wire_keys_are_unique_and_round_trip_exactly() {
+        let mut keys = std::collections::HashSet::new();
+        for criterion in Wcag22CriterionV1::ALL {
+            assert!(keys.insert(criterion.key()));
+            assert_eq!(Wcag22CriterionV1::parse(criterion.key()), Some(criterion));
+        }
+        assert_eq!(
+            Wcag22CriterionV1::ALL
+                .map(Wcag22CriterionV1::key)
+                .join(" | "),
+            Wcag22CriterionV1::WIRE_KEY_MENU
+        );
+        assert_eq!(Wcag22CriterionV1::parse(""), None);
+        assert_eq!(Wcag22CriterionV1::parse("SC-1.4.3-TEXT-DEFAULT"), None);
+    }
 
     #[test]
     fn profile_binds_canonical_sources_and_artifact() {

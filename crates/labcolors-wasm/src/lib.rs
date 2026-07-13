@@ -559,17 +559,11 @@ pub fn evaluate_wcag22(
     criterion: &str,
 ) -> Result<JsWcag22Assessment, JsError> {
     use labcolors_core::wcag22::Wcag22CriterionV1 as C;
-    let criterion = match criterion {
-        "sc-1.4.3-text-default" => C::Sc143TextDefault,
-        "sc-1.4.3-text-large-scale" => C::Sc143TextLargeScale,
-        "sc-1.4.11-ui-component-or-state" => C::Sc1411UiComponentOrState,
-        "sc-1.4.11-graphical-object" => C::Sc1411GraphicalObject,
-        requested => {
-            return Err(to_js_error(BindingError::UnknownWcag22Criterion {
-                requested: requested.to_string(),
-            }));
-        }
-    };
+    let criterion = C::parse(criterion).ok_or_else(|| {
+        to_js_error(BindingError::UnknownWcag22Criterion {
+            requested: criterion.to_string(),
+        })
+    })?;
     let assessment =
         labcolors_core::wcag22::evaluate_wcag22_hex(foreground_hex, background_hex, criterion)
             .map_err(|error| {
@@ -689,8 +683,9 @@ impl LabColors {
     ///
     /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
     /// order of `fgHexes`: index `2*i` is foreground `i`'s signed `Lc`, `2*i+1`
-    /// its WCAG ratio. Rejects (structured `{code, message}`) on an invalid hex or
-    /// an unknown theme.
+    /// its WCAG ratio. On invalid hex or an unknown theme, rejects with an
+    /// ordinary JS `Error` whose message starts with the stable
+    /// `"<code>: <message>"` prefix.
     #[wasm_bindgen(js_name = recheckContrast)]
     pub fn recheck_contrast(
         &self,
@@ -788,25 +783,32 @@ fn stable_glow_recheck_core_error(reason: String) -> BindingError {
 mod native_contract_tests {
     use super::*;
 
-    #[test]
-    fn generated_config_types_cover_the_closed_ladder_menu_and_dto_fields() {
-        let source = include_str!("lib.rs");
-        let types = source
+    fn custom_types() -> &'static str {
+        include_str!("lib.rs")
             .split_once("const TS_RESULT_TYPES: &'static str = r##\"")
             .and_then(|(_, tail)| tail.split_once("\"##;").map(|(types, _)| types))
-            .expect("custom TypeScript section is extractable");
-        let block = types
-            .split_once("export type LadderPositionV1 =")
+            .expect("custom TypeScript section is extractable")
+    }
+
+    fn string_union<'a>(types: &'a str, name: &str) -> Vec<&'a str> {
+        let declaration = format!("export type {name} =");
+        types
+            .split_once(&declaration)
             .and_then(|(_, tail)| tail.split_once(';').map(|(block, _)| block))
-            .expect("LadderPositionV1 union exists");
-        let declared: Vec<&str> = block
+            .unwrap_or_else(|| panic!("{name} union exists"))
             .lines()
             .filter_map(|line| {
                 line.trim()
                     .strip_prefix("| \"")
                     .and_then(|value| value.strip_suffix('"'))
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn generated_config_types_cover_the_closed_ladder_menu_and_dto_fields() {
+        let types = custom_types();
+        let declared = string_union(types, "LadderPositionV1");
         let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
         let core_set: std::collections::HashSet<&str> = labcolors_core::LadderPosition::ALL
             .iter()
@@ -821,6 +823,26 @@ mod native_contract_tests {
         assert!(types.contains("hue?: LadderSource"));
         assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\" | \"none\""));
         assert!(types.contains("readonly roles: ReadonlyArray"));
+    }
+
+    #[test]
+    fn generated_wcag22_criterion_type_equals_the_core_wire_menu() {
+        let declared = string_union(custom_types(), "Wcag22CriterionV1");
+        let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
+        let core_set: std::collections::HashSet<&str> =
+            labcolors_core::wcag22::Wcag22CriterionV1::ALL
+                .iter()
+                .map(|criterion| criterion.key())
+                .collect();
+        assert_eq!(
+            declared.len(),
+            declared_set.len(),
+            "duplicate TS WCAG22 criterion literal"
+        );
+        assert_eq!(
+            declared_set, core_set,
+            "TS WCAG22 criterion menu must equal core ALL"
+        );
     }
 
     #[test]

@@ -72,7 +72,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "e8c242171e3c20009430da164395d4ac6ef67f1d628d9dd63afa479f4fab6304"
+    "daa10163830e2f15f13ab3ca26c5bae561397b39e641d35c68cae3fd5f1cb601"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
@@ -80,11 +80,11 @@ EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
 )
 PARSER_ID = "encoded-srgb8-hex-parser-v1"
 EXPECTED_PARSER_SHA256 = (
-    "354b75ef51b92dc2568672d30f1186ee5239bcb086d8acc5bec6c9b5a983c5a0"
+    "57cd2605e040a4d206a83c86cf01c5d6935e5bff9c45e556db0e4c6eaede7280"
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
-    "0744abc71b061b032fb462f5549de7c985cb06fc9348d86b6aeb6ed00e532cef"
+    "07abc87d428e26d793c306babdddb4fb1746a5ef7fff3698feee5a786ebc6b51"
 )
 EXPECTED_CRATE_LIB_SHA256 = (
     "40d926da94547201242ef3aaf01db4c7e3912e8034998ab9a11671882057a726"
@@ -325,6 +325,8 @@ def canonical_bytes(rows: list[tuple[int, int]]) -> bytes:
 def verify_rows(
     metadata: dict[str, int | str],
     committed_rows: list[tuple[int, int]],
+    *,
+    canonical_binary_artifact: bytes | None = None,
 ) -> tuple[list[list[tuple[int, int]]], dict[str, int | list[int]]]:
     assert metadata["q55_scale"] == Q, (
         f"scale drift: {metadata['q55_scale']} != {Q}"
@@ -336,7 +338,11 @@ def verify_rows(
     assert len(committed_rows) == ROW_COUNT, (
         f"row-count drift: {len(committed_rows)} != {ROW_COUNT}"
     )
-    committed_binary = CANONICAL_BINARY_ARTIFACT.read_bytes()
+    committed_binary = (
+        CANONICAL_BINARY_ARTIFACT.read_bytes()
+        if canonical_binary_artifact is None
+        else canonical_binary_artifact
+    )
     expected_binary = canonical_bytes(committed_rows)
     assert committed_binary == expected_binary, (
         "canonical binary artifact differs from the production Rust table"
@@ -618,9 +624,17 @@ def verify_negative_controls(
     bad_row_metadata = metadata.copy()
     bad_row_metadata["artifact_sha256"] = canonical_digest(mutated_rows)
     try:
-        verify_rows(bad_row_metadata, mutated_rows)
-    except AssertionError:
-        pass
+        verify_rows(
+            bad_row_metadata,
+            mutated_rows,
+            canonical_binary_artifact=canonical_bytes(mutated_rows),
+        )
+    except AssertionError as error:
+        expected = "row 1 differs from adaptive Decimal oracle"
+        if not str(error).startswith(expected):
+            raise AssertionError(
+                "negative control: non-tight row missed the row oracle"
+            ) from error
     else:
         raise AssertionError("negative control: non-tight row was accepted")
 
@@ -721,6 +735,7 @@ def verify_srgb8_parser() -> str:
     )
     compact = re.sub(r"\s+", " ", source_bytes.decode("utf-8"))
     required = (
+        "hex.strip_prefix('#').unwrap_or(hex)",
         "hex.len() != 6 || !hex.is_ascii()",
         "parse(&hex[0..2])?",
         "parse(&hex[2..4])?",
@@ -728,6 +743,9 @@ def verify_srgb8_parser() -> str:
     )
     for fragment in required:
         assert fragment in compact, f"encoded sRGB8 parser semantic drift: {fragment}"
+    assert "trim_start_matches" not in compact, (
+        "encoded sRGB8 parser must remove at most one optional hash prefix"
+    )
     return digest
 
 
@@ -743,7 +761,7 @@ def verify_public_facade() -> tuple[str, str]:
         pattern = rf'({name}: &str =\s*)"[0-9a-f]{{64}}"'
         normalized, count = re.subn(
             pattern,
-            rf'\1"<self-digest>"',
+            r'\1"<self-digest>"',
             normalized,
         )
         assert count == 1, f"public facade has {count} {name} digest literals"
