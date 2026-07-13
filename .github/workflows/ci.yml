@@ -235,7 +235,7 @@ jobs:
         run: |
           artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
           protocol=(
-            --admit-revision 04c229d7a316ee4b2e0afc687905e71859b50a46
+            --admit-revision 7b0961e5be026e417f11a9316fef8faf3ce40f7c
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
@@ -249,7 +249,7 @@ jobs:
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$artifact" "${protocol[@]}" \
             --verify-current-subjects \
-            --artifact-sha256 4c72b4aab6a2b1e7b4d56c8b3f7d24c3cd8c02416633504b47235cce50cddf7c \
+            --artifact-sha256 c894f65c44a3df248ee7bf239565503f01e6b805e0572ac58fbf1a613aab08b2 \
             --self-test
 
   audit:
