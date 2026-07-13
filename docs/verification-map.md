@@ -90,6 +90,21 @@ criterion, а не замена LPC/APCA-shaped перцептивной цел�
 | право минтить terminal evidence связано с фактической typed WCAG registry-row | compiled Rust probe читает live row; Python канонизирует 10 mint-relevant полей через length-prefix/SHA-256; 10 field mutations + 2 hex/count transport mutations обязаны отказать | независимая site-local admission binding (в proof: 15 negative controls всего) |
 | один verdict/evidence сохраняется через Core → FFI/WASM → JS/Swift/conformance | `wcag22_transport_*`, `wasm_parity`, `wcag22.test.mjs`, Swift conformance, committed pack 4 `wcag22.json`; release verifier повторно проверяет evidence-байты | дифференциальный cross-boundary oracle |
 
+## Конечная WCAG 2.2 feasibility-компиляция — `wcag22_feasibility.rs` (#295)
+
+Модуль канонизирует opaque client declarations и полностью перечисляет
+зарегистрированный конечный домен. Он не ранжирует кандидаты, не выводит
+применимость или размер текста из ID и не заменяет перцептивную цель solver-а.
+
+| инвариант | чем верифицирован | оракул |
+|---|---|---|
+| все 256 нейтралей проверяются против каждой канонической applicable adjacency; граничные множества для 4.5:1 и 3:1 совпадают с independently recomputed fixture | `verify_wcag22_neutral_axis.py`; `production_vectors_are_bound_to_the_exact_independent_oracle_fixture`; full-matrix и boundary tests | независимая `Fraction`-арифметика с адаптивными точными границами корня пятой степени; production Q55/Rust evaluator не импортируются |
+| перестановки и точные дубликаты не меняют канонические content IDs; изменение opaque ID меняет identity, но не физический partition | `verify_wcag22_feasibility_identity.py`; `exact_identity_preimages_match_the_independent_cross_language_fixture`; property/characterization tests канонизации | независимая Python-транскрипция exact byte grammar и SHA-256 + внутренние metamorphic tests |
+| терминал появляется только после полного `W=256E`; packed storage равен `B=0` при `A=0`, иначе `B=32(E+1)`; partial terminal и silent fallback отсутствуют | fault-injection tests evaluator/storage/allocation/completeness; `check_wcag22_feasibility_benchmark.py` проверяет полный набор граничных shapes, exact counters и SHA-256 dependency cone | типизированные negative controls + raw native measurements; elapsed time не является acceptance threshold |
+
+Benchmark artifact не доказывает total WebAssembly memory, serialized output
+size или client latency: эти величины явно находятся вне его claim boundary.
+
 ## LPC (перцептивный контраст) — `lpc.rs`
 
 | формула | чем верифицирована | оракул |

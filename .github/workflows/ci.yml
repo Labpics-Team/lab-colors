@@ -195,6 +195,9 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          # Benchmark admission replays the measured implementation commit,
+          # which precedes the committed evidence artifact (and a PR merge SHA).
+          fetch-depth: 0
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -224,6 +227,18 @@ jobs:
         run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
         run: python3 scripts/verify_wcag22_q55.py
+      - name: independently recompute WCAG22 neutral-axis fixtures
+        run: python3 scripts/verify_wcag22_neutral_axis.py
+      - name: verify WCAG22 feasibility identity byte grammar
+        run: python3 scripts/verify_wcag22_feasibility_identity.py
+      - name: validate committed WCAG22 feasibility benchmark evidence
+        run: |
+          artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
+          if test -f "$artifact"; then
+            python3 scripts/check_wcag22_feasibility_benchmark.py "$artifact"
+          else
+            echo "benchmark artifact is not committed yet; validation deferred"
+          fi
 
   audit:
     name: cargo audit (rustsec)

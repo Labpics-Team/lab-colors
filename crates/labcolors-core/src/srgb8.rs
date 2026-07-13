@@ -15,6 +15,38 @@ pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
 }
 // END WCAG22_PARSER_CAPSULE_V1
 
+/// One exact final encoded-sRGB8 triplet.
+///
+/// This is a physical value object, not a colour-role or client-semantic type.
+/// It is intentionally unversioned: versioned profiles describe how bytes are
+/// interpreted, while the bytes themselves remain exactly three octets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Srgb8([u8; 3]);
+
+impl Srgb8 {
+    /// Construct one exact byte triplet.
+    pub const fn new(bytes: [u8; 3]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return the exact three encoded bytes.
+    pub const fn bytes(self) -> [u8; 3] {
+        self.0
+    }
+}
+
+impl From<[u8; 3]> for Srgb8 {
+    fn from(value: [u8; 3]) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Srgb8> for [u8; 3] {
+    fn from(value: Srgb8) -> Self {
+        value.bytes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -30,5 +62,13 @@ mod tests {
     #[test]
     fn public_srgb_parser_rejects_a_repeated_hash_prefix() {
         assert!(crate::spaces::srgb::srgb_encoded_from_hex("##1A2B3C").is_err());
+    }
+
+    #[test]
+    fn typed_public_value_round_trips_exact_bytes() {
+        let value = Srgb8::new([0x1A, 0x2B, 0x3C]);
+        assert_eq!(value.bytes(), [0x1A, 0x2B, 0x3C]);
+        assert_eq!(Srgb8::from(value.bytes()), value);
+        assert_eq!(<[u8; 3]>::from(value), [0x1A, 0x2B, 0x3C]);
     }
 }

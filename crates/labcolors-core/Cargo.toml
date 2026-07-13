@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "glow_alpha"
 harness = false
+
+[[bench]]
+name = "wcag22_feasibility_admission"
+harness = false
