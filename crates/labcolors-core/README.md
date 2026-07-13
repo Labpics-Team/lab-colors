@@ -42,12 +42,18 @@ terminal: `Feasible`, `Infeasible` or declaration-only `NotEvaluated`.
 `Infeasible` means that this selected registered domain has no feasible member;
 it does not claim that no colour exists outside that domain.
 
+The `wcag22-feasibility` Cargo feature is enabled by default for direct core
+consumers. Transport adapters disable unprojected capabilities and enable each
+one together with its public transport and conformance contract.
+
 Version 1 registers the 256-member encoded-sRGB8 neutral axis. It does not infer
 text size, component semantics or applicability from an ID. Resource excess,
 contradictory declarations, allocation failure and evaluator/compiler invariant
 failure are typed errors; there is no partial result or fallback.
 
 ```rust
+# #[cfg(feature = "wcag22-feasibility")]
+# fn feasibility_example() -> Result<(), Box<dyn std::error::Error>> {
 use labcolors_core::{
     Srgb8,
     wcag22::Wcag22CriterionV1,
@@ -57,7 +63,6 @@ use labcolors_core::{
     },
 };
 
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let relation = RelationV1::applicable(
     RelationId::try_new("label-on-surface")?,
     OccurrenceId::try_new("button/label")?,
@@ -81,4 +86,5 @@ if let Some(evaluated) = result.evaluated() {
 }
 # Ok(())
 # }
+# fn main() {}
 ```

@@ -9,9 +9,11 @@ pub mod wcag22_evidence;
 
 pub(crate) mod spaces;
 
+#[cfg(feature = "wcag22-feasibility")]
 mod sha256;
 
 pub use srgb8::Srgb8;
+#[cfg(feature = "wcag22-feasibility")]
 pub mod wcag22_feasibility;
 
 pub(crate) mod accent;

@@ -15,7 +15,9 @@ description = "WASM bindings for the labcolors-core contrast engine, packaged as
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-labcolors-core = { path = "../labcolors-core" }
+# Compile only capabilities this adapter projects. A core capability is enabled
+# here atomically with its public transport and conformance surface.
+labcolors-core = { path = "../labcolors-core", default-features = false }
 wasm-bindgen = { workspace = true }
 # js-sys ships with the wasm-bindgen toolchain (no new third-party tree); used
 # to build the result object at the boundary without a serde dependency.
