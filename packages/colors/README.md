@@ -231,6 +231,53 @@ profile, а не как численную гарантию. Полная миг
 
 ---
 
+### `evaluateWcag22(foreground, background, criterion): Wcag22AssessmentV1`
+
+Проверяет одну **финальную sRGB8-пару** по датированному профилю WCAG 2.2. Core
+не угадывает назначение токена или размер текста: клиент явно выбирает критерий
+для конкретного использования, а evaluator возвращает строгий `pass | fail`.
+
+```js
+import init, { evaluateWcag22 } from "@labpics/colors";
+
+await init();
+const assessment = evaluateWcag22(
+  "#898CB8",
+  "#3E2217",
+  "sc-1.4.3-text-default",
+);
+// assessment.decision === "fail" — значение строго ниже 4.5:1
+```
+
+| `criterion` | Порог | Когда выбирать |
+|---|---:|---|
+| `sc-1.4.3-text-default` | 4.5:1 | обычный текст |
+| `sc-1.4.3-text-large-scale` | 3:1 | только текст, который клиент уже классифицировал как large-scale по WCAG |
+| `sc-1.4.11-ui-component-or-state` | 3:1 | необходимая визуальная информация компонента или состояния |
+| `sc-1.4.11-graphical-object` | 3:1 | необходимая визуальная информация графического объекта |
+
+Core не выводит критерий из имени токена, CSS-класса, размера шрифта или
+компонента: applicability принадлежит клиентскому контексту. Неверный ключ и
+нестрогий цветовой transport отклоняются ошибкой, без fallback.
+
+Решение не использует epsilon, округлённый display-ratio или отдельную JS-
+формулу. Оно приходит из Rust core вместе с identity профиля, Q55-таблицы,
+bound-law и воспроизводимого full-domain proof. Файлы доказательства входят в
+npm-тарбол в `evidence/`. LPC/APCA-shaped diagnostics и legacy `wcagRatio` не
+могут изменить этот вердикт.
+
+---
+
+### `numericalCapabilityManifest(): NumericalCapabilityManifestV2`
+
+Возвращает статический манифест численных возможностей установленной сборки:
+какие solver-sites зарегистрированы и какие artifact/bound/proof IDs они могут
+выдать. Это диагностическая поверхность для tooling, CI и ИИ-агентов; она не
+выбирает режим и не превращает compatibility-результат в доказанный. Публичная
+функция одна: отдельного V1 или `numericalCapabilityManifestV2()` нет.
+
+---
+
 ### `engine.recheckContrast(bgHex, fgHexes, theme): Float64Array`
 
 Дешёвая покадровая проверка: какие контрасты дают цвета `fgHexes` на фоне `bgHex` под темой `theme`, без полного резолва (один прямой ход модели на фон плюс по одному на каждый передний план). Возвращает `Float64Array` пар `[lc, wcagRatio]` в порядке `fgHexes`: индекс `2·i` — знаковый `Lc` цвета `i`, `2·i+1` — его WCAG-отношение. Это примитив, которым `adaptTheme` решает, пора ли пересчитывать.
@@ -353,10 +400,12 @@ replacement принадлежит #283.
 
 ## Размер бандла
 
-Размер не закреплён в документации приблизительным числом: оно устаревает при
-любом изменении солвера. SSOT — шаг CI `report bundle size (gzip)` в `ci.yml`,
-который для каждого коммита печатает точные raw-байты и результат `gzip -9`
-отдельно для `labcolors_bg.wasm` и wasm-bindgen-обёртки `labcolors.js`.
+Raw-размер WASM — hard gate. Его versioned SSOT —
+`bench/wasm-size-budget-v1.json`: точное принятое измерение Issue #284 вместе
+с toolchain provenance, SHA-256 измеренного артефакта и ceiling без
+произвольного запаса. CI запускает `scripts/check-wasm-size-budget.mjs` и падает
+при превышении ceiling. `gzip -9` остаётся только диагностикой: разные gzip-
+реализации не определяют correctness gate.
 
 Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
 поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого

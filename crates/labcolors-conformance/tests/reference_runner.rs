@@ -29,8 +29,8 @@ use std::path::PathBuf;
 
 use labcolors_conformance::{
     AlphaVector, ContrastVector, DRIFT_TOL, FAMILY_FILES, LadderVector, MANIFEST_FILE, Manifest,
-    MuddinessVector, Pack, SolveOutcome, SolveVector, generate_alpha, generate_contrasts,
-    generate_ladders, generate_muddiness, generate_solve,
+    MuddinessVector, Pack, SolveOutcome, SolveVector, Wcag22Vector, generate_alpha,
+    generate_contrasts, generate_ladders, generate_muddiness, generate_solve, generate_wcag22,
 };
 use labcolors_core::fnv1a_32;
 
@@ -191,6 +191,19 @@ fn core_reproduces_committed_muddiness() {
         assert_eq!(c.hex, f.hex, "legacy proxy key");
         approx(c.score, f.score, &format!("muddiness {}", c.hex));
     }
+}
+
+#[test]
+fn core_reproduces_committed_wcag22_exactly() {
+    let committed: Vec<Wcag22Vector> = parse("wcag22.json");
+    let fresh = generate_wcag22().expect("canonical WCAG22 vectors");
+    assert_eq!(committed, fresh, "wcag22.json: exact family drifted");
+    assert!(committed.iter().any(|vector| {
+        vector.foreground == "#89BB09"
+            && vector.background == "#8212DB"
+            && vector.decision == "fail"
+            && vector.evidence_kind == "canonical-finite-bounded"
+    }));
 }
 
 // ── Слой 2: метаданные манифеста ──────────────────────────────────────────────

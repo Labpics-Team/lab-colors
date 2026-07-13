@@ -220,6 +220,8 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
+      - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
+        run: python3 scripts/verify_wcag22_q55.py
 
   audit:
     name: cargo audit (rustsec)
@@ -321,6 +323,11 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
+      - name: enforce measured WASM raw-byte budget
+        # Hard gate: exact accepted Issue #284 raw-byte measurement, without
+        # invented headroom. gzip is reported only as a transport diagnostic
+        # because compressed bytes may vary with the gzip implementation.
+        run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve
         # against the *real* wasm-bindgen declarations — so the type-level smoke
@@ -459,14 +466,6 @@ jobs:
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
         run: wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
-      - name: report bundle size (gzip)
-        # Size is part of the perf story (perf-bench). Not a hard gate yet — a
-        # budget gate lands with perf-bench; here we surface the number in logs.
-        run: |
-          wasm="packages/colors/pkg/labcolors_bg.wasm"
-          glue="packages/colors/pkg/labcolors.js"
-          echo "wasm: raw=$(wc -c <"$wasm")B gzip=$(gzip -9 -c "$wasm" | wc -c)B"
-          echo "glue: raw=$(wc -c <"$glue")B gzip=$(gzip -9 -c "$glue" | wc -c)B"
   docs-drift:
     name: docs-drift (нейминг-канон)
     runs-on: [self-hosted, Linux, X64]

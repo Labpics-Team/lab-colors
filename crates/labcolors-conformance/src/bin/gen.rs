@@ -45,13 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let c = pack.counts();
     println!(
-        "готово: {} векторов (contrasts={}, ladders={}, alpha={}, solve={}, muddiness={}), дайджест={}",
+        "готово: {} векторов (contrasts={}, ladders={}, alpha={}, solve={}, muddiness={}, wcag22={}), дайджест={}",
         c.total,
         c.contrasts,
         c.ladders,
         c.alpha,
         c.solve,
         c.muddiness,
+        c.wcag22,
         pack.digest()
     );
     Ok(())

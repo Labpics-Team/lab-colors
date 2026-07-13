@@ -1,10 +1,6 @@
-// Additive-поверхность #292: `numericalCapabilityManifest()` — canonical
-// numerical capability manifest сборки, спроецированный из core registry SSOT
-// (не рукописная копия). Тест пинит ФОРМУ (camelCase-поля проекции
-// conformance-пака), покрытие мигрированного glow-site и формат checksum
-// (FNV-1a-32, 8 lowercase hex), но НЕ значение checksum: значение принадлежит
-// registry и меняется вместе с ним законно — дрейф формы был бы дефектом
-// границы, дрейф значения — свойством ядра.
+// Capability schema is independently versioned. Before public clients exist,
+// the one public projection moves atomically to proof-capable V2 rather than
+// preserving two competing entrypoints.
 //
 // Requires the built `pkg/` (CI runs `npm test` after `wasm-pack build`).
 // Skips cleanly if the wasm bundle is absent, matching the other wasm tests.
@@ -21,12 +17,12 @@ const gluePath = resolve(here, "../pkg/labcolors.js");
 
 const haveWasm = existsSync(wasmPath) && existsSync(gluePath);
 
-test("numericalCapabilityManifest projects the core capability SSOT", async (t) => {
+test("numericalCapabilityManifest publishes the single proof-capable V2 contract", async (t) => {
   if (!haveWasm) {
     t.skip("pkg/ not built — run `npm run build` first (CI builds before `npm test`)");
     return;
   }
-  const { initSync, numericalCapabilityManifest } = await import(
+  const { initSync, numericalCapabilityManifest, numericalCapabilityManifestV2 } = await import(
     pathToFileURL(gluePath).href
   );
   initSync({ module: readFileSync(wasmPath) });
@@ -39,7 +35,7 @@ test("numericalCapabilityManifest projects the core capability SSOT", async (t) 
     ["checksum", "coverage", "schemaVersion", "sites"],
     "верхний уровень несёт ровно четыре canonical-поля",
   );
-  assert.equal(manifest.schemaVersion, 1, "capability schema V1");
+  assert.equal(manifest.schemaVersion, 2, "capability schema V2");
   assert.equal(manifest.coverage, "migrated-sites-only-v1");
   assert.match(
     manifest.checksum,
@@ -48,9 +44,12 @@ test("numericalCapabilityManifest projects the core capability SSOT", async (t) 
   );
 
   // Rows отсортированы по UTF-8 байтам siteId (инвариант canonical preimage).
-  assert.ok(Array.isArray(manifest.sites) && manifest.sites.length > 0);
+  assert.ok(Array.isArray(manifest.sites));
   const ids = manifest.sites.map((site) => site.siteId);
-  assert.deepEqual(ids, [...ids].sort(), "sites отсортированы по siteId");
+  assert.deepEqual(ids, [
+    "glow-target-or-maximum-v1",
+    "wcag22-srgb8-contrast-v1",
+  ]);
 
   // Мигрированный glow-site: точное содержимое registry-строки. Пустые
   // массивы обязаны быть явными [] — пусто значит «нет evidence», не
@@ -66,11 +65,12 @@ test("numericalCapabilityManifest projects the core capability SSOT", async (t) 
       "boundIds",
       "compatibilityReleases",
       "evidenceClasses",
+      "proofIds",
       "runtimeAttestations",
       "siteId",
       "stableOutcomes",
     ],
-    "row несёт ровно семь canonical-полей",
+    "V2 row несёт ровно восемь canonical-полей",
   );
   assert.deepEqual(glow.stableOutcomes, ["bit-exact", "indeterminate"]);
   assert.deepEqual(glow.compatibilityReleases, [
@@ -79,7 +79,15 @@ test("numericalCapabilityManifest projects the core capability SSOT", async (t) 
   assert.deepEqual(glow.evidenceClasses, ["bit-exact"]);
   assert.deepEqual(glow.artifactIds, []);
   assert.deepEqual(glow.boundIds, []);
+  assert.deepEqual(glow.proofIds, []);
   assert.deepEqual(glow.runtimeAttestations, []);
+
+  const wcag22 = manifest.sites[1];
+  assert.deepEqual(wcag22.stableOutcomes, ["canonical-finite-bounded"]);
+  assert.deepEqual(wcag22.evidenceClasses, ["canonical-finite-bounded"]);
+  assert.deepEqual(wcag22.artifactIds, ["wcag22-srgb8-luminance-q55-v1"]);
+  assert.deepEqual(wcag22.boundIds, ["wcag22-srgb8-outward-q55-v1"]);
+  assert.deepEqual(wcag22.proofIds, ["wcag22-srgb8-full-domain-q55-v1"]);
 
   // Манифест — статическое свойство сборки: повторный вызов идентичен.
   assert.deepEqual(numericalCapabilityManifest(), manifest);
@@ -88,4 +96,6 @@ test("numericalCapabilityManifest projects the core capability SSOT", async (t) 
   const root = await import(pathToFileURL(resolve(here, "../index.js")).href);
   assert.equal(typeof root.numericalCapabilityManifest, "function");
   assert.deepEqual(root.numericalCapabilityManifest(), manifest);
+  assert.equal(numericalCapabilityManifestV2, undefined);
+  assert.equal(root.numericalCapabilityManifestV2, undefined);
 });

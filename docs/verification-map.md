@@ -104,7 +104,8 @@
 ## Численные решения — `numerics.rs`, `numerical_plan.rs` (#292)
 
 Три уровня контракта разделены типами: package capability
-(`NumericalCapabilityManifestV1`, projection registry SSOT) ≠ compiled
+(`NumericalCapabilityManifestV2` — единственная proof-capable projection
+registry SSOT) ≠ compiled
 invocation plan (`CompiledNumericalPlanV1`) ≠ атомарный результат
 (`NumericalDecisionV1`: `Determinate`/`Compatibility`/`Indeterminate`).
 Новой математики модуль не вводит — проверяется невозможность повышения
@@ -114,6 +115,7 @@ caller-created значений и legacy-исходов до доказател
 |---|---|---|
 | registry непустой, ключи уникальны, Glow site покрыт обоими stable outcomes и registered compatibility release | `numerics::tests::migrated_registry_is_non_vacuous_unique_and_covers_glow_site` | внутренняя тождественность |
 | capability manifest — каноническая projection registry: сортировка по UTF-8 `siteId`, coverage `migrated-sites-only-v1`, без выбранного mode | `numerics::tests::capability_manifest_is_canonical_registry_projection` | внутренняя тождественность |
+| единственный public `numericalCapabilityManifest()` возвращает V2 с WCAG artifact/bound/proof IDs; одна декларация проецирует internal runtime и public capability без двух SSOT | `numerics::tests::unified_registry_projects_runtime_glow_and_proof_bound_wcag`, `projection::tests::capability_manifest_json_mirrors_proof_capable_core_ssot`, `packages/colors/test/capability-manifest.test.mjs` | regression pin + дифференциальный adapter/core |
 | drift-checksum канонический и tamper-чувствителен: смена schema version / удаление row меняет FNV-1a-32 preimage | `numerics::tests::capability_checksum_is_canonical_and_tamper_sensitive`; независимые пересчёты: JS (`scripts/verify-package-release.mjs`) и Swift (`ConformanceTests.testCapabilityManifestChecksumRecomputes`) | внутренняя тождественность + два независимых re-implementation оракула |
 | legacy-исход — атомарный `Compatibility` с registered release, не determinate evidence | `numerics::tests::legacy_result_is_compatibility_not_determinate_evidence` | тип-уровневая (взаимоисключающие варианты) + внутренняя тождественность |
 | BitExact-evidence минтится только registry-owned конструктором для site с объявленным классом; внешняя подделка не компилируется | `numerics::tests::bit_exact_evidence_is_registry_owned_and_sealed`, `bit_exact_mint_is_refused_without_declared_capability` + два compile-fail doctests в шапке `numerics.rs` (импорт удалённого `classify_at_least_v1`; struct-литерал `BitExact` с приватной печатью) | тип-уровневая (компилятор) |

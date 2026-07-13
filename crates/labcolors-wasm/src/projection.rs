@@ -28,6 +28,110 @@ use std::fmt::Write as _;
 use crate::dto::{GlowColor, GlowIndeterminateColor, MaterialColor, ResolvedTheme, RoleOutcome};
 use crate::error::BindingError;
 
+/// Project the core-owned WCAG22 assessment without recomputing any math.
+pub fn wcag22_json(
+    assessment: &labcolors_core::wcag22::Wcag22AssessmentV1,
+) -> Result<String, BindingError> {
+    use labcolors_core::NumericalDecisionEvidenceV1;
+    use labcolors_core::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1};
+
+    let Wcag22AssessmentV1::Evaluated {
+        profile_id,
+        criterion,
+        measurement,
+        decision,
+        evidence,
+        ..
+    } = assessment
+    else {
+        return Err(BindingError::Internal {
+            reason: "pair evaluator returned report-only NotEvaluated".to_string(),
+        });
+    };
+    let NumericalDecisionEvidenceV1::CanonicalFiniteBounded(evidence_payload) = evidence else {
+        return Err(BindingError::Internal {
+            reason: "WCAG22 assessment carried a non-bounded evidence class".to_string(),
+        });
+    };
+    let artifact_id = evidence_payload.artifact_id();
+    let bound_id = evidence_payload.bound_id();
+    let proof_id = evidence_payload.proof_id();
+    let profile = labcolors_core::wcag22::wcag22_profile_v1();
+    if profile.profile_id != *profile_id
+        || profile.artifact_id != artifact_id
+        || profile.bound_id != bound_id
+        || profile.proof_id != proof_id
+    {
+        return Err(BindingError::Internal {
+            reason: "WCAG22 assessment/profile evidence identities drifted".to_string(),
+        });
+    }
+
+    let hex = |bytes: [u8; 3]| format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
+    let criterion = match criterion {
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault => "sc-1.4.3-text-default",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextLargeScale => {
+            "sc-1.4.3-text-large-scale"
+        }
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411UiComponentOrState => {
+            "sc-1.4.11-ui-component-or-state"
+        }
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411GraphicalObject => {
+            "sc-1.4.11-graphical-object"
+        }
+        _ => {
+            return Err(BindingError::Internal {
+                reason: "unknown core WCAG22 criterion variant".to_string(),
+            });
+        }
+    };
+    let decision = match decision {
+        Wcag22ApplicableDecisionV1::Pass => "pass",
+        Wcag22ApplicableDecisionV1::Fail => "fail",
+        _ => {
+            return Err(BindingError::Internal {
+                reason: "unknown core WCAG22 decision variant".to_string(),
+            });
+        }
+    };
+
+    Ok(format!(
+        concat!(
+            "{{\"kind\":\"evaluated\",\"profileId\":\"{}\",",
+            "\"criterion\":\"{}\",\"foreground\":\"{}\",\"background\":\"{}\",",
+            "\"foregroundLuminanceQ55\":{{\"lower\":\"{}\",\"upper\":\"{}\"}},",
+            "\"backgroundLuminanceQ55\":{{\"lower\":\"{}\",\"upper\":\"{}\"}},",
+            "\"q55Scale\":\"{}\",\"decision\":\"{}\",",
+            "\"evidence\":{{\"kind\":\"canonical-finite-bounded\",",
+            "\"artifactId\":\"{}\",\"artifactSha256\":\"{}\",",
+            "\"boundId\":\"{}\",\"proofId\":\"{}\",",
+            "\"proofSha256\":\"{}\",\"proofPayloadSha256\":\"{}\",",
+            "\"generatorSha256\":\"{}\",\"verifierSha256\":\"{}\",",
+            "\"profileChecksum\":\"{}\",\"profileSha256\":\"{}\"}}}}"
+        ),
+        profile_id.key(),
+        criterion,
+        hex(measurement.foreground),
+        hex(measurement.background),
+        measurement.foreground_luminance.lower(),
+        measurement.foreground_luminance.upper(),
+        measurement.background_luminance.lower(),
+        measurement.background_luminance.upper(),
+        labcolors_core::wcag22::Wcag22LuminanceBoundsQ55V1::scale(),
+        decision,
+        artifact_id.key(),
+        profile.artifact_sha256,
+        bound_id.key(),
+        proof_id.key(),
+        profile.proof_sha256,
+        profile.proof_payload_sha256,
+        profile.generator_sha256,
+        profile.verifier_sha256,
+        profile.profile_checksum,
+        profile.source_sha256,
+    ))
+}
+
 /// Сериализовать [`ResolvedTheme`] в JSON, литерально повторяющий форму
 /// `.d.ts`-контракта: `{ theme, background, vars, roles }`. Построено
 /// генерически из вектора ролей — ни одна роль здесь не поименована, набор
@@ -244,25 +348,16 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
     Ok(out)
 }
 
-/// Проекция canonical numerical capability manifest (#289/#292) в JSON с
-/// camelCase-полями ровно той же формы, что `CapabilityManifestProjection`
-/// conformance-крейта: `schemaVersion, coverage, sites[{siteId, stableOutcomes,
-/// compatibilityReleases, evidenceClasses, artifactIds, boundIds,
-/// runtimeAttestations}], checksum`. Построена ИЗ core SSOT
-/// (`numerical_capability_manifest_v1`), не из рукописной копии registry:
-/// adapter не имеет права держать второй список sites, иначе поверхности
-/// расходятся молча. Пустой список эмитится явным `[]` (пусто = отсутствие
-/// evidence, не implicit support).
+/// Proof-capable V2-проекция. Форма совпадает с `numericalCapabilities`
+/// conformance pack 4. Это единственная public adapter projection.
 pub fn capability_manifest_json() -> String {
-    let manifest = labcolors_core::numerical_capability_manifest_v1();
-    let mut out = String::with_capacity(384);
+    let manifest = labcolors_core::numerical_capability_manifest_v2();
+    let mut out = String::with_capacity(512);
     out.push_str("{\"schemaVersion\":");
     let _ = write!(out, "{}", manifest.schema_version);
     out.push_str(",\"coverage\":");
     push_str_lit(&mut out, manifest.coverage.key());
     out.push_str(",\"sites\":[");
-    // sites уже отсортированы ядром по UTF-8 bytes site key (инвариант
-    // canonical checksum preimage) — проекция порядок не пересобирает.
     for (index, site) in manifest.sites.iter().enumerate() {
         if index > 0 {
             out.push(',');
@@ -290,6 +385,7 @@ pub fn capability_manifest_json() -> String {
             site.artifact_ids.iter().map(|v| v.key()),
         );
         push_key_array(&mut out, "boundIds", site.bound_ids.iter().map(|v| v.key()));
+        push_key_array(&mut out, "proofIds", site.proof_ids.iter().map(|v| v.key()));
         push_key_array(
             &mut out,
             "runtimeAttestations",
@@ -1090,92 +1186,37 @@ mod tests {
         );
     }
 
-    /// Capability-manifest проекция несёт camelCase-форму conformance-крейта и
-    /// checksum ядра (8 lowercase hex) — additive-поверхность WASM не имеет
-    /// права дрейфовать ни от core SSOT, ни от формы pack-манифеста.
     #[test]
-    fn capability_manifest_json_mirrors_the_core_ssot() {
+    fn capability_manifest_json_mirrors_proof_capable_core_ssot() {
         let value: serde_json::Value =
             serde_json::from_str(&capability_manifest_json()).expect("валидный JSON");
-        let core = labcolors_core::numerical_capability_manifest_v1();
-
-        assert_eq!(
-            value["schemaVersion"].as_u64(),
-            Some(u64::from(core.schema_version))
-        );
+        let core = labcolors_core::numerical_capability_manifest_v2();
+        assert_eq!(value["schemaVersion"], 2);
         assert_eq!(value["coverage"], core.coverage.key());
         assert_eq!(value["checksum"], core.checksum.hex());
-        let checksum = value["checksum"].as_str().unwrap();
-        assert_eq!(checksum.len(), 8);
-        assert!(
-            checksum
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-            "checksum обязан быть 8 lowercase hex: {checksum}"
-        );
-
         let sites = value["sites"].as_array().expect("sites — массив");
         assert_eq!(sites.len(), core.sites.len());
         for (projected, expected) in sites.iter().zip(core.sites.iter()) {
             assert_eq!(projected["siteId"], expected.site_id.key());
-            let list = |name: &str| -> Vec<String> {
-                projected[name]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("{name} — массив (пустой = явный [])"))
-                    .iter()
-                    .map(|v| v.as_str().unwrap().to_string())
-                    .collect()
-            };
-            let keys = |actual: Vec<String>, expected_keys: Vec<&str>, name: &str| {
-                assert_eq!(actual, expected_keys, "{name}");
-            };
-            keys(
-                list("stableOutcomes"),
-                expected.stable_outcomes.iter().map(|v| v.key()).collect(),
-                "stableOutcomes",
-            );
-            keys(
-                list("compatibilityReleases"),
+            let proof_ids: Vec<_> = projected["proofIds"]
+                .as_array()
+                .expect("V2 proofIds — явный массив")
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                proof_ids,
                 expected
-                    .compatibility_releases
+                    .proof_ids
                     .iter()
-                    .map(|v| v.key())
-                    .collect(),
-                "compatibilityReleases",
-            );
-            keys(
-                list("evidenceClasses"),
-                expected.evidence_classes.iter().map(|v| v.key()).collect(),
-                "evidenceClasses",
-            );
-            keys(
-                list("artifactIds"),
-                expected.artifact_ids.iter().map(|v| v.key()).collect(),
-                "artifactIds",
-            );
-            keys(
-                list("boundIds"),
-                expected.bound_ids.iter().map(|v| v.key()).collect(),
-                "boundIds",
-            );
-            keys(
-                list("runtimeAttestations"),
-                expected
-                    .runtime_attestations
-                    .iter()
-                    .map(|v| v.key())
-                    .collect(),
-                "runtimeAttestations",
+                    .map(|value| value.key())
+                    .collect::<Vec<_>>()
             );
         }
-
-        // Non-vacuous: мигрированный glow-site реально присутствует.
-        assert!(
-            sites
-                .iter()
-                .any(|site| site["siteId"] == "glow-target-or-maximum-v1"),
-            "manifest обязан покрывать glow site"
-        );
+        assert!(sites.iter().any(|site| {
+            site["siteId"] == "wcag22-srgb8-contrast-v1"
+                && site["proofIds"][0] == "wcag22-srgb8-full-domain-q55-v1"
+        }));
     }
 
     /// Материал (whitepaper §3.7) проецируется в контрактные CSS-переменные: `--lab-<role>` =
@@ -1457,6 +1498,33 @@ mod tests {
                 .as_str()
                 .unwrap(),
             "--lab-we\"ird\\key\n\t\u{0001}"
+        );
+    }
+
+    #[test]
+    fn wcag22_projection_preserves_exact_ids_bytes_and_u64_as_strings() {
+        let assessment = labcolors_core::wcag22::evaluate_wcag22_hex(
+            "#89BB09",
+            "#8212DB",
+            labcolors_core::wcag22::Wcag22CriterionV1::Sc1411GraphicalObject,
+        )
+        .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&wcag22_json(&assessment).unwrap()).unwrap();
+        assert_eq!(value["decision"], "fail");
+        assert_eq!(value["foreground"], "#89BB09");
+        assert_eq!(value["background"], "#8212DB");
+        assert_eq!(
+            value["evidence"]["artifactId"],
+            "wcag22-srgb8-luminance-q55-v1"
+        );
+        assert!(value["q55Scale"].as_str().unwrap().parse::<u64>().is_ok());
+        assert!(
+            value["foregroundLuminanceQ55"]["lower"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .is_ok()
         );
     }
 

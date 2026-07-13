@@ -55,22 +55,25 @@ decision. Legacy-идентификаторы сохранены только д
 - `alpha.json` начиная с pack `2.0.0` обязательно содержит точный byte-reference
   half-tie `#C0B2FA @ 0.122` над `#000000` → `#17161F`. Это mutation-killer
   старого пути `(byte/255) · alpha · 255`, который выбирал соседний LSB.
-- `manifest.numericalCapabilities` (схема пака 3.0.0) генерируется из
-  core-owned `numerical_capability_manifest_v1()` и заменяет прозаический
-  `numericalSites` пака 2.x. Форма:
+- `manifest.numericalCapabilities` в pack `4.0.0` генерируется из
+  proof-capable core-owned `numerical_capability_manifest_v2()`. До появления
+  внешних клиентов промежуточная Glow-only capability-схема V1 удалена из
+  public API: один `numericalCapabilityManifest()` сразу возвращает V2, без
+  второго version-suffixed entrypoint. Это намеренная pre-client breaking
+  коррекция ложной схемы, а не поддержка двух конкурирующих контрактов. Форма V2:
   `{schemaVersion, coverage, sites[], checksum}`, где `schemaVersion` —
-  независимый version domain capability-схемы (сейчас `1`); `coverage` —
+  независимый version domain capability-схемы (сейчас `2`); `coverage` —
   `migrated-sites-only-v1` (перечислены только **уже мигрированные**
   branch-sensitive sites, не утверждение полного аудита исторических
   `f64`-ветвлений — он остаётся в scope #291); каждая строка `sites[]` несёт
-  `siteId` и шесть списков стабильных ключей (`stableOutcomes`,
+  `siteId` и семь списков стабильных ключей (`stableOutcomes`,
   `compatibilityReleases`, `evidenceClasses`, `artifactIds`, `boundIds`,
-  `runtimeAttestations`; пустой список — явное «evidence отсутствует», не
-  пропуск); `checksum` — FNV-1a-32 (8 lowercase hex) над canonical
+  `proofIds`, `runtimeAttestations`; пустой список — явное «evidence отсутствует»,
+  не пропуск); `checksum` — FNV-1a-32 (8 lowercase hex) над canonical
   length-prefixed preimage с домен-сепаратором
-  `labcolors.numerical-capability.v1`. Release verifier и Swift-тесты
-  пересчитывают checksum НЕЗАВИСИМО от Rust-кода. Сейчас в manifest только
-  `glow-target-or-maximum-v1`.
+  `labcolors.numerical-capability.v2`. Release verifier и Swift-тесты
+  пересчитывают checksum НЕЗАВИСИМО от Rust-кода. Manifest содержит
+  `glow-target-or-maximum-v1` и proof-bound `wcag22-srgb8-contrast-v1`.
 
 Словарь **позиций лестницы** (не ролей): `label-*`, `fill-*`, `border-*`,
 `focus-ring`, `glow`, `skeleton-*`, `neutral-fill-*`, `neutral-border-*`,

@@ -27,7 +27,8 @@
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
 //! | `muddiness.json` | hex → замороженная legacy-координата | `cleanliness::muddiness_from_hex` |
-//! | `manifest.json` | версии, дайджест, счётчики, capability manifest | `numerical_capability_manifest_v1` |
+//! | `wcag22.json` | final sRGB8 pair + criterion → exact assessment | `wcag22::evaluate_wcag22_hex` |
+//! | `manifest.json` | версии, дайджест, счётчики, capability manifest | `numerical_capability_manifest_v2` |
 //!
 //! `muddiness.json` фиксирует только воспроизводимость исторического числового
 //! API. Это `experimental compatibility proxy`, а не валидированный на
@@ -53,7 +54,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "3.0.0";
+pub const PACK_VERSION: &str = "4.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -457,6 +458,164 @@ pub fn generate_muddiness() -> Vec<MuddinessVector> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Семейство: exact WCAG 2.2 final-sRGB8 assessment
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One cross-runtime exact WCAG 2.2 assessment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wcag22Vector {
+    /// Final foreground bytes.
+    pub foreground: String,
+    /// Final background bytes.
+    pub background: String,
+    /// Explicit occurrence-level criterion key.
+    pub criterion: String,
+    /// Immutable evaluator profile.
+    pub profile_id: String,
+    /// Exact terminal decision.
+    pub decision: String,
+    /// Q55 bounds are decimal strings to remain exact in JavaScript.
+    pub foreground_lower_q55: String,
+    pub foreground_upper_q55: String,
+    pub background_lower_q55: String,
+    pub background_upper_q55: String,
+    pub q55_scale: String,
+    /// Sealed evidence identities and digests.
+    pub evidence_kind: String,
+    pub artifact_id: String,
+    pub artifact_sha256: String,
+    pub bound_id: String,
+    pub proof_id: String,
+    pub proof_sha256: String,
+    pub proof_payload_sha256: String,
+    pub generator_sha256: String,
+    pub verifier_sha256: String,
+    pub profile_checksum: String,
+    pub profile_sha256: String,
+}
+
+const WCAG22_CASES: [(&str, &str, labcolors_core::wcag22::Wcag22CriterionV1); 6] = [
+    (
+        "#000000",
+        "#FFFFFF",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault,
+    ),
+    (
+        "#FFFFFF",
+        "#000000",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411GraphicalObject,
+    ),
+    (
+        "#89BB09",
+        "#8212DB",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411UiComponentOrState,
+    ),
+    (
+        "#898CB8",
+        "#3E2217",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault,
+    ),
+    (
+        "#8A8A8A",
+        "#FFFFFF",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault,
+    ),
+    (
+        "#8A8A8A",
+        "#FFFFFF",
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextLargeScale,
+    ),
+];
+
+/// Generate exact vectors by transporting the core assessment, never by
+/// reimplementing the formula in the conformance crate.
+pub fn generate_wcag22() -> Result<Vec<Wcag22Vector>, PackGenerationError> {
+    use labcolors_core::NumericalDecisionEvidenceV1;
+    use labcolors_core::wcag22::{
+        Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1,
+    };
+
+    WCAG22_CASES
+        .iter()
+        .map(|&(foreground, background, criterion)| {
+            let assessment =
+                labcolors_core::wcag22::evaluate_wcag22_hex(foreground, background, criterion)
+                    .map_err(|error| PackGenerationError::InternalCoreInvariant {
+                        reason: error.to_string(),
+                    })?;
+            let Wcag22AssessmentV1::Evaluated {
+                profile_id,
+                criterion: assessed_criterion,
+                measurement,
+                decision,
+                evidence,
+                ..
+            } = assessment
+            else {
+                return Err(PackGenerationError::InternalCoreInvariant {
+                    reason: "pair evaluator returned NotEvaluated".to_string(),
+                });
+            };
+            let NumericalDecisionEvidenceV1::CanonicalFiniteBounded(evidence_payload) = evidence
+            else {
+                return Err(PackGenerationError::IncompatibleCoreContract {
+                    reason: "WCAG22 evidence is not canonical-finite-bounded".to_string(),
+                });
+            };
+            let artifact_id = evidence_payload.artifact_id();
+            let bound_id = evidence_payload.bound_id();
+            let proof_id = evidence_payload.proof_id();
+            let profile = labcolors_core::wcag22::wcag22_profile_v1();
+            let criterion = match assessed_criterion {
+                Wcag22CriterionV1::Sc143TextDefault => "sc-1.4.3-text-default",
+                Wcag22CriterionV1::Sc143TextLargeScale => "sc-1.4.3-text-large-scale",
+                Wcag22CriterionV1::Sc1411UiComponentOrState => "sc-1.4.11-ui-component-or-state",
+                Wcag22CriterionV1::Sc1411GraphicalObject => "sc-1.4.11-graphical-object",
+                _ => {
+                    return Err(PackGenerationError::IncompatibleCoreContract {
+                        reason: "unknown WCAG22 criterion".to_string(),
+                    });
+                }
+            };
+            let decision = match decision {
+                Wcag22ApplicableDecisionV1::Pass => "pass",
+                Wcag22ApplicableDecisionV1::Fail => "fail",
+                _ => {
+                    return Err(PackGenerationError::IncompatibleCoreContract {
+                        reason: "unknown WCAG22 decision".to_string(),
+                    });
+                }
+            };
+            let hex = |bytes: [u8; 3]| format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
+            Ok(Wcag22Vector {
+                foreground: hex(measurement.foreground),
+                background: hex(measurement.background),
+                criterion: criterion.to_string(),
+                profile_id: profile_id.key().to_string(),
+                decision: decision.to_string(),
+                foreground_lower_q55: measurement.foreground_luminance.lower().to_string(),
+                foreground_upper_q55: measurement.foreground_luminance.upper().to_string(),
+                background_lower_q55: measurement.background_luminance.lower().to_string(),
+                background_upper_q55: measurement.background_luminance.upper().to_string(),
+                q55_scale: labcolors_core::wcag22::Wcag22LuminanceBoundsQ55V1::scale().to_string(),
+                evidence_kind: "canonical-finite-bounded".to_string(),
+                artifact_id: artifact_id.key().to_string(),
+                artifact_sha256: profile.artifact_sha256.to_string(),
+                bound_id: bound_id.key().to_string(),
+                proof_id: proof_id.key().to_string(),
+                proof_sha256: profile.proof_sha256.to_string(),
+                proof_payload_sha256: profile.proof_payload_sha256.to_string(),
+                generator_sha256: profile.generator_sha256.to_string(),
+                verifier_sha256: profile.verifier_sha256.to_string(),
+                profile_checksum: profile.profile_checksum.to_string(),
+                profile_sha256: profile.source_sha256.to_string(),
+            })
+        })
+        .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Агрегат пака + сериализация + дайджест
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -465,12 +624,13 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 
 /// Имена файлов семейств в КАНОНИЧЕСКОМ порядке — единый источник порядка для
 /// генератора, дайджеста и раннера-референса (дайджест зависит от порядка).
-pub const FAMILY_FILES: [&str; 5] = [
+pub const FAMILY_FILES: [&str; 6] = [
     "contrasts.json",
     "ladders.json",
     "alpha.json",
     "solve.json",
     "muddiness.json",
+    "wcag22.json",
 ];
 
 /// Каноническая толерантность сравнения f64 для conformance-
@@ -498,6 +658,8 @@ pub struct Counts {
     pub solve: usize,
     /// Compatibility-векторы legacy-координаты `muddiness`.
     pub muddiness: usize,
+    /// Exact WCAG 2.2 vectors.
+    pub wcag22: usize,
     /// Итого.
     pub total: usize,
 }
@@ -508,13 +670,13 @@ pub struct Counts {
 /// consumes this projection instead of a hand-written semantic registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CapabilityManifestProjection {
+pub struct CapabilityManifestProjectionV2 {
     /// Capability schema version (independent version domain).
     pub schema_version: u32,
     /// Registry coverage key (`migrated-sites-only-v1`).
     pub coverage: String,
     /// Capability rows sorted by UTF-8 `siteId` bytes.
-    pub sites: Vec<CapabilitySiteProjection>,
+    pub sites: Vec<CapabilitySiteProjectionV2>,
     /// FNV-1a-32 drift-checksum canonical preimage, 8 lowercase hex.
     pub checksum: String,
 }
@@ -522,7 +684,7 @@ pub struct CapabilityManifestProjection {
 /// One site capability row (no selected mode; manifest describes the build).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CapabilitySiteProjection {
+pub struct CapabilitySiteProjectionV2 {
     /// Stable site identity key.
     pub site_id: String,
     /// Lawful stable outcome keys.
@@ -533,23 +695,25 @@ pub struct CapabilitySiteProjection {
     pub evidence_classes: Vec<String>,
     /// Canonical finite artifact IDs (empty = no evidence, not implicit support).
     pub artifact_ids: Vec<String>,
-    /// Registered error bound IDs (empty in V1).
+    /// Registered error bound IDs (empty when none are admitted).
     pub bound_ids: Vec<String>,
+    /// Replayable proof artifact IDs.
+    pub proof_ids: Vec<String>,
     /// Runtime attestation IDs (empty until #258).
     pub runtime_attestations: Vec<String>,
 }
 
 /// Generate the release-facing capability manifest directly from the core SSOT.
 #[must_use]
-pub fn generate_capability_manifest() -> CapabilityManifestProjection {
-    let manifest = labcolors_core::numerical_capability_manifest_v1();
-    CapabilityManifestProjection {
+pub fn generate_capability_manifest_v2() -> CapabilityManifestProjectionV2 {
+    let manifest = labcolors_core::numerical_capability_manifest_v2();
+    CapabilityManifestProjectionV2 {
         schema_version: manifest.schema_version,
         coverage: manifest.coverage.key().to_string(),
         sites: manifest
             .sites
             .iter()
-            .map(|site| CapabilitySiteProjection {
+            .map(|site| CapabilitySiteProjectionV2 {
                 site_id: site.site_id.key().to_string(),
                 stable_outcomes: site
                     .stable_outcomes
@@ -572,6 +736,7 @@ pub fn generate_capability_manifest() -> CapabilityManifestProjection {
                     .map(|v| v.key().to_string())
                     .collect(),
                 bound_ids: site.bound_ids.iter().map(|v| v.key().to_string()).collect(),
+                proof_ids: site.proof_ids.iter().map(|v| v.key().to_string()).collect(),
                 runtime_attestations: site
                     .runtime_attestations
                     .iter()
@@ -598,7 +763,7 @@ pub struct Manifest {
     /// Счётчики по семействам.
     pub counts: Counts,
     /// Canonical numerical capability manifest (core registry projection).
-    pub numerical_capabilities: CapabilityManifestProjection,
+    pub numerical_capabilities: CapabilityManifestProjectionV2,
 }
 
 /// Весь пак в памяти. `serialize_family` даёт КАНОНИЧЕСКИЕ байты каждого файла
@@ -615,6 +780,8 @@ pub struct Pack {
     pub solve: Vec<SolveVector>,
     /// Compatibility-векторы legacy-координаты `muddiness`.
     pub muddiness: Vec<MuddinessVector>,
+    /// Exact final-sRGB8 WCAG 2.2 vectors.
+    pub wcag22: Vec<Wcag22Vector>,
 }
 
 impl Pack {
@@ -626,6 +793,7 @@ impl Pack {
             alpha: generate_alpha(),
             solve: generate_solve()?,
             muddiness: generate_muddiness(),
+            wcag22: generate_wcag22()?,
         })
     }
 
@@ -637,13 +805,15 @@ impl Pack {
         let alpha = self.alpha.len();
         let solve = self.solve.len();
         let muddiness = self.muddiness.len();
+        let wcag22 = self.wcag22.len();
         Counts {
             contrasts,
             ladders,
             alpha,
             solve,
             muddiness,
-            total: contrasts + ladders + alpha + solve + muddiness,
+            wcag22,
+            total: contrasts + ladders + alpha + solve + muddiness + wcag22,
         }
     }
 
@@ -668,7 +838,7 @@ impl Pack {
             core_version: core_version().to_string(),
             pack_digest: self.digest(),
             counts: self.counts(),
-            numerical_capabilities: generate_capability_manifest(),
+            numerical_capabilities: generate_capability_manifest_v2(),
         }
     }
 
@@ -682,6 +852,7 @@ impl Pack {
             (FAMILY_FILES[2], to_canonical_json(&self.alpha)),
             (FAMILY_FILES[3], to_canonical_json(&self.solve)),
             (FAMILY_FILES[4], to_canonical_json(&self.muddiness)),
+            (FAMILY_FILES[5], to_canonical_json(&self.wcag22)),
         ]
     }
 }
@@ -699,7 +870,7 @@ pub fn to_canonical_json<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use labcolors_core::numerical_registry_v1;
+    use labcolors_core::numerical_registry_v2;
 
     #[test]
     fn unreachable_code_mapping_is_fallible_without_generic_fallback() {
@@ -739,7 +910,7 @@ mod tests {
         assert!(c.total > 0, "пустой пак бессмыслен");
         assert_eq!(
             c.total,
-            c.contrasts + c.ladders + c.alpha + c.solve + c.muddiness,
+            c.contrasts + c.ladders + c.alpha + c.solve + c.muddiness + c.wcag22,
             "итог не сходится с семействами"
         );
         // Лестниц ровно столько, сколько канонических позиций.
@@ -753,11 +924,11 @@ mod tests {
             .manifest();
         assert_eq!(
             manifest.numerical_capabilities,
-            generate_capability_manifest()
+            generate_capability_manifest_v2()
         );
         assert_eq!(
             manifest.numerical_capabilities.sites.len(),
-            numerical_registry_v1().len()
+            numerical_registry_v2().len()
         );
         assert!(manifest.numerical_capabilities.sites.iter().any(|site| {
             site.site_id == "glow-target-or-maximum-v1"
@@ -766,27 +937,35 @@ mod tests {
                 && site.evidence_classes == ["bit-exact"]
                 && site.artifact_ids.is_empty()
                 && site.bound_ids.is_empty()
+                && site.proof_ids.is_empty()
                 && site.runtime_attestations.is_empty()
         }));
+        assert!(manifest.numerical_capabilities.sites.iter().any(|site| {
+            site.site_id == "wcag22-srgb8-contrast-v1"
+                && site.evidence_classes == ["canonical-finite-bounded"]
+                && site.artifact_ids == ["wcag22-srgb8-luminance-q55-v1"]
+                && site.bound_ids == ["wcag22-srgb8-outward-q55-v1"]
+                && site.proof_ids == ["wcag22-srgb8-full-domain-q55-v1"]
+        }));
+        assert_eq!(manifest.numerical_capabilities.schema_version, 2);
         // Checksum canonical projection: 8 hex, независимо пересчитываем в core.
         assert_eq!(manifest.numerical_capabilities.checksum.len(), 8);
     }
 
     #[test]
-    fn pack_v3_contains_the_exact_source_over_half_tie() {
+    fn pack_v4_contains_prior_half_tie_and_new_wcag22_family() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Обязательство унаследовано pack v3 (v3 менял только
-        // схему манифеста: numericalSites → numericalCapabilities, состав
-        // векторных семейств тот же). Проверка одновременно убивает вакуумные
+        // соседний LSB. Обязательство унаследовано pack v4; v4 добавляет exact
+        // WCAG22 family. Проверка одновременно убивает вакуумные
         // изменения версии/счётчика без обязательного доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
-        assert_eq!(PACK_VERSION, "3.0.0", "half-tie обязателен начиная с v2");
+        assert_eq!(PACK_VERSION, "4.0.0", "WCAG22 family обязана быть pack v4");
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v3 наследует векторные семейства, сгенерированные ядром 0.2.0"
+            "pack v4 наследует прежние семейства и добавляет WCAG22 на core 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
@@ -795,9 +974,10 @@ mod tests {
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
         assert_eq!(
-            manifest.counts.total, 82,
+            manifest.counts.total, 88,
             "состав векторных семейств изменился"
         );
+        assert_eq!(manifest.counts.wcag22, 6);
 
         let half_tie = pack
             .alpha

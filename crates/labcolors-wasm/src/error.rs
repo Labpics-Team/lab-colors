@@ -63,6 +63,15 @@ pub enum BindingError {
         /// The unrecognised theme string the caller passed.
         requested: String,
     },
+
+    /// WCAG 2.2 criterion transport is outside the closed public menu.
+    #[error(
+        "unknown WCAG22 criterion: '{requested}' (expected sc-1.4.3-text-default | sc-1.4.3-text-large-scale | sc-1.4.11-ui-component-or-state | sc-1.4.11-graphical-object)"
+    )]
+    UnknownWcag22Criterion {
+        /// Unrecognised criterion key.
+        requested: String,
+    },
 }
 
 impl BindingError {
@@ -75,6 +84,7 @@ impl BindingError {
             BindingError::InvalidConfig { .. } => "invalid_config",
             BindingError::ConfigRequired => "config_required",
             BindingError::UnknownTheme { .. } => "unknown_theme",
+            BindingError::UnknownWcag22Criterion { .. } => "unknown_wcag22_criterion",
             BindingError::Internal { .. } => "internal_error",
         }
     }
@@ -94,6 +104,9 @@ mod tests {
             BindingError::UnknownTheme {
                 requested: "x".into(),
             },
+            BindingError::UnknownWcag22Criterion {
+                requested: "x".into(),
+            },
             BindingError::Internal { reason: "x".into() },
         ];
         let codes: Vec<_> = errors.iter().map(BindingError::code).collect();
@@ -105,6 +118,7 @@ mod tests {
                 "invalid_config",
                 "config_required",
                 "unknown_theme",
+                "unknown_wcag22_criterion",
                 "internal_error"
             ]
         );

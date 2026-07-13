@@ -53,6 +53,16 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    func wcag22Criterion(_ key: String) -> Wcag22Criterion {
+        switch key {
+        case "sc-1.4.3-text-default": return .sc143TextDefault
+        case "sc-1.4.3-text-large-scale": return .sc143TextLargeScale
+        case "sc-1.4.11-ui-component-or-state": return .sc1411UiComponentOrState
+        case "sc-1.4.11-graphical-object": return .sc1411GraphicalObject
+        default: fatalError("unknown WCAG22 criterion in pack: \(key)")
+        }
+    }
+
     func channels(_ hex: String) -> [Int] {
         let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
         precondition(s.count == 6, "ожидался #RRGGBB, получено \(hex)")
@@ -118,16 +128,16 @@ final class ConformanceTests: XCTestCase {
     /// preimage ядра (labcolors-core/src/numerics.rs): length-prefixed (u32 LE
     /// длина + байты) домен-сепаратор, u32 LE schema version, coverage key,
     /// u32 LE счётчик sites (сортировка по сырым UTF-8 байтам siteId), на site —
-    /// siteId и шесть списков ключей; каждый список: u32 LE count (явный и для
+    /// siteId и семь списков ключей; каждый список: u32 LE count (явный и для
     /// пустого) + отсортированные length-prefixed ключи. Кодирование повторено
     /// здесь НАМЕРЕННО: тест — оракул, он не должен переиспользовать encoder,
     /// который проверяет.
     func testCapabilityManifestChecksumRecomputes() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
         let caps = manifest.numericalCapabilities
-        // Оракул реализует canonical preimage V1: другая версия схемы обязана
+        // Оракул реализует canonical preimage V2: другая версия схемы обязана
         // падать здесь, а не молча проходить с пересчитанным checksum.
-        XCTAssertEqual(caps.schemaVersion, 1, "неподдерживаемая версия capability-схемы")
+        XCTAssertEqual(caps.schemaVersion, 2, "неподдерживаемая версия capability-схемы")
         XCTAssertEqual(caps.coverage, "migrated-sites-only-v1", "coverage capability manifest")
         XCTAssertFalse(caps.sites.isEmpty, "capability manifest без единого migrated site пуст")
         for site in caps.sites {
@@ -161,7 +171,7 @@ final class ConformanceTests: XCTestCase {
             for key in sorted { pushLenPrefixed(key) }
         }
 
-        pushLenPrefixed("labcolors.numerical-capability.v1")
+        pushLenPrefixed("labcolors.numerical-capability.v2")
         pushU32LE(caps.schemaVersion)
         pushLenPrefixed(caps.coverage)
         let sites = caps.sites.sorted {
@@ -175,6 +185,7 @@ final class ConformanceTests: XCTestCase {
             pushSortedKeyList(site.evidenceClasses)
             pushSortedKeyList(site.artifactIds)
             pushSortedKeyList(site.boundIds)
+            pushSortedKeyList(site.proofIds)
             pushSortedKeyList(site.runtimeAttestations)
         }
 
@@ -422,6 +433,41 @@ final class ConformanceTests: XCTestCase {
             XCTAssertEqual(got, v.score, accuracy: Self.driftTol, "muddiness \(v.hex)")
         }
     }
+
+
+    // MARK: - Exact WCAG 2.2 final-sRGB8 assessment
+
+    func testWcag22() throws {
+        let vectors = try load("wcag22.json", as: [Wcag22Vec].self)
+        XCTAssertFalse(vectors.isEmpty)
+        for vector in vectors {
+            let got = try evaluateWcag22(
+                foreground: vector.foreground,
+                background: vector.background,
+                criterion: wcag22Criterion(vector.criterion))
+            XCTAssertEqual(got.profileId, vector.profileId)
+            XCTAssertEqual(got.criterion, wcag22Criterion(vector.criterion))
+            XCTAssertEqual(got.foreground, vector.foreground)
+            XCTAssertEqual(got.background, vector.background)
+            XCTAssertEqual(got.decision == .pass ? "pass" : "fail", vector.decision)
+            XCTAssertEqual(got.foregroundLuminance.lower, UInt64(vector.foregroundLowerQ55))
+            XCTAssertEqual(got.foregroundLuminance.upper, UInt64(vector.foregroundUpperQ55))
+            XCTAssertEqual(got.backgroundLuminance.lower, UInt64(vector.backgroundLowerQ55))
+            XCTAssertEqual(got.backgroundLuminance.upper, UInt64(vector.backgroundUpperQ55))
+            XCTAssertEqual(got.q55Scale, UInt64(vector.q55Scale))
+            XCTAssertEqual(got.evidence.kind, vector.evidenceKind)
+            XCTAssertEqual(got.evidence.artifactId, vector.artifactId)
+            XCTAssertEqual(got.evidence.artifactSha256, vector.artifactSha256)
+            XCTAssertEqual(got.evidence.boundId, vector.boundId)
+            XCTAssertEqual(got.evidence.proofId, vector.proofId)
+            XCTAssertEqual(got.evidence.proofSha256, vector.proofSha256)
+            XCTAssertEqual(got.evidence.proofPayloadSha256, vector.proofPayloadSha256)
+            XCTAssertEqual(got.evidence.generatorSha256, vector.generatorSha256)
+            XCTAssertEqual(got.evidence.verifierSha256, vector.verifierSha256)
+            XCTAssertEqual(got.evidence.profileChecksum, vector.profileChecksum)
+            XCTAssertEqual(got.evidence.profileSha256, vector.profileSha256)
+        }
+    }
 }
 
 // MARK: - Codable-зеркала схемы векторов
@@ -433,7 +479,7 @@ struct Manifest: Codable {
     let numericalCapabilities: CapabilityManifest
 }
 
-/// Зеркало capability manifest (pack 3.0.0): typed-проекция core registry
+/// Зеркало proof-capable capability manifest (pack 4.0.0): typed-проекция core registry
 /// численных решений. Заменяет прозаический `numericalSites` из pack 2.x —
 /// биндинг сверяет typed rows и drift-checksum, а не research-тексты.
 struct CapabilityManifest: Codable {
@@ -452,7 +498,32 @@ struct CapabilitySite: Codable {
     let evidenceClasses: [String]
     let artifactIds: [String]
     let boundIds: [String]
+    let proofIds: [String]
     let runtimeAttestations: [String]
+}
+
+struct Wcag22Vec: Codable {
+    let foreground: String
+    let background: String
+    let criterion: String
+    let profileId: String
+    let decision: String
+    let foregroundLowerQ55: String
+    let foregroundUpperQ55: String
+    let backgroundLowerQ55: String
+    let backgroundUpperQ55: String
+    let q55Scale: String
+    let evidenceKind: String
+    let artifactId: String
+    let artifactSha256: String
+    let boundId: String
+    let proofId: String
+    let proofSha256: String
+    let proofPayloadSha256: String
+    let generatorSha256: String
+    let verifierSha256: String
+    let profileChecksum: String
+    let profileSha256: String
 }
 
 struct ContrastVec: Codable {
