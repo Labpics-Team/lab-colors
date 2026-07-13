@@ -198,6 +198,20 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.doesNotMatch(ci, /chromedriver-bb6facf4ea9511f6|Pre-seeded wasm-pack/);
   assert.match(ci, /CHROME_ROOT="\$RUNNER_TEMP\/chrome-\$GITHUB_JOB"/);
   assert.match(ci, /DEPS_DIR="\$RUNNER_TEMP\/chrome-deps-\$GITHUB_JOB"/);
+  assert.match(ci, /APT_LISTS="\$DEPS_DIR\/apt-lists"/);
+  assert.match(ci, /APT_CACHE="\$DEPS_DIR\/apt-cache"/);
+  assert.match(ci, /Dir::State::lists=\$APT_LISTS/);
+  assert.match(ci, /Dir::State::status=\/var\/lib\/dpkg\/status/);
+  assert.match(ci, /Dir::Cache=\$APT_CACHE/);
+  assert.match(ci, /Dir::Cache::archives=\$APT_CACHE\/archives/);
+  assert.match(ci, /Debug::NoLocking=1/);
+  assert.match(ci, /Acquire::Retries=3/);
+  const aptUpdate = ci.indexOf('apt-get "${APT_OPTIONS[@]}" update');
+  const aptDownload = ci.indexOf('apt-get "${APT_OPTIONS[@]}" download');
+  assert.ok(
+    aptUpdate >= 0 && aptDownload >= 0 && aptUpdate < aptDownload,
+    "Chrome dependency download must use a fresh isolated APT index",
+  );
   assert.match(ci, /CHROME_BIN_DIR="\$RUNNER_TEMP\/chrome-bin-\$GITHUB_JOB"/);
   assert.doesNotMatch(ci, /\$HOME|~\//, "WASM/Chrome state must not leak into shared HOME");
   assert.match(
