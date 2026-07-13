@@ -4,10 +4,10 @@
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
   "measurement": {
     "issue": 284,
-    "rawBytes": 457988,
-    "sha256": "2fe22d6721de23f34a2a3364d39fac432e6b5fb648c7416e887dbfe2a48ec7ee",
-    "gzip9BytesDiagnostic": 197665,
-    "gzipImplementation": "Apple gzip 475",
+    "rawBytes": 458074,
+    "sha256": "07fc1fa75d1edf32d755261f04a6c422d68899fccc70ab9899aed7314c34b861",
+    "gzip9BytesDiagnostic": 198942,
+    "gzipImplementation": "Node.js 24.14.0 zlib gzipSync level 9",
     "rustToolchain": "1.96.0",
     "rustcCommit": "ac68faa20",
     "wasmPack": "0.13.1",
@@ -16,11 +16,11 @@
     "cargoProfile": "release",
     "wasmOpt": "-Oz",
     "wasmOptVersion": "117",
-    "measurementPlatform": "darwin-arm64",
+    "measurementPlatform": "linux-x64",
     "command": "wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked"
   },
   "policy": {
-    "maxRawBytes": 457988,
+    "maxRawBytes": 458074,
     "derivation": "exact-accepted-issue-284-measurement",
     "gzip": "diagnostic-only"
   }

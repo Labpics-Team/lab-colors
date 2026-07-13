@@ -324,9 +324,9 @@ jobs:
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
       - name: enforce measured WASM raw-byte budget
-        # Hard gate: exact accepted Issue #284 raw-byte measurement, without
-        # invented headroom. gzip is reported only as a transport diagnostic
-        # because compressed bytes may vary with the gzip implementation.
+        # This Linux x64 release-equivalent build is the canonical Issue #284
+        # artifact: the checker binds its exact SHA-256 and raw-byte ceiling,
+        # without invented headroom. gzip is transport diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve

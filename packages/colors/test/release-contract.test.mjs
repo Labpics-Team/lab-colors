@@ -745,14 +745,18 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   assert.equal(budget.measurement.target, "wasm32-unknown-unknown");
   assert.equal(budget.measurement.cargoProfile, "release");
   assert.equal(budget.measurement.wasmOpt, "-Oz");
-  assert.equal(budget.measurement.rawBytes, 457988);
-  assert.equal(budget.policy.maxRawBytes, 457988);
+  assert.equal(budget.measurement.rawBytes, 458074);
+  assert.equal(budget.policy.maxRawBytes, 458074);
   assert.equal(
     budget.measurement.sha256,
-    "2fe22d6721de23f34a2a3364d39fac432e6b5fb648c7416e887dbfe2a48ec7ee",
+    "07fc1fa75d1edf32d755261f04a6c422d68899fccc70ab9899aed7314c34b861",
   );
-  assert.equal(budget.measurement.gzip9BytesDiagnostic, 197665);
-  assert.equal(budget.measurement.gzipImplementation, "Apple gzip 475");
+  assert.equal(budget.measurement.gzip9BytesDiagnostic, 198942);
+  assert.equal(
+    budget.measurement.gzipImplementation,
+    "Node.js 24.14.0 zlib gzipSync level 9",
+  );
+  assert.equal(budget.measurement.measurementPlatform, "linux-x64");
   assert.equal(budget.policy.derivation, "exact-accepted-issue-284-measurement");
   assert.equal(budget.policy.gzip, "diagnostic-only");
   const ci = read(".github", "workflows", "ci.yml");
@@ -775,6 +779,7 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
           ...budget.measurement,
           rawBytes: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex"),
+          measurementPlatform: `${process.platform}-${process.arch}`,
         },
         policy: { ...budget.policy, maxRawBytes: bytes.length },
       })}\n`,
@@ -786,6 +791,18 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     assert.match(run(), /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B/u);
+
+    const sameSizeDifferentArtifact = Buffer.from(bytes);
+    sameSizeDifferentArtifact[7] = 1;
+    writeFileSync(wasm, sameSizeDifferentArtifact);
+    assert.throws(
+      run,
+      (error) => {
+        assert.match(error.stderr.toString(), /canonical artifact SHA-256 mismatch/u);
+        return true;
+      },
+      "canonical host must reject a same-size artifact with different bytes",
+    );
 
     writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
     assert.throws(

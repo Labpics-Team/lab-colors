@@ -403,9 +403,11 @@ replacement принадлежит #283.
 Raw-размер WASM — hard gate. Его versioned SSOT —
 `bench/wasm-size-budget-v1.json`: точное принятое измерение Issue #284 вместе
 с toolchain provenance, SHA-256 измеренного артефакта и ceiling без
-произвольного запаса. CI запускает `scripts/check-wasm-size-budget.mjs` и падает
-при превышении ceiling. `gzip -9` остаётся только диагностикой: разные gzip-
-реализации не определяют correctness gate.
+произвольного запаса. Канонический артефакт строит release-equivalent Linux x64
+CI: там checker требует одновременно точный SHA-256 и непревышение ceiling. На
+других host-платформах тот же checker сохраняет переносимый raw-size gate, но не
+выдаёт host-specific bytes за канонический release artifact. `gzip -9` остаётся
+только диагностикой: разные gzip-реализации не определяют correctness gate.
 
 Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
 поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого

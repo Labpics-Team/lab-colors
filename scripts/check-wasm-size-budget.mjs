@@ -107,6 +107,7 @@ const maxRawBytes = budget.policy.maxRawBytes;
 const gzipBytes = gzipSync(wasm, { level: 9 }).length;
 const sha256 = createHash("sha256").update(wasm).digest("hex");
 const baselineSha = sha256 === budget.measurement.sha256 ? "match" : "different";
+const currentPlatform = `${process.platform}-${process.arch}`;
 const artifact = relative(REPO_ROOT, wasmPath).replaceAll("\\", "/");
 
 if (rawBytes > maxRawBytes) {
@@ -115,9 +116,18 @@ if (rawBytes > maxRawBytes) {
       `by=${rawBytes - maxRawBytes}B; gzip=${gzipBytes}B diagnostic-only; sha256=${sha256}`,
   );
 }
+if (
+  currentPlatform === budget.measurement.measurementPlatform &&
+  baselineSha !== "match"
+) {
+  fail(
+    `canonical artifact SHA-256 mismatch on ${currentPlatform}: ` +
+      `expected=${budget.measurement.sha256} actual=${sha256}`,
+  );
+}
 
 console.log(
   `WASM size budget PASS raw=${rawBytes}B ceiling=${maxRawBytes}B ` +
     `remaining=${maxRawBytes - rawBytes}B gzip=${gzipBytes}B ` +
-    `diagnostic-only baseline-sha=${baselineSha}`,
+    `diagnostic-only platform=${currentPlatform} baseline-sha=${baselineSha}`,
 );
