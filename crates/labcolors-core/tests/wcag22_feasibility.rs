@@ -159,7 +159,7 @@ fn check_property<S: Strategy>(
 fn production_vectors_are_bound_to_the_exact_independent_oracle_fixture() {
     assert_eq!(
         fixture_sha256::digest(ORACLE_FIXTURE.as_bytes()).to_hex(),
-        "5211e1413e105f3d41cd8a9f3a8da09734f9cffe8c327c23cece2ba697c8c4fd"
+        "af56e71febf2994a186a7d4b1e51d5297263220f4adbe482d8c7a7f3b155f8b2"
     );
 }
 

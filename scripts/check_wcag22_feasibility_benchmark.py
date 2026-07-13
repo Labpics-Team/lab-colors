@@ -146,6 +146,8 @@ class AdmissionProtocol:
         target_triple: str,
         target_arch: str,
         target_os: str,
+        pointer_width_bits: int,
+        package_version: str,
         sample_count: int,
     ) -> None:
         self.revision = revision
@@ -153,6 +155,8 @@ class AdmissionProtocol:
         self.target_triple = target_triple
         self.target_arch = target_arch
         self.target_os = target_os
+        self.pointer_width_bits = pointer_width_bits
+        self.package_version = package_version
         self.sample_count = sample_count
 
 
@@ -460,6 +464,15 @@ def check_environment(
     rustc_verbose = environment.get("rustcVerbose")
     require(isinstance(rustc_verbose, str),
             "environment.rustcVerbose must be present even when unavailable")
+    pointer_width_bits = exact_nonnegative_int(
+        environment.get("pointerWidthBits"),
+        "environment.pointerWidthBits",
+    )
+    require(pointer_width_bits > 0,
+            "environment.pointerWidthBits must be positive")
+    package_version = environment.get("packageVersion")
+    require(isinstance(package_version, str) and package_version != "",
+            "environment.packageVersion must be a non-empty string")
 
     revision = environment.get("gitRevision")
     tree = environment.get("gitTree")
@@ -499,6 +512,10 @@ def check_environment(
             "measured target architecture differs from the pinned reference target")
     require(environment.get("targetOs") == protocol.target_os,
             "measured target OS differs from the pinned reference target")
+    require(pointer_width_bits == protocol.pointer_width_bits,
+            "measured pointer width differs from the pinned reference target")
+    require(package_version == protocol.package_version,
+            "measured package version differs from the pinned admission version")
     require(
         rustc_verbose.startswith(f"rustc {protocol.rustc_release} "),
         "measured rustc differs from the pinned admission toolchain",
@@ -574,12 +591,16 @@ def run_mutation_self_tests(
     protocol: AdmissionProtocol | None,
     verify_current_subjects: bool,
 ) -> int:
+    mutation_checks = 0
+
     def rejected(mutator: Any, label: str) -> None:
+        nonlocal mutation_checks
         candidate = copy.deepcopy(payload)
         mutator(candidate)
         try:
             check(candidate, protocol, verify_current_subjects)
         except ValueError:
+            mutation_checks += 1
             return
         raise ValueError(f"checker mutation survived: {label}")
 
@@ -621,6 +642,19 @@ def run_mutation_self_tests(
         ),
         "source object ID shape",
     )
+    if protocol is not None:
+        rejected(
+            lambda value: value["environment"].__setitem__(
+                "pointerWidthBits", protocol.pointer_width_bits + 1
+            ),
+            "admitted pointer width",
+        )
+        rejected(
+            lambda value: value["environment"].__setitem__(
+                "packageVersion", f"{protocol.package_version}-mutated"
+            ),
+            "admitted package version",
+        )
     if verify_current_subjects:
         rejected(
             lambda value: value["environment"]["sourceObjects"]["coreCargo"].__setitem__(
@@ -650,16 +684,16 @@ def run_mutation_self_tests(
             SOURCE_OBJECTS,
         )
     except ValueError:
-        pass
+        mutation_checks += 1
     else:
         raise ValueError("checker mutation survived: subject Git binding")
     try:
         require_current_subjects_clean("?? crates/labcolors-core/src/unbound.rs\n")
     except ValueError:
-        pass
+        mutation_checks += 1
     else:
         raise ValueError("checker mutation survived: dirty current subject")
-    return 10
+    return mutation_checks
 
 
 def check_artifact_digest(payload_bytes: bytes, expected: str) -> None:
@@ -682,6 +716,8 @@ def main() -> int:
     parser.add_argument("--admit-target-triple")
     parser.add_argument("--admit-target-arch")
     parser.add_argument("--admit-target-os")
+    parser.add_argument("--admit-pointer-width-bits", type=int)
+    parser.add_argument("--admit-package-version")
     parser.add_argument("--admit-sample-count", type=int)
     parser.add_argument(
         "--verify-current-subjects",
@@ -701,6 +737,8 @@ def main() -> int:
         args.admit_target_triple,
         args.admit_target_arch,
         args.admit_target_os,
+        args.admit_pointer_width_bits,
+        args.admit_package_version,
         args.admit_sample_count,
     )
     require(
@@ -726,12 +764,18 @@ def main() -> int:
                 "--admit-revision must be one lowercase 40-hex Git object ID")
         require(args.admit_sample_count >= 5,
                 "--admit-sample-count must pin at least five raw observations")
+        require(args.admit_pointer_width_bits > 0,
+                "--admit-pointer-width-bits must be positive")
+        require(args.admit_package_version != "",
+                "--admit-package-version must be non-empty")
         protocol = AdmissionProtocol(
             revision=args.admit_revision,
             rustc_release=args.admit_rustc_release,
             target_triple=args.admit_target_triple,
             target_arch=args.admit_target_arch,
             target_os=args.admit_target_os,
+            pointer_width_bits=args.admit_pointer_width_bits,
+            package_version=args.admit_package_version,
             sample_count=args.admit_sample_count,
         )
     payload_bytes = args.artifact.read_bytes()

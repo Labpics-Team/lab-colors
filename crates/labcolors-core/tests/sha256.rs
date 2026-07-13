@@ -154,6 +154,12 @@ fn deterministic_corpus_matches_python_hashlib() {
         (0..100_000).map(|index| (index % 251) as u8).collect(),
         "opaque-client-id/Привет/🎨".as_bytes().to_vec(),
     ]);
+    // Anti-vacuum for the bidirectional pipe protocol: the encoded input is
+    // over 16 MiB and Python's digest output is over 2 MiB.  A mutation that
+    // writes all stdin before draining stdout therefore blocks on finite OS
+    // pipes instead of merely passing because the ordinary corpus is small.
+    let pipe_stress_payload: Vec<u8> = (0..=u8::MAX).collect();
+    corpus.extend((0..32 * 1_024).map(|_| pipe_stress_payload.clone()));
 
     let mut child = Command::new("python3")
         .args([
@@ -170,26 +176,32 @@ fn deterministic_corpus_matches_python_hashlib() {
         .spawn()
         .expect("python3 is part of the repository CI toolchain");
 
-    {
-        let stdin = child.stdin.as_mut().expect("piped Python stdin");
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        for bytes in &corpus {
-            let mut line = Vec::with_capacity(bytes.len() * 2 + 1);
-            for byte in bytes {
-                line.push(HEX[usize::from(byte >> 4)]);
-                line.push(HEX[usize::from(byte & 0x0f)]);
+    let mut stdin = child.stdin.take().expect("piped Python stdin");
+    let (output, write_result) = std::thread::scope(|scope| {
+        let corpus_for_writer = &corpus;
+        let writer = scope.spawn(move || {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            for bytes in corpus_for_writer {
+                let mut line = Vec::with_capacity(bytes.len() * 2 + 1);
+                for byte in bytes {
+                    line.push(HEX[usize::from(byte >> 4)]);
+                    line.push(HEX[usize::from(byte & 0x0f)]);
+                }
+                line.push(b'\n');
+                stdin.write_all(&line)?;
             }
-            line.push(b'\n');
-            stdin.write_all(&line).expect("write corpus to hashlib");
-        }
-    }
-
-    let output = child.wait_with_output().expect("wait for hashlib oracle");
+            Ok::<(), std::io::Error>(())
+        });
+        let output = child.wait_with_output().expect("wait for hashlib oracle");
+        let write_result = writer.join().expect("hashlib stdin writer panicked");
+        (output, write_result)
+    });
     assert!(
         output.status.success(),
-        "hashlib oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "hashlib oracle failed (stdin={write_result:?}): {}",
+        String::from_utf8_lossy(&output.stderr),
     );
+    write_result.expect("write corpus to hashlib");
     let expected: Vec<_> = String::from_utf8(output.stdout)
         .expect("hashlib emits ASCII")
         .lines()

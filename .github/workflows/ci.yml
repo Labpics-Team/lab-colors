@@ -274,6 +274,8 @@ jobs:
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
             --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
             --admit-sample-count 5
           )
           if test "$GITHUB_EVENT_NAME" = pull_request; then

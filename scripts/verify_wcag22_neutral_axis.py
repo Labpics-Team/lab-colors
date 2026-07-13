@@ -100,9 +100,17 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def reject_non_json_constant(value: str) -> None:
+    raise ValueError(f"non-JSON numeric constant: {value}")
+
+
 def parse_json(raw: bytes, label: str) -> dict[str, Any]:
     try:
-        value = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+        value = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_non_json_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ValueError(f"{label} is not strict JSON: {error}") from error
     if not isinstance(value, dict):
@@ -440,6 +448,16 @@ def verify_payload_integrity(document: dict[str, Any]) -> None:
 
 def run_self_tests(profile: dict[str, Any]) -> int:
     tests = 0
+
+    for constant in (b"NaN", b"Infinity", b"-Infinity"):
+        try:
+            parse_json(b'{"value":' + constant + b"}", "non-finite probe")
+        except ValueError as error:
+            if "is not strict JSON" not in str(error):
+                raise AssertionError("strict-JSON error lost its context") from error
+            tests += 1
+        else:
+            raise AssertionError(f"non-JSON constant {constant!r} was accepted")
 
     if integer_root_floor(0, 5) != 0 or integer_root_floor(33, 5) != 2:
         raise AssertionError("integer fifth-root floor self-test failed")

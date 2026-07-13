@@ -18,10 +18,12 @@
 //! ```
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::error::Error;
 use std::fmt::Write as _;
 use std::fs;
 use std::hint::black_box;
+use std::num::NonZeroU8;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,7 +40,7 @@ use labcolors_core::wcag22_feasibility::{
 mod subject_sha256;
 
 const ARTIFACT_ID: &str = "wcag22-feasibility-admission-raw-v1";
-const DEFAULT_OUTPUT: &str = "/private/tmp/labcolors-wcag22-feasibility-admission-raw-v1.json";
+const DEFAULT_OUTPUT_FILENAME: &str = "labcolors-wcag22-feasibility-admission-raw-v1.json";
 const CANDIDATE_COUNT: u64 = 256;
 const PAGE_BYTES: u64 = 65_536;
 const DECISION_SLOT_BYTES: u64 = 32;
@@ -169,7 +171,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Shape {
     raw_relations: u64,
     raw_adjacent_entries: u64,
@@ -177,6 +179,105 @@ struct Shape {
     canonical_relations: u64,
     applicable_relations: u64,
     applicable_edges: u64,
+}
+
+#[derive(Debug)]
+enum HarnessError {
+    SampleCountNotUtf8,
+    InvalidSampleCount {
+        maximum: u8,
+        source: std::num::ParseIntError,
+    },
+    SampleReservation {
+        scenario: &'static str,
+        sample_count: usize,
+        source: std::collections::TryReserveError,
+    },
+    ShapeArithmeticOverflow,
+    ConflictingScenarioRelation {
+        relation_id: String,
+    },
+    MissingScenarioRelationKind {
+        relation_id: String,
+    },
+    ShapeMismatch {
+        scenario: &'static str,
+        declared: Shape,
+        actual: Shape,
+    },
+    MissingIdentity {
+        scenario: &'static str,
+    },
+}
+
+impl std::fmt::Display for HarnessError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SampleCountNotUtf8 => {
+                formatter.write_str("LABCOLORS_WCAG22_BENCH_SAMPLES is not UTF-8")
+            }
+            Self::InvalidSampleCount { maximum, .. } => write!(
+                formatter,
+                "LABCOLORS_WCAG22_BENCH_SAMPLES must be an integer in 1..={maximum}"
+            ),
+            Self::SampleReservation {
+                scenario,
+                sample_count,
+                ..
+            } => write!(
+                formatter,
+                "cannot reserve {sample_count} raw samples for scenario {scenario}"
+            ),
+            Self::ShapeArithmeticOverflow => {
+                formatter.write_str("benchmark scenario shape arithmetic overflowed")
+            }
+            Self::ConflictingScenarioRelation { relation_id } => write!(
+                formatter,
+                "benchmark scenario relation {relation_id} has conflicting declarations"
+            ),
+            Self::MissingScenarioRelationKind { relation_id } => write!(
+                formatter,
+                "benchmark scenario relation {relation_id} has no public relation kind"
+            ),
+            Self::ShapeMismatch {
+                scenario,
+                declared,
+                actual,
+            } => write!(
+                formatter,
+                "scenario {scenario} declared shape {declared:?}, but built request has {actual:?}"
+            ),
+            Self::MissingIdentity { scenario } => {
+                write!(
+                    formatter,
+                    "scenario {scenario} produced no measured identity"
+                )
+            }
+        }
+    }
+}
+
+impl Error for HarnessError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidSampleCount { source, .. } => Some(source),
+            Self::SampleReservation { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SampleCount(NonZeroU8);
+
+impl SampleCount {
+    // Это граница представления протокола, а не статистический порог: harness
+    // сохраняет каждое сырое наблюдение одновременно в памяти и JSON.
+    const LOCAL_SMOKE: Self = Self(NonZeroU8::MIN);
+
+    fn get(self) -> usize {
+        usize::from(self.0.get())
+    }
 }
 
 impl Shape {
@@ -215,7 +316,12 @@ struct Scenario {
     shape: Shape,
     terminal: Terminal,
     feasible_candidates: Option<u64>,
-    build: fn() -> RequestV1,
+    build: fn() -> Result<PreparedRequest, Box<dyn Error>>,
+}
+
+struct PreparedRequest {
+    value: RequestV1,
+    shape: Shape,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -252,7 +358,7 @@ struct ScenarioRun {
 }
 
 struct Protocol {
-    sample_count: usize,
+    sample_count: SampleCount,
     sample_count_explicit: bool,
 }
 
@@ -299,16 +405,114 @@ fn not_applicable(
     )
 }
 
-fn request(relations: Vec<RelationV1>) -> RequestV1 {
-    RequestV1::try_new(
+#[derive(PartialEq, Eq)]
+enum CanonicalDeclaration {
+    Applicable {
+        occurrence_id: String,
+        criterion: Wcag22CriterionV1,
+        adjacent: Vec<Srgb8>,
+    },
+    NotApplicable {
+        occurrence_id: String,
+        reason_id: String,
+    },
+}
+
+fn shape_count(value: usize) -> Result<u64, HarnessError> {
+    u64::try_from(value).map_err(|_| HarnessError::ShapeArithmeticOverflow)
+}
+
+fn add_shape_count(target: &mut u64, value: u64) -> Result<(), HarnessError> {
+    *target = target
+        .checked_add(value)
+        .ok_or(HarnessError::ShapeArithmeticOverflow)?;
+    Ok(())
+}
+
+fn derive_shape(relations: &[RelationV1]) -> Result<Shape, HarnessError> {
+    // Считаем только через публичные value-object API, не переиспользуя
+    // внутренний preflight Core: так артефакт независимо связывает декларацию
+    // Shape с тем же Vec, который затем без изменения переходит в RequestV1.
+    let raw_relations = shape_count(relations.len())?;
+    let mut raw_adjacent_entries = 0_u64;
+    let mut opaque_utf8_bytes = 0_u64;
+    let mut canonical_by_id = BTreeMap::new();
+
+    for relation in relations {
+        let relation_id = relation.relation_id().as_str();
+        let occurrence_id = relation.occurrence_id().as_str();
+        add_shape_count(&mut opaque_utf8_bytes, shape_count(relation_id.len())?)?;
+        add_shape_count(&mut opaque_utf8_bytes, shape_count(occurrence_id.len())?)?;
+
+        let declaration = if let Some((criterion, adjacent)) = relation.as_applicable() {
+            add_shape_count(&mut raw_adjacent_entries, shape_count(adjacent.len())?)?;
+            let mut adjacent = adjacent.to_vec();
+            adjacent.sort_unstable();
+            adjacent.dedup();
+            CanonicalDeclaration::Applicable {
+                occurrence_id: occurrence_id.to_owned(),
+                criterion,
+                adjacent,
+            }
+        } else if let Some(declaration) = relation.as_not_applicable() {
+            add_shape_count(
+                &mut opaque_utf8_bytes,
+                shape_count(declaration.reason_id().len())?,
+            )?;
+            CanonicalDeclaration::NotApplicable {
+                occurrence_id: occurrence_id.to_owned(),
+                reason_id: declaration.reason_id().to_owned(),
+            }
+        } else {
+            return Err(HarnessError::MissingScenarioRelationKind {
+                relation_id: relation_id.to_owned(),
+            });
+        };
+
+        match canonical_by_id.entry(relation_id.to_owned()) {
+            Entry::Vacant(entry) => {
+                entry.insert(declaration);
+            }
+            Entry::Occupied(entry) if entry.get() == &declaration => {}
+            Entry::Occupied(_) => {
+                return Err(HarnessError::ConflictingScenarioRelation {
+                    relation_id: relation_id.to_owned(),
+                });
+            }
+        }
+    }
+
+    let canonical_relations = shape_count(canonical_by_id.len())?;
+    let mut applicable_relations = 0_u64;
+    let mut applicable_edges = 0_u64;
+    for declaration in canonical_by_id.values() {
+        if let CanonicalDeclaration::Applicable { adjacent, .. } = declaration {
+            add_shape_count(&mut applicable_relations, 1)?;
+            add_shape_count(&mut applicable_edges, shape_count(adjacent.len())?)?;
+        }
+    }
+
+    Ok(Shape {
+        raw_relations,
+        raw_adjacent_entries,
+        opaque_utf8_bytes,
+        canonical_relations,
+        applicable_relations,
+        applicable_edges,
+    })
+}
+
+fn request(relations: Vec<RelationV1>) -> Result<PreparedRequest, Box<dyn Error>> {
+    let shape = derive_shape(&relations)?;
+    let value = RequestV1::try_new(
         DomainIdV1::Srgb8NeutralAxis,
         relations,
         ResourceProfileIdV1::Compile,
-    )
-    .expect("benchmark scenarios are locally well formed")
+    )?;
+    Ok(PreparedRequest { value, shape })
 }
 
-fn build_minimum_evaluated() -> RequestV1 {
+fn build_minimum_evaluated() -> Result<PreparedRequest, Box<dyn Error>> {
     request(vec![applicable("r", "o", vec![Srgb8::new([0x76; 3])])])
 }
 
@@ -337,7 +541,7 @@ fn maximum_distinct_adjacent() -> Vec<Srgb8> {
     adjacent
 }
 
-fn build_maximum_applicable_edges() -> RequestV1 {
+fn build_maximum_applicable_edges() -> Result<PreparedRequest, Box<dyn Error>> {
     request(vec![applicable(
         "max-edges",
         "occurrence",
@@ -345,12 +549,12 @@ fn build_maximum_applicable_edges() -> RequestV1 {
     )])
 }
 
-fn build_maximum_raw_duplicate_relations() -> RequestV1 {
+fn build_maximum_raw_duplicate_relations() -> Result<PreparedRequest, Box<dyn Error>> {
     let duplicate = applicable("duplicate", "same", vec![Srgb8::new([0x76; 3])]);
     request(vec![duplicate; MAX_APPLICABLE_EDGES as usize])
 }
 
-fn build_maximum_raw_adjacent_duplicates() -> RequestV1 {
+fn build_maximum_raw_adjacent_duplicates() -> Result<PreparedRequest, Box<dyn Error>> {
     request(vec![applicable(
         "r",
         "o",
@@ -358,7 +562,7 @@ fn build_maximum_raw_adjacent_duplicates() -> RequestV1 {
     )])
 }
 
-fn build_maximum_canonical_applicable_relations() -> RequestV1 {
+fn build_maximum_canonical_applicable_relations() -> Result<PreparedRequest, Box<dyn Error>> {
     let relations = (0..MAX_APPLICABLE_EDGES)
         .map(|index| {
             applicable(
@@ -371,7 +575,7 @@ fn build_maximum_canonical_applicable_relations() -> RequestV1 {
     request(relations)
 }
 
-fn build_maximum_combined_applicable_envelope() -> RequestV1 {
+fn build_maximum_combined_applicable_envelope() -> Result<PreparedRequest, Box<dyn Error>> {
     let relations = (0..MAX_APPLICABLE_EDGES)
         .map(|index| {
             let extra_bytes = if index < 32 { 23 } else { 22 };
@@ -385,7 +589,7 @@ fn build_maximum_combined_applicable_envelope() -> RequestV1 {
     request(relations)
 }
 
-fn build_maximum_canonical_not_applicable_relations() -> RequestV1 {
+fn build_maximum_canonical_not_applicable_relations() -> Result<PreparedRequest, Box<dyn Error>> {
     let relations = (0..MAX_APPLICABLE_EDGES)
         .map(|index| {
             not_applicable(
@@ -398,7 +602,7 @@ fn build_maximum_canonical_not_applicable_relations() -> RequestV1 {
     request(relations)
 }
 
-fn build_maximum_combined_not_applicable_envelope() -> RequestV1 {
+fn build_maximum_combined_not_applicable_envelope() -> Result<PreparedRequest, Box<dyn Error>> {
     let relations = (0..MAX_APPLICABLE_EDGES)
         .map(|index| {
             let extra_bytes = if index < 32 { 15 } else { 14 };
@@ -412,7 +616,7 @@ fn build_maximum_combined_not_applicable_envelope() -> RequestV1 {
     request(relations)
 }
 
-fn build_maximum_mixed_relations() -> RequestV1 {
+fn build_maximum_mixed_relations() -> Result<PreparedRequest, Box<dyn Error>> {
     let applicable_count = MAX_APPLICABLE_EDGES / 2;
     let mut relations = Vec::with_capacity(MAX_APPLICABLE_EDGES as usize);
     relations.extend((0..applicable_count).map(|index| {
@@ -432,7 +636,7 @@ fn build_maximum_mixed_relations() -> RequestV1 {
     request(relations)
 }
 
-fn build_maximum_opaque_utf8_bytes() -> RequestV1 {
+fn build_maximum_opaque_utf8_bytes() -> Result<PreparedRequest, Box<dyn Error>> {
     let reason = "x".repeat(PAGE_BYTES as usize - 2);
     request(vec![not_applicable("r", "o", reason)])
 }
@@ -636,15 +840,32 @@ fn observe(result: &FeasibilityV1) -> Identity {
 
 fn run_scenario(
     scenario: &'static Scenario,
-    sample_count: usize,
+    sample_count: SampleCount,
 ) -> Result<ScenarioRun, Box<dyn Error>> {
     let mut identity: Option<Identity> = None;
-    let mut samples = Vec::with_capacity(sample_count);
+    let sample_count = sample_count.get();
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(sample_count)
+        .map_err(|source| HarnessError::SampleReservation {
+            scenario: scenario.name,
+            sample_count,
+            source,
+        })?;
     for index in 0..sample_count {
         // Request construction is intentionally outside the sample: callers
         // already own this input. Evaluation still includes raw preflight,
         // canonicalization, exact allocation, all pair calls and proof hashing.
-        let request = black_box((scenario.build)());
+        let prepared = (scenario.build)()?;
+        if prepared.shape != scenario.shape {
+            return Err(HarnessError::ShapeMismatch {
+                scenario: scenario.name,
+                declared: scenario.shape,
+                actual: prepared.shape,
+            }
+            .into());
+        }
+        let request = black_box(prepared.value);
         let baseline_live_bytes = begin_allocator_sample();
         let started = Instant::now();
         let result = evaluate(request)?;
@@ -678,7 +899,9 @@ fn run_scenario(
     }
     Ok(ScenarioRun {
         scenario,
-        identity: identity.expect("positive sample count produces an identity"),
+        identity: identity.ok_or(HarnessError::MissingIdentity {
+            scenario: scenario.name,
+        })?,
         samples,
     })
 }
@@ -688,19 +911,20 @@ fn parse_protocol() -> Result<Protocol, Box<dyn Error>> {
         // One raw observation is a convenient local smoke default, not an
         // admission threshold. A committed protocol must set the count.
         return Ok(Protocol {
-            sample_count: 1,
+            sample_count: SampleCount::LOCAL_SMOKE,
             sample_count_explicit: false,
         });
     };
     let value = value
         .into_string()
-        .map_err(|_| "LABCOLORS_WCAG22_BENCH_SAMPLES is not UTF-8")?;
+        .map_err(|_| HarnessError::SampleCountNotUtf8)?;
     let parsed = value
-        .parse::<usize>()
-        .map_err(|_| "LABCOLORS_WCAG22_BENCH_SAMPLES must be a positive integer")?;
-    if parsed == 0 {
-        return Err("LABCOLORS_WCAG22_BENCH_SAMPLES must be positive".into());
-    }
+        .parse::<NonZeroU8>()
+        .map(SampleCount)
+        .map_err(|source| HarnessError::InvalidSampleCount {
+            maximum: u8::MAX,
+            source,
+        })?;
     Ok(Protocol {
         sample_count: parsed,
         sample_count_explicit: true,
@@ -877,7 +1101,7 @@ fn render_json(runs: &[ScenarioRun], protocol: &Protocol) -> Result<String, std:
     write!(
         output,
         "  \"sampleCount\": {},\n  \"admissionStatus\": \"measurement-only-unless-admission-check-passes\",\n  \"hardSlo\": {{\n    \"class\": \"deterministic-work-and-storage\",\n    \"logicalAssessmentLaw\": \"W=256E\",\n    \"packedStorageLaw\": \"B=0 if A=0, otherwise B=32(E+1)\",\n    \"partialTerminalAllowed\": false,\n    \"timingThresholdNs\": null,\n    \"allRequiredShapesMustComplete\": true\n  }},\n  \"boundedEnvelopeModel\": {{\n    \"scope\": \"product-policy-capacity-arithmetic-not-total-memory\",\n    \"referenceBoundedBytes\": {PAGE_BYTES},\n    \"candidateCount\": {CANDIDATE_COUNT},\n    \"decisionSlotBytes\": {DECISION_SLOT_BYTES},\n    \"partitionBytes\": {PARTITION_BYTES},\n    \"reservedPartitionSlots\": 1,\n    \"maximumCardinality\": {MAX_APPLICABLE_EDGES},\n    \"maximumLogicalAssessments\": {},\n    \"maximumPackedResultBytes\": {}\n  }},\n",
-        protocol.sample_count,
+        protocol.sample_count.get(),
         CANDIDATE_COUNT * MAX_APPLICABLE_EDGES,
         DECISION_SLOT_BYTES * (MAX_APPLICABLE_EDGES + 1),
     )
@@ -1001,7 +1225,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let output_path = std::env::var_os("LABCOLORS_WCAG22_BENCH_OUTPUT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_OUTPUT));
+        .unwrap_or_else(|| std::env::temp_dir().join(DEFAULT_OUTPUT_FILENAME));
     let payload = render_json(&runs, &protocol)?;
     fs::write(&output_path, payload)?;
     println!(

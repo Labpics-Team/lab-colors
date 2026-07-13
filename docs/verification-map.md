@@ -76,34 +76,62 @@
 
 ## WCAG 2.2 для финальной sRGB8-пары — `wcag22.rs`, `wcag22/`, `srgb8.rs` (#284)
 
-Это versioned terminal certificate соответствия объявленному success
-criterion, а не замена LPC/APCA-shaped перцептивной цели solver-а. Клиент явно
-передаёт criterion; core не выводит размер текста или семантику из имени токена.
+Это версионированный терминальный сертификат соответствия явно выбранному
+критерию, а не замена перцептивной цели решателя в форме LPC/APCA. Клиент сам
+передаёт критерий; Core не выводит размер текста или семантику из имени токена.
 
 | формула/инвариант | чем верифицирована | оракул |
 |---|---|---|
-| dated profile: IEC/WCAG EOTF split `0.04045`, веса `0.2126/0.7152/0.0722`, offset `0.05`, пороги `3.0` и `4.5` | immutable `wcag22-srgb8-v1.json`; независимая точная копия `NORMATIVE_PROFILE_V1` в `verify_wcag22_q55.py`; `wcag22_tests::*` | публикация (W3C WCAG 2.2 Recommendation 2024-12-12) |
-| 768 outward Q55-вкладов (3 канала × 256 кодов) tight: ширина строки ≤ 1; все threshold terms overflow-safe | adaptive-precision Decimal с directed rounding и устойчивостью на successive precisions; exact-integer/fifth-power проверка каждой строки; verifier доказывает `180·(Q55+3)+7·Q55 < i64::MAX`, фиксирует headroom и отказ Q56 | независимая численная транскрипция + целочисленная проверка tightness/overflow |
-| полный домен `256³ = 16 777 216` цветов имеет zero unresolved для обоих пороговых законов | `verify_wcag22_q55.py`: перечисление всех sRGB8-интервалов и monotone boundary scan; committed proof фиксирует минимальные pass/fail margins и witnesses; synthetic overlap обязан сделать verifier RED | полный конечный перебор + mutation oracle |
-| production verdict использует только outward Q55 и целочисленные сравнения; kernel/parser/facade/terminal-evidence нельзя подменить отдельно | exact SHA узких production-листьев (`kernel.rs`, terminal evidence) и production-only parser-capsule в `srgb8.rs`, normalized facade SHA (исключены только три self-digest literal) + semantic guards; `anti_epsilon_witnesses_are_definite_fail`, parser panic/property tests | независимый verifier + внутренние boundary witnesses |
-| proof связан с фактическим публичным путём, но не с посторонним текстом всего `lib.rs`/родительского `srgb8.rs` | source-binding schema v1: Cargo metadata фиксирует canonical lib target `src/lib.rs`; length-prefixed SHA-256 связывает этот факт, четыре crate-root route и exact parser body; независимый тест отвергает `[lib] path`, `cfg`/`path`/parser redirects и доказывает non-interference будущих `Srgb8`/root re-export; существующий compiled registry probe вызывает оба public entrypoint, 4.5 boundary и 4.5/3.0 criterion discriminator, evidence IDs и invalid transport | Cargo metadata + exact capsule oracle + внешний Rust consumer внутри verifier-а |
-| право минтить terminal evidence связано с фактической typed WCAG registry-row | compiled Rust probe читает live row; Python канонизирует 10 mint-relevant полей через length-prefix/SHA-256; 10 field mutations + 2 hex/count transport mutations обязаны отказать | независимая site-local admission binding (в proof: 15 negative controls всего) |
-| один verdict/evidence сохраняется через Core → FFI/WASM → JS/Swift/conformance | `wcag22_transport_*`, `wasm_parity`, `wcag22.test.mjs`, Swift conformance, committed pack 4 `wcag22.json`; release verifier повторно проверяет evidence-байты | дифференциальный cross-boundary oracle |
+| профиль с зафиксированной датой: граница IEC/WCAG EOTF `0.04045`, веса `0.2126/0.7152/0.0722`, слагаемое `0.05`, пороги `3.0` и `4.5` | неизменяемый `wcag22-srgb8-v1.json`; независимая точная копия `NORMATIVE_PROFILE_V1` в `verify_wcag22_q55.py`; `wcag22_tests::*` | публикация (W3C WCAG 2.2 Recommendation 2024-12-12) |
+| 768 наружу округлённых вкладов Q55 (3 канала × 256 кодов) имеют ширину не более 1; пороговые выражения не переполняются | `Decimal` с адаптивной точностью, направленным округлением и устойчивостью при повышении точности; целочисленная проверка и проверка пятой степени каждой строки; verifier доказывает `180·(Q55+3)+7·Q55 < i64::MAX`, фиксирует запас и отказ Q56 | независимая численная транскрипция + целочисленная проверка точности и переполнения |
+| полный домен `256³ = 16 777 216` цветов не содержит неразрешённых случаев для обоих пороговых законов | `verify_wcag22_q55.py`: перечисление всех интервалов sRGB8 и монотонный поиск границ; зафиксированное доказательство хранит минимальные отступы pass/fail и граничные примеры; синтетическое пересечение обязано сделать verifier RED | полный конечный перебор + мутационный оракул |
+| производственный вердикт использует только наружу округлённые Q55 и целочисленные сравнения; ядро, парсер, фасад и терминальное доказательство нельзя подменить независимо | точные SHA узких production-листьев (`kernel.rs`, terminal evidence), production-only капсулы парсера в `srgb8.rs` и нормализованного фасада (исключены только три self-digest literal) + семантические проверки; `anti_epsilon_witnesses_are_definite_fail`, тесты парсера на panic и свойства | независимый verifier + внутренние граничные примеры |
+| доказательство связано с фактическим публичным путём, но не с посторонним текстом всего `lib.rs` или родительского `srgb8.rs` | схема привязки источников V1: Cargo metadata фиксирует каноническую цель библиотеки `src/lib.rs`; length-prefixed SHA-256 связывает этот факт, четыре маршрута из корня crate и точное тело парсера; независимый тест отвергает перенаправления `[lib] path`, `cfg`, `path` и parser, доказывая невлияние будущих `Srgb8`/root re-export; скомпилированная проба registry вызывает оба публичных входа, границу 4.5, различие критериев 4.5/3.0, ID доказательств и невалидный транспорт | Cargo metadata + точный capsule-оракул + внешний Rust-потребитель внутри verifier-а |
+| право выпускать терминальное доказательство связано с фактической типизированной строкой WCAG registry | скомпилированная Rust-проба читает действующую строку; Python канонизирует 10 значимых для выпуска полей через length-prefix/SHA-256; 10 мутаций полей + 2 мутации hex/count транспорта обязаны отказать | независимая локальная привязка допуска (в proof всего 15 негативных контролей) |
+| один вердикт и его доказательство сохраняются через Core → FFI/WASM → JS/Swift/контракт соответствия | `wcag22_transport_*`, `wasm_parity`, `wcag22.test.mjs`, Swift conformance, зафиксированный набор из четырёх `wcag22.json`; release verifier повторно проверяет байты доказательств | дифференциальный межграничный оракул |
 
-## Конечная WCAG 2.2 feasibility-компиляция — `wcag22_feasibility.rs` (#295)
+## Конечная компиляция выполнимости WCAG 2.2 — `wcag22_feasibility.rs` (#295)
 
-Модуль канонизирует opaque client declarations и полностью перечисляет
+Модуль канонизирует непрозрачные клиентские декларации и полностью перечисляет
 зарегистрированный конечный домен. Он не ранжирует кандидаты, не выводит
-применимость или размер текста из ID и не заменяет перцептивную цель solver-а.
+применимость или размер текста из ID и не заменяет перцептивную цель решателя.
 
 | инвариант | чем верифицирован | оракул |
 |---|---|---|
-| все 256 нейтралей проверяются против каждой канонической applicable adjacency; граничные множества для 4.5:1 и 3:1 совпадают с independently recomputed fixture | `verify_wcag22_neutral_axis.py`; `production_vectors_are_bound_to_the_exact_independent_oracle_fixture`; full-matrix и boundary tests | независимая `Fraction`-арифметика с адаптивными точными границами корня пятой степени; production Q55/Rust evaluator не импортируются |
-| перестановки и точные дубликаты не меняют канонические content IDs; изменение opaque ID меняет identity, но не физический partition | `verify_wcag22_feasibility_identity.py`; `exact_identity_preimages_match_the_independent_cross_language_fixture`; property/characterization tests канонизации | независимая Python-транскрипция exact byte grammar и SHA-256 + внутренние metamorphic tests |
-| терминал появляется только после полного `W=256E`; packed storage равен `B=0` при `A=0`, иначе `B=32(E+1)`; partial terminal и silent fallback отсутствуют | fault-injection tests evaluator/storage/allocation/completeness; `check_wcag22_feasibility_benchmark.py` проверяет полный набор граничных shapes, exact counters и SHA-256 dependency cone | типизированные negative controls + raw native measurements; elapsed time не является acceptance threshold |
+| все 256 нейтралей проверяются против каждого канонического применимого соседа; граничные множества для 4.5:1 и 3:1 совпадают с независимо пересчитанным эталоном | `verify_wcag22_neutral_axis.py`; `production_vectors_are_bound_to_the_exact_independent_oracle_fixture`; тесты полной матрицы и границ | независимая `Fraction`-арифметика с адаптивными точными границами корня пятой степени; производственный Q55 и Rust-вычислитель не импортируются |
+| перестановки и точные дубликаты не меняют канонические ID содержимого; изменение непрозрачного ID меняет идентичность, но не физическое разбиение | `verify_wcag22_feasibility_identity.py`; `exact_identity_preimages_match_the_independent_cross_language_fixture`; тесты свойств и фиксации текущего поведения канонизации | независимая Python-транскрипция точной байтовой грамматики и SHA-256 + внутренние метаморфные тесты |
+| терминал появляется только после полного `W=256E`; упакованное хранилище равно `B=0` при `A=0`, иначе `B=32(E+1)`; частичный терминал и неявная подстановка результата отсутствуют | тесты с внедрением отказов вычислителя, хранилища, выделения памяти и полноты; `check_wcag22_feasibility_benchmark.py` проверяет полный набор граничных форм, точные счётчики и SHA-256 графа зависимостей | типизированные негативные контроли + прямые измерения скомпилированного процесса текущей платформы; прошедшее время не является порогом приёмки |
 
-Benchmark artifact не доказывает total WebAssembly memory, serialized output
-size или client latency: эти величины явно находятся вне его claim boundary.
+Здесь `E` — число канонических применимых рёбер «связь × сосед»
+(`E∈{0,1,…,2047}`), `A` — число применимых связей (`A∈{0,1,…,E}`;
+`A=0` тогда и только тогда, когда
+`E=0`), `W` — точное число вызовов вычислителя, `B` — число байтов матрицы
+решений вместе с итоговым разбиением кандидатов. Для домена V1 `W=256E`,
+то есть `W∈{0,256,…,524032}`, поскольку проверяются все 256 кодов нейтральной
+оси. Один бит на кандидата даёт `256/8=32` байта на каждое ребро и ещё 32 байта
+на итоговое разбиение, поэтому при `A>0` получаем `B=32(E+1)`, то есть
+`B∈{64,96,…,65536}`; при `A=0` получаем `B=0`. Это дискретная арифметика
+представления, а не настроенные пороги. Её напрямую фиксируют
+`packed_storage_is_exactly_32_times_e_plus_one` и
+`one_by_e_e_by_one_and_mixed_declarations_all_execute_exact_w`.
+
+Максимум `2047` также выведен, а не подобран: ресурсный профиль `Compile` V1
+отводит под упакованный результат объём `65536` байт (одна
+64-КиБ страница WebAssembly), резервирует 32 байта для итогового разбиения и
+делит оставшиеся `65504` байта на 32-байтные слоты рёбер:
+`65504/32=2047`. Это граница продуктовой политики результата, а не утверждение
+о полной памяти WebAssembly.
+
+Чувствительность явна: для другого зарегистрированного домена мощности `D`
+число вычислений станет `W=DE`, а закон `B` будет зависеть от явно выбранной
+схемы битовой упаковки. V1 не заявляет такую обобщённую реализацию: другой домен
+требует новой версионированной регистрации, ресурсного профиля, точного закона
+хранения, оракула и артефакта допуска. Формулы V1 нельзя молча переносить на
+него.
+
+Артефакт измерений не доказывает полную память WebAssembly, размер
+сериализованного результата или клиентскую задержку: эти величины явно
+находятся вне границы доказанного утверждения.
 
 ## LPC (перцептивный контраст) — `lpc.rs`
 
