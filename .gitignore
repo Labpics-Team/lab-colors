@@ -12,6 +12,7 @@ target/
 packages/colors/.release/
 packages/colors/LICENSE
 packages/colors/build-metadata.json
+packages/colors/evidence/
 
 # Психофизический харнесс: сгенерированные манифесты/раннеры/экспорты сессий —
 # это артефакты запуска (детерминированы из seed), в гит не коммитятся.

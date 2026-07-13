@@ -20,6 +20,10 @@ examine_globs = [
     "crates/labcolors-core/src/numerical_plan.rs",
     "crates/labcolors-core/src/numerics.rs",
     "crates/labcolors-core/src/pair.rs",
+    "crates/labcolors-core/src/srgb8.rs",
+    "crates/labcolors-core/src/wcag22.rs",
+    "crates/labcolors-core/src/wcag22_evidence.rs",
+    "crates/labcolors-core/src/wcag22/kernel.rs",
 ]
 
 # Запас времени на мутант: legacy proxy coordinate считается быстро, но набор в целом не

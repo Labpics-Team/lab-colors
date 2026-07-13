@@ -9,6 +9,8 @@
 //! transitive crates) and guarantees exact reproducibility with other
 //! CSS-based pipelines.
 
+use crate::srgb8::hex_bytes;
+
 /// D65 white point (normalized to Y = 1.0).
 ///
 /// Derived from the 4-digit chromaticity (0.3127, 0.3290) of IEC 61966-2-1 /
@@ -127,22 +129,6 @@ pub(crate) fn decode_8bit(byte: u8) -> f64 {
 // ------------------------------------------------------------------
 //  Public helpers
 // ------------------------------------------------------------------
-
-/// Разбор `#RRGGBB` → три байта. Единственная реализация hex-парсинга —
-/// линейный и кодированный варианты различаются только декодом поверх байтов.
-fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
-    let hex = hex.trim_start_matches('#');
-    // `len()` is a *byte* count and the slices below cut on byte indices, so a
-    // non-ASCII string of 6 bytes (e.g. "€€") would pass a bare length check yet
-    // slice mid-codepoint and panic. Require ASCII so every byte is a char
-    // boundary; non-hex ASCII is still rejected by `from_str_radix` below.
-    if hex.len() != 6 || !hex.is_ascii() {
-        return Err(format!("expected #RRGGBB, got #{}", hex));
-    }
-    let parse =
-        |s: &str| u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex '{}': {}", s, e));
-    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
-}
 
 /// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
 pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {

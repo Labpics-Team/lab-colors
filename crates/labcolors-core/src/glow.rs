@@ -218,15 +218,37 @@ impl GlowDecisionProfileV1 {
 /// точный no-op либо явный registered compatibility-алгоритм. Незаконная
 /// комбинация (stable + legacy provenance и т. п.) непредставима типами;
 /// cross-product независимых полей profile/guarantee удалён (#292).
+///
+/// Genuine evidence from another registered site cannot be relabelled as a
+/// Glow outcome outside Core:
+///
+/// ```compile_fail,E0639
+/// use labcolors_core::GlowDecisionOutcomeV1;
+/// use labcolors_core::wcag22::{
+///     Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
+/// };
+///
+/// let wcag = evaluate_wcag22_srgb8(
+///     [0, 0, 0],
+///     [255, 255, 255],
+///     Wcag22CriterionV1::Sc143TextDefault,
+/// ).unwrap();
+/// let Wcag22AssessmentV1::Evaluated { evidence, .. } = wcag else {
+///     unreachable!()
+/// };
+/// let _forged = GlowDecisionOutcomeV1::StableExactNoop { evidence };
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum GlowDecisionOutcomeV1 {
     /// Stable exact no-op: решение доказано запечатанным BitExact-evidence.
+    #[non_exhaustive]
     StableExactNoop {
         /// Запечатанное registry-owned evidence.
         evidence: NumericalDecisionEvidenceV1,
     },
     /// Явно выбранный зарегистрированный прежний алгоритм.
+    #[non_exhaustive]
     Compatibility {
         /// Registered release, реально исполнивший invocation.
         release_id: NumericalCompatibilityReleaseIdV1,

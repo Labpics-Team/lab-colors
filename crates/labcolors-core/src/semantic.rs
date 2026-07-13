@@ -4205,12 +4205,12 @@ mod tests {
 
         // Каждый invocation соответствует manifest-supported site: mode/release
         // объявлены capability-строкой сборки (registry SSOT).
-        let manifest = crate::numerics::numerical_capability_manifest_v1();
+        let manifest = crate::numerics::numerical_capability_manifest_v2();
         for inv in plan.invocations() {
             let site = manifest
                 .sites
                 .iter()
-                .find(|site| site.site_id == inv.site_id)
+                .find(|site| site.site_id.key() == inv.site_id.key())
                 .expect("site каждого invocation присутствует в capability manifest");
             match inv.mode {
                 NumericalExecutionModeV1::StableOnly => assert!(

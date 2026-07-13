@@ -4,6 +4,11 @@
 // `RoleResult` union and the `LabColors` engine) and the vanilla `applyTheme`
 // helper, so a consumer gets full typing from the package root.
 
+import type {
+  Wcag22AssessmentV1,
+  Wcag22CriterionV1,
+} from "./pkg/labcolors.js";
+
 export {
   default,
   default as init,
@@ -11,6 +16,13 @@ export {
   LabColors,
   numericalCapabilityManifest,
 } from "./pkg/labcolors.js";
+
+/** Exact WCAG 2.2 assessment for one canonical final-sRGB8 occurrence. */
+export declare function evaluateWcag22(
+  foreground: string,
+  background: string,
+  criterion: Wcag22CriterionV1,
+): Wcag22AssessmentV1;
 
 // Curated public schema/result surface. wasm-bindgen's InitOutput and raw
 // __wbg_* ABI helpers remain implementation details.
@@ -53,8 +65,12 @@ export type {
   RoleRecipe,
   ThemeConfig,
   ResolvedTheme,
-  NumericalCapabilitySiteV1,
-  NumericalCapabilityManifestV1,
+  NumericalCapabilitySiteV2,
+  NumericalCapabilityManifestV2,
+  Wcag22CriterionV1,
+  Wcag22DecisionV1,
+  Wcag22Q55BoundsV1,
+  Wcag22AssessmentV1,
 } from "./pkg/labcolors.js";
 
 export { applyTheme } from "./apply-theme.js";

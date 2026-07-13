@@ -5,10 +5,23 @@ Rust различаются, потому что это разные delivery su
 
 ## [Unreleased]
 
-Атомарная numerical-decision граница (#292). Wire/npm JSON, эмитируемые цвета,
-config fingerprint и `packDigest` conformance-векторов НЕ изменились; breaking
-только Rust API. Migration-note: [exact alpha / typed
-Glow](docs/migrations/exact-alpha-glow.md), дополнение ADR-0004 от 2026-07-12.
+Атомарная numerical-decision граница (#292) и exact WCAG 2.2 evaluator для
+финальной sRGB8-пары (#284). Существующая цветовая эмиссия, config fingerprint
+и adaptive runtime не меняются, но Rust/npm capability API и conformance pack
+изменены; следующий release обязан получить согласованный 0.x version bump.
+Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
+дополнение ADR-0004 от 2026-07-12.
+
+### Added
+
+- Versioned `evaluate_wcag22_srgb8` / `evaluate_wcag22_hex` и эквивалентные
+  WASM/TypeScript/UniFFI границы. Criterion всегда объявляет клиент; verdict
+  возвращает точное terminal evidence без epsilon или округлённого ratio.
+- Canonical Q55 artifact и независимый verifier: Decimal directed-rounding +
+  integer tightness для 768 строк, полный scan всех `16 777 216` sRGB8-цветов,
+  source bindings и SHA-256 live typed registry admission-row.
+- npm package несёт byte-exact profile/table/proof в `evidence/`; release
+  verifier и clean-install gate повторно проверяют их хэши и содержимое.
 
 ### Breaking (Rust API)
 
@@ -23,18 +36,29 @@ Glow](docs/migrations/exact-alpha-glow.md), дополнение ADR-0004 от 2
 - `NumericalDecisionEvidenceV1::BitExact` запечатан (приватное поле-печать):
   внешний код матчит только с `..`, минт выполняет registry-owned конструктор
   (закреплено compile-fail тестом).
+- Все terminal-варианты `NumericalDecisionV1<T>` и
+  `GlowDecisionOutcomeV1` запечатаны variant-level `#[non_exhaustive]`:
+  подлинное evidence одного site нельзя переупаковать как результат другого;
+  внешний match обязан использовать `..`.
+- Временный capability V1 заменён единственным public
+  `NumericalCapabilityManifestV2`; WCAG site несёт artifact/bound/proof IDs.
+  Published `@labpics/colors` 0.10.0 остаётся неизменным, а следующий npm
+  release должен мигрировать на V2 явно.
 - `RoleSpec::Glow` несёт typed execution mode
   (`NumericalExecutionModeV1::StableOnly` |
   `ExplicitCompatibility { release_id }`); строковый `GlowDecisionProfileV1`
   остался boundary-адаптером, прежние wire keys (`stable-v1`,
   `legacy-platform-dependent-v1`, `bit-exact`) сохранены byte-for-byte.
+- Raw WCAG profile/proof JSON больше не поля runtime-профиля: используйте
+  `Wcag22ProfileV1::source_json()` / `proof_json()`. Это позволяет linker-у не
+  включать отдельно поставляемые evidence-документы в WASM.
 
 ### Changed
 
-- Conformance pack 3.0.0: `manifest.numericalSites` заменён typed
-  `numericalCapabilities` — capability manifest ядра (schema v1, coverage
-  `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над canonical
-  length-prefixed preimage). Векторные семейства и `packDigest` не изменились.
+- Conformance pack 4.0.0 добавляет `wcag22.json`; `packDigest` закономерно
+  изменён. `manifest.numericalCapabilities` зеркалит single public V2 core
+  manifest (coverage `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над
+  canonical length-prefixed preimage).
 - Release manifest schema v2: секция `numericalSites` заменена на
   `numericalCapabilities`; release verifier и Swift conformance-тесты
   пересчитывают capability checksum независимо от Rust-кода.

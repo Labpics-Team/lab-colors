@@ -13,20 +13,23 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `3.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов. Bump 2.0.0 → 3.0.0 менял только схему
-  манифеста (`numericalSites` → `numericalCapabilities`); векторные семейства
-  и `packDigest` не изменились.
+- **Версия пака** (`manifest.packVersion`, сейчас `4.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов. Bump 3.0.0 → 4.0.0 перевёл
+  `numericalCapabilities` на proof-capable schema V2 и добавил семейство
+  `wcag22`; поэтому состав семейств и `packDigest` изменились. Предыдущий bump
+  2.0.0 → 3.0.0 менял только схему манифеста
+  (`numericalSites` → `numericalCapabilities`), без изменения векторных
+  семейств.
 - **Версия ядра** (`manifest.coreVersion`, для этого пака `0.2.0`) — версия
   `labcolors-core`, из канона которой сгенерированы значения. Пак действителен
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
   сдвигается.
-- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами семейств
-  (в порядке `contrasts, ladders, alpha, solve, muddiness`). Отпечаток
-  КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы генерации (последний
-  ULP f64 в сериализации) — не кросс-платформенный инвариант, а якорь
-  целостности файлов.
+- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами шести
+  семейств (в порядке `contrasts, ladders, alpha, solve, muddiness, wcag22`).
+  Отпечаток КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы
+  генерации (последний ULP f64 в сериализации) — не кросс-платформенный
+  инвариант, а якорь целостности файлов.
 
 ## Семейства векторов (`vectors/*.json`)
 
@@ -37,6 +40,7 @@
 | `alpha.json` | подложка→α | `{tint, alpha, bg, composite, minAlpha}` |
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
 | `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
+| `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
 `muddiness.json` — это `experimental compatibility proxy`: corpus доказывает
@@ -55,22 +59,29 @@ decision. Legacy-идентификаторы сохранены только д
 - `alpha.json` начиная с pack `2.0.0` обязательно содержит точный byte-reference
   half-tie `#C0B2FA @ 0.122` над `#000000` → `#17161F`. Это mutation-killer
   старого пути `(byte/255) · alpha · 255`, который выбирал соседний LSB.
-- `manifest.numericalCapabilities` (схема пака 3.0.0) генерируется из
-  core-owned `numerical_capability_manifest_v1()` и заменяет прозаический
-  `numericalSites` пака 2.x. Форма:
+- `manifest.numericalCapabilities` в pack `4.0.0` генерируется из
+  proof-capable core-owned `numerical_capability_manifest_v2()`. До появления
+  внешних клиентов промежуточная Glow-only capability-схема V1 удалена из
+  public API: один `numericalCapabilityManifest()` сразу возвращает V2, без
+  второго version-suffixed entrypoint. Это намеренная pre-client breaking
+  коррекция ложной схемы, а не поддержка двух конкурирующих контрактов. Форма V2:
   `{schemaVersion, coverage, sites[], checksum}`, где `schemaVersion` —
-  независимый version domain capability-схемы (сейчас `1`); `coverage` —
+  независимый version domain capability-схемы (сейчас `2`); `coverage` —
   `migrated-sites-only-v1` (перечислены только **уже мигрированные**
   branch-sensitive sites, не утверждение полного аудита исторических
   `f64`-ветвлений — он остаётся в scope #291); каждая строка `sites[]` несёт
-  `siteId` и шесть списков стабильных ключей (`stableOutcomes`,
+  `siteId` и семь списков стабильных ключей (`stableOutcomes`,
   `compatibilityReleases`, `evidenceClasses`, `artifactIds`, `boundIds`,
-  `runtimeAttestations`; пустой список — явное «evidence отсутствует», не
-  пропуск); `checksum` — FNV-1a-32 (8 lowercase hex) над canonical
+  `proofIds`, `runtimeAttestations`; пустой список — явное «evidence отсутствует»,
+  не пропуск); `checksum` — FNV-1a-32 (8 lowercase hex) над canonical
   length-prefixed preimage с домен-сепаратором
-  `labcolors.numerical-capability.v1`. Release verifier и Swift-тесты
-  пересчитывают checksum НЕЗАВИСИМО от Rust-кода. Сейчас в manifest только
-  `glow-target-or-maximum-v1`.
+  `labcolors.numerical-capability.v2`. Release verifier и Swift-тесты
+  пересчитывают checksum НЕЗАВИСИМО от Rust-кода. Manifest содержит
+  `glow-target-or-maximum-v1` и proof-bound `wcag22-srgb8-contrast-v1`.
+  Отдельно full-domain WCAG proof несёт SHA-256 private admission-row: ровно
+  десять live typed полей, которые разрешают mint terminal evidence, включая
+  `boundStatus` и `fallbackStatus`. Это site-local proof binding, а не новые
+  public capability-поля и не FNV checksum всего manifest.
 
 Словарь **позиций лестницы** (не ролей): `label-*`, `fill-*`, `border-*`,
 `focus-ring`, `glow`, `skeleton-*`, `neutral-fill-*`, `neutral-border-*`,
@@ -112,14 +123,16 @@ solve-векторами: `Pack::generate()` возвращает `PackGeneratio
 вектор в пределах толерантности, дайджест сходится с сырыми байтами, а
 опубликованные WCAG-якоря (21:1, граница `#767676`) держатся. Раннер входит в
 `cargo test --workspace` на Linux x86_64. Активный Swift/UniFFI gate также
-прогоняет все пять семейств пака в pinned Linux x86_64 container.
+прогоняет все перечисленные manifest-ом семейства в pinned Linux x86_64
+container.
 
-Активный browser-gate теперь воспроизводит все 82 закоммиченных вектора внутри
-фактического wasm32 core runtime и отдельно держит targeted parity-тесты
-публичной JS-границы. Это доказывает wasm32-исполнение ядра против независимых
-байтов пака, но ещё не прогоняет каждый вектор всех пяти семейств непосредственно
-через публичный JS API. Поэтому полная conformance именно JS-поверхности текущего
-пака пока не заявляется. В
+Активный browser-gate теперь воспроизводит каждый вектор всех перечисленных
+manifest-ом семейств внутри фактического wasm32 core runtime; anti-vacuum total
+вычисляется из длин самих replayed family files, а не поддерживается отдельным
+числом. Targeted parity-тесты отдельно проверяют публичную JS-границу. Это
+доказывает wasm32-исполнение ядра против независимых байтов пака, но ещё не
+прогоняет каждый вектор непосредственно через публичный JS API. Поэтому полная
+conformance именно JS-поверхности текущего пака пока не заявляется. В
 `native-conformance.yml` сохранён ручной macOS/arm64 reference path, но он не
 запускается на PR/push и не считается достигнутой аттестацией текущего пака.
 Полная runtime-матрица остаётся scope #258; допуск `DRIFT_TOL` задаёт правило

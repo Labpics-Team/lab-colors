@@ -13,6 +13,13 @@ export const PACKAGE_DIR = resolve(REPO_ROOT, "packages/colors");
 const SOURCE_LICENSE = resolve(REPO_ROOT, "LICENSE");
 const PACKED_LICENSE = resolve(PACKAGE_DIR, "LICENSE");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
+const WCAG22_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
+const PACKED_WCAG22_EVIDENCE_DIR = resolve(PACKAGE_DIR, "evidence");
+const WCAG22_EVIDENCE_FILES = [
+  "wcag22-srgb8-v1.json",
+  "wcag22-srgb8-q55-v1.bin",
+  "wcag22-srgb8-q55-proof-v1.json",
+];
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_FILES = [
   "contrasts.json",
@@ -20,6 +27,7 @@ const CONFORMANCE_FILES = [
   "alpha.json",
   "solve.json",
   "muddiness.json",
+  "wcag22.json",
 ];
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -88,6 +96,17 @@ export async function prepareNpmPackage() {
   const copied = await readFile(PACKED_LICENSE);
   if (!copied.equals(canonical)) {
     throw new Error("generated npm LICENSE differs from the canonical root LICENSE");
+  }
+
+  await mkdir(PACKED_WCAG22_EVIDENCE_DIR, { recursive: true });
+  for (const file of WCAG22_EVIDENCE_FILES) {
+    const source = await readFile(resolve(WCAG22_CONTRACT_DIR, file));
+    if (source.length === 0) throw new Error(`canonical WCAG22 evidence is empty: ${file}`);
+    const destination = resolve(PACKED_WCAG22_EVIDENCE_DIR, file);
+    await atomicWrite(destination, source);
+    if (!(await readFile(destination)).equals(source)) {
+      throw new Error(`packed WCAG22 evidence differs from canonical source: ${file}`);
+    }
   }
 
   const [packageJsonSource, cargoSource, conformanceSource, wasm, ...familyBytes] =

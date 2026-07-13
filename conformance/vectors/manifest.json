@@ -1,17 +1,18 @@
 {
-  "packVersion": "3.0.0",
+  "packVersion": "4.0.0",
   "coreVersion": "0.2.0",
-  "packDigest": "64a68cbd",
+  "packDigest": "63d9a93f",
   "counts": {
     "contrasts": 40,
     "ladders": 25,
     "alpha": 7,
     "solve": 6,
     "muddiness": 4,
-    "total": 82
+    "wcag22": 6,
+    "total": 88
   },
   "numericalCapabilities": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "coverage": "migrated-sites-only-v1",
     "sites": [
       {
@@ -28,9 +29,30 @@
         ],
         "artifactIds": [],
         "boundIds": [],
+        "proofIds": [],
+        "runtimeAttestations": []
+      },
+      {
+        "siteId": "wcag22-srgb8-contrast-v1",
+        "stableOutcomes": [
+          "canonical-finite-bounded"
+        ],
+        "compatibilityReleases": [],
+        "evidenceClasses": [
+          "canonical-finite-bounded"
+        ],
+        "artifactIds": [
+          "wcag22-srgb8-luminance-q55-v1"
+        ],
+        "boundIds": [
+          "wcag22-srgb8-outward-q55-v1"
+        ],
+        "proofIds": [
+          "wcag22-srgb8-full-domain-q55-v1"
+        ],
         "runtimeAttestations": []
       }
     ],
-    "checksum": "5a3f6cbc"
+    "checksum": "f8d0c63d"
   }
 }

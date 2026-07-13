@@ -15,10 +15,11 @@
 //!                            причина у Indeterminate
 //! ```
 //!
-//! Законы первого V1-среза (#292):
+//! Законы versioned capability-срезов (#292/#284):
 //!
-//! * `Determinate` несёт только реально минтимое core-ом evidence — `BitExact`
-//!   (конструктор запечатан и registry-owned);
+//! * `Determinate` несёт только реально минтимое core-ом evidence: опубликованный
+//!   V1 registry допускает `BitExact`, proof-capable V2 также допускает
+//!   `CanonicalFiniteBounded`; оба конструктора запечатаны и registry-owned;
 //! * текущий нехарактеризованный legacy-результат — отдельный атомарный вариант
 //!   `Compatibility` с зарегистрированным release ID и provenance-классом
 //!   `LegacyPlatformDependentV1`; он НЕ является determinate evidence и не
@@ -51,11 +52,35 @@
 //!     _seal: labcolors_core::numerics::EvidenceSeal { _private: () },
 //! };
 //! ```
+//!
+//! Подлинное evidence также нельзя переиспользовать для другого site/result:
+//! каждый terminal-вариант запечатан целиком, а не только его evidence payload.
+//!
+//! ```compile_fail,E0639
+//! use labcolors_core::{NumericalDecisionV1, NumericalSiteIdV1};
+//! use labcolors_core::wcag22::{
+//!     Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
+//! };
+//!
+//! let genuine = evaluate_wcag22_srgb8(
+//!     [0, 0, 0],
+//!     [255, 255, 255],
+//!     Wcag22CriterionV1::Sc143TextDefault,
+//! ).unwrap();
+//! let Wcag22AssessmentV1::Evaluated { evidence, .. } = genuine else {
+//!     unreachable!()
+//! };
+//! let _forged: NumericalDecisionV1<&str> = NumericalDecisionV1::Determinate {
+//!     site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+//!     value: "forged cross-site result",
+//!     evidence,
+//! };
+//! ```
 
 /// Stable outcomes admitted for a migrated branch-sensitive site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum StableNumericalOutcomeV1 {
+pub(crate) enum StableNumericalOutcomeV1 {
     /// Determinate branch follows from exact finite/integer/rational evidence.
     BitExact,
     /// No semantic branch is selected.
@@ -64,7 +89,8 @@ pub enum StableNumericalOutcomeV1 {
 
 impl StableNumericalOutcomeV1 {
     /// Stable manifest key.
-    pub fn key(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn key(self) -> &'static str {
         match self {
             Self::BitExact => "bit-exact",
             Self::Indeterminate => "indeterminate",
@@ -75,18 +101,9 @@ impl StableNumericalOutcomeV1 {
 /// Sound-bound availability for a migrated numerical site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum NumericalBoundStatusV1 {
+pub(crate) enum NumericalBoundStatusV1 {
     /// No sound bound has been admitted.
     Unavailable,
-}
-
-impl NumericalBoundStatusV1 {
-    /// Stable manifest key.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Unavailable => "unavailable",
-        }
-    }
 }
 
 /// Whether a stable profile may silently choose another decision path.
@@ -128,14 +145,15 @@ impl NumericalCompatibilityReleaseIdV1 {
 /// Класс evidence, который package способен минтить для site (manifest-уровень).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum NumericalEvidenceClassV1 {
+pub(crate) enum NumericalEvidenceClassV1 {
     /// Точное решение из конечного integer/байтового состояния.
     BitExact,
 }
 
 impl NumericalEvidenceClassV1 {
     /// Стабильный manifest key.
-    pub fn key(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn key(self) -> &'static str {
         match self {
             Self::BitExact => "bit-exact",
         }
@@ -160,26 +178,27 @@ impl ReferenceProfileIdV1 {
     }
 }
 
-/// Идентификатор canonical finite artifact. Ни один artifact не допущен в V1:
-/// тип намеренно ненаселён — пустой список в manifest единственно представим,
-/// фиктивные IDs невозможны по построению.
+/// Internal V1 artifact identity. Тип намеренно ненаселён: adaptive Glow
+/// registry не может приписать себе canonical finite artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericalArtifactIdV1 {}
+pub(crate) enum NumericalArtifactIdV1 {}
 
 impl NumericalArtifactIdV1 {
     /// Стабильный manifest key (недостижимо: тип ненаселён).
-    pub fn key(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn key(self) -> &'static str {
         match self {}
     }
 }
 
 /// Идентификатор зарегистрированного error bound. Не допущен в V1 (ненаселён).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericalErrorBoundIdV1 {}
+pub(crate) enum NumericalErrorBoundIdV1 {}
 
 impl NumericalErrorBoundIdV1 {
     /// Стабильный manifest key (недостижимо: тип ненаселён).
-    pub fn key(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn key(self) -> &'static str {
         match self {}
     }
 }
@@ -187,23 +206,24 @@ impl NumericalErrorBoundIdV1 {
 /// Идентификатор runtime attestation. Не допущен до immutable attestation
 /// registry (#258): тип ненаселён, `PlatformCharacterized` непредставим.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericalRuntimeAttestationIdV1 {}
+pub(crate) enum NumericalRuntimeAttestationIdV1 {}
 
 impl NumericalRuntimeAttestationIdV1 {
     /// Стабильный manifest key (недостижимо: тип ненаселён).
-    pub fn key(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn key(self) -> &'static str {
         match self {}
     }
 }
 
-/// Machine-readable registry row required by research lock #281.
+/// Internal adaptive-runtime registry row required by research lock #281.
 ///
 /// Текстовые поля (`operations`/`domain`/`branch_effect`/`boundary_corpus`/
-/// `runtime_matrix`) — human-readable research metadata; они НЕ входят в
-/// canonical capability checksum preimage (#289).
+/// `runtime_matrix`) — human-readable research metadata, не public capability
+/// projection и не input runtime-решения.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct NumericalSiteRecordV1 {
+pub(crate) struct NumericalSiteRecordV1 {
     /// Stable site identity.
     pub site_id: NumericalSiteIdV1,
     /// Branch-sensitive operations (research metadata).
@@ -234,82 +254,181 @@ pub struct NumericalSiteRecordV1 {
     pub fallback_status: NumericalFallbackStatusV1,
 }
 
-// Enum identity and its registry row are emitted by one declaration. A new
-// migrated site therefore cannot exist without machine-readable metadata.
-macro_rules! define_numerical_registry_v1 {
-    ($(
-        $(#[$variant_meta:meta])*
-        $variant:ident => {
-            key: $key:literal,
-            operations: $operations:literal,
-            domain: $domain:literal,
-            branch_effect: $branch_effect:literal,
-            stable_outcomes: [$($stable_outcome:path),+ $(,)?],
-            compatibility_releases: [$($release:path),* $(,)?],
-            evidence_classes: [$($evidence_class:path),* $(,)?],
-            bound_status: $bound_status:path,
-            boundary_corpus: $boundary_corpus:literal,
-            runtime_matrix: $runtime_matrix:literal,
-            fallback_status: $fallback_status:path $(,)?
+// One declaration emits both the internal adaptive-runtime V1 projection and
+// the only public proof-capable V2 registry. Shared sites therefore cannot
+// drift between runtime/plan validation and the package capability manifest.
+macro_rules! define_numerical_registries {
+    (
+        legacy {
+            $(
+                $(#[$legacy_meta:meta])*
+                $legacy_variant:ident => {
+                    key: $legacy_key:literal,
+                    operations: $legacy_operations:literal,
+                    domain: $legacy_domain:literal,
+                    branch_effect: $legacy_branch_effect:literal,
+                    stable_outcomes: [$($legacy_stable:ident),+ $(,)?],
+                    compatibility_releases: [$($legacy_release:path),* $(,)?],
+                    evidence_classes: [$($legacy_evidence:ident),* $(,)?],
+                    bound_status: $legacy_bound:ident,
+                    boundary_corpus: $legacy_corpus:literal,
+                    runtime_matrix: $legacy_matrix:literal,
+                    fallback_status: $legacy_fallback:path $(,)?
+                }
+            ),+ $(,)?
         }
-    ),+ $(,)?) => {
+        proof {
+            $(
+                $(#[$proof_meta:meta])*
+                $proof_variant:ident => {
+                    key: $proof_key:literal,
+                    operations: $proof_operations:literal,
+                    domain: $proof_domain:literal,
+                    branch_effect: $proof_branch_effect:literal,
+                    stable_outcomes: [$($proof_stable:ident),+ $(,)?],
+                    compatibility_releases: [$($proof_release:path),* $(,)?],
+                    evidence_classes: [$($proof_evidence:ident),+ $(,)?],
+                    artifact_ids: [$($proof_artifact:path),+ $(,)?],
+                    bound_ids: [$($proof_bound_id:path),+ $(,)?],
+                    proof_ids: [$($proof_id:path),+ $(,)?],
+                    bound_status: $proof_bound:ident,
+                    boundary_corpus: $proof_corpus:literal,
+                    runtime_matrix: $proof_matrix:literal,
+                    fallback_status: $proof_fallback:path $(,)?
+                }
+            ),+ $(,)?
+        }
+    ) => {
         /// Зарегистрированный migrated site, где число влияет на semantic branch.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         #[non_exhaustive]
         pub enum NumericalSiteIdV1 {
-            $($(#[$variant_meta])* $variant),+
+            $($(#[$legacy_meta])* $legacy_variant),+
         }
 
         impl NumericalSiteIdV1 {
             /// Стабильный wire/registry key.
             pub fn key(self) -> &'static str {
                 match self {
-                    $(Self::$variant => $key),+
+                    $(Self::$legacy_variant => $legacy_key),+
+                }
+            }
+        }
+
+        /// Registered site in the single public proof-capable registry.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[non_exhaustive]
+        pub enum NumericalSiteIdV2 {
+            $($(#[$legacy_meta])* $legacy_variant),+,
+            $($(#[$proof_meta])* $proof_variant),+
+        }
+
+        impl NumericalSiteIdV2 {
+            /// Stable wire/registry key.
+            pub fn key(self) -> &'static str {
+                match self {
+                    $(Self::$legacy_variant => $legacy_key),+,
+                    $(Self::$proof_variant => $proof_key),+
                 }
             }
         }
 
         const NUMERICAL_REGISTRY_V1: &[NumericalSiteRecordV1] = &[
             $(NumericalSiteRecordV1 {
-                site_id: NumericalSiteIdV1::$variant,
-                operations: $operations,
-                domain: $domain,
-                branch_effect: $branch_effect,
-                stable_outcomes: &[$($stable_outcome),+],
-                compatibility_releases: &[$($release),*],
-                evidence_classes: &[$($evidence_class),*],
+                site_id: NumericalSiteIdV1::$legacy_variant,
+                operations: $legacy_operations,
+                domain: $legacy_domain,
+                branch_effect: $legacy_branch_effect,
+                stable_outcomes: &[$(StableNumericalOutcomeV1::$legacy_stable),+],
+                compatibility_releases: &[$($legacy_release),*],
+                evidence_classes: &[$(NumericalEvidenceClassV1::$legacy_evidence),*],
                 artifact_ids: &[],
                 bound_ids: &[],
                 runtime_attestations: &[],
-                bound_status: $bound_status,
-                boundary_corpus: $boundary_corpus,
-                runtime_matrix: $runtime_matrix,
-                fallback_status: $fallback_status,
+                bound_status: NumericalBoundStatusV1::$legacy_bound,
+                boundary_corpus: $legacy_corpus,
+                runtime_matrix: $legacy_matrix,
+                fallback_status: $legacy_fallback,
+            }),+
+        ];
+
+        const NUMERICAL_REGISTRY_V2: &[NumericalSiteRecordV2] = &[
+            $(NumericalSiteRecordV2 {
+                site_id: NumericalSiteIdV2::$legacy_variant,
+                operations: $legacy_operations,
+                domain: $legacy_domain,
+                branch_effect: $legacy_branch_effect,
+                stable_outcomes: &[$(StableNumericalOutcomeV2::$legacy_stable),+],
+                compatibility_releases: &[$($legacy_release),*],
+                evidence_classes: &[$(NumericalEvidenceClassV2::$legacy_evidence),*],
+                artifact_ids: &[],
+                bound_ids: &[],
+                proof_ids: &[],
+                runtime_attestations: &[],
+                bound_status: NumericalBoundStatusV2::$legacy_bound,
+                boundary_corpus: $legacy_corpus,
+                runtime_matrix: $legacy_matrix,
+                fallback_status: $legacy_fallback,
+            }),+,
+            $(NumericalSiteRecordV2 {
+                site_id: NumericalSiteIdV2::$proof_variant,
+                operations: $proof_operations,
+                domain: $proof_domain,
+                branch_effect: $proof_branch_effect,
+                stable_outcomes: &[$(StableNumericalOutcomeV2::$proof_stable),+],
+                compatibility_releases: &[$($proof_release),*],
+                evidence_classes: &[$(NumericalEvidenceClassV2::$proof_evidence),+],
+                artifact_ids: &[$($proof_artifact),+],
+                bound_ids: &[$($proof_bound_id),+],
+                proof_ids: &[$($proof_id),+],
+                runtime_attestations: &[],
+                bound_status: NumericalBoundStatusV2::$proof_bound,
+                boundary_corpus: $proof_corpus,
+                runtime_matrix: $proof_matrix,
+                fallback_status: $proof_fallback,
             }),+
         ];
     };
 }
 
-define_numerical_registry_v1! {
-    /// Glow: первый state, достигший target, либо глобальный максимум.
-    GlowTargetOrMaximumV1 => {
-        key: "glow-target-or-maximum-v1",
-        operations: "CAM16 forward powf; CAM16-UCS J-prime; abs; target >=; maximum ordering",
-        domain: "encoded sRGB8 point screen states -> diagnostic CAM16-UCS delta J-prime",
-        branch_effect: "first reached state versus global maximum and reached/unreachable status",
-        stable_outcomes: [
-            StableNumericalOutcomeV1::BitExact,
-            StableNumericalOutcomeV1::Indeterminate,
-        ],
-        compatibility_releases: [
-            NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
-        ],
-        evidence_classes: [NumericalEvidenceClassV1::BitExact],
-        bound_status: NumericalBoundStatusV1::Unavailable,
-        boundary_corpus: "glow stable-indeterminate; exact no-op; finite-state compositor; half-tie alpha",
-        runtime_matrix: "active: native x86_64 + wasm32; native arm64 required before any cross-runtime CAM16 decision claim; exact bytes only for compositor",
-        fallback_status: NumericalFallbackStatusV1::None,
-    },
+define_numerical_registries! {
+    legacy {
+        /// Glow: первый state, достигший target, либо глобальный максимум.
+        GlowTargetOrMaximumV1 => {
+            key: "glow-target-or-maximum-v1",
+            operations: "CAM16 forward powf; CAM16-UCS J-prime; abs; target >=; maximum ordering",
+            domain: "encoded sRGB8 point screen states -> diagnostic CAM16-UCS delta J-prime",
+            branch_effect: "first reached state versus global maximum and reached/unreachable status",
+            stable_outcomes: [BitExact, Indeterminate],
+            compatibility_releases: [
+                NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
+            ],
+            evidence_classes: [BitExact],
+            bound_status: Unavailable,
+            boundary_corpus: "glow stable-indeterminate; exact no-op; finite-state compositor; half-tie alpha",
+            runtime_matrix: "active: native x86_64 + wasm32; native arm64 required before any cross-runtime CAM16 decision claim; exact bytes only for compositor",
+            fallback_status: NumericalFallbackStatusV1::None,
+        },
+    }
+    proof {
+        /// WCAG 2.2 assessment of one final sRGB8 pair.
+        Wcag22Srgb8ContrastV1 => {
+            key: "wcag22-srgb8-contrast-v1",
+            operations: "integer threshold laws over Q55 outward luminance bounds; both orientations",
+            domain: "final foreground/background sRGB8 pair + explicit criterion -> atomic assessment",
+            branch_effect: "proved Pass versus proved Fail; full-domain proof rejects unresolved artifact",
+            stable_outcomes: [CanonicalFiniteBounded],
+            compatibility_releases: [],
+            evidence_classes: [CanonicalFiniteBounded],
+            artifact_ids: [NumericalArtifactIdV2::Wcag22Srgb8LuminanceQ55V1],
+            bound_ids: [NumericalErrorBoundIdV2::Wcag22Srgb8OutwardQ55V1],
+            proof_ids: [NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1],
+            bound_status: Available,
+            boundary_corpus: "anti-epsilon witnesses; exact 21:1; threshold-equality; full 16.7M domain scan",
+            runtime_matrix: "native + wasm32 integer-only comparisons; adapters transport terminal results",
+            fallback_status: NumericalFallbackStatusV1::None,
+        },
+    }
 }
 
 /// Registry уже мигрированных typed-decision sites V1.
@@ -317,7 +436,8 @@ define_numerical_registry_v1! {
 /// Это не заявление о завершённом аудите старых `f64` branches: его владелец —
 /// #291. Новый site, переводимый на stable typed decision, обязан получить
 /// строку до изменения runtime behavior.
-pub fn numerical_registry_v1() -> &'static [NumericalSiteRecordV1] {
+#[cfg(test)]
+pub(crate) fn numerical_registry_v1() -> &'static [NumericalSiteRecordV1] {
     NUMERICAL_REGISTRY_V1
 }
 
@@ -328,84 +448,7 @@ pub(crate) fn registry_row(site_id: NumericalSiteIdV1) -> Option<&'static Numeri
         .find(|row| row.site_id == site_id)
 }
 
-// ── Package capability manifest (#289) ──────────────────────────────────────
-
-/// Версия capability-схемы. Независима от версий conformance pack и
-/// release-manifest (три разных version domain, #289).
-pub const NUMERICAL_CAPABILITY_SCHEMA_VERSION_V1: u32 = 1;
-
-/// Домен-сепаратор canonical checksum preimage.
-const CAPABILITY_CHECKSUM_DOMAIN_V1: &[u8] = b"labcolors.numerical-capability.v1";
-
-/// Покрытие registry данным manifest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum NumericalRegistryCoverageV1 {
-    /// Перечислены только уже мигрированные sites (не весь core).
-    MigratedSitesOnlyV1,
-}
-
-impl NumericalRegistryCoverageV1 {
-    /// Стабильный manifest key. `CompleteV1` недоступен до закрытия #291 и
-    /// потому отсутствует в типе V1.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::MigratedSitesOnlyV1 => "migrated-sites-only-v1",
-        }
-    }
-}
-
-/// Capability одного site — проекция registry-строки без research-текстов и
-/// без выбранного mode (manifest описывает возможности сборки, не выбор клиента).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NumericalSiteCapabilityV1 {
-    /// Site identity.
-    pub site_id: NumericalSiteIdV1,
-    /// Lawful stable outcomes.
-    pub stable_outcomes: &'static [StableNumericalOutcomeV1],
-    /// Registered compatibility releases.
-    pub compatibility_releases: &'static [NumericalCompatibilityReleaseIdV1],
-    /// Минтимые классы evidence.
-    pub evidence_classes: &'static [NumericalEvidenceClassV1],
-    /// Canonical finite artifacts (пусто в V1).
-    pub artifact_ids: &'static [NumericalArtifactIdV1],
-    /// Registered error bounds (пусто в V1).
-    pub bound_ids: &'static [NumericalErrorBoundIdV1],
-    /// Runtime attestations (пусто до #258).
-    pub runtime_attestations: &'static [NumericalRuntimeAttestationIdV1],
-}
-
-/// Переносимый drift-checksum typed capability projection — НЕ
-/// security/certificate/cache identity: exact rows остаются authority, а
-/// SHA-256 сырых байтов полного artifact — отдельная integrity-гарантия.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NumericalCapabilityChecksumV1(u32);
-
-impl NumericalCapabilityChecksumV1 {
-    /// FNV-1a-32 canonical preimage (dependency-free, как `packDigest`).
-    pub fn from_preimage(preimage: &[u8]) -> Self {
-        Self(crate::hash::fnv1a_32(preimage))
-    }
-
-    /// Каноническая 8-hex запись (lowercase).
-    pub fn hex(self) -> String {
-        format!("{:08x}", self.0)
-    }
-}
-
-/// Package capability manifest: статическое свойство сборки. Не содержит
-/// выбранного mode; rows генерируются только из core registry SSOT.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NumericalCapabilityManifestV1 {
-    /// Версия capability-схемы.
-    pub schema_version: u32,
-    /// Покрытие registry.
-    pub coverage: NumericalRegistryCoverageV1,
-    /// Capability rows, отсортированные по UTF-8 bytes `site_id.key()`.
-    pub sites: Vec<NumericalSiteCapabilityV1>,
-    /// Drift-checksum canonical projection.
-    pub checksum: NumericalCapabilityChecksumV1,
-}
+// ── Package capability manifest encoding (#289) ─────────────────────────────
 
 /// Length-prefixed запись: u32 LE длина + байты. Единый примитив canonical
 /// encoding manifest/plan (versioned контракт, не JSON).
@@ -425,17 +468,257 @@ fn push_sorted_key_list(buffer: &mut Vec<u8>, keys: &mut Vec<&'static str>) {
     }
 }
 
-impl NumericalCapabilityManifestV1 {
-    /// Canonical checksum preimage (#289): versioned length-prefixed binary
-    /// encoding. В preimage НЕ входят checksum, config/plan, версии
-    /// core/conformance/release, счётчики векторов, JSON-форматирование и
-    /// human-readable research-тексты.
+// ── Proof-capable package capability manifest V2 (#284) ────────────────────
+
+/// Версия единственной публичной proof-capable capability-схемы.
+pub const NUMERICAL_CAPABILITY_SCHEMA_VERSION_V2: u32 = 2;
+
+/// Домен-сепаратор canonical checksum preimage V2.
+const CAPABILITY_CHECKSUM_DOMAIN_V2: &[u8] = b"labcolors.numerical-capability.v2";
+
+/// Stable outcomes admitted by the proof-capable V2 registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StableNumericalOutcomeV2 {
+    /// Determinate branch follows from exact finite/integer/rational evidence.
+    BitExact,
+    /// Determinate branch follows from a canonical finite outward-bound artifact.
+    CanonicalFiniteBounded,
+    /// No semantic branch is selected.
+    Indeterminate,
+}
+
+impl StableNumericalOutcomeV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::BitExact => "bit-exact",
+            Self::CanonicalFiniteBounded => "canonical-finite-bounded",
+            Self::Indeterminate => "indeterminate",
+        }
+    }
+}
+
+/// Sound-bound availability in the V2 registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalBoundStatusV2 {
+    /// Registered sound bound is shipped and independently verified.
+    Available,
+    /// No sound bound has been admitted.
+    Unavailable,
+}
+
+impl NumericalBoundStatusV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Evidence classes the V2 package can mint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalEvidenceClassV2 {
+    /// Exact decision over finite/integer state.
+    BitExact,
+    /// Decision from a registered canonical finite artifact and outward law.
+    CanonicalFiniteBounded,
+}
+
+impl NumericalEvidenceClassV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::BitExact => "bit-exact",
+            Self::CanonicalFiniteBounded => "canonical-finite-bounded",
+        }
+    }
+}
+
+/// Canonical finite artifact identities admitted by V2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalArtifactIdV2 {
+    /// Q55 outward tables for WCAG 2.2 sRGB8 relative luminance.
+    Wcag22Srgb8LuminanceQ55V1,
+}
+
+impl NumericalArtifactIdV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Wcag22Srgb8LuminanceQ55V1 => "wcag22-srgb8-luminance-q55-v1",
+        }
+    }
+}
+
+/// Registered error-bound identities admitted by V2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalErrorBoundIdV2 {
+    /// Integer Q55 outward-bound and threshold laws for WCAG 3.0/4.5.
+    Wcag22Srgb8OutwardQ55V1,
+}
+
+impl NumericalErrorBoundIdV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Wcag22Srgb8OutwardQ55V1 => "wcag22-srgb8-outward-q55-v1",
+        }
+    }
+}
+
+/// Replayable proof identities admitted by V2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalProofIdV2 {
+    /// Full sRGB8-domain proof with zero unresolved WCAG 3.0/4.5 decisions.
+    Wcag22Srgb8FullDomainQ55V1,
+}
+
+impl NumericalProofIdV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Wcag22Srgb8FullDomainQ55V1 => "wcag22-srgb8-full-domain-q55-v1",
+        }
+    }
+}
+
+/// Runtime attestation identities admitted by V2. Empty until #258.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalRuntimeAttestationIdV2 {}
+
+impl NumericalRuntimeAttestationIdV2 {
+    /// Stable manifest key (unreachable while the type is uninhabited).
+    pub fn key(self) -> &'static str {
+        match self {}
+    }
+}
+
+/// Machine-readable proof-capable registry row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NumericalSiteRecordV2 {
+    /// Stable site identity.
+    pub site_id: NumericalSiteIdV2,
+    /// Branch-sensitive operations (research metadata).
+    pub operations: &'static str,
+    /// Input/output domain (research metadata).
+    pub domain: &'static str,
+    /// Semantic branch affected by the value (research metadata).
+    pub branch_effect: &'static str,
+    /// Lawful stable outcomes.
+    pub stable_outcomes: &'static [StableNumericalOutcomeV2],
+    /// Registered compatibility releases.
+    pub compatibility_releases: &'static [NumericalCompatibilityReleaseIdV1],
+    /// Evidence classes mintable for the site.
+    pub evidence_classes: &'static [NumericalEvidenceClassV2],
+    /// Canonical finite artifacts.
+    pub artifact_ids: &'static [NumericalArtifactIdV2],
+    /// Registered error bounds.
+    pub bound_ids: &'static [NumericalErrorBoundIdV2],
+    /// Replayable proof artifacts.
+    pub proof_ids: &'static [NumericalProofIdV2],
+    /// Runtime attestations (empty until #258).
+    pub runtime_attestations: &'static [NumericalRuntimeAttestationIdV2],
+    /// Sound-bound availability (research metadata).
+    pub bound_status: NumericalBoundStatusV2,
+    /// Executable boundary corpus identifiers (research metadata).
+    pub boundary_corpus: &'static str,
+    /// Required cross-runtime comparison scope (research metadata).
+    pub runtime_matrix: &'static str,
+    /// Fallback status.
+    pub fallback_status: NumericalFallbackStatusV1,
+}
+
+/// Registry of proof-capable typed-decision sites.
+pub fn numerical_registry_v2() -> &'static [NumericalSiteRecordV2] {
+    NUMERICAL_REGISTRY_V2
+}
+
+/// V2 registry coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NumericalRegistryCoverageV2 {
+    /// Only migrated sites are listed; this is not a whole-core audit claim.
+    MigratedSitesOnlyV1,
+}
+
+impl NumericalRegistryCoverageV2 {
+    /// Stable manifest key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::MigratedSitesOnlyV1 => "migrated-sites-only-v1",
+        }
+    }
+}
+
+/// Proof-capable capability projection for one V2 registry site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NumericalSiteCapabilityV2 {
+    /// Site identity.
+    pub site_id: NumericalSiteIdV2,
+    /// Lawful stable outcomes.
+    pub stable_outcomes: &'static [StableNumericalOutcomeV2],
+    /// Registered compatibility releases.
+    pub compatibility_releases: &'static [NumericalCompatibilityReleaseIdV1],
+    /// Mintable evidence classes.
+    pub evidence_classes: &'static [NumericalEvidenceClassV2],
+    /// Canonical finite artifacts.
+    pub artifact_ids: &'static [NumericalArtifactIdV2],
+    /// Registered error bounds.
+    pub bound_ids: &'static [NumericalErrorBoundIdV2],
+    /// Replayable proof artifacts.
+    pub proof_ids: &'static [NumericalProofIdV2],
+    /// Runtime attestations.
+    pub runtime_attestations: &'static [NumericalRuntimeAttestationIdV2],
+}
+
+/// Drift checksum for the V2 canonical capability projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NumericalCapabilityChecksumV2(u32);
+
+impl NumericalCapabilityChecksumV2 {
+    /// FNV-1a-32 over the V2 canonical preimage.
+    pub fn from_preimage(preimage: &[u8]) -> Self {
+        Self(crate::hash::fnv1a_32(preimage))
+    }
+
+    /// Canonical lowercase eight-hex representation.
+    pub fn hex(self) -> String {
+        format!("{:08x}", self.0)
+    }
+}
+
+/// Proof-capable package manifest generated only from the V2 registry SSOT.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumericalCapabilityManifestV2 {
+    /// Capability schema version.
+    pub schema_version: u32,
+    /// Registry coverage.
+    pub coverage: NumericalRegistryCoverageV2,
+    /// Canonically sorted site capabilities.
+    pub sites: Vec<NumericalSiteCapabilityV2>,
+    /// Drift checksum of the canonical projection.
+    pub checksum: NumericalCapabilityChecksumV2,
+}
+
+impl NumericalCapabilityManifestV2 {
+    /// Versioned length-prefixed canonical checksum preimage. `proof_ids`
+    /// кодируются после `bound_ids` и до runtime attestations.
     pub fn canonical_checksum_preimage(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
-        push_len_prefixed(&mut buffer, CAPABILITY_CHECKSUM_DOMAIN_V1);
+        push_len_prefixed(&mut buffer, CAPABILITY_CHECKSUM_DOMAIN_V2);
         buffer.extend_from_slice(&self.schema_version.to_le_bytes());
         push_len_prefixed(&mut buffer, self.coverage.key().as_bytes());
-        let mut sites: Vec<&NumericalSiteCapabilityV1> = self.sites.iter().collect();
+        let mut sites: Vec<&NumericalSiteCapabilityV2> = self.sites.iter().collect();
         sites.sort_unstable_by_key(|site| site.site_id.key().as_bytes());
         buffer.extend_from_slice(&(sites.len() as u32).to_le_bytes());
         for site in sites {
@@ -466,6 +749,10 @@ impl NumericalCapabilityManifestV1 {
             );
             push_sorted_key_list(
                 &mut buffer,
+                &mut site.proof_ids.iter().map(|v| v.key()).collect(),
+            );
+            push_sorted_key_list(
+                &mut buffer,
                 &mut site.runtime_attestations.iter().map(|v| v.key()).collect(),
             );
         }
@@ -473,30 +760,30 @@ impl NumericalCapabilityManifestV1 {
     }
 }
 
-/// Capability manifest текущей сборки — единственная projection core registry
-/// SSOT. Adapters не держат рукописной копии.
-pub fn numerical_capability_manifest_v1() -> NumericalCapabilityManifestV1 {
-    let mut sites: Vec<NumericalSiteCapabilityV1> = NUMERICAL_REGISTRY_V1
+/// Capability manifest for the proof-capable V2 registry.
+pub fn numerical_capability_manifest_v2() -> NumericalCapabilityManifestV2 {
+    let mut sites: Vec<NumericalSiteCapabilityV2> = NUMERICAL_REGISTRY_V2
         .iter()
-        .map(|row| NumericalSiteCapabilityV1 {
+        .map(|row| NumericalSiteCapabilityV2 {
             site_id: row.site_id,
             stable_outcomes: row.stable_outcomes,
             compatibility_releases: row.compatibility_releases,
             evidence_classes: row.evidence_classes,
             artifact_ids: row.artifact_ids,
             bound_ids: row.bound_ids,
+            proof_ids: row.proof_ids,
             runtime_attestations: row.runtime_attestations,
         })
         .collect();
     sites.sort_unstable_by_key(|site| site.site_id.key().as_bytes());
-    let mut manifest = NumericalCapabilityManifestV1 {
-        schema_version: NUMERICAL_CAPABILITY_SCHEMA_VERSION_V1,
-        coverage: NumericalRegistryCoverageV1::MigratedSitesOnlyV1,
+    let mut manifest = NumericalCapabilityManifestV2 {
+        schema_version: NUMERICAL_CAPABILITY_SCHEMA_VERSION_V2,
+        coverage: NumericalRegistryCoverageV2::MigratedSitesOnlyV1,
         sites,
-        checksum: NumericalCapabilityChecksumV1(0),
+        checksum: NumericalCapabilityChecksumV2(0),
     };
     manifest.checksum =
-        NumericalCapabilityChecksumV1::from_preimage(&manifest.canonical_checksum_preimage());
+        NumericalCapabilityChecksumV2::from_preimage(&manifest.canonical_checksum_preimage());
     manifest
 }
 
@@ -508,8 +795,8 @@ pub fn numerical_capability_manifest_v1() -> NumericalCapabilityManifestV1 {
 /// что истинное значение лежит внутри. Determinate evidence из интервала не
 /// изготовляется: он живёт только внутри
 /// [`NumericalIndeterminacyV1::IntervalOverlap`]. Bounded determinate evidence
-/// вернётся в #284/#291 только вместе с зарегистрированным verifier и
-/// bound/artifact identity.
+/// минтится отдельно только для proof-capable registry V2 и никогда не выводится
+/// из caller-created диагностического интервала.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutwardIntervalV1 {
     lower: f64,
@@ -583,10 +870,9 @@ pub struct EvidenceSeal {
     _private: (),
 }
 
-/// Запечатанное evidence determinate-решения. В V1 минтится только реально
-/// admitted `BitExact`; bounded/canonical-finite варианты появятся вместе с
-/// зарегистрированным verifier и bound/artifact identity (#284/#291) —
-/// фиктивные IDs запрещены.
+/// Запечатанное evidence determinate-решения. Опубликованный BitExact-путь
+/// остаётся привязан к registry V1; новый bounded-вариант может ссылаться
+/// только на proof-capable identity из registry V2.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum NumericalDecisionEvidenceV1 {
@@ -598,6 +884,9 @@ pub enum NumericalDecisionEvidenceV1 {
         /// Печать: внешняя конструкция невозможна (тип поля приватен).
         _seal: EvidenceSeal,
     },
+    /// Решение следует из зарегистрированного canonical finite artifact:
+    /// outward-границы + целочисленные пороговые законы (#284).
+    CanonicalFiniteBounded(crate::wcag22_evidence::CanonicalFiniteBoundedEvidenceV1),
 }
 
 impl NumericalDecisionEvidenceV1 {
@@ -605,6 +894,7 @@ impl NumericalDecisionEvidenceV1 {
     pub fn class_key(&self) -> &'static str {
         match self {
             Self::BitExact { .. } => "bit-exact",
+            Self::CanonicalFiniteBounded(_) => "canonical-finite-bounded",
         }
     }
 }
@@ -658,6 +948,7 @@ fn mint_bit_exact_for_row(
 #[non_exhaustive]
 pub enum NumericalDecisionV1<T> {
     /// Решение принято под запечатанным evidence.
+    #[non_exhaustive]
     Determinate {
         /// Зарегистрированный site.
         site_id: NumericalSiteIdV1,
@@ -667,6 +958,7 @@ pub enum NumericalDecisionV1<T> {
         evidence: NumericalDecisionEvidenceV1,
     },
     /// Явно выбранный зарегистрированный прежний алгоритм.
+    #[non_exhaustive]
     Compatibility {
         /// Зарегистрированный site.
         site_id: NumericalSiteIdV1,
@@ -678,6 +970,7 @@ pub enum NumericalDecisionV1<T> {
         provenance: LegacyPlatformDependentV1,
     },
     /// Stable branch не выбран.
+    #[non_exhaustive]
     Indeterminate {
         /// Зарегистрированный site.
         site_id: NumericalSiteIdV1,
@@ -740,6 +1033,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unified_registry_projects_runtime_glow_and_proof_bound_wcag() {
+        assert_eq!(numerical_registry_v1().len(), 1);
+        let rows = numerical_registry_v2();
+        assert_eq!(rows.len(), 2);
+        let mut site_keys = std::collections::HashSet::new();
+        for row in rows {
+            assert!(
+                site_keys.insert(row.site_id.key()),
+                "duplicate V2 numerical site wire key: {}",
+                row.site_id.key()
+            );
+        }
+        let wcag = rows
+            .iter()
+            .find(|row| row.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1)
+            .expect("WCAG22 site обязан быть зарегистрирован в V2");
+        assert_eq!(
+            wcag.evidence_classes,
+            [NumericalEvidenceClassV2::CanonicalFiniteBounded]
+        );
+        assert_eq!(
+            wcag.artifact_ids,
+            [NumericalArtifactIdV2::Wcag22Srgb8LuminanceQ55V1]
+        );
+        assert_eq!(
+            wcag.bound_ids,
+            [NumericalErrorBoundIdV2::Wcag22Srgb8OutwardQ55V1]
+        );
+        assert_eq!(
+            wcag.proof_ids,
+            [NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1]
+        );
+        assert_eq!(wcag.bound_status, NumericalBoundStatusV2::Available);
+    }
+
     /// Диагностический интервал проверяет только форму.
     #[test]
     fn diagnostic_interval_validates_shape_only() {
@@ -776,9 +1105,9 @@ mod tests {
     /// нечувствителен к порядку rows (сортировка внутри preimage).
     #[test]
     fn capability_checksum_is_canonical_and_tamper_sensitive() {
-        let manifest = numerical_capability_manifest_v1();
+        let manifest = numerical_capability_manifest_v2();
         let recomputed =
-            NumericalCapabilityChecksumV1::from_preimage(&manifest.canonical_checksum_preimage());
+            NumericalCapabilityChecksumV2::from_preimage(&manifest.canonical_checksum_preimage());
         assert_eq!(manifest.checksum, recomputed);
         assert_eq!(manifest.checksum.hex().len(), 8);
 
@@ -786,7 +1115,7 @@ mod tests {
         let mut tampered = manifest.clone();
         tampered.schema_version += 1;
         assert_ne!(
-            NumericalCapabilityChecksumV1::from_preimage(&tampered.canonical_checksum_preimage()),
+            NumericalCapabilityChecksumV2::from_preimage(&tampered.canonical_checksum_preimage()),
             manifest.checksum
         );
 
@@ -794,9 +1123,68 @@ mod tests {
         let mut emptied = manifest.clone();
         emptied.sites.clear();
         assert_ne!(
-            NumericalCapabilityChecksumV1::from_preimage(&emptied.canonical_checksum_preimage()),
+            NumericalCapabilityChecksumV2::from_preimage(&emptied.canonical_checksum_preimage()),
             manifest.checksum
         );
+
+        // Tamper: удаление proof identity меняет checksum независимо от
+        // остальных capability-полей строки.
+        let mut proof_tampered = manifest.clone();
+        let wcag = proof_tampered
+            .sites
+            .iter_mut()
+            .find(|site| site.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1)
+            .expect("WCAG22 capability row");
+        wcag.proof_ids = &[];
+        assert_ne!(
+            NumericalCapabilityChecksumV2::from_preimage(
+                &proof_tampered.canonical_checksum_preimage()
+            ),
+            manifest.checksum
+        );
+    }
+
+    /// Exact independent oracle for the `proof_ids` list position and bytes.
+    /// This intentionally does not call either production encoding helper.
+    #[test]
+    fn proof_ids_have_independent_canonical_encoding_guard() {
+        fn push_expected_len_prefixed(buffer: &mut Vec<u8>, value: &[u8]) {
+            buffer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(value);
+        }
+
+        let manifest = NumericalCapabilityManifestV2 {
+            schema_version: 2,
+            coverage: NumericalRegistryCoverageV2::MigratedSitesOnlyV1,
+            sites: vec![NumericalSiteCapabilityV2 {
+                site_id: NumericalSiteIdV2::Wcag22Srgb8ContrastV1,
+                stable_outcomes: &[],
+                compatibility_releases: &[],
+                evidence_classes: &[],
+                artifact_ids: &[],
+                bound_ids: &[],
+                proof_ids: &[NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1],
+                runtime_attestations: &[],
+            }],
+            checksum: NumericalCapabilityChecksumV2(0),
+        };
+
+        let mut expected = Vec::new();
+        push_expected_len_prefixed(&mut expected, b"labcolors.numerical-capability.v2");
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        push_expected_len_prefixed(&mut expected, b"migrated-sites-only-v1");
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        push_expected_len_prefixed(&mut expected, b"wcag22-srgb8-contrast-v1");
+        // stable outcomes, releases, evidence, artifacts, then bounds.
+        for _ in 0..5 {
+            expected.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        push_expected_len_prefixed(&mut expected, b"wcag22-srgb8-full-domain-q55-v1");
+        // runtime attestations follow proof IDs.
+        expected.extend_from_slice(&0_u32.to_le_bytes());
+
+        assert_eq!(manifest.canonical_checksum_preimage(), expected);
     }
 }
 
@@ -849,37 +1237,46 @@ mod red_292_tests {
         ));
     }
 
-    /// RED #292/#289: capability manifest — core registry projection с
-    /// каноническим checksum; coverage MigratedSitesOnlyV1, mode отсутствует.
+    /// RED #292/#289/#284: единственный capability manifest — proof-capable
+    /// V2 projection с каноническим checksum; выбранный mode отсутствует.
     #[test]
     fn capability_manifest_is_canonical_registry_projection() {
-        let manifest = numerical_capability_manifest_v1();
+        let manifest = numerical_capability_manifest_v2();
         assert!(matches!(
             manifest.coverage,
-            NumericalRegistryCoverageV1::MigratedSitesOnlyV1
+            NumericalRegistryCoverageV2::MigratedSitesOnlyV1
         ));
-        assert_eq!(manifest.sites.len(), 1);
-        let site = &manifest.sites[0];
-        assert_eq!(site.site_id, NumericalSiteIdV1::GlowTargetOrMaximumV1);
+        assert_eq!(manifest.sites.len(), 2);
+        let site = manifest
+            .sites
+            .iter()
+            .find(|site| site.site_id == NumericalSiteIdV2::GlowTargetOrMaximumV1)
+            .expect("Glow capability row");
+        assert_eq!(site.site_id, NumericalSiteIdV2::GlowTargetOrMaximumV1);
         assert_eq!(
             site.stable_outcomes,
             [
-                StableNumericalOutcomeV1::BitExact,
-                StableNumericalOutcomeV1::Indeterminate,
+                StableNumericalOutcomeV2::BitExact,
+                StableNumericalOutcomeV2::Indeterminate,
             ]
         );
         assert_eq!(
             site.compatibility_releases,
             [NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,]
         );
-        assert_eq!(site.evidence_classes, [NumericalEvidenceClassV1::BitExact]);
+        assert_eq!(site.evidence_classes, [NumericalEvidenceClassV2::BitExact]);
         assert!(site.artifact_ids.is_empty());
         assert!(site.bound_ids.is_empty());
+        assert!(site.proof_ids.is_empty());
         assert!(site.runtime_attestations.is_empty());
         // Checksum детерминирован и воспроизводим из canonical preimage.
+        assert!(manifest.sites.iter().any(|site| {
+            site.site_id == NumericalSiteIdV2::Wcag22Srgb8ContrastV1
+                && site.proof_ids == [NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1]
+        }));
         assert_eq!(
             manifest.checksum,
-            NumericalCapabilityChecksumV1::from_preimage(&manifest.canonical_checksum_preimage())
+            NumericalCapabilityChecksumV2::from_preimage(&manifest.canonical_checksum_preimage())
         );
     }
 

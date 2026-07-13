@@ -18,6 +18,8 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { validateWcag22EvidenceArtifacts } from "../../../scripts/verify-package-release.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
@@ -196,6 +198,20 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.doesNotMatch(ci, /chromedriver-bb6facf4ea9511f6|Pre-seeded wasm-pack/);
   assert.match(ci, /CHROME_ROOT="\$RUNNER_TEMP\/chrome-\$GITHUB_JOB"/);
   assert.match(ci, /DEPS_DIR="\$RUNNER_TEMP\/chrome-deps-\$GITHUB_JOB"/);
+  assert.match(ci, /APT_LISTS="\$DEPS_DIR\/apt-lists"/);
+  assert.match(ci, /APT_CACHE="\$DEPS_DIR\/apt-cache"/);
+  assert.match(ci, /Dir::State::lists=\$APT_LISTS/);
+  assert.match(ci, /Dir::State::status=\/var\/lib\/dpkg\/status/);
+  assert.match(ci, /Dir::Cache=\$APT_CACHE/);
+  assert.match(ci, /Dir::Cache::archives=\$APT_CACHE\/archives/);
+  assert.match(ci, /Debug::NoLocking=1/);
+  assert.match(ci, /Acquire::Retries=3/);
+  const aptUpdate = ci.indexOf('apt-get "${APT_OPTIONS[@]}" update');
+  const aptDownload = ci.indexOf('apt-get "${APT_OPTIONS[@]}" download');
+  assert.ok(
+    aptUpdate >= 0 && aptDownload >= 0 && aptUpdate < aptDownload,
+    "Chrome dependency download must use a fresh isolated APT index",
+  );
   assert.match(ci, /CHROME_BIN_DIR="\$RUNNER_TEMP\/chrome-bin-\$GITHUB_JOB"/);
   assert.doesNotMatch(ci, /\$HOME|~\//, "WASM/Chrome state must not leak into shared HOME");
   assert.match(
@@ -720,10 +736,291 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   assert.match(verifier, /familySetSha256: sha256\(Buffer\.concat\(familyBuffers\)\)/);
   assert.match(verifier, /sha256: sha256\(familyBuffers\[index\]\)/);
   assert.match(verifier, /numericalCapabilities: conformance\.numericalCapabilities/);
+  assert.match(
+    verifier,
+    /CAPABILITY_CHECKSUM_DOMAIN_V2 = "labcolors\.numerical-capability\.v2"/,
+  );
+  assert.match(verifier, /capabilities\.schemaVersion !== 2/);
   assert.doesNotMatch(
     verifier,
     /numericalCapabilities:\s*\{\s*"/,
     "release manifest must copy the generated capability manifest, not duplicate it",
+  );
+});
+
+test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
+  const budgetPath = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
+  const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
+  const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
+
+  assert.equal(budget.schemaVersion, 1);
+  assert.equal(budget.budgetId, "labcolors-wasm-raw-issue-284-v1");
+  assert.equal(budget.measurement.issue, 284);
+  assert.equal(budget.measurement.rustToolchain, "1.96.0");
+  assert.equal(budget.measurement.wasmPack, "0.13.1");
+  assert.equal(budget.measurement.target, "wasm32-unknown-unknown");
+  assert.equal(budget.measurement.cargoProfile, "release");
+  assert.equal(budget.measurement.wasmOpt, "-Oz");
+  assert.equal(budget.measurement.rawBytes, 454385);
+  assert.equal(budget.policy.maxRawBytes, 454385);
+  assert.equal(
+    budget.measurement.sha256,
+    "94c61c1689fa2e1c10d79817864471f41c623463bd9b5b4e0dac2a850a58f09f",
+  );
+  assert.equal(budget.measurement.measurementPlatform, "linux-x64");
+  assert.deepEqual(budget.measurement.rustPathRemap, [
+    "GITHUB_WORKSPACE=/workspace/lab-colors",
+    "CARGO_HOME=/cargo-home",
+  ]);
+  assert.equal(budget.policy.derivation, "exact-accepted-issue-284-measurement");
+  assert.equal(budget.policy.gzip, "diagnostic-only");
+  const ci = read(".github", "workflows", "ci.yml");
+  assert.match(ci, /name: enforce measured WASM raw-byte budget/);
+  assert.match(ci, /run: node scripts\/check-wasm-size-budget\.mjs/);
+  assert.doesNotMatch(ci, /Not a hard gate yet/);
+  const wasmJob = ci.match(/\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n)/u)?.groups?.body;
+  assert.ok(wasmJob, "CI must contain a bounded wasm job");
+  assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
+  assert.match(wasmJob, /CARGO_ENCODED_RUSTFLAGS/u);
+  assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);
+  assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
+
+  const builtWasm = readFileSync(
+    join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
+  ).toString("latin1");
+  assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
+  assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
+  assert.doesNotMatch(builtWasm, /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u);
+
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-"));
+  try {
+    const wasm = join(temporary, "fixture.wasm");
+    const fixtureBudget = join(temporary, "budget.json");
+    const bytes = Buffer.alloc(8);
+    bytes.set([0x00, 0x61, 0x73, 0x6d]);
+    writeFileSync(wasm, bytes);
+    writeFileSync(
+      fixtureBudget,
+      `${JSON.stringify({
+        ...budget,
+        measurement: {
+          ...budget.measurement,
+          rawBytes: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          measurementPlatform: `${process.platform}-${process.arch}`,
+        },
+        policy: { ...budget.policy, maxRawBytes: bytes.length },
+      })}\n`,
+    );
+
+    const run = () => execFileSync(
+      process.execPath,
+      [checkerPath, "--wasm", wasm, "--budget", fixtureBudget],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    assert.match(run(), /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B/u);
+
+    const canonicalFixtureBudget = readFileSync(fixtureBudget, "utf8");
+    const wrongLengthBudget = JSON.parse(canonicalFixtureBudget);
+    wrongLengthBudget.measurement.rawBytes = bytes.length + 1;
+    wrongLengthBudget.policy.maxRawBytes = bytes.length + 1;
+    writeFileSync(fixtureBudget, `${JSON.stringify(wrongLengthBudget)}\n`);
+    assert.throws(
+      run,
+      (error) => {
+        assert.match(error.stderr.toString(), /canonical artifact raw-byte mismatch/u);
+        return true;
+      },
+      "canonical host must reject measurement metadata with the wrong raw length",
+    );
+    writeFileSync(fixtureBudget, canonicalFixtureBudget);
+
+    const sameSizeDifferentArtifact = Buffer.from(bytes);
+    sameSizeDifferentArtifact[7] = 1;
+    writeFileSync(wasm, sameSizeDifferentArtifact);
+    assert.throws(
+      run,
+      (error) => {
+        assert.match(error.stderr.toString(), /canonical artifact SHA-256 mismatch/u);
+        return true;
+      },
+      "canonical host must reject a same-size artifact with different bytes",
+    );
+
+    writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
+    assert.throws(
+      run,
+      (error) => {
+        assert.match(error.stderr.toString(), /raw=9B exceeds ceiling=8B by=1B/u);
+        return true;
+      },
+      "canonical ceiling + 1 byte must hard-fail",
+    );
+
+    const nonCanonicalBudget = JSON.parse(readFileSync(fixtureBudget, "utf8"));
+    nonCanonicalBudget.measurement.measurementPlatform =
+      `${process.platform}-${process.arch}` === "linux-x64"
+        ? "darwin-arm64"
+        : "linux-x64";
+    writeFileSync(fixtureBudget, `${JSON.stringify(nonCanonicalBudget)}\n`);
+    writeFileSync(wasm, sameSizeDifferentArtifact);
+    assert.match(
+      run(),
+      /DIAGNOSTIC raw=8B canonical-ceiling=8B delta=\+0B gzip=\d+B .*baseline-sha=different/u,
+      "non-canonical host reports diagnostics without claiming byte identity",
+    );
+
+    writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
+    assert.match(
+      run(),
+      /DIAGNOSTIC raw=9B canonical-ceiling=8B delta=\+1B gzip=\d+B .*baseline-sha=different/u,
+      "non-canonical bytes remain diagnostic even above the canonical host ceiling",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("runtime WASM does not duplicate separately shipped WCAG22 evidence documents", () => {
+  const wasm = readFileSync(
+    join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
+  );
+  for (const name of [
+    "wcag22-srgb8-v1.json",
+    "wcag22-srgb8-q55-proof-v1.json",
+  ]) {
+    const evidence = readFileSync(
+      join(root, "crates", "labcolors-core", "contracts", name),
+    );
+    assert.equal(
+      wasm.indexOf(evidence),
+      -1,
+      `${name} belongs in npm evidence/, not the runtime WASM`,
+    );
+  }
+});
+
+test("npm release carries and re-verifies the exact WCAG22 finite evidence", () => {
+  const packageJson = JSON.parse(read("packages", "colors", "package.json"));
+  const evidenceFiles = [
+    "evidence/wcag22-srgb8-v1.json",
+    "evidence/wcag22-srgb8-q55-v1.bin",
+    "evidence/wcag22-srgb8-q55-proof-v1.json",
+  ];
+  for (const path of evidenceFiles) {
+    assert.ok(packageJson.files.includes(path), `npm files omits ${path}`);
+  }
+
+  const artifact = join(
+    root,
+    "crates",
+    "labcolors-core",
+    "contracts",
+    "wcag22-srgb8-q55-v1.bin",
+  );
+  assert.ok(existsSync(artifact), "canonical Q55 binary artifact is absent");
+  assert.equal(lstatSync(artifact).size, 768 * 2 * 8, "artifact must be 1536 little-endian u64s");
+
+  const prepare = read("scripts", "prepare-npm-package.mjs");
+  for (const name of evidenceFiles.map((path) => path.split("/").at(-1))) {
+    assert.match(prepare, new RegExp(name.replaceAll(".", "\\."), "u"));
+  }
+
+  const verifier = read("scripts", "verify-package-release.mjs");
+  assert.match(verifier, /verify_wcag22_q55\.py/);
+  assert.match(verifier, /WCAG22_EVIDENCE_FILES/);
+  const numericalVerifier = read("scripts", "verify_wcag22_q55.py");
+  assert.match(numericalVerifier, /NORMATIVE_PROFILE_V1/);
+  assert.ok(
+    numericalVerifier.includes(String.raw`r'\1"<self-digest>"'`),
+    "facade normalization must preserve the literal regex backreference",
+  );
+  assert.ok(
+    !numericalVerifier.includes(String.raw`rf'\1"<self-digest>"'`),
+    "a replacement without interpolation must not use an f-string",
+  );
+  const conformanceReadme = read("conformance", "README.md");
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `4\.0\.0`/u);
+  assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
+  assert.match(conformanceReadme, /`wcag22\.json`/u);
+  assert.match(
+    conformanceReadme,
+    /contrasts, ladders, alpha, solve, muddiness, wcag22/u,
+  );
+  assert.doesNotMatch(conformanceReadme, /сейчас `3\.0\.0`/u);
+  const workflow = read(".github", "workflows", "ci.yml");
+  assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
+});
+
+test("packed and clean-installed WCAG22 evidence stays byte-exact", async () => {
+  const names = [
+    "wcag22-srgb8-v1.json",
+    "wcag22-srgb8-q55-v1.bin",
+    "wcag22-srgb8-q55-proof-v1.json",
+  ];
+  const contents = names.map((name) =>
+    readFileSync(join(root, "crates", "labcolors-core", "contracts", name))
+  );
+  const expected = names.map((name, index) => ({
+    path: `evidence/${name}`,
+    bytes: contents[index].length,
+    sha256: createHash("sha256").update(contents[index]).digest("hex"),
+  }));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-evidence-boundary-"));
+  try {
+    const evidenceDir = join(temporary, "evidence");
+    mkdirSync(evidenceDir);
+    for (const [index, name] of names.entries()) {
+      writeFileSync(join(evidenceDir, name), contents[index]);
+    }
+    await assert.doesNotReject(
+      validateWcag22EvidenceArtifacts(temporary, expected, "fixture"),
+    );
+
+    const corrupted = Buffer.from(contents[0]);
+    corrupted[0] ^= 1;
+    writeFileSync(join(evidenceDir, names[0]), corrupted);
+    await assert.rejects(
+      validateWcag22EvidenceArtifacts(temporary, expected, "fixture"),
+      /fixture WCAG22 evidence bytes differ/u,
+      "same-length evidence corruption must fail",
+    );
+
+    writeFileSync(join(evidenceDir, names[0]), contents[0]);
+    const wrongDigest = structuredClone(expected);
+    wrongDigest[0].sha256 = "0".repeat(64);
+    await assert.rejects(
+      validateWcag22EvidenceArtifacts(temporary, wrongDigest, "fixture"),
+      /fixture WCAG22 evidence metadata differs/u,
+      "expected digest drift must fail independently of the byte comparison",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+
+  const verifier = read("scripts", "verify-package-release.mjs");
+  assert.match(
+    verifier,
+    /validatePackedWcag22Evidence\(canonicalPack\.path, wcag22Evidence\.artifacts\)/u,
+  );
+  assert.match(
+    verifier,
+    /verifyCleanConsumer\([\s\S]*?wcag22Evidence\.artifacts[\s\S]*?\);/u,
+  );
+});
+
+test("Swift capability mirror transports proof IDs in the canonical checksum order", () => {
+  const swift = read(
+    "bindings",
+    "swift",
+    "Tests",
+    "LabColorsConformanceTests",
+    "ConformanceTests.swift",
+  );
+  assert.match(swift, /let proofIds: \[String\]/);
+  assert.match(
+    swift,
+    /pushSortedKeyList\(site\.boundIds\)\s+pushSortedKeyList\(site\.proofIds\)\s+pushSortedKeyList\(site\.runtimeAttestations\)/u,
   );
 });
 

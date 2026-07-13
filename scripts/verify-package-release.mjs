@@ -24,12 +24,19 @@ const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
 const ROOT_CARGO = resolve(REPO_ROOT, "Cargo.toml");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_MANIFEST = resolve(CONFORMANCE_DIR, "manifest.json");
+const WCAG22_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
+const WCAG22_EVIDENCE_FILES = [
+  "wcag22-srgb8-v1.json",
+  "wcag22-srgb8-q55-v1.bin",
+  "wcag22-srgb8-q55-proof-v1.json",
+];
 const CONFORMANCE_FAMILY_FILES = [
   "contrasts.json",
   "ladders.json",
   "alpha.json",
   "solve.json",
   "muddiness.json",
+  "wcag22.json",
 ];
 const WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
 
@@ -101,6 +108,130 @@ async function hashedArtifact(path, displayPath) {
   const bytes = await readFile(path);
   if (bytes.length === 0) fail(`${displayPath} is empty`);
   return { path: displayPath, bytes: bytes.length, sha256: sha256(bytes) };
+}
+
+export async function validateWcag22EvidenceArtifacts(
+  root,
+  expectedArtifacts,
+  label,
+) {
+  const allowedPaths = WCAG22_EVIDENCE_FILES.map((file) => `evidence/${file}`);
+  if (!Array.isArray(expectedArtifacts) || expectedArtifacts.length !== allowedPaths.length) {
+    fail(`${label} WCAG22 evidence expectation must contain ${allowedPaths.length} artifacts`);
+  }
+  const expectedByPath = new Map();
+  for (const artifact of expectedArtifacts) {
+    if (
+      !allowedPaths.includes(artifact?.path) ||
+      !Number.isSafeInteger(artifact?.bytes) ||
+      artifact.bytes <= 0 ||
+      !/^[0-9a-f]{64}$/u.test(artifact?.sha256 ?? "") ||
+      expectedByPath.has(artifact.path)
+    ) {
+      fail(`${label} has malformed or duplicate WCAG22 evidence metadata`);
+    }
+    expectedByPath.set(artifact.path, artifact);
+  }
+
+  const actualArtifacts = [];
+  for (const file of WCAG22_EVIDENCE_FILES) {
+    const displayPath = `evidence/${file}`;
+    const expected = expectedByPath.get(displayPath);
+    if (!expected) fail(`${label} lacks expected WCAG22 evidence metadata: ${displayPath}`);
+    const [canonical, actual] = await Promise.all([
+      readFile(resolve(WCAG22_CONTRACT_DIR, file)),
+      readFile(resolve(root, "evidence", file)),
+    ]);
+    if (!actual.equals(canonical)) {
+      fail(`${label} WCAG22 evidence bytes differ from canonical source: ${displayPath}`);
+    }
+    const metadata = {
+      path: displayPath,
+      bytes: actual.length,
+      sha256: sha256(actual),
+    };
+    if (metadata.bytes !== expected.bytes || metadata.sha256 !== expected.sha256) {
+      fail(
+        `${label} WCAG22 evidence metadata differs for ${displayPath}: ` +
+          `expected ${expected.bytes}B/${expected.sha256}, ` +
+          `actual ${metadata.bytes}B/${metadata.sha256}`,
+      );
+    }
+    actualArtifacts.push(metadata);
+  }
+  return actualArtifacts;
+}
+
+async function validateWcag22Evidence() {
+  const artifacts = [];
+  for (const file of WCAG22_EVIDENCE_FILES) {
+    artifacts.push(
+      await hashedArtifact(
+        resolve(WCAG22_CONTRACT_DIR, file),
+        `evidence/${file}`,
+      ),
+    );
+  }
+  await validateWcag22EvidenceArtifacts(PACKAGE_DIR, artifacts, "staged package");
+
+  const profilePath = resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[0]);
+  const profileBytes = await readFile(profilePath);
+  const profile = await readJson(profilePath);
+  const binary = await readFile(resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[1]));
+  const proof = await readJson(resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[2]));
+  if (profile.profileId !== "wcag22-srgb8-contrast-v1" || proof.profile_id !== profile.profileId) {
+    fail("WCAG22 profile/proof identity drifted");
+  }
+  if (binary.length !== 768 * 2 * 8) {
+    fail(`WCAG22 Q55 artifact has ${binary.length} bytes, expected 12288`);
+  }
+  if (proof.profile_source_sha256 !== sha256(profileBytes)) {
+    fail("WCAG22 proof does not bind the canonical profile bytes");
+  }
+  if (proof.artifact_sha256 !== sha256(binary)) {
+    fail("WCAG22 proof does not bind the canonical Q55 artifact bytes");
+  }
+  if (
+    proof.artifact_id !== "wcag22-srgb8-luminance-q55-v1" ||
+    proof.bound_id !== "wcag22-srgb8-outward-q55-v1" ||
+    proof.proof_id !== "wcag22-srgb8-full-domain-q55-v1" ||
+    proof.kernel_id !== "wcag22-srgb8-evaluation-kernel-v1" ||
+    proof.terminal_evidence_id !== "wcag22-srgb8-terminal-evidence-v1" ||
+    proof.parser_id !== "encoded-srgb8-hex-parser-v1" ||
+    proof.facade_id !== "wcag22-srgb8-public-facade-v1" ||
+    proof.declared_operation_law !==
+      "final-srgb8-outward-q55-two-orientation-integer-threshold-v1"
+  ) {
+    fail("WCAG22 proof typed identity or operation law drifted");
+  }
+  if (!/^[0-9a-f]{8}$/u.test(proof.profile_checksum ?? "")) {
+    fail("WCAG22 proof lacks a typed profile checksum");
+  }
+  if (!/^[0-9a-f]{64}$/u.test(proof.crate_lib_source_sha256 ?? "")) {
+    fail("WCAG22 proof lacks the proof-bound crate-root digest");
+  }
+  if (proof.rows !== 768 || proof.artifact_words !== 1536 || proof.colors !== 16_777_216) {
+    fail("WCAG22 proof has incomplete row or finite-domain coverage");
+  }
+  if (
+    !Array.isArray(proof.thresholds) ||
+    proof.thresholds.length !== 2 ||
+    !proof.thresholds.every((threshold) => threshold.unresolved === 0)
+  ) {
+    fail("WCAG22 proof contains an unresolved supported threshold");
+  }
+  return {
+    profileId: profile.profileId,
+    profileChecksum: proof.profile_checksum,
+    artifactId: proof.artifact_id,
+    boundId: proof.bound_id,
+    proofId: proof.proof_id,
+    kernelId: proof.kernel_id,
+    terminalEvidenceId: proof.terminal_evidence_id,
+    parserId: proof.parser_id,
+    facadeId: proof.facade_id,
+    artifacts,
+  };
 }
 
 export function validateBuildMetadata(
@@ -212,6 +343,20 @@ async function packInto(destination, packageJson) {
   return { path: resolve(destination, tarballName), tarballName };
 }
 
+async function validatePackedWcag22Evidence(tarballPath, expectedArtifacts) {
+  const extracted = await mkdtemp(join(tmpdir(), "labcolors-packed-evidence-"));
+  try {
+    command("tar", ["-xzf", tarballPath, "-C", extracted]);
+    await validateWcag22EvidenceArtifacts(
+      resolve(extracted, "package"),
+      expectedArtifacts,
+      "npm tarball",
+    );
+  } finally {
+    await rm(extracted, { recursive: true, force: true });
+  }
+}
+
 function fnv1a32(buffers) {
   let hash = 0x811c9dc5;
   for (const buffer of buffers) {
@@ -227,15 +372,16 @@ function fnv1a32(buffers) {
 // labcolors-core/src/numerics.rs, canonical_checksum_preimage). Домен-сепаратор
 // и length-prefixed кодирование повторены здесь НЕЗАВИСИМО: релизный гейт не
 // доверяет закоммиченному checksum, а пересчитывает его из тех же typed rows.
-const CAPABILITY_CHECKSUM_DOMAIN_V1 = "labcolors.numerical-capability.v1";
+const CAPABILITY_CHECKSUM_DOMAIN_V2 = "labcolors.numerical-capability.v2";
 // Поля-списки одного site в каноническом порядке preimage (порядок фиксирован
-// схемой v1 и не выводится из JSON, чтобы переименование ключа ломало гейт).
+// схемой v2 и не выводится из JSON, чтобы переименование ключа ломало гейт).
 const CAPABILITY_SITE_LIST_FIELDS = [
   "stableOutcomes",
   "compatibilityReleases",
   "evidenceClasses",
   "artifactIds",
   "boundIds",
+  "proofIds",
   "runtimeAttestations",
 ];
 
@@ -257,7 +403,7 @@ function compareUtf8(a, b) {
 
 function capabilityChecksumPreimage(capabilities) {
   const chunks = [];
-  chunks.push(...lenPrefixed(Buffer.from(CAPABILITY_CHECKSUM_DOMAIN_V1, "utf8")));
+  chunks.push(...lenPrefixed(Buffer.from(CAPABILITY_CHECKSUM_DOMAIN_V2, "utf8")));
   chunks.push(u32le(capabilities.schemaVersion));
   chunks.push(...lenPrefixed(Buffer.from(capabilities.coverage, "utf8")));
   const sites = [...capabilities.sites].sort((a, b) => compareUtf8(a.siteId, b.siteId));
@@ -283,9 +429,9 @@ function validateCapabilityManifest(capabilities) {
   if (typeof capabilities !== "object" || capabilities === null || Array.isArray(capabilities)) {
     fail("conformance manifest has no numericalCapabilities object");
   }
-  if (capabilities.schemaVersion !== 1) {
+  if (capabilities.schemaVersion !== 2) {
     fail(
-      `numericalCapabilities schemaVersion ${capabilities.schemaVersion} is not the supported 1`,
+      `numericalCapabilities schemaVersion ${capabilities.schemaVersion} is not the supported 2`,
     );
   }
   if (capabilities.coverage !== "migrated-sites-only-v1") {
@@ -325,8 +471,8 @@ function validateCapabilityManifest(capabilities) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "3.0.0") {
-    fail(`release requires conformance pack 3.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "4.0.0") {
+    fail(`release requires conformance pack 4.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -353,7 +499,7 @@ async function validateConformance(conformance) {
       fail(`${CONFORMANCE_FAMILY_FILES[index]} is not valid JSON: ${error.message}`);
     }
   });
-  const countKeys = ["contrasts", "ladders", "alpha", "solve", "muddiness"];
+  const countKeys = ["contrasts", "ladders", "alpha", "solve", "muddiness", "wcag22"];
   let total = 0;
   for (const [index, key] of countKeys.entries()) {
     const actual = families[index].length;
@@ -370,6 +516,31 @@ async function validateConformance(conformance) {
   );
   if (halfTie?.composite !== "#17161F") {
     fail("conformance pack lacks the exact source-over half-tie #C0B2FA@0.122 -> #17161F");
+  }
+  const antiEpsilon = families[5].find(
+    (entry) =>
+      entry.foreground === "#89BB09" &&
+      entry.background === "#8212DB" &&
+      entry.criterion === "sc-1.4.11-ui-component-or-state",
+  );
+  const proofPath = resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
+  const proofBytes = await readFile(proofPath);
+  const proof = await readJson(proofPath);
+  if (
+    antiEpsilon?.decision !== "fail" ||
+    antiEpsilon?.evidenceKind !== "canonical-finite-bounded" ||
+    antiEpsilon?.artifactId !== proof.artifact_id ||
+    antiEpsilon?.artifactSha256 !== proof.artifact_sha256 ||
+    antiEpsilon?.boundId !== proof.bound_id ||
+    antiEpsilon?.proofId !== proof.proof_id ||
+    antiEpsilon?.proofSha256 !== sha256(proofBytes) ||
+    antiEpsilon?.proofPayloadSha256 !== proof.proof_payload_sha256 ||
+    antiEpsilon?.generatorSha256 !== proof.generator_sha256 ||
+    antiEpsilon?.verifierSha256 !== proof.verifier_sha256 ||
+    antiEpsilon?.profileChecksum !== proof.profile_checksum ||
+    antiEpsilon?.profileSha256 !== proof.profile_source_sha256
+  ) {
+    fail("conformance pack lacks the exact proof-bound WCAG22 anti-epsilon witness");
   }
   validateCapabilityManifest(conformance.numericalCapabilities);
 
@@ -414,7 +585,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
-import init, { LabColors } from "@labpics/colors";
+import init, {
+  LabColors,
+  evaluateWcag22,
+  numericalCapabilityManifest,
+} from "@labpics/colors";
 
 const require = createRequire(import.meta.url);
 const wasmPath = require.resolve("@labpics/colors/pkg/labcolors_bg.wasm");
@@ -430,6 +605,22 @@ assert.match(metadata.sourceSha, /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u);
 assert.match(metadata.coreVersion, /^\d+\.\d+\.\d+$/u);
 assert.equal(metadata.wasm.bytes, (await readFile(wasmPath)).length);
 await init({ module_or_path: await readFile(wasmPath) });
+
+const capability = numericalCapabilityManifest();
+assert.equal(capability.schemaVersion, 2);
+assert.ok(capability.sites.some((site) =>
+  site.siteId === "wcag22-srgb8-contrast-v1" &&
+  site.proofIds.includes("wcag22-srgb8-full-domain-q55-v1")
+));
+
+const exactWcag22 = evaluateWcag22(
+  "#898CB8",
+  "#3E2217",
+  "sc-1.4.3-text-default",
+);
+assert.equal(exactWcag22.decision, "fail");
+assert.equal(exactWcag22.evidence.profileChecksum, "152813fe");
+assert.match(exactWcag22.evidence.proofSha256, /^[0-9a-f]{64}$/u);
 
 const config = {
   brand: {
@@ -600,6 +791,8 @@ function typeSmokeSource() {
   return String.raw`
 import init, {
   LabColors,
+  evaluateWcag22,
+  numericalCapabilityManifest,
   type GlowDecisionGuaranteeV1,
   type GlowDeterminateRole,
   type GlowDeterminateRoleBase,
@@ -608,16 +801,28 @@ import init, {
   type LadderPositionV1,
   type MaterialRole,
   type MaterialRoleBase,
+  type NumericalCapabilityManifestV2,
   type NumericalIndeterminacyV1,
   type ResolvedTheme,
   type ThemeConfig,
   type TranslucentRole,
+  type Wcag22AssessmentV1,
+  type Wcag22CriterionV1,
 } from "@labpics/colors";
 
 const initialise: typeof init = init;
 const engine = new LabColors();
 const fingerprint: string = engine.loadConfig("{}");
 const resolved: ResolvedTheme = engine.resolveTheme("#000000", "light");
+const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
+const wcagCriterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
+const wcagAssessment: Wcag22AssessmentV1 = evaluateWcag22(
+  "#000000",
+  "#FFFFFF",
+  wcagCriterion,
+);
+// @ts-expect-error criterion is an explicit closed menu, not an opaque string.
+evaluateWcag22("#000000", "#FFFFFF", "danger");
 const borderPosition: LadderPositionV1 = "border-strong";
 const config: ThemeConfig = {
   brand: {
@@ -770,6 +975,8 @@ void [
   initialise,
   fingerprint,
   resolved,
+  wcagAssessment,
+  capability,
   config,
   alphaContract,
   glowContract,
@@ -788,6 +995,7 @@ async function verifyCleanConsumer(
   packageJson,
   packageLock,
   expectedBuildMetadata,
+  expectedWcag22Artifacts,
 ) {
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-release-consumer-"));
   try {
@@ -829,6 +1037,12 @@ async function verifyCleanConsumer(
           `expected ${packageJson.name}@${packageJson.version}`,
       );
     }
+
+    await validateWcag22EvidenceArtifacts(
+      installed,
+      expectedWcag22Artifacts,
+      "clean-installed package",
+    );
 
     const installedWasm = await readFile(resolve(installed, "pkg/labcolors_bg.wasm"));
     if (sha256(installedWasm) !== expectedBuildMetadata.wasm.sha256) {
@@ -904,6 +1118,8 @@ export async function smokePackedRuntime(tarballPath) {
 
 export async function verifyPackageRelease() {
   const { sourceSha: source } = await prepareNpmPackage();
+  command("python3", ["scripts/verify_wcag22_q55.py"], REPO_ROOT);
+  const wcag22Evidence = await validateWcag22Evidence();
 
   const [packageJson, packageLock, cargoSource, conformance] = await Promise.all([
     readJson(PACKAGE_JSON),
@@ -972,6 +1188,8 @@ export async function verifyPackageRelease() {
     await rm(reproductionDir, { recursive: true, force: true });
   }
 
+  await validatePackedWcag22Evidence(canonicalPack.path, wcag22Evidence.artifacts);
+
   const tarball = await hashedArtifact(
     canonicalPack.path,
     `.release/${canonicalPack.tarballName}`,
@@ -981,6 +1199,7 @@ export async function verifyPackageRelease() {
     packageJson,
     packageLock,
     buildMetadataValue,
+    wcag22Evidence.artifacts,
   );
 
   const manifest = {
@@ -997,6 +1216,7 @@ export async function verifyPackageRelease() {
       trackingIssue: 258,
     },
     conformance: conformanceEvidence,
+    normativeEvidence: { wcag22: wcag22Evidence },
     sourceSha: source,
     reproducibility: {
       method: "two-independent-npm-pack-passes",
@@ -1024,6 +1244,7 @@ export async function verifyPackageRelease() {
       "exact-alpha-srgb8-v1",
       "exact-screen-composite-srgb8-v1",
       "typed-glow-indeterminate-v1",
+      "wcag22-srgb8-contrast-v1",
     ],
     numericalCapabilities: conformance.numericalCapabilities,
     unsupported: [

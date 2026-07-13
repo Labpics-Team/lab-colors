@@ -11,6 +11,7 @@ export {
   default as init,
   initSync,
   LabColors,
+  evaluateWcag22,
   numericalCapabilityManifest,
 } from "./pkg/labcolors.js";
 

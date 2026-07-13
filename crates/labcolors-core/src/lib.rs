@@ -1,4 +1,8 @@
 pub(crate) mod spaces;
+pub(crate) mod srgb8;
+pub mod wcag22;
+#[doc(hidden)]
+pub mod wcag22_evidence;
 
 pub(crate) mod accent;
 pub mod accent_balance;
@@ -36,6 +40,9 @@ mod agnostic_gates;
 
 #[cfg(test)]
 mod appearance_graph_tests;
+
+#[cfg(test)]
+mod wcag22_tests;
 
 #[cfg(test)]
 mod one_levelness_tests;
@@ -111,20 +118,21 @@ pub use numerical_plan::{
     NumericalPlanErrorV1, compile_numerical_plan_v1,
 };
 pub use numerics::{
-    LegacyPlatformDependentV1, NUMERICAL_CAPABILITY_SCHEMA_VERSION_V1, NumericalArtifactIdV1,
-    NumericalBoundStatusV1, NumericalCapabilityChecksumV1, NumericalCapabilityManifestV1,
+    LegacyPlatformDependentV1, NUMERICAL_CAPABILITY_SCHEMA_VERSION_V2, NumericalArtifactIdV2,
+    NumericalBoundStatusV2, NumericalCapabilityChecksumV2, NumericalCapabilityManifestV2,
     NumericalCompatibilityReleaseIdV1, NumericalDecisionEvidenceV1, NumericalDecisionV1,
-    NumericalErrorBoundIdV1, NumericalEvidenceClassV1, NumericalFallbackStatusV1,
-    NumericalIndeterminacyV1, NumericalRegistryCoverageV1, NumericalRuntimeAttestationIdV1,
-    NumericalSiteCapabilityV1, NumericalSiteIdV1, NumericalSiteRecordV1, OutwardIntervalV1,
-    ReferenceProfileIdV1, StableNumericalOutcomeV1, numerical_capability_manifest_v1,
-    numerical_registry_v1,
+    NumericalErrorBoundIdV2, NumericalEvidenceClassV2, NumericalFallbackStatusV1,
+    NumericalIndeterminacyV1, NumericalProofIdV2, NumericalRegistryCoverageV2,
+    NumericalRuntimeAttestationIdV2, NumericalSiteCapabilityV2, NumericalSiteIdV1,
+    NumericalSiteIdV2, NumericalSiteRecordV2, OutwardIntervalV1, ReferenceProfileIdV1,
+    StableNumericalOutcomeV2, numerical_capability_manifest_v2, numerical_registry_v2,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor,
     TranslucentResolved, measure_contrast, recheck_against, recheck_against_multi,
     resolve_named_set,
 };
+pub use wcag22_evidence::CanonicalFiniteBoundedEvidenceV1;
 // The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no
 // longer part of the production API (ADR-0001 PR-c): the agnostic engine ships
 // only the string-keyed `resolve_named_set` path. It survives ONLY as the

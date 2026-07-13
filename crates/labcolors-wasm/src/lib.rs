@@ -443,38 +443,60 @@ export interface ThemeConfig {
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }
 
-/** Capability одного зарегистрированного численного site (#289/#292): что
- *  сборка УМЕЕТ (registry-проекция), не что выбрал клиент. Пустой массив —
- *  явное отсутствие evidence, не implicit support. */
-export interface NumericalCapabilitySiteV1 {
-  /** Stable site identity key, например "glow-target-or-maximum-v1". */
+/** Proof-capable V2 site. Empty arrays explicitly mean no admitted evidence. */
+export interface NumericalCapabilitySiteV2 {
   readonly siteId: string;
-  /** Законные stable-исходы site. */
   readonly stableOutcomes: ReadonlyArray<string>;
-  /** Зарегистрированные compatibility-releases. */
   readonly compatibilityReleases: ReadonlyArray<string>;
-  /** Минтимые классы evidence. */
   readonly evidenceClasses: ReadonlyArray<string>;
-  /** Canonical finite artifact IDs (пусто в V1). */
   readonly artifactIds: ReadonlyArray<string>;
-  /** Registered error bound IDs (пусто в V1). */
   readonly boundIds: ReadonlyArray<string>;
-  /** Runtime attestation IDs (пусто до #258). */
+  readonly proofIds: ReadonlyArray<string>;
   readonly runtimeAttestations: ReadonlyArray<string>;
 }
 
-/** Canonical numerical capability manifest: статическое свойство сборки,
- *  спроецированное из core registry SSOT. Та же camelCase-форма, что
- *  numericalCapabilities манифеста conformance-пака. */
-export interface NumericalCapabilityManifestV1 {
-  /** Версия capability-схемы (независимый домен версий). */
-  readonly schemaVersion: number;
-  /** Покрытие registry: "migrated-sites-only-v1". */
+/** Proof-capable numerical capability manifest used by conformance pack 4. */
+export interface NumericalCapabilityManifestV2 {
+  readonly schemaVersion: 2;
   readonly coverage: string;
-  /** Capability rows, отсортированные по UTF-8 байтам siteId. */
-  readonly sites: ReadonlyArray<NumericalCapabilitySiteV1>;
-  /** FNV-1a-32 drift-checksum canonical preimage, 8 lowercase hex. */
+  readonly sites: ReadonlyArray<NumericalCapabilitySiteV2>;
   readonly checksum: string;
+}
+
+export type Wcag22CriterionV1 =
+  | "sc-1.4.3-text-default"
+  | "sc-1.4.3-text-large-scale"
+  | "sc-1.4.11-ui-component-or-state"
+  | "sc-1.4.11-graphical-object";
+export type Wcag22DecisionV1 = "pass" | "fail";
+export interface Wcag22Q55BoundsV1 {
+  /** Decimal u64 string: Q55 values exceed JavaScript's safe integer range. */
+  readonly lower: string;
+  readonly upper: string;
+}
+export interface Wcag22AssessmentV1 {
+  readonly kind: "evaluated";
+  readonly profileId: "wcag22-srgb8-contrast-v1";
+  readonly criterion: Wcag22CriterionV1;
+  readonly foreground: string;
+  readonly background: string;
+  readonly foregroundLuminanceQ55: Wcag22Q55BoundsV1;
+  readonly backgroundLuminanceQ55: Wcag22Q55BoundsV1;
+  readonly q55Scale: string;
+  readonly decision: Wcag22DecisionV1;
+  readonly evidence: {
+    readonly kind: "canonical-finite-bounded";
+    readonly artifactId: "wcag22-srgb8-luminance-q55-v1";
+    readonly artifactSha256: string;
+    readonly boundId: "wcag22-srgb8-outward-q55-v1";
+    readonly proofId: "wcag22-srgb8-full-domain-q55-v1";
+    readonly proofSha256: string;
+    readonly proofPayloadSha256: string;
+    readonly generatorSha256: string;
+    readonly verifierSha256: string;
+    readonly profileChecksum: string;
+    readonly profileSha256: string;
+  };
 }
 
 /** The full result of resolving one background under one theme. */
@@ -503,24 +525,62 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "ResolvedTheme")]
     pub type JsResolvedTheme;
 
-    #[wasm_bindgen(typescript_type = "NumericalCapabilityManifestV1")]
-    pub type JsNumericalCapabilityManifest;
+    #[wasm_bindgen(typescript_type = "NumericalCapabilityManifestV2")]
+    pub type JsNumericalCapabilityManifestV2;
+
+    #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
+    pub type JsWcag22Assessment;
 }
 
-/// Canonical numerical capability manifest текущей WASM-сборки (#289/#292).
+/// Единственный public numerical capability manifest: proof-capable V2.
 ///
 /// Свободная функция, а не метод движка: манифест — статическое свойство
 /// сборки (core registry SSOT), он не зависит ни от загруженного конфига, ни
-/// от состояния кэша. Форма — camelCase-проекция `CapabilityManifestProjection`
-/// conformance-пака; `checksum` — FNV-1a-32 canonical preimage, 8 lowercase hex.
+/// от состояния кэша. До появления клиентов ошибочная промежуточная V1
+/// projection удалена, чтобы не закреплять две конкурирующие поверхности.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
-pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifest, JsError> {
+pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsError> {
     // Та же «широкая» схема границы, что у resolveTheme: одна UTF-8 строка +
     // нативный JSON.parse вместо пообъектной сборки Reflect::set.
     let json = crate::projection::capability_manifest_json();
     let parsed = js_sys::JSON::parse(&json).map_err(|_| {
         to_js_error(BindingError::Internal {
             reason: "capability manifest не распарсился как JSON".to_string(),
+        })
+    })?;
+    Ok(parsed.unchecked_into())
+}
+
+/// Exact WCAG 2.2 assessment of one final sRGB8 pair.
+#[wasm_bindgen(js_name = evaluateWcag22)]
+pub fn evaluate_wcag22(
+    foreground_hex: &str,
+    background_hex: &str,
+    criterion: &str,
+) -> Result<JsWcag22Assessment, JsError> {
+    use labcolors_core::wcag22::Wcag22CriterionV1 as C;
+    let criterion = C::parse(criterion).ok_or_else(|| {
+        to_js_error(BindingError::UnknownWcag22Criterion {
+            requested: criterion.to_string(),
+        })
+    })?;
+    let assessment =
+        labcolors_core::wcag22::evaluate_wcag22_hex(foreground_hex, background_hex, criterion)
+            .map_err(|error| {
+                use labcolors_core::wcag22::Wcag22EvaluationErrorV1 as E;
+                to_js_error(match error {
+                    E::InvalidSrgb8 { field, reason } => BindingError::InvalidColor {
+                        reason: format!("{field}: {reason}"),
+                    },
+                    other => BindingError::Internal {
+                        reason: other.to_string(),
+                    },
+                })
+            })?;
+    let json = crate::projection::wcag22_json(&assessment).map_err(to_js_error)?;
+    let parsed = js_sys::JSON::parse(&json).map_err(|_| {
+        to_js_error(BindingError::Internal {
+            reason: "WCAG22 projection не распарсился как JSON".to_string(),
         })
     })?;
     Ok(parsed.unchecked_into())
@@ -623,8 +683,9 @@ impl LabColors {
     ///
     /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
     /// order of `fgHexes`: index `2*i` is foreground `i`'s signed `Lc`, `2*i+1`
-    /// its WCAG ratio. Rejects (structured `{code, message}`) on an invalid hex or
-    /// an unknown theme.
+    /// its WCAG ratio. On invalid hex or an unknown theme, rejects with an
+    /// ordinary JS `Error` whose message starts with the stable
+    /// `"<code>: <message>"` prefix.
     #[wasm_bindgen(js_name = recheckContrast)]
     pub fn recheck_contrast(
         &self,
@@ -722,25 +783,32 @@ fn stable_glow_recheck_core_error(reason: String) -> BindingError {
 mod native_contract_tests {
     use super::*;
 
-    #[test]
-    fn generated_config_types_cover_the_closed_ladder_menu_and_dto_fields() {
-        let source = include_str!("lib.rs");
-        let types = source
+    fn custom_types() -> &'static str {
+        include_str!("lib.rs")
             .split_once("const TS_RESULT_TYPES: &'static str = r##\"")
             .and_then(|(_, tail)| tail.split_once("\"##;").map(|(types, _)| types))
-            .expect("custom TypeScript section is extractable");
-        let block = types
-            .split_once("export type LadderPositionV1 =")
+            .expect("custom TypeScript section is extractable")
+    }
+
+    fn string_union<'a>(types: &'a str, name: &str) -> Vec<&'a str> {
+        let declaration = format!("export type {name} =");
+        types
+            .split_once(&declaration)
             .and_then(|(_, tail)| tail.split_once(';').map(|(block, _)| block))
-            .expect("LadderPositionV1 union exists");
-        let declared: Vec<&str> = block
+            .unwrap_or_else(|| panic!("{name} union exists"))
             .lines()
             .filter_map(|line| {
                 line.trim()
                     .strip_prefix("| \"")
                     .and_then(|value| value.strip_suffix('"'))
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn generated_config_types_cover_the_closed_ladder_menu_and_dto_fields() {
+        let types = custom_types();
+        let declared = string_union(types, "LadderPositionV1");
         let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
         let core_set: std::collections::HashSet<&str> = labcolors_core::LadderPosition::ALL
             .iter()
@@ -755,6 +823,26 @@ mod native_contract_tests {
         assert!(types.contains("hue?: LadderSource"));
         assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\" | \"none\""));
         assert!(types.contains("readonly roles: ReadonlyArray"));
+    }
+
+    #[test]
+    fn generated_wcag22_criterion_type_equals_the_core_wire_menu() {
+        let declared = string_union(custom_types(), "Wcag22CriterionV1");
+        let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
+        let core_set: std::collections::HashSet<&str> =
+            labcolors_core::wcag22::Wcag22CriterionV1::ALL
+                .iter()
+                .map(|criterion| criterion.key())
+                .collect();
+        assert_eq!(
+            declared.len(),
+            declared_set.len(),
+            "duplicate TS WCAG22 criterion literal"
+        );
+        assert_eq!(
+            declared_set, core_set,
+            "TS WCAG22 criterion menu must equal core ALL"
+        );
     }
 
     #[test]

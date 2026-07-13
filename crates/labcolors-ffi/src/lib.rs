@@ -23,6 +23,7 @@
 //! | [`ladder_alpha`] | `ladders` | `LadderPosition::alpha_pair` |
 //! | [`composite`] / [`min_alpha`] | `alpha` | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | [`muddiness`] | `muddiness` legacy compatibility vectors | `cleanliness::muddiness_from_hex` |
+//! | [`evaluate_wcag22`] | `wcag22` | exact final-sRGB8 WCAG 2.2 evaluator |
 //! | [`core_version`] | `manifest` | версия ядра |
 //!
 //! [`solve_glow_point`] — отдельный low-level contract test нативной границы:
@@ -131,6 +132,99 @@ pub struct Contrast {
     pub lc: f64,
     /// Контраст-ratio WCAG 2.1 (1–21).
     pub wcag_ratio: f64,
+}
+
+/// Explicit WCAG 2.2 success criterion for one occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Wcag22Criterion {
+    /// SC 1.4.3 ordinary text, 4.5:1.
+    Sc143TextDefault,
+    /// SC 1.4.3 explicitly declared large-scale text, 3:1.
+    Sc143TextLargeScale,
+    /// SC 1.4.11 required UI component/state information, 3:1.
+    Sc1411UiComponentOrState,
+    /// SC 1.4.11 required graphical-object information, 3:1.
+    Sc1411GraphicalObject,
+}
+
+impl Wcag22Criterion {
+    fn to_core(self) -> labcolors_core::wcag22::Wcag22CriterionV1 {
+        use labcolors_core::wcag22::Wcag22CriterionV1 as Core;
+        match self {
+            Self::Sc143TextDefault => Core::Sc143TextDefault,
+            Self::Sc143TextLargeScale => Core::Sc143TextLargeScale,
+            Self::Sc1411UiComponentOrState => Core::Sc1411UiComponentOrState,
+            Self::Sc1411GraphicalObject => Core::Sc1411GraphicalObject,
+        }
+    }
+}
+
+/// Total decision on the admitted final-sRGB8 domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Wcag22Decision {
+    /// Threshold is proved satisfied.
+    Pass,
+    /// Threshold is proved unsatisfied.
+    Fail,
+}
+
+/// Q55 outward luminance enclosure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct Wcag22Q55Bounds {
+    /// Inclusive lower bound.
+    pub lower: u64,
+    /// Inclusive upper bound.
+    pub upper: u64,
+}
+
+/// Registry-bound numerical evidence transported from Rust core.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Wcag22Evidence {
+    /// Evidence class key.
+    pub kind: String,
+    /// Canonical artifact identity.
+    pub artifact_id: String,
+    /// Canonical binary artifact digest.
+    pub artifact_sha256: String,
+    /// Registered bound/threshold-law identity.
+    pub bound_id: String,
+    /// Replayable full-domain proof identity.
+    pub proof_id: String,
+    /// Exact committed proof-file digest.
+    pub proof_sha256: String,
+    /// Canonical proof payload integrity digest.
+    pub proof_payload_sha256: String,
+    /// Exact generator source digest.
+    pub generator_sha256: String,
+    /// Exact independent verifier source digest.
+    pub verifier_sha256: String,
+    /// Typed profile V1 checksum, independent of JSON formatting.
+    pub profile_checksum: String,
+    /// Canonical profile-source digest.
+    pub profile_sha256: String,
+}
+
+/// Atomic WCAG 2.2 assessment; Swift performs no contrast math.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Wcag22Assessment {
+    /// Immutable profile identity.
+    pub profile_id: String,
+    /// Exact declared occurrence criterion.
+    pub criterion: Wcag22Criterion,
+    /// Normalised final foreground bytes as hex.
+    pub foreground: String,
+    /// Normalised final background bytes as hex.
+    pub background: String,
+    /// Foreground Q55 enclosure.
+    pub foreground_luminance: Wcag22Q55Bounds,
+    /// Background Q55 enclosure.
+    pub background_luminance: Wcag22Q55Bounds,
+    /// Fixed-point scale (`2^55`).
+    pub q55_scale: u64,
+    /// Exact Pass/Fail result.
+    pub decision: Wcag22Decision,
+    /// Sealed evidence identities.
+    pub evidence: Wcag22Evidence,
 }
 
 /// Резолвнутый цвет и достигнутые им контрасты.
@@ -340,6 +434,118 @@ pub fn contrast(fg: String, bg: String, theme: Theme) -> Result<Contrast, ColorE
         recheck_against(&bg, &[&fg], &vc).map_err(|reason| ColorError::InvalidColor { reason })?;
     let (lc, wcag_ratio) = pairs.pop().expect("ровно один передний план");
     Ok(Contrast { lc, wcag_ratio })
+}
+
+/// Exact WCAG 2.2 assessment of one final foreground/background sRGB8 pair.
+///
+/// Swift transports the Rust-core decision and evidence; it does not implement
+/// relative luminance, thresholds or rounding independently.
+#[uniffi::export]
+pub fn evaluate_wcag22(
+    foreground: String,
+    background: String,
+    criterion: Wcag22Criterion,
+) -> Result<Wcag22Assessment, ColorError> {
+    use labcolors_core::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1};
+
+    let core =
+        labcolors_core::wcag22::evaluate_wcag22_hex(&foreground, &background, criterion.to_core())
+            .map_err(|error| match error {
+                labcolors_core::wcag22::Wcag22EvaluationErrorV1::InvalidSrgb8 { field, reason } => {
+                    ColorError::InvalidColor {
+                        reason: format!("{field}: {reason}"),
+                    }
+                }
+                other => ColorError::IncompatibleCoreContract {
+                    reason: other.to_string(),
+                },
+            })?;
+    let Wcag22AssessmentV1::Evaluated {
+        profile_id,
+        criterion: assessed_criterion,
+        measurement,
+        decision,
+        evidence,
+        ..
+    } = core
+    else {
+        return Err(ColorError::IncompatibleCoreContract {
+            reason: "pair evaluator returned report-only NotEvaluated".to_string(),
+        });
+    };
+    let NumericalDecisionEvidenceV1::CanonicalFiniteBounded(evidence_payload) = evidence else {
+        return Err(ColorError::IncompatibleCoreContract {
+            reason: "WCAG22 assessment carried a non-bounded evidence class".to_string(),
+        });
+    };
+    let artifact_id = evidence_payload.artifact_id();
+    let bound_id = evidence_payload.bound_id();
+    let proof_id = evidence_payload.proof_id();
+    let profile = labcolors_core::wcag22::wcag22_profile_v1();
+    if profile.profile_id != profile_id
+        || profile.artifact_id != artifact_id
+        || profile.bound_id != bound_id
+        || profile.proof_id != proof_id
+    {
+        return Err(ColorError::IncompatibleCoreContract {
+            reason: "WCAG22 assessment/profile evidence identities drifted".to_string(),
+        });
+    }
+    let hex = |bytes: [u8; 3]| format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
+    let decision = match decision {
+        Wcag22ApplicableDecisionV1::Pass => Wcag22Decision::Pass,
+        Wcag22ApplicableDecisionV1::Fail => Wcag22Decision::Fail,
+        _ => return Err(incompatible_core_variant("Wcag22ApplicableDecisionV1")),
+    };
+    let mapped_criterion = match assessed_criterion {
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextDefault => {
+            Wcag22Criterion::Sc143TextDefault
+        }
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc143TextLargeScale => {
+            Wcag22Criterion::Sc143TextLargeScale
+        }
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411UiComponentOrState => {
+            Wcag22Criterion::Sc1411UiComponentOrState
+        }
+        labcolors_core::wcag22::Wcag22CriterionV1::Sc1411GraphicalObject => {
+            Wcag22Criterion::Sc1411GraphicalObject
+        }
+        _ => return Err(incompatible_core_variant("Wcag22CriterionV1")),
+    };
+    if mapped_criterion != criterion {
+        return Err(ColorError::IncompatibleCoreContract {
+            reason: "WCAG22 assessment criterion drifted from the requested criterion".to_string(),
+        });
+    }
+    Ok(Wcag22Assessment {
+        profile_id: profile_id.key().to_string(),
+        criterion: mapped_criterion,
+        foreground: hex(measurement.foreground),
+        background: hex(measurement.background),
+        foreground_luminance: Wcag22Q55Bounds {
+            lower: measurement.foreground_luminance.lower(),
+            upper: measurement.foreground_luminance.upper(),
+        },
+        background_luminance: Wcag22Q55Bounds {
+            lower: measurement.background_luminance.lower(),
+            upper: measurement.background_luminance.upper(),
+        },
+        q55_scale: labcolors_core::wcag22::Wcag22LuminanceBoundsQ55V1::scale(),
+        decision,
+        evidence: Wcag22Evidence {
+            kind: "canonical-finite-bounded".to_string(),
+            artifact_id: artifact_id.key().to_string(),
+            artifact_sha256: profile.artifact_sha256.to_string(),
+            bound_id: bound_id.key().to_string(),
+            proof_id: proof_id.key().to_string(),
+            proof_sha256: profile.proof_sha256.to_string(),
+            proof_payload_sha256: profile.proof_payload_sha256.to_string(),
+            generator_sha256: profile.generator_sha256.to_string(),
+            verifier_sha256: profile.verifier_sha256.to_string(),
+            profile_checksum: profile.profile_checksum.to_string(),
+            profile_sha256: profile.source_sha256.to_string(),
+        },
+    })
 }
 
 /// Перепроверка контрастов многих передних планов на одном фоне под темой.
@@ -612,7 +818,9 @@ pub fn solve_glow_point(
                 }),
             }
         }
-        NumericalDecisionV1::Indeterminate { site_id, evidence } => {
+        NumericalDecisionV1::Indeterminate {
+            site_id, evidence, ..
+        } => {
             if profile != GlowDecisionProfile::StableV1 {
                 return Err(ColorError::IncompatibleCoreContract {
                     reason: "legacy Glow profile returned an Indeterminate core outcome"
@@ -646,6 +854,51 @@ pub fn muddiness(hex: String) -> Result<f64, ColorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wcag22_transport_preserves_core_decision_and_evidence() {
+        let assessment = evaluate_wcag22(
+            "#89BB09".into(),
+            "#8212DB".into(),
+            Wcag22Criterion::Sc1411GraphicalObject,
+        )
+        .unwrap();
+        assert_eq!(assessment.decision, Wcag22Decision::Fail);
+        assert_eq!(assessment.foreground, "#89BB09");
+        assert_eq!(assessment.background, "#8212DB");
+        assert_eq!(
+            assessment.evidence.artifact_id,
+            "wcag22-srgb8-luminance-q55-v1"
+        );
+        assert_eq!(
+            assessment.evidence.proof_id,
+            "wcag22-srgb8-full-domain-q55-v1"
+        );
+        assert_eq!(assessment.q55_scale, 1_u64 << 55);
+    }
+
+    #[test]
+    fn wcag22_transport_maps_core_pass() {
+        let assessment = evaluate_wcag22(
+            "#000000".into(),
+            "#FFFFFF".into(),
+            Wcag22Criterion::Sc143TextDefault,
+        )
+        .unwrap();
+        assert_eq!(assessment.decision, Wcag22Decision::Pass);
+    }
+
+    #[test]
+    fn wcag22_transport_rejects_invalid_hex_without_fallback() {
+        assert!(matches!(
+            evaluate_wcag22(
+                "invalid".into(),
+                "#FFFFFF".into(),
+                Wcag22Criterion::Sc143TextDefault,
+            ),
+            Err(ColorError::InvalidColor { .. })
+        ));
+    }
 
     #[test]
     fn legacy_solve_maps_to_atomic_compatibility_variants() {

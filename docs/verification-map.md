@@ -74,6 +74,21 @@
 > есть для КАЖДОГО квантованного цвета обе версии выбирают одну ветвь и
 > линеаризуют идентично; расхождение только на суб-квантовых величинах.
 
+## WCAG 2.2 для финальной sRGB8-пары — `wcag22.rs`, `wcag22/`, `srgb8.rs` (#284)
+
+Это versioned terminal certificate соответствия объявленному success
+criterion, а не замена LPC/APCA-shaped перцептивной цели solver-а. Клиент явно
+передаёт criterion; core не выводит размер текста или семантику из имени токена.
+
+| формула/инвариант | чем верифицирована | оракул |
+|---|---|---|
+| dated profile: IEC/WCAG EOTF split `0.04045`, веса `0.2126/0.7152/0.0722`, offset `0.05`, пороги `3.0` и `4.5` | immutable `wcag22-srgb8-v1.json`; независимая точная копия `NORMATIVE_PROFILE_V1` в `verify_wcag22_q55.py`; `wcag22_tests::*` | публикация (W3C WCAG 2.2 Recommendation 2024-12-12) |
+| 768 outward Q55-вкладов (3 канала × 256 кодов) tight: ширина строки ≤ 1; все threshold terms overflow-safe | adaptive-precision Decimal с directed rounding и устойчивостью на successive precisions; exact-integer/fifth-power проверка каждой строки; verifier доказывает `180·(Q55+3)+7·Q55 < i64::MAX`, фиксирует headroom и отказ Q56 | независимая численная транскрипция + целочисленная проверка tightness/overflow |
+| полный домен `256³ = 16 777 216` цветов имеет zero unresolved для обоих пороговых законов | `verify_wcag22_q55.py`: перечисление всех sRGB8-интервалов и monotone boundary scan; committed proof фиксирует минимальные pass/fail margins и witnesses; synthetic overlap обязан сделать verifier RED | полный конечный перебор + mutation oracle |
+| production verdict использует только outward Q55 и целочисленные сравнения; kernel/parser/facade/terminal-evidence нельзя подменить отдельно | exact source SHA bindings + semantic guards verifier-а; `anti_epsilon_witnesses_are_definite_fail`, parser panic/property tests | независимый verifier + внутренние boundary witnesses |
+| право минтить terminal evidence связано с фактической typed WCAG registry-row | compiled Rust probe читает live row; Python канонизирует 10 mint-relevant полей через length-prefix/SHA-256; 10 field mutations + 2 hex/count transport mutations обязаны отказать | независимая site-local admission binding (в proof: 15 negative controls всего) |
+| один verdict/evidence сохраняется через Core → FFI/WASM → JS/Swift/conformance | `wcag22_transport_*`, `wasm_parity`, `wcag22.test.mjs`, Swift conformance, committed pack 4 `wcag22.json`; release verifier повторно проверяет evidence-байты | дифференциальный cross-boundary oracle |
+
 ## LPC (перцептивный контраст) — `lpc.rs`
 
 | формула | чем верифицирована | оракул |
@@ -104,7 +119,8 @@
 ## Численные решения — `numerics.rs`, `numerical_plan.rs` (#292)
 
 Три уровня контракта разделены типами: package capability
-(`NumericalCapabilityManifestV1`, projection registry SSOT) ≠ compiled
+(`NumericalCapabilityManifestV2` — единственная proof-capable projection
+registry SSOT) ≠ compiled
 invocation plan (`CompiledNumericalPlanV1`) ≠ атомарный результат
 (`NumericalDecisionV1`: `Determinate`/`Compatibility`/`Indeterminate`).
 Новой математики модуль не вводит — проверяется невозможность повышения
@@ -114,9 +130,11 @@ caller-created значений и legacy-исходов до доказател
 |---|---|---|
 | registry непустой, ключи уникальны, Glow site покрыт обоими stable outcomes и registered compatibility release | `numerics::tests::migrated_registry_is_non_vacuous_unique_and_covers_glow_site` | внутренняя тождественность |
 | capability manifest — каноническая projection registry: сортировка по UTF-8 `siteId`, coverage `migrated-sites-only-v1`, без выбранного mode | `numerics::tests::capability_manifest_is_canonical_registry_projection` | внутренняя тождественность |
+| единственный public `numericalCapabilityManifest()` возвращает V2 с WCAG artifact/bound/proof IDs; одна декларация проецирует internal runtime и public capability без двух SSOT | `numerics::tests::unified_registry_projects_runtime_glow_and_proof_bound_wcag`, `projection::tests::capability_manifest_json_mirrors_proof_capable_core_ssot`, `packages/colors/test/capability-manifest.test.mjs` | regression pin + дифференциальный adapter/core |
 | drift-checksum канонический и tamper-чувствителен: смена schema version / удаление row меняет FNV-1a-32 preimage | `numerics::tests::capability_checksum_is_canonical_and_tamper_sensitive`; независимые пересчёты: JS (`scripts/verify-package-release.mjs`) и Swift (`ConformanceTests.testCapabilityManifestChecksumRecomputes`) | внутренняя тождественность + два независимых re-implementation оракула |
 | legacy-исход — атомарный `Compatibility` с registered release, не determinate evidence | `numerics::tests::legacy_result_is_compatibility_not_determinate_evidence` | тип-уровневая (взаимоисключающие варианты) + внутренняя тождественность |
-| BitExact-evidence минтится только registry-owned конструктором для site с объявленным классом; внешняя подделка не компилируется | `numerics::tests::bit_exact_evidence_is_registry_owned_and_sealed`, `bit_exact_mint_is_refused_without_declared_capability` + два compile-fail doctests в шапке `numerics.rs` (импорт удалённого `classify_at_least_v1`; struct-литерал `BitExact` с приватной печатью) | тип-уровневая (компилятор) |
+| BitExact/bounded evidence минтится только registry-owned конструктором; внешний код не может ни собрать evidence, ни переупаковать genuine evidence другого site в новый terminal result | `numerics::tests::bit_exact_evidence_is_registry_owned_and_sealed`, `bit_exact_mint_is_refused_without_declared_capability` + три compile-fail doctests в шапке `numerics.rs` (удалённый classifier, приватная evidence-печать, cross-site reuse) | тип-уровневая (компилятор) |
+| предметный Glow outcome также Core-owned: generic/WCAG evidence нельзя объявить `StableExactNoop`, а compatibility нельзя собрать вручную | variant-level sealing `GlowDecisionOutcomeV1` + compile-fail doctest в `glow.rs`; WASM-тесты получают оба outcome только через полный `resolve_named_set` path | тип-уровневая + boundary characterization |
 | диагностический интервал проверяет только форму (конечность, порядок) и не изготовляет determinate evidence | `numerics::tests::diagnostic_interval_validates_shape_only` | внутренняя тождественность |
 | invocation identity плана канонична: локальные ordinals внутри (node, site), перестановка деклараций не меняет ids/projection | `numerical_plan::tests::mixed_modes_coexist_and_ordinals_are_local`, `declaration_permutation_preserves_ids_and_canonical_projection` | внутренняя тождественность |
 | план tamper-чувствителен: переименование node/site меняет identity, смена mode меняет checksum; незарегистрированный release — typed ошибка компиляции плана | `numerical_plan::tests::rename_changes_identity_and_mode_mutation_changes_checksum`, `unregistered_release_is_a_typed_compile_error` | внутренняя тождественность |

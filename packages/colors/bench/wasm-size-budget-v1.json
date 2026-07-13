@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "budgetId": "labcolors-wasm-raw-issue-284-v1",
+  "artifact": "packages/colors/pkg/labcolors_bg.wasm",
+  "measurement": {
+    "issue": 284,
+    "rawBytes": 454385,
+    "sha256": "94c61c1689fa2e1c10d79817864471f41c623463bd9b5b4e0dac2a850a58f09f",
+    "rustToolchain": "1.96.0",
+    "rustcCommit": "ac68faa20",
+    "wasmPack": "0.13.1",
+    "wasmBindgen": "0.2.126",
+    "target": "wasm32-unknown-unknown",
+    "cargoProfile": "release",
+    "wasmOpt": "-Oz",
+    "wasmOptVersion": "117",
+    "measurementPlatform": "linux-x64",
+    "rustPathRemap": [
+      "GITHUB_WORKSPACE=/workspace/lab-colors",
+      "CARGO_HOME=/cargo-home"
+    ],
+    "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked"
+  },
+  "policy": {
+    "maxRawBytes": 454385,
+    "derivation": "exact-accepted-issue-284-measurement",
+    "gzip": "diagnostic-only"
+  }
+}

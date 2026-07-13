@@ -229,23 +229,35 @@ normalized expanded запись `alpha·T + (1−alpha)·B` алгебраич�
 
 ## 4. Обновите Rust Glow API
 
-`solve_screen_alpha_for_dj` теперь принимает обязательный
-`GlowDecisionProfileV1` и возвращает `NumericalDecisionV1<GlowSolve>`:
+`solve_screen_alpha_for_dj` принимает обязательный typed execution mode и
+возвращает `NumericalDecisionV1<GlowSolve>`:
 
 ```rust
 let decision = solve_screen_alpha_for_dj(
     tint,
     background,
     target_dj,
-    GlowDecisionProfileV1::StableV1,
+    GlowDecisionProfileV1::StableV1.execution_mode(),
     viewing_conditions,
 )?;
 
 match decision {
-    NumericalDecisionV1::Determinate { value, guarantee } => {
-        emit(value.alpha_css(), guarantee);
+    NumericalDecisionV1::Determinate { value, evidence, .. } => {
+        emit_stable(value.alpha_css(), evidence.class_key());
     }
-    NumericalDecisionV1::Indeterminate { site_id, evidence } => {
+    NumericalDecisionV1::Compatibility {
+        value,
+        release_id,
+        provenance,
+        ..
+    } => {
+        emit_compatibility(
+            value.alpha_css(),
+            release_id.key(),
+            provenance.key(),
+        );
+    }
+    NumericalDecisionV1::Indeterminate { site_id, evidence, .. } => {
         match evidence {
             NumericalIndeterminacyV1::SoundBoundUnavailable => {
                 record_unbounded(site_id);
@@ -270,8 +282,13 @@ WASM-проекция сохраняет discriminated wire-форму `reason` 
 для `#[non_exhaustive]` enum и трактовать неизвестный вариант как явную
 несовместимость версии, а не как legacy fallback.
 
-`DecisionGuaranteeV1` тоже `#[non_exhaustive]`. На WASM-границе он сериализуется
-tagged object, а не строкой:
+`DecisionGuaranteeV1` удалён: generic Core больше не ранжирует
+взаимоисключающие исходы по «силе гарантии». `Determinate` несёт sealed
+`NumericalDecisionEvidenceV1`, а explicit legacy-путь — отдельный
+`Compatibility { release_id, provenance }`.
+
+На WASM-границе прежний client-facing `decisionGuarantee` остаётся
+tagged object и выводится адаптером из атомарного outcome:
 
 ```ts
 type GlowDecisionGuaranteeV1 =
@@ -279,10 +296,8 @@ type GlowDecisionGuaranteeV1 =
   | { readonly kind: "legacy-platform-dependent-v1" };
 ```
 
-Generic core сохраняет `DecisionGuaranteeV1::OutwardIntervalV1` для других
-численных sites, но Glow-adapter не умеет построить соответствующий determinate
-outcome и возвращает структурную несовместимость. Не принимайте неизвестный
-`kind` как `bit-exact` или legacy.
+Это wire-type, не generic Rust evidence enum. Не принимайте неизвестный `kind`
+как `bit-exact` или legacy.
 
 Low-level UniFFI/Swift поверхность не переносит flattened provenance-поля
 generic wire-формы. Её `GlowPointDecision` — algebraic sum ровно четырёх
@@ -297,10 +312,10 @@ composite hex и composite profile/guarantee. Отдельные native-типы
 
 Native adapter заранее валидирует tint, background и конечный `targetDj > 0`;
 только такой public input возвращает `ColorError.InvalidGlowRequest`. Если после
-успешной проверки core всё же возвращает `Err`, неизвестный forward variant,
-illegal provenance tuple либо generic `DecisionGuaranteeV1::OutwardIntervalV1`,
-граница возвращает `ColorError.IncompatibleCoreContract`. Тот же закон действует
-для нового неизвестного `Unreachable`: adapter не подменяет его строкой
+успешной проверки core всё же возвращает `Err`, неизвестный forward variant
+либо illegal site/release/evidence tuple, граница возвращает
+`ColorError.IncompatibleCoreContract`. Тот же закон действует для нового
+неизвестного `Unreachable`: adapter не подменяет его строкой
 `"unreachable"`. `NumericalIndeterminacy.intervalOverlap` остаётся в Swift как
 законное outward evidence для `indeterminate`.
 
@@ -327,7 +342,7 @@ binary64 identity alpha, каноническую CSS-строку и composite 
    цвета.
 5. Сравнивайте alpha через `alphaCss` или побитный parse round-trip; не
    округляйте её до фиксированного числа знаков.
-6. Используйте актуальный conformance pack (3.0.0; half-tie введён в 2.0.0
+6. Используйте актуальный conformance pack (4.0.0; half-tie введён в 2.0.0
    и обязателен с тех пор). Half-tie
    `#C0B2FA @ 0.122` над `#000000` обязан дать `#17161F`. Обрабатывайте
    `generate_solve()` / `Pack::generate()` как `Result`: internal core failure
@@ -387,7 +402,10 @@ Rollback выполняется парой runtime + config:
 - Ни один из этих профилей не сертифицирует реальный browser color-management,
   HDR/display pipeline, blur, overlap или spatial glow field.
 
-## Migration-note: атомарный `NumericalDecisionV1` и pack 3.0.0 (#292)
+## Историческая migration-note: атомарный `NumericalDecisionV1` и pack 3.0.0 (#292)
+
+> Этот подраздел фиксирует переход #292 до добавления WCAG-семейства. Для
+> текущего unreleased-контракта используйте pack 4.0.0 и дополнение ниже.
 
 Последующий rework численной границы (см. дополнение ADR-0004 от 2026-07-12)
 намеренно НЕ меняет wire: прежние ключи сохранены byte-for-byte как
@@ -413,3 +431,19 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   typed `numericalCapabilities` (coverage `migrated-sites-only-v1`,
   FNV-1a-32 drift-checksum). Векторные семейства и `packDigest` не изменились;
   потребители манифеста должны читать новую секцию.
+
+## Текущий unreleased-контракт: WCAG 2.2 и pack 4.0.0 (#284)
+
+- Единственный public capability contract — V2; он добавляет proof-capable
+  `wcag22-srgb8-contrast-v1` с artifact/bound/proof IDs. Временный V1 не
+  сохраняется compatibility alias-ом до появления клиентов.
+- Pack 4.0.0 добавляет `wcag22.json`, поэтому `packDigest` меняется. npm API
+  добавляет `evaluateWcag22`; profile/table/proof поставляются byte-exact в
+  `evidence/` и перепроверяются release gate-ом.
+- Все struct-like terminal variants `NumericalDecisionV1` и
+  `GlowDecisionOutcomeV1` sealed variant-level `#[non_exhaustive]`: внешний
+  Rust-код матчится с `..` и не может переупаковать genuine evidence другого
+  site.
+- Raw WCAG JSON читается через `Wcag22ProfileV1::source_json()` и
+  `proof_json()`. Runtime-профиль хранит только IDs/хэши, поэтому отдельно
+  поставляемые документы не дублируются в WASM.
