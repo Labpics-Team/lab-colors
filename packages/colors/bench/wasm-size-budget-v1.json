@@ -5,7 +5,7 @@
   "measurement": {
     "issue": 284,
     "rawBytes": 457924,
-    "sha256": "aa0ff0b83035b520bdbf19166a5493c01969ecf874dd7d957f2872bb23ab2968",
+    "sha256": "db534a3c00c099d1b0c7f117db691744cf3e560b414be86ca47719a23c6c1909",
     "rustToolchain": "1.96.0",
     "rustcCommit": "ac68faa20",
     "wasmPack": "0.13.1",

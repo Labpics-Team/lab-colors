@@ -749,7 +749,7 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   assert.equal(budget.policy.maxRawBytes, 457924);
   assert.equal(
     budget.measurement.sha256,
-    "aa0ff0b83035b520bdbf19166a5493c01969ecf874dd7d957f2872bb23ab2968",
+    "db534a3c00c099d1b0c7f117db691744cf3e560b414be86ca47719a23c6c1909",
   );
   assert.equal(budget.measurement.measurementPlatform, "linux-x64");
   assert.deepEqual(budget.measurement.rustPathRemap, [
@@ -803,6 +803,21 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     assert.match(run(), /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B/u);
+
+    const canonicalFixtureBudget = readFileSync(fixtureBudget, "utf8");
+    const wrongLengthBudget = JSON.parse(canonicalFixtureBudget);
+    wrongLengthBudget.measurement.rawBytes = bytes.length + 1;
+    wrongLengthBudget.policy.maxRawBytes = bytes.length + 1;
+    writeFileSync(fixtureBudget, `${JSON.stringify(wrongLengthBudget)}\n`);
+    assert.throws(
+      run,
+      (error) => {
+        assert.match(error.stderr.toString(), /canonical artifact raw-byte mismatch/u);
+        return true;
+      },
+      "canonical host must reject measurement metadata with the wrong raw length",
+    );
+    writeFileSync(fixtureBudget, canonicalFixtureBudget);
 
     const sameSizeDifferentArtifact = Buffer.from(bytes);
     sameSizeDifferentArtifact[7] = 1;

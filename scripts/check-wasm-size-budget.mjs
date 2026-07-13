@@ -124,11 +124,22 @@ if (rawBytes > maxRawBytes) {
 }
 if (
   currentPlatform === budget.measurement.measurementPlatform &&
+  rawBytes !== budget.measurement.rawBytes
+) {
+  fail(
+    `canonical artifact raw-byte mismatch on ${currentPlatform}: ` +
+      `expected=${budget.measurement.rawBytes}B actual=${rawBytes}B; ` +
+      `gzip=${gzipBytes}B diagnostic-only; sha256=${sha256}`,
+  );
+}
+if (
+  currentPlatform === budget.measurement.measurementPlatform &&
   baselineSha !== "match"
 ) {
   fail(
     `canonical artifact SHA-256 mismatch on ${currentPlatform}: ` +
-      `expected=${budget.measurement.sha256} actual=${sha256}`,
+      `expected=${budget.measurement.sha256} actual=${sha256}; ` +
+      `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
   );
 }
 
