@@ -769,7 +769,7 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   );
   assert.equal(
     budget.currentArtifact.sha256,
-    "76aa41da3a831e99b3b2d0370ade0663964b56de11346d45e50523471a79f63a",
+    "58015ea92c539eec9a715dac79d80148f103b83c628be9d95ade63b87fc76533",
   );
   assert.equal(budget.currentArtifact.recertificationIssue, 295);
   assert.equal(budget.measurement.measurementPlatform, "linux-x64");
