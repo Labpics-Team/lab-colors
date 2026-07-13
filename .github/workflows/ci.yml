@@ -223,6 +223,40 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
+      - name: prove core capability projection boundary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          metadata = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+              text=True,
+          ))
+          packages = {package["name"]: package for package in metadata["packages"]}
+          core = packages["labcolors-core"]
+          if core["features"].get("default") != ["wcag22-feasibility"]:
+              raise SystemExit("labcolors-core default capability set drifted")
+
+          dependencies = [
+              dependency
+              for dependency in packages["labcolors-wasm"]["dependencies"]
+              if dependency["name"] == "labcolors-core" and dependency["kind"] is None
+          ]
+          if len(dependencies) != 1:
+              raise SystemExit("labcolors-wasm must have one normal labcolors-core edge")
+          dependency = dependencies[0]
+          if dependency["uses_default_features"] or dependency["features"]:
+              raise SystemExit("labcolors-wasm enabled an unprojected core capability")
+          PY
+
+          feature_tree="$(cargo tree -p labcolors-wasm --edges normal -e features)"
+          if grep -Fq 'labcolors-core feature "wcag22-feasibility"' <<<"$feature_tree"; then
+            echo "labcolors-wasm resolved an unprojected core capability" >&2
+            exit 1
+          fi
+          echo "core capability projection: PASS"
       - name: reject WCAG22 source-route redirects and proof vacuums
         run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
