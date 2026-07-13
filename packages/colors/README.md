@@ -405,12 +405,12 @@ Raw-размер WASM — hard gate. Его versioned SSOT —
 с toolchain provenance, SHA-256 измеренного артефакта и ceiling без
 произвольного запаса. Канонический артефакт строит release-equivalent Linux x64
 CI: там checker требует одновременно точный SHA-256 и непревышение ceiling. На
-других host-платформах тот же checker сохраняет переносимый raw-size gate, но не
-выдаёт host-specific bytes за канонический release artifact. Каноническая сборка
-remap-ит mutable workspace и Cargo registry roots в стабильные виртуальные пути,
-поэтому имя конкретного self-hosted runner не меняет бинарь. `gzip -9` вычисляется
-на каждом gate только как диагностика: разные gzip-реализации не определяют
-correctness и не хранятся как ложная константа SSOT.
+других host-платформах тот же checker только сообщает raw/gzip/SHA-диагностику:
+host-native toolchain bytes не выдаются за канонический release artifact и не
+сравниваются с чужим ceiling. Каноническая сборка remap-ит mutable workspace и
+Cargo registry roots в стабильные виртуальные пути, поэтому имя конкретного
+self-hosted Linux runner не меняет бинарь. `gzip -9` также остаётся живой
+диагностикой и не хранится как ложная константа SSOT.
 
 Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
 поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого

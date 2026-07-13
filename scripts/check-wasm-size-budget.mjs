@@ -114,37 +114,35 @@ const gzipBytes = gzipSync(wasm, { level: 9 }).length;
 const sha256 = createHash("sha256").update(wasm).digest("hex");
 const baselineSha = sha256 === budget.measurement.sha256 ? "match" : "different";
 const currentPlatform = `${process.platform}-${process.arch}`;
+const isCanonicalPlatform = currentPlatform === budget.measurement.measurementPlatform;
 const artifact = relative(REPO_ROOT, wasmPath).replaceAll("\\", "/");
 
-if (rawBytes > maxRawBytes) {
+if (isCanonicalPlatform && rawBytes > maxRawBytes) {
   fail(
     `FAIL ${artifact} raw=${rawBytes}B exceeds ceiling=${maxRawBytes}B ` +
       `by=${rawBytes - maxRawBytes}B; gzip=${gzipBytes}B diagnostic-only; sha256=${sha256}`,
   );
 }
-if (
-  currentPlatform === budget.measurement.measurementPlatform &&
-  rawBytes !== budget.measurement.rawBytes
-) {
+if (isCanonicalPlatform && rawBytes !== budget.measurement.rawBytes) {
   fail(
     `canonical artifact raw-byte mismatch on ${currentPlatform}: ` +
       `expected=${budget.measurement.rawBytes}B actual=${rawBytes}B; ` +
       `gzip=${gzipBytes}B diagnostic-only; sha256=${sha256}`,
   );
 }
-if (
-  currentPlatform === budget.measurement.measurementPlatform &&
-  baselineSha !== "match"
-) {
+if (isCanonicalPlatform && baselineSha !== "match") {
   fail(
     `canonical artifact SHA-256 mismatch on ${currentPlatform}: ` +
       `expected=${budget.measurement.sha256} actual=${sha256}; ` +
       `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
   );
 }
+const sizeStatus = isCanonicalPlatform
+  ? `remaining=${maxRawBytes - rawBytes}B`
+  : `canonical-ceiling-delta=${rawBytes - maxRawBytes >= 0 ? "+" : ""}${rawBytes - maxRawBytes}B`;
 
 console.log(
   `WASM size budget PASS raw=${rawBytes}B ceiling=${maxRawBytes}B ` +
-    `remaining=${maxRawBytes - rawBytes}B gzip=${gzipBytes}B ` +
+    `${sizeStatus} gzip=${gzipBytes}B ` +
     `diagnostic-only platform=${currentPlatform} baseline-sha=${baselineSha}`,
 );

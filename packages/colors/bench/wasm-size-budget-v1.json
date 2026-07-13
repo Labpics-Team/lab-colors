@@ -4,7 +4,7 @@
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
   "measurement": {
     "issue": 284,
-    "rawBytes": 457924,
+    "rawBytes": 457815,
     "sha256": "db534a3c00c099d1b0c7f117db691744cf3e560b414be86ca47719a23c6c1909",
     "rustToolchain": "1.96.0",
     "rustcCommit": "ac68faa20",
@@ -22,7 +22,7 @@
     "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked"
   },
   "policy": {
-    "maxRawBytes": 457924,
+    "maxRawBytes": 457815,
     "derivation": "exact-accepted-issue-284-measurement",
     "gzip": "diagnostic-only"
   }
