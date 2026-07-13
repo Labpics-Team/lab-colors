@@ -16,7 +16,7 @@
 | членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 5 |
 | крейтов семейства в crates/ | 4 |
 | экспорт-субпутей package.json @labpics/colors | 8 |
-| python-скриптов scripts/*.py | 5 |
+| python-скриптов scripts/*.py | 8 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 7 |
 | файлов вне закона имён | 4 |
@@ -69,6 +69,10 @@
   сверяет обе формы и full-domain decision-totality;
   `test_wcag22_source_binding.py` независимо мутирует proof-bound Rust-маршруты
   и parser-capsule, проверяя, что посторонний source-текст не меняет digest.
+- `verify_wcag22_neutral_axis.py` независимо выводит exact neutral-axis fixtures;
+  `verify_wcag22_feasibility_identity.py` воспроизводит canonical preimages и
+  bit packing; `check_wcag22_feasibility_benchmark.py` fail-closed проверяет
+  первичное admission и post-squash тождество измеренного dependency cone.
 - Скрипты живут только в scripts/; каждый упомянут в этом каноне — появление
   нового скрипта требует строчки здесь (иначе гейт красный).
 
