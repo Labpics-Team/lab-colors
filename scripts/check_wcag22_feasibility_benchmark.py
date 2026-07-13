@@ -365,6 +365,30 @@ def git_rev_parse(specification: str) -> str:
     return value
 
 
+def check_current_subjects_clean() -> None:
+    result = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            *(path for _, path in SOURCE_OBJECTS),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    require(result.returncode == 0,
+            "cannot inspect the current dependency-cone worktree")
+    require_current_subjects_clean(result.stdout)
+
+
+def require_current_subjects_clean(status: str) -> None:
+    require(status == "", "current dependency-cone worktree is dirty")
+
+
 def check_source_objects(
     environment: dict[str, Any],
     revision: str,
@@ -398,6 +422,7 @@ def check_source_objects(
     if verify_current_subjects:
         require(tree != "unavailable",
                 "current-subject verification requires a recorded measurement tree")
+        check_current_subjects_clean()
         for name, path in SOURCE_OBJECTS:
             require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
                     f"current Git subject differs from admitted measurement: {path}")
@@ -628,7 +653,13 @@ def run_mutation_self_tests(
         pass
     else:
         raise ValueError("checker mutation survived: subject Git binding")
-    return 9
+    try:
+        require_current_subjects_clean("?? crates/labcolors-core/src/unbound.rs\n")
+    except ValueError:
+        pass
+    else:
+        raise ValueError("checker mutation survived: dirty current subject")
+    return 10
 
 
 def check_artifact_digest(payload_bytes: bytes, expected: str) -> None:
