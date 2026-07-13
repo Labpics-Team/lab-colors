@@ -745,24 +745,36 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   assert.equal(budget.measurement.target, "wasm32-unknown-unknown");
   assert.equal(budget.measurement.cargoProfile, "release");
   assert.equal(budget.measurement.wasmOpt, "-Oz");
-  assert.equal(budget.measurement.rawBytes, 458074);
-  assert.equal(budget.policy.maxRawBytes, 458074);
+  assert.equal(budget.measurement.rawBytes, 457924);
+  assert.equal(budget.policy.maxRawBytes, 457924);
   assert.equal(
     budget.measurement.sha256,
-    "07fc1fa75d1edf32d755261f04a6c422d68899fccc70ab9899aed7314c34b861",
-  );
-  assert.equal(budget.measurement.gzip9BytesDiagnostic, 198942);
-  assert.equal(
-    budget.measurement.gzipImplementation,
-    "Node.js 24.14.0 zlib gzipSync level 9",
+    "aa0ff0b83035b520bdbf19166a5493c01969ecf874dd7d957f2872bb23ab2968",
   );
   assert.equal(budget.measurement.measurementPlatform, "linux-x64");
+  assert.deepEqual(budget.measurement.rustPathRemap, [
+    "GITHUB_WORKSPACE=/workspace/lab-colors",
+    "CARGO_HOME=/cargo-home",
+  ]);
   assert.equal(budget.policy.derivation, "exact-accepted-issue-284-measurement");
   assert.equal(budget.policy.gzip, "diagnostic-only");
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(ci, /name: enforce measured WASM raw-byte budget/);
   assert.match(ci, /run: node scripts\/check-wasm-size-budget\.mjs/);
   assert.doesNotMatch(ci, /Not a hard gate yet/);
+  const wasmJob = ci.match(/\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n)/u)?.groups?.body;
+  assert.ok(wasmJob, "CI must contain a bounded wasm job");
+  assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
+  assert.match(wasmJob, /CARGO_ENCODED_RUSTFLAGS/u);
+  assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);
+  assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
+
+  const builtWasm = readFileSync(
+    join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
+  ).toString("latin1");
+  assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
+  assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
+  assert.doesNotMatch(builtWasm, /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u);
 
   const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-"));
   try {
@@ -802,6 +814,18 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
         return true;
       },
       "canonical host must reject a same-size artifact with different bytes",
+    );
+
+    const nonCanonicalBudget = JSON.parse(readFileSync(fixtureBudget, "utf8"));
+    nonCanonicalBudget.measurement.measurementPlatform =
+      `${process.platform}-${process.arch}` === "linux-x64"
+        ? "darwin-arm64"
+        : "linux-x64";
+    writeFileSync(fixtureBudget, `${JSON.stringify(nonCanonicalBudget)}\n`);
+    assert.match(
+      run(),
+      /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B .*baseline-sha=different/u,
+      "non-canonical host keeps the size gate without claiming byte identity",
     );
 
     writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));

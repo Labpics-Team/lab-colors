@@ -52,16 +52,9 @@ function readBudget(path) {
   if (!/^[0-9a-f]{64}$/u.test(measurement?.sha256 ?? "")) {
     fail("measurement.sha256 must identify the exact measured artifact");
   }
-  if (
-    !Number.isSafeInteger(measurement?.gzip9BytesDiagnostic) ||
-    measurement.gzip9BytesDiagnostic <= 0
-  ) {
-    fail("measurement.gzip9BytesDiagnostic must be a positive measured integer");
-  }
   for (const field of [
     "rustToolchain",
     "rustcCommit",
-    "gzipImplementation",
     "wasmPack",
     "wasmBindgen",
     "target",
@@ -74,6 +67,19 @@ function readBudget(path) {
     if (typeof measurement[field] !== "string" || measurement[field].length === 0) {
       fail(`measurement.${field} must be non-empty provenance`);
     }
+  }
+  const expectedPathRemap = [
+    "GITHUB_WORKSPACE=/workspace/lab-colors",
+    "CARGO_HOME=/cargo-home",
+  ];
+  if (
+    !Array.isArray(measurement.rustPathRemap) ||
+    measurement.rustPathRemap.length !== expectedPathRemap.length ||
+    measurement.rustPathRemap.some(
+      (entry, index) => entry !== expectedPathRemap[index],
+    )
+  ) {
+    fail("measurement.rustPathRemap must pin the canonical workspace and CARGO_HOME roots");
   }
   if (!Number.isSafeInteger(policy?.maxRawBytes) || policy.maxRawBytes <= 0) {
     fail("policy.maxRawBytes must be a positive safe integer");
