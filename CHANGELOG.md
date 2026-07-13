@@ -55,6 +55,11 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 
 ### Changed
 
+- WCAG proof envelope переведён на schema 2: SHA всего `lib.rs` заменён
+  versioned binding canonical Cargo lib target и двух exact source
+  capsules. Profile V1, proof ID `wcag22-srgb8-full-domain-q55-v1` и package path
+  `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
+  domains, а доказанная математика и finite artifact прежние.
 - Conformance pack 4.0.0 добавляет `wcag22.json`; `packDigest` закономерно
   изменён. `manifest.numericalCapabilities` зеркалит single public V2 core
   manifest (coverage `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над

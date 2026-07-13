@@ -447,3 +447,9 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
 - Raw WCAG JSON читается через `Wcag22ProfileV1::source_json()` и
   `proof_json()`. Runtime-профиль хранит только IDs/хэши, поэтому отдельно
   поставляемые документы не дублируются в WASM.
+- Proof schema 2 заменяет SHA всего crate-root на versioned semantic route
+  binding. Kernel, Q55 source/bin, profile, generator, normalized facade и
+  terminal evidence остаются byte-identical; production-only parser-capsule в
+  исходном `srgb8.rs` связан exact SHA без роста optimized WASM size или
+  code-body lengths, а добавление несвязанного API больше не выглядит сменой
+  математики.

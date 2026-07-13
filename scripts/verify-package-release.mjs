@@ -207,8 +207,16 @@ async function validateWcag22Evidence() {
   if (!/^[0-9a-f]{8}$/u.test(proof.profile_checksum ?? "")) {
     fail("WCAG22 proof lacks a typed profile checksum");
   }
-  if (!/^[0-9a-f]{64}$/u.test(proof.crate_lib_source_sha256 ?? "")) {
-    fail("WCAG22 proof lacks the proof-bound crate-root digest");
+  if (
+    proof.schema_version !== 2 ||
+    proof.source_binding_schema_version !== 1 ||
+    proof.source_binding_law !== "wcag22-rust-semantic-dependency-cone-v1" ||
+    !/^[0-9a-f]{64}$/u.test(proof.source_route_sha256 ?? "")
+  ) {
+    fail("WCAG22 proof lacks the versioned semantic source binding");
+  }
+  if (Object.hasOwn(proof, "crate_lib_source_sha256")) {
+    fail("WCAG22 proof still binds unrelated whole-crate source bytes");
   }
   if (proof.rows !== 768 || proof.artifact_words !== 1536 || proof.colors !== 16_777_216) {
     fail("WCAG22 proof has incomplete row or finite-domain coverage");

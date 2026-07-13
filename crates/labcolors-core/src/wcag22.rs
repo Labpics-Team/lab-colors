@@ -21,10 +21,10 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "c4a35a902ea49729704d05c2a9a07530a1731ebd4ff7325b5e5baf261fbe7b9e";
+    "941b4490cd5ace2c8b48efdcc3df158160edac3d1ff694b681e9a5d2e01d2ff9";
 const PROOF_PAYLOAD_SHA256: &str =
-    "fa10908a1960e51b122a11ca0413083ab67749c79161c8b5d22a6c0c69ce71fb";
-const VERIFIER_SHA256: &str = "8757b348b99926700c6d9854ed4ae515d4c676b31c7924b0812a3745f2181221";
+    "dc4e197bc235fc2382a3e55d2aff52fcbcee0cc5cb6056b745ec5dc498e3b259";
+const VERIFIER_SHA256: &str = "a24c3a1b39103e18e7493e3677e7120f33c52b5aaa93498d421012bd18e106b6";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
