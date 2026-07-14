@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify current applicability of the immutable feasibility benchmark.
 
-The admitted neutral-path V4 artifact keeps the exact measured ``Cargo.lock``
+The admitted neutral-path V3 artifact keeps the exact measured ``Cargo.lock``
 blob as historical provenance.  This verifier deliberately does not
 reinterpret that blob as a byte-for-byte constraint on unrelated workspace
 packages. Instead it proves that every current Core/benchmark subject is
@@ -308,7 +308,7 @@ def check_current_applicability(
     payload = decode_artifact(raw)
     require(payload.get("schemaVersion") == 1,
             "unsupported benchmark artifact schema")
-    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v4",
+    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v3",
             "unexpected benchmark artifact identity")
 
     manifest = subject_manifest(payload)
