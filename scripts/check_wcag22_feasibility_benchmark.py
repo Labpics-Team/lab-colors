@@ -24,7 +24,7 @@ from typing import Any
 
 
 DEFAULT_ARTIFACT = Path(
-    "/private/tmp/labcolors-wcag22-feasibility-admission-raw-v2.json"
+    "/private/tmp/labcolors-wcag22-feasibility-admission-raw-v3.json"
 )
 HEX_256 = re.compile(r"[0-9a-f]{64}")
 GIT_OBJECT = re.compile(r"[0-9a-f]{40}")
@@ -536,7 +536,7 @@ def check(
 ) -> None:
     require(isinstance(payload, dict), "artifact root must be an object")
     require(payload.get("schemaVersion") == 1, "unsupported benchmark schemaVersion")
-    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v2",
+    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v3",
             "unexpected benchmark artifactId")
     require(
         payload.get("claimBoundary")

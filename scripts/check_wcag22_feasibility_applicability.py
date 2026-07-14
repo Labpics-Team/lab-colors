@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify current applicability of the immutable feasibility benchmark.
 
-The admitted neutral-path V2 artifact keeps the exact measured ``Cargo.lock``
+The admitted neutral-path V3 artifact keeps the exact measured ``Cargo.lock``
 blob as historical provenance.  This verifier deliberately does not
 reinterpret that blob as a byte-for-byte constraint on unrelated workspace
 packages.  Instead
@@ -26,7 +26,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT = ROOT / (
     "crates/labcolors-core/contracts/"
-    "wcag22-feasibility-benchmark-v2.json"
+    "wcag22-feasibility-benchmark-v3.json"
 )
 HISTORICAL_ONLY_PATH = "Cargo.lock"
 CORE_SOURCE_TREE_PATH = "crates/labcolors-core/src"
@@ -312,7 +312,7 @@ def check_current_applicability(
     payload = decode_artifact(raw)
     require(payload.get("schemaVersion") == 1,
             "unsupported benchmark artifact schema")
-    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v2",
+    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v3",
             "unexpected benchmark artifact identity")
 
     manifest = subject_manifest(payload)
