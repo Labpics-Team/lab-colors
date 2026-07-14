@@ -682,6 +682,11 @@ final class ConformanceTests: XCTestCase {
         XCTAssertThrowsError(
             try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: transposedDomain))
 
+        let interiorTransposedDomain = try mutated { domain, _, _ in domain.swapAt(1, 2) }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                Wcag22FeasibilityOutcomeV1.self, from: interiorTransposedDomain))
+
         func reversedBits(_ byte: Int) -> Int {
             var source = byte
             var result = 0

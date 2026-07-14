@@ -276,6 +276,13 @@ public enum Wcag22FeasibilityV1: Codable, Equatable, Sendable {
             guard value.domain.count == 256 else {
                 throw corrupted("evaluated domain must contain exactly 256 candidates")
             }
+            for (index, candidate) in value.domain.enumerated() {
+                guard let channel = UInt8(exactly: index),
+                      candidate == Srgb8BytesV1(red: channel, green: channel, blue: channel)
+                else {
+                    throw corrupted("evaluated domain differs from registered candidate order")
+                }
+            }
             let counts = try relationCounts(value.relations)
             guard counts.applicable > 0, counts.edges > 0 else {
                 throw corrupted("evaluated terminal must contain an applicable edge")

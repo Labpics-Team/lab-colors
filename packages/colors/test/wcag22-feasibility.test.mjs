@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
+import { runInNewContext } from "node:vm";
 
 const packageRoot = new URL("../", import.meta.url);
 const require = createRequire(import.meta.url);
@@ -89,6 +90,41 @@ test("package root rejects an oversized envelope before the avoidable WASM copy"
   assert.equal(root.evaluateWcag22Feasibility(exactLimit).outcome, "success");
   assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate.length, 1);
   assert.strictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], exactLimit);
+});
+
+test("package root rejects non-Uint8Array inputs before touching WASM", async (t) => {
+  const root = await importRootWithInstrumentedWasm(t);
+  const invalidInputs = [
+    ["Array", []],
+    ["Int8Array", new Int8Array()],
+    ["DataView", new DataView(new ArrayBuffer(0))],
+    ["array-like object", { byteLength: 0, length: 0 }],
+    [
+      "tag-spoofed array-like object",
+      { byteLength: 0, length: 0, [Symbol.toStringTag]: "Uint8Array" },
+    ],
+  ];
+
+  for (const [label, input] of invalidInputs) {
+    assert.throws(
+      () => root.evaluateWcag22Feasibility(input),
+      {
+        name: "TypeError",
+        message: "evaluateWcag22Feasibility request must be a Uint8Array",
+      },
+      label,
+    );
+  }
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls, {
+    evaluate: [],
+    max: [],
+    oversize: [],
+  });
+
+  root.initSync();
+  const crossRealm = runInNewContext("new Uint8Array([123])");
+  assert.equal(root.evaluateWcag22Feasibility(crossRealm).outcome, "success");
+  assert.strictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], crossRealm);
 });
 
 test("package root derives the envelope ceiling from WASM instead of copying a literal", async () => {

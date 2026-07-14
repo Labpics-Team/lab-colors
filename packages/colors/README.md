@@ -309,10 +309,11 @@ if (outcome.outcome === "success") {
 }
 ```
 
-Вход — только `Uint8Array` со strict JSON V1. Граница размера выведена из
-грамматики и resource profile; после `init()` её возвращает
-`wcag22FeasibilityMaxBytes()`. Package wrapper проверяет `byteLength` до
-избежимой копии в WASM, а Rust повторяет авторитетную проверку. Выход хранит
+Вход — только настоящий `Uint8Array` со strict JSON V1; иной JavaScript-тип
+детерминированно отклоняется `TypeError` до чтения WASM-owned ceiling и копии.
+Граница размера выведена из грамматики и resource profile; после `init()` её
+возвращает `wcag22FeasibilityMaxBytes()`. Package wrapper проверяет `byteLength`
+до избежимой копии в WASM, а Rust повторяет авторитетную проверку. Выход хранит
 домен и канонические связи по одному разу, а решения — в candidate-major LSB0
 bitset; объектного графа `256 × E` в public result нет.
 

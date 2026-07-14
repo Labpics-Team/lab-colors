@@ -318,29 +318,29 @@ test("whole-call checker mutation-kills missing evidence and inflated claims", (
   }
 });
 
-test("final CI verifies and uploads committed Linux evidence before the size gate", () => {
+test("post-review CI records and uploads fresh Linux evidence before the size gate", () => {
   const ci = ciSource;
   const harness = "node bench/wcag22-feasibility-boundary.bench.mjs";
-  const verify = "\n          --verify";
+  const record = '--record "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v1.json"';
   const fingerprint = "sha256sum packages/colors/pkg/labcolors_bg.wasm";
   const upload =
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
   const oldSizeGate = "node scripts/check-wasm-size-budget.mjs";
   const harnessIndex = ci.indexOf(harness);
-  const verifyIndex = ci.indexOf(verify, harnessIndex);
-  const fingerprintIndex = ci.indexOf(fingerprint, verifyIndex);
-  const uploadIndex = ci.indexOf(upload, verifyIndex);
+  const recordIndex = ci.indexOf(record, harnessIndex);
+  const fingerprintIndex = ci.indexOf(fingerprint, recordIndex);
+  const uploadIndex = ci.indexOf(upload, recordIndex);
   const oldSizeGateIndex = ci.indexOf(oldSizeGate);
-  assert.match(ci, /verify committed #295 canonical whole-call WASM boundary evidence/u);
+  assert.match(ci, /record post-review #295 canonical whole-call WASM boundary candidate/u);
   assert.match(
     ci,
-    /name: "upload exact #295 verified whole-call evidence"/u,
+    /name: "upload exact #295 post-review whole-call candidate"/u,
   );
   assert.ok(harnessIndex >= 0, "the package-root harness must run in CI");
-  assert.ok(verifyIndex > harnessIndex, "CI must rerun the committed evidence verifier");
+  assert.ok(recordIndex > harnessIndex, "CI must persist the fresh exact candidate");
   assert.ok(
-    fingerprintIndex > verifyIndex,
-    "an independent system tool must fingerprint the verified WASM",
+    fingerprintIndex > recordIndex,
+    "an independent system tool must fingerprint the candidate WASM",
   );
   assert.ok(uploadIndex > fingerprintIndex, "upload must follow the independent fingerprint");
   assert.ok(
@@ -349,9 +349,8 @@ test("final CI verifies and uploads committed Linux evidence before the size gat
   );
   assert.match(
     ci,
-    /path: \|[\s\S]*?packages\/colors\/bench\/wcag22-feasibility-wasm-boundary-v1\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm/u,
+    /path: \|[\s\S]*?\$\{\{ runner\.temp \}\}\/wcag22-feasibility-wasm-boundary-v1\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm/u,
   );
-  assert.doesNotMatch(ci, /--record/u, "candidate-recording mode must not survive admission");
   assert.match(ci, /if-no-files-found: error/u);
   assert.match(
     readFileSync(resolve(root, "packages/colors/bench/wcag22-feasibility-boundary.bench.mjs"), "utf8"),
