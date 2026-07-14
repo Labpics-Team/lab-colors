@@ -86,6 +86,11 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   побайтно сохраняет детерминированную проекцию 10 крайних форм × 5 свежих
   процессов из V1; latency, process maxRSS и WASM pages остаются наблюдениями,
   не SLO.
+- Native feasibility admission также append-only: V1/V2/V3 проверяются в
+  исторических snapshots, а V4 связывает текущий полный Core source tree с
+  measurement revision `5e5fdb3` и artifact SHA
+  `e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd`.
+  Сырые наблюдения сохранены без timing threshold.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
   versioned complete-feasibility transport family, поэтому `packDigest`
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public
