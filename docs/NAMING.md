@@ -72,8 +72,11 @@
   исходный текст не меняет хэш.
 - `verify_wcag22_neutral_axis.py` независимо выводит точные фикстуры нейтральной
   оси; `verify_wcag22_feasibility_identity.py` воспроизводит канонические
-  прообразы и упаковку битов; `check_wcag22_feasibility_benchmark.py` проверяет
-  с отказом при любом расхождении неизменяемый первичный допуск;
+  прообразы фиксированного домена;
+  `verify_wcag22_explicit_feasibility_identity.py` независимо проверяет точные
+  UTF-8 ID, переменную непрерывную LSB0-упаковку, partition и SHA-грамматику
+  явного конечного домена; `check_wcag22_feasibility_benchmark.py` проверяет с
+  отказом при любом расхождении неизменяемый первичный допуск;
   `check_wcag22_feasibility_applicability.py` отдельно доказывает его текущую
   применимость, сохраняя полное Core source tree и точные внешние dependency-
   записи; изменяться могут только source-less не-Core workspace-записи без

@@ -17,6 +17,9 @@ use crate::wcag22::{
     wcag22_profile_v1,
 };
 
+#[path = "wcag22_feasibility/explicit.rs"]
+pub mod explicit;
+
 const CANDIDATE_COUNT: u64 = 256;
 const PARTITION_BYTES: u64 = CANDIDATE_COUNT / 8;
 
@@ -315,6 +318,12 @@ pub enum InvalidRequestV1 {
     EmptyOccurrenceId,
     /// No relations were declared.
     EmptyRelations,
+    /// An explicit candidate ID was empty.
+    EmptyCandidateId,
+    /// No explicit candidates were declared.
+    EmptyCandidates,
+    /// The same explicit candidate ID occurred more than once.
+    DuplicateCandidateId { candidate_id: explicit::CandidateId },
     /// An applicable relation had no adjacent colour.
     EmptyAdjacentSet { relation_id: RelationId },
     /// The same relation ID described different canonical declarations.
@@ -329,6 +338,11 @@ impl fmt::Display for InvalidRequestV1 {
             Self::EmptyRelationId => formatter.write_str("relation ID must be non-empty"),
             Self::EmptyOccurrenceId => formatter.write_str("occurrence ID must be non-empty"),
             Self::EmptyRelations => formatter.write_str("at least one relation is required"),
+            Self::EmptyCandidateId => formatter.write_str("candidate ID must be non-empty"),
+            Self::EmptyCandidates => formatter.write_str("at least one candidate is required"),
+            Self::DuplicateCandidateId { candidate_id } => {
+                write!(formatter, "candidate ID {candidate_id} is duplicated")
+            }
             Self::EmptyAdjacentSet { relation_id } => {
                 write!(
                     formatter,
@@ -372,13 +386,13 @@ pub enum EvaluatorInvariantV1 {
 pub enum CompilerInvariantV1 {
     /// Derived raw/canonical layout counts violated their construction laws.
     LayoutMismatch,
-    /// Observed evaluator cells differed from the preflighted `256E` work.
+    /// Observed evaluator cells differed from the preflighted `C×E` work.
     AssessmentCardinalityMismatch { expected: u64, observed: u64 },
     /// Observed candidates differed from the registered domain count.
     CandidateCardinalityMismatch { expected: u64, observed: u64 },
     /// Packed storage rejected a cell proved addressable by preflight.
     DecisionStorageRejectedCell,
-    /// Packed storage rejected the fixed 256-bit partition.
+    /// Packed storage rejected a partition bit proved addressable by preflight.
     DecisionStorageRejectedPartition,
     /// Completed matrix, partition or proof counters disagreed.
     CompleteResultMismatch,
@@ -516,27 +530,91 @@ struct WorkLayoutV1 {
     packed_result_bytes: u64,
 }
 
+/// Private boundary implemented by every finite sRGB8 enumeration. Domain
+/// implementations own only candidate identity/order; the compiler below owns
+/// relation canonicalization, exhaustive evaluation and packed evidence.
+trait FiniteSrgb8DomainV1: Sized {
+    fn raw_opaque_utf8_bytes(&self) -> Result<u64, InvalidRequestV1>;
+    fn canonicalize(&mut self) -> Result<(), InvalidRequestV1>;
+    fn candidate_count(&self) -> Result<u64, InvalidRequestV1>;
+    fn candidate_at(&self, index: u64) -> Option<Srgb8>;
+}
+
+impl FiniteSrgb8DomainV1 for DomainIdV1 {
+    fn raw_opaque_utf8_bytes(&self) -> Result<u64, InvalidRequestV1> {
+        Ok(0)
+    }
+
+    fn canonicalize(&mut self) -> Result<(), InvalidRequestV1> {
+        Ok(())
+    }
+
+    fn candidate_count(&self) -> Result<u64, InvalidRequestV1> {
+        Ok(CANDIDATE_COUNT)
+    }
+
+    fn candidate_at(&self, index: u64) -> Option<Srgb8> {
+        match self {
+            Self::Srgb8NeutralAxis if index < CANDIDATE_COUNT => {
+                let value = index as u8;
+                Some(Srgb8::new([value; 3]))
+            }
+            Self::Srgb8NeutralAxis => None,
+        }
+    }
+}
+
 fn overflow() -> InvalidRequestV1 {
     InvalidRequestV1::ArithmeticOverflow
 }
 
-fn checked_logical_assessments_v1(applicable_edges: u64) -> Result<u64, InvalidRequestV1> {
-    CANDIDATE_COUNT
+fn checked_logical_assessments_for_domain_v1(
+    candidate_count: u64,
+    applicable_edges: u64,
+) -> Result<u64, InvalidRequestV1> {
+    candidate_count
         .checked_mul(applicable_edges)
         .ok_or_else(overflow)
 }
 
-fn checked_packed_result_bytes_v1(
+#[cfg(test)]
+fn checked_logical_assessments_v1(applicable_edges: u64) -> Result<u64, InvalidRequestV1> {
+    checked_logical_assessments_for_domain_v1(CANDIDATE_COUNT, applicable_edges)
+}
+
+fn checked_bit_bytes_v1(bits: u64) -> Result<u64, InvalidRequestV1> {
+    (bits / 8)
+        .checked_add(u64::from(bits % 8 != 0))
+        .ok_or_else(overflow)
+}
+
+fn checked_packed_result_bytes_for_domain_v1(
+    candidate_count: u64,
     applicable_relations: u64,
     applicable_edges: u64,
 ) -> Result<u64, InvalidRequestV1> {
     if applicable_relations == 0 {
         return Ok(0);
     }
-    applicable_edges
-        .checked_add(1)
-        .and_then(|value| PARTITION_BYTES.checked_mul(value))
+    let logical_assessments =
+        checked_logical_assessments_for_domain_v1(candidate_count, applicable_edges)?;
+    let matrix_bytes = checked_bit_bytes_v1(logical_assessments)?;
+    let partition_bytes = checked_bit_bytes_v1(candidate_count)?;
+    matrix_bytes
+        .checked_add(partition_bytes)
         .ok_or_else(overflow)
+}
+
+#[cfg(test)]
+fn checked_packed_result_bytes_v1(
+    applicable_relations: u64,
+    applicable_edges: u64,
+) -> Result<u64, InvalidRequestV1> {
+    checked_packed_result_bytes_for_domain_v1(
+        CANDIDATE_COUNT,
+        applicable_relations,
+        applicable_edges,
+    )
 }
 
 fn resource_value(
@@ -569,8 +647,27 @@ fn resource_limit(limits: ResourceLimitsV1, dimension: ResourceDimensionV1) -> u
     }
 }
 
+#[cfg(test)]
 fn checked_layout_v1(
     profile_id: ResourceProfileIdV1,
+    raw: RawInputCountsV1,
+    canonical: CanonicalCountsV1,
+    limits: ResourceLimitsV1,
+    addressable_byte_limit: u64,
+) -> Result<WorkLayoutV1, ErrorV1> {
+    checked_layout_for_domain_v1(
+        profile_id,
+        CANDIDATE_COUNT,
+        raw,
+        canonical,
+        limits,
+        addressable_byte_limit,
+    )
+}
+
+fn checked_layout_for_domain_v1(
+    profile_id: ResourceProfileIdV1,
+    candidate_count: u64,
     raw: RawInputCountsV1,
     canonical: CanonicalCountsV1,
     limits: ResourceLimitsV1,
@@ -603,21 +700,26 @@ fn checked_layout_v1(
         ));
     }
 
-    let logical_assessments = checked_logical_assessments_v1(canonical.applicable_edges)?;
+    if candidate_count == 0 {
+        return Err(InvalidRequestV1::EmptyCandidates.into());
+    }
+    let logical_assessments =
+        checked_logical_assessments_for_domain_v1(candidate_count, canonical.applicable_edges)?;
     let failure_matrix_bytes = if canonical.applicable_relations == 0 {
         0
     } else {
-        PARTITION_BYTES
-            .checked_mul(canonical.applicable_edges)
-            .ok_or_else(overflow)?
+        checked_bit_bytes_v1(logical_assessments)?
     };
     let partition_bytes = if canonical.applicable_relations == 0 {
         0
     } else {
-        PARTITION_BYTES
+        checked_bit_bytes_v1(candidate_count)?
     };
-    let packed_result_bytes =
-        checked_packed_result_bytes_v1(canonical.applicable_relations, canonical.applicable_edges)?;
+    let packed_result_bytes = checked_packed_result_bytes_for_domain_v1(
+        candidate_count,
+        canonical.applicable_relations,
+        canonical.applicable_edges,
+    )?;
 
     for dimension in [
         ResourceDimensionV1::RawRelations,
@@ -662,7 +764,7 @@ fn checked_layout_v1(
         applicable_relations: canonical.applicable_relations,
         not_evaluated_relations: canonical.not_evaluated_relations,
         applicable_edges: canonical.applicable_edges,
-        candidate_count: CANDIDATE_COUNT,
+        candidate_count,
         logical_assessments,
         failure_matrix_bytes,
         partition_bytes,
@@ -679,11 +781,11 @@ fn usize_as_u64(value: usize) -> Result<u64, ErrorV1> {
     u64::try_from(value).map_err(|_| overflow().into())
 }
 
-fn raw_counts(request: &RequestV1) -> Result<RawInputCountsV1, ErrorV1> {
-    let raw_relations = usize_as_u64(request.relations.len())?;
+fn raw_relation_counts(relations: &[RelationV1]) -> Result<RawInputCountsV1, ErrorV1> {
+    let raw_relations = usize_as_u64(relations.len())?;
     let mut raw_adjacent_entries = 0_u64;
     let mut opaque_utf8_bytes = 0_u64;
-    for relation in &request.relations {
+    for relation in relations {
         add_checked(
             &mut opaque_utf8_bytes,
             usize_as_u64(relation.relation_id.as_str().len())?,
@@ -709,6 +811,20 @@ fn raw_counts(request: &RequestV1) -> Result<RawInputCountsV1, ErrorV1> {
     })
 }
 
+#[cfg(test)]
+fn raw_counts(request: &RequestV1) -> Result<RawInputCountsV1, ErrorV1> {
+    raw_counts_for_domain(&request.domain_id, &request.relations)
+}
+
+fn raw_counts_for_domain<D: FiniteSrgb8DomainV1>(
+    domain: &D,
+    relations: &[RelationV1],
+) -> Result<RawInputCountsV1, ErrorV1> {
+    let mut raw = raw_relation_counts(relations)?;
+    add_checked(&mut raw.opaque_utf8_bytes, domain.raw_opaque_utf8_bytes()?)?;
+    Ok(raw)
+}
+
 fn check_raw_limits(profile_id: ResourceProfileIdV1, raw: RawInputCountsV1) -> Result<(), ErrorV1> {
     for (dimension, requested) in [
         (ResourceDimensionV1::RawRelations, raw.raw_relations),
@@ -731,33 +847,35 @@ fn check_raw_limits(profile_id: ResourceProfileIdV1, raw: RawInputCountsV1) -> R
     Ok(())
 }
 
+#[cfg(test)]
 fn canonicalize(request: &mut RequestV1) -> Result<CanonicalCountsV1, ErrorV1> {
-    for relation in &mut request.relations {
+    canonicalize_relations(&mut request.relations)
+}
+
+fn canonicalize_relations(relations: &mut Vec<RelationV1>) -> Result<CanonicalCountsV1, ErrorV1> {
+    for relation in relations.iter_mut() {
         if let RelationKindV1::Applicable { adjacent, .. } = &mut relation.kind {
             adjacent.sort_unstable();
             adjacent.dedup();
         }
     }
-    request
-        .relations
-        .sort_unstable_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    relations.sort_unstable_by(|left, right| left.relation_id.cmp(&right.relation_id));
 
-    let conflict_index = request
-        .relations
+    let conflict_index = relations
         .windows(2)
         .position(|pair| pair[0].relation_id == pair[1].relation_id && pair[0] != pair[1]);
     if let Some(conflict_index) = conflict_index {
         // `RelationId` uses Arc<str>: this is a fixed-size ownership clone,
         // never a proportional copy of the opaque client bytes.
-        let relation_id = request.relations[conflict_index].relation_id.clone();
+        let relation_id = relations[conflict_index].relation_id.clone();
         return Err(InvalidRequestV1::ConflictingRelationId { relation_id }.into());
     }
-    request.relations.dedup();
+    relations.dedup();
 
     let mut applicable_relations = 0_u64;
     let mut not_evaluated_relations = 0_u64;
     let mut applicable_edges = 0_u64;
-    for relation in &request.relations {
+    for relation in relations.iter() {
         match &relation.kind {
             RelationKindV1::Applicable { adjacent, .. } => {
                 add_checked(&mut applicable_relations, 1)?;
@@ -767,7 +885,7 @@ fn canonicalize(request: &mut RequestV1) -> Result<CanonicalCountsV1, ErrorV1> {
         }
     }
     Ok(CanonicalCountsV1 {
-        canonical_relations: usize_as_u64(request.relations.len())?,
+        canonical_relations: usize_as_u64(relations.len())?,
         applicable_relations,
         not_evaluated_relations,
         applicable_edges,
@@ -915,7 +1033,12 @@ trait DecisionStorage {
         logical_index: u64,
         decision: Wcag22ApplicableDecisionV1,
     ) -> Result<(), ()>;
-    fn finish(&mut self, passing_partition: [u8; 32]) -> Result<(), ()>;
+    fn write_feasible_candidate(
+        &mut self,
+        matrix_bytes: u64,
+        candidate_index: u64,
+    ) -> Result<(), ()>;
+    fn finish(&mut self) -> Result<(), ()>;
 }
 
 #[derive(Debug, Default)]
@@ -946,42 +1069,56 @@ impl DecisionStorage for PackedDecisionStorage {
         Ok(())
     }
 
-    fn finish(&mut self, passing_partition: [u8; 32]) -> Result<(), ()> {
-        let start = self.bytes.len().checked_sub(32).ok_or(())?;
-        let destination = self.bytes.get_mut(start..).ok_or(())?;
-        if destination.len() != passing_partition.len() {
-            return Err(());
-        }
-        destination.copy_from_slice(&passing_partition);
+    fn write_feasible_candidate(
+        &mut self,
+        matrix_bytes: u64,
+        candidate_index: u64,
+    ) -> Result<(), ()> {
+        let byte_index = matrix_bytes
+            .checked_add(candidate_index / 8)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or(())?;
+        let bit = (candidate_index % 8) as u8;
+        let byte = self.bytes.get_mut(byte_index).ok_or(())?;
+        *byte |= 1_u8 << bit;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), ()> {
         Ok(())
     }
 }
 
 #[derive(Debug)]
-struct KernelEvaluatedV1 {
-    domain_id: DomainIdV1,
+struct KernelEvaluatedV1<D> {
+    domain: D,
     resource_profile_id: ResourceProfileIdV1,
     relations: Vec<RelationV1>,
     layout: WorkLayoutV1,
     observed_candidates: u64,
     observed_assessments: u64,
     passing_candidates: u64,
-    partition: [u8; 32],
     atomic_evidence: AtomicEvidenceBindingV1,
 }
 
 #[derive(Debug)]
-struct KernelNotEvaluatedV1 {
-    domain_id: DomainIdV1,
+struct KernelNotEvaluatedV1<D> {
+    domain: D,
     resource_profile_id: ResourceProfileIdV1,
     relations: Vec<RelationV1>,
     layout: WorkLayoutV1,
 }
 
 #[derive(Debug)]
-enum KernelResultV1 {
-    Evaluated(KernelEvaluatedV1),
-    NotEvaluated(KernelNotEvaluatedV1),
+enum KernelResultV1<D> {
+    Evaluated(KernelEvaluatedV1<D>),
+    NotEvaluated(KernelNotEvaluatedV1<D>),
+}
+
+struct KernelRequestV1<D> {
+    domain: D,
+    relations: Vec<RelationV1>,
+    resource_profile_id: ResourceProfileIdV1,
 }
 
 fn evaluator_error(
@@ -1003,15 +1140,39 @@ fn compiler_result_error() -> ErrorV1 {
 }
 
 fn evaluate_with<E: PairEvaluator, S: DecisionStorage>(
-    mut request: RequestV1,
+    request: RequestV1,
     evaluator: &mut E,
     storage: &mut S,
-) -> Result<KernelResultV1, ErrorV1> {
-    let raw = raw_counts(&request)?;
+) -> Result<KernelResultV1<DomainIdV1>, ErrorV1> {
+    evaluate_domain_with(
+        KernelRequestV1 {
+            domain: request.domain_id,
+            relations: request.relations,
+            resource_profile_id: request.resource_profile_id,
+        },
+        evaluator,
+        storage,
+    )
+}
+
+fn evaluate_domain_with<D, E, S>(
+    mut request: KernelRequestV1<D>,
+    evaluator: &mut E,
+    storage: &mut S,
+) -> Result<KernelResultV1<D>, ErrorV1>
+where
+    D: FiniteSrgb8DomainV1,
+    E: PairEvaluator,
+    S: DecisionStorage,
+{
+    let raw = raw_counts_for_domain(&request.domain, &request.relations)?;
     check_raw_limits(request.resource_profile_id, raw)?;
-    let canonical = canonicalize(&mut request)?;
-    let layout = checked_layout_v1(
+    request.domain.canonicalize()?;
+    let candidate_count = request.domain.candidate_count()?;
+    let canonical = canonicalize_relations(&mut request.relations)?;
+    let layout = checked_layout_for_domain_v1(
         request.resource_profile_id,
+        candidate_count,
         raw,
         canonical,
         ResourceLimitsV1::for_profile(request.resource_profile_id),
@@ -1034,7 +1195,7 @@ fn evaluate_with<E: PairEvaluator, S: DecisionStorage>(
 
     if layout.applicable_relations == 0 {
         return Ok(KernelResultV1::NotEvaluated(KernelNotEvaluatedV1 {
-            domain_id: request.domain_id,
+            domain: request.domain,
             resource_profile_id: request.resource_profile_id,
             relations: request.relations,
             layout,
@@ -1047,19 +1208,30 @@ fn evaluate_with<E: PairEvaluator, S: DecisionStorage>(
             CompilerInvariantV1::LayoutMismatch,
         ));
     };
+    let first_candidate = request.domain.candidate_at(0).ok_or({
+        ErrorV1::CompilerInvariantViolation(CompilerInvariantV1::CandidateCardinalityMismatch {
+            expected: layout.candidate_count,
+            observed: 0,
+        })
+    })?;
     let expected_evidence = expected_atomic_evidence_binding_v1().map_err(|source| {
         evaluator_error(
-            Srgb8::new([0; 3]),
+            first_candidate,
             first_applicable.0,
             first_applicable.1,
             EvaluatorInvariantV1::Source(source),
         )
     })?;
-    let mut partition = [0_u8; 32];
     let mut logical_index = 0_u64;
     let mut observed_candidates = 0_u64;
     let mut passing_candidates = 0_u64;
-    for (candidate_index, candidate) in request.domain_id.candidates().enumerate() {
+    for candidate_index in 0..layout.candidate_count {
+        let candidate = request.domain.candidate_at(candidate_index).ok_or({
+            ErrorV1::CompilerInvariantViolation(CompilerInvariantV1::CandidateCardinalityMismatch {
+                expected: layout.candidate_count,
+                observed: candidate_index,
+            })
+        })?;
         let mut candidate_passes = true;
         for relation in &request.relations {
             let RelationKindV1::Applicable {
@@ -1141,7 +1313,13 @@ fn evaluate_with<E: PairEvaluator, S: DecisionStorage>(
             }
         }
         if candidate_passes {
-            partition[candidate_index / 8] |= 1_u8 << (candidate_index % 8);
+            storage
+                .write_feasible_candidate(layout.failure_matrix_bytes, candidate_index)
+                .map_err(|()| {
+                    ErrorV1::CompilerInvariantViolation(
+                        CompilerInvariantV1::DecisionStorageRejectedPartition,
+                    )
+                })?;
             passing_candidates += 1;
         }
         observed_candidates += 1;
@@ -1162,19 +1340,30 @@ fn evaluate_with<E: PairEvaluator, S: DecisionStorage>(
             },
         ));
     }
-    storage.finish(partition).map_err(|()| {
+    if request
+        .domain
+        .candidate_at(layout.candidate_count)
+        .is_some()
+    {
+        return Err(ErrorV1::CompilerInvariantViolation(
+            CompilerInvariantV1::CandidateCardinalityMismatch {
+                expected: layout.candidate_count,
+                observed: layout.candidate_count.saturating_add(1),
+            },
+        ));
+    }
+    storage.finish().map_err(|()| {
         ErrorV1::CompilerInvariantViolation(CompilerInvariantV1::DecisionStorageRejectedPartition)
     })?;
 
     Ok(KernelResultV1::Evaluated(KernelEvaluatedV1 {
-        domain_id: request.domain_id,
+        domain: request.domain,
         resource_profile_id: request.resource_profile_id,
         relations: request.relations,
         layout,
         observed_candidates,
         observed_assessments: logical_index,
         passing_candidates,
-        partition,
         atomic_evidence: expected_evidence,
     }))
 }
@@ -1194,23 +1383,40 @@ fn packed_bit(bytes: &[u8], logical_index: u64) -> bool {
     bytes[byte_index] & (1_u8 << bit) != 0
 }
 
+fn unused_tail_bits_are_zero(bytes: &[u8], used_bits: u64) -> bool {
+    let remainder = (used_bits % 8) as u8;
+    if remainder == 0 {
+        return true;
+    }
+    let Some(last) = bytes.last() else {
+        return false;
+    };
+    let used_mask = ((1_u16 << remainder) - 1) as u8;
+    last & !used_mask == 0
+}
+
 fn validate_complete_result_v1(
     layout: WorkLayoutV1,
     matrix: &[u8],
-    partition: &[u8; 32],
+    partition: &[u8],
     counters: EvaluationProofCountersV1,
 ) -> Result<(), CompilerInvariantV1> {
     let expected_matrix_bytes = usize::try_from(layout.failure_matrix_bytes)
         .map_err(|_| CompilerInvariantV1::CompleteResultMismatch)?;
-    if matrix.len() != expected_matrix_bytes {
+    let expected_partition_bytes = usize::try_from(layout.partition_bytes)
+        .map_err(|_| CompilerInvariantV1::CompleteResultMismatch)?;
+    if matrix.len() != expected_matrix_bytes
+        || partition.len() != expected_partition_bytes
+        || !unused_tail_bits_are_zero(matrix, layout.logical_assessments)
+        || !unused_tail_bits_are_zero(partition, layout.candidate_count)
+    {
         return Err(CompilerInvariantV1::CompleteResultMismatch);
     }
     if counters.logical_assessments != layout.logical_assessments {
         return Err(CompilerInvariantV1::CompleteResultMismatch);
     }
-    let mut derived_partition = [0_u8; 32];
     let mut passing = 0_u64;
-    for candidate in 0_u64..CANDIDATE_COUNT {
+    for candidate in 0_u64..layout.candidate_count {
         let row_start = candidate
             .checked_mul(layout.applicable_edges)
             .ok_or(CompilerInvariantV1::CompleteResultMismatch)?;
@@ -1219,15 +1425,12 @@ fn validate_complete_result_v1(
             let failed = packed_bit(matrix, row_start + edge);
             row_passes &= !failed;
         }
+        if row_passes != packed_bit(partition, candidate) {
+            return Err(CompilerInvariantV1::CompleteResultMismatch);
+        }
         if row_passes {
-            let candidate = usize::try_from(candidate)
-                .map_err(|_| CompilerInvariantV1::CompleteResultMismatch)?;
-            derived_partition[candidate / 8] |= 1_u8 << (candidate % 8);
             passing += 1;
         }
-    }
-    if &derived_partition != partition {
-        return Err(CompilerInvariantV1::CompleteResultMismatch);
     }
     if counters.passing_candidates != passing {
         return Err(CompilerInvariantV1::CompleteResultMismatch);
@@ -1235,7 +1438,7 @@ fn validate_complete_result_v1(
     if counters
         .passing_candidates
         .checked_add(counters.failing_candidates)
-        != Some(CANDIDATE_COUNT)
+        != Some(layout.candidate_count)
     {
         return Err(CompilerInvariantV1::CompleteResultMismatch);
     }
@@ -1298,7 +1501,7 @@ fn evaluation_id(
     binding: &AtomicEvidenceBindingV1,
     layout: WorkLayoutV1,
     matrix_digest: &[u8; 32],
-    partition: &[u8; 32],
+    partition: &[u8],
 ) -> EvaluationIdV1 {
     let mut hasher = Hasher::new();
     hasher.update(EVALUATION_SEPARATOR);
@@ -1322,6 +1525,67 @@ fn evaluation_id(
     hasher.update(matrix_digest);
     hasher.update(partition);
     EvaluationIdV1(*hasher.finalize().as_bytes())
+}
+
+struct SealedPackedV1 {
+    packed: Vec<u8>,
+    matrix_digest: [u8; 32],
+    matrix_bytes: usize,
+}
+
+impl SealedPackedV1 {
+    fn partition(&self) -> &[u8] {
+        &self.packed[self.matrix_bytes..]
+    }
+}
+
+fn seal_evaluated_v1<D>(
+    result: &KernelEvaluatedV1<D>,
+    storage: PackedDecisionStorage,
+) -> Result<SealedPackedV1, ErrorV1> {
+    let matrix_bytes = usize::try_from(result.layout.failure_matrix_bytes).map_err(|_| {
+        ErrorV1::ResourceLimitExceeded {
+            profile_id: result.resource_profile_id,
+            dimension: ResourceDimensionV1::PackedResultBytes,
+            requested: result.layout.failure_matrix_bytes,
+            limit: usize::MAX as u64,
+        }
+    })?;
+    let packed_bytes = usize::try_from(result.layout.packed_result_bytes).map_err(|_| {
+        ErrorV1::ResourceLimitExceeded {
+            profile_id: result.resource_profile_id,
+            dimension: ResourceDimensionV1::PackedResultBytes,
+            requested: result.layout.packed_result_bytes,
+            limit: usize::MAX as u64,
+        }
+    })?;
+    if storage.bytes.len() != packed_bytes || matrix_bytes > packed_bytes {
+        return Err(compiler_result_error());
+    }
+    let (matrix, partition) = storage.bytes.split_at(matrix_bytes);
+    let Some(failing_candidates) = result
+        .layout
+        .candidate_count
+        .checked_sub(result.passing_candidates)
+    else {
+        return Err(compiler_result_error());
+    };
+    validate_complete_result_v1(
+        result.layout,
+        matrix,
+        partition,
+        EvaluationProofCountersV1 {
+            logical_assessments: result.observed_assessments,
+            passing_candidates: result.passing_candidates,
+            failing_candidates,
+        },
+    )
+    .map_err(ErrorV1::CompilerInvariantViolation)?;
+    Ok(SealedPackedV1 {
+        matrix_digest: *sha256::digest(matrix).as_bytes(),
+        packed: storage.bytes,
+        matrix_bytes,
+    })
 }
 
 /// Sealed evidence for one complete evaluated terminal.
@@ -1479,27 +1743,36 @@ impl<'a> AssessmentV1<'a> {
     }
 }
 
-struct AssessmentIter<'a> {
-    record: &'a EvaluatedV1,
-    candidate: u16,
+struct AssessmentCellV1<'a> {
+    candidate_index: u64,
+    relation: &'a RelationV1,
+    adjacent: Srgb8,
+    decision: Wcag22ApplicableDecisionV1,
+}
+
+struct AssessmentCursorV1<'a> {
+    relations: &'a [RelationV1],
+    matrix: &'a [u8],
+    candidate_index: u64,
+    candidate_count: u64,
     relation_index: usize,
     adjacent_index: usize,
     logical_index: u64,
     remaining: usize,
 }
 
-impl<'a> Iterator for AssessmentIter<'a> {
-    type Item = AssessmentV1<'a>;
+impl<'a> Iterator for AssessmentCursorV1<'a> {
+    type Item = AssessmentCellV1<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.candidate < 256 {
-            if self.relation_index >= self.record.relations.len() {
-                self.candidate += 1;
+        while self.candidate_index < self.candidate_count {
+            if self.relation_index >= self.relations.len() {
+                self.candidate_index += 1;
                 self.relation_index = 0;
                 self.adjacent_index = 0;
                 continue;
             }
-            let relation = &self.record.relations[self.relation_index];
+            let relation = &self.relations[self.relation_index];
             let RelationKindV1::Applicable { adjacent, .. } = &relation.kind else {
                 self.relation_index += 1;
                 self.adjacent_index = 0;
@@ -1511,8 +1784,7 @@ impl<'a> Iterator for AssessmentIter<'a> {
                 continue;
             }
             let adjacent_value = adjacent[self.adjacent_index];
-            let candidate_value = self.candidate as u8;
-            let decision = if packed_bit(self.record.failure_matrix(), self.logical_index) {
+            let decision = if packed_bit(self.matrix, self.logical_index) {
                 Wcag22ApplicableDecisionV1::Fail
             } else {
                 Wcag22ApplicableDecisionV1::Pass
@@ -1520,9 +1792,9 @@ impl<'a> Iterator for AssessmentIter<'a> {
             self.adjacent_index += 1;
             self.logical_index += 1;
             self.remaining -= 1;
-            return Some(AssessmentV1 {
-                candidate: Srgb8::new([candidate_value; 3]),
-                relation_id: &relation.relation_id,
+            return Some(AssessmentCellV1 {
+                candidate_index: self.candidate_index,
+                relation,
                 adjacent: adjacent_value,
                 decision,
             });
@@ -1532,6 +1804,31 @@ impl<'a> Iterator for AssessmentIter<'a> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for AssessmentCursorV1<'_> {}
+
+struct AssessmentIter<'a> {
+    cursor: AssessmentCursorV1<'a>,
+}
+
+impl<'a> Iterator for AssessmentIter<'a> {
+    type Item = AssessmentV1<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let cell = self.cursor.next()?;
+        let candidate = cell.candidate_index as u8;
+        Some(AssessmentV1 {
+            candidate: Srgb8::new([candidate; 3]),
+            relation_id: &cell.relation.relation_id,
+            adjacent: cell.adjacent,
+            decision: cell.decision,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.cursor.size_hint()
     }
 }
 
@@ -1613,12 +1910,16 @@ impl EvaluatedV1 {
     /// Full candidate-major `256E` matrix without per-cell allocation.
     pub fn assessments(&self) -> impl ExactSizeIterator<Item = AssessmentV1<'_>> + '_ {
         AssessmentIter {
-            record: self,
-            candidate: 0,
-            relation_index: 0,
-            adjacent_index: 0,
-            logical_index: 0,
-            remaining: self.layout.logical_assessments as usize,
+            cursor: AssessmentCursorV1 {
+                relations: &self.relations,
+                matrix: self.failure_matrix(),
+                candidate_index: 0,
+                candidate_count: self.layout.candidate_count,
+                relation_index: 0,
+                adjacent_index: 0,
+                logical_index: 0,
+                remaining: self.layout.logical_assessments as usize,
+            },
         }
     }
 }
@@ -1715,10 +2016,10 @@ pub fn evaluate(request: RequestV1) -> Result<FeasibilityV1, ErrorV1> {
     match evaluate_with(request, &mut evaluator, &mut storage)? {
         KernelResultV1::NotEvaluated(result) => {
             debug_assert_eq!(result.layout.applicable_relations, 0);
-            let domain_digest = domain_digest(result.domain_id);
+            let domain_digest = domain_digest(result.domain);
             let relation_set_digest = relation_set_digest(&result.relations);
             Ok(FeasibilityV1::NotEvaluated(NotEvaluatedV1 {
-                domain_id: result.domain_id,
+                domain_id: result.domain,
                 relations: result.relations,
                 resource_profile_id: result.resource_profile_id,
                 domain_digest,
@@ -1726,63 +2027,27 @@ pub fn evaluate(request: RequestV1) -> Result<FeasibilityV1, ErrorV1> {
             }))
         }
         KernelResultV1::Evaluated(result) => {
-            let matrix_length =
-                usize::try_from(result.layout.failure_matrix_bytes).map_err(|_| {
-                    ErrorV1::ResourceLimitExceeded {
-                        profile_id: result.resource_profile_id,
-                        dimension: ResourceDimensionV1::PackedResultBytes,
-                        requested: result.layout.failure_matrix_bytes,
-                        limit: usize::MAX as u64,
-                    }
-                })?;
-            let packed_length =
-                usize::try_from(result.layout.packed_result_bytes).map_err(|_| {
-                    ErrorV1::ResourceLimitExceeded {
-                        profile_id: result.resource_profile_id,
-                        dimension: ResourceDimensionV1::PackedResultBytes,
-                        requested: result.layout.packed_result_bytes,
-                        limit: usize::MAX as u64,
-                    }
-                })?;
-            if storage.bytes.len() != packed_length {
-                return Err(compiler_result_error());
-            }
-            let (matrix, packed_partition) = storage.bytes.split_at(matrix_length);
-            if packed_partition != result.partition {
-                return Err(compiler_result_error());
-            }
-            let Some(failing_candidates) = CANDIDATE_COUNT.checked_sub(result.passing_candidates)
-            else {
-                return Err(compiler_result_error());
-            };
-            validate_complete_result_v1(
-                result.layout,
-                matrix,
-                &result.partition,
-                EvaluationProofCountersV1 {
-                    logical_assessments: result.observed_assessments,
-                    passing_candidates: result.passing_candidates,
-                    failing_candidates,
-                },
-            )
-            .map_err(ErrorV1::CompilerInvariantViolation)?;
-
-            let domain_digest = domain_digest(result.domain_id);
+            let sealed = seal_evaluated_v1(&result, storage)?;
+            let partition: [u8; 32] = sealed
+                .partition()
+                .try_into()
+                .map_err(|_| compiler_result_error())?;
+            let domain_digest = domain_digest(result.domain);
             let relation_set_digest = relation_set_digest(&result.relations);
             let binding = result.atomic_evidence;
-            let matrix_digest = *sha256::digest(matrix).as_bytes();
+            let matrix_digest = sealed.matrix_digest;
             let evaluation_id = evaluation_id(
                 domain_digest,
                 relation_set_digest,
                 &binding,
                 result.layout,
                 &matrix_digest,
-                &result.partition,
+                &partition,
             );
             let proof = EvaluationProofV1 {
                 evaluation_id,
                 resource_profile_id: result.resource_profile_id,
-                domain_id: result.domain_id,
+                domain_id: result.domain,
                 domain_digest,
                 domain_count: result.observed_candidates,
                 domain_first: Srgb8::new([0; 3]),
@@ -1794,14 +2059,14 @@ pub fn evaluate(request: RequestV1) -> Result<FeasibilityV1, ErrorV1> {
                 applicable_edges: result.layout.applicable_edges,
                 logical_assessments: result.observed_assessments,
                 matrix_digest,
-                partition: result.partition,
+                partition,
                 atomic_evidence: binding,
             };
             let evaluated = EvaluatedV1 {
-                domain_id: result.domain_id,
+                domain_id: result.domain,
                 relations: result.relations,
                 layout: result.layout,
-                packed: storage.bytes,
+                packed: sealed.packed,
                 domain_digest,
                 relation_set_digest,
                 evaluation_id,

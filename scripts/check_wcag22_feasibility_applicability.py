@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Verify current applicability of the immutable feasibility benchmark.
 
-The admitted Slice-A artifact keeps the exact measured ``Cargo.lock`` blob as
-historical provenance.  This verifier deliberately does not reinterpret that
-blob as a byte-for-byte constraint on unrelated workspace packages.  Instead
+The admitted neutral-path V2 artifact keeps the exact measured ``Cargo.lock``
+blob as historical provenance.  This verifier deliberately does not
+reinterpret that blob as a byte-for-byte constraint on unrelated workspace
+packages.  Instead
 it proves that every current Core/benchmark subject is unchanged and that the
 current lock preserves the exact ``labcolors-core`` record plus every sourced
 registry/git package from the measured lock.  Only source-less non-Core
@@ -25,7 +26,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT = ROOT / (
     "crates/labcolors-core/contracts/"
-    "wcag22-feasibility-benchmark-v1.json"
+    "wcag22-feasibility-benchmark-v2.json"
 )
 HISTORICAL_ONLY_PATH = "Cargo.lock"
 CORE_SOURCE_TREE_PATH = "crates/labcolors-core/src"
@@ -33,6 +34,7 @@ EXPECTED_SUBJECT_PATHS = (
     "Cargo.toml",
     "crates/labcolors-core/src/lib.rs",
     "crates/labcolors-core/src/wcag22_feasibility.rs",
+    "crates/labcolors-core/src/wcag22_feasibility/explicit.rs",
     "crates/labcolors-core/src/srgb8.rs",
     "crates/labcolors-core/src/sha256.rs",
     "crates/labcolors-core/src/wcag22.rs",
@@ -310,7 +312,7 @@ def check_current_applicability(
     payload = decode_artifact(raw)
     require(payload.get("schemaVersion") == 1,
             "unsupported benchmark artifact schema")
-    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v1",
+    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v2",
             "unexpected benchmark artifact identity")
 
     manifest = subject_manifest(payload)

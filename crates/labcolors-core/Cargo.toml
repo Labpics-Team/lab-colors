@@ -61,3 +61,7 @@ required-features = ["wcag22-feasibility"]
 [[test]]
 name = "wcag22_feasibility"
 required-features = ["wcag22-feasibility"]
+
+[[test]]
+name = "wcag22_explicit_feasibility"
+required-features = ["wcag22-feasibility"]
