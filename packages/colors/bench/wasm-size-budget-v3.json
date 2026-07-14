@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 3,
+  "budgetId": "labcolors-wasm-raw-issue-296-v3",
+  "artifact": "packages/colors/pkg/labcolors_bg.wasm",
+  "buildRecipe": {
+    "path": "packages/colors/bench/wasm-size-budget-v1.json",
+    "fileSha256": "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
+    "recipeSha256": "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4"
+  },
+  "measurement": {
+    "issue": 296,
+    "measurementPlatform": "linux-x64",
+    "rawBytes": 523937,
+    "sha256": "394cd18b6162a5093fb321fd00aacd8161309a4afcad8fbe66b49137e56c12d9"
+  },
+  "policy": {
+    "maxRawBytes": 523937,
+    "derivation": "exact-accepted-issue-296-slice-a-measurement",
+    "gzip": "diagnostic-only"
+  }
+}

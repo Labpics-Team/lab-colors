@@ -331,10 +331,10 @@ test("final CI verifies and uploads committed Linux evidence before the size gat
   const fingerprintIndex = ci.indexOf(fingerprint, verifyIndex);
   const uploadIndex = ci.indexOf(upload, verifyIndex);
   const oldSizeGateIndex = ci.indexOf(oldSizeGate);
-  assert.match(ci, /verify committed #295 canonical whole-call WASM boundary evidence/u);
+  assert.match(ci, /verify committed #296-A canonical whole-call WASM boundary evidence/u);
   assert.match(
     ci,
-    /name: "upload exact #295 verified whole-call evidence"/u,
+    /name: "upload exact #296-A verified whole-call evidence"/u,
   );
   assert.ok(harnessIndex >= 0, "the package-root harness must run in CI");
   assert.ok(verifyIndex > harnessIndex, "CI must rerun the committed evidence verifier");

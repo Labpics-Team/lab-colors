@@ -463,8 +463,11 @@ Raw-размер WASM — hard gate с append-only историей. Неизм�
 `bench/wasm-size-budget-v2.json` отдельно допускает полный transport #295:
 ровно `521240 B`, SHA-256
 `d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0`.
-V2 ссылается на точные байты V1 и его build recipe; новый ceiling равен
-измерению, поэтому произвольного запаса нет и история #284 не переписана.
+Текущий `bench/wasm-size-budget-v3.json` повторно допускает Core-срез #296-A:
+ровно `523937 B`, SHA-256
+`394cd18b6162a5093fb321fd00aacd8161309a4afcad8fbe66b49137e56c12d9`.
+Каждый ceiling равен своему каноническому Linux-x64 измерению, произвольного
+запаса нет; V1/V2 остаются побайтно неизменными.
 
 Release-equivalent Linux x64 CI требует одновременно точный размер и SHA.
 Отдельный `bench/wcag22-feasibility-wasm-boundary-v1.json` фиксирует 10 крайних

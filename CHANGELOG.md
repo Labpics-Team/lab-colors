@@ -71,8 +71,9 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
 - WASM size history стала append-only: immutable V1 сохраняет допуск #284
-  (`454385 B`), а V2 допускает полный transport #295 как точные `521240 B` /
-  `d37841…9ca0` с нулевым headroom и ссылкой на неизменяемый V1 build recipe.
+  (`454385 B`), V2 — transport #295 (`521240 B` / `d37841…9ca0`), а V3 —
+  Core-срез #296-A (`523937 B` / `394cd1…12d9`). Каждый допуск имеет нулевой
+  headroom и точную ссылку на неизменяемый V1 build recipe; V1/V2 не переписаны.
   Canonical whole-call artifact фиксирует 10 крайних форм × 5 свежих процессов;
   latency, process maxRSS и WASM pages остаются наблюдениями, не SLO.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
