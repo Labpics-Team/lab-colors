@@ -59,10 +59,7 @@ fn exact_oracle_counts_cross_the_protocol_without_adapter_math() {
         default,
         vec![[0x76; 3]],
     )]));
-    assert!(matches!(
-        seven.feasibility(),
-        Some(FeasibilityV1::Feasible(_))
-    ));
+    assert!(seven.feasibility().is_some_and(FeasibilityV1::is_feasible));
     assert_eq!(feasible_count(&seven), 7);
 
     let two = evaluate(&request(vec![applicable(
@@ -71,10 +68,7 @@ fn exact_oracle_counts_cross_the_protocol_without_adapter_math() {
         default,
         vec![[0; 3], [255; 3]],
     )]));
-    assert!(matches!(
-        two.feasibility(),
-        Some(FeasibilityV1::Feasible(_))
-    ));
+    assert!(two.feasibility().is_some_and(FeasibilityV1::is_feasible));
     assert_eq!(feasible_count(&two), 2);
 
     let zero = evaluate(&request(vec![applicable(
@@ -83,10 +77,7 @@ fn exact_oracle_counts_cross_the_protocol_without_adapter_math() {
         default,
         vec![[0; 3], [255; 3], [0x76; 3]],
     )]));
-    assert!(matches!(
-        zero.feasibility(),
-        Some(FeasibilityV1::Infeasible(_))
-    ));
+    assert!(zero.feasibility().is_some_and(FeasibilityV1::is_infeasible));
     assert_eq!(feasible_count(&zero), 0);
 
     let ninety_two = evaluate(&request(vec![applicable(
@@ -158,10 +149,10 @@ fn mixed_and_all_not_applicable_keep_declarations_without_fabricated_evidence() 
         "occurrence",
         "client-reason",
     )]));
-    let declaration = match all_na.feasibility() {
-        Some(FeasibilityV1::NotEvaluated(value)) => value,
-        other => panic!("expected successful NotEvaluated, got {other:?}"),
-    };
+    let declaration = all_na
+        .feasibility()
+        .and_then(FeasibilityV1::not_evaluated)
+        .unwrap_or_else(|| panic!("expected successful NotEvaluated, got {all_na:?}"));
     assert_eq!(declaration.relations().len(), 1);
 }
 
@@ -434,6 +425,14 @@ fn exact_compact_ceiling_is_derived_and_attainable() {
     }
     let encoded = encode_request_v1(&request(relations)).expect("exact-limit encoding");
     assert_eq!(encoded.len() as u64, MAX_ENVELOPE_BYTES_V1);
+
+    let at_limit_outcome = evaluate_wcag22_feasibility_v1(&encoded);
+    assert!(
+        at_limit_outcome
+            .feasibility()
+            .is_some_and(FeasibilityV1::is_feasible),
+        "the generated exact-limit maximizer must decode to a complete non-empty partition"
+    );
 
     let mut over = encoded;
     over.push(b' ');

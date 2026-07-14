@@ -1043,23 +1043,83 @@ impl NotEvaluatedV1 {
 
 /// Successful feasibility terminal. Failure is represented only by
 /// [`ProtocolOutcomeV1::Failure`], never by a fourth variant here.
+///
+/// Evaluated terminal payloads are variant-sealed: an external adapter may
+/// inspect or clone the evidence, but cannot rewrap genuine Core evidence with
+/// the opposite terminal.
+///
+/// ```compile_fail
+/// use labcolors_protocol::{
+///     EvaluatedV1, FeasibilityV1, NotEvaluatedV1, ProtocolOutcomeV1,
+/// };
+///
+/// fn rewrap_feasible(value: EvaluatedV1) -> FeasibilityV1 {
+///     FeasibilityV1::Feasible(value)
+/// }
+///
+/// fn rewrap_infeasible(value: EvaluatedV1) -> FeasibilityV1 {
+///     FeasibilityV1::Infeasible(value)
+/// }
+///
+/// fn rewrap_not_evaluated(value: NotEvaluatedV1) -> FeasibilityV1 {
+///     FeasibilityV1::NotEvaluated(value)
+/// }
+///
+/// fn flip_terminal(outcome: ProtocolOutcomeV1) -> ProtocolOutcomeV1 {
+///     let evaluated = outcome
+///         .feasibility()
+///         .and_then(FeasibilityV1::evaluated)
+///         .expect("evaluated Core outcome")
+///         .clone();
+///     ProtocolOutcomeV1::Success {
+///         feasibility: FeasibilityV1::Infeasible(evaluated),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", content = "result", rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum FeasibilityV1 {
     /// Complete evaluation found a non-empty feasible partition.
+    #[non_exhaustive]
     Feasible(EvaluatedV1),
     /// Complete evaluation proved the registered partition empty.
+    #[non_exhaustive]
     Infeasible(EvaluatedV1),
     /// Every canonical relation was client-declared NotApplicable.
+    #[non_exhaustive]
     NotEvaluated(NotEvaluatedV1),
 }
 
 impl FeasibilityV1 {
+    /// Whether complete evaluation found at least one feasible candidate.
+    pub const fn is_feasible(&self) -> bool {
+        matches!(self, Self::Feasible(..))
+    }
+
+    /// Whether complete evaluation proved the feasible partition empty.
+    pub const fn is_infeasible(&self) -> bool {
+        matches!(self, Self::Infeasible(..))
+    }
+
+    /// Whether every canonical relation was declared NotApplicable.
+    pub const fn is_not_evaluated(&self) -> bool {
+        matches!(self, Self::NotEvaluated(..))
+    }
+
     /// Borrow an evaluated payload from either evaluated terminal.
     pub const fn evaluated(&self) -> Option<&EvaluatedV1> {
         match self {
             Self::Feasible(value) | Self::Infeasible(value) => Some(value),
             Self::NotEvaluated(_) => None,
+        }
+    }
+
+    /// Borrow the declaration-only payload.
+    pub const fn not_evaluated(&self) -> Option<&NotEvaluatedV1> {
+        match self {
+            Self::NotEvaluated(value) => Some(value),
+            Self::Feasible(..) | Self::Infeasible(..) => None,
         }
     }
 }
@@ -1076,10 +1136,10 @@ impl FeasibilityV1 {
 ///     serde_json::from_str(r#"{"schemaVersion":1,"outcome":"success"}"#).unwrap();
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-// The largest current variant is a fixed 328-byte header over bounded owned
-// buffers. Keeping it inline avoids one heap allocation, OOM edge and
-// indirection on every successful compiler call. A test below caps future
-// stack growth at 384 bytes; this is an implementation guard, not wire ABI.
+// The successful terminal keeps bounded owned-buffer headers inline, avoiding
+// one heap allocation, OOM edge and indirection on every compiler call. The
+// layout test below admits exactly the largest payload plus its required tag
+// slot, with no discretionary stack headroom; this is not wire ABI.
 #[allow(clippy::large_enum_variant)]
 pub enum ProtocolOutcomeV1 {
     /// Successful complete feasibility operation.
@@ -1682,10 +1742,26 @@ mod tests {
     }
 
     #[test]
-    fn inline_outcome_header_stays_within_the_reviewed_stack_guard() {
-        let bytes = core::mem::size_of::<ProtocolOutcomeV1>();
-        assert!(bytes > 0);
-        assert!(bytes <= 384, "inline outcome header grew to {bytes} bytes");
+    fn inline_outcome_header_has_no_discretionary_stack_headroom() {
+        let largest_terminal_payload =
+            core::mem::size_of::<EvaluatedV1>().max(core::mem::size_of::<NotEvaluatedV1>());
+        let required_terminal_tag_slot = core::mem::align_of::<FeasibilityV1>();
+        let exact_terminal_header = largest_terminal_payload + required_terminal_tag_slot;
+
+        assert_eq!(
+            core::mem::size_of::<FeasibilityV1>(),
+            exact_terminal_header,
+            "terminal layout gained bytes beyond its largest payload and aligned tag slot"
+        );
+        assert!(
+            core::mem::size_of::<ProtocolErrorV1>() <= exact_terminal_header,
+            "failure payload became the largest outcome payload"
+        );
+        assert_eq!(
+            core::mem::size_of::<ProtocolOutcomeV1>(),
+            exact_terminal_header,
+            "outer outcome tag introduced an additional stack slot"
+        );
     }
 
     #[test]
