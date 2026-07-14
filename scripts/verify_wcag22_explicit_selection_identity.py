@@ -665,6 +665,32 @@ def mutation_self_tests() -> tuple[int, int, int]:
         lambda value, _kwargs: value["relations"][0]["edges"].reverse(),
     )
 
+    def use_applicable_relation_ordinals(value: dict[str, Any]) -> None:
+        for ordinal, relation in enumerate(value["relations"]):
+            relation["relationOrdinal"] = ordinal
+
+    def reset_edge_ordinals_per_relation(value: dict[str, Any]) -> None:
+        for relation in value["relations"]:
+            for ordinal, edge in enumerate(relation["edges"]):
+                edge["edgeOrdinal"] = ordinal
+
+    survivors: list[str] = []
+    for label, mutate in (
+        ("applicable-only relation ordinals", use_applicable_relation_ordinals),
+        ("per-relation edge ordinal reset", reset_edge_ordinals_per_relation),
+    ):
+        candidate = copy.deepcopy(receipt_inputs)
+        mutate(candidate)
+        if sha256(receipt_preimage(**candidate)) == baseline_receipt:
+            survivors.append(label)
+        else:
+            mutation_checks += 1
+    require(
+        survivors == [],
+        "receipt traversal mutants survived identity oracle: "
+        + ", ".join(survivors),
+    )
+
     # Input permutations are canonicalization invariants inherited from A.
     permuted = copy.deepcopy(model)
     permuted["candidates"].reverse()
