@@ -109,7 +109,7 @@
 | WASM/npm не повторяет Core-математику, preflight-ит `Uint8Array.byteLength` до избегаемой ABI-копии и переносит domain/relations один раз с candidate-major LSB0 matrix | `wasm_parity::committed_conformance_pack_replays_in_wasm32`; feasibility boundary tests; `wcag22-feasibility.test.mjs` с независимым LSB0 reduction и mutation subject | дифференциальный public-boundary replay pack 5 + независимый packed consumer |
 | UniFFI/Swift вызывает тот же protocol byte path, preflight-ит `Data`/`[UInt8]` до сырой FFI-копии и исчерпывающе декодирует terminal/error algebra | FFI mechanical-shell tests; Swift pack-5 replay, limit+1 bridge spy, structural mutation tests и extreme-shape whole-call observations | побайтный FFI/protocol differential + независимый Swift packed consumer |
 | conformance pack 5 добавляет только feasibility-family; прежние шесть family остаются byte-identical, а 13 новых outcomes воспроизводятся canonical protocol encoder побайтно | `pack_v5_contract`; `reference_runner::protocol_reproduces_committed_wcag22_feasibility_exactly`; release verifier/clean-install replay | SHA-256 immutable-family guards + дифференциальный protocol/public-package replay |
-| исторический native-допуск остаётся неизменным, а текущая применимость не зависит от добавленных transport-крейтов | старый checker исполняется в чистом snapshot `6001cf4`; отдельный applicability verifier фиксирует полный Core source tree, Core package record и все sourced lock records, разрешая только изменения source-less non-Core workspace-записей | exact Git objects + fail-closed Cargo.lock V4 parser и мутационные негативные контроли |
+| исторический native-допуск V1 остаётся неизменным; V2 заново измеряет текущий neutral-вход через общий variable-domain kernel | V1 checker исполняется в чистом измеренном snapshot `6001cf4`, его более поздний applicability verifier — в последнем применимом `94efeee`; V2 привязан к source SHA `9a4144d`, artifact SHA `7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1` и полному текущему Core source tree; applicability разрешает только изменения source-less non-Core workspace-записей | exact Git objects + fail-closed Cargo.lock V4 parser, 13 V2 checker-мутаций и сырые native-наблюдения без timing threshold |
 | канонический WASM transport воспроизводим побайтно и завершает все граничные whole-call формы | append-only size V2: `521240 B` + точный SHA без headroom; committed whole-call artifact: 10 форм × 5 fresh-process samples, exact request/outcome hashes и source/pack/toolchain bindings | независимые Linux `wc`/`sha256sum` + повторный package-root verifier; latency/maxRSS/pages не превращаются в пороги |
 
 Здесь `E` — число канонических применимых рёбер «связь × сосед»
@@ -140,7 +140,10 @@ LSB0-матрица занимает `ceil(C×E/8)` байт без выравн
 Зарегистрированная нейтральная ось остаётся частным случаем `C=256` с прежними
 байтами публичного V1-контракта.
 
-Артефакт измерений не доказывает полную память WebAssembly, размер
+Артефакт V2 измеряет прежнюю нейтральную ось через общий kernel и потому
+проверяет отсутствие регрессии уже работающего пути. Он не подменяет точные
+тесты переменного `C×E` и не выдаёт время neutral-сортировки за оценку стоимости
+клиентских ID. Артефакт не доказывает полную память WebAssembly, размер
 сериализованного результата или клиентскую задержку: эти величины явно
 находятся вне границы доказанного утверждения.
 

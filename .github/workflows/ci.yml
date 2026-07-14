@@ -302,10 +302,12 @@ jobs:
         run: python3 scripts/verify_wcag22_neutral_axis.py
       - name: verify WCAG22 feasibility identity byte grammar
         run: python3 scripts/verify_wcag22_feasibility_identity.py
-      - name: validate committed WCAG22 feasibility benchmark evidence
+      - name: verify explicit WCAG22 feasibility identity and anti-vacuum mutations
+        run: python3 scripts/verify_wcag22_explicit_feasibility_identity.py --self-test
+      - name: validate historical and current WCAG22 feasibility benchmark evidence
         run: |
-          artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
-          protocol=(
+          historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
+          historical_protocol=(
             --admit-revision fea99a1ea4148a5a72423c88220655f7f84213fe
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
@@ -315,9 +317,10 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
-          historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
+          historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
+          historical_applicability_snapshot=94efeeeb1811f5515558ab2d79014a5e4c3a570a
           historical_root="$RUNNER_TEMP/wcag22-feasibility-slice-a-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          git worktree add --detach "$historical_root" "$historical_snapshot"
+          git worktree add --detach "$historical_root" "$historical_checker_snapshot"
           cleanup_history() {
             git worktree remove --force "$historical_root"
           }
@@ -325,16 +328,42 @@ jobs:
           (
             cd "$historical_root"
             python3 scripts/check_wcag22_feasibility_benchmark.py \
-              "$artifact" "${protocol[@]}" \
+              "$historical_artifact" "${historical_protocol[@]}" \
               --verify-current-subjects \
               --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
               --self-test
           )
           cleanup_history
+          git worktree add --detach "$historical_root" "$historical_applicability_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_applicability.py \
+              "$historical_artifact" \
+              --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+              --self-test
+          )
+          cleanup_history
           trap - EXIT
+
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
+          current_protocol=(
+            --admit-revision 9a4144d23fb3582bae8e0f0e2749722eef1b1e56
+            --admit-rustc-release 1.96.0
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
+          python3 scripts/check_wcag22_feasibility_benchmark.py \
+            "$current_artifact" "${current_protocol[@]}" \
+            --verify-current-subjects \
+            --artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1 \
+            --self-test
           python3 scripts/check_wcag22_feasibility_applicability.py \
-            "$artifact" \
-            --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+            "$current_artifact" \
+            --artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1 \
             --self-test
 
   audit:

@@ -1240,7 +1240,7 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
   }
 });
 
-test("feasibility benchmark applicability permits only source-less non-Core lock drift", () => {
+test("feasibility benchmark keeps V1 history and admits only exact V2 Core subjects", () => {
   const checker = join(
     root,
     "scripts",
@@ -1254,10 +1254,10 @@ test("feasibility benchmark applicability permits only source-less non-Core lock
         "crates",
         "labcolors-core",
         "contracts",
-        "wcag22-feasibility-benchmark-v1.json",
+        "wcag22-feasibility-benchmark-v2.json",
       ),
       "--artifact-sha256",
-      "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e",
+      "7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1",
       "--self-test",
     ], {
       cwd: root,
@@ -1269,17 +1269,23 @@ test("feasibility benchmark applicability permits only source-less non-Core lock
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(
     ci,
-    /historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    /historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_checker_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
     "the unchanged checker must replay in its exact clean Slice-A snapshot",
-  );
-  assert.equal(
-    ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    1,
-    "the historical checker must never be applied to the additive current workspace",
   );
   assert.match(
     ci,
-    /python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    /historical_applicability_snapshot=94efeeeb1811f5515558ab2d79014a5e4c3a570a[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_applicability_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    "the V1 applicability law must replay where its verifier first existed",
+  );
+  assert.match(
+    ci,
+    /current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json"[\s\S]*?--admit-revision 9a4144d23fb3582bae8e0f0e2749722eef1b1e56[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1[\s\S]*?--self-test/u,
+    "V2 must bind the current generic kernel to one exact measured source commit",
+  );
+  assert.equal(
+    ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
+    2,
+    "CI must validate exactly one historical and one current benchmark artifact",
   );
 });
 
