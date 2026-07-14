@@ -433,11 +433,18 @@ jobs:
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
           --record "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v1.json"
+      - name: independently fingerprint the exact #295 WASM candidate
+        run: |
+          bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
+          sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
+          echo "canonical candidate raw=${bytes}B sha256=${sha256}"
       - name: "upload exact #295 whole-call candidate before expected size RED"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v1.json
+          path: |
+            ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v1.json
+            packages/colors/pkg/labcolors_bg.wasm
           if-no-files-found: error
           retention-days: 30
       - name: enforce measured WASM raw-byte budget

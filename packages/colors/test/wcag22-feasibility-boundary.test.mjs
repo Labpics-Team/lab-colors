@@ -322,11 +322,13 @@ test("first-pass CI records and uploads Linux evidence before the immutable #284
   const ci = ciSource;
   const harness = "node bench/wcag22-feasibility-boundary.bench.mjs";
   const record = '--record "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v1.json"';
+  const fingerprint = "sha256sum packages/colors/pkg/labcolors_bg.wasm";
   const upload =
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
   const oldSizeGate = "node scripts/check-wasm-size-budget.mjs";
   const harnessIndex = ci.indexOf(harness);
   const recordIndex = ci.indexOf(record);
+  const fingerprintIndex = ci.indexOf(fingerprint, recordIndex);
   const uploadIndex = ci.indexOf(upload, recordIndex);
   const oldSizeGateIndex = ci.indexOf(oldSizeGate);
   assert.match(ci, /record #295 canonical whole-call WASM boundary candidate/u);
@@ -336,14 +338,18 @@ test("first-pass CI records and uploads Linux evidence before the immutable #284
   );
   assert.ok(harnessIndex >= 0, "the package-root harness must run in CI");
   assert.ok(recordIndex > harnessIndex, "the CI run must persist the exact candidate");
-  assert.ok(uploadIndex > recordIndex, "upload must follow the completed record");
+  assert.ok(
+    fingerprintIndex > recordIndex,
+    "an independent system tool must fingerprint the recorded WASM",
+  );
+  assert.ok(uploadIndex > fingerprintIndex, "upload must follow the independent fingerprint");
   assert.ok(
     oldSizeGateIndex > uploadIndex,
     "the retrievable candidate must precede the immutable #284 size gate",
   );
   assert.match(
     ci,
-    /path: \$\{\{ runner\.temp \}\}\/wcag22-feasibility-wasm-boundary-v1\.json/u,
+    /path: \|[\s\S]*?\$\{\{ runner\.temp \}\}\/wcag22-feasibility-wasm-boundary-v1\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm/u,
   );
   assert.match(ci, /if-no-files-found: error/u);
   assert.match(
