@@ -473,6 +473,41 @@ fn receipt_hasher(
     hasher
 }
 
+trait ReceiptSink {
+    fn write(&mut self, bytes: &[u8]);
+}
+
+impl ReceiptSink for Hasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.update(bytes);
+    }
+}
+
+fn receipt_sink_u64(sink: &mut impl ReceiptSink, value: u64) {
+    sink.write(&value.to_le_bytes());
+}
+
+fn receipt_sink_len_prefixed(sink: &mut impl ReceiptSink, bytes: &[u8]) {
+    receipt_sink_u64(sink, bytes.len() as u64);
+    sink.write(bytes);
+}
+
+fn stream_receipt_edge(
+    sink: &mut impl ReceiptSink,
+    edge_ordinal: u64,
+    relation_id: &[u8],
+    criterion_key: &[u8],
+    foreground: Srgb8,
+    background: Srgb8,
+) {
+    receipt_sink_u64(sink, edge_ordinal);
+    receipt_sink_len_prefixed(sink, relation_id);
+    receipt_sink_len_prefixed(sink, criterion_key);
+    sink.write(&foreground.bytes());
+    sink.write(&background.bytes());
+    sink.write(&[1]);
+}
+
 fn preflight(
     record: &EvaluatedV1,
     policy: &FirstFeasibleInDeclaredOrderV1,
@@ -645,12 +680,14 @@ fn select_with<E: PairEvaluator>(
                 ));
             }
 
-            hash_u64(&mut receipt, edge_ordinal);
-            hash_len_prefixed(&mut receipt, relation.relation_id().as_str().as_bytes());
-            hash_len_prefixed(&mut receipt, criterion.key().as_bytes());
-            receipt.update(&candidate.emitted.bytes());
-            receipt.update(&adjacent.bytes());
-            receipt.update(&[1]);
+            stream_receipt_edge(
+                &mut receipt,
+                edge_ordinal,
+                relation.relation_id().as_str().as_bytes(),
+                criterion.key().as_bytes(),
+                candidate.emitted,
+                adjacent,
+            );
             edge_ordinal = edge_ordinal.checked_add(1).ok_or({
                 SelectionErrorV1::IntegrityViolation(
                     SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
@@ -796,6 +833,48 @@ mod tests {
                 evidence: self.evidence.clone(),
             })
         }
+    }
+
+    #[derive(Default)]
+    struct CountingSink {
+        bytes: u64,
+    }
+
+    impl ReceiptSink for CountingSink {
+        fn write(&mut self, bytes: &[u8]) {
+            self.bytes += u64::try_from(bytes.len()).unwrap();
+        }
+    }
+
+    fn relation_receipt_bytes(relation_id: &[u8], edges: u64) -> u64 {
+        let mut sink = CountingSink::default();
+        for edge_ordinal in 0..edges {
+            stream_receipt_edge(
+                &mut sink,
+                edge_ordinal,
+                relation_id,
+                Wcag22CriterionV1::Sc143TextDefault.key().as_bytes(),
+                Srgb8::new([255; 3]),
+                Srgb8::new([0; 3]),
+            );
+        }
+        sink.bytes
+    }
+
+    #[test]
+    fn relation_identity_is_streamed_once_not_once_per_edge() {
+        let edges = ResourceProfileIdV1::Compile.limit(ResourceDimensionV1::ApplicableEdges);
+        let opaque_bytes = ResourceProfileIdV1::Compile.limit(ResourceDimensionV1::OpaqueUtf8Bytes);
+        let long_len = usize::try_from(opaque_bytes - 2).unwrap();
+        let short_id = [b'r'];
+        let long_id = vec![b'r'; long_len];
+
+        let short = relation_receipt_bytes(&short_id, edges);
+        let long = relation_receipt_bytes(&long_id, edges);
+        assert_eq!(
+            long - short,
+            u64::try_from(long_len - short_id.len()).unwrap()
+        );
     }
 
     #[test]
