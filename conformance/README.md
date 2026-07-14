@@ -56,11 +56,26 @@ encoders `labcolors-protocol`. Outcome сохраняет вложенную а�
 `failureMatrix` и 32-byte partition. В нём нет `256 × E` cells/assessments,
 списков feasible/infeasible candidates или локально пересобранного proof.
 
-Corpus фиксирует exact 7/2/0, все три ratio-3 критерия на 92, ratio-3
-black+white на 59, mixed/all NotApplicable, conflicting relation ID, raw
-resource rejection и пару запросов с несвязанными opaque IDs. Последняя пара
-обязана иметь одинаковые физические packed decisions и разные declared
-identity.
+Числа feasibility ниже — не параметры solver-а, а точные мощности допустимых
+подмножеств полной 256-точечной оси `#000000…#FFFFFF`:
+
+- для normal text 4.5:1 против `#767676` проходят 7 кандидатов:
+  `#000000…#040404` и `#FEFEFE…#FFFFFF`; против black+white проходят только
+  `#757575…#767676` (2), а добавление `#767676` к black+white даёт пустое
+  пересечение (0);
+- для каждого из трёх критериев с отношением 3:1 против `#767676` проходят
+  `#000000…#2D2D2D` и `#D2D2D2…#FFFFFF` (92); против black+white —
+  `#5A5A5A…#949494` (59).
+
+Любое изменение adjacent bytes или нормативного отношения пересчитывает набор,
+а не сохраняет эти числа как константы. Независимый exact-rational oracle —
+`scripts/verify_wcag22_neutral_axis.py`; его content-bound результат —
+`crates/labcolors-core/contracts/wcag22-neutral-axis-oracle-v1.json`. Production
+differential и mutation tests убивают any/first-only, пропуск adjacent и
+пропуск endpoint. Corpus также фиксирует mixed/all NotApplicable, conflicting
+relation ID, raw resource rejection и пару запросов с несвязанными opaque IDs.
+Последняя пара обязана иметь одинаковые физические packed decisions и разные
+declared identity.
 
 `muddiness.json` — это `experimental compatibility proxy`: corpus доказывает
 воспроизводимость исторического числового API, но не валидированный на

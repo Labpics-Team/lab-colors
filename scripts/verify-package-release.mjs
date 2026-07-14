@@ -1177,12 +1177,48 @@ async function validateConformance(conformance) {
   };
 }
 
-function lockedTypescriptVersion(packageLock) {
-  const version = packageLock.packages?.["node_modules/typescript"]?.version;
+function lockedTypescriptVersion(packageLock, packagePath, label) {
+  const version = packageLock.packages?.[packagePath]?.version;
   if (!/^\d+\.\d+\.\d+(?:[-+].+)?$/u.test(version ?? "")) {
-    fail("package-lock.json does not pin an exact TypeScript compiler version");
+    fail(`package-lock.json does not pin an exact ${label} version`);
   }
   return version;
+}
+
+function lockedTypescriptCompilers(packageJson, packageLock) {
+  const minimumSpec = packageJson.devDependencies?.["typescript-floor"];
+  const minimumDeclared = minimumSpec?.match(
+    /^npm:typescript@(\d+\.\d+\.\d+)$/u,
+  )?.[1];
+  if (!minimumDeclared) {
+    fail("package.json must declare an exact npm:typescript@X.Y.Z consumer floor");
+  }
+  const compilers = [
+    {
+      role: "minimum-consumer",
+      packageDirectory: "typescript-floor",
+      version: lockedTypescriptVersion(
+        packageLock,
+        "node_modules/typescript-floor",
+        "minimum consumer TypeScript",
+      ),
+    },
+    {
+      role: "workspace-locked",
+      packageDirectory: "typescript",
+      version: lockedTypescriptVersion(
+        packageLock,
+        "node_modules/typescript",
+        "workspace TypeScript compiler",
+      ),
+    },
+  ];
+  if (compilers[0].version !== minimumDeclared) {
+    fail(
+      `minimum TypeScript lock ${compilers[0].version} differs from declared ${minimumDeclared}`,
+    );
+  }
+  return compilers;
 }
 
 function lockedNpmVersion(packageJson) {
@@ -1770,7 +1806,7 @@ void [
 async function verifyCleanConsumer(
   tarballPath,
   packageJson,
-  packageLock,
+  typescriptCompilers,
   expectedBuildMetadata,
   expectedWcag22Artifacts,
 ) {
@@ -1781,16 +1817,22 @@ async function verifyCleanConsumer(
       `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
     );
 
-    const typescriptVersion = lockedTypescriptVersion(packageLock);
-    const localTypescript = await readJson(
-      resolve(PACKAGE_DIR, "node_modules/typescript/package.json"),
-    );
-    if (localTypescript.version !== typescriptVersion) {
-      fail(
-        `installed TypeScript ${localTypescript.version} differs from lockfile ${typescriptVersion}`,
+    for (const compiler of typescriptCompilers) {
+      const localTypescript = await readJson(
+        resolve(
+          PACKAGE_DIR,
+          "node_modules",
+          compiler.packageDirectory,
+          "package.json",
+        ),
       );
+      if (localTypescript.version !== compiler.version) {
+        fail(
+          `installed ${compiler.role} TypeScript ${localTypescript.version} ` +
+            `differs from lockfile ${compiler.version}`,
+        );
+      }
     }
-    const typescriptCompiler = resolve(PACKAGE_DIR, "node_modules/typescript/bin/tsc");
 
     npm(
       [
@@ -1837,26 +1879,34 @@ async function verifyCleanConsumer(
     await writeFile(typesPath, typeSmokeSource());
 
     command(process.execPath, [runtimePath], consumer);
-    command(
-      process.execPath,
-      [
-        typescriptCompiler,
-        "--noEmit",
-        "--strict",
-        "--skipLibCheck",
-        "false",
-        "--target",
-        "ES2022",
-        "--lib",
-        "ES2022,DOM",
-        "--module",
-        "NodeNext",
-        "--moduleResolution",
-        "NodeNext",
-        typesPath,
-      ],
-      consumer,
-    );
+    for (const compiler of typescriptCompilers) {
+      command(
+        process.execPath,
+        [
+          resolve(
+            PACKAGE_DIR,
+            "node_modules",
+            compiler.packageDirectory,
+            "lib",
+            "tsc.js",
+          ),
+          "--noEmit",
+          "--strict",
+          "--skipLibCheck",
+          "false",
+          "--target",
+          "ES2022",
+          "--lib",
+          "ES2022,DOM",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          typesPath,
+        ],
+        consumer,
+      );
+    }
   } finally {
     await rm(consumer, { recursive: true, force: true });
   }
@@ -1909,6 +1959,7 @@ export async function verifyPackageRelease() {
 
   const coreVersion = workspaceVersion(cargoSource);
   const npmVersion = lockedNpmVersion(packageJson);
+  const typescriptCompilers = lockedTypescriptCompilers(packageJson, packageLock);
   const lockRoot = packageLock.packages?.[""];
   if (packageJson.name !== "@labpics/colors") fail(`unexpected npm package name: ${packageJson.name}`);
   const consumerNodeFloor = packageJson.engines?.node?.match(/^>=(\d+\.\d+\.\d+)$/u)?.[1];
@@ -1976,7 +2027,7 @@ export async function verifyPackageRelease() {
   await verifyCleanConsumer(
     canonicalPack.path,
     packageJson,
-    packageLock,
+    typescriptCompilers,
     buildMetadataValue,
     wcag22Evidence.artifacts,
   );
@@ -2013,7 +2064,8 @@ export async function verifyPackageRelease() {
         npm: npmVersion,
       },
       typescript: {
-        compiler: lockedTypescriptVersion(packageLock),
+        compiler: typescriptCompilers[1].version,
+        minimumConsumerCompiler: typescriptCompilers[0].version,
         target: "ES2022",
         libraries: ["ES2022", "DOM"],
         skipLibCheck: false,

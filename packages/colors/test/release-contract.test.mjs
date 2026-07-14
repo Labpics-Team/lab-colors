@@ -1464,7 +1464,9 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(verifier, /installedBuildMetadata/);
   assert.match(verifier, /isDeepStrictEqual\(installedBuildMetadata, expectedBuildMetadata\)/);
   assert.match(verifier, /"--offline"/);
-  assert.match(verifier, /node_modules\/typescript\/package\.json/);
+  assert.match(verifier, /packageDirectory: "typescript"/u);
+  assert.match(verifier, /packageDirectory: "typescript-floor"/u);
+  assert.match(verifier, /compiler\.packageDirectory,[\s\S]*?"package\.json"/u);
   assert.doesNotMatch(verifier, /`typescript@\$\{typescriptVersion\}`/);
   assert.match(verifier, /"--lib",\s+"ES2022,DOM"/u);
   assert.doesNotMatch(verifier, /ES2022,DOM,ESNext\.Disposable/u);
@@ -1560,4 +1562,68 @@ test("package root curates public types while keeping feasibility internals priv
     "root types must equal the reviewed public subset exactly",
   );
   assert.doesNotMatch(rootTypes, /InitOutput|__wbg_/u, "raw wasm ABI must stay private");
+});
+
+test("public declarations compile at the documented minimum TypeScript version", () => {
+  const packageJson = JSON.parse(read("packages", "colors", "package.json"));
+  const packageLock = JSON.parse(read("packages", "colors", "package-lock.json"));
+  assert.equal(packageJson.devDependencies["typescript-floor"], "npm:typescript@5.2.2");
+  assert.equal(
+    packageLock.packages["node_modules/typescript-floor"]?.version,
+    "5.2.2",
+    "the consumer floor must be an exact offline lock, not a floating install",
+  );
+
+  const readme = read("packages", "colors", "README.md");
+  assert.match(readme, /TypeScript `>= 5\.2\.2`/u);
+  assert.match(
+    readme,
+    /typescriptlang\.org\/docs\/handbook\/release-notes\/typescript-5-2\.html/u,
+  );
+
+  execFileSync(process.execPath, [
+    join(root, "packages", "colors", "node_modules", "typescript-floor", "lib", "tsc.js"),
+    "--noEmit",
+    "--strict",
+    "--skipLibCheck",
+    "false",
+    "--target",
+    "ES2022",
+    "--lib",
+    "ES2022,DOM",
+    "--module",
+    "NodeNext",
+    "--moduleResolution",
+    "NodeNext",
+    "index.d.ts",
+    "apply-theme.d.ts",
+    "watch-theme.d.ts",
+    "adapt-theme.d.ts",
+    "effective-bg.d.ts",
+  ], {
+    cwd: join(root, "packages", "colors"),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const verifier = read("scripts", "verify-package-release.mjs");
+  assert.match(verifier, /minimumConsumerCompiler/u);
+  assert.match(verifier, /node_modules\/typescript-floor/u);
+});
+
+test("conformance docs define every feasibility count as an oracle output", () => {
+  const readme = read("conformance", "README.md");
+  for (const range of [
+    "#000000…#040404",
+    "#FEFEFE…#FFFFFF",
+    "#757575…#767676",
+    "#000000…#2D2D2D",
+    "#D2D2D2…#FFFFFF",
+    "#5A5A5A…#949494",
+  ]) {
+    assert.ok(readme.includes(range), `feasibility count docs omit exact range ${range}`);
+  }
+  assert.match(readme, /256/u);
+  assert.match(readme, /scripts\/verify_wcag22_neutral_axis\.py/u);
+  assert.match(readme, /wcag22-neutral-axis-oracle-v1\.json/u);
+  assert.match(readme, /не параметры/u);
 });
