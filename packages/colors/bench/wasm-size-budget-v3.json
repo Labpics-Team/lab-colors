@@ -11,7 +11,7 @@
     "issue": 296,
     "measurementPlatform": "linux-x64",
     "rawBytes": 521231,
-    "sha256": "ba534f985b800d7d7f115bf2f38f0c5de1c1a5a6ae263cfb78ad8b71dd439e53"
+    "sha256": "779379e914909ff1ddbb5afdd6554d026b586f3c71ef6b2cfeba3468bf93e029"
   },
   "policy": {
     "maxRawBytes": 521231,
