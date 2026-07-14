@@ -83,14 +83,15 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   Core-срез #296-A (`521231 B` / `779379…e029`), а текущий V4 — #296-B
   (`520993 B` / `9ae0fa…dd16`). Каждый допуск имеет нулевой headroom и точную
   ссылку на неизменяемый V1 build recipe; V1/V2/V3 не переписаны. Whole-call V2
-  побайтно сохраняет детерминированную проекцию 10 крайних форм × 5 свежих
-  процессов из V1; latency, process maxRSS и WASM pages остаются наблюдениями,
-  не SLO.
-- Native feasibility admission также append-only: V1/V2/V3 проверяются в
-  исторических snapshots, а V4 связывает текущий полный Core source tree с
-  measurement revision `5e5fdb3` и artifact SHA
-  `e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd`.
-  Сырые наблюдения сохранены без timing threshold.
+  сохраняет детерминированную request/outcome-проекцию 10 крайних форм × 5
+  свежих процессов из V1 и привязан к текущему native admission; latency,
+  process maxRSS и WASM pages остаются наблюдениями, не SLO.
+- Native feasibility admission также append-only относительно принятого
+  `main`: V1/V2 проверяются в исторических snapshots, а текущий V3 связывает
+  полный Core source tree с measurement revision `01718a2` и artifact SHA
+  `47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec`.
+  Сырые наблюдения сохранены без timing threshold; промежуточные draft-артефакты
+  не становятся отдельной публичной историей после squash.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
   versioned complete-feasibility transport family, поэтому `packDigest`
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public

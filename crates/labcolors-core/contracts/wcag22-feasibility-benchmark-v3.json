@@ -16,15 +16,15 @@
     "measurementThreads": 1,
     "requestConstructionMeasured": false,
     "rustcVerbose": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: aarch64-apple-darwin\nrelease: 1.96.0\nLLVM version: 22.1.2",
-    "gitRevision": "5781d4ab84b39a585d437e8e04604b25ef891cf1",
-    "gitTree": "80ad67ed91e12aa664fc7d771dc72249766199d6",
+    "gitRevision": "01718a2bb0b53b6d50587a88e687d7bb332d51f0",
+    "gitTree": "04542f03cc0924214fb4c6599381ccb0f2014075",
     "sourceTreeClean": true,
     "sampleCountExplicit": true,
     "sourceObjects": {
       "workspaceCargo": {"path": "Cargo.toml", "gitObject": "e64e7a0e3875e37dbd8be06c013868da3248b4b3"},
       "workspaceLock": {"path": "Cargo.lock", "gitObject": "bd2faf4108ed85d275ee595ce3824ed199b7c722"},
       "coreCargo": {"path": "crates/labcolors-core/Cargo.toml", "gitObject": "4e9c0893754f1a6d131d98f85f0101902f0991c2"},
-      "coreSourceTree": {"path": "crates/labcolors-core/src", "gitObject": "560d654a9df773850973343a65552a1fa363169b"},
+      "coreSourceTree": {"path": "crates/labcolors-core/src", "gitObject": "2faa9af5e5975963d86ecaea9fbdb7a71f2a3b24"},
       "wcag22Srgb8Contract": {"path": "crates/labcolors-core/contracts/wcag22-srgb8-v1.json", "gitObject": "7b3932335398bdbc0760136904cb245305749b09"},
       "wcag22Q55ProofContract": {"path": "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json", "gitObject": "ddce1912e8e06ce6bd55c9854acf27a28a31b134"},
       "benchmarkHarness": {"path": "crates/labcolors-core/benches/wcag22_feasibility_admission.rs", "gitObject": "5e0ea3cd6c0fb90fd3a916a31f765e25210b8cf8"},
@@ -111,11 +111,11 @@
         "feasibleCandidates": 7
       },
       "samples": [
-        {"index": 0, "elapsedNs": 30333, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
-        {"index": 1, "elapsedNs": 18542, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
-        {"index": 2, "elapsedNs": 18250, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
-        {"index": 3, "elapsedNs": 18125, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
-        {"index": 4, "elapsedNs": 18125, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64}
+        {"index": 0, "elapsedNs": 108542, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 1, "elapsedNs": 19792, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 2, "elapsedNs": 19417, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 3, "elapsedNs": 19292, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 4, "elapsedNs": 19208, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64}
       ]
     },
     {
@@ -145,11 +145,11 @@
         "feasibleCandidates": 0
       },
       "samples": [
-        {"index": 0, "elapsedNs": 30248584, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
-        {"index": 1, "elapsedNs": 21093792, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
-        {"index": 2, "elapsedNs": 17861750, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
-        {"index": 3, "elapsedNs": 15878583, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
-        {"index": 4, "elapsedNs": 15314208, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536}
+        {"index": 0, "elapsedNs": 16258792, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 1, "elapsedNs": 17813458, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 2, "elapsedNs": 17314958, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 3, "elapsedNs": 15852000, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 4, "elapsedNs": 15870583, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536}
       ]
     },
     {
@@ -179,11 +179,11 @@
         "feasibleCandidates": 7
       },
       "samples": [
-        {"index": 0, "elapsedNs": 145500, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
-        {"index": 1, "elapsedNs": 141166, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
-        {"index": 2, "elapsedNs": 140959, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
-        {"index": 3, "elapsedNs": 140750, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
-        {"index": 4, "elapsedNs": 140875, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0}
+        {"index": 0, "elapsedNs": 152750, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 149958, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 149958, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 149916, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 149917, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0}
       ]
     },
     {
@@ -213,11 +213,11 @@
         "feasibleCandidates": 7
       },
       "samples": [
-        {"index": 0, "elapsedNs": 31000, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
-        {"index": 1, "elapsedNs": 30750, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
-        {"index": 2, "elapsedNs": 30792, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
-        {"index": 3, "elapsedNs": 30792, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
-        {"index": 4, "elapsedNs": 30625, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64}
+        {"index": 0, "elapsedNs": 33000, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 1, "elapsedNs": 33000, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 2, "elapsedNs": 32875, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 3, "elapsedNs": 32750, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 4, "elapsedNs": 32792, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64}
       ]
     },
     {
@@ -247,11 +247,11 @@
         "feasibleCandidates": 7
       },
       "samples": [
-        {"index": 0, "elapsedNs": 16821625, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
-        {"index": 1, "elapsedNs": 16947667, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
-        {"index": 2, "elapsedNs": 17026041, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
-        {"index": 3, "elapsedNs": 16753042, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
-        {"index": 4, "elapsedNs": 16730917, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536}
+        {"index": 0, "elapsedNs": 18097417, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 1, "elapsedNs": 17450834, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 2, "elapsedNs": 17141875, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 3, "elapsedNs": 17109834, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 4, "elapsedNs": 17587333, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536}
       ]
     },
     {
@@ -281,11 +281,11 @@
         "feasibleCandidates": 7
       },
       "samples": [
-        {"index": 0, "elapsedNs": 16960416, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
-        {"index": 1, "elapsedNs": 17039500, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
-        {"index": 2, "elapsedNs": 16927708, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
-        {"index": 3, "elapsedNs": 16978208, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
-        {"index": 4, "elapsedNs": 16969792, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536}
+        {"index": 0, "elapsedNs": 21076708, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 1, "elapsedNs": 18565792, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 2, "elapsedNs": 17442875, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 3, "elapsedNs": 19303125, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 4, "elapsedNs": 17580958, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536}
       ]
     },
     {
@@ -315,11 +315,11 @@
         "feasibleCandidates": null
       },
       "samples": [
-        {"index": 0, "elapsedNs": 622625, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
-        {"index": 1, "elapsedNs": 619583, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
-        {"index": 2, "elapsedNs": 615833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
-        {"index": 3, "elapsedNs": 609708, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
-        {"index": 4, "elapsedNs": 610000, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0}
+        {"index": 0, "elapsedNs": 621625, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 620292, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 618125, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 645500, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 619750, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0}
       ]
     },
     {
@@ -349,11 +349,11 @@
         "feasibleCandidates": null
       },
       "samples": [
-        {"index": 0, "elapsedNs": 767708, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
-        {"index": 1, "elapsedNs": 765500, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
-        {"index": 2, "elapsedNs": 766500, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
-        {"index": 3, "elapsedNs": 769167, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
-        {"index": 4, "elapsedNs": 765666, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0}
+        {"index": 0, "elapsedNs": 768625, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 767625, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 769542, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 769250, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 821375, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0}
       ]
     },
     {
@@ -383,11 +383,11 @@
         "feasibleCandidates": 7
       },
       "samples": [
-        {"index": 0, "elapsedNs": 8795792, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
-        {"index": 1, "elapsedNs": 8806458, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
-        {"index": 2, "elapsedNs": 8920291, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
-        {"index": 3, "elapsedNs": 8918875, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
-        {"index": 4, "elapsedNs": 8917625, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768}
+        {"index": 0, "elapsedNs": 9307333, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 1, "elapsedNs": 8882417, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 2, "elapsedNs": 9082667, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 3, "elapsedNs": 8905333, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 4, "elapsedNs": 9143500, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768}
       ]
     },
     {
@@ -417,11 +417,11 @@
         "feasibleCandidates": null
       },
       "samples": [
-        {"index": 0, "elapsedNs": 335208, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
-        {"index": 1, "elapsedNs": 335250, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
-        {"index": 2, "elapsedNs": 336250, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
-        {"index": 3, "elapsedNs": 334833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
-        {"index": 4, "elapsedNs": 333833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0}
+        {"index": 0, "elapsedNs": 330834, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 329542, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 329833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 330333, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 329291, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0}
       ]
     }
   ]

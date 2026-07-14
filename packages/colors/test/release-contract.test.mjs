@@ -1313,7 +1313,19 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   }
 });
 
-test("feasibility benchmark keeps V1/V2/V3 history and admits exact V4 Core subjects", () => {
+test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subjects", () => {
+  const contractNames = readdirSync(join(
+    root,
+    "crates",
+    "labcolors-core",
+    "contracts",
+  )).filter((name) => /^wcag22-feasibility-benchmark-v[0-9]+\.json$/u.test(name));
+  assert.deepEqual(contractNames.sort(), [
+    "wcag22-feasibility-benchmark-v1.json",
+    "wcag22-feasibility-benchmark-v2.json",
+    "wcag22-feasibility-benchmark-v3.json",
+  ]);
+
   const checker = join(
     root,
     "scripts",
@@ -1327,10 +1339,10 @@ test("feasibility benchmark keeps V1/V2/V3 history and admits exact V4 Core subj
         "crates",
         "labcolors-core",
         "contracts",
-        "wcag22-feasibility-benchmark-v4.json",
+        "wcag22-feasibility-benchmark-v3.json",
       ),
       "--artifact-sha256",
-      "e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd",
+      "47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec",
       "--self-test",
     ], {
       cwd: root,
@@ -1340,11 +1352,29 @@ test("feasibility benchmark keeps V1/V2/V3 history and admits exact V4 Core subj
   });
 
   const ci = read(".github", "workflows", "ci.yml");
-  assert.doesNotMatch(
-    ci,
-    /v3_snapshot=b777b1d95dd7693220621600dd49042a2046dab5/u,
-    "durable evidence must not depend on a pre-squash PR commit",
-  );
+  const unmergedDraftAdmission =
+    /v3_snapshot=|b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace|feasibility-benchmark-v4|admission-raw-v4/u;
+  for (const [path, source] of [
+    [".github/workflows/ci.yml", ci],
+    ["CHANGELOG.md", read("CHANGELOG.md")],
+    ["docs/verification-map.md", read("docs", "verification-map.md")],
+    [
+      "native harness",
+      read("crates", "labcolors-core", "benches", "wcag22_feasibility_admission.rs"),
+    ],
+    ["native checker", read("scripts", "check_wcag22_feasibility_benchmark.py")],
+    ["native applicability", read("scripts", "check_wcag22_feasibility_applicability.py")],
+    [
+      "WASM boundary checker",
+      read("packages", "colors", "bench", "wcag22-feasibility-boundary.bench.mjs"),
+    ],
+  ]) {
+    assert.doesNotMatch(
+      source,
+      unmergedDraftAdmission,
+      `${path} must not retain an unmerged draft admission`,
+    );
+  }
   assert.match(
     ci,
     /historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_checker_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
@@ -1362,18 +1392,18 @@ test("feasibility benchmark keeps V1/V2/V3 history and admits exact V4 Core subj
   );
   assert.match(
     ci,
-    /v3_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?v3_snapshot=b777b1d95dd7693220621600dd49042a2046dab5[\s\S]*?--admit-revision 5781d4ab84b39a585d437e8e04604b25ef891cf1[\s\S]*?git worktree add --detach "\$historical_root" "\$v3_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53[\s\S]*?--self-test/u,
-    "V3 must replay through the last exact source-compatible snapshot",
-  );
-  assert.match(
-    ci,
-    /current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v4\.json"[\s\S]*?--admit-revision 5e5fdb34586452f3171b20113ab6f6a9412bcd82[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd[\s\S]*?--self-test/u,
-    "V4 must bind the current generic kernel to one exact measured source commit",
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?--admit-revision 01718a2bb0b53b6d50587a88e687d7bb332d51f0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec[\s\S]*?--self-test/u,
+    "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(
     ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    4,
-    "CI must validate exactly three historical and one current benchmark artifact",
+    3,
+    "CI must validate exactly two historical and one current benchmark artifact",
+  );
+  assert.equal(
+    ci.match(/git worktree add --detach/gu)?.length,
+    3,
+    "only the three main-reachable historical verifier snapshots may use worktrees",
   );
 });
 

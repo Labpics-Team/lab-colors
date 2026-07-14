@@ -387,38 +387,9 @@ jobs:
           cleanup_history
           trap - EXIT
 
-          v3_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
-          v3_snapshot=b777b1d95dd7693220621600dd49042a2046dab5
-          v3_protocol=(
-            --admit-revision 5781d4ab84b39a585d437e8e04604b25ef891cf1
-            --admit-rustc-release 1.96.0
-            --admit-target-triple aarch64-apple-darwin
-            --admit-target-arch aarch64
-            --admit-target-os macos
-            --admit-pointer-width-bits 64
-            --admit-package-version 0.2.0
-            --admit-sample-count 5
-          )
-          git worktree add --detach "$historical_root" "$v3_snapshot"
-          trap cleanup_history EXIT
-          (
-            cd "$historical_root"
-            python3 scripts/check_wcag22_feasibility_benchmark.py \
-              "$v3_artifact" "${v3_protocol[@]}" \
-              --verify-current-subjects \
-              --artifact-sha256 ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53 \
-              --self-test
-            python3 scripts/check_wcag22_feasibility_applicability.py \
-              "$v3_artifact" \
-              --artifact-sha256 ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53 \
-              --self-test
-          )
-          cleanup_history
-          trap - EXIT
-
-          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json"
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
           current_protocol=(
-            --admit-revision 5e5fdb34586452f3171b20113ab6f6a9412bcd82
+            --admit-revision 01718a2bb0b53b6d50587a88e687d7bb332d51f0
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
@@ -430,11 +401,11 @@ jobs:
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
             --verify-current-subjects \
-            --artifact-sha256 e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd \
+            --artifact-sha256 47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec \
             --self-test
           python3 scripts/check_wcag22_feasibility_applicability.py \
             "$current_artifact" \
-            --artifact-sha256 e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd \
+            --artifact-sha256 47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec \
             --self-test
 
   audit:
