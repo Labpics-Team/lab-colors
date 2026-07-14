@@ -920,41 +920,112 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   assert.match(verifier, /case "incompatibleCoreContract"/u);
 });
 
-test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
-  const budgetPath = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
+test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
+  const v1Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
+  const v2Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v2.json");
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
-  const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
+  const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+  const canonicalJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
-  assert.equal(budget.schemaVersion, 2);
-  assert.equal(budget.budgetId, "labcolors-wasm-raw-issue-284-v1");
-  assert.equal(budget.measurement.issue, 284);
-  assert.equal(budget.measurement.rustToolchain, "1.96.0");
-  assert.equal(budget.measurement.wasmPack, "0.13.1");
-  assert.equal(budget.measurement.target, "wasm32-unknown-unknown");
-  assert.equal(budget.measurement.cargoProfile, "release");
-  assert.equal(budget.measurement.wasmOpt, "-Oz");
-  assert.equal(budget.measurement.rawBytes, 454385);
-  assert.equal(budget.policy.maxRawBytes, 454385);
+  const v1Bytes = readFileSync(v1Path);
+  const v1 = JSON.parse(v1Bytes);
   assert.equal(
-    budget.measurement.sha256,
-    "94c61c1689fa2e1c10d79817864471f41c623463bd9b5b4e0dac2a850a58f09f",
+    sha256(v1Bytes),
+    "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
+    "the immutable #284 evidence and build recipe must remain byte-identical",
   );
+  const recipe = {
+    rustToolchain: v1.measurement.rustToolchain,
+    rustcCommit: v1.measurement.rustcCommit,
+    wasmPack: v1.measurement.wasmPack,
+    wasmBindgen: v1.measurement.wasmBindgen,
+    target: v1.measurement.target,
+    cargoProfile: v1.measurement.cargoProfile,
+    wasmOpt: v1.measurement.wasmOpt,
+    wasmOptVersion: v1.measurement.wasmOptVersion,
+    measurementPlatform: v1.measurement.measurementPlatform,
+    rustPathRemap: v1.measurement.rustPathRemap,
+    command: v1.measurement.command,
+  };
   assert.equal(
-    budget.currentArtifact.sha256,
-    "58015ea92c539eec9a715dac79d80148f103b83c628be9d95ade63b87fc76533",
+    sha256(JSON.stringify(recipe)),
+    "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4",
   );
-  assert.equal(budget.currentArtifact.recertificationIssue, 295);
-  assert.equal(budget.measurement.measurementPlatform, "linux-x64");
-  assert.deepEqual(budget.measurement.rustPathRemap, [
+  assert.deepEqual(v1.measurement.rustPathRemap, [
     "GITHUB_WORKSPACE=/workspace/lab-colors",
     "CARGO_HOME=/cargo-home",
   ]);
-  assert.equal(budget.policy.derivation, "exact-accepted-issue-284-measurement");
-  assert.equal(budget.policy.gzip, "diagnostic-only");
+
+  const v2Bytes = readFileSync(v2Path);
+  const v2 = JSON.parse(v2Bytes);
+  assert.equal(v2Bytes.toString("utf8"), canonicalJson(v2));
+  assert.equal(
+    sha256(v2Bytes),
+    "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1",
+    "the admitted v2 document must be byte-immutable",
+  );
+  assert.deepEqual(Object.keys(v2), [
+    "schemaVersion",
+    "budgetId",
+    "artifact",
+    "buildRecipe",
+    "measurement",
+    "policy",
+  ]);
+  assert.deepEqual(Object.keys(v2.buildRecipe), ["path", "fileSha256", "recipeSha256"]);
+  assert.deepEqual(Object.keys(v2.measurement), [
+    "issue",
+    "measurementPlatform",
+    "rawBytes",
+    "sha256",
+  ]);
+  assert.deepEqual(Object.keys(v2.policy), ["maxRawBytes", "derivation", "gzip"]);
+  assert.equal(v2.schemaVersion, 3);
+  assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
+  assert.equal(v2.artifact, "packages/colors/pkg/labcolors_bg.wasm");
+  assert.deepEqual(v2.buildRecipe, {
+    path: "packages/colors/bench/wasm-size-budget-v1.json",
+    fileSha256: "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
+    recipeSha256: "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4",
+  });
+  assert.deepEqual(v2.measurement, {
+    issue: 295,
+    measurementPlatform: "linux-x64",
+    rawBytes: 521240,
+    sha256: "d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0",
+  });
+  assert.deepEqual(v2.policy, {
+    maxRawBytes: 521240,
+    derivation: "exact-accepted-issue-295-slice-b-measurement",
+    gzip: "diagnostic-only",
+  });
+
+  const checker = await import(
+    new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
+  );
+  assert.equal(checker.DEFAULT_BUDGET, v2Path);
+  assert.equal(checker.V1_FILE_SHA256, v2.buildRecipe.fileSha256);
+  assert.equal(checker.V1_RECIPE_SHA256, v2.buildRecipe.recipeSha256);
+  assert.equal(checker.V2_FILE_SHA256, sha256(v2Bytes));
+
+  const wholeCallSource = read(
+    "packages",
+    "colors",
+    "bench",
+    "wcag22-feasibility-boundary.bench.mjs",
+  );
+  assert.match(wholeCallSource, /wasmToolchainPath = resolve\(here, "wasm-size-budget-v1\.json"\)/u);
+  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v2\.json/u);
+  assert.doesNotMatch(
+    read("scripts", "check-wasm-size-budget.mjs"),
+    /wcag22-feasibility-wasm-boundary-v1\.json/u,
+    "the sibling whole-call artifact must not become a size-budget dependency",
+  );
+
   const ci = read(".github", "workflows", "ci.yml");
-  assert.match(ci, /name: enforce measured WASM raw-byte budget/);
-  assert.match(ci, /run: node scripts\/check-wasm-size-budget\.mjs/);
-  assert.doesNotMatch(ci, /Not a hard gate yet/);
+  assert.match(ci, /name: enforce measured WASM raw-byte budget/u);
+  assert.match(ci, /run: node scripts\/check-wasm-size-budget\.mjs/u);
+  assert.doesNotMatch(ci, /Not a hard gate yet/u);
   const wasmJob = ci.match(/\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n)/u)?.groups?.body;
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
   assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
@@ -967,128 +1038,142 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   ).toString("latin1");
   assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
   assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
-  assert.doesNotMatch(builtWasm, /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u);
+  assert.doesNotMatch(
+    builtWasm,
+    /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u,
+  );
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v2-"));
   try {
-    const wasm = join(temporary, "fixture.wasm");
-    const fixtureBudget = join(temporary, "budget.json");
-    const bytes = Buffer.alloc(8);
+    const wasmPath = join(temporary, "fixture.wasm");
+    const fixtureBudgetPath = join(temporary, "budget.json");
+    const bytes = Buffer.alloc(16);
     bytes.set([0x00, 0x61, 0x73, 0x6d]);
-    writeFileSync(wasm, bytes);
-    writeFileSync(
-      fixtureBudget,
-      `${JSON.stringify({
-        ...budget,
-        measurement: {
-          ...budget.measurement,
-          rawBytes: bytes.length,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-          measurementPlatform: `${process.platform}-${process.arch}`,
-        },
-        currentArtifact: {
-          ...budget.currentArtifact,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-        },
-        policy: { ...budget.policy, maxRawBytes: bytes.length },
-      })}\n`,
-    );
+    const fixture = structuredClone(v2);
+    fixture.measurement.rawBytes = bytes.length;
+    fixture.measurement.sha256 = sha256(bytes);
+    fixture.policy.maxRawBytes = bytes.length;
+    writeFileSync(wasmPath, bytes);
+    writeFileSync(fixtureBudgetPath, canonicalJson(fixture));
 
     const run = () => execFileSync(
       process.execPath,
-      [checkerPath, "--wasm", wasm, "--budget", fixtureBudget],
+      [checkerPath, "--wasm", wasmPath, "--budget", fixtureBudgetPath],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     assert.match(
       run(),
-      /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B .*current-sha=match/u,
+      /WASM size budget (?:PASS|DIAGNOSTIC) raw=16B .*artifact-sha=match/u,
     );
 
-    const canonicalFixtureBudget = readFileSync(fixtureBudget, "utf8");
-    for (const [currentArtifact, expectedError] of [
-      [undefined, /currentArtifact\.sha256 must identify the exact current artifact/u],
-      [{ ...budget.currentArtifact, sha256: "0" }, /currentArtifact\.sha256/u],
-      [
-        { ...budget.currentArtifact, recertificationIssue: 0 },
-        /currentArtifact\.recertificationIssue must be a positive issue number/u,
-      ],
-    ]) {
-      const invalid = JSON.parse(canonicalFixtureBudget);
-      invalid.currentArtifact = currentArtifact;
-      writeFileSync(fixtureBudget, `${JSON.stringify(invalid)}\n`);
-      assert.throws(run, (error) => {
-        assert.match(error.stderr.toString(), expectedError);
-        return true;
-      });
+    const schemaMutations = [
+      ["schema rollback", (value) => { value.schemaVersion = 2; }],
+      ["identity drift", (value) => { value.budgetId = "other"; }],
+      ["artifact path drift", (value) => { value.artifact = "other.wasm"; }],
+      ["missing field", (value) => { delete value.artifact; }],
+      ["unknown field", (value) => { value.unknown = true; }],
+      ["recipe path drift", (value) => { value.buildRecipe.path = "other.json"; }],
+      ["v1 file drift", (value) => { value.buildRecipe.fileSha256 = "0".repeat(64); }],
+      ["recipe drift", (value) => { value.buildRecipe.recipeSha256 = "0".repeat(64); }],
+      ["missing recipe field", (value) => { delete value.buildRecipe.recipeSha256; }],
+      ["measurement issue drift", (value) => { value.measurement.issue = 294; }],
+      ["measurement platform drift", (value) => {
+        value.measurement.measurementPlatform = "darwin-arm64";
+      }],
+      ["unknown measurement field", (value) => { value.measurement.unknown = true; }],
+      ["zero bytes", (value) => { value.measurement.rawBytes = 0; }],
+      ["fractional bytes", (value) => { value.measurement.rawBytes = 1.5; }],
+      ["unsafe bytes", (value) => {
+        value.measurement.rawBytes = Number.MAX_SAFE_INTEGER + 1;
+      }],
+      ["invalid SHA", (value) => { value.measurement.sha256 = "0"; }],
+      ["uppercase SHA", (value) => { value.measurement.sha256 = "A".repeat(64); }],
+      ["ceiling plus one", (value) => { value.policy.maxRawBytes += 1; }],
+      ["ceiling minus one", (value) => { value.policy.maxRawBytes -= 1; }],
+      ["derivation drift", (value) => { value.policy.derivation = "guessed"; }],
+      ["gzip gate", (value) => { value.policy.gzip = 123; }],
+      ["missing policy field", (value) => { delete value.policy.gzip; }],
+      ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
+      ["key reorder", (value) => ({
+        budgetId: value.budgetId,
+        schemaVersion: value.schemaVersion,
+        artifact: value.artifact,
+        buildRecipe: value.buildRecipe,
+        measurement: value.measurement,
+        policy: value.policy,
+      })],
+    ];
+    assert.equal(schemaMutations.length, 24, "v2 schema mutation set changed");
+    for (const [name, mutate] of schemaMutations) {
+      const invalid = structuredClone(fixture);
+      const result = mutate(invalid) ?? invalid;
+      writeFileSync(fixtureBudgetPath, canonicalJson(result));
+      assert.throws(run, undefined, `${name} must fail the checker`);
     }
 
-    const independentlyRecertifiedBudget = JSON.parse(canonicalFixtureBudget);
-    independentlyRecertifiedBudget.measurement.sha256 = "0".repeat(64);
-    writeFileSync(fixtureBudget, `${JSON.stringify(independentlyRecertifiedBudget)}\n`);
-    assert.match(
-      run(),
-      /PASS raw=8B ceiling=8B remaining=0B gzip=\d+B .*baseline-sha=different current-sha=match/u,
-      "current reproducibility attestation must not rewrite the immutable size baseline",
+    writeFileSync(fixtureBudgetPath, `${JSON.stringify(fixture)}\n`);
+    assert.throws(run, /canonical JSON/u, "non-canonical JSON must fail");
+    writeFileSync(
+      fixtureBudgetPath,
+      canonicalJson(fixture).replace(
+        '  "schemaVersion": 3,\n',
+        '  "schemaVersion": 3,\n  "schemaVersion": 3,\n',
+      ),
     );
+    assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
 
-    writeFileSync(fixtureBudget, canonicalFixtureBudget);
-    const largerHistoricalBaseline = JSON.parse(canonicalFixtureBudget);
-    largerHistoricalBaseline.measurement.rawBytes = bytes.length + 1;
-    largerHistoricalBaseline.policy.maxRawBytes = bytes.length + 1;
-    writeFileSync(fixtureBudget, `${JSON.stringify(largerHistoricalBaseline)}\n`);
-    assert.match(
-      run(),
-      /PASS raw=8B ceiling=9B remaining=1B gzip=\d+B .*current-sha=match/u,
-      "a smaller recertified artifact must not rewrite the historical size measurement",
-    );
-    writeFileSync(fixtureBudget, canonicalFixtureBudget);
+    const canonical = checker.evaluateWasmBudget(fixture, bytes, "linux-x64");
+    assert.equal(canonical.status, "PASS");
+    assert.equal(canonical.artifactSha, "match");
 
-    const sameSizeDifferentArtifact = Buffer.from(bytes);
-    sameSizeDifferentArtifact[7] = 1;
-    writeFileSync(wasm, sameSizeDifferentArtifact);
+    const sameSizeMutation = Buffer.from(bytes);
+    sameSizeMutation[15] = 1;
     assert.throws(
-      run,
-      (error) => {
-        assert.match(error.stderr.toString(), /current artifact SHA-256 mismatch/u);
-        return true;
-      },
-      "canonical host must reject a same-size artifact with different bytes",
+      () => checker.evaluateWasmBudget(fixture, sameSizeMutation, "linux-x64"),
+      /SHA-256 mismatch/u,
+      "same-size byte drift must fail",
     );
-
-    const oversizedArtifact = Buffer.concat([bytes, Buffer.from([0])]);
-    const oversizedBudget = JSON.parse(canonicalFixtureBudget);
-    oversizedBudget.currentArtifact.sha256 = createHash("sha256")
-      .update(oversizedArtifact)
-      .digest("hex");
-    writeFileSync(fixtureBudget, `${JSON.stringify(oversizedBudget)}\n`);
-    writeFileSync(wasm, oversizedArtifact);
     assert.throws(
-      run,
-      (error) => {
-        assert.match(error.stderr.toString(), /raw=9B exceeds ceiling=8B by=1B/u);
-        return true;
-      },
-      "canonical ceiling + 1 byte must hard-fail",
+      () => checker.evaluateWasmBudget(
+        fixture,
+        Buffer.concat([bytes, Buffer.from([0])]),
+        "linux-x64",
+      ),
+      /length mismatch/u,
+      "append must fail",
+    );
+    assert.throws(
+      () => checker.evaluateWasmBudget(fixture, bytes.subarray(0, 15), "linux-x64"),
+      /length mismatch/u,
+      "truncate must fail",
+    );
+    assert.equal(
+      checker.evaluateWasmBudget(fixture, sameSizeMutation, "darwin-arm64").status,
+      "DIAGNOSTIC",
+      "non-canonical hosts report evidence without admitting it",
+    );
+    assert.equal(
+      checker.evaluateWasmBudget(
+        fixture,
+        Buffer.concat([bytes, Buffer.from([0])]),
+        "darwin-arm64",
+      ).status,
+      "DIAGNOSTIC",
+      "non-canonical growth remains diagnostic",
+    );
+    assert.equal(
+      checker.evaluateWasmBudget(fixture, bytes.subarray(0, 15), "darwin-arm64").status,
+      "DIAGNOSTIC",
+      "non-canonical shrink remains diagnostic",
     );
 
-    const nonCanonicalBudget = JSON.parse(canonicalFixtureBudget);
-    nonCanonicalBudget.measurement.measurementPlatform =
-      `${process.platform}-${process.arch}` === "linux-x64"
-        ? "darwin-arm64"
-        : "linux-x64";
-    writeFileSync(fixtureBudget, `${JSON.stringify(nonCanonicalBudget)}\n`);
-    writeFileSync(wasm, sameSizeDifferentArtifact);
-    assert.match(
-      run(),
-      /DIAGNOSTIC raw=8B canonical-ceiling=8B delta=\+0B gzip=\d+B .*baseline-sha=different current-sha=different/u,
-      "non-canonical host reports diagnostics without claiming byte identity",
-    );
-
-    writeFileSync(wasm, Buffer.concat([bytes, Buffer.from([0])]));
-    assert.match(
-      run(),
-      /DIAGNOSTIC raw=9B canonical-ceiling=8B delta=\+1B gzip=\d+B .*baseline-sha=different current-sha=different/u,
-      "non-canonical bytes remain diagnostic even above the canonical host ceiling",
+    const coordinatedMutation = structuredClone(fixture);
+    coordinatedMutation.measurement.sha256 = sha256(sameSizeMutation);
+    const coordinatedBytes = Buffer.from(canonicalJson(coordinatedMutation));
+    assert.throws(
+      () => checker.parseBudgetDocument(coordinatedBytes, v2Path),
+      /immutable v2 file SHA-256 mismatch/u,
+      "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });
@@ -1124,12 +1209,17 @@ test("feasibility benchmark applicability permits only source-less non-Core lock
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(
     ci,
-    /python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    /historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    "the unchanged checker must replay in its exact clean Slice-A snapshot",
   );
-  assert.doesNotMatch(
+  assert.equal(
+    ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
+    1,
+    "the historical checker must never be applied to the additive current workspace",
+  );
+  assert.match(
     ci,
-    /check_wcag22_feasibility_benchmark\.py[\s\S]{0,500}--verify-current-subjects/u,
-    "the immutable historical checker must not overbind current workspace additions",
+    /python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
   );
 });
 

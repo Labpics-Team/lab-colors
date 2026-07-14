@@ -450,19 +450,23 @@ replacement принадлежит #283.
 
 ## Размер бандла
 
-Raw-размер WASM — hard gate. Его versioned SSOT —
-`bench/wasm-size-budget-v1.json`: точное принятое измерение Issue #284 вместе
-с toolchain provenance, SHA-256 измеренного baseline и ceiling без
-произвольного запаса. SHA текущего воспроизводимого артефакта хранится отдельно
-в `currentArtifact`, поэтому его recertification не переписывает происхождение
-лимита. Канонический артефакт строит release-equivalent Linux x64 CI: там
-checker требует одновременно точный текущий SHA-256 и неизменный ceiling. На
-других host-платформах тот же checker только сообщает raw/gzip/SHA-диагностику:
-host-native toolchain bytes не выдаются за канонический release artifact и не
-сравниваются с чужим ceiling. Каноническая сборка remap-ит mutable workspace и
-Cargo registry roots в стабильные виртуальные пути, поэтому имя конкретного
-self-hosted Linux runner не меняет бинарь. `gzip -9` также остаётся живой
-диагностикой и не хранится как ложная константа SSOT.
+Raw-размер WASM — hard gate с append-only историей. Неизменяемый
+`bench/wasm-size-budget-v1.json` сохраняет допуск #284 (`454385 B`), а
+`bench/wasm-size-budget-v2.json` отдельно допускает полный transport #295:
+ровно `521240 B`, SHA-256
+`d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0`.
+V2 ссылается на точные байты V1 и его build recipe; новый ceiling равен
+измерению, поэтому произвольного запаса нет и история #284 не переписана.
+
+Release-equivalent Linux x64 CI требует одновременно точный размер и SHA.
+Отдельный `bench/wcag22-feasibility-wasm-boundary-v1.json` фиксирует 10 крайних
+whole-call форм × 5 свежих процессов, request/outcome bytes, packed shape и
+привязки Core/pack/toolchain. Время, process maxRSS и страницы WASM остаются
+наблюдениями без выдуманного production-порога. На других host-платформах
+checker сообщает только raw/gzip/SHA-диагностику: host-native bytes не выдаются
+за канонический release artifact. Сборка remap-ит mutable workspace и Cargo
+registry roots в стабильные виртуальные пути; `gzip -9` остаётся диагностикой,
+а не второй константой допуска.
 
 Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
 поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого

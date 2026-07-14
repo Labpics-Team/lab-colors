@@ -70,10 +70,11 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   capsules. Profile V1, proof ID `wcag22-srgb8-full-domain-q55-v1` и package path
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
-- WASM size contract сохраняет immutable измерение #284 как происхождение
-  точного raw-byte ceiling и отдельно аттестует SHA текущего воспроизводимого
-  артефакта. Proof-only recertification больше не переписывает baseline задним
-  числом; ceiling остаётся `454385 B` без запаса.
+- WASM size history стала append-only: immutable V1 сохраняет допуск #284
+  (`454385 B`), а V2 допускает полный transport #295 как точные `521240 B` /
+  `d37841…9ca0` с нулевым headroom и ссылкой на неизменяемый V1 build recipe.
+  Canonical whole-call artifact фиксирует 10 крайних форм × 5 свежих процессов;
+  latency, process maxRSS и WASM pages остаются наблюдениями, не SLO.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
   versioned complete-feasibility transport family, поэтому `packDigest`
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public

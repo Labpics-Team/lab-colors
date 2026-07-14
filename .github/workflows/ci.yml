@@ -309,10 +309,23 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
-          python3 scripts/check_wcag22_feasibility_benchmark.py \
-            "$artifact" "${protocol[@]}" \
-            --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
-            --self-test
+          historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
+          historical_root="$RUNNER_TEMP/wcag22-feasibility-slice-a-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git worktree add --detach "$historical_root" "$historical_snapshot"
+          cleanup_history() {
+            git worktree remove --force "$historical_root"
+          }
+          trap cleanup_history EXIT
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$artifact" "${protocol[@]}" \
+              --verify-current-subjects \
+              --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+              --self-test
+          )
+          cleanup_history
+          trap - EXIT
           python3 scripts/check_wcag22_feasibility_applicability.py \
             "$artifact" \
             --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
@@ -422,35 +435,31 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "record #295 canonical whole-call WASM boundary candidate"
-        # First-pass evidence intentionally precedes the immutable #284 size
-        # gate: the new capability changes bytes, and the exact Linux x64
-        # observation must remain retrievable even while that old gate is RED.
-        # --record also prints the canonical JSON to logs and refuses overwrite
-        # or a non-canonical host. Once reviewed and committed, switch to
-        # --verify; latency/maxRSS/pages remain observations only.
+      - name: "verify committed #295 canonical whole-call WASM boundary evidence"
+        # The admitted JSON binds exact deterministic bytes/shapes to this built
+        # Linux x64 WASM. Fresh latency/maxRSS/pages remain observations only.
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --record "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v1.json"
-      - name: independently fingerprint the exact #295 WASM candidate
+          --verify
+      - name: independently fingerprint the exact #295 WASM
         run: |
           bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
           sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
           echo "canonical candidate raw=${bytes}B sha256=${sha256}"
-      - name: "upload exact #295 whole-call candidate before expected size RED"
+      - name: "upload exact #295 verified whole-call evidence"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v1.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v1.json
             packages/colors/pkg/labcolors_bg.wasm
           if-no-files-found: error
           retention-days: 30
       - name: enforce measured WASM raw-byte budget
-        # Issue #284 owns the immutable measured ceiling baseline. The checker
-        # separately binds this current Linux x64 artifact's exact SHA-256 and
-        # rejects growth above that ceiling. gzip is transport diagnostics only.
+        # Issue #295 owns the current exact Linux x64 measurement and zero-headroom
+        # ceiling. Issue #284 remains the immutable V1 build-recipe/baseline input.
+        # gzip is transport diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve
