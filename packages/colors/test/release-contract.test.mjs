@@ -992,6 +992,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   const v1Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
   const v2Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v2.json");
   const v3Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v3.json");
+  const v4Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v4.json");
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
   const sha256 = (value) => createHash("sha256").update(value).digest("hex");
   const canonicalJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -1097,14 +1098,44 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     gzip: "diagnostic-only",
   });
 
+  const v4Bytes = readFileSync(v4Path);
+  const v4 = JSON.parse(v4Bytes);
+  assert.equal(v4Bytes.toString("utf8"), canonicalJson(v4));
+  assert.equal(
+    sha256(v4Bytes),
+    "f0c3b2190f5675791e74ebd5591b1ad3d31bc6ff877f5f46a87b62524fbdc413",
+    "the admitted v4 document must be byte-immutable",
+  );
+  assert.deepEqual(Object.keys(v4), Object.keys(v3));
+  assert.deepEqual(Object.keys(v4.buildRecipe), Object.keys(v3.buildRecipe));
+  assert.deepEqual(Object.keys(v4.measurement), Object.keys(v3.measurement));
+  assert.deepEqual(Object.keys(v4.policy), Object.keys(v3.policy));
+  assert.equal(v4.schemaVersion, 3);
+  assert.equal(v4.budgetId, "labcolors-wasm-raw-issue-296-v4");
+  assert.equal(v4.artifact, "packages/colors/pkg/labcolors_bg.wasm");
+  assert.deepEqual(v4.buildRecipe, v3.buildRecipe);
+  assert.deepEqual(v4.measurement, {
+    issue: 296,
+    measurementPlatform: "linux-x64",
+    rawBytes: 520993,
+    sha256: "9ae0fa3f738dd88478c49cbe244dd0b1b672b237b82248c8cb1051baf0a2dd16",
+  });
+  assert.deepEqual(v4.policy, {
+    maxRawBytes: 520993,
+    derivation: "exact-accepted-issue-296-slice-b-measurement",
+    gzip: "diagnostic-only",
+  });
+  assert.ok(v4.policy.maxRawBytes <= v3.policy.maxRawBytes, "the v4 ratchet may only tighten");
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, v3Path);
-  assert.equal(checker.V1_FILE_SHA256, v3.buildRecipe.fileSha256);
-  assert.equal(checker.V1_RECIPE_SHA256, v3.buildRecipe.recipeSha256);
+  assert.equal(checker.DEFAULT_BUDGET, v4Path);
+  assert.equal(checker.V1_FILE_SHA256, v4.buildRecipe.fileSha256);
+  assert.equal(checker.V1_RECIPE_SHA256, v4.buildRecipe.recipeSha256);
   assert.equal(checker.V2_FILE_SHA256, sha256(v2Bytes));
   assert.equal(checker.V3_FILE_SHA256, sha256(v3Bytes));
+  assert.equal(checker.V4_FILE_SHA256, sha256(v4Bytes));
 
   const wholeCallSource = read(
     "packages",
@@ -1113,7 +1144,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     "wcag22-feasibility-boundary.bench.mjs",
   );
   assert.match(wholeCallSource, /wasmToolchainPath = resolve\(here, "wasm-size-budget-v1\.json"\)/u);
-  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v[23]\.json/u);
+  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v[234]\.json/u);
   assert.doesNotMatch(
     read("scripts", "check-wasm-size-budget.mjs"),
     /wcag22-feasibility-wasm-boundary-v1\.json/u,
@@ -1141,13 +1172,13 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u,
   );
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v3-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v4-"));
   try {
     const wasmPath = join(temporary, "fixture.wasm");
     const fixtureBudgetPath = join(temporary, "budget.json");
     const bytes = Buffer.alloc(16);
     bytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v3);
+    const fixture = structuredClone(v4);
     fixture.measurement.rawBytes = bytes.length;
     fixture.measurement.sha256 = sha256(bytes);
     fixture.policy.maxRawBytes = bytes.length;
@@ -1192,6 +1223,10 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
       ["gzip gate", (value) => { value.policy.gzip = 123; }],
       ["missing policy field", (value) => { delete value.policy.gzip; }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
+      ["ratchet regression", (value) => {
+        value.measurement.rawBytes = v3.policy.maxRawBytes + 1;
+        value.policy.maxRawBytes = v3.policy.maxRawBytes + 1;
+      }],
       ["key reorder", (value) => ({
         budgetId: value.budgetId,
         schemaVersion: value.schemaVersion,
@@ -1201,7 +1236,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
         policy: value.policy,
       })],
     ];
-    assert.equal(schemaMutations.length, 24, "v3 schema mutation set changed");
+    assert.equal(schemaMutations.length, 25, "v4 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1269,8 +1304,8 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     coordinatedMutation.measurement.sha256 = sha256(sameSizeMutation);
     const coordinatedBytes = Buffer.from(canonicalJson(coordinatedMutation));
     assert.throws(
-      () => checker.parseBudgetDocument(coordinatedBytes, v3Path),
-      /immutable v3 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(coordinatedBytes, v4Path),
+      /immutable v4 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {

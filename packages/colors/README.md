@@ -466,16 +466,19 @@ Raw-размер WASM — hard gate с append-only историей. Неизм�
 `bench/wasm-size-budget-v2.json` отдельно допускает полный transport #295:
 ровно `521240 B`, SHA-256
 `d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0`.
-Текущий `bench/wasm-size-budget-v3.json` повторно допускает Core-срез #296-A:
+`bench/wasm-size-budget-v3.json` повторно допускает Core-срез #296-A:
 ровно `521231 B`, SHA-256
 `779379e914909ff1ddbb5afdd6554d026b586f3c71ef6b2cfeba3468bf93e029`.
+Текущий `bench/wasm-size-budget-v4.json` допускает #296-B: ровно `520993 B`,
+SHA-256 `9ae0fa3f738dd88478c49cbe244dd0b1b672b237b82248c8cb1051baf0a2dd16`.
 Каждый ceiling равен своему каноническому Linux-x64 измерению, произвольного
-запаса нет; V1/V2 остаются побайтно неизменными.
+запаса нет; V1/V2/V3 остаются побайтно неизменными, а V4 не может ослабить V3.
 
 Release-equivalent Linux x64 CI требует одновременно точный размер и SHA.
-Отдельный `bench/wcag22-feasibility-wasm-boundary-v1.json` фиксирует 10 крайних
+Текущий `bench/wcag22-feasibility-wasm-boundary-v2.json` фиксирует 10 крайних
 whole-call форм × 5 свежих процессов, request/outcome bytes, packed shape и
-привязки Core/pack/toolchain. Время, process maxRSS и страницы WASM остаются
+привязки Core/pack/toolchain; его детерминированная проекция побайтно совпадает
+с неизменяемым V1. Время, process maxRSS и страницы WASM остаются
 наблюдениями без выдуманного production-порога. На других host-платформах
 checker сообщает только raw/gzip/SHA-диагностику: host-native bytes не выдаются
 за канонический release artifact. Сборка remap-ит mutable workspace и Cargo

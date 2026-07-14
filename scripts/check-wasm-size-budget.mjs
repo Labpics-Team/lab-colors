@@ -12,10 +12,11 @@ const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const DEFAULT_WASM = resolve(REPO_ROOT, "packages/colors/pkg/labcolors_bg.wasm");
 const V1_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v1.json");
 const V2_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v2.json");
+const V3_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v3.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v3.json",
+  "packages/colors/bench/wasm-size-budget-v4.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -25,9 +26,11 @@ export const V2_FILE_SHA256 =
   "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1";
 export const V3_FILE_SHA256 =
   "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15";
+export const V4_FILE_SHA256 =
+  "f0c3b2190f5675791e74ebd5591b1ad3d31bc6ff877f5f46a87b62524fbdc413";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V3_BUDGET_ID = "labcolors-wasm-raw-issue-296-v3";
+const V4_BUDGET_ID = "labcolors-wasm-raw-issue-296-v4";
 const WASM_REPOSITORY_PATH = "packages/colors/pkg/labcolors_bg.wasm";
 
 function fail(message) {
@@ -80,7 +83,33 @@ function toolchainRecipe(v1) {
   };
 }
 
-function verifyImmutableBuildRecipe() {
+function readImmutableBudget(path, expectedSha256, version, budgetId) {
+  let bytes;
+  try {
+    bytes = readFileSync(path);
+  } catch (error) {
+    fail(`cannot read immutable ${version} budget ${path}: ${error.message}`);
+  }
+  const actualSha256 = sha256(bytes);
+  if (actualSha256 !== expectedSha256) {
+    fail(
+      `immutable ${version} file SHA-256 mismatch: ` +
+        `expected=${expectedSha256} actual=${actualSha256}`,
+    );
+  }
+  let budget;
+  try {
+    budget = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    fail(`immutable ${version} budget is not JSON: ${error.message}`);
+  }
+  if (budget?.schemaVersion !== 3 || budget?.budgetId !== budgetId) {
+    fail(`immutable ${version} budget identity drifted`);
+  }
+  return budget;
+}
+
+function verifyImmutableHistory() {
   let bytes;
   try {
     bytes = readFileSync(V1_PATH);
@@ -111,17 +140,18 @@ function verifyImmutableBuildRecipe() {
     );
   }
 
-  const v2Bytes = readFileSync(V2_PATH);
-  if (sha256(v2Bytes) !== V2_FILE_SHA256) {
-    fail(
-      `immutable v2 file SHA-256 mismatch: ` +
-        `expected=${V2_FILE_SHA256} actual=${sha256(v2Bytes)}`,
-    );
-  }
-  const v2 = JSON.parse(v2Bytes.toString("utf8"));
-  if (v2?.schemaVersion !== 3 || v2?.budgetId !== "labcolors-wasm-raw-issue-295-v2") {
-    fail("immutable v2 budget identity drifted");
-  }
+  readImmutableBudget(
+    V2_PATH,
+    V2_FILE_SHA256,
+    "v2",
+    "labcolors-wasm-raw-issue-295-v2",
+  );
+  return readImmutableBudget(
+    V3_PATH,
+    V3_FILE_SHA256,
+    "v3",
+    "labcolors-wasm-raw-issue-296-v3",
+  );
 }
 
 function validateBudgetValue(budget) {
@@ -131,7 +161,7 @@ function validateBudgetValue(budget) {
     "budget",
   );
   if (budget.schemaVersion !== 3) fail("supported schemaVersion is exactly 3");
-  if (budget.budgetId !== V3_BUDGET_ID) fail(`budgetId must be ${V3_BUDGET_ID}`);
+  if (budget.budgetId !== V4_BUDGET_ID) fail(`budgetId must be ${V4_BUDGET_ID}`);
   if (budget.artifact !== WASM_REPOSITORY_PATH) {
     fail(`artifact must be ${WASM_REPOSITORY_PATH}`);
   }
@@ -168,14 +198,18 @@ function validateBudgetValue(budget) {
   if (budget.policy.maxRawBytes !== budget.measurement.rawBytes) {
     fail("current ceiling must equal the exact accepted measurement (zero arbitrary headroom)");
   }
-  if (budget.policy.derivation !== "exact-accepted-issue-296-slice-a-measurement") {
-    fail("policy.derivation must cite the exact accepted Issue #296 Slice A measurement");
+  if (budget.policy.derivation !== "exact-accepted-issue-296-slice-b-measurement") {
+    fail("policy.derivation must cite the exact accepted Issue #296 Slice B measurement");
   }
   if (budget.policy.gzip !== "diagnostic-only") {
     fail("gzip must remain diagnostic-only across implementations");
   }
 
-  verifyImmutableBuildRecipe();
+  const previous = verifyImmutableHistory();
+  positiveSafeInteger(previous.policy?.maxRawBytes, "immutable v3 policy.maxRawBytes");
+  if (budget.policy.maxRawBytes > previous.policy.maxRawBytes) {
+    fail("current ceiling must not exceed the immutable v3 ratchet");
+  }
 }
 
 export function parseBudgetDocument(bytes, budgetPath) {
@@ -193,10 +227,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V3_FILE_SHA256) {
+    if (actualFileSha256 !== V4_FILE_SHA256) {
       fail(
-        `immutable v3 file SHA-256 mismatch: ` +
-          `expected=${V3_FILE_SHA256} actual=${actualFileSha256}`,
+        `immutable v4 file SHA-256 mismatch: ` +
+          `expected=${V4_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
