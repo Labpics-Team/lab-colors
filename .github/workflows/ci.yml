@@ -309,13 +309,12 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
-          if test "$GITHUB_EVENT_NAME" = pull_request; then
-            python3 scripts/check_wcag22_feasibility_benchmark.py \
-              "$artifact" "${protocol[@]}" --self-test
-          fi
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$artifact" "${protocol[@]}" \
-            --verify-current-subjects \
+            --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+            --self-test
+          python3 scripts/check_wcag22_feasibility_applicability.py \
+            "$artifact" \
             --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
             --self-test
 

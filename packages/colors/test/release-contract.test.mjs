@@ -1095,6 +1095,44 @@ test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   }
 });
 
+test("feasibility benchmark applicability permits only source-less non-Core lock drift", () => {
+  const checker = join(
+    root,
+    "scripts",
+    "check_wcag22_feasibility_applicability.py",
+  );
+  assert.doesNotThrow(() => {
+    execFileSync("python3", [
+      checker,
+      join(
+        root,
+        "crates",
+        "labcolors-core",
+        "contracts",
+        "wcag22-feasibility-benchmark-v1.json",
+      ),
+      "--artifact-sha256",
+      "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e",
+      "--self-test",
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  });
+
+  const ci = read(".github", "workflows", "ci.yml");
+  assert.match(
+    ci,
+    /python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+  );
+  assert.doesNotMatch(
+    ci,
+    /check_wcag22_feasibility_benchmark\.py[\s\S]{0,500}--verify-current-subjects/u,
+    "the immutable historical checker must not overbind current workspace additions",
+  );
+});
+
 test("runtime WASM does not duplicate separately shipped WCAG22 evidence documents", () => {
   const wasm = readFileSync(
     join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
