@@ -334,7 +334,7 @@ jobs:
           )
           historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
           historical_applicability_snapshot=94efeeeb1811f5515558ab2d79014a5e4c3a570a
-          historical_root="$RUNNER_TEMP/wcag22-feasibility-slice-a-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          historical_root="$RUNNER_TEMP/wcag22-feasibility-history-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           git worktree add --detach "$historical_root" "$historical_checker_snapshot"
           cleanup_history() {
             git worktree remove --force "$historical_root"
@@ -358,11 +358,38 @@ jobs:
               --self-test
           )
           cleanup_history
+
+          v2_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
+          v2_snapshot=4afe61b124b05e13b999f83a9de580ef43405080
+          v2_protocol=(
+            --admit-revision 965eb42642beb1c072a74886be1d016027afeae5
+            --admit-rustc-release 1.96.0
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
+          git worktree add --detach "$historical_root" "$v2_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$v2_artifact" "${v2_protocol[@]}" \
+              --verify-current-subjects \
+              --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+              --self-test
+            python3 scripts/check_wcag22_feasibility_applicability.py \
+              "$v2_artifact" \
+              --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+              --self-test
+          )
+          cleanup_history
           trap - EXIT
 
-          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
           current_protocol=(
-            --admit-revision 965eb42642beb1c072a74886be1d016027afeae5
+            --admit-revision 5781d4ab84b39a585d437e8e04604b25ef891cf1
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
@@ -374,11 +401,11 @@ jobs:
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
             --verify-current-subjects \
-            --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+            --artifact-sha256 ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53 \
             --self-test
           python3 scripts/check_wcag22_feasibility_applicability.py \
             "$current_artifact" \
-            --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+            --artifact-sha256 ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53 \
             --self-test
 
   audit:

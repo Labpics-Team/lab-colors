@@ -1,0 +1,428 @@
+{
+  "schemaVersion": 1,
+  "artifactId": "wcag22-feasibility-admission-raw-v3",
+  "claimBoundary": "native-process-observations-and-page-slot-arithmetic-only",
+  "notMeasured": ["webassembly-runtime-memory", "serialized-output-size", "client-latency"],
+  "environment": {
+    "execution": "native-process",
+    "targetArch": "aarch64",
+    "targetOs": "macos",
+    "pointerWidthBits": 64,
+    "debugAssertions": false,
+    "packageVersion": "0.2.0",
+    "allocator": "std::alloc::System",
+    "allocatorInstrumentationIncludedInElapsedTime": true,
+    "timer": "std::time::Instant",
+    "measurementThreads": 1,
+    "requestConstructionMeasured": false,
+    "rustcVerbose": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: aarch64-apple-darwin\nrelease: 1.96.0\nLLVM version: 22.1.2",
+    "gitRevision": "5781d4ab84b39a585d437e8e04604b25ef891cf1",
+    "gitTree": "80ad67ed91e12aa664fc7d771dc72249766199d6",
+    "sourceTreeClean": true,
+    "sampleCountExplicit": true,
+    "sourceObjects": {
+      "workspaceCargo": {"path": "Cargo.toml", "gitObject": "e64e7a0e3875e37dbd8be06c013868da3248b4b3"},
+      "workspaceLock": {"path": "Cargo.lock", "gitObject": "bd2faf4108ed85d275ee595ce3824ed199b7c722"},
+      "coreCargo": {"path": "crates/labcolors-core/Cargo.toml", "gitObject": "4e9c0893754f1a6d131d98f85f0101902f0991c2"},
+      "coreSourceTree": {"path": "crates/labcolors-core/src", "gitObject": "560d654a9df773850973343a65552a1fa363169b"},
+      "wcag22Srgb8Contract": {"path": "crates/labcolors-core/contracts/wcag22-srgb8-v1.json", "gitObject": "7b3932335398bdbc0760136904cb245305749b09"},
+      "wcag22Q55ProofContract": {"path": "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json", "gitObject": "ddce1912e8e06ce6bd55c9854acf27a28a31b134"},
+      "benchmarkHarness": {"path": "crates/labcolors-core/benches/wcag22_feasibility_admission.rs", "gitObject": "5e0ea3cd6c0fb90fd3a916a31f765e25210b8cf8"},
+      "benchmarkChecker": {"path": "scripts/check_wcag22_feasibility_benchmark.py", "gitObject": "69cb4d7f12f5fceeb605ee3612104a1bb1523903"}
+    }
+  },
+  "warmupSamples": 0,
+  "scenarioOrder": "as-emitted",
+  "sampleCount": 5,
+  "admissionStatus": "measurement-only-unless-admission-check-passes",
+  "hardSlo": {
+    "class": "deterministic-work-and-storage",
+    "logicalAssessmentLaw": "W=256E",
+    "packedStorageLaw": "B=0 if A=0, otherwise B=32(E+1)",
+    "partialTerminalAllowed": false,
+    "timingThresholdNs": null,
+    "allRequiredShapesMustComplete": true
+  },
+  "boundedEnvelopeModel": {
+    "scope": "product-policy-capacity-arithmetic-not-total-memory",
+    "referenceBoundedBytes": 65536,
+    "candidateCount": 256,
+    "decisionSlotBytes": 32,
+    "partitionBytes": 32,
+    "reservedPartitionSlots": 1,
+    "maximumCardinality": 2047,
+    "maximumLogicalAssessments": 524032,
+    "maximumPackedResultBytes": 65536
+  },
+  "subjectManifest": [
+    {"path": "Cargo.toml", "sha256": "fb821f899e1d32aeb86cbfd2f9896797569e0bef908356dd6ba7c27c674a6c04"},
+    {"path": "crates/labcolors-core/src/lib.rs", "sha256": "a98651f9b4ab45237fbc04bda90cc260b98e6caf6b99fada63407745cdbd3d64"},
+    {"path": "crates/labcolors-core/src/wcag22_feasibility.rs", "sha256": "6fd41b09e8a57a0a0c2d8879fec5b653eb9c81d6e9e1ee6bbca85a8ee8c570e7"},
+    {"path": "crates/labcolors-core/src/wcag22_feasibility/explicit.rs", "sha256": "ead9f24e830661037bb723d14d03c152fbedb2a1074a8ec0591153484f8db112"},
+    {"path": "crates/labcolors-core/src/srgb8.rs", "sha256": "9a37ea3f25f7ab3e2ae064e5a5b5c7d51a880a537c297169d6014fa32e593e17"},
+    {"path": "crates/labcolors-core/src/sha256.rs", "sha256": "09827c91997db66ade30ec7b68b422b4204004296e17b2ee6de49af9ea5b002a"},
+    {"path": "crates/labcolors-core/src/wcag22.rs", "sha256": "3e648301d01515f221a783625fa18f41859989f00ceda1cfc3360205d29ab852"},
+    {"path": "crates/labcolors-core/src/wcag22/kernel.rs", "sha256": "c97980c1ca2c7ea9cabff9c8d2fb7282773cca180ae15948391c29c9d6196040"},
+    {"path": "crates/labcolors-core/src/wcag22/q55_data.rs", "sha256": "af4d23d6b70c45ce6efa839e7dda4bb0a61f6aae43cb805af6fa9b29e6c3bae2"},
+    {"path": "crates/labcolors-core/src/wcag22_evidence.rs", "sha256": "3c5a75b07254c6071a64700af208a64987d0f0ea9698eadc54a9e74585ce1f72"},
+    {"path": "crates/labcolors-core/src/numerics.rs", "sha256": "ef10c32534f8e3af7c895aaf465a142184ed651d11634d6c0bbb60db4ff2304f"},
+    {"path": "crates/labcolors-core/contracts/wcag22-srgb8-v1.json", "sha256": "b4bb7e5f17a99f2c911fdbe3da23a48b049277b796291094950f14680cc3cc7b"},
+    {"path": "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json", "sha256": "d269e9de689009bb955788bf8762fce56680bf616fc0459b6526a367875a6a08"},
+    {"path": "crates/labcolors-core/Cargo.toml", "sha256": "46cf9970ab05d821187b30ff98f0fc9ab070ef546f82817a49d76f6e473e80ff"},
+    {"path": "Cargo.lock", "sha256": "bab0b2ff01eab4f4f392b4509a909248fd415338e53e3f74563a6b6e0550af4d"},
+    {"path": "crates/labcolors-core/benches/wcag22_feasibility_admission.rs", "sha256": "df9066c556acf44cfaca179aecc69514916830685aa4ca77d895e64504802b95"},
+    {"path": "scripts/check_wcag22_feasibility_benchmark.py", "sha256": "a3ab9a212b98bab462202240b74e4dc6ffc5e0bf37bd90af886c02162b27e307"}
+  ],
+  "profileLimits": {
+    "profileId": "compile-v1",
+    "rawRelations": 2047,
+    "rawAdjacentEntries": 2047,
+    "opaqueUtf8Bytes": 65536,
+    "canonicalRelations": 2047,
+    "applicableEdges": 2047,
+    "logicalAssessments": 524032,
+    "packedResultBytes": 65536
+  },
+  "scenarios": [
+    {
+      "name": "minimum-evaluated",
+      "shape": {
+        "rawRelations": 1,
+        "rawAdjacentEntries": 1,
+        "opaqueUtf8Bytes": 2,
+        "canonicalRelations": 1,
+        "applicableRelations": 1,
+        "applicableEdges": 1
+      },
+      "expected": {
+        "terminal": "feasible",
+        "logicalAssessments": 256,
+        "packedResultBytes": 64,
+        "feasibleCandidates": 7
+      },
+      "observedIdentity": {
+        "terminal": "feasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "770f11c7b289f17427541399fa49f4e747a4e84d04a3689e3a7e8f0cea968ecc",
+        "evaluationIdSha256": "c2ff3ed8394f040a1e01ccf92c07442f8fb06f2e8fcb735412c8a4803a81c5db",
+        "logicalAssessments": 256,
+        "assessmentIteratorLen": 256,
+        "derivedPackedResultBytes": 64,
+        "feasibleCandidates": 7
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 30333, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 1, "elapsedNs": 18542, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 2, "elapsedNs": 18250, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 3, "elapsedNs": 18125, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64},
+        {"index": 4, "elapsedNs": 18125, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 2792, "endLiveBytes": 2856, "peakLiveBytes": 2856, "peakAdditionalLiveBytes": 64}
+      ]
+    },
+    {
+      "name": "maximum-applicable-edges",
+      "shape": {
+        "rawRelations": 1,
+        "rawAdjacentEntries": 2047,
+        "opaqueUtf8Bytes": 19,
+        "canonicalRelations": 1,
+        "applicableRelations": 1,
+        "applicableEdges": 2047
+      },
+      "expected": {
+        "terminal": "infeasible",
+        "logicalAssessments": 524032,
+        "packedResultBytes": 65536,
+        "feasibleCandidates": 0
+      },
+      "observedIdentity": {
+        "terminal": "infeasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "3498263d9b09b28b10b0a76147bff13bef9844f44b4fe70a3585e6404efac947",
+        "evaluationIdSha256": "b6011501962a5f2eb55817d2ddab783f37d0eef036ace829bec2675511af394d",
+        "logicalAssessments": 524032,
+        "assessmentIteratorLen": 524032,
+        "derivedPackedResultBytes": 65536,
+        "feasibleCandidates": 0
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 30248584, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 1, "elapsedNs": 21093792, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 2, "elapsedNs": 17861750, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 3, "elapsedNs": 15878583, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536},
+        {"index": 4, "elapsedNs": 15314208, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 9347, "endLiveBytes": 74883, "peakLiveBytes": 74883, "peakAdditionalLiveBytes": 65536}
+      ]
+    },
+    {
+      "name": "maximum-raw-duplicate-relations",
+      "shape": {
+        "rawRelations": 2047,
+        "rawAdjacentEntries": 2047,
+        "opaqueUtf8Bytes": 26611,
+        "canonicalRelations": 1,
+        "applicableRelations": 1,
+        "applicableEdges": 1
+      },
+      "expected": {
+        "terminal": "feasible",
+        "logicalAssessments": 256,
+        "packedResultBytes": 64,
+        "feasibleCandidates": 7
+      },
+      "observedIdentity": {
+        "terminal": "feasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "2d8c3d7dce6f7caee600851331aabbd45692a0cb530f1d58f08afb6f0a9aacc2",
+        "evaluationIdSha256": "83fa34dd186f1692438b5594fcae93b5d10746891e7e400b62f063b4f459cc1a",
+        "logicalAssessments": 256,
+        "assessmentIteratorLen": 256,
+        "derivedPackedResultBytes": 64,
+        "feasibleCandidates": 7
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 145500, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 141166, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 140959, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 140750, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 140875, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 4092, "deallocatedBytes": 14322, "baselineLiveBytes": 165237, "endLiveBytes": 150979, "peakLiveBytes": 165237, "peakAdditionalLiveBytes": 0}
+      ]
+    },
+    {
+      "name": "maximum-raw-adjacent-duplicates",
+      "shape": {
+        "rawRelations": 1,
+        "rawAdjacentEntries": 2047,
+        "opaqueUtf8Bytes": 2,
+        "canonicalRelations": 1,
+        "applicableRelations": 1,
+        "applicableEdges": 1
+      },
+      "expected": {
+        "terminal": "feasible",
+        "logicalAssessments": 256,
+        "packedResultBytes": 64,
+        "feasibleCandidates": 7
+      },
+      "observedIdentity": {
+        "terminal": "feasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "770f11c7b289f17427541399fa49f4e747a4e84d04a3689e3a7e8f0cea968ecc",
+        "evaluationIdSha256": "c2ff3ed8394f040a1e01ccf92c07442f8fb06f2e8fcb735412c8a4803a81c5db",
+        "logicalAssessments": 256,
+        "assessmentIteratorLen": 256,
+        "derivedPackedResultBytes": 64,
+        "feasibleCandidates": 7
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 31000, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 1, "elapsedNs": 30750, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 2, "elapsedNs": 30792, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 3, "elapsedNs": 30792, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64},
+        {"index": 4, "elapsedNs": 30625, "allocationCalls": 1, "allocatedBytes": 64, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 10130, "endLiveBytes": 10194, "peakLiveBytes": 10194, "peakAdditionalLiveBytes": 64}
+      ]
+    },
+    {
+      "name": "maximum-canonical-applicable-relations",
+      "shape": {
+        "rawRelations": 2047,
+        "rawAdjacentEntries": 2047,
+        "opaqueUtf8Bytes": 20470,
+        "canonicalRelations": 2047,
+        "applicableRelations": 2047,
+        "applicableEdges": 2047
+      },
+      "expected": {
+        "terminal": "feasible",
+        "logicalAssessments": 524032,
+        "packedResultBytes": 65536,
+        "feasibleCandidates": 7
+      },
+      "observedIdentity": {
+        "terminal": "feasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "2c034157301d1ebd68d207201ff4f18e38400a1bddea7824a77079a0ed96d41c",
+        "evaluationIdSha256": "db69a53550117574de7167b6f40dcfb8e213f5710dcd6ef16d6487259bd6bdc5",
+        "logicalAssessments": 524032,
+        "assessmentIteratorLen": 524032,
+        "derivedPackedResultBytes": 65536,
+        "feasibleCandidates": 7
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 16821625, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 1, "elapsedNs": 16947667, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 2, "elapsedNs": 17026041, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 3, "elapsedNs": 16753042, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536},
+        {"index": 4, "elapsedNs": 16730917, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 223321, "endLiveBytes": 288857, "peakLiveBytes": 288857, "peakAdditionalLiveBytes": 65536}
+      ]
+    },
+    {
+      "name": "maximum-combined-applicable-envelope",
+      "shape": {
+        "rawRelations": 2047,
+        "rawAdjacentEntries": 2047,
+        "opaqueUtf8Bytes": 65536,
+        "canonicalRelations": 2047,
+        "applicableRelations": 2047,
+        "applicableEdges": 2047
+      },
+      "expected": {
+        "terminal": "feasible",
+        "logicalAssessments": 524032,
+        "packedResultBytes": 65536,
+        "feasibleCandidates": 7
+      },
+      "observedIdentity": {
+        "terminal": "feasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "647fbd1e61b7b10a58a32f00c6f9f2c1fd4deca9e685e6f682f26ec792dc5a84",
+        "evaluationIdSha256": "1d71ce6dea709b3977c252e814d0981dfeda2d3d1c42e9c2a1ff60848b4c118a",
+        "logicalAssessments": 524032,
+        "assessmentIteratorLen": 524032,
+        "derivedPackedResultBytes": 65536,
+        "feasibleCandidates": 7
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 16960416, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 1, "elapsedNs": 17039500, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 2, "elapsedNs": 16927708, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 3, "elapsedNs": 16978208, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536},
+        {"index": 4, "elapsedNs": 16969792, "allocationCalls": 1, "allocatedBytes": 65536, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 262646, "endLiveBytes": 328182, "peakLiveBytes": 328182, "peakAdditionalLiveBytes": 65536}
+      ]
+    },
+    {
+      "name": "maximum-canonical-not-applicable-relations",
+      "shape": {
+        "rawRelations": 2047,
+        "rawAdjacentEntries": 0,
+        "opaqueUtf8Bytes": 36846,
+        "canonicalRelations": 2047,
+        "applicableRelations": 0,
+        "applicableEdges": 0
+      },
+      "expected": {
+        "terminal": "not-evaluated",
+        "logicalAssessments": 0,
+        "packedResultBytes": 0,
+        "feasibleCandidates": null
+      },
+      "observedIdentity": {
+        "terminal": "not-evaluated",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "7e5f031ce0c8ef68c6667d9ae05bcf9818d8d34b1095fdbbc2dd7bc8f8748089",
+        "evaluationIdSha256": null,
+        "logicalAssessments": 0,
+        "assessmentIteratorLen": 0,
+        "derivedPackedResultBytes": 0,
+        "feasibleCandidates": null
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 622625, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 619583, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 615833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 609708, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 610000, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 234356, "endLiveBytes": 234356, "peakLiveBytes": 234356, "peakAdditionalLiveBytes": 0}
+      ]
+    },
+    {
+      "name": "maximum-combined-not-applicable-envelope",
+      "shape": {
+        "rawRelations": 2047,
+        "rawAdjacentEntries": 0,
+        "opaqueUtf8Bytes": 65536,
+        "canonicalRelations": 2047,
+        "applicableRelations": 0,
+        "applicableEdges": 0
+      },
+      "expected": {
+        "terminal": "not-evaluated",
+        "logicalAssessments": 0,
+        "packedResultBytes": 0,
+        "feasibleCandidates": null
+      },
+      "observedIdentity": {
+        "terminal": "not-evaluated",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "68d40f750b9e1e7520290ce21a5077b5eb19d44308dd5c44076a080486182bc2",
+        "evaluationIdSha256": null,
+        "logicalAssessments": 0,
+        "assessmentIteratorLen": 0,
+        "derivedPackedResultBytes": 0,
+        "feasibleCandidates": null
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 767708, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 765500, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 766500, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 769167, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 765666, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 283884, "endLiveBytes": 283884, "peakLiveBytes": 283884, "peakAdditionalLiveBytes": 0}
+      ]
+    },
+    {
+      "name": "maximum-mixed-relations",
+      "shape": {
+        "rawRelations": 2047,
+        "rawAdjacentEntries": 1023,
+        "opaqueUtf8Bytes": 28662,
+        "canonicalRelations": 2047,
+        "applicableRelations": 1023,
+        "applicableEdges": 1023
+      },
+      "expected": {
+        "terminal": "feasible",
+        "logicalAssessments": 261888,
+        "packedResultBytes": 32768,
+        "feasibleCandidates": 7
+      },
+      "observedIdentity": {
+        "terminal": "feasible",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "dbe4493668b49a058babc3188b84fc40f321bfd80d8bef22ec9d63f775033eed",
+        "evaluationIdSha256": "ab188519042404430aa7e71b4766ebf3b64f22fd88cff7898e7bf7ae65b298c2",
+        "logicalAssessments": 261888,
+        "assessmentIteratorLen": 261888,
+        "derivedPackedResultBytes": 32768,
+        "feasibleCandidates": 7
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 8795792, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 1, "elapsedNs": 8806458, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 2, "elapsedNs": 8920291, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 3, "elapsedNs": 8918875, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768},
+        {"index": 4, "elapsedNs": 8917625, "allocationCalls": 1, "allocatedBytes": 32768, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 230041, "endLiveBytes": 262809, "peakLiveBytes": 262809, "peakAdditionalLiveBytes": 32768}
+      ]
+    },
+    {
+      "name": "maximum-opaque-utf8-bytes",
+      "shape": {
+        "rawRelations": 1,
+        "rawAdjacentEntries": 0,
+        "opaqueUtf8Bytes": 65536,
+        "canonicalRelations": 1,
+        "applicableRelations": 0,
+        "applicableEdges": 0
+      },
+      "expected": {
+        "terminal": "not-evaluated",
+        "logicalAssessments": 0,
+        "packedResultBytes": 0,
+        "feasibleCandidates": null
+      },
+      "observedIdentity": {
+        "terminal": "not-evaluated",
+        "domainDigestSha256": "9634ac326979b23c2103ffcd92a2b890427ea8914a97b264b0c73409640f8466",
+        "relationSetDigestSha256": "d89fd489c0f419f8e6ef2ac97f164d2ee1b4b20dc961895da8061688aa24cc2c",
+        "evaluationIdSha256": null,
+        "logicalAssessments": 0,
+        "assessmentIteratorLen": 0,
+        "derivedPackedResultBytes": 0,
+        "feasibleCandidates": null
+      },
+      "samples": [
+        {"index": 0, "elapsedNs": 335208, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 1, "elapsedNs": 335250, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 2, "elapsedNs": 336250, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 3, "elapsedNs": 334833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0},
+        {"index": 4, "elapsedNs": 333833, "allocationCalls": 0, "allocatedBytes": 0, "deallocationCalls": 0, "deallocatedBytes": 0, "baselineLiveBytes": 71923, "endLiveBytes": 71923, "peakLiveBytes": 71923, "peakAdditionalLiveBytes": 0}
+      ]
+    }
+  ]
+}
