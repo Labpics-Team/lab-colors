@@ -889,44 +889,46 @@ mod tests {
     }
 
     #[test]
-    fn a_fault_only_on_the_last_edge_fails_closed_after_exactly_e_calls() {
+    fn a_fault_on_each_edge_fails_closed_at_that_exact_edge() {
         let source = feasible(
             vec![candidate("selected", 255)],
             vec![Srgb8::new([0; 3]), Srgb8::new([1; 3]), Srgb8::new([2; 3])],
         );
 
-        let mut verdict_fault = ProbeEvaluator::new(ProbeMode::FailAt(3));
-        let error = select_with(
-            source.selection_source().unwrap(),
-            policy("last-verdict", &["selected"]),
-            &mut verdict_fault,
-        )
-        .expect_err("a last-edge verdict mismatch cannot mint a receipt");
-        assert!(matches!(
-            error,
-            SelectionErrorV1::IntegrityViolation(
-                SelectionIntegrityViolationV1::SealedDecisionMismatch { .. }
+        for fault_at in 1..=3 {
+            let mut verdict_fault = ProbeEvaluator::new(ProbeMode::FailAt(fault_at));
+            let error = select_with(
+                source.selection_source().unwrap(),
+                policy("verdict-fault", &["selected"]),
+                &mut verdict_fault,
             )
-        ));
-        assert_eq!(verdict_fault.calls, 3);
+            .expect_err("a verdict mismatch on any edge cannot mint a receipt");
+            assert!(matches!(
+                error,
+                SelectionErrorV1::IntegrityViolation(
+                    SelectionIntegrityViolationV1::SealedDecisionMismatch { .. }
+                )
+            ));
+            assert_eq!(verdict_fault.calls, fault_at);
 
-        let mut input_fault = ProbeEvaluator::new(ProbeMode::InputMismatchAt(3));
-        let error = select_with(
-            source.selection_source().unwrap(),
-            policy("last-input", &["selected"]),
-            &mut input_fault,
-        )
-        .expect_err("a last-edge adapter mismatch cannot mint a receipt");
-        assert!(matches!(
-            error,
-            SelectionErrorV1::IntegrityViolation(
-                SelectionIntegrityViolationV1::EvaluatorContract {
-                    violation: EvaluatorInvariantV1::InputMismatch,
-                    ..
-                }
+            let mut input_fault = ProbeEvaluator::new(ProbeMode::InputMismatchAt(fault_at));
+            let error = select_with(
+                source.selection_source().unwrap(),
+                policy("input-fault", &["selected"]),
+                &mut input_fault,
             )
-        ));
-        assert_eq!(input_fault.calls, 3);
+            .expect_err("an adapter mismatch on any edge cannot mint a receipt");
+            assert!(matches!(
+                error,
+                SelectionErrorV1::IntegrityViolation(
+                    SelectionIntegrityViolationV1::EvaluatorContract {
+                        violation: EvaluatorInvariantV1::InputMismatch,
+                        ..
+                    }
+                )
+            ));
+            assert_eq!(input_fault.calls, fault_at);
+        }
     }
 
     #[test]
