@@ -126,6 +126,23 @@ def check_lock_compatibility(historical: bytes, current: bytes) -> int:
         require(current_sourced[key] == block,
                 f"current Cargo.lock changed sourced package record {key}")
 
+    historical_workspace_names = {
+        key[0]
+        for key in historical_records
+        if not key[2] and key[0] != "labcolors-core"
+    }
+    current_workspace_names = {
+        key[0]
+        for key in current_records
+        if not key[2] and key[0] != "labcolors-core"
+    }
+    missing_workspace_names = historical_workspace_names - current_workspace_names
+    require(
+        not missing_workspace_names,
+        "current Cargo.lock removed historical source-less non-Core package(s): "
+        + ", ".join(sorted(missing_workspace_names)),
+    )
+
     return sum(
         1
         for key in set(historical_records) | set(current_records)
@@ -246,6 +263,7 @@ def self_test() -> None:
             dep.replace("1" * 64, "2" * 64), core, other,
         ]),
         "missing sourced package": canonical_lock([core, other]),
+        "missing historical workspace package": canonical_lock([dep, core]),
         "new sourced package": canonical_lock([
             dep,
             core,
