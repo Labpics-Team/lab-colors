@@ -1340,6 +1340,11 @@ test("feasibility benchmark keeps V1/V2/V3 history and admits exact V4 Core subj
   });
 
   const ci = read(".github", "workflows", "ci.yml");
+  assert.doesNotMatch(
+    ci,
+    /v3_snapshot=b777b1d95dd7693220621600dd49042a2046dab5/u,
+    "durable evidence must not depend on a pre-squash PR commit",
+  );
   assert.match(
     ci,
     /historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_checker_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
