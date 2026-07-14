@@ -1153,6 +1153,10 @@ impl PackedDomainV1 for NeutralAxisPackingV1 {
         _matrix_bytes: u64,
         candidate_index: usize,
     ) -> Result<(), ()> {
+        // The associated type seals this packing to DomainIdV1, whose exact
+        // iterator yields only 0..256; no client-defined domain can reach this
+        // fixed 32-byte array. The post-loop cardinality check guards that
+        // private iterator contract without adding a branch to every hot cell.
         partition[candidate_index / 8] |= 1_u8 << (candidate_index % 8);
         Ok(())
     }
