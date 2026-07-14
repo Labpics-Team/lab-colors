@@ -424,39 +424,16 @@ impl NoSelectionV1 {
     }
 }
 
+/// Exhaustive V1 outcome. Variant construction is reserved to Core so an
+/// arbitrary payload cannot be promoted into a certified result.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SelectionOutcomeKindV1 {
-    Selected(SelectedV1),
-    NoSelection(NoSelectionV1),
-}
-
-/// Exhaustive V1 outcome with private construction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectionOutcomeV1 {
-    kind: SelectionOutcomeKindV1,
-}
-
-impl SelectionOutcomeV1 {
-    /// Borrow the selected result, when one was minted.
-    pub const fn selected(&self) -> Option<&SelectedV1> {
-        match &self.kind {
-            SelectionOutcomeKindV1::Selected(value) => Some(value),
-            SelectionOutcomeKindV1::NoSelection(..) => None,
-        }
-    }
-
-    /// Borrow the exhaustive no-selection result.
-    pub const fn no_selection(&self) -> Option<&NoSelectionV1> {
-        match &self.kind {
-            SelectionOutcomeKindV1::Selected(..) => None,
-            SelectionOutcomeKindV1::NoSelection(value) => Some(value),
-        }
-    }
-
-    /// Whether the valid declared order had no feasible member.
-    pub const fn is_no_selection(&self) -> bool {
-        matches!(self.kind, SelectionOutcomeKindV1::NoSelection(..))
-    }
+pub enum SelectionOutcomeV1 {
+    /// The first feasible member in declared order, with final evidence.
+    #[non_exhaustive]
+    Selected { selected: SelectedV1 },
+    /// The complete declared order contained no feasible member.
+    #[non_exhaustive]
+    NoSelection { no_selection: NoSelectionV1 },
 }
 
 fn policy_digest(policy: &FirstFeasibleInDeclaredOrderV1, entries: u64) -> PolicyDigestV1 {
@@ -594,13 +571,13 @@ fn select_with<E: PairEvaluator>(
     }
 
     let Some((selected_policy_ordinal, candidate_index)) = selected else {
-        return Ok(SelectionOutcomeV1 {
-            kind: SelectionOutcomeKindV1::NoSelection(NoSelectionV1 {
+        return Ok(SelectionOutcomeV1::NoSelection {
+            no_selection: NoSelectionV1 {
                 reason: NoSelectionReasonV1::NoDeclaredCandidateFeasible,
                 policy_id: policy.policy_id,
                 policy_digest: digest,
                 evaluation_id: record.evaluation_id,
-            }),
+            },
         });
     };
 
@@ -701,15 +678,15 @@ fn select_with<E: PairEvaluator>(
         proof_sha256: binding.proof_sha256,
         receipt_digest,
     };
-    Ok(SelectionOutcomeV1 {
-        kind: SelectionOutcomeKindV1::Selected(SelectedV1 {
+    Ok(SelectionOutcomeV1::Selected {
+        selected: SelectedV1 {
             candidate: candidate.clone(),
             policy_id: policy.policy_id,
             policy_digest: digest,
             evaluation_id: record.evaluation_id,
             selected_policy_ordinal,
             final_verification,
-        }),
+        },
     })
 }
 
@@ -859,7 +836,7 @@ mod tests {
             &mut evaluator,
         )
         .unwrap();
-        assert!(outcome.is_no_selection());
+        assert!(matches!(outcome, SelectionOutcomeV1::NoSelection { .. }));
         assert_eq!(evaluator.calls, 0);
     }
 
@@ -878,14 +855,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(evaluator.calls, 3);
-        assert_eq!(
-            outcome
-                .selected()
-                .unwrap()
-                .final_verification()
-                .verified_applicable_edges(),
-            3
-        );
+        let SelectionOutcomeV1::Selected { selected, .. } = outcome else {
+            panic!("feasible singleton must be selected");
+        };
+        assert_eq!(selected.final_verification().verified_applicable_edges(), 3);
     }
 
     #[test]

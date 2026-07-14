@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use labcolors_core::Srgb8;
 use labcolors_core::wcag22::Wcag22CriterionV1;
 use labcolors_core::wcag22_feasibility::explicit::selection::{
-    FirstFeasibleInDeclaredOrderV1, PolicyId, select,
+    FirstFeasibleInDeclaredOrderV1, PolicyId, SelectionOutcomeV1, select,
 };
 use labcolors_core::wcag22_feasibility::explicit::{
     CandidateId, CandidateV1, DomainRequestV1, RequestV1, evaluate,
@@ -114,7 +114,9 @@ fn public_selection_allocates_nothing_after_source_and_policy_construction() {
     let allocation_calls = ALLOCATION_CALLS.load(Ordering::SeqCst);
 
     let outcome = outcome.expect("selection succeeds");
-    let selected = outcome.selected().expect("declared order selects");
+    let SelectionOutcomeV1::Selected { selected, .. } = outcome else {
+        panic!("declared order must select");
+    };
     assert_eq!(selected.candidate().candidate_id().as_str(), "candidate-16");
     assert_eq!(selected.final_verification().verified_applicable_edges(), 3);
     assert_eq!(

@@ -10,8 +10,8 @@ use std::process::Command;
 use labcolors_core::Srgb8;
 use labcolors_core::wcag22::{Wcag22ClientDeclaredNotApplicableV1, Wcag22CriterionV1};
 use labcolors_core::wcag22_feasibility::explicit::selection::{
-    FirstFeasibleInDeclaredOrderV1, InvalidSelectionRequestV1, NoSelectionReasonV1, PolicyId,
-    NoSelectionV1, SelectedV1, SelectionErrorV1, SelectionOutcomeV1, select,
+    FirstFeasibleInDeclaredOrderV1, InvalidSelectionRequestV1, NoSelectionReasonV1, NoSelectionV1,
+    PolicyId, SelectedV1, SelectionErrorV1, SelectionOutcomeV1, select,
 };
 use labcolors_core::wcag22_feasibility::explicit::{
     CandidateId, CandidateV1, DomainRequestV1, EvaluatedV1, FeasibilityV1, RequestV1, evaluate,
@@ -72,14 +72,14 @@ fn evaluated(result: &FeasibilityV1) -> &EvaluatedV1 {
     result.evaluated().expect("expected an evaluated terminal")
 }
 
-fn selected(outcome: &SelectionOutcomeV1) -> Option<&SelectedV1> {
+fn as_selected(outcome: &SelectionOutcomeV1) -> Option<&SelectedV1> {
     match outcome {
         SelectionOutcomeV1::Selected { selected, .. } => Some(selected),
         SelectionOutcomeV1::NoSelection { .. } => None,
     }
 }
 
-fn no_selection(outcome: &SelectionOutcomeV1) -> Option<&NoSelectionV1> {
+fn as_no_selection(outcome: &SelectionOutcomeV1) -> Option<&NoSelectionV1> {
     match outcome {
         SelectionOutcomeV1::Selected { .. } => None,
         SelectionOutcomeV1::NoSelection { no_selection, .. } => Some(no_selection),
@@ -215,8 +215,8 @@ fn opposite_declared_orders_choose_opposite_opaque_ids_without_rewriting_feasibi
         policy("brand/order", &["second", "first"]),
     )
     .unwrap();
-    let first = first.selected().expect("first order selects");
-    let second = second.selected().expect("second order selects");
+    let first = as_selected(&first).expect("first order selects");
+    let second = as_selected(&second).expect("second order selects");
 
     assert_eq!(first.candidate().candidate_id().as_str(), "first");
     assert_eq!(second.candidate().candidate_id().as_str(), "second");
@@ -241,7 +241,7 @@ fn first_feasible_after_an_infeasible_prefix_keeps_its_declared_ordinal() {
         policy("ordered", &["fail", "pass"]),
     )
     .unwrap();
-    let selected = outcome.selected().expect("the second declared ID passes");
+    let selected = as_selected(&outcome).expect("the second declared ID passes");
 
     assert_eq!(selected.candidate().candidate_id().as_str(), "pass");
     assert_eq!(selected.proof().selected_policy_ordinal(), 1);
@@ -263,9 +263,7 @@ fn singleton_infeasible_policy_is_real_no_selection_without_domain_fallback() {
         policy("exact/fail-only", &["fail"]),
     )
     .unwrap();
-    let no_selection = outcome
-        .no_selection()
-        .expect("a valid singleton may select nothing");
+    let no_selection = as_no_selection(&outcome).expect("a valid singleton may select nothing");
 
     assert_eq!(
         no_selection.reason(),
@@ -407,7 +405,7 @@ fn mixed_graph_final_receipt_counts_edges_not_relation_labels() {
         policy("mixed", &["balanced"]),
     )
     .unwrap();
-    let selected = outcome.selected().unwrap();
+    let selected = as_selected(&outcome).unwrap();
     assert_eq!(selected.proof().selected_policy_ordinal(), 0);
     assert_eq!(selected.final_verification().verified_applicable_edges(), 2);
     assert_eq!(selected.evaluation_id(), record.evaluation_id());
@@ -493,12 +491,11 @@ fn property_selection_equals_an_independent_declared_order_lsb0_oracle() {
                 policy("property", &order),
             )
             .unwrap();
-            let actual = outcome
-                .selected()
-                .map(|selected| selected.candidate().candidate_id().as_str());
+            let actual =
+                as_selected(&outcome).map(|selected| selected.candidate().candidate_id().as_str());
 
             prop_assert_eq!(actual, expected);
-            prop_assert_eq!(outcome.is_no_selection(), expected.is_none());
+            prop_assert_eq!(as_no_selection(&outcome).is_some(), expected.is_none());
             Ok(())
         },
     );
@@ -564,7 +561,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
         policy("brand/выбор/🎨", &["海", "é", "e\u{301}"]),
     )
     .unwrap();
-    let composed = composed.selected().expect("fixture policy selects");
+    let composed = as_selected(&composed).expect("fixture policy selects");
     assert_eq!(composed.candidate().candidate_id().as_str(), "é");
     assert_eq!(composed.candidate().emitted(), Srgb8::new([117; 3]));
     assert_eq!(composed.proof().selected_policy_ordinal(), 1);
@@ -587,7 +584,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
         policy("brand/выбор/🎨", &["海", "e\u{301}", "é"]),
     )
     .unwrap();
-    let decomposed = decomposed.selected().expect("opposite order selects");
+    let decomposed = as_selected(&decomposed).expect("opposite order selects");
     assert_eq!(decomposed.candidate().candidate_id().as_str(), "e\u{301}");
     assert_eq!(decomposed.candidate().emitted(), Srgb8::new([117; 3]));
     assert_eq!(decomposed.proof().selected_policy_ordinal(), 1);
@@ -605,9 +602,8 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
         policy("brand/выбор/🎨", &["海"]),
     )
     .unwrap();
-    let no_selection = no_selection
-        .no_selection()
-        .expect("infeasible singleton does not receive a fallback");
+    let no_selection =
+        as_no_selection(&no_selection).expect("infeasible singleton does not receive a fallback");
     assert_eq!(
         hex(no_selection.policy_digest().as_bytes()),
         "25906476eb6f6baf6378f0d421ea953291de5fa33d8d7733313b353660756c62"
@@ -663,11 +659,11 @@ fn main() {}
 };
 
 fn wrap_selected(value: SelectedV1) -> SelectionOutcomeV1 {
-    SelectionOutcomeV1::Selected(value)
+    SelectionOutcomeV1::Selected { selected: value }
 }
 
 fn wrap_no_selection(value: NoSelectionV1) -> SelectionOutcomeV1 {
-    SelectionOutcomeV1::NoSelection(value)
+    SelectionOutcomeV1::NoSelection { no_selection: value }
 }
 
 fn main() {}
