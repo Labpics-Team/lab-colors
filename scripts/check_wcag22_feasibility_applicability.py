@@ -4,10 +4,10 @@
 The admitted neutral-path V3 artifact keeps the exact measured ``Cargo.lock``
 blob as historical provenance.  This verifier deliberately does not
 reinterpret that blob as a byte-for-byte constraint on unrelated workspace
-packages.  Instead
-it proves that every current Core/benchmark subject is unchanged and that the
-current lock preserves the exact ``labcolors-core`` record plus every sourced
-registry/git package from the measured lock.  Only source-less non-Core
+packages. Instead it proves that every current Core/benchmark subject is
+unchanged and that the current lock preserves the exact ``labcolors-core``
+record plus every sourced registry/git package from the measured lock. Only
+source-less non-Core
 workspace records may differ.
 """
 
@@ -24,10 +24,6 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ARTIFACT = ROOT / (
-    "crates/labcolors-core/contracts/"
-    "wcag22-feasibility-benchmark-v3.json"
-)
 HISTORICAL_ONLY_PATH = "Cargo.lock"
 CORE_SOURCE_TREE_PATH = "crates/labcolors-core/src"
 EXPECTED_SUBJECT_PATHS = (
