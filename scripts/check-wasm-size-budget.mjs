@@ -24,7 +24,7 @@ export const V1_RECIPE_SHA256 =
 export const V2_FILE_SHA256 =
   "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1";
 export const V3_FILE_SHA256 =
-  "5c6451b28e0217adc51f3dba6747a3d9f90bebe5370328fc3197ff91c14d33cc";
+  "deb9b78a95e47472d15d7434d5d008672ac8152d6f0c9387a0a93e5610f68783";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
 const V3_BUDGET_ID = "labcolors-wasm-raw-issue-296-v3";
