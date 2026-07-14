@@ -928,4 +928,59 @@ mod tests {
         ));
         assert_eq!(input_fault.calls, 3);
     }
+
+    #[test]
+    fn selected_row_recheck_reads_the_exact_last_lsb0_cell_across_a_byte_boundary() {
+        let mut source = feasible(
+            vec![
+                candidate("a", 255),
+                candidate("b", 255),
+                candidate("z", 255),
+            ],
+            vec![Srgb8::new([0; 3]), Srgb8::new([1; 3]), Srgb8::new([2; 3])],
+        );
+        let record = match &mut source {
+            FeasibilityV1::Feasible(record) => record,
+            _ => panic!("the fixture must mint a feasible terminal"),
+        };
+        // Candidate `z` is canonical row 2 and E=3, so its last cell is
+        // logical bit 8: the first bit of the second matrix byte. Corrupting
+        // only that sealed cell makes a constant-Pass or wrong-row reader
+        // survive neither the verdict nor the selected-row postcondition.
+        record.packed[1] |= 1;
+
+        let mut pass = ProbeEvaluator::new(ProbeMode::Pass);
+        let error = select_with(
+            source.selection_source().unwrap(),
+            policy("sealed-last-cell", &["z"]),
+            &mut pass,
+        )
+        .expect_err("the recheck must read the corrupted last sealed cell");
+        assert!(matches!(
+            error,
+            SelectionErrorV1::IntegrityViolation(
+                SelectionIntegrityViolationV1::SealedDecisionMismatch {
+                    sealed: Wcag22ApplicableDecisionV1::Fail,
+                    rechecked: Wcag22ApplicableDecisionV1::Pass,
+                    ..
+                }
+            )
+        ));
+        assert_eq!(pass.calls, 3);
+
+        let mut matching_fail = ProbeEvaluator::new(ProbeMode::FailAt(3));
+        let error = select_with(
+            source.selection_source().unwrap(),
+            policy("sealed-last-cell", &["z"]),
+            &mut matching_fail,
+        )
+        .expect_err("a matching Fail still contradicts a feasible partition");
+        assert!(matches!(
+            error,
+            SelectionErrorV1::IntegrityViolation(
+                SelectionIntegrityViolationV1::SelectedRowNotPassing { .. }
+            )
+        ));
+        assert_eq!(matching_fail.calls, 3);
+    }
 }
