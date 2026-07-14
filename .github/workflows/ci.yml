@@ -483,25 +483,24 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "verify committed #296-A canonical whole-call WASM boundary evidence"
-        # The admitted JSON binds exact deterministic bytes/shapes and the
-        # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
-        # latency/maxRSS/pages remain observations only.
+      - name: "record #296-A canonical whole-call WASM candidate"
+        # Temporary admission pass: the final commit restores hard verification
+        # against the reviewed candidate recorded by this exact Linux build.
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify
+          --record bench/wcag22-feasibility-wasm-boundary-candidate.json
       - name: independently fingerprint the exact #296-A WASM
         run: |
           bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
           sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
           echo "canonical candidate raw=${bytes}B sha256=${sha256}"
-      - name: "upload exact #296-A verified whole-call evidence"
+      - name: "upload exact #296-A whole-call candidate"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v1.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-candidate.json
             packages/colors/pkg/labcolors_bg.wasm
           if-no-files-found: error
           retention-days: 30
