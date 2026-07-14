@@ -223,6 +223,12 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
+      - name: prove base-only Core capability is independently testable
+        run: |
+          cargo check -p labcolors-core --all-targets --no-default-features --features wcag22-feasibility --locked
+          cargo test -p labcolors-core --lib --no-default-features --features wcag22-feasibility --locked
+          cargo test -p labcolors-core --test wcag22_feasibility --no-default-features --features wcag22-feasibility --locked
+          cargo test -p labcolors-core --doc --no-default-features --features wcag22-feasibility --locked
       - name: prove core capability projection boundary
         shell: bash
         run: |
@@ -241,7 +247,10 @@ jobs:
               "labcolors-conformance",
           )
           core = packages["labcolors-core"]
-          if core["features"].get("default") != ["wcag22-feasibility"]:
+          if core["features"].get("default") != [
+              "wcag22-feasibility",
+              "wcag22-explicit-feasibility",
+          ]:
               raise SystemExit("labcolors-core default capability set drifted")
 
           protocol_core = [
@@ -291,6 +300,10 @@ jobs:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
                   )
+              if 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
+                  raise SystemExit(
+                      f"{consumer} resolved the Core-only explicit-domain capability"
+                  )
 
           print("core capability projection: PASS")
           PY
@@ -302,10 +315,12 @@ jobs:
         run: python3 scripts/verify_wcag22_neutral_axis.py
       - name: verify WCAG22 feasibility identity byte grammar
         run: python3 scripts/verify_wcag22_feasibility_identity.py
-      - name: validate committed WCAG22 feasibility benchmark evidence
+      - name: verify explicit WCAG22 feasibility identity and anti-vacuum mutations
+        run: python3 scripts/verify_wcag22_explicit_feasibility_identity.py --self-test
+      - name: validate historical and current WCAG22 feasibility benchmark evidence
         run: |
-          artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
-          protocol=(
+          historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
+          historical_protocol=(
             --admit-revision fea99a1ea4148a5a72423c88220655f7f84213fe
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
@@ -315,9 +330,10 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
-          historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
+          historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
+          historical_applicability_snapshot=94efeeeb1811f5515558ab2d79014a5e4c3a570a
           historical_root="$RUNNER_TEMP/wcag22-feasibility-slice-a-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          git worktree add --detach "$historical_root" "$historical_snapshot"
+          git worktree add --detach "$historical_root" "$historical_checker_snapshot"
           cleanup_history() {
             git worktree remove --force "$historical_root"
           }
@@ -325,16 +341,42 @@ jobs:
           (
             cd "$historical_root"
             python3 scripts/check_wcag22_feasibility_benchmark.py \
-              "$artifact" "${protocol[@]}" \
+              "$historical_artifact" "${historical_protocol[@]}" \
               --verify-current-subjects \
               --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
               --self-test
           )
           cleanup_history
+          git worktree add --detach "$historical_root" "$historical_applicability_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_applicability.py \
+              "$historical_artifact" \
+              --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+              --self-test
+          )
+          cleanup_history
           trap - EXIT
+
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
+          current_protocol=(
+            --admit-revision 965eb42642beb1c072a74886be1d016027afeae5
+            --admit-rustc-release 1.96.0
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
+          python3 scripts/check_wcag22_feasibility_benchmark.py \
+            "$current_artifact" "${current_protocol[@]}" \
+            --verify-current-subjects \
+            --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+            --self-test
           python3 scripts/check_wcag22_feasibility_applicability.py \
-            "$artifact" \
-            --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+            "$current_artifact" \
+            --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
             --self-test
 
   audit:
@@ -441,7 +483,7 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "verify committed #295 canonical whole-call WASM boundary evidence"
+      - name: "verify committed #296-A canonical whole-call WASM boundary evidence"
         # The admitted JSON binds exact deterministic bytes/shapes and the
         # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
         # latency/maxRSS/pages remain observations only.
@@ -449,12 +491,12 @@ jobs:
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
           --verify
-      - name: independently fingerprint the exact #295 WASM
+      - name: independently fingerprint the exact #296-A WASM
         run: |
           bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
           sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
           echo "canonical candidate raw=${bytes}B sha256=${sha256}"
-      - name: "upload exact #295 verified whole-call evidence"
+      - name: "upload exact #296-A verified whole-call evidence"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
@@ -464,8 +506,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: enforce measured WASM raw-byte budget
-        # Issue #295 owns the current exact Linux x64 measurement and zero-headroom
-        # ceiling. Issue #284 remains the immutable V1 build-recipe/baseline input.
+        # Issue #296 owns the current exact Linux x64 measurement and zero-headroom
+        # ceiling. Issues #284/#295 remain immutable historical inputs.
         # gzip is transport diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"

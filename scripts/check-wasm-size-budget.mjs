@@ -11,10 +11,11 @@ const SCRIPT_DIR = dirname(SCRIPT_PATH);
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const DEFAULT_WASM = resolve(REPO_ROOT, "packages/colors/pkg/labcolors_bg.wasm");
 const V1_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v1.json");
+const V2_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v2.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v2.json",
+  "packages/colors/bench/wasm-size-budget-v3.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -22,9 +23,11 @@ export const V1_RECIPE_SHA256 =
   "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4";
 export const V2_FILE_SHA256 =
   "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1";
+export const V3_FILE_SHA256 =
+  "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V2_BUDGET_ID = "labcolors-wasm-raw-issue-295-v2";
+const V3_BUDGET_ID = "labcolors-wasm-raw-issue-296-v3";
 const WASM_REPOSITORY_PATH = "packages/colors/pkg/labcolors_bg.wasm";
 
 function fail(message) {
@@ -107,6 +110,18 @@ function verifyImmutableBuildRecipe() {
         `expected=${V1_RECIPE_SHA256} actual=${actualRecipeSha256}`,
     );
   }
+
+  const v2Bytes = readFileSync(V2_PATH);
+  if (sha256(v2Bytes) !== V2_FILE_SHA256) {
+    fail(
+      `immutable v2 file SHA-256 mismatch: ` +
+        `expected=${V2_FILE_SHA256} actual=${sha256(v2Bytes)}`,
+    );
+  }
+  const v2 = JSON.parse(v2Bytes.toString("utf8"));
+  if (v2?.schemaVersion !== 3 || v2?.budgetId !== "labcolors-wasm-raw-issue-295-v2") {
+    fail("immutable v2 budget identity drifted");
+  }
 }
 
 function validateBudgetValue(budget) {
@@ -116,7 +131,7 @@ function validateBudgetValue(budget) {
     "budget",
   );
   if (budget.schemaVersion !== 3) fail("supported schemaVersion is exactly 3");
-  if (budget.budgetId !== V2_BUDGET_ID) fail(`budgetId must be ${V2_BUDGET_ID}`);
+  if (budget.budgetId !== V3_BUDGET_ID) fail(`budgetId must be ${V3_BUDGET_ID}`);
   if (budget.artifact !== WASM_REPOSITORY_PATH) {
     fail(`artifact must be ${WASM_REPOSITORY_PATH}`);
   }
@@ -141,7 +156,7 @@ function validateBudgetValue(budget) {
     ["issue", "measurementPlatform", "rawBytes", "sha256"],
     "measurement",
   );
-  if (budget.measurement.issue !== 295) fail("measurement must cite Issue #295");
+  if (budget.measurement.issue !== 296) fail("measurement must cite Issue #296");
   if (budget.measurement.measurementPlatform !== "linux-x64") {
     fail("measurement.measurementPlatform must be canonical linux-x64");
   }
@@ -151,10 +166,10 @@ function validateBudgetValue(budget) {
   exactKeys(budget.policy, ["maxRawBytes", "derivation", "gzip"], "policy");
   positiveSafeInteger(budget.policy.maxRawBytes, "policy.maxRawBytes");
   if (budget.policy.maxRawBytes !== budget.measurement.rawBytes) {
-    fail("v2 ceiling must equal the exact accepted measurement (zero arbitrary headroom)");
+    fail("current ceiling must equal the exact accepted measurement (zero arbitrary headroom)");
   }
-  if (budget.policy.derivation !== "exact-accepted-issue-295-slice-b-measurement") {
-    fail("policy.derivation must cite the exact accepted Issue #295 Slice B measurement");
+  if (budget.policy.derivation !== "exact-accepted-issue-296-slice-a-measurement") {
+    fail("policy.derivation must cite the exact accepted Issue #296 Slice A measurement");
   }
   if (budget.policy.gzip !== "diagnostic-only") {
     fail("gzip must remain diagnostic-only across implementations");
@@ -178,10 +193,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V2_FILE_SHA256) {
+    if (actualFileSha256 !== V3_FILE_SHA256) {
       fail(
-        `immutable v2 file SHA-256 mismatch: ` +
-          `expected=${V2_FILE_SHA256} actual=${actualFileSha256}`,
+        `immutable v3 file SHA-256 mismatch: ` +
+          `expected=${V3_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }

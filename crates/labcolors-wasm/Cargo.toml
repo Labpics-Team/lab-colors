@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Direct Core use stays isolated from optional compiler capabilities. The
-# versioned protocol crate is the single owner of WCAG22 feasibility.
+# versioned protocol crate owns only the registered-domain WCAG22 projection.
 labcolors-core = { path = "../labcolors-core", default-features = false }
 labcolors-protocol = { path = "../labcolors-protocol" }
 wasm-bindgen = { workspace = true }

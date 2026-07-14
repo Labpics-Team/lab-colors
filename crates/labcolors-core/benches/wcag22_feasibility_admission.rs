@@ -13,7 +13,7 @@
 //!
 //! ```text
 //! LABCOLORS_WCAG22_BENCH_SAMPLES=5 \
-//! LABCOLORS_WCAG22_BENCH_OUTPUT=/private/tmp/labcolors-wcag22-feasibility-admission-raw-v1.json \
+//! LABCOLORS_WCAG22_BENCH_OUTPUT=/private/tmp/labcolors-wcag22-feasibility-admission-raw-v2.json \
 //! cargo bench -p labcolors-core --bench wcag22_feasibility_admission
 //! ```
 
@@ -39,8 +39,8 @@ use labcolors_core::wcag22_feasibility::{
 #[path = "../src/sha256.rs"]
 mod subject_sha256;
 
-const ARTIFACT_ID: &str = "wcag22-feasibility-admission-raw-v1";
-const DEFAULT_OUTPUT_FILENAME: &str = "labcolors-wcag22-feasibility-admission-raw-v1.json";
+const ARTIFACT_ID: &str = "wcag22-feasibility-admission-raw-v2";
+const DEFAULT_OUTPUT_FILENAME: &str = "labcolors-wcag22-feasibility-admission-raw-v2.json";
 const CANDIDATE_COUNT: u64 = 256;
 const PAGE_BYTES: u64 = 65_536;
 const DECISION_SLOT_BYTES: u64 = 32;
@@ -71,10 +71,11 @@ const SOURCE_OBJECTS: [(&str, &str); 8] = [
         "scripts/check_wcag22_feasibility_benchmark.py",
     ),
 ];
-const SUBJECT_PATHS: [&str; 16] = [
+const SUBJECT_PATHS: [&str; 17] = [
     "Cargo.toml",
     "crates/labcolors-core/src/lib.rs",
     "crates/labcolors-core/src/wcag22_feasibility.rs",
+    "crates/labcolors-core/src/wcag22_feasibility/explicit.rs",
     "crates/labcolors-core/src/srgb8.rs",
     "crates/labcolors-core/src/sha256.rs",
     "crates/labcolors-core/src/wcag22.rs",

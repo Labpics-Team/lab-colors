@@ -16,7 +16,7 @@
 | членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
 | крейтов семейства в crates/ | 5 |
 | экспорт-субпутей package.json @labpics/colors | 8 |
-| python-скриптов scripts/*.py | 9 |
+| python-скриптов scripts/*.py | 10 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 8 |
 | файлов вне закона имён | 4 |
@@ -72,8 +72,11 @@
   исходный текст не меняет хэш.
 - `verify_wcag22_neutral_axis.py` независимо выводит точные фикстуры нейтральной
   оси; `verify_wcag22_feasibility_identity.py` воспроизводит канонические
-  прообразы и упаковку битов; `check_wcag22_feasibility_benchmark.py` проверяет
-  с отказом при любом расхождении неизменяемый первичный допуск;
+  прообразы фиксированного домена;
+  `verify_wcag22_explicit_feasibility_identity.py` независимо проверяет точные
+  UTF-8 ID, переменную непрерывную LSB0-упаковку, partition и SHA-грамматику
+  явного конечного домена; `check_wcag22_feasibility_benchmark.py` проверяет с
+  отказом при любом расхождении неизменяемый первичный допуск;
   `check_wcag22_feasibility_applicability.py` отдельно доказывает его текущую
   применимость, сохраняя полное Core source tree и точные внешние dependency-
   записи; изменяться могут только source-less не-Core workspace-записи без

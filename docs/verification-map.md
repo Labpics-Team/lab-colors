@@ -90,23 +90,33 @@
 | право выпускать терминальное доказательство связано с фактической типизированной строкой WCAG registry | скомпилированная Rust-проба читает действующую строку; Python канонизирует 10 значимых для выпуска полей через length-prefix/SHA-256; 10 мутаций полей + 2 мутации hex/count транспорта обязаны отказать | независимая локальная привязка допуска (в proof всего 15 негативных контролей) |
 | один вердикт и его доказательство сохраняются через Core → FFI/WASM → JS/Swift/контракт соответствия | `wcag22_transport_*`, `wasm_parity`, `wcag22.test.mjs`, Swift conformance, зафиксированный набор из шести `wcag22.json`; release verifier повторно проверяет байты доказательств | дифференциальный межграничный оракул |
 
-## Конечная компиляция выполнимости WCAG 2.2 — `wcag22_feasibility.rs` (#295)
+## Конечная компиляция выполнимости WCAG 2.2 — `wcag22_feasibility.rs` (#295, #296-A)
 
 Модуль канонизирует непрозрачные клиентские декларации и полностью перечисляет
-зарегистрированный конечный домен. Он не ранжирует кандидаты, не выводит
-применимость или размер текста из ID и не заменяет перцептивную цель решателя.
+либо зарегистрированную нейтральную ось, либо явно объявленный клиентом конечный
+набор финальных sRGB8. Оба входа используют один приватный kernel. Он не
+ранжирует кандидаты, не выводит применимость или размер текста из ID и не
+заменяет перцептивную цель решателя.
 
 | инвариант | чем верифицирован | оракул |
 |---|---|---|
 | все 256 нейтралей проверяются против каждого канонического применимого соседа; граничные множества для 4.5:1 и 3:1 совпадают с независимо пересчитанным эталоном | `verify_wcag22_neutral_axis.py`; `production_vectors_are_bound_to_the_exact_independent_oracle_fixture`; тесты полной матрицы и границ | независимая `Fraction`-арифметика с адаптивными точными границами корня пятой степени; производственный Q55 и Rust-вычислитель не импортируются |
 | перестановки и точные дубликаты не меняют канонические ID содержимого; изменение непрозрачного ID меняет идентичность, но не физическое разбиение | `verify_wcag22_feasibility_identity.py`; `exact_identity_preimages_match_the_independent_cross_language_fixture`; тесты свойств и фиксации текущего поведения канонизации | независимая Python-транскрипция точной байтовой грамматики и SHA-256 + внутренние метаморфные тесты |
 | терминал появляется только после полного `W=256E`; упакованное хранилище равно `B=0` при `A=0`, иначе `B=32(E+1)`; частичный терминал и неявная подстановка результата отсутствуют | тесты с внедрением отказов вычислителя, хранилища, выделения памяти и полноты; `check_wcag22_feasibility_benchmark.py` проверяет полный набор граничных форм, точные счётчики и SHA-256 графа зависимостей | типизированные негативные контроли + прямые измерения скомпилированного процесса текущей платформы; прошедшее время не является порогом приёмки |
+| явный домен сортируется по точным UTF-8-байтам непрозрачного ID; повторы ID запрещены, одинаковый sRGB8 под разными ID сохраняет две строки; ID и физические байты входят в domain identity | `verify_wcag22_explicit_feasibility_identity.py`; Unicode-фикстура, permutation/property/duplicate positive-control и compile-fail тесты | независимая Python-транскрипция канонизации, length-prefix/SHA-256 и непрерывной LSB0-упаковки; 6 мутаций + 2 инвариантных контроля |
+| для явного домена Core выводит `W=C×E`, `M=ceil(W/8)`, `P=ceil(C/8)` и при `E>0` один буфер `B=M+P`; при `E=0` результат не вычисляется и `B=0` | инструментированный приватный kernel доказывает точные вызовы/reserve/writes; property покрывает переменные `C/E`; совместная грань при максимальном `E` (`C=256,E=2047,W=524032,B=65536`) завершается, а `C+1` при том же `E` отклоняется до evaluation/allocation; отдельный public-тест успешно проходит `C=513,E=1` и границу 64-го байта partition; полный явный набор нейтралей побитно совпадает с V1 | проверяемая целочисленная арифметика + differential к прежнему публичному пути + негативные storage/tail-bit контроли |
+
+Строки транспорта ниже доказывают только уже отгруженный вход
+зарегистрированной нейтральной оси V1. Явный клиентский набор в этом релизе
+Core-only; эти evidence не расширяются на его отсутствующие
+Protocol/WASM/FFI/npm/Swift проекции.
+
 | transport V1 принимает только strict UTF-8 JSON bytes, сначала применяет выведенный предел envelope, затем сохраняет полную Core-алгебру как `Success(feasibility) \| Failure(error)` | `labcolors-protocol`: exact-limit witness, limit+1 decoder-spy, strict-schema/error-algebra tests и compile-fail запрет forged outcome | литеральная грамматика + Core resource-profile SSOT + тип-уровневый негативный контроль |
 | WASM/npm не повторяет Core-математику, preflight-ит `Uint8Array.byteLength` до избегаемой ABI-копии и переносит domain/relations один раз с candidate-major LSB0 matrix | `wasm_parity::committed_conformance_pack_replays_in_wasm32`; feasibility boundary tests; `wcag22-feasibility.test.mjs` с независимым LSB0 reduction и mutation subject | дифференциальный public-boundary replay pack 5 + независимый packed consumer |
 | UniFFI/Swift вызывает тот же protocol byte path, preflight-ит `Data`/`[UInt8]` до сырой FFI-копии и исчерпывающе декодирует terminal/error algebra | FFI mechanical-shell tests; Swift pack-5 replay, limit+1 bridge spy, structural mutation tests и extreme-shape whole-call observations | побайтный FFI/protocol differential + независимый Swift packed consumer |
 | conformance pack 5 добавляет только feasibility-family; прежние шесть family остаются byte-identical, а 13 новых outcomes воспроизводятся canonical protocol encoder побайтно | `pack_v5_contract`; `reference_runner::protocol_reproduces_committed_wcag22_feasibility_exactly`; release verifier/clean-install replay | SHA-256 immutable-family guards + дифференциальный protocol/public-package replay |
-| исторический native-допуск остаётся неизменным, а текущая применимость не зависит от добавленных transport-крейтов | старый checker исполняется в чистом snapshot `6001cf4`; отдельный applicability verifier фиксирует полный Core source tree, Core package record и все sourced lock records, разрешая только изменения source-less non-Core workspace-записей | exact Git objects + fail-closed Cargo.lock V4 parser и мутационные негативные контроли |
-| канонический WASM transport воспроизводим побайтно и завершает все граничные whole-call формы | append-only size V2: `521240 B` + точный SHA без headroom; committed whole-call artifact: 10 форм × 5 fresh-process samples, exact request/outcome hashes и source/pack/toolchain bindings | независимые Linux `wc`/`sha256sum` + повторный package-root verifier; latency/maxRSS/pages не превращаются в пороги |
+| исторический native-допуск V1 остаётся неизменным; V2 заново измеряет текущий neutral-вход через общий finite-domain kernel | V1 checker исполняется в чистом измеренном snapshot `6001cf4`, его более поздний applicability verifier — в последнем применимом `94efeee`; V2 привязан к source SHA `965eb42`, artifact SHA `d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202` и полному текущему Core source tree; applicability разрешает только изменения source-less non-Core workspace-записей | exact Git objects + fail-closed Cargo.lock V4 parser, 13 V2 checker-мутаций и сырые native-наблюдения без timing threshold |
+| канонический WASM transport воспроизводим побайтно и завершает все граничные whole-call формы | append-only size V3: `521231 B` + точный SHA без headroom; V1/V2 неизменны; committed whole-call artifact: 10 форм × 5 fresh-process samples, exact request/outcome hashes и source/pack/toolchain bindings | независимые Linux `wc`/`sha256sum` + повторный package-root verifier; latency/maxRSS/pages не превращаются в пороги |
 
 Здесь `E` — число канонических применимых рёбер «связь × сосед»
 (`E∈{0,1,…,2047}`), `A` — число применимых связей (`A∈{0,1,…,E}`;
@@ -128,14 +138,18 @@
 `65504/32=2047`. Это граница продуктовой политики результата, а не утверждение
 о полной памяти WebAssembly.
 
-Чувствительность явна: для другого зарегистрированного домена мощности `D`
-число вычислений станет `W=DE`, а закон `B` будет зависеть от явно выбранной
-схемы битовой упаковки. V1 не заявляет такую обобщённую реализацию: другой домен
-требует новой версионированной регистрации, ресурсного профиля, точного закона
-хранения, оракула и артефакта допуска. Формулы V1 нельзя молча переносить на
-него.
+Для явного домена `C` — выведенное Core число канонических клиентских записей,
+а не переданная клиентом метаинформация. При `E>0` непрерывная candidate-major
+LSB0-матрица занимает `ceil(C×E/8)` байт без выравнивания строк, partition —
+`ceil(C/8)` байт; неиспользуемые хвостовые биты обязаны быть нулевыми. Полнота
+означает только перебор всех членов объявленного набора, никогда не весь gamut.
+Зарегистрированная нейтральная ось остаётся частным случаем `C=256` с прежними
+байтами публичного V1-контракта.
 
-Артефакт измерений не доказывает полную память WebAssembly, размер
+Артефакт V2 измеряет прежнюю нейтральную ось через общий kernel и потому
+проверяет отсутствие регрессии уже работающего пути. Он не подменяет точные
+тесты переменного `C×E` и не выдаёт время neutral-сортировки за оценку стоимости
+клиентских ID. Артефакт не доказывает полную память WebAssembly, размер
 сериализованного результата или клиентскую задержку: эти величины явно
 находятся вне границы доказанного утверждения.
 

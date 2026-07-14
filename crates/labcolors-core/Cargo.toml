@@ -14,8 +14,9 @@ rust-version.workspace = true
 [features]
 # Direct core consumers receive the stable default capability set. A transport
 # adapter may disable defaults and then enable only capabilities it projects.
-default = ["wcag22-feasibility"]
+default = ["wcag22-feasibility", "wcag22-explicit-feasibility"]
 wcag22-feasibility = []
+wcag22-explicit-feasibility = ["wcag22-feasibility"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"
@@ -61,3 +62,7 @@ required-features = ["wcag22-feasibility"]
 [[test]]
 name = "wcag22_feasibility"
 required-features = ["wcag22-feasibility"]
+
+[[test]]
+name = "wcag22_explicit_feasibility"
+required-features = ["wcag22-explicit-feasibility"]

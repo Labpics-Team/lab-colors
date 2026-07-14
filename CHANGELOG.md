@@ -28,6 +28,10 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   `[UInt8]`;
   обе поверхности сохраняют `Success(Feasible | Infeasible | NotEvaluated)`
   либо typed `Failure` и не воспроизводят математику Core.
+- Rust Core принимает также непустой явный конечный набор пар «opaque ID +
+  финальный sRGB8», канонизирует точные UTF-8-байты ID и использует тот же
+  exhaustive kernel. Возможность включена в default Core, но не проецируется в
+  Protocol/WASM/FFI/npm/Swift.
 - Conformance pack 5.0.0 добавляет ровно одно семейство
   `wcag22-feasibility.json`: exact 7/2/0/92/59, mixed/all NotApplicable,
   typed conflict/resource failures и opaque-ID law. Шесть прежних family
@@ -71,8 +75,9 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
 - WASM size history стала append-only: immutable V1 сохраняет допуск #284
-  (`454385 B`), а V2 допускает полный transport #295 как точные `521240 B` /
-  `d37841…9ca0` с нулевым headroom и ссылкой на неизменяемый V1 build recipe.
+  (`454385 B`), V2 — transport #295 (`521240 B` / `d37841…9ca0`), а V3 —
+  Core-срез #296-A (`521231 B` / `779379…e029`). Каждый допуск имеет нулевой
+  headroom и точную ссылку на неизменяемый V1 build recipe; V1/V2 не переписаны.
   Canonical whole-call artifact фиксирует 10 крайних форм × 5 свежих процессов;
   latency, process maxRSS и WASM pages остаются наблюдениями, не SLO.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только

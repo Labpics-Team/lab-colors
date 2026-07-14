@@ -10,10 +10,12 @@
 //!   is the exact evaluator-call and assessment cardinality.  `B = 0`
 //!   when `A = 0`; only an evaluated result (`A > 0`) owns the 32-byte
 //!   candidate partition and therefore has `B = 32(E + 1)`.
-//! - `evaluate_with(request, evaluator, storage)` owns canonicalization and the
-//!   exact `256 * E` traversal while `PairEvaluator` and `DecisionStorage` are
-//!   replaceable private dependencies.  The production wrapper supplies the
-//!   sealed #284 adapter and packed storage.
+//! - `evaluate_domain_with(request, evaluator, storage)` owns canonicalization
+//!   and the exact `C * E` traversal for any finite sRGB8 domain;
+//!   `evaluate_with` is its byte-identical 256-neutral compatibility wrapper.
+//!   `PairEvaluator` and `DecisionStorage` are replaceable private
+//!   dependencies. The production wrapper supplies the sealed #284 adapter and
+//!   packed storage.
 //!
 //! The expected private records used below are deliberately plain structs.
 //! `RawInputCountsV1`, `CanonicalCountsV1`, `ResourceLimitsV1` and
@@ -311,6 +313,245 @@ fn packed_storage_is_exactly_32_times_e_plus_one() {
 }
 
 #[test]
+fn variable_domain_layout_is_contiguous_ceil_bit_arithmetic() {
+    for (candidates, edges, matrix_bytes, partition_bytes) in [
+        (1, 1, 1, 1),
+        (1, 8, 1, 1),
+        (3, 3, 2, 1),
+        (7, 9, 8, 1),
+        (8, 9, 9, 1),
+        (9, 9, 11, 2),
+        (17, 7, 15, 3),
+    ] {
+        let layout = checked_layout_for_domain_v1(
+            PROFILE,
+            candidates,
+            RawInputCountsV1 {
+                raw_relations: 1,
+                raw_adjacent_entries: edges,
+                opaque_utf8_bytes: candidates,
+            },
+            CanonicalCountsV1 {
+                canonical_relations: 1,
+                applicable_relations: 1,
+                not_evaluated_relations: 0,
+                applicable_edges: edges,
+            },
+            unlimited(),
+            u64::MAX,
+        )
+        .unwrap();
+        assert_eq!(layout.logical_assessments, candidates * edges);
+        assert_eq!(layout.failure_matrix_bytes, matrix_bytes);
+        assert_eq!(layout.partition_bytes, partition_bytes);
+        assert_eq!(layout.packed_result_bytes, matrix_bytes + partition_bytes);
+    }
+
+    assert!(matches!(
+        checked_logical_assessments_for_domain_v1(u64::MAX, 2),
+        Err(InvalidRequestV1::ArithmeticOverflow)
+    ));
+    assert!(matches!(
+        checked_packed_result_bytes_for_domain_v1(u64::MAX, 1, 2),
+        Err(InvalidRequestV1::ArithmeticOverflow)
+    ));
+
+    let zero_domain = checked_layout_for_domain_v1(
+        PROFILE,
+        0,
+        RawInputCountsV1 {
+            raw_relations: 1,
+            raw_adjacent_entries: 1,
+            opaque_utf8_bytes: 0,
+        },
+        CanonicalCountsV1 {
+            canonical_relations: 1,
+            applicable_relations: 1,
+            not_evaluated_relations: 0,
+            applicable_edges: 1,
+        },
+        unlimited(),
+        u64::MAX,
+    )
+    .expect_err("a parsed finite domain cannot be empty");
+    assert!(matches!(
+        zero_domain,
+        ErrorV1::CompilerInvariantViolation(CompilerInvariantV1::LayoutMismatch)
+    ));
+}
+
+#[cfg(feature = "wcag22-explicit-feasibility")]
+fn explicit_domain(count: u16) -> explicit::DomainRequestV1 {
+    explicit::DomainRequestV1::try_new(
+        (0..count)
+            .map(|index| {
+                explicit::CandidateV1::new(
+                    explicit::CandidateId::try_new(format!("candidate/{index:03}")).unwrap(),
+                    Srgb8::new([index as u8; 3]),
+                )
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+#[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
+fn explicit_kernel_executes_exact_c_times_e_and_reserves_one_exact_buffer() {
+    let request = KernelRequestV1 {
+        domain: explicit_domain(3),
+        relations: vec![applicable_relation(
+            "three-edges",
+            vec![grey(0), grey(118), grey(255)],
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        resource_profile_id: PROFILE,
+    };
+    let (mut evaluator, calls) = ProbeEvaluator::new(EvaluatorMode::AllPass);
+    let mut storage = ProbeStorage::default();
+    let result = evaluate_domain_with(request, &mut evaluator, &mut storage).unwrap();
+    let result = match result {
+        KernelResultV1::Evaluated(value) => value,
+        KernelResultV1::NotEvaluated(_) => panic!("three applicable edges must be evaluated"),
+    };
+
+    assert_eq!(result.layout.candidate_count, 3);
+    assert_eq!(result.layout.logical_assessments, 9);
+    assert_eq!(result.layout.failure_matrix_bytes, 2);
+    assert_eq!(result.layout.partition_bytes, 1);
+    assert_eq!(result.layout.packed_result_bytes, 3);
+    assert_eq!(calls.get(), 9);
+    assert_eq!(storage.reserve_calls, 1);
+    assert_eq!(storage.reserved_bytes, Some(3));
+    assert_eq!(storage.writes, 9);
+    assert_eq!(storage.partition_writes, 3);
+    assert_eq!(
+        storage.finish_calls, 0,
+        "variable packing writes its partition in-place and has no finalization step",
+    );
+}
+
+#[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
+fn explicit_allocation_failure_precedes_the_first_atomic_call() {
+    let request = KernelRequestV1 {
+        domain: explicit_domain(3),
+        relations: vec![applicable_relation(
+            "allocation",
+            vec![grey(255)],
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        resource_profile_id: PROFILE,
+    };
+    let (mut evaluator, calls) = ProbeEvaluator::new(EvaluatorMode::AllPass);
+    let mut storage = ProbeStorage::allocation_failure();
+    let error = evaluate_domain_with(request, &mut evaluator, &mut storage).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ErrorV1::AllocationFailed {
+            profile_id: PROFILE,
+            requested_bytes: 2,
+        }
+    ));
+    assert_eq!(storage.reserve_calls, 1);
+    assert_eq!(storage.reserved_bytes, Some(2));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(storage.writes, 0);
+    assert_eq!(storage.partition_writes, 0);
+    assert_eq!(storage.finish_calls, 0);
+}
+
+#[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
+fn explicit_kernel_reuses_the_single_atomic_invariant_error_algebra() {
+    let request = KernelRequestV1 {
+        domain: explicit_domain(1),
+        relations: vec![applicable_relation(
+            "shared-error",
+            vec![grey(255)],
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        resource_profile_id: PROFILE,
+    };
+    let (mut evaluator, calls) = ProbeEvaluator::new(EvaluatorMode::ForegroundMismatch);
+    let mut storage = ProbeStorage::default();
+    let error = evaluate_domain_with(request, &mut evaluator, &mut storage).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ErrorV1::EvaluatorInvariantViolation {
+            candidate,
+            adjacent,
+            violation: EvaluatorInvariantV1::InputMismatch,
+            ..
+        } if candidate == Srgb8::new([0; 3]) && adjacent == grey(255)
+    ));
+    assert_eq!(calls.get(), 1);
+    assert_eq!(storage.writes, 0);
+    assert_eq!(storage.finish_calls, 0);
+}
+
+#[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
+fn explicit_compile_profile_maximum_completes_and_plus_one_fails_before_evaluation() {
+    let edges = PROFILE.limit(ResourceDimensionV1::ApplicableEdges);
+    let work_limit = PROFILE.limit(ResourceDimensionV1::LogicalAssessments);
+    let packed_limit = PROFILE.limit(ResourceDimensionV1::PackedResultBytes);
+    let candidates = work_limit / edges;
+    assert_eq!((candidates, edges), (256, 2_047));
+    assert_eq!(work_limit % edges, 0);
+
+    let adjacent = (0..edges)
+        .map(|code| Srgb8::new([0, (code >> 8) as u8, code as u8]))
+        .collect::<Vec<_>>();
+    let relation = || {
+        applicable_relation(
+            "maximum-envelope",
+            adjacent.clone(),
+            Wcag22CriterionV1::Sc143TextDefault,
+        )
+    };
+
+    let request = KernelRequestV1 {
+        domain: explicit_domain(candidates as u16),
+        relations: vec![relation()],
+        resource_profile_id: PROFILE,
+    };
+    let (mut evaluator, calls) = ProbeEvaluator::new(EvaluatorMode::AllPass);
+    let mut storage = ProbeStorage::default();
+    let result = evaluate_domain_with(request, &mut evaluator, &mut storage).unwrap();
+    let result = match result {
+        KernelResultV1::Evaluated(value) => value,
+        KernelResultV1::NotEvaluated(_) => panic!("the maximum applicable shape must evaluate"),
+    };
+    assert_eq!(result.layout.logical_assessments, work_limit);
+    assert_eq!(result.layout.packed_result_bytes, packed_limit);
+    assert_eq!(storage.reserved_bytes, Some(packed_limit));
+    assert_eq!(calls.get(), work_limit);
+
+    let oversized = KernelRequestV1 {
+        domain: explicit_domain((candidates + 1) as u16),
+        relations: vec![relation()],
+        resource_profile_id: PROFILE,
+    };
+    let (mut evaluator, calls) = ProbeEvaluator::new(EvaluatorMode::AllPass);
+    let mut storage = ProbeStorage::default();
+    let error = evaluate_domain_with(oversized, &mut evaluator, &mut storage).unwrap_err();
+    assert!(matches!(
+        error,
+        ErrorV1::ResourceLimitExceeded {
+            profile_id: PROFILE,
+            dimension: ResourceDimensionV1::LogicalAssessments,
+            requested,
+            limit,
+        } if requested == (candidates + 1) * edges && limit == work_limit
+    ));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(storage.reserve_calls, 0);
+}
+
+#[test]
 fn all_not_applicable_has_zero_work_and_zero_packed_result_bytes() {
     let layout = checked_layout_v1(
         PROFILE,
@@ -389,6 +630,7 @@ enum EvaluatorMode {
 struct ProbeEvaluator {
     mode: EvaluatorMode,
     calls: Rc<Cell<u64>>,
+    evidence: AtomicEvidenceBindingV1,
 }
 
 impl ProbeEvaluator {
@@ -398,6 +640,8 @@ impl ProbeEvaluator {
             Self {
                 mode,
                 calls: Rc::clone(&calls),
+                evidence: expected_atomic_evidence_binding_v1()
+                    .expect("the committed #284 evidence binding is valid"),
             },
             calls,
         )
@@ -427,8 +671,7 @@ impl PairEvaluator for ProbeEvaluator {
         let mut foreground = candidate.bytes();
         let mut background = adjacent.bytes();
         let mut actual_criterion = criterion;
-        let mut evidence = expected_atomic_evidence_binding_v1()
-            .expect("the committed #284 evidence binding is valid");
+        let mut evidence = self.evidence.clone();
         match &self.mode {
             EvaluatorMode::AllPass | EvaluatorMode::SourceError(_) => {}
             EvaluatorMode::AllFail => {}
@@ -470,6 +713,8 @@ struct ProbeStorage {
     reserve_calls: u64,
     reserved_bytes: Option<u64>,
     writes: u64,
+    #[cfg(feature = "wcag22-explicit-feasibility")]
+    partition_writes: u64,
     finish_calls: u64,
 }
 
@@ -513,7 +758,17 @@ impl DecisionStorage for ProbeStorage {
         if self.fail_write { Err(()) } else { Ok(()) }
     }
 
-    fn finish(&mut self, _passing_partition: [u8; 32]) -> Result<(), ()> {
+    #[cfg(feature = "wcag22-explicit-feasibility")]
+    fn write_feasible_candidate(
+        &mut self,
+        _matrix_bytes: u64,
+        _candidate_index: u64,
+    ) -> Result<(), ()> {
+        self.partition_writes += 1;
+        Ok(())
+    }
+
+    fn finish(&mut self, _partition: &[u8]) -> Result<(), ()> {
         self.finish_calls += 1;
         if self.fail_finish { Err(()) } else { Ok(()) }
     }
@@ -839,32 +1094,43 @@ fn matrix_partition_and_proof_invariants_reject_single_field_mutations() {
         passing_candidates: CANDIDATES,
         failing_candidates: 0,
     };
-    validate_complete_result_v1(layout, &all_pass_matrix, &all_pass_partition, proof)
+    validate_neutral_complete_result_v1(layout, &all_pass_matrix, &all_pass_partition, proof)
         .expect("the exact all-pass matrix, partition and counts agree");
 
     assert!(
-        validate_complete_result_v1(layout, &all_pass_matrix[..31], &all_pass_partition, proof,)
-            .is_err(),
+        validate_neutral_complete_result_v1(
+            layout,
+            &all_pass_matrix[..31],
+            &all_pass_partition,
+            proof,
+        )
+        .is_err(),
         "matrix length is part of the proof"
     );
 
     let mut one_failed_cell = all_pass_matrix;
     one_failed_cell[0] ^= 1;
     assert!(
-        validate_complete_result_v1(layout, &one_failed_cell, &all_pass_partition, proof).is_err(),
+        validate_neutral_complete_result_v1(layout, &one_failed_cell, &all_pass_partition, proof,)
+            .is_err(),
         "the candidate partition must be derived from every matrix cell"
     );
 
     let mut one_missing_candidate = all_pass_partition;
     one_missing_candidate[0] ^= 1;
     assert!(
-        validate_complete_result_v1(layout, &all_pass_matrix, &one_missing_candidate, proof)
-            .is_err(),
+        validate_neutral_complete_result_v1(
+            layout,
+            &all_pass_matrix,
+            &one_missing_candidate,
+            proof,
+        )
+        .is_err(),
         "partition bytes and proof counts cannot diverge"
     );
 
     assert!(
-        validate_complete_result_v1(
+        validate_neutral_complete_result_v1(
             layout,
             &all_pass_matrix,
             &all_pass_partition,
@@ -877,7 +1143,7 @@ fn matrix_partition_and_proof_invariants_reject_single_field_mutations() {
         "the proof must attest the exact W cells"
     );
     assert!(
-        validate_complete_result_v1(
+        validate_neutral_complete_result_v1(
             layout,
             &all_pass_matrix,
             &all_pass_partition,
@@ -889,6 +1155,57 @@ fn matrix_partition_and_proof_invariants_reject_single_field_mutations() {
         )
         .is_err(),
         "passing + failing must equal the 256-candidate domain"
+    );
+}
+
+#[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
+fn variable_matrix_and_partition_tail_bits_are_part_of_the_proof() {
+    let layout = checked_layout_for_domain_v1(
+        PROFILE,
+        3,
+        RawInputCountsV1 {
+            raw_relations: 1,
+            raw_adjacent_entries: 3,
+            opaque_utf8_bytes: 3,
+        },
+        CanonicalCountsV1 {
+            canonical_relations: 1,
+            applicable_relations: 1,
+            not_evaluated_relations: 0,
+            applicable_edges: 3,
+        },
+        unlimited(),
+        u64::MAX,
+    )
+    .unwrap();
+    let matrix = [0_u8; 2];
+    let partition = [0b0000_0111];
+    let counters = EvaluationProofCountersV1 {
+        logical_assessments: 9,
+        passing_candidates: 3,
+        failing_candidates: 0,
+    };
+    validate_variable_complete_result_v1(layout, &matrix, &partition, counters).unwrap();
+
+    let mut matrix_tail = matrix;
+    matrix_tail[1] |= 1 << 1;
+    assert!(
+        validate_variable_complete_result_v1(layout, &matrix_tail, &partition, counters).is_err(),
+        "unused matrix bits cannot carry covert state"
+    );
+
+    let partition_tail = [partition[0] | (1 << 3)];
+    assert!(
+        validate_variable_complete_result_v1(layout, &matrix, &partition_tail, counters).is_err(),
+        "unused partition bits cannot carry covert state"
+    );
+
+    let mut used_cell = matrix;
+    used_cell[0] |= 1;
+    assert!(
+        validate_variable_complete_result_v1(layout, &used_cell, &partition, counters).is_err(),
+        "a row decision and its feasible bit must agree"
     );
 }
 

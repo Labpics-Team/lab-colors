@@ -283,6 +283,9 @@ diagnostics и legacy `wcagRatio` не могут изменить этот ве
 кандидаты проходят все эти ограничения?». Она не выбирает лучший цвет, не
 угадывает применимость и не понимает семантику ID.
 
+Эта npm-граница принимает только зарегистрированную нейтральную ось V1. Явные
+клиентские наборы sRGB8 доступны в Rust Core и этим transport API не принимаются.
+
 ```ts
 import init, {
   evaluateWcag22Feasibility,
@@ -463,8 +466,11 @@ Raw-размер WASM — hard gate с append-only историей. Неизм�
 `bench/wasm-size-budget-v2.json` отдельно допускает полный transport #295:
 ровно `521240 B`, SHA-256
 `d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0`.
-V2 ссылается на точные байты V1 и его build recipe; новый ceiling равен
-измерению, поэтому произвольного запаса нет и история #284 не переписана.
+Текущий `bench/wasm-size-budget-v3.json` повторно допускает Core-срез #296-A:
+ровно `521231 B`, SHA-256
+`779379e914909ff1ddbb5afdd6554d026b586f3c71ef6b2cfeba3468bf93e029`.
+Каждый ceiling равен своему каноническому Linux-x64 измерению, произвольного
+запаса нет; V1/V2 остаются побайтно неизменными.
 
 Release-equivalent Linux x64 CI требует одновременно точный размер и SHA.
 Отдельный `bench/wcag22-feasibility-wasm-boundary-v1.json` фиксирует 10 крайних

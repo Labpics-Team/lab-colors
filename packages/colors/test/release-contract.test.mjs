@@ -121,7 +121,7 @@ test("every workspace package inherits the declared MSRV", () => {
   }
 });
 
-test("WCAG22 feasibility has one protocol feature owner shared by every boundary consumer", () => {
+test("WCAG22 feasibility projects only the registered-domain capability through transports", () => {
   const isolatedCoreEdge =
     /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false \}/u;
   const protocolEdge = /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
@@ -158,12 +158,20 @@ test("WCAG22 feasibility has one protocol feature owner shared by every boundary
     1,
     "the dependency and feature-tree checks must share one consumer loop",
   );
+  assert.match(
+    projection,
+    /core\["features"\]\.get\("default"\) != \[\n\s+"wcag22-feasibility",\n\s+"wcag22-explicit-feasibility",\n\s*\]:/u,
+  );
   assert.match(projection, /protocol_core\["features"\] != \["wcag22-feasibility"\]/u);
   assert.match(projection, /core_dependency\["features"\]/u);
   assert.match(projection, /dependency\["name"\] == "labcolors-protocol"/u);
   assert.match(
     projection,
     /\["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"\]/u,
+  );
+  assert.match(
+    projection,
+    /'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree/u,
   );
   assert.doesNotMatch(projection, /for consumer in labcolors-/u);
 });
@@ -980,9 +988,10 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   assert.match(verifier, /case "incompatibleCoreContract"/u);
 });
 
-test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
+test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () => {
   const v1Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
   const v2Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v2.json");
+  const v3Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v3.json");
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
   const sha256 = (value) => createHash("sha256").update(value).digest("hex");
   const canonicalJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -1060,13 +1069,42 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
     gzip: "diagnostic-only",
   });
 
+  const v3Bytes = readFileSync(v3Path);
+  const v3 = JSON.parse(v3Bytes);
+  assert.equal(v3Bytes.toString("utf8"), canonicalJson(v3));
+  assert.equal(
+    sha256(v3Bytes),
+    "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15",
+    "the admitted v3 document must be byte-immutable",
+  );
+  assert.deepEqual(Object.keys(v3), Object.keys(v2));
+  assert.deepEqual(Object.keys(v3.buildRecipe), Object.keys(v2.buildRecipe));
+  assert.deepEqual(Object.keys(v3.measurement), Object.keys(v2.measurement));
+  assert.deepEqual(Object.keys(v3.policy), Object.keys(v2.policy));
+  assert.equal(v3.schemaVersion, 3);
+  assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
+  assert.equal(v3.artifact, "packages/colors/pkg/labcolors_bg.wasm");
+  assert.deepEqual(v3.buildRecipe, v2.buildRecipe);
+  assert.deepEqual(v3.measurement, {
+    issue: 296,
+    measurementPlatform: "linux-x64",
+    rawBytes: 521231,
+    sha256: "779379e914909ff1ddbb5afdd6554d026b586f3c71ef6b2cfeba3468bf93e029",
+  });
+  assert.deepEqual(v3.policy, {
+    maxRawBytes: 521231,
+    derivation: "exact-accepted-issue-296-slice-a-measurement",
+    gzip: "diagnostic-only",
+  });
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, v2Path);
-  assert.equal(checker.V1_FILE_SHA256, v2.buildRecipe.fileSha256);
-  assert.equal(checker.V1_RECIPE_SHA256, v2.buildRecipe.recipeSha256);
+  assert.equal(checker.DEFAULT_BUDGET, v3Path);
+  assert.equal(checker.V1_FILE_SHA256, v3.buildRecipe.fileSha256);
+  assert.equal(checker.V1_RECIPE_SHA256, v3.buildRecipe.recipeSha256);
   assert.equal(checker.V2_FILE_SHA256, sha256(v2Bytes));
+  assert.equal(checker.V3_FILE_SHA256, sha256(v3Bytes));
 
   const wholeCallSource = read(
     "packages",
@@ -1075,7 +1113,7 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
     "wcag22-feasibility-boundary.bench.mjs",
   );
   assert.match(wholeCallSource, /wasmToolchainPath = resolve\(here, "wasm-size-budget-v1\.json"\)/u);
-  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v2\.json/u);
+  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v[23]\.json/u);
   assert.doesNotMatch(
     read("scripts", "check-wasm-size-budget.mjs"),
     /wcag22-feasibility-wasm-boundary-v1\.json/u,
@@ -1103,13 +1141,13 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
     /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u,
   );
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v2-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v3-"));
   try {
     const wasmPath = join(temporary, "fixture.wasm");
     const fixtureBudgetPath = join(temporary, "budget.json");
     const bytes = Buffer.alloc(16);
     bytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v2);
+    const fixture = structuredClone(v3);
     fixture.measurement.rawBytes = bytes.length;
     fixture.measurement.sha256 = sha256(bytes);
     fixture.policy.maxRawBytes = bytes.length;
@@ -1136,7 +1174,7 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
       ["v1 file drift", (value) => { value.buildRecipe.fileSha256 = "0".repeat(64); }],
       ["recipe drift", (value) => { value.buildRecipe.recipeSha256 = "0".repeat(64); }],
       ["missing recipe field", (value) => { delete value.buildRecipe.recipeSha256; }],
-      ["measurement issue drift", (value) => { value.measurement.issue = 294; }],
+      ["measurement issue drift", (value) => { value.measurement.issue = 295; }],
       ["measurement platform drift", (value) => {
         value.measurement.measurementPlatform = "darwin-arm64";
       }],
@@ -1163,7 +1201,7 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
         policy: value.policy,
       })],
     ];
-    assert.equal(schemaMutations.length, 24, "v2 schema mutation set changed");
+    assert.equal(schemaMutations.length, 24, "v3 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1231,8 +1269,8 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
     coordinatedMutation.measurement.sha256 = sha256(sameSizeMutation);
     const coordinatedBytes = Buffer.from(canonicalJson(coordinatedMutation));
     assert.throws(
-      () => checker.parseBudgetDocument(coordinatedBytes, v2Path),
-      /immutable v2 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(coordinatedBytes, v3Path),
+      /immutable v3 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1240,7 +1278,7 @@ test("WCAG22 WASM budget v2 is exact, immutable, and acyclic", async () => {
   }
 });
 
-test("feasibility benchmark applicability permits only source-less non-Core lock drift", () => {
+test("feasibility benchmark keeps V1 history and admits only exact V2 Core subjects", () => {
   const checker = join(
     root,
     "scripts",
@@ -1254,10 +1292,10 @@ test("feasibility benchmark applicability permits only source-less non-Core lock
         "crates",
         "labcolors-core",
         "contracts",
-        "wcag22-feasibility-benchmark-v1.json",
+        "wcag22-feasibility-benchmark-v2.json",
       ),
       "--artifact-sha256",
-      "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e",
+      "d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202",
       "--self-test",
     ], {
       cwd: root,
@@ -1269,17 +1307,23 @@ test("feasibility benchmark applicability permits only source-less non-Core lock
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(
     ci,
-    /historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    /historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_checker_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
     "the unchanged checker must replay in its exact clean Slice-A snapshot",
-  );
-  assert.equal(
-    ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    1,
-    "the historical checker must never be applied to the additive current workspace",
   );
   assert.match(
     ci,
-    /python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    /historical_applicability_snapshot=94efeeeb1811f5515558ab2d79014a5e4c3a570a[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_applicability_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
+    "the V1 applicability law must replay where its verifier first existed",
+  );
+  assert.match(
+    ci,
+    /current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json"[\s\S]*?--admit-revision 965eb42642beb1c072a74886be1d016027afeae5[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202[\s\S]*?--self-test/u,
+    "V2 must bind the current generic kernel to one exact measured source commit",
+  );
+  assert.equal(
+    ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
+    2,
+    "CI must validate exactly one historical and one current benchmark artifact",
   );
 });
 
