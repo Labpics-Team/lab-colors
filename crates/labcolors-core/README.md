@@ -57,7 +57,8 @@ Core-only API и не попадает в транспортный артефа�
 их повторы и сам выводит мощность, digest, матрицу и partition. Разные ID с
 одинаковыми физическими байтами остаются разными кандидатами. Ни один из входов
 не выводит размер текста, компонентную семантику, применимость или предпочтение
-из ID; выбор среди допустимых кандидатов в этот контракт не входит.
+из ID. Feasibility сам ничего не ранжирует; явный клиентский порядок применяется
+только отдельным запечатанным selection-шагом после полного доказательства.
 
 Для `C` кандидатов и `E` канонических применимых рёбер выполняется ровно
 `W=C×E` атомарных проверок. При `E>0` единственный упакованный буфер имеет
@@ -124,6 +125,7 @@ use labcolors_core::{
         OccurrenceId, RelationId, RelationV1, ResourceProfileIdV1,
         explicit::{
             CandidateId, CandidateV1, DomainRequestV1, RequestV1, evaluate,
+            selection::{FirstFeasibleInDeclaredOrderV1, PolicyId, select},
         },
     },
 };
@@ -145,10 +147,36 @@ let result = evaluate(RequestV1::try_new(
 )?)?;
 
 assert_eq!(result.evaluated().map(|value| value.candidates().len()), Some(2));
+let source = result
+    .selection_source()
+    .expect("this fixture has at least one feasible candidate");
+let policy = FirstFeasibleInDeclaredOrderV1::try_new(
+    PolicyId::try_new("article/foreground-order")?,
+    vec![
+        CandidateId::try_new("brand/paper")?,
+        CandidateId::try_new("brand/ink")?,
+    ],
+)?;
+let outcome = select(source, policy)?;
+let selected = outcome
+    .selected()
+    .expect("the declared order intersects the feasible partition")
+    .candidate()
+    .candidate_id()
+    .as_str();
+assert_eq!(selected, "brand/ink");
 # Ok(())
 # }
 # fn main() {}
 ```
+
+`selection_source()` существует только у `Feasible`: `Infeasible` и
+`NotEvaluated` не могут начать выбор. Политика перечисляет допустимое подмножество
+ID в точном клиентском порядке. Core сначала проверяет весь список, затем берёт
+первый уже доказанный feasible-ID и повторно проверяет его ровно по всем `E`
+каноническим применимым рёбрам тем же вычислителем WCAG. Валидный список без
+feasible-ID возвращает `NoSelection`; неизвестный/повторный ID и расхождение
+финальной проверки являются разными типизированными отказами, без fallback.
 
 В примере `Sc143TextDefault` означает явно объявленный клиентом критерий
 SC 1.4.3 для обычного текста с отношением 4.5:1; Core не угадывает его по ID или

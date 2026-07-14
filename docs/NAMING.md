@@ -16,7 +16,7 @@
 | членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
 | крейтов семейства в crates/ | 5 |
 | экспорт-субпутей package.json @labpics/colors | 8 |
-| python-скриптов scripts/*.py | 10 |
+| python-скриптов scripts/*.py | 11 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 8 |
 | файлов вне закона имён | 4 |
@@ -75,7 +75,10 @@
   прообразы фиксированного домена;
   `verify_wcag22_explicit_feasibility_identity.py` независимо проверяет точные
   UTF-8 ID, переменную непрерывную LSB0-упаковку, partition и SHA-грамматику
-  явного конечного домена; `check_wcag22_feasibility_benchmark.py` проверяет с
+  явного конечного домена;
+  `verify_wcag22_explicit_selection_identity.py` независимо проверяет точный
+  клиентский порядок и потоковый финальный receipt выбранной строки;
+  `check_wcag22_feasibility_benchmark.py` проверяет с
   отказом при любом расхождении неизменяемый первичный допуск;
   `check_wcag22_feasibility_applicability.py` отдельно доказывает его текущую
   применимость, сохраняя полное Core source tree и точные внешние dependency-

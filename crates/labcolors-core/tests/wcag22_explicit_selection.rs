@@ -22,7 +22,17 @@ use labcolors_core::wcag22_feasibility::{
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 
+#[path = "../src/sha256.rs"]
+#[allow(dead_code)]
+mod fixture_sha256;
+
 const PROFILE: ResourceProfileIdV1 = ResourceProfileIdV1::Compile;
+const IDENTITY_FIXTURE: &str =
+    include_str!("../contracts/wcag22-explicit-selection-identity-v1.json");
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 fn candidate(id: &str, emitted: [u8; 3]) -> CandidateV1 {
     CandidateV1::new(
@@ -156,6 +166,18 @@ fn only_feasible_terminal_mints_a_selection_source() {
 }
 
 #[test]
+fn empty_policy_shapes_are_rejected_before_selection() {
+    assert!(matches!(
+        PolicyId::try_new(""),
+        Err(InvalidSelectionRequestV1::EmptyPolicyId)
+    ));
+    assert!(matches!(
+        FirstFeasibleInDeclaredOrderV1::try_new(PolicyId::try_new("policy").unwrap(), Vec::new(),),
+        Err(InvalidSelectionRequestV1::EmptyCandidateOrder)
+    ));
+}
+
+#[test]
 fn opposite_declared_orders_choose_opposite_opaque_ids_without_rewriting_feasibility() {
     let feasibility = compile(
         vec![
@@ -171,12 +193,12 @@ fn opposite_declared_orders_choose_opposite_opaque_ids_without_rewriting_feasibi
 
     let first = select(
         feasibility.selection_source().unwrap(),
-        policy("brand/order-a", &["first", "second"]),
+        policy("brand/order", &["first", "second"]),
     )
     .unwrap();
     let second = select(
         feasibility.selection_source().unwrap(),
-        policy("brand/order-b", &["second", "first"]),
+        policy("brand/order", &["second", "first"]),
     )
     .unwrap();
     let first = first.selected().expect("first order selects");
@@ -191,6 +213,24 @@ fn opposite_declared_orders_choose_opposite_opaque_ids_without_rewriting_feasibi
     assert_eq!(record.failure_matrix(), matrix_before);
     assert_eq!(record.proof().partition(), partition_before);
     assert_eq!(record.evaluation_id(), evaluation_before);
+}
+
+#[test]
+fn first_feasible_after_an_infeasible_prefix_keeps_its_declared_ordinal() {
+    let feasibility = compile(
+        vec![candidate("fail", [0; 3]), candidate("pass", [255; 3])],
+        vec![applicable("contrast", vec![Srgb8::new([0; 3])])],
+    );
+
+    let outcome = select(
+        feasibility.selection_source().unwrap(),
+        policy("ordered", &["fail", "pass"]),
+    )
+    .unwrap();
+    let selected = outcome.selected().expect("the second declared ID passes");
+
+    assert_eq!(selected.candidate().candidate_id().as_str(), "pass");
+    assert_eq!(selected.proof().selected_policy_ordinal(), 1);
 }
 
 #[test]
@@ -227,7 +267,11 @@ fn singleton_infeasible_policy_is_real_no_selection_without_domain_fallback() {
 #[test]
 fn feasible_prefix_never_hides_a_foreign_or_duplicate_tail() {
     let feasibility = compile(
-        vec![candidate("first", [255; 3]), candidate("second", [254; 3])],
+        vec![
+            candidate("first", [255; 3]),
+            candidate("second", [254; 3]),
+            candidate("third", [253; 3]),
+        ],
         vec![applicable("contrast", vec![Srgb8::new([0; 3])])],
     );
 
@@ -259,7 +303,7 @@ fn feasible_prefix_never_hides_a_foreign_or_duplicate_tail() {
 #[test]
 fn policy_resource_preflight_is_exact_and_precedes_semantic_lookup() {
     let feasibility = compile(
-        vec![candidate("x", [255; 3])],
+        vec![candidate("x", [255; 3]), candidate("y", [254; 3])],
         vec![applicable("contrast", vec![Srgb8::new([0; 3])])],
     );
     let at_limit = select(
@@ -273,17 +317,50 @@ fn policy_resource_preflight_is_exact_and_precedes_semantic_lookup() {
 
     let over_limit = select(
         feasibility.selection_source().unwrap(),
-        policy(&"p".repeat(65_536), &["x"]),
+        policy(&"p".repeat(65_530), &["x", "foreign"]),
     )
-    .expect_err("65537 policy bytes must fail before cardinality or duplicate lookup");
+    .expect_err("over-limit policy bytes must fail before foreign-ID lookup");
     assert!(matches!(
         over_limit,
         SelectionErrorV1::ResourceLimitExceeded {
             profile_id: ResourceProfileIdV1::Compile,
             dimension: ResourceDimensionV1::OpaqueUtf8Bytes,
-            requested: 65_537,
+            requested: 65_538,
             limit: 65_536,
         }
+    ));
+}
+
+#[test]
+fn policy_cardinality_accepts_the_domain_size_and_rejects_size_plus_one_first() {
+    let ids = ["candidate/0", "candidate/1"];
+    let feasibility = compile(
+        ids.iter().map(|id| candidate(id, [255; 3])).collect(),
+        vec![applicable("contrast", vec![Srgb8::new([0; 3])])],
+    );
+
+    assert!(
+        select(
+            feasibility.selection_source().unwrap(),
+            policy("count-bound", &ids),
+        )
+        .is_ok(),
+        "P equal to the finite domain cardinality must remain valid",
+    );
+
+    let error = select(
+        feasibility.selection_source().unwrap(),
+        policy("count-bound", &[ids[0], ids[1], ids[0]]),
+    )
+    .expect_err("P = C + 1 must fail before duplicate lookup");
+    assert!(matches!(
+        error,
+        SelectionErrorV1::InvalidRequest(
+            InvalidSelectionRequestV1::PolicyCardinalityExceedsDomain {
+                requested: 3,
+                domain: 2,
+            }
+        )
     ));
 }
 
@@ -324,29 +401,60 @@ fn mixed_graph_final_receipt_counts_edges_not_relation_labels() {
         selected.final_verification().profile_id(),
         record.proof().profile_id()
     );
+    assert_eq!(
+        selected.final_verification().artifact_id(),
+        record.proof().artifact_id()
+    );
+    assert_eq!(
+        selected.final_verification().bound_id(),
+        record.proof().bound_id()
+    );
+    assert_eq!(
+        selected.final_verification().proof_id(),
+        record.proof().proof_id()
+    );
+    assert_eq!(
+        selected.final_verification().proof_sha256(),
+        record.proof().proof_sha256()
+    );
+    assert_eq!(
+        selected.final_verification().relation_set_digest(),
+        record.relation_set_digest()
+    );
 }
 
 #[test]
 fn property_selection_equals_an_independent_declared_order_lsb0_oracle() {
+    const CANDIDATES: usize = 17;
     check_property(
         (
-            prop::collection::vec(any::<u32>(), 8),
-            prop::collection::vec(any::<bool>(), 8),
+            prop::collection::vec(any::<u32>(), CANDIDATES),
+            prop::collection::vec(any::<bool>(), CANDIDATES),
         ),
         |(keys, included)| {
-            let ids = (0..8)
-                .map(|index| format!("candidate/{index}"))
+            let ids = (0..CANDIDATES)
+                .map(|index| format!("candidate/{index:02}"))
                 .collect::<Vec<_>>();
             let feasibility = compile(
-                [0_u8, 32, 64, 96, 117, 160, 200, 255]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| candidate(&ids[index], [value; 3]))
+                (0..CANDIDATES)
+                    .map(|index| {
+                        let value = match index {
+                            7 => 0x75,
+                            8 => 0x76,
+                            16 => 0xff,
+                            _ => 0x00,
+                        };
+                        candidate(&ids[index], [value; 3])
+                    })
                     .collect(),
                 vec![applicable("contrast", vec![Srgb8::new([0; 3])])],
             );
             let record = evaluated(&feasibility);
-            let mut ordinals = (0..8).filter(|index| included[*index]).collect::<Vec<_>>();
+            let proof = record.proof();
+            prop_assert_eq!(proof.partition(), &[0x80, 0x01, 0x01]);
+            let mut ordinals = (0..CANDIDATES)
+                .filter(|index| included[*index])
+                .collect::<Vec<_>>();
             if ordinals.is_empty() {
                 ordinals.push(0);
             }
@@ -383,27 +491,173 @@ fn property_selection_equals_an_independent_declared_order_lsb0_oracle() {
 }
 
 #[test]
+fn production_identity_matches_the_independent_unicode_selection_fixture() {
+    assert_eq!(
+        fixture_sha256::digest(IDENTITY_FIXTURE.as_bytes()).to_hex(),
+        "ca6c9c83a87a400655ea6cbdc4efcfb36176095c082ec9342bda08ba7dfed955"
+    );
+    let applicable = RelationV1::applicable(
+        relation_id("alpha"),
+        occurrence_id("hover/🎨"),
+        Wcag22CriterionV1::Sc143TextDefault,
+        vec![
+            Srgb8::new([255; 3]),
+            Srgb8::new([0; 3]),
+            Srgb8::new([255; 3]),
+        ],
+    )
+    .unwrap();
+    let not_applicable = RelationV1::not_applicable(
+        relation_id("zeta"),
+        occurrence_id("ornament"),
+        Wcag22ClientDeclaredNotApplicableV1::try_new("client/не-применимо").unwrap(),
+    );
+    let feasibility = compile(
+        vec![
+            candidate("海", [0; 3]),
+            candidate("é", [117; 3]),
+            candidate("e\u{301}", [117; 3]),
+        ],
+        vec![not_applicable, applicable],
+    );
+    let record = evaluated(&feasibility);
+
+    assert_eq!(
+        record
+            .candidates()
+            .iter()
+            .map(|value| value.candidate_id().as_str())
+            .collect::<Vec<_>>(),
+        ["e\u{301}", "é", "海"]
+    );
+    assert_eq!(record.failure_matrix(), [0x10]);
+    assert_eq!(record.proof().partition(), [0x03]);
+    assert_eq!(
+        hex(record.domain_digest().as_bytes()),
+        "9c99082645e713daf56f65e15012d21e80b3b491763d28ec7ddf8fa966164f17"
+    );
+    assert_eq!(
+        hex(record.relation_set_digest().as_bytes()),
+        "f163238ded41b3a5e7e181153a2fe48530d1a9426bf32737d52f571842ce7a3e"
+    );
+    assert_eq!(
+        hex(record.evaluation_id().as_bytes()),
+        "4d93a22b27f2e9a6241f6f4a93e83c497c1a6162ddebd958febdc4277bb9adee"
+    );
+
+    let composed = select(
+        feasibility.selection_source().unwrap(),
+        policy("brand/выбор/🎨", &["海", "é", "e\u{301}"]),
+    )
+    .unwrap();
+    let composed = composed.selected().expect("fixture policy selects");
+    assert_eq!(composed.candidate().candidate_id().as_str(), "é");
+    assert_eq!(composed.candidate().emitted(), Srgb8::new([117; 3]));
+    assert_eq!(composed.proof().selected_policy_ordinal(), 1);
+    assert_eq!(
+        hex(composed.policy_digest().as_bytes()),
+        "60f67cfa7931a33f7968740343936e52209abbf322525933c83c919eac61f4d7"
+    );
+    assert_eq!(
+        hex(composed.receipt_digest().as_bytes()),
+        "3adbc3d926e75cc719eb9f3c31442e9cc2c272dfc175d0f942ef60423ee6d538"
+    );
+    assert_eq!(
+        composed.proof().receipt_digest(),
+        composed.final_verification().receipt_digest()
+    );
+    assert_eq!(composed.final_verification().verified_applicable_edges(), 2);
+
+    let decomposed = select(
+        feasibility.selection_source().unwrap(),
+        policy("brand/выбор/🎨", &["海", "e\u{301}", "é"]),
+    )
+    .unwrap();
+    let decomposed = decomposed.selected().expect("opposite order selects");
+    assert_eq!(decomposed.candidate().candidate_id().as_str(), "e\u{301}");
+    assert_eq!(decomposed.candidate().emitted(), Srgb8::new([117; 3]));
+    assert_eq!(decomposed.proof().selected_policy_ordinal(), 1);
+    assert_eq!(
+        hex(decomposed.policy_digest().as_bytes()),
+        "422bc9682e4829d6155ea319cf79ca2198c23373760763baee84057f38ccca25"
+    );
+    assert_eq!(
+        hex(decomposed.receipt_digest().as_bytes()),
+        "4859d800ff978319bdb0b84a6efe31090bf6ca0bc0d0090745fd53228e0ca991"
+    );
+
+    let no_selection = select(
+        feasibility.selection_source().unwrap(),
+        policy("brand/выбор/🎨", &["海"]),
+    )
+    .unwrap();
+    let no_selection = no_selection
+        .no_selection()
+        .expect("infeasible singleton does not receive a fallback");
+    assert_eq!(
+        hex(no_selection.policy_digest().as_bytes()),
+        "25906476eb6f6baf6378f0d421ea953291de5fa33d8d7733313b353660756c62"
+    );
+}
+
+#[test]
 fn selection_source_and_receipts_cannot_be_forged_or_rewrapped_downstream() {
     assert_downstream_rejected(
         r#"use labcolors_core::wcag22_feasibility::explicit::EvaluatedV1;
-use labcolors_core::wcag22_feasibility::explicit::selection::{
-    FeasibleSelectionSourceV1, FinalRelationVerificationV1, SelectionProofV1,
-};
+use labcolors_core::wcag22_feasibility::explicit::selection::FeasibleSelectionSourceV1;
 
 fn forge_source(record: &EvaluatedV1) -> FeasibleSelectionSourceV1<'_> {
     FeasibleSelectionSourceV1 { record }
 }
+
+fn main() {}
+"#,
+        &["FeasibleSelectionSourceV1", "private"],
+    );
+
+    assert_downstream_rejected(
+        r#"use labcolors_core::wcag22_feasibility::explicit::selection::{
+    FinalRelationVerificationV1, SelectionProofV1,
+};
 
 fn main() {
     let _proof = SelectionProofV1 {};
     let _verification = FinalRelationVerificationV1 {};
 }
 "#,
-        &[
-            "FeasibleSelectionSourceV1",
-            "private",
-            "SelectionProofV1",
-            "FinalRelationVerificationV1",
-        ],
+        &["SelectionProofV1", "FinalRelationVerificationV1", "private"],
+    );
+
+    assert_downstream_rejected(
+        r#"use labcolors_core::wcag22_feasibility::explicit::EvaluatedV1;
+use labcolors_core::wcag22_feasibility::explicit::selection::{
+    FirstFeasibleInDeclaredOrderV1, select,
+};
+
+fn bypass_source(record: &EvaluatedV1, policy: FirstFeasibleInDeclaredOrderV1) {
+    let _ = select(record, policy);
+}
+
+fn main() {}
+"#,
+        &["FeasibleSelectionSourceV1", "&EvaluatedV1"],
+    );
+
+    assert_downstream_rejected(
+        r#"use labcolors_core::wcag22_feasibility::explicit::selection::{
+    NoSelectionV1, SelectedV1, SelectionOutcomeV1,
+};
+
+fn wrap_selected(value: SelectedV1) -> SelectionOutcomeV1 {
+    SelectionOutcomeV1::Selected(value)
+}
+
+fn wrap_no_selection(value: NoSelectionV1) -> SelectionOutcomeV1 {
+    SelectionOutcomeV1::NoSelection(value)
+}
+
+fn main() {}
+"#,
+        &["Selected", "NoSelection"],
     );
 }

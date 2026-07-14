@@ -992,6 +992,43 @@ trait PairEvaluator {
     ) -> Result<PairEvaluationV1, Wcag22EvaluationErrorV1>;
 }
 
+fn evaluate_bound_pair<E: PairEvaluator>(
+    evaluator: &mut E,
+    expected_evidence: &AtomicEvidenceBindingV1,
+    candidate: Srgb8,
+    adjacent: Srgb8,
+    criterion: Wcag22CriterionV1,
+) -> Result<Wcag22ApplicableDecisionV1, EvaluatorInvariantV1> {
+    let result = evaluator
+        .evaluate_pair(candidate, adjacent, criterion)
+        .map_err(EvaluatorInvariantV1::Source)?;
+    let (foreground, background, actual_criterion, decision, evidence) = match result {
+        PairEvaluationV1::Evaluated {
+            foreground,
+            background,
+            criterion,
+            decision,
+            evidence,
+        } => (foreground, background, criterion, decision, evidence),
+        PairEvaluationV1::NotEvaluated => {
+            return Err(EvaluatorInvariantV1::UnexpectedNotEvaluated);
+        }
+        PairEvaluationV1::InvalidEvidence => {
+            return Err(EvaluatorInvariantV1::EvidenceMismatch);
+        }
+    };
+    if foreground != candidate.bytes() || background != adjacent.bytes() {
+        return Err(EvaluatorInvariantV1::InputMismatch);
+    }
+    if actual_criterion != criterion {
+        return Err(EvaluatorInvariantV1::CriterionMismatch);
+    }
+    if evidence != *expected_evidence {
+        return Err(EvaluatorInvariantV1::EvidenceMismatch);
+    }
+    Ok(decision)
+}
+
 struct AtomicPairEvaluator {
     expected_evidence: Result<AtomicEvidenceBindingV1, Wcag22EvaluationErrorV1>,
 }
@@ -1340,65 +1377,14 @@ where
                 continue;
             };
             for adjacent in adjacent.iter().copied() {
-                let result = evaluator
-                    .evaluate_pair(candidate, adjacent, *criterion)
-                    .map_err(|source| {
-                        evaluator_error(
-                            candidate,
-                            relation,
-                            adjacent,
-                            EvaluatorInvariantV1::Source(source),
-                        )
-                    })?;
-                let (foreground, background, actual_criterion, decision, evidence) = match result {
-                    PairEvaluationV1::Evaluated {
-                        foreground,
-                        background,
-                        criterion,
-                        decision,
-                        evidence,
-                    } => (foreground, background, criterion, decision, evidence),
-                    PairEvaluationV1::NotEvaluated => {
-                        return Err(evaluator_error(
-                            candidate,
-                            relation,
-                            adjacent,
-                            EvaluatorInvariantV1::UnexpectedNotEvaluated,
-                        ));
-                    }
-                    PairEvaluationV1::InvalidEvidence => {
-                        return Err(evaluator_error(
-                            candidate,
-                            relation,
-                            adjacent,
-                            EvaluatorInvariantV1::EvidenceMismatch,
-                        ));
-                    }
-                };
-                if foreground != candidate.bytes() || background != adjacent.bytes() {
-                    return Err(evaluator_error(
-                        candidate,
-                        relation,
-                        adjacent,
-                        EvaluatorInvariantV1::InputMismatch,
-                    ));
-                }
-                if actual_criterion != *criterion {
-                    return Err(evaluator_error(
-                        candidate,
-                        relation,
-                        adjacent,
-                        EvaluatorInvariantV1::CriterionMismatch,
-                    ));
-                }
-                if evidence != expected_evidence {
-                    return Err(evaluator_error(
-                        candidate,
-                        relation,
-                        adjacent,
-                        EvaluatorInvariantV1::EvidenceMismatch,
-                    ));
-                }
+                let decision = evaluate_bound_pair(
+                    evaluator,
+                    &expected_evidence,
+                    candidate,
+                    adjacent,
+                    *criterion,
+                )
+                .map_err(|violation| evaluator_error(candidate, relation, adjacent, violation))?;
                 storage
                     .write_decision(logical_index, decision)
                     .map_err(|()| {
