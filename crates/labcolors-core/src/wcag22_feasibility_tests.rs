@@ -355,8 +355,32 @@ fn variable_domain_layout_is_contiguous_ceil_bit_arithmetic() {
         checked_packed_result_bytes_for_domain_v1(u64::MAX, 1, 2),
         Err(InvalidRequestV1::ArithmeticOverflow)
     ));
+
+    let zero_domain = checked_layout_for_domain_v1(
+        PROFILE,
+        0,
+        RawInputCountsV1 {
+            raw_relations: 1,
+            raw_adjacent_entries: 1,
+            opaque_utf8_bytes: 0,
+        },
+        CanonicalCountsV1 {
+            canonical_relations: 1,
+            applicable_relations: 1,
+            not_evaluated_relations: 0,
+            applicable_edges: 1,
+        },
+        unlimited(),
+        u64::MAX,
+    )
+    .expect_err("a parsed finite domain cannot be empty");
+    assert!(matches!(
+        zero_domain,
+        ErrorV1::CompilerInvariantViolation(CompilerInvariantV1::LayoutMismatch)
+    ));
 }
 
+#[cfg(feature = "wcag22-explicit-feasibility")]
 fn explicit_domain(count: u16) -> explicit::DomainRequestV1 {
     explicit::DomainRequestV1::try_new(
         (0..count)
@@ -372,6 +396,7 @@ fn explicit_domain(count: u16) -> explicit::DomainRequestV1 {
 }
 
 #[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
 fn explicit_kernel_executes_exact_c_times_e_and_reserves_one_exact_buffer() {
     let request = KernelRequestV1 {
         domain: explicit_domain(3),
@@ -400,10 +425,14 @@ fn explicit_kernel_executes_exact_c_times_e_and_reserves_one_exact_buffer() {
     assert_eq!(storage.reserved_bytes, Some(3));
     assert_eq!(storage.writes, 9);
     assert_eq!(storage.partition_writes, 3);
-    assert_eq!(storage.finish_calls, 1);
+    assert_eq!(
+        storage.finish_calls, 0,
+        "variable packing writes its partition in-place and has no finalization step",
+    );
 }
 
 #[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
 fn explicit_allocation_failure_precedes_the_first_atomic_call() {
     let request = KernelRequestV1 {
         domain: explicit_domain(3),
@@ -434,6 +463,7 @@ fn explicit_allocation_failure_precedes_the_first_atomic_call() {
 }
 
 #[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
 fn explicit_kernel_reuses_the_single_atomic_invariant_error_algebra() {
     let request = KernelRequestV1 {
         domain: explicit_domain(1),
@@ -463,6 +493,7 @@ fn explicit_kernel_reuses_the_single_atomic_invariant_error_algebra() {
 }
 
 #[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
 fn explicit_compile_profile_maximum_completes_and_plus_one_fails_before_evaluation() {
     let edges = PROFILE.limit(ResourceDimensionV1::ApplicableEdges);
     let work_limit = PROFILE.limit(ResourceDimensionV1::LogicalAssessments);
@@ -682,6 +713,7 @@ struct ProbeStorage {
     reserve_calls: u64,
     reserved_bytes: Option<u64>,
     writes: u64,
+    #[cfg(feature = "wcag22-explicit-feasibility")]
     partition_writes: u64,
     finish_calls: u64,
 }
@@ -726,6 +758,7 @@ impl DecisionStorage for ProbeStorage {
         if self.fail_write { Err(()) } else { Ok(()) }
     }
 
+    #[cfg(feature = "wcag22-explicit-feasibility")]
     fn write_feasible_candidate(
         &mut self,
         _matrix_bytes: u64,
@@ -735,7 +768,7 @@ impl DecisionStorage for ProbeStorage {
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<(), ()> {
+    fn finish(&mut self, _partition: &[u8]) -> Result<(), ()> {
         self.finish_calls += 1;
         if self.fail_finish { Err(()) } else { Ok(()) }
     }
@@ -1061,32 +1094,43 @@ fn matrix_partition_and_proof_invariants_reject_single_field_mutations() {
         passing_candidates: CANDIDATES,
         failing_candidates: 0,
     };
-    validate_complete_result_v1(layout, &all_pass_matrix, &all_pass_partition, proof)
+    validate_neutral_complete_result_v1(layout, &all_pass_matrix, &all_pass_partition, proof)
         .expect("the exact all-pass matrix, partition and counts agree");
 
     assert!(
-        validate_complete_result_v1(layout, &all_pass_matrix[..31], &all_pass_partition, proof,)
-            .is_err(),
+        validate_neutral_complete_result_v1(
+            layout,
+            &all_pass_matrix[..31],
+            &all_pass_partition,
+            proof,
+        )
+        .is_err(),
         "matrix length is part of the proof"
     );
 
     let mut one_failed_cell = all_pass_matrix;
     one_failed_cell[0] ^= 1;
     assert!(
-        validate_complete_result_v1(layout, &one_failed_cell, &all_pass_partition, proof).is_err(),
+        validate_neutral_complete_result_v1(layout, &one_failed_cell, &all_pass_partition, proof,)
+            .is_err(),
         "the candidate partition must be derived from every matrix cell"
     );
 
     let mut one_missing_candidate = all_pass_partition;
     one_missing_candidate[0] ^= 1;
     assert!(
-        validate_complete_result_v1(layout, &all_pass_matrix, &one_missing_candidate, proof)
-            .is_err(),
+        validate_neutral_complete_result_v1(
+            layout,
+            &all_pass_matrix,
+            &one_missing_candidate,
+            proof,
+        )
+        .is_err(),
         "partition bytes and proof counts cannot diverge"
     );
 
     assert!(
-        validate_complete_result_v1(
+        validate_neutral_complete_result_v1(
             layout,
             &all_pass_matrix,
             &all_pass_partition,
@@ -1099,7 +1143,7 @@ fn matrix_partition_and_proof_invariants_reject_single_field_mutations() {
         "the proof must attest the exact W cells"
     );
     assert!(
-        validate_complete_result_v1(
+        validate_neutral_complete_result_v1(
             layout,
             &all_pass_matrix,
             &all_pass_partition,
@@ -1115,6 +1159,7 @@ fn matrix_partition_and_proof_invariants_reject_single_field_mutations() {
 }
 
 #[test]
+#[cfg(feature = "wcag22-explicit-feasibility")]
 fn variable_matrix_and_partition_tail_bits_are_part_of_the_proof() {
     let layout = checked_layout_for_domain_v1(
         PROFILE,
@@ -1141,25 +1186,25 @@ fn variable_matrix_and_partition_tail_bits_are_part_of_the_proof() {
         passing_candidates: 3,
         failing_candidates: 0,
     };
-    validate_complete_result_v1(layout, &matrix, &partition, counters).unwrap();
+    validate_variable_complete_result_v1(layout, &matrix, &partition, counters).unwrap();
 
     let mut matrix_tail = matrix;
     matrix_tail[1] |= 1 << 1;
     assert!(
-        validate_complete_result_v1(layout, &matrix_tail, &partition, counters).is_err(),
+        validate_variable_complete_result_v1(layout, &matrix_tail, &partition, counters).is_err(),
         "unused matrix bits cannot carry covert state"
     );
 
     let partition_tail = [partition[0] | (1 << 3)];
     assert!(
-        validate_complete_result_v1(layout, &matrix, &partition_tail, counters).is_err(),
+        validate_variable_complete_result_v1(layout, &matrix, &partition_tail, counters).is_err(),
         "unused partition bits cannot carry covert state"
     );
 
     let mut used_cell = matrix;
     used_cell[0] |= 1;
     assert!(
-        validate_complete_result_v1(layout, &used_cell, &partition, counters).is_err(),
+        validate_variable_complete_result_v1(layout, &used_cell, &partition, counters).is_err(),
         "a row decision and its feasible bit must agree"
     );
 }

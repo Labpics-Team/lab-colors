@@ -12,8 +12,8 @@ use super::{
     AssessmentCellV1, AssessmentCursorV1, AtomicEvidenceBindingV1, AtomicPairEvaluator,
     DomainDigestV1, ErrorV1, EvaluationIdV1, FiniteSrgb8DomainV1, InvalidRequestV1,
     KernelRequestV1, KernelResultV1, PackedDecisionStorage, RelationId, RelationSetDigestV1,
-    RelationV1, ResourceProfileIdV1, WorkLayoutV1, evaluate_domain_with, hash_len_prefixed,
-    hash_u64, packed_bit, relation_set_digest, seal_evaluated_v1,
+    RelationV1, ResourceProfileIdV1, VariablePackingV1, WorkLayoutV1, evaluate_domain_with,
+    hash_len_prefixed, hash_u64, packed_bit, relation_set_digest, seal_evaluated_v1,
 };
 
 const DOMAIN_SEPARATOR: &[u8] = b"labcolors/wcag22-feasibility/domain/explicit-srgb8-set/v1\0";
@@ -96,6 +96,8 @@ impl DomainRequestV1 {
 }
 
 impl FiniteSrgb8DomainV1 for DomainRequestV1 {
+    type Packing = VariablePackingV1;
+
     fn raw_opaque_utf8_bytes(&self) -> Result<u64, InvalidRequestV1> {
         let mut bytes = 0_u64;
         for candidate in &self.candidates {
@@ -127,15 +129,8 @@ impl FiniteSrgb8DomainV1 for DomainRequestV1 {
         Ok(())
     }
 
-    fn candidate_count(&self) -> Result<u64, InvalidRequestV1> {
-        u64::try_from(self.candidates.len()).map_err(|_| InvalidRequestV1::ArithmeticOverflow)
-    }
-
-    fn candidate_at(&self, index: u64) -> Option<Srgb8> {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| self.candidates.get(index))
-            .map(CandidateV1::emitted)
+    fn candidates(&self) -> impl ExactSizeIterator<Item = Srgb8> + '_ {
+        self.candidates.iter().map(CandidateV1::emitted)
     }
 }
 
@@ -411,7 +406,8 @@ impl<'a> Iterator for AssessmentIter<'a> {
         } = self.cursor.next()?;
         let candidate = usize::try_from(candidate_index)
             .ok()
-            .and_then(|index| self.candidates.get(index))?;
+            .and_then(|index| self.candidates.get(index))
+            .expect("sealed explicit candidate cardinality must match the assessment cursor");
         Some(AssessmentV1 {
             candidate,
             relation_id: &relation.relation_id,
@@ -636,7 +632,7 @@ pub fn evaluate(request: RequestV1) -> Result<FeasibilityV1, ErrorV1> {
             }))
         }
         KernelResultV1::Evaluated(result) => {
-            let sealed = seal_evaluated_v1(&result, storage)?;
+            let sealed = seal_evaluated_v1(&result, storage.into_bytes())?;
             let digest = domain_digest(&result.domain, result.observed_candidates);
             let domain = DomainDescriptorV1 {
                 kind: DomainKindV1::ExplicitSrgb8Set,
@@ -679,5 +675,45 @@ pub fn evaluate(request: RequestV1) -> Result<FeasibilityV1, ErrorV1> {
                 Ok(FeasibilityV1::Feasible(evaluated))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wcag22::Wcag22CriterionV1;
+    use crate::wcag22_feasibility::OccurrenceId;
+
+    #[test]
+    #[should_panic(expected = "sealed explicit candidate cardinality")]
+    fn assessment_iterator_cannot_hide_a_broken_sealed_cardinality() {
+        let candidates = [CandidateV1::new(
+            CandidateId::try_new("only-candidate").unwrap(),
+            Srgb8::new([0; 3]),
+        )];
+        let relations = [RelationV1::applicable(
+            RelationId::try_new("relation").unwrap(),
+            OccurrenceId::try_new("occurrence").unwrap(),
+            Wcag22CriterionV1::Sc143TextDefault,
+            vec![Srgb8::new([255; 3])],
+        )
+        .unwrap()];
+        let matrix = [0_u8];
+        let mut iterator = AssessmentIter {
+            candidates: &candidates,
+            cursor: AssessmentCursorV1 {
+                relations: &relations,
+                matrix: &matrix,
+                candidate_index: 0,
+                candidate_count: 2,
+                relation_index: 0,
+                adjacent_index: 0,
+                logical_index: 0,
+                remaining: 2,
+            },
+        };
+
+        assert!(iterator.next().is_some());
+        let _ = iterator.next();
     }
 }

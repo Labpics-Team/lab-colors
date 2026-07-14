@@ -121,7 +121,7 @@ test("every workspace package inherits the declared MSRV", () => {
   }
 });
 
-test("WCAG22 feasibility has one protocol feature owner shared by every boundary consumer", () => {
+test("WCAG22 feasibility projects only the registered-domain capability through transports", () => {
   const isolatedCoreEdge =
     /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false \}/u;
   const protocolEdge = /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
@@ -158,12 +158,20 @@ test("WCAG22 feasibility has one protocol feature owner shared by every boundary
     1,
     "the dependency and feature-tree checks must share one consumer loop",
   );
+  assert.match(
+    projection,
+    /core\["features"\]\.get\("default"\) != \[\n\s+"wcag22-feasibility",\n\s+"wcag22-explicit-feasibility",\n\s*\]:/u,
+  );
   assert.match(projection, /protocol_core\["features"\] != \["wcag22-feasibility"\]/u);
   assert.match(projection, /core_dependency\["features"\]/u);
   assert.match(projection, /dependency\["name"\] == "labcolors-protocol"/u);
   assert.match(
     projection,
     /\["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"\]/u,
+  );
+  assert.match(
+    projection,
+    /'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree/u,
   );
   assert.doesNotMatch(projection, /for consumer in labcolors-/u);
 });

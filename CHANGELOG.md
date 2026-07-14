@@ -28,6 +28,10 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   `[UInt8]`;
   обе поверхности сохраняют `Success(Feasible | Infeasible | NotEvaluated)`
   либо typed `Failure` и не воспроизводят математику Core.
+- Rust Core принимает также непустой явный конечный набор пар «opaque ID +
+  финальный sRGB8», канонизирует точные UTF-8-байты ID и использует тот же
+  exhaustive kernel. Возможность включена в default Core, но не проецируется в
+  Protocol/WASM/FFI/npm/Swift.
 - Conformance pack 5.0.0 добавляет ровно одно семейство
   `wcag22-feasibility.json`: exact 7/2/0/92/59, mixed/all NotApplicable,
   typed conflict/resource failures и opaque-ID law. Шесть прежних family

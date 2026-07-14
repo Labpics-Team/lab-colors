@@ -233,6 +233,31 @@ fn variable_bit_layout_uses_one_contiguous_matrix_and_zero_tail_bits() {
 }
 
 #[test]
+fn variable_domain_crosses_the_256_candidate_boundary_without_truncation() {
+    const CANDIDATES: usize = 513;
+    let result = evaluate(request(
+        (0..CANDIDATES)
+            .map(|index| candidate(&format!("candidate/{index:03}"), [255; 3]))
+            .collect(),
+        vec![applicable(vec![Srgb8::new([0; 3])])],
+    ))
+    .unwrap();
+    let record = evaluated(&result);
+
+    assert_eq!(record.proof().domain().candidate_count(), 513);
+    assert_eq!(record.proof().logical_assessments(), 513);
+    assert_eq!(record.failure_matrix(), [0_u8; 65]);
+    assert_eq!(record.proof().partition()[..64], [u8::MAX; 64]);
+    assert_eq!(record.proof().partition()[64], 1);
+    assert_eq!(record.assessments().len(), 513);
+    assert_eq!(record.feasible_candidates().count(), 513);
+    assert_eq!(
+        record.candidates().last().unwrap().candidate_id().as_str(),
+        "candidate/512",
+    );
+}
+
+#[test]
 fn full_explicit_neutral_set_matches_every_neutral_v1_physical_bit() {
     let adjacent = vec![Srgb8::new([0x76; 3])];
     let neutral = evaluate_neutral(

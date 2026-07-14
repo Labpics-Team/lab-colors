@@ -223,6 +223,12 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
+      - name: prove base-only Core capability is independently testable
+        run: |
+          cargo check -p labcolors-core --all-targets --no-default-features --features wcag22-feasibility --locked
+          cargo test -p labcolors-core --lib --no-default-features --features wcag22-feasibility --locked
+          cargo test -p labcolors-core --test wcag22_feasibility --no-default-features --features wcag22-feasibility --locked
+          cargo test -p labcolors-core --doc --no-default-features --features wcag22-feasibility --locked
       - name: prove core capability projection boundary
         shell: bash
         run: |
@@ -241,7 +247,10 @@ jobs:
               "labcolors-conformance",
           )
           core = packages["labcolors-core"]
-          if core["features"].get("default") != ["wcag22-feasibility"]:
+          if core["features"].get("default") != [
+              "wcag22-feasibility",
+              "wcag22-explicit-feasibility",
+          ]:
               raise SystemExit("labcolors-core default capability set drifted")
 
           protocol_core = [
@@ -290,6 +299,10 @@ jobs:
               if 'labcolors-core feature "wcag22-feasibility"' not in feature_tree:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
+                  )
+              if 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
+                  raise SystemExit(
+                      f"{consumer} resolved the Core-only explicit-domain capability"
                   )
 
           print("core capability projection: PASS")
