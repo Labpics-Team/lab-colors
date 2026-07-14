@@ -11,7 +11,7 @@ use labcolors_core::Srgb8;
 use labcolors_core::wcag22::{Wcag22ClientDeclaredNotApplicableV1, Wcag22CriterionV1};
 use labcolors_core::wcag22_feasibility::explicit::selection::{
     FirstFeasibleInDeclaredOrderV1, InvalidSelectionRequestV1, NoSelectionReasonV1, PolicyId,
-    SelectionErrorV1, select,
+    NoSelectionV1, SelectedV1, SelectionErrorV1, SelectionOutcomeV1, select,
 };
 use labcolors_core::wcag22_feasibility::explicit::{
     CandidateId, CandidateV1, DomainRequestV1, EvaluatedV1, FeasibilityV1, RequestV1, evaluate,
@@ -70,6 +70,20 @@ fn request(candidates: Vec<CandidateV1>, relations: Vec<RelationV1>) -> RequestV
 
 fn evaluated(result: &FeasibilityV1) -> &EvaluatedV1 {
     result.evaluated().expect("expected an evaluated terminal")
+}
+
+fn selected(outcome: &SelectionOutcomeV1) -> Option<&SelectedV1> {
+    match outcome {
+        SelectionOutcomeV1::Selected { selected, .. } => Some(selected),
+        SelectionOutcomeV1::NoSelection { .. } => None,
+    }
+}
+
+fn no_selection(outcome: &SelectionOutcomeV1) -> Option<&NoSelectionV1> {
+    match outcome {
+        SelectionOutcomeV1::Selected { .. } => None,
+        SelectionOutcomeV1::NoSelection { no_selection, .. } => Some(no_selection),
+    }
 }
 
 fn policy(id: &str, order: &[&str]) -> FirstFeasibleInDeclaredOrderV1 {
