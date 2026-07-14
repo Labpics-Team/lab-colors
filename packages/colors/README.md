@@ -269,6 +269,55 @@ diagnostics и legacy `wcagRatio` не могут изменить этот ве
 
 ---
 
+### `evaluateWcag22Feasibility(request): Wcag22FeasibilityOutcomeV1`
+
+Полностью перебирает зарегистрированную конечную ось sRGB8 против всех явно
+объявленных клиентом связей. Операция отвечает только на вопрос «какие
+кандидаты проходят все эти ограничения?». Она не выбирает лучший цвет, не
+угадывает применимость и не понимает семантику ID.
+
+```ts
+import init, {
+  evaluateWcag22Feasibility,
+  type Wcag22FeasibilityRequestV1,
+} from "@labpics/colors";
+
+await init();
+
+const request: Wcag22FeasibilityRequestV1 = {
+  schemaVersion: 1,
+  domainId: "srgb8-neutral-axis-v1",
+  resourceProfileId: "compile-v1",
+  relations: [{
+    relationId: "opaque-relation-7f3a",
+    occurrenceId: "opaque-occurrence-17",
+    kind: "applicable",
+    criterion: "sc-1.4.3-text-default",
+    adjacent: [[0, 0, 0], [255, 255, 255]],
+  }],
+};
+
+const bytes = new TextEncoder().encode(JSON.stringify(request));
+const outcome = evaluateWcag22Feasibility(bytes);
+
+if (outcome.outcome === "success") {
+  // feasible | infeasible | notEvaluated
+  console.log(outcome.feasibility.status);
+} else {
+  // strict transport/core failure as typed data; no fallback colour
+  console.error(outcome.error);
+}
+```
+
+Вход — только `Uint8Array` со strict JSON V1. Граница размера выведена из
+грамматики и resource profile; после `init()` её возвращает
+`wcag22FeasibilityMaxBytes()`. Package wrapper проверяет `byteLength` до
+избежимой копии в WASM, а Rust повторяет авторитетную проверку. Выход хранит
+домен и канонические связи по одному разу, а решения — в candidate-major LSB0
+bitset; объектного графа `256 × E` в public result нет.
+
+---
+
 ### `numericalCapabilityManifest(): NumericalCapabilityManifestV2`
 
 Возвращает статический манифест численных возможностей установленной сборки:

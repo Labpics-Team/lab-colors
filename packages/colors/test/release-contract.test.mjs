@@ -18,7 +18,10 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { validateWcag22EvidenceArtifacts } from "../../../scripts/verify-package-release.mjs";
+import {
+  validateWcag22EvidenceArtifacts,
+  validateWcag22FeasibilityFamily,
+} from "../../../scripts/verify-package-release.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -116,6 +119,36 @@ test("every workspace package inherits the declared MSRV", () => {
       `${manifest} не публикует/не наследует workspace MSRV`,
     );
   }
+});
+
+test("WCAG22 feasibility has one protocol feature owner shared by every boundary consumer", () => {
+  const isolatedCoreEdge =
+    /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false \}/u;
+  const protocolEdge = /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
+  const protocolManifest = read("crates", "labcolors-protocol", "Cargo.toml");
+  const wasmManifest = read("crates", "labcolors-wasm", "Cargo.toml");
+  const ffiManifest = read("crates", "labcolors-ffi", "Cargo.toml");
+  const conformanceManifest = read("crates", "labcolors-conformance", "Cargo.toml");
+
+  assert.match(
+    protocolManifest,
+    /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false, features = \["wcag22-feasibility"\] \}/u,
+  );
+  for (const manifest of [wasmManifest, ffiManifest, conformanceManifest]) {
+    assert.match(manifest, isolatedCoreEdge);
+    assert.match(manifest, protocolEdge);
+    assert.doesNotMatch(manifest, /features = \["wcag22-feasibility"\]/u);
+  }
+
+  const ci = read(".github", "workflows", "ci.yml");
+  assert.match(
+    ci,
+    /for consumer in \["labcolors-wasm", "labcolors-ffi", "labcolors-conformance"\]/u,
+  );
+  assert.match(ci, /protocol_core\["features"\] != \["wcag22-feasibility"\]/u);
+  assert.match(ci, /core_dependency\["features"\]/u);
+  assert.match(ci, /dependency\["name"\] == "labcolors-protocol"/u);
+  assert.match(ci, /cargo tree -p "\$consumer" --edges normal -e features/u);
 });
 
 test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
@@ -748,6 +781,145 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
+test("conformance pack 5 adds only the feasibility family", () => {
+  const immutableFamilies = new Map([
+    ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
+    ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
+    ["alpha.json", "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1"],
+    ["solve.json", "64acfc4a8c613a4b11e4e83c52a33ecf308320abc6ab18fde20853a7f2399f06"],
+    ["muddiness.json", "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3"],
+    ["wcag22.json", "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826"],
+  ]);
+  assert.equal(immutableFamilies.size, 6, "anti-vacuum: prior family set changed");
+  for (const [name, expected] of immutableFamilies) {
+    const bytes = readFileSync(join(root, "conformance", "vectors", name));
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), expected, name);
+  }
+
+  const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
+  assert.equal(manifest.packVersion, "5.0.0");
+  assert.ok(
+    existsSync(join(root, "conformance", "vectors", "wcag22-feasibility.json")),
+    "pack 5 must add the single feasibility family",
+  );
+  assert.equal(manifest.counts.wcag22Feasibility > 0, true);
+});
+
+test("release checker independently validates and mutation-proves feasibility pack semantics", () => {
+  const canonical = JSON.parse(
+    read("conformance", "vectors", "wcag22-feasibility.json"),
+  );
+  assert.doesNotThrow(() => validateWcag22FeasibilityFamily(canonical));
+
+  const mutateOutcome = (family, caseId, mutate) => {
+    const vector = family.find((entry) => entry.caseId === caseId);
+    assert.ok(vector, `mutation fixture missing ${caseId}`);
+    const outcome = JSON.parse(vector.outcomeJson);
+    mutate(outcome);
+    vector.outcomeJson = JSON.stringify(outcome);
+  };
+  const mutations = [
+    ["vector schema expansion", (family) => { family[0].extra = true; }],
+    ["non-compact request", (family) => { family[0].requestJson += " "; }],
+    ["proportional cells", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.cells = []; },
+    )],
+    ["domain truncation", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.domain.pop(); },
+    )],
+    ["matrix truncation", (family) => mutateOutcome(
+      family,
+      "text-default-two",
+      (outcome) => { outcome.feasibility.result.failureMatrix.pop(); },
+    )],
+    ["partition LSB0 flip", (family) => mutateOutcome(
+      family,
+      "ui-component-fifty-nine",
+      (outcome) => { outcome.feasibility.result.proof.partition[0] ^= 1; },
+    )],
+    ["numeric u64", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.proof.domainCount = 256; },
+    )],
+    ["conflict collapsed", (family) => {
+      const source = family.find((entry) => entry.caseId === "all-not-applicable");
+      const target = family.find((entry) => entry.caseId === "conflicting-relation-id");
+      target.outcomeJson = source.outcomeJson;
+    }],
+    ["resource failure collapsed", (family) => {
+      const source = family.find((entry) => entry.caseId === "all-not-applicable");
+      const target = family.find((entry) => entry.caseId === "raw-adjacent-resource-rejection");
+      target.outcomeJson = source.outcomeJson;
+    }],
+    ["opaque identity collapsed", (family) => {
+      const first = family.find((entry) => entry.caseId === "opaque-identity-a");
+      const second = family.find((entry) => entry.caseId === "opaque-identity-b");
+      const firstOutcome = JSON.parse(first.outcomeJson);
+      const secondOutcome = JSON.parse(second.outcomeJson);
+      secondOutcome.feasibility.result.proof.relationSetDigest =
+        firstOutcome.feasibility.result.proof.relationSetDigest;
+      second.outcomeJson = JSON.stringify(secondOutcome);
+    }],
+  ];
+  assert.equal(mutations.length, 10, "anti-vacuum mutation corpus changed");
+  for (const [name, mutate] of mutations) {
+    const family = structuredClone(canonical);
+    mutate(family);
+    assert.throws(
+      () => validateWcag22FeasibilityFamily(family),
+      undefined,
+      `${name} must fail the release checker`,
+    );
+  }
+});
+
+test("release evidence carries the versioned WCAG22 feasibility operation", () => {
+  const prepare = read("scripts", "prepare-npm-package.mjs");
+  const verifier = read("scripts", "verify-package-release.mjs");
+
+  assert.match(prepare, /"wcag22-feasibility\.json"/u);
+  assert.match(verifier, /"wcag22-feasibility\.json"/u);
+  assert.match(verifier, /conformance\.packVersion !== "5\.0\.0"/u);
+  assert.match(
+    verifier,
+    /"wcag22Feasibility"/u,
+    "release count projection must include the new family",
+  );
+  assert.match(
+    verifier,
+    /"wcag22-feasibility-v1"/u,
+    "release supported list must advertise the compiler operation",
+  );
+  assert.match(verifier, /validateWcag22FeasibilityFamily\(families\[6\]\)/u);
+  assert.match(verifier, /evaluateWcag22Feasibility/u);
+  assert.match(verifier, /wcag22FeasibilityMaxBytes/u);
+  assert.match(verifier, /type Wcag22FeasibilityRequestV1/u);
+  assert.match(verifier, /type Wcag22FeasibilityOutcomeV1/u);
+  assert.match(verifier, /get\("text-default-seven"\)\?\.vector/u);
+  assert.match(
+    verifier,
+    /JSON\.stringify\(evaluateWcag22Feasibility\(feasibilityRequest\)\)[\s\S]*?feasibilityFixture\.outcomeJson/u,
+  );
+  assert.equal(
+    verifier.match(/writeFile\(runtimePath, runtimeSmokeSource\(feasibilityFixture\)\)/gu)?.length,
+    2,
+    "clean-install and Node-floor smokes must execute the same canonical fixture",
+  );
+  assert.ok(
+    verifier.indexOf("await init({ module_or_path:") <
+      verifier.indexOf("wcag22FeasibilityMaxBytes()"),
+    "clean smoke must import safely and call the getter only after WASM init",
+  );
+  assert.match(verifier, /@ts-expect-error byte API rejects strings/u);
+  assert.match(verifier, /case "notEvaluated"/u);
+  assert.match(verifier, /case "incompatibleCoreContract"/u);
+});
+
 test("WCAG22 WASM budget is measured and rejects a one-byte regression", () => {
   const budgetPath = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
@@ -982,14 +1154,16 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `4\.0\.0`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `5\.0\.0`/u);
+  assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
   assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
   assert.match(conformanceReadme, /`wcag22\.json`/u);
+  assert.match(conformanceReadme, /`wcag22-feasibility\.json`/u);
   assert.match(
     conformanceReadme,
-    /contrasts, ladders, alpha, solve, muddiness, wcag22/u,
+    /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility/u,
   );
-  assert.doesNotMatch(conformanceReadme, /сейчас `3\.0\.0`/u);
+  assert.doesNotMatch(conformanceReadme, /сейчас `[34]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
 });
@@ -1107,7 +1281,7 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(verifier, /artifacts: \{ tarball, wasm, buildMetadata \}/);
 });
 
-test("package root curates every custom schema/result type without exporting wasm ABI", () => {
+test("package root curates public types while keeping feasibility internals private", () => {
   const wasmSource = read("crates", "labcolors-wasm", "src", "lib.rs");
   const customSection = wasmSource.match(
     /const TS_RESULT_TYPES: &'static str = r##"([\s\S]*?)"##;/u,
@@ -1126,10 +1300,40 @@ test("package root curates every custom schema/result type without exporting was
   const exportedNames = [...rootTypes.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9_]*),$/gmu)].map(
     (match) => match[1],
   );
+  const feasibilityInternals = new Set([
+    "Bytes32V1",
+    "DecimalU64V1",
+    "Srgb8BytesV1",
+    "Wcag22FeasibilityApplicableRelationV1",
+    "Wcag22FeasibilityAtomicErrorV1",
+    "Wcag22FeasibilityCompilerInvariantV1",
+    "Wcag22FeasibilityCoreErrorV1",
+    "Wcag22FeasibilityEvaluatedV1",
+    "Wcag22FeasibilityEvaluatorInvariantV1",
+    "Wcag22FeasibilityInvalidRequestV1",
+    "Wcag22FeasibilityNotApplicableRelationV1",
+    "Wcag22FeasibilityNotEvaluatedResultV1",
+    "Wcag22FeasibilityProofV1",
+    "Wcag22FeasibilityProtocolErrorV1",
+    "Wcag22FeasibilityRelationV1",
+    "Wcag22FeasibilityResourceDimensionV1",
+    "Wcag22FeasibilityTransportErrorV1",
+    "Wcag22FeasibilityV1",
+  ]);
+  for (const name of feasibilityInternals) {
+    assert.ok(generatedNames.includes(name), `generated declarations omit ${name}`);
+    assert.ok(!exportedNames.includes(name), `package root leaks internal ${name}`);
+  }
+  for (const publicName of [
+    "Wcag22FeasibilityRequestV1",
+    "Wcag22FeasibilityOutcomeV1",
+  ]) {
+    assert.ok(exportedNames.includes(publicName), `package root omits ${publicName}`);
+  }
   assert.deepEqual(
     [...exportedNames].sort(),
-    [...generatedNames].sort(),
-    "root types must equal the custom public section exactly",
+    generatedNames.filter((name) => !feasibilityInternals.has(name)).sort(),
+    "root types must equal the reviewed public subset exactly",
   );
   assert.doesNotMatch(rootTypes, /InitOutput|__wbg_/u, "raw wasm ABI must stay private");
 });

@@ -28,6 +28,7 @@
 //! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
 //! | `muddiness.json` | hex → замороженная legacy-координата | `cleanliness::muddiness_from_hex` |
 //! | `wcag22.json` | final sRGB8 pair + criterion → exact assessment | `wcag22::evaluate_wcag22_hex` |
+//! | `wcag22-feasibility.json` | versioned request → packed compiler algebra | `labcolors-protocol` |
 //! | `manifest.json` | версии, дайджест, счётчики, capability manifest | `numerical_capability_manifest_v2` |
 //!
 //! `muddiness.json` фиксирует только воспроизводимость исторического числового
@@ -54,7 +55,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "4.0.0";
+pub const PACK_VERSION: &str = "5.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -309,6 +310,14 @@ pub enum PackGenerationError {
     /// The core introduced an `Unreachable` variant this pack does not know how
     /// to encode. The adapter must be upgraded before regenerating artifacts.
     IncompatibleCoreContract { reason: String },
+    /// Public protocol builders or canonical encoders rejected a controlled
+    /// fixture. Generation stops instead of inventing a local wire schema.
+    IncompatibleProtocolContract {
+        /// Stable vector identifier.
+        case_id: String,
+        /// Upstream protocol error.
+        reason: String,
+    },
 }
 
 impl core::fmt::Display for PackGenerationError {
@@ -319,6 +328,9 @@ impl core::fmt::Display for PackGenerationError {
             }
             Self::IncompatibleCoreContract { reason } => {
                 write!(f, "incompatible core contract: {reason}")
+            }
+            Self::IncompatibleProtocolContract { case_id, reason } => {
+                write!(f, "incompatible protocol contract in {case_id}: {reason}")
             }
         }
     }
@@ -604,6 +616,254 @@ pub fn generate_wcag22() -> Result<Vec<Wcag22Vector>, PackGenerationError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Семейство: WCAG 2.2 feasibility transport
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One end-to-end vector for the versioned feasibility protocol.
+///
+/// Both JSON strings are emitted by `labcolors-protocol` canonical encoders.
+/// The conformance crate deliberately owns neither a duplicate request DTO nor
+/// an outcome projection. In particular, the encoded outcome keeps only the
+/// packed failure matrix and partition supplied by Core; it never expands the
+/// `256 × E` logical assessment graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wcag22FeasibilityVector {
+    /// Stable corpus identity, outside the protocol algebra.
+    pub case_id: String,
+    /// Exact compact UTF-8 request produced by `encode_request_v1`.
+    pub request_json: String,
+    /// Exact compact UTF-8 nested `Success/Failure` outcome produced by
+    /// `encode_outcome_v1`.
+    pub outcome_json: String,
+}
+
+fn protocol_fixture<T, E: core::fmt::Debug>(
+    case_id: &str,
+    result: Result<T, E>,
+) -> Result<T, PackGenerationError> {
+    result.map_err(|error| PackGenerationError::IncompatibleProtocolContract {
+        case_id: case_id.to_string(),
+        reason: format!("{error:?}"),
+    })
+}
+
+fn applicable_relation(
+    case_id: &str,
+    relation_id: &str,
+    occurrence_id: &str,
+    criterion: labcolors_protocol::Wcag22CriterionV1,
+    adjacent: Vec<[u8; 3]>,
+) -> Result<labcolors_protocol::RelationV1, PackGenerationError> {
+    protocol_fixture(
+        case_id,
+        labcolors_protocol::RelationV1::applicable(relation_id, occurrence_id, criterion, adjacent),
+    )
+}
+
+fn not_applicable_relation(
+    case_id: &str,
+    relation_id: &str,
+    occurrence_id: &str,
+    reason: &str,
+) -> Result<labcolors_protocol::RelationV1, PackGenerationError> {
+    protocol_fixture(
+        case_id,
+        labcolors_protocol::RelationV1::not_applicable(relation_id, occurrence_id, reason),
+    )
+}
+
+fn feasibility_vector(
+    case_id: &str,
+    relations: Vec<labcolors_protocol::RelationV1>,
+) -> Result<Wcag22FeasibilityVector, PackGenerationError> {
+    use labcolors_protocol::{DomainIdV1, RequestV1, ResourceProfileIdV1};
+
+    let request = protocol_fixture(
+        case_id,
+        RequestV1::try_new(
+            DomainIdV1::Srgb8NeutralAxis,
+            relations,
+            ResourceProfileIdV1::Compile,
+        ),
+    )?;
+    let request_bytes = protocol_fixture(case_id, labcolors_protocol::encode_request_v1(&request))?;
+    let outcome = labcolors_protocol::evaluate_wcag22_feasibility_v1(&request_bytes);
+    let outcome_bytes = protocol_fixture(case_id, labcolors_protocol::encode_outcome_v1(&outcome))?;
+    let request_json = protocol_fixture(case_id, String::from_utf8(request_bytes))?;
+    let outcome_json = protocol_fixture(case_id, String::from_utf8(outcome_bytes))?;
+    Ok(Wcag22FeasibilityVector {
+        case_id: case_id.to_string(),
+        request_json,
+        outcome_json,
+    })
+}
+
+/// Generate the complete pack-5 feasibility corpus exclusively through the
+/// public protocol construction and canonical encoding boundary.
+pub fn generate_wcag22_feasibility() -> Result<Vec<Wcag22FeasibilityVector>, PackGenerationError> {
+    use labcolors_protocol::Wcag22CriterionV1 as Criterion;
+
+    let mut vectors = Vec::with_capacity(13);
+
+    let case_id = "text-default-seven";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![applicable_relation(
+            case_id,
+            "relation-7",
+            "occurrence-7",
+            Criterion::Sc143TextDefault,
+            vec![[0x76; 3]],
+        )?],
+    )?);
+
+    let case_id = "text-default-two";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![applicable_relation(
+            case_id,
+            "relation-2",
+            "occurrence-2",
+            Criterion::Sc143TextDefault,
+            vec![[0; 3], [255; 3]],
+        )?],
+    )?);
+
+    let case_id = "text-default-zero";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![applicable_relation(
+            case_id,
+            "relation-0",
+            "occurrence-0",
+            Criterion::Sc143TextDefault,
+            vec![[0; 3], [255; 3], [0x76; 3]],
+        )?],
+    )?);
+
+    for (case_id, criterion) in [
+        (
+            "text-large-scale-ninety-two",
+            Criterion::Sc143TextLargeScale,
+        ),
+        (
+            "ui-component-ninety-two",
+            Criterion::Sc1411UiComponentOrState,
+        ),
+        (
+            "graphical-object-ninety-two",
+            Criterion::Sc1411GraphicalObject,
+        ),
+    ] {
+        vectors.push(feasibility_vector(
+            case_id,
+            vec![applicable_relation(
+                case_id,
+                "ratio-three-relation",
+                "ratio-three-occurrence",
+                criterion,
+                vec![[0x76; 3]],
+            )?],
+        )?);
+    }
+
+    let case_id = "ui-component-fifty-nine";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![applicable_relation(
+            case_id,
+            "relation-59",
+            "occurrence-59",
+            Criterion::Sc1411UiComponentOrState,
+            vec![[0; 3], [255; 3]],
+        )?],
+    )?);
+
+    let case_id = "mixed-not-applicable";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![
+            applicable_relation(
+                case_id,
+                "mixed-applicable",
+                "shared-occurrence",
+                Criterion::Sc143TextDefault,
+                vec![[0x76; 3]],
+            )?,
+            not_applicable_relation(
+                case_id,
+                "mixed-declaration",
+                "shared-occurrence",
+                "client-declared-out-of-scope",
+            )?,
+        ],
+    )?);
+
+    let case_id = "all-not-applicable";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![not_applicable_relation(
+            case_id,
+            "declaration-only",
+            "opaque-occurrence",
+            "client-declared-out-of-scope",
+        )?],
+    )?);
+
+    let case_id = "conflicting-relation-id";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![
+            applicable_relation(
+                case_id,
+                "same-id",
+                "first-occurrence",
+                Criterion::Sc143TextDefault,
+                vec![[0; 3]],
+            )?,
+            applicable_relation(
+                case_id,
+                "same-id",
+                "second-occurrence",
+                Criterion::Sc143TextDefault,
+                vec![[0; 3]],
+            )?,
+        ],
+    )?);
+
+    let case_id = "raw-adjacent-resource-rejection";
+    vectors.push(feasibility_vector(
+        case_id,
+        vec![applicable_relation(
+            case_id,
+            "resource-relation",
+            "resource-occurrence",
+            Criterion::Sc1411UiComponentOrState,
+            vec![[0; 3]; 2_048],
+        )?],
+    )?);
+
+    for (case_id, relation_id, occurrence_id) in [
+        ("opaque-identity-a", "r:7f3a", "o:17"),
+        ("opaque-identity-b", "z:\u{03bb}9", "q:\u{6d77}"),
+    ] {
+        vectors.push(feasibility_vector(
+            case_id,
+            vec![applicable_relation(
+                case_id,
+                relation_id,
+                occurrence_id,
+                Criterion::Sc143TextDefault,
+                vec![[0x76; 3]],
+            )?],
+        )?);
+    }
+
+    Ok(vectors)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Агрегат пака + сериализация + дайджест
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -612,13 +872,14 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 
 /// Имена файлов семейств в КАНОНИЧЕСКОМ порядке — единый источник порядка для
 /// генератора, дайджеста и раннера-референса (дайджест зависит от порядка).
-pub const FAMILY_FILES: [&str; 6] = [
+pub const FAMILY_FILES: [&str; 7] = [
     "contrasts.json",
     "ladders.json",
     "alpha.json",
     "solve.json",
     "muddiness.json",
     "wcag22.json",
+    "wcag22-feasibility.json",
 ];
 
 /// Каноническая толерантность сравнения f64 для conformance-
@@ -648,6 +909,8 @@ pub struct Counts {
     pub muddiness: usize,
     /// Exact WCAG 2.2 vectors.
     pub wcag22: usize,
+    /// Versioned WCAG 2.2 feasibility protocol vectors.
+    pub wcag22_feasibility: usize,
     /// Итого.
     pub total: usize,
 }
@@ -770,6 +1033,8 @@ pub struct Pack {
     pub muddiness: Vec<MuddinessVector>,
     /// Exact final-sRGB8 WCAG 2.2 vectors.
     pub wcag22: Vec<Wcag22Vector>,
+    /// Bounded compiler protocol vectors with packed evidence only.
+    pub wcag22_feasibility: Vec<Wcag22FeasibilityVector>,
 }
 
 impl Pack {
@@ -782,6 +1047,7 @@ impl Pack {
             solve: generate_solve()?,
             muddiness: generate_muddiness(),
             wcag22: generate_wcag22()?,
+            wcag22_feasibility: generate_wcag22_feasibility()?,
         })
     }
 
@@ -794,6 +1060,7 @@ impl Pack {
         let solve = self.solve.len();
         let muddiness = self.muddiness.len();
         let wcag22 = self.wcag22.len();
+        let wcag22_feasibility = self.wcag22_feasibility.len();
         Counts {
             contrasts,
             ladders,
@@ -801,7 +1068,8 @@ impl Pack {
             solve,
             muddiness,
             wcag22,
-            total: contrasts + ladders + alpha + solve + muddiness + wcag22,
+            wcag22_feasibility,
+            total: contrasts + ladders + alpha + solve + muddiness + wcag22 + wcag22_feasibility,
         }
     }
 
@@ -841,6 +1109,7 @@ impl Pack {
             (FAMILY_FILES[3], to_canonical_json(&self.solve)),
             (FAMILY_FILES[4], to_canonical_json(&self.muddiness)),
             (FAMILY_FILES[5], to_canonical_json(&self.wcag22)),
+            (FAMILY_FILES[6], to_canonical_json(&self.wcag22_feasibility)),
         ]
     }
 }
@@ -909,7 +1178,13 @@ mod tests {
         assert!(c.total > 0, "пустой пак бессмыслен");
         assert_eq!(
             c.total,
-            c.contrasts + c.ladders + c.alpha + c.solve + c.muddiness + c.wcag22,
+            c.contrasts
+                + c.ladders
+                + c.alpha
+                + c.solve
+                + c.muddiness
+                + c.wcag22
+                + c.wcag22_feasibility,
             "итог не сходится с семействами"
         );
         // Лестниц ровно столько, сколько канонических позиций.
@@ -952,19 +1227,22 @@ mod tests {
     }
 
     #[test]
-    fn pack_v4_contains_prior_half_tie_and_new_wcag22_family() {
+    fn pack_v5_inherits_old_families_and_adds_feasibility_protocol() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Обязательство унаследовано pack v4; v4 добавляет exact
-        // WCAG22 family. Проверка одновременно убивает вакуумные
+        // соседний LSB. Обязательство унаследовано pack v5; v5 добавляет ровно
+        // одну WCAG22-feasibility family. Проверка одновременно убивает вакуумные
         // изменения версии/счётчика без обязательного доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
-        assert_eq!(PACK_VERSION, "4.0.0", "WCAG22 family обязана быть pack v4");
+        assert_eq!(
+            PACK_VERSION, "5.0.0",
+            "WCAG22 feasibility family обязана быть pack v5"
+        );
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v4 наследует прежние семейства и добавляет WCAG22 на core 0.2.0"
+            "pack v5 наследует прежние семейства на core 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
@@ -973,10 +1251,11 @@ mod tests {
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
         assert_eq!(
-            manifest.counts.total, 88,
+            manifest.counts.total, 101,
             "состав векторных семейств изменился"
         );
         assert_eq!(manifest.counts.wcag22, 6);
+        assert_eq!(manifest.counts.wcag22_feasibility, 13);
 
         let half_tie = pack
             .alpha
@@ -1004,6 +1283,10 @@ mod tests {
         assert_eq!(
             to_canonical_json(&pack.solve),
             to_canonical_json(&pack.solve)
+        );
+        assert_eq!(
+            to_canonical_json(&pack.wcag22_feasibility),
+            to_canonical_json(&pack.wcag22_feasibility)
         );
         // Разбор валиден структурно (форма контракта), даже если последний ULP
         // f64 может отличаться — семантическую точность держит tolerance пака.

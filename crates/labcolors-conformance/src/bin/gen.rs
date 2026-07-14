@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let c = pack.counts();
     println!(
-        "готово: {} векторов (contrasts={}, ladders={}, alpha={}, solve={}, muddiness={}, wcag22={}), дайджест={}",
+        "готово: {} векторов (contrasts={}, ladders={}, alpha={}, solve={}, muddiness={}, wcag22={}, wcag22-feasibility={}), дайджест={}",
         c.total,
         c.contrasts,
         c.ladders,
@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         c.solve,
         c.muddiness,
         c.wcag22,
+        c.wcag22_feasibility,
         pack.digest()
     );
     Ok(())

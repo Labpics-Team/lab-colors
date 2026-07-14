@@ -13,12 +13,12 @@
 
 | Метрика | N |
 | --- | --- |
-| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 5 |
-| крейтов семейства в crates/ | 4 |
+| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
+| крейтов семейства в crates/ | 5 |
 | экспорт-субпутей package.json @labpics/colors | 8 |
 | python-скриптов scripts/*.py | 8 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
-| векторов conformance/vectors/*.json (включая manifest) | 7 |
+| векторов conformance/vectors/*.json (включая manifest) | 8 |
 | файлов вне закона имён | 4 |
 
 ## Общие принципы (эталон lab-icons)
@@ -39,8 +39,8 @@
 ### Крейты workspace
 
 - Имя крейта = `labcolors-<роль>`, kebab-case; роль — одно слово:
-  `labcolors-core`, `labcolors-conformance`, `labcolors-ffi`,
-  `labcolors-wasm`. Директория `crates/<имя крейта>`.
+  `labcolors-core`, `labcolors-protocol`, `labcolors-conformance`,
+  `labcolors-ffi`, `labcolors-wasm`. Директория `crates/<имя крейта>`.
 - Члены workspace объявлены в корневом Cargo.toml (`members`); глоб `crates/*`
   разворачивается по ФС, harness-члены вне crates/ перечислены поимённо
   (experiments/psychophysics — имя пакета без префикса: не публикуется,
@@ -87,7 +87,8 @@
 - Миграции в docs/migrations/ — kebab-case по предмету breaking-контракта
   (`exact-alpha-glow.md`); одна дока обязана покрывать upgrade и rollback.
 - Векторы конформанса — conformance/vectors/`<домен>.json`, домен — одно
-  kebab-слово (alpha, contrasts, ladders, muddiness, solve, wcag22) + manifest.json.
+  kebab-слово (alpha, contrasts, ladders, muddiness, solve, wcag22,
+  wcag22-feasibility) + manifest.json.
 
 ### Swift-биндинг
 

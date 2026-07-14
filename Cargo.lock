@@ -498,6 +498,7 @@ name = "labcolors-conformance"
 version = "0.2.0"
 dependencies = [
  "labcolors-core",
+ "labcolors-protocol",
  "serde",
  "serde_json",
 ]
@@ -518,8 +519,18 @@ name = "labcolors-ffi"
 version = "0.2.0"
 dependencies = [
  "labcolors-core",
+ "labcolors-protocol",
  "thiserror",
  "uniffi",
+]
+
+[[package]]
+name = "labcolors-protocol"
+version = "0.2.0"
+dependencies = [
+ "labcolors-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -531,6 +542,7 @@ dependencies = [
  "js-sys",
  "labcolors-conformance",
  "labcolors-core",
+ "labcolors-protocol",
  "serde",
  "serde_json",
  "thiserror",

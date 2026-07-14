@@ -1,6 +1,8 @@
 # Сгенерированные UniFFI-биндинги — производный артефакт, генерируется в CI
-# (uniffi-bindgen) ПЕРЕД `swift test`. В репозитории каталоги несут лишь .gitkeep.
+# (uniffi-bindgen) ПЕРЕД `swift test`. Единственный отслеживаемый Swift-source
+# ниже — hand-written protocol consumer.
 Sources/LabColors/*.swift
+!Sources/LabColors/Wcag22FeasibilityProtocol.swift
 Sources/labcolorsFFI/*.h
 Sources/labcolorsFFI/module.modulemap
 Sources/labcolorsFFI/*.modulemap

@@ -29,8 +29,9 @@ use std::path::PathBuf;
 
 use labcolors_conformance::{
     AlphaVector, ContrastVector, DRIFT_TOL, FAMILY_FILES, LadderVector, MANIFEST_FILE, Manifest,
-    MuddinessVector, Pack, SolveOutcome, SolveVector, Wcag22Vector, generate_alpha,
-    generate_contrasts, generate_ladders, generate_muddiness, generate_solve, generate_wcag22,
+    MuddinessVector, Pack, SolveOutcome, SolveVector, Wcag22FeasibilityVector, Wcag22Vector,
+    generate_alpha, generate_contrasts, generate_ladders, generate_muddiness, generate_solve,
+    generate_wcag22, generate_wcag22_feasibility,
 };
 use labcolors_core::fnv1a_32;
 
@@ -204,6 +205,27 @@ fn core_reproduces_committed_wcag22_exactly() {
             && vector.decision == "fail"
             && vector.evidence_kind == "canonical-finite-bounded"
     }));
+}
+
+#[test]
+fn protocol_reproduces_committed_wcag22_feasibility_exactly() {
+    let committed: Vec<Wcag22FeasibilityVector> = parse("wcag22-feasibility.json");
+    let fresh = generate_wcag22_feasibility().expect("canonical feasibility vectors");
+    assert_eq!(committed, fresh, "wcag22-feasibility.json drifted");
+
+    for vector in committed {
+        let outcome =
+            labcolors_protocol::evaluate_wcag22_feasibility_v1(vector.request_json.as_bytes());
+        let encoded = labcolors_protocol::encode_outcome_v1(&outcome).unwrap_or_else(|error| {
+            panic!("{} outcome encoding failed: {error:?}", vector.case_id)
+        });
+        assert_eq!(
+            encoded,
+            vector.outcome_json.as_bytes(),
+            "{} canonical outcome bytes drifted",
+            vector.case_id
+        );
+    }
 }
 
 // ── Слой 2: метаданные манифеста ──────────────────────────────────────────────

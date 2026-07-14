@@ -5,8 +5,9 @@
 // Swift-контейнере на Linux x86_64; ручной macOS/arm64 path не является
 // достигнутой аттестацией. Файлы в `Sources/LabColors` и
 // `Sources/labcolorsFFI` генерирует uniffi-bindgen ПЕРЕД `swift test` (см.
-// .github/workflows/native-conformance.yml). В репозитории эти каталоги несут
-// лишь .gitkeep — сгенерированное не коммитится.
+// .github/workflows/native-conformance.yml). Единственный hand-written source
+// в `Sources/LabColors` — exhaustive protocol wrapper
+// `Wcag22FeasibilityProtocol.swift`; сгенерированное не коммитится.
 import PackageDescription
 
 let package = Package(
@@ -19,7 +20,7 @@ let package = Package(
         // labcolorsFFI.h + labcolorsFFI.modulemap → переименовывается в
         // module.modulemap в CI). Экспортирует extern-C FFI-символы ядра.
         .systemLibrary(name: "labcolorsFFI", path: "Sources/labcolorsFFI"),
-        // Swift-обёртка (сгенерированный labcolors.swift) поверх системного модуля.
+        // Сгенерированный labcolors.swift + hand-written typed byte wrapper.
         .target(
             name: "LabColors",
             dependencies: ["labcolorsFFI"],

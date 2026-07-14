@@ -1,7 +1,7 @@
 {
-  "packVersion": "4.0.0",
+  "packVersion": "5.0.0",
   "coreVersion": "0.2.0",
-  "packDigest": "8faec2af",
+  "packDigest": "48d00cd5",
   "counts": {
     "contrasts": 40,
     "ladders": 25,
@@ -9,7 +9,8 @@
     "solve": 6,
     "muddiness": 4,
     "wcag22": 6,
-    "total": 88
+    "wcag22Feasibility": 13,
+    "total": 101
   },
   "numericalCapabilities": {
     "schemaVersion": 2,

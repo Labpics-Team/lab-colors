@@ -342,7 +342,7 @@ binary64 identity alpha, каноническую CSS-строку и composite 
    цвета.
 5. Сравнивайте alpha через `alphaCss` или побитный parse round-trip; не
    округляйте её до фиксированного числа знаков.
-6. Используйте актуальный conformance pack (4.0.0; half-tie введён в 2.0.0
+6. Используйте актуальный conformance pack (5.0.0; half-tie введён в 2.0.0
    и обязателен с тех пор). Half-tie
    `#C0B2FA @ 0.122` над `#000000` обязан дать `#17161F`. Обрабатывайте
    `generate_solve()` / `Pack::generate()` как `Result`: internal core failure
@@ -405,7 +405,7 @@ Rollback выполняется парой runtime + config:
 ## Историческая migration-note: атомарный `NumericalDecisionV1` и pack 3.0.0 (#292)
 
 > Этот подраздел фиксирует переход #292 до добавления WCAG-семейства. Для
-> текущего unreleased-контракта используйте pack 4.0.0 и дополнение ниже.
+> текущего unreleased-контракта используйте pack 5.0.0 и дополнения ниже.
 
 Последующий rework численной границы (см. дополнение ADR-0004 от 2026-07-12)
 намеренно НЕ меняет wire: прежние ключи сохранены byte-for-byte как
@@ -432,7 +432,7 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   FNV-1a-32 drift-checksum). Векторные семейства и `packDigest` не изменились;
   потребители манифеста должны читать новую секцию.
 
-## Текущий unreleased-контракт: WCAG 2.2 и pack 4.0.0 (#284)
+## Исторический контракт: WCAG 2.2 и pack 4.0.0 (#284)
 
 - Единственный public capability contract — V2; он добавляет proof-capable
   `wcag22-srgb8-contrast-v1` с artifact/bound/proof IDs. Временный V1 не
@@ -453,3 +453,16 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   исходном `srgb8.rs` связан exact SHA без роста optimized WASM size или
   code-body lengths, а добавление несвязанного API больше не выглядит сменой
   математики.
+
+## Текущий transport-контракт: complete feasibility и pack 5.0.0 (#295)
+
+- Pack 5.0.0 добавляет ровно `wcag22-feasibility.json`; байты шести family из
+  pack 4 сохранены. Новый corpus фиксирует versioned request/outcome bytes,
+  packed LSB0 evidence, все три feasibility-терминала и типизированные
+  conflict/resource error paths.
+- npm добавляет `evaluateWcag22Feasibility(Uint8Array)` и два root-типа —
+  request/outcome. Вложенные wire-типы остаются деталями исчерпывающего outcome,
+  а raw wasm-bindgen ABI не экспортируется из package root.
+- Feasibility полностью перечисляет зарегистрированный домен и не выбирает
+  цвет. Selection policy, брендовая близость, polarity и appearance-scoring не
+  являются скрытой частью этого migration-контракта.

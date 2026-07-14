@@ -1,0 +1,15 @@
+[package]
+name = "labcolors-protocol"
+publish = false
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded versioned transport protocol for Lab Colors compiler operations."
+
+[dependencies]
+labcolors-core = { path = "../labcolors-core", default-features = false, features = ["wcag22-feasibility"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

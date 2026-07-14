@@ -239,23 +239,54 @@ jobs:
           if core["features"].get("default") != ["wcag22-feasibility"]:
               raise SystemExit("labcolors-core default capability set drifted")
 
-          dependencies = [
+          protocol_core = [
               dependency
-              for dependency in packages["labcolors-wasm"]["dependencies"]
+              for dependency in packages["labcolors-protocol"]["dependencies"]
               if dependency["name"] == "labcolors-core" and dependency["kind"] is None
           ]
-          if len(dependencies) != 1:
-              raise SystemExit("labcolors-wasm must have one normal labcolors-core edge")
-          dependency = dependencies[0]
-          if dependency["uses_default_features"] or dependency["features"]:
-              raise SystemExit("labcolors-wasm enabled an unprojected core capability")
+          if len(protocol_core) != 1:
+              raise SystemExit("labcolors-protocol must have one normal labcolors-core edge")
+          protocol_core = protocol_core[0]
+          if protocol_core["uses_default_features"]:
+              raise SystemExit("labcolors-protocol must disable Core default capabilities")
+          if protocol_core["features"] != ["wcag22-feasibility"]:
+              raise SystemExit(
+                  "labcolors-protocol must own exactly wcag22-feasibility, got "
+                  f"{protocol_core['features']}"
+              )
+
+          for consumer in ["labcolors-wasm", "labcolors-ffi", "labcolors-conformance"]:
+              core_dependencies = [
+                  dependency
+                  for dependency in packages[consumer]["dependencies"]
+                  if dependency["name"] == "labcolors-core" and dependency["kind"] is None
+              ]
+              if len(core_dependencies) != 1:
+                  raise SystemExit(f"{consumer} must have one normal labcolors-core edge")
+              core_dependency = core_dependencies[0]
+              if core_dependency["uses_default_features"]:
+                  raise SystemExit(f"{consumer} must disable Core default capabilities")
+              if core_dependency["features"]:
+                  raise SystemExit(
+                      f"{consumer} direct Core edge must own no optional capability, got "
+                      f"{core_dependency['features']}"
+                  )
+              protocol_dependencies = [
+                  dependency
+                  for dependency in packages[consumer]["dependencies"]
+                  if dependency["name"] == "labcolors-protocol" and dependency["kind"] is None
+              ]
+              if len(protocol_dependencies) != 1:
+                  raise SystemExit(f"{consumer} must have one normal labcolors-protocol edge")
           PY
 
-          feature_tree="$(cargo tree -p labcolors-wasm --edges normal -e features)"
-          if grep -Fq 'labcolors-core feature "wcag22-feasibility"' <<<"$feature_tree"; then
-            echo "labcolors-wasm resolved an unprojected core capability" >&2
-            exit 1
-          fi
+          for consumer in labcolors-wasm labcolors-ffi labcolors-conformance; do
+            feature_tree="$(cargo tree -p "$consumer" --edges normal -e features)"
+            if ! grep -Fq 'labcolors-core feature "wcag22-feasibility"' <<<"$feature_tree"; then
+              echo "$consumer did not resolve protocol-owned wcag22-feasibility" >&2
+              exit 1
+            fi
+          done
           echo "core capability projection: PASS"
       - name: reject WCAG22 source-route redirects and proof vacuums
         run: python3 scripts/test_wcag22_source_binding.py
@@ -392,6 +423,24 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
+      - name: "record #295 canonical whole-call WASM boundary candidate"
+        # First-pass evidence intentionally precedes the immutable #284 size
+        # gate: the new capability changes bytes, and the exact Linux x64
+        # observation must remain retrievable even while that old gate is RED.
+        # --record also prints the canonical JSON to logs and refuses overwrite
+        # or a non-canonical host. Once reviewed and committed, switch to
+        # --verify; latency/maxRSS/pages remain observations only.
+        working-directory: packages/colors
+        run: >-
+          node bench/wcag22-feasibility-boundary.bench.mjs
+          --record "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v1.json"
+      - name: "upload exact #295 whole-call candidate before expected size RED"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v1.json
+          if-no-files-found: error
+          retention-days: 30
       - name: enforce measured WASM raw-byte budget
         # Issue #284 owns the immutable measured ceiling baseline. The checker
         # separately binds this current Linux x64 artifact's exact SHA-256 and
