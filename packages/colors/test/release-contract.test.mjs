@@ -1342,7 +1342,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
         "wcag22-feasibility-benchmark-v3.json",
       ),
       "--artifact-sha256",
-      "47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec",
+      "f6b4b119cbf87a2b7ee63cbb41a639926b0efa20a304395dae8c18e41a52720c",
       "--self-test",
     ], {
       cwd: root,
@@ -1392,7 +1392,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?--admit-revision 01718a2bb0b53b6d50587a88e687d7bb332d51f0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 47ae9e93f6e4483cd7f38bef8086f37219a8e46530000b83c6081ae32df3f1ec[\s\S]*?--self-test/u,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?--admit-revision e8a9825ee57fff7181c757356013201bf0b99f2f[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 f6b4b119cbf87a2b7ee63cbb41a639926b0efa20a304395dae8c18e41a52720c[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 f6b4b119cbf87a2b7ee63cbb41a639926b0efa20a304395dae8c18e41a52720c[\s\S]*?--self-test/u,
     "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(
