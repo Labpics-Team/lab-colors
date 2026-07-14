@@ -173,7 +173,18 @@ def fixture_model() -> dict[str, Any]:
         ],
         "relations": [
             {
-                "relationId": "zeta",
+                "relationId": "beta",
+                "occurrenceId": "focus/🎨",
+                "kind": "applicable",
+                "criterion": "sc-1.4.11-graphical-object",
+                "adjacent": [
+                    [255, 255, 255],
+                    [0, 0, 0],
+                    [255, 255, 255],
+                ],
+            },
+            {
+                "relationId": "00-not-applicable",
                 "occurrenceId": "ornament",
                 "kind": "notApplicable",
                 "reasonId": "client/не-применимо",
@@ -183,26 +194,22 @@ def fixture_model() -> dict[str, Any]:
                 "occurrenceId": "hover/🎨",
                 "kind": "applicable",
                 "criterion": "sc-1.4.3-text-default",
-                "adjacent": [
-                    [255, 255, 255],
-                    [0, 0, 0],
-                    [255, 255, 255],
-                ],
+                "adjacent": [[0, 0, 0]],
             },
         ],
         "layout": {
-            "canonicalRelations": 2,
-            "applicableRelations": 1,
+            "canonicalRelations": 3,
+            "applicableRelations": 2,
             "notApplicableRelations": 1,
-            "applicableEdges": 2,
+            "applicableEdges": 3,
             "candidateCount": 3,
-            "logicalAssessments": 6,
-            "failureMatrixBytes": 1,
+            "logicalAssessments": 9,
+            "failureMatrixBytes": 2,
             "partitionBytes": 1,
-            "packedResultBytes": 2,
+            "packedResultBytes": 3,
         },
-        # Candidate-major LSB0 rows: P,P | P,P | F,P.
-        "matrix": bytes.fromhex("10"),
+        # Candidate-major LSB0 rows: P,P,P | P,P,P | F,F,P.
+        "matrix": bytes.fromhex("c000"),
         "partition": bytes.fromhex("03"),
     }
 
@@ -622,10 +629,10 @@ def mutation_self_tests() -> tuple[int, int, int]:
     )
     receipt_changed(
         "duplicated edge payload",
-        lambda value, _kwargs: value["relations"][0]["edges"].__setitem__(
+        lambda value, _kwargs: value["relations"][1]["edges"].__setitem__(
             1,
             {
-                **copy.deepcopy(value["relations"][0]["edges"][0]),
+                **copy.deepcopy(value["relations"][1]["edges"][0]),
                 "edgeOrdinal": 1,
             },
         ),
@@ -662,7 +669,7 @@ def mutation_self_tests() -> tuple[int, int, int]:
         raise ValueError("non-Pass edge decision survived the V1 receipt grammar")
     receipt_changed(
         "edge order",
-        lambda value, _kwargs: value["relations"][0]["edges"].reverse(),
+        lambda value, _kwargs: value["relations"][1]["edges"].reverse(),
     )
 
     def use_applicable_relation_ordinals(value: dict[str, Any]) -> None:

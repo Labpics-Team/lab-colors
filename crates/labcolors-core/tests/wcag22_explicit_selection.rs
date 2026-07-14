@@ -505,12 +505,19 @@ fn property_selection_equals_an_independent_declared_order_lsb0_oracle() {
 fn production_identity_matches_the_independent_unicode_selection_fixture() {
     assert_eq!(
         fixture_sha256::digest(IDENTITY_FIXTURE.as_bytes()).to_hex(),
-        "5c5d33c27edcc6dedff4e77d7b70beb5a3b4a05a324169002db0b2b586161326"
+        "ac981bcfcf472bd71b7b2cef3add3725d76f6b61a245c1317b6eef22e61a4c08"
     );
-    let applicable = RelationV1::applicable(
+    let alpha = RelationV1::applicable(
         relation_id("alpha"),
         occurrence_id("hover/🎨"),
         Wcag22CriterionV1::Sc143TextDefault,
+        vec![Srgb8::new([0; 3])],
+    )
+    .unwrap();
+    let beta = RelationV1::applicable(
+        relation_id("beta"),
+        occurrence_id("focus/🎨"),
+        Wcag22CriterionV1::Sc1411GraphicalObject,
         vec![
             Srgb8::new([255; 3]),
             Srgb8::new([0; 3]),
@@ -519,7 +526,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
     )
     .unwrap();
     let not_applicable = RelationV1::not_applicable(
-        relation_id("zeta"),
+        relation_id("00-not-applicable"),
         occurrence_id("ornament"),
         Wcag22ClientDeclaredNotApplicableV1::try_new("client/не-применимо").unwrap(),
     );
@@ -529,7 +536,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
             candidate("é", [117; 3]),
             candidate("e\u{301}", [117; 3]),
         ],
-        vec![not_applicable, applicable],
+        vec![beta, not_applicable, alpha],
     );
     let record = evaluated(&feasibility);
 
@@ -541,7 +548,15 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
             .collect::<Vec<_>>(),
         ["e\u{301}", "é", "海"]
     );
-    assert_eq!(record.failure_matrix(), [0x10]);
+    assert_eq!(
+        record
+            .relations()
+            .iter()
+            .map(|relation| relation.relation_id().as_str())
+            .collect::<Vec<_>>(),
+        ["00-not-applicable", "alpha", "beta"]
+    );
+    assert_eq!(record.failure_matrix(), [0xc0, 0x00]);
     assert_eq!(record.proof().partition(), [0x03]);
     assert_eq!(
         hex(record.domain_digest().as_bytes()),
@@ -549,11 +564,11 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
     );
     assert_eq!(
         hex(record.relation_set_digest().as_bytes()),
-        "f163238ded41b3a5e7e181153a2fe48530d1a9426bf32737d52f571842ce7a3e"
+        "dc8b8a796fdf6ba47114c435b7c7da7c8664af888acbd7c7a7ece341e3dd8eca"
     );
     assert_eq!(
         hex(record.evaluation_id().as_bytes()),
-        "4d93a22b27f2e9a6241f6f4a93e83c497c1a6162ddebd958febdc4277bb9adee"
+        "bcba480573a4a7249e8f4745dffcc69f13616e822dd82a705fd6bad2f1e66e07"
     );
 
     let composed = select(
@@ -571,13 +586,13 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
     );
     assert_eq!(
         hex(composed.receipt_digest().as_bytes()),
-        "d275134278f8b4dbc80b4325a13e9a52069daf1e463c3853c7d9666b5d4f7677"
+        "972f0ebc717fb1a9b1190425aed76b63c212734253da68b558f9c2d6f3ffb230"
     );
     assert_eq!(
         composed.proof().receipt_digest(),
         composed.final_verification().receipt_digest()
     );
-    assert_eq!(composed.final_verification().verified_applicable_edges(), 2);
+    assert_eq!(composed.final_verification().verified_applicable_edges(), 3);
 
     let decomposed = select(
         feasibility.selection_source().unwrap(),
@@ -594,7 +609,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
     );
     assert_eq!(
         hex(decomposed.receipt_digest().as_bytes()),
-        "b6e9b102088b322e5a834ae305543b1a23f07dc8e9a0b592164a0943696c83b8"
+        "9290de999db124bfaaa97d7d67c5248e83599399a74e764cbf177e1cfcc891b9"
     );
 
     let no_selection = select(

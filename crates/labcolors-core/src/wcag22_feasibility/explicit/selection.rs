@@ -257,7 +257,8 @@ impl std::error::Error for SelectionErrorV1 {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NoSelectionReasonV1 {
-    /// None of the declared domain members belongs to the feasible partition.
+    /// None of the candidate IDs declared by the policy belongs to the feasible
+    /// partition.
     NoDeclaredCandidateFeasible,
 }
 
@@ -393,7 +394,7 @@ impl SelectionProofV1<'_> {
     }
 }
 
-/// A valid policy whose declared domain members were all infeasible.
+/// A valid policy whose declared candidate IDs were all infeasible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoSelectionV1 {
     reason: NoSelectionReasonV1,
@@ -758,7 +759,9 @@ pub fn select(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wcag22::{Wcag22CriterionV1, Wcag22EvaluationErrorV1};
+    use crate::wcag22::{
+        Wcag22ClientDeclaredNotApplicableV1, Wcag22CriterionV1, Wcag22EvaluationErrorV1,
+    };
     use crate::wcag22_feasibility::explicit::{
         DomainRequestV1, RequestV1, evaluate as evaluate_explicit,
     };
@@ -962,6 +965,59 @@ mod tests {
             panic!("feasible singleton must be selected");
         };
         assert_eq!(selected.final_verification().verified_applicable_edges(), 3);
+    }
+
+    #[test]
+    fn first_and_last_edges_of_a_second_applicable_relation_fail_closed() {
+        let source = evaluate_explicit(
+            RequestV1::try_new(
+                DomainRequestV1::try_new(vec![candidate("selected", 255)]).unwrap(),
+                vec![
+                    RelationV1::applicable(
+                        RelationId::try_new("beta").unwrap(),
+                        OccurrenceId::try_new("focus").unwrap(),
+                        Wcag22CriterionV1::Sc1411GraphicalObject,
+                        vec![Srgb8::new([1; 3]), Srgb8::new([2; 3])],
+                    )
+                    .unwrap(),
+                    RelationV1::not_applicable(
+                        RelationId::try_new("00-not-applicable").unwrap(),
+                        OccurrenceId::try_new("ornament").unwrap(),
+                        Wcag22ClientDeclaredNotApplicableV1::try_new("client-declared").unwrap(),
+                    ),
+                    RelationV1::applicable(
+                        RelationId::try_new("alpha").unwrap(),
+                        OccurrenceId::try_new("text").unwrap(),
+                        Wcag22CriterionV1::Sc143TextDefault,
+                        vec![Srgb8::new([0; 3])],
+                    )
+                    .unwrap(),
+                ],
+                ResourceProfileIdV1::Compile,
+            )
+            .unwrap(),
+        )
+        .expect("multi-relation fixture compiles");
+        let record = source.evaluated().expect("fixture must be feasible");
+        assert_eq!(record.proof().canonical_relations(), 3);
+        assert_eq!(record.proof().applicable_edges(), 3);
+
+        for fault_at in [2, 3] {
+            let mut evaluator = ProbeEvaluator::new(ProbeMode::FailAt(fault_at));
+            let error = select_with(
+                source.selection_source().unwrap(),
+                policy("second-relation-fault", &["selected"]),
+                &mut evaluator,
+            )
+            .expect_err("either boundary edge of the second relation must fail closed");
+            assert!(matches!(
+                error,
+                SelectionErrorV1::IntegrityViolation(
+                    SelectionIntegrityViolationV1::SealedDecisionMismatch { .. }
+                )
+            ));
+            assert_eq!(evaluator.calls, fault_at);
+        }
     }
 
     #[test]
