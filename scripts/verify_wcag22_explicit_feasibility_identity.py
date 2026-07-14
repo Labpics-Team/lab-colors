@@ -373,13 +373,14 @@ def canonical_bytes(value: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def mutation_self_tests() -> int:
+def mutation_self_tests() -> tuple[int, int]:
     baseline_model = fixture_model()
     baseline = identities(baseline_model)
-    checks = 0
+    mutation_checks = 0
+    invariance_checks = 0
 
     def changed(label: str, mutate: Any, expected_indices: tuple[int, ...]) -> None:
-        nonlocal checks
+        nonlocal mutation_checks
         candidate = copy.deepcopy(baseline_model)
         mutate(candidate)
         observed = identities(candidate)
@@ -387,7 +388,7 @@ def mutation_self_tests() -> int:
             all(observed[index] != baseline[index] for index in expected_indices),
             f"mutation survived identity oracle: {label}",
         )
-        checks += 1
+        mutation_checks += 1
 
     changed(
         "candidate ID bytes",
@@ -433,7 +434,7 @@ def mutation_self_tests() -> int:
     wrong_order = sha256(domain_preimage_from_canonical(list(reversed(canonical))))
     require(wrong_order != baseline[0],
             "non-canonical candidate record order matched canonical digest")
-    checks += 1
+    invariance_checks += 1
 
     decomposed = "e\u0301".encode("utf-8")
     composed = "é".encode("utf-8")
@@ -443,8 +444,8 @@ def mutation_self_tests() -> int:
         == sorted([candidate_id_bytes(value) for value in canonical]),
         "canonical candidate order is not exact byte order",
     )
-    checks += 1
-    return checks
+    invariance_checks += 1
+    return mutation_checks, invariance_checks
 
 
 def main() -> int:
@@ -461,14 +462,17 @@ def main() -> int:
     require(actual == expected,
             "explicit feasibility identity fixture drift; run --print and review exact bytes")
     payload = json.loads(actual)
-    mutation_checks = mutation_self_tests() if args.self_test else 0
+    mutation_checks, invariance_checks = (
+        mutation_self_tests() if args.self_test else (0, 0)
+    )
     print(
         "WCAG22 explicit feasibility identity oracle: PASS; "
         f"domain={payload['expected']['domainDigestSha256']}; "
         f"relations={payload['expected']['relationSetDigestSha256']}; "
         f"evaluation={payload['expected']['evaluationIdSha256']}; "
         f"fixture_sha256={sha256(actual).hex()}; "
-        f"mutation_checks={mutation_checks}"
+        f"mutation_checks={mutation_checks}; "
+        f"invariance_checks={invariance_checks}"
     )
     return 0
 

@@ -16,7 +16,7 @@
 | членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
 | крейтов семейства в crates/ | 5 |
 | экспорт-субпутей package.json @labpics/colors | 8 |
-| python-скриптов scripts/*.py | 9 |
+| python-скриптов scripts/*.py | 10 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 8 |
 | файлов вне закона имён | 4 |

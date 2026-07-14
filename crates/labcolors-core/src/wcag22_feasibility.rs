@@ -1,4 +1,4 @@
-//! Bounded complete WCAG 2.2 enumeration over registered finite colour domains.
+//! Bounded complete WCAG 2.2 enumeration over finite colour domains.
 //!
 //! Client identifiers and applicability remain opaque declarations. Core owns
 //! canonicalization, exhaustive pair evaluation, packed decisions and sealed
@@ -122,7 +122,7 @@ pub enum ResourceDimensionV1 {
     RawRelations,
     /// Applicable adjacent entries before per-relation deduplication.
     RawAdjacentEntries,
-    /// Aggregate relation, occurrence and reason UTF-8 bytes.
+    /// Aggregate candidate, relation, occurrence and reason UTF-8 bytes.
     OpaqueUtf8Bytes,
     /// Relations after canonical duplicate removal.
     CanonicalRelations,
@@ -388,7 +388,7 @@ pub enum CompilerInvariantV1 {
     LayoutMismatch,
     /// Observed evaluator cells differed from the preflighted `C×E` work.
     AssessmentCardinalityMismatch { expected: u64, observed: u64 },
-    /// Observed candidates differed from the registered domain count.
+    /// Observed candidates differed from the declared finite-domain count.
     CandidateCardinalityMismatch { expected: u64, observed: u64 },
     /// Packed storage rejected a cell proved addressable by preflight.
     DecisionStorageRejectedCell,
