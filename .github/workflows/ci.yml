@@ -235,28 +235,65 @@ jobs:
               text=True,
           ))
           packages = {package["name"]: package for package in metadata["packages"]}
+          consumers = (
+              "labcolors-wasm",
+              "labcolors-ffi",
+              "labcolors-conformance",
+          )
           core = packages["labcolors-core"]
           if core["features"].get("default") != ["wcag22-feasibility"]:
               raise SystemExit("labcolors-core default capability set drifted")
 
-          dependencies = [
+          protocol_core = [
               dependency
-              for dependency in packages["labcolors-wasm"]["dependencies"]
+              for dependency in packages["labcolors-protocol"]["dependencies"]
               if dependency["name"] == "labcolors-core" and dependency["kind"] is None
           ]
-          if len(dependencies) != 1:
-              raise SystemExit("labcolors-wasm must have one normal labcolors-core edge")
-          dependency = dependencies[0]
-          if dependency["uses_default_features"] or dependency["features"]:
-              raise SystemExit("labcolors-wasm enabled an unprojected core capability")
-          PY
+          if len(protocol_core) != 1:
+              raise SystemExit("labcolors-protocol must have one normal labcolors-core edge")
+          protocol_core = protocol_core[0]
+          if protocol_core["uses_default_features"]:
+              raise SystemExit("labcolors-protocol must disable Core default capabilities")
+          if protocol_core["features"] != ["wcag22-feasibility"]:
+              raise SystemExit(
+                  "labcolors-protocol must own exactly wcag22-feasibility, got "
+                  f"{protocol_core['features']}"
+              )
 
-          feature_tree="$(cargo tree -p labcolors-wasm --edges normal -e features)"
-          if grep -Fq 'labcolors-core feature "wcag22-feasibility"' <<<"$feature_tree"; then
-            echo "labcolors-wasm resolved an unprojected core capability" >&2
-            exit 1
-          fi
-          echo "core capability projection: PASS"
+          for consumer in consumers:
+              core_dependencies = [
+                  dependency
+                  for dependency in packages[consumer]["dependencies"]
+                  if dependency["name"] == "labcolors-core" and dependency["kind"] is None
+              ]
+              if len(core_dependencies) != 1:
+                  raise SystemExit(f"{consumer} must have one normal labcolors-core edge")
+              core_dependency = core_dependencies[0]
+              if core_dependency["uses_default_features"]:
+                  raise SystemExit(f"{consumer} must disable Core default capabilities")
+              if core_dependency["features"]:
+                  raise SystemExit(
+                      f"{consumer} direct Core edge must own no optional capability, got "
+                      f"{core_dependency['features']}"
+                  )
+              protocol_dependencies = [
+                  dependency
+                  for dependency in packages[consumer]["dependencies"]
+                  if dependency["name"] == "labcolors-protocol" and dependency["kind"] is None
+              ]
+              if len(protocol_dependencies) != 1:
+                  raise SystemExit(f"{consumer} must have one normal labcolors-protocol edge")
+              feature_tree = subprocess.check_output(
+                  ["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"],
+                  text=True,
+              )
+              if 'labcolors-core feature "wcag22-feasibility"' not in feature_tree:
+                  raise SystemExit(
+                      f"{consumer} did not resolve protocol-owned wcag22-feasibility"
+                  )
+
+          print("core capability projection: PASS")
+          PY
       - name: reject WCAG22 source-route redirects and proof vacuums
         run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
@@ -278,13 +315,25 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
-          if test "$GITHUB_EVENT_NAME" = pull_request; then
+          historical_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
+          historical_root="$RUNNER_TEMP/wcag22-feasibility-slice-a-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git worktree add --detach "$historical_root" "$historical_snapshot"
+          cleanup_history() {
+            git worktree remove --force "$historical_root"
+          }
+          trap cleanup_history EXIT
+          (
+            cd "$historical_root"
             python3 scripts/check_wcag22_feasibility_benchmark.py \
-              "$artifact" "${protocol[@]}" --self-test
-          fi
-          python3 scripts/check_wcag22_feasibility_benchmark.py \
-            "$artifact" "${protocol[@]}" \
-            --verify-current-subjects \
+              "$artifact" "${protocol[@]}" \
+              --verify-current-subjects \
+              --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
+              --self-test
+          )
+          cleanup_history
+          trap - EXIT
+          python3 scripts/check_wcag22_feasibility_applicability.py \
+            "$artifact" \
             --artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e \
             --self-test
 
@@ -392,10 +441,32 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
+      - name: "verify committed #295 canonical whole-call WASM boundary evidence"
+        # The admitted JSON binds exact deterministic bytes/shapes and the
+        # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
+        # latency/maxRSS/pages remain observations only.
+        working-directory: packages/colors
+        run: >-
+          node bench/wcag22-feasibility-boundary.bench.mjs
+          --verify
+      - name: independently fingerprint the exact #295 WASM
+        run: |
+          bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
+          sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
+          echo "canonical candidate raw=${bytes}B sha256=${sha256}"
+      - name: "upload exact #295 verified whole-call evidence"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v1.json
+            packages/colors/pkg/labcolors_bg.wasm
+          if-no-files-found: error
+          retention-days: 30
       - name: enforce measured WASM raw-byte budget
-        # Issue #284 owns the immutable measured ceiling baseline. The checker
-        # separately binds this current Linux x64 artifact's exact SHA-256 and
-        # rejects growth above that ceiling. gzip is transport diagnostics only.
+        # Issue #295 owns the current exact Linux x64 measurement and zero-headroom
+        # ceiling. Issue #284 remains the immutable V1 build-recipe/baseline input.
+        # gzip is transport diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve

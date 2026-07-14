@@ -3,8 +3,8 @@
 Swift-поверхность динамического Rust-ядра через UniFFI: сгенерированный Swift
 вызывает `labcolors-core` в runtime, а не сериализует токены на сборке.
 Экспортируется рантайм-контраст-ядро (см. `crates/labcolors-ffi`): контраст,
-резолв, лестницы, подложка→α, legacy-координата `muddiness` и low-level Glow
-point decision с обязательным numerical profile.
+резолв, лестницы, подложка→α, legacy-координата `muddiness`, low-level Glow
+point decision и versioned WCAG 2.2 feasibility byte protocol.
 
 Исторически названная `muddiness` поверхность — это
 `experimental compatibility proxy`: она сохраняет прежний числовой API и его
@@ -20,9 +20,10 @@ Linux x86_64. Оно не является аттестацией Apple ABI, mac
 
 - `Package.swift` — SwiftPM: системный модуль (`labcolorsFFI`) + Swift-обёртка
   (`LabColors`) + conformance-тесты.
-- `Sources/LabColors`, `Sources/labcolorsFFI` — **генерируются в CI**
-  (uniffi-bindgen), в репозитории лишь `.gitkeep`. Коммитить сгенерированное не
-  нужно — оно производно от `crates/labcolors-ffi`.
+- `Sources/LabColors/Wcag22FeasibilityProtocol.swift` — hand-written строгая
+  `Codable`-проекция `Success(feasibility) / Failure(error)` и host-preflight;
+  остальные Swift/C sources **генерируются в CI** (uniffi-bindgen) и не
+  коммитятся.
 - `Tests/LabColorsConformanceTests` — прогон закоммиченного пака
   `conformance/vectors/*.json` против выхода FFI.
 
@@ -46,7 +47,7 @@ docker run --rm -v "$PWD":/src:ro \
 
 Историческая аттестация pack `1.0.0` (числа, версии, платформа):
 `docs/conformance/local-swift-attestation.md`; она явно superseded для текущего
-pack `2.0.0` и не подменяет новый CI-прогон. Нативный macOS/arm64 path сейчас
+pack `5.0.0` и не подменяет новый CI-прогон. Нативный macOS/arm64 path сейчас
 представлен только ручной reference-джобой
 `swift-conformance-macos-reference` (`workflow_dispatch`): это **не gate** PR,
 `main` или release. Полная platform/runtime-матрица остаётся отдельной работой
@@ -89,3 +90,35 @@ provenance и target outcome. `indeterminate` является stable отказ
 успешной валидации, неизвестный численный variant или новый `Unreachable`
 считаются `ColorError.IncompatibleCoreContract`; adapter не выдаёт им
 выдуманный fallback-code.
+
+## Feasibility byte protocol
+
+`evaluateWcag22Feasibility(_:)` принимает только `Data` или `[UInt8]`. Swift
+сравнивает точный byte count с protocol-owned ceiling до сырой UniFFI-копии;
+для oversize вызывает scalar helper, а Rust повторяет authoritative limit на
+каждом raw-вызове. Результат — исчерпывающий `Codable` sum
+`Wcag22FeasibilityOutcomeV1`: semantic input/Core error остаётся
+`Failure(error)` data, а не exception, fallback или цветовым решением.
+
+Swift не вычисляет WCAG, не сортирует отношения и не строит partition. Он
+декодирует Core-owned ordered domain, canonical relations, candidate-major
+LSB0 failure matrix и proof. Pack 5 replay независимо проверяет 256 triples,
+`32E`-byte matrix, 32-byte partition, LSB0 query law и opaque-ID invariance.
+
+Linux gate дополнительно публикует emit-first
+`uniffi-swift-observation-v1.json`: exact checkout SHA, pinned container,
+manifest/family/benchmark/FFI hashes, четыре extreme shape,
+request/output/submitted bytes, limit+1 preflight и peak RSS. Sample count и
+profile limits читаются из Core admission artifact, а не повторяются. Статус
+намеренно `observed-not-admitted`, latency/memory thresholds равны `null`;
+локальные macOS-числа не становятся evidence. Структурный checker и
+отрицательные мутации запрещают дрейф provenance/copy law, потерю shape и
+ложный admission. После первого exact-head CI JSON можно отдельно заморозить
+как durable Linux observation, не превращая измерение в научную константу.
+
+Latency начинается после построения request envelope и покрывает
+Swift-wrapper → UniFFI → protocol/Core → typed outcome decode. Peak RSS —
+максимум двух отдельных focused `swift test` процессов; он включает
+SwiftPM/XCTest и заранее построенные extreme envelopes. Эти scope-строки —
+обязательная часть проверяемого JSON, поэтому измерение нельзя молча выдать за
+чистое время Core или за incremental allocation одного вызова.

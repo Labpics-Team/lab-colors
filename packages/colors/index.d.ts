@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+
 // Public types for @labpics/colors.
 //
 // Re-exports the wasm-bindgen-generated types (the rich `ResolvedTheme` /
@@ -7,6 +9,7 @@
 import type {
   Wcag22AssessmentV1,
   Wcag22CriterionV1,
+  Wcag22FeasibilityOutcomeV1,
 } from "./pkg/labcolors.js";
 
 export {
@@ -23,6 +26,14 @@ export declare function evaluateWcag22(
   background: string,
   criterion: Wcag22CriterionV1,
 ): Wcag22AssessmentV1;
+
+/** Exact derived V1 request ceiling, available after WASM initialization. */
+export declare function wcag22FeasibilityMaxBytes(): number;
+
+/** Evaluate one strict V1 UTF-8 JSON byte envelope; protocol failures are data. */
+export declare function evaluateWcag22Feasibility(
+  request: Uint8Array,
+): Wcag22FeasibilityOutcomeV1;
 
 // Curated public schema/result surface. wasm-bindgen's InitOutput and raw
 // __wbg_* ABI helpers remain implementation details.
@@ -71,6 +82,8 @@ export type {
   Wcag22DecisionV1,
   Wcag22Q55BoundsV1,
   Wcag22AssessmentV1,
+  Wcag22FeasibilityRequestV1,
+  Wcag22FeasibilityOutcomeV1,
 } from "./pkg/labcolors.js";
 
 export { applyTheme } from "./apply-theme.js";

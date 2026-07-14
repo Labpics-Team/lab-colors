@@ -1,6 +1,6 @@
 // Public types for the adaptive hysteresis controller.
 
-import type { LabColors, ThemeName } from "./pkg/labcolors.js";
+import type { LabColors, ThemeName } from "./index.js";
 
 export interface AdaptThemeOptions {
   /**

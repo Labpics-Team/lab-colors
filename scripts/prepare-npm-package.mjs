@@ -28,6 +28,7 @@ const CONFORMANCE_FILES = [
   "solve.json",
   "muddiness.json",
   "wcag22.json",
+  "wcag22-feasibility.json",
 ];
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");

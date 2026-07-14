@@ -37,6 +37,7 @@ const CONFORMANCE_FAMILY_FILES = [
   "solve.json",
   "muddiness.json",
   "wcag22.json",
+  "wcag22-feasibility.json",
 ];
 const WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
 
@@ -478,9 +479,609 @@ function validateCapabilityManifest(capabilities) {
   }
 }
 
+const FEASIBILITY_VECTOR_KEYS_V1 = ["caseId", "outcomeJson", "requestJson"];
+const FEASIBILITY_CASES_V1 = new Map([
+  ["text-default-seven", { terminal: "feasible", count: 7 }],
+  ["text-default-two", { terminal: "feasible", count: 2 }],
+  ["text-default-zero", { terminal: "infeasible", count: 0 }],
+  ["text-large-scale-ninety-two", { terminal: "feasible", count: 92 }],
+  ["ui-component-ninety-two", { terminal: "feasible", count: 92 }],
+  ["graphical-object-ninety-two", { terminal: "feasible", count: 92 }],
+  ["ui-component-fifty-nine", { terminal: "feasible", count: 59 }],
+  ["mixed-not-applicable", { terminal: "feasible" }],
+  ["all-not-applicable", { terminal: "notEvaluated" }],
+  ["conflicting-relation-id", { failure: "conflict" }],
+  ["raw-adjacent-resource-rejection", { failure: "resource" }],
+  ["opaque-identity-a", { terminal: "feasible" }],
+  ["opaque-identity-b", { terminal: "feasible" }],
+]);
+const FEASIBILITY_CRITERIA_V1 = new Set([
+  "sc-1.4.3-text-default",
+  "sc-1.4.3-text-large-scale",
+  "sc-1.4.11-ui-component-or-state",
+  "sc-1.4.11-graphical-object",
+]);
+const FEASIBILITY_PROPORTIONAL_KEYS_V1 = new Set([
+  "assessments",
+  "cells",
+  "feasibleCandidates",
+  "infeasibleCandidates",
+]);
+const FEASIBILITY_PROOF_KEYS_V1 = [
+  "applicableEdges",
+  "applicableRelations",
+  "artifactId",
+  "boundId",
+  "canonicalRelations",
+  "domainCount",
+  "domainDigest",
+  "domainFirst",
+  "domainId",
+  "domainLast",
+  "evaluationId",
+  "logicalAssessments",
+  "matrixDigest",
+  "notApplicableRelations",
+  "partition",
+  "proofId",
+  "proofSha256",
+  "relationSetDigest",
+  "resourceProfileId",
+  "wcag22ProfileId",
+];
+const FEASIBILITY_DOMAIN_SEPARATOR_V1 = Buffer.from(
+  "labcolors/wcag22-feasibility/domain/v1\0",
+  "utf8",
+);
+const FEASIBILITY_RELATION_SEPARATOR_V1 = Buffer.from(
+  "labcolors/wcag22-feasibility/relations/v1\0",
+  "utf8",
+);
+const FEASIBILITY_EVALUATION_SEPARATOR_V1 = Buffer.from(
+  "labcolors/wcag22-feasibility/evaluation/v1\0",
+  "utf8",
+);
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function exactKeys(value, expected, label) {
+  if (!isRecord(value)) fail(`${label} must be an object`);
+  const actual = Object.keys(value).sort();
+  const canonical = [...expected].sort();
+  if (!isDeepStrictEqual(actual, canonical)) {
+    fail(`${label} fields ${JSON.stringify(actual)} differ from ${JSON.stringify(canonical)}`);
+  }
+}
+
+function canonicalJson(source, label) {
+  if (typeof source !== "string" || source.length === 0) fail(`${label} must be non-empty JSON text`);
+  let value;
+  try {
+    value = JSON.parse(source);
+  } catch (error) {
+    fail(`${label} is not valid JSON: ${error.message}`);
+  }
+  if (JSON.stringify(value) !== source) fail(`${label} is not canonical compact JSON`);
+  return value;
+}
+
+function decimalU64(value, label) {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    fail(`${label} must be a canonical decimal u64 string`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > 18_446_744_073_709_551_615n) fail(`${label} exceeds u64`);
+  return parsed;
+}
+
+function byteArray(value, expectedLength, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== expectedLength ||
+    !value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+  ) {
+    fail(`${label} must contain exactly ${expectedLength} byte values`);
+  }
+}
+
+function u64be(value, label) {
+  const parsed = BigInt(value);
+  if (parsed < 0n || parsed > 18_446_744_073_709_551_615n) {
+    fail(`${label} is outside u64`);
+  }
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64BE(parsed);
+  return bytes;
+}
+
+function updateLengthPrefixed(hasher, value, label) {
+  const bytes = Buffer.from(value, "utf8");
+  hasher.update(u64be(bytes.length, `${label}.length`));
+  hasher.update(bytes);
+}
+
+function requireDigest(actual, expected, label) {
+  byteArray(actual, 32, label);
+  if (!Buffer.from(actual).equals(expected)) {
+    fail(`${label} does not bind its canonical preimage`);
+  }
+}
+
+function neutralAxisDomainV1() {
+  return Array.from({ length: 256 }, (_, value) => [value, value, value]);
+}
+
+function feasibilityDomainDigestV1(domainId, domain) {
+  const hasher = createHash("sha256");
+  hasher.update(FEASIBILITY_DOMAIN_SEPARATOR_V1);
+  updateLengthPrefixed(hasher, domainId, "domainId");
+  hasher.update(u64be(domain.length, "domainCount"));
+  for (const candidate of domain) hasher.update(Buffer.from(candidate));
+  return hasher.digest();
+}
+
+function feasibilityRelationSetDigestV1(relations) {
+  const hasher = createHash("sha256");
+  hasher.update(FEASIBILITY_RELATION_SEPARATOR_V1);
+  hasher.update(u64be(relations.length, "canonicalRelations"));
+  for (const relation of relations) {
+    if (relation.kind === "applicable") {
+      hasher.update(Buffer.from([1]));
+      updateLengthPrefixed(hasher, relation.relationId, "relationId");
+      updateLengthPrefixed(hasher, relation.occurrenceId, "occurrenceId");
+      updateLengthPrefixed(hasher, relation.criterion, "criterion");
+      hasher.update(u64be(relation.adjacent.length, "adjacentCount"));
+      for (const adjacent of relation.adjacent) hasher.update(Buffer.from(adjacent));
+    } else {
+      hasher.update(Buffer.from([2]));
+      updateLengthPrefixed(hasher, relation.relationId, "relationId");
+      updateLengthPrefixed(hasher, relation.occurrenceId, "occurrenceId");
+      updateLengthPrefixed(hasher, relation.reasonId, "reasonId");
+    }
+  }
+  return hasher.digest();
+}
+
+function feasibilityEvaluationIdV1({ proof, counts, matrixDigest, atomicProofSha256 }) {
+  const hasher = createHash("sha256");
+  hasher.update(FEASIBILITY_EVALUATION_SEPARATOR_V1);
+  hasher.update(Buffer.from(proof.domainDigest));
+  hasher.update(Buffer.from(proof.relationSetDigest));
+  for (const [field, value] of [
+    ["wcag22ProfileId", proof.wcag22ProfileId],
+    ["artifactId", proof.artifactId],
+    ["boundId", proof.boundId],
+    ["proofId", proof.proofId],
+  ]) {
+    updateLengthPrefixed(hasher, value, field);
+  }
+  hasher.update(atomicProofSha256);
+  for (const [field, value] of [
+    ["canonicalRelations", counts.canonicalRelations],
+    ["applicableRelations", counts.applicableRelations],
+    ["notApplicableRelations", counts.notApplicableRelations],
+    ["applicableEdges", counts.applicableEdges],
+    ["logicalAssessments", counts.logicalAssessments],
+    ["packedResultBytes", counts.packedResultBytes],
+  ]) {
+    hasher.update(u64be(value, field));
+  }
+  hasher.update(matrixDigest);
+  hasher.update(Buffer.from(proof.partition));
+  return hasher.digest();
+}
+
+function rgb(value, label) {
+  byteArray(value, 3, label);
+}
+
+function walkNoProportionalDto(value, label) {
+  if (Array.isArray(value)) {
+    for (const child of value) walkNoProportionalDto(child, label);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    if (FEASIBILITY_PROPORTIONAL_KEYS_V1.has(key)) {
+      fail(`${label} contains forbidden proportional field ${key}`);
+    }
+    walkNoProportionalDto(child, label);
+  }
+}
+
+function validateFeasibilityRelation(relation, label) {
+  if (relation?.kind === "applicable") {
+    exactKeys(
+      relation,
+      ["adjacent", "criterion", "kind", "occurrenceId", "relationId"],
+      label,
+    );
+    if (!FEASIBILITY_CRITERIA_V1.has(relation.criterion)) {
+      fail(`${label} has unsupported criterion ${relation.criterion}`);
+    }
+    if (!Array.isArray(relation.adjacent) || relation.adjacent.length === 0) {
+      fail(`${label} must declare non-empty adjacency`);
+    }
+    relation.adjacent.forEach((value, index) => rgb(value, `${label}.adjacent[${index}]`));
+  } else if (relation?.kind === "notApplicable") {
+    exactKeys(relation, ["kind", "occurrenceId", "reasonId", "relationId"], label);
+    if (typeof relation.reasonId !== "string" || relation.reasonId.length === 0) {
+      fail(`${label} must declare a non-empty reasonId`);
+    }
+  } else {
+    fail(`${label} has unsupported kind ${relation?.kind}`);
+  }
+  for (const field of ["relationId", "occurrenceId"]) {
+    if (typeof relation[field] !== "string" || relation[field].length === 0) {
+      fail(`${label}.${field} must be a non-empty opaque string`);
+    }
+  }
+}
+
+function validateFeasibilityRequest(source, caseId) {
+  const request = canonicalJson(source, `${caseId}.requestJson`);
+  exactKeys(
+    request,
+    ["domainId", "relations", "resourceProfileId", "schemaVersion"],
+    `${caseId}.request`,
+  );
+  if (
+    request.schemaVersion !== 1 ||
+    request.domainId !== "srgb8-neutral-axis-v1" ||
+    request.resourceProfileId !== "compile-v1"
+  ) {
+    fail(`${caseId}.request has unsupported version/domain/profile`);
+  }
+  if (!Array.isArray(request.relations) || request.relations.length === 0) {
+    fail(`${caseId}.request must contain relations`);
+  }
+  request.relations.forEach((relation, index) =>
+    validateFeasibilityRelation(relation, `${caseId}.request.relations[${index}]`));
+  return request;
+}
+
+function compareRgb(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+function canonicalRelations(relations) {
+  const values = relations.map((relation) => {
+    if (relation.kind !== "applicable") return structuredClone(relation);
+    const adjacent = [...relation.adjacent].sort(compareRgb);
+    const unique = adjacent.filter(
+      (value, index) => index === 0 || compareRgb(value, adjacent[index - 1]) !== 0,
+    );
+    return { ...structuredClone(relation), adjacent: unique };
+  });
+  values.sort((left, right) =>
+    Buffer.compare(Buffer.from(left.relationId, "utf8"), Buffer.from(right.relationId, "utf8")));
+  return values.filter(
+    (value, index) => index === 0 || !isDeepStrictEqual(value, values[index - 1]),
+  );
+}
+
+function packedBit(bytes, logicalIndex) {
+  return (bytes[Math.floor(logicalIndex / 8)] & (1 << (logicalIndex % 8))) !== 0;
+}
+
+function validateEvaluatedFeasibility(
+  result,
+  request,
+  status,
+  caseId,
+  atomicProofSha256,
+) {
+  exactKeys(result, ["domain", "failureMatrix", "proof", "relations"], `${caseId}.result`);
+  if (!Array.isArray(result.domain) || result.domain.length !== 256) {
+    fail(`${caseId}.domain must contain exactly 256 candidates`);
+  }
+  result.domain.forEach((candidate, index) => {
+    rgb(candidate, `${caseId}.domain[${index}]`);
+    if (!isDeepStrictEqual(candidate, [index, index, index])) {
+      fail(`${caseId}.domain candidate ${index} is not the registered neutral-axis value`);
+    }
+  });
+  if (!Array.isArray(result.relations) || result.relations.length === 0) {
+    fail(`${caseId}.result must retain canonical relations once`);
+  }
+  result.relations.forEach((relation, index) =>
+    validateFeasibilityRelation(relation, `${caseId}.result.relations[${index}]`));
+  if (!isDeepStrictEqual(result.relations, canonicalRelations(request.relations))) {
+    fail(`${caseId}.result relations differ from independent canonical request projection`);
+  }
+
+  const proof = result.proof;
+  exactKeys(proof, FEASIBILITY_PROOF_KEYS_V1, `${caseId}.proof`);
+  for (const [field, value] of [
+    ["evaluationId", proof.evaluationId],
+    ["domainDigest", proof.domainDigest],
+    ["relationSetDigest", proof.relationSetDigest],
+    ["matrixDigest", proof.matrixDigest],
+    ["partition", proof.partition],
+    ["proofSha256", proof.proofSha256],
+  ]) {
+    byteArray(value, 32, `${caseId}.proof.${field}`);
+  }
+  rgb(proof.domainFirst, `${caseId}.proof.domainFirst`);
+  rgb(proof.domainLast, `${caseId}.proof.domainLast`);
+  if (
+    proof.resourceProfileId !== "compile-v1" ||
+    proof.domainId !== "srgb8-neutral-axis-v1" ||
+    proof.wcag22ProfileId !== "wcag22-srgb8-contrast-v1" ||
+    proof.artifactId !== "wcag22-srgb8-luminance-q55-v1" ||
+    proof.boundId !== "wcag22-srgb8-outward-q55-v1" ||
+    proof.proofId !== "wcag22-srgb8-full-domain-q55-v1"
+  ) {
+    fail(`${caseId}.proof typed identities drifted`);
+  }
+  if (
+    !isDeepStrictEqual(proof.domainFirst, [0, 0, 0]) ||
+    !isDeepStrictEqual(proof.domainLast, [255, 255, 255])
+  ) {
+    fail(`${caseId}.proof domain endpoints drifted`);
+  }
+  requireDigest(
+    proof.domainDigest,
+    feasibilityDomainDigestV1(proof.domainId, result.domain),
+    `${caseId}.proof.domainDigest`,
+  );
+  requireDigest(
+    proof.relationSetDigest,
+    feasibilityRelationSetDigestV1(result.relations),
+    `${caseId}.proof.relationSetDigest`,
+  );
+  requireDigest(proof.proofSha256, atomicProofSha256, `${caseId}.proof.proofSha256`);
+
+  const counts = Object.fromEntries(
+    [
+      "domainCount",
+      "canonicalRelations",
+      "applicableRelations",
+      "notApplicableRelations",
+      "applicableEdges",
+      "logicalAssessments",
+    ].map((field) => [field, decimalU64(proof[field], `${caseId}.proof.${field}`)]),
+  );
+  const applicable = result.relations.filter((relation) => relation.kind === "applicable");
+  const notApplicable = result.relations.length - applicable.length;
+  const edges = applicable.reduce((sum, relation) => sum + relation.adjacent.length, 0);
+  if (
+    counts.domainCount !== 256n ||
+    counts.canonicalRelations !== BigInt(result.relations.length) ||
+    counts.applicableRelations !== BigInt(applicable.length) ||
+    counts.notApplicableRelations !== BigInt(notApplicable) ||
+    counts.applicableEdges !== BigInt(edges) ||
+    counts.logicalAssessments !== 256n * BigInt(edges)
+  ) {
+    fail(`${caseId}.proof decimal counts disagree with transported content`);
+  }
+  byteArray(result.failureMatrix, 32 * edges, `${caseId}.failureMatrix`);
+  const matrixDigest = createHash("sha256").update(Buffer.from(result.failureMatrix)).digest();
+  requireDigest(proof.matrixDigest, matrixDigest, `${caseId}.proof.matrixDigest`);
+
+  let feasibleCount = 0;
+  for (let candidate = 0; candidate < 256; candidate += 1) {
+    let hasFailure = false;
+    for (let edge = 0; edge < edges; edge += 1) {
+      hasFailure ||= packedBit(result.failureMatrix, candidate * edges + edge);
+    }
+    const feasible = !hasFailure;
+    if (packedBit(proof.partition, candidate) !== feasible) {
+      fail(`${caseId}.partition is not the candidate-major LSB0 all-edge reduction`);
+    }
+    feasibleCount += Number(feasible);
+  }
+  if ((status === "feasible") !== (feasibleCount > 0)) {
+    fail(`${caseId}.${status} contradicts its complete partition`);
+  }
+  requireDigest(
+    proof.evaluationId,
+    feasibilityEvaluationIdV1({
+      proof,
+      matrixDigest,
+      atomicProofSha256,
+      counts: {
+        ...counts,
+        packedResultBytes: BigInt(result.failureMatrix.length + proof.partition.length),
+      },
+    }),
+    `${caseId}.proof.evaluationId`,
+  );
+  return feasibleCount;
+}
+
+function validateNotEvaluatedFeasibility(result, request, caseId) {
+  exactKeys(
+    result,
+    ["domainDigest", "domainId", "relationSetDigest", "relations", "resourceProfileId"],
+    `${caseId}.result`,
+  );
+  if (
+    result.domainId !== "srgb8-neutral-axis-v1" ||
+    result.resourceProfileId !== "compile-v1"
+  ) {
+    fail(`${caseId}.NotEvaluated typed identities drifted`);
+  }
+  byteArray(result.domainDigest, 32, `${caseId}.domainDigest`);
+  byteArray(result.relationSetDigest, 32, `${caseId}.relationSetDigest`);
+  if (
+    !Array.isArray(result.relations) ||
+    result.relations.some((relation) => relation?.kind !== "notApplicable")
+  ) {
+    fail(`${caseId}.NotEvaluated must retain only declared NotApplicable relations`);
+  }
+  result.relations.forEach((relation, index) =>
+    validateFeasibilityRelation(relation, `${caseId}.result.relations[${index}]`));
+  if (!isDeepStrictEqual(result.relations, canonicalRelations(request.relations))) {
+    fail(`${caseId}.NotEvaluated relations differ from its canonical request`);
+  }
+  requireDigest(
+    result.domainDigest,
+    feasibilityDomainDigestV1(result.domainId, neutralAxisDomainV1()),
+    `${caseId}.domainDigest`,
+  );
+  requireDigest(
+    result.relationSetDigest,
+    feasibilityRelationSetDigestV1(result.relations),
+    `${caseId}.relationSetDigest`,
+  );
+}
+
+function validateFeasibilityFailure(outcome, expectation, request, caseId) {
+  exactKeys(outcome, ["error", "outcome", "schemaVersion"], `${caseId}.outcome`);
+  exactKeys(outcome.error, ["error", "source"], `${caseId}.error`);
+  if (outcome.error.source !== "core") fail(`${caseId} must preserve a Core failure`);
+  const error = outcome.error.error;
+  if (expectation.failure === "conflict") {
+    exactKeys(error, ["code", "details"], `${caseId}.coreError`);
+    exactKeys(error.details, ["code", "relationId"], `${caseId}.coreError.details`);
+    const conflictingIds = new Set();
+    for (const relation of request.relations) {
+      const peers = request.relations.filter(
+        (candidate) => candidate.relationId === relation.relationId,
+      );
+      if (peers.some((candidate) => !isDeepStrictEqual(candidate, relation))) {
+        conflictingIds.add(relation.relationId);
+      }
+    }
+    if (
+      error.code !== "invalidRequest" ||
+      error.details.code !== "conflictingRelationId" ||
+      !conflictingIds.has(error.details.relationId)
+    ) {
+      fail(`${caseId} does not preserve the conflicting relation failure`);
+    }
+    return;
+  }
+  exactKeys(error, ["code", "details"], `${caseId}.coreError`);
+  exactKeys(
+    error.details,
+    ["dimension", "limit", "profileId", "requested"],
+    `${caseId}.coreError.details`,
+  );
+  const rawAdjacent = request.relations.reduce(
+    (sum, relation) => sum + (relation.kind === "applicable" ? relation.adjacent.length : 0),
+    0,
+  );
+  if (
+    error.code !== "resourceLimitExceeded" ||
+    error.details.profileId !== "compile-v1" ||
+    error.details.dimension !== "rawAdjacentEntries" ||
+    decimalU64(error.details.requested, `${caseId}.requested`) !== BigInt(rawAdjacent) ||
+    decimalU64(error.details.limit, `${caseId}.limit`) !== 2_047n ||
+    rawAdjacent !== 2_048
+  ) {
+    fail(`${caseId} does not preserve the exact raw-adjacent resource failure`);
+  }
+}
+
+/** Independently validate the complete pack-5 feasibility family. */
+export function validateWcag22FeasibilityFamily(family, atomicProofSha256Hex) {
+  if (!/^[0-9a-f]{64}$/u.test(atomicProofSha256Hex ?? "")) {
+    fail("WCAG22 feasibility validation requires the canonical atomic proof SHA-256");
+  }
+  const atomicProofSha256 = Buffer.from(atomicProofSha256Hex, "hex");
+  if (!Array.isArray(family) || family.length !== FEASIBILITY_CASES_V1.size) {
+    fail(`wcag22-feasibility family must contain exactly ${FEASIBILITY_CASES_V1.size} vectors`);
+  }
+  const byCase = new Map();
+  for (const [index, vector] of family.entries()) {
+    exactKeys(vector, FEASIBILITY_VECTOR_KEYS_V1, `wcag22-feasibility[${index}]`);
+    if (typeof vector.caseId !== "string" || !FEASIBILITY_CASES_V1.has(vector.caseId)) {
+      fail(`wcag22-feasibility[${index}] has unknown caseId ${vector.caseId}`);
+    }
+    if (byCase.has(vector.caseId)) fail(`duplicate wcag22-feasibility caseId ${vector.caseId}`);
+    const expectation = FEASIBILITY_CASES_V1.get(vector.caseId);
+    const request = validateFeasibilityRequest(vector.requestJson, vector.caseId);
+    const outcome = canonicalJson(vector.outcomeJson, `${vector.caseId}.outcomeJson`);
+    walkNoProportionalDto(outcome, `${vector.caseId}.outcome`);
+    if (outcome.schemaVersion !== 1) fail(`${vector.caseId}.outcome schemaVersion must be 1`);
+
+    let evaluated;
+    let feasibleCount;
+    if (expectation.failure) {
+      if (outcome.outcome !== "failure") fail(`${vector.caseId} must be a failure outcome`);
+      validateFeasibilityFailure(outcome, expectation, request, vector.caseId);
+    } else {
+      exactKeys(
+        outcome,
+        ["feasibility", "outcome", "schemaVersion"],
+        `${vector.caseId}.outcome`,
+      );
+      if (outcome.outcome !== "success") fail(`${vector.caseId} must be a success outcome`);
+      exactKeys(outcome.feasibility, ["result", "status"], `${vector.caseId}.feasibility`);
+      if (outcome.feasibility.status !== expectation.terminal) {
+        fail(`${vector.caseId} terminal ${outcome.feasibility.status} != ${expectation.terminal}`);
+      }
+      if (expectation.terminal === "notEvaluated") {
+        validateNotEvaluatedFeasibility(outcome.feasibility.result, request, vector.caseId);
+      } else {
+        evaluated = outcome.feasibility.result;
+        feasibleCount = validateEvaluatedFeasibility(
+          evaluated,
+          request,
+          expectation.terminal,
+          vector.caseId,
+          atomicProofSha256,
+        );
+        if (expectation.count !== undefined && feasibleCount !== expectation.count) {
+          fail(`${vector.caseId} feasible count ${feasibleCount} != ${expectation.count}`);
+        }
+      }
+    }
+    byCase.set(vector.caseId, { vector, request, outcome, evaluated, feasibleCount });
+  }
+
+  const opaqueARecord = byCase.get("opaque-identity-a");
+  const opaqueBRecord = byCase.get("opaque-identity-b");
+  const opaqueA = opaqueARecord?.evaluated;
+  const opaqueB = opaqueBRecord?.evaluated;
+  if (!opaqueA || !opaqueB || !opaqueARecord || !opaqueBRecord) {
+    fail("opaque identity fixtures must both be evaluated");
+  }
+  const physicalRequest = (request) => ({
+    ...request,
+    relations: request.relations.map(({ relationId, occurrenceId, ...physical }) => physical),
+  });
+  if (
+    !isDeepStrictEqual(
+      physicalRequest(opaqueARecord.request),
+      physicalRequest(opaqueBRecord.request),
+    ) ||
+    opaqueARecord.request.relations.some(
+      (relation, index) =>
+        relation.relationId === opaqueBRecord.request.relations[index]?.relationId ||
+        relation.occurrenceId === opaqueBRecord.request.relations[index]?.occurrenceId,
+    )
+  ) {
+    fail("opaque identity fixtures must differ only in client-owned identities");
+  }
+  for (const field of ["domain", "failureMatrix"]) {
+    if (!isDeepStrictEqual(opaqueA[field], opaqueB[field])) {
+      fail(`opaque identities changed physical ${field}`);
+    }
+  }
+  for (const field of ["partition", "matrixDigest", "domainDigest", "proofSha256"]) {
+    if (!isDeepStrictEqual(opaqueA.proof[field], opaqueB.proof[field])) {
+      fail(`opaque identities changed physical proof ${field}`);
+    }
+  }
+  for (const field of ["relationSetDigest", "evaluationId"]) {
+    if (isDeepStrictEqual(opaqueA.proof[field], opaqueB.proof[field])) {
+      fail(`opaque identities did not change declared ${field}`);
+    }
+  }
+  return byCase;
+}
+
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "4.0.0") {
-    fail(`release requires conformance pack 4.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "5.0.0") {
+    fail(`release requires conformance pack 5.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -489,6 +1090,9 @@ async function validateConformance(conformance) {
   const familyBuffers = await Promise.all(
     CONFORMANCE_FAMILY_FILES.map((name) => readFile(resolve(CONFORMANCE_DIR, name))),
   );
+  const proofPath = resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
+  const proofBytes = await readFile(proofPath);
+  const proof = await readJson(proofPath);
   const actualDigest = fnv1a32(familyBuffers);
   if (actualDigest !== conformance.packDigest) {
     fail(
@@ -507,7 +1111,15 @@ async function validateConformance(conformance) {
       fail(`${CONFORMANCE_FAMILY_FILES[index]} is not valid JSON: ${error.message}`);
     }
   });
-  const countKeys = ["contrasts", "ladders", "alpha", "solve", "muddiness", "wcag22"];
+  const countKeys = [
+    "contrasts",
+    "ladders",
+    "alpha",
+    "solve",
+    "muddiness",
+    "wcag22",
+    "wcag22Feasibility",
+  ];
   let total = 0;
   for (const [index, key] of countKeys.entries()) {
     const actual = families[index].length;
@@ -519,6 +1131,7 @@ async function validateConformance(conformance) {
   if (conformance.counts?.total !== total) {
     fail(`conformance total=${conformance.counts?.total} differs from ${total}`);
   }
+  validateWcag22FeasibilityFamily(families[6], sha256(proofBytes));
   const halfTie = families[2].find(
     (entry) => entry.tint === "#C0B2FA" && entry.bg === "#000000" && entry.alpha === 0.122,
   );
@@ -531,9 +1144,6 @@ async function validateConformance(conformance) {
       entry.background === "#8212DB" &&
       entry.criterion === "sc-1.4.11-ui-component-or-state",
   );
-  const proofPath = resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
-  const proofBytes = await readFile(proofPath);
-  const proof = await readJson(proofPath);
   if (
     antiEpsilon?.decision !== "fail" ||
     antiEpsilon?.evidenceKind !== "canonical-finite-bounded" ||
@@ -567,12 +1177,48 @@ async function validateConformance(conformance) {
   };
 }
 
-function lockedTypescriptVersion(packageLock) {
-  const version = packageLock.packages?.["node_modules/typescript"]?.version;
+function lockedTypescriptVersion(packageLock, packagePath, label) {
+  const version = packageLock.packages?.[packagePath]?.version;
   if (!/^\d+\.\d+\.\d+(?:[-+].+)?$/u.test(version ?? "")) {
-    fail("package-lock.json does not pin an exact TypeScript compiler version");
+    fail(`package-lock.json does not pin an exact ${label} version`);
   }
   return version;
+}
+
+function lockedTypescriptCompilers(packageJson, packageLock) {
+  const minimumSpec = packageJson.devDependencies?.["typescript-floor"];
+  const minimumDeclared = minimumSpec?.match(
+    /^npm:typescript@(\d+\.\d+\.\d+)$/u,
+  )?.[1];
+  if (!minimumDeclared) {
+    fail("package.json must declare an exact npm:typescript@X.Y.Z consumer floor");
+  }
+  const compilers = [
+    {
+      role: "minimum-consumer",
+      packageDirectory: "typescript-floor",
+      version: lockedTypescriptVersion(
+        packageLock,
+        "node_modules/typescript-floor",
+        "minimum consumer TypeScript",
+      ),
+    },
+    {
+      role: "workspace-locked",
+      packageDirectory: "typescript",
+      version: lockedTypescriptVersion(
+        packageLock,
+        "node_modules/typescript",
+        "workspace TypeScript compiler",
+      ),
+    },
+  ];
+  if (compilers[0].version !== minimumDeclared) {
+    fail(
+      `minimum TypeScript lock ${compilers[0].version} differs from declared ${minimumDeclared}`,
+    );
+  }
+  return compilers;
 }
 
 function lockedNpmVersion(packageJson) {
@@ -587,7 +1233,21 @@ function lockedNpmVersion(packageJson) {
   return declared;
 }
 
-function runtimeSmokeSource() {
+async function wcag22FeasibilitySmokeFixture() {
+  const family = await readJson(resolve(CONFORMANCE_DIR, "wcag22-feasibility.json"));
+  const proofBytes = await readFile(
+    resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json"),
+  );
+  const canonical = validateWcag22FeasibilityFamily(family, sha256(proofBytes))
+    .get("text-default-seven")?.vector;
+  if (!canonical) fail("wcag22-feasibility smoke fixture is missing text-default-seven");
+  return {
+    requestJson: canonical.requestJson,
+    outcomeJson: canonical.outcomeJson,
+  };
+}
+
+function runtimeSmokeSource(feasibilityFixture) {
   return String.raw`
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -596,7 +1256,9 @@ import { createRequire } from "node:module";
 import init, {
   LabColors,
   evaluateWcag22,
+  evaluateWcag22Feasibility,
   numericalCapabilityManifest,
+  wcag22FeasibilityMaxBytes,
 } from "@labpics/colors";
 
 const require = createRequire(import.meta.url);
@@ -613,6 +1275,14 @@ assert.match(metadata.sourceSha, /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u);
 assert.match(metadata.coreVersion, /^\d+\.\d+\.\d+$/u);
 assert.equal(metadata.wasm.bytes, (await readFile(wasmPath)).length);
 await init({ module_or_path: await readFile(wasmPath) });
+
+const feasibilityFixture = ${JSON.stringify(feasibilityFixture)};
+const feasibilityRequest = new TextEncoder().encode(feasibilityFixture.requestJson);
+assert.ok(feasibilityRequest.byteLength <= wcag22FeasibilityMaxBytes());
+assert.equal(
+  JSON.stringify(evaluateWcag22Feasibility(feasibilityRequest)),
+  feasibilityFixture.outcomeJson,
+);
 
 const capability = numericalCapabilityManifest();
 assert.equal(capability.schemaVersion, 2);
@@ -800,7 +1470,9 @@ function typeSmokeSource() {
 import init, {
   LabColors,
   evaluateWcag22,
+  evaluateWcag22Feasibility,
   numericalCapabilityManifest,
+  wcag22FeasibilityMaxBytes,
   type GlowDecisionGuaranteeV1,
   type GlowDeterminateRole,
   type GlowDeterminateRoleBase,
@@ -816,9 +1488,40 @@ import init, {
   type TranslucentRole,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
+  type Wcag22FeasibilityOutcomeV1,
+  type Wcag22FeasibilityRequestV1,
 } from "@labpics/colors";
+import { applyTheme } from "@labpics/colors/apply-theme";
+import {
+  watchTheme,
+  type WatchController,
+  type WatchThemeOptions,
+} from "@labpics/colors/watch-theme";
+import {
+  adaptTheme,
+  type AdaptController,
+  type AdaptThemeOptions,
+} from "@labpics/colors/adapt-theme";
+import {
+  effectiveBackground,
+  type EffectiveBackgroundOptions,
+  type Rgba,
+} from "@labpics/colors/effective-bg";
 
 const initialise: typeof init = init;
+const apply: typeof applyTheme = applyTheme;
+const watch: typeof watchTheme = watchTheme;
+const adapt: typeof adaptTheme = adaptTheme;
+const effective: typeof effectiveBackground = effectiveBackground;
+type PublicSubpathTypes =
+  | WatchController
+  | WatchThemeOptions
+  | AdaptController
+  | AdaptThemeOptions
+  | EffectiveBackgroundOptions
+  | Rgba;
+declare const publicSubpathType: PublicSubpathTypes;
+void [apply, watch, adapt, effective, publicSubpathType];
 const engine = new LabColors();
 const fingerprint: string = engine.loadConfig("{}");
 const resolved: ResolvedTheme = engine.resolveTheme("#000000", "light");
@@ -831,6 +1534,103 @@ const wcagAssessment: Wcag22AssessmentV1 = evaluateWcag22(
 );
 // @ts-expect-error criterion is an explicit closed menu, not an opaque string.
 evaluateWcag22("#000000", "#FFFFFF", "danger");
+
+const feasibilityRequest: Wcag22FeasibilityRequestV1 = {
+  schemaVersion: 1,
+  domainId: "srgb8-neutral-axis-v1",
+  resourceProfileId: "compile-v1",
+  relations: [{
+    relationId: "opaque-client-relation",
+    occurrenceId: "opaque-client-occurrence",
+    kind: "applicable",
+    criterion: "sc-1.4.3-text-default",
+    adjacent: [[118, 118, 118]],
+  }],
+};
+const feasibilityBytes = new TextEncoder().encode(JSON.stringify(feasibilityRequest));
+const feasibilityCeiling: number = wcag22FeasibilityMaxBytes();
+const feasibilityOutcome: Wcag22FeasibilityOutcomeV1 =
+  evaluateWcag22Feasibility(feasibilityBytes);
+// @ts-expect-error byte API rejects strings.
+evaluateWcag22Feasibility(JSON.stringify(feasibilityRequest));
+
+function assertNever(value: never): never {
+  throw new Error("unreachable: " + String(value));
+}
+
+type FeasibilityFailure = Extract<
+  Wcag22FeasibilityOutcomeV1,
+  { readonly outcome: "failure" }
+>["error"];
+type FeasibilityTransportFailure = Extract<
+  FeasibilityFailure,
+  { readonly source: "transport" }
+>["error"];
+type FeasibilityCoreFailure = Extract<
+  FeasibilityFailure,
+  { readonly source: "core" }
+>["error"];
+
+function describeTransportFailure(error: FeasibilityTransportFailure): string {
+  switch (error.code) {
+    case "envelopeTooLarge":
+    case "invalidUtf8":
+    case "malformedEnvelope":
+    case "unsupportedSchemaVersion":
+    case "unsupportedDomainId":
+    case "unsupportedResourceProfileId":
+    case "unsupportedCriterion":
+    case "emptyNotApplicableReason":
+      return error.code;
+    default:
+      return assertNever(error);
+  }
+}
+
+function describeCoreFailure(error: FeasibilityCoreFailure): string {
+  switch (error.code) {
+    case "invalidRequest":
+    case "resourceLimitExceeded":
+    case "allocationFailed":
+    case "evaluatorInvariantViolation":
+    case "compilerInvariantViolation":
+      return error.code;
+    default:
+      return assertNever(error);
+  }
+}
+
+function describeFeasibilityOutcome(outcome: Wcag22FeasibilityOutcomeV1): string {
+  switch (outcome.outcome) {
+    case "success": {
+      const feasibility = outcome.feasibility;
+      switch (feasibility.status) {
+        case "feasible":
+        case "infeasible":
+        case "notEvaluated":
+          return feasibility.status;
+        default:
+          return assertNever(feasibility);
+      }
+    }
+    case "failure": {
+      const failure = outcome.error;
+      switch (failure.source) {
+        case "transport":
+          return describeTransportFailure(failure.error);
+        case "core":
+          return describeCoreFailure(failure.error);
+        case "incompatibleCoreContract":
+          return failure.source;
+        default:
+          return assertNever(failure);
+      }
+    }
+    default:
+      return assertNever(outcome);
+  }
+}
+
 const borderPosition: LadderPositionV1 = "border-strong";
 const config: ThemeConfig = {
   brand: {
@@ -984,6 +1784,11 @@ void [
   fingerprint,
   resolved,
   wcagAssessment,
+  feasibilityRequest,
+  feasibilityBytes,
+  feasibilityCeiling,
+  feasibilityOutcome,
+  describeFeasibilityOutcome,
   capability,
   config,
   alphaContract,
@@ -1001,7 +1806,7 @@ void [
 async function verifyCleanConsumer(
   tarballPath,
   packageJson,
-  packageLock,
+  typescriptCompilers,
   expectedBuildMetadata,
   expectedWcag22Artifacts,
 ) {
@@ -1012,16 +1817,22 @@ async function verifyCleanConsumer(
       `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
     );
 
-    const typescriptVersion = lockedTypescriptVersion(packageLock);
-    const localTypescript = await readJson(
-      resolve(PACKAGE_DIR, "node_modules/typescript/package.json"),
-    );
-    if (localTypescript.version !== typescriptVersion) {
-      fail(
-        `installed TypeScript ${localTypescript.version} differs from lockfile ${typescriptVersion}`,
+    for (const compiler of typescriptCompilers) {
+      const localTypescript = await readJson(
+        resolve(
+          PACKAGE_DIR,
+          "node_modules",
+          compiler.packageDirectory,
+          "package.json",
+        ),
       );
+      if (localTypescript.version !== compiler.version) {
+        fail(
+          `installed ${compiler.role} TypeScript ${localTypescript.version} ` +
+            `differs from lockfile ${compiler.version}`,
+        );
+      }
     }
-    const typescriptCompiler = resolve(PACKAGE_DIR, "node_modules/typescript/bin/tsc");
 
     npm(
       [
@@ -1061,32 +1872,41 @@ async function verifyCleanConsumer(
       fail("clean-installed build metadata differs from the verified release inputs");
     }
 
+    const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
     const runtimePath = resolve(consumer, "smoke.mjs");
     const typesPath = resolve(consumer, "smoke.ts");
-    await writeFile(runtimePath, runtimeSmokeSource());
+    await writeFile(runtimePath, runtimeSmokeSource(feasibilityFixture));
     await writeFile(typesPath, typeSmokeSource());
 
     command(process.execPath, [runtimePath], consumer);
-    command(
-      process.execPath,
-      [
-        typescriptCompiler,
-        "--noEmit",
-        "--strict",
-        "--skipLibCheck",
-        "false",
-        "--target",
-        "ES2022",
-        "--lib",
-        "ES2022,DOM,ESNext.Disposable",
-        "--module",
-        "NodeNext",
-        "--moduleResolution",
-        "NodeNext",
-        typesPath,
-      ],
-      consumer,
-    );
+    for (const compiler of typescriptCompilers) {
+      command(
+        process.execPath,
+        [
+          resolve(
+            PACKAGE_DIR,
+            "node_modules",
+            compiler.packageDirectory,
+            "lib",
+            "tsc.js",
+          ),
+          "--noEmit",
+          "--strict",
+          "--skipLibCheck",
+          "false",
+          "--target",
+          "ES2022",
+          "--lib",
+          "ES2022,DOM",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          typesPath,
+        ],
+        consumer,
+      );
+    }
   } finally {
     await rm(consumer, { recursive: true, force: true });
   }
@@ -1116,8 +1936,9 @@ export async function smokePackedRuntime(tarballPath) {
       ],
       consumer,
     );
+    const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
     const runtimePath = resolve(consumer, "smoke.mjs");
-    await writeFile(runtimePath, runtimeSmokeSource());
+    await writeFile(runtimePath, runtimeSmokeSource(feasibilityFixture));
     command(process.execPath, [runtimePath], consumer);
   } finally {
     await rm(consumer, { recursive: true, force: true });
@@ -1138,6 +1959,7 @@ export async function verifyPackageRelease() {
 
   const coreVersion = workspaceVersion(cargoSource);
   const npmVersion = lockedNpmVersion(packageJson);
+  const typescriptCompilers = lockedTypescriptCompilers(packageJson, packageLock);
   const lockRoot = packageLock.packages?.[""];
   if (packageJson.name !== "@labpics/colors") fail(`unexpected npm package name: ${packageJson.name}`);
   const consumerNodeFloor = packageJson.engines?.node?.match(/^>=(\d+\.\d+\.\d+)$/u)?.[1];
@@ -1205,7 +2027,7 @@ export async function verifyPackageRelease() {
   await verifyCleanConsumer(
     canonicalPack.path,
     packageJson,
-    packageLock,
+    typescriptCompilers,
     buildMetadataValue,
     wcag22Evidence.artifacts,
   );
@@ -1242,9 +2064,10 @@ export async function verifyPackageRelease() {
         npm: npmVersion,
       },
       typescript: {
-        compiler: lockedTypescriptVersion(packageLock),
+        compiler: typescriptCompilers[1].version,
+        minimumConsumerCompiler: typescriptCompilers[0].version,
         target: "ES2022",
-        libraries: ["ES2022", "DOM", "ESNext.Disposable"],
+        libraries: ["ES2022", "DOM"],
         skipLibCheck: false,
       },
     },
@@ -1253,6 +2076,7 @@ export async function verifyPackageRelease() {
       "exact-screen-composite-srgb8-v1",
       "typed-glow-indeterminate-v1",
       "wcag22-srgb8-contrast-v1",
+      "wcag22-feasibility-v1",
     ],
     numericalCapabilities: conformance.numericalCapabilities,
     unsupported: [

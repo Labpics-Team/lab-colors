@@ -1,6 +1,6 @@
 // Public types for the reactive theme runtime.
 
-import type { LabColors, ResolvedTheme, ThemeName } from "./pkg/labcolors.js";
+import type { LabColors, ResolvedTheme, ThemeName } from "./index.js";
 
 export interface WatchThemeOptions {
   /** An initialised `LabColors` engine (after `await init()`). */

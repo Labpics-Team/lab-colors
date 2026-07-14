@@ -5,10 +5,11 @@ Rust различаются, потому что это разные delivery su
 
 ## [Unreleased]
 
-Атомарная numerical-decision граница (#292) и exact WCAG 2.2 evaluator для
-финальной sRGB8-пары (#284). Существующая цветовая эмиссия, config fingerprint
-и adaptive runtime не меняются, но Rust/npm capability API и conformance pack
-изменены; следующий release обязан получить согласованный 0.x version bump.
+Атомарная numerical-decision граница (#292), exact WCAG 2.2 evaluator для
+финальной sRGB8-пары (#284) и bounded complete-feasibility compiler (#295).
+Существующая цветовая эмиссия, config fingerprint и adaptive runtime не
+меняются, но Rust/npm/Swift transport API и conformance pack изменены;
+следующий release обязан получить согласованный 0.x version bump.
 Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 дополнение ADR-0004 от 2026-07-12.
 
@@ -22,6 +23,15 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   source bindings и SHA-256 live typed registry admission-row.
 - npm package несёт byte-exact profile/table/proof в `evidence/`; release
   verifier и clean-install gate повторно проверяют их хэши и содержимое.
+- `labcolors-protocol` задаёт единственную versioned bytes→Core→wire границу
+  complete-feasibility. npm принимает только `Uint8Array`, Swift — `Data` или
+  `[UInt8]`;
+  обе поверхности сохраняют `Success(Feasible | Infeasible | NotEvaluated)`
+  либо typed `Failure` и не воспроизводят математику Core.
+- Conformance pack 5.0.0 добавляет ровно одно семейство
+  `wcag22-feasibility.json`: exact 7/2/0/92/59, mixed/all NotApplicable,
+  typed conflict/resource failures и opaque-ID law. Шесть прежних family
+  остаются byte-identical.
 
 ### Breaking (Rust API)
 
@@ -60,14 +70,16 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   capsules. Profile V1, proof ID `wcag22-srgb8-full-domain-q55-v1` и package path
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
-- WASM size contract сохраняет immutable измерение #284 как происхождение
-  точного raw-byte ceiling и отдельно аттестует SHA текущего воспроизводимого
-  артефакта. Proof-only recertification больше не переписывает baseline задним
-  числом; ceiling остаётся `454385 B` без запаса.
-- Conformance pack 4.0.0 добавляет `wcag22.json`; `packDigest` закономерно
-  изменён. `manifest.numericalCapabilities` зеркалит single public V2 core
-  manifest (coverage `migrated-sites-only-v1`, FNV-1a-32 drift-checksum над
-  canonical length-prefixed preimage).
+- WASM size history стала append-only: immutable V1 сохраняет допуск #284
+  (`454385 B`), а V2 допускает полный transport #295 как точные `521240 B` /
+  `d37841…9ca0` с нулевым headroom и ссылкой на неизменяемый V1 build recipe.
+  Canonical whole-call artifact фиксирует 10 крайних форм × 5 свежих процессов;
+  latency, process maxRSS и WASM pages остаются наблюдениями, не SLO.
+- Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
+  versioned complete-feasibility transport family, поэтому `packDigest`
+  закономерно изменён. `manifest.numericalCapabilities` зеркалит single public
+  V2 core manifest (coverage `migrated-sites-only-v1`, FNV-1a-32
+  drift-checksum над canonical length-prefixed preimage).
 - Release manifest schema v2: секция `numericalSites` заменена на
   `numericalCapabilities`; release verifier и Swift conformance-тесты
   пересчитывают capability checksum независимо от Rust-кода.

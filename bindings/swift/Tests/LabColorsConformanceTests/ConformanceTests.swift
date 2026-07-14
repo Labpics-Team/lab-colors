@@ -32,6 +32,17 @@ final class ConformanceTests: XCTestCase {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    func loadFeasibilityBenchmarkContract() throws -> FeasibilityBenchmarkContract {
+        let repoRoot = Self.vectorsDir
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot
+            .appendingPathComponent("crates/labcolors-core/contracts")
+            .appendingPathComponent("wcag22-feasibility-benchmark-v1.json")
+        return try JSONDecoder().decode(
+            FeasibilityBenchmarkContract.self, from: Data(contentsOf: url))
+    }
+
     // MARK: - Вспомогательные мапперы словаря
 
     func theme(_ s: String) -> Theme {
@@ -468,6 +479,551 @@ final class ConformanceTests: XCTestCase {
             XCTAssertEqual(got.evidence.profileSha256, vector.profileSha256)
         }
     }
+
+    // MARK: - WCAG 2.2 finite-domain feasibility protocol
+
+    func testWcag22FeasibilityPackReplaysThroughRawAndTypedSwiftSurfaces() throws {
+        let vectors = try load(
+            "wcag22-feasibility.json", as: [Wcag22FeasibilityVector].self)
+        XCTAssertEqual(vectors.count, 13, "pack 5 family cardinality")
+
+        for vector in vectors {
+            let request = Array(vector.requestJson.utf8)
+            let raw = try evaluateWcag22FeasibilityRawV1(request: Data(request))
+            XCTAssertEqual(
+                raw, Data(vector.outcomeJson.utf8),
+                "canonical FFI bytes \(vector.caseId)")
+
+            let typed = try evaluateWcag22Feasibility(Data(request))
+            let expected = try JSONDecoder().decode(
+                Wcag22FeasibilityOutcomeV1.self, from: Data(vector.outcomeJson.utf8))
+            XCTAssertEqual(typed, expected, "typed outcome \(vector.caseId)")
+        }
+    }
+
+    func testWcag22FeasibilityDomainPackingAndOpaqueIdentityLaws() throws {
+        let vectors = try load(
+            "wcag22-feasibility.json", as: [Wcag22FeasibilityVector].self)
+        var evaluatedById: [String: Wcag22FeasibilityEvaluatedV1] = [:]
+        var feasibleCounts: [String: Int] = [:]
+        var sawNotEvaluated = false
+        var sawConflict = false
+        var sawRawResourceRejection = false
+
+        func lsb0(_ bytes: [UInt8], _ index: Int) -> Bool {
+            (bytes[index / 8] & (UInt8(1) << UInt8(index % 8))) != 0
+        }
+
+        for vector in vectors {
+            let outcome = try evaluateWcag22Feasibility(Array(vector.requestJson.utf8))
+            switch outcome {
+            case let .success(feasibility):
+                switch feasibility {
+                case let .feasible(value), let .infeasible(value):
+                    XCTAssertEqual(value.domain.count, 256, vector.caseId)
+                    for (index, candidate) in value.domain.enumerated() {
+                        XCTAssertEqual(
+                            candidate.bytes,
+                            [UInt8(index), UInt8(index), UInt8(index)],
+                            "Core-owned domain order \(vector.caseId) @ \(index)")
+                    }
+
+                    let edgeCount = value.relations.reduce(into: 0) { count, relation in
+                        if case let .applicable(_, _, _, adjacent) = relation {
+                            count += adjacent.count
+                        }
+                    }
+                    XCTAssertEqual(value.proof.applicableEdges.value, UInt64(edgeCount))
+                    XCTAssertEqual(value.failureMatrix.count, 32 * edgeCount)
+                    XCTAssertEqual(value.proof.partition.bytes.count, 32)
+                    XCTAssertEqual(
+                        value.proof.logicalAssessments.value, UInt64(256 * edgeCount))
+
+                    var feasibleCount = 0
+                    for candidate in 0..<256 {
+                        var rowFailed = false
+                        for edge in 0..<edgeCount {
+                            if lsb0(value.failureMatrix, candidate * edgeCount + edge) {
+                                rowFailed = true
+                            }
+                        }
+                        let partitionSaysFeasible = lsb0(value.proof.partition.bytes, candidate)
+                        XCTAssertEqual(
+                            partitionSaysFeasible, !rowFailed,
+                            "candidate-major LSB0 law \(vector.caseId) @ \(candidate)")
+                        if partitionSaysFeasible { feasibleCount += 1 }
+                    }
+                    feasibleCounts[vector.caseId] = feasibleCount
+                    evaluatedById[vector.caseId] = value
+                case let .notEvaluated(value):
+                    sawNotEvaluated = true
+                    XCTAssertEqual(vector.caseId, "all-not-applicable")
+                    XCTAssertFalse(value.relations.isEmpty)
+                    for relation in value.relations {
+                        guard case .notApplicable = relation else {
+                            return XCTFail("NotEvaluated carried an applicable relation")
+                        }
+                    }
+                }
+            case let .failure(error):
+                switch error {
+                case let .core(coreError):
+                    switch coreError {
+                    case let .invalidRequest(invalid):
+                        if case let .conflictingRelationId(relationId) = invalid {
+                            sawConflict = true
+                            XCTAssertEqual(vector.caseId, "conflicting-relation-id")
+                            XCTAssertEqual(relationId, "same-id")
+                        }
+                    case let .resourceLimitExceeded(_, dimension, requested, limit):
+                        sawRawResourceRejection = true
+                        XCTAssertEqual(vector.caseId, "raw-adjacent-resource-rejection")
+                        XCTAssertEqual(dimension, .rawAdjacentEntries)
+                        XCTAssertGreaterThan(requested.value, limit.value)
+                    case .allocationFailed, .evaluatorInvariantViolation,
+                         .compilerInvariantViolation:
+                        XCTFail("unexpected pack error branch: \(coreError)")
+                    }
+                case .transport, .incompatibleCoreContract:
+                    XCTFail("unexpected pack failure source: \(error)")
+                }
+            }
+        }
+
+        XCTAssertEqual(feasibleCounts["text-default-seven"], 7)
+        XCTAssertEqual(feasibleCounts["text-default-two"], 2)
+        XCTAssertEqual(feasibleCounts["text-default-zero"], 0)
+        XCTAssertEqual(feasibleCounts["text-large-scale-ninety-two"], 92)
+        XCTAssertEqual(feasibleCounts["ui-component-ninety-two"], 92)
+        XCTAssertEqual(feasibleCounts["graphical-object-ninety-two"], 92)
+        XCTAssertEqual(feasibleCounts["ui-component-fifty-nine"], 59)
+        XCTAssertTrue(sawNotEvaluated)
+        XCTAssertTrue(sawConflict)
+        XCTAssertTrue(sawRawResourceRejection)
+
+        let opaqueA = try XCTUnwrap(evaluatedById["opaque-identity-a"])
+        let opaqueB = try XCTUnwrap(evaluatedById["opaque-identity-b"])
+        XCTAssertEqual(opaqueA.failureMatrix, opaqueB.failureMatrix)
+        XCTAssertEqual(opaqueA.proof.partition, opaqueB.proof.partition)
+        XCTAssertEqual(opaqueA.proof.matrixDigest, opaqueB.proof.matrixDigest)
+        XCTAssertNotEqual(opaqueA.proof.relationSetDigest, opaqueB.proof.relationSetDigest)
+        XCTAssertNotEqual(opaqueA.proof.evaluationId, opaqueB.proof.evaluationId)
+    }
+
+    func testWcag22FeasibilityPreflightAvoidsOversizeRawCopy() throws {
+        var rawCalls = 0
+        var oversizeCalls: [UInt64] = []
+        let invalidUtf8Failure = Data(
+            #"{"schemaVersion":1,"outcome":"failure","error":{"source":"transport","error":{"code":"invalidUtf8"}}}"#.utf8)
+        let oversizeFailure = Data(
+            #"{"schemaVersion":1,"outcome":"failure","error":{"source":"transport","error":{"code":"envelopeTooLarge","requestedBytes":"4","limitBytes":"3"}}}"#.utf8)
+        let bridge = Wcag22FeasibilityBridge(
+            maxRequestBytes: { 3 },
+            evaluateRaw: { bytes in
+                rawCalls += 1
+                XCTAssertEqual(bytes.count, 3)
+                return invalidUtf8Failure
+            },
+            envelopeTooLarge: { requested in
+                oversizeCalls.append(requested)
+                return oversizeFailure
+            })
+
+        _ = try evaluateWcag22Feasibility(Data([0, 1, 2]), using: bridge)
+        XCTAssertEqual(rawCalls, 1, "limit bytes must reach authoritative Rust path")
+        XCTAssertTrue(oversizeCalls.isEmpty)
+
+        let outcome = try evaluateWcag22Feasibility(Data([0, 1, 2, 3]), using: bridge)
+        XCTAssertEqual(rawCalls, 1, "limit+1 must not materialize/pass the raw FFI vector")
+        XCTAssertEqual(oversizeCalls, [4])
+        guard case let .failure(.transport(.envelopeTooLarge(requested, limit))) = outcome else {
+            return XCTFail("oversize preflight did not preserve typed protocol failure")
+        }
+        XCTAssertEqual(requested.value, 4)
+        XCTAssertEqual(limit.value, 3)
+    }
+
+    func testWcag22FeasibilityPackedConsumerRejectsStructuralMutations() throws {
+        let vectors = try load(
+            "wcag22-feasibility.json", as: [Wcag22FeasibilityVector].self)
+        let fixture = try XCTUnwrap(vectors.first { $0.caseId == "text-default-seven" })
+        let canonicalData = Data(fixture.outcomeJson.utf8)
+        let canonical = try JSONDecoder().decode(
+            Wcag22FeasibilityOutcomeV1.self, from: canonicalData)
+
+        func mutated(
+            _ change: (inout [[Int]], inout [Int], inout [String: Any]) throws -> Void
+        ) throws -> Data {
+            var root = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: canonicalData) as? [String: Any])
+            var feasibility = try XCTUnwrap(root["feasibility"] as? [String: Any])
+            var result = try XCTUnwrap(feasibility["result"] as? [String: Any])
+            var domain = try XCTUnwrap(result["domain"] as? [[Int]])
+            var matrix = try XCTUnwrap(result["failureMatrix"] as? [Int])
+            var proof = try XCTUnwrap(result["proof"] as? [String: Any])
+            try change(&domain, &matrix, &proof)
+            result["domain"] = domain
+            result["failureMatrix"] = matrix
+            result["proof"] = proof
+            feasibility["result"] = result
+            root["feasibility"] = feasibility
+            return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        }
+
+        let wrongFirstBit = try mutated { _, matrix, _ in matrix[0] ^= 1 }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: wrongFirstBit))
+
+        let truncated = try mutated { _, matrix, _ in matrix.removeLast() }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: truncated))
+
+        let transposedDomain = try mutated { domain, _, _ in domain.swapAt(0, 1) }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: transposedDomain))
+
+        let interiorTransposedDomain = try mutated { domain, _, _ in domain.swapAt(1, 2) }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                Wcag22FeasibilityOutcomeV1.self, from: interiorTransposedDomain))
+
+        func reversedBits(_ byte: Int) -> Int {
+            var source = byte
+            var result = 0
+            for _ in 0..<8 {
+                result = (result << 1) | (source & 1)
+                source >>= 1
+            }
+            return result
+        }
+        let msb0 = try mutated { _, matrix, _ in matrix = matrix.map(reversedBits) }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: msb0))
+
+        var forgedRoot = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: canonicalData) as? [String: Any])
+        var forgedFeasibility = try XCTUnwrap(forgedRoot["feasibility"] as? [String: Any])
+        forgedFeasibility["status"] = "infeasible"
+        forgedRoot["feasibility"] = forgedFeasibility
+        let forgedTerminal = try JSONSerialization.data(
+            withJSONObject: forgedRoot, options: [.sortedKeys])
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: forgedTerminal))
+
+        let changedIdentity = try mutated { _, _, proof in
+            var digest = try XCTUnwrap(proof["relationSetDigest"] as? [Int])
+            let first = try XCTUnwrap(digest.indices.first)
+            digest[first] ^= 1
+            proof["relationSetDigest"] = digest
+        }
+        let changedIdentityOutcome = try JSONDecoder().decode(
+            Wcag22FeasibilityOutcomeV1.self, from: changedIdentity)
+        XCTAssertNotEqual(
+            changedIdentityOutcome, canonical,
+            "pack equality must reject an identity mutation even when shape remains lawful")
+    }
+
+    func testWcag22FeasibilitySwiftFailureAlgebraRoundTripsExhaustively() throws {
+        let one = DecimalU64V1(1)
+        let two = DecimalU64V1(2)
+        let rgb = Srgb8BytesV1(red: 1, green: 2, blue: 3)
+        let transport: [Wcag22FeasibilityTransportErrorV1] = [
+            .envelopeTooLarge(requestedBytes: two, limitBytes: one),
+            .invalidUtf8,
+            .malformedEnvelope(.syntax),
+            .malformedEnvelope(.shape),
+            .malformedEnvelope(.endOfInput),
+            .malformedEnvelope(.io),
+            .unsupportedSchemaVersion(2),
+            .unsupportedDomainId("future"),
+            .unsupportedResourceProfileId("future"),
+            .unsupportedCriterion("future"),
+            .emptyNotApplicableReason,
+        ]
+        let invalid: [Wcag22FeasibilityInvalidRequestV1] = [
+            .emptyRelationId,
+            .emptyOccurrenceId,
+            .emptyRelations,
+            .emptyAdjacentSet(relationId: "r"),
+            .conflictingRelationId(relationId: "r"),
+            .arithmeticOverflow,
+        ]
+        let atomic: [Wcag22FeasibilityAtomicErrorV1] = [
+            .invalidSrgb8(field: "foreground", reason: "fixture"),
+            .emptyNotApplicableReason,
+            .artifactInvariantViolation(
+                criterion: .sc143TextDefault, foreground: rgb, background: rgb),
+            .evidenceRegistryMismatch(message: "fixture"),
+        ]
+        var evaluator: [Wcag22FeasibilityEvaluatorInvariantV1] = atomic.map { .source($0) }
+        evaluator += [
+            .unexpectedNotEvaluated, .inputMismatch, .criterionMismatch, .evidenceMismatch,
+        ]
+        let compiler: [Wcag22FeasibilityCompilerInvariantV1] = [
+            .layoutMismatch,
+            .assessmentCardinalityMismatch(expected: one, observed: two),
+            .candidateCardinalityMismatch(expected: one, observed: two),
+            .decisionStorageRejectedCell,
+            .decisionStorageRejectedPartition,
+            .completeResultMismatch,
+        ]
+        var core: [Wcag22FeasibilityCoreErrorV1] = invalid.map { .invalidRequest($0) }
+        core += [
+            .resourceLimitExceeded(
+                profileId: .compileV1,
+                dimension: .rawRelations,
+                requested: two,
+                limit: one),
+            .allocationFailed(profileId: .compileV1, requestedBytes: two),
+        ]
+        core += evaluator.map {
+            .evaluatorInvariantViolation(
+                candidate: rgb, relationId: "r", adjacent: rgb, violation: $0)
+        }
+        core += compiler.map { .compilerInvariantViolation($0) }
+
+        let protocolErrors = transport.map { Wcag22FeasibilityProtocolErrorV1.transport($0) }
+            + core.map { Wcag22FeasibilityProtocolErrorV1.core($0) }
+            + [.incompatibleCoreContract]
+        XCTAssertEqual(protocolErrors.count, 34, "new branch requires an explicit test fixture")
+        for error in protocolErrors {
+            let outcome = Wcag22FeasibilityOutcomeV1.failure(error)
+            let encoded = try JSONEncoder().encode(outcome)
+            let decoded = try JSONDecoder().decode(
+                Wcag22FeasibilityOutcomeV1.self, from: encoded)
+            XCTAssertEqual(decoded, outcome)
+        }
+    }
+
+    func testWcag22FeasibilityWholeCallObservation() throws {
+        let vectors = try load(
+            "wcag22-feasibility.json", as: [Wcag22FeasibilityVector].self)
+        let benchmark = try loadFeasibilityBenchmarkContract()
+        guard benchmark.sampleCount > 0 else {
+            return XCTFail("benchmark sampleCount must remain positive")
+        }
+        let fixture = try XCTUnwrap(vectors.first { $0.caseId == "text-default-two" })
+        let request = Data(fixture.requestJson.utf8)
+        var elapsedNanoseconds: [UInt64] = []
+
+        for _ in 0..<benchmark.sampleCount {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let outcome = try evaluateWcag22Feasibility(request)
+            elapsedNanoseconds.append(DispatchTime.now().uptimeNanoseconds - start)
+            guard case .success = outcome else {
+                return XCTFail("observation fixture unexpectedly failed")
+            }
+        }
+        elapsedNanoseconds.sort()
+        let samples = elapsedNanoseconds.map(String.init).joined(separator: ",")
+        print(
+            "LABCOLORS_FEASIBILITY_OBSERVATION " +
+            "whole_call_median_ns=\(elapsedNanoseconds[benchmark.sampleCount / 2]) " +
+            "sample_count=\(benchmark.sampleCount) samples=\(samples) " +
+            "request_bytes=\(request.count) " +
+            "max_request_bytes=\(wcag22FeasibilityMaxBytes())")
+
+        let maxBytes = wcag22FeasibilityMaxBytes()
+        let requestedBytes = maxBytes + 1
+        let oversized = Data(repeating: 0, count: Int(requestedBytes))
+        var rawCalls = 0
+        var scalarCalls = 0
+        var ffiSubmittedBytes = 0
+        var outputBytes = 0
+        let live = Wcag22FeasibilityBridge.live
+        let observingBridge = Wcag22FeasibilityBridge(
+            maxRequestBytes: live.maxRequestBytes,
+            evaluateRaw: { request in
+                rawCalls += 1
+                ffiSubmittedBytes += request.count
+                let output = try live.evaluateRaw(request)
+                outputBytes += output.count
+                return output
+            },
+            envelopeTooLarge: { requested in
+                scalarCalls += 1
+                let output = try live.envelopeTooLarge(requested)
+                outputBytes += output.count
+                return output
+            })
+        let oversizeOutcome = try evaluateWcag22Feasibility(oversized, using: observingBridge)
+        guard case let .failure(.transport(.envelopeTooLarge(requested, limit))) =
+            oversizeOutcome
+        else { return XCTFail("actual oversize preflight lost its typed failure") }
+        XCTAssertEqual(requested.value, requestedBytes)
+        XCTAssertEqual(limit.value, maxBytes)
+        XCTAssertEqual(rawCalls, 0)
+        XCTAssertEqual(scalarCalls, 1)
+        XCTAssertEqual(ffiSubmittedBytes, 0)
+        XCTAssertGreaterThan(outputBytes, 0)
+        print(
+            "LABCOLORS_FEASIBILITY_OVERSIZE requested_bytes=\(requestedBytes) " +
+            "max_request_bytes=\(maxBytes) ffi_submitted_bytes=\(ffiSubmittedBytes) " +
+            "output_bytes=\(outputBytes) raw_calls=\(rawCalls) " +
+            "scalar_calls=\(scalarCalls)")
+    }
+
+    func testWcag22FeasibilityExtremeShapeObservation() throws {
+        let benchmark = try loadFeasibilityBenchmarkContract()
+        let relationLimit = try benchmark.shape("maximum-canonical-applicable-relations")
+            .rawRelations
+        let adjacentLimit = try benchmark.shape("maximum-applicable-edges")
+            .rawAdjacentEntries
+        let allNotApplicableLimit = try benchmark
+            .shape("maximum-canonical-not-applicable-relations").rawRelations
+        let opaqueUtf8Limit = try benchmark.shape("maximum-opaque-utf8-bytes")
+            .opaqueUtf8Bytes
+        func request(_ relations: [[String: Any]]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "domainId": "srgb8-neutral-axis-v1",
+                "resourceProfileId": "compile-v1",
+                "relations": relations,
+            ], options: [.sortedKeys])
+        }
+
+        let relations2047x1: [[String: Any]] = (0..<relationLimit).map { index in
+            [
+                "relationId": "r\(index)",
+                "occurrenceId": "o",
+                "kind": "applicable",
+                "criterion": "sc-1.4.11-ui-component-or-state",
+                "adjacent": [[0, 0, 0]],
+            ]
+        }
+        let adjacent2047: [[Int]] = (0..<adjacentLimit).map { index in
+            [index & 255, (index >> 8) & 255, 0]
+        }
+        let relation1x2047: [[String: Any]] = [[
+            "relationId": "r",
+            "occurrenceId": "o",
+            "kind": "applicable",
+            "criterion": "sc-1.4.11-ui-component-or-state",
+            "adjacent": adjacent2047,
+        ]]
+        let opaqueShare = opaqueUtf8Limit / 3
+        let maxOpaque: [[String: Any]] = [[
+            "relationId": String(repeating: "r", count: opaqueShare),
+            "occurrenceId": String(repeating: "o", count: opaqueShare),
+            "kind": "notApplicable",
+            "reasonId": String(
+                repeating: "n",
+                count: opaqueUtf8Limit - 2 * opaqueShare),
+        ]]
+        let allNotApplicable: [[String: Any]] =
+            (0..<allNotApplicableLimit).map { index in
+            [
+                "relationId": "r\(index)",
+                "occurrenceId": "o",
+                "kind": "notApplicable",
+                "reasonId": "not-required",
+            ]
+        }
+        XCTAssertEqual(relations2047x1.count, relationLimit)
+        XCTAssertEqual(adjacent2047.count, adjacentLimit)
+        XCTAssertEqual(allNotApplicable.count, allNotApplicableLimit)
+        XCTAssertEqual(
+            opaqueShare + opaqueShare
+                + (opaqueUtf8Limit - 2 * opaqueShare),
+            opaqueUtf8Limit)
+        let relationsOpaqueBytes = (0..<relationLimit).reduce(0) { total, index in
+            total + "r\(index)".utf8.count + "o".utf8.count
+        }
+        let allNotApplicableOpaqueBytes =
+            (0..<allNotApplicableLimit).reduce(0) { total, index in
+                total + "r\(index)".utf8.count + "o".utf8.count
+                    + "not-required".utf8.count
+            }
+        let cases: [(
+            shape: String,
+            envelope: Data,
+            expectsNotEvaluated: Bool,
+            rawRelations: Int,
+            rawAdjacentEntries: Int,
+            opaqueUtf8Bytes: Int
+        )] = try [
+            (
+                "maximum-canonical-applicable-relations",
+                request(relations2047x1),
+                false,
+                relations2047x1.count,
+                relations2047x1.count,
+                relationsOpaqueBytes),
+            (
+                "maximum-applicable-edges",
+                request(relation1x2047),
+                false,
+                relation1x2047.count,
+                adjacent2047.count,
+                "r".utf8.count + "o".utf8.count),
+            (
+                "maximum-opaque-utf8-bytes",
+                request(maxOpaque),
+                true,
+                maxOpaque.count,
+                0,
+                opaqueUtf8Limit),
+            (
+                "maximum-canonical-not-applicable-relations",
+                request(allNotApplicable),
+                true,
+                allNotApplicable.count,
+                0,
+                allNotApplicableOpaqueBytes),
+        ]
+
+        for item in cases {
+            var rawCalls = 0
+            var scalarCalls = 0
+            var submittedBytes = 0
+            var outputBytes = 0
+            let live = Wcag22FeasibilityBridge.live
+            let observingBridge = Wcag22FeasibilityBridge(
+                maxRequestBytes: live.maxRequestBytes,
+                evaluateRaw: { request in
+                    rawCalls += 1
+                    submittedBytes += request.count
+                    let output = try live.evaluateRaw(request)
+                    outputBytes += output.count
+                    return output
+                },
+                envelopeTooLarge: { requested in
+                    scalarCalls += 1
+                    let output = try live.envelopeTooLarge(requested)
+                    outputBytes += output.count
+                    return output
+                })
+
+            XCTAssertLessThanOrEqual(
+                item.envelope.count, Int(wcag22FeasibilityMaxBytes()), item.shape)
+            let start = DispatchTime.now().uptimeNanoseconds
+            let outcome = try evaluateWcag22Feasibility(item.envelope, using: observingBridge)
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start
+            guard case let .success(feasibility) = outcome else {
+                return XCTFail("extreme shape unexpectedly failed: \(item.shape)")
+            }
+            if item.expectsNotEvaluated {
+                guard case .notEvaluated = feasibility else {
+                    return XCTFail(
+                        "declaration-only extreme fabricated evidence: \(item.shape)")
+                }
+            } else if case .notEvaluated = feasibility {
+                return XCTFail("applicable extreme was not evaluated: \(item.shape)")
+            }
+            XCTAssertEqual(rawCalls, 1, item.shape)
+            XCTAssertEqual(scalarCalls, 0, item.shape)
+            XCTAssertEqual(submittedBytes, item.envelope.count, item.shape)
+            XCTAssertGreaterThan(outputBytes, 0, item.shape)
+            print(
+                "LABCOLORS_FEASIBILITY_EXTREME shape=\(item.shape) " +
+                "raw_relations=\(item.rawRelations) " +
+                "raw_adjacent_entries=\(item.rawAdjacentEntries) " +
+                "opaque_utf8_bytes=\(item.opaqueUtf8Bytes) " +
+                "whole_call_ns=\(elapsed) request_bytes=\(item.envelope.count) " +
+                "ffi_submitted_bytes=\(submittedBytes) output_bytes=\(outputBytes) " +
+                "raw_calls=\(rawCalls) scalar_calls=\(scalarCalls)")
+        }
+    }
 }
 
 // MARK: - Codable-зеркала схемы векторов
@@ -524,6 +1080,38 @@ struct Wcag22Vec: Codable {
     let verifierSha256: String
     let profileChecksum: String
     let profileSha256: String
+}
+
+struct Wcag22FeasibilityVector: Codable {
+    let caseId: String
+    let requestJson: String
+    let outcomeJson: String
+}
+
+struct FeasibilityBenchmarkContract: Codable {
+    let sampleCount: Int
+    let scenarios: [Scenario]
+
+    struct Scenario: Codable {
+        let name: String
+        let shape: Shape
+    }
+
+    struct Shape: Codable {
+        let rawRelations: Int
+        let rawAdjacentEntries: Int
+        let opaqueUtf8Bytes: Int
+    }
+
+    func shape(_ name: String) throws -> Shape {
+        guard let scenario = scenarios.first(where: { $0.name == name }) else {
+            throw NSError(
+                domain: "LabColorsConformance",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "missing benchmark scenario: \(name)"])
+        }
+        return scenario.shape
+    }
 }
 
 struct ContrastVec: Codable {

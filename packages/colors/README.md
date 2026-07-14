@@ -14,6 +14,13 @@
 npm install @labpics/colors
 ```
 
+Минимально поддерживается TypeScript `>= 5.2.2`: ветка 5.2 впервые добавила
+стандартный `esnext.disposable` ([официальное описание TypeScript
+5.2](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html)).
+Публичный `.d.ts` подключает эту библиотеку сам, поэтому потребителю не требуется
+расширять свой `lib`. Release-gate компилирует чисто установленный пакет с
+`skipLibCheck: false` и точным floor `5.2.2`, и текущим compiler из lockfile.
+
 При сборке из монорепо:
 
 ```sh
@@ -269,6 +276,56 @@ diagnostics и legacy `wcagRatio` не могут изменить этот ве
 
 ---
 
+### `evaluateWcag22Feasibility(request): Wcag22FeasibilityOutcomeV1`
+
+Полностью перебирает зарегистрированную конечную ось sRGB8 против всех явно
+объявленных клиентом связей. Операция отвечает только на вопрос «какие
+кандидаты проходят все эти ограничения?». Она не выбирает лучший цвет, не
+угадывает применимость и не понимает семантику ID.
+
+```ts
+import init, {
+  evaluateWcag22Feasibility,
+  type Wcag22FeasibilityRequestV1,
+} from "@labpics/colors";
+
+await init();
+
+const request: Wcag22FeasibilityRequestV1 = {
+  schemaVersion: 1,
+  domainId: "srgb8-neutral-axis-v1",
+  resourceProfileId: "compile-v1",
+  relations: [{
+    relationId: "opaque-relation-7f3a",
+    occurrenceId: "opaque-occurrence-17",
+    kind: "applicable",
+    criterion: "sc-1.4.3-text-default",
+    adjacent: [[0, 0, 0], [255, 255, 255]],
+  }],
+};
+
+const bytes = new TextEncoder().encode(JSON.stringify(request));
+const outcome = evaluateWcag22Feasibility(bytes);
+
+if (outcome.outcome === "success") {
+  // feasible | infeasible | notEvaluated
+  console.log(outcome.feasibility.status);
+} else {
+  // strict transport/core failure as typed data; no fallback colour
+  console.error(outcome.error);
+}
+```
+
+Вход — только настоящий `Uint8Array` со strict JSON V1; иной JavaScript-тип
+детерминированно отклоняется `TypeError` до чтения WASM-owned ceiling и копии.
+Граница размера выведена из грамматики и resource profile; после `init()` её
+возвращает `wcag22FeasibilityMaxBytes()`. Package wrapper проверяет `byteLength`
+до избежимой копии в WASM, а Rust повторяет авторитетную проверку. Выход хранит
+домен и канонические связи по одному разу, а решения — в candidate-major LSB0
+bitset; объектного графа `256 × E` в public result нет.
+
+---
+
 ### `numericalCapabilityManifest(): NumericalCapabilityManifestV2`
 
 Возвращает статический манифест численных возможностей установленной сборки:
@@ -401,19 +458,23 @@ replacement принадлежит #283.
 
 ## Размер бандла
 
-Raw-размер WASM — hard gate. Его versioned SSOT —
-`bench/wasm-size-budget-v1.json`: точное принятое измерение Issue #284 вместе
-с toolchain provenance, SHA-256 измеренного baseline и ceiling без
-произвольного запаса. SHA текущего воспроизводимого артефакта хранится отдельно
-в `currentArtifact`, поэтому его recertification не переписывает происхождение
-лимита. Канонический артефакт строит release-equivalent Linux x64 CI: там
-checker требует одновременно точный текущий SHA-256 и неизменный ceiling. На
-других host-платформах тот же checker только сообщает raw/gzip/SHA-диагностику:
-host-native toolchain bytes не выдаются за канонический release artifact и не
-сравниваются с чужим ceiling. Каноническая сборка remap-ит mutable workspace и
-Cargo registry roots в стабильные виртуальные пути, поэтому имя конкретного
-self-hosted Linux runner не меняет бинарь. `gzip -9` также остаётся живой
-диагностикой и не хранится как ложная константа SSOT.
+Raw-размер WASM — hard gate с append-only историей. Неизменяемый
+`bench/wasm-size-budget-v1.json` сохраняет допуск #284 (`454385 B`), а
+`bench/wasm-size-budget-v2.json` отдельно допускает полный transport #295:
+ровно `521240 B`, SHA-256
+`d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0`.
+V2 ссылается на точные байты V1 и его build recipe; новый ceiling равен
+измерению, поэтому произвольного запаса нет и история #284 не переписана.
+
+Release-equivalent Linux x64 CI требует одновременно точный размер и SHA.
+Отдельный `bench/wcag22-feasibility-wasm-boundary-v1.json` фиксирует 10 крайних
+whole-call форм × 5 свежих процессов, request/outcome bytes, packed shape и
+привязки Core/pack/toolchain. Время, process maxRSS и страницы WASM остаются
+наблюдениями без выдуманного production-порога. На других host-платформах
+checker сообщает только raw/gzip/SHA-диагностику: host-native bytes не выдаются
+за канонический release artifact. Сборка remap-ит mutable workspace и Cargo
+registry roots в стабильные виртуальные пути; `gzip -9` остаётся диагностикой,
+а не второй константой допуска.
 
 Это весь движок: CAM16, солверы контраста, лестницы и граница конфига. `.wasm`
 поставляется отдельным ассетом. Будет ли его загрузка критическим путём первого

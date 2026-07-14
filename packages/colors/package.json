@@ -69,7 +69,8 @@
     "release:verify": "node ../../scripts/verify-package-release.mjs"
   },
   "devDependencies": {
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "typescript-floor": "npm:typescript@5.2.2"
   },
   "types": "./index.d.ts",
   "sideEffects": false,
