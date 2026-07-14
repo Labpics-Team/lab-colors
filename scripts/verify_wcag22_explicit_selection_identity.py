@@ -100,7 +100,7 @@ def receipt_preimage(
     selected_candidate_id: bytes,
     selected_emitted: bytes,
     verified_applicable_edges: int,
-    edges: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
     separator: bytes = RECEIPT_SEPARATOR,
     kind: bytes = RECEIPT_KIND,
     profile_key: bytes = feasibility.PROFILE_KEY,
@@ -118,8 +118,9 @@ def receipt_preimage(
         require(len(value) == 32, f"{label} must contain exactly 32 bytes")
     require(selected_candidate_id != b"", "selected candidate ID must be non-empty")
     require(len(selected_emitted) == 3, "selected emitted value must be one sRGB8 triple")
+    streamed_edges = sum(len(relation["edges"]) for relation in relations)
     require(
-        verified_applicable_edges == len(edges),
+        verified_applicable_edges == streamed_edges,
         "verified edge count must equal the exact streamed record count",
     )
 
@@ -135,22 +136,29 @@ def receipt_preimage(
         preimage += field(key)
     preimage += proof_sha256
     preimage += u64(verified_applicable_edges)
-    for edge in edges:
-        foreground = edge["foreground"]
-        background = edge["background"]
-        require(len(foreground) == 3 and len(background) == 3,
-                "verified edge colours must be exact sRGB8 triples")
-        decision_tag = edge["decisionTag"]
-        require(
-            decision_tag == VERIFIED_PASS_TAG,
-            "a V1 selected receipt may contain only the verified-Pass tag",
-        )
-        preimage += u64(edge["edgeOrdinal"])
-        preimage += field(edge["relationId"])
-        preimage += field(edge["criterion"])
-        preimage += foreground
-        preimage += background
-        preimage += bytes([decision_tag])
+    for relation in relations:
+        relation_id = relation["relationId"]
+        criterion = relation["criterion"]
+        require(relation_id != b"", "verified relation ID must be non-empty")
+        require(criterion != b"", "verified criterion key must be non-empty")
+        preimage += u64(relation["relationOrdinal"])
+        preimage += field(relation_id)
+        preimage += field(criterion)
+        preimage += u64(len(relation["edges"]))
+        for edge in relation["edges"]:
+            foreground = edge["foreground"]
+            background = edge["background"]
+            require(len(foreground) == 3 and len(background) == 3,
+                    "verified edge colours must be exact sRGB8 triples")
+            decision_tag = edge["decisionTag"]
+            require(
+                decision_tag == VERIFIED_PASS_TAG,
+                "a V1 selected receipt may contain only the verified-Pass tag",
+            )
+            preimage += u64(edge["edgeOrdinal"])
+            preimage += foreground
+            preimage += background
+            preimage += bytes([decision_tag])
     return bytes(preimage)
 
 
@@ -264,11 +272,12 @@ def evaluate_policy(
     assert selected_policy_ordinal is not None
     selected = candidates[selected_index]
     selected_emitted = exact_rgb(selected["emitted"], "selected emitted")
-    edges: list[dict[str, Any]] = []
+    verified_relations: list[dict[str, Any]] = []
     edge_ordinal = 0
-    for relation in relations:
+    for relation_ordinal, relation in enumerate(relations):
         if relation["kind"] != "applicable":
             continue
+        relation_edges: list[dict[str, Any]] = []
         for adjacent in relation["adjacent"]:
             logical_index = (
                 selected_index * model["layout"]["applicableEdges"] + edge_ordinal
@@ -277,17 +286,23 @@ def evaluate_policy(
                 not feasibility.bit(model["matrix"], logical_index),
                 "selected fixture row must contain only Pass cells",
             )
-            edges.append(
+            relation_edges.append(
                 {
                     "edgeOrdinal": edge_ordinal,
-                    "relationId": exact_utf8(relation["relationId"], "relationId"),
-                    "criterion": exact_utf8(relation["criterion"], "criterion"),
                     "foreground": selected_emitted,
                     "background": exact_rgb(adjacent, "adjacent"),
                     "decisionTag": VERIFIED_PASS_TAG,
                 }
             )
             edge_ordinal += 1
+        verified_relations.append(
+            {
+                "relationOrdinal": relation_ordinal,
+                "relationId": exact_utf8(relation["relationId"], "relationId"),
+                "criterion": exact_utf8(relation["criterion"], "criterion"),
+                "edges": relation_edges,
+            }
+        )
     require(
         edge_ordinal == model["layout"]["applicableEdges"],
         "verified fixture traversal must cover every canonical applicable edge",
@@ -301,7 +316,7 @@ def evaluate_policy(
         "selected_candidate_id": feasibility.candidate_id_bytes(selected),
         "selected_emitted": selected_emitted,
         "verified_applicable_edges": edge_ordinal,
-        "edges": edges,
+        "relations": verified_relations,
     }
     result.update(
         {
@@ -310,7 +325,7 @@ def evaluate_policy(
             "selectedEmitted": selected_emitted,
             "selectedPolicyOrdinal": selected_policy_ordinal,
             "verifiedApplicableEdges": edge_ordinal,
-            "verifiedEdges": edges,
+            "verifiedRelations": verified_relations,
             "receiptInputs": receipt_inputs,
             "selectionReceiptDigestSha256": sha256(
                 receipt_preimage(**receipt_inputs)
@@ -323,11 +338,18 @@ def evaluate_policy(
 def json_edge(edge: dict[str, Any]) -> dict[str, Any]:
     return {
         "edgeOrdinal": edge["edgeOrdinal"],
-        "relationId": edge["relationId"].decode("utf-8"),
-        "criterion": edge["criterion"].decode("utf-8"),
         "foreground": list(edge["foreground"]),
         "background": list(edge["background"]),
         "decisionTag": edge["decisionTag"],
+    }
+
+
+def json_verified_relation(relation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "relationOrdinal": relation["relationOrdinal"],
+        "relationId": relation["relationId"].decode("utf-8"),
+        "criterion": relation["criterion"].decode("utf-8"),
+        "edges": [json_edge(edge) for edge in relation["edges"]],
     }
 
 
@@ -350,7 +372,10 @@ def json_outcome(result: dict[str, Any]) -> dict[str, Any]:
                 "selectedEmitted": list(result["selectedEmitted"]),
                 "selectedPolicyOrdinal": result["selectedPolicyOrdinal"],
                 "verifiedApplicableEdges": result["verifiedApplicableEdges"],
-                "verifiedEdges": [json_edge(edge) for edge in result["verifiedEdges"]],
+                "verifiedRelations": [
+                    json_verified_relation(relation)
+                    for relation in result["verifiedRelations"]
+                ],
             }
         )
     return value
@@ -402,12 +427,17 @@ def build_fixture() -> dict[str, Any]:
                 "length-prefixed-profile-artifact-bound-proof-keys",
                 "proof-sha256",
                 "verified-applicable-edge-count",
-                "canonical-verified-edge-records",
+                "canonical-applicable-relation-records-with-edge-records",
+            ],
+            "verifiedRelationRecord": [
+                "canonical-relation-ordinal-u64",
+                "length-prefixed-relation-id",
+                "length-prefixed-actual-criterion-key",
+                "relation-edge-count-u64",
+                "verified-edge-records",
             ],
             "verifiedEdgeRecord": [
                 "edge-ordinal-u64",
-                "length-prefixed-relation-id",
-                "length-prefixed-actual-criterion-key",
                 "actual-foreground-srgb8",
                 "actual-background-srgb8",
                 "verified-pass-tag-01",
@@ -570,47 +600,60 @@ def mutation_self_tests() -> tuple[int, int, int]:
     receipt_changed(
         "verified edge count and appended record",
         lambda value, _kwargs: (
-            value["edges"].append(
+            value["relations"][0]["edges"].append(
                 {
-                    **copy.deepcopy(value["edges"][-1]),
-                    "edgeOrdinal": len(value["edges"]),
+                    **copy.deepcopy(value["relations"][0]["edges"][-1]),
+                    "edgeOrdinal": value["verified_applicable_edges"],
                 }
             ),
-            value.__setitem__("verified_applicable_edges", len(value["edges"])),
+            value.__setitem__(
+                "verified_applicable_edges", value["verified_applicable_edges"] + 1
+            ),
         ),
     )
     receipt_changed(
         "omitted edge record and count",
         lambda value, _kwargs: (
-            value["edges"].pop(),
-            value.__setitem__("verified_applicable_edges", len(value["edges"])),
+            value["relations"][0]["edges"].pop(),
+            value.__setitem__(
+                "verified_applicable_edges", value["verified_applicable_edges"] - 1
+            ),
         ),
     )
     receipt_changed(
         "duplicated edge payload",
-        lambda value, _kwargs: value["edges"].__setitem__(
+        lambda value, _kwargs: value["relations"][0]["edges"].__setitem__(
             1,
             {
-                **copy.deepcopy(value["edges"][0]),
+                **copy.deepcopy(value["relations"][0]["edges"][0]),
                 "edgeOrdinal": 1,
             },
         ),
     )
     for label, key, replacement in (
+        ("relation ordinal", "relationOrdinal", 7),
+        ("relation ID", "relationId", b"other"),
+        ("relation criterion", "criterion", b"other-criterion"),
+    ):
+        receipt_changed(
+            label,
+            lambda value, _kwargs, key=key, replacement=replacement: value[
+                "relations"
+            ][0].__setitem__(key, replacement),
+        )
+    for label, key, replacement in (
         ("edge ordinal", "edgeOrdinal", 7),
-        ("edge relation ID", "relationId", b"other"),
-        ("edge criterion", "criterion", b"other-criterion"),
         ("edge foreground", "foreground", b"\x74\x75\x75"),
         ("edge background", "background", b"\x01\x00\x00"),
     ):
         receipt_changed(
             label,
-            lambda value, _kwargs, key=key, replacement=replacement: value["edges"][
-                0
-            ].__setitem__(key, replacement),
+            lambda value, _kwargs, key=key, replacement=replacement: value[
+                "relations"
+            ][0]["edges"][0].__setitem__(key, replacement),
         )
     invalid_decision = copy.deepcopy(receipt_inputs)
-    invalid_decision["edges"][0]["decisionTag"] = 2
+    invalid_decision["relations"][0]["edges"][0]["decisionTag"] = 2
     try:
         receipt_preimage(**invalid_decision)
     except ValueError:
@@ -619,7 +662,7 @@ def mutation_self_tests() -> tuple[int, int, int]:
         raise ValueError("non-Pass edge decision survived the V1 receipt grammar")
     receipt_changed(
         "edge order",
-        lambda value, _kwargs: value["edges"].reverse(),
+        lambda value, _kwargs: value["relations"][0]["edges"].reverse(),
     )
 
     # Input permutations are canonicalization invariants inherited from A.

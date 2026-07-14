@@ -484,7 +484,7 @@ impl ReceiptSink for Hasher {
 }
 
 fn receipt_sink_u64(sink: &mut impl ReceiptSink, value: u64) {
-    sink.write(&value.to_le_bytes());
+    sink.write(&value.to_be_bytes());
 }
 
 fn receipt_sink_len_prefixed(sink: &mut impl ReceiptSink, bytes: &[u8]) {
@@ -492,17 +492,26 @@ fn receipt_sink_len_prefixed(sink: &mut impl ReceiptSink, bytes: &[u8]) {
     sink.write(bytes);
 }
 
+fn stream_receipt_relation(
+    sink: &mut impl ReceiptSink,
+    relation_ordinal: u64,
+    relation_id: &[u8],
+    criterion_key: &[u8],
+    relation_edges: u64,
+) {
+    receipt_sink_u64(sink, relation_ordinal);
+    receipt_sink_len_prefixed(sink, relation_id);
+    receipt_sink_len_prefixed(sink, criterion_key);
+    receipt_sink_u64(sink, relation_edges);
+}
+
 fn stream_receipt_edge(
     sink: &mut impl ReceiptSink,
     edge_ordinal: u64,
-    relation_id: &[u8],
-    criterion_key: &[u8],
     foreground: Srgb8,
     background: Srgb8,
 ) {
     receipt_sink_u64(sink, edge_ordinal);
-    receipt_sink_len_prefixed(sink, relation_id);
-    receipt_sink_len_prefixed(sink, criterion_key);
     sink.write(&foreground.bytes());
     sink.write(&background.bytes());
     sink.write(&[1]);
@@ -619,10 +628,27 @@ fn select_with<E: PairEvaluator>(
     let candidate = &record.candidates[candidate_index];
     let mut receipt = receipt_hasher(record, digest, selected_policy_ordinal, candidate);
     let mut edge_ordinal = 0_u64;
-    for relation in &record.relations {
+    for (relation_index, relation) in record.relations.iter().enumerate() {
         let Some((criterion, adjacent)) = relation.as_applicable() else {
             continue;
         };
+        let relation_ordinal = u64::try_from(relation_index).map_err(|_| {
+            SelectionErrorV1::IntegrityViolation(
+                SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
+            )
+        })?;
+        let relation_edges = u64::try_from(adjacent.len()).map_err(|_| {
+            SelectionErrorV1::IntegrityViolation(
+                SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
+            )
+        })?;
+        stream_receipt_relation(
+            &mut receipt,
+            relation_ordinal,
+            relation.relation_id().as_str().as_bytes(),
+            criterion.key().as_bytes(),
+            relation_edges,
+        );
         for adjacent in adjacent.iter().copied() {
             let decision = evaluate_bound_pair(
                 evaluator,
@@ -680,14 +706,7 @@ fn select_with<E: PairEvaluator>(
                 ));
             }
 
-            stream_receipt_edge(
-                &mut receipt,
-                edge_ordinal,
-                relation.relation_id().as_str().as_bytes(),
-                criterion.key().as_bytes(),
-                candidate.emitted,
-                adjacent,
-            );
+            stream_receipt_edge(&mut receipt, edge_ordinal, candidate.emitted, adjacent);
             edge_ordinal = edge_ordinal.checked_add(1).ok_or({
                 SelectionErrorV1::IntegrityViolation(
                     SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
@@ -848,12 +867,17 @@ mod tests {
 
     fn relation_receipt_bytes(relation_id: &[u8], edges: u64) -> u64 {
         let mut sink = CountingSink::default();
+        stream_receipt_relation(
+            &mut sink,
+            0,
+            relation_id,
+            Wcag22CriterionV1::Sc143TextDefault.key().as_bytes(),
+            edges,
+        );
         for edge_ordinal in 0..edges {
             stream_receipt_edge(
                 &mut sink,
                 edge_ordinal,
-                relation_id,
-                Wcag22CriterionV1::Sc143TextDefault.key().as_bytes(),
                 Srgb8::new([255; 3]),
                 Srgb8::new([0; 3]),
             );

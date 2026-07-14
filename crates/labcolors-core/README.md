@@ -125,7 +125,9 @@ use labcolors_core::{
         OccurrenceId, RelationId, RelationV1, ResourceProfileIdV1,
         explicit::{
             CandidateId, CandidateV1, DomainRequestV1, RequestV1, evaluate,
-            selection::{FirstFeasibleInDeclaredOrderV1, PolicyId, select},
+            selection::{
+                FirstFeasibleInDeclaredOrderV1, PolicyId, SelectionOutcomeV1, select,
+            },
         },
     },
 };
@@ -158,25 +160,26 @@ let policy = FirstFeasibleInDeclaredOrderV1::try_new(
     ],
 )?;
 let outcome = select(source, policy)?;
-let selected = outcome
-    .selected()
-    .expect("the declared order intersects the feasible partition")
-    .candidate()
-    .candidate_id()
-    .as_str();
+let selected = match &outcome {
+    SelectionOutcomeV1::Selected { selected, .. } => {
+        selected.candidate().candidate_id().as_str()
+    }
+    SelectionOutcomeV1::NoSelection { .. } => panic!("fixture must select"),
+};
 assert_eq!(selected, "brand/ink");
 # Ok(())
 # }
 # fn main() {}
 ```
 
-`selection_source()` существует только у `Feasible`: `Infeasible` и
+`selection_source()` возвращает `Some` только для `Feasible`: `Infeasible` и
 `NotEvaluated` не могут начать выбор. Политика перечисляет допустимое подмножество
 ID в точном клиентском порядке. Core сначала проверяет весь список, затем берёт
 первый уже доказанный feasible-ID и повторно проверяет его ровно по всем `E`
 каноническим применимым рёбрам тем же вычислителем WCAG. Валидный список без
-feasible-ID возвращает `NoSelection`; неизвестный/повторный ID и расхождение
-финальной проверки являются разными типизированными отказами, без fallback.
+feasible-ID возвращает исчерпывающий `NoSelection`; неизвестный/повторный ID и
+расхождение финальной проверки являются разными типизированными отказами, без
+fallback.
 
 В примере `Sc143TextDefault` означает явно объявленный клиентом критерий
 SC 1.4.3 для обычного текста с отношением 4.5:1; Core не угадывает его по ID или

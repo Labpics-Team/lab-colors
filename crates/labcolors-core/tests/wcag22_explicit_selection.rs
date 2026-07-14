@@ -505,7 +505,7 @@ fn property_selection_equals_an_independent_declared_order_lsb0_oracle() {
 fn production_identity_matches_the_independent_unicode_selection_fixture() {
     assert_eq!(
         fixture_sha256::digest(IDENTITY_FIXTURE.as_bytes()).to_hex(),
-        "ca6c9c83a87a400655ea6cbdc4efcfb36176095c082ec9342bda08ba7dfed955"
+        "5c5d33c27edcc6dedff4e77d7b70beb5a3b4a05a324169002db0b2b586161326"
     );
     let applicable = RelationV1::applicable(
         relation_id("alpha"),
@@ -571,7 +571,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
     );
     assert_eq!(
         hex(composed.receipt_digest().as_bytes()),
-        "3adbc3d926e75cc719eb9f3c31442e9cc2c272dfc175d0f942ef60423ee6d538"
+        "d275134278f8b4dbc80b4325a13e9a52069daf1e463c3853c7d9666b5d4f7677"
     );
     assert_eq!(
         composed.proof().receipt_digest(),
@@ -594,7 +594,7 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
     );
     assert_eq!(
         hex(decomposed.receipt_digest().as_bytes()),
-        "4859d800ff978319bdb0b84a6efe31090bf6ca0bc0d0090745fd53228e0ca991"
+        "b6e9b102088b322e5a834ae305543b1a23f07dc8e9a0b592164a0943696c83b8"
     );
 
     let no_selection = select(
