@@ -43,17 +43,17 @@ const runtimeSourceIds = [
 ];
 const coreAdmissionPath = resolve(
   repoRoot,
-  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json",
+  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
 );
 const packOraclePath = resolve(repoRoot, "conformance/vectors/wcag22-feasibility.json");
 const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.json");
 const wasmToolchainPath = resolve(here, "wasm-size-budget-v1.json");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
-const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v1.json");
+const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v2.json");
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v1";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v2";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
@@ -158,7 +158,7 @@ function sourceContracts() {
   const toolchain = readJsonWithBytes(wasmToolchainPath, "WASM toolchain artifact");
   if (
     core.value?.schemaVersion !== 1 ||
-    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v1" ||
+    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v3" ||
     core.value?.profileLimits?.profileId !== "compile-v1"
   ) {
     fail("unsupported Core admission artifact identity");
@@ -576,7 +576,7 @@ export function validateMeasurementArtifact(
   );
   if (
     artifact.bindings.coreAdmission.path !==
-      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json" ||
+      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json" ||
     artifact.bindings.coreAdmission.schemaVersion !== core.value.schemaVersion ||
     artifact.bindings.coreAdmission.artifactId !== core.value.artifactId ||
     artifact.bindings.coreAdmission.profileId !== core.value.profileLimits.profileId ||
@@ -1129,7 +1129,7 @@ function measurementArtifact() {
     },
     bindings: {
       coreAdmission: {
-        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json",
+        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
         schemaVersion: core.value.schemaVersion,
         artifactId: core.value.artifactId,
         profileId: core.value.profileLimits.profileId,

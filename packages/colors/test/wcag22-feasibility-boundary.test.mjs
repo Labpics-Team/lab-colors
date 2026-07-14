@@ -15,7 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const corePath = resolve(
   root,
-  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json",
+  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
 );
 const toolchainPath = resolve(root, "packages/colors/bench/wasm-size-budget-v1.json");
 const harnessPath = resolve(
@@ -199,7 +199,7 @@ function fixture() {
     },
     bindings: {
       coreAdmission: {
-        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json",
+        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
         schemaVersion: core.schemaVersion,
         artifactId: core.artifactId,
         profileId: core.profileLimits.profileId,
