@@ -1,4 +1,4 @@
-import type { ResolvedTheme } from "./pkg/labcolors.js";
+import type { ResolvedTheme } from "./index.js";
 
 /**
  * Apply a resolved theme's CSS variables to an element.

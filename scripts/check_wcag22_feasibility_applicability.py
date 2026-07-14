@@ -71,6 +71,16 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def decode_artifact(raw: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ApplicabilityError("benchmark artifact is not JSON") from error
+    require(isinstance(payload, dict),
+            "benchmark artifact root must be an object")
+    return payload
+
+
 def git_blob(object_id: str) -> bytes:
     require(GIT_OBJECT.fullmatch(object_id) is not None,
             "historical Cargo.lock Git object is invalid")
@@ -297,10 +307,7 @@ def check_current_applicability(
             "expected artifact SHA-256 is invalid")
     require(sha256(raw) == expected_artifact_sha256,
             "benchmark artifact SHA-256 mismatch")
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise ApplicabilityError("benchmark artifact is not JSON") from error
+    payload = decode_artifact(raw)
     require(payload.get("schemaVersion") == 1,
             "unsupported benchmark artifact schema")
     require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v1",
@@ -339,6 +346,22 @@ def canonical_lock(records: list[str]) -> bytes:
 
 
 def self_test() -> None:
+    require(decode_artifact(b"{}") == {},
+            "object artifact root must remain admissible")
+    for label, mutation in (
+        ("invalid UTF-8", b"\xff"),
+        ("array root", b"[]"),
+        ("null root", b"null"),
+        ("string scalar root", b'"scalar"'),
+        ("number scalar root", b"0"),
+        ("boolean scalar root", b"true"),
+    ):
+        try:
+            decode_artifact(mutation)
+        except ApplicabilityError:
+            continue
+        raise ApplicabilityError(f"self-test mutation survived: {label}")
+
     core = 'name = "labcolors-core"\nversion = "0.2.0"\ndependencies = [\n "dep",\n]'
     dep = (
         'name = "dep"\nversion = "1.0.0"\n'

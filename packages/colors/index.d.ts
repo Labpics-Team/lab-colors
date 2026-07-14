@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+
 // Public types for @labpics/colors.
 //
 // Re-exports the wasm-bindgen-generated types (the rich `ResolvedTheme` /

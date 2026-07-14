@@ -235,6 +235,11 @@ jobs:
               text=True,
           ))
           packages = {package["name"]: package for package in metadata["packages"]}
+          consumers = (
+              "labcolors-wasm",
+              "labcolors-ffi",
+              "labcolors-conformance",
+          )
           core = packages["labcolors-core"]
           if core["features"].get("default") != ["wcag22-feasibility"]:
               raise SystemExit("labcolors-core default capability set drifted")
@@ -255,7 +260,7 @@ jobs:
                   f"{protocol_core['features']}"
               )
 
-          for consumer in ["labcolors-wasm", "labcolors-ffi", "labcolors-conformance"]:
+          for consumer in consumers:
               core_dependencies = [
                   dependency
                   for dependency in packages[consumer]["dependencies"]
@@ -278,16 +283,17 @@ jobs:
               ]
               if len(protocol_dependencies) != 1:
                   raise SystemExit(f"{consumer} must have one normal labcolors-protocol edge")
-          PY
+              feature_tree = subprocess.check_output(
+                  ["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"],
+                  text=True,
+              )
+              if 'labcolors-core feature "wcag22-feasibility"' not in feature_tree:
+                  raise SystemExit(
+                      f"{consumer} did not resolve protocol-owned wcag22-feasibility"
+                  )
 
-          for consumer in labcolors-wasm labcolors-ffi labcolors-conformance; do
-            feature_tree="$(cargo tree -p "$consumer" --edges normal -e features)"
-            if ! grep -Fq 'labcolors-core feature "wcag22-feasibility"' <<<"$feature_tree"; then
-              echo "$consumer did not resolve protocol-owned wcag22-feasibility" >&2
-              exit 1
-            fi
-          done
-          echo "core capability projection: PASS"
+          print("core capability projection: PASS")
+          PY
       - name: reject WCAG22 source-route redirects and proof vacuums
         run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain

@@ -155,20 +155,23 @@ test("package root derives the envelope ceiling from WASM instead of copying a l
 test("feasibility TypeScript is exhaustive and excludes forged/proportional states", async (t) => {
   const fixture = await mkdtemp(join(tmpdir(), "labcolors-feasibility-types-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
-  const rust = await readFile(
-    new URL("../../../crates/labcolors-wasm/src/lib.rs", import.meta.url),
-    "utf8",
+  let declarations;
+  try {
+    declarations = await readFile(new URL("../pkg/labcolors.d.ts", import.meta.url), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error("pkg/labcolors.d.ts is required; run `npm run build` before tests", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  assert.match(
+    declarations,
+    /export function evaluateWcag22FeasibilityV1\(request: Uint8Array\): Wcag22FeasibilityOutcomeV1;/u,
+    "wasm-bindgen must publish the reviewed byte API declaration",
   );
-  const marker = 'const TS_RESULT_TYPES: &\'static str = r##"';
-  const start = rust.indexOf(marker);
-  const end = rust.indexOf('"##;', start + marker.length);
-  assert.notEqual(start, -1, "wasm-bindgen custom types section exists");
-  assert.notEqual(end, -1, "wasm-bindgen custom types section is closed");
-  const declarations = rust.slice(start + marker.length, end);
-  await writeFile(
-    join(fixture, "labcolors.d.ts"),
-    `${declarations}\nexport declare function evaluateWcag22FeasibilityV1(request: Uint8Array): Wcag22FeasibilityOutcomeV1;\n`,
-  );
+  await writeFile(join(fixture, "labcolors.d.ts"), declarations);
   await writeFile(
     join(fixture, "consumer.ts"),
     `
@@ -261,6 +264,8 @@ void [forgedSuccess, forgedFailure];
       "false",
       "--target",
       "ES2022",
+      "--lib",
+      "ES2022,DOM,ESNext.Disposable",
       "--module",
       "ESNext",
       "--moduleResolution",

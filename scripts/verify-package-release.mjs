@@ -529,6 +529,18 @@ const FEASIBILITY_PROOF_KEYS_V1 = [
   "resourceProfileId",
   "wcag22ProfileId",
 ];
+const FEASIBILITY_DOMAIN_SEPARATOR_V1 = Buffer.from(
+  "labcolors/wcag22-feasibility/domain/v1\0",
+  "utf8",
+);
+const FEASIBILITY_RELATION_SEPARATOR_V1 = Buffer.from(
+  "labcolors/wcag22-feasibility/relations/v1\0",
+  "utf8",
+);
+const FEASIBILITY_EVALUATION_SEPARATOR_V1 = Buffer.from(
+  "labcolors/wcag22-feasibility/evaluation/v1\0",
+  "utf8",
+);
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -572,6 +584,93 @@ function byteArray(value, expectedLength, label) {
   ) {
     fail(`${label} must contain exactly ${expectedLength} byte values`);
   }
+}
+
+function u64be(value, label) {
+  const parsed = BigInt(value);
+  if (parsed < 0n || parsed > 18_446_744_073_709_551_615n) {
+    fail(`${label} is outside u64`);
+  }
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64BE(parsed);
+  return bytes;
+}
+
+function updateLengthPrefixed(hasher, value, label) {
+  const bytes = Buffer.from(value, "utf8");
+  hasher.update(u64be(bytes.length, `${label}.length`));
+  hasher.update(bytes);
+}
+
+function requireDigest(actual, expected, label) {
+  byteArray(actual, 32, label);
+  if (!Buffer.from(actual).equals(expected)) {
+    fail(`${label} does not bind its canonical preimage`);
+  }
+}
+
+function neutralAxisDomainV1() {
+  return Array.from({ length: 256 }, (_, value) => [value, value, value]);
+}
+
+function feasibilityDomainDigestV1(domainId, domain) {
+  const hasher = createHash("sha256");
+  hasher.update(FEASIBILITY_DOMAIN_SEPARATOR_V1);
+  updateLengthPrefixed(hasher, domainId, "domainId");
+  hasher.update(u64be(domain.length, "domainCount"));
+  for (const candidate of domain) hasher.update(Buffer.from(candidate));
+  return hasher.digest();
+}
+
+function feasibilityRelationSetDigestV1(relations) {
+  const hasher = createHash("sha256");
+  hasher.update(FEASIBILITY_RELATION_SEPARATOR_V1);
+  hasher.update(u64be(relations.length, "canonicalRelations"));
+  for (const relation of relations) {
+    if (relation.kind === "applicable") {
+      hasher.update(Buffer.from([1]));
+      updateLengthPrefixed(hasher, relation.relationId, "relationId");
+      updateLengthPrefixed(hasher, relation.occurrenceId, "occurrenceId");
+      updateLengthPrefixed(hasher, relation.criterion, "criterion");
+      hasher.update(u64be(relation.adjacent.length, "adjacentCount"));
+      for (const adjacent of relation.adjacent) hasher.update(Buffer.from(adjacent));
+    } else {
+      hasher.update(Buffer.from([2]));
+      updateLengthPrefixed(hasher, relation.relationId, "relationId");
+      updateLengthPrefixed(hasher, relation.occurrenceId, "occurrenceId");
+      updateLengthPrefixed(hasher, relation.reasonId, "reasonId");
+    }
+  }
+  return hasher.digest();
+}
+
+function feasibilityEvaluationIdV1({ proof, counts, matrixDigest, atomicProofSha256 }) {
+  const hasher = createHash("sha256");
+  hasher.update(FEASIBILITY_EVALUATION_SEPARATOR_V1);
+  hasher.update(Buffer.from(proof.domainDigest));
+  hasher.update(Buffer.from(proof.relationSetDigest));
+  for (const [field, value] of [
+    ["wcag22ProfileId", proof.wcag22ProfileId],
+    ["artifactId", proof.artifactId],
+    ["boundId", proof.boundId],
+    ["proofId", proof.proofId],
+  ]) {
+    updateLengthPrefixed(hasher, value, field);
+  }
+  hasher.update(atomicProofSha256);
+  for (const [field, value] of [
+    ["canonicalRelations", counts.canonicalRelations],
+    ["applicableRelations", counts.applicableRelations],
+    ["notApplicableRelations", counts.notApplicableRelations],
+    ["applicableEdges", counts.applicableEdges],
+    ["logicalAssessments", counts.logicalAssessments],
+    ["packedResultBytes", counts.packedResultBytes],
+  ]) {
+    hasher.update(u64be(value, field));
+  }
+  hasher.update(matrixDigest);
+  hasher.update(Buffer.from(proof.partition));
+  return hasher.digest();
 }
 
 function rgb(value, label) {
@@ -670,7 +769,13 @@ function packedBit(bytes, logicalIndex) {
   return (bytes[Math.floor(logicalIndex / 8)] & (1 << (logicalIndex % 8))) !== 0;
 }
 
-function validateEvaluatedFeasibility(result, request, status, caseId) {
+function validateEvaluatedFeasibility(
+  result,
+  request,
+  status,
+  caseId,
+  atomicProofSha256,
+) {
   exactKeys(result, ["domain", "failureMatrix", "proof", "relations"], `${caseId}.result`);
   if (!Array.isArray(result.domain) || result.domain.length !== 256) {
     fail(`${caseId}.domain must contain exactly 256 candidates`);
@@ -720,6 +825,17 @@ function validateEvaluatedFeasibility(result, request, status, caseId) {
   ) {
     fail(`${caseId}.proof domain endpoints drifted`);
   }
+  requireDigest(
+    proof.domainDigest,
+    feasibilityDomainDigestV1(proof.domainId, result.domain),
+    `${caseId}.proof.domainDigest`,
+  );
+  requireDigest(
+    proof.relationSetDigest,
+    feasibilityRelationSetDigestV1(result.relations),
+    `${caseId}.proof.relationSetDigest`,
+  );
+  requireDigest(proof.proofSha256, atomicProofSha256, `${caseId}.proof.proofSha256`);
 
   const counts = Object.fromEntries(
     [
@@ -745,13 +861,8 @@ function validateEvaluatedFeasibility(result, request, status, caseId) {
     fail(`${caseId}.proof decimal counts disagree with transported content`);
   }
   byteArray(result.failureMatrix, 32 * edges, `${caseId}.failureMatrix`);
-  if (
-    !Buffer.from(proof.matrixDigest).equals(
-      createHash("sha256").update(Buffer.from(result.failureMatrix)).digest(),
-    )
-  ) {
-    fail(`${caseId}.proof matrixDigest does not bind failureMatrix bytes`);
-  }
+  const matrixDigest = createHash("sha256").update(Buffer.from(result.failureMatrix)).digest();
+  requireDigest(proof.matrixDigest, matrixDigest, `${caseId}.proof.matrixDigest`);
 
   let feasibleCount = 0;
   for (let candidate = 0; candidate < 256; candidate += 1) {
@@ -768,6 +879,19 @@ function validateEvaluatedFeasibility(result, request, status, caseId) {
   if ((status === "feasible") !== (feasibleCount > 0)) {
     fail(`${caseId}.${status} contradicts its complete partition`);
   }
+  requireDigest(
+    proof.evaluationId,
+    feasibilityEvaluationIdV1({
+      proof,
+      matrixDigest,
+      atomicProofSha256,
+      counts: {
+        ...counts,
+        packedResultBytes: BigInt(result.failureMatrix.length + proof.partition.length),
+      },
+    }),
+    `${caseId}.proof.evaluationId`,
+  );
   return feasibleCount;
 }
 
@@ -796,6 +920,16 @@ function validateNotEvaluatedFeasibility(result, request, caseId) {
   if (!isDeepStrictEqual(result.relations, canonicalRelations(request.relations))) {
     fail(`${caseId}.NotEvaluated relations differ from its canonical request`);
   }
+  requireDigest(
+    result.domainDigest,
+    feasibilityDomainDigestV1(result.domainId, neutralAxisDomainV1()),
+    `${caseId}.domainDigest`,
+  );
+  requireDigest(
+    result.relationSetDigest,
+    feasibilityRelationSetDigestV1(result.relations),
+    `${caseId}.relationSetDigest`,
+  );
 }
 
 function validateFeasibilityFailure(outcome, expectation, request, caseId) {
@@ -847,7 +981,11 @@ function validateFeasibilityFailure(outcome, expectation, request, caseId) {
 }
 
 /** Independently validate the complete pack-5 feasibility family. */
-export function validateWcag22FeasibilityFamily(family) {
+export function validateWcag22FeasibilityFamily(family, atomicProofSha256Hex) {
+  if (!/^[0-9a-f]{64}$/u.test(atomicProofSha256Hex ?? "")) {
+    fail("WCAG22 feasibility validation requires the canonical atomic proof SHA-256");
+  }
+  const atomicProofSha256 = Buffer.from(atomicProofSha256Hex, "hex");
   if (!Array.isArray(family) || family.length !== FEASIBILITY_CASES_V1.size) {
     fail(`wcag22-feasibility family must contain exactly ${FEASIBILITY_CASES_V1.size} vectors`);
   }
@@ -889,6 +1027,7 @@ export function validateWcag22FeasibilityFamily(family) {
           request,
           expectation.terminal,
           vector.caseId,
+          atomicProofSha256,
         );
         if (expectation.count !== undefined && feasibleCount !== expectation.count) {
           fail(`${vector.caseId} feasible count ${feasibleCount} != ${expectation.count}`);
@@ -951,6 +1090,9 @@ async function validateConformance(conformance) {
   const familyBuffers = await Promise.all(
     CONFORMANCE_FAMILY_FILES.map((name) => readFile(resolve(CONFORMANCE_DIR, name))),
   );
+  const proofPath = resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
+  const proofBytes = await readFile(proofPath);
+  const proof = await readJson(proofPath);
   const actualDigest = fnv1a32(familyBuffers);
   if (actualDigest !== conformance.packDigest) {
     fail(
@@ -989,7 +1131,7 @@ async function validateConformance(conformance) {
   if (conformance.counts?.total !== total) {
     fail(`conformance total=${conformance.counts?.total} differs from ${total}`);
   }
-  validateWcag22FeasibilityFamily(families[6]);
+  validateWcag22FeasibilityFamily(families[6], sha256(proofBytes));
   const halfTie = families[2].find(
     (entry) => entry.tint === "#C0B2FA" && entry.bg === "#000000" && entry.alpha === 0.122,
   );
@@ -1002,9 +1144,6 @@ async function validateConformance(conformance) {
       entry.background === "#8212DB" &&
       entry.criterion === "sc-1.4.11-ui-component-or-state",
   );
-  const proofPath = resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
-  const proofBytes = await readFile(proofPath);
-  const proof = await readJson(proofPath);
   if (
     antiEpsilon?.decision !== "fail" ||
     antiEpsilon?.evidenceKind !== "canonical-finite-bounded" ||
@@ -1060,7 +1199,11 @@ function lockedNpmVersion(packageJson) {
 
 async function wcag22FeasibilitySmokeFixture() {
   const family = await readJson(resolve(CONFORMANCE_DIR, "wcag22-feasibility.json"));
-  const canonical = validateWcag22FeasibilityFamily(family).get("text-default-seven")?.vector;
+  const proofBytes = await readFile(
+    resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json"),
+  );
+  const canonical = validateWcag22FeasibilityFamily(family, sha256(proofBytes))
+    .get("text-default-seven")?.vector;
   if (!canonical) fail("wcag22-feasibility smoke fixture is missing text-default-seven");
   return {
     requestJson: canonical.requestJson,
@@ -1312,8 +1455,37 @@ import init, {
   type Wcag22FeasibilityOutcomeV1,
   type Wcag22FeasibilityRequestV1,
 } from "@labpics/colors";
+import { applyTheme } from "@labpics/colors/apply-theme";
+import {
+  watchTheme,
+  type WatchController,
+  type WatchThemeOptions,
+} from "@labpics/colors/watch-theme";
+import {
+  adaptTheme,
+  type AdaptController,
+  type AdaptThemeOptions,
+} from "@labpics/colors/adapt-theme";
+import {
+  effectiveBackground,
+  type EffectiveBackgroundOptions,
+  type Rgba,
+} from "@labpics/colors/effective-bg";
 
 const initialise: typeof init = init;
+const apply: typeof applyTheme = applyTheme;
+const watch: typeof watchTheme = watchTheme;
+const adapt: typeof adaptTheme = adaptTheme;
+const effective: typeof effectiveBackground = effectiveBackground;
+type PublicSubpathTypes =
+  | WatchController
+  | WatchThemeOptions
+  | AdaptController
+  | AdaptThemeOptions
+  | EffectiveBackgroundOptions
+  | Rgba;
+declare const publicSubpathType: PublicSubpathTypes;
+void [apply, watch, adapt, effective, publicSubpathType];
 const engine = new LabColors();
 const fingerprint: string = engine.loadConfig("{}");
 const resolved: ResolvedTheme = engine.resolveTheme("#000000", "light");
@@ -1676,7 +1848,7 @@ async function verifyCleanConsumer(
         "--target",
         "ES2022",
         "--lib",
-        "ES2022,DOM,ESNext.Disposable",
+        "ES2022,DOM",
         "--module",
         "NodeNext",
         "--moduleResolution",
@@ -1843,7 +2015,7 @@ export async function verifyPackageRelease() {
       typescript: {
         compiler: lockedTypescriptVersion(packageLock),
         target: "ES2022",
-        libraries: ["ES2022", "DOM", "ESNext.Disposable"],
+        libraries: ["ES2022", "DOM"],
         skipLibCheck: false,
       },
     },

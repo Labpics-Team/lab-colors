@@ -141,14 +141,31 @@ test("WCAG22 feasibility has one protocol feature owner shared by every boundary
   }
 
   const ci = read(".github", "workflows", "ci.yml");
-  assert.match(
+  const projection = workflowRunScript(
     ci,
-    /for consumer in \["labcolors-wasm", "labcolors-ffi", "labcolors-conformance"\]/u,
+    "name: prove core capability projection boundary",
   );
-  assert.match(ci, /protocol_core\["features"\] != \["wcag22-feasibility"\]/u);
-  assert.match(ci, /core_dependency\["features"\]/u);
-  assert.match(ci, /dependency\["name"\] == "labcolors-protocol"/u);
-  assert.match(ci, /cargo tree -p "\$consumer" --edges normal -e features/u);
+  const declaredConsumers = projection.match(
+    /consumers = \(\n(?<items>(?:    "[^"]+",\n)+)\)/u,
+  )?.groups?.items;
+  assert.ok(declaredConsumers, "CI must declare one consumer SSOT");
+  assert.deepEqual(
+    [...declaredConsumers.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
+    ["labcolors-wasm", "labcolors-ffi", "labcolors-conformance"],
+  );
+  assert.equal(
+    projection.match(/for consumer in consumers:/gu)?.length,
+    1,
+    "the dependency and feature-tree checks must share one consumer loop",
+  );
+  assert.match(projection, /protocol_core\["features"\] != \["wcag22-feasibility"\]/u);
+  assert.match(projection, /core_dependency\["features"\]/u);
+  assert.match(projection, /dependency\["name"\] == "labcolors-protocol"/u);
+  assert.match(
+    projection,
+    /\["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"\]/u,
+  );
+  assert.doesNotMatch(projection, /for consumer in labcolors-/u);
 });
 
 test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
@@ -809,7 +826,16 @@ test("release checker independently validates and mutation-proves feasibility pa
   const canonical = JSON.parse(
     read("conformance", "vectors", "wcag22-feasibility.json"),
   );
-  assert.doesNotThrow(() => validateWcag22FeasibilityFamily(canonical));
+  const atomicProofSha256 = createHash("sha256")
+    .update(readFileSync(join(
+      root,
+      "crates",
+      "labcolors-core",
+      "contracts",
+      "wcag22-srgb8-q55-proof-v1.json",
+    )))
+    .digest("hex");
+  assert.doesNotThrow(() => validateWcag22FeasibilityFamily(canonical, atomicProofSha256));
 
   const mutateOutcome = (family, caseId, mutate) => {
     const vector = family.find((entry) => entry.caseId === caseId);
@@ -841,6 +867,36 @@ test("release checker independently validates and mutation-proves feasibility pa
       "ui-component-fifty-nine",
       (outcome) => { outcome.feasibility.result.proof.partition[0] ^= 1; },
     )],
+    ["domain digest flip", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.proof.domainDigest[0] ^= 1; },
+    )],
+    ["relation-set digest flip", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.proof.relationSetDigest[0] ^= 1; },
+    )],
+    ["evaluation ID flip", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.proof.evaluationId[0] ^= 1; },
+    )],
+    ["atomic proof digest flip", (family) => mutateOutcome(
+      family,
+      "text-default-seven",
+      (outcome) => { outcome.feasibility.result.proof.proofSha256[0] ^= 1; },
+    )],
+    ["not-evaluated domain digest flip", (family) => mutateOutcome(
+      family,
+      "all-not-applicable",
+      (outcome) => { outcome.feasibility.result.domainDigest[0] ^= 1; },
+    )],
+    ["not-evaluated relation-set digest flip", (family) => mutateOutcome(
+      family,
+      "all-not-applicable",
+      (outcome) => { outcome.feasibility.result.relationSetDigest[0] ^= 1; },
+    )],
     ["numeric u64", (family) => mutateOutcome(
       family,
       "text-default-seven",
@@ -866,12 +922,12 @@ test("release checker independently validates and mutation-proves feasibility pa
       second.outcomeJson = JSON.stringify(secondOutcome);
     }],
   ];
-  assert.equal(mutations.length, 10, "anti-vacuum mutation corpus changed");
+  assert.equal(mutations.length, 16, "anti-vacuum mutation corpus changed");
   for (const [name, mutate] of mutations) {
     const family = structuredClone(canonical);
     mutate(family);
     assert.throws(
-      () => validateWcag22FeasibilityFamily(family),
+      () => validateWcag22FeasibilityFamily(family, atomicProofSha256),
       undefined,
       `${name} must fail the release checker`,
     );
@@ -895,7 +951,11 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
     /"wcag22-feasibility-v1"/u,
     "release supported list must advertise the compiler operation",
   );
-  assert.match(verifier, /validateWcag22FeasibilityFamily\(families\[6\]\)/u);
+  assert.match(
+    verifier,
+    /validateWcag22FeasibilityFamily\(families\[6\], sha256\(proofBytes\)\)/u,
+    "pack validation must bind feasibility proof fields to the canonical atomic proof bytes",
+  );
   assert.match(verifier, /evaluateWcag22Feasibility/u);
   assert.match(verifier, /wcag22FeasibilityMaxBytes/u);
   assert.match(verifier, /type Wcag22FeasibilityRequestV1/u);
@@ -1406,6 +1466,9 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(verifier, /"--offline"/);
   assert.match(verifier, /node_modules\/typescript\/package\.json/);
   assert.doesNotMatch(verifier, /`typescript@\$\{typescriptVersion\}`/);
+  assert.match(verifier, /"--lib",\s+"ES2022,DOM"/u);
+  assert.doesNotMatch(verifier, /ES2022,DOM,ESNext\.Disposable/u);
+  assert.match(verifier, /libraries: \["ES2022", "DOM"\]/u);
   assert.match(verifier, /artifacts: \{ tarball, wasm, buildMetadata \}/);
 });
 
@@ -1421,7 +1484,40 @@ test("package root curates public types while keeping feasibility internals priv
   assert.ok(generatedNames.length > 10, "anti-vacuum: custom type surface is non-trivial");
   assert.equal(new Set(generatedNames).size, generatedNames.length, "duplicate custom type name");
 
-  const rootTypes = read("packages", "colors", "index.d.ts").match(
+  const rootDeclarations = read("packages", "colors", "index.d.ts");
+  assert.match(
+    rootDeclarations,
+    /^\/\/\/ <reference lib="esnext\.disposable" \/>/u,
+    "package root must make wasm-bindgen disposal types self-contained for consumers",
+  );
+  const typecheck = JSON.parse(read("packages", "colors", "tsconfig.json"));
+  assert.deepEqual(typecheck.compilerOptions.lib, ["ES2022", "DOM"]);
+  assert.equal(typecheck.compilerOptions.skipLibCheck, false);
+
+  for (const subpath of ["apply-theme", "watch-theme", "adapt-theme"]) {
+    const declarations = read("packages", "colors", `${subpath}.d.ts`);
+    assert.match(
+      declarations,
+      /from "\.\/index\.js";/u,
+      `${subpath} declarations must reuse the curated root type owner`,
+    );
+    assert.doesNotMatch(
+      declarations,
+      /\.\/pkg\/labcolors\.js/u,
+      `${subpath} declarations must not bypass the curated root type owner`,
+    );
+  }
+
+  const verifier = read("scripts", "verify-package-release.mjs");
+  for (const subpath of ["apply-theme", "watch-theme", "adapt-theme", "effective-bg"]) {
+    assert.match(
+      verifier,
+      new RegExp(`@labpics/colors/${subpath}`, "u"),
+      `clean-consumer type smoke must compile the ${subpath} public subpath`,
+    );
+  }
+
+  const rootTypes = rootDeclarations.match(
     /export type \{([\s\S]*?)\} from "\.\/pkg\/labcolors\.js";/u,
   )?.[1];
   assert.ok(rootTypes, "curated root type export block not found");

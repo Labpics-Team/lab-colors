@@ -491,7 +491,7 @@ final class ConformanceTests: XCTestCase {
             let request = Array(vector.requestJson.utf8)
             let raw = try evaluateWcag22FeasibilityRawV1(request: Data(request))
             XCTAssertEqual(
-                String(decoding: raw, as: UTF8.self), vector.outcomeJson,
+                raw, Data(vector.outcomeJson.utf8),
                 "canonical FFI bytes \(vector.caseId)")
 
             let typed = try evaluateWcag22Feasibility(Data(request))
@@ -652,7 +652,7 @@ final class ConformanceTests: XCTestCase {
             Wcag22FeasibilityOutcomeV1.self, from: canonicalData)
 
         func mutated(
-            _ change: (inout [[Int]], inout [Int], inout [String: Any]) -> Void
+            _ change: (inout [[Int]], inout [Int], inout [String: Any]) throws -> Void
         ) throws -> Data {
             var root = try XCTUnwrap(
                 JSONSerialization.jsonObject(with: canonicalData) as? [String: Any])
@@ -661,7 +661,7 @@ final class ConformanceTests: XCTestCase {
             var domain = try XCTUnwrap(result["domain"] as? [[Int]])
             var matrix = try XCTUnwrap(result["failureMatrix"] as? [Int])
             var proof = try XCTUnwrap(result["proof"] as? [String: Any])
-            change(&domain, &matrix, &proof)
+            try change(&domain, &matrix, &proof)
             result["domain"] = domain
             result["failureMatrix"] = matrix
             result["proof"] = proof
@@ -711,8 +711,9 @@ final class ConformanceTests: XCTestCase {
             try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: forgedTerminal))
 
         let changedIdentity = try mutated { _, _, proof in
-            var digest = proof["relationSetDigest"] as! [Int]
-            digest[0] ^= 1
+            var digest = try XCTUnwrap(proof["relationSetDigest"] as? [Int])
+            let first = try XCTUnwrap(digest.indices.first)
+            digest[first] ^= 1
             proof["relationSetDigest"] = digest
         }
         let changedIdentityOutcome = try JSONDecoder().decode(

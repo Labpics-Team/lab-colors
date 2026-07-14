@@ -855,26 +855,32 @@ public func evaluateWcag22Feasibility(
     _ request: [UInt8]
 ) throws -> Wcag22FeasibilityOutcomeV1 {
     let bridge = Wcag22FeasibilityBridge.live
-    let requestedBytes = UInt64(request.count)
-    let encoded: Data
-    if requestedBytes > bridge.maxRequestBytes() {
-        encoded = try bridge.envelopeTooLarge(requestedBytes)
-    } else {
-        encoded = try bridge.evaluateRaw(Data(request))
-    }
-    return try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: encoded)
+    return try evaluateWcag22Feasibility(
+        requestedBytes: UInt64(request.count),
+        using: bridge,
+        evaluateAdmitted: { try bridge.evaluateRaw(Data(request)) })
 }
 
 func evaluateWcag22Feasibility(
     _ request: Data,
     using bridge: Wcag22FeasibilityBridge
 ) throws -> Wcag22FeasibilityOutcomeV1 {
-    let requestedBytes = UInt64(request.count)
+    try evaluateWcag22Feasibility(
+        requestedBytes: UInt64(request.count),
+        using: bridge,
+        evaluateAdmitted: { try bridge.evaluateRaw(request) })
+}
+
+private func evaluateWcag22Feasibility(
+    requestedBytes: UInt64,
+    using bridge: Wcag22FeasibilityBridge,
+    evaluateAdmitted: () throws -> Data
+) throws -> Wcag22FeasibilityOutcomeV1 {
     let encoded: Data
     if requestedBytes > bridge.maxRequestBytes() {
         encoded = try bridge.envelopeTooLarge(requestedBytes)
     } else {
-        encoded = try bridge.evaluateRaw(request)
+        encoded = try evaluateAdmitted()
     }
     return try JSONDecoder().decode(Wcag22FeasibilityOutcomeV1.self, from: encoded)
 }

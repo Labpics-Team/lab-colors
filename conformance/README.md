@@ -78,8 +78,8 @@ decision. Legacy-идентификаторы сохранены только д
 - `alpha.json` начиная с pack `2.0.0` обязательно содержит точный byte-reference
   half-tie `#C0B2FA @ 0.122` над `#000000` → `#17161F`. Это mutation-killer
   старого пути `(byte/255) · alpha · 255`, который выбирал соседний LSB.
-- `manifest.numericalCapabilities`, введённый в pack `4.0.0` и сохранённый в
-  `5.0.0`, генерируется из
+- `manifest.numericalCapabilities`, введённый в pack `3.0.0`, переведённый на
+  proof-capable schema V2 в pack `4.0.0` и сохранённый в `5.0.0`, генерируется из
   proof-capable core-owned `numerical_capability_manifest_v2()`. До появления
   внешних клиентов промежуточная Glow-only capability-схема V1 удалена из
   public API: один `numericalCapabilityManifest()` сразу возвращает V2, без

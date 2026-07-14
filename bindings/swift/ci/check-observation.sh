@@ -27,6 +27,19 @@ live_ffi_sha=$(sha256sum "$ffi_subject" | awk '{print $1}')
 readonly live_ffi_sha
 live_sample_count=$(jq -r .sampleCount "$benchmark")
 readonly live_sample_count
+# Independent transport oracle: the compact V1 grammar contributes 101 fixed
+# bytes, at most 115 bytes per raw relation, 14 per adjacent triple and six
+# per opaque UTF-8 byte. Production owns the same ceiling in
+# labcolors-protocol; this checker intentionally derives it from the public
+# profile limits instead of trusting the observed Swift scalar.
+live_max_request_bytes=$(jq -er '
+  .profileLimits
+  | 101
+    + 115 * .rawRelations
+    + 14 * .rawAdjacentEntries
+    + 6 * .opaqueUtf8Bytes
+' "$benchmark")
+readonly live_max_request_bytes
 live_max_relation_raw=$(jq -r '
   .scenarios[] | select(.name == "maximum-canonical-applicable-relations")
   | .shape.rawRelations
@@ -66,6 +79,7 @@ jq -e \
   --arg benchmarkSha256 "$live_benchmark_sha" \
   --arg ffiSha256 "$live_ffi_sha" \
   --argjson sampleCount "$live_sample_count" \
+  --argjson maxRequestBytes "$live_max_request_bytes" \
   --argjson maxRelationRaw "$live_max_relation_raw" \
   --argjson maxRelationAdjacent "$live_max_relation_adjacent" \
   --argjson maxEdgeRaw "$live_max_edge_raw" \
@@ -73,7 +87,6 @@ jq -e \
   --argjson maxOpaque "$live_max_opaque" \
   --argjson maxNotApplicableRaw "$live_max_not_applicable_raw" '
   def exact_keys($expected): (keys | sort) == ($expected | sort);
-  (.wholeCall[0].maxRequestBytes) as $max |
   exact_keys([
     "artifacts", "contract", "evidenceClass", "extremeShapes", "mode",
     "oversizePreflight", "process", "schemaVersion", "status", "subject",
@@ -138,6 +151,7 @@ jq -e \
     ($call.samplesNs | sort | .[($sampleCount / 2 | floor)]) == $call.medianNs and
     ($call.requestBytes | type == "number") and $call.requestBytes > 0 and
     ($call.maxRequestBytes | type == "number") and
+      $call.maxRequestBytes == $maxRequestBytes and
       $call.maxRequestBytes >= $call.requestBytes) and
   (.oversizePreflight | length == 1) and
   (.oversizePreflight[0] | exact_keys([
@@ -145,8 +159,8 @@ jq -e \
     "requestedBytes", "scalarCalls"
   ])) and
   (.oversizePreflight[0] as $oversize |
-    $oversize.maxRequestBytes == $max and
-    $oversize.requestedBytes == ($max + 1) and
+    $oversize.maxRequestBytes == $maxRequestBytes and
+    $oversize.requestedBytes == ($maxRequestBytes + 1) and
     $oversize.ffiSubmittedBytes == 0 and
     $oversize.outputBytes > 0 and
     $oversize.rawCalls == 0 and
@@ -172,7 +186,7 @@ jq -e \
     (.opaqueUtf8Bytes | type == "number") and .opaqueUtf8Bytes > 0 and
     (.wholeCallNs | numbers) and .wholeCallNs > 0 and
     (.requestBytes | numbers) and .requestBytes > 0 and
-    .requestBytes <= $max and
+    .requestBytes <= $maxRequestBytes and
     (.outputBytes | numbers) and .outputBytes > 0 and
     .ffiSubmittedBytes == .requestBytes and
     .rawCalls == 1 and
@@ -211,8 +225,8 @@ if [[ ${2:-} == "--mutation-test" ]]; then
   reject_mutation latency-scope '.contract.wholeCallLatencyScope = "includes-construction"'
   reject_mutation copy-drift '.extremeShapes[0].ffiSubmittedBytes += 1'
   reject_mutation oversize-copy '.oversizePreflight[0].rawCalls = 1'
-  reject_mutation oversize-ceiling-drift \
-    '.oversizePreflight[0].maxRequestBytes += 1 | .oversizePreflight[0].requestedBytes += 1'
+  reject_mutation derived-ceiling-drift \
+    '.wholeCall[0].maxRequestBytes += 1 | .oversizePreflight[0].maxRequestBytes += 1 | .oversizePreflight[0].requestedBytes += 1'
   reject_mutation extreme-over-ceiling \
     '.extremeShapes[0].requestBytes = (.wholeCall[0].maxRequestBytes + 1) | .extremeShapes[0].ffiSubmittedBytes = .extremeShapes[0].requestBytes'
   reject_mutation sample-count '.wholeCall[0].sampleCount += 1'

@@ -14,6 +14,11 @@
 npm install @labpics/colors
 ```
 
+Публичный `.d.ts` сам подключает стандартный `esnext.disposable`, нужный
+сгенерированному wasm-bindgen классу: TypeScript-проекту не требуется вручную
+расширять свой `lib`. Release-gate компилирует чистого потребителя с
+`skipLibCheck: false` и зафиксированной версией TypeScript.
+
 При сборке из монорепо:
 
 ```sh
