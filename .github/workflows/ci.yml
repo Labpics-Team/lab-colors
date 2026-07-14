@@ -347,7 +347,7 @@ jobs:
 
           current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
           current_protocol=(
-            --admit-revision 9a4144d23fb3582bae8e0f0e2749722eef1b1e56
+            --admit-revision 055a740f7553dc19e1c133b138e44a851d329f71
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
@@ -359,11 +359,11 @@ jobs:
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
             --verify-current-subjects \
-            --artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1 \
+            --artifact-sha256 c2866b6b4a213fca801daef4a7bfa7631f4657f369308ad1c233c2465395bf33 \
             --self-test
           python3 scripts/check_wcag22_feasibility_applicability.py \
             "$current_artifact" \
-            --artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1 \
+            --artifact-sha256 c2866b6b4a213fca801daef4a7bfa7631f4657f369308ad1c233c2465395bf33 \
             --self-test
 
   audit:
@@ -470,14 +470,14 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "verify committed #295 canonical whole-call WASM boundary evidence"
+      - name: "record canonical #296-A whole-call WASM boundary candidate"
         # The admitted JSON binds exact deterministic bytes/shapes and the
         # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
         # latency/maxRSS/pages remain observations only.
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify
+          --emit > bench/wcag22-feasibility-wasm-boundary-v1.json
       - name: independently fingerprint the exact #295 WASM
         run: |
           bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"

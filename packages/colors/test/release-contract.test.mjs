@@ -1257,7 +1257,7 @@ test("feasibility benchmark keeps V1 history and admits only exact V2 Core subje
         "wcag22-feasibility-benchmark-v2.json",
       ),
       "--artifact-sha256",
-      "7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1",
+      "c2866b6b4a213fca801daef4a7bfa7631f4657f369308ad1c233c2465395bf33",
       "--self-test",
     ], {
       cwd: root,
@@ -1279,7 +1279,7 @@ test("feasibility benchmark keeps V1 history and admits only exact V2 Core subje
   );
   assert.match(
     ci,
-    /current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json"[\s\S]*?--admit-revision 9a4144d23fb3582bae8e0f0e2749722eef1b1e56[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 7809990c643453d1b255870b178b755c1736af8f59107a03fd5a28fa82ecf7a1[\s\S]*?--self-test/u,
+    /current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json"[\s\S]*?--admit-revision 055a740f7553dc19e1c133b138e44a851d329f71[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 c2866b6b4a213fca801daef4a7bfa7631f4657f369308ad1c233c2465395bf33[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 c2866b6b4a213fca801daef4a7bfa7631f4657f369308ad1c233c2465395bf33[\s\S]*?--self-test/u,
     "V2 must bind the current generic kernel to one exact measured source commit",
   );
   assert.equal(
