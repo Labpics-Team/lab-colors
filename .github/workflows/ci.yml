@@ -385,6 +385,7 @@ jobs:
           46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json
           3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json
           6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json
+          2e319643e582ca385f988af173b534cd9d1c921f36fcc929f1c56eb8bd978d24  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v6.json
           SHA256
 
           historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
@@ -505,8 +506,9 @@ jobs:
           cleanup_history
           trap - EXIT
 
-          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json"
-          current_protocol=(
+          v5_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json"
+          v5_snapshot=9819bbd549ef2347eb133b948ccb5f7a3c5a51fe
+          v5_protocol=(
             --admit-rustc-release 1.96.0
             --admit-cargo-release 1.96.0
             --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
@@ -519,9 +521,35 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
+          trap cleanup_history EXIT
+          git worktree add --detach "$historical_root" "$v5_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$v5_artifact" "${v5_protocol[@]}" \
+              --artifact-sha256 6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5 \
+              --self-test
+          )
+          cleanup_history
+          trap - EXIT
+
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v6.json"
+          current_protocol=(
+            --admit-rustc-release 1.96.0
+            --admit-cargo-release 1.96.0
+            --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
+            --admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841
+            --admit-benchmark-binary-sha256 1e43b4c8418b8f45da3614d9697966874943e034d4275ee2a404f95aa60dbd2a
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --artifact-sha256 6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5 \
+            --artifact-sha256 2e319643e582ca385f988af173b534cd9d1c921f36fcc929f1c56eb8bd978d24 \
             --self-test
 
   audit:
