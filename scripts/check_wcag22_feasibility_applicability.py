@@ -16,11 +16,12 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
-import json
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from check_wcag22_feasibility_benchmark import decode_benchmark_artifact
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,12 +72,9 @@ def sha256(data: bytes) -> str:
 
 def decode_artifact(raw: bytes) -> dict[str, Any]:
     try:
-        payload = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ApplicabilityError("benchmark artifact is not JSON") from error
-    require(isinstance(payload, dict),
-            "benchmark artifact root must be an object")
-    return payload
+        return decode_benchmark_artifact(raw)
+    except ValueError as error:
+        raise ApplicabilityError(str(error)) from error
 
 
 def git_blob(object_id: str) -> bytes:
@@ -347,7 +345,11 @@ def self_test() -> None:
     require(decode_artifact(b"{}") == {},
             "object artifact root must remain admissible")
     for label, mutation in (
-        ("invalid UTF-8", b"\xff"),
+        ("duplicate key", b'{"outer":{"key":1,"key":2}}'),
+        ("NaN", b'{"value":NaN}'),
+        ("positive infinity", b'{"value":Infinity}'),
+        ("negative infinity", b'{"value":-Infinity}'),
+        ("non-UTF-8 encoding", b'\xff\xfe{\x00}\x00'),
         ("array root", b"[]"),
         ("null root", b"null"),
         ("string scalar root", b'"scalar"'),

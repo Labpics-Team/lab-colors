@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +167,70 @@ class AdmissionProtocol:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def reject_non_json_constant(value: str) -> None:
+    raise ValueError(f"non-JSON numeric constant: {value}")
+
+
+def decode_benchmark_artifact(payload_bytes: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(
+            payload_bytes.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_json_keys,
+            parse_constant=reject_non_json_constant,
+            # Preserve valid JSON numbers such as 1e400 without Python silently
+            # turning them into non-finite binary floats. Schema checks below
+            # admit only the exact integer fields the artifact declares.
+            parse_float=Decimal,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"benchmark artifact is not strict JSON: {error}") from error
+    require(isinstance(payload, dict), "benchmark artifact root must be an object")
+    return payload
+
+
+def run_json_parser_self_tests() -> int:
+    require(
+        decode_benchmark_artifact(b'{"outer":{"integer":1}}')
+        == {"outer": {"integer": 1}},
+        "strict JSON object must remain admissible",
+    )
+    large_exponent = decode_benchmark_artifact(b'{"value":1e400}')["value"]
+    require(
+        isinstance(large_exponent, Decimal) and large_exponent.is_finite(),
+        "valid large-exponent JSON must not become a non-finite binary float",
+    )
+    hostile = (
+        b'{"outer":{"key":1,"key":2}}',
+        b'{"value":NaN}',
+        b'{"value":Infinity}',
+        b'{"value":-Infinity}',
+        b'\xff\xfe{\x00}\x00',
+        b"[]",
+        b"null",
+        b'"scalar"',
+        b"0",
+        b"true",
+    )
+    rejected = 0
+    for candidate in hostile:
+        try:
+            decode_benchmark_artifact(candidate)
+        except ValueError:
+            rejected += 1
+        else:
+            raise ValueError("checker mutation survived: ambiguous or invalid artifact JSON")
+    return rejected
 
 
 def exact_nonnegative_int(value: Any, field: str) -> int:
@@ -818,14 +883,15 @@ def main() -> int:
                 digest_checks = 1
             else:
                 raise ValueError("checker mutation survived: artifact SHA-256")
-    payload = json.loads(payload_bytes.decode("utf-8"))
+    parser_checks = run_json_parser_self_tests() if args.self_test else 0
+    payload = decode_benchmark_artifact(payload_bytes)
     check(payload, protocol, args.verify_current_subjects)
     mutation_checks = (
         run_mutation_self_tests(payload, protocol, args.verify_current_subjects)
         if args.self_test
         else 0
     )
-    mutation_checks += digest_checks
+    mutation_checks += digest_checks + parser_checks
     print(
         "WCAG22 feasibility benchmark artifact: PASS; "
         f"scenarios={len(REQUIRED_SCENARIOS)}; "

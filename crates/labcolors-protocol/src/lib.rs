@@ -525,7 +525,7 @@ pub enum ResourceDimensionV1 {
     RawRelations,
     /// Adjacent entries before per-relation deduplication.
     RawAdjacentEntries,
-    /// Aggregate opaque identity bytes.
+    /// Exact projection of Core's operation-scoped opaque UTF-8 payload-byte sum.
     OpaqueUtf8Bytes,
     /// Relations after canonical duplicate removal.
     CanonicalRelations,
@@ -1787,24 +1787,50 @@ mod tests {
         }
 
         let dimensions = [
-            CoreResourceDimensionV1::RawRelations,
-            CoreResourceDimensionV1::RawAdjacentEntries,
-            CoreResourceDimensionV1::OpaqueUtf8Bytes,
-            CoreResourceDimensionV1::CanonicalRelations,
-            CoreResourceDimensionV1::ApplicableEdges,
-            CoreResourceDimensionV1::LogicalAssessments,
-            CoreResourceDimensionV1::PackedResultBytes,
+            (
+                CoreResourceDimensionV1::RawRelations,
+                ResourceDimensionV1::RawRelations,
+            ),
+            (
+                CoreResourceDimensionV1::RawAdjacentEntries,
+                ResourceDimensionV1::RawAdjacentEntries,
+            ),
+            (
+                CoreResourceDimensionV1::OpaqueUtf8Bytes,
+                ResourceDimensionV1::OpaqueUtf8Bytes,
+            ),
+            (
+                CoreResourceDimensionV1::CanonicalRelations,
+                ResourceDimensionV1::CanonicalRelations,
+            ),
+            (
+                CoreResourceDimensionV1::ApplicableEdges,
+                ResourceDimensionV1::ApplicableEdges,
+            ),
+            (
+                CoreResourceDimensionV1::LogicalAssessments,
+                ResourceDimensionV1::LogicalAssessments,
+            ),
+            (
+                CoreResourceDimensionV1::PackedResultBytes,
+                ResourceDimensionV1::PackedResultBytes,
+            ),
         ];
-        for dimension in dimensions {
-            assert!(matches!(
+        for (core_dimension, protocol_dimension) in dimensions {
+            assert_eq!(
                 project_core_error(CoreFeasibilityErrorV1::ResourceLimitExceeded {
                     profile_id: CoreResourceProfileIdV1::Compile,
-                    dimension,
+                    dimension: core_dimension,
                     requested: 2,
                     limit: 1,
                 }),
-                ProtocolErrorV1::Core(CoreErrorV1::ResourceLimitExceeded { .. })
-            ));
+                ProtocolErrorV1::Core(CoreErrorV1::ResourceLimitExceeded {
+                    profile_id: ResourceProfileIdV1::Compile,
+                    dimension: protocol_dimension,
+                    requested: 2,
+                    limit: 1,
+                })
+            );
         }
         assert!(matches!(
             project_core_error(CoreFeasibilityErrorV1::AllocationFailed {
@@ -1927,11 +1953,17 @@ mod tests {
     fn every_public_u64_error_field_serializes_as_exact_decimal_text() {
         let resource = serde_json::to_value(CoreErrorV1::ResourceLimitExceeded {
             profile_id: ResourceProfileIdV1::Compile,
-            dimension: ResourceDimensionV1::RawRelations,
+            dimension: ResourceDimensionV1::OpaqueUtf8Bytes,
             requested: u64::MAX,
             limit: 2_047,
         })
         .unwrap();
+        assert_eq!(
+            resource
+                .pointer("/details/dimension")
+                .and_then(|v| v.as_str()),
+            Some("opaqueUtf8Bytes")
+        );
         assert_eq!(
             resource
                 .pointer("/details/requested")

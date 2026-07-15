@@ -1351,6 +1351,76 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     });
   });
 
+  const benchmarkChecker = join(
+    root,
+    "scripts",
+    "check_wcag22_feasibility_benchmark.py",
+  );
+  const canonicalArtifact = readFileSync(join(
+    root,
+    "crates",
+    "labcolors-core",
+    "contracts",
+    "wcag22-feasibility-benchmark-v3.json",
+  ));
+  const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
+  const rustcRelease = canonicalPayload.environment.rustcVerbose
+    .match(/^rustc ([^ ]+) /u)?.[1];
+  const targetTriple = canonicalPayload.environment.rustcVerbose
+    .match(/^host: (.+)$/mu)?.[1];
+  assert.ok(rustcRelease, "canonical benchmark records its rustc release");
+  assert.ok(targetTriple, "canonical benchmark records its target triple");
+  const admissionPins = [
+    "--admit-revision",
+    canonicalPayload.environment.gitRevision,
+    "--admit-rustc-release",
+    rustcRelease,
+    "--admit-target-triple",
+    targetTriple,
+    "--admit-target-arch",
+    canonicalPayload.environment.targetArch,
+    "--admit-target-os",
+    canonicalPayload.environment.targetOs,
+    "--admit-pointer-width-bits",
+    String(canonicalPayload.environment.pointerWidthBits),
+    "--admit-package-version",
+    canonicalPayload.environment.packageVersion,
+    "--admit-sample-count",
+    String(canonicalPayload.sampleCount),
+  ];
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-benchmark-json-"));
+  try {
+    const hostileArtifact = join(temporary, "duplicate-key.json");
+    writeFileSync(
+      hostileArtifact,
+      Buffer.concat([
+        Buffer.from(
+          `{"schemaVersion":${JSON.stringify(canonicalPayload.schemaVersion)},`,
+        ),
+        canonicalArtifact.subarray(1),
+      ]),
+    );
+    assert.throws(
+      () => execFileSync("python3", [
+        benchmarkChecker,
+        hostileArtifact,
+        ...admissionPins,
+      ], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      (error) => {
+        assert.notEqual(error.status, 0, "duplicate-key admission must fail");
+        assert.match(error.stderr, /duplicate JSON key: schemaVersion/u);
+        return true;
+      },
+      "the admission CLI must route artifact bytes through the strict loader",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+
   const ci = read(".github", "workflows", "ci.yml");
   const unmergedDraftAdmission =
     /v3_snapshot=|b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace|feasibility-benchmark-v4|admission-raw-v4/u;

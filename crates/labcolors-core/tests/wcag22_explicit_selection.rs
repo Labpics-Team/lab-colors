@@ -318,33 +318,40 @@ fn feasible_prefix_never_hides_a_foreign_or_duplicate_tail() {
 
 #[test]
 fn policy_resource_preflight_is_exact_and_precedes_semantic_lookup() {
+    let candidate_id = "é";
     let feasibility = compile(
-        vec![candidate("x", [255; 3]), candidate("y", [254; 3])],
+        vec![
+            candidate(candidate_id, [255; 3]),
+            candidate("other", [254; 3]),
+        ],
         vec![applicable("contrast", vec![Srgb8::new([0; 3])])],
     );
+    let limit = usize::try_from(PROFILE.limit(ResourceDimensionV1::OpaqueUtf8Bytes))
+        .expect("compile profile byte limit fits usize");
+    let policy_id = "p".repeat(limit - candidate_id.len());
     let at_limit = select(
         feasibility.selection_source().unwrap(),
-        policy(&"p".repeat(65_535), &["x"]),
+        policy(&policy_id, &[candidate_id]),
     );
     assert!(
         at_limit.is_ok(),
-        "policy ID plus order ID is exactly 65536 bytes"
+        "selection counts only this operation's exact UTF-8 payload-byte sum"
     );
 
     let over_limit = select(
         feasibility.selection_source().unwrap(),
-        policy(&"p".repeat(65_530), &["x", "foreign"]),
+        policy(&policy_id, &[candidate_id, candidate_id]),
     )
-    .expect_err("over-limit policy bytes must fail before foreign-ID lookup");
-    assert!(matches!(
+    .expect_err("over-limit raw bytes must fail before duplicate-ID lookup");
+    assert_eq!(
         over_limit,
         SelectionErrorV1::ResourceLimitExceeded {
             profile_id: ResourceProfileIdV1::Compile,
             dimension: ResourceDimensionV1::OpaqueUtf8Bytes,
-            requested: 65_538,
-            limit: 65_536,
+            requested: u64::try_from(limit + candidate_id.len()).expect("test request fits u64"),
+            limit: u64::try_from(limit).expect("test limit fits u64"),
         }
-    ));
+    );
 }
 
 #[test]

@@ -123,7 +123,15 @@ pub enum ResourceDimensionV1 {
     RawRelations,
     /// Applicable adjacent entries before per-relation deduplication.
     RawAdjacentEntries,
-    /// Aggregate candidate, relation, occurrence and reason UTF-8 bytes.
+    /// Raw UTF-8 payload bytes of opaque client IDs declared by one operation.
+    ///
+    /// Counting happens before canonicalization, deduplication or lookup and
+    /// excludes Core-owned keys, framing, escaped transport bytes and total
+    /// memory. Feasibility counts every raw explicit-candidate, relation and
+    /// occurrence ID plus every `NotApplicable` reason ID; a registered domain
+    /// contributes no candidate bytes. Selection counts its policy ID and every
+    /// raw ordered candidate ID without recounting IDs retained by the completed
+    /// feasibility source. Values from separate operations are never accumulated.
     OpaqueUtf8Bytes,
     /// Relations after canonical duplicate removal.
     CanonicalRelations,

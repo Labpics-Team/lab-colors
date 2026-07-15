@@ -517,6 +517,9 @@ fn preflight(
             .ok_or(InvalidSelectionRequestV1::ArithmeticOverflow)?;
     }
     let profile_id = record.proof.resource_profile_id;
+    // Selection is its own bounded operation: reuse the profile's generic
+    // opaque-string envelope for this policy, never a hidden sum with the
+    // already completed feasibility request.
     let dimension = ResourceDimensionV1::OpaqueUtf8Bytes;
     let limit = profile_id.limit(dimension);
     if bytes > limit {
