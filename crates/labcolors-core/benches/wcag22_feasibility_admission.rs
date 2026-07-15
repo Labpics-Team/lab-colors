@@ -13,7 +13,7 @@
 //!
 //! ```text
 //! python3 scripts/check_wcag22_feasibility_benchmark.py \
-//!   /private/tmp/labcolors-wcag22-feasibility-admission-raw-v5.json \
+//!   /private/tmp/labcolors-wcag22-feasibility-admission-raw-v6.json \
 //!   --record --record-toolchain 1.96.0 --record-sample-count 5
 //! ```
 
@@ -39,8 +39,8 @@ use labcolors_core::wcag22_feasibility::{
 #[path = "../src/sha256.rs"]
 mod subject_sha256;
 
-const ARTIFACT_ID: &str = "wcag22-feasibility-admission-raw-v5";
-const DEFAULT_OUTPUT_FILENAME: &str = "labcolors-wcag22-feasibility-admission-raw-v5.json";
+const ARTIFACT_ID: &str = "wcag22-feasibility-admission-raw-v6";
+const DEFAULT_OUTPUT_FILENAME: &str = "labcolors-wcag22-feasibility-admission-raw-v6.json";
 const CANDIDATE_COUNT: u64 = 256;
 const PAGE_BYTES: u64 = 65_536;
 const DECISION_SLOT_BYTES: u64 = 32;
