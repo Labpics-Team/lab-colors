@@ -992,6 +992,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   const v1Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
   const v2Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v2.json");
   const v3Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v3.json");
+  const v4Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v4.json");
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
   const sha256 = (value) => createHash("sha256").update(value).digest("hex");
   const canonicalJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -1097,14 +1098,44 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     gzip: "diagnostic-only",
   });
 
+  const v4Bytes = readFileSync(v4Path);
+  const v4 = JSON.parse(v4Bytes);
+  assert.equal(v4Bytes.toString("utf8"), canonicalJson(v4));
+  assert.equal(
+    sha256(v4Bytes),
+    "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c",
+    "the admitted v4 document must be byte-immutable",
+  );
+  assert.deepEqual(Object.keys(v4), Object.keys(v3));
+  assert.deepEqual(Object.keys(v4.buildRecipe), Object.keys(v3.buildRecipe));
+  assert.deepEqual(Object.keys(v4.measurement), Object.keys(v3.measurement));
+  assert.deepEqual(Object.keys(v4.policy), Object.keys(v3.policy));
+  assert.equal(v4.schemaVersion, 3);
+  assert.equal(v4.budgetId, "labcolors-wasm-raw-issue-296-v4");
+  assert.equal(v4.artifact, "packages/colors/pkg/labcolors_bg.wasm");
+  assert.deepEqual(v4.buildRecipe, v3.buildRecipe);
+  assert.deepEqual(v4.measurement, {
+    issue: 296,
+    measurementPlatform: "linux-x64",
+    rawBytes: 520920,
+    sha256: "c179f42cd90c24699167ee78b4080c80fb38247c54953e7dc020483f6fcf94ed",
+  });
+  assert.deepEqual(v4.policy, {
+    maxRawBytes: 520920,
+    derivation: "exact-accepted-issue-296-slice-b-measurement",
+    gzip: "diagnostic-only",
+  });
+  assert.ok(v4.policy.maxRawBytes <= v3.policy.maxRawBytes, "the v4 ratchet may only tighten");
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, v3Path);
-  assert.equal(checker.V1_FILE_SHA256, v3.buildRecipe.fileSha256);
-  assert.equal(checker.V1_RECIPE_SHA256, v3.buildRecipe.recipeSha256);
+  assert.equal(checker.DEFAULT_BUDGET, v4Path);
+  assert.equal(checker.V1_FILE_SHA256, v4.buildRecipe.fileSha256);
+  assert.equal(checker.V1_RECIPE_SHA256, v4.buildRecipe.recipeSha256);
   assert.equal(checker.V2_FILE_SHA256, sha256(v2Bytes));
   assert.equal(checker.V3_FILE_SHA256, sha256(v3Bytes));
+  assert.equal(checker.V4_FILE_SHA256, sha256(v4Bytes));
 
   const wholeCallSource = read(
     "packages",
@@ -1113,7 +1144,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     "wcag22-feasibility-boundary.bench.mjs",
   );
   assert.match(wholeCallSource, /wasmToolchainPath = resolve\(here, "wasm-size-budget-v1\.json"\)/u);
-  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v[23]\.json/u);
+  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v[234]\.json/u);
   assert.doesNotMatch(
     read("scripts", "check-wasm-size-budget.mjs"),
     /wcag22-feasibility-wasm-boundary-v1\.json/u,
@@ -1141,13 +1172,13 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u,
   );
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v3-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v4-"));
   try {
     const wasmPath = join(temporary, "fixture.wasm");
     const fixtureBudgetPath = join(temporary, "budget.json");
     const bytes = Buffer.alloc(16);
     bytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v3);
+    const fixture = structuredClone(v4);
     fixture.measurement.rawBytes = bytes.length;
     fixture.measurement.sha256 = sha256(bytes);
     fixture.policy.maxRawBytes = bytes.length;
@@ -1192,6 +1223,10 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
       ["gzip gate", (value) => { value.policy.gzip = 123; }],
       ["missing policy field", (value) => { delete value.policy.gzip; }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
+      ["ratchet regression", (value) => {
+        value.measurement.rawBytes = v3.policy.maxRawBytes + 1;
+        value.policy.maxRawBytes = v3.policy.maxRawBytes + 1;
+      }],
       ["key reorder", (value) => ({
         budgetId: value.budgetId,
         schemaVersion: value.schemaVersion,
@@ -1201,7 +1236,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
         policy: value.policy,
       })],
     ];
-    assert.equal(schemaMutations.length, 24, "v3 schema mutation set changed");
+    assert.equal(schemaMutations.length, 25, "v4 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1269,8 +1304,8 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     coordinatedMutation.measurement.sha256 = sha256(sameSizeMutation);
     const coordinatedBytes = Buffer.from(canonicalJson(coordinatedMutation));
     assert.throws(
-      () => checker.parseBudgetDocument(coordinatedBytes, v3Path),
-      /immutable v3 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(coordinatedBytes, v4Path),
+      /immutable v4 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1278,33 +1313,183 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   }
 });
 
-test("feasibility benchmark keeps V1 history and admits only exact V2 Core subjects", () => {
-  const checker = join(
+test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subjects", () => {
+  const contractNames = readdirSync(join(
+    root,
+    "crates",
+    "labcolors-core",
+    "contracts",
+  )).filter((name) => /^wcag22-feasibility-benchmark-v[0-9]+\.json$/u.test(name));
+  assert.deepEqual(contractNames.sort(), [
+    "wcag22-feasibility-benchmark-v1.json",
+    "wcag22-feasibility-benchmark-v2.json",
+    "wcag22-feasibility-benchmark-v3.json",
+  ]);
+
+  const benchmarkChecker = join(
     root,
     "scripts",
-    "check_wcag22_feasibility_applicability.py",
+    "check_wcag22_feasibility_benchmark.py",
   );
-  assert.doesNotThrow(() => {
-    execFileSync("python3", [
-      checker,
-      join(
-        root,
-        "crates",
-        "labcolors-core",
-        "contracts",
-        "wcag22-feasibility-benchmark-v2.json",
-      ),
-      "--artifact-sha256",
-      "d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202",
-      "--self-test",
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  });
+  const canonicalArtifact = readFileSync(join(
+    root,
+    "crates",
+    "labcolors-core",
+    "contracts",
+    "wcag22-feasibility-benchmark-v3.json",
+  ));
+  const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
+  assert.equal(
+    "gitRevision" in canonicalPayload.environment,
+    false,
+    "durable V3 must not claim an ephemeral measurement commit",
+  );
+  assert.equal(
+    "gitTree" in canonicalPayload.environment,
+    false,
+    "durable V3 must use its exact source-object cone as the provenance SSOT",
+  );
+  assert.deepEqual(
+    canonicalPayload.environment.explicitEmptyBuildInputs,
+    [
+      "CARGO_ENCODED_RUSTFLAGS",
+      "RUSTC_WRAPPER",
+      "RUSTC_WORKSPACE_WRAPPER",
+    ],
+    "the highest-precedence rustflags source and both rustc wrappers must be explicitly empty",
+  );
+  assert.equal(
+    canonicalPayload.recordProvenance.recipeId,
+    "closed-cargo-bench-v1",
+  );
+  assert.match(
+    canonicalPayload.recordProvenance.sourceSnapshotSha256,
+    /^[0-9a-f]{64}$/u,
+  );
+  assert.match(
+    canonicalPayload.recordProvenance.benchmarkBinarySha256,
+    /^[0-9a-f]{64}$/u,
+  );
+  assert.match(canonicalPayload.environment.rustcBinarySha256, /^[0-9a-f]{64}$/u);
+  assert.match(canonicalPayload.environment.cargoBinarySha256, /^[0-9a-f]{64}$/u);
+  assert.equal(
+    "rustFlags" in canonicalPayload.environment,
+    false,
+    "V3 must not collapse absent and explicitly empty RUSTFLAGS",
+  );
+  assert.equal(
+    "cargoEncodedRustflags" in canonicalPayload.environment,
+    false,
+    "V3 must represent source presence instead of only its empty value",
+  );
+  const rustcRelease = canonicalPayload.environment.rustcVerbose
+    .match(/^rustc ([^ ]+) /u)?.[1];
+  const cargoRelease = canonicalPayload.environment.cargoVerbose
+    .match(/^cargo ([^ ]+) /u)?.[1];
+  const targetTriple = canonicalPayload.environment.rustcVerbose
+    .match(/^host: (.+)$/mu)?.[1];
+  assert.ok(rustcRelease, "canonical benchmark records its rustc release");
+  assert.ok(cargoRelease, "canonical benchmark records its cargo release");
+  assert.ok(targetTriple, "canonical benchmark records its target triple");
+  const admissionPins = [
+    "--admit-rustc-release",
+    rustcRelease,
+    "--admit-cargo-release",
+    cargoRelease,
+    "--admit-rustc-binary-sha256",
+    canonicalPayload.environment.rustcBinarySha256,
+    "--admit-cargo-binary-sha256",
+    canonicalPayload.environment.cargoBinarySha256,
+    "--admit-benchmark-binary-sha256",
+    canonicalPayload.recordProvenance.benchmarkBinarySha256,
+    "--admit-target-triple",
+    targetTriple,
+    "--admit-target-arch",
+    canonicalPayload.environment.targetArch,
+    "--admit-target-os",
+    canonicalPayload.environment.targetOs,
+    "--admit-pointer-width-bits",
+    String(canonicalPayload.environment.pointerWidthBits),
+    "--admit-package-version",
+    canonicalPayload.environment.packageVersion,
+    "--admit-sample-count",
+    String(canonicalPayload.sampleCount),
+  ];
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-benchmark-json-"));
+  try {
+    const hostileArtifact = join(temporary, "duplicate-key.json");
+    writeFileSync(
+      hostileArtifact,
+      Buffer.concat([
+        Buffer.from(
+          `{"schemaVersion":${JSON.stringify(canonicalPayload.schemaVersion)},`,
+        ),
+        canonicalArtifact.subarray(1),
+      ]),
+    );
+    assert.throws(
+      () => execFileSync("python3", [
+        benchmarkChecker,
+        hostileArtifact,
+        ...admissionPins,
+      ], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      (error) => {
+        assert.notEqual(error.status, 0, "duplicate-key admission must fail");
+        assert.match(error.stderr, /duplicate JSON key: schemaVersion/u);
+        return true;
+      },
+      "the admission CLI must route artifact bytes through the strict loader",
+    );
+    assert.throws(
+      () => execFileSync("python3", [
+        benchmarkChecker,
+        hostileArtifact,
+        "--admit-revision",
+        "0".repeat(40),
+        ...admissionPins,
+      ], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      (error) => {
+        assert.notEqual(error.status, 0, "legacy revision admission must fail");
+        assert.match(error.stderr, /unrecognized arguments: --admit-revision/u);
+        return true;
+      },
+      "V3 must not accept unverifiable whole-commit provenance",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 
   const ci = read(".github", "workflows", "ci.yml");
+  const unmergedDraftAdmission =
+    /v3_snapshot=|b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace|feasibility-benchmark-v4|admission-raw-v4/u;
+  for (const [path, source] of [
+    [".github/workflows/ci.yml", ci],
+    ["CHANGELOG.md", read("CHANGELOG.md")],
+    ["docs/verification-map.md", read("docs", "verification-map.md")],
+    [
+      "native harness",
+      read("crates", "labcolors-core", "benches", "wcag22_feasibility_admission.rs"),
+    ],
+    ["native checker", read("scripts", "check_wcag22_feasibility_benchmark.py")],
+    [
+      "WASM boundary checker",
+      read("packages", "colors", "bench", "wcag22-feasibility-boundary.bench.mjs"),
+    ],
+  ]) {
+    assert.doesNotMatch(
+      source,
+      unmergedDraftAdmission,
+      `${path} must not retain an unmerged draft admission`,
+    );
+  }
   assert.match(
     ci,
     /historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4[\s\S]*?git worktree add --detach "\$historical_root" "\$historical_checker_snapshot"[\s\S]*?\(\n\s+cd "\$historical_root"\n\s+python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e[\s\S]*?--self-test/u,
@@ -1317,13 +1502,23 @@ test("feasibility benchmark keeps V1 history and admits only exact V2 Core subje
   );
   assert.match(
     ci,
-    /current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json"[\s\S]*?--admit-revision 965eb42642beb1c072a74886be1d016027afeae5[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202[\s\S]*?--self-test/u,
-    "V2 must bind the current generic kernel to one exact measured source commit",
+    /v2_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json"[\s\S]*?v2_snapshot=4afe61b124b05e13b999f83a9de580ef43405080[\s\S]*?git worktree add --detach "\$historical_root" "\$v2_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202[\s\S]*?--self-test/u,
+    "V2 must replay through its exact stable verifier snapshot",
+  );
+  assert.match(
+    ci,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 [0-9a-f]{64}[\s\S]*?--admit-cargo-binary-sha256 [0-9a-f]{64}[\s\S]*?--admit-benchmark-binary-sha256 [0-9a-f]{64}[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a[\s\S]*?--self-test/u,
+    "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(
     ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    2,
-    "CI must validate exactly one historical and one current benchmark artifact",
+    3,
+    "CI must validate exactly two historical and one current benchmark artifact",
+  );
+  assert.equal(
+    ci.match(/git worktree add --detach/gu)?.length,
+    3,
+    "only the three main-reachable historical verifier snapshots may use worktrees",
   );
 });
 

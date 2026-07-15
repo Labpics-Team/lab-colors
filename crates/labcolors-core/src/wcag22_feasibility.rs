@@ -123,7 +123,15 @@ pub enum ResourceDimensionV1 {
     RawRelations,
     /// Applicable adjacent entries before per-relation deduplication.
     RawAdjacentEntries,
-    /// Aggregate candidate, relation, occurrence and reason UTF-8 bytes.
+    /// Raw UTF-8 payload bytes of opaque client IDs declared by one operation.
+    ///
+    /// Counting happens before canonicalization, deduplication or lookup and
+    /// excludes Core-owned keys, framing, escaped transport bytes and total
+    /// memory. Feasibility counts every raw explicit-candidate, relation and
+    /// occurrence ID plus every `NotApplicable` reason ID; a registered domain
+    /// contributes no candidate bytes. Selection counts its policy ID and every
+    /// raw ordered candidate ID without recounting IDs retained by the completed
+    /// feasibility source. Values from separate operations are never accumulated.
     OpaqueUtf8Bytes,
     /// Relations after canonical duplicate removal.
     CanonicalRelations,
@@ -992,6 +1000,43 @@ trait PairEvaluator {
     ) -> Result<PairEvaluationV1, Wcag22EvaluationErrorV1>;
 }
 
+fn evaluate_bound_pair<E: PairEvaluator>(
+    evaluator: &mut E,
+    expected_evidence: &AtomicEvidenceBindingV1,
+    candidate: Srgb8,
+    adjacent: Srgb8,
+    criterion: Wcag22CriterionV1,
+) -> Result<Wcag22ApplicableDecisionV1, EvaluatorInvariantV1> {
+    let result = evaluator
+        .evaluate_pair(candidate, adjacent, criterion)
+        .map_err(EvaluatorInvariantV1::Source)?;
+    let (foreground, background, actual_criterion, decision, evidence) = match result {
+        PairEvaluationV1::Evaluated {
+            foreground,
+            background,
+            criterion,
+            decision,
+            evidence,
+        } => (foreground, background, criterion, decision, evidence),
+        PairEvaluationV1::NotEvaluated => {
+            return Err(EvaluatorInvariantV1::UnexpectedNotEvaluated);
+        }
+        PairEvaluationV1::InvalidEvidence => {
+            return Err(EvaluatorInvariantV1::EvidenceMismatch);
+        }
+    };
+    if foreground != candidate.bytes() || background != adjacent.bytes() {
+        return Err(EvaluatorInvariantV1::InputMismatch);
+    }
+    if actual_criterion != criterion {
+        return Err(EvaluatorInvariantV1::CriterionMismatch);
+    }
+    if evidence != *expected_evidence {
+        return Err(EvaluatorInvariantV1::EvidenceMismatch);
+    }
+    Ok(decision)
+}
+
 struct AtomicPairEvaluator {
     expected_evidence: Result<AtomicEvidenceBindingV1, Wcag22EvaluationErrorV1>,
 }
@@ -1340,65 +1385,14 @@ where
                 continue;
             };
             for adjacent in adjacent.iter().copied() {
-                let result = evaluator
-                    .evaluate_pair(candidate, adjacent, *criterion)
-                    .map_err(|source| {
-                        evaluator_error(
-                            candidate,
-                            relation,
-                            adjacent,
-                            EvaluatorInvariantV1::Source(source),
-                        )
-                    })?;
-                let (foreground, background, actual_criterion, decision, evidence) = match result {
-                    PairEvaluationV1::Evaluated {
-                        foreground,
-                        background,
-                        criterion,
-                        decision,
-                        evidence,
-                    } => (foreground, background, criterion, decision, evidence),
-                    PairEvaluationV1::NotEvaluated => {
-                        return Err(evaluator_error(
-                            candidate,
-                            relation,
-                            adjacent,
-                            EvaluatorInvariantV1::UnexpectedNotEvaluated,
-                        ));
-                    }
-                    PairEvaluationV1::InvalidEvidence => {
-                        return Err(evaluator_error(
-                            candidate,
-                            relation,
-                            adjacent,
-                            EvaluatorInvariantV1::EvidenceMismatch,
-                        ));
-                    }
-                };
-                if foreground != candidate.bytes() || background != adjacent.bytes() {
-                    return Err(evaluator_error(
-                        candidate,
-                        relation,
-                        adjacent,
-                        EvaluatorInvariantV1::InputMismatch,
-                    ));
-                }
-                if actual_criterion != *criterion {
-                    return Err(evaluator_error(
-                        candidate,
-                        relation,
-                        adjacent,
-                        EvaluatorInvariantV1::CriterionMismatch,
-                    ));
-                }
-                if evidence != expected_evidence {
-                    return Err(evaluator_error(
-                        candidate,
-                        relation,
-                        adjacent,
-                        EvaluatorInvariantV1::EvidenceMismatch,
-                    ));
-                }
+                let decision = evaluate_bound_pair(
+                    evaluator,
+                    &expected_evidence,
+                    candidate,
+                    adjacent,
+                    *criterion,
+                )
+                .map_err(|violation| evaluator_error(candidate, relation, adjacent, violation))?;
                 storage
                     .write_decision(logical_index, decision)
                     .map_err(|()| {
@@ -1583,13 +1577,25 @@ fn validate_variable_complete_result_v1(
     Ok(())
 }
 
-fn hash_len_prefixed(hasher: &mut Hasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
+// Identity encoders target this minimal sink so production SHA-256 and bounded
+// byte-work probes execute the same byte grammar rather than parallel copies.
+trait CanonicalByteSink {
+    fn write(&mut self, bytes: &[u8]);
 }
 
-fn hash_u64(hasher: &mut Hasher, value: u64) {
-    hasher.update(&value.to_be_bytes());
+impl CanonicalByteSink for Hasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.update(bytes);
+    }
+}
+
+fn hash_len_prefixed(sink: &mut impl CanonicalByteSink, bytes: &[u8]) {
+    hash_u64(sink, bytes.len() as u64);
+    sink.write(bytes);
+}
+
+fn hash_u64(sink: &mut impl CanonicalByteSink, value: u64) {
+    sink.write(&value.to_be_bytes());
 }
 
 fn domain_digest(domain_id: DomainIdV1) -> DomainDigestV1 {

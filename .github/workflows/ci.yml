@@ -317,6 +317,8 @@ jobs:
         run: python3 scripts/verify_wcag22_feasibility_identity.py
       - name: verify explicit WCAG22 feasibility identity and anti-vacuum mutations
         run: python3 scripts/verify_wcag22_explicit_feasibility_identity.py --self-test
+      - name: verify explicit WCAG22 selection identity and anti-vacuum mutations
+        run: python3 scripts/verify_wcag22_explicit_selection_identity.py --self-test
       - name: validate historical and current WCAG22 feasibility benchmark evidence
         run: |
           historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
@@ -332,7 +334,7 @@ jobs:
           )
           historical_checker_snapshot=6001cf41e0a8364f25543e7955ceaf64d50129b4
           historical_applicability_snapshot=94efeeeb1811f5515558ab2d79014a5e4c3a570a
-          historical_root="$RUNNER_TEMP/wcag22-feasibility-slice-a-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          historical_root="$RUNNER_TEMP/wcag22-feasibility-history-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           git worktree add --detach "$historical_root" "$historical_checker_snapshot"
           cleanup_history() {
             git worktree remove --force "$historical_root"
@@ -356,10 +358,10 @@ jobs:
               --self-test
           )
           cleanup_history
-          trap - EXIT
 
-          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
-          current_protocol=(
+          v2_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json"
+          v2_snapshot=4afe61b124b05e13b999f83a9de580ef43405080
+          v2_protocol=(
             --admit-revision 965eb42642beb1c072a74886be1d016027afeae5
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
@@ -369,14 +371,39 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
+          git worktree add --detach "$historical_root" "$v2_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$v2_artifact" "${v2_protocol[@]}" \
+              --verify-current-subjects \
+              --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+              --self-test
+            python3 scripts/check_wcag22_feasibility_applicability.py \
+              "$v2_artifact" \
+              --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+              --self-test
+          )
+          cleanup_history
+          trap - EXIT
+
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
+          current_protocol=(
+            --admit-rustc-release 1.96.0
+            --admit-cargo-release 1.96.0
+            --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
+            --admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841
+            --admit-benchmark-binary-sha256 6ac07bad81a204ee8fcee8f94a3c445f881d1ca10edaf4cc4a86a5db0b232e3a
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --verify-current-subjects \
-            --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
-            --self-test
-          python3 scripts/check_wcag22_feasibility_applicability.py \
-            "$current_artifact" \
-            --artifact-sha256 d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202 \
+            --artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a \
             --self-test
 
   audit:
@@ -483,7 +510,7 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "verify committed #296-A canonical whole-call WASM boundary evidence"
+      - name: "verify committed #296-B canonical whole-call WASM boundary evidence"
         # The admitted JSON binds exact deterministic bytes/shapes and the
         # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
         # latency/maxRSS/pages remain observations only.
@@ -491,17 +518,17 @@ jobs:
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
           --verify
-      - name: independently fingerprint the exact #296-A WASM
+      - name: independently fingerprint the exact #296-B WASM
         run: |
           bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
           sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
           echo "canonical candidate raw=${bytes}B sha256=${sha256}"
-      - name: "upload exact #296-A verified whole-call evidence"
+      - name: "upload exact #296-B verified whole-call evidence"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v1.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v2.json
             packages/colors/pkg/labcolors_bg.wasm
           if-no-files-found: error
           retention-days: 30

@@ -1,5 +1,8 @@
 //! Client-declared finite sRGB8 feasibility (#296-A).
 
+#[path = "explicit/selection.rs"]
+pub mod selection;
+
 use core::fmt;
 use std::sync::Arc;
 

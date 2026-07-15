@@ -32,6 +32,10 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   финальный sRGB8», канонизирует точные UTF-8-байты ID и использует тот же
   exhaustive kernel. Возможность включена в default Core, но не проецируется в
   Protocol/WASM/FFI/npm/Swift.
+- Только полный `Feasible`-терминал минтит sealed capability выбора. Клиент
+  передаёт непрозрачный ID политики и порядок кандидатов; Core полностью
+  проверяет декларацию, выбирает первый feasible ID и повторно проверяет его
+  строку тем же exact evaluator без heap-allocation после создания source/policy.
 - Conformance pack 5.0.0 добавляет ровно одно семейство
   `wcag22-feasibility.json`: exact 7/2/0/92/59, mixed/all NotApplicable,
   typed conflict/resource failures и opaque-ID law. Шесть прежних family
@@ -75,11 +79,26 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
 - WASM size history стала append-only: immutable V1 сохраняет допуск #284
-  (`454385 B`), V2 — transport #295 (`521240 B` / `d37841…9ca0`), а V3 —
-  Core-срез #296-A (`521231 B` / `779379…e029`). Каждый допуск имеет нулевой
-  headroom и точную ссылку на неизменяемый V1 build recipe; V1/V2 не переписаны.
-  Canonical whole-call artifact фиксирует 10 крайних форм × 5 свежих процессов;
-  latency, process maxRSS и WASM pages остаются наблюдениями, не SLO.
+  (`454385 B`), V2 — transport #295 (`521240 B` / `d37841…9ca0`), V3 —
+  Core-срез #296-A (`521231 B` / `779379…e029`), а текущий V4 — #296-B
+  (`520920 B` / `c179f4…f94ed`). Каждый допуск имеет нулевой headroom и точную
+  ссылку на неизменяемый V1 build recipe; V1/V2/V3 не переписаны. Whole-call V2
+  сохраняет детерминированную request/outcome-проекцию 10 крайних форм × 5
+  свежих процессов из V1 и привязан к текущему native admission; latency,
+  process maxRSS и WASM pages остаются наблюдениями, не SLO.
+- Native feasibility admission также append-only относительно принятого
+  `main`: V1/V2 проверяются в исторических snapshots, а текущий V3 связывает
+  artifact SHA
+  `46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a`
+  с одним точным dependency cone. Source-bound recorder проверяет Git objects,
+  SHA-256 verifier/subject-файлов и точный `Cargo.lock` до сборки и после
+  запуска; fresh target, пустая Cargo-config hierarchy и закрытая среда
+  исключают ambient profile/flags/wrappers. Receipt фиксирует Rust/Cargo 1.96.0,
+  SHA-256 обоих toolchain executables и реально запущенного benchmark binary,
+  явный feature set и explicit-empty compiler overrides; 71 негативная мутация
+  проверяет fail-closed границы.
+  Сырые наблюдения сохранены без timing threshold, а промежуточные draft-
+  артефакты не становятся публичной историей.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
   versioned complete-feasibility transport family, поэтому `packDigest`
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public

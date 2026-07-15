@@ -25,6 +25,7 @@ examine_globs = [
     "crates/labcolors-core/src/wcag22_evidence.rs",
     "crates/labcolors-core/src/wcag22_feasibility.rs",
     "crates/labcolors-core/src/wcag22_feasibility/explicit.rs",
+    "crates/labcolors-core/src/wcag22_feasibility/explicit/selection.rs",
     "crates/labcolors-core/src/wcag22/kernel.rs",
 ]
 

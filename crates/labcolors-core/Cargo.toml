@@ -66,3 +66,11 @@ required-features = ["wcag22-feasibility"]
 [[test]]
 name = "wcag22_explicit_feasibility"
 required-features = ["wcag22-explicit-feasibility"]
+
+[[test]]
+name = "wcag22_explicit_selection"
+required-features = ["wcag22-explicit-feasibility"]
+
+[[test]]
+name = "wcag22_explicit_selection_alloc"
+required-features = ["wcag22-explicit-feasibility"]
