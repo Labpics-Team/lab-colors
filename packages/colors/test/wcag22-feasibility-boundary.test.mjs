@@ -275,7 +275,7 @@ test("whole-call evidence history is exact and deterministic", () => {
   );
   assert.equal(
     sha256(v2Bytes),
-    "67d71bc2a5073b073e8764c04db995e2defcda22f080fb144a3a9b1be8c6c968",
+    "c4f9880843b9a267d7c87a4a630537a2fa984e3825bbcb9fd95f52e8f7b27ab8",
   );
   const v1 = JSON.parse(v1Bytes);
   const v2 = JSON.parse(v2Bytes);
@@ -286,12 +286,12 @@ test("whole-call evidence history is exact and deterministic", () => {
     schemaVersion: 1,
     artifactId: "wcag22-feasibility-admission-raw-v3",
     profileId: "compile-v1",
-    sha256: "b7c7e00c644cccc38f9b9a4998975a0eb1321886d71bc72f00a964b5d2ed0982",
+    sha256: "28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a",
   });
   assert.deepEqual(v2.bindings.wasm, {
     path: "packages/colors/pkg/labcolors_bg.wasm",
     bytes: 520920,
-    sha256: "7e9c3b41d61919e677572094374b9b59f22d61f98c1977b3f5166d96aa684c0e",
+    sha256: "c179f42cd90c24699167ee78b4080c80fb38247c54953e7dc020483f6fcf94ed",
   });
 
   const deterministicProjection = (artifact) => ({
@@ -370,30 +370,29 @@ test("whole-call checker mutation-kills missing evidence and inflated claims", (
   }
 });
 
-test("candidate CI records and uploads retrievable Linux evidence before the size gate", () => {
+test("final CI verifies and uploads committed Linux evidence before the size gate", () => {
   const ci = ciSource;
   const harness = "node bench/wcag22-feasibility-boundary.bench.mjs";
-  const record =
-    "\n          --record bench/wcag22-feasibility-wasm-boundary-candidate-v2.json";
+  const verify = "\n          --verify";
   const fingerprint = "sha256sum packages/colors/pkg/labcolors_bg.wasm";
   const upload =
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
   const sizeGate = "node scripts/check-wasm-size-budget.mjs";
   const harnessIndex = ci.indexOf(harness);
-  const recordIndex = ci.indexOf(record, harnessIndex);
-  const fingerprintIndex = ci.indexOf(fingerprint, recordIndex);
-  const uploadIndex = ci.indexOf(upload, recordIndex);
+  const verifyIndex = ci.indexOf(verify, harnessIndex);
+  const fingerprintIndex = ci.indexOf(fingerprint, verifyIndex);
+  const uploadIndex = ci.indexOf(upload, verifyIndex);
   const sizeGateIndex = ci.indexOf(sizeGate);
-  assert.match(ci, /record #296-B final-review whole-call WASM candidate/u);
+  assert.match(ci, /verify committed #296-B canonical whole-call WASM boundary evidence/u);
   assert.match(
     ci,
-    /name: "upload exact #296-B final-review candidate evidence"/u,
+    /name: "upload exact #296-B verified whole-call evidence"/u,
   );
   assert.ok(harnessIndex >= 0, "the package-root harness must run in CI");
-  assert.ok(recordIndex > harnessIndex, "CI must record the exact candidate");
+  assert.ok(verifyIndex > harnessIndex, "CI must rerun the committed evidence verifier");
   assert.ok(
-    fingerprintIndex > recordIndex,
-    "an independent system tool must fingerprint the recorded WASM",
+    fingerprintIndex > verifyIndex,
+    "an independent system tool must fingerprint the verified WASM",
   );
   assert.ok(uploadIndex > fingerprintIndex, "upload must follow the independent fingerprint");
   assert.ok(
@@ -402,9 +401,9 @@ test("candidate CI records and uploads retrievable Linux evidence before the siz
   );
   assert.match(
     ci,
-    /path: \|[\s\S]*?packages\/colors\/bench\/wcag22-feasibility-wasm-boundary-candidate-v2\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm/u,
+    /path: \|[\s\S]*?packages\/colors\/bench\/wcag22-feasibility-wasm-boundary-v2\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm/u,
   );
-  assert.match(ci, /--record/u, "candidate commit must execute recording mode");
+  assert.doesNotMatch(ci, /--record/u, "candidate-recording mode must not survive admission");
   assert.match(ci, /if-no-files-found: error/u);
   assert.match(
     readFileSync(resolve(root, "packages/colors/bench/wcag22-feasibility-boundary.bench.mjs"), "utf8"),

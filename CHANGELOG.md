@@ -81,7 +81,7 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 - WASM size history стала append-only: immutable V1 сохраняет допуск #284
   (`454385 B`), V2 — transport #295 (`521240 B` / `d37841…9ca0`), V3 —
   Core-срез #296-A (`521231 B` / `779379…e029`), а текущий V4 — #296-B
-  (`520920 B` / `7e9c3b…84c0`). Каждый допуск имеет нулевой headroom и точную
+  (`520920 B` / `c179f4…f94ed`). Каждый допуск имеет нулевой headroom и точную
   ссылку на неизменяемый V1 build recipe; V1/V2/V3 не переписаны. Whole-call V2
   сохраняет детерминированную request/outcome-проекцию 10 крайних форм × 5
   свежих процессов из V1 и привязан к текущему native admission; latency,
