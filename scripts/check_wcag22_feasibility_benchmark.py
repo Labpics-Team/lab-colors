@@ -6,9 +6,10 @@ and allocator observations stay raw evidence; WebAssembly memory and serialized
 size are explicitly outside this artifact's claim boundary.
 
 Generation admission replays the measured revision while it is addressable.
-Durable repository verification instead proves that every current subject is
-byte-identical to the admitted measurement, so squash merging and deleting the
-source branch cannot turn valid evidence into an unreachable Git reference.
+Durable repository verification instead proves that every current Core and
+benchmark subject is byte-identical to the admitted measurement. ``Cargo.lock``
+remains historical provenance there: the companion applicability checker owns
+its structured compatibility law so unrelated workspace records may evolve.
 """
 
 from __future__ import annotations
@@ -250,7 +251,7 @@ def check_subject_manifest(
 
 
 def current_byte_identity_required(path: str, durable_current_subjects: bool) -> bool:
-    """Return whether this verification mode owns exact current bytes for path."""
+    """Keep the structured lock compatibility law in exactly one checker."""
     return not (durable_current_subjects and path == HISTORICAL_ONLY_PATH)
 
 
@@ -751,9 +752,9 @@ def main() -> int:
         "--verify-current-subjects",
         action="store_true",
         help=(
-            "verify current dependency-cone objects instead of resolving the "
-            "recorded measurement commit; requires all admission pins and "
-            "--artifact-sha256"
+            "verify current exact subjects plus the durable historical-lock "
+            "handoff instead of resolving the recorded measurement commit; "
+            "requires all admission pins and --artifact-sha256"
         ),
     )
     parser.add_argument("--artifact-sha256")
