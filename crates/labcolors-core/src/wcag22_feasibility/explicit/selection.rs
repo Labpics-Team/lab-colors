@@ -80,9 +80,13 @@ impl FirstFeasibleInDeclaredOrderV1 {
         })
     }
 
+    /// Стабильный Core-ключ единственного V1 policy kind. Строгие wire-декодеры
+    /// сверяют клиентский `policyKind` ровно с этим значением.
+    pub const KIND_KEY_V1: &'static str = POLICY_KIND_KEY;
+
     /// Versioned Core-owned policy kind.
     pub const fn kind_key(&self) -> &'static str {
-        POLICY_KIND_KEY
+        Self::KIND_KEY_V1
     }
 
     /// Opaque client policy identity.
@@ -93,6 +97,11 @@ impl FirstFeasibleInDeclaredOrderV1 {
     /// Exact declared candidate order.
     pub fn ordered_candidate_ids(&self) -> &[CandidateId] {
         &self.ordered_candidate_ids
+    }
+
+    /// Передать opaque идентичность политики её финальному владельцу-исходу.
+    pub(super) fn into_policy_id(self) -> PolicyId {
+        self.policy_id
     }
 }
 
@@ -503,8 +512,41 @@ fn stream_receipt_edge(
     sink.write(&[VERIFIED_PASS_TAG]);
 }
 
+/// Первый feasible член объявленного порядка, найденный валидатором.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FirstFeasibleDeclaredV1 {
+    policy_ordinal: u64,
+    candidate_index: usize,
+}
+
+/// Результат полной валидации политики против одного канонического домена.
+///
+/// Это единственный владелец закона «resource preflight → P≤C → каждый
+/// foreign ID → каждый дубликат»: и автономная selection, и атомарная
+/// операция #296-C вызывают ровно эту функцию, поэтому некорректная политика
+/// классифицируется одинаково после любого успешного A-терминала.
+#[derive(Debug)]
+pub(super) struct CompletePolicyValidationV1 {
+    digest: PolicyDigestV1,
+    declared_entries: u64,
+    first_feasible: Option<FirstFeasibleDeclaredV1>,
+}
+
+impl CompletePolicyValidationV1 {
+    /// Каноническая идентичность провалидированного объявленного порядка.
+    pub(super) const fn digest(&self) -> PolicyDigestV1 {
+        self.digest
+    }
+
+    /// Точное число объявленных записей `P`.
+    pub(super) const fn declared_entries(&self) -> u64 {
+        self.declared_entries
+    }
+}
+
 fn preflight(
-    record: &EvaluatedV1,
+    candidate_count: u64,
+    resource_profile_id: ResourceProfileIdV1,
     policy: &FirstFeasibleInDeclaredOrderV1,
 ) -> Result<u64, SelectionErrorV1> {
     let mut bytes = u64::try_from(policy.policy_id.as_str().len())
@@ -516,15 +558,14 @@ fn preflight(
             .checked_add(length)
             .ok_or(InvalidSelectionRequestV1::ArithmeticOverflow)?;
     }
-    let profile_id = record.proof.resource_profile_id;
     // Selection is its own bounded operation: reuse the profile's generic
     // opaque-string envelope for this policy, never a hidden sum with the
     // already completed feasibility request.
     let dimension = ResourceDimensionV1::OpaqueUtf8Bytes;
-    let limit = profile_id.limit(dimension);
+    let limit = resource_profile_id.limit(dimension);
     if bytes > limit {
         return Err(SelectionErrorV1::ResourceLimitExceeded {
-            profile_id,
+            profile_id: resource_profile_id,
             dimension,
             requested: bytes,
             limit,
@@ -533,20 +574,18 @@ fn preflight(
 
     let entries = u64::try_from(policy.ordered_candidate_ids.len())
         .map_err(|_| InvalidSelectionRequestV1::ArithmeticOverflow)?;
-    let domain = record.domain.candidate_count;
-    if entries > domain {
+    if entries > candidate_count {
         return Err(InvalidSelectionRequestV1::PolicyCardinalityExceedsDomain {
             requested: entries,
-            domain,
+            domain: candidate_count,
         }
         .into());
     }
     Ok(entries)
 }
 
-fn find_canonical_candidate(record: &EvaluatedV1, id: &CandidateId) -> Option<usize> {
-    record
-        .candidates
+fn find_canonical_candidate(candidates: &[CandidateV1], id: &CandidateId) -> Option<usize> {
+    candidates
         .binary_search_by(|candidate| {
             candidate
                 .candidate_id
@@ -557,18 +596,27 @@ fn find_canonical_candidate(record: &EvaluatedV1, id: &CandidateId) -> Option<us
         .ok()
 }
 
-fn select_with<E: PairEvaluator>(
-    source: FeasibleSelectionSourceV1<'_>,
-    mut policy: FirstFeasibleInDeclaredOrderV1,
-    evaluator: &mut E,
-) -> Result<SelectionOutcomeV1, SelectionErrorV1> {
-    let record = source.record;
-    let entries = preflight(record, &policy)?;
-    let digest = policy_digest(&policy, entries);
+/// Полностью провалидировать объявленный порядок против канонического домена.
+///
+/// Ошибки сохраняют приоритет автономной selection: точный байтовый preflight,
+/// затем `P≤C`, затем первый foreign ID в объявленном порядке, затем первый
+/// дубликат в каноническом порядке байтов. Партиция опциональна: терминалы без
+/// selection-права (`Infeasible`, `NotEvaluated`) валидируются без чтения
+/// feasibility-битов, а объявленный порядок сортируется на месте только после
+/// вычисления дайджеста.
+pub(super) fn validate_complete_policy(
+    candidates: &[CandidateV1],
+    candidate_count: u64,
+    resource_profile_id: ResourceProfileIdV1,
+    partition: Option<&[u8]>,
+    policy: &mut FirstFeasibleInDeclaredOrderV1,
+) -> Result<CompletePolicyValidationV1, SelectionErrorV1> {
+    let declared_entries = preflight(candidate_count, resource_profile_id, policy)?;
+    let digest = policy_digest(policy, declared_entries);
 
-    let mut selected = None;
+    let mut first_feasible = None;
     for (ordinal, id) in policy.ordered_candidate_ids.iter().enumerate() {
-        let Some(candidate_index) = find_canonical_candidate(record, id) else {
+        let Some(candidate_index) = find_canonical_candidate(candidates, id) else {
             return Err(InvalidSelectionRequestV1::ForeignCandidateId {
                 candidate_id: id.clone(),
             }
@@ -579,13 +627,18 @@ fn select_with<E: PairEvaluator>(
                 SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
             )
         })?;
-        if selected.is_none() && packed_bit(record.partition(), canonical_ordinal) {
-            let policy_ordinal = u64::try_from(ordinal).map_err(|_| {
-                SelectionErrorV1::IntegrityViolation(
-                    SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
-                )
-            })?;
-            selected = Some((policy_ordinal, candidate_index));
+        if let Some(partition) = partition {
+            if first_feasible.is_none() && packed_bit(partition, canonical_ordinal) {
+                let policy_ordinal = u64::try_from(ordinal).map_err(|_| {
+                    SelectionErrorV1::IntegrityViolation(
+                        SelectionIntegrityViolationV1::SealedTraversalArithmeticOverflow,
+                    )
+                })?;
+                first_feasible = Some(FirstFeasibleDeclaredV1 {
+                    policy_ordinal,
+                    candidate_index,
+                });
+            }
         }
     }
 
@@ -603,7 +656,33 @@ fn select_with<E: PairEvaluator>(
         .into());
     }
 
-    let Some((selected_policy_ordinal, candidate_index)) = selected else {
+    Ok(CompletePolicyValidationV1 {
+        digest,
+        declared_entries,
+        first_feasible,
+    })
+}
+
+fn select_with<E: PairEvaluator>(
+    source: FeasibleSelectionSourceV1<'_>,
+    mut policy: FirstFeasibleInDeclaredOrderV1,
+    evaluator: &mut E,
+) -> Result<SelectionOutcomeV1, SelectionErrorV1> {
+    let record = source.record;
+    let validation = validate_complete_policy(
+        &record.candidates,
+        record.domain.candidate_count,
+        record.proof.resource_profile_id,
+        Some(record.partition()),
+        &mut policy,
+    )?;
+    let digest = validation.digest;
+
+    let Some(FirstFeasibleDeclaredV1 {
+        policy_ordinal: selected_policy_ordinal,
+        candidate_index,
+    }) = validation.first_feasible
+    else {
         return Ok(SelectionOutcomeV1::NoSelection {
             no_selection: NoSelectionV1 {
                 reason: NoSelectionReasonV1::NoDeclaredCandidateFeasible,
@@ -742,6 +821,26 @@ pub fn select(
 ) -> Result<SelectionOutcomeV1, SelectionErrorV1> {
     let mut evaluator = AtomicPairEvaluator::new();
     select_with(source, policy, &mut evaluator)
+}
+
+/// Выбрать из владеемой Feasible-записи и вернуть её вместе с исходом.
+///
+/// Единственный внутренний потребитель — атомарная операция #296-C: она
+/// владеет A-терминалом и обязана вернуть его в исходе без копирования.
+/// Capability чеканится здесь же, внутри модуля-владельца конструктора, и
+/// немедленно потребляется; вызывающий обязан передавать запись только из
+/// `FeasibilityV1::Feasible`.
+pub(super) fn select_from_feasible_record_with<E: PairEvaluator>(
+    record: EvaluatedV1,
+    policy: FirstFeasibleInDeclaredOrderV1,
+    evaluator: &mut E,
+) -> Result<(EvaluatedV1, SelectionOutcomeV1), SelectionErrorV1> {
+    let outcome = select_with(
+        FeasibleSelectionSourceV1 { record: &record },
+        policy,
+        evaluator,
+    )?;
+    Ok((record, outcome))
 }
 
 #[cfg(test)]

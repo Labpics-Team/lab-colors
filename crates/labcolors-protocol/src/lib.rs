@@ -31,6 +31,9 @@ use labcolors_core::wcag22_feasibility::{
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 
+#[cfg(feature = "wcag22-explicit-selection")]
+pub mod explicit_selection;
+
 /// Exact schema version of the request and outcome envelopes.
 pub const SCHEMA_VERSION_V1: u32 = 1;
 
@@ -40,21 +43,21 @@ const FIXED_ENVELOPE_BYTES_V1: u64 = b"{\"schemaVersion\":1,\"domainId\":\"".len
     + CoreResourceProfileIdV1::Compile.key().len() as u64
     + b"\",\"relations\":[".len() as u64
     + b"]}".len() as u64;
-const APPLICABLE_SKELETON_BYTES_V1: u64 =
+pub(crate) const APPLICABLE_SKELETON_BYTES_V1: u64 =
     b"{\"relationId\":\"\",\"occurrenceId\":\"\",\"kind\":\"applicable\",\"criterion\":\"".len()
         as u64
         + CoreWcag22CriterionV1::Sc1411UiComponentOrState.key().len() as u64
         + b"\",\"adjacent\":[]}".len() as u64;
-const NOT_APPLICABLE_SKELETON_BYTES_V1: u64 =
+pub(crate) const NOT_APPLICABLE_SKELETON_BYTES_V1: u64 =
     b"{\"relationId\":\"\",\"occurrenceId\":\"\",\"kind\":\"notApplicable\",\"reasonId\":\"\"}"
         .len() as u64;
-const MAX_RGB_TRIPLE_BYTES_V1: u64 = b"[255,255,255]".len() as u64;
-const MAX_JSON_ESCAPE_BYTES_PER_OPAQUE_BYTE_V1: u64 = b"\\u0000".len() as u64;
-const RAW_RELATION_LIMIT_V1: u64 =
+pub(crate) const MAX_RGB_TRIPLE_BYTES_V1: u64 = b"[255,255,255]".len() as u64;
+pub(crate) const MAX_JSON_ESCAPE_BYTES_PER_OPAQUE_BYTE_V1: u64 = b"\\u0000".len() as u64;
+pub(crate) const RAW_RELATION_LIMIT_V1: u64 =
     CoreResourceProfileIdV1::Compile.limit(CoreResourceDimensionV1::RawRelations);
-const RAW_ADJACENT_LIMIT_V1: u64 =
+pub(crate) const RAW_ADJACENT_LIMIT_V1: u64 =
     CoreResourceProfileIdV1::Compile.limit(CoreResourceDimensionV1::RawAdjacentEntries);
-const OPAQUE_UTF8_LIMIT_V1: u64 =
+pub(crate) const OPAQUE_UTF8_LIMIT_V1: u64 =
     CoreResourceProfileIdV1::Compile.limit(CoreResourceDimensionV1::OpaqueUtf8Bytes);
 const MAX_APPLICABLE_RELATIONS_V1: u64 = if RAW_RELATION_LIMIT_V1 < RAW_ADJACENT_LIMIT_V1 {
     RAW_RELATION_LIMIT_V1
@@ -419,7 +422,7 @@ struct RawRequestV1 {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-enum RawRelationV1 {
+pub(crate) enum RawRelationV1 {
     Applicable {
         #[serde(rename = "relationId")]
         relation_id: String,
@@ -498,6 +501,12 @@ pub enum TransportErrorV1 {
     },
     /// A NotApplicable declaration had no client reason identity.
     EmptyNotApplicableReason,
+    /// Policy-kind key is not registered in V1.
+    #[cfg(feature = "wcag22-explicit-selection")]
+    UnsupportedPolicyKind {
+        /// Exact rejected key.
+        received: String,
+    },
 }
 
 /// Canonical JSON encoding failure. This is not a colour or feasibility result.
@@ -560,6 +569,18 @@ pub enum CoreInvalidRequestV1 {
     ConflictingRelationId {
         /// Opaque relation identity.
         relation_id: String,
+    },
+    /// An explicit candidate ID was empty.
+    #[cfg(feature = "wcag22-explicit-selection")]
+    EmptyCandidateId,
+    /// No explicit candidates were declared.
+    #[cfg(feature = "wcag22-explicit-selection")]
+    EmptyCandidates,
+    /// The same explicit candidate ID occurred more than once.
+    #[cfg(feature = "wcag22-explicit-selection")]
+    DuplicateCandidateId {
+        /// Opaque candidate identity.
+        candidate_id: String,
     },
     /// Checked cardinality arithmetic overflowed.
     ArithmeticOverflow,
@@ -1200,18 +1221,18 @@ impl Serialize for ProtocolOutcomeV1 {
     }
 }
 
-fn serialize_u64_decimal<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_u64_decimal<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     serializer.serialize_str(&value.to_string())
 }
 
-fn usize_as_u64(value: usize) -> u64 {
+pub(crate) fn usize_as_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-fn core_invalid(error: CoreInvalidRequestV1) -> ProtocolErrorV1 {
+pub(crate) fn core_invalid(error: CoreInvalidRequestV1) -> ProtocolErrorV1 {
     ProtocolErrorV1::Core(CoreErrorV1::InvalidRequest(error))
 }
 
@@ -1400,7 +1421,9 @@ fn project_not_evaluated(value: &CoreNotEvaluatedV1) -> Result<NotEvaluatedV1, P
     })
 }
 
-fn project_relations(values: &[CoreRelationV1]) -> Result<Vec<RelationV1>, ProtocolErrorV1> {
+pub(crate) fn project_relations(
+    values: &[CoreRelationV1],
+) -> Result<Vec<RelationV1>, ProtocolErrorV1> {
     values.iter().map(project_relation).collect()
 }
 
@@ -1458,7 +1481,7 @@ fn project_domain_id(value: CoreDomainIdV1) -> Result<DomainIdV1, ProtocolErrorV
     }
 }
 
-fn project_resource_profile_id(
+pub(crate) fn project_resource_profile_id(
     value: CoreResourceProfileIdV1,
 ) -> Result<ResourceProfileIdV1, ProtocolErrorV1> {
     match value {
@@ -1467,7 +1490,9 @@ fn project_resource_profile_id(
     }
 }
 
-fn project_criterion(value: CoreWcag22CriterionV1) -> Result<Wcag22CriterionV1, ProtocolErrorV1> {
+pub(crate) fn project_criterion(
+    value: CoreWcag22CriterionV1,
+) -> Result<Wcag22CriterionV1, ProtocolErrorV1> {
     match value {
         CoreWcag22CriterionV1::Sc143TextDefault => Ok(Wcag22CriterionV1::Sc143TextDefault),
         CoreWcag22CriterionV1::Sc143TextLargeScale => Ok(Wcag22CriterionV1::Sc143TextLargeScale),
@@ -1481,7 +1506,7 @@ fn project_criterion(value: CoreWcag22CriterionV1) -> Result<Wcag22CriterionV1, 
     }
 }
 
-fn project_wcag22_profile_id(
+pub(crate) fn project_wcag22_profile_id(
     value: CoreWcag22ProfileIdV1,
 ) -> Result<Wcag22ProfileIdV1, ProtocolErrorV1> {
     match value {
@@ -1490,7 +1515,7 @@ fn project_wcag22_profile_id(
     }
 }
 
-fn project_artifact_id(
+pub(crate) fn project_artifact_id(
     value: CoreNumericalArtifactIdV2,
 ) -> Result<NumericalArtifactIdV2, ProtocolErrorV1> {
     match value {
@@ -1501,7 +1526,7 @@ fn project_artifact_id(
     }
 }
 
-fn project_bound_id(
+pub(crate) fn project_bound_id(
     value: CoreNumericalErrorBoundIdV2,
 ) -> Result<NumericalErrorBoundIdV2, ProtocolErrorV1> {
     match value {
@@ -1512,7 +1537,9 @@ fn project_bound_id(
     }
 }
 
-fn project_proof_id(value: CoreNumericalProofIdV2) -> Result<NumericalProofIdV2, ProtocolErrorV1> {
+pub(crate) fn project_proof_id(
+    value: CoreNumericalProofIdV2,
+) -> Result<NumericalProofIdV2, ProtocolErrorV1> {
     match value {
         CoreNumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1 => {
             Ok(NumericalProofIdV2::Wcag22Srgb8FullDomainQ55)
@@ -1548,11 +1575,21 @@ fn project_core_invalid(error: CoreInvalidRequestSourceV1) -> Result<CoreInvalid
         CoreInvalidRequestSourceV1::ArithmeticOverflow => {
             Ok(CoreInvalidRequestV1::ArithmeticOverflow)
         }
+        #[cfg(feature = "wcag22-explicit-selection")]
+        CoreInvalidRequestSourceV1::EmptyCandidateId => Ok(CoreInvalidRequestV1::EmptyCandidateId),
+        #[cfg(feature = "wcag22-explicit-selection")]
+        CoreInvalidRequestSourceV1::EmptyCandidates => Ok(CoreInvalidRequestV1::EmptyCandidates),
+        #[cfg(feature = "wcag22-explicit-selection")]
+        CoreInvalidRequestSourceV1::DuplicateCandidateId { candidate_id } => {
+            Ok(CoreInvalidRequestV1::DuplicateCandidateId {
+                candidate_id: candidate_id.as_str().to_string(),
+            })
+        }
         _ => Err(()),
     }
 }
 
-fn project_core_error(error: CoreFeasibilityErrorV1) -> ProtocolErrorV1 {
+pub(crate) fn project_core_error(error: CoreFeasibilityErrorV1) -> ProtocolErrorV1 {
     let projected = match error {
         CoreFeasibilityErrorV1::InvalidRequest(error) => {
             project_core_invalid(error).map(CoreErrorV1::InvalidRequest)

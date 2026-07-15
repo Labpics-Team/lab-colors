@@ -15,6 +15,27 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 
 ### Added
 
+- Атомарная операция `wcag22-explicit-selection-v1` (#296-C2): Core-функция
+  `evaluate_and_select` исполняет `feasibility → полная валидация политики →
+  selection → финальная перепроверка` за один вызов. Ошибка A-фазы приоритетна;
+  некорректная политика классифицируется единственным SSOT-валидатором
+  одинаково после каждого успешного A-терминала; `Infeasible`/`NotEvaluated`
+  связывают точную политику без selection-receipt; терминал A перемещается в
+  исход без копирования и без дополнительных аллокаций. Все четыре терминала
+  запечатаны: снаружи Core их нельзя ни собрать, ни перепарить.
+- Строгий транспорт атомарной операции в `labcolors-protocol` за non-default
+  фичей `wcag22-explicit-selection`: выведенный точный envelope
+  (машинно-проверяемый корнер-анализ, достижимость ровно в MAX байтов),
+  строгий декодер с typed-ошибками для неизвестных schema/domain/profile/policy
+  kind, фазовая атрибуция дефектов конструирования и исходы без `Deserialize`.
+  Ни один публикуемый adapter (compiler WASM, UniFFI/Swift, npm) не рекламирует
+  capability до #296-C3.
+- Conformance pack 6.0.0 добавляет ровно одно семейство
+  `wcag22-explicit-selection.json` (12 векторов: четыре законных терминала,
+  opposite-order пара с байт-идентичным feasibility-поддеревом, policy-ошибки,
+  unsupported policy kind, unicode-идентичности). Семейство генерируется и
+  реплеится только нативно; прежние семь семейств byte-identical, npm/Swift
+  продолжают реплеить прежние семь.
 - Versioned `evaluate_wcag22_srgb8` / `evaluate_wcag22_hex` и эквивалентные
   WASM/TypeScript/UniFFI границы. Criterion всегда объявляет клиент; verdict
   возвращает точное terminal evidence без epsilon или округлённого ratio.

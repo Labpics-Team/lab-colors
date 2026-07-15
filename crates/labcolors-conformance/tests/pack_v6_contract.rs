@@ -1,5 +1,5 @@
-//! RED contract for #295 Slice B: pack 5 adds exactly one feasibility family
-//! while preserving every byte of the six admitted pack-4 families.
+//! Pack-контракт: pack 6 добавляет ровно одну atomic explicit-selection family
+//! (#296-C2), сохраняя байт-в-байт все семь допущенных pack-5 семейств.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
 #[path = "../../labcolors-core/src/sha256.rs"]
 mod sha256;
 
-const LEGACY_FAMILY_SHA256: [(&str, &str); 6] = [
+const LEGACY_FAMILY_SHA256: [(&str, &str); 7] = [
     (
         "contrasts.json",
         "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145",
@@ -34,6 +34,10 @@ const LEGACY_FAMILY_SHA256: [(&str, &str); 6] = [
     (
         "wcag22.json",
         "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826",
+    ),
+    (
+        "wcag22-feasibility.json",
+        "ae2caec47a7b650e73b8d4029a69b4e401dfb7cc199db579c0f95106eebe8dc3",
     ),
 ];
 
@@ -110,8 +114,8 @@ fn partition_count(outcome: &serde_json::Value) -> u32 {
 }
 
 #[test]
-fn pack_v5_adds_only_the_feasibility_family_and_preserves_legacy_bytes() {
-    assert_eq!(PACK_VERSION, "5.0.0");
+fn pack_v6_adds_only_the_explicit_selection_family_and_preserves_prior_bytes() {
+    assert_eq!(PACK_VERSION, "6.0.0");
     assert_eq!(
         FAMILY_FILES.as_slice(),
         [
@@ -122,6 +126,7 @@ fn pack_v5_adds_only_the_feasibility_family_and_preserves_legacy_bytes() {
             "muddiness.json",
             "wcag22.json",
             "wcag22-feasibility.json",
+            "wcag22-explicit-selection.json",
         ]
         .as_slice()
     );
@@ -131,15 +136,16 @@ fn pack_v5_adds_only_the_feasibility_family_and_preserves_legacy_bytes() {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-4 family bytes drifted: {name}"
+            "pack-5 family bytes drifted: {name}"
         );
     }
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest JSON");
-    assert_eq!(manifest["packVersion"], "5.0.0");
+    assert_eq!(manifest["packVersion"], "6.0.0");
     assert_eq!(manifest["counts"]["wcag22Feasibility"], 13);
-    assert_eq!(manifest["counts"]["total"], 101);
+    assert_eq!(manifest["counts"]["wcag22ExplicitSelection"], 12);
+    assert_eq!(manifest["counts"]["total"], 113);
 }
 
 #[test]
@@ -289,4 +295,194 @@ fn feasibility_corpus_pins_terminals_counts_packing_and_opaque_identity_law() {
         b["proof"]["relationSetDigest"]
     );
     assert_ne!(a["proof"]["evaluationId"], b["proof"]["evaluationId"]);
+}
+
+// ── Законы новой atomic explicit-selection family ────────────────────────────
+
+const EXPLICIT_SELECTION_CASES: [&str; 12] = [
+    "selected-declared-order-overrides-canonical",
+    "selected-mixed-not-applicable",
+    "no-selection-singleton-infeasible",
+    "infeasible-policy-bound",
+    "not-evaluated-policy-bound",
+    "opposite-order-forward",
+    "opposite-order-reverse",
+    "error-foreign-tail-after-feasible-prefix",
+    "error-duplicate-order-tail",
+    "error-policy-cardinality-exceeds-domain",
+    "error-unsupported-policy-kind",
+    "opaque-unicode-identities",
+];
+
+fn explicit_selection_vectors() -> Vec<serde_json::Value> {
+    serde_json::from_slice(&read(vectors_dir().join("wcag22-explicit-selection.json")))
+        .expect("valid explicit-selection family JSON")
+}
+
+#[test]
+fn explicit_selection_family_is_canonical_compact_protocol_json() {
+    let vectors = explicit_selection_vectors();
+    assert_eq!(vectors.len(), EXPLICIT_SELECTION_CASES.len());
+
+    let actual: BTreeSet<_> = vectors
+        .iter()
+        .map(|vector| {
+            let object = vector.as_object().expect("vector object");
+            assert_eq!(object.len(), 3, "vector schema must stay compact");
+            let request = object["requestJson"]
+                .as_str()
+                .expect("canonical request JSON string");
+            let outcome = object["outcomeJson"]
+                .as_str()
+                .expect("canonical outcome JSON string");
+            serde_json::from_str::<serde_json::Value>(request).expect("request protocol JSON");
+            serde_json::from_str::<serde_json::Value>(outcome).expect("outcome protocol JSON");
+            for forbidden in [
+                "feasibleCandidates",
+                "infeasibleCandidates",
+                "cells",
+                "assessments",
+                "domainFirst",
+                "domainLast",
+            ] {
+                assert!(
+                    !outcome.contains(forbidden),
+                    "outcome contains forbidden view {forbidden}"
+                );
+            }
+            object["caseId"].as_str().expect("stable case id")
+        })
+        .collect();
+    assert_eq!(actual, BTreeSet::from(EXPLICIT_SELECTION_CASES));
+}
+
+#[test]
+fn explicit_selection_corpus_pins_the_atomic_terminal_and_error_algebra() {
+    let vectors = explicit_selection_vectors();
+
+    // Selected: объявленный порядок перекрывает канонический; финальная
+    // перепроверка отчитывается точным числом рёбер.
+    let selected = outcome(vector(
+        &vectors,
+        "selected-declared-order-overrides-canonical",
+    ));
+    assert_eq!(selected["outcome"], "success");
+    assert_eq!(selected["result"]["status"], "selected");
+    assert_eq!(selected["result"]["selection"]["candidateId"], "z-bright");
+    assert_eq!(
+        selected["result"]["selection"]["selectedPolicyOrdinal"],
+        "1"
+    );
+    assert_eq!(
+        selected["result"]["selection"]["finalVerification"]["verifiedApplicableEdges"],
+        "1"
+    );
+    let proof = &selected["result"]["feasibility"]["proof"];
+    assert_eq!(proof["domainKind"], "explicit-srgb8-set-v1");
+    assert_eq!(proof["candidateCount"], "3");
+    // Переменная партиция: ceil(3/8) = 1 байт, без 256-байтного зазора.
+    assert_eq!(proof["partition"].as_array().expect("partition").len(), 1);
+
+    // Смешанный граф: NA-декларация сохраняется, рёбра считаются точно.
+    let mixed = outcome(vector(&vectors, "selected-mixed-not-applicable"));
+    assert_eq!(
+        mixed["result"]["selection"]["finalVerification"]["verifiedApplicableEdges"],
+        "2"
+    );
+    assert_eq!(
+        mixed["result"]["feasibility"]["proof"]["notApplicableRelations"],
+        "1"
+    );
+
+    // NoSelection: настоящий отказ с привязкой политики и evaluation.
+    let no_selection = outcome(vector(&vectors, "no-selection-singleton-infeasible"));
+    assert_eq!(no_selection["result"]["status"], "noSelection");
+    assert_eq!(
+        no_selection["result"]["selection"]["reason"],
+        "noDeclaredCandidateFeasible"
+    );
+    assert_eq!(
+        no_selection["result"]["selection"]["evaluationId"],
+        no_selection["result"]["feasibility"]["proof"]["evaluationId"],
+        "NoSelection must bind the exact source evaluation"
+    );
+
+    // Невыборные терминалы связывают точную политику без selection-receipt.
+    let infeasible = outcome(vector(&vectors, "infeasible-policy-bound"));
+    assert_eq!(infeasible["result"]["status"], "infeasible");
+    assert_eq!(infeasible["result"]["policy"]["policyId"], "any-member");
+    assert_eq!(infeasible["result"]["policy"]["declaredEntries"], "2");
+    assert!(infeasible["result"].get("selection").is_none());
+
+    let not_evaluated = outcome(vector(&vectors, "not-evaluated-policy-bound"));
+    assert_eq!(not_evaluated["result"]["status"], "notEvaluated");
+    assert_eq!(not_evaluated["result"]["policy"]["policyId"], "still-bound");
+    assert!(not_evaluated["result"].get("selection").is_none());
+    assert!(
+        not_evaluated["result"]["feasibility"]
+            .get("proof")
+            .is_none(),
+        "a declaration-only terminal must not fabricate numerical proof"
+    );
+
+    // Противоположные порядки: физика байт-идентична, выбор и binding меняются.
+    let forward = outcome(vector(&vectors, "opposite-order-forward"));
+    let reverse = outcome(vector(&vectors, "opposite-order-reverse"));
+    assert_eq!(
+        forward["result"]["feasibility"], reverse["result"]["feasibility"],
+        "opposite declared orders must not rewrite the physical feasibility subtree"
+    );
+    assert_eq!(
+        forward["result"]["selection"]["candidateId"],
+        "first-bright"
+    );
+    assert_eq!(
+        reverse["result"]["selection"]["candidateId"],
+        "second-bright"
+    );
+    assert_ne!(
+        forward["result"]["selection"]["policyDigest"],
+        reverse["result"]["selection"]["policyDigest"]
+    );
+
+    // Ошибочные политики: malformed, не NoSelection; без частичного payload.
+    for (case_id, code) in [
+        (
+            "error-foreign-tail-after-feasible-prefix",
+            "foreignCandidateId",
+        ),
+        ("error-duplicate-order-tail", "duplicateCandidateId"),
+        (
+            "error-policy-cardinality-exceeds-domain",
+            "policyCardinalityExceedsDomain",
+        ),
+    ] {
+        let failure = outcome(vector(&vectors, case_id));
+        assert_eq!(failure["outcome"], "failure", "{case_id}");
+        assert!(failure.get("result").is_none(), "{case_id} leaked a result");
+        assert_eq!(failure["error"]["source"], "selection", "{case_id}");
+        assert_eq!(failure["error"]["error"]["code"], "invalidRequest");
+        assert_eq!(failure["error"]["error"]["details"]["code"], code);
+    }
+
+    // Неизвестный policy kind — строгий декодер, typed transport.
+    let unsupported = outcome(vector(&vectors, "error-unsupported-policy-kind"));
+    assert_eq!(unsupported["error"]["source"], "transport");
+    assert_eq!(
+        unsupported["error"]["error"]["code"],
+        "unsupportedPolicyKind"
+    );
+    assert_eq!(
+        unsupported["error"]["error"]["received"],
+        "best-feasible-v1"
+    );
+
+    // Unicode opaque ID проходят без нормализации; выбран первый feasible
+    // из объявленного порядка.
+    let unicode = outcome(vector(&vectors, "opaque-unicode-identities"));
+    assert_eq!(unicode["result"]["status"], "selected");
+    assert_eq!(
+        unicode["result"]["selection"]["candidateId"], "z:\u{03bb}9",
+        "the declared order starts with the infeasible dark member"
+    );
 }

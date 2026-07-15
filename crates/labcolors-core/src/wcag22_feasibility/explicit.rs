@@ -1,5 +1,7 @@
 //! Client-declared finite sRGB8 feasibility (#296-A).
 
+#[path = "explicit/atomic.rs"]
+pub mod atomic;
 #[path = "explicit/selection.rs"]
 pub mod selection;
 

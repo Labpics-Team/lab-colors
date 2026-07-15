@@ -18,7 +18,7 @@
 | экспорт-субпутей package.json @labpics/colors | 10 |
 | python-скриптов scripts/*.py | 10 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
-| векторов conformance/vectors/*.json (включая manifest) | 8 |
+| векторов conformance/vectors/*.json (включая manifest) | 9 |
 | исходных/объявленных publish-файлов вне закона имён | 10 |
 
 ## Общие принципы (эталон lab-icons)

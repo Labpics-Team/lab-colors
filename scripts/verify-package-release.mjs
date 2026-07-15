@@ -30,6 +30,9 @@ const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-q55-v1.bin",
   "wcag22-srgb8-q55-proof-v1.json",
 ];
+// Полный состав пака 6.0.0. Верификатор читает байты из репозитория (не из
+// тарболла) и пересчитывает packDigest над всеми восемью семействами;
+// wcag22-explicit-selection остаётся native-only и в пакет не попадает.
 const CONFORMANCE_FAMILY_FILES = [
   "contrasts.json",
   "ladders.json",
@@ -38,6 +41,7 @@ const CONFORMANCE_FAMILY_FILES = [
   "muddiness.json",
   "wcag22.json",
   "wcag22-feasibility.json",
+  "wcag22-explicit-selection.json",
 ];
 const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
 const COMPILER_WASM_PATH = resolve(PACKAGE_DIR, "compiler/labcolors_compiler_bg.wasm");
@@ -1084,8 +1088,8 @@ export function validateWcag22FeasibilityFamily(family, atomicProofSha256Hex) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "5.0.0") {
-    fail(`release requires conformance pack 5.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "6.0.0") {
+    fail(`release requires conformance pack 6.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -1123,6 +1127,7 @@ async function validateConformance(conformance) {
     "muddiness",
     "wcag22",
     "wcag22Feasibility",
+    "wcag22ExplicitSelection",
   ];
   let total = 0;
   for (const [index, key] of countKeys.entries()) {

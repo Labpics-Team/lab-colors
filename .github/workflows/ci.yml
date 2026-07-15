@@ -306,9 +306,30 @@ jobs:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
                   )
-              if 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
+              # #296-C2: атомарная explicit-операция protocol существует за
+              # non-default фичей. До #296-C3 её резолвит ТОЛЬКО нативный
+              # conformance-генератор; публикуемые adapters (compiler, ffi)
+              # обязаны оставаться feasibility-only.
+              if consumer == "labcolors-conformance":
+                  if (
+                      'labcolors-protocol feature "wcag22-explicit-selection"'
+                      not in feature_tree
+                  ):
+                      raise SystemExit(
+                          "labcolors-conformance must resolve the native-only "
+                          "explicit-selection protocol feature"
+                      )
+                  if (
+                      'labcolors-core feature "wcag22-explicit-feasibility"'
+                      not in feature_tree
+                  ):
+                      raise SystemExit(
+                          "labcolors-conformance must resolve the explicit-domain "
+                          "capability for pack generation"
+                      )
+              elif 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
                   raise SystemExit(
-                      f"{consumer} resolved the Core-only explicit-domain capability"
+                      f"{consumer} resolved the pre-C3 native-only explicit capability"
                   )
 
           runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
