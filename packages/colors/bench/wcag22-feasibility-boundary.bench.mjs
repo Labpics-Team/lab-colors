@@ -44,7 +44,7 @@ const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v3";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v4";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
