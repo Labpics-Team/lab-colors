@@ -1261,11 +1261,43 @@ async function wcag22ExplicitSelectionSmokeFixture() {
   const family = await readJson(
     resolve(CONFORMANCE_DIR, "wcag22-explicit-selection.json"),
   );
+  // Паритет с feasibility-фикстурой: семейство целиком проверяется на форму
+  // (каждый вектор — ровно caseId/requestJson/outcomeJson, оба JSON-парсятся,
+  // caseId уникальны), затем выбирается канонический selected-кейс.
+  if (!Array.isArray(family) || family.length === 0) {
+    fail("wcag22-explicit-selection family must be a non-empty vector array");
+  }
+  const seen = new Set();
+  for (const vector of family) {
+    const keys = Object.keys(vector);
+    if (
+      keys.length !== 3 ||
+      typeof vector.caseId !== "string" ||
+      typeof vector.requestJson !== "string" ||
+      typeof vector.outcomeJson !== "string"
+    ) {
+      fail(`wcag22-explicit-selection vector schema drifted: ${vector.caseId}`);
+    }
+    if (seen.has(vector.caseId)) {
+      fail(`wcag22-explicit-selection duplicate caseId: ${vector.caseId}`);
+    }
+    seen.add(vector.caseId);
+    try {
+      JSON.parse(vector.requestJson);
+      JSON.parse(vector.outcomeJson);
+    } catch (error) {
+      fail(`wcag22-explicit-selection ${vector.caseId} is not nested JSON: ${error.message}`);
+    }
+  }
   const canonical = family.find(
     (vector) => vector.caseId === "selected-declared-order-overrides-canonical",
   );
   if (!canonical) {
     fail("wcag22-explicit-selection smoke fixture is missing its canonical case");
+  }
+  const outcome = JSON.parse(canonical.outcomeJson);
+  if (outcome?.outcome !== "success" || outcome?.result?.status !== "selected") {
+    fail("wcag22-explicit-selection canonical case must be a selected terminal");
   }
   return {
     requestJson: canonical.requestJson,
