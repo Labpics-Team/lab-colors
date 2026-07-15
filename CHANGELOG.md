@@ -89,11 +89,14 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 - Native feasibility admission также append-only относительно принятого
   `main`: V1/V2 проверяются в исторических snapshots, а текущий V3 связывает
   artifact SHA
-  `576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78`
-  с одним точным dependency cone: Git objects исходников, SHA-256 всех
-  исполняемых verifier/subject-файлов и точный `Cargo.lock` проверяются до и
-  после измерения. Допуск фиксирует Rust/Cargo 1.96.0, явный feature set и
-  пустые rustflags; 56 негативных мутаций проверяют fail-closed границы.
+  `46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a`
+  с одним точным dependency cone. Source-bound recorder проверяет Git objects,
+  SHA-256 verifier/subject-файлов и точный `Cargo.lock` до сборки и после
+  запуска; fresh target, пустая Cargo-config hierarchy и закрытая среда
+  исключают ambient profile/flags/wrappers. Receipt фиксирует Rust/Cargo 1.96.0,
+  SHA-256 обоих toolchain executables и реально запущенного benchmark binary,
+  явный feature set и explicit-empty compiler overrides; 71 негативная мутация
+  проверяет fail-closed границы.
   Сырые наблюдения сохранены без timing threshold, а промежуточные draft-
   артефакты не становятся публичной историей.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только

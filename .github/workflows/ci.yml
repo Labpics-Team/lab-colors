@@ -391,6 +391,9 @@ jobs:
           current_protocol=(
             --admit-rustc-release 1.96.0
             --admit-cargo-release 1.96.0
+            --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
+            --admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841
+            --admit-benchmark-binary-sha256 6ac07bad81a204ee8fcee8f94a3c445f881d1ca10edaf4cc4a86a5db0b232e3a
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
             --admit-target-os macos
@@ -400,7 +403,7 @@ jobs:
           )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --artifact-sha256 576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78 \
+            --artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a \
             --self-test
 
   audit:

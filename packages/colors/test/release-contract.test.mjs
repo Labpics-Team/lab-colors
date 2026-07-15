@@ -1349,6 +1349,39 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     false,
     "durable V3 must use its exact source-object cone as the provenance SSOT",
   );
+  assert.deepEqual(
+    canonicalPayload.environment.explicitEmptyBuildInputs,
+    [
+      "CARGO_ENCODED_RUSTFLAGS",
+      "RUSTC_WRAPPER",
+      "RUSTC_WORKSPACE_WRAPPER",
+    ],
+    "the highest-precedence rustflags source and both rustc wrappers must be explicitly empty",
+  );
+  assert.equal(
+    canonicalPayload.recordProvenance.recipeId,
+    "closed-cargo-bench-v1",
+  );
+  assert.match(
+    canonicalPayload.recordProvenance.sourceSnapshotSha256,
+    /^[0-9a-f]{64}$/u,
+  );
+  assert.match(
+    canonicalPayload.recordProvenance.benchmarkBinarySha256,
+    /^[0-9a-f]{64}$/u,
+  );
+  assert.match(canonicalPayload.environment.rustcBinarySha256, /^[0-9a-f]{64}$/u);
+  assert.match(canonicalPayload.environment.cargoBinarySha256, /^[0-9a-f]{64}$/u);
+  assert.equal(
+    "rustFlags" in canonicalPayload.environment,
+    false,
+    "V3 must not collapse absent and explicitly empty RUSTFLAGS",
+  );
+  assert.equal(
+    "cargoEncodedRustflags" in canonicalPayload.environment,
+    false,
+    "V3 must represent source presence instead of only its empty value",
+  );
   const rustcRelease = canonicalPayload.environment.rustcVerbose
     .match(/^rustc ([^ ]+) /u)?.[1];
   const cargoRelease = canonicalPayload.environment.cargoVerbose
@@ -1363,6 +1396,12 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     rustcRelease,
     "--admit-cargo-release",
     cargoRelease,
+    "--admit-rustc-binary-sha256",
+    canonicalPayload.environment.rustcBinarySha256,
+    "--admit-cargo-binary-sha256",
+    canonicalPayload.environment.cargoBinarySha256,
+    "--admit-benchmark-binary-sha256",
+    canonicalPayload.recordProvenance.benchmarkBinarySha256,
     "--admit-target-triple",
     targetTriple,
     "--admit-target-arch",
@@ -1468,7 +1507,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78[\s\S]*?--self-test/u,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 [0-9a-f]{64}[\s\S]*?--admit-cargo-binary-sha256 [0-9a-f]{64}[\s\S]*?--admit-benchmark-binary-sha256 [0-9a-f]{64}[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a[\s\S]*?--self-test/u,
     "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(
