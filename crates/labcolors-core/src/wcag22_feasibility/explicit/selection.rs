@@ -14,8 +14,8 @@ use crate::sha256::Hasher;
 use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22ProfileIdV1};
 
 use super::super::{
-    AtomicPairEvaluator, EvaluationIdV1, EvaluatorInvariantV1, PairEvaluator, RelationId,
-    RelationSetDigestV1, ResourceDimensionV1, ResourceProfileIdV1, evaluate_bound_pair,
+    AtomicPairEvaluator, CanonicalByteSink, EvaluationIdV1, EvaluatorInvariantV1, PairEvaluator,
+    RelationId, RelationSetDigestV1, ResourceDimensionV1, ResourceProfileIdV1, evaluate_bound_pair,
     hash_len_prefixed, hash_u64, packed_bit,
 };
 use super::{CandidateId, CandidateV1, EvaluatedV1, FeasibilityV1};
@@ -26,6 +26,10 @@ const RECEIPT_SEPARATOR: &[u8] =
     b"labcolors/wcag22-feasibility/selection/receipt/selected-final-verification/v1\0";
 const POLICY_KIND_KEY: &str = "first-feasible-in-declared-order-v1";
 const RECEIPT_KIND_KEY: &str = "selected-final-verification-v1";
+// V1 receipt grammar records only edges re-evaluated as Pass. A failing edge
+// exits with an integrity error before receipt streaming, so no other verdict
+// tag is representable in this grammar.
+const VERIFIED_PASS_TAG: u8 = 1;
 
 /// Opaque client-owned identity of one declared selection policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -474,48 +478,29 @@ fn receipt_hasher(
     hasher
 }
 
-trait ReceiptSink {
-    fn write(&mut self, bytes: &[u8]);
-}
-
-impl ReceiptSink for Hasher {
-    fn write(&mut self, bytes: &[u8]) {
-        self.update(bytes);
-    }
-}
-
-fn receipt_sink_u64(sink: &mut impl ReceiptSink, value: u64) {
-    sink.write(&value.to_be_bytes());
-}
-
-fn receipt_sink_len_prefixed(sink: &mut impl ReceiptSink, bytes: &[u8]) {
-    receipt_sink_u64(sink, bytes.len() as u64);
-    sink.write(bytes);
-}
-
 fn stream_receipt_relation(
-    sink: &mut impl ReceiptSink,
+    sink: &mut impl CanonicalByteSink,
     relation_ordinal: u64,
     relation_id: &[u8],
     criterion_key: &[u8],
     relation_edges: u64,
 ) {
-    receipt_sink_u64(sink, relation_ordinal);
-    receipt_sink_len_prefixed(sink, relation_id);
-    receipt_sink_len_prefixed(sink, criterion_key);
-    receipt_sink_u64(sink, relation_edges);
+    hash_u64(sink, relation_ordinal);
+    hash_len_prefixed(sink, relation_id);
+    hash_len_prefixed(sink, criterion_key);
+    hash_u64(sink, relation_edges);
 }
 
 fn stream_receipt_edge(
-    sink: &mut impl ReceiptSink,
+    sink: &mut impl CanonicalByteSink,
     edge_ordinal: u64,
     foreground: Srgb8,
     background: Srgb8,
 ) {
-    receipt_sink_u64(sink, edge_ordinal);
+    hash_u64(sink, edge_ordinal);
     sink.write(&foreground.bytes());
     sink.write(&background.bytes());
-    sink.write(&[1]);
+    sink.write(&[VERIFIED_PASS_TAG]);
 }
 
 fn preflight(
@@ -862,7 +847,7 @@ mod tests {
         bytes: u64,
     }
 
-    impl ReceiptSink for CountingSink {
+    impl CanonicalByteSink for CountingSink {
         fn write(&mut self, bytes: &[u8]) {
             self.bytes += u64::try_from(bytes.len()).unwrap();
         }

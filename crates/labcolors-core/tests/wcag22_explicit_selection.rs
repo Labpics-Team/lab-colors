@@ -118,7 +118,11 @@ where
         .expect("selection property failed with a minimized counterexample");
 }
 
-fn assert_downstream_rejected(source: &str, expected_fragments: &[&str]) {
+fn assert_downstream_rejected(
+    shared_target_dir: &std::path::Path,
+    source: &str,
+    expected_fragments: &[&str],
+) {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join("src")).unwrap();
     let package_dir = env!("CARGO_MANIFEST_DIR")
@@ -138,7 +142,7 @@ fn assert_downstream_rejected(source: &str, expected_fragments: &[&str]) {
     let output = Command::new(env!("CARGO"))
         .arg("check")
         .arg("--offline")
-        .env("CARGO_TARGET_DIR", temp.path().join("target"))
+        .env("CARGO_TARGET_DIR", shared_target_dir)
         .current_dir(temp.path())
         .output()
         .unwrap();
@@ -627,7 +631,10 @@ fn production_identity_matches_the_independent_unicode_selection_fixture() {
 
 #[test]
 fn selection_source_and_receipts_cannot_be_forged_or_rewrapped_downstream() {
+    let shared_target = tempfile::tempdir().unwrap();
+
     assert_downstream_rejected(
+        shared_target.path(),
         r#"use labcolors_core::wcag22_feasibility::explicit::EvaluatedV1;
 use labcolors_core::wcag22_feasibility::explicit::selection::FeasibleSelectionSourceV1;
 
@@ -641,6 +648,7 @@ fn main() {}
     );
 
     assert_downstream_rejected(
+        shared_target.path(),
         r#"use labcolors_core::wcag22_feasibility::explicit::selection::{
     FinalRelationVerificationV1, SelectionProofV1,
 };
@@ -654,6 +662,7 @@ fn main() {
     );
 
     assert_downstream_rejected(
+        shared_target.path(),
         r#"use labcolors_core::wcag22_feasibility::explicit::EvaluatedV1;
 use labcolors_core::wcag22_feasibility::explicit::selection::{
     FirstFeasibleInDeclaredOrderV1, select,
@@ -669,6 +678,7 @@ fn main() {}
     );
 
     assert_downstream_rejected(
+        shared_target.path(),
         r#"use labcolors_core::wcag22_feasibility::explicit::selection::{
     NoSelectionV1, SelectedV1, SelectionOutcomeV1,
 };

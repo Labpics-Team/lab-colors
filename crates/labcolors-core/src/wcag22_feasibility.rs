@@ -1569,13 +1569,25 @@ fn validate_variable_complete_result_v1(
     Ok(())
 }
 
-fn hash_len_prefixed(hasher: &mut Hasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
+// Identity encoders target this minimal sink so production SHA-256 and bounded
+// byte-work probes execute the same byte grammar rather than parallel copies.
+trait CanonicalByteSink {
+    fn write(&mut self, bytes: &[u8]);
 }
 
-fn hash_u64(hasher: &mut Hasher, value: u64) {
-    hasher.update(&value.to_be_bytes());
+impl CanonicalByteSink for Hasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.update(bytes);
+    }
+}
+
+fn hash_len_prefixed(sink: &mut impl CanonicalByteSink, bytes: &[u8]) {
+    hash_u64(sink, bytes.len() as u64);
+    sink.write(bytes);
+}
+
+fn hash_u64(sink: &mut impl CanonicalByteSink, value: u64) {
+    sink.write(&value.to_be_bytes());
 }
 
 fn domain_digest(domain_id: DomainIdV1) -> DomainDigestV1 {
