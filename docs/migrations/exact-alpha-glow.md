@@ -460,6 +460,11 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   pack 4 сохранены. Новый corpus фиксирует versioned request/outcome bytes,
   packed LSB0 evidence, все три feasibility-терминала и типизированные
   conflict/resource error paths.
+- Pack 6.0.0 добавляет ровно `wcag22-explicit-selection.json` — корпус
+  атомарной операции `wcag22-explicit-selection-v1`. Публичный JS/TS/Swift
+  transport при этом НЕ расширяется: операция не опубликована ни в одном
+  адаптере, нового transport-endpoint у потребителей нет, а воспроизведением
+  корпуса владеет нативный эталонный раннер conformance-крейта.
 - `evaluateWcag22Feasibility(Uint8Array)`, `wcag22FeasibilityMaxBytes()` и
   request/outcome types перенесены из package root в
   `@labpics/colors/compiler`. Compiler загружает собственный WASM через

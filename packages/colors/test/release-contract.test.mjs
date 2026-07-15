@@ -1478,11 +1478,13 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
       (path) => historicalSubjects.get(path) !== canonicalSubjects.get(path),
     ),
     [
+      "crates/labcolors-core/Cargo.toml",
       "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
       "crates/labcolors-core/src/wcag22_feasibility/explicit.rs",
       "scripts/check_wcag22_feasibility_benchmark.py",
     ],
-    "V5 source drift must be exactly the C2 explicit module and admission machinery",
+    "V5 source drift must be exactly the C2 explicit module, its test-target " +
+      "registration and admission machinery",
   );
   assert.equal(
     "gitRevision" in canonicalPayload.environment,

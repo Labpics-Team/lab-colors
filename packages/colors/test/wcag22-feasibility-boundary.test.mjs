@@ -290,7 +290,7 @@ test("whole-call evidence history is exact and deterministic", () => {
   );
   assert.equal(
     sha256(v4Bytes),
-    "5972370080431704bf54989a8c1c7a172c60be4598155bb52d53a22aba0e3ebc",
+    "34fcc24d74c1c0b877c04457799d5d67b8947915199a14202f737353bfff4257",
   );
   const v1 = JSON.parse(v1Bytes);
   const v2 = JSON.parse(v2Bytes);
