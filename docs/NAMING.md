@@ -19,7 +19,7 @@
 | python-скриптов scripts/*.py | 10 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 8 |
-| файлов вне закона имён | 8 |
+| файлов вне закона имён | 4 |
 
 ## Общие принципы (эталон lab-icons)
 
@@ -117,12 +117,6 @@
 - `./compiler/wasm` — вложенный служебный субпуть физического compiler-WASM;
   вложенность сохраняет одну публичную роль `compiler`, а имя артефакта скрыто
   за стабильным export map.
-- `packages/colors/compiler/labcolors_compiler.js`,
-  `packages/colors/compiler/labcolors_compiler.d.ts`,
-  `packages/colors/compiler/labcolors_compiler_bg.wasm` и
-  `packages/colors/compiler/labcolors_compiler_bg.wasm.d.ts` — механически
-  сгенерированная wasm-bindgen-группа для `--out-name labcolors_compiler`;
-  snake_case задаёт генератор и вручную не редактируется.
 - `./build-metadata.json` — служебный JSON-контракт build metadata; расширение
   намеренно остаётся частью subpath, чтобы формат был явным и потребитель не
   принимал его за исполняемый JS entrypoint.

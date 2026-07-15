@@ -1369,7 +1369,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
   }
 });
 
-test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subjects", () => {
+test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subjects", () => {
   const contractNames = readdirSync(join(
     root,
     "crates",
@@ -1380,6 +1380,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     "wcag22-feasibility-benchmark-v1.json",
     "wcag22-feasibility-benchmark-v2.json",
     "wcag22-feasibility-benchmark-v3.json",
+    "wcag22-feasibility-benchmark-v4.json",
   ]);
 
   const benchmarkChecker = join(
@@ -1392,18 +1393,18 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     "crates",
     "labcolors-core",
     "contracts",
-    "wcag22-feasibility-benchmark-v3.json",
+    "wcag22-feasibility-benchmark-v4.json",
   ));
   const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
   assert.equal(
     "gitRevision" in canonicalPayload.environment,
     false,
-    "durable V3 must not claim an ephemeral measurement commit",
+    "durable V4 must not claim an ephemeral measurement commit",
   );
   assert.equal(
     "gitTree" in canonicalPayload.environment,
     false,
-    "durable V3 must use its exact source-object cone as the provenance SSOT",
+    "durable V4 must use its exact source-object cone as the provenance SSOT",
   );
   assert.deepEqual(
     canonicalPayload.environment.explicitEmptyBuildInputs,
@@ -1431,12 +1432,12 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   assert.equal(
     "rustFlags" in canonicalPayload.environment,
     false,
-    "V3 must not collapse absent and explicitly empty RUSTFLAGS",
+    "V4 must not collapse absent and explicitly empty RUSTFLAGS",
   );
   assert.equal(
     "cargoEncodedRustflags" in canonicalPayload.environment,
     false,
-    "V3 must represent source presence instead of only its empty value",
+    "V4 must represent source presence instead of only its empty value",
   );
   const rustcRelease = canonicalPayload.environment.rustcVerbose
     .match(/^rustc ([^ ]+) /u)?.[1];
@@ -1517,15 +1518,15 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
         assert.match(error.stderr, /unrecognized arguments: --admit-revision/u);
         return true;
       },
-      "V3 must not accept unverifiable whole-commit provenance",
+      "V4 must not accept unverifiable whole-commit provenance",
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
 
   const ci = read(".github", "workflows", "ci.yml");
-  const unmergedDraftAdmission =
-    /v3_snapshot=|b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace|feasibility-benchmark-v4|admission-raw-v4/u;
+  const rejectedDraftFingerprints =
+    /b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace/u;
   for (const [path, source] of [
     [".github/workflows/ci.yml", ci],
     ["CHANGELOG.md", read("CHANGELOG.md")],
@@ -1542,7 +1543,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   ]) {
     assert.doesNotMatch(
       source,
-      unmergedDraftAdmission,
+      rejectedDraftFingerprints,
       `${path} must not retain an unmerged draft admission`,
     );
   }

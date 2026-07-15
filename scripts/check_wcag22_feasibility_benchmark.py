@@ -29,7 +29,7 @@ from typing import Any
 
 
 DEFAULT_ARTIFACT = Path(
-    "/private/tmp/labcolors-wcag22-feasibility-admission-raw-v3.json"
+    "/private/tmp/labcolors-wcag22-feasibility-admission-raw-v4.json"
 )
 HEX_256 = re.compile(r"[0-9a-f]{64}")
 GIT_OBJECT = re.compile(r"[0-9a-f]{40}")
@@ -821,7 +821,7 @@ def check_environment(
     require(isinstance(environment, dict) and environment.get("execution") == "native-process",
             "environment must identify native-process execution")
     require(set(environment) == ENVIRONMENT_FIELDS,
-            "environment fields drifted from the exact V3 schema")
+            "environment fields drifted from the exact V4 schema")
     require(environment.get("allocator") == "std::alloc::System",
             "allocator provenance must identify the measured global allocator")
     require(environment.get("allocatorInstrumentationIncludedInElapsedTime") is True,
@@ -911,7 +911,7 @@ def check(
     source_before = dependency_cone_snapshot()
     require(isinstance(payload, dict), "artifact root must be an object")
     require(payload.get("schemaVersion") == 1, "unsupported benchmark schemaVersion")
-    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v3",
+    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v4",
             "unexpected benchmark artifactId")
     require(
         payload.get("claimBoundary")

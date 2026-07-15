@@ -7,9 +7,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   ROOT,
@@ -17,6 +18,7 @@ import {
   crateName,
   fileStem,
   lawForFile,
+  nonLawFiles,
   workspaceCrates,
   workspaceMembers,
 } from './naming-inventory.mjs';
@@ -67,6 +69,19 @@ test('lawForFile: по-доменные законы', () => {
   assert.ok(lawForFile('bindings/swift/Package.swift'));
   assert.ok(!lawForFile('packages/colors/bench/AFTER.txt'));
   assert.ok(!lawForFile('crates/x/tests/data/labui.config.prod.json'));
+});
+
+test('generated compiler WASM directory не становится фактом исходного дерева', () => {
+  const root = mkdtempSync(join(tmpdir(), 'labcolors-naming-generated-'));
+  try {
+    const generated = join(root, 'packages', 'colors', 'compiler');
+    mkdirSync(generated, { recursive: true });
+    writeFileSync(join(generated, 'labcolors_compiler.js'), 'generated');
+    writeFileSync(join(generated, 'labcolors_compiler_bg.wasm'), 'generated');
+    assert.deepEqual(nonLawFiles(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('workspaceMembers разворачивает глоб crates/* по ФС', () => {

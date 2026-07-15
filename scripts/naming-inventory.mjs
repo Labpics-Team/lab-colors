@@ -191,6 +191,9 @@ export function nonLawFiles(root = ROOT) {
   const bad = [];
   for (const top of SCAN_TOPS) {
     for (const f of walk(join(root, top))) {
+      // Both WASM output directories are generated facts, even though the
+      // compiler role cannot share the conventional `pkg` directory name.
+      if (top === 'packages' && f.startsWith('colors/compiler/')) continue;
       if (!lawForFile(f)) bad.push(`${top}/${f}`);
     }
   }
