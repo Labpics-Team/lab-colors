@@ -1269,6 +1269,9 @@ async function wcag22ExplicitSelectionSmokeFixture() {
   }
   const seen = new Set();
   for (const vector of family) {
+    if (vector === null || typeof vector !== "object" || Array.isArray(vector)) {
+      fail("wcag22-explicit-selection vector schema drifted: vector must be an object");
+    }
     const keys = Object.keys(vector);
     if (
       keys.length !== 3 ||
