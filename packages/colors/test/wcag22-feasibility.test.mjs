@@ -29,6 +29,7 @@ export function initSync() { initialized = true; }
 export function wcag22FeasibilityMaxRequestBytesV1() {
   if (!initialized) throw new Error("WASM not initialized");
   globalThis.__labcolorsFeasibilityCalls.max.push(true);
+  globalThis.__labcolorsFeasibilityBeforeForward?.();
   return 657380;
 }
 export function evaluateWcag22FeasibilityV1(request) {
@@ -77,7 +78,86 @@ test("compiler rejects an oversized envelope before the avoidable WASM copy", as
   const exactLimit = new Uint8Array(compiler.wcag22FeasibilityMaxBytes());
   assert.equal(compiler.evaluateWcag22Feasibility(exactLimit).outcome, "success");
   assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate.length, 1);
-  assert.strictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], exactLimit);
+  assert.notStrictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], exactLimit);
+  assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate[0].buffer, exactLimit.buffer);
+});
+
+test("compiler measures the intrinsic Uint8Array length, not an own-property spoof", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+  const oversized = new Uint8Array(compiler.wcag22FeasibilityMaxBytes() + 1);
+  Object.defineProperty(oversized, "byteLength", { value: 0 });
+
+  const outcome = compiler.evaluateWcag22Feasibility(oversized);
+  assert.equal(outcome.error.error.code, "envelopeTooLarge");
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls.evaluate, []);
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls.oversize, [657381n]);
+});
+
+test("compiler does not pass a spoofed Uint8Array length to generated glue", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+  const request = new Uint8Array([1, 2, 3]);
+  Object.defineProperty(request, "length", { value: 0 });
+
+  assert.equal(compiler.evaluateWcag22Feasibility(request).outcome, "success");
+  const [forwarded] = globalThis.__labcolorsFeasibilityCalls.evaluate;
+  assert.equal(forwarded.length, 3);
+  assert.deepEqual([...forwarded], [1, 2, 3]);
+});
+
+test("compiler normalizes hostile subclasses and rejects detached views before WASM", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+
+  class HostileUint8Array extends Uint8Array {}
+  Object.defineProperty(HostileUint8Array.prototype, "length", {
+    get: () => 0,
+  });
+  const hostile = new HostileUint8Array([4, 5]);
+  assert.equal(compiler.evaluateWcag22Feasibility(hostile).outcome, "success");
+  assert.deepEqual([...globalThis.__labcolorsFeasibilityCalls.evaluate[0]], [4, 5]);
+
+  const detached = new Uint8Array([6]);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  assert.throws(
+    () => compiler.evaluateWcag22Feasibility(detached),
+    /request must be a live Uint8Array/u,
+  );
+
+  const normal = new Uint8Array([7]);
+  assert.equal(compiler.evaluateWcag22Feasibility(normal).outcome, "success");
+  assert.deepEqual([...globalThis.__labcolorsFeasibilityCalls.evaluate[1]], [7]);
+});
+
+test("compiler rejects a detached view before requiring initialized WASM", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  const detached = new Uint8Array([1]);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+
+  assert.throws(
+    () => compiler.evaluateWcag22Feasibility(detached),
+    /request must be a live Uint8Array/u,
+  );
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls, {
+    evaluate: [],
+    max: [],
+    oversize: [],
+  });
+});
+
+test("compiler freezes a length-tracking shared view at the checked byte length", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+  const buffer = new SharedArrayBuffer(1, { maxByteLength: 2 });
+  const request = new Uint8Array(buffer);
+  globalThis.__labcolorsFeasibilityBeforeForward = () => buffer.grow(2);
+  t.after(() => { delete globalThis.__labcolorsFeasibilityBeforeForward; });
+
+  assert.equal(compiler.evaluateWcag22Feasibility(request).outcome, "success");
+  const [forwarded] = globalThis.__labcolorsFeasibilityCalls.evaluate;
+  assert.equal(buffer.byteLength, 2);
+  assert.equal(forwarded.length, 1);
 });
 
 test("compiler rejects non-Uint8Array inputs before touching WASM", async (t) => {
@@ -112,7 +192,8 @@ test("compiler rejects non-Uint8Array inputs before touching WASM", async (t) =>
   compiler.initSync();
   const crossRealm = runInNewContext("new Uint8Array([123])");
   assert.equal(compiler.evaluateWcag22Feasibility(crossRealm).outcome, "success");
-  assert.strictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], crossRealm);
+  assert.deepEqual([...globalThis.__labcolorsFeasibilityCalls.evaluate[0]], [123]);
+  assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate[0].buffer, crossRealm.buffer);
 });
 
 test("compiler derives the envelope ceiling from WASM instead of copying a literal", async () => {

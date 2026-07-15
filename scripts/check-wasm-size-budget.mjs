@@ -7,16 +7,15 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const SCRIPT_DIR = dirname(SCRIPT_PATH);
-const REPO_ROOT = resolve(SCRIPT_DIR, "..");
-const DEFAULT_WASM = resolve(REPO_ROOT, "packages/colors/pkg/labcolors_bg.wasm");
+const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "..");
 const V1_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v1.json");
 const V2_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v2.json");
 const V3_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v3.json");
+const V4_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v4.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v4.json",
+  "packages/colors/bench/wasm-size-budget-v5.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -28,10 +27,29 @@ export const V3_FILE_SHA256 =
   "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15";
 export const V4_FILE_SHA256 =
   "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c";
+export const V5_FILE_SHA256 =
+  "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V4_BUDGET_ID = "labcolors-wasm-raw-issue-296-v4";
-const WASM_REPOSITORY_PATH = "packages/colors/pkg/labcolors_bg.wasm";
+const V4_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v4.json";
+const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
+const ROLE_ORDER = ["runtime", "compiler"];
+const ROLE_SPECS = {
+  runtime: {
+    artifact: "packages/colors/pkg/labcolors_bg.wasm",
+    command:
+      "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+    recipeSha256: V1_RECIPE_SHA256,
+    derivation: "exact-accepted-issue-296-slice-c1-runtime-measurement",
+  },
+  compiler: {
+    artifact: "packages/colors/compiler/labcolors_compiler_bg.wasm",
+    command:
+      "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
+    recipeSha256: "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f",
+    derivation: "exact-accepted-issue-296-slice-c1-compiler-first-admission",
+  },
+};
 
 function fail(message) {
   throw new Error(`WASM size budget: ${message}`);
@@ -66,7 +84,7 @@ function positiveSafeInteger(value, label) {
   }
 }
 
-function toolchainRecipe(v1) {
+function roleRecipe(v1, command) {
   const measurement = v1.measurement;
   return {
     rustToolchain: measurement?.rustToolchain,
@@ -79,136 +97,143 @@ function toolchainRecipe(v1) {
     wasmOptVersion: measurement?.wasmOptVersion,
     measurementPlatform: measurement?.measurementPlatform,
     rustPathRemap: measurement?.rustPathRemap,
-    command: measurement?.command,
+    command,
   };
 }
 
-function readImmutableBudget(path, expectedSha256, version, budgetId) {
+function readImmutableJson(path, expectedSha256, label) {
   let bytes;
   try {
     bytes = readFileSync(path);
   } catch (error) {
-    fail(`cannot read immutable ${version} budget ${path}: ${error.message}`);
+    fail(`cannot read immutable ${label} ${path}: ${error.message}`);
   }
   const actualSha256 = sha256(bytes);
   if (actualSha256 !== expectedSha256) {
     fail(
-      `immutable ${version} file SHA-256 mismatch: ` +
+      `immutable ${label} file SHA-256 mismatch: ` +
         `expected=${expectedSha256} actual=${actualSha256}`,
     );
   }
-  let budget;
   try {
-    budget = JSON.parse(bytes.toString("utf8"));
+    return JSON.parse(bytes.toString("utf8"));
   } catch (error) {
-    fail(`immutable ${version} budget is not JSON: ${error.message}`);
+    fail(`immutable ${label} is not JSON: ${error.message}`);
   }
-  if (budget?.schemaVersion !== 3 || budget?.budgetId !== budgetId) {
-    fail(`immutable ${version} budget identity drifted`);
-  }
-  return budget;
 }
 
 function verifyImmutableHistory() {
-  let bytes;
-  try {
-    bytes = readFileSync(V1_PATH);
-  } catch (error) {
-    fail(`cannot read immutable build recipe ${V1_PATH}: ${error.message}`);
-  }
-  if (sha256(bytes) !== V1_FILE_SHA256) {
-    fail(`immutable v1 file SHA-256 mismatch: expected=${V1_FILE_SHA256} actual=${sha256(bytes)}`);
-  }
-
-  let v1;
-  try {
-    v1 = JSON.parse(bytes.toString("utf8"));
-  } catch (error) {
-    fail(`immutable v1 build recipe is not JSON: ${error.message}`);
-  }
-  if (
-    v1?.schemaVersion !== 2 ||
-    v1?.budgetId !== "labcolors-wasm-raw-issue-284-v1"
-  ) {
+  const v1 = readImmutableJson(V1_PATH, V1_FILE_SHA256, "v1");
+  if (v1?.schemaVersion !== 2 || v1?.budgetId !== "labcolors-wasm-raw-issue-284-v1") {
     fail("immutable v1 build recipe identity drifted");
   }
-  const actualRecipeSha256 = sha256(JSON.stringify(toolchainRecipe(v1)));
-  if (actualRecipeSha256 !== V1_RECIPE_SHA256) {
-    fail(
-      `immutable v1 toolchain recipe SHA-256 mismatch: ` +
-        `expected=${V1_RECIPE_SHA256} actual=${actualRecipeSha256}`,
-    );
+  if (sha256(JSON.stringify(roleRecipe(v1, v1.measurement.command))) !== V1_RECIPE_SHA256) {
+    fail("immutable v1 runtime recipe projection drifted");
   }
 
-  readImmutableBudget(
-    V2_PATH,
-    V2_FILE_SHA256,
-    "v2",
-    "labcolors-wasm-raw-issue-295-v2",
-  );
-  return readImmutableBudget(
-    V3_PATH,
-    V3_FILE_SHA256,
-    "v3",
-    "labcolors-wasm-raw-issue-296-v3",
-  );
+  const historical = [
+    [V2_PATH, V2_FILE_SHA256, "v2", "labcolors-wasm-raw-issue-295-v2"],
+    [V3_PATH, V3_FILE_SHA256, "v3", "labcolors-wasm-raw-issue-296-v3"],
+    [V4_PATH, V4_FILE_SHA256, "v4", "labcolors-wasm-raw-issue-296-v4"],
+  ];
+  let v4;
+  for (const [path, digest, label, budgetId] of historical) {
+    const value = readImmutableJson(path, digest, label);
+    if (value?.schemaVersion !== 3 || value?.budgetId !== budgetId) {
+      fail(`immutable ${label} budget identity drifted`);
+    }
+    if (label === "v4") v4 = value;
+  }
+  return { v1, v4 };
 }
 
 function validateBudgetValue(budget) {
   exactKeys(
     budget,
-    ["schemaVersion", "budgetId", "artifact", "buildRecipe", "measurement", "policy"],
+    [
+      "schemaVersion",
+      "budgetId",
+      "predecessor",
+      "toolchainSource",
+      "buildRecipes",
+      "roles",
+    ],
     "budget",
   );
-  if (budget.schemaVersion !== 3) fail("supported schemaVersion is exactly 3");
-  if (budget.budgetId !== V4_BUDGET_ID) fail(`budgetId must be ${V4_BUDGET_ID}`);
-  if (budget.artifact !== WASM_REPOSITORY_PATH) {
-    fail(`artifact must be ${WASM_REPOSITORY_PATH}`);
+  if (budget.schemaVersion !== 4) fail("supported schemaVersion is exactly 4");
+  if (budget.budgetId !== V5_BUDGET_ID) fail(`budgetId must be ${V5_BUDGET_ID}`);
+
+  exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
+  if (
+    budget.predecessor.path !== V4_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V4_FILE_SHA256
+  ) {
+    fail("predecessor must bind the immutable v4 document");
   }
 
-  exactKeys(
-    budget.buildRecipe,
-    ["path", "fileSha256", "recipeSha256"],
-    "buildRecipe",
-  );
-  if (budget.buildRecipe.path !== V1_REPOSITORY_PATH) {
-    fail(`buildRecipe.path must be ${V1_REPOSITORY_PATH}`);
-  }
-  if (budget.buildRecipe.fileSha256 !== V1_FILE_SHA256) {
-    fail("buildRecipe.fileSha256 must bind the immutable v1 file");
-  }
-  if (budget.buildRecipe.recipeSha256 !== V1_RECIPE_SHA256) {
-    fail("buildRecipe.recipeSha256 must bind the canonical v1 toolchain projection");
+  exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
+  if (
+    budget.toolchainSource.path !== V1_REPOSITORY_PATH ||
+    budget.toolchainSource.fileSha256 !== V1_FILE_SHA256
+  ) {
+    fail("toolchainSource must bind the immutable v1 document");
   }
 
-  exactKeys(
-    budget.measurement,
-    ["issue", "measurementPlatform", "rawBytes", "sha256"],
-    "measurement",
-  );
-  if (budget.measurement.issue !== 296) fail("measurement must cite Issue #296");
-  if (budget.measurement.measurementPlatform !== "linux-x64") {
-    fail("measurement.measurementPlatform must be canonical linux-x64");
-  }
-  positiveSafeInteger(budget.measurement.rawBytes, "measurement.rawBytes");
-  lowercaseDigest(budget.measurement.sha256, "measurement.sha256");
+  exactKeys(budget.buildRecipes, ROLE_ORDER, "buildRecipes");
+  exactKeys(budget.roles, ROLE_ORDER, "roles");
+  const { v1, v4 } = verifyImmutableHistory();
 
-  exactKeys(budget.policy, ["maxRawBytes", "derivation", "gzip"], "policy");
-  positiveSafeInteger(budget.policy.maxRawBytes, "policy.maxRawBytes");
-  if (budget.policy.maxRawBytes !== budget.measurement.rawBytes) {
-    fail("current ceiling must equal the exact accepted measurement (zero arbitrary headroom)");
-  }
-  if (budget.policy.derivation !== "exact-accepted-issue-296-slice-b-measurement") {
-    fail("policy.derivation must cite the exact accepted Issue #296 Slice B measurement");
-  }
-  if (budget.policy.gzip !== "diagnostic-only") {
-    fail("gzip must remain diagnostic-only across implementations");
+  for (const role of ROLE_ORDER) {
+    const spec = ROLE_SPECS[role];
+    const recipe = budget.buildRecipes[role];
+    exactKeys(recipe, ["command", "recipeSha256"], `buildRecipes.${role}`);
+    if (recipe.command !== spec.command) fail(`${role} build command drifted`);
+    lowercaseDigest(recipe.recipeSha256, `buildRecipes.${role}.recipeSha256`);
+    const actualRecipeSha256 = sha256(JSON.stringify(roleRecipe(v1, recipe.command)));
+    if (
+      recipe.recipeSha256 !== spec.recipeSha256 ||
+      recipe.recipeSha256 !== actualRecipeSha256
+    ) {
+      fail(`${role} build recipe SHA-256 does not bind the declared command and toolchain`);
+    }
+
+    const record = budget.roles[role];
+    exactKeys(record, ["artifact", "measurement", "policy"], `roles.${role}`);
+    if (record.artifact !== spec.artifact) {
+      fail(`roles.${role}.artifact must be ${spec.artifact}`);
+    }
+    exactKeys(
+      record.measurement,
+      ["issue", "slice", "measurementPlatform", "rawBytes", "sha256"],
+      `roles.${role}.measurement`,
+    );
+    if (record.measurement.issue !== 296 || record.measurement.slice !== "C1") {
+      fail(`roles.${role}.measurement must cite Issue #296 Slice C1`);
+    }
+    if (record.measurement.measurementPlatform !== "linux-x64") {
+      fail(`roles.${role}.measurement must use canonical linux-x64`);
+    }
+    positiveSafeInteger(record.measurement.rawBytes, `roles.${role}.measurement.rawBytes`);
+    lowercaseDigest(record.measurement.sha256, `roles.${role}.measurement.sha256`);
+
+    exactKeys(record.policy, ["maxRawBytes", "derivation", "gzip"], `roles.${role}.policy`);
+    positiveSafeInteger(record.policy.maxRawBytes, `roles.${role}.policy.maxRawBytes`);
+    if (record.policy.maxRawBytes !== record.measurement.rawBytes) {
+      fail(`${role} ceiling must equal its exact measurement (zero arbitrary headroom)`);
+    }
+    if (record.policy.derivation !== spec.derivation) {
+      fail(`${role} policy derivation drifted`);
+    }
+    if (record.policy.gzip !== "diagnostic-only") {
+      fail(`${role} gzip measurement must remain diagnostic-only`);
+    }
   }
 
-  const previous = verifyImmutableHistory();
-  positiveSafeInteger(previous.policy?.maxRawBytes, "immutable v3 policy.maxRawBytes");
-  if (budget.policy.maxRawBytes > previous.policy.maxRawBytes) {
-    fail("current ceiling must not exceed the immutable v3 ratchet");
+  if (budget.roles.runtime.policy.maxRawBytes > v1.policy.maxRawBytes) {
+    fail("runtime role must not exceed the immutable same-capability pre-compiler ceiling");
+  }
+  if (budget.roles.runtime.policy.maxRawBytes > v4.policy.maxRawBytes) {
+    fail("runtime role must not regress the immutable immediate predecessor ceiling");
   }
 }
 
@@ -227,10 +252,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V4_FILE_SHA256) {
+    if (actualFileSha256 !== V5_FILE_SHA256) {
       fail(
-        `immutable v4 file SHA-256 mismatch: ` +
-          `expected=${V4_FILE_SHA256} actual=${actualFileSha256}`,
+        `immutable v5 file SHA-256 mismatch: ` +
+          `expected=${V5_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
@@ -238,63 +263,50 @@ export function parseBudgetDocument(bytes, budgetPath) {
 }
 
 function readBudget(path) {
-  let bytes;
   try {
-    bytes = readFileSync(path);
+    return parseBudgetDocument(readFileSync(path), path);
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("WASM size budget:")) throw error;
     fail(`cannot read ${path}: ${error.message}`);
   }
-  return parseBudgetDocument(bytes, path);
 }
 
-function pathsFromArgs(args) {
-  let wasm = DEFAULT_WASM;
-  let budget = DEFAULT_BUDGET;
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index];
-    const value = args[index + 1];
-    if (value === undefined) fail(`${flag ?? "argument"} requires a path`);
-    if (flag === "--wasm") wasm = resolve(value);
-    else if (flag === "--budget") budget = resolve(value);
-    else fail(`unknown argument ${flag}`);
-  }
-  return { wasm, budget };
-}
-
-export function evaluateWasmBudget(budget, wasm, currentPlatform) {
+export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
+  if (!ROLE_ORDER.includes(role)) fail(`unknown execution role ${role}`);
   const bytes = Buffer.isBuffer(wasm) ? wasm : Buffer.from(wasm);
   if (
     bytes.length < 8 ||
     !bytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))
   ) {
-    fail("artifact is not a WebAssembly binary");
+    fail(`${role} artifact is not a WebAssembly binary`);
   }
 
   const rawBytes = bytes.length;
   const gzipBytes = gzipSync(bytes, { level: 9 }).length;
   const artifactSha256 = sha256(bytes);
-  const artifactSha = artifactSha256 === budget.measurement.sha256 ? "match" : "different";
-  const isCanonicalPlatform = currentPlatform === budget.measurement.measurementPlatform;
-  if (isCanonicalPlatform && rawBytes !== budget.measurement.rawBytes) {
+  const artifactSha = artifactSha256 === record.measurement.sha256 ? "match" : "different";
+  const isCanonicalPlatform = currentPlatform === record.measurement.measurementPlatform;
+  if (isCanonicalPlatform && rawBytes !== record.measurement.rawBytes) {
     fail(
-      `exact artifact length mismatch on ${currentPlatform}: ` +
-        `expected=${budget.measurement.rawBytes}B actual=${rawBytes}B; ` +
+      `${role} exact artifact length mismatch on ${currentPlatform}: ` +
+        `expected=${record.measurement.rawBytes}B actual=${rawBytes}B; ` +
         `gzip=${gzipBytes}B diagnostic-only sha256=${artifactSha256}`,
     );
   }
   if (isCanonicalPlatform && artifactSha !== "match") {
     fail(
-      `exact artifact SHA-256 mismatch on ${currentPlatform}: ` +
-        `expected=${budget.measurement.sha256} actual=${artifactSha256}; ` +
+      `${role} exact artifact SHA-256 mismatch on ${currentPlatform}: ` +
+        `expected=${record.measurement.sha256} actual=${artifactSha256}; ` +
         `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
     );
   }
 
   return {
+    role,
     status: isCanonicalPlatform ? "PASS" : "DIAGNOSTIC",
     rawBytes,
-    maxRawBytes: budget.policy.maxRawBytes,
-    deltaBytes: rawBytes - budget.policy.maxRawBytes,
+    maxRawBytes: record.policy.maxRawBytes,
+    deltaBytes: rawBytes - record.policy.maxRawBytes,
     gzipBytes,
     currentPlatform,
     artifactSha,
@@ -305,29 +317,50 @@ export function evaluateWasmBudget(budget, wasm, currentPlatform) {
 function formatResult(result, artifact) {
   const delta = `${result.deltaBytes >= 0 ? "+" : ""}${result.deltaBytes}`;
   return (
-    `WASM size budget ${result.status} raw=${result.rawBytes}B ` +
+    `WASM size budget ${result.status} role=${result.role} raw=${result.rawBytes}B ` +
     `ceiling=${result.maxRawBytes}B delta=${delta}B gzip=${result.gzipBytes}B ` +
     `diagnostic-only platform=${result.currentPlatform} artifact=${artifact} ` +
     `artifact-sha=${result.artifactSha} recipe-sha=match`
   );
 }
 
-function main(args) {
-  const { wasm: wasmPath, budget: budgetPath } = pathsFromArgs(args);
-  const budget = readBudget(budgetPath);
-  let wasm;
-  try {
-    wasm = readFileSync(wasmPath);
-  } catch (error) {
-    fail(`cannot read ${wasmPath}: ${error.message}`);
+function pathsFromArgs(args) {
+  const paths = {
+    budget: DEFAULT_BUDGET,
+    runtime: resolve(REPO_ROOT, ROLE_SPECS.runtime.artifact),
+    compiler: resolve(REPO_ROOT, ROLE_SPECS.compiler.artifact),
+  };
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (value === undefined) fail(`${flag ?? "argument"} requires a path`);
+    if (flag === "--budget") paths.budget = resolve(value);
+    else if (flag === "--runtime-wasm") paths.runtime = resolve(value);
+    else if (flag === "--compiler-wasm") paths.compiler = resolve(value);
+    else fail(`unknown argument ${flag}`);
   }
-  const artifact = relative(REPO_ROOT, wasmPath).replaceAll("\\", "/");
-  const result = evaluateWasmBudget(
-    budget,
-    wasm,
-    `${process.platform}-${process.arch}`,
-  );
-  console.log(formatResult(result, artifact));
+  return paths;
+}
+
+function main(args) {
+  const paths = pathsFromArgs(args);
+  const budget = readBudget(paths.budget);
+  for (const role of ROLE_ORDER) {
+    let wasm;
+    try {
+      wasm = readFileSync(paths[role]);
+    } catch (error) {
+      fail(`cannot read ${role} artifact ${paths[role]}: ${error.message}`);
+    }
+    const result = evaluateWasmBudget(
+      role,
+      budget.roles[role],
+      wasm,
+      `${process.platform}-${process.arch}`,
+    );
+    const artifact = relative(REPO_ROOT, paths[role]).replaceAll("\\", "/");
+    console.log(formatResult(result, artifact));
+  }
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === SCRIPT_PATH) {

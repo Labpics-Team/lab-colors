@@ -6,10 +6,24 @@ import {
   wcag22FeasibilityMaxRequestBytesV1,
 } from "./compiler/labcolors_compiler.js";
 
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const typedArrayTag = Object.getOwnPropertyDescriptor(
-  Object.getPrototypeOf(Uint8Array.prototype),
+  typedArrayPrototype,
   Symbol.toStringTag,
 ).get;
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+).get;
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+).get;
+const typedArrayByteOffset = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteOffset",
+).get;
+const Uint8ArrayConstructor = Uint8Array;
 
 function hasUint8ArrayBrand(value) {
   return ArrayBuffer.isView(value) && typedArrayTag.call(value) === "Uint8Array";
@@ -38,9 +52,20 @@ export function evaluateWcag22Feasibility(request) {
   if (!hasUint8ArrayBrand(request)) {
     throw new TypeError("evaluateWcag22Feasibility request must be a Uint8Array");
   }
-  const requestedBytes = request.byteLength;
+  const snapshotBytes = typedArrayByteLength.call(request);
+  let canonicalRequest;
+  try {
+    canonicalRequest = new Uint8ArrayConstructor(
+      typedArrayBuffer.call(request),
+      typedArrayByteOffset.call(request),
+      snapshotBytes,
+    );
+  } catch {
+    throw new TypeError("evaluateWcag22Feasibility request must be a live Uint8Array");
+  }
+  const requestedBytes = typedArrayByteLength.call(canonicalRequest);
   if (requestedBytes > wcag22FeasibilityMaxBytes()) {
     return wcag22FeasibilityEnvelopeTooLargeV1(BigInt(requestedBytes));
   }
-  return evaluateWcag22FeasibilityRawV1(request);
+  return evaluateWcag22FeasibilityRawV1(canonicalRequest);
 }

@@ -157,10 +157,21 @@ test("build metadata exact validator rejects one-field tampering", async () => {
       manifestSha256: "2".repeat(64),
       familySetSha256: "3".repeat(64),
     },
-    wasm: { bytes: 123, sha256: "4".repeat(64) },
+    wasm: {
+      runtime: {
+        path: "pkg/labcolors_bg.wasm",
+        bytes: 123,
+        sha256: "4".repeat(64),
+      },
+      compiler: {
+        path: "compiler/labcolors_compiler_bg.wasm",
+        bytes: 45,
+        sha256: "5".repeat(64),
+      },
+    },
   };
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     package: { ...context.packageJson },
     sourceSha: context.source,
     coreVersion: context.coreVersion,
@@ -170,12 +181,15 @@ test("build metadata exact validator rejects one-field tampering", async () => {
       manifestSha256: context.conformanceEvidence.manifestSha256,
       familySetSha256: context.conformanceEvidence.familySetSha256,
     },
-    wasm: { ...context.wasm },
+    wasm: [
+      { role: "runtime", ...context.wasm.runtime },
+      { role: "compiler", ...context.wasm.compiler },
+    ],
   };
   assert.doesNotThrow(() => validateBuildMetadata(metadata, context));
 
   const tampered = structuredClone(metadata);
-  tampered.wasm.sha256 = "5".repeat(64);
+  tampered.wasm[1].sha256 = "6".repeat(64);
   assert.throws(
     () => validateBuildMetadata(tampered, context),
     /does not exactly bind the release inputs/,

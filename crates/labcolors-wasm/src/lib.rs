@@ -788,6 +788,10 @@ mod native_contract_tests {
             .expect("custom TypeScript section is extractable")
     }
 
+    fn shared_wcag22_types() -> &'static str {
+        include_str!("../../../packages/colors/wcag22.d.ts")
+    }
+
     fn string_union<'a>(types: &'a str, name: &str) -> Vec<&'a str> {
         let declaration = format!("export type {name} =");
         types
@@ -825,7 +829,7 @@ mod native_contract_tests {
 
     #[test]
     fn generated_wcag22_criterion_type_equals_the_core_wire_menu() {
-        let declared = string_union(custom_types(), "Wcag22CriterionV1");
+        let declared = string_union(shared_wcag22_types(), "Wcag22CriterionV1");
         let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
         let core_set: std::collections::HashSet<&str> =
             labcolors_core::wcag22::Wcag22CriterionV1::ALL

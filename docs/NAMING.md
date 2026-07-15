@@ -13,13 +13,13 @@
 
 | Метрика | N |
 | --- | --- |
-| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
-| крейтов семейства в crates/ | 5 |
-| экспорт-субпутей package.json @labpics/colors | 8 |
+| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 7 |
+| крейтов семейства в crates/ | 6 |
+| экспорт-субпутей package.json @labpics/colors | 10 |
 | python-скриптов scripts/*.py | 10 |
 | маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
 | векторов conformance/vectors/*.json (включая manifest) | 8 |
-| файлов вне закона имён | 4 |
+| файлов вне закона имён | 8 |
 
 ## Общие принципы (эталон lab-icons)
 
@@ -40,7 +40,8 @@
 
 - Имя крейта = `labcolors-<роль>`, kebab-case; роль — одно слово:
   `labcolors-core`, `labcolors-protocol`, `labcolors-conformance`,
-  `labcolors-ffi`, `labcolors-wasm`. Директория `crates/<имя крейта>`.
+  `labcolors-ffi`, `labcolors-wasm`, `labcolors-compiler`. Директория
+  `crates/<имя крейта>`.
 - Члены workspace объявлены в корневом Cargo.toml (`members`); глоб `crates/*`
   разворачивается по ФС, harness-члены вне crates/ перечислены поимённо
   (experiments/psychophysics — имя пакета без префикса: не публикуется,
@@ -52,12 +53,14 @@
 ### npm-пакет @labpics/colors
 
 - Субпуть = домен, kebab-case: `./apply-theme`, `./watch-theme`,
-  `./adapt-theme`, `./effective-bg`. Каждый субпуть разрешается в исходник
-  packages/colors (exports без кода запрещены — сверяет typecheck пакета).
+  `./adapt-theme`, `./effective-bg`, `./compiler`. Каждый субпуть разрешается
+  в исходник packages/colors (exports без кода запрещены — сверяет typecheck
+  пакета).
 - Служебный субпуть `./package.json` — стандарт npm, разрешён законом.
 - Служебный субпуть `./build-metadata.json` — versioned machine-readable build
   metadata опубликованных байтов; расширение фиксирует JSON-формат контракта.
 - Артефактный субпуть `./pkg/labcolors_bg.wasm` — см. «Известные отступления».
+- Артефактный субпуть `./compiler/wasm` — см. «Известные отступления».
 - Файлы пакета — kebab-case (`apply-theme.js` + `apply-theme.d.ts`).
 
 ### Python-скрипты (эталоны)
@@ -111,6 +114,15 @@
 - `./pkg/labcolors_bg.wasm` — субпуть-артефакт wasm-pack: имя `labcolors_bg.wasm`
   генерирует wasm-bindgen из `--out-name labcolors`, snake_case продиктован
   тулингом и руками не переименовывается.
+- `./compiler/wasm` — вложенный служебный субпуть физического compiler-WASM;
+  вложенность сохраняет одну публичную роль `compiler`, а имя артефакта скрыто
+  за стабильным export map.
+- `packages/colors/compiler/labcolors_compiler.js`,
+  `packages/colors/compiler/labcolors_compiler.d.ts`,
+  `packages/colors/compiler/labcolors_compiler_bg.wasm` и
+  `packages/colors/compiler/labcolors_compiler_bg.wasm.d.ts` — механически
+  сгенерированная wasm-bindgen-группа для `--out-name labcolors_compiler`;
+  snake_case задаёт генератор и вручную не редактируется.
 - `./build-metadata.json` — служебный JSON-контракт build metadata; расширение
   намеренно остаётся частью subpath, чтобы формат был явным и потребитель не
   принимал его за исполняемый JS entrypoint.

@@ -274,6 +274,15 @@ jobs:
             throw new Error(`release artifact rejected: ${message}`);
           }
 
+          function exactKeys(value, expected, label) {
+            const actual = value && typeof value === "object" && !Array.isArray(value)
+              ? Object.keys(value).sort()
+              : [];
+            if (actual.join(",") !== [...expected].sort().join(",")) {
+              fail(`${label} has a non-canonical shape`);
+            }
+          }
+
           function walk(directory, files = []) {
             for (const entry of readdirSync(directory, { withFileTypes: true })) {
               const path = join(directory, entry.name);
@@ -313,13 +322,14 @@ jobs:
 
           const manifest = JSON.parse(readFileSync(manifests[0], "utf8"));
           const expectedVersion = expectedTag.slice("colors-v".length);
-          if (manifest.schemaVersion !== 2) fail(`manifest schema ${manifest.schemaVersion}`);
+          if (manifest.schemaVersion !== 3) fail(`manifest schema ${manifest.schemaVersion}`);
           if (manifest.sourceSha !== expectedSha) {
             fail(`manifest sourceSha ${manifest.sourceSha} != ${expectedSha}`);
           }
           if (manifest.npm !== expectedVersion) {
             fail(`manifest npm ${manifest.npm} != tag version ${expectedVersion}`);
           }
+          exactKeys(manifest.artifacts, ["tarball", "wasm", "buildMetadata"], "manifest artifacts");
 
           const tarball = tarballs[0];
           const bytes = readFileSync(tarball);
@@ -333,6 +343,82 @@ jobs:
           const digest = createHash("sha256").update(bytes).digest("hex");
           if (!/^[0-9a-f]{64}$/u.test(evidence.sha256) || evidence.sha256 !== digest) {
             fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
+          }
+
+          const expectedWasm = [
+            ["runtime", "pkg/labcolors_bg.wasm"],
+            ["compiler", "compiler/labcolors_compiler_bg.wasm"],
+          ];
+          const wasmEvidence = manifest.artifacts?.wasm;
+          if (!Array.isArray(wasmEvidence) || wasmEvidence.length !== expectedWasm.length) {
+            fail("manifest must bind exactly the runtime and compiler WASM roles");
+          }
+          for (let index = 0; index < expectedWasm.length; index += 1) {
+            const [role, path] = expectedWasm[index];
+            const record = wasmEvidence[index];
+            const keys = record && typeof record === "object" ? Object.keys(record) : [];
+            if (keys.join(",") !== "role,path,bytes,sha256") {
+              fail(`${role} WASM record has a non-canonical shape`);
+            }
+            if (record.role !== role || record.path !== path) {
+              fail(`WASM role ${index} must be ${role} at ${path}`);
+            }
+            const packedWasm = execFileSync("tar", ["-xOzf", tarball, `package/${path}`]);
+            const packedDigest = createHash("sha256").update(packedWasm).digest("hex");
+            if (record.bytes !== packedWasm.length || record.sha256 !== packedDigest) {
+              fail(`${role} WASM record does not match the exact tarball bytes`);
+            }
+          }
+
+          const metadataEvidence = manifest.artifacts.buildMetadata;
+          exactKeys(metadataEvidence, ["path", "bytes", "sha256"], "build metadata record");
+          if (metadataEvidence.path !== "build-metadata.json") {
+            fail(`build metadata path ${metadataEvidence.path}`);
+          }
+          const packedMetadata = execFileSync(
+            "tar",
+            ["-xOzf", tarball, "package/build-metadata.json"],
+          );
+          const packedMetadataDigest = createHash("sha256").update(packedMetadata).digest("hex");
+          if (
+            metadataEvidence.bytes !== packedMetadata.length ||
+            metadataEvidence.sha256 !== packedMetadataDigest
+          ) {
+            fail("build metadata record does not match the exact tarball bytes");
+          }
+          const metadata = JSON.parse(packedMetadata.toString("utf8"));
+          exactKeys(
+            metadata,
+            ["schemaVersion", "package", "sourceSha", "coreVersion", "conformance", "wasm"],
+            "packed build metadata",
+          );
+          exactKeys(metadata.package, ["name", "version"], "packed build metadata package");
+          exactKeys(
+            metadata.conformance,
+            ["packVersion", "packDigest", "manifestSha256", "familySetSha256"],
+            "packed build metadata conformance",
+          );
+          if (
+            metadata.schemaVersion !== 2 ||
+            metadata.package.name !== "@labpics/colors" ||
+            metadata.package.version !== expectedVersion ||
+            metadata.sourceSha !== expectedSha ||
+            metadata.coreVersion !== manifest.core ||
+            metadata.conformance.packVersion !== manifest.conformance?.packVersion ||
+            metadata.conformance.packDigest !== manifest.conformance?.packDigest ||
+            metadata.conformance.manifestSha256 !== manifest.conformance?.manifestSha256 ||
+            metadata.conformance.familySetSha256 !== manifest.conformance?.familySetSha256 ||
+            !Array.isArray(metadata.wasm) ||
+            metadata.wasm.length !== wasmEvidence.length
+          ) {
+            fail("packed build metadata does not bind the release identity and conformance");
+          }
+          for (let index = 0; index < wasmEvidence.length; index += 1) {
+            const metadataWasm = metadata.wasm[index];
+            exactKeys(metadataWasm, ["role", "path", "bytes", "sha256"], "metadata WASM record");
+            if (JSON.stringify(metadataWasm) !== JSON.stringify(wasmEvidence[index])) {
+              fail(`metadata WASM role ${index} differs from the release manifest`);
+            }
           }
 
           const packedPackage = JSON.parse(

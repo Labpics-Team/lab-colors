@@ -24,8 +24,8 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 - npm package несёт byte-exact profile/table/proof в `evidence/`; release
   verifier и clean-install gate повторно проверяют их хэши и содержимое.
 - `labcolors-protocol` задаёт единственную versioned bytes→Core→wire границу
-  complete-feasibility. npm принимает только `Uint8Array`, Swift — `Data` или
-  `[UInt8]`;
+  complete-feasibility. `@labpics/colors/compiler` принимает только
+  `Uint8Array`, Swift — `Data` или `[UInt8]`;
   обе поверхности сохраняют `Success(Feasible | Infeasible | NotEvaluated)`
   либо typed `Failure` и не воспроизводят математику Core.
 - Rust Core принимает также непустой явный конечный набор пар «opaque ID +
@@ -40,6 +40,13 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   `wcag22-feasibility.json`: exact 7/2/0/92/59, mixed/all NotApplicable,
   typed conflict/resource failures и opaque-ID law. Шесть прежних family
   остаются byte-identical.
+
+### Breaking (npm API)
+
+- Complete-feasibility API и его request/outcome types перенесены из package
+  root в `@labpics/colors/compiler`. Offline compiler загружает отдельный WASM
+  через `@labpics/colors/compiler/wasm`; runtime dependency cone больше не
+  содержит feasibility protocol.
 
 ### Breaking (Rust API)
 
@@ -78,14 +85,12 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   capsules. Profile V1, proof ID `wcag22-srgb8-full-domain-q55-v1` и package path
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
-- WASM size history стала append-only: immutable V1 сохраняет допуск #284
-  (`454385 B`), V2 — transport #295 (`521240 B` / `d37841…9ca0`), V3 —
-  Core-срез #296-A (`521231 B` / `779379…e029`), а текущий V4 — #296-B
-  (`520920 B` / `c179f4…f94ed`). Каждый допуск имеет нулевой headroom и точную
-  ссылку на неизменяемый V1 build recipe; V1/V2/V3 не переписаны. Whole-call V2
-  сохраняет детерминированную request/outcome-проекцию 10 крайних форм × 5
-  свежих процессов из V1 и привязан к текущему native admission; latency,
-  process maxRSS и WASM pages остаются наблюдениями, не SLO.
+- WASM size history стала role-aware: V5 задаёт независимые exact Linux-x64
+  size/SHA и рецепты `runtime`/`compiler` с нулевым headroom, не переписывая
+  V1–V4. Whole-call V3 проверяет dedicated compiler entry, связывает его с V5
+  и native admission V3 и сохраняет детерминированную request/outcome-проекцию.
+  `initSync`, прогретая операция, process maxRSS и WASM pages остаются
+  наблюдениями, не SLO.
 - Native feasibility admission также append-only относительно принятого
   `main`: V1/V2 проверяются в исторических snapshots, а текущий V3 связывает
   artifact SHA
@@ -104,9 +109,11 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public
   V2 core manifest (coverage `migrated-sites-only-v1`, FNV-1a-32
   drift-checksum над canonical length-prefixed preimage).
-- Release manifest schema v2: секция `numericalSites` заменена на
-  `numericalCapabilities`; release verifier и Swift conformance-тесты
-  пересчитывают capability checksum независимо от Rust-кода.
+- Release manifest schema v3 сохраняет введённую в V2 секцию
+  `numericalCapabilities` и добавляет упорядоченные exact records обеих
+  WASM-ролей и build metadata. Publish read-back перепроверяет их по байтам
+  tarball; Swift conformance-тесты по-прежнему независимо пересчитывают
+  capability checksum.
 - Добавлен компилируемый numerical plan (`compile_numerical_plan_v1`) с
   канонической invocation identity и checksum — типизированная проекция того,
   какие site/mode заявляет сборка.

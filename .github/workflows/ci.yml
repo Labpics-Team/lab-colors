@@ -48,13 +48,13 @@ jobs:
         with:
           name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/node-floor-artifact
-      - name: packed public runtime on declared Node floor
+      - name: packed public entrypoints on declared Node floor
         env:
           ARTIFACT_DIR: ${{ runner.temp }}/node-floor-artifact
         run: |
           mapfile -t tarballs < <(find "$ARTIFACT_DIR" -type f -name '*.tgz' -print)
           test "${#tarballs[@]}" -eq 1
-          node scripts/verify-package-release.mjs --runtime-smoke "${tarballs[0]}"
+          node scripts/verify-package-release.mjs --package-smoke "${tarballs[0]}"
 
   msrv:
     name: MSRV workspace check
@@ -553,23 +553,19 @@ jobs:
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
           wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked
-      - name: report C1 candidate role fingerprints
-        run: |
-          wc -c packages/colors/pkg/labcolors_bg.wasm packages/colors/compiler/labcolors_compiler_bg.wasm
-          sha256sum packages/colors/pkg/labcolors_bg.wasm packages/colors/compiler/labcolors_compiler_bg.wasm
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "verify committed #296-B canonical whole-call WASM boundary evidence"
-        # The admitted JSON binds exact deterministic bytes/shapes and the
-        # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
-        # latency/maxRSS/pages remain observations only.
+      - name: "record and verify #296-C1 canonical whole-call compiler candidate"
+        # Candidate bytes stay in runner.temp until the exact artifact is
+        # reviewed and committed; the checkout remains clean for release pack.
         working-directory: packages/colors
-        run: >-
-          node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify
+        run: |
+          evidence="$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v3.json"
+          node bench/wcag22-feasibility-boundary.bench.mjs --record "$evidence" >/dev/null
+          node bench/wcag22-feasibility-boundary.bench.mjs --verify "$evidence"
       - name: independently fingerprint both execution-role WASM artifacts
         run: |
           for artifact in \
@@ -580,20 +576,20 @@ jobs:
             sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
             echo "canonical candidate artifact=${artifact} raw=${bytes}B sha256=${sha256}"
           done
-      - name: "upload exact #296-B verified whole-call evidence"
+          sha256sum "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v3.json"
+      - name: "upload exact #296-C1 candidate whole-call evidence"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v2.json
+            ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v3.json
             packages/colors/pkg/labcolors_bg.wasm
             packages/colors/compiler/labcolors_compiler_bg.wasm
           if-no-files-found: error
           retention-days: 30
-      - name: enforce measured WASM raw-byte budget
-        # Issue #296 owns the current exact Linux x64 measurement and zero-headroom
-        # ceiling. Issues #284/#295 remain immutable historical inputs.
-        # gzip is transport diagnostics only.
+      - name: enforce measured WASM role budgets
+        # Runtime and compiler have independent exact Linux x64 zero-headroom
+        # ratchets. gzip remains transport diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve

@@ -2016,9 +2016,9 @@ async function verifyPackedRoleIsolation(tarballPath, packageJson, role, smokeSo
 // Execute the same packed-package runtime smoke under the caller's Node binary.
 // CI uses this to prove the public consumer floor independently from the pinned
 // release packer.
-export async function smokePackedRuntime(tarballPath) {
+export async function smokePackedPackage(tarballPath) {
   const tarball = resolve(tarballPath);
-  const consumer = await mkdtemp(join(tmpdir(), "labcolors-runtime-smoke-"));
+  const consumer = await mkdtemp(join(tmpdir(), "labcolors-package-smoke-"));
   try {
     await writeFile(
       join(consumer, "package.json"),
@@ -2038,8 +2038,12 @@ export async function smokePackedRuntime(tarballPath) {
       consumer,
     );
     const runtimePath = resolve(consumer, "smoke.mjs");
+    const compilerPath = resolve(consumer, "compiler-smoke.mjs");
+    const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
     await writeFile(runtimePath, runtimeSmokeSource());
+    await writeFile(compilerPath, compilerSmokeSource(feasibilityFixture));
     command(process.execPath, [runtimePath], consumer);
+    command(process.execPath, [compilerPath], consumer);
   } finally {
     await rm(consumer, { recursive: true, force: true });
   }
@@ -2140,11 +2144,9 @@ export async function verifyPackageRelease() {
   );
 
   const manifest = {
-    // Схема release-manifest v2: numericalSites (pack 2.x, прозаические
-    // research-поля) заменён на numericalCapabilities — typed capability
-    // projection ядра с независимо пересчитанным checksum. Read-back в
-    // publish-workflow пиняет ровно эту версию.
-    schemaVersion: 2,
+    // V3 makes the two execution-role WASM records explicit. The publish
+    // read-back validates both records against bytes inside the exact tarball.
+    schemaVersion: 3,
     npm: packageJson.version,
     core: coreVersion,
     wire: {
@@ -2222,18 +2224,18 @@ const invokedDirectly =
   process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
-  const runtimeSmokeIndex = process.argv.indexOf("--runtime-smoke");
-  const action = runtimeSmokeIndex >= 0
+  const packageSmokeIndex = process.argv.indexOf("--package-smoke");
+  const action = packageSmokeIndex >= 0
     ? (() => {
-        const tarball = process.argv[runtimeSmokeIndex + 1];
-        if (!tarball) fail("--runtime-smoke requires a tarball path");
-        return smokePackedRuntime(tarball).then(() => ({ runtimeSmoke: tarball }));
+        const tarball = process.argv[packageSmokeIndex + 1];
+        if (!tarball) fail("--package-smoke requires a tarball path");
+        return smokePackedPackage(tarball).then(() => ({ packageSmoke: tarball }));
       })()
     : verifyPackageRelease();
   action
     .then(async ({ manifest, tarball }) => {
-      if (runtimeSmokeIndex >= 0) {
-        console.log(`runtime smoke passed: ${resolve(process.argv[runtimeSmokeIndex + 1])}`);
+      if (packageSmokeIndex >= 0) {
+        console.log(`package smoke passed: ${resolve(process.argv[packageSmokeIndex + 1])}`);
         return;
       }
       await writeGithubOutputs({ manifest, tarball });

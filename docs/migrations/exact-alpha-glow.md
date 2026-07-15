@@ -460,9 +460,11 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   pack 4 сохранены. Новый corpus фиксирует versioned request/outcome bytes,
   packed LSB0 evidence, все три feasibility-терминала и типизированные
   conflict/resource error paths.
-- npm добавляет `evaluateWcag22Feasibility(Uint8Array)` и два root-типа —
-  request/outcome. Вложенные wire-типы остаются деталями исчерпывающего outcome,
-  а raw wasm-bindgen ABI не экспортируется из package root.
+- `evaluateWcag22Feasibility(Uint8Array)`, `wcag22FeasibilityMaxBytes()` и
+  request/outcome types перенесены из package root в
+  `@labpics/colors/compiler`. Compiler загружает собственный WASM через
+  `@labpics/colors/compiler/wasm`; runtime WASM больше не содержит feasibility
+  protocol. Raw wasm-bindgen ABI обеих ролей остаётся приватным.
 - Feasibility полностью перечисляет зарегистрированный домен и не выбирает
   цвет. Selection policy, брендовая близость, polarity и appearance-scoring не
   являются скрытой частью этого migration-контракта.
