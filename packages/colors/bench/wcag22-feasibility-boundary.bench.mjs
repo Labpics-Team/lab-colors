@@ -40,11 +40,11 @@ const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.
 const wasmBudgetPath = resolve(here, "wasm-size-budget-v5.json");
 const wasmToolchainSourcePath = resolve(here, "wasm-size-budget-v1.json");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
-const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v4.json");
+const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v5.json");
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v4";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v5";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
