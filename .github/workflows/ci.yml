@@ -306,30 +306,20 @@ jobs:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
                   )
-              # #296-C2: атомарная explicit-операция protocol существует за
-              # non-default фичей. До #296-C3 её резолвит ТОЛЬКО нативный
-              # conformance-генератор; публикуемые adapters (compiler, ffi)
-              # обязаны оставаться feasibility-only.
-              if consumer == "labcolors-conformance":
-                  if (
-                      'labcolors-protocol feature "wcag22-explicit-selection"'
-                      not in feature_tree
-                  ):
-                      raise SystemExit(
-                          "labcolors-conformance must resolve the native-only "
-                          "explicit-selection protocol feature"
-                      )
-                  if (
-                      'labcolors-core feature "wcag22-explicit-feasibility"'
-                      not in feature_tree
-                  ):
-                      raise SystemExit(
-                          "labcolors-conformance must resolve the explicit-domain "
-                          "capability for pack generation"
-                      )
-              elif 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
+              # #296-C3: атомарная explicit-операция опубликована. Каждый
+              # protocol-потребитель (compiler, ffi, conformance) обязан
+              # резолвить её через одну non-default protocol-фичу; прямых
+              # core-фич у потребителей по-прежнему нет.
+              if (
+                  'labcolors-protocol feature "wcag22-explicit-selection"'
+                  not in feature_tree
+              ):
                   raise SystemExit(
-                      f"{consumer} resolved the pre-C3 native-only explicit capability"
+                      f"{consumer} must resolve the explicit-selection protocol feature"
+                  )
+              if 'labcolors-core feature "wcag22-explicit-feasibility"' not in feature_tree:
+                  raise SystemExit(
+                      f"{consumer} did not resolve the explicit-domain capability"
                   )
 
           runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
@@ -370,8 +360,8 @@ jobs:
               raise SystemExit("compiler role resolved the theme/runtime engine")
           if 'labcolors-core feature "wcag22-feasibility"' not in compiler_tree:
               raise SystemExit("compiler role lacks protocol-owned wcag22-feasibility")
-          if 'labcolors-core feature "wcag22-explicit-feasibility"' in compiler_tree:
-              raise SystemExit("compiler role resolved the Core-only explicit capability")
+          if 'labcolors-core feature "wcag22-explicit-feasibility"' not in compiler_tree:
+              raise SystemExit("compiler role lacks the published explicit capability")
 
           print("core capability projection: PASS")
           PY
@@ -639,11 +629,11 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: verify committed #296-C2 canonical whole-call compiler evidence
+      - name: verify committed #296-C3 canonical whole-call compiler evidence
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify bench/wcag22-feasibility-wasm-boundary-v4.json
+          --verify bench/wcag22-feasibility-wasm-boundary-v5.json
       - name: independently fingerprint both execution-role WASM artifacts
         run: |
           for artifact in \
@@ -654,13 +644,13 @@ jobs:
             sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
             echo "canonical candidate artifact=${artifact} raw=${bytes}B sha256=${sha256}"
           done
-          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json
-      - name: upload exact #296-C2 whole-call evidence
+          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v5.json
+      - name: upload exact #296-C3 whole-call evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v5.json
             packages/colors/pkg/labcolors_bg.wasm
             packages/colors/compiler/labcolors_compiler_bg.wasm
           if-no-files-found: error

@@ -136,19 +136,22 @@ public enum Wcag22FeasibilityRelationV1: Codable, Equatable, Sendable {
         }
     }
 
+    /// Key order mirrors the canonical Rust `RelationV1` serializer
+    /// (`relationId`, `occurrenceId`, `kind`, …) so an order-preserving
+    /// re-encode reproduces the exact wire bytes.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case let .applicable(relationId, occurrenceId, criterion, adjacent):
-            try container.encode(Kind.applicable, forKey: .kind)
             try container.encode(relationId, forKey: .relationId)
             try container.encode(occurrenceId, forKey: .occurrenceId)
+            try container.encode(Kind.applicable, forKey: .kind)
             try container.encode(criterion, forKey: .criterion)
             try container.encode(adjacent, forKey: .adjacent)
         case let .notApplicable(relationId, occurrenceId, reasonId):
-            try container.encode(Kind.notApplicable, forKey: .kind)
             try container.encode(relationId, forKey: .relationId)
             try container.encode(occurrenceId, forKey: .occurrenceId)
+            try container.encode(Kind.notApplicable, forKey: .kind)
             try container.encode(reasonId, forKey: .reasonId)
         }
     }

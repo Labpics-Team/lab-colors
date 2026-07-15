@@ -37,14 +37,14 @@ const coreAdmissionPath = resolve(
 );
 const packOraclePath = resolve(repoRoot, "conformance/vectors/wcag22-feasibility.json");
 const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.json");
-const wasmBudgetPath = resolve(here, "wasm-size-budget-v5.json");
+const wasmBudgetPath = resolve(here, "wasm-size-budget-v6.json");
 const wasmToolchainSourcePath = resolve(here, "wasm-size-budget-v1.json");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
-const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v4.json");
+const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v5.json");
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v4";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v5";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
@@ -163,10 +163,10 @@ function sourceContracts() {
     fail("unsupported Core admission artifact identity");
   }
   if (
-    budget.value?.schemaVersion !== 4 ||
-    budget.value?.budgetId !== "labcolors-wasm-roles-issue-296-c1-v5" ||
+    budget.value?.schemaVersion !== 5 ||
+    budget.value?.budgetId !== "labcolors-wasm-roles-issue-296-c3-v6" ||
     sha256(budget.bytes) !==
-      "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59" ||
+      "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32" ||
     budget.value?.toolchainSource?.path !==
       "packages/colors/bench/wasm-size-budget-v1.json" ||
     budget.value?.toolchainSource?.fileSha256 !== sha256(toolchain.bytes) ||
@@ -677,7 +677,7 @@ export function validateMeasurementArtifact(
   );
   if (
     artifact.bindings.wasmBudget.path !==
-      "packages/colors/bench/wasm-size-budget-v5.json" ||
+      "packages/colors/bench/wasm-size-budget-v6.json" ||
     artifact.bindings.wasmBudget.schemaVersion !== budget.value.schemaVersion ||
     artifact.bindings.wasmBudget.budgetId !== budget.value.budgetId ||
     artifact.bindings.wasmBudget.fileSha256 !== sha256(budget.bytes) ||
@@ -1230,7 +1230,7 @@ function measurementArtifact() {
       },
       compilerSources: sources,
       wasmBudget: {
-        path: "packages/colors/bench/wasm-size-budget-v5.json",
+        path: "packages/colors/bench/wasm-size-budget-v6.json",
         schemaVersion: budget.value.schemaVersion,
         budgetId: budget.value.budgetId,
         fileSha256: sha256(budget.bytes),

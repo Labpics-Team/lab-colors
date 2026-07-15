@@ -28,7 +28,9 @@ path = "src/bin/uniffi_bindgen.rs"
 
 [dependencies]
 labcolors-core = { path = "../labcolors-core", default-features = false }
-labcolors-protocol = { path = "../labcolors-protocol" }
+# #296-C3: UniFFI-роль публикует обе offline-операции; explicit-selection
+# включается той же non-default protocol-фичей, что и в compiler-роли.
+labcolors-protocol = { path = "../labcolors-protocol", features = ["wcag22-explicit-selection"] }
 # Нативная FFI-обвязка. Библиотечная зависимость БЕЗ фичи cli (иначе clap течёт
 # в артефакт); cli включается только через passthrough-фичу ниже на генерации.
 uniffi = { version = "0.32", default-features = false }

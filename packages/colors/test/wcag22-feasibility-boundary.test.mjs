@@ -27,7 +27,7 @@ const conformanceManifestPath = resolve(root, "conformance/vectors/manifest.json
 const packageManifestPath = resolve(root, "packages/colors/package.json");
 const compilerEntryPath = resolve(root, "packages/colors/compiler.js");
 const wasmGluePath = resolve(root, "packages/colors/compiler/labcolors_compiler.js");
-const wasmBudgetPath = resolve(root, "packages/colors/bench/wasm-size-budget-v5.json");
+const wasmBudgetPath = resolve(root, "packages/colors/bench/wasm-size-budget-v6.json");
 const coreBytes = readFileSync(corePath);
 const core = JSON.parse(coreBytes);
 const toolchain = JSON.parse(readFileSync(toolchainPath));
@@ -241,7 +241,7 @@ function fixture() {
         },
       },
       wasmBudget: {
-        path: "packages/colors/bench/wasm-size-budget-v5.json",
+        path: "packages/colors/bench/wasm-size-budget-v6.json",
         schemaVersion: wasmBudget.schemaVersion,
         budgetId: wasmBudget.budgetId,
         fileSha256: sha256(wasmBudgetBytes),
@@ -276,6 +276,10 @@ test("whole-call evidence history is exact and deterministic", () => {
     root,
     "packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json",
   ));
+  const v5Bytes = readFileSync(resolve(
+    root,
+    "packages/colors/bench/wcag22-feasibility-wasm-boundary-v5.json",
+  ));
   assert.equal(
     sha256(v1Bytes),
     "8281f372cf635174fa3cedf828a96b48a023c413f43245cfc7001d9b83ff1790",
@@ -292,14 +296,20 @@ test("whole-call evidence history is exact and deterministic", () => {
     sha256(v4Bytes),
     "34fcc24d74c1c0b877c04457799d5d67b8947915199a14202f737353bfff4257",
   );
+  assert.equal(
+    sha256(v5Bytes),
+    "97cb5478db091e8c3aac4a22f5ea801197375a1d158e6e39de2e237f991e88a7",
+  );
   const v1 = JSON.parse(v1Bytes);
   const v2 = JSON.parse(v2Bytes);
   const v3 = JSON.parse(v3Bytes);
   const v4 = JSON.parse(v4Bytes);
+  const v5 = JSON.parse(v5Bytes);
   assert.equal(v1.artifactId, "wcag22-feasibility-wasm-whole-call-v1");
   assert.equal(v2.artifactId, "wcag22-feasibility-wasm-whole-call-v2");
   assert.equal(v3.artifactId, "wcag22-feasibility-wasm-whole-call-v3");
   assert.equal(v4.artifactId, "wcag22-feasibility-wasm-whole-call-v4");
+  assert.equal(v5.artifactId, "wcag22-feasibility-wasm-whole-call-v5");
   // V4 перезаписан после pack-6/admission-V5: связывает точную новую истину,
   // компилерный WASM байт-в-байт равен ратчету C1.
   assert.deepEqual(v4.bindings.coreAdmission, {
@@ -315,6 +325,19 @@ test("whole-call evidence history is exact and deterministic", () => {
     sha256: "3a552ce43ada7d0b10e90a23b4a7e50a4ecad77a446374b98ca8ee6b5c6a2a45",
   });
   assert.equal(v4.bindings.packOracle.packVersion, "6.0.0");
+  // V5 (#296-C3): compiler публикует атомарную операцию — новый exact WASM,
+  // бюджет V6 и та же admission V5; deterministic-проекция не меняется.
+  assert.deepEqual(v5.bindings.coreAdmission, v4.bindings.coreAdmission);
+  assert.deepEqual(v5.bindings.wasm, {
+    path: "packages/colors/compiler/labcolors_compiler_bg.wasm",
+    bytes: 229658,
+    sha256: "34e2a561862ee06d52d1104f8ba60ccf9967e2e4fd09803d4e75e1966074bc8d",
+  });
+  assert.equal(
+    v5.bindings.wasmBudget.budgetId,
+    "labcolors-wasm-roles-issue-296-c3-v6",
+  );
+  assert.equal(v5.bindings.packOracle.packDigest, "129158d2");
   assert.deepEqual(v2.bindings.coreAdmission, {
     path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
     schemaVersion: 1,
@@ -358,6 +381,7 @@ test("whole-call evidence history is exact and deterministic", () => {
   assert.deepEqual(deterministicProjection(v2), deterministicProjection(v1));
   assert.deepEqual(deterministicProjection(v3), deterministicProjection(v2));
   assert.deepEqual(deterministicProjection(v4), deterministicProjection(v3));
+  assert.deepEqual(deterministicProjection(v5), deterministicProjection(v4));
 });
 
 test("canonical whole-call artifact schema accepts all immutable scenarios", () => {
@@ -437,7 +461,7 @@ test("whole-call checker mutation-kills missing evidence and inflated claims", (
 test("CI verifies committed whole-call evidence before the size gate", () => {
   const ci = ciSource;
   const harness = "node bench/wcag22-feasibility-boundary.bench.mjs";
-  const evidence = "bench/wcag22-feasibility-wasm-boundary-v4.json";
+  const evidence = "bench/wcag22-feasibility-wasm-boundary-v5.json";
   const verify = `--verify ${evidence}`;
   const fingerprint = "name: independently fingerprint both execution-role WASM artifacts";
   const upload =
@@ -448,10 +472,10 @@ test("CI verifies committed whole-call evidence before the size gate", () => {
   const fingerprintIndex = ci.indexOf(fingerprint, verifyIndex);
   const uploadIndex = ci.indexOf(upload, verifyIndex);
   const sizeGateIndex = ci.indexOf(sizeGate);
-  assert.match(ci, /verify committed #296-C2 canonical whole-call compiler evidence/u);
+  assert.match(ci, /verify committed #296-C3 canonical whole-call compiler evidence/u);
   assert.match(
     ci,
-    /name: upload exact #296-C2 whole-call evidence/u,
+    /name: upload exact #296-C3 whole-call evidence/u,
   );
   assert.ok(harnessIndex >= 0, "the compiler-entry harness must run in CI");
   assert.ok(verifyIndex > harnessIndex, "CI must verify the committed evidence");
@@ -466,7 +490,7 @@ test("CI verifies committed whole-call evidence before the size gate", () => {
   );
   assert.match(
     ci,
-    /path: \|[\s\S]*?packages\/colors\/bench\/wcag22-feasibility-wasm-boundary-v4\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm[\s\S]*?packages\/colors\/compiler\/labcolors_compiler_bg\.wasm/u,
+    /path: \|[\s\S]*?packages\/colors\/bench\/wcag22-feasibility-wasm-boundary-v5\.json[\s\S]*?packages\/colors\/pkg\/labcolors_bg\.wasm[\s\S]*?packages\/colors\/compiler\/labcolors_compiler_bg\.wasm/u,
   );
   assert.doesNotMatch(
     ci,

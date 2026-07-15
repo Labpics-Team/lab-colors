@@ -15,10 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [features]
-# Атомарная explicit-операция `wcag22-explicit-selection-v1` (#296-C2).
-# Не входит в default: до #296-C3 ни один публикуемый adapter (compiler-WASM,
-# UniFFI/Swift) не рекламирует capability; фичу включает только нативный
-# conformance-генератор. Базовое core-ребро остаётся ровно wcag22-feasibility.
+# Атомарная explicit-операция `wcag22-explicit-selection-v1` (#296-C2/C3).
+# Не входит в default: каждую проекцию потребитель включает явно; после C3 её
+# резолвят все три protocol-потребителя (compiler-WASM, UniFFI/Swift,
+# conformance). Базовое core-ребро остаётся ровно wcag22-feasibility.
 wcag22-explicit-selection = ["labcolors-core/wcag22-explicit-feasibility"]
 
 [[test]]

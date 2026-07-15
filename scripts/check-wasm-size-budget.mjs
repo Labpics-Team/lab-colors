@@ -12,10 +12,11 @@ const V1_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v1.js
 const V2_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v2.json");
 const V3_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v3.json");
 const V4_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v4.json");
+const V5_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v5.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v5.json",
+  "packages/colors/bench/wasm-size-budget-v6.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -29,10 +30,13 @@ export const V4_FILE_SHA256 =
   "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c";
 export const V5_FILE_SHA256 =
   "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59";
+export const V6_FILE_SHA256 =
+  "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V4_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v4.json";
+const V5_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v5.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
+const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
 const ROLE_ORDER = ["runtime", "compiler"];
 const ROLE_SPECS = {
   runtime: {
@@ -41,13 +45,17 @@ const ROLE_SPECS = {
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
     derivation: "exact-accepted-issue-296-slice-c1-runtime-measurement",
+    measurementSlice: "C1",
   },
   compiler: {
     artifact: "packages/colors/compiler/labcolors_compiler_bg.wasm",
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
     recipeSha256: "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f",
-    derivation: "exact-accepted-issue-296-slice-c1-compiler-first-admission",
+    // C3 публикует атомарную операцию в compiler-роли: рост размера — это
+    // добавленная capability, зафиксированная новым точным измерением.
+    derivation: "exact-accepted-issue-296-slice-c3-compiler-measurement",
+    measurementSlice: "C3",
   },
 };
 
@@ -144,7 +152,11 @@ function verifyImmutableHistory() {
     }
     if (label === "v4") v4 = value;
   }
-  return { v1, v4 };
+  const v5 = readImmutableJson(V5_PATH, V5_FILE_SHA256, "v5");
+  if (v5?.schemaVersion !== 4 || v5?.budgetId !== V5_BUDGET_ID) {
+    fail("immutable v5 budget identity drifted");
+  }
+  return { v1, v4, v5 };
 }
 
 function validateBudgetValue(budget) {
@@ -160,15 +172,15 @@ function validateBudgetValue(budget) {
     ],
     "budget",
   );
-  if (budget.schemaVersion !== 4) fail("supported schemaVersion is exactly 4");
-  if (budget.budgetId !== V5_BUDGET_ID) fail(`budgetId must be ${V5_BUDGET_ID}`);
+  if (budget.schemaVersion !== 5) fail("supported schemaVersion is exactly 5");
+  if (budget.budgetId !== V6_BUDGET_ID) fail(`budgetId must be ${V6_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V4_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V4_FILE_SHA256
+    budget.predecessor.path !== V5_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V5_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v4 document");
+    fail("predecessor must bind the immutable v5 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -207,8 +219,8 @@ function validateBudgetValue(budget) {
       ["issue", "slice", "measurementPlatform", "rawBytes", "sha256"],
       `roles.${role}.measurement`,
     );
-    if (record.measurement.issue !== 296 || record.measurement.slice !== "C1") {
-      fail(`roles.${role}.measurement must cite Issue #296 Slice C1`);
+    if (record.measurement.issue !== 296 || record.measurement.slice !== spec.measurementSlice) {
+      fail(`roles.${role}.measurement must cite Issue #296 Slice ${spec.measurementSlice}`);
     }
     if (record.measurement.measurementPlatform !== "linux-x64") {
       fail(`roles.${role}.measurement must use canonical linux-x64`);
@@ -252,10 +264,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V5_FILE_SHA256) {
+    if (actualFileSha256 !== V6_FILE_SHA256) {
       fail(
-        `immutable v5 file SHA-256 mismatch: ` +
-          `expected=${V5_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v6 file SHA-256 mismatch: ` +
+          `expected=${V6_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
