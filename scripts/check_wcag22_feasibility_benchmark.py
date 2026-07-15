@@ -36,6 +36,7 @@ PARTITION_BYTES = 32
 MAX_APPLICABLE_EDGES = PAGE_BYTES // DECISION_SLOT_BYTES - 1
 MAX_LOGICAL_ASSESSMENTS = CANDIDATE_COUNT * MAX_APPLICABLE_EDGES
 ROOT = Path(__file__).resolve().parents[1]
+HISTORICAL_ONLY_PATH = "Cargo.lock"
 SUBJECT_PATHS = (
     "Cargo.toml",
     "crates/labcolors-core/src/lib.rs",
@@ -51,7 +52,7 @@ SUBJECT_PATHS = (
     "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
     "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
     "crates/labcolors-core/Cargo.toml",
-    "Cargo.lock",
+    HISTORICAL_ONLY_PATH,
     "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
     "scripts/check_wcag22_feasibility_benchmark.py",
 )
@@ -231,7 +232,9 @@ def check_hard_slo(payload: dict[str, Any]) -> None:
             "hard SLO must remain deterministic work/storage, never a guessed timing limit")
 
 
-def check_subject_manifest(payload: dict[str, Any]) -> None:
+def check_subject_manifest(
+    payload: dict[str, Any], durable_current_subjects: bool
+) -> None:
     check_subject_git_bindings(SUBJECT_PATHS, SOURCE_OBJECTS)
     manifest = payload.get("subjectManifest")
     require(isinstance(manifest, list) and len(manifest) == len(SUBJECT_PATHS),
@@ -240,9 +243,15 @@ def check_subject_manifest(payload: dict[str, Any]) -> None:
         entry = manifest[index]
         require(isinstance(entry, dict) and entry.get("path") == path,
                 f"subjectManifest[{index}] path/order drifted")
-        expected = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-        require(entry.get("sha256") == expected,
-                f"subjectManifest source drift: {path}")
+        if current_byte_identity_required(path, durable_current_subjects):
+            expected = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+            require(entry.get("sha256") == expected,
+                    f"subjectManifest source drift: {path}")
+
+
+def current_byte_identity_required(path: str, durable_current_subjects: bool) -> bool:
+    """Return whether this verification mode owns exact current bytes for path."""
+    return True
 
 
 def check_subject_git_bindings(
@@ -429,8 +438,9 @@ def check_source_objects(
                 "current-subject verification requires a recorded measurement tree")
         check_current_subjects_clean()
         for name, path in SOURCE_OBJECTS:
-            require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
-                    f"current Git subject differs from admitted measurement: {path}")
+            if current_byte_identity_required(path, verify_current_subjects):
+                require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
+                        f"current Git subject differs from admitted measurement: {path}")
         return
 
     require(tree == git_rev_parse(f"{revision}^{{tree}}"),
@@ -564,7 +574,7 @@ def check(
     check_hard_slo(payload)
     check_bounded_envelope_model(payload)
     check_profile_limits(payload)
-    check_subject_manifest(payload)
+    check_subject_manifest(payload, verify_current_subjects)
 
     scenarios = payload.get("scenarios")
     require(isinstance(scenarios, list), "scenarios must be an array")
@@ -593,6 +603,23 @@ def run_mutation_self_tests(
     verify_current_subjects: bool,
 ) -> int:
     mutation_checks = 0
+
+    require(
+        not current_byte_identity_required(HISTORICAL_ONLY_PATH, True),
+        "durable verification must delegate historical-only Cargo.lock compatibility",
+    )
+    require(
+        current_byte_identity_required(HISTORICAL_ONLY_PATH, False),
+        "admission verification must retain exact measured Cargo.lock bytes",
+    )
+    require(
+        all(
+            current_byte_identity_required(path, True)
+            for path in SUBJECT_PATHS
+            if path != HISTORICAL_ONLY_PATH
+        ),
+        "durable verification must retain every non-historical subject byte",
+    )
 
     def rejected(mutator: Any, label: str) -> None:
         nonlocal mutation_checks
