@@ -33,7 +33,7 @@ const compilerSourceIds = [
 ];
 const coreAdmissionPath = resolve(
   repoRoot,
-  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
+  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json",
 );
 const packOraclePath = resolve(repoRoot, "conformance/vectors/wcag22-feasibility.json");
 const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.json");
@@ -157,7 +157,7 @@ function sourceContracts() {
   );
   if (
     core.value?.schemaVersion !== 1 ||
-    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v3" ||
+    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v4" ||
     core.value?.profileLimits?.profileId !== "compile-v1"
   ) {
     fail("unsupported Core admission artifact identity");
@@ -617,7 +617,7 @@ export function validateMeasurementArtifact(
   );
   if (
     artifact.bindings.coreAdmission.path !==
-      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json" ||
+      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json" ||
     artifact.bindings.coreAdmission.schemaVersion !== core.value.schemaVersion ||
     artifact.bindings.coreAdmission.artifactId !== core.value.artifactId ||
     artifact.bindings.coreAdmission.profileId !== core.value.profileLimits.profileId ||
@@ -1211,7 +1211,7 @@ function measurementArtifact() {
     },
     bindings: {
       coreAdmission: {
-        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
+        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json",
         schemaVersion: core.value.schemaVersion,
         artifactId: core.value.artifactId,
         profileId: core.value.profileLimits.profileId,

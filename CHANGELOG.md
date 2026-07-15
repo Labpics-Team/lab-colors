@@ -88,19 +88,21 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 - WASM size history стала role-aware: V5 задаёт независимые exact Linux-x64
   size/SHA и рецепты `runtime`/`compiler` с нулевым headroom, не переписывая
   V1–V4. Whole-call V3 проверяет dedicated compiler entry, связывает его с V5
-  и native admission V3 и сохраняет детерминированную request/outcome-проекцию.
+  и native admission V4 и сохраняет детерминированную request/outcome-проекцию.
   `initSync`, прогретая операция, process maxRSS и WASM pages остаются
   наблюдениями, не SLO.
 - Native feasibility admission также append-only относительно принятого
-  `main`: V1/V2 проверяются в исторических snapshots, а текущий V3 связывает
+  `main`: V1–V3 проверяются в исторических snapshots, а текущий V4 связывает
   artifact SHA
-  `46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a`
+  `3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275`
   с одним точным dependency cone. Source-bound recorder проверяет Git objects,
   SHA-256 verifier/subject-файлов и точный `Cargo.lock` до сборки и после
   запуска; fresh target, пустая Cargo-config hierarchy и закрытая среда
   исключают ambient profile/flags/wrappers. Receipt фиксирует Rust/Cargo 1.96.0,
   SHA-256 обоих toolchain executables и реально запущенного benchmark binary,
-  явный feature set и explicit-empty compiler overrides; 71 негативная мутация
+  явный feature set и explicit-empty compiler overrides; V3/V4 сохраняют одну
+  deterministic scenario/identity-проекцию, поэтому C1 меняет только workspace
+  provenance и admission machinery, а не конечный алгоритм; 71 негативная мутация
   проверяет fail-closed границы.
   Сырые наблюдения сохранены без timing threshold, а промежуточные draft-
   артефакты не становятся публичной историей.

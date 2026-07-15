@@ -71,14 +71,28 @@ test('lawForFile: по-доменные законы', () => {
   assert.ok(!lawForFile('crates/x/tests/data/labui.config.prod.json'));
 });
 
-test('generated compiler WASM directory не становится фактом исходного дерева', () => {
+test('generated WASM names come from package files without hiding undeclared source', () => {
   const root = mkdtempSync(join(tmpdir(), 'labcolors-naming-generated-'));
   try {
     const generated = join(root, 'packages', 'colors', 'compiler');
     mkdirSync(generated, { recursive: true });
+    writeFileSync(
+      join(root, 'packages', 'colors', 'package.json'),
+      JSON.stringify({
+        files: [
+          'compiler/labcolors_compiler.js',
+          'compiler/labcolors_compiler_bg.wasm',
+        ],
+      }),
+    );
     writeFileSync(join(generated, 'labcolors_compiler.js'), 'generated');
     writeFileSync(join(generated, 'labcolors_compiler_bg.wasm'), 'generated');
-    assert.deepEqual(nonLawFiles(root), []);
+    writeFileSync(join(generated, 'hand_written_bad.js'), 'source');
+    assert.deepEqual(nonLawFiles(root), [
+      'packages/colors/compiler/hand_written_bad.js',
+      'packages/colors/compiler/labcolors_compiler.js',
+      'packages/colors/compiler/labcolors_compiler_bg.wasm',
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -313,6 +327,9 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
     'appearanceDiagnosticProfile',
     'selectionDiagnosticProfile',
     'resolve_alpha_analog_hex',
+    'import initCompiler from "@labpics/colors/compiler"',
+    'await Promise.all([initRuntime(), initCompiler()])',
+    'один и тот же модуль для двух ролей не подходит',
     'Rollback',
   ]) {
     assert.ok(migration.includes(required), `migration не содержит ${required}`);

@@ -465,6 +465,21 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   `@labpics/colors/compiler`. Compiler загружает собственный WASM через
   `@labpics/colors/compiler/wasm`; runtime WASM больше не содержит feasibility
   protocol. Raw wasm-bindgen ABI обеих ролей остаётся приватным.
+- Инициализация теперь также разделена по execution-role: прежний root
+  `await init()` инициализирует только runtime. Перед первым compiler-вызовом
+  отдельно импортируйте `init` (или `initSync`) из `@labpics/colors/compiler`
+  и инициализируйте его собственный WASM; иначе compiler API fail-fast, а не
+  использует скрытый runtime fallback.
+
+  ```ts
+  import initRuntime from "@labpics/colors";
+  import initCompiler from "@labpics/colors/compiler";
+
+  await Promise.all([initRuntime(), initCompiler()]);
+  ```
+
+  Для Node передайте каждой функции байты её WASM, как показано в package
+  README; один и тот же модуль для двух ролей не подходит.
 - Feasibility полностью перечисляет зарегистрированный домен и не выбирает
   цвет. Selection policy, брендовая близость, polarity и appearance-scoring не
   являются скрытой частью этого migration-контракта.

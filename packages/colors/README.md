@@ -496,7 +496,7 @@ checker сообщает только raw/gzip/SHA-диагностику и н�
 канонический release artifact.
 
 `bench/wcag22-feasibility-wasm-boundary-v3.json` фиксирует compiler-entry
-whole-call формы в свежих процессах и связывает их с Core admission V3, V5
+whole-call формы в свежих процессах и связывает их с Core admission V4, V5
 compiler recipe, package entry/glue и точным compiler WASM. Время `initSync`,
 время прогретого вызова, process maxRSS и страницы WASM — наблюдения без
 production-порога. `gzip -9` также остаётся диагностикой, а не второй

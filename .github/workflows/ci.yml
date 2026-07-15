@@ -432,10 +432,10 @@ jobs:
               --self-test
           )
           cleanup_history
-          trap - EXIT
 
-          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
-          current_protocol=(
+          v3_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
+          v3_snapshot=10c44ef0f4248d0390aa339e81c05a6d5e41996f
+          v3_protocol=(
             --admit-rustc-release 1.96.0
             --admit-cargo-release 1.96.0
             --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
@@ -448,9 +448,34 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
+          git worktree add --detach "$historical_root" "$v3_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$v3_artifact" "${v3_protocol[@]}" \
+              --artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a \
+              --self-test
+          )
+          cleanup_history
+          trap - EXIT
+
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json"
+          current_protocol=(
+            --admit-rustc-release 1.96.0
+            --admit-cargo-release 1.96.0
+            --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
+            --admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841
+            --admit-benchmark-binary-sha256 69fe95cea34c845478c0a3c260e3e4459f1bc09d76857b74d5edb50fd923410a
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a \
+            --artifact-sha256 3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275 \
             --self-test
 
   audit:

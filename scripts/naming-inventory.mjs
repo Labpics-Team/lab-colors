@@ -188,16 +188,27 @@ export function lawForFile(path) {
 
 /** Файлы SCAN_TOPS вне по-доменного закона имён. */
 export function nonLawFiles(root = ROOT) {
-  const bad = [];
+  const packageRoot = join(root, 'packages', 'colors');
+  const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+  const generatedPackageFiles = new Set(
+    (packageJson.files ?? [])
+      .filter((path) => /^(?:pkg|compiler)\//.test(path))
+      .map((path) => `packages/colors/${path}`),
+  );
+  const bad = new Set();
   for (const top of SCAN_TOPS) {
     for (const f of walk(join(root, top))) {
-      // Both WASM output directories are generated facts, even though the
-      // compiler role cannot share the conventional `pkg` directory name.
-      if (top === 'packages' && f.startsWith('colors/compiler/')) continue;
-      if (!lawForFile(f)) bad.push(`${top}/${f}`);
+      const repositoryPath = `${top}/${f}`;
+      // Declared generated outputs are package-contract facts, not source-tree
+      // facts. An undeclared file beside them still passes through the law.
+      if (generatedPackageFiles.has(repositoryPath)) continue;
+      if (!lawForFile(f)) bad.add(repositoryPath);
     }
   }
-  return bad.sort();
+  for (const path of generatedPackageFiles) {
+    if (!lawForFile(path)) bad.add(path);
+  }
+  return [...bad].sort();
 }
 
 /* ------------------------------------------------------------------ */
