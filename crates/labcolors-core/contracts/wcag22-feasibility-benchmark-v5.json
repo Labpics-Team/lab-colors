@@ -3,7 +3,7 @@
   "artifactId": "wcag22-feasibility-admission-raw-v5",
   "recordProvenance": {
     "recipeId": "closed-cargo-bench-v1",
-    "sourceSnapshotSha256": "1dad6cc415abe30420c30af00937536f098ee68b1af9e70abbfb3a4f2efe729f",
+    "sourceSnapshotSha256": "9f52065cabfd56e50fb691e32b751769aa6eafd2a9440552edcb0c20a8d3b738",
     "benchmarkBinarySha256": "bd8a6289cfc4605ffcba00b38c4e7309a6ee2989cbab8e76f03ed478e4fcff0a"
   },
   "claimBoundary": "native-process-observations-and-page-slot-arithmetic-only",
@@ -50,11 +50,11 @@
       },
       "coreCargo": {
         "path": "crates/labcolors-core/Cargo.toml",
-        "gitObject": "4e9c0893754f1a6d131d98f85f0101902f0991c2"
+        "gitObject": "96dc3f9f072fbfc8cd34899cbf7303c1eeb803dc"
       },
       "coreSourceTree": {
         "path": "crates/labcolors-core/src",
-        "gitObject": "afe9431cc0f7440737d4cd368b65fd85abf83dec"
+        "gitObject": "166225d03308fbf435e8875f1b49ebfcdbc4a2c0"
       },
       "wcag22Srgb8Contract": {
         "path": "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
@@ -152,7 +152,7 @@
     },
     {
       "path": "crates/labcolors-core/Cargo.toml",
-      "sha256": "46cf9970ab05d821187b30ff98f0fc9ab070ef546f82817a49d76f6e473e80ff"
+      "sha256": "a704ebe5db345b16866be848b38d7adc4990b68c9aaee4af8b75cbd5ecb7455a"
     },
     {
       "path": "Cargo.lock",
@@ -207,7 +207,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 41250,
+          "elapsedNs": 38250,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -219,7 +219,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 18083,
+          "elapsedNs": 19125,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -231,7 +231,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 17750,
+          "elapsedNs": 18542,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -243,7 +243,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 17500,
+          "elapsedNs": 18708,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -255,7 +255,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 17500,
+          "elapsedNs": 18416,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -296,7 +296,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 13838375,
+          "elapsedNs": 14045125,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -308,7 +308,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 13666916,
+          "elapsedNs": 13804791,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -320,7 +320,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 13925875,
+          "elapsedNs": 13710750,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -332,7 +332,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 13930625,
+          "elapsedNs": 13616875,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -344,7 +344,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 13732250,
+          "elapsedNs": 13613541,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -385,7 +385,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 149375,
+          "elapsedNs": 135791,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -397,7 +397,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 139125,
+          "elapsedNs": 134833,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -409,7 +409,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 138917,
+          "elapsedNs": 134584,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -421,7 +421,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 138625,
+          "elapsedNs": 134458,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -433,7 +433,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 138667,
+          "elapsedNs": 134500,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -474,7 +474,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 31250,
+          "elapsedNs": 30292,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -486,7 +486,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 31083,
+          "elapsedNs": 30083,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -498,7 +498,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 31083,
+          "elapsedNs": 30125,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -510,7 +510,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 36875,
+          "elapsedNs": 30250,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -522,7 +522,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 31125,
+          "elapsedNs": 30000,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -563,7 +563,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 15429458,
+          "elapsedNs": 14882083,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -575,7 +575,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 15632208,
+          "elapsedNs": 14878125,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -587,7 +587,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 15629417,
+          "elapsedNs": 15069041,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -599,7 +599,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 15248666,
+          "elapsedNs": 15345791,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -611,7 +611,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 15141875,
+          "elapsedNs": 15340709,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -652,7 +652,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 15175958,
+          "elapsedNs": 15420959,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -664,7 +664,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 15215750,
+          "elapsedNs": 15117333,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -676,7 +676,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 15234542,
+          "elapsedNs": 15305458,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -688,7 +688,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 15227750,
+          "elapsedNs": 15264875,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -700,7 +700,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 15473500,
+          "elapsedNs": 15138292,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -741,7 +741,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 658166,
+          "elapsedNs": 606250,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -753,7 +753,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 606292,
+          "elapsedNs": 605666,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -765,7 +765,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 613083,
+          "elapsedNs": 609583,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -777,7 +777,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 628583,
+          "elapsedNs": 605291,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -789,7 +789,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 606500,
+          "elapsedNs": 605334,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -830,7 +830,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 769542,
+          "elapsedNs": 764917,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -842,7 +842,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 770042,
+          "elapsedNs": 763750,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -854,7 +854,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 762250,
+          "elapsedNs": 761958,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -866,7 +866,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 763875,
+          "elapsedNs": 762375,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -878,7 +878,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 789334,
+          "elapsedNs": 761208,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -919,7 +919,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 7977666,
+          "elapsedNs": 7902791,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -931,7 +931,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 8255375,
+          "elapsedNs": 7931792,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -943,7 +943,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 7974917,
+          "elapsedNs": 7932125,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -955,7 +955,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 8127583,
+          "elapsedNs": 7906208,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -967,7 +967,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 8064375,
+          "elapsedNs": 7940291,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -1008,7 +1008,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 325709,
+          "elapsedNs": 345959,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1020,7 +1020,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 327167,
+          "elapsedNs": 324500,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1032,7 +1032,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 325125,
+          "elapsedNs": 324292,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1044,7 +1044,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 324792,
+          "elapsedNs": 325042,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1056,7 +1056,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 329625,
+          "elapsedNs": 324958,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,

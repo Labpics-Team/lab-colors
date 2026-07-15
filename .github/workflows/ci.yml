@@ -394,7 +394,7 @@ jobs:
           d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json
           46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json
           3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json
-          d1883c30b3be4c7cf5d1866bcec7c586b7cc75fbe0f7f1078c6a73cd21086515  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json
+          6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json
           SHA256
 
           historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
@@ -531,7 +531,7 @@ jobs:
           )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --artifact-sha256 d1883c30b3be4c7cf5d1866bcec7c586b7cc75fbe0f7f1078c6a73cd21086515 \
+            --artifact-sha256 6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5 \
             --self-test
 
   audit:
