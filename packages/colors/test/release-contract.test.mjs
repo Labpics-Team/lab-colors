@@ -1468,7 +1468,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?--self-test/u,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78[\s\S]*?--self-test/u,
     "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(

@@ -88,11 +88,14 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   process maxRSS и WASM pages остаются наблюдениями, не SLO.
 - Native feasibility admission также append-only относительно принятого
   `main`: V1/V2 проверяются в исторических snapshots, а текущий V3 связывает
-  полный Core source tree с measurement revision `cffc775` и artifact SHA
-  `28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a`.
-  Сырые наблюдения сохранены без timing threshold; durable-проверка делегирует
-  структурную совместимость исторического `Cargo.lock` одному applicability-
-  checker, а промежуточные draft-артефакты не становятся публичной историей.
+  artifact SHA
+  `576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78`
+  с одним точным dependency cone: Git objects исходников, SHA-256 всех
+  исполняемых verifier/subject-файлов и точный `Cargo.lock` проверяются до и
+  после измерения. Допуск фиксирует Rust/Cargo 1.96.0, явный feature set и
+  пустые rustflags; 56 негативных мутаций проверяют fail-closed границы.
+  Сырые наблюдения сохранены без timing threshold, а промежуточные draft-
+  артефакты не становятся публичной историей.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
   versioned complete-feasibility transport family, поэтому `packDigest`
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public

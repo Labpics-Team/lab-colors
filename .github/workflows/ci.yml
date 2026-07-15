@@ -400,7 +400,7 @@ jobs:
           )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a \
+            --artifact-sha256 576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78 \
             --self-test
 
   audit:

@@ -275,7 +275,7 @@ test("whole-call evidence history is exact and deterministic", () => {
   );
   assert.equal(
     sha256(v2Bytes),
-    "c4f9880843b9a267d7c87a4a630537a2fa984e3825bbcb9fd95f52e8f7b27ab8",
+    "db36155529926998d3801a5adcbc3cfb306d4ae26f037bf0f5398c24741f50bc",
   );
   const v1 = JSON.parse(v1Bytes);
   const v2 = JSON.parse(v2Bytes);
@@ -286,7 +286,7 @@ test("whole-call evidence history is exact and deterministic", () => {
     schemaVersion: 1,
     artifactId: "wcag22-feasibility-admission-raw-v3",
     profileId: "compile-v1",
-    sha256: "28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a",
+    sha256: "576226821daa3bd0e549cfa50e30785dc71753cc3ab44cae837778b9bb70bb78",
   });
   assert.deepEqual(v2.bindings.wasm, {
     path: "packages/colors/pkg/labcolors_bg.wasm",
