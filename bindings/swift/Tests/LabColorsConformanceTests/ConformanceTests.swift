@@ -1051,20 +1051,33 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    /// (b) decode → re-encode через Codable-типы воспроизводит канонические
-    /// байты serde: порядок ключей типов повторяет Rust-сериализаторы, а
-    /// order-preserving JSONEncoder не переупорядочивает контейнеры.
-    func testWcag22ExplicitSelectionTypedDecodeReencodesCanonicalBytes() throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes]
+    /// (b) decode → re-encode через Codable-типы воспроизводит канонический
+    /// JSON-терм: ни одно поле не теряется, не переименовывается и не меняет
+    /// представления. Порядок ключей serde пинуется байт-точно сырым
+    /// FFI-реплеем выше; Swift-овский JSONEncoder порядок вставки не
+    /// сохраняет, поэтому байтовая сверка идёт после нормализации ОБЕИХ
+    /// сторон одним и тем же sorted-keys сериализатором.
+    func testWcag22ExplicitSelectionTypedDecodeReencodesCanonicalTree() throws {
+        func normalized(_ data: Data) throws -> Data {
+            try JSONSerialization.data(
+                withJSONObject: JSONSerialization.jsonObject(with: data),
+                options: [.sortedKeys])
+        }
         for vector in try loadExplicitSelectionVectors() {
             let canonical = Data(vector.outcomeJson.utf8)
             let decoded = try JSONDecoder().decode(
                 Wcag22ExplicitSelectionOutcomeV1.self, from: canonical)
-            let reencoded = try encoder.encode(decoded)
+            let reencoded = try JSONEncoder().encode(decoded)
+            let reencodedTerm = try normalized(reencoded)
+            let canonicalTerm = try normalized(canonical)
             XCTAssertEqual(
-                reencoded, canonical,
-                "decode→re-encode drifted from canonical bytes \(vector.caseId)")
+                reencodedTerm, canonicalTerm,
+                "decode→re-encode drifted from the canonical term \(vector.caseId)")
+            let redecoded = try JSONDecoder().decode(
+                Wcag22ExplicitSelectionOutcomeV1.self, from: reencoded)
+            XCTAssertEqual(
+                redecoded, decoded,
+                "re-encoded bytes must decode back to the same value \(vector.caseId)")
         }
     }
 
@@ -1107,9 +1120,10 @@ final class ConformanceTests: XCTestCase {
 
         let scalarBytes = try wcag22ExplicitSelectionEnvelopeTooLargeV1(
             requestedBytes: requestedBytes)
+        let scalarOutcome = try JSONDecoder().decode(
+            Wcag22ExplicitSelectionOutcomeV1.self, from: scalarBytes)
         XCTAssertEqual(
-            try JSONDecoder().decode(Wcag22ExplicitSelectionOutcomeV1.self, from: scalarBytes),
-            outcome,
+            scalarOutcome, outcome,
             "scalar helper and typed preflight must agree on the canonical failure")
     }
 
