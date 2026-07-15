@@ -1024,6 +1024,244 @@ final class ConformanceTests: XCTestCase {
                 "raw_calls=\(rawCalls) scalar_calls=\(scalarCalls)")
         }
     }
+
+    // MARK: - Atomic WCAG 2.2 explicit-selection protocol (#296-C3)
+
+    func loadExplicitSelectionVectors() throws -> [Wcag22ExplicitSelectionVector] {
+        let vectors = try load(
+            "wcag22-explicit-selection.json", as: [Wcag22ExplicitSelectionVector].self)
+        XCTAssertEqual(vectors.count, 15, "atomic explicit-selection family cardinality")
+        return vectors
+    }
+
+    /// (a) Реплей всех 15 векторов: байт-точная сверка сырого FFI-выхода с
+    /// закоммиченным исходом плюс равенство типизированной проекции.
+    func testWcag22ExplicitSelectionPackReplaysThroughRawAndTypedSwiftSurfaces() throws {
+        for vector in try loadExplicitSelectionVectors() {
+            let request = Data(vector.requestJson.utf8)
+            let raw = try evaluateWcag22ExplicitSelectionRawV1(request: request)
+            XCTAssertEqual(
+                raw, Data(vector.outcomeJson.utf8),
+                "canonical FFI bytes \(vector.caseId)")
+
+            let typed = try evaluateWcag22ExplicitSelection(request)
+            let expected = try JSONDecoder().decode(
+                Wcag22ExplicitSelectionOutcomeV1.self, from: Data(vector.outcomeJson.utf8))
+            XCTAssertEqual(typed, expected, "typed outcome \(vector.caseId)")
+        }
+    }
+
+    /// (b) decode → re-encode через Codable-типы воспроизводит канонические
+    /// байты serde: порядок ключей типов повторяет Rust-сериализаторы, а
+    /// order-preserving JSONEncoder не переупорядочивает контейнеры.
+    func testWcag22ExplicitSelectionTypedDecodeReencodesCanonicalBytes() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        for vector in try loadExplicitSelectionVectors() {
+            let canonical = Data(vector.outcomeJson.utf8)
+            let decoded = try JSONDecoder().decode(
+                Wcag22ExplicitSelectionOutcomeV1.self, from: canonical)
+            let reencoded = try encoder.encode(decoded)
+            XCTAssertEqual(
+                reencoded, canonical,
+                "decode→re-encode drifted from canonical bytes \(vector.caseId)")
+        }
+    }
+
+    /// (c) limit+1 отклоняется ДО сырой FFI-копии; typed-путь и скалярный
+    /// helper обязаны выдавать один и тот же канонический отказ.
+    func testWcag22ExplicitSelectionOversizePreflightMatchesScalarHelper() throws {
+        let maxBytes = wcag22ExplicitSelectionMaxBytes()
+        XCTAssertEqual(maxBytes, wcag22ExplicitSelectionMaxRequestBytesV1())
+        // Кросс-платформенный пин конверта, разделяемый с packages/colors.
+        XCTAssertEqual(maxBytes, 3_889_322)
+
+        let requestedBytes = maxBytes + 1
+        var rawCalls = 0
+        var scalarCalls = 0
+        var ffiSubmittedBytes = 0
+        let live = Wcag22ExplicitSelectionBridge.live
+        let observing = Wcag22ExplicitSelectionBridge(
+            maxRequestBytes: live.maxRequestBytes,
+            evaluateRaw: { request in
+                rawCalls += 1
+                ffiSubmittedBytes += request.count
+                return try live.evaluateRaw(request)
+            },
+            envelopeTooLarge: { requested in
+                scalarCalls += 1
+                return try live.envelopeTooLarge(requested)
+            })
+        let oversized = Data(repeating: 0x20, count: Int(requestedBytes))
+        let outcome = try evaluateWcag22ExplicitSelection(oversized, using: observing)
+        XCTAssertEqual(rawCalls, 0, "limit+1 must not materialize/pass the raw FFI vector")
+        XCTAssertEqual(scalarCalls, 1)
+        XCTAssertEqual(ffiSubmittedBytes, 0)
+        guard case let .failure(.transport(.common(.envelopeTooLarge(requested, limit)))) =
+            outcome
+        else {
+            return XCTFail("oversize preflight did not preserve typed protocol failure")
+        }
+        XCTAssertEqual(requested.value, requestedBytes)
+        XCTAssertEqual(limit.value, maxBytes)
+
+        let scalarBytes = try wcag22ExplicitSelectionEnvelopeTooLargeV1(
+            requestedBytes: requestedBytes)
+        XCTAssertEqual(
+            try JSONDecoder().decode(Wcag22ExplicitSelectionOutcomeV1.self, from: scalarBytes),
+            outcome,
+            "scalar helper and typed preflight must agree on the canonical failure")
+    }
+
+    /// (d) Структурные мутации законного `selected`-терминала обязаны падать
+    /// на decode: испорченная ширина партиции, чужой status, потерянный
+    /// selection, перевёрнутый бит матрицы, недосчитанная финальная
+    /// перепроверка и нарушенный канонический порядок кандидатов.
+    func testWcag22ExplicitSelectionTypedConsumerRejectsStructuralMutations() throws {
+        let vectors = try loadExplicitSelectionVectors()
+        let fixture = try XCTUnwrap(
+            vectors.first { $0.caseId == "selected-declared-order-overrides-canonical" })
+        let canonicalData = Data(fixture.outcomeJson.utf8)
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(Wcag22ExplicitSelectionOutcomeV1.self, from: canonicalData),
+            "mutation oracle requires a lawful canonical fixture")
+
+        func mutated(
+            _ change: (inout [String: Any]) throws -> Void
+        ) throws -> Data {
+            var root = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: canonicalData) as? [String: Any])
+            var result = try XCTUnwrap(root["result"] as? [String: Any])
+            try change(&result)
+            root["result"] = result
+            return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        }
+        func mutatedFeasibility(
+            _ change: (inout [String: Any]) throws -> Void
+        ) throws -> Data {
+            try mutated { result in
+                var feasibility = try XCTUnwrap(result["feasibility"] as? [String: Any])
+                try change(&feasibility)
+                result["feasibility"] = feasibility
+            }
+        }
+        func assertDecodeFails(_ data: Data, _ context: String) {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(Wcag22ExplicitSelectionOutcomeV1.self, from: data),
+                context)
+        }
+
+        // Лишний нулевой байт держит padding законным, но ломает ceil(C/8).
+        let widePartition = try mutatedFeasibility { feasibility in
+            var proof = try XCTUnwrap(feasibility["proof"] as? [String: Any])
+            var partition = try XCTUnwrap(proof["partition"] as? [Int])
+            partition.append(0)
+            proof["partition"] = partition
+            feasibility["proof"] = proof
+        }
+        assertDecodeFails(widePartition, "damaged partition width must fail decode")
+
+        // Чужой терминальный ключ нейтральной feasibility-операции.
+        let foreignStatus = try mutated { $0["status"] = "feasible" }
+        assertDecodeFails(foreignStatus, "foreign status key must fail decode")
+
+        // Selected без своего sealed-выбора непредставим.
+        let lostSelection = try mutated { $0.removeValue(forKey: "selection") }
+        assertDecodeFails(lostSelection, "lost selection on selected must fail decode")
+
+        // Первый бит матрицы рассогласовывает партицию с candidate-major LSB0.
+        let flippedMatrixBit = try mutatedFeasibility { feasibility in
+            var matrix = try XCTUnwrap(feasibility["failureMatrix"] as? [Int])
+            matrix[0] ^= 1
+            feasibility["failureMatrix"] = matrix
+        }
+        assertDecodeFails(flippedMatrixBit, "flipped matrix bit must fail decode")
+
+        // Финальная перепроверка обязана покрыть каждое applicable-ребро.
+        let partialVerification = try mutated { result in
+            var selection = try XCTUnwrap(result["selection"] as? [String: Any])
+            var verification = try XCTUnwrap(
+                selection["finalVerification"] as? [String: Any])
+            verification["verifiedApplicableEdges"] = "0"
+            selection["finalVerification"] = verification
+            result["selection"] = selection
+        }
+        assertDecodeFails(
+            partialVerification, "under-counted final verification must fail decode")
+
+        // Канонический byte-sorted порядок кандидатов Core-owned.
+        let transposedCandidates = try mutatedFeasibility { feasibility in
+            var candidates = try XCTUnwrap(feasibility["candidates"] as? [[String: Any]])
+            candidates.swapAt(0, 1)
+            feasibility["candidates"] = candidates
+        }
+        assertDecodeFails(transposedCandidates, "transposed candidates must fail decode")
+    }
+
+    /// Полная алгебра отказов атомарной операции обязана пережить
+    /// encode→decode без потери ветки или payload.
+    func testWcag22ExplicitSelectionFailureAlgebraRoundTripsExhaustively() throws {
+        let one = DecimalU64V1(1)
+        let two = DecimalU64V1(2)
+        let rgb = Srgb8BytesV1(red: 1, green: 2, blue: 3)
+        let transport: [Wcag22ExplicitSelectionTransportErrorV1] = [
+            .common(.envelopeTooLarge(requestedBytes: two, limitBytes: one)),
+            .common(.malformedEnvelope(.shape)),
+            .common(.unsupportedDomainId("future")),
+            .unsupportedPolicyKind("best-feasible-v1"),
+        ]
+        let feasibility: [Wcag22ExplicitSelectionFeasibilityErrorV1] = [
+            .emptyCandidateId,
+            .emptyCandidates,
+            .duplicateCandidateId(candidateId: "twin"),
+            .common(.invalidRequest(.emptyRelations)),
+            .common(.resourceLimitExceeded(
+                profileId: .compileV1,
+                dimension: .rawAdjacentEntries,
+                requested: two,
+                limit: one)),
+        ]
+        let invalid: [Wcag22ExplicitSelectionInvalidRequestV1] = [
+            .emptyPolicyId,
+            .emptyCandidateOrder,
+            .emptyCandidateId,
+            .arithmeticOverflow,
+            .policyCardinalityExceedsDomain(requested: two, domain: one),
+            .foreignCandidateId(candidateId: "foreign"),
+            .duplicateCandidateId(candidateId: "twin"),
+        ]
+        let integrity: [Wcag22ExplicitSelectionIntegrityViolationV1] = [
+            .evaluatorContract(
+                candidateId: "c", relationId: "r", adjacent: rgb, violation: .inputMismatch),
+            .sealedDecisionMismatch(
+                candidateId: "c", relationId: "r", adjacent: rgb,
+                sealed: .pass, rechecked: .fail),
+            .selectedRowNotPassing(candidateId: "c", relationId: "r", adjacent: rgb),
+            .applicableEdgeCountMismatch(expected: one, observed: two),
+            .sealedTraversalArithmeticOverflow,
+        ]
+        var selection: [Wcag22ExplicitSelectionErrorV1] = invalid.map { .invalidRequest($0) }
+        selection.append(.resourceLimitExceeded(
+            profileId: .compileV1,
+            dimension: .logicalAssessments,
+            requested: two,
+            limit: one))
+        selection += integrity.map { .integrityViolation($0) }
+
+        let errors: [Wcag22ExplicitSelectionOperationErrorV1] =
+            transport.map { .transport($0) }
+            + feasibility.map { .feasibility($0) }
+            + selection.map { .selection($0) }
+            + [.incompatibleCoreContract]
+        XCTAssertEqual(errors.count, 23, "new branch requires an explicit test fixture")
+        for error in errors {
+            let outcome = Wcag22ExplicitSelectionOutcomeV1.failure(error)
+            let encoded = try JSONEncoder().encode(outcome)
+            let decoded = try JSONDecoder().decode(
+                Wcag22ExplicitSelectionOutcomeV1.self, from: encoded)
+            XCTAssertEqual(decoded, outcome)
+        }
+    }
 }
 
 // MARK: - Codable-зеркала схемы векторов
@@ -1083,6 +1321,12 @@ struct Wcag22Vec: Codable {
 }
 
 struct Wcag22FeasibilityVector: Codable {
+    let caseId: String
+    let requestJson: String
+    let outcomeJson: String
+}
+
+struct Wcag22ExplicitSelectionVector: Codable {
     let caseId: String
     let requestJson: String
     let outcomeJson: String

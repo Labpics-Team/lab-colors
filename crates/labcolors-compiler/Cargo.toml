@@ -13,7 +13,9 @@ description = "Offline WASM compiler operations for @labpics/colors/compiler."
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-labcolors-protocol = { path = "../labcolors-protocol" }
+# #296-C3: compiler-роль публикует обе offline-операции — complete feasibility
+# и атомарную explicit-selection. Runtime-роль по-прежнему не резолвит protocol.
+labcolors-protocol = { path = "../labcolors-protocol", features = ["wcag22-explicit-selection"] }
 wasm-bindgen = { workspace = true }
 js-sys = "0.3"
 

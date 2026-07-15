@@ -124,7 +124,10 @@ test("every workspace package inherits the declared MSRV", () => {
 test("runtime and compiler resolve disjoint Core capability graphs", () => {
   const isolatedCoreEdge =
     /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false \}/u;
-  const protocolEdge = /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
+  // #296-C3: каждый protocol-потребитель публикует атомарную операцию через
+  // одну non-default фичу; голых protocol-рёбер в воркспейсе больше нет.
+  const protocolEdge =
+    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol", features = \["wcag22-explicit-selection"\] \}/u;
   const protocolManifest = read("crates", "labcolors-protocol", "Cargo.toml");
   const wasmManifest = read("crates", "labcolors-wasm", "Cargo.toml");
   const compilerManifest = read("crates", "labcolors-compiler", "Cargo.toml");
@@ -142,16 +145,11 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   assert.match(ffiManifest, isolatedCoreEdge);
   assert.match(ffiManifest, protocolEdge);
   assert.doesNotMatch(ffiManifest, /features = \["wcag22-feasibility"\]/u);
-  assert.doesNotMatch(ffiManifest, /wcag22-explicit-selection/u);
-  // #296-C2: только нативный conformance-генератор включает explicit-операцию
-  // protocol; прямое Core-ребро conformance остаётся без capability-фич, а
-  // публикуемые adapters (compiler, ffi) — feasibility-only до #296-C3.
   assert.match(conformanceManifest, isolatedCoreEdge);
-  assert.match(
-    conformanceManifest,
-    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol", features = \["wcag22-explicit-selection"\] \}/u,
-  );
+  assert.match(conformanceManifest, protocolEdge);
   assert.doesNotMatch(conformanceManifest, /features = \["wcag22-feasibility"\]/u);
+  // Прямые Core-рёбра потребителей не несут capability-фич: explicit-домен
+  // приходит только через protocol-фичу.
   assert.doesNotMatch(
     conformanceManifest,
     /labcolors-core\/wcag22-explicit-feasibility/u,
@@ -203,7 +201,11 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   );
   assert.match(
     projection,
-    /'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree/u,
+    /'labcolors-core feature "wcag22-explicit-feasibility"' not in feature_tree/u,
+  );
+  assert.match(
+    projection,
+    /'labcolors-protocol feature "wcag22-explicit-selection"'\n\s+not in feature_tree/u,
   );
   assert.doesNotMatch(projection, /for consumer in labcolors-/u);
 });
@@ -1100,9 +1102,17 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
     /JSON\.stringify\(evaluateWcag22Feasibility\(feasibilityRequest\)\)[\s\S]*?feasibilityFixture\.outcomeJson/u,
   );
   assert.equal(
-    verifier.match(/compilerSmokeSource\(feasibilityFixture\)/gu)?.length,
+    verifier.match(
+      /compilerSmokeSource\(feasibilityFixture, explicitSelectionFixture\)/gu,
+    )?.length,
     4,
-    "clean-install, role-isolation and Node-floor smokes must execute the same canonical fixture",
+    "clean-install, role-isolation and Node-floor smokes must execute the same canonical fixtures",
+  );
+  assert.match(verifier, /evaluateWcag22ExplicitSelection/u);
+  assert.match(verifier, /wcag22ExplicitSelectionMaxBytes/u);
+  assert.match(
+    verifier,
+    /JSON\.stringify\(evaluateWcag22ExplicitSelection\(explicitSelectionRequest\)\)[\s\S]*?explicitSelectionFixture\.outcomeJson/u,
   );
   const compilerSmoke = verifier.slice(
     verifier.indexOf("function compilerSmokeSource"),

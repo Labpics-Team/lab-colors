@@ -1256,6 +1256,22 @@ async function wcag22FeasibilitySmokeFixture() {
   };
 }
 
+async function wcag22ExplicitSelectionSmokeFixture() {
+  const family = await readJson(
+    resolve(CONFORMANCE_DIR, "wcag22-explicit-selection.json"),
+  );
+  const canonical = family.find(
+    (vector) => vector.caseId === "selected-declared-order-overrides-canonical",
+  );
+  if (!canonical) {
+    fail("wcag22-explicit-selection smoke fixture is missing its canonical case");
+  }
+  return {
+    requestJson: canonical.requestJson,
+    outcomeJson: canonical.outcomeJson,
+  };
+}
+
 function runtimeSmokeSource() {
   return String.raw`
 import assert from "node:assert/strict";
@@ -1467,14 +1483,16 @@ for (const key of [
 `;
 }
 
-function compilerSmokeSource(feasibilityFixture) {
+function compilerSmokeSource(feasibilityFixture, explicitSelectionFixture) {
   return String.raw`
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
 import init, {
+  evaluateWcag22ExplicitSelection,
   evaluateWcag22Feasibility,
+  wcag22ExplicitSelectionMaxBytes,
   wcag22FeasibilityMaxBytes,
 } from "@labpics/colors/compiler";
 
@@ -1493,6 +1511,18 @@ assert.ok(feasibilityRequest.byteLength <= wcag22FeasibilityMaxBytes());
 assert.equal(
   JSON.stringify(evaluateWcag22Feasibility(feasibilityRequest)),
   feasibilityFixture.outcomeJson,
+);
+
+const explicitSelectionFixture = ${JSON.stringify(explicitSelectionFixture)};
+const explicitSelectionRequest = new TextEncoder().encode(
+  explicitSelectionFixture.requestJson,
+);
+assert.ok(
+  explicitSelectionRequest.byteLength <= wcag22ExplicitSelectionMaxBytes(),
+);
+assert.equal(
+  JSON.stringify(evaluateWcag22ExplicitSelection(explicitSelectionRequest)),
+  explicitSelectionFixture.outcomeJson,
 );
 `;
 }
@@ -1920,11 +1950,15 @@ async function verifyCleanConsumer(
     }
 
     const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
+    const explicitSelectionFixture = await wcag22ExplicitSelectionSmokeFixture();
     const runtimePath = resolve(consumer, "runtime-smoke.mjs");
     const compilerPath = resolve(consumer, "compiler-smoke.mjs");
     const typesPath = resolve(consumer, "smoke.ts");
     await writeFile(runtimePath, runtimeSmokeSource());
-    await writeFile(compilerPath, compilerSmokeSource(feasibilityFixture));
+    await writeFile(
+      compilerPath,
+      compilerSmokeSource(feasibilityFixture, explicitSelectionFixture),
+    );
     await writeFile(typesPath, typeSmokeSource());
 
     command(process.execPath, [runtimePath], consumer);
@@ -1968,7 +2002,7 @@ async function verifyCleanConsumer(
       tarballPath,
       packageJson,
       "compiler",
-      compilerSmokeSource(feasibilityFixture),
+      compilerSmokeSource(feasibilityFixture, explicitSelectionFixture),
     );
   } finally {
     await rm(consumer, { recursive: true, force: true });
@@ -2045,8 +2079,12 @@ export async function smokePackedPackage(tarballPath) {
     const runtimePath = resolve(consumer, "smoke.mjs");
     const compilerPath = resolve(consumer, "compiler-smoke.mjs");
     const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
+    const explicitSelectionFixture = await wcag22ExplicitSelectionSmokeFixture();
     await writeFile(runtimePath, runtimeSmokeSource());
-    await writeFile(compilerPath, compilerSmokeSource(feasibilityFixture));
+    await writeFile(
+      compilerPath,
+      compilerSmokeSource(feasibilityFixture, explicitSelectionFixture),
+    );
     command(process.execPath, [runtimePath], consumer);
     command(process.execPath, [compilerPath], consumer);
   } finally {

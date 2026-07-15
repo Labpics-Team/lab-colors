@@ -15,6 +15,13 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 
 ### Added
 
+- #296-C3 публикует атомарную операцию в обоих адаптерах: compiler-WASM/npm
+  (`evaluateWcag22ExplicitSelection`, `wcag22ExplicitSelectionMaxBytes` в
+  `@labpics/colors/compiler` с тем же hostile-preflight, что у feasibility) и
+  UniFFI/Swift (`evaluate_wcag22_explicit_selection_raw_v1` + типизированная
+  Codable-проекция исхода). Оба адаптера повекторно реплеят conformance-family;
+  clean-consumer smoke упакованного пакета прогоняет обе операции. Runtime-роль
+  по-прежнему не резолвит protocol; топология фич проверяется CI-гейтом.
 - Атомарная операция `wcag22-explicit-selection-v1` (#296-C2): Core-функция
   `evaluate_and_select` исполняет `feasibility → полная валидация политики →
   selection → финальная перепроверка` за один вызов. Ошибка A-фазы приоритетна;
@@ -33,17 +40,14 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   кодирует реальный запрос ровно в это число байтов,
   строгий декодер с typed-ошибками для неизвестных schema/domain/profile/policy
   kind, фазовая атрибуция дефектов конструирования и исходы без `Deserialize`.
-  Ни один публикуемый adapter (compiler WASM, UniFFI/Swift, npm) не рекламирует
-  capability до #296-C3.
+  До #296-C3 capability не рекламировалась; C3 публикует её в обеих ролях.
 - Conformance pack 6.0.0 добавляет ровно одно семейство
   `wcag22-explicit-selection.json` (15 векторов: четыре законных терминала,
   opposite-order пара с байт-идентичным feasibility-поддеревом, policy-ошибки
   после каждого успешного A-терминала, приоритет A-ошибки, unsupported policy
-  kind, unicode-идентичности). Повекторный replay семейства владеет нативный
-  reference runner conformance-крейта; wasm32-паритет сверяет только счётчики
-  манифеста, а ни один публикуемый adapter семейство не читает и не
-  рекламирует. Прежние семь семейств byte-identical, npm/Swift реплеят
-  прежние семь.
+  kind, unicode-идентичности). Прежние семь семейств byte-identical. После
+  #296-C3 семейство воспроизводят нативный reference runner и оба публикуемых
+  адаптера (compiler WASM/npm и UniFFI/Swift) — побайтно.
 - Versioned `evaluate_wcag22_srgb8` / `evaluate_wcag22_hex` и эквивалентные
   WASM/TypeScript/UniFFI границы. Criterion всегда объявляет клиент; verdict
   возвращает точное terminal evidence без epsilon или округлённого ratio.

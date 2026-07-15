@@ -52,7 +52,7 @@
 | `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `wcag22-feasibility.json` | bounded request и полный compiler outcome | `{caseId, requestJson, outcomeJson}` |
-| `wcag22-explicit-selection.json` | атомарная операция `feasibility → policy → selection → recheck`; replay владеет conformance-крейт | `{caseId, requestJson, outcomeJson}` |
+| `wcag22-explicit-selection.json` | атомарная операция `feasibility → policy → selection → recheck`; воспроизводится нативно и обоими адаптерами | `{caseId, requestJson, outcomeJson}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
 `wcag22-feasibility.json` не определяет собственную transport-схему. Поля

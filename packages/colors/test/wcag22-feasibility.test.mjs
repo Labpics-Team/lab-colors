@@ -23,6 +23,7 @@ async function importCompilerWithInstrumentedWasm(t) {
     join(fixture, "compiler/labcolors_compiler.js"),
     `
 globalThis.__labcolorsFeasibilityCalls = { evaluate: [], max: [], oversize: [] };
+globalThis.__labcolorsExplicitCalls = { evaluate: [], max: [], oversize: [] };
 let initialized = false;
 export default async function init() { initialized = true; }
 export function initSync() { initialized = true; }
@@ -49,6 +50,33 @@ export function wcag22FeasibilityEnvelopeTooLargeV1(requestedBytes) {
         code: "envelopeTooLarge",
         requestedBytes: requestedBytes.toString(),
         limitBytes: "657380",
+      },
+    },
+  };
+}
+
+export function wcag22ExplicitSelectionMaxRequestBytesV1() {
+  if (!initialized) throw new Error("WASM not initialized");
+  globalThis.__labcolorsExplicitCalls.max.push(true);
+  return 3889322;
+}
+export function evaluateWcag22ExplicitSelectionV1(request) {
+  if (!initialized) throw new Error("WASM not initialized");
+  globalThis.__labcolorsExplicitCalls.evaluate.push(request);
+  return { schemaVersion: 1, outcome: "failure", error: { source: "incompatibleCoreContract" } };
+}
+export function wcag22ExplicitSelectionEnvelopeTooLargeV1(requestedBytes) {
+  if (!initialized) throw new Error("WASM not initialized");
+  globalThis.__labcolorsExplicitCalls.oversize.push(requestedBytes);
+  return {
+    schemaVersion: 1,
+    outcome: "failure",
+    error: {
+      source: "transport",
+      error: {
+        code: "envelopeTooLarge",
+        requestedBytes: requestedBytes.toString(),
+        limitBytes: "3889322",
       },
     },
   };
