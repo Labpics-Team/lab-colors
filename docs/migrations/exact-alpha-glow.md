@@ -405,7 +405,7 @@ Rollback выполняется парой runtime + config:
 ## Историческая migration-note: атомарный `NumericalDecisionV1` и pack 3.0.0 (#292)
 
 > Этот подраздел фиксирует переход #292 до добавления WCAG-семейства. Для
-> текущего unreleased-контракта используйте pack 5.0.0 и дополнения ниже.
+> текущего unreleased-контракта используйте pack 6.0.0 и дополнения ниже.
 
 Последующий rework численной границы (см. дополнение ADR-0004 от 2026-07-12)
 намеренно НЕ меняет wire: прежние ключи сохранены byte-for-byte как
@@ -454,12 +454,17 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   code-body lengths, а добавление несвязанного API больше не выглядит сменой
   математики.
 
-## Текущий transport-контракт: complete feasibility и pack 5.0.0 (#295)
+## Текущий transport-контракт: complete feasibility и pack 6.0.0 (#295)
 
 - Pack 5.0.0 добавляет ровно `wcag22-feasibility.json`; байты шести family из
   pack 4 сохранены. Новый corpus фиксирует versioned request/outcome bytes,
   packed LSB0 evidence, все три feasibility-терминала и типизированные
   conflict/resource error paths.
+- Pack 6.0.0 добавляет ровно `wcag22-explicit-selection.json` — корпус
+  атомарной операции `wcag22-explicit-selection-v1`. Публичный JS/TS/Swift
+  transport при этом НЕ расширяется: операция не опубликована ни в одном
+  адаптере, нового transport-endpoint у потребителей нет, а воспроизведением
+  корпуса владеет нативный эталонный раннер conformance-крейта.
 - `evaluateWcag22Feasibility(Uint8Array)`, `wcag22FeasibilityMaxBytes()` и
   request/outcome types перенесены из package root в
   `@labpics/colors/compiler`. Compiler загружает собственный WASM через

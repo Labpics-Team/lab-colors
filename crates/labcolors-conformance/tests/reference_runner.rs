@@ -29,9 +29,10 @@ use std::path::PathBuf;
 
 use labcolors_conformance::{
     AlphaVector, ContrastVector, DRIFT_TOL, FAMILY_FILES, LadderVector, MANIFEST_FILE, Manifest,
-    MuddinessVector, Pack, SolveOutcome, SolveVector, Wcag22FeasibilityVector, Wcag22Vector,
-    generate_alpha, generate_contrasts, generate_ladders, generate_muddiness, generate_solve,
-    generate_wcag22, generate_wcag22_feasibility,
+    MuddinessVector, Pack, SolveOutcome, SolveVector, Wcag22ExplicitSelectionVector,
+    Wcag22FeasibilityVector, Wcag22Vector, generate_alpha, generate_contrasts, generate_ladders,
+    generate_muddiness, generate_solve, generate_wcag22, generate_wcag22_explicit_selection,
+    generate_wcag22_feasibility,
 };
 use labcolors_core::fnv1a_32;
 
@@ -219,6 +220,30 @@ fn protocol_reproduces_committed_wcag22_feasibility_exactly() {
         let encoded = labcolors_protocol::encode_outcome_v1(&outcome).unwrap_or_else(|error| {
             panic!("{} outcome encoding failed: {error:?}", vector.case_id)
         });
+        assert_eq!(
+            encoded,
+            vector.outcome_json.as_bytes(),
+            "{} canonical outcome bytes drifted",
+            vector.case_id
+        );
+    }
+}
+
+#[test]
+fn protocol_reproduces_committed_wcag22_explicit_selection_exactly() {
+    let committed: Vec<Wcag22ExplicitSelectionVector> = parse("wcag22-explicit-selection.json");
+    let fresh = generate_wcag22_explicit_selection().expect("canonical explicit-selection vectors");
+    assert_eq!(committed, fresh, "wcag22-explicit-selection.json drifted");
+
+    for vector in committed {
+        let outcome = labcolors_protocol::explicit_selection::evaluate_wcag22_explicit_selection_v1(
+            vector.request_json.as_bytes(),
+        );
+        let encoded =
+            labcolors_protocol::explicit_selection::encode_explicit_selection_outcome_v1(&outcome)
+                .unwrap_or_else(|error| {
+                    panic!("{} outcome encoding failed: {error:?}", vector.case_id)
+                });
         assert_eq!(
             encoded,
             vector.outcome_json.as_bytes(),

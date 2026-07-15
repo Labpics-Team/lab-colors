@@ -33,18 +33,18 @@ const compilerSourceIds = [
 ];
 const coreAdmissionPath = resolve(
   repoRoot,
-  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json",
+  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json",
 );
 const packOraclePath = resolve(repoRoot, "conformance/vectors/wcag22-feasibility.json");
 const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.json");
 const wasmBudgetPath = resolve(here, "wasm-size-budget-v5.json");
 const wasmToolchainSourcePath = resolve(here, "wasm-size-budget-v1.json");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
-const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v3.json");
+const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v4.json");
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v3";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v4";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
@@ -157,7 +157,7 @@ function sourceContracts() {
   );
   if (
     core.value?.schemaVersion !== 1 ||
-    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v4" ||
+    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v5" ||
     core.value?.profileLimits?.profileId !== "compile-v1"
   ) {
     fail("unsupported Core admission artifact identity");
@@ -253,19 +253,19 @@ function compilerSourceBindings() {
 }
 
 function packOracle() {
-  const pack = readJsonWithBytes(packOraclePath, "pack-5 WCAG22 feasibility oracle");
-  const manifest = readJsonWithBytes(conformanceManifestPath, "pack-5 manifest");
-  if (!Array.isArray(pack.value)) fail("pack-5 WCAG22 feasibility oracle must be an array");
+  const pack = readJsonWithBytes(packOraclePath, "pack-6 WCAG22 feasibility oracle");
+  const manifest = readJsonWithBytes(conformanceManifestPath, "pack-6 manifest");
+  if (!Array.isArray(pack.value)) fail("pack-6 WCAG22 feasibility oracle must be an array");
   if (
-    manifest.value?.packVersion !== "5.0.0" ||
+    manifest.value?.packVersion !== "6.0.0" ||
     typeof manifest.value?.packDigest !== "string" ||
     manifest.value?.counts?.wcag22Feasibility !== pack.value.length
   ) {
-    fail("pack-5 manifest does not bind the WCAG22 feasibility family");
+    fail("pack-6 manifest does not bind the WCAG22 feasibility family");
   }
   const vector = pack.value.find((entry) => entry.caseId === "text-default-seven");
   if (!vector || typeof vector.requestJson !== "string" || typeof vector.outcomeJson !== "string") {
-    fail("pack-5 WCAG22 feasibility oracle lacks text-default-seven");
+    fail("pack-6 WCAG22 feasibility oracle lacks text-default-seven");
   }
   let requestValue;
   let outcomeValue;
@@ -273,7 +273,7 @@ function packOracle() {
     requestValue = JSON.parse(vector.requestJson);
     outcomeValue = JSON.parse(vector.outcomeJson);
   } catch (error) {
-    fail(`pack-5 text-default-seven is not nested JSON: ${error.message}`);
+    fail(`pack-6 text-default-seven is not nested JSON: ${error.message}`);
   }
   const relation = requestValue?.relations?.[0];
   const result = outcomeValue?.feasibility?.result;
@@ -291,7 +291,7 @@ function packOracle() {
     !Array.isArray(partition) ||
     partition.length !== 32
   ) {
-    fail("pack-5 text-default-seven no longer defines the exact minimum LSB0 oracle");
+    fail("pack-6 text-default-seven no longer defines the exact minimum LSB0 oracle");
   }
   return {
     path: "conformance/vectors/wcag22-feasibility.json",
@@ -617,7 +617,7 @@ export function validateMeasurementArtifact(
   );
   if (
     artifact.bindings.coreAdmission.path !==
-      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json" ||
+      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json" ||
     artifact.bindings.coreAdmission.schemaVersion !== core.value.schemaVersion ||
     artifact.bindings.coreAdmission.artifactId !== core.value.artifactId ||
     artifact.bindings.coreAdmission.profileId !== core.value.profileLimits.profileId ||
@@ -652,7 +652,7 @@ export function validateMeasurementArtifact(
     artifact.bindings.packOracle.packVersion !== oracle.packVersion ||
     artifact.bindings.packOracle.packDigest !== oracle.packDigest
   ) {
-    fail("pack-5 LSB0 oracle binding drifted");
+    fail("pack-6 LSB0 oracle binding drifted");
   }
   const sources = compilerSourceBindings();
   exactKeys(
@@ -1211,7 +1211,7 @@ function measurementArtifact() {
     },
     bindings: {
       coreAdmission: {
-        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json",
+        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json",
         schemaVersion: core.value.schemaVersion,
         artifactId: core.value.artifactId,
         profileId: core.value.profileLimits.profileId,

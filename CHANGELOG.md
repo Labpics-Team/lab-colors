@@ -15,6 +15,35 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 
 ### Added
 
+- Атомарная операция `wcag22-explicit-selection-v1` (#296-C2): Core-функция
+  `evaluate_and_select` исполняет `feasibility → полная валидация политики →
+  selection → финальная перепроверка` за один вызов. Ошибка A-фазы приоритетна;
+  некорректная политика классифицируется единственным SSOT-валидатором
+  одинаково после каждого успешного A-терминала; `Infeasible`/`NotEvaluated`
+  связывают точную политику без selection-receipt; терминал A перемещается в
+  исход без копирования и без дополнительных аллокаций. Все четыре терминала
+  запечатаны: снаружи Core их нельзя ни собрать, ни перепарить.
+- Строгий транспорт атомарной операции в `labcolors-protocol` за non-default
+  фичей `wcag22-explicit-selection`: выведенный точный envelope
+  `MAX_EXPLICIT_SELECTION_ENVELOPE_BYTES_V1 = 3 889 322` байта — производная
+  константа от литеральной JSON-грамматики и RAW-пределов профиля `compile-v1`
+  (не ручка: диапазона и sensitivity нет, при изменении схемы/пределов
+  пересчитывается компилятором); корнер-анализ закреплён const-assert'ами, а
+  тест `derived_envelope_is_achievable_by_a_raw_admissible_compact_request`
+  кодирует реальный запрос ровно в это число байтов,
+  строгий декодер с typed-ошибками для неизвестных schema/domain/profile/policy
+  kind, фазовая атрибуция дефектов конструирования и исходы без `Deserialize`.
+  Ни один публикуемый adapter (compiler WASM, UniFFI/Swift, npm) не рекламирует
+  capability до #296-C3.
+- Conformance pack 6.0.0 добавляет ровно одно семейство
+  `wcag22-explicit-selection.json` (15 векторов: четыре законных терминала,
+  opposite-order пара с байт-идентичным feasibility-поддеревом, policy-ошибки
+  после каждого успешного A-терминала, приоритет A-ошибки, unsupported policy
+  kind, unicode-идентичности). Повекторный replay семейства владеет нативный
+  reference runner conformance-крейта; wasm32-паритет сверяет только счётчики
+  манифеста, а ни один публикуемый adapter семейство не читает и не
+  рекламирует. Прежние семь семейств byte-identical, npm/Swift реплеят
+  прежние семь.
 - Versioned `evaluate_wcag22_srgb8` / `evaluate_wcag22_hex` и эквивалентные
   WASM/TypeScript/UniFFI границы. Criterion всегда объявляет клиент; verdict
   возвращает точное terminal evidence без epsilon или округлённого ratio.
@@ -30,8 +59,9 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   либо typed `Failure` и не воспроизводят математику Core.
 - Rust Core принимает также непустой явный конечный набор пар «opaque ID +
   финальный sRGB8», канонизирует точные UTF-8-байты ID и использует тот же
-  exhaustive kernel. Возможность включена в default Core, но не проецируется в
-  Protocol/WASM/FFI/npm/Swift.
+  exhaustive kernel. Возможность включена в default Core; её единственная
+  транспортная проекция — атомарная операция #296-C2 за non-default фичей
+  protocol (см. ниже), WASM/FFI/npm/Swift-проекций нет до #296-C3.
 - Только полный `Feasible`-терминал минтит sealed capability выбора. Клиент
   передаёт непрозрачный ID политики и порядок кандидатов; Core полностью
   проверяет декларацию, выбирает первый feasible ID и повторно проверяет его

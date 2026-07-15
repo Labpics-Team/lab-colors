@@ -17,7 +17,10 @@ labcolors-core = { path = "../labcolors-core", default-features = false }
 # Request construction, byte preflight and wire algebra stay in one protocol
 # authority shared with both adapters. This crate only records its canonical
 # request/outcome bytes; it does not mirror transport DTOs.
-labcolors-protocol = { path = "../labcolors-protocol" }
+# `wcag22-explicit-selection` — НАТИВНОЕ включение атомарной операции #296-C2
+# ради генерации/replay её conformance-family. Публикуемые adapters (compiler
+# WASM, UniFFI/Swift) фичу не включают до #296-C3.
+labcolors-protocol = { path = "../labcolors-protocol", features = ["wcag22-explicit-selection"] }
 # serde/serde_json УЖЕ в дереве воркспейса (граница конфига WASM). Переиспользуем
 # тот же пин — ноль новой supply-chain-поверхности для `cargo audit`.
 serde = { version = "1", features = ["derive"] }

@@ -306,9 +306,30 @@ jobs:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
                   )
-              if 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
+              # #296-C2: атомарная explicit-операция protocol существует за
+              # non-default фичей. До #296-C3 её резолвит ТОЛЬКО нативный
+              # conformance-генератор; публикуемые adapters (compiler, ffi)
+              # обязаны оставаться feasibility-only.
+              if consumer == "labcolors-conformance":
+                  if (
+                      'labcolors-protocol feature "wcag22-explicit-selection"'
+                      not in feature_tree
+                  ):
+                      raise SystemExit(
+                          "labcolors-conformance must resolve the native-only "
+                          "explicit-selection protocol feature"
+                      )
+                  if (
+                      'labcolors-core feature "wcag22-explicit-feasibility"'
+                      not in feature_tree
+                  ):
+                      raise SystemExit(
+                          "labcolors-conformance must resolve the explicit-domain "
+                          "capability for pack generation"
+                      )
+              elif 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
                   raise SystemExit(
-                      f"{consumer} resolved the Core-only explicit-domain capability"
+                      f"{consumer} resolved the pre-C3 native-only explicit capability"
                   )
 
           runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
@@ -373,6 +394,7 @@ jobs:
           d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json
           46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json
           3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json
+          6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json
           SHA256
 
           historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
@@ -466,8 +488,9 @@ jobs:
           cleanup_history
           trap - EXIT
 
-          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json"
-          current_protocol=(
+          v4_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json"
+          v4_snapshot=397e5a1fdfe401dbabaf241f280a3c498aa1ab43
+          v4_protocol=(
             --admit-rustc-release 1.96.0
             --admit-cargo-release 1.96.0
             --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
@@ -480,9 +503,35 @@ jobs:
             --admit-package-version 0.2.0
             --admit-sample-count 5
           )
+          trap cleanup_history EXIT
+          git worktree add --detach "$historical_root" "$v4_snapshot"
+          (
+            cd "$historical_root"
+            python3 scripts/check_wcag22_feasibility_benchmark.py \
+              "$v4_artifact" "${v4_protocol[@]}" \
+              --artifact-sha256 3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275 \
+              --self-test
+          )
+          cleanup_history
+          trap - EXIT
+
+          current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v5.json"
+          current_protocol=(
+            --admit-rustc-release 1.96.0
+            --admit-cargo-release 1.96.0
+            --admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe
+            --admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841
+            --admit-benchmark-binary-sha256 bd8a6289cfc4605ffcba00b38c4e7309a6ee2989cbab8e76f03ed478e4fcff0a
+            --admit-target-triple aarch64-apple-darwin
+            --admit-target-arch aarch64
+            --admit-target-os macos
+            --admit-pointer-width-bits 64
+            --admit-package-version 0.2.0
+            --admit-sample-count 5
+          )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --artifact-sha256 3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275 \
+            --artifact-sha256 6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5 \
             --self-test
 
   audit:
@@ -590,11 +639,11 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: verify committed #296-C1 canonical whole-call compiler evidence
+      - name: verify committed #296-C2 canonical whole-call compiler evidence
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify bench/wcag22-feasibility-wasm-boundary-v3.json
+          --verify bench/wcag22-feasibility-wasm-boundary-v4.json
       - name: independently fingerprint both execution-role WASM artifacts
         run: |
           for artifact in \
@@ -605,13 +654,13 @@ jobs:
             sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
             echo "canonical candidate artifact=${artifact} raw=${bytes}B sha256=${sha256}"
           done
-          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v3.json
-      - name: upload exact #296-C1 whole-call evidence
+          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json
+      - name: upload exact #296-C2 whole-call evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v3.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json
             packages/colors/pkg/labcolors_bg.wasm
             packages/colors/compiler/labcolors_compiler_bg.wasm
           if-no-files-found: error

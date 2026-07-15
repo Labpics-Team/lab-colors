@@ -47,7 +47,7 @@ docker run --rm -v "$PWD":/src:ro \
 
 Историческая аттестация pack `1.0.0` (числа, версии, платформа):
 `docs/conformance/local-swift-attestation.md`; она явно superseded для текущего
-pack `5.0.0` и не подменяет новый CI-прогон. Нативный macOS/arm64 path сейчас
+pack `6.0.0` и не подменяет новый CI-прогон. Нативный macOS/arm64 path сейчас
 представлен только ручной reference-джобой
 `swift-conformance-macos-reference` (`workflow_dispatch`): это **не gate** PR,
 `main` или release. Полная platform/runtime-матрица остаётся отдельной работой
