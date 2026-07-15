@@ -348,12 +348,22 @@ fn fixture_replays_bit_for_bit() {
     let rendered = render(&observed);
     let fixture = fixture_path();
     if std::env::var_os("LABCOLORS_RECORD_SOLVE_CHARACTERIZATION").is_some() {
+        // Дисциплина append-only рекордера (как у admission/whole-call):
+        // перезапись закоммиченного эталона — только осознанным `rm` заранее,
+        // и recorder-ран НИКОГДА не зелёный, чтобы случайный запуск с env-var
+        // не мог превратить численный регресс в прошедший тест.
+        assert!(
+            !std::path::Path::new(fixture).exists(),
+            "refusing to overwrite the committed fixture {fixture}; \
+             rebaseline must be a deliberate act — delete the file first"
+        );
         std::fs::write(fixture, &rendered).expect("fixture written");
-        eprintln!(
-            "solve characterization recorded: {} cases -> {fixture}",
+        panic!(
+            "solve characterization recorded: {} cases -> {fixture}; \
+             recording runs never pass — rerun without \
+             LABCOLORS_RECORD_SOLVE_CHARACTERIZATION to verify the replay",
             observed.len()
         );
-        return;
     }
     let committed =
         std::fs::read_to_string(fixture).expect("committed solve characterization fixture exists");
