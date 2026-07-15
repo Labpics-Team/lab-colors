@@ -235,9 +235,12 @@ fn committed_conformance_pack_replays_in_wasm32() {
         assert_eq!(actual, committed, "feasibility protocol fixture drift");
     }
 
-    // Native-only family #296-C2: runtime-роль не владеет её capability, но
+    // Семейство #296-C2: runtime-роль не владеет его capability, и wasm32 его
+    // повекторно НЕ реплеит — replay владеет нативный reference_runner
+    // conformance-крейта. Здесь семейство участвует только арифметикой:
     // анти-вакуумный итог манифеста обязан покрывать каждый закоммиченный
-    // вектор. Сверка committed == fresh идёт тем же нативным путём.
+    // вектор, поэтому длина закоммиченного файла входит в replayed_total, а
+    // равенство счётчиков committed == fresh гарантирует сверка counts ниже.
     let wcag22_explicit_selection: Vec<Wcag22ExplicitSelectionVector> = serde_json::from_str(
         include_str!("../../../conformance/vectors/wcag22-explicit-selection.json"),
     )
@@ -246,12 +249,6 @@ fn committed_conformance_pack_replays_in_wasm32() {
         wcag22_explicit_selection.len(),
         fresh.wcag22_explicit_selection.len()
     );
-    for (committed, actual) in wcag22_explicit_selection
-        .iter()
-        .zip(&fresh.wcag22_explicit_selection)
-    {
-        assert_eq!(actual, committed, "explicit-selection fixture drift");
-    }
 
     let committed_manifest: Manifest =
         serde_json::from_str(include_str!("../../../conformance/vectors/manifest.json")).unwrap();

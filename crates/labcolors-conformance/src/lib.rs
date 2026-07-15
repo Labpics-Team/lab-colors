@@ -699,7 +699,7 @@ fn feasibility_vector(
     })
 }
 
-/// Generate the complete pack-5 feasibility corpus exclusively through the
+/// Generate the complete feasibility corpus (pack 5+) exclusively through the
 /// public protocol construction and canonical encoding boundary.
 pub fn generate_wcag22_feasibility() -> Result<Vec<Wcag22FeasibilityVector>, PackGenerationError> {
     use labcolors_protocol::Wcag22CriterionV1 as Criterion;
@@ -957,7 +957,7 @@ pub fn generate_wcag22_explicit_selection()
 -> Result<Vec<Wcag22ExplicitSelectionVector>, PackGenerationError> {
     use labcolors_protocol::Wcag22CriterionV1 as Criterion;
 
-    let mut vectors = Vec::with_capacity(12);
+    let mut vectors = Vec::with_capacity(15);
 
     // Объявленный порядок начинается с infeasible члена и выбирает первый
     // feasible; канонический (байтовый) порядок кандидатов другой.
@@ -1084,6 +1084,59 @@ pub fn generate_wcag22_explicit_selection()
             explicit_policy(case_id, policy_id, &order)?,
         )?);
     }
+
+    // Malformed политика классифицируется идентично после КАЖДОГО успешного
+    // A-терминала: те же foreign-хвосты над Infeasible и NotEvaluated.
+    let case_id = "error-foreign-tail-after-infeasible";
+    vectors.push(explicit_selection_vector(
+        case_id,
+        vec![
+            explicit_candidate(case_id, "near-black", [0; 3])?,
+            explicit_candidate(case_id, "dim", [1, 1, 1])?,
+        ],
+        vec![applicable_relation(
+            case_id,
+            "body-text",
+            "paragraph",
+            Criterion::Sc143TextDefault,
+            vec![[0; 3]],
+        )?],
+        explicit_policy(case_id, "hidden-tail", &["near-black", "foreign"])?,
+    )?);
+
+    let case_id = "error-foreign-tail-after-not-evaluated";
+    vectors.push(explicit_selection_vector(
+        case_id,
+        vec![
+            explicit_candidate(case_id, "alpha", [255; 3])?,
+            explicit_candidate(case_id, "beta", [0; 3])?,
+        ],
+        vec![not_applicable_relation(
+            case_id,
+            "declaration-only",
+            "opaque-occurrence",
+            "client-declared-out-of-scope",
+        )?],
+        explicit_policy(case_id, "hidden-tail", &["alpha", "foreign"])?,
+    )?);
+
+    // Ошибка A-фазы приоритетна: дубликат домена гасит и невалидную политику.
+    let case_id = "error-feasibility-priority-over-policy";
+    vectors.push(explicit_selection_vector(
+        case_id,
+        vec![
+            explicit_candidate(case_id, "twin", [255; 3])?,
+            explicit_candidate(case_id, "twin", [0; 3])?,
+        ],
+        vec![applicable_relation(
+            case_id,
+            "body-text",
+            "paragraph",
+            Criterion::Sc143TextDefault,
+            vec![[0; 3]],
+        )?],
+        explicit_policy(case_id, "foreign-only", &["foreign"])?,
+    )?);
 
     // Feasible-префикс не прячет foreign-хвост: ноль финальных вызовов.
     let case_id = "error-foreign-tail-after-feasible-prefix";
@@ -1604,12 +1657,12 @@ mod tests {
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
         assert_eq!(
-            manifest.counts.total, 113,
+            manifest.counts.total, 116,
             "состав векторных семейств изменился"
         );
         assert_eq!(manifest.counts.wcag22, 6);
         assert_eq!(manifest.counts.wcag22_feasibility, 13);
-        assert_eq!(manifest.counts.wcag22_explicit_selection, 12);
+        assert_eq!(manifest.counts.wcag22_explicit_selection, 15);
 
         let half_tie = pack
             .alpha

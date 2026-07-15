@@ -16,10 +16,11 @@
 - **Версия пака** (`manifest.packVersion`, сейчас `6.0.0`) — семантическая
   версия СХЕМЫ и состава векторов. Bump 5.0.0 → 6.0.0 добавил ровно одно
   семейство `wcag22-explicit-selection`: канонические request/outcome JSON
-  атомарной операции `wcag22-explicit-selection-v1` (#296-C2). Байты семи
-  прежних семейств сохранены; семейство реплеится ТОЛЬКО нативно — ни один
-  публикуемый adapter (compiler WASM, UniFFI/Swift) не рекламирует capability
-  до #296-C3. Предыдущий bump 4.0.0 → 5.0.0 добавил ровно одно
+  атомарной операции `wcag22-explicit-selection-v1`. Байты семи прежних
+  семейств сохранены; семейство воспроизводится только внутри
+  conformance-крейта — ни один публикуемый adapter (compiler WASM,
+  UniFFI/Swift) его не читает, их поверхность остаётся feasibility-only.
+  Предыдущий bump 4.0.0 → 5.0.0 добавил ровно одно
   семейство `wcag22-feasibility`: канонические versioned request/outcome JSON
   для полного перечисления neutral-axis с packed evidence. Байты шести прежних
   семейств сохранены. Предыдущий bump 3.0.0 → 4.0.0 перевёл
@@ -51,7 +52,7 @@
 | `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `wcag22-feasibility.json` | bounded request и полный compiler outcome | `{caseId, requestJson, outcomeJson}` |
-| `wcag22-explicit-selection.json` | атомарная операция `feasibility → policy → selection → recheck` (native-only replay) | `{caseId, requestJson, outcomeJson}` |
+| `wcag22-explicit-selection.json` | атомарная операция `feasibility → policy → selection → recheck`; replay владеет conformance-крейт | `{caseId, requestJson, outcomeJson}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
 `wcag22-feasibility.json` не определяет собственную transport-схему. Поля

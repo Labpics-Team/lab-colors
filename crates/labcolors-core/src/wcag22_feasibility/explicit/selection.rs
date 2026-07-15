@@ -835,6 +835,14 @@ pub(super) fn select_from_feasible_record_with<E: PairEvaluator>(
     policy: FirstFeasibleInDeclaredOrderV1,
     evaluator: &mut E,
 ) -> Result<(EvaluatedV1, SelectionOutcomeV1), SelectionErrorV1> {
+    // Инвариант вызывающего: запись обязана происходить из Feasible-терминала.
+    // Партиция настоящего Feasible непуста по построению; страховка ловит
+    // будущий внутримодульный вызов с Infeasible-записью, который иначе
+    // отчеканил бы NoSelection с семантически ложной причиной.
+    debug_assert!(
+        record.feasible_candidates().next().is_some(),
+        "select_from_feasible_record_with requires a Feasible-terminal record"
+    );
     let outcome = select_with(
         FeasibleSelectionSourceV1 { record: &record },
         policy,

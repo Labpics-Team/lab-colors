@@ -144,8 +144,8 @@ fn pack_v6_adds_only_the_explicit_selection_family_and_preserves_prior_bytes() {
         serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest JSON");
     assert_eq!(manifest["packVersion"], "6.0.0");
     assert_eq!(manifest["counts"]["wcag22Feasibility"], 13);
-    assert_eq!(manifest["counts"]["wcag22ExplicitSelection"], 12);
-    assert_eq!(manifest["counts"]["total"], 113);
+    assert_eq!(manifest["counts"]["wcag22ExplicitSelection"], 15);
+    assert_eq!(manifest["counts"]["total"], 116);
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn feasibility_corpus_pins_terminals_counts_packing_and_opaque_identity_law() {
 
 // ── Законы новой atomic explicit-selection family ────────────────────────────
 
-const EXPLICIT_SELECTION_CASES: [&str; 12] = [
+const EXPLICIT_SELECTION_CASES: [&str; 15] = [
     "selected-declared-order-overrides-canonical",
     "selected-mixed-not-applicable",
     "no-selection-singleton-infeasible",
@@ -307,6 +307,9 @@ const EXPLICIT_SELECTION_CASES: [&str; 12] = [
     "not-evaluated-policy-bound",
     "opposite-order-forward",
     "opposite-order-reverse",
+    "error-foreign-tail-after-infeasible",
+    "error-foreign-tail-after-not-evaluated",
+    "error-feasibility-priority-over-policy",
     "error-foreign-tail-after-feasible-prefix",
     "error-duplicate-order-tail",
     "error-policy-cardinality-exceeds-domain",
@@ -464,6 +467,34 @@ fn explicit_selection_corpus_pins_the_atomic_terminal_and_error_algebra() {
         assert_eq!(failure["error"]["error"]["code"], "invalidRequest");
         assert_eq!(failure["error"]["error"]["details"]["code"], code);
     }
+
+    // Идентичная классификация malformed-политики после невыборных терминалов:
+    // байт-в-байт тот же typed error-подобъект, что и после Feasible.
+    let feasible_error =
+        outcome(vector(&vectors, "error-foreign-tail-after-feasible-prefix"))["error"].clone();
+    for case_id in [
+        "error-foreign-tail-after-infeasible",
+        "error-foreign-tail-after-not-evaluated",
+    ] {
+        let failure = outcome(vector(&vectors, case_id));
+        assert_eq!(failure["outcome"], "failure", "{case_id}");
+        assert!(failure.get("result").is_none(), "{case_id} leaked a result");
+        assert_eq!(
+            failure["error"], feasible_error,
+            "{case_id}: malformed policy must classify identically after every \
+             successful A terminal"
+        );
+    }
+
+    // Приоритет A-фазы: дубликат домена гасит и невалидную политику.
+    let priority = outcome(vector(&vectors, "error-feasibility-priority-over-policy"));
+    assert_eq!(priority["outcome"], "failure");
+    assert_eq!(priority["error"]["source"], "feasibility");
+    assert_eq!(
+        priority["error"]["error"]["details"]["code"],
+        "duplicateCandidateId"
+    );
+    assert!(priority.get("result").is_none());
 
     // Неизвестный policy kind — строгий декодер, typed transport.
     let unsupported = outcome(vector(&vectors, "error-unsupported-policy-kind"));

@@ -212,6 +212,13 @@ impl PolicyV1 {
                 InvalidSelectionRequestV1::EmptyCandidateOrder,
             ));
         }
+        // Симметрия encode→decode: builder отклоняет то же, что строгий
+        // декодер, иначе builder-валидный запрос проваливал бы свой wire-парс.
+        if ordered_candidate_ids.iter().any(String::is_empty) {
+            return Err(selection_invalid(
+                InvalidSelectionRequestV1::EmptyCandidateId,
+            ));
+        }
         Ok(Self {
             policy_id,
             ordered_candidate_ids,
