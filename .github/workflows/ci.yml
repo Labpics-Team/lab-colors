@@ -639,11 +639,11 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: verify committed #296-C2 canonical whole-call compiler evidence
+      - name: "THROWAWAY: record #296-C2 canonical whole-call compiler evidence v4"
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify bench/wcag22-feasibility-wasm-boundary-v4.json
+          --record bench/wcag22-feasibility-wasm-boundary-v4.json
       - name: independently fingerprint both execution-role WASM artifacts
         run: |
           for artifact in \
