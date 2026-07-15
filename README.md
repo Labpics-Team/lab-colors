@@ -31,7 +31,7 @@ NamedRoleTable
   source-over/screen операции несут проверяемый профиль и `bit-exact`
   сертификат; Glow требует явный decision profile и может завершиться
   типизированным `Indeterminate` без CSS fallback.
-- **Полная проверка конечного домена.** В опубликованном V1 клиент объявляет
+- **Полная проверка конечного домена.** В compiler-контракте V1 клиент объявляет
   opaque occurrence relations, точные соседние sRGB8-цвета и критерии WCAG 2.2,
   а домен фиксирован зарегистрированной `srgb8-neutral-axis-v1`. Core полностью
   перечисляет его и возвращает packed feasible partition с доказательством. В
