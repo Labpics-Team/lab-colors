@@ -84,6 +84,7 @@ test('generated WASM names come from package files without hiding undeclared sou
         files: [
           'compiler/labcolors_compiler.js',
           'compiler/labcolors_compiler_bg.wasm',
+          'compiler/not_built_generated_bg.wasm',
           'pkg/labcolors.js',
         ],
       }),
@@ -97,6 +98,7 @@ test('generated WASM names come from package files without hiding undeclared sou
       'packages/colors/compiler/hand_written_bad.js',
       'packages/colors/compiler/labcolors_compiler.js',
       'packages/colors/compiler/labcolors_compiler_bg.wasm',
+      'packages/colors/compiler/not_built_generated_bg.wasm',
       'packages/colors/pkg/hand_written_runtime_bad.js',
     ]);
   } finally {
@@ -117,9 +119,14 @@ test('generated package directory entries are naming roots, not blind spots', ()
     );
     writeFileSync(join(compiler, 'labcolors_compiler.js'), 'generated');
     writeFileSync(join(runtime, 'labcolors.js'), 'generated');
+    writeFileSync(join(runtime, '.hidden_runtime_bad.js'), 'extra');
+    mkdirSync(join(runtime, 'dist'));
+    writeFileSync(join(runtime, 'dist', 'nested_runtime_bad.js'), 'extra');
     writeFileSync(join(runtime, 'unexpected_runtime_bad.js'), 'extra');
     assert.deepEqual(nonLawFiles(root), [
       'packages/colors/compiler/labcolors_compiler.js',
+      'packages/colors/pkg/.hidden_runtime_bad.js',
+      'packages/colors/pkg/dist/nested_runtime_bad.js',
       'packages/colors/pkg/unexpected_runtime_bad.js',
     ]);
   } finally {

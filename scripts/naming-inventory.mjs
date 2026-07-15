@@ -36,6 +36,13 @@ const SKIP_DIRS = new Set([
   'coverage',
 ]);
 
+// Directory entries in package.json#files own their full tree. Source-only
+// build-directory and dotfile skips must not create publish blind spots.
+const PACKAGE_ROOT_WALK = Object.freeze({
+  includeDotEntries: true,
+  skipDirs: new Set(['node_modules', '.git']),
+});
+
 /** Директории, по которым бежит скан закона имён. */
 export const SCAN_TOPS = [
   'crates',
@@ -56,13 +63,14 @@ const TOOL_FIXED = new Set([
   'LICENSE',
 ]);
 
-/** Рекурсивный список файлов (POSIX-пути относительно base, дотфайлы мимо). */
-export function walk(dir, out = [], base = dir) {
+/** Рекурсивный список файлов (POSIX-пути относительно base). */
+export function walk(dir, out = [], base = dir, options = {}) {
   if (!existsSync(dir)) return out;
+  const { includeDotEntries = false, skipDirs = SKIP_DIRS } = options;
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith('.')) continue;
+    if (!includeDotEntries && e.name.startsWith('.')) continue;
     if (e.isDirectory()) {
-      if (!SKIP_DIRS.has(e.name)) walk(join(dir, e.name), out, base);
+      if (!skipDirs.has(e.name)) walk(join(dir, e.name), out, base, options);
     } else {
       out.push(relative(base, join(dir, e.name)).replaceAll('\\', '/'));
     }
@@ -193,7 +201,8 @@ export function nonLawFiles(root = ROOT) {
   for (const declaredPath of packageJson.files ?? []) {
     const packagePath = declaredPath.replace(/^\.\//, '').replace(/\/+$/, '');
     if (packagePath === 'pkg' || packagePath === 'compiler') {
-      for (const file of walk(join(packageRoot, packagePath))) {
+      const generatedRoot = join(packageRoot, packagePath);
+      for (const file of walk(generatedRoot, [], generatedRoot, PACKAGE_ROOT_WALK)) {
         generatedPackageFiles.add(`packages/colors/${packagePath}/${file}`);
       }
     } else if (/^(?:pkg|compiler)\//.test(packagePath)) {
