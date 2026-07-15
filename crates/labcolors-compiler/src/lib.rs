@@ -402,6 +402,21 @@ export type Wcag22ExplicitSelectionResultV1 =
       readonly policy: Wcag22ExplicitPolicyBindingV1;
     };
 
+/** Explicit-domain invalid-request codes extend the shared feasibility set. */
+export type Wcag22ExplicitFeasibilityInvalidRequestV1 =
+  | Wcag22FeasibilityInvalidRequestV1
+  | { readonly code: "emptyCandidateId" }
+  | { readonly code: "emptyCandidates" }
+  | { readonly code: "duplicateCandidateId"; readonly candidateId: string };
+
+/** Feasibility-phase failures of the atomic operation. */
+export type Wcag22ExplicitFeasibilityCoreErrorV1 =
+  | Exclude<Wcag22FeasibilityCoreErrorV1, { readonly code: "invalidRequest" }>
+  | {
+      readonly code: "invalidRequest";
+      readonly details: Wcag22ExplicitFeasibilityInvalidRequestV1;
+    };
+
 export type Wcag22ExplicitSelectionTransportErrorV1 =
   | Wcag22FeasibilityTransportErrorV1
   | { readonly code: "unsupportedPolicyKind"; readonly received: string };
@@ -474,7 +489,10 @@ export type Wcag22ExplicitSelectionOperationErrorV1 =
       readonly source: "transport";
       readonly error: Wcag22ExplicitSelectionTransportErrorV1;
     }
-  | { readonly source: "feasibility"; readonly error: Wcag22FeasibilityCoreErrorV1 }
+  | {
+      readonly source: "feasibility";
+      readonly error: Wcag22ExplicitFeasibilityCoreErrorV1;
+    }
   | { readonly source: "selection"; readonly error: Wcag22ExplicitSelectionErrorV1 }
   | { readonly source: "incompatibleCoreContract" };
 

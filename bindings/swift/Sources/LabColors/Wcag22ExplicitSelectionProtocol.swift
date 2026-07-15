@@ -217,6 +217,37 @@ public enum Wcag22ExplicitSelectionResultV1: Codable, Equatable, Sendable {
             }
             return (applicable, notApplicable, edges)
         }
+        /// Canonical relation order mirrors Core: relations strictly
+        /// increasing by raw relation-ID bytes, each applicable adjacency
+        /// strictly increasing and unique. The transported relationSetDigest
+        /// was computed by Core over exactly this order, so a reordered wire
+        /// would silently disagree with its own sealed digest.
+        func validateCanonicalRelations(_ relations: [Wcag22FeasibilityRelationV1]) throws {
+            func relationId(_ relation: Wcag22FeasibilityRelationV1) -> String {
+                switch relation {
+                case let .applicable(id, _, _, _): return id
+                case let .notApplicable(id, _, _): return id
+                }
+            }
+            for pair in zip(relations, relations.dropFirst()) {
+                guard utf8(relationId(pair.0))
+                    .lexicographicallyPrecedes(utf8(relationId(pair.1)))
+                else {
+                    throw corrupted("relations differ from canonical byte-sorted ID order")
+                }
+            }
+            for relation in relations {
+                guard case let .applicable(_, _, _, adjacent) = relation else { continue }
+                for pair in zip(adjacent, adjacent.dropFirst()) {
+                    let left = [pair.0.red, pair.0.green, pair.0.blue]
+                    let right = [pair.1.red, pair.1.green, pair.1.blue]
+                    guard left.lexicographicallyPrecedes(right) else {
+                        throw corrupted(
+                            "applicable adjacency differs from canonical sorted unique order")
+                    }
+                }
+            }
+        }
         /// Canonical explicit order: opaque IDs strictly increasing by raw
         /// UTF-8 bytes (which also proves uniqueness). Swift `String` equality
         /// is Unicode-canonical, so the opaque byte law is checked on bytes.
@@ -237,6 +268,7 @@ public enum Wcag22ExplicitSelectionResultV1: Codable, Equatable, Sendable {
             expectsFeasible: Bool
         ) throws {
             try validateCanonicalCandidates(value.candidates)
+            try validateCanonicalRelations(value.relations)
             let candidateCount = value.candidates.count
             let counts = try relationCounts(value.relations)
             guard counts.applicable > 0, counts.edges > 0 else {
@@ -329,6 +361,7 @@ public enum Wcag22ExplicitSelectionResultV1: Codable, Equatable, Sendable {
             try validateEvaluated(feasibility, expectsFeasible: false)
         case let .notEvaluated(feasibility, _):
             try validateCanonicalCandidates(feasibility.candidates)
+            try validateCanonicalRelations(feasibility.relations)
             guard feasibility.candidateCount.value == UInt64(feasibility.candidates.count)
             else {
                 throw corrupted("candidate count does not match transported candidates")

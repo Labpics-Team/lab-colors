@@ -32,7 +32,8 @@ const WCAG22_EVIDENCE_FILES = [
 ];
 // Полный состав пака 6.0.0. Верификатор читает байты из репозитория (не из
 // тарболла) и пересчитывает packDigest над всеми восемью семействами;
-// wcag22-explicit-selection остаётся native-only и в пакет не попадает.
+// семейство wcag22-explicit-selection в пакет не попадает (операцию
+// потребитель получает кодом обоих адаптеров, а не векторами).
 const CONFORMANCE_FAMILY_FILES = [
   "contrasts.json",
   "ladders.json",
@@ -1550,8 +1551,12 @@ import init, {
   type Wcag22CriterionV1,
 } from "@labpics/colors";
 import {
+  evaluateWcag22ExplicitSelection,
   evaluateWcag22Feasibility,
+  wcag22ExplicitSelectionMaxBytes,
   wcag22FeasibilityMaxBytes,
+  type Wcag22ExplicitSelectionOutcomeV1,
+  type Wcag22ExplicitSelectionRequestV1,
   type Wcag22FeasibilityOutcomeV1,
   type Wcag22FeasibilityRequestV1,
 } from "@labpics/colors/compiler";
@@ -1617,6 +1622,47 @@ const feasibilityOutcome: Wcag22FeasibilityOutcomeV1 =
   evaluateWcag22Feasibility(feasibilityBytes);
 // @ts-expect-error byte API rejects strings.
 evaluateWcag22Feasibility(JSON.stringify(feasibilityRequest));
+
+const explicitSelectionRequest: Wcag22ExplicitSelectionRequestV1 = {
+  schemaVersion: 1,
+  domainId: "explicit-srgb8-set-v1",
+  resourceProfileId: "compile-v1",
+  candidates: [{ candidateId: "opaque-client-candidate", emitted: [255, 255, 255] }],
+  relations: [{
+    relationId: "opaque-client-relation",
+    occurrenceId: "opaque-client-occurrence",
+    kind: "applicable",
+    criterion: "sc-1.4.3-text-default",
+    adjacent: [[0, 0, 0]],
+  }],
+  policy: {
+    policyKind: "first-feasible-in-declared-order-v1",
+    policyId: "opaque-client-policy",
+    orderedCandidateIds: ["opaque-client-candidate"],
+  },
+};
+const explicitSelectionBytes = new TextEncoder().encode(
+  JSON.stringify(explicitSelectionRequest),
+);
+const explicitSelectionCeiling: number = wcag22ExplicitSelectionMaxBytes();
+const explicitSelectionOutcome: Wcag22ExplicitSelectionOutcomeV1 =
+  evaluateWcag22ExplicitSelection(explicitSelectionBytes);
+// @ts-expect-error byte API rejects strings.
+evaluateWcag22ExplicitSelection(JSON.stringify(explicitSelectionRequest));
+// Закоммиченный вектор error-feasibility-priority-over-policy обязан быть
+// представим в типовом контракте: explicit-код duplicateCandidateId живёт в
+// feasibility-источнике операции.
+const representableCommittedFailure: Wcag22ExplicitSelectionOutcomeV1 = {
+  schemaVersion: 1,
+  outcome: "failure",
+  error: {
+    source: "feasibility",
+    error: {
+      code: "invalidRequest",
+      details: { code: "duplicateCandidateId", candidateId: "twin" },
+    },
+  },
+};
 
 function assertNever(value: never): never {
   throw new Error("unreachable: " + String(value));

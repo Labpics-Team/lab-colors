@@ -23,8 +23,8 @@ const WCAG22_EVIDENCE_FILES = [
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 // Полный состав пака 6.0.0: восемь семейств. В npm-тарболл эти файлы НЕ
 // копируются — байты хешируются из репозитория в build-metadata provenance
-// (packDigest/familySetSha256), поэтому native-only семейство
-// wcag22-explicit-selection не расширяет публикуемую поверхность.
+// (packDigest/familySetSha256); семейство wcag22-explicit-selection в
+// тарболл не входит — публикуемая поверхность это код адаптеров.
 const CONFORMANCE_FILES = [
   "contrasts.json",
   "ladders.json",
