@@ -251,7 +251,7 @@ def check_subject_manifest(
 
 def current_byte_identity_required(path: str, durable_current_subjects: bool) -> bool:
     """Return whether this verification mode owns exact current bytes for path."""
-    return True
+    return not (durable_current_subjects and path == HISTORICAL_ONLY_PATH)
 
 
 def check_subject_git_bindings(
