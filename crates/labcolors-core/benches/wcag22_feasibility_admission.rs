@@ -939,19 +939,10 @@ fn parse_protocol() -> Result<Protocol, Box<dyn Error>> {
     })
 }
 
-fn command_output(mut command: Command) -> String {
-    match command.output() {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_owned()
-        }
-        _ => "unavailable".to_owned(),
-    }
-}
-
 fn require_closed_compiler_environment() -> Result<(), Box<dyn Error>> {
     for name in EXPLICIT_EMPTY_BUILD_INPUTS {
-        match std::env::var_os(name) {
-            Some(value) if value.is_empty() => {}
+        match compile_time_build_input(name) {
+            Some("") => {}
             Some(_) => return Err(format!("{name} must be explicitly empty").into()),
             None => return Err(format!("{name} must be explicitly present").into()),
         }
@@ -959,13 +950,31 @@ fn require_closed_compiler_environment() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn executable_sha256(variable: &str) -> Result<[u8; 32], Box<dyn Error>> {
-    let value = std::env::var_os(variable)
-        .ok_or_else(|| format!("{variable} must identify the executed toolchain binary"))?;
+fn compile_time_build_input(name: &str) -> Option<&'static str> {
+    match name {
+        "CARGO_ENCODED_RUSTFLAGS" => option_env!("CARGO_ENCODED_RUSTFLAGS"),
+        "RUSTC_WRAPPER" => option_env!("RUSTC_WRAPPER"),
+        "RUSTC_WORKSPACE_WRAPPER" => option_env!("RUSTC_WORKSPACE_WRAPPER"),
+        _ => None,
+    }
+}
+
+fn compile_time_toolchain_path(variable: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let value = match variable {
+        "RUSTC" => option_env!("RUSTC"),
+        "CARGO" => option_env!("CARGO"),
+        _ => None,
+    }
+    .ok_or_else(|| format!("{variable} must identify the compiled toolchain binary"))?;
     let path = PathBuf::from(value);
     if !path.is_absolute() {
         return Err(format!("{variable} must be an absolute path").into());
     }
+    Ok(path)
+}
+
+fn executable_sha256(variable: &str) -> Result<[u8; 32], Box<dyn Error>> {
+    let path = compile_time_toolchain_path(variable)?;
     let bytes = fs::read(&path)?;
     Ok(*subject_sha256::digest(&bytes).as_bytes())
 }
@@ -1020,13 +1029,11 @@ fn git_metadata() -> Result<GitMetadata, Box<dyn Error>> {
     })
 }
 
-fn rustc_verbose() -> String {
-    let executable = std::env::var_os("RUSTC")
-        .or_else(|| option_env!("RUSTC").map(Into::into))
-        .unwrap_or_else(|| "rustc".into());
+fn rustc_verbose() -> Result<String, Box<dyn Error>> {
+    let executable = compile_time_toolchain_path("RUSTC")?;
     let mut command = Command::new(executable);
     command.arg("-Vv");
-    command_output(command)
+    checked_command_output(command, "rustc -Vv")
 }
 
 fn subject_manifest() -> Result<Vec<(&'static str, [u8; 32])>, std::io::Error> {
@@ -1072,14 +1079,14 @@ fn render_json(
     git: &GitMetadata,
 ) -> Result<String, Box<dyn Error>> {
     let subjects = subject_manifest()?;
-    let rustc = rustc_verbose();
+    let rustc = rustc_verbose()?;
     let rustc_binary_sha256 = executable_sha256("RUSTC")?;
     let cargo_binary_sha256 = executable_sha256("CARGO")?;
     let cargo = {
-        let executable = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let executable = compile_time_toolchain_path("CARGO")?;
         let mut command = Command::new(executable);
         command.arg("-Vv");
-        command_output(command)
+        checked_command_output(command, "cargo -Vv")?
     };
     let active_core_features = [
         ("wcag22-feasibility", cfg!(feature = "wcag22-feasibility")),
@@ -1120,9 +1127,7 @@ fn render_json(
     push_json_string(&mut output, &rustc);
     output.push_str(",\n    \"cargoVerbose\": ");
     push_json_string(&mut output, &cargo);
-    output.push_str(
-        ",\n    \"compilerRecipeId\": \"closed-cargo-bench-v1\",\n    \"activeCoreFeatures\": [",
-    );
+    output.push_str(",\n    \"activeCoreFeatures\": [");
     for (index, feature) in active_core_features.iter().enumerate() {
         if index != 0 {
             output.push_str(", ");

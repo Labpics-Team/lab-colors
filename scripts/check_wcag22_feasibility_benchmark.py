@@ -100,7 +100,6 @@ ENVIRONMENT_FIELDS = frozenset(
         "requestConstructionMeasured",
         "rustcVerbose",
         "cargoVerbose",
-        "compilerRecipeId",
         "activeCoreFeatures",
         "explicitEmptyBuildInputs",
         "rustcBinarySha256",
@@ -182,6 +181,7 @@ class AdmissionProtocol:
         cargo_release: str,
         rustc_binary_sha256: str,
         cargo_binary_sha256: str,
+        benchmark_binary_sha256: str,
         target_triple: str,
         target_arch: str,
         target_os: str,
@@ -193,6 +193,7 @@ class AdmissionProtocol:
         self.cargo_release = cargo_release
         self.rustc_binary_sha256 = rustc_binary_sha256
         self.cargo_binary_sha256 = cargo_binary_sha256
+        self.benchmark_binary_sha256 = benchmark_binary_sha256
         self.target_triple = target_triple
         self.target_arch = target_arch
         self.target_os = target_os
@@ -269,6 +270,7 @@ def record_command(cargo: Path) -> list[str]:
         str(cargo),
         "bench",
         "--locked",
+        "--frozen",
         "--manifest-path",
         str(ROOT / "Cargo.toml"),
         "--no-default-features",
@@ -279,6 +281,66 @@ def record_command(cargo: Path) -> list[str]:
         "--bench",
         "wcag22_feasibility_admission",
     ]
+
+
+def fetch_command(cargo: Path) -> list[str]:
+    return [
+        str(cargo),
+        "fetch",
+        "--locked",
+        "--manifest-path",
+        str(ROOT / "Cargo.toml"),
+    ]
+
+
+def source_snapshot_sha256(
+    snapshot: tuple[dict[str, str], dict[str, str]],
+) -> str:
+    canonical = json.dumps(
+        snapshot,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def recorded_benchmark_binary(target: Path) -> Path:
+    candidates = [
+        path
+        for path in (target / "release" / "deps").glob(
+            "wcag22_feasibility_admission-*"
+        )
+        if path.is_file() and os.access(path, os.X_OK)
+    ]
+    require(len(candidates) == 1,
+            "closed record recipe did not produce exactly one benchmark binary")
+    return candidates[0]
+
+
+def bind_record_provenance(
+    output: Path,
+    source_snapshot: tuple[dict[str, str], dict[str, str]],
+    target: Path,
+) -> None:
+    payload = decode_benchmark_artifact(output.read_bytes())
+    require("recordProvenance" not in payload,
+            "raw harness output must not self-assert record provenance")
+    binary = recorded_benchmark_binary(target)
+    provenance = {
+        "recipeId": COMPILER_RECIPE_ID,
+        "sourceSnapshotSha256": source_snapshot_sha256(source_snapshot),
+        "benchmarkBinarySha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+    }
+    enriched: dict[str, Any] = {}
+    for key, value in payload.items():
+        enriched[key] = value
+        if key == "artifactId":
+            enriched["recordProvenance"] = provenance
+    output.write_text(
+        json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def record_artifact(
@@ -301,7 +363,13 @@ def record_artifact(
             rustc,
             cargo,
             sample_count,
-            os.environ.get("PATH", os.defpath),
+            os.defpath,
+        )
+        subprocess.run(
+            fetch_command(cargo),
+            cwd=temporary_root,
+            env=environment,
+            check=True,
         )
         subprocess.run(
             record_command(cargo),
@@ -309,8 +377,15 @@ def record_artifact(
             env=environment,
             check=True,
         )
+        require(dependency_cone_snapshot() == source_before,
+                "dependency cone changed between pre-build snapshot and benchmark completion")
+        bind_record_provenance(
+            output,
+            source_before,
+            temporary_root / "target",
+        )
     require(dependency_cone_snapshot() == source_before,
-            "dependency cone changed between the clean pre-build snapshot and record completion")
+            "dependency cone changed while record provenance was bound")
     require(output.is_file(), "closed record recipe did not produce the artifact")
 
 
@@ -347,6 +422,7 @@ def run_record_recipe_self_tests() -> int:
             command[1:] == [
                 "bench",
                 "--locked",
+                "--frozen",
                 "--manifest-path",
                 str(ROOT / "Cargo.toml"),
                 "--no-default-features",
@@ -358,6 +434,15 @@ def run_record_recipe_self_tests() -> int:
                 "wcag22_feasibility_admission",
             ],
             "closed recipe command drifted",
+        )
+        require(
+            fetch_command(cargo)[1:] == [
+                "fetch",
+                "--locked",
+                "--manifest-path",
+                str(ROOT / "Cargo.toml"),
+            ],
+            "closed fetch command drifted",
         )
         cargo_directory = temporary_root / ".cargo"
         cargo_directory.mkdir()
@@ -371,7 +456,7 @@ def run_record_recipe_self_tests() -> int:
             pass
         else:
             raise ValueError("record recipe mutation survived: Cargo config hierarchy")
-    return 4
+    return 5
 
 
 def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -702,6 +787,31 @@ def check_source_objects(
                 f"current Git subject differs from admitted measurement: {path}")
 
 
+def check_record_provenance(
+    payload: dict[str, Any],
+    current_snapshot: tuple[dict[str, str], dict[str, str]],
+    protocol: AdmissionProtocol | None,
+) -> None:
+    provenance = payload.get("recordProvenance")
+    require(
+        isinstance(provenance, dict)
+        and set(provenance)
+        == {"recipeId", "sourceSnapshotSha256", "benchmarkBinarySha256"},
+        "recordProvenance must be the exact source-bound recorder receipt",
+    )
+    require(provenance.get("recipeId") == COMPILER_RECIPE_ID,
+            "recordProvenance.recipeId drifted from the closed native recipe")
+    source_digest = provenance.get("sourceSnapshotSha256")
+    benchmark_digest = provenance.get("benchmarkBinarySha256")
+    require_digest(source_digest, "recordProvenance.sourceSnapshotSha256")
+    require_digest(benchmark_digest, "recordProvenance.benchmarkBinarySha256")
+    require(source_digest == source_snapshot_sha256(current_snapshot),
+            "recorded source snapshot differs from the current dependency cone")
+    if protocol is not None:
+        require(benchmark_digest == protocol.benchmark_binary_sha256,
+                "recorded benchmark binary differs from the pinned executable")
+
+
 def check_environment(
     payload: dict[str, Any],
     protocol: AdmissionProtocol | None,
@@ -732,8 +842,6 @@ def check_environment(
     cargo_verbose = environment.get("cargoVerbose")
     require(isinstance(cargo_verbose, str),
             "environment.cargoVerbose must be present even when unavailable")
-    require(environment.get("compilerRecipeId") == COMPILER_RECIPE_ID,
-            "environment.compilerRecipeId drifted from the closed native recipe")
     require(
         environment.get("activeCoreFeatures")
         == ["wcag22-feasibility", "wcag22-explicit-feasibility"],
@@ -820,6 +928,7 @@ def check(
         == "measurement-only-unless-admission-check-passes",
         "raw artifacts must not claim admission without an exact protocol check",
     )
+    check_record_provenance(payload, source_before, protocol)
     check_environment(payload, protocol, source_before[0])
 
     sample_count = exact_nonnegative_int(payload.get("sampleCount"), "sampleCount")
@@ -1000,11 +1109,34 @@ def run_mutation_self_tests(
             "admitted cargo binary identity",
         )
     rejected(
-        lambda value: value["environment"].__setitem__(
-            "compilerRecipeId", "ambient-cargo"
+        lambda value: value.pop("recordProvenance"),
+        "source-bound record provenance",
+    )
+    rejected(
+        lambda value: value["recordProvenance"].__setitem__(
+            "recipeId", "ambient-cargo"
         ),
         "closed compiler recipe",
     )
+    rejected(
+        lambda value: value["recordProvenance"].__setitem__(
+            "sourceSnapshotSha256", "0" * 64
+        ),
+        "recorded source snapshot",
+    )
+    rejected(
+        lambda value: value["recordProvenance"].__setitem__(
+            "benchmarkBinarySha256", "not-a-digest"
+        ),
+        "recorded benchmark binary shape",
+    )
+    if protocol is not None:
+        rejected(
+            lambda value: value["recordProvenance"].__setitem__(
+                "benchmarkBinarySha256", "0" * 64
+            ),
+            "admitted benchmark binary identity",
+        )
     rejected(
         lambda value: (
             value["environment"]["sourceObjects"]["workspaceCargo"].__setitem__(
@@ -1055,6 +1187,7 @@ def main() -> int:
     parser.add_argument("--admit-cargo-release")
     parser.add_argument("--admit-rustc-binary-sha256")
     parser.add_argument("--admit-cargo-binary-sha256")
+    parser.add_argument("--admit-benchmark-binary-sha256")
     parser.add_argument("--admit-target-triple")
     parser.add_argument("--admit-target-arch")
     parser.add_argument("--admit-target-os")
@@ -1072,6 +1205,7 @@ def main() -> int:
         args.admit_cargo_release,
         args.admit_rustc_binary_sha256,
         args.admit_cargo_binary_sha256,
+        args.admit_benchmark_binary_sha256,
         args.admit_target_triple,
         args.admit_target_arch,
         args.admit_target_os,
@@ -1114,11 +1248,14 @@ def main() -> int:
                        "--admit-rustc-binary-sha256")
         require_digest(args.admit_cargo_binary_sha256,
                        "--admit-cargo-binary-sha256")
+        require_digest(args.admit_benchmark_binary_sha256,
+                       "--admit-benchmark-binary-sha256")
         protocol = AdmissionProtocol(
             rustc_release=args.admit_rustc_release,
             cargo_release=args.admit_cargo_release,
             rustc_binary_sha256=args.admit_rustc_binary_sha256,
             cargo_binary_sha256=args.admit_cargo_binary_sha256,
+            benchmark_binary_sha256=args.admit_benchmark_binary_sha256,
             target_triple=args.admit_target_triple,
             target_arch=args.admit_target_arch,
             target_os=args.admit_target_os,
