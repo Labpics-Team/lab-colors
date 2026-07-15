@@ -629,16 +629,6 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "THROWAWAY: learn canonical role sizes before any gate"
-        run: |
-          for artifact in \
-            packages/colors/pkg/labcolors_bg.wasm \
-            packages/colors/compiler/labcolors_compiler_bg.wasm
-          do
-            bytes="$(wc -c < "$artifact" | tr -d '[:space:]')"
-            sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
-            echo "LEARN artifact=${artifact} raw=${bytes}B sha256=${sha256}"
-          done
       - name: "THROWAWAY: record #296-C3 whole-call compiler evidence v5"
         working-directory: packages/colors
         run: |
