@@ -644,6 +644,8 @@ pub(crate) fn solve_in(
             .conformance()
             .min_ratio()
             .is_none_or(|floor_ratio| solved.wcag_ratio() + 1e-9 >= floor_ratio);
+        #[cfg(test)]
+        probe_log::record(solved.hex(), solved.lc());
         Ok(Candidate {
             passes: perceptual_ok && legal_ok,
             lc: solved.lc(),
@@ -895,6 +897,8 @@ pub(crate) fn solve_dj(
         let solved = finish(rgb, y_gov, bg_disp, false, vc)?;
         let rgb_quantised = srgb_from_hex(solved.hex()).map_err(Unreachable::InvalidInput)?;
         let achieved_dj = (jp_of_linear(rgb_quantised, vc) - jp_bg).abs();
+        #[cfg(test)]
+        probe_log::record(solved.hex(), achieved_dj);
         Ok(DjCandidate {
             error: (achieved_dj - magnitude_dj).abs(),
             achieved_dj,
@@ -1315,6 +1319,41 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions)
 pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
     lpc::y_hk(j_hk, vc)
+}
+
+/// Test-only examined-candidate log (#297 local-search truth): both local
+/// searches (`solve`'s quantisation walk and `solve_dj`'s separation walk)
+/// record every on-grid candidate they actually materialize, so tests can
+/// prove a reported near-miss (`nearest` / degraded `achieved_dj`) is drawn
+/// ONLY from this set — a local claim, never a global one. Compiled solely
+/// under `cfg(test)`: shipped bytes carry none of this.
+#[cfg(test)]
+pub(crate) mod probe_log {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static EXAMINED: RefCell<Option<Vec<(String, f64)>>> = const { RefCell::new(None) };
+    }
+
+    /// Begin recording examined candidates on this thread.
+    pub(crate) fn start() {
+        EXAMINED.with(|e| *e.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// Record one examined candidate: emitted hex + the measure the search
+    /// compares against its budget (`lc` for `solve`, `|dJ'|` for `solve_dj`).
+    pub(crate) fn record(hex: &str, measure: f64) {
+        EXAMINED.with(|e| {
+            if let Some(log) = e.borrow_mut().as_mut() {
+                log.push((hex.to_string(), measure));
+            }
+        });
+    }
+
+    /// Stop recording and return the examined set (empty if never started).
+    pub(crate) fn take() -> Vec<(String, f64)> {
+        EXAMINED.with(|e| e.borrow_mut().take()).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -2785,6 +2824,217 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // #297 local-search truth: инструментированные exact-candidate тесты.
+    // Оба локальных поиска пишут каждый материализованный on-grid кандидат в
+    // `probe_log` (только под cfg(test)); отчётные значения обязаны быть
+    // взяты ИЗ этого набора — «locality of report». Контрпримеры ниже убивают
+    // глобальное прочтение `QuantizationGap`/`nearest` и «nearest achievable».
+    // ------------------------------------------------------------------
+
+    /// Каждое отданное значение solve — из examined-набора; walk реально
+    /// стреляет на JND-полосе (анти-вакуум) и никогда не смотрит больше чем
+    /// 1 + NEIGHBOR_STEPS кандидатов (Floor::None ⇒ bisection не участвует).
+    #[test]
+    fn solve_reports_are_drawn_only_from_examined_candidates() {
+        let vc = ViewingConditions::srgb();
+        let mut walk_fired = 0usize;
+        for (bg_hex, pol) in [("#FFFFFF", 1.0), ("#000000", -1.0)] {
+            let mut t = 7.30f64;
+            while t <= 7.60 + 1e-9 {
+                let target = t * pol;
+                let bg = BgInput::solid(bg_hex).unwrap();
+                probe_log::start();
+                let result = solve(
+                    bg,
+                    Contract::range(target, target),
+                    Hue::deg(0.0),
+                    ChromaPolicy::Neutral,
+                    &vc,
+                    Gamut::Srgb,
+                );
+                let examined = probe_log::take();
+                assert!(
+                    examined.len() <= 1 + NEIGHBOR_STEPS as usize,
+                    "{bg_hex} {target}: local search examined {} candidates — beyond seed+budget",
+                    examined.len()
+                );
+                if examined.len() > 1 {
+                    walk_fired += 1;
+                }
+                match result {
+                    Ok(s) => assert!(
+                        examined.iter().any(|(h, m)| h == s.hex() && *m == s.lc()),
+                        "{bg_hex} {target}: returned colour was never an examined candidate"
+                    ),
+                    // Аналитический отказ ДО квантования: ноль on-grid кандидатов —
+                    // честно (сетка не при чём, мёртвая зона непрерывного ядра).
+                    Err(Unreachable::BelowContrastFloor { .. }) => {}
+                    Err(Unreachable::QuantizationGap { nearest, .. }) => assert!(
+                        examined
+                            .iter()
+                            .any(|(_, m)| (m.abs() - nearest).abs() < 1e-12),
+                        "{bg_hex} {target}: reported nearest is not an examined candidate"
+                    ),
+                    Err(other) => panic!("{bg_hex} {target}: unexpected {other:?}"),
+                }
+                t += 0.01;
+            }
+        }
+        assert!(
+            walk_fired >= 2,
+            "anti-vacuum: the neighbour walk must fire on the JND band; fired {walk_fired}"
+        );
+    }
+
+    /// Контрпример, убивающий глобальное прочтение `QuantizationGap`/`nearest`:
+    /// на реальной hex-сетке (distinct-шаги — настоящий `build_color`) с
+    /// синтетическим законом измерения walk (сид + 2 distinct-соседа) выносит
+    /// `QuantizationGap`, хотя ТРЕТИЙ distinct-шаг — первый, куда поиску
+    /// запрещено смотреть — проходит контракт внутри бюджета. `nearest` при
+    /// этом — ровно ближайший ИЗУЧЕННЫЙ (сид), не глобальный ближайший.
+    /// Публичной поверхностью этот вариант сегодня недостижим (см. интеграционную
+    /// характеризацию: класс вымер на solid-фонах), поэтому структурная правда
+    /// поиска пинится на его собственном шве.
+    #[test]
+    fn quantization_gap_wording_is_local_not_global_counterexample() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let target = 10.0;
+        let interval = bg.luma_interval(&vc).unwrap();
+        let y_gov = interval.governing(target);
+        let bg_disp = bg.governing_display(target);
+        let hue = Hue::deg(0.0);
+        let cp = ChromaPolicy::Neutral;
+
+        // Первые 4 distinct hex-узла по расписанию walk'а (шаг −0.001 от сида,
+        // полярность dark-on-light) — та же сетка, которую он реально посетит.
+        let l_start = 0.5;
+        let mut distinct: Vec<(f64, String)> =
+            vec![(l_start, hex_from_srgb(build_color(l_start, hue, cp)))];
+        let mut l = l_start;
+        while distinct.len() < 4 {
+            l -= 0.001;
+            let hx = hex_from_srgb(build_color(l, hue, cp));
+            if hx != distinct.last().unwrap().1 {
+                distinct.push((l, hx));
+            }
+        }
+        // Синтетический закон измерения: сид ниже цели (проваливает пол), два
+        // разрешённых соседа перепрыгивают бюджет, третий — попадает в него.
+        let law = {
+            let table: Vec<(String, f64)> = distinct
+                .iter()
+                .map(|(_, h)| h.clone())
+                .zip([8.8, 11.4, 11.8, 10.3])
+                .collect();
+            move |hex: &str| -> f64 {
+                table
+                    .iter()
+                    .find(|(h, _)| h == hex)
+                    .map(|(_, lc)| *lc)
+                    .unwrap_or(200.0)
+            }
+        };
+        let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
+            let solved = finish(build_color(l_ok, hue, cp), y_gov, bg_disp, false, &vc)?;
+            let lc = law(solved.hex());
+            Ok(Candidate {
+                passes: lc >= target,
+                lc,
+                solved,
+            })
+        };
+
+        let start_lc = law(&distinct[0].1);
+        match solve_quantization_neighbor(l_start, target, hue, cp, start_lc, evaluate) {
+            Err(Unreachable::QuantizationGap { target: t, nearest }) => {
+                assert_eq!(t, target);
+                // `nearest` — ближайший ИЗУЧЕННЫЙ (сид, 8.8)…
+                assert!(
+                    (nearest - 8.8).abs() < 1e-12,
+                    "nearest {nearest} must be the closest EXAMINED candidate (8.8)"
+                );
+                // …а первый же узел за бюджетом walk'а проходит контракт в бюджете:
+                // «no on-grid colour» — ложь, правда лишь «в локальном бюджете».
+                let beyond = evaluate(distinct[3].0).unwrap();
+                assert!(
+                    beyond.passes && beyond.error(target) <= QUANT_BUDGET,
+                    "the 3rd distinct step must be a passing in-budget candidate"
+                );
+                assert!(
+                    beyond.error(target) < (nearest - target).abs(),
+                    "the unexamined candidate is strictly closer than the reported nearest"
+                );
+            }
+            other => panic!("expected QuantizationGap, got {other:?}"),
+        }
+    }
+
+    /// Реальный (не синтетический) контрпример для «nearest achievable» в dJ':
+    /// dark-on-light цель 98.75 на белом. Сид квантуется в #000000 (dj=100.0,
+    /// err 1.25 > DJ_BUDGET); walk смотрит ТОЛЬКО от фона (к меньшему J'), где
+    /// distinct-соседей нет вовсе — весь examined-набор состоит из ОДНОГО цвета,
+    /// и деградация отдаёт его как «nearest achievable». Глобально же #010101
+    /// (та же полярность, тот же policy-универсум серых) достигает 98.0964 —
+    /// строго ближе к цели, но лежит НАЗАД (к фону), куда walk не смотрит.
+    #[test]
+    fn dj_degraded_nearest_achievable_is_local_not_global() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let magnitude = 98.75;
+        probe_log::start();
+        let dj = solve_dj(
+            &bg,
+            magnitude,
+            1.0,
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+        )
+        .expect("far dark-on-light dJ' target degrades, not errs (закон 2 ADR-0002)");
+        let examined = probe_log::take();
+
+        assert!(
+            dj.degraded,
+            "seed misses DJ_BUDGET and the wall stops the walk"
+        );
+        assert_eq!(dj.solved.hex(), "#000000");
+        // Отчёт — только из examined-набора (locality of report)…
+        assert!(
+            examined
+                .iter()
+                .any(|(h, m)| h == dj.solved.hex() && *m == dj.achieved_dj),
+            "reported nearest-achievable must be an examined candidate"
+        );
+        // …и весь набор — один-единственный цвет: поиск не «перебрал все hex».
+        assert!(
+            !examined.is_empty() && examined.iter().all(|(h, _)| h == "#000000"),
+            "every examined candidate is the wall colour; got {examined:?}"
+        );
+
+        // Глобальная правда: #010101 строго ближе к запрошенной величине.
+        let bg_disp = bg.governing_display(1.0);
+        let jp_bg = jp_of_linear(
+            [
+                srgb_gamma_inv(bg_disp[0]),
+                srgb_gamma_inv(bg_disp[1]),
+                srgb_gamma_inv(bg_disp[2]),
+            ],
+            &vc,
+        );
+        let better_dj = (jp_of_linear(srgb_from_hex("#010101").unwrap(), &vc) - jp_bg).abs();
+        assert!(
+            (better_dj - magnitude).abs() + 0.5 < (dj.achieved_dj - magnitude).abs(),
+            "#010101 (dj {better_dj:.4}) is strictly closer to {magnitude} than reported {:.4}",
+            dj.achieved_dj
+        );
+        assert!(
+            !examined.iter().any(|(h, _)| h == "#010101"),
+            "the strictly-better on-grid candidate was never examined"
+        );
+    }
+
     #[test]
     #[ignore]
     fn _emit_resolve_set_golden() {
@@ -2884,6 +3134,13 @@ mod exposure_locks {
 
     /// EXPOSURE: доля целевого диапазона, чья приёмка ближайшего узла флипает, пока
     /// бюджет ходит в +-50% полосе. Малая ⇒ дискретность сетки поглощает свип.
+    ///
+    /// УТВЕРЖДАЕМАЯ характеризация (#297: printed-only gates запрещены). Домен —
+    /// текущая 8-битная СЕРАЯ сетка читаемости (Lc на белом; J' серых), т.е.
+    /// ровно то, по чему ходят оба локальных поиска при Neutral-политике; числа
+    /// не несут перцептивной/универсальной претензии — это свойство именно этой
+    /// сетки и этих бюджетов. Точные счётчики детерминированы (фиксированные
+    /// сетки, фиксированный шаг свипа) и запинены: дрейф = осознанная правка.
     #[test]
     fn exposure_quant_and_dj_budgets() {
         let lc = grey_lc();
@@ -2908,10 +3165,15 @@ mod exposure_locks {
             td += 1;
             t += 0.05;
         }
-        eprintln!(
-            "EXPOSURE QUANT_BUDGET flip={:.2}% | DJ_BUDGET flip={:.2}%",
-            100.0 * fq as f64 / tq as f64,
-            100.0 * fd as f64 / td as f64
+        assert_eq!(
+            (fq, tq),
+            (39, 2121),
+            "QUANT_BUDGET flip-share drifted: {fq}/{tq} (pinned 39/2121 = 1.84%)"
+        );
+        assert_eq!(
+            (fd, td),
+            (31, 2001),
+            "DJ_BUDGET flip-share drifted: {fd}/{td} (pinned 31/2001 = 1.55%)"
         );
     }
 }

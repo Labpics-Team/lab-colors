@@ -1,0 +1,603 @@
+//! RED-характеризация легаси-солвера (#297) на текущем main.
+//!
+//! Фикстура `contracts/solve-characterization-v1.json` — неизменяемый вход
+//! миграции честных имён: она записана ДО любых переименований и обязана
+//! реплеиться бит-в-бит (f64 сравниваются по битам, не по значению) после
+//! каждого шага миграции. Слепой rebaseline запрещён: любое расхождение —
+//! дефект PR, а не повод перегенерировать эталон.
+//!
+//! Запись эталона (ровно один раз, на baseline):
+//! `LABCOLORS_RECORD_SOLVE_CHARACTERIZATION=1 cargo test -p labcolors-core \
+//!    --test solve_characterization -- --nocapture`
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
+use labcolors_core::{
+    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, Unreachable,
+    ViewingConditions, solve, solve_many,
+};
+
+const FIXTURE_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/contracts/solve-characterization-v1.json"
+);
+
+/// Битовое представление f64: точность «биты payload не меняются» из #297.
+fn bits(value: f64) -> String {
+    format!("{:016x}", value.to_bits())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FloorSpec {
+    Default,
+    None,
+    AaUi,
+}
+
+impl FloorSpec {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::None => "none",
+            Self::AaUi => "aa-ui",
+        }
+    }
+
+    fn apply(self, contract: Contract) -> Contract {
+        match self {
+            Self::Default => contract,
+            Self::None => contract.with_conformance(Floor::None),
+            Self::AaUi => contract.with_conformance(Floor::AaUi),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ContractSpec {
+    Text(f64),
+    Ui(f64),
+    Range(f64, f64),
+}
+
+impl ContractSpec {
+    fn key(self) -> String {
+        match self {
+            Self::Text(lc) => format!("text({lc})"),
+            Self::Ui(lc) => format!("ui({lc})"),
+            Self::Range(floor, ceiling) => format!("range({floor},{ceiling})"),
+        }
+    }
+
+    fn build(self) -> Contract {
+        match self {
+            Self::Text(lc) => Contract::text(lc),
+            Self::Ui(lc) => Contract::ui(lc),
+            Self::Range(floor, ceiling) => Contract::range(floor, ceiling),
+        }
+    }
+}
+
+struct CaseSpec {
+    bg: &'static str,
+    contract: ContractSpec,
+    floor: FloorSpec,
+    hue: f64,
+    chroma: ChromaPolicy,
+}
+
+/// Невакуумная матрица: оба знака полярности, floored/non-floored успехи и
+/// каждый достижимый класс ошибки. Полоса |Lc| ∈ (7.3, 7.6) — территория
+/// квантизационных гэпов (см. `solve.rs` band-scan тест).
+fn matrix() -> Vec<CaseSpec> {
+    let mut cases = Vec::new();
+    let backgrounds = ["#FFFFFF", "#000000", "#767676", "#101012", "#007AFF"];
+    let text_targets = [30.0, 60.0, 75.0, 90.0, 150.0, -30.0, -60.0, -75.0, -90.0];
+    for bg in backgrounds {
+        for target in text_targets {
+            cases.push(CaseSpec {
+                bg,
+                contract: ContractSpec::Text(target),
+                floor: FloorSpec::Default,
+                hue: 264.0,
+                chroma: ChromaPolicy::Neutral,
+            });
+        }
+    }
+    // Квантизационная полоса: мелкий шаг у нижней границы читаемости.
+    let mut t = 7.30_f64;
+    while t <= 7.60 + 1e-9 {
+        cases.push(CaseSpec {
+            bg: "#FFFFFF",
+            contract: ContractSpec::Text(t),
+            floor: FloorSpec::None,
+            hue: 0.0,
+            chroma: ChromaPolicy::Neutral,
+        });
+        cases.push(CaseSpec {
+            bg: "#000000",
+            contract: ContractSpec::Text(-t),
+            floor: FloorSpec::None,
+            hue: 0.0,
+            chroma: ChromaPolicy::Neutral,
+        });
+        t += 0.05;
+    }
+    // Средне-серые фоны: территория FloorUnreachable для dark-on-light AA.
+    for bg in ["#6E6E6E", "#7A7A7A", "#828282"] {
+        for target in [20.0, 35.0, 45.0] {
+            cases.push(CaseSpec {
+                bg,
+                contract: ContractSpec::Text(target),
+                floor: FloorSpec::Default,
+                hue: 145.0,
+                chroma: ChromaPolicy::Relative(0.35),
+            });
+        }
+    }
+    // UI и range контракты, обе полярности, вариации floor-спеки.
+    for (bg, target) in [("#FFFFFF", 45.0), ("#101012", -45.0)] {
+        cases.push(CaseSpec {
+            bg,
+            contract: ContractSpec::Ui(target),
+            floor: FloorSpec::Default,
+            hue: 30.0,
+            chroma: ChromaPolicy::Relative(0.6),
+        });
+        cases.push(CaseSpec {
+            bg,
+            contract: ContractSpec::Ui(target),
+            floor: FloorSpec::AaUi,
+            hue: 30.0,
+            chroma: ChromaPolicy::Neutral,
+        });
+    }
+    for (bg, floor, ceiling) in [("#FFFFFF", 12.0, 20.0), ("#000000", -20.0, -12.0)] {
+        cases.push(CaseSpec {
+            bg,
+            contract: ContractSpec::Range(floor, ceiling),
+            floor: FloorSpec::Default,
+            hue: 200.0,
+            chroma: ChromaPolicy::Relative(0.2),
+        });
+    }
+    // Заведомо мёртвая зона и невалидный вход.
+    cases.push(CaseSpec {
+        bg: "#FFFFFF",
+        contract: ContractSpec::Text(3.0),
+        floor: FloorSpec::None,
+        hue: 0.0,
+        chroma: ChromaPolicy::Neutral,
+    });
+    cases.push(CaseSpec {
+        bg: "not-a-color",
+        contract: ContractSpec::Text(60.0),
+        floor: FloorSpec::Default,
+        hue: 0.0,
+        chroma: ChromaPolicy::Neutral,
+    });
+    cases
+}
+
+fn chroma_key(policy: ChromaPolicy) -> String {
+    match policy {
+        ChromaPolicy::Neutral => "neutral".to_string(),
+        ChromaPolicy::Relative(fraction) => format!("relative({fraction})"),
+    }
+}
+
+fn case_key(case: &CaseSpec) -> String {
+    format!(
+        "bg={} contract={} floor={} hue={} chroma={}",
+        case.bg,
+        case.contract.key(),
+        case.floor.key(),
+        case.hue,
+        chroma_key(case.chroma),
+    )
+}
+
+/// Точная сериализация исхода: hex-байты + битовые f64 + все поля ошибок.
+fn outcome_line(result: &Result<Solved, Unreachable>) -> String {
+    match result {
+        Ok(solved) => format!(
+            "ok hex={} lc_bits={} wcag_ratio_bits={} floor_override={} jp_bits={} h_ok_bits={} s_bits={}",
+            solved.hex(),
+            bits(solved.lc()),
+            bits(solved.wcag_ratio()),
+            solved.floor_override(),
+            bits(solved.color().jp),
+            bits(solved.color().h_ok),
+            bits(solved.color().s),
+        ),
+        Err(Unreachable::BelowContrastFloor { target }) => {
+            format!("err below_contrast_floor target_bits={}", bits(*target))
+        }
+        Err(Unreachable::ExceedsRange {
+            target,
+            max_achievable,
+        }) => format!(
+            "err exceeds_range target_bits={} max_achievable_bits={}",
+            bits(*target),
+            bits(*max_achievable)
+        ),
+        Err(Unreachable::QuantizationGap { target, nearest }) => format!(
+            "err quantization_gap target_bits={} nearest_bits={}",
+            bits(*target),
+            bits(*nearest)
+        ),
+        Err(Unreachable::FloorUnreachable { floor, max_ratio }) => format!(
+            "err floor_unreachable floor_bits={} max_ratio_bits={}",
+            bits(*floor),
+            bits(*max_ratio)
+        ),
+        Err(Unreachable::PolarityMismatch { target }) => {
+            format!("err polarity_mismatch target_bits={}", bits(*target))
+        }
+        Err(Unreachable::GamutUnsupported) => "err gamut_unsupported".to_string(),
+        Err(Unreachable::InvalidInput(message)) => {
+            format!("err invalid_input message={message:?}")
+        }
+        Err(Unreachable::InternalInvariant(message)) => {
+            format!("err internal_invariant message={message:?}")
+        }
+        Err(other) => format!("err unknown {other:?}"),
+    }
+}
+
+fn run_case(case: &CaseSpec) -> Result<Solved, Unreachable> {
+    let bg = BgInput::solid(case.bg)?;
+    solve(
+        bg,
+        case.floor.apply(case.contract.build()),
+        Hue::deg(case.hue),
+        case.chroma,
+        &ViewingConditions::srgb(),
+        Gamut::Srgb,
+    )
+}
+
+fn observed_map() -> BTreeMap<String, String> {
+    let mut observed = BTreeMap::new();
+    // Одна GamutUnsupported-строка поверх матрицы (у solve это внешний гейт).
+    let gamut_case = solve(
+        BgInput::solid("#FFFFFF").expect("literal background"),
+        Contract::text(60.0),
+        Hue::deg(0.0),
+        ChromaPolicy::Neutral,
+        &ViewingConditions::srgb(),
+        Gamut::DisplayP3,
+    );
+    observed.insert(
+        "bg=#FFFFFF contract=text(60) floor=default hue=0 chroma=neutral gamut=display-p3"
+            .to_string(),
+        outcome_line(&gamut_case),
+    );
+    for case in matrix() {
+        let previous = observed.insert(case_key(&case), outcome_line(&run_case(&case)));
+        assert!(
+            previous.is_none(),
+            "duplicate case key: {}",
+            case_key(&case)
+        );
+    }
+    observed
+}
+
+fn render(observed: &BTreeMap<String, String>) -> String {
+    let mut out = String::from("{\n");
+    let mut first = true;
+    for (key, value) in observed {
+        if !first {
+            out.push_str(",\n");
+        }
+        first = false;
+        write!(out, "  {}: {}", json_string(key), json_string(value)).unwrap();
+    }
+    out.push_str("\n}\n");
+    out
+}
+
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            control if (control as u32) < 0x20 => write!(out, "\\u{:04x}", control as u32).unwrap(),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[test]
+fn fixture_replays_bit_for_bit() {
+    let observed = observed_map();
+    let rendered = render(&observed);
+    if std::env::var_os("LABCOLORS_RECORD_SOLVE_CHARACTERIZATION").is_some() {
+        std::fs::write(FIXTURE_PATH, &rendered).expect("fixture written");
+        eprintln!(
+            "solve characterization recorded: {} cases -> {FIXTURE_PATH}",
+            observed.len()
+        );
+        return;
+    }
+    let committed = std::fs::read_to_string(FIXTURE_PATH)
+        .expect("committed solve characterization fixture exists");
+    assert_eq!(
+        rendered, committed,
+        "solve characterization drifted from the immutable baseline; \
+         a rename migration must not change bytes, payload bits or terminals"
+    );
+}
+
+/// Анти-вакуум: матрица обязана населять оба знака, floored/non-floored успехи
+/// и каждый достижимый класс ошибки; PolarityMismatch задокументирован как
+/// defensively-unreachable и обязан оставаться нулевым.
+#[test]
+fn characterization_counters_are_non_vacuous() {
+    let observed = observed_map();
+    let mut successes = 0_usize;
+    let mut floored = 0_usize;
+    let mut unfloored = 0_usize;
+    let mut positive = 0_usize;
+    let mut negative = 0_usize;
+    let mut class_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for (key, line) in &observed {
+        if line.starts_with("ok ") {
+            successes += 1;
+            if line.contains("floor_override=true") {
+                floored += 1;
+            } else {
+                unfloored += 1;
+            }
+            if key.contains("contract=text(-")
+                || key.contains("contract=ui(-")
+                || key.contains("contract=range(-")
+            {
+                negative += 1;
+            } else {
+                positive += 1;
+            }
+        } else {
+            let class = line
+                .strip_prefix("err ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .expect("error line carries a class");
+            let slot = match class {
+                "below_contrast_floor" => "below_contrast_floor",
+                "exceeds_range" => "exceeds_range",
+                "quantization_gap" => "quantization_gap",
+                "floor_unreachable" => "floor_unreachable",
+                "polarity_mismatch" => "polarity_mismatch",
+                "gamut_unsupported" => "gamut_unsupported",
+                "invalid_input" => "invalid_input",
+                "internal_invariant" => "internal_invariant",
+                other => panic!("unknown error class {other}"),
+            };
+            *class_counts.entry(slot).or_default() += 1;
+        }
+    }
+    assert!(successes >= 10, "successes: {successes}");
+    assert!(floored >= 2, "floored successes: {floored}");
+    assert!(unfloored >= 2, "unfloored successes: {unfloored}");
+    assert!(positive >= 3 && negative >= 3, "+{positive}/-{negative}");
+    for class in [
+        "below_contrast_floor",
+        "exceeds_range",
+        "floor_unreachable",
+        "gamut_unsupported",
+        "invalid_input",
+    ] {
+        assert!(
+            class_counts.get(class).copied().unwrap_or(0) >= 1,
+            "error class {class} is not populated; counts: {class_counts:?}"
+        );
+    }
+    // QuantizationGap на публичной поверхности ВЫМЕР: широкий скан (solid-фоны
+    // обеих полярностей × 24 hue × Neutral/Relative × Floor::None/AaText/AaUi ×
+    // |Lc| 7.3..112 шаг 0.05 × srgb/dim × Srgb/DisplayP3, ≈3.5M вызовов) не
+    // производит ни одного — после фикса #44 walk в 2 distinct-шага с бюджетом
+    // ±1 всегда пересекает мёртвую зону 8-битной сетки. Правда самого варианта
+    // (`nearest` локален, не глобален) запинена на его собственном шве:
+    // `solve::tests::quantization_gap_wording_is_local_not_global_counterexample`.
+    // Появление гэпа из этой матрицы = изменение поведения поиска, не «новый кейс».
+    assert_eq!(
+        class_counts.get("quantization_gap").copied().unwrap_or(0),
+        0,
+        "QuantizationGap is characterized as publicly extinct on this matrix"
+    );
+    assert_eq!(
+        class_counts.get("polarity_mismatch").copied().unwrap_or(0),
+        0,
+        "PolarityMismatch is documented as defensively unreachable"
+    );
+    assert_eq!(
+        class_counts.get("internal_invariant").copied().unwrap_or(0),
+        0,
+        "characterization inputs must not trip internal invariants"
+    );
+}
+
+/// `solve_many(bg, jobs) == jobs.map(solve)` позиционно: успехи, каждый класс
+/// per-job ошибки, пустой вход, дубликаты и смешанные валидные/невалидные
+/// задания; внешняя gamut-ошибка остаётся внешней и не сдвигает позиции.
+#[test]
+fn solve_many_is_positionally_identical_to_sequential_solve() {
+    let vc = ViewingConditions::srgb();
+    let job = |contract: Contract, hue: f64, chroma: ChromaPolicy| SolveJob {
+        contract,
+        hue: Hue::deg(hue),
+        chroma_policy: chroma,
+    };
+    let jobs = vec![
+        job(Contract::text(60.0), 264.0, ChromaPolicy::Neutral),
+        job(Contract::text(150.0), 0.0, ChromaPolicy::Neutral),
+        job(
+            Contract::text(7.45).with_conformance(Floor::None),
+            0.0,
+            ChromaPolicy::Neutral,
+        ),
+        job(
+            Contract::text(3.0).with_conformance(Floor::None),
+            0.0,
+            ChromaPolicy::Neutral,
+        ),
+        job(Contract::ui(45.0), 30.0, ChromaPolicy::Relative(0.6)),
+        // Дубликат первого задания: позиционность, не дедупликация.
+        job(Contract::text(60.0), 264.0, ChromaPolicy::Neutral),
+        job(
+            Contract::range(12.0, 20.0),
+            200.0,
+            ChromaPolicy::Relative(0.2),
+        ),
+    ];
+    let bg = BgInput::solid("#FFFFFF").expect("literal background");
+    let batch = solve_many(bg, &jobs, &vc, Gamut::Srgb).expect("batch runs");
+    assert_eq!(batch.len(), jobs.len());
+
+    let mut ok = 0_usize;
+    let mut err_classes: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, job) in jobs.iter().enumerate() {
+        let bg = BgInput::solid("#FFFFFF").expect("literal background");
+        let sequential = solve(
+            bg,
+            job.contract,
+            job.hue,
+            job.chroma_policy,
+            &vc,
+            Gamut::Srgb,
+        );
+        assert_eq!(
+            outcome_line(&batch[index]),
+            outcome_line(&sequential),
+            "position {index} diverged"
+        );
+        match &batch[index] {
+            Ok(_) => ok += 1,
+            Err(error) => {
+                let line = outcome_line(&Err::<Solved, _>(error.clone()));
+                let class = line
+                    .strip_prefix("err ")
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .expect("class")
+                    .to_string();
+                *err_classes.entry(class).or_default() += 1;
+            }
+        }
+    }
+    // Анти-вакуум партии: успехи, дубликат успеха и ≥2 разных класса ошибок;
+    // партия целиком из Err пройти не может.
+    assert!(ok >= 3, "batch successes: {ok}");
+    assert!(
+        err_classes.len() >= 2,
+        "batch must exercise several per-job error classes: {err_classes:?}"
+    );
+    assert_eq!(
+        outcome_line(&batch[0]),
+        outcome_line(&batch[5]),
+        "duplicate jobs"
+    );
+
+    // Пустой вход — пустой результат.
+    let bg = BgInput::solid("#FFFFFF").expect("literal background");
+    assert!(
+        solve_many(bg, &[], &vc, Gamut::Srgb)
+            .expect("empty batch")
+            .is_empty()
+    );
+
+    // Внешняя ошибка гамута — внешняя: Err всей партии, позиций нет.
+    let bg = BgInput::solid("#FFFFFF").expect("literal background");
+    assert!(matches!(
+        solve_many(bg, &jobs, &vc, Gamut::DisplayP3),
+        Err(Unreachable::GamutUnsupported)
+    ));
+}
+
+/// Позитивная характеризация JND-полосы против НЕЗАВИСИМОГО оракула
+/// (`recheck_against` — тот самый публичный перемер, которым адаптивный рантайм
+/// проверяет цвета каждый кадр). Пинится наблюдаемый контракт локального поиска:
+///
+/// 1. полоса в основном разрешается (анти-вакуум: all-Err пройти не может);
+/// 2. каждый разрешённый цвет попадает в симметричный бюджет ±1 Lc;
+/// 3. репортуемый `lc` бит-в-бит равен независимому перемеру того же hex —
+///    измерительная честность: `finish` и `recheck_against` читают одну ось;
+/// 4. приёмка ТОЛЕРАНТНА: существуют разрешённые случаи, где достигнутый `lc`
+///    строго НЕ дотягивает до цели (в пределах нижнего допуска бюджета) — то
+///    есть «решено» на этой поверхности значит «в допуске», а не «на-или-за
+///    целью». Это зафиксированное текущее поведение, которое честные имена
+///    #297 обязаны проговорить, а не спрятать.
+///
+/// Ни один вход полосы не смеет выносить QuantizationGap (публичное вымирание —
+/// см. counters-тест); правда о локальности `nearest`/«nearest achievable»
+/// запинена контрпримерами на шве поиска (unit-тесты solve.rs:
+/// `quantization_gap_wording_is_local_not_global_counterexample`,
+/// `dj_degraded_nearest_achievable_is_local_not_global`).
+#[test]
+fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
+    let vc = ViewingConditions::srgb();
+    let mut tolerated_undershoot = 0_usize;
+    for (bg_hex, pol) in [("#FFFFFF", 1.0_f64), ("#000000", -1.0_f64)] {
+        let mut resolved = 0_usize;
+        let mut t = 7.30_f64;
+        while t <= 7.60 + 1e-9 {
+            let target = t * pol;
+            let bg = BgInput::solid(bg_hex).expect("literal background");
+            let result = solve(
+                bg,
+                Contract::text(target).with_conformance(Floor::None),
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                Gamut::Srgb,
+            );
+            match result {
+                Ok(solved) => {
+                    resolved += 1;
+                    assert!(
+                        (solved.lc() - target).abs() <= 1.0 + 1e-12,
+                        "{bg_hex} {target}: resolved lc {} escapes the ±1 budget",
+                        solved.lc()
+                    );
+                    let remeasured = labcolors_core::recheck_against(bg_hex, &[solved.hex()], &vc)
+                        .expect("emitted hex rechecks");
+                    assert_eq!(
+                        bits(solved.lc()),
+                        bits(remeasured[0].0),
+                        "{bg_hex} {target}: reported lc diverges from the independent \
+                         re-measurement of the same hex"
+                    );
+                    let undershoots = if pol >= 0.0 {
+                        solved.lc() < target
+                    } else {
+                        solved.lc() > target
+                    };
+                    if undershoots {
+                        tolerated_undershoot += 1;
+                    }
+                }
+                Err(Unreachable::BelowContrastFloor { .. }) => {}
+                Err(other) => panic!(
+                    "{bg_hex} {target}: band may refuse only via the analytic dead \
+                     zone; got {other:?}"
+                ),
+            }
+            t += 0.01;
+        }
+        assert!(
+            resolved >= 20,
+            "anti-vacuum: the JND band on {bg_hex} must mostly resolve; got {resolved}"
+        );
+    }
+    // Толерантная нижняя приёмка обязана реально стрелять хотя бы на одном
+    // фоне полосы (сегодня — на #000000: цель −7.36 принимает #323232 с
+    // lc −7.3502, недолёт 0.0098 внутри допуска).
+    assert!(
+        tolerated_undershoot >= 1,
+        "anti-vacuum: the tolerant lower acceptance never fired on the band"
+    );
+}
