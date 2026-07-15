@@ -976,16 +976,29 @@ def run_mutation_self_tests(
     )
     rejected(
         lambda value: value["environment"].__setitem__(
-            "rustcBinarySha256", "0" * 64
+            "rustcBinarySha256", "not-a-digest"
         ),
-        "rustc binary identity",
+        "rustc binary identity shape",
     )
     rejected(
         lambda value: value["environment"].__setitem__(
-            "cargoBinarySha256", "0" * 64
+            "cargoBinarySha256", "not-a-digest"
         ),
-        "cargo binary identity",
+        "cargo binary identity shape",
     )
+    if protocol is not None:
+        rejected(
+            lambda value: value["environment"].__setitem__(
+                "rustcBinarySha256", "0" * 64
+            ),
+            "admitted rustc binary identity",
+        )
+        rejected(
+            lambda value: value["environment"].__setitem__(
+                "cargoBinarySha256", "0" * 64
+            ),
+            "admitted cargo binary identity",
+        )
     rejected(
         lambda value: value["environment"].__setitem__(
             "compilerRecipeId", "ambient-cargo"
