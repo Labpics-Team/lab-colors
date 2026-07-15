@@ -639,11 +639,11 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: verify committed #296-C1 canonical whole-call compiler evidence
+      - name: "THROWAWAY: record #296-C2 canonical whole-call compiler evidence v4"
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify bench/wcag22-feasibility-wasm-boundary-v3.json
+          --record bench/wcag22-feasibility-wasm-boundary-v4.json
       - name: independently fingerprint both execution-role WASM artifacts
         run: |
           for artifact in \
@@ -654,13 +654,13 @@ jobs:
             sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
             echo "canonical candidate artifact=${artifact} raw=${bytes}B sha256=${sha256}"
           done
-          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v3.json
+          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json
       - name: upload exact #296-C1 whole-call evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v3.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v4.json
             packages/colors/pkg/labcolors_bg.wasm
             packages/colors/compiler/labcolors_compiler_bg.wasm
           if-no-files-found: error
