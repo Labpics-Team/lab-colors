@@ -1,12 +1,13 @@
 //! RED-характеризация легаси-солвера (#297) на текущем main.
 //!
-//! Фикстура `contracts/solve-characterization-v1.json` — неизменяемый вход
-//! миграции честных имён: она записана ДО любых переименований и обязана
-//! реплеиться бит-в-бит (f64 сравниваются по битам, не по значению) после
-//! каждого шага миграции. Слепой rebaseline запрещён: любое расхождение —
-//! дефект PR, а не повод перегенерировать эталон.
+//! Фикстуры `contracts/solve-characterization-v1-{macos-aarch64,linux-x64}.json`
+//! — неизменяемый вход миграции честных имён: записаны ДО любых переименований
+//! и обязаны реплеиться бит-в-бит (f64 сравниваются по битам, не по значению)
+//! после каждого шага миграции, каждая на своей канонической платформе. Слепой
+//! rebaseline запрещён: любое расхождение — дефект PR, а не повод
+//! перегенерировать эталон.
 //!
-//! Запись эталона (ровно один раз, на baseline):
+//! Запись эталона текущей платформы (ровно один раз, на baseline):
 //! `LABCOLORS_RECORD_SOLVE_CHARACTERIZATION=1 cargo test -p labcolors-core \
 //!    --test solve_characterization -- --nocapture`
 
@@ -18,10 +19,38 @@ use labcolors_core::{
     ViewingConditions, solve, solve_many,
 };
 
-const FIXTURE_PATH: &str = concat!(
+/// Платформенные эталоны. Текущий релиз — `LegacyPlatformDependent` (#297/#292):
+/// f64-корреляты CAM16→Oklab проходят через libm (atan2/cbrt), чьи последние
+/// ulp расходятся между платформами, поэтому bit-for-bit фикстура пинится ПО
+/// ПЛАТФОРМАМ. Обе зафиксированы и обязаны реплеиться бит-в-бит каждая на
+/// своей: macos-aarch64 записана локальной канонической машиной; linux-x64 —
+/// дословный вывод канонического CI-раннера (реплей PR #327), верифицированный
+/// тем же ранером бит-в-бит. Их расхождение задокументировано и запинено тестом
+/// `platform_fixtures_agree_except_documented_hue_ulp_drift` ниже — рост дрифта
+/// за пределы экспоната = алярм, не «новая платформа шумит».
+const FIXTURE_MACOS_AARCH64: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/contracts/solve-characterization-v1.json"
+    "/contracts/solve-characterization-v1-macos-aarch64.json"
 );
+const FIXTURE_LINUX_X64: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/contracts/solve-characterization-v1-linux-x64.json"
+);
+
+/// Эталон текущей платформы. На незапиненной платформе — громкий отказ:
+/// характеризация без записанного эталона не «пропускается», её нужно записать.
+fn fixture_path() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        FIXTURE_MACOS_AARCH64
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        FIXTURE_LINUX_X64
+    } else {
+        panic!(
+            "no recorded solve-characterization fixture for this platform; \
+             record one with LABCOLORS_RECORD_SOLVE_CHARACTERIZATION=1"
+        );
+    }
+}
 
 /// Битовое представление f64: точность «биты payload не меняются» из #297.
 fn bits(value: f64) -> String {
@@ -317,16 +346,17 @@ fn json_string(value: &str) -> String {
 fn fixture_replays_bit_for_bit() {
     let observed = observed_map();
     let rendered = render(&observed);
+    let fixture = fixture_path();
     if std::env::var_os("LABCOLORS_RECORD_SOLVE_CHARACTERIZATION").is_some() {
-        std::fs::write(FIXTURE_PATH, &rendered).expect("fixture written");
+        std::fs::write(fixture, &rendered).expect("fixture written");
         eprintln!(
-            "solve characterization recorded: {} cases -> {FIXTURE_PATH}",
+            "solve characterization recorded: {} cases -> {fixture}",
             observed.len()
         );
         return;
     }
-    let committed = std::fs::read_to_string(FIXTURE_PATH)
-        .expect("committed solve characterization fixture exists");
+    let committed =
+        std::fs::read_to_string(fixture).expect("committed solve characterization fixture exists");
     assert_eq!(
         rendered, committed,
         "solve characterization drifted from the immutable baseline; \
@@ -658,5 +688,90 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
     assert!(
         tolerated_undershoot >= 1,
         "anti-vacuum: the tolerant lower acceptance never fired on the band"
+    );
+}
+
+/// Экспонат платформенной зависимости текущего релиза (#297 «current path is
+/// LegacyPlatformDependent»): между канонической macOS-arm64 и каноническим
+/// Linux-x64 расходится РОВНО хвост ulp одного поля — Oklab-hue коррелята
+/// `h_ok` — в трёх кейсах матрицы. Всё остальное (hex-байты, `lc`,
+/// `wcag_ratio`, `floor_override`, `jp`, `s`, все payload'ы ошибок) —
+/// бит-идентично на всех 77 кейсах. Два кейса — честная libm-разница
+/// (atan2/cbrt, 5 ulp на хроматике); третий — ахроматический результат, где
+/// hue вырожден (atan2 шума о шум) и платформенный шум усиливается до
+/// величины ~1e-8 при том же значении в градусах. Рост этого множества —
+/// изменение численного поведения, а не «шум новой платформы».
+#[test]
+fn platform_fixtures_agree_except_documented_hue_ulp_drift() {
+    let load = |path: &str| -> BTreeMap<String, String> {
+        let text = std::fs::read_to_string(path).expect("committed fixture exists");
+        let mut out = BTreeMap::new();
+        for line in text.lines() {
+            let Some(rest) = line.trim().strip_prefix('"') else {
+                continue;
+            };
+            let Some((key, value_part)) = rest.split_once("\": \"") else {
+                continue;
+            };
+            let value = value_part
+                .trim_end_matches(',')
+                .trim_end_matches('"')
+                .to_string();
+            out.insert(key.to_string(), value);
+        }
+        out
+    };
+    let mac = load(FIXTURE_MACOS_AARCH64);
+    let linux = load(FIXTURE_LINUX_X64);
+    assert_eq!(mac.len(), 77, "macOS fixture cardinality");
+    assert_eq!(
+        mac.keys().collect::<Vec<_>>(),
+        linux.keys().collect::<Vec<_>>(),
+        "the two platform fixtures must pin the same case matrix"
+    );
+
+    let mut drifted: Vec<(String, Vec<String>)> = Vec::new();
+    for (key, mac_line) in &mac {
+        let linux_line = &linux[key];
+        if mac_line == linux_line {
+            continue;
+        }
+        let fields = |line: &str| -> BTreeMap<String, String> {
+            line.strip_prefix("ok ")
+                .unwrap_or(line)
+                .split_whitespace()
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let mf = fields(mac_line);
+        let lf = fields(linux_line);
+        let differing: Vec<String> = mf
+            .iter()
+            .filter(|(k, v)| lf.get(*k) != Some(v))
+            .map(|(k, _)| k.clone())
+            .collect();
+        drifted.push((key.clone(), differing));
+    }
+    drifted.sort();
+
+    let expected: Vec<(String, Vec<String>)> = vec![
+        (
+            "bg=#7A7A7A contract=text(20) floor=default hue=145 chroma=relative(0.35)".to_string(),
+            vec!["h_ok_bits".to_string()],
+        ),
+        (
+            "bg=#7A7A7A contract=text(35) floor=default hue=145 chroma=relative(0.35)".to_string(),
+            vec!["h_ok_bits".to_string()],
+        ),
+        (
+            "bg=#FFFFFF contract=ui(45) floor=aa-ui hue=30 chroma=neutral".to_string(),
+            vec!["h_ok_bits".to_string()],
+        ),
+    ];
+    assert_eq!(
+        drifted, expected,
+        "the cross-platform drift exhibit must stay exactly the documented \
+         three h_ok ulp-tail cases"
     );
 }
