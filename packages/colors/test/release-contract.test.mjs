@@ -1406,6 +1406,7 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
     "wcag22-feasibility-benchmark-v2.json",
     "wcag22-feasibility-benchmark-v3.json",
     "wcag22-feasibility-benchmark-v4.json",
+    "wcag22-feasibility-benchmark-v5.json",
   ]);
   const immutableArtifactHashes = new Map([
     ["wcag22-feasibility-benchmark-v1.json", "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e"],
@@ -1438,14 +1439,14 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
     "crates",
     "labcolors-core",
     "contracts",
-    "wcag22-feasibility-benchmark-v4.json",
+    "wcag22-feasibility-benchmark-v5.json",
   ));
   const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
-  const historicalV3Payload = JSON.parse(read(
+  const historicalV4Payload = JSON.parse(read(
     "crates",
     "labcolors-core",
     "contracts",
-    "wcag22-feasibility-benchmark-v3.json",
+    "wcag22-feasibility-benchmark-v4.json",
   ));
   const identityProjection = (payload) => ({
     boundedEnvelopeModel: payload.boundedEnvelopeModel,
@@ -1460,13 +1461,13 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
   });
   assert.deepEqual(
     identityProjection(canonicalPayload),
-    identityProjection(historicalV3Payload),
-    "C1 may change provenance and observations, not the admitted finite algorithm",
+    identityProjection(historicalV4Payload),
+    "C2 may change provenance and observations, not the admitted finite algorithm",
   );
   const subjectsByPath = (payload) => new Map(
     payload.subjectManifest.map((subject) => [subject.path, subject.sha256]),
   );
-  const historicalSubjects = subjectsByPath(historicalV3Payload);
+  const historicalSubjects = subjectsByPath(historicalV4Payload);
   const canonicalSubjects = subjectsByPath(canonicalPayload);
   const subjectPaths = [...new Set([
     ...historicalSubjects.keys(),
@@ -1477,22 +1478,21 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
       (path) => historicalSubjects.get(path) !== canonicalSubjects.get(path),
     ),
     [
-      "Cargo.lock",
-      "Cargo.toml",
       "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
+      "crates/labcolors-core/src/wcag22_feasibility/explicit.rs",
       "scripts/check_wcag22_feasibility_benchmark.py",
     ],
-    "V4 source drift must be exactly the C1 workspace and admission machinery",
+    "V5 source drift must be exactly the C2 explicit module and admission machinery",
   );
   assert.equal(
     "gitRevision" in canonicalPayload.environment,
     false,
-    "durable V4 must not claim an ephemeral measurement commit",
+    "durable V5 must not claim an ephemeral measurement commit",
   );
   assert.equal(
     "gitTree" in canonicalPayload.environment,
     false,
-    "durable V4 must use its exact source-object cone as the provenance SSOT",
+    "durable V5 must use its exact source-object cone as the provenance SSOT",
   );
   assert.deepEqual(
     canonicalPayload.environment.explicitEmptyBuildInputs,
@@ -1520,12 +1520,12 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
   assert.equal(
     "rustFlags" in canonicalPayload.environment,
     false,
-    "V4 must not collapse absent and explicitly empty RUSTFLAGS",
+    "V5 must not collapse absent and explicitly empty RUSTFLAGS",
   );
   assert.equal(
     "cargoEncodedRustflags" in canonicalPayload.environment,
     false,
-    "V4 must represent source presence instead of only its empty value",
+    "V5 must represent source presence instead of only its empty value",
   );
   const rustcRelease = canonicalPayload.environment.rustcVerbose
     .match(/^rustc ([^ ]+) /u)?.[1];
@@ -1662,18 +1662,23 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v4\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 69fe95cea34c845478c0a3c260e3e4459f1bc09d76857b74d5edb50fd923410a[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275[\s\S]*?--self-test/u,
-    "V4 must bind the current C1 source cone without an intermediate worktree",
+    /v4_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v4\.json"[\s\S]*?v4_snapshot=397e5a1fdfe401dbabaf241f280a3c498aa1ab43[\s\S]*?--admit-benchmark-binary-sha256 69fe95cea34c845478c0a3c260e3e4459f1bc09d76857b74d5edb50fd923410a[\s\S]*?git worktree add --detach "\$historical_root" "\$v4_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275[\s\S]*?--self-test/u,
+    "V4 must replay through the exact merged C1 snapshot",
+  );
+  assert.match(
+    ci,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v5\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 bd8a6289cfc4605ffcba00b38c4e7309a6ee2989cbab8e76f03ed478e4fcff0a[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 d1883c30b3be4c7cf5d1866bcec7c586b7cc75fbe0f7f1078c6a73cd21086515[\s\S]*?--self-test/u,
+    "V5 must bind the current C2 source cone without an intermediate worktree",
   );
   assert.equal(
     ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    4,
-    "CI must validate exactly three historical and one current benchmark artifact",
+    5,
+    "CI must validate exactly four historical and one current benchmark artifact",
   );
   assert.equal(
     ci.match(/git worktree add --detach/gu)?.length,
-    4,
-    "only the four main-reachable historical verifier snapshots may use worktrees",
+    5,
+    "only the five main-reachable historical verifier snapshots may use worktrees",
   );
 });
 
