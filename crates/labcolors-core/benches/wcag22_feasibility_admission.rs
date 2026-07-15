@@ -9,12 +9,12 @@
 //! serialization size, or client latency. Those require their own target- and
 //! adapter-specific measurements.
 //!
-//! Run after registering this target with `harness = false`:
+//! Record only through the source-bound closed-environment shell:
 //!
 //! ```text
-//! LABCOLORS_WCAG22_BENCH_SAMPLES=5 \
-//! LABCOLORS_WCAG22_BENCH_OUTPUT=/private/tmp/labcolors-wcag22-feasibility-admission-raw-v3.json \
-//! cargo bench -p labcolors-core --bench wcag22_feasibility_admission
+//! python3 scripts/check_wcag22_feasibility_benchmark.py \
+//!   /private/tmp/labcolors-wcag22-feasibility-admission-raw-v3.json \
+//!   --record --record-toolchain 1.96.0 --record-sample-count 5
 //! ```
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -46,6 +46,14 @@ const PAGE_BYTES: u64 = 65_536;
 const DECISION_SLOT_BYTES: u64 = 32;
 const PARTITION_BYTES: u64 = 32;
 const MAX_APPLICABLE_EDGES: u64 = PAGE_BYTES / DECISION_SLOT_BYTES - 1;
+// Cargo documents these as the highest-precedence rustflags input and the two
+// wrapper overrides. Requiring presence with an empty value makes every lower
+// config/env source inapplicable instead of trying to enumerate it.
+const EXPLICIT_EMPTY_BUILD_INPUTS: [&str; 3] = [
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+];
 // The committed result artifact lives under `contracts`, so binding that whole
 // tree would make durable verification self-referential. Bind the two contracts
 // the compiler actually consumes as exact blobs instead.
@@ -940,6 +948,28 @@ fn command_output(mut command: Command) -> String {
     }
 }
 
+fn require_closed_compiler_environment() -> Result<(), Box<dyn Error>> {
+    for name in EXPLICIT_EMPTY_BUILD_INPUTS {
+        match std::env::var_os(name) {
+            Some(value) if value.is_empty() => {}
+            Some(_) => return Err(format!("{name} must be explicitly empty").into()),
+            None => return Err(format!("{name} must be explicitly present").into()),
+        }
+    }
+    Ok(())
+}
+
+fn executable_sha256(variable: &str) -> Result<[u8; 32], Box<dyn Error>> {
+    let value = std::env::var_os(variable)
+        .ok_or_else(|| format!("{variable} must identify the executed toolchain binary"))?;
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err(format!("{variable} must be an absolute path").into());
+    }
+    let bytes = fs::read(&path)?;
+    Ok(*subject_sha256::digest(&bytes).as_bytes())
+}
+
 fn repository_root() -> PathBuf {
     let manifest = Path::new(option_env!("CARGO_MANIFEST_DIR").unwrap_or("."));
     manifest
@@ -1040,9 +1070,11 @@ fn render_json(
     runs: &[ScenarioRun],
     protocol: &Protocol,
     git: &GitMetadata,
-) -> Result<String, std::io::Error> {
+) -> Result<String, Box<dyn Error>> {
     let subjects = subject_manifest()?;
     let rustc = rustc_verbose();
+    let rustc_binary_sha256 = executable_sha256("RUSTC")?;
+    let cargo_binary_sha256 = executable_sha256("CARGO")?;
     let cargo = {
         let executable = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut command = Command::new(executable);
@@ -1059,8 +1091,6 @@ fn render_json(
     .into_iter()
     .filter_map(|(name, active)| active.then_some(name))
     .collect::<Vec<_>>();
-    let rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
-    let encoded_rustflags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     let profile = ResourceProfileIdV1::Compile;
     let mut output = String::new();
     output.push_str("{\n  \"schemaVersion\": 1,\n  \"artifactId\": ");
@@ -1090,17 +1120,26 @@ fn render_json(
     push_json_string(&mut output, &rustc);
     output.push_str(",\n    \"cargoVerbose\": ");
     push_json_string(&mut output, &cargo);
-    output.push_str(",\n    \"buildRecipeId\": \"cargo-bench-locked-explicit-features-empty-rustflags-v1\",\n    \"activeCoreFeatures\": [");
+    output.push_str(
+        ",\n    \"compilerRecipeId\": \"closed-cargo-bench-v1\",\n    \"activeCoreFeatures\": [",
+    );
     for (index, feature) in active_core_features.iter().enumerate() {
         if index != 0 {
             output.push_str(", ");
         }
         push_json_string(&mut output, feature);
     }
-    output.push_str("],\n    \"rustFlags\": ");
-    push_json_string(&mut output, &rustflags);
-    output.push_str(",\n    \"cargoEncodedRustflags\": ");
-    push_json_string(&mut output, &encoded_rustflags);
+    output.push_str("],\n    \"explicitEmptyBuildInputs\": [");
+    for (index, name) in EXPLICIT_EMPTY_BUILD_INPUTS.iter().enumerate() {
+        if index != 0 {
+            output.push_str(", ");
+        }
+        push_json_string(&mut output, name);
+    }
+    output.push_str("],\n    \"rustcBinarySha256\": ");
+    push_json_string(&mut output, &hex(&rustc_binary_sha256));
+    output.push_str(",\n    \"cargoBinarySha256\": ");
+    push_json_string(&mut output, &hex(&cargo_binary_sha256));
     write!(
         output,
         ",\n    \"sourceConeClean\": {},\n    \"sampleCountExplicit\": {},\n    \"sourceObjects\": {{\n",
@@ -1240,6 +1279,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ResourceProfileIdV1::Compile.limit(ResourceDimensionV1::ApplicableEdges),
         MAX_APPLICABLE_EDGES
     );
+    require_closed_compiler_environment()?;
     let protocol = parse_protocol()?;
     let source_before = git_metadata()?;
     if !source_before.cone_clean {

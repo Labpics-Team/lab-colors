@@ -19,8 +19,10 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -77,6 +79,12 @@ SOURCE_OBJECTS = (
     ),
     ("benchmarkChecker", "scripts/check_wcag22_feasibility_benchmark.py"),
 )
+COMPILER_RECIPE_ID = "closed-cargo-bench-v1"
+EXPLICIT_EMPTY_BUILD_INPUTS = (
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+)
 ENVIRONMENT_FIELDS = frozenset(
     {
         "execution",
@@ -92,10 +100,11 @@ ENVIRONMENT_FIELDS = frozenset(
         "requestConstructionMeasured",
         "rustcVerbose",
         "cargoVerbose",
-        "buildRecipeId",
+        "compilerRecipeId",
         "activeCoreFeatures",
-        "rustFlags",
-        "cargoEncodedRustflags",
+        "explicitEmptyBuildInputs",
+        "rustcBinarySha256",
+        "cargoBinarySha256",
         "sourceConeClean",
         "sampleCountExplicit",
         "sourceObjects",
@@ -171,6 +180,8 @@ class AdmissionProtocol:
         *,
         rustc_release: str,
         cargo_release: str,
+        rustc_binary_sha256: str,
+        cargo_binary_sha256: str,
         target_triple: str,
         target_arch: str,
         target_os: str,
@@ -180,6 +191,8 @@ class AdmissionProtocol:
     ) -> None:
         self.rustc_release = rustc_release
         self.cargo_release = cargo_release
+        self.rustc_binary_sha256 = rustc_binary_sha256
+        self.cargo_binary_sha256 = cargo_binary_sha256
         self.target_triple = target_triple
         self.target_arch = target_arch
         self.target_os = target_os
@@ -191,6 +204,174 @@ class AdmissionProtocol:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def toolchain_binary(toolchain: str, binary: str) -> Path:
+    result = subprocess.run(
+        ["rustup", "which", "--toolchain", toolchain, binary],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    path = Path(result.stdout.strip()).resolve(strict=True)
+    require(path.is_file() and path.is_absolute(),
+            f"rustup did not resolve an absolute {binary} binary")
+    return path
+
+
+def require_empty_cargo_config_hierarchy(cwd: Path, cargo_home: Path) -> None:
+    candidates = [
+        *(parent / ".cargo" / name
+          for parent in (cwd, *cwd.parents)
+          for name in ("config", "config.toml")),
+        cargo_home / "config",
+        cargo_home / "config.toml",
+    ]
+    for candidate in candidates:
+        require(not candidate.exists(),
+                f"closed record recipe rejects Cargo config: {candidate}")
+
+
+def closed_record_environment(
+    temporary_root: Path,
+    output: Path,
+    rustc: Path,
+    cargo: Path,
+    sample_count: int,
+    path_value: str,
+) -> dict[str, str]:
+    home = temporary_root / "home"
+    cargo_home = temporary_root / "cargo-home"
+    target = temporary_root / "target"
+    for directory in (home, cargo_home, target):
+        directory.mkdir()
+    require_empty_cargo_config_hierarchy(temporary_root, cargo_home)
+    return {
+        "PATH": path_value,
+        "HOME": str(home),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "CARGO": str(cargo),
+        "RUSTC": str(rustc),
+        "CARGO_HOME": str(cargo_home),
+        "CARGO_TARGET_DIR": str(target),
+        "CARGO_CACHE_RUSTC_INFO": "0",
+        "CARGO_ENCODED_RUSTFLAGS": "",
+        "RUSTC_WRAPPER": "",
+        "RUSTC_WORKSPACE_WRAPPER": "",
+        "LABCOLORS_WCAG22_BENCH_SAMPLES": str(sample_count),
+        "LABCOLORS_WCAG22_BENCH_OUTPUT": str(output),
+    }
+
+
+def record_command(cargo: Path) -> list[str]:
+    return [
+        str(cargo),
+        "bench",
+        "--locked",
+        "--manifest-path",
+        str(ROOT / "Cargo.toml"),
+        "--no-default-features",
+        "--features",
+        "wcag22-feasibility,wcag22-explicit-feasibility",
+        "-p",
+        "labcolors-core",
+        "--bench",
+        "wcag22_feasibility_admission",
+    ]
+
+
+def record_artifact(
+    output: Path,
+    toolchain: str,
+    sample_count: int,
+) -> None:
+    require(toolchain != "", "--record-toolchain must be non-empty")
+    require(sample_count >= 5,
+            "--record-sample-count must request at least five observations")
+    require(output.parent.is_dir(), "record output parent directory must exist")
+    rustc = toolchain_binary(toolchain, "rustc")
+    cargo = toolchain_binary(toolchain, "cargo")
+    source_before = dependency_cone_snapshot()
+    with tempfile.TemporaryDirectory(prefix="labcolors-wcag22-record-") as raw_root:
+        temporary_root = Path(raw_root)
+        environment = closed_record_environment(
+            temporary_root,
+            output.resolve(),
+            rustc,
+            cargo,
+            sample_count,
+            os.environ.get("PATH", os.defpath),
+        )
+        subprocess.run(
+            record_command(cargo),
+            cwd=temporary_root,
+            env=environment,
+            check=True,
+        )
+    require(dependency_cone_snapshot() == source_before,
+            "dependency cone changed between the clean pre-build snapshot and record completion")
+    require(output.is_file(), "closed record recipe did not produce the artifact")
+
+
+def run_record_recipe_self_tests() -> int:
+    with tempfile.TemporaryDirectory(prefix="labcolors-wcag22-recipe-test-") as raw_root:
+        temporary_root = Path(raw_root)
+        output = temporary_root / "artifact.json"
+        rustc = Path("/toolchain/rustc")
+        cargo = Path("/toolchain/cargo")
+        environment = closed_record_environment(
+            temporary_root,
+            output,
+            rustc,
+            cargo,
+            5,
+            "/controlled/bin",
+        )
+        require(
+            all(environment[name] == "" for name in EXPLICIT_EMPTY_BUILD_INPUTS),
+            "closed recipe must explicitly empty every compiler override",
+        )
+        hostile_names = (
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_PROFILE_BENCH_OPT_LEVEL",
+            "RUSTFLAGS",
+            "RUSTC_BOOTSTRAP",
+        )
+        require(
+            all(name not in environment for name in hostile_names),
+            "closed recipe leaked an ambient semantic build input",
+        )
+        command = record_command(cargo)
+        require(
+            command[1:] == [
+                "bench",
+                "--locked",
+                "--manifest-path",
+                str(ROOT / "Cargo.toml"),
+                "--no-default-features",
+                "--features",
+                "wcag22-feasibility,wcag22-explicit-feasibility",
+                "-p",
+                "labcolors-core",
+                "--bench",
+                "wcag22_feasibility_admission",
+            ],
+            "closed recipe command drifted",
+        )
+        cargo_directory = temporary_root / ".cargo"
+        cargo_directory.mkdir()
+        (cargo_directory / "config.toml").write_text("[build]\n", encoding="utf-8")
+        try:
+            require_empty_cargo_config_hierarchy(
+                temporary_root,
+                Path(environment["CARGO_HOME"]),
+            )
+        except ValueError:
+            pass
+        else:
+            raise ValueError("record recipe mutation survived: Cargo config hierarchy")
+    return 4
 
 
 def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -551,20 +732,22 @@ def check_environment(
     cargo_verbose = environment.get("cargoVerbose")
     require(isinstance(cargo_verbose, str),
             "environment.cargoVerbose must be present even when unavailable")
-    require(
-        environment.get("buildRecipeId")
-        == "cargo-bench-locked-explicit-features-empty-rustflags-v1",
-        "environment.buildRecipeId drifted from the exact native recipe",
-    )
+    require(environment.get("compilerRecipeId") == COMPILER_RECIPE_ID,
+            "environment.compilerRecipeId drifted from the closed native recipe")
     require(
         environment.get("activeCoreFeatures")
         == ["wcag22-feasibility", "wcag22-explicit-feasibility"],
         "environment.activeCoreFeatures drifted from the measured feature set",
     )
-    require(environment.get("rustFlags") == "",
-            "native admission requires empty RUSTFLAGS")
-    require(environment.get("cargoEncodedRustflags") == "",
-            "native admission requires empty CARGO_ENCODED_RUSTFLAGS")
+    require(
+        environment.get("explicitEmptyBuildInputs")
+        == list(EXPLICIT_EMPTY_BUILD_INPUTS),
+        "native admission requires the exact explicit-empty compiler overrides",
+    )
+    rustc_binary_sha256 = environment.get("rustcBinarySha256")
+    cargo_binary_sha256 = environment.get("cargoBinarySha256")
+    require_digest(rustc_binary_sha256, "environment.rustcBinarySha256")
+    require_digest(cargo_binary_sha256, "environment.cargoBinarySha256")
     pointer_width_bits = exact_nonnegative_int(
         environment.get("pointerWidthBits"),
         "environment.pointerWidthBits",
@@ -589,6 +772,10 @@ def check_environment(
             "measured target architecture differs from the pinned reference target")
     require(environment.get("targetOs") == protocol.target_os,
             "measured target OS differs from the pinned reference target")
+    require(rustc_binary_sha256 == protocol.rustc_binary_sha256,
+            "measured rustc binary differs from the pinned toolchain")
+    require(cargo_binary_sha256 == protocol.cargo_binary_sha256,
+            "measured cargo binary differs from the pinned toolchain")
     require(pointer_width_bits == protocol.pointer_width_bits,
             "measured pointer width differs from the pinned reference target")
     require(package_version == protocol.package_version,
@@ -777,8 +964,33 @@ def run_mutation_self_tests(
         "active Core feature set",
     )
     rejected(
-        lambda value: value["environment"].__setitem__("rustFlags", "-Ctarget-cpu=native"),
-        "ambient RUSTFLAGS",
+        lambda value: value["environment"].__setitem__(
+            "explicitEmptyBuildInputs",
+            list(reversed(EXPLICIT_EMPTY_BUILD_INPUTS)),
+        ),
+        "explicit-empty compiler input order",
+    )
+    rejected(
+        lambda value: value["environment"]["explicitEmptyBuildInputs"].pop(),
+        "missing explicit-empty compiler input",
+    )
+    rejected(
+        lambda value: value["environment"].__setitem__(
+            "rustcBinarySha256", "0" * 64
+        ),
+        "rustc binary identity",
+    )
+    rejected(
+        lambda value: value["environment"].__setitem__(
+            "cargoBinarySha256", "0" * 64
+        ),
+        "cargo binary identity",
+    )
+    rejected(
+        lambda value: value["environment"].__setitem__(
+            "compilerRecipeId", "ambient-cargo"
+        ),
+        "closed compiler recipe",
     )
     rejected(
         lambda value: (
@@ -828,6 +1040,8 @@ def main() -> int:
     )
     parser.add_argument("--admit-rustc-release")
     parser.add_argument("--admit-cargo-release")
+    parser.add_argument("--admit-rustc-binary-sha256")
+    parser.add_argument("--admit-cargo-binary-sha256")
     parser.add_argument("--admit-target-triple")
     parser.add_argument("--admit-target-arch")
     parser.add_argument("--admit-target-os")
@@ -835,17 +1049,36 @@ def main() -> int:
     parser.add_argument("--admit-package-version")
     parser.add_argument("--admit-sample-count", type=int)
     parser.add_argument("--artifact-sha256")
+    parser.add_argument("--record", action="store_true")
+    parser.add_argument("--record-toolchain")
+    parser.add_argument("--record-sample-count", type=int)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     admission_values = (
         args.admit_rustc_release,
         args.admit_cargo_release,
+        args.admit_rustc_binary_sha256,
+        args.admit_cargo_binary_sha256,
         args.admit_target_triple,
         args.admit_target_arch,
         args.admit_target_os,
         args.admit_pointer_width_bits,
         args.admit_package_version,
         args.admit_sample_count,
+    )
+    record_values = (args.record_toolchain, args.record_sample_count)
+    require(
+        (args.record and all(value is not None for value in record_values))
+        or (not args.record and all(value is None for value in record_values)),
+        "--record requires both --record-toolchain and --record-sample-count",
+    )
+    require(
+        not args.record or all(value is None for value in admission_values),
+        "recording and pre-declared admission pins are separate operations",
+    )
+    require(
+        not args.record or args.artifact_sha256 is None,
+        "a new recording cannot have a pre-declared artifact SHA-256",
     )
     require(
         all(value is None for value in admission_values)
@@ -864,15 +1097,27 @@ def main() -> int:
                 "--admit-pointer-width-bits must be positive")
         require(args.admit_package_version != "",
                 "--admit-package-version must be non-empty")
+        require_digest(args.admit_rustc_binary_sha256,
+                       "--admit-rustc-binary-sha256")
+        require_digest(args.admit_cargo_binary_sha256,
+                       "--admit-cargo-binary-sha256")
         protocol = AdmissionProtocol(
             rustc_release=args.admit_rustc_release,
             cargo_release=args.admit_cargo_release,
+            rustc_binary_sha256=args.admit_rustc_binary_sha256,
+            cargo_binary_sha256=args.admit_cargo_binary_sha256,
             target_triple=args.admit_target_triple,
             target_arch=args.admit_target_arch,
             target_os=args.admit_target_os,
             pointer_width_bits=args.admit_pointer_width_bits,
             package_version=args.admit_package_version,
             sample_count=args.admit_sample_count,
+        )
+    if args.record:
+        record_artifact(
+            args.artifact,
+            args.record_toolchain,
+            args.record_sample_count,
         )
     payload_bytes = args.artifact.read_bytes()
     digest_checks = 0
@@ -886,6 +1131,7 @@ def main() -> int:
             else:
                 raise ValueError("checker mutation survived: artifact SHA-256")
     parser_checks = run_json_parser_self_tests() if args.self_test else 0
+    recipe_checks = run_record_recipe_self_tests() if args.self_test else 0
     payload = decode_benchmark_artifact(payload_bytes)
     check(payload, protocol)
     mutation_checks = (
@@ -893,7 +1139,7 @@ def main() -> int:
         if args.self_test
         else 0
     )
-    mutation_checks += digest_checks + parser_checks
+    mutation_checks += digest_checks + parser_checks + recipe_checks
     print(
         "WCAG22 feasibility benchmark artifact: PASS; "
         f"scenarios={len(REQUIRED_SCENARIOS)}; "
