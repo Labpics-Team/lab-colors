@@ -312,13 +312,34 @@ diagnostics и legacy `wcagRatio` не могут изменить этот ве
 принимает только зарегистрированную нейтральную ось V1. Явные клиентские наборы
 sRGB8 доступны в Rust Core и этим transport API не принимаются.
 
+В браузере compiler принадлежит offline/Worker execution class: main thread
+импортирует только runtime, а dedicated module Worker владеет compiler WASM и
+полным вызовом. Node build-tooling может вызывать тот же entry напрямую.
+
 ```ts
-import init, {
+// color-compiler.worker.ts
+import initCompiler, {
   evaluateWcag22Feasibility,
   type Wcag22FeasibilityRequestV1,
 } from "@labpics/colors/compiler";
 
-await init();
+await initCompiler();
+
+self.addEventListener(
+  "message",
+  ({ data }: MessageEvent<Wcag22FeasibilityRequestV1>) => {
+    const bytes = new TextEncoder().encode(JSON.stringify(data));
+    self.postMessage(evaluateWcag22Feasibility(bytes));
+  },
+);
+```
+
+```ts
+// build-colors.ts — main thread не импортирует runtime-код compiler-а
+import type {
+  Wcag22FeasibilityOutcomeV1,
+  Wcag22FeasibilityRequestV1,
+} from "@labpics/colors/compiler";
 
 const request: Wcag22FeasibilityRequestV1 = {
   schemaVersion: 1,
@@ -333,8 +354,20 @@ const request: Wcag22FeasibilityRequestV1 = {
   }],
 };
 
-const bytes = new TextEncoder().encode(JSON.stringify(request));
-const outcome = evaluateWcag22Feasibility(bytes);
+const outcome = await new Promise<Wcag22FeasibilityOutcomeV1>((resolve, reject) => {
+  const worker = new Worker(new URL("./color-compiler.worker.ts", import.meta.url), {
+    type: "module",
+  });
+  worker.addEventListener("message", ({ data }) => {
+    worker.terminate();
+    resolve(data);
+  }, { once: true });
+  worker.addEventListener("error", (event) => {
+    worker.terminate();
+    reject(event.error);
+  }, { once: true });
+  worker.postMessage(request);
+});
 
 if (outcome.outcome === "success") {
   // feasible | infeasible | notEvaluated
@@ -347,7 +380,7 @@ if (outcome.outcome === "success") {
 
 Вход — только настоящий `Uint8Array` со strict JSON V1; иной JavaScript-тип
 детерминированно отклоняется `TypeError` до чтения WASM-owned ceiling и копии.
-Граница размера выведена из грамматики и resource profile; после `init()` её
+Граница размера выведена из грамматики и resource profile; после `initCompiler()` её
 возвращает `wcag22FeasibilityMaxBytes()`. Package wrapper проверяет `byteLength`
 до избежимой копии в WASM, а Rust повторяет авторитетную проверку. Выход хранит
 домен и канонические связи по одному разу, а решения — в candidate-major LSB0

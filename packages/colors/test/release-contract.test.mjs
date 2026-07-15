@@ -1382,6 +1382,26 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
     "wcag22-feasibility-benchmark-v3.json",
     "wcag22-feasibility-benchmark-v4.json",
   ]);
+  const immutableArtifactHashes = new Map([
+    ["wcag22-feasibility-benchmark-v1.json", "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e"],
+    ["wcag22-feasibility-benchmark-v2.json", "d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202"],
+    ["wcag22-feasibility-benchmark-v3.json", "46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a"],
+    ["wcag22-feasibility-benchmark-v4.json", "3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275"],
+  ]);
+  for (const [name, expectedSha256] of immutableArtifactHashes) {
+    const bytes = readFileSync(join(
+      root,
+      "crates",
+      "labcolors-core",
+      "contracts",
+      name,
+    ));
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      expectedSha256,
+      `${name} is append-only evidence and must stay byte-exact`,
+    );
+  }
 
   const benchmarkChecker = join(
     root,
@@ -1568,6 +1588,11 @@ test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subject
   }
 
   const ci = read(".github", "workflows", "ci.yml");
+  assert.match(
+    ci,
+    /sha256sum --check --strict <<'SHA256'[\s\S]*?7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v1\.json[\s\S]*?d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json[\s\S]*?46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json[\s\S]*?3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v4\.json[\s\S]*?SHA256/u,
+    "CI must pin current-checkout bytes before historical replay",
+  );
   const rejectedDraftFingerprints =
     /b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace/u;
   for (const [path, source] of [

@@ -368,6 +368,13 @@ jobs:
         run: python3 scripts/verify_wcag22_explicit_selection_identity.py --self-test
       - name: validate historical and current WCAG22 feasibility benchmark evidence
         run: |
+          sha256sum --check --strict <<'SHA256'
+          7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json
+          d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v2.json
+          46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json
+          3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275  crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json
+          SHA256
+
           historical_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v1.json"
           historical_protocol=(
             --admit-revision fea99a1ea4148a5a72423c88220655f7f84213fe
@@ -583,14 +590,11 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "record and verify #296-C1 canonical whole-call compiler candidate"
-        # Candidate bytes stay in runner.temp until the exact artifact is
-        # reviewed and committed; the checkout remains clean for release pack.
+      - name: verify committed #296-C1 canonical whole-call compiler evidence
         working-directory: packages/colors
-        run: |
-          evidence="$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v3.json"
-          node bench/wcag22-feasibility-boundary.bench.mjs --record "$evidence" >/dev/null
-          node bench/wcag22-feasibility-boundary.bench.mjs --verify "$evidence"
+        run: >-
+          node bench/wcag22-feasibility-boundary.bench.mjs
+          --verify bench/wcag22-feasibility-wasm-boundary-v3.json
       - name: independently fingerprint both execution-role WASM artifacts
         run: |
           for artifact in \
@@ -601,13 +605,13 @@ jobs:
             sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
             echo "canonical candidate artifact=${artifact} raw=${bytes}B sha256=${sha256}"
           done
-          sha256sum "$RUNNER_TEMP/wcag22-feasibility-wasm-boundary-v3.json"
-      - name: "upload exact #296-C1 candidate whole-call evidence"
+          sha256sum packages/colors/bench/wcag22-feasibility-wasm-boundary-v3.json
+      - name: upload exact #296-C1 whole-call evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v3.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-v3.json
             packages/colors/pkg/labcolors_bg.wasm
             packages/colors/compiler/labcolors_compiler_bg.wasm
           if-no-files-found: error

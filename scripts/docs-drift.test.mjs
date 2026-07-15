@@ -327,9 +327,8 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
     'appearanceDiagnosticProfile',
     'selectionDiagnosticProfile',
     'resolve_alpha_analog_hex',
-    'import initCompiler from "@labpics/colors/compiler"',
-    'await Promise.all([initRuntime(), initCompiler()])',
-    'один и тот же модуль для двух ролей не подходит',
+    'dedicated module Worker',
+    'Один и тот же модуль для',
     'Rollback',
   ]) {
     assert.ok(migration.includes(required), `migration не содержит ${required}`);
@@ -339,6 +338,11 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
   assert.doesNotMatch(adr, /referenceProfile/);
   assert.doesNotMatch(readme, /\bdiagnosticProfile\b/);
   assert.doesNotMatch(adr, /\bdiagnosticProfile\b/);
+  assert.match(
+    readme,
+    /new Worker\(new URL\("\.\/color-compiler\.worker\.ts"[\s\S]*?worker\.terminate\(\)/,
+  );
+  assert.doesNotMatch(migration, /Promise\.all\(\[initRuntime\(\), initCompiler\(\)\]\)/);
 });
 
 test('exact-alpha migration экранирует absolute-value pipes внутри Markdown tables', () => {

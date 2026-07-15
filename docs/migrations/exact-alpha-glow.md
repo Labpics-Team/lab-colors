@@ -469,17 +469,21 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   `await init()` инициализирует только runtime. Перед первым compiler-вызовом
   отдельно импортируйте `init` (или `initSync`) из `@labpics/colors/compiler`
   и инициализируйте его собственный WASM; иначе compiler API fail-fast, а не
-  использует скрытый runtime fallback.
+  использует скрытый runtime fallback. В браузере перенесите compiler import,
+  init и evaluate в dedicated module Worker; UI thread загружает только
+  runtime.
 
   ```ts
-  import initRuntime from "@labpics/colors";
-  import initCompiler from "@labpics/colors/compiler";
-
-  await Promise.all([initRuntime(), initCompiler()]);
+  const compiler = new Worker(
+    new URL("./color-compiler.worker.ts", import.meta.url),
+    { type: "module" },
+  );
   ```
 
-  Для Node передайте каждой функции байты её WASM, как показано в package
-  README; один и тот же модуль для двух ролей не подходит.
+  Worker-модуль инициализирует `@labpics/colors/compiler` и выполняет полный
+  вызов, как показано в package README. Для Node offline tooling можно вызывать
+  entry напрямую, передав ему байты compiler WASM. Один и тот же модуль для
+  двух ролей не подходит.
 - Feasibility полностью перечисляет зарегистрированный домен и не выбирает
   цвет. Selection policy, брендовая близость, polarity и appearance-scoring не
   являются скрытой частью этого migration-контракта.
