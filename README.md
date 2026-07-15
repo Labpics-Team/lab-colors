@@ -31,12 +31,13 @@ NamedRoleTable
   source-over/screen операции несут проверяемый профиль и `bit-exact`
   сертификат; Glow требует явный decision profile и может завершиться
   типизированным `Indeterminate` без CSS fallback.
-- **Полная проверка конечного домена.** Клиент может объявить opaque relations,
-  точные соседние sRGB8-цвета и критерии WCAG 2.2; Core полностью перечислит
-  зарегистрированную neutral-axis и вернёт packed feasible partition с
-  доказательством. В npm это offline-операция `@labpics/colors/compiler` с
-  отдельным WASM, а не часть browser runtime. Это проверка выполнимости, а не
-  скрытая политика выбора.
+- **Полная проверка конечного домена.** В опубликованном V1 клиент объявляет
+  opaque occurrence relations, точные соседние sRGB8-цвета и критерии WCAG 2.2,
+  а домен фиксирован зарегистрированной `srgb8-neutral-axis-v1`. Core полностью
+  перечисляет его и возвращает packed feasible partition с доказательством. В
+  npm это offline-операция `@labpics/colors/compiler` с отдельным WASM, а не
+  часть browser runtime; явный клиентский домен пока остаётся Core-only. Это
+  проверка выполнимости, а не скрытая политика выбора.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
 - **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальной областью DOM.
 

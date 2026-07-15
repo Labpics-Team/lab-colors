@@ -26,12 +26,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(__dirname, '..');
 
-/** Генерируемое/чужое — не инвентарь. `pkg` — артефакт wasm-pack. */
+/** Генерируемое/чужое вне публичного package-контракта — не инвентарь. */
 const SKIP_DIRS = new Set([
   'node_modules',
   'target',
   '.git',
-  'pkg',
   'dist',
   '.build',
   'coverage',
@@ -190,11 +189,17 @@ export function lawForFile(path) {
 export function nonLawFiles(root = ROOT) {
   const packageRoot = join(root, 'packages', 'colors');
   const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
-  const generatedPackageFiles = new Set(
-    (packageJson.files ?? [])
-      .filter((path) => /^(?:pkg|compiler)\//.test(path))
-      .map((path) => `packages/colors/${path}`),
-  );
+  const generatedPackageFiles = new Set();
+  for (const declaredPath of packageJson.files ?? []) {
+    const packagePath = declaredPath.replace(/^\.\//, '').replace(/\/+$/, '');
+    if (packagePath === 'pkg' || packagePath === 'compiler') {
+      for (const file of walk(join(packageRoot, packagePath))) {
+        generatedPackageFiles.add(`packages/colors/${packagePath}/${file}`);
+      }
+    } else if (/^(?:pkg|compiler)\//.test(packagePath)) {
+      generatedPackageFiles.add(`packages/colors/${packagePath}`);
+    }
+  }
   const bad = new Set();
   for (const top of SCAN_TOPS) {
     for (const f of walk(join(root, top))) {

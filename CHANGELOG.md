@@ -41,14 +41,14 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   typed conflict/resource failures и opaque-ID law. Шесть прежних family
   остаются byte-identical.
 
-### Breaking (npm API)
+### Несовместимые изменения (npm API)
 
 - Complete-feasibility API и его request/outcome types перенесены из package
   root в `@labpics/colors/compiler`. Offline compiler загружает отдельный WASM
   через `@labpics/colors/compiler/wasm`; runtime dependency cone больше не
   содержит feasibility protocol.
 
-### Breaking (Rust API)
+### Несовместимые изменения (Rust API)
 
 - Удалены `classify_at_least_v1`, `AtLeastDecisionV1` и `DecisionGuaranteeV1`:
   сравнительная «сила гарантии» как данные допускала lossy-схлопывание

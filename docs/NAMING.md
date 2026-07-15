@@ -52,10 +52,11 @@
 
 ### npm-пакет @labpics/colors
 
-- Субпуть = домен, kebab-case: `./apply-theme`, `./watch-theme`,
-  `./adapt-theme`, `./effective-bg`, `./compiler`. Каждый субпуть разрешается
-  в исходник packages/colors (exports без кода запрещены — сверяет typecheck
-  пакета).
+- Исходный JS/TS-субпуть = домен, kebab-case: `./apply-theme`, `./watch-theme`,
+  `./adapt-theme`, `./effective-bg`, `./compiler`. Каждый такой субпуть
+  разрешается в исходник packages/colors (exports без кода запрещены — сверяет
+  typecheck пакета). Служебные и артефактные субпути ниже имеют собственные
+  правила и не обязаны разрешаться в JS/TS-исходник.
 - Служебный субпуть `./package.json` — стандарт npm, разрешён законом.
 - Служебный субпуть `./build-metadata.json` — versioned machine-readable build
   metadata опубликованных байтов; расширение фиксирует JSON-формат контракта.

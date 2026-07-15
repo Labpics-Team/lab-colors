@@ -74,24 +74,53 @@ test('lawForFile: по-доменные законы', () => {
 test('generated WASM names come from package files without hiding undeclared source', () => {
   const root = mkdtempSync(join(tmpdir(), 'labcolors-naming-generated-'));
   try {
-    const generated = join(root, 'packages', 'colors', 'compiler');
-    mkdirSync(generated, { recursive: true });
+    const compiler = join(root, 'packages', 'colors', 'compiler');
+    const runtime = join(root, 'packages', 'colors', 'pkg');
+    mkdirSync(compiler, { recursive: true });
+    mkdirSync(runtime, { recursive: true });
     writeFileSync(
       join(root, 'packages', 'colors', 'package.json'),
       JSON.stringify({
         files: [
           'compiler/labcolors_compiler.js',
           'compiler/labcolors_compiler_bg.wasm',
+          'pkg/labcolors.js',
         ],
       }),
     );
-    writeFileSync(join(generated, 'labcolors_compiler.js'), 'generated');
-    writeFileSync(join(generated, 'labcolors_compiler_bg.wasm'), 'generated');
-    writeFileSync(join(generated, 'hand_written_bad.js'), 'source');
+    writeFileSync(join(compiler, 'labcolors_compiler.js'), 'generated');
+    writeFileSync(join(compiler, 'labcolors_compiler_bg.wasm'), 'generated');
+    writeFileSync(join(compiler, 'hand_written_bad.js'), 'source');
+    writeFileSync(join(runtime, 'labcolors.js'), 'generated');
+    writeFileSync(join(runtime, 'hand_written_runtime_bad.js'), 'source');
     assert.deepEqual(nonLawFiles(root), [
       'packages/colors/compiler/hand_written_bad.js',
       'packages/colors/compiler/labcolors_compiler.js',
       'packages/colors/compiler/labcolors_compiler_bg.wasm',
+      'packages/colors/pkg/hand_written_runtime_bad.js',
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('generated package directory entries are naming roots, not blind spots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'labcolors-naming-generated-roots-'));
+  try {
+    const compiler = join(root, 'packages', 'colors', 'compiler');
+    const runtime = join(root, 'packages', 'colors', 'pkg');
+    mkdirSync(compiler, { recursive: true });
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(
+      join(root, 'packages', 'colors', 'package.json'),
+      JSON.stringify({ files: ['compiler', 'pkg'] }),
+    );
+    writeFileSync(join(compiler, 'labcolors_compiler.js'), 'generated');
+    writeFileSync(join(runtime, 'labcolors.js'), 'generated');
+    writeFileSync(join(runtime, 'unexpected_runtime_bad.js'), 'extra');
+    assert.deepEqual(nonLawFiles(root), [
+      'packages/colors/compiler/labcolors_compiler.js',
+      'packages/colors/pkg/unexpected_runtime_bad.js',
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
