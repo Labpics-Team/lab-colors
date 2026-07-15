@@ -510,6 +510,18 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
+      - name: "candidate only — recapture #296-B whole-call observations"
+        working-directory: packages/colors
+        run: >-
+          node bench/wcag22-feasibility-boundary.bench.mjs
+          --record ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v2.json
+      - name: "candidate only — upload recaptured #296-B whole-call observations"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wcag22-feasibility-wasm-boundary-candidate-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wcag22-feasibility-wasm-boundary-v2.json
+          if-no-files-found: error
+          retention-days: 1
       - name: "verify committed #296-B canonical whole-call WASM boundary evidence"
         # The admitted JSON binds exact deterministic bytes/shapes and the
         # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
