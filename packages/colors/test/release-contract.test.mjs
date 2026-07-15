@@ -1103,7 +1103,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   assert.equal(v4Bytes.toString("utf8"), canonicalJson(v4));
   assert.equal(
     sha256(v4Bytes),
-    "f0c3b2190f5675791e74ebd5591b1ad3d31bc6ff877f5f46a87b62524fbdc413",
+    "d1cd31be0c451c6d9e75a51c1ca9269a5b199186d7a1caaff0114638ae59d33f",
     "the admitted v4 document must be byte-immutable",
   );
   assert.deepEqual(Object.keys(v4), Object.keys(v3));
@@ -1117,11 +1117,11 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   assert.deepEqual(v4.measurement, {
     issue: 296,
     measurementPlatform: "linux-x64",
-    rawBytes: 520993,
-    sha256: "9ae0fa3f738dd88478c49cbe244dd0b1b672b237b82248c8cb1051baf0a2dd16",
+    rawBytes: 520920,
+    sha256: "7e9c3b41d61919e677572094374b9b59f22d61f98c1977b3f5166d96aa684c0e",
   });
   assert.deepEqual(v4.policy, {
-    maxRawBytes: 520993,
+    maxRawBytes: 520920,
     derivation: "exact-accepted-issue-296-slice-b-measurement",
     gzip: "diagnostic-only",
   });

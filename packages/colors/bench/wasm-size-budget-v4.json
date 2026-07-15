@@ -10,11 +10,11 @@
   "measurement": {
     "issue": 296,
     "measurementPlatform": "linux-x64",
-    "rawBytes": 520993,
-    "sha256": "9ae0fa3f738dd88478c49cbe244dd0b1b672b237b82248c8cb1051baf0a2dd16"
+    "rawBytes": 520920,
+    "sha256": "7e9c3b41d61919e677572094374b9b59f22d61f98c1977b3f5166d96aa684c0e"
   },
   "policy": {
-    "maxRawBytes": 520993,
+    "maxRawBytes": 520920,
     "derivation": "exact-accepted-issue-296-slice-b-measurement",
     "gzip": "diagnostic-only"
   }
