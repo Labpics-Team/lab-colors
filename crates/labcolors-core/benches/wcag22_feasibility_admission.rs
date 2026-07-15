@@ -363,8 +363,9 @@ struct Protocol {
     sample_count_explicit: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct GitMetadata {
-    clean: bool,
+    cone_clean: bool,
     source_objects: Vec<(&'static str, &'static str, String)>,
 }
 
@@ -948,30 +949,45 @@ fn repository_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn git_metadata() -> GitMetadata {
+fn checked_command_output(mut command: Command, label: &str) -> Result<String, Box<dyn Error>> {
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err(format!("{label} failed with {}", output.status).into());
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_owned())
+        .map_err(Into::into)
+}
+
+fn git_metadata() -> Result<GitMetadata, Box<dyn Error>> {
     let root = repository_root();
     let mut status = Command::new("git");
     status
         .current_dir(&root)
-        .args(["status", "--porcelain", "--untracked-files=normal"]);
-    let clean = match status.output() {
-        Ok(output) if output.status.success() => output.stdout.is_empty(),
-        _ => false,
-    };
-    let source_objects: Vec<(&'static str, &'static str, String)> = SOURCE_OBJECTS
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+            "--",
+        ])
+        .args(SOURCE_OBJECTS.iter().map(|(_, path)| *path));
+    let cone_clean = checked_command_output(status, "scoped Git status")?.is_empty();
+    let source_objects = SOURCE_OBJECTS
         .iter()
         .map(|&(name, path)| {
             let mut object = Command::new("git");
             object
                 .current_dir(&root)
                 .args(["rev-parse", &format!("HEAD:{path}")]);
-            (name, path, command_output(object))
+            checked_command_output(object, &format!("Git object lookup for {path}"))
+                .map(|object| (name, path, object))
         })
-        .collect();
-    GitMetadata {
-        clean,
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(GitMetadata {
+        cone_clean,
         source_objects,
-    }
+    })
 }
 
 fn rustc_verbose() -> String {
@@ -1020,10 +1036,31 @@ fn hex(bytes: &[u8; 32]) -> String {
     output
 }
 
-fn render_json(runs: &[ScenarioRun], protocol: &Protocol) -> Result<String, std::io::Error> {
-    let git = git_metadata();
+fn render_json(
+    runs: &[ScenarioRun],
+    protocol: &Protocol,
+    git: &GitMetadata,
+) -> Result<String, std::io::Error> {
     let subjects = subject_manifest()?;
     let rustc = rustc_verbose();
+    let cargo = {
+        let executable = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut command = Command::new(executable);
+        command.arg("-Vv");
+        command_output(command)
+    };
+    let active_core_features = [
+        ("wcag22-feasibility", cfg!(feature = "wcag22-feasibility")),
+        (
+            "wcag22-explicit-feasibility",
+            cfg!(feature = "wcag22-explicit-feasibility"),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, active)| active.then_some(name))
+    .collect::<Vec<_>>();
+    let rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+    let encoded_rustflags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     let profile = ResourceProfileIdV1::Compile;
     let mut output = String::new();
     output.push_str("{\n  \"schemaVersion\": 1,\n  \"artifactId\": ");
@@ -1051,10 +1088,23 @@ fn render_json(runs: &[ScenarioRun], protocol: &Protocol) -> Result<String, std:
     );
     output.push_str(",\n    \"allocator\": \"std::alloc::System\",\n    \"allocatorInstrumentationIncludedInElapsedTime\": true,\n    \"timer\": \"std::time::Instant\",\n    \"measurementThreads\": 1,\n    \"requestConstructionMeasured\": false,\n    \"rustcVerbose\": ");
     push_json_string(&mut output, &rustc);
+    output.push_str(",\n    \"cargoVerbose\": ");
+    push_json_string(&mut output, &cargo);
+    output.push_str(",\n    \"buildRecipeId\": \"cargo-bench-locked-explicit-features-empty-rustflags-v1\",\n    \"activeCoreFeatures\": [");
+    for (index, feature) in active_core_features.iter().enumerate() {
+        if index != 0 {
+            output.push_str(", ");
+        }
+        push_json_string(&mut output, feature);
+    }
+    output.push_str("],\n    \"rustFlags\": ");
+    push_json_string(&mut output, &rustflags);
+    output.push_str(",\n    \"cargoEncodedRustflags\": ");
+    push_json_string(&mut output, &encoded_rustflags);
     write!(
         output,
-        ",\n    \"sourceTreeClean\": {},\n    \"sampleCountExplicit\": {},\n    \"sourceObjects\": {{\n",
-        git.clean, protocol.sample_count_explicit,
+        ",\n    \"sourceConeClean\": {},\n    \"sampleCountExplicit\": {},\n    \"sourceObjects\": {{\n",
+        git.cone_clean, protocol.sample_count_explicit,
     )
     .expect("String writes cannot fail");
     for (index, (name, path, object)) in git.source_objects.iter().enumerate() {
@@ -1191,6 +1241,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         MAX_APPLICABLE_EDGES
     );
     let protocol = parse_protocol()?;
+    let source_before = git_metadata()?;
+    if !source_before.cone_clean {
+        return Err("measured source cone is dirty before sampling".into());
+    }
     let mut runs = Vec::with_capacity(SCENARIOS.len());
     for scenario in &SCENARIOS {
         runs.push(run_scenario(scenario, protocol.sample_count)?);
@@ -1199,7 +1253,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_path = std::env::var_os("LABCOLORS_WCAG22_BENCH_OUTPUT")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join(DEFAULT_OUTPUT_FILENAME));
-    let payload = render_json(&runs, &protocol)?;
+    let source_after = git_metadata()?;
+    if source_after != source_before {
+        return Err("measured source cone changed during sampling".into());
+    }
+    let payload = render_json(&runs, &protocol, &source_after)?;
     fs::write(&output_path, payload)?;
     println!(
         "wrote {} raw scenarios to {}",

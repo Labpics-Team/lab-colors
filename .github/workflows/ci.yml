@@ -390,6 +390,7 @@ jobs:
           current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
           current_protocol=(
             --admit-rustc-release 1.96.0
+            --admit-cargo-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
             --admit-target-os macos
@@ -399,11 +400,6 @@ jobs:
           )
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
-            --verify-current-subjects \
-            --artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a \
-            --self-test
-          python3 scripts/check_wcag22_feasibility_applicability.py \
-            "$current_artifact" \
             --artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a \
             --self-test
 

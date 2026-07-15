@@ -1326,31 +1326,6 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     "wcag22-feasibility-benchmark-v3.json",
   ]);
 
-  const checker = join(
-    root,
-    "scripts",
-    "check_wcag22_feasibility_applicability.py",
-  );
-  assert.doesNotThrow(() => {
-    execFileSync("python3", [
-      checker,
-      join(
-        root,
-        "crates",
-        "labcolors-core",
-        "contracts",
-        "wcag22-feasibility-benchmark-v3.json",
-      ),
-      "--artifact-sha256",
-      "28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a",
-      "--self-test",
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  });
-
   const benchmarkChecker = join(
     root,
     "scripts",
@@ -1376,13 +1351,18 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   const rustcRelease = canonicalPayload.environment.rustcVerbose
     .match(/^rustc ([^ ]+) /u)?.[1];
+  const cargoRelease = canonicalPayload.environment.cargoVerbose
+    .match(/^cargo ([^ ]+) /u)?.[1];
   const targetTriple = canonicalPayload.environment.rustcVerbose
     .match(/^host: (.+)$/mu)?.[1];
   assert.ok(rustcRelease, "canonical benchmark records its rustc release");
+  assert.ok(cargoRelease, "canonical benchmark records its cargo release");
   assert.ok(targetTriple, "canonical benchmark records its target triple");
   const admissionPins = [
     "--admit-rustc-release",
     rustcRelease,
+    "--admit-cargo-release",
+    cargoRelease,
     "--admit-target-triple",
     targetTriple,
     "--admit-target-arch",
@@ -1425,6 +1405,25 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
       },
       "the admission CLI must route artifact bytes through the strict loader",
     );
+    assert.throws(
+      () => execFileSync("python3", [
+        benchmarkChecker,
+        hostileArtifact,
+        "--admit-revision",
+        "0".repeat(40),
+        ...admissionPins,
+      ], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      (error) => {
+        assert.notEqual(error.status, 0, "legacy revision admission must fail");
+        assert.match(error.stderr, /unrecognized arguments: --admit-revision/u);
+        return true;
+      },
+      "V3 must not accept unverifiable whole-commit provenance",
+    );
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
@@ -1441,7 +1440,6 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
       read("crates", "labcolors-core", "benches", "wcag22_feasibility_admission.rs"),
     ],
     ["native checker", read("scripts", "check_wcag22_feasibility_benchmark.py")],
-    ["native applicability", read("scripts", "check_wcag22_feasibility_applicability.py")],
     [
       "WASM boundary checker",
       read("packages", "colors", "bench", "wcag22-feasibility-boundary.bench.mjs"),
@@ -1470,7 +1468,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?--self-test/u,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?--self-test/u,
     "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(
@@ -1483,38 +1481,6 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     3,
     "only the three main-reachable historical verifier snapshots may use worktrees",
   );
-});
-
-test("applicability imports leave a clean release source tree", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-python-cache-"));
-  try {
-    for (const name of [
-      "check_wcag22_feasibility_benchmark.py",
-      "check_wcag22_feasibility_applicability.py",
-    ]) {
-      writeFileSync(
-        join(temporary, name),
-        readFileSync(join(root, "scripts", name)),
-      );
-    }
-    execFileSync("python3", [
-      "-X",
-      "pycache_prefix=",
-      join(temporary, "check_wcag22_feasibility_applicability.py"),
-      "--self-test",
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    assert.equal(
-      existsSync(join(temporary, "__pycache__")),
-      false,
-      "the verifier must not dirty the source tree it attests",
-    );
-  } finally {
-    rmSync(temporary, { recursive: true, force: true });
-  }
 });
 
 test("runtime WASM does not duplicate separately shipped WCAG22 evidence documents", () => {

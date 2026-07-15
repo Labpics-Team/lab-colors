@@ -8,9 +8,9 @@ size are explicitly outside this artifact's claim boundary.
 Generation admission and durable repository verification share one provenance
 SSOT: the exact Git objects and SHA-256 manifest of the measured dependency
 cone. A whole-commit identity is deliberately absent because a pre-merge
-measurement commit is not durable across squash merge. ``Cargo.lock`` remains
-historical provenance in durable mode: the companion applicability checker owns
-its structured compatibility law so unrelated workspace records may evolve.
+measurement commit is not durable across squash merge. ``Cargo.lock`` is an
+ordinary exact member of that cone; dependency drift requires a new measured
+artifact instead of a second compatibility law.
 """
 
 from __future__ import annotations
@@ -39,7 +39,6 @@ PARTITION_BYTES = 32
 MAX_APPLICABLE_EDGES = PAGE_BYTES // DECISION_SLOT_BYTES - 1
 MAX_LOGICAL_ASSESSMENTS = CANDIDATE_COUNT * MAX_APPLICABLE_EDGES
 ROOT = Path(__file__).resolve().parents[1]
-HISTORICAL_ONLY_PATH = "Cargo.lock"
 SUBJECT_PATHS = (
     "Cargo.toml",
     "crates/labcolors-core/src/lib.rs",
@@ -55,7 +54,7 @@ SUBJECT_PATHS = (
     "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
     "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
     "crates/labcolors-core/Cargo.toml",
-    HISTORICAL_ONLY_PATH,
+    "Cargo.lock",
     "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
     "scripts/check_wcag22_feasibility_benchmark.py",
 )
@@ -92,7 +91,12 @@ ENVIRONMENT_FIELDS = frozenset(
         "measurementThreads",
         "requestConstructionMeasured",
         "rustcVerbose",
-        "sourceTreeClean",
+        "cargoVerbose",
+        "buildRecipeId",
+        "activeCoreFeatures",
+        "rustFlags",
+        "cargoEncodedRustflags",
+        "sourceConeClean",
         "sampleCountExplicit",
         "sourceObjects",
     }
@@ -166,6 +170,7 @@ class AdmissionProtocol:
         self,
         *,
         rustc_release: str,
+        cargo_release: str,
         target_triple: str,
         target_arch: str,
         target_os: str,
@@ -174,6 +179,7 @@ class AdmissionProtocol:
         sample_count: int,
     ) -> None:
         self.rustc_release = rustc_release
+        self.cargo_release = cargo_release
         self.target_triple = target_triple
         self.target_arch = target_arch
         self.target_os = target_os
@@ -317,7 +323,7 @@ def check_hard_slo(payload: dict[str, Any]) -> None:
 
 
 def check_subject_manifest(
-    payload: dict[str, Any], durable_current_subjects: bool
+    payload: dict[str, Any], current_digests: dict[str, str]
 ) -> None:
     check_subject_git_bindings(SUBJECT_PATHS, SOURCE_OBJECTS)
     manifest = payload.get("subjectManifest")
@@ -325,17 +331,13 @@ def check_subject_manifest(
             "subjectManifest must bind every exact dependency-cone path")
     for index, path in enumerate(SUBJECT_PATHS):
         entry = manifest[index]
-        require(isinstance(entry, dict) and entry.get("path") == path,
+        require(isinstance(entry, dict) and set(entry) == {"path", "sha256"},
+                f"subjectManifest[{index}] has unexpected fields")
+        require(entry.get("path") == path,
                 f"subjectManifest[{index}] path/order drifted")
-        if current_byte_identity_required(path, durable_current_subjects):
-            expected = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-            require(entry.get("sha256") == expected,
-                    f"subjectManifest source drift: {path}")
-
-
-def current_byte_identity_required(path: str, durable_current_subjects: bool) -> bool:
-    """Keep the structured lock compatibility law in exactly one checker."""
-    return not (durable_current_subjects and path == HISTORICAL_ONLY_PATH)
+        require_digest(entry.get("sha256"), f"subjectManifest[{index}].sha256")
+        require(entry["sha256"] == current_digests[path],
+                f"subjectManifest source drift: {path}")
 
 
 def check_subject_git_bindings(
@@ -463,13 +465,14 @@ def git_rev_parse(specification: str) -> str:
     return value
 
 
-def check_current_subjects_clean() -> None:
+def dependency_cone_snapshot() -> tuple[dict[str, str], dict[str, str]]:
     result = subprocess.run(
         [
             "git",
             "status",
             "--porcelain=v1",
             "--untracked-files=all",
+            "--ignored=matching",
             "--",
             *(path for _, path in SOURCE_OBJECTS),
         ],
@@ -480,16 +483,24 @@ def check_current_subjects_clean() -> None:
     )
     require(result.returncode == 0,
             "cannot inspect the current dependency-cone worktree")
-    require_current_subjects_clean(result.stdout)
+    require_cone_clean(result.stdout)
+    objects = {
+        name: git_rev_parse(f"HEAD:{path}") for name, path in SOURCE_OBJECTS
+    }
+    digests = {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in SUBJECT_PATHS
+    }
+    return objects, digests
 
 
-def require_current_subjects_clean(status: str) -> None:
+def require_cone_clean(status: str) -> None:
     require(status == "", "current dependency-cone worktree is dirty")
 
 
 def check_source_objects(
     environment: dict[str, Any],
-    verify_current_subjects: bool,
+    current_objects: dict[str, str],
 ) -> None:
     values = environment.get("sourceObjects")
     require(isinstance(values, dict), "environment.sourceObjects must be an object")
@@ -503,22 +514,17 @@ def check_source_objects(
                 f"environment.sourceObjects.{name}.path drifted")
         object_id = entry.get("gitObject")
         require(
-            object_id == "unavailable"
-            or (isinstance(object_id, str) and GIT_OBJECT.fullmatch(object_id) is not None),
+            isinstance(object_id, str) and GIT_OBJECT.fullmatch(object_id) is not None,
             f"environment.sourceObjects.{name}.gitObject is invalid",
         )
-
-    check_current_subjects_clean()
-    for name, path in SOURCE_OBJECTS:
-        if current_byte_identity_required(path, verify_current_subjects):
-            require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
-                    f"current Git subject differs from admitted measurement: {path}")
+        require(object_id == current_objects[name],
+                f"current Git subject differs from admitted measurement: {path}")
 
 
 def check_environment(
     payload: dict[str, Any],
     protocol: AdmissionProtocol | None,
-    verify_current_subjects: bool,
+    current_objects: dict[str, str],
 ) -> None:
     environment = payload.get("environment")
     require(isinstance(environment, dict) and environment.get("execution") == "native-process",
@@ -535,13 +541,30 @@ def check_environment(
             "this raw protocol is intentionally single-threaded")
     require(environment.get("requestConstructionMeasured") is False,
             "request construction must remain outside the compiler-operation sample")
-    require(type(environment.get("sourceTreeClean")) is bool,
-            "environment.sourceTreeClean must preserve dirty-tree truth")
+    require(environment.get("sourceConeClean") is True,
+            "environment.sourceConeClean must attest a clean measured cone")
     require(type(environment.get("sampleCountExplicit")) is bool,
             "environment.sampleCountExplicit must preserve protocol truth")
     rustc_verbose = environment.get("rustcVerbose")
     require(isinstance(rustc_verbose, str),
             "environment.rustcVerbose must be present even when unavailable")
+    cargo_verbose = environment.get("cargoVerbose")
+    require(isinstance(cargo_verbose, str),
+            "environment.cargoVerbose must be present even when unavailable")
+    require(
+        environment.get("buildRecipeId")
+        == "cargo-bench-locked-explicit-features-empty-rustflags-v1",
+        "environment.buildRecipeId drifted from the exact native recipe",
+    )
+    require(
+        environment.get("activeCoreFeatures")
+        == ["wcag22-feasibility", "wcag22-explicit-feasibility"],
+        "environment.activeCoreFeatures drifted from the measured feature set",
+    )
+    require(environment.get("rustFlags") == "",
+            "native admission requires empty RUSTFLAGS")
+    require(environment.get("cargoEncodedRustflags") == "",
+            "native admission requires empty CARGO_ENCODED_RUSTFLAGS")
     pointer_width_bits = exact_nonnegative_int(
         environment.get("pointerWidthBits"),
         "environment.pointerWidthBits",
@@ -552,25 +575,16 @@ def check_environment(
     require(isinstance(package_version, str) and package_version != "",
             "environment.packageVersion must be a non-empty string")
 
-    check_source_objects(environment, verify_current_subjects)
+    check_source_objects(environment, current_objects)
 
     if protocol is None:
         return
     require(protocol.sample_count >= 5,
             "admission protocol requires at least five raw observations")
-    require(environment["sourceTreeClean"] is True,
-            "admission requires a clean source tree")
     require(environment["sampleCountExplicit"] is True,
             "admission requires an explicitly pinned raw sample count")
     require(environment.get("debugAssertions") is False,
             "admission requires an optimized release-profile binary")
-    require(
-        all(
-            environment["sourceObjects"][name]["gitObject"] != "unavailable"
-            for name, _ in SOURCE_OBJECTS
-        ),
-        "admission requires every exact Git subject object",
-    )
     require(environment.get("targetArch") == protocol.target_arch,
             "measured target architecture differs from the pinned reference target")
     require(environment.get("targetOs") == protocol.target_os,
@@ -584,6 +598,10 @@ def check_environment(
         "measured rustc differs from the pinned admission toolchain",
     )
     require(
+        cargo_verbose.startswith(f"cargo {protocol.cargo_release} "),
+        "measured cargo differs from the pinned admission toolchain",
+    )
+    require(
         f"host: {protocol.target_triple}" in rustc_verbose.splitlines(),
         "measured native target triple differs from the pinned reference target",
     )
@@ -594,8 +612,8 @@ def check_environment(
 def check(
     payload: Any,
     protocol: AdmissionProtocol | None = None,
-    verify_current_subjects: bool = False,
 ) -> None:
+    source_before = dependency_cone_snapshot()
     require(isinstance(payload, dict), "artifact root must be an object")
     require(payload.get("schemaVersion") == 1, "unsupported benchmark schemaVersion")
     require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v3",
@@ -615,7 +633,7 @@ def check(
         == "measurement-only-unless-admission-check-passes",
         "raw artifacts must not claim admission without an exact protocol check",
     )
-    check_environment(payload, protocol, verify_current_subjects)
+    check_environment(payload, protocol, source_before[0])
 
     sample_count = exact_nonnegative_int(payload.get("sampleCount"), "sampleCount")
     require(sample_count > 0, "sampleCount must be positive")
@@ -626,7 +644,7 @@ def check(
     check_hard_slo(payload)
     check_bounded_envelope_model(payload)
     check_profile_limits(payload)
-    check_subject_manifest(payload, verify_current_subjects)
+    check_subject_manifest(payload, source_before[1])
 
     scenarios = payload.get("scenarios")
     require(isinstance(scenarios, list), "scenarios must be an array")
@@ -647,38 +665,22 @@ def check(
             require(scenario_domain == domain_digest,
                     "all scenarios must bind the same registered domain digest")
     require(seen == set(REQUIRED_SCENARIOS), "required scenario set is incomplete")
+    require(dependency_cone_snapshot() == source_before,
+            "current dependency cone changed during verification")
 
 
 def run_mutation_self_tests(
     payload: dict[str, Any],
     protocol: AdmissionProtocol | None,
-    verify_current_subjects: bool,
 ) -> int:
     mutation_checks = 0
-
-    require(
-        not current_byte_identity_required(HISTORICAL_ONLY_PATH, True),
-        "durable verification must delegate historical-only Cargo.lock compatibility",
-    )
-    require(
-        current_byte_identity_required(HISTORICAL_ONLY_PATH, False),
-        "admission verification must retain exact measured Cargo.lock bytes",
-    )
-    require(
-        all(
-            current_byte_identity_required(path, True)
-            for path in SUBJECT_PATHS
-            if path != HISTORICAL_ONLY_PATH
-        ),
-        "durable verification must retain every non-historical subject byte",
-    )
 
     def rejected(mutator: Any, label: str) -> None:
         nonlocal mutation_checks
         candidate = copy.deepcopy(payload)
         mutator(candidate)
         try:
-            check(candidate, protocol, verify_current_subjects)
+            check(candidate, protocol)
         except ValueError:
             mutation_checks += 1
             return
@@ -702,9 +704,20 @@ def run_mutation_self_tests(
         ),
         "allocator live-byte conservation",
     )
+    for index, path in enumerate(SUBJECT_PATHS):
+        rejected(
+            lambda value, entry_index=index: value["subjectManifest"][entry_index].__setitem__(
+                "sha256", "0" * 64
+            ),
+            f"subject SHA-256: {path}",
+        )
     rejected(
-        lambda value: value["subjectManifest"][0].__setitem__("sha256", "0" * 64),
-        "subject SHA-256",
+        lambda value: value["subjectManifest"][0].__setitem__("extra", True),
+        "subject manifest entry shape",
+    )
+    rejected(
+        lambda value: value["subjectManifest"].reverse(),
+        "subject manifest order",
     )
     rejected(
         lambda value: value["environment"]["sourceObjects"].pop("coreSourceTree"),
@@ -722,6 +735,12 @@ def run_mutation_self_tests(
         ),
         "source object ID shape",
     )
+    rejected(
+        lambda value: value["environment"]["sourceObjects"]["coreCargo"].__setitem__(
+            "extra", True
+        ),
+        "source object entry shape",
+    )
     if protocol is not None:
         rejected(
             lambda value: value["environment"].__setitem__(
@@ -735,31 +754,45 @@ def run_mutation_self_tests(
             ),
             "admitted package version",
         )
-    if verify_current_subjects:
-        for name, path in SOURCE_OBJECTS:
-            if current_byte_identity_required(path, verify_current_subjects):
-                rejected(
-                    lambda value, source_name=name: value["environment"]["sourceObjects"][
-                        source_name
-                    ].__setitem__("gitObject", "0" * 40),
-                    f"current source object replay: {path}",
-                )
-    else:
-        for name, path in SOURCE_OBJECTS:
-            rejected(
-                lambda value, source_name=name: value["environment"]["sourceObjects"][
-                    source_name
-                ].__setitem__("gitObject", "0" * 40),
-                f"admission source object replay: {path}",
-            )
+    for name, path in SOURCE_OBJECTS:
+        rejected(
+            lambda value, source_name=name: value["environment"]["sourceObjects"][
+                source_name
+            ].__setitem__("gitObject", "0" * 40),
+            f"source object replay: {path}",
+        )
+    for field in ("gitRevision", "gitTree", "unknownEnvironmentField"):
+        rejected(
+            lambda value, field_name=field: value["environment"].__setitem__(
+                field_name, "0" * 40
+            ),
+            f"unexpected environment field: {field}",
+        )
     rejected(
-        lambda value: value["environment"].__setitem__("gitRevision", "0" * 40),
-        "unverifiable whole-commit provenance",
+        lambda value: value["environment"].__setitem__("sourceConeClean", False),
+        "dirty measured source cone",
+    )
+    rejected(
+        lambda value: value["environment"].__setitem__("activeCoreFeatures", []),
+        "active Core feature set",
+    )
+    rejected(
+        lambda value: value["environment"].__setitem__("rustFlags", "-Ctarget-cpu=native"),
+        "ambient RUSTFLAGS",
+    )
+    rejected(
+        lambda value: (
+            value["environment"]["sourceObjects"]["workspaceCargo"].__setitem__(
+                "gitObject", "0" * 40
+            ),
+            value["subjectManifest"][0].__setitem__("sha256", "0" * 64),
+        ),
+        "coordinated source-object and manifest drift",
     )
 
     timing = copy.deepcopy(payload)
     timing["scenarios"][0]["samples"][0]["elapsedNs"] = 10**30
-    check(timing, protocol, verify_current_subjects)
+    check(timing, protocol)
     try:
         check_subject_git_bindings(
             (*SUBJECT_PATHS, "unbound-subject"),
@@ -770,7 +803,7 @@ def run_mutation_self_tests(
     else:
         raise ValueError("checker mutation survived: subject Git binding")
     try:
-        require_current_subjects_clean("?? crates/labcolors-core/src/unbound.rs\n")
+        require_cone_clean("?? crates/labcolors-core/src/unbound.rs\n")
     except ValueError:
         mutation_checks += 1
     else:
@@ -794,26 +827,19 @@ def main() -> int:
         help="raw JSON emitted by wcag22_feasibility_admission",
     )
     parser.add_argument("--admit-rustc-release")
+    parser.add_argument("--admit-cargo-release")
     parser.add_argument("--admit-target-triple")
     parser.add_argument("--admit-target-arch")
     parser.add_argument("--admit-target-os")
     parser.add_argument("--admit-pointer-width-bits", type=int)
     parser.add_argument("--admit-package-version")
     parser.add_argument("--admit-sample-count", type=int)
-    parser.add_argument(
-        "--verify-current-subjects",
-        action="store_true",
-        help=(
-            "verify the exact source-object cone plus the durable historical-lock "
-            "handoff; "
-            "requires all admission pins and --artifact-sha256"
-        ),
-    )
     parser.add_argument("--artifact-sha256")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     admission_values = (
         args.admit_rustc_release,
+        args.admit_cargo_release,
         args.admit_target_triple,
         args.admit_target_arch,
         args.admit_target_os,
@@ -827,16 +853,8 @@ def main() -> int:
         "exact admission requires all --admit-* protocol pins together",
     )
     require(
-        not args.verify_current_subjects or all(value is not None for value in admission_values),
-        "current-subject verification requires all --admit-* protocol pins",
-    )
-    require(
-        not args.verify_current_subjects or args.artifact_sha256 is not None,
-        "current-subject verification requires --artifact-sha256",
-    )
-    require(
-        args.artifact_sha256 is None or args.verify_current_subjects,
-        "--artifact-sha256 is reserved for durable current-subject verification",
+        args.artifact_sha256 is None or all(value is not None for value in admission_values),
+        "durable artifact verification requires all --admit-* protocol pins",
     )
     protocol = None
     if args.admit_rustc_release is not None:
@@ -848,6 +866,7 @@ def main() -> int:
                 "--admit-package-version must be non-empty")
         protocol = AdmissionProtocol(
             rustc_release=args.admit_rustc_release,
+            cargo_release=args.admit_cargo_release,
             target_triple=args.admit_target_triple,
             target_arch=args.admit_target_arch,
             target_os=args.admit_target_os,
@@ -868,9 +887,9 @@ def main() -> int:
                 raise ValueError("checker mutation survived: artifact SHA-256")
     parser_checks = run_json_parser_self_tests() if args.self_test else 0
     payload = decode_benchmark_artifact(payload_bytes)
-    check(payload, protocol, args.verify_current_subjects)
+    check(payload, protocol)
     mutation_checks = (
-        run_mutation_self_tests(payload, protocol, args.verify_current_subjects)
+        run_mutation_self_tests(payload, protocol)
         if args.self_test
         else 0
     )
@@ -879,7 +898,7 @@ def main() -> int:
         "WCAG22 feasibility benchmark artifact: PASS; "
         f"scenarios={len(REQUIRED_SCENARIOS)}; "
         f"samples={payload['sampleCount']}; "
-        f"mode={'current-subjects' if args.verify_current_subjects else ('admission' if protocol is not None else 'measurement')}; "
+        f"mode={'durable-admission' if args.artifact_sha256 is not None else ('admission' if protocol is not None else 'measurement')}; "
         f"mutation_checks={mutation_checks}; timing_thresholds=none"
     )
     return 0
