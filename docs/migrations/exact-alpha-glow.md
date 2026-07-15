@@ -480,10 +480,11 @@ boundary-адаптер, поэтому для JS/TS-потребителей и
   );
   ```
 
-  Worker-модуль инициализирует `@labpics/colors/compiler` и выполняет полный
-  вызов, как показано в package README. Для Node offline tooling можно вызывать
-  entry напрямую, передав ему байты compiler WASM. Один и тот же модуль для
-  двух ролей не подходит.
+  Worker-модуль инициализирует `@labpics/colors/compiler`, регистрирует handler
+  и только затем отправляет `ready`; main thread передаёт запрос после этого
+  сигнала, как показано в package README. Для Node offline tooling можно
+  вызывать entry напрямую, передав ему байты compiler WASM. Один и тот же
+  модуль для двух ролей не подходит.
 - Feasibility полностью перечисляет зарегистрированный домен и не выбирает
   цвет. Selection policy, брендовая близость, polarity и appearance-scoring не
   являются скрытой частью этого migration-контракта.

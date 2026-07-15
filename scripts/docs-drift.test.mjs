@@ -328,7 +328,7 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
     'selectionDiagnosticProfile',
     'resolve_alpha_analog_hex',
     'dedicated module Worker',
-    'Один и тот же модуль для',
+    'двух ролей не подходит',
     'Rollback',
   ]) {
     assert.ok(migration.includes(required), `migration не содержит ${required}`);
@@ -341,6 +341,27 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
   assert.match(
     readme,
     /new Worker\(new URL\("\.\/color-compiler\.worker\.ts"[\s\S]*?worker\.terminate\(\)/,
+  );
+  const workerReady = readme.indexOf('self.postMessage({ type: "ready" } as const)');
+  const mainMessageHandler = readme.indexOf(
+    'worker.addEventListener("message"',
+    workerReady,
+  );
+  const readyBranch = readme.indexOf(
+    'if (data?.type === "ready")',
+    mainMessageHandler,
+  );
+  const requestPost = readme.indexOf('worker.postMessage(request)', readyBranch);
+  const outcomeResolve = readme.indexOf('resolve(data)', requestPost);
+  assert.ok(workerReady >= 0, 'compiler Worker не сообщает ready после init');
+  assert.ok(mainMessageHandler > workerReady, 'main listener должен ждать ready');
+  assert.ok(readyBranch > mainMessageHandler, 'main не различает ready и outcome');
+  assert.ok(requestPost > readyBranch, 'request нельзя отправлять до ready');
+  assert.ok(outcomeResolve > requestPost, 'listener обязан дождаться outcome после ready');
+  assert.doesNotMatch(
+    readme.slice(mainMessageHandler, outcomeResolve),
+    /\{ once: true \}/,
+    'ready не должен снимать listener до получения outcome',
   );
   assert.doesNotMatch(migration, /Promise\.all\(\[initRuntime\(\), initCompiler\(\)\]\)/);
 });

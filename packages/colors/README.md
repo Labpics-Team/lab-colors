@@ -332,6 +332,7 @@ self.addEventListener(
     self.postMessage(evaluateWcag22Feasibility(bytes));
   },
 );
+self.postMessage({ type: "ready" } as const);
 ```
 
 ```ts
@@ -359,14 +360,17 @@ const outcome = await new Promise<Wcag22FeasibilityOutcomeV1>((resolve, reject) 
     type: "module",
   });
   worker.addEventListener("message", ({ data }) => {
+    if (data?.type === "ready") {
+      worker.postMessage(request);
+      return;
+    }
     worker.terminate();
     resolve(data);
-  }, { once: true });
+  });
   worker.addEventListener("error", (event) => {
     worker.terminate();
-    reject(event.error);
+    reject(event.error ?? new Error(event.message));
   }, { once: true });
-  worker.postMessage(request);
 });
 
 if (outcome.outcome === "success") {
