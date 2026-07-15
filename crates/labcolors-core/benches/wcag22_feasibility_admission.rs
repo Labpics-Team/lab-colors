@@ -364,8 +364,6 @@ struct Protocol {
 }
 
 struct GitMetadata {
-    revision: String,
-    tree: String,
     clean: bool,
     source_objects: Vec<(&'static str, &'static str, String)>,
 }
@@ -952,14 +950,6 @@ fn repository_root() -> PathBuf {
 
 fn git_metadata() -> GitMetadata {
     let root = repository_root();
-    let mut revision = Command::new("git");
-    revision.current_dir(&root).args(["rev-parse", "HEAD"]);
-    let revision = command_output(revision);
-
-    let mut tree = Command::new("git");
-    tree.current_dir(&root).args(["rev-parse", "HEAD^{tree}"]);
-    let tree = command_output(tree);
-
     let mut status = Command::new("git");
     status
         .current_dir(&root)
@@ -978,21 +968,7 @@ fn git_metadata() -> GitMetadata {
             (name, path, command_output(object))
         })
         .collect();
-    let complete_revision = clean
-        && source_objects
-            .iter()
-            .all(|(_, _, object)| object != "unavailable");
     GitMetadata {
-        revision: if complete_revision {
-            revision
-        } else {
-            "unavailable".to_owned()
-        },
-        tree: if complete_revision {
-            tree
-        } else {
-            "unavailable".to_owned()
-        },
         clean,
         source_objects,
     }
@@ -1075,10 +1051,6 @@ fn render_json(runs: &[ScenarioRun], protocol: &Protocol) -> Result<String, std:
     );
     output.push_str(",\n    \"allocator\": \"std::alloc::System\",\n    \"allocatorInstrumentationIncludedInElapsedTime\": true,\n    \"timer\": \"std::time::Instant\",\n    \"measurementThreads\": 1,\n    \"requestConstructionMeasured\": false,\n    \"rustcVerbose\": ");
     push_json_string(&mut output, &rustc);
-    output.push_str(",\n    \"gitRevision\": ");
-    push_json_string(&mut output, &git.revision);
-    output.push_str(",\n    \"gitTree\": ");
-    push_json_string(&mut output, &git.tree);
     write!(
         output,
         ",\n    \"sourceTreeClean\": {},\n    \"sampleCountExplicit\": {},\n    \"sourceObjects\": {{\n",

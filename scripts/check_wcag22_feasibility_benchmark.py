@@ -5,10 +5,11 @@ This checker intentionally does not admit or reject elapsed time. Native timing
 and allocator observations stay raw evidence; WebAssembly memory and serialized
 size are explicitly outside this artifact's claim boundary.
 
-Generation admission replays the measured revision while it is addressable.
-Durable repository verification instead proves that every current Core and
-benchmark subject is byte-identical to the admitted measurement. ``Cargo.lock``
-remains historical provenance there: the companion applicability checker owns
+Generation admission and durable repository verification share one provenance
+SSOT: the exact Git objects and SHA-256 manifest of the measured dependency
+cone. A whole-commit identity is deliberately absent because a pre-merge
+measurement commit is not durable across squash merge. ``Cargo.lock`` remains
+historical provenance in durable mode: the companion applicability checker owns
 its structured compatibility law so unrelated workspace records may evolve.
 """
 
@@ -76,6 +77,25 @@ SOURCE_OBJECTS = (
         "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
     ),
     ("benchmarkChecker", "scripts/check_wcag22_feasibility_benchmark.py"),
+)
+ENVIRONMENT_FIELDS = frozenset(
+    {
+        "execution",
+        "targetArch",
+        "targetOs",
+        "pointerWidthBits",
+        "debugAssertions",
+        "packageVersion",
+        "allocator",
+        "allocatorInstrumentationIncludedInElapsedTime",
+        "timer",
+        "measurementThreads",
+        "requestConstructionMeasured",
+        "rustcVerbose",
+        "sourceTreeClean",
+        "sampleCountExplicit",
+        "sourceObjects",
+    }
 )
 
 REQUIRED_SCENARIOS: dict[str, dict[str, Any]] = {
@@ -145,7 +165,6 @@ class AdmissionProtocol:
     def __init__(
         self,
         *,
-        revision: str,
         rustc_release: str,
         target_triple: str,
         target_arch: str,
@@ -154,7 +173,6 @@ class AdmissionProtocol:
         package_version: str,
         sample_count: int,
     ) -> None:
-        self.revision = revision
         self.rustc_release = rustc_release
         self.target_triple = target_triple
         self.target_arch = target_arch
@@ -471,8 +489,6 @@ def require_current_subjects_clean(status: str) -> None:
 
 def check_source_objects(
     environment: dict[str, Any],
-    revision: str,
-    tree: str,
     verify_current_subjects: bool,
 ) -> None:
     values = environment.get("sourceObjects")
@@ -492,28 +508,11 @@ def check_source_objects(
             f"environment.sourceObjects.{name}.gitObject is invalid",
         )
 
-    if revision == "unavailable":
-        require(tree == "unavailable",
-                "gitTree must be unavailable when complete revision provenance is unavailable")
-        require(not verify_current_subjects,
-                "current-subject verification requires complete measured provenance")
-        return
-
-    if verify_current_subjects:
-        require(tree != "unavailable",
-                "current-subject verification requires a recorded measurement tree")
-        check_current_subjects_clean()
-        for name, path in SOURCE_OBJECTS:
-            if current_byte_identity_required(path, verify_current_subjects):
-                require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
-                        f"current Git subject differs from admitted measurement: {path}")
-        return
-
-    require(tree == git_rev_parse(f"{revision}^{{tree}}"),
-            "recorded gitTree differs from gitRevision")
+    check_current_subjects_clean()
     for name, path in SOURCE_OBJECTS:
-        require(values[name]["gitObject"] == git_rev_parse(f"{revision}:{path}"),
-                f"recorded Git object differs from gitRevision: {path}")
+        if current_byte_identity_required(path, verify_current_subjects):
+            require(values[name]["gitObject"] == git_rev_parse(f"HEAD:{path}"),
+                    f"current Git subject differs from admitted measurement: {path}")
 
 
 def check_environment(
@@ -524,6 +523,8 @@ def check_environment(
     environment = payload.get("environment")
     require(isinstance(environment, dict) and environment.get("execution") == "native-process",
             "environment must identify native-process execution")
+    require(set(environment) == ENVIRONMENT_FIELDS,
+            "environment fields drifted from the exact V3 schema")
     require(environment.get("allocator") == "std::alloc::System",
             "allocator provenance must identify the measured global allocator")
     require(environment.get("allocatorInstrumentationIncludedInElapsedTime") is True,
@@ -551,19 +552,7 @@ def check_environment(
     require(isinstance(package_version, str) and package_version != "",
             "environment.packageVersion must be a non-empty string")
 
-    revision = environment.get("gitRevision")
-    tree = environment.get("gitTree")
-    require(
-        revision == "unavailable"
-        or (isinstance(revision, str) and GIT_OBJECT.fullmatch(revision) is not None),
-        "environment.gitRevision must be unavailable or one exact Git object ID",
-    )
-    require(
-        tree == "unavailable"
-        or (isinstance(tree, str) and GIT_OBJECT.fullmatch(tree) is not None),
-        "environment.gitTree must be unavailable or one exact Git object ID",
-    )
-    check_source_objects(environment, revision, tree, verify_current_subjects)
+    check_source_objects(environment, verify_current_subjects)
 
     if protocol is None:
         return
@@ -575,9 +564,6 @@ def check_environment(
             "admission requires an explicitly pinned raw sample count")
     require(environment.get("debugAssertions") is False,
             "admission requires an optimized release-profile binary")
-    require(revision == protocol.revision,
-            "measured Git revision differs from the pinned admission revision")
-    require(tree != "unavailable", "admission requires an exact Git tree identity")
     require(
         all(
             environment["sourceObjects"][name]["gitObject"] != "unavailable"
@@ -750,24 +736,26 @@ def run_mutation_self_tests(
             "admitted package version",
         )
     if verify_current_subjects:
-        rejected(
-            lambda value: value["environment"]["sourceObjects"]["coreCargo"].__setitem__(
-                "gitObject", "0" * 40
-            ),
-            "current source object replay",
-        )
-    elif payload["environment"]["gitRevision"] == "unavailable":
-        rejected(
-            lambda value: value["environment"].__setitem__(
-                "gitTree", "0" * 40
-            ),
-            "unavailable revision/tree consistency",
-        )
+        for name, path in SOURCE_OBJECTS:
+            if current_byte_identity_required(path, verify_current_subjects):
+                rejected(
+                    lambda value, source_name=name: value["environment"]["sourceObjects"][
+                        source_name
+                    ].__setitem__("gitObject", "0" * 40),
+                    f"current source object replay: {path}",
+                )
     else:
-        rejected(
-            lambda value: value["environment"].__setitem__("gitTree", "0" * 40),
-            "revision tree replay",
-        )
+        for name, path in SOURCE_OBJECTS:
+            rejected(
+                lambda value, source_name=name: value["environment"]["sourceObjects"][
+                    source_name
+                ].__setitem__("gitObject", "0" * 40),
+                f"admission source object replay: {path}",
+            )
+    rejected(
+        lambda value: value["environment"].__setitem__("gitRevision", "0" * 40),
+        "unverifiable whole-commit provenance",
+    )
 
     timing = copy.deepcopy(payload)
     timing["scenarios"][0]["samples"][0]["elapsedNs"] = 10**30
@@ -805,7 +793,6 @@ def main() -> int:
         default=DEFAULT_ARTIFACT,
         help="raw JSON emitted by wcag22_feasibility_admission",
     )
-    parser.add_argument("--admit-revision")
     parser.add_argument("--admit-rustc-release")
     parser.add_argument("--admit-target-triple")
     parser.add_argument("--admit-target-arch")
@@ -817,8 +804,8 @@ def main() -> int:
         "--verify-current-subjects",
         action="store_true",
         help=(
-            "verify current exact subjects plus the durable historical-lock "
-            "handoff instead of resolving the recorded measurement commit; "
+            "verify the exact source-object cone plus the durable historical-lock "
+            "handoff; "
             "requires all admission pins and --artifact-sha256"
         ),
     )
@@ -826,7 +813,6 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     admission_values = (
-        args.admit_revision,
         args.admit_rustc_release,
         args.admit_target_triple,
         args.admit_target_arch,
@@ -853,9 +839,7 @@ def main() -> int:
         "--artifact-sha256 is reserved for durable current-subject verification",
     )
     protocol = None
-    if args.admit_revision is not None:
-        require(GIT_OBJECT.fullmatch(args.admit_revision) is not None,
-                "--admit-revision must be one lowercase 40-hex Git object ID")
+    if args.admit_rustc_release is not None:
         require(args.admit_sample_count >= 5,
                 "--admit-sample-count must pin at least five raw observations")
         require(args.admit_pointer_width_bits > 0,
@@ -863,7 +847,6 @@ def main() -> int:
         require(args.admit_package_version != "",
                 "--admit-package-version must be non-empty")
         protocol = AdmissionProtocol(
-            revision=args.admit_revision,
             rustc_release=args.admit_rustc_release,
             target_triple=args.admit_target_triple,
             target_arch=args.admit_target_arch,

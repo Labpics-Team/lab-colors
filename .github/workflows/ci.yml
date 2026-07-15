@@ -389,7 +389,6 @@ jobs:
 
           current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
           current_protocol=(
-            --admit-revision cffc7758ba7c3919378b3ebe5fcd60fb43adc085
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64

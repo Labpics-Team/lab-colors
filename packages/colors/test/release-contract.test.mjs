@@ -1364,6 +1364,16 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     "wcag22-feasibility-benchmark-v3.json",
   ));
   const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
+  assert.equal(
+    "gitRevision" in canonicalPayload.environment,
+    false,
+    "durable V3 must not claim an ephemeral measurement commit",
+  );
+  assert.equal(
+    "gitTree" in canonicalPayload.environment,
+    false,
+    "durable V3 must use its exact source-object cone as the provenance SSOT",
+  );
   const rustcRelease = canonicalPayload.environment.rustcVerbose
     .match(/^rustc ([^ ]+) /u)?.[1];
   const targetTriple = canonicalPayload.environment.rustcVerbose
@@ -1371,8 +1381,6 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   assert.ok(rustcRelease, "canonical benchmark records its rustc release");
   assert.ok(targetTriple, "canonical benchmark records its target triple");
   const admissionPins = [
-    "--admit-revision",
-    canonicalPayload.environment.gitRevision,
     "--admit-rustc-release",
     rustcRelease,
     "--admit-target-triple",
@@ -1462,7 +1470,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?--admit-revision cffc7758ba7c3919378b3ebe5fcd60fb43adc085[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?--self-test/u,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--verify-current-subjects[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?python3 scripts\/check_wcag22_feasibility_applicability\.py[\s\S]*?--artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a[\s\S]*?--self-test/u,
     "V3 must bind the current generic kernel without an intermediate worktree",
   );
   assert.equal(
