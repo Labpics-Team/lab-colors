@@ -17,7 +17,7 @@ repository = "https://github.com/Labpics-Team/lab-colors"
 rust-version = "1.85"
 
 # Centralised dependency pins. `labcolors-core` stays zero-RUNTIME-deps (issue #29):
-# wasm-bindgen lives ONLY in `labcolors-wasm`, which references it from here.
+# only the runtime and offline-compiler WASM edge crates use this wasm-bindgen pin.
 # `proptest` is a DEV-only dependency of `labcolors-core` (property/fuzz invariants);
 # it never enters the runtime graph — proven by the supply-chain guards in
 # `tests/s2b_baseline_guards.rs` (`supply_chain_proptest_*`).

@@ -39,7 +39,8 @@ const CONFORMANCE_FAMILY_FILES = [
   "wcag22.json",
   "wcag22-feasibility.json",
 ];
-const WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
+const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
+const COMPILER_WASM_PATH = resolve(PACKAGE_DIR, "compiler/labcolors_compiler_bg.wasm");
 
 const REQUIRED_PACK_FILES = ["package.json", "README.md", "LICENSE"];
 const FORBIDDEN_PACK_SEGMENTS = new Set([
@@ -248,7 +249,7 @@ export function validateBuildMetadata(
   { packageJson, source, coreVersion, conformanceEvidence, wasm },
 ) {
   const expected = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     package: { name: packageJson.name, version: packageJson.version },
     sourceSha: source,
     coreVersion,
@@ -258,7 +259,10 @@ export function validateBuildMetadata(
       manifestSha256: conformanceEvidence.manifestSha256,
       familySetSha256: conformanceEvidence.familySetSha256,
     },
-    wasm: { bytes: wasm.bytes, sha256: wasm.sha256 },
+    wasm: [
+      { role: "runtime", ...wasm.runtime },
+      { role: "compiler", ...wasm.compiler },
+    ],
   };
   if (!isDeepStrictEqual(metadata, expected)) {
     fail(
@@ -1247,7 +1251,7 @@ async function wcag22FeasibilitySmokeFixture() {
   };
 }
 
-function runtimeSmokeSource(feasibilityFixture) {
+function runtimeSmokeSource() {
   return String.raw`
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -1256,9 +1260,7 @@ import { createRequire } from "node:module";
 import init, {
   LabColors,
   evaluateWcag22,
-  evaluateWcag22Feasibility,
   numericalCapabilityManifest,
-  wcag22FeasibilityMaxBytes,
 } from "@labpics/colors";
 
 const require = createRequire(import.meta.url);
@@ -1273,16 +1275,11 @@ assert.deepEqual(metadata.package, {
 });
 assert.match(metadata.sourceSha, /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u);
 assert.match(metadata.coreVersion, /^\d+\.\d+\.\d+$/u);
-assert.equal(metadata.wasm.bytes, (await readFile(wasmPath)).length);
+assert.deepEqual(metadata.wasm.map(({ role }) => role), ["runtime", "compiler"]);
+const runtimeWasm = metadata.wasm.find(({ role }) => role === "runtime");
+assert.deepEqual(runtimeWasm.path, "pkg/labcolors_bg.wasm");
+assert.equal(runtimeWasm.bytes, (await readFile(wasmPath)).length);
 await init({ module_or_path: await readFile(wasmPath) });
-
-const feasibilityFixture = ${JSON.stringify(feasibilityFixture)};
-const feasibilityRequest = new TextEncoder().encode(feasibilityFixture.requestJson);
-assert.ok(feasibilityRequest.byteLength <= wcag22FeasibilityMaxBytes());
-assert.equal(
-  JSON.stringify(evaluateWcag22Feasibility(feasibilityRequest)),
-  feasibilityFixture.outcomeJson,
-);
 
 const capability = numericalCapabilityManifest();
 assert.equal(capability.schemaVersion, 2);
@@ -1465,14 +1462,42 @@ for (const key of [
 `;
 }
 
+function compilerSmokeSource(feasibilityFixture) {
+  return String.raw`
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+
+import init, {
+  evaluateWcag22Feasibility,
+  wcag22FeasibilityMaxBytes,
+} from "@labpics/colors/compiler";
+
+const require = createRequire(import.meta.url);
+const wasmPath = require.resolve("@labpics/colors/compiler/wasm");
+const metadataPath = require.resolve("@labpics/colors/build-metadata.json");
+const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+const compilerWasm = metadata.wasm.find(({ role }) => role === "compiler");
+assert.deepEqual(compilerWasm.path, "compiler/labcolors_compiler_bg.wasm");
+assert.equal(compilerWasm.bytes, (await readFile(wasmPath)).length);
+await init({ module_or_path: await readFile(wasmPath) });
+
+const feasibilityFixture = ${JSON.stringify(feasibilityFixture)};
+const feasibilityRequest = new TextEncoder().encode(feasibilityFixture.requestJson);
+assert.ok(feasibilityRequest.byteLength <= wcag22FeasibilityMaxBytes());
+assert.equal(
+  JSON.stringify(evaluateWcag22Feasibility(feasibilityRequest)),
+  feasibilityFixture.outcomeJson,
+);
+`;
+}
+
 function typeSmokeSource() {
   return String.raw`
 import init, {
   LabColors,
   evaluateWcag22,
-  evaluateWcag22Feasibility,
   numericalCapabilityManifest,
-  wcag22FeasibilityMaxBytes,
   type GlowDecisionGuaranteeV1,
   type GlowDeterminateRole,
   type GlowDeterminateRoleBase,
@@ -1488,9 +1513,13 @@ import init, {
   type TranslucentRole,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
+} from "@labpics/colors";
+import {
+  evaluateWcag22Feasibility,
+  wcag22FeasibilityMaxBytes,
   type Wcag22FeasibilityOutcomeV1,
   type Wcag22FeasibilityRequestV1,
-} from "@labpics/colors";
+} from "@labpics/colors/compiler";
 import { applyTheme } from "@labpics/colors/apply-theme";
 import {
   watchTheme,
@@ -1863,9 +1892,22 @@ async function verifyCleanConsumer(
       "clean-installed package",
     );
 
-    const installedWasm = await readFile(resolve(installed, "pkg/labcolors_bg.wasm"));
-    if (sha256(installedWasm) !== expectedBuildMetadata.wasm.sha256) {
-      fail("clean-installed WASM bytes differ from the packed release input");
+    const expectedWasm = new Map(
+      expectedBuildMetadata.wasm.map((artifact) => [artifact.role, artifact]),
+    );
+    for (const [role, path] of [
+      ["runtime", "pkg/labcolors_bg.wasm"],
+      ["compiler", "compiler/labcolors_compiler_bg.wasm"],
+    ]) {
+      const expected = expectedWasm.get(role);
+      const installedWasm = await readFile(resolve(installed, path));
+      if (
+        expected?.path !== path ||
+        expected.bytes !== installedWasm.length ||
+        expected.sha256 !== sha256(installedWasm)
+      ) {
+        fail(`clean-installed ${role} WASM differs from the packed release input`);
+      }
     }
     const installedBuildMetadata = await readJson(resolve(installed, "build-metadata.json"));
     if (!isDeepStrictEqual(installedBuildMetadata, expectedBuildMetadata)) {
@@ -1873,12 +1915,15 @@ async function verifyCleanConsumer(
     }
 
     const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
-    const runtimePath = resolve(consumer, "smoke.mjs");
+    const runtimePath = resolve(consumer, "runtime-smoke.mjs");
+    const compilerPath = resolve(consumer, "compiler-smoke.mjs");
     const typesPath = resolve(consumer, "smoke.ts");
-    await writeFile(runtimePath, runtimeSmokeSource(feasibilityFixture));
+    await writeFile(runtimePath, runtimeSmokeSource());
+    await writeFile(compilerPath, compilerSmokeSource(feasibilityFixture));
     await writeFile(typesPath, typeSmokeSource());
 
     command(process.execPath, [runtimePath], consumer);
+    command(process.execPath, [compilerPath], consumer);
     for (const compiler of typescriptCompilers) {
       command(
         process.execPath,
@@ -1907,6 +1952,62 @@ async function verifyCleanConsumer(
         consumer,
       );
     }
+
+    await verifyPackedRoleIsolation(
+      tarballPath,
+      packageJson,
+      "runtime",
+      runtimeSmokeSource(),
+    );
+    await verifyPackedRoleIsolation(
+      tarballPath,
+      packageJson,
+      "compiler",
+      compilerSmokeSource(feasibilityFixture),
+    );
+  } finally {
+    await rm(consumer, { recursive: true, force: true });
+  }
+}
+
+async function verifyPackedRoleIsolation(tarballPath, packageJson, role, smokeSource) {
+  const consumer = await mkdtemp(join(tmpdir(), `labcolors-${role}-isolation-`));
+  try {
+    await writeFile(
+      join(consumer, "package.json"),
+      `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
+    );
+    const installed = resolve(consumer, "node_modules", ...packageJson.name.split("/"));
+    await mkdir(installed, { recursive: true });
+    command("tar", ["-xzf", tarballPath, "--strip-components=1", "-C", installed]);
+
+    if (role === "runtime") {
+      await rm(resolve(installed, "compiler"), { recursive: true, force: true });
+      await rm(resolve(installed, "compiler.js"), { force: true });
+      await rm(resolve(installed, "compiler.d.ts"), { force: true });
+    } else if (role === "compiler") {
+      await rm(resolve(installed, "pkg"), { recursive: true, force: true });
+      for (const file of [
+        "index.js",
+        "index.d.ts",
+        "apply-theme.js",
+        "apply-theme.d.ts",
+        "watch-theme.js",
+        "watch-theme.d.ts",
+        "adapt-theme.js",
+        "adapt-theme.d.ts",
+        "effective-bg.js",
+        "effective-bg.d.ts",
+      ]) {
+        await rm(resolve(installed, file), { force: true });
+      }
+    } else {
+      fail(`unknown isolated execution role: ${role}`);
+    }
+
+    const smokePath = resolve(consumer, "smoke.mjs");
+    await writeFile(smokePath, smokeSource);
+    command(process.execPath, [smokePath], consumer);
   } finally {
     await rm(consumer, { recursive: true, force: true });
   }
@@ -1915,9 +2016,9 @@ async function verifyCleanConsumer(
 // Execute the same packed-package runtime smoke under the caller's Node binary.
 // CI uses this to prove the public consumer floor independently from the pinned
 // release packer.
-export async function smokePackedRuntime(tarballPath) {
+export async function smokePackedPackage(tarballPath) {
   const tarball = resolve(tarballPath);
-  const consumer = await mkdtemp(join(tmpdir(), "labcolors-runtime-smoke-"));
+  const consumer = await mkdtemp(join(tmpdir(), "labcolors-package-smoke-"));
   try {
     await writeFile(
       join(consumer, "package.json"),
@@ -1936,10 +2037,13 @@ export async function smokePackedRuntime(tarballPath) {
       ],
       consumer,
     );
-    const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
     const runtimePath = resolve(consumer, "smoke.mjs");
-    await writeFile(runtimePath, runtimeSmokeSource(feasibilityFixture));
+    const compilerPath = resolve(consumer, "compiler-smoke.mjs");
+    const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
+    await writeFile(runtimePath, runtimeSmokeSource());
+    await writeFile(compilerPath, compilerSmokeSource(feasibilityFixture));
     command(process.execPath, [runtimePath], consumer);
+    command(process.execPath, [compilerPath], consumer);
   } finally {
     await rm(consumer, { recursive: true, force: true });
   }
@@ -1979,11 +2083,18 @@ export async function verifyPackageRelease() {
   }
   const conformanceEvidence = await validateConformance(conformance);
 
-  const wasmBytes = await readFile(WASM_PATH);
-  if (wasmBytes.length < 8 || !wasmBytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) {
-    fail("pkg/labcolors_bg.wasm is absent or has no WebAssembly magic header");
+  const wasmPaths = {
+    runtime: [RUNTIME_WASM_PATH, "pkg/labcolors_bg.wasm"],
+    compiler: [COMPILER_WASM_PATH, "compiler/labcolors_compiler_bg.wasm"],
+  };
+  const wasm = {};
+  for (const [role, [path, displayPath]] of Object.entries(wasmPaths)) {
+    const bytes = await readFile(path);
+    if (bytes.length < 8 || !bytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) {
+      fail(`${displayPath} is absent or has no WebAssembly magic header`);
+    }
+    wasm[role] = await hashedArtifact(path, displayPath);
   }
-  const wasm = await hashedArtifact(WASM_PATH, "pkg/labcolors_bg.wasm");
   const buildMetadataValue = await readJson(BUILD_METADATA);
   validateBuildMetadata(buildMetadataValue, {
     packageJson,
@@ -2033,11 +2144,9 @@ export async function verifyPackageRelease() {
   );
 
   const manifest = {
-    // Схема release-manifest v2: numericalSites (pack 2.x, прозаические
-    // research-поля) заменён на numericalCapabilities — typed capability
-    // projection ядра с независимо пересчитанным checksum. Read-back в
-    // publish-workflow пиняет ровно эту версию.
-    schemaVersion: 2,
+    // V3 makes the two execution-role WASM records explicit. The publish
+    // read-back validates both records against bytes inside the exact tarball.
+    schemaVersion: 3,
     npm: packageJson.version,
     core: coreVersion,
     wire: {
@@ -2086,7 +2195,14 @@ export async function verifyPackageRelease() {
       "spatial-glow-field",
       "display-p3",
     ],
-    artifacts: { tarball, wasm, buildMetadata },
+    artifacts: {
+      tarball,
+      wasm: [
+        { role: "runtime", ...wasm.runtime },
+        { role: "compiler", ...wasm.compiler },
+      ],
+      buildMetadata,
+    },
   };
   await writeFile(RELEASE_MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -2108,18 +2224,18 @@ const invokedDirectly =
   process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
-  const runtimeSmokeIndex = process.argv.indexOf("--runtime-smoke");
-  const action = runtimeSmokeIndex >= 0
+  const packageSmokeIndex = process.argv.indexOf("--package-smoke");
+  const action = packageSmokeIndex >= 0
     ? (() => {
-        const tarball = process.argv[runtimeSmokeIndex + 1];
-        if (!tarball) fail("--runtime-smoke requires a tarball path");
-        return smokePackedRuntime(tarball).then(() => ({ runtimeSmoke: tarball }));
+        const tarball = process.argv[packageSmokeIndex + 1];
+        if (!tarball) fail("--package-smoke requires a tarball path");
+        return smokePackedPackage(tarball).then(() => ({ packageSmoke: tarball }));
       })()
     : verifyPackageRelease();
   action
     .then(async ({ manifest, tarball }) => {
-      if (runtimeSmokeIndex >= 0) {
-        console.log(`runtime smoke passed: ${resolve(process.argv[runtimeSmokeIndex + 1])}`);
+      if (packageSmokeIndex >= 0) {
+        console.log(`package smoke passed: ${resolve(process.argv[packageSmokeIndex + 1])}`);
         return;
       }
       await writeGithubOutputs({ manifest, tarball });

@@ -121,12 +121,13 @@ test("every workspace package inherits the declared MSRV", () => {
   }
 });
 
-test("WCAG22 feasibility projects only the registered-domain capability through transports", () => {
+test("runtime and compiler resolve disjoint Core capability graphs", () => {
   const isolatedCoreEdge =
     /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false \}/u;
   const protocolEdge = /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
   const protocolManifest = read("crates", "labcolors-protocol", "Cargo.toml");
   const wasmManifest = read("crates", "labcolors-wasm", "Cargo.toml");
+  const compilerManifest = read("crates", "labcolors-compiler", "Cargo.toml");
   const ffiManifest = read("crates", "labcolors-ffi", "Cargo.toml");
   const conformanceManifest = read("crates", "labcolors-conformance", "Cargo.toml");
 
@@ -134,7 +135,11 @@ test("WCAG22 feasibility projects only the registered-domain capability through 
     protocolManifest,
     /labcolors-core = \{ path = "\.\.\/labcolors-core", default-features = false, features = \["wcag22-feasibility"\] \}/u,
   );
-  for (const manifest of [wasmManifest, ffiManifest, conformanceManifest]) {
+  assert.match(wasmManifest, isolatedCoreEdge);
+  assert.doesNotMatch(wasmManifest, /labcolors-protocol/u);
+  assert.match(compilerManifest, protocolEdge);
+  assert.doesNotMatch(compilerManifest, /labcolors-core|labcolors-wasm/u);
+  for (const manifest of [ffiManifest, conformanceManifest]) {
     assert.match(manifest, isolatedCoreEdge);
     assert.match(manifest, protocolEdge);
     assert.doesNotMatch(manifest, /features = \["wcag22-feasibility"\]/u);
@@ -145,18 +150,29 @@ test("WCAG22 feasibility projects only the registered-domain capability through 
     ci,
     "name: prove core capability projection boundary",
   );
-  const declaredConsumers = projection.match(
-    /consumers = \(\n(?<items>(?:    "[^"]+",\n)+)\)/u,
+  const declaredDirectCore = projection.match(
+    /direct_core_consumers = \(\n(?<items>(?:    "[^"]+",\n)+)\)/u,
   )?.groups?.items;
-  assert.ok(declaredConsumers, "CI must declare one consumer SSOT");
+  const declaredProtocol = projection.match(
+    /protocol_consumers = \(\n(?<items>(?:    "[^"]+",\n)+)\)/u,
+  )?.groups?.items;
+  assert.ok(declaredDirectCore, "CI must declare one direct-Core consumer SSOT");
+  assert.ok(declaredProtocol, "CI must declare one Protocol consumer SSOT");
   assert.deepEqual(
-    [...declaredConsumers.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
+    [...declaredDirectCore.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
     ["labcolors-wasm", "labcolors-ffi", "labcolors-conformance"],
   );
+  assert.deepEqual(
+    [...declaredProtocol.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
+    ["labcolors-compiler", "labcolors-ffi", "labcolors-conformance"],
+  );
   assert.equal(
-    projection.match(/for consumer in consumers:/gu)?.length,
+    projection.match(/for consumer in direct_core_consumers:/gu)?.length,
     1,
-    "the dependency and feature-tree checks must share one consumer loop",
+  );
+  assert.equal(
+    projection.match(/for consumer in protocol_consumers:/gu)?.length,
+    1,
   );
   assert.match(
     projection,
@@ -167,7 +183,11 @@ test("WCAG22 feasibility projects only the registered-domain capability through 
   assert.match(projection, /dependency\["name"\] == "labcolors-protocol"/u);
   assert.match(
     projection,
-    /\["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"\]/u,
+    /"cargo", "tree", "-p", "labcolors-wasm",[\s\S]*?"--target", "wasm32-unknown-unknown"/u,
+  );
+  assert.match(
+    projection,
+    /"cargo", "tree", "-p", "labcolors-compiler",[\s\S]*?"--target", "wasm32-unknown-unknown"/u,
   );
   assert.match(
     projection,
@@ -204,7 +224,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(ci, /^\s*NODE_CONSUMER_FLOOR: 22\.11\.0$/m);
   assert.match(
     ci,
-    /^\s*node-consumer-floor:[\s\S]*needs: wasm[\s\S]*node-version: \$\{\{ env\.NODE_CONSUMER_FLOOR \}\}[\s\S]*actions\/download-artifact@[0-9a-f]{40}[\s\S]*--runtime-smoke/m,
+    /^\s*node-consumer-floor:[\s\S]*needs: wasm[\s\S]*node-version: \$\{\{ env\.NODE_CONSUMER_FLOOR \}\}[\s\S]*actions\/download-artifact@[0-9a-f]{40}[\s\S]*--package-smoke/m,
   );
   assert.match(ci, /^\s*CHROME_FOR_TESTING_VERSION: 150\.0\.7871\.115$/m);
   assert.match(
@@ -722,22 +742,70 @@ test("publish artifact validator executes and rejects identity or byte drift", (
       join(payload, "package.json"),
       `${JSON.stringify({ name: "@labpics/colors", version: "0.10.0" })}\n`,
     );
+    const runtimeWasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+    const compilerWasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 1]);
+    mkdirSync(join(payload, "pkg"));
+    mkdirSync(join(payload, "compiler"));
+    writeFileSync(join(payload, "pkg", "labcolors_bg.wasm"), runtimeWasm);
+    writeFileSync(
+      join(payload, "compiler", "labcolors_compiler_bg.wasm"),
+      compilerWasm,
+    );
+
+    const expectedSha = "a".repeat(40);
+    const conformance = {
+      packVersion: "5.0.0",
+      packDigest: "12345678",
+      manifestSha256: "c".repeat(64),
+      familySetSha256: "d".repeat(64),
+    };
+    const wasmEvidence = [
+      {
+        role: "runtime",
+        path: "pkg/labcolors_bg.wasm",
+        bytes: runtimeWasm.length,
+        sha256: createHash("sha256").update(runtimeWasm).digest("hex"),
+      },
+      {
+        role: "compiler",
+        path: "compiler/labcolors_compiler_bg.wasm",
+        bytes: compilerWasm.length,
+        sha256: createHash("sha256").update(compilerWasm).digest("hex"),
+      },
+    ];
+    const buildMetadata = {
+      schemaVersion: 2,
+      package: { name: "@labpics/colors", version: "0.10.0" },
+      sourceSha: expectedSha,
+      coreVersion: "0.2.0",
+      conformance,
+      wasm: wasmEvidence,
+    };
+    const metadataPath = join(payload, "build-metadata.json");
+    const metadataBytes = Buffer.from(`${JSON.stringify(buildMetadata)}\n`);
+    writeFileSync(metadataPath, metadataBytes);
 
     const tarball = join(artifact, "labpics-colors-0.10.0.tgz");
     execFileSync("tar", ["-czf", tarball, "-C", join(temporary, "payload"), "package"]);
     const bytes = readFileSync(tarball);
-    const expectedSha = "a".repeat(40);
+
     const manifest = {
-      // Release-manifest schema v2: numericalCapabilities вместо numericalSites
-      // (см. verify-package-release.mjs); validator publish-workflow пиняет 2.
-      schemaVersion: 2,
+      schemaVersion: 3,
       npm: "0.10.0",
+      core: "0.2.0",
+      conformance,
       sourceSha: expectedSha,
       artifacts: {
         tarball: {
           path: ".release/labpics-colors-0.10.0.tgz",
           bytes: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+        wasm: structuredClone(wasmEvidence),
+        buildMetadata: {
+          path: "build-metadata.json",
+          bytes: metadataBytes.length,
+          sha256: createHash("sha256").update(metadataBytes).digest("hex"),
         },
       },
     };
@@ -773,6 +841,38 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
     manifest.sourceSha = expectedSha;
     manifest.artifacts.tarball.sha256 = "0".repeat(64);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+    assert.throws(execute, /Command failed/u);
+
+    manifest.artifacts.tarball.sha256 = createHash("sha256").update(bytes).digest("hex");
+    manifest.artifacts.wasm[1].bytes += 1;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+    assert.throws(execute, /Command failed/u);
+
+    manifest.artifacts.wasm[1].bytes -= 1;
+    manifest.artifacts.wasm.reverse();
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+    assert.throws(execute, /Command failed/u);
+
+    manifest.artifacts.wasm.reverse();
+    manifest.artifacts.buildMetadata.sha256 = "0".repeat(64);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+    assert.throws(execute, /Command failed/u);
+
+    const tamperedMetadataBytes = Buffer.from(
+      `${JSON.stringify({ ...buildMetadata, sourceSha: "b".repeat(40) })}\n`,
+    );
+    writeFileSync(metadataPath, tamperedMetadataBytes);
+    execFileSync("tar", ["-czf", tarball, "-C", join(temporary, "payload"), "package"]);
+    const tamperedTarball = readFileSync(tarball);
+    manifest.artifacts.tarball.bytes = tamperedTarball.length;
+    manifest.artifacts.tarball.sha256 = createHash("sha256")
+      .update(tamperedTarball)
+      .digest("hex");
+    manifest.artifacts.buildMetadata.bytes = tamperedMetadataBytes.length;
+    manifest.artifacts.buildMetadata.sha256 = createHash("sha256")
+      .update(tamperedMetadataBytes)
+      .digest("hex");
     writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
     assert.throws(execute, /Command failed/u);
   } finally {
@@ -966,6 +1066,7 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   );
   assert.match(verifier, /evaluateWcag22Feasibility/u);
   assert.match(verifier, /wcag22FeasibilityMaxBytes/u);
+  assert.match(verifier, /from "@labpics\/colors\/compiler"/u);
   assert.match(verifier, /type Wcag22FeasibilityRequestV1/u);
   assert.match(verifier, /type Wcag22FeasibilityOutcomeV1/u);
   assert.match(verifier, /get\("text-default-seven"\)\?\.vector/u);
@@ -974,168 +1075,121 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
     /JSON\.stringify\(evaluateWcag22Feasibility\(feasibilityRequest\)\)[\s\S]*?feasibilityFixture\.outcomeJson/u,
   );
   assert.equal(
-    verifier.match(/writeFile\(runtimePath, runtimeSmokeSource\(feasibilityFixture\)\)/gu)?.length,
-    2,
-    "clean-install and Node-floor smokes must execute the same canonical fixture",
+    verifier.match(/compilerSmokeSource\(feasibilityFixture\)/gu)?.length,
+    4,
+    "clean-install, role-isolation and Node-floor smokes must execute the same canonical fixture",
+  );
+  const compilerSmoke = verifier.slice(
+    verifier.indexOf("function compilerSmokeSource"),
+    verifier.indexOf("function typeSmokeSource"),
   );
   assert.ok(
-    verifier.indexOf("await init({ module_or_path:") <
-      verifier.indexOf("wcag22FeasibilityMaxBytes()"),
-    "clean smoke must import safely and call the getter only after WASM init",
+    compilerSmoke.indexOf("await init({ module_or_path:") <
+      compilerSmoke.indexOf("wcag22FeasibilityMaxBytes()"),
+    "compiler smoke must import safely and call the getter only after its WASM init",
   );
+  assert.match(verifier, /verifyPackedRoleIsolation/u);
+  assert.match(verifier, /await rm\(resolve\(installed, "compiler"\)/u);
+  assert.match(verifier, /await rm\(resolve\(installed, "pkg"\)/u);
   assert.match(verifier, /@ts-expect-error byte API rejects strings/u);
   assert.match(verifier, /case "notEvaluated"/u);
   assert.match(verifier, /case "incompatibleCoreContract"/u);
 });
 
-test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () => {
-  const v1Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v1.json");
-  const v2Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v2.json");
-  const v3Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v3.json");
-  const v4Path = join(root, "packages", "colors", "bench", "wasm-size-budget-v4.json");
+test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () => {
+  const bench = join(root, "packages", "colors", "bench");
+  const paths = Object.fromEntries(
+    [1, 2, 3, 4, 5].map((version) => [
+      `v${version}`,
+      join(bench, `wasm-size-budget-v${version}.json`),
+    ]),
+  );
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
   const sha256 = (value) => createHash("sha256").update(value).digest("hex");
   const canonicalJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
-
-  const v1Bytes = readFileSync(v1Path);
-  const v1 = JSON.parse(v1Bytes);
-  assert.equal(
-    sha256(v1Bytes),
-    "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
-    "the immutable #284 evidence and build recipe must remain byte-identical",
-  );
-  const recipe = {
-    rustToolchain: v1.measurement.rustToolchain,
-    rustcCommit: v1.measurement.rustcCommit,
-    wasmPack: v1.measurement.wasmPack,
-    wasmBindgen: v1.measurement.wasmBindgen,
-    target: v1.measurement.target,
-    cargoProfile: v1.measurement.cargoProfile,
-    wasmOpt: v1.measurement.wasmOpt,
-    wasmOptVersion: v1.measurement.wasmOptVersion,
-    measurementPlatform: v1.measurement.measurementPlatform,
-    rustPathRemap: v1.measurement.rustPathRemap,
-    command: v1.measurement.command,
+  const expectedHashes = {
+    v1: "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
+    v2: "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1",
+    v3: "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15",
+    v4: "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c",
+    v5: "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59",
   };
-  assert.equal(
-    sha256(JSON.stringify(recipe)),
-    "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4",
-  );
-  assert.deepEqual(v1.measurement.rustPathRemap, [
-    "GITHUB_WORKSPACE=/workspace/lab-colors",
-    "CARGO_HOME=/cargo-home",
-  ]);
+  const documents = {};
+  for (const version of Object.keys(paths)) {
+    const bytes = readFileSync(paths[version]);
+    const value = JSON.parse(bytes);
+    documents[version] = value;
+    assert.equal(sha256(bytes), expectedHashes[version], `${version} byte identity drifted`);
+    if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
+  }
 
-  const v2Bytes = readFileSync(v2Path);
-  const v2 = JSON.parse(v2Bytes);
-  assert.equal(v2Bytes.toString("utf8"), canonicalJson(v2));
-  assert.equal(
-    sha256(v2Bytes),
-    "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1",
-    "the admitted v2 document must be byte-immutable",
-  );
-  assert.deepEqual(Object.keys(v2), [
+  const { v1, v2, v3, v4, v5 } = documents;
+  assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
+  assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
+  assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
+  assert.equal(v4.budgetId, "labcolors-wasm-raw-issue-296-v4");
+  assert.deepEqual(Object.keys(v5), [
     "schemaVersion",
     "budgetId",
-    "artifact",
-    "buildRecipe",
-    "measurement",
-    "policy",
+    "predecessor",
+    "toolchainSource",
+    "buildRecipes",
+    "roles",
   ]);
-  assert.deepEqual(Object.keys(v2.buildRecipe), ["path", "fileSha256", "recipeSha256"]);
-  assert.deepEqual(Object.keys(v2.measurement), [
-    "issue",
-    "measurementPlatform",
-    "rawBytes",
-    "sha256",
-  ]);
-  assert.deepEqual(Object.keys(v2.policy), ["maxRawBytes", "derivation", "gzip"]);
-  assert.equal(v2.schemaVersion, 3);
-  assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
-  assert.equal(v2.artifact, "packages/colors/pkg/labcolors_bg.wasm");
-  assert.deepEqual(v2.buildRecipe, {
+  assert.equal(v5.schemaVersion, 4);
+  assert.equal(v5.budgetId, "labcolors-wasm-roles-issue-296-c1-v5");
+  assert.deepEqual(v5.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v4.json",
+    fileSha256: expectedHashes.v4,
+  });
+  assert.deepEqual(v5.toolchainSource, {
     path: "packages/colors/bench/wasm-size-budget-v1.json",
-    fileSha256: "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
-    recipeSha256: "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4",
+    fileSha256: expectedHashes.v1,
   });
-  assert.deepEqual(v2.measurement, {
-    issue: 295,
-    measurementPlatform: "linux-x64",
-    rawBytes: 521240,
-    sha256: "d37841bfb2615d05c8366b08dcc7e5aed1bbd3cf27c3db67896108c5ec9c9ca0",
-  });
-  assert.deepEqual(v2.policy, {
-    maxRawBytes: 521240,
-    derivation: "exact-accepted-issue-295-slice-b-measurement",
-    gzip: "diagnostic-only",
-  });
-
-  const v3Bytes = readFileSync(v3Path);
-  const v3 = JSON.parse(v3Bytes);
-  assert.equal(v3Bytes.toString("utf8"), canonicalJson(v3));
+  assert.deepEqual(Object.keys(v5.buildRecipes), ["runtime", "compiler"]);
+  assert.deepEqual(Object.keys(v5.roles), ["runtime", "compiler"]);
   assert.equal(
-    sha256(v3Bytes),
-    "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15",
-    "the admitted v3 document must be byte-immutable",
+    v5.buildRecipes.runtime.recipeSha256,
+    "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4",
   );
-  assert.deepEqual(Object.keys(v3), Object.keys(v2));
-  assert.deepEqual(Object.keys(v3.buildRecipe), Object.keys(v2.buildRecipe));
-  assert.deepEqual(Object.keys(v3.measurement), Object.keys(v2.measurement));
-  assert.deepEqual(Object.keys(v3.policy), Object.keys(v2.policy));
-  assert.equal(v3.schemaVersion, 3);
-  assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
-  assert.equal(v3.artifact, "packages/colors/pkg/labcolors_bg.wasm");
-  assert.deepEqual(v3.buildRecipe, v2.buildRecipe);
-  assert.deepEqual(v3.measurement, {
-    issue: 296,
-    measurementPlatform: "linux-x64",
-    rawBytes: 521231,
-    sha256: "779379e914909ff1ddbb5afdd6554d026b586f3c71ef6b2cfeba3468bf93e029",
-  });
-  assert.deepEqual(v3.policy, {
-    maxRawBytes: 521231,
-    derivation: "exact-accepted-issue-296-slice-a-measurement",
-    gzip: "diagnostic-only",
-  });
-
-  const v4Bytes = readFileSync(v4Path);
-  const v4 = JSON.parse(v4Bytes);
-  assert.equal(v4Bytes.toString("utf8"), canonicalJson(v4));
   assert.equal(
-    sha256(v4Bytes),
-    "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c",
-    "the admitted v4 document must be byte-immutable",
+    v5.buildRecipes.compiler.recipeSha256,
+    "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f",
   );
-  assert.deepEqual(Object.keys(v4), Object.keys(v3));
-  assert.deepEqual(Object.keys(v4.buildRecipe), Object.keys(v3.buildRecipe));
-  assert.deepEqual(Object.keys(v4.measurement), Object.keys(v3.measurement));
-  assert.deepEqual(Object.keys(v4.policy), Object.keys(v3.policy));
-  assert.equal(v4.schemaVersion, 3);
-  assert.equal(v4.budgetId, "labcolors-wasm-raw-issue-296-v4");
-  assert.equal(v4.artifact, "packages/colors/pkg/labcolors_bg.wasm");
-  assert.deepEqual(v4.buildRecipe, v3.buildRecipe);
-  assert.deepEqual(v4.measurement, {
+  assert.match(v5.buildRecipes.runtime.command, /crates\/labcolors-wasm/u);
+  assert.match(v5.buildRecipes.compiler.command, /crates\/labcolors-compiler/u);
+  assert.deepEqual(v5.roles.runtime.measurement, {
     issue: 296,
+    slice: "C1",
     measurementPlatform: "linux-x64",
-    rawBytes: 520920,
-    sha256: "c179f42cd90c24699167ee78b4080c80fb38247c54953e7dc020483f6fcf94ed",
+    rawBytes: 454385,
+    sha256: "8cd65f001d4bb4b8ddead9084e705a64bee14cd796c7bc6ebeb2f2687aa5fdba",
   });
-  assert.deepEqual(v4.policy, {
-    maxRawBytes: 520920,
-    derivation: "exact-accepted-issue-296-slice-b-measurement",
-    gzip: "diagnostic-only",
+  assert.deepEqual(v5.roles.compiler.measurement, {
+    issue: 296,
+    slice: "C1",
+    measurementPlatform: "linux-x64",
+    rawBytes: 175212,
+    sha256: "3a552ce43ada7d0b10e90a23b4a7e50a4ecad77a446374b98ca8ee6b5c6a2a45",
   });
-  assert.ok(v4.policy.maxRawBytes <= v3.policy.maxRawBytes, "the v4 ratchet may only tighten");
+  assert.equal(v5.roles.runtime.policy.maxRawBytes, v5.roles.runtime.measurement.rawBytes);
+  assert.equal(v5.roles.compiler.policy.maxRawBytes, v5.roles.compiler.measurement.rawBytes);
+  assert.ok(v5.roles.runtime.policy.maxRawBytes <= v1.policy.maxRawBytes);
+  assert.ok(v5.roles.runtime.policy.maxRawBytes <= v4.policy.maxRawBytes);
 
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, v4Path);
-  assert.equal(checker.V1_FILE_SHA256, v4.buildRecipe.fileSha256);
-  assert.equal(checker.V1_RECIPE_SHA256, v4.buildRecipe.recipeSha256);
-  assert.equal(checker.V2_FILE_SHA256, sha256(v2Bytes));
-  assert.equal(checker.V3_FILE_SHA256, sha256(v3Bytes));
-  assert.equal(checker.V4_FILE_SHA256, sha256(v4Bytes));
+  assert.equal(checker.DEFAULT_BUDGET, paths.v5);
+  for (const version of [1, 2, 3, 4, 5]) {
+    assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
+  }
+  assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
+  assert.doesNotMatch(
+    read("scripts", "check-wasm-size-budget.mjs"),
+    /wcag22-feasibility-wasm-boundary-v1\.json/u,
+    "whole-call evidence must not become a size-budget dependency",
+  );
 
   const wholeCallSource = read(
     "packages",
@@ -1143,100 +1197,116 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     "bench",
     "wcag22-feasibility-boundary.bench.mjs",
   );
-  assert.match(wholeCallSource, /wasmToolchainPath = resolve\(here, "wasm-size-budget-v1\.json"\)/u);
-  assert.doesNotMatch(wholeCallSource, /wasm-size-budget-v[234]\.json/u);
-  assert.doesNotMatch(
-    read("scripts", "check-wasm-size-budget.mjs"),
-    /wcag22-feasibility-wasm-boundary-v1\.json/u,
-    "the sibling whole-call artifact must not become a size-budget dependency",
-  );
+  assert.match(wholeCallSource, /wasmBudgetPath = resolve\(here, "wasm-size-budget-v5\.json"\)/u);
 
   const ci = read(".github", "workflows", "ci.yml");
-  assert.match(ci, /name: enforce measured WASM raw-byte budget/u);
+  assert.match(ci, /name: enforce measured WASM role budgets/u);
   assert.match(ci, /run: node scripts\/check-wasm-size-budget\.mjs/u);
-  assert.doesNotMatch(ci, /Not a hard gate yet/u);
   const wasmJob = ci.match(/\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n)/u)?.groups?.body;
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
   assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
-  assert.match(wasmJob, /CARGO_ENCODED_RUSTFLAGS/u);
   assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);
   assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
 
-  const builtWasm = readFileSync(
-    join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
-  ).toString("latin1");
-  assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
-  assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
-  assert.doesNotMatch(
-    builtWasm,
-    /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u,
-  );
+  for (const [role, path] of [
+    ["runtime", join(root, "packages", "colors", "pkg", "labcolors_bg.wasm")],
+    ["compiler", join(root, "packages", "colors", "compiler", "labcolors_compiler_bg.wasm")],
+  ]) {
+    const builtBytes = readFileSync(path);
+    // The exact V5 digest selects the pinned Linux build; developer builds retain their own host paths.
+    if (sha256(builtBytes) !== v5.roles[role].measurement.sha256) continue;
+    const builtWasm = builtBytes.toString("latin1");
+    assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
+    assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
+    assert.doesNotMatch(builtWasm, /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u);
+  }
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-budget-v4-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v5-"));
   try {
-    const wasmPath = join(temporary, "fixture.wasm");
+    const runtimePath = join(temporary, "runtime.wasm");
+    const compilerPath = join(temporary, "compiler.wasm");
     const fixtureBudgetPath = join(temporary, "budget.json");
-    const bytes = Buffer.alloc(16);
-    bytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v4);
-    fixture.measurement.rawBytes = bytes.length;
-    fixture.measurement.sha256 = sha256(bytes);
-    fixture.policy.maxRawBytes = bytes.length;
-    writeFileSync(wasmPath, bytes);
+    const runtimeBytes = Buffer.alloc(16);
+    const compilerBytes = Buffer.alloc(17);
+    runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
+    compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
+    const fixture = structuredClone(v5);
+    for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
+      fixture.roles[role].measurement.rawBytes = bytes.length;
+      fixture.roles[role].measurement.sha256 = sha256(bytes);
+      fixture.roles[role].policy.maxRawBytes = bytes.length;
+    }
+    writeFileSync(runtimePath, runtimeBytes);
+    writeFileSync(compilerPath, compilerBytes);
     writeFileSync(fixtureBudgetPath, canonicalJson(fixture));
+    assert.doesNotThrow(() =>
+      checker.parseBudgetDocument(readFileSync(fixtureBudgetPath), fixtureBudgetPath)
+    );
 
     const run = () => execFileSync(
       process.execPath,
-      [checkerPath, "--wasm", wasmPath, "--budget", fixtureBudgetPath],
+      [
+        checkerPath,
+        "--budget",
+        fixtureBudgetPath,
+        "--runtime-wasm",
+        runtimePath,
+        "--compiler-wasm",
+        compilerPath,
+      ],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
-    assert.match(
-      run(),
-      /WASM size budget (?:PASS|DIAGNOSTIC) raw=16B .*artifact-sha=match/u,
-    );
+    const output = run();
+    assert.match(output, /role=runtime raw=16B .*artifact-sha=match/u);
+    assert.match(output, /role=compiler raw=17B .*artifact-sha=match/u);
 
     const schemaMutations = [
-      ["schema rollback", (value) => { value.schemaVersion = 2; }],
+      ["schema rollback", (value) => { value.schemaVersion = 3; }],
       ["identity drift", (value) => { value.budgetId = "other"; }],
-      ["artifact path drift", (value) => { value.artifact = "other.wasm"; }],
-      ["missing field", (value) => { delete value.artifact; }],
-      ["unknown field", (value) => { value.unknown = true; }],
-      ["recipe path drift", (value) => { value.buildRecipe.path = "other.json"; }],
-      ["v1 file drift", (value) => { value.buildRecipe.fileSha256 = "0".repeat(64); }],
-      ["recipe drift", (value) => { value.buildRecipe.recipeSha256 = "0".repeat(64); }],
-      ["missing recipe field", (value) => { delete value.buildRecipe.recipeSha256; }],
-      ["measurement issue drift", (value) => { value.measurement.issue = 295; }],
-      ["measurement platform drift", (value) => {
-        value.measurement.measurementPlatform = "darwin-arm64";
+      ["predecessor path", (value) => { value.predecessor.path = "other.json"; }],
+      ["predecessor hash", (value) => { value.predecessor.fileSha256 = "0".repeat(64); }],
+      ["toolchain path", (value) => { value.toolchainSource.path = "other.json"; }],
+      ["toolchain hash", (value) => { value.toolchainSource.fileSha256 = "0".repeat(64); }],
+      ["missing compiler recipe", (value) => { delete value.buildRecipes.compiler; }],
+      ["extra recipe", (value) => { value.buildRecipes.other = value.buildRecipes.runtime; }],
+      ["compiler uses runtime command", (value) => {
+        value.buildRecipes.compiler.command = value.buildRecipes.runtime.command;
       }],
-      ["unknown measurement field", (value) => { value.measurement.unknown = true; }],
-      ["zero bytes", (value) => { value.measurement.rawBytes = 0; }],
-      ["fractional bytes", (value) => { value.measurement.rawBytes = 1.5; }],
-      ["unsafe bytes", (value) => {
-        value.measurement.rawBytes = Number.MAX_SAFE_INTEGER + 1;
+      ["compiler recipe digest", (value) => {
+        value.buildRecipes.compiler.recipeSha256 = "0".repeat(64);
       }],
-      ["invalid SHA", (value) => { value.measurement.sha256 = "0"; }],
-      ["uppercase SHA", (value) => { value.measurement.sha256 = "A".repeat(64); }],
-      ["ceiling plus one", (value) => { value.policy.maxRawBytes += 1; }],
-      ["ceiling minus one", (value) => { value.policy.maxRawBytes -= 1; }],
-      ["derivation drift", (value) => { value.policy.derivation = "guessed"; }],
-      ["gzip gate", (value) => { value.policy.gzip = 123; }],
-      ["missing policy field", (value) => { delete value.policy.gzip; }],
+      ["missing compiler role", (value) => { delete value.roles.compiler; }],
+      ["extra role", (value) => { value.roles.other = value.roles.runtime; }],
+      ["swapped artifacts", (value) => {
+        [value.roles.runtime.artifact, value.roles.compiler.artifact] =
+          [value.roles.compiler.artifact, value.roles.runtime.artifact];
+      }],
+      ["measurement issue", (value) => { value.roles.runtime.measurement.issue = 295; }],
+      ["measurement slice", (value) => { value.roles.compiler.measurement.slice = "B"; }],
+      ["measurement platform", (value) => {
+        value.roles.runtime.measurement.measurementPlatform = "darwin-arm64";
+      }],
+      ["zero bytes", (value) => { value.roles.compiler.measurement.rawBytes = 0; }],
+      ["fractional bytes", (value) => { value.roles.runtime.measurement.rawBytes = 1.5; }],
+      ["invalid SHA", (value) => { value.roles.compiler.measurement.sha256 = "0"; }],
+      ["ceiling mismatch", (value) => { value.roles.runtime.policy.maxRawBytes += 1; }],
+      ["derivation drift", (value) => { value.roles.compiler.policy.derivation = "guessed"; }],
+      ["gzip gate", (value) => { value.roles.runtime.policy.gzip = "gate"; }],
+      ["same-capability regression", (value) => {
+        value.roles.runtime.measurement.rawBytes = v1.policy.maxRawBytes + 1;
+        value.roles.runtime.policy.maxRawBytes = v1.policy.maxRawBytes + 1;
+      }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
-      ["ratchet regression", (value) => {
-        value.measurement.rawBytes = v3.policy.maxRawBytes + 1;
-        value.policy.maxRawBytes = v3.policy.maxRawBytes + 1;
-      }],
-      ["key reorder", (value) => ({
+      ["top-level key reorder", (value) => ({
         budgetId: value.budgetId,
         schemaVersion: value.schemaVersion,
-        artifact: value.artifact,
-        buildRecipe: value.buildRecipe,
-        measurement: value.measurement,
-        policy: value.policy,
+        predecessor: value.predecessor,
+        toolchainSource: value.toolchainSource,
+        buildRecipes: value.buildRecipes,
+        roles: value.roles,
       })],
     ];
-    assert.equal(schemaMutations.length, 25, "v4 schema mutation set changed");
+    assert.equal(schemaMutations.length, 25, "v5 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1249,63 +1319,49 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 3,\n',
-        '  "schemaVersion": 3,\n  "schemaVersion": 3,\n',
+        '  "schemaVersion": 4,\n',
+        '  "schemaVersion": 4,\n  "schemaVersion": 4,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
 
-    const canonical = checker.evaluateWasmBudget(fixture, bytes, "linux-x64");
-    assert.equal(canonical.status, "PASS");
-    assert.equal(canonical.artifactSha, "match");
-
-    const sameSizeMutation = Buffer.from(bytes);
-    sameSizeMutation[15] = 1;
-    assert.throws(
-      () => checker.evaluateWasmBudget(fixture, sameSizeMutation, "linux-x64"),
-      /SHA-256 mismatch/u,
-      "same-size byte drift must fail",
-    );
-    assert.throws(
-      () => checker.evaluateWasmBudget(
-        fixture,
-        Buffer.concat([bytes, Buffer.from([0])]),
-        "linux-x64",
-      ),
-      /length mismatch/u,
-      "append must fail",
-    );
-    assert.throws(
-      () => checker.evaluateWasmBudget(fixture, bytes.subarray(0, 15), "linux-x64"),
-      /length mismatch/u,
-      "truncate must fail",
-    );
-    assert.equal(
-      checker.evaluateWasmBudget(fixture, sameSizeMutation, "darwin-arm64").status,
-      "DIAGNOSTIC",
-      "non-canonical hosts report evidence without admitting it",
-    );
-    assert.equal(
-      checker.evaluateWasmBudget(
-        fixture,
-        Buffer.concat([bytes, Buffer.from([0])]),
-        "darwin-arm64",
-      ).status,
-      "DIAGNOSTIC",
-      "non-canonical growth remains diagnostic",
-    );
-    assert.equal(
-      checker.evaluateWasmBudget(fixture, bytes.subarray(0, 15), "darwin-arm64").status,
-      "DIAGNOSTIC",
-      "non-canonical shrink remains diagnostic",
-    );
+    for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
+      const record = fixture.roles[role];
+      const canonical = checker.evaluateWasmBudget(role, record, bytes, "linux-x64");
+      assert.equal(canonical.status, "PASS");
+      assert.equal(canonical.artifactSha, "match");
+      const sameSizeMutation = Buffer.from(bytes);
+      sameSizeMutation[sameSizeMutation.length - 1] = 1;
+      assert.throws(
+        () => checker.evaluateWasmBudget(role, record, sameSizeMutation, "linux-x64"),
+        /SHA-256 mismatch/u,
+      );
+      assert.throws(
+        () => checker.evaluateWasmBudget(
+          role,
+          record,
+          Buffer.concat([bytes, Buffer.from([0])]),
+          "linux-x64",
+        ),
+        /length mismatch/u,
+      );
+      assert.throws(
+        () => checker.evaluateWasmBudget(role, record, bytes.subarray(0, -1), "linux-x64"),
+        /length mismatch/u,
+      );
+      assert.equal(
+        checker.evaluateWasmBudget(role, record, sameSizeMutation, "darwin-arm64").status,
+        "DIAGNOSTIC",
+      );
+    }
 
     const coordinatedMutation = structuredClone(fixture);
-    coordinatedMutation.measurement.sha256 = sha256(sameSizeMutation);
-    const coordinatedBytes = Buffer.from(canonicalJson(coordinatedMutation));
+    coordinatedMutation.roles.compiler.measurement.sha256 = sha256(
+      Buffer.from(compilerBytes).fill(1, compilerBytes.length - 1),
+    );
     assert.throws(
-      () => checker.parseBudgetDocument(coordinatedBytes, v4Path),
-      /immutable v4 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v5),
+      /immutable v5 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1313,7 +1369,7 @@ test("WCAG22 WASM budget history is exact, append-only, and acyclic", async () =
   }
 });
 
-test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subjects", () => {
+test("feasibility benchmark keeps V1-V3 history and admits exact V4 Core subjects", () => {
   const contractNames = readdirSync(join(
     root,
     "crates",
@@ -1324,7 +1380,28 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     "wcag22-feasibility-benchmark-v1.json",
     "wcag22-feasibility-benchmark-v2.json",
     "wcag22-feasibility-benchmark-v3.json",
+    "wcag22-feasibility-benchmark-v4.json",
   ]);
+  const immutableArtifactHashes = new Map([
+    ["wcag22-feasibility-benchmark-v1.json", "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e"],
+    ["wcag22-feasibility-benchmark-v2.json", "d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202"],
+    ["wcag22-feasibility-benchmark-v3.json", "46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a"],
+    ["wcag22-feasibility-benchmark-v4.json", "3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275"],
+  ]);
+  for (const [name, expectedSha256] of immutableArtifactHashes) {
+    const bytes = readFileSync(join(
+      root,
+      "crates",
+      "labcolors-core",
+      "contracts",
+      name,
+    ));
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      expectedSha256,
+      `${name} is append-only evidence and must stay byte-exact`,
+    );
+  }
 
   const benchmarkChecker = join(
     root,
@@ -1336,18 +1413,61 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
     "crates",
     "labcolors-core",
     "contracts",
-    "wcag22-feasibility-benchmark-v3.json",
+    "wcag22-feasibility-benchmark-v4.json",
   ));
   const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
+  const historicalV3Payload = JSON.parse(read(
+    "crates",
+    "labcolors-core",
+    "contracts",
+    "wcag22-feasibility-benchmark-v3.json",
+  ));
+  const identityProjection = (payload) => ({
+    boundedEnvelopeModel: payload.boundedEnvelopeModel,
+    profileLimits: payload.profileLimits,
+    scenarioOrder: payload.scenarioOrder,
+    scenarios: payload.scenarios.map((scenario) => ({
+      name: scenario.name,
+      shape: scenario.shape,
+      expected: scenario.expected,
+      observedIdentity: scenario.observedIdentity,
+    })),
+  });
+  assert.deepEqual(
+    identityProjection(canonicalPayload),
+    identityProjection(historicalV3Payload),
+    "C1 may change provenance and observations, not the admitted finite algorithm",
+  );
+  const subjectsByPath = (payload) => new Map(
+    payload.subjectManifest.map((subject) => [subject.path, subject.sha256]),
+  );
+  const historicalSubjects = subjectsByPath(historicalV3Payload);
+  const canonicalSubjects = subjectsByPath(canonicalPayload);
+  const subjectPaths = [...new Set([
+    ...historicalSubjects.keys(),
+    ...canonicalSubjects.keys(),
+  ])].sort();
+  assert.deepEqual(
+    subjectPaths.filter(
+      (path) => historicalSubjects.get(path) !== canonicalSubjects.get(path),
+    ),
+    [
+      "Cargo.lock",
+      "Cargo.toml",
+      "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
+      "scripts/check_wcag22_feasibility_benchmark.py",
+    ],
+    "V4 source drift must be exactly the C1 workspace and admission machinery",
+  );
   assert.equal(
     "gitRevision" in canonicalPayload.environment,
     false,
-    "durable V3 must not claim an ephemeral measurement commit",
+    "durable V4 must not claim an ephemeral measurement commit",
   );
   assert.equal(
     "gitTree" in canonicalPayload.environment,
     false,
-    "durable V3 must use its exact source-object cone as the provenance SSOT",
+    "durable V4 must use its exact source-object cone as the provenance SSOT",
   );
   assert.deepEqual(
     canonicalPayload.environment.explicitEmptyBuildInputs,
@@ -1375,12 +1495,12 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   assert.equal(
     "rustFlags" in canonicalPayload.environment,
     false,
-    "V3 must not collapse absent and explicitly empty RUSTFLAGS",
+    "V4 must not collapse absent and explicitly empty RUSTFLAGS",
   );
   assert.equal(
     "cargoEncodedRustflags" in canonicalPayload.environment,
     false,
-    "V3 must represent source presence instead of only its empty value",
+    "V4 must represent source presence instead of only its empty value",
   );
   const rustcRelease = canonicalPayload.environment.rustcVerbose
     .match(/^rustc ([^ ]+) /u)?.[1];
@@ -1461,15 +1581,20 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
         assert.match(error.stderr, /unrecognized arguments: --admit-revision/u);
         return true;
       },
-      "V3 must not accept unverifiable whole-commit provenance",
+      "V4 must not accept unverifiable whole-commit provenance",
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
 
   const ci = read(".github", "workflows", "ci.yml");
-  const unmergedDraftAdmission =
-    /v3_snapshot=|b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace|feasibility-benchmark-v4|admission-raw-v4/u;
+  assert.match(
+    ci,
+    /sha256sum --check --strict <<'SHA256'[\s\S]*?7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v1\.json[\s\S]*?d8d5c7f3eda834bca9912d835fe3ada13d9dcd5a11cb47a131736716b0b51202  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v2\.json[\s\S]*?46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json[\s\S]*?3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275  crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v4\.json[\s\S]*?SHA256/u,
+    "CI must pin current-checkout bytes before historical replay",
+  );
+  const rejectedDraftFingerprints =
+    /b777b1d95dd7693220621600dd49042a2046dab5|5781d4ab84b39a585d437e8e04604b25ef891cf1|5e5fdb34586452f3171b20113ab6f6a9412bcd82|ff2ed3c522192fe7c1e1492d59a466dd78c90ba2d5a243474cd4073f93362f53|e701d2e5ea8db96e446f6ac428b44374cd219caf09711bcac109639fbb405efd|d7f0f1c3ef0810eb5e3a8aecfcb0b67be7603ee9a6b23f8401c2284c5532bace/u;
   for (const [path, source] of [
     [".github/workflows/ci.yml", ci],
     ["CHANGELOG.md", read("CHANGELOG.md")],
@@ -1486,7 +1611,7 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   ]) {
     assert.doesNotMatch(
       source,
-      unmergedDraftAdmission,
+      rejectedDraftFingerprints,
       `${path} must not retain an unmerged draft admission`,
     );
   }
@@ -1507,18 +1632,23 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 [0-9a-f]{64}[\s\S]*?--admit-cargo-binary-sha256 [0-9a-f]{64}[\s\S]*?--admit-benchmark-binary-sha256 [0-9a-f]{64}[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a[\s\S]*?--self-test/u,
-    "V3 must bind the current generic kernel without an intermediate worktree",
+    /v3_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v3\.json"[\s\S]*?v3_snapshot=10c44ef0f4248d0390aa339e81c05a6d5e41996f[\s\S]*?--admit-benchmark-binary-sha256 6ac07bad81a204ee8fcee8f94a3c445f881d1ca10edaf4cc4a86a5db0b232e3a[\s\S]*?git worktree add --detach "\$historical_root" "\$v3_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a[\s\S]*?--self-test/u,
+    "V3 must replay through the exact merged Slice-B snapshot",
+  );
+  assert.match(
+    ci,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v4\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 69fe95cea34c845478c0a3c260e3e4459f1bc09d76857b74d5edb50fd923410a[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275[\s\S]*?--self-test/u,
+    "V4 must bind the current C1 source cone without an intermediate worktree",
   );
   assert.equal(
     ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    3,
-    "CI must validate exactly two historical and one current benchmark artifact",
+    4,
+    "CI must validate exactly three historical and one current benchmark artifact",
   );
   assert.equal(
     ci.match(/git worktree add --detach/gu)?.length,
-    3,
-    "only the three main-reachable historical verifier snapshots may use worktrees",
+    4,
+    "only the four main-reachable historical verifier snapshots may use worktrees",
   );
 });
 
@@ -1693,13 +1823,21 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(prepare, /packDigest: conformance\.packDigest/);
   assert.match(prepare, /manifestSha256: sha256\(Buffer\.from\(conformanceSource\)\)/);
   assert.match(prepare, /familySetSha256: sha256\(Buffer\.concat\(familyBytes\)\)/);
-  assert.match(prepare, /wasm: \{ bytes: wasm\.length, sha256: sha256\(wasm\) \}/);
+  assert.match(prepare, /schemaVersion: 2/u);
+  assert.match(prepare, /role: "runtime"[\s\S]*?path: "pkg\/labcolors_bg\.wasm"/u);
+  assert.match(
+    prepare,
+    /role: "compiler"[\s\S]*?path: "compiler\/labcolors_compiler_bg\.wasm"/u,
+  );
+  assert.match(prepare, /bytes: runtimeWasm\.length/u);
+  assert.match(prepare, /bytes: compilerWasm\.length/u);
 
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(verifier, /import \{ workspaceVersion \} from "\.\/cargo-workspace\.mjs";/);
   assert.match(verifier, /function validateBuildMetadata/);
   assert.match(verifier, /isDeepStrictEqual\(metadata, expected\)/);
   assert.match(verifier, /require\.resolve\("@labpics\/colors\/build-metadata\.json"\)/);
+  assert.match(verifier, /require\.resolve\("@labpics\/colors\/compiler\/wasm"\)/);
   assert.match(verifier, /installedBuildMetadata/);
   assert.match(verifier, /isDeepStrictEqual\(installedBuildMetadata, expectedBuildMetadata\)/);
   assert.match(verifier, /"--offline"/);
@@ -1710,10 +1848,12 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(verifier, /"--lib",\s+"ES2022,DOM"/u);
   assert.doesNotMatch(verifier, /ES2022,DOM,ESNext\.Disposable/u);
   assert.match(verifier, /libraries: \["ES2022", "DOM"\]/u);
-  assert.match(verifier, /artifacts: \{ tarball, wasm, buildMetadata \}/);
+  assert.match(verifier, /role: "runtime", \.\.\.wasm\.runtime/u);
+  assert.match(verifier, /role: "compiler", \.\.\.wasm\.compiler/u);
+  assert.match(verifier, /buildMetadata,/u);
 });
 
-test("package root curates public types while keeping feasibility internals private", () => {
+test("runtime and compiler declarations expose disjoint curated type surfaces", () => {
   const wasmSource = read("crates", "labcolors-wasm", "src", "lib.rs");
   const customSection = wasmSource.match(
     /const TS_RESULT_TYPES: &'static str = r##"([\s\S]*?)"##;/u,
@@ -1724,6 +1864,7 @@ test("package root curates public types while keeping feasibility internals priv
   ].map((match) => match[1]);
   assert.ok(generatedNames.length > 10, "anti-vacuum: custom type surface is non-trivial");
   assert.equal(new Set(generatedNames).size, generatedNames.length, "duplicate custom type name");
+  assert.doesNotMatch(customSection, /Feasibility|feasibility/u);
 
   const rootDeclarations = read("packages", "colors", "index.d.ts");
   assert.match(
@@ -1765,6 +1906,32 @@ test("package root curates public types while keeping feasibility internals priv
   const exportedNames = [...rootTypes.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9_]*),$/gmu)].map(
     (match) => match[1],
   );
+  assert.deepEqual(
+    [...exportedNames].sort(),
+    [...generatedNames].sort(),
+    "root types must equal the runtime generated surface exactly",
+  );
+  assert.doesNotMatch(rootDeclarations, /Feasibility|feasibility/u);
+  assert.match(rootDeclarations, /export type \{ Wcag22CriterionV1 \} from "\.\/wcag22\.js"/u);
+
+  const compilerSource = read("crates", "labcolors-compiler", "src", "lib.rs");
+  const compilerCustomSection = compilerSource.match(
+    /const TS_COMPILER_TYPES: &'static str = r##"([\s\S]*?)"##;/u,
+  )?.[1];
+  assert.ok(compilerCustomSection, "compiler custom TypeScript section not found");
+  const compilerGeneratedNames = [
+    ...compilerCustomSection.matchAll(
+      /^export\s+(?:type|interface)\s+([A-Za-z][A-Za-z0-9_]*)/gmu,
+    ),
+  ].map((match) => match[1]);
+  const compilerDeclarations = read("packages", "colors", "compiler.d.ts");
+  const compilerPublicTypes = compilerDeclarations.match(
+    /export type \{([\s\S]*?)\} from "\.\/compiler\/labcolors_compiler\.js";/u,
+  )?.[1];
+  assert.ok(compilerPublicTypes, "curated compiler type export block not found");
+  const compilerExportedNames = [
+    ...compilerPublicTypes.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9_]*),$/gmu),
+  ].map((match) => match[1]);
   const feasibilityInternals = new Set([
     "Bytes32V1",
     "DecimalU64V1",
@@ -1786,21 +1953,25 @@ test("package root curates public types while keeping feasibility internals priv
     "Wcag22FeasibilityV1",
   ]);
   for (const name of feasibilityInternals) {
-    assert.ok(generatedNames.includes(name), `generated declarations omit ${name}`);
-    assert.ok(!exportedNames.includes(name), `package root leaks internal ${name}`);
+    assert.ok(compilerGeneratedNames.includes(name), `compiler declarations omit ${name}`);
+    assert.ok(!compilerExportedNames.includes(name), `compiler entry leaks internal ${name}`);
   }
   for (const publicName of [
     "Wcag22FeasibilityRequestV1",
     "Wcag22FeasibilityOutcomeV1",
   ]) {
-    assert.ok(exportedNames.includes(publicName), `package root omits ${publicName}`);
+    assert.ok(compilerExportedNames.includes(publicName), `compiler entry omits ${publicName}`);
   }
-  assert.deepEqual(
-    [...exportedNames].sort(),
-    generatedNames.filter((name) => !feasibilityInternals.has(name)).sort(),
-    "root types must equal the reviewed public subset exactly",
-  );
+  assert.deepEqual(compilerExportedNames.sort(), [
+    "Wcag22FeasibilityOutcomeV1",
+    "Wcag22FeasibilityRequestV1",
+  ]);
   assert.doesNotMatch(rootTypes, /InitOutput|__wbg_/u, "raw wasm ABI must stay private");
+  assert.doesNotMatch(
+    compilerPublicTypes,
+    /InitOutput|__wbg_/u,
+    "raw compiler WASM ABI must stay private",
+  );
 });
 
 test("public declarations compile at the documented minimum TypeScript version", () => {

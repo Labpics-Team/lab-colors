@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Whole-call #295 boundary evidence through the built package-root API.
+// Whole-call #296-C1 evidence through the dedicated compiler entry.
 // `--emit` prints diagnostic JSON with explicit canonical eligibility; `--record PATH`
 // admits only the pinned Linux x64/Node/toolchain context and never overwrites;
 // `--verify [PATH]` binds the exact WASM and reruns every structural law.
@@ -21,39 +21,30 @@ const packageRoot = process.env.LABCOLORS_BOUNDARY_PACKAGE_ROOT
   : canonicalPackageRoot;
 const canonicalPackageInput = packageRoot === canonicalPackageRoot;
 const repoRoot = resolve(canonicalPackageRoot, "../..");
-const packageEntry = resolve(packageRoot, "index.js");
+const packageEntry = resolve(packageRoot, "compiler.js");
 const packageManifestPath = resolve(packageRoot, "package.json");
-const wasmGluePath = resolve(packageRoot, "pkg/labcolors.js");
-const wasmPath = resolve(packageRoot, "pkg/labcolors_bg.wasm");
-const eagerRuntimeModules = {
-  adaptTheme: [resolve(packageRoot, "adapt-theme.js"), "packages/colors/adapt-theme.js"],
-  applyTheme: [resolve(packageRoot, "apply-theme.js"), "packages/colors/apply-theme.js"],
-  effectiveBackground: [
-    resolve(packageRoot, "effective-bg.js"),
-    "packages/colors/effective-bg.js",
-  ],
-  watchTheme: [resolve(packageRoot, "watch-theme.js"), "packages/colors/watch-theme.js"],
-};
-const runtimeSourceIds = [
-  ...Object.keys(eagerRuntimeModules),
+const wasmGluePath = resolve(packageRoot, "compiler/labcolors_compiler.js");
+const wasmPath = resolve(packageRoot, "compiler/labcolors_compiler_bg.wasm");
+const compilerSourceIds = [
+  "compilerEntry",
   "harness",
   "packageManifest",
-  "packageRoot",
   "wasmGlue",
 ];
 const coreAdmissionPath = resolve(
   repoRoot,
-  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
+  "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json",
 );
 const packOraclePath = resolve(repoRoot, "conformance/vectors/wcag22-feasibility.json");
 const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.json");
-const wasmToolchainPath = resolve(here, "wasm-size-budget-v1.json");
+const wasmBudgetPath = resolve(here, "wasm-size-budget-v5.json");
+const wasmToolchainSourcePath = resolve(here, "wasm-size-budget-v1.json");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
-const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v2.json");
+const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v3.json");
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v2";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v3";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
@@ -87,7 +78,11 @@ const hardGates = [
   "no-proportional-dto",
 ];
 const memoryClaim =
-  "process maxRSS is total-process high-water including V8; post-call WASM pages are linear-memory high-water observations; neither is total operation memory";
+  "process maxRSS values are total-process high-water including V8 and prior warm-up/observer allocations; after-init and warm-call WASM pages are linear-memory high-water observations; neither is total operation memory";
+const initSyncScope =
+  "initSync-from-in-memory-compiler-wasm-includes-wasm-bindgen-startup-excludes-io-and-js-module-import";
+const operationScope =
+  "second-identical-operation-after-one-unmeasured-warm-up-whose-result-graph-is-not-retained-by-harness";
 const proportionalKeys = new Set([
   "assessments",
   "cells",
@@ -155,13 +150,30 @@ function readJsonWithBytes(path, label) {
 
 function sourceContracts() {
   const core = readJsonWithBytes(coreAdmissionPath, "Core admission artifact");
-  const toolchain = readJsonWithBytes(wasmToolchainPath, "WASM toolchain artifact");
+  const budget = readJsonWithBytes(wasmBudgetPath, "WASM role budget artifact");
+  const toolchain = readJsonWithBytes(
+    wasmToolchainSourcePath,
+    "WASM toolchain source artifact",
+  );
   if (
     core.value?.schemaVersion !== 1 ||
-    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v3" ||
+    core.value?.artifactId !== "wcag22-feasibility-admission-raw-v4" ||
     core.value?.profileLimits?.profileId !== "compile-v1"
   ) {
     fail("unsupported Core admission artifact identity");
+  }
+  if (
+    budget.value?.schemaVersion !== 4 ||
+    budget.value?.budgetId !== "labcolors-wasm-roles-issue-296-c1-v5" ||
+    sha256(budget.bytes) !==
+      "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59" ||
+    budget.value?.toolchainSource?.path !==
+      "packages/colors/bench/wasm-size-budget-v1.json" ||
+    budget.value?.toolchainSource?.fileSha256 !== sha256(toolchain.bytes) ||
+    budget.value?.roles?.compiler?.artifact !==
+      "packages/colors/compiler/labcolors_compiler_bg.wasm"
+  ) {
+    fail("unsupported canonical WASM role budget identity");
   }
   if (
     toolchain.value?.schemaVersion !== 2 ||
@@ -169,10 +181,20 @@ function sourceContracts() {
   ) {
     fail("unsupported canonical WASM toolchain artifact identity");
   }
-  return { core, toolchain };
+  const compilerRecipe = toolchainRecipe(
+    toolchain.value,
+    budget.value.buildRecipes?.compiler?.command,
+  );
+  if (
+    budget.value.buildRecipes?.compiler?.recipeSha256 !==
+      sha256(Buffer.from(JSON.stringify(compilerRecipe), "utf8"))
+  ) {
+    fail("compiler build recipe does not bind the canonical toolchain source");
+  }
+  return { budget, core, toolchain };
 }
 
-function toolchainRecipe(toolchain) {
+function toolchainRecipe(toolchain, command) {
   const measurement = toolchain.measurement;
   const recipe = {
     rustToolchain: measurement?.rustToolchain,
@@ -185,7 +207,7 @@ function toolchainRecipe(toolchain) {
     wasmOptVersion: measurement?.wasmOptVersion,
     measurementPlatform: measurement?.measurementPlatform,
     rustPathRemap: measurement?.rustPathRemap,
-    command: measurement?.command,
+    command,
   };
   if (
     Object.values(recipe).some((value) => value === undefined) ||
@@ -196,7 +218,7 @@ function toolchainRecipe(toolchain) {
   return recipe;
 }
 
-function runtimeSourceBindings() {
+function compilerSourceBindings() {
   const binding = (path, repositoryPath, label) => {
     let bytes;
     try {
@@ -206,13 +228,12 @@ function runtimeSourceBindings() {
     }
     return { path: repositoryPath, sha256: sha256(bytes) };
   };
-  const eagerModules = Object.fromEntries(
-    Object.entries(eagerRuntimeModules).map(([sourceId, [path, repositoryPath]]) => [
-      sourceId,
-      binding(path, repositoryPath, `${sourceId} eager runtime module`),
-    ]),
-  );
   return {
+    compilerEntry: binding(
+      packageEntry,
+      "packages/colors/compiler.js",
+      "compiler entry module",
+    ),
     harness: binding(
       harnessPath,
       "packages/colors/bench/wcag22-feasibility-boundary.bench.mjs",
@@ -223,13 +244,11 @@ function runtimeSourceBindings() {
       "packages/colors/package.json",
       "package manifest",
     ),
-    packageRoot: binding(packageEntry, "packages/colors/index.js", "package-root module"),
     wasmGlue: binding(
       wasmGluePath,
-      "packages/colors/pkg/labcolors.js",
+      "packages/colors/compiler/labcolors_compiler.js",
       "wasm-bindgen JS glue",
     ),
-    ...eagerModules,
   };
 }
 
@@ -441,23 +460,31 @@ function validateSample(sample, shape, scenarioId, limits, sampleIndex, label) {
   exactKeys(
     sample,
     [
+      "initSyncElapsedNs",
       "elapsedNs",
       "outcomeBytes",
       "outcomeSha256",
       "processMaxRssKiBAfter",
+      "processMaxRssKiBAfterInit",
       "processMaxRssKiBBefore",
+      "processMaxRssKiBBeforeInit",
       "requestBytes",
       "requestSha256",
       "sampleIndex",
       "summary",
       "wasmMemoryBytesAfter",
+      "wasmMemoryBytesAfterInit",
       "wasmMemoryBytesBefore",
       "wasmMemoryPagesAfter",
+      "wasmMemoryPagesAfterInit",
       "wasmMemoryPagesBefore",
     ],
     label,
   );
   if (sample.sampleIndex !== sampleIndex) fail(`${label}.sampleIndex is not contiguous`);
+  decimal(sample.initSyncElapsedNs, `${label}.initSyncElapsedNs`, {
+    positive: true,
+  });
   decimal(sample.elapsedNs, `${label}.elapsedNs`, { positive: true });
   positiveSafeInteger(sample.requestBytes, `${label}.requestBytes`);
   positiveSafeInteger(sample.outcomeBytes, `${label}.outcomeBytes`);
@@ -466,17 +493,26 @@ function validateSample(sample, shape, scenarioId, limits, sampleIndex, label) {
   for (const field of [
     "processMaxRssKiBBefore",
     "processMaxRssKiBAfter",
+    "processMaxRssKiBBeforeInit",
+    "processMaxRssKiBAfterInit",
     "wasmMemoryBytesBefore",
     "wasmMemoryBytesAfter",
+    "wasmMemoryBytesAfterInit",
     "wasmMemoryPagesBefore",
     "wasmMemoryPagesAfter",
+    "wasmMemoryPagesAfterInit",
   ]) {
     nonNegativeSafeInteger(sample[field], `${label}.${field}`);
   }
   if (
+    sample.processMaxRssKiBAfterInit < sample.processMaxRssKiBBeforeInit ||
+    sample.processMaxRssKiBBefore < sample.processMaxRssKiBAfterInit ||
     sample.processMaxRssKiBAfter < sample.processMaxRssKiBBefore ||
+    sample.wasmMemoryBytesBefore < sample.wasmMemoryBytesAfterInit ||
     sample.wasmMemoryBytesAfter < sample.wasmMemoryBytesBefore ||
+    sample.wasmMemoryPagesBefore < sample.wasmMemoryPagesAfterInit ||
     sample.wasmMemoryPagesAfter < sample.wasmMemoryPagesBefore ||
+    sample.wasmMemoryBytesAfterInit !== sample.wasmMemoryPagesAfterInit * pageBytes ||
     sample.wasmMemoryBytesBefore !== sample.wasmMemoryPagesBefore * pageBytes ||
     sample.wasmMemoryBytesAfter !== sample.wasmMemoryPagesAfter * pageBytes
   ) {
@@ -490,14 +526,14 @@ export function validateMeasurementArtifact(
   artifact,
   { requireCanonicalArtifact = true } = {},
 ) {
-  const { core, toolchain } = sourceContracts();
+  const { budget, core, toolchain } = sourceContracts();
   const profileLimits = coreLimits(core.value);
   const expectedSampleCount = requiredSampleCount(core.value);
   exactKeys(artifact, artifactTopKeys, "artifact");
   if (
     artifact.schemaVersion !== 1 ||
     artifact.artifactId !== MEASUREMENT_ARTIFACT_ID ||
-    artifact.claimBoundary !== "canonical-wasm-package-root-whole-call-observations-only"
+    artifact.claimBoundary !== "canonical-wasm-compiler-entry-whole-call-observations-only"
   ) {
     fail("artifact identity or claim boundary drifted");
   }
@@ -511,7 +547,8 @@ export function validateMeasurementArtifact(
     artifact.claims.admission !== "canonical-linux-x64-exact-wasm-only" ||
     !isDeepStrictEqual(artifact.claims.hardGates, hardGates) ||
     artifact.claims.timingThresholdNs !== null ||
-    artifact.claims.latency !== "observation-only-no-production-threshold" ||
+    artifact.claims.latency !==
+      "init-sync-and-warm-operation-observations-only-no-production-threshold" ||
     artifact.claims.memory !== memoryClaim
   ) {
     fail("claims add a guessed threshold, inflate memory meaning or weaken hard gates");
@@ -522,9 +559,11 @@ export function validateMeasurementArtifact(
     [
       "canonicalCandidate",
       "cargoProfile",
+      "initSyncScope",
       "execution",
       "nodeVersion",
-      "packageRootApi",
+      "operationScope",
+      "publicEntry",
       "platform",
       "requestConstructionMeasured",
       "rustToolchain",
@@ -540,10 +579,12 @@ export function validateMeasurementArtifact(
   const measuredToolchain = toolchain.value.measurement;
   if (
     artifact.environment.execution !== "fresh-node-child-process-per-sample" ||
+    artifact.environment.initSyncScope !== initSyncScope ||
+    artifact.environment.operationScope !== operationScope ||
     artifact.environment.sampleCount !== expectedSampleCount ||
     artifact.environment.requestConstructionMeasured !== false ||
     artifact.environment.timer !== "process.hrtime.bigint" ||
-    artifact.environment.packageRootApi !== "packages/colors/index.js" ||
+    artifact.environment.publicEntry !== "packages/colors/compiler.js" ||
     !/^v\d+\.\d+\.\d+$/u.test(artifact.environment.nodeVersion ?? "") ||
     (requireCanonicalArtifact &&
       artifact.environment.nodeVersion !== canonicalNodeVersion()) ||
@@ -566,7 +607,7 @@ export function validateMeasurementArtifact(
 
   exactKeys(
     artifact.bindings,
-    ["coreAdmission", "packOracle", "runtimeSources", "wasm", "wasmToolchain"],
+    ["compilerSources", "coreAdmission", "packOracle", "wasm", "wasmBudget"],
     "bindings",
   );
   exactKeys(
@@ -576,7 +617,7 @@ export function validateMeasurementArtifact(
   );
   if (
     artifact.bindings.coreAdmission.path !==
-      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json" ||
+      "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json" ||
     artifact.bindings.coreAdmission.schemaVersion !== core.value.schemaVersion ||
     artifact.bindings.coreAdmission.artifactId !== core.value.artifactId ||
     artifact.bindings.coreAdmission.profileId !== core.value.profileLimits.profileId ||
@@ -613,43 +654,56 @@ export function validateMeasurementArtifact(
   ) {
     fail("pack-5 LSB0 oracle binding drifted");
   }
-  const sources = runtimeSourceBindings();
+  const sources = compilerSourceBindings();
   exactKeys(
-    artifact.bindings.runtimeSources,
-    runtimeSourceIds,
-    "bindings.runtimeSources",
+    artifact.bindings.compilerSources,
+    compilerSourceIds,
+    "bindings.compilerSources",
   );
-  for (const sourceId of runtimeSourceIds) {
+  for (const sourceId of compilerSourceIds) {
     exactKeys(
-      artifact.bindings.runtimeSources[sourceId],
+      artifact.bindings.compilerSources[sourceId],
       ["path", "sha256"],
-      `bindings.runtimeSources.${sourceId}`,
+      `bindings.compilerSources.${sourceId}`,
     );
-    if (!isDeepStrictEqual(artifact.bindings.runtimeSources[sourceId], sources[sourceId])) {
-      fail(`runtime source binding ${sourceId} drifted`);
+    if (!isDeepStrictEqual(artifact.bindings.compilerSources[sourceId], sources[sourceId])) {
+      fail(`compiler source binding ${sourceId} drifted`);
     }
   }
   exactKeys(
-    artifact.bindings.wasmToolchain,
-    ["budgetId", "path", "recipeSha256", "schemaVersion"],
-    "bindings.wasmToolchain",
+    artifact.bindings.wasmBudget,
+    ["budgetId", "fileSha256", "path", "recipeSha256", "role", "schemaVersion"],
+    "bindings.wasmBudget",
   );
   if (
-    artifact.bindings.wasmToolchain.path !==
-      "packages/colors/bench/wasm-size-budget-v1.json" ||
-    artifact.bindings.wasmToolchain.schemaVersion !== toolchain.value.schemaVersion ||
-    artifact.bindings.wasmToolchain.budgetId !== toolchain.value.budgetId ||
-    artifact.bindings.wasmToolchain.recipeSha256 !==
-      sha256(Buffer.from(JSON.stringify(toolchainRecipe(toolchain.value)), "utf8"))
+    artifact.bindings.wasmBudget.path !==
+      "packages/colors/bench/wasm-size-budget-v5.json" ||
+    artifact.bindings.wasmBudget.schemaVersion !== budget.value.schemaVersion ||
+    artifact.bindings.wasmBudget.budgetId !== budget.value.budgetId ||
+    artifact.bindings.wasmBudget.fileSha256 !== sha256(budget.bytes) ||
+    artifact.bindings.wasmBudget.role !== "compiler" ||
+    artifact.bindings.wasmBudget.recipeSha256 !==
+      budget.value.buildRecipes.compiler.recipeSha256
   ) {
-    fail("canonical WASM toolchain binding drifted");
+    fail("canonical compiler WASM budget binding drifted");
   }
   exactKeys(artifact.bindings.wasm, ["bytes", "path", "sha256"], "bindings.wasm");
-  if (artifact.bindings.wasm.path !== "packages/colors/pkg/labcolors_bg.wasm") {
+  if (
+    artifact.bindings.wasm.path !==
+      "packages/colors/compiler/labcolors_compiler_bg.wasm"
+  ) {
     fail("WASM binding path drifted");
   }
   positiveSafeInteger(artifact.bindings.wasm.bytes, "bindings.wasm.bytes");
   digest(artifact.bindings.wasm.sha256, "bindings.wasm.sha256");
+  const compilerMeasurement = budget.value.roles.compiler.measurement;
+  if (
+    requireCanonicalArtifact &&
+    (artifact.bindings.wasm.bytes !== compilerMeasurement.rawBytes ||
+      artifact.bindings.wasm.sha256 !== compilerMeasurement.sha256)
+  ) {
+    fail("canonical compiler WASM bytes differ from the bound role budget");
+  }
 
   exactKeys(
     artifact.limits,
@@ -992,6 +1046,15 @@ function summarizeOutcome(outcome, scenarioId) {
   };
 }
 
+function observeOutcome(outcome, scenarioId) {
+  const bytes = new TextEncoder().encode(JSON.stringify(outcome));
+  return {
+    outcomeBytes: bytes.byteLength,
+    outcomeSha256: sha256(bytes),
+    summary: summarizeOutcome(outcome, scenarioId),
+  };
+}
+
 function wasmMemory(initOutput) {
   const memory = initOutput?.memory;
   if (!(memory instanceof WebAssembly.Memory)) {
@@ -1005,39 +1068,55 @@ function wasmMemory(initOutput) {
 async function measureOneSample(scenarioId) {
   const { core } = sourceContracts();
   const wasmBytes = readFileSync(wasmPath);
-  const rootApi = await import(pathToFileURL(packageEntry).href);
-  const initOutput = rootApi.initSync({ module: wasmBytes });
-  const publicMax = rootApi.wcag22FeasibilityMaxBytes();
+  const compilerApi = await import(pathToFileURL(packageEntry).href);
+  const beforeInitRss = process.resourceUsage().maxRSS;
+  const initStarted = process.hrtime.bigint();
+  const initOutput = compilerApi.initSync({ module: wasmBytes });
+  const initSyncElapsedNs = process.hrtime.bigint() - initStarted;
+  const afterInitMemory = wasmMemory(initOutput);
+  const afterInitRss = process.resourceUsage().maxRSS;
+  const publicMax = compilerApi.wcag22FeasibilityMaxBytes();
   positiveSafeInteger(publicMax, "public max getter");
   const limits = { maxRequestBytes: publicMax, ...coreLimits(core.value) };
   const built = buildScenario(scenarioId, limits);
   const requestSha256 = sha256(built.bytes);
 
+  const warmupObservation = observeOutcome(
+    compilerApi.evaluateWcag22Feasibility(built.bytes),
+    scenarioId,
+  );
   const beforeRss = process.resourceUsage().maxRSS;
   const beforeMemory = wasmMemory(initOutput);
   const started = process.hrtime.bigint();
-  const outcome = rootApi.evaluateWcag22Feasibility(built.bytes);
+  const outcome = compilerApi.evaluateWcag22Feasibility(built.bytes);
   const elapsedNs = process.hrtime.bigint() - started;
   const afterMemory = wasmMemory(initOutput);
   const afterRss = process.resourceUsage().maxRSS;
-
-  const outcomeBytes = new TextEncoder().encode(JSON.stringify(outcome));
+  const outcomeObservation = observeOutcome(outcome, scenarioId);
+  if (!isDeepStrictEqual(warmupObservation, outcomeObservation)) {
+    fail("warm-up and measured operation returned different outcomes");
+  }
   return {
     scenarioId,
     maxRequestBytes: publicMax,
     shape: built.shape,
     sample: {
       sampleIndex: 0,
+      initSyncElapsedNs: initSyncElapsedNs.toString(),
       elapsedNs: elapsedNs.toString(),
       requestBytes: built.bytes.byteLength,
       requestSha256,
-      outcomeBytes: outcomeBytes.byteLength,
-      outcomeSha256: sha256(outcomeBytes),
-      summary: summarizeOutcome(outcome, scenarioId),
+      outcomeBytes: outcomeObservation.outcomeBytes,
+      outcomeSha256: outcomeObservation.outcomeSha256,
+      summary: outcomeObservation.summary,
+      processMaxRssKiBBeforeInit: beforeInitRss,
+      processMaxRssKiBAfterInit: afterInitRss,
       processMaxRssKiBBefore: beforeRss,
       processMaxRssKiBAfter: afterRss,
+      wasmMemoryBytesAfterInit: afterInitMemory.bytes,
       wasmMemoryBytesBefore: beforeMemory.bytes,
       wasmMemoryBytesAfter: afterMemory.bytes,
+      wasmMemoryPagesAfterInit: afterInitMemory.pages,
       wasmMemoryPagesBefore: beforeMemory.pages,
       wasmMemoryPagesAfter: afterMemory.pages,
     },
@@ -1064,11 +1143,11 @@ function childSample(scenarioId) {
 }
 
 function measurementArtifact() {
-  const { core, toolchain } = sourceContracts();
+  const { budget, core, toolchain } = sourceContracts();
   const profileLimits = coreLimits(core.value);
   const measuredSampleCount = requiredSampleCount(core.value);
   const oracle = packOracle();
-  const sources = runtimeSourceBindings();
+  const sources = compilerSourceBindings();
   const wasm = readFileSync(wasmPath);
   if (wasm.length < 8 || !wasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) {
     fail("built package WASM is absent or malformed");
@@ -1100,22 +1179,25 @@ function measurementArtifact() {
   const artifact = {
     schemaVersion: 1,
     artifactId: MEASUREMENT_ARTIFACT_ID,
-    claimBoundary: "canonical-wasm-package-root-whole-call-observations-only",
+    claimBoundary: "canonical-wasm-compiler-entry-whole-call-observations-only",
     claims: {
       admission: "canonical-linux-x64-exact-wasm-only",
       hardGates,
       timingThresholdNs: null,
-      latency: "observation-only-no-production-threshold",
+      latency:
+        "init-sync-and-warm-operation-observations-only-no-production-threshold",
       memory: memoryClaim,
     },
     environment: {
       execution: "fresh-node-child-process-per-sample",
+      initSyncScope,
+      operationScope,
       platform,
       nodeVersion: process.version,
       sampleCount: measuredSampleCount,
       requestConstructionMeasured: false,
       timer: "process.hrtime.bigint",
-      packageRootApi: "packages/colors/index.js",
+      publicEntry: "packages/colors/compiler.js",
       canonicalCandidate:
         platform === "linux-x64" &&
         canonicalPackageInput &&
@@ -1129,7 +1211,7 @@ function measurementArtifact() {
     },
     bindings: {
       coreAdmission: {
-        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json",
+        path: "crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v4.json",
         schemaVersion: core.value.schemaVersion,
         artifactId: core.value.artifactId,
         profileId: core.value.profileLimits.profileId,
@@ -1146,17 +1228,17 @@ function measurementArtifact() {
         packVersion: oracle.packVersion,
         packDigest: oracle.packDigest,
       },
-      runtimeSources: sources,
-      wasmToolchain: {
-        path: "packages/colors/bench/wasm-size-budget-v1.json",
-        schemaVersion: toolchain.value.schemaVersion,
-        budgetId: toolchain.value.budgetId,
-        recipeSha256: sha256(
-          Buffer.from(JSON.stringify(toolchainRecipe(toolchain.value)), "utf8"),
-        ),
+      compilerSources: sources,
+      wasmBudget: {
+        path: "packages/colors/bench/wasm-size-budget-v5.json",
+        schemaVersion: budget.value.schemaVersion,
+        budgetId: budget.value.budgetId,
+        fileSha256: sha256(budget.bytes),
+        role: "compiler",
+        recipeSha256: budget.value.buildRecipes.compiler.recipeSha256,
       },
       wasm: {
-        path: "packages/colors/pkg/labcolors_bg.wasm",
+        path: "packages/colors/compiler/labcolors_compiler_bg.wasm",
         bytes: wasm.length,
         sha256: sha256(wasm),
       },

@@ -7,9 +7,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   ROOT,
@@ -17,6 +18,7 @@ import {
   crateName,
   fileStem,
   lawForFile,
+  nonLawFiles,
   workspaceCrates,
   workspaceMembers,
 } from './naming-inventory.mjs';
@@ -67,6 +69,69 @@ test('lawForFile: по-доменные законы', () => {
   assert.ok(lawForFile('bindings/swift/Package.swift'));
   assert.ok(!lawForFile('packages/colors/bench/AFTER.txt'));
   assert.ok(!lawForFile('crates/x/tests/data/labui.config.prod.json'));
+});
+
+test('generated WASM names come from package files without hiding undeclared source', () => {
+  const root = mkdtempSync(join(tmpdir(), 'labcolors-naming-generated-'));
+  try {
+    const compiler = join(root, 'packages', 'colors', 'compiler');
+    const runtime = join(root, 'packages', 'colors', 'pkg');
+    mkdirSync(compiler, { recursive: true });
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(
+      join(root, 'packages', 'colors', 'package.json'),
+      JSON.stringify({
+        files: [
+          'compiler/labcolors_compiler.js',
+          'compiler/labcolors_compiler_bg.wasm',
+          'compiler/not_built_generated_bg.wasm',
+          'pkg/labcolors.js',
+        ],
+      }),
+    );
+    writeFileSync(join(compiler, 'labcolors_compiler.js'), 'generated');
+    writeFileSync(join(compiler, 'labcolors_compiler_bg.wasm'), 'generated');
+    writeFileSync(join(compiler, 'hand_written_bad.js'), 'source');
+    writeFileSync(join(runtime, 'labcolors.js'), 'generated');
+    writeFileSync(join(runtime, 'hand_written_runtime_bad.js'), 'source');
+    assert.deepEqual(nonLawFiles(root), [
+      'packages/colors/compiler/hand_written_bad.js',
+      'packages/colors/compiler/labcolors_compiler.js',
+      'packages/colors/compiler/labcolors_compiler_bg.wasm',
+      'packages/colors/compiler/not_built_generated_bg.wasm',
+      'packages/colors/pkg/hand_written_runtime_bad.js',
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('generated package directory entries are naming roots, not blind spots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'labcolors-naming-generated-roots-'));
+  try {
+    const compiler = join(root, 'packages', 'colors', 'compiler');
+    const runtime = join(root, 'packages', 'colors', 'pkg');
+    mkdirSync(compiler, { recursive: true });
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(
+      join(root, 'packages', 'colors', 'package.json'),
+      JSON.stringify({ files: ['compiler', 'pkg'] }),
+    );
+    writeFileSync(join(compiler, 'labcolors_compiler.js'), 'generated');
+    writeFileSync(join(runtime, 'labcolors.js'), 'generated');
+    writeFileSync(join(runtime, '.hidden_runtime_bad.js'), 'extra');
+    mkdirSync(join(runtime, 'dist'));
+    writeFileSync(join(runtime, 'dist', 'nested_runtime_bad.js'), 'extra');
+    writeFileSync(join(runtime, 'unexpected_runtime_bad.js'), 'extra');
+    assert.deepEqual(nonLawFiles(root), [
+      'packages/colors/compiler/labcolors_compiler.js',
+      'packages/colors/pkg/.hidden_runtime_bad.js',
+      'packages/colors/pkg/dist/nested_runtime_bad.js',
+      'packages/colors/pkg/unexpected_runtime_bad.js',
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('workspaceMembers разворачивает глоб crates/* по ФС', () => {
@@ -298,6 +363,8 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
     'appearanceDiagnosticProfile',
     'selectionDiagnosticProfile',
     'resolve_alpha_analog_hex',
+    'dedicated module Worker',
+    'двух ролей не подходит',
     'Rollback',
   ]) {
     assert.ok(migration.includes(required), `migration не содержит ${required}`);
@@ -307,6 +374,32 @@ test('breaking exact-alpha/glow контракт имеет migration и не о
   assert.doesNotMatch(adr, /referenceProfile/);
   assert.doesNotMatch(readme, /\bdiagnosticProfile\b/);
   assert.doesNotMatch(adr, /\bdiagnosticProfile\b/);
+  assert.match(
+    readme,
+    /new Worker\(new URL\("\.\/color-compiler\.worker\.ts"[\s\S]*?worker\.terminate\(\)/,
+  );
+  const workerReady = readme.indexOf('self.postMessage({ type: "ready" } as const)');
+  const mainMessageHandler = readme.indexOf(
+    'worker.addEventListener("message"',
+    workerReady,
+  );
+  const readyBranch = readme.indexOf(
+    'if (data?.type === "ready")',
+    mainMessageHandler,
+  );
+  const requestPost = readme.indexOf('worker.postMessage(request)', readyBranch);
+  const outcomeResolve = readme.indexOf('resolve(data)', requestPost);
+  assert.ok(workerReady >= 0, 'compiler Worker не сообщает ready после init');
+  assert.ok(mainMessageHandler > workerReady, 'main listener должен ждать ready');
+  assert.ok(readyBranch > mainMessageHandler, 'main не различает ready и outcome');
+  assert.ok(requestPost > readyBranch, 'request нельзя отправлять до ready');
+  assert.ok(outcomeResolve > requestPost, 'listener обязан дождаться outcome после ready');
+  assert.doesNotMatch(
+    readme.slice(mainMessageHandler, outcomeResolve),
+    /\{ once: true \}/,
+    'ready не должен снимать listener до получения outcome',
+  );
+  assert.doesNotMatch(migration, /Promise\.all\(\[initRuntime\(\), initCompiler\(\)\]\)/);
 });
 
 test('exact-alpha migration экранирует absolute-value pipes внутри Markdown tables', () => {

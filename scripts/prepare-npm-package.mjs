@@ -110,19 +110,27 @@ export async function prepareNpmPackage() {
     }
   }
 
-  const [packageJsonSource, cargoSource, conformanceSource, wasm, ...familyBytes] =
+  const [
+    packageJsonSource,
+    cargoSource,
+    conformanceSource,
+    runtimeWasm,
+    compilerWasm,
+    ...familyBytes
+  ] =
     await Promise.all([
       readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"),
       readFile(resolve(REPO_ROOT, "Cargo.toml"), "utf8"),
       readFile(resolve(CONFORMANCE_DIR, "manifest.json"), "utf8"),
       readFile(resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm")),
+      readFile(resolve(PACKAGE_DIR, "compiler/labcolors_compiler_bg.wasm")),
       ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
     ]);
   const packageJson = JSON.parse(packageJsonSource);
   const conformance = JSON.parse(conformanceSource);
   const coreVersion = workspaceVersion(cargoSource);
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     package: { name: packageJson.name, version: packageJson.version },
     sourceSha,
     coreVersion,
@@ -132,7 +140,20 @@ export async function prepareNpmPackage() {
       manifestSha256: sha256(Buffer.from(conformanceSource)),
       familySetSha256: sha256(Buffer.concat(familyBytes)),
     },
-    wasm: { bytes: wasm.length, sha256: sha256(wasm) },
+    wasm: [
+      {
+        role: "runtime",
+        path: "pkg/labcolors_bg.wasm",
+        bytes: runtimeWasm.length,
+        sha256: sha256(runtimeWasm),
+      },
+      {
+        role: "compiler",
+        path: "compiler/labcolors_compiler_bg.wasm",
+        bytes: compilerWasm.length,
+        sha256: sha256(compilerWasm),
+      },
+    ],
   };
   await atomicWrite(BUILD_METADATA, `${JSON.stringify(metadata, null, 2)}\n`);
 

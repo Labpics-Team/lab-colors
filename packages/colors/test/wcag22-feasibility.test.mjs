@@ -8,28 +8,28 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 
-const packageRoot = new URL("../", import.meta.url);
 const require = createRequire(import.meta.url);
 
-async function importRootWithInstrumentedWasm(t) {
-  const fixture = await mkdtemp(join(tmpdir(), "labcolors-feasibility-host-"));
+async function importCompilerWithInstrumentedWasm(t) {
+  const fixture = await mkdtemp(join(tmpdir(), "labcolors-compiler-host-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
-  await mkdir(join(fixture, "pkg"));
+  await mkdir(join(fixture, "compiler"));
   await writeFile(join(fixture, "package.json"), '{"type":"module"}\n');
-  await writeFile(join(fixture, "index.js"), await readFile(new URL("../index.js", import.meta.url)));
   await writeFile(
-    join(fixture, "pkg/labcolors.js"),
+    join(fixture, "compiler.js"),
+    await readFile(new URL("../compiler.js", import.meta.url)),
+  );
+  await writeFile(
+    join(fixture, "compiler/labcolors_compiler.js"),
     `
 globalThis.__labcolorsFeasibilityCalls = { evaluate: [], max: [], oversize: [] };
 let initialized = false;
 export default async function init() { initialized = true; }
 export function initSync() { initialized = true; }
-export class LabColors {}
-export function evaluateWcag22() {}
-export function numericalCapabilityManifest() {}
 export function wcag22FeasibilityMaxRequestBytesV1() {
   if (!initialized) throw new Error("WASM not initialized");
   globalThis.__labcolorsFeasibilityCalls.max.push(true);
+  globalThis.__labcolorsFeasibilityBeforeForward?.();
   return 657380;
 }
 export function evaluateWcag22FeasibilityV1(request) {
@@ -55,45 +55,113 @@ export function wcag22FeasibilityEnvelopeTooLargeV1(requestedBytes) {
 }
 `,
   );
-  for (const [file, exports] of [
-    ["apply-theme.js", "export function applyTheme() {}\n"],
-    ["watch-theme.js", "export function watchTheme() {}\n"],
-    ["adapt-theme.js", "export function adaptTheme() {}\n"],
-    [
-      "effective-bg.js",
-      "export function effectiveBackground() {}\nexport function parseCssColor() {}\nexport function compositeOver() {}\nexport function compositeStackToHex() {}\nexport function toHex() {}\nexport function oklabLerp() {}\n",
-    ],
-  ]) {
-    await writeFile(join(fixture, file), exports);
-  }
-  return import(`${pathToFileURL(join(fixture, "index.js")).href}?case=${Date.now()}`);
+  return import(`${pathToFileURL(join(fixture, "compiler.js")).href}?case=${Date.now()}`);
 }
 
-test("package root rejects an oversized envelope before the avoidable WASM copy", async (t) => {
-  const root = await importRootWithInstrumentedWasm(t);
+test("compiler rejects an oversized envelope before the avoidable WASM copy", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
   assert.deepEqual(
     globalThis.__labcolorsFeasibilityCalls.max,
     [],
     "import must not touch uninitialized WASM",
   );
-  root.initSync();
-  assert.equal(root.wcag22FeasibilityMaxBytes(), 657380);
+  compiler.initSync();
+  assert.equal(compiler.wcag22FeasibilityMaxBytes(), 657380);
 
-  const oversized = new Uint8Array(root.wcag22FeasibilityMaxBytes() + 1);
-  const outcome = root.evaluateWcag22Feasibility(oversized);
+  const oversized = new Uint8Array(compiler.wcag22FeasibilityMaxBytes() + 1);
+  const outcome = compiler.evaluateWcag22Feasibility(oversized);
   assert.equal(outcome.outcome, "failure");
   assert.equal(outcome.error.error.code, "envelopeTooLarge");
   assert.deepEqual(globalThis.__labcolorsFeasibilityCalls.evaluate, []);
   assert.deepEqual(globalThis.__labcolorsFeasibilityCalls.oversize, [657381n]);
 
-  const exactLimit = new Uint8Array(root.wcag22FeasibilityMaxBytes());
-  assert.equal(root.evaluateWcag22Feasibility(exactLimit).outcome, "success");
+  const exactLimit = new Uint8Array(compiler.wcag22FeasibilityMaxBytes());
+  assert.equal(compiler.evaluateWcag22Feasibility(exactLimit).outcome, "success");
   assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate.length, 1);
-  assert.strictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], exactLimit);
+  assert.notStrictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], exactLimit);
+  assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate[0].buffer, exactLimit.buffer);
 });
 
-test("package root rejects non-Uint8Array inputs before touching WASM", async (t) => {
-  const root = await importRootWithInstrumentedWasm(t);
+test("compiler measures the intrinsic Uint8Array length, not an own-property spoof", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+  const oversized = new Uint8Array(compiler.wcag22FeasibilityMaxBytes() + 1);
+  Object.defineProperty(oversized, "byteLength", { value: 0 });
+
+  const outcome = compiler.evaluateWcag22Feasibility(oversized);
+  assert.equal(outcome.error.error.code, "envelopeTooLarge");
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls.evaluate, []);
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls.oversize, [657381n]);
+});
+
+test("compiler does not pass a spoofed Uint8Array length to generated glue", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+  const request = new Uint8Array([1, 2, 3]);
+  Object.defineProperty(request, "length", { value: 0 });
+
+  assert.equal(compiler.evaluateWcag22Feasibility(request).outcome, "success");
+  const [forwarded] = globalThis.__labcolorsFeasibilityCalls.evaluate;
+  assert.equal(forwarded.length, 3);
+  assert.deepEqual([...forwarded], [1, 2, 3]);
+});
+
+test("compiler normalizes hostile subclasses and rejects detached views before WASM", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+
+  class HostileUint8Array extends Uint8Array {}
+  Object.defineProperty(HostileUint8Array.prototype, "length", {
+    get: () => 0,
+  });
+  const hostile = new HostileUint8Array([4, 5]);
+  assert.equal(compiler.evaluateWcag22Feasibility(hostile).outcome, "success");
+  assert.deepEqual([...globalThis.__labcolorsFeasibilityCalls.evaluate[0]], [4, 5]);
+
+  const detached = new Uint8Array([6]);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  assert.throws(
+    () => compiler.evaluateWcag22Feasibility(detached),
+    /request must be a live Uint8Array/u,
+  );
+
+  const normal = new Uint8Array([7]);
+  assert.equal(compiler.evaluateWcag22Feasibility(normal).outcome, "success");
+  assert.deepEqual([...globalThis.__labcolorsFeasibilityCalls.evaluate[1]], [7]);
+});
+
+test("compiler rejects a detached view before requiring initialized WASM", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  const detached = new Uint8Array([1]);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+
+  assert.throws(
+    () => compiler.evaluateWcag22Feasibility(detached),
+    /request must be a live Uint8Array/u,
+  );
+  assert.deepEqual(globalThis.__labcolorsFeasibilityCalls, {
+    evaluate: [],
+    max: [],
+    oversize: [],
+  });
+});
+
+test("compiler freezes a length-tracking shared view at the checked byte length", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
+  compiler.initSync();
+  const buffer = new SharedArrayBuffer(1, { maxByteLength: 2 });
+  const request = new Uint8Array(buffer);
+  globalThis.__labcolorsFeasibilityBeforeForward = () => buffer.grow(2);
+  t.after(() => { delete globalThis.__labcolorsFeasibilityBeforeForward; });
+
+  assert.equal(compiler.evaluateWcag22Feasibility(request).outcome, "success");
+  const [forwarded] = globalThis.__labcolorsFeasibilityCalls.evaluate;
+  assert.equal(buffer.byteLength, 2);
+  assert.equal(forwarded.length, 1);
+});
+
+test("compiler rejects non-Uint8Array inputs before touching WASM", async (t) => {
+  const compiler = await importCompilerWithInstrumentedWasm(t);
   const invalidInputs = [
     ["Array", []],
     ["Int8Array", new Int8Array()],
@@ -107,7 +175,7 @@ test("package root rejects non-Uint8Array inputs before touching WASM", async (t
 
   for (const [label, input] of invalidInputs) {
     assert.throws(
-      () => root.evaluateWcag22Feasibility(input),
+      () => compiler.evaluateWcag22Feasibility(input),
       {
         name: "TypeError",
         message: "evaluateWcag22Feasibility request must be a Uint8Array",
@@ -121,15 +189,16 @@ test("package root rejects non-Uint8Array inputs before touching WASM", async (t
     oversize: [],
   });
 
-  root.initSync();
+  compiler.initSync();
   const crossRealm = runInNewContext("new Uint8Array([123])");
-  assert.equal(root.evaluateWcag22Feasibility(crossRealm).outcome, "success");
-  assert.strictEqual(globalThis.__labcolorsFeasibilityCalls.evaluate[0], crossRealm);
+  assert.equal(compiler.evaluateWcag22Feasibility(crossRealm).outcome, "success");
+  assert.deepEqual([...globalThis.__labcolorsFeasibilityCalls.evaluate[0]], [123]);
+  assert.equal(globalThis.__labcolorsFeasibilityCalls.evaluate[0].buffer, crossRealm.buffer);
 });
 
-test("package root derives the envelope ceiling from WASM instead of copying a literal", async () => {
-  const source = await readFile(new URL("../index.js", import.meta.url), "utf8");
-  const declarations = await readFile(new URL("../index.d.ts", import.meta.url), "utf8");
+test("compiler derives the envelope ceiling from WASM instead of copying a literal", async () => {
+  const source = await readFile(new URL("../compiler.js", import.meta.url), "utf8");
+  const declarations = await readFile(new URL("../compiler.d.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /657380/u);
   assert.match(source, /wcag22FeasibilityMaxBytes/u);
   assert.match(source, /wcag22FeasibilityMaxRequestBytesV1/u);
@@ -147,7 +216,7 @@ test("package root derives the envelope ceiling from WASM instead of copying a l
     assert.doesNotMatch(
       declarations,
       new RegExp(`\\b${internal},`, "u"),
-      `${internal} must not widen the curated package-root type menu`,
+      `${internal} must not widen the curated compiler type menu`,
     );
   }
 });
@@ -157,10 +226,13 @@ test("feasibility TypeScript is exhaustive and excludes forged/proportional stat
   t.after(() => rm(fixture, { recursive: true, force: true }));
   let declarations;
   try {
-    declarations = await readFile(new URL("../pkg/labcolors.d.ts", import.meta.url), "utf8");
+    declarations = await readFile(
+      new URL("../compiler/labcolors_compiler.d.ts", import.meta.url),
+      "utf8",
+    );
   } catch (error) {
     if (error?.code === "ENOENT") {
-      throw new Error("pkg/labcolors.d.ts is required; run `npm run build` before tests", {
+      throw new Error("compiler declarations are required; run `npm run build` before tests", {
         cause: error,
       });
     }
@@ -171,7 +243,12 @@ test("feasibility TypeScript is exhaustive and excludes forged/proportional stat
     /export function evaluateWcag22FeasibilityV1\(request: Uint8Array\): Wcag22FeasibilityOutcomeV1;/u,
     "wasm-bindgen must publish the reviewed byte API declaration",
   );
-  await writeFile(join(fixture, "labcolors.d.ts"), declarations);
+  await mkdir(join(fixture, "compiler"));
+  await writeFile(join(fixture, "compiler", "labcolors_compiler.d.ts"), declarations);
+  await writeFile(
+    join(fixture, "wcag22.d.ts"),
+    await readFile(new URL("../wcag22.d.ts", import.meta.url)),
+  );
   await writeFile(
     join(fixture, "consumer.ts"),
     `
@@ -181,7 +258,7 @@ import {
   type Wcag22FeasibilityEvaluatedV1,
   type Wcag22FeasibilityOutcomeV1,
   type Wcag22FeasibilityRequestV1,
-} from "./labcolors.js";
+} from "./compiler/labcolors_compiler.js";
 
 const request: Wcag22FeasibilityRequestV1 = {
   schemaVersion: 1,
@@ -300,14 +377,16 @@ function assertPackedPartition(result) {
   }
 }
 
-test("built package root replays pack 5 through an independent packed consumer", async () => {
-  const glueUrl = new URL("../pkg/labcolors.js", import.meta.url);
-  const wasmBytes = await readFile(new URL("../pkg/labcolors_bg.wasm", import.meta.url));
+test("built compiler replays pack 5 through an independent packed consumer", async () => {
+  const glueUrl = new URL("../compiler/labcolors_compiler.js", import.meta.url);
+  const wasmBytes = await readFile(
+    new URL("../compiler/labcolors_compiler_bg.wasm", import.meta.url),
+  );
   const raw = await import(glueUrl.href);
   raw.initSync({ module: new WebAssembly.Module(wasmBytes) });
-  const root = await import(`../index.js?feasibility=${Date.now()}`);
+  const compiler = await import(`../compiler.js?feasibility=${Date.now()}`);
   assert.equal(
-    root.wcag22FeasibilityMaxBytes(),
+    compiler.wcag22FeasibilityMaxBytes(),
     raw.wcag22FeasibilityMaxRequestBytesV1(),
   );
 
@@ -329,7 +408,7 @@ test("built package root replays pack 5 through an independent packed consumer",
   const encoder = new TextEncoder();
   let mutationSubject;
   for (const vector of vectors) {
-    const outcome = root.evaluateWcag22Feasibility(encoder.encode(vector.requestJson));
+    const outcome = compiler.evaluateWcag22Feasibility(encoder.encode(vector.requestJson));
     assert.equal(JSON.stringify(outcome), vector.outcomeJson, `${vector.caseId}: wire drift`);
     if (outcome.outcome !== "success" || outcome.feasibility.status === "notEvaluated") {
       continue;
