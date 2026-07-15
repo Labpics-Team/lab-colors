@@ -389,7 +389,7 @@ jobs:
 
           current_artifact="crates/labcolors-core/contracts/wcag22-feasibility-benchmark-v3.json"
           current_protocol=(
-            --admit-revision 6c8f66b9d0634763465d20f32b422bf1be66ab7d
+            --admit-revision cffc7758ba7c3919378b3ebe5fcd60fb43adc085
             --admit-rustc-release 1.96.0
             --admit-target-triple aarch64-apple-darwin
             --admit-target-arch aarch64
@@ -401,11 +401,11 @@ jobs:
           python3 scripts/check_wcag22_feasibility_benchmark.py \
             "$current_artifact" "${current_protocol[@]}" \
             --verify-current-subjects \
-            --artifact-sha256 b7c7e00c644cccc38f9b9a4998975a0eb1321886d71bc72f00a964b5d2ed0982 \
+            --artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a \
             --self-test
           python3 scripts/check_wcag22_feasibility_applicability.py \
             "$current_artifact" \
-            --artifact-sha256 b7c7e00c644cccc38f9b9a4998975a0eb1321886d71bc72f00a964b5d2ed0982 \
+            --artifact-sha256 28c4af13a83a04f4668c61fe3399a8e1e91355cd71f02e27af47fce150fc001a \
             --self-test
 
   audit:
@@ -512,25 +512,25 @@ jobs:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: "verify committed #296-B canonical whole-call WASM boundary evidence"
-        # The admitted JSON binds exact deterministic bytes/shapes and the
-        # reviewed Uint8Array package root to this built Linux x64 WASM. Fresh
-        # latency/maxRSS/pages remain observations only.
+      - name: "record #296-B final-review whole-call WASM candidate"
+        # One forward-only candidate pass binds the strict native admission to
+        # the canonical Linux x64 package root. The next commit restores exact
+        # verification of the retrieved bytes.
         working-directory: packages/colors
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
-          --verify
-      - name: independently fingerprint the exact #296-B WASM
+          --record bench/wcag22-feasibility-wasm-boundary-candidate-v2.json
+      - name: independently fingerprint the exact #296-B final-review candidate
         run: |
           bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
           sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
           echo "canonical candidate raw=${bytes}B sha256=${sha256}"
-      - name: "upload exact #296-B verified whole-call evidence"
+      - name: "upload exact #296-B final-review candidate evidence"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wcag22-feasibility-wasm-boundary-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
-            packages/colors/bench/wcag22-feasibility-wasm-boundary-v2.json
+            packages/colors/bench/wcag22-feasibility-wasm-boundary-candidate-v2.json
             packages/colors/pkg/labcolors_bg.wasm
           if-no-files-found: error
           retention-days: 30
