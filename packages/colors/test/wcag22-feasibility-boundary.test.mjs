@@ -27,7 +27,7 @@ const conformanceManifestPath = resolve(root, "conformance/vectors/manifest.json
 const packageManifestPath = resolve(root, "packages/colors/package.json");
 const compilerEntryPath = resolve(root, "packages/colors/compiler.js");
 const wasmGluePath = resolve(root, "packages/colors/compiler/labcolors_compiler.js");
-const wasmBudgetPath = resolve(root, "packages/colors/bench/wasm-size-budget-v5.json");
+const wasmBudgetPath = resolve(root, "packages/colors/bench/wasm-size-budget-v6.json");
 const coreBytes = readFileSync(corePath);
 const core = JSON.parse(coreBytes);
 const toolchain = JSON.parse(readFileSync(toolchainPath));
@@ -241,7 +241,7 @@ function fixture() {
         },
       },
       wasmBudget: {
-        path: "packages/colors/bench/wasm-size-budget-v5.json",
+        path: "packages/colors/bench/wasm-size-budget-v6.json",
         schemaVersion: wasmBudget.schemaVersion,
         budgetId: wasmBudget.budgetId,
         fileSha256: sha256(wasmBudgetBytes),
