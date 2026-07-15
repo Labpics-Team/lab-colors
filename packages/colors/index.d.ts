@@ -6,11 +6,8 @@
 // `RoleResult` union and the `LabColors` engine) and the vanilla `applyTheme`
 // helper, so a consumer gets full typing from the package root.
 
-import type {
-  Wcag22AssessmentV1,
-  Wcag22CriterionV1,
-  Wcag22FeasibilityOutcomeV1,
-} from "./pkg/labcolors.js";
+import type { Wcag22AssessmentV1 } from "./pkg/labcolors.js";
+import type { Wcag22CriterionV1 } from "./wcag22.js";
 
 export {
   default,
@@ -26,14 +23,6 @@ export declare function evaluateWcag22(
   background: string,
   criterion: Wcag22CriterionV1,
 ): Wcag22AssessmentV1;
-
-/** Exact derived V1 request ceiling, available after WASM initialization. */
-export declare function wcag22FeasibilityMaxBytes(): number;
-
-/** Evaluate one strict V1 UTF-8 JSON byte envelope; protocol failures are data. */
-export declare function evaluateWcag22Feasibility(
-  request: Uint8Array,
-): Wcag22FeasibilityOutcomeV1;
 
 // Curated public schema/result surface. wasm-bindgen's InitOutput and raw
 // __wbg_* ABI helpers remain implementation details.
@@ -78,13 +67,11 @@ export type {
   ResolvedTheme,
   NumericalCapabilitySiteV2,
   NumericalCapabilityManifestV2,
-  Wcag22CriterionV1,
   Wcag22DecisionV1,
   Wcag22Q55BoundsV1,
   Wcag22AssessmentV1,
-  Wcag22FeasibilityRequestV1,
-  Wcag22FeasibilityOutcomeV1,
 } from "./pkg/labcolors.js";
+export type { Wcag22CriterionV1 } from "./wcag22.js";
 
 export { applyTheme } from "./apply-theme.js";
 export { watchTheme } from "./watch-theme.js";

@@ -241,8 +241,13 @@ jobs:
               text=True,
           ))
           packages = {package["name"]: package for package in metadata["packages"]}
-          consumers = (
+          direct_core_consumers = (
               "labcolors-wasm",
+              "labcolors-ffi",
+              "labcolors-conformance",
+          )
+          protocol_consumers = (
+              "labcolors-compiler",
               "labcolors-ffi",
               "labcolors-conformance",
           )
@@ -269,7 +274,7 @@ jobs:
                   f"{protocol_core['features']}"
               )
 
-          for consumer in consumers:
+          for consumer in direct_core_consumers:
               core_dependencies = [
                   dependency
                   for dependency in packages[consumer]["dependencies"]
@@ -285,6 +290,7 @@ jobs:
                       f"{consumer} direct Core edge must own no optional capability, got "
                       f"{core_dependency['features']}"
                   )
+          for consumer in protocol_consumers:
               protocol_dependencies = [
                   dependency
                   for dependency in packages[consumer]["dependencies"]
@@ -304,6 +310,47 @@ jobs:
                   raise SystemExit(
                       f"{consumer} resolved the Core-only explicit-domain capability"
                   )
+
+          runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
+          if any(dependency["name"] == "labcolors-protocol" for dependency in runtime_dependencies):
+              raise SystemExit("labcolors-wasm must not depend on labcolors-protocol")
+          compiler_dependencies = packages["labcolors-compiler"]["dependencies"]
+          if any(
+              dependency["name"] in {"labcolors-core", "labcolors-wasm"}
+              for dependency in compiler_dependencies
+          ):
+              raise SystemExit("labcolors-compiler must be a thin protocol-only adapter")
+
+          runtime_tree = subprocess.check_output(
+              [
+                  "cargo", "tree", "-p", "labcolors-wasm",
+                  "--target", "wasm32-unknown-unknown",
+                  "--edges", "normal", "-e", "features",
+              ],
+              text=True,
+          )
+          for forbidden in (
+              "labcolors-protocol",
+              'labcolors-core feature "wcag22-feasibility"',
+              'labcolors-core feature "wcag22-explicit-feasibility"',
+          ):
+              if forbidden in runtime_tree:
+                  raise SystemExit(f"runtime role resolved forbidden capability: {forbidden}")
+
+          compiler_tree = subprocess.check_output(
+              [
+                  "cargo", "tree", "-p", "labcolors-compiler",
+                  "--target", "wasm32-unknown-unknown",
+                  "--edges", "normal", "-e", "features",
+              ],
+              text=True,
+          )
+          if "labcolors-wasm" in compiler_tree:
+              raise SystemExit("compiler role resolved the theme/runtime engine")
+          if 'labcolors-core feature "wcag22-feasibility"' not in compiler_tree:
+              raise SystemExit("compiler role lacks protocol-owned wcag22-feasibility")
+          if 'labcolors-core feature "wcag22-explicit-feasibility"' in compiler_tree:
+              raise SystemExit("compiler role resolved the Core-only explicit capability")
 
           print("core capability projection: PASS")
           PY
@@ -497,14 +544,19 @@ jobs:
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-      - name: wasm-pack build (release)
-        # The release bundle: panic=abort, no panic hook, wasm-opt -Oz. This is
-        # the artifact @labpics/colors ships, so the size measured below is real.
+      - name: wasm-pack build (runtime + compiler release roles)
+        # Each execution role is a separate Cargo root and physical artifact;
+        # building them in separate invocations prevents feature unification.
         # Rust error locations otherwise embed the self-hosted runner's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
         run: |
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
+          wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked
+      - name: report C1 candidate role fingerprints
+        run: |
+          wc -c packages/colors/pkg/labcolors_bg.wasm packages/colors/compiler/labcolors_compiler_bg.wasm
+          sha256sum packages/colors/pkg/labcolors_bg.wasm packages/colors/compiler/labcolors_compiler_bg.wasm
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: ${{ env.NODE_TOOLCHAIN }}
@@ -518,11 +570,16 @@ jobs:
         run: >-
           node bench/wcag22-feasibility-boundary.bench.mjs
           --verify
-      - name: independently fingerprint the exact #296-B WASM
+      - name: independently fingerprint both execution-role WASM artifacts
         run: |
-          bytes="$(wc -c < packages/colors/pkg/labcolors_bg.wasm | tr -d '[:space:]')"
-          sha256="$(sha256sum packages/colors/pkg/labcolors_bg.wasm | cut -d ' ' -f1)"
-          echo "canonical candidate raw=${bytes}B sha256=${sha256}"
+          for artifact in \
+            packages/colors/pkg/labcolors_bg.wasm \
+            packages/colors/compiler/labcolors_compiler_bg.wasm
+          do
+            bytes="$(wc -c < "$artifact" | tr -d '[:space:]')"
+            sha256="$(sha256sum "$artifact" | cut -d ' ' -f1)"
+            echo "canonical candidate artifact=${artifact} raw=${bytes}B sha256=${sha256}"
+          done
       - name: "upload exact #296-B verified whole-call evidence"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -530,6 +587,7 @@ jobs:
           path: |
             packages/colors/bench/wcag22-feasibility-wasm-boundary-v2.json
             packages/colors/pkg/labcolors_bg.wasm
+            packages/colors/compiler/labcolors_compiler_bg.wasm
           if-no-files-found: error
           retention-days: 30
       - name: enforce measured WASM raw-byte budget
@@ -690,7 +748,9 @@ jobs:
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
-        run: wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
+        run: |
+          wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
+          wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-compiler --locked
   docs-drift:
     name: docs-drift (нейминг-канон)
     runs-on: [self-hosted, Linux, X64]

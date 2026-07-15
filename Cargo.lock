@@ -494,6 +494,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "labcolors-compiler"
+version = "0.2.0"
+dependencies = [
+ "js-sys",
+ "labcolors-protocol",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "labcolors-conformance"
 version = "0.2.0"
 dependencies = [
@@ -542,7 +554,6 @@ dependencies = [
  "js-sys",
  "labcolors-conformance",
  "labcolors-core",
- "labcolors-protocol",
  "serde",
  "serde_json",
  "thiserror",

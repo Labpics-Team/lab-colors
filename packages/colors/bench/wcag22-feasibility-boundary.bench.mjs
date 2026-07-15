@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Whole-call #295 boundary evidence through the built package-root API.
+// Whole-call #296-C1 evidence through the dedicated compiler entry.
 // `--emit` prints diagnostic JSON with explicit canonical eligibility; `--record PATH`
 // admits only the pinned Linux x64/Node/toolchain context and never overwrites;
 // `--verify [PATH]` binds the exact WASM and reruns every structural law.
@@ -21,24 +21,14 @@ const packageRoot = process.env.LABCOLORS_BOUNDARY_PACKAGE_ROOT
   : canonicalPackageRoot;
 const canonicalPackageInput = packageRoot === canonicalPackageRoot;
 const repoRoot = resolve(canonicalPackageRoot, "../..");
-const packageEntry = resolve(packageRoot, "index.js");
+const packageEntry = resolve(packageRoot, "compiler.js");
 const packageManifestPath = resolve(packageRoot, "package.json");
-const wasmGluePath = resolve(packageRoot, "pkg/labcolors.js");
-const wasmPath = resolve(packageRoot, "pkg/labcolors_bg.wasm");
-const eagerRuntimeModules = {
-  adaptTheme: [resolve(packageRoot, "adapt-theme.js"), "packages/colors/adapt-theme.js"],
-  applyTheme: [resolve(packageRoot, "apply-theme.js"), "packages/colors/apply-theme.js"],
-  effectiveBackground: [
-    resolve(packageRoot, "effective-bg.js"),
-    "packages/colors/effective-bg.js",
-  ],
-  watchTheme: [resolve(packageRoot, "watch-theme.js"), "packages/colors/watch-theme.js"],
-};
-const runtimeSourceIds = [
-  ...Object.keys(eagerRuntimeModules),
+const wasmGluePath = resolve(packageRoot, "compiler/labcolors_compiler.js");
+const wasmPath = resolve(packageRoot, "compiler/labcolors_compiler_bg.wasm");
+const compilerSourceIds = [
+  "compilerEntry",
   "harness",
   "packageManifest",
-  "packageRoot",
   "wasmGlue",
 ];
 const coreAdmissionPath = resolve(
@@ -49,11 +39,11 @@ const packOraclePath = resolve(repoRoot, "conformance/vectors/wcag22-feasibility
 const conformanceManifestPath = resolve(repoRoot, "conformance/vectors/manifest.json");
 const wasmToolchainPath = resolve(here, "wasm-size-budget-v1.json");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
-const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v2.json");
+const defaultMeasurementPath = resolve(here, "wcag22-feasibility-wasm-boundary-v3.json");
 const pageBytes = 65_536;
 const candidateCount = 256;
 
-export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v2";
+export const MEASUREMENT_ARTIFACT_ID = "wcag22-feasibility-wasm-whole-call-v3";
 export const SCENARIO_IDS = Object.freeze([
   "minimum-evaluated",
   "maximum-canonical-applicable-relations",
@@ -196,7 +186,7 @@ function toolchainRecipe(toolchain) {
   return recipe;
 }
 
-function runtimeSourceBindings() {
+function compilerSourceBindings() {
   const binding = (path, repositoryPath, label) => {
     let bytes;
     try {
@@ -206,13 +196,12 @@ function runtimeSourceBindings() {
     }
     return { path: repositoryPath, sha256: sha256(bytes) };
   };
-  const eagerModules = Object.fromEntries(
-    Object.entries(eagerRuntimeModules).map(([sourceId, [path, repositoryPath]]) => [
-      sourceId,
-      binding(path, repositoryPath, `${sourceId} eager runtime module`),
-    ]),
-  );
   return {
+    compilerEntry: binding(
+      packageEntry,
+      "packages/colors/compiler.js",
+      "compiler entry module",
+    ),
     harness: binding(
       harnessPath,
       "packages/colors/bench/wcag22-feasibility-boundary.bench.mjs",
@@ -223,13 +212,11 @@ function runtimeSourceBindings() {
       "packages/colors/package.json",
       "package manifest",
     ),
-    packageRoot: binding(packageEntry, "packages/colors/index.js", "package-root module"),
     wasmGlue: binding(
       wasmGluePath,
-      "packages/colors/pkg/labcolors.js",
+      "packages/colors/compiler/labcolors_compiler.js",
       "wasm-bindgen JS glue",
     ),
-    ...eagerModules,
   };
 }
 
@@ -497,7 +484,7 @@ export function validateMeasurementArtifact(
   if (
     artifact.schemaVersion !== 1 ||
     artifact.artifactId !== MEASUREMENT_ARTIFACT_ID ||
-    artifact.claimBoundary !== "canonical-wasm-package-root-whole-call-observations-only"
+    artifact.claimBoundary !== "canonical-wasm-compiler-entry-whole-call-observations-only"
   ) {
     fail("artifact identity or claim boundary drifted");
   }
@@ -543,7 +530,7 @@ export function validateMeasurementArtifact(
     artifact.environment.sampleCount !== expectedSampleCount ||
     artifact.environment.requestConstructionMeasured !== false ||
     artifact.environment.timer !== "process.hrtime.bigint" ||
-    artifact.environment.packageRootApi !== "packages/colors/index.js" ||
+    artifact.environment.packageRootApi !== "packages/colors/compiler.js" ||
     !/^v\d+\.\d+\.\d+$/u.test(artifact.environment.nodeVersion ?? "") ||
     (requireCanonicalArtifact &&
       artifact.environment.nodeVersion !== canonicalNodeVersion()) ||
@@ -566,7 +553,7 @@ export function validateMeasurementArtifact(
 
   exactKeys(
     artifact.bindings,
-    ["coreAdmission", "packOracle", "runtimeSources", "wasm", "wasmToolchain"],
+    ["compilerSources", "coreAdmission", "packOracle", "wasm", "wasmToolchain"],
     "bindings",
   );
   exactKeys(
@@ -613,20 +600,20 @@ export function validateMeasurementArtifact(
   ) {
     fail("pack-5 LSB0 oracle binding drifted");
   }
-  const sources = runtimeSourceBindings();
+  const sources = compilerSourceBindings();
   exactKeys(
-    artifact.bindings.runtimeSources,
-    runtimeSourceIds,
-    "bindings.runtimeSources",
+    artifact.bindings.compilerSources,
+    compilerSourceIds,
+    "bindings.compilerSources",
   );
-  for (const sourceId of runtimeSourceIds) {
+  for (const sourceId of compilerSourceIds) {
     exactKeys(
-      artifact.bindings.runtimeSources[sourceId],
+      artifact.bindings.compilerSources[sourceId],
       ["path", "sha256"],
-      `bindings.runtimeSources.${sourceId}`,
+      `bindings.compilerSources.${sourceId}`,
     );
-    if (!isDeepStrictEqual(artifact.bindings.runtimeSources[sourceId], sources[sourceId])) {
-      fail(`runtime source binding ${sourceId} drifted`);
+    if (!isDeepStrictEqual(artifact.bindings.compilerSources[sourceId], sources[sourceId])) {
+      fail(`compiler source binding ${sourceId} drifted`);
     }
   }
   exactKeys(
@@ -645,7 +632,10 @@ export function validateMeasurementArtifact(
     fail("canonical WASM toolchain binding drifted");
   }
   exactKeys(artifact.bindings.wasm, ["bytes", "path", "sha256"], "bindings.wasm");
-  if (artifact.bindings.wasm.path !== "packages/colors/pkg/labcolors_bg.wasm") {
+  if (
+    artifact.bindings.wasm.path !==
+      "packages/colors/compiler/labcolors_compiler_bg.wasm"
+  ) {
     fail("WASM binding path drifted");
   }
   positiveSafeInteger(artifact.bindings.wasm.bytes, "bindings.wasm.bytes");
@@ -1005,9 +995,9 @@ function wasmMemory(initOutput) {
 async function measureOneSample(scenarioId) {
   const { core } = sourceContracts();
   const wasmBytes = readFileSync(wasmPath);
-  const rootApi = await import(pathToFileURL(packageEntry).href);
-  const initOutput = rootApi.initSync({ module: wasmBytes });
-  const publicMax = rootApi.wcag22FeasibilityMaxBytes();
+  const compilerApi = await import(pathToFileURL(packageEntry).href);
+  const initOutput = compilerApi.initSync({ module: wasmBytes });
+  const publicMax = compilerApi.wcag22FeasibilityMaxBytes();
   positiveSafeInteger(publicMax, "public max getter");
   const limits = { maxRequestBytes: publicMax, ...coreLimits(core.value) };
   const built = buildScenario(scenarioId, limits);
@@ -1016,7 +1006,7 @@ async function measureOneSample(scenarioId) {
   const beforeRss = process.resourceUsage().maxRSS;
   const beforeMemory = wasmMemory(initOutput);
   const started = process.hrtime.bigint();
-  const outcome = rootApi.evaluateWcag22Feasibility(built.bytes);
+  const outcome = compilerApi.evaluateWcag22Feasibility(built.bytes);
   const elapsedNs = process.hrtime.bigint() - started;
   const afterMemory = wasmMemory(initOutput);
   const afterRss = process.resourceUsage().maxRSS;
@@ -1068,7 +1058,7 @@ function measurementArtifact() {
   const profileLimits = coreLimits(core.value);
   const measuredSampleCount = requiredSampleCount(core.value);
   const oracle = packOracle();
-  const sources = runtimeSourceBindings();
+  const sources = compilerSourceBindings();
   const wasm = readFileSync(wasmPath);
   if (wasm.length < 8 || !wasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) {
     fail("built package WASM is absent or malformed");
@@ -1100,7 +1090,7 @@ function measurementArtifact() {
   const artifact = {
     schemaVersion: 1,
     artifactId: MEASUREMENT_ARTIFACT_ID,
-    claimBoundary: "canonical-wasm-package-root-whole-call-observations-only",
+    claimBoundary: "canonical-wasm-compiler-entry-whole-call-observations-only",
     claims: {
       admission: "canonical-linux-x64-exact-wasm-only",
       hardGates,
@@ -1115,7 +1105,7 @@ function measurementArtifact() {
       sampleCount: measuredSampleCount,
       requestConstructionMeasured: false,
       timer: "process.hrtime.bigint",
-      packageRootApi: "packages/colors/index.js",
+      packageRootApi: "packages/colors/compiler.js",
       canonicalCandidate:
         platform === "linux-x64" &&
         canonicalPackageInput &&
@@ -1146,7 +1136,7 @@ function measurementArtifact() {
         packVersion: oracle.packVersion,
         packDigest: oracle.packDigest,
       },
-      runtimeSources: sources,
+      compilerSources: sources,
       wasmToolchain: {
         path: "packages/colors/bench/wasm-size-budget-v1.json",
         schemaVersion: toolchain.value.schemaVersion,
@@ -1156,7 +1146,7 @@ function measurementArtifact() {
         ),
       },
       wasm: {
-        path: "packages/colors/pkg/labcolors_bg.wasm",
+        path: "packages/colors/compiler/labcolors_compiler_bg.wasm",
         bytes: wasm.length,
         sha256: sha256(wasm),
       },

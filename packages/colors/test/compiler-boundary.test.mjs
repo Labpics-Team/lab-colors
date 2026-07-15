@@ -45,13 +45,13 @@ test("runtime and compiler have disjoint normal dependency graphs", () => {
   const compilerManifestPath = join(
     root,
     "crates",
-    "labcolors-compiler-wasm",
+    "labcolors-compiler",
     "Cargo.toml",
   );
   assert.ok(existsSync(compilerManifestPath), "thin compiler WASM crate is missing");
 
   const runtimeManifest = read("crates", "labcolors-wasm", "Cargo.toml");
-  const compilerManifest = read("crates", "labcolors-compiler-wasm", "Cargo.toml");
+  const compilerManifest = read("crates", "labcolors-compiler", "Cargo.toml");
   assert.doesNotMatch(runtimeManifest, /labcolors-protocol/u);
   assert.match(
     compilerManifest,
@@ -69,6 +69,6 @@ test("the package build invokes wasm-pack once per physical role", () => {
   assert.match(build, /crates\/labcolors-wasm[\s\S]*--out-dir \.\.\/\.\.\/packages\/colors\/pkg/u);
   assert.match(
     build,
-    /crates\/labcolors-compiler-wasm[\s\S]*--out-dir \.\.\/\.\.\/packages\/colors\/compiler/u,
+    /crates\/labcolors-compiler[\s\S]*--out-dir \.\.\/\.\.\/packages\/colors\/compiler/u,
   );
 });

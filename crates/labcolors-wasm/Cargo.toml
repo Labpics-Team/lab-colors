@@ -15,14 +15,12 @@ description = "WASM bindings for the labcolors-core contrast engine, packaged as
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Direct Core use stays isolated from optional compiler capabilities. The
-# versioned protocol crate owns only the registered-domain WCAG22 projection.
+# Runtime owns only point evaluation and the adaptive theme engine. Offline
+# compiler operations have a separate Cargo root and physical WASM artifact.
 labcolors-core = { path = "../labcolors-core", default-features = false }
-labcolors-protocol = { path = "../labcolors-protocol" }
 wasm-bindgen = { workspace = true }
 # js-sys ships with the wasm-bindgen toolchain (no new third-party tree). It is
-# used by existing JavaScript boundary code and to parse protocol-owned JSON;
-# the protocol crate, not this adapter, owns serde projection.
+# used by existing JavaScript boundary code.
 js-sys = "0.3"
 # Derive-only: thiserror is a proc-macro with no runtime code, so it adds
 # nothing to the WASM bundle while giving matchable, well-described errors.
