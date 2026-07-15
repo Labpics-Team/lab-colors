@@ -397,12 +397,17 @@ fn characterization_counters_are_non_vacuous() {
             "error class {class} is not populated; counts: {class_counts:?}"
         );
     }
-    // QuantizationGap на публичной поверхности ВЫМЕР: широкий скан (solid-фоны
-    // обеих полярностей × 24 hue × Neutral/Relative × Floor::None/AaText/AaUi ×
-    // |Lc| 7.3..112 шаг 0.05 × srgb/dim × Srgb/DisplayP3, ≈3.5M вызовов) не
-    // производит ни одного — после фикса #44 walk в 2 distinct-шага с бюджетом
-    // ±1 всегда пересекает мёртвую зону 8-битной сетки. Правда самого варианта
-    // (`nearest` локален, не глобален) запинена на его собственном шве:
+    // QuantizationGap на публичной поверхности ВЫМЕР. Структурно: допуск
+    // `meets_floor_lc` (−1 Lc) вместе с QUANT_BUDGET=1 даёт окно приёмки в
+    // 2 Lc, а same-polarity окна сетки шире 2 Lc существуют только вплотную к
+    // аналитическому клипу, где отказ принадлежит BelowContrastFloor ЕЩЁ ДО
+    // квантования; walk в 2 distinct-шага пересекает всё остальное (фикс #44).
+    // Эмпирически: сканы публичного API на миллионы вызовов (solid-фоны обеих
+    // полярностей, серые и хроматические, hue-сетка, Neutral/Relative вплоть до
+    // 1.0, Floor::None/AaText/AaUi, |Lc| 7.3..112, srgb и dim surround; wide
+    // gamut не участвует — DisplayP3 умирает на внешнем гейте) не производят
+    // ни одного. Правда самого варианта (`nearest` локален, не глобален)
+    // запинена на его собственном шве:
     // `solve::tests::quantization_gap_wording_is_local_not_global_counterexample`.
     // Появление гэпа из этой матрицы = изменение поведения поиска, не «новый кейс».
     assert_eq!(
@@ -454,6 +459,11 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
             200.0,
             ChromaPolicy::Relative(0.2),
         ),
+        // Смешанный batch: невалидное per-job задание (chroma-ratio вне [0,1])
+        // между валидными — обязано стать позиционным Err, не сдвинуть соседей
+        // и не уронить партию (требование #297 «mixed valid/invalid jobs»).
+        job(Contract::text(60.0), 264.0, ChromaPolicy::Relative(-0.25)),
+        job(Contract::text(45.0), 90.0, ChromaPolicy::Relative(0.3)),
     ];
     let bg = BgInput::solid("#FFFFFF").expect("literal background");
     let batch = solve_many(bg, &jobs, &vc, Gamut::Srgb).expect("batch runs");
@@ -489,18 +499,64 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
             }
         }
     }
-    // Анти-вакуум партии: успехи, дубликат успеха и ≥2 разных класса ошибок;
-    // партия целиком из Err пройти не может.
-    assert!(ok >= 3, "batch successes: {ok}");
+    // Анти-вакуум партии: успехи, дубликат успеха и ≥3 разных класса per-job
+    // ошибок (включая invalid_input от смешанного задания); партия целиком из
+    // Err пройти не может.
+    assert!(ok >= 4, "batch successes: {ok}");
     assert!(
-        err_classes.len() >= 2,
+        err_classes.len() >= 3,
         "batch must exercise several per-job error classes: {err_classes:?}"
+    );
+    assert!(
+        err_classes.contains_key("invalid_input"),
+        "the mixed batch must carry a positional invalid job: {err_classes:?}"
     );
     assert_eq!(
         outcome_line(&batch[0]),
         outcome_line(&batch[5]),
         "duplicate jobs"
     );
+    assert!(
+        batch[7].is_err() && batch[8].is_ok(),
+        "the invalid job must not shift or poison its valid neighbour"
+    );
+
+    // Отдельная партия на средне-сером #6E6E6E: dark-on-light AA-text там
+    // математически не достигает 4.5:1 (потолок ~4.14), поэтому per-job
+    // FloorUnreachable обязан быть позиционным исходом и совпадать с
+    // последовательным solve.
+    let grey_jobs = vec![
+        job(Contract::text(20.0), 145.0, ChromaPolicy::Neutral),
+        job(
+            Contract::text(9.0).with_conformance(Floor::None),
+            0.0,
+            ChromaPolicy::Neutral,
+        ),
+    ];
+    let grey_bg = BgInput::solid("#6E6E6E").expect("literal background");
+    let grey_batch = solve_many(grey_bg, &grey_jobs, &vc, Gamut::Srgb).expect("batch runs");
+    for (index, grey_job) in grey_jobs.iter().enumerate() {
+        let bg = BgInput::solid("#6E6E6E").expect("literal background");
+        let sequential = solve(
+            bg,
+            grey_job.contract,
+            grey_job.hue,
+            grey_job.chroma_policy,
+            &vc,
+            Gamut::Srgb,
+        );
+        assert_eq!(
+            outcome_line(&grey_batch[index]),
+            outcome_line(&sequential),
+            "grey position {index} diverged"
+        );
+    }
+    assert!(
+        outcome_line(&grey_batch[0]).starts_with("err floor_unreachable"),
+        "mid-grey AA-text job must be a positional FloorUnreachable: {}",
+        outcome_line(&grey_batch[0])
+    );
+    assert!(grey_batch[1].is_ok(), "the floorless grey job must resolve");
 
     // Пустой вход — пустой результат.
     let bg = BgInput::solid("#FFFFFF").expect("literal background");
@@ -518,9 +574,12 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
     ));
 }
 
-/// Позитивная характеризация JND-полосы против НЕЗАВИСИМОГО оракула
-/// (`recheck_against` — тот самый публичный перемер, которым адаптивный рантайм
-/// проверяет цвета каждый кадр). Пинится наблюдаемый контракт локального поиска:
+/// Позитивная характеризация JND-полосы против `recheck_against` — публичного
+/// пути перемера, которым адаптивный рантайм проверяет цвета каждый кадр. Это
+/// независимый ПУТЬ (другой вход, другая горячая экономия), но та же
+/// измерительная сердцевина `lpc::contrast_core` — тест пинит согласованность
+/// оси читаемости между solve и recheck, не независимый вывод самой метрики.
+/// Пинится наблюдаемый контракт локального поиска:
 ///
 /// 1. полоса в основном разрешается (анти-вакуум: all-Err пройти не может);
 /// 2. каждый разрешённый цвет попадает в симметричный бюджет ±1 Lc;
