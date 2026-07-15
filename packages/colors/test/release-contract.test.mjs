@@ -1477,6 +1477,38 @@ test("feasibility benchmark keeps V1/V2 history and admits exact V3 Core subject
   );
 });
 
+test("applicability imports leave a clean release source tree", () => {
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-python-cache-"));
+  try {
+    for (const name of [
+      "check_wcag22_feasibility_benchmark.py",
+      "check_wcag22_feasibility_applicability.py",
+    ]) {
+      writeFileSync(
+        join(temporary, name),
+        readFileSync(join(root, "scripts", name)),
+      );
+    }
+    execFileSync("python3", [
+      "-X",
+      "pycache_prefix=",
+      join(temporary, "check_wcag22_feasibility_applicability.py"),
+      "--self-test",
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    assert.equal(
+      existsSync(join(temporary, "__pycache__")),
+      false,
+      "the verifier must not dirty the source tree it attests",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("runtime WASM does not duplicate separately shipped WCAG22 evidence documents", () => {
   const wasm = readFileSync(
     join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),

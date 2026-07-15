@@ -18,9 +18,14 @@ import copy
 import hashlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
+# This verifier is also executed inside the clean-tree npm release gate. Its
+# sibling import must never materialize a repository-local ``__pycache__`` and
+# thereby make the source it is attesting dirty.
+sys.dont_write_bytecode = True
 from check_wcag22_feasibility_benchmark import decode_benchmark_artifact
 
 
