@@ -27,6 +27,63 @@ function mudStatusPattern(id, status) {
     "mu",
   );
 }
+const RUNTIME_DOC_FALSE_CLAIMS = [
+  {
+    pattern: /правильные --lab-\* для своего фона/u,
+    sample: "правильные --lab-* для своего фона",
+    reason: "reference background estimate was promoted to a correct rendered result",
+  },
+  {
+    pattern: /цвета будут корректны для наиболее сложного из них/u,
+    sample: "цвета будут корректны для наиболее сложного из них",
+    reason: "a finite sample set was promoted to the whole varying backdrop",
+  },
+  {
+    pattern: /adaptTheme\(hero,[\s\S]{0,120}strict:\s*true/u,
+    sample: "adaptTheme(hero, {\n  colors,\n  strict: true",
+    reason: "legacy strict mode was presented as the recommended example",
+  },
+  {
+    pattern: /~2\.5× на 3 сэмплах/u,
+    sample: "~2.5× на 3 сэмплах",
+    reason: "an ungated benchmark result was presented as a durable property",
+  },
+  {
+    pattern: /перцептуально равномерная интерполяция между двумя hex-значениями/iu,
+    sample: "перцептуально равномерная интерполяция между двумя hex-значениями",
+    reason: "Oklab coordinate interpolation was promoted to a human-perception guarantee",
+  },
+  {
+    pattern: /Perceptually uniform \(even crossfade timing/iu,
+    sample: "Perceptually uniform (even crossfade timing",
+    reason: "Oklab coordinate interpolation was promoted to a human-perception guarantee",
+  },
+  {
+    pattern: /non-muddy/iu,
+    sample: "non-muddy chroma path",
+    reason: "Oklab coordinate interpolation was promoted to a cleanliness guarantee",
+  },
+  {
+    pattern: /held legible against the hardest sample/iu,
+    sample: "held legible against the hardest sample",
+    reason: "tracked metrics were promoted to universal legibility",
+  },
+  {
+    pattern: /hold while colours still pass/iu,
+    sample: "hold while colours still pass",
+    reason: "tracked metrics were promoted to universal legibility",
+  },
+  {
+    pattern: /#287 owns the finite replacement/u,
+    sample: "#287 owns the finite replacement",
+    reason: "a closed Issue was used as public reference documentation",
+  },
+  {
+    pattern: /replacement принадлежит #283/u,
+    sample: "replacement принадлежит #283",
+    reason: "a closed Issue was used as public reference documentation",
+  },
+];
 
 function claimFiles(path, files = []) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -68,6 +125,12 @@ function publicClaimFiles() {
   ].filter((file) => file !== SELF);
 }
 
+function runtimeDocFalseClaims(path, source) {
+  return RUNTIME_DOC_FALSE_CLAIMS
+    .filter(({ pattern }) => pattern.test(source))
+    .map(({ reason }) => `${path}: ${reason}`);
+}
+
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);
   assert.equal(knownFalseClaims("x.md", "цвета #89CFF0 и #8944AB").length, 0);
@@ -79,6 +142,49 @@ test("false-claim detector bites without treating hex colours as Issue links", (
   );
   assert.equal(knownFalseClaims("x.md", "потребляет labui-material.css").length, 1);
   assert.equal(knownFalseClaims("x.md", "platform-characterized").length, 1);
+});
+
+test("runtime-doc detector bites on every rejected promotion", () => {
+  for (const { sample, reason } of RUNTIME_DOC_FALSE_CLAIMS) {
+    assert.equal(
+      runtimeDocFalseClaims("x.md", sample).length,
+      1,
+      `detector did not bite: ${reason}`,
+    );
+  }
+});
+
+test("runtime docs do not promote estimates, samples, or coordinates", () => {
+  const paths = [
+    "packages/colors/README.md",
+    "packages/colors/adapt-theme.d.ts",
+    "packages/colors/effective-bg.d.ts",
+  ];
+  const failures = paths.flatMap((path) =>
+    runtimeDocFalseClaims(path, readFileSync(join(ROOT, path), "utf8")),
+  );
+  assert.deepEqual(failures, []);
+});
+
+test("runtime docs scope background evidence to estimates and finite samples", () => {
+  const readme = readFileSync(join(ROOT, "packages/colors/README.md"), "utf8");
+  const adaptTypes = readFileSync(
+    join(ROOT, "packages/colors/adapt-theme.d.ts"),
+    "utf8",
+  );
+  const backgroundTypes = readFileSync(
+    join(ROOT, "packages/colors/effective-bg.d.ts"),
+    "utf8",
+  );
+
+  assert.match(readme, /конечный набор[^\n]*образц/u);
+  assert.match(readme, /только[^\n]*переданн[^\n]*точ/u);
+  assert.match(adaptTypes, /finite, caller-supplied sample set/iu);
+  assert.match(adaptTypes, /does not infer[^\n]*between samples/iu);
+  assert.match(backgroundTypes, /reference estimate/iu);
+  assert.match(backgroundTypes, /solid\/translucent ancestor/iu);
+  assert.match(backgroundTypes, /`background-color` chain/iu);
+  assert.match(backgroundTypes, /not[\s*]+a browser pixel observation/iu);
 });
 
 test("cleanliness-verdict quarantine bites on every rejected public meaning", () => {

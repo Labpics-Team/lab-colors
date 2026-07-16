@@ -16,11 +16,13 @@ export interface AdaptThemeOptions {
     Partial<Pick<LabColors, "recheckContrastMulti" | "isStableGlowPointNoop">>;
   theme: ThemeName;
   /**
-   * Explicit effective background, overriding the ancestor-composite. A single
-   * hex is one solid surface; an array (or a function returning one) is a set of
-   * worst-case samples of a varying backdrop (gradient / image / video the
-   * caller sampled), and the colours are held legible against the hardest
-   * sample. With one sample this is identical to plain single-background mode.
+   * Explicit background evidence, overriding the ancestor reference estimate.
+   * A single hex is one solid surface; an array (or a function returning one)
+   * is a finite, caller-supplied sample set for a varying backdrop (gradient /
+   * image / video). The controller compares every supplied point and bases its
+   * decision on the worst returned metric; it does not infer between samples
+   * or observe the whole field. With one sample this is identical to plain
+   * single-background mode.
    */
   background?: string | string[] | (() => string | string[]);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
@@ -38,8 +40,9 @@ export interface AdaptThemeOptions {
   /**
    * Enable the legacy characterized per-frame clamp. The current
    * Oklab→clip→sRGB8 path is not globally monotone, so this option is not a
-   * universal floor/least-blend certificate; #287 owns the finite replacement.
-   * Default `false`.
+   * universal floor/least-blend or legibility certificate. Use it only when an
+   * integration explicitly needs the characterized legacy clamp. Default
+   * `false`.
    */
   strict?: boolean;
   /** Override reduced-motion detection (default reads `matchMedia`). */
@@ -69,8 +72,9 @@ export interface AdaptController {
 
 /**
  * Keep an element's `--lab-*` variables adapting to its (changing) background
- * **lazily and smoothly**: re-check each frame, hold while colours still pass,
- * and re-solve + ease only when contrast stably degrades. The calm, cheap
- * alternative to re-solving every frame.
+ * without re-solving every frame: re-check the declared sample set, compare
+ * its returned metrics with the last resolved baseline, and re-solve + ease
+ * only after a sustained relative drop. This does not establish legibility
+ * outside the supplied samples or between them.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;
