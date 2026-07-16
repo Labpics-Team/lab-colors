@@ -1432,7 +1432,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
   }
 });
 
-test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subjects", () => {
+test("feasibility benchmark keeps V1-V6 history and admits exact V7 Core subjects", () => {
   const contractNames = readdirSync(join(
     root,
     "crates",
@@ -1446,6 +1446,7 @@ test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subject
     "wcag22-feasibility-benchmark-v4.json",
     "wcag22-feasibility-benchmark-v5.json",
     "wcag22-feasibility-benchmark-v6.json",
+    "wcag22-feasibility-benchmark-v7.json",
   ]);
   const immutableArtifactHashes = new Map([
     ["wcag22-feasibility-benchmark-v1.json", "7e9ffcbdd9d5d50fe681f511c34fc5c5dd270e9c475ce23ae56e9776922a3c5e"],
@@ -1453,6 +1454,7 @@ test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subject
     ["wcag22-feasibility-benchmark-v3.json", "46ec939523a9aff4f253c4c74e997dfd95812a694b2507fae885ff60244ade3a"],
     ["wcag22-feasibility-benchmark-v4.json", "3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275"],
     ["wcag22-feasibility-benchmark-v5.json", "6079612797bb28a9fc97c1451efd830e2323ed06e15fbffd70527dddc3fa84c5"],
+    ["wcag22-feasibility-benchmark-v6.json", "2e319643e582ca385f988af173b534cd9d1c921f36fcc929f1c56eb8bd978d24"],
   ]);
   for (const [name, expectedSha256] of immutableArtifactHashes) {
     const bytes = readFileSync(join(
@@ -1479,14 +1481,14 @@ test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subject
     "crates",
     "labcolors-core",
     "contracts",
-    "wcag22-feasibility-benchmark-v6.json",
+    "wcag22-feasibility-benchmark-v7.json",
   ));
   const canonicalPayload = JSON.parse(canonicalArtifact.toString("utf8"));
-  const historicalV5Payload = JSON.parse(read(
+  const historicalV6Payload = JSON.parse(read(
     "crates",
     "labcolors-core",
     "contracts",
-    "wcag22-feasibility-benchmark-v5.json",
+    "wcag22-feasibility-benchmark-v6.json",
   ));
   const identityProjection = (payload) => ({
     boundedEnvelopeModel: payload.boundedEnvelopeModel,
@@ -1501,13 +1503,13 @@ test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subject
   });
   assert.deepEqual(
     identityProjection(canonicalPayload),
-    identityProjection(historicalV5Payload),
-    "#297 characterization may change provenance and observations, not the admitted finite algorithm",
+    identityProjection(historicalV6Payload),
+    "#297 GREEN rename may change provenance and observations, not the admitted finite algorithm",
   );
   const subjectsByPath = (payload) => new Map(
     payload.subjectManifest.map((subject) => [subject.path, subject.sha256]),
   );
-  const historicalSubjects = subjectsByPath(historicalV5Payload);
+  const historicalSubjects = subjectsByPath(historicalV6Payload);
   const canonicalSubjects = subjectsByPath(canonicalPayload);
   const subjectPaths = [...new Set([
     ...historicalSubjects.keys(),
@@ -1521,19 +1523,20 @@ test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subject
       "crates/labcolors-core/benches/wcag22_feasibility_admission.rs",
       "scripts/check_wcag22_feasibility_benchmark.py",
     ],
-    "V6 subject drift must be exactly the admission machinery identity bump; " +
-      "the #297 characterization touches solve.rs, which sits in the broad " +
-      "source cone (forcing this re-record) but is not an admission subject",
+    "V7 subject drift must be exactly the admission machinery identity bump " +
+      "and the checker temp-dir default promised in #327 review; the #297 " +
+      "rename touches solve/semantic/config, which sit in the broad source " +
+      "cone (forcing this re-record) but are not admission subjects",
   );
   assert.equal(
     "gitRevision" in canonicalPayload.environment,
     false,
-    "durable V6 must not claim an ephemeral measurement commit",
+    "durable V7 must not claim an ephemeral measurement commit",
   );
   assert.equal(
     "gitTree" in canonicalPayload.environment,
     false,
-    "durable V6 must use its exact source-object cone as the provenance SSOT",
+    "durable V7 must use its exact source-object cone as the provenance SSOT",
   );
   assert.deepEqual(
     canonicalPayload.environment.explicitEmptyBuildInputs,
@@ -1713,18 +1716,23 @@ test("feasibility benchmark keeps V1-V5 history and admits exact V6 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v6\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 1e43b4c8418b8f45da3614d9697966874943e034d4275ee2a404f95aa60dbd2a[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 2e319643e582ca385f988af173b534cd9d1c921f36fcc929f1c56eb8bd978d24[\s\S]*?--self-test/u,
-    "V6 must bind the current #297 characterization source cone without an intermediate worktree",
+    /v6_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v6\.json"[\s\S]*?v6_snapshot=3a8d0a6df3c12a3c66363f099c9b12f7d97594f6[\s\S]*?--admit-benchmark-binary-sha256 1e43b4c8418b8f45da3614d9697966874943e034d4275ee2a404f95aa60dbd2a[\s\S]*?git worktree add --detach "\$historical_root" "\$v6_snapshot"[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 2e319643e582ca385f988af173b534cd9d1c921f36fcc929f1c56eb8bd978d24[\s\S]*?--self-test/u,
+    "V6 must replay through the exact merged slice-A snapshot",
+  );
+  assert.match(
+    ci,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v7\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 3cfba87ecf7d5a19f4b98eeed6ac0b689a725bbc7813efb2875ceedcf00adb47[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 51e1e445e8367de431ba23f664f654322362903d8dcf60dcc0c5521281016fdc[\s\S]*?--self-test/u,
+    "V7 must bind the current #297 rename source cone without an intermediate worktree",
   );
   assert.equal(
     ci.match(/python3 scripts\/check_wcag22_feasibility_benchmark\.py/gu)?.length,
-    6,
-    "CI must validate exactly five historical and one current benchmark artifact",
+    7,
+    "CI must validate exactly six historical and one current benchmark artifact",
   );
   assert.equal(
     ci.match(/git worktree add --detach/gu)?.length,
-    6,
-    "only the six main-reachable historical verifier snapshots may use worktrees",
+    7,
+    "only the seven main-reachable historical verifier snapshots may use worktrees",
   );
 });
 
