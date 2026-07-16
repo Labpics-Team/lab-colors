@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 5,
+  "budgetId": "labcolors-wasm-roles-issue-307-c7a-v7",
+  "predecessor": {
+    "path": "packages/colors/bench/wasm-size-budget-v6.json",
+    "fileSha256": "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32"
+  },
+  "toolchainSource": {
+    "path": "packages/colors/bench/wasm-size-budget-v1.json",
+    "fileSha256": "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1"
+  },
+  "buildRecipes": {
+    "runtime": {
+      "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+      "recipeSha256": "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4"
+    },
+    "compiler": {
+      "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
+      "recipeSha256": "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f"
+    }
+  },
+  "roles": {
+    "runtime": {
+      "artifact": "packages/colors/pkg/labcolors_bg.wasm",
+      "measurement": {
+        "issue": 307,
+        "slice": "C7a",
+        "measurementPlatform": "linux-x64",
+        "rawBytes": 454334,
+        "sha256": "e052ff2413d6da57e745342b45abe9af3719994deface73db19faeba84af91b5"
+      },
+      "policy": {
+        "maxRawBytes": 454334,
+        "derivation": "exact-accepted-issue-307-slice-c7a-runtime-measurement",
+        "gzip": "diagnostic-only"
+      }
+    },
+    "compiler": {
+      "artifact": "packages/colors/compiler/labcolors_compiler_bg.wasm",
+      "measurement": {
+        "issue": 296,
+        "slice": "C3",
+        "measurementPlatform": "linux-x64",
+        "rawBytes": 229658,
+        "sha256": "34e2a561862ee06d52d1104f8ba60ccf9967e2e4fd09803d4e75e1966074bc8d"
+      },
+      "policy": {
+        "maxRawBytes": 229658,
+        "derivation": "exact-accepted-issue-296-slice-c3-compiler-measurement",
+        "gzip": "diagnostic-only"
+      }
+    }
+  }
+}

@@ -1128,10 +1128,10 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   assert.match(verifier, /case "incompatibleCoreContract"/u);
 });
 
-test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () => {
+test("WASM role budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1146,6 +1146,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     v4: "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c",
     v5: "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59",
     v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
+    v7: "a57e94d4cf6b0df7048ec2d808f78eef301e80064bee0648179af83e729a95c3",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1156,7 +1157,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1237,11 +1238,38 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
   assert.ok(v6.roles.runtime.policy.maxRawBytes <= v1.policy.maxRawBytes);
   assert.ok(v6.roles.runtime.policy.maxRawBytes <= v4.policy.maxRawBytes);
 
+  // V7 (#307-C7a): удаление нефизической evidence-оси уменьшает только runtime;
+  // compiler и оба воспроизводимых build-рецепта остаются байт-идентичными V6.
+  assert.equal(v7.schemaVersion, 5);
+  assert.equal(v7.budgetId, "labcolors-wasm-roles-issue-307-c7a-v7");
+  assert.deepEqual(v7.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v6.json",
+    fileSha256: expectedHashes.v6,
+  });
+  assert.deepEqual(v7.toolchainSource, v6.toolchainSource);
+  assert.deepEqual(v7.buildRecipes, v6.buildRecipes);
+  assert.deepEqual(v7.roles.runtime.measurement, {
+    issue: 307,
+    slice: "C7a",
+    measurementPlatform: "linux-x64",
+    rawBytes: 454334,
+    sha256: "e052ff2413d6da57e745342b45abe9af3719994deface73db19faeba84af91b5",
+  });
+  assert.equal(
+    v7.roles.runtime.policy.derivation,
+    "exact-accepted-issue-307-slice-c7a-runtime-measurement",
+  );
+  assert.deepEqual(v7.roles.compiler, v6.roles.compiler);
+  for (const role of ["runtime", "compiler"]) {
+    assert.equal(v7.roles[role].policy.maxRawBytes, v7.roles[role].measurement.rawBytes);
+    assert.ok(v7.roles[role].policy.maxRawBytes <= v6.roles[role].policy.maxRawBytes);
+  }
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v6);
-  for (const version of [1, 2, 3, 4, 5, 6]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v7);
+  for (const version of [1, 2, 3, 4, 5, 6, 7]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1261,15 +1289,15 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     ["compiler", join(root, "packages", "colors", "compiler", "labcolors_compiler_bg.wasm")],
   ]) {
     const builtBytes = readFileSync(path);
-    // The exact V5 digest selects the pinned Linux build; developer builds retain their own host paths.
-    if (sha256(builtBytes) !== v5.roles[role].measurement.sha256) continue;
+    // The current exact digest selects the pinned Linux build; developer builds retain their own host paths.
+    if (sha256(builtBytes) !== v7.roles[role].measurement.sha256) continue;
     const builtWasm = builtBytes.toString("latin1");
     assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
     assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
     assert.doesNotMatch(builtWasm, /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u);
   }
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v5-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v7-"));
   try {
     const runtimePath = join(temporary, "runtime.wasm");
     const compilerPath = join(temporary, "compiler.wasm");
@@ -1278,7 +1306,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     const compilerBytes = Buffer.alloc(17);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
     compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v6);
+    const fixture = structuredClone(v7);
     for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
       fixture.roles[role].measurement.rawBytes = bytes.length;
       fixture.roles[role].measurement.sha256 = sha256(bytes);
@@ -1344,6 +1372,12 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
         value.roles.runtime.measurement.rawBytes = v1.policy.maxRawBytes + 1;
         value.roles.runtime.policy.maxRawBytes = v1.policy.maxRawBytes + 1;
       }],
+      ["compiler predecessor regression", (value) => {
+        value.roles.compiler.measurement.rawBytes =
+          v6.roles.compiler.policy.maxRawBytes + 1;
+        value.roles.compiler.policy.maxRawBytes =
+          v6.roles.compiler.policy.maxRawBytes + 1;
+      }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
       ["top-level key reorder", (value) => ({
         budgetId: value.budgetId,
@@ -1354,7 +1388,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
         roles: value.roles,
       })],
     ];
-    assert.equal(schemaMutations.length, 25, "v5 schema mutation set changed");
+    assert.equal(schemaMutations.length, 26, "v7 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1408,8 +1442,8 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
       Buffer.from(compilerBytes).fill(1, compilerBytes.length - 1),
     );
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v6),
-      /current v6 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v7),
+      /current v7 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {

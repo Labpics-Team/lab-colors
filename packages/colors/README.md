@@ -621,9 +621,10 @@ WASM и полным вызовом.
 ## Размер бандла
 
 Raw-размер WASM — hard gate с append-only историей. Текущий
-`bench/wasm-size-budget-v6.json` содержит exact Linux-x64 size/SHA-бюджеты с
-нулевым headroom для `runtime` и `compiler`; V1–V5 остаются
-неизменяемой историей прежнего единого артефакта. Release-equivalent CI требует
+`bench/wasm-size-budget-v7.json` содержит exact Linux-x64 size/SHA-бюджеты с
+нулевым headroom для `runtime` и `compiler`; checker выбирает текущую версию, а
+все предыдущие versioned-файлы остаются неизменяемой историей.
+Release-equivalent CI требует
 точного совпадения обеих ролей и их рецептов сборки. На других host-платформах
 checker сообщает только raw/gzip/SHA-диагностику и не выдаёт локальные байты за
 канонический release artifact.
