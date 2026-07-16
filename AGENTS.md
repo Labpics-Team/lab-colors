@@ -14,11 +14,10 @@ Lab Colors развивается как контекстный компилят
 вычисляет конечные значения; runtime повторно проверяет только зависимую часть
 графа.
 
-Текущий pre-1.0 `main` ещё переходный: публичный путь использует
-`ThemeConfig → NamedRoleTable`, специальные `RoleRecipe` и частично legacy
-browser helpers. Это известный долг, а не образец для расширения. Новый код не
-добавляет к нему специальные роли; затронутый путь мигрирует к общей модели с
-characterization/differential защитой и удалением заменённой ветви.
+Special-recipe path не является extension point. Если изменение затрагивает
+ветвь, где продуктовая потребность выражена отдельным role kind, потребность
+переносится в общий graph/constraint contract с characterization/differential
+защитой, а заменённая ветвь удаляется в том же завершённом срезе.
 
 Клиент владеет именами и смыслом токенов, aliases, hierarchy, component states,
 design language и authored anchors. Core владеет colorimetry, compositing,
