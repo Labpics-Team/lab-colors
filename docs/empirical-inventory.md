@@ -8,7 +8,7 @@ Standards (`HK_CHROMA_EXPONENT`, `LC_SCALE`, `DELTA_Y_MIN`, `S_PERC_MIN`, WCAG r
 
 Marker column: `SSOT-TRACKED` = has a paper trail in this table but no citation-verified standard/document yet; `GROUNDED` = attested by cited standard/document (GATE-4 verifies the citation).
 
-Terminal classes describe why a shipped number may exist:
+Terminal classes описывают, почему число может находиться в поставляемом коде:
 
 - **(a) DERIVED** — follows from declared mathematics or a versioned standard and is re-derived by a test;
 - **(b) GROUNDED** — reproduces a cited published value inside its stated applicability;
