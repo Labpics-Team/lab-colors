@@ -91,7 +91,7 @@ fn dim_tinted_holds_wcag_floors_on_the_grid() {
 #[test]
 fn dim_tinted_keeps_strict_hierarchy_or_flags_compression() {
     // Invariant 3: primary > secondary > muted > disabled in |Lc|, under dim
-    // surround with the tinted table. Where the legal floor squeezes two roles
+    // surround with the tinted table. Where the ratio floor squeezes two roles
     // together the order may go non-strict, but only if the junior is flagged
     // `compressed` — never a silent inversion.
     let vc = ViewingConditions::dim_surround();

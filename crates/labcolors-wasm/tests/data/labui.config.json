@@ -186,7 +186,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-text"
+        "floor": "text-ratio"
       }
     },
     {
@@ -194,7 +194,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.64359014,
-        "floor": "aa-text"
+        "floor": "text-ratio"
       }
     },
     {
@@ -202,7 +202,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.47572199,
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -218,7 +218,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -354,7 +354,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "brand"
         }
@@ -365,7 +365,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.64359014,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "brand"
         }
@@ -376,7 +376,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.47572199,
-        "floor": "aa-ui",
+        "floor": "ui-ratio",
         "hue": {
           "kind": "brand"
         }
@@ -441,7 +441,7 @@
           "kind": "brand"
         },
         "position": "border-strong",
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -469,7 +469,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "danger"
@@ -481,7 +481,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.64359014,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "danger"
@@ -493,7 +493,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.47572199,
-        "floor": "aa-ui",
+        "floor": "ui-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "danger"
@@ -565,7 +565,7 @@
           "name": "danger"
         },
         "position": "border-strong",
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -595,7 +595,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "warning"
@@ -607,7 +607,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.64359014,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "warning"
@@ -619,7 +619,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.47572199,
-        "floor": "aa-ui",
+        "floor": "ui-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "warning"
@@ -691,7 +691,7 @@
           "name": "warning"
         },
         "position": "border-strong",
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -721,7 +721,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "success"
@@ -733,7 +733,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.64359014,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "success"
@@ -745,7 +745,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.47572199,
-        "floor": "aa-ui",
+        "floor": "ui-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "success"
@@ -817,7 +817,7 @@
           "name": "success"
         },
         "position": "border-strong",
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -847,7 +847,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.97335917,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "info"
@@ -859,7 +859,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.64359014,
-        "floor": "aa-text",
+        "floor": "text-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "info"
@@ -871,7 +871,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.47572199,
-        "floor": "aa-ui",
+        "floor": "ui-ratio",
         "hue": {
           "kind": "sentiment",
           "name": "info"
@@ -943,7 +943,7 @@
           "name": "info"
         },
         "position": "border-strong",
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {

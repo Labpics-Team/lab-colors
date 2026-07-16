@@ -61,7 +61,7 @@ fn bits(value: f64) -> String {
 enum FloorSpec {
     Default,
     None,
-    AaUi,
+    UiRatio,
 }
 
 impl FloorSpec {
@@ -69,15 +69,15 @@ impl FloorSpec {
         match self {
             Self::Default => "default",
             Self::None => "none",
-            Self::AaUi => "aa-ui",
+            Self::UiRatio => "aa-ui",
         }
     }
 
     fn apply(self, contract: Contract) -> Contract {
         match self {
             Self::Default => contract,
-            Self::None => contract.with_conformance(Floor::None),
-            Self::AaUi => contract.with_conformance(Floor::AaUi),
+            Self::None => contract.with_ratio_floor(Floor::None),
+            Self::UiRatio => contract.with_ratio_floor(Floor::UiRatio),
         }
     }
 }
@@ -176,7 +176,7 @@ fn matrix() -> Vec<CaseSpec> {
         cases.push(CaseSpec {
             bg,
             contract: ContractSpec::Ui(target),
-            floor: FloorSpec::AaUi,
+            floor: FloorSpec::UiRatio,
             hue: 30.0,
             chroma: ChromaPolicy::Neutral,
         });
@@ -250,10 +250,15 @@ fn outcome_line(result: &Result<Solved, Unreachable>) -> String {
             bits(*target),
             bits(*max_achievable)
         ),
-        Err(Unreachable::QuantizationGap { target, nearest }) => format!(
+        // Лексика фикстуры заморожена срезом A: метка остаётся `nearest_bits`,
+        // хотя API-поле переименовано в честное `closest_examined`.
+        Err(Unreachable::QuantizationGap {
+            target,
+            closest_examined,
+        }) => format!(
             "err quantization_gap target_bits={} nearest_bits={}",
             bits(*target),
-            bits(*nearest)
+            bits(*closest_examined)
         ),
         Err(Unreachable::FloorUnreachable { floor, max_ratio }) => format!(
             "err floor_unreachable floor_bits={} max_ratio_bits={}",
@@ -444,7 +449,7 @@ fn characterization_counters_are_non_vacuous() {
     // квантования; walk в 2 distinct-шага пересекает всё остальное (фикс #44).
     // Эмпирически: сканы публичного API на миллионы вызовов (solid-фоны обеих
     // полярностей, серые и хроматические, hue-сетка, Neutral/Relative вплоть до
-    // 1.0, Floor::None/AaText/AaUi, |Lc| 7.3..112, srgb и dim surround; wide
+    // 1.0, Floor::None/TextRatio/UiRatio, |Lc| 7.3..112, srgb и dim surround; wide
     // gamut не участвует — DisplayP3 умирает на внешнем гейте) не производят
     // ни одного. Правда самого варианта (`nearest` локален, не глобален)
     // запинена на его собственном шве:
@@ -482,12 +487,12 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
         job(Contract::text(60.0), 264.0, ChromaPolicy::Neutral),
         job(Contract::text(150.0), 0.0, ChromaPolicy::Neutral),
         job(
-            Contract::text(7.45).with_conformance(Floor::None),
+            Contract::text(7.45).with_ratio_floor(Floor::None),
             0.0,
             ChromaPolicy::Neutral,
         ),
         job(
-            Contract::text(3.0).with_conformance(Floor::None),
+            Contract::text(3.0).with_ratio_floor(Floor::None),
             0.0,
             ChromaPolicy::Neutral,
         ),
@@ -568,7 +573,7 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
     let grey_jobs = vec![
         job(Contract::text(20.0), 145.0, ChromaPolicy::Neutral),
         job(
-            Contract::text(9.0).with_conformance(Floor::None),
+            Contract::text(9.0).with_ratio_floor(Floor::None),
             0.0,
             ChromaPolicy::Neutral,
         ),
@@ -648,7 +653,7 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
             let bg = BgInput::solid(bg_hex).expect("literal background");
             let result = solve(
                 bg,
-                Contract::text(target).with_conformance(Floor::None),
+                Contract::text(target).with_ratio_floor(Floor::None),
                 Hue::deg(0.0),
                 ChromaPolicy::Neutral,
                 &vc,

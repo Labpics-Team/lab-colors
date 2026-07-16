@@ -83,7 +83,7 @@ fn warning_occurrence_targets_the_rendered_surface_not_the_page() {
     let surface = occurrence
         .backdrop
         .map(|channel| f64::from(channel) / 255.0);
-    let legacy_ui_floor = Floor::AaUi.min_ratio().unwrap();
+    let legacy_ui_floor = Floor::UiRatio.min_ratio().unwrap();
     assert!(crate::wcag::contrast_ratio(foreground, page) >= legacy_ui_floor);
     assert!(crate::wcag::contrast_ratio(foreground, surface) < legacy_ui_floor);
 

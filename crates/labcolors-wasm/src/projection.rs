@@ -142,7 +142,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 field_bool(&mut roles, "hueVanished", c.hue_vanished);
                 field_opt_num(&mut roles, "achievedDj", c.achieved_dj)?;
                 field_bool(&mut roles, "floorOverride", c.floor_override);
-                field_opt_num(&mut roles, "legalFloor", c.legal_floor)?;
+                field_opt_num(&mut roles, "floorRatio", c.floor_ratio)?;
                 // Единая форма эмиссии: oklch и для солида (hex остаётся
                 // данными роли; синтаксис переменной один на все исходы).
                 let css = oklch_css(&c.hex, None)?;
@@ -851,7 +851,7 @@ mod tests {
                 hue_vanished: false,
                 achieved_dj: None,
                 floor_override: true,
-                legal_floor: Some(4.5),
+                floor_ratio: Some(4.5),
             }),
         }
     }
@@ -937,7 +937,7 @@ mod tests {
                 "\"label-primary\":{{\"cssVar\":\"--lab-label-primary\",\"kind\":\"color\",",
                 "\"hex\":\"#D5D5D7\",\"lc\":62.375,\"wcagRatio\":7.25,\"compressed\":false,",
                 "\"hueVanished\":false,\"achievedDj\":null,\"floorOverride\":true,",
-                "\"legalFloor\":4.5,\"css\":\"{lab}\"}},",
+                "\"floorRatio\":4.5,\"css\":\"{lab}\"}},",
                 "\"spacer\":{{\"cssVar\":\"--lab-spacer\",\"kind\":\"none\"}},",
                 "\"veil\":{{\"cssVar\":\"--lab-veil\",\"kind\":\"translucent\",",
                 "\"tintHex\":\"#89CFF0\",\"alpha\":0.35,\"compositeHex\":\"#55757F\",",

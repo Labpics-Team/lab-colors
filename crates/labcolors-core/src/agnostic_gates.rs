@@ -300,8 +300,8 @@ fn acme_config() -> ThemeConfig {
         // A small but real role set: a text ladder, a neutral fill, a brand fill,
         // a hued brand label, a badge label, a brand focus ring, a brand glow.
         roles: vec![
-            ("text-strong".to_string(), text(0.968, Floor::AaText)),
-            ("text-weak".to_string(), text(0.461, Floor::AaUi)),
+            ("text-strong".to_string(), text(0.968, Floor::TextRatio)),
+            ("text-weak".to_string(), text(0.461, Floor::UiRatio)),
             (
                 "surface".to_string(),
                 RoleRecipe::Ladder {
@@ -318,7 +318,7 @@ fn acme_config() -> ThemeConfig {
                 "brand-label".to_string(),
                 RoleRecipe::TextAnchor {
                     fraction: 0.968,
-                    floor: Floor::AaText,
+                    floor: Floor::TextRatio,
                     hue: Some(LadderSource::Brand),
                 },
             ),
@@ -329,7 +329,7 @@ fn acme_config() -> ThemeConfig {
                 RoleRecipe::PairLabel {
                     source: LadderSource::Brand,
                     fraction: 0.461,
-                    floor: Floor::AaUi,
+                    floor: Floor::UiRatio,
                 },
             ),
             ("focus".to_string(), brand_ladder(LadderPosition::FocusRing)),

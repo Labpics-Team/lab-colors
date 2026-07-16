@@ -1397,7 +1397,7 @@ const config = {
         source: { kind: "brand" },
         tone_light: 0.72,
         tone_dark: 0.28,
-        floor: "aa-ui",
+        floor: "ui-ratio",
       },
     },
   ],
@@ -1797,7 +1797,7 @@ const config: ThemeConfig = {
       recipe: {
         kind: "text-anchor",
         fraction: 0.62,
-        floor: "aa-text",
+        floor: "text-ratio",
         hue: { kind: "brand" },
       },
     },
@@ -1807,7 +1807,7 @@ const config: ThemeConfig = {
         kind: "ladder",
         source: { kind: "brand" },
         position: borderPosition,
-        floor: "aa-ui",
+        floor: "ui-ratio",
       },
     },
     {

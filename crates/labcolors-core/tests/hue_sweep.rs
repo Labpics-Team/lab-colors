@@ -13,7 +13,7 @@
 //! (#FFFFFF) and a dark (#1C1C1E) background, at a moderate chroma
 //! (`Relative(0.3)`), and asserts two contracts on every result:
 //!
-//! 1. **Perceptual target held — unless the law overrode it.** When the WCAG
+//! 1. **Perceptual target held — unless the ratio floor overrode it.** When the
 //!    floor did NOT override (`!floor_override`), the measured |Lc − target| ≤ 1
 //!    (the solver's own ±1 quantization budget), independently re-measured
 //!    through the public `lpc_with_vc` on the emitted hex — not trusting the
@@ -86,7 +86,7 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 let result = solve(
                     bg,
-                    Contract::text(target).with_conformance(Floor::None),
+                    Contract::text(target).with_ratio_floor(Floor::None),
                     Hue::deg(hue_deg),
                     ChromaPolicy::Relative(0.3),
                     &vc,

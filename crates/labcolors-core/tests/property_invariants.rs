@@ -242,7 +242,7 @@ fn muddiness_cool_hue_is_not_monotone_finding() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Небольшая витрина ролей с легальными полами: сильный/слабый текст + цветной
-/// бренд-лейбл (все несут пол через `RoleSpec::legal_floor`).
+/// бренд-лейбл (все несут пол через `RoleSpec::floor_ratio`).
 fn legality_table() -> labcolors_core::NamedRoleTable {
     let cfg = base_config(
         (0x30, 0x6A, 0xE0),
@@ -266,7 +266,7 @@ fn every_floored_role_clears_its_wcag_floor_on_quantised_bytes() {
             let bg = BgInput::solid(&bg_hex).expect("valid #RRGGBB фон");
             let set = resolve_named_set(&bg, &table, &vcs[vc_i]);
             for (name, spec) in table.entries() {
-                let Some(floor) = spec.legal_floor() else {
+                let Some(floor) = spec.floor_ratio() else {
                     continue; // роль без легального пола — вне закона
                 };
                 let resolved = set.iter().find(|(n, _)| n == name).map(|(_, r)| r);
@@ -362,7 +362,7 @@ fn base_config(
                 "text-strong".to_string(),
                 RoleRecipe::TextAnchor {
                     fraction: f_strong,
-                    floor: Floor::AaText,
+                    floor: Floor::TextRatio,
                     hue: None,
                 },
             ),
@@ -370,7 +370,7 @@ fn base_config(
                 "text-weak".to_string(),
                 RoleRecipe::TextAnchor {
                     fraction: f_weak,
-                    floor: Floor::AaUi,
+                    floor: Floor::UiRatio,
                     hue: None,
                 },
             ),
@@ -402,7 +402,7 @@ fn base_config(
                 "brand-label".to_string(),
                 RoleRecipe::TextAnchor {
                     fraction: 0.968,
-                    floor: Floor::AaText,
+                    floor: Floor::TextRatio,
                     hue: Some(LadderSource::Brand),
                 },
             ),

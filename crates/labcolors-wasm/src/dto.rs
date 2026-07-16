@@ -201,7 +201,7 @@ pub struct SolvedColor {
     pub lc: f64,
     /// The WCAG 2.1 ratio (1–21) against the background.
     pub wcag_ratio: f64,
-    /// `true` when the legal floor squeezed this role onto the smallest step
+    /// `true` when the ratio floor squeezed this role onto the smallest step
     /// below its senior (an honest, flagged hierarchy degradation).
     pub compressed: bool,
     /// `true` when a coloured family label (M1 ch5c) lost perceptible colour on
@@ -214,11 +214,11 @@ pub struct SolvedColor {
     /// Честный замер |ΔJ'| на отданном hex для dJ'-ролей (симметрия с glow);
     /// `None` у контраст-ролей (их метрика — Lc).
     pub achieved_dj: Option<f64>,
-    /// `true` when the WCAG legal floor overrode the perceptual target.
+    /// `true` when the contract's ratio floor overrode the perceptual target.
     pub floor_override: bool,
-    /// The minimum WCAG ratio this role is legally clamped to (`AaText` → 4.5,
-    /// `AaUi` → 3.0), or `None` for decorative / JND / zero roles. A property of
+    /// The minimum WCAG-formula ratio this role is clamped to (`TextRatio` → 4.5,
+    /// `UiRatio` → 3.0), or `None` for decorative / JND / zero roles. A property of
     /// the role's contract, not of this solve: a runtime easing between themes
     /// uses it to hold the floor every frame of the transition.
-    pub legal_floor: Option<f64>,
+    pub floor_ratio: Option<f64>,
 }

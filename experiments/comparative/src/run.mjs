@@ -208,7 +208,7 @@ function renderMarkdown(r) {
     "",
     "| Система | Заявка | Случаев | Выполнено |",
     "|---|---|---:|---:|",
-    `| ${L.s1} | роль с legalFloor достигает пола на фоне | ${n.s1.total} | ${pct(n.s1.achieved, n.s1.total)} |`,
+    `| ${L.s1} | роль с floorRatio достигает пола на фоне | ${n.s1.total} | ${pct(n.s1.achieved, n.s1.total)} |`,
     `| ${L.s1} | — из них с флагами честности | ${n.s1.total} | ${pct(n.s1.flagged, n.s1.total)} |`,
     `| ${L.s2} | ΔTone ≥ 50 ⇒ контраст ≥ 4.5:1 | ${n.s2.claim45.pairs} | ${pct(n.s2.claim45.pass, n.s2.claim45.pairs)} |`,
     `| ${L.s2} | ΔTone ≥ 40 ⇒ контраст ≥ 3.0:1 | ${n.s2.claim30.pairs} | ${pct(n.s2.claim30.pass, n.s2.claim30.pairs)} |`,

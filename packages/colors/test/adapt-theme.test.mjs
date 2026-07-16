@@ -71,12 +71,12 @@ const oneRole = (hex, lc) => ({
   roles: { "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc } },
 });
 
-// A role set that carries an explicit `legalFloor` (4.5 / 3.0 / null), the field
+// A role set that carries an explicit `floorRatio` (4.5 / 3.0 / null), the field
 // the strict floor-clamp reads.
-const floorRole = (hex, lc, legalFloor) => ({
+const floorRole = (hex, lc, floorRatio) => ({
   vars: { "--lab-label-primary": hex },
   roles: {
-    "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc, legalFloor },
+    "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc, floorRatio },
   },
 });
 
@@ -926,7 +926,7 @@ test("the default ease dips below the floor on the canonical strict comparison f
 });
 
 test("strict mode leaves floorless (decorative) roles to ease freely", () => {
-  // legalFloor null → the clamp is a no-op; the role crosses low contrast freely.
+  // floorRatio null → the clamp is a no-op; the role crosses low contrast freely.
   const h = harness({ strict: true, easeMs: 100 });
   h.colors.setRecheckLc([10]);
   h.colors.setResolve(floorRole("#FFFFFF", 100, null)); // no legal floor

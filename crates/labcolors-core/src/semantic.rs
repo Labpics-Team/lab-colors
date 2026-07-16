@@ -22,7 +22,7 @@
 //! The sign is chosen in two stages, and — crucially — from the *WCAG* gate the
 //! text roles actually have to clear, not from the perceptual maximum:
 //!
-//! 1. **WCAG reachability first.** A text role floors at the legal AA ratio
+//! 1. **WCAG reachability first.** A text role floors at the AA-numbered ratio
 //!    (4.5:1 for text). Which polarity can reach that floor is a property of the
 //!    background alone — `contrast_ratio(black, bg)` vs `contrast_ratio(white,
 //!    bg)` — and is independent of the viewing conditions, because the WCAG
@@ -31,10 +31,10 @@
 //!    every text role unreachable while *black* text on it passes AA with room to
 //!    spare: the old "pick the larger LPC maximum" rule flipped polarity near
 //!    `#999999`, far from the WCAG flip near `#747474`, and chose the side the
-//!    legal floor could not reach.
+//!    ratio floor could not reach.
 //! 2. **Tie-break to the perceptual winner (white).** When both polarities clear
 //!    the strict floor they do so only on a narrow band: black clears 4.5:1 at
-//!    `Y ≥ 0.175`, white at `Y ≤ 0.1833`, so both are legal only on
+//!    `Y ≥ 0.175`, white at `Y ≤ 0.1833`, so both clear the floor only on
 //!    `Y ∈ [0.175, 0.1833]` (`#757575`, `#767676` and same-luminance chromatics
 //!    such as `#0078D4`). Across that whole band the perceptual layer prefers
 //!    *light-on-dark* with a wide margin — the luminance-domain LPC core
@@ -79,7 +79,7 @@
 //! On a background whose readable window is *narrower than the hierarchy's own
 //! steps* — a near-AA mid-grey such as `#747474`, where the only readable
 //! polarity has barely any room above 4.5:1 — two adjacent text roles can be
-//! forced by the legal floor onto the same point. The old code let primary and
+//! forced by the ratio floor onto the same point. The old code let primary and
 //! secondary collapse to an identical hex silently, falsifying the "strict
 //! hierarchy by construction" claim. This module instead degrades *honestly*:
 //! the order is kept non-strict (primary ≥ secondary ≥ muted ≥ disabled), a
@@ -339,7 +339,7 @@ const LABEL_QUATERNARY_FRACTION: f64 = 0.29335999;
 // SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
 const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
 
-/// The strict WCAG 2.1 AA *text* ratio (4.5:1) — the tightest legal gate any
+/// The strict 4.5:1 text ratio (number from WCAG 2.x AA) — the tightest ratio gate any
 /// role in the table imposes, and therefore the one polarity is chosen against.
 /// Selecting against the strictest floor keeps a single polarity for the whole
 /// set: a side that clears 4.5:1 trivially clears the laxer 3:1 UI floor too.
@@ -349,7 +349,7 @@ const POLARITY_FLOOR_RATIO: f64 = wcag::AA_TEXT_RATIO;
 /// background, or light foreground on a dark one.
 ///
 /// Replaces the old bare `f64` sign (`+1.0` / `-1.0`): the two valid states are
-/// named, illegal ones (a zero or non-unit sign) are unrepresentable, and the
+/// named, invalid ones (a zero or non-unit sign) are unrepresentable, and the
 /// `sign()` accessor is the single place the enum becomes the signed `Lc` the
 /// solver consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -518,7 +518,7 @@ impl Role {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextAnchor {
     fraction: f64,
-    conformance: Floor,
+    ratio_floor: Floor,
     /// Опциональный источник ОТТЕНКА семьи (ратификация ch5c, M1). `None` —
     /// нейтральный лейбл (подтон из [`RoleChroma`] таблицы, прежний путь
     /// байт-в-байт). `Some(tint)` — ЦВЕТНОЙ лейбл: держит ТОТ ЖЕ Lc-контракт
@@ -534,10 +534,10 @@ impl TextAnchor {
     /// A text anchor at `fraction` of the background's maximum contrast, with the
     /// given WCAG conformance floor. `fraction` is clamped into `(0, 1)`. Neutral
     /// undertone (no family hue); attach one with [`with_hue`](Self::with_hue).
-    pub fn new(fraction: f64, conformance: Floor) -> Self {
+    pub fn new(fraction: f64, ratio_floor: Floor) -> Self {
         Self {
             fraction: fraction.clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON),
-            conformance,
+            ratio_floor,
             hue: None,
         }
     }
@@ -556,8 +556,8 @@ impl TextAnchor {
     }
 
     /// The WCAG conformance floor applied after the perceptual target.
-    pub fn conformance(self) -> Floor {
-        self.conformance
+    pub fn ratio_floor(self) -> Floor {
+        self.ratio_floor
     }
 
     /// Источник оттенка семьи, если это цветной лейбл (M1). `None` — нейтральный.
@@ -714,7 +714,7 @@ pub enum RoleSpec {
         alpha_light: f64,
         /// Альфа для тёмной темы (`(0, 1]`; у акцентов = `alpha_light`).
         alpha_dark: f64,
-        /// Опциональный юр. пол UI (M2 ch5c): солидная семейная граница
+        /// Опциональный ratio-пол UI (M2 ch5c): солидная семейная граница
         /// (`border-<family>-strong`, α=1) ОБЯЗАНА держать 3:1 (WCAG 1.4.11).
         /// `None` — прежний путь (тинт эмитится как есть). `Some(floor)` —
         /// если композит чист (≥ пола), эмитится точный семейный солид (Figma
@@ -761,7 +761,7 @@ pub enum RoleSpec {
         /// Целевой |ΔJ'| тона-базы от фона резолва (пер-темная пара): тир
         /// материала (base = крупный/заметный, subtle = малый/тонкий).
         tone: DjMagnitude,
-        /// WCAG-пол читаемости, который держит выведенная α (`AaText`/`AaUi`).
+        /// WCAG-пол читаемости, который держит выведенная α (`TextRatio`/`UiRatio`).
         /// `Floor::None` невалиден — материал обязан нести пол (валидатор ловит).
         floor: Floor,
     },
@@ -1429,22 +1429,22 @@ impl RoleTable {
         self.chroma
     }
 
-    /// The minimum WCAG 2.1 contrast ratio this role is legally clamped to, if
+    /// The minimum WCAG-formula contrast ratio this role is clamped to, if
     /// any.
     ///
-    /// This is the *legal floor* the solver can never drop below for `role` —
+    /// This is the *ratio floor* the solver can never drop below for `role` —
     /// independent of the perceptual target and of the background. Anchored
     /// (text / UI) roles carry their [`TextAnchor`]'s WCAG conformance
-    /// ([`Floor::AaText`] → 4.5, [`Floor::AaUi`] → 3.0); every decorative /
-    /// JND / zero role has no legal floor and returns `None`.
+    /// ([`Floor::TextRatio`] → 4.5, [`Floor::UiRatio`] → 3.0); every decorative /
+    /// JND / zero role has no ratio floor and returns `None`.
     ///
     /// A runtime that eases between resolved themes uses this to *hold the
     /// floor every frame* during the transition: an intermediate (interpolated)
     /// colour is only allowed to be served while it still clears this ratio
     /// against the live background. The value is a property of the contract,
     /// not of any one solve, so it is exposed alongside each resolved role.
-    pub fn legal_floor(&self, role: Role) -> Option<f64> {
-        self.spec(role).legal_floor()
+    pub fn floor_ratio(&self, role: Role) -> Option<f64> {
+        self.spec(role).floor_ratio()
     }
 
     /// Return a copy with `role`'s recipe replaced — every other role keeps its
@@ -1506,7 +1506,7 @@ impl Default for RoleTable {
     /// controls). Decorative roles carry Lc magnitudes with no floor.
     fn default() -> Self {
         let anchor =
-            |fraction, conformance| RoleSpec::Anchor(TextAnchor::new(fraction, conformance));
+            |fraction, ratio_floor| RoleSpec::Anchor(TextAnchor::new(fraction, ratio_floor));
         // Lc decorative magnitudes — the shadow stack only (its owner anchors
         // are alpha opacities, not dJ' steps). See `surface-jnd` for context.
         let decorative = |magnitude| RoleSpec::Decorative { magnitude };
@@ -1517,19 +1517,19 @@ impl Default for RoleTable {
                 // Labels — the text ladder, renamed from text-* to the owner's HIG
                 // names. The contracts are carried over 1:1 (0.97335917 /
                 // 0.64359014 / 0.47572199 / 0.29335999 with the same
-                // AaText/AaText/AaUi/None floors), so the
+                // TextRatio/TextRatio/UiRatio/None floors), so the
                 // emitted colours are byte-identical to the old text-* roles.
                 (
                     Role::LabelPrimary,
-                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaText),
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::TextRatio),
                 ),
                 (
                     Role::LabelSecondary,
-                    anchor(LABEL_SECONDARY_FRACTION, Floor::AaText),
+                    anchor(LABEL_SECONDARY_FRACTION, Floor::TextRatio),
                 ),
                 (
                     Role::LabelTertiary,
-                    anchor(LABEL_TERTIARY_FRACTION, Floor::AaUi),
+                    anchor(LABEL_TERTIARY_FRACTION, Floor::UiRatio),
                 ),
                 (
                     Role::LabelQuaternary,
@@ -1545,7 +1545,7 @@ impl Default for RoleTable {
                 // stronger than soft is the order contract.
                 (
                     Role::BorderStrong,
-                    anchor(LABEL_PRIMARY_FRACTION, Floor::AaUi),
+                    anchor(LABEL_PRIMARY_FRACTION, Floor::UiRatio),
                 ),
                 (Role::BorderBase, dj(BORDER_BASE_DJ)),
                 (Role::BorderSoft, dj(BORDER_SOFT_DJ)),
@@ -1587,7 +1587,7 @@ impl Default for RoleTable {
 #[non_exhaustive]
 pub enum Resolved {
     /// A solved colour for a text/UI or decorative role. `compressed` is `true`
-    /// when the legal floor squeezed this role's target against its senior's so
+    /// when the ratio floor squeezed this role's target against its senior's so
     /// the strict hierarchy could not hold and the role was demoted to the
     /// smallest distinguishable step below — an honest, flagged degradation
     /// rather than a silent two-roles-one-colour collapse. See the module docs.
@@ -1676,7 +1676,7 @@ pub struct TranslucentResolved {
     /// ([`alpha`](Self::alpha) несёт фактическое значение).
     alpha_coerced: bool,
     /// Солидная семейная граница (`border-<family>-strong`, M2 ch5c) была
-    /// притемнена по кривой семьи до юр. пола UI (3:1), потому что тинт-якорь
+    /// притемнена по кривой семьи до ratio-пола UI (3:1), потому что тинт-якорь
     /// семьи не держал 3:1 на этом фоне. Честный флаг минимального легального
     /// сдвига — оттенок/насыщенность семьи сохранены, изменилась лишь светлота.
     /// `false` у прямой лестницы и когда семейный солид уже легален (Figma-тинт
@@ -1728,7 +1728,7 @@ impl TranslucentResolved {
         self.alpha_coerced
     }
 
-    /// Солидная семейная граница притемнена до юр. пола UI (M2 ch5c). `false` у
+    /// Солидная семейная граница притемнена до ratio-пола UI (M2 ch5c). `false` у
     /// прямой лестницы и легальных семейных солидов. См. поле-документацию.
     pub fn floor_coerced(&self) -> bool {
         self.floor_coerced
@@ -1996,7 +1996,7 @@ impl MaterialResolved {
     }
 
     /// Целевой |ΔJ'| тона был недостижим (стена оси J' / квантовая дыра) —
-    /// возвращён ближайший достижимый тон (закон 2 ADR-0002). `false` в норме.
+    /// возвращён ближайший ИЗУЧЕННЫЙ локальным поиском тон (закон 2 ADR-0002). `false` в норме.
     pub fn tone_compressed(&self) -> bool {
         self.tone_compressed
     }
@@ -2049,11 +2049,11 @@ impl Resolved {
         )
     }
 
-    /// Whether this role's contract was **degraded to the nearest achievable**
+    /// Whether this role's contract was **degraded to the closest examined**
     /// (закон 2 ADR-0002) — the emitted colour honours the contract as closely
     /// as physics allows, but not exactly:
     ///
-    /// - contrast roles: the legal floor forced the colour onto (or just below)
+    /// - contrast roles: the ratio floor forced the colour onto (or just below)
     ///   its senior, so its place in the hierarchy order is non-strict;
     /// - decorative dJ' roles: the requested |ΔJ'| sits past the wall of the
     ///   J' axis (or in a quantisation gap) — the colour with the closest
@@ -2173,7 +2173,7 @@ impl ResolveContext {
             max_ratio: 0.0,
         })?;
         let target = self.polarity.sign() * anchor.fraction() * max;
-        Ok(Contract::text(target).with_conformance(anchor.conformance()))
+        Ok(Contract::text(target).with_ratio_floor(anchor.ratio_floor()))
     }
 
     /// The signed range contract for a decorative JND role: the chosen polarity's
@@ -2221,7 +2221,7 @@ impl ResolveContext {
 ///   role's seniors. In isolation it is therefore never set.
 /// * **dJ'-path degradation** is a *single-role* property: a decorative dJ' role
 ///   ([`RoleSpec::DecorativeDj`]) whose magnitude target is unreachable degrades
-///   to the nearest achievable step and reports `compressed == true` on its own
+///   to the closest examined step and reports `compressed == true` on its own
 ///   (see `resolve_dj`), even resolved here in isolation.
 ///
 /// So a contract (Lc) role resolved here always reports `compressed == false`,
@@ -2292,7 +2292,7 @@ fn resolve_spec_in(
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
             // `solve_with_chroma`. Недостижимая цель (стена оси J' / квантовая
-            // дыра) деградирует к ближайшему достижимому с флагом `compressed`
+            // дыра) деградирует к ближайшему изученному с флагом `compressed`
             // (закон 2 ADR-0002 — смысл флага тот же, что у контраст-ролей:
             // «контракт занят ближайшим честным, не точным»).
             return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
@@ -2350,7 +2350,7 @@ fn resolve_spec_in(
                 alpha_light
             };
             // M2 ch5c: солидная семейная граница (`floor = Some`, α=1) обязана
-            // держать юр. пол UI (3:1). Пол применим лишь к солиду — у
+            // держать ratio-пол UI (3:1). Пол применим лишь к солиду — у
             // полупрозрачной позиции контраст определяется композитом, а не
             // тинтом, и притемнять тинт бессмысленно.
             if let Some(floor) = floor {
@@ -2594,7 +2594,7 @@ fn resolve_rgba_direct(
 ///   красива, хрома выведена, не оптимизируется отдельной метрикой.
 ///
 /// Честные исходы (не молчаливая деградация):
-/// * `compressed` — юр. пол уровня перекрыл перцептивную цель
+/// * `compressed` — ratio-пол уровня перекрыл перцептивную цель
 ///   ([`Solved::floor_override`]): контракт занят ближайшим легальным, не точным;
 /// * `hue_vanished` — на решённой светлоте красочность `M'` цвета упала ниже
 ///   `TINT_PERCEPTIBLE_MP_FLOOR`: у краёв кривой (почти-белый/чёрный) хрома
@@ -2659,13 +2659,13 @@ fn resolve_hued_anchor_from_encoded_source(
     }
 }
 
-/// Резолв СОЛИДНОЙ семейной границы `border-<family>-strong` с юр. полом UI
+/// Резолв СОЛИДНОЙ семейной границы `border-<family>-strong` с ratio-полом UI
 /// (ратификация ch5c, M2).
 ///
 /// Солид семьи (α=1) обязан держать 3:1 (WCAG 1.4.11 для границ контролов). Если
 /// композит тинта уже чист (≥ пола) — эмитится ТОЧНЫЙ семейный солид (Figma-
 /// идентичность цела, диффа эмиссии нет). Иначе — МИНИМАЛЬНЫЙ ЛЕГАЛЬНЫЙ СДВИГ по
-/// кривой семьи: контракт целит естественный Lc тинта, а юр. пол притемняет цвет
+/// кривой семьи: контракт целит естественный Lc тинта, а ratio-пол притемняет цвет
 /// РОВНО до легальности; оттенок и насыщенность семьи сохранены (доля хромы
 /// якоря на решённой светлоте). Сдвиг объявлен флагом
 /// [`TranslucentResolved::floor_coerced`] — не молчаливая деградация. Эмиссия
@@ -2728,7 +2728,7 @@ fn resolve_solid_with_ui_floor(
     };
     // Контракт целит естественный Lc; пол уровня (`floor`) притемняет ровно до
     // легальности — минимальный сдвиг по построению solve.
-    let contract = solve::Contract::text(anchor_lc).with_conformance(floor);
+    let contract = solve::Contract::text(anchor_lc).with_ratio_floor(floor);
     match solve::solve_in(
         bg,
         contract,
@@ -3079,7 +3079,7 @@ fn resolve_material(
         Some(r) => r,
         None => {
             return Resolved::Unreachable(Unreachable::InvalidInput(
-                "material-роль требует пол читаемости (aa-text/aa-ui), получен zero-floor"
+                "material-роль требует пол читаемости (text-ratio/ui-ratio), получен zero-floor"
                     .to_string(),
             ));
         }
@@ -3243,7 +3243,7 @@ fn solved_oklab_lightness(solved: &Solved) -> Result<f64, Unreachable> {
 ///
 /// Polarity and maximum contrast are computed once for the whole set (see
 /// [`ResolveContext`]); every role shares them. After the per-role solve a
-/// hierarchy pass walks the text roles strongest-first and, where the legal floor
+/// hierarchy pass walks the text roles strongest-first and, where the ratio floor
 /// squeezed a role onto its senior, demotes it to the smallest distinguishable
 /// step below if one still clears its floor, flagging it [`Resolved::compressed`]
 /// — an honest, visible degradation rather than a silent identical-colour
@@ -3316,13 +3316,13 @@ pub struct NamedRoleTable {
 
 impl RoleSpec {
     /// WCAG-пол этой спеки — свойство контракта, не резолва: текст/UI-якорь
-    /// несёт пол своего [`TextAnchor`] (AaText → 4.5, AaUi → 3.0), все
+    /// несёт пол своего [`TextAnchor`] (TextRatio → 4.5, UiRatio → 3.0), все
     /// остальные формы (декоративные, dJ', лестница, альфа-аналог, zero) —
     /// без легального пола. Одна семантика для обеих таблиц
-    /// (`RoleTable::legal_floor` и string-keyed границы).
-    pub fn legal_floor(&self) -> Option<f64> {
+    /// (`RoleTable::floor_ratio` и string-keyed границы).
+    pub fn floor_ratio(&self) -> Option<f64> {
         match self {
-            RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
+            RoleSpec::Anchor(anchor) => anchor.ratio_floor().min_ratio(),
             // Лейбл тинт-бейджа несёт свой пол против тинт-поверхности — семантика
             // контракта, как у текст/UI-якоря (иерархия-пасс его не трогает: он
             // singleton, не ступень лестницы).
@@ -3603,7 +3603,7 @@ pub fn recheck_against_multi(
 
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
 ///
-/// The anchor principle already orders the *targets* strictly, but the legal
+/// The anchor principle already orders the *targets* strictly, but the ratio
 /// floor can lift two adjacent roles onto the same colour where the readable
 /// window is narrower than the hierarchy steps (a near-AA mid-grey). For each
 /// junior text role that did not come out strictly weaker than the senior above
@@ -3635,9 +3635,9 @@ fn enforce_text_hierarchy(
         }
 
         // The floor squeezed this junior onto (or above) its senior. The junior's
-        // own conformance governs how far down it may move and still be legal.
+        // own ratio floor governs how far down it may move and still clear it.
         let floor = match table.spec(junior_role) {
-            RoleSpec::Anchor(a) => a.conformance(),
+            RoleSpec::Anchor(a) => a.ratio_floor(),
             _ => Floor::None,
         };
         let demoted = demote_below(senior_mag, ctx, chroma, floor, bg, vc);
@@ -3748,7 +3748,7 @@ fn enforce_named_text_hierarchy(
             let RoleSpec::Anchor(anchor) = entries[junior_idx].1 else {
                 continue;
             };
-            let floor = anchor.conformance();
+            let floor = anchor.ratio_floor();
             let demoted = match anchor.hue() {
                 Some(hue_tint) => demote_below_hued(senior_mag, hue_tint, floor, bg, vc, ctx),
                 None => demote_below(senior_mag, ctx, chroma, floor, bg, vc),
@@ -3828,7 +3828,7 @@ fn demote_below(
     // floor, so if that floor lifts the colour right back onto the senior there is
     // no room to distinguish — detected by re-measuring the result below.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
-    let contract = Contract::text(target).with_conformance(floor);
+    let contract = Contract::text(target).with_ratio_floor(floor);
     // Reuse the set's one background interval; an unreducible background has no
     // demotion to offer, so propagate that as "no distinguishable step".
     let interval = ctx.interval.as_ref().ok().copied()?;
@@ -3854,7 +3854,7 @@ fn demote_below_hued(
     ctx: &ResolveContext,
 ) -> Option<Solved> {
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
-    let contract = Contract::text(target).with_conformance(floor);
+    let contract = Contract::text(target).with_ratio_floor(floor);
     let interval = ctx.interval.as_ref().ok().copied()?;
     let hue_deg = crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(
         hue_tint.for_vc(vc),
@@ -3910,7 +3910,7 @@ fn max_contrast(
 ) -> Result<f64, Unreachable> {
     let sign = polarity.sign();
     // 300 Lc is comfortably past the ~106 ceiling of any sRGB background.
-    let probe = Contract::text(sign * 300.0).with_conformance(Floor::None);
+    let probe = Contract::text(sign * 300.0).with_ratio_floor(Floor::None);
     match solve::solve_in(
         bg,
         probe,
@@ -3939,7 +3939,7 @@ fn max_contrast(
 /// for light-on-dark — which is a property of the background alone and does not
 /// depend on `vc`, because the WCAG formula does not. This is the fix for the
 /// false-unreachable stripe: the old "larger LPC maximum" rule flipped near
-/// `#999999`, but the legal floor flips near `#747474`, and on the band between
+/// `#999999`, but the ratio floor flips near `#747474`, and on the band between
 /// them the LPC rule chose the side that could not reach 4.5:1.
 ///
 /// Stage 2 — *tie-break*: when both sides clear the floor (the narrow
@@ -3974,7 +3974,7 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
     }
 }
 
-/// Break a polarity tie when both sides clear the legal floor: **light-on-dark
+/// Break a polarity tie when both sides clear the ratio floor: **light-on-dark
 /// (white)** — a value derived from the band's geometry and the perceptual
 /// metric, not a tuned convention.
 ///
@@ -4444,18 +4444,18 @@ mod tests {
     #[test]
     fn legal_floor_is_held_across_a_full_background_sweep() {
         // Defence-in-depth for the engine's core legal guarantee: every anchored
-        // role's resolved colour clears its WCAG legal floor against EVERY
+        // role's resolved colour clears its ratio floor against EVERY
         // background across the full 256-step grey axis plus a chromatic palette,
         // under both calibrated viewing conditions. WCAG AA conformance is the
         // engine's reason for existence, so this is the one invariant worth a
-        // brute sweep — and the per-role `legal_floor` accessor is only honest if
+        // brute sweep — and the per-role `floor_ratio` accessor is only honest if
         // the solver actually meets it everywhere. Doubles as a no-panic sweep:
         // `resolve_set` must return cleanly across this whole input space.
         //
         // The floor is held essentially EXACTLY: the solver lands the quantised
         // hex just above the line (measured worst margin ≈ +1.5e-4 at #949494),
         // never below, so a tight `1e-6` epsilon — not a loose cushion — is the
-        // honest assertion. A regression that dropped a role below its legal floor
+        // honest assertion. A regression that dropped a role below its ratio floor
         // (an accessibility-law violation) would fail here.
         const FLOOR_EPS: f64 = 1e-6;
         let table = RoleTable::default();
@@ -4475,13 +4475,13 @@ mod tests {
             for bg_hex in &backgrounds {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 for (role, resolved) in resolve_set(&bg, &table, vc) {
-                    let (Some(floor), Some(solved)) = (table.legal_floor(role), resolved.solved())
+                    let (Some(floor), Some(solved)) = (table.floor_ratio(role), resolved.solved())
                     else {
                         continue;
                     };
                     assert!(
                         solved.wcag_ratio() >= floor - FLOOR_EPS,
-                        "{role:?} on {bg_hex} (vc{vi}): wcag {:.5} below legal floor {floor}",
+                        "{role:?} on {bg_hex} (vc{vi}): wcag {:.5} below ratio floor {floor}",
                         solved.wcag_ratio()
                     );
                 }
@@ -4491,28 +4491,28 @@ mod tests {
 
     #[test]
     fn legal_floor_reports_each_roles_wcag_clamp_and_holds_under_resolve() {
-        // `legal_floor` is the floor the solver can never drop below for a role,
+        // `floor_ratio` is the floor the solver can never drop below for a role,
         // independent of background. Anchored roles carry their conformance
-        // (AaText → 4.5, AaUi → 3.0); decorative / JND / zero roles have none.
+        // (TextRatio → 4.5, UiRatio → 3.0); decorative / JND / zero roles have none.
         let table = RoleTable::default();
         assert_eq!(
-            table.legal_floor(Role::LabelPrimary),
+            table.floor_ratio(Role::LabelPrimary),
             Some(crate::wcag::AA_TEXT_RATIO)
         );
         assert_eq!(
-            table.legal_floor(Role::LabelTertiary),
+            table.floor_ratio(Role::LabelTertiary),
             Some(crate::wcag::AA_UI_RATIO)
         );
         // border-strong: различимость (non-text 3:1), не текстовый пол —
         // API-контракт для даунстримов, фиксируем значением.
         assert_eq!(
-            table.legal_floor(Role::BorderStrong),
+            table.floor_ratio(Role::BorderStrong),
             Some(crate::wcag::AA_UI_RATIO)
         );
-        // No legal floor for the decorative / JND / zero contracts.
-        assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
-        assert_eq!(table.legal_floor(Role::Separator), None);
-        assert_eq!(table.legal_floor(Role::BorderNone), None);
+        // No ratio floor for the decorative / JND / zero contracts.
+        assert_eq!(table.floor_ratio(Role::LabelQuaternary), None);
+        assert_eq!(table.floor_ratio(Role::Separator), None);
+        assert_eq!(table.floor_ratio(Role::BorderNone), None);
 
         // The contract holds: every resolved anchored role clears its own legal
         // floor against the live background (modulo the solver's own quantised
@@ -4521,13 +4521,13 @@ mod tests {
             for bg_hex in ["#FFFFFF", "#1C1C1E", "#3478F6", "#7F7F7F"] {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 for (role, resolved) in resolve_set(&bg, &table, &vc) {
-                    let (Some(floor), Some(solved)) = (table.legal_floor(role), resolved.solved())
+                    let (Some(floor), Some(solved)) = (table.floor_ratio(role), resolved.solved())
                     else {
                         continue;
                     };
                     assert!(
                         solved.wcag_ratio() >= floor - 0.05,
-                        "{role:?} on {bg_hex}: wcag {} below legal floor {floor}",
+                        "{role:?} on {bg_hex}: wcag {} below ratio floor {floor}",
                         solved.wcag_ratio()
                     );
                 }
@@ -5471,7 +5471,7 @@ mod tests {
 
     #[test]
     fn decorative_roles_carry_no_wcag_override() {
-        // No decorative role (dJ' or legacy Lc) trips the WCAG legal floor — they
+        // No decorative role (dJ' or legacy Lc) trips the ratio floor — they
         // are distinguishability contracts, not readability ones.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
@@ -5692,7 +5692,7 @@ mod tests {
         let default_table = RoleTable::default();
         let custom = default_table.clone().with(
             Role::LabelPrimary,
-            RoleSpec::Anchor(TextAnchor::new(0.5, Floor::AaText)),
+            RoleSpec::Anchor(TextAnchor::new(0.5, Floor::TextRatio)),
         );
 
         // Primary changed.

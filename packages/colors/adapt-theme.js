@@ -67,7 +67,7 @@ function easeOut(t) {
 
 /** Relative luminance of `#RRGGBB` in the frozen original WCAG 2.1 (2018)
  * profile (0.03928 split, 2.4 exponent), so the strict floor-clamp agrees
- * byte-for-byte with the core's versioned `legalFloor` semantics. */
+ * byte-for-byte with the core's versioned `floorRatio` semantics. */
 function relativeLuminanceHex(hex) {
   const rgb = parseCssColor(hex) ?? [0, 0, 0, 1];
   const lin = (c) => {
@@ -168,7 +168,7 @@ export function adaptTheme(element, options) {
   const clock = options.now ?? (() => (win?.performance?.now ? win.performance.now() : Date.now()));
 
   let theme = options.theme;
-  /** @type {{ cssVar: string, key: string, lc: number, hex: string, legalFloor: number|null }[]} stable role order */
+  /** @type {{ cssVar: string, key: string, lc: number, hex: string, floorRatio: number|null }[]} stable role order */
   let roles = [];
   /** Stable Glow roles need an exact class recheck in addition to color
    * contrast rechecks. The only determinate stable state is the core-certified
@@ -371,7 +371,7 @@ export function adaptTheme(element, options) {
         key,
         lc: r.lc,
         hex: r.hex,
-        legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
+        floorRatio: typeof r.floorRatio === "number" ? r.floorRatio : null,
       }));
     stableGlows = nextStableGlows;
     fgsCache = roles.map((r) => r.hex);
@@ -601,7 +601,7 @@ export function adaptTheme(element, options) {
       const seg = easing.get(r.cssVar);
       if (!seg) continue;
       let blend = e;
-      if (strict && r.legalFloor != null) {
+      if (strict && r.floorRatio != null) {
         // Hold the floor (against the worst sample), then LATCH: the displayed
         // blend may only advance toward the destination, never retreat.
         // `floorBlend` is stateless and depends on the live (drifting) samples,
@@ -611,7 +611,7 @@ export function adaptTheme(element, options) {
         // out: the scalar blend parameter never retreats. This latch alone is
         // not a proof that the quantized colour stays above every floor; #287
         // owns that finite-path guarantee.
-        blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
+        blend = Math.max(floorBlend(seg, e, bgLums, r.floorRatio), seg.held);
         seg.held = blend;
       }
       overlay[r.cssVar] = segHex(seg, blend);
@@ -650,8 +650,8 @@ export function adaptTheme(element, options) {
         continue;
       }
       const blend =
-        strict && r.legalFloor != null
-          ? Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held)
+        strict && r.floorRatio != null
+          ? Math.max(floorBlend(seg, e, bgLums, r.floorRatio), seg.held)
           : e;
       vars[r.cssVar] = segHex(seg, blend);
     }

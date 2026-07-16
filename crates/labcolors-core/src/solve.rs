@@ -97,34 +97,36 @@ pub struct TypographicContext {
     pub weight: u16,
 }
 
-/// The WCAG 2.1 AA legal contrast floor a contract must clear.
+/// The minimum WCAG-formula contrast ratio a contract must clear.
 ///
-/// EAA / EN 301 549 mandate WCAG 2.1 level AA: a relative-luminance contrast
-/// ratio of 4.5:1 for normal text (success criterion 1.4.3) and 3:1 for
-/// user-interface components and graphical objects (1.4.11). The floor is the
-/// legal minimum *beneath* the perceptual LPC target: if the LPC solution does
-/// not clear it, [`solve`] pushes the colour until it does and flags the result
-/// via [`Solved::floor_override`], so the caller can see where law overrode
-/// perception. Decorative / just-noticeable-difference contracts (shadows,
-/// separators) carry [`None`](Floor::None) — readability law does not apply to
-/// them, and `solve` leaves them on their perceptual target.
+/// The ratio floor sits *beneath* the perceptual LPC target: if the LPC
+/// solution does not clear it, [`solve`] pushes the colour until it does and
+/// flags the result via [`Solved::floor_override`], so the caller can see
+/// where the ratio policy displaced the perceptual target. The 4.5:1 and 3:1
+/// values are historically taken from WCAG 2.x AA (SC 1.4.3 / 1.4.11); the
+/// policy enforces those NUMBERS and asserts nothing about criterion
+/// conformance or applicability. Decorative / just-noticeable-difference
+/// contracts (shadows, separators) carry [`None`](Floor::None) — no ratio
+/// floor applies, and `solve` leaves them on their perceptual target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Floor {
-    /// WCAG 2.1 AA normal text — contrast ratio ≥ 4.5:1.
-    AaText,
-    /// WCAG 2.1 AA UI components / graphical objects — contrast ratio ≥ 3:1.
-    AaUi,
-    /// No legal floor (decorative / JND contracts).
+    /// Text tier — WCAG-formula contrast ratio ≥ 4.5:1 (number historically
+    /// from WCAG 2.x AA normal text; no conformance claim).
+    TextRatio,
+    /// UI tier — WCAG-formula contrast ratio ≥ 3:1 (number historically from
+    /// WCAG 2.x AA non-text; no conformance claim).
+    UiRatio,
+    /// No ratio floor (decorative / JND contracts).
     None,
 }
 
 impl Floor {
-    /// The minimum WCAG 2.1 contrast ratio this floor enforces, if any.
+    /// The minimum WCAG-formula contrast ratio this floor enforces, if any.
     pub(crate) fn min_ratio(self) -> Option<f64> {
         match self {
-            Floor::AaText => Some(wcag::AA_TEXT_RATIO),
-            Floor::AaUi => Some(wcag::AA_UI_RATIO),
+            Floor::TextRatio => Some(wcag::AA_TEXT_RATIO),
+            Floor::UiRatio => Some(wcag::AA_UI_RATIO),
             Floor::None => Option::None,
         }
     }
@@ -140,55 +142,55 @@ impl Floor {
 /// matters. `solve` targets `floor`.
 ///
 /// Every contract also carries a WCAG 2.1 [`Floor`]: text and UI contracts get
-/// the AA legal minimum by default (4.5:1 / 3:1); range (decorative / JND)
+/// the ratio floor by default (4.5:1 / 3:1); range (decorative / JND)
 /// contracts get [`Floor::None`]. Disable or change it explicitly with
-/// [`with_conformance`](Contract::with_conformance).
+/// [`with_ratio_floor`](Contract::with_ratio_floor).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Contract {
     floor: f64,
     ceiling: f64,
     typography: Option<TypographicContext>,
-    conformance: Floor,
+    ratio_floor: Floor,
 }
 
 impl Contract {
     /// A text contract for an explicit signed target `Lc` (degenerate range).
     ///
-    /// Carries the WCAG 2.1 AA *normal-text* floor ([`Floor::AaText`], 4.5:1) by
-    /// default — disable it explicitly with [`with_conformance`](Self::with_conformance).
+    /// Carries the WCAG 2.1 AA *normal-text* floor ([`Floor::TextRatio`], 4.5:1) by
+    /// default — disable it explicitly with [`with_ratio_floor`](Self::with_ratio_floor).
     pub fn text(target_lc: f64) -> Self {
         Self {
             floor: target_lc,
             ceiling: target_lc,
             typography: None,
-            conformance: Floor::AaText,
+            ratio_floor: Floor::TextRatio,
         }
     }
 
     /// A UI-component contract for an explicit signed target `Lc` (degenerate
     /// range).
     ///
-    /// Carries the WCAG 2.1 AA *non-text* floor ([`Floor::AaUi`], 3:1) by
+    /// Carries the WCAG 2.1 AA *non-text* floor ([`Floor::UiRatio`], 3:1) by
     /// default — for icons, controls, focus rings and graphical objects.
     pub fn ui(target_lc: f64) -> Self {
         Self {
             floor: target_lc,
             ceiling: target_lc,
             typography: None,
-            conformance: Floor::AaUi,
+            ratio_floor: Floor::UiRatio,
         }
     }
 
     /// A range contract `[floor, ceiling]` of signed `Lc`. `solve` targets `floor`.
     ///
     /// Reserved for decorative / just-noticeable-difference contracts, so it
-    /// carries [`Floor::None`]: no legal readability floor applies.
+    /// carries [`Floor::None`]: no ratio floor applies.
     pub fn range(floor: f64, ceiling: f64) -> Self {
         Self {
             floor,
             ceiling,
             typography: None,
-            conformance: Floor::None,
+            ratio_floor: Floor::None,
         }
     }
 
@@ -198,12 +200,12 @@ impl Contract {
         self
     }
 
-    /// Override the WCAG 2.1 conformance [`Floor`]. The default depends on the
-    /// constructor ([`text`](Self::text) → AA text, [`ui`](Self::ui) → AA UI,
-    /// [`range`](Self::range) → none); pass [`Floor::None`] to disable the legal
-    /// floor explicitly.
-    pub fn with_conformance(mut self, conformance: Floor) -> Self {
-        self.conformance = conformance;
+    /// Override the contract's ratio [`Floor`]. The default depends on the
+    /// constructor ([`text`](Self::text) → [`Floor::TextRatio`],
+    /// [`ui`](Self::ui) → [`Floor::UiRatio`], [`range`](Self::range) → none);
+    /// pass [`Floor::None`] to disable the ratio floor explicitly.
+    pub fn with_ratio_floor(mut self, ratio_floor: Floor) -> Self {
+        self.ratio_floor = ratio_floor;
         self
     }
 
@@ -223,8 +225,8 @@ impl Contract {
     }
 
     /// The WCAG 2.1 conformance floor this contract enforces.
-    pub fn conformance(self) -> Floor {
-        self.conformance
+    pub fn ratio_floor(self) -> Floor {
+        self.ratio_floor
     }
 }
 
@@ -263,7 +265,7 @@ impl BgInput {
     /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
     /// the background **only** through two scalars derived here from `bg` — the
     /// WCAG 2.1 relative luminance `Y_wcag` of the quantised display colour
-    /// (readability contract + polarity + the legal floor: один домен, одно
+    /// (readability contract + polarity + the ratio floor: один домен, одно
     /// число) and the CAM16-UCS lightness `J'_bg` (needed only by the dJ'
     /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — покинул ось
     /// читаемости вместе с ADR-0003 и живёт только на яркостной оси
@@ -337,9 +339,10 @@ impl LumaInterval {
 
 /// A solved foreground colour and the two contrasts it actually achieves.
 ///
-/// The perceptual [`lc`](Solved::lc) (signed LPC) and the legal
-/// [`wcag_ratio`](Solved::wcag_ratio) (symmetric WCAG 2.1) are reported as
-/// separate numbers — they measure different things and are never conflated.
+/// The perceptual [`lc`](Solved::lc) (signed LPC) and the
+/// [`wcag_ratio`](Solved::wcag_ratio) (symmetric WCAG-formula measurement)
+/// are reported as separate numbers — they measure different things and are
+/// never conflated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Solved {
     color: LcsColor,
@@ -367,19 +370,21 @@ impl Solved {
         self.lc
     }
 
-    /// The WCAG 2.1 relative-luminance contrast ratio (1–21) of the resolved
-    /// colour against the background, measured on the quantised hex. For a
-    /// text/UI contract this is guaranteed to meet the contract's [`Floor`]
-    /// (≥ 4.5 or ≥ 3.0); for a [`Floor::None`] contract it is reported for
-    /// transparency but not enforced.
+    /// The WCAG 2.x relative-luminance contrast ratio (1–21) of the resolved
+    /// colour against the background, measured on the quantised hex. The name
+    /// identifies the FORMULA, not a conformance claim. For a text/UI contract
+    /// this is guaranteed to meet the contract's [`Floor`] (≥ 4.5 or ≥ 3.0);
+    /// for a [`Floor::None`] contract it is reported for transparency but not
+    /// enforced.
     pub fn wcag_ratio(&self) -> f64 {
         self.wcag_ratio
     }
 
-    /// `true` when the WCAG legal floor overrode the perceptual target: the LPC
-    /// solution did not clear the floor, so the colour was pushed (darker for
-    /// dark-on-light, lighter for light-on-dark) until it did. Lets the caller
-    /// surface where the law won over perception.
+    /// `true` when the ratio floor overrode the perceptual target: the LPC
+    /// solution did not clear the contract's [`Floor`], so the colour was
+    /// pushed (darker for dark-on-light, lighter for light-on-dark) until it
+    /// did. Lets the caller surface where the ratio policy displaced the
+    /// perceptual target.
     pub fn floor_override(&self) -> bool {
         self.floor_override
     }
@@ -397,18 +402,22 @@ pub enum Unreachable {
     /// The background cannot supply the target even at the luminance extreme
     /// (pure black for dark-on-light, pure white for light-on-dark).
     ExceedsRange { target: f64, max_achievable: f64 },
-    /// The target falls in an 8-bit quantisation gap: the analytic foreground is
-    /// reachable in principle, but every hex colour the solver can emit near it
-    /// lands either short of the target or inside the low-contrast dead zone, so
-    /// no on-grid colour reproduces it within the ±1 Lc budget. Distinct from
+    /// The target falls in an 8-bit quantisation gap: the analytic foreground
+    /// is reachable in principle, but no candidate the solver's LOCAL search
+    /// examined (the analytic seed plus a bounded walk of adjacent hex steps)
+    /// lands within its acceptance budget. This is a statement about the
+    /// examined candidates only — not about every hex colour. Distinct from
     /// [`Self::ExceedsRange`] (where the *background* is the limit): here the
-    /// background can supply the target, the discrete sRGB grid cannot.
-    /// `nearest` is the closest |Lc| an adjacent hex step actually achieves.
-    QuantizationGap { target: f64, nearest: f64 },
-    /// The WCAG legal floor cannot be met on this background even at the
-    /// achromatic extreme (pure black for dark-on-light, pure white for
-    /// light-on-dark). `max_ratio` is the most contrast this background can
+    /// background can supply the target, the examined slice of the discrete
+    /// sRGB grid did not. `closest_examined` is the closest |Lc| among the
+    /// candidates the search actually evaluated.
+    QuantizationGap { target: f64, closest_examined: f64 },
+    /// The contract's ratio floor cannot be met on this background within the
+    /// contract's DECLARED POLARITY, even at that polarity's achromatic
+    /// extreme (pure black for dark-on-light, pure white for light-on-dark).
+    /// `max_ratio` is the most WCAG-formula contrast this background can
     /// supply in that polarity; `floor` is the ratio the contract required.
+    /// Says nothing about the opposite polarity or any normative claim.
     FloorUnreachable { floor: f64, max_ratio: f64 },
     /// The target's polarity disagrees with the background's luminance, e.g. a
     /// dark-on-light target against a background that is already dark.
@@ -442,13 +451,16 @@ impl core::fmt::Display for Unreachable {
                 f,
                 "target Lc {target:.2} exceeds the most this background can supply ({max_achievable:.2})"
             ),
-            Self::QuantizationGap { target, nearest } => write!(
+            Self::QuantizationGap {
+                target,
+                closest_examined,
+            } => write!(
                 f,
-                "target Lc {target:.2} falls in an 8-bit quantisation gap; the nearest on-grid colour reaches only {nearest:.2}"
+                "target Lc {target:.2} falls in an 8-bit quantisation gap; the closest candidate the local search examined reaches {closest_examined:.2}"
             ),
             Self::FloorUnreachable { floor, max_ratio } => write!(
                 f,
-                "WCAG floor {floor:.1}:1 is unreachable on this background (max {max_ratio:.2}:1)"
+                "ratio floor {floor:.1}:1 is unreachable on this background in the contract's polarity (max {max_ratio:.2}:1)"
             ),
             Self::PolarityMismatch { target } => write!(
                 f,
@@ -600,21 +612,21 @@ pub(crate) fn solve_in(
     // that reproduces the contract's target against the governing endpoint.
     let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy)?;
 
-    // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
+    // Stage 2 — ratio floor. Text/UI contracts carry a WCAG-formula ratio floor; if the
     // perceptual solution falls short of it, push the colour until it clears the
     // floor and flag the override. Decorative ([`Floor::None`]) contracts skip
     // this entirely and keep their perceptual target. The resolved Oklab
     // lightness (not just the colour) is returned so the quantisation-gap search
     // below can step to neighbouring hex grid points from it.
     let bg_disp = bg.governing_display(target);
-    let (l_final, floor_override) = match contract.conformance().min_ratio() {
+    let (l_final, floor_override) = match contract.ratio_floor().min_ratio() {
         Some(floor_ratio) => apply_floor(l_lpc, floor_ratio, target, hue, chroma_policy, bg_disp)?,
         Option::None => (l_lpc, false),
     };
 
     // Stage 3 — quantise, measure, verify. Build the colour at the resolved
     // lightness, emit its hex, and confirm the dual gate (perceptual floor at
-    // both interval ends, plus the legal WCAG floor for text/UI) still holds on
+    // both interval ends, plus the ratio floor for text/UI) still holds on
     // the *quantised* colour. If it does not, the analytic solution may have
     // fallen into an 8-bit quantisation gap — the emitted hex lands inside the
     // low-contrast dead zone even though the background can supply the target —
@@ -638,16 +650,16 @@ pub(crate) fn solve_in(
             }
         });
         // The walk only moves toward the achromatic extreme, which raises (never
-        // lowers) WCAG contrast, but re-verify the legal floor explicitly rather
+        // lowers) WCAG-formula contrast, but re-verify the ratio floor explicitly rather
         // than lean on an unproven monotonicity assumption.
-        let legal_ok = contract
-            .conformance()
+        let ratio_ok = contract
+            .ratio_floor()
             .min_ratio()
             .is_none_or(|floor_ratio| solved.wcag_ratio() + 1e-9 >= floor_ratio);
         #[cfg(test)]
         probe_log::record(solved.hex(), solved.lc());
         Ok(Candidate {
-            passes: perceptual_ok && legal_ok,
+            passes: perceptual_ok && ratio_ok,
             lc: solved.lc(),
             solved,
         })
@@ -678,7 +690,7 @@ const QUANT_BUDGET: f64 = 1.0;
 /// One on-grid candidate the quantisation-gap search evaluates: the solved
 /// colour, the perceptual `Lc` it actually achieves on the quantised hex, and
 /// whether it clears the dual gate (perceptual floor at both interval ends +
-/// legal WCAG floor). `passes` is the *lower*-bound floor check the primary
+/// ratio floor). `passes` is the *lower*-bound floor check the primary
 /// solution uses; the neighbour walk additionally enforces the upper bound so a
 /// step can never overshoot the `±1` budget.
 struct Candidate {
@@ -772,7 +784,7 @@ fn solve_quantization_neighbor(
 
     Err(Unreachable::QuantizationGap {
         target,
-        nearest: nearest_lc.abs(),
+        closest_examined: nearest_lc.abs(),
     })
 }
 
@@ -841,9 +853,11 @@ const DJ_NEIGHBOR_STEPS: u32 = 2;
 /// [`DJ_NEIGHBOR_STEPS`] distinct hex grid points. If none lands in budget — or
 /// the target J' falls off the end of the achievable axis (e.g. a positive dJ'
 /// requested above a near-white background) — the contract **деградирует к
-/// ближайшему достижимому** (ADR-0002, закон 2): возвращается цвет с
-/// минимальной ошибкой `||ΔJ'|−цель|` среди осмотренных грид-точек, помеченный
-/// `degraded: true`, с честно замеренным `achieved_dj`. Голый отказ прежней
+/// ближайшему ИЗУЧЕННОМУ** (ADR-0002, закон 2): возвращается цвет с
+/// минимальной ошибкой `||ΔJ'|−цель|` среди осмотренных этим локальным
+/// однонаправленным walk'ом грид-точек (НЕ глобальный минимум по оси — walk
+/// смотрит только от фона), помеченный `degraded: true`, с честно замеренным
+/// `achieved_dj`. Голый отказ прежней
 /// версии (`DjUnreachable`) наказывал владельца контракта ошибкой за
 /// физическую стену оси — вместо честного результата (политика Figma-коэрсии:
 /// rgb(999) → 255, не exception).
@@ -956,7 +970,8 @@ pub(crate) fn solve_dj(
     }
 
     // Закон 2 ADR-0002: цель за стеной оси / в квантовой дыре — ближайший
-    // достижимый цвет с флагом, не ошибка.
+    // ИЗУЧЕННЫЙ walk'ом цвет с флагом, не ошибка (локальный минимум, не
+    // глобальный: walk однонаправлен от фона).
     Ok(DjSolved {
         achieved_dj: best.achieved_dj,
         solved: best.solved,
@@ -974,8 +989,8 @@ struct DjCandidate {
 }
 
 /// Результат dJ'-солва: решённый цвет, честно замеренный `|ΔJ'|` на отданном
-/// hex и флаг деградации (закон 2 ADR-0002 — цель недостижима, отдан
-/// ближайший достижимый).
+/// hex и флаг деградации (закон 2 ADR-0002 — цель не взята в бюджете, отдан
+/// ближайший из ИЗУЧЕННЫХ локальным поиском).
 pub(crate) struct DjSolved {
     pub(crate) solved: Solved,
     /// Честный замер |ΔJ'| на отданном hex — доносится до
@@ -984,7 +999,7 @@ pub(crate) struct DjSolved {
     pub(crate) degraded: bool,
 }
 
-/// Stage 2: enforce the WCAG legal floor on the quantised colour.
+/// Stage 2: enforce the contract's ratio floor on the quantised colour.
 ///
 /// If the perceptual solution already clears `floor_ratio`, perception governs
 /// and the colour is returned unchanged (no override). Otherwise the lightness
@@ -1247,7 +1262,7 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
 /// Quantise the ideal colour to hex and report both contrasts it actually
 /// achieves — what the caller gets, not the pre-quantisation ideal. The
 /// perceptual `lc` is measured in `Ys` space (WCAG relative luminance of the
-/// quantised display colour — ADR-0003) against `y_bg`; the legal `wcag_ratio`
+/// quantised display colour — ADR-0003) against `y_bg`; the WCAG-formula `wcag_ratio`
 /// on the same display colour against `bg_disp`. Обе метрики читают ОДНУ
 /// люминансу — домен-мисматч оси читаемости закрыт конструкцией. The CAM16
 /// forward remains solely for the returned [`LcsColor`] appearance correlates.
@@ -1388,7 +1403,7 @@ mod tests {
             },
             Unreachable::QuantizationGap {
                 target: 1.0,
-                nearest: 0.9,
+                closest_examined: 0.9,
             },
             Unreachable::FloorUnreachable {
                 floor: 4.5,
@@ -1548,7 +1563,7 @@ mod tests {
         // the WCAG floor (on by default for text) is tested separately.
         let solved = solve(
             bg,
-            Contract::text(target).with_conformance(Floor::None),
+            Contract::text(target).with_ratio_floor(Floor::None),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
             vc,
@@ -1663,7 +1678,7 @@ mod tests {
     fn default_wcag_floor_preserves_polarity_sign() {
         // The property grid above proves sign preservation under `Floor::None`
         // (pure perceptual inversion). The PRODUCTION default for text is the AA
-        // WCAG floor, which may RAISE a too-weak |Lc| to the legal minimum — a
+        // ratio floor, which may RAISE a too-weak |Lc| to the floor minimum — a
         // separate code path (`apply_floor`). This pins the safety invariant on
         // THAT path: the floor override may strengthen contrast but must never
         // flip the foreground to the wrong side of the background. Weak targets
@@ -1685,7 +1700,7 @@ mod tests {
                     for target in [magnitude, -magnitude] {
                         // Fresh per solve: `solve` consumes the `BgInput`.
                         let bg = BgInput::solid(bg_hex).unwrap();
-                        // Default constructor → Floor::AaText (no with_conformance).
+                        // Default constructor → Floor::TextRatio (no with_ratio_floor).
                         let solved = match solve(
                             bg,
                             Contract::text(target),
@@ -1719,7 +1734,7 @@ mod tests {
                             solved.hex()
                         );
                         // Override detection: a weak target (well under the AA text
-                        // floor — 15/30/45 Lc all sit below the ~4.5:1 legal minimum,
+                        // floor — 15/30/45 Lc all sit below the ~4.5:1 floor minimum,
                         // wcag::AA_TEXT_RATIO) that the floor lifted past its request,
                         // same sign. The `magnitude < 60` gate excludes already-strong
                         // targets (which the floor leaves alone), so a large-but-not-
@@ -1876,7 +1891,7 @@ mod tests {
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let from_text = solve(
             bg.clone(),
-            Contract::text(60.0).with_conformance(Floor::None),
+            Contract::text(60.0).with_ratio_floor(Floor::None),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
             &vc,
@@ -1934,7 +1949,7 @@ mod tests {
         let target = 45.0;
         let solved = solve(
             bg,
-            Contract::text(target).with_conformance(Floor::None),
+            Contract::text(target).with_ratio_floor(Floor::None),
             Hue::deg(264.0), // Oklab blue
             ChromaPolicy::Relative(0.8),
             &vc,
@@ -2025,7 +2040,7 @@ mod tests {
 
     #[test]
     fn floor_overrides_a_weak_perceptual_target() {
-        // Conflict case: Lc 15 text on white is far below 4.5:1 — the law wins,
+        // Conflict case: Lc 15 text on white is far below 4.5:1 — the ratio floor wins,
         // the colour is pushed darker and the override is flagged.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
@@ -2426,8 +2441,10 @@ mod tests {
 
             let describe = |r: &Result<(Solved, f64), Unreachable>| match r {
                 Ok((s, m)) => format!("Ok {} Lc {m:+.3}", s.hex()),
-                Err(Unreachable::QuantizationGap { nearest, .. }) => {
-                    format!("Gap (nearest {nearest:.3})")
+                Err(Unreachable::QuantizationGap {
+                    closest_examined, ..
+                }) => {
+                    format!("Gap (closest examined {closest_examined:.3})")
                 }
                 Err(Unreachable::BelowContrastFloor { .. }) => "BelowFloor".to_string(),
                 Err(e) => format!("ERR {e:?}"),
@@ -2452,13 +2469,13 @@ mod tests {
                     }
                     Err(Unreachable::QuantizationGap {
                         target: et,
-                        nearest,
+                        closest_examined,
                     }) => {
                         gapped += 1;
                         assert!((et - target).abs() < 1e-9, "echoed target {et} vs {target}");
                         assert!(
-                            nearest.is_finite() && *nearest >= 0.0,
-                            "gap near-miss must be a real magnitude, got {nearest}"
+                            closest_examined.is_finite() && *closest_examined >= 0.0,
+                            "gap near-miss must be a real magnitude, got {closest_examined}"
                         );
                     }
                     // Honest analytic dead zone at |Lc| <= 7.3 — a different
@@ -2525,7 +2542,7 @@ mod tests {
         // contract (the scan above exercises the live path).
         let err = Unreachable::QuantizationGap {
             target: 7.45,
-            nearest: 7.85,
+            closest_examined: 7.85,
         };
         let msg = err.to_string();
         assert!(msg.contains("quantisation gap"), "message: {msg}");
@@ -2870,11 +2887,13 @@ mod tests {
                     // Аналитический отказ ДО квантования: ноль on-grid кандидатов —
                     // честно (сетка не при чём, мёртвая зона непрерывного ядра).
                     Err(Unreachable::BelowContrastFloor { .. }) => {}
-                    Err(Unreachable::QuantizationGap { nearest, .. }) => assert!(
+                    Err(Unreachable::QuantizationGap {
+                        closest_examined, ..
+                    }) => assert!(
                         examined
                             .iter()
-                            .any(|(_, m)| (m.abs() - nearest).abs() < 1e-12),
-                        "{bg_hex} {target}: reported nearest is not an examined candidate"
+                            .any(|(_, m)| (m.abs() - closest_examined).abs() < 1e-12),
+                        "{bg_hex} {target}: the report is not an examined candidate"
                     ),
                     Err(other) => panic!("{bg_hex} {target}: unexpected {other:?}"),
                 }
@@ -2948,12 +2967,15 @@ mod tests {
 
         let start_lc = law(&distinct[0].1);
         match solve_quantization_neighbor(l_start, target, hue, cp, start_lc, evaluate) {
-            Err(Unreachable::QuantizationGap { target: t, nearest }) => {
+            Err(Unreachable::QuantizationGap {
+                target: t,
+                closest_examined,
+            }) => {
                 assert_eq!(t, target);
-                // `nearest` — ближайший ИЗУЧЕННЫЙ (сид, 8.8)…
+                // `closest_examined` — ближайший ИЗУЧЕННЫЙ (сид, 8.8)…
                 assert!(
-                    (nearest - 8.8).abs() < 1e-12,
-                    "nearest {nearest} must be the closest EXAMINED candidate (8.8)"
+                    (closest_examined - 8.8).abs() < 1e-12,
+                    "closest_examined {closest_examined} must be the seed (8.8)"
                 );
                 // …а первый же узел за бюджетом walk'а проходит контракт в бюджете:
                 // «no on-grid colour» — ложь, правда лишь «в локальном бюджете».
@@ -2963,8 +2985,8 @@ mod tests {
                     "the 3rd distinct step must be a passing in-budget candidate"
                 );
                 assert!(
-                    beyond.error(target) < (nearest - target).abs(),
-                    "the unexamined candidate is strictly closer than the reported nearest"
+                    beyond.error(target) < (closest_examined - target).abs(),
+                    "the unexamined candidate is strictly closer than the report"
                 );
             }
             other => panic!("expected QuantizationGap, got {other:?}"),

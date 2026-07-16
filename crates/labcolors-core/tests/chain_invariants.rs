@@ -409,7 +409,7 @@ fn achromatic_extreme_brand_never_panics() {
                     "brand-label".to_string(),
                     RoleRecipe::TextAnchor {
                         fraction: 0.9,
-                        floor: Floor::AaText,
+                        floor: Floor::TextRatio,
                         hue: Some(LadderSource::Brand),
                     },
                 ),

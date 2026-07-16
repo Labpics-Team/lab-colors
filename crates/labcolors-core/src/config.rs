@@ -236,7 +236,7 @@ pub enum ConfigError {
     EmptyContract,
     /// `material`-рецепту передан `floor: zero` — у материала нет цели для вывода
     /// альфы без пола читаемости. Отказ на загрузке (а не молчаливая невидимая
-    /// роль): материал обязан нести `aa-text` или `aa-ui`.
+    /// роль): материал обязан нести `text-ratio` или `ui-ratio`.
     MaterialFloorRequired { role: String },
 }
 
@@ -303,7 +303,7 @@ impl std::fmt::Display for ConfigError {
             ConfigError::EmptyContract => write!(f, "контракт пуст: передайте roles"),
             ConfigError::MaterialFloorRequired { role } => write!(
                 f,
-                "material-роль `{role}` требует пол читаемости (aa-text/aa-ui), получен zero-floor"
+                "material-роль `{role}` требует пол читаемости (text-ratio/ui-ratio), получен zero-floor"
             ),
         }
     }
@@ -515,11 +515,11 @@ pub enum RoleRecipe {
         source: LadderSource,
         /// Позиция меню (несёт пер-темную пару альф из стаба labui).
         position: LadderPosition,
-        /// Опциональный юр. пол UI (ратификация ch5c, M2). `None` — прежний путь
+        /// Опциональный ratio-пол UI (ратификация ch5c, M2). `None` — прежний путь
         /// (тинт эмитится как есть). `Some(floor)` — только для СОЛИДНОЙ позиции
         /// (`α=1`, напр. `BorderStrong`): семейный солид обязан держать пол
         /// (3:1); если не держит — минимальный легальный сдвиг по кривой семьи с
-        /// честным флагом. Аддитивен в JSON — `{..., floor?: "aa-ui"}`.
+        /// честным флагом. Аддитивен в JSON — `{..., floor?: "ui-ratio"}`.
         floor: Option<Floor>,
     },
     /// Свечение (labui ADR-0002 §5): screen-слои цвета источника, интенсивность
@@ -596,7 +596,7 @@ pub enum RoleRecipe {
         tone_light: f64,
         /// Целевой |ΔJ'| тона-базы под тёмное окружение (`> 0`).
         tone_dark: f64,
-        /// WCAG-пол читаемости, который держит выведенная α (`AaText`/`AaUi`;
+        /// WCAG-пол читаемости, который держит выведенная α (`TextRatio`/`UiRatio`;
         /// `None` невалиден — валидатор ловит [`ConfigError::MaterialFloorRequired`]).
         floor: Floor,
     },

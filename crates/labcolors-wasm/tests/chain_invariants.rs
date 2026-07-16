@@ -145,13 +145,13 @@ fn fingerprint_is_invariant_to_json_key_order() {
       "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
       "themes": [{"name": "light", "preset": "srgb"}],
       "roles": [
-        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "text-ratio"}}
       ]
     }"##;
     // Порядок B: те же ключи/значения, обратный top-level порядок.
     let order_b = r##"{
       "roles": [
-        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "text-ratio"}}
       ],
       "themes": [{"name": "light", "preset": "srgb"}],
       "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},

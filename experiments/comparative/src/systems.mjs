@@ -33,7 +33,7 @@ const FLAG_RE = /coerced|degraded|compressed|unreachable|clamp/i;
 /**
  * S1: сид патчит все четыре brand-якоря конфига labui; лестница — compositeHex
  * роли fill-accent (alpha=1.0, солид бренда) на каждом фоне свипа.
- * native: все солид-роли с legalFloor на каждом фоне (для M1-B).
+ * native: все солид-роли с floorRatio на каждом фоне (для M1-B).
  */
 export function buildS1(seedHex) {
   const cfg = structuredClone(BASE_CONFIG);
@@ -52,12 +52,12 @@ export function buildS1(seedHex) {
       });
       const roles = [];
       for (const [key, r] of Object.entries(t.roles)) {
-        if (r.kind !== "color" || r.legalFloor == null) continue;
+        if (r.kind !== "color" || r.floorRatio == null) continue;
         const flags = Object.entries(r)
           .filter(([k, v]) => v === true && FLAG_RE.test(k))
           .map(([k]) => k)
           .sort();
-        roles.push({ key, hex: r.hex.toUpperCase(), floor: r.legalFloor, flags });
+        roles.push({ key, hex: r.hex.toUpperCase(), floor: r.floorRatio, flags });
       }
       roles.sort((a, b) => (a.key < b.key ? -1 : 1));
       native.push({ bgHex: bg.hex, roles });

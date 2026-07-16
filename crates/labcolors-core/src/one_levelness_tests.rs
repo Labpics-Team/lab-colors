@@ -10,7 +10,7 @@
 //! для каждой темы × уровня × семьи
 //!   | |Lc(label-<family>-L)| − |Lc(label-neutral-L)| | ≤ TOL
 //! ЛИБО роль честно несёт флаг деградации (`compressed` / `hue_vanished`) — тогда
-//! контракт занят ближайшим достижимым, а не молча провален. Плюс юр. полы уровня
+//! контракт занят ближайшим изученным, а не молча провален. Плюс ratio-полы уровня
 //! (AA text 4.5 / 4.5 / AA UI 3.0 / —) держатся у цветного лейбла как у нейтрали
 //! (полы НЕТОРГУЕМЫ).
 //!
@@ -27,7 +27,7 @@ const TOL: f64 = 5.0;
 /// Семьи, чьи лейблы обязаны быть одноуровневы с нейтралью.
 const FAMILIES: &[&str] = &["brand", "danger", "warning", "success", "info"];
 
-/// (уровень, имя нейтральной роли, юр. пол WCAG или `None`).
+/// (уровень, имя нейтральной роли, ratio-пол или `None`).
 const LEVELS: &[(&str, &str, Option<f64>)] = &[
     ("primary", "label-primary", Some(4.5)),
     ("secondary", "label-secondary", Some(4.5)),
@@ -76,7 +76,7 @@ fn role<'a>(set: &'a [(String, Resolved)], name: &str) -> &'a Resolved {
 
 /// WCAG-отношение контраст-исхода: солид (Color) — против фона; полупрозрачный
 /// (Translucent, напр. ladder-роль в RED-proof) — его КОМПОЗИТ против фона. Так
-/// проверка юр. пола применима к обоим рецептам, а не только к ратифицированному.
+/// проверка ratio-пола применима к обоим рецептам, а не только к ратифицированному.
 fn role_wcag(res: &Resolved) -> Option<f64> {
     if let Some(s) = res.solved() {
         Some(s.wcag_ratio())
@@ -117,7 +117,7 @@ fn one_levelness_violations(table: &NamedRoleTable) -> Vec<String> {
                     });
                     if wcag + 1e-9 < *min_ratio {
                         out.push(format!(
-                            "{}/{fam_role_name}: WCAG {wcag:.2} < юр. пол {min_ratio} — \
+                            "{}/{fam_role_name}: WCAG {wcag:.2} < ratio-пол {min_ratio} — \
                              пол уровня пробит",
                             theme.name
                         ));
@@ -131,7 +131,7 @@ fn one_levelness_violations(table: &NamedRoleTable) -> Vec<String> {
 
 /// GREEN: на ратифицированной фикстуре labui гейт одноуровневости держится —
 /// каждый цветной лейбл несёт контракт своего уровня в оттенке семьи (Δ ≤ TOL)
-/// или честно флагирован, и юр. полы уровней стоят.
+/// или честно флагирован, и ratio-полы уровней стоят.
 #[test]
 fn one_levelness_holds_on_labui_reference() {
     let table = labui_reference()

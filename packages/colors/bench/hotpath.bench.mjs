@@ -94,7 +94,7 @@ function makeStubEngine() {
           cssVar,
           lc: 60,
           hex: toneHex(tone + i * 9),
-          legalFloor: i % 3 === 0 ? 3 : null,
+          floorRatio: i % 3 === 0 ? 3 : null,
         };
       }
       for (let i = 0; i < TRANSLUCENT_COUNT; i++) {

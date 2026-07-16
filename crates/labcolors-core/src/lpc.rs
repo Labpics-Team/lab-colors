@@ -513,7 +513,7 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 /// # Argument domain
 ///
 /// `fg`/`bg` are **display** (gamma-encoded) sRGB triples in `[0, 1]` — the same
-/// domain [`crate::wcag::relative_luminance`] is defined on and the legal WCAG
+/// domain [`crate::wcag::relative_luminance`] is defined on and the WCAG-formula
 /// floor is measured in. Callers pass already-decoded colours (no hex parse, no
 /// `unwrap_or` fallback — ADR-0002 law 3). `Ys` is display-referred, so this
 /// contrast is viewing-condition invariant by construction: the dark-theme
@@ -648,7 +648,7 @@ mod tests {
         // Black and white are the luminance endpoints (Ys = 0/1 == Y_hk = 0/1),
         // so the two domains must agree there bit-for-bit: variant A moves only
         // the chromatic interior, never the achromatic endpoints. The canonical
-        // black-on-white number (≈106.04) is preserved, so the WCAG legal floor
+        // black-on-white number (≈106.04) is preserved, so the WCAG-ratio floor
         // and the endpoint anchors the golden grid locks are untouched.
         let enc = |hex: &str| crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("valid hex");
         let bw_ys = lpc_readability_ys(enc("#000000"), enc("#FFFFFF"));

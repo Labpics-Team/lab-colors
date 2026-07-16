@@ -177,11 +177,11 @@ async function consume(clientConfigJson: string): Promise<void> {
     const hex: string = primary.hex;
     const lc: number = primary.lc;
     const wcag: number = primary.wcagRatio;
-    const legalFloor: number | null = primary.legalFloor;
+    const floorRatio: number | null = primary.floorRatio;
     void hex;
     void lc;
     void wcag;
-    void legalFloor;
+    void floorRatio;
   } else if (primary.kind === "unreachable") {
     const code: string = primary.code;
     void code;

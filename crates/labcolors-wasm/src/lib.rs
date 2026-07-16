@@ -54,9 +54,9 @@ export interface SolvedColor {
   readonly css: string;
   /** Signed perceptual contrast (Lc) against the background. */
   readonly lc: number;
-  /** WCAG 2.1 ratio (1–21) against the background. */
+  /** WCAG-formula ratio (1–21) against the background; names the formula, not a conformance claim. */
   readonly wcagRatio: number;
-  /** The legal floor squeezed this role onto the smallest step below its senior. */
+  /** The ratio floor squeezed this role onto the smallest step below its senior. */
   readonly compressed: boolean;
   /**
    * `true` when a coloured family label (M1) lost perceptible colour on its
@@ -69,15 +69,16 @@ export interface SolvedColor {
   readonly hueVanished: boolean;
   /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
   readonly achievedDj: number | null;
-  /** The WCAG floor overrode the perceptual target. */
+  /** The contract's ratio floor overrode the perceptual target. */
   readonly floorOverride: boolean;
   /**
-   * The minimum WCAG ratio this role is legally clamped to (4.5 for AA text,
-   * 3.0 for AA UI), or `null` for decorative / zero roles. A property of
-   * the role's contract, not of this solve: a runtime easing between themes
-   * uses it to hold the floor every frame of the transition.
+   * The minimum WCAG-formula ratio this role's contract is clamped to (4.5
+   * for the text tier, 3.0 for the UI tier — numbers historically from WCAG
+   * 2.x AA; no conformance claim), or `null` for decorative / zero roles. A
+   * property of the role's contract, not of this solve: a runtime easing
+   * between themes uses it to hold the floor every frame of the transition.
    */
-  readonly legalFloor: number | null;
+  readonly floorRatio: number | null;
 }
 
 /** The explicit zero token: no colour here, by design (not a failure). */
@@ -390,7 +391,7 @@ export type RoleRecipe =
   | {
       kind: "text-anchor";
       fraction: number;
-      floor: "aa-text" | "aa-ui" | "none";
+      floor: "text-ratio" | "ui-ratio" | "none";
       hue?: LadderSource;
     }
   | { kind: "dj-anchor"; light: number; dark: number }
@@ -399,7 +400,7 @@ export type RoleRecipe =
       kind: "ladder";
       source: LadderSource;
       position: LadderPositionV1;
-      floor?: "aa-text" | "aa-ui" | "none";
+      floor?: "text-ratio" | "ui-ratio" | "none";
     }
   | {
       kind: "glow";
@@ -408,9 +409,9 @@ export type RoleRecipe =
       decision_profile: GlowDecisionProfileV1;
     }
   | { kind: "pair-fill"; source: LadderSource }
-  | { kind: "pair-label"; source: LadderSource; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
+  | { kind: "pair-label"; source: LadderSource; fraction: number; floor: "text-ratio" | "ui-ratio" | "none" }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
-  | { kind: "material"; source: LadderSource; tone_light: number; tone_dark: number; floor: "aa-text" | "aa-ui" }
+  | { kind: "material"; source: LadderSource; tone_light: number; tone_dark: number; floor: "text-ratio" | "ui-ratio" }
   | { kind: "zero" };
 
 /** Полный конфиг дизайн-системы клиента — вход loadConfig (JSON.stringify(config)). */
@@ -823,7 +824,7 @@ mod native_contract_tests {
         );
         assert_eq!(declared_set, core_set, "TS ladder menu must equal core ALL");
         assert!(types.contains("hue?: LadderSource"));
-        assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\" | \"none\""));
+        assert!(types.contains("floor?: \"text-ratio\" | \"ui-ratio\" | \"none\""));
         assert!(types.contains("readonly roles: ReadonlyArray"));
     }
 

@@ -81,12 +81,18 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         // Labels.
         // Доли — Ys-перенос Figma-якорей (генезис Y_hk: 102.6/66.5/48.9/29.3),
         // инвариант переноса — цвет: см. semantic.rs «Доли текстовой иерархии».
-        ("label-primary".to_string(), text(0.97335917, Floor::AaText)),
+        (
+            "label-primary".to_string(),
+            text(0.97335917, Floor::TextRatio),
+        ),
         (
             "label-secondary".to_string(),
-            text(0.64359014, Floor::AaText),
+            text(0.64359014, Floor::TextRatio),
         ),
-        ("label-tertiary".to_string(), text(0.47572199, Floor::AaUi)),
+        (
+            "label-tertiary".to_string(),
+            text(0.47572199, Floor::UiRatio),
+        ),
         (
             "label-quaternary".to_string(),
             text(0.29335999, Floor::None),
@@ -101,7 +107,10 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         // границ контролов) вместо текстового 4.5:1 — бордер не обязан читаться.
         // base/soft — лестница от нейтрали: полупрозрачный mid-тинт ложится на
         // ЛЮБУЮ поверхность (композитит браузер), пер-темные пары альф — данные.
-        ("border-strong".to_string(), text(0.97335917, Floor::AaUi)),
+        (
+            "border-strong".to_string(),
+            text(0.97335917, Floor::UiRatio),
+        ),
         (
             "border-base".to_string(),
             neutral_pos(NeutralPick::Mid, LadderPosition::NeutralBorderBase),
@@ -162,7 +171,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // соответствующего fill-*-primary. Все альфы — из меню LadderPosition (Figma).
     // Цветной лейбл (ратификация ch5c, M1): доля/пол КАЖДОГО уровня = нейтральный
     // контракт лейбла (0.97335917/0.64359014/0.47572199/0.29335999,
-    // AaText/AaText/AaUi/None) —
+    // TextRatio/TextRatio/UiRatio/None) —
     // одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ; оттенок = источник семьи
     // (чистый цвет, светлота выводится контрактом на кривой семьи). Заменяет
     // прежнюю α-рампу @72/@52/@32 поверх тинта (40/40 нарушений одноуровневости,
@@ -182,15 +191,15 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         |prefix: &str, source: LadderSource, mk: &dyn Fn(LadderPosition) -> RoleRecipe| {
             use LadderPosition::*;
             vec![
-                hued_label(prefix, "primary", 0.97335917, Floor::AaText, &source),
-                hued_label(prefix, "secondary", 0.64359014, Floor::AaText, &source),
-                hued_label(prefix, "tertiary", 0.47572199, Floor::AaUi, &source),
+                hued_label(prefix, "primary", 0.97335917, Floor::TextRatio, &source),
+                hued_label(prefix, "secondary", 0.64359014, Floor::TextRatio, &source),
+                hued_label(prefix, "tertiary", 0.47572199, Floor::UiRatio, &source),
                 hued_label(prefix, "quaternary", 0.29335999, Floor::None, &source),
                 (format!("fill-{prefix}-primary"), mk(FillPrimary)),
                 (format!("fill-{prefix}-secondary"), mk(FillSecondary)),
                 (format!("fill-{prefix}-tertiary"), mk(FillTertiary)),
                 (format!("fill-{prefix}-quaternary"), mk(FillQuaternary)),
-                // M2 ch5c: солидная семейная граница обязана держать юр. пол UI
+                // M2 ch5c: солидная семейная граница обязана держать ratio-пол UI
                 // (3:1, WCAG 1.4.11). Солид эмитится как есть, если легален
                 // (Figma-тинт цел); иначе минимальный сдвиг по кривой семьи.
                 (
@@ -198,7 +207,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
                     RoleRecipe::Ladder {
                         source: source.clone(),
                         position: BorderStrong,
-                        floor: Some(Floor::AaUi),
+                        floor: Some(Floor::UiRatio),
                     },
                 ),
                 (format!("border-{prefix}-base"), mk(BorderBase)),

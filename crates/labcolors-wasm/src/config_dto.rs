@@ -129,8 +129,8 @@ pub enum NeutralPickDto {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FloorDto {
-    AaText,
-    AaUi,
+    TextRatio,
+    UiRatio,
     None,
 }
 
@@ -156,7 +156,7 @@ pub enum RoleRecipeDto {
     Ladder {
         source: LadderSourceDto,
         position: String,
-        /// Опциональный юр. пол UI для солидной семейной границы (M2 ch5c) —
+        /// Опциональный ratio-пол UI для солидной семейной границы (M2 ch5c) —
         /// аддитивен: отсутствие = прежний путь без пола.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         floor: Option<FloorDto>,
@@ -286,8 +286,8 @@ impl From<NeutralPickDto> for NeutralPick {
 impl From<FloorDto> for Floor {
     fn from(f: FloorDto) -> Self {
         match f {
-            FloorDto::AaText => Floor::AaText,
-            FloorDto::AaUi => Floor::AaUi,
+            FloorDto::TextRatio => Floor::TextRatio,
+            FloorDto::UiRatio => Floor::UiRatio,
             FloorDto::None => Floor::None,
         }
     }
@@ -322,8 +322,8 @@ fn position_from_key(key: &str) -> Result<LadderPosition, String> {
 /// неизвестный вариант — честный `Err`, не тихий дефолт.
 fn floor_to_dto(f: Floor) -> Result<FloorDto, String> {
     Ok(match f {
-        Floor::AaText => FloorDto::AaText,
-        Floor::AaUi => FloorDto::AaUi,
+        Floor::TextRatio => FloorDto::TextRatio,
+        Floor::UiRatio => FloorDto::UiRatio,
         Floor::None => FloorDto::None,
         other => return Err(format!("несериализуемый Floor: {other:?}")),
     })
@@ -713,13 +713,13 @@ mod tests {
     #[test]
     fn pair_label_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;
-        let json = r#"{"kind":"pair-label","source":{"kind":"sentiment","name":"warning"},"fraction":0.461,"floor":"aa-ui"}"#;
+        let json = r#"{"kind":"pair-label","source":{"kind":"sentiment","name":"warning"},"fraction":0.461,"floor":"ui-ratio"}"#;
         let dto: RoleRecipeDto = serde_json::from_str(json).expect("pair-label парсится");
         let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");
         assert!(
             matches!(
                 &core,
-                RoleRecipe::PairLabel { fraction, floor: Floor::AaUi, .. }
+                RoleRecipe::PairLabel { fraction, floor: Floor::UiRatio, .. }
                     if (*fraction - 0.461).abs() < 1e-12
             ),
             "pair-label конвертируется в ядро с целыми полями"
@@ -727,7 +727,7 @@ mod tests {
         let back = RoleRecipeDto::try_from(&core).expect("RoleRecipe → DTO");
         let re = serde_json::to_string(&back).expect("сериализуем");
         assert!(re.contains(r#""kind":"pair-label""#), "kebab-тег цел: {re}");
-        assert!(re.contains(r#""floor":"aa-ui""#), "пол цел: {re}");
+        assert!(re.contains(r#""floor":"ui-ratio""#), "пол цел: {re}");
         assert!(re.contains(r#""name":"warning""#), "источник цел: {re}");
     }
 
@@ -738,13 +738,13 @@ mod tests {
     #[test]
     fn material_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;
-        let json = r#"{"kind":"material","source":{"kind":"neutral","pick":"mid"},"tone_light":12.0,"tone_dark":18.0,"floor":"aa-text"}"#;
+        let json = r#"{"kind":"material","source":{"kind":"neutral","pick":"mid"},"tone_light":12.0,"tone_dark":18.0,"floor":"text-ratio"}"#;
         let dto: RoleRecipeDto = serde_json::from_str(json).expect("material парсится");
         let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");
         assert!(
             matches!(
                 &core,
-                RoleRecipe::Material { tone_light, tone_dark, floor: Floor::AaText, .. }
+                RoleRecipe::Material { tone_light, tone_dark, floor: Floor::TextRatio, .. }
                     if (*tone_light - 12.0).abs() < 1e-12 && (*tone_dark - 18.0).abs() < 1e-12
             ),
             "material конвертируется в ядро с целыми полями"
@@ -754,7 +754,7 @@ mod tests {
         assert!(re.contains(r#""kind":"material""#), "kebab-тег цел: {re}");
         assert!(re.contains(r#""tone_light":12"#), "tone_light цел: {re}");
         assert!(re.contains(r#""tone_dark":18"#), "tone_dark цел: {re}");
-        assert!(re.contains(r#""floor":"aa-text""#), "пол цел: {re}");
+        assert!(re.contains(r#""floor":"text-ratio""#), "пол цел: {re}");
     }
 
     #[test]
@@ -836,13 +836,18 @@ mod tests {
     /// 5013ba77a61f58ff → f2a892a62f7bc91e. Глава #282 добавила обязательный
     /// `decision_profile` в каждый Glow recipe: explicit legacy сохраняет
     /// прежнюю эмиссию, но profile обязан менять cache/config identity, поэтому
-    /// пин легитимно стал c51445fcd167781a.
+    /// пин легитимно стал c51445fcd167781a. Глава #297 (честные имена):
+    /// kebab-значения floor-политики "aa-text"/"aa-ui" переименованы в
+    /// "text-ratio"/"ui-ratio" (ложная претензия на WCAG-AA-соответствие
+    /// убрана из wire-схемы; сами числа 4.5/3.0 и эмиссия байт-в-байт те же) —
+    /// задекларированная версионная смена идентичности схемы, пин легитимно
+    /// стал 866006bd94b8ce02.
     #[test]
     fn full_labui_fingerprint_pin_current_main() {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "c51445fcd167781a",
+            "866006bd94b8ce02",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }

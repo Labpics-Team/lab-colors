@@ -1175,7 +1175,7 @@ mod tests {
             (
                 U::QuantizationGap {
                     target: 50.0,
-                    nearest: 49.0,
+                    closest_examined: 49.0,
                 },
                 "quantization_gap",
             ),

@@ -101,11 +101,11 @@ test("legality survives serialization: each solid role's emitted var reparses to
           Math.abs(lc - role.lc) < 1e-9,
           `${theme}/${bg}/${key}: recheck Lc ${lc} != reported ${role.lc}`,
         );
-        if (role.legalFloor != null) {
+        if (role.floorRatio != null) {
           flooredChecked++;
           assert.ok(
-            wcag >= role.legalFloor - 1e-9,
-            `${theme}/${bg}/${key}: reparsed colour fell below legal floor ${role.legalFloor} (got ${wcag})`,
+            wcag >= role.floorRatio - 1e-9,
+            `${theme}/${bg}/${key}: reparsed colour fell below legal floor ${role.floorRatio} (got ${wcag})`,
           );
         }
       }

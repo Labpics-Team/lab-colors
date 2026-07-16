@@ -754,7 +754,7 @@ fn config_boundary_two_configs_diverge() {
       "themes": [{"name": "light", "preset": "srgb"}],
       "roles": [
         {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
-        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+        {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "text-ratio"}}
       ]
     }"##;
     // Второй клиент: тот же контракт имён, другой бренд → другая эмиссия.

@@ -59,7 +59,7 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
     // Плюс роли, покинувшие паспорт по закону семантики: separator — токена
     // нет (бордер и сепаратор едины, компонент применяет бордер), shadow-* —
     // полупрозрачных лестница под стаб-именами fx-shadow-* (солид над контентом был бы
-    // грязью), border-strong — пол различимости AaUi (зеркалится: дефолт-таблица
+    // грязью), border-strong — пол различимости UiRatio (зеркалится: дефолт-таблица
     // несёт тот же пол).
     const LADDER_MIGRATED: [&str; 11] = [
         "fill-primary",
@@ -138,7 +138,7 @@ fn byte_identity_test_bites_on_mutated_recipe() {
         if name == "label-primary" {
             *recipe = RoleRecipe::TextAnchor {
                 fraction: 0.627,
-                floor: Floor::AaText,
+                floor: Floor::TextRatio,
                 hue: None,
             };
         }
@@ -204,7 +204,7 @@ fn fraction_out_of_bounds_is_rejected() {
         "label-primary",
         RoleRecipe::TextAnchor {
             fraction: 1.5,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
             hue: None,
         },
     );
@@ -217,7 +217,7 @@ fn fraction_out_of_bounds_is_rejected() {
         "label-primary",
         RoleRecipe::TextAnchor {
             fraction: 0.0,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
             hue: None,
         },
     );
@@ -234,7 +234,7 @@ fn fraction_bound_red_proof_at_edges() {
         "label-primary",
         RoleRecipe::TextAnchor {
             fraction: 1.0,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
             hue: None,
         },
     );
@@ -243,7 +243,7 @@ fn fraction_bound_red_proof_at_edges() {
         "label-primary",
         RoleRecipe::TextAnchor {
             fraction: 1.0 + 1e-9,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
             hue: None,
         },
     );
@@ -510,7 +510,7 @@ fn invalid_role_name_is_rejected() {
         "Label_Bad".to_string(),
         RoleRecipe::TextAnchor {
             fraction: 0.5,
-            floor: Floor::AaUi,
+            floor: Floor::UiRatio,
             hue: None,
         },
     ));
@@ -1613,7 +1613,7 @@ fn validator_rejects_role_and_alias_collisions_with_emitted_satellites() {
         let mut role_cfg = labui_reference();
         role_cfg.roles.push((
             "probe-material".to_string(),
-            neutral_material(10.0, Floor::AaText),
+            neutral_material(10.0, Floor::TextRatio),
         ));
         let ordinary_recipe = role_cfg
             .roles
@@ -1628,7 +1628,7 @@ fn validator_rejects_role_and_alias_collisions_with_emitted_satellites() {
         let mut alias_cfg = labui_reference();
         alias_cfg.roles.push((
             "probe-material".to_string(),
-            neutral_material(10.0, Floor::AaText),
+            neutral_material(10.0, Floor::TextRatio),
         ));
         alias_cfg
             .aliases
@@ -1661,7 +1661,7 @@ fn validator_rejects_role_and_alias_collisions_with_emitted_satellites() {
         let mut cfg = labui_reference();
         cfg.roles.push((
             "probe-material".to_string(),
-            neutral_material(10.0, Floor::AaText),
+            neutral_material(10.0, Floor::TextRatio),
         ));
         cfg.aliases
             .push((owner.to_string(), "probe-material".to_string()));
@@ -1702,7 +1702,7 @@ fn validator_reserves_zero_role_and_alias_primary_names() {
         ("probe-glow", glow_recipe, &["-core", "-alpha"][..]),
         (
             "probe-material",
-            neutral_material(10.0, Floor::AaText),
+            neutral_material(10.0, Floor::TextRatio),
             &["-01", "-02"][..],
         ),
     ] {
@@ -1755,7 +1755,7 @@ fn emitted_namespace_allows_non_colliding_near_misses() {
     ));
     cfg.roles.push((
         "probe-material".to_string(),
-        neutral_material(10.0, Floor::AaText),
+        neutral_material(10.0, Floor::TextRatio),
     ));
     cfg.aliases
         .push(("probe-material-03".to_string(), "label-primary".to_string()));
@@ -2386,7 +2386,7 @@ fn neutral_material(tone: f64, floor: Floor) -> RoleRecipe {
 fn material_on_white(tone: f64) -> Resolved {
     resolve_role_recipe(
         "fill-brand-secondary",
-        neutral_material(tone, Floor::AaText),
+        neutral_material(tone, Floor::TextRatio),
         "#FFFFFF",
         &ViewingConditions::srgb(),
     )
@@ -2480,7 +2480,7 @@ fn neutral_material_tone_matches_dj_anchor() {
     let vc = ViewingConditions::srgb();
     let mat = resolve_role_recipe(
         "fill-brand-secondary",
-        neutral_material(14.0, Floor::AaText),
+        neutral_material(14.0, Floor::TextRatio),
         "#FFFFFF",
         &vc,
     );
@@ -2516,7 +2516,7 @@ fn accent_material_tone_carries_family_hue() {
             source: LadderSource::Brand,
             tone_light: 22.0,
             tone_dark: 22.0,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
         },
         "#FFFFFF",
         &vc,
@@ -2584,7 +2584,7 @@ fn material_tone_is_distinguishable_from_bg() {
 fn material_dark_theme_white_pole_guaranteed() {
     let res = resolve_role_recipe(
         "fill-brand-secondary",
-        neutral_material(15.0, Floor::AaText),
+        neutral_material(15.0, Floor::TextRatio),
         "#101012",
         &ViewingConditions::dim_surround(),
     );
@@ -2623,7 +2623,7 @@ fn material_non_positive_tone_rejected() {
             source: LadderSource::Neutral(NeutralPick::Mid),
             tone_light: 0.0,
             tone_dark: 10.0,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
         },
     );
     assert!(
@@ -2644,7 +2644,7 @@ fn material_unknown_family_rejected() {
             source: LadderSource::Family("нет-такого".to_string()),
             tone_light: 10.0,
             tone_dark: 10.0,
-            floor: Floor::AaText,
+            floor: Floor::TextRatio,
         },
     );
     assert!(

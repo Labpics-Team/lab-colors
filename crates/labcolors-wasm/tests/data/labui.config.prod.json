@@ -186,7 +186,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.968,
-        "floor": "aa-text"
+        "floor": "text-ratio"
       }
     },
     {
@@ -194,7 +194,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.627,
-        "floor": "aa-text"
+        "floor": "text-ratio"
       }
     },
     {
@@ -202,7 +202,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.461,
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {
@@ -218,7 +218,7 @@
       "recipe": {
         "kind": "text-anchor",
         "fraction": 0.968,
-        "floor": "aa-ui"
+        "floor": "ui-ratio"
       }
     },
     {

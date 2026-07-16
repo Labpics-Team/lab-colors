@@ -67,7 +67,7 @@ export function monotonicity(ladder, eps = 1e-6) {
   return { violations };
 }
 
-/** M1-B для S1: доля (роль x фон), достигших своего legalFloor (по арбитру), + флаги честности. */
+/** M1-B для S1: доля (роль x фон), достигших своего floorRatio (по арбитру), + флаги честности. */
 export function s1Native(native) {
   let total = 0;
   let achieved = 0;

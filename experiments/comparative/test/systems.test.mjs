@@ -21,7 +21,7 @@ describe("S1 lab-colors (HEAD)", () => {
     expect(r.ladder[0].pos).toBe(0);
     expect(r.ladder.at(-1).pos).toBe(1);
   });
-  it("native: 20 ролей с legalFloor на каждом из 11 фонов", () => {
+  it("native: 20 ролей с floorRatio на каждом из 11 фонов", () => {
     expect(r.native).toHaveLength(11);
     for (const { roles } of r.native) {
       expect(roles).toHaveLength(20);

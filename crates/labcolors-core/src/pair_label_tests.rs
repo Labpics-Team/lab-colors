@@ -17,7 +17,7 @@
 //!  2. `pair_label_*` — новая роль держит пол против тинт-поверхности во всех
 //!     сентимент-категориях × light/dark (± IC).
 //!  3. `pair_label_beats_page_resolved_label` — дифференциальный RED-proof:
-//!     ТОТ ЖЕ контракт (доля 0.4757, `AaUi`), решённый против страницы
+//!     ТОТ ЖЕ контракт (доля 0.4757, `UiRatio`), решённый против страницы
 //!     (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success,
 //!     а `PairLabel` (против поверхности) — держит. Разница ТОЛЬКО в подложке
 //!     резолва: если бы `resolve_pair_label` целил фон страницы, тест бы упал.
@@ -68,16 +68,16 @@ fn themes() -> [(&'static str, &'static str, ViewingConditions); 4] {
     ]
 }
 
-/// Юр. пол UI (WCAG 1.4.11, 3:1) из SSOT контракта [`Floor::AaUi`] — локальная
+/// Юр. пол UI (WCAG 1.4.11, 3:1) из SSOT контракта [`Floor::UiRatio`] — локальная
 /// копия числа запрещена (#307): тест обязан проверять тот же пол, который
 /// энфорсит резолвер. Консервативный дефолт порога тинт-бейджа (короткая
 /// пилюля-индикатор — UI-объект, не длинный текст; 4.5:1 на светлом тинте
 /// вынудил бы near-black и убил бы «цветной» вид). Порог 3:1 vs 4.5:1 —
 /// открытый вопрос владельцу (см. отчёт task #29).
 fn ui_floor() -> f64 {
-    Floor::AaUi
+    Floor::UiRatio
         .min_ratio()
-        .expect("AaUi несёт числовой юр. пол")
+        .expect("UiRatio несёт числовой ratio-пол")
 }
 
 fn enc(hex: &str) -> [f64; 3] {
@@ -109,7 +109,7 @@ fn ratio_on_tint(set: &[(String, Resolved)], role: &str, fam: &str) -> f64 {
 }
 
 /// Конфиг labui + добавленные роли `badge-label-<fam>` (`PairLabel`, доля
-/// 0.47572199 «цветного» уровня = `label-*-tertiary`, пол `AaUi`) — форма,
+/// 0.47572199 «цветного» уровня = `label-*-tertiary`, пол `UiRatio`) — форма,
 /// которую тинт-бейдж должен потреблять.
 fn labui_with_badge_labels() -> crate::NamedRoleTable {
     let mut cfg = labui_reference();
@@ -119,7 +119,7 @@ fn labui_with_badge_labels() -> crate::NamedRoleTable {
             RoleRecipe::PairLabel {
                 source,
                 fraction: 0.47572199,
-                floor: Floor::AaUi,
+                floor: Floor::UiRatio,
             },
         ));
     }
@@ -204,7 +204,7 @@ fn pair_label_stays_hued_not_near_black() {
 
 // ── 3. Дифференциальный RED-proof: подложка резолва — и есть констрейнт ────────
 
-/// ТОТ ЖЕ контракт (доля 0.4757, `AaUi`), решённый против СТРАНИЦЫ
+/// ТОТ ЖЕ контракт (доля 0.4757, `UiRatio`), решённый против СТРАНИЦЫ
 /// (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success в light;
 /// `PairLabel` (против ПОВЕРХНОСТИ) — держит. Единственная разница — подложка
 /// резолва: если `resolve_pair_label` целил бы фон страницы, «after» совпал бы с
@@ -417,7 +417,7 @@ proptest! {
             context[0], context[1], context[2]
         );
         let bg = BgInput::solid(&context_hex).expect("байтовый hex валиден");
-        let floor = [Floor::AaText, Floor::AaUi, Floor::None][floor_pick];
+        let floor = [Floor::TextRatio, Floor::UiRatio, Floor::None][floor_pick];
         let (_, _, vc) = themes()[theme_pick];
         let production = resolve_pair_label(
             &bg, tint, fraction, floor, alpha_light, alpha_dark, &vc,

@@ -35,10 +35,10 @@ function fakeElement() {
 // is the color role's canonical (oklch) string in `vars`; `hex` is its solved
 // hex (what the ease interpolates over). `panelVar` is the translucent role's
 // canonical string — present only in `vars`, never a "color" role.
-const makeResult = (hex, labelVar, panelVar, legalFloor = null) => ({
+const makeResult = (hex, labelVar, panelVar, floorRatio = null) => ({
   vars: { "--lab-label": labelVar, "--lab-panel": panelVar },
   roles: {
-    label: { kind: "color", cssVar: "--lab-label", hex, lc: 100, legalFloor },
+    label: { kind: "color", cssVar: "--lab-label", hex, lc: 100, floorRatio },
     panel: { kind: "translucent", cssVar: "--lab-panel" },
   },
 });
@@ -170,7 +170,7 @@ const THREE = {
     "--lab-extra": "oklch(50.000% 0.1 120 / 0.4)",
   },
   roles: {
-    label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null },
+    label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, floorRatio: null },
     panel: { kind: "translucent", cssVar: "--lab-panel" },
     extra: { kind: "translucent", cssVar: "--lab-extra" },
   },
@@ -178,13 +178,13 @@ const THREE = {
 const TWO = {
   vars: { "--lab-label": "oklch(90.000% 0 0)", "--lab-panel": "oklch(30.000% 0.02 260 / 0.6)" },
   roles: {
-    label: { kind: "color", cssVar: "--lab-label", hex: "#E5E5E5", lc: 100, legalFloor: null },
+    label: { kind: "color", cssVar: "--lab-label", hex: "#E5E5E5", lc: 100, floorRatio: null },
     panel: { kind: "translucent", cssVar: "--lab-panel" },
   },
 };
 const ONE = {
   vars: { "--lab-label": "oklch(20.000% 0 0)" },
-  roles: { label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null } },
+  roles: { label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, floorRatio: null } },
 };
 
 test("a later solve that DROPS a role removes its var from target and current()", () => {

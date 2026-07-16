@@ -94,7 +94,7 @@ impl Engine {
         let mut floors: HashMap<String, Option<f64>> = table
             .entries()
             .iter()
-            .map(|(name, spec)| (name.clone(), spec.legal_floor()))
+            .map(|(name, spec)| (name.clone(), spec.floor_ratio()))
             .collect();
         for (alias, target) in table.aliases() {
             let floor = floors.get(target).copied().flatten();
@@ -242,9 +242,9 @@ impl Engine {
     }
 }
 
-/// Map one core [`Resolved`] into the boundary [`RoleOutcome`]. `legal_floor` is
+/// Map one core [`Resolved`] into the boundary [`RoleOutcome`]. `floor_ratio` is
 /// the role's WCAG clamp (from the role table), carried onto a solved colour.
-fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutcome, BindingError> {
+fn map_resolved(resolved: Resolved, floor_ratio: Option<f64>) -> Result<RoleOutcome, BindingError> {
     Ok(match resolved {
         Resolved::Color {
             solved,
@@ -256,7 +256,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             compressed,
             achieved_dj,
             hue_vanished,
-            legal_floor,
+            floor_ratio,
         )),
         Resolved::None => RoleOutcome::None,
         Resolved::Unreachable(reason) => RoleOutcome::Unreachable {
@@ -337,7 +337,7 @@ fn map_solved(
     compressed: bool,
     achieved_dj: Option<f64>,
     hue_vanished: bool,
-    legal_floor: Option<f64>,
+    floor_ratio: Option<f64>,
 ) -> SolvedColor {
     SolvedColor {
         hex: solved.hex().to_owned(),
@@ -346,7 +346,7 @@ fn map_solved(
         compressed,
         achieved_dj,
         floor_override: solved.floor_override(),
-        legal_floor,
+        floor_ratio,
         hue_vanished,
     }
 }
@@ -666,18 +666,18 @@ mod tests {
         };
         // AA text role → 4.5.
         match floor_of("label-primary") {
-            Some(RoleOutcome::Color(c)) => assert_eq!(c.legal_floor, Some(4.5)),
+            Some(RoleOutcome::Color(c)) => assert_eq!(c.floor_ratio, Some(4.5)),
             other => panic!("label-primary expected solved, got {other:?}"),
         }
         // AA UI role → 3.0. (`icon` каноном #92 стал алиасом на label-tertiary —
         // сам label-tertiary и есть AA-UI роль с полом 3.0.)
         match floor_of("label-tertiary") {
-            Some(RoleOutcome::Color(c)) => assert_eq!(c.legal_floor, Some(3.0)),
+            Some(RoleOutcome::Color(c)) => assert_eq!(c.floor_ratio, Some(3.0)),
             other => panic!("label-tertiary expected solved, got {other:?}"),
         }
-        // Decorative / JND roles carry no legal floor even when solved.
+        // Decorative / JND roles carry no ratio floor even when solved.
         if let Some(RoleOutcome::Color(c)) = floor_of("label-quaternary") {
-            assert_eq!(c.legal_floor, None);
+            assert_eq!(c.floor_ratio, None);
         }
     }
 
@@ -853,7 +853,7 @@ mod tests {
           "themes": [{"name": "light", "preset": "srgb"}, {"name": "dark", "preset": "dim"}],
           "roles": [
             {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
-            {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
+            {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "text-ratio"}}
           ],
           "aliases": [{"alias": "btn-label", "target": "body-text"}]
         }"##
@@ -905,7 +905,7 @@ mod tests {
             "кэш-коллизия: под ключом acme отдан labui-контракт"
         );
         // Алиас наследует пол цели и через named-путь (btn-label → body-text,
-        // aa-text → 4.5) — вторая половина класса «потерянный legal_floor».
+        // text-ratio → 4.5) — вторая половина класса «потерянный floor_ratio».
         let alias_entry = acme_set
             .roles
             .iter()
@@ -913,7 +913,7 @@ mod tests {
             .expect("алиас в контракте acme");
         match &alias_entry.outcome {
             RoleOutcome::Color(c) => assert_eq!(
-                c.legal_floor,
+                c.floor_ratio,
                 Some(4.5),
                 "алиас несёт AA-пол своей цели через named-путь"
             ),
@@ -970,7 +970,7 @@ mod tests {
         let mut expected_floor: std::collections::HashMap<&str, Option<f64>> = table
             .entries()
             .iter()
-            .map(|(n, spec)| (n.as_str(), spec.legal_floor()))
+            .map(|(n, spec)| (n.as_str(), spec.floor_ratio()))
             .collect();
         for (alias, target) in table.aliases() {
             let floor = expected_floor.get(target.as_str()).copied().flatten();
@@ -981,7 +981,7 @@ mod tests {
             assert_eq!(name, &entry.role_key, "порядок и имена совпадают");
             if let RoleOutcome::Color(c) = &entry.outcome {
                 let want = expected_floor.get(name.as_str()).copied().flatten();
-                assert_eq!(c.legal_floor, want, "{name}: legal_floor конфиг-роли");
+                assert_eq!(c.floor_ratio, want, "{name}: floor_ratio конфиг-роли");
                 if want.is_some() {
                     anchored_seen += 1;
                 }
@@ -1126,7 +1126,7 @@ mod tests {
             .expect("label-primary в контракте");
         match &label.outcome {
             RoleOutcome::Color(c) => assert_eq!(
-                c.legal_floor,
+                c.floor_ratio,
                 Some(4.5),
                 "AA-пол текстового якоря доходит до границы через named-путь"
             ),
@@ -1307,7 +1307,7 @@ mod tests {
                     "source": {"kind": "neutral", "pick": "mid"},
                     "tone_light": 10.0,
                     "tone_dark": 10.0,
-                    "floor": "aa-text"
+                    "floor": "text-ratio"
                 }),
             ),
         ];
