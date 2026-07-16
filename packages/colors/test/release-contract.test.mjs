@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -211,19 +211,73 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
 
 test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.ok(existsSync(join(root, "LICENSE")), "root LICENSE отсутствует");
-  const coreLicense = join(root, "crates", "labcolors-core", "LICENSE");
-  const wasmLicense = join(root, "crates", "labcolors-wasm", "LICENSE");
-  for (const license of [coreLicense, wasmLicense]) {
+  const cargoMetadata = JSON.parse(execFileSync(process.env.CARGO ?? "cargo", [
+    "metadata",
+    "--no-deps",
+    "--format-version",
+    "1",
+    "--locked",
+  ], { cwd: root, encoding: "utf8" }));
+  const workspaceMembers = new Set(cargoMetadata.workspace_members);
+  const publishableCargoRoots = cargoMetadata.packages
+    .filter((crate) => workspaceMembers.has(crate.id))
+    .filter((crate) => crate.publish === null || crate.publish.length > 0)
+    .map((crate) => dirname(crate.manifest_path));
+  const packageJson = JSON.parse(read("packages", "colors", "package.json"));
+  const wasmPackInvocationCount = packageJson.scripts.build.match(/\bwasm-pack\s+build\b/gu)?.length ?? 0;
+  const wasmPackCommands = packageJson.scripts.build
+    .split(/\s*&&\s*/u)
+    .filter((command) => /\bwasm-pack\s+build\b/u.test(command));
+  assert.equal(
+    wasmPackCommands.length,
+    wasmPackInvocationCount,
+    "every wasm-pack build invocation must be one independently parsed command",
+  );
+  const wasmPackRoots = wasmPackCommands.map((command) => {
+    const match = command.match(
+      /\bwasm-pack\s+build\s+(?<root>"[^"]+"|'[^']+'|[^\s]+)/u,
+    );
+    assert.ok(match, `cannot parse wasm-pack crate root from: ${command}`);
+    const token = match.groups.root;
+    const cratePath = token.startsWith('"') || token.startsWith("'")
+      ? token.slice(1, -1)
+      : token;
+    assert.ok(!cratePath.startsWith("-"), `wasm-pack crate root must precede flags: ${command}`);
+    const crateRoot = resolve(root, "packages", "colors", cratePath);
+    assert.ok(
+      existsSync(join(crateRoot, "Cargo.toml")),
+      `wasm-pack crate root has no Cargo.toml: ${crateRoot}`,
+    );
+    return crateRoot;
+  });
+  assert.ok(publishableCargoRoots.length > 0, "anti-vacuum: no publishable Cargo roots");
+  assert.ok(wasmPackRoots.length > 0, "anti-vacuum: no wasm-pack build roots");
+
+  const distributableRoots = [...new Set([
+    ...publishableCargoRoots,
+    ...wasmPackRoots,
+  ])].sort();
+  assert.deepEqual(
+    distributableRoots
+      .filter((crateRoot) => !existsSync(join(crateRoot, "LICENSE")))
+      .map((crateRoot) => relative(root, crateRoot)),
+    [],
+    "every distributable crate root must expose the canonical LICENSE",
+  );
+  for (const crateRoot of distributableRoots) {
+    const license = join(crateRoot, "LICENSE");
     assert.ok(lstatSync(license).isSymbolicLink(), `${license} must preserve the root SSOT`);
-    assert.equal(readlinkSync(license), "../../LICENSE");
+    const canonicalTarget = relative(crateRoot, join(root, "LICENSE")).replaceAll("\\", "/");
+    assert.equal(readlinkSync(license), canonicalTarget);
     assert.equal(readFileSync(license, "utf8"), read("LICENSE"));
+    const manifest = readFileSync(join(crateRoot, "Cargo.toml"), "utf8");
+    assert.match(manifest, /^license\.workspace = true$/mu);
+    assert.doesNotMatch(manifest, /^license-file\s*=/mu);
   }
   const coreManifest = read("crates", "labcolors-core", "Cargo.toml");
   const coreLib = read("crates", "labcolors-core", "src", "lib.rs");
   assert.match(coreManifest, /^description = "[^"]+"$/m);
   assert.match(coreManifest, /^readme = "README\.md"$/m);
-  assert.match(coreManifest, /^license\.workspace = true$/m);
-  assert.doesNotMatch(coreManifest, /^license-file\s*=/m);
   assert.ok(
     existsSync(join(root, "crates", "labcolors-core", "README.md")),
     "published core crate needs a package-local README",
