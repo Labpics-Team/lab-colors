@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "budgetId": "labcolors-wasm-roles-issue-307-c7a-v7",
   "predecessor": {
     "path": "packages/colors/bench/wasm-size-budget-v6.json",
@@ -26,8 +26,7 @@
         "issue": 307,
         "slice": "C7a",
         "measurementPlatform": "linux-x64",
-        "rawBytes": 454334,
-        "sha256": "e052ff2413d6da57e745342b45abe9af3719994deface73db19faeba84af91b5"
+        "rawBytes": 454334
       },
       "policy": {
         "maxRawBytes": 454334,
@@ -41,8 +40,7 @@
         "issue": 296,
         "slice": "C3",
         "measurementPlatform": "linux-x64",
-        "rawBytes": 229658,
-        "sha256": "34e2a561862ee06d52d1104f8ba60ccf9967e2e4fd09803d4e75e1966074bc8d"
+        "rawBytes": 229658
       },
       "policy": {
         "maxRawBytes": 229658,

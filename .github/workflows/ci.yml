@@ -466,15 +466,48 @@ jobs:
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-      - name: wasm-pack build (runtime + compiler release roles)
+      - name: reproduce WASM roles from the same source
         # Each execution role is a separate Cargo root and physical artifact;
         # building them in separate invocations prevents feature unification.
         # Rust error locations otherwise embed the self-hosted runner's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
+        # The second build follows `cargo clean`, so equality proves same-source
+        # reproduction instead of comparing unrelated source commits by SHA.
         run: |
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
-          wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
-          wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked
+          build_roles() {
+            wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
+            wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked
+          }
+
+          rm -rf packages/colors/pkg packages/colors/compiler
+          build_roles
+
+          first="$RUNNER_TEMP/wasm-first-$GITHUB_JOB"
+          rm -rf "$first"
+          mkdir -p "$first"
+          cp -a packages/colors/pkg "$first/pkg"
+          cp -a packages/colors/compiler "$first/compiler"
+
+          cargo clean
+          rm -rf packages/colors/pkg packages/colors/compiler
+          build_roles
+
+          diff --no-dereference --recursive "$first/pkg" packages/colors/pkg
+          diff --no-dereference --recursive "$first/compiler" packages/colors/compiler
+
+          for wasm in \
+            packages/colors/pkg/labcolors_bg.wasm \
+            packages/colors/compiler/labcolors_compiler_bg.wasm
+          do
+            if LC_ALL=C grep -a -q -E '/(Users|home)/[^[:cntrl:]]*/\.cargo/registry/src/|/opt/actions-runner/[^[:cntrl:]]*/cargo-wasm/registry/src/' "$wasm"; then
+              echo "unmapped build path in $wasm" >&2
+              exit 1
+            fi
+          done
+          sha256sum \
+            packages/colors/pkg/labcolors_bg.wasm \
+            packages/colors/compiler/labcolors_compiler_bg.wasm
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: ${{ env.NODE_TOOLCHAIN }}

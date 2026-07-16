@@ -34,7 +34,7 @@ export const V5_FILE_SHA256 =
 export const V6_FILE_SHA256 =
   "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32";
 export const V7_FILE_SHA256 =
-  "a57e94d4cf6b0df7048ec2d808f78eef301e80064bee0648179af83e729a95c3";
+  "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
 const V6_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v6.json";
@@ -182,7 +182,7 @@ function validateBudgetValue(budget) {
     ],
     "budget",
   );
-  if (budget.schemaVersion !== 5) fail("supported schemaVersion is exactly 5");
+  if (budget.schemaVersion !== 6) fail("supported schemaVersion is exactly 6");
   if (budget.budgetId !== V7_BUDGET_ID) fail(`budgetId must be ${V7_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
@@ -226,7 +226,7 @@ function validateBudgetValue(budget) {
     }
     exactKeys(
       record.measurement,
-      ["issue", "slice", "measurementPlatform", "rawBytes", "sha256"],
+      ["issue", "slice", "measurementPlatform", "rawBytes"],
       `roles.${role}.measurement`,
     );
     if (
@@ -242,7 +242,6 @@ function validateBudgetValue(budget) {
       fail(`roles.${role}.measurement must use canonical linux-x64`);
     }
     positiveSafeInteger(record.measurement.rawBytes, `roles.${role}.measurement.rawBytes`);
-    lowercaseDigest(record.measurement.sha256, `roles.${role}.measurement.sha256`);
 
     exactKeys(record.policy, ["maxRawBytes", "derivation", "gzip"], `roles.${role}.policy`);
     positiveSafeInteger(record.policy.maxRawBytes, `roles.${role}.policy.maxRawBytes`);
@@ -314,7 +313,6 @@ export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
   const rawBytes = bytes.length;
   const gzipBytes = gzipSync(bytes, { level: 9 }).length;
   const artifactSha256 = sha256(bytes);
-  const artifactSha = artifactSha256 === record.measurement.sha256 ? "match" : "different";
   const isCanonicalPlatform = currentPlatform === record.measurement.measurementPlatform;
   if (isCanonicalPlatform && rawBytes !== record.measurement.rawBytes) {
     fail(
@@ -323,14 +321,6 @@ export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
         `gzip=${gzipBytes}B diagnostic-only sha256=${artifactSha256}`,
     );
   }
-  if (isCanonicalPlatform && artifactSha !== "match") {
-    fail(
-      `${role} exact artifact SHA-256 mismatch on ${currentPlatform}: ` +
-        `expected=${record.measurement.sha256} actual=${artifactSha256}; ` +
-        `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
-    );
-  }
-
   return {
     role,
     status: isCanonicalPlatform ? "PASS" : "DIAGNOSTIC",
@@ -339,7 +329,6 @@ export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
     deltaBytes: rawBytes - record.policy.maxRawBytes,
     gzipBytes,
     currentPlatform,
-    artifactSha,
     artifactSha256,
   };
 }
@@ -350,7 +339,7 @@ function formatResult(result, artifact) {
     `WASM size budget ${result.status} role=${result.role} raw=${result.rawBytes}B ` +
     `ceiling=${result.maxRawBytes}B delta=${delta}B gzip=${result.gzipBytes}B ` +
     `diagnostic-only platform=${result.currentPlatform} artifact=${artifact} ` +
-    `artifact-sha=${result.artifactSha} recipe-sha=match`
+    `artifact-sha256=${result.artifactSha256} declared-recipe-sha=match`
   );
 }
 
