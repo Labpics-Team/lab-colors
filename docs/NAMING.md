@@ -13,7 +13,7 @@
 
 | Метрика | N |
 | --- | --- |
-| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 7 |
+| членов workspace (Cargo.toml `members`, глоб развёрнут по ФС) | 6 |
 | крейтов семейства в crates/ | 6 |
 | экспорт-субпутей package.json @labpics/colors | 10 |
 | python-скриптов scripts/*.py | 10 |
@@ -43,10 +43,8 @@
   `labcolors-ffi`, `labcolors-wasm`, `labcolors-compiler`. Директория
   `crates/<имя крейта>`.
 - Члены workspace объявлены в корневом Cargo.toml (`members`); глоб `crates/*`
-  разворачивается по ФС, harness-члены вне crates/ перечислены поимённо
-  (experiments/psychophysics — имя пакета без префикса: не публикуется,
-  зависимость-нулевой калибровочный харнесс). Каждый член обязан разрешаться
-  в ФС — фантомные члены ловит гейт.
+  разворачивается по ФС. Каждый член обязан разрешаться в ФС — фантомные члены
+  ловит гейт.
 - Файлы `.rs` — snake_case стема (закон rustc); это относится и к тестам,
   бенчам и примерам (`accent_balance.rs`, `y_hk.rs`, `bg_ladder_anchors.rs`).
 

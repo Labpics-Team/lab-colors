@@ -14,11 +14,6 @@ packages/colors/LICENSE
 packages/colors/build-metadata.json
 packages/colors/evidence/
 
-# Психофизический харнесс: сгенерированные манифесты/раннеры/экспорты сессий —
-# это артефакты запуска (детерминированы из seed), в гит не коммитятся.
-experiments/psychophysics/out/
-psychophysics-out/
-
 # Mutation testing (cargo-mutants) — transient run output, never committed.
 # Produced locally and by the scheduled `.github/workflows/mutation.yml` job.
 mutants.out/

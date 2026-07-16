@@ -110,7 +110,6 @@ test("every workspace package inherits the declared MSRV", () => {
   const manifests = readdirSync(join(root, "crates"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => join("crates", entry.name, "Cargo.toml"));
-  manifests.push(join("experiments", "psychophysics", "Cargo.toml"));
   assert.ok(manifests.length > 1, "anti-vacuum: workspace package list is non-trivial");
   for (const manifest of manifests) {
     assert.match(
