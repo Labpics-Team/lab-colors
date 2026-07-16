@@ -45,7 +45,8 @@ import { effectiveBackground } from "./effective-bg.js";
  *   image/gradient/blur remains one declared point, not whole-field evidence.
  * @param {*} [options.target=element]  Element to write the variables onto.
  * @param {string} [options.fallback="#FFFFFF"]  Base for a fully-translucent chain.
- * @param {boolean} [options.observe=true]  Auto-refresh on DOM attribute mutations.
+ * @param {boolean} [options.observe=true]  Auto-refresh on `style`/`class`
+ *   attribute changes in the observed subtree.
  * @param {*} [options.root]  Mutation-observer root (default: the document element).
  * @param {*} [options.win=globalThis]  Window-like host (for MutationObserver).
  * @param {(el:*)=>*} [options.getStyle]  Injection seam for `effectiveBackground`.

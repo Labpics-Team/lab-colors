@@ -342,7 +342,8 @@ const LUM_CACHE_CAP = 256;
 const lumCache = new Map();
 
 /** WCAG relative luminance of any colour string, memoised. Byte-equal to the
- *  string path `adapt-theme` used per sample per frame: luminance of
+ *  string path `adapt-theme` uses for each sample during a performed metric
+ *  recheck: luminance of
  *  `parseCssColor(css) ?? [0,0,0,1]` — i.e. unparseable input yields the
  *  luminance of black, preserving the historical fallback. */
 export function wcagLuminanceCached(css) {

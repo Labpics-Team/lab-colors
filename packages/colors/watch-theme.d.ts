@@ -17,7 +17,7 @@ export interface WatchThemeOptions {
   target?: HTMLElement;
   /** Base colour when the ancestor chain is fully translucent. Default `"#FFFFFF"`. */
   fallback?: string;
-  /** Auto-refresh on DOM attribute mutations. Default `true`. */
+  /** Auto-refresh on `style`/`class` attribute changes in the observed subtree. Default `true`. */
   observe?: boolean;
   /** Mutation-observer root. Defaults to the document element. */
   root?: Node;

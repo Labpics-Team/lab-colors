@@ -73,7 +73,8 @@ function segLum(seg, t) {
 /**
  * @typedef {object} AdaptController
  * @property {(now?: number) => void} tick  Drive one step (call from rAF, or let
- *   `start()` do it). Cheap: a re-check; a re-solve only on a sustained breach.
+ *   `start()` do it). Unchanged idle input exits before metric evaluation; a
+ *   re-solve occurs only on a sustained breach.
  * @property {(theme: string) => void} setTheme  Switch theme INSTANTLY (intent,
  *   not drift) — re-resolve and apply, bypassing the debounce/dwell machinery.
  * @property {() => void} start  Begin an internal requestAnimationFrame loop.
@@ -355,13 +356,13 @@ export function adaptTheme(element, options) {
   // Resolve a fresh set and adopt it as the current colours (no ease).
   const solveAndAdopt = (bg, now) => adoptResolved(colors.resolveTheme(bg, theme), now);
 
-  // Solve+adopt against the hardest of `samples`. With one sample this is a
-  // single solve; with several it does a provisional solve to learn the role
-  // colours, picks the worst sample for them, and re-solves against it if that
-  // is not the one already chosen — so the adopted set is the strongest the
-  // backdrop demands. Used where there is no current set to recheck (initial
-  // apply, theme switch); the tick path already knows the worst sample from its
-  // own recheck and calls `solveAndAdopt` directly.
+  // Choose an initial result from `samples`. With one sample this is a single
+  // solve. With several, solve against the first sample, evaluate that
+  // provisional role set over every supplied sample, then re-solve at most once
+  // against its lowest-metric sample. The second result is not rechecked over
+  // the set, so this is a bounded initialization heuristic, not a final
+  // worst-sample certificate. The tick path instead starts from its own current
+  // result and calls `solveAndAdopt` for the lowest-metric supplied sample.
   const solveAndAdoptWorst = (samples, now) => {
     solveAndAdopt(samples[0], now);
     if (samples.length > 1) {

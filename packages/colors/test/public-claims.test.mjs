@@ -129,6 +129,26 @@ const RUNTIME_DOC_FALSE_CLAIMS = [
     reason: "sample polling was confused with a metric recheck on unchanged state",
   },
   {
+    pattern: /(?:one batched call per frame|per sample per frame)/iu,
+    sample: "ONE batched call per frame",
+    reason: "a performed metric recheck was promoted to an every-frame operation",
+  },
+  {
+    pattern: /strongest the backdrop demands/iu,
+    sample: "the strongest the backdrop demands",
+    reason: "a provisional worst-sample heuristic was promoted to a final-field guarantee",
+  },
+  {
+    pattern: /(?:auto-refresh on DOM attribute mutations|авто-обновление при DOM-мутациях)/iu,
+    sample: "Auto-refresh on DOM attribute mutations",
+    reason: "the style/class-only observer was promoted to arbitrary DOM mutations",
+  },
+  {
+    pattern: /переключение темы[^\n]{0,120}MutationObserver[^\n]{0,40}автоматически/iu,
+    sample: "переключение темы и style/class отслеживаются MutationObserver автоматически",
+    reason: "an explicit setTheme operation was promoted to MutationObserver behaviour",
+  },
+  {
     pattern: /(?:currently-applied `--lab-\*`|текущие применённые --lab-\*)/iu,
     sample: "The currently-applied `--lab-*` variables",
     reason: "current() logical targets were described as painted DOM values",
@@ -239,6 +259,10 @@ test("runtime docs scope background evidence to estimates and finite samples", (
     join(ROOT, "packages/colors/watch-theme.js"),
     "utf8",
   );
+  const watchTypes = readFileSync(
+    join(ROOT, "packages/colors/watch-theme.d.ts"),
+    "utf8",
+  );
 
   assert.match(readme, /конечный набор[^\n]*образц/u);
   assert.match(readme, /только[^\n]*переданн[^\n]*точ/u);
@@ -251,6 +275,16 @@ test("runtime docs scope background evidence to estimates and finite samples", (
   assert.match(backgroundTypes, /alpha[^\n]*discarded/iu);
   assert.match(adaptTypes, /logical target/iu);
   assert.match(watchSource, /reference estimate/iu);
+  assert.match(readme, /изменения атрибутов `style`\/`class`/iu);
+  for (const source of [watchSource, watchTypes]) {
+    assert.match(source, /`style`\/`class` attribute changes/iu);
+  }
+  for (const source of [readme, watchSource, watchTypes]) assert.match(source, /setTheme/iu);
+  assert.match(
+    watchSource,
+    /attributeFilter:\s*\["style", "class"\]/u,
+    "observer implementation and public scope must name the same two attributes",
+  );
   assert.equal(
     existsSync(join(ROOT, "docs/migrations/exact-alpha-glow.md")),
     false,
