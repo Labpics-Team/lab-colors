@@ -145,8 +145,8 @@ pub enum ResourceDimensionV1 {
 
 // Offline compilation capacity: one standard WebAssembly 64-KiB page is the
 // deterministic packed-result envelope, not a claim about allocator capacity,
-// memory.grow or total operation memory. The committed benchmark artifact is
-// the executable admission record for these product-policy limits.
+// memory.grow or total operation memory. Direct exact-boundary tests enforce
+// this versioned policy through Core, protocol, public WASM and Swift paths.
 const COMPILE_PAGE_SLOT_BYTES: u64 = 65_536;
 const COMPILE_CONTENT_SLOTS: u64 = COMPILE_PAGE_SLOT_BYTES / PARTITION_BYTES - 1;
 const COMPILE_LOGICAL_ASSESSMENTS: u64 = CANDIDATE_COUNT * COMPILE_CONTENT_SLOTS;

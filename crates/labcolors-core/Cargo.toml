@@ -54,11 +54,6 @@ harness = false
 name = "glow_alpha"
 harness = false
 
-[[bench]]
-name = "wcag22_feasibility_admission"
-harness = false
-required-features = ["wcag22-feasibility"]
-
 [[test]]
 name = "wcag22_feasibility"
 required-features = ["wcag22-feasibility"]
