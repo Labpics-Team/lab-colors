@@ -688,13 +688,13 @@ pub enum RoleSpec {
     /// позиции `fill-*-primary` над фоном резолва), а НЕ против фона страницы
     /// и НЕ против эмитированного [`PairFill`](Self::PairFill) — у того своя,
     /// отдельно сдвинутая солид-эмиссия; ребра `PairFill → PairLabel` не
-    /// существует. Резолв — compatibility-адаптер над одним generic-компонентом
-    /// appearance-графа (#307): скомпилированный граф точно собирает
-    /// поверхность и возвращает foreground occurrence против неё, затем
-    /// оттеночный foreground решается прежним законом (`resolve_hued_anchor…`,
-    /// статус LegacyCompatibility) — пол поверхности гарантирован по
-    /// построению, тон клампится (флаг `compressed`) при недостижимости на
-    /// кривой семьи.
+    /// существует. Резолв использует один generic-компонент appearance-графа:
+    /// скомпилированный граф собирает поверхность и возвращает физические факты
+    /// foreground occurrence против неё. Доказательный статус последующего
+    /// резолвера граф не назначает. Дифференциальный тест закрепляет
+    /// эквивалентность миграционного подключения и результатов на проверяемом
+    /// домене, но не является независимым эталоном математики самого резолвера.
+    /// Тон клампится (флаг `compressed`) при недостижимости на кривой семьи.
     PairLabel {
         /// Пер-темный кодированный тинт-якорь семьи (как у лестницы).
         tint: LadderTint,
@@ -2774,7 +2774,7 @@ fn nested_foreground_component() -> Result<
     &'static crate::appearance::GraphError,
 > {
     use crate::appearance::{
-        AppearanceGraphSpec, CompiledAppearanceGraph, CompositionProfileV1, EvidenceClass,
+        AppearanceGraphSpec, CompiledAppearanceGraph, CompositionProfileV1,
         ForegroundOccurrenceSpec, GraphError, SurfaceSpec,
     };
     static COMPONENT: std::sync::OnceLock<Result<CompiledAppearanceGraph, GraphError>> =
@@ -2801,7 +2801,6 @@ fn nested_foreground_component() -> Result<
                     id: NESTED_FOREGROUND,
                     identity_source: NESTED_SOURCE,
                     against: NESTED_DERIVED_SURFACE,
-                    evidence: EvidenceClass::LegacyCompatibility,
                 }],
             )
             .compile()
@@ -2829,10 +2828,15 @@ fn pair_label_surface_domain_error(error: &str) -> Resolved {
 /// Поверхность НЕ является эмитированным [`RoleSpec::PairFill`] — у того своя,
 /// отдельно сдвинутая солид-эмиссия; никакого ребра `PairFill → PairLabel` нет.
 ///
-/// Оттеночный foreground решается ПРЕЖНИМ законом
-/// ([`resolve_hued_anchor_from_encoded_source`], статус LegacyCompatibility —
-/// не новая научная истина) НА ЭТОЙ ПОВЕРХНОСТИ: её собственный
-/// [`ResolveContext`] задаёт полярность/макс-контраст, поэтому WCAG-пол лейбла
+/// Оттеночный foreground решается текущим
+/// [`resolve_hued_anchor_from_encoded_source`] НА ЭТОЙ ПОВЕРХНОСТИ. Appearance-
+/// граф не присваивает этому последующему решению доказательный статус: он
+/// возвращает только source/against/backdrop. Дифференциальный тест закрепляет
+/// подключение и результаты миграции на проверяемом домене, но оба пути
+/// используют один резолвер и потому не образуют независимый эталон его
+/// математики. Собственный [`ResolveContext`] поверхности задаёт
+/// полярность/макс-контраст, поэтому
+/// WCAG-пол лейбла
 /// гарантирован против той подложки, на которой foreground реально стоит
 /// (обычные `label-*` роли решаются против страницы, и на тинт-подложке их
 /// контраст проседает — класс, который закрывает эта роль). Недостижимость пола

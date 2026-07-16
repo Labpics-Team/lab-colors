@@ -1128,10 +1128,10 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   assert.match(verifier, /case "incompatibleCoreContract"/u);
 });
 
-test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () => {
+test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1146,6 +1146,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     v4: "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c",
     v5: "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59",
     v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
+    v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1156,7 +1157,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1237,11 +1238,43 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
   assert.ok(v6.roles.runtime.policy.maxRawBytes <= v1.policy.maxRawBytes);
   assert.ok(v6.roles.runtime.policy.maxRawBytes <= v4.policy.maxRawBytes);
 
+  // V7 (#307-C7a): size policy хранит только измеряемую величину. SHA каждого
+  // конкретного source-коммита принадлежит release provenance, не size budget.
+  assert.equal(v7.schemaVersion, 6);
+  assert.equal(v7.budgetId, "labcolors-wasm-roles-issue-307-c7a-v7");
+  assert.deepEqual(v7.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v6.json",
+    fileSha256: expectedHashes.v6,
+  });
+  assert.deepEqual(v7.toolchainSource, v6.toolchainSource);
+  assert.deepEqual(v7.buildRecipes, v6.buildRecipes);
+  assert.deepEqual(v7.roles.runtime.measurement, {
+    issue: 307,
+    slice: "C7a",
+    measurementPlatform: "linux-x64",
+    rawBytes: 454334,
+  });
+  assert.equal(
+    v7.roles.runtime.policy.derivation,
+    "exact-accepted-issue-307-slice-c7a-runtime-measurement",
+  );
+  assert.deepEqual(v7.roles.compiler.measurement, {
+    issue: 296,
+    slice: "C3",
+    measurementPlatform: "linux-x64",
+    rawBytes: 229658,
+  });
+  assert.deepEqual(v7.roles.compiler.policy, v6.roles.compiler.policy);
+  for (const role of ["runtime", "compiler"]) {
+    assert.equal(v7.roles[role].policy.maxRawBytes, v7.roles[role].measurement.rawBytes);
+    assert.ok(v7.roles[role].policy.maxRawBytes <= v6.roles[role].policy.maxRawBytes);
+  }
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v6);
-  for (const version of [1, 2, 3, 4, 5, 6]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v7);
+  for (const version of [1, 2, 3, 4, 5, 6, 7]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1255,21 +1288,103 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
   assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
   assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);
   assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
+  const repetition = workflowRunScript(
+    ci,
+    "name: repeat WASM role builds in one toolchain-pinned CI job",
+  );
+  const recipePrefix = "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ";
+  const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${v1.measurement.rustPathRemap
+    .map((mapping) => {
+      const separator = mapping.indexOf("=");
+      assert.ok(separator > 0, "path remap must name one environment source");
+      return `"--remap-path-prefix=\$${mapping.slice(0, separator)}=${mapping.slice(separator + 1)}"`;
+    })
+    .join("$'\\x1f'")}`;
+  const expectedBuilds = ["runtime", "compiler"].map((role) => {
+    const command = v7.buildRecipes[role].command;
+    assert.ok(command.startsWith(recipePrefix));
+    return command.slice(recipePrefix.length);
+  });
+  const expectedDiffs = [
+    'diff --no-dereference --recursive "$first/pkg" packages/colors/pkg',
+    'diff --no-dereference --recursive "$first/compiler" packages/colors/compiler',
+  ];
+  const expectedDiffBlocks = expectedDiffs.map((command, index) => [
+    `if ! ${command}; then`,
+    `  echo "${index === 0 ? "runtime" : "compiler"} WASM output changed between builds" >&2`,
+    "  exit 1",
+    "fi",
+  ].join("\n"));
+  const expectedPathGuard = [
+    '  for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do',
+    '    if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then',
+    '      echo "unmapped build path $root in $wasm" >&2',
+    "      exit 1",
+    "    fi",
+    "  done",
+  ].join("\n");
+  const assertRepeatabilityContract = (script) => {
+    assert.match(script, /^set -euo pipefail$/mu);
+    assert.deepEqual(
+      script.split("\n").filter((line) => line.startsWith("export CARGO_ENCODED_RUSTFLAGS=")),
+      [expectedRemapExport],
+      "the live path-remap command must equal the versioned budget declaration",
+    );
+    const functionBody = script.match(
+      /(?:^|\n)build_roles\(\) \{\n(?<body>(?:  [^\n]+\n)+)\}/u,
+    )?.groups?.body;
+    assert.ok(functionBody, "build_roles must be one bounded shell function");
+    assert.deepEqual(
+      functionBody.split("\n").map((line) => line.trim()).filter(Boolean),
+      expectedBuilds,
+      "CI build commands must equal the versioned budget recipe commands",
+    );
+    assert.equal(
+      script.match(/^build_roles$/gmu)?.length,
+      2,
+      "the same recipe must run exactly twice",
+    );
+    assert.match(script, /^cargo clean$/mu);
+    assert.match(script, /^cp -a packages\/colors\/pkg "\$first\/pkg"$/mu);
+    assert.match(script, /^cp -a packages\/colors\/compiler "\$first\/compiler"$/mu);
+    assert.deepEqual(
+      [...script.matchAll(/^if ! diff[^\n]+\n  echo [^\n]+\n  exit 1\nfi$/gmu)]
+        .map((match) => match[0]),
+      expectedDiffBlocks,
+      "both output directories must be compared by fail-closed exact commands",
+    );
+    assert.equal(
+      script.match(
+        /^  for root in "\$GITHUB_WORKSPACE" "\$CARGO_HOME" "\$RUSTUP_HOME"; do\n    if LC_ALL=C grep -a -F -q -- "\$root\/" "\$wasm"; then\n      echo "unmapped build path \$root in \$wasm" >&2\n      exit 1\n    fi\n  done$/mu,
+      )?.[0],
+      expectedPathGuard,
+      "host-path rejection must remain one fail-closed exact block",
+    );
+  };
+  assertRepeatabilityContract(repetition);
 
-  for (const [role, path] of [
-    ["runtime", join(root, "packages", "colors", "pkg", "labcolors_bg.wasm")],
-    ["compiler", join(root, "packages", "colors", "compiler", "labcolors_compiler_bg.wasm")],
-  ]) {
-    const builtBytes = readFileSync(path);
-    // The exact V5 digest selects the pinned Linux build; developer builds retain their own host paths.
-    if (sha256(builtBytes) !== v5.roles[role].measurement.sha256) continue;
-    const builtWasm = builtBytes.toString("latin1");
-    assert.match(builtWasm, /\/cargo-home\/registry\/src\//u);
-    assert.doesNotMatch(builtWasm, /\/(?:Users|home)\/[^\0]*?\/\.cargo\/registry\/src\//u);
-    assert.doesNotMatch(builtWasm, /\/opt\/actions-runner\/[^\0]*?\/cargo-wasm\/registry\/src\//u);
-  }
+  const recipeBypass = repetition.replace(
+    expectedBuilds[0],
+    `${expectedBuilds[0]} --features unreviewed`,
+  );
+  assert.notEqual(recipeBypass, repetition, "recipe mutation must bite a real command");
+  assert.throws(() => assertRepeatabilityContract(recipeBypass));
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v5-"));
+  const diffBypass = repetition.replace(
+    expectedDiffBlocks[0],
+    expectedDiffBlocks[0].replace("  exit 1", "  :"),
+  );
+  assert.notEqual(diffBypass, repetition, "diff mutation must bite a real command");
+  assert.throws(() => assertRepeatabilityContract(diffBypass));
+
+  const pathBypass = repetition.replace(
+    expectedPathGuard,
+    expectedPathGuard.replace("      exit 1", "      :"),
+  );
+  assert.notEqual(pathBypass, repetition, "path mutation must bite the live guard");
+  assert.throws(() => assertRepeatabilityContract(pathBypass));
+
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v7-"));
   try {
     const runtimePath = join(temporary, "runtime.wasm");
     const compilerPath = join(temporary, "compiler.wasm");
@@ -1278,10 +1393,9 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     const compilerBytes = Buffer.alloc(17);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
     compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v6);
+    const fixture = structuredClone(v7);
     for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
       fixture.roles[role].measurement.rawBytes = bytes.length;
-      fixture.roles[role].measurement.sha256 = sha256(bytes);
       fixture.roles[role].policy.maxRawBytes = bytes.length;
     }
     writeFileSync(runtimePath, runtimeBytes);
@@ -1305,11 +1419,22 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     const output = run();
-    assert.match(output, /role=runtime raw=16B .*artifact-sha=match/u);
-    assert.match(output, /role=compiler raw=17B .*artifact-sha=match/u);
+    assert.match(
+      output,
+      /role=runtime raw=16B .*artifact-sha256=[0-9a-f]{64}/u,
+    );
+    assert.match(
+      output,
+      /role=compiler raw=17B .*artifact-sha256=[0-9a-f]{64}/u,
+    );
+    assert.doesNotMatch(
+      output,
+      /(?:recipe|artifact)-sha(?:256)?=match/u,
+      "the size checker cannot infer artifact provenance from arbitrary input bytes",
+    );
 
     const schemaMutations = [
-      ["schema rollback", (value) => { value.schemaVersion = 3; }],
+      ["schema rollback", (value) => { value.schemaVersion = 5; }],
       ["identity drift", (value) => { value.budgetId = "other"; }],
       ["predecessor path", (value) => { value.predecessor.path = "other.json"; }],
       ["predecessor hash", (value) => { value.predecessor.fileSha256 = "0".repeat(64); }],
@@ -1336,13 +1461,21 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
       }],
       ["zero bytes", (value) => { value.roles.compiler.measurement.rawBytes = 0; }],
       ["fractional bytes", (value) => { value.roles.runtime.measurement.rawBytes = 1.5; }],
-      ["invalid SHA", (value) => { value.roles.compiler.measurement.sha256 = "0"; }],
+      ["artifact digest conflation", (value) => {
+        value.roles.compiler.measurement.sha256 = "0".repeat(64);
+      }],
       ["ceiling mismatch", (value) => { value.roles.runtime.policy.maxRawBytes += 1; }],
       ["derivation drift", (value) => { value.roles.compiler.policy.derivation = "guessed"; }],
       ["gzip gate", (value) => { value.roles.runtime.policy.gzip = "gate"; }],
       ["same-capability regression", (value) => {
         value.roles.runtime.measurement.rawBytes = v1.policy.maxRawBytes + 1;
         value.roles.runtime.policy.maxRawBytes = v1.policy.maxRawBytes + 1;
+      }],
+      ["compiler predecessor regression", (value) => {
+        value.roles.compiler.measurement.rawBytes =
+          v6.roles.compiler.policy.maxRawBytes + 1;
+        value.roles.compiler.policy.maxRawBytes =
+          v6.roles.compiler.policy.maxRawBytes + 1;
       }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
       ["top-level key reorder", (value) => ({
@@ -1354,7 +1487,7 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
         roles: value.roles,
       })],
     ];
-    assert.equal(schemaMutations.length, 25, "v5 schema mutation set changed");
+    assert.equal(schemaMutations.length, 26, "v7 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1367,8 +1500,8 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 5,\n',
-        '  "schemaVersion": 5,\n  "schemaVersion": 5,\n',
+        '  "schemaVersion": 6,\n',
+        '  "schemaVersion": 6,\n  "schemaVersion": 6,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
@@ -1377,13 +1510,17 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
       const record = fixture.roles[role];
       const canonical = checker.evaluateWasmBudget(role, record, bytes, "linux-x64");
       assert.equal(canonical.status, "PASS");
-      assert.equal(canonical.artifactSha, "match");
+      assert.equal(canonical.artifactSha256, sha256(bytes));
       const sameSizeMutation = Buffer.from(bytes);
       sameSizeMutation[sameSizeMutation.length - 1] = 1;
-      assert.throws(
-        () => checker.evaluateWasmBudget(role, record, sameSizeMutation, "linux-x64"),
-        /SHA-256 mismatch/u,
+      const sameSize = checker.evaluateWasmBudget(
+        role,
+        record,
+        sameSizeMutation,
+        "linux-x64",
       );
+      assert.equal(sameSize.status, "PASS");
+      assert.notEqual(sameSize.artifactSha256, canonical.artifactSha256);
       assert.throws(
         () => checker.evaluateWasmBudget(
           role,
@@ -1404,12 +1541,11 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
     }
 
     const coordinatedMutation = structuredClone(fixture);
-    coordinatedMutation.roles.compiler.measurement.sha256 = sha256(
-      Buffer.from(compilerBytes).fill(1, compilerBytes.length - 1),
-    );
+    coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
+    coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v6),
-      /current v6 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v7),
+      /current v7 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1598,6 +1734,8 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   );
   assert.match(prepare, /bytes: runtimeWasm\.length/u);
   assert.match(prepare, /bytes: compilerWasm\.length/u);
+  assert.match(prepare, /sha256: sha256\(runtimeWasm\)/u);
+  assert.match(prepare, /sha256: sha256\(compilerWasm\)/u);
 
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(verifier, /import \{ workspaceVersion \} from "\.\/cargo-workspace\.mjs";/);

@@ -13,10 +13,11 @@ const V2_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v2.js
 const V3_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v3.json");
 const V4_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v4.json");
 const V5_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v5.json");
+const V6_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v6.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v6.json",
+  "packages/colors/bench/wasm-size-budget-v7.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -32,11 +33,14 @@ export const V5_FILE_SHA256 =
   "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59";
 export const V6_FILE_SHA256 =
   "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32";
+export const V7_FILE_SHA256 =
+  "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V5_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v5.json";
+const V6_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v6.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
 const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
+const V7_BUDGET_ID = "labcolors-wasm-roles-issue-307-c7a-v7";
 const ROLE_ORDER = ["runtime", "compiler"];
 const ROLE_SPECS = {
   runtime: {
@@ -44,8 +48,9 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
-    derivation: "exact-accepted-issue-296-slice-c1-runtime-measurement",
-    measurementSlice: "C1",
+    derivation: "exact-accepted-issue-307-slice-c7a-runtime-measurement",
+    measurementIssue: 307,
+    measurementSlice: "C7a",
   },
   compiler: {
     artifact: "packages/colors/compiler/labcolors_compiler_bg.wasm",
@@ -55,6 +60,7 @@ const ROLE_SPECS = {
     // C3 публикует атомарную операцию в compiler-роли: рост размера — это
     // добавленная capability, зафиксированная новым точным измерением.
     derivation: "exact-accepted-issue-296-slice-c3-compiler-measurement",
+    measurementIssue: 296,
     measurementSlice: "C3",
   },
 };
@@ -156,7 +162,11 @@ function verifyImmutableHistory() {
   if (v5?.schemaVersion !== 4 || v5?.budgetId !== V5_BUDGET_ID) {
     fail("immutable v5 budget identity drifted");
   }
-  return { v1, v4, v5 };
+  const v6 = readImmutableJson(V6_PATH, V6_FILE_SHA256, "v6");
+  if (v6?.schemaVersion !== 5 || v6?.budgetId !== V6_BUDGET_ID) {
+    fail("immutable v6 budget identity drifted");
+  }
+  return { v1, v4, v5, v6 };
 }
 
 function validateBudgetValue(budget) {
@@ -172,15 +182,15 @@ function validateBudgetValue(budget) {
     ],
     "budget",
   );
-  if (budget.schemaVersion !== 5) fail("supported schemaVersion is exactly 5");
-  if (budget.budgetId !== V6_BUDGET_ID) fail(`budgetId must be ${V6_BUDGET_ID}`);
+  if (budget.schemaVersion !== 6) fail("supported schemaVersion is exactly 6");
+  if (budget.budgetId !== V7_BUDGET_ID) fail(`budgetId must be ${V7_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V5_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V5_FILE_SHA256
+    budget.predecessor.path !== V6_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V6_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v5 document");
+    fail("predecessor must bind the immutable v6 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -193,7 +203,7 @@ function validateBudgetValue(budget) {
 
   exactKeys(budget.buildRecipes, ROLE_ORDER, "buildRecipes");
   exactKeys(budget.roles, ROLE_ORDER, "roles");
-  const { v1, v4 } = verifyImmutableHistory();
+  const { v1, v6 } = verifyImmutableHistory();
 
   for (const role of ROLE_ORDER) {
     const spec = ROLE_SPECS[role];
@@ -216,17 +226,22 @@ function validateBudgetValue(budget) {
     }
     exactKeys(
       record.measurement,
-      ["issue", "slice", "measurementPlatform", "rawBytes", "sha256"],
+      ["issue", "slice", "measurementPlatform", "rawBytes"],
       `roles.${role}.measurement`,
     );
-    if (record.measurement.issue !== 296 || record.measurement.slice !== spec.measurementSlice) {
-      fail(`roles.${role}.measurement must cite Issue #296 Slice ${spec.measurementSlice}`);
+    if (
+      record.measurement.issue !== spec.measurementIssue ||
+      record.measurement.slice !== spec.measurementSlice
+    ) {
+      fail(
+        `roles.${role}.measurement must cite Issue #${spec.measurementIssue} ` +
+          `Slice ${spec.measurementSlice}`,
+      );
     }
     if (record.measurement.measurementPlatform !== "linux-x64") {
       fail(`roles.${role}.measurement must use canonical linux-x64`);
     }
     positiveSafeInteger(record.measurement.rawBytes, `roles.${role}.measurement.rawBytes`);
-    lowercaseDigest(record.measurement.sha256, `roles.${role}.measurement.sha256`);
 
     exactKeys(record.policy, ["maxRawBytes", "derivation", "gzip"], `roles.${role}.policy`);
     positiveSafeInteger(record.policy.maxRawBytes, `roles.${role}.policy.maxRawBytes`);
@@ -242,10 +257,12 @@ function validateBudgetValue(budget) {
   }
 
   if (budget.roles.runtime.policy.maxRawBytes > v1.policy.maxRawBytes) {
-    fail("runtime role must not exceed the immutable same-capability pre-compiler ceiling");
+    fail("runtime role must not exceed the immutable same-capability initial ceiling");
   }
-  if (budget.roles.runtime.policy.maxRawBytes > v4.policy.maxRawBytes) {
-    fail("runtime role must not regress the immutable immediate predecessor ceiling");
+  for (const role of ROLE_ORDER) {
+    if (budget.roles[role].policy.maxRawBytes > v6.roles[role].policy.maxRawBytes) {
+      fail(`${role} role must not regress the immutable immediate predecessor ceiling`);
+    }
   }
 }
 
@@ -264,10 +281,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V6_FILE_SHA256) {
+    if (actualFileSha256 !== V7_FILE_SHA256) {
       fail(
-        `current v6 file SHA-256 mismatch: ` +
-          `expected=${V6_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v7 file SHA-256 mismatch: ` +
+          `expected=${V7_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
@@ -296,7 +313,6 @@ export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
   const rawBytes = bytes.length;
   const gzipBytes = gzipSync(bytes, { level: 9 }).length;
   const artifactSha256 = sha256(bytes);
-  const artifactSha = artifactSha256 === record.measurement.sha256 ? "match" : "different";
   const isCanonicalPlatform = currentPlatform === record.measurement.measurementPlatform;
   if (isCanonicalPlatform && rawBytes !== record.measurement.rawBytes) {
     fail(
@@ -305,14 +321,6 @@ export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
         `gzip=${gzipBytes}B diagnostic-only sha256=${artifactSha256}`,
     );
   }
-  if (isCanonicalPlatform && artifactSha !== "match") {
-    fail(
-      `${role} exact artifact SHA-256 mismatch on ${currentPlatform}: ` +
-        `expected=${record.measurement.sha256} actual=${artifactSha256}; ` +
-        `raw=${rawBytes}B gzip=${gzipBytes}B diagnostic-only`,
-    );
-  }
-
   return {
     role,
     status: isCanonicalPlatform ? "PASS" : "DIAGNOSTIC",
@@ -321,7 +329,6 @@ export function evaluateWasmBudget(role, record, wasm, currentPlatform) {
     deltaBytes: rawBytes - record.policy.maxRawBytes,
     gzipBytes,
     currentPlatform,
-    artifactSha,
     artifactSha256,
   };
 }
@@ -332,7 +339,7 @@ function formatResult(result, artifact) {
     `WASM size budget ${result.status} role=${result.role} raw=${result.rawBytes}B ` +
     `ceiling=${result.maxRawBytes}B delta=${delta}B gzip=${result.gzipBytes}B ` +
     `diagnostic-only platform=${result.currentPlatform} artifact=${artifact} ` +
-    `artifact-sha=${result.artifactSha} recipe-sha=match`
+    `artifact-sha256=${result.artifactSha256}`
   );
 }
 

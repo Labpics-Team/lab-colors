@@ -10,8 +10,9 @@
 use proptest::prelude::*;
 
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, ColorInputId, CompositionProfileV1, EvidenceClass,
-    ForegroundOccurrenceSpec, GraphError, OccurrenceId, OpacityInputId, SurfaceId, SurfaceSpec,
+    AppearanceBindings, AppearanceGraphSpec, ColorInputId, CompositionProfileV1,
+    ForegroundOccurrenceSpec, GraphError, OccurrenceId, OpacityInputId, ResolvedOccurrence,
+    SourceOverCertificateV1, SurfaceId, SurfaceSpec,
 };
 use crate::solve::Floor;
 
@@ -21,6 +22,45 @@ const OPACITY: OpacityInputId = OpacityInputId::new(0);
 const CONTEXT_SURFACE: SurfaceId = SurfaceId::new(0);
 const DERIVED_SURFACE: SurfaceId = SurfaceId::new(1);
 const FOREGROUND: OccurrenceId = OccurrenceId::new(0);
+
+#[test]
+fn occurrence_contract_contains_only_physical_facts() {
+    let graph = AppearanceGraphSpec::new(
+        vec![SOURCE, CONTEXT],
+        vec![],
+        vec![SurfaceSpec::Input {
+            id: CONTEXT_SURFACE,
+            color: CONTEXT,
+        }],
+        vec![ForegroundOccurrenceSpec {
+            id: FOREGROUND,
+            identity_source: SOURCE,
+            against: CONTEXT_SURFACE,
+        }],
+    )
+    .compile()
+    .unwrap();
+
+    let rendered = graph
+        .evaluate(&AppearanceBindings::new(
+            vec![(SOURCE, [1, 2, 3]), (CONTEXT, [4, 5, 6])],
+            vec![],
+        ))
+        .unwrap();
+
+    let ResolvedOccurrence {
+        id,
+        identity_source,
+        source,
+        against,
+        backdrop,
+    } = *rendered.occurrence(FOREGROUND).unwrap();
+
+    assert_eq!(
+        (id, identity_source, source, against, backdrop),
+        (FOREGROUND, SOURCE, [1, 2, 3], CONTEXT_SURFACE, [4, 5, 6],)
+    );
+}
 
 fn atomic_component(surface_declarations_reversed: bool) -> AppearanceGraphSpec {
     let context = SurfaceSpec::Input {
@@ -48,7 +88,6 @@ fn atomic_component(surface_declarations_reversed: bool) -> AppearanceGraphSpec 
             id: FOREGROUND,
             identity_source: SOURCE,
             against: DERIVED_SURFACE,
-            evidence: EvidenceClass::LegacyCompatibility,
         }],
     )
 }
@@ -130,7 +169,6 @@ fn unrelated_opaque_handles_do_not_change_the_physics() {
             id: other_occurrence,
             identity_source: other_source,
             against: other_derived_surface,
-            evidence: EvidenceClass::LegacyCompatibility,
         }],
     )
     .compile()
@@ -171,7 +209,6 @@ fn graph_rejects_missing_occurrence_backdrop_and_cycles() {
             id: FOREGROUND,
             identity_source: SOURCE,
             against: DERIVED_SURFACE,
-            evidence: EvidenceClass::LegacyCompatibility,
         }],
     )
     .compile();
@@ -240,17 +277,27 @@ proptest! {
         let certificates = rendered.certificates();
         prop_assert_eq!(certificates.len(), 1);
         let certificate = &certificates[0];
-        prop_assert_eq!(certificate.profile, CompositionProfileV1::EncodedSrgb8SourceOverV1);
-        prop_assert_eq!(certificate.evidence, EvidenceClass::ReferenceExact);
-        prop_assert_eq!(certificate.surface, DERIVED_SURFACE);
-        prop_assert_eq!(certificate.source_input, SOURCE);
-        prop_assert_eq!(certificate.source_rgb, source);
-        prop_assert_eq!(certificate.backdrop_surface, CONTEXT_SURFACE);
-        prop_assert_eq!(certificate.backdrop_rgb, context);
-        prop_assert_eq!(certificate.opacity_input, OPACITY);
-        prop_assert_eq!(certificate.opacity_bits, opacity.to_bits());
-        prop_assert_eq!(certificate.output_rgb, rendered.surface_rgb(DERIVED_SURFACE).unwrap());
-        prop_assert_eq!(certificate.replay(), Ok(certificate.output_rgb));
+        let SourceOverCertificateV1 {
+            profile,
+            surface,
+            source_input,
+            source_rgb,
+            backdrop_surface,
+            backdrop_rgb,
+            opacity_input,
+            opacity_bits,
+            output_rgb,
+        } = certificate;
+        prop_assert_eq!(*profile, CompositionProfileV1::EncodedSrgb8SourceOverV1);
+        prop_assert_eq!(*surface, DERIVED_SURFACE);
+        prop_assert_eq!(*source_input, SOURCE);
+        prop_assert_eq!(*source_rgb, source);
+        prop_assert_eq!(*backdrop_surface, CONTEXT_SURFACE);
+        prop_assert_eq!(*backdrop_rgb, context);
+        prop_assert_eq!(*opacity_input, OPACITY);
+        prop_assert_eq!(*opacity_bits, opacity.to_bits());
+        prop_assert_eq!(*output_rgb, rendered.surface_rgb(DERIVED_SURFACE).unwrap());
+        prop_assert_eq!(certificate.replay(), Ok(*output_rgb));
     }
 }
 
@@ -308,13 +355,11 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
                 id: FOREGROUND,
                 identity_source: SOURCE,
                 against: CONTEXT_SURFACE,
-                evidence: EvidenceClass::LegacyCompatibility,
             },
             ForegroundOccurrenceSpec {
                 id: FOREGROUND,
                 identity_source: CONTEXT,
                 against: CONTEXT_SURFACE,
-                evidence: EvidenceClass::LegacyCompatibility,
             },
         ],
     )
@@ -433,7 +478,6 @@ fn compile_rejects_every_missing_reference_with_typed_errors() {
             id: FOREGROUND,
             identity_source: SOURCE,
             against: CONTEXT_SURFACE,
-            evidence: EvidenceClass::LegacyCompatibility,
         }],
     )
     .compile();
@@ -567,7 +611,6 @@ fn occurrence_source_follows_the_declared_identity_edge_not_the_composite_source
             id: FOREGROUND,
             identity_source: identity,
             against: DERIVED_SURFACE,
-            evidence: EvidenceClass::LegacyCompatibility,
         }],
     )
     .compile()
@@ -587,5 +630,4 @@ fn occurrence_source_follows_the_declared_identity_edge_not_the_composite_source
     assert_eq!(occurrence.identity_source, identity);
     assert_eq!(occurrence.source, [111, 112, 113]);
     assert_ne!(occurrence.source, [10, 20, 30]);
-    assert_eq!(occurrence.evidence, EvidenceClass::LegacyCompatibility);
 }
