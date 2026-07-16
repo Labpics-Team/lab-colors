@@ -18,7 +18,7 @@ const RUNTIME_DOC_PATHS = [
 ];
 const CLAIM_EXT = /\.(?:js|md|mjs|rs|ts)$/u;
 const REPOSITORY_TEXT_EXT =
-  /\.(?:c|cc|cpp|css|h|hpp|html|js|json|md|mjs|py|rs|sh|swift|toml|ts|tsx|txt|ya?ml)$/u;
+  /\.(?:c|cc|cpp|css|go|h|hpp|html|java|js|json|jsx|kt|md|mdx|mjs|py|rs|sh|swift|toml|ts|tsx|txt|ya?ml)$/u;
 const CLAIM_SKIP = /(?:^|\/)(?:node_modules|pkg|target|\.git)(?:\/|$)|mutants\.out/u;
 const HUMAN_CLEANLINESS_VERDICTS = [
   /Закон Грязи/u,
@@ -194,6 +194,8 @@ const LCS_LPC_DRIFT = [
   /J['′]\s*=\s*50[\s\S]{0,100}half-lightness/iu,
   /perceptually uniform J['′]\/M['′]/iu,
   /Because UCS is perceptually uniform/iu,
+  /J['′]\s*[—-]\s*перцептуальн[а-яё]*\s+яркост/iu,
+  /s:\s*f64[\s\S]{0,80}насыщенн/iu,
   /lab-colors\s+решает[^.]{0,200}перцептуальн[а-яё]*\s+пространств[а-яё]*\s+LCS/iu,
   /Perceptual-contrast core curve/iu,
   /generic perceptual-contrast math/iu,
@@ -300,6 +302,26 @@ test("verification-index quarantine bites on links and renamed copies", () => {
   }
 });
 
+test("repository claim scan includes every governed text format", () => {
+  for (const extension of [
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "py",
+    "rs",
+    "go",
+    "java",
+    "kt",
+    "cpp",
+    "h",
+    "md",
+    "mdx",
+  ]) {
+    assert.match(`claim.${extension}`, REPOSITORY_TEXT_EXT, extension);
+  }
+});
+
 test("live repository has no hand-written global verification index", () => {
   const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
     (file) => file !== SELF,
@@ -324,6 +346,8 @@ test("LCS/LPC drift detector bites on every rejected expansion or reduction", ()
     "J'=50 reads as half-lightness",
     "maps correlates onto perceptually uniform J'/M'",
     "Because UCS is perceptually uniform, this is a human scale",
+    "J' — перцептуальная яркость (CAM16-UCS)",
+    "s: f64, // насыщенность = M' / (J' + 1)",
     "lab-colors решает её в собственном перцептуальном пространстве LCS",
     "Perceptual-contrast core curve",
     "Faithful port of the generic perceptual-contrast math",

@@ -241,10 +241,12 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
 //
 //   J' = 1.7·J / (1 + 0.007·J),   M' = ln(1 + 0.0228·M) / 0.0228.
 //
-// These four helpers are the SINGLE SOURCE OF TRUTH for the exactly invertible
-// CAM16-UCS coordinate rescale. They do not assign universal perceptual-
-// attribute meaning to an individual J'/M' value: `lcs` stores the coordinates,
-// `lpc` decompresses back to raw J/M, and the
+// These four helpers are the SINGLE SOURCE OF TRUTH for the CAM16-UCS
+// coordinate rescale. The forward and inverse formulae are analytically mutual
+// inverses; binary64 round-trips are validated within the `1e-12` tolerance in
+// `ucs_rescale_round_trips`, not claimed bit-exact. They do not assign universal
+// perceptual-attribute meaning to an individual J'/M' value: `lcs` stores the
+// coordinates, `lpc` transforms them back to raw J/M, and the
 // constants (`1.7`, `0.007`, `0.0228`) must never be re-typed inline anywhere
 // else (previously duplicated across `lcs::from_xyz_with_hok`, `lcs::to_xyz`,
 // and `lpc::y_hk_from_lcs`).

@@ -14,8 +14,9 @@ pub struct LcsColor {
     pub h_ok: f64,
     /// Internal reparameterisation of CAM16-UCS colourfulness `M′`:
     /// `s = M′ / (J′ + 1)`. The `+ 1` is a regulariser against division by zero
-    /// as `J′ → 0`; it is lossless — `LcsColor::mp` recovers `M′` exactly as
-    /// `s · (J′ + 1)`. This is NOT the CAM16 saturation correlate.
+    /// as `J′ → 0`; `LcsColor::mp` applies the analytical inverse
+    /// `s · (J′ + 1)`, subject to ordinary binary64 round-off. This is NOT the
+    /// CAM16 saturation correlate.
     pub s: f64,
     h_cam: f64,
 }
@@ -28,9 +29,9 @@ impl LcsColor {
 
     /// Parse from hex using the given viewing conditions.
     ///
-    /// The resulting J', saturation, and CAM16 hue reflect perception under
-    /// the provided VC (e.g. [`ViewingConditions::dim_surround`] for dark
-    /// themes).
+    /// The stored CAM16-UCS/Oklab coordinates are evaluated under the provided
+    /// VC (e.g. [`ViewingConditions::dim_surround`] for dark themes). They are
+    /// implementation inputs, not universal perceptual-attribute scales.
     pub fn from_hex_with_vc(hex: &str, vc: &ViewingConditions) -> Result<Self, String> {
         let rgb = srgb_from_hex(hex)?;
         let xyz = srgb_to_xyz(rgb);
@@ -59,8 +60,8 @@ impl LcsColor {
         Self { jp, h_ok, s, h_cam }
     }
 
-    /// CAM16-UCS colourfulness `M'`, recovered losslessly from the stored
-    /// reparameterisation (see the `s` field doc).
+    /// CAM16-UCS colourfulness correlate `M'`, recovered through the analytical
+    /// inverse of the stored reparameterisation (see the `s` field doc).
     pub(crate) fn mp(&self) -> f64 {
         self.s * (self.jp + 1.0)
     }
@@ -98,9 +99,10 @@ impl LcsColor {
     /// `finish`) reuses that result instead of recomputing it.
     pub(crate) fn from_cam16(j: f64, m: f64, h_cam: f64, h_ok: f64) -> Self {
         // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131). This is
-        // an exactly inverted coordinate transform used for colour-difference
-        // work; no individual J'/M' value is assigned a universal attribute
-        // meaning here. Inverse in `to_xyz` uses the same helpers.
+        // an analytically invertible coordinate transform used for
+        // colour-difference work; binary64 round-off is covered by the shared
+        // tolerance tests. No individual J'/M' value is assigned a universal
+        // attribute meaning here. Inverse in `to_xyz` uses the same helpers.
         let jp = cam16::ucs_j(j);
         let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
