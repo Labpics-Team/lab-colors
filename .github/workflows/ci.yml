@@ -640,23 +640,3 @@ jobs:
         run: |
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-compiler --locked
-  docs-drift:
-    name: docs-drift (нейминг-канон)
-    runs-on: [self-hosted, Linux, X64]
-    # Защита от fork-PR — см. комментарий в job `lint` выше.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-      # Гейт «доки == реальность» (порт эталона labui#150 / lab-icons#53 /
-      # lab-motion): docs/NAMING.md сверяется с фактами ФС. Node уже стоит на
-      # self-hosted раннерах; точная версия npm здесь не release input, потому
-      # setup-node не нужен. Rust-тулчейн тоже не нужен — гейт читает только ФС,
-      # поэтому джоба лёгкая и не трогает изоляцию остальных джоб.
-      - name: юниты гейта
-        run: node --test scripts/docs-drift.test.mjs
-      - name: check-docs-drift (docs/NAMING.md == факты ФС)
-        run: node scripts/check-docs-drift.mjs

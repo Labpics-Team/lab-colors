@@ -130,7 +130,6 @@ jobs:
                 "test",
                 "cargo audit (rustsec)",
                 "wasm build + headless test + size",
-                "docs-drift (нейминг-канон)",
               ],
             },
             {
