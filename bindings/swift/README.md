@@ -45,13 +45,10 @@ docker run --rm -v "$PWD":/src:ro \
     bash /src/bindings/swift/ci/run-conformance.sh
 ```
 
-Историческая аттестация pack `1.0.0` (числа, версии, платформа):
-`docs/conformance/local-swift-attestation.md`; она явно superseded для текущего
-pack `6.0.0` и не подменяет новый CI-прогон. Нативный macOS/arm64 path сейчас
-представлен только ручной reference-джобой
+Нативный macOS/arm64 path сейчас представлен только ручной reference-джобой
 `swift-conformance-macos-reference` (`workflow_dispatch`): это **не gate** PR,
-`main` или release. Полная platform/runtime-матрица остаётся отдельной работой
-в [issue #258](https://github.com/Labpics-Team/lab-colors/issues/258).
+`main` или release. Исполняемое доказательство остаётся явно ограничено
+описанным выше pinned Linux x86_64 контекстом.
 
 ## Толерантность conformance
 

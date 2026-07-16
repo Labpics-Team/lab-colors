@@ -67,7 +67,6 @@ test('lawForFile: по-доменные законы', () => {
   assert.ok(lawForFile('packages/colors/apply-theme.js'));
   assert.ok(lawForFile('crates/labcolors-core/Cargo.toml'));
   assert.ok(lawForFile('bindings/swift/Package.swift'));
-  assert.ok(!lawForFile('packages/colors/bench/AFTER.txt'));
   assert.ok(!lawForFile('crates/x/tests/data/labui.config.prod.json'));
 });
 
@@ -250,9 +249,9 @@ test('deviationsSection выделяет раздел до следующего 
 });
 
 test('fileLawErrors: незафиксированный файл и осиротевшая запись', () => {
-  const inv = { nonLaw: ['packages/colors/bench/AFTER.txt'], subpaths: [] };
+  const inv = { nonLaw: ['vendor/tool/OUTPUT.bin'], subpaths: [] };
   assert.deepEqual(
-    fileLawErrors('- `packages/colors/bench/AFTER.txt` — слепок.', inv),
+    fileLawErrors('- `vendor/tool/OUTPUT.bin` — артефакт внешнего тулинга.', inv),
     [],
   );
   assert.match(fileLawErrors('', inv)[0], /не зафиксирован/);

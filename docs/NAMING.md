@@ -17,9 +17,9 @@
 | крейтов семейства в crates/ | 6 |
 | экспорт-субпутей package.json @labpics/colors | 10 |
 | python-скриптов scripts/*.py | 9 |
-| маркдаун-доков docs/**/*.md (включая этот канон) | 12 |
+| маркдаун-доков docs/**/*.md (включая этот канон) | 10 |
 | векторов conformance/vectors/*.json (включая manifest) | 9 |
-| исходных/объявленных publish-файлов вне закона имён | 10 |
+| исходных/объявленных publish-файлов вне закона имён | 8 |
 
 ## Общие принципы (эталон lab-icons)
 
@@ -131,10 +131,6 @@
 - `crates/labcolors-wasm/tests/data/labui.config.prod.json` — фикстура
   байт-в-байт воспроизводит имя реального конфига labui; точечные сегменты —
   как у источника, переименование сломало бы прослеживаемость.
-- `packages/colors/bench/AFTER.txt` и `packages/colors/bench/BASELINE.txt` —
-  bench-слепки; КАПС-стем — маркер «снапшот, не код», по аналогии с
-  КАПС-канонами маркдауна.
-
 ## Как чинить дрейф
 
 1. `node scripts/naming-inventory.mjs` — посмотреть факты ФС (JSON).
