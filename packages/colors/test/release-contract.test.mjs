@@ -1290,7 +1290,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
   const repetition = workflowRunScript(
     ci,
-    "name: repeat WASM role builds in one pinned job",
+    "name: repeat WASM role builds in one toolchain-pinned CI job",
   );
   const recipePrefix = "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ";
   const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${v1.measurement.rustPathRemap
@@ -1309,6 +1309,20 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     'diff --no-dereference --recursive "$first/pkg" packages/colors/pkg',
     'diff --no-dereference --recursive "$first/compiler" packages/colors/compiler',
   ];
+  const expectedDiffBlocks = expectedDiffs.map((command, index) => [
+    `if ! ${command}; then`,
+    `  echo "${index === 0 ? "runtime" : "compiler"} WASM output changed between builds" >&2`,
+    "  exit 1",
+    "fi",
+  ].join("\n"));
+  const expectedPathGuard = [
+    '  for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do',
+    '    if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then',
+    '      echo "unmapped build path $root in $wasm" >&2',
+    "      exit 1",
+    "    fi",
+    "  done",
+  ].join("\n");
   const assertRepeatabilityContract = (script) => {
     assert.match(script, /^set -euo pipefail$/mu);
     assert.deepEqual(
@@ -1334,17 +1348,17 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     assert.match(script, /^cp -a packages\/colors\/pkg "\$first\/pkg"$/mu);
     assert.match(script, /^cp -a packages\/colors\/compiler "\$first\/compiler"$/mu);
     assert.deepEqual(
-      script.split("\n").filter((line) => line.startsWith("diff ")),
-      expectedDiffs,
+      [...script.matchAll(/^if ! diff[^\n]+\n  echo [^\n]+\n  exit 1\nfi$/gmu)]
+        .map((match) => match[0]),
+      expectedDiffBlocks,
       "both output directories must be compared by fail-closed exact commands",
     );
-    assert.match(
-      script,
-      /^  for root in "\$GITHUB_WORKSPACE" "\$CARGO_HOME" "\$RUSTUP_HOME"; do$/mu,
-    );
-    assert.match(
-      script,
-      /^    if LC_ALL=C grep -a -F -q -- "\$root\/" "\$wasm"; then$/mu,
+    assert.equal(
+      script.match(
+        /^  for root in "\$GITHUB_WORKSPACE" "\$CARGO_HOME" "\$RUSTUP_HOME"; do\n    if LC_ALL=C grep -a -F -q -- "\$root\/" "\$wasm"; then\n      echo "unmapped build path \$root in \$wasm" >&2\n      exit 1\n    fi\n  done$/mu,
+      )?.[0],
+      expectedPathGuard,
+      "host-path rejection must remain one fail-closed exact block",
     );
   };
   assertRepeatabilityContract(repetition);
@@ -1356,12 +1370,17 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.notEqual(recipeBypass, repetition, "recipe mutation must bite a real command");
   assert.throws(() => assertRepeatabilityContract(recipeBypass));
 
-  const diffBypass = repetition.replace(expectedDiffs[0], `${expectedDiffs[0]} || true`);
+  const diffBypass = repetition.replace(
+    expectedDiffBlocks[0],
+    expectedDiffBlocks[0].replace("  exit 1", "  :"),
+  );
   assert.notEqual(diffBypass, repetition, "diff mutation must bite a real command");
   assert.throws(() => assertRepeatabilityContract(diffBypass));
 
-  const pathCheck = 'if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then';
-  const pathBypass = repetition.replace(pathCheck, `${pathCheck} : || true`);
+  const pathBypass = repetition.replace(
+    expectedPathGuard,
+    expectedPathGuard.replace("      exit 1", "      :"),
+  );
   assert.notEqual(pathBypass, repetition, "path mutation must bite the live guard");
   assert.throws(() => assertRepeatabilityContract(pathBypass));
 

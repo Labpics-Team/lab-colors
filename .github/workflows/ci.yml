@@ -466,13 +466,14 @@ jobs:
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-      - name: repeat WASM role builds in one pinned job
+      - name: repeat WASM role builds in one toolchain-pinned CI job
         # Each execution role is a separate Cargo root and physical artifact;
         # building them in separate invocations prevents feature unification.
         # Rust error locations otherwise embed the self-hosted runner's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
         # The second build follows `cargo clean`; equality checks repeatability
-        # for this source inside one pinned job, not cross-run identity.
+        # for this source inside this toolchain-pinned job, not cross-run or
+        # cross-host identity.
         run: |
           set -euo pipefail
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
@@ -494,8 +495,14 @@ jobs:
           rm -rf packages/colors/pkg packages/colors/compiler
           build_roles
 
-          diff --no-dereference --recursive "$first/pkg" packages/colors/pkg
-          diff --no-dereference --recursive "$first/compiler" packages/colors/compiler
+          if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then
+            echo "runtime WASM output changed between builds" >&2
+            exit 1
+          fi
+          if ! diff --no-dereference --recursive "$first/compiler" packages/colors/compiler; then
+            echo "compiler WASM output changed between builds" >&2
+            exit 1
+          fi
 
           for wasm in \
             packages/colors/pkg/labcolors_bg.wasm \
