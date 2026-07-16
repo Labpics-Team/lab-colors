@@ -1,10 +1,11 @@
-//! External published reference vectors for the deepest colour-science layers.
+//! Reference checks for the deepest colour-science layers.
 //!
-//! These pin the crate's transforms to CONTROL POINTS AND VECTORS PUBLISHED IN
-//! STANDARDS / PEER-REVIEWED SOURCES, not to the crate's own output. They live
-//! in-crate (not `tests/`) because the transforms they touch are `pub(crate)`
-//! and invisible to an integration test. Public-API-reachable vectors are in
-//! `tests/reference_vectors.rs`; the full map is `docs/verification-map.md`.
+//! The checks combine published control points, independent transcriptions and
+//! explicit identities. They live in-crate (not `tests/`) because the transforms
+//! they touch are `pub(crate)` and invisible to an integration test.
+//! Public-API-reachable checks are in `tests/reference_vectors.rs`; each test
+//! below carries its own source and applicability boundary beside the assertion
+//! it protects.
 //!
 //! Sources cited per test:
 //! * IEC 61966-2-1:1999 — sRGB EOTF/OETF and primaries; also W3C CSS Color 4.

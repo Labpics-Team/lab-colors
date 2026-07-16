@@ -1,9 +1,10 @@
-//! External published reference vectors reachable through the PUBLIC API.
+//! Reference checks reachable through the PUBLIC API.
 //!
 //! Companion to the crate-internal `reference_vectors_deep` (which reaches
-//! `pub(crate)` transforms). Every vector here is a control point or worked
-//! value from a STANDARD or PEER-REVIEWED SOURCE, asserted end-to-end through
-//! the shipped surface. Full map: `docs/verification-map.md`.
+//! `pub(crate)` transforms). The checks combine published control points,
+//! independently transcribed formulae and explicit cross-boundary identities.
+//! Each assertion owns its source and oracle boundary; crate-private companion
+//! checks live in `src/reference_vectors_deep.rs`.
 //!
 //! Sources:
 //! * W3C WCAG 2.1 §1.4.3 / §1.4.11 — relative luminance & contrast ratio.
@@ -262,7 +263,8 @@ fn dim_surround_shifts_lpc() {
 // (byte-exact round-trip, proven for the core by `oklch::round_trip_is_byte_exact`).
 // This file OWNS the seed set; the committed fixture is the artifact the JS test
 // reads; `oklch_core_vectors_fixture_is_fresh` keeps it in lock-step with the
-// live emitter. See `docs/verification-map.md`.
+// live emitter, while `packages/colors/test/reference-vectors.test.mjs`
+// independently decodes the committed strings back to the seed bytes.
 // ═════════════════════════════════════════════════════════════════════════════
 
 const FIXTURE_REL: &str = "/../../packages/colors/test/data/oklch-core-vectors.txt";

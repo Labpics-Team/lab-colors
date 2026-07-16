@@ -77,11 +77,11 @@ mod pair_label_tests;
 #[cfg(test)]
 mod r3_byte_identity_tests;
 
-// External published reference vectors for the deepest colour-science layers
-// (sRGB EOTF & matrices, Ottosson Oklab, CAT16/CIECAM16 adapt, Hellwig-2022 H-K,
-// WCAG linearise). These reach `pub(crate)` transforms an integration test in
-// `tests/` cannot see; the public-API-reachable vectors live in
-// `tests/reference_vectors.rs`. See `docs/verification-map.md`.
+// Reference checks for the deepest colour-science layers (sRGB EOTF & matrices,
+// Ottosson Oklab, CAT16/CIECAM16 adapt, Hellwig-2022 H-K, WCAG linearise). These
+// reach `pub(crate)` transforms an integration test in `tests/` cannot see; the
+// public-API-reachable checks live in `tests/reference_vectors.rs`, with source
+// and oracle scope beside each test.
 #[cfg(test)]
 mod reference_vectors_deep;
 

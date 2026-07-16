@@ -17,6 +17,8 @@ const RUNTIME_DOC_PATHS = [
     .map((path) => `packages/colors/${path}`),
 ];
 const CLAIM_EXT = /\.(?:js|md|mjs|rs|ts)$/u;
+const REPOSITORY_TEXT_EXT =
+  /\.(?:c|cc|cpp|css|h|hpp|html|js|json|md|mjs|py|rs|sh|swift|toml|ts|tsx|txt|ya?ml)$/u;
 const CLAIM_SKIP = /(?:^|\/)(?:node_modules|pkg|target|\.git)(?:\/|$)|mutants\.out/u;
 const HUMAN_CLEANLINESS_VERDICTS = [
   /Закон Грязи/u,
@@ -56,6 +58,11 @@ const RUNTIME_DOC_FALSE_CLAIMS = [
   {
     pattern: /~2\.5× на 3 сэмплах/u,
     sample: "~2.5× на 3 сэмплах",
+    reason: "an ungated benchmark result was presented as a durable property",
+  },
+  {
+    pattern: /measured\s+~2\.6x/iu,
+    sample: "a measured ~2.6x on the multi-sample recheck",
     reason: "an ungated benchmark result was presented as a durable property",
   },
   {
@@ -169,13 +176,21 @@ const RUNTIME_DOC_FALSE_CLAIMS = [
     reason: "the public package linked to a private-repository migration guide",
   },
 ];
+const MANUAL_VERIFICATION_PROSE = [
+  /(?:docs\/)?verification-map\.md/u,
+  /Карта верификации нижних слоёв/iu,
+  /Каждая формула[\s\S]{0,240}ВНЕШНЕГО опубликованного эталона/iu,
+  /\|\s*формула(?:\/инвариант)?\s*\|\s*чем верифицирован[а]?\s*\|\s*оракул\s*\|/iu,
+  /Every vector here[\s\S]{0,160}(?:STANDARD|PEER-REVIEWED SOURCE)/iu,
+  /These pin[\s\S]{0,200}STANDARDS\s*\/\s*PEER-REVIEWED SOURCES[\s\S]{0,120}not to the crate's own output/iu,
+];
 
-function claimFiles(path, files = []) {
+function claimFiles(path, files = [], extensions = CLAIM_EXT) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
   for (const entry of readdirSync(path, { withFileTypes: true })) {
     const child = join(path, entry.name);
-    if (entry.isDirectory()) claimFiles(child, files);
-    else if (CLAIM_EXT.test(entry.name)) files.push(child);
+    if (entry.isDirectory()) claimFiles(child, files, extensions);
+    else if (extensions.test(entry.name)) files.push(child);
   }
   return files;
 }
@@ -216,6 +231,15 @@ function runtimeDocFalseClaims(path, source) {
     .map(({ reason }) => `${path}: ${reason}`);
 }
 
+function manualVerificationProseResidue(path, source) {
+  return MANUAL_VERIFICATION_PROSE
+    .filter((pattern) => pattern.test(source))
+    .map(
+      () =>
+        `${path}: hand-written verification prose competes with executable oracles`,
+    );
+}
+
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);
   assert.equal(knownFalseClaims("x.md", "цвета #89CFF0 и #8944AB").length, 0);
@@ -238,8 +262,42 @@ test("runtime-doc detector bites on every rejected promotion", () => {
   }
 });
 
+test("verification-index quarantine bites on links and renamed copies", () => {
+  for (const sample of [
+    "See docs/verification-map.md",
+    "# Карта верификации нижних слоёв",
+    "Каждая формула проверяется против ВНЕШНЕГО опубликованного эталона",
+    "| формула/инвариант | чем верифицирована | оракул |",
+    "Every vector here is a control point from a STANDARD or PEER-REVIEWED SOURCE",
+    "These pin transforms to STANDARDS / PEER-REVIEWED SOURCES, not to the crate's own output",
+  ]) {
+    assert.equal(
+      manualVerificationProseResidue("x.md", sample).length,
+      1,
+      `quarantine did not detect: ${sample}`,
+    );
+  }
+});
+
+test("live repository has no hand-written global verification index", () => {
+  const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
+    (file) => file !== SELF,
+  );
+  const failures = files.flatMap((file) =>
+    manualVerificationProseResidue(
+      relative(ROOT, file),
+      readFileSync(file, "utf8"),
+    ),
+  );
+  assert.deepEqual(failures, []);
+});
+
 test("runtime docs do not promote estimates, samples, or coordinates", () => {
-  const failures = RUNTIME_DOC_PATHS.flatMap((path) =>
+  const paths = [
+    ...RUNTIME_DOC_PATHS,
+    "crates/labcolors-wasm/src/lib.rs",
+  ];
+  const failures = paths.flatMap((path) =>
     runtimeDocFalseClaims(path, readFileSync(join(ROOT, path), "utf8")),
   );
   assert.deepEqual(failures, []);
