@@ -28,8 +28,10 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_ARTIFACT = Path(
-    "/private/tmp/labcolors-wcag22-feasibility-admission-raw-v6.json"
+# Синхронизировано с DEFAULT_OUTPUT_FILENAME бенча: он пишет в std::env::temp_dir(),
+# чекер по умолчанию читает оттуда же (обещание из ревью PR #327).
+DEFAULT_ARTIFACT = Path(tempfile.gettempdir()) / (
+    "labcolors-wcag22-feasibility-admission-raw-v7.json"
 )
 HEX_256 = re.compile(r"[0-9a-f]{64}")
 GIT_OBJECT = re.compile(r"[0-9a-f]{40}")
@@ -911,7 +913,7 @@ def check(
     source_before = dependency_cone_snapshot()
     require(isinstance(payload, dict), "artifact root must be an object")
     require(payload.get("schemaVersion") == 1, "unsupported benchmark schemaVersion")
-    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v6",
+    require(payload.get("artifactId") == "wcag22-feasibility-admission-raw-v7",
             "unexpected benchmark artifactId")
     require(
         payload.get("claimBoundary")
