@@ -31,8 +31,9 @@ export declare function toHex(rgb: Rgba | [number, number, number]): string;
 /**
  * Linearly interpolate the Oklab coordinates of two colours at `t ∈ [0,1]` →
  * `#RRGGBB`. `from`/`to` may be any string `parseCssColor` accepts (`#hex`,
- * `rgb()`/`rgba()`, `oklch()`, `transparent`), not only `#RRGGBB`. Endpoints are
- * exact and out-of-gamut intermediate channels are clamped.
+ * `rgb()`/`rgba()`, `oklch()`, `transparent`), not only `#RRGGBB`. The output is
+ * always opaque: input alpha is discarded, endpoint RGB bytes are normalized
+ * through `toHex`, and out-of-gamut intermediate channels are clamped.
  */
 export declare function oklabLerp(from: string, to: string, t: number): string;
 

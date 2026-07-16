@@ -1,24 +1,21 @@
 // Reactive theme runtime — zero dependencies.
 //
-// `applyTheme` writes a resolved theme's `--lab-*` variables onto an element
-// once. `watchTheme` closes the loop the css-injection-runtime chapter left
-// open: it keeps an element's variables *in sync* with its background. Point it
-// at a surface and theming follows the background — the seamless drop-in for a
-// design system that re-resolves against a changing background.
+// `applyTheme` writes a resolved theme's `--lab-*` variables once. `watchTheme`
+// repeats that operation when an explicitly supplied background input or the
+// helper's supported `background-color` reference estimate changes. It does not
+// observe rendered pixels or infer a whole backdrop field.
 //
 // It serves both regimes:
-//   * DISCRETE changes (theme switch, a class/style toggle, DOM reflow) are
-//     caught automatically by a `MutationObserver` — call once, forget.
+//   * DISCRETE `style`/`class` attribute changes in the observed subtree schedule
+//     a refresh through `MutationObserver`; layout and pixel changes do not.
 //   * CONTINUOUS changes (a CSS-animated or per-frame-scripted background that
 //     never mutates inline style) are driven by the caller calling `refresh()`
-//     inside its own `requestAnimationFrame` loop. `refresh()` is cheap: it
-//     re-resolves only when the effective background actually changed, so a
-//     steady background costs one string compare per frame, not a WASM solve.
+//     inside its own `requestAnimationFrame` loop. `refresh()` re-resolves only
+//     when the supplied/reference background string changes.
 //
-// The effective background is computed by alpha-compositing ancestors
-// (`effective-bg.js`); for surfaces over images/gradients/blur — which have no
-// single readable colour — pass an explicit `background` (a hex string or a
-// `() => hex` you sample yourself).
+// The fallback estimate alpha-composites the supported ancestor
+// `background-color` chain (`effective-bg.js`). For images/gradients/blur, pass
+// an explicit reference hex; one sample does not represent the whole field.
 
 import { applyTheme } from "./apply-theme.js";
 import { effectiveBackground } from "./effective-bg.js";
@@ -29,12 +26,13 @@ import { effectiveBackground } from "./effective-bg.js";
  *   background (or theme) changed; `force` re-applies unconditionally. Returns the
  *   `resolveTheme` result that is now applied, or `null` if nothing was applied.
  * @property {(theme: string) => void} setTheme  Switch theme and re-apply.
- * @property {() => string} background  The effective background hex last resolved.
+ * @property {() => string} background  The background/reference hex last resolved.
  * @property {() => void} stop  Disconnect observers and stop watching.
  */
 
 /**
- * Keep `element`'s `--lab-*` variables in sync with its (effective) background.
+ * Keep `element`'s `--lab-*` variables aligned with a supplied background or
+ * the supported ancestor-chain reference estimate.
  *
  * @param {*} element  The surface to read the background from and (by default)
  *   write the variables onto.
@@ -42,9 +40,9 @@ import { effectiveBackground } from "./effective-bg.js";
  * @param {{ resolveTheme: (bgHex: string, theme: string) => object }} options.colors
  *   An initialised `LabColors` engine (already `await init()`-ed).
  * @param {string} options.theme  Theme name (`"light" | "dark" | …`).
- * @param {string | (() => string)} [options.background]  Explicit effective
- *   background, overriding the ancestor-composite (use for image/gradient/blur
- *   surfaces you sample yourself).
+ * @param {string | (() => string)} [options.background]  Explicit reference
+ *   background, overriding the ancestor estimate. A sample from an
+ *   image/gradient/blur remains one declared point, not whole-field evidence.
  * @param {*} [options.target=element]  Element to write the variables onto.
  * @param {string} [options.fallback="#FFFFFF"]  Base for a fully-translucent chain.
  * @param {boolean} [options.observe=true]  Auto-refresh on DOM attribute mutations.
@@ -123,7 +121,7 @@ export function watchTheme(element, options) {
     }
   }
 
-  // Apply immediately so the surface is correct on creation.
+  // Resolve and apply immediately against the first supplied/reference input.
   refresh(true);
 
   return {

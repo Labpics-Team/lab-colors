@@ -136,7 +136,7 @@ test("toHex coerces non-finite channels to 0 (valid CSS, never #NAN…)", () => 
   assert.match(toHex([NaN, NaN, NaN]), /^#[0-9A-F]{6}$/);
 });
 
-test("oklabLerp returns endpoints exactly", () => {
+test("oklabLerp returns opaque RGB endpoints byte-exactly", () => {
   assert.equal(oklabLerp("#000000", "#F0F0F0", 0), "#000000");
   assert.equal(oklabLerp("#000000", "#F0F0F0", 1), "#F0F0F0");
   // Out-of-range t is clamped to the endpoints.
@@ -146,13 +146,18 @@ test("oklabLerp returns endpoints exactly", () => {
   assert.equal(oklabLerp("#0a0", "#fff", 0), "#00AA00");
 });
 
-test("oklabLerp midpoint is perceptual, not the brighter sRGB midpoint", () => {
+test("oklabLerp discards endpoint alpha because its output is opaque", () => {
+  assert.equal(oklabLerp("rgba(255, 0, 0, 0.25)", "#0000FF", 0), "#FF0000");
+  assert.equal(oklabLerp("transparent", "#FFFFFF", 0), "#000000");
+  assert.equal(oklabLerp("#000000", "rgba(0, 0, 255, 0.25)", 1), "#0000FF");
+});
+
+test("oklabLerp grey midpoint follows Oklab coordinates, not encoded sRGB", () => {
   // A straight sRGB blend of black→white at t=0.5 is #808080 (channel 128). The
-  // perceptual midpoint is markedly darker (Oklab L=0.5 → ~#636363), which is
-  // the whole point: the crossfade does not linger in the bright half.
+  // Oklab-coordinate midpoint L=0.5 converts to an encoded channel near 99.
   const mid = oklabLerp("#000000", "#FFFFFF", 0.5);
   const ch = parseCssColor(mid)[0];
-  assert.ok(ch > 90 && ch < 110, `perceptual midpoint channel ~99, got ${ch}`);
+  assert.ok(ch > 90 && ch < 110, `Oklab midpoint channel near 99, got ${ch}`);
   assert.ok(ch < 128, "must be darker than the sRGB midpoint (128)");
 });
 

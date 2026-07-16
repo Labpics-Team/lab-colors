@@ -58,7 +58,7 @@ export interface AdaptThemeOptions {
 }
 
 export interface AdaptController {
-  /** Drive one step. Cheap (a re-check); re-solves only on a sustained breach. */
+  /** Read one sample step; unchanged idle state skips metric evaluation. */
   tick(now?: number): void;
   /** Switch theme INSTANTLY (intent, not drift) — bypasses the hysteresis. */
   setTheme(theme: ThemeName): void;
@@ -66,15 +66,16 @@ export interface AdaptController {
   start(): void;
   /** Stop the loop. */
   stop(): void;
-  /** The currently-applied `--lab-*` variables. */
+  /** Canonical logical targets; during an ease these differ from painted DOM values. */
   current(): Record<string, string>;
 }
 
 /**
  * Keep an element's `--lab-*` variables adapting to its (changing) background
- * without re-solving every frame: re-check the declared sample set, compare
- * its returned metrics with the last resolved baseline, and re-solve + ease
- * only after a sustained relative drop. This does not establish legibility
- * outside the supplied samples or between them.
+ * without re-solving every frame. Each tick reads the declared sample set;
+ * metric evaluation is skipped while that set and the pending state are
+ * unchanged. A changed/pending set is compared with the last resolved baseline,
+ * and re-solve + ease starts only after a sustained relative drop. This does not
+ * establish legibility outside the supplied samples or between them.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;

@@ -15,8 +15,8 @@
 // HONEST LIMIT: this composites solid/translucent `background-color` layers only.
 // It does NOT sample `background-image`s, gradients, blurred backdrops, video, or
 // content showing through — those have no single colour to read from computed
-// style. For those, the caller supplies the effective background explicitly (the
-// `background` option of `watchTheme`, or a sampled average). What it does cover —
+// style. For those, the caller supplies explicit finite background evidence (the
+// `background` option of `watchTheme`, or declared samples). What it does cover —
 // translucent panels over solid parents — is the common case and is composited
 // *correctly* (true source-over alpha), not approximated.
 //
@@ -27,8 +27,7 @@
 // modern forms — `lab()`, `lch()`, `color(srgb …)`, `color-mix()`, `hsl()`,
 // named colours beyond `transparent` — are NOT parsed and currently become a
 // dropped layer for compatibility. That is not safe evidence: pass the
-// background explicitly. Issue #283 owns the typed `Unknown` replacement for
-// unsupported syntax, missing opaque bases and incomplete traversal.
+// background explicitly when any unsupported layer affects the decision.
 
 /** @typedef {[number, number, number, number]} Rgba  r,g,b in 0..255, a in 0..1 */
 
@@ -215,14 +214,11 @@ export function toHex(rgb) {
   return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`.toUpperCase();
 }
 
-// --- Perceptual interpolation (Oklab) -------------------------------------
+// --- Oklab-coordinate interpolation ---------------------------------------
 //
-// A crossfade should feel even: equal progress should be equal *perceived*
-// change. A straight sRGB-channel blend is not that — it lingers in the brighter
-// half (black→white at t=0.5 is #808080, but the perceived midpoint grey is
-// ~#606060). Interpolating in Oklab — a perceptually-uniform space — fixes the
-// timing and, for chromatic endpoints, avoids the muddy desaturated midpoint a
-// raw RGB blend produces. Björn Ottosson's sRGB↔Oklab transform, self-contained.
+// The helper linearly interpolates Oklab coordinates, converts the intermediate
+// value to sRGB, clamps channels and emits an opaque byte hex. This describes the
+// numeric path only; it is not a guarantee about perceived timing or cleanliness.
 
 /** sRGB gamma transfer (IEC 61966-2-1): encoded channel 0..1 → linear 0..1. */
 function srgbToLinear(c) {
@@ -268,13 +264,11 @@ function oklabToLinearRgb(L, A, B) {
  * Interpolate two colours in Oklab at `t ∈ [0,1]`, returning `#RRGGBB`.
  *
  * `from`/`to` may be ANY string `parseCssColor` accepts (`#rgb`/`#rrggbb`,
- * `rgb()`/`rgba()`, `oklch()`, `transparent`) — not only `#RRGGBB`. Perceptually
- * uniform: equal steps in `t` are equal steps in perceived lightness (and a
- * straight, non-muddy path in hue/chroma), so a crossfade feels even rather than
- * lingering bright. Endpoints are returned exactly (`t ≤ 0` → `from`, `t ≥ 1` →
- * `to`), always normalised to `#RRGGBB` through `toHex`; out-of-gamut
- * intermediates are clamped per channel. Unparseable input falls back to the
- * nearer parseable endpoint.
+ * `rgb()`/`rgba()`, `oklch()`, `transparent`) — not only `#RRGGBB`. Output is
+ * always opaque: input alpha is discarded. At `t ≤ 0`/`t ≥ 1`, the selected
+ * endpoint's RGB channels are normalized through `toHex`; intermediate
+ * out-of-gamut channels are clamped. Unparseable input falls back to the nearer
+ * parseable endpoint.
  *
  * @param {string} from  any colour string `parseCssColor` accepts
  * @param {string} to    any colour string `parseCssColor` accepts
@@ -301,11 +295,10 @@ export function oklabLerp(from, to, t) {
 //
 // `adaptTheme` interpolates the SAME from/to pair on every frame of an ease,
 // and strict mode re-derives WCAG luminance from the interpolated colour up to
-// 14× per floored role per frame (`floorBlend`'s bisection). Doing that
-// through the string API means re-parsing both endpoints and round-tripping
-// through `#RRGGBB` text on every call — measured at ~85-90% of the ease-frame
-// budget (bench/hotpath.bench.mjs). These helpers compile a pair once and then
-// produce results BYTE-IDENTICAL to their string-path equivalents:
+// repeatedly per floored role (`floorBlend`'s bisection). The string API would
+// re-parse both endpoints and round-trip through `#RRGGBB` on every call. These
+// helpers compile a pair once and then produce results BYTE-IDENTICAL to their
+// string-path equivalents:
 //
 //   · `lerpPairHex(pair, t)`       ≡ `oklabLerp(from, to, t)`
 //   · `lerpPairLuminance(pair, t)` ≡ WCAG luminance of `oklabLerp(from, to, t)`
@@ -323,7 +316,7 @@ const parseCache = new Map();
  *  endpoints). The cap is a blunt bound, not an LRU: a full cache is simply
  *  cleared and refills within a frame — cheaper than eviction bookkeeping for
  *  a working set that is a handful of strings. The cached arrays are SHARED —
- *  package-internal callers must treat them as immutable. (The public
+ *  package-internal callers must treat them as read-only. (The public
  *  `parseCssColor` stays unmemoized and returns a fresh array per call.) */
 export function parseCssColorCached(css) {
   let hit = parseCache.get(css);
