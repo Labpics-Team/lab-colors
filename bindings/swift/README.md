@@ -4,7 +4,8 @@ Swift-поверхность динамического Rust-ядра через
 вызывает `labcolors-core` в runtime, а не сериализует токены на сборке.
 Экспортируется рантайм-контраст-ядро (см. `crates/labcolors-ffi`): контраст,
 резолв, лестницы, подложка→α, legacy-координата `muddiness`, low-level Glow
-point decision и versioned WCAG 2.2 feasibility byte protocol.
+point decision, versioned WCAG 2.2 feasibility и atomic explicit-selection
+byte protocols.
 
 Исторически названная `muddiness` поверхность — это
 `experimental compatibility proxy`: она сохраняет прежний числовой API и его
@@ -21,8 +22,12 @@ Linux x86_64. Оно не является аттестацией Apple ABI, mac
 - `Package.swift` — SwiftPM: системный модуль (`labcolorsFFI`) + Swift-обёртка
   (`LabColors`) + conformance-тесты.
 - `Sources/LabColors/Wcag22FeasibilityProtocol.swift` — hand-written строгая
-  `Codable`-проекция `Success(feasibility) / Failure(error)` и host-preflight;
-  остальные Swift/C sources **генерируются в CI** (uniffi-bindgen) и не
+  `Codable`-проекция `Success(feasibility) / Failure(error)` и host-preflight.
+- `Sources/LabColors/Wcag22ExplicitSelectionProtocol.swift` — hand-written
+  типизированная проекция атомарного
+  `feasibility → client policy → selection → final recheck` и тот же строгий
+  host-preflight.
+- Остальные Swift/C sources **генерируются в CI** (uniffi-bindgen) и не
   коммитятся.
 - `Tests/LabColorsConformanceTests` — прогон закоммиченного пака
   `conformance/vectors/*.json` против выхода FFI.
@@ -101,3 +106,18 @@ Swift не вычисляет WCAG, не сортирует отношения �
 декодирует Core-owned ordered domain, canonical relations, candidate-major
 LSB0 failure matrix и proof. Pack 5 replay независимо проверяет 256 triples,
 `32E`-byte matrix, 32-byte partition, LSB0 query law и opaque-ID invariance.
+
+## Atomic explicit-selection byte protocol
+
+`evaluateWcag22ExplicitSelection(_:)` принимает `Data` или `[UInt8]` с явным
+конечным набором `opaque candidate ID + sRGB8`, occurrence relations и
+клиентским порядком `first-feasible-in-declared-order-v1`. Core атомарно
+выполняет feasibility, полностью валидирует policy, выбирает первый допустимый
+ID и повторно проверяет выбранную строку. Swift не пересобирает матрицу и не
+принимает сериализованный proof обратно как capability.
+
+Pack 6 проходит через raw UniFFI с байт-точным сравнением и через публичную
+Swift-функцию с равенством типизированного значения и нормализованного JSON-
+дерева. Oversize отсекается до избегаемой для отклонённого входа ABI-копии и
+повторно проверяется Rust-границей; structural mutation результата отклоняется
+декодером, а не превращается в частичный успех.

@@ -29,8 +29,8 @@ assert_eq!(composite, [0x17, 0x16, 0x1F]);
 
 Exact composite guarantees do not extend to an unknown renderer, display,
 spatial blur field or the explicit platform-dependent legacy Glow decision.
-See the repository migration guide and conformance pack for versioned boundary
-details.
+See the conformance pack and commit-pinned release documentation for versioned
+boundary details.
 
 ## Ограниченная проверка выполнимости WCAG 2.2
 
@@ -43,11 +43,12 @@ details.
 конечном домене; это не утверждение об отсутствии цвета вне него.
 
 Прямой Core по умолчанию включает `wcag22-feasibility` и зависящую от неё
-возможность `wcag22-explicit-feasibility`. Транспорты отключают default-features,
-а Protocol/WASM/FFI в V1 проецируют только первую возможность с
-зарегистрированной нейтральной осью. Поэтому явный клиентский набор остаётся
-Core-only API и не попадает в транспортный артефакт; обе формы используют один
-математический компилятор.
+возможность `wcag22-explicit-feasibility`. Базовая зависимость Protocol включает
+только neutral-axis feasibility; non-default feature
+`wcag22-explicit-selection` добавляет атомарную операцию над явным клиентским
+набором. Compiler WASM/npm и UniFFI/Swift включают эту feature и публикуют обе
+offline-операции. Все поверхности используют один математический компилятор и
+не входят в runtime WASM.
 
 В V1 доступны две формы одного компилятора. Совместимый вход `evaluate`
 перечисляет зарегистрированную нейтральную ось: ровно 256 кодов `[v, v, v]`,

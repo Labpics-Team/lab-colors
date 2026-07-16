@@ -17,9 +17,9 @@
   версия СХЕМЫ и состава векторов. Bump 5.0.0 → 6.0.0 добавил ровно одно
   семейство `wcag22-explicit-selection`: канонические request/outcome JSON
   атомарной операции `wcag22-explicit-selection-v1`. Байты семи прежних
-  семейств сохранены; семейство воспроизводится только внутри
-  conformance-крейта — ни один публикуемый adapter (compiler WASM,
-  UniFFI/Swift) его не читает, их поверхность остаётся feasibility-only.
+  семейств сохранены; conformance-крейт, compiler WASM/npm и raw UniFFI
+  воспроизводят его байт-в-байт, а типизированная Swift-поверхность проверяется
+  по равенству значения и нормализованного JSON-дерева.
   Предыдущий bump 4.0.0 → 5.0.0 добавил ровно одно
   семейство `wcag22-feasibility`: канонические versioned request/outcome JSON
   для полного перечисления neutral-axis с packed evidence. Байты шести прежних
@@ -151,7 +151,8 @@ labels (канон labui): роли `icon` в словаре нет.
 - **`solve.outcome.hex`** — в пределах **±1 LSB на канал**. Это квантование
   трансцендентного резолва: у границы 8-бит-ячейки libm-шум может качнуть
   результат на один шаг.
-- **`wcag22-feasibility.requestJson/outcomeJson`** — БАЙТ-ТОЧНО. Это
+- **`wcag22-feasibility.requestJson/outcomeJson` и
+  `wcag22-explicit-selection.requestJson/outcomeJson`** — БАЙТ-ТОЧНО. Это
   canonical integer/byte/string protocol без libm: terminal algebra, decimal
   u64 strings, identities, упакованная LSB0 matrix и partition сравниваются как
   точные UTF-8 байты.

@@ -32,12 +32,13 @@ NamedRoleTable
   сертификат; Glow требует явный decision profile и может завершиться
   типизированным `Indeterminate` без CSS fallback.
 - **Полная проверка конечного домена.** В compiler-контракте V1 клиент объявляет
-  opaque occurrence relations, точные соседние sRGB8-цвета и критерии WCAG 2.2,
-  а домен фиксирован зарегистрированной `srgb8-neutral-axis-v1`. Core полностью
-  перечисляет его и возвращает packed feasible partition с доказательством. В
-  npm это offline-операция `@labpics/colors/compiler` с отдельным WASM, а не
-  часть browser runtime; явный клиентский домен пока остаётся Core-only. Это
-  проверка выполнимости, а не скрытая политика выбора.
+  opaque occurrence relations, точные соседние sRGB8-цвета и критерии WCAG 2.2.
+  Для зарегистрированной `srgb8-neutral-axis-v1` Core полностью перечисляет
+  домен и возвращает packed feasible partition. Для явного клиентского набора
+  `opaque ID + sRGB8` атомарная compiler-операция дополнительно применяет
+  объявленный клиентом порядок, выбирает первый feasible ID и повторно
+  проверяет выбранную строку. Обе операции доступны offline через отдельный
+  `@labpics/colors/compiler` WASM и не входят в root runtime API/runtime WASM.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
 - **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальной областью DOM.
 
@@ -291,24 +292,11 @@ anchors
 - [ADR: конфиг-граница](docs/decisions/0001-config-boundary.md)
 - [Научный whitepaper](docs/whitepaper.md)
 - [Реестр коэффициентов и policies](docs/empirical-inventory.md)
-- [Правила именования и конформанса](docs/NAMING.md)
 - [Conformance и numerical registry](conformance/README.md)
-- [Миграция exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md)
-- [Changelog](CHANGELOG.md)
 
-Агент без контекста читает:
-
-```text
-AGENTS.md
-→ Issue #276
-→ Issue #228
-→ Issue #248
-→ актуальный main
-→ активный PR
-→ Owner Issue текущего correctness-root
-```
-
-Roadmap, текущий SHA и активный PR хранятся только в Issues.
+Перед изменением прочитайте [`AGENTS.md`](AGENTS.md), публичный контракт
+затрагиваемого пакета, реализацию всего изменяемого пути и его тесты. Issues и
+PR координируют работу, но не являются источником скрытой семантики продукта.
 
 ## Структура репозитория
 
@@ -326,7 +314,6 @@ packages/
 docs/
 ├── decisions/
 ├── empirical-inventory.md
-├── empirical-residue.md
 └── whitepaper.md
 ```
 
@@ -351,7 +338,9 @@ cargo test --workspace --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
-Изменения browser/WASM/public wire contract дополнительно требуют сборки пакета, consumer-smoke, JS/browser tests и platform conformance. Обязательные gates определяются workflow-файлами и acceptance конкретного Issue.
+Изменения browser/WASM/public wire contract дополнительно требуют сборки пакета,
+consumer-smoke, JS/browser tests и platform conformance. Обязательные gates
+определяются workflow-файлами и затронутым публичным контрактом.
 
 ## Главный принцип
 

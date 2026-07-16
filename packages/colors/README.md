@@ -258,7 +258,7 @@ type RoleResult =
 обязана пока сохранить прежнюю CSS-эмиссию, укажите
 `legacy-platform-dependent-v1` явно и обрабатывайте его как compatibility
 profile, а не как численную гарантию. Полная миграция с rollback-порядком — в
-[гайде exact alpha / typed Glow](https://github.com/Labpics-Team/lab-colors/blob/main/docs/migrations/exact-alpha-glow.md).
+[commit-pinned гайде релиза 0.10.0](https://github.com/Labpics-Team/lab-colors/blob/52d7895774c2fa3796e51f7133452cf83c09346b/docs/migrations/exact-alpha-glow.md).
 
 ---
 

@@ -222,10 +222,10 @@ WASM/TypeScript:
 `#C0B2FA @ 0.122` над чёрным, поэтому Rust FFI и все нативные биндинги обязаны
 вернуть `#17161F`, а старый нормализованный путь больше не считается conformant.
 
-Полный переход и rollback описаны в `docs/migrations/exact-alpha-glow.md`.
-Открытыми остаются: полный viewing/context contract (#230), sound cross-runtime
-CAM16 bounds (#223/#281), фактический renderer/output pipeline (#233/#241) и
-пространственная модель glow (#221).
+Пошаговый переход и rollback опубликованной версии 0.10.0 сохранены в
+content-addressed commit `52d7895774c2fa3796e51f7133452cf83c09346b`.
+Текущий ADR владеет только решением и его границами, а не состоянием
+последующих работ.
 
 ## Дополнение 2026-07-12: атомарный результат и registered compatibility release (#292)
 

@@ -371,7 +371,6 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
     "test",
     "cargo audit (rustsec)",
     "wasm build + headless test + size",
-    "docs-drift (нейминг-канон)",
     "swift conformance (self-hosted Linux, swift container)",
   ];
   for (const check of requiredChecks) {
@@ -626,7 +625,6 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
     "test",
     "cargo audit (rustsec)",
     "wasm build + headless test + size",
-    "docs-drift (нейминг-канон)",
   ];
   assert.ok(requiredCiJobs.length > 5, "anti-vacuum: CI gate list is unexpectedly small");
 
@@ -1250,7 +1248,9 @@ test("WCAG22 WASM role budgets are exact, append-only, and acyclic", async () =>
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(ci, /name: enforce measured WASM role budgets/u);
   assert.match(ci, /run: node scripts\/check-wasm-size-budget\.mjs/u);
-  const wasmJob = ci.match(/\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n)/u)?.groups?.body;
+  const wasmJob = ci.match(
+    /\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n|\s*$)/u,
+  )?.groups?.body;
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
   assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
   assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);

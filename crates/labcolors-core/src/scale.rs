@@ -1531,7 +1531,7 @@ mod exposure_locks {
 
 /// Замки отвергнутых дерайваций: кандидаты, которые ПРОВЕРЕНЫ и отклонены с
 /// измеренной причиной. Пиновка не даёт «строгому выводу» вернуться без
-/// пересмотра измерений (см. docs/empirical-residue.md, мишень №2).
+/// пересмотра измерений, зафиксированных в тестах ниже.
 #[cfg(test)]
 mod derivation_rejection_locks {
     use super::{max_chroma, srgb_from_hex, srgb_linear_to_oklab};
