@@ -184,6 +184,21 @@ const MANUAL_VERIFICATION_PROSE = [
   /Every vector here[\s\S]{0,160}(?:STANDARD|PEER-REVIEWED SOURCE)/iu,
   /These pin[\s\S]{0,200}STANDARDS\s*\/\s*PEER-REVIEWED SOURCES[\s\S]{0,120}not to the crate's own output/iu,
 ];
+const LCS_LPC_DRIFT = [
+  /Labpics Color Space/u,
+  /Local Color State/u,
+  /Local Perceptual Contrast/u,
+  /LPC\s*=\s*APCA/iu,
+  /APCA[^.\n]{0,160}под именем \*\*?LPC/iu,
+  /^LPC\s*=\s*опубликованная контрастная кривая/imu,
+  /J['′]\s*=\s*50[\s\S]{0,100}half-lightness/iu,
+  /perceptually uniform J['′]\/M['′]/iu,
+  /Because UCS is perceptually uniform/iu,
+  /lab-colors\s+решает[^.]{0,200}перцептуальн[а-яё]*\s+пространств[а-яё]*\s+LCS/iu,
+  /Perceptual-contrast core curve/iu,
+  /generic perceptual-contrast math/iu,
+  /метрика\s+называется\s+LPC/iu,
+];
 
 function claimFiles(path, files = [], extensions = CLAIM_EXT) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -240,6 +255,12 @@ function manualVerificationProseResidue(path, source) {
     );
 }
 
+function lcsLpcDrift(path, source) {
+  return LCS_LPC_DRIFT.filter((pattern) => pattern.test(source)).map(
+    () => `${path}: LCS/LPC brand or evidence boundary drifted`,
+  );
+}
+
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);
   assert.equal(knownFalseClaims("x.md", "цвета #89CFF0 и #8944AB").length, 0);
@@ -290,6 +311,45 @@ test("live repository has no hand-written global verification index", () => {
     ),
   );
   assert.deepEqual(failures, []);
+});
+
+test("LCS/LPC drift detector bites on every rejected expansion or reduction", () => {
+  for (const sample of [
+    "LCS means Labpics Color Space",
+    "LCS means Local Color State",
+    "LPC means Local Perceptual Contrast",
+    "LPC = APCA + H-K",
+    "APCA реализована под именем **LPC**",
+    "LPC = опубликованная контрастная кривая",
+    "J'=50 reads as half-lightness",
+    "maps correlates onto perceptually uniform J'/M'",
+    "Because UCS is perceptually uniform, this is a human scale",
+    "lab-colors решает её в собственном перцептуальном пространстве LCS",
+    "Perceptual-contrast core curve",
+    "Faithful port of the generic perceptual-contrast math",
+    "метрика называется LPC",
+  ]) {
+    assert.ok(lcsLpcDrift("x.md", sample).length >= 1, `detector did not bite: ${sample}`);
+  }
+});
+
+test("live repository keeps canonical LCS/LPC names and evidence boundaries", () => {
+  const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
+    (file) => file !== SELF,
+  );
+  const failures = files.flatMap((file) =>
+    lcsLpcDrift(relative(ROOT, file), readFileSync(file, "utf8")),
+  );
+  assert.deepEqual(failures, []);
+
+  assert.match(
+    readFileSync(join(ROOT, "crates/labcolors-core/src/lcs.rs"), "utf8"),
+    /Labpics Colors Space/u,
+  );
+  assert.match(
+    readFileSync(join(ROOT, "crates/labcolors-core/src/lpc.rs"), "utf8"),
+    /Labpics Perceptual Contrast/u,
+  );
 });
 
 test("runtime docs do not promote estimates, samples, or coordinates", () => {

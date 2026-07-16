@@ -241,9 +241,10 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
 //
 //   J' = 1.7·J / (1 + 0.007·J),   M' = ln(1 + 0.0228·M) / 0.0228.
 //
-// Maps raw CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads as
-// half-lightness). These four helpers are the SINGLE SOURCE OF TRUTH for the
-// rescale: `lcs` stores J'/M', `lpc` decompresses back to raw J/M, and the
+// These four helpers are the SINGLE SOURCE OF TRUTH for the exactly invertible
+// CAM16-UCS coordinate rescale. They do not assign universal perceptual-
+// attribute meaning to an individual J'/M' value: `lcs` stores the coordinates,
+// `lpc` decompresses back to raw J/M, and the
 // constants (`1.7`, `0.007`, `0.0228`) must never be re-typed inline anywhere
 // else (previously duplicated across `lcs::from_xyz_with_hok`, `lcs::to_xyz`,
 // and `lpc::y_hk_from_lcs`).

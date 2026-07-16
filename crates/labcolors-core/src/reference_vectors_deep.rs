@@ -298,8 +298,8 @@ fn cam16_ucs_constants() {
             "ucs_m not invertible at {m}"
         );
     }
-    // J'=50 reads as half-lightness only if the 1.7/0.007 pair is intact:
-    // published sanity value ucs_j(43.30..) ≈ 55.6 is a monotone lift, not 1:1.
+    // The rescale is not the identity: J=50 maps above 50. This checks only the
+    // published coordinate transform, not a human meaning for either number.
     assert!(ucs_j(50.0) > 50.0, "UCS lightness lift must raise J");
 }
 

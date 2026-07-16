@@ -1,3 +1,8 @@
+//! Current point representation used while **Labpics Colors Space (LCS)** is
+//! being reduced to one context-bound coordinate contract. The stored
+//! CAM16-UCS/Oklab views are implementation inputs, not independent editable
+//! definitions of LCS and not a claim of uniform perceptual attributes.
+
 use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz, xyz_to_srgb};
 use crate::spaces::{cam16, cat16, oklab, vc::ViewingConditions};
 
@@ -92,9 +97,10 @@ impl LcsColor {
     /// caller that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s
     /// `finish`) reuses that result instead of recomputing it.
     pub(crate) fn from_cam16(j: f64, m: f64, h_cam: f64, h_ok: f64) -> Self {
-        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131): maps raw
-        // CIECAM16 J/M onto perceptually uniform J'/M' (J'=50 reads as
-        // half-lightness). Inverse in `to_xyz` via the same helpers.
+        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131). This is
+        // an exactly inverted coordinate transform used for colour-difference
+        // work; no individual J'/M' value is assigned a universal attribute
+        // meaning here. Inverse in `to_xyz` uses the same helpers.
         let jp = cam16::ucs_j(j);
         let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
