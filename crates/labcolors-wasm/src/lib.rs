@@ -732,7 +732,7 @@ impl LabColors {
     /// foregrounds against every sample of a varying backdrop (gradient / image /
     /// bg-blur / glass); the dominant per-foreground CAM16 forward is background-
     /// independent, so this shares it across all samples instead of recomputing it
-    /// per `recheckContrast` call — a measured ~2.6x on the multi-sample recheck.
+    /// per `recheckContrast` call.
     ///
     /// Returns a flat, background-major `Float64Array`: sample `s`, foreground `i`
     /// is at `(s * fgHexes.length + i) * 2` (`lc`) and `+1` (`wcagRatio`). The

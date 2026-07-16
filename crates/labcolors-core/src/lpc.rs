@@ -1,3 +1,10 @@
+//! Candidate components of **Labpics Perceptual Contrast (LPC)**.
+//!
+//! The current APCA-shaped and H-K paths are characterized implementation
+//! components, not the complete LPC definition and not evidence that LPC
+//! outperforms APCA. Readability admission is owned by a versioned evaluator
+//! profile with declared typography, observer and context applicability.
+
 use crate::spaces::srgb::{D65_WHITE, srgb_from_hex, srgb_to_xyz};
 use crate::spaces::{cam16, cat16, vc::ViewingConditions};
 
@@ -174,15 +181,11 @@ fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
     (lo + hi) * 0.5
 }
 
-// Канонические константы перцептивного контраста из опубликованной формулы
-// версии 0.0.98G-4g («4g»-набор SAPC-8). Имена в комментариях воспроизводят
-// исходные идентификаторы, чтобы маппинг был аудируемым.
-//
-// Правовая позиция: Copyright (17 U.S.C. § 102(b)) не охраняет формулы и константы,
-// только конкретное кодовое выражение. Данная реализация написана независимо;
-// файлы репозиториев Myndex не копировались. Метрика называется LPC — не APCA,
-// не APCA-совместима и не одобрена Myndex Research или Andrew Somers.
-// Товарный знак «APCA» в публичных API-символах и названии метрики не используется.
+// Константы candidate-кривой транскрибированы из опубликованного набора
+// SAPC-8 0.0.98G-4g. Имена в комментариях воспроизводят исходные
+// идентификаторы, чтобы маппинг был аудируемым. Эта транскрипция сама по себе не
+// является APCA conformance, complete LPC или evidence читаемости; комментарий
+// также не делает правового вывода о допустимости дальнейшего распространения.
 //
 // Это ЕДИНСТВЕННЫЙ ИСТОЧНИК ИСТИНЫ для кривой контраста: и прямой `contrast_core`,
 // и обратный решатель (`crate::solve`) читают значения здесь.
@@ -308,27 +311,18 @@ pub(crate) fn soft_clamp_inv(clamped: f64) -> Option<f64> {
     Some(y)
 }
 
-/// Perceptual-contrast core curve (asymmetric power contrast on luminance).
+/// Candidate asymmetric power curve over a luminance-shaped scalar.
 ///
-/// Faithful port of the published generic perceptual-contrast math — soft
-/// black clamp, polarity-dependent power exponents, the minimum-luminance
-/// gate, the low-contrast clip, and the polarity offsets. Fed the *same* input
-/// luminance, the curve reproduces the reference; the absolute numbers agree
-/// with the published APCA only at the endpoints (Y = 0 and Y = 1, e.g. black
-/// on white ≈ `106.04`). For interior greys the luminance fed here is
-/// `Y_hk`, not the reference's `Ys`, so LPC departs from the published APCA
-/// on those: measured against `apca-w3` on the 8-bit grey axis the departure
-/// stays within ~2.3 Lc (grey-on-grey pairs ≤ ~0.6 Lc, endpoints exact). On
-/// near-neutrals the H-K term itself is ≈0 (M ≲ 1), so the interior departure
-/// is dominated by the CAM16 lightness reconstruction inside `Y_hk`. A
-/// deliberate, declared difference of the metric (the same `Y_hk` substitution
-/// that makes LPC diverge from the reference on chromatic colours), not a
-/// porting error.
+/// The branches and constants mirror the frozen SAPC-8 0.0.98G-4g candidate:
+/// soft black clamp, polarity-dependent exponents, a minimum-luminance gate,
+/// low-contrast clipping and polarity offsets. Current call sites feed more
+/// than one luminance definition, including an H-K/CAM16-derived scalar. That
+/// composition is characterized implementation behavior, not APCA conformance,
+/// complete LPC or evidence of glyph readability.
 ///
-/// Константы: формула APCA SAPC-8 версии 0.0.98G-4g; метрика называется LPC,
-/// не APCA, не одобрена Myndex Research. The achromatic alignment is locked by
-/// `golden_tests::contrast_core_matches_reference_on_grey_axis`. The curve is
-/// inverted by `crate::solve` to recover a foreground luminance from a target.
+/// `golden_tests::contrast_core_matches_reference_on_grey_axis` pins only the
+/// scalar curve arithmetic. The curve is inverted by `crate::solve` to recover
+/// a foreground scalar from a target.
 pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
     let fg = soft_clamp(y_fg);
     let bg = soft_clamp(y_bg);

@@ -130,11 +130,11 @@
 //! The default undertone policy is [`RoleChroma::Curve`] (v2), derived from three
 //! computable mechanisms rather than a flat ratio of the gamut:
 //!
-//! 1. **Constant perceptual colorfulness** — the chroma at each role's resolved
-//!    lightness is solved to a *constant* CAM16-UCS `M'` (`TINT_TARGET_MP`), not
-//!    a fixed fraction of the gamut maximum. Because UCS is perceptually uniform,
-//!    one constant holds the chroma in the lights and moderates it in the middle —
-//!    fixing v1's inverted envelope (over-saturated middle, starved light end).
+//! 1. **Constant CAM16-UCS coordinate** — the chroma at each role's resolved
+//!    lightness is solved to a constant `M'` (`TINT_TARGET_MP`), not a fixed
+//!    fraction of the gamut maximum. This is a characterized design policy that
+//!    holds chroma in the lights and moderates it in the middle; it does not turn
+//!    `M'` into a universal perceptual-colorfulness scale.
 //! 2. **Cusp-attracted hue** — the hue at each lightness is pulled toward the
 //!    local chroma cusp of the sRGB gamut, penalised for leaving the canonical
 //!    286° (`cusp_attracted_hue`). The drift emerges from geometry; it is *not*

@@ -302,8 +302,9 @@ Core не выводит критерий из имени токена, CSS-кл
 формулу. Оно приходит из Rust core вместе с identity профиля, Q55-таблицы,
 bound-law и воспроизводимого full-domain proof. Файлы доказательства входят в
 npm-тарбол в `evidence/`; proof также SHA-256-связан с фактической typed
-registry-строкой, разрешающей Core минтить terminal evidence. LPC/APCA-shaped
-diagnostics и legacy `wcagRatio` не могут изменить этот вердикт.
+registry-строкой, разрешающей Core минтить terminal evidence. APCA-shaped
+diagnostic-компонент текущего LPC и legacy `wcagRatio` не могут изменить этот
+вердикт.
 
 ---
 
