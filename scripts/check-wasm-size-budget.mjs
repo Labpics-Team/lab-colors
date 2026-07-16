@@ -339,7 +339,7 @@ function formatResult(result, artifact) {
     `WASM size budget ${result.status} role=${result.role} raw=${result.rawBytes}B ` +
     `ceiling=${result.maxRawBytes}B delta=${delta}B gzip=${result.gzipBytes}B ` +
     `diagnostic-only platform=${result.currentPlatform} artifact=${artifact} ` +
-    `artifact-sha256=${result.artifactSha256} declared-recipe-sha=match`
+    `artifact-sha256=${result.artifactSha256}`
   );
 }
 

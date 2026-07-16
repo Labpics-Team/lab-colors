@@ -1288,33 +1288,82 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
   assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);
   assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
-  const reproduction = workflowRunScript(
+  const repetition = workflowRunScript(
     ci,
-    "name: reproduce WASM roles from the same source",
+    "name: repeat WASM role builds in one pinned job",
   );
-  assert.equal(
-    reproduction.match(/wasm-pack build crates\/labcolors-wasm/gu)?.length,
-    1,
-    "runtime build recipe must have one shell SSOT",
+  const recipePrefix = "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ";
+  const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${v1.measurement.rustPathRemap
+    .map((mapping) => {
+      const separator = mapping.indexOf("=");
+      assert.ok(separator > 0, "path remap must name one environment source");
+      return `"--remap-path-prefix=\$${mapping.slice(0, separator)}=${mapping.slice(separator + 1)}"`;
+    })
+    .join("$'\\x1f'")}`;
+  const expectedBuilds = ["runtime", "compiler"].map((role) => {
+    const command = v7.buildRecipes[role].command;
+    assert.ok(command.startsWith(recipePrefix));
+    return command.slice(recipePrefix.length);
+  });
+  const expectedDiffs = [
+    'diff --no-dereference --recursive "$first/pkg" packages/colors/pkg',
+    'diff --no-dereference --recursive "$first/compiler" packages/colors/compiler',
+  ];
+  const assertRepeatabilityContract = (script) => {
+    assert.match(script, /^set -euo pipefail$/mu);
+    assert.deepEqual(
+      script.split("\n").filter((line) => line.startsWith("export CARGO_ENCODED_RUSTFLAGS=")),
+      [expectedRemapExport],
+      "the live path-remap command must equal the versioned budget declaration",
+    );
+    const functionBody = script.match(
+      /(?:^|\n)build_roles\(\) \{\n(?<body>(?:  [^\n]+\n)+)\}/u,
+    )?.groups?.body;
+    assert.ok(functionBody, "build_roles must be one bounded shell function");
+    assert.deepEqual(
+      functionBody.split("\n").map((line) => line.trim()).filter(Boolean),
+      expectedBuilds,
+      "CI build commands must equal the versioned budget recipe commands",
+    );
+    assert.equal(
+      script.match(/^build_roles$/gmu)?.length,
+      2,
+      "the same recipe must run exactly twice",
+    );
+    assert.match(script, /^cargo clean$/mu);
+    assert.match(script, /^cp -a packages\/colors\/pkg "\$first\/pkg"$/mu);
+    assert.match(script, /^cp -a packages\/colors\/compiler "\$first\/compiler"$/mu);
+    assert.deepEqual(
+      script.split("\n").filter((line) => line.startsWith("diff ")),
+      expectedDiffs,
+      "both output directories must be compared by fail-closed exact commands",
+    );
+    assert.match(
+      script,
+      /^  for root in "\$GITHUB_WORKSPACE" "\$CARGO_HOME" "\$RUSTUP_HOME"; do$/mu,
+    );
+    assert.match(
+      script,
+      /^    if LC_ALL=C grep -a -F -q -- "\$root\/" "\$wasm"; then$/mu,
+    );
+  };
+  assertRepeatabilityContract(repetition);
+
+  const recipeBypass = repetition.replace(
+    expectedBuilds[0],
+    `${expectedBuilds[0]} --features unreviewed`,
   );
-  assert.equal(
-    reproduction.match(/wasm-pack build crates\/labcolors-compiler/gu)?.length,
-    1,
-    "compiler build recipe must have one shell SSOT",
-  );
-  assert.equal(
-    reproduction.match(/^\s*build_roles$/gmu)?.length,
-    2,
-    "the same recipe must run exactly twice",
-  );
-  assert.match(reproduction, /cargo clean/u);
-  assert.match(reproduction, /cp -a packages\/colors\/pkg/u);
-  assert.match(reproduction, /cp -a packages\/colors\/compiler/u);
-  assert.equal(
-    reproduction.match(/diff --no-dereference --recursive/gu)?.length,
-    2,
-  );
-  assert.match(reproduction, /\/opt\/actions-runner\/[^\n]*cargo-wasm\/registry\/src\//u);
+  assert.notEqual(recipeBypass, repetition, "recipe mutation must bite a real command");
+  assert.throws(() => assertRepeatabilityContract(recipeBypass));
+
+  const diffBypass = repetition.replace(expectedDiffs[0], `${expectedDiffs[0]} || true`);
+  assert.notEqual(diffBypass, repetition, "diff mutation must bite a real command");
+  assert.throws(() => assertRepeatabilityContract(diffBypass));
+
+  const pathCheck = 'if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then';
+  const pathBypass = repetition.replace(pathCheck, `${pathCheck} : || true`);
+  assert.notEqual(pathBypass, repetition, "path mutation must bite the live guard");
+  assert.throws(() => assertRepeatabilityContract(pathBypass));
 
   const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v7-"));
   try {
@@ -1353,11 +1402,16 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     const output = run();
     assert.match(
       output,
-      /role=runtime raw=16B .*artifact-sha256=[0-9a-f]{64} declared-recipe-sha=match/u,
+      /role=runtime raw=16B .*artifact-sha256=[0-9a-f]{64}/u,
     );
     assert.match(
       output,
-      /role=compiler raw=17B .*artifact-sha256=[0-9a-f]{64} declared-recipe-sha=match/u,
+      /role=compiler raw=17B .*artifact-sha256=[0-9a-f]{64}/u,
+    );
+    assert.doesNotMatch(
+      output,
+      /(?:recipe|artifact)-sha(?:256)?=match/u,
+      "the size checker cannot infer artifact provenance from arbitrary input bytes",
     );
 
     const schemaMutations = [

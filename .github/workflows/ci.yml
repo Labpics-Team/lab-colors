@@ -466,14 +466,15 @@ jobs:
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-      - name: reproduce WASM roles from the same source
+      - name: repeat WASM role builds in one pinned job
         # Each execution role is a separate Cargo root and physical artifact;
         # building them in separate invocations prevents feature unification.
         # Rust error locations otherwise embed the self-hosted runner's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
-        # The second build follows `cargo clean`, so equality proves same-source
-        # reproduction instead of comparing unrelated source commits by SHA.
+        # The second build follows `cargo clean`; equality checks repeatability
+        # for this source inside one pinned job, not cross-run identity.
         run: |
+          set -euo pipefail
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           build_roles() {
             wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
@@ -500,10 +501,12 @@ jobs:
             packages/colors/pkg/labcolors_bg.wasm \
             packages/colors/compiler/labcolors_compiler_bg.wasm
           do
-            if LC_ALL=C grep -a -q -E '/(Users|home)/[^[:cntrl:]]*/\.cargo/registry/src/|/opt/actions-runner/[^[:cntrl:]]*/cargo-wasm/registry/src/' "$wasm"; then
-              echo "unmapped build path in $wasm" >&2
-              exit 1
-            fi
+            for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do
+              if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then
+                echo "unmapped build path $root in $wasm" >&2
+                exit 1
+              fi
+            done
           done
           sha256sum \
             packages/colors/pkg/labcolors_bg.wasm \
