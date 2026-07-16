@@ -87,18 +87,6 @@ pub(crate) enum CompositionProfileV1 {
     EncodedSrgb8SourceOverV1,
 }
 
-/// Класс доказательства результата: точная операция объявленного профиля либо
-/// охарактеризованное legacy-совместимое поведение. Классы не смешиваются:
-/// occurrence, решаемый legacy-солвером, не наследует exact-статус композита.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EvidenceClass {
-    /// Точный результат reference-операции в её объявленном конечном домене.
-    ReferenceExact,
-    /// Охарактеризованное текущее поведение (см. §5.2 ТЗ #307): сохраняется
-    /// байт-в-байт, но не объявляется новой научной истиной.
-    LegacyCompatibility,
-}
-
 /// Декларация поверхности: input-слой (цвет из bindings как есть) либо
 /// source-over композит поверх другой поверхности.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,8 +133,6 @@ pub(crate) struct ForegroundOccurrenceSpec {
     pub(crate) identity_source: ColorInputId,
     /// Поверхность, против которой foreground реально стоит.
     pub(crate) against: SurfaceId,
-    /// Класс доказательства решателя, потребляющего occurrence.
-    pub(crate) evidence: EvidenceClass,
 }
 
 /// Типизированные ошибки compile/evaluate. Публичный (в пределах crate) вход
@@ -467,9 +453,6 @@ pub(crate) struct SourceOverCertificateV1 {
     pub(crate) opacity_bits: u64,
     /// Финальные байты результата.
     pub(crate) output_rgb: [u8; 3],
-    /// Класс доказательства: всегда [`EvidenceClass::ReferenceExact`] —
-    /// сертификат существует только для exact-профиля.
-    pub(crate) evidence: EvidenceClass,
 }
 
 impl SourceOverCertificateV1 {
@@ -509,8 +492,6 @@ pub(crate) struct ResolvedOccurrence {
     pub(crate) against: SurfaceId,
     /// Финальные вычисленные байты этой поверхности.
     pub(crate) backdrop: [u8; 3],
-    /// Класс доказательства решателя-потребителя.
-    pub(crate) evidence: EvidenceClass,
 }
 
 /// Результат одного evaluate: байты каждой поверхности, occurrences,
@@ -688,7 +669,6 @@ impl CompiledAppearanceGraph {
                         opacity_input: opacity,
                         opacity_bits: alpha.to_bits(),
                         output_rgb,
-                        evidence: EvidenceClass::ReferenceExact,
                     });
                     resolved[index] = Some(output_rgb);
                 }
@@ -723,7 +703,6 @@ impl CompiledAppearanceGraph {
                     source: color_value(spec.identity_source),
                     against: spec.against,
                     backdrop,
-                    evidence: spec.evidence,
                 }
             })
             .collect();
