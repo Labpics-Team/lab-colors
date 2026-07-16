@@ -1,49 +1,17 @@
-// Adaptive theme controller — the lazy debounced-re-solve runtime. Zero dependencies.
+// Adaptive theme controller. Zero dependencies.
 //
-// `watchTheme` re-resolves the whole set whenever the background changes. For a
-// CONTINUOUSLY changing background (animation/scroll/blur) that is both expensive
-// (a full solve every frame) and jittery (colours twitch frame to frame).
+// Each `tick` reads one finite, caller-declared sample set. An unchanged sample
+// key with no pending breach/ease skips metric evaluation. Otherwise the
+// controller compares the current resolved colours with the returned Lc/WCAG
+// metrics, waits for the configured relative-drop interval, then resolves again
+// and interpolates colour-role coordinates toward the new target.
 //
-// `adaptTheme` is the elegant alternative, and the way real systems behave: it
-// does NOT re-solve per frame. Each frame it cheaply RE-CHECKS whether the
-// current colours still pass their contrast against the (new) background — one
-// perceptual-model forward for the background plus one per role, no solve. While they pass
-// it does nothing (no churn, no jitter). Only when a role's perceptual contrast
-// stays below target for a sustained moment does it re-solve and **ease** to the
-// fresh colours over a short transition. The result: fewer computations, no
-// flicker, and a smooth, calm adaptation.
-//
-// Control law (principled defaults; all tunable):
-//   * Margin threshold — re-solve only when a role's achieved |Lc| falls below
-//     `(1 - dropFraction)` of its target |Lc| (a `dropFraction` margin under the
-//     target), not merely when it touches the line. This is a SINGLE-threshold
-//     detector: the same level gates entering and leaving the breach state — NOT a
-//     Schmitt trigger, which would need two distinct levels. The margin keeps a
-//     background sitting right at the target from counting as a breach, but it
-//     does NOT by itself stop chatter for values straddling the threshold.
-//   * Debounce — the breach must persist `sustainMs` before acting, so a dark
-//     object scrolling past for a couple of frames never triggers. Together with
-//     min-dwell this is what actually prevents oscillation near the threshold.
-//   * Min dwell — at least `dwellMs` between re-solves, capping the effective
-//     transition rate well under the flash threshold.
-//   * Ease — a non-overshooting ease-out crossfade of `easeMs`; under
-//     `prefers-reduced-motion` a gentle short fade (NOT a jarring snap — an
-//     instant state change is more stressful than a soft one, and a colour
-//     crossfade is not "motion").
-//   * Theme switches are a deliberate INTENT, not a drift: applied instantly
-//     (a single quick crossfade), never run through the debounce/dwell machinery.
-//
-// Floor-clamp modes:
-//   * Default (free ease): the crossfade does not floor-clamp each frame.
-//     Reading comprehension is far slower than a ~300ms transition and surfaces
-//     usually sit on a substrate, so a brief dip of the aesthetic *surplus*
-//     during the ease is imperceptible while the freshly-solved destination is
-//     always legal.
-//   * Strict (`strict: true`): requests the legacy per-frame floor clamp. The
-//     current Oklab→clip→sRGB8 path is characterized, but is not globally
-//     monotone and therefore does not prove a least/legal blend for every frame;
-//     #287 owns the finite hard-floor-safe replacement. Roles with no declared
-//     floor (decorative) ease freely either way.
+// These are runtime mechanics, not a whole-field or human-readability proof.
+// `dropFraction`, `sustainMs`, `dwellMs`, `easeMs`, and the shorter transition
+// selected for the host motion preference are compatibility parameters, not
+// standard-derived thresholds. Default easing does not verify a floor on every
+// frame. `strict: true` enables the characterized per-frame clamp, whose current
+// Oklab→clip→sRGB8 path is not globally monotone and is not a floor certificate.
 
 import { applyTheme } from "./apply-theme.js";
 import {
@@ -84,8 +52,7 @@ function wcagRatio(lumA, lumB) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Interpolate an ease segment at `t ∈ [0,1]` in Oklab, so the crossfade is
- * perceptually even (no lingering-bright sRGB midpoint, no muddy chroma path).
+/** Linearly interpolate an ease segment's Oklab coordinates at `t ∈ [0,1]`.
  * Segments carry a compiled pair (`compileLerpPair`) when both endpoints
  * parse — the always-case in practice, both being engine-emitted `#RRGGBB` —
  * so per-frame interpolation runs on pre-parsed Oklab coordinates instead of
@@ -106,28 +73,31 @@ function segLum(seg, t) {
 /**
  * @typedef {object} AdaptController
  * @property {(now?: number) => void} tick  Drive one step (call from rAF, or let
- *   `start()` do it). Cheap: a re-check; a re-solve only on a sustained breach.
+ *   `start()` do it). Unchanged idle input exits before metric evaluation; a
+ *   re-solve occurs only on a sustained breach.
  * @property {(theme: string) => void} setTheme  Switch theme INSTANTLY (intent,
  *   not drift) — re-resolve and apply, bypassing the debounce/dwell machinery.
  * @property {() => void} start  Begin an internal requestAnimationFrame loop.
  * @property {() => void} stop   Stop the loop and disconnect.
- * @property {() => Record<string,string>} current  The currently-applied vars.
+ * @property {() => Record<string,string>} current  Canonical resolved targets;
+ *   during an ease these differ from the values painted into the DOM.
  */
 
 /**
- * Keep an element's `--lab-*` variables adapting to its (changing) background
- * lazily and smoothly. Applies the resolved set immediately, then holds it while
- * it still passes, re-solving + easing only when contrast stably degrades.
+ * Adapt an element's `--lab-*` variables to a finite declared sample set.
+ * Applies the first resolved set immediately; later metric evaluation occurs
+ * only for changed samples or pending controller state, and a sustained relative
+ * drop starts a new resolve plus coordinate interpolation.
  *
  * @param {*} element
  * @param {object} options
  * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:string,fgs:string[],theme:string)=>ArrayLike<number>, isStableGlowPointNoop?:(tint:string,bg:string)=>boolean }} options.colors
  * @param {string} options.theme
  * @param {string | string[] | (() => string | string[])} [options.background]
- *   explicit effective background. An ARRAY (or a function returning one) is a
- *   set of worst-case samples of a varying backdrop (gradient / image): the
- *   colours are held legible against the hardest sample. The caller does the
- *   pixel sampling; this consumes the samples worst-case.
+ *   explicit background evidence. An ARRAY (or a function returning one) is a
+ *   finite sample set for a varying backdrop (gradient / image). The caller owns
+ *   sampling; the controller compares only those points and uses the lowest
+ *   returned metric, without inferring the field between them.
  * @param {*} [options.target=element]  element to write vars onto
  * @param {string} [options.fallback="#FFFFFF"]
  * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
@@ -136,7 +106,7 @@ function segLum(seg, t) {
  * @param {number} [options.easeMs=280]  crossfade duration
  * @param {boolean} [options.strict=false]  enable the legacy characterized
  *   per-frame clamp; the current non-monotone interpolation path is not a
- *   universal floor certificate (replacement tracked by #287)
+ *   universal floor certificate
  * @param {boolean} [options.reducedMotion]  override; default reads matchMedia
  * @param {() => number} [options.now]  clock (default performance.now/Date.now)
  * @param {*} [options.win=globalThis]
@@ -386,13 +356,13 @@ export function adaptTheme(element, options) {
   // Resolve a fresh set and adopt it as the current colours (no ease).
   const solveAndAdopt = (bg, now) => adoptResolved(colors.resolveTheme(bg, theme), now);
 
-  // Solve+adopt against the hardest of `samples`. With one sample this is a
-  // single solve; with several it does a provisional solve to learn the role
-  // colours, picks the worst sample for them, and re-solves against it if that
-  // is not the one already chosen — so the adopted set is the strongest the
-  // backdrop demands. Used where there is no current set to recheck (initial
-  // apply, theme switch); the tick path already knows the worst sample from its
-  // own recheck and calls `solveAndAdopt` directly.
+  // Choose an initial result from `samples`. With one sample this is a single
+  // solve. With several, solve against the first sample, evaluate that
+  // provisional role set over every supplied sample, then re-solve at most once
+  // against its lowest-metric sample. The second result is not rechecked over
+  // the set, so this is a bounded initialization heuristic, not a final
+  // worst-sample certificate. The tick path instead starts from its own current
+  // result and calls `solveAndAdopt` for the lowest-metric supplied sample.
   const solveAndAdoptWorst = (samples, now) => {
     solveAndAdopt(samples[0], now);
     if (samples.length > 1) {
@@ -539,9 +509,9 @@ export function adaptTheme(element, options) {
   // Legacy strict clamp: fixed-step bisection from the natural ease value `e`
   // toward the freshly-solved destination. Oklab→clip→sRGB8 legality is not
   // globally monotone, so this is a characterized compatibility selector, not
-  // a proof of the least or universally legal blend. #287 owns the finite
-  // hard-floor-safe replacement. If even `to` fails after background drift, the
-  // selector returns 1 and the recheck loop requests another solve.
+  // a proof of the least or universally legal blend. If even `to` fails after
+  // background drift, the selector returns 1 and the recheck loop requests
+  // another solve.
   const floorBlend = (seg, e, bgLums, floor) => {
     const legalAt = (blend) => {
       const lum = segLum(seg, blend);
@@ -558,7 +528,7 @@ export function adaptTheme(element, options) {
       if (legalAt(mid)) hi = mid;
       else lo = mid;
     }
-    return hi; // hi is always legal (or blend 1, the most-legal we have)
+    return hi; // upper search bound, or 1 when the destination also fails
   };
 
   // Per-key memo of the samples' WCAG luminances. Strict mode reads them in
@@ -609,8 +579,7 @@ export function adaptTheme(element, options) {
         // blend than last frame — a backwards step toward the old colour, the
         // precise jarring reversal this mode exists to avoid. `held` clamps that
         // out: the scalar blend parameter never retreats. This latch alone is
-        // not a proof that the quantized colour stays above every floor; #287
-        // owns that finite-path guarantee.
+        // not a proof that the quantized colour stays above every floor.
         blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
         seg.held = blend;
       }
@@ -619,9 +588,8 @@ export function adaptTheme(element, options) {
     applyHexes(overlay);
   };
 
-  // The full applied picture: the canonical set (color + translucent) with each
-  // in-flight color role reported at its LOGICAL target (`seg.to`), so a reader
-  // sees where the ease is going, not a mid-transition frame.
+  // The canonical target picture (color + translucent). An in-flight colour role
+  // is reported at `seg.to`, not at the value currently painted into the DOM.
   const currentApplied = () => {
     const vars = { ...baseVars };
     for (const r of roles) {
@@ -664,7 +632,7 @@ export function adaptTheme(element, options) {
     const key = samples.join("|");
     // Advance any in-flight ease first against the live samples. Legacy strict
     // mode applies its characterized clamp here; it is not a universal
-    // per-frame floor certificate (#287).
+    // per-frame floor certificate.
     if (easing.size > 0) stepEase(now, samples, key);
 
     // Steady state: a static backdrop with no in-flight ease and no pending
@@ -676,8 +644,8 @@ export function adaptTheme(element, options) {
     lastKey = key;
     if (roles.length === 0) return;
 
-    // Cheap worst-case re-check: do the current colours still pass against every
-    // sample? `worstIdx` is the hardest sample, the one to re-solve against.
+    // Compare the current colours with every declared sample. `worstIdx` is the
+    // lowest-metric sample, the one used for the next resolve.
     const { breached, worstIdx } = recheckSamples(samples);
 
     if (!breached) {

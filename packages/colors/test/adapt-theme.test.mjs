@@ -130,6 +130,19 @@ test("applies the resolved set immediately on creation", () => {
   assert.equal(h.el.props.get("--lab-label-primary"), "#000000");
 });
 
+test("current() reports the logical target, not the painted mid-ease value", () => {
+  const h = harness();
+  h.colors.setResolve(oneRole("#FFFFFF", 100));
+  h.colors.setRecheckLc([0]);
+  h.setBg("#EEEEEE");
+
+  h.ctrl.tick(1000); // begin the sustained breach window
+  h.ctrl.tick(1300); // resolve and start the ease at t=0
+
+  assert.equal(h.el.props.get("--lab-label-primary"), "#000000");
+  assert.equal(h.ctrl.current()["--lab-label-primary"], "#FFFFFF");
+});
+
 test("stable Glow class changes re-resolve and clear/restore satellites synchronously", () => {
   const el = fakeElement();
   let bg = "#FFFFFF";
@@ -723,9 +736,9 @@ test("a color re-solve cannot reintroduce stable Glow vars unsafe for another sa
   }
 });
 
-test("holds (no re-solve) while colours still pass; the dropFraction margin tolerates small drops", () => {
+test("holds while returned Lc stays above the relative-drop trigger", () => {
   const h = harness();
-  // A small drop (95 of 100; tolerance keeps to 80) → still passing → hold.
+  // A small drop (95 of 100; trigger is 80) does not request a new solve.
   h.colors.setRecheckLc([95]);
   h.setBg("#FEFEFE");
   h.ctrl.tick();
@@ -797,7 +810,7 @@ test("setTheme is instant — a deliberate intent, never eased", () => {
   assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
 });
 
-test("prefers-reduced-motion caps the ease to a short gentle fade (not a snap)", () => {
+test("prefers-reduced-motion caps the configured ease duration at 80ms", () => {
   // easeMs requested 280, but reducedMotion caps to <= 80. We assert the cap by
   // observing the ease completes within the shortened window.
   const h = harness({ easeMs: 280, reducedMotion: true });
@@ -955,7 +968,7 @@ test("worst-case recheck breaches when any sample fails (even if another passes)
   assert.equal(h.colors.lastResolveBg(), "#202020", "re-solve targets the hardest sample");
 });
 
-test("worst-case recheck holds when every sample still passes", () => {
+test("worst-case recheck holds when every sample stays above its trigger", () => {
   let samples = ["#FFFFFF", "#FAFAFA"];
   const h = harness({ background: () => samples });
   h.colors.setRecheckByBg({ "#FFFFFF": [100], "#FAFAFA": [100], "#F5F5F5": [90] });

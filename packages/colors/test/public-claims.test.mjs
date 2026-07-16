@@ -6,6 +6,16 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const SELF = fileURLToPath(import.meta.url);
+const PACKAGE_ROOT = join(ROOT, "packages", "colors");
+const PACKAGE_MANIFEST = JSON.parse(
+  readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"),
+);
+const RUNTIME_DOC_PATHS = [
+  "packages/colors/README.md",
+  ...PACKAGE_MANIFEST.files
+    .filter((path) => /^(?:apply-theme|watch-theme|adapt-theme|effective-bg)\.(?:js|d\.ts)$/u.test(path))
+    .map((path) => `packages/colors/${path}`),
+];
 const CLAIM_EXT = /\.(?:js|md|mjs|rs|ts)$/u;
 const CLAIM_SKIP = /(?:^|\/)(?:node_modules|pkg|target|\.git)(?:\/|$)|mutants\.out/u;
 const HUMAN_CLEANLINESS_VERDICTS = [
@@ -27,6 +37,138 @@ function mudStatusPattern(id, status) {
     "mu",
   );
 }
+const RUNTIME_DOC_FALSE_CLAIMS = [
+  {
+    pattern: /правильные --lab-\* для своего фона/u,
+    sample: "правильные --lab-* для своего фона",
+    reason: "reference background estimate was promoted to a correct rendered result",
+  },
+  {
+    pattern: /цвета будут корректны для наиболее сложного из них/u,
+    sample: "цвета будут корректны для наиболее сложного из них",
+    reason: "a finite sample set was promoted to the whole varying backdrop",
+  },
+  {
+    pattern: /adaptTheme\(hero,[\s\S]{0,120}strict:\s*true/u,
+    sample: "adaptTheme(hero, {\n  colors,\n  strict: true",
+    reason: "legacy strict mode was presented as the recommended example",
+  },
+  {
+    pattern: /~2\.5× на 3 сэмплах/u,
+    sample: "~2.5× на 3 сэмплах",
+    reason: "an ungated benchmark result was presented as a durable property",
+  },
+  {
+    pattern: /перцептуально равномерная интерполяция между двумя hex-значениями/iu,
+    sample: "перцептуально равномерная интерполяция между двумя hex-значениями",
+    reason: "Oklab coordinate interpolation was promoted to a human-perception guarantee",
+  },
+  {
+    pattern: /Perceptually uniform \(even crossfade timing/iu,
+    sample: "Perceptually uniform (even crossfade timing",
+    reason: "Oklab coordinate interpolation was promoted to a human-perception guarantee",
+  },
+  {
+    pattern: /non-muddy/iu,
+    sample: "non-muddy chroma path",
+    reason: "Oklab coordinate interpolation was promoted to a cleanliness guarantee",
+  },
+  {
+    pattern: /held legible against the hardest sample/iu,
+    sample: "held legible against the hardest sample",
+    reason: "tracked metrics were promoted to universal legibility",
+  },
+  {
+    pattern: /hold while colours still pass/iu,
+    sample: "hold while colours still pass",
+    reason: "tracked metrics were promoted to universal legibility",
+  },
+  {
+    pattern: /#287 owns the finite replacement/u,
+    sample: "#287 owns the finite replacement",
+    reason: "a closed Issue was used as public reference documentation",
+  },
+  {
+    pattern: /replacement принадлежит #283/u,
+    sample: "replacement принадлежит #283",
+    reason: "a closed Issue was used as public reference documentation",
+  },
+  {
+    pattern: /(?:Issue |#)(?:283|287)\b/iu,
+    sample: "Issue #283 owns the replacement",
+    reason: "a closed Issue was used as shipped runtime documentation",
+  },
+  {
+    pattern: /(?:perceptually[- ]uniform|perceptually even|equal \*perceived\* change)/iu,
+    sample: "perceptually even",
+    reason: "coordinate interpolation was promoted to a perception guarantee",
+  },
+  {
+    pattern: /(?:non-muddy|muddy desaturated midpoint)/iu,
+    sample: "muddy desaturated midpoint",
+    reason: "coordinate interpolation was promoted to a cleanliness guarantee",
+  },
+  {
+    pattern: /(?:principled defaults|well under the flash threshold|more stressful than a soft one|imperceptible while|always legal)/iu,
+    sample: "well under the flash threshold",
+    reason: "runtime timing was promoted to an unregistered human or safety profile",
+  },
+  {
+    pattern: /(?:held legible|keeps?[^\n]{0,80}legible|universal guarantee of legibility)/iu,
+    sample: "colours are held legible",
+    reason: "tracked metrics were promoted to universal legibility",
+  },
+  {
+    pattern: /(?:фактическим фоном|surface is correct on creation)/iu,
+    sample: "surface is correct on creation",
+    reason: "a reference background estimate was promoted to an observed pixel",
+  },
+  {
+    pattern: /(?:каждый кадр повторно проверяет|re-check each frame)/iu,
+    sample: "re-check each frame",
+    reason: "sample polling was confused with a metric recheck on unchanged state",
+  },
+  {
+    pattern: /(?:one batched call per frame|per sample per frame)/iu,
+    sample: "ONE batched call per frame",
+    reason: "a performed metric recheck was promoted to an every-frame operation",
+  },
+  {
+    pattern: /strongest the backdrop demands/iu,
+    sample: "the strongest the backdrop demands",
+    reason: "a provisional worst-sample heuristic was promoted to a final-field guarantee",
+  },
+  {
+    pattern: /(?:auto-refresh on DOM attribute mutations|авто-обновление при DOM-мутациях)/iu,
+    sample: "Auto-refresh on DOM attribute mutations",
+    reason: "the style/class-only observer was promoted to arbitrary DOM mutations",
+  },
+  {
+    pattern: /переключение темы[^\n]{0,120}MutationObserver[^\n]{0,40}автоматически/iu,
+    sample: "переключение темы и style/class отслеживаются MutationObserver автоматически",
+    reason: "an explicit setTheme operation was promoted to MutationObserver behaviour",
+  },
+  {
+    pattern: /(?:currently-applied `--lab-\*`|текущие применённые --lab-\*)/iu,
+    sample: "The currently-applied `--lab-*` variables",
+    reason: "current() logical targets were described as painted DOM values",
+  },
+  {
+    pattern: /endpoints are exact/iu,
+    sample: "endpoints are exact",
+    reason: "opaque RGB endpoint identity was promoted to alpha preservation",
+  },
+  {
+    pattern: /~85-90%/u,
+    sample: "measured at ~85-90% of the frame budget",
+    reason: "an ungated benchmark snapshot was presented as a durable property",
+  },
+  {
+    pattern: /commit-pinned гайде релиза 0\.10\.0/iu,
+    sample: "commit-pinned гайде релиза 0.10.0",
+    reason: "the public package linked to a private-repository migration guide",
+  },
+];
 
 function claimFiles(path, files = []) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -68,6 +210,12 @@ function publicClaimFiles() {
   ].filter((file) => file !== SELF);
 }
 
+function runtimeDocFalseClaims(path, source) {
+  return RUNTIME_DOC_FALSE_CLAIMS
+    .filter(({ pattern }) => pattern.test(source))
+    .map(({ reason }) => `${path}: ${reason}`);
+}
+
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);
   assert.equal(knownFalseClaims("x.md", "цвета #89CFF0 и #8944AB").length, 0);
@@ -79,6 +227,69 @@ test("false-claim detector bites without treating hex colours as Issue links", (
   );
   assert.equal(knownFalseClaims("x.md", "потребляет labui-material.css").length, 1);
   assert.equal(knownFalseClaims("x.md", "platform-characterized").length, 1);
+});
+
+test("runtime-doc detector bites on every rejected promotion", () => {
+  for (const { sample, reason } of RUNTIME_DOC_FALSE_CLAIMS) {
+    assert.ok(
+      runtimeDocFalseClaims("x.md", sample).length >= 1,
+      `detector did not bite: ${reason}`,
+    );
+  }
+});
+
+test("runtime docs do not promote estimates, samples, or coordinates", () => {
+  const failures = RUNTIME_DOC_PATHS.flatMap((path) =>
+    runtimeDocFalseClaims(path, readFileSync(join(ROOT, path), "utf8")),
+  );
+  assert.deepEqual(failures, []);
+});
+
+test("runtime docs scope background evidence to estimates and finite samples", () => {
+  const readme = readFileSync(join(ROOT, "packages/colors/README.md"), "utf8");
+  const adaptTypes = readFileSync(
+    join(ROOT, "packages/colors/adapt-theme.d.ts"),
+    "utf8",
+  );
+  const backgroundTypes = readFileSync(
+    join(ROOT, "packages/colors/effective-bg.d.ts"),
+    "utf8",
+  );
+  const watchSource = readFileSync(
+    join(ROOT, "packages/colors/watch-theme.js"),
+    "utf8",
+  );
+  const watchTypes = readFileSync(
+    join(ROOT, "packages/colors/watch-theme.d.ts"),
+    "utf8",
+  );
+
+  assert.match(readme, /конечный набор[^\n]*образц/u);
+  assert.match(readme, /только[^\n]*переданн[^\n]*точ/u);
+  assert.match(adaptTypes, /finite, caller-supplied sample set/iu);
+  assert.match(adaptTypes, /does not infer[^\n]*between samples/iu);
+  assert.match(backgroundTypes, /reference estimate/iu);
+  assert.match(backgroundTypes, /solid\/translucent ancestor/iu);
+  assert.match(backgroundTypes, /`background-color` chain/iu);
+  assert.match(backgroundTypes, /not[\s*]+a browser pixel observation/iu);
+  assert.match(backgroundTypes, /alpha[^\n]*discarded/iu);
+  assert.match(adaptTypes, /logical target/iu);
+  assert.match(watchSource, /reference estimate/iu);
+  assert.match(readme, /изменения атрибутов `style`\/`class`/iu);
+  for (const source of [watchSource, watchTypes]) {
+    assert.match(source, /`style`\/`class` attribute changes/iu);
+  }
+  for (const source of [readme, watchSource, watchTypes]) assert.match(source, /setTheme/iu);
+  assert.match(
+    watchSource,
+    /attributeFilter:\s*\["style", "class"\]/u,
+    "observer implementation and public scope must name the same two attributes",
+  );
+  assert.equal(
+    existsSync(join(ROOT, "docs/migrations/exact-alpha-glow.md")),
+    false,
+    "obsolete private-link migration stub must not survive in the live tree",
+  );
 });
 
 test("cleanliness-verdict quarantine bites on every rejected public meaning", () => {

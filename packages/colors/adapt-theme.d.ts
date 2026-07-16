@@ -7,20 +7,23 @@ export interface AdaptThemeOptions {
    * An initialised engine — needs resolve + contrast recheck. The exact
    * `isStableGlowPointNoop` capability is conditionally required when a result
    * contains a stable Glow role; its absence then fails explicitly.
-   * `recheckContrastMulti` is optional: when present, a multi-sample backdrop
-   * is rechecked in ONE batched call per frame (byte-identical to the
-   * per-sample loop, locked by the wasm boundary parity test); when absent,
-   * the controller falls back to N `recheckContrast` calls.
+   * `recheckContrastMulti` is optional: when metric evaluation is performed,
+   * it rechecks a multi-sample backdrop in ONE batched call (byte-identical to
+   * the per-sample loop, locked by the wasm boundary parity test); when absent,
+   * the controller falls back to N `recheckContrast` calls. Unchanged idle
+   * ticks skip metric evaluation entirely.
    */
   colors: Pick<LabColors, "resolveTheme" | "recheckContrast"> &
     Partial<Pick<LabColors, "recheckContrastMulti" | "isStableGlowPointNoop">>;
   theme: ThemeName;
   /**
-   * Explicit effective background, overriding the ancestor-composite. A single
-   * hex is one solid surface; an array (or a function returning one) is a set of
-   * worst-case samples of a varying backdrop (gradient / image / video the
-   * caller sampled), and the colours are held legible against the hardest
-   * sample. With one sample this is identical to plain single-background mode.
+   * Explicit background evidence, overriding the ancestor reference estimate.
+   * A single hex is one solid surface; an array (or a function returning one)
+   * is a finite, caller-supplied sample set for a varying backdrop (gradient /
+   * image / video). The controller compares every supplied point and bases its
+   * decision on the worst returned metric; it does not infer between samples
+   * or observe the whole field. With one sample this is identical to plain
+   * single-background mode.
    */
   background?: string | string[] | (() => string | string[]);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
@@ -38,8 +41,9 @@ export interface AdaptThemeOptions {
   /**
    * Enable the legacy characterized per-frame clamp. The current
    * Oklab→clip→sRGB8 path is not globally monotone, so this option is not a
-   * universal floor/least-blend certificate; #287 owns the finite replacement.
-   * Default `false`.
+   * universal floor/least-blend or legibility certificate. Use it only when an
+   * integration explicitly needs the characterized legacy clamp. Default
+   * `false`.
    */
   strict?: boolean;
   /** Override reduced-motion detection (default reads `matchMedia`). */
@@ -55,7 +59,7 @@ export interface AdaptThemeOptions {
 }
 
 export interface AdaptController {
-  /** Drive one step. Cheap (a re-check); re-solves only on a sustained breach. */
+  /** Read one sample step; unchanged idle state skips metric evaluation. */
   tick(now?: number): void;
   /** Switch theme INSTANTLY (intent, not drift) — bypasses the hysteresis. */
   setTheme(theme: ThemeName): void;
@@ -63,14 +67,16 @@ export interface AdaptController {
   start(): void;
   /** Stop the loop. */
   stop(): void;
-  /** The currently-applied `--lab-*` variables. */
+  /** Canonical logical targets; during an ease these differ from painted DOM values. */
   current(): Record<string, string>;
 }
 
 /**
  * Keep an element's `--lab-*` variables adapting to its (changing) background
- * **lazily and smoothly**: re-check each frame, hold while colours still pass,
- * and re-solve + ease only when contrast stably degrades. The calm, cheap
- * alternative to re-solving every frame.
+ * without re-solving every frame. Each tick reads the declared sample set;
+ * metric evaluation is skipped while that set and the pending state are
+ * unchanged. A changed/pending set is compared with the last resolved baseline,
+ * and re-solve + ease starts only after a sustained relative drop. This does not
+ * establish legibility outside the supplied samples or between them.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;

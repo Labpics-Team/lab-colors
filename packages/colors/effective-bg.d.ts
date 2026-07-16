@@ -29,11 +29,11 @@ export declare function compositeOver(top: Rgba, bottom: Rgba): Rgba;
 export declare function toHex(rgb: Rgba | [number, number, number]): string;
 
 /**
- * Interpolate two colours in Oklab at `t ∈ [0,1]` → `#RRGGBB`. `from`/`to` may be
- * any string `parseCssColor` accepts (`#hex`, `rgb()`/`rgba()`, `oklch()`,
- * `transparent`), not only `#RRGGBB`. Perceptually uniform (even crossfade timing,
- * non-muddy chroma path); endpoints are exact and out-of-gamut intermediates are
- * clamped per channel.
+ * Linearly interpolate the Oklab coordinates of two colours at `t ∈ [0,1]` →
+ * `#RRGGBB`. `from`/`to` may be any string `parseCssColor` accepts (`#hex`,
+ * `rgb()`/`rgba()`, `oklch()`, `transparent`), not only `#RRGGBB`. The output is
+ * always opaque: input alpha is discarded, endpoint RGB bytes are normalized
+ * through `toHex`, and out-of-gamut intermediate channels are clamped.
  */
 export declare function oklabLerp(from: string, to: string, t: number): string;
 
@@ -41,9 +41,10 @@ export declare function oklabLerp(from: string, to: string, t: number): string;
 export declare function compositeStackToHex(layersFrontToBack: Rgba[], opaqueBase: Rgba): string;
 
 /**
- * Legacy opaque reference-background estimate for the supported
- * `background-color` subset. This is not a browser pixel observation; use an
- * explicit sampled background when correctness depends on unsupported layers.
+ * Opaque reference estimate for the supported solid/translucent ancestor
+ * `background-color` chain, composited over the declared fallback. This is not
+ * a browser pixel observation and does not account for images, gradients,
+ * filters, video, or other unsupported layers.
  */
 export declare function effectiveBackground(
   element: unknown,
