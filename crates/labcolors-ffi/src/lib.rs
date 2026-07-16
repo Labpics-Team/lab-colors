@@ -96,7 +96,7 @@ impl Theme {
 /// Контракт резолва — какой контраст обязан достичь передний план.
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
 pub enum ContractSpec {
-    /// Текст: цель `Lc`, юридический пол WCAG AA-text (4.5:1).
+    /// Текст: цель `Lc`, ratio-пол 4.5:1 (число из WCAG 2.x AA text).
     Text {
         /// Целевой перцептивный `Lc`.
         lc: f64,
@@ -106,7 +106,7 @@ pub enum ContractSpec {
         /// Целевой перцептивный `Lc`.
         lc: f64,
     },
-    /// Декоративная полоса `[floor, ceiling]` без юридического пола.
+    /// Декоративная полоса `[floor, ceiling]` без ratio-пола.
     Range {
         /// Нижняя граница `Lc`.
         floor: f64,
@@ -125,7 +125,7 @@ impl ContractSpec {
     }
 }
 
-/// Пара контрастов переднего плана на фоне: перцептивный `Lc` и юридический
+/// Пара контрастов переднего плана на фоне: перцептивный `Lc` и WCAG-формульный
 /// WCAG-ratio. Отчитываются РАЗДЕЛЬНО (инвариант ядра — не смешивать).
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
 pub struct Contrast {
@@ -237,7 +237,7 @@ pub struct Solved {
     pub lc: f64,
     /// WCAG-ratio на отданном hex.
     pub wcag_ratio: f64,
-    /// Юридический пол переопределил перцептивную цель.
+    /// Ratio-пол переопределил перцептивную цель.
     pub floor_override: bool,
 }
 

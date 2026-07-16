@@ -121,10 +121,11 @@ export interface TranslucentRole {
   readonly alphaCoerced: boolean;
   /**
    * `true` when a solid family border (`border-<family>-strong`, M2) was darkened
-   * along the family curve to meet the AA UI floor (3:1), because the raw family
-   * tint did not clear it on this background — an honest, flagged minimal legal
-   * shift (family hue/chroma preserved, only lightness moved). `false` for a
-   * direct ladder emission and for legal family solids.
+   * along the family curve to meet the UI ratio floor (3:1, number from WCAG 2.x
+   * 1.4.11), because the raw family tint did not clear it on this background —
+   * an honest, flagged minimal shift (family hue/chroma preserved, only
+   * lightness moved). `false` for a direct ladder emission and for family
+   * solids that already clear their floor.
    */
   readonly floorCoerced: boolean;
   /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
@@ -296,7 +297,7 @@ export interface MaterialRoleBase {
   readonly poleWhite: boolean;
   /** Фактический |ΔJ'| тона-базы от фона — различимость поверхности. */
   readonly achievedDj: number;
-  /** Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002). */
+  /** Целевой |ΔJ'| тона не взят в бюджете — отдан ближайший ИЗУЧЕННЫЙ локальным поиском (ADR-0002). */
   readonly toneCompressed: boolean;
   /** Оттенок семьи выродился у края гамута (честный флаг; false у нейтрали). */
   readonly hueVanished: boolean;

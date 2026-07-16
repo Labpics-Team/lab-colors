@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn legal_floor_rides_along_on_solved_colours() {
+    fn floor_ratio_rides_along_on_solved_colours() {
         // The DTO carries each role's legal WCAG clamp so the runtime can hold
         // the floor while easing. Anchored roles report their conformance ratio;
         // decorative / zero roles report None.

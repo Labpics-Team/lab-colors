@@ -904,7 +904,7 @@ test("held latch never reverses the scalar blend when the background drifts favo
   h.colors.setRecheckLc([100]);
   const grey = () => parseInt(h.el.props.get("--lab-label-primary").slice(1, 3), 16);
   let prev = grey();
-  // Drift the background DARKER mid-ease: the legal floor gets *easier*, so the
+  // Drift the background DARKER mid-ease: the ratio floor gets *easier*, so the
   // stateless solver would choose a smaller blend — the latch must hold the line.
   const bgs = ["#202020", "#141414", "#0C0C0C", "#060606", "#000000"];
   for (let i = 0; i < bgs.length; i++) {
@@ -929,7 +929,7 @@ test("strict mode leaves floorless (decorative) roles to ease freely", () => {
   // floorRatio null → the clamp is a no-op; the role crosses low contrast freely.
   const h = harness({ strict: true, easeMs: 100 });
   h.colors.setRecheckLc([10]);
-  h.colors.setResolve(floorRole("#FFFFFF", 100, null)); // no legal floor
+  h.colors.setResolve(floorRole("#FFFFFF", 100, null)); // no ratio floor
   h.setBg("#101010");
   h.setNow(2000);
   h.ctrl.tick(); // arm breach

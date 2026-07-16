@@ -7,11 +7,40 @@ Rust различаются, потому что это разные delivery su
 
 Атомарная numerical-decision граница (#292), exact WCAG 2.2 evaluator для
 финальной sRGB8-пары (#284) и bounded complete-feasibility compiler (#295).
-Существующая цветовая эмиссия, config fingerprint и adaptive runtime не
-меняются, но Rust/npm/Swift transport API и conformance pack изменены;
-следующий release обязан получить согласованный 0.x version bump.
+Существующая цветовая эмиссия и adaptive runtime не меняются, но Rust/npm/
+Swift transport API и conformance pack изменены; следующий release обязан
+получить согласованный 0.x version bump.
 Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
 дополнение ADR-0004 от 2026-07-12.
+
+### Changed (breaking) — #297 честные имена локального поиска
+
+Ложь публичного языка солвера убрана одной волной, без deprecated-слоя
+(правка контракта владельцем, комментарий в #297 от 2026-07-16). Эмитируемые
+цвета/решения и все численные биты не изменились — гейт: платформенные
+характеризационные фикстуры `solve-characterization-v1-*` реплеятся
+бит-в-бит (обе канонические платформы, PR #327/#328).
+
+- Rust: `Floor::AaText/AaUi` → `TextRatio/UiRatio`;
+  `Contract::conformance()/with_conformance` → `ratio_floor()/with_ratio_floor`;
+  `TextAnchor::conformance` → `ratio_floor`;
+  `Unreachable::QuantizationGap { nearest }` → `{ closest_examined }`;
+  `RoleTable/RoleSpec::legal_floor()` → `floor_ratio()`.
+- Конфиг (breaking): значения `floor` `"aa-text"/"aa-ui"` →
+  `"text-ratio"/"ui-ratio"`; старые строки — структурная ошибка
+  десериализации; fingerprint схемы легитимно
+  `c51445fcd167781a` → `866006bd94b8ce02` (клиентский `PASSPORT_FINGERPRINT`
+  в labui обновить при подъёме версии).
+- Wire/JS (breaking): ключ роли `legalFloor` → `floorRatio`
+  (тип `number | null` не менялся; adapt-theme считает те же числа).
+- Оставлено, потому что имя не врёт: `wcag_ratio`/`wcagRatio` (имя формулы,
+  доки уточнены), `floor_override`/`floorOverride`, `QuantizationGap`,
+  `FloorUnreachable` (+полярность в доке), dj `degraded`/`achieved_dj`,
+  wire-коды; байты conformance-пака не тронуты (6.0.0).
+- Evidence: admission V7 (V6 → историческая реплей-цепочка), runtime
+  size-ратчет V7 (+131B ровно — цена правдивых wire-строк; compiler
+  байт-в-байт, whole-call артефакты не тронуты).
+- Карта миграции: [297-honest-solver-names](docs/migrations/297-honest-solver-names.md).
 
 ### Added
 

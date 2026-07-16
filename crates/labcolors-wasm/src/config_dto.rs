@@ -820,6 +820,26 @@ mod tests {
         assert!(err.contains("label-quinary") && err.contains("label-primary"));
     }
 
+    /// #297: старые floor-строки "aa-text"/"aa-ui" (ложная претензия на
+    /// WCAG-AA-соответствие) НЕ читаются — структурная ошибка десериализации,
+    /// называющая новое меню. Регресс через alias/#[serde(other)] упал бы здесь.
+    #[test]
+    fn legacy_floor_strings_are_rejected_with_the_new_menu() {
+        for legacy in ["aa-text", "aa-ui"] {
+            let err = serde_json::from_str::<FloorDto>(&format!("\"{legacy}\""))
+                .expect_err("legacy floor string must fail closed")
+                .to_string();
+            assert!(
+                err.contains(legacy) && err.contains("text-ratio") && err.contains("ui-ratio"),
+                "error must name the rejected value and the new menu: {err}"
+            );
+        }
+        for current in ["text-ratio", "ui-ratio", "none"] {
+            serde_json::from_str::<FloorDto>(&format!("\"{current}\""))
+                .expect("current floor strings parse");
+        }
+    }
+
     // ── Слой 3: отпечаток полного паспорта закреплён (характеризационный пин) ──
 
     /// Характеризационный ЗАМОК ТЕКУЩЕГО main: отпечаток полного labui-конфига —

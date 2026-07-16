@@ -110,7 +110,7 @@ fn one_levelness_violations(table: &NamedRoleTable) -> Vec<String> {
                     ));
                 }
 
-                // 2. Юр. пол уровня НЕТОРГУЕМ: держится у цветного как у нейтрали.
+                // 2. Ratio-пол уровня НЕТОРГУЕМ: держится у цветного как у нейтрали.
                 if let Some(min_ratio) = floor {
                     let wcag = role_wcag(fam).unwrap_or_else(|| {
                         panic!("{fam_role_name}: контраст-исход обязан нести WCAG")

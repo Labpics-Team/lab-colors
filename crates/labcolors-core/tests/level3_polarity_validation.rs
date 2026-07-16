@@ -316,7 +316,7 @@ fn production_only_adds_ink_relative_to_pure_threshold() {
 
 /// ЭНДПОИНТ: белый фон `#FFFFFF` (`Y_hk = Y = 1`) — чёрный лейбл во ВСЕХ трёх
 /// доменах, и |Lc| канонический `≈106.04` (H-K не двигает люминансный эндпоинт;
-/// домены `Y_hk` и `Ys` совпадают там побайтно). Якорь легального пола WCAG цел.
+/// домены `Y_hk` и `Ys` совпадают там побайтно). Якорь ratio-пола цел.
 #[test]
 fn white_anchor_is_black_label_at_canonical_contrast() {
     let r = measure("#FFFFFF");

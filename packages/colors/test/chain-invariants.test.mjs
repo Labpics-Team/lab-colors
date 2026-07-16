@@ -105,7 +105,7 @@ test("legality survives serialization: each solid role's emitted var reparses to
           flooredChecked++;
           assert.ok(
             wcag >= role.floorRatio - 1e-9,
-            `${theme}/${bg}/${key}: reparsed colour fell below legal floor ${role.floorRatio} (got ${wcag})`,
+            `${theme}/${bg}/${key}: reparsed colour fell below ratio floor ${role.floorRatio} (got ${wcag})`,
           );
         }
       }

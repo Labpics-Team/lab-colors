@@ -3641,7 +3641,7 @@ fn enforce_text_hierarchy(
             _ => Floor::None,
         };
         let demoted = demote_below(senior_mag, ctx, chroma, floor, bg, vc);
-        // The senior's colour is the legal ceiling for the junior: when no
+        // The senior's colour is the floor-respecting ceiling for the junior: when no
         // distinguishable step below exists, the junior becomes a *copy* of the
         // senior — never a stronger colour. (The floor can lift the junior onto
         // a grid point above the senior; copying restores `senior ≥ junior`.)
@@ -3653,7 +3653,7 @@ fn enforce_text_hierarchy(
             continue;
         };
         entry.1 = match (demoted, senior_solved, &entry.1) {
-            // A distinguishable, still-legal step below the senior.
+            // A distinguishable step below the senior that still clears the floor.
             // achieved_dj сбрасывается: цвет заменён сжатием, прежний замер
             // ему не принадлежит (честнее None, чем чужое число).
             (Some(solved), _, _) => Resolved::Color {
@@ -3744,7 +3744,7 @@ fn enforce_named_text_hierarchy(
                 continue; // strictly weaker already — hierarchy holds here
             }
 
-            // The junior's own conformance governs how far down it may still be legal.
+            // The junior's own ratio floor governs how far down it may move.
             let RoleSpec::Anchor(anchor) = entries[junior_idx].1 else {
                 continue;
             };
@@ -3760,7 +3760,7 @@ fn enforce_named_text_hierarchy(
             };
             let senior_solved = set[senior_idx].1.solved().cloned();
             set[junior_idx].1 = match (demoted, senior_solved, &set[junior_idx].1) {
-                // A distinguishable, still-legal step below the senior.
+                // A distinguishable step below the senior that still clears the floor.
                 (Some(solved), _, _) => {
                     let hue_vanished = vanished(&solved);
                     Resolved::Color {
@@ -3789,7 +3789,7 @@ fn enforce_named_text_hierarchy(
 /// The smallest separation in `|Lc|` that counts as "strictly weaker". Note:
 /// near the extremes a single quantisation step can be worth only ~0.2–0.3 Lc,
 /// so a demotion may need several grid steps to clear it — and when even the
-/// laxest legal target cannot, the junior is set equal to its senior instead.
+/// laxest floor-clearing target cannot, the junior is set equal to its senior instead.
 /// The 0.5 threshold separates real visual distinction from float noise.
 ///
 /// Терминал **(e) DESIGN-CHOICE** (НЕ (c)): `STRICT_STEP` — прямое слагаемое
@@ -3814,7 +3814,7 @@ const STRICT_STEP: f64 = 0.5;
 /// Try to solve a junior text role at the strongest target that is still
 /// *strictly weaker* than its senior (`senior_mag − STRICT_STEP`) and still
 /// clears `floor`. Returns the demoted colour, or `None` if even the laxest
-/// distinguishable target cannot stay legal — in which case the caller keeps the
+/// distinguishable target cannot clear the floor — in which case the caller keeps the
 /// floored colour and only flags the compression.
 fn demote_below(
     senior_mag: f64,
@@ -3824,7 +3824,7 @@ fn demote_below(
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Option<Solved> {
-    // Target just under the senior. The solve still applies the junior's own legal
+    // Target just under the senior. The solve still applies the junior's own ratio
     // floor, so if that floor lifts the colour right back onto the senior there is
     // no room to distinguish — detected by re-measuring the result below.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
@@ -3933,7 +3933,7 @@ fn max_contrast(
 
 /// Choose the polarity the whole set resolves in, WCAG-first and VC-independent.
 ///
-/// Stage 1 — *legal reachability*: a text role floors at [`POLARITY_FLOOR_RATIO`]
+/// Stage 1 — *floor reachability*: a text role floors at [`POLARITY_FLOOR_RATIO`]
 /// (4.5:1), so the polarity that clears that floor wins. The reachability of each
 /// polarity is `contrast_ratio(extreme_fg, bg)` — black for dark-on-light, white
 /// for light-on-dark — which is a property of the background alone and does not
@@ -3943,7 +3943,7 @@ fn max_contrast(
 /// them the LPC rule chose the side that could not reach 4.5:1.
 ///
 /// Stage 2 — *tie-break*: when both sides clear the floor (the narrow
-/// double-legal band `Y ∈ [0.175, 0.1833]`), the tie resolves to light-on-dark —
+/// both-sides-clear band `Y ∈ [0.175, 0.1833]`), the tie resolves to light-on-dark —
 /// the side the perceptual layer prefers across the whole band ([`break_tie`]).
 /// The winner is a fixed derived polarity, so the decision stays VC-independent.
 /// When neither clears it, the side that comes *closest* wins, so the role's
@@ -3958,12 +3958,12 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
     let lod_clears = ratio_light_on_dark + 1e-9 >= POLARITY_FLOOR_RATIO;
 
     match (dol_clears, lod_clears) {
-        // Exactly one side is legal — take it.
+        // Exactly one side clears the floor — take it.
         (true, false) => Polarity::DarkOnLight,
         (false, true) => Polarity::LightOnDark,
-        // Both legal — the derived perceptual winner across the band (white).
+        // Both clear — the derived perceptual winner across the band (white).
         (true, true) => break_tie(),
-        // Neither legal — the closest side, so the diagnostic is the honest best.
+        // Neither clears — the closest side, so the diagnostic is the honest best.
         (false, false) => {
             if ratio_dark_on_light >= ratio_light_on_dark {
                 Polarity::DarkOnLight
@@ -3980,13 +3980,13 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
 ///
 /// # Derivation
 ///
-/// The double-legal band is narrow by construction. Solving the WCAG ratio for a
+/// The both-sides-clear band is narrow by construction. Solving the WCAG-formula ratio for a
 /// background luminance `Y`, black text clears the AA 4.5:1 floor when
 /// `(Y + 0.05) / 0.05 ≥ 4.5` (i.e. `Y ≥ 0.175`) and white when
-/// `1.05 / (Y + 0.05) ≥ 4.5` (i.e. `Y ≤ 0.1833`). Both are legal only on
+/// `1.05 / (Y + 0.05) ≥ 4.5` (i.e. `Y ≤ 0.1833`). Both clear only on
 /// `Y ∈ [0.175, 0.1833]`, a band ≈0.008 wide.
 ///
-/// Legality does not decide the tie there — both sides are legal by definition —
+/// The floor does not decide the tie there — both sides clear it by definition —
 /// so the perceptual layer does. In the luminance domain the LPC core
 /// ([`crate::lpc::contrast_core`]) is asymmetric: its light-on-dark exponents
 /// make a light foreground read *stronger* than a dark one against a
@@ -3996,13 +3996,13 @@ fn choose_polarity(bg: &BgInput) -> Polarity {
 /// `pair::exposure_locks::pair_crossover_equals_measured_core_polarity_flip`
 /// (on `Y = 0.211` white scores ≈69.8 Lc against black's ≈39.7; the earlier V3
 /// estimate `≈0.36` is superseded by this measurement). So across the *entire*
-/// double-legal band the readable-and-perceptually-stronger side is white.
+/// both-sides-clear band the readable-and-perceptually-stronger side is white.
 ///
 /// This replaces the former "larger WCAG margin wins" rule. The WCAG ratio is
 /// symmetric and non-perceptual; its margin crossover lies *inside* the band, at
 /// `Y ≈ 0.1791` (where `(Y+0.05)/0.05 = 1.05/(Y+0.05)`), so on the upper half
 /// `Y ∈ (0.1791, 0.1833]` the margin rule picked dark-on-light — the
-/// perceptually weaker side, and the one that made Fluent `#0078D4` (white legal
+/// perceptually weaker side, and the one that made Fluent `#0078D4` (white clearing
 /// at 4.529:1) emit black on its 4.637:1 margin, against the platform convention
 /// of white text on that blue.
 ///
@@ -4442,12 +4442,12 @@ mod tests {
     }
 
     #[test]
-    fn legal_floor_is_held_across_a_full_background_sweep() {
-        // Defence-in-depth for the engine's core legal guarantee: every anchored
+    fn ratio_floor_is_held_across_a_full_background_sweep() {
+        // Defence-in-depth for the engine's core floor guarantee: every anchored
         // role's resolved colour clears its ratio floor against EVERY
         // background across the full 256-step grey axis plus a chromatic palette,
-        // under both calibrated viewing conditions. WCAG AA conformance is the
-        // engine's reason for existence, so this is the one invariant worth a
+        // under both calibrated viewing conditions. Holding the numeric ratio
+        // floor everywhere is the engine's core promise, so it is worth a
         // brute sweep — and the per-role `floor_ratio` accessor is only honest if
         // the solver actually meets it everywhere. Doubles as a no-panic sweep:
         // `resolve_set` must return cleanly across this whole input space.
@@ -4455,8 +4455,8 @@ mod tests {
         // The floor is held essentially EXACTLY: the solver lands the quantised
         // hex just above the line (measured worst margin ≈ +1.5e-4 at #949494),
         // never below, so a tight `1e-6` epsilon — not a loose cushion — is the
-        // honest assertion. A regression that dropped a role below its ratio floor
-        // (an accessibility-law violation) would fail here.
+        // honest assertion. A regression that dropped a role below its ratio
+        // floor would fail here.
         const FLOOR_EPS: f64 = 1e-6;
         let table = RoleTable::default();
         let mut backgrounds: Vec<String> = (0u32..=255)
@@ -4490,7 +4490,7 @@ mod tests {
     }
 
     #[test]
-    fn legal_floor_reports_each_roles_wcag_clamp_and_holds_under_resolve() {
+    fn ratio_floor_reports_each_roles_wcag_clamp_and_holds_under_resolve() {
         // `floor_ratio` is the floor the solver can never drop below for a role,
         // independent of background. Anchored roles carry their conformance
         // (TextRatio → 4.5, UiRatio → 3.0); decorative / JND / zero roles have none.
@@ -4514,7 +4514,7 @@ mod tests {
         assert_eq!(table.floor_ratio(Role::Separator), None);
         assert_eq!(table.floor_ratio(Role::BorderNone), None);
 
-        // The contract holds: every resolved anchored role clears its own legal
+        // The contract holds: every resolved anchored role clears its own ratio
         // floor against the live background (modulo the solver's own quantised
         // tie-tolerance), so the value a runtime clamps to is real, not aspirational.
         for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
@@ -4910,9 +4910,9 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // CH-4a — polarity tie-break: both legal ⇒ light-on-dark (derived, not tuned).
+    // CH-4a — polarity tie-break: both clear the floor ⇒ light-on-dark (derived, not tuned).
     //
-    // Black clears AA 4.5:1 at Y ≥ 0.175, white at Y ≤ 0.1833, so both are legal
+    // Black clears 4.5:1 at Y ≥ 0.175, white at Y ≤ 0.1833, so both clear the floor
     // only on the narrow band Y ∈ [0.175, 0.1833]. The former rule broke the tie
     // on the larger symmetric WCAG margin, which crosses over INSIDE the band at
     // Y ≈ 0.1791 (solve (Y+0.05)/0.05 = 1.05/(Y+0.05)); above it black's margin
@@ -5032,7 +5032,7 @@ mod tests {
 
     #[test]
     fn fluent_blue_0078d4_resolves_light_on_dark() {
-        // #0078D4 (Y ≈ 0.1818) is double-legal: white 4.529:1, black 4.637:1 —
+        // #0078D4 (Y ≈ 0.1818) clears the floor both ways: white 4.529:1, black 4.637:1 —
         // both clear AA. The old margin rule took black (larger margin); the
         // derived rule takes white, matching the Fluent convention.
         let bg = BgInput::solid("#0078D4").unwrap();
@@ -5041,12 +5041,12 @@ mod tests {
         let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
         assert!(
             d >= 4.5 && w >= 4.5,
-            "premise: #0078D4 must be double-legal (dark {d:.3}, white {w:.3})"
+            "premise: #0078D4 must clear the floor both ways (dark {d:.3}, white {w:.3})"
         );
         assert_eq!(
             choose_polarity(&bg),
             Polarity::LightOnDark,
-            "#0078D4 is double-legal; the derived tie-break must pick white"
+            "#0078D4 clears the floor both ways; the derived tie-break must pick white"
         );
         // The whole resolved set is light-on-dark (primary lc < 0), both VCs.
         for (vc, name) in vcs() {
@@ -5059,18 +5059,18 @@ mod tests {
     }
 
     #[test]
-    fn choose_polarity_covers_all_four_legality_branches() {
-        // (true,false) — only dark-on-light legal (white-on-white is 1:1).
+    fn choose_polarity_covers_all_four_floor_branches() {
+        // (true,false) — only dark-on-light clears (white-on-white is 1:1).
         assert_eq!(
             choose_polarity(&BgInput::solid("#FFFFFF").unwrap()),
             Polarity::DarkOnLight
         );
-        // (false,true) — only light-on-dark legal (black-on-near-black < 4.5:1).
+        // (false,true) — only light-on-dark clears (black-on-near-black < 4.5:1).
         assert_eq!(
             choose_polarity(&BgInput::solid("#101012").unwrap()),
             Polarity::LightOnDark
         );
-        // (true,true) — both legal on the band → white by derivation.
+        // (true,true) — both clear on the band → white by derivation.
         assert_eq!(
             choose_polarity(&BgInput::solid("#767676").unwrap()),
             Polarity::LightOnDark
@@ -5105,8 +5105,8 @@ mod tests {
                 flips.push((hex.clone(), old, new, bg_luminance(&hex)));
             }
         }
-        // Every moved background is a dark→light flip on the upper double-legal
-        // band Y ∈ (0.1791, 0.1833], both sides genuinely legal.
+        // Every moved background is a dark→light flip on the upper both-sides-clear
+        // band Y ∈ (0.1791, 0.1833], both sides genuinely clearing the floor.
         for (hex, old, new, y) in &flips {
             assert_eq!(
                 *old,
@@ -5635,10 +5635,10 @@ mod tests {
     }
 
     #[test]
-    fn dj_off_axis_target_degrades_to_nearest_with_flag() {
+    fn dj_off_axis_target_degrades_to_closest_examined_with_flag() {
         // A dJ' larger than the axis can supply (300 J' on near-black — the
         // foreground would need J' ≈ −290) деградирует по закону 2 ADR-0002:
-        // ближайший достижимый цвет (стена оси — почти белый) с флагом
+        // ближайший изученный walk'ом цвет (стена оси — почти белый) с флагом
         // compressed. Прежний голый Unreachable::DjUnreachable наказывал
         // владельца ошибкой за физическую стену; тихий клип БЕЗ флага —
         // обратная нечестность. Флаг — граница между ними.
@@ -7062,7 +7062,7 @@ mod tests {
                 };
                 // Where perception governs, the tinted and grey roles target the
                 // same Lc and must land within the 1-Lc quantisation budget. Where
-                // the WCAG floor drives the result (an AA-floored role), the legal
+                // the ratio floor drives the result, the WCAG-formula
                 // gate — not the perceptual target — sets the colour, and the tint
                 // can land on a neighbouring on-grid point that still clears the
                 // floor; there the only honest invariant is that both clear it.

@@ -224,7 +224,7 @@ impl Contract {
         self.typography
     }
 
-    /// The WCAG 2.1 conformance floor this contract enforces.
+    /// The ratio [`Floor`] this contract enforces.
     pub fn ratio_floor(self) -> Floor {
         self.ratio_floor
     }
