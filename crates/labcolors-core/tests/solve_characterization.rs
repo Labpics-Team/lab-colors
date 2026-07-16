@@ -632,10 +632,10 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
 ///    #297 обязаны проговорить, а не спрятать.
 ///
 /// Ни один вход полосы не смеет выносить QuantizationGap (публичное вымирание —
-/// см. counters-тест); правда о локальности `nearest`/«nearest achievable»
+/// см. counters-тест); локальность reported near-miss
 /// запинена контрпримерами на шве поиска (unit-тесты solve.rs:
 /// `quantization_gap_wording_is_local_not_global_counterexample`,
-/// `dj_degraded_nearest_achievable_is_local_not_global`).
+/// `dj_degraded_selection_is_local_not_global`).
 #[test]
 fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
     let vc = ViewingConditions::srgb();

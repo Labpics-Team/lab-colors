@@ -130,7 +130,7 @@ export interface TranslucentRole {
   readonly css: string;
 }
 
-/** Свечение (kind glow, labui ADR-0002 §5): screen-слои + решённая интенсивность.
+/** Свечение (kind glow): screen-слои + решённая интенсивность.
  *  Потребитель красит слои с mix-blend-mode: screen; `vars` несёт
  *  --lab-<role> (halo, oklch), --lab-<role>-core и --lab-<role>-alpha. */
 export type GlowDecisionProfileV1 = "stable-v1" | "legacy-platform-dependent-v1";
@@ -295,7 +295,8 @@ export interface MaterialRoleBase {
   readonly poleWhite: boolean;
   /** Фактический |ΔJ'| тона-базы от фона — различимость поверхности. */
   readonly achievedDj: number;
-  /** Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002). */
+  /** Целевой |ΔJ'| тона не попал в бюджет ограниченного обхода; выбран кандидат
+   *  с минимальной ошибкой среди просмотренных, не оптимум всего гамута. */
   readonly toneCompressed: boolean;
   /** Оттенок семьи выродился у края гамута (честный флаг; false у нейтрали). */
   readonly hueVanished: boolean;

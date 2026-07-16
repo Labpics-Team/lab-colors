@@ -839,14 +839,12 @@ const DJ_NEIGHBOR_STEPS: u32 = 2;
 /// If the quantised colour lands within [`DJ_BUDGET`] of the target it is
 /// returned. Otherwise a bounded walk steps toward the target `J'` across at most
 /// [`DJ_NEIGHBOR_STEPS`] distinct hex grid points. If none lands in budget — or
-/// the target J' falls off the end of the achievable axis (e.g. a positive dJ'
-/// requested above a near-white background) — the contract **деградирует к
-/// ближайшему достижимому** (ADR-0002, закон 2): возвращается цвет с
-/// минимальной ошибкой `||ΔJ'|−цель|` среди осмотренных грид-точек, помеченный
-/// `degraded: true`, с честно замеренным `achieved_dj`. Голый отказ прежней
-/// версии (`DjUnreachable`) наказывал владельца контракта ошибкой за
-/// физическую стену оси — вместо честного результата (политика Figma-коэрсии:
-/// rgb(999) → 255, не exception).
+/// the target J' falls off the end of the axis (e.g. a positive dJ' requested
+/// above a near-white background) — the solver returns the lowest-error
+/// candidate among the analytic seed and the examined bounded walk. The result
+/// carries `degraded: true` and the measured `achieved_dj`. This is a local
+/// selection contract over at most `1 + DJ_NEIGHBOR_STEPS` distinct emitted
+/// colours, not an optimum over the whole output gamut.
 ///
 /// The reported `lc` on the returned [`Solved`] is still the measured LPC
 /// contrast of the emitted colour against the background (so the ladder-order
@@ -955,8 +953,8 @@ pub(crate) fn solve_dj(
         }
     }
 
-    // Закон 2 ADR-0002: цель за стеной оси / в квантовой дыре — ближайший
-    // достижимый цвет с флагом, не ошибка.
+    // Цель за стеной оси / вне бюджета локального обхода: вернуть лучший из
+    // фактически просмотренных кандидатов и явно отметить неточное выполнение.
     Ok(DjSolved {
         achieved_dj: best.achieved_dj,
         solved: best.solved,
@@ -973,9 +971,8 @@ struct DjCandidate {
     error: f64,
 }
 
-/// Результат dJ'-солва: решённый цвет, честно замеренный `|ΔJ'|` на отданном
-/// hex и флаг деградации (закон 2 ADR-0002 — цель недостижима, отдан
-/// ближайший достижимый).
+/// Результат dJ'-солва: решённый цвет, замеренный `|ΔJ'|` на отданном hex и
+/// флаг, что локальный ограниченный поиск не попал в бюджет цели.
 pub(crate) struct DjSolved {
     pub(crate) solved: Solved,
     /// Честный замер |ΔJ'| на отданном hex — доносится до
@@ -1810,8 +1807,8 @@ mod tests {
 
     #[test]
     fn dj_degradation_reports_honest_achieved_dj() {
-        // Закон 2 ADR-0002: цель за стеной оси J' деградирует к ближайшему
-        // достижимому с флагом. `achieved_dj` обязан быть ЗАМЕРОМ на отданном
+        // Цель за стеной оси J' даёт явно помеченный исход ограниченного выбора.
+        // `achieved_dj` обязан быть ЗАМЕРОМ на отданном
         // hex (та же честность, что glow.degraded): перечитываем hex и
         // сверяем |ΔJ'| против фона независимо.
         let vc = ViewingConditions::srgb();
@@ -2829,7 +2826,7 @@ mod tests {
     // Оба локальных поиска пишут каждый материализованный on-grid кандидат в
     // `probe_log` (только под cfg(test)); отчётные значения обязаны быть
     // взяты ИЗ этого набора — «locality of report». Контрпримеры ниже убивают
-    // глобальное прочтение `QuantizationGap`/`nearest` и «nearest achievable».
+    // глобальное прочтение `QuantizationGap`/`nearest` как optimum всего домена.
     // ------------------------------------------------------------------
 
     /// Каждое отданное значение solve — из examined-набора; walk реально
@@ -2971,15 +2968,15 @@ mod tests {
         }
     }
 
-    /// Реальный (не синтетический) контрпример для «nearest achievable» в dJ':
+    /// Реальный контрпример против глобального optimum-claim в dJ':
     /// dark-on-light цель 98.75 на белом. Сид квантуется в #000000 (dj=100.0,
     /// err 1.25 > DJ_BUDGET); walk смотрит ТОЛЬКО от фона (к меньшему J'), где
     /// distinct-соседей нет вовсе — весь examined-набор состоит из ОДНОГО цвета,
-    /// и деградация отдаёт его как «nearest achievable». Глобально же #010101
+    /// и bounded selection отдаёт его. Но #010101
     /// (та же полярность, тот же policy-универсум серых) достигает 98.0964 —
     /// строго ближе к цели, но лежит НАЗАД (к фону), куда walk не смотрит.
     #[test]
-    fn dj_degraded_nearest_achievable_is_local_not_global() {
+    fn dj_degraded_selection_is_local_not_global() {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let magnitude = 98.75;
@@ -2992,7 +2989,7 @@ mod tests {
             ChromaPolicy::Neutral,
             &vc,
         )
-        .expect("far dark-on-light dJ' target degrades, not errs (закон 2 ADR-0002)");
+        .expect("far dark-on-light dJ' target returns a typed bounded-selection outcome");
         let examined = probe_log::take();
 
         assert!(
@@ -3005,7 +3002,7 @@ mod tests {
             examined
                 .iter()
                 .any(|(h, m)| h == dj.solved.hex() && *m == dj.achieved_dj),
-            "reported nearest-achievable must be an examined candidate"
+            "reported degraded result must be an examined candidate"
         );
         // …и весь набор — один-единственный цвет: поиск не «перебрал все hex».
         assert!(

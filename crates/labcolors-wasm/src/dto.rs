@@ -48,7 +48,7 @@ pub enum RoleOutcome {
     /// `oklch(L% C H / A)` and the browser composites it; the measured
     /// contrasts are those of the composite on the resolve background.
     Translucent(RgbaColor),
-    /// Свечение (kind glow, labui ADR-0002 §5): screen-слои цвета источника +
+    /// Свечение (kind glow): screen-слои цвета источника +
     /// решённая интенсивность. Потребитель красит слои с
     /// `mix-blend-mode: screen`; `--lab-<role>` несёт halo, `--lab-<role>-core`
     /// — слой пересвета, `--lab-<role>-alpha` — интенсивность числом.
@@ -157,7 +157,9 @@ pub struct MaterialColor {
     pub pole_white: bool,
     /// Фактический |ΔJ'| тона-базы от фона резолва — различимость поверхности.
     pub achieved_dj: f64,
-    /// Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002).
+    /// Целевой |ΔJ'| тона не попал в бюджет ограниченного обхода; возвращённый
+    /// кандидат имеет минимальную ошибку среди просмотренных, не среди всего
+    /// гамута.
     pub tone_compressed: bool,
     /// Оттенок семьи выродился у края гамута (честный флаг; `false` у нейтрали).
     pub hue_vanished: bool,

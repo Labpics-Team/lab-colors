@@ -201,6 +201,15 @@ const LCS_LPC_DRIFT = [
   /generic perceptual-contrast math/iu,
   /метрика\s+называется\s+LPC/iu,
 ];
+const DISCARDED_HONEST_RESULT_CLAIMS = [
+  /ADR[- ]?0002/iu,
+  /honest-result-policy/iu,
+  /nearest(?:[-\s]+)achievable/iu,
+  /ближайш[а-яё]*\s+достижим[а-яё]*/iu,
+  /human(?:-authored)?\s+input\s+(?:is|gets)\s+(?:silently\s+)?(?:coerced|clamped)/iu,
+  /человеческ[а-яё]*\s+ввод\s+(?:тихо\s+)?(?:коэрс|кламп)[а-яё]*/iu,
+  /ошибк[а-яё]*[^.!?\n]{0,80}человеческ[а-яё]*\s+ввод[^.!?\n]{0,80}(?:запрещен|недопустим)[а-яё]*/iu,
+];
 
 function claimFiles(path, files = [], extensions = CLAIM_EXT) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -261,6 +270,15 @@ function lcsLpcDrift(path, source) {
   return LCS_LPC_DRIFT.filter((pattern) => pattern.test(source)).map(
     () => `${path}: LCS/LPC brand or evidence boundary drifted`,
   );
+}
+
+function discardedHonestResultClaims(path, source) {
+  return DISCARDED_HONEST_RESULT_CLAIMS
+    .filter((pattern) => pattern.test(source))
+    .map(
+      () =>
+        `${path}: discarded silent-coercion or global nearest-achievable doctrine`,
+    );
 }
 
 test("false-claim detector bites without treating hex colours as Issue links", () => {
@@ -333,6 +351,48 @@ test("live repository has no hand-written global verification index", () => {
     ),
   );
   assert.deepEqual(failures, []);
+});
+
+test("discarded honest-result doctrine detector bites without rejecting bounded truth", () => {
+  for (const sample of [
+    "ADR-0002 law 2",
+    "docs/decisions/0002-honest-result-policy.md",
+    "degraded to the nearest-achievable state",
+    "возвращён ближайший достижимый цвет",
+    "human-authored input is silently coerced",
+    "человеческий ввод коэрсится по Постелу",
+    "ошибки за человеческий ввод запрещены",
+  ]) {
+    assert.ok(
+      discardedHonestResultClaims("x.md", sample).length >= 1,
+      `detector did not bite: ${sample}`,
+    );
+  }
+  for (const scopedTruth of [
+    "invalid public input returns a typed error; it is never silently changed",
+    "the result has the lowest error among the three examined grid candidates",
+    "opaque endpoint returned with a typed degraded status",
+  ]) {
+    assert.deepEqual(discardedHonestResultClaims("x.md", scopedTruth), []);
+  }
+});
+
+test("live repository has no discarded honest-result doctrine", () => {
+  const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
+    (file) => file !== SELF,
+  );
+  const failures = files.flatMap((file) =>
+    discardedHonestResultClaims(
+      relative(ROOT, file),
+      readFileSync(file, "utf8"),
+    ),
+  );
+  assert.deepEqual(failures, []);
+  assert.equal(
+    existsSync(join(ROOT, "docs/decisions/0002-honest-result-policy.md")),
+    false,
+    "the contradictory ADR must not survive as an empty or rewritten live file",
+  );
 });
 
 test("LCS/LPC drift detector bites on every rejected expansion or reduction", () => {

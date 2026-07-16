@@ -302,7 +302,8 @@ pub enum MaterialAlphaGuaranteeV1 {
         numerical_profile: MaterialNumericalProfileV1,
     },
     /// Даже непрозрачный endpoint не держит floor; endpoint повторно измерен
-    /// в указанном профиле и возвращён как ближайшее достижимое состояние.
+    /// в указанном профиле и возвращён с типизированным статусом `Degraded`.
+    /// Оптимальность вне объявленного endpoint-контракта не заявляется.
     OpaqueEndpointCharacterizedV1 {
         /// Численный профиль чувствительного к ветвлению WCAG-пути `powf`.
         numerical_profile: MaterialNumericalProfileV1,
@@ -780,8 +781,9 @@ pub fn solve_material_alpha_encoded(
     }
 
     // α = 1: полоса вырождается в L(tone) → худший контраст = контраст полюса на
-    // тоне (солид-канон). Если и он ниже пола — честная деградация (ближайшее
-    // достижимое), гарантия не выполнена.
+    // тоне (солид-канон). Если и он ниже пола, возвращаем этот повторно
+    // измеренный endpoint с типизированным статусом `Degraded`: гарантия не
+    // выполнена.
     let opaque = worst_at(1.0)?;
     if opaque < floor_ratio {
         return Ok(MaterialAlpha {
@@ -1071,11 +1073,7 @@ mod tests {
             m.degraded(),
             "средний тон обязан деградировать на AAA-поле 7:1"
         );
-        assert_eq!(
-            m.alpha(),
-            1.0,
-            "деградация возвращает ближайшую достижимую α=1"
-        );
+        assert_eq!(m.alpha(), 1.0, "degraded-endpoint обязан вернуть α=1");
         assert!(m.worst_contrast() < 7.0);
         assert_eq!(m.status(), MaterialAlphaStatusV1::Degraded);
         assert!(matches!(

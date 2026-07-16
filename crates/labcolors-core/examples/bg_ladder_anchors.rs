@@ -1,4 +1,4 @@
-//! Заземление Backgrounds-лестниц (labui ADR-0002 §1): фактические dJ'-шаги
+//! Заземление Backgrounds-лестниц labui: фактические dJ'-шаги
 //! HIG-фонов, замеренные движком (CAM16-UCS J' под VC темы).
 //!
 //! Запуск: `cargo run -p labcolors-core --example bg_ladder_anchors`

@@ -508,8 +508,9 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 ///
 /// `fg`/`bg` are **display** (gamma-encoded) sRGB triples in `[0, 1]` — the same
 /// domain [`crate::wcag::relative_luminance`] is defined on and the legal WCAG
-/// floor is measured in. Callers pass already-decoded colours (no hex parse, no
-/// `unwrap_or` fallback — ADR-0002 law 3). `Ys` is display-referred, so this
+/// floor is measured in. Callers pass already-decoded colours; the boundary
+/// rejects invalid hex before this call, so no fallback is needed. `Ys` is
+/// display-referred, so this
 /// contrast is viewing-condition invariant by construction: the dark-theme
 /// surround compensation `Y_hk` carries is a brightness concern, kept off the
 /// readability axis (flagged as an open question in the ADR).

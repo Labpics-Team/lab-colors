@@ -661,7 +661,7 @@ pub enum RoleSpec {
     /// ([`LadderPosition::alpha_pair`](crate::ladder::LadderPosition::alpha_pair)):
     /// у акцентов пара равна, но скелетон-база пер-темна (стаб light @8 / dark @12),
     /// поэтому альфа выбирается по теме резолва, как и тинт.
-    /// Свечение — добавление света (labui ADR-0002 §5): screen-слой цвета
+    /// Свечение — добавление света: screen-слой цвета
     /// источника, интенсивность решается солвером под контрактную ступень
     /// [`crate::glow::GlowStep`] на фактическом фоне резолва. Эмиссия — пара
     /// слоёв (core = пересвет, halo = источник) + α; оператор потребителя —
@@ -1612,8 +1612,8 @@ pub enum Resolved {
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
     /// Несёт солид-композит на фоне резолва для честного замера контраста.
     Translucent(TranslucentResolved),
-    /// Свечение: screen-слои (core, halo) + решённая интенсивность
-    /// (labui ADR-0002 §5). Потребитель красит слои с `mix-blend-mode: screen`.
+    /// Свечение: screen-слои (core, halo) + решённая интенсивность. Потребитель
+    /// красит слои с `mix-blend-mode: screen`.
     Glow(GlowResolved),
     /// Стабильный запрос Glow, для которого отсутствует sound численная граница:
     /// семантический победитель не выбран, CSS-эмиссия отсутствует.
@@ -1655,7 +1655,7 @@ pub struct TranslucentResolved {
     composite_lc: f64,
     /// WCAG 2.1 контраст-отношение композита против фона резолва (1–21).
     composite_wcag: f64,
-    /// Композит отличим от фона на 8-битной сетке дисплея (ADR-0002, закон 2).
+    /// Композит отличим от фона на 8-битной сетке дисплея.
     ///
     /// `false` — вырожденный случай «тинт ≈ фон»: квантованный композит
     /// побайтно равен квантованному фону, эмиссия роли — пиксельный no-op
@@ -1714,7 +1714,7 @@ impl TranslucentResolved {
     ///
     /// `false` — эмиссия роли является пиксельным no-op на этом фоне
     /// (вырожденный тинт ≈ фон); потребитель обязан считать такую
-    /// тень/свечение невидимой, а не «решённой» (ADR-0002, закон 2).
+    /// тень/свечение побайтовым no-op в объявленном reference-профиле.
     pub fn composite_distinct(&self) -> bool {
         self.composite_distinct
     }
@@ -1739,9 +1739,11 @@ impl TranslucentResolved {
 ///
 /// Слои — [`crate::glow::glow_layers_from_source`] (halo = источник, core =
 /// пересвет); α — [`crate::glow::solve_screen_alpha_for_dj`] под контрактную
-/// ступень на фактическом фоне; `degraded` — честный флаг закона 2 ADR-0002:
-/// цель не держит ни одно достижимое sRGB8-состояние, поэтому возвращено глобально
-/// лучшее состояние. На белом screen является точечным no-op только в объявленном
+/// ступень на фактическом фоне; `target_status` сообщает исход объявленного
+/// профиля исполнения. Legacy-профиль перечисляет все sRGB8-состояния точечного
+/// композита этого screen-потока и при промахе цели выбирает максимум внутри
+/// конечного набора; stable-профиль без sound bound возвращает типизированный
+/// `Indeterminate`. На белом screen является точечным no-op только в объявленном
 /// reference-профиле — это не утверждение о физическом свечении. Recipe,
 /// appearance-диагностика, диагностика выбора и точный сертификат композита
 /// возвращаются раздельно: ни одно из них не повышает силу другого.
@@ -1995,8 +1997,9 @@ impl MaterialResolved {
         self.achieved_dj
     }
 
-    /// Целевой |ΔJ'| тона был недостижим (стена оси J' / квантовая дыра) —
-    /// возвращён ближайший достижимый тон (закон 2 ADR-0002). `false` в норме.
+    /// Целевой |ΔJ'| тона не попал в бюджет локального ограниченного поиска;
+    /// возвращён кандидат с минимальной ошибкой среди просмотренных. `false` в
+    /// норме. Флаг не заявляет оптимум по всему гамуту.
     pub fn tone_compressed(&self) -> bool {
         self.tone_compressed
     }
@@ -2049,15 +2052,13 @@ impl Resolved {
         )
     }
 
-    /// Whether this role's contract was **degraded to the nearest achievable**
-    /// (закон 2 ADR-0002) — the emitted colour honours the contract as closely
-    /// as physics allows, but not exactly:
+    /// Whether this role produced an explicitly non-exact outcome:
     ///
     /// - contrast roles: the legal floor forced the colour onto (or just below)
     ///   its senior, so its place in the hierarchy order is non-strict;
-    /// - decorative dJ' roles: the requested |ΔJ'| sits past the wall of the
-    ///   J' axis (or in a quantisation gap) — the colour with the closest
-    ///   achievable |ΔJ'| was emitted instead.
+    /// - decorative dJ' roles: the requested |ΔJ'| missed the budget of the
+    ///   bounded candidate walk, so the lowest-error examined candidate was
+    ///   emitted. This is not a whole-gamut optimality claim.
     ///
     /// `false` for the zero token and unreachable roles.
     pub fn compressed(&self) -> bool {
@@ -2220,9 +2221,9 @@ impl ResolveContext {
 ///   senior's target — and is raised only by `resolve_set`, which sees a
 ///   role's seniors. In isolation it is therefore never set.
 /// * **dJ'-path degradation** is a *single-role* property: a decorative dJ' role
-///   ([`RoleSpec::DecorativeDj`]) whose magnitude target is unreachable degrades
-///   to the nearest achievable step and reports `compressed == true` on its own
-///   (see `resolve_dj`), even resolved here in isolation.
+///   ([`RoleSpec::DecorativeDj`]) whose magnitude misses the bounded local
+///   selection budget reports `compressed == true` on its own (see `resolve_dj`),
+///   even resolved here in isolation.
 ///
 /// So a contract (Lc) role resolved here always reports `compressed == false`,
 /// but a decorative dJ' role can report `compressed == true`.
@@ -2291,10 +2292,10 @@ fn resolve_spec_in(
         RoleSpec::DecorativeDj { magnitude_dj } => {
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
             // builds the undertone itself, so it does not route through
-            // `solve_with_chroma`. Недостижимая цель (стена оси J' / квантовая
-            // дыра) деградирует к ближайшему достижимому с флагом `compressed`
-            // (закон 2 ADR-0002 — смысл флага тот же, что у контраст-ролей:
-            // «контракт занят ближайшим честным, не точным»).
+            // `solve_with_chroma`. Если цель не попала в бюджет локального
+            // ограниченного обхода, кандидат с минимальной ошибкой среди
+            // просмотренных возвращается с `compressed`; флаг не утверждает
+            // оптимум по всему гамуту.
             return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
                 Ok(d) => Resolved::Color {
                     solved: d.solved,
@@ -2841,8 +2842,8 @@ fn pair_label_surface_domain_error(error: &str) -> Resolved {
 /// (обычные `label-*` роли решаются против страницы, и на тинт-подложке их
 /// контраст проседает — класс, который закрывает эта роль). Недостижимость пола
 /// на кривой семьи клампит тон (`floor_override` → `compressed`), как у любой
-/// контраст-роли (ADR-0002 честный результат) — консервативный дефолт вместо
-/// тихой нечитаемости. Занимаемые графом typed handles структурны; клиентские
+/// контраст-роли; флаг не позволяет выдать нестрогий исход за точное выполнение.
+/// Занимаемые графом typed handles структурны; клиентские
 /// имена в граф не передаются.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_pair_label(
@@ -3043,7 +3044,7 @@ fn finish_rgba(
     let bg_linear = decode(bg_encoded);
     let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
     let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
-    // Отличимость в encoded-sRGB8 reference (ADR-0002): сравнение по тем же
+    // Отличимость в encoded-sRGB8 reference: сравнение по тем же
     // 8-битным hex, из которых строится сертификат. Фон квантуется тем же
     // форматтером; применимость к рендереру проверяется отдельно (#241).
     let composite_distinct = composite_hex != hex_from_srgb_encoded(bg_encoded);
@@ -5639,13 +5640,12 @@ mod tests {
     }
 
     #[test]
-    fn dj_off_axis_target_degrades_to_nearest_with_flag() {
+    fn dj_off_axis_target_reports_bounded_degradation() {
         // A dJ' larger than the axis can supply (300 J' on near-black — the
-        // foreground would need J' ≈ −290) деградирует по закону 2 ADR-0002:
-        // ближайший достижимый цвет (стена оси — почти белый) с флагом
-        // compressed. Прежний голый Unreachable::DjUnreachable наказывал
-        // владельца ошибкой за физическую стену; тихий клип БЕЗ флага —
-        // обратная нечестность. Флаг — граница между ними.
+        // foreground would need J' ≈ −290) не попадает в ограниченный обход:
+        // кандидат с минимальной ошибкой среди просмотренных (стена оси — почти
+        // белый) несёт compressed. Тест проверяет типизированный статус и
+        // фактическую сторону стены, но не заявляет оптимум по всему гамуту.
         let vc = ViewingConditions::srgb();
         let table = RoleTable::default().with(
             Role::FillPrimary,
@@ -6187,7 +6187,7 @@ mod tests {
 
     #[test]
     fn composite_distinct_flags_degenerate_tint_over_own_background() {
-        // ADR-0002 (закон 2), класс «тинт ≈ фон ⇒ пиксельный no-op»: до флага
+        // Класс «тинт ≈ фон ⇒ пиксельный no-op»: до флага
         // вырожденная тень/свечение (тёмный тинт на тёмном фоне, светлый на
         // светлом) проходила как валидный Translucent молча — composite_lc≈0
         // вычислялся, но нигде не гейтился. Теперь вырождение ИЗМЕРИМО.
