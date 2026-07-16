@@ -348,7 +348,7 @@ fn fixture_replays_bit_for_bit() {
     let rendered = render(&observed);
     let fixture = fixture_path();
     if std::env::var_os("LABCOLORS_RECORD_SOLVE_CHARACTERIZATION").is_some() {
-        // Дисциплина append-only рекордера (как у admission/whole-call):
+        // Дисциплина append-only рекордера:
         // перезапись закоммиченного эталона — только осознанным `rm` заранее,
         // и recorder-ран НИКОГДА не зелёный, чтобы случайный запуск с env-var
         // не мог превратить численный регресс в прошедший тест.

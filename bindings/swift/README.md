@@ -104,21 +104,3 @@ Swift не вычисляет WCAG, не сортирует отношения �
 декодирует Core-owned ordered domain, canonical relations, candidate-major
 LSB0 failure matrix и proof. Pack 5 replay независимо проверяет 256 triples,
 `32E`-byte matrix, 32-byte partition, LSB0 query law и opaque-ID invariance.
-
-Linux gate дополнительно публикует emit-first
-`uniffi-swift-observation-v1.json`: exact checkout SHA, pinned container,
-manifest/family/benchmark/FFI hashes, четыре extreme shape,
-request/output/submitted bytes, limit+1 preflight и peak RSS. Sample count и
-profile limits читаются из Core admission artifact, а не повторяются. Статус
-намеренно `observed-not-admitted`, latency/memory thresholds равны `null`;
-локальные macOS-числа не становятся evidence. Структурный checker и
-отрицательные мутации запрещают дрейф provenance/copy law, потерю shape и
-ложный admission. После первого exact-head CI JSON можно отдельно заморозить
-как durable Linux observation, не превращая измерение в научную константу.
-
-Latency начинается после построения request envelope и покрывает
-Swift-wrapper → UniFFI → protocol/Core → typed outcome decode. Peak RSS —
-максимум двух отдельных focused `swift test` процессов; он включает
-SwiftPM/XCTest и заранее построенные extreme envelopes. Эти scope-строки —
-обязательная часть проверяемого JSON, поэтому измерение нельзя молча выдать за
-чистое время Core или за incremental allocation одного вызова.

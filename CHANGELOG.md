@@ -119,27 +119,16 @@ Migration-note: [exact alpha / typed Glow](docs/migrations/exact-alpha-glow.md),
   capsules. Profile V1, proof ID `wcag22-srgb8-full-domain-q55-v1` и package path
   `evidence/wcag22-srgb8-q55-proof-v1.json` не меняются: это отдельные version
   domains, а доказанная математика и finite artifact прежние.
-- WASM size history стала role-aware: V5 задаёт независимые exact Linux-x64
-  size/SHA и рецепты `runtime`/`compiler` с нулевым headroom, не переписывая
-  V1–V4. Whole-call V3 проверяет dedicated compiler entry, связывает его с V5
-  и native admission V4 и сохраняет детерминированную request/outcome-проекцию.
-  `initSync`, прогретая операция, process maxRSS и WASM pages остаются
-  наблюдениями, не SLO.
-- Native feasibility admission также append-only относительно принятого
-  `main`: V1–V3 проверяются в исторических snapshots, а текущий V4 связывает
-  artifact SHA
-  `3c257c336bc403eee933990fd7188a3b0a6e89d0cbc983aff18846ef76206275`
-  с одним точным dependency cone. Source-bound recorder проверяет Git objects,
-  SHA-256 verifier/subject-файлов и точный `Cargo.lock` до сборки и после
-  запуска; fresh target, пустая Cargo-config hierarchy и закрытая среда
-  исключают ambient profile/flags/wrappers. Receipt фиксирует Rust/Cargo 1.96.0,
-  SHA-256 обоих toolchain executables и реально запущенного benchmark binary,
-  явный feature set и explicit-empty compiler overrides; V3/V4 сохраняют одну
-  deterministic scenario/identity-проекцию, поэтому C1 меняет только workspace
-  provenance и admission machinery, а не конечный алгоритм; 71 негативная мутация
-  проверяет fail-closed границы.
-  Сырые наблюдения сохранены без timing threshold, а промежуточные draft-
-  артефакты не становятся публичной историей.
+- WASM size history стала role-aware: V6 задаёт независимые exact Linux-x64
+  size/SHA и рецепты `runtime`/`compiler` с нулевым headroom, сохраняя
+  append-only цепочку V1–V6. Этот гейт доказывает только воспроизводимость и
+  верхнюю границу размера точных артефактов, не latency или общую память.
+- Удалена историческая feasibility admission/observation machinery: результаты,
+  timing и Git-snapshot replay больше не хранятся в репозитории. Границы
+  продуктовой политики `compile-v1` исполняются напрямую: Core проверяет
+  максимальную геометрию, Protocol достигает точного envelope и отвергает
+  MAX+1, а публичный compiler-WASM и Swift/UniFFI независимо проходят тот же
+  exact-MAX запрос с anti-vacuum мутациями. SLO производительности не заявлен.
 - Conformance pack 4.0.0 добавил `wcag22.json`; pack 5.0.0 добавляет только
   versioned complete-feasibility transport family, поэтому `packDigest`
   закономерно изменён. `manifest.numericalCapabilities` зеркалит single public

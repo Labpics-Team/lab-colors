@@ -51,28 +51,10 @@ jobs:
       # $GITHUB_WORKSPACE монтируется read-only; сборка идёт в /work в контейнере.
       - name: swift conformance in swift:6.1.3 container
         run: |
-          evidence_dir="$RUNNER_TEMP/labcolors-swift-evidence"
-          rm -rf "$evidence_dir"
-          mkdir -p "$evidence_dir"
-          subject_sha=$(git rev-parse HEAD)
           docker run --rm \
             -v "$GITHUB_WORKSPACE":/src:ro \
-            -v "$evidence_dir":/evidence \
-            -e LABCOLORS_SUBJECT_SHA="$subject_sha" \
-            -e LABCOLORS_SWIFT_CONTAINER="$SWIFT_CONTAINER" \
-            -e LABCOLORS_SWIFT_EVIDENCE_DIR=/evidence \
-            -e LABCOLORS_EVIDENCE_MODE=canonical-ci \
             "$SWIFT_CONTAINER" \
             bash /src/bindings/swift/ci/run-conformance.sh
-
-      - name: upload versioned UniFFI/Swift observation
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: uniffi-swift-observation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/labcolors-swift-evidence
-          if-no-files-found: ignore
-          retention-days: 14
 
   # ССЫЛОЧНАЯ джоба (НЕ активный гейт): нативный macOS/arm64. Требует ПЛАТНЫХ
   # GitHub-hosted macOS-минут, которые владелец исключил навсегда — поэтому

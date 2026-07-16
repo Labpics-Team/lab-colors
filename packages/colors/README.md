@@ -588,19 +588,12 @@ WASM и полным вызовом.
 ## Размер бандла
 
 Raw-размер WASM — hard gate с append-only историей. Текущий
-`bench/wasm-size-budget-v5.json` содержит независимые exact Linux-x64
-size/SHA-бюджеты с нулевым headroom для `runtime` и `compiler`; V1–V4 остаются
+`bench/wasm-size-budget-v6.json` содержит exact Linux-x64 size/SHA-бюджеты с
+нулевым headroom для `runtime` и `compiler`; V1–V5 остаются
 неизменяемой историей прежнего единого артефакта. Release-equivalent CI требует
 точного совпадения обеих ролей и их рецептов сборки. На других host-платформах
 checker сообщает только raw/gzip/SHA-диагностику и не выдаёт локальные байты за
 канонический release artifact.
-
-`bench/wcag22-feasibility-wasm-boundary-v3.json` фиксирует compiler-entry
-whole-call формы в свежих процессах и связывает их с Core admission V4, V5
-compiler recipe, package entry/glue и точным compiler WASM. Время `initSync`,
-время прогретого вызова, process maxRSS и страницы WASM — наблюдения без
-production-порога. `gzip -9` также остаётся диагностикой, а не второй
-константой допуска.
 
 Runtime и offline compiler поставляются двумя независимо загружаемыми
 `.wasm`-ассетами. Будет ли runtime-загрузка критическим путём первого рендера,

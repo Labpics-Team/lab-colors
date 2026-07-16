@@ -405,14 +405,169 @@ function assertPackedPartition(result) {
   }
 }
 
-test("built compiler replays pack 5 through an independent packed consumer", async () => {
-  const glueUrl = new URL("../compiler/labcolors_compiler.js", import.meta.url);
-  const wasmBytes = await readFile(
-    new URL("../compiler/labcolors_compiler_bg.wasm", import.meta.url),
+// Compile V1 assigns one 64-KiB packed-result page and a separate 64-KiB
+// opaque-ID allowance; the strict JSON grammar derives the 657,380-byte cap.
+const EXACT_MAX_DOMAIN_CANDIDATES = 256;
+const EXACT_MAX_PACKED_RESULT_BYTES = 65536;
+const EXACT_MAX_PARTITION_BYTES = EXACT_MAX_DOMAIN_CANDIDATES / 8;
+const EXACT_MAX_RELATIONS =
+  (EXACT_MAX_PACKED_RESULT_BYTES - EXACT_MAX_PARTITION_BYTES) / EXACT_MAX_PARTITION_BYTES;
+const EXACT_MAX_FEASIBILITY = Object.freeze({
+  requestBytes: 657380,
+  relations: EXACT_MAX_RELATIONS,
+  opaqueUtf8Bytes: 65536,
+  logicalAssessments: EXACT_MAX_DOMAIN_CANDIDATES * EXACT_MAX_RELATIONS,
+  failureMatrixBytes: EXACT_MAX_PARTITION_BYTES * EXACT_MAX_RELATIONS,
+  partitionBytes: EXACT_MAX_PARTITION_BYTES,
+});
+
+const EXACT_MAX_ID_ALPHABET = Object.freeze([
+  0, 1, 2, 3, 4, 5, 6, 7, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+  26, 27, 28, 29, 30, 31,
+]);
+
+function exactMaxFeasibilityWitness(relationCount = EXACT_MAX_FEASIBILITY.relations) {
+  const relationIdWidth = 3;
+  const idRadix = EXACT_MAX_ID_ALPHABET.length;
+  const relationIdBytes = relationCount * relationIdWidth;
+  const firstOccurrenceBytes =
+    EXACT_MAX_FEASIBILITY.opaqueUtf8Bytes - relationIdBytes - (relationCount - 1);
+  assert.ok(firstOccurrenceBytes > 0, "exact-max witness must have a non-empty first ID");
+
+  const relations = Array.from({ length: relationCount }, (_, index) => ({
+    relationId: String.fromCharCode(
+      EXACT_MAX_ID_ALPHABET[Math.floor(index / (idRadix * idRadix)) % idRadix],
+      EXACT_MAX_ID_ALPHABET[Math.floor(index / idRadix) % idRadix],
+      EXACT_MAX_ID_ALPHABET[index % idRadix],
+    ),
+    occurrenceId: index === 0 ? "\0".repeat(firstOccurrenceBytes) : "\0",
+    kind: "applicable",
+    criterion: "sc-1.4.11-ui-component-or-state",
+    adjacent: [[255, 255, 255]],
+  }));
+  const encoder = new TextEncoder();
+  const request = encoder.encode(
+    JSON.stringify({
+      schemaVersion: 1,
+      domainId: "srgb8-neutral-axis-v1",
+      resourceProfileId: "compile-v1",
+      relations,
+    }),
   );
-  const raw = await import(glueUrl.href);
-  raw.initSync({ module: new WebAssembly.Module(wasmBytes) });
-  const compiler = await import(`../compiler.js?feasibility=${Date.now()}`);
+  const opaqueUtf8Bytes = relations.reduce(
+    (total, relation) =>
+      total +
+      encoder.encode(relation.relationId).byteLength +
+      encoder.encode(relation.occurrenceId).byteLength,
+    0,
+  );
+  return {
+    request,
+    rawRelations: relations.length,
+    rawApplicableRelations: relations.length,
+    rawAdjacentEntries: relations.reduce(
+      (total, relation) => total + relation.adjacent.length,
+      0,
+    ),
+    opaqueUtf8Bytes,
+  };
+}
+
+function assertExactMaxFeasibilityWitness(witness) {
+  assert.equal(witness.request.byteLength, EXACT_MAX_FEASIBILITY.requestBytes);
+  assert.equal(witness.rawRelations, EXACT_MAX_FEASIBILITY.relations);
+  assert.equal(witness.rawApplicableRelations, EXACT_MAX_FEASIBILITY.relations);
+  assert.equal(witness.rawAdjacentEntries, EXACT_MAX_FEASIBILITY.relations);
+  assert.equal(witness.opaqueUtf8Bytes, EXACT_MAX_FEASIBILITY.opaqueUtf8Bytes);
+}
+
+function assertNoCellOrProportionalDto(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoCellOrProportionalDto(item);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    assert.doesNotMatch(key, /cell|proportional/iu);
+    assertNoCellOrProportionalDto(child);
+  }
+}
+
+function assertExactMaxFeasibilityResult(outcome) {
+  assert.equal(outcome.outcome, "success");
+  assert.equal(outcome.feasibility.status, "feasible");
+  const result = outcome.feasibility.result;
+  assert.deepEqual(Object.keys(result).sort(), ["domain", "failureMatrix", "proof", "relations"]);
+  assert.equal(result.domain.length, EXACT_MAX_DOMAIN_CANDIDATES);
+  assert.equal(result.relations.length, EXACT_MAX_FEASIBILITY.relations);
+  assert.equal(
+    result.relations.reduce(
+      (edges, relation) => edges + (relation.kind === "applicable" ? relation.adjacent.length : 0),
+      0,
+    ),
+    EXACT_MAX_FEASIBILITY.relations,
+  );
+  assert.equal(result.failureMatrix.length, EXACT_MAX_FEASIBILITY.failureMatrixBytes);
+  assert.equal(result.proof.partition.length, EXACT_MAX_FEASIBILITY.partitionBytes);
+  assert.equal(result.proof.canonicalRelations, String(EXACT_MAX_FEASIBILITY.relations));
+  assert.equal(result.proof.applicableRelations, String(EXACT_MAX_FEASIBILITY.relations));
+  assert.equal(result.proof.notApplicableRelations, "0");
+  assert.equal(result.proof.applicableEdges, String(EXACT_MAX_FEASIBILITY.relations));
+  assert.equal(result.proof.logicalAssessments, String(EXACT_MAX_FEASIBILITY.logicalAssessments));
+  assertNoCellOrProportionalDto(outcome);
+  assertPackedPartition(result);
+}
+
+let builtCompilerPromise;
+
+function loadBuiltCompiler() {
+  builtCompilerPromise ??= (async () => {
+    const glueUrl = new URL("../compiler/labcolors_compiler.js", import.meta.url);
+    const wasmBytes = await readFile(
+      new URL("../compiler/labcolors_compiler_bg.wasm", import.meta.url),
+    );
+    const raw = await import(glueUrl.href);
+    raw.initSync({ module: new WebAssembly.Module(wasmBytes) });
+    const compiler = await import(`../compiler.js?feasibility=${Date.now()}`);
+    return { compiler, raw };
+  })();
+  return builtCompilerPromise;
+}
+
+test("built public compiler accepts the exact maximum legal feasibility request", async () => {
+  const { compiler } = await loadBuiltCompiler();
+  const witness = exactMaxFeasibilityWitness();
+  assertExactMaxFeasibilityWitness(witness);
+  assert.throws(
+    () =>
+      assertExactMaxFeasibilityWitness(
+        exactMaxFeasibilityWitness(EXACT_MAX_FEASIBILITY.relations - 1),
+      ),
+    { name: "AssertionError" },
+    "an off-by-one relation witness must not certify the exact boundary",
+  );
+
+  const outcome = compiler.evaluateWcag22Feasibility(witness.request);
+  assertExactMaxFeasibilityResult(outcome);
+  const missingEdge = {
+    ...outcome,
+    feasibility: {
+      ...outcome.feasibility,
+      result: {
+        ...outcome.feasibility.result,
+        relations: outcome.feasibility.result.relations.slice(0, -1),
+      },
+    },
+  };
+  assert.throws(
+    () => assertExactMaxFeasibilityResult(missingEdge),
+    { name: "AssertionError" },
+    "a result missing one canonical edge must not satisfy the exact-boundary proof",
+  );
+});
+
+test("built compiler replays pack 5 through an independent packed consumer", async () => {
+  const { compiler, raw } = await loadBuiltCompiler();
   assert.equal(
     compiler.wcag22FeasibilityMaxBytes(),
     raw.wcag22FeasibilityMaxRequestBytesV1(),

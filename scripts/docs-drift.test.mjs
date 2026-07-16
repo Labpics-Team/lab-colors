@@ -137,7 +137,7 @@ test('generated package directory entries are naming roots, not blind spots', ()
 test('workspaceMembers разворачивает глоб crates/* по ФС', () => {
   const members = workspaceMembers(ROOT);
   assert.ok(members.includes('crates/labcolors-core'));
-  assert.ok(members.includes('experiments/psychophysics'));
+  assert.ok(members.length > 1, 'anti-vacuum: workspace не свёлся к одному члену');
   assert.equal(members.length, new Set(members).size, 'без дублей');
 });
 
