@@ -1757,7 +1757,7 @@ test("feasibility benchmark keeps V1-V6 history and admits exact V7 Core subject
   );
   assert.match(
     ci,
-    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v7\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 3cfba87ecf7d5a19f4b98eeed6ac0b689a725bbc7813efb2875ceedcf00adb47[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 51e1e445e8367de431ba23f664f654322362903d8dcf60dcc0c5521281016fdc[\s\S]*?--self-test/u,
+    /trap - EXIT[\s\S]*?current_artifact="crates\/labcolors-core\/contracts\/wcag22-feasibility-benchmark-v7\.json"[\s\S]*?current_protocol=\([\s\S]*?--admit-rustc-release 1\.96\.0[\s\S]*?--admit-cargo-release 1\.96\.0[\s\S]*?--admit-rustc-binary-sha256 c5922366bfe3d6d028a65d626f4e629b3adad066995cf0b60c8a4b617bba5ffe[\s\S]*?--admit-cargo-binary-sha256 fec239e6b74df873f54ef52912bfcfcc8d8414bc14a7ae1e0be80460bae72841[\s\S]*?--admit-benchmark-binary-sha256 3cfba87ecf7d5a19f4b98eeed6ac0b689a725bbc7813efb2875ceedcf00adb47[\s\S]*?python3 scripts\/check_wcag22_feasibility_benchmark\.py[\s\S]*?--artifact-sha256 d9c28b0a693932b3c224ac5d0349902cfa724fbfe2916d776116ba1098139508[\s\S]*?--self-test/u,
     "V7 must bind the current #297 rename source cone without an intermediate worktree",
   );
   assert.equal(

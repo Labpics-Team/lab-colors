@@ -3,7 +3,7 @@
   "artifactId": "wcag22-feasibility-admission-raw-v7",
   "recordProvenance": {
     "recipeId": "closed-cargo-bench-v1",
-    "sourceSnapshotSha256": "b334c703e0eb211e57fc1b5c34d7c3ec97aff33e214d7adfe2c44633bd6de531",
+    "sourceSnapshotSha256": "b9ca5c6a5ed0db225d91338cf36dcdee602bef7ad55515eb7d61ce3d02a5d460",
     "benchmarkBinarySha256": "3cfba87ecf7d5a19f4b98eeed6ac0b689a725bbc7813efb2875ceedcf00adb47"
   },
   "claimBoundary": "native-process-observations-and-page-slot-arithmetic-only",
@@ -54,7 +54,7 @@
       },
       "coreSourceTree": {
         "path": "crates/labcolors-core/src",
-        "gitObject": "9fe1d603782a015130f030637f8f641f835efdf1"
+        "gitObject": "608a3df230a1b92c9219e168f53722bdfd5c2a83"
       },
       "wcag22Srgb8Contract": {
         "path": "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
@@ -207,7 +207,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 42875,
+          "elapsedNs": 38583,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -219,7 +219,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 19250,
+          "elapsedNs": 18375,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -231,7 +231,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 18667,
+          "elapsedNs": 17833,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -243,7 +243,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 18750,
+          "elapsedNs": 17917,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -255,7 +255,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 18750,
+          "elapsedNs": 18041,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -296,7 +296,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 13931542,
+          "elapsedNs": 14213292,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -308,7 +308,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 13837125,
+          "elapsedNs": 14392750,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -320,7 +320,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 13914708,
+          "elapsedNs": 14018250,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -332,7 +332,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 13912042,
+          "elapsedNs": 14209167,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -344,7 +344,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 14653625,
+          "elapsedNs": 14208208,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -385,7 +385,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 144250,
+          "elapsedNs": 145541,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -397,7 +397,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 143750,
+          "elapsedNs": 137542,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -409,7 +409,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 144541,
+          "elapsedNs": 137209,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -421,7 +421,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 143917,
+          "elapsedNs": 138875,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -433,7 +433,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 144125,
+          "elapsedNs": 137042,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 4092,
@@ -474,7 +474,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 32250,
+          "elapsedNs": 30959,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -486,7 +486,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 32041,
+          "elapsedNs": 30709,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -498,7 +498,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 31917,
+          "elapsedNs": 30667,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -510,7 +510,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 32041,
+          "elapsedNs": 30625,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -522,7 +522,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 33166,
+          "elapsedNs": 30542,
           "allocationCalls": 1,
           "allocatedBytes": 64,
           "deallocationCalls": 0,
@@ -563,7 +563,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 15927084,
+          "elapsedNs": 15313583,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -575,7 +575,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 15687666,
+          "elapsedNs": 15426417,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -587,7 +587,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 15322500,
+          "elapsedNs": 15452792,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -599,7 +599,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 15238416,
+          "elapsedNs": 15415834,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -611,7 +611,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 15207167,
+          "elapsedNs": 15352042,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -652,7 +652,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 15630834,
+          "elapsedNs": 15572917,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -664,7 +664,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 15158166,
+          "elapsedNs": 15603542,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -676,7 +676,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 15307125,
+          "elapsedNs": 15968125,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -688,7 +688,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 15469666,
+          "elapsedNs": 15829917,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -700,7 +700,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 15433209,
+          "elapsedNs": 15472125,
           "allocationCalls": 1,
           "allocatedBytes": 65536,
           "deallocationCalls": 0,
@@ -741,7 +741,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 616375,
+          "elapsedNs": 618834,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -753,7 +753,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 627375,
+          "elapsedNs": 616667,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -765,7 +765,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 723333,
+          "elapsedNs": 616375,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -777,7 +777,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 606208,
+          "elapsedNs": 616667,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -789,7 +789,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 606208,
+          "elapsedNs": 616750,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -830,7 +830,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 763500,
+          "elapsedNs": 777875,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -842,7 +842,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 760792,
+          "elapsedNs": 776333,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -854,7 +854,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 762333,
+          "elapsedNs": 805042,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -866,7 +866,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 771958,
+          "elapsedNs": 779125,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -878,7 +878,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 765625,
+          "elapsedNs": 778041,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -919,7 +919,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 8011291,
+          "elapsedNs": 9174500,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -931,7 +931,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 8051667,
+          "elapsedNs": 11627000,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -943,7 +943,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 8063833,
+          "elapsedNs": 8314625,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -955,7 +955,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 8017750,
+          "elapsedNs": 8262083,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -967,7 +967,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 8111334,
+          "elapsedNs": 8155667,
           "allocationCalls": 1,
           "allocatedBytes": 32768,
           "deallocationCalls": 0,
@@ -1008,7 +1008,7 @@
       "samples": [
         {
           "index": 0,
-          "elapsedNs": 350042,
+          "elapsedNs": 392542,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1020,7 +1020,7 @@
         },
         {
           "index": 1,
-          "elapsedNs": 348000,
+          "elapsedNs": 346041,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1032,7 +1032,7 @@
         },
         {
           "index": 2,
-          "elapsedNs": 349875,
+          "elapsedNs": 355625,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1044,7 +1044,7 @@
         },
         {
           "index": 3,
-          "elapsedNs": 349083,
+          "elapsedNs": 331750,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
@@ -1056,7 +1056,7 @@
         },
         {
           "index": 4,
-          "elapsedNs": 348750,
+          "elapsedNs": 331333,
           "allocationCalls": 0,
           "allocatedBytes": 0,
           "deallocationCalls": 0,
