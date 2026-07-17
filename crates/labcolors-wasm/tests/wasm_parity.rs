@@ -691,18 +691,32 @@ fn resolve_without_config_rejects_config_required() {
     );
 }
 
-/// An unknown theme name rejects with a structured error — not a panic. Theme
-/// parsing happens before the config check, so this holds with no config loaded.
+/// C5.1: словарь тем принадлежит загруженному конфигу. Без конфига любой
+/// resolve — `config_required`; с конфигом ключ вне словаря — `unknown_theme`.
+/// Оба — структурные ошибки, не паника.
 #[wasm_bindgen_test]
 fn unknown_theme_rejects_without_panic() {
-    let engine = LabColors::new();
-    // `JsResolvedTheme` is not `Debug`, so map the Ok arm away before unwrapping
-    // the error — we only care that the call rejected and why.
+    // Без конфига словаря нет — честный config_required даже для «знакомого» имени.
+    let bare = LabColors::new();
+    let err = bare
+        .resolve_theme("#FFFFFF", "light")
+        .map(|_| ())
+        .expect_err("resolve до load_config обязан отказать");
+    let message = error_message(err);
+    assert!(
+        message.contains("config_required"),
+        "error must carry the stable code, got: {message}"
+    );
+
+    // С конфигом: ключ вне клиентского словаря — unknown_theme.
+    let mut engine = LabColors::new();
+    engine
+        .load_config(include_str!("data/labui.config.json"))
+        .expect("labui passport loads");
     let err = engine
         .resolve_theme("#FFFFFF", "__not_a_theme__")
         .map(|_| ())
-        .expect_err("unrecognised theme must reject");
-    // The error message carries the stable code.
+        .expect_err("ключ вне словаря обязан отказать");
     let message = error_message(err);
     assert!(
         message.contains("unknown_theme"),
