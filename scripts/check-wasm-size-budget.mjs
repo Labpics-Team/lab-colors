@@ -17,10 +17,11 @@ const V6_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v6.js
 const V7_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v7.json");
 const V8_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v8.json");
 const V9_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v9.json");
+const V10_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v10.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v10.json",
+  "packages/colors/bench/wasm-size-budget-v11.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -44,16 +45,19 @@ export const V9_FILE_SHA256 =
   "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4";
 export const V10_FILE_SHA256 =
   "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6";
+export const V11_FILE_SHA256 =
+  "fa11531ee390dd6dfdfadfadab99bbe8277f2b152b567951b17ef6093d42b1e4";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V9_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v9.json";
+const V10_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v10.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
 const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
 const V7_BUDGET_ID = "labcolors-wasm-roles-issue-307-c7a-v7";
 const V8_BUDGET_ID = "labcolors-wasm-roles-pr-338-v8";
 const V9_BUDGET_ID = "labcolors-wasm-roles-c4a-v9";
 const V10_BUDGET_ID = "labcolors-wasm-roles-failure-admissibility-v10";
-const ROLE_ORDER = ["runtime", "compiler"];
+const V11_BUDGET_ID = "labcolors-wasm-runtime-c4cd-v11";
+const ROLE_ORDER = ["runtime"];
 const ROLE_SPECS = {
   runtime: {
     artifact: "packages/colors/pkg/labcolors_bg.wasm",
@@ -67,18 +71,6 @@ const ROLE_SPECS = {
     // страж реентерабельности кэша). Любой дальнейший рост требует НОВОЙ
     // версии снапшота, не headroom здесь.
     acceptedCeiling: 459241,
-  },
-  compiler: {
-    artifact: "packages/colors/compiler/labcolors_compiler_bg.wasm",
-    command:
-      "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
-    recipeSha256: "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f",
-    // C4a вырезал атомарную explicit-selection операцию: canonical compiler
-    // вернулся БАЙТ-В-БАЙТ к до-атомарному артефакту (175212B, sha 3a552ce4… —
-    // ровно C1-эра), что подтверждает чистоту выреза. Run 29571640106.
-    basis: "accepted-c4a-excision-snapshot",
-    measurementSource: "github-actions-run-29571640106",
-    acceptedCeiling: 175212,
   },
 };
 
@@ -195,7 +187,11 @@ function verifyImmutableHistory() {
   if (v9?.schemaVersion !== 7 || v9?.budgetId !== V9_BUDGET_ID) {
     fail("immutable v9 budget identity drifted");
   }
-  return { v1, v4, v5, v6, v7, v8, v9 };
+  const v10 = readImmutableJson(V10_PATH, V10_FILE_SHA256, "v10");
+  if (v10?.schemaVersion !== 7 || v10?.budgetId !== V10_BUDGET_ID) {
+    fail("immutable v10 budget identity drifted");
+  }
+  return { v1, v4, v5, v6, v7, v8, v9, v10 };
 }
 
 function validateBudgetValue(budget) {
@@ -211,15 +207,15 @@ function validateBudgetValue(budget) {
     ],
     "budget",
   );
-  if (budget.schemaVersion !== 7) fail("supported schemaVersion is exactly 7");
-  if (budget.budgetId !== V10_BUDGET_ID) fail(`budgetId must be ${V10_BUDGET_ID}`);
+  if (budget.schemaVersion !== 8) fail("supported schemaVersion is exactly 8");
+  if (budget.budgetId !== V11_BUDGET_ID) fail(`budgetId must be ${V11_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V9_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V9_FILE_SHA256
+    budget.predecessor.path !== V10_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V10_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v9 document");
+    fail("predecessor must bind the immutable v10 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -232,7 +228,7 @@ function validateBudgetValue(budget) {
 
   exactKeys(budget.buildRecipes, ROLE_ORDER, "buildRecipes");
   exactKeys(budget.roles, ROLE_ORDER, "roles");
-  const { v1, v9 } = verifyImmutableHistory();
+  const { v1, v10 } = verifyImmutableHistory();
 
   for (const role of ROLE_ORDER) {
     const spec = ROLE_SPECS[role];
@@ -285,8 +281,8 @@ function validateBudgetValue(budget) {
     }
   }
 
-  if (budget.roles.compiler.policy.maxRawBytes > v9.roles.compiler.policy.maxRawBytes) {
-    fail("untouched compiler role must not exceed the immutable predecessor ceiling");
+  if (budget.roles.runtime.policy.maxRawBytes > v10.roles.runtime.policy.maxRawBytes) {
+    fail("untouched runtime role must not exceed the immutable predecessor ceiling");
   }
 }
 
@@ -305,10 +301,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V10_FILE_SHA256) {
+    if (actualFileSha256 !== V11_FILE_SHA256) {
       fail(
-        `current v10 file SHA-256 mismatch: ` +
-          `expected=${V10_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v11 file SHA-256 mismatch: ` +
+          `expected=${V11_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
@@ -371,7 +367,6 @@ function pathsFromArgs(args) {
   const paths = {
     budget: DEFAULT_BUDGET,
     runtime: resolve(REPO_ROOT, ROLE_SPECS.runtime.artifact),
-    compiler: resolve(REPO_ROOT, ROLE_SPECS.compiler.artifact),
   };
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index];
@@ -379,7 +374,6 @@ function pathsFromArgs(args) {
     if (value === undefined) fail(`${flag ?? "argument"} requires a path`);
     if (flag === "--budget") paths.budget = resolve(value);
     else if (flag === "--runtime-wasm") paths.runtime = resolve(value);
-    else if (flag === "--compiler-wasm") paths.compiler = resolve(value);
     else fail(`unknown argument ${flag}`);
   }
   return paths;

@@ -3,8 +3,7 @@
 // Re-exports the wasm-bindgen surface (the default `init` loader, `initSync`,
 // and the `LabColors` engine class) plus the vanilla DOM runtime helpers:
 // `applyTheme` (one-shot apply), `watchTheme` (reactive sync), and the
-// effective-background resolver. Offline compiler operations live exclusively
-// at `@labpics/colors/compiler` and have a separate WASM artifact.
+// effective-background resolver.
 
 export {
   default,

@@ -57,7 +57,6 @@ mkdir -p bindings/swift/Sources/LabColors bindings/swift/Sources/labcolorsFFI
 cp "$gen/labcolors.swift"        bindings/swift/Sources/LabColors/labcolors.swift
 cp "$gen/labcolorsFFI.h"         bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
 cp "$gen/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
-test -f bindings/swift/Sources/LabColors/Wcag22FeasibilityProtocol.swift
 echo "--- module.modulemap ---"; cat bindings/swift/Sources/labcolorsFFI/module.modulemap
 
 echo "==================== SWIFT TEST (пак против FFI) ===================="

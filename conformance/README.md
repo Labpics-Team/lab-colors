@@ -13,11 +13,14 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `8.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов. Bump 7.0.0 → 8.0.0 удалил ровно одно
+- **Версия пака** (`manifest.packVersion`, сейчас `9.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов. Bump 8.0.0 → 9.0.0 удалил ровно одно
+  семейство `wcag22-feasibility`: offline protocol/compiler линия вырезана из
+  всех проекций (exact-вычислитель, Q55-артефакт и независимый neutral-axis
+  оракул сохранены), байты остальных шести семейств не тронуты.
+  Предыдущий bump 7.0.0 → 8.0.0 удалил ровно одно
   семейство `wcag22-explicit-selection`: параллельная атомарная операция
-  вырезана из всех проекций (exact-вычислитель и neutral feasibility
-  сохранены), байты остальных семи семейств не тронуты.
+  вырезана из всех проекций.
   Предыдущий bump 6.0.0 → 7.0.0 изменил только семейство
   `solve`: failure wire `{kind:"failure", category, code}` теперь атомарно
   различает доказанную недостижимость, незавершённый bounded search, отклонённый
@@ -26,10 +29,8 @@
   сохранены байт-в-байт; прежний одноуровневый failure wire не поддерживается.
   Предыдущий bump 5.0.0 → 6.0.0 добавлял семейство
   `wcag22-explicit-selection` (удалено в 8.0.0).
-  Предыдущий bump 4.0.0 → 5.0.0 добавил ровно одно
-  семейство `wcag22-feasibility`: канонические versioned request/outcome JSON
-  для полного перечисления neutral-axis с packed evidence. Байты шести прежних
-  семейств сохранены. Предыдущий bump 3.0.0 → 4.0.0 перевёл
+  Предыдущий bump 4.0.0 → 5.0.0 добавлял семейство
+  `wcag22-feasibility` (удалено в 9.0.0). Предыдущий bump 3.0.0 → 4.0.0 перевёл
   `numericalCapabilities` на proof-capable schema V2 и добавил семейство
   `wcag22`; поэтому состав семейств и `packDigest` изменились. Предыдущий bump
   2.0.0 → 3.0.0 менял только схему манифеста
@@ -40,9 +41,8 @@
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
   сдвигается.
-- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами семи
-  семейств (в порядке `contrasts, ladders, alpha, solve, muddiness, wcag22,
-  wcag22-feasibility`).
+- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами шести
+  семейств (в порядке `contrasts, ladders, alpha, solve, muddiness, wcag22`).
   Отпечаток КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы
   генерации (последний ULP f64 в сериализации) — не кросс-платформенный
   инвариант, а якорь целостности файлов.
@@ -57,19 +57,10 @@
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
 | `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
-| `wcag22-feasibility.json` | bounded request и полный compiler outcome | `{caseId, requestJson, outcomeJson}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
-`wcag22-feasibility.json` не определяет собственную transport-схему. Поля
-`requestJson` и `outcomeJson` — точные compact UTF-8 байты публичных canonical
-encoders `labcolors-protocol`. Outcome сохраняет вложенную алгебру
-`Success(feasibility) | Failure(error)`; evaluated result содержит упорядоченный
-домен и канонические relations по одному разу, candidate-major LSB0
-`failureMatrix` и 32-byte partition. В нём нет `256 × E` cells/assessments,
-списков feasible/infeasible candidates или локально пересобранного proof.
-
-Числа feasibility ниже — не параметры solver-а, а точные мощности допустимых
-подмножеств полной 256-точечной оси `#000000…#FFFFFF`:
+Точные решения нейтральной оси — не параметры solver-а, а вычисленные
+мощности допустимых подмножеств полной 256-точечной оси `#000000…#FFFFFF`:
 
 - для normal text 4.5:1 против `#767676` проходят 7 кандидатов:
   `#000000…#040404` и `#FEFEFE…#FFFFFF`; против black+white проходят только
@@ -79,15 +70,13 @@ encoders `labcolors-protocol`. Outcome сохраняет вложенную а�
   `#000000…#2D2D2D` и `#D2D2D2…#FFFFFF` (92); против black+white —
   `#5A5A5A…#949494` (59).
 
-Любое изменение adjacent bytes или нормативного отношения пересчитывает набор,
-а не сохраняет эти числа как константы. Независимый exact-rational oracle —
-`scripts/verify_wcag22_neutral_axis.py`; его content-bound результат —
-`crates/labcolors-core/contracts/wcag22-neutral-axis-oracle-v1.json`. Production
-differential и mutation tests убивают any/first-only, пропуск adjacent и
-пропуск endpoint. Corpus также фиксирует mixed/all NotApplicable, conflicting
-relation ID, raw resource rejection и пару запросов с несвязанными opaque IDs.
-Последняя пара обязана иметь одинаковые физические packed decisions и разные
-declared identity.
+Их независимый exact-rational oracle — `scripts/verify_wcag22_neutral_axis.py`;
+его content-bound результат —
+`crates/labcolors-core/contracts/wcag22-neutral-axis-oracle-v1.json`, запиненный
+по SHA-256 и replay-имый через публичный exact-вычислитель
+(`crates/labcolors-core/tests/wcag22_neutral_axis_replay.rs`). Любое изменение
+adjacent bytes или нормативного отношения пересчитывает набор, а не сохраняет
+эти числа как константы.
 
 `muddiness.json` — это `experimental compatibility proxy`: corpus доказывает
 воспроизводимость исторического числового API, но не валидированный на
@@ -160,10 +149,6 @@ labels (канон labui): роли `icon` в словаре нет.
 - **`solve.outcome.hex`** — в пределах **±1 LSB на канал**. Это квантование
   трансцендентного резолва: у границы 8-бит-ячейки libm-шум может качнуть
   результат на один шаг.
-- **`wcag22-feasibility.requestJson/outcomeJson`** — БАЙТ-ТОЧНО. Это
-  canonical integer/byte/string protocol без libm: terminal algebra, decimal
-  u64 strings, identities, упакованная LSB0 matrix и partition сравниваются как
-  точные UTF-8 байты.
 
 Внутренняя ошибка core и неизвестный forward-вариант без public boundary
 descriptor не являются solve-векторами: `Pack::generate()` возвращает
@@ -175,9 +160,8 @@ descriptor не являются solve-векторами: `Pack::generate()` в
 ## Референс: ядро само себя проходит
 
 `crates/labcolors-conformance` несёт генератор (`--bin gen`) и раннер-референс
-(`tests/reference_runner.rs`). Раннер — CI-гейт: ядро и общий protocol boundary
-воспроизводят каждый вектор в пределах толерантности, дайджест сходится с
-сырыми байтами, а
+(`tests/reference_runner.rs`). Раннер — CI-гейт: ядро воспроизводит каждый
+вектор в пределах толерантности, дайджест сходится с сырыми байтами, а
 опубликованные WCAG-якоря (21:1, граница `#767676`) держатся. Раннер входит в
 `cargo test --workspace` на Linux x86_64. Активный Swift/UniFFI gate также
 прогоняет все перечисленные manifest-ом семейства в pinned Linux x86_64
@@ -205,6 +189,5 @@ cargo run -p labcolors-conformance --bin gen
 
 Пишет `vectors/*.json` + `manifest.json` детерминированно. Раннер-референс
 падёт, если старые численные векторы разошлись с ядром за пределами
-толерантности или feasibility JSON разошёлся с protocol encoder хотя бы на один
-байт. Перегенерация допустима только при принятом изменении соответствующего
+толерантности. Перегенерация допустима только при принятом изменении соответствующего
 контракта; `coreVersion` обновляется лишь вместе с версией ядра.

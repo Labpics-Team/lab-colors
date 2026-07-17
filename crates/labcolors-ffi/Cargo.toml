@@ -28,7 +28,6 @@ path = "src/bin/uniffi_bindgen.rs"
 
 [dependencies]
 labcolors-core = { path = "../labcolors-core", default-features = false }
-labcolors-protocol = { path = "../labcolors-protocol" }
 # Нативная FFI-обвязка. Библиотечная зависимость БЕЗ фичи cli (иначе clap течёт
 # в артефакт); cli включается только через passthrough-фичу ниже на генерации.
 uniffi = { version = "0.32", default-features = false }

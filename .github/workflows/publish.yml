@@ -344,13 +344,10 @@ jobs:
             fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
           }
 
-          const expectedWasm = [
-            ["runtime", "pkg/labcolors_bg.wasm"],
-            ["compiler", "compiler/labcolors_compiler_bg.wasm"],
-          ];
+          const expectedWasm = [["runtime", "pkg/labcolors_bg.wasm"]];
           const wasmEvidence = manifest.artifacts?.wasm;
           if (!Array.isArray(wasmEvidence) || wasmEvidence.length !== expectedWasm.length) {
-            fail("manifest must bind exactly the runtime and compiler WASM roles");
+            fail("manifest must bind exactly the runtime WASM role");
           }
           for (let index = 0; index < expectedWasm.length; index += 1) {
             const [role, path] = expectedWasm[index];

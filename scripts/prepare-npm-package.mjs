@@ -21,7 +21,7 @@ const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-q55-proof-v1.json",
 ];
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
-// Полный состав пака 8.0.0: семь семейств. В npm-тарболл эти файлы НЕ
+// Полный состав пака 9.0.0: шесть семейств. В npm-тарболл эти файлы НЕ
 // копируются — байты хешируются из репозитория в build-metadata provenance
 // (packDigest/familySetSha256); публикуемая поверхность это код адаптеров.
 const CONFORMANCE_FILES = [
@@ -31,7 +31,6 @@ const CONFORMANCE_FILES = [
   "solve.json",
   "muddiness.json",
   "wcag22.json",
-  "wcag22-feasibility.json",
 ];
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -113,20 +112,12 @@ export async function prepareNpmPackage() {
     }
   }
 
-  const [
-    packageJsonSource,
-    cargoSource,
-    conformanceSource,
-    runtimeWasm,
-    compilerWasm,
-    ...familyBytes
-  ] =
+  const [packageJsonSource, cargoSource, conformanceSource, runtimeWasm, ...familyBytes] =
     await Promise.all([
       readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"),
       readFile(resolve(REPO_ROOT, "Cargo.toml"), "utf8"),
       readFile(resolve(CONFORMANCE_DIR, "manifest.json"), "utf8"),
       readFile(resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm")),
-      readFile(resolve(PACKAGE_DIR, "compiler/labcolors_compiler_bg.wasm")),
       ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
     ]);
   const packageJson = JSON.parse(packageJsonSource);
@@ -149,12 +140,6 @@ export async function prepareNpmPackage() {
         path: "pkg/labcolors_bg.wasm",
         bytes: runtimeWasm.length,
         sha256: sha256(runtimeWasm),
-      },
-      {
-        role: "compiler",
-        path: "compiler/labcolors_compiler_bg.wasm",
-        bytes: compilerWasm.length,
-        sha256: sha256(compilerWasm),
       },
     ],
   };

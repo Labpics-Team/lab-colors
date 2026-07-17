@@ -1,8 +1,6 @@
 # Сгенерированные UniFFI-биндинги — производный артефакт, генерируется в CI
-# (uniffi-bindgen) ПЕРЕД `swift test`. Отслеживаемые Swift-sources ниже —
-# hand-written protocol consumers.
+# (uniffi-bindgen) ПЕРЕД `swift test`.
 Sources/LabColors/*.swift
-!Sources/LabColors/Wcag22FeasibilityProtocol.swift
 Sources/labcolorsFFI/*.h
 Sources/labcolorsFFI/module.modulemap
 Sources/labcolorsFFI/*.modulemap

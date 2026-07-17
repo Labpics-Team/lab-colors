@@ -2,7 +2,7 @@
   "name": "@labpics/colors",
   "version": "0.10.0",
   "packageManager": "npm@11.9.0",
-  "description": "Contextual compiler and runtime resolver for client-owned color-token contracts. WASM core, zero runtime dependencies.",
+  "description": "Runtime resolver for client-owned color-token contracts. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -19,11 +19,6 @@
       "types": "./index.d.ts",
       "default": "./index.js"
     },
-    "./compiler": {
-      "types": "./compiler.d.ts",
-      "default": "./compiler.js"
-    },
-    "./compiler/wasm": "./compiler/labcolors_compiler_bg.wasm",
     "./apply-theme": {
       "types": "./apply-theme.d.ts",
       "default": "./apply-theme.js"
@@ -49,8 +44,6 @@
     "build-metadata.json",
     "index.js",
     "index.d.ts",
-    "compiler.js",
-    "compiler.d.ts",
     "wcag22.d.ts",
     "apply-theme.js",
     "apply-theme.d.ts",
@@ -66,15 +59,10 @@
     "pkg/labcolors.js",
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
-    "pkg/labcolors_bg.wasm.d.ts",
-    "compiler/labcolors_compiler.js",
-    "compiler/labcolors_compiler.d.ts",
-    "compiler/labcolors_compiler_bg.wasm",
-    "compiler/labcolors_compiler_bg.wasm.d.ts"
+    "pkg/labcolors_bg.wasm.d.ts"
   ],
   "scripts": {
-    "//build": "Each execution role has its own Cargo root and output directory; wasm-pack resolves --out-dir relative to that crate.",
-    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked && wasm-pack build ../../crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
+    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test",
     "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",
