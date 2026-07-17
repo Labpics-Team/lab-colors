@@ -83,7 +83,10 @@ adjacent bytes или нормативного отношения пересчи
 наблюдателях человеческий вердикт clean/dirty и не пригодность для production
 decision. Legacy-идентификаторы сохранены только для совместимости.
 
-- `theme` — kebab-ключ: `light` \| `dark` \| `light-ic` \| `dark-ic`.
+- `theme` — kebab-ключ ЛОКАЛЬНОГО fixture-словаря пака (совпадает со словарём
+  labui-паспорта): `light` \| `dark` \| `light-ic` \| `dark-ic`. Канонический
+  словарь тем принадлежит клиентскому конфигу (C5.1); ядро встроенных имён
+  не несёт.
 - `contract` (в `solve`): `{kind:"text", lc}` \| `{kind:"ui", lc}` \|
   `{kind:"range", floor, ceiling}`.
 - `outcome` (в `solve`): успех `{kind:"solved", hex, lc, wcagRatio, floorOverride}`

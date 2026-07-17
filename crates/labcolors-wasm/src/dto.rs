@@ -11,8 +11,9 @@
 /// после того, как ВЕСЬ именованный набор атомарно прошёл допуск.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTheme {
-    /// The theme key this was resolved under (`"light"`, `"dark"`, …).
-    pub theme: &'static str,
+    /// ИСХОДНЫЙ клиентский ключ темы из словаря конфига, под которым решён
+    /// набор (результат сохраняет имя клиента, не физический пресет).
+    pub theme: String,
     /// The normalised background hex the set was resolved against.
     pub background: String,
     /// One entry per role the core returned, in the core's deterministic order.

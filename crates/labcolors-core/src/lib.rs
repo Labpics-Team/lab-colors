@@ -95,8 +95,7 @@ pub use accent_surface::{
 };
 pub use alpha::composite_over_encoded;
 pub use cleanliness::{
-    DefectContext, Theme, drab, drab_in_context, muddiness_from_hex, muddiness_from_linear_srgb,
-    muddiness_in_context, muddiness_oklch, n_pure,
+    drab, muddiness_from_hex, muddiness_from_linear_srgb, muddiness_oklch, n_pure,
 };
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,

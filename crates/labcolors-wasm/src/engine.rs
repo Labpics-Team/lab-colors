@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use labcolors_core::config::ThemeConfig;
+use labcolors_core::config::{ThemeConfig, VcPreset};
 use labcolors_core::semantic::NamedRoleTable;
 use labcolors_core::{BgInput, ResolveSetError, Resolved, Solved};
 
@@ -22,7 +22,6 @@ use crate::cache::{CacheKey, ContractCache};
 use crate::config_dto::{ConfigDto, fingerprint};
 use crate::dto::{ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
 use crate::error::BindingError;
-use crate::theme::Theme;
 
 /// How many distinct `(bg, theme, table)` resolves the cache holds before a
 /// целиком. Фиксированная граница исключает неограниченный рост при
@@ -50,6 +49,21 @@ struct NamedState {
     table: NamedRoleTable,
     fingerprint: u64,
     floors: HashMap<String, Option<f64>>,
+    /// Иммутабельный словарь тем конфига: (клиентский ключ, VC-пресет) в
+    /// порядке объявления. Позиция пары — слот ключа кэша.
+    themes: Vec<(String, VcPreset)>,
+}
+
+impl NamedState {
+    /// Найти клиентский ключ темы в словаре: `(слот, VC-пресет)`.
+    /// Неизвестный ключ (включая любой ключ при пустом словаре) — `None`;
+    /// типизацию ошибки выбирает вызывающий.
+    fn theme_binding(&self, key: &str) -> Option<(u32, VcPreset)> {
+        self.themes
+            .iter()
+            .position(|(name, _)| name == key)
+            .map(|slot| (slot as u32, self.themes[slot].1))
+    }
 }
 
 impl Default for Engine {
@@ -86,6 +100,7 @@ impl Engine {
         let fp = fingerprint(&dto);
         let cfg =
             ThemeConfig::try_from(dto).map_err(|reason| BindingError::InvalidConfig { reason })?;
+        let themes = cfg.themes.entries.clone();
         let table = cfg
             .compile_named_role_table()
             .map_err(|e| BindingError::InvalidConfig {
@@ -109,6 +124,7 @@ impl Engine {
             table,
             fingerprint: fp,
             floors,
+            themes,
         });
         Ok(fp)
     }
@@ -123,9 +139,8 @@ impl Engine {
     pub fn resolve_theme(
         &self,
         bg_hex: &str,
-        theme: Theme,
+        theme_key: &str,
     ) -> Result<Rc<ResolvedTheme>, BindingError> {
-        let vc = theme.viewing_conditions();
         // Validate and normalise the background once, before the cache lookup,
         // so an invalid hex fails fast and the cache key is canonical.
         let normalised = normalise_hex(bg_hex)?;
@@ -134,9 +149,18 @@ impl Engine {
         })?;
 
         // Конфиг загружен → эмитится ЕГО контракт (string-keyed) той же
-        // физикой; отпечаток в ключе разводит кэш-пространства конфигов.
+        // физикой; тема — КЛИЕНТСКИЙ ключ словаря конфига (канонический путь
+        // client key → binding → VcPreset → ViewingConditions), отпечаток в
+        // ключе разводит кэш-пространства конфигов, слот — темы внутри одного.
         if let Some(named) = &self.named {
-            let key = CacheKey::new(normalised.clone(), theme, named.fingerprint);
+            let (slot, preset) =
+                named
+                    .theme_binding(theme_key)
+                    .ok_or_else(|| BindingError::UnknownTheme {
+                        requested: theme_key.to_string(),
+                    })?;
+            let vc = preset.viewing_conditions();
+            let key = CacheKey::new(normalised.clone(), slot, named.fingerprint);
             let result = self.cache.get_or_try_insert_with(key, || {
                 let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc)
                     .map_err(resolve_set_error_to_binding)?;
@@ -163,7 +187,8 @@ impl Engine {
                     }
                 }
                 Ok(Rc::new(ResolvedTheme {
-                    theme: theme.key(),
+                    // Результат несёт ИСХОДНЫЙ клиентский ключ, не пресет.
+                    theme: theme_key.to_string(),
                     background: normalised.clone(),
                     roles,
                 }))
@@ -190,9 +215,9 @@ impl Engine {
         &self,
         bg_hex: &str,
         fg_hexes: &[String],
-        theme: Theme,
+        theme_key: &str,
     ) -> Result<Vec<f64>, BindingError> {
-        let vc = theme.viewing_conditions();
+        let vc = self.recheck_vc(theme_key)?;
         // Accept the same hex forms as the background and `resolveTheme` (`#RGB`
         // shorthand, missing `#`, any case) — but on this per-frame primitive,
         // BORROW the input when it is already a valid 6-hex-digit colour so the
@@ -226,9 +251,9 @@ impl Engine {
         &self,
         bg_hexes: &[String],
         fg_hexes: &[String],
-        theme: Theme,
+        theme_key: &str,
     ) -> Result<Vec<f64>, BindingError> {
-        let vc = theme.viewing_conditions();
+        let vc = self.recheck_vc(theme_key)?;
         let bg_cows: Vec<Cow<'_, str>> = bg_hexes
             .iter()
             .map(|h| hex_for_recheck(h))
@@ -241,6 +266,23 @@ impl Engine {
         let fg_refs: Vec<&str> = fg_cows.iter().map(Cow::as_ref).collect();
         labcolors_core::recheck_against_multi(&bg_refs, &fg_refs, &vc)
             .map_err(|reason| BindingError::InvalidBackground { reason })
+    }
+
+    /// Условия просмотра для recheck-пути: ТОТ ЖЕ канонический словарь, что у
+    /// [`resolve_theme`](Self::resolve_theme) — recheck без загруженного
+    /// конфига невозможен (нет словаря ключей), неизвестный ключ типизирован.
+    fn recheck_vc(
+        &self,
+        theme_key: &str,
+    ) -> Result<labcolors_core::ViewingConditions, BindingError> {
+        let named = self.named.as_ref().ok_or(BindingError::ConfigRequired)?;
+        let (_, preset) =
+            named
+                .theme_binding(theme_key)
+                .ok_or_else(|| BindingError::UnknownTheme {
+                    requested: theme_key.to_string(),
+                })?;
+        Ok(preset.viewing_conditions())
     }
 }
 
@@ -444,7 +486,7 @@ mod tests {
         // silent default system.
         let engine = Engine::new();
         assert!(matches!(
-            engine.resolve_theme("#FFFFFF", Theme::Light),
+            engine.resolve_theme("#FFFFFF", "light"),
             Err(BindingError::ConfigRequired)
         ));
     }
@@ -471,7 +513,7 @@ mod tests {
     #[test]
     fn resolves_white_light_to_keyed_entries() {
         let engine = engine_with_labui();
-        let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let result = engine.resolve_theme("#FFFFFF", "light").unwrap();
         assert_eq!(result.theme, "light");
         assert_eq!(result.background, "#FFFFFF");
         // Generic over the role set: the config's own role names key each entry.
@@ -491,9 +533,9 @@ mod tests {
         // same thing as the original solve.
         let engine = engine_with_labui();
         for (bg, theme) in [
-            ("#FFFFFF", Theme::Light),
-            ("#3478F6", Theme::Light),
-            ("#1C1C1E", Theme::Dark),
+            ("#FFFFFF", "light"),
+            ("#3478F6", "light"),
+            ("#1C1C1E", "dark"),
         ] {
             let result = engine.resolve_theme(bg, theme).unwrap();
             let mut fgs = Vec::new();
@@ -514,12 +556,14 @@ mod tests {
                 );
             }
         }
-        // Invalid foreground hex surfaces a structured error, not a panic.
-        assert!(
-            Engine::new()
-                .recheck("#FFFFFF", &["nothex".to_string()], Theme::Light)
-                .is_err()
-        );
+        // Invalid foreground hex surfaces a structured error, not a panic —
+        // проверяется С ЗАГРУЖЕННЫМ конфигом, иначе первым сработал бы
+        // ConfigRequired и hex-путь остался бы вакуумным (C5.1: recheck
+        // требует словарь тем).
+        assert!(matches!(
+            engine_with_labui().recheck("#FFFFFF", &["nothex".to_string()], "light"),
+            Err(BindingError::InvalidBackground { .. })
+        ));
     }
 
     #[test]
@@ -529,13 +573,15 @@ mod tests {
         // resolve — and every spelling of a colour rechecks bit-identically.
         // `#123` and `#112233` are the SAME colour (each nibble is doubled), and
         // `#fff` is `#FFFFFF`, so all of these must agree with the canonical form.
-        let engine = Engine::new();
+        // C5.1: recheck требует конфиг (словарь тем клиентский) — путь тот же,
+        // что у resolve.
+        let engine = engine_with_labui();
         let canonical = engine
-            .recheck("#FFFFFF", &["#112233".to_string()], Theme::Light)
+            .recheck("#FFFFFF", &["#112233".to_string()], "light")
             .unwrap();
         for bg in ["#fff", "FFFFFF", "#FFFFFF"] {
             for fg in ["#123", "112233", "#112233"] {
-                let got = engine.recheck(bg, &[fg.to_string()], Theme::Light).unwrap();
+                let got = engine.recheck(bg, &[fg.to_string()], "light").unwrap();
                 assert_eq!(got.len(), 2, "{bg}/{fg}: one (lc, wcag) pair");
                 assert_eq!(got, canonical, "{bg}/{fg}: must match the canonical form");
             }
@@ -577,7 +623,7 @@ mod tests {
     #[test]
     fn none_role_resolves_to_none_outcome() {
         let engine = engine_with_labui();
-        let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let result = engine.resolve_theme("#FFFFFF", "light").unwrap();
         let none_entry = result.roles.iter().find(|r| r.role_key == "none").unwrap();
         assert_eq!(none_entry.outcome, RoleOutcome::None);
     }
@@ -585,7 +631,7 @@ mod tests {
     #[test]
     fn label_primary_on_white_is_a_dark_colour() {
         let engine = engine_with_labui();
-        let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let result = engine.resolve_theme("#FFFFFF", "light").unwrap();
         let tp = result
             .roles
             .iter()
@@ -606,7 +652,7 @@ mod tests {
         // the floor while easing. Anchored roles report their conformance ratio;
         // decorative / zero roles report None.
         let engine = engine_with_labui();
-        let result = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let result = engine.resolve_theme("#FFFFFF", "light").unwrap();
         let floor_of = |key: &str| {
             result
                 .roles
@@ -634,8 +680,8 @@ mod tests {
     #[test]
     fn cache_returns_identical_shared_result() {
         let engine = engine_with_labui();
-        let first = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
-        let second = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let first = engine.resolve_theme("#FFFFFF", "light").unwrap();
+        let second = engine.resolve_theme("#FFFFFF", "light").unwrap();
         assert!(
             Rc::ptr_eq(&first, &second),
             "second call must be a cache hit"
@@ -645,8 +691,8 @@ mod tests {
     #[test]
     fn cache_key_is_hex_normalised() {
         let engine = engine_with_labui();
-        let canonical = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
-        let shorthand = engine.resolve_theme("#fff", Theme::Light).unwrap();
+        let canonical = engine.resolve_theme("#FFFFFF", "light").unwrap();
+        let shorthand = engine.resolve_theme("#fff", "light").unwrap();
         assert!(
             Rc::ptr_eq(&canonical, &shorthand),
             "equivalent hex spellings must share a cache entry"
@@ -656,7 +702,7 @@ mod tests {
     #[test]
     fn ic_theme_resolves_without_error() {
         let engine = engine_with_labui();
-        assert!(engine.resolve_theme("#FFFFFF", Theme::LightIc).is_ok());
+        assert!(engine.resolve_theme("#FFFFFF", "light-ic").is_ok());
     }
 
     #[test]
@@ -669,17 +715,17 @@ mod tests {
         // is unique, and every key is constructible into a CSS var name.
         let engine = engine_with_labui();
         let reps = [
-            ("#FFFFFF", Theme::Light),
-            ("#000000", Theme::Dark),
-            ("#808080", Theme::Light),
+            ("#FFFFFF", "light"),
+            ("#000000", "dark"),
+            ("#808080", "light"),
             // Increased-contrast variants: the same contract must hold.
-            ("#FFFFFF", Theme::LightIc),
-            ("#000000", Theme::DarkIc),
+            ("#FFFFFF", "light-ic"),
+            ("#000000", "dark-ic"),
         ];
         // The role count is a property of the loaded contract, not a magic number:
         // pin it to the first sweep and assert every background emits the same set.
         let expected_len = engine
-            .resolve_theme("#FFFFFF", Theme::Light)
+            .resolve_theme("#FFFFFF", "light")
             .unwrap()
             .roles
             .len();
@@ -790,6 +836,129 @@ mod tests {
         cfg.compile_named_role_table().expect("labui компилируется")
     }
 
+    /// Конфиг с ПРОИЗВОЛЬНЫМИ клиентскими именами тем: словарь принадлежит
+    /// клиенту (C5.1), встроенных имён у движка нет.
+    fn custom_theme_names_json() -> String {
+        let mut v: serde_json::Value = serde_json::from_str(&labui_json()).unwrap();
+        v["themes"] = serde_json::json!([
+            {"name": "paper", "preset": "srgb"},
+            {"name": "oled", "preset": "dim"},
+            {"name": "paper-contrast", "preset": "srgb-ic"}
+        ]);
+        v.to_string()
+    }
+
+    /// C5.1, канонический путь: клиентский ключ словаря резолвится, а прежние
+    /// «встроенные» имена БЕЗ объявления в словаре — типизированный отказ.
+    #[test]
+    fn client_theme_keys_resolve_and_builtin_names_are_gone() {
+        let mut engine = Engine::new();
+        engine
+            .load_config(&custom_theme_names_json())
+            .expect("конфиг с клиентскими именами валиден");
+
+        let resolved = engine.resolve_theme("#FFFFFF", "paper").unwrap();
+        assert_eq!(
+            resolved.theme, "paper",
+            "результат несёт исходный клиентский ключ"
+        );
+
+        // «light» больше не встроен: его нет в словаре ЭТОГО конфига.
+        match engine.resolve_theme("#FFFFFF", "light") {
+            Err(BindingError::UnknownTheme { requested }) => assert_eq!(requested, "light"),
+            other => panic!("ожидался UnknownTheme для необъявленного ключа, got {other:?}"),
+        }
+    }
+
+    /// Два клиентских ключа одного VcPreset: одинаковая физика (байт-в-байт
+    /// те же роли), но результат сохраняет РАЗНЫЕ имена; перестановка
+    /// объявлений не меняет физику по имени.
+    #[test]
+    fn two_keys_of_one_preset_share_physics_but_keep_names() {
+        let mut v: serde_json::Value = serde_json::from_str(&labui_json()).unwrap();
+        v["themes"] = serde_json::json!([
+            {"name": "day", "preset": "srgb"},
+            {"name": "paper", "preset": "srgb"}
+        ]);
+        let mut engine = Engine::new();
+        engine.load_config(&v.to_string()).unwrap();
+
+        let day = engine.resolve_theme("#FFFFFF", "day").unwrap();
+        let paper = engine.resolve_theme("#FFFFFF", "paper").unwrap();
+        assert_eq!(day.theme, "day");
+        assert_eq!(paper.theme, "paper");
+        assert_eq!(
+            day.roles, paper.roles,
+            "один пресет ⇒ идентичная физика ролей"
+        );
+        assert_eq!(day.background, paper.background);
+
+        // Перестановка словаря: физика по имени не меняется.
+        v["themes"] = serde_json::json!([
+            {"name": "paper", "preset": "srgb"},
+            {"name": "day", "preset": "srgb"}
+        ]);
+        let mut engine2 = Engine::new();
+        engine2.load_config(&v.to_string()).unwrap();
+        let day2 = engine2.resolve_theme("#FFFFFF", "day").unwrap();
+        assert_eq!(day.roles, day2.roles, "слот в ключе кэша — не физика");
+    }
+
+    /// Пустой словарь тем — отказ НА ЗАГРУЗКЕ (симметрия с EmptyContract у
+    /// ролей): без единой темы resolve/recheck тотально неработоспособны, и
+    /// поздний unknown_theme был бы неотличим от опечатки. Прежнее состояние
+    /// движка не тронуто (атомарность).
+    #[test]
+    fn empty_theme_dictionary_is_rejected_at_load() {
+        let mut v: serde_json::Value = serde_json::from_str(&labui_json()).unwrap();
+        v["themes"] = serde_json::json!([]);
+        let mut engine = engine_with_labui();
+        match engine.load_config(&v.to_string()) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(
+                    reason.contains("словарь тем пуст"),
+                    "причина обязана называть пустой словарь тем, got: {reason}"
+                );
+            }
+            other => panic!("пустой словарь тем обязан отклоняться на загрузке, got {other:?}"),
+        }
+        // Прежний конфиг жив: resolve по его словарю работает.
+        assert!(engine.resolve_theme("#FFFFFF", "light").is_ok());
+    }
+
+    /// C5.1: recheck-путь требует загруженный конфиг НАРАВНЕ с resolve —
+    /// без словаря нет ни одного валидного ключа темы.
+    #[test]
+    fn recheck_without_config_is_config_required() {
+        let engine = Engine::new();
+        assert!(matches!(
+            engine.recheck("#FFFFFF", &["#112233".to_string()], "light"),
+            Err(BindingError::ConfigRequired)
+        ));
+        assert!(matches!(
+            engine.recheck_multi(&["#FFFFFF".to_string()], &["#112233".to_string()], "light"),
+            Err(BindingError::ConfigRequired)
+        ));
+    }
+
+    /// Неудачный reload сохраняет прежние state и cache: движок продолжает
+    /// отвечать прежним контрактом (атомарность загрузки).
+    #[test]
+    fn failed_reload_preserves_state_and_cache() {
+        let mut engine = engine_with_labui();
+        let before = engine.resolve_theme("#FFFFFF", "light").unwrap();
+
+        assert!(engine.load_config("{не json").is_err());
+        // И валидный JSON с невалидным конфигом:
+        assert!(engine.load_config("{}").is_err());
+
+        let after = engine.resolve_theme("#FFFFFF", "light").unwrap();
+        assert!(
+            Rc::ptr_eq(&before, &after),
+            "после неудачного reload прежний cache-hit жив (state не тронут)"
+        );
+    }
+
     /// Минимальный конфиг второго клиента: другой бренд, своё пространство имён.
     fn acme_json() -> String {
         r##"{
@@ -819,14 +988,14 @@ mod tests {
         // resolve обязан честно отказать, а не отдать встроенный дефолт.
         assert!(
             matches!(
-                engine.resolve_theme("#FFFFFF", Theme::Light),
+                engine.resolve_theme("#FFFFFF", "light"),
                 Err(BindingError::ConfigRequired)
             ),
             "до load_config resolve_theme = ConfigRequired"
         );
 
         let fp_labui = engine.load_config(&labui_json()).expect("labui валиден");
-        let labui_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let labui_set = engine.resolve_theme("#FFFFFF", "light").unwrap();
         assert!(
             labui_set
                 .roles
@@ -845,7 +1014,7 @@ mod tests {
         );
         // Тот же (bg, тема) СРАЗУ после смены конфига: попадание в чужую запись
         // было бы кэш-коллизией — пространство ключей обязано быть acme.
-        let acme_set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let acme_set = engine.resolve_theme("#FFFFFF", "light").unwrap();
         assert!(acme_set.roles.iter().any(|r| r.role_key == "accent-fill"));
         assert!(
             acme_set
@@ -902,13 +1071,16 @@ mod tests {
     fn loaded_config_matches_direct_named_resolve() {
         let mut engine = Engine::new();
         engine.load_config(&labui_json()).unwrap();
-        let via_engine = engine.resolve_theme("#101012", Theme::Dark).unwrap();
+        let via_engine = engine.resolve_theme("#101012", "dark").unwrap();
 
         let table = labui_table();
         let bg = labcolors_core::BgInput::solid("#101012").unwrap();
-        let direct =
-            labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions())
-                .expect("valid loaded table resolves atomically");
+        let direct = labcolors_core::resolve_named_set(
+            &bg,
+            &table,
+            &labcolors_core::VcPreset::Dim.viewing_conditions(),
+        )
+        .expect("valid loaded table resolves atomically");
 
         assert_eq!(
             via_engine.roles.len(),
@@ -1116,7 +1288,7 @@ mod tests {
         }
 
         // Состояние прежнее: контракт acme жив.
-        let set = engine.resolve_theme("#FFFFFF", Theme::Light).unwrap();
+        let set = engine.resolve_theme("#FFFFFF", "light").unwrap();
         assert!(set.roles.iter().any(|r| r.role_key == "accent-fill"));
     }
 
@@ -1128,7 +1300,7 @@ mod tests {
             .load_config(&stable_json)
             .expect("stable profile валиден");
         let resolved = engine
-            .resolve_theme("#101012", Theme::Dark)
+            .resolve_theme("#101012", "dark")
             .expect("resolve возвращает per-role terminal outcomes");
         let role = resolved
             .roles
@@ -1165,7 +1337,7 @@ mod tests {
             .load_config(&stable_json)
             .expect("stable profile валиден");
         let resolved = engine
-            .resolve_theme("#FFFFFF", Theme::Light)
+            .resolve_theme("#FFFFFF", "light")
             .expect("white screen point is an exact no-op");
         let role = resolved
             .roles
@@ -1218,7 +1390,7 @@ mod tests {
         let mut engine = Engine::new();
         engine.load_config(&labui_json()).expect("labui валиден");
         let resolved = engine
-            .resolve_theme("#101012", Theme::Dark)
+            .resolve_theme("#101012", "dark")
             .expect("валидный контракт резолвится");
         let projected: serde_json::Value =
             serde_json::from_str(&crate::projection::resolved_json(&resolved).unwrap()).unwrap();
@@ -1276,7 +1448,7 @@ mod tests {
                 .load_config(&valid.to_string())
                 .expect("контрольный многоключевой рецепт валиден");
             let resolved = engine
-                .resolve_theme("#101012", Theme::Dark)
+                .resolve_theme("#101012", "dark")
                 .expect("контрольный рецепт резолвится");
             let projected: serde_json::Value =
                 serde_json::from_str(&crate::projection::resolved_json(&resolved).unwrap())

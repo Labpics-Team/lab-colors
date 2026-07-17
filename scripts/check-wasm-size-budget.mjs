@@ -18,10 +18,11 @@ const V7_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v7.js
 const V8_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v8.json");
 const V9_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v9.json");
 const V10_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v10.json");
+const V11_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v11.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v11.json",
+  "packages/colors/bench/wasm-size-budget-v12.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -47,9 +48,11 @@ export const V10_FILE_SHA256 =
   "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6";
 export const V11_FILE_SHA256 =
   "fa11531ee390dd6dfdfadfadab99bbe8277f2b152b567951b17ef6093d42b1e4";
+export const V12_FILE_SHA256 =
+  "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V10_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v10.json";
+const V11_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v11.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
 const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
 const V7_BUDGET_ID = "labcolors-wasm-roles-issue-307-c7a-v7";
@@ -57,6 +60,7 @@ const V8_BUDGET_ID = "labcolors-wasm-roles-pr-338-v8";
 const V9_BUDGET_ID = "labcolors-wasm-roles-c4a-v9";
 const V10_BUDGET_ID = "labcolors-wasm-roles-failure-admissibility-v10";
 const V11_BUDGET_ID = "labcolors-wasm-runtime-c4cd-v11";
+const V12_BUDGET_ID = "labcolors-wasm-runtime-c5-theme-keys-v12";
 const ROLE_ORDER = ["runtime"];
 const ROLE_SPECS = {
   runtime: {
@@ -64,13 +68,13 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
-    basis: "accepted-failure-admissibility-runtime-snapshot",
-    measurementSource: "github-actions-run-29578036842",
-    // Pinned Linux run 29578036842 измерил failure-admissibility head точно
-    // (+2545B над PR-338 снапшотом: wire-строки ролевых отказов + жёсткий
-    // страж реентерабельности кэша). Любой дальнейший рост требует НОВОЙ
-    // версии снапшота, не headroom здесь.
-    acceptedCeiling: 459241,
+    // Pinned Linux run 29609974767 измерил C5.1 head точно (+524B над v11:
+    // словарь клиентских ключей тем вместо fixed enum + отказ EmptyThemes на
+    // загрузке). Любой дальнейший рост требует НОВОЙ версии снапшота,
+    // не headroom здесь.
+    basis: "accepted-c5-theme-dictionary-snapshot",
+    measurementSource: "github-actions-run-29609974767",
+    acceptedCeiling: 459765,
   },
 };
 
@@ -191,7 +195,11 @@ function verifyImmutableHistory() {
   if (v10?.schemaVersion !== 7 || v10?.budgetId !== V10_BUDGET_ID) {
     fail("immutable v10 budget identity drifted");
   }
-  return { v1, v4, v5, v6, v7, v8, v9, v10 };
+  const v11 = readImmutableJson(V11_PATH, V11_FILE_SHA256, "v11");
+  if (v11?.schemaVersion !== 8 || v11?.budgetId !== V11_BUDGET_ID) {
+    fail("immutable v11 budget identity drifted");
+  }
+  return { v1, v4, v5, v6, v7, v8, v9, v10, v11 };
 }
 
 function validateBudgetValue(budget) {
@@ -208,14 +216,14 @@ function validateBudgetValue(budget) {
     "budget",
   );
   if (budget.schemaVersion !== 8) fail("supported schemaVersion is exactly 8");
-  if (budget.budgetId !== V11_BUDGET_ID) fail(`budgetId must be ${V11_BUDGET_ID}`);
+  if (budget.budgetId !== V12_BUDGET_ID) fail(`budgetId must be ${V12_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V10_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V10_FILE_SHA256
+    budget.predecessor.path !== V11_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V11_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v10 document");
+    fail("predecessor must bind the immutable v11 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -228,7 +236,7 @@ function validateBudgetValue(budget) {
 
   exactKeys(budget.buildRecipes, ROLE_ORDER, "buildRecipes");
   exactKeys(budget.roles, ROLE_ORDER, "roles");
-  const { v1, v10 } = verifyImmutableHistory();
+  const { v1 } = verifyImmutableHistory();
 
   for (const role of ROLE_ORDER) {
     const spec = ROLE_SPECS[role];
@@ -281,9 +289,6 @@ function validateBudgetValue(budget) {
     }
   }
 
-  if (budget.roles.runtime.policy.maxRawBytes > v10.roles.runtime.policy.maxRawBytes) {
-    fail("untouched runtime role must not exceed the immutable predecessor ceiling");
-  }
 }
 
 export function parseBudgetDocument(bytes, budgetPath) {
@@ -301,10 +306,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V11_FILE_SHA256) {
+    if (actualFileSha256 !== V12_FILE_SHA256) {
       fail(
-        `current v11 file SHA-256 mismatch: ` +
-          `expected=${V11_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v12 file SHA-256 mismatch: ` +
+          `expected=${V12_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }

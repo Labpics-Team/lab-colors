@@ -51,8 +51,7 @@ use labcolors_core::{
     GlowDecisionProfileV1, GlowDiagnosticProfileV1, GlowTargetStatus as CoreGlowTargetStatus, Hue,
     LadderPosition, LegacyPlatformDependentV1, NumericalCompatibilityReleaseIdV1,
     NumericalDecisionEvidenceV1, NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1,
-    Theme as CoreTheme, ViewingConditions, recheck_against, solve, solve_screen_alpha_for_dj,
-    srgb_encoded_from_hex,
+    ViewingConditions, recheck_against, solve, solve_screen_alpha_for_dj, srgb_encoded_from_hex,
 };
 
 // Регистрирует UniFFI-scaffolding под namespace = имя крейта (`labcolors`).
@@ -78,17 +77,20 @@ pub enum Theme {
 }
 
 impl Theme {
-    fn to_core(self) -> CoreTheme {
+    /// ЛОКАЛЬНЫЙ adapter-словарь FFI → физический VC-пресет ядра (C5.1:
+    /// канонический словарь тем клиентский; ядро встроенных имён не несёт).
+    fn preset(self) -> labcolors_core::VcPreset {
+        use labcolors_core::VcPreset;
         match self {
-            Theme::Light => CoreTheme::Light,
-            Theme::Dark => CoreTheme::Dark,
-            Theme::LightIc => CoreTheme::LightIc,
-            Theme::DarkIc => CoreTheme::DarkIc,
+            Theme::Light => VcPreset::Srgb,
+            Theme::Dark => VcPreset::Dim,
+            Theme::LightIc => VcPreset::SrgbIc,
+            Theme::DarkIc => VcPreset::DimIc,
         }
     }
 
     fn vc(self) -> ViewingConditions {
-        self.to_core().viewing_conditions()
+        self.preset().viewing_conditions()
     }
 }
 

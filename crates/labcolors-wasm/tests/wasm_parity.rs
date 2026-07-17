@@ -279,21 +279,22 @@ fn public_muddiness_binding_matches_committed_conformance_vectors() {
 /// Shared parity assertion: for a passport, the binding's `resolveTheme`
 /// must reproduce the core `resolve_named_set`, role for role. Expectations
 /// come straight from the core inside the same wasm runtime — never hand-typed.
-/// The core side derives its ViewingConditions from the SAME enum the
-/// boundary resolves through (`Theme::viewing_conditions()`): a hardcoded
-/// `srgb()` here silently diverges on any non-srgb theme (dark = dim surround)
-/// — exactly the miss that kept the old light-only test blind to dim parity.
-/// (String→Theme mapping is the boundary parser's contract, covered by its own
-/// unit tests; the literals here mirror it 1:1.)
+/// The core side derives its ViewingConditions from the SAME physical presets
+/// the engine's theme dictionary binds (C5.1: client key → `VcPreset` →
+/// `viewing_conditions()`); a hardcoded `srgb()` here silently diverges on any
+/// non-srgb theme (dark = dim surround). The literals mirror the labui
+/// passport's `themes` dictionary 1:1 — the fixture's local dictionary, not a
+/// built-in engine vocabulary (the engine no longer has one).
 fn theme_vc(theme: &str) -> ViewingConditions {
-    let t = match theme {
-        "light" => labcolors_core::Theme::Light,
-        "dark" => labcolors_core::Theme::Dark,
-        "light-ic" => labcolors_core::Theme::LightIc,
-        "dark-ic" => labcolors_core::Theme::DarkIc,
+    use labcolors_core::VcPreset;
+    let preset = match theme {
+        "light" => VcPreset::Srgb,
+        "dark" => VcPreset::Dim,
+        "light-ic" => VcPreset::SrgbIc,
+        "dark-ic" => VcPreset::DimIc,
         other => panic!("test scaffolding: unmapped theme literal {other}"),
     };
-    t.viewing_conditions()
+    preset.viewing_conditions()
 }
 
 fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
@@ -553,8 +554,9 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     }
 
     // Shorthand / missing-`#` foregrounds are accepted, identical to canonical —
-    // the same hex contract `resolveTheme` honours (`#123` == `#112233`). recheck
-    // is stateless, so no config is needed for this half.
+    // the same hex contract `resolveTheme` honours (`#123` == `#112233`).
+    // C5.1: recheck идёт через словарь тем загруженного конфига — engine здесь
+    // уже несёт labui-паспорт.
     let canonical = engine
         .recheck_contrast(bg, vec!["#112233".to_string()], "light")
         .expect("canonical rechecks");
@@ -690,18 +692,32 @@ fn resolve_without_config_rejects_config_required() {
     );
 }
 
-/// An unknown theme name rejects with a structured error — not a panic. Theme
-/// parsing happens before the config check, so this holds with no config loaded.
+/// C5.1: словарь тем принадлежит загруженному конфигу. Без конфига любой
+/// resolve — `config_required`; с конфигом ключ вне словаря — `unknown_theme`.
+/// Оба — структурные ошибки, не паника.
 #[wasm_bindgen_test]
 fn unknown_theme_rejects_without_panic() {
-    let engine = LabColors::new();
-    // `JsResolvedTheme` is not `Debug`, so map the Ok arm away before unwrapping
-    // the error — we only care that the call rejected and why.
+    // Без конфига словаря нет — честный config_required даже для «знакомого» имени.
+    let bare = LabColors::new();
+    let err = bare
+        .resolve_theme("#FFFFFF", "light")
+        .map(|_| ())
+        .expect_err("resolve до load_config обязан отказать");
+    let message = error_message(err);
+    assert!(
+        message.contains("config_required"),
+        "error must carry the stable code, got: {message}"
+    );
+
+    // С конфигом: ключ вне клиентского словаря — unknown_theme.
+    let mut engine = LabColors::new();
+    engine
+        .load_config(include_str!("data/labui.config.json"))
+        .expect("labui passport loads");
     let err = engine
         .resolve_theme("#FFFFFF", "__not_a_theme__")
         .map(|_| ())
-        .expect_err("unrecognised theme must reject");
-    // The error message carries the stable code.
+        .expect_err("ключ вне словаря обязан отказать");
     let message = error_message(err);
     assert!(
         message.contains("unknown_theme"),

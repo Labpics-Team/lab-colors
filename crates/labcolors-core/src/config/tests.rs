@@ -1613,6 +1613,18 @@ fn validator_rejects_duplicate_dictionary_keys() {
         })
     ));
 
+    // C5.1: имя темы — ключ клиентского словаря; дубликат делал бы lookup
+    // неоднозначным (first-wins тихо хоронит вторую декларацию).
+    let mut c = labui_reference();
+    c.themes.entries.push(c.themes.entries[0].clone());
+    assert!(matches!(
+        c.validate(),
+        Err(ConfigError::DuplicateKey {
+            dictionary: "themes",
+            ..
+        })
+    ));
+
     let mut c = labui_reference();
     c.palette.push(c.palette[0].clone());
     assert!(matches!(

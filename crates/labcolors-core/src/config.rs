@@ -235,6 +235,11 @@ pub enum ConfigError {
     /// ЗАГРУЗКЕ (`#[serde(default)]` на `roles` на границе WASM разрешает ОПУСТИТЬ
     /// словарь синтаксически, но не остаться совсем без контракта).
     EmptyContract,
+    /// Словарь тем пуст. Симметрия с [`EmptyContract`](Self::EmptyContract):
+    /// без единой темы `resolve`/`recheck` тотально неработоспособны (любой
+    /// ключ — unknown), и дефект уехал бы на использование неотличимым от
+    /// опечатки. Отказ на загрузке.
+    EmptyThemes,
     /// `material`-рецепту передан `floor: zero` — у материала нет цели для вывода
     /// альфы без пола читаемости. Отказ на загрузке (а не молчаливая невидимая
     /// роль): материал обязан нести `aa-text` или `aa-ui`.
@@ -303,6 +308,7 @@ impl std::fmt::Display for ConfigError {
                 reason,
             } => write!(f, "сентимент `{sentiment}` (роль `{role}`): {reason}"),
             ConfigError::EmptyContract => write!(f, "контракт пуст: передайте roles"),
+            ConfigError::EmptyThemes => write!(f, "словарь тем пуст: передайте themes"),
             ConfigError::MaterialFloorRequired { role } => write!(
                 f,
                 "material-роль `{role}` требует пол читаемости (aa-text/aa-ui), получен zero-floor"
@@ -1261,8 +1267,9 @@ impl ThemeConfig {
     ///
     /// # Errors
     ///
-    /// [`ConfigError`] структурной/деривационной фазы либо
-    /// [`ConfigError::EmptyContract`] на голом контракте (без ролей и алиасов).
+    /// [`ConfigError`] структурной/деривационной фазы,
+    /// [`ConfigError::EmptyContract`] на голом контракте (без ролей и алиасов)
+    /// либо [`ConfigError::EmptyThemes`] на пустом словаре тем.
     pub fn compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError> {
         self.validate_syntactic()?;
 
@@ -1272,6 +1279,12 @@ impl ThemeConfig {
         // всплывают раньше.
         if self.roles.is_empty() && self.aliases.is_empty() {
             return Err(ConfigError::EmptyContract);
+        }
+        // Пустой словарь тем — тот же класс дефекта, что и пустой контракт
+        // ролей: без темы resolve/recheck невозможны, отказ обязан быть на
+        // загрузке, а не поздним unknown_theme на использовании.
+        if self.themes.entries.is_empty() {
+            return Err(ConfigError::EmptyThemes);
         }
 
         let mut entries: Vec<(String, RoleSpec)> = Vec::with_capacity(self.roles.len());
