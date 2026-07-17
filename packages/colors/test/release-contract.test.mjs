@@ -150,7 +150,7 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   assert.match(conformanceManifest, protocolEdge);
   assert.doesNotMatch(conformanceManifest, /features = \["wcag22-feasibility"\]/u);
   // Прямые Core-рёбра потребителей не несут capability-фич; explicit-домен
-  // после C4a заморожен внутри Core и потребителями не резолвится.
+  // вырезан целиком (C4b) — упоминание не смеет вернуться ни в один манифест.
   assert.doesNotMatch(
     conformanceManifest,
     /labcolors-core\/wcag22-explicit-feasibility/u,
@@ -187,7 +187,7 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   );
   assert.match(
     projection,
-    /core\["features"\]\.get\("default"\) != \[\n\s+"wcag22-feasibility",\n\s+"wcag22-explicit-feasibility",\n\s*\]:/u,
+    /core\["features"\]\.get\("default"\) != \["wcag22-feasibility"\]:/u,
   );
   assert.match(projection, /protocol_core\["features"\] != \["wcag22-feasibility"\]/u);
   assert.match(projection, /core_dependency\["features"\]/u);
@@ -202,7 +202,7 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   );
   assert.match(
     projection,
-    /'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree/u,
+    /"wcag22-explicit" in feature_tree/u,
   );
   assert.doesNotMatch(
     projection,

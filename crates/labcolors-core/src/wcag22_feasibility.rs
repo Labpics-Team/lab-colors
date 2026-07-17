@@ -17,10 +17,6 @@ use crate::wcag22::{
     wcag22_profile_v1,
 };
 
-#[path = "wcag22_feasibility/explicit.rs"]
-#[cfg(feature = "wcag22-explicit-feasibility")]
-pub mod explicit;
-
 const CANDIDATE_COUNT: u64 = 256;
 const PARTITION_BYTES: u64 = CANDIDATE_COUNT / 8;
 
@@ -127,7 +123,7 @@ pub enum ResourceDimensionV1 {
     ///
     /// Counting happens before canonicalization, deduplication or lookup and
     /// excludes Core-owned keys, framing, escaped transport bytes and total
-    /// memory. Feasibility counts every raw explicit-candidate, relation and
+    /// memory. Feasibility counts every raw relation and
     /// occurrence ID plus every `NotApplicable` reason ID; a registered domain
     /// contributes no candidate bytes. Selection counts its policy ID and every
     /// raw ordered candidate ID without recounting IDs retained by the completed
@@ -327,15 +323,6 @@ pub enum InvalidRequestV1 {
     EmptyOccurrenceId,
     /// No relations were declared.
     EmptyRelations,
-    /// An explicit candidate ID was empty.
-    #[cfg(feature = "wcag22-explicit-feasibility")]
-    EmptyCandidateId,
-    /// No explicit candidates were declared.
-    #[cfg(feature = "wcag22-explicit-feasibility")]
-    EmptyCandidates,
-    /// The same explicit candidate ID occurred more than once.
-    #[cfg(feature = "wcag22-explicit-feasibility")]
-    DuplicateCandidateId { candidate_id: explicit::CandidateId },
     /// An applicable relation had no adjacent colour.
     EmptyAdjacentSet { relation_id: RelationId },
     /// The same relation ID described different canonical declarations.
@@ -350,14 +337,6 @@ impl fmt::Display for InvalidRequestV1 {
             Self::EmptyRelationId => formatter.write_str("relation ID must be non-empty"),
             Self::EmptyOccurrenceId => formatter.write_str("occurrence ID must be non-empty"),
             Self::EmptyRelations => formatter.write_str("at least one relation is required"),
-            #[cfg(feature = "wcag22-explicit-feasibility")]
-            Self::EmptyCandidateId => formatter.write_str("candidate ID must be non-empty"),
-            #[cfg(feature = "wcag22-explicit-feasibility")]
-            Self::EmptyCandidates => formatter.write_str("at least one candidate is required"),
-            #[cfg(feature = "wcag22-explicit-feasibility")]
-            Self::DuplicateCandidateId { candidate_id } => {
-                write!(formatter, "candidate ID {candidate_id} is duplicated")
-            }
             Self::EmptyAdjacentSet { relation_id } => {
                 write!(
                     formatter,
@@ -1102,25 +1081,12 @@ trait DecisionStorage {
         logical_index: u64,
         decision: Wcag22ApplicableDecisionV1,
     ) -> Result<(), ()>;
-    #[cfg(feature = "wcag22-explicit-feasibility")]
-    fn write_feasible_candidate(
-        &mut self,
-        matrix_bytes: u64,
-        candidate_index: u64,
-    ) -> Result<(), ()>;
     fn finish(&mut self, partition: &[u8]) -> Result<(), ()>;
 }
 
 #[derive(Debug, Default)]
 struct PackedDecisionStorage {
     bytes: Vec<u8>,
-}
-
-impl PackedDecisionStorage {
-    #[cfg(feature = "wcag22-explicit-feasibility")]
-    fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
 }
 
 impl DecisionStorage for PackedDecisionStorage {
@@ -1143,22 +1109,6 @@ impl DecisionStorage for PackedDecisionStorage {
             let byte = self.bytes.get_mut(byte_index).ok_or(())?;
             *byte |= 1_u8 << bit;
         }
-        Ok(())
-    }
-
-    #[cfg(feature = "wcag22-explicit-feasibility")]
-    fn write_feasible_candidate(
-        &mut self,
-        matrix_bytes: u64,
-        candidate_index: u64,
-    ) -> Result<(), ()> {
-        let byte_index = matrix_bytes
-            .checked_add(candidate_index / 8)
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or(())?;
-        let bit = (candidate_index % 8) as u8;
-        let byte = self.bytes.get_mut(byte_index).ok_or(())?;
-        *byte |= 1_u8 << bit;
         Ok(())
     }
 
@@ -1208,32 +1158,6 @@ impl PackedDomainV1 for NeutralAxisPackingV1 {
 
     fn finish<S: DecisionStorage>(partition: &Self::Partition, storage: &mut S) -> Result<(), ()> {
         storage.finish(partition)
-    }
-}
-
-#[derive(Debug)]
-#[cfg(feature = "wcag22-explicit-feasibility")]
-struct VariablePackingV1;
-
-#[cfg(feature = "wcag22-explicit-feasibility")]
-impl PackedDomainV1 for VariablePackingV1 {
-    type Partition = ();
-
-    fn record_feasible<S: DecisionStorage>(
-        _partition: &mut Self::Partition,
-        storage: &mut S,
-        matrix_bytes: u64,
-        candidate_index: usize,
-    ) -> Result<(), ()> {
-        let candidate_index = u64::try_from(candidate_index).map_err(|_| ())?;
-        storage.write_feasible_candidate(matrix_bytes, candidate_index)
-    }
-
-    fn finish<S: DecisionStorage>(
-        _partition: &Self::Partition,
-        _storage: &mut S,
-    ) -> Result<(), ()> {
-        Ok(())
     }
 }
 
@@ -1468,19 +1392,6 @@ fn packed_bit(bytes: &[u8], logical_index: u64) -> bool {
     bytes[byte_index] & (1_u8 << bit) != 0
 }
 
-#[cfg(feature = "wcag22-explicit-feasibility")]
-fn unused_tail_bits_are_zero(bytes: &[u8], used_bits: u64) -> bool {
-    let remainder = (used_bits % 8) as u8;
-    if remainder == 0 {
-        return true;
-    }
-    let Some(last) = bytes.last() else {
-        return false;
-    };
-    let used_mask = ((1_u16 << remainder) - 1) as u8;
-    last & !used_mask == 0
-}
-
 fn validate_neutral_complete_result_v1(
     layout: WorkLayoutV1,
     matrix: &[u8],
@@ -1520,57 +1431,6 @@ fn validate_neutral_complete_result_v1(
         .passing_candidates
         .checked_add(counters.failing_candidates)
         != Some(CANDIDATE_COUNT)
-    {
-        return Err(CompilerInvariantV1::CompleteResultMismatch);
-    }
-    Ok(())
-}
-
-#[cfg(feature = "wcag22-explicit-feasibility")]
-fn validate_variable_complete_result_v1(
-    layout: WorkLayoutV1,
-    matrix: &[u8],
-    partition: &[u8],
-    counters: EvaluationProofCountersV1,
-) -> Result<(), CompilerInvariantV1> {
-    let expected_matrix_bytes = usize::try_from(layout.failure_matrix_bytes)
-        .map_err(|_| CompilerInvariantV1::CompleteResultMismatch)?;
-    let expected_partition_bytes = usize::try_from(layout.partition_bytes)
-        .map_err(|_| CompilerInvariantV1::CompleteResultMismatch)?;
-    if matrix.len() != expected_matrix_bytes
-        || partition.len() != expected_partition_bytes
-        || !unused_tail_bits_are_zero(matrix, layout.logical_assessments)
-        || !unused_tail_bits_are_zero(partition, layout.candidate_count)
-    {
-        return Err(CompilerInvariantV1::CompleteResultMismatch);
-    }
-    if counters.logical_assessments != layout.logical_assessments {
-        return Err(CompilerInvariantV1::CompleteResultMismatch);
-    }
-    let mut passing = 0_u64;
-    for candidate in 0_u64..layout.candidate_count {
-        let row_start = candidate
-            .checked_mul(layout.applicable_edges)
-            .ok_or(CompilerInvariantV1::CompleteResultMismatch)?;
-        let mut row_passes = true;
-        for edge in 0..layout.applicable_edges {
-            let failed = packed_bit(matrix, row_start + edge);
-            row_passes &= !failed;
-        }
-        if row_passes != packed_bit(partition, candidate) {
-            return Err(CompilerInvariantV1::CompleteResultMismatch);
-        }
-        if row_passes {
-            passing += 1;
-        }
-    }
-    if counters.passing_candidates != passing {
-        return Err(CompilerInvariantV1::CompleteResultMismatch);
-    }
-    if counters
-        .passing_candidates
-        .checked_add(counters.failing_candidates)
-        != Some(layout.candidate_count)
     {
         return Err(CompilerInvariantV1::CompleteResultMismatch);
     }
@@ -1669,70 +1529,6 @@ fn evaluation_id(
     hasher.update(matrix_digest);
     hasher.update(partition);
     EvaluationIdV1(*hasher.finalize().as_bytes())
-}
-
-#[cfg(feature = "wcag22-explicit-feasibility")]
-struct SealedPackedV1 {
-    packed: Vec<u8>,
-    matrix_digest: [u8; 32],
-    matrix_bytes: usize,
-}
-
-#[cfg(feature = "wcag22-explicit-feasibility")]
-impl SealedPackedV1 {
-    fn partition(&self) -> &[u8] {
-        &self.packed[self.matrix_bytes..]
-    }
-}
-
-#[cfg(feature = "wcag22-explicit-feasibility")]
-fn seal_evaluated_v1<D: FiniteSrgb8DomainV1>(
-    result: &KernelEvaluatedV1<D>,
-    packed: Vec<u8>,
-) -> Result<SealedPackedV1, ErrorV1> {
-    let matrix_bytes = usize::try_from(result.layout.failure_matrix_bytes).map_err(|_| {
-        ErrorV1::ResourceLimitExceeded {
-            profile_id: result.resource_profile_id,
-            dimension: ResourceDimensionV1::PackedResultBytes,
-            requested: result.layout.failure_matrix_bytes,
-            limit: usize::MAX as u64,
-        }
-    })?;
-    let packed_bytes = usize::try_from(result.layout.packed_result_bytes).map_err(|_| {
-        ErrorV1::ResourceLimitExceeded {
-            profile_id: result.resource_profile_id,
-            dimension: ResourceDimensionV1::PackedResultBytes,
-            requested: result.layout.packed_result_bytes,
-            limit: usize::MAX as u64,
-        }
-    })?;
-    if packed.len() != packed_bytes || matrix_bytes > packed_bytes {
-        return Err(compiler_result_error());
-    }
-    let (matrix, partition) = packed.split_at(matrix_bytes);
-    let Some(failing_candidates) = result
-        .layout
-        .candidate_count
-        .checked_sub(result.passing_candidates)
-    else {
-        return Err(compiler_result_error());
-    };
-    validate_variable_complete_result_v1(
-        result.layout,
-        matrix,
-        partition,
-        EvaluationProofCountersV1 {
-            logical_assessments: result.observed_assessments,
-            passing_candidates: result.passing_candidates,
-            failing_candidates,
-        },
-    )
-    .map_err(ErrorV1::CompilerInvariantViolation)?;
-    Ok(SealedPackedV1 {
-        matrix_digest: *sha256::digest(matrix).as_bytes(),
-        packed,
-        matrix_bytes,
-    })
 }
 
 /// Sealed evidence for one complete evaluated terminal.

@@ -249,10 +249,7 @@ jobs:
               "labcolors-conformance",
           )
           core = packages["labcolors-core"]
-          if core["features"].get("default") != [
-              "wcag22-feasibility",
-              "wcag22-explicit-feasibility",
-          ]:
+          if core["features"].get("default") != ["wcag22-feasibility"]:
               raise SystemExit("labcolors-core default capability set drifted")
 
           protocol_core = [
@@ -303,12 +300,11 @@ jobs:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
                   )
-              # C4a: атомарная explicit-selection операция вырезана. Explicit-домен
-              # остаётся внутрикорной способностью (до C4b) и заморожен: ни один
-              # потребитель не смеет резолвить его заново.
-              if 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
+              # Explicit-домен вырезан целиком: анти-воскрешение — сама фича
+              # больше не существует, потребительские деревья обязаны быть чисты.
+              if "wcag22-explicit" in feature_tree:
                   raise SystemExit(
-                      f"{consumer} resolved the frozen explicit-domain capability"
+                      f"{consumer} resolved a deleted explicit-domain capability"
                   )
 
           runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
@@ -349,8 +345,8 @@ jobs:
               raise SystemExit("compiler role resolved the theme/runtime engine")
           if 'labcolors-core feature "wcag22-feasibility"' not in compiler_tree:
               raise SystemExit("compiler role lacks protocol-owned wcag22-feasibility")
-          if 'labcolors-core feature "wcag22-explicit-feasibility"' in compiler_tree:
-              raise SystemExit("compiler role resolved the frozen explicit capability")
+          if "wcag22-explicit" in compiler_tree:
+              raise SystemExit("compiler role resolved a deleted explicit capability")
 
           print("core capability projection: PASS")
           PY
@@ -362,8 +358,6 @@ jobs:
         run: python3 scripts/verify_wcag22_neutral_axis.py
       - name: verify WCAG22 feasibility identity byte grammar
         run: python3 scripts/verify_wcag22_feasibility_identity.py
-      - name: verify explicit WCAG22 feasibility identity and anti-vacuum mutations
-        run: python3 scripts/verify_wcag22_explicit_feasibility_identity.py --self-test
 
   audit:
     name: cargo audit (rustsec)
