@@ -521,10 +521,10 @@ headless Chrome из CI. ESM/URL-обёртка генерируется wasm-pa
 ### Для аудиторов цепочки поставки
 
 - **Build metadata:** экспорт `@labpics/colors/build-metadata.json` декларирует
-  source SHA, conformance pack и обе WASM-роли; verifier отклоняет любое лишнее,
-  отсутствующее или несовпадающее поле и перечитывает metadata из tarball.
+  source SHA, conformance pack и runtime WASM-артефакт; verifier отклоняет любое
+  лишнее, отсутствующее или несовпадающее поле и перечитывает metadata из tarball.
   Объект не подписан и не заменяет отключённую npm/Sigstore provenance-аттестацию.
-- **Network access (Socket и др.):** оба generated loader-а умеют получить свой
+- **Network access (Socket и др.):** generated loader умеет получить свой
   `.wasm` через `fetch`, только когда интеграция передала URL или использовала
   browser default. В пакете нет внешнего endpoint, отправки данных или исполнения
   при импорте; Node-smoke передаёт локальные байты.
