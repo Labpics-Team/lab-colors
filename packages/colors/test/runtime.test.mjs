@@ -738,3 +738,72 @@ test("watchTheme: stop() cancels a refresh already scheduled by a mutation", asy
   assert.equal(colors.calls.length, 1, "no refresh must fire after stop()");
   assert.deepEqual(errors, [], "a cancelled refresh must not report an error");
 });
+
+// ── Reentrancy: stop()/setTheme() изнутри prepare не даёт поздних записей ────
+
+test("watchTheme: reentrant stop() inside background() cancels the outer commit", () => {
+  const el = fakeElement("rgb(255,255,255)");
+  let w = null;
+  let calls = 0;
+  const colors = {
+    resolveTheme: () => ({ vars: { "--lab-a": "#111111" }, roles: {} }),
+  };
+  const watcher = watchTheme(el, {
+    colors,
+    theme: "light",
+    background: () => {
+      calls++;
+      if (calls === 2 && w) w.stop(); // reentrant stop во время refresh
+      return calls === 2 ? "#EEEEEE" : "#FFFFFF";
+    },
+    observe: false,
+  });
+  w = watcher;
+  assert.equal(el.props.get("--lab-a"), "#111111", "initial commit lands");
+  el.props.set("--lab-a", "#SENTINEL");
+  watcher.refresh(true); // prepare вызовет background() → stop() внутри
+  assert.equal(
+    el.props.get("--lab-a"),
+    "#SENTINEL",
+    "после reentrant stop() внешняя транзакция не пишет DOM",
+  );
+});
+
+test("watchTheme: reentrant setTheme() wins over the stale outer transaction", () => {
+  const el = fakeElement("rgb(128,128,128)");
+  let w = null;
+  let reentered = false;
+  const colors = {
+    resolveTheme: (bg, theme) => ({
+      vars: { "--lab-a": theme === "dark" ? "#000000" : "#FFFFFF" },
+      roles: {},
+    }),
+  };
+  const watcher = watchTheme(el, {
+    colors,
+    theme: "light",
+    background: () => {
+      if (w === null && !reentered) {
+        // Первый (конструкционный) prepare: до создания watcher reentrancy
+        // недоступна — вернуть фон как есть.
+        return "#808080";
+      }
+      if (!reentered) {
+        reentered = true;
+        w.setTheme("dark"); // более новая операция изнутри prepare внешней
+      }
+      return "#808080";
+    },
+    observe: false,
+  });
+  w = watcher;
+  // Внешний refresh(true): его prepare перехвачен setTheme("dark") — commit
+  // внешнего стейл-кандидата (light) обязан быть отменён, тёмный остаётся.
+  watcher.refresh(true);
+  assert.equal(
+    el.props.get("--lab-a"),
+    "#000000",
+    "DOM несёт результат новой операции (dark), стейл light не перезаписал её",
+  );
+  watcher.stop();
+});

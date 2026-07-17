@@ -87,6 +87,11 @@ export function watchTheme(element, options) {
     }
   };
   let theme = options.theme;
+  // Поколение операций: prepareFor исполняет пользовательский код
+  // (background()/resolveTheme), который может reentrant-но вызвать
+  // stop()/setTheme()/refresh(). Внешняя транзакция обязана проверить
+  // владение ПОСЛЕ prepare и не коммитить устаревшего кандидата.
+  let generation = 0;
   let lastBg = null;
   let lastTheme = null;
   let lastResult = null;
@@ -134,7 +139,13 @@ export function watchTheme(element, options) {
   };
 
   const refreshFor = (candidateTheme, force = false) => {
+    const gen = ++generation;
     const prepared = prepareFor(candidateTheme, force);
+    if (stopped || gen !== generation) {
+      // Изнутри prepare случился stop() либо более новая операция: наш
+      // кандидат устарел — вернуть закоммиченное состояние без записи.
+      return lastResult;
+    }
     return prepared === null ? lastResult : commitPrepared(prepared);
   };
 
@@ -143,6 +154,7 @@ export function watchTheme(element, options) {
   // Решаем первого кандидата до захвата долгоживущего host-ресурса,
   // но не применяем сразу: observer обязан быть активным во время первой
   // CSS-записи, чтобы variable-driven мутация фона не потерялась.
+  const initialGen = ++generation;
   const initial = prepareFor(theme, true);
 
   // Coalesce a burst of mutations into a single refresh on the next microtask.
@@ -182,7 +194,9 @@ export function watchTheme(element, options) {
         });
       }
     }
-    commitPrepared(initial);
+    if (!stopped && initialGen === generation) {
+      commitPrepared(initial);
+    }
   } catch (error) {
     // Упавшая конструкция не смеет оставить недосягаемый observer или
     // поздний refresh. Помечаем stopped до disconnect, чтобы уже поставленный
@@ -213,6 +227,7 @@ export function watchTheme(element, options) {
     },
     stop() {
       stopped = true;
+      generation++;
       if (observer) observer.disconnect();
       observer = null;
     },
