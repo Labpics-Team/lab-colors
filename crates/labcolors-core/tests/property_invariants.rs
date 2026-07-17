@@ -18,16 +18,6 @@
 //! Каждый инвариант получен RED-first: временная инъекция нарушения (в код-под-тестом
 //! или на границе вызова) роняет property с МИНИМИЗИРОВАННЫМ (shrunk) контрпримером.
 //! Зелёный-с-рождения запрещён (был бы театром). Механика инъекции описана в PR.
-//!
-//! # ЗАМЕЧАНИЕ ПО monotonicity
-//!
-//! proxy, not a human judgement. Its coordinate is nondecreasing in C only for warm
-//! hues (`sin(h) ≥ 0`, h∈[0°,180°]): там оба зависящих
-//! от C множителя — `neutral_gate(C)` и b-гейт `sigmoid((C·sin h − B0)/BW)` — растут в C.
-//! Для ХОЛОДНЫХ оттенков (`sin(h) < 0`, h∈(180°,360°)) b-гейт УБЫВАЕТ в C (b = C·sin h < 0
-//! уходит от B0), поэтому произведение НЕ монотонно. Property ниже проверяет
-//! математический инвариант тёплой полуплоскости;
-//! как characterization реального поведения (не одобрение — фиксация факта для владельца).
 
 use labcolors_core::{
     BgInput, Brand, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource, NeutralAnchors,
