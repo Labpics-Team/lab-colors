@@ -1,5 +1,5 @@
-//! Pack-контракт: pack 6 добавляет ровно одну atomic explicit-selection family
-//! (#296-C2), сохраняя байт-в-байт все семь допущенных pack-5 семейств.
+//! Pack-контракт: pack 7 меняет ровно `solve.json` (failure wire и его
+//! anti-vacuum corpus), сохраняя байт-в-байт остальные семь семейств pack 6.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
 #[path = "../../labcolors-core/src/sha256.rs"]
 mod sha256;
 
-const LEGACY_FAMILY_SHA256: [(&str, &str); 7] = [
+const UNCHANGED_FAMILY_SHA256: [(&str, &str); 7] = [
     (
         "contrasts.json",
         "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145",
@@ -24,10 +24,6 @@ const LEGACY_FAMILY_SHA256: [(&str, &str); 7] = [
         "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1",
     ),
     (
-        "solve.json",
-        "64acfc4a8c613a4b11e4e83c52a33ecf308320abc6ab18fde20853a7f2399f06",
-    ),
-    (
         "muddiness.json",
         "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3",
     ),
@@ -39,7 +35,14 @@ const LEGACY_FAMILY_SHA256: [(&str, &str); 7] = [
         "wcag22-feasibility.json",
         "ae2caec47a7b650e73b8d4029a69b4e401dfb7cc199db579c0f95106eebe8dc3",
     ),
+    (
+        "wcag22-explicit-selection.json",
+        "3c4b0b8d7954b598ab9f8cd85be5749577e7c82380976293810fcab20d8ef41a",
+    ),
 ];
+
+const PACK_V7_SOLVE_SHA256: &str =
+    "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af";
 
 const REQUIRED_CASES: [&str; 13] = [
     "text-default-seven",
@@ -114,8 +117,8 @@ fn partition_count(outcome: &serde_json::Value) -> u32 {
 }
 
 #[test]
-fn pack_v6_adds_only_the_explicit_selection_family_and_preserves_prior_bytes() {
-    assert_eq!(PACK_VERSION, "6.0.0");
+fn pack_v7_changes_only_the_solve_family() {
+    assert_eq!(PACK_VERSION, "7.0.0");
     assert_eq!(
         FAMILY_FILES.as_slice(),
         [
@@ -132,20 +135,69 @@ fn pack_v6_adds_only_the_explicit_selection_family_and_preserves_prior_bytes() {
     );
 
     let dir = vectors_dir();
-    for (name, expected) in LEGACY_FAMILY_SHA256 {
+    for (name, expected) in UNCHANGED_FAMILY_SHA256 {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-5 family bytes drifted: {name}"
+            "pack-6 family bytes drifted outside solve.json: {name}"
         );
     }
+    assert_eq!(
+        sha256::digest(&read(dir.join("solve.json"))).to_hex(),
+        PACK_V7_SOLVE_SHA256,
+        "pack-7 solve family bytes drifted"
+    );
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest JSON");
-    assert_eq!(manifest["packVersion"], "6.0.0");
+    assert_eq!(manifest["packVersion"], "7.0.0");
     assert_eq!(manifest["counts"]["wcag22Feasibility"], 13);
     assert_eq!(manifest["counts"]["wcag22ExplicitSelection"], 15);
-    assert_eq!(manifest["counts"]["total"], 116);
+    assert_eq!(manifest["counts"]["total"], 118);
+}
+
+#[test]
+fn solve_failure_wire_is_exact_and_closed() {
+    let vectors: Vec<serde_json::Value> =
+        serde_json::from_slice(&read(vectors_dir().join("solve.json")))
+            .expect("valid solve family JSON");
+    let failures: Vec<_> = vectors
+        .iter()
+        .filter_map(|vector| {
+            let outcome = &vector["outcome"];
+            (outcome["kind"] == "failure").then_some(outcome)
+        })
+        .collect();
+    assert!(
+        !failures.is_empty(),
+        "anti-vacuum: solve family has no failure"
+    );
+    let mut actual = BTreeSet::new();
+    for failure in failures {
+        let fields: BTreeSet<_> = failure
+            .as_object()
+            .expect("failure object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(fields, BTreeSet::from(["category", "code", "kind"]));
+        actual.insert((
+            failure["category"].as_str().expect("failure category"),
+            failure["code"].as_str().expect("failure code"),
+        ));
+    }
+    assert_eq!(
+        actual,
+        BTreeSet::from([
+            ("unreachable", "below_contrast_floor"),
+            ("unreachable", "exceeds_range"),
+            ("unreachable", "floor_unreachable"),
+        ])
+    );
+    assert!(vectors.iter().all(|vector| matches!(
+        vector["outcome"]["kind"].as_str(),
+        Some("solved" | "failure")
+    )));
 }
 
 #[test]

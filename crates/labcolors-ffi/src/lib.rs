@@ -343,6 +343,30 @@ pub enum GlowPointDecision {
     },
 }
 
+/// Типизированная категория solve failure на нативной границе.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FailureCategory {
+    /// Полный объявленный domain доказывает отсутствие решения.
+    Unreachable,
+    /// Bounded algorithm завершился без доказательства в любую сторону.
+    Unresolved,
+    /// Запрос не принадлежит объявленному domain.
+    Rejected,
+    /// Запрос валиден, но capability не реализована.
+    Unsupported,
+}
+
+impl FailureCategory {
+    fn from_core(value: labcolors_core::SolveFailureCategory) -> Self {
+        match value {
+            labcolors_core::SolveFailureCategory::Unreachable => Self::Unreachable,
+            labcolors_core::SolveFailureCategory::Unresolved => Self::Unresolved,
+            labcolors_core::SolveFailureCategory::Rejected => Self::Rejected,
+            labcolors_core::SolveFailureCategory::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
 /// Ошибки границы — сматчиваемые на Swift-стороне (бросаются как исключения).
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum ColorError {
@@ -364,11 +388,13 @@ pub enum ColorError {
         /// Запрошенный ключ.
         key: String,
     },
-    /// Контракт недостижим; `code` — стабильная причина (тождественна кодам
-    /// WASM-границы: `floor_unreachable`, `exceeds_range`, …).
-    #[error("контракт недостижим: {code}")]
-    Unreachable {
-        /// Стабильный машинный код причины.
+    /// Resolver не вернул цвет. Категория отделяет доказанную недостижимость
+    /// от unresolved, rejected и unsupported исходов.
+    #[error("solve failure {category:?}/{code}")]
+    Failure {
+        /// Стабильная семантическая категория core failure.
+        category: FailureCategory,
+        /// Стабильный машинный код конкретной причины.
         code: String,
     },
     /// Невалидный low-level Glow request на публичной границе.
@@ -395,26 +421,21 @@ pub enum ColorError {
     },
 }
 
-/// Стабильный код недостижимости — тождественен маппингу WASM-границы
-/// (`labcolors-wasm/src/engine.rs`) и conformance-пака. Общий контракт имён для
-/// ВСЕХ биндингов: одна известная причина → один код на любой платформе;
-/// неизвестный forward-вариант — несовместимость версии, а не fallback-code.
-fn unreachable_code(err: &labcolors_core::Unreachable) -> Result<&'static str, ColorError> {
-    use labcolors_core::Unreachable as U;
-    match err {
-        U::BelowContrastFloor { .. } => Ok("below_contrast_floor"),
-        U::ExceedsRange { .. } => Ok("exceeds_range"),
-        U::QuantizationGap { .. } => Ok("quantization_gap"),
-        U::FloorUnreachable { .. } => Ok("floor_unreachable"),
-        U::PolarityMismatch { .. } => Ok("polarity_mismatch"),
-        U::GamutUnsupported => Ok("gamut_unsupported"),
-        U::InvalidInput(_) => Ok("invalid_input"),
-        U::InternalInvariant(reason) => Err(ColorError::IncompatibleCoreContract {
-            reason: format!("internal core invariant failure: {reason}"),
-        }),
-        // Forward core variant — несовместимость adapter, не выдуманный code.
-        _ => Err(incompatible_core_variant("Unreachable")),
-    }
+/// Единственная FFI-проекция core-owned descriptor. Внутренний либо будущий
+/// failure без public descriptor закрывает вызов целиком, не получает
+/// правдоподобную локальную категорию.
+fn public_failure_wire(
+    err: &labcolors_core::SolveFailure,
+) -> Result<(FailureCategory, &'static str), ColorError> {
+    let boundary = err
+        .boundary()
+        .ok_or_else(|| ColorError::IncompatibleCoreContract {
+            reason: err.to_string(),
+        })?;
+    Ok((
+        FailureCategory::from_core(boundary.category()),
+        boundary.code(),
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -542,20 +563,33 @@ pub fn wcag22_explicit_selection_envelope_too_large_v1(
     )
 }
 
+/// Проверяет single-result postcondition до проекции на ABI record.
+fn single_contrast_result(pairs: Vec<(f64, f64)>) -> Result<Contrast, ColorError> {
+    let count = pairs.len();
+    let mut values = pairs.into_iter();
+    match (values.next(), values.next()) {
+        (Some((lc, wcag_ratio)), None) => Ok(Contrast { lc, wcag_ratio }),
+        _ => Err(ColorError::IncompatibleCoreContract {
+            reason: format!("single contrast request produced {count} results"),
+        }),
+    }
+}
+
 /// Контраст одного переднего плана на фоне под темой — `(Lc, WCAG)`. Дешёвый
 /// пер-кадровый примитив: один forward перцептивной модели для фона плюс один
 /// для переднего плана.
 ///
 /// # Errors
 ///
-/// [`ColorError::InvalidColor`] на невалидном hex.
+/// [`ColorError::InvalidColor`] на невалидном hex;
+/// [`ColorError::IncompatibleCoreContract`] если core нарушил кардинальность
+/// single-result postcondition.
 #[uniffi::export]
 pub fn contrast(fg: String, bg: String, theme: Theme) -> Result<Contrast, ColorError> {
     let vc = theme.vc();
-    let mut pairs =
+    let pairs =
         recheck_against(&bg, &[&fg], &vc).map_err(|reason| ColorError::InvalidColor { reason })?;
-    let (lc, wcag_ratio) = pairs.pop().expect("ровно один передний план");
-    Ok(Contrast { lc, wcag_ratio })
+    single_contrast_result(pairs)
 }
 
 /// Exact WCAG 2.2 assessment of one final foreground/background sRGB8 pair.
@@ -696,10 +730,9 @@ pub fn recheck(bg: String, fgs: Vec<String>, theme: Theme) -> Result<Vec<Contras
 /// # Errors
 ///
 /// [`ColorError::InvalidColor`] на невалидном hex фона;
-/// [`ColorError::Unreachable`] со стабильным кодом, если ни один цвет не
-/// удовлетворяет контракт (честный отказ, не тихий клип);
-/// [`ColorError::IncompatibleCoreContract`] на неизвестном forward-варианте
-/// core [`labcolors_core::Unreachable`].
+/// [`ColorError::Failure`] с core-owned category/code, если resolver не вернул
+/// цвет; [`ColorError::IncompatibleCoreContract`] на internal либо неизвестном
+/// forward-варианте core [`labcolors_core::SolveFailure`] без public descriptor.
 #[uniffi::export]
 pub fn solve_contrast(
     bg: String,
@@ -724,9 +757,10 @@ pub fn solve_contrast(
             wcag_ratio: s.wcag_ratio(),
             floor_override: s.floor_override(),
         }),
-        Err(e) => {
-            let code = unreachable_code(&e)?;
-            Err(ColorError::Unreachable {
+        Err(error) => {
+            let (category, code) = public_failure_wire(&error)?;
+            Err(ColorError::Failure {
+                category,
                 code: code.to_string(),
             })
         }
@@ -1158,11 +1192,12 @@ mod tests {
     }
 
     #[test]
-    fn known_unreachable_code_mapping_is_fallible_without_code_drift() {
-        use labcolors_core::Unreachable as U;
+    fn failure_wire_is_the_core_projection_and_fails_closed() {
+        use labcolors_core::SolveFailure as U;
         let cases = [
             (
                 U::BelowContrastFloor { target: 1.0 },
+                FailureCategory::Unreachable,
                 "below_contrast_floor",
             ),
             (
@@ -1170,36 +1205,47 @@ mod tests {
                     target: 100.0,
                     max_achievable: 90.0,
                 },
+                FailureCategory::Unreachable,
                 "exceeds_range",
             ),
             (
-                U::QuantizationGap {
+                U::BoundedSearchExhausted {
                     target: 50.0,
-                    nearest: 49.0,
+                    closest_examined: 49.0,
                 },
-                "quantization_gap",
+                FailureCategory::Unresolved,
+                "bounded_search_exhausted",
             ),
             (
                 U::FloorUnreachable {
                     floor: 4.5,
                     max_ratio: 4.0,
                 },
+                FailureCategory::Unreachable,
                 "floor_unreachable",
             ),
-            (U::PolarityMismatch { target: -60.0 }, "polarity_mismatch"),
-            (U::GamutUnsupported, "gamut_unsupported"),
-            (U::InvalidInput("fixture".into()), "invalid_input"),
+            (
+                U::GamutUnsupported,
+                FailureCategory::Unsupported,
+                "gamut_unsupported",
+            ),
+            (
+                U::InvalidInput("fixture".into()),
+                FailureCategory::Rejected,
+                "invalid_input",
+            ),
         ];
-        for (error, expected) in cases {
-            assert_eq!(unreachable_code(&error).unwrap(), expected);
+        for (error, category, code) in cases {
+            assert_eq!(public_failure_wire(&error).unwrap(), (category, code));
         }
 
         let internal = U::InternalInvariant("fixture drift".into());
-        assert!(matches!(
-            unreachable_code(&internal),
-            Err(ColorError::IncompatibleCoreContract { reason })
-                if reason == "internal core invariant failure: fixture drift"
-        ));
+        match public_failure_wire(&internal) {
+            Err(ColorError::IncompatibleCoreContract { reason }) => {
+                assert_eq!(reason, "internal invariant failure: fixture drift");
+            }
+            other => panic!("internal failure escaped public boundary: {other:?}"),
+        }
     }
 
     #[test]
@@ -1279,6 +1325,18 @@ mod tests {
     }
 
     #[test]
+    fn contrast_cardinality_drift_fails_closed_without_panicking() {
+        for (pairs, expected_count) in [(vec![], 0), (vec![(1.0, 2.0), (3.0, 4.0)], 2)] {
+            match single_contrast_result(pairs) {
+                Err(ColorError::IncompatibleCoreContract { reason }) => {
+                    assert!(reason.contains(&expected_count.to_string()), "{reason}");
+                }
+                other => panic!("cardinality drift escaped boundary: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn invalid_hex_is_structured_error() {
         let err = contrast("nope".into(), "#FFFFFF".into(), Theme::Light).unwrap_err();
         assert!(matches!(err, ColorError::InvalidColor { .. }));
@@ -1296,16 +1354,31 @@ mod tests {
     }
 
     #[test]
-    fn solve_unreachable_carries_stable_code() {
-        let err = solve_contrast(
-            "#FFFFFF".into(),
-            ContractSpec::Text { lc: 150.0 },
-            Theme::Light,
-        )
-        .unwrap_err();
-        match err {
-            ColorError::Unreachable { code } => assert_eq!(code, "exceeds_range"),
-            other => panic!("ожидался Unreachable, получено {other:?}"),
+    fn solve_failure_carries_stable_category_and_code() {
+        for (bg, contract, expected_code) in [
+            (
+                "#FFFFFF",
+                ContractSpec::Range {
+                    floor: 3.0,
+                    ceiling: 5.0,
+                },
+                "below_contrast_floor",
+            ),
+            (
+                "#6E6E6E",
+                ContractSpec::Text { lc: 20.0 },
+                "floor_unreachable",
+            ),
+            ("#FFFFFF", ContractSpec::Text { lc: 150.0 }, "exceeds_range"),
+        ] {
+            let error = solve_contrast(bg.into(), contract, Theme::Light).unwrap_err();
+            match error {
+                ColorError::Failure { category, code } => {
+                    assert_eq!(category, FailureCategory::Unreachable);
+                    assert_eq!(code, expected_code);
+                }
+                other => panic!("ожидался typed failure, получено {other:?}"),
+            }
         }
     }
 

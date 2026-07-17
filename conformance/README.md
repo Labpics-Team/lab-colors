@@ -13,8 +13,14 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `6.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов. Bump 5.0.0 → 6.0.0 добавил ровно одно
+- **Версия пака** (`manifest.packVersion`, сейчас `7.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов. Bump 6.0.0 → 7.0.0 изменил только семейство
+  `solve`: failure wire `{kind:"failure", category, code}` теперь атомарно
+  различает доказанную недостижимость, незавершённый bounded search, отклонённый
+  запрос и неподдерживаемую capability, а corpus добавил реальные
+  `below_contrast_floor` и `floor_unreachable` paths. Остальные семь семейств
+  сохранены байт-в-байт; прежний одноуровневый failure wire не поддерживается.
+  Предыдущий bump 5.0.0 → 6.0.0 добавил ровно одно
   семейство `wcag22-explicit-selection`: канонические request/outcome JSON
   атомарной операции `wcag22-explicit-selection-v1`. Байты семи прежних
   семейств сохранены; conformance-крейт, compiler WASM/npm и raw UniFFI
@@ -93,10 +99,14 @@ decision. Legacy-идентификаторы сохранены только д
 - `contract` (в `solve`): `{kind:"text", lc}` \| `{kind:"ui", lc}` \|
   `{kind:"range", floor, ceiling}`.
 - `outcome` (в `solve`): успех `{kind:"solved", hex, lc, wcagRatio, floorOverride}`
-  или честный отказ `{kind:"unreachable", code}`.
-- `code` недостижимости — стабильный словарь, общий для всех биндингов:
-  `below_contrast_floor`, `exceeds_range`, `quantization_gap`,
-  `floor_unreachable`, `polarity_mismatch`, `gamut_unsupported`, `invalid_input`.
+  или типизированный терминальный исход `{kind:"failure", category, code}`.
+- `(category, code)` — атомарная core-owned классификация, общая для всех
+  биндингов: `unreachable/exceeds_range`, `unreachable/floor_unreachable`,
+  `unresolved/bounded_search_exhausted`, `rejected/invalid_input`,
+  `unreachable/below_contrast_floor` и `unsupported/gamut_unsupported`. Только
+  `unreachable` доказывает отсутствие
+  решения в объявленном полном domain; `unresolved` не делает утверждения о
+  непроверенных кандидатах.
 - `alpha.json` начиная с pack `2.0.0` обязательно содержит точный byte-reference
   half-tie `#C0B2FA @ 0.122` над `#000000` → `#17161F`. Это mutation-killer
   старого пути `(byte/255) · alpha · 255`, который выбирал соседний LSB.
@@ -157,10 +167,11 @@ labels (канон labui): роли `icon` в словаре нет.
   u64 strings, identities, упакованная LSB0 matrix и partition сравниваются как
   точные UTF-8 байты.
 
-Внутренняя ошибка core и неизвестный forward-вариант `Unreachable` не являются
-solve-векторами: `Pack::generate()` возвращает `PackGenerationError` и не пишет
-правдоподобный `{kind:"unreachable"}` fallback в сертификационный артефакт.
-- **Строки/enum/bool** (`theme`, `position`, `code`, `floorOverride`, `kind`) —
+Внутренняя ошибка core и неизвестный forward-вариант без public boundary
+descriptor не являются solve-векторами: `Pack::generate()` возвращает
+`PackGenerationError` и не пишет правдоподобный failure fallback в
+сертификационный артефакт.
+- **Строки/enum/bool** (`theme`, `position`, `category`, `code`, `floorOverride`, `kind`) —
   ТОЧНО.
 
 ## Референс: ядро само себя проходит

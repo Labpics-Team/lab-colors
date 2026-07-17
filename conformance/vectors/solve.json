@@ -53,7 +53,8 @@
     },
     "theme": "dark",
     "outcome": {
-      "kind": "unreachable",
+      "kind": "failure",
+      "category": "unreachable",
       "code": "exceeds_range"
     }
   },
@@ -65,8 +66,36 @@
     },
     "theme": "light",
     "outcome": {
-      "kind": "unreachable",
+      "kind": "failure",
+      "category": "unreachable",
       "code": "exceeds_range"
+    }
+  },
+  {
+    "bg": "#FFFFFF",
+    "contract": {
+      "kind": "range",
+      "floor": 3.0,
+      "ceiling": 5.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "failure",
+      "category": "unreachable",
+      "code": "below_contrast_floor"
+    }
+  },
+  {
+    "bg": "#6E6E6E",
+    "contract": {
+      "kind": "text",
+      "lc": 20.0
+    },
+    "theme": "light",
+    "outcome": {
+      "kind": "failure",
+      "category": "unreachable",
+      "code": "floor_unreachable"
     }
   },
   {
@@ -77,7 +106,8 @@
     },
     "theme": "light",
     "outcome": {
-      "kind": "unreachable",
+      "kind": "failure",
+      "category": "unreachable",
       "code": "exceeds_range"
     }
   }

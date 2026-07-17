@@ -30,7 +30,7 @@ const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-q55-v1.bin",
   "wcag22-srgb8-q55-proof-v1.json",
 ];
-// Полный состав пака 6.0.0. Верификатор читает байты из репозитория (не из
+// Полный состав пака 7.0.0. Верификатор читает байты из репозитория (не из
 // тарболла) и пересчитывает packDigest над всеми восемью семействами;
 // семейство wcag22-explicit-selection в пакет не попадает (операцию
 // потребитель получает кодом обоих адаптеров, а не векторами).
@@ -1088,9 +1088,62 @@ export function validateWcag22FeasibilityFamily(family, atomicProofSha256Hex) {
   return byCase;
 }
 
+const SOLVE_FAILURE_CATEGORY_BY_CODE = new Map([
+  ["below_contrast_floor", "unreachable"],
+  ["exceeds_range", "unreachable"],
+  ["bounded_search_exhausted", "unresolved"],
+  ["floor_unreachable", "unreachable"],
+  ["gamut_unsupported", "unsupported"],
+  ["invalid_input", "rejected"],
+]);
+
+export function validateSolveFailurePair(category, code, label = "solve failure") {
+  const expectedCategory = SOLVE_FAILURE_CATEGORY_BY_CODE.get(code);
+  if (expectedCategory === undefined) {
+    fail(`${label} has unknown failure code ${code}`);
+  }
+  if (category !== expectedCategory) {
+    fail(`${label} category ${category} differs from ${expectedCategory} for ${code}`);
+  }
+}
+
+// Validate the versioned solve outcome algebra independently of Rust serde.
+// The category/code pair is atomic: neither an old tag nor a plausible local
+// reclassification may enter release evidence.
+export function validateSolveFamily(family) {
+  if (!Array.isArray(family) || family.length === 0) {
+    fail("solve family must be a non-empty vector array");
+  }
+  let solved = 0;
+  let failures = 0;
+  for (const [index, vector] of family.entries()) {
+    exactKeys(vector, ["bg", "contract", "theme", "outcome"], `solve[${index}]`);
+    const outcome = vector.outcome;
+    if (!isRecord(outcome)) fail(`solve[${index}].outcome must be an object`);
+    if (outcome.kind === "solved") {
+      exactKeys(
+        outcome,
+        ["kind", "hex", "lc", "wcagRatio", "floorOverride"],
+        `solve[${index}].outcome`,
+      );
+      solved += 1;
+      continue;
+    }
+    if (outcome.kind !== "failure") {
+      fail(`solve[${index}].outcome has unsupported kind ${outcome.kind}`);
+    }
+    exactKeys(outcome, ["kind", "category", "code"], `solve[${index}].outcome`);
+    validateSolveFailurePair(outcome.category, outcome.code, `solve[${index}].outcome`);
+    failures += 1;
+  }
+  if (solved === 0 || failures === 0) {
+    fail(`solve family must exercise both outcomes, got solved=${solved} failure=${failures}`);
+  }
+}
+
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "6.0.0") {
-    fail(`release requires conformance pack 6.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "7.0.0") {
+    fail(`release requires conformance pack 7.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -1141,6 +1194,7 @@ async function validateConformance(conformance) {
   if (conformance.counts?.total !== total) {
     fail(`conformance total=${conformance.counts?.total} differs from ${total}`);
   }
+  validateSolveFamily(families[3]);
   validateWcag22FeasibilityFamily(families[6], sha256(proofBytes));
   const halfTie = families[2].find(
     (entry) => entry.tint === "#C0B2FA" && entry.bg === "#000000" && entry.alpha === 0.122,

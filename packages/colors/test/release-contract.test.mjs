@@ -19,6 +19,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  validateSolveFailurePair,
+  validateSolveFamily,
   validateWcag22EvidenceArtifacts,
   validateWcag22FeasibilityFamily,
 } from "../../../scripts/verify-package-release.mjs";
@@ -819,7 +821,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
     const expectedSha = "a".repeat(40);
     const conformance = {
-      packVersion: "6.0.0",
+      packVersion: "7.0.0",
       packDigest: "12345678",
       manifestSha256: "c".repeat(64),
       familySetSha256: "d".repeat(64),
@@ -971,32 +973,64 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 6 adds only the explicit-selection family", () => {
+test("conformance pack 7 changes only the solve family", () => {
   const immutableFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
     ["alpha.json", "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1"],
-    ["solve.json", "64acfc4a8c613a4b11e4e83c52a33ecf308320abc6ab18fde20853a7f2399f06"],
     ["muddiness.json", "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3"],
     ["wcag22.json", "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826"],
     [
       "wcag22-feasibility.json",
       "ae2caec47a7b650e73b8d4029a69b4e401dfb7cc199db579c0f95106eebe8dc3",
     ],
+    [
+      "wcag22-explicit-selection.json",
+      "3c4b0b8d7954b598ab9f8cd85be5749577e7c82380976293810fcab20d8ef41a",
+    ],
   ]);
-  assert.equal(immutableFamilies.size, 7, "anti-vacuum: prior family set changed");
+  assert.equal(immutableFamilies.size, 7, "anti-vacuum: unchanged family set changed");
   for (const [name, expected] of immutableFamilies) {
     const bytes = readFileSync(join(root, "conformance", "vectors", name));
     assert.equal(createHash("sha256").update(bytes).digest("hex"), expected, name);
   }
+  assert.equal(
+    createHash("sha256")
+      .update(readFileSync(join(root, "conformance", "vectors", "solve.json")))
+      .digest("hex"),
+    "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af",
+    "pack-7 solve family bytes drifted",
+  );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
-  assert.equal(manifest.packVersion, "6.0.0");
-  assert.ok(
-    existsSync(join(root, "conformance", "vectors", "wcag22-explicit-selection.json")),
-    "pack 6 must add the single atomic explicit-selection family",
+  assert.equal(manifest.packVersion, "7.0.0");
+  const solve = JSON.parse(read("conformance", "vectors", "solve.json"));
+  const supersededKind = ["un", "reachable"].join("");
+  const failures = solve.filter(({ outcome }) => outcome.kind === "failure");
+  assert.ok(failures.length > 0, "anti-vacuum: solve family has no typed failure");
+  const failurePairs = new Set();
+  for (const { outcome } of failures) {
+    assert.deepEqual(
+      Object.keys(outcome).sort(),
+      ["category", "code", "kind"],
+      "failure wire must be exactly {kind,category,code}",
+    );
+    assert.equal(outcome.category, "unreachable");
+    failurePairs.add(`${outcome.category}/${outcome.code}`);
+  }
+  assert.deepEqual(
+    [...failurePairs].sort(),
+    [
+      "unreachable/below_contrast_floor",
+      "unreachable/exceeds_range",
+      "unreachable/floor_unreachable",
+    ],
   );
-  assert.equal(manifest.counts.wcag22ExplicitSelection > 0, true);
+  assert.equal(
+    solve.some(({ outcome }) => outcome.kind === supersededKind),
+    false,
+    "pack 7 must not preserve the superseded failure kind",
+  );
   assert.equal(
     manifest.counts.total,
     Object.entries(manifest.counts)
@@ -1004,6 +1038,54 @@ test("conformance pack 6 adds only the explicit-selection family", () => {
       .reduce((sum, [, value]) => sum + value, 0),
     "manifest total must equal the sum of every family count",
   );
+});
+
+test("release checker rejects solve failure wire drift", () => {
+  const canonical = JSON.parse(read("conformance", "vectors", "solve.json"));
+  assert.doesNotThrow(() => validateSolveFamily(canonical));
+
+  const mutations = [
+    ["missing category", (outcome) => delete outcome.category],
+    ["wrong category", (outcome) => { outcome.category = "unresolved"; }],
+    ["old kind", (outcome) => { outcome.kind = ["un", "reachable"].join(""); }],
+    ["extra field", (outcome) => { outcome.reason = "plausible fallback"; }],
+    ["internal category", (outcome) => { outcome.category = "internal"; }],
+    ["unknown code", (outcome) => { outcome.code = "future_guess"; }],
+  ];
+  assert.equal(mutations.length, 6, "anti-vacuum mutation corpus changed");
+  for (const [name, mutate] of mutations) {
+    const family = structuredClone(canonical);
+    const failure = family.find(({ outcome }) => outcome.kind === "failure")?.outcome;
+    assert.ok(failure, "anti-vacuum: solve family has no failure fixture");
+    mutate(failure);
+    assert.throws(() => validateSolveFamily(family), undefined, name);
+  }
+
+  const successesOnly = canonical.filter(({ outcome }) => outcome.kind === "solved");
+  assert.throws(
+    () => validateSolveFamily(successesOnly),
+    /exercise both outcomes/u,
+    "removing the failure branch must fail closed",
+  );
+
+  const boundaryRows = [
+    ["unreachable", "below_contrast_floor"],
+    ["unreachable", "exceeds_range"],
+    ["unresolved", "bounded_search_exhausted"],
+    ["unreachable", "floor_unreachable"],
+    ["unsupported", "gamut_unsupported"],
+    ["rejected", "invalid_input"],
+  ];
+  assert.equal(boundaryRows.length, 6, "public core failure dictionary changed");
+  for (const [category, code] of boundaryRows) {
+    assert.doesNotThrow(() => validateSolveFailurePair(category, code));
+    const wrongCategory = category === "unreachable" ? "rejected" : "unreachable";
+    assert.throws(
+      () => validateSolveFailurePair(wrongCategory, code),
+      /differs from/u,
+      `${code} category mutation must bite`,
+    );
+  }
 });
 
 test("release checker independently validates and mutation-proves feasibility pack semantics", () => {
@@ -1126,7 +1208,8 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   assert.match(prepare, /"wcag22-explicit-selection\.json"/u);
   assert.match(verifier, /"wcag22-feasibility\.json"/u);
   assert.match(verifier, /"wcag22-explicit-selection\.json"/u);
-  assert.match(verifier, /conformance\.packVersion !== "6\.0\.0"/u);
+  assert.match(verifier, /conformance\.packVersion !== "7\.0\.0"/u);
+  assert.match(verifier, /validateSolveFamily\(families\[3\]\)/u);
   assert.match(
     verifier,
     /"wcag22Feasibility"/u,
@@ -1666,7 +1749,8 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `6\.0\.0`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `7\.0\.0`/u);
+  assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
   assert.match(conformanceReadme, /5\.0\.0 → 6\.0\.0/u);
   assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
   assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
@@ -1677,7 +1761,7 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     conformanceReadme,
     /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility,\s*wcag22-explicit-selection/u,
   );
-  assert.doesNotMatch(conformanceReadme, /сейчас `[345]\.0\.0`/u);
+  assert.doesNotMatch(conformanceReadme, /сейчас `[3-6]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
 });

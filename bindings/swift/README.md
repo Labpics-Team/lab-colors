@@ -66,6 +66,11 @@ docker run --rm -v "$PWD":/src:ro \
 который фиксирует порядок IEEE binary64 операций и квантование; исполняемое
 Swift/UniFFI evidence сейчас ограничено описанным выше pinned Linux x86_64
 runtime. Solve-hex — квантование трансцендентного резолва, ±1 LSB на канал.
+Неуспешный solve возвращает `ColorError.Failure(category, code)`: category —
+закрытый enum `FailureCategory`, а не произвольная строка. Он
+отделяет доказанную `unreachable` от `unresolved`, `rejected` и `unsupported`,
+а code задаёт конкретную машинную причину. Оба поля приходят из одного
+core-owned descriptor и проверяются pack 7.
 
 Glow проверяется другим контрактом: `stable-v1` обязан вернуть типизированный
 `Indeterminate` (`site_id` + неразделимое typed `evidence`), если доказанной
@@ -89,9 +94,9 @@ provenance и target outcome. `indeterminate` является stable отказ
 
 Граница самостоятельно валидирует tint, background и конечный `targetDj > 0`:
 только эти ошибки становятся `ColorError.InvalidGlowRequest`. Ошибка core после
-успешной валидации, неизвестный численный variant или новый `Unreachable`
-считаются `ColorError.IncompatibleCoreContract`; adapter не выдаёт им
-выдуманный fallback-code.
+успешной валидации, неизвестный численный variant или новый `SolveFailure` без
+public descriptor считаются `ColorError.IncompatibleCoreContract`; adapter не
+выдаёт им выдуманный fallback-code.
 
 ## Feasibility byte protocol
 
@@ -104,7 +109,8 @@ provenance и target outcome. `indeterminate` является stable отказ
 
 Swift не вычисляет WCAG, не сортирует отношения и не строит partition. Он
 декодирует Core-owned ordered domain, canonical relations, candidate-major
-LSB0 failure matrix и proof. Pack 5 replay независимо проверяет 256 triples,
+LSB0 failure matrix и proof. Текущее pack 7 replay независимо проверяет 256
+triples,
 `32E`-byte matrix, 32-byte partition, LSB0 query law и opaque-ID invariance.
 
 ## Atomic explicit-selection byte protocol
@@ -116,8 +122,9 @@ LSB0 failure matrix и proof. Pack 5 replay независимо проверя�
 ID и повторно проверяет выбранную строку. Swift не пересобирает матрицу и не
 принимает сериализованный proof обратно как capability.
 
-Pack 6 проходит через raw UniFFI с байт-точным сравнением и через публичную
-Swift-функцию с равенством типизированного значения и нормализованного JSON-
-дерева. Oversize отсекается до избегаемой для отклонённого входа ABI-копии и
-повторно проверяется Rust-границей; structural mutation результата отклоняется
-декодером, а не превращается в частичный успех.
+Текущее pack 7 (семейство введено в pack 6) проходит через raw UniFFI с
+байт-точным сравнением и через публичную Swift-функцию с равенством
+типизированного значения и нормализованного JSON-дерева. Oversize отсекается до
+избегаемой для отклонённого входа ABI-копии и повторно проверяется
+Rust-границей; structural mutation результата отклоняется декодером, а не
+превращается в частичный успех.

@@ -21,7 +21,7 @@ const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-q55-proof-v1.json",
 ];
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
-// Полный состав пака 6.0.0: восемь семейств. В npm-тарболл эти файлы НЕ
+// Полный состав пака 7.0.0: восемь семейств. В npm-тарболл эти файлы НЕ
 // копируются — байты хешируются из репозитория в build-metadata provenance
 // (packDigest/familySetSha256); семейство wcag22-explicit-selection в
 // тарболл не входит — публикуемая поверхность это код адаптеров.

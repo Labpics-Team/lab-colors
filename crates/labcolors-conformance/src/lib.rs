@@ -25,7 +25,7 @@
 //! | `contrasts.json` | (fg, bg, тема) → (Lc, WCAG) | `recheck_against` |
 //! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
-//! | `solve.json` | (bg, контракт, тема) → резолв или честный отказ | `solve` |
+//! | `solve.json` | (bg, контракт, тема) → цвет или типизированный failure | `solve` |
 //! | `muddiness.json` | hex → замороженная legacy-координата | `cleanliness::muddiness_from_hex` |
 //! | `wcag22.json` | final sRGB8 pair + criterion → exact assessment | `wcag22::evaluate_wcag22_hex` |
 //! | `wcag22-feasibility.json` | versioned request → packed compiler algebra | `labcolors-protocol` |
@@ -55,7 +55,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "6.0.0";
+pub const PACK_VERSION: &str = "7.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -272,9 +272,8 @@ impl ContractSpec {
     }
 }
 
-/// Исход резолва: успешный цвет или ЧЕСТНЫЙ отказ со стабильным кодом. Коды
-/// тождественны кодам WASM-биндинга — все поверхности классифицируют
-/// недостижимость одинаково.
+/// Исход резолва: успешный цвет либо типизированный терминальный failure.
+/// Категория и код проецируются из одного core-owned boundary descriptor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -293,9 +292,12 @@ pub enum SolveOutcome {
         /// Юридический пол переопределил перцептивную цель.
         floor_override: bool,
     },
-    /// Ни один цвет не удовлетворяет контракт; `code` — стабильная причина.
-    Unreachable {
-        /// Стабильный машинный код (`floor_unreachable`, `exceeds_range`, …).
+    /// Resolver не вернул цвет; category отделяет доказанную недостижимость от
+    /// unresolved, rejected и unsupported исходов.
+    Failure {
+        /// Стабильная семантическая категория core failure.
+        category: String,
+        /// Стабильный машинный код конкретной причины.
         code: String,
     },
 }
@@ -307,8 +309,8 @@ pub enum SolveOutcome {
 pub enum PackGenerationError {
     /// Core-generated data violated a core postcondition.
     InternalCoreInvariant { reason: String },
-    /// The core introduced an `Unreachable` variant this pack does not know how
-    /// to encode. The adapter must be upgraded before regenerating artifacts.
+    /// The core introduced a failure without a public boundary descriptor. The
+    /// adapter must be upgraded before regenerating artifacts.
     IncompatibleCoreContract { reason: String },
     /// Public protocol builders or canonical encoders rejected a controlled
     /// fixture. Generation stops instead of inventing a local wire schema.
@@ -338,24 +340,21 @@ impl core::fmt::Display for PackGenerationError {
 
 impl std::error::Error for PackGenerationError {}
 
-/// Стабильный код физической недостижимости. Тождественен маппингу WASM-
-/// границы (`labcolors-wasm/src/engine.rs`). Внутренняя ошибка или неизвестный
-/// forward-вариант возвращаются как [`PackGenerationError`] и не сериализуются.
-pub fn unreachable_code(
-    err: &labcolors_core::Unreachable,
-) -> Result<&'static str, PackGenerationError> {
-    use labcolors_core::Unreachable as U;
+/// Core-owned публичная проекция failure. Conformance не поддерживает второй
+/// словарь категорий/кодов: внутренний failure либо будущий вариант без
+/// boundary descriptor закрывает генерацию целиком.
+pub fn solve_failure_wire(
+    err: &labcolors_core::SolveFailure,
+) -> Result<(&'static str, &'static str), PackGenerationError> {
+    if let Some(boundary) = err.boundary() {
+        return Ok((boundary.category().as_str(), boundary.code()));
+    }
     match err {
-        U::BelowContrastFloor { .. } => Ok("below_contrast_floor"),
-        U::ExceedsRange { .. } => Ok("exceeds_range"),
-        U::QuantizationGap { .. } => Ok("quantization_gap"),
-        U::FloorUnreachable { .. } => Ok("floor_unreachable"),
-        U::PolarityMismatch { .. } => Ok("polarity_mismatch"),
-        U::GamutUnsupported => Ok("gamut_unsupported"),
-        U::InvalidInput(_) => Ok("invalid_input"),
-        U::InternalInvariant(reason) => Err(PackGenerationError::InternalCoreInvariant {
-            reason: reason.clone(),
-        }),
+        labcolors_core::SolveFailure::InternalInvariant(reason) => {
+            Err(PackGenerationError::InternalCoreInvariant {
+                reason: reason.clone(),
+            })
+        }
         _ => Err(PackGenerationError::IncompatibleCoreContract {
             reason: err.to_string(),
         }),
@@ -376,10 +375,10 @@ pub struct SolveVector {
     pub outcome: SolveOutcome,
 }
 
-/// Кейсы резолва: достижимые контракты на светлом/тёмном/брендовом фоне под
-/// разными темами плюс один намеренно недостижимый (демонстрация честного
-/// отказа, а не тихого клипа).
-const SOLVE_CASES: [(&str, ContractSpec, &str); 6] = [
+/// Кейсы резолва: успешные контракты на светлом фоне и реальные публичные
+/// failure paths на тёмном, брендовом и среднем фоне. Каждый failure остаётся
+/// типизированным терминалом, не тихим клипом.
+const SOLVE_CASES: [(&str, ContractSpec, &str); 8] = [
     ("#FFFFFF", ContractSpec::Text { lc: 60.0 }, "light"),
     ("#FFFFFF", ContractSpec::Ui { lc: 45.0 }, "light"),
     (
@@ -392,8 +391,21 @@ const SOLVE_CASES: [(&str, ContractSpec, &str); 6] = [
     ),
     ("#101012", ContractSpec::Text { lc: 75.0 }, "dark"),
     ("#007AFF", ContractSpec::Text { lc: 60.0 }, "light"),
+    // Floorless target lies in the open LPC dead-zone gap: neither exact zero
+    // nor the minimum non-zero boundary is within the declared ±1 Lc budget.
+    (
+        "#FFFFFF",
+        ContractSpec::Range {
+            floor: 3.0,
+            ceiling: 5.0,
+        },
+        "light",
+    ),
+    // Even the dark endpoint cannot meet the text conformance floor on this
+    // mid-grey background, independently exercising FloorUnreachable.
+    ("#6E6E6E", ContractSpec::Text { lc: 20.0 }, "light"),
     // Намеренно недостижимо: цель Lc 150 превышает всё, что белый фон способен
-    // дать (макс ≈ 107 у чёрного) → честный ExceedsRange, не клип.
+    // дать (макс ≈ 107 у чёрного) → typed ExceedsRange, не клип.
     ("#FFFFFF", ContractSpec::Text { lc: 150.0 }, "light"),
 ];
 
@@ -421,9 +433,13 @@ pub fn generate_solve() -> Result<Vec<SolveVector>, PackGenerationError> {
                         wcag_ratio: s.wcag_ratio(),
                         floor_override: s.floor_override(),
                     },
-                    Err(e) => SolveOutcome::Unreachable {
-                        code: unreachable_code(&e)?.to_string(),
-                    },
+                    Err(error) => {
+                        let (category, code) = solve_failure_wire(&error)?;
+                        SolveOutcome::Failure {
+                            category: category.to_string(),
+                            code: code.to_string(),
+                        }
+                    }
                 };
                 Ok(SolveVector {
                     bg: bg.to_string(),
@@ -1546,21 +1562,53 @@ mod tests {
     }
 
     #[test]
-    fn unreachable_code_mapping_is_fallible_without_generic_fallback() {
-        let error = solve(
-            BgInput::solid("#FFFFFF").unwrap(),
-            Contract::text(f64::NAN),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &ViewingConditions::srgb(),
-            Gamut::Srgb,
-        )
-        .unwrap_err();
-        assert_eq!(unreachable_code(&error).unwrap(), "invalid_input");
+    fn solve_failure_wire_is_the_core_projection_and_fails_closed() {
+        use labcolors_core::SolveFailure as F;
 
-        let internal = labcolors_core::Unreachable::InternalInvariant("fixture drift".into());
+        let fixtures = [
+            (
+                F::BelowContrastFloor { target: 1.0 },
+                "unreachable",
+                "below_contrast_floor",
+            ),
+            (
+                F::ExceedsRange {
+                    target: 100.0,
+                    max_achievable: 90.0,
+                },
+                "unreachable",
+                "exceeds_range",
+            ),
+            (
+                F::BoundedSearchExhausted {
+                    target: 50.0,
+                    closest_examined: 49.0,
+                },
+                "unresolved",
+                "bounded_search_exhausted",
+            ),
+            (
+                F::FloorUnreachable {
+                    floor: 4.5,
+                    max_ratio: 4.0,
+                },
+                "unreachable",
+                "floor_unreachable",
+            ),
+            (F::GamutUnsupported, "unsupported", "gamut_unsupported"),
+            (
+                F::InvalidInput("fixture".into()),
+                "rejected",
+                "invalid_input",
+            ),
+        ];
+        for (failure, category, code) in fixtures {
+            assert_eq!(solve_failure_wire(&failure).unwrap(), (category, code));
+        }
+
+        let internal = labcolors_core::SolveFailure::InternalInvariant("fixture drift".into());
         assert!(matches!(
-            unreachable_code(&internal),
+            solve_failure_wire(&internal),
             Err(PackGenerationError::InternalCoreInvariant { reason })
                 if reason == "fixture drift"
         ));
@@ -1633,22 +1681,22 @@ mod tests {
     }
 
     #[test]
-    fn pack_v6_inherits_old_families_and_adds_explicit_selection() {
+    fn pack_v7_changes_only_the_solve_family_without_adding_a_family() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Обязательство унаследовано pack v6; v6 добавляет ровно
-        // одну atomic explicit-selection family (#296-C2). Проверка одновременно
-        // убивает вакуумные изменения версии/счётчика без доказательного вектора.
+        // соседний LSB. Обязательство унаследовано pack v7; v7 меняет только
+        // failure-wire solve-family. Проверка одновременно убивает вакуумные
+        // изменения версии/счётчика без доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
         assert_eq!(
-            PACK_VERSION, "6.0.0",
-            "atomic explicit-selection family обязана быть pack v6"
+            PACK_VERSION, "7.0.0",
+            "типизированный failure wire обязан быть pack v7"
         );
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v6 наследует прежние семейства на core 0.2.0"
+            "pack v7 остаётся привязан к core 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
@@ -1657,7 +1705,7 @@ mod tests {
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
         assert_eq!(
-            manifest.counts.total, 116,
+            manifest.counts.total, 118,
             "состав векторных семейств изменился"
         );
         assert_eq!(manifest.counts.wcag22, 6);
@@ -1702,8 +1750,9 @@ mod tests {
     }
 
     #[test]
-    fn solve_pack_contains_reachable_and_unreachable() {
-        // Пак честен: есть и успешный резолв, и намеренный отказ с кодом.
+    fn solve_pack_contains_solved_and_typed_failure() {
+        // Anti-vacuum: corpus исполняет обе ветви и закрепляет категорию вместе
+        // с конкретным кодом, а не только новый serde-тег.
         let solve = generate_solve().expect("canonical solve vectors");
         assert!(
             solve
@@ -1711,13 +1760,17 @@ mod tests {
                 .any(|v| matches!(v.outcome, SolveOutcome::Solved { .. })),
             "нет ни одного успешного резолва"
         );
-        let unreachable = solve
+        let failure = solve
             .iter()
             .find_map(|v| match &v.outcome {
-                SolveOutcome::Unreachable { code } => Some(code.clone()),
+                SolveOutcome::Failure { category, code } => Some((category.clone(), code.clone())),
                 SolveOutcome::Solved { .. } => None,
             })
-            .expect("нет ни одного честного отказа");
-        assert_eq!(unreachable, "exceeds_range", "код отказа сменился");
+            .expect("нет ни одного failure outcome");
+        assert_eq!(
+            failure,
+            ("unreachable".into(), "exceeds_range".into()),
+            "категория или код failure сменились"
+        );
     }
 }
