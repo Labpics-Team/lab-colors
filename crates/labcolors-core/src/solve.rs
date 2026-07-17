@@ -1622,7 +1622,8 @@ mod tests {
                 // COLD: fresh cache, first resolve of this theme.
                 crate::semantic::reset_curve_plan_cache();
                 FORWARD_CALLS.with(|c| c.set(0));
-                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
+                crate::semantic::resolve_set_live(&bgi, &tbl, &vc)
+                    .expect("valid cold perf fixture resolves atomically");
                 let cold = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
                     cold, cold_exp,
@@ -1631,7 +1632,8 @@ mod tests {
 
                 // WARM: same theme re-resolved, curve plans now cached.
                 FORWARD_CALLS.with(|c| c.set(0));
-                let _ = crate::semantic::resolve_set_live(&bgi, &tbl, &vc);
+                crate::semantic::resolve_set_live(&bgi, &tbl, &vc)
+                    .expect("valid warm perf fixture resolves atomically");
                 let warm = FORWARD_CALLS.with(|c| c.get());
                 assert_eq!(
                     warm, warm_exp,
@@ -2855,9 +2857,7 @@ mod tests {
                     Resolved::GlowIndeterminate(_) => "glow-indeterminate".to_string(),
                     Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
                     Resolved::None => "none".to_string(),
-                    Resolved::Failure(failure) => {
-                        crate::test_support::valid_srgb_set_failure_repr(failure)
-                    }
+                    Resolved::Failure(failure) => crate::test_support::role_failure_repr(failure),
                 };
                 format!("{}={}", role.key(), v)
             })

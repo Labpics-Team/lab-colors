@@ -266,8 +266,10 @@ test("watchTheme applies on creation and re-resolves only when the bg changes", 
   assert.equal(ctrl.background(), "#FFFFFF");
 
   // No change → no re-resolve.
-  ctrl.refresh();
+  const unchanged = ctrl.refresh();
   assert.equal(colors.calls.length, 1);
+  assert.equal(unchanged.theme, "light");
+  assert.equal(unchanged.background, "#FFFFFF");
 
   // Background changes → one more resolve.
   el.bg = "rgb(0, 0, 0)";
@@ -298,13 +300,419 @@ test("watchTheme setTheme re-resolves under the new theme; explicit background w
   assert.equal(colors.calls[1].bg, "#123456");
 });
 
+test("watchTheme failed setTheme preserves the committed theme for a later refresh", () => {
+  const el = fakeElement("rgb(255,255,255)");
+  let background = "#123456";
+  const calls = [];
+  const colors = {
+    resolveTheme(bg, theme) {
+      calls.push({ bg, theme });
+      if (theme === "dark") throw new Error("rejected: invalid_input");
+      return {
+        theme,
+        background: bg,
+        vars: { "--lab-x": `${theme}:${bg}` },
+        roles: {},
+      };
+    },
+  };
+  const ctrl = watchTheme(el, {
+    colors,
+    theme: "light",
+    background: () => background,
+    observe: false,
+  });
+  const before = el.props.get("--lab-x");
+
+  assert.throws(() => ctrl.setTheme("dark"), /rejected: invalid_input/u);
+  assert.equal(el.props.get("--lab-x"), before, "the failed candidate must not repaint");
+
+  background = "#654321";
+  assert.doesNotThrow(() => ctrl.refresh());
+  assert.deepEqual(calls.at(-1), { bg: "#654321", theme: "light" });
+  assert.equal(el.props.get("--lab-x"), "light:#654321");
+});
+
+test("watchTheme retries the same changed background after a transient resolve failure", () => {
+  const el = fakeElement("rgb(255,255,255)");
+  let background = "#123456";
+  let failedBgAttempts = 0;
+  const colors = {
+    resolveTheme(bg, theme) {
+      if (bg === "#654321") {
+        failedBgAttempts++;
+        if (failedBgAttempts === 1) throw new Error("internal_error: transient resolve");
+      }
+      return {
+        theme,
+        background: bg,
+        vars: { "--lab-x": `${theme}:${bg}` },
+        roles: {},
+      };
+    },
+  };
+  const ctrl = watchTheme(el, {
+    colors,
+    theme: "light",
+    background: () => background,
+    observe: false,
+  });
+  const before = el.props.get("--lab-x");
+
+  background = "#654321";
+  assert.throws(() => ctrl.refresh(), /transient resolve/u);
+  assert.equal(ctrl.background(), "#123456");
+  assert.equal(el.props.get("--lab-x"), before);
+
+  assert.doesNotThrow(() => ctrl.refresh());
+  assert.equal(failedBgAttempts, 2, "failed background evidence must remain retryable");
+  assert.equal(ctrl.background(), "#654321");
+  assert.equal(el.props.get("--lab-x"), "light:#654321");
+});
+
 test("watchTheme rejects a missing engine", () => {
   assert.throws(() => watchTheme(fakeElement("#fff"), { theme: "light", observe: false }), TypeError);
+});
+
+test("watchTheme acquires no observer when its initial resolve fails", () => {
+  let constructed = 0;
+  let observed = 0;
+  const MutationObserver = function () {
+    constructed++;
+    return {
+      observe() {
+        observed++;
+      },
+      disconnect() {},
+    };
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+
+  assert.throws(
+    () =>
+      watchTheme(fakeElement("rgb(255,255,255)"), {
+        colors: {
+          resolveTheme() {
+            throw new Error("initial resolve failed");
+          },
+        },
+        theme: "light",
+        win,
+      }),
+    /initial resolve failed/u,
+  );
+  assert.equal(constructed, 0, "failed construction must not acquire an observer");
+  assert.equal(observed, 0, "failed construction must not leave a live observation");
+});
+
+test("watchTheme observes its own initial CSS mutation and catches up once", async () => {
+  let callback = null;
+  let active = false;
+  let background = "#FFFFFF";
+  const props = new Map();
+  const element = {
+    style: {
+      length: 0,
+      item: () => null,
+      removeProperty: (key) => props.delete(key),
+      setProperty(key, value) {
+        props.set(key, value);
+        if (key === "--lab-x" && background === "#FFFFFF") {
+          background = "#000000";
+          if (active) queueMicrotask(callback);
+        }
+      },
+    },
+  };
+  const colors = fakeEngine();
+  const MutationObserver = function (fn) {
+    callback = fn;
+    return {
+      observe() {
+        active = true;
+      },
+      disconnect() {
+        active = false;
+      },
+    };
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+
+  const ctrl = watchTheme(element, {
+    colors,
+    theme: "light",
+    background: () => background,
+    win,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(colors.calls.length, 2, "the initial write-induced background must be re-resolved");
+  assert.equal(ctrl.background(), "#000000");
+  assert.equal(props.get("--lab-x"), "#000000");
+  ctrl.stop();
+});
+
+test("watchTheme cleans an observer candidate when observe fails before any write", () => {
+  let disconnects = 0;
+  let writes = 0;
+  const MutationObserver = function () {
+    return {
+      observe() {
+        throw new Error("observe failed");
+      },
+      disconnect() {
+        disconnects++;
+      },
+    };
+  };
+  const element = fakeElement("rgb(255,255,255)");
+  element.style.setProperty = () => {
+    writes++;
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+
+  assert.throws(
+    () => watchTheme(element, { colors: fakeEngine(), theme: "light", win }),
+    /observe failed/u,
+  );
+  assert.equal(disconnects, 1, "a partially-acquired observer must be released");
+  assert.equal(writes, 0, "observe failure must precede the initial DOM commit");
+});
+
+test("watchTheme disconnects and cancels a queued refresh when initial apply fails", async () => {
+  let callback = null;
+  let active = false;
+  let disconnects = 0;
+  const colors = fakeEngine();
+  const MutationObserver = function (fn) {
+    callback = fn;
+    return {
+      observe() {
+        active = true;
+      },
+      disconnect() {
+        active = false;
+        disconnects++;
+      },
+    };
+  };
+  const element = fakeElement("rgb(255,255,255)");
+  element.style.setProperty = () => {
+    if (active) queueMicrotask(callback);
+    throw new Error("initial apply failed");
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+
+  assert.throws(
+    () => watchTheme(element, { colors, theme: "light", win }),
+    /initial apply failed/u,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(active, false);
+  assert.equal(disconnects, 1);
+  assert.equal(colors.calls.length, 1, "the failed constructor must cancel its queued refresh");
+});
+
+test("watchTheme rejects an invalid async error handler before acquiring an observer", () => {
+  let constructed = 0;
+  const MutationObserver = function () {
+    constructed++;
+    return { observe() {}, disconnect() {} };
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+
+  assert.throws(
+    () =>
+      watchTheme(fakeElement("rgb(255,255,255)"), {
+        colors: fakeEngine(),
+        theme: "light",
+        onError: "not-a-function",
+        win,
+      }),
+    /onError/u,
+  );
+  assert.equal(constructed, 0);
+});
+
+test("watchTheme reports one coalesced observer failure without publishing it", async () => {
+  let callback = null;
+  let background = "#FFFFFF";
+  const errors = [];
+  const calls = [];
+  const failure = new Error("whole-set rejected");
+  const colors = {
+    resolveTheme(bg, theme) {
+      calls.push({ bg, theme });
+      if (bg === "#000000") throw failure;
+      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+    },
+  };
+  const MutationObserver = function (fn) {
+    callback = fn;
+    return { observe() {}, disconnect() {} };
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+  const element = fakeElement("rgb(255,255,255)");
+  const ctrl = watchTheme(element, {
+    colors,
+    theme: "light",
+    background: () => background,
+    onError: (error) => errors.push(error),
+    win,
+  });
+
+  background = "#000000";
+  callback();
+  callback();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 2, "one mutation burst must make one failed attempt");
+  assert.deepEqual(errors, [failure]);
+  assert.equal(ctrl.background(), "#FFFFFF");
+  assert.equal(element.props.get("--lab-x"), "#FFFFFF");
+  ctrl.stop();
+});
+
+test("watchTheme stays active and retries after a transient observer failure", async () => {
+  let callback = null;
+  let background = "#FFFFFF";
+  let failedAttempts = 0;
+  const errors = [];
+  const colors = {
+    resolveTheme(bg, theme) {
+      if (bg === "#000000" && failedAttempts++ === 0) {
+        throw new Error("transient observer failure");
+      }
+      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+    },
+  };
+  const MutationObserver = function (fn) {
+    callback = fn;
+    return { observe() {}, disconnect() {} };
+  };
+  const win = { MutationObserver, document: { documentElement: {} } };
+  const element = fakeElement("rgb(255,255,255)");
+  const ctrl = watchTheme(element, {
+    colors,
+    theme: "light",
+    background: () => background,
+    onError: (error) => errors.push(error),
+    win,
+  });
+
+  background = "#000000";
+  callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ctrl.background(), "#FFFFFF");
+  assert.equal(errors.length, 1);
+
+  callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(failedAttempts, 2);
+  assert.equal(ctrl.background(), "#000000");
+  assert.equal(element.props.get("--lab-x"), "#000000");
+  ctrl.stop();
+});
+
+test("watchTheme reports observer failure through the host when onError is absent", async () => {
+  let callback = null;
+  let background = "#FFFFFF";
+  const reported = [];
+  const failure = new Error("host-reported observer failure");
+  const colors = {
+    resolveTheme(bg, theme) {
+      if (bg === "#000000") throw failure;
+      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+    },
+  };
+  const MutationObserver = function (fn) {
+    callback = fn;
+    return { observe() {}, disconnect() {} };
+  };
+  const win = {
+    MutationObserver,
+    document: { documentElement: {} },
+    reportError: (error) => reported.push(error),
+  };
+  const ctrl = watchTheme(fakeElement("rgb(255,255,255)"), {
+    colors,
+    theme: "light",
+    background: () => background,
+    win,
+  });
+
+  background = "#000000";
+  callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reported, [failure]);
+  assert.equal(ctrl.background(), "#FFFFFF");
+  ctrl.stop();
+});
+
+test("watchTheme explicit refresh throws synchronously and bypasses onError", () => {
+  let background = "#FFFFFF";
+  let fail = true;
+  const errors = [];
+  const colors = {
+    resolveTheme(bg, theme) {
+      if (bg === "#000000" && fail) throw new Error("explicit refresh failed");
+      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+    },
+  };
+  const element = fakeElement("rgb(255,255,255)");
+  const ctrl = watchTheme(element, {
+    colors,
+    theme: "light",
+    background: () => background,
+    onError: (error) => errors.push(error),
+    observe: false,
+  });
+
+  background = "#000000";
+  assert.throws(() => ctrl.refresh(), /explicit refresh failed/u);
+  assert.deepEqual(errors, []);
+  assert.equal(ctrl.background(), "#FFFFFF");
+
+  fail = false;
+  assert.doesNotThrow(() => ctrl.refresh());
+  assert.equal(ctrl.background(), "#000000");
+});
+
+test("watchTheme retries a dirty canonical write even when its inputs are unchanged", () => {
+  const colors = fakeEngine();
+  const element = fakeElement("rgb(255,255,255)");
+  const write = element.style.setProperty;
+  let failWrite = false;
+  element.style.setProperty = (key, value) => {
+    if (failWrite) {
+      element.props.delete(key);
+      throw new Error("cssom write failed");
+    }
+    write(key, value);
+  };
+  const ctrl = watchTheme(element, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    observe: false,
+  });
+
+  failWrite = true;
+  assert.throws(() => ctrl.refresh(true), /cssom write failed/u);
+  assert.equal(ctrl.background(), "#FFFFFF", "a failed write must not publish a new snapshot");
+  assert.equal(element.props.get("--lab-x"), undefined, "CSSOM cannot roll back the partial write");
+
+  failWrite = false;
+  ctrl.refresh();
+  assert.equal(colors.calls.length, 2, "repair should reuse the committed resolved snapshot");
+  assert.equal(element.props.get("--lab-x"), "#FFFFFF");
 });
 
 test("watchTheme: stop() cancels a refresh already scheduled by a mutation", async () => {
   const colors = fakeEngine();
   const el = fakeElement("rgb(255,255,255)");
+  const errors = [];
   // A fake MutationObserver whose callback we can fire on demand.
   let cb = null;
   const fakeObserver = function (fn) {
@@ -316,6 +724,7 @@ test("watchTheme: stop() cancels a refresh already scheduled by a mutation", asy
     colors,
     theme: "light",
     win,
+    onError: (error) => errors.push(error),
     getStyle: (e) => ({ getPropertyValue: () => e.bg }),
     parentOf: () => null,
   });
@@ -327,4 +736,5 @@ test("watchTheme: stop() cancels a refresh already scheduled by a mutation", asy
   await Promise.resolve(); // let the microtask drain
   await Promise.resolve();
   assert.equal(colors.calls.length, 1, "no refresh must fire after stop()");
+  assert.deepEqual(errors, [], "a cancelled refresh must not report an error");
 });

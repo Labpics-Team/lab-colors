@@ -54,7 +54,8 @@ fn emit_snapshot() -> String {
     for (vc, vc_name) in &vcs {
         for bg_hex in bgs {
             let bg = BgInput::solid(bg_hex).expect("golden bg parses");
-            let set = resolve_named_set(&bg, &table, vc);
+            let set = resolve_named_set(&bg, &table, vc)
+                .expect("golden-конфиг обязан резолвиться атомарно");
             for (name, res) in &set {
                 let _ = writeln!(out, "{vc_name}|{bg_hex}|{name}={}", repr(res));
             }
@@ -145,7 +146,8 @@ fn accepted_endpoint_recovery_keeps_previously_false_failed_borders_legal() {
         ),
     ] {
         let bg = BgInput::solid(background).unwrap();
-        let set = resolve_named_set(&bg, &table, &vc);
+        let set = resolve_named_set(&bg, &table, &vc)
+            .expect("валидная border-фикстура обязана резолвиться");
         for role in roles {
             let outcome = &set
                 .iter()
@@ -216,7 +218,8 @@ fn hierarchy_pass_fires_and_flags_when_ladder_is_squeezed() {
     // branch (`demote_below` → None → copy of the senior) under test.
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#767676").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+        .expect("валидная hierarchy-фикстура обязана резолвиться");
 
     assert_eq!(
         hex(&set, "label-primary"),
@@ -250,7 +253,8 @@ fn hierarchy_pass_does_not_sweep_in_lone_anchors() {
     // pass demonstrably fires on the labels while leaving `border-strong` alone.
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#767676").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+        .expect("валидная hierarchy-фикстура обязана резолвиться");
     assert!(
         !compressed(&set, "border-strong"),
         "border-strong must not join the label ladder"
@@ -266,7 +270,8 @@ fn hierarchy_pass_is_a_noop_on_the_golden_grid() {
     for (vc, _) in vcs {
         for bg_hex in bgs {
             let bg = BgInput::solid(bg_hex).unwrap();
-            let set = resolve_named_set(&bg, &table, &vc);
+            let set = resolve_named_set(&bg, &table, &vc)
+                .expect("golden hierarchy-фикстура обязана резолвиться");
             for l in LABELS {
                 assert!(
                     !compressed(&set, l),
@@ -438,7 +443,8 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         (ViewingConditions::dim_surround(), "#1A1614"),
     ] {
         let bg = BgInput::solid(bg_hex).unwrap();
-        let set = resolve_named_set(&bg, &table, &vc);
+        let set = resolve_named_set(&bg, &table, &vc)
+            .expect("валидный второй клиент обязан резолвиться атомарно");
         assert_eq!(set.len(), 8, "every declared role resolves to an outcome");
 
         // The text ladder is real: strong is a solved colour that clears its AA

@@ -310,7 +310,8 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
     let bg = BgInput::solid(bg_hex).expect("bg is valid");
     let table = core_table(passport);
     let vc = theme_vc(theme);
-    let core_resolved = resolve_named_set(&bg, &table, &vc);
+    let core_resolved =
+        resolve_named_set(&bg, &table, &vc).expect("valid parity table resolves atomically");
 
     // The binding result for the same inputs, from a loaded config.
     let engine = boundary_with(passport);
@@ -341,22 +342,19 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
             Resolved::None => {
                 assert_eq!(kind, "none", "{name} should be the zero token");
             }
-            Resolved::Failure(reason) => {
-                let boundary = reason
-                    .boundary()
-                    .expect("an internal core failure must reject the whole resolve");
+            Resolved::Failure(failure) => {
                 assert_eq!(kind, "failure", "{name} should be a typed failure");
                 assert_eq!(
                     get_str(&entry, "category").as_deref(),
-                    Some(boundary.category().as_str()),
+                    Some(failure.category().as_str()),
                     "{name} failure category must come from core"
                 );
                 assert_eq!(
                     get_str(&entry, "code").as_deref(),
-                    Some(boundary.code()),
+                    Some(failure.code()),
                     "{name} failure code must come from core"
                 );
-                let message = reason.to_string();
+                let message = failure.to_string();
                 assert_eq!(
                     get_str(&entry, "message").as_deref(),
                     Some(message.as_str()),
@@ -533,7 +531,8 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
         &BgInput::solid(bg).expect("white is valid"),
         &core_labui_table(),
         &ViewingConditions::srgb(),
-    );
+    )
+    .expect("valid recheck parity table resolves atomically");
     let mut fgs: Vec<String> = Vec::new();
     let mut want: Vec<(f64, f64)> = Vec::new();
     for (_name, resolved) in &core_resolved {

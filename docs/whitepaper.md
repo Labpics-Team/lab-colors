@@ -130,8 +130,10 @@ LCS учитывает окружение через параметры CIECAM16
 Путь значения: `ThemeConfig::validate` (пределы **каждой** экспонируемой ручки;
 вне предела — `ConfigError`, не тихое принятие) →
 `ThemeConfig::compile_named_role_table` → `NamedRoleTable` →
-`resolve_named_set(bg, &table, vc)` — весь набор ролей одним проходом со
-строковыми ключами. JSON-парсинг — забота границы WASM, не ядра
+`resolve_named_set(bg, &table, vc) -> Result<Vec<(String, Resolved)>, ResolveSetError>`.
+Успешный набор сохраняет порядок объявления и допускает локально только
+`unreachable` или `unresolved`; `rejected`, `unsupported` и `internal` возвращают
+атомарный `Err` без частичного вектора. JSON-парсинг — забота границы WASM, не ядра
 ([`config.rs`](../crates/labcolors-core/src/config.rs)).
 
 ### 2.2. Рецепты ролей
@@ -463,7 +465,9 @@ LPC означает **Labpics Perceptual Contrast**. Текущая реали�
 Если цвет не возвращён, solver отдаёт типизированный `SolveFailure`, а не тихий
 клип. Только категория `unreachable` доказывает отсутствие решения в полном
 объявленном домене; `unresolved`, `rejected` и `unsupported` имеют другой смысл
-([`solve.rs`](../crates/labcolors-core/src/solve.rs)).
+([`solve.rs`](../crates/labcolors-core/src/solve.rs)). Это широкая таксономия
+низкоуровневого одиночного solve. На границе набора `resolve_named_set` допускает
+в роль только `unreachable | unresolved`; остальные исходы закрывают весь вызов.
 
 ### 3.3. Двухслойные полы: перцепция и закон раздельно
 

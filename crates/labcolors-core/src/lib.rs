@@ -142,9 +142,9 @@ pub use numerics::{
     StableNumericalOutcomeV2, numerical_capability_manifest_v2, numerical_registry_v2,
 };
 pub use semantic::{
-    GlowIndeterminateResolved, NamedRoleTable, Resolved, RoleChroma, RoleSpec, TextAnchor,
-    TranslucentResolved, measure_contrast, recheck_against, recheck_against_multi,
-    resolve_named_set,
+    GlowIndeterminateResolved, NamedRoleTable, ResolveSetError, ResolveSetErrorKind, Resolved,
+    RoleChroma, RoleFailure, RoleFailureCategory, RoleSpec, TextAnchor, TranslucentResolved,
+    measure_contrast, recheck_against, recheck_against_multi, resolve_named_set,
 };
 pub use wcag22_evidence::CanonicalFiniteBoundedEvidenceV1;
 // The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no

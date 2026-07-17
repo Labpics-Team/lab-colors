@@ -143,6 +143,484 @@ test("current() reports the logical target, not the painted mid-ease value", () 
   assert.equal(h.ctrl.current()["--lab-label-primary"], "#FFFFFF");
 });
 
+test("a failed worst-sample resolve leaves DOM and logical state unchanged", () => {
+  const el = fakeElement();
+  let samples = ["#FFFFFF", "#000000"];
+  const recheckThemes = [];
+  const colors = {
+    resolveTheme(bg, theme) {
+      if (theme === "dark" && bg === "#000000") {
+        throw new Error("rejected: invalid_input");
+      }
+      return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100);
+    },
+    recheckContrast(bg, _foregrounds, theme) {
+      recheckThemes.push(theme);
+      return [bg === "#000000" ? 0 : 100, 10];
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => 1000,
+    win: {},
+  });
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+
+  assert.throws(() => ctrl.setTheme("dark"), /rejected: invalid_input/);
+  assert.deepEqual(el.props, beforeDom, "failed resolve must not partially repaint");
+  assert.deepEqual(
+    ctrl.current(),
+    beforeCurrent,
+    "failed resolve must not publish a provisional logical target",
+  );
+
+  samples = ["#FEFEFE", "#000000"];
+  ctrl.tick();
+  assert.equal(recheckThemes.at(-1), "light", "failed setTheme must not publish hidden intent");
+});
+
+test("a failed stable-Glow reconciliation does not publish its candidate", () => {
+  const el = fakeElement();
+  const cssVar = "--lab-fx";
+  const stable = {
+    vars: {
+      [cssVar]: "oklch(70% 0.1 280)",
+      [`${cssVar}-core`]: "oklch(80% 0.1 280)",
+      [`${cssVar}-alpha`]: "0.5",
+    },
+    roles: {
+      fx: {
+        kind: "glow",
+        cssVar,
+        coreHex: "#D8CEFF",
+        haloHex: "#C0B2FA",
+        decisionProfile: "stable-v1",
+        decisionGuarantee: { kind: "bit-exact" },
+        compositeProfile: "encoded-srgb8-screen-v1",
+        compositeGuarantee: "bit-exact",
+        layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+        appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        selectionDiagnosticProfile: null,
+        constraintLayer: "halo",
+        targetStatus: "exact-noop-unreachable",
+        degraded: true,
+      },
+    },
+  };
+  const colors = {
+    resolveTheme(_bg, theme) {
+      if (theme !== "dark") return oneRole("#111111", 100);
+      return stable;
+    },
+    recheckContrast() {
+      return [];
+    },
+    isStableGlowPointNoop() {
+      throw new Error("internal_error: certificate recheck failed");
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1000,
+    win: {},
+  });
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+
+  assert.throws(
+    () => ctrl.setTheme("dark"),
+    /internal_error: certificate recheck failed/,
+  );
+  assert.deepEqual(el.props, beforeDom);
+  assert.deepEqual(ctrl.current(), beforeCurrent);
+});
+
+test("tick does not commit a Glow class change before a later set resolve succeeds", () => {
+  const el = fakeElement();
+  let samples = ["#FFFFFF"];
+  let now = 0;
+  let blackResolves = 0;
+  const cssVar = "--lab-fx";
+  const colorRole = {
+    kind: "color",
+    cssVar: "--lab-label",
+    hex: "#111111",
+    lc: 100,
+  };
+  const determinate = {
+    vars: {
+      "--lab-label": "#111111",
+      [cssVar]: "oklch(70% 0.1 280)",
+      [`${cssVar}-core`]: "oklch(80% 0.1 280)",
+      [`${cssVar}-alpha`]: "0.5",
+    },
+    roles: {
+      label: colorRole,
+      fx: {
+        kind: "glow",
+        cssVar,
+        coreHex: "#D8CEFF",
+        haloHex: "#C0B2FA",
+        decisionProfile: "stable-v1",
+        decisionGuarantee: { kind: "bit-exact" },
+        compositeProfile: "encoded-srgb8-screen-v1",
+        compositeGuarantee: "bit-exact",
+        layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+        appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        selectionDiagnosticProfile: null,
+        constraintLayer: "halo",
+        targetStatus: "exact-noop-unreachable",
+        degraded: true,
+      },
+    },
+  };
+  const colors = {
+    resolveTheme(background) {
+      if (background === "#000000") {
+        blackResolves++;
+        return determinate;
+      }
+      if (blackResolves > 0) throw new Error("rejected: invalid_input");
+      return determinate;
+    },
+    recheckContrast(background) {
+      return [background === "#000000" ? 0 : 100, 1];
+    },
+    isStableGlowPointNoop(_source, background) {
+      return background === "#FFFFFF";
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 0,
+  });
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+
+  samples = ["#FFFFFF", "#000000"];
+  now = 1;
+  assert.throws(() => ctrl.tick(), /rejected: invalid_input/);
+  assert.equal(blackResolves, 1, "the worst-sample candidate is prepared before failure");
+  assert.deepEqual(el.props, beforeDom);
+  assert.deepEqual(ctrl.current(), beforeCurrent);
+});
+
+test("an in-flight ease does not advance before the tick's fallible checks succeed", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let now = 0;
+  let resolves = 0;
+  let rechecks = 0;
+  const colors = {
+    resolveTheme() {
+      resolves++;
+      return oneRole(resolves === 1 ? "#000000" : "#FFFFFF", 100);
+    },
+    recheckContrast() {
+      rechecks++;
+      if (rechecks === 1) return [0, 1];
+      throw new Error("internal_error: recheck failed");
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+  });
+
+  bg = "#000000";
+  now = 1;
+  ctrl.tick();
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+  now = 51;
+
+  assert.throws(() => ctrl.tick(), /recheck failed/);
+  assert.deepEqual(el.props, beforeDom);
+  assert.deepEqual(ctrl.current(), beforeCurrent);
+});
+
+test("a transient recheck failure retries the same changed sample", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let rechecks = 0;
+  const colors = {
+    resolveTheme() {
+      return oneRole("#111111", 100);
+    },
+    recheckContrast() {
+      rechecks++;
+      if (rechecks === 1) throw new Error("internal_error: transient recheck");
+      return [100, 1];
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  bg = "#FEFEFE";
+  assert.throws(() => ctrl.tick(), /transient recheck/);
+  ctrl.tick();
+  assert.equal(rechecks, 2, "failed evidence must not mark the sample as processed");
+});
+
+test("the internal frame loop can restart after a transient tick failure", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let rechecks = 0;
+  let nextFrameId = 1;
+  const frames = [];
+  const win = {
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return nextFrameId++;
+    },
+    cancelAnimationFrame() {},
+  };
+  const colors = {
+    resolveTheme() {
+      return oneRole("#111111", 100);
+    },
+    recheckContrast() {
+      rechecks++;
+      if (rechecks === 1) throw new Error("internal_error: transient recheck");
+      return [100, 1];
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => 1,
+    win,
+  });
+
+  bg = "#FEFEFE";
+  ctrl.start();
+  assert.equal(frames.length, 1);
+  assert.throws(() => frames.shift()(), /transient recheck/);
+  ctrl.start();
+  assert.equal(frames.length, 1, "start must enqueue a new frame after fail-stop");
+  frames.shift()();
+  assert.equal(rechecks, 2);
+  ctrl.stop();
+});
+
+test("the internal frame loop can restart after the host rejects a requeue", () => {
+  const el = fakeElement();
+  let requests = 0;
+  let nextFrameId = 1;
+  const frames = [];
+  const win = {
+    requestAnimationFrame(callback) {
+      requests++;
+      if (requests === 2) throw new Error("host frame queue unavailable");
+      frames.push(callback);
+      return nextFrameId++;
+    },
+    cancelAnimationFrame() {},
+  };
+  const ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win,
+  });
+
+  ctrl.start();
+  assert.throws(() => frames.shift()(), /host frame queue unavailable/);
+  ctrl.start();
+  assert.equal(frames.length, 1, "start must recover after a failed host requeue");
+  ctrl.stop();
+});
+
+test("a reentrant stop and start inside tick owns exactly one next frame", () => {
+  const el = fakeElement();
+  const frames = [];
+  let nextFrameId = 1;
+  let reenter = false;
+  let ctrl;
+  const win = {
+    requestAnimationFrame(callback) {
+      const frame = { id: nextFrameId++, callback };
+      frames.push(frame);
+      return frame.id;
+    },
+    cancelAnimationFrame(id) {
+      const index = frames.findIndex((frame) => frame.id === id);
+      if (index >= 0) frames.splice(index, 1);
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "light",
+    background() {
+      if (reenter) {
+        reenter = false;
+        ctrl.stop();
+        ctrl.start();
+      }
+      return "#FFFFFF";
+    },
+    target: el,
+    now: () => 1,
+    win,
+  });
+
+  ctrl.start();
+  const current = frames.shift();
+  reenter = true;
+  current.callback();
+  assert.equal(frames.length, 1, "the restarted epoch must own exactly one frame");
+  ctrl.stop();
+});
+
+test("a stale frame surviving a failed cancel cannot capture a restarted loop", () => {
+  const el = fakeElement();
+  const frames = [];
+  let nextFrameId = 1;
+  let failCancel = true;
+  const win = {
+    requestAnimationFrame(callback) {
+      const frame = { id: nextFrameId++, callback };
+      frames.push(frame);
+      return frame.id;
+    },
+    cancelAnimationFrame() {
+      if (failCancel) {
+        failCancel = false;
+        throw new Error("host cancel failed");
+      }
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win,
+  });
+
+  ctrl.start();
+  assert.throws(() => ctrl.stop(), /host cancel failed/);
+  ctrl.start();
+  const stale = frames.shift();
+  stale.callback();
+  assert.equal(frames.length, 1, "a stale callback must not schedule beside the new epoch");
+  ctrl.stop();
+});
+
+test("stop and restart preserve an in-flight ease until its canonical target", () => {
+  const frames = [];
+  const h = harness({
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+    win: {
+      requestAnimationFrame(callback) {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelAnimationFrame() {},
+    },
+  });
+  h.colors.setResolve(oneRole("#FFFFFF", 100));
+  h.colors.setRecheckLc([0]);
+  h.setBg("#000000");
+  h.setNow(1001);
+  h.ctrl.tick();
+
+  h.colors.setRecheckLc([100]);
+  h.setNow(1051);
+  h.ctrl.tick();
+  const midpoint = h.el.props.get("--lab-label-primary");
+  assert.notEqual(midpoint, "#000000");
+  assert.notEqual(midpoint, "#FFFFFF");
+
+  h.ctrl.stop();
+  h.setNow(1151);
+  h.ctrl.start();
+  frames.shift()();
+  assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
+  assert.equal(h.ctrl.current()["--lab-label-primary"], "#FFFFFF");
+  h.ctrl.stop();
+});
+
+test("a later tick repairs the canonical DOM after a CSSOM write failure", () => {
+  const props = new Map();
+  let rejectNextWrite = false;
+  const el = {
+    props,
+    style: {
+      get length() {
+        return props.size;
+      },
+      item: (index) => [...props.keys()][index] ?? null,
+      setProperty(key, value) {
+        if (rejectNextWrite) {
+          rejectNextWrite = false;
+          throw new Error("host CSSOM write failed");
+        }
+        props.set(key, value);
+      },
+      removeProperty: (key) => props.delete(key),
+    },
+  };
+  const colors = {
+    resolveTheme(_background, theme) {
+      return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100);
+    },
+    recheckContrast() {
+      return [100, 1];
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  rejectNextWrite = true;
+  assert.throws(() => ctrl.setTheme("dark"), /host CSSOM write failed/);
+  assert.equal(el.props.has("--lab-label-primary"), false, "the host failed after clear");
+  assert.equal(ctrl.current()["--lab-label-primary"], "#FFFFFF");
+
+  ctrl.tick();
+  assert.equal(el.props.get("--lab-label-primary"), "#FFFFFF");
+});
+
 test("stable Glow class changes re-resolve and clear/restore satellites synchronously", () => {
   const el = fakeElement();
   let bg = "#FFFFFF";

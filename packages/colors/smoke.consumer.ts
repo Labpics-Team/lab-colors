@@ -29,6 +29,13 @@ const requireFailure = (_role: FailureRole): void => {};
 requireFailure({
   kind: "failure",
   cssVar: "--lab-example",
+  category: "unreachable",
+  code: "exceeds_range",
+  message: "physical output range exhausted",
+});
+requireFailure({
+  kind: "failure",
+  cssVar: "--lab-example",
   category: "unresolved",
   code: "bounded_search_exhausted",
   message: "bounded search exhausted",
@@ -41,6 +48,25 @@ requireFailure({
   code: "x",
   message: "x",
 });
+requireFailure({
+  kind: "failure",
+  cssVar: "--lab-example",
+  // @ts-expect-error rejected closes the whole resolve and cannot be role data.
+  category: "rejected",
+  code: "invalid_input",
+  message: "x",
+});
+requireFailure({
+  kind: "failure",
+  cssVar: "--lab-example",
+  // @ts-expect-error unsupported closes the whole resolve and cannot be role data.
+  category: "unsupported",
+  code: "gamut_unsupported",
+  message: "x",
+});
+
+const admittedFailureCategory: FailureCategory = "unreachable";
+void admittedFailureCategory;
 
 declare const glowDeterminateCommon: GlowDeterminateRoleBase;
 const requireGlowDeterminate = (_role: GlowDeterminateRole): void => {};
@@ -245,13 +271,23 @@ async function consume(clientConfigJson: string): Promise<void> {
     colors: engine,
     theme,
     background: () => effectiveBackground(surface, { fallback: "#101012" }),
+    onError(error: unknown) {
+      void error;
+    },
   });
-  const applied: ResolvedTheme | null = controller.refresh();
+  const applied: ResolvedTheme = controller.refresh();
   void applied;
   controller.setTheme("dark");
   const bgHex: string = controller.background();
   void bgHex;
   controller.stop();
+
+  watchTheme(surface, {
+    colors: engine,
+    theme,
+    // @ts-expect-error asynchronous observer errors require a callback.
+    onError: "invalid",
+  });
 
   // Current adaptive API remains a legacy characterised controller. Its types
   // are smoke-tested here without promoting it to a universal safety proof.

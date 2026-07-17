@@ -1,15 +1,14 @@
-//! Semantic role table: a named contrast contract resolved from any background
-//! in one [`solve`] call.
+//! Contextual resolver for compiled client-owned colour contracts.
 //!
 //! Where [`solve`](crate::solve()) answers "what colour meets *this* signed
 //! contrast against *this* background", this module answers the product-level
 //! question one layer up: "give me the whole set of named colours a UI needs
-//! against this background". A `Role` is a stable string key plus a recipe for
-//! a [`Contract`]; `RoleTable` is the default recipe set, overridable per role;
-//! `resolve` solves one role and `resolve_set` solves the whole table in a
-//! single sweep. Serialising the result to CSS custom properties is the
-//! runtime-engine chapter's job — this module returns a structured
-//! `role → Solved` map and nothing else.
+//! against this background". [`NamedRoleTable`] carries opaque client IDs plus
+//! core-owned recipes; [`resolve_named_set`] resolves them in declaration order.
+//! Admission is atomic: only role-local `unreachable | unresolved` outcomes can
+//! inhabit a successful set, while rejected, unsupported or internal provenance
+//! returns [`ResolveSetError`] without a partial vector. Serialising the result
+//! is the binding's responsibility.
 //!
 //! # Polarity is read from the background, never from the role
 //!
@@ -47,8 +46,8 @@
 //!    upper half — the perceptually weaker side there, and the one that made
 //!    `#0078D4` emit black against the Fluent convention of white. When *neither*
 //!    polarity can clear the floor (a true mid-grey with no readable side), the
-//!    side that comes *closest* is chosen, so the [`SolveFailure`] a role surfaces
-//!    carries the honest best-case `max_ratio`, not a worse one.
+//!    side that comes *closest* is chosen, so an admitted [`RoleFailure`] retains
+//!    the honest best-case `max_ratio` evidence, not a worse one.
 //!
 //! Because the criterion is VC-independent, a role's polarity never flips between
 //! the light and dim viewing conditions for the same background — no per-theme
@@ -151,7 +150,8 @@
 use crate::ladder::LadderTint;
 use crate::scale;
 use crate::solve::{
-    self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureCategory, Solved,
+    self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureBoundary,
+    SolveFailureCategory, Solved,
 };
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
@@ -1588,14 +1588,183 @@ impl Default for RoleTable {
     }
 }
 
-/// The outcome of resolving one role: a solved colour, an honest zero, a typed
-/// numerical indeterminacy, or a failure reason.
+/// The only failure categories a successfully admitted role may carry.
 ///
-/// Physical unreachability is surfaced per role, never masked — a role on an extreme
-/// background (e.g. muted text on a mid-grey that cannot supply enough contrast)
-/// returns [`SolveFailure`], it is not silently clipped to a wrong colour.
-/// [`SolveFailure::InternalInvariant`] has different provenance: bindings must
-/// turn it into a whole-call internal/incompatible-contract error.
+/// Rejected requests, unsupported capabilities and internal drift are deliberately
+/// absent: [`resolve_named_set`] returns those as [`ResolveSetError`] for the whole
+/// set, so a consumer cannot mistake them for one missing colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleFailureCategory {
+    /// The declared physical/output domain proves that no solution exists.
+    Unreachable,
+    /// A bounded algorithm ended without proving reachability either way.
+    Unresolved,
+}
+
+impl RoleFailureCategory {
+    /// Stable wire spelling used by bindings.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreachable => SolveFailureCategory::Unreachable.as_str(),
+            Self::Unresolved => SolveFailureCategory::Unresolved.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BoundaryFailure {
+    reason: SolveFailure,
+    boundary: SolveFailureBoundary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RoleFailureState {
+    Unreachable(BoundaryFailure),
+    Unresolved(BoundaryFailure),
+}
+
+/// An admitted per-role failure from the core's single
+/// [`SolveFailure::boundary`] classification.
+///
+/// Fields and constructors are private by design: only the final set-admission
+/// pass can create this value, and that pass accepts exactly `unreachable` or
+/// `unresolved`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoleFailure {
+    state: RoleFailureState,
+}
+
+impl RoleFailure {
+    const fn evidence(&self) -> &BoundaryFailure {
+        match &self.state {
+            RoleFailureState::Unreachable(evidence) | RoleFailureState::Unresolved(evidence) => {
+                evidence
+            }
+        }
+    }
+
+    /// The narrowed semantic category of this role-local failure.
+    pub const fn category(&self) -> RoleFailureCategory {
+        match &self.state {
+            RoleFailureState::Unreachable(_) => RoleFailureCategory::Unreachable,
+            RoleFailureState::Unresolved(_) => RoleFailureCategory::Unresolved,
+        }
+    }
+
+    /// Core-owned stable machine code.
+    pub const fn code(&self) -> &'static str {
+        self.evidence().boundary.code()
+    }
+
+    /// Structured solver evidence carried by this admitted failure.
+    pub const fn reason(&self) -> &SolveFailure {
+        &self.evidence().reason
+    }
+}
+
+impl core::fmt::Display for RoleFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.reason().fmt(f)
+    }
+}
+
+impl std::error::Error for RoleFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.reason())
+    }
+}
+
+/// Why resolving an already-compiled set failed atomically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveSetErrorKind {
+    /// A request value was outside its declared domain.
+    Rejected,
+    /// The request requires a capability this resolver does not implement.
+    Unsupported,
+    /// Core-produced state violated an internal postcondition.
+    Internal,
+}
+
+impl ResolveSetErrorKind {
+    /// Stable diagnostic spelling used by bindings for whole-call failures.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rejected => SolveFailureCategory::Rejected.as_str(),
+            Self::Unsupported => SolveFailureCategory::Unsupported.as_str(),
+            Self::Internal => "internal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ResolveSetErrorState {
+    Rejected(BoundaryFailure),
+    Unsupported(BoundaryFailure),
+    Internal(SolveFailure),
+}
+
+/// Whole-set failure from [`resolve_named_set`].
+///
+/// Rejected requests, unsupported capabilities and internal drift close the
+/// whole call. Constructors are private; ordinary admission shares
+/// [`SolveFailure::boundary`] with [`RoleFailure`], while [`Self::kind`] and
+/// [`Self::code`] remain the authoritative whole-call classification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolveSetError {
+    state: ResolveSetErrorState,
+}
+
+impl ResolveSetError {
+    /// The narrowed whole-call category.
+    pub const fn kind(&self) -> ResolveSetErrorKind {
+        match &self.state {
+            ResolveSetErrorState::Rejected(_) => ResolveSetErrorKind::Rejected,
+            ResolveSetErrorState::Unsupported(_) => ResolveSetErrorKind::Unsupported,
+            ResolveSetErrorState::Internal(_) => ResolveSetErrorKind::Internal,
+        }
+    }
+
+    /// Core-owned stable machine code for rejected/unsupported failures.
+    /// Internal drift intentionally has no public solver code.
+    pub const fn code(&self) -> Option<&'static str> {
+        match &self.state {
+            ResolveSetErrorState::Rejected(evidence)
+            | ResolveSetErrorState::Unsupported(evidence) => Some(evidence.boundary.code()),
+            ResolveSetErrorState::Internal(_) => None,
+        }
+    }
+
+    /// Structured source failure for diagnostics and exact evidence fields.
+    pub const fn reason(&self) -> &SolveFailure {
+        match &self.state {
+            ResolveSetErrorState::Rejected(evidence)
+            | ResolveSetErrorState::Unsupported(evidence) => &evidence.reason,
+            ResolveSetErrorState::Internal(reason) => reason,
+        }
+    }
+}
+
+impl core::fmt::Display for ResolveSetError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.reason().fmt(f)
+    }
+}
+
+impl std::error::Error for ResolveSetError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.reason())
+    }
+}
+
+/// Internal role state before the whole set has passed failure admission.
+type PendingResolution = Result<Resolved, SolveFailure>;
+
+/// The outcome of resolving one admitted role: a solved colour, an honest zero,
+/// a typed numerical indeterminacy, or a role-local failure.
+///
+/// Proved unreachability and unresolved bounded search are surfaced per role,
+/// never masked. Rejected, unsupported and internal provenance cannot inhabit
+/// this type; it closes [`resolve_named_set`] through [`ResolveSetError`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Resolved {
@@ -1638,11 +1807,43 @@ pub enum Resolved {
     Material(MaterialResolved),
     /// The honest zero of the `Role::None` token: no colour, no contrast.
     None,
-    /// A typed solve failure. Its core-owned category distinguishes a proved
-    /// unreachable contract, an unresolved bounded search, a rejected request,
-    /// and an unsupported capability. Internal invariants fail the whole call
-    /// closed at every binding.
-    Failure(SolveFailure),
+    /// A proved-unreachable contract or unresolved bounded search. Other
+    /// failure provenance is a [`ResolveSetError`] for the whole set.
+    Failure(RoleFailure),
+}
+
+/// Admit one raw role result into the terminal set surface.
+///
+/// This is the only place where broad solver failures are partitioned between
+/// role-local data and whole-call errors. It reads the existing boundary
+/// descriptor; it does not own a second variant-to-category table.
+fn classify_role_failure(reason: SolveFailure) -> Result<RoleFailure, ResolveSetError> {
+    match reason.boundary() {
+        Some(boundary) => match boundary.category() {
+            SolveFailureCategory::Unreachable => Ok(RoleFailure {
+                state: RoleFailureState::Unreachable(BoundaryFailure { reason, boundary }),
+            }),
+            SolveFailureCategory::Unresolved => Ok(RoleFailure {
+                state: RoleFailureState::Unresolved(BoundaryFailure { reason, boundary }),
+            }),
+            SolveFailureCategory::Rejected => Err(ResolveSetError {
+                state: ResolveSetErrorState::Rejected(BoundaryFailure { reason, boundary }),
+            }),
+            SolveFailureCategory::Unsupported => Err(ResolveSetError {
+                state: ResolveSetErrorState::Unsupported(BoundaryFailure { reason, boundary }),
+            }),
+        },
+        None => Err(ResolveSetError {
+            state: ResolveSetErrorState::Internal(reason),
+        }),
+    }
+}
+
+fn admit_resolution(pending: PendingResolution) -> Result<Resolved, ResolveSetError> {
+    match pending {
+        Ok(resolved) => Ok(resolved),
+        Err(reason) => classify_role_failure(reason).map(Resolved::Failure),
+    }
 }
 
 /// Резолв полупрозрачной роли: пара `(tint, α)` для прямой эмиссии `rgba(...)`
@@ -2245,9 +2446,14 @@ impl ResolveContext {
 /// * `vc` — viewing conditions (light vs dim/dark); pass the same VC the theme
 ///   resolves under.
 #[cfg(test)]
-pub fn resolve(bg: &BgInput, role: Role, table: &RoleTable, vc: &ViewingConditions) -> Resolved {
+pub fn resolve(
+    bg: &BgInput,
+    role: Role,
+    table: &RoleTable,
+    vc: &ViewingConditions,
+) -> Result<Resolved, ResolveSetError> {
     let ctx = ResolveContext::new(bg, vc);
-    resolve_in(bg, role, table, vc, &ctx)
+    admit_resolution(resolve_in(bg, role, table, vc, &ctx))
 }
 
 /// Resolve one role through an already-derived [`ResolveContext`], so a whole set
@@ -2266,7 +2472,7 @@ fn resolve_in(
     table: &RoleTable,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) -> Resolved {
+) -> PendingResolution {
     resolve_spec_in(bg, &table.spec(role), table.chroma(), vc, ctx)
 }
 
@@ -2285,9 +2491,9 @@ fn resolve_spec_in(
     chroma: RoleChroma,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) -> Resolved {
+) -> PendingResolution {
     let contract = match *spec {
-        RoleSpec::Zero => return Resolved::None,
+        RoleSpec::Zero => return Ok(Resolved::None),
         RoleSpec::Anchor(anchor) => {
             // Цветной лейбл (M1 ch5c): тот же контракт уровня, решённый в чистом
             // оттенке семьи. Нейтральный (`hue == None`) идёт прежним путём
@@ -2295,10 +2501,7 @@ fn resolve_spec_in(
             if let Some(hue_tint) = anchor.hue() {
                 return resolve_hued_anchor(bg, anchor, hue_tint, vc, ctx);
             }
-            match ctx.anchored_contract(anchor) {
-                Ok(c) => c,
-                Err(reason) => return Resolved::Failure(reason),
-            }
+            ctx.anchored_contract(anchor)?
         }
         RoleSpec::DecorativeDj { magnitude_dj } => {
             // dJ' has its own analytic solver (J' offset, not an Lc contract); it
@@ -2307,15 +2510,14 @@ fn resolve_spec_in(
             // ограниченного обхода, кандидат с минимальной ошибкой среди
             // просмотренных возвращается с `compressed`; флаг не утверждает
             // оптимум по всему гамуту.
-            return match resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc) {
-                Ok(d) => Resolved::Color {
+            return resolve_dj(bg, magnitude_dj.for_vc(vc), ctx.polarity, chroma, vc).map(|d| {
+                Resolved::Color {
                     solved: d.solved,
                     compressed: d.degraded,
                     achieved_dj: Some(d.achieved_dj),
                     hue_vanished: false,
-                },
-                Err(reason) => Resolved::Failure(reason),
-            };
+                }
+            });
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
         RoleSpec::PairFill { tint } => {
@@ -2384,12 +2586,12 @@ fn resolve_spec_in(
             // одна для обоих атомарных законных исходов.
             let assemble = |g: &crate::glow::GlowSolve,
                             outcome: crate::glow::GlowDecisionOutcomeV1|
-             -> Resolved {
+             -> PendingResolution {
                 let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc)
                 {
                     Ok(pair) => pair,
                     Err(e) => {
-                        return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                        return Err(SolveFailure::InternalInvariant(format!(
                             "generated Glow layer recipe was rejected: {e}"
                         )));
                     }
@@ -2402,12 +2604,12 @@ fn resolve_spec_in(
                 ) {
                     Ok(measurement) => measurement,
                     Err(e) => {
-                        return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                        return Err(SolveFailure::InternalInvariant(format!(
                             "generated Glow core measurement was rejected: {e}"
                         )));
                     }
                 };
-                Resolved::Glow(GlowResolved {
+                Ok(Resolved::Glow(GlowResolved {
                     core_hex,
                     halo_hex,
                     alpha: g.alpha(),
@@ -2426,7 +2628,7 @@ fn resolve_spec_in(
                     decision_outcome: outcome,
                     halo_composite_certificate: g.composite_certificate().clone(),
                     core_composite_certificate: core_measurement.certificate,
-                })
+                }))
             };
             return match crate::glow::solve_screen_alpha_for_dj(
                 &halo_hex,
@@ -2436,7 +2638,7 @@ fn resolve_spec_in(
                 vc,
             ) {
                 Ok(crate::numerics::NumericalDecisionV1::Indeterminate { site_id, evidence }) => {
-                    Resolved::GlowIndeterminate(GlowIndeterminateResolved {
+                    Ok(Resolved::GlowIndeterminate(GlowIndeterminateResolved {
                         source_hex: halo_hex,
                         target_dj: step.target_dj(),
                         decision_profile: crate::glow::GlowDecisionProfileV1::from_execution_mode(
@@ -2444,7 +2646,7 @@ fn resolve_spec_in(
                         ),
                         site_id,
                         evidence,
-                    })
+                    }))
                 }
                 Ok(crate::numerics::NumericalDecisionV1::Determinate {
                     value: g,
@@ -2466,7 +2668,7 @@ fn resolve_spec_in(
                         provenance,
                     },
                 ),
-                Err(e) => Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                Err(e) => Err(SolveFailure::InternalInvariant(format!(
                     "generated Glow solve request was rejected: {e}"
                 ))),
             };
@@ -2506,7 +2708,7 @@ fn resolve_spec_in(
                         // семейный материал на нём невыразим. Честный отказ, НЕ тихая
                         // подмена нейтральным тоном при флаге `family_hued=true`.
                         RoleChroma::Neutral => {
-                            return Resolved::Failure(SolveFailure::InvalidInput(
+                            return Err(SolveFailure::InvalidInput(
                                 "семейный материал требует хроматического подтона \
                                  таблицы (curve/tinted), у таблицы — ахроматический"
                                     .to_string(),
@@ -2527,14 +2729,8 @@ fn resolve_spec_in(
         }
     };
 
-    let interval = match &ctx.interval {
-        Ok(iv) => *iv,
-        Err(reason) => return Resolved::Failure(reason.clone()),
-    };
-    match solve_with_chroma(bg, contract, chroma, vc, interval) {
-        Ok(solved) => Resolved::color(solved),
-        Err(reason) => Resolved::Failure(reason),
-    }
+    let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
+    solve_with_chroma(bg, contract, chroma, vc, interval).map(Resolved::color)
 }
 
 /// Лестница: rgba(`tint`, `alpha`) эмитится напрямую; его композит на фоне
@@ -2592,14 +2788,14 @@ fn resolve_rgba_direct(
     alpha: f64,
     bg: &BgInput,
     vc: &ViewingConditions,
-) -> Resolved {
+) -> PendingResolution {
     if !encoded_rgb_valid(tint_encoded) {
-        return Resolved::Failure(SolveFailure::InternalInvariant(
+        return Err(SolveFailure::InternalInvariant(
             "validated/generated rgba tint left encoded sRGB domain".into(),
         ));
     }
     if !role_alpha_valid(alpha) {
-        return Resolved::Failure(SolveFailure::InvalidInput(
+        return Err(SolveFailure::InvalidInput(
             "rgba alpha must be finite and inside (0, 1]".into(),
         ));
     }
@@ -2639,7 +2835,7 @@ fn resolve_hued_anchor(
     hue_tint: crate::ladder::LadderTint,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) -> Resolved {
+) -> PendingResolution {
     resolve_hued_anchor_from_encoded_source(bg, anchor, hue_tint.for_vc(vc), vc, ctx)
 }
 
@@ -2659,15 +2855,9 @@ fn resolve_hued_anchor_from_encoded_source(
     source_encoded: [f64; 3],
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) -> Resolved {
-    let contract = match ctx.anchored_contract(anchor) {
-        Ok(c) => c,
-        Err(reason) => return Resolved::Failure(reason),
-    };
-    let interval = match &ctx.interval {
-        Ok(iv) => *iv,
-        Err(reason) => return Resolved::Failure(reason.clone()),
-    };
+) -> PendingResolution {
+    let contract = ctx.anchored_contract(anchor)?;
+    let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     let hue_deg =
         crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(source_encoded));
     match solve::solve_in(
@@ -2682,14 +2872,14 @@ fn resolve_hued_anchor_from_encoded_source(
             let hue_vanished = solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR;
             // Тот же смысл, что у нейтрали: пол перекрыл перцептивную цель.
             let compressed = solved.floor_override();
-            Resolved::Color {
+            Ok(Resolved::Color {
                 solved,
                 compressed,
                 achieved_dj: Option::None,
                 hue_vanished,
-            }
+            })
         }
-        Err(reason) => Resolved::Failure(reason),
+        Err(reason) => Err(reason),
     }
 }
 
@@ -2711,9 +2901,9 @@ fn resolve_solid_with_ui_floor(
     bg: &BgInput,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) -> Resolved {
+) -> PendingResolution {
     if !encoded_rgb_valid(tint_encoded) {
-        return Resolved::Failure(SolveFailure::InternalInvariant(
+        return Err(SolveFailure::InternalInvariant(
             "validated/generated solid tint left encoded sRGB domain".into(),
         ));
     }
@@ -2733,10 +2923,7 @@ fn resolve_solid_with_ui_floor(
         return resolve_rgba_direct(tint_encoded, 1.0, bg, vc);
     }
     // Нелегально: минимальный сдвиг по кривой семьи до пола.
-    let interval = match &ctx.interval {
-        Ok(iv) => *iv,
-        Err(reason) => return Resolved::Failure(reason.clone()),
-    };
+    let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     let tint_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint_q);
     let hue_deg = crate::accent::oklab_hue_of(&tint_hex);
     // Естественный знаковый Lc якоря и доля его хромы на собственной светлоте —
@@ -2773,11 +2960,11 @@ fn resolve_solid_with_ui_floor(
     ) {
         Ok(solved) => match crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) {
             Ok(shifted) => finish_rgba(shifted, 1.0, bg_encoded, vc, false, true),
-            Err(reason) => Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            Err(reason) => Err(SolveFailure::InternalInvariant(format!(
                 "solver emitted an invalid sRGB hex for solid-floor role: {reason}"
             ))),
         },
-        Err(reason) => Resolved::Failure(reason),
+        Err(reason) => Err(reason),
     }
 }
 
@@ -2844,8 +3031,8 @@ fn nested_foreground_component() -> Result<
 }
 
 /// Public PairLabel opacity rejected by the graph's SSOT validator.
-fn pair_label_opacity_input_error(error: &str) -> Resolved {
-    Resolved::Failure(SolveFailure::InvalidInput(format!(
+fn pair_label_opacity_input_error(error: &str) -> PendingResolution {
+    Err(SolveFailure::InvalidInput(format!(
         "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
     )))
 }
@@ -2887,7 +3074,7 @@ pub(crate) fn resolve_pair_label(
     surface_alpha_light: f64,
     surface_alpha_dark: f64,
     vc: &ViewingConditions,
-) -> Resolved {
+) -> PendingResolution {
     let alpha = if vc.is_dark_theme() {
         surface_alpha_dark
     } else {
@@ -2902,7 +3089,7 @@ pub(crate) fn resolve_pair_label(
     let source_rgb = match crate::alpha::encoded_to_srgb8(tint_q, "tint") {
         Ok(bytes) => bytes,
         Err(error) => {
-            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            return Err(SolveFailure::InternalInvariant(format!(
                 "validated PairLabel tint left encoded sRGB domain: {error}"
             )));
         }
@@ -2910,7 +3097,7 @@ pub(crate) fn resolve_pair_label(
     let context_rgb = match crate::alpha::encoded_to_srgb8(bg.encoded_display(), "bg") {
         Ok(bytes) => bytes,
         Err(error) => {
-            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            return Err(SolveFailure::InternalInvariant(format!(
                 "validated background left encoded sRGB domain: {error}"
             )));
         }
@@ -2920,7 +3107,7 @@ pub(crate) fn resolve_pair_label(
         // Статическая спека не компилируется только при внутреннем дефекте —
         // типизированный отказ честнее паники (RoleSpec публичен).
         Err(defect) => {
-            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            return Err(SolveFailure::InternalInvariant(format!(
                 "внутренний дефект компиляции компонента тинт-поверхности: {defect:?}"
             )));
         }
@@ -2940,13 +3127,13 @@ pub(crate) fn resolve_pair_label(
         // недостижимы (bindings собраны из объявленных handles); отказ
         // остаётся типизированным вместо паники.
         Err(defect) => {
-            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            return Err(SolveFailure::InternalInvariant(format!(
                 "внутренний дефект исполнения компонента тинт-поверхности: {defect:?}"
             )));
         }
     };
     let Some(occurrence) = evaluation.occurrence(NESTED_FOREGROUND) else {
-        return Resolved::Failure(SolveFailure::InternalInvariant(
+        return Err(SolveFailure::InternalInvariant(
             "внутренний дефект компонента тинт-поверхности: occurrence отсутствует".into(),
         ));
     };
@@ -2955,17 +3142,14 @@ pub(crate) fn resolve_pair_label(
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
         // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
         // отказ, чем правдоподобный мусор (RoleSpec публичен).
-        return Resolved::Failure(SolveFailure::InternalInvariant(
+        return Err(SolveFailure::InternalInvariant(
             "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
         ));
     };
     // Свежий контекст ПОВЕРХНОСТИ: полярность/интервал/макс-контраст берутся от
     // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
-    let anchor = match TextAnchor::new(fraction, floor) {
-        Ok(anchor) => anchor,
-        Err(reason) => return Resolved::Failure(reason),
-    };
+    let anchor = TextAnchor::new(fraction, floor)?;
     // Identity-ребро occurrence: foreground решается из ВОЗВРАЩЁННОГО
     // источника (byte → byte/255 точно), а не повторного чтения `tint` —
     // иначе объявленное ребро идентичности было бы декоративным.
@@ -2989,7 +3173,7 @@ pub(crate) fn resolve_pair_label_legacy_oracle(
     surface_alpha_light: f64,
     surface_alpha_dark: f64,
     vc: &ViewingConditions,
-) -> Resolved {
+) -> PendingResolution {
     let alpha = if vc.is_dark_theme() {
         surface_alpha_dark
     } else {
@@ -3000,21 +3184,18 @@ pub(crate) fn resolve_pair_label_legacy_oracle(
         match crate::alpha::composite_hex_from_encoded(tint_q, alpha, bg.encoded_display()) {
             Ok(hex) => hex,
             Err(error) => {
-                return Resolved::Failure(SolveFailure::InvalidInput(format!(
+                return Err(SolveFailure::InvalidInput(format!(
                     "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
                 )));
             }
         };
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
-        return Resolved::Failure(SolveFailure::InternalInvariant(
+        return Err(SolveFailure::InternalInvariant(
             "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
         ));
     };
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
-    let anchor = match TextAnchor::new(fraction, floor) {
-        Ok(anchor) => anchor,
-        Err(reason) => return Resolved::Failure(reason),
-    };
+    let anchor = TextAnchor::new(fraction, floor)?;
     resolve_hued_anchor(&surface_bg, anchor, tint, vc, &surface_ctx)
 }
 
@@ -3026,17 +3207,17 @@ fn resolve_rgba_inverted(
     requested_alpha: f64,
     bg: &BgInput,
     vc: &ViewingConditions,
-) -> Resolved {
+) -> PendingResolution {
     // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен. Без него
     // недоменная спека, собранная в обход валидатора конфига, дошла бы до
     // численного пути вместо честного типизированного исхода.
     if !encoded_rgb_valid(solid_encoded) {
-        return Resolved::Failure(SolveFailure::InternalInvariant(
+        return Err(SolveFailure::InternalInvariant(
             "validated alpha-analog solid left encoded sRGB domain".into(),
         ));
     }
     if !role_alpha_valid(requested_alpha) {
-        return Resolved::Failure(SolveFailure::InvalidInput(
+        return Err(SolveFailure::InvalidInput(
             "alpha-analog alpha must be finite and inside (0, 1]".into(),
         ));
     }
@@ -3046,7 +3227,7 @@ fn resolve_rgba_inverted(
         match crate::alpha::resolve_alpha_analog_srgb8(solid_q, requested_alpha, bg_encoded) {
             Ok(analog) => analog,
             Err(error) => {
-                return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                return Err(SolveFailure::InternalInvariant(format!(
                     "validated alpha-analog resolver violated its total-domain contract: {error}"
                 )));
             }
@@ -3071,7 +3252,7 @@ fn finish_rgba(
     vc: &ViewingConditions,
     alpha_coerced: bool,
     floor_coerced: bool,
-) -> Resolved {
+) -> PendingResolution {
     use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
     // Единый байтовый домен SSOT нужен и для hex, и для обеих метрик:
     // нормализация `(byte/255)·255` способна изменить граничное значение
@@ -3080,7 +3261,7 @@ fn finish_rgba(
         match crate::alpha::composite_hex_from_encoded(tint_encoded, alpha, bg_encoded) {
             Ok(hex) => hex,
             Err(error) => {
-                return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                return Err(SolveFailure::InternalInvariant(format!(
                     "rgba-композит вне encoded-sRGB8 reference-домена: {error}"
                 )));
             }
@@ -3088,7 +3269,7 @@ fn finish_rgba(
     let composite_q = match srgb_encoded_from_hex(&composite_hex) {
         Ok(value) => value,
         Err(reason) => {
-            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            return Err(SolveFailure::InternalInvariant(format!(
                 "rgba formatter emitted an invalid sRGB hex: {reason}"
             )));
         }
@@ -3109,7 +3290,7 @@ fn finish_rgba(
     // 8-битным hex, из которых строится сертификат. Фон квантуется тем же
     // форматтером; применимость к рендереру проверяется отдельно (#241).
     let composite_distinct = composite_hex != hex_from_srgb_encoded(bg_encoded);
-    Resolved::Translucent(TranslucentResolved {
+    Ok(Resolved::Translucent(TranslucentResolved {
         tint_hex: hex_from_srgb_encoded(tint_encoded),
         alpha,
         composite_hex,
@@ -3118,7 +3299,7 @@ fn finish_rgba(
         composite_distinct,
         alpha_coerced,
         floor_coerced,
-    })
+    }))
 }
 
 /// Резолв двухслойного материала (whitepaper §3.7): тон-база `02` на целевом |ΔJ'| в оттенке
@@ -3138,23 +3319,20 @@ fn resolve_material(
     chroma: RoleChroma,
     family_hued: bool,
     vc: &ViewingConditions,
-) -> Resolved {
+) -> PendingResolution {
     use crate::spaces::srgb::hex_from_srgb_encoded;
     // Пол читаемости обязателен: у материала без пола нет цели для вывода α.
     let floor_ratio = match floor.min_ratio() {
         Some(r) => r,
         None => {
-            return Resolved::Failure(SolveFailure::InvalidInput(
+            return Err(SolveFailure::InvalidInput(
                 "material-роль требует пол читаемости (aa-text/aa-ui), получен zero-floor"
                     .to_string(),
             ));
         }
     };
     // Тон-база 02: семейно-оттеночная опаковая поверхность на целевом |ΔJ'|.
-    let dj = match resolve_dj(bg, tone_dj, polarity, chroma, vc) {
-        Ok(d) => d,
-        Err(reason) => return Resolved::Failure(reason),
-    };
+    let dj = resolve_dj(bg, tone_dj, polarity, chroma, vc)?;
     let tone_hex = dj.solved.hex().to_string();
     // Вырождение оттенка семьи у края гамута — только у семейных материалов;
     // нейтраль ахроматична намеренно, не «выродилась».
@@ -3164,7 +3342,7 @@ fn resolve_material(
     let m = match crate::material::solve_material_alpha_hex(&tone_hex, floor_ratio) {
         Ok(m) => m,
         Err(e) => {
-            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+            return Err(SolveFailure::InternalInvariant(format!(
                 "generated Material solve request was rejected: {e}"
             )));
         }
@@ -3173,7 +3351,7 @@ fn resolve_material(
     // замер, что у полупрозрачных ролей; off-grid фон честно квантуется).
     let bg_hex = hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
     let distinct = tone_hex != bg_hex;
-    Resolved::Material(MaterialResolved {
+    Ok(Resolved::Material(MaterialResolved {
         tone_hex,
         alpha: m.alpha(),
         worst_contrast: m.worst_contrast(),
@@ -3185,7 +3363,7 @@ fn resolve_material(
         tone_compressed: dj.degraded,
         hue_vanished,
         distinct,
-    })
+    }))
 }
 
 /// Solve `contract` against `bg` under `chroma`, building the undertone the
@@ -3330,6 +3508,7 @@ pub fn resolve_set(
     // the `#[cfg(test)]` byte-identity oracle for the named path, so the live
     // solve is all it needs.
     resolve_set_live(bg, table, vc)
+        .expect("the cfg(test) built-in oracle must remain an admissible sRGB set")
 }
 
 /// The full solver sweep behind `resolve_set` — the built-in byte-identity
@@ -3339,19 +3518,20 @@ pub(crate) fn resolve_set_live(
     bg: &BgInput,
     table: &RoleTable,
     vc: &ViewingConditions,
-) -> Vec<(Role, Resolved)> {
+) -> Result<Vec<(Role, Resolved)>, ResolveSetError> {
     // Memoize the CIECAM16 forward for the span of this set: viewing conditions
     // are fixed here, so the refine fixed-point and the hierarchy pass that
     // re-measure the same candidate colours hit the cache instead of recomputing
     // (25–33 % of the forwards are exact repeats). Cleared on drop.
     let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
-    let mut set: Vec<(Role, Resolved)> = Role::ALL
-        .iter()
-        .map(|&role| (role, resolve_in(bg, role, table, vc, &ctx)))
-        .collect();
-    enforce_text_hierarchy(&mut set, bg, table, vc, &ctx);
-    set
+    let mut set = Vec::with_capacity(Role::ALL.len());
+    for &role in &Role::ALL {
+        let resolved = admit_resolution(resolve_in(bg, role, table, vc, &ctx))?;
+        set.push((role, resolved));
+    }
+    enforce_text_hierarchy(&mut set, bg, table, vc, &ctx)?;
+    Ok(set)
 }
 
 /// A recipe table keyed by **arbitrary string names**, the config-layer analogue
@@ -3461,6 +3641,22 @@ impl RoleSpec {
         }
     }
 
+    /// Validate the cross-field contract between a recipe and the table-wide
+    /// chroma policy. A family-hued material needs a policy capable of carrying
+    /// hue; accepting it under an achromatic policy would defer invalid input
+    /// into the runtime resolve.
+    fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
+        self.validate_domain()?;
+        if matches!(self, RoleSpec::Material { hue: Some(_), .. })
+            && matches!(chroma, RoleChroma::Neutral)
+        {
+            return Err(
+                "family-hued material requires a chromatic table policy (curve/tinted)".into(),
+            );
+        }
+        Ok(())
+    }
+
     /// WCAG-пол этой спеки — свойство контракта, не резолва: текст/UI-якорь
     /// несёт пол своего [`TextAnchor`] (AaText → 4.5, AaUi → 3.0), все
     /// остальные формы (декоративные, dJ', лестница, альфа-аналог, zero) —
@@ -3498,7 +3694,7 @@ impl NamedRoleTable {
     ) -> Result<Self, SolveFailure> {
         chroma.validate()?;
         for (name, spec) in &entries {
-            spec.validate_domain()
+            spec.validate_with_chroma(chroma)
                 .map_err(|message| SolveFailure::InvalidInput(format!("role {name}: {message}")))?;
         }
         Ok(Self::from_validated_parts(entries, aliases, chroma))
@@ -3575,55 +3771,34 @@ impl NamedRoleTable {
     }
 }
 
-/// Resolve every named role in `table` against `bg` under `vc`, in declaration
-/// order — the string-keyed sibling of `resolve_set`.
+/// Resolve every client-named role in `table` against `bg` under `vc`.
 ///
-/// Each `(name, recipe)` pair resolves through the very same `resolve_spec_in`
-/// physics core the built-in `resolve_set` uses, so a config whose recipes match
-/// the built-in table emits byte-for-byte identical colours (the byte-identity
-/// guarantee ADR-0001 requires of the labui fixture). The returned pairs preserve
-/// declaration order so a serialiser emits stable output.
-///
-/// Unlike `resolve_set`, this takes no O(1) grey/chromatic fast path (those are
-/// keyed on the built-in default table); it is the honest live sweep for an
-/// arbitrary table, followed by the same honest hierarchy-compression pass
-/// (`enforce_named_text_hierarchy`) applied to every declared text ladder.
+/// `Ok` preserves declaration order and may contain only admitted role-local
+/// `unreachable | unresolved` failures. Rejected input, unsupported capability
+/// or internal drift returns [`ResolveSetError`] for the entire call; no partial
+/// vector is observable. Declared text ladders are compressed in place only
+/// after their individual results have passed the same admission boundary.
 pub fn resolve_named_set(
     bg: &BgInput,
     table: &NamedRoleTable,
     vc: &ViewingConditions,
-) -> Vec<(String, Resolved)> {
-    if let Err(reason) = table.chroma.validate() {
-        // Политика общая для всей таблицы. Частичный правдоподобный результат
-        // скрыл бы ошибку вызывающего кода, поэтому каждый объявленный outcome
-        // получает одну и ту же структурированную причину.
-        return table
-            .entries
-            .iter()
-            .map(|(name, _)| (name.clone(), Resolved::Failure(reason.clone())))
-            .collect();
-    }
+) -> Result<Vec<(String, Resolved)>, ResolveSetError> {
     // One CIECAM16 forward-cache for the span of this sweep, mirroring
     // `resolve_set_live`: the curve refine fixed-point and repeated lightnesses
     // across roles hit the cache instead of recomputing.
     let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
-    let mut set: Vec<(String, Resolved)> = table
-        .entries
-        .iter()
-        .map(|(name, spec)| {
-            (
-                name.clone(),
-                resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
-            )
-        })
-        .collect();
+    let mut set = Vec::with_capacity(table.entries.len());
+    for (name, spec) in &table.entries {
+        let resolved = admit_resolution(resolve_spec_in(bg, spec, table.chroma, vc, &ctx))?;
+        set.push((name.clone(), resolved));
+    }
     // Keep every declared text ladder non-strict-but-honest, the string-keyed
     // analogue of the built-in path's hierarchy pass (see
     // [`enforce_named_text_hierarchy`]). A no-op wherever each ladder is already
     // individually reachable (the labui fixture on the golden grid).
-    enforce_named_text_hierarchy(&mut set, table, bg, vc, &ctx);
-    set
+    enforce_named_text_hierarchy(&mut set, table, bg, vc, &ctx)?;
+    Ok(set)
 }
 
 /// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
@@ -3808,7 +3983,7 @@ fn enforce_text_hierarchy(
     table: &RoleTable,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) {
+) -> Result<(), ResolveSetError> {
     let chroma = table.chroma();
 
     // Strongest-first text order; each junior is compared against its senior.
@@ -3855,9 +4030,10 @@ fn enforce_text_hierarchy(
             (Ok(None), senior, junior) => {
                 hierarchy_fallback(senior.map(|solved| (solved, false)), junior, floor)
             }
-            (Err(reason), _, _) => Resolved::Failure(reason),
+            (Err(reason), _, _) => admit_resolution(Err(reason))?,
         };
     }
+    Ok(())
 }
 
 /// The string-keyed analogue of [`enforce_text_hierarchy`]: keep every declared
@@ -3881,7 +4057,7 @@ fn enforce_named_text_hierarchy(
     bg: &BgInput,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) {
+) -> Result<(), ResolveSetError> {
     let entries = table.entries();
     let chroma = table.chroma();
 
@@ -3961,10 +4137,11 @@ fn enforce_named_text_hierarchy(
                 }
                 // No ordered step: copy a legal senior or preserve the legal junior.
                 (Ok(None), senior, junior) => hierarchy_fallback(senior, junior, floor),
-                (Err(reason), _, _) => Resolved::Failure(reason),
+                (Err(reason), _, _) => admit_resolution(Err(reason))?,
             };
         }
     }
+    Ok(())
 }
 
 /// The smallest separation in `|Lc|` that counts as "strictly weaker". Note:
@@ -4239,6 +4416,147 @@ mod tests {
     use super::*;
 
     #[test]
+    fn admission_preserves_every_failure_category_code_and_reason() {
+        let local = [
+            (
+                SolveFailure::BelowContrastFloor { target: 3.0 },
+                RoleFailureCategory::Unreachable,
+                "below_contrast_floor",
+            ),
+            (
+                SolveFailure::ExceedsRange {
+                    target: 300.0,
+                    max_achievable: 106.0,
+                },
+                RoleFailureCategory::Unreachable,
+                "exceeds_range",
+            ),
+            (
+                SolveFailure::BoundedSearchExhausted {
+                    target: 10.0,
+                    closest_examined: 9.0,
+                },
+                RoleFailureCategory::Unresolved,
+                "bounded_search_exhausted",
+            ),
+            (
+                SolveFailure::FloorUnreachable {
+                    floor: 4.5,
+                    max_ratio: 3.0,
+                },
+                RoleFailureCategory::Unreachable,
+                "floor_unreachable",
+            ),
+        ];
+        for (reason, category, code) in local {
+            let admitted =
+                admit_resolution(Err(reason.clone())).expect("physical failure remains role-local");
+            let Resolved::Failure(failure) = admitted else {
+                panic!("physical failure admitted as non-failure: {admitted:?}");
+            };
+            assert_eq!(failure.category(), category);
+            assert_eq!(failure.code(), code);
+            assert_eq!(failure.reason(), &reason);
+        }
+
+        let outer = [
+            (
+                SolveFailure::InvalidInput("invalid fixture".into()),
+                ResolveSetErrorKind::Rejected,
+                Some("invalid_input"),
+            ),
+            (
+                SolveFailure::GamutUnsupported,
+                ResolveSetErrorKind::Unsupported,
+                Some("gamut_unsupported"),
+            ),
+            (
+                SolveFailure::InternalInvariant("injected drift".into()),
+                ResolveSetErrorKind::Internal,
+                None,
+            ),
+        ];
+        for (reason, kind, code) in outer {
+            let error = admit_resolution(Err(reason.clone()))
+                .expect_err("non-local failure must close the whole set");
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.code(), code);
+            assert_eq!(error.reason(), &reason);
+        }
+    }
+
+    #[test]
+    fn admission_passes_success_through_unchanged() {
+        assert_eq!(admit_resolution(Ok(Resolved::None)), Ok(Resolved::None));
+    }
+
+    #[test]
+    fn last_role_rejection_closes_named_set_without_partial_output() {
+        let source = crate::spaces::srgb::srgb_encoded_from_hex("#3478F6").unwrap();
+        let table = NamedRoleTable::from_validated_parts(
+            vec![
+                ("first".into(), RoleSpec::Zero),
+                (
+                    "fatal-last".into(),
+                    RoleSpec::AlphaAnalog {
+                        of: LadderTint::new([source; 4]).unwrap(),
+                        alpha: f64::NAN,
+                    },
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        );
+        let error = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        )
+        .expect_err("late rejected input must not expose a partial set");
+        assert_eq!(error.kind(), ResolveSetErrorKind::Rejected);
+        assert_eq!(error.code(), Some("invalid_input"));
+        assert_eq!(
+            error.reason(),
+            &SolveFailure::InvalidInput(
+                "alpha-analog alpha must be finite and inside (0, 1]".into()
+            )
+        );
+    }
+
+    #[test]
+    fn physical_unreachability_remains_local_after_real_resolution() {
+        let table = NamedRoleTable::new(
+            vec![(
+                "physically-unreachable".into(),
+                RoleSpec::Decorative { magnitude: 300.0 },
+            )],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        let set = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        )
+        .expect("physical failure is role-local, not a whole-set error");
+        let Resolved::Failure(failure) = &set[0].1 else {
+            panic!("real unreachable fixture must stay a typed role failure: {set:?}");
+        };
+        assert_eq!(failure.category(), RoleFailureCategory::Unreachable);
+        assert_eq!(failure.code(), "exceeds_range");
+        let SolveFailure::ExceedsRange {
+            target,
+            max_achievable,
+        } = failure.reason()
+        else {
+            panic!("unexpected physical reason: {failure:?}");
+        };
+        assert_eq!(target.to_bits(), 300.0_f64.to_bits());
+        assert!(max_achievable.is_finite() && *max_achievable > 0.0);
+    }
+
+    #[test]
     fn controlled_ceiling_probe_never_leaks_a_client_or_physical_failure() {
         for unexpected in [
             SolveFailure::BelowContrastFloor { target: 3.0 },
@@ -4327,9 +4645,14 @@ mod tests {
             high_contrast: false,
         };
 
-        enforce_named_text_hierarchy(&mut set, &table, &bg, &vc, &ctx);
+        let before = set.clone();
+        let error = enforce_named_text_hierarchy(&mut set, &table, &bg, &vc, &ctx)
+            .expect_err("internal hierarchy drift must close the whole set");
 
-        assert_eq!(set[1].1, Resolved::Failure(failure));
+        assert_eq!(error.kind(), ResolveSetErrorKind::Internal);
+        assert_eq!(error.code(), None);
+        assert_eq!(error.reason(), &failure);
+        assert_eq!(set, before, "failed hierarchy admission must be atomic");
     }
 
     #[test]
@@ -4472,7 +4795,6 @@ mod tests {
                 of: tint,
                 alpha: 0.25,
             },
-            material(1.0, 2.0, Floor::AaText),
         ] {
             assert!(
                 NamedRoleTable::new(
@@ -4483,6 +4805,46 @@ mod tests {
                 .is_ok()
             );
         }
+
+        assert!(
+            matches!(
+                NamedRoleTable::new(
+                    vec![("family-material".into(), material(1.0, 2.0, Floor::AaText),)],
+                    Vec::new(),
+                    RoleChroma::Neutral,
+                ),
+                Err(SolveFailure::InvalidInput(_))
+            ),
+            "a family-hued material cannot be deferred into an achromatic executable table"
+        );
+        assert!(
+            NamedRoleTable::new(
+                vec![(
+                    "neutral-material".into(),
+                    RoleSpec::Material {
+                        hue: None,
+                        tone: DjMagnitude::new(1.0, 2.0),
+                        floor: Floor::AaText,
+                    },
+                )],
+                Vec::new(),
+                RoleChroma::Neutral,
+            )
+            .is_ok(),
+            "an explicitly neutral material is valid with an achromatic policy"
+        );
+        assert!(
+            NamedRoleTable::new(
+                vec![("family-material".into(), material(1.0, 2.0, Floor::AaText),)],
+                Vec::new(),
+                RoleChroma::Tinted {
+                    hue_deg: 240.0,
+                    ratio: 0.5,
+                },
+            )
+            .is_ok(),
+            "a family-hued material is valid when the table carries chroma"
+        );
     }
 
     fn one_glow_table(
@@ -4513,7 +4875,8 @@ mod tests {
             &BgInput::solid("#FFFFFF").unwrap(),
             &one_glow_table("#4A8FFF", crate::glow::GlowDecisionProfileV1::StableV1),
             &vc,
-        );
+        )
+        .expect("valid stable Glow fixture resolves atomically");
         let Resolved::Glow(exact) = &exact[0].1 else {
             panic!("stable point no-op must resolve as a full Glow result");
         };
@@ -4538,7 +4901,8 @@ mod tests {
                 crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1,
             ),
             &vc,
-        );
+        )
+        .expect("valid legacy Glow fixture resolves atomically");
         let Resolved::Glow(legacy) = &legacy[0].1 else {
             panic!("explicit legacy selection must resolve as a full Glow result");
         };
@@ -5169,26 +5533,6 @@ mod tests {
                 ),
                 "даже пустая таблица не должна скрывать некорректную policy: {chroma:?}"
             );
-
-            // Defense in depth для crate-internal validated-пути: если его
-            // инвариант когда-либо будет нарушен, резолв не вернёт частичный
-            // правдоподобный набор.
-            let bypassed = NamedRoleTable::from_validated_parts(entries(), Vec::new(), chroma);
-            let outcomes = resolve_named_set(&bg, &bypassed, &vc);
-            assert_eq!(
-                outcomes
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>(),
-                ["first", "second"]
-            );
-            assert!(
-                outcomes.iter().all(|(_, outcome)| matches!(
-                    outcome,
-                    Resolved::Failure(SolveFailure::InvalidInput(_))
-                )),
-                "глобальная ошибка не должна оставлять частично решённые роли: {outcomes:?}"
-            );
         }
 
         for chroma in [
@@ -5208,6 +5552,7 @@ mod tests {
         ] {
             assert!(
                 resolve_valid(chroma)
+                    .expect("valid chroma boundary resolves atomically")
                     .iter()
                     .all(|(_, outcome)| *outcome == Resolved::None),
                 "валидная граница отвергнута"
@@ -5368,7 +5713,8 @@ mod tests {
         )
         .unwrap();
         let bg = BgInput::solid("#2E2E2E").unwrap();
-        let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+        let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+            .expect("valid hierarchy fixture resolves atomically");
         let junior = set
             .iter()
             .find_map(|(name, resolved)| (name == "junior").then_some(resolved))
@@ -5476,7 +5822,11 @@ mod tests {
         let table = RoleTable::default();
         Role::ALL
             .iter()
-            .map(|&r| (r, resolve_in(bg, r, &table, vc, &ctx)))
+            .map(|&r| {
+                let resolved = admit_resolution(resolve_in(bg, r, &table, vc, &ctx))
+                    .expect("forced valid fixture has no whole-set failure");
+                (r, resolved)
+            })
             .collect()
     }
 
@@ -5742,7 +6092,7 @@ mod tests {
     fn solved_lc(bg: &BgInput, role: Role, vc: &ViewingConditions) -> f64 {
         let table = RoleTable::default();
         match resolve(bg, role, &table, vc) {
-            Resolved::Color { solved, .. } => solved.lc(),
+            Ok(Resolved::Color { solved, .. }) => solved.lc(),
             other => panic!("{} expected a colour, got {other:?}", role.key()),
         }
     }
@@ -5891,11 +6241,11 @@ mod tests {
 
         for (i, role) in TEXT_ORDER.iter().enumerate() {
             let light = match resolve(&white, *role, &table, &vc) {
-                Resolved::Color { solved, .. } => solved,
+                Ok(Resolved::Color { solved, .. }) => solved,
                 other => panic!("{}: {other:?}", role.key()),
             };
             let dark = match resolve(&black, *role, &table, &vc) {
-                Resolved::Color { solved, .. } => solved,
+                Ok(Resolved::Color { solved, .. }) => solved,
                 other => panic!("{}: {other:?}", role.key()),
             };
             let (light_lc, dark_lc) = (light.lc().abs(), dark.lc().abs());
@@ -5928,7 +6278,8 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let table = RoleTable::default();
-        let resolved = resolve(&bg, Role::None, &table, &vc);
+        let resolved =
+            resolve(&bg, Role::None, &table, &vc).expect("zero role resolves atomically");
         assert_eq!(resolved, Resolved::None);
         assert_eq!(resolved.lc(), Some(0.0));
         assert!(resolved.solved().is_none());
@@ -5947,7 +6298,7 @@ mod tests {
                     (Role::LabelTertiary, 3.0),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
-                        Resolved::Color { solved, .. } => solved,
+                        Ok(Resolved::Color { solved, .. }) => solved,
                         other => panic!("{} {bg_hex}: {other:?}", role.key()),
                     };
                     assert!(
@@ -5982,7 +6333,7 @@ mod tests {
             Role::ShadowMajor,
         ] {
             let solved = match resolve(&bg, role, &table, &vc) {
-                Resolved::Color { solved, .. } => solved,
+                Ok(Resolved::Color { solved, .. }) => solved,
                 other => panic!("{} expected colour, got {other:?}", role.key()),
             };
             assert!(
@@ -6004,7 +6355,7 @@ mod tests {
             Role::ShadowMajor,
         ] {
             let solved = match resolve(&bg, role, &table, &vc) {
-                Resolved::Color { solved, .. } => solved,
+                Ok(Resolved::Color { solved, .. }) => solved,
                 other => panic!("{other:?}"),
             };
             assert!(
@@ -6027,8 +6378,10 @@ mod tests {
             .clone()
             .with(Role::Separator, RoleSpec::Decorative { magnitude: 20.0 });
 
-        let base = resolve(&bg, Role::Separator, &default_table, &vc);
-        let bumped = resolve(&bg, Role::Separator, &stronger, &vc);
+        let base = resolve(&bg, Role::Separator, &default_table, &vc)
+            .expect("valid default decorative role resolves atomically");
+        let bumped = resolve(&bg, Role::Separator, &stronger, &vc)
+            .expect("valid stronger decorative role resolves atomically");
         let (b, s) = (base.lc().unwrap().abs(), bumped.lc().unwrap().abs());
         assert!(s > b, "bumped magnitude must raise |Lc|: {b} -> {s}");
     }
@@ -6037,7 +6390,7 @@ mod tests {
     fn resolved_dj(bg_hex: &str, role: Role, table: &RoleTable, vc: &ViewingConditions) -> f64 {
         let bg = BgInput::solid(bg_hex).unwrap();
         let solved = match resolve(&bg, role, table, vc) {
-            Resolved::Color { solved, .. } => solved,
+            Ok(Resolved::Color { solved, .. }) => solved,
             other => panic!("{} expected a colour, got {other:?}", role.key()),
         };
         let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), vc)
@@ -6142,9 +6495,9 @@ mod tests {
         );
         let bg = BgInput::solid("#101012").unwrap();
         match resolve(&bg, Role::FillPrimary, &table, &vc) {
-            Resolved::Color {
+            Ok(Resolved::Color {
                 solved, compressed, ..
-            } => {
+            }) => {
                 assert!(compressed, "off-axis dJ' must carry the degradation flag");
                 // Стена светлой стороны: решённый цвет заметно светлее фона
                 // (light-on-dark полярность на #101012) — не тихий возврат фона.
@@ -6167,7 +6520,7 @@ mod tests {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         match resolve(&bg, Role::FillPrimary, &RoleTable::default(), &vc) {
-            Resolved::Color { compressed, .. } => {
+            Ok(Resolved::Color { compressed, .. }) => {
                 assert!(!compressed, "in-budget dJ' must not be flagged")
             }
             other => panic!("expected Color, got {other:?}"),
@@ -6189,7 +6542,7 @@ mod tests {
         // Primary changed.
         let p_default = solved_lc(&bg, Role::LabelPrimary, &vc);
         let p_custom = match resolve(&bg, Role::LabelPrimary, &custom, &vc) {
-            Resolved::Color { solved, .. } => solved.lc(),
+            Ok(Resolved::Color { solved, .. }) => solved.lc(),
             other => panic!("{other:?}"),
         };
         assert!(
@@ -6199,7 +6552,7 @@ mod tests {
         // Secondary unchanged.
         let s_default = solved_lc(&bg, Role::LabelSecondary, &vc);
         let s_custom = match resolve(&bg, Role::LabelSecondary, &custom, &vc) {
-            Resolved::Color { solved, .. } => solved.lc(),
+            Ok(Resolved::Color { solved, .. }) => solved.lc(),
             other => panic!("{other:?}"),
         };
         assert!(
@@ -6286,13 +6639,16 @@ mod tests {
                 let bg = BgInput::solid(&bg_hex).unwrap();
                 let set = resolve_set(&bg, &table_default(), &vc);
                 for (role, r) in &set {
-                    if let Resolved::Failure(SolveFailure::FloorUnreachable { floor, max_ratio }) =
-                        r
-                    {
-                        panic!(
-                            "{vc_name} {bg_hex} {}: false FloorUnreachable (floor {floor}, max {max_ratio})",
-                            role.key()
-                        );
+                    // MSRV 1.85: let-chains недоступны — вложенный if-let.
+                    if let Resolved::Failure(failure) = r {
+                        if let SolveFailure::FloorUnreachable { floor, max_ratio } =
+                            failure.reason()
+                        {
+                            panic!(
+                                "{vc_name} {bg_hex} {}: false FloorUnreachable (floor {floor}, max {max_ratio})",
+                                role.key()
+                            );
+                        }
                     }
                 }
             }
@@ -6436,7 +6792,7 @@ mod tests {
                         role
                     ),
                     Resolved::Failure(failure) => {
-                        crate::test_support::valid_srgb_set_failure_repr(failure);
+                        crate::test_support::role_failure_repr(failure);
                         true
                     }
                 });
@@ -6533,7 +6889,8 @@ mod tests {
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let table = RoleTable::default();
         for role in [Role::BorderNone, Role::FillNone, Role::None] {
-            let resolved = resolve(&bg, role, &table, &vc);
+            let resolved =
+                resolve(&bg, role, &table, &vc).expect("valid zero role resolves atomically");
             assert_eq!(
                 resolved,
                 Resolved::None,
@@ -6704,7 +7061,8 @@ mod tests {
         for (hex, alpha) in [("#101012", 0.22), ("#FFFFFF", 0.08), ("#787880", 0.5)] {
             let tint = srgb_encoded_from_hex(hex).unwrap();
             let bg = BgInput::solid(hex).unwrap();
-            let res = resolve_rgba_direct(tint, alpha, &bg, &vc);
+            let res = resolve_rgba_direct(tint, alpha, &bg, &vc)
+                .expect("valid direct rgba fixture resolves");
             let t = res
                 .translucent()
                 .unwrap_or_else(|| panic!("{hex} rgba должен резолвиться"));
@@ -6719,7 +7077,8 @@ mod tests {
         // Контроль: контрастный тинт на том же фоне отличим уже при малой α.
         let dark = srgb_encoded_from_hex("#101012").unwrap();
         let bg_white = BgInput::solid("#FFFFFF").unwrap();
-        let res = resolve_rgba_direct(dark, 0.12, &bg_white, &vc);
+        let res = resolve_rgba_direct(dark, 0.12, &bg_white, &vc)
+            .expect("valid direct rgba fixture resolves");
         let t = res.translucent().expect("контрастный rgba резолвится");
         assert!(
             t.composite_distinct(),
@@ -6735,25 +7094,15 @@ mod tests {
 
         let internal = resolve_rgba_direct([f64::NAN, 0.0, 0.0], 0.5, &bg, &vc);
         assert!(
-            matches!(
-                internal,
-                Resolved::Failure(SolveFailure::InternalInvariant(_))
-            ),
+            matches!(internal, Err(SolveFailure::InternalInvariant(_))),
             "generated tint drift must fail the enclosing boundary: {internal:?}"
         );
 
         let rejected = resolve_rgba_direct([0.0, 0.0, 0.0], f64::NAN, &bg, &vc);
-        match rejected {
-            Resolved::Failure(failure) => {
-                let boundary = failure.boundary().expect("public alpha has a wire failure");
-                assert_eq!(
-                    boundary.category(),
-                    crate::solve::SolveFailureCategory::Rejected
-                );
-                assert_eq!(boundary.code(), "invalid_input");
-            }
-            other => panic!("public alpha must be rejected, got {other:?}"),
-        }
+        assert!(
+            matches!(rejected, Err(SolveFailure::InvalidInput(_))),
+            "public alpha must be rejected, got {rejected:?}"
+        );
     }
 
     #[test]
@@ -6770,7 +7119,8 @@ mod tests {
         // alpha.rs::min_alpha_hex("#101012","#FFFFFF") > 0.9); запрос 0.05
         // неразрешим → α поднимается → флаг true.
         let dark_solid = srgb_encoded_from_hex("#101012").unwrap();
-        let coerced = resolve_rgba_inverted(dark_solid, 0.05, &white, &vc);
+        let coerced = resolve_rgba_inverted(dark_solid, 0.05, &white, &vc)
+            .expect("valid inverted rgba fixture resolves");
         let t = coerced
             .translucent()
             .expect("альфа-аналог резолвится (α поднимается до разрешимой)");
@@ -6790,7 +7140,8 @@ mod tests {
         // Без коэрсии (α разрешима как есть): светлый солид над белым (низкий пол)
         // при α=0.5 → флаг false.
         let light_solid = srgb_encoded_from_hex("#E4E4E6").unwrap();
-        let ok = resolve_rgba_inverted(light_solid, 0.5, &white, &vc);
+        let ok = resolve_rgba_inverted(light_solid, 0.5, &white, &vc)
+            .expect("valid inverted rgba fixture resolves");
         let t_ok = ok
             .translucent()
             .expect("разрешимый альфа-аналог резолвится");
@@ -6809,7 +7160,8 @@ mod tests {
         // тинт @ 0.12 уже округляется в #1F0000, поэтому коэрсии быть не должно.
         let black = BgInput::solid("#000000").unwrap();
         let quantised_solid = srgb_encoded_from_hex("#1F0000").unwrap();
-        let quantised = resolve_rgba_inverted(quantised_solid, 0.12, &black, &vc);
+        let quantised = resolve_rgba_inverted(quantised_solid, 0.12, &black, &vc)
+            .expect("valid quantised rgba fixture resolves");
         let t_quantised = quantised.translucent().unwrap();
         assert!(!t_quantised.alpha_coerced());
         assert_eq!(t_quantised.alpha().to_bits(), 0.12_f64.to_bits());
@@ -6817,7 +7169,8 @@ mod tests {
 
         // Граница: α=1.0 всегда разрешима (тинт=солид) → флаг false даже для
         // насыщенного солида, который иначе коэрсил бы.
-        let full = resolve_rgba_inverted(dark_solid, 1.0, &white, &vc);
+        let full = resolve_rgba_inverted(dark_solid, 1.0, &white, &vc)
+            .expect("valid opaque rgba fixture resolves");
         let t_full = full.translucent().expect("α=1.0 тривиально разрешима");
         assert!(
             !t_full.alpha_coerced(),
@@ -6825,7 +7178,8 @@ mod tests {
         );
 
         // Прямая лестница (не альфа-аналог) НИКОГДА не коэрсит α.
-        let direct = resolve_rgba_direct(dark_solid, 0.12, &white, &vc);
+        let direct = resolve_rgba_direct(dark_solid, 0.12, &white, &vc)
+            .expect("valid direct rgba fixture resolves");
         assert!(
             !direct.translucent().unwrap().alpha_coerced(),
             "прямая rgba-лестница эмитит α как есть — флаг всегда false"
@@ -7028,7 +7382,7 @@ mod tests {
         use crate::spaces::oklab::{oklab_hue, srgb_linear_to_oklab};
         use crate::spaces::srgb::srgb_from_hex;
         let solved = match resolve(bg, role, table, vc) {
-            Resolved::Color { solved, .. } => solved,
+            Ok(Resolved::Color { solved, .. }) => solved,
             other => panic!("{} expected a colour, got {other:?}", role.key()),
         };
         let rgb = srgb_from_hex(solved.hex()).unwrap();
@@ -7049,7 +7403,7 @@ mod tests {
         for (vc, vc_name) in vcs() {
             let bg = BgInput::solid("#FFFFFF").unwrap();
             let solved = match resolve(&bg, Role::LabelPrimary, &table, &vc) {
-                Resolved::Color { solved, .. } => solved,
+                Ok(Resolved::Color { solved, .. }) => solved,
                 other => panic!("{other:?}"),
             };
             assert_ne!(
@@ -7124,7 +7478,7 @@ mod tests {
                 .iter()
                 .map(|&r| {
                     let solved = match resolve(&bg, r, &RoleTable::default(), &vc) {
-                        Resolved::Color { solved, .. } => solved,
+                        Ok(Resolved::Color { solved, .. }) => solved,
                         other => panic!("{other:?}"),
                     };
                     let rgb = crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap();
@@ -7200,7 +7554,7 @@ mod tests {
         // And the achromatic override reproduces the historic sterile grey exactly.
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let grey = match resolve(&bg, Role::LabelPrimary, &table, &ViewingConditions::srgb()) {
-            Resolved::Color { solved, .. } => solved.hex().to_uppercase(),
+            Ok(Resolved::Color { solved, .. }) => solved.hex().to_uppercase(),
             other => panic!("{other:?}"),
         };
         assert_eq!(grey, "#141414", "neutral override must restore pure grey");
@@ -7221,7 +7575,7 @@ mod tests {
         let [_a, b, chroma, _hue] = resolved_oklab(&bg, Role::LabelSecondary, &flat, &vc);
         assert!(b < 0.0, "flat tint must stay cool (b={b})");
         let solved = match resolve(&bg, Role::LabelSecondary, &flat, &vc) {
-            Resolved::Color { solved, .. } => solved,
+            Ok(Resolved::Color { solved, .. }) => solved,
             other => panic!("{other:?}"),
         };
         let l = crate::spaces::oklab::srgb_linear_to_oklab(
@@ -7538,7 +7892,7 @@ mod tests {
                         }
                         Resolved::None => "none".to_string(),
                         Resolved::Failure(failure) => {
-                            crate::test_support::valid_srgb_set_failure_repr(failure)
+                            crate::test_support::role_failure_repr(failure)
                         }
                     };
                     let want = GOLDEN
@@ -7593,11 +7947,11 @@ mod tests {
                 (Role::LabelTertiary, 3.0),
             ] {
                 let t = match resolve(&bg, role, &tinted, &vc) {
-                    Resolved::Color { solved, .. } => solved,
+                    Ok(Resolved::Color { solved, .. }) => solved,
                     other => panic!("{other:?}"),
                 };
                 let g = match resolve(&bg, role, &grey, &vc) {
-                    Resolved::Color { solved, .. } => solved,
+                    Ok(Resolved::Color { solved, .. }) => solved,
                     other => panic!("{other:?}"),
                 };
                 // Where perception governs, the tinted and grey roles target the

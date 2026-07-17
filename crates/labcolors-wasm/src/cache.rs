@@ -14,8 +14,8 @@
 //! wholesale-clears the cache (see [`ContractCache::clear`]), so exactly one key
 //! namespace is ever live and a stale entry from another config cannot be served.
 //!
-//! Single-threaded by design: WASM has no threads, so a `RefCell` interior is
-//! the right shared-mutability tool — no lock, no contention, no `Send` bound.
+//! Each `Engine` is confined to one JavaScript agent. A `RefCell` therefore
+//! provides the required interior mutability without a lock or a `Send` bound.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -77,25 +77,30 @@ impl<V: Clone> ContractCache<V> {
     }
 
     /// Return the cached value for `key`, computing and storing it with `build`
-    /// on a miss. `build` runs at most once per distinct key between clears.
+    /// on a miss. Only a successful build mutates the cache; an error neither
+    /// inserts nor evicts an existing successful value.
     ///
     /// # Reentrancy
-    /// `build` must not call `get_or_insert_with` on this same cache with the
+    /// `build` must not call `get_or_try_insert_with` on this same cache with the
     /// same `key` — the entry is not inserted until `build` returns, so a
     /// same-key re-entry would recurse without end. A different key is safe.
     /// In this crate `build` only calls `core::resolve_named_set`, which never
     /// re-enters the cache, so the constraint holds by construction.
-    pub fn get_or_insert_with(&self, key: CacheKey, build: impl FnOnce() -> V) -> V {
+    pub fn get_or_try_insert_with<E>(
+        &self,
+        key: CacheKey,
+        build: impl FnOnce() -> Result<V, E>,
+    ) -> Result<V, E> {
         if let Some(hit) = self.entries.borrow().get(&key) {
-            return hit.clone();
+            return Ok(hit.clone());
         }
-        let value = build();
+        let value = build()?;
         let mut entries = self.entries.borrow_mut();
         if entries.len() >= self.capacity {
             entries.clear();
         }
         entries.insert(key, value.clone());
-        value
+        Ok(value)
     }
 
     /// Очистить кэш целиком. Смена таблицы (загрузка конфига) обязана снести
@@ -117,6 +122,63 @@ impl<V: Clone> ContractCache<V> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn failed_build_is_not_cached_and_a_later_success_is_shared() {
+        let cache: ContractCache<Rc<u32>> = ContractCache::new(8);
+        let calls = Cell::new(0);
+        let key = || CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
+
+        let failed: Result<Rc<u32>, &'static str> = cache.get_or_try_insert_with(key(), || {
+            calls.set(calls.get() + 1);
+            Err("injected failure")
+        });
+        assert_eq!(failed, Err("injected failure"));
+        assert_eq!(cache.len(), 0, "a failed build must not mutate the cache");
+
+        let inserted = cache
+            .get_or_try_insert_with(key(), || {
+                calls.set(calls.get() + 1);
+                Ok::<_, &'static str>(Rc::new(42))
+            })
+            .unwrap();
+        let hit = cache
+            .get_or_try_insert_with(key(), || -> Result<Rc<u32>, &'static str> {
+                panic!("cache hit must not run the builder")
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 2, "the failed key is retried exactly once");
+        assert!(Rc::ptr_eq(&inserted, &hit), "a hit reuses the same theme");
+    }
+
+    #[test]
+    fn failed_miss_at_capacity_preserves_every_successful_entry() {
+        let cache: ContractCache<Rc<u32>> = ContractCache::new(2);
+        let first_key = CacheKey::new("#000000".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
+        let second_key = CacheKey::new("#111111".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
+        let first = cache
+            .get_or_try_insert_with(first_key.clone(), || Ok::<_, &'static str>(Rc::new(1)))
+            .unwrap();
+        cache
+            .get_or_try_insert_with(second_key, || Ok::<_, &'static str>(Rc::new(2)))
+            .unwrap();
+        assert_eq!(cache.len(), 2);
+
+        let failed: Result<Rc<u32>, &'static str> = cache.get_or_try_insert_with(
+            CacheKey::new("#222222".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+            || Err("injected failure"),
+        );
+        assert_eq!(failed, Err("injected failure"));
+        assert_eq!(cache.len(), 2, "an error cannot trigger wholesale eviction");
+
+        let first_hit = cache
+            .get_or_try_insert_with(first_key, || -> Result<Rc<u32>, &'static str> {
+                panic!("preserved successful entry must still hit")
+            })
+            .unwrap();
+        assert!(Rc::ptr_eq(&first, &first_hit));
+    }
 
     #[test]
     fn builds_once_then_serves_from_cache() {
@@ -124,14 +186,18 @@ mod tests {
         let calls = Cell::new(0);
         let key = || CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
 
-        let first = cache.get_or_insert_with(key(), || {
-            calls.set(calls.get() + 1);
-            42
-        });
-        let second = cache.get_or_insert_with(key(), || {
-            calls.set(calls.get() + 1);
-            99
-        });
+        let first = cache
+            .get_or_try_insert_with(key(), || {
+                calls.set(calls.get() + 1);
+                Ok::<_, ()>(42)
+            })
+            .unwrap();
+        let second = cache
+            .get_or_try_insert_with(key(), || {
+                calls.set(calls.get() + 1);
+                Ok::<_, ()>(99)
+            })
+            .unwrap();
 
         assert_eq!(first, 42);
         assert_eq!(second, 42, "second call must hit the cache, not rebuild");
@@ -141,14 +207,18 @@ mod tests {
     #[test]
     fn distinct_keys_do_not_collide() {
         let cache: ContractCache<&str> = ContractCache::new(8);
-        let light = cache.get_or_insert_with(
-            CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
-            || "light",
-        );
-        let dark = cache.get_or_insert_with(
-            CacheKey::new("#FFFFFF".into(), Theme::Dark, DEFAULT_TABLE_FINGERPRINT),
-            || "dark",
-        );
+        let light = cache
+            .get_or_try_insert_with(
+                CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+                || Ok::<_, ()>("light"),
+            )
+            .unwrap();
+        let dark = cache
+            .get_or_try_insert_with(
+                CacheKey::new("#FFFFFF".into(), Theme::Dark, DEFAULT_TABLE_FINGERPRINT),
+                || Ok::<_, ()>("dark"),
+            )
+            .unwrap();
         assert_eq!(light, "light");
         assert_eq!(dark, "dark");
         assert_eq!(cache.len(), 2);
@@ -158,21 +228,25 @@ mod tests {
     fn clears_wholesale_at_capacity() {
         let cache: ContractCache<u32> = ContractCache::new(2);
         for i in 0..2 {
-            cache.get_or_insert_with(
-                CacheKey::new(
-                    format!("#00000{i}"),
-                    Theme::Light,
-                    DEFAULT_TABLE_FINGERPRINT,
-                ),
-                || i,
-            );
+            cache
+                .get_or_try_insert_with(
+                    CacheKey::new(
+                        format!("#00000{i}"),
+                        Theme::Light,
+                        DEFAULT_TABLE_FINGERPRINT,
+                    ),
+                    || Ok::<_, ()>(i),
+                )
+                .unwrap();
         }
         assert_eq!(cache.len(), 2);
         // The third distinct key trips the cap → wholesale clear, then insert.
-        cache.get_or_insert_with(
-            CacheKey::new("#0000FF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
-            || 3,
-        );
+        cache
+            .get_or_try_insert_with(
+                CacheKey::new("#0000FF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+                || Ok::<_, ()>(3),
+            )
+            .unwrap();
         assert_eq!(
             cache.len(),
             1,

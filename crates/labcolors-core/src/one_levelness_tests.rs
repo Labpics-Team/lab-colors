@@ -91,7 +91,8 @@ fn one_levelness_violations(table: &NamedRoleTable) -> Vec<String> {
     let mut out = Vec::new();
     for theme in themes() {
         let bg = BgInput::solid(theme.bg).expect("валидный фон темы");
-        let set = resolve_named_set(&bg, table, &theme.vc);
+        let set = resolve_named_set(&bg, table, &theme.vc)
+            .expect("валидная одноуровневая таблица обязана резолвиться атомарно");
         for (level, neutral_role, floor) in LEVELS {
             let neutral_lc = abs_lc(&set, neutral_role);
             for family in FAMILIES {

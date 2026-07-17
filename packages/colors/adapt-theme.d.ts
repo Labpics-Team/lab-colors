@@ -59,13 +59,23 @@ export interface AdaptThemeOptions {
 }
 
 export interface AdaptController {
-  /** Read one sample step; unchanged idle state skips metric evaluation. */
+  /**
+   * Read one sample step; unchanged idle state skips metric evaluation.
+   * Resolver/recheck/evidence failure before the write phase preserves the
+   * committed logical targets and DOM variables.
+   */
   tick(now?: number): void;
-  /** Switch theme INSTANTLY (intent, not drift) — bypasses the hysteresis. */
+  /**
+   * Switch theme INSTANTLY (intent, not drift) — bypasses the hysteresis. A
+   * rejected candidate leaves the previously committed theme, targets and DOM.
+   */
   setTheme(theme: ThemeName): void;
   /** Begin an internal `requestAnimationFrame` loop. */
   start(): void;
-  /** Stop the loop. */
+  /**
+   * Stop the internal loop without discarding an in-flight ease; a later
+   * `start()` or `tick()` continues it against the current clock.
+   */
   stop(): void;
   /** Canonical logical targets; during an ease these differ from painted DOM values. */
   current(): Record<string, string>;

@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
-use labcolors_core::{BgInput, Resolved, SolveFailure, Solved};
+use labcolors_core::{BgInput, ResolveSetError, Resolved, Solved};
 
 use crate::cache::{CacheKey, ContractCache};
 use crate::config_dto::{ConfigDto, fingerprint};
@@ -25,8 +25,8 @@ use crate::error::BindingError;
 use crate::theme::Theme;
 
 /// How many distinct `(bg, theme, table)` resolves the cache holds before a
-/// wholesale clear. A few thousand entries at well under 1 MB — generous for a
-/// design tool sweeping backgrounds, bounded so memory cannot run away.
+/// wholesale clear. The fixed bound prevents unbounded growth under arbitrary
+/// background sampling; its value is a capacity policy, not a byte-size claim.
 const CACHE_CAPACITY: usize = 4096;
 
 /// A caching contrast engine over a consumer-supplied design system.
@@ -39,7 +39,7 @@ const CACHE_CAPACITY: usize = 4096;
 /// bump, not a re-clone of the whole set.
 pub struct Engine {
     named: Option<NamedState>,
-    cache: ContractCache<Result<Rc<ResolvedTheme>, BindingError>>,
+    cache: ContractCache<Rc<ResolvedTheme>>,
 }
 
 /// Загруженный конфиг потребителя: скомпилированная таблица + её отпечаток
@@ -116,9 +116,9 @@ impl Engine {
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
     /// result. Repeated identical calls hit the contract cache.
     ///
-    /// Errors (bad hex, unknown theme, or an internal core invariant failure)
-    /// are returned, never panicked. Physical per-role unreachability is part
-    /// of a *successful* result; internal provenance fails the whole call.
+    /// Errors are returned, never panicked. Admitted per-role unreachability or
+    /// unresolved search is part of a successful result. Rejected, unsupported
+    /// or internal set provenance fails the whole call before any theme exists.
     pub fn resolve_theme(
         &self,
         bg_hex: &str,
@@ -136,8 +136,9 @@ impl Engine {
         // физикой; отпечаток в ключе разводит кэш-пространства конфигов.
         if let Some(named) = &self.named {
             let key = CacheKey::new(normalised.clone(), theme, named.fingerprint);
-            let result = self.cache.get_or_insert_with(key, || {
-                let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc);
+            let result = self.cache.get_or_try_insert_with(key, || {
+                let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc)
+                    .map_err(resolve_set_error_to_binding)?;
                 let mut roles: Vec<RoleEntry> = set
                     .into_iter()
                     .map(|(name, resolved)| -> Result<RoleEntry, BindingError> {
@@ -259,14 +260,11 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             legal_floor,
         )),
         Resolved::None => RoleOutcome::None,
-        Resolved::Failure(reason) => {
-            let (category, code) = public_failure_wire(&reason)?;
-            RoleOutcome::Failure {
-                category,
-                code,
-                message: reason.to_string(),
-            }
-        }
+        Resolved::Failure(failure) => RoleOutcome::Failure {
+            category: failure.category(),
+            code: failure.code(),
+            message: failure.to_string(),
+        },
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
         // наружу уходит oklch(L% C H / α), браузер композитит; контраст —
         // свойство композита на фоне резолва (закон лестницы ядра).
@@ -355,15 +353,10 @@ fn map_solved(
     }
 }
 
-/// Project the core-owned failure vocabulary without reclassifying it.
-/// Internal failures close the whole binding call and never become role data.
-fn public_failure_wire(
-    reason: &SolveFailure,
-) -> Result<(&'static str, &'static str), BindingError> {
-    let boundary = reason.boundary().ok_or_else(|| BindingError::Internal {
-        reason: reason.to_string(),
-    })?;
-    Ok((boundary.category().as_str(), boundary.code()))
+fn resolve_set_error_to_binding(error: ResolveSetError) -> BindingError {
+    BindingError::Internal {
+        reason: error.reason().to_string(),
+    }
 }
 
 /// A recheck-ready hex that BORROWS when the input is already a valid 6-hex-digit
@@ -549,66 +542,35 @@ mod tests {
     }
 
     #[test]
-    fn failure_wire_is_core_owned_and_internal_fails_closed() {
-        // Every public variant crosses with the category/code minted by the
-        // core boundary descriptor. This pins the JS vocabulary without a
-        // second adapter-owned classification table.
-        let cases = [
-            (
-                SolveFailure::BelowContrastFloor { target: 1.0 },
-                ("unreachable", "below_contrast_floor"),
-            ),
-            (
-                SolveFailure::ExceedsRange {
-                    target: 100.0,
-                    max_achievable: 90.0,
-                },
-                ("unreachable", "exceeds_range"),
-            ),
-            (
-                SolveFailure::BoundedSearchExhausted {
-                    target: 60.0,
-                    closest_examined: 58.0,
-                },
-                ("unresolved", "bounded_search_exhausted"),
-            ),
-            (
-                SolveFailure::FloorUnreachable {
-                    floor: 4.5,
-                    max_ratio: 3.0,
-                },
-                ("unreachable", "floor_unreachable"),
-            ),
-            (
-                SolveFailure::GamutUnsupported,
-                ("unsupported", "gamut_unsupported"),
-            ),
-            (
-                SolveFailure::InvalidInput("fixture".into()),
-                ("rejected", "invalid_input"),
-            ),
-        ];
-        for (failure, expected) in cases {
-            assert_eq!(public_failure_wire(&failure).unwrap(), expected);
-            let message = failure.to_string();
-            let outcome = map_resolved(Resolved::Failure(failure), None).unwrap();
-            assert!(matches!(
-                outcome,
-                RoleOutcome::Failure {
-                    category,
-                    code,
-                    message: actual_message,
-                } if (category, code) == expected && actual_message == message
-            ));
-        }
-
-        let internal = SolveFailure::InternalInvariant("fixture drift".into());
-        let error = map_resolved(Resolved::Failure(internal), None).unwrap_err();
+    fn admitted_role_failure_crosses_without_adapter_reclassification() {
+        let table = labcolors_core::NamedRoleTable::new(
+            vec![(
+                "opaque-client-id".into(),
+                labcolors_core::RoleSpec::Decorative { magnitude: 300.0 },
+            )],
+            Vec::new(),
+            labcolors_core::RoleChroma::Neutral,
+        )
+        .unwrap();
+        let mut set = labcolors_core::resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &labcolors_core::ViewingConditions::srgb(),
+        )
+        .expect("physical failure is an admitted set result");
+        let Resolved::Failure(failure) = set.remove(0).1 else {
+            panic!("fixture must exercise the admitted failure path");
+        };
+        let message = failure.to_string();
+        let outcome = map_resolved(Resolved::Failure(failure), None).unwrap();
         assert!(matches!(
-            error,
-            BindingError::Internal { ref reason } if reason.contains("fixture drift")
+            outcome,
+            RoleOutcome::Failure {
+                category: labcolors_core::RoleFailureCategory::Unreachable,
+                code: "exceeds_range",
+                message: actual_message,
+            } if actual_message == message
         ));
-        assert_eq!(error.code(), "internal_error");
     }
 
     #[test]
@@ -944,7 +906,8 @@ mod tests {
         let table = labui_table();
         let bg = labcolors_core::BgInput::solid("#101012").unwrap();
         let direct =
-            labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions());
+            labcolors_core::resolve_named_set(&bg, &table, &Theme::Dark.viewing_conditions())
+                .expect("valid loaded table resolves atomically");
 
         assert_eq!(
             via_engine.roles.len(),

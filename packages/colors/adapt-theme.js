@@ -78,7 +78,8 @@ function segLum(seg, t) {
  * @property {(theme: string) => void} setTheme  Switch theme INSTANTLY (intent,
  *   not drift) — re-resolve and apply, bypassing the debounce/dwell machinery.
  * @property {() => void} start  Begin an internal requestAnimationFrame loop.
- * @property {() => void} stop   Stop the loop and disconnect.
+ * @property {() => void} stop   Stop the internal loop without discarding an
+ *   in-flight ease; a later `start()` or `tick()` continues against its clock.
  * @property {() => Record<string,string>} current  Canonical resolved targets;
  *   during an ease these differ from the values painted into the DOM.
  */
@@ -199,22 +200,29 @@ export function adaptTheme(element, options) {
   const canBatch =
     typeof colors.recheckContrastMulti === "function";
 
-  const recheckSamples = (samples) => {
+  const recheckSamples = (
+    samples,
+    roleSet = roles,
+    foregrounds = fgsCache,
+    themeName = theme,
+  ) => {
     let breached = false;
     let worstIdx = 0;
     let worstMargin = Infinity;
-    const stride = fgsCache.length;
+    const stride = foregrounds.length;
     const batch =
       canBatch && samples.length > 1
-        ? colors.recheckContrastMulti(samples, fgsCache, theme)
+        ? colors.recheckContrastMulti(samples, foregrounds, themeName)
         : null;
     for (let s = 0; s < samples.length; s++) {
       // Per-sample flat buffer, or a background-major window into the batch one.
-      const flat = batch ? null : colors.recheckContrast(samples[s], fgsCache, theme);
+      const flat = batch
+        ? null
+        : colors.recheckContrast(samples[s], foregrounds, themeName);
       const base = s * stride;
       let sampleMargin = Infinity;
-      for (let i = 0; i < roles.length; i++) {
-        const want = Math.abs(roles[i].lc) * (1 - dropFraction);
+      for (let i = 0; i < roleSet.length; i++) {
+        const want = Math.abs(roleSet[i].lc) * (1 - dropFraction);
         const lcNow = Math.abs(batch ? batch[(base + i) * 2] : flat[2 * i]);
         if (lcNow < want) breached = true;
         const margin = want > 0 ? lcNow / want : Infinity;
@@ -328,13 +336,12 @@ export function adaptTheme(element, options) {
     return out;
   };
 
-  // Adopt one already-resolved set as the current colours (no ease).
-  const adoptResolved = (result, now) => {
+  // Build an immutable candidate first. No controller or DOM state changes
+  // until every resolve/recheck/certificate step in the transaction succeeds.
+  const resolvedCandidate = (result, now) => {
     const nextStableGlows = validatedStableGlowsFrom(result);
-    // Carry the FULL canonical var set (color + translucent) so no reachable
-    // role is dropped by a subsequent apply; only color roles feed the ease.
-    baseVars = result.vars && typeof result.vars === "object" ? result.vars : {};
-    roles = Object.entries(result.roles)
+    const nextBaseVars = result.vars && typeof result.vars === "object" ? result.vars : {};
+    const nextRoles = Object.entries(result.roles)
       .filter(([, r]) => r && r.kind === "color")
       .map(([key, r]) => ({
         cssVar: r.cssVar,
@@ -343,18 +350,31 @@ export function adaptTheme(element, options) {
         hex: r.hex,
         legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
       }));
-    stableGlows = nextStableGlows;
-    fgsCache = roles.map((r) => r.hex);
-    // The adopt may change the var/role KEY SET — force the next write through
-    // `applyTheme`'s full clear-then-write instead of the mid-ease diff path.
-    written = null;
-    lastSolveAt = now;
-    breachSince = null;
-    return result;
+    return {
+      result,
+      baseVars: nextBaseVars,
+      roles: nextRoles,
+      stableGlows: nextStableGlows,
+      fgsCache: nextRoles.map((r) => r.hex),
+      lastSolveAt: now,
+      breachSince: null,
+    };
   };
 
-  // Resolve a fresh set and adopt it as the current colours (no ease).
-  const solveAndAdopt = (bg, now) => adoptResolved(colors.resolveTheme(bg, theme), now);
+  const commitResolved = (candidate) => {
+    baseVars = candidate.baseVars;
+    roles = candidate.roles;
+    stableGlows = candidate.stableGlows;
+    fgsCache = candidate.fgsCache;
+    lastSolveAt = candidate.lastSolveAt;
+    breachSince = candidate.breachSince;
+    // A resolved candidate may change the key set. The next write must use the
+    // full clear-then-write path, but only after the transaction commits.
+    written = null;
+  };
+
+  const solveCandidate = (bg, now, themeName) =>
+    resolvedCandidate(colors.resolveTheme(bg, themeName), now);
 
   // Choose an initial result from `samples`. With one sample this is a single
   // solve. With several, solve against the first sample, evaluate that
@@ -362,13 +382,22 @@ export function adaptTheme(element, options) {
   // against its lowest-metric sample. The second result is not rechecked over
   // the set, so this is a bounded initialization heuristic, not a final
   // worst-sample certificate. The tick path instead starts from its own current
-  // result and calls `solveAndAdopt` for the lowest-metric supplied sample.
-  const solveAndAdoptWorst = (samples, now) => {
-    solveAndAdopt(samples[0], now);
+  // result and resolves once more for the lowest-metric supplied sample.
+  const solveWorstCandidate = (samples, now, themeName) => {
+    const sample0 = solveCandidate(samples[0], now, themeName);
+    let candidate = sample0;
     if (samples.length > 1) {
-      const { worstIdx } = recheckSamples(samples);
-      if (worstIdx !== 0) solveAndAdopt(samples[worstIdx], now);
+      const { worstIdx } = recheckSamples(
+        samples,
+        candidate.roles,
+        candidate.fgsCache,
+        themeName,
+      );
+      if (worstIdx !== 0) {
+        candidate = solveCandidate(samples[worstIdx], now, themeName);
+      }
     }
+    return { candidate, sample0Result: sample0.result };
   };
 
   // Every write goes through the full canonical set with the (optional) eased
@@ -391,13 +420,21 @@ export function adaptTheme(element, options) {
   let written = null;
   const applyHexes = (overlay) => {
     const vars = { ...baseVars, ...overlay };
-    if (written === null) {
-      applyTheme(target, { vars });
-    } else {
-      for (const k in vars) {
-        const v = vars[k];
-        if (written[k] !== v) target.style.setProperty(k, v);
+    try {
+      if (written === null) {
+        applyTheme(target, { vars });
+      } else {
+        for (const k in vars) {
+          const v = vars[k];
+          if (written[k] !== v) target.style.setProperty(k, v);
+        }
       }
+    } catch (error) {
+      // CSSOM has no transaction/rollback primitive. Forget the diff baseline
+      // so the next explicit tick retries the whole canonical snapshot instead
+      // of treating a partially-written DOM as committed.
+      written = null;
+      throw error;
     }
     written = vars;
   };
@@ -412,8 +449,13 @@ export function adaptTheme(element, options) {
    * A stable Glow result requires the core-owned exact predicate. Missing
    * capability is a typed integration error, never a hidden full-solve loop.
    */
-  const reconcileStableGlows = (samples) => {
-    if (stableGlows.length === 0) return false;
+  const prepareStableGlowReconciliation = (
+    samples,
+    state,
+    themeName,
+    sample0Result = null,
+  ) => {
+    if (state.stableGlows.length === 0) return null;
 
     if (typeof colors.isStableGlowPointNoop !== "function") {
       throw new TypeError(
@@ -421,26 +463,26 @@ export function adaptTheme(element, options) {
       );
     }
     const desired = new Map();
-    for (const role of stableGlows) {
+    for (const role of state.stableGlows) {
       desired.set(
         role.key,
         samples.some((bg) => !colors.isStableGlowPointNoop(role.sourceHex, bg)),
       );
     }
 
-    const changed = stableGlows.some(
+    const changed = state.stableGlows.some(
       (role) => desired.get(role.key) !== role.indeterminate,
     );
-    if (!changed) return false;
+    if (!changed) return null;
 
     // Re-resolve exactly once to refresh certificates/source metadata. Only
     // stable Glow satellites are adopted; color/translucent roles remain under
     // the existing adaptive contrast controller and do not snap.
-    const fresh = colors.resolveTheme(samples[0], theme);
+    const fresh = sample0Result ?? colors.resolveTheme(samples[0], themeName);
     const freshStable = validatedStableGlowsFrom(fresh);
     const freshByKey = new Map(freshStable.map((role) => [role.key, role]));
-    const nextVars = { ...baseVars };
-    for (const previous of stableGlows) {
+    const nextVars = { ...state.baseVars };
+    for (const previous of state.stableGlows) {
       const current = freshByKey.get(previous.key);
       if (!current) {
         throw new TypeError(`adaptTheme: stable Glow role '${previous.key}' disappeared`);
@@ -457,15 +499,35 @@ export function adaptTheme(element, options) {
           nextVars[key] = fresh.vars[key];
         }
       }
-      current.indeterminate = indeterminate;
     }
 
-    const previousVars = baseVars;
-    baseVars = nextVars;
-    stableGlows = freshStable.map((role) => {
+    const nextStableGlows = freshStable.map((role) => {
       const state = desired.get(role.key);
       return state === undefined ? role : { ...role, indeterminate: state };
     });
+    return { baseVars: nextVars, stableGlows: nextStableGlows };
+  };
+
+  const withStableGlowReconciliation = (
+    candidate,
+    samples,
+    themeName,
+    sample0Result = null,
+  ) => {
+    const prepared = prepareStableGlowReconciliation(
+      samples,
+      candidate,
+      themeName,
+      sample0Result,
+    );
+    return prepared === null ? candidate : { ...candidate, ...prepared };
+  };
+
+  const commitStableGlowReconciliation = (prepared) => {
+    if (prepared === null) return false;
+    const previousVars = baseVars;
+    baseVars = prepared.baseVars;
+    stableGlows = prepared.stableGlows;
     if (written !== null) {
       // A stable certificate transition may coincide with an in-flight color
       // ease. Patch only Glow satellites so the already-painted color overlay
@@ -475,16 +537,24 @@ export function adaptTheme(element, options) {
       const stableKeys = new Set(
         stableGlows.flatMap((role) => stableVarKeys(role)),
       );
-      for (const key of stableKeys) {
-        if (typeof nextVars[key] === "string") {
-          if (previousVars[key] !== nextVars[key] || written[key] !== nextVars[key]) {
-            target.style.setProperty(key, nextVars[key]);
+      try {
+        for (const key of stableKeys) {
+          if (typeof prepared.baseVars[key] === "string") {
+            if (
+              previousVars[key] !== prepared.baseVars[key] ||
+              written[key] !== prepared.baseVars[key]
+            ) {
+              target.style.setProperty(key, prepared.baseVars[key]);
+            }
+            nextWritten[key] = prepared.baseVars[key];
+          } else {
+            target.style.removeProperty(key);
+            delete nextWritten[key];
           }
-          nextWritten[key] = nextVars[key];
-        } else {
-          target.style.removeProperty(key);
-          delete nextWritten[key];
         }
+      } catch (error) {
+        written = null;
+        throw error;
       }
       written = nextWritten;
     }
@@ -494,15 +564,25 @@ export function adaptTheme(element, options) {
   // Begin an ease from the currently-applied colours toward the role colours.
   // `held` latches the per-role displayed blend so it only ever advances toward
   // the destination (strict mode) — see `stepEase`.
-  const beginEase = (fromByVar, now) => {
-    easing = new Map();
-    for (const r of roles) {
+  const prepareEase = (roleSet, fromByVar, now) => {
+    const nextEasing = new Map();
+    for (const r of roleSet) {
       const from = fromByVar[r.cssVar] ?? r.hex;
       if (from !== r.hex) {
-        easing.set(r.cssVar, { from, to: r.hex, held: 0, pair: compileLerpPair(from, r.hex) });
+        nextEasing.set(r.cssVar, {
+          from,
+          to: r.hex,
+          held: 0,
+          pair: compileLerpPair(from, r.hex),
+        });
       }
     }
-    easeStart = now;
+    return { easing: nextEasing, easeStart: now };
+  };
+
+  const commitEase = (prepared) => {
+    easing = prepared.easing;
+    easeStart = prepared.easeStart;
     if (easing.size === 0) applyRolesDirect();
   };
 
@@ -588,6 +668,11 @@ export function adaptTheme(element, options) {
     applyHexes(overlay);
   };
 
+  const easeCompletesAt = (now) => {
+    const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
+    return t >= 1 || !Number.isFinite(t);
+  };
+
   // The canonical target picture (color + translucent). An in-flight colour role
   // is reported at `seg.to`, not at the value currently painted into the DOM.
   const currentApplied = () => {
@@ -630,30 +715,73 @@ export function adaptTheme(element, options) {
     const now = nowArg ?? clock();
     const samples = readSamples();
     const key = samples.join("|");
-    // Advance any in-flight ease first against the live samples. Legacy strict
-    // mode applies its characterized clamp here; it is not a universal
-    // per-frame floor certificate.
-    if (easing.size > 0) stepEase(now, samples, key);
+    const hasEase = easing.size > 0;
 
-    // Steady state: a static backdrop with no in-flight ease and no pending
-    // breach needs no work. A PENDING breach keeps us live even on a static
-    // backdrop, so the sustain timer can fire on one that changed once to a
-    // failing value and then held.
-    if (key === lastKey && easing.size === 0 && breachSince === null) return;
-    if (key !== lastKey) reconcileStableGlows(samples);
-    lastKey = key;
-    if (roles.length === 0) return;
+    // A completed ease on an otherwise idle, unchanged sample has no fallible
+    // work left. Finalise it directly and preserve the old no-recheck fast path.
+    if (
+      key === lastKey &&
+      breachSince === null &&
+      (!hasEase || easeCompletesAt(now))
+    ) {
+      if (hasEase) stepEase(now, samples, key);
+      else if (written === null) applyRolesDirect();
+      return;
+    }
+
+    // A Glow-only set still reacts to a changed backdrop. Prepare the exact
+    // class transition before publishing either the key or CSS state.
+    if (roles.length === 0) {
+      const preparedGlow =
+        key === lastKey
+          ? null
+          : prepareStableGlowReconciliation(
+              samples,
+              { baseVars, stableGlows },
+              theme,
+            );
+      commitStableGlowReconciliation(preparedGlow);
+      lastKey = key;
+      if (hasEase) stepEase(now, samples, key);
+      else if (written === null) applyRolesDirect();
+      return;
+    }
 
     // Compare the current colours with every declared sample. `worstIdx` is the
     // lowest-metric sample, the one used for the next resolve.
     const { breached, worstIdx } = recheckSamples(samples);
+    let nextBreachSince = breachSince;
 
     if (!breached) {
-      breachSince = null;
-      return; // hold — the common case for a slowly-drifting backdrop
+      nextBreachSince = null;
+    } else if (nextBreachSince === null) {
+      nextBreachSince = now;
     }
-    if (breachSince === null) breachSince = now;
-    if (now - breachSince < sustainMs || now - lastSolveAt < dwellMs) return; // debounce / dwell
+
+    const shouldResolve =
+      breached &&
+      now - nextBreachSince >= sustainMs &&
+      now - lastSolveAt >= dwellMs;
+
+    if (!shouldResolve) {
+      const preparedGlow =
+        key === lastKey
+          ? null
+          : prepareStableGlowReconciliation(
+              samples,
+              { baseVars, stableGlows },
+              theme,
+            );
+      // All resolver/recheck/Glow validation work succeeded. Only now publish
+      // the certificate transition and controller bookkeeping, then advance the
+      // current ease against the same sample snapshot.
+      commitStableGlowReconciliation(preparedGlow);
+      lastKey = key;
+      breachSince = nextBreachSince;
+      if (hasEase) stepEase(now, samples, key);
+      else if (written === null) applyRolesDirect();
+      return;
+    }
 
     // Sustained breach: re-solve against the worst sample and ease toward fresh,
     // starting from the colour each role is PAINTED right now (the in-flight ease
@@ -661,45 +789,115 @@ export function adaptTheme(element, options) {
     // would SNAP the element to the old target for one frame before easing,
     // reintroducing flicker when a re-solve overlaps a previous ease.
     const fromByVar = paintedNow(now, samples, key);
-    solveAndAdopt(samples[worstIdx], now);
-    reconcileStableGlows(samples);
-    beginEase(fromByVar, now);
+    let candidate = solveCandidate(samples[worstIdx], now, theme);
+    candidate = withStableGlowReconciliation(
+      candidate,
+      samples,
+      theme,
+      worstIdx === 0 ? candidate.result : null,
+    );
+    const preparedEase = prepareEase(candidate.roles, fromByVar, now);
+    // No controller or DOM state changed before this point. Publish the whole
+    // resolved candidate, ease and sample key as one commit phase.
+    commitResolved(candidate);
+    commitEase(preparedEase);
+    lastKey = key;
     stepEase(now, samples, key);
   };
 
   let rafId = null;
-  const loop = () => {
-    tick();
-    if (win?.requestAnimationFrame) rafId = win.requestAnimationFrame(loop);
+  let running = false;
+  let frameEpoch = 0;
+  let frameCallback = null;
+  const queueNextFrame = (callback) => {
+    try {
+      rafId = win.requestAnimationFrame(callback);
+    } catch (error) {
+      running = false;
+      rafId = null;
+      frameCallback = null;
+      frameEpoch++;
+      throw error;
+    }
+  };
+  const runFrame = (epoch) => {
+    // A callback can survive a hostile/failed cancellation. Epoch ownership
+    // keeps it inert and, critically, prevents it from clearing or extending a
+    // loop started later.
+    if (!running || epoch !== frameEpoch) return;
+    rafId = null;
+    try {
+      tick();
+    } catch (error) {
+      running = false;
+      frameCallback = null;
+      frameEpoch++;
+      throw error;
+    }
+    if (
+      running &&
+      epoch === frameEpoch &&
+      rafId === null &&
+      frameCallback !== null &&
+      win?.requestAnimationFrame
+    ) {
+      queueNextFrame(frameCallback);
+    }
   };
 
   // Apply the initial set immediately (against the worst sample of the backdrop).
   {
     const samples = readSamples();
-    lastKey = samples.join("|");
-    solveAndAdoptWorst(samples, clock());
-    reconcileStableGlows(samples);
+    const nextKey = samples.join("|");
+    const now = clock();
+    const prepared = solveWorstCandidate(samples, now, theme);
+    let candidate = withStableGlowReconciliation(
+      prepared.candidate,
+      samples,
+      theme,
+      prepared.sample0Result,
+    );
+    commitResolved(candidate);
+    lastKey = nextKey;
     applyRolesDirect();
   }
 
   return {
     tick,
     setTheme(next) {
-      theme = next;
       const samples = readSamples();
-      lastKey = samples.join("|");
+      const nextKey = samples.join("|");
+      const now = clock();
+      const prepared = solveWorstCandidate(samples, now, next);
+      let candidate = withStableGlowReconciliation(
+        prepared.candidate,
+        samples,
+        next,
+        prepared.sample0Result,
+      );
+      // All pre-write resolver/recheck/evidence work is complete. Publish the
+      // new theme and resolved state, then enter the CSSOM write phase.
+      theme = next;
+      lastKey = nextKey;
       easing = new Map();
-      solveAndAdoptWorst(samples, clock());
-      reconcileStableGlows(samples);
+      commitResolved(candidate);
       applyRolesDirect(); // instant — a theme switch is intent, not drift
     },
     start() {
-      if (rafId == null && win?.requestAnimationFrame) rafId = win.requestAnimationFrame(loop);
+      if (!running && win?.requestAnimationFrame) {
+        running = true;
+        const epoch = ++frameEpoch;
+        frameCallback = () => runFrame(epoch);
+        queueNextFrame(frameCallback);
+      }
     },
     stop() {
-      if (rafId != null && win?.cancelAnimationFrame) win.cancelAnimationFrame(rafId);
+      running = false;
+      frameEpoch++;
+      frameCallback = null;
+      const pending = rafId;
       rafId = null;
-      easing = new Map();
+      if (pending != null && win?.cancelAnimationFrame) win.cancelAnimationFrame(pending);
     },
     current: currentApplied,
   };

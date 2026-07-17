@@ -3,8 +3,9 @@
 //! Inside Rust, errors are `thiserror` enums callers can match on. At the JS
 //! boundary, whole-call failures become ordinary `Error` objects whose message
 //! has the stable `"<code>: <message>"` form; there is no separate JS `code`
-//! property. The top-level wasm adapter throws those errors for rejected input
-//! (bad hex, unknown theme) without unwinding a Rust panic across the boundary.
+//! property. The top-level adapter throws without unwinding a Rust panic.
+//! Post-preflight rejected, unsupported or internal set outcomes are contract
+//! drift and map to `internal_error`; they never become role data.
 
 use thiserror::Error;
 
@@ -14,9 +15,9 @@ fn expected_wcag22_criterion_keys() -> &'static str {
 
 /// A reason a binding call could not produce a result.
 ///
-/// Per-role unreachability is *not* here — that is a successful resolve whose
-/// individual entries carry their own reason (see [`crate::dto`]). This enum is
-/// for failures of the call as a whole.
+/// Admitted per-role `unreachable | unresolved` outcomes are not here: they are
+/// successful role data (see [`crate::dto`]). This enum is for failures of the
+/// call as a whole.
 #[derive(Error, Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BindingError {
@@ -52,8 +53,9 @@ pub enum BindingError {
 
     /// A core-generated value violated an internal postcondition or the adapter
     /// could not represent a known/forward core variant without losing meaning.
-    /// Includes projection/oklch serialization failures and stable-Glow recheck
-    /// failures after public inputs were already validated. Never client blame.
+    /// Includes post-preflight set rejection/unsupported outcomes,
+    /// projection/oklch serialization failures and stable-Glow recheck failures
+    /// after public inputs were already validated. Never client blame.
     #[error("internal error: {reason}")]
     Internal {
         /// The internal postcondition, projection, or contract mismatch.
