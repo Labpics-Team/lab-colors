@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, Unreachable,
+    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, SolveJob, Solved,
     ViewingConditions, solve, solve_many,
 };
 
@@ -227,7 +227,7 @@ fn case_key(case: &CaseSpec) -> String {
 }
 
 /// Точная сериализация исхода: hex-байты + битовые f64 + все поля ошибок.
-fn outcome_line(result: &Result<Solved, Unreachable>) -> String {
+fn outcome_line(result: &Result<Solved, SolveFailure>) -> String {
     match result {
         Ok(solved) => format!(
             "ok hex={} lc_bits={} wcag_ratio_bits={} floor_override={} jp_bits={} h_ok_bits={} s_bits={}",
@@ -239,10 +239,10 @@ fn outcome_line(result: &Result<Solved, Unreachable>) -> String {
             bits(solved.color().h_ok),
             bits(solved.color().s),
         ),
-        Err(Unreachable::BelowContrastFloor { target }) => {
+        Err(SolveFailure::BelowContrastFloor { target }) => {
             format!("err below_contrast_floor target_bits={}", bits(*target))
         }
-        Err(Unreachable::ExceedsRange {
+        Err(SolveFailure::ExceedsRange {
             target,
             max_achievable,
         }) => format!(
@@ -250,31 +250,31 @@ fn outcome_line(result: &Result<Solved, Unreachable>) -> String {
             bits(*target),
             bits(*max_achievable)
         ),
-        Err(Unreachable::QuantizationGap { target, nearest }) => format!(
-            "err quantization_gap target_bits={} nearest_bits={}",
+        Err(SolveFailure::BoundedSearchExhausted {
+            target,
+            closest_examined,
+        }) => format!(
+            "err bounded_search_exhausted target_bits={} closest_examined_bits={}",
             bits(*target),
-            bits(*nearest)
+            bits(*closest_examined)
         ),
-        Err(Unreachable::FloorUnreachable { floor, max_ratio }) => format!(
+        Err(SolveFailure::FloorUnreachable { floor, max_ratio }) => format!(
             "err floor_unreachable floor_bits={} max_ratio_bits={}",
             bits(*floor),
             bits(*max_ratio)
         ),
-        Err(Unreachable::PolarityMismatch { target }) => {
-            format!("err polarity_mismatch target_bits={}", bits(*target))
-        }
-        Err(Unreachable::GamutUnsupported) => "err gamut_unsupported".to_string(),
-        Err(Unreachable::InvalidInput(message)) => {
+        Err(SolveFailure::GamutUnsupported) => "err gamut_unsupported".to_string(),
+        Err(SolveFailure::InvalidInput(message)) => {
             format!("err invalid_input message={message:?}")
         }
-        Err(Unreachable::InternalInvariant(message)) => {
+        Err(SolveFailure::InternalInvariant(message)) => {
             format!("err internal_invariant message={message:?}")
         }
         Err(other) => format!("err unknown {other:?}"),
     }
 }
 
-fn run_case(case: &CaseSpec) -> Result<Solved, Unreachable> {
+fn run_case(case: &CaseSpec) -> Result<Solved, SolveFailure> {
     let bg = BgInput::solid(case.bg)?;
     solve(
         bg,
@@ -410,7 +410,7 @@ fn characterization_counters_are_non_vacuous() {
             let slot = match class {
                 "below_contrast_floor" => "below_contrast_floor",
                 "exceeds_range" => "exceeds_range",
-                "quantization_gap" => "quantization_gap",
+                "bounded_search_exhausted" => "bounded_search_exhausted",
                 "floor_unreachable" => "floor_unreachable",
                 "polarity_mismatch" => "polarity_mismatch",
                 "gamut_unsupported" => "gamut_unsupported",
@@ -437,7 +437,7 @@ fn characterization_counters_are_non_vacuous() {
             "error class {class} is not populated; counts: {class_counts:?}"
         );
     }
-    // QuantizationGap на публичной поверхности ВЫМЕР. Структурно: допуск
+    // BoundedSearchExhausted на публичной поверхности ВЫМЕР. Структурно: допуск
     // `meets_floor_lc` (−1 Lc) вместе с QUANT_BUDGET=1 даёт окно приёмки в
     // 2 Lc, а same-polarity окна сетки шире 2 Lc существуют только вплотную к
     // аналитическому клипу, где отказ принадлежит BelowContrastFloor ЕЩЁ ДО
@@ -446,14 +446,17 @@ fn characterization_counters_are_non_vacuous() {
     // полярностей, серые и хроматические, hue-сетка, Neutral/Relative вплоть до
     // 1.0, Floor::None/AaText/AaUi, |Lc| 7.3..112, srgb и dim surround; wide
     // gamut не участвует — DisplayP3 умирает на внешнем гейте) не производят
-    // ни одного. Правда самого варианта (`nearest` локален, не глобален)
+    // ни одного. Правда самого варианта (`closest_examined` локален, не глобален)
     // запинена на его собственном шве:
-    // `solve::tests::quantization_gap_wording_is_local_not_global_counterexample`.
-    // Появление гэпа из этой матрицы = изменение поведения поиска, не «новый кейс».
+    // `solve::tests::bounded_search_exhausted_is_local_not_global_counterexample`.
+    // Появление исхода из этой матрицы = изменение поведения поиска, не «новый кейс».
     assert_eq!(
-        class_counts.get("quantization_gap").copied().unwrap_or(0),
+        class_counts
+            .get("bounded_search_exhausted")
+            .copied()
+            .unwrap_or(0),
         0,
-        "QuantizationGap is characterized as publicly extinct on this matrix"
+        "BoundedSearchExhausted is characterized as publicly extinct on this matrix"
     );
     assert_eq!(
         class_counts.get("polarity_mismatch").copied().unwrap_or(0),
@@ -610,7 +613,7 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
     let bg = BgInput::solid("#FFFFFF").expect("literal background");
     assert!(matches!(
         solve_many(bg, &jobs, &vc, Gamut::DisplayP3),
-        Err(Unreachable::GamutUnsupported)
+        Err(SolveFailure::GamutUnsupported)
     ));
 }
 
@@ -631,10 +634,10 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
 ///    целью». Это зафиксированное текущее поведение, которое честные имена
 ///    #297 обязаны проговорить, а не спрятать.
 ///
-/// Ни один вход полосы не смеет выносить QuantizationGap (публичное вымирание —
-/// см. counters-тест); локальность reported near-miss
+/// Ни один вход полосы не смеет выносить BoundedSearchExhausted (публичное
+/// вымирание — см. counters-тест); локальность reported near-miss
 /// запинена контрпримерами на шве поиска (unit-тесты solve.rs:
-/// `quantization_gap_wording_is_local_not_global_counterexample`,
+/// `bounded_search_exhausted_is_local_not_global_counterexample`,
 /// `dj_degraded_selection_is_local_not_global`).
 #[test]
 fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
@@ -679,7 +682,7 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
                         tolerated_undershoot += 1;
                     }
                 }
-                Err(Unreachable::BelowContrastFloor { .. }) => {}
+                Err(SolveFailure::BelowContrastFloor { .. }) => {}
                 Err(other) => panic!(
                     "{bg_hex} {target}: band may refuse only via the analytic dead \
                      zone; got {other:?}"

@@ -1857,7 +1857,7 @@ fn compiled_table_carries_aliases() {
 }
 
 /// Сборка RoleSpec в обход валидатора не даёт правдоподобного мусора:
-/// невалидная α/тинт резолвятся в Unreachable, не в тихий кламп.
+/// невалидная α/тинт резолвятся в SolveFailure, не в тихий кламп.
 #[test]
 fn translucent_resolve_rejects_out_of_domain_spec() {
     use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
@@ -1885,8 +1885,8 @@ fn translucent_resolve_rejects_out_of_domain_spec() {
             &ViewingConditions::srgb(),
         );
         assert!(
-            matches!(set[0].1, Resolved::Unreachable(_)),
-            "α={bad_alpha} обязана дать Unreachable, не цвет"
+            matches!(set[0].1, Resolved::Failure(_)),
+            "α={bad_alpha} обязана дать SolveFailure, не цвет"
         );
     }
     // Мусорный quad отвергается конструктором тинта с именем режима.
@@ -2011,7 +2011,7 @@ fn validate_is_a_complete_preflight() {
 }
 
 /// `RoleSpec` публичен: alpha-analog-спека с недоменной α, собранная в обход
-/// валидатора конфига, резолвится в честный `Unreachable`, а не в
+/// валидатора конфига, резолвится в честный `SolveFailure`, а не в
 /// правдоподобный hex через кламп резолвера инверсии. Недоменный СОЛИД по
 /// построению невозможен ([`crate::ladder::LadderTint::new`] валидирует домен
 /// квада) — гард по солиду остаётся глубинной защитой.
@@ -2035,8 +2035,8 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
         let set = crate::semantic::resolve_named_set(&bg, &table, &ViewingConditions::srgb());
         let (_, r) = set.iter().find(|(n, _)| n == "probe").expect("роль есть");
         assert!(
-            matches!(r, Resolved::Unreachable(_)),
-            "α={alpha}: ждали Unreachable (честный отказ), получено {r:?}"
+            matches!(r, Resolved::Failure(_)),
+            "α={alpha}: ждали SolveFailure (честный отказ), получено {r:?}"
         );
     }
 }

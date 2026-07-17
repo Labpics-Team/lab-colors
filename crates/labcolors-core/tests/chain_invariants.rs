@@ -113,7 +113,7 @@ fn plain_sentiments() -> SentimentsConfig {
 /// Возвращает число ДОСТИЖИМЫХ (эмитирующих цвет) исходов за весь свип — гард
 /// не-вакуумности для вызывающих: тест, чей контракт заявляет эмиссию, обязан
 /// увидеть >0, иначе конечность/эмитируемость не проверилась ни разу (все роли
-/// решились в None/Unreachable — зелёный впустую).
+/// решились в None/SolveFailure — зелёный впустую).
 #[must_use]
 fn assert_table_is_total(table: &NamedRoleTable, label: &str) -> usize {
     let mut reachable = 0usize;
@@ -135,7 +135,7 @@ fn assert_table_is_total(table: &NamedRoleTable, label: &str) -> usize {
 /// `NaN`/`inf`. `Resolved` — `#[non_exhaustive]`: неучтённый вариант обязан
 /// падать громко, а не пройти молча. Возвращает `true`, если исход ЭМИТИРУЕТ
 /// цвет (Color/Translucent/Glow) — то есть ассерты эмитируемости реально
-/// сработали, а не пропущены пустыми ветками None/Unreachable.
+/// сработали, а не пропущены пустыми ветками None/SolveFailure.
 fn assert_resolved_is_finite_and_emittable(
     resolved: &Resolved,
     label: &str,
@@ -183,7 +183,7 @@ fn assert_resolved_is_finite_and_emittable(
             true
         }
         Resolved::None => false,
-        Resolved::Unreachable(_) => false,
+        Resolved::Failure(_) => false,
         other => panic!("{label}/{name}@{bg}: неучтённый Resolved: {other:?}"),
     }
 }
@@ -321,7 +321,7 @@ fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
         );
         if let Ok(table) = cfg.compile_named_role_table() {
             // Чистый гард тотальности/не-паники: достижимость на экстремальных
-            // ручках не обязательна (роль может честно уйти в Unreachable).
+            // ручках не обязательна (роль может честно уйти в SolveFailure).
             let _ = assert_table_is_total(
                 &table,
                 &format!("neutral(r={ratio},mp={target_mp},k={hue_stiffness})"),

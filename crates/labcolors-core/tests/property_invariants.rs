@@ -235,7 +235,7 @@ fn muddiness_cool_hue_is_not_monotone_finding() {
 //
 // КЛАСС: «движок эмитит цвет текст/UI-роли, нарушающий свой легальный пол на
 // байтах» — для ЛЮБОГО фона. Решённый цвет либо КЛИРИТ пол на квантованных
-// байтах, либо роль честно Unreachable (не тихое нарушение). Оракул НЕЗАВИСИМ
+// байтах, либо роль честно SolveFailure (не тихое нарушение). Оракул НЕЗАВИСИМ
 // (своя транскрипция WCAG), не читает число движка — differential-проверка.
 // БЬЁТ НА МУТАЦИИ: ослабление проверки пола в solve (`>=` → всегда-true) →
 // эмитится под-пороговый цвет → независимый оракул ловит → RED.
@@ -270,7 +270,7 @@ fn every_floored_role_clears_its_wcag_floor_on_quantised_bytes() {
                     continue; // роль без легального пола — вне закона
                 };
                 let resolved = set.iter().find(|(n, _)| n == name).map(|(_, r)| r);
-                // Unreachable/None/Translucent — честный не-solid исход, не нарушение.
+                // SolveFailure/None/Translucent — честный не-solid исход, не нарушение.
                 if let Some(Resolved::Color { solved, .. }) = resolved {
                     let ratio = wcag_ratio_from_hex(solved.hex(), &bg_hex);
                     prop_assert!(
@@ -468,7 +468,7 @@ fn resolve_named_set_is_total_and_emits_valid_hex_for_any_valid_config() {
             for ((got, _), (want, _)) in set.iter().zip(table.entries().iter()) {
                 prop_assert_eq!(got, want, "порядок ролей поехал");
             }
-            // Каждый solid-цвет — валидный 7-символьный hex; Unreachable — легальный исход.
+            // Каждый solid-цвет — валидный 7-символьный hex; SolveFailure — легальный исход.
             for (name, res) in &set {
                 if let Some(solved) = res.solved() {
                     prop_assert!(
@@ -499,7 +499,7 @@ fn repr(res: &Resolved) -> String {
         Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
         Resolved::Glow(g) => format!("glow({},{},{:.4})", g.core_hex(), g.halo_hex(), g.alpha()),
         Resolved::None => "none".to_string(),
-        Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
+        Resolved::Failure(_) => "UNREACHABLE".to_string(),
         // `Resolved` помечен `#[non_exhaustive]`: заглушка для будущих вариантов.
         _ => "other".to_string(),
     }

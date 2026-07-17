@@ -152,8 +152,8 @@ pub use wcag22_evidence::CanonicalFiniteBoundedEvidenceV1;
 #[cfg(test)]
 pub(crate) use semantic::{Role, RoleTable, resolve_set};
 pub use solve::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveJob, Solved, TypographicContext,
-    Unreachable, solve, solve_many,
+    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, SolveFailureBoundary,
+    SolveFailureCategory, SolveJob, Solved, TypographicContext, solve, solve_many,
 };
 pub use spaces::oklch::{css_alpha_value, oklch_css_from_hex, oklch_from_hex};
 pub use spaces::p3::{p3_css_from_hex, p3_from_hex};

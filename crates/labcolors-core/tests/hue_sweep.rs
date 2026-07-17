@@ -28,13 +28,13 @@
 //!    every case, override or not.
 //!
 //! And it pins the error model: an `Err` is acceptable only for *principled*
-//! reasons (out of range, dead zone, quantization gap, floor unreachable), never
+//! reasons (out of range, dead zone, bounded search exhausted, floor unreachable), never
 //! a malformed-input panic — and a moderate +45 target on pure white, which the
 //! background can clearly host, must NOT come back ExceedsRange.
 
 use labcolors_core::lpc::{lpc_readability_ys, lpc_with_vc};
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, Unreachable, ViewingConditions, solve,
+    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, ViewingConditions, solve,
     srgb_encoded_from_hex,
 };
 
@@ -122,14 +122,14 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                             solved.hex(),
                         );
                     }
-                    Err(Unreachable::InvalidInput(msg)) => {
+                    Err(SolveFailure::InvalidInput(msg)) => {
                         panic!(
                             "{vc_name} {bg_hex} hue {hue_deg}: malformed-input error on a \
                              well-formed solve: {msg}"
                         );
                     }
                     // A principled refusal (e.g. a hue whose tiny in-gamut chroma
-                    // forces a quantization gap) is legal; the white-specific
+                    // exhausts the bounded neighbour search) is legal; the white-specific
                     // guard below rejects the one variant that would be a bug.
                     Err(_) => {}
                 }
@@ -178,7 +178,7 @@ fn solver_holds_wcag_floor_across_the_full_hue_circle() {
                         solved.wcag_ratio(),
                         solved.hex(),
                     );
-                } else if let Err(Unreachable::InvalidInput(msg)) = result {
+                } else if let Err(SolveFailure::InvalidInput(msg)) = result {
                     panic!(
                         "{vc_name} {bg_hex} hue {hue_deg}: malformed-input error on a \
                          well-formed solve: {msg}"
@@ -196,8 +196,8 @@ fn moderate_positive_target_on_white_is_never_out_of_range_at_any_hue() {
     // comfortably reachable (white hosts up to ~106 Lc), so at NO hue may the
     // solver report ExceedsRange — that would mean it believes white cannot
     // supply a mid contrast, the exact false-unreachable failure mode. A
-    // QuantizationGap is the only tolerated near-miss (an 8-bit grid artefact),
-    // and even that must not occur here in practice; ExceedsRange never may.
+    // BoundedSearchExhausted is the only tolerated near-miss, and even that must
+    // not occur here in practice; ExceedsRange never may.
     for (vc, vc_name) in vcs() {
         let mut hue_deg = 0.0_f64;
         while hue_deg < 360.0 {
@@ -212,13 +212,13 @@ fn moderate_positive_target_on_white_is_never_out_of_range_at_any_hue() {
             );
             if let Err(err) = result {
                 assert!(
-                    !matches!(err, Unreachable::ExceedsRange { .. }),
+                    !matches!(err, SolveFailure::ExceedsRange { .. }),
                     "{vc_name} hue {hue_deg}: white reported ExceedsRange for +45 Lc \
                      — false-unreachable regression: {err:?}"
                 );
                 // Any other Err here would also be surprising on white; surface it.
                 assert!(
-                    matches!(err, Unreachable::QuantizationGap { .. }),
+                    matches!(err, SolveFailure::BoundedSearchExhausted { .. }),
                     "{vc_name} hue {hue_deg}: unexpected refusal of +45 on white: {err:?}"
                 );
             }

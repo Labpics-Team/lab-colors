@@ -47,7 +47,7 @@
 //!    upper half — the perceptually weaker side there, and the one that made
 //!    `#0078D4` emit black against the Fluent convention of white. When *neither*
 //!    polarity can clear the floor (a true mid-grey with no readable side), the
-//!    side that comes *closest* is chosen, so the [`Unreachable`] a role surfaces
+//!    side that comes *closest* is chosen, so the [`SolveFailure`] a role surfaces
 //!    carries the honest best-case `max_ratio`, not a worse one.
 //!
 //! Because the criterion is VC-independent, a role's polarity never flips between
@@ -150,7 +150,7 @@
 
 use crate::ladder::LadderTint;
 use crate::scale;
-use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Hue, Solved, Unreachable};
+use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, Solved};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -161,7 +161,7 @@ use crate::wcag;
 /// [`QUANT_GUARD`] (`0.2`). За клипом решатель эмитит |Lc| ≥ 7.3 — это алгебраически
 /// следует из GROUNDED APCA `0.0.98G-4g` набора (issue #44); guard держит пол
 /// строго выше 7.3, чтобы `Contract::range` у самого клипа не садился на порог
-/// квантования и не возвращал [`Unreachable::BelowContrastFloor`]. Каждый
+/// квантования и не возвращал [`SolveFailure::BelowContrastFloor`]. Каждый
 /// декоративный порог держится строго выше этой границы до появления полной
 /// JND-калибровки.
 ///
@@ -513,8 +513,7 @@ impl Role {
 ///
 /// A fraction of the background's maximum achievable contrast — *not* a fixed
 /// `Lc` delta. See the module docs on the anchor principle for why. `fraction`
-/// is in `(0, 1)`: at `1.0` the target equals the unreachable extreme, so the
-/// strongest meaningful anchor sits just below it.
+/// is in `(0, 1]`: `1.0` names the physical contrast endpoint exactly.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextAnchor {
     fraction: f64,
@@ -532,14 +531,21 @@ pub struct TextAnchor {
 
 impl TextAnchor {
     /// A text anchor at `fraction` of the background's maximum contrast, with the
-    /// given WCAG conformance floor. `fraction` is clamped into `(0, 1)`. Neutral
-    /// undertone (no family hue); attach one with [`with_hue`](Self::with_hue).
-    pub fn new(fraction: f64, conformance: Floor) -> Self {
-        Self {
-            fraction: fraction.clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON),
+    /// given WCAG conformance floor. `fraction` must be finite and inside
+    /// `(0, 1]`; invalid input is rejected rather than silently rewritten.
+    /// Neutral undertone (no family hue); attach one with
+    /// [`with_hue`](Self::with_hue).
+    pub fn new(fraction: f64, conformance: Floor) -> Result<Self, SolveFailure> {
+        if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
+            return Err(SolveFailure::InvalidInput(format!(
+                "text anchor fraction must be finite and inside (0, 1], got {fraction}"
+            )));
+        }
+        Ok(Self {
+            fraction,
             conformance,
             hue: None,
-        }
+        })
     }
 
     /// Тот же якорь, но решаемый в чистом оттенке `hue`-семьи (M1 ch5c). Контракт
@@ -550,7 +556,7 @@ impl TextAnchor {
         self
     }
 
-    /// The fraction of maximum contrast this anchor targets, in `(0, 1)`.
+    /// The fraction of maximum contrast this anchor targets, in `(0, 1]`.
     pub fn fraction(self) -> f64 {
         self.fraction
     }
@@ -998,17 +1004,17 @@ impl RoleChroma {
     /// `NamedRoleTable` можно собрать напрямую, в обход конфиг-валидатора, поэтому
     /// граница резолва обязана отвергать такой ввод сама, а не получать из NaN
     /// правдоподобный серый цвет через особенности сравнений `f64`.
-    fn validate(self) -> Result<(), Unreachable> {
+    fn validate(self) -> Result<(), SolveFailure> {
         match self {
             RoleChroma::Neutral => Ok(()),
             RoleChroma::Tinted { hue_deg, ratio } => {
                 if !hue_deg.is_finite() {
-                    return Err(Unreachable::InvalidInput(format!(
+                    return Err(SolveFailure::InvalidInput(format!(
                         "undertone hue must be finite, got {hue_deg}"
                     )));
                 }
                 if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
-                    return Err(Unreachable::InvalidInput(format!(
+                    return Err(SolveFailure::InvalidInput(format!(
                         "undertone chroma ratio must be finite and inside [0, 1], got {ratio}"
                     )));
                 }
@@ -1020,17 +1026,17 @@ impl RoleChroma {
                 hue_stiffness,
             } => {
                 if !canonical_hue_deg.is_finite() {
-                    return Err(Unreachable::InvalidInput(format!(
+                    return Err(SolveFailure::InvalidInput(format!(
                         "curve canonical hue must be finite, got {canonical_hue_deg}"
                     )));
                 }
                 if !target_mp.is_finite() || target_mp <= 0.0 {
-                    return Err(Unreachable::InvalidInput(format!(
+                    return Err(SolveFailure::InvalidInput(format!(
                         "curve target M' must be finite and greater than zero, got {target_mp}"
                     )));
                 }
                 if !hue_stiffness.is_finite() || hue_stiffness < 0.0 {
-                    return Err(Unreachable::InvalidInput(format!(
+                    return Err(SolveFailure::InvalidInput(format!(
                         "curve hue stiffness must be finite and non-negative, got {hue_stiffness}"
                     )));
                 }
@@ -1505,8 +1511,13 @@ impl Default for RoleTable {
     /// icon the AA UI floor (3:1), disabled carries none (WCAG excludes inactive
     /// controls). Decorative roles carry Lc magnitudes with no floor.
     fn default() -> Self {
-        let anchor =
-            |fraction, conformance| RoleSpec::Anchor(TextAnchor::new(fraction, conformance));
+        let anchor = |fraction, conformance| {
+            RoleSpec::Anchor(TextAnchor {
+                fraction,
+                conformance,
+                hue: None,
+            })
+        };
         // Lc decorative magnitudes — the shadow stack only (its owner anchors
         // are alpha opacities, not dJ' steps). See `surface-jnd` for context.
         let decorative = |magnitude| RoleSpec::Decorative { magnitude };
@@ -1580,8 +1591,8 @@ impl Default for RoleTable {
 ///
 /// Physical unreachability is surfaced per role, never masked — a role on an extreme
 /// background (e.g. muted text on a mid-grey that cannot supply enough contrast)
-/// returns [`Unreachable`], it is not silently clipped to a wrong colour.
-/// [`Unreachable::InternalInvariant`] has different provenance: bindings must
+/// returns [`SolveFailure`], it is not silently clipped to a wrong colour.
+/// [`SolveFailure::InternalInvariant`] has different provenance: bindings must
 /// turn it into a whole-call internal/incompatible-contract error.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -1624,10 +1635,11 @@ pub enum Resolved {
     Material(MaterialResolved),
     /// The honest zero of the `Role::None` token: no colour, no contrast.
     None,
-    /// A physical/domain failure, or an internal core invariant failure. Bindings
-    /// project only physical variants as per-role outcomes and fail the whole
-    /// call closed for [`Unreachable::InternalInvariant`].
-    Unreachable(Unreachable),
+    /// A typed solve failure. Its core-owned category distinguishes a proved
+    /// unreachable contract, an unresolved bounded search, a rejected request,
+    /// and an unsupported capability. Internal invariants fail the whole call
+    /// closed at every binding.
+    Failure(SolveFailure),
 }
 
 /// Резолв полупрозрачной роли: пара `(tint, α)` для прямой эмиссии `rgba(...)`
@@ -2085,7 +2097,7 @@ impl Resolved {
             // α-гарантия читаемости + |ΔJ'| различимость тона, не единый Lc.
             Resolved::Material(_) => Option::None,
             Resolved::None => Some(0.0),
-            Resolved::Unreachable(_) => Option::None,
+            Resolved::Failure(_) => Option::None,
         }
     }
 
@@ -2139,7 +2151,7 @@ struct ResolveContext {
     /// Every role's solve reuses it instead of re-deriving the background's
     /// CIECAM16 forward per call. `Err` if the background cannot be reduced —
     /// then every colour role surfaces that reason.
-    interval: Result<solve::LumaInterval, Unreachable>,
+    interval: Result<solve::LumaInterval, SolveFailure>,
     /// Whether these conditions enforce increased contrast (IC).
     high_contrast: bool,
 }
@@ -2168,8 +2180,8 @@ impl ResolveContext {
     /// sign times `fraction` of the background's maximum contrast. `Err` when the
     /// background has no headroom in the chosen polarity (the honest max-ratio is
     /// reported by the role's solve).
-    fn anchored_contract(&self, anchor: TextAnchor) -> Result<Contract, Unreachable> {
-        let max = self.max_contrast.ok_or(Unreachable::FloorUnreachable {
+    fn anchored_contract(&self, anchor: TextAnchor) -> Result<Contract, SolveFailure> {
+        let max = self.max_contrast.ok_or(SolveFailure::FloorUnreachable {
             floor: POLARITY_FLOOR_RATIO,
             max_ratio: 0.0,
         })?;
@@ -2212,7 +2224,7 @@ impl ResolveContext {
 ///
 /// * [`Resolved::Color`] — the solved colour for a text/UI or decorative role;
 /// * [`Resolved::None`] — for the `Role::None` zero token;
-/// * [`Resolved::Unreachable`] — when no colour can meet the role's contract on
+/// * [`Resolved::Failure`] — when no colour can meet the role's contract on
 ///   this background (an extreme background, never a silent clip).
 ///
 /// This solves the single role in isolation. The `compressed` flag has two
@@ -2286,7 +2298,7 @@ fn resolve_spec_in(
             }
             match ctx.anchored_contract(anchor) {
                 Ok(c) => c,
-                Err(reason) => return Resolved::Unreachable(reason),
+                Err(reason) => return Resolved::Failure(reason),
             }
         }
         RoleSpec::DecorativeDj { magnitude_dj } => {
@@ -2303,7 +2315,7 @@ fn resolve_spec_in(
                     achieved_dj: Some(d.achieved_dj),
                     hue_vanished: false,
                 },
-                Err(reason) => Resolved::Unreachable(reason),
+                Err(reason) => Resolved::Failure(reason),
             };
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
@@ -2378,7 +2390,7 @@ fn resolve_spec_in(
                 {
                     Ok(pair) => pair,
                     Err(e) => {
-                        return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                        return Resolved::Failure(SolveFailure::InternalInvariant(format!(
                             "generated Glow layer recipe was rejected: {e}"
                         )));
                     }
@@ -2391,7 +2403,7 @@ fn resolve_spec_in(
                 ) {
                     Ok(measurement) => measurement,
                     Err(e) => {
-                        return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                        return Resolved::Failure(SolveFailure::InternalInvariant(format!(
                             "generated Glow core measurement was rejected: {e}"
                         )));
                     }
@@ -2455,7 +2467,7 @@ fn resolve_spec_in(
                         provenance,
                     },
                 ),
-                Err(e) => Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+                Err(e) => Resolved::Failure(SolveFailure::InternalInvariant(format!(
                     "generated Glow solve request was rejected: {e}"
                 ))),
             };
@@ -2495,7 +2507,7 @@ fn resolve_spec_in(
                         // семейный материал на нём невыразим. Честный отказ, НЕ тихая
                         // подмена нейтральным тоном при флаге `family_hued=true`.
                         RoleChroma::Neutral => {
-                            return Resolved::Unreachable(Unreachable::InvalidInput(
+                            return Resolved::Failure(SolveFailure::InvalidInput(
                                 "семейный материал требует хроматического подтона \
                                  таблицы (curve/tinted), у таблицы — ахроматический"
                                     .to_string(),
@@ -2518,11 +2530,11 @@ fn resolve_spec_in(
 
     let interval = match &ctx.interval {
         Ok(iv) => *iv,
-        Err(reason) => return Resolved::Unreachable(reason.clone()),
+        Err(reason) => return Resolved::Failure(reason.clone()),
     };
     match solve_with_chroma(bg, contract, chroma, vc, interval) {
         Ok(solved) => Resolved::color(solved),
-        Err(reason) => Resolved::Unreachable(reason),
+        Err(reason) => Resolved::Failure(reason),
     }
 }
 
@@ -2541,33 +2553,37 @@ fn quantise_encoded(e: [f64; 3]) -> [f64; 3] {
     [q(e[0]), q(e[1]), q(e[2])]
 }
 
-/// Валидный кодированный вход rgba-пути: конечные каналы [0,1] и α в (0,1].
-/// RoleSpec публичен — спека, собранная в обход валидатора конфига, не должна
-/// давать правдоподобный мусор: невалидный вход честно резолвится в
-/// Unreachable, не в тихий кламп.
-fn rgba_input_valid(tint_encoded: [f64; 3], alpha: f64) -> bool {
-    tint_encoded
+fn encoded_rgb_valid(encoded: [f64; 3]) -> bool {
+    encoded
         .iter()
-        .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
-        && alpha.is_finite()
-        && alpha > 0.0
-        && alpha <= 1.0
+        .all(|channel| channel.is_finite() && (0.0..=1.0).contains(channel))
+}
+
+fn role_alpha_valid(alpha: f64) -> bool {
+    alpha.is_finite() && alpha > 0.0 && alpha <= 1.0
 }
 
 /// Прямая rgba-лестница: спека зафиксировала точный тинт и α — движок НЕ решает
 /// контракт читаемости, его работа здесь только честный замер. Светлота не
 /// подбирается, α не коэрсится (флаги `finish_rgba(.., false, false)`);
 /// composite/Lc/WCAG считаются из фактически эмитируемого 8-битного значения.
-/// Валидация домена — потому что RoleSpec публичен (см. `rgba_input_valid`).
+/// Альфа остаётся публичным полем `RoleSpec` и потому отвергается как вход.
+/// Тинт к этому шву приходит только из валидированного `LadderTint` либо из
+/// core-математики; его выход из домена был бы внутренним дефектом.
 fn resolve_rgba_direct(
     tint_encoded: [f64; 3],
     alpha: f64,
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Resolved {
-    if !rgba_input_valid(tint_encoded, alpha) {
-        return Resolved::Unreachable(Unreachable::InvalidInput(
-            "rgba-спека вне домена (тинт [0,1], α (0,1]) — сборка в обход валидатора".into(),
+    if !encoded_rgb_valid(tint_encoded) {
+        return Resolved::Failure(SolveFailure::InternalInvariant(
+            "validated/generated rgba tint left encoded sRGB domain".into(),
+        ));
+    }
+    if !role_alpha_valid(alpha) {
+        return Resolved::Failure(SolveFailure::InvalidInput(
+            "rgba alpha must be finite and inside (0, 1]".into(),
         ));
     }
     let bg_encoded = bg.encoded_display();
@@ -2629,11 +2645,11 @@ fn resolve_hued_anchor_from_encoded_source(
 ) -> Resolved {
     let contract = match ctx.anchored_contract(anchor) {
         Ok(c) => c,
-        Err(reason) => return Resolved::Unreachable(reason),
+        Err(reason) => return Resolved::Failure(reason),
     };
     let interval = match &ctx.interval {
         Ok(iv) => *iv,
-        Err(reason) => return Resolved::Unreachable(reason.clone()),
+        Err(reason) => return Resolved::Failure(reason.clone()),
     };
     let hue_deg =
         crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(source_encoded));
@@ -2656,7 +2672,7 @@ fn resolve_hued_anchor_from_encoded_source(
                 hue_vanished,
             }
         }
-        Err(reason) => Resolved::Unreachable(reason),
+        Err(reason) => Resolved::Failure(reason),
     }
 }
 
@@ -2679,9 +2695,9 @@ fn resolve_solid_with_ui_floor(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> Resolved {
-    if !rgba_input_valid(tint_encoded, 1.0) {
-        return Resolved::Unreachable(Unreachable::InvalidInput(
-            "solid-floor-спека вне домена (тинт [0,1]) — сборка в обход валидатора".into(),
+    if !encoded_rgb_valid(tint_encoded) {
+        return Resolved::Failure(SolveFailure::InternalInvariant(
+            "validated/generated solid tint left encoded sRGB domain".into(),
         ));
     }
     let bg_encoded = bg.encoded_display();
@@ -2702,7 +2718,7 @@ fn resolve_solid_with_ui_floor(
     // Нелегально: минимальный сдвиг по кривой семьи до пола.
     let interval = match &ctx.interval {
         Ok(iv) => *iv,
-        Err(reason) => return Resolved::Unreachable(reason.clone()),
+        Err(reason) => return Resolved::Failure(reason.clone()),
     };
     let tint_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint_q);
     let hue_deg = crate::accent::oklab_hue_of(&tint_hex);
@@ -2738,12 +2754,13 @@ fn resolve_solid_with_ui_floor(
         vc,
         interval,
     ) {
-        Ok(solved) => {
-            let shifted = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
-                .expect("hex собственного солвера всегда валиден");
-            finish_rgba(shifted, 1.0, bg_encoded, vc, false, true)
-        }
-        Err(reason) => Resolved::Unreachable(reason),
+        Ok(solved) => match crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) {
+            Ok(shifted) => finish_rgba(shifted, 1.0, bg_encoded, vc, false, true),
+            Err(reason) => Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                "solver emitted an invalid sRGB hex for solid-floor role: {reason}"
+            ))),
+        },
+        Err(reason) => Resolved::Failure(reason),
     }
 }
 
@@ -2809,10 +2826,9 @@ fn nested_foreground_component() -> Result<
         .as_ref()
 }
 
-/// Доменный отказ сборки тинт-поверхности — прежний публичный текст дословно
-/// (тексты отказов наблюдаемы потребителем и заморожены миграцией #307).
-fn pair_label_surface_domain_error(error: &str) -> Resolved {
-    Resolved::Unreachable(Unreachable::InvalidInput(format!(
+/// Public PairLabel opacity rejected by the graph's SSOT validator.
+fn pair_label_opacity_input_error(error: &str) -> Resolved {
+    Resolved::Failure(SolveFailure::InvalidInput(format!(
         "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
     )))
 }
@@ -2868,18 +2884,26 @@ pub(crate) fn resolve_pair_label(
     let tint_q = quantise_encoded(tint.for_vc(vc));
     let source_rgb = match crate::alpha::encoded_to_srgb8(tint_q, "tint") {
         Ok(bytes) => bytes,
-        Err(error) => return pair_label_surface_domain_error(&error),
+        Err(error) => {
+            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                "validated PairLabel tint left encoded sRGB domain: {error}"
+            )));
+        }
     };
     let context_rgb = match crate::alpha::encoded_to_srgb8(bg.encoded_display(), "bg") {
         Ok(bytes) => bytes,
-        Err(error) => return pair_label_surface_domain_error(&error),
+        Err(error) => {
+            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                "validated background left encoded sRGB domain: {error}"
+            )));
+        }
     };
     let graph = match nested_foreground_component() {
         Ok(graph) => graph,
         // Статическая спека не компилируется только при внутреннем дефекте —
         // типизированный отказ честнее паники (RoleSpec публичен).
         Err(defect) => {
-            return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
                 "внутренний дефект компиляции компонента тинт-поверхности: {defect:?}"
             )));
         }
@@ -2893,19 +2917,19 @@ pub(crate) fn resolve_pair_label(
         // Доменный отказ по α несёт сообщение SSOT-валидатора дословно —
         // публичный текст отказа совпадает со старым путём байт-в-байт.
         Err(crate::appearance::GraphError::OpacityOutOfDomain { message, .. }) => {
-            return pair_label_surface_domain_error(&message);
+            return pair_label_opacity_input_error(&message);
         }
         // Прочие ошибки исполнения статического компонента структурно
         // недостижимы (bindings собраны из объявленных handles); отказ
         // остаётся типизированным вместо паники.
         Err(defect) => {
-            return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
                 "внутренний дефект исполнения компонента тинт-поверхности: {defect:?}"
             )));
         }
     };
     let Some(occurrence) = evaluation.occurrence(NESTED_FOREGROUND) else {
-        return Resolved::Unreachable(Unreachable::InvalidInput(
+        return Resolved::Failure(SolveFailure::InternalInvariant(
             "внутренний дефект компонента тинт-поверхности: occurrence отсутствует".into(),
         ));
     };
@@ -2914,14 +2938,17 @@ pub(crate) fn resolve_pair_label(
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
         // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
         // отказ, чем правдоподобный мусор (RoleSpec публичен).
-        return Resolved::Unreachable(Unreachable::InvalidInput(
+        return Resolved::Failure(SolveFailure::InternalInvariant(
             "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
         ));
     };
     // Свежий контекст ПОВЕРХНОСТИ: полярность/интервал/макс-контраст берутся от
     // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
-    let anchor = TextAnchor::new(fraction, floor);
+    let anchor = match TextAnchor::new(fraction, floor) {
+        Ok(anchor) => anchor,
+        Err(reason) => return Resolved::Failure(reason),
+    };
     // Identity-ребро occurrence: foreground решается из ВОЗВРАЩЁННОГО
     // источника (byte → byte/255 точно), а не повторного чтения `tint` —
     // иначе объявленное ребро идентичности было бы декоративным.
@@ -2956,18 +2983,21 @@ pub(crate) fn resolve_pair_label_legacy_oracle(
         match crate::alpha::composite_hex_from_encoded(tint_q, alpha, bg.encoded_display()) {
             Ok(hex) => hex,
             Err(error) => {
-                return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+                return Resolved::Failure(SolveFailure::InvalidInput(format!(
                     "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
                 )));
             }
         };
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
-        return Resolved::Unreachable(Unreachable::InvalidInput(
+        return Resolved::Failure(SolveFailure::InternalInvariant(
             "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
         ));
     };
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
-    let anchor = TextAnchor::new(fraction, floor);
+    let anchor = match TextAnchor::new(fraction, floor) {
+        Ok(anchor) => anchor,
+        Err(reason) => return Resolved::Failure(reason),
+    };
     resolve_hued_anchor(&surface_bg, anchor, tint, vc, &surface_ctx)
 }
 
@@ -2983,10 +3013,14 @@ fn resolve_rgba_inverted(
     // Тот же домен-гард, что у прямого rgba-пути: RoleSpec публичен. Без него
     // недоменная спека, собранная в обход валидатора конфига, дошла бы до
     // численного пути вместо честного типизированного исхода.
-    if !rgba_input_valid(solid_encoded, requested_alpha) {
-        return Resolved::Unreachable(Unreachable::InvalidInput(
-            "alpha-analog-спека вне домена (солид [0,1], α (0,1]) — сборка в обход валидатора"
-                .into(),
+    if !encoded_rgb_valid(solid_encoded) {
+        return Resolved::Failure(SolveFailure::InternalInvariant(
+            "validated alpha-analog solid left encoded sRGB domain".into(),
+        ));
+    }
+    if !role_alpha_valid(requested_alpha) {
+        return Resolved::Failure(SolveFailure::InvalidInput(
+            "alpha-analog alpha must be finite and inside (0, 1]".into(),
         ));
     }
     let bg_encoded = bg.encoded_display();
@@ -2994,7 +3028,11 @@ fn resolve_rgba_inverted(
     let analog =
         match crate::alpha::resolve_alpha_analog_srgb8(solid_q, requested_alpha, bg_encoded) {
             Ok(analog) => analog,
-            Err(error) => return Resolved::Unreachable(Unreachable::InvalidInput(error)),
+            Err(error) => {
+                return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                    "validated alpha-analog resolver violated its total-domain contract: {error}"
+                )));
+            }
         };
     let (tint_srgb8, actual_alpha) = analog;
     let tint_q = tint_srgb8.map(|channel| f64::from(channel) / 255.0);
@@ -3025,13 +3063,19 @@ fn finish_rgba(
         match crate::alpha::composite_hex_from_encoded(tint_encoded, alpha, bg_encoded) {
             Ok(hex) => hex,
             Err(error) => {
-                return Resolved::Unreachable(Unreachable::InvalidInput(format!(
+                return Resolved::Failure(SolveFailure::InternalInvariant(format!(
                     "rgba-композит вне encoded-sRGB8 reference-домена: {error}"
                 )));
             }
         };
-    let composite_q =
-        srgb_encoded_from_hex(&composite_hex).expect("hex собственного форматтера всегда валиден");
+    let composite_q = match srgb_encoded_from_hex(&composite_hex) {
+        Ok(value) => value,
+        Err(reason) => {
+            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
+                "rgba formatter emitted an invalid sRGB hex: {reason}"
+            )));
+        }
+    };
     // Линейный свет из кодированного (per-channel gamma-декод) для перцептивного Lc.
     let decode = |e: [f64; 3]| {
         [
@@ -3083,7 +3127,7 @@ fn resolve_material(
     let floor_ratio = match floor.min_ratio() {
         Some(r) => r,
         None => {
-            return Resolved::Unreachable(Unreachable::InvalidInput(
+            return Resolved::Failure(SolveFailure::InvalidInput(
                 "material-роль требует пол читаемости (aa-text/aa-ui), получен zero-floor"
                     .to_string(),
             ));
@@ -3092,7 +3136,7 @@ fn resolve_material(
     // Тон-база 02: семейно-оттеночная опаковая поверхность на целевом |ΔJ'|.
     let dj = match resolve_dj(bg, tone_dj, polarity, chroma, vc) {
         Ok(d) => d,
-        Err(reason) => return Resolved::Unreachable(reason),
+        Err(reason) => return Resolved::Failure(reason),
     };
     let tone_hex = dj.solved.hex().to_string();
     // Вырождение оттенка семьи у края гамута — только у семейных материалов;
@@ -3103,7 +3147,7 @@ fn resolve_material(
     let m = match crate::material::solve_material_alpha_hex(&tone_hex, floor_ratio) {
         Ok(m) => m,
         Err(e) => {
-            return Resolved::Unreachable(Unreachable::InternalInvariant(format!(
+            return Resolved::Failure(SolveFailure::InternalInvariant(format!(
                 "generated Material solve request was rejected: {e}"
             )));
         }
@@ -3149,7 +3193,7 @@ fn solve_with_chroma(
     chroma: RoleChroma,
     vc: &ViewingConditions,
     interval: solve::LumaInterval,
-) -> Result<Solved, Unreachable> {
+) -> Result<Solved, SolveFailure> {
     if let RoleChroma::Curve { .. } = chroma {
         // Probe — discover the contrast-solved lightness achromatically.
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
@@ -3195,7 +3239,7 @@ fn resolve_dj(
     polarity: Polarity,
     chroma: RoleChroma,
     vc: &ViewingConditions,
-) -> Result<solve::DjSolved, Unreachable> {
+) -> Result<solve::DjSolved, SolveFailure> {
     let sign = polarity.sign();
     if let RoleChroma::Curve { .. } = chroma {
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
@@ -3229,13 +3273,13 @@ const CURVE_REFINE_STEPS: u32 = 3;
 const LIGHTNESS_SETTLE: f64 = 0.002;
 
 /// The Oklab lightness of a solved colour, read back from its emitted hex.
-fn solved_oklab_lightness(solved: &Solved) -> Result<f64, Unreachable> {
+fn solved_oklab_lightness(solved: &Solved) -> Result<f64, SolveFailure> {
     use crate::spaces::oklab::srgb_linear_to_oklab;
     use crate::spaces::srgb::srgb_from_hex;
     srgb_from_hex(solved.hex())
         .map(|rgb| srgb_linear_to_oklab(rgb)[0])
         .map_err(|reason| {
-            Unreachable::InvalidInput(format!(
+            SolveFailure::InternalInvariant(format!(
                 "engine emitted an invalid sRGB hex during curve refinement: {reason}"
             ))
         })
@@ -3348,13 +3392,13 @@ impl NamedRoleTable {
     ///
     /// # Errors
     ///
-    /// [`Unreachable::InvalidInput`], если параметры `chroma` не конечны или
+    /// [`SolveFailure::InvalidInput`], если параметры `chroma` не конечны или
     /// выходят из физического домена своей политики.
     pub fn new(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
-    ) -> Result<Self, Unreachable> {
+    ) -> Result<Self, SolveFailure> {
         chroma.validate()?;
         Ok(Self::from_validated_parts(entries, aliases, chroma))
     }
@@ -3455,7 +3499,7 @@ pub fn resolve_named_set(
         return table
             .entries
             .iter()
-            .map(|(name, _)| (name.clone(), Resolved::Unreachable(reason.clone())))
+            .map(|(name, _)| (name.clone(), Resolved::Failure(reason.clone())))
             .collect();
     }
     // One CIECAM16 forward-cache for the span of this sweep, mirroring
@@ -3901,7 +3945,7 @@ const TEXT_HIERARCHY: [Role; 4] = [
 ];
 
 /// The maximum contrast magnitude the background can supply in `polarity`, read
-/// back from the solver's own [`Unreachable::ExceedsRange`].
+/// back from the solver's own [`SolveFailure::ExceedsRange`].
 ///
 /// Probing a deliberately unreachable target makes `solve` report the true
 /// forward-curve maximum, so the anchor fraction is taken against the same number
@@ -3912,7 +3956,7 @@ fn max_contrast(
     polarity: Polarity,
     vc: &ViewingConditions,
     interval: solve::LumaInterval,
-) -> Result<f64, Unreachable> {
+) -> Result<f64, SolveFailure> {
     let sign = polarity.sign();
     // 300 Lc is comfortably past the ~106 ceiling of any sRGB background.
     let probe = Contract::text(sign * 300.0).with_conformance(Floor::None);
@@ -3925,13 +3969,12 @@ fn max_contrast(
         interval,
     ) {
         // The probe is unreachable by design; ExceedsRange carries the ceiling.
-        Err(Unreachable::ExceedsRange { max_achievable, .. }) => Ok(max_achievable.abs()),
+        Err(SolveFailure::ExceedsRange { max_achievable, .. }) => Ok(max_achievable.abs()),
         // A reachable 300 Lc is physically impossible; treat anything else as the
         // background having no usable headroom in this polarity.
-        Ok(_) => Err(Unreachable::ExceedsRange {
-            target: sign * 300.0,
-            max_achievable: 0.0,
-        }),
+        Ok(_) => Err(SolveFailure::InternalInvariant(
+            "300 Lc ceiling probe unexpectedly resolved".to_string(),
+        )),
         Err(other) => Err(other),
     }
 }
@@ -3952,7 +3995,7 @@ fn max_contrast(
 /// the side the perceptual layer prefers across the whole band ([`break_tie`]).
 /// The winner is a fixed derived polarity, so the decision stays VC-independent.
 /// When neither clears it, the side that comes *closest* wins, so the role's
-/// [`Unreachable`] reports the honest best-case `max_ratio`.
+/// [`SolveFailure`] reports the honest best-case `max_ratio`.
 fn choose_polarity(bg: &BgInput) -> Polarity {
     let bg_disp = bg_display(bg);
     // Dark-on-light is hosted by a black foreground; light-on-dark by white.
@@ -4024,17 +4067,14 @@ fn break_tie() -> Polarity {
 /// The quantised 8-bit *display* sRGB the WCAG formula is measured against — the
 /// exact bytes of the background's hex.
 ///
-/// [`BgInput::Solid`] stores *linear*-light sRGB (from `srgb_from_hex`), so it is
+/// [`BgInput`] stores *linear*-light sRGB (from `srgb_from_hex`), so it is
 /// gamma-encoded back to display space and rounded to the 8-bit grid, matching
 /// the quantisation `solve` uses internally so both sides of the WCAG comparison
 /// are on the same grid.
 fn bg_display(bg: &BgInput) -> [f64; 3] {
-    match bg {
-        BgInput::Solid(rgb_linear) => {
-            let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
-            [q(rgb_linear[0]), q(rgb_linear[1]), q(rgb_linear[2])]
-        }
-    }
+    let rgb_linear = bg.linear_srgb();
+    let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
+    [q(rgb_linear[0]), q(rgb_linear[1]), q(rgb_linear[2])]
 }
 
 #[cfg(test)]
@@ -4721,7 +4761,7 @@ mod tests {
             assert!(
                 matches!(
                     NamedRoleTable::new(Vec::new(), Vec::new(), chroma),
-                    Err(Unreachable::InvalidInput(_))
+                    Err(SolveFailure::InvalidInput(_))
                 ),
                 "даже пустая таблица не должна скрывать некорректную policy: {chroma:?}"
             );
@@ -4741,7 +4781,7 @@ mod tests {
             assert!(
                 outcomes.iter().all(|(_, outcome)| matches!(
                     outcome,
-                    Resolved::Unreachable(Unreachable::InvalidInput(_))
+                    Resolved::Failure(SolveFailure::InvalidInput(_))
                 )),
                 "глобальная ошибка не должна оставлять частично решённые роли: {outcomes:?}"
             );
@@ -5696,7 +5736,7 @@ mod tests {
         let default_table = RoleTable::default();
         let custom = default_table.clone().with(
             Role::LabelPrimary,
-            RoleSpec::Anchor(TextAnchor::new(0.5, Floor::AaText)),
+            RoleSpec::Anchor(TextAnchor::new(0.5, Floor::AaText).unwrap()),
         );
 
         // Primary changed.
@@ -5718,6 +5758,24 @@ mod tests {
         assert!(
             (s_default - s_custom).abs() < 1e-9,
             "override of primary must not touch secondary"
+        );
+    }
+
+    #[test]
+    fn text_anchor_rejects_instead_of_rewriting_invalid_fraction() {
+        for fraction in [f64::NAN, f64::NEG_INFINITY, -0.1, 0.0, 1.1, f64::INFINITY] {
+            assert!(
+                matches!(
+                    TextAnchor::new(fraction, Floor::AaText),
+                    Err(SolveFailure::InvalidInput(_))
+                ),
+                "fraction {fraction:?} must be rejected"
+            );
+        }
+        assert_eq!(
+            TextAnchor::new(1.0, Floor::AaText).unwrap().fraction(),
+            1.0,
+            "the physical endpoint must remain exact"
         );
     }
 
@@ -5781,10 +5839,8 @@ mod tests {
                 let bg = BgInput::solid(&bg_hex).unwrap();
                 let set = resolve_set(&bg, &table_default(), &vc);
                 for (role, r) in &set {
-                    if let Resolved::Unreachable(Unreachable::FloorUnreachable {
-                        floor,
-                        max_ratio,
-                    }) = r
+                    if let Resolved::Failure(SolveFailure::FloorUnreachable { floor, max_ratio }) =
+                        r
                     {
                         panic!(
                             "{vc_name} {bg_hex} {}: false FloorUnreachable (floor {floor}, max {max_ratio})",
@@ -5932,7 +5988,7 @@ mod tests {
                         "{bg_hex}: RoleTable::default() отдал Material для {:?} — дрейф дефолт-таблицы",
                         role
                     ),
-                    Resolved::Unreachable(_) => true,
+                    Resolved::Failure(_) => true,
                 });
                 assert!(
                     no_silent_clip,
@@ -6220,6 +6276,34 @@ mod tests {
             "тёмный тинт @ 0.12 на белом обязан быть отличим (composite={})",
             t.composite_hex()
         );
+    }
+
+    #[test]
+    fn rgba_failure_provenance_does_not_blame_clients_for_core_output() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+
+        let internal = resolve_rgba_direct([f64::NAN, 0.0, 0.0], 0.5, &bg, &vc);
+        assert!(
+            matches!(
+                internal,
+                Resolved::Failure(SolveFailure::InternalInvariant(_))
+            ),
+            "generated tint drift must fail the enclosing boundary: {internal:?}"
+        );
+
+        let rejected = resolve_rgba_direct([0.0, 0.0, 0.0], f64::NAN, &bg, &vc);
+        match rejected {
+            Resolved::Failure(failure) => {
+                let boundary = failure.boundary().expect("public alpha has a wire failure");
+                assert_eq!(
+                    boundary.category(),
+                    crate::solve::SolveFailureCategory::Rejected
+                );
+                assert_eq!(boundary.code(), "invalid_input");
+            }
+            other => panic!("public alpha must be rejected, got {other:?}"),
+        }
     }
 
     #[test]
@@ -7003,7 +7087,7 @@ mod tests {
                             format!("material({},{:.4})", m.tint_hex(), m.alpha())
                         }
                         Resolved::None => "none".to_string(),
-                        Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
+                        Resolved::Failure(_) => "UNREACHABLE".to_string(),
                     };
                     let want = GOLDEN
                         .iter()
