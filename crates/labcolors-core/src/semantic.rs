@@ -1,14 +1,14 @@
-//! Contextual resolver for compiled client-owned colour contracts.
+//! Контекстный резолвер скомпилированных клиентских цветовых контрактов.
 //!
 //! Where [`solve`](crate::solve()) answers "what colour meets *this* signed
 //! contrast against *this* background", this module answers the product-level
 //! question one layer up: "give me the whole set of named colours a UI needs
 //! against this background". [`NamedRoleTable`] carries opaque client IDs plus
 //! core-owned recipes; [`resolve_named_set`] resolves them in declaration order.
-//! Admission is atomic: only role-local `unreachable | unresolved` outcomes can
-//! inhabit a successful set, while rejected, unsupported or internal provenance
-//! returns [`ResolveSetError`] without a partial vector. Serialising the result
-//! is the binding's responsibility.
+//! Допуск атомарен: в успешном наборе живут только локальные
+//! `unreachable | unresolved`, а rejected/unsupported/internal провенанс
+//! возвращает [`ResolveSetError`] без частичного вектора. Сериализация
+//! результата — ответственность биндинга.
 //!
 //! # Polarity is read from the background, never from the role
 //!
@@ -47,7 +47,7 @@
 //!    `#0078D4` emit black against the Fluent convention of white. When *neither*
 //!    polarity can clear the floor (a true mid-grey with no readable side), the
 //!    side that comes *closest* is chosen, so an admitted [`RoleFailure`] retains
-//!    the honest best-case `max_ratio` evidence, not a worse one.
+//!    честное best-case-свидетельство `max_ratio`, а не худшее.
 //!
 //! Because the criterion is VC-independent, a role's polarity never flips between
 //! the light and dim viewing conditions for the same background — no per-theme
@@ -1588,21 +1588,21 @@ impl Default for RoleTable {
     }
 }
 
-/// The only failure categories a successfully admitted role may carry.
+/// Единственные категории отказа, которые может нести допущенная роль.
 ///
-/// Rejected requests, unsupported capabilities and internal drift are deliberately
-/// absent: [`resolve_named_set`] returns those as [`ResolveSetError`] for the whole
-/// set, so a consumer cannot mistake them for one missing colour.
+/// Rejected-запросы, неподдержанные capability и внутренний дрейф отсутствуют
+/// намеренно: [`resolve_named_set`] возвращает их как [`ResolveSetError`] на
+/// весь набор, чтобы потребитель не принял их за «один недостающий цвет».
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoleFailureCategory {
-    /// The declared physical/output domain proves that no solution exists.
+    /// Объявленный физический/выходной домен доказывает: решения нет.
     Unreachable,
-    /// A bounded algorithm ended without proving reachability either way.
+    /// Ограниченный алгоритм завершился, не доказав достижимость ни в одну сторону.
     Unresolved,
 }
 
 impl RoleFailureCategory {
-    /// Stable wire spelling used by bindings.
+    /// Стабильное wire-написание для биндингов.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unreachable => SolveFailureCategory::Unreachable.as_str(),
@@ -1623,11 +1623,11 @@ enum RoleFailureState {
     Unresolved(BoundaryFailure),
 }
 
-/// An admitted per-role failure from the core's single
-/// [`SolveFailure::boundary`] classification.
+/// Допущенный пер-ролевой отказ из единственной классификации ядра
+/// [`SolveFailure::boundary`].
 ///
-/// Fields and constructors are private by design: only the final set-admission
-/// pass can create this value, and that pass accepts exactly `unreachable` or
+/// Поля и конструкторы приватны намеренно: создать это значение может только
+/// финальный проход допуска набора, и он принимает ровно `unreachable` или
 /// `unresolved`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoleFailure {
@@ -1643,7 +1643,7 @@ impl RoleFailure {
         }
     }
 
-    /// The narrowed semantic category of this role-local failure.
+    /// Суженная семантическая категория этого локального отказа роли.
     pub const fn category(&self) -> RoleFailureCategory {
         match &self.state {
             RoleFailureState::Unreachable(_) => RoleFailureCategory::Unreachable,
@@ -1651,12 +1651,12 @@ impl RoleFailure {
         }
     }
 
-    /// Core-owned stable machine code.
+    /// Стабильный машинный код, принадлежащий ядру.
     pub const fn code(&self) -> &'static str {
         self.evidence().boundary.code()
     }
 
-    /// Structured solver evidence carried by this admitted failure.
+    /// Структурированное свидетельство солвера внутри допущенного отказа.
     pub const fn reason(&self) -> &SolveFailure {
         &self.evidence().reason
     }
@@ -1674,19 +1674,19 @@ impl std::error::Error for RoleFailure {
     }
 }
 
-/// Why resolving an already-compiled set failed atomically.
+/// Почему резолв уже скомпилированного набора отказал атомарно.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveSetErrorKind {
-    /// A request value was outside its declared domain.
+    /// Значение запроса вышло за объявленный домен.
     Rejected,
-    /// The request requires a capability this resolver does not implement.
+    /// Запрос требует capability, которую этот резолвер не реализует.
     Unsupported,
-    /// Core-produced state violated an internal postcondition.
+    /// Состояние, произведённое ядром, нарушило внутренний постинвариант.
     Internal,
 }
 
 impl ResolveSetErrorKind {
-    /// Stable diagnostic spelling used by bindings for whole-call failures.
+    /// Стабильное диагностическое написание для whole-call-отказов в биндингах.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Rejected => SolveFailureCategory::Rejected.as_str(),
@@ -1703,19 +1703,19 @@ enum ResolveSetErrorState {
     Internal(SolveFailure),
 }
 
-/// Whole-set failure from [`resolve_named_set`].
+/// Отказ всего набора из [`resolve_named_set`].
 ///
-/// Rejected requests, unsupported capabilities and internal drift close the
-/// whole call. Constructors are private; ordinary admission shares
-/// [`SolveFailure::boundary`] with [`RoleFailure`], while [`Self::kind`] and
-/// [`Self::code`] remain the authoritative whole-call classification.
+/// Rejected-запросы, неподдержанные capability и внутренний дрейф закрывают
+/// весь вызов. Конструкторы приватны; допуск делит [`SolveFailure::boundary`]
+/// с [`RoleFailure`], а [`Self::kind`] и [`Self::code`] остаются
+/// авторитетной whole-call-классификацией.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolveSetError {
     state: ResolveSetErrorState,
 }
 
 impl ResolveSetError {
-    /// The narrowed whole-call category.
+    /// Суженная whole-call-категория.
     pub const fn kind(&self) -> ResolveSetErrorKind {
         match &self.state {
             ResolveSetErrorState::Rejected(_) => ResolveSetErrorKind::Rejected,
@@ -1724,8 +1724,8 @@ impl ResolveSetError {
         }
     }
 
-    /// Core-owned stable machine code for rejected/unsupported failures.
-    /// Internal drift intentionally has no public solver code.
+    /// Стабильный машинный код ядра для rejected/unsupported-отказов.
+    /// У внутреннего дрейфа намеренно нет публичного solver-кода.
     pub const fn code(&self) -> Option<&'static str> {
         match &self.state {
             ResolveSetErrorState::Rejected(evidence)
@@ -1734,7 +1734,7 @@ impl ResolveSetError {
         }
     }
 
-    /// Structured source failure for diagnostics and exact evidence fields.
+    /// Структурированный исходный отказ — диагностика и точные evidence-поля.
     pub const fn reason(&self) -> &SolveFailure {
         match &self.state {
             ResolveSetErrorState::Rejected(evidence)
@@ -1756,15 +1756,16 @@ impl std::error::Error for ResolveSetError {
     }
 }
 
-/// Internal role state before the whole set has passed failure admission.
+/// Внутреннее состояние роли до того, как весь набор прошёл допуск отказов.
 type PendingResolution = Result<Resolved, SolveFailure>;
 
-/// The outcome of resolving one admitted role: a solved colour, an honest zero,
-/// a typed numerical indeterminacy, or a role-local failure.
+/// Исход резолва одной допущенной роли: решённый цвет, честный ноль,
+/// типизированная численная неопределённость или локальный отказ роли.
 ///
-/// Proved unreachability and unresolved bounded search are surfaced per role,
-/// never masked. Rejected, unsupported and internal provenance cannot inhabit
-/// this type; it closes [`resolve_named_set`] through [`ResolveSetError`].
+/// Доказанная недостижимость и незавершённый bounded search отдаются
+/// пер-ролью и не маскируются. Rejected/unsupported/internal провенанс в этом
+/// типе жить не может: он закрывает [`resolve_named_set`] через
+/// [`ResolveSetError`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Resolved {
@@ -1807,16 +1808,16 @@ pub enum Resolved {
     Material(MaterialResolved),
     /// The honest zero of the `Role::None` token: no colour, no contrast.
     None,
-    /// A proved-unreachable contract or unresolved bounded search. Other
-    /// failure provenance is a [`ResolveSetError`] for the whole set.
+    /// Доказанно недостижимый контракт либо незавершённый bounded search.
+    /// Иной провенанс отказа — [`ResolveSetError`] на весь набор.
     Failure(RoleFailure),
 }
 
-/// Admit one raw role result into the terminal set surface.
+/// Допустить один сырой результат роли в терминальную поверхность набора.
 ///
-/// This is the only place where broad solver failures are partitioned between
-/// role-local data and whole-call errors. It reads the existing boundary
-/// descriptor; it does not own a second variant-to-category table.
+/// Единственное место, где широкие отказы солвера делятся на локальные данные
+/// роли и whole-call-ошибки. Читает существующий boundary-дескриптор; второй
+/// таблицы «вариант → категория» здесь нет.
 fn classify_role_failure(reason: SolveFailure) -> Result<RoleFailure, ResolveSetError> {
     match reason.boundary() {
         Some(boundary) => match boundary.category() {
@@ -3641,10 +3642,10 @@ impl RoleSpec {
         }
     }
 
-    /// Validate the cross-field contract between a recipe and the table-wide
-    /// chroma policy. A family-hued material needs a policy capable of carrying
-    /// hue; accepting it under an achromatic policy would defer invalid input
-    /// into the runtime resolve.
+    /// Проверить меж-полевой контракт рецепта и общетабличной политики хромы.
+    /// Family-hued материал требует политику, способную нести hue: принять его
+    /// под ахроматической политикой значило бы отложить невалидный вход до
+    /// runtime-резолва.
     fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
         self.validate_domain()?;
         if matches!(self, RoleSpec::Material { hue: Some(_), .. })
@@ -3686,7 +3687,9 @@ impl NamedRoleTable {
     /// # Errors
     ///
     /// [`SolveFailure::InvalidInput`], если любой численный параметр роли или
-    /// `chroma` не конечен либо выходит из своего физического домена.
+    /// `chroma` не конечен либо выходит из своего физического домена, а также
+    /// при структурной несовместимости спеки с политикой хромы (например,
+    /// `Material { hue: Some(_) }` при `RoleChroma::Neutral`).
     pub fn new(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
@@ -3771,13 +3774,14 @@ impl NamedRoleTable {
     }
 }
 
-/// Resolve every client-named role in `table` against `bg` under `vc`.
+/// Решить каждую клиентски именованную роль `table` против `bg` при `vc`.
 ///
-/// `Ok` preserves declaration order and may contain only admitted role-local
-/// `unreachable | unresolved` failures. Rejected input, unsupported capability
+/// `Ok` сохраняет порядок объявления и может нести только допущенные
+/// локальные `unreachable | unresolved`. Rejected-вход, неподдержанная capability
 /// or internal drift returns [`ResolveSetError`] for the entire call; no partial
-/// vector is observable. Declared text ladders are compressed in place only
-/// after their individual results have passed the same admission boundary.
+/// вектор не наблюдаем. Объявленные текстовые лестницы сжимаются на месте
+/// только после того, как их индивидуальные результаты прошли ту же границу
+/// допуска.
 pub fn resolve_named_set(
     bg: &BgInput,
     table: &NamedRoleTable,

@@ -20,9 +20,9 @@ export interface WatchThemeOptions {
   /** Auto-refresh on `style`/`class` attribute changes in the observed subtree. Default `true`. */
   observe?: boolean;
   /**
-   * Receives failures from observer-triggered refreshes. Explicit `refresh()`
-   * and `setTheme()` remain synchronous and throw to their caller. Without a
-   * handler, the host reports the exception through `reportError`/its error event.
+   * Получает отказы observer-обновлений. Явные `refresh()` и `setTheme()`
+   * синхронны и бросают вызывающему. Без обработчика host сообщает об
+   * исключении через `reportError`/своё error-событие.
    */
   onError?: (error: unknown) => void;
   /** Mutation-observer root. Defaults to the document element. */

@@ -1613,15 +1613,22 @@ test("a NaN clock mid-ease never paints invalid #NANNANNAN CSS (easeOut NaN guar
   assert.notEqual(midPainted, "#000000", "sanity: genuinely mid-path, not the origin");
   assert.notEqual(midPainted, "#F0F0F0", "sanity: genuinely mid-path, not the target");
 
-  // Now STEP the still-in-flight ease with a NaN clock. easeOut's guard turns the
-  // NaN `t` into a completed ease (1) → a valid hex; without it lerpHex emits
-  // "#NaNNaNNaN". The passing recheck means this paint is NOT overwritten by a
-  // re-solve, so it is exactly what easeOut produced.
+  // Теперь шаг с NaN-часами. Контракт УЖЕСТОЧЁН (находка CodeRabbit #340):
+  // нефинитное время отбивается на входе tick() громким RangeError раньше,
+  // чем успеет отравить breach/ease-тайминг; страж easeOut остаётся второй
+  // линией обороны. Проверяем обе стороны: бросок И то, что покрашенное
+  // значение осталось валидным mid-ease hex — NaN не дошёл до CSS.
   h.setBg("#202023");
-  h.ctrl.tick(NaN);
+  assert.throws(() => h.ctrl.tick(NaN), /конечными/u);
   const painted = h.el.props.get("--lab-label-primary");
-  assert.ok(isHex6(painted), `NaN clock must still paint a valid #RRGGBB, saw ${painted}`);
-  assert.ok(!/nan/i.test(painted), `painted colour must contain no NaN channel (never #NANNANNAN), saw ${painted}`);
+  assert.ok(isHex6(painted), `после отбитого NaN-тика в CSS валидный #RRGGBB, saw ${painted}`);
+  assert.ok(!/nan/i.test(painted), `никакого #NANNANNAN, saw ${painted}`);
+  assert.equal(painted, midPainted, "отбитый тик ничего не перекрашивает");
+
+  // Следующий конечный тик продолжает ease как ни в чём не бывало.
+  h.setNow(1360);
+  h.ctrl.tick();
+  assert.ok(isHex6(h.el.props.get("--lab-label-primary")));
 });
 
 test("rejects a colours engine missing recheckContrast", () => {
@@ -1847,4 +1854,78 @@ test("admitted per-role failure stays inert through init, breach re-solve and ea
   // 3. current() не фабрикует отказную переменную.
   assert.equal(ctrl.current()["--lab-impossible"], undefined);
   ctrl.stop();
+});
+
+// ── Hostile-input стражи цикла (находки CodeRabbit PR #340) ──────────────────
+
+test("corrupted recheck buffer fails loud instead of silently keeping stale colours", () => {
+  const el = fakeElement();
+  let recheckMode = "ok";
+  let bg = "#FFFFFF";
+  const colors = {
+    resolveTheme: () => oneRole("#000000", 100),
+    recheckContrast(b, fgs) {
+      if (recheckMode === "short") return [10]; // битая длина
+      if (recheckMode === "nan") return fgs.flatMap(() => [Number.NaN, 1.5]);
+      return fgs.flatMap(() => [100, 10]);
+    },
+  };
+  let now = 1000;
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  recheckMode = "short";
+  bg = "#EEEEEE"; // сменить фон, чтобы уйти с fast-path и запустить recheck
+  now += 50;
+  assert.throws(() => ctrl.tick(), /неверной длины/u);
+  recheckMode = "nan";
+  bg = "#DDDDDD";
+  now += 50;
+  assert.throws(() => ctrl.tick(), /нефинитный Lc/u);
+  ctrl.stop();
+});
+
+test("corrupted resolve result throws instead of wiping vars with an empty snapshot", () => {
+  const el = fakeElement();
+  let corrupt = false;
+  let bg = "#FFFFFF";
+  const colors = {
+    resolveTheme: () => (corrupt ? { roles: {} } : oneRole("#000000", 100)),
+    recheckContrast: (b, fgs) => fgs.flatMap(() => [1, 1.5]), // пробой → re-solve
+  };
+  let now = 1000;
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  const varsBefore = new Map(el.props);
+  corrupt = true;
+  bg = "#EEEEEE"; // уйти с fast-path: recheck сообщит пробой, цикл пере-решит
+  now += 50;
+  assert.throws(() => ctrl.tick(), /vars, roles/u);
+  assert.deepEqual(el.props, varsBefore, "painted vars survive a corrupted re-solve");
+  ctrl.stop();
+});
+
+test("non-finite clock is rejected before it can poison breach timing", () => {
+  const h = harness();
+  assert.throws(() => h.ctrl.tick(Number.NaN), /конечными/u);
+  assert.throws(() => h.ctrl.tick(Number.POSITIVE_INFINITY), /конечными/u);
+  // Конечный tick после отбитых — работает как ни в чём не бывало.
+  h.advance(50);
+  h.ctrl.tick();
+  h.ctrl.stop();
 });

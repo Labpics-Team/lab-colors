@@ -79,7 +79,7 @@ function segLum(seg, t) {
  *   not drift) — re-resolve and apply, bypassing the debounce/dwell machinery.
  * @property {() => void} start  Begin an internal requestAnimationFrame loop.
  * @property {() => void} stop   Stop the internal loop without discarding an
- *   in-flight ease; a later `start()` or `tick()` continues against its clock.
+ *   незавершённый ease; последующий `start()`/`tick()` продолжит его по своим часам.
  * @property {() => Record<string,string>} current  Canonical resolved targets;
  *   during an ease these differ from the values painted into the DOM.
  */
@@ -219,11 +219,25 @@ export function adaptTheme(element, options) {
       const flat = batch
         ? null
         : colors.recheckContrast(samples[s], foregrounds, themeName);
+      if (!batch && (flat?.length ?? -1) !== roleSet.length * 2) {
+        throw new RangeError(
+          "adaptTheme: recheckContrast вернул буфер неверной длины " +
+            `(${flat?.length} вместо ${roleSet.length * 2}) — ` +
+            "битый результат нельзя молча принять за отсутствие пробоя",
+        );
+      }
       const base = s * stride;
       let sampleMargin = Infinity;
       for (let i = 0; i < roleSet.length; i++) {
         const want = Math.abs(roleSet[i].lc) * (1 - dropFraction);
-        const lcNow = Math.abs(batch ? batch[(base + i) * 2] : flat[2 * i]);
+        const lcRaw = batch ? batch[(base + i) * 2] : flat[2 * i];
+        if (!Number.isFinite(lcRaw)) {
+          throw new RangeError(
+            `adaptTheme: recheckContrast отдал нефинитный Lc (${lcRaw}) — ` +
+              "NaN-сравнения молча заморозили бы устаревшие цвета",
+          );
+        }
+        const lcNow = Math.abs(lcRaw);
         if (lcNow < want) breached = true;
         const margin = want > 0 ? lcNow / want : Infinity;
         if (margin < sampleMargin) sampleMargin = margin;
@@ -336,11 +350,24 @@ export function adaptTheme(element, options) {
     return out;
   };
 
-  // Build an immutable candidate first. No controller or DOM state changes
-  // until every resolve/recheck/certificate step in the transaction succeeds.
+  // Сначала собрать неизменяемый кандидат: состояние контроллера и DOM не
+  // меняются, пока каждый шаг транзакции (resolve/recheck/сертификат) не пройдёт.
   const resolvedCandidate = (result, now) => {
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !result.vars ||
+      typeof result.vars !== "object" ||
+      !result.roles ||
+      typeof result.roles !== "object"
+    ) {
+      throw new TypeError(
+        "adaptTheme: resolveTheme обязан вернуть {vars, roles}; повреждённый " +
+          "результат нельзя подменять пустым снимком — это стёрло бы все --lab-*",
+      );
+    }
     const nextStableGlows = validatedStableGlowsFrom(result);
-    const nextBaseVars = result.vars && typeof result.vars === "object" ? result.vars : {};
+    const nextBaseVars = result.vars;
     const nextRoles = Object.entries(result.roles)
       .filter(([, r]) => r && r.kind === "color")
       .map(([key, r]) => ({
@@ -368,8 +395,8 @@ export function adaptTheme(element, options) {
     fgsCache = candidate.fgsCache;
     lastSolveAt = candidate.lastSolveAt;
     breachSince = candidate.breachSince;
-    // A resolved candidate may change the key set. The next write must use the
-    // full clear-then-write path, but only after the transaction commits.
+    // Пере-решённый кандидат может сменить набор ключей: следующая запись
+    // обязана идти полным clear-then-write, но лишь после коммита транзакции.
     written = null;
   };
 
@@ -382,7 +409,7 @@ export function adaptTheme(element, options) {
   // against its lowest-metric sample. The second result is not rechecked over
   // the set, so this is a bounded initialization heuristic, not a final
   // worst-sample certificate. The tick path instead starts from its own current
-  // result and resolves once more for the lowest-metric supplied sample.
+  // результата и пере-решает по худшему (минимальная метрика) из образцов.
   const solveWorstCandidate = (samples, now, themeName) => {
     const sample0 = solveCandidate(samples[0], now, themeName);
     let candidate = sample0;
@@ -430,9 +457,9 @@ export function adaptTheme(element, options) {
         }
       }
     } catch (error) {
-      // CSSOM has no transaction/rollback primitive. Forget the diff baseline
-      // so the next explicit tick retries the whole canonical snapshot instead
-      // of treating a partially-written DOM as committed.
+      // У CSSOM нет транзакций/отката. Забываем diff-базу, чтобы следующий
+      // явный tick переписал весь канонический снимок, а не считал частично
+      // записанный DOM закоммиченным.
       written = null;
       throw error;
     }
@@ -713,12 +740,18 @@ export function adaptTheme(element, options) {
 
   const tick = (nowArg) => {
     const now = nowArg ?? clock();
+    if (!Number.isFinite(now)) {
+      throw new RangeError(
+        `adaptTheme: часы обязаны быть конечными, получено ${now} — ` +
+          "нефинитное время отравило бы breach/ease-тайминг навсегда",
+      );
+    }
     const samples = readSamples();
     const key = samples.join("|");
     const hasEase = easing.size > 0;
 
-    // A completed ease on an otherwise idle, unchanged sample has no fallible
-    // work left. Finalise it directly and preserve the old no-recheck fast path.
+    // Завершившийся ease на неизменном idle-образце не содержит fallible-
+    // работы: финализируем напрямую, сохраняя старый fast-path без recheck.
     if (
       key === lastKey &&
       breachSince === null &&
@@ -729,8 +762,8 @@ export function adaptTheme(element, options) {
       return;
     }
 
-    // A Glow-only set still reacts to a changed backdrop. Prepare the exact
-    // class transition before publishing either the key or CSS state.
+    // Glow-only набор всё равно реагирует на смену подложки. Готовим точный
+    // class-переход до публикации и ключа, и CSS-состояния.
     if (roles.length === 0) {
       const preparedGlow =
         key === lastKey
@@ -772,9 +805,9 @@ export function adaptTheme(element, options) {
               { baseVars, stableGlows },
               theme,
             );
-      // All resolver/recheck/Glow validation work succeeded. Only now publish
-      // the certificate transition and controller bookkeeping, then advance the
-      // current ease against the same sample snapshot.
+      // Вся работа resolver/recheck/Glow-валидации успешна. Только теперь
+      // публикуем сертификатный переход и учёт контроллера, затем двигаем
+      // текущий ease по тому же снимку образцов.
       commitStableGlowReconciliation(preparedGlow);
       lastKey = key;
       breachSince = nextBreachSince;
@@ -797,8 +830,8 @@ export function adaptTheme(element, options) {
       worstIdx === 0 ? candidate.result : null,
     );
     const preparedEase = prepareEase(candidate.roles, fromByVar, now);
-    // No controller or DOM state changed before this point. Publish the whole
-    // resolved candidate, ease and sample key as one commit phase.
+    // До этой точки ни состояние контроллера, ни DOM не менялись. Публикуем
+    // решённого кандидата, ease и ключ образцов одной commit-фазой.
     commitResolved(candidate);
     commitEase(preparedEase);
     lastKey = key;
@@ -821,17 +854,22 @@ export function adaptTheme(element, options) {
     }
   };
   const runFrame = (epoch) => {
-    // A callback can survive a hostile/failed cancellation. Epoch ownership
-    // keeps it inert and, critically, prevents it from clearing or extending a
-    // loop started later.
+    // Callback может пережить враждебную/несработавшую отмену. Владение
+    // эпохой держит его инертным и, главное, не даёт ему гасить или
+    // продлевать цикл, запущенный позже.
     if (!running || epoch !== frameEpoch) return;
     rafId = null;
     try {
       tick();
     } catch (error) {
-      running = false;
-      frameCallback = null;
-      frameEpoch++;
+      // Гасить можно только СВОЮ эпоху: если tick() внутри успел сделать
+      // stop()/start(), новая эпоха уже владеет циклом, и падение старого
+      // кадра не смеет её глушить.
+      if (epoch === frameEpoch) {
+        running = false;
+        frameCallback = null;
+        frameEpoch++;
+      }
       throw error;
     }
     if (
@@ -875,8 +913,8 @@ export function adaptTheme(element, options) {
         next,
         prepared.sample0Result,
       );
-      // All pre-write resolver/recheck/evidence work is complete. Publish the
-      // new theme and resolved state, then enter the CSSOM write phase.
+      // Вся до-записьная работа resolver/recheck/evidence завершена.
+      // Публикуем новую тему и решённое состояние, затем — фаза CSSOM-записи.
       theme = next;
       lastKey = nextKey;
       easing = new Map();

@@ -3,9 +3,9 @@
 //! Inside Rust, errors are `thiserror` enums callers can match on. At the JS
 //! boundary, whole-call failures become ordinary `Error` objects whose message
 //! has the stable `"<code>: <message>"` form; there is no separate JS `code`
-//! property. The top-level adapter throws without unwinding a Rust panic.
-//! Post-preflight rejected, unsupported or internal set outcomes are contract
-//! drift and map to `internal_error`; they never become role data.
+//! свойство. Верхний адаптер бросает без разматывания Rust-паники.
+//! Пост-префлайтовые rejected/unsupported/internal исходы набора — контрактный
+//! дрейф: мапятся в `internal_error` и никогда не становятся данными роли.
 
 use thiserror::Error;
 
@@ -15,9 +15,8 @@ fn expected_wcag22_criterion_keys() -> &'static str {
 
 /// A reason a binding call could not produce a result.
 ///
-/// Admitted per-role `unreachable | unresolved` outcomes are not here: they are
-/// successful role data (see [`crate::dto`]). This enum is for failures of the
-/// call as a whole.
+/// Допущенных пер-ролевых `unreachable | unresolved` здесь нет: это успешные
+/// данные роли (см. [`crate::dto`]). Этот enum — про отказ вызова ЦЕЛИКОМ.
 #[derive(Error, Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BindingError {
@@ -53,9 +52,9 @@ pub enum BindingError {
 
     /// A core-generated value violated an internal postcondition or the adapter
     /// could not represent a known/forward core variant without losing meaning.
-    /// Includes post-preflight set rejection/unsupported outcomes,
-    /// projection/oklch serialization failures and stable-Glow recheck failures
-    /// after public inputs were already validated. Never client blame.
+    /// Включает пост-префлайтовые rejection/unsupported исходы набора,
+    /// отказы проекции/oklch-сериализации и stable-Glow recheck-отказы
+    /// уже после валидации публичных входов. Никогда не вина клиента.
     #[error("internal error: {reason}")]
     Internal {
         /// The internal postcondition, projection, or contract mismatch.

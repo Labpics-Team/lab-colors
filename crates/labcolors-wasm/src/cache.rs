@@ -14,11 +14,11 @@
 //! wholesale-clears the cache (see [`ContractCache::clear`]), so exactly one key
 //! namespace is ever live and a stale entry from another config cannot be served.
 //!
-//! Each `Engine` is confined to one JavaScript agent. A `RefCell` therefore
-//! provides the required interior mutability without a lock or a `Send` bound.
+//! Каждый `Engine` живёт в одном JavaScript-агенте, поэтому `RefCell` даёт
+//! нужную внутреннюю изменяемость без локов и `Send`-обязательств.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::theme::Theme;
 
@@ -59,6 +59,9 @@ impl CacheKey {
 /// cloneable value (e.g. an `Rc`-backed or already-serialised result).
 pub struct ContractCache<V> {
     entries: RefCell<HashMap<CacheKey, V>>,
+    /// Ключи, чей `build` выполняется прямо сейчас: жёсткий страж
+    /// same-key-реентерабельности (см. `get_or_try_insert_with`).
+    building: RefCell<HashSet<CacheKey>>,
     capacity: usize,
 }
 
@@ -72,20 +75,23 @@ impl<V: Clone> ContractCache<V> {
         assert!(capacity > 0, "ContractCache capacity must be at least 1");
         Self {
             entries: RefCell::new(HashMap::new()),
+            building: RefCell::new(HashSet::new()),
             capacity,
         }
     }
 
-    /// Return the cached value for `key`, computing and storing it with `build`
-    /// on a miss. Only a successful build mutates the cache; an error neither
-    /// inserts nor evicts an existing successful value.
+    /// Вернуть закэшированное значение для `key`, при промахе вычислив и
+    /// сохранив его через `build`. Кэш мутирует только успешная сборка: ошибка
+    /// ничего не вставляет и не вытесняет существующее успешное значение.
     ///
-    /// # Reentrancy
-    /// `build` must not call `get_or_try_insert_with` on this same cache with the
-    /// same `key` — the entry is not inserted until `build` returns, so a
-    /// same-key re-entry would recurse without end. A different key is safe.
-    /// In this crate `build` only calls `core::resolve_named_set`, which never
-    /// re-enters the cache, so the constraint holds by construction.
+    /// # Реентерабельность
+    /// `build` не смеет звать `get_or_try_insert_with` этого же кэша с тем же
+    /// `key`: запись появляется только после возврата `build`, так что
+    /// same-key-реентерабельность зациклилась бы. Это не предусловие на
+    /// честном слове, а ЖЁСТКИЙ страж: повторный вход по строящемуся ключу —
+    /// детерминированная паника с внятным сообщением (fail-closed contract
+    /// drift), а не переполнение стека. Другой ключ безопасен; страж
+    /// снимается и при ошибке `build` (drop-guard).
     pub fn get_or_try_insert_with<E>(
         &self,
         key: CacheKey,
@@ -94,7 +100,25 @@ impl<V: Clone> ContractCache<V> {
         if let Some(hit) = self.entries.borrow().get(&key) {
             return Ok(hit.clone());
         }
+        assert!(
+            self.building.borrow_mut().insert(key.clone()),
+            "ContractCache: реентерабельный build по тому же ключу — контрактный дрейф"
+        );
+        struct BuildingGuard<'a> {
+            building: &'a RefCell<HashSet<CacheKey>>,
+            key: &'a CacheKey,
+        }
+        impl Drop for BuildingGuard<'_> {
+            fn drop(&mut self) {
+                self.building.borrow_mut().remove(self.key);
+            }
+        }
+        let guard = BuildingGuard {
+            building: &self.building,
+            key: &key,
+        };
         let value = build()?;
+        drop(guard);
         let mut entries = self.entries.borrow_mut();
         if entries.len() >= self.capacity {
             entries.clear();
@@ -251,6 +275,73 @@ mod tests {
             cache.len(),
             1,
             "cap trips a wholesale clear, never unbounded growth"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reentrancy_tests {
+    use super::*;
+
+    /// Страж реентерабельности — жёсткий: same-key build падает детерминированной
+    /// паникой (контрактный дрейф), а не переполнением стека.
+    #[test]
+    #[should_panic(expected = "реентерабельный build")]
+    fn same_key_reentrant_build_panics_deterministically() {
+        let cache: ContractCache<u32> = ContractCache::new(4);
+        let key = CacheKey::new(
+            "#FFFFFF".to_string(),
+            Theme::Light,
+            DEFAULT_TABLE_FINGERPRINT,
+        );
+        let key_inner = key.clone();
+        let _ = cache.get_or_try_insert_with::<()>(key, || {
+            // Тот же ключ изнутри build — обязан паниковать, не рекурсировать.
+            cache
+                .get_or_try_insert_with::<()>(key_inner.clone(), || Ok(1))
+                .map(|_| 2)
+        });
+    }
+
+    /// Другой ключ изнутри build безопасен, а страж снимается и после ошибки:
+    /// повторная сборка того же ключа после Err проходит.
+    #[test]
+    fn different_key_nested_build_is_safe_and_guard_lifts_on_error() {
+        let cache: ContractCache<u32> = ContractCache::new(4);
+        let a = CacheKey::new(
+            "#FFFFFF".to_string(),
+            Theme::Light,
+            DEFAULT_TABLE_FINGERPRINT,
+        );
+        let b = CacheKey::new(
+            "#000000".to_string(),
+            Theme::Light,
+            DEFAULT_TABLE_FINGERPRINT,
+        );
+        let b_inner = b.clone();
+        let nested = cache
+            .get_or_try_insert_with::<()>(a.clone(), || {
+                cache
+                    .get_or_try_insert_with::<()>(b_inner.clone(), || Ok(7))
+                    .map(|inner| inner + 1)
+            })
+            .unwrap();
+        assert_eq!(nested, 8);
+
+        let c = CacheKey::new(
+            "#123456".to_string(),
+            Theme::Dark,
+            DEFAULT_TABLE_FINGERPRINT,
+        );
+        assert!(
+            cache
+                .get_or_try_insert_with(c.clone(), || Err::<u32, _>("boom"))
+                .is_err()
+        );
+        // Страж снят drop-guard'ом — та же клетка строится снова.
+        assert_eq!(
+            cache.get_or_try_insert_with::<()>(c, || Ok(42)).unwrap(),
+            42
         );
     }
 }

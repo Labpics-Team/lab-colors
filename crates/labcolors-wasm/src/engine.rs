@@ -25,8 +25,8 @@ use crate::error::BindingError;
 use crate::theme::Theme;
 
 /// How many distinct `(bg, theme, table)` resolves the cache holds before a
-/// wholesale clear. The fixed bound prevents unbounded growth under arbitrary
-/// background sampling; its value is a capacity policy, not a byte-size claim.
+/// целиком. Фиксированная граница исключает неограниченный рост при
+/// произвольном сэмплинге фона; это политика ёмкости, не байтовая claim.
 const CACHE_CAPACITY: usize = 4096;
 
 /// A caching contrast engine over a consumer-supplied design system.
@@ -116,9 +116,10 @@ impl Engine {
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
     /// result. Repeated identical calls hit the contract cache.
     ///
-    /// Errors are returned, never panicked. Admitted per-role unreachability or
-    /// unresolved search is part of a successful result. Rejected, unsupported
-    /// or internal set provenance fails the whole call before any theme exists.
+    /// Ошибки возвращаются, не паникуют. Допущенная пер-ролевой
+    /// недостижимость или незавершённый поиск — часть успешного результата.
+    /// Rejected/unsupported/internal провенанс набора валит весь вызов до
+    /// появления какой-либо темы.
     pub fn resolve_theme(
         &self,
         bg_hex: &str,

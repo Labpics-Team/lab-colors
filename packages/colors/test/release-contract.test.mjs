@@ -1757,7 +1757,11 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
       ["basis drift", (value) => { value.roles.compiler.policy.basis = "guessed"; }],
       ["gzip gate", (value) => { value.roles.runtime.policy.gzip = "gate"; }],
       ["unscoped runtime growth", (value) => {
-        // Крип сверх принятого failure-admissibility снапшота.
+        // Согласованный рост: одновременно поднимаем measurement и ceiling —
+        // именно так выглядел бы «честный» новый снапшот без принятого
+        // acceptedCeiling-закона. Чекер обязан отклонить его всё равно:
+        // рост сверх принятого снапшота требует НОВОЙ версии бюджета,
+        // а не правки текущей.
         const ceiling = v10.roles.runtime.policy.maxRawBytes;
         value.roles.runtime.measurement.rawBytes = ceiling + 1;
         value.roles.runtime.policy.maxRawBytes = ceiling + 1;

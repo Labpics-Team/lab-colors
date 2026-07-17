@@ -626,11 +626,11 @@ impl LabColors {
     /// Resolve every role for `bgHex` under `theme` (`"light" | "dark" |
     /// "light-ic" | "dark-ic"`).
     ///
-    /// Returns a complete `ResolvedTheme`. A role-local `unreachable` or
-    /// `unresolved` outcome remains typed role data. Rejected, unsupported and
-    /// internal set failures reject atomically, so no partial theme or CSS is
-    /// returned. Boundary errors use the structured `"<code>: <message>"` form
-    /// and never unwind a Rust panic into JavaScript.
+    /// Возвращает полный `ResolvedTheme`. Локальный `unreachable`/`unresolved`
+    /// остаётся типизированными данными роли. Rejected/unsupported/internal
+    /// отказы набора отклоняются атомарно: частичной темы или CSS не бывает.
+    /// Ошибки границы — структурная форма `"<code>: <message>"`, Rust-паника
+    /// в JavaScript не разматывается.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
         let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;

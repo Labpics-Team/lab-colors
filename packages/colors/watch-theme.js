@@ -24,7 +24,7 @@ import { effectiveBackground } from "./effective-bg.js";
  * @typedef {object} WatchController
  * @property {(force?: boolean) => object} refresh  Re-resolve+apply if the
  *   background (or theme) changed; `force` re-applies unconditionally. Returns the
- *   committed `resolveTheme` result (the cached snapshot when nothing changed).
+ *   закоммиченный результат `resolveTheme` (кэшированный снимок, если ничего не менялось).
  * @property {(theme: string) => void} setTheme  Switch theme and re-apply.
  * @property {() => string} background  The background/reference hex last resolved.
  * @property {() => void} stop  Disconnect observers and stop watching.
@@ -48,7 +48,7 @@ import { effectiveBackground } from "./effective-bg.js";
  * @param {boolean} [options.observe=true]  Auto-refresh on `style`/`class`
  *   attribute changes in the observed subtree.
  * @param {(error: unknown) => void} [options.onError]  Receives failures from
- *   observer-triggered refreshes. Explicit `refresh`/`setTheme` still throw.
+ *   observer-обновлений. Явные `refresh`/`setTheme` по-прежнему бросают.
  * @param {*} [options.root]  Mutation-observer root (default: the document element).
  * @param {*} [options.win=globalThis]  Window-like host (for MutationObserver).
  * @param {(el:*)=>*} [options.getStyle]  Injection seam for `effectiveBackground`.
@@ -80,7 +80,7 @@ export function watchTheme(element, options) {
     } else if (typeof win?.reportError === "function") {
       win.reportError(error);
     } else {
-      // Preserve a visible host exception without creating a rejected Promise.
+      // Сохранить видимое host-исключение, не создавая rejected Promise.
       enqueueMicrotask(() => {
         throw error;
       });
@@ -106,9 +106,9 @@ export function watchTheme(element, options) {
   const prepareFor = (candidateTheme, force = false) => {
     const bg = readBackground();
     if (!force && bg === lastBg && candidateTheme === lastTheme) {
-      // A previous CSSOM exception may have left the live inline style only
-      // partially written. Reuse the committed physical snapshot; no resolver
-      // work is needed merely to repair the imperative shell.
+      // Прошлое CSSOM-исключение могло оставить inline-стиль записанным
+      // частично. Переиспользуем закоммиченный физический снимок: чинить
+      // императивную оболочку резолвером не нужно.
       return dirty ? { bg, candidateTheme, result: lastResult } : null;
     }
     const result = options.colors.resolveTheme(bg, candidateTheme);
@@ -122,9 +122,9 @@ export function watchTheme(element, options) {
       dirty = true;
       throw error;
     }
-    // Publish the requested theme only after both resolve and DOM application
-    // succeed. A rejected candidate therefore cannot become the hidden input of
-    // a later background refresh.
+    // Публикуем запрошенную тему только после успеха и резолва, и записи в
+    // DOM: отклонённый кандидат не может стать скрытым входом позднейшего
+    // фонового refresh.
     theme = candidateTheme;
     lastBg = bg;
     lastTheme = candidateTheme;
@@ -140,9 +140,9 @@ export function watchTheme(element, options) {
 
   const refresh = (force = false) => refreshFor(theme, force);
 
-  // Resolve the first candidate before acquiring a long-lived host resource,
-  // but do not apply it yet: the observer must be active while the initial CSS
-  // write occurs so a variable-driven background mutation is not lost.
+  // Решаем первого кандидата до захвата долгоживущего host-ресурса,
+  // но не применяем сразу: observer обязан быть активным во время первой
+  // CSS-записи, чтобы variable-driven мутация фона не потерялась.
   const initial = prepareFor(theme, true);
 
   // Coalesce a burst of mutations into a single refresh on the next microtask.
@@ -173,7 +173,7 @@ export function watchTheme(element, options) {
         (typeof win.document !== "undefined" ? win.document.documentElement : null);
       if (root) {
         observer = new win.MutationObserver(schedule);
-        // A background can change on the element OR any ancestor, via inline style
+        // Фон может смениться на самом элементе ИЛИ любом предке — через inline-стиль
         // or a class swap — so watch attribute changes across the subtree.
         observer.observe(root, {
           subtree: true,
@@ -184,9 +184,9 @@ export function watchTheme(element, options) {
     }
     commitPrepared(initial);
   } catch (error) {
-    // Failed construction must not leave an unreachable observer or a late
-    // refresh. Mark stopped before disconnecting so an already-queued callback
-    // is inert even if host cleanup itself fails.
+    // Упавшая конструкция не смеет оставить недосягаемый observer или
+    // поздний refresh. Помечаем stopped до disconnect, чтобы уже поставленный
+    // в очередь callback был инертен, даже если host-очистка сама упала.
     stopped = true;
     const acquired = observer;
     observer = null;

@@ -1,14 +1,14 @@
 //! Plain-data results of a resolve, independent of any JS representation.
 //!
 //! These are the binding's *output boundary*: pure Rust structs the engine
-//! fills from an already-admitted named set, with no knowledge of wasm-bindgen
-//! or `js_sys`. The adapter layer ([`crate::lib`]) projects them into a JS
-//! object. Keeping them framework-free makes the engine testable with a native
-//! `cargo test` and keeps the dependency arrow pointing inward. No role names
-//! are enumerated here: every key remains client-owned.
+//! заполняет из уже допущенного именованного набора, ничего не зная о
+//! wasm-bindgen или `js_sys`. Адаптерный слой ([`crate::lib`]) проецирует их в
+//! JS-объект. Отсутствие фреймворка делает движок тестируемым нативным
+//! `cargo test` и держит стрелку зависимостей внутрь. Имена ролей здесь не
+//! перечисляются: каждый ключ принадлежит клиенту.
 
-/// The full result of resolving one background under one theme. It exists only
-/// after the whole named set has passed admission atomically.
+/// Полный результат резолва одного фона под одной темой. Существует только
+/// после того, как ВЕСЬ именованный набор атомарно прошёл допуск.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTheme {
     /// The theme key this was resolved under (`"light"`, `"dark"`, …).
@@ -35,7 +35,7 @@ pub struct RoleEntry {
 pub enum RoleOutcome {
     /// A solved colour with its measured contrasts and degradation flags.
     Color(SolvedColor),
-    /// An explicit zero token: no colour here, by design.
+    /// Явный нулевой токен: цвета здесь нет — намеренно.
     None,
     /// A semi-transparent ladder / alpha-analog role: the emission is
     /// `oklch(L% C H / A)` and the browser composites it; the measured
@@ -53,9 +53,9 @@ pub enum RoleOutcome {
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
     Material(MaterialColor),
-    /// An admitted role-local failure: proved unreachability or an unresolved
-    /// bounded search. Rejected, unsupported and internal failures close the
-    /// entire resolve and cannot inhabit this variant.
+    /// Допущенный локальный отказ роли: доказанная недостижимость или
+    /// незавершённый bounded search. Rejected/unsupported/internal закрывают
+    /// весь резолв и в этом варианте жить не могут.
     Failure {
         /// Core-owned semantic category.
         category: labcolors_core::RoleFailureCategory,
