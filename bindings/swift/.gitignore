@@ -3,7 +3,6 @@
 # hand-written protocol consumers.
 Sources/LabColors/*.swift
 !Sources/LabColors/Wcag22FeasibilityProtocol.swift
-!Sources/LabColors/Wcag22ExplicitSelectionProtocol.swift
 Sources/labcolorsFFI/*.h
 Sources/labcolorsFFI/module.modulemap
 Sources/labcolorsFFI/*.modulemap

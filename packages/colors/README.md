@@ -323,9 +323,8 @@ diagnostic-компонент текущего LPC и legacy `wcagRatio` не м
 угадывает применимость и не понимает семантику ID.
 
 Операция экспортируется только из `@labpics/colors/compiler` и загружает
-отдельный compiler WASM; package root остаётся runtime API. Эта операция
-принимает только зарегистрированную нейтральную ось V1; явные клиентские
-наборы sRGB8 обслуживает соседняя атомарная операция ниже.
+отдельный compiler WASM; package root остаётся runtime API. Операция принимает
+только зарегистрированную нейтральную ось V1.
 
 В браузере compiler принадлежит offline/Worker execution class: main thread
 импортирует только runtime, а dedicated module Worker владеет compiler WASM и

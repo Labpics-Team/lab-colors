@@ -4,8 +4,7 @@ Swift-поверхность динамического Rust-ядра через
 вызывает `labcolors-core` в runtime, а не сериализует токены на сборке.
 Экспортируется рантайм-контраст-ядро (см. `crates/labcolors-ffi`): контраст,
 резолв, лестницы, подложка→α, legacy-координата `muddiness`, low-level Glow
-point decision, versioned WCAG 2.2 feasibility и atomic explicit-selection
-byte protocols.
+point decision и versioned WCAG 2.2 feasibility byte protocol.
 
 Исторически названная `muddiness` поверхность — это
 `experimental compatibility proxy`: она сохраняет прежний числовой API и его
@@ -23,10 +22,6 @@ Linux x86_64. Оно не является аттестацией Apple ABI, mac
   (`LabColors`) + conformance-тесты.
 - `Sources/LabColors/Wcag22FeasibilityProtocol.swift` — hand-written строгая
   `Codable`-проекция `Success(feasibility) / Failure(error)` и host-preflight.
-- `Sources/LabColors/Wcag22ExplicitSelectionProtocol.swift` — hand-written
-  типизированная проекция атомарного
-  `feasibility → client policy → selection → final recheck` и тот же строгий
-  host-preflight.
 - Остальные Swift/C sources **генерируются в CI** (uniffi-bindgen) и не
   коммитятся.
 - `Tests/LabColorsConformanceTests` — прогон закоммиченного пака
@@ -70,7 +65,7 @@ runtime. Solve-hex — квантование трансцендентного �
 закрытый enum `FailureCategory`, а не произвольная строка. Он
 отделяет доказанную `unreachable` от `unresolved`, `rejected` и `unsupported`,
 а code задаёт конкретную машинную причину. Оба поля приходят из одного
-core-owned descriptor и проверяются pack 7.
+core-owned descriptor и проверяются pack 8.
 
 Glow проверяется другим контрактом: `stable-v1` обязан вернуть типизированный
 `Indeterminate` (`site_id` + неразделимое typed `evidence`), если доказанной
@@ -109,22 +104,7 @@ public descriptor считаются `ColorError.IncompatibleCoreContract`; adap
 
 Swift не вычисляет WCAG, не сортирует отношения и не строит partition. Он
 декодирует Core-owned ordered domain, canonical relations, candidate-major
-LSB0 failure matrix и proof. Текущее pack 7 replay независимо проверяет 256
+LSB0 failure matrix и proof. Текущее pack 8 replay независимо проверяет 256
 triples,
 `32E`-byte matrix, 32-byte partition, LSB0 query law и opaque-ID invariance.
 
-## Atomic explicit-selection byte protocol
-
-`evaluateWcag22ExplicitSelection(_:)` принимает `Data` или `[UInt8]` с явным
-конечным набором `opaque candidate ID + sRGB8`, occurrence relations и
-клиентским порядком `first-feasible-in-declared-order-v1`. Core атомарно
-выполняет feasibility, полностью валидирует policy, выбирает первый допустимый
-ID и повторно проверяет выбранную строку. Swift не пересобирает матрицу и не
-принимает сериализованный proof обратно как capability.
-
-Текущее pack 7 (семейство введено в pack 6) проходит через raw UniFFI с
-байт-точным сравнением и через публичную Swift-функцию с равенством
-типизированного значения и нормализованного JSON-дерева. Oversize отсекается до
-избегаемой для отклонённого входа ABI-копии и повторно проверяется
-Rust-границей; structural mutation результата отклоняется декодером, а не
-превращается в частичный успех.
