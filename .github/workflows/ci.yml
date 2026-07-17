@@ -328,7 +328,7 @@ jobs:
           for forbidden in (
               "labcolors-protocol",
               'labcolors-core feature "wcag22-feasibility"',
-              'labcolors-core feature "wcag22-explicit-feasibility"',
+              "wcag22-explicit",
           ):
               if forbidden in runtime_tree:
                   raise SystemExit(f"runtime role resolved forbidden capability: {forbidden}")
