@@ -195,7 +195,9 @@ fn r3_resolve_set_240_cell_representative_byte_identity() {
             .map(|(_, resolved)| match resolved {
                 Resolved::Color { solved, .. } => solved.hex().to_string(),
                 Resolved::None => "none".to_string(),
-                Resolved::Unreachable(_) => "UNREACHABLE".to_string(),
+                Resolved::Failure(failure) => {
+                    crate::test_support::valid_srgb_set_failure_repr(failure)
+                }
                 // Дефолтная `RoleTable` (Role-путь) не несёт Ladder/AlphaAnalog-
                 // рецептов, поэтому rgba-роль здесь недостижима; арм обязателен
                 // из-за `#[non_exhaustive] Resolved`.

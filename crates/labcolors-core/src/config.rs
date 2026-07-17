@@ -41,7 +41,10 @@
 //! отдельный заход; сейчас фоны едут якорями конфига как есть.
 
 use crate::ladder::{LadderPosition, LadderTint, ThemeAnchors};
-use crate::semantic::{DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec, TextAnchor};
+use crate::semantic::{
+    DECORATIVE_FLOOR_MIN, DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec, TextAnchor,
+    validate_ladder_floor,
+};
 use crate::solve::Floor;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,9 +63,8 @@ use crate::solve::Floor;
 ///
 /// `fraction · max` — целевой контраст текстовой роли. При `fraction ≤ 0` цель
 /// нулевая (роль нечитаема), при `fraction > 1` цель превышает достижимый максимум
-/// фона (всегда [`crate::Unreachable`]). Верхняя граница включает `1.0` — это
-/// «почти максимум, который фон физически позволяет» (сам движок клампит долю чуть
-/// ниже единицы, см. [`TextAnchor::new`]).
+/// фона (всегда [`crate::SolveFailure`]). Верхняя граница включает `1.0` — это
+/// физический максимум контраста фона; движок хранит это значение без переписи.
 const FRACTION_MIN_EXCLUSIVE: f64 = 0.0;
 /// Верхний предел доли текстового якоря (включительно).
 const FRACTION_MAX_INCLUSIVE: f64 = 1.0;
@@ -72,18 +74,21 @@ const FRACTION_MAX_INCLUSIVE: f64 = 1.0;
 /// dJ' — перцептивная разница светлоты (шаг `J'`), которую роль держит от своей
 /// поверхности. `dj ≤ 0` означает «нет различимого шага» — вырожденная роль,
 /// неотличимая от фона. Верхнего предела нет по величине как таковой: физика сама
-/// вернёт [`crate::Unreachable`], если якорь недостижим на данном фоне, — но
+/// вернёт [`crate::SolveFailure`], если якорь недостижим на данном фоне, — но
 /// нулевой/отрицательный якорь это ошибка КОНФИГА, а не недостижимость.
 const DJ_MIN_EXCLUSIVE: f64 = 0.0;
 
-/// Lc-величина декоративной роли (тени) обязана быть строго положительной.
+/// Человекочитаемая проекция [`DECORATIVE_FLOOR_MIN`] на границе конфига.
 ///
-/// Единица — воспринимаемый контраст `Lc`; знак выбирает физика от фона, поэтому
-/// конфиг несёт величину (модуль). `magnitude ≤ 0` — невидимая тень (вырождение).
-/// Движок дополнительно поднимает величину до порога квантования
-/// ([`DECORATIVE_FLOOR_MIN`](crate::semantic)), так что валидатор проверяет лишь
-/// положительность как контракт конфига.
-const DECORATIVE_LC_MIN_EXCLUSIVE: f64 = 0.0;
+/// Rust не умеет `stringify!` значения именованной константы; тест ниже строит
+/// ожидаемый текст из числового SSOT и не позволяет литералам разойтись.
+const DECORATIVE_FLOOR_BOUND: &str = "magnitude ≥ 7.5 Lc (граница декоративной Lc-цели)";
+
+// Lc-величина декоративной роли (тени) обязана лежать не ниже физического
+// декоративного пола ядра. Единица — воспринимаемый контраст `Lc`; знак выбирает
+// физика от фона, поэтому конфиг несёт величину (модуль). Значение ниже
+// `DECORATIVE_FLOOR_MIN` попадает в квантованный low-contrast gap; ядро не
+// переписывает такую декларацию в другой контракт, а отклоняет её на загрузке.
 
 /// Коэффициент хромы подтона (`neutral.tint.ratio`) обязан лежать в `[0, 1]`.
 ///
@@ -163,8 +168,8 @@ use crate::sentiment::{HUE_DOMAIN_MAX_EXCLUSIVE, HUE_DOMAIN_MIN_INCLUSIVE};
 /// Ошибка компиляции или валидации [`ThemeConfig`].
 ///
 /// Матчится по вариантам (это часть публичного API ядра): потребитель различает
-/// «невалидный hex», «ручка вне предела», «ссылка на несуществующее семейство» и
-/// «рецепт ещё не реализован». Реализована вручную (без `thiserror`) — крейт
+/// «невалидный hex», «ручка вне предела» и «ссылка на несуществующее семейство».
+/// Реализована вручную (без `thiserror`) — крейт
 /// `labcolors-core` держит НОЛЬ runtime-зависимостей (issue #29); стиль `Display`
 /// повторяет ручные ошибки ядра.
 ///
@@ -225,10 +230,6 @@ pub enum ConfigError {
         sentiment: String,
         reason: String,
     },
-    /// Рецепт объявлен в меню, но его компиляция ещё не реализована — честная
-    /// заглушка для БУДУЩИХ рецептов (все текущие компилируются; вариант
-    /// сохранён как сеам для расширения меню без ломающего изменения).
-    NotYetImplemented { recipe: &'static str, role: String },
     /// Контракт пуст: ни ролей, ни алиасов. Резолв не эмитил бы ни одной роли —
     /// молчаливый приём увёл бы дефект на использование. Отказ обязан быть НА
     /// ЗАГРУЗКЕ (`#[serde(default)]` на `roles` на границе WASM разрешает ОПУСТИТЬ
@@ -238,6 +239,11 @@ pub enum ConfigError {
     /// альфы без пола читаемости. Отказ на загрузке (а не молчаливая невидимая
     /// роль): материал обязан нести `aa-text` или `aa-ui`.
     MaterialFloorRequired { role: String },
+    /// Readability-floor лестницы объявлен для полупрозрачной позиции либо как
+    /// no-op `zero`. Публичный floor сейчас определён только для opaque
+    /// occurrence; для translucent не объявлено, какую occurrence ограничивать
+    /// и разрешено ли менять tint, alpha или оба параметра.
+    InvalidLadderFloor { role: String, reason: &'static str },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -296,15 +302,14 @@ impl std::fmt::Display for ConfigError {
                 sentiment,
                 reason,
             } => write!(f, "сентимент `{sentiment}` (роль `{role}`): {reason}"),
-            ConfigError::NotYetImplemented { recipe, role } => write!(
-                f,
-                "рецепт `{recipe}` (роль `{role}`) ещё не реализован ядром"
-            ),
             ConfigError::EmptyContract => write!(f, "контракт пуст: передайте roles"),
             ConfigError::MaterialFloorRequired { role } => write!(
                 f,
                 "material-роль `{role}` требует пол читаемости (aa-text/aa-ui), получен zero-floor"
             ),
+            ConfigError::InvalidLadderFloor { role, reason } => {
+                write!(f, "ladder-роль `{role}` несёт невалидный floor: {reason}")
+            }
         }
     }
 }
@@ -522,7 +527,7 @@ pub enum RoleRecipe {
         /// честным флагом. Аддитивен в JSON — `{..., floor?: "aa-ui"}`.
         floor: Option<Floor>,
     },
-    /// Свечение (labui ADR-0002 §5): screen-слои цвета источника, интенсивность
+    /// Свечение: screen-слои цвета источника, интенсивность
     /// решается солвером под контрактную ступень [`crate::glow::GlowStep`]
     /// (зеркальная деривация от стека теней) на фактическом фоне резолва.
     Glow {
@@ -556,8 +561,8 @@ pub enum RoleRecipe {
     /// на кривой оседает к ~3:1 и ниже). Здесь foreground решается ШТАТНЫМ
     /// законом НА тинт-поверхности, собранной appearance-графом (#307), поэтому
     /// пол гарантирован против той подложки, на которой лейбл реально стоит.
-    /// Недостижимость пола на кривой семьи клампит тон (флаг `compressed`, ADR-0002
-    /// честный результат) — консервативный дефолт. Компилируется в
+    /// Недостижимость пола на кривой семьи выражается флагом `compressed` рядом
+    /// с фактическим результатом. Компилируется в
     /// [`RoleSpec::PairLabel`].
     PairLabel {
         /// Источник семьи оттенка/тинта: бренд, семейство, сентимент или нейтраль.
@@ -1134,13 +1139,26 @@ impl ThemeConfig {
                     "dj > 0 (перцептивный шаг светлоты; ≤ 0 = нет различимого шага)",
                 )
             }
-            RoleRecipe::DecorativeLc { magnitude } => check_gt(
+            RoleRecipe::DecorativeLc { magnitude } => check_ge(
                 &format!("roles.{role}.magnitude"),
                 *magnitude,
-                DECORATIVE_LC_MIN_EXCLUSIVE,
-                "magnitude > 0 (Lc-величина тени; ≤ 0 = невидима)",
+                DECORATIVE_FLOOR_MIN,
+                DECORATIVE_FLOOR_BOUND,
             ),
-            RoleRecipe::Ladder { source, .. } => self.check_ladder_source(role, source),
+            RoleRecipe::Ladder {
+                source,
+                position,
+                floor,
+            } => {
+                self.check_ladder_source(role, source)?;
+                let (alpha_light, alpha_dark) = position.alpha_pair();
+                validate_ladder_floor(alpha_light, alpha_dark, *floor).map_err(|reason| {
+                    ConfigError::InvalidLadderFloor {
+                        role: role.to_string(),
+                        reason,
+                    }
+                })
+            }
             // Ступень — закрытый enum, числовой валидации не требует; источник — как у лестницы.
             RoleRecipe::Glow { source, .. } => self.check_ladder_source(role, source),
             RoleRecipe::PairFill { source } => self.check_ladder_source(role, source),
@@ -1305,7 +1323,12 @@ impl ThemeConfig {
                 floor,
                 hue,
             } => {
-                let anchor = TextAnchor::new(*fraction, *floor);
+                let anchor =
+                    TextAnchor::new(*fraction, *floor).map_err(|_| ConfigError::OutOfBounds {
+                        handle: format!("roles.{role}.fraction"),
+                        value: *fraction,
+                        bound: "0 < fraction ≤ 1 (доля максимального контраста фона)",
+                    })?;
                 // Цветной лейбл (M1): источник оттенка раскладывается в пер-темный
                 // тинт-якорь тем же механизмом, что тинт лестницы (для сентимента
                 // — солид, разведённый с брендом). Резолв держит контракт уровня в

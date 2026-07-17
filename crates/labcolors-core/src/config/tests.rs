@@ -295,17 +295,47 @@ fn dj_anchor_bound_red_proof() {
 }
 
 #[test]
-fn decorative_lc_non_positive_is_rejected() {
-    // `icon` больше не роль (канон #92 — алиас на label-tertiary); валидацию
-    // неположительной магнитуды проверяем на существующей роли label-tertiary.
-    let cfg = with_role_recipe(
+fn decorative_lc_requires_the_core_physical_floor() {
+    // Проверяем точную закрытую границу: ближайший меньший binary64 уже
+    // недоменен, сам физический пол принимается без переписи.
+    let below = f64::from_bits(DECORATIVE_FLOOR_MIN.to_bits() - 1);
+    for magnitude in [f64::NAN, f64::INFINITY, 0.0, below] {
+        let cfg = with_role_recipe("label-tertiary", RoleRecipe::DecorativeLc { magnitude });
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(ConfigError::OutOfBounds { handle, .. })
+                    if handle == "roles.label-tertiary.magnitude"
+            ),
+            "magnitude={magnitude} обязана быть отклонена"
+        );
+    }
+
+    let below_error = with_role_recipe(
         "label-tertiary",
-        RoleRecipe::DecorativeLc { magnitude: 0.0 },
+        RoleRecipe::DecorativeLc { magnitude: below },
+    )
+    .validate()
+    .expect_err("значение ниже физического пола обязано быть отклонено");
+    let ConfigError::OutOfBounds { bound, .. } = below_error else {
+        panic!("ожидалась числовая граница декоративного контраста");
+    };
+    assert_eq!(
+        bound,
+        format!("magnitude ≥ {DECORATIVE_FLOOR_MIN} Lc (граница декоративной Lc-цели)")
     );
-    assert!(matches!(
-        cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.label-tertiary.magnitude"
-    ));
+    assert!(
+        !bound.contains("DECORATIVE_FLOOR_MIN"),
+        "публичная ошибка не должна показывать внутренний идентификатор: {bound}"
+    );
+
+    let boundary = with_role_recipe(
+        "label-tertiary",
+        RoleRecipe::DecorativeLc {
+            magnitude: DECORATIVE_FLOOR_MIN,
+        },
+    );
+    assert_eq!(boundary.validate(), Ok(()));
 }
 
 #[test]
@@ -575,6 +605,37 @@ fn ladder_recipe_compiles_to_translucent_spec() {
 }
 
 #[test]
+fn ladder_floor_is_valid_only_for_a_solid_readability_constraint() {
+    for (position, floor) in [
+        (LadderPosition::FillPrimary, Some(Floor::AaUi)),
+        (LadderPosition::BorderStrong, Some(Floor::None)),
+    ] {
+        let cfg = with_role_recipe(
+            "fill-primary",
+            RoleRecipe::Ladder {
+                source: LadderSource::Brand,
+                position,
+                floor,
+            },
+        );
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::InvalidLadderFloor { role, .. }) if role == "fill-primary"
+        ));
+    }
+
+    let valid = with_role_recipe(
+        "fill-primary",
+        RoleRecipe::Ladder {
+            source: LadderSource::Brand,
+            position: LadderPosition::BorderStrong,
+            floor: Some(Floor::AaUi),
+        },
+    );
+    assert_eq!(valid.validate(), Ok(()));
+}
+
+#[test]
 fn alpha_analog_recipe_compiles_to_translucent_spec() {
     let cfg = with_role_recipe(
         "fill-primary",
@@ -799,7 +860,7 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
     ("label-on-neutral", "on-* выброшены: лейбл решается от фона"),
     ("label-on-danger", "on-* выброшены: лейбл решается от фона"),
     // Фоны/оверлеи — ВХОДЫ (набор фонов = конфиг потребителя) или alpha.rs-роли.
-    // СУЖЕНО (ADR-0002 labui §1, 2026-07-03): базовый фон остаётся ВХОДОМ
+    // Базовый фон остаётся ВХОДОМ
     // (bg-primary/secondary/... — маппинг потребителя на тона), но выведенные
     // ТОНА лестницы фонов (bg-tone-*) — легитимные dJ'-эмиссии солвера:
     // «еле отличимо»-ступени — контракт движка, не рукописные hex потребителя.
@@ -1856,16 +1917,14 @@ fn compiled_table_carries_aliases() {
     );
 }
 
-/// Сборка RoleSpec в обход валидатора не даёт правдоподобного мусора:
-/// невалидная α/тинт резолвятся в Unreachable, не в тихий кламп.
+/// Прямой NamedRoleTable-конструктор не допускает правдоподобный мусор:
+/// невалидная α отвергается до создания executable-таблицы.
 #[test]
 fn translucent_resolve_rejects_out_of_domain_spec() {
-    use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
-    use crate::solve::BgInput;
-    use crate::spaces::vc::ViewingConditions;
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
     let tint = crate::ladder::LadderTint::new([[0.5, 0.5, 0.5]; 4]).expect("валидный тинт");
     for bad_alpha in [f64::NAN, 0.0, 1.5] {
-        let table = NamedRoleTable::new(
+        let result = NamedRoleTable::new(
             vec![(
                 "probe".to_string(),
                 RoleSpec::Ladder {
@@ -1877,16 +1936,10 @@ fn translucent_resolve_rejects_out_of_domain_spec() {
             )],
             vec![],
             RoleChroma::Neutral,
-        )
-        .expect("нейтральная policy валидна");
-        let set = resolve_named_set(
-            &BgInput::solid("#FFFFFF").unwrap(),
-            &table,
-            &ViewingConditions::srgb(),
         );
         assert!(
-            matches!(set[0].1, Resolved::Unreachable(_)),
-            "α={bad_alpha} обязана дать Unreachable, не цвет"
+            matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+            "α={bad_alpha} обязана быть отвергнута до resolve"
         );
     }
     // Мусорный quad отвергается конструктором тинта с именем режима.
@@ -2011,8 +2064,7 @@ fn validate_is_a_complete_preflight() {
 }
 
 /// `RoleSpec` публичен: alpha-analog-спека с недоменной α, собранная в обход
-/// валидатора конфига, резолвится в честный `Unreachable`, а не в
-/// правдоподобный hex через кламп резолвера инверсии. Недоменный СОЛИД по
+/// валидатора конфига, отвергается до создания executable-таблицы. Недоменный СОЛИД по
 /// построению невозможен ([`crate::ladder::LadderTint::new`] валидирует домен
 /// квада) — гард по солиду остаётся глубинной защитой.
 #[test]
@@ -2021,22 +2073,18 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
     use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
 
     let tint = LadderTint::new([[0.5, 0.5, 0.5]; 4]).expect("валидный квад");
-    let bg = BgInput::solid("#FFFFFF").unwrap();
     for alpha in [1.0 + 1e-9, 0.0, -0.5, f64::NAN, f64::INFINITY] {
-        let table = NamedRoleTable::new(
+        let result = NamedRoleTable::new(
             vec![(
                 "probe".to_string(),
                 RoleSpec::AlphaAnalog { of: tint, alpha },
             )],
             vec![],
             RoleChroma::Neutral,
-        )
-        .expect("нейтральная policy валидна");
-        let set = crate::semantic::resolve_named_set(&bg, &table, &ViewingConditions::srgb());
-        let (_, r) = set.iter().find(|(n, _)| n == "probe").expect("роль есть");
+        );
         assert!(
-            matches!(r, Resolved::Unreachable(_)),
-            "α={alpha}: ждали Unreachable (честный отказ), получено {r:?}"
+            matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+            "α={alpha}: ожидался отказ конструктора, получено {result:?}"
         );
     }
 }
@@ -2100,7 +2148,7 @@ fn achromatic_hue_sources_are_handled_honestly() {
     );
 }
 
-/// Волна 2 ADR-0002 labui §5 — КОМПОЗИЦИОННЫЙ контракт FX-стека теней.
+/// КОМПОЗИЦИОННЫЙ контракт FX-стека теней.
 ///
 /// Прежний контракт держал только пер-токенный порядок (|Lc| каждой ступени
 /// сама по себе). Закон владельца сильнее: токены НАСЛАИВАЮТСЯ (minor под
@@ -2109,7 +2157,7 @@ fn achromatic_hue_sources_are_handled_honestly() {
 /// (`alpha::composite_over_encoded`, тот же оператор, что у браузера) слой за
 /// слоем над светлым фоном паспорта, и проверяется:
 ///   (1) каждый слой меняет пиксели: state_k ≠ state_{k-1} на 8-битной сетке
-///       (класс `composite_distinct`, ADR-0002 lab-colors);
+///       (класс `composite_distinct`);
 ///   (2) различимость стека от фона строго растёт: |ΔJ'|(state_k, bg)
 ///       возрастает по k — прогрессия именно КОМПОЗИЦИИ, не отдельных ступеней.
 ///
@@ -2170,7 +2218,7 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
     }
 }
 
-/// Kind glow (labui ADR-0002 §5): screen-слои + решённая интенсивность.
+/// Kind glow: screen-слои + решённая интенсивность.
 ///
 /// Закрепляет новую эмиссию fx-glow-* (взамен выведенных из стаб-сверки
 /// Ladder@52-строк): (а) на тёмной базе паспорта свечение решается БЕЗ

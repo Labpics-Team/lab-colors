@@ -8,7 +8,7 @@
 //! «цветной» лейбл (доля 0.4757, как `label-*-tertiary`) оседает к ~2.9:1 < 3:1.
 //! `PairLabel` решает оттеночный лейбл ПРОТИВ тинт-поверхности, поэтому пол
 //! гарантирован по построению; при недостижимости тон клампится (флаг
-//! `compressed`, ADR-0002), а не молча остаётся нечитаемым.
+//! `compressed`), а не молча выдаётся за точное выполнение контракта.
 //!
 //! Четыре группы:
 //!  1. `shipped_*` — реальный контракт labui (`label-<fam>-primary` на
@@ -33,7 +33,7 @@ use crate::config::fixture::labui_reference;
 use crate::semantic::{resolve_pair_label, resolve_pair_label_legacy_oracle};
 use crate::solve::Floor;
 use crate::{
-    BgInput, LadderSource, LadderTint, Resolved, RoleRecipe, RoleSpec, Unreachable,
+    BgInput, LadderSource, LadderTint, Resolved, RoleRecipe, RoleSpec, SolveFailure,
     ViewingConditions, resolve_named_set,
 };
 
@@ -158,7 +158,7 @@ fn pair_label_clears_ui_floor_against_tinted_surface_all_families_and_themes() {
         let set = resolve_named_set(&bg, &table, &vc);
         for (fam, _) in families() {
             let role = format!("badge-label-{fam}");
-            // Решается цветом (не Unreachable/None) и держит пол на тинте.
+            // Решается цветом (не SolveFailure/None) и держит пол на тинте.
             let r = ratio_on_tint(&set, &role, fam);
             assert!(
                 r >= floor,
@@ -355,10 +355,7 @@ fn migration_preserves_public_invalid_alpha_outcomes_exactly() {
             "публичный тип/текст отказа по α={bad_alpha} обязан быть заморожен"
         );
         assert!(
-            matches!(
-                production,
-                Resolved::Unreachable(Unreachable::InvalidInput(_))
-            ),
+            matches!(production, Resolved::Failure(SolveFailure::InvalidInput(_))),
             "невалидная α обязана давать типизированный InvalidInput, не панику/кламп"
         );
     }

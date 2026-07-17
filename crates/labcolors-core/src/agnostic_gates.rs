@@ -109,6 +109,63 @@ fn labui_fixture_emission_is_byte_identical_to_frozen_golden() {
     );
 }
 
+#[test]
+fn accepted_endpoint_recovery_keeps_previously_false_failed_borders_legal() {
+    let table = labui_reference()
+        .compile_named_role_table()
+        .expect("reference fixture compiles");
+    for (vc, background, roles) in [
+        (
+            ViewingConditions::srgb(),
+            "#7F7F7F",
+            &[
+                "border-brand-strong",
+                "border-danger-strong",
+                "border-info-strong",
+            ][..],
+        ),
+        (
+            ViewingConditions::srgb(),
+            "#3478F6",
+            &[
+                "border-brand-strong",
+                "border-danger-strong",
+                "border-info-strong",
+            ][..],
+        ),
+        (
+            ViewingConditions::dim_surround(),
+            "#7F7F7F",
+            &["border-danger-strong"][..],
+        ),
+        (
+            ViewingConditions::dim_surround(),
+            "#3478F6",
+            &["border-danger-strong"][..],
+        ),
+    ] {
+        let bg = BgInput::solid(background).unwrap();
+        let set = resolve_named_set(&bg, &table, &vc);
+        for role in roles {
+            let outcome = &set
+                .iter()
+                .find(|(name, _)| name == role)
+                .unwrap_or_else(|| panic!("missing role {role}"))
+                .1;
+            let Resolved::Translucent(value) = outcome else {
+                panic!("{background} {role}: expected a resolved opaque endpoint, got {outcome:?}");
+            };
+            assert_eq!(value.alpha(), 1.0, "{background} {role}");
+            assert!(value.floor_coerced(), "{background} {role}");
+            assert!(
+                value.composite_wcag() >= 3.0,
+                "{background} {role}: UI floor missed ({})",
+                value.composite_wcag()
+            );
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Named-path text-hierarchy compression
 // ─────────────────────────────────────────────────────────────────────────────

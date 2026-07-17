@@ -36,7 +36,7 @@ pub struct RoleEntry {
     pub outcome: RoleOutcome,
 }
 
-/// The honest outcome union for one role, mirroring the core's `Resolved`
+/// The terminal outcome union for one role, mirroring the core's `Resolved`
 /// without leaking the core type across the boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleOutcome {
@@ -48,7 +48,7 @@ pub enum RoleOutcome {
     /// `oklch(L% C H / A)` and the browser composites it; the measured
     /// contrasts are those of the composite on the resolve background.
     Translucent(RgbaColor),
-    /// Свечение (kind glow, labui ADR-0002 §5): screen-слои цвета источника +
+    /// Свечение (kind glow): screen-слои цвета источника +
     /// решённая интенсивность. Потребитель красит слои с
     /// `mix-blend-mode: screen`; `--lab-<role>` несёт halo, `--lab-<role>-core`
     /// — слой пересвета, `--lab-<role>-alpha` — интенсивность числом.
@@ -60,9 +60,13 @@ pub enum RoleOutcome {
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
     Material(MaterialColor),
-    /// No colour can satisfy this role on this background, with the reason.
-    Unreachable {
-        /// A stable machine code for the unreachability reason.
+    /// A typed terminal failure. The category distinguishes proof of
+    /// unreachability from unresolved search, rejected input, and unsupported
+    /// capability; internal failures never reach this variant.
+    Failure {
+        /// Core-owned semantic category.
+        category: &'static str,
+        /// Core-owned stable machine code.
         code: &'static str,
         /// A human-readable explanation (the core's `Display`).
         message: String,
@@ -157,7 +161,9 @@ pub struct MaterialColor {
     pub pole_white: bool,
     /// Фактический |ΔJ'| тона-базы от фона резолва — различимость поверхности.
     pub achieved_dj: f64,
-    /// Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002).
+    /// Целевой |ΔJ'| тона не попал в бюджет ограниченного обхода; возвращённый
+    /// кандидат имеет минимальную ошибку среди просмотренных, не среди всего
+    /// гамута.
     pub tone_compressed: bool,
     /// Оттенок семьи выродился у края гамута (честный флаг; `false` у нейтрали).
     pub hue_vanished: bool,

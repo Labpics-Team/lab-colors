@@ -11,6 +11,8 @@ import init, {
   oklabLerp,
 } from "./index.js";
 import type {
+  FailureCategory,
+  FailureRole,
   GlowDiagnosticProfileV1,
   GlowDeterminateRole,
   GlowDeterminateRoleBase,
@@ -22,6 +24,23 @@ import type {
   RoleResult,
   ThemeName,
 } from "./index.js";
+
+const requireFailure = (_role: FailureRole): void => {};
+requireFailure({
+  kind: "failure",
+  cssVar: "--lab-example",
+  category: "unresolved",
+  code: "bounded_search_exhausted",
+  message: "bounded search exhausted",
+});
+requireFailure({
+  kind: "failure",
+  cssVar: "--lab-example",
+  // @ts-expect-error failure categories are a closed core-owned vocabulary.
+  category: "internal",
+  code: "x",
+  message: "x",
+});
 
 declare const glowDeterminateCommon: GlowDeterminateRoleBase;
 const requireGlowDeterminate = (_role: GlowDeterminateRole): void => {};
@@ -182,11 +201,12 @@ async function consume(clientConfigJson: string): Promise<void> {
     void lc;
     void wcag;
     void legalFloor;
-  } else if (primary.kind === "unreachable") {
+  } else if (primary.kind === "failure") {
+    const category: FailureCategory = primary.category;
     const code: string = primary.code;
+    void category;
     void code;
   } else {
-    // kind === "none"
     const cssVar: string = primary.cssVar;
     void cssVar;
   }

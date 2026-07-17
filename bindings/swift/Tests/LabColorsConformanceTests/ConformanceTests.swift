@@ -148,6 +148,16 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    func failureCategory(_ key: String) -> FailureCategory {
+        switch key {
+        case "unreachable": return .unreachable
+        case "unresolved": return .unresolved
+        case "rejected": return .rejected
+        case "unsupported": return .unsupported
+        default: fatalError("неизвестная failure category в pack: \(key)")
+        }
+    }
+
     func contractSpec(_ c: ContractJSON) -> ContractSpec {
         switch c.kind {
         case "text": return .text(lc: c.lc!)
@@ -209,6 +219,7 @@ final class ConformanceTests: XCTestCase {
 
     func testCoreVersionMatchesManifest() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
+        XCTAssertEqual(manifest.packVersion, "7.0.0", "Swift fixture обязан исполнять pack v7")
         XCTAssertFalse(coreVersion().isEmpty)
         XCTAssertEqual(
             coreVersion(), manifest.coreVersion,
@@ -514,12 +525,15 @@ final class ConformanceTests: XCTestCase {
                     got.wcagRatio, v.outcome.wcagRatio!, accuracy: Self.driftTol,
                     "solve wcag \(v.bg)")
                 XCTAssertEqual(got.floorOverride, v.outcome.floorOverride!, "floor_override \(v.bg)")
-            case "unreachable":
+            case "failure":
                 XCTAssertThrowsError(try solveContrast(bg: v.bg, contract: spec, theme: th)) { err in
-                    guard case let ColorError.Unreachable(code) = err else {
-                        return XCTFail("ожидался Unreachable, получено \(err) на \(v.bg)")
+                    guard case let ColorError.Failure(category, code) = err else {
+                        return XCTFail("ожидался typed failure, получено \(err) на \(v.bg)")
                     }
-                    XCTAssertEqual(code, v.outcome.code!, "код недостижимости на \(v.bg)")
+                    XCTAssertEqual(
+                        category, failureCategory(v.outcome.category!),
+                        "категория failure на \(v.bg)")
+                    XCTAssertEqual(code, v.outcome.code!, "код failure на \(v.bg)")
                 }
             default:
                 XCTFail("неизвестный исход в паке: \(v.outcome.kind)")
@@ -1383,6 +1397,7 @@ struct OutcomeJSON: Codable {
     let lc: Double?
     let wcagRatio: Double?
     let floorOverride: Bool?
+    let category: String?
     let code: String?
 }
 

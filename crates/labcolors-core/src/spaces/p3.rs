@@ -139,7 +139,7 @@ pub fn p3_css_from_hex(hex: &str, alpha: Option<f64>) -> Result<String, String> 
 /// # Errors
 ///
 /// `Err` — компонента вне гамута P3 сверх шумового эпсилона: квантовать
-/// не-цвет молча нельзя (честная граница, ADR-0002 закон 3).
+/// такое значение как цвет нельзя.
 #[cfg_attr(not(test), allow(dead_code))] // прод-потребитель — этап 2
 pub(crate) fn p3_bytes_from_linear(lin: [f64; 3]) -> Result<[u8; 3], String> {
     let mut out = [0_u8; 3];

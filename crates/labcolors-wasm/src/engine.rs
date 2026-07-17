@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
-use labcolors_core::{BgInput, Resolved, Solved, Unreachable};
+use labcolors_core::{BgInput, Resolved, SolveFailure, Solved};
 
 use crate::cache::{CacheKey, ContractCache};
 use crate::config_dto::{ConfigDto, fingerprint};
@@ -259,10 +259,14 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             legal_floor,
         )),
         Resolved::None => RoleOutcome::None,
-        Resolved::Unreachable(reason) => RoleOutcome::Unreachable {
-            code: unreachable_code(&reason)?,
-            message: reason.to_string(),
-        },
+        Resolved::Failure(reason) => {
+            let (category, code) = public_failure_wire(&reason)?;
+            RoleOutcome::Failure {
+                category,
+                code,
+                message: reason.to_string(),
+            }
+        }
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
         // наружу уходит oklch(L% C H / α), браузер композитит; контраст —
         // свойство композита на фоне резолва (закон лестницы ядра).
@@ -321,7 +325,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
         }),
         // `Resolved` is non-exhaustive across this crate boundary. An unknown
         // future semantic outcome is a structural adapter failure, never a
-        // physically-looking `Unreachable` role.
+        // physically-looking terminal role.
         _ => return Err(unmapped_resolved_variant()),
     })
 }
@@ -351,43 +355,15 @@ fn map_solved(
     }
 }
 
-/// A stable machine code for each unreachability reason. These strings are part
-/// of the JS-facing contract — a caller may branch on them — so they must not
-/// change silently (see `unreachable_codes_are_the_stable_js_contract`).
-///
-/// `Unreachable` is `#[non_exhaustive]`, so the catch-all is mandatory. A future
-/// core variant is a structural adapter failure until this closed wire vocabulary
-/// maps it explicitly; it must never collapse into a physically-looking generic
-/// `Unreachable` result.
-///
-/// Note: with the v1 default role table, `resolve_theme` never actually yields
-/// an unreachable role on any solid background (a wide sweep finds none) — every
-/// default role is reachable everywhere. This mapping is therefore a forward-
-/// compatible / defensive seam, exercised below by driving the core `solve`
-/// directly into the cases a custom table or a future gamut would surface.
-fn unreachable_code(reason: &Unreachable) -> Result<&'static str, BindingError> {
-    let code = match reason {
-        Unreachable::BelowContrastFloor { .. } => "below_contrast_floor",
-        Unreachable::ExceedsRange { .. } => "exceeds_range",
-        Unreachable::QuantizationGap { .. } => "quantization_gap",
-        Unreachable::FloorUnreachable { .. } => "floor_unreachable",
-        Unreachable::PolarityMismatch { .. } => "polarity_mismatch",
-        Unreachable::GamutUnsupported => "gamut_unsupported",
-        Unreachable::InvalidInput(_) => "invalid_input",
-        Unreachable::InternalInvariant(reason) => {
-            return Err(BindingError::Internal {
-                reason: reason.clone(),
-            });
-        }
-        _ => return Err(unmapped_unreachable_reason()),
-    };
-    Ok(code)
-}
-
-fn unmapped_unreachable_reason() -> BindingError {
-    BindingError::Internal {
-        reason: "unmapped core Unreachable variant".to_string(),
-    }
+/// Project the core-owned failure vocabulary without reclassifying it.
+/// Internal failures close the whole binding call and never become role data.
+fn public_failure_wire(
+    reason: &SolveFailure,
+) -> Result<(&'static str, &'static str), BindingError> {
+    let boundary = reason.boundary().ok_or_else(|| BindingError::Internal {
+        reason: reason.to_string(),
+    })?;
+    Ok((boundary.category().as_str(), boundary.code()))
 }
 
 /// A recheck-ready hex that BORROWS when the input is already a valid 6-hex-digit
@@ -452,14 +428,6 @@ mod tests {
             error,
             BindingError::Internal { ref reason }
                 if reason == "unmapped core Resolved variant"
-        ));
-        assert_eq!(error.code(), "internal_error");
-
-        let error = unmapped_unreachable_reason();
-        assert!(matches!(
-            error,
-            BindingError::Internal { ref reason }
-                if reason == "unmapped core Unreachable variant"
         ));
         assert_eq!(error.code(), "internal_error");
     }
@@ -581,47 +549,66 @@ mod tests {
     }
 
     #[test]
-    fn unreachable_codes_are_the_stable_js_contract() {
-        // The Unreachable→code mapping is a JS API contract. `Unreachable` is
-        // `#[non_exhaustive]` (can't be constructed here), and the default table
-        // never produces one through `resolve_theme`, so we drive the core
-        // `solve` into two real cases and pin their codes against silent drift.
-        use labcolors_core::ViewingConditions;
-        use labcolors_core::solve::{ChromaPolicy, Contract, Gamut, Hue, solve};
+    fn failure_wire_is_core_owned_and_internal_fails_closed() {
+        // Every public variant crosses with the category/code minted by the
+        // core boundary descriptor. This pins the JS vocabulary without a
+        // second adapter-owned classification table.
+        let cases = [
+            (
+                SolveFailure::BelowContrastFloor { target: 1.0 },
+                ("unreachable", "below_contrast_floor"),
+            ),
+            (
+                SolveFailure::ExceedsRange {
+                    target: 100.0,
+                    max_achievable: 90.0,
+                },
+                ("unreachable", "exceeds_range"),
+            ),
+            (
+                SolveFailure::BoundedSearchExhausted {
+                    target: 60.0,
+                    closest_examined: 58.0,
+                },
+                ("unresolved", "bounded_search_exhausted"),
+            ),
+            (
+                SolveFailure::FloorUnreachable {
+                    floor: 4.5,
+                    max_ratio: 3.0,
+                },
+                ("unreachable", "floor_unreachable"),
+            ),
+            (
+                SolveFailure::GamutUnsupported,
+                ("unsupported", "gamut_unsupported"),
+            ),
+            (
+                SolveFailure::InvalidInput("fixture".into()),
+                ("rejected", "invalid_input"),
+            ),
+        ];
+        for (failure, expected) in cases {
+            assert_eq!(public_failure_wire(&failure).unwrap(), expected);
+            let message = failure.to_string();
+            let outcome = map_resolved(Resolved::Failure(failure), None).unwrap();
+            assert!(matches!(
+                outcome,
+                RoleOutcome::Failure {
+                    category,
+                    code,
+                    message: actual_message,
+                } if (category, code) == expected && actual_message == message
+            ));
+        }
 
-        let vc = ViewingConditions::srgb();
-        let neutral = ChromaPolicy::Neutral;
-
-        // A non-sRGB gamut is reserved-but-unsupported in v1.
-        let gamut_err = solve(
-            BgInput::solid("#FFFFFF").unwrap(),
-            Contract::text(7.0),
-            Hue::deg(0.0),
-            neutral,
-            &vc,
-            Gamut::DisplayP3,
-        )
-        .unwrap_err();
-        assert_eq!(unreachable_code(&gamut_err).unwrap(), "gamut_unsupported");
-
-        // A non-finite target is rejected up front as invalid input.
-        let invalid_err = solve(
-            BgInput::solid("#FFFFFF").unwrap(),
-            Contract::text(f64::NAN),
-            Hue::deg(0.0),
-            neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap_err();
-        assert_eq!(unreachable_code(&invalid_err).unwrap(), "invalid_input");
-
-        let internal = Unreachable::InternalInvariant("fixture drift".into());
-        let error = unreachable_code(&internal).unwrap_err();
+        let internal = SolveFailure::InternalInvariant("fixture drift".into());
+        let error = map_resolved(Resolved::Failure(internal), None).unwrap_err();
         assert!(matches!(
             error,
-            BindingError::Internal { reason } if reason == "fixture drift"
+            BindingError::Internal { ref reason } if reason.contains("fixture drift")
         ));
+        assert_eq!(error.code(), "internal_error");
     }
 
     #[test]
@@ -812,7 +799,7 @@ mod tests {
                         );
                     }
                     RoleOutcome::None => {}
-                    RoleOutcome::Unreachable { .. } => {}
+                    RoleOutcome::Failure { .. } => {}
                 }
             }
             assert_eq!(

@@ -51,7 +51,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     };
 
     let mut roles = vec![
-        // Backgrounds — тона лестницы фонов (labui ADR-0002 §1, волна 1).
+        // Backgrounds — тона лестницы фонов labui.
         // Асимметрия тем — закон владельца: светлая — 2 тона × 3 применения
         // (elevation тенями), тёмная — 3 тона × 2 (elevation осветлением).
         // Тон-1 = сам фон резолва (не эмитится); тона 2-3 — dJ'-шаги от него,
@@ -246,7 +246,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         "fx-focus-ring-neutral".to_string(),
         neutral_pos(NeutralPick::Edge, LadderPosition::FocusRing),
     ));
-    // Свечения — новый kind glow (labui ADR-0002 §5, 2026-07-03): screen-слои
+    // Свечения — kind glow: screen-слои
     // цвета источника, интенсивность решается под контрактную ступень base
     // (зеркало fx-shadow-ambient) на фактическом фоне. Прежние Ladder@52
     // (фикс-альфа, нормальная композиция) вырождались на одноимённых фонах;

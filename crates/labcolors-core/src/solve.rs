@@ -3,7 +3,7 @@
 //! The forward path maps a colour to the WCAG relative luminance `Ys` of its
 //! quantised display value and through [`contrast_core`](crate::lpc) to a
 //! contrast value `Lc` — ось читаемости считает в домене `Ys`, в котором
-//! определены константы SAPC-8 (ADR-0003; активировано главой #64). This
+//! определены константы SAPC-8 (ADR-0003). This
 //! module runs that path backwards: given a background and a target contrast
 //! it recovers the foreground luminance analytically (the contrast core is
 //! invertible), then searches `(lightness, chroma, hue)` for an in-gamut
@@ -13,7 +13,7 @@
 //!
 //! 1. **Background → luminance interval.** [`BgInput`] reduces to `[Y_lo, Y_hi]`
 //!    in `Ys` space (WCAG relative luminance of the quantised display colour);
-//!    a [`Solid`](BgInput::Solid) colour is the degenerate interval `[Y, Y]`.
+//!    an opaque background is the degenerate interval `[Y, Y]`.
 //!    The contract is checked at both ends.
 //! 2. **Invert the contrast core.** From the target `Lc` and a background
 //!    luminance, recover the clamped foreground luminance for the matching
@@ -25,7 +25,7 @@
 //!    on `Ys`. The step is VC-free and CAM16-free: WCAG luminance is a
 //!    display-domain quantity.
 //!
-//! An unreachable contract returns [`Unreachable`] with a reason — never a
+//! An unreachable contract returns [`SolveFailure`] with a reason — never a
 //! silent clip.
 //!
 //! All canonical contrast constants are reused from [`crate::lpc`]; this module
@@ -77,7 +77,7 @@ pub enum Gamut {
     /// Standard sRGB.
     Srgb,
     /// Display P3. Reserved: the wider-gamut chroma boundary lands in a later
-    /// chapter, so v1 returns [`Unreachable::GamutUnsupported`] rather than
+    /// chapter, so v1 returns [`SolveFailure::GamutUnsupported`] rather than
     /// silently solving in sRGB.
     DisplayP3,
 }
@@ -228,37 +228,26 @@ impl Contract {
     }
 }
 
-/// A background descriptor, reduced to a luminance interval before solving.
+/// A validated opaque background for a foreground solve.
 ///
-/// SEAM (a): any background reduces to a luminance interval `[Y_lo, Y_hi]` in
-/// `Y_hk` space, and the contract is checked at both ends. A
-/// [`Solid`](BgInput::Solid) colour is the degenerate interval `[Y, Y]` — zero
-/// extra cost in v1. Future translucent-composite or area-distribution
-/// backgrounds (a later chapter) add variants that widen the interval;
-/// `#[non_exhaustive]` keeps that purely additive, so `solve`'s signature never
-/// changes. Their interval derivation is intentionally not invented here.
-// No `Copy`: future variants (translucent composites, area distributions)
-// carry heap data, and removing `Copy` later would be a breaking change.
+/// Its representation is private: callers construct it through [`Self::solid`],
+/// so non-finite or out-of-domain channels cannot bypass the public parser and
+/// become a plausible numeric result later in the resolver.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum BgInput {
-    /// A single opaque background colour, stored as a linear-sRGB stimulus so
-    /// its luminance is resolved under the solve-time viewing conditions.
-    Solid([f64; 3]),
+pub struct BgInput {
+    linear_srgb: [f64; 3],
 }
 
 impl BgInput {
     /// A solid background from an `#RRGGBB` hex colour.
-    pub fn solid(hex: &str) -> Result<Self, Unreachable> {
-        let rgb = srgb_from_hex(hex).map_err(Unreachable::InvalidInput)?;
-        Ok(Self::Solid(rgb))
+    pub fn solid(hex: &str) -> Result<Self, SolveFailure> {
+        let rgb = srgb_from_hex(hex).map_err(SolveFailure::InvalidInput)?;
+        Ok(Self { linear_srgb: rgb })
     }
 
     /// Reduce the descriptor to its readability luminance interval — `Ys`,
     /// WCAG relative luminance of the quantised display colour (ADR-0003:
     /// ось читаемости считает в `Ys`; активировано главой #64).
-    ///
-    /// New variants plug in here without touching `solve`'s signature (SEAM a).
     ///
     /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
     /// the background **only** through two scalars derived here from `bg` — the
@@ -269,30 +258,22 @@ impl BgInput {
     /// читаемости вместе с ADR-0003 и живёт только на яркостной оси
     /// ([`bg_luma`]: сторона пары, свечение, сентимент). Verified by an
     /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
-    /// This is what lets the grey fast path (256 codes) and the chromatic memo
-    /// (keyed on the exact display colour, a superset of the two) stay
-    /// bit-identical to the solver.
+    /// The representation stays an interval so a future field background can
+    /// supply bounded endpoints without changing the solver contract.
     pub(crate) fn luma_interval(
         &self,
         _vc: &ViewingConditions,
-    ) -> Result<LumaInterval, Unreachable> {
-        match self {
-            BgInput::Solid(rgb) => {
-                let y = wcag::relative_luminance(quantised_display(*rgb));
-                Ok(LumaInterval { lo: y, hi: y })
-            }
-        }
+    ) -> Result<LumaInterval, SolveFailure> {
+        let y = wcag::relative_luminance(quantised_display(self.linear_srgb));
+        Ok(LumaInterval { lo: y, hi: y })
     }
 
     /// Gamma-encoded (8-bit-quantised) sRGB of the endpoint the WCAG floor is
     /// checked against — the background colour with the least luminance contrast
-    /// for the target's polarity. For a [`Solid`](BgInput::Solid) background this
-    /// is just the colour. Future interval backgrounds resolve their worst-case
-    /// endpoint here, keeping `solve` free of variant matching (SEAM a).
+    /// for the target's polarity. For the current opaque background domain this
+    /// is just the validated colour.
     fn governing_display(&self, _target: f64) -> [f64; 3] {
-        match self {
-            BgInput::Solid(rgb) => quantised_display(*rgb),
-        }
+        quantised_display(self.linear_srgb)
     }
 
     /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — домен
@@ -301,13 +282,14 @@ impl BgInput {
     /// ([`crate::semantic::RoleSpec::Ladder`] /
     /// [`AlphaAnalog`](crate::semantic::RoleSpec::AlphaAnalog)) композитит свой
     /// тинт на этом фоне для честного замера контраста солид-эквивалента. Для
-    /// [`Solid`](BgInput::Solid) это квантованный дисплей-цвет фона; будущие
-    /// интервальные фоны выберут здесь свой представительный край, оставляя
-    /// физику резолва свободной от матчинга вариантов (SEAM a).
+    /// Это квантованный дисплей-цвет валидированного фона.
     pub(crate) fn encoded_display(&self) -> [f64; 3] {
-        match self {
-            BgInput::Solid(rgb) => quantised_display(*rgb),
-        }
+        quantised_display(self.linear_srgb)
+    }
+
+    /// Validated linear-sRGB stimulus used by appearance-only measurements.
+    pub(crate) fn linear_srgb(&self) -> [f64; 3] {
+        self.linear_srgb
     }
 }
 
@@ -329,7 +311,7 @@ impl LumaInterval {
     /// the least contrast for a fixed foreground, so meeting the contract there
     /// meets it across the whole interval. Dark-on-light (`target ≥ 0`) is
     /// hardest against the darkest background; light-on-dark against the
-    /// brightest. Degenerate for [`BgInput::Solid`] (`lo == hi`).
+    /// brightest. Degenerate for the current opaque background (`lo == hi`).
     fn governing(self, target: f64) -> f64 {
         if target >= 0.0 { self.lo } else { self.hi }
     }
@@ -385,38 +367,32 @@ impl Solved {
     }
 }
 
-/// Why a solve could not return a colour. Physical/domain variants explain a
-/// contract failure; [`Self::InternalInvariant`] reports core drift and must be
-/// failed closed by bindings rather than projected as a physical outcome.
+/// Why a solve did not return a colour. The variant and its
+/// [`SolveFailureCategory`] distinguish proof of unreachability from an
+/// exhausted algorithm, a rejected request, an unsupported capability, and an
+/// internal invariant. Bindings must fail closed on [`Self::InternalInvariant`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Unreachable {
-    /// `|target|` is below the low-contrast clip floor (`loClip`): the contrast
-    /// curve reports zero there, so no colour can reproduce such a target.
+pub enum SolveFailure {
+    /// `|target|` lies in the contrast curve's low-contrast dead zone and is
+    /// farther than the declared acceptance budget from both representable
+    /// sides: zero and the minimum non-zero model output.
     BelowContrastFloor { target: f64 },
-    /// The background cannot supply the target even at the luminance extreme
-    /// (pure black for dark-on-light, pure white for light-on-dark).
+    /// The background's luminance extreme (pure black for dark-on-light, pure
+    /// white for light-on-dark) remains outside the declared acceptance budget.
     ExceedsRange { target: f64, max_achievable: f64 },
-    /// The target falls in an 8-bit quantisation gap: the analytic foreground is
-    /// reachable in principle, but every hex colour the solver can emit near it
-    /// lands either short of the target or inside the low-contrast dead zone, so
-    /// no on-grid colour reproduces it within the ±1 Lc budget. Distinct from
-    /// [`Self::ExceedsRange`] (where the *background* is the limit): here the
-    /// background can supply the target, the discrete sRGB grid cannot.
-    /// `nearest` is the closest |Lc| an adjacent hex step actually achieves.
-    QuantizationGap { target: f64, nearest: f64 },
+    /// The bounded neighbour search exhausted its declared candidate budget
+    /// without finding an emitted colour inside the ±1 Lc acceptance window.
+    /// Distinct from [`Self::ExceedsRange`] (where the *background* is the
+    /// proven limit): this variant makes no claim about unexamined sRGB colours.
+    /// `closest_examined` is the smallest-error `|Lc|` among the analytic seed
+    /// and the at most `NEIGHBOR_STEPS` distinct neighbours actually measured.
+    BoundedSearchExhausted { target: f64, closest_examined: f64 },
     /// The WCAG legal floor cannot be met on this background even at the
     /// achromatic extreme (pure black for dark-on-light, pure white for
     /// light-on-dark). `max_ratio` is the most contrast this background can
     /// supply in that polarity; `floor` is the ratio the contract required.
     FloorUnreachable { floor: f64, max_ratio: f64 },
-    /// The target's polarity disagrees with the background's luminance, e.g. a
-    /// dark-on-light target against a background that is already dark.
-    ///
-    /// Defensive guard: with the canonical constant set the low-contrast floor
-    /// rejects such targets first (they surface as [`Self::BelowContrastFloor`]
-    /// or [`Self::ExceedsRange`]), so this variant is not produced in practice.
-    PolarityMismatch { target: f64 },
     /// The requested gamut is not supported yet (Display P3 arrives later).
     GamutUnsupported,
     /// Malformed input, such as an invalid hex colour or a non-finite target.
@@ -428,12 +404,85 @@ pub enum Unreachable {
     InternalInvariant(String),
 }
 
-impl core::fmt::Display for Unreachable {
+/// Machine-readable meaning of a [`SolveFailure`].
+///
+/// This classification is the SSOT for every binding and conformance adapter:
+/// adapters may change representation, but never reclassify a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolveFailureCategory {
+    /// The complete declared metric/output domain proves no solution exists.
+    Unreachable,
+    /// A bounded algorithm ended without proving reachability either way.
+    Unresolved,
+    /// The request is malformed or inconsistent with the declared domain.
+    Rejected,
+    /// The request is valid, but the requested capability is not implemented.
+    Unsupported,
+}
+
+impl SolveFailureCategory {
+    /// Canonical wire spelling shared by all supported bindings.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreachable => "unreachable",
+            Self::Unresolved => "unresolved",
+            Self::Rejected => "rejected",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// Atomic public projection of a [`SolveFailure`].
+///
+/// Internal invariants intentionally have no value of this type, so an adapter
+/// cannot accidentally serialize core drift as a client-visible terminal
+/// result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SolveFailureBoundary {
+    category: SolveFailureCategory,
+    code: &'static str,
+}
+
+impl SolveFailureBoundary {
+    /// Semantic category shared by every binding.
+    pub const fn category(self) -> SolveFailureCategory {
+        self.category
+    }
+
+    /// Canonical machine code shared by every binding.
+    pub const fn code(self) -> &'static str {
+        self.code
+    }
+}
+
+impl SolveFailure {
+    /// Public boundary descriptor, or `None` for internal core drift.
+    pub const fn boundary(&self) -> Option<SolveFailureBoundary> {
+        let (category, code) = match self {
+            Self::BelowContrastFloor { .. } => {
+                (SolveFailureCategory::Unreachable, "below_contrast_floor")
+            }
+            Self::ExceedsRange { .. } => (SolveFailureCategory::Unreachable, "exceeds_range"),
+            Self::BoundedSearchExhausted { .. } => {
+                (SolveFailureCategory::Unresolved, "bounded_search_exhausted")
+            }
+            Self::FloorUnreachable { .. } => {
+                (SolveFailureCategory::Unreachable, "floor_unreachable")
+            }
+            Self::GamutUnsupported => (SolveFailureCategory::Unsupported, "gamut_unsupported"),
+            Self::InvalidInput(_) => (SolveFailureCategory::Rejected, "invalid_input"),
+            Self::InternalInvariant(_) => return None,
+        };
+        Some(SolveFailureBoundary { category, code })
+    }
+}
+
+impl core::fmt::Display for SolveFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::BelowContrastFloor { target } => write!(
                 f,
-                "target Lc {target:.2} is inside the low-contrast dead zone; no colour reaches it"
+                "target Lc {target:.2} lies inside the contrast dead zone outside the acceptance budget"
             ),
             Self::ExceedsRange {
                 target,
@@ -442,17 +491,16 @@ impl core::fmt::Display for Unreachable {
                 f,
                 "target Lc {target:.2} exceeds the most this background can supply ({max_achievable:.2})"
             ),
-            Self::QuantizationGap { target, nearest } => write!(
+            Self::BoundedSearchExhausted {
+                target,
+                closest_examined,
+            } => write!(
                 f,
-                "target Lc {target:.2} falls in an 8-bit quantisation gap; the nearest on-grid colour reaches only {nearest:.2}"
+                "bounded search exhausted for target Lc {target:.2}; closest examined |Lc| was {closest_examined:.2}"
             ),
             Self::FloorUnreachable { floor, max_ratio } => write!(
                 f,
                 "WCAG floor {floor:.1}:1 is unreachable on this background (max {max_ratio:.2}:1)"
-            ),
-            Self::PolarityMismatch { target } => write!(
-                f,
-                "target Lc {target:.2} has the wrong polarity for this background's luminance"
             ),
             Self::GamutUnsupported => {
                 write!(
@@ -466,13 +514,14 @@ impl core::fmt::Display for Unreachable {
     }
 }
 
-impl std::error::Error for Unreachable {}
+impl std::error::Error for SolveFailure {}
 
 /// Solve for a foreground colour that meets `contract` against `bg`.
 ///
-/// Returns the resolved colour together with the contrast it achieves, or
-/// [`Unreachable`] explaining why no colour can satisfy the contract. See the
-/// [module documentation](self) for the algorithm.
+/// Returns the resolved colour together with the contrast it achieves, or a
+/// [`SolveFailure`]. Inspect its category before interpreting the outcome:
+/// only [`SolveFailureCategory::Unreachable`] proves absence of a solution in
+/// the declared domain.
 ///
 /// * `bg` — the background (reduced to a luminance interval).
 /// * `contract` — the contrast band; `solve` targets its [`floor`](Contract::floor).
@@ -487,24 +536,23 @@ pub fn solve(
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
     gamut: Gamut,
-) -> Result<Solved, Unreachable> {
+) -> Result<Solved, SolveFailure> {
     // The Display P3 chroma boundary is future work (chapter 5); fail loudly.
     if gamut != Gamut::Srgb {
-        return Err(Unreachable::GamutUnsupported);
+        return Err(SolveFailure::GamutUnsupported);
     }
     validate_job(contract, hue, chroma_policy)?;
-    // The background side costs exactly one CIECAM16 forward — its H-K luminance
-    // interval. Compute it here and hand it to [`solve_in`]; [`solve_many`] and
-    // [`resolve_set`](crate::resolve_set) compute it once and reuse it across a
-    // whole batch instead of re-deriving the same background forward per target.
+    // Compute the background's quantised display-luminance interval once and
+    // hand it to [`solve_in`]; batch/set entry points reuse the same value for
+    // every target. CAM16/H-K is not part of this readability axis.
     let interval = bg.luma_interval(vc)?;
     solve_in(&bg, contract, hue, chroma_policy, vc, interval)
 }
 
 /// One foreground request in a [`solve_many`] batch: the contract to meet plus
 /// the foreground's hue and chroma policy. The background, viewing conditions,
-/// and gamut are shared across the batch, so the background's H-K luminance
-/// forward is paid once for the whole slice rather than once per request.
+/// and gamut are shared across the batch, so the background's quantised
+/// display-luminance reduction is paid once for the whole slice.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveJob {
     /// The contrast contract this foreground must meet against the background.
@@ -518,19 +566,19 @@ pub struct SolveJob {
 /// Solve a batch of foreground requests against one shared background.
 ///
 /// Equivalent to calling [`solve`] once per [`SolveJob`], but the background's
-/// luminance interval — the only CIECAM16 forward the background side costs — is
-/// computed once for the whole slice. The returned vector is positional: entry
-/// `i` is the result for `jobs[i]`, each carrying its own `Result` so one
-/// unreachable request never fails the batch. A whole-batch failure (unsupported
-/// gamut, or a background that cannot be reduced) is the outer `Err`.
+/// quantised display-luminance interval is computed once for the whole slice.
+/// The returned vector is positional: entry `i` is the result for `jobs[i]`,
+/// each carrying its own `Result` so one failed request never fails the batch.
+/// A whole-batch failure (unsupported gamut, or a background that cannot be
+/// reduced) is the outer `Err`.
 pub fn solve_many(
     bg: BgInput,
     jobs: &[SolveJob],
     vc: &ViewingConditions,
     gamut: Gamut,
-) -> Result<Vec<Result<Solved, Unreachable>>, Unreachable> {
+) -> Result<Vec<Result<Solved, SolveFailure>>, SolveFailure> {
     if gamut != Gamut::Srgb {
-        return Err(Unreachable::GamutUnsupported);
+        return Err(SolveFailure::GamutUnsupported);
     }
     // Background side: one forward for the whole batch (see [`solve`]).
     let interval = bg.luma_interval(vc)?;
@@ -550,28 +598,28 @@ fn validate_job(
     contract: Contract,
     hue: Hue,
     chroma_policy: ChromaPolicy,
-) -> Result<(), Unreachable> {
+) -> Result<(), SolveFailure> {
     let target = contract.floor();
     if !target.is_finite() {
-        return Err(Unreachable::InvalidInput(format!(
+        return Err(SolveFailure::InvalidInput(format!(
             "target Lc is not finite: {target}"
         )));
     }
 
     let hue_deg = hue.degrees();
     if !hue_deg.is_finite() {
-        return Err(Unreachable::InvalidInput(format!(
+        return Err(SolveFailure::InvalidInput(format!(
             "hue is not finite: {hue_deg}"
         )));
     }
     if let ChromaPolicy::Relative(ratio) = chroma_policy {
         if !ratio.is_finite() {
-            return Err(Unreachable::InvalidInput(format!(
+            return Err(SolveFailure::InvalidInput(format!(
                 "chroma ratio is not finite: {ratio}"
             )));
         }
         if !(0.0..=1.0).contains(&ratio) {
-            return Err(Unreachable::InvalidInput(format!(
+            return Err(SolveFailure::InvalidInput(format!(
                 "chroma ratio must be inside [0, 1], got {ratio}"
             )));
         }
@@ -592,7 +640,7 @@ pub(crate) fn solve_in(
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
     interval: LumaInterval,
-) -> Result<Solved, Unreachable> {
+) -> Result<Solved, SolveFailure> {
     let target = contract.floor();
     let y_gov = interval.governing(target);
 
@@ -604,7 +652,7 @@ pub(crate) fn solve_in(
     // perceptual solution falls short of it, push the colour until it clears the
     // floor and flag the override. Decorative ([`Floor::None`]) contracts skip
     // this entirely and keep their perceptual target. The resolved Oklab
-    // lightness (not just the colour) is returned so the quantisation-gap search
+    // lightness (not just the colour) is returned so the bounded neighbour search
     // below can step to neighbouring hex grid points from it.
     let bg_disp = bg.governing_display(target);
     let (l_final, floor_override) = match contract.conformance().min_ratio() {
@@ -615,21 +663,18 @@ pub(crate) fn solve_in(
     // Stage 3 — quantise, measure, verify. Build the colour at the resolved
     // lightness, emit its hex, and confirm the dual gate (perceptual floor at
     // both interval ends, plus the legal WCAG floor for text/UI) still holds on
-    // the *quantised* colour. If it does not, the analytic solution may have
-    // fallen into an 8-bit quantisation gap — the emitted hex lands inside the
-    // low-contrast dead zone even though the background can supply the target —
-    // so walk a bounded number of neighbouring hex steps toward larger `|Lc|`
-    // before giving up. Every candidate is re-measured honestly: no silent clip.
-    let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
+    // the *quantised* colour. If it does not, walk a bounded number of neighbouring
+    // hex steps toward larger `|Lc|` before returning an explicitly scoped
+    // exhausted-search outcome. Every candidate is re-measured: no unexamined
+    // colour is described or implied by the result.
+    let evaluate = |l_ok: f64| -> Result<Candidate, SolveFailure> {
         let rgb = build_color(l_ok, hue, chroma_policy);
         let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
         // Perceptual floor at every interval endpoint. The governing endpoint's
         // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
-        // against), so reuse it instead of re-deriving the foreground luminance —
-        // that recovery is the costly H-K forward. Only a *distinct* endpoint
-        // (genuine luminance intervals, a future background variant) pays for a
-        // fresh measurement; a [`Solid`] background's endpoints all coincide with
-        // the governing one, so it measures the foreground exactly once.
+        // against), so reuse it instead of re-deriving foreground display
+        // luminance. Only a *distinct* endpoint (a future field background) pays
+        // for a fresh measurement; an opaque background's endpoints coincide.
         let perceptual_ok = interval.endpoints().into_iter().all(|y_end| {
             if y_end == y_gov {
                 meets_floor_lc(solved.lc(), target)
@@ -657,7 +702,7 @@ pub(crate) fn solve_in(
     if primary.passes {
         return Ok(primary.solved);
     }
-    solve_quantization_neighbor(l_final, target, hue, chroma_policy, primary.lc, evaluate)
+    solve_bounded_neighbor_search(l_final, target, hue, chroma_policy, primary.lc, evaluate)
 }
 
 /// The quantisation budget: a solved colour is accepted only when its measured
@@ -675,7 +720,7 @@ pub(crate) fn solve_in(
 // SSOT-TRACKED — допуск приёмки Lc в единицах шага сетки (±1 Lc), терминал (c) interval-insensitive (exposure 1.84%), см. docs/empirical-inventory.md.
 const QUANT_BUDGET: f64 = 1.0;
 
-/// One on-grid candidate the quantisation-gap search evaluates: the solved
+/// One on-grid candidate the bounded neighbour search evaluates: the solved
 /// colour, the perceptual `Lc` it actually achieves on the quantised hex, and
 /// whether it clears the dual gate (perceptual floor at both interval ends +
 /// legal WCAG floor). `passes` is the *lower*-bound floor check the primary
@@ -695,10 +740,9 @@ impl Candidate {
     }
 }
 
-/// Maximum distinct hex steps the quantisation-gap search explores from the
-/// analytic solution. Two steps is enough to cross the single dead-zone band the
-/// 8-bit grid opens just above the low-contrast clip; this is a gap-bridge, not
-/// an optimiser, so the reach is deliberately tiny (issue #44).
+/// Declared finite work budget: the bounded neighbour search measures at most
+/// two distinct emitted colours after the analytic seed. This is a local search
+/// limit, not a statement about the rest of the sRGB grid.
 const NEIGHBOR_STEPS: u32 = 2;
 
 /// Walk up to [`NEIGHBOR_STEPS`] *distinct* hex grid points toward larger `|Lc|`
@@ -706,25 +750,25 @@ const NEIGHBOR_STEPS: u32 = 2;
 /// return the first that clears the dual gate **and** lands within the symmetric
 /// [`QUANT_BUDGET`] of the target.
 ///
-/// Two honesty guarantees:
+/// Two search guarantees:
 /// * *Distinct* — a step counts only when the emitted hex actually changes, so
 ///   the search can never silently re-clip to the colour it started from.
 /// * *Bounded both ways* — `evaluate.passes` rejects steps that fall short of
 ///   the floor; the `±QUANT_BUDGET` check here rejects steps that overshoot it.
 ///   A neighbour is returned only when it is genuinely within budget.
 ///
-/// If no neighbour qualifies, the target sits in a real quantisation gap and
-/// [`Unreachable::QuantizationGap`] is returned, reporting the `|Lc|` of the
-/// *closest* colour explored (the start plus every neighbour) — the true
-/// near-miss, never a fabricated bound.
-fn solve_quantization_neighbor(
+/// If no neighbour qualifies, [`SolveFailure::BoundedSearchExhausted`] reports
+/// the `|Lc|` of the lowest-error examined colour (the seed plus every visited
+/// neighbour). It deliberately says nothing about colours outside this bounded
+/// candidate set.
+fn solve_bounded_neighbor_search(
     l_start: f64,
     target: f64,
     hue: Hue,
     chroma_policy: ChromaPolicy,
     start_lc: f64,
-    evaluate: impl Fn(f64) -> Result<Candidate, Unreachable>,
-) -> Result<Solved, Unreachable> {
+    evaluate: impl Fn(f64) -> Result<Candidate, SolveFailure>,
+) -> Result<Solved, SolveFailure> {
     // Toward larger contrast: dark-on-light needs a darker foreground (lower
     // Oklab lightness), light-on-dark a lighter one. The probe increment is well
     // below one 8-bit grid step so neighbours are visited in order, not skipped.
@@ -743,10 +787,10 @@ fn solve_quantization_neighbor(
     let mut last_hex = hex_from_srgb(build_color(l_start, hue, chroma_policy));
     let mut steps_taken = 0_u32;
     let mut l_probe = l_start;
-    // Track the colour closest to the target across the start and every
-    // neighbour, so the gap error reports the true near-miss (not a max).
-    let mut nearest_lc = start_lc;
-    let mut nearest_err = (start_lc - target).abs();
+    // Track the lowest-error measured candidate across the seed and every
+    // visited neighbour. This is an exact fact about the bounded search only.
+    let mut closest_examined_lc = start_lc;
+    let mut closest_examined_err = (start_lc - target).abs();
 
     while steps_taken < NEIGHBOR_STEPS && (0.0..=1.0).contains(&l_probe) {
         l_probe += direction * PROBE;
@@ -759,20 +803,20 @@ fn solve_quantization_neighbor(
 
         let candidate = evaluate(l_probe)?;
         let err = candidate.error(target);
-        if err < nearest_err {
-            nearest_err = err;
-            nearest_lc = candidate.lc;
+        if err < closest_examined_err {
+            closest_examined_err = err;
+            closest_examined_lc = candidate.lc;
         }
         // Accept only when the floor holds AND the step has not overshot the
-        // symmetric budget — an honest neighbour, in band on both sides.
+        // symmetric budget — an in-band neighbour on both sides.
         if candidate.passes && err <= QUANT_BUDGET {
             return Ok(candidate.solved);
         }
     }
 
-    Err(Unreachable::QuantizationGap {
+    Err(SolveFailure::BoundedSearchExhausted {
         target,
-        nearest: nearest_lc.abs(),
+        closest_examined: closest_examined_lc.abs(),
     })
 }
 
@@ -784,7 +828,7 @@ fn solve_lpc_lightness(
     target: f64,
     hue: Hue,
     chroma_policy: ChromaPolicy,
-) -> Result<f64, Unreachable> {
+) -> Result<f64, SolveFailure> {
     let y_fg = invert_contrast(y_bg, target)?;
     Ok(match_lightness_ys(y_fg, hue, chroma_policy))
 }
@@ -839,14 +883,12 @@ const DJ_NEIGHBOR_STEPS: u32 = 2;
 /// If the quantised colour lands within [`DJ_BUDGET`] of the target it is
 /// returned. Otherwise a bounded walk steps toward the target `J'` across at most
 /// [`DJ_NEIGHBOR_STEPS`] distinct hex grid points. If none lands in budget — or
-/// the target J' falls off the end of the achievable axis (e.g. a positive dJ'
-/// requested above a near-white background) — the contract **деградирует к
-/// ближайшему достижимому** (ADR-0002, закон 2): возвращается цвет с
-/// минимальной ошибкой `||ΔJ'|−цель|` среди осмотренных грид-точек, помеченный
-/// `degraded: true`, с честно замеренным `achieved_dj`. Голый отказ прежней
-/// версии (`DjUnreachable`) наказывал владельца контракта ошибкой за
-/// физическую стену оси — вместо честного результата (политика Figma-коэрсии:
-/// rgb(999) → 255, не exception).
+/// the target J' falls off the end of the axis (e.g. a positive dJ' requested
+/// above a near-white background) — the solver returns the lowest-error
+/// candidate among the analytic seed and the examined bounded walk. The result
+/// carries `degraded: true` and the measured `achieved_dj`. This is a local
+/// selection contract over at most `1 + DJ_NEIGHBOR_STEPS` distinct emitted
+/// colours, not an optimum over the whole output gamut.
 ///
 /// The reported `lc` on the returned [`Solved`] is still the measured LPC
 /// contrast of the emitted colour against the background (so the ladder-order
@@ -859,9 +901,9 @@ pub(crate) fn solve_dj(
     hue: Hue,
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
-) -> Result<DjSolved, Unreachable> {
+) -> Result<DjSolved, SolveFailure> {
     if !magnitude_dj.is_finite() || magnitude_dj < 0.0 {
-        return Err(Unreachable::InvalidInput(format!(
+        return Err(SolveFailure::InvalidInput(format!(
             "dJ' magnitude must be finite and non-negative: {magnitude_dj}"
         )));
     }
@@ -891,11 +933,15 @@ pub(crate) fn solve_dj(
     // Build, quantise, and honestly measure the achieved separation on the emitted
     // hex (decoded to linear — the colour the caller actually gets), not the
     // pre-quantisation ideal.
-    let evaluate = |jp_goal: f64| -> Result<DjCandidate, Unreachable> {
+    let evaluate = |jp_goal: f64| -> Result<DjCandidate, SolveFailure> {
         let l_ok = crate::scale::jp_to_oklab_l(jp_goal, vc);
         let rgb = build_color(l_ok, hue, chroma_policy);
         let solved = finish(rgb, y_gov, bg_disp, false, vc)?;
-        let rgb_quantised = srgb_from_hex(solved.hex()).map_err(Unreachable::InvalidInput)?;
+        let rgb_quantised = srgb_from_hex(solved.hex()).map_err(|reason| {
+            SolveFailure::InternalInvariant(format!(
+                "solver emitted an invalid sRGB hex during dJ refinement: {reason}"
+            ))
+        })?;
         let achieved_dj = (jp_of_linear(rgb_quantised, vc) - jp_bg).abs();
         #[cfg(test)]
         probe_log::record(solved.hex(), achieved_dj);
@@ -955,8 +1001,8 @@ pub(crate) fn solve_dj(
         }
     }
 
-    // Закон 2 ADR-0002: цель за стеной оси / в квантовой дыре — ближайший
-    // достижимый цвет с флагом, не ошибка.
+    // Цель за стеной оси / вне бюджета локального обхода: вернуть лучший из
+    // фактически просмотренных кандидатов и явно отметить неточное выполнение.
     Ok(DjSolved {
         achieved_dj: best.achieved_dj,
         solved: best.solved,
@@ -973,9 +1019,8 @@ struct DjCandidate {
     error: f64,
 }
 
-/// Результат dJ'-солва: решённый цвет, честно замеренный `|ΔJ'|` на отданном
-/// hex и флаг деградации (закон 2 ADR-0002 — цель недостижима, отдан
-/// ближайший достижимый).
+/// Результат dJ'-солва: решённый цвет, замеренный `|ΔJ'|` на отданном hex и
+/// флаг, что локальный ограниченный поиск не попал в бюджет цели.
 pub(crate) struct DjSolved {
     pub(crate) solved: Solved,
     /// Честный замер |ΔJ'| на отданном hex — доносится до
@@ -995,7 +1040,7 @@ pub(crate) struct DjSolved {
 /// the ratio along the path is not formally proven monotonic, so "smallest" is
 /// up to the bisection's resolution; the floor guarantee itself never depends
 /// on monotonicity — the returned colour is always a verified passing point.) If even the extreme cannot reach the floor, the contract
-/// is [`Unreachable::FloorUnreachable`].
+/// is [`SolveFailure::FloorUnreachable`].
 /// Lightness-bracket width below which the floor bisection has pinned the
 /// lightness finely enough that the emitted 8-bit hex can no longer move. At
 /// ~1e-9 it is far tighter than the lightness step one hex byte spans, so the
@@ -1011,7 +1056,7 @@ fn apply_floor(
     hue: Hue,
     chroma_policy: ChromaPolicy,
     bg_disp: [f64; 3],
-) -> Result<(f64, bool), Unreachable> {
+) -> Result<(f64, bool), SolveFailure> {
     let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
     if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
         return Ok((l_lpc, false));
@@ -1020,7 +1065,7 @@ fn apply_floor(
     let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
     let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
     if max_ratio < floor_ratio {
-        return Err(Unreachable::FloorUnreachable {
+        return Err(SolveFailure::FloorUnreachable {
             floor: floor_ratio,
             max_ratio,
         });
@@ -1099,64 +1144,83 @@ fn max_lc(y_bg: f64, target: f64) -> f64 {
 }
 
 /// Analytic inverse of [`contrast_core`](crate::lpc): the clamp-inverted
-/// foreground luminance `Y_hk` that yields `target` against `y_bg`.
-fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, Unreachable> {
-    // Past the offset and clip, the smallest representable |Lc| is this floor;
-    // targets inside the dead zone collapse to zero in the forward curve.
+/// foreground luminance `Ys` that yields `target` against `y_bg`.
+fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, SolveFailure> {
+    // Past the offset and clip, the smallest representable |Lc| is this floor.
+    // The curve's dead zone has two representable boundaries: zero and this
+    // minimum non-zero output. Acceptance belongs to the public contract, so a
+    // target within QUANT_BUDGET of either boundary must be solved at that
+    // boundary before the remaining open gap can be proved unreachable.
     let offset = if target > 0.0 {
         LO_BOW_OFFSET
     } else {
         LO_WOB_OFFSET
     };
     let lc_floor = (LO_CLIP - offset) * LC_SCALE;
-    if target.abs() < lc_floor {
-        return Err(Unreachable::BelowContrastFloor { target });
-    }
+    let target_magnitude = target.abs();
+    let solve_target = if target_magnitude < lc_floor {
+        let zero_error = target_magnitude;
+        let non_zero_error = lc_floor - target_magnitude;
+        if zero_error <= QUANT_BUDGET && zero_error <= non_zero_error {
+            return Ok(y_bg);
+        }
+        if non_zero_error <= QUANT_BUDGET {
+            target.signum() * lc_floor
+        } else {
+            return Err(SolveFailure::BelowContrastFloor { target });
+        }
+    } else {
+        target
+    };
 
     let bg_c = lpc::soft_clamp(y_bg);
 
-    if target > 0.0 {
+    if solve_target > 0.0 {
         // Normal polarity (dark-on-light): sapc = (bg^a − fg^b)·scale, then
         // Lc = (sapc − offset)·100. Solve for the clamped foreground fg_c.
-        let sapc = target / LC_SCALE + LO_BOW_OFFSET;
+        let sapc = solve_target / LC_SCALE + LO_BOW_OFFSET;
         let base = bg_c.powf(EXP_BG_LIGHT);
-        let max_achievable = max_lc(y_bg, target);
+        let max_achievable = max_lc(y_bg, solve_target);
         let fg_pow = base - sapc / CONTRAST_SCALE; // = fg_c^EXP_FG_LIGHT
         if fg_pow < 0.0 {
-            // Even a pure-black foreground cannot reach the target.
-            return Err(Unreachable::ExceedsRange {
-                target,
-                max_achievable,
-            });
+            return physical_endpoint_or_range_failure(target, max_achievable, 0.0);
         }
         let fg_c = fg_pow.powf(1.0 / EXP_FG_LIGHT);
-        if fg_c > bg_c {
-            // Foreground would have to be lighter than the background.
-            return Err(Unreachable::PolarityMismatch { target });
+        match lpc::soft_clamp_inv(fg_c) {
+            Some(y_fg) => Ok(y_fg),
+            None => physical_endpoint_or_range_failure(target, max_achievable, 0.0),
         }
-        lpc::soft_clamp_inv(fg_c).ok_or(Unreachable::ExceedsRange {
-            target,
-            max_achievable,
-        })
     } else {
         // Reverse polarity (light-on-dark): Lc = (sapc + offset)·100, sapc < 0.
-        let sapc = target / LC_SCALE - LO_WOB_OFFSET;
+        let sapc = solve_target / LC_SCALE - LO_WOB_OFFSET;
         let base = bg_c.powf(EXP_BG_DARK);
-        let max_achievable = max_lc(y_bg, target);
+        let max_achievable = max_lc(y_bg, solve_target);
         let fg_pow = base - sapc / CONTRAST_SCALE; // = fg_c^EXP_FG_DARK, > base
         let fg_c = fg_pow.powf(1.0 / EXP_FG_DARK);
         if fg_c > 1.0 {
-            // Even a pure-white foreground cannot reach the target.
-            return Err(Unreachable::ExceedsRange {
-                target,
-                max_achievable,
-            });
-        }
-        if fg_c < bg_c {
-            return Err(Unreachable::PolarityMismatch { target });
+            return physical_endpoint_or_range_failure(target, max_achievable, 1.0);
         }
         // fg_c ∈ [bg_c, 1] ≥ soft_clamp(0), so the clamp inverse always exists.
-        lpc::soft_clamp_inv(fg_c).ok_or(Unreachable::ExceedsRange {
+        lpc::soft_clamp_inv(fg_c).ok_or_else(|| {
+            SolveFailure::InternalInvariant(
+                "reverse-polarity inverse left the soft-clamp image".into(),
+            )
+        })
+    }
+}
+
+/// Return the physical luminance endpoint when it satisfies the same public
+/// acceptance budget as every quantised candidate; only a farther target is a
+/// proof of range unreachability.
+fn physical_endpoint_or_range_failure(
+    target: f64,
+    max_achievable: f64,
+    endpoint: f64,
+) -> Result<f64, SolveFailure> {
+    if (target - max_achievable).abs() <= QUANT_BUDGET {
+        Ok(endpoint)
+    } else {
+        Err(SolveFailure::ExceedsRange {
             target,
             max_achievable,
         })
@@ -1257,9 +1321,13 @@ fn finish(
     bg_disp: [f64; 3],
     floor_override: bool,
     vc: &ViewingConditions,
-) -> Result<Solved, Unreachable> {
+) -> Result<Solved, SolveFailure> {
     let hex = hex_from_srgb(rgb_ideal);
-    let rgb_quantised = srgb_from_hex(&hex).map_err(Unreachable::InvalidInput)?;
+    let rgb_quantised = srgb_from_hex(&hex).map_err(|reason| {
+        SolveFailure::InternalInvariant(format!(
+            "solver formatter emitted an invalid sRGB hex: {reason}"
+        ))
+    })?;
     let xyz = srgb_to_xyz(rgb_quantised);
     let (j, m, h) = crate::spaces::cam16::forward(xyz, vc);
     let color = LcsColor::from_cam16(j, m, h, oklab_hue(rgb_quantised));
@@ -1324,7 +1392,7 @@ pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
 /// Test-only examined-candidate log (#297 local-search truth): both local
 /// searches (`solve`'s quantisation walk and `solve_dj`'s separation walk)
 /// record every on-grid candidate they actually materialize, so tests can
-/// prove a reported near-miss (`nearest` / degraded `achieved_dj`) is drawn
+/// prove a reported near-miss (`closest_examined` / degraded `achieved_dj`) is drawn
 /// ONLY from this set — a local claim, never a global one. Compiled solely
 /// under `cfg(test)`: shipped bytes carry none of this.
 #[cfg(test)]
@@ -1363,12 +1431,68 @@ mod tests {
 
     #[test]
     fn internal_invariant_failure_is_not_reported_as_invalid_client_input() {
-        let error = Unreachable::InternalInvariant("generated fixture drift".into());
+        let error = SolveFailure::InternalInvariant("generated fixture drift".into());
         assert!(error.to_string().starts_with("internal invariant failure:"));
         assert!(!error.to_string().starts_with("invalid input:"));
+        assert_eq!(
+            error.boundary(),
+            None,
+            "internal drift must have no wire value"
+        );
     }
 
-    /// D2(a) страж (аудит 2026-07-03): `Unreachable` не несёт never-constructed
+    #[test]
+    fn public_failure_boundary_is_core_owned_and_semantically_partitioned() {
+        let cases = [
+            (
+                SolveFailure::BelowContrastFloor { target: 1.0 },
+                SolveFailureCategory::Unreachable,
+                "below_contrast_floor",
+            ),
+            (
+                SolveFailure::ExceedsRange {
+                    target: 100.0,
+                    max_achievable: 90.0,
+                },
+                SolveFailureCategory::Unreachable,
+                "exceeds_range",
+            ),
+            (
+                SolveFailure::BoundedSearchExhausted {
+                    target: 8.0,
+                    closest_examined: 7.5,
+                },
+                SolveFailureCategory::Unresolved,
+                "bounded_search_exhausted",
+            ),
+            (
+                SolveFailure::FloorUnreachable {
+                    floor: 4.5,
+                    max_ratio: 3.0,
+                },
+                SolveFailureCategory::Unreachable,
+                "floor_unreachable",
+            ),
+            (
+                SolveFailure::GamutUnsupported,
+                SolveFailureCategory::Unsupported,
+                "gamut_unsupported",
+            ),
+            (
+                SolveFailure::InvalidInput("x".into()),
+                SolveFailureCategory::Rejected,
+                "invalid_input",
+            ),
+        ];
+
+        for (failure, category, code) in cases {
+            let boundary = failure.boundary().expect("public variant must project");
+            assert_eq!(boundary.category(), category, "{failure:?}");
+            assert_eq!(boundary.code(), code, "{failure:?}");
+        }
+    }
+
+    /// D2(a) страж (аудит 2026-07-03): `SolveFailure` не несёт never-constructed
     /// вариантов-заготовок. `UnsupportedBackground` («future inputs», 0 точек
     /// конструирования по grep всех крейтов — только объявление + Display + wasm-
     /// маппинг) удалён; enum остаётся `#[non_exhaustive]`.
@@ -1379,39 +1503,37 @@ mod tests {
     /// как `UnsupportedBackground`. Массив-образцы доказывают конструируемость
     /// каждого живого варианта и покрывают их `Display`.
     #[test]
-    fn unreachable_carries_only_constructed_variants_with_display() {
+    fn solve_failure_carries_only_constructed_variants_with_display() {
         let samples = [
-            Unreachable::BelowContrastFloor { target: 0.1 },
-            Unreachable::ExceedsRange {
+            SolveFailure::BelowContrastFloor { target: 0.1 },
+            SolveFailure::ExceedsRange {
                 target: 1.0,
                 max_achievable: 0.5,
             },
-            Unreachable::QuantizationGap {
+            SolveFailure::BoundedSearchExhausted {
                 target: 1.0,
-                nearest: 0.9,
+                closest_examined: 0.9,
             },
-            Unreachable::FloorUnreachable {
+            SolveFailure::FloorUnreachable {
                 floor: 4.5,
                 max_ratio: 2.0,
             },
-            Unreachable::PolarityMismatch { target: 1.0 },
-            Unreachable::GamutUnsupported,
-            Unreachable::InvalidInput("x".to_string()),
-            Unreachable::InternalInvariant("x".to_string()),
+            SolveFailure::GamutUnsupported,
+            SolveFailure::InvalidInput("x".to_string()),
+            SolveFailure::InternalInvariant("x".to_string()),
         ];
         for u in &samples {
             assert!(!u.to_string().is_empty(), "Display пуст для {u:?}");
             // Замок исчерпываемости: новый вариант non_exhaustive-enum обязан
             // пройти этот match (нет `_`), иначе компиляция здесь падает.
             match u {
-                Unreachable::BelowContrastFloor { .. }
-                | Unreachable::ExceedsRange { .. }
-                | Unreachable::QuantizationGap { .. }
-                | Unreachable::FloorUnreachable { .. }
-                | Unreachable::PolarityMismatch { .. }
-                | Unreachable::GamutUnsupported
-                | Unreachable::InvalidInput(_)
-                | Unreachable::InternalInvariant(_) => {}
+                SolveFailure::BelowContrastFloor { .. }
+                | SolveFailure::ExceedsRange { .. }
+                | SolveFailure::BoundedSearchExhausted { .. }
+                | SolveFailure::FloorUnreachable { .. }
+                | SolveFailure::GamutUnsupported
+                | SolveFailure::InvalidInput(_)
+                | SolveFailure::InternalInvariant(_) => {}
             }
         }
     }
@@ -1542,7 +1664,7 @@ mod tests {
         bg_hex: &str,
         target: f64,
         vc: &ViewingConditions,
-    ) -> Result<(Solved, f64), Unreachable> {
+    ) -> Result<(Solved, f64), SolveFailure> {
         let bg = BgInput::solid(bg_hex)?;
         // Floor::None: these helpers exercise the pure perceptual inversion;
         // the WCAG floor (on by default for text) is tested separately.
@@ -1640,7 +1762,7 @@ mod tests {
                                     "polarity sign mismatch: target {target}, measured {measured}"
                                 );
                             }
-                            Err(Unreachable::InvalidInput(msg)) => {
+                            Err(SolveFailure::InvalidInput(msg)) => {
                                 panic!("unexpected invalid input for {bg_hex}/{target}: {msg}")
                             }
                             // Out-of-range / wrong-polarity / dead-zone targets are
@@ -1762,9 +1884,73 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(err, Unreachable::BelowContrastFloor { .. }),
+            matches!(err, SolveFailure::BelowContrastFloor { .. }),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn acceptance_budget_precedes_low_contrast_dead_zone_failure() {
+        let vc = ViewingConditions::srgb();
+        for (background, target) in [("#FFFFFF", 7.0), ("#000000", -7.0)] {
+            let solved = solve(
+                BgInput::solid(background).unwrap(),
+                Contract::range(target, target),
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                Gamut::Srgb,
+            )
+            .unwrap_or_else(|failure| {
+                panic!(
+                    "{background} target {target} is satisfiable inside the declared ±{QUANT_BUDGET} Lc budget, got {failure:?}"
+                )
+            });
+            assert!(
+                (solved.lc() - target).abs() <= QUANT_BUDGET,
+                "{background} target {target}: emitted {} measured {}",
+                solved.hex(),
+                solved.lc()
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_budget_precedes_physical_range_proof() {
+        let vc = ViewingConditions::srgb();
+        for (background, sign) in [("#FFFFFF", 1.0), ("#000000", -1.0)] {
+            let maximum = match solve(
+                BgInput::solid(background).unwrap(),
+                Contract::range(sign * 300.0, sign * 300.0),
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                Gamut::Srgb,
+            ) {
+                Err(SolveFailure::ExceedsRange { max_achievable, .. }) => max_achievable,
+                other => panic!("{background}: expected public range proof, got {other:?}"),
+            };
+            let target = maximum + sign * (QUANT_BUDGET * 0.5);
+            let solved = solve(
+                BgInput::solid(background).unwrap(),
+                Contract::range(target, target),
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                Gamut::Srgb,
+            )
+            .unwrap_or_else(|failure| {
+                panic!(
+                    "{background} target {target} is satisfied by the physical endpoint inside the declared ±{QUANT_BUDGET} Lc budget, got {failure:?}"
+                )
+            });
+            assert!(
+                (solved.lc() - target).abs() <= QUANT_BUDGET,
+                "{background} target {target}: emitted {} measured {}",
+                solved.hex(),
+                solved.lc()
+            );
+        }
     }
 
     #[test]
@@ -1781,7 +1967,7 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap_err();
-        assert!(matches!(err, Unreachable::ExceedsRange { .. }), "{err:?}");
+        assert!(matches!(err, SolveFailure::ExceedsRange { .. }), "{err:?}");
     }
 
     #[test]
@@ -1799,19 +1985,13 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Unreachable::ExceedsRange { .. } | Unreachable::PolarityMismatch { .. }
-            ),
-            "{err:?}"
-        );
+        assert!(matches!(err, SolveFailure::ExceedsRange { .. }), "{err:?}");
     }
 
     #[test]
     fn dj_degradation_reports_honest_achieved_dj() {
-        // Закон 2 ADR-0002: цель за стеной оси J' деградирует к ближайшему
-        // достижимому с флагом. `achieved_dj` обязан быть ЗАМЕРОМ на отданном
+        // Цель за стеной оси J' даёт явно помеченный исход ограниченного выбора.
+        // `achieved_dj` обязан быть ЗАМЕРОМ на отданном
         // hex (та же честность, что glow.degraded): перечитываем hex и
         // сверяем |ΔJ'| против фона независимо.
         let vc = ViewingConditions::srgb();
@@ -1866,7 +2046,7 @@ mod tests {
             Gamut::DisplayP3,
         )
         .unwrap_err();
-        assert_eq!(err, Unreachable::GamutUnsupported);
+        assert_eq!(err, SolveFailure::GamutUnsupported);
     }
 
     #[test]
@@ -1956,7 +2136,7 @@ mod tests {
 
     #[test]
     fn solid_background_reduces_to_a_degenerate_interval() {
-        // SEAM (a): every background reduces to a Y_hk interval; a Solid colour
+        // SEAM (a): every background reduces to a Ys interval; a Solid colour
         // is the degenerate interval [Y, Y]. `solve` only ever consumes the
         // interval (never matches BgInput variants), so future composite /
         // distribution variants — enabled by `#[non_exhaustive]` — extend
@@ -1975,7 +2155,7 @@ mod tests {
     #[test]
     fn invalid_hex_background_is_rejected() {
         let err = BgInput::solid("#xyz").unwrap_err();
-        assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+        assert!(matches!(err, SolveFailure::InvalidInput(_)), "{err:?}");
     }
 
     #[test]
@@ -2208,7 +2388,7 @@ mod tests {
         )
         .unwrap_err();
         match err {
-            Unreachable::FloorUnreachable { floor, max_ratio } => {
+            SolveFailure::FloorUnreachable { floor, max_ratio } => {
                 assert!((floor - 4.5).abs() < 1e-9, "floor {floor}");
                 assert!(max_ratio < 4.5, "max_ratio {max_ratio}");
             }
@@ -2230,7 +2410,7 @@ mod tests {
                 Gamut::Srgb,
             )
             .unwrap_err();
-            assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+            assert!(matches!(err, SolveFailure::InvalidInput(_)), "{err:?}");
         }
     }
 
@@ -2256,7 +2436,7 @@ mod tests {
                 Gamut::Srgb,
             )
             .unwrap_err();
-            assert!(matches!(err, Unreachable::InvalidInput(_)), "{err:?}");
+            assert!(matches!(err, SolveFailure::InvalidInput(_)), "{err:?}");
         }
 
         for edge in [0.0, 1.0] {
@@ -2307,11 +2487,11 @@ mod tests {
         assert_eq!(results.len(), jobs.len());
         assert!(results[0].is_ok(), "первая валидная job потеряна");
         assert!(
-            matches!(&results[1], Err(Unreachable::InvalidInput(_))),
+            matches!(&results[1], Err(SolveFailure::InvalidInput(_))),
             "отрицательный ratio обязан остаться ошибкой в своей позиции"
         );
         assert!(
-            matches!(&results[2], Err(Unreachable::InvalidInput(_))),
+            matches!(&results[2], Err(SolveFailure::InvalidInput(_))),
             "ratio выше единицы обязан остаться ошибкой в своей позиции"
         );
         assert!(results[3].is_ok(), "последняя валидная job потеряна");
@@ -2333,7 +2513,7 @@ mod tests {
         )
         .unwrap_err();
         match err {
-            Unreachable::ExceedsRange { max_achievable, .. } => {
+            SolveFailure::ExceedsRange { max_achievable, .. } => {
                 let black_on_white = crate::lpc::lpc_with_vc("#000000", "#FFFFFF", &vc);
                 assert!(
                     (max_achievable - black_on_white).abs() < 0.5,
@@ -2360,7 +2540,7 @@ mod tests {
         )
         .unwrap_err();
         match err {
-            Unreachable::ExceedsRange { max_achievable, .. } => assert!(
+            SolveFailure::ExceedsRange { max_achievable, .. } => assert!(
                 max_achievable <= 0.0,
                 "reverse-polarity max on white must be <= 0, got {max_achievable}"
             ),
@@ -2369,7 +2549,7 @@ mod tests {
     }
 
     #[test]
-    fn quantization_gap_target_resolves_via_neighbor_step() {
+    fn bounded_neighbor_search_resolves_initial_quantization_miss() {
         // Issue #44: target Lc 7.31 on white. The analytic foreground quantises
         // to a hex inside the low-contrast dead zone (Lc 0); the floor sits at
         // ≈7.3 and the first valid darker grid step is #EDEDED (Lc ≈ 7.604 в
@@ -2403,20 +2583,20 @@ mod tests {
     }
 
     #[test]
-    fn quantization_band_is_fully_resolvable_or_honestly_unreachable() {
+    fn jnd_band_is_fully_resolvable_or_reports_bounded_exhaustion() {
         // Scan the JND band (7.3, 7.6) at 0.05 on white (dark-on-light, +Lc) and
         // black (light-on-dark, −Lc). The analytic low-contrast floor sits at
         // exactly 7.3 Lc ((LO_CLIP − offset)·100), so |target| == 7.3 is the
-        // honest BelowContrastFloor dead zone; the quantisation gap lives just
-        // above it. Inside the band every target must either resolve within ±1
+        // analytic BelowContrastFloor dead zone; quantisation can make the initial
+        // candidate miss just above it. Inside the band every target must either resolve within ±1
         // Lc, or fail with a *principled* variant — BelowContrastFloor (analytic
-        // dead zone) or QuantizationGap (on-grid near-miss) — but NEVER the
+        // dead zone) or BoundedSearchExhausted (bounded near-miss) — but NEVER the
         // misleading ExceedsRange, and never a silent clip. Prints a before/after
         // table for the PR.
         let vc = ViewingConditions::srgb();
         let mut t = 7.30_f64;
         let mut resolved = 0_usize;
-        let mut gapped = 0_usize;
+        let mut exhausted = 0_usize;
         let mut below = 0_usize;
         eprintln!("band scan (7.3, 7.6) step 0.05:");
         eprintln!("  target |  white +Lc                 |  black -Lc");
@@ -2424,12 +2604,14 @@ mod tests {
             let pos = solve_and_measure("#FFFFFF", t, &vc);
             let neg = solve_and_measure("#000000", -t, &vc);
 
-            let describe = |r: &Result<(Solved, f64), Unreachable>| match r {
+            let describe = |r: &Result<(Solved, f64), SolveFailure>| match r {
                 Ok((s, m)) => format!("Ok {} Lc {m:+.3}", s.hex()),
-                Err(Unreachable::QuantizationGap { nearest, .. }) => {
-                    format!("Gap (nearest {nearest:.3})")
+                Err(SolveFailure::BoundedSearchExhausted {
+                    closest_examined, ..
+                }) => {
+                    format!("Exhausted (closest examined {closest_examined:.3})")
                 }
-                Err(Unreachable::BelowContrastFloor { .. }) => "BelowFloor".to_string(),
+                Err(SolveFailure::BelowContrastFloor { .. }) => "BelowFloor".to_string(),
                 Err(e) => format!("ERR {e:?}"),
             };
             eprintln!("  {t:>6.2} |  {:<26}|  {}", describe(&pos), describe(&neg));
@@ -2450,20 +2632,20 @@ mod tests {
                             "band polarity mismatch: target {target}, measured {measured}"
                         );
                     }
-                    Err(Unreachable::QuantizationGap {
+                    Err(SolveFailure::BoundedSearchExhausted {
                         target: et,
-                        nearest,
+                        closest_examined,
                     }) => {
-                        gapped += 1;
+                        exhausted += 1;
                         assert!((et - target).abs() < 1e-9, "echoed target {et} vs {target}");
                         assert!(
-                            nearest.is_finite() && *nearest >= 0.0,
-                            "gap near-miss must be a real magnitude, got {nearest}"
+                            closest_examined.is_finite() && *closest_examined >= 0.0,
+                            "bounded near-miss must be a real magnitude, got {closest_examined}"
                         );
                     }
                     // Honest analytic dead zone at |Lc| <= 7.3 — a different
-                    // mechanism from the quantisation gap, and not a clip.
-                    Err(Unreachable::BelowContrastFloor { target: et }) => {
+                    // mechanism from bounded-search exhaustion, and not a clip.
+                    Err(SolveFailure::BelowContrastFloor { target: et }) => {
                         below += 1;
                         assert!((et - target).abs() < 1e-9, "echoed target {et} vs {target}");
                     }
@@ -2475,7 +2657,7 @@ mod tests {
             t += 0.05;
         }
         eprintln!(
-            "band scan: {resolved} resolved, {gapped} honest quant gaps, {below} below-floor"
+            "band scan: {resolved} resolved, {exhausted} bounded searches exhausted, {below} below-floor"
         );
         // The whole point of the fix: the issue-#44 white case is now resolvable.
         assert!(
@@ -2518,21 +2700,21 @@ mod tests {
     }
 
     #[test]
-    fn quantization_gap_error_is_honest_not_exceeds_range() {
-        // The QuantizationGap variant must report a real near-miss magnitude and
-        // render a message that names the gap — distinct from ExceedsRange, which
-        // would falsely blame the background. Construct one directly to lock the
-        // contract (the scan above exercises the live path).
-        let err = Unreachable::QuantizationGap {
+    fn bounded_search_exhausted_is_distinct_from_exceeds_range() {
+        // The bounded-search variant reports a real examined near-miss and names
+        // the finite search boundary — distinct from ExceedsRange, which proves a
+        // background limit. Construct one directly to lock the public contract.
+        let err = SolveFailure::BoundedSearchExhausted {
             target: 7.45,
-            nearest: 7.85,
+            closest_examined: 7.85,
         };
         let msg = err.to_string();
-        assert!(msg.contains("quantisation gap"), "message: {msg}");
+        assert!(msg.contains("bounded search exhausted"), "message: {msg}");
+        assert!(msg.contains("closest examined"), "message: {msg}");
         assert!(msg.contains("7.45"), "message must echo the target: {msg}");
         assert_ne!(
             err,
-            Unreachable::ExceedsRange {
+            SolveFailure::ExceedsRange {
                 target: 7.45,
                 max_achievable: 7.85,
             },
@@ -2673,7 +2855,9 @@ mod tests {
                     Resolved::GlowIndeterminate(_) => "glow-indeterminate".to_string(),
                     Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
                     Resolved::None => "none".to_string(),
-                    Resolved::Unreachable(_) => "unreach".to_string(),
+                    Resolved::Failure(failure) => {
+                        crate::test_support::valid_srgb_set_failure_repr(failure)
+                    }
                 };
                 format!("{}={}", role.key(), v)
             })
@@ -2829,7 +3013,7 @@ mod tests {
     // Оба локальных поиска пишут каждый материализованный on-grid кандидат в
     // `probe_log` (только под cfg(test)); отчётные значения обязаны быть
     // взяты ИЗ этого набора — «locality of report». Контрпримеры ниже убивают
-    // глобальное прочтение `QuantizationGap`/`nearest` и «nearest achievable».
+    // глобальное прочтение bounded outcome как optimum всего домена.
     // ------------------------------------------------------------------
 
     /// Каждое отданное значение solve — из examined-набора; walk реально
@@ -2869,12 +3053,14 @@ mod tests {
                     ),
                     // Аналитический отказ ДО квантования: ноль on-grid кандидатов —
                     // честно (сетка не при чём, мёртвая зона непрерывного ядра).
-                    Err(Unreachable::BelowContrastFloor { .. }) => {}
-                    Err(Unreachable::QuantizationGap { nearest, .. }) => assert!(
+                    Err(SolveFailure::BelowContrastFloor { .. }) => {}
+                    Err(SolveFailure::BoundedSearchExhausted {
+                        closest_examined, ..
+                    }) => assert!(
                         examined
                             .iter()
-                            .any(|(_, m)| (m.abs() - nearest).abs() < 1e-12),
-                        "{bg_hex} {target}: reported nearest is not an examined candidate"
+                            .any(|(_, m)| (m.abs() - closest_examined).abs() < 1e-12),
+                        "{bg_hex} {target}: reported closest_examined is not an examined candidate"
                     ),
                     Err(other) => panic!("{bg_hex} {target}: unexpected {other:?}"),
                 }
@@ -2887,17 +3073,17 @@ mod tests {
         );
     }
 
-    /// Контрпример, убивающий глобальное прочтение `QuantizationGap`/`nearest`:
+    /// Контрпример, запрещающий читать bounded outcome как глобальный optimum:
     /// на реальной hex-сетке (distinct-шаги — настоящий `build_color`) с
     /// синтетическим законом измерения walk (сид + 2 distinct-соседа) выносит
-    /// `QuantizationGap`, хотя ТРЕТИЙ distinct-шаг — первый, куда поиску
-    /// запрещено смотреть — проходит контракт внутри бюджета. `nearest` при
-    /// этом — ровно ближайший ИЗУЧЕННЫЙ (сид), не глобальный ближайший.
+    /// `BoundedSearchExhausted`, хотя ТРЕТИЙ distinct-шаг — первый, куда поиску
+    /// запрещено смотреть — проходит контракт внутри бюджета. `closest_examined`
+    /// при этом — ровно лучший ИЗУЧЕННЫЙ кандидат, не глобальный ближайший.
     /// Публичной поверхностью этот вариант сегодня недостижим (см. интеграционную
     /// характеризацию: класс вымер на solid-фонах), поэтому структурная правда
     /// поиска пинится на его собственном шве.
     #[test]
-    fn quantization_gap_wording_is_local_not_global_counterexample() {
+    fn bounded_search_exhausted_is_local_not_global_counterexample() {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let target = 10.0;
@@ -2936,7 +3122,7 @@ mod tests {
                     .unwrap_or(200.0)
             }
         };
-        let evaluate = |l_ok: f64| -> Result<Candidate, Unreachable> {
+        let evaluate = |l_ok: f64| -> Result<Candidate, SolveFailure> {
             let solved = finish(build_color(l_ok, hue, cp), y_gov, bg_disp, false, &vc)?;
             let lc = law(solved.hex());
             Ok(Candidate {
@@ -2947,39 +3133,42 @@ mod tests {
         };
 
         let start_lc = law(&distinct[0].1);
-        match solve_quantization_neighbor(l_start, target, hue, cp, start_lc, evaluate) {
-            Err(Unreachable::QuantizationGap { target: t, nearest }) => {
+        match solve_bounded_neighbor_search(l_start, target, hue, cp, start_lc, evaluate) {
+            Err(SolveFailure::BoundedSearchExhausted {
+                target: t,
+                closest_examined,
+            }) => {
                 assert_eq!(t, target);
-                // `nearest` — ближайший ИЗУЧЕННЫЙ (сид, 8.8)…
+                // `closest_examined` — лучший ИЗУЧЕННЫЙ кандидат (сид, 8.8)…
                 assert!(
-                    (nearest - 8.8).abs() < 1e-12,
-                    "nearest {nearest} must be the closest EXAMINED candidate (8.8)"
+                    (closest_examined - 8.8).abs() < 1e-12,
+                    "closest_examined {closest_examined} must be the lowest-error EXAMINED candidate (8.8)"
                 );
                 // …а первый же узел за бюджетом walk'а проходит контракт в бюджете:
-                // «no on-grid colour» — ложь, правда лишь «в локальном бюджете».
+                // результат ничего не утверждает об этом неизученном узле.
                 let beyond = evaluate(distinct[3].0).unwrap();
                 assert!(
                     beyond.passes && beyond.error(target) <= QUANT_BUDGET,
                     "the 3rd distinct step must be a passing in-budget candidate"
                 );
                 assert!(
-                    beyond.error(target) < (nearest - target).abs(),
-                    "the unexamined candidate is strictly closer than the reported nearest"
+                    beyond.error(target) < (closest_examined - target).abs(),
+                    "the unexamined candidate is strictly closer than closest_examined"
                 );
             }
-            other => panic!("expected QuantizationGap, got {other:?}"),
+            other => panic!("expected BoundedSearchExhausted, got {other:?}"),
         }
     }
 
-    /// Реальный (не синтетический) контрпример для «nearest achievable» в dJ':
+    /// Реальный контрпример против глобального optimum-claim в dJ':
     /// dark-on-light цель 98.75 на белом. Сид квантуется в #000000 (dj=100.0,
     /// err 1.25 > DJ_BUDGET); walk смотрит ТОЛЬКО от фона (к меньшему J'), где
     /// distinct-соседей нет вовсе — весь examined-набор состоит из ОДНОГО цвета,
-    /// и деградация отдаёт его как «nearest achievable». Глобально же #010101
+    /// и bounded selection отдаёт его. Но #010101
     /// (та же полярность, тот же policy-универсум серых) достигает 98.0964 —
     /// строго ближе к цели, но лежит НАЗАД (к фону), куда walk не смотрит.
     #[test]
-    fn dj_degraded_nearest_achievable_is_local_not_global() {
+    fn dj_degraded_selection_is_local_not_global() {
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let magnitude = 98.75;
@@ -2992,7 +3181,7 @@ mod tests {
             ChromaPolicy::Neutral,
             &vc,
         )
-        .expect("far dark-on-light dJ' target degrades, not errs (закон 2 ADR-0002)");
+        .expect("far dark-on-light dJ' target returns a typed bounded-selection outcome");
         let examined = probe_log::take();
 
         assert!(
@@ -3005,7 +3194,7 @@ mod tests {
             examined
                 .iter()
                 .any(|(h, m)| h == dj.solved.hex() && *m == dj.achieved_dj),
-            "reported nearest-achievable must be an examined candidate"
+            "reported degraded result must be an examined candidate"
         );
         // …и весь набор — один-единственный цвет: поиск не «перебрал все hex».
         assert!(

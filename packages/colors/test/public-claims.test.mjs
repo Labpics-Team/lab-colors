@@ -28,6 +28,8 @@ const HUMAN_CLEANLINESS_VERDICTS = [
 ];
 const WHOLE_GLOW_CLAIM =
   /(?:glow[^.!?\n]*полного результата|полного результата[^.!?\n]*glow)/iu;
+const FULL_SOLVE_EXACT_INVERSION_CLAIM =
+  /(?:точн[а-яё]*\s+инверси[а-яё]*\s+прямого\s+пути|exact(?:ly)?\s+(?:inverts?|inversion\s+of)\s+the\s+(?:complete\s+)?forward\s+path)/iu;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -201,6 +203,27 @@ const LCS_LPC_DRIFT = [
   /generic perceptual-contrast math/iu,
   /метрика\s+называется\s+LPC/iu,
 ];
+const DISCARDED_HONEST_RESULT_CLAIMS = [
+  /ADR[- ]?0002/iu,
+  /honest-result-policy/iu,
+  /nearest(?:[-\s]+)achievable/iu,
+  /ближайш[а-яё]*\s+достижим[а-яё]*/iu,
+  /human(?:-authored)?\s+input\s+(?:is|gets)\s+(?:silently\s+)?(?:coerced|clamped)/iu,
+  /человеческ[а-яё]*\s+ввод\s+(?:тихо\s+)?(?:коэрс|кламп)[а-яё]*/iu,
+  /ошибк[а-яё]*[^.!?\n]{0,80}человеческ[а-яё]*\s+ввод[^.!?\n]{0,80}(?:запрещен|недопустим)[а-яё]*/iu,
+  /\bno on-grid colou?r\s+(?:reproduces?|can\s+reproduce|satisfies?|can\s+satisfy)\b/iu,
+  /\bthe nearest on-grid colou?r\s+(?:reaches?|achieves?|is)\b/iu,
+];
+const DISCARDED_FAILURE_WIRE = [
+  /\bquantization_gap\b/u,
+  /["'`]?kind["'`]?\s*[:=]\s*["'`]unreachable\b/iu,
+  /\b(?:Resolved|RoleOutcome|ColorError)::Unreachable\b/u,
+  /\b(?:UnreachableRole|FailedRole)\b/u,
+  /\bpub\s+enum\s+Unreachable\b/u,
+  /\bunreachable_code\b/u,
+  /\bpolarity_mismatch\b/u,
+  /\bSolveFailure::PolarityMismatch\b/u,
+];
 
 function claimFiles(path, files = [], extensions = CLAIM_EXT) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -227,6 +250,16 @@ function knownFalseClaims(path, source) {
   }
   if (/platform-characterized/iu.test(source)) {
     failures.push(`${path}: claims a stronger status than legacy-platform-dependent`);
+  }
+  if (FULL_SOLVE_EXACT_INVERSION_CLAIM.test(source)) {
+    failures.push(`${path}: full solve was described as an exact inverse`);
+  }
+  if (
+    /ADR[- ]?0003[^.!?\n]{0,160}(?:dormant|дормант|default[^.!?\n]{0,30}unchanged|дефолт[^.!?\n]{0,30}не измен)/iu.test(
+      source,
+    )
+  ) {
+    failures.push(`${path}: implemented Ys readability path was described as dormant`);
   }
   return failures;
 }
@@ -263,6 +296,21 @@ function lcsLpcDrift(path, source) {
   );
 }
 
+function discardedHonestResultClaims(path, source) {
+  return DISCARDED_HONEST_RESULT_CLAIMS
+    .filter((pattern) => pattern.test(source))
+    .map(
+      () =>
+        `${path}: discarded silent-coercion or global nearest-achievable doctrine`,
+    );
+}
+
+function discardedFailureWire(path, source) {
+  return DISCARDED_FAILURE_WIRE.filter((pattern) => pattern.test(source)).map(
+    () => `${path}: discarded unreachable/quantization-gap machine contract`,
+  );
+}
+
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);
   assert.equal(knownFalseClaims("x.md", "цвета #89CFF0 и #8944AB").length, 0);
@@ -274,6 +322,21 @@ test("false-claim detector bites without treating hex colours as Issue links", (
   );
   assert.equal(knownFalseClaims("x.md", "потребляет labui-material.css").length, 1);
   assert.equal(knownFalseClaims("x.md", "platform-characterized").length, 1);
+  assert.equal(
+    knownFalseClaims("x.md", "ADR-0003 is dormant; default remains unchanged").length,
+    1,
+  );
+  assert.equal(
+    knownFalseClaims("x.md", "solve — точная инверсия прямого пути").length,
+    1,
+  );
+  assert.equal(
+    knownFalseClaims(
+      "x.md",
+      "Контрастное ядро инвертируется аналитически; эмитированный кандидат проверяется повторно.",
+    ).length,
+    0,
+  );
 });
 
 test("runtime-doc detector bites on every rejected promotion", () => {
@@ -331,6 +394,82 @@ test("live repository has no hand-written global verification index", () => {
       relative(ROOT, file),
       readFileSync(file, "utf8"),
     ),
+  );
+  assert.deepEqual(failures, []);
+});
+
+test("discarded honest-result doctrine detector bites without rejecting bounded truth", () => {
+  for (const sample of [
+    "ADR-0002 law 2",
+    "docs/decisions/0002-honest-result-policy.md",
+    "degraded to the nearest-achievable state",
+    "возвращён ближайший достижимый цвет",
+    "human-authored input is silently coerced",
+    "человеческий ввод коэрсится по Постелу",
+    "ошибки за человеческий ввод запрещены",
+    "no on-grid colour reproduces it",
+    "the nearest on-grid colour reaches only 7.85",
+  ]) {
+    assert.ok(
+      discardedHonestResultClaims("x.md", sample).length >= 1,
+      `detector did not bite: ${sample}`,
+    );
+  }
+  for (const scopedTruth of [
+    "invalid public input returns a typed error; it is never silently changed",
+    "strict config parsing returns a typed error for an out-of-domain field",
+    "the result has the lowest error among the three examined grid candidates",
+    "opaque endpoint returned with a typed degraded status",
+  ]) {
+    assert.deepEqual(discardedHonestResultClaims("x.md", scopedTruth), []);
+  }
+});
+
+test("live repository has no discarded honest-result doctrine", () => {
+  const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
+    (file) => file !== SELF,
+  );
+  const failures = files.flatMap((file) =>
+    discardedHonestResultClaims(
+      relative(ROOT, file),
+      readFileSync(file, "utf8"),
+    ),
+  );
+  assert.deepEqual(failures, []);
+  assert.equal(
+    existsSync(join(ROOT, "docs/decisions/0002-honest-result-policy.md")),
+    false,
+    "the contradictory ADR must not survive as an empty or rewritten live file",
+  );
+});
+
+test("discarded failure wire detector rejects every old machine shape", () => {
+  for (const sample of [
+    '"code":"quantization_gap"',
+    'readonly kind: "unreachable"',
+    "Resolved::Unreachable(reason)",
+    "RoleOutcome::Unreachable { code }",
+    "ColorError::Unreachable { code }",
+    "export interface UnreachableRole",
+    "export interface FailedRole",
+    "pub enum Unreachable",
+    "fn unreachable_code(reason: Unreachable)",
+    '"code":"polarity_mismatch"',
+    "SolveFailure::PolarityMismatch { target }",
+  ]) {
+    assert.ok(
+      discardedFailureWire("x.rs", sample).length >= 1,
+      `failure-wire detector did not bite: ${sample}`,
+    );
+  }
+});
+
+test("live repository has no discarded failure wire", () => {
+  const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
+    (file) => file !== SELF,
+  );
+  const failures = files.flatMap((file) =>
+    discardedFailureWire(relative(ROOT, file), readFileSync(file, "utf8")),
   );
   assert.deepEqual(failures, []);
 });

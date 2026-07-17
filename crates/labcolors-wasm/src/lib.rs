@@ -86,11 +86,16 @@ export interface NoneRole {
   readonly cssVar: string;
 }
 
-/** No colour can satisfy this role on this background, with the reason. */
-export interface UnreachableRole {
-  readonly kind: "unreachable";
+/** Semantic class of a terminal role failure. Only `unreachable` proves absence of a solution in the declared domain. */
+export type FailureCategory = "unreachable" | "unresolved" | "rejected" | "unsupported";
+
+/** A typed terminal role failure. Internal failures reject the whole call instead. */
+export interface FailureRole {
+  readonly kind: "failure";
   readonly cssVar: string;
-  /** Stable machine code, e.g. "floor_unreachable". */
+  /** Core-owned semantic category. */
+  readonly category: FailureCategory;
+  /** Core-owned stable machine code, e.g. "floor_unreachable". */
   readonly code: string;
   /** Human-readable explanation. */
   readonly message: string;
@@ -130,7 +135,7 @@ export interface TranslucentRole {
   readonly css: string;
 }
 
-/** Свечение (kind glow, labui ADR-0002 §5): screen-слои + решённая интенсивность.
+/** Свечение (kind glow): screen-слои + решённая интенсивность.
  *  Потребитель красит слои с mix-blend-mode: screen; `vars` несёт
  *  --lab-<role> (halo, oklch), --lab-<role>-core и --lab-<role>-alpha. */
 export type GlowDecisionProfileV1 = "stable-v1" | "legacy-platform-dependent-v1";
@@ -295,7 +300,8 @@ export interface MaterialRoleBase {
   readonly poleWhite: boolean;
   /** Фактический |ΔJ'| тона-базы от фона — различимость поверхности. */
   readonly achievedDj: number;
-  /** Целевой |ΔJ'| тона был недостижим — ближайший достижимый (ADR-0002). */
+  /** Целевой |ΔJ'| тона не попал в бюджет ограниченного обхода; выбран кандидат
+   *  с минимальной ошибкой среди просмотренных, не оптимум всего гамута. */
   readonly toneCompressed: boolean;
   /** Оттенок семьи выродился у края гамута (честный флаг; false у нейтрали). */
   readonly hueVanished: boolean;
@@ -340,7 +346,7 @@ export type RoleResult =
   | GlowRole
   | MaterialRole
   | NoneRole
-  | UnreachableRole;
+  | FailureRole;
 
 /** Пер-темная четвёрка якорных hex (light / dark / light-ic / dark-ic). */
 export interface ThemeAnchors {
@@ -501,7 +507,7 @@ export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
   /**
-   * Reachable roles only. Values are ready-to-serve CSS in ONE form:
+   * Roles with a selected CSS value only. Values are ready-to-serve CSS in ONE form:
    * "oklch(L% C H)" for solid roles, "oklch(L% C H / A)" for semi-transparent
    * ladder/alpha-analog roles. Solved in the sRGB gamut (oklch is the
    * notation, not a gamut extension); byte-exact vs `SolvedColor.hex` and
@@ -618,11 +624,11 @@ impl LabColors {
     /// Resolve every role for `bgHex` under `theme` (`"light" | "dark" |
     /// "light-ic" | "dark-ic"`).
     ///
-    /// Returns a `ResolvedTheme` object. Per-role unreachability is part of a
-    /// successful result (each role carries its own `kind`); only whole-call
+    /// Returns a `ResolvedTheme` object. A per-role solve failure is part of a
+    /// successful result (`kind: "failure"` plus category/code); only whole-call
     /// failures reject (no config loaded yet as `config_required`, invalid hex,
     /// unknown theme, a core invariant failure, and the by-construction-
-    /// unreachable oklch serialisation failure as `internal_error`) — as a
+    /// impossible oklch serialisation failure as `internal_error`) — as a
     /// structured `"<code>: <message>"` error, never an unwound panic.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {

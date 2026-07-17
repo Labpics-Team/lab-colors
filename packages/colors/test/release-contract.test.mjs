@@ -19,6 +19,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  validateSolveFailurePair,
+  validateSolveFamily,
   validateWcag22EvidenceArtifacts,
   validateWcag22FeasibilityFamily,
 } from "../../../scripts/verify-package-release.mjs";
@@ -819,7 +821,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
     const expectedSha = "a".repeat(40);
     const conformance = {
-      packVersion: "6.0.0",
+      packVersion: "7.0.0",
       packDigest: "12345678",
       manifestSha256: "c".repeat(64),
       familySetSha256: "d".repeat(64),
@@ -971,38 +973,179 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 6 adds only the explicit-selection family", () => {
+test("conformance pack 7 changes only the solve family", () => {
   const immutableFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
     ["alpha.json", "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1"],
-    ["solve.json", "64acfc4a8c613a4b11e4e83c52a33ecf308320abc6ab18fde20853a7f2399f06"],
     ["muddiness.json", "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3"],
     ["wcag22.json", "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826"],
     [
       "wcag22-feasibility.json",
       "ae2caec47a7b650e73b8d4029a69b4e401dfb7cc199db579c0f95106eebe8dc3",
     ],
+    [
+      "wcag22-explicit-selection.json",
+      "3c4b0b8d7954b598ab9f8cd85be5749577e7c82380976293810fcab20d8ef41a",
+    ],
   ]);
-  assert.equal(immutableFamilies.size, 7, "anti-vacuum: prior family set changed");
+  assert.equal(immutableFamilies.size, 7, "anti-vacuum: unchanged family set changed");
   for (const [name, expected] of immutableFamilies) {
     const bytes = readFileSync(join(root, "conformance", "vectors", name));
     assert.equal(createHash("sha256").update(bytes).digest("hex"), expected, name);
   }
+  assert.equal(
+    createHash("sha256")
+      .update(readFileSync(join(root, "conformance", "vectors", "solve.json")))
+      .digest("hex"),
+    "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af",
+    "pack-7 solve family bytes drifted",
+  );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
-  assert.equal(manifest.packVersion, "6.0.0");
-  assert.ok(
-    existsSync(join(root, "conformance", "vectors", "wcag22-explicit-selection.json")),
-    "pack 6 must add the single atomic explicit-selection family",
+  assert.equal(manifest.packVersion, "7.0.0");
+  const solve = JSON.parse(read("conformance", "vectors", "solve.json"));
+  const supersededKind = ["un", "reachable"].join("");
+  const failures = solve.filter(({ outcome }) => outcome.kind === "failure");
+  assert.ok(failures.length > 0, "anti-vacuum: solve family has no typed failure");
+  const failurePairs = new Set();
+  for (const { outcome } of failures) {
+    assert.deepEqual(
+      Object.keys(outcome).sort(),
+      ["category", "code", "kind"],
+      "failure wire must be exactly {kind,category,code}",
+    );
+    assert.equal(outcome.category, "unreachable");
+    failurePairs.add(`${outcome.category}/${outcome.code}`);
+  }
+  assert.deepEqual(
+    [...failurePairs].sort(),
+    [
+      "unreachable/below_contrast_floor",
+      "unreachable/exceeds_range",
+      "unreachable/floor_unreachable",
+    ],
   );
-  assert.equal(manifest.counts.wcag22ExplicitSelection > 0, true);
+  assert.equal(
+    solve.some(({ outcome }) => outcome.kind === supersededKind),
+    false,
+    "pack 7 must not preserve the superseded failure kind",
+  );
   assert.equal(
     manifest.counts.total,
     Object.entries(manifest.counts)
       .filter(([key]) => key !== "total")
       .reduce((sum, [, value]) => sum + value, 0),
     "manifest total must equal the sum of every family count",
+  );
+});
+
+test("release checker rejects solve failure wire drift", () => {
+  const canonical = JSON.parse(read("conformance", "vectors", "solve.json"));
+  assert.doesNotThrow(() => validateSolveFamily(canonical));
+
+  const mutations = [
+    ["missing category", (outcome) => delete outcome.category],
+    ["wrong category", (outcome) => { outcome.category = "unresolved"; }],
+    ["old kind", (outcome) => { outcome.kind = ["un", "reachable"].join(""); }],
+    ["extra field", (outcome) => { outcome.reason = "plausible fallback"; }],
+    ["internal category", (outcome) => { outcome.category = "internal"; }],
+    ["unknown code", (outcome) => { outcome.code = "future_guess"; }],
+  ];
+  assert.equal(mutations.length, 6, "anti-vacuum mutation corpus changed");
+  for (const [name, mutate] of mutations) {
+    const family = structuredClone(canonical);
+    const failure = family.find(({ outcome }) => outcome.kind === "failure")?.outcome;
+    assert.ok(failure, "anti-vacuum: solve family has no failure fixture");
+    mutate(failure);
+    assert.throws(() => validateSolveFamily(family), undefined, name);
+  }
+
+  const successesOnly = canonical.filter(({ outcome }) => outcome.kind === "solved");
+  assert.throws(
+    () => validateSolveFamily(successesOnly),
+    /exercise both outcomes/u,
+    "removing the failure branch must fail closed",
+  );
+
+  const boundaryRows = [
+    ["unreachable", "below_contrast_floor"],
+    ["unreachable", "exceeds_range"],
+    ["unresolved", "bounded_search_exhausted"],
+    ["unreachable", "floor_unreachable"],
+    ["unsupported", "gamut_unsupported"],
+    ["rejected", "invalid_input"],
+  ];
+  assert.equal(boundaryRows.length, 6, "public core failure dictionary changed");
+  for (const [category, code] of boundaryRows) {
+    assert.doesNotThrow(() => validateSolveFailurePair(category, code));
+    const wrongCategory = category === "unreachable" ? "rejected" : "unreachable";
+    assert.throws(
+      () => validateSolveFailurePair(wrongCategory, code),
+      /differs from/u,
+      `${code} category mutation must bite`,
+    );
+  }
+});
+
+test("release checker rejects solved payload drift", () => {
+  const canonical = JSON.parse(read("conformance", "vectors", "solve.json"));
+  assert.doesNotThrow(() => validateSolveFamily(canonical));
+
+  const solvedFields = ["floorOverride", "hex", "kind", "lc", "wcagRatio"];
+  const set = (field, value) => (outcome) => { outcome[field] = value; };
+  const drop = (field) => (outcome) => { delete outcome[field]; };
+  const fieldsError = (actual) => ({
+    message: `solve[0].outcome fields ${JSON.stringify(actual)} differ from ${JSON.stringify(solvedFields)}`,
+  });
+  const hexError = { message: "solve[0].outcome.hex must be canonical #RRGGBB" };
+  const lcError = { message: "solve[0].outcome.lc must be finite" };
+  const ratioError = {
+    message: "solve[0].outcome.wcagRatio must be finite and within [1, 21]",
+  };
+  const mutations = [
+    ["missing hex", drop("hex"), fieldsError(solvedFields.filter((key) => key !== "hex"))],
+    ["extra solved field", set("note", "plausible fallback"), fieldsError([...solvedFields, "note"].sort())],
+    ["unknown solved kind", set("kind", "success"), { message: "solve[0].outcome has unsupported kind success" }],
+    ["hex type", set("hex", 0x767676), hexError],
+    ["hex prefix", set("hex", "C4C4C4"), hexError],
+    ["hex length", set("hex", "#C4C4C"), hexError],
+    ["hex uppercase", set("hex", "#c4c4c4"), hexError],
+    ["hex alphabet", set("hex", "#GGGGGG"), hexError],
+    ["lc type", set("lc", "68.2"), lcError],
+    ["non-finite lc", set("lc", Number.NaN), lcError],
+    ["infinite lc", set("lc", Number.POSITIVE_INFINITY), lcError],
+    ["ratio type", set("wcagRatio", "4.5"), ratioError],
+    ["non-finite ratio", set("wcagRatio", Number.NaN), ratioError],
+    ["infinite ratio", set("wcagRatio", Number.POSITIVE_INFINITY), ratioError],
+    ["ratio below physical range", set("wcagRatio", 0.99), ratioError],
+    ["ratio above physical range", set("wcagRatio", 21.01), ratioError],
+    ["floor override type", set("floorOverride", null), { message: "solve[0].outcome.floorOverride must be boolean" }],
+  ];
+  assert.equal(mutations.length, 17, "solved anti-vacuum mutation corpus changed");
+  for (const [name, mutate, expected] of mutations) {
+    const family = structuredClone(canonical);
+    const solved = family.find(({ outcome }) => outcome.kind === "solved")?.outcome;
+    assert.ok(solved, "anti-vacuum: solve family has no solved fixture");
+    // In-memory mutation intentionally preserves NaN; a JSON round-trip would coerce it to null.
+    mutate(solved);
+    assert.throws(() => validateSolveFamily(family), expected, name);
+  }
+
+  for (const ratio of [1, 21]) {
+    const family = structuredClone(canonical);
+    family.find(({ outcome }) => outcome.kind === "solved").outcome.wcagRatio = ratio;
+    assert.doesNotThrow(
+      () => validateSolveFamily(family),
+      `inclusive WCAG ratio boundary ${ratio} must remain valid`,
+    );
+  }
+
+  const failuresOnly = canonical.filter(({ outcome }) => outcome.kind === "failure");
+  assert.throws(
+    () => validateSolveFamily(failuresOnly),
+    /got solved=0 failure=5/u,
+    "removing the solved branch must fail closed",
   );
 });
 
@@ -1126,7 +1269,8 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   assert.match(prepare, /"wcag22-explicit-selection\.json"/u);
   assert.match(verifier, /"wcag22-feasibility\.json"/u);
   assert.match(verifier, /"wcag22-explicit-selection\.json"/u);
-  assert.match(verifier, /conformance\.packVersion !== "6\.0\.0"/u);
+  assert.match(verifier, /conformance\.packVersion !== "7\.0\.0"/u);
+  assert.match(verifier, /validateSolveFamily\(families\[3\]\)/u);
   assert.match(
     verifier,
     /"wcag22Feasibility"/u,
@@ -1185,7 +1329,7 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
 test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7, 8].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1201,6 +1345,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v5: "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59",
     v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
     v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
+    v8: "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1211,7 +1356,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6, v7 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7, v8 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1324,11 +1469,44 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     assert.ok(v7.roles[role].policy.maxRawBytes <= v6.roles[role].policy.maxRawBytes);
   }
 
+  // V8 accepts the exact measured PR #338 runtime snapshot; it does not infer
+  // how many bytes belong to one capability. The unchanged role stays ratcheted.
+  assert.equal(v8.schemaVersion, 7);
+  assert.equal(v8.budgetId, "labcolors-wasm-roles-pr-338-v8");
+  assert.deepEqual(v8.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v7.json",
+    fileSha256: expectedHashes.v7,
+  });
+  assert.deepEqual(v8.toolchainSource, v7.toolchainSource);
+  assert.deepEqual(v8.buildRecipes, v7.buildRecipes);
+  assert.deepEqual(v8.roles.runtime.measurement, {
+    source: "github-actions-run-29548782379",
+    measurementPlatform: "linux-x64",
+    rawBytes: 456696,
+  });
+  assert.equal(
+    v8.roles.runtime.policy.basis,
+    "accepted-pr-338-runtime-snapshot",
+  );
+  assert.equal(v8.roles.runtime.policy.maxRawBytes, v8.roles.runtime.measurement.rawBytes);
+  assert.ok(v8.roles.runtime.policy.maxRawBytes > v7.roles.runtime.policy.maxRawBytes);
+  assert.equal(v8.roles.compiler.artifact, v7.roles.compiler.artifact);
+  assert.deepEqual(v8.roles.compiler.measurement, {
+    source: "github-actions-run-29548782379",
+    measurementPlatform: "linux-x64",
+    rawBytes: 229658,
+  });
+  assert.deepEqual(v8.roles.compiler.policy, {
+    maxRawBytes: v7.roles.compiler.policy.maxRawBytes,
+    basis: "unchanged-v7-compiler-ceiling",
+    gzip: "diagnostic-only",
+  });
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v7);
-  for (const version of [1, 2, 3, 4, 5, 6, 7]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v8);
+  for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1438,7 +1616,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.notEqual(pathBypass, repetition, "path mutation must bite the live guard");
   assert.throws(() => assertRepeatabilityContract(pathBypass));
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v7-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v8-"));
   try {
     const runtimePath = join(temporary, "runtime.wasm");
     const compilerPath = join(temporary, "compiler.wasm");
@@ -1447,7 +1625,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     const compilerBytes = Buffer.alloc(17);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
     compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v7);
+    const fixture = structuredClone(v8);
     for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
       fixture.roles[role].measurement.rawBytes = bytes.length;
       fixture.roles[role].policy.maxRawBytes = bytes.length;
@@ -1488,7 +1666,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     );
 
     const schemaMutations = [
-      ["schema rollback", (value) => { value.schemaVersion = 5; }],
+      ["schema rollback", (value) => { value.schemaVersion = 6; }],
       ["identity drift", (value) => { value.budgetId = "other"; }],
       ["predecessor path", (value) => { value.predecessor.path = "other.json"; }],
       ["predecessor hash", (value) => { value.predecessor.fileSha256 = "0".repeat(64); }],
@@ -1508,8 +1686,12 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         [value.roles.runtime.artifact, value.roles.compiler.artifact] =
           [value.roles.compiler.artifact, value.roles.runtime.artifact];
       }],
-      ["measurement issue", (value) => { value.roles.runtime.measurement.issue = 295; }],
-      ["measurement slice", (value) => { value.roles.compiler.measurement.slice = "B"; }],
+      ["runtime measurement source", (value) => {
+        value.roles.runtime.measurement.source = "github-actions-run-other";
+      }],
+      ["compiler measurement source", (value) => {
+        value.roles.compiler.measurement.source = "github-actions-run-other";
+      }],
       ["measurement platform", (value) => {
         value.roles.runtime.measurement.measurementPlatform = "darwin-arm64";
       }],
@@ -1519,17 +1701,17 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         value.roles.compiler.measurement.sha256 = "0".repeat(64);
       }],
       ["ceiling mismatch", (value) => { value.roles.runtime.policy.maxRawBytes += 1; }],
-      ["derivation drift", (value) => { value.roles.compiler.policy.derivation = "guessed"; }],
+      ["basis drift", (value) => { value.roles.compiler.policy.basis = "guessed"; }],
       ["gzip gate", (value) => { value.roles.runtime.policy.gzip = "gate"; }],
-      ["same-capability regression", (value) => {
-        value.roles.runtime.measurement.rawBytes = v1.policy.maxRawBytes + 1;
-        value.roles.runtime.policy.maxRawBytes = v1.policy.maxRawBytes + 1;
+      ["unscoped runtime growth", (value) => {
+        value.roles.runtime.measurement.rawBytes = v8.roles.runtime.policy.maxRawBytes + 1;
+        value.roles.runtime.policy.maxRawBytes = v8.roles.runtime.policy.maxRawBytes + 1;
       }],
       ["compiler predecessor regression", (value) => {
         value.roles.compiler.measurement.rawBytes =
-          v6.roles.compiler.policy.maxRawBytes + 1;
+          v7.roles.compiler.policy.maxRawBytes + 1;
         value.roles.compiler.policy.maxRawBytes =
-          v6.roles.compiler.policy.maxRawBytes + 1;
+          v7.roles.compiler.policy.maxRawBytes + 1;
       }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
       ["top-level key reorder", (value) => ({
@@ -1541,7 +1723,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         roles: value.roles,
       })],
     ];
-    assert.equal(schemaMutations.length, 26, "v7 schema mutation set changed");
+    assert.equal(schemaMutations.length, 26, "v8 schema mutation set changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1554,8 +1736,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 6,\n',
-        '  "schemaVersion": 6,\n  "schemaVersion": 6,\n',
+        '  "schemaVersion": 7,\n',
+        '  "schemaVersion": 7,\n  "schemaVersion": 7,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
@@ -1598,8 +1780,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
     coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v7),
-      /current v7 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v8),
+      /current v8 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1666,7 +1848,8 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `6\.0\.0`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `7\.0\.0`/u);
+  assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
   assert.match(conformanceReadme, /5\.0\.0 → 6\.0\.0/u);
   assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
   assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
@@ -1677,7 +1860,7 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     conformanceReadme,
     /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility,\s*wcag22-explicit-selection/u,
   );
-  assert.doesNotMatch(conformanceReadme, /сейчас `[345]\.0\.0`/u);
+  assert.doesNotMatch(conformanceReadme, /сейчас `[3-6]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
 });

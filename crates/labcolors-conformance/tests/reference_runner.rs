@@ -172,8 +172,22 @@ fn core_reproduces_committed_solve() {
                 approx(*cl, *fl, &format!("solve lc на {}", c.bg));
                 approx(*cw, *fw, &format!("solve wcag на {}", c.bg));
             }
-            (SolveOutcome::Unreachable { code: cc }, SolveOutcome::Unreachable { code: fc }) => {
-                assert_eq!(cc, fc, "код недостижимости на {}", c.bg)
+            (
+                SolveOutcome::Failure {
+                    category: committed_category,
+                    code: committed_code,
+                },
+                SolveOutcome::Failure {
+                    category: actual_category,
+                    code: actual_code,
+                },
+            ) => {
+                assert_eq!(
+                    actual_category, committed_category,
+                    "категория failure на {}",
+                    c.bg
+                );
+                assert_eq!(actual_code, committed_code, "код failure на {}", c.bg);
             }
             (a, b) => panic!("исход резолва разошёлся на {}: {a:?} vs {b:?}", c.bg),
         }
