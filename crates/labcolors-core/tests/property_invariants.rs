@@ -21,22 +21,19 @@
 //!
 //! # ЗАМЕЧАНИЕ ПО monotonicity
 //!
-//! Historical API identifier `muddiness_oklch` denotes an experimental compatibility
 //! proxy, not a human judgement. Its coordinate is nondecreasing in C only for warm
 //! hues (`sin(h) ≥ 0`, h∈[0°,180°]): там оба зависящих
 //! от C множителя — `neutral_gate(C)` и b-гейт `sigmoid((C·sin h − B0)/BW)` — растут в C.
 //! Для ХОЛОДНЫХ оттенков (`sin(h) < 0`, h∈(180°,360°)) b-гейт УБЫВАЕТ в C (b = C·sin h < 0
 //! уходит от B0), поэтому произведение НЕ монотонно. Property ниже проверяет
 //! математический инвариант тёплой полуплоскости;
-//! холодный контрпример зафиксирован тестом `muddiness_cool_hue_is_not_monotone_finding`
 //! как characterization реального поведения (не одобрение — фиксация факта для владельца).
 
 use labcolors_core::{
     BgInput, Brand, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource, NeutralAnchors,
     NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleFailure, RoleRecipe,
     SentimentCategory, SentimentsConfig, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset,
-    ViewingConditions, muddiness_oklch, oklch_from_hex, p3_from_hex, resolve_named_set,
-    srgb_encoded_from_hex,
+    ViewingConditions, oklch_from_hex, p3_from_hex, resolve_named_set, srgb_encoded_from_hex,
 };
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -142,78 +139,6 @@ fn anchors_ld(light: String, dark: String) -> ThemeAnchors {
         light_ic: light,
         dark_ic: dark,
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// СВОЙСТВО 1 — muddiness_oklch монотонна в C (тёплая полуплоскость)
-//
-// КЛАСС: инвариант монотонности frozen compatibility coordinate. Закрывает
-// весь класс регрессий C-зависимости для тёплого оттенка, не один вход.
-// БЬЁТ НА МУТАЦИИ: замена `neutral_gate` sigmoid на константу / переворот знака
-// аргумента / отбрасывание C-зависимости → монотонность рушится → RED.
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn muddiness_is_monotone_nondecreasing_in_chroma_for_warm_hues() {
-    // Тёплая полуплоскость sin(h) ≥ 0 ⇒ h∈[0°,180°]. Произведение неубывающих
-    // неотрицательных множителей неубывает; допуск 1e-12 гасит f64-шум насыщения.
-    check(
-        512,
-        (0.0f64..=1.0, 0.0f64..=180.0, 0.0f64..=0.4, 0.0f64..=0.4),
-        |(l, h, c1, delta)| {
-            let lo = muddiness_oklch(l, c1, h);
-            let hi = muddiness_oklch(l, c1 + delta, h);
-            prop_assert!(
-                hi + 1e-12 >= lo,
-                "муддинес убыл по C при тёплом h={h}: L={l}, C:{c1}→{} дало {lo}→{hi}",
-                c1 + delta
-            );
-            Ok(())
-        },
-    );
-}
-
-#[test]
-fn muddiness_strictly_increases_in_chroma_in_the_steep_warm_band() {
-    // Строгая версия в КРУТОЙ полосе обоих сигмоид (около C0=0.0395, B0=0.036),
-    // где приращение f64-различимо. L ≤ 0.44 < min(cusp_L)=0.454 ⇒ depth_term>0;
-    // h∈[10°,170°] ⇒ sin>0 и hue_weight>0. Оба C-множителя строго растут ⇒
-    // произведение строго растёт.
-    check(
-        512,
-        (
-            0.15f64..=0.44,
-            10.0f64..=170.0,
-            0.02f64..=0.06,
-            0.008f64..=0.03,
-        ),
-        |(l, h, c1, delta)| {
-            let lo = muddiness_oklch(l, c1, h);
-            let hi = muddiness_oklch(l, c1 + delta, h);
-            prop_assert!(
-                hi > lo,
-                "муддинес не вырос строго в крутой полосе: L={l}, h={h}, C:{c1}→{} ({lo} vs {hi})",
-                c1 + delta
-            );
-            Ok(())
-        },
-    );
-}
-
-/// Characterization: for a cool hue (h=270°, sin=-1), the compatibility
-/// coordinate is not monotone in C: it first rises, then falls. This records
-/// current mathematics without assigning perceptual meaning.
-#[test]
-fn muddiness_cool_hue_is_not_monotone_finding() {
-    let l = 0.3;
-    let h = 270.0; // sin(270°) = −1 → b = −C, b-гейт убывает в C
-    let at = |c: f64| muddiness_oklch(l, c, h);
-    let (a, b, c) = (at(0.0), at(0.04), at(0.10));
-    // Растёт 0→0.04, затем падает 0.04→0.10 — немонотонно (не строго-монотонная кривая).
-    assert!(
-        b > a && b > c,
-        "ожидался немонотонный холодный профиль (пик у C≈0.04): {a} {b} {c}"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

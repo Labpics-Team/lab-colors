@@ -3,15 +3,8 @@
 Swift-поверхность динамического Rust-ядра через UniFFI: сгенерированный Swift
 вызывает `labcolors-core` в runtime, а не сериализует токены на сборке.
 Экспортируется рантайм-контраст-ядро (см. `crates/labcolors-ffi`): контраст,
-резолв, лестницы, подложка→α, legacy-координата `muddiness` и low-level Glow
-point decision.
+резолв, лестницы, подложка→α и low-level Glow point decision.
 
-Исторически названная `muddiness` поверхность — это
-`experimental compatibility proxy`: она сохраняет прежний числовой API и его
-conformance-векторы, но не
-является валидированным на наблюдателях человеческим вердиктом clean/dirty и не
-должна использоваться как production decision. Legacy-идентификатор сохранён
-только для совместимости.
 
 Текущее исполняемое доказательство этой поверхности — pinned Swift-контейнер на
 Linux x86_64. Оно не является аттестацией Apple ABI, macOS/arm64 или iOS.

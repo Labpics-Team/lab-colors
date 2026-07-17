@@ -441,18 +441,6 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    // MARK: - Семейство: legacy proxy coordinate
-
-    func testMuddiness() throws {
-        let vectors = try load("muddiness.json", as: [MuddinessVec].self)
-        XCTAssertFalse(vectors.isEmpty)
-        for v in vectors {
-            let got = try muddiness(hex: v.hex)
-            XCTAssertEqual(got, v.score, accuracy: Self.driftTol, "muddiness \(v.hex)")
-        }
-    }
-
-
     // MARK: - Exact WCAG 2.2 final-sRGB8 assessment
 
     func testWcag22() throws {
@@ -590,7 +578,3 @@ struct SolveVec: Codable {
     let outcome: OutcomeJSON
 }
 
-struct MuddinessVec: Codable {
-    let hex: String
-    let score: Double
-}

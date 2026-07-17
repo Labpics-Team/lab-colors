@@ -724,18 +724,6 @@ impl LabColors {
             .map_err(|reason| to_js_error(stable_glow_recheck_core_error(reason)))
     }
 
-    /// Return the frozen legacy `muddiness` coordinate for an sRGB hex colour.
-    ///
-    /// This is an experimental compatibility proxy: it reproduces the historic
-    /// numeric API, but is not an observer-validated human clean/dirty verdict
-    /// or a production decision. The legacy identifier is retained only for
-    /// compatibility.
-    #[wasm_bindgen(js_name = muddiness)]
-    pub fn muddiness(&self, hex: &str) -> Result<f64, JsError> {
-        labcolors_core::cleanliness::muddiness_from_hex(hex)
-            .map_err(|reason| to_js_error(BindingError::InvalidColor { reason }))
-    }
-
     /// Recheck one foreground set against MANY background samples in a single
     /// call. The reactive controller's worst-case loop rechecks the same
     /// foregrounds against every sample of a varying backdrop (gradient / image /

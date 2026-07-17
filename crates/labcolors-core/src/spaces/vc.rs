@@ -132,36 +132,6 @@ impl ViewingConditions {
         vc
     }
 
-    /// Average surround (light theme) с произвольной яркостью фона `y_b_pct`.
-    ///
-    /// Аналогичен [`srgb`](Self::srgb), но параметр `Yb` (яркость фона, % от белого) задаётся явно.
-    /// Значение по умолчанию для [`srgb`](Self::srgb) равно 20 % (нейтральный серый, IEC 61966-2-1).
-    ///
-    /// Диапазон: [0.5, 100.0]; значения за пределами ограничиваются (clamp).
-    /// Нижняя граница 0.5 % — защита от вырождения: Yb=0 → n=Yb/100=0 → nbb=∞ (деление
-    /// на 0 в CIECAM16). Граница 0.5 % соответствует почти полной темноте; реальный
-    /// чёрный фон (#000000, Y=0.0%) clampится к 0.5 % без значимого влияния на
-    /// итоговый J: разница J(Yb=0.5) − J(Yb≈0) пренебрежимо мала на практике.
-    ///
-    /// Используется legacy `cleanliness` compatibility proxy как partial input
-    /// `Yb + theme`. Это не полный visual context и не observer verdict.
-    pub fn srgb_with_yb(y_b_pct: f64) -> Self {
-        // average surround: F=1.0, c=0.69, N_c=1.0 — CIECAM02/16 Table 1
-        Self::build(64.0, y_b_pct.clamp(0.5, 100.0), 1.0, 0.69, 1.0)
-    }
-
-    /// Dim surround (dark theme) с произвольной яркостью фона `y_b_pct`.
-    ///
-    /// Аналогичен [`dim_surround`](Self::dim_surround), но параметр `Yb` задаётся явно.
-    /// Диапазон ограничен [0.5, 100.0] — нижняя граница по той же причине, что в
-    /// [`srgb_with_yb`](Self::srgb_with_yb): Yb=0 вырождает CIECAM16 (nbb→∞).
-    /// Используется legacy compatibility proxy как partial `Yb + theme` input;
-    /// это не полная surround/observer model.
-    pub fn dim_surround_with_yb(y_b_pct: f64) -> Self {
-        // dim surround: F=0.9, c=0.59, N_c=0.9 — CIECAM02/16 Table 1
-        Self::build(64.0, y_b_pct.clamp(0.5, 100.0), 0.9, 0.59, 0.9)
-    }
-
     /// Dark surround viewing conditions (CIECAM16 Table 1: F = 0.8, c = 0.525,
     /// N_c = 0.8). Not a precompiled LUT target — used in tests to exercise the
     /// grey-axis LUT's fall-back-to-bisection path for an unsupported VC.
@@ -366,8 +336,6 @@ mod tests {
             ViewingConditions::srgb_high_contrast(),
             ViewingConditions::dim_surround_high_contrast(),
             ViewingConditions::dark_surround(),
-            ViewingConditions::srgb_with_yb(5.0),
-            ViewingConditions::dim_surround_with_yb(60.0),
         ] {
             assert_eq!(
                 vc.fl_pow_025.to_bits(),

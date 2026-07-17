@@ -35,12 +35,6 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function mudStatusPattern(id, status) {
-  return new RegExp(
-    `^\\|\\s*${escapeRegExp(id)}\\s*\\|[^|]*\\|[^|]*\\|[^|]*\\|\\s*${escapeRegExp(status)}\\s*\\|`,
-    "mu",
-  );
-}
 const RUNTIME_DOC_FALSE_CLAIMS = [
   {
     pattern: /правильные --lab-\* для своего фона/u,
@@ -600,29 +594,43 @@ test("public claim inventory includes the shipped Swift README", () => {
   assert.ok(publicClaimFiles().includes(join(ROOT, "bindings", "swift", "README.md")));
 });
 
-test("inventory status checks cannot be satisfied by rationale text", () => {
-  const wrongStatus =
-    "| M-01 | `C0` | `0.0395` | `cleanliness.rs` | cited-measured | rationale says Indeterminate provenance |";
-  assert.doesNotMatch(wrongStatus, mudStatusPattern("M-01", "Indeterminate provenance"));
-});
 
-test("legacy cleanliness surfaces remain explicitly quarantined", () => {
+test("legacy cleanliness proxy is excised, not quarantined (C5.2)", () => {
+  // C5.2: карантин заменён вырезом. Ни модуль, ни векторное семейство не
+  // существуют; публичные поверхности не несут ни API, ни человеческих
+  // вердиктов чистоты.
+  assert.equal(
+    existsSync(join(ROOT, "crates/labcolors-core/src/cleanliness.rs")),
+    false,
+    "cleanliness.rs must stay deleted",
+  );
+  assert.equal(
+    existsSync(join(ROOT, "conformance/vectors/muddiness.json")),
+    false,
+    "muddiness family must stay deleted",
+  );
+
+  // Закон удаления пака (pack_v10_removes_only_the_muddiness_family) легально
+  // НАЗЫВАЕТ удалённое семейство — поэтому по conformance-крейту запрещаются
+  // только API-идентификаторы прокси, по остальным поверхностям — само слово.
   const surfaces = [
-    "crates/labcolors-core/src/cleanliness.rs",
-    "crates/labcolors-wasm/src/lib.rs",
-    "crates/labcolors-ffi/src/lib.rs",
-    "crates/labcolors-conformance/src/lib.rs",
-    "conformance/README.md",
-    "packages/colors/README.md",
-    "bindings/swift/README.md",
+    ["crates/labcolors-wasm/src/lib.rs", /muddiness|drab|n_pure/iu],
+    ["crates/labcolors-ffi/src/lib.rs", /muddiness|drab|n_pure/iu],
+    [
+      "crates/labcolors-conformance/src/lib.rs",
+      /muddiness_from_hex|MuddinessVector|generate_muddiness|\bdrab\b|n_pure/iu,
+    ],
+    ["packages/colors/README.md", /muddiness|drab|n_pure/iu],
+    ["packages/colors/index.d.ts", /muddiness|drab|n_pure/iu],
+    ["bindings/swift/README.md", /muddiness|drab|n_pure/iu],
   ];
   const publicText = surfaces
-    .map((path) => {
+    .map(([path, forbidden]) => {
       const source = readFileSync(join(ROOT, path), "utf8");
-      assert.match(
+      assert.doesNotMatch(
         source,
-        /experimental compatibility proxy/iu,
-        `${path}: legacy name must not become a human cleanliness verdict`,
+        forbidden,
+        `${path}: excised proxy identifiers must not resurface`,
       );
       return source;
     })
@@ -630,26 +638,5 @@ test("legacy cleanliness surfaces remain explicitly quarantined", () => {
 
   for (const forbidden of HUMAN_CLEANLINESS_VERDICTS) {
     assert.doesNotMatch(publicText, forbidden);
-  }
-
-  const inventory = readFileSync(
-    join(ROOT, "docs", "empirical-inventory.md"),
-    "utf8",
-  );
-  for (const [id, status] of [
-    ["M-01", "Indeterminate provenance"],
-    ["M-02", "universal JND Rejected; Indeterminate value"],
-    ["M-04", "Rejected provenance; Indeterminate value"],
-    ["M-05", "Rejected provenance; Indeterminate value"],
-    ["M-12", "arithmetic admitted; observer claim Rejected"],
-  ]) {
-    assert.match(
-      inventory,
-      mudStatusPattern(id, status),
-      `${id}: empirical inventory promoted a rejected provenance claim`,
-    );
-  }
-  for (const id of ["M-04", "M-05"]) {
-    assert.doesNotMatch(inventory, mudStatusPattern(id, "cited-measured"));
   }
 });

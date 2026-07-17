@@ -26,14 +26,8 @@
 //! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → цвет или типизированный failure | `solve` |
-//! | `muddiness.json` | hex → замороженная legacy-координата | `cleanliness::muddiness_from_hex` |
 //! | `wcag22.json` | final sRGB8 pair + criterion → exact assessment | `wcag22::evaluate_wcag22_hex` |
 //! | `manifest.json` | версии, дайджест, счётчики, capability manifest | `numerical_capability_manifest_v2` |
-//!
-//! `muddiness.json` фиксирует только воспроизводимость исторического числового
-//! API. Это `experimental compatibility proxy`, а не валидированный на
-//! наблюдателях человеческий вердикт clean/dirty и не production decision;
-//! legacy-идентификаторы сохранены для совместимости.
 //!
 //! Версия пака ([`PACK_VERSION`]) привязана к версии ядра ([`core_version`]):
 //! при легитимной смене канона генератор перегенерирует векторы, а
@@ -46,7 +40,6 @@
 use serde::{Deserialize, Serialize};
 
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
-use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
     BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, ViewingConditions, fnv1a_32,
     recheck_against, solve,
@@ -54,7 +47,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "9.0.0";
+pub const PACK_VERSION: &str = "10.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -450,39 +443,6 @@ pub fn generate_solve() -> Result<Vec<SolveVector>, PackGenerationError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Семейство: legacy-координата muddiness
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Один вектор замороженной legacy-координаты `muddiness`.
-///
-/// Это `experimental compatibility proxy`: вектор доказывает совпадение
-/// численного выхода, но не observer-validated human clean/dirty verdict и не
-/// пригодность значения для production decision.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MuddinessVector {
-    /// Цвет, `#RRGGBB`.
-    pub hex: String,
-    /// Замороженный числовой выход legacy-формулы.
-    pub score: f64,
-}
-
-/// Нейтральный corpus исторических sample inputs; названия не задают семантику.
-const MUDDINESS_CASES: [&str; 4] = ["#6B6B2E", "#808080", "#007AFF", "#8A7A50"];
-
-/// Дериватор compatibility-векторов legacy-координаты.
-#[must_use]
-pub fn generate_muddiness() -> Vec<MuddinessVector> {
-    MUDDINESS_CASES
-        .iter()
-        .map(|&hex| MuddinessVector {
-            hex: hex.to_string(),
-            score: muddiness_from_hex(hex).expect("валидный hex"),
-        })
-        .collect()
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Семейство: exact WCAG 2.2 final-sRGB8 assessment
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -637,12 +597,11 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 
 /// Имена файлов семейств в КАНОНИЧЕСКОМ порядке — единый источник порядка для
 /// генератора, дайджеста и раннера-референса (дайджест зависит от порядка).
-pub const FAMILY_FILES: [&str; 6] = [
+pub const FAMILY_FILES: [&str; 5] = [
     "contrasts.json",
     "ladders.json",
     "alpha.json",
     "solve.json",
-    "muddiness.json",
     "wcag22.json",
 ];
 
@@ -669,8 +628,6 @@ pub struct Counts {
     pub alpha: usize,
     /// Резолв-векторы.
     pub solve: usize,
-    /// Compatibility-векторы legacy-координаты `muddiness`.
-    pub muddiness: usize,
     /// Exact WCAG 2.2 vectors.
     pub wcag22: usize,
     /// Итого.
@@ -791,8 +748,6 @@ pub struct Pack {
     pub alpha: Vec<AlphaVector>,
     /// Резолв-векторы.
     pub solve: Vec<SolveVector>,
-    /// Compatibility-векторы legacy-координаты `muddiness`.
-    pub muddiness: Vec<MuddinessVector>,
     /// Exact final-sRGB8 WCAG 2.2 vectors.
     pub wcag22: Vec<Wcag22Vector>,
 }
@@ -805,7 +760,6 @@ impl Pack {
             ladders: generate_ladders(),
             alpha: generate_alpha(),
             solve: generate_solve()?,
-            muddiness: generate_muddiness(),
             wcag22: generate_wcag22()?,
         })
     }
@@ -817,16 +771,14 @@ impl Pack {
         let ladders = self.ladders.len();
         let alpha = self.alpha.len();
         let solve = self.solve.len();
-        let muddiness = self.muddiness.len();
         let wcag22 = self.wcag22.len();
         Counts {
             contrasts,
             ladders,
             alpha,
             solve,
-            muddiness,
             wcag22,
-            total: contrasts + ladders + alpha + solve + muddiness + wcag22,
+            total: contrasts + ladders + alpha + solve + wcag22,
         }
     }
 
@@ -864,8 +816,7 @@ impl Pack {
             (FAMILY_FILES[1], to_canonical_json(&self.ladders)),
             (FAMILY_FILES[2], to_canonical_json(&self.alpha)),
             (FAMILY_FILES[3], to_canonical_json(&self.solve)),
-            (FAMILY_FILES[4], to_canonical_json(&self.muddiness)),
-            (FAMILY_FILES[5], to_canonical_json(&self.wcag22)),
+            (FAMILY_FILES[4], to_canonical_json(&self.wcag22)),
         ]
     }
 }
@@ -966,7 +917,7 @@ mod tests {
         assert!(c.total > 0, "пустой пак бессмыслен");
         assert_eq!(
             c.total,
-            c.contrasts + c.ladders + c.alpha + c.solve + c.muddiness + c.wcag22,
+            c.contrasts + c.ladders + c.alpha + c.solve + c.wcag22,
             "итог не сходится с семействами"
         );
         // Лестниц ровно столько, сколько канонических позиций.
@@ -1009,23 +960,23 @@ mod tests {
     }
 
     #[test]
-    fn pack_v9_removes_only_the_feasibility_family() {
+    fn pack_v10_removes_only_the_muddiness_family() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Обязательство унаследовано с pack v2; v9 удаляет ровно
-        // feasibility-семейство, не трогая байты остальных. Проверка
+        // соседний LSB. Обязательство унаследовано с pack v2; v10 удаляет ровно
+        // muddiness-семейство, не трогая байты остальных. Проверка
         // одновременно убивает вакуумные изменения версии/счётчика без
         // доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
         assert_eq!(
-            PACK_VERSION, "9.0.0",
-            "вырезание feasibility-семейства обязано быть pack v9"
+            PACK_VERSION, "10.0.0",
+            "вырезание muddiness-семейства обязано быть pack v10"
         );
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v9 остаётся привязан к core 0.2.0"
+            "pack v10 остаётся привязан к core 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
@@ -1034,7 +985,7 @@ mod tests {
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
         assert_eq!(
-            manifest.counts.total, 90,
+            manifest.counts.total, 86,
             "состав векторных семейств изменился"
         );
         assert_eq!(manifest.counts.wcag22, 6);

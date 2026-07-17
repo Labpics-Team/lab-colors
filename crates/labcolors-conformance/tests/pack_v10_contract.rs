@@ -1,7 +1,7 @@
-//! Pack-контракт: pack 9 удаляет ровно `wcag22-feasibility.json`
-//! (feasibility/protocol/compiler-линия вырезана из всех проекций; exact
-//! evaluateWcag22 и Q55-доказательства сохранены), сохраняя байт-в-байт все
-//! шесть оставшихся семейств pack 8.
+//! Pack-контракт: pack 10 удаляет ровно `muddiness.json` (legacy
+//! cleanliness-прокси вырезан из всех проекций; физические законы —
+//! Oklab-преобразования, гамут-границы, агностичность — живут в своих
+//! модулях), сохраняя байт-в-байт все пять оставшихся семейств pack 9.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
 #[path = "../../labcolors-core/src/sha256.rs"]
 mod sha256;
 
-const UNCHANGED_FAMILY_SHA256: [(&str, &str); 6] = [
+const UNCHANGED_FAMILY_SHA256: [(&str, &str); 5] = [
     (
         "solve.json",
         "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af",
@@ -28,10 +28,6 @@ const UNCHANGED_FAMILY_SHA256: [(&str, &str); 6] = [
     (
         "alpha.json",
         "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1",
-    ),
-    (
-        "muddiness.json",
-        "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3",
     ),
     (
         "wcag22.json",
@@ -53,8 +49,8 @@ fn read(path: impl AsRef<Path>) -> Vec<u8> {
 }
 
 #[test]
-fn pack_v9_removes_only_the_feasibility_family() {
-    assert_eq!(PACK_VERSION, "9.0.0");
+fn pack_v10_removes_only_the_muddiness_family() {
+    assert_eq!(PACK_VERSION, "10.0.0");
     assert_eq!(
         FAMILY_FILES.as_slice(),
         [
@@ -62,7 +58,6 @@ fn pack_v9_removes_only_the_feasibility_family() {
             "ladders.json",
             "alpha.json",
             "solve.json",
-            "muddiness.json",
             "wcag22.json",
         ]
         .as_slice()
@@ -73,7 +68,7 @@ fn pack_v9_removes_only_the_feasibility_family() {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-8 family bytes drifted during the feasibility removal: {name}"
+            "pack-9 family bytes drifted during the muddiness removal: {name}"
         );
     }
     assert!(
@@ -84,16 +79,21 @@ fn pack_v9_removes_only_the_feasibility_family() {
         !dir.join("wcag22-feasibility.json").exists(),
         "the feasibility family must be gone, not regenerated"
     );
+    assert!(
+        !dir.join("muddiness.json").exists(),
+        "the muddiness family must be gone, not regenerated"
+    );
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest JSON");
-    assert_eq!(manifest["packVersion"], "9.0.0");
+    assert_eq!(manifest["packVersion"], "10.0.0");
     assert!(
         manifest["counts"].get("wcag22ExplicitSelection").is_none()
-            && manifest["counts"].get("wcag22Feasibility").is_none(),
+            && manifest["counts"].get("wcag22Feasibility").is_none()
+            && manifest["counts"].get("muddiness").is_none(),
         "manifest must not carry removed family counts"
     );
-    assert_eq!(manifest["counts"]["total"], 90);
+    assert_eq!(manifest["counts"]["total"], 86);
 }
 
 #[test]

@@ -944,16 +944,19 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 9 removes only the feasibility family", () => {
+test("conformance pack 10 removes only the muddiness family", () => {
   const immutableFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
     ["alpha.json", "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1"],
-    ["muddiness.json", "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3"],
     ["wcag22.json", "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826"],
   ]);
-  assert.equal(immutableFamilies.size, 5, "anti-vacuum: unchanged family set changed");
-  for (const removed of ["wcag22-explicit-selection.json", "wcag22-feasibility.json"]) {
+  assert.equal(immutableFamilies.size, 4, "anti-vacuum: unchanged family set changed");
+  for (const removed of [
+    "wcag22-explicit-selection.json",
+    "wcag22-feasibility.json",
+    "muddiness.json",
+  ]) {
     assert.ok(
       !existsSync(join(root, "conformance", "vectors", removed)),
       `${removed} must be gone, not regenerated`,
@@ -972,7 +975,7 @@ test("conformance pack 9 removes only the feasibility family", () => {
   );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
-  assert.equal(manifest.packVersion, "9.0.0");
+  assert.equal(manifest.packVersion, "10.0.0");
   const solve = JSON.parse(read("conformance", "vectors", "solve.json"));
   const supersededKind = ["un", "reachable"].join("");
   const failures = solve.filter(({ outcome }) => outcome.kind === "failure");
@@ -1122,18 +1125,18 @@ test("release evidence carries no trace of the excised offline line", () => {
   const prepare = read("scripts", "prepare-npm-package.mjs");
   const verifier = read("scripts", "verify-package-release.mjs");
 
-  assert.doesNotMatch(prepare, /feasibility|labcolors-compiler|wcag22-explicit/iu);
+  assert.doesNotMatch(prepare, /feasibility|labcolors-compiler|wcag22-explicit|muddiness/iu);
   assert.doesNotMatch(
     verifier,
-    /feasibility|labcolors-compiler|wcag22-explicit|verifyPackedRoleIsolation/iu,
+    /feasibility|labcolors-compiler|wcag22-explicit|verifyPackedRoleIsolation|muddiness/iu,
   );
   assert.doesNotMatch(verifier, /from "@labpics\/colors\/compiler"/u);
-  assert.match(verifier, /conformance\.packVersion !== "9\.0\.0"/u);
+  assert.match(verifier, /conformance\.packVersion !== "10\.0\.0"/u);
   assert.match(verifier, /validateSolveFamily\(families\[3\]\)/u);
   assert.match(
     verifier,
-    /countKeys = \["contrasts", "ladders", "alpha", "solve", "muddiness", "wcag22"\]/u,
-    "release count projection must cover exactly the six surviving families",
+    /countKeys = \["contrasts", "ladders", "alpha", "solve", "wcag22"\]/u,
+    "release count projection must cover exactly the five surviving families",
   );
   assert.match(
     verifier,
@@ -1742,7 +1745,8 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `9\.0\.0`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `10\.0\.0`/u);
+  assert.match(conformanceReadme, /9\.0\.0 → 10\.0\.0/u);
   assert.match(conformanceReadme, /8\.0\.0 → 9\.0\.0/u);
   assert.match(conformanceReadme, /7\.0\.0 → 8\.0\.0/u);
   assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
@@ -1750,12 +1754,12 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
   assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
   assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
   assert.match(conformanceReadme, /`wcag22\.json`/u);
-  assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`|`wcag22-feasibility\.json`/u);
+  assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`|`wcag22-feasibility\.json`|`muddiness\.json`/u);
   assert.match(
     conformanceReadme,
-    /contrasts, ladders, alpha, solve, muddiness, wcag22/u,
+    /contrasts, ladders, alpha, solve, wcag22/u,
   );
-  assert.doesNotMatch(conformanceReadme, /сейчас `[3-8]\.0\.0`/u);
+  assert.doesNotMatch(conformanceReadme, /сейчас `[3-9]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
 });

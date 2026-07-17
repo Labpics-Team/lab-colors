@@ -352,15 +352,6 @@ diagnostic-компонент текущего LPC и legacy `wcagRatio` не м
 
 ---
 
-### `engine.muddiness(hex): number`
-
-`muddiness` возвращает замороженный числовой выход исторической формулы. Это
-`experimental compatibility proxy`: legacy-имя сохранено для совместимости, но
-значение не является валидированным на наблюдателях человеческим вердиктом
-clean/dirty и не должно использоваться как production decision. Сам диапазон
-`[0, 1]` — свойство формулы, а не шкала человеческого восприятия.
-
----
 
 ### `applyTheme(element, result): void`
 

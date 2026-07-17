@@ -178,7 +178,7 @@ LCS учитывает окружение через параметры CIECAM16
 [`config/preset.rs`](../crates/labcolors-core/src/config/preset.rs) (план
 BL-007) — имена, фракции, позиции лестницы, полы, **ни одного цветового
 значения**; модуль продовый и сканируется гейтом чистоты
-`tests/agnostic_cleanliness.rs`. Тонкий конфиг компилируется в таблицу,
+`tests/agnostic_production_surface.rs`. Тонкий конфиг компилируется в таблицу,
 **байт-идентичную** полному эталону; пресет — всё-или-ничего: `preset` +
 непустые `roles`/`aliases` → `ConfigError::PresetWithRoles`
 ([`config.rs`](../crates/labcolors-core/src/config.rs), модульный док).
