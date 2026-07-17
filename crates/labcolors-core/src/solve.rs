@@ -258,9 +258,8 @@ impl BgInput {
     /// читаемости вместе с ADR-0003 и живёт только на яркостной оси
     /// ([`bg_luma`]: сторона пары, свечение, сентимент). Verified by an
     /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
-    /// This is what lets the grey fast path (256 codes) and the chromatic memo
-    /// (keyed on the exact display colour, a superset of the two) stay
-    /// bit-identical to the solver.
+    /// The representation stays an interval so a future field background can
+    /// supply bounded endpoints without changing the solver contract.
     pub(crate) fn luma_interval(
         &self,
         _vc: &ViewingConditions,
@@ -543,18 +542,17 @@ pub fn solve(
         return Err(SolveFailure::GamutUnsupported);
     }
     validate_job(contract, hue, chroma_policy)?;
-    // The background side costs exactly one CIECAM16 forward — its H-K luminance
-    // interval. Compute it here and hand it to [`solve_in`]; [`solve_many`] and
-    // [`resolve_set`](crate::resolve_set) compute it once and reuse it across a
-    // whole batch instead of re-deriving the same background forward per target.
+    // Compute the background's quantised display-luminance interval once and
+    // hand it to [`solve_in`]; batch/set entry points reuse the same value for
+    // every target. CAM16/H-K is not part of this readability axis.
     let interval = bg.luma_interval(vc)?;
     solve_in(&bg, contract, hue, chroma_policy, vc, interval)
 }
 
 /// One foreground request in a [`solve_many`] batch: the contract to meet plus
 /// the foreground's hue and chroma policy. The background, viewing conditions,
-/// and gamut are shared across the batch, so the background's H-K luminance
-/// forward is paid once for the whole slice rather than once per request.
+/// and gamut are shared across the batch, so the background's quantised
+/// display-luminance reduction is paid once for the whole slice.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveJob {
     /// The contrast contract this foreground must meet against the background.
@@ -568,11 +566,11 @@ pub struct SolveJob {
 /// Solve a batch of foreground requests against one shared background.
 ///
 /// Equivalent to calling [`solve`] once per [`SolveJob`], but the background's
-/// luminance interval — the only CIECAM16 forward the background side costs — is
-/// computed once for the whole slice. The returned vector is positional: entry
-/// `i` is the result for `jobs[i]`, each carrying its own `Result` so one
-/// unreachable request never fails the batch. A whole-batch failure (unsupported
-/// gamut, or a background that cannot be reduced) is the outer `Err`.
+/// quantised display-luminance interval is computed once for the whole slice.
+/// The returned vector is positional: entry `i` is the result for `jobs[i]`,
+/// each carrying its own `Result` so one failed request never fails the batch.
+/// A whole-batch failure (unsupported gamut, or a background that cannot be
+/// reduced) is the outer `Err`.
 pub fn solve_many(
     bg: BgInput,
     jobs: &[SolveJob],
@@ -674,11 +672,9 @@ pub(crate) fn solve_in(
         let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
         // Perceptual floor at every interval endpoint. The governing endpoint's
         // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
-        // against), so reuse it instead of re-deriving the foreground luminance —
-        // that recovery is the costly H-K forward. Only a *distinct* endpoint
-        // (genuine luminance intervals, a future background variant) pays for a
-        // fresh measurement; an opaque background's endpoints all coincide with
-        // the governing one, so it measures the foreground exactly once.
+        // against), so reuse it instead of re-deriving foreground display
+        // luminance. Only a *distinct* endpoint (a future field background) pays
+        // for a fresh measurement; an opaque background's endpoints coincide.
         let perceptual_ok = interval.endpoints().into_iter().all(|y_end| {
             if y_end == y_gov {
                 meets_floor_lc(solved.lc(), target)
@@ -2140,7 +2136,7 @@ mod tests {
 
     #[test]
     fn solid_background_reduces_to_a_degenerate_interval() {
-        // SEAM (a): every background reduces to a Y_hk interval; a Solid colour
+        // SEAM (a): every background reduces to a Ys interval; a Solid colour
         // is the degenerate interval [Y, Y]. `solve` only ever consumes the
         // interval (never matches BgInput variants), so future composite /
         // distribution variants — enabled by `#[non_exhaustive]` — extend

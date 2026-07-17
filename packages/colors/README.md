@@ -248,6 +248,7 @@ type RoleResult =
 | `config_required` | конфиг ещё не загружен (`loadConfig` не вызывался) |
 | `invalid_background` | `bgHex` не является `#RGB` или `#RRGGBB` |
 | `unknown_theme` | `theme` не входит в список допустимых |
+| `internal_error` | Core нарушил собственный инвариант; частичный CSS не возвращается |
 
 ---
 

@@ -295,17 +295,29 @@ fn dj_anchor_bound_red_proof() {
 }
 
 #[test]
-fn decorative_lc_non_positive_is_rejected() {
-    // `icon` больше не роль (канон #92 — алиас на label-tertiary); валидацию
-    // неположительной магнитуды проверяем на существующей роли label-tertiary.
-    let cfg = with_role_recipe(
+fn decorative_lc_requires_the_core_physical_floor() {
+    // Проверяем точную закрытую границу: ближайший меньший binary64 уже
+    // недоменен, сам физический пол принимается без переписи.
+    let below = f64::from_bits(DECORATIVE_FLOOR_MIN.to_bits() - 1);
+    for magnitude in [f64::NAN, f64::INFINITY, 0.0, below] {
+        let cfg = with_role_recipe("label-tertiary", RoleRecipe::DecorativeLc { magnitude });
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(ConfigError::OutOfBounds { handle, .. })
+                    if handle == "roles.label-tertiary.magnitude"
+            ),
+            "magnitude={magnitude} обязана быть отклонена"
+        );
+    }
+
+    let boundary = with_role_recipe(
         "label-tertiary",
-        RoleRecipe::DecorativeLc { magnitude: 0.0 },
+        RoleRecipe::DecorativeLc {
+            magnitude: DECORATIVE_FLOOR_MIN,
+        },
     );
-    assert!(matches!(
-        cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "roles.label-tertiary.magnitude"
-    ));
+    assert_eq!(boundary.validate(), Ok(()));
 }
 
 #[test]
@@ -572,6 +584,37 @@ fn ladder_recipe_compiles_to_translucent_spec() {
             if (*alpha_light - 0.122).abs() < 1e-12 && (*alpha_dark - 0.122).abs() < 1e-12),
         "Ladder(FillPrimary) обязан нести альфу @12 (обе темы); получено {spec:?}"
     );
+}
+
+#[test]
+fn ladder_floor_is_valid_only_for_a_solid_readability_constraint() {
+    for (position, floor) in [
+        (LadderPosition::FillPrimary, Some(Floor::AaUi)),
+        (LadderPosition::BorderStrong, Some(Floor::None)),
+    ] {
+        let cfg = with_role_recipe(
+            "fill-primary",
+            RoleRecipe::Ladder {
+                source: LadderSource::Brand,
+                position,
+                floor,
+            },
+        );
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::InvalidLadderFloor { role, .. }) if role == "fill-primary"
+        ));
+    }
+
+    let valid = with_role_recipe(
+        "fill-primary",
+        RoleRecipe::Ladder {
+            source: LadderSource::Brand,
+            position: LadderPosition::BorderStrong,
+            floor: Some(Floor::AaUi),
+        },
+    );
+    assert_eq!(valid.validate(), Ok(()));
 }
 
 #[test]
@@ -1856,16 +1899,14 @@ fn compiled_table_carries_aliases() {
     );
 }
 
-/// Сборка RoleSpec в обход валидатора не даёт правдоподобного мусора:
-/// невалидная α/тинт резолвятся в SolveFailure, не в тихий кламп.
+/// Прямой NamedRoleTable-конструктор не допускает правдоподобный мусор:
+/// невалидная α отвергается до создания executable-таблицы.
 #[test]
 fn translucent_resolve_rejects_out_of_domain_spec() {
-    use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
-    use crate::solve::BgInput;
-    use crate::spaces::vc::ViewingConditions;
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
     let tint = crate::ladder::LadderTint::new([[0.5, 0.5, 0.5]; 4]).expect("валидный тинт");
     for bad_alpha in [f64::NAN, 0.0, 1.5] {
-        let table = NamedRoleTable::new(
+        let result = NamedRoleTable::new(
             vec![(
                 "probe".to_string(),
                 RoleSpec::Ladder {
@@ -1877,16 +1918,10 @@ fn translucent_resolve_rejects_out_of_domain_spec() {
             )],
             vec![],
             RoleChroma::Neutral,
-        )
-        .expect("нейтральная policy валидна");
-        let set = resolve_named_set(
-            &BgInput::solid("#FFFFFF").unwrap(),
-            &table,
-            &ViewingConditions::srgb(),
         );
         assert!(
-            matches!(set[0].1, Resolved::Failure(_)),
-            "α={bad_alpha} обязана дать SolveFailure, не цвет"
+            matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+            "α={bad_alpha} обязана быть отвергнута до resolve"
         );
     }
     // Мусорный quad отвергается конструктором тинта с именем режима.
@@ -2011,8 +2046,7 @@ fn validate_is_a_complete_preflight() {
 }
 
 /// `RoleSpec` публичен: alpha-analog-спека с недоменной α, собранная в обход
-/// валидатора конфига, резолвится в честный `SolveFailure`, а не в
-/// правдоподобный hex через кламп резолвера инверсии. Недоменный СОЛИД по
+/// валидатора конфига, отвергается до создания executable-таблицы. Недоменный СОЛИД по
 /// построению невозможен ([`crate::ladder::LadderTint::new`] валидирует домен
 /// квада) — гард по солиду остаётся глубинной защитой.
 #[test]
@@ -2021,22 +2055,18 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
     use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
 
     let tint = LadderTint::new([[0.5, 0.5, 0.5]; 4]).expect("валидный квад");
-    let bg = BgInput::solid("#FFFFFF").unwrap();
     for alpha in [1.0 + 1e-9, 0.0, -0.5, f64::NAN, f64::INFINITY] {
-        let table = NamedRoleTable::new(
+        let result = NamedRoleTable::new(
             vec![(
                 "probe".to_string(),
                 RoleSpec::AlphaAnalog { of: tint, alpha },
             )],
             vec![],
             RoleChroma::Neutral,
-        )
-        .expect("нейтральная policy валидна");
-        let set = crate::semantic::resolve_named_set(&bg, &table, &ViewingConditions::srgb());
-        let (_, r) = set.iter().find(|(n, _)| n == "probe").expect("роль есть");
+        );
         assert!(
-            matches!(r, Resolved::Failure(_)),
-            "α={alpha}: ждали SolveFailure (честный отказ), получено {r:?}"
+            matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+            "α={alpha}: ожидался отказ конструктора, получено {result:?}"
         );
     }
 }

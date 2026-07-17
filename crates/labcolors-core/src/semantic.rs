@@ -82,12 +82,12 @@
 //! forced by the legal floor onto the same point. The old code let primary and
 //! secondary collapse to an identical hex silently, falsifying the "strict
 //! hierarchy by construction" claim. This module instead degrades *honestly*:
-//! the order is kept non-strict (primary ≥ secondary ≥ muted ≥ disabled), a
-//! subordinate role is nudged to the smallest distinguishable quantisation step
-//! below its senior **only while it still clears its own floor**, and any role
-//! whose target was lifted by the floor into this squeeze is marked
-//! [`Resolved::compressed`]. A consumer can read the flag and know the hierarchy
-//! is compressed here, rather than discovering two roles share a colour.
+//! a subordinate role is nudged to the smallest distinguishable quantisation
+//! step below its senior **only while it still clears its own floor**. If order
+//! and the junior's hard floor conflict, the floor wins: the legal junior colour
+//! is retained and [`Resolved::compressed`] marks the non-exact hierarchy
+//! outcome. A consumer never receives a floor-violating colour disguised as a
+//! successful hierarchy.
 //!
 //! # The zero token
 //!
@@ -150,7 +150,9 @@
 
 use crate::ladder::LadderTint;
 use crate::scale;
-use crate::solve::{self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, Solved};
+use crate::solve::{
+    self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureCategory, Solved,
+};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -170,7 +172,7 @@ use crate::wcag;
 /// `7.5 == MODEL_LC_FLOOR + QUANT_GUARD` закреплена компайл-тайм-проверкой ниже и
 /// тестом `decorative_floor_is_model_floor_plus_guard`.
 // SSOT-TRACKED — DERIVED: MODEL_LC_FLOOR (7.3) + QUANT_GUARD (0.2), issue #44, см. docs/empirical-inventory.md.
-const DECORATIVE_FLOOR_MIN: f64 = 7.5;
+pub(crate) const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 
 /// Квант-guard над модельным полом [`MODEL_LC_FLOOR`](crate::lpc::MODEL_LC_FLOOR):
 /// зазор `DECORATIVE_FLOOR_MIN − MODEL_LC_FLOOR`, держащий декоративный пол строго
@@ -1599,9 +1601,10 @@ impl Default for RoleTable {
 pub enum Resolved {
     /// A solved colour for a text/UI or decorative role. `compressed` is `true`
     /// when the legal floor squeezed this role's target against its senior's so
-    /// the strict hierarchy could not hold and the role was demoted to the
-    /// smallest distinguishable step below — an honest, flagged degradation
-    /// rather than a silent two-roles-one-colour collapse. See the module docs.
+    /// the exact hierarchy target could not hold. The role is either demoted to
+    /// the smallest still-legal step, copied from a still-legal senior, or kept at
+    /// its own legal colour when hierarchy and floor conflict. No readability
+    /// floor is traded for ordering. See the module docs.
     ///
     /// `achieved_dj` — честный замер |ΔJ'| на отданном hex для dJ'-ролей
     /// (симметрия честности с [`GlowResolved::achieved_dj`]); `None` у
@@ -2066,8 +2069,9 @@ impl Resolved {
 
     /// Whether this role produced an explicitly non-exact outcome:
     ///
-    /// - contrast roles: the legal floor forced the colour onto (or just below)
-    ///   its senior, so its place in the hierarchy order is non-strict;
+    /// - contrast roles: the legal floor prevented the exact hierarchy target;
+    ///   the colour was placed at a still-legal compressed step, or retained at
+    ///   its own legal value when the floor and hierarchy order conflict;
     /// - decorative dJ' roles: the requested |ΔJ'| missed the budget of the
     ///   bounded candidate walk, so the lowest-error examined candidate was
     ///   emitted. This is not a whole-gamut optimality claim.
@@ -2143,14 +2147,13 @@ impl Resolved {
 struct ResolveContext {
     /// The single polarity the whole set resolves in (chosen WCAG-first).
     polarity: Polarity,
-    /// The maximum contrast magnitude the background supplies in `polarity`, or
-    /// `None` if the background has no headroom in it at all (a pathological
-    /// extreme). Anchored roles need this to take their fraction of it.
-    max_contrast: Option<f64>,
-    /// The background's H-K luminance interval, computed once for the whole set.
-    /// Every role's solve reuses it instead of re-deriving the background's
-    /// CIECAM16 forward per call. `Err` if the background cannot be reduced —
-    /// then every colour role surfaces that reason.
+    /// The maximum contrast magnitude the background supplies in `polarity`.
+    /// Zero is a valid physical ceiling; derivation failures retain their typed
+    /// provenance for every anchored role instead of becoming a sentinel.
+    max_contrast: Result<f64, SolveFailure>,
+    /// The background's quantised display-luminance (`Ys`) interval, computed
+    /// once for the whole set. Every contrast role reuses it. `Err` means the
+    /// background cannot be reduced, so every colour role surfaces that reason.
     interval: Result<solve::LumaInterval, SolveFailure>,
     /// Whether these conditions enforce increased contrast (IC).
     high_contrast: bool,
@@ -2166,8 +2169,8 @@ impl ResolveContext {
         let interval = bg.luma_interval(vc);
         let max_contrast = interval
             .as_ref()
-            .ok()
-            .and_then(|iv| max_contrast(bg, polarity, vc, *iv).ok());
+            .map_err(Clone::clone)
+            .and_then(|iv| max_contrast(bg, polarity, vc, *iv));
         Self {
             polarity,
             max_contrast,
@@ -2177,14 +2180,10 @@ impl ResolveContext {
     }
 
     /// The signed `Lc` target for an anchored text/UI role: the chosen polarity's
-    /// sign times `fraction` of the background's maximum contrast. `Err` when the
-    /// background has no headroom in the chosen polarity (the honest max-ratio is
-    /// reported by the role's solve).
+    /// sign times `fraction` of the background's maximum contrast. Context
+    /// derivation failures retain their original type.
     fn anchored_contract(&self, anchor: TextAnchor) -> Result<Contract, SolveFailure> {
-        let max = self.max_contrast.ok_or(SolveFailure::FloorUnreachable {
-            floor: POLARITY_FLOOR_RATIO,
-            max_ratio: 0.0,
-        })?;
+        let max = *self.max_contrast.as_ref().map_err(Clone::clone)?;
         let target = self.polarity.sign() * anchor.fraction() * max;
         Ok(Contract::text(target).with_conformance(anchor.conformance()))
     }
@@ -2195,7 +2194,7 @@ impl ResolveContext {
     ///
     /// Under high contrast the floor delta `IC_DECORATIVE_FLOOR_MIN −
     /// DECORATIVE_FLOOR_MIN` is applied as an ORDER-PRESERVING uniform shift on
-    /// top of the regular floored magnitude — not as a `max` with the IC floor.
+    /// top of the validated magnitude — not as a `max` with the IC floor.
     /// A plain `max(|m|, 15.0)` collapsed every decorative magnitude below 15
     /// (the whole shadow stack 8/9.5/11.5/14 and the separator) onto one
     /// identical target, so under `-ic` all four shadows resolved to the same
@@ -2203,13 +2202,13 @@ impl ResolveContext {
     /// and silently mutating the owner-measured Lc deltas. The shift keeps every
     /// pairwise gap exactly as measured while guaranteeing the result is at
     /// least `IC_DECORATIVE_FLOOR_MIN` (any input already sits at or above
-    /// `DECORATIVE_FLOOR_MIN` after the regular floor).
+    /// `DECORATIVE_FLOOR_MIN` by construction).
     fn decorative_contract(&self, magnitude: f64) -> Contract {
-        let floored = magnitude.abs().max(DECORATIVE_FLOOR_MIN);
+        debug_assert!(magnitude.is_finite() && magnitude >= DECORATIVE_FLOOR_MIN);
         let effective = if self.high_contrast {
-            floored + (IC_DECORATIVE_FLOOR_MIN - DECORATIVE_FLOOR_MIN)
+            magnitude + (IC_DECORATIVE_FLOOR_MIN - DECORATIVE_FLOOR_MIN)
         } else {
-            floored
+            magnitude
         };
         let target = self.polarity.sign() * effective;
         // `range` already carries `Floor::None`; the degenerate band [t, t] targets t.
@@ -2561,6 +2560,24 @@ fn encoded_rgb_valid(encoded: [f64; 3]) -> bool {
 
 fn role_alpha_valid(alpha: f64) -> bool {
     alpha.is_finite() && alpha > 0.0 && alpha <= 1.0
+}
+
+/// The public ladder-floor contract currently applies only to an opaque emitted
+/// occurrence. For a translucent ladder the contract has not declared which
+/// occurrence is constrained or whether tint, alpha, or both may move; accepting
+/// it would invent semantics. `Some(Floor::None)` is a no-op disguised as a
+/// constraint.
+pub(crate) fn validate_ladder_floor(
+    alpha_light: f64,
+    alpha_dark: f64,
+    floor: Option<Floor>,
+) -> Result<(), &'static str> {
+    match floor {
+        None => Ok(()),
+        Some(Floor::None) => Err("omit the ladder floor when no floor is required"),
+        Some(_) if alpha_light == 1.0 && alpha_dark == 1.0 => Ok(()),
+        Some(_) => Err("a ladder floor requires alpha = 1 in every theme"),
+    }
 }
 
 /// Прямая rgba-лестница: спека зафиксировала точный тинт и α — движок НЕ решает
@@ -3294,9 +3311,9 @@ fn solved_oklab_lightness(solved: &Solved) -> Result<f64, SolveFailure> {
 /// [`ResolveContext`]); every role shares them. After the per-role solve a
 /// hierarchy pass walks the text roles strongest-first and, where the legal floor
 /// squeezed a role onto its senior, demotes it to the smallest distinguishable
-/// step below if one still clears its floor, flagging it [`Resolved::compressed`]
-/// — an honest, visible degradation rather than a silent identical-colour
-/// collapse.
+/// still-legal step. If no ordered step clears the junior floor, the legal junior
+/// is retained and flagged [`Resolved::compressed`]; readability remains a hard
+/// constraint while hierarchy is an explicit soft outcome.
 #[cfg(test)]
 pub fn resolve_set(
     bg: &BgInput,
@@ -3353,9 +3370,11 @@ pub(crate) fn resolve_set_live(
 /// config (a declaration-order run of strictly-descending [`Anchor`](RoleSpec::Anchor)
 /// roles), not off role names, so an arbitrary consumer table degrades a squeezed
 /// mid-grey exactly as the built-in table does instead of silently collapsing two
-/// labels onto one colour. The pass is a no-op wherever every rung is individually
-/// reachable — which is why the labui fixture stays byte-identical on the golden
-/// grid (see the byte-identity test).
+/// labels onto one colour. A junior floor always remains hard; when it conflicts
+/// with the requested order, the legal junior survives with `compressed = true`.
+/// The pass is a no-op wherever every rung is individually reachable — which is
+/// why the labui fixture stays byte-identical on the golden grid (see the
+/// byte-identity test).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
@@ -3364,6 +3383,84 @@ pub struct NamedRoleTable {
 }
 
 impl RoleSpec {
+    /// Validate every raw numeric field before a spec can enter an executable
+    /// named table. Typed payloads (`TextAnchor`, `LadderTint`, closed enums)
+    /// already enforce their own domains; this guard owns the remaining public
+    /// scalar seams in one place.
+    pub(crate) fn validate_domain(self) -> Result<(), String> {
+        let positive = |field: &str, value: f64| {
+            if value.is_finite() && value > 0.0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{field} must be finite and greater than zero, got {value}"
+                ))
+            }
+        };
+        let alpha = |field: &str, value: f64| {
+            if role_alpha_valid(value) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{field} must be finite and inside (0, 1], got {value}"
+                ))
+            }
+        };
+
+        match self {
+            RoleSpec::Anchor(_)
+            | RoleSpec::Glow { .. }
+            | RoleSpec::PairFill { .. }
+            | RoleSpec::Zero => Ok(()),
+            RoleSpec::DecorativeDj { magnitude_dj } => {
+                positive("decorative dJ light magnitude", magnitude_dj.light())?;
+                positive("decorative dJ dark magnitude", magnitude_dj.dark())
+            }
+            RoleSpec::Decorative { magnitude } => {
+                if magnitude.is_finite() && magnitude >= DECORATIVE_FLOOR_MIN {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "decorative Lc magnitude must be finite and at least {DECORATIVE_FLOOR_MIN}, got {magnitude}"
+                    ))
+                }
+            }
+            RoleSpec::PairLabel {
+                fraction,
+                surface_alpha_light,
+                surface_alpha_dark,
+                ..
+            } => {
+                if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
+                    return Err(format!(
+                        "pair-label fraction must be finite and inside (0, 1], got {fraction}"
+                    ));
+                }
+                alpha("pair-label light surface alpha", surface_alpha_light)?;
+                alpha("pair-label dark surface alpha", surface_alpha_dark)
+            }
+            RoleSpec::Ladder {
+                alpha_light,
+                alpha_dark,
+                floor,
+                ..
+            } => {
+                alpha("ladder light alpha", alpha_light)?;
+                alpha("ladder dark alpha", alpha_dark)?;
+                validate_ladder_floor(alpha_light, alpha_dark, floor).map_err(str::to_owned)
+            }
+            RoleSpec::AlphaAnalog { alpha: value, .. } => alpha("alpha-analog alpha", value),
+            RoleSpec::Material { tone, floor, .. } => {
+                positive("material light tone", tone.light())?;
+                positive("material dark tone", tone.dark())?;
+                if matches!(floor, Floor::None) {
+                    return Err("material requires a readability floor".into());
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// WCAG-пол этой спеки — свойство контракта, не резолва: текст/UI-якорь
     /// несёт пол своего [`TextAnchor`] (AaText → 4.5, AaUi → 3.0), все
     /// остальные формы (декоративные, dJ', лестница, альфа-аналог, zero) —
@@ -3386,20 +3483,24 @@ impl NamedRoleTable {
     /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
     /// constructor does not validate names — the config validator
     /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
-    /// Численный домен `chroma` проверяется здесь, потому что таблицу можно
-    /// собрать без конфига. Поэтому невалидная глобальная policy не существует
-    /// даже у пустой таблицы, где per-role ошибка была бы некуда записать.
+    /// Все численные домены `RoleSpec` и `chroma` проверяются здесь, потому что
+    /// таблицу можно собрать без конфига. Поэтому executable-таблица не может
+    /// содержать отложенное невалидное состояние, зависящее от темы или ветки.
     ///
     /// # Errors
     ///
-    /// [`SolveFailure::InvalidInput`], если параметры `chroma` не конечны или
-    /// выходят из физического домена своей политики.
+    /// [`SolveFailure::InvalidInput`], если любой численный параметр роли или
+    /// `chroma` не конечен либо выходит из своего физического домена.
     pub fn new(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
     ) -> Result<Self, SolveFailure> {
         chroma.validate()?;
+        for (name, spec) in &entries {
+            spec.validate_domain()
+                .map_err(|message| SolveFailure::InvalidInput(format!("role {name}: {message}")))?;
+        }
         Ok(Self::from_validated_parts(entries, aliases, chroma))
     }
 
@@ -3650,6 +3751,45 @@ pub fn recheck_against_multi(
     Ok(out)
 }
 
+/// Resolve the terminal hierarchy conflict without weakening a hard floor.
+///
+/// Copying the senior is valid only when that exact emitted colour also clears
+/// the junior's floor. Otherwise the junior's already-legal solve is retained and
+/// merely marked non-exact: hierarchy is a soft relation, readability is not.
+fn hierarchy_fallback(
+    senior: Option<(Solved, bool)>,
+    junior: &Resolved,
+    junior_floor: Floor,
+) -> Resolved {
+    let Some((senior_solved, senior_hue_vanished)) = senior else {
+        return junior.clone();
+    };
+    let senior_is_legal = junior_floor
+        .min_ratio()
+        .is_none_or(|minimum| senior_solved.wcag_ratio() >= minimum);
+
+    match junior {
+        Resolved::Color {
+            solved,
+            achieved_dj,
+            hue_vanished,
+            ..
+        } if !senior_is_legal => Resolved::Color {
+            solved: solved.clone(),
+            compressed: true,
+            achieved_dj: *achieved_dj,
+            hue_vanished: *hue_vanished,
+        },
+        Resolved::Color { .. } => Resolved::Color {
+            solved: senior_solved,
+            compressed: true,
+            achieved_dj: Option::None,
+            hue_vanished: senior_hue_vanished,
+        },
+        other => other.clone(),
+    }
+}
+
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
 ///
 /// The anchor principle already orders the *targets* strictly, but the legal
@@ -3657,9 +3797,10 @@ pub fn recheck_against_multi(
 /// window is narrower than the hierarchy steps (a near-AA mid-grey). For each
 /// junior text role that did not come out strictly weaker than the senior above
 /// it, try to demote it by the smallest number of quantisation steps that makes
-/// it strictly weaker *while it still clears its own WCAG floor*; if none does,
-/// the junior becomes a copy of the senior (equality — never stronger). Either
-/// way, flag it [`Resolved::compressed`] so the squeeze is visible, not silent.
+/// it strictly weaker *while it still clears its own WCAG floor*. If none does,
+/// copy the senior only when that colour also clears the junior floor; otherwise
+/// retain the legal junior. Either non-exact outcome is flagged
+/// [`Resolved::compressed`] so the conflict is visible, not silent.
 #[cfg(test)]
 fn enforce_text_hierarchy(
     set: &mut [(Role, Resolved)],
@@ -3690,10 +3831,9 @@ fn enforce_text_hierarchy(
             _ => Floor::None,
         };
         let demoted = demote_below(senior_mag, ctx, chroma, floor, bg, vc);
-        // The senior's colour is the legal ceiling for the junior: when no
-        // distinguishable step below exists, the junior becomes a *copy* of the
-        // senior — never a stronger colour. (The floor can lift the junior onto
-        // a grid point above the senior; copying restores `senior ≥ junior`.)
+        // Copying the senior can restore `senior ≥ junior`, but only if that
+        // exact colour also clears the junior's floor. The shared fallback owns
+        // that precedence law for both built-in and named paths.
         let senior_solved = set.iter().find_map(|(r, res)| match res {
             Resolved::Color { solved, .. } if *r == senior_role => Some(solved.clone()),
             _ => None,
@@ -3705,20 +3845,17 @@ fn enforce_text_hierarchy(
             // A distinguishable, still-legal step below the senior.
             // achieved_dj сбрасывается: цвет заменён сжатием, прежний замер
             // ему не принадлежит (честнее None, чем чужое число).
-            (Some(solved), _, _) => Resolved::Color {
+            (Ok(Some(solved)), _, _) => Resolved::Color {
                 solved,
                 compressed: true,
                 achieved_dj: Option::None,
                 hue_vanished: false,
             },
-            // No room to separate: equal to the senior by copy, flagged.
-            (None, Some(solved), Resolved::Color { .. }) => Resolved::Color {
-                solved,
-                compressed: true,
-                achieved_dj: Option::None,
-                hue_vanished: false,
-            },
-            (None, _, other) => other.clone(),
+            // No ordered step: copy a legal senior or preserve the legal junior.
+            (Ok(None), senior, junior) => {
+                hierarchy_fallback(senior.map(|solved| (solved, false)), junior, floor)
+            }
+            (Err(reason), _, _) => Resolved::Failure(reason),
         };
     }
 }
@@ -3807,10 +3944,13 @@ fn enforce_named_text_hierarchy(
             let vanished = |solved: &Solved| {
                 anchor.hue().is_some() && solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR
             };
-            let senior_solved = set[senior_idx].1.solved().cloned();
+            let senior_solved = set[senior_idx].1.solved().cloned().map(|solved| {
+                let hue_vanished = vanished(&solved);
+                (solved, hue_vanished)
+            });
             set[junior_idx].1 = match (demoted, senior_solved, &set[junior_idx].1) {
                 // A distinguishable, still-legal step below the senior.
-                (Some(solved), _, _) => {
+                (Ok(Some(solved)), _, _) => {
                     let hue_vanished = vanished(&solved);
                     Resolved::Color {
                         solved,
@@ -3819,17 +3959,9 @@ fn enforce_named_text_hierarchy(
                         hue_vanished,
                     }
                 }
-                // No room to separate: equal to the senior by copy, flagged.
-                (None, Some(solved), Resolved::Color { .. }) => {
-                    let hue_vanished = vanished(&solved);
-                    Resolved::Color {
-                        solved,
-                        compressed: true,
-                        achieved_dj: Option::None,
-                        hue_vanished,
-                    }
-                }
-                (None, _, other) => other.clone(),
+                // No ordered step: copy a legal senior or preserve the legal junior.
+                (Ok(None), senior, junior) => hierarchy_fallback(senior, junior, floor),
+                (Err(reason), _, _) => Resolved::Failure(reason),
             };
         }
     }
@@ -3872,21 +4004,21 @@ fn demote_below(
     floor: Floor,
     bg: &BgInput,
     vc: &ViewingConditions,
-) -> Option<Solved> {
+) -> Result<Option<Solved>, SolveFailure> {
     // Target just under the senior. The solve still applies the junior's own legal
     // floor, so if that floor lifts the colour right back onto the senior there is
     // no room to distinguish — detected by re-measuring the result below.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
     let contract = Contract::text(target).with_conformance(floor);
-    // Reuse the set's one background interval; an unreducible background has no
-    // demotion to offer, so propagate that as "no distinguishable step".
-    let interval = ctx.interval.as_ref().ok().copied()?;
-    let solved = solve_with_chroma(bg, contract, chroma, vc, interval).ok()?;
-    if solved.lc().abs() + STRICT_STEP <= senior_mag {
-        Some(solved)
-    } else {
-        None
-    }
+    // Reuse the set's one background interval without erasing its failure
+    // provenance. Only a proven inability to find a weaker legal colour may
+    // collapse the hierarchy to equality; unresolved/internal outcomes remain
+    // typed failures.
+    let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
+    demotion_outcome(
+        solve_with_chroma(bg, contract, chroma, vc, interval),
+        senior_mag,
+    )
 }
 
 /// Hue-preserving sibling of [`demote_below`] for a **coloured** label (M1): the
@@ -3901,26 +4033,44 @@ fn demote_below_hued(
     bg: &BgInput,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
-) -> Option<Solved> {
+) -> Result<Option<Solved>, SolveFailure> {
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
     let contract = Contract::text(target).with_conformance(floor);
-    let interval = ctx.interval.as_ref().ok().copied()?;
+    let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     let hue_deg = crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(
         hue_tint.for_vc(vc),
     ));
-    let solved = solve::solve_in(
-        bg,
-        contract,
-        Hue::deg(hue_deg),
-        ChromaPolicy::Relative(1.0),
-        vc,
-        interval,
+    demotion_outcome(
+        solve::solve_in(
+            bg,
+            contract,
+            Hue::deg(hue_deg),
+            ChromaPolicy::Relative(1.0),
+            vc,
+            interval,
+        ),
+        senior_mag,
     )
-    .ok()?;
-    if solved.lc().abs() + STRICT_STEP <= senior_mag {
-        Some(solved)
-    } else {
-        None
+}
+
+/// Interpret one hierarchy-demotion solve without conflating proof, bounded
+/// uncertainty, invalid generated state, and internal drift.
+fn demotion_outcome(
+    outcome: Result<Solved, SolveFailure>,
+    senior_mag: f64,
+) -> Result<Option<Solved>, SolveFailure> {
+    match outcome {
+        Ok(solved) if solved.lc().abs() + STRICT_STEP <= senior_mag => Ok(Some(solved)),
+        Ok(_) => Ok(None),
+        Err(failure) => match failure.boundary().map(|boundary| boundary.category()) {
+            Some(SolveFailureCategory::Unreachable) => Ok(None),
+            Some(SolveFailureCategory::Unresolved) | None => Err(failure),
+            Some(SolveFailureCategory::Rejected | SolveFailureCategory::Unsupported) => {
+                Err(SolveFailure::InternalInvariant(format!(
+                    "validated sRGB hierarchy demotion produced {failure}"
+                )))
+            }
+        },
     }
 }
 
@@ -4113,6 +4263,226 @@ mod tests {
         }
         let internal = SolveFailure::InternalInvariant("original provenance".into());
         assert_eq!(ceiling_from_probe(Err(internal.clone())), Err(internal));
+    }
+
+    #[test]
+    fn anchored_contract_preserves_context_failure_and_accepts_zero_ceiling() {
+        let anchor = TextAnchor::new(0.5, Floor::AaText).unwrap();
+        let failure = SolveFailure::InternalInvariant("controlled probe drift".into());
+        let failed = ResolveContext {
+            polarity: Polarity::DarkOnLight,
+            max_contrast: Err(failure.clone()),
+            interval: Err(SolveFailure::InternalInvariant("unused interval".into())),
+            high_contrast: false,
+        };
+        assert_eq!(failed.anchored_contract(anchor), Err(failure));
+
+        let zero = ResolveContext {
+            polarity: Polarity::DarkOnLight,
+            max_contrast: Ok(0.0),
+            interval: Err(SolveFailure::InternalInvariant("unused interval".into())),
+            high_contrast: false,
+        };
+        let contract = zero.anchored_contract(anchor).unwrap();
+        assert_eq!(contract.floor(), 0.0, "zero is a valid physical ceiling");
+    }
+
+    #[test]
+    fn hierarchy_demotion_never_turns_an_internal_failure_into_a_colour() {
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let vc = ViewingConditions::srgb();
+        let solved = crate::solve::solve(
+            bg.clone(),
+            Contract::text(60.0).with_conformance(Floor::None),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            crate::solve::Gamut::Srgb,
+        )
+        .unwrap();
+        let table = NamedRoleTable::new(
+            vec![
+                (
+                    "senior".into(),
+                    RoleSpec::Anchor(TextAnchor::new(1.0, Floor::AaText).unwrap()),
+                ),
+                (
+                    "junior".into(),
+                    RoleSpec::Anchor(TextAnchor::new(0.5, Floor::AaText).unwrap()),
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        let mut set = vec![
+            ("senior".into(), Resolved::color(solved.clone())),
+            ("junior".into(), Resolved::color(solved)),
+        ];
+        let failure = SolveFailure::InternalInvariant("injected interval drift".into());
+        let ctx = ResolveContext {
+            polarity: Polarity::DarkOnLight,
+            max_contrast: Ok(100.0),
+            interval: Err(failure.clone()),
+            high_contrast: false,
+        };
+
+        enforce_named_text_hierarchy(&mut set, &table, &bg, &vc, &ctx);
+
+        assert_eq!(set[1].1, Resolved::Failure(failure));
+    }
+
+    #[test]
+    fn hierarchy_demotion_distinguishes_proof_from_uncertainty_and_core_drift() {
+        for failure in [
+            SolveFailure::BoundedSearchExhausted {
+                target: 10.0,
+                closest_examined: 9.0,
+            },
+            SolveFailure::InternalInvariant("injected drift".into()),
+        ] {
+            assert_eq!(demotion_outcome(Err(failure.clone()), 20.0), Err(failure));
+        }
+        for failure in [
+            SolveFailure::BelowContrastFloor { target: 3.0 },
+            SolveFailure::ExceedsRange {
+                target: 20.0,
+                max_achievable: 10.0,
+            },
+            SolveFailure::FloorUnreachable {
+                floor: 4.5,
+                max_ratio: 3.0,
+            },
+        ] {
+            assert_eq!(demotion_outcome(Err(failure), 20.0), Ok(None));
+        }
+        for failure in [
+            SolveFailure::GamutUnsupported,
+            SolveFailure::InvalidInput("generated request".into()),
+        ] {
+            assert!(matches!(
+                demotion_outcome(Err(failure), 20.0),
+                Err(SolveFailure::InternalInvariant(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn named_table_rejects_non_physical_decorative_magnitudes_at_construction() {
+        for magnitude in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -1.0,
+            f64::from_bits(DECORATIVE_FLOOR_MIN.to_bits() - 1),
+        ] {
+            assert!(matches!(
+                NamedRoleTable::new(
+                    vec![("decorative".into(), RoleSpec::Decorative { magnitude })],
+                    Vec::new(),
+                    RoleChroma::Neutral,
+                ),
+                Err(SolveFailure::InvalidInput(_))
+            ));
+        }
+        assert!(
+            NamedRoleTable::new(
+                vec![(
+                    "decorative".into(),
+                    RoleSpec::Decorative {
+                        magnitude: DECORATIVE_FLOOR_MIN,
+                    },
+                )],
+                Vec::new(),
+                RoleChroma::Neutral,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn named_table_validates_every_raw_role_field_before_resolution() {
+        let tint = LadderTint::new([[0.25, 0.5, 0.75]; 4]).unwrap();
+        let pair = |fraction, light, dark| RoleSpec::PairLabel {
+            tint,
+            fraction,
+            floor: Floor::AaText,
+            surface_alpha_light: light,
+            surface_alpha_dark: dark,
+        };
+        let ladder = |light, dark| RoleSpec::Ladder {
+            tint,
+            alpha_light: light,
+            alpha_dark: dark,
+            floor: None,
+        };
+        let ladder_with_floor = |light, dark, floor| RoleSpec::Ladder {
+            tint,
+            alpha_light: light,
+            alpha_dark: dark,
+            floor,
+        };
+        let material = |light, dark, floor| RoleSpec::Material {
+            hue: Some(tint),
+            tone: DjMagnitude::new(light, dark),
+            floor,
+        };
+        let invalid = [
+            RoleSpec::DecorativeDj {
+                magnitude_dj: DjMagnitude::new(f64::NAN, 1.0),
+            },
+            RoleSpec::DecorativeDj {
+                magnitude_dj: DjMagnitude::new(1.0, 0.0),
+            },
+            pair(f64::NAN, 0.5, 0.5),
+            pair(0.5, 0.0, 0.5),
+            pair(0.5, 0.5, f64::INFINITY),
+            ladder(0.0, 0.5),
+            ladder(0.5, f64::NAN),
+            ladder_with_floor(1.0, 1.0, Some(Floor::None)),
+            ladder_with_floor(1.0, 0.5, Some(Floor::AaUi)),
+            RoleSpec::AlphaAnalog {
+                of: tint,
+                alpha: 0.0,
+            },
+            material(f64::NAN, 1.0, Floor::AaText),
+            material(1.0, 0.0, Floor::AaText),
+            material(1.0, 1.0, Floor::None),
+        ];
+        for spec in invalid {
+            assert!(matches!(
+                NamedRoleTable::new(
+                    vec![("invalid".into(), spec)],
+                    Vec::new(),
+                    RoleChroma::Neutral,
+                ),
+                Err(SolveFailure::InvalidInput(_))
+            ));
+        }
+
+        for spec in [
+            RoleSpec::DecorativeDj {
+                magnitude_dj: DjMagnitude::new(1.0, 2.0),
+            },
+            pair(0.5, 0.25, 1.0),
+            ladder(0.25, 1.0),
+            ladder_with_floor(1.0, 1.0, Some(Floor::AaUi)),
+            RoleSpec::AlphaAnalog {
+                of: tint,
+                alpha: 0.25,
+            },
+            material(1.0, 2.0, Floor::AaText),
+        ] {
+            assert!(
+                NamedRoleTable::new(
+                    vec![("valid".into(), spec)],
+                    Vec::new(),
+                    RoleChroma::Neutral,
+                )
+                .is_ok()
+            );
+        }
     }
 
     fn one_glow_table(
@@ -4977,6 +5347,49 @@ mod tests {
     }
 
     #[test]
+    fn hierarchy_never_trades_a_junior_readability_floor_for_order() {
+        // A stronger floor on the junior can make the hierarchy and readability
+        // constraints incompatible on a particular background. Hierarchy is a
+        // presentation preference; the declared readability floor is a hard
+        // constraint and must survive the compression pass.
+        let table = NamedRoleTable::new(
+            vec![
+                (
+                    "senior".into(),
+                    RoleSpec::Anchor(TextAnchor::new(0.4, Floor::AaUi).unwrap()),
+                ),
+                (
+                    "junior".into(),
+                    RoleSpec::Anchor(TextAnchor::new(0.3, Floor::AaText).unwrap()),
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        let bg = BgInput::solid("#2E2E2E").unwrap();
+        let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+        let junior = set
+            .iter()
+            .find_map(|(name, resolved)| (name == "junior").then_some(resolved))
+            .unwrap();
+        let Resolved::Color {
+            solved, compressed, ..
+        } = junior
+        else {
+            panic!("junior must remain a typed colour outcome, got {junior:?}");
+        };
+
+        assert!(*compressed, "the hierarchy conflict must be explicit");
+        assert!(
+            solved.wcag_ratio() >= crate::wcag::AA_TEXT_RATIO,
+            "junior floor was lost: {} at {}",
+            solved.wcag_ratio(),
+            solved.hex()
+        );
+    }
+
+    #[test]
     fn polarity_tie_break_is_vc_independent_at_the_seam() {
         // #757575/#767676 straddle the equal-ratio crossover; the chosen
         // polarity must be identical under both viewing conditions.
@@ -5052,8 +5465,8 @@ mod tests {
         let interval = bg.luma_interval(vc);
         let max = interval
             .as_ref()
-            .ok()
-            .and_then(|iv| max_contrast(bg, polarity, vc, *iv).ok());
+            .map_err(Clone::clone)
+            .and_then(|iv| max_contrast(bg, polarity, vc, *iv));
         let ctx = ResolveContext {
             polarity,
             max_contrast: max,
