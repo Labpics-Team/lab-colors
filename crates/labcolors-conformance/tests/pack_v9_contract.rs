@@ -139,5 +139,3 @@ fn solve_failure_wire_is_exact_and_closed() {
         Some("solved" | "failure")
     )));
 }
-
-// ── Законы новой atomic explicit-selection family ────────────────────────────

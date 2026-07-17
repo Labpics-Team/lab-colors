@@ -410,14 +410,6 @@ pub enum ColorError {
         /// Человекочитаемая причина internal/core-surface несовместимости.
         reason: String,
     },
-    /// Sealed protocol outcome could not be encoded for the native ABI.
-    /// Public-input and Core failures never use this branch: they remain
-    /// canonical `ProtocolOutcomeV1::Failure` bytes.
-    #[error("не удалось закодировать protocol outcome: {reason}")]
-    ProtocolEncodingFailed {
-        /// Internal serialization diagnostic; never a colour decision.
-        reason: String,
-    },
 }
 
 /// Единственная FFI-проекция core-owned descriptor. Внутренний либо будущий

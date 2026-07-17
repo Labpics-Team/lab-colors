@@ -149,6 +149,7 @@ labels (канон labui): роли `icon` в словаре нет.
 - **`solve.outcome.hex`** — в пределах **±1 LSB на канал**. Это квантование
   трансцендентного резолва: у границы 8-бит-ячейки libm-шум может качнуть
   результат на один шаг.
+
 Внутренняя ошибка core и неизвестный forward-вариант без public boundary
 descriptor не являются solve-векторами: `Pack::generate()` возвращает
 `PackGenerationError` и не пишет правдоподобный failure fallback в

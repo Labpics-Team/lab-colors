@@ -311,14 +311,6 @@ pub enum PackGenerationError {
     /// The core introduced a failure without a public boundary descriptor. The
     /// adapter must be upgraded before regenerating artifacts.
     IncompatibleCoreContract { reason: String },
-    /// Public protocol builders or canonical encoders rejected a controlled
-    /// fixture. Generation stops instead of inventing a local wire schema.
-    IncompatibleProtocolContract {
-        /// Stable vector identifier.
-        case_id: String,
-        /// Upstream protocol error.
-        reason: String,
-    },
 }
 
 impl core::fmt::Display for PackGenerationError {
@@ -329,9 +321,6 @@ impl core::fmt::Display for PackGenerationError {
             }
             Self::IncompatibleCoreContract { reason } => {
                 write!(f, "incompatible core contract: {reason}")
-            }
-            Self::IncompatibleProtocolContract { case_id, reason } => {
-                write!(f, "incompatible protocol contract in {case_id}: {reason}")
             }
         }
     }
@@ -1014,8 +1003,8 @@ mod tests {
     fn pack_v9_removes_only_the_feasibility_family() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Обязательство унаследовано pack v8; v8 удаляет ровно
-        // explicit-selection семейство, не трогая байты остальных. Проверка
+        // соседний LSB. Обязательство унаследовано с pack v2; v9 удаляет ровно
+        // feasibility-семейство, не трогая байты остальных. Проверка
         // одновременно убивает вакуумные изменения версии/счётчика без
         // доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
@@ -1027,7 +1016,7 @@ mod tests {
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v8 остаётся привязан к core 0.2.0"
+            "pack v9 остаётся привязан к core 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
