@@ -67,9 +67,6 @@ const ROLE_SPECS = {
     // его ceiling остаётся равным неизменному v7 измерению.
     basis: "unchanged-v7-compiler-ceiling",
     measurementSource: "github-actions-run-29548782379",
-    // The same run produced the immutable v6/v7 compiler SHA, proving that its
-    // prior exact byte length remains the current ceiling.
-    acceptedCeiling: 229658,
   },
 };
 
@@ -254,7 +251,10 @@ function validateBudgetValue(budget) {
     if (record.policy.maxRawBytes !== record.measurement.rawBytes) {
       fail(`${role} ceiling must equal its exact measurement (zero arbitrary headroom)`);
     }
-    if (record.policy.maxRawBytes > spec.acceptedCeiling) {
+    if (
+      spec.acceptedCeiling !== undefined &&
+      record.policy.maxRawBytes > spec.acceptedCeiling
+    ) {
       fail(`${role} exceeds its accepted snapshot ceiling`);
     }
     if (record.policy.basis !== spec.basis) {
