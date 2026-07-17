@@ -128,7 +128,7 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   // #296-C3: каждый protocol-потребитель публикует атомарную операцию через
   // одну non-default фичу; голых protocol-рёбер в воркспейсе больше нет.
   const protocolEdge =
-    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol", features = \["wcag22-explicit-selection"\] \}/u;
+    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
   const protocolManifest = read("crates", "labcolors-protocol", "Cargo.toml");
   const wasmManifest = read("crates", "labcolors-wasm", "Cargo.toml");
   const compilerManifest = read("crates", "labcolors-compiler", "Cargo.toml");
@@ -149,8 +149,8 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   assert.match(conformanceManifest, isolatedCoreEdge);
   assert.match(conformanceManifest, protocolEdge);
   assert.doesNotMatch(conformanceManifest, /features = \["wcag22-feasibility"\]/u);
-  // Прямые Core-рёбра потребителей не несут capability-фич: explicit-домен
-  // приходит только через protocol-фичу.
+  // Прямые Core-рёбра потребителей не несут capability-фич; explicit-домен
+  // после C4a заморожен внутри Core и потребителями не резолвится.
   assert.doesNotMatch(
     conformanceManifest,
     /labcolors-core\/wcag22-explicit-feasibility/u,
@@ -202,11 +202,12 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   );
   assert.match(
     projection,
-    /'labcolors-core feature "wcag22-explicit-feasibility"' not in feature_tree/u,
+    /'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree/u,
   );
-  assert.match(
+  assert.doesNotMatch(
     projection,
-    /'labcolors-protocol feature "wcag22-explicit-selection"'\n\s+not in feature_tree/u,
+    /wcag22-explicit-selection/u,
+    "C4a: the deleted protocol feature must not reappear in the projection law",
   );
   assert.doesNotMatch(projection, /for consumer in labcolors-/u);
 });
@@ -821,7 +822,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
     const expectedSha = "a".repeat(40);
     const conformance = {
-      packVersion: "7.0.0",
+      packVersion: "8.0.0",
       packDigest: "12345678",
       manifestSha256: "c".repeat(64),
       familySetSha256: "d".repeat(64),
@@ -973,7 +974,7 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 7 changes only the solve family", () => {
+test("conformance pack 8 removes only the explicit-selection family", () => {
   const immutableFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
@@ -984,12 +985,12 @@ test("conformance pack 7 changes only the solve family", () => {
       "wcag22-feasibility.json",
       "ae2caec47a7b650e73b8d4029a69b4e401dfb7cc199db579c0f95106eebe8dc3",
     ],
-    [
-      "wcag22-explicit-selection.json",
-      "3c4b0b8d7954b598ab9f8cd85be5749577e7c82380976293810fcab20d8ef41a",
-    ],
   ]);
-  assert.equal(immutableFamilies.size, 7, "anti-vacuum: unchanged family set changed");
+  assert.equal(immutableFamilies.size, 6, "anti-vacuum: unchanged family set changed");
+  assert.ok(
+    !existsSync(join(root, "conformance", "vectors", "wcag22-explicit-selection.json")),
+    "C4a: the explicit-selection family must be gone, not regenerated",
+  );
   for (const [name, expected] of immutableFamilies) {
     const bytes = readFileSync(join(root, "conformance", "vectors", name));
     assert.equal(createHash("sha256").update(bytes).digest("hex"), expected, name);
@@ -1003,7 +1004,7 @@ test("conformance pack 7 changes only the solve family", () => {
   );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
-  assert.equal(manifest.packVersion, "7.0.0");
+  assert.equal(manifest.packVersion, "8.0.0");
   const solve = JSON.parse(read("conformance", "vectors", "solve.json"));
   const supersededKind = ["un", "reachable"].join("");
   const failures = solve.filter(({ outcome }) => outcome.kind === "failure");
@@ -1266,10 +1267,10 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   const verifier = read("scripts", "verify-package-release.mjs");
 
   assert.match(prepare, /"wcag22-feasibility\.json"/u);
-  assert.match(prepare, /"wcag22-explicit-selection\.json"/u);
+  assert.doesNotMatch(prepare, /wcag22-explicit-selection/u);
   assert.match(verifier, /"wcag22-feasibility\.json"/u);
-  assert.match(verifier, /"wcag22-explicit-selection\.json"/u);
-  assert.match(verifier, /conformance\.packVersion !== "7\.0\.0"/u);
+  assert.doesNotMatch(verifier, /wcag22-explicit-selection/u);
+  assert.match(verifier, /conformance\.packVersion !== "8\.0\.0"/u);
   assert.match(verifier, /validateSolveFamily\(families\[3\]\)/u);
   assert.match(
     verifier,
@@ -1298,16 +1299,15 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   );
   assert.equal(
     verifier.match(
-      /compilerSmokeSource\(feasibilityFixture, explicitSelectionFixture\)/gu,
+      /compilerSmokeSource\(feasibilityFixture\)/gu,
     )?.length,
     4,
     "clean-install, role-isolation and Node-floor smokes must execute the same canonical fixtures",
   );
-  assert.match(verifier, /evaluateWcag22ExplicitSelection/u);
-  assert.match(verifier, /wcag22ExplicitSelectionMaxBytes/u);
-  assert.match(
+  assert.doesNotMatch(
     verifier,
-    /JSON\.stringify\(evaluateWcag22ExplicitSelection\(explicitSelectionRequest\)\)[\s\S]*?explicitSelectionFixture\.outcomeJson/u,
+    /ExplicitSelection/u,
+    "C4a: the deleted atomic operation must not survive in release smokes",
   );
   const compilerSmoke = verifier.slice(
     verifier.indexOf("function compilerSmokeSource"),
@@ -1848,17 +1848,17 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `7\.0\.0`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `8\.0\.0`/u);
   assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
   assert.match(conformanceReadme, /5\.0\.0 → 6\.0\.0/u);
   assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
   assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
   assert.match(conformanceReadme, /`wcag22\.json`/u);
   assert.match(conformanceReadme, /`wcag22-feasibility\.json`/u);
-  assert.match(conformanceReadme, /`wcag22-explicit-selection\.json`/u);
+  assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`/u);
   assert.match(
     conformanceReadme,
-    /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility,\s*wcag22-explicit-selection/u,
+    /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility/u,
   );
   assert.doesNotMatch(conformanceReadme, /сейчас `[3-6]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");

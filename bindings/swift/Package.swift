@@ -7,7 +7,7 @@
 // `Sources/labcolorsFFI` генерирует uniffi-bindgen ПЕРЕД `swift test` (см.
 // .github/workflows/native-conformance.yml). Hand-written sources в
 // `Sources/LabColors` — exhaustive protocol wrappers
-// `Wcag22FeasibilityProtocol.swift` и `Wcag22ExplicitSelectionProtocol.swift`;
+// `Wcag22FeasibilityProtocol.swift`;
 // сгенерированное не коммитится.
 import PackageDescription
 

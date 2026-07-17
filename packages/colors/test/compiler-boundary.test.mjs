@@ -55,7 +55,7 @@ test("runtime and compiler have disjoint normal dependency graphs", () => {
   assert.doesNotMatch(runtimeManifest, /labcolors-protocol/u);
   assert.match(
     compilerManifest,
-    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol", features = \["wcag22-explicit-selection"\] \}/u,
+    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u,
   );
   assert.doesNotMatch(compilerManifest, /labcolors-wasm|labcolors-core/u);
 });

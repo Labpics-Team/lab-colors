@@ -506,63 +506,6 @@ pub fn wcag22_feasibility_envelope_too_large_v1(
     ))
 }
 
-fn encode_explicit_selection_outcome(
-    outcome: labcolors_protocol::explicit_selection::OutcomeV1,
-) -> Result<Vec<u8>, ColorError> {
-    labcolors_protocol::explicit_selection::encode_explicit_selection_outcome_v1(&outcome).map_err(
-        |error| ColorError::ProtocolEncodingFailed {
-            reason: error.to_string(),
-        },
-    )
-}
-
-/// Exact protocol-owned ceiling of the atomic `wcag22-explicit-selection-v1`
-/// request envelope.
-#[uniffi::export]
-#[must_use]
-pub const fn wcag22_explicit_selection_max_request_bytes_v1() -> u64 {
-    labcolors_protocol::explicit_selection::MAX_EXPLICIT_SELECTION_ENVELOPE_BYTES_V1
-}
-
-/// Evaluate one exact atomic `wcag22-explicit-selection-v1` byte envelope and
-/// return its canonical outcome bytes.
-///
-/// Public-input, feasibility and selection failures are successful ABI calls
-/// carrying `outcome:"failure"` data; only an internal canonical-encoding
-/// failure returns [`ColorError::ProtocolEncodingFailed`].
-///
-/// # Errors
-///
-/// [`ColorError::ProtocolEncodingFailed`] only if the sealed protocol outcome
-/// cannot be serialized.
-#[uniffi::export]
-pub fn evaluate_wcag22_explicit_selection_raw_v1(request: Vec<u8>) -> Result<Vec<u8>, ColorError> {
-    encode_explicit_selection_outcome(
-        labcolors_protocol::explicit_selection::evaluate_wcag22_explicit_selection_v1(&request),
-    )
-}
-
-/// Construct canonical atomic oversize failure bytes from a scalar count.
-///
-/// Host wrappers call this only after proving the request exceeds
-/// [`wcag22_explicit_selection_max_request_bytes_v1`], so the rejected raw
-/// buffer is never copied into UniFFI.
-///
-/// # Errors
-///
-/// [`ColorError::ProtocolEncodingFailed`] only if the sealed protocol outcome
-/// cannot be serialized.
-#[uniffi::export]
-pub fn wcag22_explicit_selection_envelope_too_large_v1(
-    requested_bytes: u64,
-) -> Result<Vec<u8>, ColorError> {
-    encode_explicit_selection_outcome(
-        labcolors_protocol::explicit_selection::explicit_selection_envelope_too_large_outcome_v1(
-            requested_bytes,
-        ),
-    )
-}
-
 /// Проверяет single-result postcondition до проекции на ABI record.
 fn single_contrast_result(pairs: Vec<(f64, f64)>) -> Result<Contrast, ColorError> {
     let count = pairs.len();
@@ -1066,39 +1009,6 @@ mod tests {
             )
             .unwrap()
         );
-    }
-
-    #[test]
-    fn explicit_selection_boundary_exposes_the_protocol_byte_ceiling() {
-        assert_eq!(
-            wcag22_explicit_selection_max_request_bytes_v1(),
-            labcolors_protocol::explicit_selection::MAX_EXPLICIT_SELECTION_ENVELOPE_BYTES_V1
-        );
-    }
-
-    #[test]
-    fn explicit_selection_boundary_is_a_mechanical_protocol_byte_shell() {
-        let request = br#"{"schemaVersion":1,"domainId":"explicit-srgb8-set-v1","resourceProfileId":"compile-v1","candidates":[{"candidateId":"only","emitted":[255,255,255]}],"relations":[{"relationId":"r","occurrenceId":"o","kind":"applicable","criterion":"sc-1.4.3-text-default","adjacent":[[0,0,0]]}],"policy":{"policyKind":"first-feasible-in-declared-order-v1","policyId":"client","orderedCandidateIds":["only"]}}"#;
-        let authoritative =
-            labcolors_protocol::explicit_selection::encode_explicit_selection_outcome_v1(
-                &labcolors_protocol::explicit_selection::evaluate_wcag22_explicit_selection_v1(
-                    request,
-                ),
-            )
-            .unwrap();
-        assert_eq!(
-            evaluate_wcag22_explicit_selection_raw_v1(request.to_vec()).unwrap(),
-            authoritative
-        );
-    }
-
-    #[test]
-    fn explicit_selection_oversize_scalar_helper_matches_authoritative_raw_recheck() {
-        let requested = wcag22_explicit_selection_max_request_bytes_v1() + 1;
-        let oversized = vec![b' '; usize::try_from(requested).unwrap()];
-        let from_scalar = wcag22_explicit_selection_envelope_too_large_v1(requested).unwrap();
-        let from_raw = evaluate_wcag22_explicit_selection_raw_v1(oversized).unwrap();
-        assert_eq!(from_scalar, from_raw);
     }
 
     #[test]

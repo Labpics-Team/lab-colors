@@ -31,9 +31,6 @@ use labcolors_core::wcag22_feasibility::{
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 
-#[cfg(feature = "wcag22-explicit-selection")]
-pub mod explicit_selection;
-
 /// Exact schema version of the request and outcome envelopes.
 pub const SCHEMA_VERSION_V1: u32 = 1;
 
@@ -502,12 +499,6 @@ pub enum TransportErrorV1 {
     },
     /// A NotApplicable declaration had no client reason identity.
     EmptyNotApplicableReason,
-    /// Policy-kind key is not registered in V1.
-    #[cfg(feature = "wcag22-explicit-selection")]
-    UnsupportedPolicyKind {
-        /// Exact rejected key.
-        received: String,
-    },
 }
 
 /// Canonical JSON encoding failure. This is not a colour or feasibility result.
@@ -571,18 +562,6 @@ pub enum CoreInvalidRequestV1 {
     ConflictingRelationId {
         /// Opaque relation identity.
         relation_id: String,
-    },
-    /// An explicit candidate ID was empty.
-    #[cfg(feature = "wcag22-explicit-selection")]
-    EmptyCandidateId,
-    /// No explicit candidates were declared.
-    #[cfg(feature = "wcag22-explicit-selection")]
-    EmptyCandidates,
-    /// The same explicit candidate ID occurred more than once.
-    #[cfg(feature = "wcag22-explicit-selection")]
-    DuplicateCandidateId {
-        /// Opaque candidate identity.
-        candidate_id: String,
     },
     /// Checked cardinality arithmetic overflowed.
     ArithmeticOverflow,
@@ -1570,16 +1549,6 @@ fn project_core_invalid(error: CoreInvalidRequestSourceV1) -> Result<CoreInvalid
         }
         CoreInvalidRequestSourceV1::ArithmeticOverflow => {
             Ok(CoreInvalidRequestV1::ArithmeticOverflow)
-        }
-        #[cfg(feature = "wcag22-explicit-selection")]
-        CoreInvalidRequestSourceV1::EmptyCandidateId => Ok(CoreInvalidRequestV1::EmptyCandidateId),
-        #[cfg(feature = "wcag22-explicit-selection")]
-        CoreInvalidRequestSourceV1::EmptyCandidates => Ok(CoreInvalidRequestV1::EmptyCandidates),
-        #[cfg(feature = "wcag22-explicit-selection")]
-        CoreInvalidRequestSourceV1::DuplicateCandidateId { candidate_id } => {
-            Ok(CoreInvalidRequestV1::DuplicateCandidateId {
-                candidate_id: candidate_id.as_str().to_string(),
-            })
         }
         _ => Err(()),
     }

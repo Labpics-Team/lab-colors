@@ -13,19 +13,19 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `7.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов. Bump 6.0.0 → 7.0.0 изменил только семейство
+- **Версия пака** (`manifest.packVersion`, сейчас `8.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов. Bump 7.0.0 → 8.0.0 удалил ровно одно
+  семейство `wcag22-explicit-selection` (roadmap C4a: параллельная атомарная
+  операция вырезана из всех проекций; exact-вычислитель и neutral feasibility
+  сохранены), не тронув байты остальных семи семейств.
+  Предыдущий bump 6.0.0 → 7.0.0 изменил только семейство
   `solve`: failure wire `{kind:"failure", category, code}` теперь атомарно
   различает доказанную недостижимость, незавершённый bounded search, отклонённый
   запрос и неподдерживаемую capability, а corpus добавил реальные
   `below_contrast_floor` и `floor_unreachable` paths. Остальные семь семейств
   сохранены байт-в-байт; прежний одноуровневый failure wire не поддерживается.
-  Предыдущий bump 5.0.0 → 6.0.0 добавил ровно одно
-  семейство `wcag22-explicit-selection`: канонические request/outcome JSON
-  атомарной операции `wcag22-explicit-selection-v1`. Байты семи прежних
-  семейств сохранены; conformance-крейт, compiler WASM/npm и raw UniFFI
-  воспроизводят его байт-в-байт, а типизированная Swift-поверхность проверяется
-  по равенству значения и нормализованного JSON-дерева.
+  Предыдущий bump 5.0.0 → 6.0.0 добавлял семейство
+  `wcag22-explicit-selection` (удалено в 8.0.0).
   Предыдущий bump 4.0.0 → 5.0.0 добавил ровно одно
   семейство `wcag22-feasibility`: канонические versioned request/outcome JSON
   для полного перечисления neutral-axis с packed evidence. Байты шести прежних
@@ -40,9 +40,9 @@
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
   сдвигается.
-- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами восьми
+- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами семи
   семейств (в порядке `contrasts, ladders, alpha, solve, muddiness, wcag22,
-  wcag22-feasibility, wcag22-explicit-selection`).
+  wcag22-feasibility`).
   Отпечаток КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы
   генерации (последний ULP f64 в сериализации) — не кросс-платформенный
   инвариант, а якорь целостности файлов.
@@ -58,7 +58,6 @@
 | `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `wcag22-feasibility.json` | bounded request и полный compiler outcome | `{caseId, requestJson, outcomeJson}` |
-| `wcag22-explicit-selection.json` | атомарная операция `feasibility → policy → selection → recheck`; воспроизводится нативно и обоими адаптерами | `{caseId, requestJson, outcomeJson}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
 `wcag22-feasibility.json` не определяет собственную transport-схему. Поля
@@ -161,8 +160,7 @@ labels (канон labui): роли `icon` в словаре нет.
 - **`solve.outcome.hex`** — в пределах **±1 LSB на канал**. Это квантование
   трансцендентного резолва: у границы 8-бит-ячейки libm-шум может качнуть
   результат на один шаг.
-- **`wcag22-feasibility.requestJson/outcomeJson` и
-  `wcag22-explicit-selection.requestJson/outcomeJson`** — БАЙТ-ТОЧНО. Это
+- **`wcag22-feasibility.requestJson/outcomeJson`** — БАЙТ-ТОЧНО. Это
   canonical integer/byte/string protocol без libm: terminal algebra, decimal
   u64 strings, identities, упакованная LSB0 matrix и partition сравниваются как
   точные UTF-8 байты.

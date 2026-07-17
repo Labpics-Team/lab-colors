@@ -303,20 +303,12 @@ jobs:
                   raise SystemExit(
                       f"{consumer} did not resolve protocol-owned wcag22-feasibility"
                   )
-              # #296-C3: атомарная explicit-операция опубликована. Каждый
-              # protocol-потребитель (compiler, ffi, conformance) обязан
-              # резолвить её через одну non-default protocol-фичу; прямых
-              # core-фич у потребителей по-прежнему нет.
-              if (
-                  'labcolors-protocol feature "wcag22-explicit-selection"'
-                  not in feature_tree
-              ):
+              # C4a: атомарная explicit-selection операция вырезана. Explicit-домен
+              # остаётся внутрикорной способностью (до C4b) и заморожен: ни один
+              # потребитель не смеет резолвить его заново.
+              if 'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree:
                   raise SystemExit(
-                      f"{consumer} must resolve the explicit-selection protocol feature"
-                  )
-              if 'labcolors-core feature "wcag22-explicit-feasibility"' not in feature_tree:
-                  raise SystemExit(
-                      f"{consumer} did not resolve the explicit-domain capability"
+                      f"{consumer} resolved the frozen explicit-domain capability"
                   )
 
           runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
@@ -357,8 +349,8 @@ jobs:
               raise SystemExit("compiler role resolved the theme/runtime engine")
           if 'labcolors-core feature "wcag22-feasibility"' not in compiler_tree:
               raise SystemExit("compiler role lacks protocol-owned wcag22-feasibility")
-          if 'labcolors-core feature "wcag22-explicit-feasibility"' not in compiler_tree:
-              raise SystemExit("compiler role lacks the published explicit capability")
+          if 'labcolors-core feature "wcag22-explicit-feasibility"' in compiler_tree:
+              raise SystemExit("compiler role resolved the frozen explicit capability")
 
           print("core capability projection: PASS")
           PY
@@ -372,8 +364,6 @@ jobs:
         run: python3 scripts/verify_wcag22_feasibility_identity.py
       - name: verify explicit WCAG22 feasibility identity and anti-vacuum mutations
         run: python3 scripts/verify_wcag22_explicit_feasibility_identity.py --self-test
-      - name: verify explicit WCAG22 selection identity and anti-vacuum mutations
-        run: python3 scripts/verify_wcag22_explicit_selection_identity.py --self-test
 
   audit:
     name: cargo audit (rustsec)
