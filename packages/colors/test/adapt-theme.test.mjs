@@ -1752,3 +1752,99 @@ test("batch engine still uses the per-sample path for a single-sample backdrop",
     "one sample must not use the batch call (nothing to collapse)",
   );
 });
+
+// ── Пер-ролевой отказ сквозь рантайм-цикл (закон допуска на JS-стороне) ──────
+
+// Смешанный набор: живой цвет + допущенный пер-ролевой отказ (var НЕ эмитится,
+// по wasm-проекции) + полупрозрачная роль. Отказная роль обязана оставаться
+// структурно инертной на каждой фазе: ни выдуманного цвета, ни участия в
+// recheck/ease, ни воскрешения после re-solve; выжившие роли живут как обычно.
+function mixedWithFailure(hex, lc) {
+  return {
+    vars: {
+      "--lab-label-primary": hex,
+      "--lab-veil": "oklch(50% 0 0 / 0.5)",
+    },
+    roles: {
+      "label-primary": {
+        kind: "color",
+        cssVar: "--lab-label-primary",
+        hex,
+        lc,
+        floorRatio: null,
+      },
+      impossible: {
+        kind: "failure",
+        cssVar: "--lab-impossible",
+        category: "unreachable",
+        code: "exceeds_range",
+        message: "target exceeds the most this background can supply",
+      },
+      veil: {
+        kind: "translucent",
+        cssVar: "--lab-veil",
+        tintHex: "#808080",
+        alpha: 0.5,
+      },
+    },
+  };
+}
+
+test("admitted per-role failure stays inert through init, breach re-solve and ease", () => {
+  const h = harness();
+  h.colors.setResolve(mixedWithFailure("#000000", 100));
+  // Пересоздать контроллер поверх нового резолва: init-фаза.
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let now = 1000;
+  const seenRecheckHex = [];
+  const colors = {
+    resolveCount: 0,
+    resolveTheme(b) {
+      this.resolveCount++;
+      return mixedWithFailure(this.resolveCount === 1 ? "#000000" : "#111111", 100);
+    },
+    recheckContrast(b, fgs) {
+      seenRecheckHex.push(...fgs);
+      for (const f of fgs) {
+        assert.match(f, /^#[0-9A-Fa-f]{6}$/, "recheck must only ever see color hexes");
+      }
+      return fgs.flatMap(() => [10, 1.5]); // пробой: цикл обязан пере-решить
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+    strict: true,
+  });
+
+  // 1. Init: отказная роль не окрашена и не выдумана.
+  assert.equal(el.props.get("--lab-impossible"), undefined, "no invented var for the failed role");
+  assert.equal(el.props.get("--lab-label-primary"), "#000000");
+  assert.equal(el.props.get("--lab-veil"), "oklch(50% 0 0 / 0.5)", "translucent survives");
+
+  // 2. Пробой и ease: recheck видит только hex цветовой роли; re-solve не
+  // воскрешает отказ; выживший цвет остаётся окрашенным.
+  bg = "#EEEEEE";
+  now += 10;
+  ctrl.tick();
+  now += 10;
+  ctrl.tick();
+  now += 200;
+  ctrl.tick();
+  assert.ok(colors.resolveCount >= 2, "breach must re-solve");
+  assert.ok(seenRecheckHex.length > 0, "recheck actually ran");
+  assert.equal(el.props.get("--lab-impossible"), undefined, "failure stays var-less across re-solve");
+  assert.ok(el.props.get("--lab-label-primary"), "surviving color stays painted");
+
+  // 3. current() не фабрикует отказную переменную.
+  assert.equal(ctrl.current()["--lab-impossible"], undefined);
+  ctrl.stop();
+});
