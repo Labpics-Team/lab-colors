@@ -95,17 +95,6 @@ fn get_bool(obj: &JsValue, key: &str) -> bool {
         .unwrap_or_else(|| panic!("{key} must be a boolean"))
 }
 
-fn get_array(obj: &JsValue, key: &str) -> js_sys::Array {
-    js_sys::Array::from(&get_obj(obj, key))
-}
-
-fn json_text(value: &JsValue) -> String {
-    js_sys::JSON::stringify(value)
-        .expect("value is JSON-serializable")
-        .as_string()
-        .expect("JSON.stringify returns text")
-}
-
 /// Read the `message` of a rejected `JsError`. A `JsError` crosses as a JS
 /// `Error` object, so the human text (carrying our stable code) is its
 /// `.message` property, not the value's own string form.
@@ -202,11 +191,18 @@ fn committed_conformance_pack_replays_in_wasm32() {
                 assert_eq!(actual_floor, committed_floor);
             }
             (
-                SolveOutcome::Unreachable {
+                SolveOutcome::Failure {
+                    category: committed_category,
                     code: committed_code,
                 },
-                SolveOutcome::Unreachable { code: actual_code },
-            ) => assert_eq!(actual_code, committed_code),
+                SolveOutcome::Failure {
+                    category: actual_category,
+                    code: actual_code,
+                },
+            ) => {
+                assert_eq!(actual_category, committed_category);
+                assert_eq!(actual_code, committed_code);
+            }
             pair => panic!("solve outcome class drift: {pair:?}"),
         }
     }
@@ -362,8 +358,27 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
             Resolved::None => {
                 assert_eq!(kind, "none", "{name} should be the zero token");
             }
-            Resolved::Unreachable(_) => {
-                assert_eq!(kind, "unreachable", "{name} should be unreachable");
+            Resolved::Failure(reason) => {
+                let boundary = reason
+                    .boundary()
+                    .expect("an internal core failure must reject the whole resolve");
+                assert_eq!(kind, "failure", "{name} should be a typed failure");
+                assert_eq!(
+                    get_str(&entry, "category").as_deref(),
+                    Some(boundary.category().as_str()),
+                    "{name} failure category must come from core"
+                );
+                assert_eq!(
+                    get_str(&entry, "code").as_deref(),
+                    Some(boundary.code()),
+                    "{name} failure code must come from core"
+                );
+                let message = reason.to_string();
+                assert_eq!(
+                    get_str(&entry, "message").as_deref(),
+                    Some(message.as_str()),
+                    "{name} failure explanation must be preserved"
+                );
             }
             Resolved::Translucent(r) => {
                 assert_eq!(kind, "translucent", "{name} should be translucent");
@@ -735,6 +750,46 @@ fn invalid_background_rejects() {
     assert!(
         message.contains("invalid_background"),
         "error must carry the stable code, got: {message}"
+    );
+}
+
+/// A real core failure crosses as the single public role shape. The fixture is
+/// deliberately solvable as a request but impossible on this background, so
+/// the test cannot be satisfied by config validation or a synthetic DTO.
+#[wasm_bindgen_test]
+fn typed_role_failure_crosses_with_core_category_and_no_css_value() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(LABUI_JSON).expect("canonical passport parses");
+    config["roles"]
+        .as_array_mut()
+        .expect("roles is an array")
+        .push(serde_json::json!({
+            "name": "failure-probe",
+            "recipe": {"kind": "decorative-lc", "magnitude": 50.0}
+        }));
+    let json = serde_json::to_string(&config).expect("extended passport serializes");
+    let engine = boundary_with(&json);
+    let result: JsValue = engine
+        .resolve_theme("#808080", "light")
+        .expect("per-role physical failure is a successful resolve")
+        .into();
+    let roles = get_obj(&result, "roles");
+    let vars = get_obj(&result, "vars");
+    let failure = get_obj(&roles, "failure-probe");
+
+    assert_eq!(get_str(&failure, "kind").as_deref(), Some("failure"));
+    assert_eq!(
+        get_str(&failure, "category").as_deref(),
+        Some("unreachable")
+    );
+    assert_eq!(get_str(&failure, "code").as_deref(), Some("exceeds_range"));
+    assert!(
+        get_str(&failure, "message").is_some_and(|message| message.contains("target Lc 50.00"))
+    );
+    assert_eq!(
+        get_str(&vars, "--lab-failure-probe"),
+        None,
+        "failure must not fabricate a CSS fallback"
     );
 }
 

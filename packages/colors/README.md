@@ -180,7 +180,7 @@ await initCompiler({ module_or_path: compilerWasm });
 interface ResolvedTheme {
   theme: ThemeName;
   background: string;                     // нормализованный #RRGGBB
-  vars: Record<string, string>;           // достижимые роли: "--lab-<ключ>" → готовое CSS-значение oklch
+  vars: Record<string, string>;           // роли с выбранным CSS-значением: "--lab-<ключ>" → oklch
   roles: Record<string, RoleResult>;      // все роли с деталями
 }
 
@@ -190,7 +190,7 @@ type RoleResult =
   | GlowRole
   | MaterialRole
   | NoneRole
-  | UnreachableRole;
+  | FailureRole;
 ```
 
 Каждая роль — одна из шести категорий результата; у Glow есть два терминальных
@@ -233,9 +233,15 @@ type RoleResult =
   это platform-characterization, а не двухугловая теорема, глобальная
   монотонность, первый passing state или точная минимальная alpha.
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
-- `UnreachableRole` — ни один цвет не удовлетворяет требованиям для этого фона (`kind: "unreachable"`).
+- `FailureRole` — типизированный терминальный исход без выбранного
+  цвета (`kind: "failure"`). `category` отделяет доказанную
+  недостижимость (`"unreachable"`) от исхода ограниченного поиска без
+  доказательства (`"unresolved"`), отклонённого запроса (`"rejected"`) и
+  неподдержанной возможности (`"unsupported"`). `code` уточняет причину.
 
-Недостижимость отдельных ролей — **часть успешного результата**. Отклоняет весь вызов (как `Error`) только при невалидном аргументе:
+Ожидаемый failure отдельной роли — **часть успешного результата** и не
+попадает в `vars`. Внутреннее нарушение инварианта никогда не маскируется такой
+ролью: оно отклоняет весь вызов с `internal_error`. Публичные ошибки вызова:
 
 | Код ошибки | Причина |
 |------------|---------|
@@ -444,7 +450,10 @@ clean/dirty и не должно использоваться как production 
 
 ### `applyTheme(element, result): void`
 
-Записывает все достижимые роли из `result.vars` в `element.style` через `setProperty`. Устаревшие `--lab-*` от предыдущего вызова сбрасываются перед записью — роль, потерявшая достижимость, не остаётся висеть.
+Записывает все выбранные CSS-значения из `result.vars` в `element.style` через
+`setProperty`. Устаревшие `--lab-*` от предыдущего вызова сбрасываются перед
+записью: роль, перешедшая в `failure`, `none` или `glow-indeterminate`, не оставляет
+устаревшее значение.
 
 ---
 

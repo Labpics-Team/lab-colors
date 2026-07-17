@@ -11,8 +11,8 @@ const LAB_VAR_PREFIX = "--lab-";
  * Apply a resolved theme's CSS variables to an element.
  *
  * First clears every inline `--lab-*` custom property a previous call set on
- * this element, then writes every reachable role from `result.vars` via
- * `setProperty`. Unreachable, zero-token (`none`), and stable
+ * this element, then writes every selected value from `result.vars` via
+ * `setProperty`. Failure, zero-token (`none`), and stable
  * `glow-indeterminate` roles carry no selected CSS value, so they are absent
  * from `vars` and are not written — the caller's CSS fallbacks stay in effect
  * for those, including across theme re-application (a role reachable in the

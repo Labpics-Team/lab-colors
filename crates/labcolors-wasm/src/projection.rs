@@ -308,8 +308,13 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
             RoleOutcome::None => {
                 field_str(&mut roles, "kind", "none");
             }
-            RoleOutcome::Unreachable { code, message } => {
-                field_str(&mut roles, "kind", "unreachable");
+            RoleOutcome::Failure {
+                category,
+                code,
+                message,
+            } => {
+                field_str(&mut roles, "kind", "failure");
+                field_str(&mut roles, "category", category);
                 field_str(&mut roles, "code", code);
                 field_str(&mut roles, "message", message);
             }
@@ -907,8 +912,9 @@ mod tests {
                 },
                 RoleEntry {
                     role_key: "impossible".to_string(),
-                    outcome: RoleOutcome::Unreachable {
-                        code: "gamut_exhausted",
+                    outcome: RoleOutcome::Failure {
+                        category: "unsupported",
+                        code: "gamut_unsupported",
                         message: "нет цвета: \"предел\"\nвторая строка".to_string(),
                     },
                 },
@@ -957,8 +963,8 @@ mod tests {
                 "\"haloCompositeHex\":\"#13151B\",\"haloAchievedDj\":2.373123785729128,",
                 "\"coreCompositeHex\":\"#15171B\",\"coreAchievedDj\":3.235504076619437,",
                 "\"achievedDj\":2.373123785729128,\"degraded\":false,\"css\":\"{halo}\"}},",
-                "\"impossible\":{{\"cssVar\":\"--lab-impossible\",\"kind\":\"unreachable\",",
-                "\"code\":\"gamut_exhausted\",",
+                "\"impossible\":{{\"cssVar\":\"--lab-impossible\",\"kind\":\"failure\",",
+                "\"category\":\"unsupported\",\"code\":\"gamut_unsupported\",",
                 "\"message\":\"нет цвета: \\\"предел\\\"\\nвторая строка\"}}",
                 "}}}}"
             ),
@@ -976,6 +982,25 @@ mod tests {
         assert_eq!(none["kind"], "none");
         assert_eq!(none["cssVar"], "--lab-spacer");
         assert!(projected["vars"].get("--lab-spacer").is_none());
+
+        // Failure is one terminal wire shape. It preserves the core-owned
+        // category/code, emits no CSS value, and carries no superseded alias.
+        let failure = &projected["roles"]["impossible"];
+        assert_eq!(failure["kind"], "failure");
+        assert_eq!(failure["category"], "unsupported");
+        assert_eq!(failure["code"], "gamut_unsupported");
+        assert!(projected["vars"].get("--lab-impossible").is_none());
+        let mut failure_fields = failure
+            .as_object()
+            .expect("failure role is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        failure_fields.sort_unstable();
+        assert_eq!(
+            failure_fields,
+            ["category", "code", "cssVar", "kind", "message"]
+        );
     }
 
     #[test]

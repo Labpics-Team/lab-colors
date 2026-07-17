@@ -36,7 +36,7 @@ pub struct RoleEntry {
     pub outcome: RoleOutcome,
 }
 
-/// The honest outcome union for one role, mirroring the core's `Resolved`
+/// The terminal outcome union for one role, mirroring the core's `Resolved`
 /// without leaking the core type across the boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleOutcome {
@@ -60,9 +60,13 @@ pub enum RoleOutcome {
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
     Material(MaterialColor),
-    /// No colour can satisfy this role on this background, with the reason.
-    Unreachable {
-        /// A stable machine code for the unreachability reason.
+    /// A typed terminal failure. The category distinguishes proof of
+    /// unreachability from unresolved search, rejected input, and unsupported
+    /// capability; internal failures never reach this variant.
+    Failure {
+        /// Core-owned semantic category.
+        category: &'static str,
+        /// Core-owned stable machine code.
         code: &'static str,
         /// A human-readable explanation (the core's `Display`).
         message: String,

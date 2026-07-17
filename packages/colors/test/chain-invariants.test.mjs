@@ -350,15 +350,28 @@ test("no colliding vars keys: every emitted var name is unique (glow satellites 
   for (const theme of THEMES) {
     for (const bg of BACKGROUNDS) {
       const res = e.resolveTheme(bg, theme);
-      // Ожидаемое число ключей vars: по одному primary на каждую эмитирующую
-      // роль (color/translucent/glow) + 2 сателлита на каждый glow. Если
-      // сателлит перезаписал чужой primary, фактическое число будет МЕНЬШЕ.
+      // Ожидаемое число ключей vars выводится из wire-kind: solid/
+      // translucent несут одно значение, Glow/Material — primary и два
+      // сателлита, терминальные исходы — ноль. Если сателлит перезаписал
+      // чужой primary, фактическое число будет меньше.
       let expected = 0;
       for (const role of Object.values(res.roles)) {
-        if (role.kind === "color" || role.kind === "translucent" || role.kind === "glow") {
-          expected += 1;
+        switch (role.kind) {
+          case "color":
+          case "translucent":
+            expected += 1;
+            break;
+          case "glow":
+          case "material":
+            expected += 3;
+            break;
+          case "none":
+          case "failure":
+          case "glow-indeterminate":
+            break;
+          default:
+            assert.fail(`unknown role kind: ${String(role.kind)}`);
         }
-        if (role.kind === "glow") expected += 2;
       }
       // Гард не-вакуумности: паспорт обязан эмитить роли, иначе 0==0 пройдёт
       // тривиально и коллизия осталась бы непроверенной.
@@ -373,7 +386,7 @@ test("no colliding vars keys: every emitted var name is unique (glow satellites 
   }
 });
 
-test("reachable role-key set is identical across all four themes, and every reachable role appears in vars", () => {
+test("role-key set is theme-invariant and vars contain only selected outcomes", () => {
   const e = engine();
   const bg = "#FFFFFF";
 
@@ -390,15 +403,18 @@ test("reachable role-key set is identical across all four themes, and every reac
     );
   }
 
-  // Каждая достижимая роль (не none/unreachable) присутствует в vars.
+  // Каждый выбранный primary присутствует в vars; терминальный исход
+  // не может оставить правдоподобный CSS fallback под своим именем.
   for (const theme of THEMES) {
     const res = e.resolveTheme(bg, theme);
     for (const [key, role] of Object.entries(res.roles)) {
-      const reachable = ["color", "translucent", "glow"].includes(role.kind);
+      const selected = ["color", "translucent", "glow", "material"].includes(role.kind);
       const present = Object.prototype.hasOwnProperty.call(res.vars, role.cssVar);
-      if (reachable) {
-        assert.ok(present, `${theme}/${key}: reachable role missing from vars`);
-      }
+      assert.equal(
+        present,
+        selected,
+        `${theme}/${key}: primary var does not match the terminal outcome`,
+      );
     }
   }
 });
