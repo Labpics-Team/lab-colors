@@ -1,19 +1,14 @@
 //! Plain-data results of a resolve, independent of any JS representation.
 //!
 //! These are the binding's *output boundary*: pure Rust structs the engine
-//! fills from the core's `Vec<(Role, Resolved)>`, with no knowledge of
-//! wasm-bindgen or `js_sys`. The adapter layer ([`crate::lib`]) projects them
-//! into a JS object. Keeping them framework-free makes the engine testable with
-//! a native `cargo test` and keeps the dependency arrow pointing inward.
-//!
-//! Generic over the role set BY CONSTRUCTION: an entry is built per `(Role,
-//! Resolved)` the core returns and keyed by `Role::key()`. Nothing here
-//! enumerates the roles, so a set change carries through on a rebuild untouched:
-//! the label expansion already grew it to 19 roles, and the accent ladder
-//! (issue #59) added the `Translucent` outcome carried below. Any further
-//! outcome lands the same way.
+//! заполняет из уже допущенного именованного набора, ничего не зная о
+//! wasm-bindgen или `js_sys`. Адаптерный слой ([`crate::lib`]) проецирует их в
+//! JS-объект. Отсутствие фреймворка делает движок тестируемым нативным
+//! `cargo test` и держит стрелку зависимостей внутрь. Имена ролей здесь не
+//! перечисляются: каждый ключ принадлежит клиенту.
 
-/// The full result of resolving one background under one theme.
+/// Полный результат резолва одного фона под одной темой. Существует только
+/// после того, как ВЕСЬ именованный набор атомарно прошёл допуск.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTheme {
     /// The theme key this was resolved under (`"light"`, `"dark"`, …).
@@ -28,9 +23,7 @@ pub struct ResolvedTheme {
 /// One role's outcome, keyed by its stable role key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoleEntry {
-    /// The stable role key — the CSS-variable stem. Built-in roles use
-    /// `Role::key()`; config-defined roles carry the config's own name
-    /// (the string-keyed contract), so the key is owned.
+    /// The client-owned role key — the CSS-variable stem.
     pub role_key: String,
     /// What the role resolved to.
     pub outcome: RoleOutcome,
@@ -42,7 +35,7 @@ pub struct RoleEntry {
 pub enum RoleOutcome {
     /// A solved colour with its measured contrasts and degradation flags.
     Color(SolvedColor),
-    /// The explicit zero token (`Role::None`): no colour here, by design.
+    /// Явный нулевой токен: цвета здесь нет — намеренно.
     None,
     /// A semi-transparent ladder / alpha-analog role: the emission is
     /// `oklch(L% C H / A)` and the browser composites it; the measured
@@ -60,12 +53,12 @@ pub enum RoleOutcome {
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
     Material(MaterialColor),
-    /// A typed terminal failure. The category distinguishes proof of
-    /// unreachability from unresolved search, rejected input, and unsupported
-    /// capability; internal failures never reach this variant.
+    /// Допущенный локальный отказ роли: доказанная недостижимость или
+    /// незавершённый bounded search. Rejected/unsupported/internal закрывают
+    /// весь резолв и в этом варианте жить не могут.
     Failure {
         /// Core-owned semantic category.
-        category: &'static str,
+        category: labcolors_core::RoleFailureCategory,
         /// Core-owned stable machine code.
         code: &'static str,
         /// A human-readable explanation (the core's `Display`).

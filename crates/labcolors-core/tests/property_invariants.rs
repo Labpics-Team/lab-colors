@@ -33,9 +33,9 @@
 
 use labcolors_core::{
     BgInput, Brand, DefectContext, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource,
-    NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe,
-    SentimentCategory, SentimentsConfig, SolveFailure, SolveFailureCategory, Theme, ThemeAnchors,
-    ThemeConfig, ThemesConfig, VcPreset, ViewingConditions, muddiness_in_context, muddiness_oklch,
+    NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleFailure,
+    RoleRecipe, SentimentCategory, SentimentsConfig, Theme, ThemeAnchors, ThemeConfig,
+    ThemesConfig, VcPreset, ViewingConditions, muddiness_in_context, muddiness_oklch,
     oklch_from_hex, p3_from_hex, resolve_named_set, srgb_encoded_from_hex,
 };
 use proptest::prelude::*;
@@ -79,65 +79,12 @@ fn hue_distance(a: f64, b: f64) -> f64 {
     if d > 180.0 { 360.0 - d } else { d }
 }
 
-/// Валидный sRGB `resolve_named_set` может завершиться `unreachable` либо
-/// `unresolved`. Первый доказывает отсутствие решения, второй лишь честно
-/// фиксирует исчерпание объявленного поиска; `unsupported` здесь означает дрейф
-/// фиксированной capability, но остаётся честным исходом общего `solve` API.
-fn valid_srgb_set_failure_repr(failure: &SolveFailure) -> Result<String, TestCaseError> {
-    let Some(boundary) = failure.boundary() else {
-        return Err(TestCaseError::fail(format!(
-            "internal solve invariant leaked from valid resolve: {failure}"
-        )));
-    };
-    match boundary.category() {
-        SolveFailureCategory::Unreachable | SolveFailureCategory::Unresolved => Ok(format!(
-            "FAILURE({},{})",
-            boundary.category().as_str(),
-            boundary.code()
-        )),
-        SolveFailureCategory::Rejected | SolveFailureCategory::Unsupported => {
-            Err(TestCaseError::fail(format!(
-                "valid sRGB set resolve returned {}/{}: {failure}",
-                boundary.category().as_str(),
-                boundary.code()
-            )))
-        }
-    }
-}
-
-#[test]
-fn valid_srgb_set_failure_projection_is_non_vacuous() {
-    let below = SolveFailure::BelowContrastFloor { target: 1.0 };
-    let floor = SolveFailure::FloorUnreachable {
-        floor: 4.5,
-        max_ratio: 3.0,
-    };
-    assert_eq!(
-        valid_srgb_set_failure_repr(&below).unwrap(),
-        "FAILURE(unreachable,below_contrast_floor)"
-    );
-    assert_eq!(
-        valid_srgb_set_failure_repr(&floor).unwrap(),
-        "FAILURE(unreachable,floor_unreachable)"
-    );
-    assert_eq!(
-        valid_srgb_set_failure_repr(&SolveFailure::BoundedSearchExhausted {
-            target: 50.0,
-            closest_examined: 48.0,
-        })
-        .unwrap(),
-        "FAILURE(unresolved,bounded_search_exhausted)"
-    );
-    for invalid in [
-        SolveFailure::InvalidInput("bad".to_string()),
-        SolveFailure::GamutUnsupported,
-        SolveFailure::InternalInvariant("drift".to_string()),
-    ] {
-        assert!(
-            valid_srgb_set_failure_repr(&invalid).is_err(),
-            "valid sRGB set resolve must reject {invalid:?}"
-        );
-    }
+fn role_failure_repr(failure: &RoleFailure) -> String {
+    format!(
+        "FAILURE({},{})",
+        failure.category().as_str(),
+        failure.code()
+    )
 }
 
 /// Две канонические viewing-conditions пресета (srgb / dim) по индексу 0/1.
@@ -325,7 +272,9 @@ fn every_floored_role_clears_its_wcag_floor_on_quantised_bytes() {
         |(r, g, b, vc_i)| {
             let bg_hex = hex_of(r, g, b);
             let bg = BgInput::solid(&bg_hex).expect("valid #RRGGBB фон");
-            let set = resolve_named_set(&bg, &table, &vcs[vc_i]);
+            let set = resolve_named_set(&bg, &table, &vcs[vc_i]).map_err(|error| {
+                TestCaseError::fail(format!("валидный set-resolve завершился целиком: {error}"))
+            })?;
             for (name, spec) in table.entries() {
                 let Some(floor) = spec.legal_floor() else {
                     continue; // роль без легального пола — вне закона
@@ -342,9 +291,7 @@ fn every_floored_role_clears_its_wcag_floor_on_quantised_bytes() {
                             solved.hex()
                         );
                     }
-                    Some(Resolved::Failure(failure)) => {
-                        valid_srgb_set_failure_repr(failure)?;
-                    }
+                    Some(Resolved::Failure(_)) => {}
                     Some(other) => {
                         return Err(TestCaseError::fail(format!(
                             "floored role `{name}` resolved to unexpected shape: {other:?}"
@@ -538,7 +485,9 @@ fn resolve_named_set_is_total_and_emits_valid_hex_for_any_valid_config() {
                 .expect("сгенерированный конфиг сконструирован валидным ⇒ Ok");
             let vc = vc_of(vc_i);
             let bg = BgInput::solid(&hex_of(r, g, b)).expect("valid фон");
-            let set = resolve_named_set(&bg, &table, &vc);
+            let set = resolve_named_set(&bg, &table, &vc).map_err(|error| {
+                TestCaseError::fail(format!("валидный set-resolve завершился целиком: {error}"))
+            })?;
 
             // Ровно N ролей, в порядке декларации.
             prop_assert_eq!(set.len(), table.entries().len(), "потеряна/добавлена роль");
@@ -549,9 +498,7 @@ fn resolve_named_set_is_total_and_emits_valid_hex_for_any_valid_config() {
             // допустимы только явно различённые unreachable или unresolved.
             for (name, res) in &set {
                 match res {
-                    Resolved::Failure(failure) => {
-                        valid_srgb_set_failure_repr(failure)?;
-                    }
+                    Resolved::Failure(_) => {}
                     _ => {
                         if let Some(solved) = res.solved() {
                             prop_assert!(
@@ -591,7 +538,7 @@ fn repr(res: &Resolved) -> Result<String, TestCaseError> {
         Resolved::None => Ok("none".to_string()),
         Resolved::GlowIndeterminate(g) => Ok(format!("glow-indeterminate({g:?})")),
         Resolved::Material(m) => Ok(format!("material({},{:.4})", m.tint_hex(), m.alpha())),
-        Resolved::Failure(failure) => valid_srgb_set_failure_repr(failure),
+        Resolved::Failure(failure) => Ok(role_failure_repr(failure)),
         // Новый вариант обязан получить точную проекцию, а не разделить sentinel.
         other => Err(TestCaseError::fail(format!(
             "unrepresented Resolved variant in determinism property: {other:?}"
@@ -608,8 +555,12 @@ fn resolve_named_set_is_deterministic() {
             let t = cfg.compile_named_role_table().expect("валидный конфиг");
             let bg = BgInput::solid(&hex_of(r, g, b)).expect("valid фон");
             let vc = ViewingConditions::srgb();
-            let a = resolve_named_set(&bg, &t, &vc);
-            let b2 = resolve_named_set(&bg, &t, &vc);
+            let a = resolve_named_set(&bg, &t, &vc).map_err(|error| {
+                TestCaseError::fail(format!("первый валидный resolve завершился: {error}"))
+            })?;
+            let b2 = resolve_named_set(&bg, &t, &vc).map_err(|error| {
+                TestCaseError::fail(format!("повторный валидный resolve завершился: {error}"))
+            })?;
             prop_assert_eq!(a.len(), b2.len());
             for ((n1, r1), (n2, r2)) in a.iter().zip(b2.iter()) {
                 prop_assert_eq!(n1, n2, "имена ролей разошлись между прогонами");
@@ -718,7 +669,9 @@ fn hued_brand_label_preserves_family_hue_where_it_has_chroma() {
         |(r, g, b, vc_i)| {
             let vc = vc_of(vc_i);
             let bg = BgInput::solid(&hex_of(r, g, b)).expect("valid фон");
-            let set = resolve_named_set(&bg, &table, &vc);
+            let set = resolve_named_set(&bg, &table, &vc).map_err(|error| {
+                TestCaseError::fail(format!("валидный цветной resolve завершился: {error}"))
+            })?;
             let label = set.iter().find(|(n, _)| n == "brand-label").map(|(_, r)| r);
             match label {
                 Some(Resolved::Color { solved, .. }) => {
@@ -736,9 +689,7 @@ fn hued_brand_label_preserves_family_hue_where_it_has_chroma() {
                         );
                     }
                 }
-                Some(Resolved::Failure(failure)) => {
-                    valid_srgb_set_failure_repr(failure)?;
-                }
+                Some(Resolved::Failure(_)) => {}
                 Some(other) => {
                     return Err(TestCaseError::fail(format!(
                         "brand-label resolved to unexpected shape: {other:?}"

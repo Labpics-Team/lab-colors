@@ -19,6 +19,12 @@ export interface WatchThemeOptions {
   fallback?: string;
   /** Auto-refresh on `style`/`class` attribute changes in the observed subtree. Default `true`. */
   observe?: boolean;
+  /**
+   * Получает отказы observer-обновлений. Явные `refresh()` и `setTheme()`
+   * синхронны и бросают вызывающему. Без обработчика host сообщает об
+   * исключении через `reportError`/своё error-событие.
+   */
+  onError?: (error: unknown) => void;
   /** Mutation-observer root. Defaults to the document element. */
   root?: Node;
   /** Window-like host (for `MutationObserver`). Defaults to `globalThis`. */
@@ -35,8 +41,8 @@ export interface WatchController {
    * `force` re-applies unconditionally. Returns the now-applied result, or the
    * cached one when nothing changed.
    */
-  refresh(force?: boolean): ResolvedTheme | null;
-  /** Switch theme and re-apply. */
+  refresh(force?: boolean): ResolvedTheme;
+  /** Switch theme and re-apply; a rejected candidate keeps the committed theme. */
   setTheme(theme: ThemeName): void;
   /** The background/reference hex last resolved. */
   background(): string;

@@ -314,7 +314,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 message,
             } => {
                 field_str(&mut roles, "kind", "failure");
-                field_str(&mut roles, "category", category);
+                field_str(&mut roles, "category", category.as_str());
                 field_str(&mut roles, "code", code);
                 field_str(&mut roles, "message", message);
             }
@@ -827,7 +827,8 @@ mod tests {
             &labcolors_core::BgInput::solid(background).unwrap(),
             &table,
             &labcolors_core::ViewingConditions::srgb(),
-        );
+        )
+        .expect("valid Glow fixture resolves atomically");
         let labcolors_core::Resolved::Glow(glow) = &resolved[0].1 else {
             panic!("core fixture must resolve to a terminal Glow outcome");
         };
@@ -911,10 +912,10 @@ mod tests {
                     }),
                 },
                 RoleEntry {
-                    role_key: "impossible".to_string(),
+                    role_key: "unresolved".to_string(),
                     outcome: RoleOutcome::Failure {
-                        category: "unsupported",
-                        code: "gamut_unsupported",
+                        category: labcolors_core::RoleFailureCategory::Unresolved,
+                        code: "bounded_search_exhausted",
                         message: "нет цвета: \"предел\"\nвторая строка".to_string(),
                     },
                 },
@@ -963,8 +964,8 @@ mod tests {
                 "\"haloCompositeHex\":\"#13151B\",\"haloAchievedDj\":2.373123785729128,",
                 "\"coreCompositeHex\":\"#15171B\",\"coreAchievedDj\":3.235504076619437,",
                 "\"achievedDj\":2.373123785729128,\"degraded\":false,\"css\":\"{halo}\"}},",
-                "\"impossible\":{{\"cssVar\":\"--lab-impossible\",\"kind\":\"failure\",",
-                "\"category\":\"unsupported\",\"code\":\"gamut_unsupported\",",
+                "\"unresolved\":{{\"cssVar\":\"--lab-unresolved\",\"kind\":\"failure\",",
+                "\"category\":\"unresolved\",\"code\":\"bounded_search_exhausted\",",
                 "\"message\":\"нет цвета: \\\"предел\\\"\\nвторая строка\"}}",
                 "}}}}"
             ),
@@ -985,11 +986,11 @@ mod tests {
 
         // Failure is one terminal wire shape. It preserves the core-owned
         // category/code, emits no CSS value, and carries no superseded alias.
-        let failure = &projected["roles"]["impossible"];
+        let failure = &projected["roles"]["unresolved"];
         assert_eq!(failure["kind"], "failure");
-        assert_eq!(failure["category"], "unsupported");
-        assert_eq!(failure["code"], "gamut_unsupported");
-        assert!(projected["vars"].get("--lab-impossible").is_none());
+        assert_eq!(failure["category"], "unresolved");
+        assert_eq!(failure["code"], "bounded_search_exhausted");
+        assert!(projected["vars"].get("--lab-unresolved").is_none());
         let mut failure_fields = failure
             .as_object()
             .expect("failure role is an object")

@@ -86,10 +86,12 @@ export interface NoneRole {
   readonly cssVar: string;
 }
 
-/** Semantic class of a terminal role failure. Only `unreachable` proves absence of a solution in the declared domain. */
-export type FailureCategory = "unreachable" | "unresolved" | "rejected" | "unsupported";
+/** Admitted role-local failure. Only `unreachable` proves absence of a solution in the declared domain. */
+export type FailureCategory =
+  | "unreachable"
+  | "unresolved";
 
-/** A typed terminal role failure. Internal failures reject the whole call instead. */
+/** A typed role-local failure. Rejected, unsupported and internal failures reject the whole call instead. */
 export interface FailureRole {
   readonly kind: "failure";
   readonly cssVar: string;
@@ -624,12 +626,11 @@ impl LabColors {
     /// Resolve every role for `bgHex` under `theme` (`"light" | "dark" |
     /// "light-ic" | "dark-ic"`).
     ///
-    /// Returns a `ResolvedTheme` object. A per-role solve failure is part of a
-    /// successful result (`kind: "failure"` plus category/code); only whole-call
-    /// failures reject (no config loaded yet as `config_required`, invalid hex,
-    /// unknown theme, a core invariant failure, and the by-construction-
-    /// impossible oklch serialisation failure as `internal_error`) — as a
-    /// structured `"<code>: <message>"` error, never an unwound panic.
+    /// Возвращает полный `ResolvedTheme`. Локальный `unreachable`/`unresolved`
+    /// остаётся типизированными данными роли. Rejected/unsupported/internal
+    /// отказы набора отклоняются атомарно: частичной темы или CSS не бывает.
+    /// Ошибки границы — структурная форма `"<code>: <message>"`, Rust-паника
+    /// в JavaScript не разматывается.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
         let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
@@ -831,6 +832,26 @@ mod native_contract_tests {
         assert!(types.contains("hue?: LadderSource"));
         assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\" | \"none\""));
         assert!(types.contains("readonly roles: ReadonlyArray"));
+    }
+
+    #[test]
+    fn generated_failure_category_equals_the_admitted_core_menu() {
+        let declared = string_union(custom_types(), "FailureCategory");
+        let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
+        let expected = [
+            labcolors_core::RoleFailureCategory::Unreachable.as_str(),
+            labcolors_core::RoleFailureCategory::Unresolved.as_str(),
+        ];
+        let expected_set: std::collections::HashSet<&str> = expected.into_iter().collect();
+        assert_eq!(
+            declared.len(),
+            declared_set.len(),
+            "duplicate TS failure literal"
+        );
+        assert_eq!(
+            declared_set, expected_set,
+            "TS role failure menu must equal core admission"
+        );
     }
 
     #[test]

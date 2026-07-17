@@ -88,11 +88,12 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
 ## API
 
 - Ядро: `ThemeConfig::compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError>`
-  (semantic.rs `NamedRoleTable`); `resolve_named_set(bg, &table, vc)` резолвит
-  именованную таблицу той же физикой, что и встроенную `resolve_set`.
-- WASM: `engine.load_config(json) -> fingerprint`; сигнатура
-  `resolve_theme(bg_hex, theme)` НЕ меняется — конфиг = состояние движка,
-  кэш по fingerprint.
+  (semantic.rs `NamedRoleTable`); `resolve_named_set(bg, &table, vc) ->
+  Result<Vec<(String, Resolved)>, ResolveSetError>` атомарно допускает весь
+  именованный набор. В `Ok` локальными могут быть только `unreachable` и
+  `unresolved`; остальные причины возвращают `Err` без частичного набора.
+- WASM: `engine.load_config(json) -> fingerprint`; конфиг является состоянием
+  движка, а кэш успешных полных тем разделён по fingerprint. Ошибки не кэшируются.
 - Ручки политики подтона (`target_mp`, `hue_stiffness`, `ratio`) и сентиментов
   (`hardness`, `chroma_fraction`) экспонируются конфигом с сегодняшними
   значениями labui как дефолтами; каждая остаётся SSOT-TRACKED в науч-реестре.

@@ -91,7 +91,8 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
     for (vc, _vc_name) in vcs {
         for bg_hex in bgs {
             let bg = BgInput::solid(bg_hex).unwrap();
-            let named = resolve_named_set(&bg, &table, &vc);
+            let named = resolve_named_set(&bg, &table, &vc)
+                .expect("валидная labui-фикстура обязана резолвиться");
             let default_map = default_by_key(&bg, &vc);
 
             // Сравниваем ТОЛЬКО 19 сегодняшних ролей (акцентные — новые, у них нет
@@ -152,7 +153,8 @@ fn byte_identity_test_bites_on_mutated_recipe() {
     for (vc, _n) in vcs {
         for bg_hex in bgs {
             let bg = BgInput::solid(bg_hex).unwrap();
-            let named = resolve_named_set(&bg, &mutated, &vc);
+            let named = resolve_named_set(&bg, &mutated, &vc)
+                .expect("валидный recipe-мутант обязан резолвиться");
             let default_map = default_by_key(&bg, &vc);
             for (name, res) in &named {
                 if name == "label-primary" {
@@ -1162,7 +1164,8 @@ fn ladder_emits_translucent_with_composite_over_bg() {
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#FFFFFF").unwrap();
     let vc = ViewingConditions::srgb();
-    let set = resolve_named_set(&bg, &table, &vc);
+    let set =
+        resolve_named_set(&bg, &table, &vc).expect("валидная ladder-фикстура обязана резолвиться");
 
     let (_, res) = set
         .iter()
@@ -1210,7 +1213,8 @@ fn ladder_bites_on_position_mutation() {
     }
     let table = cfg.compile_named_role_table().unwrap();
     let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+        .expect("валидная ladder-фикстура обязана резолвиться");
     let (_, res) = set
         .iter()
         .find(|(n, _)| n == "fill-brand-secondary")
@@ -1233,7 +1237,8 @@ fn ladder_bites_on_family_source_mutation() {
     let bg = BgInput::solid("#FFFFFF").unwrap();
     let vc = ViewingConditions::srgb();
     let base_tint = {
-        let set = resolve_named_set(&bg, &base, &vc);
+        let set = resolve_named_set(&bg, &base, &vc)
+            .expect("валидная базовая ladder-фикстура обязана резолвиться");
         let (_, res) = set
             .iter()
             .find(|(n, _)| n == "fill-danger-primary")
@@ -1253,7 +1258,8 @@ fn ladder_bites_on_family_source_mutation() {
     }
     let mutated = cfg.compile_named_role_table().unwrap();
     let mutated_tint = {
-        let set = resolve_named_set(&bg, &mutated, &vc);
+        let set = resolve_named_set(&bg, &mutated, &vc)
+            .expect("валидный family-мутант обязан резолвиться");
         let (_, res) = set
             .iter()
             .find(|(n, _)| n == "fill-danger-primary")
@@ -1302,7 +1308,8 @@ fn alpha_analog_recipe_inverts_and_bites_on_alpha() {
             },
         ));
         let table = cfg.compile_named_role_table().unwrap();
-        let set = resolve_named_set(&bg, &table, &vc);
+        let set =
+            resolve_named_set(&bg, &table, &vc).expect("валидный alpha-analog обязан резолвиться");
         let (_, res) = set.iter().find(|(n, _)| n == "probe-tinted").unwrap();
         let r = res.translucent().unwrap();
         (
@@ -1510,8 +1517,10 @@ fn representative_roles_match_stub_values_light_and_dark() {
     ];
 
     for (role, want_light, want_dark) in cases {
-        let set_l = resolve_named_set(&bg_light, &table, &ViewingConditions::srgb());
-        let set_d = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
+        let set_l = resolve_named_set(&bg_light, &table, &ViewingConditions::srgb())
+            .expect("валидная светлая fixture обязана резолвиться");
+        let set_d = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround())
+            .expect("валидная тёмная fixture обязана резолвиться");
         let got_l = &set_l.iter().find(|(n, _)| n == role).unwrap().1;
         let got_d = &set_d.iter().find(|(n, _)| n == role).unwrap().1;
         assert_matches_stub(role, "light", got_l, want_light);
@@ -1536,7 +1545,8 @@ fn value_test_bites_on_alpha_mutation() {
     }
     let table = cfg.compile_named_role_table().unwrap();
     let bg_dark = BgInput::solid("#101012").unwrap();
-    let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround());
+    let set = resolve_named_set(&bg_dark, &table, &ViewingConditions::dim_surround())
+        .expect("валидная alpha-mutation fixture обязана резолвиться");
     let (got_rgb, got_alpha) = translucent_to_parts(
         &set.iter()
             .find(|(n, _)| n == "fx-skeleton-highlight")
@@ -1564,7 +1574,8 @@ fn pair_side_is_family_stable_across_themes_at_resolve_level() {
         &bg_dark,
         &table,
         &ViewingConditions::dim_surround_high_contrast(),
-    );
+    )
+    .expect("валидная pair-side fixture обязана резолвиться");
     let (_, res) = set
         .iter()
         .find(|(n, _)| n == "badge-fill-brand")
@@ -2130,7 +2141,8 @@ fn achromatic_hue_sources_are_handled_honestly() {
         &BgInput::solid("#FFFFFF").unwrap(),
         &table,
         &crate::spaces::vc::ViewingConditions::srgb(),
-    );
+    )
+    .expect("валидная ахроматическая brand-фикстура обязана резолвиться");
     // `fill-danger-primary` остаётся Ladder (сентимент-тинт под альфой) — на нём
     // и проверяем «серый бренд → сырой якорь семейства». `label-danger-primary`
     // после ратификации ch5c (M1) — цветной TextAnchor (Color), не Translucent.
@@ -2178,7 +2190,8 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
     let vc = ViewingConditions::srgb();
     let bg_hex = "#FFFFFF"; // светлый якорь паспорта — фон резолва светлой темы
     let bg = BgInput::solid(bg_hex).unwrap();
-    let set = resolve_named_set(&bg, &table, &vc);
+    let set =
+        resolve_named_set(&bg, &table, &vc).expect("валидный shadow-stack обязан резолвиться");
 
     let stack = [
         "fx-shadow-minor",
@@ -2236,7 +2249,8 @@ fn glow_roles_resolve_screen_layers() {
     // (а) тёмная база: полноценное свечение бренда.
     let bg_dark = BgInput::solid("#101012").unwrap();
     let vc_dark = ViewingConditions::dim_surround();
-    let set = resolve_named_set(&bg_dark, &table, &vc_dark);
+    let set = resolve_named_set(&bg_dark, &table, &vc_dark)
+        .expect("валидный Glow-контракт обязан резолвиться");
     let (_, res) = set
         .iter()
         .find(|(n, _)| n == "fx-glow-brand")
@@ -2264,7 +2278,8 @@ fn glow_roles_resolve_screen_layers() {
 
     // (б) белое свечение на белом — честная деградация.
     let bg_white = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg_white, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg_white, &table, &ViewingConditions::srgb())
+        .expect("валидный Glow-контракт обязан резолвиться");
     let (_, res) = set
         .iter()
         .find(|(n, _)| n == "fx-glow-neutral")
@@ -2414,6 +2429,7 @@ fn resolve_role_recipe(
         .expect("material-конфиг компилируется");
     let bg = BgInput::solid(bg_hex).unwrap();
     resolve_named_set(&bg, &table, vc)
+        .expect("валидный material-контракт обязан резолвиться")
         .into_iter()
         .find(|(n, _)| n == role)
         .map(|(_, r)| r)

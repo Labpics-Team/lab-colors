@@ -21,8 +21,8 @@ use labcolors_core::BgInput;
 use labcolors_core::{
     Brand, Floor, LadderPosition, LadderSource, NamedRoleTable, NeutralAnchors, NeutralConfig,
     NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe, SentimentCategory,
-    SentimentsConfig, SolveFailureCategory, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset,
-    ViewingConditions, oklch_css_from_hex, resolve_named_set,
+    SentimentsConfig, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions,
+    oklch_css_from_hex, resolve_named_set,
 };
 
 /// `ThemeAnchors` с одинаковыми якорями во всех четырёх слотах — вход не о
@@ -120,7 +120,8 @@ fn assert_table_is_total(table: &NamedRoleTable, label: &str) -> usize {
     for bg_hex in EXTREME_BGS {
         let bg = BgInput::solid(bg_hex).expect("экстремальный фон валиден");
         for vc in all_vcs() {
-            let set = resolve_named_set(&bg, table, &vc);
+            let set = resolve_named_set(&bg, table, &vc)
+                .unwrap_or_else(|error| panic!("{label}/{bg_hex}: whole-set failure: {error}"));
             for (name, resolved) in &set {
                 if assert_resolved_is_finite_and_emittable(resolved, label, name, bg_hex) {
                     reachable += 1;
@@ -184,17 +185,15 @@ fn assert_resolved_is_finite_and_emittable(
         }
         Resolved::None => false,
         Resolved::Failure(failure) => {
-            let boundary = failure.boundary().unwrap_or_else(|| {
-                panic!("{label}/{name}@{bg}: internal solve invariant leaked: {failure}")
-            });
             assert!(
                 matches!(
-                    boundary.category(),
-                    SolveFailureCategory::Unreachable | SolveFailureCategory::Unresolved
+                    failure.category(),
+                    labcolors_core::RoleFailureCategory::Unreachable
+                        | labcolors_core::RoleFailureCategory::Unresolved
                 ),
                 "{label}/{name}@{bg}: valid resolve returned {}/{}: {failure}",
-                boundary.category().as_str(),
-                boundary.code()
+                failure.category().as_str(),
+                failure.code()
             );
             false
         }
@@ -283,7 +282,8 @@ fn zero_role_config_is_meaningful_not_panic() {
             assert!(table.entries().is_empty(), "нет ролей ⇒ пустая таблица");
             // Тотальность на пустом контракте: резолв не паникует и даёт пусто.
             let bg = BgInput::solid("#FFFFFF").unwrap();
-            let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+            let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+                .expect("валидная пустая таблица обязана дать пустой набор");
             assert!(set.is_empty(), "пустой контракт ⇒ пустой набор");
         }
         Err(_) => { /* честный отказ — тоже валидный, не-паникующий исход */

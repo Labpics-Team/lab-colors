@@ -380,7 +380,7 @@ mod tests {
             let bg = BgInput::solid(&fill_hex).unwrap();
             let table = RoleTable::default();
             let label = match resolve(&bg, Role::LabelPrimary, &table, &ViewingConditions::srgb()) {
-                Resolved::Color { solved, .. } => solved,
+                Ok(Resolved::Color { solved, .. }) => solved,
                 other => panic!("{hex}: лейбл обязан решиться цветом, получено {other:?}"),
             };
             // Светлая полярность: лейбл светлее заливки.

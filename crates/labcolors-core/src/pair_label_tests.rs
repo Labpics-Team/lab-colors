@@ -135,7 +135,8 @@ fn shipped_tinted_badge_label_clears_ui_floor_on_tint_all_families_and_themes() 
     let table = labui_reference().compile_named_role_table().unwrap();
     for (tname, bg_hex, vc) in themes() {
         let bg = BgInput::solid(bg_hex).unwrap();
-        let set = resolve_named_set(&bg, &table, &vc);
+        let set = resolve_named_set(&bg, &table, &vc)
+            .expect("валидный labui-контракт обязан резолвиться");
         for (fam, _) in families() {
             let r = ratio_on_tint(&set, &format!("label-{fam}-primary"), fam);
             assert!(
@@ -155,7 +156,8 @@ fn pair_label_clears_ui_floor_against_tinted_surface_all_families_and_themes() {
     let table = labui_with_badge_labels();
     for (tname, bg_hex, vc) in themes() {
         let bg = BgInput::solid(bg_hex).unwrap();
-        let set = resolve_named_set(&bg, &table, &vc);
+        let set = resolve_named_set(&bg, &table, &vc)
+            .expect("валидный PairLabel-контракт обязан резолвиться");
         for (fam, _) in families() {
             let role = format!("badge-label-{fam}");
             // Решается цветом (не SolveFailure/None) и держит пол на тинте.
@@ -175,7 +177,8 @@ fn pair_label_clears_ui_floor_against_tinted_surface_all_families_and_themes() {
 fn pair_label_stays_hued_not_near_black() {
     let table = labui_with_badge_labels();
     let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+        .expect("валидный PairLabel-контракт обязан резолвиться");
     for (fam, _) in families() {
         let role = format!("badge-label-{fam}");
         let res = &set.iter().find(|(n, _)| n == &role).unwrap().1;
@@ -214,7 +217,8 @@ fn pair_label_beats_page_resolved_label_on_failing_families() {
     let floor = ui_floor();
     let table = labui_with_badge_labels();
     let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+        .expect("валидный PairLabel-контракт обязан резолвиться");
 
     // warning/success — семьи, где страничный `label-*-tertiary` проваливает 3:1
     // на собственном тинте (замер task #29: warning 2.76, success 2.88).
@@ -300,6 +304,7 @@ fn migration_backgrounds() -> [&'static str; 6] {
 #[test]
 fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
     let table = labui_with_badge_labels();
+    let mut resolved_hits = 0usize;
     for (tname, _, vc) in themes() {
         for bg_hex in migration_backgrounds() {
             let bg = BgInput::solid(bg_hex).unwrap();
@@ -323,9 +328,23 @@ fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
                     "[{tname}/{bg_hex}] `{role}`: production-граф обязан быть \
                      идентичен замороженному legacy oracle по всем полям"
                 );
-                if let (Resolved::Color { solved: p, .. }, Resolved::Color { solved: o, .. }) =
-                    (&production, &oracle)
+                for outcome in [&production, &oracle] {
+                    assert!(
+                        !matches!(
+                            outcome,
+                            Err(SolveFailure::InvalidInput(_)
+                                | SolveFailure::GamutUnsupported
+                                | SolveFailure::InternalInvariant(_))
+                        ),
+                        "[{tname}/{bg_hex}] `{role}`: a valid sRGB fixture produced a non-physical error: {outcome:?}"
+                    );
+                }
+                if let (
+                    Ok(Resolved::Color { solved: p, .. }),
+                    Ok(Resolved::Color { solved: o, .. }),
+                ) = (&production, &oracle)
                 {
+                    resolved_hits += 1;
                     assert_eq!(
                         p.hex(),
                         o.hex(),
@@ -335,6 +354,10 @@ fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
             }
         }
     }
+    assert!(
+        resolved_hits > 0,
+        "differential matrix must exercise successful colour resolution"
+    );
 }
 
 /// Публичные исходы невалидной альфы (RoleSpec публичен — спека, собранная в
@@ -355,7 +378,7 @@ fn migration_preserves_public_invalid_alpha_outcomes_exactly() {
             "публичный тип/текст отказа по α={bad_alpha} обязан быть заморожен"
         );
         assert!(
-            matches!(production, Resolved::Failure(SolveFailure::InvalidInput(_))),
+            matches!(production, Err(SolveFailure::InvalidInput(_))),
             "невалидная α обязана давать типизированный InvalidInput, не панику/кламп"
         );
     }
@@ -378,7 +401,8 @@ fn emitted_pair_fill_differs_from_the_pair_label_surface() {
         .compile_named_role_table()
         .expect("labui + pair-fill компилируется");
     let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb());
+    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
+        .expect("валидный PairFill-контракт обязан резолвиться");
     for (fam, _) in families() {
         let pair_fill_composite = set
             .iter()
