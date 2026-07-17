@@ -556,12 +556,14 @@ mod tests {
                 );
             }
         }
-        // Invalid foreground hex surfaces a structured error, not a panic.
-        assert!(
-            Engine::new()
-                .recheck("#FFFFFF", &["nothex".to_string()], "light")
-                .is_err()
-        );
+        // Invalid foreground hex surfaces a structured error, not a panic —
+        // проверяется С ЗАГРУЖЕННЫМ конфигом, иначе первым сработал бы
+        // ConfigRequired и hex-путь остался бы вакуумным (C5.1: recheck
+        // требует словарь тем).
+        assert!(matches!(
+            engine_with_labui().recheck("#FFFFFF", &["nothex".to_string()], "light"),
+            Err(BindingError::InvalidBackground { .. })
+        ));
     }
 
     #[test]
@@ -902,23 +904,26 @@ mod tests {
         assert_eq!(day.roles, day2.roles, "слот в ключе кэша — не физика");
     }
 
-    /// Пустой словарь тем: конфиг загружается, но ЛЮБОЙ ключ — типизированный
-    /// UnknownTheme (резолвить нечем; молчаливого дефолта нет).
+    /// Пустой словарь тем — отказ НА ЗАГРУЗКЕ (симметрия с EmptyContract у
+    /// ролей): без единой темы resolve/recheck тотально неработоспособны, и
+    /// поздний unknown_theme был бы неотличим от опечатки. Прежнее состояние
+    /// движка не тронуто (атомарность).
     #[test]
-    fn empty_theme_dictionary_rejects_every_key() {
+    fn empty_theme_dictionary_is_rejected_at_load() {
         let mut v: serde_json::Value = serde_json::from_str(&labui_json()).unwrap();
         v["themes"] = serde_json::json!([]);
-        let mut engine = Engine::new();
-        engine.load_config(&v.to_string()).unwrap();
-        for key in ["light", "dark", "anything"] {
-            assert!(
-                matches!(
-                    engine.resolve_theme("#FFFFFF", key),
-                    Err(BindingError::UnknownTheme { .. })
-                ),
-                "пустой словарь: {key} обязан быть UnknownTheme"
-            );
+        let mut engine = engine_with_labui();
+        match engine.load_config(&v.to_string()) {
+            Err(BindingError::InvalidConfig { reason }) => {
+                assert!(
+                    reason.contains("словарь тем пуст"),
+                    "причина обязана называть пустой словарь тем, got: {reason}"
+                );
+            }
+            other => panic!("пустой словарь тем обязан отклоняться на загрузке, got {other:?}"),
         }
+        // Прежний конфиг жив: resolve по его словарю работает.
+        assert!(engine.resolve_theme("#FFFFFF", "light").is_ok());
     }
 
     /// C5.1: recheck-путь требует загруженный конфиг НАРАВНЕ с resolve —

@@ -39,7 +39,6 @@ use crate::error::BindingError;
 const TS_RESULT_TYPES: &'static str = r##"
 import type { Wcag22CriterionV1 } from "../wcag22.js";
 
-/** The stable theme contract. `-ic` variants apply increased contrast; all four spellings are fully supported. */
 /** Ключ темы из словаря `themes` загруженного конфига (клиентское имя). */
 export type ThemeName = string;
 

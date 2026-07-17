@@ -554,8 +554,9 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     }
 
     // Shorthand / missing-`#` foregrounds are accepted, identical to canonical —
-    // the same hex contract `resolveTheme` honours (`#123` == `#112233`). recheck
-    // is stateless, so no config is needed for this half.
+    // the same hex contract `resolveTheme` honours (`#123` == `#112233`).
+    // C5.1: recheck идёт через словарь тем загруженного конфига — engine здесь
+    // уже несёт labui-паспорт.
     let canonical = engine
         .recheck_contrast(bg, vec!["#112233".to_string()], "light")
         .expect("canonical rechecks");
