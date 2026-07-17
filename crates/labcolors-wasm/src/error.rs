@@ -61,10 +61,12 @@ pub enum BindingError {
         reason: String,
     },
 
-    /// The theme string is not one of the public spellings.
-    #[error("unknown theme: '{requested}' (expected light | dark | light-ic | dark-ic)")]
+    /// The theme key is absent from the loaded config's `themes` dictionary
+    /// (в частности, ЛЮБОЙ ключ при пустом словаре). Словарь тем принадлежит
+    /// клиенту; встроенных имён у движка нет.
+    #[error("unknown theme: '{requested}' (не объявлена в словаре themes конфига)")]
     UnknownTheme {
-        /// The unrecognised theme string the caller passed.
+        /// The unrecognised theme key the caller passed.
         requested: String,
     },
 

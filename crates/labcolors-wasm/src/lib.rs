@@ -22,7 +22,6 @@ mod dto;
 mod engine;
 mod error;
 mod projection;
-mod theme;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -41,7 +40,8 @@ const TS_RESULT_TYPES: &'static str = r##"
 import type { Wcag22CriterionV1 } from "../wcag22.js";
 
 /** The stable theme contract. `-ic` variants apply increased contrast; all four spellings are fully supported. */
-export type ThemeName = "light" | "dark" | "light-ic" | "dark-ic";
+/** Ключ темы из словаря `themes` загруженного конфига (клиентское имя). */
+export type ThemeName = string;
 
 /** A solved colour and the contrasts it actually achieves. */
 export interface SolvedColor {
@@ -623,8 +623,9 @@ impl LabColors {
         }
     }
 
-    /// Resolve every role for `bgHex` under `theme` (`"light" | "dark" |
-    /// "light-ic" | "dark-ic"`).
+    /// Resolve every role for `bgHex` under `theme` — КЛИЕНТСКОГО ключа из
+    /// словаря `themes` загруженного конфига (канонический путь: ключ →
+    /// `VcPreset` → viewing conditions). Ключ вне словаря — `unknown_theme`.
     ///
     /// Возвращает полный `ResolvedTheme`. Локальный `unreachable`/`unresolved`
     /// остаётся типизированными данными роли. Rejected/unsupported/internal
@@ -633,7 +634,6 @@ impl LabColors {
     /// в JavaScript не разматывается.
     #[wasm_bindgen(js_name = resolveTheme)]
     pub fn resolve_theme(&self, bg_hex: &str, theme: &str) -> Result<JsResolvedTheme, JsError> {
-        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         let resolved = self
             .inner
             .resolve_theme(bg_hex, theme)
@@ -677,6 +677,10 @@ impl LabColors {
     #[wasm_bindgen(js_name = loadConfig)]
     pub fn load_config(&mut self, json: &str) -> Result<String, JsError> {
         let fp = self.inner.load_config(json).map_err(to_js_error)?;
+        // Успешный atomic reload чистит и projection-memo: следующая проекция
+        // пересобирается для нового контракта. Неудачный reload возвращается
+        // выше ДО этой строки — прежние state/cache/memo не тронуты.
+        *self.proj_memo.borrow_mut() = None;
         Ok(format!("{fp:016x}"))
     }
 
@@ -698,7 +702,6 @@ impl LabColors {
         fg_hexes: Vec<String>,
         theme: &str,
     ) -> Result<Vec<f64>, JsError> {
-        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         self.inner
             .recheck(bg_hex, &fg_hexes, theme)
             .map_err(to_js_error)
@@ -752,7 +755,6 @@ impl LabColors {
         fg_hexes: Vec<String>,
         theme: &str,
     ) -> Result<Vec<f64>, JsError> {
-        let theme = crate::theme::parse_theme(theme).map_err(to_js_error)?;
         self.inner
             .recheck_multi(&bg_hexes, &fg_hexes, theme)
             .map_err(to_js_error)

@@ -48,8 +48,8 @@ use serde::{Deserialize, Serialize};
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, Theme, ViewingConditions,
-    fnv1a_32, recheck_against, solve,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, ViewingConditions, fnv1a_32,
+    recheck_against, solve,
 };
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
@@ -71,12 +71,21 @@ pub fn core_version() -> &'static str {
 // словарём тем ("light" | "dark" | "light-ic" | "dark-ic").
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Условия просмотра для kebab-ключа темы. Паникует на неизвестной теме —
-/// ключи в паке контролируются генератором, внешний вход сюда не попадает.
+/// Условия просмотра для kebab-ключа темы — ЛОКАЛЬНЫЙ fixture-словарь пака
+/// (C5.1: канонический словарь тем принадлежит клиентскому конфигу; ядро
+/// встроенных имён не несёт). Ключи совпадают со словарём labui-паспорта.
+/// Паникует на неизвестной теме — ключи в паке контролируются генератором,
+/// внешний вход сюда не попадает.
 fn vc_for_theme(theme_key: &str) -> ViewingConditions {
-    Theme::parse(theme_key)
-        .expect("ключ темы в паке всегда канонический")
-        .viewing_conditions()
+    use labcolors_core::VcPreset;
+    let preset = match theme_key {
+        "light" => VcPreset::Srgb,
+        "dark" => VcPreset::Dim,
+        "light-ic" => VcPreset::SrgbIc,
+        "dark-ic" => VcPreset::DimIc,
+        other => panic!("ключ темы в паке всегда канонический, получено: {other}"),
+    };
+    preset.viewing_conditions()
 }
 
 /// Все четыре канонические темы в стабильном порядке.

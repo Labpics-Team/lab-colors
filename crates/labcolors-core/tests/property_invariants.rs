@@ -32,11 +32,11 @@
 //! как characterization реального поведения (не одобрение — фиксация факта для владельца).
 
 use labcolors_core::{
-    BgInput, Brand, DefectContext, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource,
-    NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleFailure,
-    RoleRecipe, SentimentCategory, SentimentsConfig, Theme, ThemeAnchors, ThemeConfig,
-    ThemesConfig, VcPreset, ViewingConditions, muddiness_in_context, muddiness_oklch,
-    oklch_from_hex, p3_from_hex, resolve_named_set, srgb_encoded_from_hex,
+    BgInput, Brand, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource, NeutralAnchors,
+    NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleFailure, RoleRecipe,
+    SentimentCategory, SentimentsConfig, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset,
+    ViewingConditions, muddiness_oklch, oklch_from_hex, p3_from_hex, resolve_named_set,
+    srgb_encoded_from_hex,
 };
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -198,28 +198,6 @@ fn muddiness_strictly_increases_in_chroma_in_the_steep_warm_band() {
             Ok(())
         },
     );
-}
-
-/// Закрытие ДЫРЫ, найденной mutation-прогоном (survivor `cleanliness.rs:541:35
-/// replace + with * in muddiness_in_context`): local-context path must calculate
-/// Euclidean Oklab chroma `sqrt(a²+b²)`. The `a²*b²` mutant collapses these
-/// fixtures below C0 and moves the frozen proxy from roughly 0.5-0.7 to ~0.03.
-/// The `> 0.3` boundary is mutation characterization, not a human verdict.
-/// Заземлено замером: #6B6B2E=0.651, #8A7A2E=0.622, #7A5A20=0.666, #B8860B=0.506.
-#[test]
-fn muddiness_in_context_uses_euclidean_oklab_chroma() {
-    let ctx = DefectContext {
-        bg_hex: "#FFFFFF",
-        theme: Theme::Light,
-    };
-    for hex in ["#6B6B2E", "#8A7A2E", "#7A5A20", "#B8860B"] {
-        let mud = muddiness_in_context(hex, ctx).unwrap();
-        assert!(
-            mud > 0.3,
-            "fixture {hex} proxy must remain > 0.3 with Euclidean sqrt(a²+b²); \
-             collapsed chroma would approach zero. Got {mud}"
-        );
-    }
 }
 
 /// Characterization: for a cool hue (h=270°, sin=-1), the compatibility

@@ -1,5 +1,5 @@
-//! A contract cache for resolved theme sets, keyed by `(bgHex, theme, table
-//! fingerprint)`.
+//! A contract cache for resolved theme sets, keyed by `(bgHex, theme-binding
+//! slot, table fingerprint)`.
 //!
 //! Re-solving the same background under the same theme is the common case while
 //! a tool tweaks a colour, and a resolve sweep is real work. The cache returns
@@ -20,8 +20,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use crate::theme::Theme;
-
 /// A stable, arbitrary fingerprint used by the cache's own unit tests as a
 /// single key namespace. Production keys always carry a real config fingerprint
 /// (an FNV-1a over the canonical DTO, computed in the engine); this constant
@@ -30,21 +28,27 @@ use crate::theme::Theme;
 pub(crate) const DEFAULT_TABLE_FINGERPRINT: u64 = 0;
 
 /// The full key of a cached resolve: every input that can change the output.
+///
+/// Тема входит НОМЕРОМ слота в словаре тем загруженного конфига (порядок
+/// объявления), не строкой: ключ не аллоцирует и не зависит от длины
+/// клиентского имени. Отпечаток конфига разводит пространства словарей, так
+/// что слот всегда читается в правильном словаре.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CacheKey {
     bg_hex: String,
-    theme: &'static str,
+    theme_slot: u32,
     table_fingerprint: u64,
 }
 
 impl CacheKey {
-    /// Build a key from a normalised background hex, a theme, and a table
-    /// fingerprint. The hex is normalised by the caller (uppercased, `#`-led)
-    /// so `#fff` and `#FFFFFF` never split the cache once expanded upstream.
-    pub fn new(bg_hex: String, theme: Theme, table_fingerprint: u64) -> Self {
+    /// Build a key from a normalised background hex, a theme-binding slot, and
+    /// a table fingerprint. The hex is normalised by the caller (uppercased,
+    /// `#`-led) so `#fff` and `#FFFFFF` never split the cache once expanded
+    /// upstream.
+    pub fn new(bg_hex: String, theme_slot: u32, table_fingerprint: u64) -> Self {
         Self {
             bg_hex,
-            theme: theme.key(),
+            theme_slot,
             table_fingerprint,
         }
     }
@@ -152,7 +156,7 @@ mod tests {
     fn failed_build_is_not_cached_and_a_later_success_is_shared() {
         let cache: ContractCache<Rc<u32>> = ContractCache::new(8);
         let calls = Cell::new(0);
-        let key = || CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
+        let key = || CacheKey::new("#FFFFFF".into(), 0, DEFAULT_TABLE_FINGERPRINT);
 
         let failed: Result<Rc<u32>, &'static str> = cache.get_or_try_insert_with(key(), || {
             calls.set(calls.get() + 1);
@@ -179,8 +183,8 @@ mod tests {
     #[test]
     fn failed_miss_at_capacity_preserves_every_successful_entry() {
         let cache: ContractCache<Rc<u32>> = ContractCache::new(2);
-        let first_key = CacheKey::new("#000000".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
-        let second_key = CacheKey::new("#111111".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
+        let first_key = CacheKey::new("#000000".into(), 0, DEFAULT_TABLE_FINGERPRINT);
+        let second_key = CacheKey::new("#111111".into(), 0, DEFAULT_TABLE_FINGERPRINT);
         let first = cache
             .get_or_try_insert_with(first_key.clone(), || Ok::<_, &'static str>(Rc::new(1)))
             .unwrap();
@@ -190,7 +194,7 @@ mod tests {
         assert_eq!(cache.len(), 2);
 
         let failed: Result<Rc<u32>, &'static str> = cache.get_or_try_insert_with(
-            CacheKey::new("#222222".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+            CacheKey::new("#222222".into(), 0, DEFAULT_TABLE_FINGERPRINT),
             || Err("injected failure"),
         );
         assert_eq!(failed, Err("injected failure"));
@@ -208,7 +212,7 @@ mod tests {
     fn builds_once_then_serves_from_cache() {
         let cache: ContractCache<u32> = ContractCache::new(8);
         let calls = Cell::new(0);
-        let key = || CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT);
+        let key = || CacheKey::new("#FFFFFF".into(), 0, DEFAULT_TABLE_FINGERPRINT);
 
         let first = cache
             .get_or_try_insert_with(key(), || {
@@ -233,13 +237,13 @@ mod tests {
         let cache: ContractCache<&str> = ContractCache::new(8);
         let light = cache
             .get_or_try_insert_with(
-                CacheKey::new("#FFFFFF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+                CacheKey::new("#FFFFFF".into(), 0, DEFAULT_TABLE_FINGERPRINT),
                 || Ok::<_, ()>("light"),
             )
             .unwrap();
         let dark = cache
             .get_or_try_insert_with(
-                CacheKey::new("#FFFFFF".into(), Theme::Dark, DEFAULT_TABLE_FINGERPRINT),
+                CacheKey::new("#FFFFFF".into(), 1, DEFAULT_TABLE_FINGERPRINT),
                 || Ok::<_, ()>("dark"),
             )
             .unwrap();
@@ -254,11 +258,7 @@ mod tests {
         for i in 0..2 {
             cache
                 .get_or_try_insert_with(
-                    CacheKey::new(
-                        format!("#00000{i}"),
-                        Theme::Light,
-                        DEFAULT_TABLE_FINGERPRINT,
-                    ),
+                    CacheKey::new(format!("#00000{i}"), 0, DEFAULT_TABLE_FINGERPRINT),
                     || Ok::<_, ()>(i),
                 )
                 .unwrap();
@@ -267,7 +267,7 @@ mod tests {
         // The third distinct key trips the cap → wholesale clear, then insert.
         cache
             .get_or_try_insert_with(
-                CacheKey::new("#0000FF".into(), Theme::Light, DEFAULT_TABLE_FINGERPRINT),
+                CacheKey::new("#0000FF".into(), 0, DEFAULT_TABLE_FINGERPRINT),
                 || Ok::<_, ()>(3),
             )
             .unwrap();
@@ -289,11 +289,7 @@ mod reentrancy_tests {
     #[should_panic(expected = "реентерабельный build")]
     fn same_key_reentrant_build_panics_deterministically() {
         let cache: ContractCache<u32> = ContractCache::new(4);
-        let key = CacheKey::new(
-            "#FFFFFF".to_string(),
-            Theme::Light,
-            DEFAULT_TABLE_FINGERPRINT,
-        );
+        let key = CacheKey::new("#FFFFFF".to_string(), 0, DEFAULT_TABLE_FINGERPRINT);
         let key_inner = key.clone();
         let _ = cache.get_or_try_insert_with::<()>(key, || {
             // Тот же ключ изнутри build — обязан паниковать, не рекурсировать.
@@ -308,16 +304,8 @@ mod reentrancy_tests {
     #[test]
     fn different_key_nested_build_is_safe_and_guard_lifts_on_error() {
         let cache: ContractCache<u32> = ContractCache::new(4);
-        let a = CacheKey::new(
-            "#FFFFFF".to_string(),
-            Theme::Light,
-            DEFAULT_TABLE_FINGERPRINT,
-        );
-        let b = CacheKey::new(
-            "#000000".to_string(),
-            Theme::Light,
-            DEFAULT_TABLE_FINGERPRINT,
-        );
+        let a = CacheKey::new("#FFFFFF".to_string(), 0, DEFAULT_TABLE_FINGERPRINT);
+        let b = CacheKey::new("#000000".to_string(), 0, DEFAULT_TABLE_FINGERPRINT);
         let b_inner = b.clone();
         let nested = cache
             .get_or_try_insert_with::<()>(a.clone(), || {
@@ -328,11 +316,7 @@ mod reentrancy_tests {
             .unwrap();
         assert_eq!(nested, 8);
 
-        let c = CacheKey::new(
-            "#123456".to_string(),
-            Theme::Dark,
-            DEFAULT_TABLE_FINGERPRINT,
-        );
+        let c = CacheKey::new("#123456".to_string(), 1, DEFAULT_TABLE_FINGERPRINT);
         assert!(
             cache
                 .get_or_try_insert_with(c.clone(), || Err::<u32, _>("boom"))

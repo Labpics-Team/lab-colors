@@ -326,7 +326,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
         vars.len() + roles.len() + resolved.background.len() + resolved.theme.len() + 64,
     );
     out.push_str("{\"theme\":");
-    push_str_lit(&mut out, resolved.theme);
+    push_str_lit(&mut out, &resolved.theme);
     out.push_str(",\"background\":");
     push_str_lit(&mut out, &resolved.background);
     out.push_str(",\"vars\":{");
@@ -864,7 +864,7 @@ mod tests {
 
     fn fixture() -> ResolvedTheme {
         ResolvedTheme {
-            theme: "dark",
+            theme: "dark".to_string(),
             background: "#3A3A3C".to_string(),
             roles: vec![
                 color_entry("label-primary"),
@@ -1251,7 +1251,7 @@ mod tests {
     #[test]
     fn material_projects_two_layer_css_vars() {
         let theme = ResolvedTheme {
-            theme: "light",
+            theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
             roles: vec![RoleEntry {
                 role_key: "bg-material-base".to_string(),
@@ -1351,7 +1351,7 @@ mod tests {
             })
         };
         let theme = ResolvedTheme {
-            theme: "light",
+            theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
             roles: vec![
                 RoleEntry {
@@ -1415,7 +1415,7 @@ mod tests {
         ));
 
         let indeterminate_theme = ResolvedTheme {
-            theme: "light",
+            theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
             roles: vec![RoleEntry {
                 role_key: "indeterminate".to_string(),
@@ -1439,7 +1439,7 @@ mod tests {
 
         let numerical_profile = labcolors_core::MaterialNumericalProfileV1::EncodedSrgbByteScaleAffinePlatformBinary64PowfV1;
         let material_theme = ResolvedTheme {
-            theme: "light",
+            theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
             roles: vec![RoleEntry {
                 role_key: "material".to_string(),
@@ -1505,7 +1505,7 @@ mod tests {
     #[test]
     fn hostile_role_keys_escape_reversibly() {
         let theme = ResolvedTheme {
-            theme: "light",
+            theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
             roles: vec![RoleEntry {
                 role_key: "we\"ird\\key\n\t\u{0001}".to_string(),
