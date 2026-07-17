@@ -4051,6 +4051,14 @@ fn enforce_text_hierarchy(
 /// the pass never touches — matching the built-in `TEXT_HIERARCHY` exactly for the
 /// labui fixture. Coloured (hued) ladders demote in their family hue
 /// ([`demote_below_hued`]); neutral ladders in the undertone ([`demote_below`]).
+///
+/// Помимо demote/copy/retain у прохода есть четвёртый честный исход: если сам
+/// демоушен-солв юниора завершился категорией Unresolved (bounded search не
+/// взял бюджет), юниор становится [`Resolved::Failure`] — громкий локальный
+/// отказ вместо тихого выбора одного из спорных цветов. Unreachable демоушена
+/// означает лишь «шаг вниз недоступен» и деградирует в copy/retain, а
+/// Rejected/Unsupported от валидированного core-запроса — контрактный дрейф
+/// ([`SolveFailure::InternalInvariant`]), закрывающий весь набор.
 fn enforce_named_text_hierarchy(
     set: &mut [(String, Resolved)],
     table: &NamedRoleTable,
