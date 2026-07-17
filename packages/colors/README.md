@@ -631,7 +631,7 @@ WASM и полным вызовом.
 ## Размер бандла
 
 Raw-размер WASM — hard gate с append-only историей. Текущий
-`bench/wasm-size-budget-v7.json` содержит exact Linux-x64 size-бюджеты с нулевым
+`bench/wasm-size-budget-v8.json` содержит exact Linux-x64 size-бюджеты с нулевым
 headroom для `runtime` и `compiler`; checker выбирает текущую версию, а все
 предыдущие versioned-файлы остаются неизменяемой историей. Size policy не
 притворяется идентификатором артефакта: фактический SHA каждой роли вместе с

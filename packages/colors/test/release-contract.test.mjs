@@ -1268,7 +1268,7 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
 test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7, 8].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1284,6 +1284,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v5: "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59",
     v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
     v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
+    v8: "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1294,7 +1295,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6, v7 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7, v8 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1407,11 +1408,44 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     assert.ok(v7.roles[role].policy.maxRawBytes <= v6.roles[role].policy.maxRawBytes);
   }
 
+  // V8 accepts the exact measured PR #338 runtime snapshot; it does not infer
+  // how many bytes belong to one capability. The unchanged role stays ratcheted.
+  assert.equal(v8.schemaVersion, 7);
+  assert.equal(v8.budgetId, "labcolors-wasm-roles-pr-338-v8");
+  assert.deepEqual(v8.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v7.json",
+    fileSha256: expectedHashes.v7,
+  });
+  assert.deepEqual(v8.toolchainSource, v7.toolchainSource);
+  assert.deepEqual(v8.buildRecipes, v7.buildRecipes);
+  assert.deepEqual(v8.roles.runtime.measurement, {
+    source: "github-actions-run-29548782379",
+    measurementPlatform: "linux-x64",
+    rawBytes: 456696,
+  });
+  assert.equal(
+    v8.roles.runtime.policy.basis,
+    "accepted-pr-338-runtime-snapshot",
+  );
+  assert.equal(v8.roles.runtime.policy.maxRawBytes, v8.roles.runtime.measurement.rawBytes);
+  assert.ok(v8.roles.runtime.policy.maxRawBytes > v7.roles.runtime.policy.maxRawBytes);
+  assert.equal(v8.roles.compiler.artifact, v7.roles.compiler.artifact);
+  assert.deepEqual(v8.roles.compiler.measurement, {
+    source: "github-actions-run-29548782379",
+    measurementPlatform: "linux-x64",
+    rawBytes: 229658,
+  });
+  assert.deepEqual(v8.roles.compiler.policy, {
+    maxRawBytes: v7.roles.compiler.policy.maxRawBytes,
+    basis: "unchanged-v7-compiler-ceiling",
+    gzip: "diagnostic-only",
+  });
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v7);
-  for (const version of [1, 2, 3, 4, 5, 6, 7]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v8);
+  for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1521,7 +1555,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.notEqual(pathBypass, repetition, "path mutation must bite the live guard");
   assert.throws(() => assertRepeatabilityContract(pathBypass));
 
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v7-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-role-budget-v8-"));
   try {
     const runtimePath = join(temporary, "runtime.wasm");
     const compilerPath = join(temporary, "compiler.wasm");
@@ -1530,7 +1564,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     const compilerBytes = Buffer.alloc(17);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
     compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v7);
+    const fixture = structuredClone(v8);
     for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
       fixture.roles[role].measurement.rawBytes = bytes.length;
       fixture.roles[role].policy.maxRawBytes = bytes.length;
@@ -1571,7 +1605,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     );
 
     const schemaMutations = [
-      ["schema rollback", (value) => { value.schemaVersion = 5; }],
+      ["schema rollback", (value) => { value.schemaVersion = 6; }],
       ["identity drift", (value) => { value.budgetId = "other"; }],
       ["predecessor path", (value) => { value.predecessor.path = "other.json"; }],
       ["predecessor hash", (value) => { value.predecessor.fileSha256 = "0".repeat(64); }],
@@ -1591,8 +1625,12 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         [value.roles.runtime.artifact, value.roles.compiler.artifact] =
           [value.roles.compiler.artifact, value.roles.runtime.artifact];
       }],
-      ["measurement issue", (value) => { value.roles.runtime.measurement.issue = 295; }],
-      ["measurement slice", (value) => { value.roles.compiler.measurement.slice = "B"; }],
+      ["runtime measurement source", (value) => {
+        value.roles.runtime.measurement.source = "github-actions-run-other";
+      }],
+      ["compiler measurement source", (value) => {
+        value.roles.compiler.measurement.source = "github-actions-run-other";
+      }],
       ["measurement platform", (value) => {
         value.roles.runtime.measurement.measurementPlatform = "darwin-arm64";
       }],
@@ -1602,17 +1640,17 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         value.roles.compiler.measurement.sha256 = "0".repeat(64);
       }],
       ["ceiling mismatch", (value) => { value.roles.runtime.policy.maxRawBytes += 1; }],
-      ["derivation drift", (value) => { value.roles.compiler.policy.derivation = "guessed"; }],
+      ["basis drift", (value) => { value.roles.compiler.policy.basis = "guessed"; }],
       ["gzip gate", (value) => { value.roles.runtime.policy.gzip = "gate"; }],
-      ["same-capability regression", (value) => {
-        value.roles.runtime.measurement.rawBytes = v1.policy.maxRawBytes + 1;
-        value.roles.runtime.policy.maxRawBytes = v1.policy.maxRawBytes + 1;
+      ["unscoped runtime growth", (value) => {
+        value.roles.runtime.measurement.rawBytes = v8.roles.runtime.policy.maxRawBytes + 1;
+        value.roles.runtime.policy.maxRawBytes = v8.roles.runtime.policy.maxRawBytes + 1;
       }],
       ["compiler predecessor regression", (value) => {
         value.roles.compiler.measurement.rawBytes =
-          v6.roles.compiler.policy.maxRawBytes + 1;
+          v7.roles.compiler.policy.maxRawBytes + 1;
         value.roles.compiler.policy.maxRawBytes =
-          v6.roles.compiler.policy.maxRawBytes + 1;
+          v7.roles.compiler.policy.maxRawBytes + 1;
       }],
       ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
       ["top-level key reorder", (value) => ({
@@ -1637,8 +1675,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 6,\n',
-        '  "schemaVersion": 6,\n  "schemaVersion": 6,\n',
+        '  "schemaVersion": 7,\n',
+        '  "schemaVersion": 7,\n  "schemaVersion": 7,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
@@ -1681,8 +1719,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
     coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v7),
-      /current v7 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v8),
+      /current v8 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {

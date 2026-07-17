@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 7,
+  "budgetId": "labcolors-wasm-roles-pr-338-v8",
+  "predecessor": {
+    "path": "packages/colors/bench/wasm-size-budget-v7.json",
+    "fileSha256": "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e"
+  },
+  "toolchainSource": {
+    "path": "packages/colors/bench/wasm-size-budget-v1.json",
+    "fileSha256": "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1"
+  },
+  "buildRecipes": {
+    "runtime": {
+      "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+      "recipeSha256": "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4"
+    },
+    "compiler": {
+      "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
+      "recipeSha256": "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f"
+    }
+  },
+  "roles": {
+    "runtime": {
+      "artifact": "packages/colors/pkg/labcolors_bg.wasm",
+      "measurement": {
+        "source": "github-actions-run-29548782379",
+        "measurementPlatform": "linux-x64",
+        "rawBytes": 456696
+      },
+      "policy": {
+        "maxRawBytes": 456696,
+        "basis": "accepted-pr-338-runtime-snapshot",
+        "gzip": "diagnostic-only"
+      }
+    },
+    "compiler": {
+      "artifact": "packages/colors/compiler/labcolors_compiler_bg.wasm",
+      "measurement": {
+        "source": "github-actions-run-29548782379",
+        "measurementPlatform": "linux-x64",
+        "rawBytes": 229658
+      },
+      "policy": {
+        "maxRawBytes": 229658,
+        "basis": "unchanged-v7-compiler-ceiling",
+        "gzip": "diagnostic-only"
+      }
+    }
+  }
+}
