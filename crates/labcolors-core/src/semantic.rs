@@ -3950,7 +3950,7 @@ const TEXT_HIERARCHY: [Role; 4] = [
 /// Probing a deliberately unreachable target makes `solve` report the true
 /// forward-curve maximum, so the anchor fraction is taken against the same number
 /// the solver would clip at — no duplicated contrast constants. A background with
-/// genuinely zero headroom in this polarity returns its reason.
+/// genuinely zero headroom in this polarity returns a zero ceiling.
 fn max_contrast(
     bg: &BgInput,
     polarity: Polarity,
