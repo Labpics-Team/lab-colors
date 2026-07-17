@@ -1347,7 +1347,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
     v8: "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109",
     v9: "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4",
-    v10: "0be0a1e64165b9fcb1bf6c7b89495469874d17c6b3cf3fe16bab1091ca36abd1",
+    v10: "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1532,9 +1532,9 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     "C4a must shrink the compiler role, never grow it",
   );
 
-  // V10 (failure admissibility): the role-failure wire costs +113B of runtime
-  // strings over the accepted PR-338 snapshot; the compiler role is untouched
-  // and keeps the C4a pre-atomic ratchet.
+  // V10 (failure admissibility): wire-строки ролевых отказов + жёсткий страж
+  // реентерабельности кэша стоят +2545B runtime над принятым PR-338 снапшотом;
+  // compiler не тронут и держит C4a pre-atomic ратчет.
   assert.equal(v10.schemaVersion, 7);
   assert.equal(v10.budgetId, "labcolors-wasm-roles-failure-admissibility-v10");
   assert.deepEqual(v10.predecessor, {
@@ -1544,15 +1544,15 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.deepEqual(v10.toolchainSource, v9.toolchainSource);
   assert.deepEqual(v10.buildRecipes, v9.buildRecipes);
   assert.deepEqual(v10.roles.runtime.measurement, {
-    source: "github-actions-run-29574918764",
+    source: "github-actions-run-29578036842",
     measurementPlatform: "linux-x64",
-    rawBytes: 456809,
+    rawBytes: 459241,
   });
   assert.equal(
     v10.roles.runtime.policy.basis,
     "accepted-failure-admissibility-runtime-snapshot",
   );
-  assert.equal(v10.roles.runtime.policy.maxRawBytes, 456809);
+  assert.equal(v10.roles.runtime.policy.maxRawBytes, 459241);
   assert.deepEqual(v10.roles.compiler, v9.roles.compiler);
 
   const checker = await import(

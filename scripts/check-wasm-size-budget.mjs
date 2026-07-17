@@ -43,7 +43,7 @@ export const V8_FILE_SHA256 =
 export const V9_FILE_SHA256 =
   "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4";
 export const V10_FILE_SHA256 =
-  "0be0a1e64165b9fcb1bf6c7b89495469874d17c6b3cf3fe16bab1091ca36abd1";
+  "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
 const V9_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v9.json";
@@ -61,11 +61,12 @@ const ROLE_SPECS = {
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
     basis: "accepted-failure-admissibility-runtime-snapshot",
-    measurementSource: "github-actions-run-29574918764",
-    // Pinned Linux run 29574918764 measured the failure-admissibility head
-    // exactly (+113B of role-failure wire strings over the PR-338 snapshot).
-    // Any later growth requires a new versioned snapshot, never headroom here.
-    acceptedCeiling: 456809,
+    measurementSource: "github-actions-run-29578036842",
+    // Pinned Linux run 29578036842 измерил failure-admissibility head точно
+    // (+2545B над PR-338 снапшотом: wire-строки ролевых отказов + жёсткий
+    // страж реентерабельности кэша). Любой дальнейший рост требует НОВОЙ
+    // версии снапшота, не headroom здесь.
+    acceptedCeiling: 459241,
   },
   compiler: {
     artifact: "packages/colors/compiler/labcolors_compiler_bg.wasm",
