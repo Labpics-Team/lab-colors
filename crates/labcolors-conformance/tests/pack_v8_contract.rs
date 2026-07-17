@@ -1,6 +1,6 @@
 //! Pack-контракт: pack 8 удаляет ровно `wcag22-explicit-selection.json`
-//! (roadmap C4a — параллельная explicit/atomic операция вырезана), сохраняя
-//! байт-в-байт все семь оставшихся семейств pack 7.
+//! (параллельная explicit/atomic операция вырезана из всех проекций),
+//! сохраняя байт-в-байт все семь оставшихся семейств pack 7.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -136,12 +136,12 @@ fn pack_v8_removes_only_the_explicit_selection_family() {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-7 family bytes drifted during the C4a removal: {name}"
+            "pack-7 family bytes drifted during the explicit-selection removal: {name}"
         );
     }
     assert!(
         !dir.join("wcag22-explicit-selection.json").exists(),
-        "C4a: the explicit-selection family must be gone, not regenerated"
+        "the explicit-selection family must be gone, not regenerated"
     );
 
     let manifest: serde_json::Value =

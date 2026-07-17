@@ -1279,14 +1279,14 @@ mod tests {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
         // соседний LSB. Обязательство унаследовано pack v8; v8 удаляет ровно
-        // explicit-selection семейство (roadmap C4a), не трогая байты остальных.
-        // Проверка одновременно убивает вакуумные изменения версии/счётчика
-        // без доказательного вектора.
+        // explicit-selection семейство, не трогая байты остальных. Проверка
+        // одновременно убивает вакуумные изменения версии/счётчика без
+        // доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
         assert_eq!(
             PACK_VERSION, "8.0.0",
-            "вырезание C4a-семейства обязано быть pack v8"
+            "вырезание explicit-selection семейства обязано быть pack v8"
         );
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
