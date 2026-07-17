@@ -1267,8 +1267,9 @@ impl ThemeConfig {
     ///
     /// # Errors
     ///
-    /// [`ConfigError`] структурной/деривационной фазы либо
-    /// [`ConfigError::EmptyContract`] на голом контракте (без ролей и алиасов).
+    /// [`ConfigError`] структурной/деривационной фазы,
+    /// [`ConfigError::EmptyContract`] на голом контракте (без ролей и алиасов)
+    /// либо [`ConfigError::EmptyThemes`] на пустом словаре тем.
     pub fn compile_named_role_table(&self) -> Result<NamedRoleTable, ConfigError> {
         self.validate_syntactic()?;
 
