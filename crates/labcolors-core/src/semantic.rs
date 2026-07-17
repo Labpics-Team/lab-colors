@@ -6435,7 +6435,10 @@ mod tests {
                         "{bg_hex}: RoleTable::default() отдал Material для {:?} — дрейф дефолт-таблицы",
                         role
                     ),
-                    Resolved::Failure(_) => true,
+                    Resolved::Failure(failure) => {
+                        crate::test_support::valid_srgb_set_failure_repr(failure);
+                        true
+                    }
                 });
                 assert!(
                     no_silent_clip,
@@ -7534,7 +7537,9 @@ mod tests {
                             format!("material({},{:.4})", m.tint_hex(), m.alpha())
                         }
                         Resolved::None => "none".to_string(),
-                        Resolved::Failure(_) => "UNREACHABLE".to_string(),
+                        Resolved::Failure(failure) => {
+                            crate::test_support::valid_srgb_set_failure_repr(failure)
+                        }
                     };
                     let want = GOLDEN
                         .iter()

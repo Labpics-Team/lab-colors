@@ -311,6 +311,24 @@ fn decorative_lc_requires_the_core_physical_floor() {
         );
     }
 
+    let below_error = with_role_recipe(
+        "label-tertiary",
+        RoleRecipe::DecorativeLc { magnitude: below },
+    )
+    .validate()
+    .expect_err("значение ниже физического пола обязано быть отклонено");
+    let ConfigError::OutOfBounds { bound, .. } = below_error else {
+        panic!("ожидалась числовая граница декоративного контраста");
+    };
+    assert_eq!(
+        bound,
+        format!("magnitude ≥ {DECORATIVE_FLOOR_MIN} Lc (граница декоративной Lc-цели)")
+    );
+    assert!(
+        !bound.contains("DECORATIVE_FLOOR_MIN"),
+        "публичная ошибка не должна показывать внутренний идентификатор: {bound}"
+    );
+
     let boundary = with_role_recipe(
         "label-tertiary",
         RoleRecipe::DecorativeLc {

@@ -78,6 +78,12 @@ const FRACTION_MAX_INCLUSIVE: f64 = 1.0;
 /// нулевой/отрицательный якорь это ошибка КОНФИГА, а не недостижимость.
 const DJ_MIN_EXCLUSIVE: f64 = 0.0;
 
+/// Человекочитаемая проекция [`DECORATIVE_FLOOR_MIN`] на границе конфига.
+///
+/// Rust не умеет `stringify!` значения именованной константы; тест ниже строит
+/// ожидаемый текст из числового SSOT и не позволяет литералам разойтись.
+const DECORATIVE_FLOOR_BOUND: &str = "magnitude ≥ 7.5 Lc (граница декоративной Lc-цели)";
+
 // Lc-величина декоративной роли (тени) обязана лежать не ниже физического
 // декоративного пола ядра. Единица — воспринимаемый контраст `Lc`; знак выбирает
 // физика от фона, поэтому конфиг несёт величину (модуль). Значение ниже
@@ -1137,7 +1143,7 @@ impl ThemeConfig {
                 &format!("roles.{role}.magnitude"),
                 *magnitude,
                 DECORATIVE_FLOOR_MIN,
-                "magnitude ≥ DECORATIVE_FLOOR_MIN (physical quantised low-contrast floor)",
+                DECORATIVE_FLOOR_BOUND,
             ),
             RoleRecipe::Ladder {
                 source,

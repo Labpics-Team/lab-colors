@@ -21,8 +21,8 @@ use labcolors_core::BgInput;
 use labcolors_core::{
     Brand, Floor, LadderPosition, LadderSource, NamedRoleTable, NeutralAnchors, NeutralConfig,
     NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe, SentimentCategory,
-    SentimentsConfig, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions,
-    oklch_css_from_hex, resolve_named_set,
+    SentimentsConfig, SolveFailureCategory, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset,
+    ViewingConditions, oklch_css_from_hex, resolve_named_set,
 };
 
 /// `ThemeAnchors` с одинаковыми якорями во всех четырёх слотах — вход не о
@@ -183,7 +183,21 @@ fn assert_resolved_is_finite_and_emittable(
             true
         }
         Resolved::None => false,
-        Resolved::Failure(_) => false,
+        Resolved::Failure(failure) => {
+            let boundary = failure.boundary().unwrap_or_else(|| {
+                panic!("{label}/{name}@{bg}: internal solve invariant leaked: {failure}")
+            });
+            assert!(
+                matches!(
+                    boundary.category(),
+                    SolveFailureCategory::Unreachable | SolveFailureCategory::Unresolved
+                ),
+                "{label}/{name}@{bg}: valid resolve returned {}/{}: {failure}",
+                boundary.category().as_str(),
+                boundary.code()
+            );
+            false
+        }
         other => panic!("{label}/{name}@{bg}: неучтённый Resolved: {other:?}"),
     }
 }

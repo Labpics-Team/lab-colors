@@ -44,6 +44,9 @@ pub mod curve;
 pub(crate) mod exposure_support;
 
 #[cfg(test)]
+pub(crate) mod test_support;
+
+#[cfg(test)]
 mod golden_tests;
 
 #[cfg(test)]

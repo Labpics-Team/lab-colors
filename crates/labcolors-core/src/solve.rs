@@ -2855,7 +2855,9 @@ mod tests {
                     Resolved::GlowIndeterminate(_) => "glow-indeterminate".to_string(),
                     Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
                     Resolved::None => "none".to_string(),
-                    Resolved::Failure(_) => "unreach".to_string(),
+                    Resolved::Failure(failure) => {
+                        crate::test_support::valid_srgb_set_failure_repr(failure)
+                    }
                 };
                 format!("{}={}", role.key(), v)
             })

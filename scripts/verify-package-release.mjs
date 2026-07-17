@@ -1126,6 +1126,22 @@ export function validateSolveFamily(family) {
         ["kind", "hex", "lc", "wcagRatio", "floorOverride"],
         `solve[${index}].outcome`,
       );
+      if (typeof outcome.hex !== "string" || !/^#[0-9A-F]{6}$/u.test(outcome.hex)) {
+        fail(`solve[${index}].outcome.hex must be canonical #RRGGBB`);
+      }
+      if (!Number.isFinite(outcome.lc)) {
+        fail(`solve[${index}].outcome.lc must be finite`);
+      }
+      if (
+        !Number.isFinite(outcome.wcagRatio) ||
+        outcome.wcagRatio < 1 ||
+        outcome.wcagRatio > 21
+      ) {
+        fail(`solve[${index}].outcome.wcagRatio must be finite and within [1, 21]`);
+      }
+      if (typeof outcome.floorOverride !== "boolean") {
+        fail(`solve[${index}].outcome.floorOverride must be boolean`);
+      }
       solved += 1;
       continue;
     }

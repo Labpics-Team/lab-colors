@@ -14,6 +14,6 @@ pub(crate) fn resolved_repr(res: &Resolved) -> String {
         Resolved::GlowIndeterminate(_) => "GLOW_INDETERMINATE".to_string(),
         Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
         Resolved::None => "none".to_string(),
-        Resolved::Failure(_) => "UNREACHABLE".to_string(),
+        Resolved::Failure(failure) => crate::test_support::valid_srgb_set_failure_repr(failure),
     }
 }

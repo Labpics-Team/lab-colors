@@ -1088,6 +1088,67 @@ test("release checker rejects solve failure wire drift", () => {
   }
 });
 
+test("release checker rejects solved payload drift", () => {
+  const canonical = JSON.parse(read("conformance", "vectors", "solve.json"));
+  assert.doesNotThrow(() => validateSolveFamily(canonical));
+
+  const solvedFields = ["floorOverride", "hex", "kind", "lc", "wcagRatio"];
+  const set = (field, value) => (outcome) => { outcome[field] = value; };
+  const drop = (field) => (outcome) => { delete outcome[field]; };
+  const fieldsError = (actual) => ({
+    message: `solve[0].outcome fields ${JSON.stringify(actual)} differ from ${JSON.stringify(solvedFields)}`,
+  });
+  const hexError = { message: "solve[0].outcome.hex must be canonical #RRGGBB" };
+  const lcError = { message: "solve[0].outcome.lc must be finite" };
+  const ratioError = {
+    message: "solve[0].outcome.wcagRatio must be finite and within [1, 21]",
+  };
+  const mutations = [
+    ["missing hex", drop("hex"), fieldsError(solvedFields.filter((key) => key !== "hex"))],
+    ["extra solved field", set("note", "plausible fallback"), fieldsError([...solvedFields, "note"].sort())],
+    ["unknown solved kind", set("kind", "success"), { message: "solve[0].outcome has unsupported kind success" }],
+    ["hex type", set("hex", 0x767676), hexError],
+    ["hex prefix", set("hex", "C4C4C4"), hexError],
+    ["hex length", set("hex", "#C4C4C"), hexError],
+    ["hex uppercase", set("hex", "#c4c4c4"), hexError],
+    ["hex alphabet", set("hex", "#GGGGGG"), hexError],
+    ["lc type", set("lc", "68.2"), lcError],
+    ["non-finite lc", set("lc", Number.NaN), lcError],
+    ["infinite lc", set("lc", Number.POSITIVE_INFINITY), lcError],
+    ["ratio type", set("wcagRatio", "4.5"), ratioError],
+    ["non-finite ratio", set("wcagRatio", Number.NaN), ratioError],
+    ["infinite ratio", set("wcagRatio", Number.POSITIVE_INFINITY), ratioError],
+    ["ratio below physical range", set("wcagRatio", 0.99), ratioError],
+    ["ratio above physical range", set("wcagRatio", 21.01), ratioError],
+    ["floor override type", set("floorOverride", null), { message: "solve[0].outcome.floorOverride must be boolean" }],
+  ];
+  assert.equal(mutations.length, 17, "solved anti-vacuum mutation corpus changed");
+  for (const [name, mutate, expected] of mutations) {
+    const family = structuredClone(canonical);
+    const solved = family.find(({ outcome }) => outcome.kind === "solved")?.outcome;
+    assert.ok(solved, "anti-vacuum: solve family has no solved fixture");
+    // In-memory mutation intentionally preserves NaN; a JSON round-trip would coerce it to null.
+    mutate(solved);
+    assert.throws(() => validateSolveFamily(family), expected, name);
+  }
+
+  for (const ratio of [1, 21]) {
+    const family = structuredClone(canonical);
+    family.find(({ outcome }) => outcome.kind === "solved").outcome.wcagRatio = ratio;
+    assert.doesNotThrow(
+      () => validateSolveFamily(family),
+      `inclusive WCAG ratio boundary ${ratio} must remain valid`,
+    );
+  }
+
+  const failuresOnly = canonical.filter(({ outcome }) => outcome.kind === "failure");
+  assert.throws(
+    () => validateSolveFamily(failuresOnly),
+    /got solved=0 failure=5/u,
+    "removing the solved branch must fail closed",
+  );
+});
+
 test("release checker independently validates and mutation-proves feasibility pack semantics", () => {
   const canonical = JSON.parse(
     read("conformance", "vectors", "wcag22-feasibility.json"),

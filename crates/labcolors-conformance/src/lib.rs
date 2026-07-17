@@ -1760,17 +1760,21 @@ mod tests {
                 .any(|v| matches!(v.outcome, SolveOutcome::Solved { .. })),
             "нет ни одного успешного резолва"
         );
-        let failure = solve
+        let failures = solve
             .iter()
-            .find_map(|v| match &v.outcome {
+            .filter_map(|v| match &v.outcome {
                 SolveOutcome::Failure { category, code } => Some((category.clone(), code.clone())),
                 SolveOutcome::Solved { .. } => None,
             })
-            .expect("нет ни одного failure outcome");
+            .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
-            failure,
-            ("unreachable".into(), "exceeds_range".into()),
-            "категория или код failure сменились"
+            failures,
+            std::collections::BTreeSet::from([
+                ("unreachable".into(), "below_contrast_floor".into()),
+                ("unreachable".into(), "exceeds_range".into()),
+                ("unreachable".into(), "floor_unreachable".into()),
+            ]),
+            "полный набор категорий/кодов failure сменился"
         );
     }
 }
