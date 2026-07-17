@@ -30,10 +30,8 @@ const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-q55-v1.bin",
   "wcag22-srgb8-q55-proof-v1.json",
 ];
-// Полный состав пака 7.0.0. Верификатор читает байты из репозитория (не из
-// тарболла) и пересчитывает packDigest над всеми восемью семействами;
-// семейство wcag22-explicit-selection в пакет не попадает (операцию
-// потребитель получает кодом обоих адаптеров, а не векторами).
+// Полный состав пака 8.0.0. Верификатор читает байты из репозитория (не из
+// тарболла) и пересчитывает packDigest над всеми семью семействами.
 const CONFORMANCE_FAMILY_FILES = [
   "contrasts.json",
   "ladders.json",
@@ -42,7 +40,6 @@ const CONFORMANCE_FAMILY_FILES = [
   "muddiness.json",
   "wcag22.json",
   "wcag22-feasibility.json",
-  "wcag22-explicit-selection.json",
 ];
 const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
 const COMPILER_WASM_PATH = resolve(PACKAGE_DIR, "compiler/labcolors_compiler_bg.wasm");
@@ -1158,8 +1155,8 @@ export function validateSolveFamily(family) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "7.0.0") {
-    fail(`release requires conformance pack 7.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "8.0.0") {
+    fail(`release requires conformance pack 8.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -1197,7 +1194,6 @@ async function validateConformance(conformance) {
     "muddiness",
     "wcag22",
     "wcag22Feasibility",
-    "wcag22ExplicitSelection",
   ];
   let total = 0;
   for (const [index, key] of countKeys.entries()) {
@@ -1321,57 +1317,6 @@ async function wcag22FeasibilitySmokeFixture() {
   const canonical = validateWcag22FeasibilityFamily(family, sha256(proofBytes))
     .get("text-default-seven")?.vector;
   if (!canonical) fail("wcag22-feasibility smoke fixture is missing text-default-seven");
-  return {
-    requestJson: canonical.requestJson,
-    outcomeJson: canonical.outcomeJson,
-  };
-}
-
-async function wcag22ExplicitSelectionSmokeFixture() {
-  const family = await readJson(
-    resolve(CONFORMANCE_DIR, "wcag22-explicit-selection.json"),
-  );
-  // Паритет с feasibility-фикстурой: семейство целиком проверяется на форму
-  // (каждый вектор — ровно caseId/requestJson/outcomeJson, оба JSON-парсятся,
-  // caseId уникальны), затем выбирается канонический selected-кейс.
-  if (!Array.isArray(family) || family.length === 0) {
-    fail("wcag22-explicit-selection family must be a non-empty vector array");
-  }
-  const seen = new Set();
-  for (const vector of family) {
-    if (vector === null || typeof vector !== "object" || Array.isArray(vector)) {
-      fail("wcag22-explicit-selection vector schema drifted: vector must be an object");
-    }
-    const keys = Object.keys(vector);
-    if (
-      keys.length !== 3 ||
-      typeof vector.caseId !== "string" ||
-      typeof vector.requestJson !== "string" ||
-      typeof vector.outcomeJson !== "string"
-    ) {
-      fail(`wcag22-explicit-selection vector schema drifted: ${vector.caseId}`);
-    }
-    if (seen.has(vector.caseId)) {
-      fail(`wcag22-explicit-selection duplicate caseId: ${vector.caseId}`);
-    }
-    seen.add(vector.caseId);
-    try {
-      JSON.parse(vector.requestJson);
-      JSON.parse(vector.outcomeJson);
-    } catch (error) {
-      fail(`wcag22-explicit-selection ${vector.caseId} is not nested JSON: ${error.message}`);
-    }
-  }
-  const canonical = family.find(
-    (vector) => vector.caseId === "selected-declared-order-overrides-canonical",
-  );
-  if (!canonical) {
-    fail("wcag22-explicit-selection smoke fixture is missing its canonical case");
-  }
-  const outcome = JSON.parse(canonical.outcomeJson);
-  if (outcome?.outcome !== "success" || outcome?.result?.status !== "selected") {
-    fail("wcag22-explicit-selection canonical case must be a selected terminal");
-  }
   return {
     requestJson: canonical.requestJson,
     outcomeJson: canonical.outcomeJson,
@@ -1589,16 +1534,14 @@ for (const key of [
 `;
 }
 
-function compilerSmokeSource(feasibilityFixture, explicitSelectionFixture) {
+function compilerSmokeSource(feasibilityFixture) {
   return String.raw`
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
 import init, {
-  evaluateWcag22ExplicitSelection,
   evaluateWcag22Feasibility,
-  wcag22ExplicitSelectionMaxBytes,
   wcag22FeasibilityMaxBytes,
 } from "@labpics/colors/compiler";
 
@@ -1617,18 +1560,6 @@ assert.ok(feasibilityRequest.byteLength <= wcag22FeasibilityMaxBytes());
 assert.equal(
   JSON.stringify(evaluateWcag22Feasibility(feasibilityRequest)),
   feasibilityFixture.outcomeJson,
-);
-
-const explicitSelectionFixture = ${JSON.stringify(explicitSelectionFixture)};
-const explicitSelectionRequest = new TextEncoder().encode(
-  explicitSelectionFixture.requestJson,
-);
-assert.ok(
-  explicitSelectionRequest.byteLength <= wcag22ExplicitSelectionMaxBytes(),
-);
-assert.equal(
-  JSON.stringify(evaluateWcag22ExplicitSelection(explicitSelectionRequest)),
-  explicitSelectionFixture.outcomeJson,
 );
 `;
 }
@@ -1656,12 +1587,8 @@ import init, {
   type Wcag22CriterionV1,
 } from "@labpics/colors";
 import {
-  evaluateWcag22ExplicitSelection,
   evaluateWcag22Feasibility,
-  wcag22ExplicitSelectionMaxBytes,
   wcag22FeasibilityMaxBytes,
-  type Wcag22ExplicitSelectionOutcomeV1,
-  type Wcag22ExplicitSelectionRequestV1,
   type Wcag22FeasibilityOutcomeV1,
   type Wcag22FeasibilityRequestV1,
 } from "@labpics/colors/compiler";
@@ -1727,47 +1654,6 @@ const feasibilityOutcome: Wcag22FeasibilityOutcomeV1 =
   evaluateWcag22Feasibility(feasibilityBytes);
 // @ts-expect-error byte API rejects strings.
 evaluateWcag22Feasibility(JSON.stringify(feasibilityRequest));
-
-const explicitSelectionRequest: Wcag22ExplicitSelectionRequestV1 = {
-  schemaVersion: 1,
-  domainId: "explicit-srgb8-set-v1",
-  resourceProfileId: "compile-v1",
-  candidates: [{ candidateId: "opaque-client-candidate", emitted: [255, 255, 255] }],
-  relations: [{
-    relationId: "opaque-client-relation",
-    occurrenceId: "opaque-client-occurrence",
-    kind: "applicable",
-    criterion: "sc-1.4.3-text-default",
-    adjacent: [[0, 0, 0]],
-  }],
-  policy: {
-    policyKind: "first-feasible-in-declared-order-v1",
-    policyId: "opaque-client-policy",
-    orderedCandidateIds: ["opaque-client-candidate"],
-  },
-};
-const explicitSelectionBytes = new TextEncoder().encode(
-  JSON.stringify(explicitSelectionRequest),
-);
-const explicitSelectionCeiling: number = wcag22ExplicitSelectionMaxBytes();
-const explicitSelectionOutcome: Wcag22ExplicitSelectionOutcomeV1 =
-  evaluateWcag22ExplicitSelection(explicitSelectionBytes);
-// @ts-expect-error byte API rejects strings.
-evaluateWcag22ExplicitSelection(JSON.stringify(explicitSelectionRequest));
-// Закоммиченный вектор error-feasibility-priority-over-policy обязан быть
-// представим в типовом контракте: explicit-код duplicateCandidateId живёт в
-// feasibility-источнике операции.
-const representableCommittedFailure: Wcag22ExplicitSelectionOutcomeV1 = {
-  schemaVersion: 1,
-  outcome: "failure",
-  error: {
-    source: "feasibility",
-    error: {
-      code: "invalidRequest",
-      details: { code: "duplicateCandidateId", candidateId: "twin" },
-    },
-  },
-};
 
 function assertNever(value: never): never {
   throw new Error("unreachable: " + String(value));
@@ -2101,14 +1987,13 @@ async function verifyCleanConsumer(
     }
 
     const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
-    const explicitSelectionFixture = await wcag22ExplicitSelectionSmokeFixture();
     const runtimePath = resolve(consumer, "runtime-smoke.mjs");
     const compilerPath = resolve(consumer, "compiler-smoke.mjs");
     const typesPath = resolve(consumer, "smoke.ts");
     await writeFile(runtimePath, runtimeSmokeSource());
     await writeFile(
       compilerPath,
-      compilerSmokeSource(feasibilityFixture, explicitSelectionFixture),
+      compilerSmokeSource(feasibilityFixture),
     );
     await writeFile(typesPath, typeSmokeSource());
 
@@ -2153,7 +2038,7 @@ async function verifyCleanConsumer(
       tarballPath,
       packageJson,
       "compiler",
-      compilerSmokeSource(feasibilityFixture, explicitSelectionFixture),
+      compilerSmokeSource(feasibilityFixture),
     );
   } finally {
     await rm(consumer, { recursive: true, force: true });
@@ -2230,11 +2115,10 @@ export async function smokePackedPackage(tarballPath) {
     const runtimePath = resolve(consumer, "smoke.mjs");
     const compilerPath = resolve(consumer, "compiler-smoke.mjs");
     const feasibilityFixture = await wcag22FeasibilitySmokeFixture();
-    const explicitSelectionFixture = await wcag22ExplicitSelectionSmokeFixture();
     await writeFile(runtimePath, runtimeSmokeSource());
     await writeFile(
       compilerPath,
-      compilerSmokeSource(feasibilityFixture, explicitSelectionFixture),
+      compilerSmokeSource(feasibilityFixture),
     );
     command(process.execPath, [runtimePath], consumer);
     command(process.execPath, [compilerPath], consumer);

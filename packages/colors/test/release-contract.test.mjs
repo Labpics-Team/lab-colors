@@ -128,7 +128,7 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   // #296-C3: каждый protocol-потребитель публикует атомарную операцию через
   // одну non-default фичу; голых protocol-рёбер в воркспейсе больше нет.
   const protocolEdge =
-    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol", features = \["wcag22-explicit-selection"\] \}/u;
+    /labcolors-protocol = \{ path = "\.\.\/labcolors-protocol" \}/u;
   const protocolManifest = read("crates", "labcolors-protocol", "Cargo.toml");
   const wasmManifest = read("crates", "labcolors-wasm", "Cargo.toml");
   const compilerManifest = read("crates", "labcolors-compiler", "Cargo.toml");
@@ -149,8 +149,8 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   assert.match(conformanceManifest, isolatedCoreEdge);
   assert.match(conformanceManifest, protocolEdge);
   assert.doesNotMatch(conformanceManifest, /features = \["wcag22-feasibility"\]/u);
-  // Прямые Core-рёбра потребителей не несут capability-фич: explicit-домен
-  // приходит только через protocol-фичу.
+  // Прямые Core-рёбра потребителей не несут capability-фич; explicit-домен
+  // после C4a заморожен внутри Core и потребителями не резолвится.
   assert.doesNotMatch(
     conformanceManifest,
     /labcolors-core\/wcag22-explicit-feasibility/u,
@@ -202,11 +202,12 @@ test("runtime and compiler resolve disjoint Core capability graphs", () => {
   );
   assert.match(
     projection,
-    /'labcolors-core feature "wcag22-explicit-feasibility"' not in feature_tree/u,
+    /'labcolors-core feature "wcag22-explicit-feasibility"' in feature_tree/u,
   );
-  assert.match(
+  assert.doesNotMatch(
     projection,
-    /'labcolors-protocol feature "wcag22-explicit-selection"'\n\s+not in feature_tree/u,
+    /wcag22-explicit-selection/u,
+    "C4a: the deleted protocol feature must not reappear in the projection law",
   );
   assert.doesNotMatch(projection, /for consumer in labcolors-/u);
 });
@@ -821,7 +822,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
     const expectedSha = "a".repeat(40);
     const conformance = {
-      packVersion: "7.0.0",
+      packVersion: "8.0.0",
       packDigest: "12345678",
       manifestSha256: "c".repeat(64),
       familySetSha256: "d".repeat(64),
@@ -973,7 +974,7 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 7 changes only the solve family", () => {
+test("conformance pack 8 removes only the explicit-selection family", () => {
   const immutableFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
@@ -984,12 +985,12 @@ test("conformance pack 7 changes only the solve family", () => {
       "wcag22-feasibility.json",
       "ae2caec47a7b650e73b8d4029a69b4e401dfb7cc199db579c0f95106eebe8dc3",
     ],
-    [
-      "wcag22-explicit-selection.json",
-      "3c4b0b8d7954b598ab9f8cd85be5749577e7c82380976293810fcab20d8ef41a",
-    ],
   ]);
-  assert.equal(immutableFamilies.size, 7, "anti-vacuum: unchanged family set changed");
+  assert.equal(immutableFamilies.size, 6, "anti-vacuum: unchanged family set changed");
+  assert.ok(
+    !existsSync(join(root, "conformance", "vectors", "wcag22-explicit-selection.json")),
+    "C4a: the explicit-selection family must be gone, not regenerated",
+  );
   for (const [name, expected] of immutableFamilies) {
     const bytes = readFileSync(join(root, "conformance", "vectors", name));
     assert.equal(createHash("sha256").update(bytes).digest("hex"), expected, name);
@@ -1003,7 +1004,7 @@ test("conformance pack 7 changes only the solve family", () => {
   );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
-  assert.equal(manifest.packVersion, "7.0.0");
+  assert.equal(manifest.packVersion, "8.0.0");
   const solve = JSON.parse(read("conformance", "vectors", "solve.json"));
   const supersededKind = ["un", "reachable"].join("");
   const failures = solve.filter(({ outcome }) => outcome.kind === "failure");
@@ -1266,10 +1267,10 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   const verifier = read("scripts", "verify-package-release.mjs");
 
   assert.match(prepare, /"wcag22-feasibility\.json"/u);
-  assert.match(prepare, /"wcag22-explicit-selection\.json"/u);
+  assert.doesNotMatch(prepare, /wcag22-explicit-selection/u);
   assert.match(verifier, /"wcag22-feasibility\.json"/u);
-  assert.match(verifier, /"wcag22-explicit-selection\.json"/u);
-  assert.match(verifier, /conformance\.packVersion !== "7\.0\.0"/u);
+  assert.doesNotMatch(verifier, /wcag22-explicit-selection/u);
+  assert.match(verifier, /conformance\.packVersion !== "8\.0\.0"/u);
   assert.match(verifier, /validateSolveFamily\(families\[3\]\)/u);
   assert.match(
     verifier,
@@ -1298,16 +1299,15 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
   );
   assert.equal(
     verifier.match(
-      /compilerSmokeSource\(feasibilityFixture, explicitSelectionFixture\)/gu,
+      /compilerSmokeSource\(feasibilityFixture\)/gu,
     )?.length,
     4,
     "clean-install, role-isolation and Node-floor smokes must execute the same canonical fixtures",
   );
-  assert.match(verifier, /evaluateWcag22ExplicitSelection/u);
-  assert.match(verifier, /wcag22ExplicitSelectionMaxBytes/u);
-  assert.match(
+  assert.doesNotMatch(
     verifier,
-    /JSON\.stringify\(evaluateWcag22ExplicitSelection\(explicitSelectionRequest\)\)[\s\S]*?explicitSelectionFixture\.outcomeJson/u,
+    /ExplicitSelection/u,
+    "C4a: the deleted atomic operation must not survive in release smokes",
   );
   const compilerSmoke = verifier.slice(
     verifier.indexOf("function compilerSmokeSource"),
@@ -1329,7 +1329,7 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
 test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7, 8].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1346,6 +1346,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
     v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
     v8: "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109",
+    v9: "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1356,7 +1357,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6, v7, v8 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7, v8, v9 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1502,11 +1503,39 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     gzip: "diagnostic-only",
   });
 
+  // V9 (roadmap C4a): the atomic explicit-selection operation is excised, and
+  // the canonical compiler returns BYTE-IDENTICAL to its pre-atomic artifact
+  // (175212B — the C1-era compiler), which pins the excision as exact. The
+  // untouched runtime role keeps its accepted PR-338 snapshot.
+  assert.equal(v9.schemaVersion, 7);
+  assert.equal(v9.budgetId, "labcolors-wasm-roles-c4a-v9");
+  assert.deepEqual(v9.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v8.json",
+    fileSha256: expectedHashes.v8,
+  });
+  assert.deepEqual(v9.toolchainSource, v8.toolchainSource);
+  assert.deepEqual(v9.buildRecipes, v8.buildRecipes);
+  assert.deepEqual(v9.roles.runtime, v8.roles.runtime);
+  assert.deepEqual(v9.roles.compiler.measurement, {
+    source: "github-actions-run-29571640106",
+    measurementPlatform: "linux-x64",
+    rawBytes: 175212,
+  });
+  assert.deepEqual(v9.roles.compiler.policy, {
+    maxRawBytes: 175212,
+    basis: "accepted-c4a-excision-snapshot",
+    gzip: "diagnostic-only",
+  });
+  assert.ok(
+    v9.roles.compiler.policy.maxRawBytes < v8.roles.compiler.policy.maxRawBytes,
+    "C4a must shrink the compiler role, never grow it",
+  );
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v8);
-  for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v9);
+  for (const version of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1625,7 +1654,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     const compilerBytes = Buffer.alloc(17);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
     compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v8);
+    const fixture = structuredClone(v9);
     for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
       fixture.roles[role].measurement.rawBytes = bytes.length;
       fixture.roles[role].policy.maxRawBytes = bytes.length;
@@ -1780,8 +1809,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
     coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v8),
-      /current v8 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v9),
+      /current v9 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1848,17 +1877,17 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `7\.0\.0`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `8\.0\.0`/u);
   assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
   assert.match(conformanceReadme, /5\.0\.0 → 6\.0\.0/u);
   assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
   assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
   assert.match(conformanceReadme, /`wcag22\.json`/u);
   assert.match(conformanceReadme, /`wcag22-feasibility\.json`/u);
-  assert.match(conformanceReadme, /`wcag22-explicit-selection\.json`/u);
+  assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`/u);
   assert.match(
     conformanceReadme,
-    /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility,\s*wcag22-explicit-selection/u,
+    /contrasts, ladders, alpha, solve, muddiness, wcag22,\s*wcag22-feasibility/u,
   );
   assert.doesNotMatch(conformanceReadme, /сейчас `[3-6]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");

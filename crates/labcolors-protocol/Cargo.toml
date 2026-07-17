@@ -14,13 +14,4 @@ labcolors-core = { path = "../labcolors-core", default-features = false, feature
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-[features]
-# Атомарная explicit-операция `wcag22-explicit-selection-v1` (#296-C2/C3).
-# Не входит в default: каждую проекцию потребитель включает явно; после C3 её
-# резолвят все три protocol-потребителя (compiler-WASM, UniFFI/Swift,
-# conformance). Базовое core-ребро остаётся ровно wcag22-feasibility.
-wcag22-explicit-selection = ["labcolors-core/wcag22-explicit-feasibility"]
 
-[[test]]
-name = "explicit_selection"
-required-features = ["wcag22-explicit-selection"]

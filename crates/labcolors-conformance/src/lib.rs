@@ -55,7 +55,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "7.0.0";
+pub const PACK_VERSION: &str = "8.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -880,392 +880,6 @@ pub fn generate_wcag22_feasibility() -> Result<Vec<Wcag22FeasibilityVector>, Pac
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Семейство: атомарная explicit-selection операция (#296-C2)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// One end-to-end vector for the atomic `wcag22-explicit-selection-v1`
-/// operation.
-///
-/// Both JSON strings are emitted by the protocol's canonical explicit
-/// encoders. The corpus is generated and replayed natively only: no published
-/// adapter (compiler WASM, UniFFI/Swift) advertises the capability before
-/// #296-C3, so npm/Swift consumers keep replaying exactly the prior seven
-/// families.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Wcag22ExplicitSelectionVector {
-    /// Stable corpus identity, outside the protocol algebra.
-    pub case_id: String,
-    /// Exact compact UTF-8 request. Canonical construction cases are produced
-    /// by `encode_explicit_selection_request_v1`; strict-decoder rejection
-    /// cases carry the exact raw bytes that must fail typed.
-    pub request_json: String,
-    /// Exact compact UTF-8 `Success/Failure` outcome produced by
-    /// `encode_explicit_selection_outcome_v1`.
-    pub outcome_json: String,
-}
-
-fn explicit_candidate(
-    case_id: &str,
-    candidate_id: &str,
-    emitted: [u8; 3],
-) -> Result<labcolors_protocol::explicit_selection::CandidateV1, PackGenerationError> {
-    protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::CandidateV1::new(candidate_id, emitted),
-    )
-}
-
-fn explicit_policy(
-    case_id: &str,
-    policy_id: &str,
-    order: &[&str],
-) -> Result<labcolors_protocol::explicit_selection::PolicyV1, PackGenerationError> {
-    protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::PolicyV1::first_feasible_in_declared_order(
-            policy_id,
-            order.iter().map(|id| (*id).to_string()).collect(),
-        ),
-    )
-}
-
-fn explicit_selection_vector_from_bytes(
-    case_id: &str,
-    request_bytes: Vec<u8>,
-) -> Result<Wcag22ExplicitSelectionVector, PackGenerationError> {
-    let outcome = labcolors_protocol::explicit_selection::evaluate_wcag22_explicit_selection_v1(
-        &request_bytes,
-    );
-    let outcome_bytes = protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::encode_explicit_selection_outcome_v1(&outcome),
-    )?;
-    let request_json = protocol_fixture(case_id, String::from_utf8(request_bytes))?;
-    let outcome_json = protocol_fixture(case_id, String::from_utf8(outcome_bytes))?;
-    Ok(Wcag22ExplicitSelectionVector {
-        case_id: case_id.to_string(),
-        request_json,
-        outcome_json,
-    })
-}
-
-fn explicit_selection_vector(
-    case_id: &str,
-    candidates: Vec<labcolors_protocol::explicit_selection::CandidateV1>,
-    relations: Vec<labcolors_protocol::RelationV1>,
-    policy: labcolors_protocol::explicit_selection::PolicyV1,
-) -> Result<Wcag22ExplicitSelectionVector, PackGenerationError> {
-    let request = protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::RequestV1::try_new(candidates, relations, policy),
-    )?;
-    let request_bytes = protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::encode_explicit_selection_request_v1(&request),
-    )?;
-    explicit_selection_vector_from_bytes(case_id, request_bytes)
-}
-
-/// Generate the complete pack-6 atomic explicit-selection corpus exclusively
-/// through the public protocol construction and canonical encoding boundary.
-pub fn generate_wcag22_explicit_selection()
--> Result<Vec<Wcag22ExplicitSelectionVector>, PackGenerationError> {
-    use labcolors_protocol::Wcag22CriterionV1 as Criterion;
-
-    let mut vectors = Vec::with_capacity(15);
-
-    // Объявленный порядок начинается с infeasible члена и выбирает первый
-    // feasible; канонический (байтовый) порядок кандидатов другой.
-    let case_id = "selected-declared-order-overrides-canonical";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "z-bright", [255; 3])?,
-            explicit_candidate(case_id, "a-dim", [0x76; 3])?,
-            explicit_candidate(case_id, "m-dark", [0; 3])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "brand-order", &["m-dark", "z-bright", "a-dim"])?,
-    )?);
-
-    // Смешанный граф: NA-отношение сохраняется в каноне, receipt считает рёбра.
-    let case_id = "selected-mixed-not-applicable";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "accent", [255; 3])?,
-            explicit_candidate(case_id, "muted", [0x40; 3])?,
-        ],
-        vec![
-            applicable_relation(
-                case_id,
-                "focus-ring",
-                "focus",
-                Criterion::Sc1411UiComponentOrState,
-                vec![[0; 3], [32, 32, 32]],
-            )?,
-            not_applicable_relation(case_id, "ornament", "decor", "client-declared-out-of-scope")?,
-        ],
-        explicit_policy(case_id, "single-choice", &["accent"])?,
-    )?);
-
-    // Валидный singleton без feasible члена: настоящий NoSelection без fallback.
-    let case_id = "no-selection-singleton-infeasible";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "bright", [255; 3])?,
-            explicit_candidate(case_id, "dark", [0; 3])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "dark-only", &["dark"])?,
-    )?);
-
-    // Пустая feasible-партиция: политика связана, selection-receipt отсутствует.
-    let case_id = "infeasible-policy-bound";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "near-black", [0; 3])?,
-            explicit_candidate(case_id, "dim", [1, 1, 1])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "any-member", &["near-black", "dim"])?,
-    )?);
-
-    // Ни одного applicable отношения: declaration-only терминал с политикой.
-    let case_id = "not-evaluated-policy-bound";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "alpha", [255; 3])?,
-            explicit_candidate(case_id, "beta", [0; 3])?,
-        ],
-        vec![not_applicable_relation(
-            case_id,
-            "declaration-only",
-            "opaque-occurrence",
-            "client-declared-out-of-scope",
-        )?],
-        explicit_policy(case_id, "still-bound", &["beta"])?,
-    )?);
-
-    // Противоположные порядки: feasibility-поддерево байт-идентично,
-    // selection-binding и выбранный ID меняются. Пара пинится контрактным
-    // тестом пака.
-    for (case_id, policy_id, order) in [
-        (
-            "opposite-order-forward",
-            "forward",
-            ["first-bright", "second-bright"],
-        ),
-        (
-            "opposite-order-reverse",
-            "reverse",
-            ["second-bright", "first-bright"],
-        ),
-    ] {
-        vectors.push(explicit_selection_vector(
-            case_id,
-            vec![
-                explicit_candidate(case_id, "first-bright", [255; 3])?,
-                explicit_candidate(case_id, "second-bright", [254, 254, 254])?,
-            ],
-            vec![applicable_relation(
-                case_id,
-                "body-text",
-                "paragraph",
-                Criterion::Sc143TextDefault,
-                vec![[0; 3]],
-            )?],
-            explicit_policy(case_id, policy_id, &order)?,
-        )?);
-    }
-
-    // Malformed политика классифицируется идентично после КАЖДОГО успешного
-    // A-терминала: те же foreign-хвосты над Infeasible и NotEvaluated.
-    let case_id = "error-foreign-tail-after-infeasible";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "near-black", [0; 3])?,
-            explicit_candidate(case_id, "dim", [1, 1, 1])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "hidden-tail", &["near-black", "foreign"])?,
-    )?);
-
-    let case_id = "error-foreign-tail-after-not-evaluated";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "alpha", [255; 3])?,
-            explicit_candidate(case_id, "beta", [0; 3])?,
-        ],
-        vec![not_applicable_relation(
-            case_id,
-            "declaration-only",
-            "opaque-occurrence",
-            "client-declared-out-of-scope",
-        )?],
-        explicit_policy(case_id, "hidden-tail", &["alpha", "foreign"])?,
-    )?);
-
-    // Ошибка A-фазы приоритетна: дубликат домена гасит и невалидную политику.
-    let case_id = "error-feasibility-priority-over-policy";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "twin", [255; 3])?,
-            explicit_candidate(case_id, "twin", [0; 3])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "foreign-only", &["foreign"])?,
-    )?);
-
-    // Feasible-префикс не прячет foreign-хвост: ноль финальных вызовов.
-    let case_id = "error-foreign-tail-after-feasible-prefix";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "bright", [255; 3])?,
-            explicit_candidate(case_id, "dark", [0; 3])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "hidden-tail", &["bright", "foreign"])?,
-    )?);
-
-    // Дубликат в объявленном порядке — malformed, не NoSelection.
-    let case_id = "error-duplicate-order-tail";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "bright", [255; 3])?,
-            explicit_candidate(case_id, "dark", [0; 3])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "duplicated", &["bright", "bright"])?,
-    )?);
-
-    // P>C: порядок не может быть подмножеством домена.
-    let case_id = "error-policy-cardinality-exceeds-domain";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![explicit_candidate(case_id, "only", [255; 3])?],
-        vec![applicable_relation(
-            case_id,
-            "body-text",
-            "paragraph",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "too-wide", &["only", "other"])?,
-    )?);
-
-    // Неизвестный policy kind обязан упасть в строгом декодере typed-ошибкой.
-    // Запрос строится каноническим кодировщиком, затем единственная строка
-    // policyKind мутируется: все прочие байты остаются каноническими, а
-    // wire-лексика не переписывается руками.
-    let case_id = "error-unsupported-policy-kind";
-    let canonical = protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::RequestV1::try_new(
-            vec![explicit_candidate(case_id, "only", [255; 3])?],
-            vec![applicable_relation(
-                case_id,
-                "body-text",
-                "paragraph",
-                Criterion::Sc143TextDefault,
-                vec![[0; 3]],
-            )?],
-            explicit_policy(case_id, "client", &["only"])?,
-        ),
-    )?;
-    let canonical_bytes = protocol_fixture(
-        case_id,
-        labcolors_protocol::explicit_selection::encode_explicit_selection_request_v1(&canonical),
-    )?;
-    let canonical_text = protocol_fixture(case_id, String::from_utf8(canonical_bytes))?;
-    let mutated = canonical_text.replace(
-        labcolors_protocol::explicit_selection::POLICY_KIND_KEY_V1,
-        "best-feasible-v1",
-    );
-    if mutated == canonical_text {
-        return Err(PackGenerationError::IncompatibleProtocolContract {
-            case_id: case_id.to_string(),
-            reason: "policy kind mutation had no effect".to_string(),
-        });
-    }
-    vectors.push(explicit_selection_vector_from_bytes(
-        case_id,
-        mutated.into_bytes(),
-    )?);
-
-    // Точные unicode-байты opaque ID проходят весь цикл без нормализации.
-    let case_id = "opaque-unicode-identities";
-    vectors.push(explicit_selection_vector(
-        case_id,
-        vec![
-            explicit_candidate(case_id, "z:\u{03bb}9", [255; 3])?,
-            explicit_candidate(case_id, "q:\u{6d77}", [0; 3])?,
-        ],
-        vec![applicable_relation(
-            case_id,
-            "r:7f3a",
-            "o:17",
-            Criterion::Sc143TextDefault,
-            vec![[0; 3]],
-        )?],
-        explicit_policy(case_id, "p:\u{2713}", &["q:\u{6d77}", "z:\u{03bb}9"])?,
-    )?);
-
-    Ok(vectors)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Агрегат пака + сериализация + дайджест
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1274,7 +888,7 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 
 /// Имена файлов семейств в КАНОНИЧЕСКОМ порядке — единый источник порядка для
 /// генератора, дайджеста и раннера-референса (дайджест зависит от порядка).
-pub const FAMILY_FILES: [&str; 8] = [
+pub const FAMILY_FILES: [&str; 7] = [
     "contrasts.json",
     "ladders.json",
     "alpha.json",
@@ -1282,7 +896,6 @@ pub const FAMILY_FILES: [&str; 8] = [
     "muddiness.json",
     "wcag22.json",
     "wcag22-feasibility.json",
-    "wcag22-explicit-selection.json",
 ];
 
 /// Каноническая толерантность сравнения f64 для conformance-
@@ -1314,8 +927,6 @@ pub struct Counts {
     pub wcag22: usize,
     /// Versioned WCAG 2.2 feasibility protocol vectors.
     pub wcag22_feasibility: usize,
-    /// Versioned atomic explicit-selection protocol vectors.
-    pub wcag22_explicit_selection: usize,
     /// Итого.
     pub total: usize,
 }
@@ -1440,8 +1051,6 @@ pub struct Pack {
     pub wcag22: Vec<Wcag22Vector>,
     /// Bounded compiler protocol vectors with packed evidence only.
     pub wcag22_feasibility: Vec<Wcag22FeasibilityVector>,
-    /// Atomic explicit-selection protocol vectors (#296-C2), native-only replay.
-    pub wcag22_explicit_selection: Vec<Wcag22ExplicitSelectionVector>,
 }
 
 impl Pack {
@@ -1455,7 +1064,6 @@ impl Pack {
             muddiness: generate_muddiness(),
             wcag22: generate_wcag22()?,
             wcag22_feasibility: generate_wcag22_feasibility()?,
-            wcag22_explicit_selection: generate_wcag22_explicit_selection()?,
         })
     }
 
@@ -1469,7 +1077,6 @@ impl Pack {
         let muddiness = self.muddiness.len();
         let wcag22 = self.wcag22.len();
         let wcag22_feasibility = self.wcag22_feasibility.len();
-        let wcag22_explicit_selection = self.wcag22_explicit_selection.len();
         Counts {
             contrasts,
             ladders,
@@ -1478,15 +1085,7 @@ impl Pack {
             muddiness,
             wcag22,
             wcag22_feasibility,
-            wcag22_explicit_selection,
-            total: contrasts
-                + ladders
-                + alpha
-                + solve
-                + muddiness
-                + wcag22
-                + wcag22_feasibility
-                + wcag22_explicit_selection,
+            total: contrasts + ladders + alpha + solve + muddiness + wcag22 + wcag22_feasibility,
         }
     }
 
@@ -1527,10 +1126,6 @@ impl Pack {
             (FAMILY_FILES[4], to_canonical_json(&self.muddiness)),
             (FAMILY_FILES[5], to_canonical_json(&self.wcag22)),
             (FAMILY_FILES[6], to_canonical_json(&self.wcag22_feasibility)),
-            (
-                FAMILY_FILES[7],
-                to_canonical_json(&self.wcag22_explicit_selection),
-            ),
         ]
     }
 }
@@ -1637,8 +1232,7 @@ mod tests {
                 + c.solve
                 + c.muddiness
                 + c.wcag22
-                + c.wcag22_feasibility
-                + c.wcag22_explicit_selection,
+                + c.wcag22_feasibility,
             "итог не сходится с семействами"
         );
         // Лестниц ровно столько, сколько канонических позиций.
@@ -1681,22 +1275,23 @@ mod tests {
     }
 
     #[test]
-    fn pack_v7_changes_only_the_solve_family_without_adding_a_family() {
+    fn pack_v8_removes_only_the_explicit_selection_family() {
         // ADR-0004 делает этот байтовый шов частью breaking conformance-контракта:
         // нормализованный `(byte/255) * alpha * 255` путь ошибочно отдавал
-        // соседний LSB. Обязательство унаследовано pack v7; v7 меняет только
-        // failure-wire solve-family. Проверка одновременно убивает вакуумные
-        // изменения версии/счётчика без доказательного вектора.
+        // соседний LSB. Обязательство унаследовано pack v8; v8 удаляет ровно
+        // explicit-selection семейство, не трогая байты остальных. Проверка
+        // одновременно убивает вакуумные изменения версии/счётчика без
+        // доказательного вектора.
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
         assert_eq!(
-            PACK_VERSION, "7.0.0",
-            "типизированный failure wire обязан быть pack v7"
+            PACK_VERSION, "8.0.0",
+            "вырезание explicit-selection семейства обязано быть pack v8"
         );
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
             manifest.core_version, "0.2.0",
-            "pack v7 остаётся привязан к core 0.2.0"
+            "pack v8 остаётся привязан к core 0.2.0"
         );
         assert_eq!(
             pack.alpha.len(),
@@ -1705,12 +1300,11 @@ mod tests {
         );
         assert_eq!(manifest.counts.alpha, pack.alpha.len());
         assert_eq!(
-            manifest.counts.total, 118,
+            manifest.counts.total, 103,
             "состав векторных семейств изменился"
         );
         assert_eq!(manifest.counts.wcag22, 6);
         assert_eq!(manifest.counts.wcag22_feasibility, 13);
-        assert_eq!(manifest.counts.wcag22_explicit_selection, 15);
 
         let half_tie = pack
             .alpha

@@ -43,12 +43,9 @@ boundary details.
 конечном домене; это не утверждение об отсутствии цвета вне него.
 
 Прямой Core по умолчанию включает `wcag22-feasibility` и зависящую от неё
-возможность `wcag22-explicit-feasibility`. Базовая зависимость Protocol включает
-только neutral-axis feasibility; non-default feature
-`wcag22-explicit-selection` добавляет атомарную операцию над явным клиентским
-набором. Compiler WASM/npm и UniFFI/Swift включают эту feature и публикуют обе
-offline-операции. Все поверхности используют один математический компилятор и
-не входят в runtime WASM.
+возможность `wcag22-explicit-feasibility`. Protocol и адаптеры публикуют одну
+offline-операцию — complete feasibility; все поверхности используют один
+математический компилятор и не входят в runtime WASM.
 
 В V1 доступны две формы одного компилятора. Совместимый вход `evaluate`
 перечисляет зарегистрированную нейтральную ось: ровно 256 кодов `[v, v, v]`,
@@ -58,8 +55,8 @@ offline-операции. Все поверхности используют о�
 их повторы и сам выводит мощность, digest, матрицу и partition. Разные ID с
 одинаковыми физическими байтами остаются разными кандидатами. Ни один из входов
 не выводит размер текста, компонентную семантику, применимость или предпочтение
-из ID. Feasibility сам ничего не ранжирует; явный клиентский порядок применяется
-только отдельным запечатанным selection-шагом после полного доказательства.
+из ID. Feasibility сам ничего не ранжирует и ничего не выбирает: он доказывает
+допустимость каждого кандидата в объявленном конечном домене, и только.
 
 Для `C` кандидатов и `E` канонических применимых рёбер выполняется ровно
 `W=C×E` атомарных проверок. При `E>0` единственный упакованный буфер имеет
@@ -124,12 +121,7 @@ use labcolors_core::{
     wcag22::Wcag22CriterionV1,
     wcag22_feasibility::{
         OccurrenceId, RelationId, RelationV1, ResourceProfileIdV1,
-        explicit::{
-            CandidateId, CandidateV1, DomainRequestV1, RequestV1, evaluate,
-            selection::{
-                FirstFeasibleInDeclaredOrderV1, PolicyId, SelectionOutcomeV1, select,
-            },
-        },
+        explicit::{CandidateId, CandidateV1, DomainRequestV1, RequestV1, evaluate},
     },
 };
 
@@ -150,37 +142,10 @@ let result = evaluate(RequestV1::try_new(
 )?)?;
 
 assert_eq!(result.evaluated().map(|value| value.candidates().len()), Some(2));
-let source = result
-    .selection_source()
-    .expect("this fixture has at least one feasible candidate");
-let policy = FirstFeasibleInDeclaredOrderV1::try_new(
-    PolicyId::try_new("article/foreground-order")?,
-    vec![
-        CandidateId::try_new("brand/paper")?,
-        CandidateId::try_new("brand/ink")?,
-    ],
-)?;
-let outcome = select(source, policy)?;
-let selected = match &outcome {
-    SelectionOutcomeV1::Selected { selected, .. } => {
-        selected.candidate().candidate_id().as_str()
-    }
-    SelectionOutcomeV1::NoSelection { .. } => panic!("fixture must select"),
-};
-assert_eq!(selected, "brand/ink");
 # Ok(())
 # }
 # fn main() {}
 ```
-
-`selection_source()` возвращает `Some` только для `Feasible`: `Infeasible` и
-`NotEvaluated` не могут начать выбор. Политика перечисляет допустимое подмножество
-ID в точном клиентском порядке. Core сначала проверяет весь список, затем берёт
-первый уже доказанный feasible-ID и повторно проверяет его ровно по всем `E`
-каноническим применимым рёбрам тем же вычислителем WCAG. Валидный список без
-feasible-ID возвращает исчерпывающий `NoSelection`; неизвестный/повторный ID и
-расхождение финальной проверки являются разными типизированными отказами, без
-fallback.
 
 В примере `Sc143TextDefault` означает явно объявленный клиентом критерий
 SC 1.4.3 для обычного текста с отношением 4.5:1; Core не угадывает его по ID или

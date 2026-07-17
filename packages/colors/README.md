@@ -323,9 +323,8 @@ diagnostic-компонент текущего LPC и legacy `wcagRatio` не м
 угадывает применимость и не понимает семантику ID.
 
 Операция экспортируется только из `@labpics/colors/compiler` и загружает
-отдельный compiler WASM; package root остаётся runtime API. Эта операция
-принимает только зарегистрированную нейтральную ось V1; явные клиентские
-наборы sRGB8 обслуживает соседняя атомарная операция ниже.
+отдельный compiler WASM; package root остаётся runtime API. Операция принимает
+только зарегистрированную нейтральную ось V1.
 
 В браузере compiler принадлежит offline/Worker execution class: main thread
 импортирует только runtime, а dedicated module Worker владеет compiler WASM и
@@ -565,73 +564,10 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ---
 
-### Offline compiler: `evaluateWcag22ExplicitSelection(request)`
-
-Атомарная операция `wcag22-explicit-selection-v1` для явного клиентского
-набора: один строгий запрос несёт конечный домен «opaque ID + точный sRGB8»,
-объявленные связи, resource profile и политику выбора
-(`first-feasible-in-declared-order-v1`). Внутри одного вызова Core полностью
-перебирает домен, целиком валидирует политику после любого успешного
-терминала, выбирает первый feasible ID объявленного порядка и перепроверяет
-каждую применимую грань выбранной строки тем же точным вычислителем.
-
-Запрос не несёт клиентских счётчиков, дайджестов, матриц, evaluation ID или
-proof — всё доказательное состояние выводит и запечатывает Core.
-Сериализованный исход — данные для проверки, а не «право выбора»: обратно он
-не принимается. Исход — ровно один из `selected | noSelection | infeasible |
-notEvaluated` либо типизированный отказ без частичного feasibility.
-
-```ts
-import initCompiler, {
-  evaluateWcag22ExplicitSelection,
-  wcag22ExplicitSelectionMaxBytes,
-  type Wcag22ExplicitSelectionRequestV1,
-} from "@labpics/colors/compiler";
-
-await initCompiler();
-
-const request: Wcag22ExplicitSelectionRequestV1 = {
-  schemaVersion: 1,
-  domainId: "explicit-srgb8-set-v1",
-  resourceProfileId: "compile-v1",
-  candidates: [
-    { candidateId: "brand-600", emitted: [64, 82, 255] },
-    { candidateId: "brand-700", emitted: [46, 60, 200] },
-  ],
-  relations: [{
-    relationId: "body-text",
-    occurrenceId: "paragraph",
-    kind: "applicable",
-    criterion: "sc-1.4.3-text-default",
-    adjacent: [[255, 255, 255]],
-  }],
-  policy: {
-    policyKind: "first-feasible-in-declared-order-v1",
-    policyId: "brand-preference",
-    orderedCandidateIds: ["brand-600", "brand-700"],
-  },
-};
-
-const bytes = new TextEncoder().encode(JSON.stringify(request));
-if (bytes.byteLength > wcag22ExplicitSelectionMaxBytes()) {
-  throw new Error("request exceeds the derived envelope");
-}
-const outcome = evaluateWcag22ExplicitSelection(bytes);
-if (outcome.outcome === "success" && outcome.result.status === "selected") {
-  // Физическая допустимость доказана Core; выбор — ровно первый feasible ID
-  // ИЗ ВАШЕГО порядка, с финальной перепроверкой каждой применимой грани.
-  console.log(outcome.result.selection.candidateId);
-}
-```
-
-Браузерное исполнение — тот же offline/Worker класс, что и у feasibility:
-main thread импортирует только типы, dedicated module Worker владеет compiler
-WASM и полным вызовом.
-
 ## Размер бандла
 
 Raw-размер WASM — hard gate с append-only историей. Текущий
-`bench/wasm-size-budget-v8.json` содержит exact Linux-x64 size-бюджеты с нулевым
+`bench/wasm-size-budget-v9.json` содержит exact Linux-x64 size-бюджеты с нулевым
 headroom для `runtime` и `compiler`; checker выбирает текущую версию, а все
 предыдущие versioned-файлы остаются неизменяемой историей. Size policy не
 притворяется идентификатором артефакта: фактический SHA каждой роли вместе с

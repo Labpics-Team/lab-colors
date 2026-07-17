@@ -62,18 +62,3 @@ required-features = ["wcag22-feasibility"]
 name = "wcag22_explicit_feasibility"
 required-features = ["wcag22-explicit-feasibility"]
 
-[[test]]
-name = "wcag22_explicit_selection"
-required-features = ["wcag22-explicit-feasibility"]
-
-[[test]]
-name = "wcag22_explicit_selection_alloc"
-required-features = ["wcag22-explicit-feasibility"]
-
-[[test]]
-name = "wcag22_explicit_atomic"
-required-features = ["wcag22-explicit-feasibility"]
-
-[[test]]
-name = "wcag22_explicit_atomic_alloc"
-required-features = ["wcag22-explicit-feasibility"]
