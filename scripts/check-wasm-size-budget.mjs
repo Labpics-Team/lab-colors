@@ -49,7 +49,7 @@ export const V10_FILE_SHA256 =
 export const V11_FILE_SHA256 =
   "fa11531ee390dd6dfdfadfadab99bbe8277f2b152b567951b17ef6093d42b1e4";
 export const V12_FILE_SHA256 =
-  "897cb035bfba299b815e51cba212e12d40ca49eba7634bfc4ec1a9e2ec3e8913";
+  "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
 const V11_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v11.json";
@@ -68,12 +68,13 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
-    // Pinned Linux run 29606827872 измерил C5.1 head точно (+416B над v11:
-    // словарь клиентских ключей тем вместо fixed enum). Любой дальнейший рост
-    // требует НОВОЙ версии снапшота, не headroom здесь.
+    // Pinned Linux run 29609974767 измерил C5.1 head точно (+524B над v11:
+    // словарь клиентских ключей тем вместо fixed enum + отказ EmptyThemes на
+    // загрузке). Любой дальнейший рост требует НОВОЙ версии снапшота,
+    // не headroom здесь.
     basis: "accepted-c5-theme-dictionary-snapshot",
-    measurementSource: "github-actions-run-29606827872",
-    acceptedCeiling: 459657,
+    measurementSource: "github-actions-run-29609974767",
+    acceptedCeiling: 459765,
   },
 };
 

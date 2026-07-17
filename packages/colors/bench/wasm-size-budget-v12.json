@@ -19,12 +19,12 @@
     "runtime": {
       "artifact": "packages/colors/pkg/labcolors_bg.wasm",
       "measurement": {
-        "source": "github-actions-run-29606827872",
+        "source": "github-actions-run-29609974767",
         "measurementPlatform": "linux-x64",
-        "rawBytes": 459657
+        "rawBytes": 459765
       },
       "policy": {
-        "maxRawBytes": 459657,
+        "maxRawBytes": 459765,
         "basis": "accepted-c5-theme-dictionary-snapshot",
         "gzip": "diagnostic-only"
       }

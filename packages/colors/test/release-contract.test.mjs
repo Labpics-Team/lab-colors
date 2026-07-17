@@ -1165,7 +1165,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v9: "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4",
     v10: "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6",
     v11: "fa11531ee390dd6dfdfadfadab99bbe8277f2b152b567951b17ef6093d42b1e4",
-    v12: "897cb035bfba299b815e51cba212e12d40ca49eba7634bfc4ec1a9e2ec3e8913",
+    v12: "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1388,8 +1388,9 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.deepEqual(v11.buildRecipes.runtime, v10.buildRecipes.runtime);
   assert.deepEqual(v11.roles.runtime, v10.roles.runtime);
 
-  // V12 (C5.1): словарь клиентских theme-ключей вместо fixed enum — принятый
-  // рост runtime +416B, зафиксирован новым точным снапшотом (run 29606827872).
+  // V12 (C5.1): словарь клиентских theme-ключей вместо fixed enum + отказ
+  // EmptyThemes на загрузке — принятый рост runtime +524B, зафиксирован новым
+  // точным снапшотом (run 29609974767).
   assert.equal(v12.schemaVersion, 8);
   assert.equal(v12.budgetId, "labcolors-wasm-runtime-c5-theme-keys-v12");
   assert.deepEqual(v12.predecessor, {
@@ -1399,18 +1400,18 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   assert.deepEqual(v12.toolchainSource, v11.toolchainSource);
   assert.deepEqual(v12.buildRecipes, v11.buildRecipes);
   assert.deepEqual(v12.roles.runtime.measurement, {
-    source: "github-actions-run-29606827872",
+    source: "github-actions-run-29609974767",
     measurementPlatform: "linux-x64",
-    rawBytes: 459657,
+    rawBytes: 459765,
   });
   assert.deepEqual(v12.roles.runtime.policy, {
-    maxRawBytes: 459657,
+    maxRawBytes: 459765,
     basis: "accepted-c5-theme-dictionary-snapshot",
     gzip: "diagnostic-only",
   });
   assert.equal(
     v12.roles.runtime.policy.maxRawBytes - v11.roles.runtime.policy.maxRawBytes,
-    416,
+    524,
     "C5.1 growth is the exact accepted dictionary-lookup delta",
   );
 
