@@ -219,7 +219,7 @@ final class ConformanceTests: XCTestCase {
 
     func testCoreVersionMatchesManifest() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
-        XCTAssertEqual(manifest.packVersion, "7.0.0", "Swift fixture обязан исполнять pack v7")
+        XCTAssertEqual(manifest.packVersion, "8.0.0", "Swift fixture обязан исполнять pack v8")
         XCTAssertFalse(coreVersion().isEmpty)
         XCTAssertEqual(
             coreVersion(), manifest.coreVersion,

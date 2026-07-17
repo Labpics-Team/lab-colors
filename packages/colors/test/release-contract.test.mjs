@@ -1329,7 +1329,7 @@ test("release evidence carries the versioned WCAG22 feasibility operation", () =
 test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7, 8].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1346,6 +1346,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
     v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
     v8: "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109",
+    v9: "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1356,7 +1357,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6, v7, v8 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7, v8, v9 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1502,11 +1503,39 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     gzip: "diagnostic-only",
   });
 
+  // V9 (roadmap C4a): the atomic explicit-selection operation is excised, and
+  // the canonical compiler returns BYTE-IDENTICAL to its pre-atomic artifact
+  // (175212B — the C1-era compiler), which pins the excision as exact. The
+  // untouched runtime role keeps its accepted PR-338 snapshot.
+  assert.equal(v9.schemaVersion, 7);
+  assert.equal(v9.budgetId, "labcolors-wasm-roles-c4a-v9");
+  assert.deepEqual(v9.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v8.json",
+    fileSha256: expectedHashes.v8,
+  });
+  assert.deepEqual(v9.toolchainSource, v8.toolchainSource);
+  assert.deepEqual(v9.buildRecipes, v8.buildRecipes);
+  assert.deepEqual(v9.roles.runtime, v8.roles.runtime);
+  assert.deepEqual(v9.roles.compiler.measurement, {
+    source: "github-actions-run-29571640106",
+    measurementPlatform: "linux-x64",
+    rawBytes: 175212,
+  });
+  assert.deepEqual(v9.roles.compiler.policy, {
+    maxRawBytes: 175212,
+    basis: "accepted-c4a-excision-snapshot",
+    gzip: "diagnostic-only",
+  });
+  assert.ok(
+    v9.roles.compiler.policy.maxRawBytes < v8.roles.compiler.policy.maxRawBytes,
+    "C4a must shrink the compiler role, never grow it",
+  );
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v8);
-  for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v9);
+  for (const version of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1625,7 +1654,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     const compilerBytes = Buffer.alloc(17);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
     compilerBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v8);
+    const fixture = structuredClone(v9);
     for (const [role, bytes] of [["runtime", runtimeBytes], ["compiler", compilerBytes]]) {
       fixture.roles[role].measurement.rawBytes = bytes.length;
       fixture.roles[role].policy.maxRawBytes = bytes.length;
@@ -1780,8 +1809,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
     coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v8),
-      /current v8 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v9),
+      /current v9 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {

@@ -15,10 +15,11 @@ const V4_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v4.js
 const V5_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v5.json");
 const V6_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v6.json");
 const V7_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v7.json");
+const V8_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v8.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v8.json",
+  "packages/colors/bench/wasm-size-budget-v9.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -38,13 +39,16 @@ export const V7_FILE_SHA256 =
   "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e";
 export const V8_FILE_SHA256 =
   "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109";
+export const V9_FILE_SHA256 =
+  "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V7_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v7.json";
+const V8_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v8.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
 const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
 const V7_BUDGET_ID = "labcolors-wasm-roles-issue-307-c7a-v7";
 const V8_BUDGET_ID = "labcolors-wasm-roles-pr-338-v8";
+const V9_BUDGET_ID = "labcolors-wasm-roles-c4a-v9";
 const ROLE_ORDER = ["runtime", "compiler"];
 const ROLE_SPECS = {
   runtime: {
@@ -54,8 +58,9 @@ const ROLE_SPECS = {
     recipeSha256: V1_RECIPE_SHA256,
     basis: "accepted-pr-338-runtime-snapshot",
     measurementSource: "github-actions-run-29548782379",
-    // Pinned Linux run 29548782379 measured this PR head exactly. Any later
-    // growth requires a new versioned snapshot, never headroom here.
+    // Pinned Linux run 29548782379 measured the PR-338 head exactly; C4a does
+    // not touch the runtime role. Any later growth requires a new versioned
+    // snapshot, never headroom here.
     acceptedCeiling: 456696,
   },
   compiler: {
@@ -63,10 +68,12 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked",
     recipeSha256: "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f",
-    // Текущий canonical build сохранил byte-identical compiler artifact;
-    // его ceiling остаётся равным неизменному v7 измерению.
-    basis: "unchanged-v7-compiler-ceiling",
-    measurementSource: "github-actions-run-29548782379",
+    // C4a вырезал атомарную explicit-selection операцию: canonical compiler
+    // вернулся БАЙТ-В-БАЙТ к до-атомарному артефакту (175212B, sha 3a552ce4… —
+    // ровно C1-эра), что подтверждает чистоту выреза. Run 29571640106.
+    basis: "accepted-c4a-excision-snapshot",
+    measurementSource: "github-actions-run-29571640106",
+    acceptedCeiling: 175212,
   },
 };
 
@@ -175,7 +182,11 @@ function verifyImmutableHistory() {
   if (v7?.schemaVersion !== 6 || v7?.budgetId !== V7_BUDGET_ID) {
     fail("immutable v7 budget identity drifted");
   }
-  return { v1, v4, v5, v6, v7 };
+  const v8 = readImmutableJson(V8_PATH, V8_FILE_SHA256, "v8");
+  if (v8?.schemaVersion !== 7 || v8?.budgetId !== V8_BUDGET_ID) {
+    fail("immutable v8 budget identity drifted");
+  }
+  return { v1, v4, v5, v6, v7, v8 };
 }
 
 function validateBudgetValue(budget) {
@@ -192,14 +203,14 @@ function validateBudgetValue(budget) {
     "budget",
   );
   if (budget.schemaVersion !== 7) fail("supported schemaVersion is exactly 7");
-  if (budget.budgetId !== V8_BUDGET_ID) fail(`budgetId must be ${V8_BUDGET_ID}`);
+  if (budget.budgetId !== V9_BUDGET_ID) fail(`budgetId must be ${V9_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V7_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V7_FILE_SHA256
+    budget.predecessor.path !== V8_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V8_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v7 document");
+    fail("predecessor must bind the immutable v8 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -212,7 +223,7 @@ function validateBudgetValue(budget) {
 
   exactKeys(budget.buildRecipes, ROLE_ORDER, "buildRecipes");
   exactKeys(budget.roles, ROLE_ORDER, "roles");
-  const { v1, v7 } = verifyImmutableHistory();
+  const { v1, v8 } = verifyImmutableHistory();
 
   for (const role of ROLE_ORDER) {
     const spec = ROLE_SPECS[role];
@@ -265,8 +276,11 @@ function validateBudgetValue(budget) {
     }
   }
 
-  if (budget.roles.compiler.policy.maxRawBytes > v7.roles.compiler.policy.maxRawBytes) {
-    fail("unchanged compiler role must not regress the immutable predecessor ceiling");
+  if (budget.roles.compiler.policy.maxRawBytes > v8.roles.compiler.policy.maxRawBytes) {
+    fail("compiler role must not exceed the immutable predecessor ceiling");
+  }
+  if (budget.roles.runtime.policy.maxRawBytes > v8.roles.runtime.policy.maxRawBytes) {
+    fail("untouched runtime role must not exceed the immutable predecessor ceiling");
   }
 }
 
@@ -285,10 +299,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V8_FILE_SHA256) {
+    if (actualFileSha256 !== V9_FILE_SHA256) {
       fail(
-        `current v8 file SHA-256 mismatch: ` +
-          `expected=${V8_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v9 file SHA-256 mismatch: ` +
+          `expected=${V9_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
