@@ -3960,22 +3960,29 @@ fn max_contrast(
     let sign = polarity.sign();
     // 300 Lc is comfortably past the ~106 ceiling of any sRGB background.
     let probe = Contract::text(sign * 300.0).with_conformance(Floor::None);
-    match solve::solve_in(
+    ceiling_from_probe(solve::solve_in(
         bg,
         probe,
         Hue::deg(0.0),
         ChromaPolicy::Neutral,
         vc,
         interval,
-    ) {
+    ))
+}
+
+fn ceiling_from_probe(result: Result<Solved, SolveFailure>) -> Result<f64, SolveFailure> {
+    match result {
         // The probe is unreachable by design; ExceedsRange carries the ceiling.
         Err(SolveFailure::ExceedsRange { max_achievable, .. }) => Ok(max_achievable.abs()),
-        // A reachable 300 Lc is physically impossible; treat anything else as the
-        // background having no usable headroom in this polarity.
         Ok(_) => Err(SolveFailure::InternalInvariant(
             "300 Lc ceiling probe unexpectedly resolved".to_string(),
         )),
-        Err(other) => Err(other),
+        // Preserve an already-correct internal failure, but never project another
+        // category from this controlled core-generated probe as client/physics.
+        Err(failure @ SolveFailure::InternalInvariant(_)) => Err(failure),
+        Err(other) => Err(SolveFailure::InternalInvariant(format!(
+            "300 Lc ceiling probe returned an unexpected outcome: {other}"
+        ))),
     }
 }
 
@@ -4080,6 +4087,33 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controlled_ceiling_probe_never_leaks_a_client_or_physical_failure() {
+        for unexpected in [
+            SolveFailure::BelowContrastFloor { target: 3.0 },
+            SolveFailure::BoundedSearchExhausted {
+                target: 300.0,
+                closest_examined: 100.0,
+            },
+            SolveFailure::FloorUnreachable {
+                floor: 4.5,
+                max_ratio: 3.0,
+            },
+            SolveFailure::GamutUnsupported,
+            SolveFailure::InvalidInput("generated probe".into()),
+        ] {
+            assert!(
+                matches!(
+                    ceiling_from_probe(Err(unexpected)),
+                    Err(SolveFailure::InternalInvariant(_))
+                ),
+                "controlled probe drift must fail the enclosing call"
+            );
+        }
+        let internal = SolveFailure::InternalInvariant("original provenance".into());
+        assert_eq!(ceiling_from_probe(Err(internal.clone())), Err(internal));
+    }
 
     fn one_glow_table(
         source_hex: &str,

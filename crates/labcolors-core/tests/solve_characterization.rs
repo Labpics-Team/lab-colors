@@ -1,11 +1,10 @@
-//! RED-характеризация легаси-солвера (#297) на текущем main.
+//! Битовая характеризация численного solver-контракта на канонических платформах.
 //!
 //! Фикстуры `contracts/solve-characterization-v1-{macos-aarch64,linux-x64}.json`
-//! — неизменяемый вход миграции честных имён: записаны ДО любых переименований
-//! и обязаны реплеиться бит-в-бит (f64 сравниваются по битам, не по значению)
-//! после каждого шага миграции, каждая на своей канонической платформе. Слепой
-//! rebaseline запрещён: любое расхождение — дефект PR, а не повод
-//! перегенерировать эталон.
+//! обязаны реплеиться бит-в-бит (f64 сравниваются по битам, не по значению)
+//! каждая на своей канонической платформе. Rebaseline допустим только вместе с
+//! доказанным изменением численного контракта и построчным review diff; любое
+//! иное расхождение — дефект PR.
 //!
 //! Запись эталона текущей платформы (ровно один раз, на baseline):
 //! `LABCOLORS_RECORD_SOLVE_CHARACTERIZATION=1 cargo test -p labcolors-core \
@@ -133,7 +132,7 @@ fn matrix() -> Vec<CaseSpec> {
             });
         }
     }
-    // Квантизационная полоса: мелкий шаг у нижней границы читаемости.
+    // Квантизационная полоса: мелкий шаг у нижней границы применимости LPC.
     let mut t = 7.30_f64;
     while t <= 7.60 + 1e-9 {
         cases.push(CaseSpec {
@@ -369,14 +368,13 @@ fn fixture_replays_bit_for_bit() {
         std::fs::read_to_string(fixture).expect("committed solve characterization fixture exists");
     assert_eq!(
         rendered, committed,
-        "solve characterization drifted from the immutable baseline; \
-         a rename migration must not change bytes, payload bits or terminals"
+        "solve characterization drifted from its reviewed baseline; \
+         numeric changes require an explicit recorder diff and proof"
     );
 }
 
 /// Анти-вакуум: матрица обязана населять оба знака, floored/non-floored успехи
-/// и каждый достижимый класс ошибки; PolarityMismatch задокументирован как
-/// defensively-unreachable и обязан оставаться нулевым.
+/// и каждый достижимый класс ошибки.
 #[test]
 fn characterization_counters_are_non_vacuous() {
     let observed = observed_map();
@@ -412,7 +410,6 @@ fn characterization_counters_are_non_vacuous() {
                 "exceeds_range" => "exceeds_range",
                 "bounded_search_exhausted" => "bounded_search_exhausted",
                 "floor_unreachable" => "floor_unreachable",
-                "polarity_mismatch" => "polarity_mismatch",
                 "gamut_unsupported" => "gamut_unsupported",
                 "invalid_input" => "invalid_input",
                 "internal_invariant" => "internal_invariant",
@@ -457,11 +454,6 @@ fn characterization_counters_are_non_vacuous() {
             .unwrap_or(0),
         0,
         "BoundedSearchExhausted is characterized as publicly extinct on this matrix"
-    );
-    assert_eq!(
-        class_counts.get("polarity_mismatch").copied().unwrap_or(0),
-        0,
-        "PolarityMismatch is documented as defensively unreachable"
     );
     assert_eq!(
         class_counts.get("internal_invariant").copied().unwrap_or(0),
