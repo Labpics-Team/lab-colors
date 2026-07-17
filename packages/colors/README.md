@@ -1,6 +1,6 @@
 # @labpics/colors
 
-Агностичный контраст-движок для дизайн-систем. Получает фоновый цвет и тему — возвращает полный набор цветовых ролей **вашей** системы. Словарь ролей не встроен в пакет: его задаёт конфиг дизайн-системы (`ThemeConfig`), загружаемый через `loadConfig`; имена вида `--lab-label-primary`, `--lab-border-base` в примерах ниже — из конфига дизайн-системы labui. CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Пакет не имеет runtime-зависимостей и разделён на две WASM-роли: runtime resolver в корне и offline compiler в `@labpics/colors/compiler`.
+Агностичный контраст-движок для дизайн-систем. Получает фоновый цвет и тему — возвращает полный набор цветовых ролей **вашей** системы. Словарь ролей не встроен в пакет: его задаёт конфиг дизайн-системы (`ThemeConfig`), загружаемый через `loadConfig`; имена вида `--lab-label-primary`, `--lab-border-base` в примерах ниже — из конфига дизайн-системы labui. CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Пакет не имеет runtime-зависимостей; runtime resolver — единственная WASM-роль.
 
 Ядро возвращает **данные**, не затрагивает DOM. Три вспомогательные функции переводят эти данные в живые CSS-переменные: `applyTheme` (разовое применение), `watchTheme` (реактивное — обновляется при изменении фона) и `adaptTheme` (плавная адаптация для фона, меняющегося каждый кадр).
 
@@ -24,13 +24,13 @@ npm install @labpics/colors
 При сборке из монорепо:
 
 ```sh
-npm run build   # → pkg/ (runtime) + compiler/ (offline compiler)
+npm run build   # → pkg/ (runtime WASM)
 ```
 
 Пакет экспортирует `@labpics/colors/build-metadata.json` — self-declared
 machine-readable metadata конкретной сборки: npm/core versions, exact source
 SHA, digest и SHA-256 conformance manifest/family set, а также размер и SHA-256
-упорядоченных `runtime`/`compiler` WASM-артефактов. Release-gate сверяет schema 2
+`runtime` WASM-артефакта. Release-gate сверяет schema 2
 целиком с исходными файлами и повторяет
 проверку после чистой установки tarball. Это integrity metadata внутри
 артефакта, не криптографическая provenance/Sigstore-аттестация, не runtime
@@ -128,24 +128,19 @@ adaptTheme(hero, {
 ### Инициализация в Node
 
 Node получает локальные WASM-байты явно; нулевая форма `init()` предназначена
-для браузерного loader-а. Runtime и compiler инициализируются независимо:
+для браузерного loader-а.
 
 ```ts
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import initRuntime from "@labpics/colors";
-import initCompiler from "@labpics/colors/compiler";
 
 const require = createRequire(import.meta.url);
 const runtimeWasm = await readFile(
   require.resolve("@labpics/colors/pkg/labcolors_bg.wasm"),
 );
-const compilerWasm = await readFile(
-  require.resolve("@labpics/colors/compiler/wasm"),
-);
 
 await initRuntime({ module_or_path: runtimeWasm });
-await initCompiler({ module_or_path: compilerWasm });
 ```
 
 ---
@@ -314,99 +309,6 @@ npm-тарбол в `evidence/`; proof также SHA-256-связан с фак
 registry-строкой, разрешающей Core минтить terminal evidence. APCA-shaped
 diagnostic-компонент текущего LPC и legacy `wcagRatio` не могут изменить этот
 вердикт.
-
----
-
-### Offline compiler: `evaluateWcag22Feasibility(request)`
-
-Полностью перебирает зарегистрированную конечную ось sRGB8 против всех явно
-объявленных клиентом связей. Операция отвечает только на вопрос «какие
-кандидаты проходят все эти ограничения?». Она не выбирает лучший цвет, не
-угадывает применимость и не понимает семантику ID.
-
-Операция экспортируется только из `@labpics/colors/compiler` и загружает
-отдельный compiler WASM; package root остаётся runtime API. Операция принимает
-только зарегистрированную нейтральную ось V1.
-
-В браузере compiler принадлежит offline/Worker execution class: main thread
-импортирует только runtime, а dedicated module Worker владеет compiler WASM и
-полным вызовом. Node build-tooling может вызывать тот же entry напрямую.
-
-```ts
-// color-compiler.worker.ts
-import initCompiler, {
-  evaluateWcag22Feasibility,
-  type Wcag22FeasibilityRequestV1,
-} from "@labpics/colors/compiler";
-
-await initCompiler();
-
-self.addEventListener(
-  "message",
-  ({ data }: MessageEvent<Wcag22FeasibilityRequestV1>) => {
-    const bytes = new TextEncoder().encode(JSON.stringify(data));
-    self.postMessage(evaluateWcag22Feasibility(bytes));
-  },
-);
-self.postMessage({ type: "ready" } as const);
-```
-
-```ts
-// build-colors.ts — main thread не импортирует runtime-код compiler-а
-import type {
-  Wcag22FeasibilityOutcomeV1,
-  Wcag22FeasibilityRequestV1,
-} from "@labpics/colors/compiler";
-
-const request: Wcag22FeasibilityRequestV1 = {
-  schemaVersion: 1,
-  domainId: "srgb8-neutral-axis-v1",
-  resourceProfileId: "compile-v1",
-  relations: [{
-    relationId: "opaque-relation-7f3a",
-    occurrenceId: "opaque-occurrence-17",
-    kind: "applicable",
-    criterion: "sc-1.4.3-text-default",
-    adjacent: [[0, 0, 0], [255, 255, 255]],
-  }],
-};
-
-const outcome = await new Promise<Wcag22FeasibilityOutcomeV1>((resolve, reject) => {
-  const worker = new Worker(new URL("./color-compiler.worker.ts", import.meta.url), {
-    type: "module",
-  });
-  worker.addEventListener("message", ({ data }) => {
-    if (data?.type === "ready") {
-      worker.postMessage(request);
-      return;
-    }
-    worker.terminate();
-    resolve(data);
-  });
-  worker.addEventListener("error", (event) => {
-    worker.terminate();
-    reject(event.error ?? new Error(event.message));
-  }, { once: true });
-});
-
-if (outcome.outcome === "success") {
-  // feasible | infeasible | notEvaluated
-  console.log(outcome.feasibility.status);
-} else {
-  // strict transport/core failure as typed data; no fallback colour
-  console.error(outcome.error);
-}
-```
-
-Вход — только настоящий `Uint8Array` со strict JSON V1; иной JavaScript-тип
-детерминированно отклоняется `TypeError` до чтения WASM-owned ceiling и копии.
-Граница размера выведена из грамматики и resource profile; после `initCompiler()` её
-возвращает `wcag22FeasibilityMaxBytes()`. Package wrapper проверяет `byteLength`
-до избежимой копии в WASM, а Rust повторяет авторитетную проверку. Выход хранит
-домен и канонические связи по одному разу, а решения — в candidate-major LSB0
-bitset; объектного графа `256 × E` в public result нет.
-
----
 
 ### `numericalCapabilityManifest(): NumericalCapabilityManifestV2`
 
@@ -590,26 +492,24 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 ## Размер бандла
 
 Raw-размер WASM — hard gate с append-only историей. Текущий
-`bench/wasm-size-budget-v10.json` содержит exact Linux-x64 size-бюджеты с нулевым
-headroom для `runtime` и `compiler`; checker выбирает текущую версию, а все
-предыдущие versioned-файлы остаются неизменяемой историей. Size policy не
-притворяется идентификатором артефакта: фактический SHA каждой роли вместе с
-source SHA записывается в `build-metadata.json` и повторно сверяется с точными
-байтами tarball при публикации. Release-equivalent CI требует точного размера
-обеих ролей и неизменных рецептов сборки. CI собирает роли, выполняет
-`cargo clean`, повторяет сборку и сравнивает результаты внутри одного Linux job
-с закреплённым toolchain; это проверка повторяемости в данном job, а не
-утверждение о cross-run или cross-host reproducibility. На других host-платформах
-checker сообщает только raw/gzip/SHA-диагностику и не выдаёт локальные байты за
-канонический release artifact.
+`bench/wasm-size-budget-v11.json` содержит exact Linux-x64 size-бюджет `runtime`
+с нулевым headroom; checker выбирает текущую версию, а все предыдущие
+versioned-файлы остаются неизменяемой историей. Size policy не притворяется
+идентификатором артефакта: фактический SHA артефакта вместе с source SHA
+записывается в `build-metadata.json` и повторно сверяется с точными байтами
+tarball при публикации. Release-equivalent CI требует точного размера и
+неизменного рецепта сборки. CI собирает артефакт, выполняет `cargo clean`,
+повторяет сборку и сравнивает результаты внутри одного Linux job с закреплённым
+toolchain; это проверка повторяемости в данном job, а не утверждение о cross-run
+или cross-host reproducibility. На других host-платформах checker сообщает
+только raw/gzip/SHA-диагностику и не выдаёт локальные байты за канонический
+release artifact.
 
-Runtime и offline compiler поставляются двумя независимо загружаемыми
-`.wasm`-ассетами. Будет ли runtime-загрузка критическим путём первого рендера,
-определяет интеграция: до первого `resolveTheme` инициализация обязана
-завершиться; compiler можно не загружать в пользовательской сессии. JS-хелперы
-(`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`) имеют
-именованные экспорты и допускают tree-shaking, но их размер также следует мерить
-сборкой, а не описывать приблизительно.
+Будет ли runtime-загрузка критическим путём первого рендера, определяет
+интеграция: до первого `resolveTheme` инициализация обязана завершиться.
+JS-хелперы (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`)
+имеют именованные экспорты и допускают tree-shaking, но их размер также следует
+мерить сборкой, а не описывать приблизительно.
 
 Release packer закреплён на Node 24.14/npm 11.9; это не consumer floor.
 Публичный контракт `Node >=22.11.0` независимо прогоняется отдельным CI job. Browser-

@@ -35,12 +35,6 @@ NamedRoleTable
   source-over/screen операции несут проверяемый профиль и `bit-exact`
   сертификат; Glow требует явный decision profile и может завершиться
   типизированным `Indeterminate` без CSS fallback.
-- **Полная проверка конечного домена.** В compiler-контракте V1 клиент объявляет
-  opaque occurrence relations, точные соседние sRGB8-цвета и критерии WCAG 2.2.
-  Для зарегистрированной `srgb8-neutral-axis-v1` Core полностью перечисляет
-  домен и возвращает packed feasible partition. Операция доступна offline через
-  отдельный `@labpics/colors/compiler` WASM и не входит в root runtime
-  API/runtime WASM.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
 - **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальной областью DOM.
 
@@ -305,7 +299,6 @@ PR координируют работу, но не являются источ�
 ```text
 crates/
 ├── labcolors-core          — математика, конфиг, resolve и результаты
-├── labcolors-protocol      — единая versioned bytes→Core→wire граница
 ├── labcolors-wasm          — WASM-граница
 ├── labcolors-ffi           — нативная FFI-граница
 └── labcolors-conformance   — общие тест-векторы

@@ -24,7 +24,6 @@
 //! | [`composite`] / [`min_alpha`] | `alpha` | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | [`muddiness`] | `muddiness` legacy compatibility vectors | `cleanliness::muddiness_from_hex` |
 //! | [`evaluate_wcag22`] | `wcag22` | exact final-sRGB8 WCAG 2.2 evaluator |
-//! | [`evaluate_wcag22_feasibility_raw_v1`] | `wcag22-feasibility` | `labcolors-protocol` bytes → Core → canonical outcome bytes |
 //! | [`core_version`] | `manifest` | версия ядра |
 //!
 //! [`solve_glow_point`] — отдельный low-level contract test нативной границы:
@@ -448,62 +447,6 @@ fn public_failure_wire(
 #[must_use]
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
-}
-
-fn encode_feasibility_outcome(
-    outcome: labcolors_protocol::ProtocolOutcomeV1,
-) -> Result<Vec<u8>, ColorError> {
-    labcolors_protocol::encode_outcome_v1(&outcome).map_err(|error| {
-        ColorError::ProtocolEncodingFailed {
-            reason: error.to_string(),
-        }
-    })
-}
-
-/// Exact protocol-owned V1 request-byte ceiling.
-///
-/// Swift reads this scalar before converting `Data` into the UniFFI byte
-/// buffer. Rust still repeats the authoritative check for every raw call.
-#[uniffi::export]
-#[must_use]
-pub const fn wcag22_feasibility_max_request_bytes_v1() -> u64 {
-    labcolors_protocol::MAX_ENVELOPE_BYTES_V1
-}
-
-/// Evaluate one exact V1 request byte envelope through the sole protocol
-/// compiler and return its canonical outcome bytes.
-///
-/// Public-input and Core failures are successful ABI calls carrying
-/// `ProtocolOutcomeV1::Failure`; only an internal canonical-encoding failure
-/// returns [`ColorError::ProtocolEncodingFailed`].
-///
-/// # Errors
-///
-/// [`ColorError::ProtocolEncodingFailed`] only if the sealed protocol outcome
-/// cannot be serialized.
-#[uniffi::export]
-pub fn evaluate_wcag22_feasibility_raw_v1(request: Vec<u8>) -> Result<Vec<u8>, ColorError> {
-    encode_feasibility_outcome(labcolors_protocol::evaluate_wcag22_feasibility_v1(&request))
-}
-
-/// Construct canonical oversize failure bytes from a scalar byte count.
-///
-/// Host wrappers call this only after proving the request exceeds
-/// [`wcag22_feasibility_max_request_bytes_v1`], so the rejected raw buffer is
-/// never copied into UniFFI. Callers that bypass the wrapper remain protected
-/// by the authoritative raw function above.
-///
-/// # Errors
-///
-/// [`ColorError::ProtocolEncodingFailed`] only if the sealed protocol outcome
-/// cannot be serialized.
-#[uniffi::export]
-pub fn wcag22_feasibility_envelope_too_large_v1(
-    requested_bytes: u64,
-) -> Result<Vec<u8>, ColorError> {
-    encode_feasibility_outcome(labcolors_protocol::envelope_too_large_outcome_v1(
-        requested_bytes,
-    ))
 }
 
 /// Проверяет single-result postcondition до проекции на ABI record.
@@ -953,63 +896,6 @@ pub fn muddiness(hex: String) -> Result<f64, ColorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn feasibility_boundary_exposes_the_protocol_byte_ceiling() {
-        assert_eq!(
-            wcag22_feasibility_max_request_bytes_v1(),
-            labcolors_protocol::MAX_ENVELOPE_BYTES_V1
-        );
-    }
-
-    #[test]
-    fn feasibility_boundary_is_a_mechanical_protocol_byte_shell() {
-        let request = br#"{"schemaVersion":1,"domainId":"srgb8-neutral-axis-v1","resourceProfileId":"compile-v1","relations":[{"relationId":"relation","occurrenceId":"occurrence","kind":"applicable","criterion":"sc-1.4.3-text-default","adjacent":[[118,118,118]]}]}"#;
-        let expected = labcolors_protocol::encode_outcome_v1(
-            &labcolors_protocol::evaluate_wcag22_feasibility_v1(request),
-        )
-        .unwrap();
-
-        assert_eq!(
-            evaluate_wcag22_feasibility_raw_v1(request.to_vec()).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn feasibility_semantic_input_errors_remain_protocol_failure_data() {
-        let request = br#"{"schemaVersion":2}"#;
-        let encoded = evaluate_wcag22_feasibility_raw_v1(request.to_vec()).unwrap();
-        let expected = labcolors_protocol::encode_outcome_v1(
-            &labcolors_protocol::evaluate_wcag22_feasibility_v1(request),
-        )
-        .unwrap();
-
-        assert_eq!(encoded, expected);
-        assert!(
-            std::str::from_utf8(&encoded)
-                .unwrap()
-                .contains(r#""outcome":"failure""#),
-            "public-input failure must be outcome data, not a thrown FFI error"
-        );
-    }
-
-    #[test]
-    fn feasibility_oversize_scalar_helper_matches_authoritative_raw_recheck() {
-        let requested = labcolors_protocol::MAX_ENVELOPE_BYTES_V1 + 1;
-        let from_scalar = wcag22_feasibility_envelope_too_large_v1(requested).unwrap();
-        let oversized = vec![b' '; usize::try_from(requested).unwrap()];
-        let from_raw = evaluate_wcag22_feasibility_raw_v1(oversized).unwrap();
-
-        assert_eq!(from_scalar, from_raw);
-        assert_eq!(
-            from_scalar,
-            labcolors_protocol::encode_outcome_v1(
-                &labcolors_protocol::envelope_too_large_outcome_v1(requested)
-            )
-            .unwrap()
-        );
-    }
 
     #[test]
     fn wcag22_transport_preserves_core_decision_and_evidence() {

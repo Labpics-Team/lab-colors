@@ -494,23 +494,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "labcolors-compiler"
-version = "0.2.0"
-dependencies = [
- "js-sys",
- "labcolors-protocol",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-test",
-]
-
-[[package]]
 name = "labcolors-conformance"
 version = "0.2.0"
 dependencies = [
  "labcolors-core",
- "labcolors-protocol",
  "serde",
  "serde_json",
 ]
@@ -531,18 +518,8 @@ name = "labcolors-ffi"
 version = "0.2.0"
 dependencies = [
  "labcolors-core",
- "labcolors-protocol",
  "thiserror",
  "uniffi",
-]
-
-[[package]]
-name = "labcolors-protocol"
-version = "0.2.0"
-dependencies = [
- "labcolors-core",
- "serde",
- "serde_json",
 ]
 
 [[package]]

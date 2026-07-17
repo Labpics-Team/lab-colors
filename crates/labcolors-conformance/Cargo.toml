@@ -11,13 +11,9 @@ description = "Платформо-нейтральный conformance-пак дв
 
 [dependencies]
 # Численные семейства ДЕРИВИРУЮТСЯ из public Core API; versioned transport
-# family — из общего public protocol API. Канонические значения и wire algebra
 # не вписываются руками: генератор остаётся тенью двух своих authority.
 labcolors-core = { path = "../labcolors-core", default-features = false }
-# Request construction, byte preflight and wire algebra stay in one protocol
-# authority shared with both adapters. This crate only records its canonical
 # request/outcome bytes; it does not mirror transport DTOs.
-labcolors-protocol = { path = "../labcolors-protocol" }
 # serde/serde_json УЖЕ в дереве воркспейса (граница конфига WASM). Переиспользуем
 # тот же пин — ноль новой supply-chain-поверхности для `cargo audit`.
 serde = { version = "1", features = ["derive"] }

@@ -12,7 +12,7 @@
 
 use labcolors_conformance::{
     AlphaVector, ContrastVector, DRIFT_TOL, LadderVector, Manifest, MuddinessVector, Pack,
-    SolveOutcome, SolveVector, Wcag22FeasibilityVector, Wcag22Vector,
+    SolveOutcome, SolveVector, Wcag22Vector,
 };
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
@@ -221,15 +221,6 @@ fn committed_conformance_pack_replays_in_wasm32() {
         assert_eq!(actual, committed, "WCAG22 finite assessment drift");
     }
 
-    let wcag22_feasibility: Vec<Wcag22FeasibilityVector> = serde_json::from_str(include_str!(
-        "../../../conformance/vectors/wcag22-feasibility.json"
-    ))
-    .unwrap();
-    assert_eq!(wcag22_feasibility.len(), fresh.wcag22_feasibility.len());
-    for (committed, actual) in wcag22_feasibility.iter().zip(&fresh.wcag22_feasibility) {
-        assert_eq!(actual, committed, "feasibility protocol fixture drift");
-    }
-
     let committed_manifest: Manifest =
         serde_json::from_str(include_str!("../../../conformance/vectors/manifest.json")).unwrap();
     let fresh_manifest = fresh.manifest();
@@ -245,8 +236,7 @@ fn committed_conformance_pack_replays_in_wasm32() {
         + alpha.len()
         + solve.len()
         + muddiness.len()
-        + wcag22.len()
-        + wcag22_feasibility.len();
+        + wcag22.len();
     assert_eq!(
         committed_manifest.counts.total, replayed_total,
         "manifest total must equal every replayed committed family"

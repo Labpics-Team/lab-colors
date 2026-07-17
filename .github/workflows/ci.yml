@@ -220,12 +220,6 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
-      - name: prove base-only Core capability is independently testable
-        run: |
-          cargo check -p labcolors-core --all-targets --no-default-features --features wcag22-feasibility --locked
-          cargo test -p labcolors-core --lib --no-default-features --features wcag22-feasibility --locked
-          cargo test -p labcolors-core --test wcag22_feasibility --no-default-features --features wcag22-feasibility --locked
-          cargo test -p labcolors-core --doc --no-default-features --features wcag22-feasibility --locked
       - name: prove core capability projection boundary
         shell: bash
         run: |
@@ -243,30 +237,14 @@ jobs:
               "labcolors-ffi",
               "labcolors-conformance",
           )
-          protocol_consumers = (
-              "labcolors-compiler",
-              "labcolors-ffi",
-              "labcolors-conformance",
-          )
           core = packages["labcolors-core"]
-          if core["features"].get("default") != ["wcag22-feasibility"]:
+          if core["features"].get("default") != []:
               raise SystemExit("labcolors-core default capability set drifted")
-
-          protocol_core = [
-              dependency
-              for dependency in packages["labcolors-protocol"]["dependencies"]
-              if dependency["name"] == "labcolors-core" and dependency["kind"] is None
-          ]
-          if len(protocol_core) != 1:
-              raise SystemExit("labcolors-protocol must have one normal labcolors-core edge")
-          protocol_core = protocol_core[0]
-          if protocol_core["uses_default_features"]:
-              raise SystemExit("labcolors-protocol must disable Core default capabilities")
-          if protocol_core["features"] != ["wcag22-feasibility"]:
-              raise SystemExit(
-                  "labcolors-protocol must own exactly wcag22-feasibility, got "
-                  f"{protocol_core['features']}"
-              )
+          # Оффлайн protocol/compiler линия вырезана целиком: анти-воскрешение —
+          # самих крейтов больше не существует в воркспейсе.
+          for erased in ("labcolors-protocol", "labcolors-compiler"):
+              if erased in packages:
+                  raise SystemExit(f"deleted crate resurfaced in the workspace: {erased}")
 
           for consumer in direct_core_consumers:
               core_dependencies = [
@@ -284,38 +262,15 @@ jobs:
                       f"{consumer} direct Core edge must own no optional capability, got "
                       f"{core_dependency['features']}"
                   )
-          for consumer in protocol_consumers:
-              protocol_dependencies = [
-                  dependency
-                  for dependency in packages[consumer]["dependencies"]
-                  if dependency["name"] == "labcolors-protocol" and dependency["kind"] is None
-              ]
-              if len(protocol_dependencies) != 1:
-                  raise SystemExit(f"{consumer} must have one normal labcolors-protocol edge")
               feature_tree = subprocess.check_output(
                   ["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"],
                   text=True,
               )
-              if 'labcolors-core feature "wcag22-feasibility"' not in feature_tree:
-                  raise SystemExit(
-                      f"{consumer} did not resolve protocol-owned wcag22-feasibility"
-                  )
-              # Explicit-домен вырезан целиком: анти-воскрешение — сама фича
-              # больше не существует, потребительские деревья обязаны быть чисты.
-              if "wcag22-explicit" in feature_tree:
-                  raise SystemExit(
-                      f"{consumer} resolved a deleted explicit-domain capability"
-                  )
-
-          runtime_dependencies = packages["labcolors-wasm"]["dependencies"]
-          if any(dependency["name"] == "labcolors-protocol" for dependency in runtime_dependencies):
-              raise SystemExit("labcolors-wasm must not depend on labcolors-protocol")
-          compiler_dependencies = packages["labcolors-compiler"]["dependencies"]
-          if any(
-              dependency["name"] in {"labcolors-core", "labcolors-wasm"}
-              for dependency in compiler_dependencies
-          ):
-              raise SystemExit("labcolors-compiler must be a thin protocol-only adapter")
+              # Вырезанные вертикали: сами фичи больше не существуют,
+              # потребительские деревья обязаны быть чисты.
+              for forbidden in ("wcag22-feasibility", "wcag22-explicit", "labcolors-protocol"):
+                  if forbidden in feature_tree:
+                      raise SystemExit(f"{consumer} resolved a deleted capability: {forbidden}")
 
           runtime_tree = subprocess.check_output(
               [
@@ -327,26 +282,11 @@ jobs:
           )
           for forbidden in (
               "labcolors-protocol",
-              'labcolors-core feature "wcag22-feasibility"',
+              "wcag22-feasibility",
               "wcag22-explicit",
           ):
               if forbidden in runtime_tree:
                   raise SystemExit(f"runtime role resolved forbidden capability: {forbidden}")
-
-          compiler_tree = subprocess.check_output(
-              [
-                  "cargo", "tree", "-p", "labcolors-compiler",
-                  "--target", "wasm32-unknown-unknown",
-                  "--edges", "normal", "-e", "features",
-              ],
-              text=True,
-          )
-          if "labcolors-wasm" in compiler_tree:
-              raise SystemExit("compiler role resolved the theme/runtime engine")
-          if 'labcolors-core feature "wcag22-feasibility"' not in compiler_tree:
-              raise SystemExit("compiler role lacks protocol-owned wcag22-feasibility")
-          if "wcag22-explicit" in compiler_tree:
-              raise SystemExit("compiler role resolved a deleted explicit capability")
 
           print("core capability projection: PASS")
           PY
@@ -356,8 +296,6 @@ jobs:
         run: python3 scripts/verify_wcag22_q55.py
       - name: independently recompute WCAG22 neutral-axis fixtures
         run: python3 scripts/verify_wcag22_neutral_axis.py
-      - name: verify WCAG22 feasibility identity byte grammar
-        run: python3 scripts/verify_wcag22_feasibility_identity.py
 
   audit:
     name: cargo audit (rustsec)
@@ -450,9 +388,7 @@ jobs:
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-      - name: repeat WASM role builds in one toolchain-pinned CI job
-        # Each execution role is a separate Cargo root and physical artifact;
-        # building them in separate invocations prevents feature unification.
+      - name: repeat runtime WASM build in one toolchain-pinned CI job
         # Rust error locations otherwise embed the self-hosted runner's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
         # The second build follows `cargo clean`; equality checks repeatability
@@ -461,55 +397,43 @@ jobs:
         run: |
           set -euo pipefail
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
-          build_roles() {
+          build_runtime() {
             wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
-            wasm-pack build crates/labcolors-compiler --release --target web --out-dir ../../packages/colors/compiler --out-name labcolors_compiler --locked
           }
 
-          rm -rf packages/colors/pkg packages/colors/compiler
-          build_roles
+          rm -rf packages/colors/pkg
+          build_runtime
 
           first="$RUNNER_TEMP/wasm-first-$GITHUB_JOB"
           rm -rf "$first"
           mkdir -p "$first"
           cp -a packages/colors/pkg "$first/pkg"
-          cp -a packages/colors/compiler "$first/compiler"
 
           cargo clean
-          rm -rf packages/colors/pkg packages/colors/compiler
-          build_roles
+          rm -rf packages/colors/pkg
+          build_runtime
 
           if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then
             echo "runtime WASM output changed between builds" >&2
             exit 1
           fi
-          if ! diff --no-dereference --recursive "$first/compiler" packages/colors/compiler; then
-            echo "compiler WASM output changed between builds" >&2
-            exit 1
-          fi
 
-          for wasm in \
-            packages/colors/pkg/labcolors_bg.wasm \
-            packages/colors/compiler/labcolors_compiler_bg.wasm
-          do
-            for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do
-              if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then
-                echo "unmapped build path $root in $wasm" >&2
-                exit 1
-              fi
-            done
+          wasm=packages/colors/pkg/labcolors_bg.wasm
+          for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do
+            if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then
+              echo "unmapped build path $root in $wasm" >&2
+              exit 1
+            fi
           done
-          sha256sum \
-            packages/colors/pkg/labcolors_bg.wasm \
-            packages/colors/compiler/labcolors_compiler_bg.wasm
+          sha256sum packages/colors/pkg/labcolors_bg.wasm
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: ${{ env.NODE_TOOLCHAIN }}
           cache: npm
           cache-dependency-path: packages/colors/package-lock.json
-      - name: enforce measured WASM role budgets
-        # Runtime and compiler have independent exact Linux x64 zero-headroom
-        # ratchets. gzip remains transport diagnostics only.
+      - name: enforce measured WASM runtime budget
+        # Exact Linux x64 zero-headroom ratchet. gzip remains transport
+        # diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve
@@ -666,4 +590,3 @@ jobs:
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
         run: |
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
-          wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-compiler --locked
