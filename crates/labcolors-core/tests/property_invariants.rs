@@ -22,8 +22,8 @@
 use labcolors_core::{
     BgInput, Brand, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource, NeutralAnchors,
     NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleFailure, RoleRecipe,
-    SentimentCategory, SentimentsConfig, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset,
-    ViewingConditions, oklch_from_hex, p3_from_hex, resolve_named_set, srgb_encoded_from_hex,
+    ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions, oklch_from_hex,
+    p3_from_hex, resolve_named_set, srgb_encoded_from_hex,
 };
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -112,8 +112,8 @@ fn is_valid_solid_hex(hex: &str) -> bool {
     hex.len() == 7 && hex.starts_with('#') && hex[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Осветлить/затемнить базовый байт для light/dark якорей семьи (валидный hex,
-/// оттенок примерно сохраняется — движку для компиляции нужны лишь валидные hex).
+/// Построить разные валидные light/dark байтовые фикстуры; это transport-data,
+/// а не модель сохранения оттенка.
 fn lighten(c: u8) -> u8 {
     128u8.saturating_add(c / 2)
 }
@@ -246,7 +246,6 @@ fn base_config(
                 dark: "#101012".to_string(),
             },
             tint: NeutralTint {
-                ratio: 0.10,
                 target_mp: 5.0,
                 hue_stiffness: 8.0,
                 hue_override_deg: Some(286.0),
@@ -258,16 +257,6 @@ fn base_config(
             key: "fam".to_string(),
             anchors: family_anchors,
         }],
-        SentimentsConfig {
-            categories: vec![SentimentCategory {
-                name: "alert".to_string(),
-                family: "fam".to_string(),
-                hue_floor_deg: None,
-                preferred_side: None,
-            }],
-            hardness: 5.0,
-            chroma_fraction: 0.88,
-        },
         ThemesConfig {
             entries: vec![
                 ("day".to_string(), VcPreset::Srgb),
@@ -527,18 +516,19 @@ fn numerical_plan_checksum_is_permutation_invariant_and_entries_keep_order() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// СВОЙСТВО 5 — сохранение оттенка семьи цветным лейблом (M1)
+// СВОЙСТВО 5 — координатная близость к семье у цветного лейбла (M1)
 //
 // КЛАСС: «цветной лейбл дрейфует из своей цветовой семьи / стерильно сереет».
 // Там, где решённый лейбл несёт РЕАЛЬНУЮ хрому (C > порога), его oklch-оттенок
-// остаётся в полосе семьи. Порог по хроме обязателен: у светлотных экстремумов
+// остаётся в объявленной координатной полосе семьи. Это геометрический lock, не
+// перцептивный verdict. Порог по хроме обязателен: у светлотных экстремумов
 // max_chroma схлопывается и оттенок численно шумит (как в dim_tinted_tests).
 // БЬЁТ НА МУТАЦИИ: срыв прокидывания оттенка бренда в тинт-якорь (M1) → лейбл
 // сереет/уходит в нейтральный подтон → C падает или дистанция растёт → RED.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn hued_brand_label_preserves_family_hue_where_it_has_chroma() {
+fn hued_brand_label_stays_in_family_coordinate_band_when_chromatic() {
     // Живой насыщенный бренд (яркий синий), лейбл держит его оттенок.
     let brand = (0x0Au8, 0x54u8, 0xF0u8);
     let cfg = base_config(

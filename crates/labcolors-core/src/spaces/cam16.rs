@@ -14,6 +14,7 @@
 //! dependency on a colour-science crate.
 
 use crate::spaces::cat16;
+use crate::spaces::srgb::D65_WHITE;
 use crate::spaces::vc::ViewingConditions;
 
 #[cfg(test)]
@@ -61,6 +62,98 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
     // (инверсия конечного J'/M') на этом пути всегда конечен. Убирает ветвящийся
     // `signum` и лишнее умножение из пер-цветового обратного хода (`to_xyz`).
     (100.0 * y.powf(1.0 / 0.42) / fl).copysign(a)
+}
+
+/// CAM16 lightness `J` of a D65-axis stimulus with relative luminance `y`.
+#[cfg(test)]
+pub(crate) fn gray_j(y: f64, vc: &ViewingConditions) -> f64 {
+    let xyz = [y * D65_WHITE[0], y, y * D65_WHITE[2]];
+    forward(xyz, vc).0
+}
+
+/// Relative luminance on the D65 gray axis whose CAM16 lightness is `j`.
+///
+/// The gray-axis forward is monotonic. Its inverse uses an analytic seed and
+/// two Newton steps over the exact three-channel CAM16 response, then clamps to
+/// the physical `[0, 1]` interval. This is appearance-model geometry shared by
+/// LCS and LPC; it is not part of either product policy.
+pub(crate) fn gray_y(j: f64, vc: &ViewingConditions) -> f64 {
+    gray_y_analytic(j, vc)
+}
+
+/// Closed-form seed plus Newton polish for [`gray_y`].
+///
+/// For the D65 gray stimulus, each adapted cone response is linear in `y`:
+/// `lms_a[i] = k_i · y`. CAM16 then computes a weighted sum of three nonlinear
+/// responses. Collapsing them to one effective scale provides the seed; Newton
+/// polish evaluates the actual three terms and their derivative.
+pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
+    if j <= 0.0 {
+        return 0.0;
+    }
+
+    let rgb_w = cat16::xyz_to_cone([
+        D65_WHITE[0] * 100.0,
+        D65_WHITE[1] * 100.0,
+        D65_WHITE[2] * 100.0,
+    ]);
+    let k = [
+        rgb_w[0] * vc.rgb_d[0],
+        rgb_w[1] * vc.rgb_d[1],
+        rgb_w[2] * vc.rgb_d[2],
+    ];
+    const W: [f64; 3] = [2.0, 1.0, 1.0 / 20.0];
+    let w_sum = W[0] + W[1] + W[2];
+
+    let target = vc.aw * (j / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
+    let s = target / w_sum;
+    if s <= 0.0 {
+        return 0.0;
+    }
+    if s >= 400.0 {
+        return 1.0;
+    }
+
+    let k_eff = (W[0] * k[0] + W[1] * k[1] + W[2] * k[2]) / w_sum;
+    let p = 27.13 * s / (400.0 - s);
+    let mut y = p.powf(1.0 / 0.42) * 100.0 / (vc.fl * k_eff);
+
+    let residual_slope = |y: f64| -> (f64, f64) {
+        let mut f = 0.0;
+        let mut df = 0.0;
+        for i in 0..3 {
+            let c = k[i] * y;
+            let x = vc.fl * c / 100.0;
+            let pp = x.powf(0.42);
+            let denominator = pp + 27.13;
+            f += W[i] * 400.0 * pp / denominator;
+            let dp = 0.42 * pp / c;
+            df += W[i] * k[i] * 400.0 * 27.13 * dp / (denominator * denominator);
+        }
+        (f - target, df)
+    };
+    for _ in 0..2 {
+        let (error, slope) = residual_slope(y);
+        y -= error / slope;
+    }
+
+    y.clamp(0.0, 1.0)
+}
+
+/// Fixed-iteration oracle for [`gray_y_analytic`].
+#[cfg(test)]
+pub(crate) fn gray_y_bisect(j: f64, vc: &ViewingConditions) -> f64 {
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    for _ in 0..64 {
+        let mid = (lo + hi) * 0.5;
+        if gray_j(mid, vc) < j {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) * 0.5
 }
 
 // Per-`resolve_set` memoization of the `forward` pass, keyed on the input `XYZ`
@@ -338,6 +431,30 @@ mod tests {
                 assert_eq!(h.to_bits(), rh.to_bits(), "{hex}: h drifted {h} vs {rh}");
             }
         }
+    }
+
+    #[test]
+    fn gray_inverse_uses_all_public_viewing_condition_discount_channels() {
+        // `ViewingConditions` is publicly representable field-by-field.  A
+        // gray-axis inverse therefore has to invert the exact three discounting
+        // factors consumed by `forward`, not reconstruct a shared hidden `d`
+        // from only the red channel.
+        let mut vc = ViewingConditions::srgb();
+        vc.rgb_d[1] *= 1.05;
+
+        let expected_y = srgb_from_hex("#808080").unwrap()[0];
+        let j = gray_j(expected_y, &vc);
+        let analytic = gray_y_analytic(j, &vc);
+        let oracle = gray_y_bisect(j, &vc);
+
+        assert!(
+            (analytic - oracle).abs() <= 2.0e-12,
+            "analytic gray inverse {analytic:.17} disagrees with the same-VC bisection oracle {oracle:.17}"
+        );
+        assert!(
+            (analytic - expected_y).abs() <= 2.0e-12,
+            "same-VC gray round-trip moved Y: expected {expected_y:.17}, got {analytic:.17}"
+        );
     }
 
     #[test]

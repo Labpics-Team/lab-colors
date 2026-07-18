@@ -23,23 +23,24 @@
 //!
 //! # Рецепты лестницы и альфа-аналога
 //!
-//! [`RoleRecipe::Ladder`] (акцентная/сентимент/бренд-лестница, поглощает GAP #59)
+//! [`RoleRecipe::Ladder`] (семейная/бренд-лестница)
 //! компилируется в [`RoleSpec::Ladder`]: источник раскладывается в пер-темный
 //! тинт-якорь ([`crate::ladder::LadderTint`]), позиция несёт альфу Figma-рампы.
 //! [`RoleRecipe::AlphaAnalog`] компилируется в [`RoleSpec::AlphaAnalog`] (солид-
 //! цель источника + запрошенная альфа, композит-инверсия — [`crate::alpha`], #119).
 //! Резолв обоих — [`crate::semantic::Resolved::Translucent`] (тинт×альфа напрямую + солид-
-//! композит на фоне резолва для замера контраста). Меню позиций + провенанс —
-//! приложение A к `docs/decisions/0001-config-boundary.md`.
+//! композит на фоне резолва для замера контраста). Исполняемый канон позиций и
+//! альф — [`LadderPosition::ALL`] и [`LadderPosition::alpha_pair`].
 //!
 //! # Агностичность: конфиг несёт СВОЙ словарь ролей
 //!
 //! Ядро не знает ни одной роли дизайн-системы — [`ThemeConfig`] обязан нести
 //! собственные `roles`/`aliases` (клиент вносит и значения, и семантику). Пустой
 //! контракт (без `roles` и без `aliases`) отклоняется на загрузке —
-//! [`ConfigError::EmptyContract`]. Фоновая лестница дельтами (§4 плана BL-007) —
-//! отдельный заход; сейчас фоны едут якорями конфига как есть.
+//! [`ConfigError::EmptyContract`]. Текущая схема принимает фоновые якоря как есть;
+//! произвольная graph/constraint-топология ещё не является публичным API.
 
+use crate::Srgb8;
 use crate::ladder::{LadderPosition, LadderTint, ThemeAnchors};
 use crate::semantic::{
     DECORATIVE_FLOOR_MIN, DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec, TextAnchor,
@@ -85,29 +86,17 @@ const DJ_MIN_EXCLUSIVE: f64 = 0.0;
 const DECORATIVE_FLOOR_BOUND: &str = "magnitude ≥ 7.5 Lc (граница декоративной Lc-цели)";
 
 // Lc-величина декоративной роли (тени) обязана лежать не ниже физического
-// декоративного пола ядра. Единица — воспринимаемый контраст `Lc`; знак выбирает
+// декоративного пола ядра. Единица — переходный Ys candidate score `Lc`; знак выбирает
 // физика от фона, поэтому конфиг несёт величину (модуль). Значение ниже
 // `DECORATIVE_FLOOR_MIN` попадает в квантованный low-contrast gap; ядро не
 // переписывает такую декларацию в другой контракт, а отклоняет её на загрузке.
 
-/// Коэффициент хромы подтона (`neutral.tint.ratio`) обязан лежать в `[0, 1]`.
-///
-/// Абсолютная хрома подтона = `ratio · max_chroma(L)`. `ratio = 0` — чистый серый
-/// (допустимо: явный отказ от подтона), `ratio = 1` — максимум гамута. Значения вне
-/// `[0, 1]` не имеют физического смысла (отрицательная хрома, либо запрос за стеной
-/// гамута). Используется v1-путём ([`RoleChroma::Tinted`]); в дефолтном v2-пути
-/// ([`RoleChroma::Curve`]) сила задаётся `target_mp`, но ручка всё равно
-/// валидируется, т.к. экспонирована.
-const TINT_RATIO_MIN_INCLUSIVE: f64 = 0.0;
-/// Верхний предел коэффициента хромы подтона (включительно).
-const TINT_RATIO_MAX_INCLUSIVE: f64 = 1.0;
-
 /// Целевая красочность подтона (`neutral.tint.target_mp`, CAM16-UCS `M'`) обязана
 /// быть строго положительной.
 ///
-/// `M'` — перцептивная красочность; отрицательная бессмысленна, нулевая = серый (для
-/// серого есть явный `ratio = 0`). Реестр держит дефолт `6.1` на плато измеренной
-/// референс-рампы; предел лишь отсекает нефизичное `≤ 0`.
+/// `M'` — перцептивная красочность; отрицательная или нулевая цель вырождает
+/// chromatic curve. Exact-gray anchor выбирает [`RoleChroma::Neutral`] до
+/// применения этой ручки. Предел лишь отсекает нефизичное `≤ 0`.
 const TARGET_MP_MIN_EXCLUSIVE: f64 = 0.0;
 
 /// Жёсткость прижатия оттенка (`neutral.tint.hue_stiffness`) обязана быть
@@ -120,33 +109,6 @@ const TARGET_MP_MIN_EXCLUSIVE: f64 = 0.0;
 /// нефизично.
 const HUE_STIFFNESS_MIN_INCLUSIVE: f64 = 0.0;
 
-/// Нижняя граница валидации поля `sentiments.hardness` (`≥ 1`).
-///
-/// ⚠️ VESTIGIAL после Волны 1: поле `hardness` задавало p-норму brand-displacement
-/// (Sticky Potential Well, #55), но закон категориальных зон снёс этот механизм —
-/// поле больше НЕ влияет на выход (см. док `SentimentsConfig.hardness`). Граница
-/// `≥ 1` сохранена как контракт схемы конфига: значение всё ещё валидируется
-/// (мусор отвергается), но законом оттенка не потребляется. Историческая
-/// семантика: `p < 1` выводило p-норму из корректной области.
-const HARDNESS_MIN_INCLUSIVE: f64 = 1.0;
-
-/// Доля хромы сентимент-цвета (`sentiments.chroma_fraction`) обязана лежать в
-/// `(0, 1]`.
-///
-/// `≤ 0` — обесцвеченный (не сентимент), `> 1` — за стеной гамута (неон/недостижимо).
-/// Дефолт реестра — `0.88` (держится `< 1`, чтобы сидеть внутри стены гамута, не
-/// читаясь как неон).
-///
-/// СЕМАНТИКА (применена 2026-07-03; тем самым закрыт слайс «инертной ручки»
-/// аудита): в продакшн-тинте (`resolve_config_sentiment_solid`) ручка —
-/// АНТИ-НЕОНОВЫЙ ПОТОЛОК: `c = min(c_якоря, f · C_max(L, h_решённый))`.
-/// Хрома якоря клиента — авторитет идентичности и сохраняется, пока не
-/// упирается в долю гамутного максимума; усечение идёт по оси хромы
-/// (оттенок сохранён — прежний канальный клип sRGB искажал оттенок).
-const CHROMA_FRACTION_MIN_EXCLUSIVE: f64 = 0.0;
-/// Верхний предел доли хромы сентимента (включительно).
-const CHROMA_FRACTION_MAX_INCLUSIVE: f64 = 1.0;
-
 /// Запрошенная альфа альфа-аналога (`roles.*.alpha`) обязана лежать в `(0, 1]`.
 ///
 /// `≤ 0` — невидимая роль (вырождение), `> 1` — не альфа. Резолвер поднимает
@@ -157,9 +119,7 @@ const ALPHA_MIN_EXCLUSIVE: f64 = 0.0;
 /// Верхний предел запрошенной альфы (включительно; α = 1 = солид).
 const ALPHA_MAX_INCLUSIVE: f64 = 1.0;
 
-// Канонический домен оттенка [0, 360) — единый дом в crate::sentiment
-// (два независимых литерала одного домена = класс тихого расхождения).
-use crate::sentiment::{HUE_DOMAIN_MAX_EXCLUSIVE, HUE_DOMAIN_MIN_INCLUSIVE};
+use crate::spaces::oklab::{HUE_DEG_MAX_EXCLUSIVE, HUE_DEG_MIN_INCLUSIVE, OklabHue, hue_of_srgb8};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ошибки валидации конфига.
@@ -190,11 +150,6 @@ pub enum ConfigError {
         referenced_by: String,
         family: String,
     },
-    /// Ссылка на категорию сентиментов, которой нет в `sentiments.categories`.
-    UnknownSentiment {
-        referenced_by: String,
-        sentiment: String,
-    },
     /// Ссылка (алиас/alpha_analog) на роль, которой нет в `roles`.
     UnknownRole { referenced_by: String, role: String },
     /// Дубликат ключа в словаре конфига или итоговом CSS-namespace: повтор имени
@@ -210,25 +165,12 @@ pub enum ConfigError {
         referenced_by: String,
         field: &'static str,
     },
-    /// Источник вывода оттенка ахроматичен (Oklab-хрома ≈ 0): hue математически
-    /// не определён — требуется явный hue_override_deg.
-    AchromaticHueSource { field: String },
     /// Значение ручки вне допустимого предела. `handle` — путь до ручки, `bound` —
     /// человеко-читаемое описание нарушенного предела с обоснованием.
     OutOfBounds {
         handle: String,
         value: f64,
         bound: &'static str,
-    },
-    /// Сентимент-солвер не смог развести оттенок (пустая легальная дуга,
-    /// недоменные углы/пороги). Отдельный вариант, а не
-    /// [`InvalidHex`](Self::InvalidHex): ошибка политики/геометрии,
-    /// замаскированная под ошибку парсинга hex, ломала бы матчинг
-    /// потребителя по вариантам.
-    SentimentResolution {
-        role: String,
-        sentiment: String,
-        reason: String,
     },
     /// Контракт пуст: ни ролей, ни алиасов. Резолв не эмитил бы ни одной роли —
     /// молчаливый приём увёл бы дефект на использование. Отказ обязан быть НА
@@ -261,13 +203,6 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "невалидное имя в поле `{field}`: {value:?} (допустимо [a-z0-9-]+, не пусто)"
             ),
-            ConfigError::UnknownSentiment {
-                referenced_by,
-                sentiment,
-            } => write!(
-                f,
-                "`{referenced_by}` ссылается на категорию сентиментов `{sentiment}`, которой нет в sentiments"
-            ),
             ConfigError::UnknownRole {
                 referenced_by,
                 role,
@@ -281,10 +216,6 @@ impl std::fmt::Display for ConfigError {
             } => write!(
                 f,
                 "`{referenced_by}` требует пер-темной нейтральной четвёрки `{field}`, которой нет в конфиге"
-            ),
-            ConfigError::AchromaticHueSource { field } => write!(
-                f,
-                "источник оттенка `{field}` ахроматичен — hue не определён, задай hue_override_deg"
             ),
             ConfigError::DuplicateKey { dictionary, key } => write!(
                 f,
@@ -302,11 +233,6 @@ impl std::fmt::Display for ConfigError {
                 value,
                 bound,
             } => write!(f, "ручка `{handle}` = {value} вне предела: {bound}"),
-            ConfigError::SentimentResolution {
-                role,
-                sentiment,
-                reason,
-            } => write!(f, "сентимент `{sentiment}` (роль `{role}`): {reason}"),
             ConfigError::EmptyContract => write!(f, "контракт пуст: передайте roles"),
             ConfigError::EmptyThemes => write!(f, "словарь тем пуст: передайте themes"),
             ConfigError::MaterialFloorRequired { role } => write!(
@@ -331,7 +257,7 @@ impl std::error::Error for ConfigError {}
 /// `rgba(якорь, α)` напрямую, а якорь берётся по теме резолва.
 ///
 /// Пер-темность (а не один якорь + вывод) — из заземления
-/// (`reference/labui-accent-primitives.md` §2: Brand light `#007AFF` /
+/// (`reference/labui-accent-primitives.md`, раздел «Якоря»: Brand light `#007AFF` /
 /// dark `#4A8FFF` / light-ic `#0040DD` / dark-ic `#409CFF`): тёмный/IC-вариант
 /// измерен, не выведен из светлого.
 #[derive(Debug, Clone, PartialEq)]
@@ -355,16 +281,14 @@ pub struct NeutralAnchors {
 /// Ручки нейтрального подтона (политика силы и удержания оттенка).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NeutralTint {
-    /// Коэффициент хромы подтона (v1 flat-путь): `[0, 1]`.
-    pub ratio: f64,
     /// Целевая перцептивная красочность CAM16-UCS `M'` (v2-кривая, «сила»): `> 0`.
     pub target_mp: f64,
     /// Жёсткость прижатия оттенка к каноническому (v2-кривая): `≥ 0`.
     pub hue_stiffness: f64,
     /// Явный оттенок подтона (градусы `[0, 360)`), если у потребителя есть
-    /// ИЗМЕРЕННАЯ величина (labui: SSOT 286.0°). `None` — движок выводит оттенок
-    /// из тёмного якоря нейтрали (та же деривация, которой была получена
-    /// labui-константа: `#101012` → 285.97°).
+    /// ИЗМЕРЕННАЯ величина (labui: SSOT 286.0°). `None` — движок классифицирует
+    /// точные sRGB8-байты тёмного якоря: равные каналы выбирают neutral policy,
+    /// неравные выводят направление hue (`#101012` → 285.97°).
     pub hue_override_deg: Option<f64>,
 }
 
@@ -389,7 +313,7 @@ pub struct NeutralConfig {
 /// Именованное семейство палитры: ключ + пер-темные якорные hex.
 ///
 /// Якорь несётся отдельно для каждого режима (light/dark/light-ic/dark-ic):
-/// заземление `reference/labui-accent-primitives.md` §2 показывает, что тёмный и
+/// заземление `reference/labui-accent-primitives.md`, раздел «Якоря», показывает, что тёмный и
 /// IC-варианты Figma-примитивов `Accent/*` замерены, а не выведены из светлого
 /// (Red light `#FF3B30` / dark `#FF3A3A` / light-ic `#D70015` / dark-ic `#FF6161`).
 /// Лестница семейства ([`RoleRecipe::Ladder`] с [`LadderSource::Family`]) выбирает
@@ -400,50 +324,6 @@ pub struct PaletteFamily {
     pub key: String,
     /// Пер-темные якорные цвета семейства.
     pub anchors: ThemeAnchors,
-}
-
-/// Политика одной семантической категории потребителя: маппинг на семейство
-/// палитры + категориальные ручки.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SentimentCategory {
-    /// Семантическое имя категории (`danger`, `warning`, …); `[a-z0-9-]+`.
-    pub name: String,
-    /// Ключ семейства палитры, на которое отображается категория.
-    pub family: String,
-    /// Минимальный угол оттенка категории (градусы, `[0, 360)`), если задан.
-    pub hue_floor_deg: Option<f64>,
-    /// Предпочтительная сторона смещения оттенка (`+1` / `-1`), если задана.
-    ///
-    /// # МЁРТВАЯ РУЧКА после Волны 1 (закон категориальных зон)
-    ///
-    /// Прежде применялась в вырожденном шве `brand == prototype` p-норм-резолвера.
-    /// Волна 1 убрала brand-displacement ЦЕЛИКОМ, поэтому шва больше НЕ существует
-    /// и ручка ничего не смещает. Поле СОХРАНЕНО ради стабильности схемы конфига
-    /// (течёт в wasm-DTO, JSON-фикстуры, JS-golden) и по-прежнему ВАЛИДИРУЕТСЯ
-    /// (`preferred_side ∈ {-1, +1}`) как контракт границы — но законом оттенка
-    /// БОЛЬШЕ НЕ ПОТРЕБЛЯЕТСЯ (прецедент «задокументированной мёртвой ручки»
-    /// сохранён). Вайринг/удаление — отдельное решение оркестратора.
-    pub preferred_side: Option<i8>,
-}
-
-/// Конфиг сентиментов: категории + общие ручки различимости.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SentimentsConfig {
-    /// Категории потребителя.
-    pub categories: Vec<SentimentCategory>,
-    /// Жёсткость p-нормы Sticky Potential Well (`≥ 1`).
-    ///
-    /// # МЁРТВАЯ РУЧКА после Волны 1 (закон категориальных зон)
-    ///
-    /// p-норма настраивала brand-displacement — смещение сентимента ОТ бренда.
-    /// Категориальный закон убрал brand-displacement ЦЕЛИКОМ (сентимент отдыхает на
-    /// фокусе своей категории), поэтому ручка БОЛЬШЕ НЕ ПОТРЕБЛЯЕТСЯ законом
-    /// оттенка. Поле СОХРАНЕНО ради стабильности схемы конфига (течёт в wasm-DTO,
-    /// JSON-фикстуры, JS-golden) и по-прежнему ВАЛИДИРУЕТСЯ (`≥ 1`) как контракт
-    /// границы — но эмитируемые байты больше не двигает.
-    pub hardness: f64,
-    /// Доля хромы сентимент-цвета от максимума гамута (`(0, 1]`).
-    pub chroma_fraction: f64,
 }
 
 /// Пресет условий просмотра из ЗАКРЫТОГО физического меню движка.
@@ -483,9 +363,12 @@ pub struct ThemesConfig {
     pub entries: Vec<(String, VcPreset)>,
 }
 
-/// Рецепт роли из ФИЗИЧЕСКОГО меню (типология из [`crate::semantic`]).
+/// Рецепт роли из закрытого физического меню текущего resolver-а.
 ///
-/// Все рецепты компилируются в [`RoleSpec`]: текст/dJ'/Lc/zero — солвер-роли,
+/// Это переходная compatibility surface, не target IR и не extension point.
+/// Новая физика не должна добавляться новым recipe variant.
+///
+/// Все рецепты компилируются в [`RoleSpec`]: текст/dJ'/Ys candidate score/zero — солвер-роли,
 /// [`Ladder`](Self::Ladder) / [`AlphaAnalog`](Self::AlphaAnalog) — полупрозрачная эмиссия.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -496,12 +379,11 @@ pub enum RoleRecipe {
         fraction: f64,
         /// WCAG-пол читаемости.
         floor: Floor,
-        /// Опциональный источник ОТТЕНКА семьи (ратификация ch5c, M1). `None` —
-        /// нейтральный лейбл (подтон таблицы, прежний путь). `Some(source)` —
-        /// ЦВЕТНОЙ лейбл: держит ТОТ ЖЕ контракт уровня (`fraction`/`floor`), что
-        /// нейтральный (одноуровневость по построению), но решённый в чистом
-        /// оттенке семьи-источника. Источник валидируется как у лестницы
-        /// (существование семейства/сентимента); аддитивен в JSON/DTO —
+        /// Опциональный источник физической цветовой идентичности. `None` берёт
+        /// neutral policy таблицы. `Some(source)` держит тот же контракт уровня
+        /// (`fraction`/`floor`), а точные sRGB8-байты источника определяют режим:
+        /// равные каналы остаются нейтральными, неравные задают направление hue.
+        /// Ссылка валидируется как у лестницы; JSON/DTO —
         /// `{kind:"text-anchor", fraction, floor, hue?: source}`.
         hue: Option<LadderSource>,
     },
@@ -512,25 +394,24 @@ pub enum RoleRecipe {
         /// dJ'-якорь под тёмное окружение (`> 0`).
         dark: f64,
     },
-    /// Декоративная роль в единице `Lc` (стек теней): величина, знак — от фона.
+    /// Декоративная роль в переходной Ys candidate-score единице `Lc` (стек теней):
+    /// величина, знак — от фона. Это не LPC/readability evidence.
     DecorativeLc {
         /// Величина `Lc` (`> 0`).
         magnitude: f64,
     },
-    /// Ступень лестницы акцента/сентимента/бренда/нейтрали: `rgba(якорь, α)`
-    /// напрямую (поглощает акцентный GAP #59). `source` — откуда берётся тинт,
-    /// `position` — позиция закрытого меню (несёт свою альфу; перечень —
-    /// приложение A к ADR-0001). Компилируется в [`RoleSpec::Ladder`].
+    /// Ступень переходной лестницы: `rgba(якорь, α)` напрямую. `source` — откуда берётся тинт,
+    /// `position` — позиция закрытого меню (несёт свою альфу; исполняемый канон —
+    /// [`LadderPosition::ALL`]). Компилируется в [`RoleSpec::Ladder`].
     Ladder {
-        /// Источник тинта: бренд, семейство палитры, сентимент или нейтраль.
+        /// Источник тинта: бренд, семейство палитры или нейтраль.
         source: LadderSource,
-        /// Позиция меню (несёт пер-темную пару альф из стаба labui).
+        /// Позиция закрытого меню с собственной парой alpha по контекстам.
         position: LadderPosition,
-        /// Опциональный юр. пол UI (ратификация ch5c, M2). `None` — прежний путь
-        /// (тинт эмитится как есть). `Some(floor)` — только для СОЛИДНОЙ позиции
-        /// (`α=1`, напр. `BorderStrong`): семейный солид обязан держать пол
-        /// (3:1); если не держит — минимальный легальный сдвиг по кривой семьи с
-        /// честным флагом. Аддитивен в JSON — `{..., floor?: "aa-ui"}`.
+        /// Опциональный юридический пол UI. `None` эмитит тинт как есть;
+        /// `Some(floor)` допустим только для solid-позиции (`α=1`, например
+        /// `BorderStrong`): семейный solid обязан держать пол, иначе выполняется
+        /// минимальный легальный сдвиг по кривой семьи с явным флагом.
         floor: Option<Floor>,
     },
     /// Свечение: screen-слои цвета источника, интенсивность
@@ -544,64 +425,49 @@ pub enum RoleRecipe {
         /// Обязательный numerical-decision profile; implicit legacy запрещён.
         decision_profile: crate::glow::GlowDecisionProfileV1,
     },
-    /// Заливка пары «поверхность × лейбл» ([`crate::pair`]): якорь источника,
-    /// минимально сдвинутый по светлоте до победы перцептивно правильной
-    /// стороны лейбла в штатной полярности (Oklab: оттенок/хрома идентичности
-    /// целы). Лейбл на такой заливке решается ОБЫЧНЫМ nested resolve — пара
-    /// не второй текстовый закон, а подготовка поверхности. Эмиссия — солид
-    /// (лестничная сантехника с α = 1).
+    /// Переходная solid-эмиссия пары (внутренний модуль `pair`). Текущий heuristic
+    /// выбирает сторону и при необходимости сдвигает светлоту источника; это не
+    /// валидированный перцептивный закон. Результат не является поверхностью
+    /// [`PairLabel`](Self::PairLabel) и удаляется вместе с pair façade.
     PairFill {
-        /// Источник якоря: бренд, семейство, сентимент или нейтраль.
+        /// Источник якоря: бренд, семейство или нейтраль.
         source: LadderSource,
     },
-    /// Лейбл ТИНТ-бейджа — лейбл-сторона пары «поверхность × лейбл»
-    /// ([`crate::pair`]). Семейно-оттеночный лейбл, чей WCAG-пол энфорсится
-    /// ПРОТИВ объявленной тинт-поверхности (композит семейного тинта при
-    /// compatibility-альфе позиции `fill-*-primary` над фоном резолва), а НЕ
-    /// против фона страницы и НЕ против эмитированного
-    /// [`PairFill`](Self::PairFill) — тот решается отдельно и не является
-    /// подложкой лейбла. Закрывает класс «контраст label↔tinted-fill
-    /// эмерджентен, не гарантирован»: обычные `label-*`/`fill-*-tinted` роли
-    /// решаются независимо против фона страницы, и их взаимный контраст на
-    /// тинт-подложке бейджа никем не констрейнится (для warning/статусных семей
-    /// на кривой оседает к ~3:1 и ниже). Здесь foreground решается ШТАТНЫМ
-    /// законом НА тинт-поверхности, собранной appearance-графом (#307), поэтому
-    /// пол гарантирован против той подложки, на которой лейбл реально стоит.
-    /// Недостижимость пола на кривой семьи выражается флагом `compressed` рядом
-    /// с фактическим результатом. Компилируется в
-    /// [`RoleSpec::PairLabel`].
+    /// Переходный foreground пары. Он решается против внутренне синтезированной
+    /// tint-поверхности с alpha закрытой позиции `FillPrimary`, а не против
+    /// страницы и не против эмитированного [`PairFill`](Self::PairFill).
+    /// Наличие двух несвязанных поверхностей является известным разрывом SSOT;
+    /// target occurrence-граф заменяет оба варианта одной композицией.
     PairLabel {
-        /// Источник семьи оттенка/тинта: бренд, семейство, сентимент или нейтраль.
+        /// Источник физической цветовой идентичности: бренд, семейство или нейтраль.
         source: LadderSource,
         /// Доля максимума контраста тинт-поверхности `(0, 1]` (как у
-        /// [`TextAnchor`](Self::TextAnchor)): низкая доля = максимально «цветной»
-        /// лейбл у пола, высокая = ближе к нейтральному пределу.
+        /// [`TextAnchor`](Self::TextAnchor)): низкая доля оставляет больше места
+        /// для хромы источника у пола, высокая тянет к контрастному пределу.
+        /// Точный серый source при любой доле остаётся нейтральным.
         fraction: f64,
         /// WCAG-пол, энфорсимый ПРОТИВ тинт-поверхности (а не фона страницы).
         floor: Floor,
     },
-    /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
-    /// #119): `(tint, α)`, чей композит на фоне резолва равен солиду `of`. Даёт
-    /// `-tinted`-роли labui. Компилируется в [`RoleSpec::AlphaAnalog`].
+    /// Альфа-аналог solid-источника через точечную композит-инверсию
+    /// ([`crate::alpha`]): `(tint, α)`, чей композит на объявленном фоне равен
+    /// solid-цели `of`. Компилируется в [`RoleSpec::AlphaAnalog`].
     AlphaAnalog {
-        /// Источник солид-цели (бренд/семейство/сентимент), чей аналог берётся.
+        /// Источник солид-цели (бренд/семейство/нейтраль), чей аналог берётся.
         of: LadderSource,
         /// Запрошенная альфа `(0, 1]` (поднимается до `α_min`, если ниже).
         alpha: f64,
     },
-    /// Двухслойный материал (стекло/акрил; канон — `docs/whitepaper.md` §3.7): пара «тинт `01` (с выведенной α)
-    /// и опаковая база `02`». База — семейно-оттеночная поверхность на целевом
-    /// перцептивном шаге тира; тинт — тот же тон, а альфа выведена из
-    /// композит-неравенства над коридором фонов. Компилируется в
-    /// [`RoleSpec::Material`].
+    /// Переходная двухслойная point-композиция: tint с вычисленной alpha и
+    /// opaque base на заданном численном шаге `J'`. Она не моделирует glass,
+    /// blur или spatial field. Компилируется в [`RoleSpec::Material`].
     ///
     /// Тир (`base/muted/soft/subtle`) — величина `tone` (|ΔJ'|): крупнее =
-    /// заметнее/плотнее. Семья — `source`: [`Neutral`](LadderSource::Neutral) даёт
-    /// нейтральный материал (подтон таблицы), остальные — семейно-оттеночный
-    /// (акцент-стекло/сентимент).
+    /// заметнее/плотнее. `source` задаёт физическую идентичность: точные равные
+    /// sRGB8-каналы дают нейтральный материал, неравные — материал в направлении
+    /// hue источника.
     Material {
-        /// Источник ОТТЕНКА семьи: бренд/семейство/сентимент/нейтраль. Нейтраль →
-        /// нейтральный материал; иное → семейно-оттеночный.
+        /// Источник физической цветовой идентичности: бренд/семейство/нейтраль.
         source: LadderSource,
         /// Целевой |ΔJ'| тона-базы под светлое окружение (`> 0`).
         tone_light: f64,
@@ -668,11 +534,8 @@ fn reserve_css_names(
 /// Источник тинта лестницы/альфа-аналога: откуда берётся якорный цвет.
 ///
 /// Тинт bg-независим (это якорь источника), только пер-темен. Для [`Family`](Self::Family)
-/// и [`Sentiment`](Self::Sentiment) `key` — ссылка на семейство/категорию конфига
-/// (валидатор проверяет существование). Сентимент-источник разводит оттенок с
-/// брендом сентимент-солвером ([`crate::sentiment`]); при бренде labui резолв
-/// сентимента совпадает с сырым якорем семейства (деривационная идентичность —
-/// тестом).
+/// У [`Family`](Self::Family) `key` — непрозрачная ссылка на семейство конфига;
+/// валидатор проверяет только существование и никогда не выводит смысл из имени.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum LadderSource {
@@ -680,9 +543,6 @@ pub enum LadderSource {
     Brand,
     /// Семейство палитры по ключу (пер-темный якорь [`PaletteFamily`]).
     Family(String),
-    /// Сентимент-категория по имени: оттенок семейства, разведённый с брендом
-    /// сентимент-солвером (пер-темный солид на разрешённом оттенке).
-    Sentiment(String),
     /// Нейтральный тинт из [`NeutralConfig::anchors`] — семейство `Neutral/Derivable`
     /// стаба labui (`rgb(120 120 128 / …)` = `neutral.anchors.mid`). Скелетон и
     /// нейтральные fill/border/glow/focus-роли берут ЭТОТ источник, НЕ семейство
@@ -716,10 +576,10 @@ pub enum NeutralPick {
 
 /// Полный конфиг темы потребителя (без сериализации — она на границе WASM).
 ///
-/// `#[non_exhaustive]`: будущие поля (напр. фоновая лестница дельтами, §4 плана
-/// BL-007) станут неломающими. Внешние крейты собирают конфиг через
-/// [`ThemeConfig::new`](Self::new), не struct-литералом; поля остаются `pub` для
-/// чтения и мутации.
+/// Внешние крейты собирают конфиг через [`ThemeConfig::new`](Self::new), а не
+/// struct-литералом. `#[non_exhaustive]` запрещает внешний struct-литерал, но не
+/// обещает, что обязательный аргумент конструктора никогда не изменится; поля
+/// остаются `pub` для чтения и мутации.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ThemeConfig {
@@ -729,8 +589,6 @@ pub struct ThemeConfig {
     pub neutral: NeutralConfig,
     /// Семейства палитры.
     pub palette: Vec<PaletteFamily>,
-    /// Сентимент-политика.
-    pub sentiments: SentimentsConfig,
     /// Словарь тем.
     pub themes: ThemesConfig,
     /// Роли: имя (`[a-z0-9-]+`) → рецепт, в порядке объявления.
@@ -749,19 +607,6 @@ fn is_valid_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
-use crate::sentiment::ACHROMATIC_CHROMA_EPS;
-
-/// Oklab-хрома hex-цвета (для гарда ахроматичности источников оттенка).
-fn oklab_chroma_of_hex(hex: &str) -> f64 {
-    match crate::spaces::srgb::srgb_from_hex(hex) {
-        Ok(lin) => {
-            let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
-            (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
-        }
-        Err(_) => 0.0, // невалидный hex ловится валидатором раньше
-    }
 }
 
 /// Проверить, что hex парсится ядром (только `#RRGGBB`).
@@ -813,25 +658,6 @@ fn check_in_excl_incl(
     }
 }
 
-/// Проверить `min ≤ value ≤ max` (замкнутый интервал).
-fn check_in_incl_incl(
-    handle: &str,
-    value: f64,
-    min_incl: f64,
-    max_incl: f64,
-    bound: &'static str,
-) -> Result<(), ConfigError> {
-    if value >= min_incl && value <= max_incl {
-        Ok(())
-    } else {
-        Err(ConfigError::OutOfBounds {
-            handle: handle.to_string(),
-            value,
-            bound,
-        })
-    }
-}
-
 /// Проверить `value > min` (строго положительно). Неконечные значения (±∞,
 /// NaN) отвергаются всегда: открытый сверху предел — не лазейка для мусора.
 fn check_gt(
@@ -872,15 +698,13 @@ fn check_ge(
 impl ThemeConfig {
     /// Собрать конфиг из полного набора полей.
     ///
-    /// Конструктор существует, потому что [`ThemeConfig`] помечен
-    /// `#[non_exhaustive]` (будущие поля — неломающие): внешние крейты (граница
-    /// WASM) собирают конфиг через него, а не struct-литералом.
-    #[allow(clippy::too_many_arguments)]
+    /// [`ThemeConfig`] помечен `#[non_exhaustive]`, поэтому внешние крейты
+    /// (включая WASM-границу) собирают его через этот конструктор, а не
+    /// struct-литералом.
     pub fn new(
         brand: Brand,
         neutral: NeutralConfig,
         palette: Vec<PaletteFamily>,
-        sentiments: SentimentsConfig,
         themes: ThemesConfig,
         roles: Vec<(String, RoleRecipe)>,
         aliases: Vec<(String, String)>,
@@ -889,7 +713,6 @@ impl ThemeConfig {
             brand,
             neutral,
             palette,
-            sentiments,
             themes,
             roles,
             aliases,
@@ -903,9 +726,9 @@ impl ThemeConfig {
     /// отброшенным результатом (единый код-путь; паритет validate/compile не
     /// может разъехаться, потому что второго списка проверок не существует).
     /// Ловится и структурное (hex, имена, ссылки, пределы ручек), и
-    /// деривационное (ахроматичный источник оттенка, отсутствующие
-    /// edge/inverted-четвёрки, пустая легальная дуга сентимента). Первая
-    /// найденная ошибка возвращается сразу — клиент чинит по одной.
+    /// деривационное (например, ссылка роли на отсутствующую
+    /// edge/inverted-четвёрку). Первая найденная ошибка возвращается сразу —
+    /// клиент чинит по одной.
     ///
     /// # Errors
     ///
@@ -916,9 +739,9 @@ impl ThemeConfig {
 
     /// Структурная фаза валидации: hex, имена, ссылки на семейства/источники
     /// лестницы, дубликаты словарей и пределы каждой экспонируемой ручки.
-    /// НЕ полный preflight: деривационные ошибки (ахроматичность, пустая дуга
-    /// сентимента) всплывают только в фазе компиляции — снаружи полноту даёт
-    /// [`validate`](Self::validate).
+    /// НЕ полный preflight: деривационные ошибки (например, ссылка роли на
+    /// отсутствующую edge/inverted-четвёрку) всплывают только в фазе компиляции —
+    /// полноту даёт [`validate`](Self::validate).
     fn validate_syntactic(&self) -> Result<(), ConfigError> {
         // Бренд: пер-темная четвёрка hex.
         check_theme_anchors("brand.anchors", &self.brand.anchors)?;
@@ -939,13 +762,6 @@ impl ThemeConfig {
         }
 
         // Нейтраль: ручки подтона.
-        check_in_incl_incl(
-            "neutral.tint.ratio",
-            self.neutral.tint.ratio,
-            TINT_RATIO_MIN_INCLUSIVE,
-            TINT_RATIO_MAX_INCLUSIVE,
-            "0 ≤ ratio ≤ 1 (доля хромы подтона; 0 = серый, 1 = максимум гамута)",
-        )?;
         check_gt(
             "neutral.tint.target_mp",
             self.neutral.tint.target_mp,
@@ -967,55 +783,8 @@ impl ThemeConfig {
             check_theme_anchors(&anchors_field, &fam.anchors)?;
         }
 
-        // Сентименты: ручки + категории (маппинг на существующее семейство).
-        check_ge(
-            "sentiments.hardness",
-            self.sentiments.hardness,
-            HARDNESS_MIN_INCLUSIVE,
-            "hardness ≥ 1 (vestigial-контракт схемы; прежде p-норма brand-displacement, снесена Волной 1)",
-        )?;
-        check_in_excl_incl(
-            "sentiments.chroma_fraction",
-            self.sentiments.chroma_fraction,
-            CHROMA_FRACTION_MIN_EXCLUSIVE,
-            CHROMA_FRACTION_MAX_INCLUSIVE,
-            "0 < chroma_fraction ≤ 1 (доля хромы сентимента; >1 = за стеной гамута)",
-        )?;
-        for cat in &self.sentiments.categories {
-            let name_field = format!("sentiments.{}.name", cat.name);
-            check_name(&name_field, &cat.name)?;
-            if !self.palette.iter().any(|f| f.key == cat.family) {
-                return Err(ConfigError::UnknownFamily {
-                    referenced_by: format!("sentiments.{}", cat.name),
-                    family: cat.family.clone(),
-                });
-            }
-            if let Some(side) = cat.preferred_side {
-                if side != 1 && side != -1 {
-                    return Err(ConfigError::OutOfBounds {
-                        handle: format!("sentiments.{}.preferred_side", cat.name),
-                        value: f64::from(side),
-                        bound: "preferred_side ∈ {-1, +1} (закрытое меню сторон смещения)",
-                    });
-                }
-            }
-            if let Some(hue) = cat.hue_floor_deg {
-                let field = format!("sentiments.{}.hue_floor_deg", cat.name);
-                // Полуинтервал `[0, 360)`: угол по модулю 360°, где 360° ≡ 0°.
-                if !(HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue) {
-                    return Err(ConfigError::OutOfBounds {
-                        handle: field,
-                        value: hue,
-                        bound: "0 ≤ hue_floor_deg < 360 (угол оттенка по модулю 360°)",
-                    });
-                }
-            }
-        }
-
         if let Some(hue) = self.neutral.tint.hue_override_deg {
-            if !(hue.is_finite()
-                && (HUE_DOMAIN_MIN_INCLUSIVE..HUE_DOMAIN_MAX_EXCLUSIVE).contains(&hue))
-            {
+            if !(hue.is_finite() && (HUE_DEG_MIN_INCLUSIVE..HUE_DEG_MAX_EXCLUSIVE).contains(&hue)) {
                 return Err(ConfigError::OutOfBounds {
                     handle: "neutral.tint.hue_override_deg".to_string(),
                     value: hue,
@@ -1041,10 +810,6 @@ impl ThemeConfig {
             Ok(())
         }
         check_unique("palette", self.palette.iter().map(|f| f.key.as_str()))?;
-        check_unique(
-            "sentiments.categories",
-            self.sentiments.categories.iter().map(|c| c.name.as_str()),
-        )?;
         check_unique(
             "themes",
             self.themes.entries.iter().map(|(n, _)| n.as_str()),
@@ -1124,8 +889,8 @@ impl ThemeConfig {
                     FRACTION_MAX_INCLUSIVE,
                     "0 < fraction ≤ 1 (доля максимального контраста фона)",
                 )?;
-                // Цветной лейбл (M1): источник оттенка обязан существовать —
-                // та же проверка, что у источника лестницы.
+                // Явный source-slot обязан ссылаться на существующий физический
+                // источник; chromatic/neutral режим определяется позже из байтов.
                 if let Some(source) = hue {
                     self.check_ladder_source(role, source)?;
                 }
@@ -1222,9 +987,8 @@ impl ThemeConfig {
     }
 
     /// Проверить, что источник лестницы разрешим: [`LadderSource::Family`]
-    /// ссылается на существующее семейство `palette`, [`LadderSource::Sentiment`]
-    /// — на существующую категорию `sentiments`; [`LadderSource::Brand`] всегда
-    /// разрешим (бренд — обязательный вход конфига).
+    /// ссылается на существующее семейство `palette`; [`LadderSource::Brand`]
+    /// всегда разрешим (бренд — обязательный вход конфига).
     fn check_ladder_source(&self, role: &str, source: &LadderSource) -> Result<(), ConfigError> {
         match source {
             LadderSource::Brand => Ok(()),
@@ -1235,16 +999,6 @@ impl ThemeConfig {
                     Err(ConfigError::UnknownFamily {
                         referenced_by: format!("roles.{role}"),
                         family: key.clone(),
-                    })
-                }
-            }
-            LadderSource::Sentiment(name) => {
-                if self.sentiments.categories.iter().any(|c| &c.name == name) {
-                    Ok(())
-                } else {
-                    Err(ConfigError::UnknownSentiment {
-                        referenced_by: format!("roles.{role}"),
-                        sentiment: name.clone(),
                     })
                 }
             }
@@ -1293,30 +1047,30 @@ impl ThemeConfig {
             entries.push((name.clone(), spec));
         }
 
-        // Нейтраль-подтон: v2-кривая. Оттенок подтона — ИЗ КОНФИГА: явная ручка
-        // hue_override (labui несёт измеренную SSOT-величину 286.0°), иначе —
-        // деривация из ТЁМНОГО якоря нейтрали клиента (NEUTRAL_HUE_DEG сам был
-        // измерен по #101012 → 285.97°; labui-константа для чужой нейтрали была
-        // бы чужим подтоном — дефект агностичности). `ratio` в v2-кривую не
-        // входит (поле v1 flat-пути), но валидируется как ручка.
-        let canonical_hue_deg = match self.neutral.tint.hue_override_deg {
-            Some(hue) => hue,
-            None => {
-                // Ахроматичный якорь не несёт оттенка: atan2(0,0) дал бы
-                // произвольный 0° — тихо чужой подтон. Порог технический
-                // (числовая определённость), не перцептивный.
-                if oklab_chroma_of_hex(&self.neutral.anchors.dark) < ACHROMATIC_CHROMA_EPS {
-                    return Err(ConfigError::AchromaticHueSource {
-                        field: "neutral.anchors.dark".to_string(),
-                    });
-                }
-                crate::accent::oklab_hue_of(&self.neutral.anchors.dark)
-            }
-        };
-        let chroma = RoleChroma::Curve {
+        // Neutral policy comes only from client data. An override explicitly
+        // supplies hue; otherwise exact emitted bytes decide whether a direction
+        // exists. Equal channels stay neutral instead of receiving matrix-noise
+        // hue. The retired schema-level flat-ratio handle is intentionally absent.
+        let curve = |canonical_hue_deg| RoleChroma::Curve {
             canonical_hue_deg,
             target_mp: self.neutral.tint.target_mp,
             hue_stiffness: self.neutral.tint.hue_stiffness,
+        };
+        let chroma = match self.neutral.tint.hue_override_deg {
+            Some(hue) => curve(hue),
+            None => {
+                let dark_bytes =
+                    crate::srgb8::hex_bytes(&self.neutral.anchors.dark).map_err(|_| {
+                        ConfigError::InvalidHex {
+                            field: "neutral.anchors.dark".to_string(),
+                            value: self.neutral.anchors.dark.clone(),
+                        }
+                    })?;
+                match hue_of_srgb8(Srgb8::new(dark_bytes)) {
+                    OklabHue::Achromatic => RoleChroma::Neutral,
+                    OklabHue::Chromatic { degrees } => curve(degrees),
+                }
+            }
         };
 
         Ok(NamedRoleTable::from_validated_parts(
@@ -1342,10 +1096,9 @@ impl ThemeConfig {
                         value: *fraction,
                         bound: "0 < fraction ≤ 1 (доля максимального контраста фона)",
                     })?;
-                // Цветной лейбл (M1): источник оттенка раскладывается в пер-темный
-                // тинт-якорь тем же механизмом, что тинт лестницы (для сентимента
-                // — солид, разведённый с брендом). Резолв держит контракт уровня в
-                // этом оттенке.
+                // Source-slot раскладывается в пер-темный якорь тем же механизмом,
+                // что тинт лестницы. Резолв классифицирует точные байты и держит
+                // контракт уровня без изобретения hue для серого источника.
                 let anchor = match hue {
                     Some(source) => anchor.with_hue(self.compile_ladder_tint(role, source)?),
                     None => anchor,
@@ -1394,8 +1147,8 @@ impl ThemeConfig {
                 tone_dark,
                 floor,
             } => {
-                // Нейтральный источник → нейтральный материал (`hue = None`, подтон
-                // ТАБЛИЦЫ); семейный → оттенок якоря подставляется в резолве.
+                // Neutral-slot использует policy таблицы (`hue = None`); остальные
+                // источники передают точные байты и классифицируются в резолве.
                 let hue = match source {
                     LadderSource::Neutral(_) => None,
                     _ => Some(self.compile_ladder_tint(role, source)?),
@@ -1418,9 +1171,8 @@ impl ThemeConfig {
                 // (@12) над фоном резолва. Альфа берётся из ЗАКРЫТОГО меню позиции
                 // (не литерал), поэтому tinted-badge лейбл и `fill-*-tinted`
                 // заливка всегда садятся на одну и ту же подложку по построению.
-                // `FillPrimary` здесь — ТОЛЬКО источник legacy-alpha-данных на
-                // этапе lowering (compatibility datum клиентской калибровки);
-                // core-семантика и appearance-граф это имя/позицию не знают.
+                // `FillPrimary` здесь — ТОЛЬКО источник client-calibrated alpha
+                // на этапе lowering; физика и appearance-граф это имя не знают.
                 let (surface_alpha_light, surface_alpha_dark) =
                     crate::ladder::LadderPosition::FillPrimary.alpha_pair();
                 Ok(RoleSpec::PairLabel {
@@ -1438,9 +1190,6 @@ impl ThemeConfig {
     ///
     /// - [`LadderSource::Brand`] / [`LadderSource::Family`]: сырая пер-темная
     ///   четвёрка якорей (эмитится напрямую как `rgba`).
-    /// - [`LadderSource::Sentiment`]: пер-темный СОЛИД, чей оттенок разведён с
-    ///   брендом сентимент-солвером (`crate::sentiment`); светлота/хрома —
-    ///   исходного якоря семейства категории.
     fn compile_ladder_tint(
         &self,
         role: &str,
@@ -1449,7 +1198,6 @@ impl ThemeConfig {
         let anchors = match source {
             LadderSource::Brand => self.brand.anchors.clone(),
             LadderSource::Family(key) => self.family_anchors(role, key)?.clone(),
-            LadderSource::Sentiment(name) => return self.compile_sentiment_tint(role, name),
             LadderSource::Neutral(pick) => self.neutral_anchors(role, *pick)?,
         };
         let quad = anchors
@@ -1516,208 +1264,10 @@ impl ThemeConfig {
                 family: key.to_string(),
             })
     }
-
-    /// Пер-темный сентимент-солид: для каждой темы взять якорь семейства категории
-    /// и разрешить его оттенок законом категориальных зон (покой на прототипе;
-    /// пол/зоны — исключения), сохранив светлоту/хрому якоря. Бренд оттенок больше
-    /// НЕ смещает (Волна 1). `s_perc_min` — пересчёт из хром якорей сентиментов
-    /// конфига (питает попарные зоны фазы-2, не зависит от labui-констант).
-    fn compile_sentiment_tint(&self, role: &str, name: &str) -> Result<LadderTint, ConfigError> {
-        // Существование категории проверяется до пофазного резолва, чтобы
-        // неизвестное имя дало свою ошибку, а не «семья не найдена».
-        if !self.sentiments.categories.iter().any(|c| c.name == name) {
-            return Err(ConfigError::UnknownSentiment {
-                referenced_by: format!("roles.{role}"),
-                sentiment: name.to_string(),
-            });
-        }
-
-        LadderTint::new([
-            self.sentiment_solid_for_mode(role, name, 0)?,
-            self.sentiment_solid_for_mode(role, name, 1)?,
-            self.sentiment_solid_for_mode(role, name, 2)?,
-            self.sentiment_solid_for_mode(role, name, 3)?,
-        ])
-        .map_err(|mode| ConfigError::InvalidHex {
-            field: format!("roles.{role} (сентимент-тинт, режим {mode})"),
-            value: "<вне кодированного домена>".to_string(),
-        })
-    }
-
-    /// Солид сентимента `name` в режиме `mode_idx` (0 light / 1 dark /
-    /// 2 light-ic / 3 dark-ic) под законом категориальных зон (Волна 1).
-    ///
-    /// Оркестрация ДВУХФАЗНАЯ (сохранена), но БРЕНД-СВОБОДНАЯ — бренд оттенок
-    /// больше не смещает; двигать его может только пол и попарные зоны соседей:
-    ///
-    /// 1. каждая категория решается на СВОЁМ прототипе с полом (без бренда,
-    ///    `resolve_config_sentiment_solid_among` с пустыми зонами);
-    ///    ПОКОЯЩИЕСЯ (решённый оттенок = оттенок прототипа, ≤ 0.5°) объявляются
-    ///    неподвижными оккупантами — деривационная идентичность якорей клиента
-    ///    не нарушается по построению (для labui-якорей ВСЕ покоятся);
-    /// 2. СМЕЩЁННЫЕ (пол клампанул оттенок) перерешиваются по порядку конфига с
-    ///    зонами оккупантов: угловой отступ от каждой зоны — инверсия хорды
-    ///    `s_perc_min` при средней хроме пары (тот же закон различимости
-    ///    сентиментов между собой; СОХРАНЁН). Решённый смещённый сам становится
-    ///    оккупантом для следующих.
-    ///
-    /// Ахроматичные оккупанты (C < ε) зон не несут — у серого нет оттенка.
-    /// Ахроматичный ЯКОРЬ обрабатывается внутри солвера (сырой якорь).
-    fn sentiment_solid_for_mode(
-        &self,
-        role: &str,
-        name: &str,
-        mode_idx: usize,
-    ) -> Result<[f64; 3], ConfigError> {
-        // s_perc_min нужен ТОЛЬКО для попарных зон фазы-2 (различимость
-        // сентиментов между собой) — brand-разведение убрано Волной 1.
-        let s_perc_min = self.sentiment_s_perc_min()?;
-        let pick = |a: &ThemeAnchors| -> String {
-            match mode_idx {
-                0 => a.light.clone(),
-                1 => a.dark.clone(),
-                2 => a.light_ic.clone(),
-                _ => a.dark_ic.clone(),
-            }
-        };
-
-        let anchor_of = |cat: &SentimentCategory| -> Result<String, ConfigError> {
-            Ok(pick(self.family_anchors(role, &cat.family)?))
-        };
-
-        // Закон категориальных зон: оттенок семейства ОТДЫХАЕТ на своём прототипе,
-        // бренд его не смещает (ахроматичный якорь обрабатывается внутри солвера).
-        // Пол/зоны — единственные исключения.
-        let solve = |cat: &SentimentCategory,
-                     anchor_hex: &str,
-                     zones: &[crate::sentiment::NeighborZone]|
-         -> Result<String, ConfigError> {
-            crate::sentiment::resolve_config_sentiment_solid_among(
-                anchor_hex,
-                self.sentiments.chroma_fraction,
-                cat.hue_floor_deg,
-                zones,
-            )
-            .map_err(|reason| ConfigError::SentimentResolution {
-                role: role.to_string(),
-                sentiment: cat.name.clone(),
-                reason,
-            })
-        };
-
-        // Фаза 1: резолв всех категорий на прототипе с полом; классификация покоя.
-        // (hue, chroma) занятых зон меряются на РЕШЁННОМ солиде — честный
-        // оккупант, не идеал.
-        let mut occupied: Vec<(f64, f64)> = Vec::new();
-        let mut displaced: Vec<(usize, String)> = Vec::new(); // (index, anchor)
-        let mut target_phase1: Option<String> = None;
-        for (i, cat) in self.sentiments.categories.iter().enumerate() {
-            let anchor_hex = anchor_of(cat)?;
-            let solid = solve(cat, &anchor_hex, &[])?;
-            let proto_hue = crate::accent::oklab_hue_of(&anchor_hex);
-            let solid_hue = crate::accent::oklab_hue_of(&solid);
-            let solid_chroma = oklab_chroma_of_hex(&solid);
-            let rested = crate::sentiment::angular_distance(solid_hue, proto_hue) <= 0.5
-                || solid_chroma < ACHROMATIC_CHROMA_EPS;
-            if rested {
-                if solid_chroma >= ACHROMATIC_CHROMA_EPS {
-                    occupied.push((solid_hue, solid_chroma));
-                }
-                if cat.name == name {
-                    target_phase1 = Some(solid);
-                }
-            } else {
-                displaced.push((i, anchor_hex));
-            }
-        }
-        if let Some(solid) = target_phase1 {
-            // Покоящаяся цель неподвижна по построению — байт-в-байт фаза 1.
-            return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
-                ConfigError::InvalidHex {
-                    field: format!("roles.{role} (сентимент-солид)"),
-                    value: solid,
-                }
-            });
-        }
-
-        // Фаза 2: смещённые перерешиваются с зонами оккупантов, по порядку.
-        for (i, anchor_hex) in displaced {
-            let cat = &self.sentiments.categories[i];
-            let c_self = oklab_chroma_of_hex(&anchor_hex);
-            let mut zones = Vec::with_capacity(occupied.len());
-            for &(hue, c_other) in &occupied {
-                let pair_chroma = (c_self + c_other) / 2.0;
-                let min_sep = crate::sentiment::s_min_deg_from_chord(s_perc_min, pair_chroma)
-                    .map_err(|reason| ConfigError::SentimentResolution {
-                        role: role.to_string(),
-                        sentiment: cat.name.clone(),
-                        reason,
-                    })?;
-                // Сатурация (маркер 180° из s_min_deg_from_chord): пара так
-                // приглушена, что категориальная хорда недостижима при любом угле —
-                // перцептивно НЕРАЗДЕЛИМА. Отступ бессмыслен, зону пропускаем: иначе
-                // legalize искал бы точный антипод (мера нуль) и вернул ложный
-                // «пустая дуга». Дормантно для labui (все сентименты хромны).
-                if min_sep >= 180.0 {
-                    continue;
-                }
-                zones.push(crate::sentiment::NeighborZone {
-                    hue_deg: hue,
-                    min_sep_deg: min_sep,
-                });
-            }
-            let solid = solve(cat, &anchor_hex, &zones)?;
-            if cat.name == name {
-                return crate::spaces::srgb::srgb_encoded_from_hex(&solid).map_err(|_| {
-                    ConfigError::InvalidHex {
-                        field: format!("roles.{role} (сентимент-солид)"),
-                        value: solid,
-                    }
-                });
-            }
-            let solid_hue = crate::accent::oklab_hue_of(&solid);
-            let solid_chroma = oklab_chroma_of_hex(&solid);
-            if solid_chroma >= ACHROMATIC_CHROMA_EPS {
-                occupied.push((solid_hue, solid_chroma));
-            }
-        }
-        unreachable!("категория `{name}` обязана быть покоящейся или смещённой")
-    }
-
-    /// `S_PERC_MIN`, пересчитанный из Oklab-хром светлых якорей 4 (или скольких
-    /// есть) сентимент-категорий конфига — закон `2·C_rep·sin(20°/2)`.
-    /// При labui-якорях == замороженная константа (тест-идентичность).
-    /// # Errors
-    ///
-    /// `Err`, если категория ссылается на несуществующее семейство или якорь
-    /// семейства — невалидный hex: порог разделения, посчитанный по НЕПОЛНОМУ
-    /// набору категорий, был бы тихой математической ложью.
-    pub fn sentiment_s_perc_min(&self) -> Result<f64, ConfigError> {
-        let mut chromas = Vec::with_capacity(self.sentiments.categories.len());
-        for c in &self.sentiments.categories {
-            let fam = self
-                .palette
-                .iter()
-                .find(|f| f.key == c.family)
-                .ok_or_else(|| ConfigError::UnknownFamily {
-                    referenced_by: format!("sentiments.{}", c.name),
-                    family: c.family.clone(),
-                })?;
-            let lin = crate::spaces::srgb::srgb_from_hex(&fam.anchors.light).map_err(|_| {
-                ConfigError::InvalidHex {
-                    field: format!("palette.{}.anchors.light", fam.key),
-                    value: fam.anchors.light.clone(),
-                }
-            })?;
-            let lab = crate::spaces::oklab::srgb_linear_to_oklab(lin);
-            chromas.push((lab[1] * lab[1] + lab[2] * lab[2]).sqrt());
-        }
-        Ok(crate::sentiment::s_perc_min_from_chromas(&chromas))
-    }
 }
 
 /// Словарь эталонного пресета labui — ТОЛЬКО семантика ролей/алиасов (ни одного
-/// цветового значения). `#[cfg(test)]`-only (ADR-0001 PR-c): labui-дерево ушло из
+/// цветового значения). `#[cfg(test)]`-only (ADR-0001): labui-дерево ушло из
 /// ОТГРУЖАЕМОГО кода ядра — прод-скан агностичности
 /// (`tests/agnostic_production_surface.rs`) его не видит. Единственный потребитель —
 /// тестовая фикстура `fixture`.

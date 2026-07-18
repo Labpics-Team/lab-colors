@@ -7,8 +7,8 @@
 //! the DEFAULT tinted table — across a grid of backgrounds, asserting all four
 //! invariants at once:
 //!
-//! 1. **Perceptual target accuracy.** Each text/UI role lands within ±1 Lc of
-//!    the target its anchor implies (fraction × the background's max contrast),
+//! 1. **Candidate-score target accuracy.** Each text/UI role lands within ±1 Lc of
+//!    the target its anchor implies (fraction × the background's max Ys score),
 //!    re-measured independently — *except* where the WCAG floor legitimately
 //!    overrode it (`floor_override`), where the contrast is only pushed *up*.
 //! 2. **WCAG floors.** primary/secondary clear 4.5:1, muted/icon clear 3:1, on
@@ -152,21 +152,21 @@ fn dim_tinted_carries_the_cool_neutral_undertone() {
             // tint because max_chroma collapses at the lightness extremes, so
             // the hue can be noisier there; assert the hue band only where the
             // tint is actually present (s above a small floor).
-            if c.s > 0.02 {
-                let dist = hue_distance(c.h_ok, TINT_HUE_CENTER);
+            if c.s() > 0.02 {
+                let dist = hue_distance(c.h_ok(), TINT_HUE_CENTER);
                 assert!(
                     dist <= TINT_HUE_BAND,
                     "dim {bg_hex} {}: undertone hue {:.1}° is {dist:.1}° off the cool \
                      neutral {TINT_HUE_CENTER}° (hex {hex}) — tint drifted or flipped warm",
                     role.key(),
-                    c.h_ok,
+                    c.h_ok(),
                 );
             }
             assert!(
-                c.s > 1e-4,
+                c.s() > 1e-4,
                 "dim {bg_hex} {}: saturation {} ~ 0 — role came out sterile grey, not tinted",
                 role.key(),
-                c.s,
+                c.s(),
             );
 
             // Cool lean: the blue byte is at least the red byte (blue-violet).
@@ -204,13 +204,13 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
         let set = resolve_set(&bg, &table, &vc);
         for role in roles {
             if let Some((solved, _)) = role_solved(&set, role) {
-                // Ось читаемости меряется в Ys (ADR-0003 глава #64): `solved.lc()`
+                // Ys candidate score вычисляется в Ys (ADR-0003): `solved.lc()`
                 // — Ys-замер, независимый пересчёт обязан читать тот же домен.
                 let fg_disp =
                     crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()).expect("valid hex");
                 let bg_disp =
                     crate::spaces::srgb::srgb_encoded_from_hex(bg_hex).expect("valid hex");
-                let measured = crate::lpc::lpc_readability_ys(fg_disp, bg_disp);
+                let measured = crate::lpc::ys_candidate_score_for_test(fg_disp, bg_disp);
                 assert!(
                     (solved.lc() - measured).abs() <= 1.0,
                     "dim {bg_hex} {}: reported lc {} disagrees with re-measured {measured} \
@@ -221,22 +221,5 @@ fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
                 );
             }
         }
-    }
-}
-
-#[test]
-fn tmp_probe_ys_anchors() {
-    let white = crate::spaces::srgb::srgb_encoded_from_hex("#FFFFFF").expect("bg");
-    let max = crate::lpc::lpc_readability_ys(
-        crate::spaces::srgb::srgb_encoded_from_hex("#000000").expect("fg"),
-        white,
-    );
-    println!("PROBE max(black-on-white) = {max}");
-    for h in [
-        "#141414", "#767676", "#949494", "#C2C2C2", "#17171C", "#EDEDED",
-    ] {
-        let fg = crate::spaces::srgb::srgb_encoded_from_hex(h).expect("fg");
-        let ys = crate::lpc::lpc_readability_ys(fg, white);
-        println!("PROBE {h}: ys_lc={ys} fraction={}", ys / max);
     }
 }

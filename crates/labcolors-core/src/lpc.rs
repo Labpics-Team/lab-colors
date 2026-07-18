@@ -5,8 +5,14 @@
 //! outperforms APCA. Readability admission is owned by a versioned evaluator
 //! profile with declared typography, observer and context applicability.
 
-use crate::spaces::srgb::{D65_WHITE, srgb_from_hex, srgb_to_xyz};
-use crate::spaces::{cam16, cat16, vc::ViewingConditions};
+use crate::spaces::{cam16, vc::ViewingConditions};
+
+#[cfg(test)]
+use crate::Srgb8;
+#[cfg(test)]
+use crate::spaces::srgb::{srgb_from_hex, srgb_linear_from_srgb8, srgb_to_xyz};
+#[cfg(test)]
+use crate::srgb8::hex_bytes;
 
 /// CIECAM16 correlates `(J, M, h)` for an XYZ stimulus.
 ///
@@ -39,146 +45,24 @@ pub(crate) fn hk_coeff(h_cam_deg: f64) -> f64 {
         + 0.792
 }
 
-/// CAM16 lightness `J` of the achromatic stimulus at luminance `y`.
+/// Gray luminance whose CAM16 lightness equals `j_hk`.
 ///
-/// This is the exact inverse of [`y_hk`]: `y_hk` finds the grey luminance whose
-/// `J` equals a target `J_HK`, so given that luminance back, `grey_j` returns
-/// the same `J_HK`. The inverse solver uses it to turn a target H-K-corrected
-/// luminance into the `J_HK` a foreground colour must reproduce.
-pub(crate) fn grey_j(y: f64, vc: &ViewingConditions) -> f64 {
-    let xyz = [y * D65_WHITE[0], y, y * D65_WHITE[2]];
-    cam16_jch_from_xyz(xyz, vc).0
-}
-
-/// Grey luminance whose CAM16 lightness equals `j_hk` (inverse of [`grey_j`]).
-///
-/// `J` is monotonic in luminance for the achromatic axis, so this inverts the
-/// forward chain analytically in closed form, then polishes with two Newton
-/// steps to full `f64` precision (see [`y_hk_analytic`]). The reference
-/// fixed-iteration bisection [`y_hk_bisect`] is retained for tests.
+/// LPC supplies an H-K-adjusted `J` target; the physical inversion itself is
+/// shared appearance geometry in [`cam16::gray_y`].
 pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
-    y_hk_analytic(j_hk, vc)
+    cam16::gray_y(j_hk, vc)
 }
 
-/// Closed-form inverse of [`grey_j`] with Newton polish.
-///
-/// # Derivation (CIECAM16 — Li et al. 2017, DOI 10.1002/col.22131; CIE 248:2022)
-///
-/// For an achromatic D65 stimulus of luminance `y`, the forward path
-/// [`grey_j`] reduces to a chain of monotonic, individually invertible links.
-/// Each cone response after chromatic adaptation is **linear in `y`**:
-/// `lms_a[i] = k_i · y`, where the per-channel scale
-/// `k_i = d·100 + (1 − d)·rgb_w[i]` follows from `rgb_d[i] = d·100/rgb_w[i] + 1 − d`
-/// (`cam16` discounting, see [`ViewingConditions::build`]) and the D65 grey
-/// `xyz = [y·Xw, y, y·Zw]·100` (the CAT16 white-point cone response cancels the
-/// `100/rgb_w[i]` term). The achromatic signal is then
-/// `A = nbb · Σ wᵢ·adapt(kᵢ·y)` with weights `w = [2, 1, 1/20]`, and
-/// `J = 100·(A/A_w)^(c·z)`.
-///
-/// Inverting link by link:
-/// 1. `J → A`:           `A = A_w · (J/100)^(1/(c·z))`           — exact (power).
-/// 2. `A → target sum`:  `Σ wᵢ·adapt(kᵢ·y) = A/nbb`              — exact (linear).
-/// 3. seed `y`:          collapse the three channels onto one effective scale
-///    `k_eff = Σ wᵢkᵢ / Σ wᵢ` and invert the single compression
-///    `adapt(k_eff·y) = S` via `(F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S)`
-///    (the inverse of [`cam16::adapt`], Li et al. 2017 / CIE 248:2022), then take the
-///    `1/0.42` power.
-///
-/// The three channels do **not** share one scale (`k_i` spread ≈ 1 % from
-/// incomplete chromatic adaptation), so step 3 is an approximation, not an
-/// exact inverse — there is no algebraic inverse for a sum of three distinct
-/// fractional-power terms. The seed lands within ~5·10⁻⁶ of the true `y`; two
-/// Newton steps on the exact 3-term residual `f(y) − target` (closed-form
-/// derivative) drive it to machine epsilon, matching [`y_hk_bisect`] to
-/// < 2·10⁻¹² over the full `J_HK` grid.
-///
-/// `Y` is clamped to `[0, 1]`, reproducing the bisection's search interval:
-/// `J_HK` can exceed `grey_j(1.0) = 100` for near-white chromatic colours
-/// (the H-K term lifts `J`), and there the bisection saturates at `Y = 1`.
+/// Benchmark wrapper for the production CAM16 gray-axis inverse.
+#[cfg(test)]
 fn y_hk_analytic(j_hk: f64, vc: &ViewingConditions) -> f64 {
-    if j_hk <= 0.0 {
-        return 0.0;
-    }
-
-    // Per-channel cone-response scale: lms_a[i] = k[i] · y (linear in y).
-    // rgb_d[i] = d·100/rgb_w[i] + (1−d), and the D65 grey cone response is
-    // rgb_w[i]·y, so lms_a[i] = (d·100 + (1−d)·rgb_w[i])·y. Recover rgb_w[i]
-    // (and hence the (1−d) part) from rgb_d[i] without re-deriving d:
-    // (1−d)·rgb_w[i] = rgb_w[i] − d·100, with rgb_w[i] from CAT16 of the white.
-    let rgb_w = cat16::xyz_to_cone([
-        D65_WHITE[0] * 100.0,
-        D65_WHITE[1] * 100.0,
-        D65_WHITE[2] * 100.0,
-    ]);
-    // rgb_d[i] = d·(100/rgb_w[i]) + (1−d)  ⇒  d = (rgb_d[i] − 1)/(100/rgb_w[i] − 1).
-    // Solve for d from channel 0, then k[i] = d·100 + (1−d)·rgb_w[i].
-    let d = (vc.rgb_d[0] - 1.0) / (100.0 / rgb_w[0] - 1.0);
-    let k = [
-        d * 100.0 + (1.0 - d) * rgb_w[0],
-        d * 100.0 + (1.0 - d) * rgb_w[1],
-        d * 100.0 + (1.0 - d) * rgb_w[2],
-    ];
-    const W: [f64; 3] = [2.0, 1.0, 1.0 / 20.0];
-    let w_sum = W[0] + W[1] + W[2];
-
-    // Step 1+2: J → target value of Σ wᵢ·adapt(kᵢ·y).
-    let target = vc.aw * (j_hk / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
-
-    // Step 3: analytic seed via the weighted-effective channel.
-    let s = target / w_sum;
-    if s <= 0.0 {
-        return 0.0;
-    }
-    if s >= 400.0 {
-        // adapt saturates at 400; J_HK is beyond what grey luminance ≤ 1 yields.
-        return 1.0;
-    }
-    let k_eff = (W[0] * k[0] + W[1] * k[1] + W[2] * k[2]) / w_sum;
-    // Inverse of adapt: (F_L·k_eff·y/100)^0.42 = 27.13·S/(400 − S).
-    let p = 27.13 * s / (400.0 - s);
-    let mut y = p.powf(1.0 / 0.42) * 100.0 / (vc.fl * k_eff);
-
-    // Newton polish on the exact 3-term residual. adapt'(c) w.r.t. c, with
-    // P = (F_L·c/100)^0.42:  dadapt/dc = 400·27.13·(0.42·P/c)/(P + 27.13)².
-    let residual_slope = |y: f64| -> (f64, f64) {
-        let mut f = 0.0;
-        let mut df = 0.0;
-        for i in 0..3 {
-            let c = k[i] * y;
-            let x = vc.fl * c / 100.0;
-            let pp = x.powf(0.42);
-            let denom = pp + 27.13;
-            f += W[i] * 400.0 * pp / denom;
-            let dp = 0.42 * pp / c;
-            df += W[i] * k[i] * 400.0 * 27.13 * dp / (denom * denom);
-        }
-        (f - target, df)
-    };
-    for _ in 0..2 {
-        let (err, slope) = residual_slope(y);
-        y -= err / slope;
-    }
-
-    y.clamp(0.0, 1.0)
+    cam16::gray_y_analytic(j_hk, vc)
 }
 
-/// Reference inverse of [`grey_j`] by fixed-iteration bisection.
-///
-/// `J` is monotonic in luminance on the achromatic axis, so 64 bisection
-/// iterations on `[0, 1]` converge to full `f64` precision. Retained as the
-/// ground truth that [`y_hk_analytic`] is property-tested against.
+/// Benchmark wrapper for the fixed-iteration CAM16 oracle.
+#[cfg(test)]
 fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
-    let mut lo = 0.0_f64;
-    let mut hi = 1.0_f64;
-    for _ in 0..64 {
-        let mid = (lo + hi) * 0.5;
-        if grey_j(mid, vc) < j_hk {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    (lo + hi) * 0.5
+    cam16::gray_y_bisect(j_hk, vc)
 }
 
 // Константы candidate-кривой транскрибированы из опубликованного набора
@@ -369,139 +253,75 @@ pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) ->
     j + hk_coeff(h) * chroma.powf(HK_CHROMA_EXPONENT)
 }
 
-fn hex_to_y_hk(hex: &str, vc: &ViewingConditions) -> f64 {
-    // Невалидный hex деградирует к чёрному, а не к Err: публичный LPC-API
-    // (`lpc`, `lpc_with_vc`) намеренно infallible (f64, не Result) — hex
-    // валидируются на границах (config/wasm), здесь только детерминированный
-    // фолбэк вместо паники.
-    let rgb = srgb_from_hex(hex).unwrap_or([0.0, 0.0, 0.0]);
+#[cfg(test)]
+fn srgb8_to_y_hk(rgb: Srgb8, vc: &ViewingConditions) -> f64 {
+    let rgb = srgb_linear_from_srgb8(rgb);
     let xyz = srgb_to_xyz(rgb);
     y_hk(j_hk_from_xyz(xyz, vc).max(0.0), vc)
 }
 
-/// Perceptual-contrast (LPC) between a foreground and background hex colour
-/// under standard sRGB viewing conditions (light-theme average surround).
-///
-/// Shortcut for [`lpc_with_vc`] with [`ViewingConditions::srgb`]. Use this for
-/// light themes; for dark themes call [`lpc_with_vc`] with
-/// [`ViewingConditions::dim_surround`] (dim surround компенсирует эффект
-/// Бартлесона–Бренемана; параметры окружения — CIE 159:2004 Table 1 / CIE 248:2022).
-pub fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
-    lpc_with_vc(fg_hex, bg_hex, &ViewingConditions::srgb())
+/// Test-only characterization of the retired scalar apparent-contrast
+/// candidate. Exact bytes make malformed transport unrepresentable; the
+/// function is deliberately absent from the production/public LPC surface.
+#[cfg(test)]
+pub(crate) fn apparent_contrast_candidate_srgb8(fg: Srgb8, bg: Srgb8) -> f64 {
+    apparent_contrast_candidate_srgb8_with_vc(fg, bg, &ViewingConditions::srgb())
 }
 
-/// Perceptual-contrast (LPC) between a foreground and background hex colour
-/// under the given viewing conditions.
-///
-/// Contrast is resolved in the perceptual space of `vc`, so the same hex pair
-/// yields different `Lc` under light and dark themes — that divergence is the
-/// point: a dark theme must reach the same contrast *contract* in a
-/// dim-surround space (Bartleson–Breneman compensation), not reuse the light
-/// numbers. Pick the VC for the theme: [`ViewingConditions::srgb`] for light
-/// themes (average surround, F=1.0 c=0.69 Nc=1.0),
-/// [`ViewingConditions::dim_surround`] for dark themes (dim surround,
-/// F=0.9 c=0.59 Nc=0.9). The surround triplets are CIE 159:2004 Table 1
-/// (carried unchanged into CIE 248:2022); Bartleson & Breneman (1967) is the
-/// psychophysical basis for a dim surround lowering apparent contrast. (This is
-/// NOT DOI 10.1002/col.22793, which is the Helmholtz–Kohlrausch paper cited by
-/// `hk_coeff` — that DOI was previously misattached to the surround params.)
-pub fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
-    let y_fg = hex_to_y_hk(fg_hex, vc);
-    let y_bg = hex_to_y_hk(bg_hex, vc);
-    contrast_core(y_fg, y_bg)
-}
-
-/// LPC surface distance between two hex colours under standard sRGB viewing
-/// conditions (light-theme average surround).
-///
-/// Shortcut for [`lpc_surface_with_vc`] with [`ViewingConditions::srgb`]; use
-/// [`ViewingConditions::dim_surround`] for dark themes.
-pub fn lpc_surface(c1_hex: &str, c2_hex: &str) -> f64 {
-    lpc_surface_with_vc(c1_hex, c2_hex, &ViewingConditions::srgb())
-}
-
-/// LPC surface distance between two hex colours under the given viewing
-/// conditions.
-///
-/// Both colours are decoded under `vc`, so dark-theme surfaces are compared in
-/// the dim-surround space. Use [`ViewingConditions::srgb`] for light themes and
-/// [`ViewingConditions::dim_surround`] for dark themes.
-pub fn lpc_surface_with_vc(c1_hex: &str, c2_hex: &str, vc: &ViewingConditions) -> f64 {
-    // `.expect()` on the parse is intentionally left in place here: the
-    // fallible-public-API redesign is tracked separately (issue #41).
-    let c1 = crate::lcs::LcsColor::from_hex_with_vc(c1_hex, vc).expect("invalid hex");
-    let c2 = crate::lcs::LcsColor::from_hex_with_vc(c2_hex, vc).expect("invalid hex");
-    let dj = c1.jp - c2.jp;
-    let m1 = c1.s * (c1.jp + 1.0);
-    let m2 = c2.s * (c2.jp + 1.0);
-    let h1 = c1.h_ok.to_radians();
-    let h2 = c2.h_ok.to_radians();
-    let da = m1 * h1.cos() - m2 * h2.cos();
-    let db = m1 * h1.sin() - m2 * h2.sin();
-    (dj * dj + da * da + db * db).sqrt()
-}
-
-/// LPC contrast between two [`crate::lcs::LcsColor`] values under standard sRGB
-/// viewing conditions (light-theme average surround).
-///
-/// Shortcut for [`lpc_lcs_with_vc`] with [`ViewingConditions::srgb`]. Uses the
-/// pre-computed CAM16 J' and Oklab hue stored in each colour, avoiding
-/// re-parsing hex strings. Delegates to the same perceptual-contrast core
-/// curve as [`lpc`].
-pub fn lpc_lcs(fg: &crate::lcs::LcsColor, bg: &crate::lcs::LcsColor) -> f64 {
-    lpc_lcs_with_vc(fg, bg, &ViewingConditions::srgb())
-}
-
-/// LPC contrast between two [`crate::lcs::LcsColor`] values under the given
-/// viewing conditions.
-///
-/// `vc` must be the same viewing conditions the colours were constructed under
-/// (e.g. via [`crate::lcs::LcsColor::from_hex_with_vc`]): the H-K chroma term
-/// and the luminance resolution both read it. Use [`ViewingConditions::srgb`]
-/// for light themes and [`ViewingConditions::dim_surround`] for dark themes.
-pub fn lpc_lcs_with_vc(
-    fg: &crate::lcs::LcsColor,
-    bg: &crate::lcs::LcsColor,
+/// Viewing-condition-specific form of
+/// [`apparent_contrast_candidate_srgb8`]. This is characterization machinery,
+/// not an admitted readability evaluator or a complete LPC definition.
+#[cfg(test)]
+pub(crate) fn apparent_contrast_candidate_srgb8_with_vc(
+    fg: Srgb8,
+    bg: Srgb8,
     vc: &ViewingConditions,
 ) -> f64 {
-    let y_fg = y_hk_from_lcs(fg, vc);
-    let y_bg = y_hk_from_lcs(bg, vc);
+    let y_fg = srgb8_to_y_hk(fg, vc);
+    let y_bg = srgb8_to_y_hk(bg, vc);
     contrast_core(y_fg, y_bg)
 }
 
-/// Derive hk-adjusted luminance from an existing [`LcsColor`].
-///
-/// Decompresses the stored UCS correlates back to raw CAM16 (J' → J,
-/// M' → M → C) so the result is bit-identical to the hex path
-/// ([`lpc`]); previously this used J'/M' directly, so `lpc` and
-/// `lpc_lcs` disagreed for chromatic colours.
-fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
-    let j = cam16::ucs_j_inv(c.jp);
-    let m = cam16::ucs_m_inv(c.mp());
-    // `vc.fl_pow_025` == инлайновый `vc.fl.powf(0.25)`; байт-идентичная `chroma`.
-    let chroma = m / vc.fl_pow_025;
-    let j_hk = j + hk_coeff(c.h_cam()) * chroma.powf(HK_CHROMA_EXPONENT);
-    y_hk(j_hk.max(0.0), vc)
+#[cfg(test)]
+pub(crate) fn apparent_contrast_candidate_hex_for_test(
+    fg_hex: &str,
+    bg_hex: &str,
+) -> Result<f64, String> {
+    Ok(apparent_contrast_candidate_srgb8(
+        Srgb8::new(hex_bytes(fg_hex)?),
+        Srgb8::new(hex_bytes(bg_hex)?),
+    ))
 }
 
-/// Perceptual contrast (LPC) of a foreground over a background computed in the
-/// **readability luminance domain** `Ys` (WCAG relative luminance) rather than
-/// the Helmholtz–Kohlrausch brightness domain `Y_hk` that the apparent-contrast
-/// metric [`lpc`] uses. С главы #64 (активация ADR-0003) это домен, в котором
-/// считает ось читаемости движка.
+#[cfg(test)]
+pub(crate) fn apparent_contrast_candidate_hex_with_vc_for_test(
+    fg_hex: &str,
+    bg_hex: &str,
+    vc: &ViewingConditions,
+) -> Result<f64, String> {
+    Ok(apparent_contrast_candidate_srgb8_with_vc(
+        Srgb8::new(hex_bytes(fg_hex)?),
+        Srgb8::new(hex_bytes(bg_hex)?),
+        vc,
+    ))
+}
+
+/// Test-reference score of a foreground over a background computed in the
+/// display-luminance domain `Ys` (WCAG relative luminance) rather than
+/// the Helmholtz–Kohlrausch brightness domain `Y_hk`. С главы #64 (активация
+/// ADR-0003) это домен, в котором считается Ys candidate score движка.
 ///
 /// # Why a second domain exists
 ///
 /// [`contrast_core`] carries the published SAPC-8 (`0.0.98G-4g`) constants, and
 /// those constants were **calibrated with screen luminance `Ys` as their input**.
-/// [`lpc`] instead feeds the curve `Y_hk` — a *brightness* estimate that lifts a
-/// saturated hue's effective luminance above its photometric value (`#007AFF`:
-/// `Y 0.211 → Y_hk 0.346`). Applied to the readability axis this inverts the
-/// label polarity: the saturated background reads as a mid grey and the curve
-/// prefers a black label where a white one is more legible. The CH-4 science
-/// étude measured a monotonic 15:0 white→black flip across the saturated-hue
-/// sweep, driven entirely by that out-of-domain `Y_hk` substitution. Reading the
-/// **calibrated** domain removes it. Full rationale and blast radius:
+/// The retired scalar candidate instead fed the curve `Y_hk` — a *brightness*
+/// estimate that lifts a saturated hue's effective luminance above its photometric value (`#007AFF`:
+/// `Y 0.211 → Y_hk 0.346`). Applied to the frozen curve this changes its
+/// polarity branch because it substitutes an out-of-domain input. The CH-4
+/// characterization observed the resulting branch flips; it did not establish
+/// a legibility preference. Restoring the formula's declared domain removes them.
+/// Full rationale and blast radius:
 /// `docs/decisions/0003-hk-scope.md` (variant A — accepted 2026-07-06).
 ///
 /// # Argument domain
@@ -513,49 +333,37 @@ fn y_hk_from_lcs(c: &crate::lcs::LcsColor, vc: &ViewingConditions) -> f64 {
 /// input. `Ys` is display-referred, so this
 /// contrast is viewing-condition invariant by construction: the dark-theme
 /// surround compensation `Y_hk` carries is a brightness concern, kept off the
-/// readability axis (flagged as an open question in the ADR).
+/// Ys candidate-score path.
 ///
-/// АКТИВИРОВАНО главой #64 (вариант A ADR-0003 в проде): ось читаемости движка
+/// ADR-0003: Ys candidate score движка
 /// считает именно в этом домене — `solve::finish`/`meets_floor`, интервал фона,
 /// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и белая
 /// сторона кроссовера пары (`pair::pair_side`). Сам движок зовёт
 /// [`contrast_core`] + [`crate::wcag::relative_luminance`] напрямую на уже
-/// готовых скалярах; эта функция — референс-вход той же формулы (те же
-/// функции, ноль новых констант), удобный для внешних сверок. `Y_hk` остался
-/// только на яркостной оси: метрика [`lpc`] (apparent contrast), чернильная
-/// сторона пары, свечение, сентимент, нейтральная лестница.
-#[doc(hidden)]
-pub fn lpc_readability_ys(fg_display: [f64; 3], bg_display: [f64; 3]) -> f64 {
+/// готовых скалярах; эта функция — только test-reference той же формулы (те же
+/// функции, ноль новых констант). `Y_hk` остаётся отдельной appearance-
+/// координатой, но не публичным scalar-LPC API.
+#[cfg(test)]
+pub(crate) fn ys_candidate_score_for_test(fg_display: [f64; 3], bg_display: [f64; 3]) -> f64 {
     contrast_core(
         crate::wcag::relative_luminance(fg_display),
         crate::wcag::relative_luminance(bg_display),
     )
 }
 
-/// Benchmark-only access to the two grey-axis inverse implementations.
-///
-/// These wrap the crate-private `y_hk_analytic` and `y_hk_bisect` so the
-/// `benches/y_hk.rs` Criterion harness can compare them head-to-head. Hidden
-/// from the rendered docs and not part of the supported public surface — the
-/// only supported entry point is `y_hk`, whose signature is unchanged.
-#[doc(hidden)]
-pub mod bench_support {
-    use super::ViewingConditions;
-
-    /// Analytic closed-form + Newton inverse (the production path).
-    pub fn y_hk_analytic(j_hk: f64, vc: &ViewingConditions) -> f64 {
-        super::y_hk_analytic(j_hk, vc)
-    }
-
-    /// Bisection reference inverse (64 iterations).
-    pub fn y_hk_bisect(j_hk: f64, vc: &ViewingConditions) -> f64 {
-        super::y_hk_bisect(j_hk, vc)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lpc(fg_hex: &str, bg_hex: &str) -> f64 {
+        apparent_contrast_candidate_hex_for_test(fg_hex, bg_hex)
+            .expect("test fixture must contain valid sRGB8 hex")
+    }
+
+    fn lpc_with_vc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
+        apparent_contrast_candidate_hex_with_vc_for_test(fg_hex, bg_hex, vc)
+            .expect("test fixture must contain valid sRGB8 hex")
+    }
 
     #[test]
     fn black_on_white_matches_reference() {
@@ -592,12 +400,6 @@ mod tests {
     }
 
     #[test]
-    fn surface_white_vs_near_white() {
-        let de = lpc_surface("#ffffff", "#f6f7fa");
-        assert!(de > 1.0 && de < 10.0, "surface delta: {}", de);
-    }
-
-    #[test]
     fn neutral_hk_boost_is_small() {
         // A near-neutral grey carries a tiny residual CAM16 colourfulness
         // (incomplete chromatic adaptation), so the H-K term shifts Y_hk
@@ -622,8 +424,8 @@ mod tests {
         for bg_hex in ["#007AFF", "#0082FF", "#FF0000", "#00B087"] {
             let bg = enc(bg_hex);
             // Readability (Ys) domain: white wins — matches platform convention.
-            let white_ys = lpc_readability_ys(white, bg).abs();
-            let black_ys = lpc_readability_ys(black, bg).abs();
+            let white_ys = ys_candidate_score_for_test(white, bg).abs();
+            let black_ys = ys_candidate_score_for_test(black, bg).abs();
             assert!(
                 white_ys > black_ys,
                 "{bg_hex}: Ys domain must prefer white (|white|={white_ys} !> |black|={black_ys})"
@@ -646,7 +448,7 @@ mod tests {
         // black-on-white number (≈106.04) is preserved, so the WCAG legal floor
         // and the endpoint anchors the golden grid locks are untouched.
         let enc = |hex: &str| crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("valid hex");
-        let bw_ys = lpc_readability_ys(enc("#000000"), enc("#FFFFFF"));
+        let bw_ys = ys_candidate_score_for_test(enc("#000000"), enc("#FFFFFF"));
         let bw_hk = lpc("#000000", "#FFFFFF");
         assert!(
             (bw_ys - bw_hk).abs() < 1e-9,
@@ -667,7 +469,7 @@ mod tests {
         // reads as materially higher contrast there than in the H-K domain.
         let enc = |hex: &str| crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("valid hex");
         let bg = "#007AFF";
-        let white_ys = lpc_readability_ys(enc("#FFFFFF"), enc(bg)).abs();
+        let white_ys = ys_candidate_score_for_test(enc("#FFFFFF"), enc(bg)).abs();
         let white_hk = lpc("#FFFFFF", bg).abs();
         assert!(
             white_ys > white_hk + 5.0,
@@ -733,62 +535,14 @@ mod tests {
     }
 
     #[test]
-    fn lpc_and_lpc_lcs_agree() {
-        // Both entry points must compute the identical metric: the LcsColor
-        // path decompresses J'/M' back to raw J/M before the H-K term.
-        for (fg, bg) in [
-            ("#0000FF", "#FFFFFF"),
-            ("#FF0000", "#101012"),
-            ("#34C759", "#FFFFFF"),
-        ] {
-            let via_hex = lpc(fg, bg);
-            let f = crate::lcs::LcsColor::from_hex(fg).expect("valid fg hex");
-            let b = crate::lcs::LcsColor::from_hex(bg).expect("valid bg hex");
-            let via_lcs = lpc_lcs(&f, &b);
-            assert!(
-                (via_hex - via_lcs).abs() < 1e-6,
-                "{fg}/{bg}: lpc={via_hex} lpc_lcs={via_lcs}"
-            );
-        }
-    }
-
-    #[test]
-    fn surface_same_color_is_zero() {
-        let de = lpc_surface("#3478F6", "#3478F6");
-        assert!(de.abs() < 1e-9, "self-distance must be zero: {}", de);
-    }
-
-    #[test]
-    fn surface_hue_distance_ordering() {
-        // Opposite hues must be further apart than near-identical reds.
-        // Guards the degrees-as-radians regression in the chroma vector.
-        let far = lpc_surface("#FF0000", "#00B050");
-        let near = lpc_surface("#FF0000", "#F51111");
-        assert!(
-            far > near,
-            "red↔green ({}) should exceed red↔red' ({})",
-            far,
-            near
-        );
-    }
-
-    #[test]
     fn shortcuts_match_srgb_with_vc() {
-        // The srgb shortcuts must be bit-identical to the explicit srgb VC
-        // path — this is what keeps every legacy value (e.g. black-on-white
-        // 106.0407) unchanged after the refactor.
+        // The test-only sRGB characterization shortcut must be bit-identical
+        // to the same typed bytes evaluated with an explicit standard VC.
         let srgb = ViewingConditions::srgb();
         assert_eq!(
             lpc("#0000FF", "#FFFFFF"),
             lpc_with_vc("#0000FF", "#FFFFFF", &srgb)
         );
-        assert_eq!(
-            lpc_surface("#FFFFFF", "#f6f7fa"),
-            lpc_surface_with_vc("#FFFFFF", "#f6f7fa", &srgb)
-        );
-        let f = crate::lcs::LcsColor::from_hex("#0000FF").expect("valid fg hex");
-        let b = crate::lcs::LcsColor::from_hex("#FFFFFF").expect("valid bg hex");
-        assert_eq!(lpc_lcs(&f, &b), lpc_lcs_with_vc(&f, &b, &srgb));
     }
 
     #[test]
@@ -854,7 +608,7 @@ mod tests {
             let mut max_dy = 0.0_f64;
             // Sweep J_HK across the full reachable range, including the
             // above-100 band (near-white chromatic colours, where the H-K term
-            // lifts J past grey_j(1.0) = 100 and both paths must saturate Y=1).
+            // lifts J past gray_j(1.0) = 100 and both paths must saturate Y=1).
             for n in 0..=4000 {
                 let j_hk = n as f64 / 4000.0 * 104.0;
                 let analytic = y_hk_analytic(j_hk, &vc);
@@ -873,38 +627,20 @@ mod tests {
         for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
             // J_HK = 0 → black (Y = 0).
             assert_eq!(y_hk_analytic(0.0, &vc), 0.0);
-            // J_HK = grey_j(1.0) = 100 → white (Y = 1), within round-off.
-            assert!((y_hk_analytic(grey_j(1.0, &vc), &vc) - 1.0).abs() < 1e-9);
+            // J_HK = gray_j(1.0) = 100 → white (Y = 1), within round-off.
+            assert!((y_hk_analytic(cam16::gray_j(1.0, &vc), &vc) - 1.0).abs() < 1e-9);
             // J_HK above 100 (reachable for near-white chromatic colours) must
             // clamp to Y = 1, matching the bisection's [0,1] search interval.
             assert_eq!(y_hk_analytic(130.0, &vc), 1.0);
-            // Round-trip: grey_j(y) → y_hk_analytic recovers y.
+            // Round-trip: gray_j(y) → y_hk_analytic recovers y.
             for &y in &[0.01_f64, 0.18, 0.5, 0.9] {
-                let recovered = y_hk_analytic(grey_j(y, &vc), &vc);
+                let recovered = y_hk_analytic(cam16::gray_j(y, &vc), &vc);
                 assert!(
                     (recovered - y).abs() < 1e-12,
                     "round-trip y={y}: recovered {recovered}, |d|={}",
                     (recovered - y).abs()
                 );
             }
-        }
-    }
-
-    #[test]
-    fn lpc_and_lpc_lcs_agree_under_dim() {
-        // The hex and LcsColor entry points must compute the identical metric
-        // under dim surround too — provided the colour is constructed under the
-        // same VC that is passed to lpc_lcs_with_vc.
-        let dim = ViewingConditions::dim_surround();
-        for (fg, bg) in [("#0000FF", "#FFFFFF"), ("#34C759", "#101012")] {
-            let via_hex = lpc_with_vc(fg, bg, &dim);
-            let f = crate::lcs::LcsColor::from_hex_with_vc(fg, &dim).expect("valid fg hex");
-            let b = crate::lcs::LcsColor::from_hex_with_vc(bg, &dim).expect("valid bg hex");
-            let via_lcs = lpc_lcs_with_vc(&f, &b, &dim);
-            assert!(
-                (via_hex - via_lcs).abs() < 1e-6,
-                "{fg}/{bg} under dim: lpc={via_hex} lpc_lcs={via_lcs}"
-            );
         }
     }
 

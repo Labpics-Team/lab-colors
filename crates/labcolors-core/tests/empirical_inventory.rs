@@ -38,7 +38,7 @@ mod common;
 const PERCEPTUAL_MODULES: [&str; 8] = [
     "semantic.rs",
     "scale.rs",
-    "sentiment.rs",
+    "spaces/oklab.rs",
     "neutral.rs",
     "lpc.rs",
     "lcs.rs",
@@ -57,9 +57,9 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
 // (0.968/0.627/0.461/0.276) and the Separator Lc (8.0) evaded GATE-1 until they
 // were extracted. The const-only detector (GATE-1/2/3) is blind to inline literals.
 //
-// Why a SUBSET and not all six: the three modules below are POLICY modules — their
-// magnitudes are tunable perceptual policy (role fractions, sentiment/curve
-// thresholds). The other three (`scale.rs`, `lpc.rs`, `lcs.rs`) are STANDARD-MODEL
+// Why a SUBSET: the three modules below are POLICY modules — their magnitudes are
+// tunable perceptual policy (role fractions and curve thresholds). The remaining
+// modules (`scale.rs`, `lpc.rs`, `lcs.rs`, `solve.rs`) are STANDARD-MODEL
 // transform modules: their inline coefficients implement cited colour-appearance
 // models verbatim — CIECAM16 (`460/451/288/6300/1403…` in `lcs.rs`), the Hellwig
 // 2022 H-K first-harmonic (`0.080/0.132/0.160/0.405/0.792` in `lpc.rs`), the CAM16
@@ -74,9 +74,9 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
 // non-policy inline floats were the ITU-R BT.709 / WCAG relative-luminance coefficients
 // (`0.2126/0.7152/0.0722`), now extracted into the `WCAG_LUMA_{R,G,B}` consts on
 // `NUMERIC_METHOD_ALLOWLIST` (a cited standard, excluded by construction — INV-3).
-// Every module in `PERCEPTUAL_MODULES` remains under the const-marker gate; the four
+// Every module in `PERCEPTUAL_MODULES` remains under the const-marker gate; the three
 // POLICY modules below are additionally scanned for inline bare literals.
-const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutral.rs", "pair.rs"];
+const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs", "pair.rs"];
 
 /// Bare float literal VALUES that are NOT tunable perceptual policy — universal
 /// domain/normalisation/degenerate/sentinel/numerical arithmetic, plus cited
@@ -86,18 +86,10 @@ const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutra
 /// (with a marker + inventory row), so it surfaces through GATE-1/2/3. Each entry
 /// is a reviewable assertion that the value is not a tunable perceptual threshold:
 const BARE_FLOAT_ALLOWLIST: &[&str] = &[
-    "0.0",  // additive identity / origin / degenerate lower clamp bound.
-    "0.5",  // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
-    "1.0",  // multiplicative identity / unit upper clamp bound / purity ceiling.
-    "2.0",  // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
-    "0.05", // hue-search STEP granularity (numerical resolution of the sentiment
-    // hue sweep), not a perceptual threshold — the continuous analogue of the
-    // `STRUCTURAL_NONPOLICY_ALLOWLIST` iteration counts.
-    "20.0", // cited categorical-hue-perception threshold (20°, Witzel & Gegenfurtner
-    // 2013) that recomputes the `S_PERC_MIN` DERIVATION-IDENTITY inline
-    // (`2·C_rep·sin(20°/2)`, see sentiment.rs `s_perc_min_from_chromas`). Excluded on
-    // the SAME grounds `NUMERIC_METHOD_ALLOWLIST` excludes `S_PERC_MIN` — recomputed /
-    // cited, not a new tunable policy literal (provenance held by the `S_PERC_MIN` doc).
+    "0.0",   // additive identity / origin / degenerate lower clamp bound.
+    "0.5",   // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
+    "1.0",   // multiplicative identity / unit upper clamp bound / purity ceiling.
+    "2.0",   // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
     "100.0", // CAM16 J lightness scale (0..100) / percent normalisation.
     "180.0", // half-turn in degrees (shortest-arc hue wrap: (Δ+180)%360−180).
     "255.0", // 8-bit sRGB channel quantisation (round·255 / 255).
@@ -118,8 +110,9 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     // APCA / WCAG standard scaling + identities (lpc.rs).
     "LC_SCALE",
     "DELTA_Y_MIN",
-    // Derivation-identity (R2), recomputed not policy (sentiment.rs).
-    "S_PERC_MIN",
+    // Representation-derived angular bounds (spaces/oklab.rs), not policy.
+    "HUE_DEG_MIN_INCLUSIVE",
+    "HUE_DEG_MAX_EXCLUSIVE",
     // Pure numeric epsilons — non-perceptual.
     "RATIO_BISECT_EPS",
     "RATIO_EPS",
@@ -158,15 +151,16 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
 /// observable half of INV-3 (exclusion is enforced, not merely implied by
 /// scoping). Checked directly against the SSOT rows.
 const FORBIDDEN_STANDARD_ROW_NAMES: &[&str] = &[
-    "HK_CHROMA_EXPONENT", // Hellwig 0.587
-    "LC_SCALE",           // APCA
-    "DELTA_Y_MIN",        // APCA
-    "S_PERC_MIN",         // derivation-identity
-    "RATIO_BISECT_EPS",   // numeric EPS
-    "AA_TEXT_RATIO",      // WCAG
-    "L_A",                // CIECAM16 L_A=64
-    "YB",                 // UCS / Yb=20
-    "D65",                // illuminant
+    "HK_CHROMA_EXPONENT",    // Hellwig 0.587
+    "LC_SCALE",              // APCA
+    "DELTA_Y_MIN",           // APCA
+    "HUE_DEG_MIN_INCLUSIVE", // exact angular domain
+    "HUE_DEG_MAX_EXCLUSIVE", // exact angular domain
+    "RATIO_BISECT_EPS",      // numeric EPS
+    "AA_TEXT_RATIO",         // WCAG
+    "L_A",                   // CIECAM16 L_A=64
+    "YB",                    // UCS / Yb=20
+    "D65",                   // illuminant
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -349,7 +343,7 @@ fn is_policy_numeric_type(ty: &str) -> bool {
 /// `(field_name, normalised_value)`. Only *floating-point* literals (containing a
 /// `.`) count — perceptual magnitudes in this domain are always fractional, while
 /// bare integers in a default body are sizes/indices, not policy. A field bound to
-/// a named const (e.g. `p_low: DEFAULT_HARDNESS`) is already covered by that
+/// a named const (e.g. `ratio: DEFAULT_RATIO`) is already covered by that
 /// const's own row and is intentionally not re-detected here.
 fn parse_default_field_literal(line: &str) -> Option<(String, String)> {
     let t = line.trim_start();

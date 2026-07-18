@@ -1,4 +1,4 @@
-//! Agnostic-core gates (ADR-0001 PR-c). Three guarantees, all in-crate `#[cfg(test)]`
+//! Agnostic-core gates (ADR-0001). Three guarantees, all in-crate `#[cfg(test)]`
 //! because they consume the relocated labui fixture (`crate::config::fixture`):
 //!
 //! 1. **Frozen golden** — `resolve_named_set` of the labui fixture is byte-for-byte
@@ -16,8 +16,8 @@ use crate::ladder::{LadderPosition, ThemeAnchors};
 use crate::solve::Floor;
 use crate::{
     BgInput, Brand, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
-    PaletteFamily, Resolved, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig,
-    ThemesConfig, VcPreset, ViewingConditions, resolve_named_set,
+    PaletteFamily, Resolved, RoleRecipe, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions,
+    resolve_named_set,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,23 +169,8 @@ fn accepted_endpoint_recovery_keeps_previously_false_failed_borders_legal() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. Named-path text-hierarchy compression
+// 2. Opaque named roles never acquire undeclared hierarchy
 // ─────────────────────────────────────────────────────────────────────────────
-
-const LABELS: [&str; 4] = [
-    "label-primary",
-    "label-secondary",
-    "label-tertiary",
-    "label-quaternary",
-];
-
-fn abs_lc(set: &[(String, Resolved)], name: &str) -> f64 {
-    set.iter()
-        .find(|(n, _)| n == name)
-        .and_then(|(_, r)| r.lc())
-        .map(f64::abs)
-        .unwrap_or_else(|| panic!("role `{name}` missing/unreachable"))
-}
 
 fn compressed(set: &[(String, Resolved)], name: &str) -> bool {
     set.iter()
@@ -203,82 +188,26 @@ fn hex(set: &[(String, Resolved)], name: &str) -> String {
 }
 
 #[test]
-fn hierarchy_pass_fires_and_flags_when_ladder_is_squeezed() {
-    // `#767676` — a near-AA mid-grey where the readable window is narrower than the
-    // label steps: primary and secondary are floored onto one colour. The pass
-    // makes that HONEST (compressed flag), not a silent collapse. A neutral anchor
-    // is flagged compressed ONLY by the pass (`Resolved::color` => compressed:false),
-    // so this is the RED-proof: disabling the pass drops the flag.
-    //
-    // Was `#747474` before the constructive-grey fix in `build_color`: the
-    // synchronized neutral anchor moved primary two quanta stronger there
-    // (#FAFBFF→#FCFCFF), which re-opened a distinguishable legal step — the
-    // squeeze band shifted to {#757575,#767676} (light-on-dark) /
-    // {#777777,#787878} (dark-on-light). Mid-band keeps the copy-collapse
-    // branch (`demote_below` → None → copy of the senior) under test.
+fn named_roles_do_not_gain_hierarchy_from_declaration_order() {
+    // This background is an anti-vacuum witness: two independently solved fixture
+    // anchors quantise to the same byte colour. Their neighbouring declaration
+    // positions and client-owned names must not make Core invent a hierarchy edge
+    // or mutate either result. C7 will express such a relation explicitly.
     let table = labui_reference().compile_named_role_table().unwrap();
     let bg = BgInput::solid("#767676").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
-        .expect("валидная hierarchy-фикстура обязана резолвиться");
+        .expect("valid opaque-role fixture must resolve");
 
     assert_eq!(
         hex(&set, "label-primary"),
         hex(&set, "label-secondary"),
-        "on #767676 secondary is expected floored onto primary"
+        "fixture must exercise the equality that used to trigger inferred hierarchy"
     );
-    assert!(
-        compressed(&set, "label-secondary"),
-        "squeezed junior MUST carry the compressed flag — the pass fired"
-    );
-    assert!(
-        !compressed(&set, "label-primary"),
-        "senior must not be flagged compressed"
-    );
-    let mags: Vec<f64> = LABELS.iter().map(|l| abs_lc(&set, l)).collect();
-    for w in mags.windows(2) {
+    for role in ["label-primary", "label-secondary", "border-strong"] {
         assert!(
-            w[0] + 1e-9 >= w[1],
-            "label ladder must stay non-strict-descending, got {mags:?}"
+            !compressed(&set, role),
+            "opaque role `{role}` acquired an undeclared order relation"
         );
-    }
-}
-
-#[test]
-fn hierarchy_pass_does_not_sweep_in_lone_anchors() {
-    // `border-strong` (0.9734) is a lone anchor, not a label-ladder rung: the
-    // grouping reads strictly-descending runs off the config, so it is never
-    // compressed. (`icon` был вторым lone-anchor; канон #92 снёс роль — глиф
-    // теперь label-tertiary, штатный rung лестницы.) `#767676` sits mid squeeze
-    // band (see `hierarchy_pass_fires_and_flags_when_ladder_is_squeezed`), so the
-    // pass demonstrably fires on the labels while leaving `border-strong` alone.
-    let table = labui_reference().compile_named_role_table().unwrap();
-    let bg = BgInput::solid("#767676").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
-        .expect("валидная hierarchy-фикстура обязана резолвиться");
-    assert!(
-        !compressed(&set, "border-strong"),
-        "border-strong must not join the label ladder"
-    );
-}
-
-#[test]
-fn hierarchy_pass_is_a_noop_on_the_golden_grid() {
-    // No golden background sits in the squeeze band — why the frozen golden stays
-    // byte-for-byte green after the port.
-    let table = labui_reference().compile_named_role_table().unwrap();
-    let (vcs, bgs) = grid();
-    for (vc, _) in vcs {
-        for bg_hex in bgs {
-            let bg = BgInput::solid(bg_hex).unwrap();
-            let set = resolve_named_set(&bg, &table, &vc)
-                .expect("golden hierarchy-фикстура обязана резолвиться");
-            for l in LABELS {
-                assert!(
-                    !compressed(&set, l),
-                    "no label may be compressed on golden bg {bg_hex}: `{l}` was"
-                );
-            }
-        }
     }
 }
 
@@ -287,7 +216,7 @@ fn hierarchy_pass_is_a_noop_on_the_golden_grid() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A synthetic "Acme" design system: a warm brand hue, families and a neutral
-/// unlike labui's Apple palette, its own sentiment and a small role set. Built
+/// unlike the Lab UI fixture, with its own opaque family IDs and a small role set. Built
 /// entirely through the PUBLIC `ThemeConfig` surface — no engine constants, no
 /// fixture reuse — so compiling and resolving it proves the core carries no
 /// baked-in taxonomy.
@@ -322,7 +251,6 @@ fn acme_config() -> ThemeConfig {
                 dark: "#1A1614".to_string(),
             },
             tint: NeutralTint {
-                ratio: 0.10,
                 target_mp: 5.0,
                 hue_stiffness: 8.0,
                 // Derive the undertone hue from the client's own dark anchor — the
@@ -343,16 +271,6 @@ fn acme_config() -> ThemeConfig {
                 anchors: anchors("#5A7D2C", "#8FB65A"),
             },
         ],
-        sentiments: SentimentsConfig {
-            categories: vec![SentimentCategory {
-                name: "alert".to_string(),
-                family: "crimson".to_string(),
-                hue_floor_deg: None,
-                preferred_side: None,
-            }],
-            hardness: 5.0,
-            chroma_fraction: 0.88,
-        },
         themes: ThemesConfig {
             entries: vec![
                 ("day".to_string(), VcPreset::Srgb),

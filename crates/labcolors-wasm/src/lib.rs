@@ -51,24 +51,15 @@ export interface SolvedColor {
   readonly hex: string;
   /** Ready-to-serve CSS value: "oklch(L% C H)". `vars` carries the same string. */
   readonly css: string;
-  /** Signed perceptual contrast (Lc) against the background. */
+  /** Signed Ys candidate score (lc) from the frozen SAPC-shaped curve; not LPC/readability evidence. */
   readonly lc: number;
   /** WCAG 2.1 ratio (1–21) against the background. */
   readonly wcagRatio: number;
   /** The legal floor squeezed this role onto the smallest step below its senior. */
   readonly compressed: boolean;
-  /**
-   * `true` when a coloured family label (M1) lost perceptible colour on its
-   * contract-solved lightness: the colour's M′ fell below the tint perceptibility
-   * floor, so at the family curve's extremes (near-white / near-black) the hue is
-   * physically indistinguishable. An honest, flagged outcome — not a silent
-   * degradation to grey. `false` for neutral labels and coloured labels that kept
-   * a distinguishable colour.
-   */
-  readonly hueVanished: boolean;
   /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
   readonly achievedDj: number | null;
-  /** The WCAG floor overrode the perceptual target. */
+  /** The WCAG floor overrode the Ys candidate-score target. */
   readonly floorOverride: boolean;
   /**
    * The minimum WCAG ratio this role is legally clamped to (4.5 for AA text,
@@ -112,7 +103,7 @@ export interface TranslucentRole {
   readonly alpha: number;
   /** The solid the tint composites to on the resolve background. */
   readonly compositeHex: string;
-  /** Signed perceptual contrast (Lc) of the composite. */
+  /** Signed Ys candidate score (Lc) of the composite; not LPC/readability evidence. */
   readonly compositeLc: number;
   /** WCAG 2.1 ratio of the composite. */
   readonly compositeWcag: number;
@@ -128,8 +119,9 @@ export interface TranslucentRole {
    * `true` when a solid family border (`border-<family>-strong`, M2) was darkened
    * along the family curve to meet the AA UI floor (3:1), because the raw family
    * tint did not clear it on this background — an honest, flagged minimal legal
-   * shift (family hue/chroma preserved, only lightness moved). `false` for a
-   * direct ladder emission and for legal family solids.
+   * shift along the declared family curve. Final bytes remain the representation
+   * truth; this flag does not claim perceptual hue/chroma preservation. `false`
+   * for a direct ladder emission and for legal family solids.
    */
   readonly floorCoerced: boolean;
   /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
@@ -200,8 +192,6 @@ export interface GlowDeterminateRoleBase {
   readonly coreCompositeHex: string;
   /** Фактический |ΔJ'| изолированного core-композита. */
   readonly coreAchievedDj: number;
-  /** @deprecated Alias `haloAchievedDj` для совместимости. */
-  readonly achievedDj: number;
   /** CSS-значение halo: `oklch(L% C H)`. */
   readonly css: string;
 }
@@ -212,8 +202,6 @@ export interface GlowStableExactNoopRole extends GlowDeterminateRoleBase {
   readonly decisionGuarantee: GlowBitExactDecisionGuaranteeV1;
   readonly selectionDiagnosticProfile: null;
   readonly targetStatus: "exact-noop-unreachable";
-  /** @deprecated Выведено из targetStatus. */
-  readonly degraded: true;
 }
 
 /** Legacy-выбор CAM16 достиг целевого |ΔJ'| в охарактеризованной среде исполнения. */
@@ -222,8 +210,6 @@ export interface GlowLegacyReachedRole extends GlowDeterminateRoleBase {
   readonly decisionGuarantee: GlowLegacyDecisionGuaranteeV1;
   readonly selectionDiagnosticProfile: GlowDiagnosticProfileV1;
   readonly targetStatus: "legacy-reached";
-  /** @deprecated Выведено из targetStatus. */
-  readonly degraded: false;
 }
 
 /** Legacy-выбор CAM16 вернул максимум, не достигший целевого |ΔJ'|. */
@@ -232,8 +218,6 @@ export interface GlowLegacyUnreachableRole extends GlowDeterminateRoleBase {
   readonly decisionGuarantee: GlowLegacyDecisionGuaranteeV1;
   readonly selectionDiagnosticProfile: GlowDiagnosticProfileV1;
   readonly targetStatus: "legacy-unreachable";
-  /** @deprecated Выведено из targetStatus. */
-  readonly degraded: true;
 }
 
 export type GlowDeterminateRole =
@@ -284,7 +268,7 @@ export type MaterialAlphaGuaranteeV1 =
   | MaterialTransparentEndpointGuaranteeV1
   | MaterialOpaqueEndpointGuaranteeV1;
 
-/** Двухслойный материал (kind material; whitepaper §3.7): тинт `01` (с выведенной α) над
+/** Двухслойный материал (kind material; whitepaper, «Точечные композиции»): тинт `01` (с выведенной α) над
  *  опаковой базой `02`, обе — один тон. `vars` несёт --lab-<role> (солид-канон,
  *  опаковый), --lab-<role>-01 (тинт oklch/α) и --lab-<role>-02 (база, опаковая).
  *  Композит-гарантия читаемости пересчитываема из toneHex/alpha (α-граница). */
@@ -304,8 +288,6 @@ export interface MaterialRoleBase {
   /** Целевой |ΔJ'| тона не попал в бюджет ограниченного обхода; выбран кандидат
    *  с минимальной ошибкой среди просмотренных, не оптимум всего гамута. */
   readonly toneCompressed: boolean;
-  /** Оттенок семьи выродился у края гамута (честный флаг; false у нейтрали). */
-  readonly hueVanished: boolean;
   /** Солид-канон отличим от фона резолва на 8-битной сетке. */
   readonly distinct: boolean;
   /** Ready-to-serve CSS value солид-канона: "oklch(L% C H)". */
@@ -317,7 +299,6 @@ export interface MaterialSatisfiedTransparentRole extends MaterialRoleBase {
   readonly alpha: 0;
   readonly alphaGuarantee: MaterialTransparentEndpointGuaranteeV1;
   readonly alphaStatus: "satisfied";
-  readonly guaranteed: true;
 }
 
 /** Повторно проверенная верхняя граница интервала держит запрошенный пол. */
@@ -325,7 +306,6 @@ export interface MaterialSatisfiedBracketRole extends MaterialRoleBase {
   readonly alpha: number;
   readonly alphaGuarantee: MaterialBisectionBracketGuaranteeV1;
   readonly alphaStatus: "satisfied";
-  readonly guaranteed: true;
 }
 
 /** Даже непрозрачная граничная точка не держит запрошенный пол; возвращается alpha 1. */
@@ -333,7 +313,6 @@ export interface MaterialDegradedOpaqueRole extends MaterialRoleBase {
   readonly alpha: 1;
   readonly alphaGuarantee: MaterialOpaqueEndpointGuaranteeV1;
   readonly alphaStatus: "degraded";
-  readonly guaranteed: false;
 }
 
 export type MaterialRole =
@@ -361,7 +340,6 @@ export interface ThemeAnchors {
 export type LadderSource =
   | { kind: "brand" }
   | { kind: "family"; key: string }
-  | { kind: "sentiment"; name: string }
   | { kind: "neutral"; pick: "mid" | "edge" | "inverted" | "light" | "dark" };
 
 /** Closed physical ladder menu accepted by the config compiler. */
@@ -392,7 +370,11 @@ export type LadderPositionV1 =
   | "shadow-penumbra"
   | "shadow-major";
 
-/** Рецепт роли из физического меню движка. */
+/**
+ * Рецепт роли из закрытого физического меню текущего resolver-а.
+ * Это переходная compatibility surface, не target IR и не extension point.
+ * Новая физика не должна добавляться новым recipe variant.
+ */
 export type RoleRecipe =
   | {
       kind: "text-anchor";
@@ -406,7 +388,7 @@ export type RoleRecipe =
       kind: "ladder";
       source: LadderSource;
       position: LadderPositionV1;
-      floor?: "aa-text" | "aa-ui" | "none";
+      floor?: "aa-text" | "aa-ui";
     }
   | {
       kind: "glow";
@@ -426,7 +408,6 @@ export interface ThemeConfig {
   readonly neutral: {
     readonly anchors: { light: string; mid: string; dark: string };
     readonly tint: {
-      ratio: number;
       target_mp: number;
       hue_stiffness: number;
       hue_override_deg?: number;
@@ -435,16 +416,6 @@ export interface ThemeConfig {
     readonly inverted?: ThemeAnchors;
   };
   readonly palette: ReadonlyArray<{ key: string; anchors: ThemeAnchors }>;
-  readonly sentiments: {
-    readonly categories: ReadonlyArray<{
-      name: string;
-      family: string;
-      hue_floor_deg?: number;
-      preferred_side?: -1 | 1;
-    }>;
-    readonly hardness: number;
-    readonly chroma_fraction: number;
-  };
   readonly themes: ReadonlyArray<{ name: string; preset: "srgb" | "dim" | "srgb-ic" | "dim-ic" }>;
   /** Словарь ролей дизайн-системы. Конфиг обязан нести собственные роли; пустой
    *  контракт (без `roles` и `aliases`) отклоняется на загрузке. */
@@ -671,8 +642,9 @@ impl LabColors {
     /// ошибкой `invalid_config: …` и НЕ меняет состояние. После успешной
     /// загрузки `resolveTheme` эмитит роли конфига (включая полупрозрачные
     /// роли лестницы — эмиссия `oklch(L% C H / α)`). Возвращает отпечаток
-    /// конфига — 16 hex-символов;
-    /// разные конфиги дают разные отпечатки (и разные кэш-пространства).
+    /// конфига — 16 hex-символов. Это детерминированный вероятностный
+    /// идентификатор; корректность reload держится на полном очищении кэша, а
+    /// не на предположении об отсутствии 64-битных коллизий.
     #[wasm_bindgen(js_name = loadConfig)]
     pub fn load_config(&mut self, json: &str) -> Result<String, JsError> {
         let fp = self.inner.load_config(json).map_err(to_js_error)?;
@@ -686,12 +658,13 @@ impl LabColors {
     /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
     /// the cheap per-frame primitive a reactive runtime uses to decide whether
     /// already-resolved colours still pass against a changed background (re-solve
-    /// only when they stably do not). No full solve: one perceptual-model forward
+    /// only when they stably do not). No full solve: one frozen-curve evaluation
     /// for the background plus one per foreground.
     ///
     /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
-    /// order of `fgHexes`: index `2*i` is foreground `i`'s signed `Lc`, `2*i+1`
-    /// its WCAG ratio. On invalid hex or an unknown theme, rejects with an
+    /// order of `fgHexes`: index `2*i` is foreground `i`'s signed characterized
+    /// Ys candidate score from the frozen SAPC-shaped curve, not an
+    /// LPC/readability verdict; `2*i+1` is its WCAG ratio. On invalid hex or an unknown theme, rejects with an
     /// ordinary JS `Error` whose message starts with the stable
     /// `"<code>: <message>"` prefix.
     #[wasm_bindgen(js_name = recheckContrast)]
@@ -727,9 +700,9 @@ impl LabColors {
     /// Recheck one foreground set against MANY background samples in a single
     /// call. The reactive controller's worst-case loop rechecks the same
     /// foregrounds against every sample of a varying backdrop (gradient / image /
-    /// bg-blur / glass); the dominant per-foreground CAM16 forward is background-
-    /// independent, so this shares it across all samples instead of recomputing it
-    /// per `recheckContrast` call.
+    /// bg-blur / glass). It decodes and quantizes each foreground once, then shares
+    /// that display-relative-luminance scalar across all background samples instead
+    /// of rebuilding it per `recheckContrast` call.
     ///
     /// Returns a flat, background-major `Float64Array`: sample `s`, foreground `i`
     /// is at `(s * fgHexes.length + i) * 2` (`lc`) and `+1` (`wcagRatio`). The
@@ -819,7 +792,9 @@ mod native_contract_tests {
         );
         assert_eq!(declared_set, core_set, "TS ladder menu must equal core ALL");
         assert!(types.contains("hue?: LadderSource"));
-        assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\" | \"none\""));
+        assert!(types.contains("floor?: \"aa-text\" | \"aa-ui\";"));
+        assert!(types.contains("floor: \"aa-text\" | \"aa-ui\" | \"none\""));
+        assert!(!types.contains("ratio: number"));
         assert!(types.contains("readonly roles: ReadonlyArray"));
     }
 

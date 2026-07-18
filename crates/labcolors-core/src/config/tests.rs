@@ -5,8 +5,8 @@
 //! 3. Валидатор: за-предельное значение КАЖДОЙ ручки даёт `ConfigError` +
 //!    RED-proof мутацией предела (валидный vs невалидный на границе).
 //! 4. Лестница/альфа: Ladder/AlphaAnalog компилируются в полупрозрачные специи;
-//!    diff=пусто против consumedRoles; S_PERC_MIN-идентичность; значенческая
-//!    сверка со стабом labui (light+dark) + RED-proof мутаций.
+//!    семейные источники точно сохраняют клиентские якоря во всех контекстах;
+//!    значенческая сверка со стабом labui держит представителей остальных групп.
 
 use super::fixture::labui_reference;
 use super::test_support::resolved_repr as repr;
@@ -49,7 +49,7 @@ fn labui_named_set_is_byte_identical_to_default_role_table() {
         .compile_named_role_table()
         .expect("эталонная фикстура labui обязана компилироваться");
 
-    // Фикстура несёт 20 core-ролей ПЛЮС акцентную/сентимент/FX/альфа
+    // Фикстура несёт 20 core-ролей ПЛЮС семейные/FX/альфа
     // лестницу. Байт-в-байт гарантия — на СОЛВЕР-ролях (имена = Role::key()):
     // именно их пинит golden-грид. Нейтральные заливки/границы НАМЕРЕННО
     // расходятся с дефолт-таблицей: они эмитятся лестницей rgba(mid, α) —
@@ -341,36 +341,6 @@ fn decorative_lc_requires_the_core_physical_floor() {
 }
 
 #[test]
-fn tint_ratio_out_of_bounds_is_rejected() {
-    let mut cfg = labui_reference();
-    cfg.neutral.tint.ratio = 1.5;
-    assert!(matches!(
-        cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "neutral.tint.ratio"
-    ));
-    let mut neg = labui_reference();
-    neg.neutral.tint.ratio = -0.01;
-    assert!(neg.validate().is_err());
-}
-
-#[test]
-fn tint_ratio_bound_red_proof_at_edges() {
-    // [0, 1] замкнут: 0.0 и 1.0 валидны, вне — нет.
-    for r in [0.0, 1.0] {
-        let mut cfg = labui_reference();
-        cfg.neutral.tint.ratio = r;
-        assert_eq!(
-            cfg.validate(),
-            Ok(()),
-            "ratio={r} на границе должен быть валиден"
-        );
-    }
-    let mut over = labui_reference();
-    over.neutral.tint.ratio = 1.0 + 1e-9;
-    assert!(over.validate().is_err());
-}
-
-#[test]
 fn target_mp_non_positive_is_rejected() {
     let mut cfg = labui_reference();
     cfg.neutral.tint.target_mp = 0.0;
@@ -389,129 +359,6 @@ fn hue_stiffness_negative_is_rejected() {
     let mut zero = labui_reference();
     zero.neutral.tint.hue_stiffness = 0.0;
     assert_eq!(zero.validate(), Ok(()));
-}
-
-#[test]
-fn hardness_below_one_is_rejected() {
-    let mut cfg = labui_reference();
-    cfg.sentiments.hardness = 0.5;
-    assert!(matches!(
-        cfg.validate(),
-        Err(ConfigError::OutOfBounds { handle, .. }) if handle == "sentiments.hardness"
-    ));
-    // RED-proof: ровно 1.0 валиден.
-    let mut at = labui_reference();
-    at.sentiments.hardness = 1.0;
-    assert_eq!(at.validate(), Ok(()));
-}
-
-#[test]
-fn chroma_fraction_out_of_bounds_is_rejected() {
-    let mut over = labui_reference();
-    over.sentiments.chroma_fraction = 1.01;
-    assert!(over.validate().is_err());
-    let mut zero = labui_reference();
-    zero.sentiments.chroma_fraction = 0.0;
-    assert!(zero.validate().is_err());
-    // RED-proof: ровно 1.0 валиден.
-    let mut at = labui_reference();
-    at.sentiments.chroma_fraction = 1.0;
-    assert_eq!(at.validate(), Ok(()));
-}
-
-/// Class-B differential-регресс: живость ПРОВОДКИ `sentiments.chroma_fraction`.
-///
-/// # Закрываемая дыра (диагноз debugger 2026-07-04)
-///
-/// Поле `config.sentiments.chroma_fraction` ЖИВОЕ — долетает до эмитируемого
-/// байта: `resolve_config_sentiment_solid_among` передаёт его в
-/// `sentiment::capped_chroma` = `min(c_якоря, f · C_max(L, h))` (анти-неоновый
-/// потолок). Но валидатор (`chroma_fraction_out_of_bounds_is_rejected`) проверяет
-/// лишь ГРАНИЦЫ, а байт-в-байт golden упражняет фикстуру с `chroma_fraction = 1.0`,
-/// при котором на якорях labui потолок ВЫРОЖДАЕТСЯ в no-op (`min(c, 1·C_max) = c`)
-/// → эффект ручки не эмитируется. Значит регресс к ИНЕРТНОСТИ (константа вместо
-/// поля в проводке ИЛИ игнор параметра `fraction` в `capped_chroma`) прошёл бы
-/// ВСЕ существующие гейты зелёным. Этот тест пинает саму проводку.
-///
-/// # Differential-механизм
-///
-/// Один паспорт (`labui_reference`), одна НАСЫЩЕННАЯ сентимент-роль — danger,
-/// якорь `#FF3B30` (`c_якоря > 0.88·C_max`, потолок реально кусается), три
-/// значения `chroma_fraction`. Доля меняет ТОЛЬКО ось хромы: `resolved_hue` и
-/// `L` от неё не зависят, поэтому `C_max(L, h)` общий для всех трёх прогонов →
-/// потолок обязан дать строгий порядок `chroma(0.5) < chroma(0.88)` и no-op на
-/// границе `chroma(1.0) = c_якоря`. Инертная проводка уравнивает три хромы —
-/// строгие `<` падают (см. RED-proof в PR-описании).
-#[test]
-fn chroma_fraction_wiring_bites_on_a_saturated_sentiment_anchor() {
-    // Насыщенный danger-солид под условия светлой темы (якорь #FF3B30).
-    let vc = ViewingConditions::srgb();
-    let danger_chroma_at = |fraction: f64| -> f64 {
-        let mut cfg = labui_reference();
-        cfg.sentiments.chroma_fraction = fraction;
-        let tint = cfg
-            .compile_sentiment_tint("diff-probe", "danger")
-            .expect("danger компилируется при валидной доле хромы");
-        let hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
-        oklab_chroma_of_hex(&hex)
-    };
-
-    let c_050 = danger_chroma_at(0.50);
-    let c_088 = danger_chroma_at(0.88);
-    let c_100 = danger_chroma_at(1.00);
-
-    // Ручка кусается: строго меньшая доля → строго меньшая выходная хрома.
-    assert!(
-        c_050 < c_088,
-        "проводка chroma_fraction ИНЕРТНА: доля 0.50 дала хрому {c_050:.4}, \
-         не строго меньше доли 0.88 ({c_088:.4}) — потолок не долетел до выхода"
-    );
-    assert!(
-        c_088 < c_100,
-        "проводка chroma_fraction ИНЕРТНА: доля 0.88 дала хрому {c_088:.4}, \
-         не строго меньше доли 1.00 ({c_100:.4})"
-    );
-
-    // Граница: доля 1.0 = no-op (потолок на стене гамута) ⇒ выходная хрома ==
-    // хроме сырого якоря #FF3B30 (в пределах 8-бит квантизации эмиссии).
-    let anchor_chroma = oklab_chroma_of_hex("#FF3B30");
-    assert!(
-        (c_100 - anchor_chroma).abs() < 0.02 * anchor_chroma,
-        "доля 1.0 обязана быть no-op: выходная хрома {c_100:.4} разошлась с \
-         сырым якорем #FF3B30 ({anchor_chroma:.4}) больше 2%"
-    );
-}
-
-#[test]
-fn hue_floor_out_of_range_is_rejected() {
-    let mut over = labui_reference();
-    over.sentiments.categories[1].hue_floor_deg = Some(360.0);
-    assert!(
-        over.validate().is_err(),
-        "360° ≡ 0°, за полуинтервалом [0,360)"
-    );
-    let mut neg = labui_reference();
-    neg.sentiments.categories[1].hue_floor_deg = Some(-1.0);
-    assert!(neg.validate().is_err());
-    // RED-proof: 0.0 валиден (ничего не исключает — компилируется).
-    let mut lo = labui_reference();
-    lo.sentiments.categories[1].hue_floor_deg = Some(0.0);
-    assert_eq!(lo.validate(), Ok(()));
-    // 359.999 проходит проверку ДИАПАЗОНА (не OutOfBounds), но полный
-    // preflight честно ловит деривационную коллизию: такой пол исключает
-    // почти весь круг (`h < f` нелегален) — легальная дуга сентимента пуста.
-    // Ассерт `Ok` здесь был бы ложноположительным preflight-ом (validate =
-    // компиляция по построению, деривационные ошибки видит).
-    let mut hi = labui_reference();
-    hi.sentiments.categories[1].hue_floor_deg = Some(359.999);
-    assert!(
-        !matches!(hi.validate(), Err(ConfigError::OutOfBounds { .. })),
-        "359.999 внутри полуинтервала [0,360) — диапазонная проверка проходит"
-    );
-    assert!(
-        hi.validate().is_err(),
-        "пол 359.999 опустошает легальную дугу — деривационная ошибка"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -549,16 +396,6 @@ fn invalid_role_name_is_rejected() {
     assert!(matches!(
         cfg.validate(),
         Err(ConfigError::InvalidName { .. })
-    ));
-}
-
-#[test]
-fn sentiment_referencing_missing_family_is_rejected() {
-    let mut cfg = labui_reference();
-    cfg.sentiments.categories[0].family = "nonexistent".to_string();
-    assert!(matches!(
-        cfg.validate(),
-        Err(ConfigError::UnknownFamily { family, .. }) if family == "nonexistent"
     ));
 }
 
@@ -710,17 +547,10 @@ fn config_error_display_is_russian_and_informative() {
 // diff=пусто против consumedRoles labui.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Полный контракт `--lab-*` labui из `packages/colors-stub/roles.json`
-/// (снят 2026-07-02, источник в шапке файла: генерируется из
-/// `reference/labui-tokens-snapshot.dtcg.json`). Захардкожен здесь как SSOT для
-/// diff-теста — при регенерации roles.json обновить этот список синхронно.
-///
-/// Имена без префикса `--lab-`. IC-режимы зарезервированы (в roles.json не
-/// перечислены), поэтому и здесь их нет.
-///
-/// Компромисс: это ЗЕРКАЛО roles.json, не живой файл. Класс дрейфа зеркала
-/// закрывается гардами поезда labui (consumed-contract против живой эмиссии) —
-/// там diff проверяется против фактического потребления, не против копии.
+/// Замороженный snapshot ожидаемых `--lab-*` имён референс-фикстуры.
+/// Это test oracle, не SSOT публичного клиента: production Core не читает его,
+/// а актуальность доказывает только diff с текущей fixture-эмиссией.
+/// Имена без префикса `--lab-`; IC-режимы не добавляют отдельные имена.
 const LABUI_CONSUMED_ROLES: &[&str] = &[
     // Backgrounds — ВХОДЫ (набор фонов = конфиг потребителя), не роли эмиссии.
     // Labels (core neutral).
@@ -728,7 +558,7 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "label-secondary",
     "label-tertiary",
     "label-quaternary",
-    // Labels — brand/сентименты.
+    // Labels — бренд и клиентские семейства.
     "label-brand-primary",
     "label-brand-secondary",
     "label-brand-tertiary",
@@ -755,7 +585,7 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "fill-tertiary",
     "fill-quaternary",
     "fill-none",
-    // Fills — brand/сентименты.
+    // Fills — бренд и клиентские семейства.
     "fill-brand-primary",
     "fill-brand-secondary",
     "fill-brand-tertiary",
@@ -783,7 +613,7 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "border-soft",
     "border-ghost",
     "border-none",
-    // Border — brand/сентименты.
+    // Borders — бренд и клиентские семейства.
     "border-brand-strong",
     "border-brand-base",
     "border-brand-soft",
@@ -982,173 +812,109 @@ fn matches_collapsed_pattern(name: &str, pattern: &str) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// S_PERC_MIN — деривационная идентичность из конфиг-якорей.
+// Неприкосновенность клиентских якорей.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `S_PERC_MIN`, пересчитанный из хром 4 сентимент-якорей labui, совпадает с
-/// замороженной константой (`0.068_703_9`, допуск 1e-4) — закон
-/// `2·C_rep·sin(20°/2)` остаётся законом, сегодняшнее значение — его частный
-/// случай при labui-якорях.
+/// Источник семейства выбирает нужный клиентский якорь для контекста,
+/// но никогда не переинтерпретирует и не смещает его физическое значение.
 #[test]
-fn s_perc_min_recomputed_from_config_anchors_matches_frozen() {
-    let recomputed = labui_reference()
-        .sentiment_s_perc_min()
-        .expect("фикстура валидна");
-    let frozen = crate::sentiment::s_perc_min_frozen();
-    assert!(
-        (recomputed - frozen).abs() < 1e-4,
-        "S_PERC_MIN(labui-якоря) = {recomputed} != замороженной {frozen} (допуск 1e-4)"
-    );
-    // Нетавтологичный пин самой замороженной величины.
-    assert!(
-        (recomputed - 0.068_703_9).abs() < 1e-4,
-        "S_PERC_MIN = {recomputed} != 0.068_703_9 (Witzel 2013 · 20°)"
-    );
-}
-
-/// RED-proof пересчёта: подмена якоря сентимента (danger red → зелёный, иная
-/// хрома) сдвигает `S_PERC_MIN` — иначе пересчёт был бы слеп к якорям.
-#[test]
-fn s_perc_min_recompute_bites_on_anchor_mutation() {
-    let base = labui_reference()
-        .sentiment_s_perc_min()
-        .expect("фикстура валидна");
+fn family_sources_preserve_authored_anchors_in_every_context() {
     let mut cfg = labui_reference();
-    // Danger маппится на red; подменим red-якорь на серый (низкая хрома) →
-    // C_rep падает → S_PERC_MIN падает.
-    for fam in &mut cfg.palette {
-        if fam.key == "red" {
-            fam.anchors.light = "#808080".to_string();
-        }
+    for family in &cfg.palette {
+        cfg.roles.push((
+            format!("probe-family-{}", family.key),
+            RoleRecipe::Ladder {
+                source: LadderSource::Family(family.key.clone()),
+                position: LadderPosition::FillPrimary,
+                floor: None,
+            },
+        ));
     }
-    let mutated = cfg
-        .sentiment_s_perc_min()
-        .expect("мутация якоря сохраняет валидность");
-    assert!(
-        (base - mutated).abs() > 1e-3,
-        "RED-proof провален: подмена якоря НЕ сдвинула S_PERC_MIN ({base} vs {mutated})"
-    );
-}
+    let table = cfg.compile_named_role_table().expect("фикстура валидна");
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Сентимент — деривационная идентичность (тинт == сырой якорь при
-// labui-бренде).
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Деривационная идентичность: при бренде labui сентимент-тинт совпадает с СЫРЫМ
-/// якорем семейства — под законом категориальных зон (Волна 1) это держится для
-/// ВСЕХ сентиментов, ВКЛЮЧАЯ Info, ПОТОМУ ЧТО бренд оттенок больше не смещает
-/// (сентимент отдыхает на фокусе своей категории).
-///
-/// ИСТОРИЯ (Волна 1 перевернула это): прежде для Danger/Success/Warning
-/// идентичность держалась (их семейства далеки от синего бренда), а Info НЕ
-/// держался — brand-separation уводил его в пурпур, т.к. Info→Blue (h≈259.9°) был
-/// лишь ≈2.5° от синего бренда labui. ИМЕННО ЭТО и был баг. Категориальный закон
-/// убрал brand-separation — теперь Info ТОЖЕ отдыхает на сыром синем якоре (включён
-/// в кейсы ниже; пер-темный «покой» пинит [`labui_info_sentiment_rests_on_blue_focus`]).
-#[test]
-fn sentiment_tint_is_raw_family_anchor_under_categorical_zones() {
-    let cfg = labui_reference();
-    let table = cfg.compile_named_role_table().unwrap();
-
-    // Под законом зон бренд оттенок НЕ смещает — ВСЕ сентименты (включая Info)
-    // отдыхают на сыром якоре семейства. Проверяем на светлой теме (канонический
-    // кейс, бренд labui = светлый `#007AFF`); пер-темные режимы покрыты
-    // `labui_info_sentiment_rests_on_blue_focus` и байт-гейтом эмиссии.
-    let cases: &[(&str, &str)] = &[
-        ("fill-danger-primary", "red"),
-        ("fill-success-primary", "green"),
-        ("fill-warning-primary", "orange"),
-        ("fill-info-primary", "blue"),
-    ];
-    let vc = ViewingConditions::srgb(); // светлая тема, brand = #007AFF
-
-    for (role, fam_key) in cases {
-        let fam = cfg.palette.iter().find(|f| &f.key == fam_key).unwrap();
-        let (_, spec) = table.entries().iter().find(|(n, _)| n == role).unwrap();
+    for family in &cfg.palette {
+        let role = format!("probe-family-{}", family.key);
+        let anchors = &family.anchors;
+        let (_, spec) = table
+            .entries()
+            .iter()
+            .find(|(name, _)| name == &role)
+            .expect("роль есть в фикстуре");
         let RoleSpec::Ladder { tint, .. } = spec else {
             panic!("{role}: ожидался Ladder-спек, получено {spec:?}");
         };
-        let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
-        let want_hex = crate::spaces::srgb::hex_from_srgb_encoded(
-            crate::spaces::srgb::srgb_encoded_from_hex(&fam.anchors.light).unwrap(),
-        );
-        assert_eq!(
-            got_hex, want_hex,
-            "ДЕРИВАЦИОННАЯ ИДЕНТИЧНОСТЬ НЕ СОШЛАСЬ (светлая тема): `{role}`: \
-             сентимент-тинт {got_hex} != сырой якорь {fam_key} {want_hex}. \
-             Сентимент-солвер сместил оттенок при labui-бренде — осмыслить, не прятать."
-        );
+        let modes = [
+            ("light", ViewingConditions::srgb(), &anchors.light),
+            ("dark", ViewingConditions::dim_surround(), &anchors.dark),
+            (
+                "light-ic",
+                ViewingConditions::srgb_high_contrast(),
+                &anchors.light_ic,
+            ),
+            (
+                "dark-ic",
+                ViewingConditions::dim_surround_high_contrast(),
+                &anchors.dark_ic,
+            ),
+        ];
+
+        for (mode, vc, authored) in modes {
+            let got = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
+            assert_eq!(
+                got, *authored,
+                "{role}/{mode}: family source moved authored anchor {authored}"
+            );
+        }
     }
 }
 
-/// ФИКС, ВИДИМЫЙ ВЛАДЕЛЬЦУ (РЕФРЕЙМ Волны 1). Прежний тест
-/// `info_is_displaced_from_blue_brand_by_design` УТВЕРЖДАЛ обратное — что Info
-/// смещён от синего бренда (`assert_ne!(got, "#3E87FF")`). ИМЕННО ЭТО и был баг:
-/// info-заливка labui уезжала в пурпур (#7579FE и т.п.) вместо своего синего
-/// якоря. Закон категориальных зон (Волна 1) его убрал — совпадение info с
-/// брендовым синим внутри синей категории легитимно (Kay & McDaniel 1978).
-///
-/// Проверяем через ПОЛНЫЙ config-путь (`fill-info-primary` Ladder-тинт) во всех
-/// 4 режимах: эмитируемый info-тинт обязан ОТДЫХАТЬ на синем якоре СВОЕГО режима
-/// (деривационная идентичность — бренд оттенок не смещает), а его Oklab-hue —
-/// в пределах 2° от синего фокуса. Для light-режима это 259.89° (Figma Accent/Blue
-/// `#3E87FF`), как заявил владелец.
+/// A family key is an opaque client ID: consistently renaming the declaration
+/// and every reference must compile to the identical physical graph.
 #[test]
-fn labui_info_sentiment_rests_on_blue_focus() {
-    let cfg = labui_reference();
-    let table = cfg.compile_named_role_table().unwrap();
-    let (_, spec) = table
-        .entries()
-        .iter()
-        .find(|(n, _)| n == "fill-info-primary")
-        .unwrap();
-    let RoleSpec::Ladder { tint, .. } = spec else {
-        panic!("fill-info-primary: ожидался Ladder");
-    };
-    let blue = cfg.palette.iter().find(|f| f.key == "blue").unwrap();
-    let modes = [
-        (
-            "light",
-            ViewingConditions::srgb(),
-            blue.anchors.light.as_str(),
-        ),
-        (
-            "dark",
-            ViewingConditions::dim_surround(),
-            blue.anchors.dark.as_str(),
-        ),
-        (
-            "light-ic",
-            ViewingConditions::srgb_high_contrast(),
-            blue.anchors.light_ic.as_str(),
-        ),
-        (
-            "dark-ic",
-            ViewingConditions::dim_surround_high_contrast(),
-            blue.anchors.dark_ic.as_str(),
-        ),
-    ];
-    for (name, vc, anchor_hex) in modes {
-        let got_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc));
-        let got_hue = crate::accent::oklab_hue_of(&got_hex);
-        let focus = crate::accent::oklab_hue_of(anchor_hex);
-        assert!(
-            crate::sentiment::angular_distance(got_hue, focus) <= 2.0,
-            "режим {name}: Info-тинт {got_hex} (h={got_hue:.2}°) обязан ОТДЫХАТЬ на синем \
-             фокусе {anchor_hex} (h={focus:.2}°) — бренд оттенок не смещает (Волна 1); \
-             отклонение {:.2}° > 2°",
-            crate::sentiment::angular_distance(got_hue, focus)
-        );
+fn renaming_family_id_and_references_does_not_change_the_compiled_graph() {
+    fn rename_source(source: &mut LadderSource, from: &str, to: &str) {
+        if let LadderSource::Family(key) = source {
+            if key == from {
+                *key = to.to_string();
+            }
+        }
     }
-    // Light-режим — заявленный владельцем синий фокус 259.89°.
-    let light_hex =
-        crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&ViewingConditions::srgb()));
-    let light_hue = crate::accent::oklab_hue_of(&light_hex);
-    assert!(
-        (light_hue - 259.89).abs() <= 2.0,
-        "light Info-тинт h={light_hue:.2}° обязан лежать в пределах 2° от синего фокуса 259.89° \
-         ({light_hex})"
+
+    let original = labui_reference();
+    let mut renamed = original.clone();
+    renamed
+        .palette
+        .iter_mut()
+        .find(|family| family.key == "red")
+        .expect("red fixture family")
+        .key = "client-family-42".to_string();
+
+    for (_, recipe) in &mut renamed.roles {
+        match recipe {
+            RoleRecipe::TextAnchor { hue, .. } => {
+                if let Some(source) = hue {
+                    rename_source(source, "red", "client-family-42");
+                }
+            }
+            RoleRecipe::Ladder { source, .. }
+            | RoleRecipe::Glow { source, .. }
+            | RoleRecipe::PairFill { source }
+            | RoleRecipe::PairLabel { source, .. }
+            | RoleRecipe::Material { source, .. } => {
+                rename_source(source, "red", "client-family-42");
+            }
+            RoleRecipe::AlphaAnalog { of, .. } => {
+                rename_source(of, "red", "client-family-42");
+            }
+            RoleRecipe::DjAnchor { .. } | RoleRecipe::DecorativeLc { .. } | RoleRecipe::Zero => {}
+        }
+    }
+
+    assert_eq!(
+        renamed.compile_named_role_table().expect("renamed config"),
+        original
+            .compile_named_role_table()
+            .expect("original config"),
     );
 }
 
@@ -1401,11 +1167,8 @@ fn assert_matches_stub(role: &str, theme: &str, got: &Resolved, want: &str) {
 /// Закрывает класс «имя есть, значение врёт»: skeleton = нейтраль #787880 с
 /// пер-темной альфой, glow-neutral = белый @52, акценты = пер-темный якорь.
 ///
-/// Исключены НАМЕРЕННО расходящиеся роли (с комментарием-ссылкой):
-/// - `border-info-*`/`label-info-*`/`fill-info-*` — под законом Волны 1 info
-///   отдыхает на синем фокусе (тест `labui_info_sentiment_rests_on_blue_focus`); их
-///   значенческую сверку со стабом (до-Wave-1 значения) обрабатывает владелец;
-/// - `fx-focus-ring-neutral` (dark), `fx-glow-inverted`, `fill-neutral` —
+/// Исключены намеренно непредставительные `fx-focus-ring-neutral` (dark),
+/// `fx-glow-inverted` и `fill-neutral`: их пер-темный нейтральный край, inverted-якоря и
 ///   задокументированные gap-и (пер-темный нейтральный край / inverted-якоря /
 ///   PROVISIONAL-литерал не выводятся из тройки neutral.anchors).
 #[test]
@@ -1420,9 +1183,9 @@ fn representative_roles_match_stub_values_light_and_dark() {
         // (тинт семьи под альфой — 40/40 нарушений одноуровневости), а цветной
         // TextAnchor — держит Lc-контракт уровня в чистом оттенке семьи и
         // резолвится в СОЛИД (`Resolved::Color`), не в Translucent. Его эмиссия и
-        // одноуровневость проверяются гейтом `tests/one_levelness.rs`. Здесь
+        // одноуровневость проверяются модулем `src/one_levelness_tests.rs`. Здесь
         // остаётся представитель полупрозрачной СЕМЕЙНОЙ заливки (тот же
-        // сентимент-тинт под альфой рампы — класс «имя есть, значение тинта врёт»).
+        // семейный тинт под альфой рампы — класс «имя есть, значение тинта врёт»).
         (
             "fill-danger-secondary",
             "rgb(255 59 48 / 0.078)",
@@ -1562,7 +1325,7 @@ fn value_test_bites_on_alpha_mutation() {
 
 /// Сторона пары — идентичность семьи НА РЕЗОЛВ-УРОВНЕ. Носитель класса —
 /// БРЕНД под dark-IC: источник Brand несёт сырые якоря, и его dark-ic
-/// (#409CFF, Y = 0.321) пересекает кроссовер 0.30. Сентименты (включая
+/// (#409CFF, Y = 0.321) пересекает кроссовер 0.30. Семейные якоря (включая
 /// info) разведены солвером и порог не straddle-ят — на них мутация
 /// «сторона от vc» поведенчески неразличима (выживший мутант M3
 /// верификатора). Мутация semantic.rs srgb→vc обязана уронить ЭТОТ тест.
@@ -1847,22 +1610,6 @@ fn emitted_namespace_allows_non_colliding_near_misses() {
     assert_eq!(cfg.validate(), Ok(()));
 }
 
-/// preferred_side — закрытое меню {-1, +1}: 0 и 2 отвергаются.
-#[test]
-fn validator_rejects_preferred_side_outside_closed_menu() {
-    for bad in [0i8, 2, -3] {
-        let mut c = labui_reference();
-        c.sentiments.categories[0].preferred_side = Some(bad);
-        assert!(
-            matches!(c.validate(), Err(ConfigError::OutOfBounds { .. })),
-            "preferred_side={bad} обязан быть отвергнут"
-        );
-    }
-    let mut c = labui_reference();
-    c.sentiments.categories[0].preferred_side = Some(-1);
-    assert!(c.validate().is_ok(), "-1 легален");
-}
-
 /// Неконечные значения ручек (∞/NaN) отвергаются и open-сверху пределами.
 #[test]
 fn validator_rejects_non_finite_handles() {
@@ -1884,21 +1631,21 @@ fn validator_rejects_non_finite_handles() {
     }
 }
 
-/// Ошибки ссылок различимы по виду: сентимент/роль/семейство — разные варианты.
+/// Ошибки ссылок различимы по виду: роль и семейство — разные варианты.
 #[test]
 fn validator_reference_errors_are_distinguishable() {
     let mut c = labui_reference();
     c.roles.push((
-        "probe-bad-sentiment".to_string(),
+        "probe-bad-family".to_string(),
         RoleRecipe::Ladder {
-            source: LadderSource::Sentiment("nonexistent".to_string()),
+            source: LadderSource::Family("nonexistent".to_string()),
             position: LadderPosition::LabelPrimary,
             floor: None,
         },
     ));
     assert!(matches!(
         c.validate(),
-        Err(ConfigError::UnknownSentiment { .. })
+        Err(ConfigError::UnknownFamily { .. })
     ));
 
     let mut c = labui_reference();
@@ -2047,11 +1794,13 @@ fn validate_is_a_complete_preflight() {
         assert!(got.contains(want), "ждали {want}, получено {got}");
     };
 
-    // Ахроматичная нейтраль без override — деривационная ошибка подтона.
+    // Exact-gray neutral without override is a lawful neutral policy, not a
+    // derivation failure; validate and compile must agree on success too.
     let mut c = labui_reference();
     c.neutral.tint.hue_override_deg = None;
     c.neutral.anchors.dark = "#101010".to_string();
-    assert_parity(&c, "AchromaticHueSource");
+    assert!(c.validate().is_ok());
+    assert!(c.compile_named_role_table().is_ok());
 
     // Edge-роль без четвёрки edge — деривационная ошибка края нейтрали.
     let mut c = labui_reference();
@@ -2112,33 +1861,43 @@ fn alpha_analog_spec_bypassing_validator_is_rejected() {
     }
 }
 
-/// Ошибка сентимент-солвера наружу — СВОИМ вариантом, не [`ConfigError::InvalidHex`]:
-/// потребитель матчится по вариантам, и ошибка политики/геометрии под маской
-/// ошибки парсинга hex ломала бы это различение. Пустая легальная дуга
-/// (пол 359.999 у категории) — ровно такой случай.
-#[test]
-fn sentiment_solver_errors_surface_as_their_own_variant() {
-    let mut c = labui_reference();
-    c.sentiments.categories[1].hue_floor_deg = Some(359.999);
-    match c.compile_named_role_table() {
-        Err(ConfigError::SentimentResolution { sentiment, .. }) => {
-            assert_eq!(sentiment, c.sentiments.categories[1].name);
-        }
-        other => panic!("ждали SentimentResolution, получено {other:?}"),
-    }
+fn assert_achromatic_hex(hex: &str, context: &str) {
+    let [red, green, blue] = crate::srgb8::hex_bytes(hex).expect("canonical emitted hex");
+    assert_eq!(
+        red, green,
+        "{context}: invented red/green direction in {hex}"
+    );
+    assert_eq!(
+        green, blue,
+        "{context}: invented green/blue direction in {hex}"
+    );
 }
 
-/// Ахроматичные источники оттенка: серая нейтраль без override — ошибка;
-/// серый бренд — сентимент честно равен сырому якорю (разведение отключено).
+fn assert_chromatic_hex(hex: &str, context: &str) {
+    let [red, green, blue] = crate::srgb8::hex_bytes(hex).expect("canonical emitted hex");
+    assert!(
+        red != green || green != blue,
+        "{context}: one-byte chromatic direction was discarded in {hex}"
+    );
+}
+
+/// Exact-gray sources carry neutral identity without an override; the nearest
+/// off-axis byte still carries its authored direction.
 #[test]
 fn achromatic_hue_sources_are_handled_honestly() {
     let mut c = labui_reference();
     c.neutral.tint.hue_override_deg = None;
-    c.neutral.anchors.dark = "#101010".to_string(); // чистый серый: хрома ≈ 0
-    assert!(matches!(
-        c.compile_named_role_table(),
-        Err(ConfigError::AchromaticHueSource { .. })
-    ));
+    c.neutral.anchors.dark = "#101010".to_string();
+    let neutral_table = c
+        .compile_named_role_table()
+        .expect("exact-gray neutral source compiles without an override");
+    assert_eq!(neutral_table.chroma(), RoleChroma::Neutral);
+
+    c.neutral.anchors.dark = "#101011".to_string();
+    let chromatic_table = c
+        .compile_named_role_table()
+        .expect("nearest chromatic neutral source retains its direction");
+    assert!(matches!(chromatic_table.chroma(), RoleChroma::Curve { .. }));
 
     let mut c = labui_reference();
     // Серый бренд: все четыре режима ахроматичны.
@@ -2155,9 +1914,18 @@ fn achromatic_hue_sources_are_handled_honestly() {
         &crate::spaces::vc::ViewingConditions::srgb(),
     )
     .expect("валидная ахроматическая brand-фикстура обязана резолвиться");
-    // `fill-danger-primary` остаётся Ladder (сентимент-тинт под альфой) — на нём
-    // и проверяем «серый бренд → сырой якорь семейства». `label-danger-primary`
-    // после ратификации ch5c (M1) — цветной TextAnchor (Color), не Translucent.
+
+    let (_, label) = set
+        .iter()
+        .find(|(name, _)| name == "label-brand-primary")
+        .expect("цветная brand-роль есть");
+    let Resolved::Color { solved, .. } = label else {
+        panic!("ожидался Color");
+    };
+    assert_achromatic_hex(solved.hex(), "TextAnchor from achromatic Brand");
+
+    // Exact-gray Brand must not affect an unrelated client-owned family source.
+    // The role name below is opaque fixture data and carries no Core semantics.
     let (_, r) = set
         .iter()
         .find(|(n, _)| n == "fill-danger-primary")
@@ -2168,8 +1936,270 @@ fn achromatic_hue_sources_are_handled_honestly() {
     assert_eq!(
         r.tint_hex(),
         "#FF3B30",
-        "при сером бренде сентимент = сырой якорь семейства (разведение отключено)"
+        "независимый family-источник обязан сохранить клиентский якорь"
     );
+}
+
+/// Transitional characterization only: these paths are removed with the closed
+/// recipe menu. The durable law lives in `Srgb8`, `SourceHuePlan` and the generic
+/// curve tests: exact emitted gray has no hue; the nearest off-axis byte does.
+#[test]
+fn every_hue_consuming_path_preserves_achromatic_source_identity() {
+    let viewing_conditions = [
+        ViewingConditions::srgb(),
+        ViewingConditions::dim_surround(),
+        ViewingConditions::srgb_high_contrast(),
+        ViewingConditions::dim_surround_high_contrast(),
+    ];
+
+    for vc in viewing_conditions {
+        let mut config = labui_reference();
+        config.brand.anchors = crate::ladder::ThemeAnchors {
+            light: "#808080".to_string(),
+            dark: "#808080".to_string(),
+            light_ic: "#808080".to_string(),
+            dark_ic: "#808080".to_string(),
+        };
+        for (name, recipe) in &mut config.roles {
+            match name.as_str() {
+                "label-brand-secondary" => {
+                    *recipe = RoleRecipe::PairLabel {
+                        source: LadderSource::Brand,
+                        fraction: 0.5,
+                        floor: Floor::AaUi,
+                    };
+                }
+                "fill-brand-secondary" => {
+                    *recipe = RoleRecipe::Material {
+                        source: LadderSource::Brand,
+                        tone_light: 12.0,
+                        tone_dark: 12.0,
+                        floor: Floor::AaUi,
+                    };
+                }
+                _ => {}
+            }
+        }
+
+        let table = config
+            .compile_named_role_table()
+            .expect("achromatic Brand recipes compile");
+        let background = if vc.is_dark_theme() {
+            BgInput::solid("#101010").unwrap()
+        } else {
+            BgInput::solid("#FFFFFF").unwrap()
+        };
+        let set = resolve_named_set(&background, &table, &vc)
+            .expect("achromatic source-derived recipes resolve");
+
+        for role in ["label-brand-primary", "label-brand-secondary"] {
+            let (_, Resolved::Color { solved, .. }) = set
+                .iter()
+                .find(|(name, _)| name == role)
+                .unwrap_or_else(|| panic!("missing {role}"))
+            else {
+                panic!("{role} must resolve to Color");
+            };
+            assert_achromatic_hex(solved.hex(), role);
+        }
+
+        let (_, Resolved::Material(material)) = set
+            .iter()
+            .find(|(name, _)| name == "fill-brand-secondary")
+            .expect("material role exists")
+        else {
+            panic!("fill-brand-secondary must resolve to Material");
+        };
+        assert_achromatic_hex(material.tint_hex(), "Material tint");
+        assert_achromatic_hex(material.base_hex(), "Material base");
+    }
+}
+
+#[test]
+fn nearest_chromatic_source_survives_every_current_source_consuming_path() {
+    let mut config = labui_reference();
+    config.brand.anchors = crate::ladder::ThemeAnchors {
+        light: "#808081".to_string(),
+        dark: "#808081".to_string(),
+        light_ic: "#808081".to_string(),
+        dark_ic: "#808081".to_string(),
+    };
+    for (name, recipe) in &mut config.roles {
+        match name.as_str() {
+            "label-brand-secondary" => {
+                *recipe = RoleRecipe::PairLabel {
+                    source: LadderSource::Brand,
+                    fraction: 0.5,
+                    floor: Floor::AaUi,
+                };
+            }
+            "fill-brand-secondary" => {
+                *recipe = RoleRecipe::Material {
+                    source: LadderSource::Brand,
+                    tone_light: 12.0,
+                    tone_dark: 12.0,
+                    floor: Floor::AaUi,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    let table = config.compile_named_role_table().unwrap();
+    let set = resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &table,
+        &ViewingConditions::srgb(),
+    )
+    .unwrap();
+
+    for role in ["label-brand-primary", "label-brand-secondary"] {
+        let (_, Resolved::Color { solved, .. }) = set
+            .iter()
+            .find(|(name, _)| name == role)
+            .unwrap_or_else(|| panic!("missing {role}"))
+        else {
+            panic!("{role} must resolve to Color");
+        };
+        assert_chromatic_hex(solved.hex(), role);
+    }
+
+    let (_, Resolved::Material(material)) = set
+        .iter()
+        .find(|(name, _)| name == "fill-brand-secondary")
+        .expect("material role exists")
+    else {
+        panic!("fill-brand-secondary must resolve to Material");
+    };
+    assert_chromatic_hex(material.base_hex(), "Material");
+
+    let (_, Resolved::Translucent(pair_fill)) = set
+        .iter()
+        .find(|(name, _)| name == "badge-fill-brand")
+        .expect("pair fill exists")
+    else {
+        panic!("badge-fill-brand must resolve to Translucent");
+    };
+    assert_chromatic_hex(pair_fill.tint_hex(), "PairFill");
+}
+
+#[test]
+fn achromatic_solid_floor_never_invents_hue() {
+    let mut floor_config = labui_reference();
+    floor_config.brand.anchors = crate::ladder::ThemeAnchors {
+        light: "#E0E0E0".to_string(),
+        dark: "#E0E0E0".to_string(),
+        light_ic: "#E0E0E0".to_string(),
+        dark_ic: "#E0E0E0".to_string(),
+    };
+    let floor_table = floor_config.compile_named_role_table().unwrap();
+    let floor_set = resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &floor_table,
+        &ViewingConditions::srgb(),
+    )
+    .unwrap();
+    let (_, Resolved::Translucent(border)) = floor_set
+        .iter()
+        .find(|(name, _)| name == "border-brand-strong")
+        .expect("solid border exists")
+    else {
+        panic!("border-brand-strong must resolve to Translucent");
+    };
+    assert!(
+        border.floor_coerced(),
+        "fixture must execute the floor-shift branch"
+    );
+    assert_achromatic_hex(border.tint_hex(), "solid floor shift");
+}
+
+#[test]
+fn adjacent_foreign_source_cannot_change_an_independent_solve() {
+    use crate::ladder::LadderTint;
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec, TextAnchor};
+
+    let tint = |hex: &str| {
+        let encoded = crate::spaces::srgb::srgb_encoded_from_hex(hex).unwrap();
+        LadderTint::new([encoded; 4]).unwrap()
+    };
+    let senior_anchor = TextAnchor::new(0.9, Floor::AaText)
+        .unwrap()
+        .with_hue(tint("#FF3B30"));
+    let junior_anchor = TextAnchor::new(0.8, Floor::AaText)
+        .unwrap()
+        .with_hue(tint("#808080"));
+    let table = NamedRoleTable::new(
+        vec![
+            ("senior".to_string(), RoleSpec::Anchor(senior_anchor)),
+            ("junior".to_string(), RoleSpec::Anchor(junior_anchor)),
+        ],
+        Vec::new(),
+        RoleChroma::Neutral,
+    )
+    .expect("two source identities are a valid table");
+
+    let background = BgInput::solid("#6F6F6F").unwrap();
+    let vc = ViewingConditions::srgb();
+    let set = resolve_named_set(&background, &table, &vc).unwrap();
+    let (_, junior) = set
+        .iter()
+        .find(|(name, _)| name == "junior")
+        .expect("junior exists");
+    let Resolved::Color { solved, .. } = junior else {
+        panic!("junior must resolve to Color");
+    };
+    assert_achromatic_hex(solved.hex(), "independent achromatic source");
+
+    let isolated = NamedRoleTable::new(
+        vec![("junior".to_string(), RoleSpec::Anchor(junior_anchor))],
+        Vec::new(),
+        RoleChroma::Neutral,
+    )
+    .unwrap();
+    let isolated_set = resolve_named_set(&background, &isolated, &vc).unwrap();
+    let Resolved::Color {
+        solved: isolated_solved,
+        ..
+    } = &isolated_set[0].1
+    else {
+        panic!("isolated junior must resolve to Color");
+    };
+    assert_eq!(solved.hex(), isolated_solved.hex());
+    assert_eq!(
+        junior, &isolated_set[0].1,
+        "an unrelated adjacent source must not change value or provenance"
+    );
+}
+
+#[test]
+fn all_achromatic_material_is_lawful_under_a_neutral_table_policy() {
+    use crate::ladder::LadderTint;
+    use crate::semantic::{DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec};
+
+    let gray = crate::spaces::srgb::srgb_encoded_from_hex("#808080").unwrap();
+    let table = NamedRoleTable::new(
+        vec![(
+            "material".to_string(),
+            RoleSpec::Material {
+                hue: Some(LadderTint::new([gray; 4]).unwrap()),
+                tone: DjMagnitude::new(12.0, 12.0),
+                floor: Floor::AaUi,
+            },
+        )],
+        Vec::new(),
+        RoleChroma::Neutral,
+    )
+    .expect("all-achromatic source needs no chromatic table policy");
+    let set = resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &table,
+        &ViewingConditions::srgb(),
+    )
+    .unwrap();
+    let Resolved::Material(material) = &set[0].1 else {
+        panic!("material must resolve");
+    };
+    assert_achromatic_hex(material.tint_hex(), "neutral-policy Material");
 }
 
 /// КОМПОЗИЦИОННЫЙ контракт FX-стека теней.
@@ -2211,7 +2241,7 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
         "fx-shadow-penumbra",
         "fx-shadow-major",
     ];
-    let bg_jp = LcsColor::from_hex_with_vc(bg_hex, &vc).unwrap().jp;
+    let bg_jp = LcsColor::from_hex_with_vc(bg_hex, &vc).unwrap().jp();
     let mut state = srgb_encoded_from_hex(bg_hex).unwrap();
     let mut prev_delta = 0.0_f64;
     for name in stack {
@@ -2233,7 +2263,7 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
             "{name}: наслоение слоя не изменило композит ({state_hex}) — вырожденная ступень стека"
         );
         // (2) суммарная различимость стека от фона строго растёт.
-        let jp = LcsColor::from_hex_with_vc(&state_hex, &vc).unwrap().jp;
+        let jp = LcsColor::from_hex_with_vc(&state_hex, &vc).unwrap().jp();
         let delta = (jp - bg_jp).abs();
         assert!(
             delta > prev_delta,
@@ -2249,8 +2279,8 @@ fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
 /// Ladder@52-строк): (а) на тёмной базе паспорта свечение решается БЕЗ
 /// деградации, halo = пер-темный якорь источника, α ∈ (0, 1], фактический шаг
 /// в допуске квантования от контрактной ступени Base; (б) на белом фоне
-/// белое нейтральное свечение деградирует ЧЕСТНО (на белом screen — point-no-op
-/// reference-профиля) — флаг degraded, не молчание и не ошибка.
+/// белое нейтральное свечение возвращает явный typed target status (на белом
+/// screen — point-no-op reference-профиля), не молчание и не ошибка.
 #[test]
 fn glow_roles_resolve_screen_layers() {
     let cfg = labui_reference();
@@ -2271,21 +2301,26 @@ fn glow_roles_resolve_screen_layers() {
         Resolved::Glow(g) => g,
         other => panic!("fx-glow-brand должен быть Resolved::Glow, получено {other:?}"),
     };
-    assert!(
-        !g.degraded(),
-        "бренд-свечение на тёмной базе не деградирует"
+    assert_eq!(
+        g.target_status(),
+        crate::glow::GlowTargetStatus::LegacyReached,
+        "бренд-свечение на тёмной базе достигает target"
     );
     assert_eq!(g.halo_hex(), "#4A8FFF", "halo = пер-темный якорь бренда");
     assert!(g.alpha() > 0.0 && g.alpha() <= 1.0);
     let target = crate::glow::GlowStep::Base.target_dj();
     assert!(
-        g.achieved_dj() >= target - 1e-9 && g.achieved_dj() - target < 0.5,
+        g.halo_achieved_dj() >= target - 1e-9 && g.halo_achieved_dj() - target < 0.5,
         "шаг ступени Base: достигнуто {:.4} (ожидалось [цель, цель+0.5))",
-        g.achieved_dj()
+        g.halo_achieved_dj()
     );
     // Анатомия: core светлее halo (пересвет).
     let vc = &vc_dark;
-    let jp = |hex: &str| crate::lcs::LcsColor::from_hex_with_vc(hex, vc).unwrap().jp;
+    let jp = |hex: &str| {
+        crate::lcs::LcsColor::from_hex_with_vc(hex, vc)
+            .unwrap()
+            .jp()
+    };
     assert!(jp(g.core_hex()) > jp(g.halo_hex()), "core светлее halo");
 
     // (б) белое свечение на белом — честная деградация.
@@ -2298,100 +2333,20 @@ fn glow_roles_resolve_screen_layers() {
         .expect("fx-glow-neutral в наборе");
     match res {
         Resolved::Glow(g) => {
-            assert!(
-                g.degraded(),
-                "белое свечение на белом обязано деградировать честно"
+            assert_eq!(
+                g.target_status(),
+                crate::glow::GlowTargetStatus::LegacyUnreachable,
+                "белое свечение на белом обязано сообщить недостижимость"
             );
-            assert!(g.achieved_dj() < 0.5, "screen над белым гаснет физически");
+            assert!(
+                g.halo_achieved_dj() < 0.5,
+                "screen над белым гаснет физически"
+            );
         }
         other => panic!("fx-glow-neutral должен быть Resolved::Glow, получено {other:?}"),
     }
 }
 
-/// Попарная различимость сентиментов между СОБОЙ (аудит 2026-07-03).
-///
-/// Модель разводит каждый сентимент от БРЕНДА (`s_min` — хорда до бренда);
-/// попарные дистанции сентиментов между собой ею прямо не гарантируются
-/// (Warning↔Danger держит только категориальный пол). Этот тест ЗАМЕРЯЕТ
-/// попарные Oklab-ab-дистанции решённых labui-солидов по всем четырём
-/// режимам против конфиг-порога `s_perc_min` — того же порога перцептивной
-/// различимости, что закон применяет к бренду.
-///
-/// ИСТОРИЯ: находка S-02 (2026-07-03) — light-ic Warning↔Success слипались
-/// (ab ≈ 0.042 < 0.0687): flip-ветка при ДАЛЁКОМ бренде зеркалила Warning
-/// через полкруга в зелень к Success. ВЫЛЕЧЕНО тем же днём многотельной
-/// легальностью (двухфазная оккупация, `sentiment_solid_for_mode`):
-/// покоящиеся сентименты — неподвижные оккупанты (идентичность якорей цела),
-/// смещённые держат выведенный угловой отступ от их зон — Warning light-ic
-/// ложится в янтарную дугу у пола вместо зелени. Тест держит закон:
-/// ВСЕ пары ≥ порога во всех режимах, без исключений.
-#[test]
-fn labui_sentiment_solids_keep_pairwise_ab_distance() {
-    use crate::spaces::oklab::srgb_linear_to_oklab;
-    use crate::spaces::srgb::srgb_gamma_inv;
-
-    let cfg = labui_reference();
-    let s_perc_min = cfg.sentiment_s_perc_min().expect("порог из якорей labui");
-    let vcs = [
-        crate::spaces::vc::ViewingConditions::srgb(),
-        crate::spaces::vc::ViewingConditions::dim_surround(),
-        crate::spaces::vc::ViewingConditions::srgb_high_contrast(),
-        crate::spaces::vc::ViewingConditions::dim_surround_high_contrast(),
-    ];
-    for (mode_idx, vc) in vcs.iter().enumerate() {
-        let mut solids: Vec<(String, [f64; 3])> = Vec::new();
-        for cat in &cfg.sentiments.categories {
-            let tint = cfg
-                .compile_sentiment_tint("pairwise-probe", &cat.name)
-                .expect("labui-сентимент компилируется");
-            let e = tint.for_vc(vc);
-            let lab = srgb_linear_to_oklab([
-                srgb_gamma_inv(e[0]),
-                srgb_gamma_inv(e[1]),
-                srgb_gamma_inv(e[2]),
-            ]);
-            solids.push((cat.name.clone(), lab));
-        }
-        for i in 0..solids.len() {
-            for j in (i + 1)..solids.len() {
-                let (na, a) = &solids[i];
-                let (nb, b) = &solids[j];
-                let d_ab = ((a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
-                assert!(
-                    d_ab >= s_perc_min,
-                    "режим {mode_idx}: сентименты `{na}` и `{nb}` перцептивно слиплись: \
-                     ab-дистанция {d_ab:.4} < порога {s_perc_min:.4}"
-                );
-            }
-        }
-    }
-}
-
-/// Warning light-ic лежит в янтарной дуге, а не в зелени.
-///
-/// РЕФРЕЙМ Волны 1 (закон категориальных зон). Прежде это был RED-proof лечения
-/// S-02: брендоцентричный однотельный закон зеркалил IC-Warning далёким брендом в
-/// зелень (~127°), а многотельный лечил в янтарь. Под новым законом
-/// brand-displacement УБРАН целиком — Warning всегда ОТДЫХАЕТ на своём оранжевом
-/// прототипе (для light-ic якорь orange `#C93400`), поэтому зелени неоткуда взяться
-/// и однотельного контр-примера больше не существует. Инвариант «warning light-ic
-/// в янтаре» ОСТАЁТСЯ валидным следствием закона и сохранён как страж; мёртвый
-/// RED-proof (однотельный→зелень) удалён.
-#[test]
-fn warning_light_ic_rests_in_amber_arc() {
-    let cfg = labui_reference();
-    let tint = cfg
-        .compile_sentiment_tint("warning-amber-probe", "warning")
-        .expect("warning компилируется");
-    let vc_ic = crate::spaces::vc::ViewingConditions::srgb_high_contrast();
-    let healed = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(&vc_ic));
-    let healed_hue = crate::accent::oklab_hue_of(&healed);
-    // Янтарная дуга: над полом Warning (45°), заведомо ниже зелени (< 90°).
-    assert!(
-        (45.0..90.0).contains(&healed_hue),
-        "warning light-ic обязан лечь в янтарь [45°, 90°), получено {healed_hue:.2}° ({healed})"
-    );
-}
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Пустой контракт отклоняется на загрузке.
 //    Агностичность: ядро не знает ролей — конфиг несёт СВОЙ словарь; голый
@@ -2425,7 +2380,7 @@ fn empty_contract_is_rejected_at_load() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Материал (whitepaper §3.7): двухслойный контракт «тинт 01 (α) + база 02» с ВЫВЕДЕННОЙ α.
+// Материал (whitepaper, «Точечные композиции»): двухслойный контракт «тинт 01 (α) + база 02» с ВЫВЕДЕННОЙ α.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Заменить роль на произвольный рецепт и вернуть её резолв на `bg_hex`/`vc`.
@@ -2491,7 +2446,11 @@ fn material_two_layer_solid_canon_byte_exact_and_guaranteed() {
         "α вне (0,1]: {}",
         m.alpha()
     );
-    assert!(m.guaranteed(), "AA-гарантия обязана держаться");
+    assert_eq!(
+        m.alpha_status(),
+        crate::material::MaterialAlphaStatusV1::Satisfied,
+        "AA-floor обязан иметь typed satisfied status"
+    );
     assert!(m.worst_contrast() >= m.floor() - 1e-9, "worst < floor");
     assert!((m.floor() - 4.5).abs() < 1e-12, "AA-text пол = 4.5");
 }
@@ -2671,9 +2630,10 @@ fn material_dark_theme_white_pole_guaranteed() {
         matches!(m.pole(), crate::material::Pole::White),
         "тёмная поверхность обязана коммитить белый полюс"
     );
-    assert!(
-        m.guaranteed(),
-        "AA-гарантия обязана держаться и на тёмной теме"
+    assert_eq!(
+        m.alpha_status(),
+        crate::material::MaterialAlphaStatusV1::Satisfied,
+        "AA-floor обязан иметь typed satisfied status и на тёмной теме"
     );
 }
 

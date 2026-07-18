@@ -113,7 +113,7 @@ pub(crate) fn ratio_from_luminances(la: f64, lb: f64) -> f64 {
 /// colours, in `[1, 21]`.
 ///
 /// `(L_lighter + 0.05) / (L_darker + 0.05)`. Symmetric and polarity-agnostic by
-/// construction — unlike the signed perceptual LPC metric, which is why the two
+/// construction — unlike the signed candidate curve, which is why the two
 /// numbers are reported separately and never folded into one.
 pub(crate) fn contrast_ratio(a: [f64; 3], b: [f64; 3]) -> f64 {
     ratio_from_luminances(relative_luminance(a), relative_luminance(b))

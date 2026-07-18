@@ -49,7 +49,7 @@ pub enum RoleOutcome {
     Glow(GlowColor),
     /// Stable Glow terminal result: no sound numerical decision, no CSS vars.
     GlowIndeterminate(GlowIndeterminateColor),
-    /// Двухслойный материал (kind material; whitepaper §3.7): тинт `01` (с выведенной α) +
+    /// Двухслойный материал (kind material; whitepaper, «Точечные композиции»): тинт `01` (с выведенной α) +
     /// опаковая база `02`, обе — один тон. `--lab-<role>-01` несёт
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
@@ -159,8 +159,6 @@ pub struct MaterialColor {
     /// кандидат имеет минимальную ошибку среди просмотренных, не среди всего
     /// гамута.
     pub tone_compressed: bool,
-    /// Оттенок семьи выродился у края гамута (честный флаг; `false` у нейтрали).
-    pub hue_vanished: bool,
     /// Солид-канон отличим от фона резолва на 8-битной сетке дисплея.
     pub distinct: bool,
 }
@@ -174,7 +172,7 @@ pub struct RgbaColor {
     pub alpha: f64,
     /// The solid the tint composites to on the resolve background.
     pub composite_hex: String,
-    /// The signed perceptual contrast `Lc` of the composite.
+    /// The signed score of the frozen SAPC-shaped candidate curve for the composite.
     pub composite_lc: f64,
     /// The WCAG 2.1 ratio of the composite.
     pub composite_wcag: f64,
@@ -187,34 +185,29 @@ pub struct RgbaColor {
     /// `true` when a solid family border (`border-<family>-strong`, M2 ch5c) was
     /// darkened along the family curve to meet the AA UI floor (3:1), because the
     /// raw family tint did not clear it on this background — an honest, flagged
-    /// minimal legal shift (family hue/chroma preserved, only lightness moved).
-    /// `false` for a direct ladder emission and for legal family solids.
+    /// minimal legal shift along the declared family curve. Final bytes remain
+    /// the representation truth; this flag does not claim perceptual hue/chroma
+    /// preservation. `false` for a direct ladder emission and legal family solids.
     pub floor_coerced: bool,
 }
 
-/// A resolved colour and the contrasts it actually achieves.
+/// A resolved colour with its Ys candidate score and WCAG ratio.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SolvedColor {
     /// The colour as `#RRGGBB`.
     pub hex: String,
-    /// The signed perceptual contrast `Lc` against the background.
+    /// The signed Ys candidate score from the frozen SAPC-shaped curve against the background;
+    /// not LPC/readability evidence.
     pub lc: f64,
     /// The WCAG 2.1 ratio (1–21) against the background.
     pub wcag_ratio: f64,
     /// `true` when the legal floor squeezed this role onto the smallest step
     /// below its senior (an honest, flagged hierarchy degradation).
     pub compressed: bool,
-    /// `true` when a coloured family label (M1 ch5c) lost perceptible colour on
-    /// its contract-solved lightness: the colour's `M'` fell below the tint
-    /// perceptibility floor, so at the family curve's extremes (near-white /
-    /// near-black) the hue is physically indistinguishable. An honest, flagged
-    /// outcome — not a silent degradation to grey. `false` for neutral labels and
-    /// for coloured labels that kept a distinguishable colour.
-    pub hue_vanished: bool,
     /// Честный замер |ΔJ'| на отданном hex для dJ'-ролей (симметрия с glow);
-    /// `None` у контраст-ролей (их метрика — Lc).
+    /// `None` у contrast-score ролей (их переходная координата — `Lc`).
     pub achieved_dj: Option<f64>,
-    /// `true` when the WCAG legal floor overrode the perceptual target.
+    /// `true` when the WCAG legal floor overrode the Ys candidate-score target.
     pub floor_override: bool,
     /// The minimum WCAG ratio this role is legally clamped to (`AaText` → 4.5,
     /// `AaUi` → 3.0), or `None` for decorative / JND / zero roles. A property of

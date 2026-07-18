@@ -240,6 +240,14 @@ jobs:
           core = packages["labcolors-core"]
           if core["features"].get("default") != []:
               raise SystemExit("labcolors-core default capability set drifted")
+          runtime_dependencies = [
+              dependency
+              for dependency in core["dependencies"]
+              if dependency["kind"] is None
+          ]
+          if runtime_dependencies:
+              names = sorted(dependency["name"] for dependency in runtime_dependencies)
+              raise SystemExit(f"labcolors-core must have zero runtime dependencies: {names}")
           # Оффлайн protocol/compiler линия вырезана целиком: анти-воскрешение —
           # самих крейтов больше не существует в воркспейсе.
           for erased in ("labcolors-protocol", "labcolors-compiler"):

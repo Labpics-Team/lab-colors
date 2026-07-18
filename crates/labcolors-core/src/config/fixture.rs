@@ -1,10 +1,10 @@
 //! Каноническая референс-фикстура labui — дерево Даниила ЦЕЛИКОМ (якоря,
 //! ручки, палитра, замер Figma 2026-07-02): тестовый оракул, `#[cfg(test)]`-only.
-//! Прод-ядро агностично (CH-3, ADR-0001 PR-c): брендовые hex не покидают тестов —
+//! Прод-ядро агностично (CH-3, ADR-0001): брендовые hex не покидают тестов —
 //! гейт `tests/agnostic_production_surface.rs`; wasm-граница читает замороженный
 //! JSON-паспорт (`labcolors-wasm/tests/data/labui.config.json`), не эту фикстуру.
 //!
-//! Словарь ролей/алиасов фикстура тянет из ПРОДОВОГО модуля пресета
+//! Словарь ролей/алиасов фикстура тянет из соседнего test-only пресета
 //! (`config/preset.rs`) — один источник; байт-в-байт гейт эмиссии
 //! (`crate::agnostic_gates`) замораживает контракт тонкий == полный.
 //!
@@ -20,7 +20,7 @@ use crate::semantic;
 pub fn labui_reference() -> ThemeConfig {
     ThemeConfig {
         brand: Brand {
-            // Пер-темный бренд labui (reference/labui-accent-primitives.md §2,
+            // Пер-темный бренд Lab UI (`reference/labui-accent-primitives.md`, «Якоря»;
             // Figma `Accent/Brand`): light/dark/light-ic/dark-ic — дословно.
             anchors: anchors("#007AFF", "#4A8FFF", "#0040DD", "#409CFF"),
         },
@@ -32,7 +32,6 @@ pub fn labui_reference() -> ThemeConfig {
             },
             tint: NeutralTint {
                 // Ручки подтона — из констант semantic.rs (единый источник истины).
-                ratio: semantic::NEUTRAL_TINT_RATIO,
                 target_mp: semantic::TINT_TARGET_MP,
                 hue_stiffness: semantic::TINT_HUE_STIFFNESS,
                 // Явный измеренный оттенок (SSOT NEUTRAL_HUE_DEG): labui несёт
@@ -56,8 +55,8 @@ pub fn labui_reference() -> ThemeConfig {
             }),
         },
         // Палитра labui — 10 замеренных семейств, ПЕР-ТЕМНО ДОСЛОВНО из
-        // reference/labui-accent-primitives.md §2 (Figma `Accent/*`, все 4 режима,
-        // замер 2026-07-02). Светлый якорь совпадает с accent.rs::anchor_hex.
+        // `reference/labui-accent-primitives.md`, «Якоря» (Figma `Accent/*`, все
+        // четыре режима, замер 2026-07-02).
         palette: vec![
             fam("red", "#FF3B30", "#FF3A3A", "#D70015", "#FF6161"),
             fam("orange", "#FFA100", "#FF9008", "#C93400", "#FFA940"),
@@ -70,25 +69,6 @@ pub fn labui_reference() -> ThemeConfig {
             fam("purple", "#AF52DE", "#BF5AF2", "#8944AB", "#DA8FFF"),
             fam("pink", "#FF2D55", "#FF2D55", "#D30F45", "#FF6482"),
         ],
-        sentiments: SentimentsConfig {
-            categories: vec![
-                sentiment("danger", "red", None, None),
-                sentiment(
-                    "warning",
-                    "orange",
-                    Some(crate::sentiment::WARNING_HUE_FLOOR_DEG),
-                    Some(1),
-                ),
-                sentiment("success", "green", None, None),
-                sentiment("info", "blue", None, None),
-            ],
-            hardness: 5.0,
-            // 1.0 = потолок на чистой стене гамута: якоря labui — авторитет
-            // идентичности (Figma-калибровка, danger #FF3B30 сидит ВЫШЕ
-            // 0.88·C_max — доля 0.88 съедала бы клиентский красный).
-            // Реестровый дефолт для клиентов без якорной калибровки — 0.88.
-            chroma_fraction: 1.0,
-        },
         themes: ThemesConfig {
             entries: vec![
                 ("light".to_string(), VcPreset::Srgb),
@@ -117,20 +97,5 @@ fn fam(key: &str, light: &str, dark: &str, light_ic: &str, dark_ic: &str) -> Pal
     PaletteFamily {
         key: key.to_string(),
         anchors: anchors(light, dark, light_ic, dark_ic),
-    }
-}
-
-/// Краткий конструктор сентимент-категории для фикстуры.
-fn sentiment(
-    name: &str,
-    family: &str,
-    hue_floor_deg: Option<f64>,
-    preferred_side: Option<i8>,
-) -> SentimentCategory {
-    SentimentCategory {
-        name: name.to_string(),
-        family: family.to_string(),
-        hue_floor_deg,
-        preferred_side,
     }
 }

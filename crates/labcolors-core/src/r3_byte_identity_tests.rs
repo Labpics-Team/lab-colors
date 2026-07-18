@@ -2,7 +2,7 @@
 //!
 //! REGIME R3: semantic-extraction / value-preserving identity. The perceptual
 //! const-extraction in `semantic.rs` (the `// NEEDS-SCIENCE` / `// GROUNDED`
-//! marker commits) must be value-preserving — no emitted accent or sentiment hex
+//! marker commits) must be value-preserving — no emitted accent hex
 //! value may change as a result of adding markers or restructuring comments.
 //!
 //! BUG CLASS these tests guard: a comment-marker commit silently shifts a curve
@@ -28,8 +28,7 @@
 //!       fails naming the triple.
 //!
 //! RELATIONSHIP TO EXISTING TESTS:
-//!   • `accent_golden.rs` / `sentiment_info_curve_sample_hex_13_matches_golden`
-//!     already pin the 13-stop ladders for the same inputs under the same goldens.
+//!   • `accent_golden.rs` already pins the same 13-stop ladder.
 //!     These R3 tests are separate test IDs that carry the R3 regime label and
 //!     run independently, so a rebase that removes `accent_golden.rs` would still
 //!     leave R3 coverage intact.
@@ -39,24 +38,19 @@
 //!     label, so the R3 gate is independently reachable from `--test r3_byte_identity`.
 //!
 //! INVARIANTS asserted (INV from the testPlan):
-//!   INV (1): zero emitted accent/sentiment hex values change.
+//!   INV (1): zero emitted accent hex values change.
 //!   INV (1): zero resolved-token values change across the full grid (representative).
 
 use crate::{
-    BgInput, Resolved, Role, RoleTable, ViewingConditions,
-    curve::ColorCurve,
-    neutral::NeutralCurve,
-    resolve_set,
-    scale::AccentCurve,
-    sentiment::{Sentiment, SentimentCurve},
+    BgInput, Resolved, Role, RoleTable, ViewingConditions, curve::ColorCurve,
+    neutral::NeutralCurve, resolve_set, scale::AccentCurve,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// R3-A: sample_hex(13) golden ladder for two representative curves.
+// R3-A: sample_hex(13) golden ladder for a representative curve.
 //
 // These constants mirror the goldens in `accent_golden.rs` and
-// `accent_golden.rs::SENTIMENT_INFO_GOLDEN`. They are DUPLICATED here (not
-// imported) so this R3 test is self-contained and independent: if the source of
+// It is DUPLICATED here (not imported) so this R3 test is self-contained and independent: if the source of
 // truth golden is renamed or the accent_golden.rs file is deleted, this test
 // continues to assert the invariant.
 //
@@ -68,15 +62,6 @@ use crate::{
 const R3_ACCENT_007AFF_GOLDEN: [&str; 13] = [
     "#FFFFFF", "#F4F8FF", "#DAE9FF", "#B6D4FF", "#88B9FF", "#4F98FF", "#0A6CFF", "#0060FC",
     "#0C41FF", "#0500F9", "#0300C4", "#010089", "#000043",
-];
-
-/// SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) — byte-identical под законом
-/// Волны 1 (категориальные зоны). Прежде brand=200° смещал Info до ≈259.96°; теперь
-/// бренд НЕ смещает — Info покоится на синем фокусе 259.89° (Figma Accent/Blue),
-/// массив перегенерирован из фактического вывода. Любое дальнейшее изменение — R3-регрессия.
-const R3_SENTIMENT_INFO_GOLDEN: [&str; 13] = [
-    "#FFFFFF", "#ECF3FD", "#CCDEFB", "#A1C2F8", "#6EA1F4", "#2F78F0", "#1858BD", "#1551B0",
-    "#114597", "#0B3579", "#052456", "#02112F", "#000108",
 ];
 
 fn canonical_neutral() -> NeutralCurve {
@@ -106,26 +91,6 @@ fn r3_sample_hex_13_accent_007aff_byte_identity() {
     );
 }
 
-/// R3: SentimentCurve(Info, 200°, "#3E87FF").sample_hex(13) производит байт-идентичный
-/// вывод после Zone D грауndинга (2026-06-30). prototype_hex сознательно обновлён
-/// с "#007AFF" на "#3E87FF" (Figma Accent/Blue). Тест кусается при мутации:
-/// измените любую запись в `R3_SENTIMENT_INFO_GOLDEN` → `assert_eq!` падает.
-#[test]
-fn r3_sample_hex_13_sentiment_info_byte_identity() {
-    let neutral = canonical_neutral();
-    // prototype_hex = Figma Accent/Blue (#3E87FF), сознательное обновление Zone D.
-    let curve = SentimentCurve::from_sentiment(Sentiment::Info, 200.0, "#3E87FF", &neutral)
-        .expect("R3: Info sentiment with far brand hue resolves (Figma anchor)");
-    let got = curve.sample_hex(13);
-    assert_eq!(
-        got.as_slice(),
-        R3_SENTIMENT_INFO_GOLDEN.as_slice(),
-        "R3 REGRESSION — SentimentCurve(Info, 200°, '#3E87FF') sample_hex(13) NOT \
-         byte-identical to Zone D golden (2026-06-30). Drift caused by перцептивный \
-         коэффициент RHS или неавторизованное изменение prototype_hex."
-    );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // R3-B: resolve_set 240-cell byte-identity (representative subset).
 //
@@ -147,7 +112,7 @@ fn r3_sample_hex_13_sentiment_info_byte_identity() {
 /// contrast text role and the most sensitive canary for a lightness-shift.
 const R3_RESOLVE_SET_SPOTS: [(&str, &str, &str, &str); 12] = [
     // sRGB viewing conditions — regenerated for the readability→`Ys` activation
-    // (глава #64, ADR-0003): ось читаемости перешла в люминансный домен `Ys`, и
+    // (ADR-0003): candidate-score путь использует люминансный домен `Ys`, и
     // текстовая лестница пересобрана на принятые владельцем hex'ы (#141414 и
     // тонированный дефолт). Owner sign-off = ADR-0003 (Принято, делегация
     // владельца). Значения совпадают с 240-cell GOLDEN в semantic.rs (тот же

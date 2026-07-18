@@ -19,22 +19,10 @@ default = []
 [dev-dependencies]
 pretty_assertions = "1.4"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-# Dev-only serialisation for the tree-mutating on-disk audit probe (#[serial]).
-# Zero runtime deps: serial_test never appears in the normal dependency graph
-# (verified by s2b_baseline_guards::supply_chain_serial_test_absent_from_normal_dep_tree).
-serial_test = "3"
-# Dev-only temp directory for isolation-safe on-disk probe: the real tree is never mutated.
-# Zero runtime deps (verified by s2b_baseline_guards supply-chain test).
+# Isolated on-disk scanner mutation proof; the real tree is never mutated.
 tempfile = "3.10"
-# Dev-only property/fuzz engine for the mathematical-invariant tests
-# (tests/property_invariants.rs). Zero runtime deps: proptest never appears in the
-# normal dependency graph (verified by s2b_baseline_guards::supply_chain_proptest_*).
-# Pin centralised in the workspace Cargo.toml (issue #29 dependency discipline).
+# Property/fuzz engine for mathematical invariants; pin is workspace-owned.
 proptest = { workspace = true }
-
-[[bench]]
-name = "y_hk"
-harness = false
 
 [[bench]]
 name = "jp_inv"
@@ -51,4 +39,3 @@ harness = false
 [[bench]]
 name = "glow_alpha"
 harness = false
-

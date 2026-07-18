@@ -3,23 +3,21 @@
 //! BUG CLASS this guards: *an axis the test suite never swept.* The crate's
 //! audit found that 6/10 mutations of key constants survived the suite, and the
 //! solver was exercised only at hue 0 (and a couple of incidental chromatic
-//! points). Hue is a full degree of freedom of `solve`: the H-K correction is
-//! hue-dependent (`f(h)` in lpc.rs), so the lightness the solver must pick to
-//! hit a target contrast varies with hue. A regression in the H-K term, the
-//! chroma cap, or the hue-to-lightness compensation would show up as the solver
-//! *missing its contrast target at some hue* — and nothing tested that.
+//! points). Hue and the gamut cap change which quantised colour can reproduce a
+//! fixed Ys candidate score. A regression in that search could miss its numeric
+//! target only on part of the hue domain.
 //!
 //! This sweeps hue 0..360 in 15 steps, both viewing conditions, on a light
 //! (#FFFFFF) and a dark (#1C1C1E) background, at a moderate chroma
 //! (`Relative(0.3)`), and asserts two contracts on every result:
 //!
-//! 1. **Perceptual target held — unless the law overrode it.** When the WCAG
+//! 1. **Ys candidate-score target held unless the WCAG floor overrode it.** When the WCAG
 //!    floor did NOT override (`!floor_override`), the measured |Lc − target| ≤ 1
 //!    (the solver's own ±1 quantization budget), independently re-measured
-//!    through the public `lpc_with_vc` on the emitted hex — not trusting the
-//!    reported `lc()`. When the AA-text floor DID override (a +45 target on
+//!    through the public `recheck_against` on the emitted hex — not trusting
+//!    the reported `lc()`. When the AA-text floor DID override (a +45 target on
 //!    white cannot clear 4.5:1, so the solver legitimately pushes the colour
-//!    darker), perception is *intentionally* exceeded: there the contract is
+//!    darker), the numeric target is intentionally exceeded: there the contract is
 //!    |Lc| ≥ target, not |Lc − target| ≤ 1. Asserting the tight band there would
 //!    be testing a bug into existence — the override is the documented, correct
 //!    behaviour (`Solved::floor_override`).
@@ -32,23 +30,17 @@
 //! a malformed-input panic — and a moderate +45 target on pure white, which the
 //! background can clearly host, must NOT come back ExceedsRange.
 
-use labcolors_core::lpc::{lpc_readability_ys, lpc_with_vc};
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, ViewingConditions, solve,
-    srgb_encoded_from_hex,
+    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, ViewingConditions,
+    recheck_against, solve,
 };
 
 /// Independent re-measure of an emitted hex's `|Lc|` MAGNITUDE in the readability
 /// domain the solver targets since глава #64 (ADR-0003): `Ys` (WCAG relative
-/// luminance of the display bytes). Меряться через `lpc_with_vc` (домен `Y_hk`,
-/// apparent contrast) в round-trip ВЕЛИЧИНЫ больше нельзя — ось читаемости
-/// переехала в `Ys`, и сверять надо в домене цели, иначе Ys≈Y_hk-разрыв на
-/// хроме даёт ложный недолёт (signum-проверки домен-агностичны, остаются на
-/// `lpc_with_vc`).
-fn readability_lc(fg_hex: &str, bg_hex: &str) -> f64 {
-    let fg = srgb_encoded_from_hex(fg_hex).expect("valid emitted hex");
-    let bg = srgb_encoded_from_hex(bg_hex).expect("valid bg hex");
-    lpc_readability_ys(fg, bg)
+/// luminance of the emitted display bytes). Rechecking through the public
+/// resolver boundary keeps the test on the actual production axis.
+fn candidate_lc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
+    recheck_against(bg_hex, &[fg_hex], vc).expect("solver and fixture emit valid sRGB8 hex")[0].0
 }
 
 /// The solver's own quantization budget (mirrors `solve::QUANT_BUDGET` / the
@@ -95,16 +87,15 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                 match result {
                     Ok(solved) => {
                         reachable += 1;
-                        // Re-measure independently on the emitted hex; never trust
-                        // the reported lc(). SIGN (polarity) — домен-агностично,
-                        // остаётся на `lpc_with_vc`; MAGNITUDE (err) — в домене
-                        // цели `Ys` (глава #64), иначе round-trip врёт на хроме.
-                        let sign_ref = lpc_with_vc(solved.hex(), bg_hex, &vc);
+                        // Re-measure independently on the emitted hex; never
+                        // trust the reported lc(). Sign and magnitude come from
+                        // the same production recheck path.
+                        let measured = candidate_lc(solved.hex(), bg_hex, &vc);
                         assert_eq!(
-                            sign_ref > 0.0,
+                            measured > 0.0,
                             target > 0.0,
                             "{vc_name} {bg_hex} hue {hue_deg}: polarity sign mismatch, \
-                             measured {sign_ref} for target {target}",
+                             measured {measured} for target {target}",
                         );
                         // With Floor::None there is no override, so the tight ±1
                         // perceptual budget must hold at every hue.
@@ -112,7 +103,6 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                             !solved.floor_override(),
                             "{vc_name} {bg_hex} hue {hue_deg}: Floor::None must never override",
                         );
-                        let measured = readability_lc(solved.hex(), bg_hex);
                         let err = (measured - target).abs();
                         max_err = max_err.max(err);
                         assert!(

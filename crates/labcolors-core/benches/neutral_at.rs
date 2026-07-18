@@ -13,8 +13,8 @@
 //! Run: `cargo bench -p labcolors-core --bench neutral_at`.
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use labcolors_core::ViewingConditions;
-use labcolors_core::neutral::{CurveParams, NeutralCurve};
+use labcolors_core::neutral::NeutralCurve;
+use labcolors_core::{CurvePosition, ViewingConditions};
 
 /// Interior curve positions on both branches (light `t ≤ 0.5`, dark `t > 0.5`),
 /// away from the exact-anchor short-circuits at 0, 0.5 and 1.
@@ -22,22 +22,17 @@ const TARGETS: [f64; 8] = [0.05, 0.15, 0.30, 0.45, 0.55, 0.70, 0.85, 0.95];
 
 fn bench_neutral_at(c: &mut Criterion) {
     let mut group = c.benchmark_group("neutral_at");
+    let positions = TARGETS.map(|t| CurvePosition::new(t).expect("bench positions are valid"));
     for (label, vc) in [
         ("srgb", ViewingConditions::srgb()),
         ("dim", ViewingConditions::dim_surround()),
     ] {
-        let curve = NeutralCurve::with_vc(
-            "#FFFFFF",
-            "#787880",
-            "#101012",
-            &CurveParams::default(),
-            &vc,
-        )
-        .expect("the canonical neutral anchors are valid");
+        let curve = NeutralCurve::with_vc("#FFFFFF", "#787880", "#101012", &vc)
+            .expect("the canonical neutral anchors are valid");
         group.bench_with_input(BenchmarkId::new("interior", label), &curve, |b, curve| {
             b.iter(|| {
-                for &t in &TARGETS {
-                    black_box(curve.at(black_box(t)));
+                for &position in &positions {
+                    black_box(curve.at(black_box(position)));
                 }
             });
         });

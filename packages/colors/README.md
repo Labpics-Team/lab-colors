@@ -202,7 +202,7 @@ type RoleResult =
 состояния:
 
 - `SolvedColor` — цвет найден (`kind: "color"`, поля `css` — готовое `oklch(L% C H)`, `hex` — тот же цвет как данные, `lc`, `wcagRatio`, …).
-- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — exact encoded-sRGB8 reference-композит на фоне резолва и его контраст. Конкретный renderer и color-management pipeline проверяются отдельно.
+- `TranslucentRole` — полупрозрачная роль лестницы или альфа-аналога (`kind: "translucent"`): `css` — готовое `oklch(L% C H / A)`, `tintHex` — тинт как данные, `alpha`, плюс `compositeHex` / `compositeLc` / `compositeWcag` — exact encoded-sRGB8 reference-композит, знаковая кандидатная оценка по `Ys` и WCAG ratio на фоне резолва. `compositeLc` не является LPC/readability verdict; конкретный renderer и color-management pipeline проверяются отдельно.
 - `GlowRole` — discriminated union. `kind: "glow"` несёт два цвета для
   `mix-blend-mode: screen`: `cssVar` — halo, `${cssVar}-core` — core,
   `${cssVar}-alpha` — каноническая `alphaCss`. `compositeProfile` /
@@ -215,8 +215,8 @@ type RoleResult =
   `"cam16-ucs-jprime-li2017-v1"`. `targetStatus` различает эти ветви явно:
   `"exact-noop-unreachable"`, `"legacy-reached"` или
   `"legacy-unreachable"`. Форма `kind: "glow"` — объединение этих трёх
-  согласованных ветвей: смешать stable/legacy профиль, гарантию, диагностику
-  выбора, статус и `degraded` на уровне TypeScript невозможно. Legacy-ветви
+  согласованных ветвей: смешать stable/legacy профиль, гарантию, диагностику и
+  статус на уровне TypeScript невозможно. Legacy-ветви
   (`decisionGuarantee: { kind: "legacy-platform-dependent-v1" }`) — это
   результат совместимости зарегистрированного алгоритма, а не доказанная
   численная гарантия. Интервал с внешним округлением не
@@ -227,8 +227,8 @@ type RoleResult =
   point-слоям, а не к полному blur/overlap-эффекту, браузеру или дисплею.
 - `MaterialRole` — объединение трёх терминальных исходов: satisfied transparent
   endpoint (`alpha = 0`), satisfied bisection bracket (`alpha` побитно равна
-  `upperAlpha`) и degraded opaque endpoint (`alpha = 1`). `alphaStatus`,
-  `alphaGuarantee` и compatibility-поле `guaranteed` согласованы типом. `floor`
+  `upperAlpha`) и degraded opaque endpoint (`alpha = 1`). `alphaStatus` и
+  `alphaGuarantee` согласованы типом. `floor`
   — запрошенный пол; он держится только при `alphaStatus: "satisfied"`. Primary
   остаётся солид-каноном, `-01` — тинтом, `-02` — опаковой базой. Численный
   профиль явно фиксирует operation order:
@@ -261,7 +261,7 @@ type RoleResult =
 
 ### `engine.loadConfig(json): string`
 
-Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight проверяет не только имена ролей, но и итоговый CSS-namespace: `-core`/`-alpha` Glow и `-01`/`-02` Material не могут быть затёрты другой ролью или алиасом. Невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает отпечаток конфига — 16 hex-символов; разные конфиги дают разные отпечатки и разные кэш-пространства.
+Загружает конфиг дизайн-системы (JSON по типу `ThemeConfig`; схема — в репозитории: `docs/decisions/0001-config-boundary.md`, TS-типы — в поставляемом `labcolors.d.ts`). Это **единственный** источник словаря ролей — встроенной таблицы в движке нет: до загрузки конфига `resolveTheme` отклоняется ошибкой `config_required`. Полный preflight проверяет не только имена ролей, но и итоговый CSS-namespace: `-core`/`-alpha` Glow и `-01`/`-02` Material не могут быть затёрты другой ролью или алиасом. Невалидный конфиг отклоняется структурной ошибкой `invalid_config: …` и НЕ меняет состояние. Возвращает детерминированный 64-битный отпечаток как 16 hex-символов; это вероятностный идентификатор, а корректность reload обеспечивается полным очищением кэша.
 
 Каждый Glow-рецепт обязан явно выбрать numerical-decision profile; default и
 неявного legacy-пути нет:
@@ -317,7 +317,7 @@ Core не выводит критерий из имени токена, CSS-кл
 bound-law и воспроизводимого full-domain proof. Файлы доказательства входят в
 npm-тарбол в `evidence/`; proof также SHA-256-связан с фактической typed
 registry-строкой, разрешающей Core минтить terminal evidence. APCA-shaped
-diagnostic-компонент текущего LPC и legacy `wcagRatio` не могут изменить этот
+Ys candidate score `lc` и диагностический `wcagRatio` не могут изменить этот
 вердикт.
 
 ### `numericalCapabilityManifest(): NumericalCapabilityManifestV2`
@@ -332,7 +332,7 @@ diagnostic-компонент текущего LPC и legacy `wcagRatio` не м
 
 ### `engine.recheckContrast(bgHex, fgHexes, theme): Float64Array`
 
-Дешёвая покадровая проверка: какие контрасты дают цвета `fgHexes` на фоне `bgHex` под темой `theme`, без полного резолва (один прямой ход модели на фон плюс по одному на каждый передний план). Требует загруженный конфиг — `theme` ищется в его словаре (`config_required` без конфига, `unknown_theme` для необъявленного ключа), как и `resolveTheme`. Возвращает `Float64Array` пар `[lc, wcagRatio]` в порядке `fgHexes`: индекс `2·i` — знаковый `Lc` цвета `i`, `2·i+1` — его WCAG-отношение. Это примитив, которым `adaptTheme` решает, пора ли пересчитывать.
+Дешёвая покадровая проверка: какие Ys candidate score и WCAG ratio дают цвета `fgHexes` на фоне `bgHex` под темой `theme`, без полного резолва. Требует загруженный конфиг — `theme` ищется в его словаре (`config_required` без конфига, `unknown_theme` для необъявленного ключа), как и `resolveTheme`. Возвращает `Float64Array` пар `[lc, wcagRatio]` в порядке `fgHexes`: индекс `2·i` — знаковая кандидатная оценка по `Ys` из frozen SAPC-shaped curve, `2·i+1` — WCAG-отношение. `lc` не является LPC/readability verdict; runtime использует его только как координату текущего transitional solver-а.
 
 ---
 
@@ -492,10 +492,11 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-Raw-размер WASM — hard gate с append-only историей. Текущий
-`bench/wasm-size-budget-v11.json` содержит exact Linux-x64 size-бюджет `runtime`
-с нулевым headroom; checker выбирает текущую версию, а все предыдущие
-versioned-файлы остаются неизменяемой историей. Size policy не притворяется
+Raw-размер WASM — hard gate с append-only историей. SSOT текущего exact
+Linux-x64 size-бюджета `runtime` — `scripts/check-wasm-size-budget.mjs`: его
+`DEFAULT_BUDGET` указывает на текущий versioned artifact в
+`packages/colors/bench/` с нулевым headroom, а все предыдущие versioned-файлы
+остаются неизменяемой историей. Size policy не притворяется
 идентификатором артефакта: фактический SHA артефакта вместе с source SHA
 записывается в `build-metadata.json` и повторно сверяется с точными байтами
 tarball при публикации. Release-equivalent CI требует точного размера и

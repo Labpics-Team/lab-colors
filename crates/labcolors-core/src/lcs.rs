@@ -3,25 +3,63 @@
 //! CAM16-UCS/Oklab views are implementation inputs, not independent editable
 //! definitions of LCS and not a claim of uniform perceptual attributes.
 
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_to_xyz, xyz_to_srgb};
+use crate::Srgb8;
+use crate::spaces::srgb::{srgb_linear_from_srgb8, srgb_to_xyz, xyz_to_srgb};
 use crate::spaces::{cam16, cat16, oklab, vc::ViewingConditions};
+
+/// A physical submanifold that must survive coordinate transforms until output.
+///
+/// This is private because callers describe stimuli, not implementation flags.
+/// The locus prevents matrix round-off from inventing a chromatic direction
+/// where the exact encoded source has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhysicalLocus {
+    General,
+    SrgbGrayAxis,
+}
 
 /// All hue fields (`h_ok`, `h_cam`) are stored in **degrees** `[0, 360)`.
 /// Convert to radians only at trigonometric call sites — never store radians.
+///
+/// Coordinates are read-only outside this module because `locus` records a
+/// physical representation invariant. Mutating one coordinate independently
+/// would make conversion and measurement observe two different colours.
+///
+/// ```compile_fail
+/// use labcolors_core::LcsColor;
+/// let mut color = LcsColor::from_hex("#808080").unwrap();
+/// color.s = 1.0;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LcsColor {
-    pub jp: f64,
-    pub h_ok: f64,
+    jp: f64,
+    h_ok: f64,
     /// Internal reparameterisation of CAM16-UCS colourfulness `M′`:
     /// `s = M′ / (J′ + 1)`. The `+ 1` is a regulariser against division by zero
     /// as `J′ → 0`; `LcsColor::mp` applies the analytical inverse
     /// `s · (J′ + 1)`, subject to ordinary binary64 round-off. This is NOT the
     /// CAM16 saturation correlate.
-    pub s: f64,
+    s: f64,
     h_cam: f64,
+    locus: PhysicalLocus,
 }
 
 impl LcsColor {
+    /// CAM16-UCS `J′` coordinate under the construction viewing conditions.
+    pub fn jp(&self) -> f64 {
+        self.jp
+    }
+
+    /// Oklab hue angle in degrees, canonicalised to zero on exact sRGB grays.
+    pub fn h_ok(&self) -> f64 {
+        self.h_ok
+    }
+
+    /// Internal chroma reparameterisation; not a client-owned intent axis.
+    pub fn s(&self) -> f64 {
+        self.s
+    }
+
     /// Parse from hex using standard sRGB viewing conditions (average surround).
     pub fn from_hex(hex: &str) -> Result<Self, String> {
         Self::from_hex_with_vc(hex, &ViewingConditions::srgb())
@@ -33,10 +71,29 @@ impl LcsColor {
     /// VC (e.g. [`ViewingConditions::dim_surround`] for dark themes). They are
     /// implementation inputs, not universal perceptual-attribute scales.
     pub fn from_hex_with_vc(hex: &str, vc: &ViewingConditions) -> Result<Self, String> {
-        let rgb = srgb_from_hex(hex)?;
+        let encoded = Srgb8::new(crate::srgb8::hex_bytes(hex)?);
+        Ok(Self::from_srgb8_with_vc(encoded, vc))
+    }
+
+    /// Build the appearance view of one exact emitted sRGB8 stimulus.
+    ///
+    /// Parsing and solver output both enter here so representation facts such
+    /// as the exact grey axis cannot diverge between two views of the same
+    /// bytes.
+    pub(crate) fn from_srgb8_with_vc(encoded: Srgb8, vc: &ViewingConditions) -> Self {
+        let rgb = srgb_linear_from_srgb8(encoded);
         let xyz = srgb_to_xyz(rgb);
         let h_ok = oklab::oklab_hue(rgb);
-        Ok(Self::from_xyz_with_hok(xyz, h_ok, vc))
+        let mut color = Self::from_xyz_with_hok(xyz, h_ok, vc);
+        if encoded.is_achromatic() {
+            // Hue is undefined on the exact encoded gray axis.  Oklab matrix
+            // round-off otherwise turns that absence into a discontinuous
+            // numeric angle at authored byte anchors, while interpolated gray
+            // points carry the canonical zero representation.
+            color.h_ok = 0.0;
+            color.locus = PhysicalLocus::SrgbGrayAxis;
+        }
+        color
     }
 
     /// Convert to hex using standard sRGB viewing conditions.
@@ -49,15 +106,45 @@ impl LcsColor {
     /// Must use the same VC that was used to construct this colour, otherwise
     /// the round-trip will introduce drift.
     pub fn to_hex_with_vc(&self, vc: &ViewingConditions) -> String {
-        let xyz = self.to_xyz(vc);
-        let rgb = xyz_to_srgb(xyz);
-        hex_from_srgb(rgb)
+        self.to_srgb8_with_vc(vc).to_hex()
+    }
+
+    /// Quantise through the same typed final-output boundary used by curves.
+    pub(crate) fn to_srgb8_with_vc(self, vc: &ViewingConditions) -> crate::Srgb8 {
+        crate::spaces::srgb::srgb8_from_linear(self.to_linear_srgb_with_vc(vc))
     }
 
     /// Raw constructor from already-valid coordinates (curves, solver).
-    /// No validation here: inputs come from our own maths, not user input.
+    /// Inputs come from internal maths; a non-finite value is therefore an
+    /// invariant bug and must never be converted into a plausible display byte.
     pub(crate) fn new(jp: f64, h_ok: f64, s: f64, h_cam: f64) -> Self {
-        Self { jp, h_ok, s, h_cam }
+        assert!(
+            [jp, h_ok, s, h_cam].into_iter().all(f64::is_finite),
+            "internal LCS coordinates must be finite"
+        );
+        Self {
+            jp,
+            h_ok,
+            s,
+            h_cam,
+            locus: PhysicalLocus::General,
+        }
+    }
+
+    /// Construct the continuous physical point on the sRGB gray axis whose
+    /// CAM16-UCS lightness is `jp` under `vc`.
+    ///
+    /// The point is never snapped to a byte. Its locus only constrains the final
+    /// output conversion to one shared channel before ordinary sRGB rounding.
+    pub(crate) fn from_srgb_gray_axis_jp(jp: f64, vc: &ViewingConditions) -> Self {
+        let y = srgb_gray_linear_at_jp(jp, vc);
+        let mut color = Self::from_xyz_with_hok(srgb_to_xyz([y; 3]), 0.0, vc);
+        // `y` is the analytic inverse of this requested coordinate. Preserve
+        // that coordinate exactly instead of feeding Newton/forward round-off
+        // back into the continuous curve skeleton.
+        color.jp = jp;
+        color.locus = PhysicalLocus::SrgbGrayAxis;
+        color
     }
 
     /// CAM16-UCS colourfulness correlate `M'`, recovered through the analytical
@@ -102,15 +189,22 @@ impl LcsColor {
         // an analytically invertible coordinate transform used for
         // colour-difference work; binary64 round-off is covered by the shared
         // tolerance tests. No individual J'/M' value is assigned a universal
-        // attribute meaning here. Inverse in `to_xyz` uses the same helpers.
+        // attribute meaning here. The inverse path uses the same helpers.
         let jp = cam16::ucs_j(j);
         let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
 
-        Self { jp, h_ok, s, h_cam }
+        Self::new(jp, h_ok, s, h_cam)
     }
 
-    pub(crate) fn to_xyz(self, vc: &ViewingConditions) -> [f64; 3] {
+    fn to_linear_srgb_with_vc(self, vc: &ViewingConditions) -> [f64; 3] {
+        match self.locus {
+            PhysicalLocus::General => xyz_to_srgb(self.to_xyz_general(vc)),
+            PhysicalLocus::SrgbGrayAxis => [srgb_gray_linear_at_jp(self.jp, vc); 3],
+        }
+    }
+
+    fn to_xyz_general(self, vc: &ViewingConditions) -> [f64; 3] {
         // Inverse CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131),
         // single source of truth in `cam16`.
         let j = cam16::ucs_j_inv(self.jp);
@@ -149,6 +243,26 @@ impl LcsColor {
 
         [xyz[0] / 100.0, xyz[1] / 100.0, xyz[2] / 100.0]
     }
+}
+
+/// Invert CAM16-UCS lightness on the achromatic D65 ray.
+///
+/// This inverse is defined only by CAM16 `J` on the D65 gray ray; it does not
+/// invoke the separate H-K appearance-brightness diagnostic. CAM16 can retain
+/// a small residual `M` on a numerically achromatic stimulus, so no claim of
+/// zero chromatic correlate is made here. This scalar is the SSOT for XYZ,
+/// continuous linear sRGB and eventual sRGB8 gray emission.
+fn srgb_gray_linear_at_jp(jp: f64, vc: &ViewingConditions) -> f64 {
+    assert!(jp.is_finite(), "internal gray-axis J′ must be finite");
+    if jp <= 0.0 {
+        return 0.0;
+    }
+    let j = cam16::ucs_j_inv(jp);
+    assert!(
+        j.is_finite() && j > 0.0,
+        "internal CAM16 gray-axis J must be finite and positive"
+    );
+    cam16::gray_y(j, vc)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "packageManager": "npm@11.9.0",
   "description": "Runtime resolver for client-owned color-token contracts. WASM core, zero runtime dependencies.",
   "type": "module",

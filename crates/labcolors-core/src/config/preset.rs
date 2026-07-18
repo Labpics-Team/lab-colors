@@ -1,5 +1,5 @@
-//! Словарь эталонного пресета labui — СЕМАНТИКА ролей/алиасов (ADR-0001 PR-c,
-//! план BL-007): имена (= `Role::key()` ядра), фракции, позиции лестницы,
+//! Словарь эталонного пресета labui — СЕМАНТИКА ролей/алиасов (ADR-0001):
+//! имена (= `Role::key()` ядра), фракции, позиции лестницы,
 //! полы — ни одного цветового значения. Модуль `#[cfg(test)]`-ONLY: labui-дерево
 //! НЕ входит в ОТГРУЖАЕМЫЙ код ядра (строгая агностичность) — прод-скан
 //! `tests/agnostic_production_surface.rs` этот модуль ИСКЛЮЧАЕТ. Единственный
@@ -19,7 +19,7 @@ use crate::solve::Floor;
 /// Общий источник для фикстуры `labui_reference` (`#[cfg(test)]`, потому не
 /// линк): полный эталон несёт ТОТ ЖЕ словарь — один источник, ноль расхождения.
 /// Словарь несёт семантику (имена = `Role::key()` ядра, рецепты 1:1 из
-/// `RoleTable::default` — тоже `#[cfg(test)]`-only оракул (ADR-0001 PR-c), потому
+/// `RoleTable::default` — тоже `#[cfg(test)]`-only оракул (ADR-0001), потому
 /// не линк) — ни одного цветового значения: якоря/ручки остаются в конфиге клиента.
 pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // Фракции и полы — 1:1 из RoleTable::default (semantic.rs), включая border-strong
@@ -44,8 +44,8 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         position,
         floor: None,
     };
-    let sent_pos = |name: &str, position| RoleRecipe::Ladder {
-        source: LadderSource::Sentiment(name.to_string()),
+    let family_pos = |key: &str, position| RoleRecipe::Ladder {
+        source: LadderSource::Family(key.to_string()),
         position,
         floor: None,
     };
@@ -154,10 +154,10 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         ("none".to_string(), RoleRecipe::Zero),
     ];
 
-    // ── Акцентная/сентимент/FX/альфа-лестница (поглощает GAP #59) ─────────────
+    // ── Семейная/FX/альфа-лестница (поглощает GAP #59) ───────────────────────
     // Имена = consumedRoles labui (roles.json) без префикса `--lab-`, минус
     // удаляемые по коллапсу (static-*/inverted-*/on-*/material-*, роли-от-фона).
-    // Каждая семья (brand + 4 сентимента) несёт label×4 · fill×4 · border(strong/
+    // Каждая семья (brand + 4 client-named status families) несёт label×4 · fill×4 · border(strong/
     // base/soft). FX focus-ring/glow — солид/@52. `-tinted` — альфа-аналог солида
     // соответствующего fill-*-primary. Все альфы — из меню LadderPosition (Figma).
     // Цветной лейбл (ратификация ch5c, M1): доля/пол КАЖДОГО уровня = нейтральный
@@ -166,7 +166,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ; оттенок = источник семьи
     // (чистый цвет, светлота выводится контрактом на кривой семьи). Заменяет
     // прежнюю α-рампу @72/@52/@32 поверх тинта (40/40 нарушений одноуровневости,
-    // нелегальность light-темы) — см. scratchpad/ch5c-ratification.md §2.
+    // нелегальность light-темы) — executable proof в `one_levelness_tests`.
     let hued_label =
         |prefix: &str, level: &str, fraction: f64, floor: Floor, source: &LadderSource| {
             (
@@ -208,22 +208,23 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
 
     // Brand-семья: источник = бренд.
     roles.extend(ladder_family("brand", LadderSource::Brand, &brand_pos));
-    // Сентимент-семьи: источник = сентимент-категория (разводится с брендом).
-    for (prefix, sname) in [
-        ("danger", "danger"),
-        ("warning", "warning"),
-        ("success", "success"),
-        ("info", "info"),
+    // Имена ролей принадлежат fixture-клиенту; Core видит только непрозрачные
+    // ссылки на обычные цветовые семейства и не меняет их якоря.
+    for (prefix, family_key) in [
+        ("danger", "red"),
+        ("warning", "orange"),
+        ("success", "green"),
+        ("info", "blue"),
     ] {
-        let mk = move |pos| sent_pos(sname, pos);
+        let mk = move |pos| family_pos(family_key, pos);
         roles.extend(ladder_family(
             prefix,
-            LadderSource::Sentiment(sname.to_string()),
+            LadderSource::Family(family_key.to_string()),
             &mk,
         ));
     }
 
-    // FX focus-ring (солид) и glow (@52). Сентимент/бренд-источники — акцентные;
+    // FX focus-ring (солид) и glow (@52). Семейные/бренд-источники — акцентные;
     // `*-neutral`/`inverted` — НЕЙТРАЛЬНЫЕ (стаб: rgb(255 255 255 / .522) и т.п.,
     // НЕ бренд).
     roles.push((
@@ -232,11 +233,11 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     ));
     roles.push((
         "fx-focus-ring-danger".to_string(),
-        sent_pos("danger", LadderPosition::FocusRing),
+        family_pos("red", LadderPosition::FocusRing),
     ));
     roles.push((
         "fx-focus-ring-warning".to_string(),
-        sent_pos("warning", LadderPosition::FocusRing),
+        family_pos("orange", LadderPosition::FocusRing),
     ));
     // Нейтральный фокус: тёмный край нейтрали, солид (стаб light rgb(16 16 18) =
     // Контур нейтрали ПЕР-ТЕМНЫЙ (стаб: light #101012 / dark #F6F8FA) — едет
@@ -266,11 +267,11 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     roles.push(("fx-glow-brand".to_string(), glow(LadderSource::Brand)));
     roles.push((
         "fx-glow-danger".to_string(),
-        glow(LadderSource::Sentiment("danger".to_string())),
+        glow(LadderSource::Family("red".to_string())),
     ));
     roles.push((
         "fx-glow-warning".to_string(),
-        glow(LadderSource::Sentiment("warning".to_string())),
+        glow(LadderSource::Family("orange".to_string())),
     ));
     roles.push((
         "fx-glow-neutral".to_string(),
@@ -292,7 +293,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         neutral_pos(NeutralPick::Mid, LadderPosition::SkeletonHighlight),
     ));
 
-    // Компонентные роли. accent = бренд, danger = danger-сентимент, neutral —
+    // Компонентные роли. accent = бренд, danger = client role over red family, neutral —
     // НЕЙТРАЛЬНЫЙ (стаб: fill-neutral солид-литерал; fill-neutral-tinted и
     // border-neutral алиасят нейтральные core-роли fill-primary/border-base).
     //
@@ -316,7 +317,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // border-neutral = var(border-base) → алиас (см. aliases ниже).
     roles.push((
         "fill-danger-tinted".to_string(),
-        sent_pos("danger", LadderPosition::FillPrimary),
+        family_pos("red", LadderPosition::FillPrimary),
     ));
     roles.push((
         "label-accent".to_string(),
@@ -324,7 +325,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     ));
     roles.push((
         "label-danger".to_string(),
-        sent_pos("danger", LadderPosition::LabelPrimary),
+        family_pos("red", LadderPosition::LabelPrimary),
     ));
     roles.push((
         "border-accent".to_string(),
@@ -333,7 +334,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // border-neutral = var(border-base): алиас на нейтральную dJ' границу core.
     roles.push((
         "border-danger".to_string(),
-        sent_pos("danger", LadderPosition::BorderBase),
+        family_pos("red", LadderPosition::BorderBase),
     ));
     roles.push((
         "border-focus".to_string(),
@@ -341,15 +342,20 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     ));
 
     // Пары «заливка × лейбл» бейджа (crate::pair): якорь источника, минимально
-    // сдвинутый до победы перцептивной стороны лейбла в штатной полярности;
+    // сдвинутый до выбранной ветви переходной pair-эвристики;
     // лейбл на такой заливке — обычный nested resolve потребителя. Статики
     // покрываются тем же законом (белый/чёрный якоря нейтрали).
     let pair = |source| RoleRecipe::PairFill { source };
     roles.push(("badge-fill-brand".to_string(), pair(LadderSource::Brand)));
-    for sname in ["danger", "warning", "success", "info"] {
+    for (client_name, family_key) in [
+        ("danger", "red"),
+        ("warning", "orange"),
+        ("success", "green"),
+        ("info", "blue"),
+    ] {
         roles.push((
-            format!("badge-fill-{sname}"),
-            pair(LadderSource::Sentiment(sname.to_string())),
+            format!("badge-fill-{client_name}"),
+            pair(LadderSource::Family(family_key.to_string())),
         ));
     }
     roles.push((

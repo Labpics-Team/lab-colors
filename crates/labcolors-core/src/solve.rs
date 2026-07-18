@@ -1,8 +1,8 @@
-//! Inverse perceptual-contrast solver: `solve(bg, contract, …) → colour`.
+//! Inverse candidate-contrast solver: `solve(bg, contract, …) → colour`.
 //!
 //! The forward path maps a colour to the WCAG relative luminance `Ys` of its
-//! quantised display value and through [`contrast_core`](crate::lpc) to a
-//! contrast value `Lc` — ось читаемости считает в домене `Ys`, в котором
+//! quantised display value and through the internal frozen SAPC-shaped curve to
+//! a signed Ys candidate score `Lc` — кривая считает в домене `Ys`, в котором
 //! определены константы SAPC-8 (ADR-0003). This
 //! module runs that path backwards: given a background and a target contrast
 //! it recovers the foreground luminance analytically (the contrast core is
@@ -28,8 +28,9 @@
 //! An unreachable contract returns [`SolveFailure`] with a reason — never a
 //! silent clip.
 //!
-//! All canonical contrast constants are reused from [`crate::lpc`]; this module
-//! declares none of them (формула APCA SAPC-8 версии 0.0.98G-4g; метрика LPC, не APCA).
+//! All frozen curve constants are reused from the internal `lpc` module; this
+//! module declares none of them. The scalar is a solver coordinate, not an
+//! LPC/readability verdict or certificate.
 
 use crate::lcs::LcsColor;
 use crate::lpc::{
@@ -37,8 +38,10 @@ use crate::lpc::{
     LO_BOW_OFFSET, LO_CLIP, LO_WOB_OFFSET,
 };
 use crate::scale::max_chroma;
-use crate::spaces::oklab::{oklab_hue, oklab_to_srgb_linear};
-use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_gamma_inv, srgb_to_xyz};
+use crate::spaces::oklab::{neutral_srgb_linear, oklab_to_srgb_linear};
+use crate::spaces::srgb::{
+    hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_gamma_inv, srgb_to_xyz, srgb8_from_linear,
+};
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
 
@@ -82,32 +85,15 @@ pub enum Gamut {
     DisplayP3,
 }
 
-/// Reserved typographic context for a future target resolver.
-///
-/// A later chapter will map font size/weight to a target `Lc` (large or bold
-/// text tolerates lower contrast). v1 does **not** resolve it — callers pass an
-/// explicit target via [`Contract::text`]. This type only reserves the seam so
-/// that adding the resolver later is not a breaking change. Advisory inputs
-/// (glyph shape, line length, tracking) are intentionally not modelled yet.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TypographicContext {
-    /// Font size in CSS pixels.
-    pub size_px: f64,
-    /// Font weight (100–900).
-    pub weight: u16,
-}
-
 /// The WCAG 2.1 AA legal contrast floor a contract must clear.
 ///
 /// EAA / EN 301 549 mandate WCAG 2.1 level AA: a relative-luminance contrast
 /// ratio of 4.5:1 for normal text (success criterion 1.4.3) and 3:1 for
 /// user-interface components and graphical objects (1.4.11). The floor is the
-/// legal minimum *beneath* the perceptual LPC target: if the LPC solution does
-/// not clear it, [`solve`] pushes the colour until it does and flags the result
-/// via [`Solved::floor_override`], so the caller can see where law overrode
-/// perception. Decorative / just-noticeable-difference contracts (shadows,
-/// separators) carry [`None`](Floor::None) — readability law does not apply to
-/// them, and `solve` leaves them on their perceptual target.
+/// legal minimum *beneath* the transitional Ys candidate-score target: if the
+/// candidate does not clear it, [`solve`] pushes the colour until it does and
+/// flags the result via [`Solved::floor_override`]. Decorative contracts carry
+/// [`None`](Floor::None): no normative WCAG floor is requested for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Floor {
@@ -115,7 +101,7 @@ pub enum Floor {
     AaText,
     /// WCAG 2.1 AA UI components / graphical objects — contrast ratio ≥ 3:1.
     AaUi,
-    /// No legal floor (decorative / JND contracts).
+    /// No normative WCAG floor (decorative contracts).
     None,
 }
 
@@ -132,22 +118,20 @@ impl Floor {
 
 /// A contrast contract: the band of acceptable contrast against the background.
 ///
-/// Expressed as a signed `Lc` range `[floor, ceiling]`, where the sign encodes
+/// Expressed as a signed Ys candidate-score range `Lc = [floor, ceiling]`,
+/// where the sign encodes
 /// polarity (positive is dark-on-light, negative is light-on-dark). v1 text
-/// contracts use a degenerate range (`floor == ceiling`); the range type is
-/// reserved for future just-noticeable-difference contracts (shadows,
-/// separators, borders) where a band — "visible enough to be felt, no more" —
-/// matters. `solve` targets `floor`.
+/// contracts use a degenerate range (`floor == ceiling`). `solve` targets
+/// `floor`. This frozen SAPC-shaped coordinate is not an LPC/readability verdict.
 ///
 /// Every contract also carries a WCAG 2.1 [`Floor`]: text and UI contracts get
-/// the AA legal minimum by default (4.5:1 / 3:1); range (decorative / JND)
+/// the AA legal minimum by default (4.5:1 / 3:1); range/decorative
 /// contracts get [`Floor::None`]. Disable or change it explicitly with
 /// [`with_conformance`](Contract::with_conformance).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Contract {
     floor: f64,
     ceiling: f64,
-    typography: Option<TypographicContext>,
     conformance: Floor,
 }
 
@@ -160,7 +144,6 @@ impl Contract {
         Self {
             floor: target_lc,
             ceiling: target_lc,
-            typography: None,
             conformance: Floor::AaText,
         }
     }
@@ -174,28 +157,20 @@ impl Contract {
         Self {
             floor: target_lc,
             ceiling: target_lc,
-            typography: None,
             conformance: Floor::AaUi,
         }
     }
 
     /// A range contract `[floor, ceiling]` of signed `Lc`. `solve` targets `floor`.
     ///
-    /// Reserved for decorative / just-noticeable-difference contracts, so it
-    /// carries [`Floor::None`]: no legal readability floor applies.
+    /// A transitional decorative Ys candidate-score band. It carries
+    /// [`Floor::None`]: no normative WCAG floor is requested.
     pub fn range(floor: f64, ceiling: f64) -> Self {
         Self {
             floor,
             ceiling,
-            typography: None,
             conformance: Floor::None,
         }
-    }
-
-    /// Attach a reserved [`TypographicContext`]. Not consulted by `solve` in v1.
-    pub fn with_typography(mut self, ctx: TypographicContext) -> Self {
-        self.typography = Some(ctx);
-        self
     }
 
     /// Override the WCAG 2.1 conformance [`Floor`]. The default depends on the
@@ -215,11 +190,6 @@ impl Contract {
     /// The upper bound of the contract band.
     pub fn ceiling(self) -> f64 {
         self.ceiling
-    }
-
-    /// The reserved typographic context, if any (unused by `solve` in v1).
-    pub fn typography(self) -> Option<TypographicContext> {
-        self.typography
     }
 
     /// The WCAG 2.1 conformance floor this contract enforces.
@@ -245,18 +215,17 @@ impl BgInput {
         Ok(Self { linear_srgb: rgb })
     }
 
-    /// Reduce the descriptor to its readability luminance interval — `Ys`,
-    /// WCAG relative luminance of the quantised display colour (ADR-0003:
-    /// ось читаемости считает в `Ys`; активировано главой #64).
+    /// Reduce the descriptor to its candidate-score luminance interval — `Ys`,
+    /// WCAG relative luminance of the quantised display colour (ADR-0003).
     ///
     /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
     /// the background **only** through two scalars derived here from `bg` — the
     /// WCAG 2.1 relative luminance `Y_wcag` of the quantised display colour
-    /// (readability contract + polarity + the legal floor: один домен, одно
+    /// (candidate-score contract + polarity + the legal floor: один домен, одно
     /// число) and the CAM16-UCS lightness `J'_bg` (needed only by the dJ'
-    /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — покинул ось
-    /// читаемости вместе с ADR-0003 и живёт только на яркостной оси
-    /// ([`bg_luma`]: сторона пары, свечение, сентимент). Verified by an
+    /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — не входит в
+    /// candidate-score путь и живёт только на яркостной оси
+    /// ([`bg_luma`]: сторона пары, свечение, семейные цветовые операции). Verified by an
     /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
     /// The representation stays an interval so a future field background can
     /// supply bounded endpoints without changing the solver contract.
@@ -317,11 +286,11 @@ impl LumaInterval {
     }
 }
 
-/// A solved foreground colour and the two contrasts it actually achieves.
+/// A solved foreground colour, its Ys candidate score, and legal contrast.
 ///
-/// The perceptual [`lc`](Solved::lc) (signed LPC) and the legal
-/// [`wcag_ratio`](Solved::wcag_ratio) (symmetric WCAG 2.1) are reported as
-/// separate numbers — they measure different things and are never conflated.
+/// The signed Ys candidate [`lc`](Solved::lc) score from the frozen SAPC-shaped curve and the
+/// legal [`wcag_ratio`](Solved::wcag_ratio) are reported separately. `lc` is a
+/// solver coordinate, not an admitted LPC/readability certificate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Solved {
     color: LcsColor,
@@ -342,9 +311,10 @@ impl Solved {
         &self.hex
     }
 
-    /// The signed perceptual contrast `Lc` the resolved colour achieves against
-    /// the background, measured on the quantised hex — what the caller actually
-    /// gets. This is the LPC metric, not WCAG; see [`wcag_ratio`](Self::wcag_ratio).
+    /// The signed Ys candidate score `Lc` the frozen SAPC-shaped curve gives the
+    /// quantised foreground/background pair. This is neither complete LPC nor
+    /// a readability verdict; see [`wcag_ratio`](Self::wcag_ratio) for the
+    /// separately reported legal ratio.
     pub fn lc(&self) -> f64 {
         self.lc
     }
@@ -358,10 +328,10 @@ impl Solved {
         self.wcag_ratio
     }
 
-    /// `true` when the WCAG legal floor overrode the perceptual target: the LPC
-    /// solution did not clear the floor, so the colour was pushed (darker for
+    /// `true` when the WCAG legal floor overrode the Ys candidate-score target: the
+    /// candidate solution did not clear the floor, so the colour was pushed (darker for
     /// dark-on-light, lighter for light-on-dark) until it did. Lets the caller
-    /// surface where the law won over perception.
+    /// report that the normative floor changed the transitional target.
     pub fn floor_override(&self) -> bool {
         self.floor_override
     }
@@ -644,14 +614,14 @@ pub(crate) fn solve_in(
     let target = contract.floor();
     let y_gov = interval.governing(target);
 
-    // Stage 1 — perceptual target. Invert the LPC core for the Oklab lightness
+    // Stage 1 — Ys candidate-score target. Invert the frozen curve for the Oklab lightness
     // that reproduces the contract's target against the governing endpoint.
     let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy)?;
 
     // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
-    // perceptual solution falls short of it, push the colour until it clears the
+    // candidate solution falls short of it, push the colour until it clears the
     // floor and flag the override. Decorative ([`Floor::None`]) contracts skip
-    // this entirely and keep their perceptual target. The resolved Oklab
+    // this entirely and keep their candidate-score target. The resolved Oklab
     // lightness (not just the colour) is returned so the bounded neighbour search
     // below can step to neighbouring hex grid points from it.
     let bg_disp = bg.governing_display(target);
@@ -661,7 +631,7 @@ pub(crate) fn solve_in(
     };
 
     // Stage 3 — quantise, measure, verify. Build the colour at the resolved
-    // lightness, emit its hex, and confirm the dual gate (perceptual floor at
+    // lightness, emit its hex, and confirm the dual gate (candidate-score floor at
     // both interval ends, plus the legal WCAG floor for text/UI) still holds on
     // the *quantised* colour. If it does not, walk a bounded number of neighbouring
     // hex steps toward larger `|Lc|` before returning an explicitly scoped
@@ -670,7 +640,7 @@ pub(crate) fn solve_in(
     let evaluate = |l_ok: f64| -> Result<Candidate, SolveFailure> {
         let rgb = build_color(l_ok, hue, chroma_policy);
         let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
-        // Perceptual floor at every interval endpoint. The governing endpoint's
+        // Candidate-score floor at every interval endpoint. The governing endpoint's
         // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
         // against), so reuse it instead of re-deriving foreground display
         // luminance. Only a *distinct* endpoint (a future field background) pays
@@ -835,7 +805,7 @@ fn solve_lpc_lightness(
 
 /// The CAM16-UCS lightness `J'` of a **linear**-sRGB colour under `vc`.
 fn jp_of_linear(rgb_linear: [f64; 3], vc: &ViewingConditions) -> f64 {
-    LcsColor::from_xyz_with_hok(srgb_to_xyz(rgb_linear), 0.0, vc).jp
+    LcsColor::from_xyz_with_hok(srgb_to_xyz(rgb_linear), 0.0, vc).jp()
 }
 
 /// The acceptance budget, in CAM16-UCS `J'` units, for a decorative dJ' solve: a
@@ -1143,7 +1113,7 @@ fn max_lc(y_bg: f64, target: f64) -> f64 {
     lpc::contrast_core(extreme_fg, y_bg)
 }
 
-/// Analytic inverse of [`contrast_core`](crate::lpc): the clamp-inverted
+/// Analytic inverse of the internal frozen contrast curve: the clamp-inverted
 /// foreground luminance `Ys` that yields `target` against `y_bg`.
 fn invert_contrast(y_bg: f64, target: f64) -> Result<f64, SolveFailure> {
     // Past the offset and clip, the smallest representable |Lc| is this floor.
@@ -1237,7 +1207,7 @@ fn physical_endpoint_or_range_failure(
 /// via [`build_color`].
 ///
 /// The search is **VC-free and CAM16-free**: WCAG luminance is a
-/// display-domain quantity (ADR-0003 — ось читаемости в `Ys`), so each probe
+/// display-domain quantity (ADR-0003 — candidate score in `Ys`), so each probe
 /// costs one Oklab→sRGB conversion plus gamma-encode and a dot product. Это
 /// сняло смысл grey-axis LUT (бывший `crate::lut`, удалён этой главой #64):
 /// таблица существовала, чтобы не платить ~64 CAM16-форварда за бисекцию
@@ -1290,8 +1260,7 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
         // эмитил #949595 (148,149,149; ratio 3.0036) вместо документированного
         // #949494. Один общий float на все три канала закрывает класс целиком:
         // любой обрыв флипает каналы синхронно.
-        let v = (l_ok * l_ok * l_ok).clamp(0.0, 1.0);
-        return [v, v, v];
+        return neutral_srgb_linear(l_ok);
     }
     let h = hue.degrees();
     let hr = h.to_radians();
@@ -1322,15 +1291,9 @@ fn finish(
     floor_override: bool,
     vc: &ViewingConditions,
 ) -> Result<Solved, SolveFailure> {
-    let hex = hex_from_srgb(rgb_ideal);
-    let rgb_quantised = srgb_from_hex(&hex).map_err(|reason| {
-        SolveFailure::InternalInvariant(format!(
-            "solver formatter emitted an invalid sRGB hex: {reason}"
-        ))
-    })?;
-    let xyz = srgb_to_xyz(rgb_quantised);
-    let (j, m, h) = crate::spaces::cam16::forward(xyz, vc);
-    let color = LcsColor::from_cam16(j, m, h, oklab_hue(rgb_quantised));
+    let encoded = srgb8_from_linear(rgb_ideal);
+    let hex = encoded.to_hex();
+    let color = LcsColor::from_srgb8_with_vc(encoded, vc);
     let disp = quantised_display(rgb_ideal);
     let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
@@ -1344,7 +1307,7 @@ fn finish(
     })
 }
 
-/// Whether a measured signed perceptual contrast meets the (signed) floor within
+/// Whether a measured signed candidate score meets the (signed) floor within
 /// the 1-Lc quantisation budget. The single comparison both endpoint checks
 /// share: the governing endpoint passes its already-measured `solved.lc()` here
 /// directly (no re-derivation), a distinct endpoint passes the contrast
@@ -1380,9 +1343,9 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions)
 /// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus — воспринимаемая
 /// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).
 ///
-/// После активации ADR-0003 (глава #64) ось читаемости это НЕ читает: контракт
+/// После ADR-0003 Ys candidate-score путь это НЕ читает: контракт
 /// контраста, полы и recheck меряются в `Ys`. Потребители — яркостная ось:
-/// выбор стороны пары ([`crate::pair::pair_side`] — H-K-сдвиг кроссовера на
+/// выбор стороны внутренней pair-эвристики (`pair_side` — H-K-сдвиг кроссовера на
 /// насыщенных фонах) и яркостные подсистемы.
 pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
@@ -1427,7 +1390,7 @@ pub(crate) mod probe_log {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lpc::lpc_with_vc;
+    use crate::lpc::apparent_contrast_candidate_hex_with_vc_for_test;
 
     #[test]
     fn internal_invariant_failure_is_not_reported_as_invalid_client_input() {
@@ -1593,12 +1556,12 @@ mod tests {
         // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
         //
         // RE-MEASURED for the readability→`Ys` activation (глава #64, ADR-0003).
-        // Ось читаемости покинула домен `Y_hk`: обратный солвер инвертирует `Ys`
+        // Candidate-score путь не использует `Y_hk`: обратный солвер инвертирует `Ys`
         // напрямую (`match_lightness_ys`), и весь CAM16-раундтрип `grey_j ↔ y_hk`
         // на пути читаемости ОТПАЛ — это ровно предсказанный ADR blast radius
         // («solve.rs упростится … отпадает CAM16-раундтрип для читаемости»).
         // Оставшиеся форварды — работа ЯРКОСТНЫХ осей (нейтральная лестница,
-        // сентимент, свечение), которые H-K сохраняют; потому dim/тёмные фоны
+        // семейные цвета, свечение), которые H-K сохраняют; потому dim/тёмные фоны
         // дороже (лестница в dim делает больше H-K-работы). Падение ~10-40×
         // против прежних пинов — не регрессия покрытия, а снятие лишнего домена.
         // Re-measured 2026-07-08 (глава #64 merge).
@@ -1643,23 +1606,17 @@ mod tests {
         }
     }
 
-    /// Independent re-measure of an emitted hex's signed perceptual contrast in
-    /// the READABILITY domain (`Ys`) the solver targets since глава #64. Заменяет
-    /// Y_hk-мерило `lpc_with_vc` в round-trip проверках ВЕЛИЧИНЫ (сверять надо в
-    /// домене цели; signum-проверки домен-агностичны и остаются на `lpc_with_vc`).
-    fn readability_lc(fg_hex: &str, bg_hex: &str) -> f64 {
+    /// Independent re-measure of an emitted hex's signed Ys candidate score.
+    fn candidate_lc(fg_hex: &str, bg_hex: &str) -> f64 {
         let fg = crate::spaces::srgb::srgb_encoded_from_hex(fg_hex).expect("valid emitted hex");
         let bg = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex).expect("valid bg hex");
-        crate::lpc::lpc_readability_ys(fg, bg)
+        crate::lpc::ys_candidate_score_for_test(fg, bg)
     }
 
     /// Solve and return both the solved value and the contrast measured
-    /// independently on the resolved hex — in the SAME readability domain the
-    /// solver now targets (`Ys`, ADR-0003 глава #64): `lpc_readability_ys` on the
-    /// display bytes. Меряться через `lpc_with_vc` (домен `Y_hk`, apparent
-    /// contrast) здесь БОЛЬШЕ НЕЛЬЗЯ: ось читаемости переехала в `Ys`, и
-    /// round-trip обязан сверяться в домене цели, иначе Ys≈Y_hk-разрыв на серости
-    /// (CAM16-лайтнесс ≠ WCAG-люминанс даже при C=0) даёт ложный недолёт. Третий
+    /// independently on the resolved hex in the same `Ys` domain the solver
+    /// targets. Measuring through an H-K appearance correlate would substitute a
+    /// different input quantity and create a false round-trip miss. The third
     /// ассерт вызывающих (`solved.lc() == measured` до 1e-9) фиксирует именно это:
     /// `solved.lc()` — Ys-замер `finish`, и независимый пересчёт обязан совпасть.
     fn solve_and_measure(
@@ -1668,7 +1625,7 @@ mod tests {
         vc: &ViewingConditions,
     ) -> Result<(Solved, f64), SolveFailure> {
         let bg = BgInput::solid(bg_hex)?;
-        // Floor::None: these helpers exercise the pure perceptual inversion;
+        // Floor::None: these helpers exercise the frozen candidate-curve inversion;
         // the WCAG floor (on by default for text) is tested separately.
         let solved = solve(
             bg,
@@ -1682,7 +1639,7 @@ mod tests {
             .expect("solved hex is produced by hex_from_srgb → always parses");
         let bg_disp = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex)
             .expect("test bg hex is a valid literal");
-        let measured = crate::lpc::lpc_readability_ys(fg_disp, bg_disp);
+        let measured = crate::lpc::ys_candidate_score_for_test(fg_disp, bg_disp);
         Ok((solved, measured))
     }
 
@@ -1729,6 +1686,39 @@ mod tests {
                     measured < 0.0,
                     "reverse polarity must be negative: {measured}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn solved_color_is_the_emitted_exact_gray_state() {
+        // `Solved` exposes one physical result in two representations.  The
+        // structured value must therefore be exactly the value obtained by
+        // decoding the emitted bytes under the solve-time VC; otherwise callers
+        // observe two colours depending on which accessor they choose.
+        for (vc, vc_name) in vcs() {
+            for (bg, polarity) in [("#FFFFFF", 1.0_f64), ("#101012", -1.0_f64)] {
+                for magnitude in MAGNITUDES {
+                    let target = polarity * magnitude;
+                    let (solved, _) = solve_and_measure(bg, target, &vc)
+                        .expect("neutral fixture must resolve on its matching background");
+                    let [r, g, b] = crate::srgb8::hex_bytes(solved.hex())
+                        .expect("solver emits canonical sRGB8");
+                    assert_eq!(
+                        [r, g],
+                        [g, b],
+                        "{vc_name}/{bg}/{target}: neutral solve emitted {}",
+                        solved.hex()
+                    );
+                    let decoded = LcsColor::from_hex_with_vc(solved.hex(), &vc)
+                        .expect("solver-emitted hex must decode");
+                    assert_eq!(
+                        solved.color(),
+                        decoded,
+                        "{vc_name}/{bg}/{target}: structured colour diverged from emitted {}",
+                        solved.hex()
+                    );
+                }
             }
         }
     }
@@ -1825,7 +1815,12 @@ mod tests {
                         };
                         reachable += 1;
                         // Independently re-measure the emitted hex's signed Lc.
-                        let measured = lpc_with_vc(solved.hex(), bg_hex, &vc);
+                        let measured = apparent_contrast_candidate_hex_with_vc_for_test(
+                            solved.hex(),
+                            bg_hex,
+                            &vc,
+                        )
+                        .expect("solver and fixture emit valid sRGB8 hex");
                         // Compare signum, not `> 0.0`. Under the AA text floor every
                         // reachable result clears 4.5:1, so `measured` is never the
                         // dead-zone zero here — this is belt-and-suspenders. f64
@@ -1993,9 +1988,9 @@ mod tests {
     #[test]
     fn dj_degradation_reports_honest_achieved_dj() {
         // Цель за стеной оси J' даёт явно помеченный исход ограниченного выбора.
-        // `achieved_dj` обязан быть ЗАМЕРОМ на отданном
-        // hex (та же честность, что glow.degraded): перечитываем hex и
-        // сверяем |ΔJ'| против фона независимо.
+        // `achieved_dj` обязан быть ЗАМЕРОМ на отданном hex, как явно названные
+        // замеры изолированных Glow-слоёв: перечитываем hex и сверяем |ΔJ'|
+        // против фона независимо.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#101012").unwrap();
         let d = solve_dj(&bg, 300.0, -1.0, Hue::deg(0.0), ChromaPolicy::Neutral, &vc)
@@ -2078,36 +2073,6 @@ mod tests {
     }
 
     #[test]
-    fn reserved_typography_does_not_change_the_result() {
-        // SEAM (c): the typographic context is reserved; the v1 solver ignores
-        // it and the caller's explicit target governs.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let plain = solve(
-            bg.clone(),
-            Contract::text(60.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        let with_ctx = solve(
-            bg,
-            Contract::text(60.0).with_typography(TypographicContext {
-                size_px: 32.0,
-                weight: 700,
-            }),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        assert_eq!(plain, with_ctx);
-    }
-
-    #[test]
     fn chromatic_foreground_hits_target_and_carries_chroma() {
         // A saturated foreground policy still lands on the contrast target,
         // because the H-K boost is compensated by lowering lightness.
@@ -2123,16 +2088,16 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap();
-        let measured = readability_lc(solved.hex(), "#FFFFFF");
+        let measured = candidate_lc(solved.hex(), "#FFFFFF");
         assert!(
             (measured - target).abs() <= TOL,
             "chromatic target {target}, measured {measured}, hex {}",
             solved.hex()
         );
         assert!(
-            solved.color().s > 0.01,
+            solved.color().s() > 0.01,
             "chromatic policy should carry chroma, s = {}",
-            solved.color().s
+            solved.color().s()
         );
     }
 
@@ -2222,7 +2187,7 @@ mod tests {
         .unwrap();
         assert!(solved.floor_override(), "floor must override Lc 15");
         assert!(solved.wcag_ratio() >= 4.5 - 1e-9);
-        let measured = readability_lc(solved.hex(), "#FFFFFF");
+        let measured = candidate_lc(solved.hex(), "#FFFFFF");
         assert!(
             measured > 15.0,
             "pushed darker means more contrast, got {measured}"
@@ -2335,7 +2300,7 @@ mod tests {
 
     #[test]
     fn decorative_contracts_skip_the_floor() {
-        // JND/decorative: range carries Floor::None — perception governs, no
+        // Decorative: range carries Floor::None — the candidate-score target governs, no
         // flag, and the (sub-AA) ratio is still reported for transparency.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
@@ -2349,7 +2314,7 @@ mod tests {
         )
         .unwrap();
         assert!(!solved.floor_override());
-        let measured = readability_lc(solved.hex(), "#FFFFFF");
+        let measured = candidate_lc(solved.hex(), "#FFFFFF");
         assert!((measured - 15.0).abs() <= TOL);
         assert!(solved.wcag_ratio() < 4.5);
     }
@@ -2370,7 +2335,7 @@ mod tests {
         .unwrap();
         assert!(!solved.floor_override());
         assert!(solved.wcag_ratio() >= 4.5);
-        let measured = readability_lc(solved.hex(), "#FFFFFF");
+        let measured = candidate_lc(solved.hex(), "#FFFFFF");
         assert!((measured - 90.0).abs() <= TOL);
     }
 
@@ -2516,7 +2481,10 @@ mod tests {
         .unwrap_err();
         match err {
             SolveFailure::ExceedsRange { max_achievable, .. } => {
-                let black_on_white = crate::lpc::lpc_with_vc("#000000", "#FFFFFF", &vc);
+                let black_on_white = crate::lpc::apparent_contrast_candidate_hex_with_vc_for_test(
+                    "#000000", "#FFFFFF", &vc,
+                )
+                .expect("literal fixture is valid");
                 assert!(
                     (max_achievable - black_on_white).abs() < 0.5,
                     "max_achievable {max_achievable} should match the forward                      curve extreme {black_on_white}"
@@ -2557,7 +2525,7 @@ mod tests {
         // ≈7.3 and the first valid darker grid step is #EDEDED (Lc ≈ 7.604 в
         // домене `Ys`), within the ±1 budget. The neighbour walk must find it
         // instead of returning a (lying) ExceedsRange — механизм issue #44 жив.
-        // ГЛАВА #64 (ADR-0003): ось читаемости перешла в `Ys`, и мерило `Lc`
+        // ADR-0003: candidate-score путь использует `Ys`, и мерило `Lc`
         // hex'а пересчиталось — прежний Y_hk-шаг #E9E9E9 (Lc ≈ 7.85) сменился на
         // #EDEDED (Lc ≈ 7.604). Между полом 7.3 и #EDEDED валидных шагов нет,
         // потому цель 7.31 ГАРАНТИРОВАННО падает в мёртвую зону и обслуживается
@@ -2732,7 +2700,7 @@ mod tests {
     /// built colour must be recovered to bisection precision, and out-of-gamut
     /// targets must short-circuit to the gamut endpoints.
     ///
-    /// Это единственное место, где солвер инвертирует ось читаемости; тест
+    /// Это единственное место, где солвер инвертирует Ys candidate-score кривую; тест
     /// охраняет строгую монотонность `Ys` вдоль тонированной кривой
     /// (`build_color` при фиксированных hue/policy), на которой держится
     /// корректность бисекции: плато или излом кривой развалили бы
@@ -3262,19 +3230,22 @@ mod tests {
 mod exposure_locks {
     use super::{DJ_BUDGET, QUANT_BUDGET};
     use crate::lcs::LcsColor;
-    use crate::lpc::lpc;
+    use crate::lpc::apparent_contrast_candidate_hex_for_test;
 
     fn grey(i: u8) -> String {
         format!("#{i:02X}{i:02X}{i:02X}")
     }
     fn grey_lc() -> Vec<f64> {
         (0u16..=255)
-            .map(|i| lpc(&grey(i as u8), "#FFFFFF"))
+            .map(|i| {
+                apparent_contrast_candidate_hex_for_test(&grey(i as u8), "#FFFFFF")
+                    .expect("generated grey is valid")
+            })
             .collect()
     }
     fn grey_jp() -> Vec<f64> {
         (0u16..=255)
-            .map(|i| LcsColor::from_hex(&grey(i as u8)).unwrap().jp)
+            .map(|i| LcsColor::from_hex(&grey(i as u8)).unwrap().jp())
             .collect()
     }
     fn median_step(vals: &[f64]) -> f64 {

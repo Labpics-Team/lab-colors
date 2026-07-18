@@ -1,3 +1,4 @@
+use crate::curve::CurvePosition;
 use crate::lcs::LcsColor;
 use crate::spaces::vc::ViewingConditions;
 
@@ -61,21 +62,18 @@ const HUE_PURITY_MP_REF_RATIO: f64 = 1.5;
 // SSOT-TRACKED — показатель кривой чистоты, терминал (e) design-choice (форма мотивирована Abney; (0,1]), см. docs/empirical-inventory.md.
 const HUE_PURITY_EXPONENT: f64 = 0.6;
 
-/// Унаследованные параметры формы нейтральной кривой.
+/// Внутренний профиль формы нейтральной кривой.
 ///
-/// Значения сохраняют текущую эмиссию до замены политики построения, но не являются
-/// универсальной психофизикой или пользовательскими осями намерения. Равномерные
-/// шаги Oklab/sRGB/CAM16-J′ и прямое прочтение метрики контрастного усиления Уиттла
-/// уже опровергнуты по магнитуде; тёмная ветвь дополнительно вырождается около
-/// чёрного. Поэтому gamma — терминальная compatibility policy для прежних байтов,
-/// а не human law. Задачи #219/#261 могут исследовать отдельную человеко-
-/// ориентированную замену; generic fact-only механизмы не должны зависеть от
-/// этих чисел или ждать такого исследования.
+/// Это declared engine calibration, а не универсальная психофизика и не
+/// пользовательские оси намерения. Равномерные шаги Oklab/sRGB/CAM16-J′ и
+/// прямое прочтение метрики контрастного усиления Уиттла уже опровергнуты по
+/// магнитуде; тёмная ветвь дополнительно вырождается около чёрного. Поэтому
+/// параметры закрыты от public API и не могут выдаваться за человеческий закон.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CurveParams {
-    pub gamma_light: f64,
-    pub gamma_dark: f64,
-    pub chroma_peak_t: f64,
+struct CurveParams {
+    gamma_light: f64,
+    gamma_dark: f64,
+    chroma_peak_t: f64,
 }
 
 impl Default for CurveParams {
@@ -83,13 +81,11 @@ impl Default for CurveParams {
         Self {
             // Показатель степени, которым гамма-кривая отображает t на светлотный
             // интервал [светлый якорь, базовый], при t <= 0.5.
-            // SSOT-TRACKED — (e) compatibility policy прежней эмиссии;
-            // научная замена отдельно остаётся OPEN в #219/#261.
+            // SSOT-TRACKED — (e) declared engine calibration; не human law.
             gamma_light: 1.75,
             // Показатель степени для тёмной ветви (t > 0.5): интервал [базовый,
             // тёмный якорь].
-            // SSOT-TRACKED — (e) compatibility policy прежней эмиссии;
-            // научная замена отдельно остаётся OPEN в #219/#261.
+            // SSOT-TRACKED — (e) declared engine calibration; не human law.
             gamma_dark: 1.5,
             // Позиция вдоль параметра кривой t, где огибающая хромы достигает пика.
             // SSOT-TRACKED — зафиксированный скаляр прежней эмиссии; исследование
@@ -103,13 +99,20 @@ impl Default for CurveParams {
 ///
 /// Светлота ведётся гамма-ветвями (`CurveParams`), хрома — C1-огибающей
 /// (`chroma_envelope`), оттенок — покоем у базы с purity-коррекцией шумных
-/// концов (`hue_purity`). `at()` — примитив каждого шага построения лестницы,
-/// поэтому все t-инвариантные величины предвычислены в конструкторе.
+/// концов (`hue_purity`). Когда все три источника лежат точно на sRGB8-серой
+/// оси, hue/chroma-путь не применим: `at()` остаётся непрерывным на физической
+/// серой оси, а один общий канал квантуется только на финальной output-boundary.
+/// `at()` — примитив каждого шага построения лестницы, поэтому все t-инвариантные
+/// величины предвычислены в конструкторе.
 #[derive(Debug, Clone)]
 pub struct NeutralCurve {
     a_light: LcsColor,
     a_base: LcsColor,
     a_dark: LcsColor,
+    /// All three authored anchors lie exactly on the emitted sRGB8 gray axis.
+    /// This representation fact bypasses every hue interpolation path in
+    /// [`Self::at`]; a numeric hue of a gray CAM/Oklab point is not identity.
+    locus: NeutralLocus,
     h_ok_base: f64,
     h_cam_base: f64,
     // Purity-скорректированные оттенки концов кривой. Они не зависят от t,
@@ -124,54 +127,65 @@ pub struct NeutralCurve {
     vc: ViewingConditions,
 }
 
+/// Physical domain of the whole authored neutral curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NeutralLocus {
+    General,
+    SrgbGrayAxis,
+}
+
 impl NeutralCurve {
     /// Build a neutral curve using standard sRGB viewing conditions (average surround).
     pub fn new(light: &str, base: &str, dark: &str) -> Result<Self, String> {
-        Self::with_vc(
-            light,
-            base,
-            dark,
-            &CurveParams::default(),
-            &ViewingConditions::srgb(),
-        )
-    }
-
-    /// Как [`NeutralCurve::new`], но с нестандартными форм-параметрами
-    /// (например, из `labui.config`), viewing conditions — стандартные sRGB.
-    pub fn with_params(
-        light: &str,
-        base: &str,
-        dark: &str,
-        params: CurveParams,
-    ) -> Result<Self, String> {
-        Self::with_vc(light, base, dark, &params, &ViewingConditions::srgb())
+        Self::with_vc(light, base, dark, &ViewingConditions::srgb())
     }
 
     /// Build a neutral curve for the given viewing conditions.
     ///
-    /// Anchor colours are parsed through `vc`, so J' and saturation reflect
-    /// the perceptual environment (e.g. dim-surround for dark themes).
-    /// Use [`ViewingConditions::srgb()`] for light themes and
-    /// [`ViewingConditions::dim_surround()`] for dark themes.
+    /// Shape calibration is engine-owned and versioned with the implementation;
+    /// clients provide physical anchors and context, not numeric gamma knobs.
     pub fn with_vc(
         light: &str,
         base: &str,
         dark: &str,
-        params: &CurveParams,
+        vc: &ViewingConditions,
+    ) -> Result<Self, String> {
+        Self::build(light, base, dark, CurveParams::default(), vc)
+    }
+
+    fn build(
+        light: &str,
+        base: &str,
+        dark: &str,
+        params: CurveParams,
         vc: &ViewingConditions,
     ) -> Result<Self, String> {
         let a_light = LcsColor::from_hex_with_vc(light, vc)?;
         let a_base = LcsColor::from_hex_with_vc(base, vc)?;
         let a_dark = LcsColor::from_hex_with_vc(dark, vc)?;
 
-        if a_light.jp <= a_base.jp {
+        if a_light.jp() <= a_base.jp() {
             return Err("light anchor must be lighter than base".into());
         }
-        if a_base.jp <= a_dark.jp {
+        if a_base.jp() <= a_dark.jp() {
             return Err("base anchor must be lighter than dark".into());
         }
 
-        let h_ok_base = a_base.h_ok;
+        let exact_gray_sources = [
+            crate::Srgb8::new(crate::srgb8::hex_bytes(light)?),
+            crate::Srgb8::new(crate::srgb8::hex_bytes(base)?),
+            crate::Srgb8::new(crate::srgb8::hex_bytes(dark)?),
+        ];
+        let locus = if exact_gray_sources
+            .into_iter()
+            .all(crate::Srgb8::is_achromatic)
+        {
+            NeutralLocus::SrgbGrayAxis
+        } else {
+            NeutralLocus::General
+        };
+
+        let h_ok_base = a_base.h_ok();
         let h_cam_base = a_base.h_cam();
 
         // Achromatic anchors have unreliable h_ok (atan2 of ~0 values).
@@ -179,13 +193,17 @@ impl NeutralCurve {
         // nominally achromatic stimuli (mp ≈ 1.5 for white, ≈ 2.3 for
         // near-black).  Threshold 5.0 catches model noise while preserving
         // genuinely chromatic anchors.
-        let a_light = if a_light.mp() < ACHROMATIC_MP_THRESHOLD {
-            LcsColor::new(a_light.jp, h_ok_base, a_light.s, a_light.h_cam())
+        let a_light = if locus == NeutralLocus::SrgbGrayAxis {
+            a_light
+        } else if a_light.mp() < ACHROMATIC_MP_THRESHOLD {
+            LcsColor::new(a_light.jp(), h_ok_base, a_light.s(), a_light.h_cam())
         } else {
             a_light
         };
-        let a_dark = if a_dark.mp() < ACHROMATIC_MP_THRESHOLD {
-            LcsColor::new(a_dark.jp, h_ok_base, a_dark.s, a_dark.h_cam())
+        let a_dark = if locus == NeutralLocus::SrgbGrayAxis {
+            a_dark
+        } else if a_dark.mp() < ACHROMATIC_MP_THRESHOLD {
+            LcsColor::new(a_dark.jp(), h_ok_base, a_dark.s(), a_dark.h_cam())
         } else {
             a_dark
         };
@@ -198,8 +216,8 @@ impl NeutralCurve {
         let mp_ref = a_base.mp() * HUE_PURITY_MP_REF_RATIO;
         let purity_light = hue_purity(a_light.mp(), mp_ref);
         let purity_dark = hue_purity(a_dark.mp(), mp_ref);
-        let h_ok_light_eff = lerp_angle(h_ok_base, a_light.h_ok, purity_light);
-        let h_ok_dark_eff = lerp_angle(h_ok_base, a_dark.h_ok, purity_dark);
+        let h_ok_light_eff = lerp_angle(h_ok_base, a_light.h_ok(), purity_light);
+        let h_ok_dark_eff = lerp_angle(h_ok_base, a_dark.h_ok(), purity_dark);
         let h_cam_light_eff = lerp_angle(h_cam_base, a_light.h_cam(), purity_light);
         let h_cam_dark_eff = lerp_angle(h_cam_base, a_dark.h_cam(), purity_dark);
 
@@ -207,51 +225,41 @@ impl NeutralCurve {
             a_light,
             a_base,
             a_dark,
+            locus,
             h_ok_base,
             h_cam_base,
             h_ok_light_eff,
             h_ok_dark_eff,
             h_cam_light_eff,
             h_cam_dark_eff,
-            params: *params,
+            params,
             vc: *vc,
         })
     }
 
     /// Точка кривой при `t ∈ [0, 1]`: 0 — светлый якорь, 0.5 — базовый,
     /// 1 — тёмный.
-    pub fn at(&self, t: f64) -> LcsColor {
-        let t = t.clamp(0.0, 1.0);
+    pub fn at(&self, position: CurvePosition) -> LcsColor {
+        let t = position.get();
 
-        // Снап к якорям в пределах 1e-12: гарантирует байт-точное
-        // воспроизведение входных hex-якорей на концах и в базе — иначе
-        // накопленная FP-погрешность интерполяции могла бы сдвинуть
-        // квантованный выход на единицу канала.
-        if (t - 0.0).abs() < 1e-12 {
+        // Только точные доменные узлы воспроизводят полное состояние якоря.
+        // Tolerance-снап создавал скрытые полки возле узлов и рвал производную;
+        // Тип CurvePosition не допускает внешних значений вне диапазона.
+        if t == 0.0 {
             return self.a_light;
         }
-        if (t - 0.5).abs() < 1e-12 {
+        if t == 0.5 {
             return self.a_base;
         }
-        if (t - 1.0).abs() < 1e-12 {
+        if t == 1.0 {
             return self.a_dark;
         }
 
-        // jp-якоря берутся напрямую из полей якорей (Oklab jp). Прежний метод-
-        // обёртка effective_hue_anchor_jp был identity ({ anchor.jp }) — имя
-        // обещало hue-зависимый расчёт, тело возвращало поле; заинлайнен (аудит
-        // D2(c), 2026-07-03), value-preserving.
-        let jp = if t <= 0.5 {
-            let u = t / 0.5;
-            let j0 = self.a_light.jp;
-            let j6 = self.a_base.jp;
-            j0 + (j6 - j0) * u.powf(self.params.gamma_light)
-        } else {
-            let u = (t - 0.5) / 0.5;
-            let j6 = self.a_base.jp;
-            let j12 = self.a_dark.jp;
-            j6 + (j12 - j6) * u.powf(self.params.gamma_dark)
-        };
+        let jp = self.jp_at(position);
+
+        if self.locus == NeutralLocus::SrgbGrayAxis {
+            return LcsColor::from_srgb_gray_axis_jp(jp, &self.vc);
+        }
 
         let mp = chroma_envelope(
             t,
@@ -266,6 +274,36 @@ impl NeutralCurve {
         let h_cam = self.interpolate_hue_cam(t);
 
         LcsColor::new(jp, h_ok, s, h_cam)
+    }
+
+    /// Continuous lightness skeleton shared by neutral and accent curves.
+    ///
+    /// This function never creates a colour representation and never performs
+    /// output quantisation, so consumers cannot accidentally inherit an sRGB8
+    /// byte wall from the neutral emission path.
+    pub(crate) fn jp_at(&self, position: CurvePosition) -> f64 {
+        let t = position.get();
+        if t == 0.0 {
+            return self.a_light.jp();
+        }
+        if t == 0.5 {
+            return self.a_base.jp();
+        }
+        if t == 1.0 {
+            return self.a_dark.jp();
+        }
+
+        if t < 0.5 {
+            let u = t / 0.5;
+            let j0 = self.a_light.jp();
+            let j6 = self.a_base.jp();
+            j0 + (j6 - j0) * u.powf(self.params.gamma_light)
+        } else {
+            let u = (t - 0.5) / 0.5;
+            let j6 = self.a_base.jp();
+            let j12 = self.a_dark.jp();
+            j6 + (j12 - j6) * u.powf(self.params.gamma_dark)
+        }
     }
 
     /// The viewing conditions used to build this curve.
@@ -314,10 +352,11 @@ impl NeutralCurve {
 /// slope, so M' is C1 on `[0, 1]` — the predecessor (`sine_env`) pinned
 /// both ends to the dark anchor's chroma, jumping at `t = 0` and `t = 0.5`.
 ///
-/// `t_peak` is clamped to `(0, 0.5]`; at `0.5` the plateau is empty and the
-/// envelope is a plain ease light→base→dark.
+/// `t_peak` is an engine-owned value in `(0, 0.5]`; at `0.5` the plateau is
+/// empty and the envelope is a plain ease light→base→dark. It is asserted, not
+/// silently repaired, because no public input can reach this boundary.
 fn chroma_envelope(t: f64, mp_light: f64, mp_base: f64, mp_dark: f64, t_peak: f64) -> f64 {
-    let t_peak = t_peak.clamp(f64::EPSILON, 0.5);
+    debug_assert!(t_peak > 0.0 && t_peak <= 0.5);
     let ease = |u: f64| 0.5 - 0.5 * (std::f64::consts::PI * u).cos();
     if t <= t_peak {
         mp_light + (mp_base - mp_light) * ease(t / t_peak)
@@ -361,8 +400,8 @@ fn hue_purity(mp: f64, mp_ref: f64) -> f64 {
 }
 
 impl crate::curve::ColorCurve for NeutralCurve {
-    fn at(&self, t: f64) -> LcsColor {
-        self.at(t)
+    fn at(&self, position: CurvePosition) -> LcsColor {
+        self.at(position)
     }
 
     fn vc(&self) -> &ViewingConditions {
@@ -375,27 +414,230 @@ mod tests {
     use super::*;
     use crate::curve::ColorCurve;
 
+    fn position(value: f64) -> CurvePosition {
+        CurvePosition::new(value).expect("test position is inside [0, 1]")
+    }
+
     fn default_curve() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()
+    }
+
+    fn gray_hex(byte: u8) -> String {
+        format!("#{byte:02X}{byte:02X}{byte:02X}")
+    }
+
+    fn assert_exact_gray(hex: &str, context: &str) {
+        let [red, green, blue] = crate::srgb8::hex_bytes(hex).expect("curve emitted canonical hex");
+        assert_eq!(
+            red, green,
+            "{context}: red/green direction invented in {hex}"
+        );
+        assert_eq!(
+            green, blue,
+            "{context}: green/blue direction invented in {hex}"
+        );
+    }
+
+    /// Exhaust the nearest valid triples on the finite sRGB8 gray axis. Every
+    /// byte participates and every interpolation branch is sampled; matrix
+    /// noise must never become a physical chromatic byte.
+    #[test]
+    fn every_exact_gray_neighbour_triple_stays_on_the_gray_axis() {
+        for vc in [
+            ViewingConditions::srgb(),
+            ViewingConditions::dim_surround(),
+            ViewingConditions::srgb_high_contrast(),
+            ViewingConditions::dim_surround_high_contrast(),
+        ] {
+            for dark in 0_u8..=253 {
+                let base = dark + 1;
+                let light = dark + 2;
+                let curve =
+                    NeutralCurve::with_vc(&gray_hex(light), &gray_hex(base), &gray_hex(dark), &vc)
+                        .unwrap();
+
+                for step in 0..=32 {
+                    let t = f64::from(step) / 32.0;
+                    assert_exact_gray(
+                        &curve.at(position(t)).to_hex_with_vc(&vc),
+                        &format!("anchors={light}/{base}/{dark}, t={t}, vc={vc:?}"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Exact equality is the law, not a one-byte tolerance. A single off-axis
+    /// channel in any anchor keeps the existing chromatic curve path alive.
+    #[test]
+    fn nearest_off_axis_anchor_is_not_collapsed_to_gray() {
+        for (anchors, t) in [
+            (("#FFFFFE", "#808080", "#101010"), 0.25),
+            (("#FFFFFF", "#808081", "#101010"), 0.25),
+            (("#FFFFFF", "#808080", "#101011"), 0.625),
+        ] {
+            let curve = NeutralCurve::new(anchors.0, anchors.1, anchors.2).unwrap();
+            let hex = curve.at(position(t)).to_hex();
+            let [red, green, blue] = crate::srgb8::hex_bytes(&hex).unwrap();
+            assert!(
+                red != green || green != blue,
+                "nearest off-axis anchor {anchors:?} was collapsed at t={t}: {hex}"
+            );
+        }
+    }
+
+    /// Differential oracle: the continuous gray scalar is encoded and rounded
+    /// once by the normative sRGB transfer. Output conversion must not add a
+    /// second nearest-J' selection policy.
+    #[test]
+    fn exact_gray_emission_matches_one_channel_srgb_quantisation() {
+        let params = CurveParams::default();
+        let triples = [
+            (255_u8, 128_u8, 0_u8),
+            (224, 128, 16),
+            (10, 9, 8),
+            (2, 1, 0),
+            (255, 254, 253),
+        ];
+
+        for vc in [
+            ViewingConditions::srgb(),
+            ViewingConditions::dim_surround(),
+            ViewingConditions::srgb_high_contrast(),
+            ViewingConditions::dim_surround_high_contrast(),
+        ] {
+            let gray_jp: [f64; 256] = std::array::from_fn(|byte| {
+                LcsColor::from_hex_with_vc(&gray_hex(byte as u8), &vc)
+                    .unwrap()
+                    .jp()
+            });
+
+            for (light, base, dark) in triples {
+                let curve = NeutralCurve::build(
+                    &gray_hex(light),
+                    &gray_hex(base),
+                    &gray_hex(dark),
+                    params,
+                    &vc,
+                )
+                .unwrap();
+
+                for step in 0..=256 {
+                    let t = f64::from(step) / 256.0;
+                    let target_jp = if t <= 0.5 {
+                        let u = t / 0.5;
+                        gray_jp[usize::from(light)]
+                            + (gray_jp[usize::from(base)] - gray_jp[usize::from(light)])
+                                * u.powf(params.gamma_light)
+                    } else {
+                        let u = (t - 0.5) / 0.5;
+                        gray_jp[usize::from(base)]
+                            + (gray_jp[usize::from(dark)] - gray_jp[usize::from(base)])
+                                * u.powf(params.gamma_dark)
+                    };
+                    let j = crate::spaces::cam16::ucs_j_inv(target_jp);
+                    let y = if target_jp <= 0.0 {
+                        0.0
+                    } else if !j.is_finite() || j <= 0.0 {
+                        1.0
+                    } else {
+                        crate::spaces::cam16::gray_y(j, &vc)
+                    };
+                    let oracle = (crate::spaces::srgb::srgb_gamma(y) * 255.0).round() as u8;
+
+                    let actual_hex = curve.at(position(t)).to_hex_with_vc(&vc);
+                    let [actual, green, blue] = crate::srgb8::hex_bytes(&actual_hex).unwrap();
+                    assert_eq!(actual, green, "oracle fixture left gray axis: {actual_hex}");
+                    assert_eq!(green, blue, "oracle fixture left gray axis: {actual_hex}");
+                    assert_eq!(
+                        actual, oracle,
+                        "anchors={light}/{base}/{dark}, t={t}, vc={vc:?}, target J'={target_jp}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// RED: finite output quantisation belongs to emission, not to the
+    /// continuous curve. Two adjacent binary64 positions around an sRGB8 byte
+    /// wall must not create a finite jump in the authored J' trajectory or in
+    /// the accent curve that consumes it as its lightness skeleton.
+    #[test]
+    fn emitted_gray_byte_wall_does_not_quantise_continuous_curve_state() {
+        let left_t = 0.019_000_259_522_785_33_f64;
+        let right_t = f64::from_bits(left_t.to_bits() + 1);
+        assert_eq!(
+            right_t.to_bits(),
+            left_t.to_bits() + 1,
+            "hostile inputs must be adjacent"
+        );
+
+        let neutral = NeutralCurve::new("#FFFFFF", "#808080", "#000000").unwrap();
+        let neutral_jump =
+            (neutral.at(position(left_t)).jp() - neutral.at(position(right_t)).jp()).abs();
+        assert!(
+            neutral_jump < 1e-9,
+            "emission byte wall leaked into NeutralCurve::at: ΔJ'={neutral_jump}"
+        );
+
+        let accent = crate::scale::AccentCurve::new("#007AFF", &neutral).unwrap();
+        let accent_jump =
+            (accent.at(position(left_t)).jp() - accent.at(position(right_t)).jp()).abs();
+        assert!(
+            accent_jump < 1e-9,
+            "neutral emission byte wall leaked into AccentCurve::at: ΔJ'={accent_jump}"
+        );
+    }
+
+    /// Anti-vacuum: continuous state must keep changing while finite output is
+    /// allowed to repeat. This catches both early byte snapping and a vacuous
+    /// "continuity" test that merely budgets one whole gray-code jump.
+    #[test]
+    fn exact_gray_curve_keeps_continuous_state_until_emission() {
+        let curve = NeutralCurve::new("#FFFFFF", "#808080", "#000000").unwrap();
+        let mut previous = curve.at(CurvePosition::START);
+        let mut previous_byte = crate::srgb8::hex_bytes(&previous.to_hex()).unwrap()[0];
+        let mut observed_repeated_output = false;
+
+        for step in 1..=4096 {
+            let point = curve.at(position(f64::from(step) / 4096.0));
+            assert!(
+                point.jp() < previous.jp(),
+                "continuous J' plateaued or reversed at step {step}: {} -> {}",
+                previous.jp(),
+                point.jp()
+            );
+            let bytes = crate::srgb8::hex_bytes(&point.to_hex()).unwrap();
+            assert_eq!(bytes[0], bytes[1], "gray point emitted red/green drift");
+            assert_eq!(bytes[1], bytes[2], "gray point emitted green/blue drift");
+            observed_repeated_output |= bytes[0] == previous_byte;
+            previous = point;
+            previous_byte = bytes[0];
+        }
+
+        assert!(
+            observed_repeated_output,
+            "finite sRGB8 output unexpectedly behaved as a continuous domain"
+        );
     }
 
     #[test]
     fn anchors_exact_at_endpoints() {
         let curve = default_curve();
-        let c0 = curve.at(0.0);
-        let cm = curve.at(0.5);
-        let c1 = curve.at(1.0);
+        let c0 = curve.at(CurvePosition::START);
+        let cm = curve.at(CurvePosition::MIDPOINT);
+        let c1 = curve.at(CurvePosition::END);
 
         assert!(
-            (c0.jp - curve.light_anchor().jp).abs() < 1e-9,
+            (c0.jp() - curve.light_anchor().jp()).abs() < 1e-9,
             "t=0 jp mismatch"
         );
         assert!(
-            (cm.jp - curve.base_anchor().jp).abs() < 1e-9,
+            (cm.jp() - curve.base_anchor().jp()).abs() < 1e-9,
             "t=0.5 jp mismatch"
         );
         assert!(
-            (c1.jp - curve.dark_anchor().jp).abs() < 1e-9,
+            (c1.jp() - curve.dark_anchor().jp()).abs() < 1e-9,
             "t=1.0 jp mismatch"
         );
     }
@@ -406,10 +648,10 @@ mod tests {
         let steps = curve.sample(100);
         for w in steps.windows(2) {
             assert!(
-                w[0].jp >= w[1].jp - 1e-9,
+                w[0].jp() >= w[1].jp() - 1e-9,
                 "jp increased: {} -> {}",
-                w[0].jp,
-                w[1].jp
+                w[0].jp(),
+                w[1].jp()
             );
         }
     }
@@ -417,10 +659,10 @@ mod tests {
     #[test]
     fn hue_drift_under_30_degrees() {
         let curve = default_curve();
-        let base_hue = curve.base_anchor().h_ok;
+        let base_hue = curve.base_anchor().h_ok();
         for i in 0..=100 {
-            let c = curve.at(i as f64 / 100.0);
-            let drift = (c.h_ok - base_hue + 180.0).rem_euclid(360.0) - 180.0;
+            let c = curve.at(position(i as f64 / 100.0));
+            let drift = (c.h_ok() - base_hue + 180.0).rem_euclid(360.0) - 180.0;
             assert!(
                 drift.abs() < 30.0,
                 "hue drift at t={}: {}° (base={})",
@@ -454,15 +696,15 @@ mod tests {
     #[test]
     fn jp_within_anchor_bounds() {
         let curve = default_curve();
-        let j_max = curve.light_anchor().jp;
-        let j_min = curve.dark_anchor().jp;
+        let j_max = curve.light_anchor().jp();
+        let j_min = curve.dark_anchor().jp();
         for i in 0..=100 {
-            let c = curve.at(i as f64 / 100.0);
+            let c = curve.at(position(i as f64 / 100.0));
             assert!(
-                c.jp <= j_max + 1e-9 && c.jp >= j_min - 1e-9,
+                c.jp() <= j_max + 1e-9 && c.jp() >= j_min - 1e-9,
                 "t={}: jp={} out of [{}, {}]",
                 i as f64 / 100.0,
-                c.jp,
+                c.jp(),
                 j_min,
                 j_max
             );
@@ -488,12 +730,12 @@ mod tests {
     fn s_non_negative_everywhere() {
         let curve = default_curve();
         for i in 0..=100 {
-            let c = curve.at(i as f64 / 100.0);
+            let c = curve.at(position(i as f64 / 100.0));
             assert!(
-                c.s >= -1e-9,
+                c.s() >= -1e-9,
                 "negative s at t={}: {}",
                 i as f64 / 100.0,
-                c.s
+                c.s()
             );
         }
     }
@@ -502,14 +744,7 @@ mod tests {
 
     fn dim_curve() -> NeutralCurve {
         let vc = ViewingConditions::dim_surround();
-        NeutralCurve::with_vc(
-            "#FFFFFF",
-            "#787880",
-            "#101012",
-            &CurveParams::default(),
-            &vc,
-        )
-        .unwrap()
+        NeutralCurve::with_vc("#FFFFFF", "#787880", "#101012", &vc).unwrap()
     }
 
     #[test]
@@ -522,10 +757,10 @@ mod tests {
         let avg = default_curve();
         let dim = dim_curve();
         assert!(
-            dim.base_anchor().jp > avg.base_anchor().jp,
+            dim.base_anchor().jp() > avg.base_anchor().jp(),
             "dim J'={} should be > avg J'={} (dim surround lifts mid-tones)",
-            dim.base_anchor().jp,
-            avg.base_anchor().jp,
+            dim.base_anchor().jp(),
+            avg.base_anchor().jp(),
         );
     }
 
@@ -535,10 +770,10 @@ mod tests {
         let steps = curve.sample(100);
         for w in steps.windows(2) {
             assert!(
-                w[0].jp >= w[1].jp - 1e-9,
+                w[0].jp() >= w[1].jp() - 1e-9,
                 "dim jp increased: {} -> {}",
-                w[0].jp,
-                w[1].jp,
+                w[0].jp(),
+                w[1].jp(),
             );
         }
     }
@@ -580,18 +815,38 @@ mod tests {
         // не имеют скачков ни в якорях, ни между ними.
         for curve in [default_curve(), dim_curve()] {
             let n = 2000;
-            let mut prev = curve.at(0.0);
+            let mut prev = curve.at(CurvePosition::START);
             for i in 1..=n {
                 let t = i as f64 / n as f64;
-                let c = curve.at(t);
+                let c = curve.at(position(t));
                 let dmp = (c.mp() - prev.mp()).abs();
-                let djp = (c.jp - prev.jp).abs();
-                let dh = ((c.h_ok - prev.h_ok + 180.0).rem_euclid(360.0) - 180.0).abs();
+                let djp = (c.jp() - prev.jp()).abs();
+                let dh = ((c.h_ok() - prev.h_ok() + 180.0).rem_euclid(360.0) - 180.0).abs();
                 assert!(dmp < 0.05, "M' jump at t={}: {}", t, dmp);
                 assert!(djp < 0.35, "J' jump at t={}: {}", t, djp);
                 assert!(dh < 1.0, "hue jump at t={}: {}°", t, dh);
                 prev = c;
             }
+        }
+    }
+
+    #[test]
+    fn exact_gray_anchor_has_no_numeric_hue_spike_between_adjacent_f64_positions() {
+        let curve = NeutralCurve::new("#FFFFFF", "#808080", "#000000").unwrap();
+        let midpoint = 0.5_f64;
+        let positions = [
+            f64::from_bits(midpoint.to_bits() - 1),
+            midpoint,
+            f64::from_bits(midpoint.to_bits() + 1),
+        ];
+        let hues = positions.map(|t| curve.at(position(t)).h_ok());
+
+        for pair in hues.windows(2) {
+            let delta = ((pair[1] - pair[0] + 180.0).rem_euclid(360.0) - 180.0).abs();
+            assert!(
+                delta <= f64::EPSILON,
+                "exact gray midpoint introduced a numeric hue spike: {hues:?}"
+            );
         }
     }
 
@@ -605,7 +860,7 @@ mod tests {
             (0.5 + eps, curve.base_anchor(), "base (fall start)"),
             (1.0 - eps, curve.dark_anchor(), "dark"),
         ] {
-            let got = curve.at(t).mp();
+            let got = curve.at(position(t)).mp();
             let want = anchor.mp();
             assert!(
                 (got - want).abs() < 0.01,
@@ -794,6 +1049,7 @@ mod exposure_locks {
 #[cfg(test)]
 mod wave2_e_locks {
     use super::{CurveParams, NeutralCurve};
+    use crate::ViewingConditions;
     use crate::curve::ColorCurve;
     use crate::spaces::oklab::srgb_linear_to_oklab;
     use crate::spaces::srgb::srgb_from_hex;
@@ -805,9 +1061,15 @@ mod wave2_e_locks {
     }
 
     fn ladder(params: CurveParams) -> Vec<String> {
-        NeutralCurve::with_params("#FFFFFF", "#787880", "#101012", params)
-            .unwrap()
-            .sample_hex(13)
+        NeutralCurve::build(
+            "#FFFFFF",
+            "#787880",
+            "#101012",
+            params,
+            &ViewingConditions::srgb(),
+        )
+        .unwrap()
+        .sample_hex(13)
     }
 
     fn max_de_vs_default(vary: impl Fn(&mut CurveParams)) -> f64 {
@@ -893,9 +1155,15 @@ mod whittle_crispening_metric {
     fn ladder_with(vary: impl Fn(&mut CurveParams)) -> Vec<String> {
         let mut p = CurveParams::default();
         vary(&mut p);
-        NeutralCurve::with_params("#FFFFFF", "#787880", "#101012", p)
-            .unwrap()
-            .sample_hex(13)
+        NeutralCurve::build(
+            "#FFFFFF",
+            "#787880",
+            "#101012",
+            p,
+            &crate::spaces::vc::ViewingConditions::srgb(),
+        )
+        .unwrap()
+        .sample_hex(13)
     }
 
     /// Обобщённый контраст Уиттла (Whittle 1986/1992): `W = (L − Lb) / min(L, Lb)`.

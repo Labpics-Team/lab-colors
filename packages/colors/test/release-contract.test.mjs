@@ -83,9 +83,9 @@ function assertCheckoutCredentialsAreEphemeral(workflow, name) {
   }
 }
 
-test("breaking release metadata is one explicit 0.2.0/0.10.0 contract", () => {
+test("breaking release metadata is one explicit 0.3.0/0.11.0 contract", () => {
   const workspace = read("Cargo.toml");
-  assert.match(workspace, /\[workspace\.package\][\s\S]*\nversion = "0\.2\.0"/);
+  assert.match(workspace, /\[workspace\.package\][\s\S]*\nversion = "0\.3\.0"/);
   assert.match(workspace, /\nrust-version = "1\.85"/);
   assert.match(
     workspace,
@@ -94,10 +94,10 @@ test("breaking release metadata is one explicit 0.2.0/0.10.0 contract", () => {
 
   const packageJson = JSON.parse(read("packages", "colors", "package.json"));
   const packageLock = JSON.parse(read("packages", "colors", "package-lock.json"));
-  assert.equal(packageJson.version, "0.10.0");
+  assert.equal(packageJson.version, "0.11.0");
   assert.equal(packageJson.packageManager, "npm@11.9.0");
-  assert.equal(packageLock.version, "0.10.0");
-  assert.equal(packageLock.packages[""].version, "0.10.0");
+  assert.equal(packageLock.version, "0.11.0");
+  assert.equal(packageLock.packages[""].version, "0.11.0");
   assert.equal(packageJson.engines.node, ">=22.11.0");
   assert.equal(packageLock.packages[""].engines.node, ">=22.11.0");
   assert.equal(

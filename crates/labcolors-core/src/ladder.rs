@@ -1,4 +1,4 @@
-//! Лестница акцента/сентимента/бренда/нейтрали как ДАННЫЕ: закрытое меню позиций
+//! Лестница семейства/бренда/нейтрали как ДАННЫЕ: закрытое меню позиций
 //! (каждая несёт свою альфу Figma-рампы) + физика тинта источника по теме.
 //!
 //! # Закон лестницы
@@ -14,7 +14,7 @@
 //! [`crate::alpha::composite_over_encoded`]) — для честного замера dJ'/WCAG
 //! контраст-корректности на подложке (фаза 1 AA: контраст меряется на композите).
 //! Заземление: Figma «🧪Lab UI (v.1)» (переменные `Accent/Derivable/*`, обход
-//! через figma-console, 2026-07-02), `reference/labui-accent-primitives.md` §2
+//! через figma-console, 2026-07-02), `reference/labui-accent-primitives.md`, «Якоря»
 //! (пер-темные якоря), стаб из labui-репо `packages/colors-stub/contract.css`
 //! (не путь в ЭТОМ репо — файла здесь нет; @NN-рампа, снапшот-значения запинены
 //! тестами конфига).
@@ -28,11 +28,11 @@
 //! имена = [`LadderPosition::key`], контракт разбора конфига).
 //! Единый паттерн проверен на brand/danger/info/success (см. «Закон лестницы»
 //! выше). Это данные позиций, а не POLICY-константы перцептивных модулей,
-//! поэтому провенанс держится этой doc-строкой + тестом лестницы, а не строкой
-//! реестра (как якорные hex палитры, `accent.rs`).
+//! поэтому провенанс держится этой doc-строкой и тестом лестницы, а не закрытым
+//! каталогом клиентских семейств в Core.
 
-use crate::spaces::oklab::srgb_linear_to_oklab;
-use crate::spaces::srgb::{srgb_encoded_from_hex, srgb_gamma_inv};
+use crate::Srgb8;
+use crate::spaces::srgb::srgb_encoded_from_hex;
 use crate::spaces::vc::ViewingConditions;
 
 /// Пер-темная четвёрка якорных hex (`light` / `dark` / `light-ic` / `dark-ic`).
@@ -51,7 +51,7 @@ fn vc_slot(vc: &ViewingConditions) -> usize {
 
 /// Источник лестницы (семейство палитры или бренд) несёт свой якорь отдельно для
 /// каждого режима — тёмная тема и режим повышенного контраста (IC) не выводятся
-/// из светлого якоря, а замеряются (`reference/labui-accent-primitives.md` §2:
+/// из светлого якоря, а замеряются (`reference/labui-accent-primitives.md`, «Якоря»:
 /// Red light `#FF3B30` / dark `#FF3A3A` / light-ic `#D70015` / dark-ic `#FF6161`).
 /// Выбор режима — по условиям просмотра резолва ([`ThemeAnchors::for_vc`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -135,25 +135,30 @@ impl LadderTint {
         self.quad[vc_slot(vc)]
     }
 
-    /// Oklab-хрома светлого якоря тинта — вход в пересчёт `S_PERC_MIN`
-    /// (среднее по четырём сентимент-якорям конфига, [`crate::sentiment`]).
-    pub fn light_oklab_chroma(&self) -> f64 {
-        // Кодированный тинт → линейный свет (per-channel gamma-декод, тот же, что
-        // в srgb_from_hex), затем Oklab-хрома = |(a, b)|.
-        let e = self.quad[0];
-        let lin = [
-            srgb_gamma_inv(e[0]),
-            srgb_gamma_inv(e[1]),
-            srgb_gamma_inv(e[2]),
-        ];
-        let lab = srgb_linear_to_oklab(lin);
-        (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
+    /// Exact emitted sRGB8 source selected for these viewing conditions.
+    pub(crate) fn srgb8_for_vc(&self, vc: &ViewingConditions) -> Srgb8 {
+        let bytes = self
+            .for_vc(vc)
+            .map(|channel| (channel * 255.0).round() as u8);
+        Srgb8::new(bytes)
+    }
+
+    /// Whether every declared context lies exactly on the encoded grey axis.
+    ///
+    /// Used by executable-table validation: an all-achromatic source is lawful
+    /// under a neutral policy, while a mixed/chromatic source still requires a
+    /// policy capable of carrying its authored direction.
+    pub(crate) fn all_modes_achromatic(&self) -> bool {
+        self.quad.iter().all(|encoded| {
+            let bytes = encoded.map(|channel| (channel * 255.0).round() as u8);
+            Srgb8::new(bytes).is_achromatic()
+        })
     }
 }
 
 /// Закрытое меню позиций лестницы: каждая позиция несёт свою альфу Figma-рампы.
 ///
-/// Перечень зафиксирован приложением A к ADR-0001 (заземление 2026-07-02).
+/// Исполняемый перечень — [`LadderPosition::ALL`], пары — [`Self::alpha_pair`].
 /// Солидные позиции (`α = 1.0`) — `LabelPrimary`, `BorderStrong`, `FocusRing`;
 /// остальные несут альфу `@NN` из рампы (см. провенанс в документации модуля).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -305,8 +310,8 @@ impl LadderPosition {
         if vc.is_dark_theme() { dark } else { light }
     }
 
-    /// Стабильный kebab-ключ позиции — для разбора рецепта из JSON-конфига
-    /// и для приложения A к ADR. Часть контракта имён; опечатка ловится тестом.
+    /// Стабильный kebab-ключ позиции для разбора рецепта из JSON-конфига.
+    /// Часть контракта имён; полнота относительно [`Self::ALL`] ловится тестом.
     pub fn key(self) -> &'static str {
         match self {
             LadderPosition::LabelPrimary => "label-primary",
@@ -516,5 +521,50 @@ mod tests {
                 .expect("якоря теста — валидные hex по построению");
             assert_eq!(tint.for_vc(&vc), want, "тинт для vc разошёлся с якорем");
         }
+    }
+
+    #[test]
+    fn achromatic_classification_covers_every_context_and_emitted_rounding() {
+        let gray = srgb_encoded_from_hex("#808080").unwrap();
+        let chromatic = srgb_encoded_from_hex("#808081").unwrap();
+        let contexts = [
+            ViewingConditions::srgb(),
+            ViewingConditions::dim_surround(),
+            ViewingConditions::srgb_high_contrast(),
+            ViewingConditions::dim_surround_high_contrast(),
+        ];
+        for (slot, selected) in contexts.iter().enumerate() {
+            let mut quad = [gray; 4];
+            quad[slot] = chromatic;
+            let mixed = LadderTint::new(quad).unwrap();
+            assert!(
+                !mixed.all_modes_achromatic(),
+                "one chromatic slot {slot} must make the source mixed"
+            );
+            for (context_slot, context) in contexts.iter().enumerate() {
+                assert_eq!(
+                    mixed.srgb8_for_vc(context).is_achromatic(),
+                    context_slot != slot,
+                    "context slot {context_slot} selected the wrong source"
+                );
+            }
+            assert!(
+                !mixed.srgb8_for_vc(selected).is_achromatic(),
+                "selected slot {slot} must retain its one-byte chromatic direction"
+            );
+        }
+
+        let off_grid_gray = [128.1 / 255.0, 127.9 / 255.0, 128.49 / 255.0];
+        let rounded = LadderTint::new([off_grid_gray; 4]).unwrap();
+        assert!(
+            rounded.all_modes_achromatic(),
+            "classification is about emitted bytes, not unequal raw f64 values"
+        );
+        assert_eq!(
+            rounded
+                .srgb8_for_vc(&ViewingConditions::dim_surround())
+                .bytes(),
+            [128; 3]
+        );
     }
 }

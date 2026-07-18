@@ -33,6 +33,21 @@ impl Srgb8 {
     pub const fn bytes(self) -> [u8; 3] {
         self.0
     }
+
+    /// Encode the exact triplet as canonical uppercase `#RRGGBB`.
+    pub fn to_hex(self) -> String {
+        let [red, green, blue] = self.0;
+        format!("#{red:02X}{green:02X}{blue:02X}")
+    }
+
+    /// Whether the encoded stimulus lies exactly on the sRGB8 grey axis.
+    ///
+    /// This is a discrete representation fact, not a perceptual threshold:
+    /// equal channel bytes carry no chromatic direction for a hue-derived
+    /// operation, while any unequal triplet retains its authored direction.
+    pub(crate) const fn is_achromatic(self) -> bool {
+        self.0[0] == self.0[1] && self.0[1] == self.0[2]
+    }
 }
 
 impl From<[u8; 3]> for Srgb8 {
@@ -68,7 +83,30 @@ mod tests {
     fn typed_public_value_round_trips_exact_bytes() {
         let value = Srgb8::new([0x1A, 0x2B, 0x3C]);
         assert_eq!(value.bytes(), [0x1A, 0x2B, 0x3C]);
+        assert_eq!(value.to_hex(), "#1A2B3C");
         assert_eq!(Srgb8::from(value.bytes()), value);
         assert_eq!(<[u8; 3]>::from(value), [0x1A, 0x2B, 0x3C]);
+    }
+
+    #[test]
+    fn achromatic_identity_is_exact_channel_equality() {
+        for base in 0_i16..=255 {
+            for red_delta in -1_i16..=1 {
+                for green_delta in -1_i16..=1 {
+                    for blue_delta in -1_i16..=1 {
+                        let channels = [base + red_delta, base + green_delta, base + blue_delta];
+                        if channels.iter().any(|channel| !(0..=255).contains(channel)) {
+                            continue;
+                        }
+                        let bytes = channels.map(|channel| channel as u8);
+                        assert_eq!(
+                            Srgb8::new(bytes).is_achromatic(),
+                            bytes[0] == bytes[1] && bytes[1] == bytes[2],
+                            "exact grey-axis classification drifted for {bytes:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

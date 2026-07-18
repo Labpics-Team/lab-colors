@@ -30,6 +30,8 @@ const WHOLE_GLOW_CLAIM =
   /(?:glow[^.!?\n]*полного результата|полного результата[^.!?\n]*glow)/iu;
 const FULL_SOLVE_EXACT_INVERSION_CLAIM =
   /(?:точн[а-яё]*\s+инверси[а-яё]*\s+прямого\s+пути|exact(?:ly)?\s+(?:inverts?|inversion\s+of)\s+the\s+(?:complete\s+)?forward\s+path)/iu;
+const RETIRED_SENTIMENT_MODEL =
+  /sentiment\.rs|`sentiments`|Sentiment(?:Curve|sConfig|Resolution)|LadderSource(?:::|Dto::)Sentiment|UnknownSentiment|resolve_config_sentiment_solid|WARNING_HUE_FLOOR_DEG|S_PERC_MIN|NeighborZone|Sticky Potential|Warning[- ]zone|brand[- ]displacement|achromatic sentiment/iu;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -197,6 +199,43 @@ const LCS_LPC_DRIFT = [
   /generic perceptual-contrast math/iu,
   /метрика\s+называется\s+LPC/iu,
 ];
+const YS_SCORE_OVERCLAIMS = [
+  /signed\s+(?:perceptual\s+contrast|LPC)\b/iu,
+  /знаков(?:ый|ая|ое|ого)\s+перцептивн[а-яё]*[^.!?\n]{0,48}\bLc\b/iu,
+  /(?:perceptual\s+LPC\s+target|LPC\s+solution)/iu,
+  /LPC[- ]перцептивн[а-яё]*\s+цел/iu,
+  /(?:readability[- ](?:контраст|оценк)|ось\s+читаемости)/iu,
+];
+const YS_SCORE_CANONICAL_SURFACES = [
+  {
+    path: "crates/labcolors-core/src/solve.rs",
+    patterns: [/signed Ys candidate score `Lc`/u, /not an admitted LPC\/readability certificate/iu],
+  },
+  {
+    path: "crates/labcolors-core/src/semantic.rs",
+    patterns: [/signed Ys candidate score `Lc`/u, /not[\s\S]{0,40}LPC\/readability verdict/iu],
+  },
+  {
+    path: "crates/labcolors-wasm/src/lib.rs",
+    patterns: [/Signed Ys candidate score \(lc\)/u, /not LPC\/readability evidence/iu],
+  },
+  {
+    path: "crates/labcolors-wasm/src/dto.rs",
+    patterns: [/signed Ys candidate score/iu, /not LPC\/readability evidence/iu],
+  },
+  {
+    path: "crates/labcolors-ffi/src/lib.rs",
+    patterns: [/кандидатная оценка `Lc` по `Ys`/u, /не LPC\/readability evidence/iu],
+  },
+  {
+    path: "crates/labcolors-conformance/src/lib.rs",
+    patterns: [/кандидатная оценка `Lc` по `Ys`/u, /не LPC\/readability evidence/iu],
+  },
+  {
+    path: "packages/colors/README.md",
+    patterns: [/кандидатная оценка по `Ys`/u, /не является LPC\/readability verdict/iu],
+  },
+];
 const DISCARDED_HONEST_RESULT_CLAIMS = [
   /ADR[- ]?0002/iu,
   /honest-result-policy/iu,
@@ -287,6 +326,12 @@ function manualVerificationProseResidue(path, source) {
 function lcsLpcDrift(path, source) {
   return LCS_LPC_DRIFT.filter((pattern) => pattern.test(source)).map(
     () => `${path}: LCS/LPC brand or evidence boundary drifted`,
+  );
+}
+
+function ysScoreOverclaim(path, source) {
+  return YS_SCORE_OVERCLAIMS.filter((pattern) => pattern.test(source)).map(
+    () => `${path}: frozen Ys candidate score was promoted to LPC/readability evidence`,
   );
 }
 
@@ -490,6 +535,43 @@ test("LCS/LPC drift detector bites on every rejected expansion or reduction", ()
   }
 });
 
+test("Ys candidate-score detector bites on known evidence promotions", () => {
+  for (const sample of [
+    "signed perceptual contrast Lc",
+    "знаковый перцептивный контраст Lc",
+    "perceptual LPC target",
+    "LPC solution",
+    "LPC-перцептивная цель",
+    "readability-контраст",
+    "ось читаемости",
+  ]) {
+    assert.ok(ysScoreOverclaim("x.md", sample).length >= 1, `detector did not bite: ${sample}`);
+  }
+  for (const scopedTruth of [
+    "signed Ys candidate score (`lc`) from the frozen SAPC-shaped curve",
+    "`lc` is not LPC/readability evidence",
+    "WCAG ratio is reported independently",
+  ]) {
+    assert.deepEqual(ysScoreOverclaim("x.md", scopedTruth), []);
+  }
+});
+
+test("live public surfaces do not promote the frozen Ys score", () => {
+  const failures = publicClaimFiles().flatMap((file) =>
+    ysScoreOverclaim(relative(ROOT, file), readFileSync(file, "utf8")),
+  );
+  assert.deepEqual(failures, []);
+});
+
+test("every shipped lc surface carries the canonical scope marker", () => {
+  for (const { path, patterns } of YS_SCORE_CANONICAL_SURFACES) {
+    const source = readFileSync(join(ROOT, path), "utf8");
+    for (const pattern of patterns) {
+      assert.match(source, pattern, `${path} lost the Ys candidate-score scope marker`);
+    }
+  }
+});
+
 test("live repository keeps canonical LCS/LPC names and evidence boundaries", () => {
   const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
     (file) => file !== SELF,
@@ -594,7 +676,6 @@ test("public claim inventory includes the shipped Swift README", () => {
   assert.ok(publicClaimFiles().includes(join(ROOT, "bindings", "swift", "README.md")));
 });
 
-
 test("legacy cleanliness proxy is excised, not quarantined", () => {
   // Инвариант: карантин заменён вырезом. Ни модуль, ни векторное семейство не
   // существуют; публичные поверхности не несут ни API, ни человеческих
@@ -638,5 +719,101 @@ test("legacy cleanliness proxy is excised, not quarantined", () => {
 
   for (const forbidden of HUMAN_CLEANLINESS_VERDICTS) {
     assert.doesNotMatch(publicText, forbidden);
+  }
+});
+
+test("legacy sentiment curve is excised instead of preserved as schema", () => {
+  for (const sample of [
+    "sentiment.rs",
+    "`sentiments`",
+    "SentimentCurve",
+    "LadderSource::Sentiment",
+    "WARNING_HUE_FLOOR_DEG",
+    "Warning-zone",
+    "brand-displacement",
+  ]) {
+    assert.match(sample, RETIRED_SENTIMENT_MODEL, `detector did not bite: ${sample}`);
+  }
+
+  assert.equal(
+    existsSync(join(ROOT, "crates/labcolors-core/src/sentiment.rs")),
+    false,
+    "the legacy sentiment solver module must stay deleted",
+  );
+
+  const surfaces = [
+    [
+      "crates/labcolors-core/src/config.rs",
+      /\b(?:SentimentCategory|SentimentsConfig|UnknownSentiment|SentimentResolution)\b|LadderSource::Sentiment|resolve_config_sentiment_solid/gu,
+    ],
+    [
+      "crates/labcolors-core/src/lib.rs",
+      /pub mod sentiment|\b(?:SentimentCategory|SentimentsConfig)\b/gu,
+    ],
+    [
+      "crates/labcolors-wasm/src/config_dto.rs",
+      /\b(?:SentimentCategoryDto|SentimentsDto)\b|LadderSourceDto::Sentiment/gu,
+    ],
+    [
+      "crates/labcolors-wasm/src/lib.rs",
+      /\{ kind: "sentiment"|readonly sentiments\s*:/gu,
+    ],
+  ];
+
+  for (const [path, forbidden] of surfaces) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, path), "utf8"),
+      forbidden,
+      `${path}: retired sentiment-specific API must not resurface`,
+    );
+  }
+
+  const documentation = [
+    ...publicClaimFiles().filter((path) => /(?:\.md|\.d\.ts)$/u.test(path)),
+    ...claimFiles(join(ROOT, "docs"), [], /\.md$/u),
+    ...claimFiles(join(ROOT, "reference"), [], /\.md$/u),
+  ].filter((path, index, all) => all.indexOf(path) === index);
+  for (const path of documentation) {
+    assert.doesNotMatch(
+      readFileSync(path, "utf8"),
+      RETIRED_SENTIMENT_MODEL,
+      `${relative(ROOT, path)}: retired sentiment model must not survive as live documentation`,
+    );
+  }
+
+  const canonicalConfigSurfaces = [
+    "crates/labcolors-wasm/tests/data/labui.config.json",
+    "crates/labcolors-wasm/tests/data/labui.config.prod.json",
+    "crates/labcolors-wasm/tests/chain_invariants.rs",
+    "crates/labcolors-wasm/tests/wasm_parity.rs",
+    "scripts/verify-package-release.mjs",
+  ];
+  for (const path of canonicalConfigSurfaces) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, path), "utf8"),
+      /["']sentiments["']|["']kind["']\s*:\s*["']sentiment["']/iu,
+      `${path}: canonical configs must not preserve the retired wire schema`,
+    );
+  }
+});
+
+test("the retired Lab UI accent catalogue stays absent from generic Core", () => {
+  assert.equal(
+    existsSync(join(ROOT, "crates/labcolors-core/src/accent.rs")),
+    false,
+    "the closed Lab UI catalogue must not survive as a self-testing fixture",
+  );
+  const lib = readFileSync(join(ROOT, "crates/labcolors-core/src/lib.rs"), "utf8");
+  assert.doesNotMatch(lib, /\bmod accent\s*;/u);
+
+  for (const path of [
+    "crates/labcolors-core/src/config.rs",
+    "crates/labcolors-core/src/semantic.rs",
+  ]) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, path), "utf8"),
+      /crate::accent::/u,
+      `${path}: generic colour math must not depend on the Lab UI test catalogue`,
+    );
   }
 });

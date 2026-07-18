@@ -12,12 +12,13 @@
 //! Отпечаток конфига ([`fingerprint`]) — FNV-1a 64 над канонической
 //! JSON-сериализацией DTO: порядок полей структур фиксирован serde, поэтому
 //! один и тот же конфиг даёт один и тот же отпечаток независимо от порядка
-//! ключей и пробелов входного JSON. Отпечаток — компонент ключа контракт-кэша:
-//! два разных конфига обязаны давать разные ключи (кэш-коллизия = чужие цвета).
+//! ключей и пробелов входного JSON. Это детерминированный вероятностный
+//! идентификатор и дополнительный компонент ключа; корректность reload не
+//! зависит от уникальности, потому что успешная загрузка очищает прежний кэш.
 
 use labcolors_core::config::{
     Brand, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily,
-    RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig, VcPreset,
+    RoleRecipe, ThemeConfig, ThemesConfig, VcPreset,
 };
 use labcolors_core::solve::Floor;
 use labcolors_core::{LadderPosition, ThemeAnchors};
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 /// Пер-темная четвёрка якорных hex.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnchorsDto {
     pub light: String,
     pub dark: String,
@@ -34,6 +36,7 @@ pub struct AnchorsDto {
 
 /// Тройка якорей нейтральной шкалы.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NeutralAnchorsDto {
     pub light: String,
     pub mid: String,
@@ -42,8 +45,8 @@ pub struct NeutralAnchorsDto {
 
 /// Ручки нейтрального подтона.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NeutralTintDto {
-    pub ratio: f64,
     pub target_mp: f64,
     pub hue_stiffness: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,6 +55,7 @@ pub struct NeutralTintDto {
 
 /// Нейтраль: якоря + подтон + опциональные пер-темные края.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NeutralDto {
     pub anchors: NeutralAnchorsDto,
     pub tint: NeutralTintDto,
@@ -63,28 +67,10 @@ pub struct NeutralDto {
 
 /// Именованное семейство палитры.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FamilyDto {
     pub key: String,
     pub anchors: AnchorsDto,
-}
-
-/// Одна сентимент-категория.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SentimentCategoryDto {
-    pub name: String,
-    pub family: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hue_floor_deg: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preferred_side: Option<i8>,
-}
-
-/// Сентимент-политика.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SentimentsDto {
-    pub categories: Vec<SentimentCategoryDto>,
-    pub hardness: f64,
-    pub chroma_fraction: f64,
 }
 
 /// VC-пресет закрытого меню.
@@ -99,6 +85,7 @@ pub enum VcPresetDto {
 
 /// Запись словаря тем.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ThemeEntryDto {
     pub name: String,
     pub preset: VcPresetDto,
@@ -106,11 +93,10 @@ pub struct ThemeEntryDto {
 
 /// Источник тинта лестницы/альфа-аналога.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum LadderSourceDto {
-    Brand,
+    Brand {},
     Family { key: String },
-    Sentiment { name: String },
     Neutral { pick: NeutralPickDto },
 }
 
@@ -134,15 +120,18 @@ pub enum FloorDto {
     None,
 }
 
-/// Рецепт роли (физическое меню ядра).
+/// Рецепт роли из закрытого физического меню текущего resolver-а.
+///
+/// Это переходная compatibility surface, не target IR и не extension point.
+/// Новая физика не должна добавляться новым recipe variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RoleRecipeDto {
     TextAnchor {
         fraction: f64,
         floor: FloorDto,
-        /// Опциональный источник оттенка семьи (M1 ch5c) — аддитивен: отсутствие
-        /// = нейтральный лейбл (прежние конфиги читаются без изменений).
+        /// Опциональный источник физической цветовой идентичности; отсутствие
+        /// выбирает neutral policy таблицы.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hue: Option<LadderSourceDto>,
     },
@@ -156,8 +145,8 @@ pub enum RoleRecipeDto {
     Ladder {
         source: LadderSourceDto,
         position: String,
-        /// Опциональный юр. пол UI для солидной семейной границы (M2 ch5c) —
-        /// аддитивен: отсутствие = прежний путь без пола.
+        /// Опциональный юридический пол UI для solid-позиции; у полупрозрачной
+        /// позиции поле должно отсутствовать.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         floor: Option<FloorDto>,
     },
@@ -178,20 +167,20 @@ pub enum RoleRecipeDto {
         of: LadderSourceDto,
         alpha: f64,
     },
-    /// Двухслойный материал (стекло/акрил; whitepaper §3.7): база на целевом |ΔJ'| тира +
-    /// тинт с выведенной α. `source` — оттенок семьи, `tone_light`/`tone_dark` —
-    /// |ΔJ'| тира по теме, `floor` — пол читаемости выводимой α.
+    /// Переходная двухслойная point-композиция: base на заданном |ΔJ'| и tint
+    /// с вычисленной alpha. Не является моделью glass, blur или spatial field.
     Material {
         source: LadderSourceDto,
         tone_light: f64,
         tone_dark: f64,
         floor: FloorDto,
     },
-    Zero,
+    Zero {},
 }
 
 /// Роль: имя + рецепт.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoleDto {
     pub name: String,
     pub recipe: RoleRecipeDto,
@@ -199,6 +188,7 @@ pub struct RoleDto {
 
 /// Компонентный алиас.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AliasDto {
     pub alias: String,
     pub target: String,
@@ -206,11 +196,11 @@ pub struct AliasDto {
 
 /// Полный конфиг темы потребителя — JSON-форма [`ThemeConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigDto {
     pub brand: AnchorsDto,
     pub neutral: NeutralDto,
     pub palette: Vec<FamilyDto>,
-    pub sentiments: SentimentsDto,
     pub themes: Vec<ThemeEntryDto>,
     /// `#[serde(default)]` разрешает ОПУСТИТЬ словарь синтаксически, но конфиг
     /// обязан нести собственные роли: пустой контракт (без `roles` и `aliases`)
@@ -224,9 +214,9 @@ pub struct ConfigDto {
 
 /// FNV-1a 64 над канонической JSON-сериализацией DTO — отпечаток конфига.
 ///
-/// Отпечаток есть идентичность конфига: два разных конфига обязаны дать разные
-/// ключи (кэш-коллизия = чужие цвета). Конфиг несёт собственный словарь ролей и
-/// хэшируется как есть — форма входа и есть форма, что реально резолвится.
+/// Детерминированный вероятностный идентификатор конфига. Конфиг несёт
+/// собственный словарь ролей и хэшируется как есть — форма входа и есть форма,
+/// что реально резолвится.
 ///
 /// Не криптографический: различение конфигов ВЕРОЯТНОСТНОЕ, поэтому оно не
 /// несущая гарантия — корректность кэша держит очистка при загрузке (в кэше
@@ -296,9 +286,8 @@ impl From<FloorDto> for Floor {
 impl From<LadderSourceDto> for LadderSource {
     fn from(s: LadderSourceDto) -> Self {
         match s {
-            LadderSourceDto::Brand => LadderSource::Brand,
+            LadderSourceDto::Brand {} => LadderSource::Brand,
             LadderSourceDto::Family { key } => LadderSource::Family(key),
-            LadderSourceDto::Sentiment { name } => LadderSource::Sentiment(name),
             LadderSourceDto::Neutral { pick } => LadderSource::Neutral(pick.into()),
         }
     }
@@ -392,7 +381,7 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
                 tone_dark,
                 floor: floor.into(),
             },
-            RoleRecipeDto::Zero => RoleRecipe::Zero,
+            RoleRecipeDto::Zero {} => RoleRecipe::Zero,
         })
     }
 }
@@ -415,7 +404,6 @@ impl TryFrom<ConfigDto> for ThemeConfig {
                 dark: dto.neutral.anchors.dark,
             },
             tint: NeutralTint {
-                ratio: dto.neutral.tint.ratio,
                 target_mp: dto.neutral.tint.target_mp,
                 hue_stiffness: dto.neutral.tint.hue_stiffness,
                 hue_override_deg: dto.neutral.tint.hue_override_deg,
@@ -431,21 +419,6 @@ impl TryFrom<ConfigDto> for ThemeConfig {
                 anchors: f.anchors.into(),
             })
             .collect();
-        let sentiments = SentimentsConfig {
-            categories: dto
-                .sentiments
-                .categories
-                .into_iter()
-                .map(|c| SentimentCategory {
-                    name: c.name,
-                    family: c.family,
-                    hue_floor_deg: c.hue_floor_deg,
-                    preferred_side: c.preferred_side,
-                })
-                .collect(),
-            hardness: dto.sentiments.hardness,
-            chroma_fraction: dto.sentiments.chroma_fraction,
-        };
         let themes = ThemesConfig {
             entries: dto
                 .themes
@@ -461,7 +434,7 @@ impl TryFrom<ConfigDto> for ThemeConfig {
 
         // ThemeConfig — #[non_exhaustive]: сборка через конструктор ядра, не
         // struct-литералом (запрещён вне крейта ядра).
-        let cfg = ThemeConfig::new(brand, neutral, palette, sentiments, themes, roles, aliases);
+        let cfg = ThemeConfig::new(brand, neutral, palette, themes, roles, aliases);
         Ok(cfg)
     }
 }
@@ -486,9 +459,8 @@ impl TryFrom<&LadderSource> for LadderSourceDto {
 
     fn try_from(s: &LadderSource) -> Result<Self, String> {
         Ok(match s {
-            LadderSource::Brand => LadderSourceDto::Brand,
+            LadderSource::Brand => LadderSourceDto::Brand {},
             LadderSource::Family(key) => LadderSourceDto::Family { key: key.clone() },
-            LadderSource::Sentiment(name) => LadderSourceDto::Sentiment { name: name.clone() },
             LadderSource::Neutral(pick) => LadderSourceDto::Neutral {
                 pick: match pick {
                     NeutralPick::Mid => NeutralPickDto::Mid,
@@ -570,7 +542,7 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
                 tone_dark: *tone_dark,
                 floor: floor_to_dto(*floor)?,
             },
-            RoleRecipe::Zero => RoleRecipeDto::Zero,
+            RoleRecipe::Zero => RoleRecipeDto::Zero {},
             other => return Err(format!("несериализуемый RoleRecipe: {other:?}")),
         })
     }
@@ -596,7 +568,6 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
                     dark: cfg.neutral.anchors.dark.clone(),
                 },
                 tint: NeutralTintDto {
-                    ratio: cfg.neutral.tint.ratio,
                     target_mp: cfg.neutral.tint.target_mp,
                     hue_stiffness: cfg.neutral.tint.hue_stiffness,
                     hue_override_deg: cfg.neutral.tint.hue_override_deg,
@@ -612,21 +583,6 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
                     anchors: (&f.anchors).into(),
                 })
                 .collect(),
-            sentiments: SentimentsDto {
-                categories: cfg
-                    .sentiments
-                    .categories
-                    .iter()
-                    .map(|c| SentimentCategoryDto {
-                        name: c.name.clone(),
-                        family: c.family.clone(),
-                        hue_floor_deg: c.hue_floor_deg,
-                        preferred_side: c.preferred_side,
-                    })
-                    .collect(),
-                hardness: cfg.sentiments.hardness,
-                chroma_fraction: cfg.sentiments.chroma_fraction,
-            },
             themes: cfg
                 .themes
                 .entries
@@ -659,7 +615,7 @@ mod tests {
     use super::*;
 
     /// Паспорт labui как статический SSOT (`tests/data/labui.config.json`): дерево
-    /// Даниила вынесено из прод-API ядра (ADR-0001 PR-c), граница читает паспорт.
+    /// Даниила вынесено из прод-API ядра (ADR-0001), граница читает паспорт.
     fn labui_dto() -> ConfigDto {
         serde_json::from_str(include_str!("../tests/data/labui.config.json"))
             .expect("паспорт labui парсится")
@@ -713,7 +669,7 @@ mod tests {
     #[test]
     fn pair_label_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;
-        let json = r#"{"kind":"pair-label","source":{"kind":"sentiment","name":"warning"},"fraction":0.461,"floor":"aa-ui"}"#;
+        let json = r#"{"kind":"pair-label","source":{"kind":"family","key":"warning"},"fraction":0.461,"floor":"aa-ui"}"#;
         let dto: RoleRecipeDto = serde_json::from_str(json).expect("pair-label парсится");
         let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");
         assert!(
@@ -728,10 +684,97 @@ mod tests {
         let re = serde_json::to_string(&back).expect("сериализуем");
         assert!(re.contains(r#""kind":"pair-label""#), "kebab-тег цел: {re}");
         assert!(re.contains(r#""floor":"aa-ui""#), "пол цел: {re}");
-        assert!(re.contains(r#""name":"warning""#), "источник цел: {re}");
+        assert!(re.contains(r#""key":"warning""#), "источник цел: {re}");
     }
 
-    /// Рецепт `material` (whitepaper §3.7) гоняется через JSON без потерь: kebab-тег
+    /// C6 RED: удалённая специальная sentiment-схема обязана стать неизвестной,
+    /// а не тихо игнорироваться serde после удаления поля/варианта.
+    #[test]
+    fn retired_sentiment_schema_is_rejected() {
+        let mut root: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/data/labui.config.json"))
+                .expect("fixture JSON");
+        root["sentiments"] = serde_json::json!({
+            "categories": [],
+            "hardness": 5.0,
+            "chroma_fraction": 0.88
+        });
+        assert!(
+            serde_json::from_value::<ConfigDto>(root).is_err(),
+            "retired root `sentiments` must be rejected, never ignored"
+        );
+
+        assert!(
+            serde_json::from_str::<LadderSourceDto>(r#"{"kind":"sentiment","name":"warning"}"#)
+                .is_err(),
+            "retired source kind `sentiment` must be rejected"
+        );
+    }
+
+    /// Неизвестное поле не может тихо превратить опечатку или удалённую
+    /// ручку в no-op. Гейт покрывает каждую объектную границу public config.
+    #[test]
+    fn unknown_fields_are_rejected_at_every_config_object_boundary() {
+        macro_rules! rejects {
+            ($ty:ty, $json:literal) => {
+                assert!(
+                    serde_json::from_str::<$ty>($json).is_err(),
+                    "{} accepted unknown fields from {}",
+                    stringify!($ty),
+                    $json
+                );
+            };
+        }
+
+        rejects!(
+            AnchorsDto,
+            r##"{"light":"#000000","dark":"#000000","light_ic":"#000000","dark_ic":"#000000","retired":true}"##
+        );
+        rejects!(
+            NeutralAnchorsDto,
+            r##"{"light":"#FFFFFF","mid":"#808080","dark":"#000000","retired":true}"##
+        );
+        rejects!(
+            NeutralTintDto,
+            r#"{"target_mp":1.5,"hue_stiffness":9.0,"hue_override_deq":286.0}"#
+        );
+        rejects!(
+            NeutralTintDto,
+            r#"{"ratio":0.1,"target_mp":1.5,"hue_stiffness":9.0}"#
+        );
+        rejects!(
+            NeutralDto,
+            r##"{"anchors":{"light":"#FFFFFF","mid":"#808080","dark":"#000000"},"tint":{"target_mp":1.5,"hue_stiffness":9.0},"retired":true}"##
+        );
+        rejects!(
+            FamilyDto,
+            r##"{"key":"red","anchors":{"light":"#000000","dark":"#000000","light_ic":"#000000","dark_ic":"#000000"},"retired":true}"##
+        );
+        rejects!(
+            ThemeEntryDto,
+            r#"{"name":"light","preset":"srgb","retired":true}"#
+        );
+        rejects!(
+            LadderSourceDto,
+            r#"{"kind":"family","key":"red","name":"warning"}"#
+        );
+        rejects!(LadderSourceDto, r#"{"kind":"brand","name":"warning"}"#);
+        rejects!(
+            RoleRecipeDto,
+            r#"{"kind":"ladder","source":{"kind":"brand"},"position":"fill-primary","retired":true}"#
+        );
+        rejects!(
+            RoleRecipeDto,
+            r#"{"kind":"zero","source":{"kind":"brand"}}"#
+        );
+        rejects!(
+            RoleDto,
+            r#"{"name":"none","recipe":{"kind":"zero"},"retired":true}"#
+        );
+        rejects!(AliasDto, r#"{"alias":"a","target":"b","retired":true}"#);
+    }
+
+    /// Рецепт `material` (whitepaper, «Точечные композиции») гоняется через JSON без потерь: kebab-тег
     /// `material`, источник/тон/пол целы туда-обратно (поля snake_case
     /// `tone_light`/`tone_dark`, как остальная config-схема). Закрывает класс
     /// «DTO-ветка компилируется, но круг-трип врёт».
@@ -822,27 +865,17 @@ mod tests {
 
     // ── Слой 3: отпечаток полного паспорта закреплён (характеризационный пин) ──
 
-    /// Характеризационный ЗАМОК ТЕКУЩЕГО main: отпечаток полного labui-конфига —
-    /// константа. Это НЕ инвариант навсегда: при ЛЕГИТИМНОЙ смене паспорта labui
-    /// (значения якорей/ручек) отпечаток сменится — тогда ОБНОВИ это число здесь
-    /// и пин `PASSPORT_FINGERPRINT` на стороне labui. Пин доказывает, что снятие
-    /// механизма пресета БАЙТ-НЕЙТРАЛЬНО для полного паспорта (то же число).
-    ///
-    /// ГЛАВА #64 (ADR-0003, активация оси читаемости в `Ys`): доли текстовой
-    /// лестницы перенесены из генезис-домена `Y_hk` в `Ys` (0.968/0.627/0.461/
-    /// 0.276 → 0.97335917/0.64359014/0.47572199/0.29335999, инвариант переноса —
-    /// принятые владельцем hex'ы #141414/#767676/#C2C2C2). Это ЛЕГИТИМНАЯ смена
-    /// паспорта (ADR помечает её semver-major), потому пин обновлён
-    /// 5013ba77a61f58ff → f2a892a62f7bc91e. Глава #282 добавила обязательный
-    /// `decision_profile` в каждый Glow recipe: explicit legacy сохраняет
-    /// прежнюю эмиссию, но profile обязан менять cache/config identity, поэтому
-    /// пин легитимно стал c51445fcd167781a.
+    /// Характеризационный пин канонической JSON-формы текущего Lab UI-паспорта.
+    /// Обновляется только вместе с проверенным изменением схемы или данных.
+    /// C6 удалил корневой sentiment-объект, заменил специальные source-теги
+    /// обычными family-ссылками и удалил неиспользуемый `neutral.tint.ratio`;
+    /// именно эти изменения канонического JSON объясняют смену отпечатка.
     #[test]
     fn full_labui_fingerprint_pin_current_main() {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "c51445fcd167781a",
+            "1adb2876102d77f3",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }

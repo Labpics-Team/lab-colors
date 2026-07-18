@@ -55,28 +55,20 @@
 //!        on_disk_audit_probe_goes_red_then_green_after_restore -- --ignored
 //!      ```
 //!
-//!   Unlike the old real-tree version, `--test-threads=1` is NO LONGER REQUIRED
-//!   (the real tree is never mutated). The test will pass with it, but default
-//!   parallelism is safe.
+//!   The isolated tempdir makes default test parallelism safe: the real tree is
+//!   never mutated.
 //!
-//! # Isolation mechanism: temp-dir copy + atomic write + #[serial]
+//! # Isolation mechanism: temp-dir copy + atomic write
 //!
 //! The real workspace is copied into a per-invocation tempdir, the probe is
 //! injected into the COPY with an atomic write (write-tmp → rename), and the
 //! subprocess runs `current_dir(<tempdir>)` so Cargo recompiles from the copy.
-//! The `#[serial]` annotation on this test serializes subprocess execution so
-//! nested cargo invocations don't thrash the shared target/ cache. The tempdir
-//! is cleaned up automatically when it goes out of scope.
+//! The tempdir is cleaned up automatically when it goes out of scope.
 
-// Pull in the shared panic-safe splice_into from the support module.
-// This closes the DRY/SRP fracture: both on_disk_audit_probe.rs and
-// s2b_baseline_guards.rs previously maintained separate copies that had already
-// diverged. The canonical implementation in splice_support.rs is the single source
-// of truth; the probe now uses it to splice into a TEMP-DIR COPY, not the real tree.
+// Atomic splice helper for the isolated temp-dir copy.
 #[path = "splice_support.rs"]
 mod splice_support;
 
-use serial_test::serial;
 use std::path::{Path, PathBuf};
 
 fn crate_root() -> PathBuf {
@@ -174,15 +166,12 @@ fn run_gate_test_from(workspace_dir: &Path, test_name: &str) -> (bool, String) {
 /// See the module-level doc comment for the full rationale and the exact
 /// invocation command.
 ///
-/// `#[serial]` serializes subprocess execution within the test binary so that
-/// nested cargo builds don't thrash the shared target/ cache. Unlike the old
-/// real-tree version, the real source tree is never written to, so the test is
-/// safe under default parallelism.
+/// The real source tree is never written to, so the test is safe under default
+/// parallelism.
 #[test]
 #[ignore = "test runs a nested cargo subprocess; requires \
             LABCOLORS_ON_DISK_PROBE_ENABLED=1 env var to enable. \
             See module doc for the exact command."]
-#[serial]
 #[cfg(not(miri))] // Miri cannot execute external subprocesses.
 fn on_disk_audit_probe_goes_red_then_green_after_restore() {
     // Env-var tripwire: a CI runner that passes `--include-ignored` must still
@@ -196,6 +185,10 @@ fn on_disk_audit_probe_goes_red_then_green_after_restore() {
         );
         return;
     }
+
+    let real_semantic = semantic_path();
+    let real_semantic_before = std::fs::read(&real_semantic)
+        .unwrap_or_else(|e| panic!("on_disk_audit_probe: cannot snapshot real semantic.rs: {e}"));
 
     // Create a temporary workspace copy.
     let tempdir = tempfile::TempDir::new().unwrap_or_else(|e| {
@@ -251,22 +244,14 @@ fn on_disk_audit_probe_goes_red_then_green_after_restore() {
          specifically because of the probe, not a pre-existing issue).\n{injected_out}"
     );
 
-    // Post-condition: verify the real tree was NEVER touched (isolation invariant).
-    // The real semantic.rs should be byte-identical to its state before this test.
-    let real_semantic = semantic_path();
-    let git_status_output = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .arg(real_semantic.file_name().unwrap())
-        .current_dir(crate_root())
-        .output()
-        .unwrap_or_else(|e| {
-            panic!("on_disk_audit_probe: cannot run git status: {e}");
-        });
-    let status_str = String::from_utf8_lossy(&git_status_output.stdout);
-    assert!(
-        status_str.trim().is_empty(),
-        "on_disk RED-proof FAILED — real semantic.rs was mutated during the test \
-         (isolation violation). git status:\n{status_str}"
+    // Post-condition compares the exact bytes observed by this invocation. It
+    // remains valid in a legitimately dirty worktree and cannot be vacuously
+    // green because of a wrong git pathspec.
+    let real_semantic_after = std::fs::read(&real_semantic)
+        .unwrap_or_else(|e| panic!("on_disk_audit_probe: cannot reread real semantic.rs: {e}"));
+    assert_eq!(
+        real_semantic_after, real_semantic_before,
+        "on-disk audit probe mutated the real semantic.rs"
     );
 
     // Tempdir is automatically cleaned up when `tempdir` goes out of scope.
