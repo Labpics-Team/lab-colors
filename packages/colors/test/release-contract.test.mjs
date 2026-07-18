@@ -1569,9 +1569,9 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     "Q0 accepted snapshot delta must equal the canonical Linux measurement",
   );
 
-  // V17 (Q0 review): безопасное Debug-экранирование client-owned role не
-  // подтягивает универсальный iterator formatter; канонический Linux runtime
-  // стал на 5B меньше (run 29663300158), поэтому ратчет тоже понижен ровно.
+  // V17 (Q0 review): run 29663300158 измерил review-hardened snapshot на 5B
+  // меньше v16. Это наблюдаемая дельта целого артефакта, не причинная оценка;
+  // ратчет следует измерению без произвольного запаса.
   assert.equal(v17.schemaVersion, 8);
   assert.equal(v17.budgetId, "labcolors-wasm-runtime-q0-review-hardening-v17");
   assert.deepEqual(v17.predecessor, {

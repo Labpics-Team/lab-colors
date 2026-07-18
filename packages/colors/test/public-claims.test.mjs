@@ -771,6 +771,19 @@ function parseTypes(source, fileName) {
 
 function namedTopLevelDeclarations(sourceFile, expectedName) {
   return sourceFile.statements.flatMap((node) => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      if (clause === undefined) return [];
+      const bindings = clause.name === undefined ? [] : [clause.name];
+      if (clause.namedBindings !== undefined) {
+        if (ts.isNamespaceImport(clause.namedBindings)) {
+          bindings.push(clause.namedBindings.name);
+        } else {
+          bindings.push(...clause.namedBindings.elements.map((element) => element.name));
+        }
+      }
+      return bindings.filter((binding) => binding.text === expectedName);
+    }
     if (node.name && ts.isIdentifier(node.name) && node.name.text === expectedName) {
       return [node];
     }
@@ -1096,6 +1109,37 @@ test("ResolvedTheme contract guard bites at every public SSOT boundary", () => {
       ),
     ).includes("README shadowed Readonly"),
   );
+  for (const utility of ["Readonly", "Record"]) {
+    const imports = [
+      `import ${utility} from "./hostile.js";`,
+      `import { Hostile as ${utility} } from "./hostile.js";`,
+      `import * as ${utility} from "./hostile.js";`,
+    ];
+    for (const hostileImport of imports) {
+      assert.ok(
+        resolvedThemeContractFailures(
+          indexTypes,
+          declarationTypes.replace(
+            "export interface ResolvedTheme {",
+            `${hostileImport}\nexport interface ResolvedTheme {`,
+          ),
+          readme,
+        ).includes(`declaration shadowed ${utility}`),
+        `generated declaration must reject ${hostileImport}`,
+      );
+      assert.ok(
+        resolvedThemeContractFailures(
+          indexTypes,
+          declarationTypes,
+          readme.replace(
+            "interface ResolvedTheme {",
+            `${hostileImport}\ninterface ResolvedTheme {`,
+          ),
+        ).includes(`README shadowed ${utility}`),
+        `README must reject ${hostileImport}`,
+      );
+    }
+  }
   assert.ok(
     resolvedThemeContractFailures(
       indexTypes,

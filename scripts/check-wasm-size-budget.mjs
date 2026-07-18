@@ -93,8 +93,8 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
-    // Pinned Linux run 29663300158 измерил review-hardened Q0 ровно. Новый
-    // formatter убрал 5B против v16; ратчет следует факту без headroom.
+    // Pinned Linux run 29663300158 измерил review-hardened Q0 на 5B меньше v16.
+    // Это дельта целого артефакта, не причинная оценка; ратчет следует факту.
     basis: "accepted-q0-review-hardening-snapshot",
     measurementSource: "github-actions-run-29663300158",
     acceptedCeiling: 432107,
