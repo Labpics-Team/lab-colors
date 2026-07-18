@@ -109,12 +109,12 @@ pub(crate) fn ratio_from_luminances(la: f64, lb: f64) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
-/// Frozen legacy WCAG 2.1 (2018) contrast ratio between two gamma-encoded sRGB
-/// colours, in `[1, 21]`.
+/// Зафиксированное legacy-отношение контраста WCAG 2.1 (2018) между двумя
+/// gamma-кодированными цветами sRGB в `[1, 21]`.
 ///
-/// `(L_lighter + 0.05) / (L_darker + 0.05)`. Symmetric and polarity-agnostic by
-/// construction — unlike the signed candidate curve, which is why the two
-/// numbers are reported separately and never folded into one.
+/// `(L_lighter + 0.05) / (L_darker + 0.05)`. Формула симметрична и не зависит от
+/// полярности, в отличие от знаковой candidate-кривой. Поэтому величины
+/// возвращаются отдельно и не объединяются.
 pub(crate) fn contrast_ratio(a: [f64; 3], b: [f64; 3]) -> f64 {
     ratio_from_luminances(relative_luminance(a), relative_luminance(b))
 }

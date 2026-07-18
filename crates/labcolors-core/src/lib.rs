@@ -141,7 +141,7 @@ pub use solve::{
 };
 pub use spaces::oklch::{css_alpha_value, oklch_css_from_hex, oklch_from_hex};
 pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
-pub use spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
+pub use spaces::srgb::srgb_encoded_from_hex;
 pub use spaces::vc::ViewingConditions;
 
 /// Компилирует rust-блоки package-local README как doctest-ы: опубликованный
@@ -151,8 +151,8 @@ pub use spaces::vc::ViewingConditions;
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-/// Interim accent recipes are implementation details, not client contracts.
-/// The occurrence graph owns the eventual public source/target/constraint API.
+/// Временные акцентные рецепты — детали реализации, а не контракты клиента.
+/// Публичный API источников, целей и ограничений принадлежит occurrence-графу.
 ///
 /// ```compile_fail
 /// use labcolors_core::accent_balance::accent_balanced;
@@ -164,8 +164,8 @@ pub struct ReadmeDoctests;
 #[cfg(doctest)]
 pub struct InternalAccentRecipes;
 
-/// Exact output bytes do not imply a perceptual hue-visibility verdict.
-/// Consumers must not recover the removed claim through either result shape.
+/// Точные выходные байты не доказывают перцептивную видимость оттенка.
+/// Удалённый вердикт нельзя восстанавливать из какой-либо формы результата.
 ///
 /// ```compile_fail
 /// use labcolors_core::Resolved;
@@ -191,8 +191,8 @@ pub struct InternalAccentRecipes;
 #[cfg(doctest)]
 pub struct NoHueVisibilityVerdict;
 
-/// Superseded compatibility aliases must not survive a pre-client breaking
-/// release. Typed statuses and explicitly named measurements are the only SSOT.
+/// Устаревшие compatibility-алиасы не входят в breaking-релиз до клиентов.
+/// Единственный SSOT — типизированные статусы и явно названные измерения.
 ///
 /// ```compile_fail
 /// use labcolors_core::Resolved;
@@ -229,9 +229,9 @@ pub struct NoHueVisibilityVerdict;
 #[cfg(doctest)]
 pub struct NoCompatibilityAliases;
 
-/// A surface metric must not combine coordinates from incompatible appearance
-/// spaces and publish the result as LPC. A future surface-distance primitive
-/// needs its own admitted model, name, domain and independent reference oracle.
+/// Метрика поверхности не смешивает координаты несовместимых appearance-
+/// пространств и не публикует результат как LPC. Будущему примитиву расстояния
+/// нужны собственные допущенные модель, имя, домен и независимый oracle.
 ///
 /// ```compile_fail
 /// use labcolors_core::lpc::lpc_surface;
@@ -243,10 +243,10 @@ pub struct NoCompatibilityAliases;
 #[cfg(doctest)]
 pub struct NoHybridLpcSurfaceMetric;
 
-/// Incomplete scalar helpers are not a standalone public LPC contract. The
-/// transitional resolver's `lc` field is explicitly only a frozen candidate
-/// score; LPC becomes a public claim through the versioned evaluator registry
-/// with stimulus, context, applicability and evidence identities.
+/// Неполные скалярные функции не образуют публичный контракт LPC. Поле `lc`
+/// переходного resolver — только зафиксированная candidate-координата. LPC
+/// становится публичным утверждением лишь через версионированный реестр
+/// evaluators с идентичностями стимула, контекста, применимости и evidence.
 ///
 /// ```compile_fail
 /// use labcolors_core::lpc::lpc;
@@ -254,11 +254,31 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// Pair polarity/fill is legacy recipe machinery, not a public extension
-/// point. The generic occurrence graph replaces it as one joint solve.
+/// Полярность/fill пары — legacy-механика рецептов, а не extension point.
+/// Общий occurrence-граф заменяет её единым совместным solve.
 ///
 /// ```compile_fail
 /// use labcolors_core::pair::pair_side;
 /// ```
 #[cfg(doctest)]
 pub struct NoPublicPairRecipeApi;
+
+/// Сырые `f64` не являются валидированным цветовым значением: публичная
+/// сериализация идёт через [`Srgb8::to_hex`], где невалидное состояние уже
+/// непредставимо. Внутренние formatter-ы с generated-finite precondition не
+/// образуют public API: внешний `NaN` не может попасть в них через эту границу.
+///
+/// ```compile_fail
+/// use labcolors_core::hex_from_srgb_encoded;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::hex_from_srgb;
+/// ```
+///
+/// ```
+/// use labcolors_core::Srgb8;
+/// assert_eq!(Srgb8::new([0x1A, 0x2B, 0x3C]).to_hex(), "#1A2B3C");
+/// ```
+#[cfg(doctest)]
+pub struct NoRawFloatSrgbSerializer;

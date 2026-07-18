@@ -17,6 +17,20 @@ use crate::spaces::cat16;
 use crate::spaces::srgb::D65_WHITE;
 use crate::spaces::vc::ViewingConditions;
 
+// Параметры нелинейного post-adaptation response и ахроматической суммы CAM16
+// из Li et al. 2017, DOI 10.1002/col.22131. Это параметры опубликованной модели,
+// а не настраиваемые product-пороги. Отдельный divisor сохраняет исходный
+// порядок IEEE-операций в forward (`blue / 20`), а массив нужен аналитической
+// инверсии, где веса исторически умножаются в цикле. Test-only literal-oracle
+// ниже намеренно не использует эти константы: иначе общий дрейф production и
+// «эталона» оставил бы bit-identity гейт зелёным.
+const RESPONSE_SCALE: f64 = 400.0;
+const RESPONSE_OFFSET: f64 = 27.13;
+const RESPONSE_EXPONENT: f64 = 0.42;
+const ACHROMATIC_RED_WEIGHT: f64 = 2.0;
+const ACHROMATIC_BLUE_DIVISOR: f64 = 20.0;
+const ACHROMATIC_WEIGHTS: [f64; 3] = [ACHROMATIC_RED_WEIGHT, 1.0, 1.0 / ACHROMATIC_BLUE_DIVISOR];
+
 #[cfg(test)]
 thread_local! {
     /// Test-only per-thread counter of [`forward`] invocations. Powers the
@@ -36,7 +50,7 @@ thread_local! {
 /// is the cone-fundamental standard and does not specify CAM16.)
 pub(crate) fn adapt(c: f64, fl: f64) -> f64 {
     let x = fl * c.abs() / 100.0;
-    let y = x.powf(0.42);
+    let y = x.powf(RESPONSE_EXPONENT);
     // Магнитуда `400·y/(y+27.13)` ≥ 0 (y ≥ 0), а знак берётся у входа `c`. Раньше
     // это делалось умножением на `c.signum()` (∈ {−1, +1} на конечных входах);
     // `copysign` переносит знаковый бит `c` напрямую — байт-идентично для любого
@@ -44,13 +58,13 @@ pub(crate) fn adapt(c: f64, fl: f64) -> f64 {
     // `copysign`; включая ±0.0), но без ветвящегося `signum` и лишнего умножения.
     // Вход `c` (линейная смесь конечных декодированных sRGB) на горячем пути и под
     // гейтом bit-identity (`forward_reference` / reference-векторы) всегда конечен.
-    (400.0 * y / (y + 27.13)).copysign(c)
+    (RESPONSE_SCALE * y / (y + RESPONSE_OFFSET)).copysign(c)
 }
 
 /// Inverse nonlinear adaptation.
 pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
     let x = a.abs();
-    let y = (27.13 * x / (400.0 - x)).max(0.0);
+    let y = (RESPONSE_OFFSET * x / (RESPONSE_SCALE - x)).max(0.0);
     // Магнитуда `100·y^(1/0.42)/fl` ≥ 0: `y ≥ 0` (`.max(0.0)`), `y^(1/0.42) ≥ 0`
     // (powf неотрицательной базы), `fl > 0` (VC-параметр по построению). Знак
     // берётся у входа `a` — зеркало прямого `adapt`. Раньше это делалось
@@ -61,7 +75,7 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
     // магнитуда 0.0 → copysign(0.0, ±0.0)=±0.0). Свип 0/6.86M расхождений; вход `a`
     // (инверсия конечного J'/M') на этом пути всегда конечен. Убирает ветвящийся
     // `signum` и лишнее умножение из пер-цветового обратного хода (`to_xyz`).
-    (100.0 * y.powf(1.0 / 0.42) / fl).copysign(a)
+    (100.0 * y.powf(1.0 / RESPONSE_EXPONENT) / fl).copysign(a)
 }
 
 /// CAM16 lightness `J` of a D65-axis stimulus with relative luminance `y`.
@@ -102,21 +116,23 @@ pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
         rgb_w[1] * vc.rgb_d[1],
         rgb_w[2] * vc.rgb_d[2],
     ];
-    const W: [f64; 3] = [2.0, 1.0, 1.0 / 20.0];
-    let w_sum = W[0] + W[1] + W[2];
+    let w_sum = ACHROMATIC_WEIGHTS[0] + ACHROMATIC_WEIGHTS[1] + ACHROMATIC_WEIGHTS[2];
 
     let target = vc.aw * (j / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
     let s = target / w_sum;
     if s <= 0.0 {
         return 0.0;
     }
-    if s >= 400.0 {
+    if s >= RESPONSE_SCALE {
         return 1.0;
     }
 
-    let k_eff = (W[0] * k[0] + W[1] * k[1] + W[2] * k[2]) / w_sum;
-    let p = 27.13 * s / (400.0 - s);
-    let mut y = p.powf(1.0 / 0.42) * 100.0 / (vc.fl * k_eff);
+    let k_eff = (ACHROMATIC_WEIGHTS[0] * k[0]
+        + ACHROMATIC_WEIGHTS[1] * k[1]
+        + ACHROMATIC_WEIGHTS[2] * k[2])
+        / w_sum;
+    let p = RESPONSE_OFFSET * s / (RESPONSE_SCALE - s);
+    let mut y = p.powf(1.0 / RESPONSE_EXPONENT) * 100.0 / (vc.fl * k_eff);
 
     let residual_slope = |y: f64| -> (f64, f64) {
         let mut f = 0.0;
@@ -124,11 +140,12 @@ pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
         for i in 0..3 {
             let c = k[i] * y;
             let x = vc.fl * c / 100.0;
-            let pp = x.powf(0.42);
-            let denominator = pp + 27.13;
-            f += W[i] * 400.0 * pp / denominator;
-            let dp = 0.42 * pp / c;
-            df += W[i] * k[i] * 400.0 * 27.13 * dp / (denominator * denominator);
+            let pp = x.powf(RESPONSE_EXPONENT);
+            let denominator = pp + RESPONSE_OFFSET;
+            f += ACHROMATIC_WEIGHTS[i] * RESPONSE_SCALE * pp / denominator;
+            let dp = RESPONSE_EXPONENT * pp / c;
+            df += ACHROMATIC_WEIGHTS[i] * k[i] * RESPONSE_SCALE * RESPONSE_OFFSET * dp
+                / (denominator * denominator);
         }
         (f - target, df)
     };
@@ -310,7 +327,9 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     let hr = h.to_radians();
 
     let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
-    let a_achrom = (2.0 * lms_aa[0] + lms_aa[1] + lms_aa[2] / 20.0) * vc.nbb;
+    let a_achrom =
+        (ACHROMATIC_RED_WEIGHT * lms_aa[0] + lms_aa[1] + lms_aa[2] / ACHROMATIC_BLUE_DIVISOR)
+            * vc.nbb;
     let j = 100.0 * (a_achrom / vc.aw).powf(vc.c * vc.z);
 
     let u = (a * a + b * b).sqrt();
@@ -369,6 +388,74 @@ mod tests {
     use super::*;
     use crate::spaces::srgb::{srgb_from_hex, srgb_to_xyz};
 
+    // Независимые literal-oracles повторяют опубликованные CAM16-параметры, а
+    // не production-константы. Это намеренная test-only дубликация: общий SSOT
+    // для реализации не должен превращать проверку чисел в самоутверждение.
+    fn adapt_reference(c: f64, fl: f64) -> f64 {
+        let x = fl * c.abs() / 100.0;
+        let y = x.powf(0.42);
+        (400.0 * y / (y + 27.13)).copysign(c)
+    }
+
+    fn unadapt_reference(a: f64, fl: f64) -> f64 {
+        let x = a.abs();
+        let y = (27.13 * x / (400.0 - x)).max(0.0);
+        (100.0 * y.powf(1.0 / 0.42) / fl).copysign(a)
+    }
+
+    fn gray_y_analytic_reference(j: f64, vc: &ViewingConditions) -> f64 {
+        if j <= 0.0 {
+            return 0.0;
+        }
+
+        let rgb_w = cat16::xyz_to_cone([
+            D65_WHITE[0] * 100.0,
+            D65_WHITE[1] * 100.0,
+            D65_WHITE[2] * 100.0,
+        ]);
+        let k = [
+            rgb_w[0] * vc.rgb_d[0],
+            rgb_w[1] * vc.rgb_d[1],
+            rgb_w[2] * vc.rgb_d[2],
+        ];
+        let weights = [2.0, 1.0, 1.0 / 20.0];
+        let w_sum = weights[0] + weights[1] + weights[2];
+
+        let target = vc.aw * (j / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
+        let s = target / w_sum;
+        if s <= 0.0 {
+            return 0.0;
+        }
+        if s >= 400.0 {
+            return 1.0;
+        }
+
+        let k_eff = (weights[0] * k[0] + weights[1] * k[1] + weights[2] * k[2]) / w_sum;
+        let p = 27.13 * s / (400.0 - s);
+        let mut y = p.powf(1.0 / 0.42) * 100.0 / (vc.fl * k_eff);
+
+        let residual_slope = |y: f64| -> (f64, f64) {
+            let mut f = 0.0;
+            let mut df = 0.0;
+            for i in 0..3 {
+                let c = k[i] * y;
+                let x = vc.fl * c / 100.0;
+                let pp = x.powf(0.42);
+                let denominator = pp + 27.13;
+                f += weights[i] * 400.0 * pp / denominator;
+                let dp = 0.42 * pp / c;
+                df += weights[i] * k[i] * 400.0 * 27.13 * dp / (denominator * denominator);
+            }
+            (f - target, df)
+        };
+        for _ in 0..2 {
+            let (error, slope) = residual_slope(y);
+            y -= error / slope;
+        }
+
+        y.clamp(0.0, 1.0)
+    }
+
     /// Frozen reference: the CIECAM16 forward math exactly as it stood inline in
     /// `lcs::from_xyz_with_hok` / `lpc::cam16_jch_from_xyz` before issue #19
     /// merged the two byte-identical copies into [`forward`]. This is the *old
@@ -384,9 +471,9 @@ mod tests {
             lms[2] * vc.rgb_d[2],
         ];
         let lms_aa = [
-            adapt(lms_a[0], vc.fl),
-            adapt(lms_a[1], vc.fl),
-            adapt(lms_a[2], vc.fl),
+            adapt_reference(lms_a[0], vc.fl),
+            adapt_reference(lms_a[1], vc.fl),
+            adapt_reference(lms_a[2], vc.fl),
         ];
 
         let a = lms_aa[0] - 12.0 * lms_aa[1] / 11.0 + lms_aa[2] / 11.0;
@@ -429,6 +516,50 @@ mod tests {
                 assert_eq!(j.to_bits(), rj.to_bits(), "{hex}: J drifted {j} vs {rj}");
                 assert_eq!(m.to_bits(), rm.to_bits(), "{hex}: M drifted {m} vs {rm}");
                 assert_eq!(h.to_bits(), rh.to_bits(), "{hex}: h drifted {h} vs {rh}");
+            }
+        }
+    }
+
+    #[test]
+    fn response_helpers_are_bit_identical_to_the_literal_model() {
+        let inputs = [
+            -100.0_f64,
+            -1.0,
+            -f64::MIN_POSITIVE,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            1.0,
+            100.0,
+        ];
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for value in inputs {
+                assert_eq!(
+                    adapt(value, vc.fl).to_bits(),
+                    adapt_reference(value, vc.fl).to_bits(),
+                    "adapt drifted for {value} at fl={}",
+                    vc.fl
+                );
+                assert_eq!(
+                    unadapt(value, vc.fl).to_bits(),
+                    unadapt_reference(value, vc.fl).to_bits(),
+                    "unadapt drifted for {value} at fl={}",
+                    vc.fl
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gray_inverse_is_bit_identical_to_the_pre_ssot_path() {
+        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
+            for j in [0.0_f64, f64::MIN_POSITIVE, 1.0, 25.0, 50.0, 75.0, 100.0] {
+                assert_eq!(
+                    gray_y_analytic(j, &vc).to_bits(),
+                    gray_y_analytic_reference(j, &vc).to_bits(),
+                    "gray inverse drifted for j={j} at fl={}",
+                    vc.fl
+                );
             }
         }
     }

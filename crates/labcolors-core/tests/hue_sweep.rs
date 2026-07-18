@@ -35,10 +35,9 @@ use labcolors_core::{
     recheck_against, solve,
 };
 
-/// Independent re-measure of an emitted hex's `|Lc|` MAGNITUDE in the readability
-/// domain the solver targets since глава #64 (ADR-0003): `Ys` (WCAG relative
-/// luminance of the emitted display bytes). Rechecking through the public
-/// resolver boundary keeps the test on the actual production axis.
+/// Независимое повторное измерение знаковой candidate-оценки `Lc` по `Ys` на
+/// финальных sRGB8-байтах. Проверка через публичный `recheck_against` сохраняет
+/// тест на фактически испускаемом состоянии и его полярности.
 fn candidate_lc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
     recheck_against(bg_hex, &[fg_hex], vc).expect("solver and fixture emit valid sRGB8 hex")[0].0
 }
@@ -58,11 +57,10 @@ fn vcs() -> [(ViewingConditions, &'static str); 2] {
 }
 
 #[test]
-fn solver_holds_perceptual_target_across_the_full_hue_circle() {
-    // The core of contract 1: the PURE perceptual inversion (Floor::None, no
-    // WCAG override muddying the result) must land within ±1 Lc of the target at
-    // every hue. This is the invariant the hue axis never tested — a regression
-    // in the H-K hue term would surface here as a missed target at some hue.
+fn solver_holds_ys_candidate_score_target_across_the_full_hue_circle() {
+    // Инверсия Ys candidate-score без юридического floor обязана попадать в
+    // ±1 Lc на каждом оттенке. Регрессия в hue/gamut search проявится здесь как
+    // промах по численной цели на части окружности.
     //
     // bg, signed target the background can host in its natural polarity:
     // dark-on-light (+) on white, light-on-dark (−) on near-black.
@@ -98,7 +96,7 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
                              measured {measured} for target {target}",
                         );
                         // With Floor::None there is no override, so the tight ±1
-                        // perceptual budget must hold at every hue.
+                        // candidate-score budget must hold at every hue.
                         assert!(
                             !solved.floor_override(),
                             "{vc_name} {bg_hex} hue {hue_deg}: Floor::None must never override",
@@ -135,7 +133,7 @@ fn solver_holds_perceptual_target_across_the_full_hue_circle() {
         "hue sweep solved too few combinations ({reachable}); the solver may be \
          refusing reachable targets across the hue circle"
     );
-    eprintln!("hue perceptual sweep: {reachable} reachable, max |Lc - target| = {max_err:.4}");
+    eprintln!("hue candidate-score sweep: {reachable} reachable, max |Lc - target| = {max_err:.4}");
 }
 
 #[test]
@@ -143,7 +141,7 @@ fn solver_holds_wcag_floor_across_the_full_hue_circle() {
     // The second half of contract 1's invariant: a default Contract::text carries
     // the AA-text floor (4.5:1), so EVERY successful solve — at every hue, both
     // VCs, both backgrounds — must clear it on the quantised colour, whether or
-    // not the floor had to override perception. A regression that let the floor
+    // not the floor had to override the candidate-score target. A regression that let the floor
     // be reported satisfied while the emitted hex falls short would surface here.
     let cases = [("#FFFFFF", 45.0_f64), ("#1C1C1E", -45.0_f64)];
 

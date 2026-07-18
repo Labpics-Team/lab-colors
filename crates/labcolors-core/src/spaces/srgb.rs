@@ -196,7 +196,7 @@ pub(crate) fn quantise_srgb(rgb: [f64; 3]) -> [f64; 3] {
 ///
 /// The input is continuous, so the gamma encode stays on the live transfer
 /// function (see the encode note above for why a table cannot be bit-exact here).
-pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
+pub(crate) fn hex_from_srgb(rgb: [f64; 3]) -> String {
     srgb8_from_linear(rgb).to_hex()
 }
 
@@ -225,9 +225,12 @@ pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
     ])
 }
 
-/// Гамма-кодированный sRGB `[0, 1]` → `#RRGGBB` (clamp + round до 8 бит).
-/// Обратная сторона [`srgb_encoded_from_hex`] — без гамма-преобразований.
-pub fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
+/// Внутренняя сериализация конечного gamma-encoded sRGB в `#RRGGBB`.
+///
+/// Это generated-finite boundary: публичный raw-`f64` formatter намеренно не
+/// существует, потому `NaN`/бесконечность не должны превращаться в цвет. На
+/// публичной границе exact-представление сериализуется через [`Srgb8::to_hex`].
+pub(crate) fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
     let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
 }

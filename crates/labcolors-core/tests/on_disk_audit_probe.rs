@@ -55,17 +55,17 @@
 //!        on_disk_audit_probe_goes_red_then_green_after_restore -- --ignored
 //!      ```
 //!
-//!   The isolated tempdir makes default test parallelism safe: the real tree is
-//!   never mutated.
+//!   Изолированный временный каталог безопасен для стандартного параллелизма
+//!   тестов: реальное дерево не изменяется.
 //!
-//! # Isolation mechanism: temp-dir copy + atomic write
+//! # Механизм изоляции: временная копия и атомарная запись
 //!
-//! The real workspace is copied into a per-invocation tempdir, the probe is
-//! injected into the COPY with an atomic write (write-tmp → rename), and the
-//! subprocess runs `current_dir(<tempdir>)` so Cargo recompiles from the copy.
-//! The tempdir is cleaned up automatically when it goes out of scope.
+//! Для каждого запуска workspace копируется во временный каталог. Проба
+//! атомарно вставляется в копию (`write-tmp → rename`), а подпроцесс запускается
+//! с `current_dir(<tempdir>)`, чтобы Cargo компилировал копию. Каталог
+//! автоматически удаляется при выходе из области видимости.
 
-// Atomic splice helper for the isolated temp-dir copy.
+// Атомарная вставка только в изолированную временную копию.
 #[path = "splice_support.rs"]
 mod splice_support;
 
@@ -166,8 +166,8 @@ fn run_gate_test_from(workspace_dir: &Path, test_name: &str) -> (bool, String) {
 /// See the module-level doc comment for the full rationale and the exact
 /// invocation command.
 ///
-/// The real source tree is never written to, so the test is safe under default
-/// parallelism.
+/// Реальное дерево исходников не изменяется, поэтому стандартный параллелизм
+/// тестов безопасен.
 #[test]
 #[ignore = "test runs a nested cargo subprocess; requires \
             LABCOLORS_ON_DISK_PROBE_ENABLED=1 env var to enable. \
@@ -244,9 +244,9 @@ fn on_disk_audit_probe_goes_red_then_green_after_restore() {
          specifically because of the probe, not a pre-existing issue).\n{injected_out}"
     );
 
-    // Post-condition compares the exact bytes observed by this invocation. It
-    // remains valid in a legitimately dirty worktree and cannot be vacuously
-    // green because of a wrong git pathspec.
+    // Постусловие сравнивает точные байты, прочитанные этим запуском. Оно
+    // корректно и в намеренно dirty-worktree и не может ложно пройти из-за
+    // неверного git pathspec.
     let real_semantic_after = std::fs::read(&real_semantic)
         .unwrap_or_else(|e| panic!("on_disk_audit_probe: cannot reread real semantic.rs: {e}"));
     assert_eq!(

@@ -1794,13 +1794,36 @@ fn validate_is_a_complete_preflight() {
         assert!(got.contains(want), "ждали {want}, получено {got}");
     };
 
-    // Exact-gray neutral without override is a lawful neutral policy, not a
-    // derivation failure; validate and compile must agree on success too.
+    // Exact-gray neutral without override is a lawful neutral policy when every
+    // material source is achromatic; validate and compile must agree on success.
     let mut c = labui_reference();
     c.neutral.tint.hue_override_deg = None;
     c.neutral.anchors.dark = "#101010".to_string();
     assert!(c.validate().is_ok());
     assert!(c.compile_named_role_table().is_ok());
+
+    // A chromatic source cannot be deferred into that neutral executable
+    // policy: preflight must reject it before the first runtime resolve.
+    for (name, recipe) in &mut c.roles {
+        if name == "fill-brand-secondary" {
+            *recipe = RoleRecipe::Material {
+                source: LadderSource::Brand,
+                tone_light: 12.0,
+                tone_dark: 12.0,
+                floor: Floor::AaUi,
+            };
+        }
+    }
+    assert!(matches!(
+        c.validate(),
+        Err(ConfigError::IncompatibleRolePolicy { ref role, .. })
+            if role == "fill-brand-secondary"
+    ));
+    assert!(matches!(
+        c.compile_named_role_table(),
+        Err(ConfigError::IncompatibleRolePolicy { ref role, .. })
+            if role == "fill-brand-secondary"
+    ));
 
     // Edge-роль без четвёрки edge — деривационная ошибка края нейтрали.
     let mut c = labui_reference();
@@ -1938,6 +1961,46 @@ fn achromatic_hue_sources_are_handled_honestly() {
         "#FF3B30",
         "независимый family-источник обязан сохранить клиентский якорь"
     );
+}
+
+/// `NeutralPick` is data, not a request to inherit the table undertone. An
+/// exact-gray selected anchor stays achromatic even when another neutral anchor
+/// makes the table-wide policy chromatic.
+#[test]
+fn material_uses_the_selected_neutral_source_before_chroma_classification() {
+    let mut config = labui_reference();
+    config.neutral.tint.hue_override_deg = None;
+    assert!(matches!(
+        config.compile_named_role_table().unwrap().chroma(),
+        RoleChroma::Curve { .. }
+    ));
+    for (name, recipe) in &mut config.roles {
+        if name == "fill-brand-secondary" {
+            *recipe = RoleRecipe::Material {
+                source: LadderSource::Neutral(NeutralPick::Light),
+                tone_light: 12.0,
+                tone_dark: 12.0,
+                floor: Floor::AaUi,
+            };
+        }
+    }
+
+    let table = config.compile_named_role_table().unwrap();
+    let set = resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &table,
+        &ViewingConditions::srgb(),
+    )
+    .expect("exact-gray material source must resolve under a chromatic table policy");
+    let (_, Resolved::Material(material)) = set
+        .iter()
+        .find(|(name, _)| name == "fill-brand-secondary")
+        .expect("material role exists")
+    else {
+        panic!("fill-brand-secondary must resolve to Material");
+    };
+    assert_achromatic_hex(material.tint_hex(), "selected Neutral(Light) Material");
+    assert_achromatic_hex(material.base_hex(), "selected Neutral(Light) Material");
 }
 
 /// Transitional characterization only: these paths are removed with the closed

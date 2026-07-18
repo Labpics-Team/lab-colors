@@ -23,6 +23,7 @@ import {
   validateSolveFamily,
   validateWcag22EvidenceArtifacts,
 } from "../../../scripts/verify-package-release.mjs";
+import { workspacePackageTable } from "../../../scripts/cargo-workspace.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -83,14 +84,30 @@ function assertCheckoutCredentialsAreEphemeral(workflow, name) {
   }
 }
 
+function tomlString(table, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const matches = [
+    ...table.matchAll(
+      new RegExp(`^[ \\t]*${escaped}[ \\t]*=[ \\t]*\"([^\"\\r\\n]+)\"[ \\t]*(?:#.*)?$`, "gmu"),
+    ),
+  ];
+  assert.equal(matches.length, 1, `expected exactly one ${key} in [workspace.package]`);
+  return matches[0][1];
+}
+
+function assertWorkspaceReleaseMetadata(source) {
+  const workspacePackage = workspacePackageTable(source);
+  assert.equal(tomlString(workspacePackage, "version"), "0.3.0");
+  assert.equal(tomlString(workspacePackage, "rust-version"), "1.85");
+  assert.equal(
+    tomlString(workspacePackage, "repository"),
+    "https://github.com/Labpics-Team/lab-colors",
+  );
+}
+
 test("breaking release metadata is one explicit 0.3.0/0.11.0 contract", () => {
   const workspace = read("Cargo.toml");
-  assert.match(workspace, /\[workspace\.package\][\s\S]*\nversion = "0\.3\.0"/);
-  assert.match(workspace, /\nrust-version = "1\.85"/);
-  assert.match(
-    workspace,
-    /repository = "https:\/\/github\.com\/Labpics-Team\/lab-colors"/,
-  );
+  assertWorkspaceReleaseMetadata(workspace);
 
   const packageJson = JSON.parse(read("packages", "colors", "package.json"));
   const packageLock = JSON.parse(read("packages", "colors", "package-lock.json"));
@@ -105,6 +122,28 @@ test("breaking release metadata is one explicit 0.3.0/0.11.0 contract", () => {
     "npm run build && node ../../scripts/prepare-npm-package.mjs",
   );
   assert.match(packageJson.scripts.build, /wasm-pack build .* --locked$/);
+});
+
+test("workspace release metadata cannot be rescued by a later TOML table", () => {
+  const expected = {
+    version: "0.3.0",
+    "rust-version": "1.85",
+    repository: "https://github.com/Labpics-Team/lab-colors",
+  };
+  for (const poisoned of Object.keys(expected)) {
+    const actual = { ...expected, [poisoned]: "wrong" };
+    assert.throws(() => assertWorkspaceReleaseMetadata(`
+[workspace.package]
+version = "${actual.version}"
+rust-version = "${actual["rust-version"]}"
+repository = "${actual.repository}"
+
+[workspace.metadata.release]
+version = "0.3.0"
+rust-version = "1.85"
+repository = "https://github.com/Labpics-Team/lab-colors"
+`), `later table rescued poisoned ${poisoned}`);
+  }
 });
 
 test("every workspace package inherits the declared MSRV", () => {

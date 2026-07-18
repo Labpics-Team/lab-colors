@@ -1294,7 +1294,7 @@ fn finish(
     let encoded = srgb8_from_linear(rgb_ideal);
     let hex = encoded.to_hex();
     let color = LcsColor::from_srgb8_with_vc(encoded, vc);
-    let disp = quantised_display(rgb_ideal);
+    let disp = encoded.bytes().map(|byte| f64::from(byte) / 255.0);
     let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(disp, bg_disp);
@@ -1390,7 +1390,6 @@ pub(crate) mod probe_log {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lpc::apparent_contrast_candidate_hex_with_vc_for_test;
 
     #[test]
     fn internal_invariant_failure_is_not_reported_as_invalid_client_input() {
@@ -1724,6 +1723,36 @@ mod tests {
     }
 
     #[test]
+    fn solved_metrics_are_reproducible_from_the_emitted_bytes() {
+        let vc = ViewingConditions::srgb();
+        let background = [1.0, 1.0, 1.0];
+        let y_bg = wcag::relative_luminance(background);
+        for ideal in [
+            [0.0, 0.5, 1.0],
+            [0.003_130_8, 0.214_041_140_482_232_55, 0.999_999_999],
+            [0.010_329, 0.215_861, 0.503_111],
+        ] {
+            let solved = finish(ideal, y_bg, background, false, &vc)
+                .expect("finite generated colour must finish");
+            let emitted = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
+                .expect("finish emits canonical sRGB8");
+            let emitted_y = wcag::relative_luminance(emitted);
+            assert_eq!(
+                solved.lc().to_bits(),
+                lpc::contrast_core(emitted_y, y_bg).to_bits(),
+                "lc was not measured from emitted {}",
+                solved.hex()
+            );
+            assert_eq!(
+                solved.wcag_ratio().to_bits(),
+                wcag::contrast_ratio(emitted, background).to_bits(),
+                "WCAG ratio was not measured from emitted {}",
+                solved.hex()
+            );
+        }
+    }
+
+    #[test]
     fn property_grid_neutral_and_chromatic_backgrounds() {
         // Grid: neutral + chromatic backgrounds × both polarities × both VCs ×
         // the full magnitude grid. Every reachable target lands within 1 Lc;
@@ -1815,12 +1844,7 @@ mod tests {
                         };
                         reachable += 1;
                         // Independently re-measure the emitted hex's signed Lc.
-                        let measured = apparent_contrast_candidate_hex_with_vc_for_test(
-                            solved.hex(),
-                            bg_hex,
-                            &vc,
-                        )
-                        .expect("solver and fixture emit valid sRGB8 hex");
+                        let measured = candidate_lc(solved.hex(), bg_hex);
                         // Compare signum, not `> 0.0`. Under the AA text floor every
                         // reachable result clears 4.5:1, so `measured` is never the
                         // dead-zone zero here — this is belt-and-suspenders. f64
@@ -2074,8 +2098,9 @@ mod tests {
 
     #[test]
     fn chromatic_foreground_hits_target_and_carries_chroma() {
-        // A saturated foreground policy still lands on the contrast target,
-        // because the H-K boost is compensated by lowering lightness.
+        // A chromatic policy still lands within the declared Ys candidate-score
+        // budget: `match_lightness_ys` varies Oklab lightness along the selected
+        // chroma curve; H-K is not an input to this readability path.
         let vc = ViewingConditions::srgb();
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let target = 45.0;
@@ -2481,10 +2506,7 @@ mod tests {
         .unwrap_err();
         match err {
             SolveFailure::ExceedsRange { max_achievable, .. } => {
-                let black_on_white = crate::lpc::apparent_contrast_candidate_hex_with_vc_for_test(
-                    "#000000", "#FFFFFF", &vc,
-                )
-                .expect("literal fixture is valid");
+                let black_on_white = candidate_lc("#000000", "#FFFFFF");
                 assert!(
                     (max_achievable - black_on_white).abs() < 0.5,
                     "max_achievable {max_achievable} should match the forward                      curve extreme {black_on_white}"
@@ -3230,7 +3252,6 @@ mod tests {
 mod exposure_locks {
     use super::{DJ_BUDGET, QUANT_BUDGET};
     use crate::lcs::LcsColor;
-    use crate::lpc::apparent_contrast_candidate_hex_for_test;
 
     fn grey(i: u8) -> String {
         format!("#{i:02X}{i:02X}{i:02X}")
@@ -3238,8 +3259,11 @@ mod exposure_locks {
     fn grey_lc() -> Vec<f64> {
         (0u16..=255)
             .map(|i| {
-                apparent_contrast_candidate_hex_for_test(&grey(i as u8), "#FFFFFF")
-                    .expect("generated grey is valid")
+                let fg = crate::spaces::srgb::srgb_encoded_from_hex(&grey(i as u8))
+                    .expect("generated grey is valid");
+                let bg = crate::spaces::srgb::srgb_encoded_from_hex("#FFFFFF")
+                    .expect("literal fixture is valid");
+                crate::lpc::ys_candidate_score_for_test(fg, bg)
             })
             .collect()
     }

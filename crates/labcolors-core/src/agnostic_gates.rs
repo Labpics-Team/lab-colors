@@ -189,14 +189,43 @@ fn hex(set: &[(String, Resolved)], name: &str) -> String {
 
 #[test]
 fn named_roles_do_not_gain_hierarchy_from_declaration_order() {
-    // This background is an anti-vacuum witness: two independently solved fixture
-    // anchors quantise to the same byte colour. Their neighbouring declaration
-    // positions and client-owned names must not make Core invent a hierarchy edge
-    // or mutate either result. C7 will express such a relation explicitly.
-    let table = labui_reference().compile_named_role_table().unwrap();
+    // Этот фон — anti-vacuum witness: два независимо решённых якоря фикстуры
+    // квантуются в один байтовый цвет. Соседство в декларации и client-owned
+    // имена не дают Core права изобретать между ними ребро и менять результат.
+    let config = labui_reference();
+    let table = config.compile_named_role_table().unwrap();
     let bg = BgInput::solid("#767676").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
         .expect("valid opaque-role fixture must resolve");
+
+    let mut reversed_config = config;
+    let declared_names: Vec<_> = reversed_config
+        .roles
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    reversed_config.roles.reverse();
+    let reversed_names: Vec<_> = reversed_config
+        .roles
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert_eq!(
+        reversed_names,
+        declared_names.into_iter().rev().collect::<Vec<_>>(),
+        "anti-vacuum: контрольная конфигурация обязана реально сменить порядок"
+    );
+    let reversed_table = reversed_config.compile_named_role_table().unwrap();
+    let reversed = resolve_named_set(&bg, &reversed_table, &ViewingConditions::srgb())
+        .expect("тот же контракт в обратном порядке обязан резолвиться");
+    let by_name: std::collections::BTreeMap<_, _> =
+        set.iter().map(|(name, value)| (name, value)).collect();
+    let reversed_by_name: std::collections::BTreeMap<_, _> =
+        reversed.iter().map(|(name, value)| (name, value)).collect();
+    assert_eq!(
+        by_name, reversed_by_name,
+        "физический результат не должен зависеть от порядка client-owned ролей"
+    );
 
     assert_eq!(
         hex(&set, "label-primary"),

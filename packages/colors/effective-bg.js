@@ -105,8 +105,8 @@ function clamp255(v) {
  * form is `oklch(<L 0..1> C H [/ A])`. Components are whitespace-separated with
  * an optional `/`-separated alpha, exactly like `rgb()`'s modern syntax.
  * oklch → Oklab is `a = C·cos(H)`, `b = C·sin(H)`; then the file's own
- * `oklabToLinearRgb` + `linearToSrgb` land it in sRGB — the SAME transform (and
- * the SAME clamp-then-round the core uses in `hex_from_srgb`) that carries the
+ * `oklabToLinearRgb` + `linearToSrgb` land it in sRGB — the SAME transform and
+ * clamp-then-round law as the core's final sRGB8 emission. That preserves the
  * emitter's byte-exact round-trip, so an emitted string decodes to its source
  * bytes. Out-of-gamut channels clamp per channel, matching `oklabLerp`/`toHex`.
  *

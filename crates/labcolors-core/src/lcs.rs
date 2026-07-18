@@ -7,23 +7,23 @@ use crate::Srgb8;
 use crate::spaces::srgb::{srgb_linear_from_srgb8, srgb_to_xyz, xyz_to_srgb};
 use crate::spaces::{cam16, cat16, oklab, vc::ViewingConditions};
 
-/// A physical submanifold that must survive coordinate transforms until output.
+/// Физическое подмногообразие, сохраняемое преобразованиями до эмиссии.
 ///
-/// This is private because callers describe stimuli, not implementation flags.
-/// The locus prevents matrix round-off from inventing a chromatic direction
-/// where the exact encoded source has none.
+/// Тип закрыт: клиент описывает стимул, а не флаги реализации. Locus не даёт
+/// матричному округлению изобрести хроматическое направление там, где его нет в
+/// точном encoded-источнике.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PhysicalLocus {
     General,
     SrgbGrayAxis,
 }
 
-/// All hue fields (`h_ok`, `h_cam`) are stored in **degrees** `[0, 360)`.
-/// Convert to radians only at trigonometric call sites — never store radians.
+/// Все поля оттенка (`h_ok`, `h_cam`) хранятся в **градусах** `[0, 360)`.
+/// Радианы используются только непосредственно в тригонометрических вызовах.
 ///
-/// Coordinates are read-only outside this module because `locus` records a
-/// physical representation invariant. Mutating one coordinate independently
-/// would make conversion and measurement observe two different colours.
+/// Координаты доступны извне только для чтения: `locus` фиксирует физический
+/// инвариант представления. Независимое изменение одной координаты заставило бы
+/// преобразование и измерение видеть разные цвета.
 ///
 /// ```compile_fail
 /// use labcolors_core::LcsColor;
@@ -45,17 +45,17 @@ pub struct LcsColor {
 }
 
 impl LcsColor {
-    /// CAM16-UCS `J′` coordinate under the construction viewing conditions.
+    /// Координата CAM16-UCS `J′` в условиях просмотра построения.
     pub fn jp(&self) -> f64 {
         self.jp
     }
 
-    /// Oklab hue angle in degrees, canonicalised to zero on exact sRGB grays.
+    /// Угол оттенка Oklab в градусах; для точных серых sRGB каноничен ноль.
     pub fn h_ok(&self) -> f64 {
         self.h_ok
     }
 
-    /// Internal chroma reparameterisation; not a client-owned intent axis.
+    /// Внутренняя перепараметризация хромы, а не клиентская ось намерения.
     pub fn s(&self) -> f64 {
         self.s
     }
@@ -75,21 +75,20 @@ impl LcsColor {
         Ok(Self::from_srgb8_with_vc(encoded, vc))
     }
 
-    /// Build the appearance view of one exact emitted sRGB8 stimulus.
+    /// Строит appearance-представление точного эмитированного стимула sRGB8.
     ///
-    /// Parsing and solver output both enter here so representation facts such
-    /// as the exact grey axis cannot diverge between two views of the same
-    /// bytes.
+    /// Парсинг и результат решателя проходят через эту границу, поэтому точная
+    /// серая ось не расходится между представлениями одних байтов.
     pub(crate) fn from_srgb8_with_vc(encoded: Srgb8, vc: &ViewingConditions) -> Self {
         let rgb = srgb_linear_from_srgb8(encoded);
         let xyz = srgb_to_xyz(rgb);
         let h_ok = oklab::oklab_hue(rgb);
         let mut color = Self::from_xyz_with_hok(xyz, h_ok, vc);
         if encoded.is_achromatic() {
-            // Hue is undefined on the exact encoded gray axis.  Oklab matrix
-            // round-off otherwise turns that absence into a discontinuous
-            // numeric angle at authored byte anchors, while interpolated gray
-            // points carry the canonical zero representation.
+            // На точной encoded-серой оси оттенок не определён. Матричное
+            // округление Oklab иначе превращает его отсутствие в разрывный
+            // числовой угол у заданных байтовых якорей, хотя интерполированные
+            // серые точки несут канонический ноль.
             color.h_ok = 0.0;
             color.locus = PhysicalLocus::SrgbGrayAxis;
         }
@@ -109,14 +108,14 @@ impl LcsColor {
         self.to_srgb8_with_vc(vc).to_hex()
     }
 
-    /// Quantise through the same typed final-output boundary used by curves.
+    /// Квантует через общую с кривыми типизированную границу эмиссии.
     pub(crate) fn to_srgb8_with_vc(self, vc: &ViewingConditions) -> crate::Srgb8 {
         crate::spaces::srgb::srgb8_from_linear(self.to_linear_srgb_with_vc(vc))
     }
 
-    /// Raw constructor from already-valid coordinates (curves, solver).
-    /// Inputs come from internal maths; a non-finite value is therefore an
-    /// invariant bug and must never be converted into a plausible display byte.
+    /// Строит значение из уже корректных координат кривой или решателя.
+    /// Неконечный внутренний результат нарушает инвариант и не преобразуется в
+    /// правдоподобный display-байт.
     pub(crate) fn new(jp: f64, h_ok: f64, s: f64, h_cam: f64) -> Self {
         assert!(
             [jp, h_ok, s, h_cam].into_iter().all(f64::is_finite),
@@ -131,17 +130,17 @@ impl LcsColor {
         }
     }
 
-    /// Construct the continuous physical point on the sRGB gray axis whose
-    /// CAM16-UCS lightness is `jp` under `vc`.
+    /// Строит непрерывную физическую точку серой оси sRGB со светлотой
+    /// CAM16-UCS `jp` в условиях `vc`.
     ///
-    /// The point is never snapped to a byte. Its locus only constrains the final
-    /// output conversion to one shared channel before ordinary sRGB rounding.
+    /// Точка не привязывается к байту. Locus ограничивает только финальное
+    /// преобразование одним общим каналом перед обычным округлением sRGB.
     pub(crate) fn from_srgb_gray_axis_jp(jp: f64, vc: &ViewingConditions) -> Self {
         let y = srgb_gray_linear_at_jp(jp, vc);
         let mut color = Self::from_xyz_with_hok(srgb_to_xyz([y; 3]), 0.0, vc);
-        // `y` is the analytic inverse of this requested coordinate. Preserve
-        // that coordinate exactly instead of feeding Newton/forward round-off
-        // back into the continuous curve skeleton.
+        // `y` — аналитическая инверсия запрошенной координаты. Сохраняем саму
+        // координату точно, не возвращая погрешность Newton/прямого хода в
+        // непрерывный каркас кривой.
         color.jp = jp;
         color.locus = PhysicalLocus::SrgbGrayAxis;
         color
@@ -185,11 +184,11 @@ impl LcsColor {
     /// caller that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s
     /// `finish`) reuses that result instead of recomputing it.
     pub(crate) fn from_cam16(j: f64, m: f64, h_cam: f64, h_ok: f64) -> Self {
-        // CAM16-UCS rescaling (Li et al. 2017, DOI 10.1002/col.22131). This is
-        // an analytically invertible coordinate transform used for
-        // colour-difference work; binary64 round-off is covered by the shared
-        // tolerance tests. No individual J'/M' value is assigned a universal
-        // attribute meaning here. The inverse path uses the same helpers.
+        // Перешкалирование CAM16-UCS (Li et al. 2017,
+        // DOI 10.1002/col.22131) — аналитически обратимое преобразование для
+        // цветовых различий. Тесты с общим допуском покрывают округление
+        // binary64; отдельным J′/M′ здесь не приписывается универсальный смысл.
+        // Обратный путь использует те же функции.
         let jp = cam16::ucs_j(j);
         let mp = cam16::ucs_m(m);
         let s = mp / (jp + 1.0);
@@ -245,13 +244,13 @@ impl LcsColor {
     }
 }
 
-/// Invert CAM16-UCS lightness on the achromatic D65 ray.
+/// Инвертирует светлоту CAM16-UCS на ахроматическом луче D65.
 ///
-/// This inverse is defined only by CAM16 `J` on the D65 gray ray; it does not
-/// invoke the separate H-K appearance-brightness diagnostic. CAM16 can retain
-/// a small residual `M` on a numerically achromatic stimulus, so no claim of
-/// zero chromatic correlate is made here. This scalar is the SSOT for XYZ,
-/// continuous linear sRGB and eventual sRGB8 gray emission.
+/// Инверсия определяется только CAM16 `J` на сером луче D65 и не вызывает
+/// отдельную H-K-диагностику appearance-яркости. CAM16 может сохранять малый
+/// остаток `M` у численно ахроматического стимула, поэтому нулевая хроматическая
+/// коррелята не заявляется. Этот скаляр — SSOT для XYZ, непрерывного линейного
+/// sRGB и последующей серой эмиссии sRGB8.
 fn srgb_gray_linear_at_jp(jp: f64, vc: &ViewingConditions) -> f64 {
     assert!(jp.is_finite(), "internal gray-axis J′ must be finite");
     if jp <= 0.0 {

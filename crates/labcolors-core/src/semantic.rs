@@ -38,6 +38,7 @@ use crate::solve::{
     self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureBoundary,
     SolveFailureCategory, Solved,
 };
+use crate::spaces::oklab::{HUE_DEG_MAX_EXCLUSIVE, HUE_DEG_MIN_INCLUSIVE};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -392,11 +393,11 @@ impl Role {
     }
 }
 
-/// How a text/UI role expresses its transitional Ys candidate-score target.
+/// Переходное представление цели text/UI-роли по Ys candidate-score.
 ///
-/// A fraction of the background's maximum Ys candidate-score magnitude —
-/// *not* a fixed `Lc` delta. `fraction` is in `(0, 1]`: `1.0` names the endpoint
-/// of the frozen SAPC-shaped curve. This coordinate is not LPC/readability evidence.
+/// Доля максимальной величины candidate-score данного фона, а не фиксированная
+/// дельта `Lc`. `fraction` лежит в `(0, 1]`; `1.0` означает конец замороженной
+/// SAPC-shaped кривой. Координата не является LPC/readability evidence.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextAnchor {
     fraction: f64,
@@ -410,11 +411,10 @@ pub struct TextAnchor {
 }
 
 impl TextAnchor {
-    /// A text anchor at `fraction` of the background's maximum Ys candidate score, with the
-    /// given WCAG conformance floor. `fraction` must be finite and inside
-    /// `(0, 1]`; invalid input is rejected rather than silently rewritten.
-    /// Neutral undertone (no family hue); attach one with
-    /// [`with_hue`](Self::with_hue).
+    /// Якорь на доле `fraction` от максимального Ys candidate-score фона с
+    /// заданным WCAG-полом. `fraction` обязан быть конечным и лежать в `(0, 1]`;
+    /// невалидный ввод отклоняется без тихой коррекции. По умолчанию семейный
+    /// оттенок отсутствует; его добавляет [`with_hue`](Self::with_hue).
     pub fn new(fraction: f64, conformance: Floor) -> Result<Self, SolveFailure> {
         if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
             return Err(SolveFailure::InvalidInput(format!(
@@ -436,12 +436,12 @@ impl TextAnchor {
         self
     }
 
-    /// The fraction of maximum Ys candidate-score magnitude, in `(0, 1]`.
+    /// Доля максимальной величины Ys candidate-score в `(0, 1]`.
     pub fn fraction(self) -> f64 {
         self.fraction
     }
 
-    /// The WCAG conformance floor applied after the candidate-score target.
+    /// WCAG-пол, применяемый после candidate-score цели.
     pub fn conformance(self) -> Floor {
         self.conformance
     }
@@ -452,11 +452,11 @@ impl TextAnchor {
     }
 }
 
-/// A pair of authored per-theme CAM16-UCS `J'` coordinate offsets.
+/// Пара авторских per-theme смещений координаты CAM16-UCS `J'`.
 ///
-/// Values are derived from referenced Figma emissions under declared viewing
-/// conditions. They are design calibration, not a measured JND or a universal
-/// surround-compensation law. The solver selects the authored side through
+/// Значения выведены из указанных Figma-эмиссий под объявленными viewing
+/// conditions. Это дизайн-калибровка, а не измеренный JND или универсальный
+/// закон компенсации окружения. Нужную сторону выбирает
 /// [`for_vc`](DjMagnitude::for_vc).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DjMagnitude {
@@ -465,13 +465,12 @@ pub struct DjMagnitude {
 }
 
 impl DjMagnitude {
-    /// Authored `J'` offsets for the light and dark viewing-condition profiles.
+    /// Авторские `J'`-смещения для светлого и тёмного профилей VC.
     pub const fn new(light: f64, dark: f64) -> Self {
         Self { light, dark }
     }
 
-    /// The anchor for these viewing conditions: the dark value under a dimmed
-    /// surround (dark theme), the light value otherwise.
+    /// Якорь для данных VC: dark-значение при dimmed surround, иначе light.
     pub fn for_vc(self, vc: &ViewingConditions) -> f64 {
         if vc.is_dark_theme() {
             self.dark
@@ -480,52 +479,44 @@ impl DjMagnitude {
         }
     }
 
-    /// The light-surround anchor.
+    /// Якорь светлого окружения.
     pub fn light(self) -> f64 {
         self.light
     }
 
-    /// The dark-surround anchor.
+    /// Якорь тёмного окружения.
     pub fn dark(self) -> f64 {
         self.dark
     }
 }
 
-/// The transitional numeric recipe behind a role — the shape this module solves.
+/// Переходный численный рецепт роли — форма, исполняемая этим модулем.
 ///
-/// Text/UI roles ([`Anchor`](RoleSpec::Anchor)) target a fraction of the frozen
-/// curve's maximum Ys candidate score; dJ' decorative roles
-/// ([`DecorativeDj`](RoleSpec::DecorativeDj)) target a CAM16-UCS `J'` coordinate
-/// step with no WCAG floor; legacy Lc decorative roles
-/// ([`Decorative`](RoleSpec::Decorative)) target a Ys candidate-score magnitude held only for
-/// the stack's relative ordering (the shadow anchors are alpha opacities, not
-/// dJ' steps — see the shadow-stack note above); the
-/// zero token ([`Zero`](RoleSpec::Zero)) resolves to nothing. Construct these
-/// through `RoleTable`; they are exposed so a caller can read or override a recipe.
+/// Text/UI-якоря задают долю максимума замороженной Ys-кривой; декоративные dJ'
+/// роли — шаг координаты CAM16-UCS `J'` без WCAG-пола; legacy-декоративные Lc
+/// роли — величину Ys candidate-score только для относительного порядка стека.
+/// Нулевой токен разрешается в отсутствие значения. Эти варианты описывают
+/// текущий transport и не являются точкой расширения Core.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleSpec {
-    /// Anchored text/UI Ys candidate score: a fraction of the background's maximum.
+    /// Ys candidate-score text/UI-якоря: доля максимума данного фона.
     Anchor(TextAnchor),
-    /// Decorative CAM16-UCS `J'` coordinate offset: the solved colour sits
-    /// `magnitude_dj` away from the background on the CAM16-UCS lightness (`J'`)
-    /// axis, toward the larger headroom (the set polarity). No WCAG floor and no
-    /// low-contrast clip. This coordinate contract does not itself claim a JND or
-    /// glyph-readability result.
+    /// Декоративное смещение координаты CAM16-UCS `J'`: решённый цвет находится
+    /// на `magnitude_dj` от фона по оси `J'` в сторону большего доступного
+    /// диапазона. Нет WCAG-пола и low-contrast clip; координатный контракт сам
+    /// по себе не заявляет JND или читаемость глифов.
     ///
-    /// The magnitude carries the owner's literal Figma-computed anchors per theme
-    /// (see [`DjMagnitude`]); the solve is analytic (J' offset → grey-axis Oklab L
-    /// → undertone build → quantise → honest dJ' measurement on the emitted hex).
-    /// The unit, type, and source of the anchor are the owner's — not a
-    /// substitute.
+    /// Величина несёт авторские Figma-якоря по темам (см. [`DjMagnitude`]); solve
+    /// аналитически переводит J'-смещение в Oklab L, строит подтон, квантует и
+    /// повторно измеряет dJ' на эмитированном hex.
     DecorativeDj { magnitude_dj: DjMagnitude },
     /// Decorative Ys candidate-score magnitude `Lc`, held above
     /// `DECORATIVE_FLOOR_MIN`, with [`Floor::None`]. It is not a JND claim.
     ///
-    /// Retained for the shadow stack, whose owner anchors are alpha opacities,
-    /// not dJ' steps — converting them to dJ' would invent numbers with no owner
-    /// source. The relative order between the shadow steps is the contract this
-    /// variant carries; `surface-jnd` derives shadow contracts from the alphas.
+    /// Сохранено для стека теней: его исходные якоря — alpha opacity, не dJ'.
+    /// Перевод в dJ' выдумал бы числа без источника; этот вариант несёт только
+    /// относительный порядок ступеней.
     Decorative { magnitude: f64 },
     /// Ступень лестницы семейства/бренда/нейтрали: тинт-якорь источника
     /// (по теме) при альфе позиции. Эмитит пару (тинт, α) НАПРЯМУЮ (закон
@@ -642,7 +633,7 @@ pub enum RoleSpec {
         /// `Floor::None` невалиден — материал обязан нести пол (валидатор ловит).
         floor: Floor,
     },
-    /// The zero token: resolves to [`Resolved::None`].
+    /// Нулевой токен: разрешается в [`Resolved::None`].
     Zero,
 }
 
@@ -739,9 +730,9 @@ pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 #[cfg(test)]
 pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 
-/// Half-width (degrees) of the hue window the cusp search explores around the
-/// canonical hue. The undertone may drift inside a blue-violet band; it may not
-/// wander into unrelated quadrants (red, cyan), so the search is bounded.
+/// Полуширина окна оттенка в градусах для cusp-поиска вокруг канонического hue.
+/// Подтон может смещаться внутри ограниченного диапазона, но не уходить в
+/// несвязанные квадранты.
 ///
 /// Терминал **(e) DESIGN-CHOICE** (НЕ (c), несмотря на внешнее сходство с
 /// [`crate::scale::HUE_SEARCH_HALF_WINDOW`]): замер
@@ -767,22 +758,20 @@ pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 // SSOT-TRACKED — hue search half-window (degrees), терминал (e) design-choice (намеренный кап (0,~42.5°], не interval-insensitive), см. docs/empirical-inventory.md.
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
-/// The chroma policy a role table carries.
+/// Chroma-policy, которую несёт таблица ролей.
 ///
-/// [`Tinted`](RoleChroma::Tinted) is a generic fixed-ratio primitive whose hue
-/// and ratio belong to an explicit client policy. [`Curve`](RoleChroma::Curve)
-/// carries the parameterised undertone construction, while
-/// [`Neutral`](RoleChroma::Neutral) is the achromatic policy. The compiled
-/// [`NamedRoleTable`] stores one of these policies without deriving it from a
-/// client ID.
+/// [`Tinted`](RoleChroma::Tinted) — общий fixed-ratio примитив с явными
+/// клиентскими hue/ratio; [`Curve`](RoleChroma::Curve) — параметризованное
+/// построение подтона; [`Neutral`](RoleChroma::Neutral) — ахроматическая policy.
+/// [`NamedRoleTable`] хранит policy без вывода из client ID.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleChroma {
-    /// Achromatic (grey): zero chroma; hue is irrelevant.
+    /// Ахроматический режим: нулевая chroma, hue не влияет.
     Neutral,
-    /// Fixed-ratio colour construction at Oklab `hue_deg`, carried as `ratio`
-    /// of the in-gamut maximum chroma at each resolved lightness. Both values
-    /// are explicit policy inputs; Core does not assign them semantic meaning.
+    /// Цвет в Oklab-направлении `hue_deg` при `ratio` от максимальной in-gamut
+    /// chroma на каждой решённой светлоте. Оба значения — явные входы policy;
+    /// Core не приписывает им клиентский смысл.
     Tinted { hue_deg: f64, ratio: f64 },
     /// Параметризованное построение цветности на решённой Oklab-светлоте.
     ///
@@ -818,9 +807,11 @@ impl RoleChroma {
         match self {
             RoleChroma::Neutral => Ok(()),
             RoleChroma::Tinted { hue_deg, ratio } => {
-                if !hue_deg.is_finite() {
+                if !hue_deg.is_finite()
+                    || !(HUE_DEG_MIN_INCLUSIVE..HUE_DEG_MAX_EXCLUSIVE).contains(&hue_deg)
+                {
                     return Err(SolveFailure::InvalidInput(format!(
-                        "undertone hue must be finite, got {hue_deg}"
+                        "undertone hue must be finite and inside [0, 360), got {hue_deg}"
                     )));
                 }
                 if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
@@ -835,9 +826,11 @@ impl RoleChroma {
                 target_mp,
                 hue_stiffness,
             } => {
-                if !canonical_hue_deg.is_finite() {
+                if !canonical_hue_deg.is_finite()
+                    || !(HUE_DEG_MIN_INCLUSIVE..HUE_DEG_MAX_EXCLUSIVE).contains(&canonical_hue_deg)
+                {
                     return Err(SolveFailure::InvalidInput(format!(
-                        "curve canonical hue must be finite, got {canonical_hue_deg}"
+                        "curve canonical hue must be finite and inside [0, 360), got {canonical_hue_deg}"
                     )));
                 }
                 if !target_mp.is_finite() || target_mp <= 0.0 {
@@ -855,8 +848,8 @@ impl RoleChroma {
         }
     }
 
-    /// Frozen calibrated curve of the test-only built-in fixture. It is an
-    /// oracle for migration parity, not a scientific default for client data.
+    /// Замороженная кривая test-only фикстуры: oracle миграционного паритета,
+    /// не научный default для клиентских данных.
     #[cfg(test)]
     fn neutral_curve() -> Self {
         RoleChroma::Curve {
@@ -866,16 +859,13 @@ impl RoleChroma {
         }
     }
 
-    /// Plan the solver's `(hue, chroma)` inputs for a role whose contrast-solved
-    /// Oklab lightness is `l_ok`.
+    /// Строит `(hue, chroma)` для роли с уже решённой Oklab-светлотой `l_ok`.
     ///
-    /// For the lightness-independent policies ([`Neutral`](RoleChroma::Neutral),
-    /// [`Tinted`](RoleChroma::Tinted)) the plan ignores `l_ok` and reproduces the
-    /// v1 behaviour exactly. For [`Curve`](RoleChroma::Curve) the hue is the
-    /// cusp-attracted hue at `l_ok` and the chroma ratio is the one that lands the
-    /// colour on the target perceptual colorfulness at that lightness and hue —
-    /// the per-lightness derivation that makes the undertone a curve, not a
-    /// constant.
+    /// [`Neutral`](RoleChroma::Neutral) и [`Tinted`](RoleChroma::Tinted) не
+    /// зависят от `l_ok`. Для [`Curve`](RoleChroma::Curve) hue притягивается к
+    /// cusp при `l_ok`, а ratio решается к объявленной численной цели `target_mp`
+    /// на этой светлоте; это model-scoped построение кривой, не общий закон
+    /// восприятия.
     fn plan_for_lightness(self, l_ok: f64, vc: &ViewingConditions) -> (Hue, ChromaPolicy) {
         match self {
             RoleChroma::Neutral => (Hue::deg(0.0), ChromaPolicy::Neutral),
@@ -887,38 +877,28 @@ impl RoleChroma {
                 target_mp,
                 hue_stiffness,
             } => {
-                // The Curve plan is a pure function of `(l_ok, policy scalars, vc)`:
-                // an 81-step cusp-hue scan plus a CAM16 ratio bisection. Within one
-                // resolve sweep the same lightness recurs across roles and across a
-                // role's fixed-point refinements, so a sweep-scoped exact-key memo
-                // returns the byte-identical `(hue, ratio)` without redoing either
-                // scan. See [`curve_plan_cached`].
+                // Curve-план — чистая функция `(l_ok, policy scalars, vc)`:
+                // 81-точечный hue-поиск и CAM16-бисекция ratio. Exact-key memo
+                // возвращает те же биты при повторе светлоты внутри sweep, не
+                // повторяя оба поиска; см. [`curve_plan_cached`].
                 curve_plan_cached(l_ok, canonical_hue_deg, target_mp, hue_stiffness, vc)
             }
         }
     }
 
-    /// A lightness-independent plan for the achromatic probe pass (pass A), used
-    /// only to discover a role's contrast-solved lightness before the real
-    /// per-lightness plan is built. Always achromatic so the probe is fast and
-    /// the discovered lightness is the role's true contrast lightness.
+    /// Независимый от светлоты ахроматический probe-план: узнаёт contrast-solved
+    /// светлоту роли до построения основного per-lightness плана.
     fn probe_plan() -> (Hue, ChromaPolicy) {
         (Hue::deg(0.0), ChromaPolicy::Neutral)
     }
 }
 
 thread_local! {
-    /// Process-lived memo for the [`RoleChroma::Curve`] plan, keyed on the bit
-    /// patterns of `(l_ok, canonical, target_mp, stiffness, vc)` so a hit returns
-    /// the byte-identical `(hue, ratio)` the 81-step cusp scan + CAM16 ratio
-    /// bisection would. The plan is a deterministic function of the key, so the
-    /// cache is always correct — a repeat of any of these means re-resolving the
-    /// same theme (the common case: a tool re-resolving as a background is tweaked,
-    /// or the same neutral resolved against many surfaces), where the cusp scan is
-    /// pure recomputation. Bounded by [`CURVE_PLAN_CACHE_CAP`]: the bisected `l_ok`
-    /// is effectively arbitrary across unrelated backgrounds, so without a cap the
-    /// map could grow without bound — at the cap it is cleared wholesale (a cold
-    /// rebuild, never incorrectness).
+    /// Process-lived memo Curve-плана по битам
+    /// `(l_ok, canonical, target_mp, stiffness, vc)`. Попадание возвращает тот же
+    /// `(hue, ratio)`, что 81-точечный cusp-поиск и CAM16-бисекция. Размер ограничен
+    /// [`CURVE_PLAN_CACHE_CAP`]; при достижении cap карта очищается, что вызывает
+    /// только cold rebuild, но не меняет результат.
     static CURVE_PLAN_CACHE: std::cell::RefCell<
         std::collections::HashMap<[u64; 5], (f64, f64)>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -3300,7 +3280,7 @@ impl RoleSpec {
     /// can carry that direction. An all-achromatic source is lawful under a
     /// neutral policy and must not be rejected merely because it occupies the
     /// same structural source slot.
-    fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
+    pub(crate) fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
         self.validate_domain()?;
         let material_has_chromatic_source = match self {
             RoleSpec::Material {
@@ -4935,6 +4915,14 @@ mod tests {
                 ratio: 0.5,
             },
             RoleChroma::Tinted {
+                hue_deg: -f64::EPSILON,
+                ratio: 0.5,
+            },
+            RoleChroma::Tinted {
+                hue_deg: 360.0,
+                ratio: 0.5,
+            },
+            RoleChroma::Tinted {
                 hue_deg: 0.0,
                 ratio: -f64::EPSILON,
             },
@@ -4944,6 +4932,21 @@ mod tests {
             },
             RoleChroma::Curve {
                 canonical_hue_deg: f64::INFINITY,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: -f64::EPSILON,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 360.0,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 1.0e308,
                 target_mp: 1.0,
                 hue_stiffness: 0.0,
             },
@@ -4988,9 +4991,18 @@ mod tests {
                 hue_deg: 359.999,
                 ratio: 1.0,
             },
+            RoleChroma::Tinted {
+                hue_deg: f64::from_bits(360.0_f64.to_bits() - 1),
+                ratio: 1.0,
+            },
             RoleChroma::Curve {
                 canonical_hue_deg: 0.0,
                 target_mp: f64::MIN_POSITIVE,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: f64::from_bits(360.0_f64.to_bits() - 1),
+                target_mp: 1.0,
                 hue_stiffness: 0.0,
             },
         ] {

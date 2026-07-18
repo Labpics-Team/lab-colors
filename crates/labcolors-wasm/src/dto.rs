@@ -201,17 +201,19 @@ pub struct SolvedColor {
     pub lc: f64,
     /// The WCAG 2.1 ratio (1–21) against the background.
     pub wcag_ratio: f64,
-    /// `true` when the legal floor squeezed this role onto the smallest step
-    /// below its senior (an honest, flagged hierarchy degradation).
+    /// `true`, если точная цель роли не сохранена: legal floor/иерархия сжали
+    /// contrast-target либо ограниченный dJ′-поиск вернул лучший из просмотренных
+    /// кандидатов. Глобальный оптимум не заявляется.
     pub compressed: bool,
     /// Честный замер |ΔJ'| на отданном hex для dJ'-ролей (симметрия с glow);
     /// `None` у contrast-score ролей (их переходная координата — `Lc`).
     pub achieved_dj: Option<f64>,
     /// `true` when the WCAG legal floor overrode the Ys candidate-score target.
     pub floor_override: bool,
-    /// The minimum WCAG ratio this role is legally clamped to (`AaText` → 4.5,
-    /// `AaUi` → 3.0), or `None` for decorative / JND / zero roles. A property of
-    /// the role's contract, not of this solve: a runtime easing between themes
-    /// uses it to hold the floor every frame of the transition.
+    /// Минимальное отношение WCAG из контракта роли (`AaText` → 4.5,
+    /// `AaUi` → 3.0) либо `None`, если пола нет. Solve проверяет финальную
+    /// эмитированную пару. Default runtime не удерживает пол на каждом
+    /// промежуточном кадре; `strict` использует охарактеризованный clamp, но не
+    /// является сертификатом.
     pub legal_floor: Option<f64>,
 }

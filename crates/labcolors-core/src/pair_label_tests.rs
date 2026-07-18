@@ -171,9 +171,9 @@ fn pair_label_clears_ui_floor_against_tinted_surface_all_families_and_themes() {
     }
 }
 
-/// Лейбл тинт-бейджа не схлопывается в основной near-black label семьи.
+/// Лейбл тинт-бейджа эмитит другой байтовый цвет, чем основной label семьи.
 #[test]
-fn pair_label_does_not_collapse_to_primary_label() {
+fn pair_label_bytes_differ_from_primary_label() {
     let table = labui_with_badge_labels();
     let bg = BgInput::solid("#FFFFFF").unwrap();
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
@@ -184,13 +184,13 @@ fn pair_label_does_not_collapse_to_primary_label() {
         let Resolved::Color { solved, .. } = res else {
             panic!("`{role}` обязан решиться цветом");
         };
-        // И отличается от отгруженного near-black `label-<fam>-primary` (17:1):
-        // цветной лейбл у пола — это НЕ чёрный.
+        // Здесь проверяется только различие представления; перцептивный порог из
+        // одного `assert_ne!` не выводится.
         let primary = solid_hex(&set, &format!("label-{fam}-primary"));
         assert_ne!(
             solved.hex(),
             primary,
-            "`{role}` не должен схлопнуться в near-black `label-{fam}-primary`"
+            "`{role}` не должен совпасть байт-в-байт с `label-{fam}-primary`"
         );
     }
 }

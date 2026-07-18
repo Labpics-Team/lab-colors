@@ -1,34 +1,25 @@
-//! Agnostic-production-surface gate (ADR-0001): поставляемый `src` не
-//! содержит клиентских брендовых значений и showcase-типов — ядро агностично
-//! к дизайн-системе, встроенные якоря живут только в `#[cfg(test)]`-оракулах.
+//! Гейт агностичной production-поверхности (ADR-0001): поставляемый `src` не
+//! содержит клиентских брендовых значений и showcase-типов. Встроенные якоря
+//! живут только в `#[cfg(test)]`-оракулах.
 //!
-//! BUG CLASS this guards: a built-in BRAND value or SHOWCASE type silently
-//! re-enters the PRODUCTION surface of the agnostic core. PR-c made the engine
-//! agnostic — HIG/Figma anchor hexes (`#007AFF`/`#FF3B30`/…) may survive only in
-//! `#[cfg(test)]` oracles, `Role`/`RoleTable` are test-only, а закрытый enum
-//! `Accent` удалён целиком. Retired sentiment physics/schema must not return.
-//! The failure mode this closes
-//! is INVISIBLE to every behavioural test: if someone drops a `#[cfg(test)]`,
-//! hardcodes an anchor hex inside a resolver, or re-exports a showcase enum, the
-//! built-ins still WORK, so all the value/property/golden tests stay green — the
-//! core has merely stopped being agnostic. This gate turns that regression RED by
-//! scanning the production (non-`cfg(test)`, non-comment) `src` for either class.
+//! Защищаемый класс регрессии: встроенное бренд-значение, showcase-тип или
+//! удалённая sentiment-физика тихо возвращаются в production-поверхность Core.
+//! HIG/Figma-якоря (`#007AFF`, `#FF3B30`, …), `Role` и `RoleTable` допустимы
+//! только в `#[cfg(test)]`-оракулах; `Accent` и sentiment-схема удалены.
+//! Поведенческие тесты не замечают такую утечку, потому что значения продолжают
+//! вычисляться. Этот гейт сканирует production-код без `cfg(test)` и комментариев
+//! и превращает потерю агностичности в RED.
 //!
-//! Scope discipline (what is NOT a violation):
-//! * Doc/line comments may still CITE a retired anchor — the physics rustdoc
-//!   explains why `#007AFF` was replaced. Comments are cut (at `//`) before the
-//!   scan, so a cited hex never trips the gate; only a hex in live code does.
-//! * `#[cfg(test)]` blocks and whole `#[cfg(test)] mod X;` files (the relocated
-//!   byte-identity oracles, the labui fixture) legitimately hold every anchor and
-//!   enum — they are stripped/excluded before the scan.
+//! Не считаются нарушением:
+//! * ссылки на удалённый якорь в комментариях: сканер отсекает текст после `//`;
+//! * блоки и файлы `#[cfg(test)] mod X;` с byte-identity-оракулами и фикстурами:
+//!   они исключаются до сканирования.
 //!
-//! INV-4 (no green-from-birth): the two GATE tests and the four `red_proof_*`
-//! tests call the SAME scanner (`forbidden_hex_sites` / `forbidden_definition_sites`
-//! over `production_lines`), so a mutation to the detector — or to the cfg(test)
-//! stripper — is caught by a RED-proof, not merely asserted by an inlined check.
+//! INV-4: GATE-тесты и `red_proof_*` вызывают одни scanner-функции поверх
+//! `production_lines`. Мутацию детектора или удаления `cfg(test)` ловит
+//! RED-proof, а не отдельная встроенная проверка.
 //!
-//! Pure-`std`, zero new deps (labcolors-core stays zero-dep, issue #29); a
-//! top-of-graph test-only consumer (Clean: depends on `src`, nothing depends on it).
+//! Реализация использует только `std`: `labcolors-core` остаётся без зависимостей.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -37,14 +28,14 @@ mod common;
 use common::src_dir;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Forbidden production content.
+// Запрещённое содержимое production-кода.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Client-owned anchor literals that must never appear in production code.
+/// Клиентские литералы якорей, запрещённые в production-коде.
 ///
-/// This includes both former accent seeds and the Lab UI neutral reference ramp.
-/// They may remain in `#[cfg(test)]` characterization, but a shipped Core helper
-/// must never retain a consumer fixture merely to reproduce a calibration.
+/// Сюда входят прежние акцентные seeds и референсная нейтральная шкала Lab UI.
+/// Они допустимы в characterization под `#[cfg(test)]`, но поставляемый helper
+/// Core не хранит клиентскую фикстуру ради воспроизведения калибровки.
 const CLIENT_ANCHOR_HEXES: &[&str] = &[
     "#007AFF", // Apple HIG systemBlue — legacy Info anchor (now cited only in docs).
     "#FF9500", // Apple HIG systemOrange — legacy Warning anchor.
@@ -62,7 +53,7 @@ const CLIENT_ANCHOR_HEXES: &[&str] = &[
     "#B3B5BF", "#CDD0D9", "#E4E7ED", "#F6F8FA",
 ];
 
-/// Client-calibration seams that are legal only inside characterization tests.
+/// Швы клиентской калибровки, допустимые только в characterization-тестах.
 const CLIENT_CALIBRATION_IDENTIFIERS: &[&str] = &[
     "tint_target_sweep_repro",
     "NEUTRAL_HUE_DEG",
@@ -70,10 +61,10 @@ const CLIENT_CALIBRATION_IDENTIFIERS: &[&str] = &[
     "TINT_HUE_STIFFNESS",
 ];
 
-/// Built-in SHOWCASE type DEFINITIONS that must stay `#[cfg(test)]`-only. A match
-/// in production code means a `#[cfg(test)]` was dropped and the showcase re-entered
-/// the shipped API. Matched with identifier boundaries so production types that
-/// merely share a prefix (`RoleChroma`, `RoleSpec`, `NamedRoleTable`) are NOT hits.
+/// Определения встроенных showcase-типов, допустимые только под `#[cfg(test)]`.
+/// Совпадение в production-коде означает возврат showcase в API. Границы
+/// идентификаторов исключают ложные срабатывания на `RoleChroma`, `RoleSpec` и
+/// `NamedRoleTable`.
 const SHOWCASE_DEFINITIONS: &[&str] = &[
     "enum Accent",
     "enum Sentiment",
@@ -81,11 +72,11 @@ const SHOWCASE_DEFINITIONS: &[&str] = &[
     "struct RoleTable",
 ];
 
-/// Exact identifiers owned by the deleted built-in sentiment model.
+/// Точные идентификаторы удалённой встроенной sentiment-модели.
 ///
-/// Generic evidence/validator vocabulary is intentionally not banned. This list
-/// only guards the former physical schema and resolver surface, whose return
-/// would again make Core interpret client meaning.
+/// Общая лексика evidence и validators не запрещена. Список охраняет только
+/// прежние физическую схему и resolver-поверхность, возврат которых заставил бы
+/// Core снова интерпретировать клиентский смысл.
 const RETIRED_SENTIMENT_IDENTIFIERS: &[&str] = &[
     "SentimentCategory",
     "SentimentsConfig",
@@ -103,7 +94,7 @@ const RETIRED_SENTIMENT_IDENTIFIERS: &[&str] = &[
     "CHROMA_FRACTION",
 ];
 
-/// Syntax fragments whose punctuation is part of the retired contract.
+/// Фрагменты синтаксиса, где пунктуация входит в удалённый контракт.
 const RETIRED_SENTIMENT_FRAGMENTS: &[&str] = &[
     "LadderSource::Sentiment",
     "pub mod sentiment",
@@ -111,11 +102,9 @@ const RETIRED_SENTIMENT_FRAGMENTS: &[&str] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// production_lines — strip `#[cfg(test)]`-guarded items, preserving 1-based line
-// numbers for diagnostics. Mirrors the `empirical_inventory` gate's stripper: a
-// braced item (`mod tests { … }`, a gated `impl`/`enum`) is removed by brace-match;
-// a bracket/`;`-terminated item (`#[cfg(test)] pub(crate) const ALL … ;`,
-// `#[cfg(test)] mod fixture;`) by `;`-match. Only test code is removed.
+// production_lines удаляет элементы под `#[cfg(test)]`, сохраняя нумерацию строк
+// с единицы. Как и гейт `empirical_inventory`, функция удаляет блоки по парным
+// фигурным скобкам, а объявления с `;` — до завершающей точки с запятой.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn production_lines(source: &str) -> Vec<(usize, String)> {
@@ -236,7 +225,7 @@ fn forbidden_hex_sites(module: &str, source: &str) -> Vec<Site> {
     out
 }
 
-/// Every client-specific calibration seam in production code.
+/// Все швы клиентской калибровки в production-коде.
 fn client_calibration_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
     for (line, text) in production_lines(source) {
@@ -254,7 +243,7 @@ fn client_calibration_sites(module: &str, source: &str) -> Vec<Site> {
     out
 }
 
-/// Every showcase type DEFINITION in the PRODUCTION code of `source`.
+/// Все определения showcase-типов в production-коде `source`.
 fn forbidden_definition_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
     for (line, text) in production_lines(source) {
@@ -272,7 +261,7 @@ fn forbidden_definition_sites(module: &str, source: &str) -> Vec<Site> {
     out
 }
 
-/// Every exact residue of the deleted built-in sentiment physics/schema.
+/// Все точные остатки удалённых sentiment-физики и схемы.
 fn retired_sentiment_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
     for (line, text) in production_lines(source) {

@@ -108,6 +108,35 @@ version = "8.8.8"
   assert.throws(
     () => workspaceVersion(`
 [workspace.package]
+description = """
+[not.a.table]
+"""
+version = "0.3.0"
+`),
+    /multiline TOML strings are unsupported/u,
+  );
+  assert.throws(
+    () => workspaceVersion(`
+[workspace.package]
+description = '''
+[not.a.table]
+'''
+version = "0.3.0"
+`),
+    /multiline TOML strings are unsupported/u,
+  );
+  assert.equal(
+    workspaceVersion(`
+# documentation mentions """ but does not open a TOML string
+[workspace.package]
+version = "0.3.0" # the retired parser rejected a comment containing '''
+description = '"""'
+`),
+    "0.3.0",
+  );
+  assert.throws(
+    () => workspaceVersion(`
+[workspace.package]
 edition = "2024"
 
 [[example]]

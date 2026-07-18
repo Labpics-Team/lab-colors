@@ -59,7 +59,8 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
 //
 // Why a SUBSET: the three modules below are POLICY modules — their magnitudes are
 // tunable perceptual policy (role fractions and curve thresholds). The remaining
-// modules (`scale.rs`, `lpc.rs`, `lcs.rs`, `solve.rs`) are STANDARD-MODEL
+// modules (`scale.rs`, `spaces/oklab.rs`, `lpc.rs`, `lcs.rs`, `solve.rs`) are
+// STANDARD-MODEL
 // transform modules: their inline coefficients implement cited colour-appearance
 // models verbatim — CIECAM16 (`460/451/288/6300/1403…` in `lcs.rs`), the Hellwig
 // 2022 H-K first-harmonic (`0.080/0.132/0.160/0.405/0.792` in `lpc.rs`), the CAM16

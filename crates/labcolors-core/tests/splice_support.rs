@@ -1,4 +1,4 @@
-//! Atomic source splice used only inside an isolated temporary workspace.
+//! Атомарная вставка в исходник только внутри изолированного временного дерева.
 
 use std::path::Path;
 

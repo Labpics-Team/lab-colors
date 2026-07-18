@@ -191,6 +191,10 @@ pub enum ConfigError {
     /// occurrence; для translucent не объявлено, какую occurrence ограничивать
     /// и разрешено ли менять tint, alpha или оба параметра.
     InvalidLadderFloor { role: String, reason: &'static str },
+    /// Рецепт и общетабличная chroma-policy противоречат друг другу. Ошибка
+    /// принадлежит preflight: executable-таблица не должна откладывать её до
+    /// конкретной темы или первого runtime-resolve.
+    IncompatibleRolePolicy { role: String, reason: String },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -241,6 +245,12 @@ impl std::fmt::Display for ConfigError {
             ),
             ConfigError::InvalidLadderFloor { role, reason } => {
                 write!(f, "ladder-роль `{role}` несёт невалидный floor: {reason}")
+            }
+            ConfigError::IncompatibleRolePolicy { role, reason } => {
+                write!(
+                    f,
+                    "роль `{role}` несовместима с chroma-policy таблицы: {reason}"
+                )
             }
         }
     }
@@ -1073,6 +1083,18 @@ impl ThemeConfig {
             }
         };
 
+        // Тот же меж-полевой закон, что у публичного конструктора
+        // `NamedRoleTable::new`: preflight не вправе создавать таблицу, которая
+        // отвергнется только при первом runtime-resolve.
+        for (role, spec) in &entries {
+            spec.validate_with_chroma(chroma).map_err(|reason| {
+                ConfigError::IncompatibleRolePolicy {
+                    role: role.clone(),
+                    reason,
+                }
+            })?;
+        }
+
         Ok(NamedRoleTable::from_validated_parts(
             entries,
             self.aliases.clone(),
@@ -1147,12 +1169,10 @@ impl ThemeConfig {
                 tone_dark,
                 floor,
             } => {
-                // Neutral-slot использует policy таблицы (`hue = None`); остальные
-                // источники передают точные байты и классифицируются в резолве.
-                let hue = match source {
-                    LadderSource::Neutral(_) => None,
-                    _ => Some(self.compile_ladder_tint(role, source)?),
-                };
+                // Любой source, включая Neutral(pick), передаёт выбранные точные
+                // байты. Резолв сам классифицирует их как achromatic/chromatic;
+                // общая policy таблицы не подменяет client-owned выбор источника.
+                let hue = Some(self.compile_ladder_tint(role, source)?);
                 Ok(RoleSpec::Material {
                     hue,
                     tone: DjMagnitude::new(*tone_light, *tone_dark),

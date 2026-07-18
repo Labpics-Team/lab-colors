@@ -64,11 +64,11 @@ const HUE_PURITY_EXPONENT: f64 = 0.6;
 
 /// Внутренний профиль формы нейтральной кривой.
 ///
-/// Это declared engine calibration, а не универсальная психофизика и не
+/// Это задекларированная калибровка движка, а не универсальная психофизика и не
 /// пользовательские оси намерения. Равномерные шаги Oklab/sRGB/CAM16-J′ и
 /// прямое прочтение метрики контрастного усиления Уиттла уже опровергнуты по
 /// магнитуде; тёмная ветвь дополнительно вырождается около чёрного. Поэтому
-/// параметры закрыты от public API и не могут выдаваться за человеческий закон.
+/// параметры закрыты от публичного API и не выдаются за закон восприятия.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CurveParams {
     gamma_light: f64,
@@ -81,11 +81,11 @@ impl Default for CurveParams {
         Self {
             // Показатель степени, которым гамма-кривая отображает t на светлотный
             // интервал [светлый якорь, базовый], при t <= 0.5.
-            // SSOT-TRACKED — (e) declared engine calibration; не human law.
+            // SSOT-TRACKED — (e) задекларированная калибровка движка, не закон восприятия.
             gamma_light: 1.75,
             // Показатель степени для тёмной ветви (t > 0.5): интервал [базовый,
             // тёмный якорь].
-            // SSOT-TRACKED — (e) declared engine calibration; не human law.
+            // SSOT-TRACKED — (e) задекларированная калибровка движка, не закон восприятия.
             gamma_dark: 1.5,
             // Позиция вдоль параметра кривой t, где огибающая хромы достигает пика.
             // SSOT-TRACKED — зафиксированный скаляр прежней эмиссии; исследование
@@ -98,20 +98,20 @@ impl Default for CurveParams {
 /// Нейтральная (серо-осевая) кривая по трём якорям: светлый → базовый → тёмный.
 ///
 /// Светлота ведётся гамма-ветвями (`CurveParams`), хрома — C1-огибающей
-/// (`chroma_envelope`), оттенок — покоем у базы с purity-коррекцией шумных
+/// (`chroma_envelope`), оттенок — покоем у базы с коррекцией чистоты шумных
 /// концов (`hue_purity`). Когда все три источника лежат точно на sRGB8-серой
-/// оси, hue/chroma-путь не применим: `at()` остаётся непрерывным на физической
-/// серой оси, а один общий канал квантуется только на финальной output-boundary.
-/// `at()` — примитив каждого шага построения лестницы, поэтому все t-инвариантные
+/// оси, путь оттенка и хромы не применяется: `at()` остаётся непрерывным на
+/// физической серой оси, а общий канал квантуется только на границе эмиссии.
+/// `at()` — примитив каждого шага лестницы, поэтому все t-инвариантные
 /// величины предвычислены в конструкторе.
 #[derive(Debug, Clone)]
 pub struct NeutralCurve {
     a_light: LcsColor,
     a_base: LcsColor,
     a_dark: LcsColor,
-    /// All three authored anchors lie exactly on the emitted sRGB8 gray axis.
-    /// This representation fact bypasses every hue interpolation path in
-    /// [`Self::at`]; a numeric hue of a gray CAM/Oklab point is not identity.
+    /// Все три заданных якоря точно лежат на эмитированной серой оси sRGB8.
+    /// Этот факт представления обходит интерполяцию оттенка в [`Self::at`]:
+    /// числовой оттенок серой точки CAM/Oklab не определяет её идентичность.
     locus: NeutralLocus,
     h_ok_base: f64,
     h_cam_base: f64,
@@ -127,7 +127,7 @@ pub struct NeutralCurve {
     vc: ViewingConditions,
 }
 
-/// Physical domain of the whole authored neutral curve.
+/// Физический домен всей заданной нейтральной кривой.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NeutralLocus {
     General,
@@ -140,10 +140,10 @@ impl NeutralCurve {
         Self::with_vc(light, base, dark, &ViewingConditions::srgb())
     }
 
-    /// Build a neutral curve for the given viewing conditions.
+    /// Строит нейтральную кривую для заданных условий просмотра.
     ///
-    /// Shape calibration is engine-owned and versioned with the implementation;
-    /// clients provide physical anchors and context, not numeric gamma knobs.
+    /// Калибровкой формы владеет движок; она версионируется с реализацией.
+    /// Клиент задаёт физические якоря и контекст, а не числовые gamma-ручки.
     pub fn with_vc(
         light: &str,
         base: &str,
@@ -276,11 +276,10 @@ impl NeutralCurve {
         LcsColor::new(jp, h_ok, s, h_cam)
     }
 
-    /// Continuous lightness skeleton shared by neutral and accent curves.
+    /// Непрерывный каркас светлоты, общий для нейтральной и акцентной кривых.
     ///
-    /// This function never creates a colour representation and never performs
-    /// output quantisation, so consumers cannot accidentally inherit an sRGB8
-    /// byte wall from the neutral emission path.
+    /// Функция не создаёт представление цвета и не квантует выход, поэтому
+    /// потребитель не наследует байтовую ступень sRGB8 из нейтральной эмиссии.
     pub(crate) fn jp_at(&self, position: CurvePosition) -> f64 {
         let t = position.get();
         if t == 0.0 {
@@ -343,18 +342,17 @@ impl NeutralCurve {
     }
 }
 
-/// C1-continuous chroma envelope through the chromas of all three anchors.
+/// C1-непрерывная огибающая хромы через хрому трёх якорей.
 ///
-/// Rises from the light anchor's M' to the base anchor's M' at `t_peak`
-/// (half-cosine ease), holds the base level until the base anchor at
-/// `t = 0.5`, then falls to the dark anchor's M' (half-cosine ease).
-/// All three anchors are reproduced exactly and every junction has zero
-/// slope, so M' is C1 on `[0, 1]` — the predecessor (`sine_env`) pinned
-/// both ends to the dark anchor's chroma, jumping at `t = 0` and `t = 0.5`.
+/// До `t_peak` полукосинус поднимает M′ светлого якоря до M′ базы, затем
+/// сохраняет уровень базы до `t = 0.5` и полукосинусом опускает его до M′
+/// тёмного якоря. Все якоря воспроизводятся точно, а наклон в стыках равен нулю,
+/// поэтому M′ имеет класс C1 на `[0, 1]`. Предшественник `sine_env` привязывал
+/// оба конца к хроме тёмного якоря и создавал скачки при `t = 0` и `t = 0.5`.
 ///
-/// `t_peak` is an engine-owned value in `(0, 0.5]`; at `0.5` the plateau is
-/// empty and the envelope is a plain ease light→base→dark. It is asserted, not
-/// silently repaired, because no public input can reach this boundary.
+/// `t_peak` принадлежит движку и лежит в `(0, 0.5]`; при `0.5` плато пусто.
+/// Инвариант проверяется assert, а не тихо исправляется: публичный вход сюда не
+/// попадает.
 fn chroma_envelope(t: f64, mp_light: f64, mp_base: f64, mp_dark: f64, t_peak: f64) -> f64 {
     debug_assert!(t_peak > 0.0 && t_peak <= 0.5);
     let ease = |u: f64| 0.5 - 0.5 * (std::f64::consts::PI * u).cos();
@@ -438,9 +436,9 @@ mod tests {
         );
     }
 
-    /// Exhaust the nearest valid triples on the finite sRGB8 gray axis. Every
-    /// byte participates and every interpolation branch is sampled; matrix
-    /// noise must never become a physical chromatic byte.
+    /// Исчерпывает соседние допустимые тройки конечной серой оси sRGB8. Каждый
+    /// байт и каждая ветвь интерполяции участвуют; матричный шум не должен
+    /// превращаться в физический хроматический байт.
     #[test]
     fn every_exact_gray_neighbour_triple_stays_on_the_gray_axis() {
         for vc in [
@@ -467,8 +465,8 @@ mod tests {
         }
     }
 
-    /// Exact equality is the law, not a one-byte tolerance. A single off-axis
-    /// channel in any anchor keeps the existing chromatic curve path alive.
+    /// Закон — точное равенство, а не допуск в один байт. Один канал вне оси в
+    /// любом якоре сохраняет хроматический путь кривой.
     #[test]
     fn nearest_off_axis_anchor_is_not_collapsed_to_gray() {
         for (anchors, t) in [
@@ -486,9 +484,9 @@ mod tests {
         }
     }
 
-    /// Differential oracle: the continuous gray scalar is encoded and rounded
-    /// once by the normative sRGB transfer. Output conversion must not add a
-    /// second nearest-J' selection policy.
+    /// Дифференциальный oracle: непрерывный серый скаляр единожды кодируется и
+    /// округляется нормативной функцией sRGB. Эмиссия не добавляет вторую
+    /// политику выбора ближайшего J′.
     #[test]
     fn exact_gray_emission_matches_one_channel_srgb_quantisation() {
         let params = CurveParams::default();
@@ -558,10 +556,10 @@ mod tests {
         }
     }
 
-    /// RED: finite output quantisation belongs to emission, not to the
-    /// continuous curve. Two adjacent binary64 positions around an sRGB8 byte
-    /// wall must not create a finite jump in the authored J' trajectory or in
-    /// the accent curve that consumes it as its lightness skeleton.
+    /// RED: квантизация конечного выхода принадлежит эмиссии, а не непрерывной
+    /// кривой. Соседние binary64-позиции по сторонам байтовой границы sRGB8 не
+    /// создают скачок в заданной траектории J′ или в использующей её акцентной
+    /// кривой.
     #[test]
     fn emitted_gray_byte_wall_does_not_quantise_continuous_curve_state() {
         let left_t = 0.019_000_259_522_785_33_f64;
@@ -589,9 +587,9 @@ mod tests {
         );
     }
 
-    /// Anti-vacuum: continuous state must keep changing while finite output is
-    /// allowed to repeat. This catches both early byte snapping and a vacuous
-    /// "continuity" test that merely budgets one whole gray-code jump.
+    /// Anti-vacuum: непрерывное состояние обязано меняться, даже когда конечный
+    /// выход повторяется. Это ловит раннюю привязку к байтам и пустой тест
+    /// непрерывности с допуском в целый код серого.
     #[test]
     fn exact_gray_curve_keeps_continuous_state_until_emission() {
         let curve = NeutralCurve::new("#FFFFFF", "#808080", "#000000").unwrap();

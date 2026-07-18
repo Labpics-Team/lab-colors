@@ -2,11 +2,11 @@ use crate::Srgb8;
 use crate::lcs::LcsColor;
 use crate::spaces::vc::ViewingConditions;
 
-/// A finite normalised position on a colour curve.
+/// Конечная нормированная позиция на цветовой кривой.
 ///
-/// Construction is the public input boundary: once this value exists, curve
-/// evaluation cannot receive `NaN`, infinity, or an out-of-domain scalar and
-/// therefore never needs a clamp or plausible-colour fallback.
+/// Создание служит публичной границей входа. Готовое значение исключает `NaN`,
+/// бесконечность и скаляр вне домена, поэтому вычислению кривой не нужны clamp
+/// или правдоподобный цвет по умолчанию.
 ///
 /// ```compile_fail
 /// use labcolors_core::neutral::NeutralCurve;
@@ -16,7 +16,7 @@ use crate::spaces::vc::ViewingConditions;
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct CurvePosition(f64);
 
-/// Why a raw scalar cannot become a [`CurvePosition`].
+/// Причина, по которой скаляр нельзя преобразовать в [`CurvePosition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurvePositionError {
     NonFinite,
@@ -35,8 +35,8 @@ impl CurvePosition {
         if !(0.0..=1.0).contains(&value) {
             return Err(CurvePositionError::OutsideUnitInterval);
         }
-        // One canonical representation makes `-0.0` and `0.0` the same domain
-        // value instead of leaking an irrelevant IEEE sign bit into identity.
+        // Каноническая запись отождествляет `-0.0` и `0.0`, не включая
+        // несущественный знаковый бит IEEE в идентичность значения.
         Ok(Self(if value == 0.0 { 0.0 } else { value }))
     }
 
@@ -71,34 +71,33 @@ impl std::fmt::Display for CurvePositionError {
 
 impl std::error::Error for CurvePositionError {}
 
-/// A parametric colour curve sampled over `t ∈ [0, 1]`.
+/// Параметрическая цветовая кривая на `t ∈ [0, 1]`.
 ///
-/// Implemented by [`NeutralCurve`](crate::neutral::NeutralCurve) and
-/// [`AccentCurve`](crate::scale::AccentCurve) so that downstream consumers
-/// (e.g. semantic resolution) can accept either generically.
+/// Реализуется [`NeutralCurve`](crate::neutral::NeutralCurve) и
+/// [`AccentCurve`](crate::scale::AccentCurve), чтобы потребители принимали обе
+/// кривые через один контракт.
 pub trait ColorCurve {
-    /// Colour at a validated normalised position.
+    /// Цвет в проверенной нормированной позиции.
     fn at(&self, position: CurvePosition) -> LcsColor;
 
-    /// The viewing conditions this curve was built with.
+    /// Условия просмотра, в которых построена кривая.
     ///
-    /// Hex conversion MUST go through these conditions — converting a
-    /// colour with mismatched VC silently drifts (see the
-    /// `wrong_vc_roundtrip_drifts` test in `lcs`).
+    /// Hex-преобразование обязано использовать эти условия: несовпадающие VC
+    /// вызывают тихий дрейф (см. тест `wrong_vc_roundtrip_drifts` в `lcs`).
     fn vc(&self) -> &ViewingConditions;
 
-    /// Quantise one continuous point at the typed final-output boundary.
+    /// Квантует непрерывную точку на типизированной границе эмиссии.
     ///
-    /// Implementations may preserve an exact representation constraint here
-    /// (for example, an authored neutral axis), but [`Self::at`] itself remains
-    /// continuous and never snaps to the output lattice.
+    /// Реализация может сохранить точный инвариант представления, например
+    /// заданную нейтральную ось. [`Self::at`] остаётся непрерывным и не
+    /// привязывается к выходной решётке.
     fn render_srgb8(&self, position: CurvePosition) -> Srgb8 {
         self.at(position).to_srgb8_with_vc(self.vc())
     }
 
-    /// `n` evenly-spaced samples along the curve.
+    /// `n` равноудалённых образцов вдоль кривой.
     ///
-    /// Default implementation delegates to [`at`](ColorCurve::at).
+    /// Реализация по умолчанию делегирует [`at`](ColorCurve::at).
     fn sample(&self, n: usize) -> Vec<LcsColor> {
         if n == 0 {
             return Vec::new();
@@ -111,7 +110,7 @@ pub trait ColorCurve {
             .collect()
     }
 
-    /// `n` hex strings sampled through this curve's own viewing conditions.
+    /// `n` hex-строк, вычисленных в собственных условиях просмотра кривой.
     fn sample_hex(&self, n: usize) -> Vec<String> {
         if n == 0 {
             return Vec::new();
@@ -157,20 +156,19 @@ mod tests {
         assert_eq!(CurvePosition::try_from(1.0).unwrap().get(), 1.0);
     }
 
-    /// Dedup guard (issue #6): both curves must reach `sample()` through the
-    /// ONE trait default, not through per-struct inherent copies. A `&dyn
-    /// ColorCurve` can only call the trait method, so if any struct stops
-    /// implementing `ColorCurve` — the exact regression that left this issue
-    /// half-done for either curve — this test fails to compile. The value
-    /// assertions pin that the shared default reproduces each curve's own ramp,
-    /// so removing the inherent bodies changed no output.
+    /// Страж дедупликации (issue #6): обе кривые обязаны вызывать единственную
+    /// реализацию `sample()` из trait, а не собственные копии. Через
+    /// `&dyn ColorCurve` доступен только метод trait, поэтому потеря реализации
+    /// `ColorCurve` ломает
+    /// компиляцию. Проверки значений подтверждают, что общий метод воспроизводит
+    /// исходную растяжку каждой кривой.
     #[test]
     fn every_curve_samples_through_the_shared_trait_default() {
         let neutral = NeutralCurve::new("#FFFFFF", "#787880", "#101012")
             .expect("canonical anchors are valid");
         let accent = AccentCurve::new("#007AFF", &neutral).expect("#007AFF is a valid accent seed");
         for curve in [&neutral as &dyn ColorCurve, &accent as &dyn ColorCurve] {
-            // n == 0 / n == 1 / n > 1 branches of the single default body.
+            // Все ветви единственной реализации: n == 0, n == 1 и n > 1.
             assert!(curve.sample(0).is_empty(), "n=0 must be empty");
             assert_eq!(
                 curve.sample(1),

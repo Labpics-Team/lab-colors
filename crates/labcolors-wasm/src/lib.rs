@@ -1,18 +1,16 @@
-//! `@labpics/colors` — WASM bindings over the `labcolors-core` contrast engine.
+//! `@labpics/colors` — WASM-граница контрастного движка `labcolors-core`.
 //!
-//! The whole crate is one Clean-Architecture slice:
-//! - `theme` — the public theme vocabulary (value object) → core viewing
-//!   conditions.
-//! - `error` — matchable boundary errors (`thiserror`).
-//! - `dto` — framework-free result types (output boundary).
-//! - `cache` — the contract cache.
-//! - `engine` — the application core: `resolve_set` made generic over roles.
-//! - this module — the *only* place `#[wasm_bindgen]` appears: the adapter that
-//!   projects the engine's pure results into JS objects.
+//! Весь крейт образует один срез Clean Architecture:
+//! - `theme` — публичный словарь тем (value object) → viewing conditions ядра;
+//! - `error` — сопоставимые ошибки границы (`thiserror`);
+//! - `dto` — независимые от фреймворка типы результата (output boundary);
+//! - `cache` — кэш контрактов;
+//! - `engine` — application core: обобщённый по ролям `resolve_set`;
+//! - этот модуль — единственное место с `#[wasm_bindgen]`: адаптер проецирует
+//!   чистые результаты движка в JS-объекты.
 //!
-//! No DOM writes, no CSS side effects — the bindings return data. Applying it to
-//! the page (CSS custom properties) is the css-injection-runtime chapter's job;
-//! a vanilla helper for that lives in the npm package, not in the WASM core.
+//! Граница возвращает данные без записи в DOM и CSS-side effects. Применение
+//! CSS custom properties выполняет runtime npm-пакета, а не WASM-ядро.
 
 mod cache;
 // pub: сериализация канонического конфига через DTO (output boundary);
@@ -32,9 +30,9 @@ use crate::dto::ResolvedTheme;
 use crate::engine::{Engine, hex_for_recheck};
 use crate::error::BindingError;
 
-/// TypeScript shapes for the values `resolveTheme` returns. wasm-bindgen emits
-/// `LabColors.resolveTheme(...): ResolvedTheme` against these, so consumers get
-/// full typing without a hand-written `.d.ts`.
+/// TypeScript-формы значений `resolveTheme`. `wasm-bindgen` связывает с ними
+/// `LabColors.resolveTheme(...): ResolvedTheme`, поэтому потребителю не нужен
+/// вручную написанный `.d.ts`.
 #[wasm_bindgen(typescript_custom_section)]
 const TS_RESULT_TYPES: &'static str = r##"
 import type { Wcag22CriterionV1 } from "../wcag22.js";
@@ -42,70 +40,74 @@ import type { Wcag22CriterionV1 } from "../wcag22.js";
 /** Ключ темы из словаря `themes` загруженного конфига (клиентское имя). */
 export type ThemeName = string;
 
-/** A solved colour and the contrasts it actually achieves. */
+/** Решённый цвет и фактически достигнутые им контрасты. */
 export interface SolvedColor {
   readonly kind: "color";
-  /** The CSS custom-property name for this role, e.g. "--lab-label-primary". */
+  /** Имя CSS custom property роли, например "--lab-label-primary". */
   readonly cssVar: string;
-  /** The resolved colour as #RRGGBB (data; `css`/`vars` carry oklch). */
+  /** Решённый цвет как #RRGGBB; `css` и `vars` содержат oklch. */
   readonly hex: string;
-  /** Ready-to-serve CSS value: "oklch(L% C H)". `vars` carries the same string. */
+  /** Готовое CSS-значение "oklch(L% C H)"; в `vars` лежит та же строка. */
   readonly css: string;
-  /** Signed Ys candidate score (lc) from the frozen SAPC-shaped curve; not LPC/readability evidence. */
+  /** Знаковая candidate-координата Ys (`lc`) замороженной SAPC-shaped кривой; не доказательство LPC или читаемости. */
   readonly lc: number;
-  /** WCAG 2.1 ratio (1–21) against the background. */
+  /** Отношение WCAG 2.1 к фону в диапазоне 1–21. */
   readonly wcagRatio: number;
-  /** The legal floor squeezed this role onto the smallest step below its senior. */
+  /**
+   * `true`, если точная цель роли не сохранена: legal floor/иерархия сжали
+   * contrast-target либо ограниченный dJ′-поиск вернул лучший из просмотренных
+   * кандидатов. Глобальный оптимум не заявляется.
+   */
   readonly compressed: boolean;
   /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
   readonly achievedDj: number | null;
-  /** The WCAG floor overrode the Ys candidate-score target. */
+  /** Пол WCAG переопределил целевую candidate-координату Ys. */
   readonly floorOverride: boolean;
   /**
-   * The minimum WCAG ratio this role is legally clamped to (4.5 for AA text,
-   * 3.0 for AA UI), or `null` for decorative / zero roles. A property of
-   * the role's contract, not of this solve: a runtime easing between themes
-   * uses it to hold the floor every frame of the transition.
+   * Минимальное отношение WCAG из контракта роли: 4.5 для AA-текста, 3.0 для
+   * AA-UI или `null`, если пола нет. Solve проверяет финальную эмитированную
+   * пару. Default runtime не удерживает пол на каждом промежуточном кадре;
+   * `strict` использует охарактеризованный clamp, но не является сертификатом.
    */
   readonly legalFloor: number | null;
 }
 
-/** The explicit zero token: no colour here, by design (not a failure). */
+/** Явный нулевой токен: цвета здесь намеренно нет; это не отказ. */
 export interface NoneRole {
   readonly kind: "none";
   readonly cssVar: string;
 }
 
-/** Admitted role-local failure. Only `unreachable` proves absence of a solution in the declared domain. */
+/** Допущенная локальная категория отказа. Только `unreachable` доказывает отсутствие решения в объявленном домене. */
 export type FailureCategory =
   | "unreachable"
   | "unresolved";
 
-/** A typed role-local failure. Rejected, unsupported and internal failures reject the whole call instead. */
+/** Типизированный локальный отказ роли. Rejected, unsupported и internal вместо этого отклоняют весь вызов. */
 export interface FailureRole {
   readonly kind: "failure";
   readonly cssVar: string;
-  /** Core-owned semantic category. */
+  /** Семантическая категория, которой владеет Core. */
   readonly category: FailureCategory;
-  /** Core-owned stable machine code, e.g. "floor_unreachable". */
+  /** Стабильный машинный код Core, например "floor_unreachable". */
   readonly code: string;
-  /** Human-readable explanation. */
+  /** Человекочитаемое объяснение. */
   readonly message: string;
 }
 
-/** A semi-transparent ladder / alpha-analog emission: the CSS carries oklch(L% C H / A), the browser composites it. */
+/** Полупрозрачная эмиссия лестницы/альфа-аналога: CSS несёт oklch(L% C H / A), а браузер композитит её. */
 export interface TranslucentRole {
   readonly kind: "translucent";
   readonly cssVar: string;
-  /** The tint as #RRGGBB (data) — the colour the oklch(… / A) carries. */
+  /** Тинт как #RRGGBB — цвет, который несёт oklch(… / A). */
   readonly tintHex: string;
-  /** The alpha of the emission, (0, 1]. */
+  /** Альфа эмиссии, (0, 1]. */
   readonly alpha: number;
-  /** The solid the tint composites to on the resolve background. */
+  /** Солид, в который тинт композитится на фоне резолва. */
   readonly compositeHex: string;
-  /** Signed Ys candidate score (Lc) of the composite; not LPC/readability evidence. */
+  /** Знаковая candidate-координата Ys (`lc`) композита; не доказательство LPC или читаемости. */
   readonly compositeLc: number;
-  /** WCAG 2.1 ratio of the composite. */
+  /** Отношение WCAG 2.1 композита. */
   readonly compositeWcag: number;
   /**
    * `true`, если запрошенная alpha не допускает ни одного byte-тинта,
@@ -116,15 +118,14 @@ export interface TranslucentRole {
    */
   readonly alphaCoerced: boolean;
   /**
-   * `true` when a solid family border (`border-<family>-strong`, M2) was darkened
-   * along the family curve to meet the AA UI floor (3:1), because the raw family
-   * tint did not clear it on this background — an honest, flagged minimal legal
-   * shift along the declared family curve. Final bytes remain the representation
-   * truth; this flag does not claim perceptual hue/chroma preservation. `false`
-   * for a direct ladder emission and for legal family solids.
+   * `true`, если solid-граница семейства (`border-<family>-strong`, M2)
+   * затемнена вдоль его кривой до пола AA UI 3:1, потому что исходный тинт не
+   * проходил на этом фоне. Это явный минимальный сдвиг по объявленной кривой.
+   * Истина представления — финальные байты; сохранение воспринимаемых оттенка и
+   * хромы не заявляется. Для прямой лестницы и legal family solids — `false`.
    */
   readonly floorCoerced: boolean;
-  /** Ready-to-serve CSS value: "oklch(L% C H / A)". `vars` carries the same string. */
+  /** Готовое CSS-значение "oklch(L% C H / A)"; в `vars` лежит та же строка. */
   readonly css: string;
 }
 
@@ -225,7 +226,7 @@ export type GlowDeterminateRole =
   | GlowLegacyReachedRole
   | GlowLegacyUnreachableRole;
 
-/** Stable terminal outcome: no sound target/max decision, therefore no CSS vars. */
+/** Терминальный stable-исход: sound target/max-решения нет, поэтому CSS-переменные отсутствуют. */
 export interface GlowIndeterminateRoleBase {
   readonly kind: "glow-indeterminate";
   readonly cssVar: string;
@@ -244,13 +245,15 @@ export type GlowRole = GlowDeterminateRole | GlowIndeterminateRole;
  * проверенный результат профиля, а не строгую межплатформенную границу
  * минимальной alpha. */
 export interface MaterialAlphaGuaranteeBaseV1 {
-  /** Byte-scale affine binary64 compositor + original WCAG 2.1 (2018)
-   *  `0.03928` EOTF, with a conservative channel envelope and both crossed seam
-   *  sides. Legacy-platform-dependent: `powf` не outward-bounded (attestation — #258). */
+  /** Byte-scale affine binary64-композитор + исходная WCAG 2.1 (2018) EOTF
+   *  с порогом `0.03928`, консервативной оболочкой каналов и обеими сторонами
+   *  пересечённого seam. Legacy-platform-dependent: `powf` не имеет outward-bound
+   *  (attestation — #258). */
   readonly numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1";
 }
-/** Rechecked fail/pass endpoints from a fixed-step binary partition after the
- *  directed-search guard. No global-monotonicity, first-state or minimum claim. */
+/** Повторно проверенные fail/pass-границы fixed-step binary partition после
+ *  directed-search guard. Глобальная монотонность, первый state и минимум не
+ *  заявляются. */
 export interface MaterialBisectionBracketGuaranteeV1 extends MaterialAlphaGuaranteeBaseV1 {
   readonly kind: "bisection-bracket-characterized-v1";
   readonly iterations: number;
@@ -290,7 +293,7 @@ export interface MaterialRoleBase {
   readonly toneCompressed: boolean;
   /** Солид-канон отличим от фона резолва на 8-битной сетке. */
   readonly distinct: boolean;
-  /** Ready-to-serve CSS value солид-канона: "oklch(L% C H)". */
+  /** Готовое CSS-значение солид-канона: "oklch(L% C H)". */
   readonly css: string;
 }
 
@@ -342,7 +345,7 @@ export type LadderSource =
   | { kind: "family"; key: string }
   | { kind: "neutral"; pick: "mid" | "edge" | "inverted" | "light" | "dark" };
 
-/** Closed physical ladder menu accepted by the config compiler. */
+/** Закрытое меню физических позиций лестницы, принимаемое компилятором конфига. */
 export type LadderPositionV1 =
   | "label-primary"
   | "label-secondary"
@@ -423,7 +426,7 @@ export interface ThemeConfig {
   readonly aliases?: ReadonlyArray<{ alias: string; target: string }>;
 }
 
-/** Proof-capable V2 site. Empty arrays explicitly mean no admitted evidence. */
+/** Site V2 с поддержкой доказательств. Пустые массивы явно означают отсутствие допущенного evidence. */
 export interface NumericalCapabilitySiteV2 {
   readonly siteId: string;
   readonly stableOutcomes: ReadonlyArray<string>;
@@ -435,7 +438,7 @@ export interface NumericalCapabilitySiteV2 {
   readonly runtimeAttestations: ReadonlyArray<string>;
 }
 
-/** Proof-capable numerical capability manifest used by conformance pack 4. */
+/** Манифест численных возможностей с доказательствами для conformance pack 4. */
 export interface NumericalCapabilityManifestV2 {
   readonly schemaVersion: 2;
   readonly coverage: string;
@@ -445,7 +448,7 @@ export interface NumericalCapabilityManifestV2 {
 
 export type Wcag22DecisionV1 = "pass" | "fail";
 export interface Wcag22Q55BoundsV1 {
-  /** Decimal u64 string: Q55 values exceed JavaScript's safe integer range. */
+  /** Десятичная строка u64: значения Q55 выходят за безопасный целочисленный диапазон JavaScript. */
   readonly lower: string;
   readonly upper: string;
 }
@@ -474,23 +477,23 @@ export interface Wcag22AssessmentV1 {
   };
 }
 
-/** The full result of resolving one background under one theme. */
+/** Полный результат резолва одного фона под одной темой. */
 export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
   /**
-   * Roles with a selected CSS value only. Values are ready-to-serve CSS in ONE form:
-   * "oklch(L% C H)" for solid roles, "oklch(L% C H / A)" for semi-transparent
-   * ladder/alpha-analog roles. Solved in the sRGB gamut (oklch is the
-   * notation, not a gamut extension); byte-exact vs `SolvedColor.hex` and
-   * `TranslucentRole.tintHex` (`compositeHex` is the background-specific
-   * composite, not the emitted token).
-   * Scope: this is resolveTheme's contract (applyTheme/watchTheme inject it
-   * verbatim); adaptTheme's per-frame easing writes concrete interpolated
-   * colours and is not bound by the emission form.
+   * Только роли с выбранным CSS-значением. Значения готовы к применению и имеют
+   * одну форму: "oklch(L% C H)" для солидов и "oklch(L% C H / A)" для
+   * полупрозрачных лестниц/альфа-аналогов. Solve выполняется в гамуте sRGB:
+   * oklch здесь нотация, а не расширение гамута. Значения побайтно согласованы с
+   * `SolvedColor.hex` и `TranslucentRole.tintHex`; `compositeHex` зависит от фона
+   * и не является эмитируемым токеном.
+   * Это контракт resolveTheme: applyTheme/watchTheme записывают значения без
+   * изменений. Покадровый easing adaptTheme пишет конкретные интерполированные
+   * цвета и этой формой эмиссии не ограничен.
    */
   readonly vars: Record<string, string>;
-  /** Every role, keyed by its stable role key (without the --lab- prefix). */
+  /** Все роли по стабильному ключу без префикса --lab-. */
   readonly roles: Record<string, RoleResult>;
 }
 "##;
@@ -508,7 +511,7 @@ extern "C" {
 
 }
 
-/// Единственный public numerical capability manifest: proof-capable V2.
+/// Единственный публичный манифест численных возможностей: V2 с доказательствами.
 ///
 /// Свободная функция, а не метод движка: манифест — статическое свойство
 /// сборки (core registry SSOT), он не зависит ни от загруженного конфига, ни
@@ -527,7 +530,7 @@ pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2
     Ok(parsed.unchecked_into())
 }
 
-/// Exact WCAG 2.2 assessment of one final sRGB8 pair.
+/// Точная оценка WCAG 2.2 одной финальной пары sRGB8.
 #[wasm_bindgen(js_name = evaluateWcag22)]
 pub fn evaluate_wcag22(
     foreground_hex: &str,
@@ -562,10 +565,11 @@ pub fn evaluate_wcag22(
     Ok(parsed.unchecked_into())
 }
 
-/// A contrast engine over a consumer-supplied design system. Construct with
-/// [`LabColors::new`], load a config with [`loadConfig`](LabColors::load_config),
-/// then call [`resolve_theme`](LabColors::resolve_theme) many times; identical
-/// calls are served from the contract cache.
+/// Контрастный движок над дизайн-системой клиента. Создайте его через
+/// [`LabColors::new`], загрузите конфиг методом
+/// [`loadConfig`](LabColors::load_config), затем многократно вызывайте
+/// [`resolve_theme`](LabColors::resolve_theme); одинаковые вызовы обслуживаются
+/// из кэша контрактов.
 #[wasm_bindgen]
 pub struct LabColors {
     inner: Engine,
@@ -580,11 +584,12 @@ pub struct LabColors {
 
 #[wasm_bindgen]
 impl LabColors {
-    /// Create an engine with no design system loaded.
+    /// Создаёт движок без загруженной дизайн-системы.
     ///
-    /// The engine is agnostic (ADR-0001): it carries no built-in role table, so
-    /// [`resolveTheme`](LabColors::resolve_theme) rejects with `config_required`
-    /// until [`loadConfig`](LabColors::load_config) supplies a design system.
+    /// Движок агностичен (ADR-0001) и не содержит встроенной таблицы ролей,
+    /// поэтому [`resolveTheme`](LabColors::resolve_theme) возвращает
+    /// `config_required`, пока [`loadConfig`](LabColors::load_config) не загрузит
+    /// дизайн-систему.
     #[wasm_bindgen(constructor)]
     pub fn new() -> LabColors {
         LabColors {
@@ -593,9 +598,9 @@ impl LabColors {
         }
     }
 
-    /// Resolve every role for `bgHex` under `theme` — КЛИЕНТСКОГО ключа из
-    /// словаря `themes` загруженного конфига (канонический путь: ключ →
-    /// `VcPreset` → viewing conditions). Ключ вне словаря — `unknown_theme`.
+    /// Решает каждую роль для `bgHex` в `theme` — КЛИЕНТСКОМ ключе из словаря
+    /// `themes` загруженного конфига (канонический путь: ключ → `VcPreset` →
+    /// viewing conditions). Ключ вне словаря — `unknown_theme`.
     ///
     /// Возвращает полный `ResolvedTheme`. Локальный `unreachable`/`unresolved`
     /// остаётся типизированными данными роли. Rejected/unsupported/internal
@@ -655,18 +660,16 @@ impl LabColors {
         Ok(format!("{fp:016x}"))
     }
 
-    /// Recheck the contrasts `fgHexes` achieve against `bgHex` under `theme` —
-    /// the cheap per-frame primitive a reactive runtime uses to decide whether
-    /// already-resolved colours still pass against a changed background (re-solve
-    /// only when they stably do not). No full solve: one frozen-curve evaluation
-    /// for the background plus one per foreground.
+    /// Повторно проверяет контрасты `fgHexes` к `bgHex` в теме `theme`.
+    /// Реактивный runtime вызывает этот дешёвый примитив покадрово и запускает
+    /// новый solve лишь после устойчивого провала уже решённых цветов. Полного
+    /// solve нет: одна оценка замороженной кривой для фона и по одной для foreground.
     ///
-    /// Returns a `Float64Array` of `[lc, wcagRatio]` pairs, interleaved and in the
-    /// order of `fgHexes`: index `2*i` is foreground `i`'s signed characterized
-    /// Ys candidate score from the frozen SAPC-shaped curve, not an
-    /// LPC/readability verdict; `2*i+1` is its WCAG ratio. On invalid hex or an unknown theme, rejects with an
-    /// ordinary JS `Error` whose message starts with the stable
-    /// `"<code>: <message>"` prefix.
+    /// Возвращает `Float64Array` чередующихся пар `[lc, wcagRatio]` в порядке
+    /// `fgHexes`: `2*i` — знаковая candidate-координата Ys foreground `i` из
+    /// замороженной SAPC-shaped кривой, а не вердикт LPC/читаемости; `2*i+1` —
+    /// отношение WCAG. Невалидный hex или неизвестная тема дают обычный JS
+    /// `Error` со стабильным префиксом `"<code>: <message>"`.
     #[wasm_bindgen(js_name = recheckContrast)]
     pub fn recheck_contrast(
         &self,
@@ -679,11 +682,11 @@ impl LabColors {
             .map_err(to_js_error)
     }
 
-    /// Exact stable-Glow runtime recheck. Returns whether the point screen
-    /// layer is a byte-for-byte no-op for every alpha under encoded sRGB8.
-    /// `adaptTheme` uses this cheap core-owned predicate to detect the only
-    /// stable determinate/indeterminate class transition without running CAM16
-    /// or re-solving on every animated-background frame.
+    /// Точная runtime-перепроверка stable Glow. Возвращает, является ли точечный
+    /// screen-слой побайтным no-op для любой альфы в encoded sRGB8. `adaptTheme`
+    /// использует этот дешёвый предикат Core для обнаружения единственного
+    /// перехода stable determinate/indeterminate без запуска CAM16 и нового solve
+    /// на каждом кадре анимированного фона.
     #[wasm_bindgen(js_name = isStableGlowPointNoop)]
     pub fn is_stable_glow_point_noop(&self, tint_hex: &str, bg_hex: &str) -> Result<bool, JsError> {
         let tint = hex_for_recheck(tint_hex).map_err(|error| match error {
@@ -697,17 +700,15 @@ impl LabColors {
             .map_err(|reason| to_js_error(stable_glow_recheck_core_error(reason)))
     }
 
-    /// Recheck one foreground set against MANY background samples in a single
-    /// call. The reactive controller's worst-case loop rechecks the same
-    /// foregrounds against every sample of a varying backdrop (gradient / image /
-    /// bg-blur / glass). It decodes and quantizes each foreground once, then shares
-    /// that display-relative-luminance scalar across all background samples instead
-    /// of rebuilding it per `recheckContrast` call.
+    /// Одним вызовом проверяет набор foreground против многих образцов фона.
+    /// Контроллер использует это для меняющегося backdrop: gradient, image,
+    /// bg-blur или glass. Каждый foreground декодируется и квантуется один раз;
+    /// его display-relative luminance переиспользуется для всех образцов.
     ///
-    /// Returns a flat, background-major `Float64Array`: sample `s`, foreground `i`
-    /// is at `(s * fgHexes.length + i) * 2` (`lc`) and `+1` (`wcagRatio`). The
-    /// values are byte-identical to calling `recheckContrast(bgHexes[s], fgHexes,
-    /// theme)` for each `s`.
+    /// Возвращает плоский background-major `Float64Array`: для образца `s` и
+    /// foreground `i` индекс `(s * fgHexes.length + i) * 2` содержит `lc`, а
+    /// следующий — `wcagRatio`. Значения побайтно совпадают с отдельным вызовом
+    /// `recheckContrast(bgHexes[s], fgHexes, theme)` для каждого `s`.
     #[wasm_bindgen(js_name = recheckContrastMulti)]
     pub fn recheck_contrast_multi(
         &self,
@@ -727,13 +728,13 @@ impl Default for LabColors {
     }
 }
 
-/// Turn a boundary error into a JS `Error` carrying both the stable machine
-/// code and the human reason, so JS can branch on the cause without a custom
-/// error class. Format: `"<code>: <message>"`.
+/// Преобразует ошибку границы в JS `Error` со стабильным машинным кодом и
+/// человекочитаемой причиной, чтобы JS мог ветвиться без отдельного класса
+/// ошибки. Формат: `"<code>: <message>"`.
 ///
-/// A free function rather than a `From` impl: `thiserror` already gives
-/// `BindingError` a blanket `From<E: Error> for JsError` via wasm-bindgen, and
-/// that path would drop the stable code. This keeps the code in the message.
+/// Это свободная функция, а не `From`: `thiserror` уже даёт `BindingError`
+/// blanket-реализацию `From<E: Error> for JsError` через wasm-bindgen, и тот путь
+/// потерял бы стабильный код. Здесь код сохраняется в сообщении.
 fn to_js_error(err: BindingError) -> JsError {
     JsError::new(&format!("{}: {}", err.code(), err))
 }
