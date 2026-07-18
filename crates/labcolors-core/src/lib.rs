@@ -11,9 +11,7 @@ pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;
 
-pub(crate) mod accent;
-pub mod accent_balance;
-pub mod accent_surface;
+pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
 pub mod config;
@@ -21,14 +19,13 @@ pub mod glow;
 pub mod hash;
 pub mod ladder;
 pub mod lcs;
-pub mod lpc;
+pub(crate) mod lpc;
 pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
-pub mod pair;
+pub(crate) mod pair;
 pub mod scale;
 pub mod semantic;
-pub mod sentiment;
 pub mod solve;
 pub(crate) mod wcag;
 
@@ -58,7 +55,7 @@ mod one_levelness_tests;
 #[cfg(test)]
 mod lcs_hue_dimensionality_tests;
 
-// Built-in-showcase behaviour tests, relocated in-crate (ADR-0001 PR-c): the
+// Built-in-showcase behaviour tests, relocated in-crate (ADR-0001): the
 // built-in `Role`/`RoleTable`/`resolve_set` cluster is now `#[cfg(test)]`-only,
 // so these tests — which exercise it as the byte-identity oracle — must live
 // inside the crate to see it (integration tests only see the public API).
@@ -82,23 +79,17 @@ mod r3_byte_identity_tests;
 #[cfg(test)]
 mod reference_vectors_deep;
 
-// AccentCurve/SentimentCurve golden snapshots, relocated in-crate (ADR-0001
-// PR-c): the `Sentiment` enum is now `#[cfg(test)]`-only, and the golden uses
-// the crate-private `SentimentCurve::from_sentiment` helper, so this test must
-// live inside the crate to see them.
+// AccentCurve golden snapshots are in-crate because their built-in showcase
+// anchors are `#[cfg(test)]`-only.
 #[cfg(test)]
 mod accent_golden_tests;
 
-pub use accent_surface::{
-    AccentSurface, SurfaceMaterial, derive_accent_surface_ramp, render_surface,
-};
 pub use alpha::composite_over_encoded;
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
-    PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
-    VcPreset,
+    PaletteFamily, RoleRecipe, ThemeConfig, ThemesConfig, VcPreset,
 };
-pub use curve::ColorCurve;
+pub use curve::{ColorCurve, CurvePosition, CurvePositionError};
 pub use glow::{
     GLOW_BASE_DJ, GLOW_BLOOM_DJ, GLOW_COMPOSITE_PROFILE, GLOW_DIAGNOSTIC_PROFILE,
     GLOW_LAYER_RECIPE_PROFILE, GLOW_SUBTLE_DJ, GlowCompositeCertificateV1,
@@ -138,7 +129,7 @@ pub use semantic::{
 };
 pub use wcag22_evidence::CanonicalFiniteBoundedEvidenceV1;
 // The built-in v1 showcase (`Role`/`RoleTable`/`resolve`/`resolve_set`) is no
-// longer part of the production API (ADR-0001 PR-c): the agnostic engine ships
+// longer part of the production API (ADR-0001): the agnostic engine ships
 // only the string-keyed `resolve_named_set` path. It survives ONLY as the
 // `#[cfg(test)]` byte-identity oracle for the named path, re-exported crate-wide
 // so the in-crate showcase tests keep their `crate::…` spellings.
@@ -146,11 +137,11 @@ pub use wcag22_evidence::CanonicalFiniteBoundedEvidenceV1;
 pub(crate) use semantic::{Role, RoleTable, resolve_set};
 pub use solve::{
     BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, SolveFailureBoundary,
-    SolveFailureCategory, SolveJob, Solved, TypographicContext, solve, solve_many,
+    SolveFailureCategory, SolveJob, Solved, solve, solve_many,
 };
 pub use spaces::oklch::{css_alpha_value, oklch_css_from_hex, oklch_from_hex};
 pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
-pub use spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
+pub use spaces::srgb::srgb_encoded_from_hex;
 pub use spaces::vc::ViewingConditions;
 
 /// Компилирует rust-блоки package-local README как doctest-ы: опубликованный
@@ -159,3 +150,135 @@ pub use spaces::vc::ViewingConditions;
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
+
+/// Временные акцентные рецепты — детали реализации, а не контракты клиента.
+/// Публичный API источников, целей и ограничений принадлежит occurrence-графу.
+///
+/// ```compile_fail
+/// use labcolors_core::accent_balance::accent_balanced;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::accent_surface::derive_accent_surface_ramp;
+/// ```
+#[cfg(doctest)]
+pub struct InternalAccentRecipes;
+
+/// Точные выходные байты не доказывают перцептивную видимость оттенка.
+/// Удалённый вердикт нельзя восстанавливать из какой-либо формы результата.
+///
+/// ```compile_fail
+/// use labcolors_core::Resolved;
+///
+/// fn inferred_verdict(result: &Resolved) -> bool {
+///     match result {
+///         Resolved::Color { hue_vanished, .. } => *hue_vanished,
+///         _ => false,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::Resolved;
+///
+/// fn inferred_verdict(result: &Resolved) -> bool {
+///     match result {
+///         Resolved::Material(material) => material.hue_vanished(),
+///         _ => false,
+///     }
+/// }
+/// ```
+#[cfg(doctest)]
+pub struct NoHueVisibilityVerdict;
+
+/// Устаревшие compatibility-алиасы не входят в breaking-релиз до клиентов.
+/// Единственный SSOT — типизированные статусы и явно названные измерения.
+///
+/// ```compile_fail
+/// use labcolors_core::Resolved;
+///
+/// fn old_measurement_alias(result: &Resolved) -> Option<f64> {
+///     match result {
+///         Resolved::Glow(glow) => Some(glow.achieved_dj()),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::Resolved;
+///
+/// fn old_boolean_alias(result: &Resolved) -> Option<bool> {
+///     match result {
+///         Resolved::Glow(glow) => Some(glow.degraded()),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::Resolved;
+///
+/// fn old_boolean_alias(result: &Resolved) -> Option<bool> {
+///     match result {
+///         Resolved::Material(material) => Some(material.guaranteed()),
+///         _ => None,
+///     }
+/// }
+/// ```
+#[cfg(doctest)]
+pub struct NoCompatibilityAliases;
+
+/// Метрика поверхности не смешивает координаты несовместимых appearance-
+/// пространств и не публикует результат как LPC. Будущему примитиву расстояния
+/// нужны собственные допущенные модель, имя, домен и независимый oracle.
+///
+/// ```compile_fail
+/// use labcolors_core::lpc::lpc_surface;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::lpc::lpc_surface_with_vc;
+/// ```
+#[cfg(doctest)]
+pub struct NoHybridLpcSurfaceMetric;
+
+/// Неполные скалярные функции не образуют публичный контракт LPC. Поле `lc`
+/// переходного resolver — только зафиксированная candidate-координата. LPC
+/// становится публичным утверждением лишь через версионированный реестр
+/// evaluators с идентичностями стимула, контекста, применимости и evidence.
+///
+/// ```compile_fail
+/// use labcolors_core::lpc::lpc;
+/// ```
+#[cfg(doctest)]
+pub struct NoPrematureScalarLpcApi;
+
+/// Полярность/fill пары — legacy-механика рецептов, а не extension point.
+/// Общий occurrence-граф заменяет её единым совместным solve.
+///
+/// ```compile_fail
+/// use labcolors_core::pair::pair_side;
+/// ```
+#[cfg(doctest)]
+pub struct NoPublicPairRecipeApi;
+
+/// Сырые `f64` не являются валидированным цветовым значением: публичная
+/// сериализация идёт через [`Srgb8::to_hex`], где невалидное состояние уже
+/// непредставимо. Внутренние formatter-ы с generated-finite precondition не
+/// образуют public API: внешний `NaN` не может попасть в них через эту границу.
+///
+/// ```compile_fail
+/// use labcolors_core::hex_from_srgb_encoded;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::hex_from_srgb;
+/// ```
+///
+/// ```
+/// use labcolors_core::Srgb8;
+/// assert_eq!(Srgb8::new([0x1A, 0x2B, 0x3C]).to_hex(), "#1A2B3C");
+/// ```
+#[cfg(doctest)]
+pub struct NoRawFloatSrgbSerializer;

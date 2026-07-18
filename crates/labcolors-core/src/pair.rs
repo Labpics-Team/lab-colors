@@ -13,12 +13,13 @@
 //! буква WCAG требовала чернил, глаз и Figma — белого.
 //!
 //! Закон пары: сторона лейбла выбирается ПЕРЦЕПТИВНЫМ кроссовером по якорю,
-//! а заливка минимально двигается по светлоте (оттенок и хрома идентичности
-//! сохраняются в Oklab), пока выбранная сторона не начнёт выигрывать штатный
+//! а непрерывный кандидат заливки минимально двигается по светлоте вдоль
+//! фиксированных Oklab `a,b`, пока выбранная сторона не начнёт выигрывать штатный
 //! `choose_polarity`. Дальше лейбл решается ОБЫЧНЫМ nested resolve на
 //! выведенной заливке — пара не изобретает второй текстовый закон, она
 //! готовит поверхность, на которой существующий закон даёт перцептивно
-//! правильную сторону с легальным полом.
+//! правильную сторону с легальным полом. Гамут и sRGB8-квантование могут изменить
+//! координаты; рецепт не выдаёт это за гарантию сохранения идентичности.
 //!
 //! # Кроссовер (level-3)
 //!
@@ -38,46 +39,43 @@
 //! выведена из самой формулы WCAG, не подобрана. Сдвиг для фирменных якорей
 //! мал: #007AFF (0.211 → 0.179) — едва заметное утемнение при том же оттенке.
 
-use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
+use crate::spaces::oklab::{neutral_srgb_linear, oklab_to_srgb_linear, srgb_linear_to_oklab};
 use crate::spaces::srgb::srgb_gamma_inv;
 use crate::spaces::vc::ViewingConditions;
 
 /// Y-порог кроссовера стороны пары «заливка × лейбл» — решается ОДИН РАЗ по
 /// каноническому светлому якорю семьи.
 ///
-/// Терминал **(a) DERIVED** — не выбран, а ИЗМЕРЕН из опубликованной модели.
+/// Терминал **(a) DERIVED** внутри замороженной численной эвристики.
 ///
 /// # Что этот порог решает
 /// Ахроматический терминал решения стороны. С главы #64 (level-3) [`pair_side`]
-/// не сравнивает люминанс с порогом напрямую — он меряет достижимый |Lc| обоих
+/// не сравнивает люминанс с порогом напрямую — он сравнивает |Lc| обоих
 /// архетипов лейбла той же кривой; на серой оси H-K-член ≈ 0 и правило
 /// редуцируется ровно к этому порогу (лок
 /// `achromatic_reduction_matches_derived_crossover`). Порог обязан стоять там,
-/// где обе стороны РАВНО читаемы, — в чисто-люминансном домене самой кривой.
+/// где обе ветви frozen Ys candidate-кривой равны по модулю.
 ///
 /// # Почему именно это число (вывод, не выбор)
-/// Перцептивная читаемость меряется контраст-ядром APCA
-/// ([`crate::lpc::contrast_core`], опубликованный набор SAPC-8 `0.0.98G-4g`).
+/// Используется внутреннее `contrast_core` с замороженным набором SAPC-8
+/// `0.0.98G-4g`.
 /// Кроссовер = фон, на котором |Lc| ЧЁРНОГО лейбла догоняет |Lc| БЕЛОГО. Он
 /// найден бисекцией (корень единственный на [0.2, 0.6], проверено сменой знака):
-/// **Y = 0.341955**. Это не подгонка — это математическое свойство опубликованных
-/// экспонент; дрейф любой из них ломает лок
+/// **Y = 0.341955**. Это математическое свойство текущих экспонент, но не
+/// LPC/readability optimum; дрейф любой из них ломает лок
 /// `pair_crossover_equals_measured_core_polarity_flip` (пиннинг деривации).
 ///
 /// # Почему не соседние кандидаты
-/// - НЕ `0.179` (`WHITE_WINS_Y`) — то WCAG-tie, легальный ПОЛ гарантии контраста,
-///   а не перцептивный оптимум читаемости.
-/// - НЕ `0.325` (полная метрика [`crate::lpc::lpc`], байт 155 серой оси) — та
-///   внутри несёт CAM16/Y_hk-реконструкцию ЯРКОСТНОГО домена, чужую для
-///   чисто-люминансного решения `pair_side` (ось читаемости — люминанс, ADR-0003).
+/// - НЕ `0.179` (`WHITE_WINS_Y`) — это отдельная граница двойной законности WCAG.
+/// - НЕ `0.325` (test-only H-K appearance-candidate, байт 155 серой оси) — тот
+///   использует другой входной домен, чужой для Ys-решения `pair_side`.
 ///
 /// # Согласованность и почему это ещё и ЛУЧШЕ прежнего 0.30
 /// 0.341955 лежит ВНУТРИ интервала 10 Figma-якорей labui (0.246, 0.423) — вывод
 /// не спорит с палитрой, а совпадает с ней (экспозиция 21.69%,
 /// `exposure_pair_crossover`). Прежнее 0.30 было дизайн-тюнингом НИЖЕ модели: при
-/// Y ∈ [0.30, 0.342) оно ставило ЧЕРНИЛЬНЫЙ лейбл там, где по модели БЕЛЫЙ
-/// читается лучше. Вывод не только объективен — он исправляет эту недодачу
-/// светлых лейблов.
+/// Y ∈ [0.30, 0.342) оно выбирало ink-ветвь там, где frozen curve даёт больший
+/// модуль white-ветви. Это согласование одной эвристики, не claim читаемости.
 // С главы #64 (level-3) `pair_side` не потребляет этот порог в РАНТАЙМЕ — он
 // выводит кроссовер из достижимого |Lc| обоих архетипов лейбла той же кривой.
 // Порог остаётся АХРОМАТИЧЕСКИМ ТЕРМИНАЛОМ правила: на серой оси H-K-член ≈ 0 и
@@ -125,7 +123,7 @@ fn wcag_y_encoded(rgb: [f64; 3]) -> f64 {
 
 /// Сторона лейбла пары по перцептивному кроссоверу якоря.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairSide {
+pub(crate) enum PairSide {
     /// Якорь перцептивно тёмный — лейбл светлый, заливка двигается до
     /// строгой победы белого в штатной полярности.
     Light,
@@ -163,7 +161,7 @@ pub enum PairSide {
 ///
 /// Тай (равенство скоров) отдан свету: полярностная асимметрия чтения — белый
 /// предпочтителен, пока чернила строго не выиграли.
-pub fn pair_side(anchor_encoded: [f64; 3]) -> PairSide {
+pub(crate) fn pair_side(anchor_encoded: [f64; 3]) -> PairSide {
     let ys = wcag_y_encoded(anchor_encoded);
     let lin = [
         srgb_gamma_inv(anchor_encoded[0]),
@@ -181,15 +179,17 @@ pub fn pair_side(anchor_encoded: [f64; 3]) -> PairSide {
 }
 
 /// Заливка пары: пер-режимный якорь, минимально сдвинутый по L Oklab до
-/// строгой победы СТОРОНЫ СЕМЬИ (a, b — оттенок/хрома идентичности — не
-/// трогаются в Oklab-координатах; у края куба каналы честно клампятся).
+/// строгой победы СТОРОНЫ СЕМЬИ. Непрерывный хроматический кандидат держит
+/// исходные Oklab `a,b`; ахроматический идёт по точной neutral ray, чтобы шум
+/// матрицы не изобрёл hue. Затем каналы клампятся и квантуются, поэтому
+/// финальные байты не несут отдельной гарантии сохранения оттенка.
 ///
 /// Сторона приходит от канонического светлого якоря семьи ([`pair_side`]) и
 /// одна на все режимы; движение пер-режимное: светлая сторона — утемнение до
 /// `Y < WHITE_WINS_Y`, чернильная — осветление до `Y > BLACK_WINS_Y`
 /// (IC-якоря проваливаются под границу). Якорь, уже дающий победу, не
 /// двигается вовсе.
-pub fn pair_fill(anchor_encoded: [f64; 3], side: PairSide) -> [f64; 3] {
+pub(crate) fn pair_fill(anchor_encoded: [f64; 3], side: PairSide) -> [f64; 3] {
     let y = wcag_y_encoded(anchor_encoded);
     let (needs_move, target_dark) = match side {
         PairSide::Light => (y >= WHITE_WINS_Y, true),
@@ -204,8 +204,18 @@ pub fn pair_fill(anchor_encoded: [f64; 3], side: PairSide) -> [f64; 3] {
         srgb_gamma_inv(anchor_encoded[2]),
     ];
     let lab = srgb_linear_to_oklab(lin);
+    let source = crate::Srgb8::new(
+        anchor_encoded.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8),
+    );
+    let linear_at = |l: f64| {
+        if source.is_achromatic() {
+            neutral_srgb_linear(l)
+        } else {
+            oklab_to_srgb_linear([l, lab[1], lab[2]])
+        }
+    };
     let wins = |l: f64| {
-        let cand = encode_clamped(oklab_to_srgb_linear([l, lab[1], lab[2]]));
+        let cand = encode_clamped(linear_at(l));
         if target_dark {
             wcag_y_encoded(cand) < WHITE_WINS_Y
         } else {
@@ -227,7 +237,7 @@ pub fn pair_fill(anchor_encoded: [f64; 3], side: PairSide) -> [f64; 3] {
             hi = mid;
         }
     }
-    encode_clamped(oklab_to_srgb_linear([lo, lab[1], lab[2]]))
+    encode_clamped(linear_at(lo))
 }
 
 /// Линейный sRGB → кодированный, КВАНТОВАННЫЙ в 8-битную решётку с клампом
@@ -282,9 +292,9 @@ mod tests {
     }
 
     /// Минимальность сдвига: заливка тёмной стороны кроссовера двигается до
-    /// строгой победы белого и ни шагом дальше; оттенок/хрома целы.
+    /// строгой победы белого и ни шагом дальше.
     #[test]
-    fn light_side_nudges_minimally_preserving_identity() {
+    fn light_side_nudges_minimally() {
         for hex in ["#007AFF", "#FF3B30", "#3E87FF"] {
             let anchor = enc(hex);
             let fill = pair_fill(anchor, PairSide::Light);
@@ -296,23 +306,6 @@ mod tests {
             assert!(
                 y > WHITE_WINS_Y - 0.004,
                 "{hex}: сдвиг минимален (Y={y:.4}, граница {WHITE_WINS_Y})"
-            );
-            // Оттенок и хрома идентичности: a, b Oklab якоря сохранены.
-            let lab_a = srgb_linear_to_oklab([
-                srgb_gamma_inv(anchor[0]),
-                srgb_gamma_inv(anchor[1]),
-                srgb_gamma_inv(anchor[2]),
-            ]);
-            let lab_f = srgb_linear_to_oklab([
-                srgb_gamma_inv(fill[0]),
-                srgb_gamma_inv(fill[1]),
-                srgb_gamma_inv(fill[2]),
-            ]);
-            assert!(
-                (lab_a[1] - lab_f[1]).abs() < 0.02 && (lab_a[2] - lab_f[2]).abs() < 0.02,
-                "{hex}: оттенок/хрома сохранены (Δa={:.4}, Δb={:.4})",
-                (lab_a[1] - lab_f[1]).abs(),
-                (lab_a[2] - lab_f[2]).abs()
             );
         }
     }
@@ -333,6 +326,29 @@ mod tests {
             hex_from_srgb_encoded(pair_fill(dark, PairSide::Light)),
             hex_from_srgb_encoded(dark),
             "тёмный якорь светлой стороны не тронут"
+        );
+    }
+
+    #[test]
+    fn every_exact_gray_pair_fill_stays_on_the_encoded_gray_axis() {
+        for byte in 0_u8..=255 {
+            let channel = f64::from(byte) / 255.0;
+            let anchor = [channel; 3];
+            let fill = pair_fill(anchor, pair_side(anchor));
+            let [red, green, blue] = crate::srgb8::hex_bytes(&hex_from_srgb_encoded(fill)).unwrap();
+            assert_eq!(red, green, "gray {byte}: red/green direction invented");
+            assert_eq!(green, blue, "gray {byte}: green/blue direction invented");
+        }
+    }
+
+    #[test]
+    fn nearest_chromatic_pair_fill_keeps_a_chromatic_direction() {
+        let anchor = enc("#808081");
+        let fill = pair_fill(anchor, pair_side(anchor));
+        let [red, green, blue] = crate::srgb8::hex_bytes(&hex_from_srgb_encoded(fill)).unwrap();
+        assert!(
+            red != green || green != blue,
+            "one-byte chromatic source was collapsed onto the gray axis"
         );
     }
 
@@ -655,18 +671,18 @@ mod exposure_locks {
     ///    бисекция. Это домен ахроматического терминала, к которому level-3
     ///    `pair_side` редуцируется на серой оси, — потому его перелом = якорь
     ///    `PAIR_CROSSOVER_Y`.
-    /// 2. Полная метрика ([`crate::lpc::lpc`], серая ось 8-бит, внутри Y_hk с
-    ///    CAM16-реконструкцией): вторичный замер яркостного домена (byte 155,
+    /// 2. Test-only H-K appearance-candidate на серой оси sRGB8 с
+    ///    CAM16-реконструкцией: вторичная численная характеризация (byte 155,
     ///    Y≈0.325) — печатается для сравнения, но решению pair.rs чужд, не якорь.
     ///
-    /// Числа печатаются и пиннятся снапшотом: дрейф любой опубликованной константы
+    /// Числа печатаются и пиннятся снапшотом: дрейф любой замороженной константы
     /// ядра сдвинет перелом и СЛОМАЕТ лок — значит `PAIR_CROSSOVER_Y` не может молча
     /// разойтись с деривацией (это и есть пиннинг (a) DERIVED). Перелом лежит внутри
     /// интервала 10 якорей (0.246, 0.423) — вывод согласован с палитрой. Провенанс —
     /// docs/empirical-inventory.md (строка 52).
     #[test]
     fn pair_crossover_equals_measured_core_polarity_flip() {
-        use crate::lpc::{contrast_core, lpc};
+        use crate::lpc::{apparent_contrast_candidate_hex_for_test, contrast_core};
         use crate::spaces::srgb::srgb_gamma_inv;
         // 1. Ядро: f(Y) = |Lc белого| − |Lc чёрного| меняет знак на [0.2, 0.6].
         let f = |y: f64| contrast_core(1.0, y).abs() - contrast_core(0.0, y).abs();
@@ -702,11 +718,18 @@ mod exposure_locks {
             }
         }
         let core_x = 0.5 * (lo + hi);
-        // 2. Полная метрика: первый серый байт, где чёрный лейбл обгоняет белый.
+        // 2. Test-only H-K appearance-candidate: первый серый байт, где
+        // black-ветвь обгоняет white-ветвь.
         let mut flip_byte = None;
         for v in 1..=255u32 {
             let hex = format!("#{v:02X}{v:02X}{v:02X}");
-            if lpc("#000000", &hex).abs() >= lpc("#FFFFFF", &hex).abs() {
+            if apparent_contrast_candidate_hex_for_test("#000000", &hex)
+                .expect("generated grey is valid")
+                .abs()
+                >= apparent_contrast_candidate_hex_for_test("#FFFFFF", &hex)
+                    .expect("generated grey is valid")
+                    .abs()
+            {
                 flip_byte = Some(v);
                 break;
             }
@@ -715,7 +738,7 @@ mod exposure_locks {
         let y_at = |b: u32| srgb_gamma_inv(f64::from(b) / 255.0);
         let (y_below, y_flip) = (y_at(v - 1), y_at(v));
         eprintln!(
-            "MODEL CROSSOVER: core Y={core_x:.6}; full-metric grey axis: byte {v} (Y in ({y_below:.4}, {y_flip:.4}])"
+            "MODEL CROSSOVER: core Y={core_x:.6}; H-K candidate grey axis: byte {v} (Y in ({y_below:.4}, {y_flip:.4}])"
         );
         // Снапшоты замера — регрессионный якорь (a)-деривации (прежний
         // rustdoc-клейм «перелом ≈ 0.36» опровергнут этим замером 2026-07-07).
@@ -725,10 +748,10 @@ mod exposure_locks {
         );
         assert_eq!(
             v, 155,
-            "полная метрика: перелом серой оси ушёл от снапшота (byte {v}, Y={y_flip:.4})"
+            "H-K candidate: перелом серой оси ушёл от снапшота (byte {v}, Y={y_flip:.4})"
         );
         // (a) DERIVED: константа РАВНА измеренному перелому ядра — якорь = ядро
-        // `contrast_core`, а не полная метрика (byte 155, Y≈0.325 несёт
+        // `contrast_core`, а не H-K candidate (byte 155, Y≈0.325 несёт
         // CAM16/Y_hk-реконструкцию; она остаётся вторичным замером, не якорем).
         assert!(
             (PAIR_CROSSOVER_Y - core_x).abs() < 1e-5,

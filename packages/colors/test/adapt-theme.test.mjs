@@ -207,7 +207,6 @@ test("a failed stable-Glow reconciliation does not publish its candidate", () =>
         selectionDiagnosticProfile: null,
         constraintLayer: "halo",
         targetStatus: "exact-noop-unreachable",
-        degraded: true,
       },
     },
   };
@@ -277,7 +276,6 @@ test("tick does not commit a Glow class change before a later set resolve succee
         selectionDiagnosticProfile: null,
         constraintLayer: "halo",
         targetStatus: "exact-noop-unreachable",
-        degraded: true,
       },
     },
   };
@@ -647,7 +645,6 @@ test("stable Glow class changes re-resolve and clear/restore satellites synchron
         selectionDiagnosticProfile: null,
         constraintLayer: "halo",
         targetStatus: "exact-noop-unreachable",
-        degraded: true,
       },
     },
   };
@@ -734,7 +731,6 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
         selectionDiagnosticProfile: null,
         constraintLayer: "halo",
         targetStatus: "exact-noop-unreachable",
-        degraded: true,
       },
     },
   };
@@ -819,21 +815,6 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
       }),
     /lacks BitExact evidence/u,
     "generic unreachable must not erase exact provenance",
-  );
-
-  const falseDegraded = structuredClone(stable);
-  falseDegraded.roles.fx.degraded = false;
-  assert.throws(
-    () =>
-      adaptTheme(fakeElement(), {
-        ...options,
-        colors: {
-          resolveTheme: () => falseDegraded,
-          recheckContrast: () => [],
-          isStableGlowPointNoop: () => true,
-        },
-      }),
-    /lacks BitExact evidence/u,
   );
 
   const incomplete = structuredClone(stable);
@@ -967,8 +948,6 @@ test("legacy Glow validates correlated provenance before adopting external resul
         haloAchievedDj: 2.4,
         coreCompositeHex: "#D8CEFF",
         coreAchievedDj: 3.1,
-        achievedDj: 2.4,
-        degraded: false,
         css: "oklch(70% 0.1 280)",
       },
     },
@@ -993,7 +972,6 @@ test("legacy Glow validates correlated provenance before adopting external resul
 
   const legacyUnreachable = structuredClone(legacyReached);
   legacyUnreachable.roles.fx.targetStatus = "legacy-unreachable";
-  legacyUnreachable.roles.fx.degraded = true;
   const acceptedUnreachable = fakeElement();
   adaptTheme(acceptedUnreachable, {
     ...options,
@@ -1008,7 +986,6 @@ test("legacy Glow validates correlated provenance before adopting external resul
     ["bit-exact legacy decision", (role) => (role.decisionGuarantee = { kind: "bit-exact" })],
     ["null legacy selection", (role) => (role.selectionDiagnosticProfile = null)],
     ["generic exact status", (role) => (role.targetStatus = "exact-noop-unreachable")],
-    ["reached marked degraded", (role) => (role.degraded = true)],
     ["unknown recipe", (role) => (role.layerRecipeProfile = "future-recipe-v2")],
     ["unknown composite", (role) => (role.compositeProfile = "browser-screen-v1")],
   ];
@@ -1072,7 +1049,6 @@ test("stable Glow invalidation does not snap an in-flight color ease", () => {
                 selectionDiagnosticProfile: null,
                 constraintLayer: "halo",
                 targetStatus: "exact-noop-unreachable",
-                degraded: true,
               }
             : {
                 kind: "glow-indeterminate",
@@ -1167,7 +1143,6 @@ test("a color re-solve cannot reintroduce stable Glow vars unsafe for another sa
                 selectionDiagnosticProfile: null,
                 constraintLayer: "halo",
                 targetStatus: "exact-noop-unreachable",
-                degraded: true,
               }
             : {
                 kind: "glow-indeterminate",

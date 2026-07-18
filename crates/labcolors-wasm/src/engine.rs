@@ -4,7 +4,7 @@
 //! This layer knows the core and the DTOs; it does NOT know wasm-bindgen. It
 //! holds the compiled config table (supplied by `load_config`) and the contract
 //! cache, runs the core resolve, and maps the resolved vector into
-//! [`ResolvedTheme`]. The engine is agnostic (ADR-0001 PR-c): it carries no
+//! [`ResolvedTheme`]. The engine is agnostic (ADR-0001): it carries no
 //! built-in design system, so `resolve_theme` needs a config first. The mapping
 //! never enumerates roles — it walks whatever the core returns and keys each
 //! entry by the config's own role name — so role growth flows through on a
@@ -87,8 +87,9 @@ impl Engine {
     /// (validate = компиляция) + вычисленный отпечаток. После успешной
     /// загрузки [`resolve_theme`](Self::resolve_theme) эмитит РОЛИ КОНФИГА
     /// (string-keyed контракт) той же физикой; сигнатура resolve_theme
-    /// неизменна. Возвращает отпечаток — компонент ключа кэша: другой конфиг
-    /// даёт другой отпечаток, записи не делятся (нет кэш-коллизии).
+    /// неизменна. Возвращает детерминированный 64-битный отпечаток. Это
+    /// вероятностный идентификатор, не доказательство уникальности; пространства
+    /// записей не смешиваются благодаря полному очищению кэша при reload.
     ///
     /// Ошибочный конфиг НЕ трогает текущее состояние: движок остаётся на
     /// прежней таблице (загрузка атомарна).
@@ -294,14 +295,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             solved,
             compressed,
             achieved_dj,
-            hue_vanished,
-        } => RoleOutcome::Color(map_solved(
-            solved,
-            compressed,
-            achieved_dj,
-            hue_vanished,
-            legal_floor,
-        )),
+        } => RoleOutcome::Color(map_solved(solved, compressed, achieved_dj, legal_floor)),
         Resolved::None => RoleOutcome::None,
         Resolved::Failure(failure) => RoleOutcome::Failure {
             category: failure.category(),
@@ -350,7 +344,7 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
                 constraint_layer: g.constraint_layer(),
             })
         }
-        // Двухслойный материал (whitepaper §3.7): тинт 01 (oklch/α) + опаковая база 02.
+        // Двухслойный материал (whitepaper, «Точечные композиции»): тинт 01 (oklch/α) + опаковая база 02.
         Resolved::Material(m) => RoleOutcome::Material(crate::dto::MaterialColor {
             tone_hex: m.tint_hex().to_string(),
             alpha: m.alpha(),
@@ -361,7 +355,6 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             pole_white: matches!(m.pole(), labcolors_core::Pole::White),
             achieved_dj: m.achieved_dj(),
             tone_compressed: m.tone_compressed(),
-            hue_vanished: m.hue_vanished(),
             distinct: m.distinct(),
         }),
         // `Resolved` is non-exhaustive across this crate boundary. An unknown
@@ -381,7 +374,6 @@ fn map_solved(
     solved: Solved,
     compressed: bool,
     achieved_dj: Option<f64>,
-    hue_vanished: bool,
     legal_floor: Option<f64>,
 ) -> SolvedColor {
     SolvedColor {
@@ -392,7 +384,6 @@ fn map_solved(
         achieved_dj,
         floor_override: solved.floor_override(),
         legal_floor,
-        hue_vanished,
     }
 }
 
@@ -821,7 +812,7 @@ mod tests {
 
     /// JSON канонического labui-конфига — статический SSOT-паспорт
     /// (`tests/data/labui.config.json`). Дерево Даниила вынесено из прод-API ядра
-    /// (ADR-0001 PR-c), поэтому граница читает замороженный паспорт, а не строит
+    /// (ADR-0001), поэтому граница читает замороженный паспорт, а не строит
     /// его из `labui_reference` (её больше нет в публичном API).
     fn labui_json() -> String {
         include_str!("../tests/data/labui.config.json").to_string()
@@ -951,6 +942,26 @@ mod tests {
         assert!(engine.load_config("{не json").is_err());
         // И валидный JSON с невалидным конфигом:
         assert!(engine.load_config("{}").is_err());
+        // C6: прежнее специальное поле не становится ignored compatibility
+        // после выреза. Строгий schema-отказ также обязан быть атомарным.
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&labui_json()).expect("fixture JSON");
+        let retired_field = legacy.get("sentiments").cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "categories": [],
+                "hardness": 5.0,
+                "chroma_fraction": 0.88
+            })
+        });
+        legacy["sentiments"] = retired_field;
+        assert!(engine.load_config(&legacy.to_string()).is_err());
+
+        // Вложенная удалённая ручка тоже не становится тихим no-op:
+        // strictness действует на всей объектной границе, а не только в корне.
+        let mut nested_legacy: serde_json::Value =
+            serde_json::from_str(&labui_json()).expect("fixture JSON");
+        nested_legacy["palette"][0]["preferred_side"] = serde_json::json!(1);
+        assert!(engine.load_config(&nested_legacy.to_string()).is_err());
 
         let after = engine.resolve_theme("#FFFFFF", "light").unwrap();
         assert!(
@@ -965,10 +976,9 @@ mod tests {
           "brand": {"light": "#7C3AED", "dark": "#8B5CF6", "light_ic": "#5B21B6", "dark_ic": "#A78BFA"},
           "neutral": {
             "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"},
-            "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
+            "tint": {"target_mp": 6.1, "hue_stiffness": 9.0}
           },
           "palette": [],
-          "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
           "themes": [{"name": "light", "preset": "srgb"}, {"name": "dark", "preset": "dim"}],
           "roles": [
             {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},
@@ -1115,7 +1125,6 @@ mod tests {
                         solved,
                         compressed,
                         achieved_dj,
-                        hue_vanished,
                     },
                     RoleOutcome::Color(c),
                 ) => {
@@ -1124,7 +1133,6 @@ mod tests {
                     assert_eq!(solved.wcag_ratio(), c.wcag_ratio, "{name}: wcag");
                     assert_eq!(*compressed, c.compressed, "{name}: compressed");
                     assert_eq!(*achieved_dj, c.achieved_dj, "{name}: achieved_dj");
-                    assert_eq!(*hue_vanished, c.hue_vanished, "{name}: hue_vanished");
                     assert_eq!(
                         solved.floor_override(),
                         c.floor_override,
@@ -1176,15 +1184,6 @@ mod tests {
                     assert_eq!(g.halo_achieved_dj(), o.halo_achieved_dj);
                     assert_eq!(g.core_composite_hex(), o.core_composite_hex);
                     assert_eq!(g.core_achieved_dj(), o.core_achieved_dj);
-                    assert_eq!(
-                        g.degraded(),
-                        matches!(
-                            o.target_status,
-                            labcolors_core::GlowTargetStatus::ExactNoopUnreachable
-                                | labcolors_core::GlowTargetStatus::LegacyUnreachable
-                        )
-                    );
-                    assert_eq!(g.achieved_dj().to_bits(), o.halo_achieved_dj.to_bits());
                 }
                 (Resolved::GlowIndeterminate(g), RoleOutcome::GlowIndeterminate(o)) => {
                     assert_eq!(g.source_hex(), o.source_hex);
@@ -1208,11 +1207,6 @@ mod tests {
                         "{name}: material alpha status"
                     );
                     assert_eq!(
-                        m.guaranteed(),
-                        o.alpha_status == labcolors_core::MaterialAlphaStatusV1::Satisfied,
-                        "{name}: material guaranteed compatibility alias"
-                    );
-                    assert_eq!(
                         matches!(m.pole(), labcolors_core::Pole::White),
                         o.pole_white,
                         "{name}: material pole_white"
@@ -1226,11 +1220,6 @@ mod tests {
                         m.tone_compressed(),
                         o.tone_compressed,
                         "{name}: material tone_compressed"
-                    );
-                    assert_eq!(
-                        m.hue_vanished(),
-                        o.hue_vanished,
-                        "{name}: material hue_vanished"
                     );
                     assert_eq!(m.distinct(), o.distinct, "{name}: material distinct");
                 }

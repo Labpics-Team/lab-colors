@@ -9,6 +9,7 @@
 //! transitive crates) and guarantees exact reproducibility with other
 //! CSS-based pipelines.
 
+use crate::Srgb8;
 use crate::srgb8::hex_bytes;
 
 /// D65 white point (normalized to Y = 1.0).
@@ -132,10 +133,18 @@ pub(crate) fn decode_8bit(byte: u8) -> f64 {
 
 /// Parse `#RRGGBB` → linear sRGB `[r, g, b]` in `[0, 1]`.
 pub fn srgb_from_hex(hex: &str) -> Result<[f64; 3], String> {
-    let [r, g, b] = hex_bytes(hex)?;
+    Ok(srgb_linear_from_srgb8(Srgb8::new(hex_bytes(hex)?)))
+}
+
+/// Decode one exact encoded triplet to continuous linear sRGB.
+///
+/// Keeping this conversion typed lets callers that also need representation
+/// facts parse the transport once without defining a second decode path.
+pub(crate) fn srgb_linear_from_srgb8(rgb: Srgb8) -> [f64; 3] {
+    let [r, g, b] = rgb.bytes();
     // The input is always an 8-bit byte, so the decode is an exact table lookup
     // (finite domain) — no per-channel powf.
-    Ok([decode_8bit(r), decode_8bit(g), decode_8bit(b)])
+    [decode_8bit(r), decode_8bit(g), decode_8bit(b)]
 }
 
 /// Parse `#RRGGBB` → `(linear, display)` in one pass over the bytes: `linear`
@@ -187,9 +196,18 @@ pub(crate) fn quantise_srgb(rgb: [f64; 3]) -> [f64; 3] {
 ///
 /// The input is continuous, so the gamma encode stays on the live transfer
 /// function (see the encode note above for why a table cannot be bit-exact here).
-pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
+pub(crate) fn hex_from_srgb(rgb: [f64; 3]) -> String {
+    srgb8_from_linear(rgb).to_hex()
+}
+
+/// Quantise continuous linear sRGB to the one exact emitted byte triplet.
+///
+/// This is the typed form of [`hex_from_srgb`]; both share the same live gamma,
+/// clamp and round operation, so string transport cannot define a second
+/// output boundary.
+pub(crate) fn srgb8_from_linear(rgb: [f64; 3]) -> crate::Srgb8 {
     let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
+    crate::Srgb8::new([q(rgb[0]), q(rgb[1]), q(rgb[2])])
 }
 
 /// Разбор `#RRGGBB` → ГАММА-КОДИРОВАННЫЙ sRGB `[r, g, b]` в `[0, 1]`
@@ -199,19 +217,17 @@ pub fn hex_from_srgb(rgb: [f64; 3]) -> String {
 /// straight-alpha (см. [`crate::alpha`]); для колориметрии используй
 /// `srgb_from_hex` (линейный свет).
 pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
-    let [r, g, b] = hex_bytes(hex)?;
-    Ok([
-        f64::from(r) / 255.0,
-        f64::from(g) / 255.0,
-        f64::from(b) / 255.0,
-    ])
+    Ok(Srgb8::new(hex_bytes(hex)?).encoded())
 }
 
-/// Гамма-кодированный sRGB `[0, 1]` → `#RRGGBB` (clamp + round до 8 бит).
-/// Обратная сторона [`srgb_encoded_from_hex`] — без гамма-преобразований.
-pub fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
+/// Внутренняя сериализация конечного gamma-encoded sRGB в `#RRGGBB`.
+///
+/// Это generated-finite boundary: публичный raw-`f64` formatter намеренно не
+/// существует, потому `NaN`/бесконечность не должны превращаться в цвет. На
+/// публичной границе exact-представление сериализуется через [`Srgb8::to_hex`].
+pub(crate) fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
     let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
+    Srgb8::new([q(rgb[0]), q(rgb[1]), q(rgb[2])]).to_hex()
 }
 
 /// Linear sRGB → CIE XYZ under D65.

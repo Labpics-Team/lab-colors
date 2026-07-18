@@ -17,31 +17,40 @@ use std::sync::OnceLock;
 
 use super::{cam16::adapt, cat16::xyz_to_cone};
 
-/// Viewing conditions for the CIECAM16 colour appearance model.
+/// Условия просмотра для модели цветового восприятия CIECAM16.
 ///
-/// Defaults match the sRGB standard (D65, 20 % grey background,
-/// average surround, no discounting).
+/// Значения по умолчанию соответствуют sRGB: D65, серый фон 20 %, среднее
+/// окружение, без discounting.
+///
+/// Производные поля образуют единое проверенное состояние и не изменяются
+/// клиентом по отдельности:
+///
+/// ```compile_fail
+/// use labcolors_core::ViewingConditions;
+/// let mut vc = ViewingConditions::srgb();
+/// vc.fl = f64::NAN;
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ViewingConditions {
     /// Background luminance factor (Yb / Yw).
-    pub n: f64,
+    pub(crate) n: f64,
     /// Achromatic response to the reference white.
-    pub aw: f64,
+    pub(crate) aw: f64,
     /// Chromatic induction factor.
-    pub nbb: f64,
-    pub ncb: f64,
+    pub(crate) nbb: f64,
+    pub(crate) ncb: f64,
     /// Luminance-level adaptation factor.
-    pub fl: f64,
+    pub(crate) fl: f64,
     /// Base exponential nonlinearity.
-    pub z: f64,
+    pub(crate) z: f64,
     /// Degree of chromatic adaptation.
-    pub c: f64,
+    pub(crate) c: f64,
     /// Chromatic induction factor.
-    pub nc: f64,
+    pub(crate) nc: f64,
     /// RGB discounting factors.
-    pub rgb_d: [f64; 3],
+    pub(crate) rgb_d: [f64; 3],
     /// Whether these conditions enforce increased contrast (IC).
-    pub high_contrast: bool,
+    pub(crate) high_contrast: bool,
     /// Предвычисленный `F_L^0.25`. Пер-VC константа, которую прямой ход CIECAM16
     /// (множитель колорфулнесс `M`) и H-K-хрома иначе пересчитывали бы на КАЖДЫЙ
     /// цвет, хотя она зависит только от условий просмотра — фиксированных на все
@@ -50,13 +59,13 @@ pub struct ViewingConditions {
     /// libm-вызов на том же операнде, под гейтом bit-identity оракула
     /// `cam16::forward`. Производное состояние (чистая функция `fl`),
     /// синхронизируется только через `build`.
-    pub fl_pow_025: f64,
+    pub(crate) fl_pow_025: f64,
     /// Предвычисленный `(1.64 − 0.29^n)^0.73` — пер-VC префактор колорфулнесс,
     /// общий для прямого `M` и обратного `t`. Хранится, а не перепечатывается на
     /// каждый цвет, по той же причине и под тем же гейтом bit-identity, что и
     /// [`fl_pow_025`](Self::fl_pow_025). Производное состояние (чистая функция
     /// `n`), синхронизируется только через `build`.
-    pub t_inner: f64,
+    pub(crate) t_inner: f64,
 }
 
 impl Default for ViewingConditions {
@@ -66,6 +75,51 @@ impl Default for ViewingConditions {
 }
 
 impl ViewingConditions {
+    /// Коэффициент фоновой яркости CAM16: `n = Y_b / Y_w`.
+    pub fn n(&self) -> f64 {
+        self.n
+    }
+
+    /// Ахроматический отклик эталонного белого.
+    pub fn aw(&self) -> f64 {
+        self.aw
+    }
+
+    /// Коэффициент хроматической индукции `N_bb`.
+    pub fn nbb(&self) -> f64 {
+        self.nbb
+    }
+
+    /// Коэффициент адаптации к уровню яркости `F_L`.
+    pub fn fl(&self) -> f64 {
+        self.fl
+    }
+
+    /// Базовый экспоненциальный член CAM16 `z`.
+    pub fn z(&self) -> f64 {
+        self.z
+    }
+
+    /// Коэффициент хроматической адаптации окружения `c`.
+    pub fn c(&self) -> f64 {
+        self.c
+    }
+
+    /// Коэффициент хроматической индукции окружения `N_c`.
+    pub fn nc(&self) -> f64 {
+        self.nc
+    }
+
+    /// RGB-коэффициенты discounting, выведенные из полных условий просмотра.
+    pub fn rgb_d(&self) -> [f64; 3] {
+        self.rgb_d
+    }
+
+    /// Требует ли пресет контракты повышенного контраста.
+    pub fn is_high_contrast(&self) -> bool {
+        self.high_contrast
+    }
+
     /// Standard sRGB viewing conditions (average surround).
     ///
     /// Parameters: D65 illuminant, L_A = 64 cd/m², Y_b = 20 %,
@@ -108,17 +162,13 @@ impl ViewingConditions {
     /// `dark_surround` constructor keeps the F = 0.8 endpoint available for
     /// comparisons and tests.
     ///
-    /// The documented dim triplet is asserted here so a silent regression to the
-    /// dark parameters — the choice this rationale rejects — fails the doctest:
+    /// Doctest проверяет классификатор пресета и ловит тихий возврат к среднему
+    /// окружению:
     ///
     /// ```
     /// use labcolors_core::ViewingConditions;
     /// let dim = ViewingConditions::dim_surround();
-    /// // Dim surround (CIECAM16 Table 1): c = 0.59, N_c = 0.9.
-    /// assert_eq!(dim.c, 0.59);
-    /// assert_eq!(dim.nc, 0.9);
-    /// // Deliberately NOT the dark endpoint (c = 0.525, N_c = 0.8).
-    /// assert_ne!(dim.c, 0.525);
+    /// assert!(dim.is_dark_theme());
     /// ```
     pub fn dim_surround() -> Self {
         // colour-science / colorjs.io surroundMap["dim"] = [0.9, 0.59, 0.9]
@@ -206,19 +256,15 @@ impl ViewingConditions {
         }
     }
 
-    /// Whether these conditions describe a dimmed/darkened viewing environment —
-    /// the surround a dark theme resolves under, as opposed to the bright
-    /// average surround a light theme uses.
+    /// Определяет, описывают ли условия приглушённое или тёмное окружение,
+    /// используемое тёмной темой, в отличие от среднего окружения светлой темы.
     ///
-    /// The discriminator is the surround chromatic-induction factor `c`: the
-    /// average (light) preset fixes it at `0.69`; every dimmer preset (`dim`
-    /// 0.59, `dark` 0.525) sits below it. A single midpoint threshold (`0.64`)
-    /// separates them with float headroom on both sides, so the classification is
-    /// stable against rounding. This keeps the viewing conditions the single
-    /// source of truth for theme-ness: a role contract that calibrates per theme
-    /// (the dJ' decorative anchors, which the owner measured separately for light
-    /// and dark) reads the theme from the VC it is resolved under, never from a
-    /// flag duplicated elsewhere.
+    /// Дискриминатор — коэффициент хроматической адаптации окружения `c`:
+    /// средний пресет фиксирует `0.69`, а `dim` и `dark` — `0.59` и `0.525`.
+    /// Порог посередине (`0.64`) оставляет запас для округления. Условия
+    /// просмотра остаются единственным источником режима: контракт роли с
+    /// заданными по темам смещениями `J′` читает сторону из VC, а не из
+    /// дублирующего флага.
     pub fn is_dark_theme(&self) -> bool {
         const AVERAGE_DIM_MIDPOINT_C: f64 = 0.64;
         self.c < AVERAGE_DIM_MIDPOINT_C

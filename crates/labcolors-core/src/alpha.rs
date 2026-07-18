@@ -167,7 +167,7 @@ pub(crate) fn encoded_to_srgb8(rgb: [f64; 3], label: &str) -> Result<[u8; 3], St
 /// Форматирование эмитируемых sRGB8-байт в `#RRGGBB` — единая точка формата
 /// для композитора и потребителей его байтовых результатов (appearance-граф).
 pub(crate) fn hex_from_srgb8(rgb: [u8; 3]) -> String {
-    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+    crate::Srgb8::new(rgb).to_hex()
 }
 
 /// Общий внутренний путь для semantic-метрик: вход уже квантован для эмиссии,

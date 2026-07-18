@@ -12,7 +12,6 @@
       "dark": "#101012"
     },
     "tint": {
-      "ratio": 0.1,
       "target_mp": 6.1,
       "hue_stiffness": 9,
       "hue_override_deg": 286
@@ -122,30 +121,6 @@
       }
     }
   ],
-  "sentiments": {
-    "categories": [
-      {
-        "name": "danger",
-        "family": "red"
-      },
-      {
-        "name": "warning",
-        "family": "orange",
-        "hue_floor_deg": 45,
-        "preferred_side": 1
-      },
-      {
-        "name": "success",
-        "family": "green"
-      },
-      {
-        "name": "info",
-        "family": "blue"
-      }
-    ],
-    "hardness": 5,
-    "chroma_fraction": 1
-  },
   "themes": [
     {
       "name": "light",
@@ -471,8 +446,8 @@
         "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         }
       }
     },
@@ -483,8 +458,8 @@
         "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         }
       }
     },
@@ -495,8 +470,8 @@
         "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         }
       }
     },
@@ -507,8 +482,8 @@
         "fraction": 0.29335999,
         "floor": "none",
         "hue": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         }
       }
     },
@@ -517,8 +492,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "fill-primary"
       }
@@ -528,8 +503,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "fill-secondary"
       }
@@ -539,8 +514,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "fill-tertiary"
       }
@@ -550,8 +525,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "fill-quaternary"
       }
@@ -561,8 +536,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "border-strong",
         "floor": "aa-ui"
@@ -573,8 +548,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "border-base"
       }
@@ -584,8 +559,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "border-soft"
       }
@@ -597,8 +572,8 @@
         "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         }
       }
     },
@@ -609,8 +584,8 @@
         "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         }
       }
     },
@@ -621,8 +596,8 @@
         "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         }
       }
     },
@@ -633,8 +608,8 @@
         "fraction": 0.29335999,
         "floor": "none",
         "hue": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         }
       }
     },
@@ -643,8 +618,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "fill-primary"
       }
@@ -654,8 +629,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "fill-secondary"
       }
@@ -665,8 +640,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "fill-tertiary"
       }
@@ -676,8 +651,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "fill-quaternary"
       }
@@ -687,8 +662,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "border-strong",
         "floor": "aa-ui"
@@ -699,8 +674,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "border-base"
       }
@@ -710,8 +685,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "border-soft"
       }
@@ -723,8 +698,8 @@
         "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         }
       }
     },
@@ -735,8 +710,8 @@
         "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         }
       }
     },
@@ -747,8 +722,8 @@
         "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         }
       }
     },
@@ -759,8 +734,8 @@
         "fraction": 0.29335999,
         "floor": "none",
         "hue": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         }
       }
     },
@@ -769,8 +744,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "fill-primary"
       }
@@ -780,8 +755,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "fill-secondary"
       }
@@ -791,8 +766,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "fill-tertiary"
       }
@@ -802,8 +777,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "fill-quaternary"
       }
@@ -813,8 +788,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "border-strong",
         "floor": "aa-ui"
@@ -825,8 +800,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "border-base"
       }
@@ -836,8 +811,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         },
         "position": "border-soft"
       }
@@ -849,8 +824,8 @@
         "fraction": 0.97335917,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         }
       }
     },
@@ -861,8 +836,8 @@
         "fraction": 0.64359014,
         "floor": "aa-text",
         "hue": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         }
       }
     },
@@ -873,8 +848,8 @@
         "fraction": 0.47572199,
         "floor": "aa-ui",
         "hue": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         }
       }
     },
@@ -885,8 +860,8 @@
         "fraction": 0.29335999,
         "floor": "none",
         "hue": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         }
       }
     },
@@ -895,8 +870,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "fill-primary"
       }
@@ -906,8 +881,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "fill-secondary"
       }
@@ -917,8 +892,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "fill-tertiary"
       }
@@ -928,8 +903,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "fill-quaternary"
       }
@@ -939,8 +914,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "border-strong",
         "floor": "aa-ui"
@@ -951,8 +926,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "border-base"
       }
@@ -962,8 +937,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         },
         "position": "border-soft"
       }
@@ -983,8 +958,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "focus-ring"
       }
@@ -994,8 +969,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "position": "focus-ring"
       }
@@ -1027,8 +1002,8 @@
       "recipe": {
         "kind": "glow",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "step": "base",
         "decision_profile": "legacy-platform-dependent-v1"
@@ -1039,8 +1014,8 @@
       "recipe": {
         "kind": "glow",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         },
         "step": "base",
         "decision_profile": "legacy-platform-dependent-v1"
@@ -1106,8 +1081,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "fill-primary"
       }
@@ -1127,8 +1102,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "label-primary"
       }
@@ -1148,8 +1123,8 @@
       "recipe": {
         "kind": "ladder",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         },
         "position": "border-base"
       }
@@ -1178,8 +1153,8 @@
       "recipe": {
         "kind": "pair-fill",
         "source": {
-          "kind": "sentiment",
-          "name": "danger"
+          "kind": "family",
+          "key": "red"
         }
       }
     },
@@ -1188,8 +1163,8 @@
       "recipe": {
         "kind": "pair-fill",
         "source": {
-          "kind": "sentiment",
-          "name": "warning"
+          "kind": "family",
+          "key": "orange"
         }
       }
     },
@@ -1198,8 +1173,8 @@
       "recipe": {
         "kind": "pair-fill",
         "source": {
-          "kind": "sentiment",
-          "name": "success"
+          "kind": "family",
+          "key": "green"
         }
       }
     },
@@ -1208,8 +1183,8 @@
       "recipe": {
         "kind": "pair-fill",
         "source": {
-          "kind": "sentiment",
-          "name": "info"
+          "kind": "family",
+          "key": "blue"
         }
       }
     },

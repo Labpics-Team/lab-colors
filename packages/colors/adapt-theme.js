@@ -290,10 +290,8 @@ export function adaptTheme(element, options) {
             `adaptTheme: legacy Glow '${key}' cannot be Indeterminate`,
           );
         }
-        const reached =
-          role.targetStatus === "legacy-reached" && role.degraded === false;
-        const unreachable =
-          role.targetStatus === "legacy-unreachable" && role.degraded === true;
+        const reached = role.targetStatus === "legacy-reached";
+        const unreachable = role.targetStatus === "legacy-unreachable";
         if (
           !hasDeterminateGlowEnvelope(result, role, emittedKeys) ||
           role.decisionGuarantee?.kind !== "legacy-platform-dependent-v1" ||
@@ -314,8 +312,7 @@ export function adaptTheme(element, options) {
           role.decisionGuarantee?.kind !== "bit-exact" ||
           !hasDeterminateGlowEnvelope(result, role, emittedKeys) ||
           role.selectionDiagnosticProfile !== null ||
-          role.targetStatus !== "exact-noop-unreachable" ||
-          role.degraded !== true
+          role.targetStatus !== "exact-noop-unreachable"
         ) {
           throw new TypeError(`adaptTheme: stable Glow '${key}' lacks BitExact evidence`);
         }

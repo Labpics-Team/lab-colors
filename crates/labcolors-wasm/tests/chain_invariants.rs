@@ -7,7 +7,8 @@
 //!   `ThemeConfig` (PartialEq ЯДРА) на круг-трипе паспорт→DTO→JSON→DTO→ядро;
 //! - `config_dto.rs::fingerprint_is_deterministic_and_discriminating` —
 //!   отпечаток стабилен к pretty-репарсу и различает конфиги;
-//! - `config_dto.rs::thin_and_full_labui_share_one_fingerprint` — тонкий==полный.
+//! - `config_dto.rs::full_labui_fingerprint_pin_current_main` — канонический
+//!   отпечаток меняется только вместе с публичной схемой.
 //!
 //! Дыры, которые закрывает этот файл:
 //! 1. КРУГ-ТРИП ЧЕРЕЗ ДВИЖОК ПО ОТПЕЧАТКУ И БАЙТАМ. Существующий тест сверяет
@@ -134,15 +135,14 @@ fn fingerprint_is_invariant_to_lf_crlf_and_indentation() {
 /// прямой контроль порядка без борьбы с сортировкой `serde_json::Value`.
 #[test]
 fn fingerprint_is_invariant_to_json_key_order() {
-    // Порядок A: brand, neutral, palette, sentiments, themes, roles.
+    // Порядок A: brand, neutral, palette, themes, roles.
     let order_a = r##"{
       "brand": {"light": "#7C3AED", "dark": "#8B5CF6", "light_ic": "#5B21B6", "dark_ic": "#A78BFA"},
       "neutral": {
         "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"},
-        "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
+        "tint": {"target_mp": 6.1, "hue_stiffness": 9.0}
       },
       "palette": [],
-      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
       "themes": [{"name": "light", "preset": "srgb"}],
       "roles": [
         {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
@@ -154,10 +154,9 @@ fn fingerprint_is_invariant_to_json_key_order() {
         {"name": "body-text", "recipe": {"kind": "text-anchor", "fraction": 0.62, "floor": "aa-text"}}
       ],
       "themes": [{"name": "light", "preset": "srgb"}],
-      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
       "palette": [],
       "neutral": {
-        "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0},
+        "tint": {"target_mp": 6.1, "hue_stiffness": 9.0},
         "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"}
       },
       "brand": {"dark_ic": "#A78BFA", "light_ic": "#5B21B6", "dark": "#8B5CF6", "light": "#7C3AED"}

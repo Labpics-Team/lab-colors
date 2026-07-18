@@ -30,6 +30,7 @@
 use std::collections::BTreeSet;
 
 mod common;
+use common::source::{ProductionLine, production_records, production_syntax_lines};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit surface — the perceptual modules the detector scans.
@@ -38,7 +39,7 @@ mod common;
 const PERCEPTUAL_MODULES: [&str; 8] = [
     "semantic.rs",
     "scale.rs",
-    "sentiment.rs",
+    "spaces/oklab.rs",
     "neutral.rs",
     "lpc.rs",
     "lcs.rs",
@@ -57,9 +58,10 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
 // (0.968/0.627/0.461/0.276) and the Separator Lc (8.0) evaded GATE-1 until they
 // were extracted. The const-only detector (GATE-1/2/3) is blind to inline literals.
 //
-// Why a SUBSET and not all six: the three modules below are POLICY modules — their
-// magnitudes are tunable perceptual policy (role fractions, sentiment/curve
-// thresholds). The other three (`scale.rs`, `lpc.rs`, `lcs.rs`) are STANDARD-MODEL
+// Why a SUBSET: the three modules below are POLICY modules — their magnitudes are
+// tunable perceptual policy (role fractions and curve thresholds). The remaining
+// modules (`scale.rs`, `spaces/oklab.rs`, `lpc.rs`, `lcs.rs`, `solve.rs`) are
+// STANDARD-MODEL
 // transform modules: their inline coefficients implement cited colour-appearance
 // models verbatim — CIECAM16 (`460/451/288/6300/1403…` in `lcs.rs`), the Hellwig
 // 2022 H-K first-harmonic (`0.080/0.132/0.160/0.405/0.792` in `lpc.rs`), the CAM16
@@ -74,9 +76,9 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
 // non-policy inline floats were the ITU-R BT.709 / WCAG relative-luminance coefficients
 // (`0.2126/0.7152/0.0722`), now extracted into the `WCAG_LUMA_{R,G,B}` consts on
 // `NUMERIC_METHOD_ALLOWLIST` (a cited standard, excluded by construction — INV-3).
-// Every module in `PERCEPTUAL_MODULES` remains under the const-marker gate; the four
+// Every module in `PERCEPTUAL_MODULES` remains under the const-marker gate; the three
 // POLICY modules below are additionally scanned for inline bare literals.
-const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutral.rs", "pair.rs"];
+const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs", "pair.rs"];
 
 /// Bare float literal VALUES that are NOT tunable perceptual policy — universal
 /// domain/normalisation/degenerate/sentinel/numerical arithmetic, plus cited
@@ -86,18 +88,10 @@ const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "sentiment.rs", "neutra
 /// (with a marker + inventory row), so it surfaces through GATE-1/2/3. Each entry
 /// is a reviewable assertion that the value is not a tunable perceptual threshold:
 const BARE_FLOAT_ALLOWLIST: &[&str] = &[
-    "0.0",  // additive identity / origin / degenerate lower clamp bound.
-    "0.5",  // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
-    "1.0",  // multiplicative identity / unit upper clamp bound / purity ceiling.
-    "2.0",  // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
-    "0.05", // hue-search STEP granularity (numerical resolution of the sentiment
-    // hue sweep), not a perceptual threshold — the continuous analogue of the
-    // `STRUCTURAL_NONPOLICY_ALLOWLIST` iteration counts.
-    "20.0", // cited categorical-hue-perception threshold (20°, Witzel & Gegenfurtner
-    // 2013) that recomputes the `S_PERC_MIN` DERIVATION-IDENTITY inline
-    // (`2·C_rep·sin(20°/2)`, see sentiment.rs `s_perc_min_from_chromas`). Excluded on
-    // the SAME grounds `NUMERIC_METHOD_ALLOWLIST` excludes `S_PERC_MIN` — recomputed /
-    // cited, not a new tunable policy literal (provenance held by the `S_PERC_MIN` doc).
+    "0.0",   // additive identity / origin / degenerate lower clamp bound.
+    "0.5",   // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
+    "1.0",   // multiplicative identity / unit upper clamp bound / purity ceiling.
+    "2.0",   // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
     "100.0", // CAM16 J lightness scale (0..100) / percent normalisation.
     "180.0", // half-turn in degrees (shortest-arc hue wrap: (Δ+180)%360−180).
     "255.0", // 8-bit sRGB channel quantisation (round·255 / 255).
@@ -118,8 +112,9 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     // APCA / WCAG standard scaling + identities (lpc.rs).
     "LC_SCALE",
     "DELTA_Y_MIN",
-    // Derivation-identity (R2), recomputed not policy (sentiment.rs).
-    "S_PERC_MIN",
+    // Representation-derived angular bounds (spaces/oklab.rs), not policy.
+    "HUE_DEG_MIN_INCLUSIVE",
+    "HUE_DEG_MAX_EXCLUSIVE",
     // Pure numeric epsilons — non-perceptual.
     "RATIO_BISECT_EPS",
     "RATIO_EPS",
@@ -158,15 +153,16 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
 /// observable half of INV-3 (exclusion is enforced, not merely implied by
 /// scoping). Checked directly against the SSOT rows.
 const FORBIDDEN_STANDARD_ROW_NAMES: &[&str] = &[
-    "HK_CHROMA_EXPONENT", // Hellwig 0.587
-    "LC_SCALE",           // APCA
-    "DELTA_Y_MIN",        // APCA
-    "S_PERC_MIN",         // derivation-identity
-    "RATIO_BISECT_EPS",   // numeric EPS
-    "AA_TEXT_RATIO",      // WCAG
-    "L_A",                // CIECAM16 L_A=64
-    "YB",                 // UCS / Yb=20
-    "D65",                // illuminant
+    "HK_CHROMA_EXPONENT",    // Hellwig 0.587
+    "LC_SCALE",              // APCA
+    "DELTA_Y_MIN",           // APCA
+    "HUE_DEG_MIN_INCLUSIVE", // exact angular domain
+    "HUE_DEG_MAX_EXCLUSIVE", // exact angular domain
+    "RATIO_BISECT_EPS",      // numeric EPS
+    "AA_TEXT_RATIO",         // WCAG
+    "L_A",                   // CIECAM16 L_A=64
+    "YB",                    // UCS / Yb=20
+    "D65",                   // illuminant
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -349,7 +345,7 @@ fn is_policy_numeric_type(ty: &str) -> bool {
 /// `(field_name, normalised_value)`. Only *floating-point* literals (containing a
 /// `.`) count — perceptual magnitudes in this domain are always fractional, while
 /// bare integers in a default body are sizes/indices, not policy. A field bound to
-/// a named const (e.g. `p_low: DEFAULT_HARDNESS`) is already covered by that
+/// a named const (e.g. `ratio: DEFAULT_RATIO`) is already covered by that
 /// const's own row and is intentionally not re-detected here.
 fn parse_default_field_literal(line: &str) -> Option<(String, String)> {
     let t = line.trim_start();
@@ -378,7 +374,7 @@ fn parse_default_field_literal(line: &str) -> Option<(String, String)> {
 /// already-marked one (which would let an untracked const hide directly beneath a
 /// marked sibling — the marker-bleed false-negative). Each magnitude must own a
 /// marker that is not separated from it by another magnitude.
-fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
+fn marker_above(lines: &[ProductionLine], site_idx: usize) -> (bool, bool, String) {
     let mut has = false;
     let mut needs = false;
     let mut marker_line = String::new();
@@ -386,13 +382,14 @@ fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
         if site_idx < back {
             break;
         }
-        let prev = lines[site_idx - back].trim_start();
-        if prev.contains("// SSOT-TRACKED") {
+        let previous = &lines[site_idx - back];
+        let prev = previous.raw.trim_start();
+        if prev.starts_with("// SSOT-TRACKED") {
             has = true;
             needs = true;
             marker_line = prev.to_string();
             break;
-        } else if prev.contains("// GROUNDED") {
+        } else if prev.starts_with("// GROUNDED") {
             has = true;
             marker_line = prev.to_string();
             break;
@@ -400,8 +397,8 @@ fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
         // An intervening magnitude line consumes its own marker — stop here so it
         // is not credited to the site below it.
         if back == 1
-            && (parse_const_decl(lines[site_idx - back]).is_some()
-                || parse_default_field_literal(lines[site_idx - back]).is_some())
+            && (parse_const_decl(&previous.syntax).is_some()
+                || parse_default_field_literal(&previous.syntax).is_some())
         {
             break;
         }
@@ -413,16 +410,17 @@ fn marker_above(lines: &[&str], site_idx: usize) -> (bool, bool, String) {
 /// `allowlist` is injected so the RED-proof can reuse the exact scanner.
 fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedConst> {
     // Skip `#[cfg(test)]` blocks: a test-only const (a test tolerance / fixture) is
-    // never perceptual POLICY. `production_lines` removes them while preserving the
-    // original 1-based line numbers used in diagnostics.
-    let prod = production_lines(source);
-    let lines: Vec<&str> = prod.iter().map(|(_, s)| s.as_str()).collect();
+    // never perceptual POLICY. Одна запись хранит raw provenance и лексически
+    // очищенный code, поэтому комментарий внутри объявления не может заставить
+    // разные гейты увидеть разные конструкции.
+    let lines = production_records(source);
     let module_stem = module.trim_end_matches(".rs").to_ascii_uppercase();
     let mut out = Vec::new();
     let mut in_default_body = false;
     let mut default_brace_depth: i32 = 0;
 
-    for (idx, line) in lines.iter().enumerate() {
+    for (idx, record) in lines.iter().enumerate() {
+        let line = record.syntax.as_str();
         let trimmed = line.trim_start();
 
         // Track `fn default()` bodies so field-literal detection is scoped to them
@@ -446,7 +444,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: prod[idx].0,
+                        line: record.number,
                         name,
                         value,
                         has_marker,
@@ -490,7 +488,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: prod[idx].0,
+                        line: record.number,
                         name,
                         value,
                         has_marker,
@@ -510,7 +508,7 @@ fn scan_source(module: &str, source: &str, allowlist: &[&str]) -> Vec<DetectedCo
                     let (has_marker, needs_science, marker_line) = marker_above(&lines, idx);
                     out.push(DetectedConst {
                         module: module.to_string(),
-                        line: prod[idx].0,
+                        line: record.number,
                         name,
                         value,
                         has_marker,
@@ -554,60 +552,6 @@ struct BareFloatSite {
     line: usize,
     /// The normalised literal value (e.g. `1.5`).
     value: String,
-}
-
-/// Return the production source lines (1-based line# preserved) with every
-/// `#[cfg(test)]`-guarded item removed by brace/`;`-matching. Handles: a braced
-/// item (`mod tests { … }`, `fn … { … }`) via brace-match, and a bracket/`;`-
-/// terminated item (`#[cfg(test)] pub const ALL: […] = [ … ];`) via `;`-match.
-/// Test code is the ONLY thing removed — production line numbers are unchanged.
-fn production_lines(source: &str) -> Vec<(usize, String)> {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        if lines[i].trim_start().starts_with("#[cfg(test)]") {
-            // Skip any further attribute/blank lines to reach the guarded item.
-            let mut j = i + 1;
-            while j < lines.len() {
-                let tj = lines[j].trim_start();
-                if tj.starts_with('#') || tj.is_empty() {
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            if j < lines.len() && lines[j].contains('{') {
-                // Braced item: brace-match to its close.
-                let mut depth = 0i32;
-                let mut opened = false;
-                let mut k = j;
-                while k < lines.len() {
-                    depth += lines[k].matches('{').count() as i32;
-                    depth -= lines[k].matches('}').count() as i32;
-                    if lines[k].contains('{') {
-                        opened = true;
-                    }
-                    if opened && depth <= 0 {
-                        break;
-                    }
-                    k += 1;
-                }
-                i = k + 1;
-            } else {
-                // Non-braced item (`… = [ … ];`, `use …;`): skip through the `;`.
-                let mut k = j;
-                while k < lines.len() && !lines[k].contains(';') {
-                    k += 1;
-                }
-                i = k + 1;
-            }
-            continue;
-        }
-        out.push((i + 1, lines[i].to_string()));
-        i += 1;
-    }
-    out
 }
 
 /// Extract every bare FLOATING-POINT literal token from one line of source: a run
@@ -672,7 +616,7 @@ fn extract_float_literals(line: &str) -> Vec<String> {
 }
 
 /// Scan a POLICY module's source for un-allowlisted inline bare float literals.
-/// A site is reported when a production line (see `production_lines`) that is
+/// A site is reported when a production line (see `production_code_lines`) that is
 /// neither a `const` declaration nor a `fn default()` field literal (both already
 /// covered by `scan_source`) carries a bare float whose value is not on
 /// `allowlist`. `allowlist` is injected so the RED-proof reuses the exact scanner.
@@ -680,13 +624,8 @@ fn scan_bare_float_literals(module: &str, source: &str, allowlist: &[&str]) -> V
     let mut out = Vec::new();
     let mut in_default_body = false;
     let mut default_brace_depth: i32 = 0;
-    for (lineno, raw) in production_lines(source) {
-        // Strip an inline/whole-line comment (no `/* */` block comments exist in
-        // the policy modules — verified — so cutting at `//` is sufficient).
-        let code = match raw.split_once("//") {
-            Some((before, _)) => before,
-            None => raw.as_str(),
-        };
+    for (lineno, raw) in production_syntax_lines(source) {
+        let code = raw.as_str();
         let trimmed = code.trim_start();
         if trimmed.is_empty() {
             continue;
@@ -1402,6 +1341,31 @@ fn red_proof_audit_probe() {
         v.contains(&"_AUDIT_PROBE".to_string()),
         "RED-proof FAILED (f64 const path) — GATE-1 did not flag the unmarked f64 const. Saw: {v:?}"
     );
+    let v =
+        unmarked_after_splice("const _AUDIT_PROBE_COMMENTED_TYPE: /* provenance */ f64 = 42.0;");
+    assert!(
+        v.contains(&"_AUDIT_PROBE_COMMENTED_TYPE".to_string()),
+        "RED-proof FAILED (shared raw/code view) — a block comment in a const declaration hid \
+         an untracked policy magnitude. Saw: {v:?}"
+    );
+    let v = unmarked_after_splice(
+        "const _AUDIT_PROBE_FIRST: f64 = 41.0; // GROUNDED not-a-marker\n\
+         const _AUDIT_PROBE_SECOND: f64 = 42.0;",
+    );
+    assert!(
+        v.contains(&"_AUDIT_PROBE_SECOND".to_string()),
+        "RED-proof FAILED (marker ownership) — an inline marker on a preceding const bled into \
+         the next magnitude. Saw: {v:?}"
+    );
+    let v = unmarked_after_splice(
+        "const _AUDIT_PROBE_NOTE: &str = \"// GROUNDED not-a-marker\";\n\
+         const _AUDIT_PROBE_AFTER_STRING: f64 = 42.0;",
+    );
+    assert!(
+        v.contains(&"_AUDIT_PROBE_AFTER_STRING".to_string()),
+        "RED-proof FAILED (marker lexical boundary) — marker text inside a string was credited \
+         to the next magnitude. Saw: {v:?}"
+    );
 
     // 2. DjMagnitude anchor const — invisible to a type==f64 gate.
     let v =
@@ -1440,6 +1404,21 @@ fn red_proof_audit_probe() {
         "RED-proof FAILED (GATE-5 bare-literal path) — an un-allowlisted inline bare float in a \
          POLICY module did NOT surface through the bare-literal scanner; a tunable policy magnitude \
          could still hide as an inline literal. Saw: {v:?}"
+    );
+    let v = bare_floats_after_splice(
+        "fn _audit_probe_url() -> f64 { let _ = \"https://fixture\"; some_call(42.0) }",
+    );
+    assert!(
+        v.contains(&"42.0".to_string()),
+        "RED-proof FAILED (GATE-5 string/comment boundary) — `//` inside a string hid later \
+         production code. Saw: {v:?}"
+    );
+    let v =
+        bare_floats_after_splice("fn _audit_probe_literal() { let _ = \"https://fixture/42.0\"; }");
+    assert!(
+        !v.contains(&"42.0".to_string()),
+        "RED-proof FAILED (GATE-5 literal boundary) — a number inside a string was treated as \
+         executable policy. Saw: {v:?}"
     );
     // And an ALLOWLISTED bare float must NOT be flagged (the allowlist is load-bearing,
     // not vacuous — a scanner that flagged everything would be green-from-birth here).

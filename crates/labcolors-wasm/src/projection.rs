@@ -139,7 +139,6 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 field_num(&mut roles, "lc", c.lc)?;
                 field_num(&mut roles, "wcagRatio", c.wcag_ratio)?;
                 field_bool(&mut roles, "compressed", c.compressed);
-                field_bool(&mut roles, "hueVanished", c.hue_vanished);
                 field_opt_num(&mut roles, "achievedDj", c.achieved_dj)?;
                 field_bool(&mut roles, "floorOverride", c.floor_override);
                 field_opt_num(&mut roles, "legalFloor", c.legal_floor)?;
@@ -165,7 +164,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 push_var(&mut vars, &css_var, &css);
             }
             RoleOutcome::Glow(g) => {
-                let degraded = glow_degraded_from_provenance(g)?;
+                validate_glow_provenance(g)?;
                 // Свечение: слои для screen-наложения потребителем.
                 // --lab-<role> несёт halo (единая oklch-форма), сателлиты
                 // --lab-<role>-core / --lab-<role>-alpha — анатомия и
@@ -239,9 +238,6 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 field_num(&mut roles, "haloAchievedDj", g.halo_achieved_dj)?;
                 field_str(&mut roles, "coreCompositeHex", &g.core_composite_hex);
                 field_num(&mut roles, "coreAchievedDj", g.core_achieved_dj)?;
-                // Aliases совместимости старого неоднозначного контракта.
-                field_num(&mut roles, "achievedDj", g.halo_achieved_dj)?;
-                field_bool(&mut roles, "degraded", degraded);
                 let halo_css = oklch_css(&g.halo_hex, None)?;
                 let core_css = oklch_css(&g.core_hex, None)?;
                 field_str(&mut roles, "css", &halo_css);
@@ -275,8 +271,8 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 // устаревший или выбранный платформой резервный цвет.
             }
             RoleOutcome::Material(m) => {
-                let guaranteed = material_guaranteed_from_provenance(m)?;
-                // Материал (whitepaper §3.7): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
+                validate_material_provenance(m)?;
+                // Материал (whitepaper, «Точечные композиции»): тинт 01 (oklch/α) над опаковой базой 02 (oklch).
                 // --lab-<role> несёт солид-канон (= тон, опаковый) как SOLID-
                 // фолбэк; --lab-<role>-01 — тинт со слэш-альфой; --lab-<role>-02 —
                 // база. Тон/01/02 несут один тон (композит T над T есть T).
@@ -291,11 +287,9 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                     material_alpha_status_key(m.alpha_status)?,
                 );
                 field_num(&mut roles, "floor", m.floor)?;
-                field_bool(&mut roles, "guaranteed", guaranteed);
                 field_bool(&mut roles, "poleWhite", m.pole_white);
                 field_num(&mut roles, "achievedDj", m.achieved_dj)?;
                 field_bool(&mut roles, "toneCompressed", m.tone_compressed);
-                field_bool(&mut roles, "hueVanished", m.hue_vanished);
                 field_bool(&mut roles, "distinct", m.distinct);
                 let solid_css = oklch_css(&m.tone_hex, None)?;
                 let tint_css = oklch_css(&m.tone_hex, Some(m.alpha))?;
@@ -408,7 +402,7 @@ fn unknown_output_variant(type_name: &str) -> BindingError {
     }
 }
 
-fn glow_degraded_from_provenance(glow: &GlowColor) -> Result<bool, BindingError> {
+fn validate_glow_provenance(glow: &GlowColor) -> Result<(), BindingError> {
     use labcolors_core::glow::GlowDecisionOutcomeV1;
     // Атомарный decision_outcome (#292) уже делает незаконную пару
     // profile × guarantee непредставимой; проекции осталось сверить его с
@@ -423,7 +417,7 @@ fn glow_degraded_from_provenance(glow: &GlowColor) -> Result<bool, BindingError>
             GlowDecisionOutcomeV1::StableExactNoop { .. },
             None,
             labcolors_core::GlowTargetStatus::ExactNoopUnreachable,
-        ) => Ok(true),
+        ) => Ok(()),
         (
             GlowDecisionOutcomeV1::Compatibility {
                 release_id:
@@ -432,7 +426,7 @@ fn glow_degraded_from_provenance(glow: &GlowColor) -> Result<bool, BindingError>
             },
             Some(labcolors_core::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
             labcolors_core::GlowTargetStatus::LegacyReached,
-        ) => Ok(false),
+        ) => Ok(()),
         (
             GlowDecisionOutcomeV1::Compatibility {
                 release_id:
@@ -441,7 +435,7 @@ fn glow_degraded_from_provenance(glow: &GlowColor) -> Result<bool, BindingError>
             },
             Some(labcolors_core::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
             labcolors_core::GlowTargetStatus::LegacyUnreachable,
-        ) => Ok(true),
+        ) => Ok(()),
         _ => Err(BindingError::Internal {
             reason: "проекция: несогласованный Glow provenance".to_string(),
         }),
@@ -459,23 +453,23 @@ fn validate_glow_indeterminate_provenance(
     }
 }
 
-fn material_guaranteed_from_provenance(material: &MaterialColor) -> Result<bool, BindingError> {
+fn validate_material_provenance(material: &MaterialColor) -> Result<(), BindingError> {
     match (material.alpha_status, material.alpha_guarantee) {
         (
             labcolors_core::MaterialAlphaStatusV1::Satisfied,
             labcolors_core::MaterialAlphaGuaranteeV1::TransparentEndpointCharacterizedV1 { .. },
-        ) if material.alpha.to_bits() == 0.0_f64.to_bits() => Ok(true),
+        ) if material.alpha.to_bits() == 0.0_f64.to_bits() => Ok(()),
         (
             labcolors_core::MaterialAlphaStatusV1::Satisfied,
             labcolors_core::MaterialAlphaGuaranteeV1::BisectionBracketCharacterizedV1 {
                 upper_alpha,
                 ..
             },
-        ) if material.alpha.to_bits() == upper_alpha.to_bits() => Ok(true),
+        ) if material.alpha.to_bits() == upper_alpha.to_bits() => Ok(()),
         (
             labcolors_core::MaterialAlphaStatusV1::Degraded,
             labcolors_core::MaterialAlphaGuaranteeV1::OpaqueEndpointCharacterizedV1 { .. },
-        ) if material.alpha.to_bits() == 1.0_f64.to_bits() => Ok(false),
+        ) if material.alpha.to_bits() == 1.0_f64.to_bits() => Ok(()),
         _ => Err(BindingError::Internal {
             reason: "проекция: несогласованный Material provenance".to_string(),
         }),
@@ -854,7 +848,6 @@ mod tests {
                 lc: 62.375,
                 wcag_ratio: 7.25,
                 compressed: false,
-                hue_vanished: false,
                 achieved_dj: None,
                 floor_override: true,
                 legal_floor: Some(4.5),
@@ -928,6 +921,10 @@ mod tests {
     #[test]
     fn shape_and_order_match_the_reflect_projection() {
         let json = resolved_json(&fixture()).unwrap();
+        assert!(
+            !json.contains("hueVanished"),
+            "final bytes are the representation truth; the boundary must not infer perceptual hue visibility"
+        );
         let css_label = labcolors_core::oklch_css_from_hex("#D5D5D7", None).unwrap();
         let css_veil = labcolors_core::oklch_css_from_hex("#89CFF0", Some(0.35)).unwrap();
         let css_halo = labcolors_core::oklch_css_from_hex("#4A8FFF", None).unwrap();
@@ -943,7 +940,7 @@ mod tests {
                 "}},\"roles\":{{",
                 "\"label-primary\":{{\"cssVar\":\"--lab-label-primary\",\"kind\":\"color\",",
                 "\"hex\":\"#D5D5D7\",\"lc\":62.375,\"wcagRatio\":7.25,\"compressed\":false,",
-                "\"hueVanished\":false,\"achievedDj\":null,\"floorOverride\":true,",
+                "\"achievedDj\":null,\"floorOverride\":true,",
                 "\"legalFloor\":4.5,\"css\":\"{lab}\"}},",
                 "\"spacer\":{{\"cssVar\":\"--lab-spacer\",\"kind\":\"none\"}},",
                 "\"veil\":{{\"cssVar\":\"--lab-veil\",\"kind\":\"translucent\",",
@@ -963,7 +960,7 @@ mod tests {
                 "\"constraintLayer\":\"halo\",\"targetDj\":2.3006,\"targetStatus\":\"legacy-reached\",",
                 "\"haloCompositeHex\":\"#13151B\",\"haloAchievedDj\":2.373123785729128,",
                 "\"coreCompositeHex\":\"#15171B\",\"coreAchievedDj\":3.235504076619437,",
-                "\"achievedDj\":2.373123785729128,\"degraded\":false,\"css\":\"{halo}\"}},",
+                "\"css\":\"{halo}\"}},",
                 "\"unresolved\":{{\"cssVar\":\"--lab-unresolved\",\"kind\":\"failure\",",
                 "\"category\":\"unresolved\",\"code\":\"bounded_search_exhausted\",",
                 "\"message\":\"нет цвета: \\\"предел\\\"\\nвторая строка\"}}",
@@ -979,6 +976,9 @@ mod tests {
         // Anti-vacuum: `kind: none` публикует client-owned `cssVar` как
         // метаданные контракта, но никогда не присваивает этому имени значение.
         let projected: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let glow = &projected["roles"]["pulse"];
+        assert!(glow.get("achievedDj").is_none());
+        assert!(glow.get("degraded").is_none());
         let none = &projected["roles"]["spacer"];
         assert_eq!(none["kind"], "none");
         assert_eq!(none["cssVar"], "--lab-spacer");
@@ -1242,7 +1242,7 @@ mod tests {
         }));
     }
 
-    /// Материал (whitepaper §3.7) проецируется в контрактные CSS-переменные: `--lab-<role>` =
+    /// Материал (whitepaper, «Точечные композиции») проецируется в контрактные CSS-переменные: `--lab-<role>` =
     /// солид-канон (oklch), `--lab-<role>-01` = тинт (oklch со слэш-альфой),
     /// `--lab-<role>-02` = опаковая база (oklch). Плюс полный набор полей исхода.
     /// Пин ИМЁН переменных — публичный CSS-контракт сателлитов материала.
@@ -1272,7 +1272,6 @@ mod tests {
                     pole_white: false,
                     achieved_dj: 18.25,
                     tone_compressed: false,
-                    hue_vanished: false,
                     distinct: true,
                 }),
             }],
@@ -1323,17 +1322,16 @@ mod tests {
         );
         assert_eq!(r["alphaStatus"], "satisfied");
         assert_eq!(r["floor"].as_f64().unwrap(), 4.5);
-        assert_eq!(r["guaranteed"], true);
+        assert!(r.get("guaranteed").is_none());
         assert_eq!(r["poleWhite"], false);
         assert_eq!(r["achievedDj"].as_f64().unwrap(), 18.25);
         assert_eq!(r["toneCompressed"], false);
-        assert_eq!(r["hueVanished"], false);
         assert_eq!(r["distinct"], true);
         assert_eq!(r["css"].as_str().unwrap(), solid);
     }
 
     #[test]
-    fn material_terminal_variants_keep_status_guarantee_and_boolean_correlated() {
+    fn material_terminal_variants_keep_status_and_guarantee_correlated_without_boolean_alias() {
         let numerical_profile = labcolors_core::MaterialNumericalProfileV1::EncodedSrgbByteScaleAffinePlatformBinary64PowfV1;
         let role = |alpha, alpha_guarantee, alpha_status| {
             RoleOutcome::Material(MaterialColor {
@@ -1346,7 +1344,6 @@ mod tests {
                 pole_white: false,
                 achieved_dj: 18.25,
                 tone_compressed: false,
-                hue_vanished: false,
                 distinct: true,
             })
         };
@@ -1386,7 +1383,7 @@ mod tests {
             "transparent-endpoint-characterized-v1"
         );
         assert_eq!(transparent["alphaStatus"], "satisfied");
-        assert_eq!(transparent["guaranteed"], true);
+        assert!(transparent.get("guaranteed").is_none());
 
         let opaque = &value["roles"]["opaque"];
         assert_eq!(opaque["alpha"], 1.0);
@@ -1395,7 +1392,7 @@ mod tests {
             "opaque-endpoint-characterized-v1"
         );
         assert_eq!(opaque["alphaStatus"], "degraded");
-        assert_eq!(opaque["guaranteed"], false);
+        assert!(opaque.get("guaranteed").is_none());
     }
 
     #[test]
@@ -1459,7 +1456,6 @@ mod tests {
                     pole_white: false,
                     achieved_dj: 18.25,
                     tone_compressed: false,
-                    hue_vanished: false,
                     distinct: true,
                 }),
             }],

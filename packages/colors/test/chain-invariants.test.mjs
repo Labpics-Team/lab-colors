@@ -245,8 +245,6 @@ test("glow roles emit halo primary + -core/-alpha satellites, all well-formed", 
           kind: "legacy-platform-dependent-v1",
         });
         assert.ok(["legacy-reached", "legacy-unreachable"].includes(role.targetStatus));
-        assert.equal(role.degraded, role.targetStatus === "legacy-unreachable");
-        assert.ok(Object.is(role.achievedDj, role.haloAchievedDj));
         if (role.targetStatus === "legacy-reached") {
           assert.ok(role.haloAchievedDj >= role.targetDj);
         } else {

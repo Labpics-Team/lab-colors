@@ -15,14 +15,15 @@
 //! генератором ([`bin/gen`](../gen/index.html)) и закоммичены. Ожидаемые
 //! значения — это то, что выдаёт ядро, а не то, что «должно бы». Внешняя правда
 //! (опубликованные WCAG-якоря) сверяется ОТДЕЛЬНО раннером-референсом
-//! (`tests/reference_runner.rs`), замыкая цепочку: закоммиченные векторы ==
-//! выход генератора == математика ядра == опубликованный стандарт.
+//! (`tests/reference_runner.rs`). Равенство с опубликованным стандартом относится
+//! только к проверяемому WCAG-подмножеству; остальные векторы характеризуют
+//! версионированное поведение ядра, не доказывая человеческий смысл координат.
 //!
 //! # Семейства векторов
 //!
 //! | Файл | Что фиксирует | Источник в ядре |
 //! |------|---------------|-----------------|
-//! | `contrasts.json` | (fg, bg, тема) → (Lc, WCAG) | `recheck_against` |
+//! | `contrasts.json` | (fg, bg, тема) → (Ys candidate score, WCAG) | `recheck_against` |
 //! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → цвет или типизированный failure | `solve` |
@@ -88,9 +89,9 @@ const THEMES: [&str; 4] = ["light", "dark", "light-ic", "dark-ic"];
 // Семейство: контрасты
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Один контраст-вектор: перцептивный `Lc` и юридический WCAG-ratio переднего
-/// плана на фоне под темой. Два числа отчитываются РАЗДЕЛЬНО — они измеряют
-/// разное и никогда не смешиваются (инвариант ядра).
+/// Один контраст-вектор: знаковая кандидатная оценка `Lc` по `Ys` и
+/// юридический WCAG-ratio переднего плана на фоне под темой. Два числа
+/// отчитываются раздельно и не смешиваются.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContrastVector {
@@ -100,7 +101,8 @@ pub struct ContrastVector {
     pub bg: String,
     /// Тема просмотра (kebab-ключ).
     pub theme: String,
-    /// Знаковый перцептивный контраст (LPC `Lc`).
+    /// Знаковая кандидатная оценка `Lc` по `Ys` из замороженной SAPC-shaped кривой;
+    /// не LPC/readability evidence.
     pub lc: f64,
     /// Контраст-ratio WCAG 2.1 (1–21).
     pub wcag_ratio: f64,
@@ -243,14 +245,14 @@ pub fn generate_alpha() -> Vec<AlphaVector> {
     rename_all_fields = "camelCase"
 )]
 pub enum ContractSpec {
-    /// Контраст текста: цель `Lc`, юридический пол WCAG AA-text (4.5:1).
+    /// Текст: цель Ys candidate score `Lc`, юридический пол WCAG AA-text (4.5:1).
     Text {
-        /// Целевой перцептивный `Lc`.
+        /// Целевая кандидатная оценка `Lc` по `Ys`.
         lc: f64,
     },
-    /// Контраст UI-элемента: цель `Lc`, пол WCAG AA-UI (3:1).
+    /// UI-элемент: цель Ys candidate score `Lc`, пол WCAG AA-UI (3:1).
     Ui {
-        /// Целевой перцептивный `Lc`.
+        /// Целевая кандидатная оценка `Lc` по `Ys`.
         lc: f64,
     },
     /// Декоративная полоса `[floor, ceiling]` без юридического пола.
@@ -286,11 +288,11 @@ pub enum SolveOutcome {
     Solved {
         /// Резолвнутый цвет, `#RRGGBB`.
         hex: String,
-        /// Знаковый перцептивный `Lc` на отданном hex.
+        /// Знаковая кандидатная оценка `Lc` по `Ys` на отданном hex.
         lc: f64,
         /// WCAG-ratio на отданном hex.
         wcag_ratio: f64,
-        /// Юридический пол переопределил перцептивную цель.
+        /// Юридический пол переопределил Ys candidate-score цель.
         floor_override: bool,
     },
     /// Resolver не вернул цвет; category отделяет доказанную недостижимость от
@@ -381,7 +383,7 @@ const SOLVE_CASES: [(&str, ContractSpec, &str); 8] = [
     ),
     ("#101012", ContractSpec::Text { lc: 75.0 }, "dark"),
     ("#007AFF", ContractSpec::Text { lc: 60.0 }, "light"),
-    // Floorless target lies in the open LPC dead-zone gap: neither exact zero
+    // Floorless target lies in the frozen candidate curve's open dead-zone gap: neither exact zero
     // nor the minimum non-zero boundary is within the declared ±1 Lc budget.
     (
         "#FFFFFF",
@@ -975,8 +977,8 @@ mod tests {
         );
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(
-            manifest.core_version, "0.2.0",
-            "pack v10 остаётся привязан к core 0.2.0"
+            manifest.core_version, "0.3.0",
+            "pack v10 остаётся привязан к core 0.3.0"
         );
         assert_eq!(
             pack.alpha.len(),

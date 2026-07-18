@@ -1,3 +1,4 @@
+use crate::curve::CurvePosition;
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;
 use crate::spaces::cam16;
@@ -56,7 +57,7 @@ impl AccentCurve {
     /// за гамут (абсолютная хрома у краёв физически недостижима).
     pub fn new(canonical_hex: &str, neutral: &NeutralCurve) -> Result<Self, String> {
         let color = LcsColor::from_hex(canonical_hex)?;
-        let h_canonical = color.h_ok;
+        let h_canonical = color.h_ok();
 
         let rgb = srgb_from_hex(canonical_hex)?;
         let lab = srgb_linear_to_oklab(rgb);
@@ -84,10 +85,8 @@ impl AccentCurve {
     /// оттенок — поиск максимума хромы со штрафом дрейфа от канонического
     /// (см. `find_optimal_hue`), хрома — `sat_ratio ×` стена гамута на этой
     /// светлоте.
-    pub fn at(&self, t: f64) -> LcsColor {
-        let t = t.clamp(0.0, 1.0);
-        let neutral_color = self.neutral.at(t);
-        let jp = neutral_color.jp;
+    pub fn at(&self, position: CurvePosition) -> LcsColor {
+        let jp = self.neutral.jp_at(position);
 
         let l_ok = jp_to_oklab_l(jp, &self.vc);
 
@@ -328,14 +327,14 @@ pub(crate) fn coarse_to_fine_argmax(
 
 /// Oklab L of the grey whose CAM16-UCS lightness J' equals `jp`, in closed form.
 ///
-/// # Derivation (mirror of `lpc::y_hk_analytic`)
+/// # Derivation (shared CAM16 gray-axis inverse)
 ///
 /// `AccentCurve::at` calls this once per stretch point to anchor the accent's
 /// lightness on the same grey axis the neutral curve defines. The forward map it
 /// inverts is the achromatic chain
 ///
 /// ```text
-///   y  ──grey_j──▶  J  ──UCS──▶  J' = 1.7·J / (1 + 0.007·J)
+///   y  ──gray_j──▶  J  ──UCS──▶  J' = 1.7·J / (1 + 0.007·J)
 /// ```
 ///
 /// followed by `L_ok = srgb_linear_to_oklab([y, y, y])[0]`. Every link is a
@@ -344,10 +343,10 @@ pub(crate) fn coarse_to_fine_argmax(
 /// 1. **J' → J** — the CAM16-UCS lightness rescale (Li et al. 2017,
 ///    DOI 10.1002/col.22131) inverts in closed form:
 ///    `jp·(1 + 0.007·J) = 1.7·J  ⇒  J = jp / (1.7 − 0.007·jp)`. This is the same
-///    inverse `lpc::y_hk_from_lcs` already uses for the LcsColor contrast path.
+///    inverse the contrast path also uses for `LcsColor`.
 /// 2. **J → y** — on the achromatic D65 ray, chroma is zero, so the Hellwig H-K
 ///    term vanishes and `J_HK ≡ J`. Recovering the grey luminance from `J` is
-///    therefore *exactly* `lpc::y_hk(J, vc)` — the analytic CAM16 grey-axis
+///    therefore *exactly* `cam16::gray_y(J, vc)` — the analytic CAM16 gray-axis
 ///    inverse (closed-form seed + two Newton steps) that replaced an identical
 ///    64-step bisection in PR #51. Reused verbatim here, no second copy of the
 ///    cone-response algebra.
@@ -383,7 +382,7 @@ pub(crate) fn jp_to_oklab_l(jp: f64, vc: &ViewingConditions) -> f64 {
 
     // Step 2: invert the achromatic CAM16 chain J → y. On the grey axis chroma
     // is zero, so J_HK ≡ J and the H-K-corrected grey inverse is the plain one.
-    let y = crate::lpc::y_hk(j, vc);
+    let y = cam16::gray_y(j, vc);
 
     // Step 3: grey Oklab L through the identical forward function the bisection
     // used — keeps the emitted lightness bit-for-bit, so the accent golden holds.
@@ -829,8 +828,8 @@ pub(crate) fn max_chroma_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
 }
 
 impl crate::curve::ColorCurve for AccentCurve {
-    fn at(&self, t: f64) -> LcsColor {
-        self.at(t)
+    fn at(&self, position: CurvePosition) -> LcsColor {
+        self.at(position)
     }
 
     fn vc(&self) -> &ViewingConditions {
@@ -842,6 +841,10 @@ impl crate::curve::ColorCurve for AccentCurve {
 mod tests {
     use super::*;
     use crate::curve::ColorCurve;
+
+    fn position(value: f64) -> CurvePosition {
+        CurvePosition::new(value).expect("test position is inside [0, 1]")
+    }
 
     fn default_neutral() -> NeutralCurve {
         NeutralCurve::new("#FFFFFF", "#787880", "#101012").unwrap()
@@ -1129,10 +1132,10 @@ mod tests {
         let steps = curve.sample(50);
         for w in steps.windows(2) {
             assert!(
-                w[0].jp >= w[1].jp - 0.5,
+                w[0].jp() >= w[1].jp() - 0.5,
                 "jp increased: {} -> {}",
-                w[0].jp,
-                w[1].jp
+                w[0].jp(),
+                w[1].jp()
             );
         }
     }
@@ -1142,8 +1145,13 @@ mod tests {
         let neutral = default_neutral();
         let curve = AccentCurve::new("#007AFF", &neutral).unwrap();
         for i in 0..=50 {
-            let c = curve.at(i as f64 / 50.0);
-            assert!(c.s >= -1e-6, "negative s at t={}: {}", i as f64 / 50.0, c.s);
+            let c = curve.at(position(i as f64 / 50.0));
+            assert!(
+                c.s() >= -1e-6,
+                "negative s at t={}: {}",
+                i as f64 / 50.0,
+                c.s()
+            );
         }
     }
 
@@ -1152,7 +1160,7 @@ mod tests {
         let neutral = default_neutral();
         let curve = AccentCurve::new("#007AFF", &neutral).unwrap();
         for i in 0..=50 {
-            let color = curve.at(i as f64 / 50.0);
+            let color = curve.at(position(i as f64 / 50.0));
             let hex = color.to_hex();
             let rgb = srgb_from_hex(&hex).unwrap();
             assert!(
@@ -1265,7 +1273,7 @@ mod tests {
         // 64-step bisection oracle to better than the bisection's own resolution.
         // Both paths feed the identical `srgb_linear_to_oklab([y,y,y])`, so the
         // only divergence is in the recovered grey luminance `y`; that inherits
-        // the < 1e-12 bound `lpc::y_hk` is held to (see y_hk_analytic tests), and
+        // the < 1e-12 bound `cam16::gray_y` is held to (see inverse tests), and
         // the cube root only contracts it. We assert max|dL| < 1e-12 and report
         // the measured worst case.
         //
@@ -1282,7 +1290,7 @@ mod tests {
         for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
             let mut max_dl = 0.0_f64;
             let mut worst_jp = 0.0_f64;
-            // grey_j(1.0) ≈ 100; sweep (0, 104] to a hair past white, mirroring
+            // gray_j(1.0) ≈ 100; sweep (0, 104] to a hair past white, mirroring
             // the y_hk grid test's reachable-range coverage. Start at n = 1 so the
             // exact-black J' = 0 endpoint (pinned elsewhere) is excluded.
             for n in 1..=6000 {
@@ -1323,7 +1331,7 @@ mod tests {
             // Round-trip: the J' produced by a known grey luminance recovers an L
             // that equals the forward grey L for that same luminance.
             for &y in &[0.02_f64, 0.18, 0.5, 0.9, 1.0] {
-                let j = crate::lpc::grey_j(y, &vc);
+                let j = cam16::gray_j(y, &vc);
                 // J' through the shared helper — the same J'-generation production
                 // uses; the equivalence is still anchored by the independent
                 // `srgb_linear_to_oklab` reference below, not by `ucs_j`.
@@ -1381,17 +1389,9 @@ mod tests {
     // ── Dark-theme (dim-surround) accent tests ────────────────
 
     fn dim_neutral() -> NeutralCurve {
-        use crate::neutral::CurveParams;
         use crate::spaces::vc::ViewingConditions;
         let vc = ViewingConditions::dim_surround();
-        NeutralCurve::with_vc(
-            "#FFFFFF",
-            "#787880",
-            "#101012",
-            &CurveParams::default(),
-            &vc,
-        )
-        .unwrap()
+        NeutralCurve::with_vc("#FFFFFF", "#787880", "#101012", &vc).unwrap()
     }
 
     #[test]
@@ -1401,10 +1401,10 @@ mod tests {
         let steps = curve.sample(50);
         for w in steps.windows(2) {
             assert!(
-                w[0].jp >= w[1].jp - 0.5,
+                w[0].jp() >= w[1].jp() - 0.5,
                 "dim accent jp increased: {} -> {}",
-                w[0].jp,
-                w[1].jp,
+                w[0].jp(),
+                w[1].jp(),
             );
         }
     }
@@ -1414,7 +1414,7 @@ mod tests {
         let neutral = dim_neutral();
         let curve = AccentCurve::new("#007AFF", &neutral).unwrap();
         for i in 0..=50 {
-            let color = curve.at(i as f64 / 50.0);
+            let color = curve.at(position(i as f64 / 50.0));
             let hex = color.to_hex_with_vc(&curve.vc);
             let rgb = srgb_from_hex(&hex).unwrap();
             assert!(

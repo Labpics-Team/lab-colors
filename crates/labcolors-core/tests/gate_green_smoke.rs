@@ -35,7 +35,7 @@ use common::{inventory_path, src_dir};
 const PERCEPTUAL_MODULES_SMOKE: [&str; 6] = [
     "semantic.rs",
     "scale.rs",
-    "sentiment.rs",
+    "spaces/oklab.rs",
     "neutral.rs",
     "lpc.rs",
     "lcs.rs",
@@ -51,7 +51,8 @@ fn count_policy_consts_approx(source: &str) -> usize {
         "HK_CHROMA_EXPONENT",
         "LC_SCALE",
         "DELTA_Y_MIN",
-        "S_PERC_MIN",
+        "HUE_DEG_MIN_INCLUSIVE",
+        "HUE_DEG_MAX_EXCLUSIVE",
         "RATIO_BISECT_EPS",
         "RATIO_EPS",
         "FLOOR_EPS",

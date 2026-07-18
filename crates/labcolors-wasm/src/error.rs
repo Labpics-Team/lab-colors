@@ -44,7 +44,7 @@ pub enum BindingError {
     },
 
     /// `resolve_theme` was called before any config was loaded. The engine is
-    /// agnostic (ADR-0001 PR-c): it carries no built-in design system, so a
+    /// agnostic (ADR-0001): it carries no built-in design system, so a
     /// resolve has nothing to emit until `load_config` supplies one. Honest,
     /// matchable failure — never a panic and never a silent built-in default.
     #[error("no config loaded: call load_config before resolve_theme or recheck")]

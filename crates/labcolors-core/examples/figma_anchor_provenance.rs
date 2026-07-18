@@ -97,7 +97,7 @@ fn hex_of(rgb: [f64; 3]) -> String {
 fn dj(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
     let fg = LcsColor::from_hex_with_vc(fg_hex, vc).expect("valid fg hex");
     let bg = LcsColor::from_hex_with_vc(bg_hex, vc).expect("valid bg hex");
-    (fg.jp - bg.jp).abs()
+    (fg.jp() - bg.jp()).abs()
 }
 
 fn main() {

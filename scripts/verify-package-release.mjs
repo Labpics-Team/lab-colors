@@ -762,7 +762,7 @@ const config = {
   },
   neutral: {
     anchors: { light: "#FFFFFF", mid: "#7A7A82", dark: "#17171A" },
-    tint: { ratio: 0.1, target_mp: 6.1, hue_stiffness: 9.0 },
+    tint: { target_mp: 6.1, hue_stiffness: 9.0 },
   },
   palette: [{
     key: "family-4d",
@@ -773,7 +773,6 @@ const config = {
       dark_ic: "#A78BFA",
     },
   }],
-  sentiments: { categories: [], hardness: 5.0, chroma_fraction: 0.88 },
   themes: [{ name: "light", preset: "srgb" }],
   roles: [
     {
@@ -843,17 +842,15 @@ assert.equal(
 if (material.alphaGuarantee.kind === "transparent-endpoint-characterized-v1") {
   assert.equal(material.alpha, 0);
   assert.equal(material.alphaStatus, "satisfied");
-  assert.equal(material.guaranteed, true);
 } else if (material.alphaGuarantee.kind === "bisection-bracket-characterized-v1") {
   assert.equal(material.alpha, material.alphaGuarantee.upperAlpha);
   assert.equal(material.alphaStatus, "satisfied");
-  assert.equal(material.guaranteed, true);
 } else {
   assert.equal(material.alphaGuarantee.kind, "opaque-endpoint-characterized-v1");
   assert.equal(material.alpha, 1);
   assert.equal(material.alphaStatus, "degraded");
-  assert.equal(material.guaranteed, false);
 }
+assert.equal(Object.hasOwn(material, "guaranteed"), false);
 assert.ok(Number.isFinite(material.floor));
 
 const glow = resolved.roles["token-92be"];
@@ -869,8 +866,8 @@ assert.equal(glow.constraintLayer, "halo");
 assert.ok(glow.targetStatus === "legacy-reached" || glow.targetStatus === "legacy-unreachable");
 assert.ok(Number.isFinite(glow.alpha) && glow.alpha > 0 && glow.alpha <= 1);
 assert.equal(Number(glow.alphaCss), glow.alpha);
-assert.equal(glow.achievedDj, glow.haloAchievedDj);
-assert.equal(glow.degraded, glow.targetStatus === "legacy-unreachable");
+assert.equal(Object.hasOwn(glow, "achievedDj"), false);
+assert.equal(Object.hasOwn(glow, "degraded"), false);
 assert.equal(screen(glow.haloHex, glow.alpha, background), glow.haloCompositeHex);
 assert.equal(screen(glow.coreHex, glow.alpha, background), glow.coreCompositeHex);
 for (const value of [glow.targetDj, glow.haloAchievedDj, glow.coreAchievedDj]) {
@@ -906,7 +903,7 @@ assert.equal(stableNoop.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
 assert.equal(stableNoop.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
 assert.equal(stableNoop.selectionDiagnosticProfile, null);
 assert.equal(stableNoop.targetStatus, "exact-noop-unreachable");
-assert.equal(stableNoop.degraded, true);
+assert.equal(Object.hasOwn(stableNoop, "degraded"), false);
 assert.equal(stableNoop.haloCompositeHex, "#FFFFFF");
 for (const key of [
   stableNoop.cssVar,
@@ -931,7 +928,6 @@ import init, {
   type GlowTargetStatusV1,
   type LadderPositionV1,
   type MaterialRole,
-  type MaterialRoleBase,
   type NumericalCapabilityManifestV2,
   type NumericalIndeterminacyV1,
   type ResolvedTheme,
@@ -994,10 +990,9 @@ const config: ThemeConfig = {
   },
   neutral: {
     anchors: { light: "#FFFFFF", mid: "#7A7A82", dark: "#17171A" },
-    tint: { ratio: 0.1, target_mp: 6.1, hue_stiffness: 9.0 },
+    tint: { target_mp: 6.1, hue_stiffness: 9.0 },
   },
   palette: [],
-  sentiments: { categories: [], hardness: 5.0, chroma_fraction: 0.88 },
   themes: [{ name: "light", preset: "srgb" }],
   roles: [
     {
@@ -1078,34 +1073,26 @@ function determinateGlowEvidence(role: GlowDeterminateRole): string {
   if (role.decisionProfile === "stable-v1") {
     const status: "exact-noop-unreachable" = role.targetStatus;
     const selection: null = role.selectionDiagnosticProfile;
-    const degraded: true = role.degraded;
     void selection;
-    void degraded;
     return status;
   }
   if (role.targetStatus === "legacy-reached") {
-    const degraded: false = role.degraded;
-    void degraded;
     return role.targetStatus;
   }
   const status: "legacy-unreachable" = role.targetStatus;
-  const degraded: true = role.degraded;
-  void degraded;
   return status;
 }
 
-function materialEvidence(role: MaterialRole): number | boolean {
+function materialEvidence(role: MaterialRole): number | string {
   if (role.alphaStatus === "degraded") {
     const alpha: 1 = role.alpha;
-    const guaranteed: false = role.guaranteed;
     void alpha;
-    return guaranteed;
+    return role.alphaStatus;
   }
-  const guaranteed: true = role.guaranteed;
   if (role.alphaGuarantee.kind === "bisection-bracket-characterized-v1") {
     return role.alphaGuarantee.upperAlpha;
   }
-  return guaranteed;
+  return role.alphaStatus;
 }
 
 declare const glowBase: GlowDeterminateRoleBase;
@@ -1116,21 +1103,16 @@ const impossibleGlow: GlowDeterminateRole = {
   decisionGuarantee: { kind: "bit-exact" },
   selectionDiagnosticProfile: null,
   targetStatus: "legacy-reached",
-  degraded: false,
 };
 
-declare const materialBase: MaterialRoleBase;
-// @ts-expect-error compatibility boolean выводится из material status/guarantee.
-const impossibleMaterial: MaterialRole = {
-  ...materialBase,
-  alpha: 1,
-  alphaGuarantee: {
-    kind: "opaque-endpoint-characterized-v1",
-    numericalProfile: "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
-  },
-  alphaStatus: "degraded",
-  guaranteed: true,
-};
+declare const noAliasGlow: GlowDeterminateRole;
+// @ts-expect-error ambiguous measurement alias was removed.
+noAliasGlow.achievedDj;
+// @ts-expect-error boolean duplicate of targetStatus was removed.
+noAliasGlow.degraded;
+declare const noAliasMaterial: MaterialRole;
+// @ts-expect-error boolean duplicate of alphaStatus was removed.
+noAliasMaterial.guaranteed;
 
 void [
   initialise,
@@ -1146,7 +1128,8 @@ void [
   determinateGlowEvidence,
   materialEvidence,
   impossibleGlow,
-  impossibleMaterial,
+  noAliasGlow,
+  noAliasMaterial,
 ];
 `;
 }

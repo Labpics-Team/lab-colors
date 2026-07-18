@@ -208,13 +208,15 @@ WASM/TypeScript:
 - каждый Glow-рецепт обязан явно нести `decision_profile`; отсутствие и
   неизвестная строка отвергаются при `loadConfig`, а профиль входит в fingerprint;
 - determinate mocks обязаны добавить `alphaCss`, `constraintLayer`, `targetDj`,
-  `targetStatus`, оба composite, оба `achievedDj`, а также раздельные
+  `targetStatus`, оба composite и явно названные `haloAchievedDj` /
+  `coreAchievedDj`, а также раздельные
   `compositeProfile`, `compositeGuarantee`, `layerRecipeProfile`,
   `appearanceDiagnosticProfile`, nullable `selectionDiagnosticProfile`,
   `decisionProfile`, `decisionGuarantee`;
 - exhaustive union обязан обрабатывать `kind: "glow-indeterminate"`; этот
   terminal outcome несёт site/reason/bounds, но не создаёт halo/core/alpha vars;
-- legacy `achievedDj` и `degraded` остаются точными aliases на период миграции;
+- дублирующие `achievedDj` и `degraded` отсутствуют: измерения и typed status
+  имеют по одному источнику истины;
 - изменение строк alpha и соответствующих golden ожидаемо.
 
 При выпуске breaking-версии по #259 общий conformance pack должен быть повышен
@@ -273,4 +275,4 @@ legacy-исход всё ещё выглядел как «determinate со сл�
   полями, разрешающими минт bounded evidence.
 - Pack 4.0.0 добавляет отдельное `wcag22`-семейство. Это terminal standard
   certificate для явно объявленного criterion, а не новая Glow-эвристика и не
-  замена LPC-перцептивной цели.
+  замена переходной Ys candidate-score цели.

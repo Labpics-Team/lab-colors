@@ -39,8 +39,8 @@
 //! — исходный цвет. Радиусы и размытие здесь отсутствуют: названия обозначают
 //! назначение слоёв у потребителя, а не измеренную геометрию.
 //!
-//! Для хроматического источника core строится существующей политикой
-//! [`crate::accent_balance`]: midpoint J′ задаёт начальную Oklab-светлоту, chroma
+//! Для хроматического источника core строится внутренней max-chroma-at-lightness
+//! политикой: midpoint J′ задаёт начальную Oklab-светлоту, chroma
 //! берётся на sRGB-границе данного hue. Точная sRGB8-нейтраль остаётся
 //! нейтральной: у неё нет hue, который можно было бы честно «усилить».
 //! После хроматического преобразования и sRGB8-квантования итоговый J′ не
@@ -57,7 +57,8 @@ use crate::numerics::{
 };
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::{
-    decode_8bit, hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_to_xyz,
+    hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_linear_from_srgb8,
+    srgb_to_xyz,
 };
 use crate::spaces::vc::ViewingConditions;
 
@@ -83,7 +84,8 @@ pub const GLOW_COMPOSITE_PROFILE: &str = "encoded-srgb8-screen-v1";
 /// решения и не усиливает сертификат композита.
 pub const GLOW_DIAGNOSTIC_PROFILE: &str = "cam16-ucs-jprime-li2017-v1";
 
-/// Версия recipe, строящего core-слой из начального CAM16-UCS J′ и Oklab cusp.
+/// Версия recipe, строящего core-слой из начального CAM16-UCS J′: exact-gray
+/// источник остаётся на neutral ray, chromatic источник использует Oklab cusp.
 ///
 /// Профиль идентифицирует только алгоритм построения слоя. Он не является
 /// гарантией выбора, appearance-сертификатом или утверждением о пространстве
@@ -145,9 +147,9 @@ impl GlowDiagnosticProfileV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GlowLayerRecipeProfileV1 {
-    /// Начальный midpoint CAM16-UCS J′, переведённый в Oklab lightness;
-    /// хроматический core берёт ограниченную cusp chroma текущего Oklab hue,
-    /// halo равен источнику.
+    /// Начальный midpoint CAM16-UCS J′, переведённый в Oklab lightness. При
+    /// равных sRGB8-каналах core идёт по neutral ray; при неравных берёт
+    /// ограниченную cusp chroma текущего Oklab hue. Halo равен источнику.
     Cam16JPrimeOklabCuspV1,
 }
 
@@ -424,9 +426,9 @@ fn validate_viewing_numerics(vc: &ViewingConditions) -> Result<(), String> {
 
 fn validate_lcs_numerics(label: &str, color: &LcsColor) -> Result<(), String> {
     for (name, value) in [
-        ("jp", color.jp),
-        ("h_ok", color.h_ok),
-        ("s", color.s),
+        ("jp", color.jp()),
+        ("h_ok", color.h_ok()),
+        ("s", color.s()),
         ("h_cam", color.h_cam()),
     ] {
         if !value.is_finite() {
@@ -440,7 +442,7 @@ fn validate_lcs_numerics(label: &str, color: &LcsColor) -> Result<(), String> {
 /// участвуют в целевой функции, поэтому полный `LcsColor` был бы лишней работой
 /// на каждом из сотен состояний sRGB8. Формула J′ остаётся тем же SSOT из `cam16`.
 fn jp_from_srgb8(bytes: [u8; 3], vc: &ViewingConditions) -> Result<f64, String> {
-    let rgb = bytes.map(decode_8bit);
+    let rgb = srgb_linear_from_srgb8(crate::Srgb8::new(bytes));
     let (j, _, _) = crate::spaces::cam16::forward(srgb_to_xyz(rgb), vc);
     let jp = crate::spaces::cam16::ucs_j(j);
     if jp.is_finite() {
@@ -650,7 +652,7 @@ fn encoded_bytes(rgb: [f64; 3]) -> [u8; 3] {
 }
 
 fn composite_hex(bytes: [u8; 3]) -> String {
-    format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2])
+    crate::Srgb8::new(bytes).to_hex()
 }
 
 /// Поток всех состояний, достижимых representable binary64-alpha в объявленном
@@ -906,15 +908,6 @@ impl GlowSolve {
     /// Типизированный результат проверки цели.
     pub fn status(&self) -> GlowTargetStatus {
         self.status
-    }
-
-    /// Геттер совместимости прежнего булева контракта: цель недостижима как при
-    /// точном no-op, так и при явном legacy-исходе с максимумом.
-    pub fn degraded(&self) -> bool {
-        matches!(
-            self.status,
-            GlowTargetStatus::ExactNoopUnreachable | GlowTargetStatus::LegacyUnreachable
-        )
     }
 
     /// Слой, по которому решалась цель.
@@ -1177,8 +1170,8 @@ fn solve_screen_alpha_for_dj_legacy(
 ///
 /// В recipe v1 halo буквально равен источнику. Для core арифметическая середина
 /// J′ источника и 100 задаёт начальную Oklab-светлоту. У хроматического источника
-/// chroma — sRGB-граница его Oklab hue через
-/// [`crate::accent_balance::accent_balanced`]; у точного sRGB8-нейтраля chroma
+/// chroma — sRGB-граница его Oklab hue через внутреннюю
+/// max-chroma-at-lightness операцию; у точного sRGB8-нейтраля chroma
 /// остаётся нулевой, потому его численный hue не несёт цветового смысла.
 /// Фактический J′ эмитированного core измеряется вызывающим кодом: он не обязан
 /// совпасть с начальным значением после смены координат и sRGB8-квантования.
@@ -1193,7 +1186,7 @@ pub fn glow_layers_from_source(
     let canonical_source_hex = hex_from_srgb_encoded(source_encoded);
     let src = LcsColor::from_hex_with_vc(&canonical_source_hex, vc)?;
     validate_lcs_numerics("source", &src)?;
-    let jp_core = (src.jp + 100.0) * 0.5;
+    let jp_core = (src.jp() + 100.0) * 0.5;
     if !jp_core.is_finite() {
         return Err(format!("core J′ seed не конечен: {jp_core}"));
     }
@@ -1202,12 +1195,12 @@ pub fn glow_layers_from_source(
         return Err(format!("core Oklab L вне конечного [0,1]: {l_core}"));
     }
 
-    let core_rgb = if source_bytes[0] == source_bytes[1] && source_bytes[1] == source_bytes[2] {
+    let core_rgb = if crate::Srgb8::new(source_bytes).is_achromatic() {
         // У точного sRGB8-нейтраля оттенка нет. Число atan2 от матричного шума
         // нельзя превращать в насыщенный core: hue-отсутствие сохраняется.
-        oklab_to_srgb_linear([l_core, 0.0, 0.0])
+        crate::spaces::oklab::neutral_srgb_linear(l_core)
     } else {
-        let balanced = crate::accent_balance::accent_balanced(l_core, src.h_ok, vc);
+        let balanced = crate::accent_balance::accent_balanced(l_core, src.h_ok(), vc);
         validate_lcs_numerics("core", &balanced.color)?;
         for (name, value) in [
             ("l_ok", balanced.l_ok),
@@ -1449,7 +1442,7 @@ mod tests {
         boundaries.sort_unstable();
         boundaries.dedup();
 
-        let bg_jp = LcsColor::from_hex_with_vc(bg_hex, vc).unwrap().jp;
+        let bg_jp = LcsColor::from_hex_with_vc(bg_hex, vc).unwrap().jp();
         let mut states: Vec<(f64, String, f64)> = Vec::new();
         for boundary in boundaries {
             let alpha = f64::from_bits(boundary);
@@ -1460,7 +1453,7 @@ mod tests {
             {
                 continue;
             }
-            let jp = LcsColor::from_hex_with_vc(&hex, vc).unwrap().jp;
+            let jp = LcsColor::from_hex_with_vc(&hex, vc).unwrap().jp();
             states.push((alpha, hex, (jp - bg_jp).abs()));
         }
         states
@@ -1517,12 +1510,12 @@ mod tests {
             for byte in 0_u16..=255 {
                 let hex = format!("#{byte:02X}{byte:02X}{byte:02X}");
                 let lean = jp_from_hex(&hex, &vc).unwrap();
-                let full = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp;
+                let full = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp();
                 assert_eq!(lean.to_bits(), full.to_bits(), "{hex}");
             }
             for hex in ["#007AFF", "#FF3B30", "#34C759", "#FFD000", "#3E87FF"] {
                 let lean = jp_from_hex(hex, &vc).unwrap();
-                let full = LcsColor::from_hex_with_vc(hex, &vc).unwrap().jp;
+                let full = LcsColor::from_hex_with_vc(hex, &vc).unwrap().jp();
                 assert_eq!(lean.to_bits(), full.to_bits(), "{hex}");
             }
         }
@@ -1779,7 +1772,6 @@ mod tests {
         let vc = ViewingConditions::dim_surround();
         for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
             let g = solve_legacy("#3E87FF", "#101012", target, &vc).unwrap();
-            assert!(!g.degraded(), "цель {target} недостижима на #101012");
             assert_eq!(g.status(), GlowTargetStatus::LegacyReached);
             assert_eq!(
                 g.selection_diagnostic_profile(),
@@ -1803,10 +1795,10 @@ mod tests {
         let vc = ViewingConditions::dim_surround();
         let tint = encoded_bytes(srgb_encoded_from_hex("#4A8FFF").unwrap());
         let bg = encoded_bytes(srgb_encoded_from_hex("#101012").unwrap());
-        let bg_jp = LcsColor::from_hex_with_vc("#101012", &vc).unwrap().jp;
+        let bg_jp = LcsColor::from_hex_with_vc("#101012", &vc).unwrap().jp();
         let measured_at = |alpha: f64| {
             let hex = composite_hex(screen_layer_over_srgb8(tint, alpha, bg).unwrap());
-            let jp = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp;
+            let jp = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp();
             ((jp - bg_jp).abs(), hex)
         };
 
@@ -1857,9 +1849,9 @@ mod tests {
                     for target in [0.01, 0.32, 1.0, 10.0, global_best.2 + 1.0] {
                         let solved = solve_legacy(tint_hex, bg_hex, target, &vc).unwrap();
                         let expected = oracle.iter().find(|state| state.2 >= target);
-                        let (expected_state, degraded) = match expected {
-                            Some(state) => (state, false),
-                            None => (global_best, true),
+                        let (expected_state, expected_status) = match expected {
+                            Some(state) => (state, GlowTargetStatus::LegacyReached),
+                            None => (global_best, GlowTargetStatus::LegacyUnreachable),
                         };
                         assert_eq!(
                             solved.composite_hex(),
@@ -1867,7 +1859,7 @@ mod tests {
                             "tint={tint_hex}, bg={bg_hex}, target={target}"
                         );
                         assert_eq!(solved.achieved_dj().to_bits(), expected_state.2.to_bits());
-                        assert_eq!(solved.degraded(), degraded);
+                        assert_eq!(solved.status(), expected_status);
 
                         let emitted_alpha = solved.alpha_css().parse::<f64>().unwrap();
                         assert_eq!(
@@ -1954,7 +1946,6 @@ mod tests {
     fn glow_on_white_degrades_honestly() {
         let vc = ViewingConditions::srgb();
         let g = solve_legacy("#3E87FF", "#FFFFFF", GLOW_BASE_DJ, &vc).unwrap();
-        assert!(g.degraded(), "над белым screen обязан быть point-no-op");
         assert_eq!(g.status(), GlowTargetStatus::LegacyUnreachable);
         assert!(g.achieved_dj() < GLOW_BASE_DJ);
         assert_eq!(g.composite_hex(), "#FFFFFF", "screen над белым — тождество");
@@ -1975,8 +1966,8 @@ mod tests {
         assert_eq!(halo_hex, "#FF3B30", "halo — сам источник");
         let src = LcsColor::from_hex_with_vc("#FF3B30", &vc).unwrap();
         let core = LcsColor::from_hex_with_vc(&core_hex, &vc).unwrap();
-        assert!(core.jp > src.jp, "core светлее источника (пересвет)");
-        let dh = (core.h_ok - src.h_ok + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(core.jp() > src.jp(), "core светлее источника (пересвет)");
+        let dh = (core.h_ok() - src.h_ok() + 180.0).rem_euclid(360.0) - 180.0;
         assert!(dh.abs() < 6.0, "оттенок унаследован: Δh = {dh:.2}°");
 
         // Хрома баланса = стена гамута ⇒ эмиссия в гамуте, без тихого клипа
@@ -2011,6 +2002,24 @@ mod tests {
                 assert_eq!(r, g, "{source} дал цветной core {core}");
                 assert_eq!(g, b, "{source} дал цветной core {core}");
             }
+        }
+    }
+
+    #[test]
+    fn nearest_chromatic_source_is_not_classified_as_gray() {
+        for vc in [
+            ViewingConditions::srgb(),
+            ViewingConditions::dim_surround(),
+            ViewingConditions::srgb_high_contrast(),
+            ViewingConditions::dim_surround_high_contrast(),
+        ] {
+            let (core, halo) = glow_layers_from_source("#808081", &vc).unwrap();
+            let [red, green, blue] = encoded_bytes(srgb_encoded_from_hex(&core).unwrap());
+            assert_eq!(halo, "#808081");
+            assert!(
+                red != green || green != blue,
+                "one-byte chromatic source collapsed to gray core {core}"
+            );
         }
     }
 

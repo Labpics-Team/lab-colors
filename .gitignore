@@ -19,14 +19,5 @@ packages/colors/evidence/
 mutants.out/
 mutants.out.old/
 
-# Splice/restore/backup sidecars left by on-disk probe tests on abnormal exit
-# (SIGKILL between write and rename, or rename failure during Drop unwind).
-# These are safe to remove; the backup is the recovery path.
-# See crates/labcolors-core/tests/splice_support.rs module doc.
-*.splice_tmp
-*.restore_tmp
-*.on_disk_probe_backup
-*.s2b_test5_backup
-
 # локальные worktree агентов — не часть проекта
 .claude/worktrees/

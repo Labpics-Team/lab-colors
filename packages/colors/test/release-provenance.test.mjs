@@ -103,7 +103,36 @@ edition = "2024"
 [workspace.metadata.release]
 version = "8.8.8"
 `),
-    /workspace core version is absent/u,
+    /\[workspace\.package\]\.version is absent/u,
+  );
+  assert.throws(
+    () => workspaceVersion(`
+[workspace.package]
+description = """
+[not.a.table]
+"""
+version = "0.3.0"
+`),
+    /multiline TOML strings are unsupported/u,
+  );
+  assert.throws(
+    () => workspaceVersion(`
+[workspace.package]
+description = '''
+[not.a.table]
+'''
+version = "0.3.0"
+`),
+    /multiline TOML strings are unsupported/u,
+  );
+  assert.equal(
+    workspaceVersion(`
+# documentation mentions """ but does not open a TOML string
+[workspace.package]
+version = "0.3.0" # the retired parser rejected a comment containing '''
+description = '"""'
+`),
+    "0.3.0",
   );
   assert.throws(
     () => workspaceVersion(`
@@ -113,7 +142,7 @@ edition = "2024"
 [[example]]
 version = "7.7.7"
 `),
-    /workspace core version is absent/u,
+    /\[workspace\.package\]\.version is absent/u,
   );
 });
 

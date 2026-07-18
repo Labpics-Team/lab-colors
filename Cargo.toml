@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Lab Pics <dev@lab.pics>"]
 license = "MIT"
@@ -11,10 +11,9 @@ repository = "https://github.com/Labpics-Team/lab-colors"
 rust-version = "1.85"
 
 # Centralised dependency pins. `labcolors-core` stays zero-RUNTIME-deps (issue #29):
-# only the runtime and offline-compiler WASM edge crates use this wasm-bindgen pin.
-# `proptest` is a DEV-only dependency of `labcolors-core` (property/fuzz invariants);
-# it never enters the runtime graph — proven by the supply-chain guards in
-# `tests/s2b_baseline_guards.rs` (`supply_chain_proptest_*`).
+# only the runtime WASM edge crate uses this wasm-bindgen pin.
+# `proptest` is a DEV-only dependency of `labcolors-core`; the CI metadata gate
+# rejects any normal dependency edge from Core, including target-specific ones.
 [workspace.dependencies]
 wasm-bindgen = "0.2"
 proptest = "1"

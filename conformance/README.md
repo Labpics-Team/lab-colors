@@ -19,7 +19,7 @@
   `crates/labcolors-conformance/tests/pack_v10_contract.rs`.
   Удаление/изменение семейства = major-bump с
   absence-законом на снятые файлы; история составов — в git.
-- **Версия ядра** (`manifest.coreVersion`, для этого пака `0.2.0`) — версия
+- **Версия ядра** (`manifest.coreVersion`, для этого пака `0.3.0`) — версия
   `labcolors-core`, из канона которой сгенерированы значения. Пак действителен
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
@@ -40,6 +40,10 @@
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
+
+Поле `lc` — знаковая кандидатная оценка по `Ys` из версионированной замороженной
+SAPC-shaped кривой; оно не валидирует LPC или читаемость. `wcagRatio` и
+exact-семейство `wcag22` являются отдельными нормативными выходами.
 
 Точные решения нейтральной оси — не параметры solver-а, а вычисленные
 мощности допустимых подмножеств полной 256-точечной оси `#000000…#FFFFFF`:
@@ -85,20 +89,23 @@ adjacent bytes или нормативного отношения пересчи
   внешних клиентов промежуточная Glow-only capability-схема V1 удалена из
   public API: один `numericalCapabilityManifest()` сразу возвращает V2, без
   второго version-suffixed entrypoint. Это намеренная pre-client breaking
-  коррекция ложной схемы, а не поддержка двух конкурирующих контрактов. Форма V2:
-  `{schemaVersion, coverage, sites[], checksum}`, где `schemaVersion` —
-  независимый version domain capability-схемы (сейчас `2`); `coverage` —
-  `migrated-sites-only-v1` (перечислены только **уже мигрированные**
-  branch-sensitive sites, не утверждение полного аудита исторических
-  `f64`-ветвлений — он остаётся в scope #291); каждая строка `sites[]` несёт
-  `siteId` и семь списков стабильных ключей (`stableOutcomes`,
-  `compatibilityReleases`, `evidenceClasses`, `artifactIds`, `boundIds`,
-  `proofIds`, `runtimeAttestations`; пустой список — явное «evidence отсутствует»,
-  не пропуск); `checksum` — FNV-1a-32 (8 lowercase hex) над canonical
+  коррекция ложной схемы, а не поддержка двух конкурирующих контрактов. Форма
+  manifest: `{schemaVersion, coverage, sites[], checksum}`. `schemaVersion`
+  независимо версионирует capability-схему. `coverage` —
+  `migrated-sites-only-v1`: `sites[]` является канонической проекцией только тех
+  branch-sensitive точек, которые внесены в типизированный реестр Core. Core- и
+  conformance-тесты проверяют уникальность строк и равенство проекции реестру;
+  release verifier проверяет форму и независимо пересчитывает `checksum`. Эти
+  gates не сканируют все `f64`-ветвления Core, поэтому отсутствие `siteId`
+  означает отсутствие capability claim, а не доказательство полного аудита.
+
+  Каждая строка `sites[]` несёт `siteId` и семь списков стабильных ключей:
+  `stableOutcomes`, `compatibilityReleases`, `evidenceClasses`, `artifactIds`,
+  `boundIds`, `proofIds`, `runtimeAttestations`. Пустой список явно означает
+  отсутствие соответствующего evidence. `checksum` — FNV-1a-32 над canonical
   length-prefixed preimage с домен-сепаратором
-  `labcolors.numerical-capability.v2`. Release verifier и Swift-тесты
-  пересчитывают checksum НЕЗАВИСИМО от Rust-кода. Manifest содержит
-  `glow-target-or-maximum-v1` и proof-bound `wcag22-srgb8-contrast-v1`.
+  `labcolors.numerical-capability.v2`; release verifier и Swift-тесты
+  пересчитывают его независимо от Rust-кода.
   Отдельно full-domain WCAG proof несёт SHA-256 private admission-row: ровно
   десять live typed полей, которые разрешают mint terminal evidence, включая
   `boundStatus` и `fallbackStatus`. Это site-local proof binding, а не новые
@@ -148,17 +155,21 @@ descriptor не являются solve-векторами: `Pack::generate()` в
 прогоняет все перечисленные manifest-ом семейства в pinned Linux x86_64
 container.
 
-Активный browser-gate теперь воспроизводит каждый вектор всех перечисленных
-manifest-ом семейств внутри фактического wasm32 core runtime; anti-vacuum total
-вычисляется из длин самих replayed family files, а не поддерживается отдельным
-числом. Targeted parity-тесты отдельно проверяют публичную JS-границу. Это
-доказывает wasm32-исполнение ядра против независимых байтов пака, но ещё не
-прогоняет каждый вектор непосредственно через публичный JS API. Поэтому полная
-conformance именно JS-поверхности текущего пака пока не заявляется. В
-`native-conformance.yml` сохранён ручной macOS/arm64 reference path, но он не
-запускается на PR/push и не считается достигнутой аттестацией текущего пака.
-Полная runtime-матрица остаётся scope #258; допуск `DRIFT_TOL` задаёт правило
-сравнения и не заменяет отсутствующий прогон.
+Исполняемое runtime-покрытие задаётся самими workflow. `ci.yml` прогоняет
+reference runner всего пака в Core на Linux x86_64 и отдельно воспроизводит
+каждое manifest-семейство внутри wasm32 Core под закреплённым Chrome. Targeted
+WASM-тесты проверяют публичную JS-границу, но каждый вектор пака через неё не
+проходит, поэтому полная conformance JS API не заявляется.
+`native-conformance.yml` воспроизводит все семейства через сгенерированный
+Swift/UniFFI binding в закреплённом Linux x86_64 container. macOS/arm64 job
+запускается только вручную и не является release gate. `publish.yml` принимает
+тег только после успешных canonical exact-SHA запусков CI и Linux Swift/UniFFI
+gate.
+
+Workflow-прогон сам по себе не добавляет запись в `runtimeAttestations`;
+capability manifest заявляет только evidence, фактически записанное в его
+строках. `DRIFT_TOL` определяет правило сравнения чисел и не расширяет
+runtime-матрицу.
 
 ## Регенерация
 

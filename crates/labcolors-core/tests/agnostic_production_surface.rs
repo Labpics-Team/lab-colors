@@ -1,50 +1,44 @@
-//! Agnostic-production-surface gate (ADR-0001 PR-c): поставляемый `src` не
-//! содержит клиентских брендовых значений и showcase-типов — ядро агностично
-//! к дизайн-системе, встроенные якоря живут только в `#[cfg(test)]`-оракулах.
+//! Гейт агностичной production-поверхности (ADR-0001): поставляемый `src` не
+//! содержит клиентских брендовых значений и showcase-типов. Встроенные якоря
+//! живут только в `#[cfg(test)]`-оракулах.
 //!
-//! BUG CLASS this guards: a built-in BRAND value or SHOWCASE type silently
-//! re-enters the PRODUCTION surface of the agnostic core. PR-c made the engine
-//! agnostic — the HIG/Figma anchor hexes (`#007AFF`/`#FF3B30`/…) and the built-in
-//! showcase types (`Accent`/`Sentiment`/`Role`/`RoleTable`) survive ONLY as
-//! `#[cfg(test)]` oracles for the string-keyed path. The failure mode this closes
-//! is INVISIBLE to every behavioural test: if someone drops a `#[cfg(test)]`,
-//! hardcodes an anchor hex inside a resolver, or re-exports a showcase enum, the
-//! built-ins still WORK, so all the value/property/golden tests stay green — the
-//! core has merely stopped being agnostic. This gate turns that regression RED by
-//! scanning the production (non-`cfg(test)`, non-comment) `src` for either class.
+//! Защищаемый класс регрессии: встроенное бренд-значение, showcase-тип или
+//! удалённая sentiment-физика тихо возвращаются в production-поверхность Core.
+//! HIG/Figma-якоря (`#007AFF`, `#FF3B30`, …), `Role` и `RoleTable` допустимы
+//! только в `#[cfg(test)]`-оракулах; `Accent` и sentiment-схема удалены.
+//! Поведенческие тесты не замечают такую утечку, потому что значения продолжают
+//! вычисляться. Этот гейт сканирует production-код без `cfg(test)` и комментариев
+//! и превращает потерю агностичности в RED.
 //!
-//! Scope discipline (what is NOT a violation):
-//! * Doc/line comments may still CITE a retired anchor — the physics rustdoc
-//!   explains why `#007AFF` was replaced. Comments are cut (at `//`) before the
-//!   scan, so a cited hex never trips the gate; only a hex in live code does.
-//! * `#[cfg(test)]` blocks and whole `#[cfg(test)] mod X;` files (the relocated
-//!   byte-identity oracles, the labui fixture) legitimately hold every anchor and
-//!   enum — they are stripped/excluded before the scan.
+//! Не считаются нарушением:
+//! * ссылки на удалённый якорь в строковых и блок-комментариях: общий lexer
+//!   маскирует комментарии, не принимая `//` внутри строки за их начало;
+//! * блоки и файлы `#[cfg(test)] mod X;` с byte-identity-оракулами и фикстурами:
+//!   они исключаются до сканирования.
 //!
-//! INV-4 (no green-from-birth): the two GATE tests and the four `red_proof_*`
-//! tests call the SAME scanner (`forbidden_hex_sites` / `forbidden_definition_sites`
-//! over `production_lines`), so a mutation to the detector — or to the cfg(test)
-//! stripper — is caught by a RED-proof, not merely asserted by an inlined check.
+//! INV-4: GATE-тесты и `red_proof_*` вызывают одни scanner-функции поверх
+//! `production_lines`. Мутацию детектора или удаления `cfg(test)` ловит
+//! RED-proof, а не отдельная встроенная проверка.
 //!
-//! Pure-`std`, zero new deps (labcolors-core stays zero-dep, issue #29); a
-//! top-of-graph test-only consumer (Clean: depends on `src`, nothing depends on it).
+//! Реализация использует только `std`: `labcolors-core` остаётся без зависимостей.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod common;
+use common::source::{production_code_lines, production_lines};
 use common::src_dir;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Forbidden production content.
+// Запрещённое содержимое production-кода.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Brand-ANCHOR hex literals that must never appear in production code. These are
-/// the culturally-recognised seed colours the built-in showcase baked in (Apple
-/// HIG legacy blue/orange + the ten Figma `Accent/*` primitives). In the agnostic
-/// core they live ONLY in the `#[cfg(test)]` `Accent::anchor_hex` oracle and the
-/// labui fixture; a consumer supplies its own via `ThemeConfig`.
-const BRAND_ANCHOR_HEXES: &[&str] = &[
+/// Клиентские литералы якорей, запрещённые в production-коде.
+///
+/// Сюда входят прежние акцентные seeds и референсная нейтральная шкала Lab UI.
+/// Они допустимы в characterization под `#[cfg(test)]`, но поставляемый helper
+/// Core не хранит клиентскую фикстуру ради воспроизведения калибровки.
+const CLIENT_ANCHOR_HEXES: &[&str] = &[
     "#007AFF", // Apple HIG systemBlue — legacy Info anchor (now cited only in docs).
     "#FF9500", // Apple HIG systemOrange — legacy Warning anchor.
     "#FF3B30", // Figma Accent/Red — Danger.
@@ -57,12 +51,22 @@ const BRAND_ANCHOR_HEXES: &[&str] = &[
     "#5856D6", // Figma Accent/Indigo.
     "#AF52DE", // Figma Accent/Purple.
     "#FF2D55", // Figma Accent/Pink.
+    "#101012", "#151518", "#212125", "#303136", "#44444B", "#5B5C64", "#787881", "#9698A2",
+    "#B3B5BF", "#CDD0D9", "#E4E7ED", "#F6F8FA",
 ];
 
-/// Built-in SHOWCASE type DEFINITIONS that must stay `#[cfg(test)]`-only. A match
-/// in production code means a `#[cfg(test)]` was dropped and the showcase re-entered
-/// the shipped API. Matched with identifier boundaries so production types that
-/// merely share a prefix (`RoleChroma`, `RoleSpec`, `NamedRoleTable`) are NOT hits.
+/// Швы клиентской калибровки, допустимые только в characterization-тестах.
+const CLIENT_CALIBRATION_IDENTIFIERS: &[&str] = &[
+    "tint_target_sweep_repro",
+    "NEUTRAL_HUE_DEG",
+    "TINT_TARGET_MP",
+    "TINT_HUE_STIFFNESS",
+];
+
+/// Определения встроенных showcase-типов, допустимые только под `#[cfg(test)]`.
+/// Совпадение в production-коде означает возврат showcase в API. Границы
+/// идентификаторов исключают ложные срабатывания на `RoleChroma`, `RoleSpec` и
+/// `NamedRoleTable`.
 const SHOWCASE_DEFINITIONS: &[&str] = &[
     "enum Accent",
     "enum Sentiment",
@@ -70,94 +74,66 @@ const SHOWCASE_DEFINITIONS: &[&str] = &[
     "struct RoleTable",
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// production_lines — strip `#[cfg(test)]`-guarded items, preserving 1-based line
-// numbers for diagnostics. Mirrors the `empirical_inventory` gate's stripper: a
-// braced item (`mod tests { … }`, a gated `impl`/`enum`) is removed by brace-match;
-// a bracket/`;`-terminated item (`#[cfg(test)] pub(crate) const ALL … ;`,
-// `#[cfg(test)] mod fixture;`) by `;`-match. Only test code is removed.
-// ─────────────────────────────────────────────────────────────────────────────
+/// Точные идентификаторы удалённой встроенной sentiment-модели.
+///
+/// Общая лексика evidence и validators не запрещена. Список охраняет только
+/// прежние физическую схему и resolver-поверхность, возврат которых заставил бы
+/// Core снова интерпретировать клиентский смысл.
+const RETIRED_SENTIMENT_IDENTIFIERS: &[&str] = &[
+    "SentimentCategory",
+    "SentimentsConfig",
+    "SentimentCurve",
+    "SentimentResolution",
+    "UnknownSentiment",
+    "resolve_config_sentiment_solid",
+    "sentiment_solid_for_mode",
+    "WARNING_HUE_FLOOR_DEG",
+    "S_PERC_MIN",
+    "NeighborZone",
+    "hue_floor_deg",
+    "preferred_side",
+    "chroma_fraction",
+    "CHROMA_FRACTION",
+];
 
-fn production_lines(source: &str) -> Vec<(usize, String)> {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        if lines[i].trim_start().starts_with("#[cfg(test)]") {
-            // Skip further attribute/blank lines to reach the guarded item.
-            let mut j = i + 1;
-            while j < lines.len() {
-                let tj = lines[j].trim_start();
-                if tj.starts_with('#') || tj.is_empty() {
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            if j < lines.len() && lines[j].contains('{') {
-                // Braced item: brace-match to its close.
-                let mut depth = 0i32;
-                let mut opened = false;
-                let mut k = j;
-                while k < lines.len() {
-                    depth += lines[k].matches('{').count() as i32;
-                    depth -= lines[k].matches('}').count() as i32;
-                    if lines[k].contains('{') {
-                        opened = true;
-                    }
-                    if opened && depth <= 0 {
-                        break;
-                    }
-                    k += 1;
-                }
-                i = k + 1;
-            } else {
-                // Non-braced item (`… ;`): skip through the terminating `;`.
-                let mut k = j;
-                while k < lines.len() && !lines[k].contains(';') {
-                    k += 1;
-                }
-                i = k + 1;
-            }
-            continue;
-        }
-        out.push((i + 1, lines[i].to_string()));
-        i += 1;
-    }
-    out
-}
+/// Фрагменты синтаксиса, где пунктуация входит в удалённый контракт.
+const RETIRED_SENTIMENT_FRAGMENTS: &[&str] = &[
+    "LadderSource::Sentiment",
+    "pub mod sentiment",
+    "mod sentiment;",
+];
 
-/// Cut a source line at the first `//` (line/inline/doc comment). No `/* */` block
-/// comments exist in the production `src` (verified), so this is sufficient to keep
-/// a cited anchor hex in a comment from tripping the gate.
-fn code_only(line: &str) -> &str {
-    match line.split_once("//") {
-        Some((before, _)) => before,
-        None => line,
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// production_lines удаляет доказанно полные элементы под `#[cfg(test)]`, сохраняя
+// нумерацию строк с единицы. Неоднозначный синтаксис остаётся видимым: гейт
+// предпочитает ложный RED скрытому production-нарушению.
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// True when `decl` (e.g. `enum Role`) appears in `code` bounded by non-identifier
 /// characters on both sides — so `enum Role` does NOT match `enum RoleChroma`, and
 /// `struct RoleTable` does NOT match `struct NamedRoleTable`.
-fn defines(code: &str, decl: &str) -> bool {
+fn contains_bounded(code: &str, needle: &str) -> bool {
     let mut start = 0;
-    while let Some(pos) = code[start..].find(decl) {
+    while let Some(pos) = code[start..].find(needle) {
         let at = start + pos;
         let before_ok = code[..at]
             .chars()
             .last()
             .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-        let after_ok = code[at + decl.len()..]
+        let after_ok = code[at + needle.len()..]
             .chars()
             .next()
             .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
         if before_ok && after_ok {
             return true;
         }
-        start = at + decl.len();
+        start = at + needle.len();
     }
     false
+}
+
+fn defines(code: &str, decl: &str) -> bool {
+    contains_bounded(code, decl)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,13 +149,13 @@ struct Site {
 }
 
 /// Every brand-anchor hex literal in the PRODUCTION code of `source`
-/// (`#[cfg(test)]` stripped, comments cut). Case-insensitive: `#3e87ff` and
-/// `#3E87FF` are the same anchor.
+/// (`#[cfg(test)]` удалён, комментарии лексически замаскированы). Регистр не
+/// различается: `#3e87ff` и `#3E87FF` — один якорь.
 fn forbidden_hex_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
-    for (line, text) in production_lines(source) {
-        let code = code_only(&text).to_ascii_uppercase();
-        for hex in BRAND_ANCHOR_HEXES {
+    for (line, text) in production_code_lines(source) {
+        let code = text.to_ascii_uppercase();
+        for hex in CLIENT_ANCHOR_HEXES {
             if code.contains(&hex.to_ascii_uppercase()) {
                 out.push(Site {
                     module: module.to_string(),
@@ -192,17 +168,59 @@ fn forbidden_hex_sites(module: &str, source: &str) -> Vec<Site> {
     out
 }
 
-/// Every showcase type DEFINITION in the PRODUCTION code of `source`.
+/// Все швы клиентской калибровки в production-коде.
+fn client_calibration_sites(module: &str, source: &str) -> Vec<Site> {
+    let mut out = Vec::new();
+    for (line, code) in production_code_lines(source) {
+        for identifier in CLIENT_CALIBRATION_IDENTIFIERS {
+            if contains_bounded(&code, identifier) {
+                out.push(Site {
+                    module: module.to_string(),
+                    line,
+                    found: (*identifier).to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Все определения showcase-типов в production-коде `source`.
 fn forbidden_definition_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
-    for (line, text) in production_lines(source) {
-        let code = code_only(&text);
+    for (line, code) in production_code_lines(source) {
         for decl in SHOWCASE_DEFINITIONS {
-            if defines(code, decl) {
+            if defines(&code, decl) {
                 out.push(Site {
                     module: module.to_string(),
                     line,
                     found: (*decl).to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Все точные остатки удалённых sentiment-физики и схемы.
+fn retired_sentiment_sites(module: &str, source: &str) -> Vec<Site> {
+    let mut out = Vec::new();
+    for (line, code) in production_code_lines(source) {
+        for identifier in RETIRED_SENTIMENT_IDENTIFIERS {
+            if contains_bounded(&code, identifier) {
+                out.push(Site {
+                    module: module.to_string(),
+                    line,
+                    found: (*identifier).to_string(),
+                });
+            }
+        }
+        for fragment in RETIRED_SENTIMENT_FRAGMENTS {
+            if code.contains(fragment) {
+                out.push(Site {
+                    module: module.to_string(),
+                    line,
+                    found: (*fragment).to_string(),
                 });
             }
         }
@@ -328,7 +346,7 @@ fn module_label(file: &Path) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn production_src_carries_no_brand_anchor_hex() {
+fn production_src_carries_no_client_anchor_hex() {
     let mut leaks = Vec::new();
     for file in production_src_files() {
         let source = std::fs::read_to_string(&file)
@@ -337,8 +355,24 @@ fn production_src_carries_no_brand_anchor_hex() {
     }
     assert!(
         leaks.is_empty(),
-        "AGNOSTIC-CLEANLINESS: brand-anchor hex leaked into PRODUCTION code (must be \
+        "AGNOSTIC-CLEANLINESS: client anchor hex leaked into PRODUCTION code (must be \
          `#[cfg(test)]`-only or supplied via ThemeConfig). Offending sites: {leaks:#?}"
+    );
+}
+
+#[test]
+fn production_src_carries_no_client_calibration_seam() {
+    let mut leaks = Vec::new();
+    for file in production_src_files() {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        leaks.extend(client_calibration_sites(&module_label(&file), &source));
+    }
+    assert!(
+        leaks.is_empty(),
+        "AGNOSTIC-CLEANLINESS: a client-specific calibration seam leaked into \
+         PRODUCTION Core. Keep reproducibility fixtures under `#[cfg(test)]`. \
+         Offending sites: {leaks:#?}"
     );
 }
 
@@ -354,6 +388,164 @@ fn production_src_defines_no_builtin_showcase_type() {
         leaks.is_empty(),
         "AGNOSTIC-CLEANLINESS: a built-in showcase type DEFINITION re-entered PRODUCTION \
          code (a `#[cfg(test)]` was dropped). Offending sites: {leaks:#?}"
+    );
+}
+
+#[test]
+fn production_src_carries_no_retired_sentiment_physics_or_schema() {
+    let mut leaks = Vec::new();
+    for file in production_src_files() {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        leaks.extend(retired_sentiment_sites(&module_label(&file), &source));
+    }
+    let retired_module = src_dir().join("sentiment.rs");
+    assert!(
+        !retired_module.exists(),
+        "AGNOSTIC-CLEANLINESS: deleted sentiment module returned at {}",
+        retired_module.display()
+    );
+    assert!(
+        leaks.is_empty(),
+        "AGNOSTIC-CLEANLINESS: retired built-in sentiment physics/schema re-entered \
+         PRODUCTION Core. Offending sites: {leaks:#?}"
+    );
+}
+
+#[test]
+fn red_proof_retired_sentiment_scanner_bites_on_every_retired_contract_token() {
+    for identifier in RETIRED_SENTIMENT_IDENTIFIERS {
+        let dirty = format!("fn probe(value: {identifier}) {{ let _ = value; }}\n");
+        let hits = retired_sentiment_sites("probe.rs", &dirty);
+        assert_eq!(
+            hits.len(),
+            1,
+            "scanner must flag retired identifier {identifier:?}"
+        );
+        assert_eq!(hits[0].found, *identifier);
+    }
+
+    for fragment in RETIRED_SENTIMENT_FRAGMENTS {
+        let dirty = format!("{fragment}\n");
+        let hits = retired_sentiment_sites("probe.rs", &dirty);
+        assert_eq!(
+            hits.len(),
+            1,
+            "scanner must flag retired syntax fragment {fragment:?}"
+        );
+        assert_eq!(hits[0].found, *fragment);
+    }
+}
+
+#[test]
+fn red_proof_retired_sentiment_scanner_ignores_tests_comments_and_lookalikes() {
+    let gated = "#[cfg(test)]\nmod t {\n    struct SentimentCurve;\n}\n";
+    assert!(retired_sentiment_sites("probe.rs", gated).is_empty());
+
+    let comments = "// SentimentCategory was deleted\n/// no LadderSource::Sentiment\n";
+    assert!(retired_sentiment_sites("probe.rs", comments).is_empty());
+
+    let lookalikes = "struct ClientSentimentCategory;\nfn chroma_fractional() {}\n";
+    assert!(retired_sentiment_sites("probe.rs", lookalikes).is_empty());
+}
+
+#[test]
+fn red_proof_cfg_test_stripper_ignores_non_code_braces_without_hiding_live_code() {
+    let opening_in_string = "#[cfg(test)]\nmod t {\n    const S: &str = \"{\";\n}\n\
+                             struct SentimentCurve;\n";
+    let hits = retired_sentiment_sites("probe.rs", opening_in_string);
+    assert_eq!(
+        hits.len(),
+        1,
+        "a brace in a test string must not hide a later production violation"
+    );
+
+    let closing_in_test_text = "#[cfg(test)]\nmod t {\n    const S: &str = \"}\";\n\
+                                /* } */\n    struct SentimentCurve;\n}\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", closing_in_test_text).is_empty(),
+        "a brace in test text must not end the guarded item early"
+    );
+
+    let non_braced_item = "#[cfg(test)]\nconst TEST_TEXT: &str = \"{\";\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", non_braced_item).len(),
+        1,
+        "a brace in a test constant must not turn it into a braced item"
+    );
+
+    let next_line_brace = "#[cfg(test)]\nmod t\n{\n    struct SentimentCurve;\n}\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", next_line_brace).is_empty(),
+        "a guarded braced item may open on a later line"
+    );
+
+    let other_non_code = r####"#[cfg(test)]
+mod t {
+    const RAW: &str = r##"{"##;
+    const CHAR: char = '{';
+    /* { /* } */ { */
+}
+struct SentimentCurve;
+"####;
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", other_non_code).len(),
+        1,
+        "raw strings, chars, and nested block comments must not hide live code"
+    );
+
+    let fake_attribute_in_comment = "/*\n#[cfg(test)]\nmod fake {\n*/\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", fake_attribute_in_comment).len(),
+        1,
+        "cfg-looking text inside a block comment is not an attribute"
+    );
+
+    let fake_attribute_in_raw = r####"const TEXT: &str = r##"
+#[cfg(test)]
+mod fake {
+"##;
+struct SentimentCurve;
+"####;
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", fake_attribute_in_raw).len(),
+        1,
+        "cfg-looking text inside a raw string is not an attribute"
+    );
+
+    let same_line_attribute = "#[cfg(test)] mod t {}\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", same_line_attribute).len(),
+        1,
+        "an unsupported same-line cfg item must fail closed instead of hiding later code"
+    );
+
+    let live_suffix = "#[cfg(test)]\nmod t {} struct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", live_suffix).len(),
+        1,
+        "production code after a guarded item on the same line must remain visible"
+    );
+
+    let same_line_followup_attribute =
+        "#[cfg(test)]\n#[allow(dead_code)] mod t {}\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", same_line_followup_attribute).len(),
+        1,
+        "a same-line follow-up attribute must not make the next production item guarded"
+    );
+
+    let block_comment_suffix = "#[cfg(test)]\nmod t { struct SentimentCurve; } /* rationale */\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", block_comment_suffix).is_empty(),
+        "a closed block-comment suffix is not production code"
+    );
+
+    let block_comment_on_marker =
+        "#[cfg(test)] /* test fixture */\nmod t { struct SentimentCurve; }\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", block_comment_on_marker).is_empty(),
+        "a closed block comment after cfg(test) must not make the marker ambiguous"
     );
 }
 
@@ -375,12 +567,44 @@ fn red_proof_hex_scanner_bites_on_injected_anchor_in_code() {
     );
     assert_eq!(hits[0].found, "#3E87FF");
 
+    let scheme_literal = "const URL: &str = \"scheme://palette/#3E87FF\";\n";
+    let hits = forbidden_hex_sites("probe.rs", scheme_literal);
+    assert_eq!(
+        hits.len(),
+        1,
+        "comment syntax inside a string must not hide a production anchor"
+    );
+    let raw_scheme_literal = r##"const URL: &str = r#"scheme://palette/#3E87FF"#;
+"##;
+    assert_eq!(
+        forbidden_hex_sites("probe.rs", raw_scheme_literal).len(),
+        1,
+        "comment syntax inside a raw string must remain production code"
+    );
+
     // Clean agnostic code has none.
     let clean = "    let set = resolve_named_set(bg, table, vc)?;\n";
     assert!(
         forbidden_hex_sites("probe.rs", clean).is_empty(),
         "agnostic code must be hex-clean"
     );
+}
+
+#[test]
+fn red_proof_client_calibration_scanner_bites_and_respects_cfg_test() {
+    for identifier in CLIENT_CALIBRATION_IDENTIFIERS {
+        let dirty = format!("fn probe() {{ let _ = {identifier}; }}\n");
+        let hits = client_calibration_sites("probe.rs", &dirty);
+        assert_eq!(hits.len(), 1, "scanner must flag {identifier}");
+        assert_eq!(hits[0].found, *identifier);
+
+        let gated =
+            format!("#[cfg(test)]\nmod t {{\n  fn probe() {{ let _ = {identifier}; }}\n}}\n");
+        assert!(
+            client_calibration_sites("probe.rs", &gated).is_empty(),
+            "test-only calibration {identifier} must remain legal"
+        );
+    }
 }
 
 #[test]
@@ -393,7 +617,7 @@ fn red_proof_hex_scanner_is_silent_on_cfg_test_and_comments() {
     );
 
     // In a comment (line + doc): invisible (cut at `//`).
-    let commented = "// the retired anchor was #007AFF\n/// доки: было #FF9500\n";
+    let commented = "// the retired anchor was #007AFF\n/// доки: было #FF9500\n/* #3E87FF */\n";
     assert!(
         forbidden_hex_sites("probe.rs", commented).is_empty(),
         "a cited hex in a comment must NOT be flagged"

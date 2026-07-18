@@ -30,6 +30,10 @@ const WHOLE_GLOW_CLAIM =
   /(?:glow[^.!?\n]*полного результата|полного результата[^.!?\n]*glow)/iu;
 const FULL_SOLVE_EXACT_INVERSION_CLAIM =
   /(?:точн[а-яё]*\s+инверси[а-яё]*\s+прямого\s+пути|exact(?:ly)?\s+(?:inverts?|inversion\s+of)\s+the\s+(?:complete\s+)?forward\s+path)/iu;
+const RETIRED_SENTIMENT_MODEL =
+  /sentiment\.rs|`sentiments`|Sentiment(?:Curve|sConfig|Resolution)|LadderSource(?:::|Dto::)Sentiment|UnknownSentiment|resolve_config_sentiment_solid|WARNING_HUE_FLOOR_DEG|S_PERC_MIN|NeighborZone|Sticky Potential|Warning[- ]zone|brand[- ]displacement|achromatic sentiment/iu;
+const RETIRED_SENTIMENT_SYMBOL =
+  /\b(?:SentimentCategory(?:Dto)?|SentimentCurve|SentimentsConfig|SentimentsDto|SentimentResolution|UnknownSentiment|NeighborZone)\b|\b(?:LadderSource|LadderSourceDto)::Sentiment\b|\bSentiment\s*(?:\(|\{)|\b(?:pub\s+)?mod\s+sentiment\s*;|\b(?:compile_sentiment_tint|sentiment_solid_for_mode|sentiment_s_perc_min|resolve_sentiment_hue_among|resolve_config_sentiment_solid(?:_among)?|s_perc_min_(?:from_chromas|frozen))\b|\b(?:WARNING_HUE_FLOOR_DEG|S_PERC_MIN)\b|["'`]sentiments["'`]|\bsentiments\s*:|(?:\bkind|["'`]kind["'`])\s*:\s*["'`]sentiment["'`]/iu;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -197,6 +201,46 @@ const LCS_LPC_DRIFT = [
   /generic perceptual-contrast math/iu,
   /метрика\s+называется\s+LPC/iu,
 ];
+const YS_SCORE_OVERCLAIMS = [
+  /signed\s+(?:perceptual\s+contrast|LPC)\b/iu,
+  /знаков(?:ый|ая|ое|ого)\s+перцептивн[а-яё]*[^.!?\n]{0,48}\bLc\b/iu,
+  /(?:perceptual\s+LPC\s+target|LPC\s+solution)/iu,
+  /LPC[- ]перцептивн[а-яё]*\s+цел/iu,
+  /(?:readability[- ](?:контраст|оценк)|ось\s+читаемости)/iu,
+];
+const YS_SCORE_CANONICAL_SURFACES = [
+  {
+    path: "crates/labcolors-core/src/solve.rs",
+    patterns: [/signed Ys candidate score `Lc`/u, /not an admitted LPC\/readability certificate/iu],
+  },
+  {
+    path: "crates/labcolors-core/src/semantic.rs",
+    patterns: [/signed Ys candidate score `Lc`/u, /not[\s\S]{0,40}LPC\/readability verdict/iu],
+  },
+  {
+    path: "crates/labcolors-wasm/src/lib.rs",
+    patterns: [
+      /Знаковая candidate-координата Ys \(`lc`\)/u,
+      /не доказательство LPC или читаемости/iu,
+    ],
+  },
+  {
+    path: "crates/labcolors-wasm/src/dto.rs",
+    patterns: [/signed Ys candidate score/iu, /not LPC\/readability evidence/iu],
+  },
+  {
+    path: "crates/labcolors-ffi/src/lib.rs",
+    patterns: [/кандидатная оценка `Lc` по `Ys`/u, /не LPC\/readability evidence/iu],
+  },
+  {
+    path: "crates/labcolors-conformance/src/lib.rs",
+    patterns: [/кандидатная оценка `Lc` по `Ys`/u, /не LPC\/readability evidence/iu],
+  },
+  {
+    path: "packages/colors/README.md",
+    patterns: [/кандидатная оценка по `Ys`/u, /не является LPC\/readability verdict/iu],
+  },
+];
 const DISCARDED_HONEST_RESULT_CLAIMS = [
   /ADR[- ]?0002/iu,
   /honest-result-policy/iu,
@@ -227,6 +271,92 @@ function claimFiles(path, files = [], extensions = CLAIM_EXT) {
     else if (extensions.test(entry.name)) files.push(child);
   }
   return files;
+}
+
+function maskRustNonCode(source) {
+  // Все позиции ниже приходят из String API и потому измерены в UTF-16 code
+  // units. split("") сохраняет ту же систему координат даже при astral chars.
+  const masked = source.split("");
+  const blank = (start, end) => {
+    for (let index = start; index < end; index += 1) {
+      if (masked[index] !== "\n" && masked[index] !== "\r") masked[index] = " ";
+    }
+  };
+  let cursor = 0;
+  while (cursor < source.length) {
+    if (source.startsWith("//", cursor)) {
+      const end = source.indexOf("\n", cursor + 2);
+      const stop = end < 0 ? source.length : end;
+      blank(cursor, stop);
+      cursor = stop;
+      continue;
+    }
+    if (source.startsWith("/*", cursor)) {
+      let depth = 1;
+      let end = cursor + 2;
+      while (end < source.length && depth > 0) {
+        if (source.startsWith("/*", end)) {
+          depth += 1;
+          end += 2;
+        } else if (source.startsWith("*/", end)) {
+          depth -= 1;
+          end += 2;
+        } else {
+          end += 1;
+        }
+      }
+      blank(cursor, end);
+      cursor = end;
+      continue;
+    }
+    const raw = /^(?:br|r)(#*)"/u.exec(source.slice(cursor));
+    if (raw) {
+      const close = `"${raw[1]}`;
+      const contentStart = cursor + raw[0].length;
+      const found = source.indexOf(close, contentStart);
+      const end = found < 0 ? source.length : found + close.length;
+      blank(cursor, end);
+      cursor = end;
+      continue;
+    }
+    const stringPrefix = source.startsWith('b"', cursor) ? 2 : source[cursor] === '"' ? 1 : 0;
+    if (stringPrefix > 0) {
+      let end = cursor + stringPrefix;
+      while (end < source.length) {
+        if (source[end] === "\\") end += 2;
+        else if (source[end] === '"') {
+          end += 1;
+          break;
+        } else end += 1;
+      }
+      blank(cursor, end);
+      cursor = end;
+      continue;
+    }
+    const character = /^(?:b)?'(?:\\.|[^'\\\r\n])'/u.exec(source.slice(cursor));
+    if (character) {
+      blank(cursor, cursor + character[0].length);
+      cursor += character[0].length;
+      continue;
+    }
+    cursor += 1;
+  }
+  return masked.join("");
+}
+
+function isProductionRustPath(file) {
+  return /[\\/]src[\\/]/u.test(file);
+}
+
+function productionRustFiles() {
+  return claimFiles(join(ROOT, "crates"), [], /\.rs$/u).filter(isProductionRustPath);
+}
+
+function productionPackageFiles() {
+  return PACKAGE_MANIFEST.files
+    .filter((path) => /\.(?:js|mjs|ts)$/u.test(path) && !path.startsWith("pkg/"))
+    .map((path) => join(PACKAGE_ROOT, path))
+    .filter(existsSync);
 }
 
 function knownFalseClaims(path, source) {
@@ -290,6 +420,12 @@ function lcsLpcDrift(path, source) {
   );
 }
 
+function ysScoreOverclaim(path, source) {
+  return YS_SCORE_OVERCLAIMS.filter((pattern) => pattern.test(source)).map(
+    () => `${path}: frozen Ys candidate score was promoted to LPC/readability evidence`,
+  );
+}
+
 function discardedHonestResultClaims(path, source) {
   return DISCARDED_HONEST_RESULT_CLAIMS
     .filter((pattern) => pattern.test(source))
@@ -304,6 +440,12 @@ function discardedFailureWire(path, source) {
     () => `${path}: discarded unreachable/quantization-gap machine contract`,
   );
 }
+
+test("production Rust path filter is separator-agnostic", () => {
+  assert.equal(isProductionRustPath("/repo/crates/core/src/lib.rs"), true);
+  assert.equal(isProductionRustPath(String.raw`C:\repo\crates\core\src\lib.rs`), true);
+  assert.equal(isProductionRustPath("/repo/crates/core/tests/src_like.rs"), false);
+});
 
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);
@@ -490,6 +632,43 @@ test("LCS/LPC drift detector bites on every rejected expansion or reduction", ()
   }
 });
 
+test("Ys candidate-score detector bites on known evidence promotions", () => {
+  for (const sample of [
+    "signed perceptual contrast Lc",
+    "знаковый перцептивный контраст Lc",
+    "perceptual LPC target",
+    "LPC solution",
+    "LPC-перцептивная цель",
+    "readability-контраст",
+    "ось читаемости",
+  ]) {
+    assert.ok(ysScoreOverclaim("x.md", sample).length >= 1, `detector did not bite: ${sample}`);
+  }
+  for (const scopedTruth of [
+    "signed Ys candidate score (`lc`) from the frozen SAPC-shaped curve",
+    "`lc` is not LPC/readability evidence",
+    "WCAG ratio is reported independently",
+  ]) {
+    assert.deepEqual(ysScoreOverclaim("x.md", scopedTruth), []);
+  }
+});
+
+test("live public surfaces do not promote the frozen Ys score", () => {
+  const failures = publicClaimFiles().flatMap((file) =>
+    ysScoreOverclaim(relative(ROOT, file), readFileSync(file, "utf8")),
+  );
+  assert.deepEqual(failures, []);
+});
+
+test("every shipped lc surface carries the canonical scope marker", () => {
+  for (const { path, patterns } of YS_SCORE_CANONICAL_SURFACES) {
+    const source = readFileSync(join(ROOT, path), "utf8");
+    for (const pattern of patterns) {
+      assert.match(source, pattern, `${path} lost the Ys candidate-score scope marker`);
+    }
+  }
+});
+
 test("live repository keeps canonical LCS/LPC names and evidence boundaries", () => {
   const files = claimFiles(ROOT, [], REPOSITORY_TEXT_EXT).filter(
     (file) => file !== SELF,
@@ -594,7 +773,6 @@ test("public claim inventory includes the shipped Swift README", () => {
   assert.ok(publicClaimFiles().includes(join(ROOT, "bindings", "swift", "README.md")));
 });
 
-
 test("legacy cleanliness proxy is excised, not quarantined", () => {
   // Инвариант: карантин заменён вырезом. Ни модуль, ни векторное семейство не
   // существуют; публичные поверхности не несут ни API, ни человеческих
@@ -638,5 +816,171 @@ test("legacy cleanliness proxy is excised, not quarantined", () => {
 
   for (const forbidden of HUMAN_CLEANLINESS_VERDICTS) {
     assert.doesNotMatch(publicText, forbidden);
+  }
+});
+
+test("legacy sentiment curve is excised instead of preserved as schema", () => {
+  for (const sample of [
+    "sentiment.rs",
+    "`sentiments`",
+    "SentimentCurve",
+    "LadderSource::Sentiment",
+    "WARNING_HUE_FLOOR_DEG",
+    "Warning-zone",
+    "brand-displacement",
+  ]) {
+    assert.match(sample, RETIRED_SENTIMENT_MODEL, `detector did not bite: ${sample}`);
+  }
+  for (const sample of [
+    "SentimentCategoryDto",
+    "SentimentCurve",
+    "SentimentsConfig",
+    "LadderSource::Sentiment",
+    "enum LadderSource { Sentiment(String) }",
+    "enum LadderSourceDto { Sentiment { name: String } }",
+    "pub mod sentiment;",
+    "resolve_sentiment_hue_among",
+    "WARNING_HUE_FLOOR_DEG",
+    '"sentiments"',
+    'kind: "sentiment"',
+  ]) {
+    assert.match(
+      sample,
+      RETIRED_SENTIMENT_SYMBOL,
+      `production-symbol detector did not bite: ${sample}`,
+    );
+  }
+
+  assert.equal(
+    existsSync(join(ROOT, "crates/labcolors-core/src/sentiment.rs")),
+    false,
+    "the legacy sentiment solver module must stay deleted",
+  );
+
+  const surfaces = [
+    [
+      "crates/labcolors-core/src/config.rs",
+      /\b(?:SentimentCategory|SentimentsConfig|UnknownSentiment|SentimentResolution)\b|LadderSource::Sentiment|resolve_config_sentiment_solid/gu,
+    ],
+    [
+      "crates/labcolors-core/src/lib.rs",
+      /pub mod sentiment|\b(?:SentimentCategory|SentimentsConfig)\b/gu,
+    ],
+    [
+      "crates/labcolors-wasm/src/config_dto.rs",
+      /\b(?:SentimentCategoryDto|SentimentsDto)\b|LadderSourceDto::Sentiment/gu,
+    ],
+    [
+      "crates/labcolors-wasm/src/lib.rs",
+      /\{ kind: "sentiment"|readonly sentiments\s*:/gu,
+    ],
+  ];
+
+  for (const [path, forbidden] of surfaces) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, path), "utf8"),
+      forbidden,
+      `${path}: retired sentiment-specific API must not resurface`,
+    );
+  }
+
+  const shippedSourceFiles = [...productionRustFiles(), ...productionPackageFiles()];
+  const shippedSourcePaths = shippedSourceFiles.map((path) => relative(ROOT, path));
+  for (const required of [
+    "crates/labcolors-core/src/semantic.rs",
+    "crates/labcolors-wasm/src/projection.rs",
+    "crates/labcolors-ffi/src/lib.rs",
+    "crates/labcolors-conformance/src/lib.rs",
+    "packages/colors/index.js",
+    "packages/colors/index.d.ts",
+  ]) {
+    assert.ok(shippedSourcePaths.includes(required), `shipped-source scan omitted ${required}`);
+  }
+  assert.ok(
+    shippedSourcePaths.every((path) =>
+      path.endsWith(".rs") || !/(?:^|\/)pkg(?:\/|$)/u.test(path),
+    ),
+    "shipped-source scan admitted a generated npm binding",
+  );
+  for (const path of shippedSourceFiles) {
+    const source = readFileSync(path, "utf8");
+    const code = path.endsWith(".rs") ? maskRustNonCode(source) : source;
+    assert.doesNotMatch(
+      code,
+      RETIRED_SENTIMENT_SYMBOL,
+      `${relative(ROOT, path)}: retired sentiment symbol resurfaced in shipped source`,
+    );
+  }
+
+  const maskedNegativeFixtures = [
+    "// SentimentCurve and LadderSource::Sentiment are retired",
+    "/* nested /* SentimentsConfig */ comment */",
+    'const OLD: &str = "SentimentCurve 😀 { };";',
+    'const RAW: &str = r#"LadderSource::Sentiment"#;',
+    "const LETTER: char = 'S';",
+    "struct CurrentProductionType;",
+  ].join("\n");
+  assert.doesNotMatch(
+    maskRustNonCode(maskedNegativeFixtures),
+    RETIRED_SENTIMENT_SYMBOL,
+    "comments and literal negative fixtures must not poison the source scan",
+  );
+  const retiredTestType = [
+    "#[cfg(test)]",
+    "struct SentimentCurve;",
+  ].join("\n");
+  assert.match(
+    maskRustNonCode(retiredTestType),
+    RETIRED_SENTIMENT_SYMBOL,
+    "retired model code is forbidden even when cfg(test)-gated",
+  );
+
+  const documentation = [
+    ...publicClaimFiles().filter((path) => /(?:\.md|\.d\.ts)$/u.test(path)),
+    ...claimFiles(join(ROOT, "docs"), [], /\.md$/u),
+    ...claimFiles(join(ROOT, "reference"), [], /\.md$/u),
+  ].filter((path, index, all) => all.indexOf(path) === index);
+  for (const path of documentation) {
+    assert.doesNotMatch(
+      readFileSync(path, "utf8"),
+      RETIRED_SENTIMENT_MODEL,
+      `${relative(ROOT, path)}: retired sentiment model must not survive as live documentation`,
+    );
+  }
+
+  const canonicalConfigSurfaces = [
+    "crates/labcolors-wasm/tests/data/labui.config.json",
+    "crates/labcolors-wasm/tests/data/labui.config.prod.json",
+    "crates/labcolors-wasm/tests/chain_invariants.rs",
+    "crates/labcolors-wasm/tests/wasm_parity.rs",
+    "scripts/verify-package-release.mjs",
+  ];
+  for (const path of canonicalConfigSurfaces) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, path), "utf8"),
+      /["']sentiments["']|["']kind["']\s*:\s*["']sentiment["']/iu,
+      `${path}: canonical configs must not preserve the retired wire schema`,
+    );
+  }
+});
+
+test("the retired Lab UI accent catalogue stays absent from generic Core", () => {
+  assert.equal(
+    existsSync(join(ROOT, "crates/labcolors-core/src/accent.rs")),
+    false,
+    "the closed Lab UI catalogue must not survive as a self-testing fixture",
+  );
+  const lib = readFileSync(join(ROOT, "crates/labcolors-core/src/lib.rs"), "utf8");
+  assert.doesNotMatch(lib, /\bmod accent\s*;/u);
+
+  for (const path of [
+    "crates/labcolors-core/src/config.rs",
+    "crates/labcolors-core/src/semantic.rs",
+  ]) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, path), "utf8"),
+      /crate::accent::/u,
+      `${path}: generic colour math must not depend on the Lab UI test catalogue`,
+    );
   }
 });

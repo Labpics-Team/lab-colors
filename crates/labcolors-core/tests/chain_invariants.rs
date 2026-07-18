@@ -10,7 +10,7 @@
 //!
 //! Дыра, которую закрывает этот файл: тот же класс тотальности, но по оси
 //! ВЫРОЖДЕННОЙ СТРУКТУРЫ, а не цвета — 0 ролей, 1 роль, пустая палитра,
-//! экстремальные ручки нейтрали/сентимента, чисто чёрный/белый бренд. Контракт:
+//! экстремальные ручки нейтрали, чисто чёрный/белый бренд. Контракт:
 //! `compile_named_role_table` либо честно возвращает `Err`, либо даёт таблицу,
 //! чей `resolve_named_set` ТОТАЛЕН — валидный hex, конечные метрики, а
 //! CSS-эмиссия каждого решённого цвета не несёт `NaN`/`inf`. Достижение
@@ -19,10 +19,10 @@
 
 use labcolors_core::BgInput;
 use labcolors_core::{
-    Brand, Floor, LadderPosition, LadderSource, NamedRoleTable, NeutralAnchors, NeutralConfig,
-    NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe, SentimentCategory,
-    SentimentsConfig, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions,
-    oklch_css_from_hex, resolve_named_set,
+    Brand, Floor, LadderPosition, LadderSource, LadderTint, NamedRoleTable, NeutralAnchors,
+    NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleRecipe, RoleSpec,
+    TextAnchor, ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions,
+    oklch_css_from_hex, resolve_named_set, srgb_encoded_from_hex,
 };
 
 /// `ThemeAnchors` с одинаковыми якорями во всех четырёх слотах — вход не о
@@ -52,11 +52,10 @@ fn all_vcs() -> [ViewingConditions; 4] {
 const EXTREME_BGS: [&str; 5] = ["#000000", "#FFFFFF", "#808080", "#010101", "#FEFFFE"];
 
 /// Минимальный НЕцветовой каркас, куда подставляются вырожденные ручки:
-/// одна палитра/сентимент нужны только чтобы конфиг был структурно валиден,
+/// палитра нужна только тем ролям, которые на неё ссылаются;
 /// роли добавляются аргументом.
 fn scaffold(
     neutral: NeutralConfig,
-    sentiments: SentimentsConfig,
     palette: Vec<PaletteFamily>,
     roles: Vec<(String, RoleRecipe)>,
 ) -> ThemeConfig {
@@ -66,7 +65,6 @@ fn scaffold(
         },
         neutral,
         palette,
-        sentiments,
         ThemesConfig {
             entries: vec![
                 ("light".to_string(), VcPreset::Srgb),
@@ -87,21 +85,12 @@ fn plain_neutral() -> NeutralConfig {
             dark: "#101012".to_string(),
         },
         tint: NeutralTint {
-            ratio: 0.10,
             target_mp: 5.0,
             hue_stiffness: 8.0,
             hue_override_deg: Some(286.0),
         },
         edge: None,
         inverted: None,
-    }
-}
-
-fn plain_sentiments() -> SentimentsConfig {
-    SentimentsConfig {
-        categories: vec![],
-        hardness: 5.0,
-        chroma_fraction: 0.88,
     }
 }
 
@@ -240,14 +229,13 @@ fn assert_oklch_components_finite(css: &str, label: &str, name: &str, bg: &str) 
 // СТРУКТУРНЫЕ ВЫРОЖДЕНИЯ
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// РОВНО одна роль (текст-якорь без пола и без hue) на пустой палитре/сентименте:
+/// РОВНО одна роль (текст-якорь без пола и без hue) на пустой палитре:
 /// самый тонкий контракт, что вообще эмитит цвет. Компилируется, тотален, эмитит
 /// одну роль. Закрывает «минимальный ненулевой контракт роняет резолв».
 #[test]
 fn single_role_config_is_total() {
     let cfg = scaffold(
         plain_neutral(),
-        plain_sentiments(),
         vec![],
         vec![(
             "solo".to_string(),
@@ -271,12 +259,65 @@ fn single_role_config_is_total() {
     );
 }
 
+/// Opaque nodes are independent unless the client declares a relation. Merely
+/// inserting an unrelated source before a token must not change that token's
+/// physical occurrence or diagnostics.
+#[test]
+fn unrelated_opaque_anchor_cannot_change_existing_token() {
+    let tint = |hex: &str| {
+        LadderTint::new([srgb_encoded_from_hex(hex).expect("test hex is valid"); 4])
+            .expect("encoded sRGB is inside the tint domain")
+    };
+    let junior = RoleSpec::Anchor(
+        TextAnchor::new(0.999, Floor::None)
+            .unwrap()
+            .with_hue(tint("#34C759")),
+    );
+    let isolated = NamedRoleTable::new(
+        vec![("junior".into(), junior)],
+        vec![],
+        labcolors_core::RoleChroma::Neutral,
+    )
+    .unwrap();
+    let preceded = NamedRoleTable::new(
+        vec![
+            (
+                "foreign".into(),
+                RoleSpec::Anchor(
+                    TextAnchor::new(1.0, Floor::None)
+                        .unwrap()
+                        .with_hue(tint("#FF3B30")),
+                ),
+            ),
+            ("junior".into(), junior),
+        ],
+        vec![],
+        labcolors_core::RoleChroma::Neutral,
+    )
+    .unwrap();
+    let bg = BgInput::solid("#000000").unwrap();
+    let vc = ViewingConditions::srgb();
+    let resolve_junior = |table: &NamedRoleTable| {
+        resolve_named_set(&bg, table, &vc)
+            .unwrap()
+            .into_iter()
+            .find(|(name, _)| name == "junior")
+            .expect("junior is present")
+            .1
+    };
+    assert_eq!(
+        resolve_junior(&preceded),
+        resolve_junior(&isolated),
+        "declaration adjacency is not a client-declared dependency"
+    );
+}
+
 /// НОЛЬ ролей на уровне ЯДРА (не границы, что его отклоняет): `compile` не
 /// паникует — либо `Err`, либо пустая таблица, чей `resolve_named_set` тотален
 /// (пустой набор). Закрывает «пустой словарь ролей роняет ядро».
 #[test]
 fn zero_role_config_is_meaningful_not_panic() {
-    let cfg = scaffold(plain_neutral(), plain_sentiments(), vec![], vec![]);
+    let cfg = scaffold(plain_neutral(), vec![], vec![]);
     match cfg.compile_named_role_table() {
         Ok(table) => {
             assert!(table.entries().is_empty(), "нет ролей ⇒ пустая таблица");
@@ -291,17 +332,15 @@ fn zero_role_config_is_meaningful_not_panic() {
     }
 }
 
-/// Экстремальные ручки НЕЙТРАЛИ (ratio 0.0 и 1.0, огромный target_mp, жёсткость
-/// у краёв): каждая комбинация либо честно `Err`, либо тотальна. Ловит деление
+/// Экстремальные ручки НЕЙТРАЛИ (огромный target_mp, жёсткость у краёв): каждая
+/// комбинация либо честно `Err`, либо тотальна. Ловит деление
 /// на ноль / переполнение в кривой нейтрали на вырожденных ручках.
 #[test]
 fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
     let knob_sets = [
-        (0.0, 5.0, 8.0),     // нулевой тинт
-        (1.0, 5.0, 8.0),     // полный тинт
-        (0.10, 200.0, 8.0),  // недостижимо большой target_mp
-        (0.10, 0.0, 0.0),    // нулевые target_mp и жёсткость
-        (0.10, 5.0, 1000.0), // экстремальная жёсткость (жёсткая стена)
+        (200.0, 8.0),  // недостижимо большой target_mp
+        (0.0, 0.0),    // нулевые target_mp и жёсткость
+        (5.0, 1000.0), // экстремальная жёсткость (жёсткая стена)
     ];
     let ladder_role = (
         "neutral-fill".to_string(),
@@ -311,7 +350,7 @@ fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
             floor: None,
         },
     );
-    for (ratio, target_mp, hue_stiffness) in knob_sets {
+    for (target_mp, hue_stiffness) in knob_sets {
         let neutral = NeutralConfig {
             anchors: NeutralAnchors {
                 light: "#FBFBFD".to_string(),
@@ -319,7 +358,6 @@ fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
                 dark: "#101012".to_string(),
             },
             tint: NeutralTint {
-                ratio,
                 target_mp,
                 hue_stiffness,
                 hue_override_deg: None,
@@ -327,65 +365,13 @@ fn extreme_neutral_tint_knobs_never_panic_or_emit_nonfinite() {
             edge: None,
             inverted: None,
         };
-        let cfg = scaffold(
-            neutral,
-            plain_sentiments(),
-            vec![],
-            vec![ladder_role.clone()],
-        );
+        let cfg = scaffold(neutral, vec![], vec![ladder_role.clone()]);
         if let Ok(table) = cfg.compile_named_role_table() {
             // Чистый гард тотальности/не-паники: достижимость на экстремальных
             // ручках не обязательна (роль может честно уйти в SolveFailure).
             let _ = assert_table_is_total(
                 &table,
-                &format!("neutral(r={ratio},mp={target_mp},k={hue_stiffness})"),
-            );
-        }
-    }
-}
-
-/// Экстремальный СЕНТИМЕНТ (chroma_fraction у краёв (0,1], жёсткость у краёв) на
-/// вырожденной палитре: pair-fill/dj роли не роняют резолв нечислом.
-#[test]
-fn extreme_sentiment_knobs_never_panic_or_emit_nonfinite() {
-    let family = PaletteFamily {
-        key: "fam".to_string(),
-        anchors: flat_anchors("#FF3B30"),
-    };
-    let knob_sets = [
-        (0.001, 1.0),   // почти нулевая хрома, самая мягкая жёсткость
-        (1.0, 5.0),     // полная хрома (стена гамута)
-        (0.88, 1000.0), // экстремальная жёсткость
-    ];
-    for (chroma_fraction, hardness) in knob_sets {
-        let sentiments = SentimentsConfig {
-            categories: vec![SentimentCategory {
-                name: "alert".to_string(),
-                family: "fam".to_string(),
-                hue_floor_deg: None,
-                preferred_side: None,
-            }],
-            hardness,
-            chroma_fraction,
-        };
-        let cfg = scaffold(
-            plain_neutral(),
-            sentiments,
-            vec![family.clone()],
-            vec![(
-                "alert-fill".to_string(),
-                RoleRecipe::Ladder {
-                    source: LadderSource::Sentiment("alert".to_string()),
-                    position: LadderPosition::FillPrimary,
-                    floor: None,
-                },
-            )],
-        );
-        if let Ok(table) = cfg.compile_named_role_table() {
-            // Чистый гард тотальности/не-паники (как neutral выше).
-            let _ = assert_table_is_total(
-                &table,
-                &format!("sentiment(cf={chroma_fraction},h={hardness})"),
+                &format!("neutral(mp={target_mp},k={hue_stiffness})"),
             );
         }
     }
@@ -403,7 +389,6 @@ fn achromatic_extreme_brand_never_panics() {
             },
             plain_neutral(),
             vec![],
-            plain_sentiments(),
             ThemesConfig {
                 entries: vec![
                     ("light".to_string(), VcPreset::Srgb),

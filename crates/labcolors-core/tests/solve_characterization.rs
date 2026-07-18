@@ -234,9 +234,9 @@ fn outcome_line(result: &Result<Solved, SolveFailure>) -> String {
             bits(solved.lc()),
             bits(solved.wcag_ratio()),
             solved.floor_override(),
-            bits(solved.color().jp),
-            bits(solved.color().h_ok),
-            bits(solved.color().s),
+            bits(solved.color().jp()),
+            bits(solved.color().h_ok()),
+            bits(solved.color().s()),
         ),
         Err(SolveFailure::BelowContrastFloor { target }) => {
             format!("err below_contrast_floor target_bits={}", bits(*target))
@@ -699,13 +699,13 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
 /// Экспонат платформенной зависимости текущего релиза (#297 «current path is
 /// LegacyPlatformDependent»): между канонической macOS-arm64 и каноническим
 /// Linux-x64 расходится РОВНО хвост ulp одного поля — Oklab-hue коррелята
-/// `h_ok` — в трёх кейсах матрицы. Всё остальное (hex-байты, `lc`,
+/// `h_ok` — в двух хроматических кейсах матрицы. Всё остальное (hex-байты, `lc`,
 /// `wcag_ratio`, `floor_override`, `jp`, `s`, все payload'ы ошибок) —
-/// бит-идентично на всех 77 кейсах. Два кейса — честная libm-разница
-/// (atan2/cbrt, 5 ulp на хроматике); третий — ахроматический результат, где
-/// hue вырожден (atan2 шума о шум) и платформенный шум усиливается до
-/// величины ~1e-8 при том же значении в градусах. Рост этого множества —
-/// изменение численного поведения, а не «шум новой платформы».
+/// бит-идентично на всех 77 кейсах. Оба кейса — libm-разница
+/// (atan2/cbrt, 5 ulp на хроматике). У точного sRGB-серого `h_ok = 0` по
+/// определению, поэтому его прежний atan2-шум больше не является частью
+/// платформенного контракта. Рост этого множества — изменение численного
+/// поведения, а не «шум новой платформы».
 #[test]
 fn platform_fixtures_agree_except_documented_hue_ulp_drift() {
     let load = |path: &str| -> BTreeMap<String, String> {
@@ -769,14 +769,10 @@ fn platform_fixtures_agree_except_documented_hue_ulp_drift() {
             "bg=#7A7A7A contract=text(35) floor=default hue=145 chroma=relative(0.35)".to_string(),
             vec!["h_ok_bits".to_string()],
         ),
-        (
-            "bg=#FFFFFF contract=ui(45) floor=aa-ui hue=30 chroma=neutral".to_string(),
-            vec!["h_ok_bits".to_string()],
-        ),
     ];
     assert_eq!(
         drifted, expected,
         "the cross-platform drift exhibit must stay exactly the documented \
-         three h_ok ulp-tail cases"
+         two chromatic h_ok ulp-tail cases"
     );
 }

@@ -1,158 +1,44 @@
 //! Контекстный резолвер скомпилированных клиентских цветовых контрактов.
 //!
-//! Where [`solve`](crate::solve()) answers "what colour meets *this* signed
-//! contrast against *this* background", this module answers the product-level
-//! question one layer up: "give me the whole set of named colours a UI needs
-//! against this background". [`NamedRoleTable`] carries opaque client IDs plus
-//! core-owned recipes; [`resolve_named_set`] resolves them in declaration order.
-//! Допуск атомарен: в успешном наборе живут только локальные
-//! `unreachable | unresolved`, а rejected/unsupported/internal провенанс
-//! возвращает [`ResolveSetError`] без частичного вектора. Сериализация
-//! результата — ответственность биндинга.
+//! # Текущий контракт
 //!
-//! # Polarity is read from the background, never from the role
+//! [`NamedRoleTable`] — переходное скомпилированное представление набора.
+//! Клиентские идентификаторы непрозрачны: Core не выводит из строк семантику,
+//! иерархию или физику. [`resolve_named_set`] решает весь набор относительно
+//! текущего фона и viewing conditions; сериализация принадлежит биндингу.
 //!
-//! [`solve`] takes a *signed* `Lc` (positive = dark-on-light, negative =
-//! light-on-dark). A role stores only the *magnitude* of the contrast it wants;
-//! this module picks the sign from the background, so the same role table
-//! resolves correctly on a light or a dark background without the caller
-//! choosing a theme. That is what "resolved from any background" means.
+//! Граница набора атомарна. Доказанная недостижимость и незавершённый bounded
+//! search остаются типизированными исходами отдельных ролей; rejected,
+//! unsupported и internal закрывают вызов через [`ResolveSetError`] без
+//! частичного успешного вектора. Нулевое значение представлено явно через
+//! [`Resolved::None`].
 //!
-//! The sign is chosen in two stages, and — crucially — from the *WCAG* gate the
-//! text roles actually have to clear, not from the perceptual maximum:
+//! Клиентский источник задаётся неизменяемыми sRGB8-байтами. Равные каналы
+//! точно ахроматичны; неравные доказывают лишь хроматичность представления.
+//! Финальные байты сами по себе не доказывают сохранение или различимость
+//! authored hue — такой вывод требует явного relation-constraint и сертификата.
 //!
-//! 1. **WCAG reachability first.** A text role floors at the legal AA ratio
-//!    (4.5:1 for text). Which polarity can reach that floor is a property of the
-//!    background alone — `contrast_ratio(black, bg)` vs `contrast_ratio(white,
-//!    bg)` — and is independent of the viewing conditions, because the WCAG
-//!    formula is. So the polarity that clears the strict 4.5:1 floor wins. This
-//!    is what stops a light-grey background (`#808080`, `#999999`) from reporting
-//!    every text role unreachable while *black* text on it passes AA with room to
-//!    spare: the old "pick the larger LPC maximum" rule flipped polarity near
-//!    `#999999`, far from the WCAG flip near `#747474`, and chose the side the
-//!    legal floor could not reach.
-//! 2. **Tie-break to the perceptual winner (white).** When both polarities clear
-//!    the strict floor they do so only on a narrow band: black clears 4.5:1 at
-//!    `Y ≥ 0.175`, white at `Y ≤ 0.1833`, so both are legal only on
-//!    `Y ∈ [0.175, 0.1833]` (`#757575`, `#767676` and same-luminance chromatics
-//!    such as `#0078D4`). Across that whole band the perceptual layer prefers
-//!    *light-on-dark* with a wide margin — the luminance-domain LPC core
-//!    (`crate::lpc::contrast_core`) has its black-overtakes-white crossover far
-//!    higher, near `Y ≈ 0.342` (measured, locked by
-//!    `pair::exposure_locks::pair_crossover_equals_measured_core_polarity_flip`)
-//!    — so the tie resolves to white (`break_tie`). This
-//!    replaces the former "larger WCAG margin wins" rule, whose symmetric margin
-//!    crossed over *inside* the band (`Y ≈ 0.1791`) and chose dark-on-light on the
-//!    upper half — the perceptually weaker side there, and the one that made
-//!    `#0078D4` emit black against the Fluent convention of white. When *neither*
-//!    polarity can clear the floor (a true mid-grey with no readable side), the
-//!    side that comes *closest* is chosen, so an admitted [`RoleFailure`] retains
-//!    честное best-case-свидетельство `max_ratio`, а не худшее.
+//! # Целевая граница
 //!
-//! Because the criterion is VC-independent, a role's polarity never flips between
-//! the light and dim viewing conditions for the same background — no per-theme
-//! coin-flip on a near-tie like `#3478F6`.
+//! Публичная модель сходится к общему графу `Color`, `Paint`, `Surface`,
+//! `Occurrence` и `Constraint`: значение или представление наблюдается в
+//! конкретном контексте и удовлетворяет объявленным физическим ограничениям.
+//! Клиент владеет именами и смыслом; Core — композитингом, контрастом,
+//! адаптацией, конечной эмиссией и сертификатами.
 //!
-//! # Sanity over arithmetic: the anchor principle
-//!
-//! Text contrast magnitudes are **not fixed deltas**. A fixed delta is how
-//! `label-primary` once came out grey: a mid contrast number satisfies the
-//! contract arithmetically but violates the design intent that primary text on
-//! white reads as *black*. Instead, a text role anchors its target to a
-//! **fraction of the maximum contrast the background can supply**
-//! ([`TextAnchor`]). Primary asks for ~97 % of that maximum — almost the
-//! strongest the background allows — so on white it lands near-black and on
-//! black near-white, by construction, on *any* background. The fractions are
-//! calibrated against Daniel's Figma anchors (see `RoleTable::default`) and
-//! stay marked "calibrates" until his eye signs off.
-//!
-//! Because every text role is a fraction of the *same* per-background maximum,
-//! the hierarchy primary > secondary > muted > disabled is **strict wherever the
-//! background physically allows it** — symmetric by construction across both
-//! polarities. This is the deliberate fix for the asymmetry baked into the
-//! literal Figma tokens, where equal opacity steps produced a dark-theme
-//! hierarchy ~40 % weaker than the light one (see the module tests).
-//!
-//! # Hierarchy compression is flagged, never silent
-//!
-//! On a background whose readable window is *narrower than the hierarchy's own
-//! steps* — a near-AA mid-grey such as `#747474`, where the only readable
-//! polarity has barely any room above 4.5:1 — two adjacent text roles can be
-//! forced by the legal floor onto the same point. The old code let primary and
-//! secondary collapse to an identical hex silently, falsifying the "strict
-//! hierarchy by construction" claim. This module instead degrades *honestly*:
-//! a subordinate role is nudged to the smallest distinguishable quantisation
-//! step below its senior **only while it still clears its own floor**. If order
-//! and the junior's hard floor conflict, the floor wins: the legal junior colour
-//! is retained and [`Resolved::compressed`] marks the non-exact hierarchy
-//! outcome. A consumer never receives a floor-violating colour disguised as a
-//! successful hierarchy.
-//!
-//! # The zero token
-//!
-//! "Empty" is a value, not a missing entry. A role that means "no colour here"
-//! (`Role::None`) is part of the table and resolves to an explicit
-//! [`Resolved::None`] — an honest zero (transparent / no contrast), never a
-//! skipped key. Swapping a literal for a token later is then a change of value,
-//! not the insertion of a token where a hole used to be.
-//!
-//! # Out of scope for v1 (extension seams, not implementations)
-//!
-//! - **Decorative contracts split by physics.** The `border-base` / `border-soft`
-//!   ladder and the `fill-primary..quaternary` ladder are *dJ'* roles
-//!   ([`RoleSpec::DecorativeDj`]): each holds the owner's literal perceived-
-//!   lightness step (a `J'` offset) against its surface, per theme, solved
-//!   analytically with no readability floor. The `shadow-minor..major` stack and
-//!   `separator` stay legacy Lc [`RoleSpec::Decorative`] placeholders (the shadow
-//!   owner anchors are alpha opacities, not dJ' steps); only their relative order
-//!   is a contract, defined and covered in the `surface-jnd` chapter.
-//!   `border-strong` carries the `label-primary` FRACTION but a 3:1 non-text
-//!   floor (WCAG 1.4.11): a border must be distinguishable, not readable.
-//! - **Brand / sentiment roles are not here.** v1 carries one *neutral*
-//!   undertone for the whole table (the cool tint of Daniel's neutral ladder,
-//!   see [`RoleChroma`]); per-role brand/accent hues are a later chapter. The
-//!   chroma seam (`RoleTable::with_chroma`) is left open so that chapter can
-//!   swap the policy over the existing sentiment machinery without reshaping
-//!   this table.
-//!
-//! # The neutral undertone: identity, not sterile grey
-//!
-//! Daniel's neutral is tinted — `#101012` carries a cool blue-violet undertone,
-//! not a pure grey. A role table resolved with zero chroma threw that identity
-//! away: `label-primary` on white came out the sterile `#141414`. So every
-//! resolved role carries the neutral's undertone and lands as a *relative* of the
-//! neutral family — `label-primary` on white as a cool near-black in the `#101012`
-//! family. The undertone is small enough that the WCAG floors, the strict
-//! hierarchy, and the near-black/near-white primary all hold exactly as before
-//! (the solver re-solves lightness to the same target with the tint applied).
-//!
-//! The default undertone policy is [`RoleChroma::Curve`] (v2), derived from three
-//! computable mechanisms rather than a flat ratio of the gamut:
-//!
-//! 1. **Constant CAM16-UCS coordinate** — the chroma at each role's resolved
-//!    lightness is solved to a constant `M'` (`TINT_TARGET_MP`), not a fixed
-//!    fraction of the gamut maximum. This is a characterized design policy that
-//!    holds chroma in the lights and moderates it in the middle; it does not turn
-//!    `M'` into a universal perceptual-colorfulness scale.
-//! 2. **Cusp-attracted hue** — the hue at each lightness is pulled toward the
-//!    local chroma cusp of the sRGB gamut, penalised for leaving the canonical
-//!    286° (`cusp_attracted_hue`). The drift emerges from geometry; it is *not*
-//!    a set of hard-coded hue nodes. (Honest limit: the gamut's cusp near 286°
-//!    does not drift to the reference's light-end azure — see that function.)
-//! 3. **Perceptibility floor** — where the gamut cannot host the target
-//!    colorfulness, the curve takes the gamut maximum and is allowed to fall
-//!    toward `TINT_PERCEPTIBLE_MP_FLOOR` rather than fake chroma it cannot reach.
-//!
-//! A caller who wants the v1 flat-ratio undertone opts back into it with
-//! [`RoleChroma::flat_neutral_tint`]; pure grey with [`RoleChroma::Neutral`];
-//! either via `RoleTable::with_chroma`.
+//! [`RoleSpec`], [`RoleChroma`] и остальные recipe-варианты — переходный
+//! compiled transport существующего пути, а не публичная точка расширения.
+//! Новые возможности должны выражаться общими узлами, рёбрами и constraints,
+//! без добавления семантических recipe-кейсов в Core.
 
+use crate::Srgb8;
 use crate::ladder::LadderTint;
 use crate::scale;
 use crate::solve::{
     self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureBoundary,
     SolveFailureCategory, Solved,
 };
+use crate::spaces::oklab::{HUE_DEG_MAX_EXCLUSIVE, HUE_DEG_MIN_INCLUSIVE};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag;
@@ -228,18 +114,12 @@ const IC_DECORATIVE_FLOOR_MIN: f64 = 15.0;
 // Лестницы fill и border несут буквальные dJ'-якоря — перцептивную разницу
 // светлоты, которую каждый декоративный шаг держит относительно своей
 // поверхности, вычисленные из растяжек LabUI Figma ("Вычисленные якоря",
-// reference/labui-figma-structure.md). Это правильная единица измерения (шаг J',
-// а не контраст Lc) и правильный тип ([`RoleSpec::DecorativeDj`], решается без
-// порога читаемости и без обрезки низкого контраста — это различимость, а не
-// разборчивость текста).
+// reference/labui-figma-structure.md). Это смещения координаты J', а не Lc;
+// они не являются измеренным JND или моделью разборчивости.
 //
-// Числа, единица измерения и источник — реальные измерения из Figma.
-//
-// По темам: якоря измерены отдельно под каждой темой, потому что восприятие
-// светлоты зависит от окружения (surround). Тёмные якоря примерно в 2.2 раза
-// больше светлых — измеренная компенсация для тёмного окружения — поэтому
-// они НЕ выведены из светлого набора, а являются отдельными измерениями под
-// тёмную тему, которые выбираются при резолве по теме viewing conditions.
+// Числа — авторская per-theme дизайн-калибровка, вычисленная из reference-
+// эмиссий под объявленными VC. Dark-значения не выводятся из light множителем:
+// обе стороны выбираются непосредственно по VC.
 
 /// dJ'-якоря лестницы fill (`fill-primary` … `fill-quaternary`), строго убывающие
 /// по видимости. Буквальные измеренные значения; отдельно light/dark по теме.
@@ -285,7 +165,8 @@ pub(crate) const BORDER_SOFT_DJ: DjMagnitude = DjMagnitude::new(3.15, 5.83);
 /// терминологическим подлогом. Значения провизорны; единственный контракт —
 /// строгий возрастающий порядок ступеней (тест
 /// `shadow_constant_stack_is_strictly_ascending_with_gaps`). Финальная
-/// перцептивная калибровка теневого стека — за владельцем.
+/// Перцептивное повышение статуса требует опубликованных данных либо явной
+/// клиентской policy; собственная owner-сессия не является evidence.
 #[cfg(test)]
 // SSOT-TRACKED — величина Lc стека теней (минимальная ступень).
 pub(crate) const SHADOW_MINOR_LC: f64 = 8.0;
@@ -311,7 +192,7 @@ pub(crate) const SHADOW_MAJOR_LC: f64 = 14.0;
 // #9C9C9C → Ys 50.446. Вывод задокументирован в rustdoc `Default for
 // RoleTable` ниже. Это «якорный принцип»: роль держит почти максимум, что
 // позволяет фон, а не фиксированную дельту; финальная перцептивная
-// калибровка долей — за владельцем.
+// Их изменение требует опубликованного evidence либо явной client policy.
 
 /// Доля максимального Lc для `LabelPrimary` (и `BorderStrong`):
 /// Ys(#141414)/Ys(max) = 103.2157/106.0407.
@@ -336,7 +217,8 @@ const LABEL_QUATERNARY_FRACTION: f64 = 0.29335999;
 
 /// Lc-величина декоративного разделителя (`Separator`). Единственная оставшаяся
 /// провизорная декоративная величина: держится выше [`DECORATIVE_FLOOR_MIN`]
-/// (7.5); финальная JND-калибровка — за владельцем.
+/// (7.5). Перцептивная калибровка требует опубликованного evidence либо явной
+/// client policy; литерал не является JND-утверждением.
 #[cfg(test)]
 // SSOT-TRACKED — провизорная декоративная величина Separator (Lc), см. docs/empirical-inventory.md.
 const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
@@ -511,32 +393,28 @@ impl Role {
     }
 }
 
-/// How a text/UI role expresses its target contrast against a background.
+/// Переходное представление цели text/UI-роли по Ys candidate-score.
 ///
-/// A fraction of the background's maximum achievable contrast — *not* a fixed
-/// `Lc` delta. See the module docs on the anchor principle for why. `fraction`
-/// is in `(0, 1]`: `1.0` names the physical contrast endpoint exactly.
+/// Доля максимальной величины candidate-score данного фона, а не фиксированная
+/// дельта `Lc`. `fraction` лежит в `(0, 1]`; `1.0` означает конец замороженной
+/// SAPC-shaped кривой. Координата не является LPC/readability evidence.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextAnchor {
     fraction: f64,
     conformance: Floor,
-    /// Опциональный источник ОТТЕНКА семьи (ратификация ch5c, M1). `None` —
-    /// нейтральный лейбл (подтон из [`RoleChroma`] таблицы, прежний путь
-    /// байт-в-байт). `Some(tint)` — ЦВЕТНОЙ лейбл: держит ТОТ ЖЕ Lc-контракт
-    /// уровня, что нейтральный (доля·max, тот же WCAG-пол — одноуровневость по
-    /// построению), но решённый в чистом оттенке семьи. Тинт — пер-темный
-    /// `Copy`-якорь идентичности (Figma-оттенок сохранён); светлота выводится
-    /// контрактом на LCS-кривой семьи, хрома = стена гамута на решённой
-    /// светлоте. Резолв — [`resolve_hued_anchor`].
+    /// Опциональный источник физической цветовой идентичности. `None` берёт
+    /// [`RoleChroma`] таблицы. `Some(tint)` держит тот же candidate-score/floor-контракт, а
+    /// точные эмитируемые sRGB8-байты выбирают план: равные каналы остаются
+    /// нейтральными; неравные задают Oklab-направление и максимальную доступную
+    /// хрому на решённой светлоте. Резолв — [`resolve_hued_anchor`].
     hue: Option<crate::ladder::LadderTint>,
 }
 
 impl TextAnchor {
-    /// A text anchor at `fraction` of the background's maximum contrast, with the
-    /// given WCAG conformance floor. `fraction` must be finite and inside
-    /// `(0, 1]`; invalid input is rejected rather than silently rewritten.
-    /// Neutral undertone (no family hue); attach one with
-    /// [`with_hue`](Self::with_hue).
+    /// Якорь на доле `fraction` от максимального Ys candidate-score фона с
+    /// заданным WCAG-полом. `fraction` обязан быть конечным и лежать в `(0, 1]`;
+    /// невалидный ввод отклоняется без тихой коррекции. По умолчанию семейный
+    /// оттенок отсутствует; его добавляет [`with_hue`](Self::with_hue).
     pub fn new(fraction: f64, conformance: Floor) -> Result<Self, SolveFailure> {
         if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
             return Err(SolveFailure::InvalidInput(format!(
@@ -550,42 +428,36 @@ impl TextAnchor {
         })
     }
 
-    /// Тот же якорь, но решаемый в чистом оттенке `hue`-семьи (M1 ch5c). Контракт
-    /// уровня (`fraction`/`conformance`) НЕ меняется — меняется лишь физика цвета:
-    /// одноуровневость держится, оттенок = идентичность семьи.
+    /// Тот же якорь с явным источником цветовой идентичности. Контракт уровня
+    /// (`fraction`/`conformance`) не меняется. Равные sRGB8-каналы источника
+    /// остаются нейтральными; неравные несут направление hue.
     pub fn with_hue(mut self, hue: crate::ladder::LadderTint) -> Self {
         self.hue = Some(hue);
         self
     }
 
-    /// The fraction of maximum contrast this anchor targets, in `(0, 1]`.
+    /// Доля максимальной величины Ys candidate-score в `(0, 1]`.
     pub fn fraction(self) -> f64 {
         self.fraction
     }
 
-    /// The WCAG conformance floor applied after the perceptual target.
+    /// WCAG-пол, применяемый после candidate-score цели.
     pub fn conformance(self) -> Floor {
         self.conformance
     }
 
-    /// Источник оттенка семьи, если это цветной лейбл (M1). `None` — нейтральный.
+    /// Явный источник физической цветовой идентичности; `None` берёт policy таблицы.
     pub fn hue(self) -> Option<crate::ladder::LadderTint> {
         self.hue
     }
 }
 
-/// A decorative perceived-lightness-difference (dJ') magnitude, with the owner's
-/// per-theme calibration.
+/// Пара авторских per-theme смещений координаты CAM16-UCS `J'`.
 ///
-/// The owner measured the perceived-lightness step a decorative element should
-/// hold against its surface separately for each theme — perception of a lightness
-/// difference is not theme-invariant, and the owner's dark anchors run ~2.2× the
-/// light ones (a measured over-compensation for dark surrounds). So the magnitude
-/// is a `(light, dark)` pair, and the solver picks the side that matches the
-/// viewing conditions it resolves under via [`for_vc`](DjMagnitude::for_vc). This
-/// keeps the role table a single VC-agnostic instance (it serves both themes) and
-/// localises the per-theme choice to the one place that knows the VC — the resolve
-/// step — rather than forcing two tables or a theme parameter through every caller.
+/// Значения выведены из указанных Figma-эмиссий под объявленными viewing
+/// conditions. Это дизайн-калибровка, а не измеренный JND или универсальный
+/// закон компенсации окружения. Нужную сторону выбирает
+/// [`for_vc`](DjMagnitude::for_vc).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DjMagnitude {
     light: f64,
@@ -593,13 +465,12 @@ pub struct DjMagnitude {
 }
 
 impl DjMagnitude {
-    /// A dJ' magnitude from its per-theme anchors (light surround, dark surround).
+    /// Авторские `J'`-смещения для светлого и тёмного профилей VC.
     pub const fn new(light: f64, dark: f64) -> Self {
         Self { light, dark }
     }
 
-    /// The anchor for these viewing conditions: the dark value under a dimmed
-    /// surround (dark theme), the light value otherwise.
+    /// Якорь для данных VC: dark-значение при dimmed surround, иначе light.
     pub fn for_vc(self, vc: &ViewingConditions) -> f64 {
         if vc.is_dark_theme() {
             self.dark
@@ -608,55 +479,46 @@ impl DjMagnitude {
         }
     }
 
-    /// The light-surround anchor.
+    /// Якорь светлого окружения.
     pub fn light(self) -> f64 {
         self.light
     }
 
-    /// The dark-surround anchor.
+    /// Якорь тёмного окружения.
     pub fn dark(self) -> f64 {
         self.dark
     }
 }
 
-/// The contrast recipe behind a role — the shape this module solves.
+/// Переходный численный рецепт роли — форма, исполняемая этим модулем.
 ///
-/// Text/UI roles ([`Anchor`](RoleSpec::Anchor)) target a fraction of the
-/// background's maximum; dJ' decorative roles
-/// ([`DecorativeDj`](RoleSpec::DecorativeDj)) target a perceived-lightness step on
-/// the CAM16-UCS J' axis with no readability floor; legacy Lc decorative roles
-/// ([`Decorative`](RoleSpec::Decorative)) target an `Lc` magnitude held only for
-/// the stack's relative ordering (the shadow anchors are alpha opacities, not
-/// dJ' steps — see the shadow-stack note above); the
-/// zero token ([`Zero`](RoleSpec::Zero)) resolves to nothing. Construct these
-/// through `RoleTable`; they are exposed so a caller can read or override a recipe.
+/// Text/UI-якоря задают долю максимума замороженной Ys-кривой; декоративные dJ'
+/// роли — шаг координаты CAM16-UCS `J'` без WCAG-пола; legacy-декоративные Lc
+/// роли — величину Ys candidate-score только для относительного порядка стека.
+/// Нулевой токен разрешается в отсутствие значения. Эти варианты описывают
+/// текущий transport и не являются точкой расширения Core.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleSpec {
-    /// Anchored text/UI contrast: a fraction of the background's maximum.
+    /// Ys candidate-score text/UI-якоря: доля максимума данного фона.
     Anchor(TextAnchor),
-    /// Decorative perceived-lightness difference (dJ'): the solved colour sits
-    /// `magnitude_dj` away from the background on the CAM16-UCS lightness (`J'`)
-    /// axis, toward the larger headroom (the set polarity). No readability floor
-    /// and no low-contrast clip — this is distinguishability of a decorative
-    /// element (a fill tint, a hairline border), a different physics from the
-    /// legibility the [`Anchor`](RoleSpec::Anchor) / [`Decorative`](RoleSpec::Decorative) roles solve.
+    /// Декоративное смещение координаты CAM16-UCS `J'`: решённый цвет находится
+    /// на `magnitude_dj` от фона по оси `J'` в сторону большего доступного
+    /// диапазона. Нет WCAG-пола и low-contrast clip; координатный контракт сам
+    /// по себе не заявляет JND или читаемость глифов.
     ///
-    /// The magnitude carries the owner's literal Figma-computed anchors per theme
-    /// (see [`DjMagnitude`]); the solve is analytic (J' offset → grey-axis Oklab L
-    /// → undertone build → quantise → honest dJ' measurement on the emitted hex).
-    /// The unit, type, and source of the anchor are the owner's — not a
-    /// substitute.
+    /// Величина несёт авторские Figma-якоря по темам (см. [`DjMagnitude`]); solve
+    /// аналитически переводит J'-смещение в Oklab L, строит подтон, квантует и
+    /// повторно измеряет dJ' на эмитированном hex.
     DecorativeDj { magnitude_dj: DjMagnitude },
-    /// Decorative just-noticeable-difference contrast: an `Lc` magnitude, held
-    /// above `DECORATIVE_FLOOR_MIN`, with [`Floor::None`].
+    /// Decorative Ys candidate-score magnitude `Lc`, held above
+    /// `DECORATIVE_FLOOR_MIN`, with [`Floor::None`]. It is not a JND claim.
     ///
-    /// Retained for the shadow stack, whose owner anchors are alpha opacities,
-    /// not dJ' steps — converting them to dJ' would invent numbers with no owner
-    /// source. The relative order between the shadow steps is the contract this
-    /// variant carries; `surface-jnd` derives shadow contracts from the alphas.
+    /// Сохранено для стека теней: его исходные якоря — alpha opacity, не dJ'.
+    /// Перевод в dJ' выдумал бы числа без источника; этот вариант несёт только
+    /// относительный порядок ступеней.
     Decorative { magnitude: f64 },
-    /// Ступень лестницы акцента/сентимента/бренда/нейтрали: тинт-якорь источника
+    /// Ступень лестницы семейства/бренда/нейтрали: тинт-якорь источника
     /// (по теме) при альфе позиции. Эмитит пару (тинт, α) НАПРЯМУЮ (закон
     /// лестницы labui — композитит браузер, а не солид-эквивалент, см.
     /// [`crate::ladder`]). Резолв — [`Resolved::Translucent`]: несёт тинт (то, что
@@ -684,13 +546,13 @@ pub enum RoleSpec {
         /// migration adapter на границе, не core-семантика.
         mode: crate::numerical_plan::NumericalExecutionModeV1,
     },
-    /// Заливка пары ([`crate::pair`]): якорь источника, сдвинутый до победы
-    /// перцептивной стороны лейбла в штатной полярности; солид-эмиссия.
+    /// Заливка пары (внутренний модуль `pair`): якорь источника, сдвинутый до победы
+    /// выбранной ветви переходной pair-эвристики; солид-эмиссия.
     PairFill {
         /// Пер-темный кодированный якорь источника.
         tint: LadderTint,
     },
-    /// Лейбл ТИНТ-бейджа ([`crate::pair`], лейбл-сторона). Семейно-оттеночный
+    /// Лейбл ТИНТ-бейджа (внутренний модуль `pair`, лейбл-сторона). Семейно-оттеночный
     /// лейбл, чей WCAG-пол энфорсится ПРОТИВ объявленной тинт-поверхности
     /// (exact source-over композит declared `tint` при compatibility-альфе
     /// позиции `fill-*-primary` над фоном резолва), а НЕ против фона страницы
@@ -724,12 +586,11 @@ pub enum RoleSpec {
         alpha_dark: f64,
         /// Опциональный юр. пол UI (M2 ch5c): солидная семейная граница
         /// (`border-<family>-strong`, α=1) ОБЯЗАНА держать 3:1 (WCAG 1.4.11).
-        /// `None` — прежний путь (тинт эмитится как есть). `Some(floor)` —
-        /// если композит чист (≥ пола), эмитится точный семейный солид (Figma
-        /// цел); иначе МИНИМАЛЬНЫЙ ЛЕГАЛЬНЫЙ СДВИГ по кривой семьи до легальности,
-        /// объявленный флагом [`TranslucentResolved::floor_coerced`]. Применим
-        /// только к солиду (α=1); у полупрозрачных позиций игнорируется (контраст
-        /// полупрозрачной роли — свойство композита, не тинта).
+        /// `None` — тинт эмитится как есть. `Some(floor)` допустим только для
+        /// solid-позиции (`α=1`): если она уже проходит пол, сохраняются точные
+        /// байты; иначе выполняется минимальный легальный сдвиг с флагом
+        /// [`TranslucentResolved::floor_coerced`]. Для полупрозрачной позиции
+        /// поле должно отсутствовать; `Some(Floor::None)` тоже невалиден.
         floor: Option<Floor>,
     },
     /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
@@ -754,17 +615,16 @@ pub enum RoleSpec {
     },
     /// Двухслойный материал (стекло/акрил): опаковая тон-база `02` на целевом
     /// |ΔJ'| тира + полупрозрачный тинт `01` (тот же тон) с ВЫВЕДЕННОЙ альфой.
-    /// Резолв — [`Resolved::Material`] ([`crate::material`]; канон — `docs/whitepaper.md` §3.7).
+    /// Резолв — [`Resolved::Material`] ([`crate::material`]; см. `docs/whitepaper.md`, «Точечные композиции»).
     ///
     /// Тон строится dj-anchor-солвером на светлоте `tone` от фона резолва в
     /// оттенке семьи; α выбирается охарактеризованным для платформы поиском
     /// с фиксированным числом шагов и повторно проверяется как проходящее
     /// состояние для `floor`.
     Material {
-        /// Оттенок семьи тона. `None` — нейтральный материал (подтон таблицы, то
-        /// же 286°, что и остальные нейтральные эмиссии). `Some(tint)` —
-        /// семейно-оттеночный (акцент/сентимент): оттенок подставляется в кривую
-        /// подтона таблицы, красочность (`target_mp`/`hue_stiffness`) — от неё же.
+        /// Источник цветовой идентичности тона. `None` берёт neutral policy
+        /// таблицы. Для `Some(tint)` равные sRGB8-каналы остаются нейтральными,
+        /// неравные подставляют направление источника в chroma-policy таблицы.
         hue: Option<LadderTint>,
         /// Целевой |ΔJ'| тона-базы от фона резолва (пер-темная пара): тир
         /// материала (base = крупный/заметный, subtle = малый/тонкий).
@@ -773,7 +633,7 @@ pub enum RoleSpec {
         /// `Floor::None` невалиден — материал обязан нести пол (валидатор ловит).
         floor: Floor,
     },
-    /// The zero token: resolves to [`Resolved::None`].
+    /// Нулевой токен: разрешается в [`Resolved::None`].
     Zero,
 }
 
@@ -800,37 +660,9 @@ pub enum RoleSpec {
 /// измеренный якорь с доказанной локальной робастностью. Протокол калибровки:
 /// пере-замерить Oklab-оттенок собственного семейства нейтралей потребителя
 /// (`atan2(b,a)` средней ступени) — измерение, а не эксперимент с наблюдателями.
-// SSOT-TRACKED — измеренный Oklab-оттенок нейтральной шкалы, терминал (e) design-choice (измеренный якорь, байт-инвариант по разбросу [285.78,286.01]), см. docs/empirical-inventory.md.
+// Test-only characterization anchor; not a production policy constant.
+#[cfg(test)]
 pub(crate) const NEUTRAL_HUE_DEG: f64 = 286.0;
-
-/// Доля от максимальной хромы в гамуте, которую несёт тонированная роль.
-///
-/// Намеренно небольшая: подтон должен *ощущаться*, но никогда не *считываться*
-/// как цвет. Решатель применяет абсолютную хрому `ratio · max_chroma(L)`
-/// ([`build_color`](crate::solve)), а `max_chroma` достигает пика на средней
-/// светлоте и падает почти до нуля на обоих краях (тёмном и светлом). Поэтому
-/// один плоский коэффициент бесплатно воспроизводит дух огибающей нейтральной
-/// кривой: самый сильный подтон приходится на роли средней силы, самый слабый —
-/// на почти-чёрный/почти-белый края текстовой шкалы — "меньше у тёмных/светлых
-/// краёв, больше к середине".
-/// `0.10`: на белом `label-primary` резолвится в холодный почти-чёрный
-/// семейства `#101012`, а не в чистый серый.
-///
-/// Терминал **(e) DESIGN-CHOICE** — генуинная свободная ручка «силы подтона».
-/// Blast radius: используется ТОЛЬКО опциональной v1-политикой
-/// [`RoleChroma::flat_neutral_tint`] (не дефолтная — дефолт `Curve` держит хрому
-/// через `TINT_TARGET_MP`), т.е. в проде «спит», пока потребитель не вернётся к
-/// плоскому тинту. Легальный диапазон конфига **[0, 1]** (валидатор `TINT_RATIO`
-/// в `config.rs`). Sensitivity (Волна 2, лок
-/// `neutral_tint_ratio_sensitivity_is_bounded`): свип легальной полосы
-/// [0, 0.20] по светлотам шкалы даёт max ΔE_ok ≈ **0.0288** (>1 JND) —
-/// НЕПРЕРЫВНЫЙ материальный дрейф (ratio прямо масштабирует хрому
-/// `ratio · max_chroma(L)`), значит честный (e), не (c). Протокол калибровки:
-/// поднимать ratio, пока подтон не начнёт «считываться как цвет» (перцептивный
-/// потолок, замер по [`TINT_PERCEPTIBLE_MP_FLOOR`]) — тогда 0.10 = чуть ниже
-/// этого потолка на серединных ролях.
-// SSOT-TRACKED — коэффициент хромы нейтрального подтона, терминал (e) design-choice (opt-in v1-политика; max ΔE_ok 0.0288 по [0,0.2]), см. docs/empirical-inventory.md.
-pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 
 /// Целевая перцептивная красочность (CAM16-UCS `M'`) по умолчанию, которую
 /// v2-кривая подтона держит по всей шкале светлоты — параметр "сила".
@@ -862,10 +694,8 @@ pub(crate) const NEUTRAL_TINT_RATIO: f64 = 0.10;
 /// `6.1` — единственный скаляр силы, применённый одинаково по всей шкале
 /// (см. тест `curve_fits_reference_plateau_colorfulness` для количественного
 /// сравнения с референсом).
-// `#[cfg(test)]` снова: с уходом фикстуры в `config::fixture` (тест-оракул)
-// прод-потребителей не осталось — словарь пресета (BL-007) несёт только
-// семантику ролей, а прод-репро `tint_target_sweep_repro` принимает цель
-// параметром.
+// `#[cfg(test)]`: значение принадлежит только characterization fixture и не
+// задаёт политику agnostic Core.
 // SSOT-TRACKED — целевой M' в CAM16-UCS.
 #[cfg(test)]
 pub(crate) const TINT_TARGET_MP: f64 = 6.1;
@@ -896,31 +726,13 @@ pub(crate) const TINT_TARGET_MP: f64 = 6.1;
 /// потребителя, но ДЕФОЛТ 9.0 к этому режиму не относится. Протокол «выхода из
 /// (c)»: если потребитель осознанно ставит стиффнес < 0.36 (хочет касп-дрейф),
 /// он ре-открывает материальность и обязан объявить своё значение (e)-ручкой.
-// SSOT-TRACKED — жёсткость прижатия оттенка к каспу, терминал (c) interval-insensitive (выход байт-инвариантен выше порога пиннинга ≈0.36, дефолт 9.0 = 25× порога), см. docs/empirical-inventory.md.
+// Test-only characterization scalar; not a production policy constant.
+#[cfg(test)]
 pub(crate) const TINT_HUE_STIFFNESS: f64 = 9.0;
 
-/// Порог воспринимаемости (механизм 3) в единицах CAM16-UCS `M'`. Ниже
-/// примерно этой красочности подтон попадает в "мёртвую серую зону" —
-/// заметно неразличимую как цвет. Там, где гамут не может обеспечить
-/// `TINT_TARGET_MP`, кривая не гонится за ним через стену гамута: она
-/// берёт максимум, который даёт гамут, и честно допускает падение к этому
-/// порогу на самых краях (почти-чёрный / почти-белый), где даже собственный
-/// `M'` референса падает до ~2.3–3.0.
-///
-/// Терминал **(c) INTERVAL-INSENSITIVE**: порог сидит вплотную ПОД измеренным
-/// потолком ахроматического `M'`-шума серых (максимум ≈1.53 у белого,
-/// `tint_floor_tracks_achromatic_mp_noise_ceiling`), а доля sRGB-гаммы, где
-/// точное значение решает «ощущаемый тон / мёртвая серость», — **0.07%**
-/// (`exposure_tint_perceptible_mp_floor`). Ниже порога классификация выхода
-/// провизорно неизменна по всему практическому интервалу — сильнее «выбор
-/// дизайна», ре-аудит `science/reclassify-e-buckets` 2026-07-07, реестр
-/// docs/empirical-inventory.md.
-// SSOT-TRACKED — порог воспринимаемости в CAM16-UCS M', терминал (c) interval-insensitive (exposure 0.07%), см. docs/empirical-inventory.md.
-pub(crate) const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
-
-/// Half-width (degrees) of the hue window the cusp search explores around the
-/// canonical hue. The undertone may drift inside a blue-violet band; it may not
-/// wander into unrelated quadrants (red, cyan), so the search is bounded.
+/// Полуширина окна оттенка в градусах для cusp-поиска вокруг канонического hue.
+/// Подтон может смещаться внутри ограниченного диапазона, но не уходить в
+/// несвязанные квадранты.
 ///
 /// Терминал **(e) DESIGN-CHOICE** (НЕ (c), несмотря на внешнее сходство с
 /// [`crate::scale::HUE_SEARCH_HALF_WINDOW`]): замер
@@ -946,54 +758,39 @@ pub(crate) const TINT_PERCEPTIBLE_MP_FLOOR: f64 = 1.5;
 // SSOT-TRACKED — hue search half-window (degrees), терминал (e) design-choice (намеренный кап (0,~42.5°], не interval-insensitive), см. docs/empirical-inventory.md.
 const CUSP_HALF_WINDOW_DEG: f64 = 40.0;
 
-/// The chroma policy a role table carries.
+/// Chroma-policy, которую несёт таблица ролей.
 ///
-/// The v1 default was [`Tinted`](RoleChroma::Tinted) (a flat ratio of the gamut
-/// maximum); the v2 default is [`Curve`](RoleChroma::Curve), the science-derived
-/// undertone (constant perceptual colorfulness + cusp-attracted hue + a
-/// perceptibility floor). [`Neutral`](RoleChroma::Neutral) is the achromatic
-/// override. A caller replaces the table's chroma wholesale via
-/// `RoleTable::with_chroma`; the enum is the seam later chapters extend for
-/// brand/sentiment-tinted roles without reshaping this type.
+/// [`Tinted`](RoleChroma::Tinted) — общий fixed-ratio примитив с явными
+/// клиентскими hue/ratio; [`Curve`](RoleChroma::Curve) — параметризованное
+/// построение подтона; [`Neutral`](RoleChroma::Neutral) — ахроматическая policy.
+/// [`NamedRoleTable`] хранит policy без вывода из client ID.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum RoleChroma {
-    /// Achromatic (grey): zero chroma, hue ignored. The explicit override that
-    /// reproduces the pre-tint behaviour.
+    /// Ахроматический режим: нулевая chroma, hue не влияет.
     Neutral,
-    /// A small undertone at a fixed Oklab `hue_deg`, carried as `ratio` of the
-    /// in-gamut maximum chroma at each role's resolved lightness. The flat-ratio
-    /// v1 policy: kept as an opt-in because its envelope follows `max_chroma(L)`,
-    /// which over-saturates the middle and starves the light end relative to the
-    /// reference. Prefer [`Curve`](RoleChroma::Curve).
+    /// Цвет в Oklab-направлении `hue_deg` при `ratio` от максимальной in-gamut
+    /// chroma на каждой решённой светлоте. Оба значения — явные входы policy;
+    /// Core не приписывает им клиентский смысл.
     Tinted { hue_deg: f64, ratio: f64 },
-    /// v2-подтон, выведенный из трёх вычислимых механизмов, а не из
-    /// захардкоженных узлов рампы:
+    /// Параметризованное построение цветности на решённой Oklab-светлоте.
     ///
-    /// 1. **Постоянная перцептивная красочность** — хрома на резолвленной
-    ///    светлоте каждой роли решается так, чтобы цвет нёс `target_mp`
-    ///    CAM16-UCS `M'` (а не фиксированную долю гамута). Именно
-    ///    равномерность UCS позволяет одной константе держать хрому в светлых
-    ///    и умерять её в середине. См. `TINT_TARGET_MP`.
-    /// 2. **Оттенок, притянутый к каспу** — оттенок на каждой светлоте
-    ///    притягивается к локальному каспу хромы гамута sRGB (вычисляется из
-    ///    `max_chroma(L, h)`), со штрафом `hue_stiffness` за отклонение от
-    ///    `canonical_hue_deg`. См. `cusp_attracted_hue`.
-    /// 3. **Порог воспринимаемости** — там, где гамут не может обеспечить
-    ///    `target_mp`, кривая берёт максимум гамута и на краях честно
-    ///    допускает падение к `TINT_PERCEPTIBLE_MP_FLOOR`, а не подделывает
-    ///    хрому.
+    /// 1. На каждой кандидатной светлоте решатель ищет gamut-valid цвет с
+    ///    заданной координатой CAM16-UCS `target_mp`. Это численная цель
+    ///    конкретной модели, а не утверждение об универсальной перцептивной
+    ///    равномерности.
+    /// 2. Поиск оттенка стартует от переданного `canonical_hue_deg` и применяет
+    ///    `hue_stiffness` при сравнении с локальной геометрией максимальной
+    ///    sRGB-хромы. Оттенок принадлежит caller/compiled policy; Core не
+    ///    приписывает ему роль, происхождение или фиксированное значение.
+    /// 3. Если `target_mp` недостижим, построение ограничивается доступной
+    ///    границей гамута. Любая последующая интерпретация результата остаётся
+    ///    model-scoped.
     ///
-    /// `target_mp` ("сила") и `hue_stiffness` ("удержание оттенка") — два
-    /// **выбранных** скаляра, единственные свободные ручки политики.
-    /// Остальное в кривой опирается на три **измеренные / геометрические**
-    /// константы, а не на свободные параметры: оттенок тёмного якоря
-    /// `canonical_hue_deg` (286°, измерен по нейтральной шкале), порог
-    /// воспринимаемости (`TINT_PERCEPTIBLE_MP_FLOOR`, 1.5 `M'`) и окно
-    /// поиска каспа по оттенку (`CUSP_HALF_WINDOW_DEG`, ±40°). То есть
-    /// политика — это "два выбранных скаляра + три измеренные/геометрические
-    /// константы", а не "два скаляра" — всё за пределами двух выбранных ручек
-    /// является фиксированной геометрией.
+    /// Все три поля — входы политики с проверяемым численным доменом.
+    /// `CUSP_HALF_WINDOW_DEG` ограничивает внутренний поиск как versioned
+    /// design choice с документированной чувствительностью; это не следствие
+    /// одной лишь геометрии и не научный default для клиентов.
     Curve {
         canonical_hue_deg: f64,
         target_mp: f64,
@@ -1010,9 +807,11 @@ impl RoleChroma {
         match self {
             RoleChroma::Neutral => Ok(()),
             RoleChroma::Tinted { hue_deg, ratio } => {
-                if !hue_deg.is_finite() {
+                if !hue_deg.is_finite()
+                    || !(HUE_DEG_MIN_INCLUSIVE..HUE_DEG_MAX_EXCLUSIVE).contains(&hue_deg)
+                {
                     return Err(SolveFailure::InvalidInput(format!(
-                        "undertone hue must be finite, got {hue_deg}"
+                        "undertone hue must be finite and inside [0, 360), got {hue_deg}"
                     )));
                 }
                 if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
@@ -1027,9 +826,11 @@ impl RoleChroma {
                 target_mp,
                 hue_stiffness,
             } => {
-                if !canonical_hue_deg.is_finite() {
+                if !canonical_hue_deg.is_finite()
+                    || !(HUE_DEG_MIN_INCLUSIVE..HUE_DEG_MAX_EXCLUSIVE).contains(&canonical_hue_deg)
+                {
                     return Err(SolveFailure::InvalidInput(format!(
-                        "curve canonical hue must be finite, got {canonical_hue_deg}"
+                        "curve canonical hue must be finite and inside [0, 360), got {canonical_hue_deg}"
                     )));
                 }
                 if !target_mp.is_finite() || target_mp <= 0.0 {
@@ -1047,23 +848,8 @@ impl RoleChroma {
         }
     }
 
-    /// The v1 flat-ratio neutral undertone, kept as an explicit opt-in.
-    ///
-    /// The default table moved to [`Curve`](RoleChroma::Curve); a caller who
-    /// prefers the older flat-ratio behaviour (the neutral's cool hue at a fixed
-    /// fraction of the gamut maximum, `NEUTRAL_TINT_RATIO`) opts back into it
-    /// with `RoleTable::default().with_chroma(RoleChroma::flat_neutral_tint())`.
-    /// This is the additive seam the task requires: the v1 policy stays a
-    /// first-class, named choice even though it is no longer the default.
-    pub fn flat_neutral_tint() -> Self {
-        RoleChroma::Tinted {
-            hue_deg: NEUTRAL_HUE_DEG,
-            ratio: NEUTRAL_TINT_RATIO,
-        }
-    }
-
-    /// The v2 default: the science-derived undertone curve at its calibrated
-    /// scalars.
+    /// Замороженная кривая test-only фикстуры: oracle миграционного паритета,
+    /// не научный default для клиентских данных.
     #[cfg(test)]
     fn neutral_curve() -> Self {
         RoleChroma::Curve {
@@ -1073,16 +859,13 @@ impl RoleChroma {
         }
     }
 
-    /// Plan the solver's `(hue, chroma)` inputs for a role whose contrast-solved
-    /// Oklab lightness is `l_ok`.
+    /// Строит `(hue, chroma)` для роли с уже решённой Oklab-светлотой `l_ok`.
     ///
-    /// For the lightness-independent policies ([`Neutral`](RoleChroma::Neutral),
-    /// [`Tinted`](RoleChroma::Tinted)) the plan ignores `l_ok` and reproduces the
-    /// v1 behaviour exactly. For [`Curve`](RoleChroma::Curve) the hue is the
-    /// cusp-attracted hue at `l_ok` and the chroma ratio is the one that lands the
-    /// colour on the target perceptual colorfulness at that lightness and hue —
-    /// the per-lightness derivation that makes the undertone a curve, not a
-    /// constant.
+    /// [`Neutral`](RoleChroma::Neutral) и [`Tinted`](RoleChroma::Tinted) не
+    /// зависят от `l_ok`. Для [`Curve`](RoleChroma::Curve) hue притягивается к
+    /// cusp при `l_ok`, а ratio решается к объявленной численной цели `target_mp`
+    /// на этой светлоте; это model-scoped построение кривой, не общий закон
+    /// восприятия.
     fn plan_for_lightness(self, l_ok: f64, vc: &ViewingConditions) -> (Hue, ChromaPolicy) {
         match self {
             RoleChroma::Neutral => (Hue::deg(0.0), ChromaPolicy::Neutral),
@@ -1094,38 +877,28 @@ impl RoleChroma {
                 target_mp,
                 hue_stiffness,
             } => {
-                // The Curve plan is a pure function of `(l_ok, policy scalars, vc)`:
-                // an 81-step cusp-hue scan plus a CAM16 ratio bisection. Within one
-                // resolve sweep the same lightness recurs across roles and across a
-                // role's fixed-point refinements, so a sweep-scoped exact-key memo
-                // returns the byte-identical `(hue, ratio)` without redoing either
-                // scan. See [`curve_plan_cached`].
+                // Curve-план — чистая функция `(l_ok, policy scalars, vc)`:
+                // 81-точечный hue-поиск и CAM16-бисекция ratio. Exact-key memo
+                // возвращает те же биты при повторе светлоты внутри sweep, не
+                // повторяя оба поиска; см. [`curve_plan_cached`].
                 curve_plan_cached(l_ok, canonical_hue_deg, target_mp, hue_stiffness, vc)
             }
         }
     }
 
-    /// A lightness-independent plan for the achromatic probe pass (pass A), used
-    /// only to discover a role's contrast-solved lightness before the real
-    /// per-lightness plan is built. Always achromatic so the probe is fast and
-    /// the discovered lightness is the role's true contrast lightness.
+    /// Независимый от светлоты ахроматический probe-план: узнаёт contrast-solved
+    /// светлоту роли до построения основного per-lightness плана.
     fn probe_plan() -> (Hue, ChromaPolicy) {
         (Hue::deg(0.0), ChromaPolicy::Neutral)
     }
 }
 
 thread_local! {
-    /// Process-lived memo for the [`RoleChroma::Curve`] plan, keyed on the bit
-    /// patterns of `(l_ok, canonical, target_mp, stiffness, vc)` so a hit returns
-    /// the byte-identical `(hue, ratio)` the 81-step cusp scan + CAM16 ratio
-    /// bisection would. The plan is a deterministic function of the key, so the
-    /// cache is always correct — a repeat of any of these means re-resolving the
-    /// same theme (the common case: a tool re-resolving as a background is tweaked,
-    /// or the same neutral resolved against many surfaces), where the cusp scan is
-    /// pure recomputation. Bounded by [`CURVE_PLAN_CACHE_CAP`]: the bisected `l_ok`
-    /// is effectively arbitrary across unrelated backgrounds, so without a cap the
-    /// map could grow without bound — at the cap it is cleared wholesale (a cold
-    /// rebuild, never incorrectness).
+    /// Process-lived memo Curve-плана по битам
+    /// `(l_ok, canonical, target_mp, stiffness, vc)`. Попадание возвращает тот же
+    /// `(hue, ratio)`, что 81-точечный cusp-поиск и CAM16-бисекция. Размер ограничен
+    /// [`CURVE_PLAN_CACHE_CAP`]; при достижении cap карта очищается, что вызывает
+    /// только cold rebuild, но не меняет результат.
     static CURVE_PLAN_CACHE: std::cell::RefCell<
         std::collections::HashMap<[u64; 5], (f64, f64)>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -1235,15 +1008,15 @@ fn cusp_attracted_hue(l_ok: f64, canonical_deg: f64, stiffness: f64) -> f64 {
 
 /// The chroma ratio (for [`ChromaPolicy::Relative`]) that lands a colour of Oklab
 /// lightness `l_ok` and hue `hue_deg` on perceptual colorfulness `target_mp`
-/// (CAM16-UCS `M'`) — mechanism 1, with the mechanism-3 floor at the gamut wall.
+/// (CAM16-UCS `M'`), bounded by the gamut wall.
 ///
 /// `M'` rises monotonically with chroma at fixed lightness and hue, so the ratio
 /// is found by bisection: build the colour at a trial ratio, measure its `M'`
 /// through the same CAM16-UCS path the engine uses ([`LcsColor::mp`]), and
 /// narrow. If even `ratio = 1` (the gamut maximum) cannot reach `target_mp`, the
 /// gamut is the limit — return `1.0` and let the colourfulness sit at the most
-/// the gamut allows (honestly below target, toward
-/// `TINT_PERCEPTIBLE_MP_FLOOR` at the pinched extremes) rather than fake it.
+/// the gamut allows (honestly below target at pinched extremes) rather than fake
+/// it. This solver does not classify human perceptibility.
 fn ratio_for_target_mp(l_ok: f64, hue_deg: f64, target_mp: f64, vc: &ViewingConditions) -> f64 {
     let target = target_mp;
     // The in-gamut max chroma depends only on `(l_ok, hue_deg)`, both fixed across
@@ -1320,92 +1093,6 @@ fn build_curve_color_with_cmax(l_ok: f64, hue_deg: f64, ratio: f64, c_max: f64) 
     ]
 }
 
-/// Plateau reference node for the tint sweep: `(oklab_l, reference_mp)`.
-type PlateauNode = (f64, f64);
-/// One tint-sweep row: `(candidate_target, rms_residual, max_residual)`.
-type SweepRow = (f64, f64, f64);
-
-/// Reproduction hook for `examples/tint_target_sweep.rs` — **not** stable public
-/// API (`#[doc(hidden)]`). Exposes the real-engine tint identity-curve `M'` sweep
-/// behind `TINT_TARGET_MP` so its provenance is reproducible from outside
-/// `#[cfg(test)]` without duplicating (and drifting from) the engine. The realised
-/// curve `M'` is computed by the exact path the `#[cfg(test)]`
-/// `curve_fits_reference_plateau_colorfulness` metric uses (`cusp_attracted_hue` →
-/// `ratio_for_target_mp` → gamut-clamped build → CAM16-UCS `M'`), so a caller's
-/// printed numbers cannot drift from the test.
-///
-/// Returns `(plateau_nodes, sweep)`:
-/// * `plateau_nodes`: `(oklab_l, reference_mp)` for the reference-ramp nodes whose
-///   Oklab lightness lies in `[l_min, l_max]` (the colourfulness plateau).
-/// * `sweep`: `(candidate_target, rms_residual, max_residual)` — over the plateau
-///   of `|realised_curve_mp(l, target) − reference_mp|` (the `M'` of the
-///   **gamut-clamped** curve built to `target`, not the raw target): `rms` is the
-///   RMS (the metric `TINT_TARGET_MP` minimises), `max` is the largest per-node
-///   residual (the quality figure the in-code test bounds at ≤ 1.0).
-///
-/// Value-preserving: reads the engine, changes nothing.
-#[doc(hidden)]
-pub fn tint_target_sweep_repro(
-    targets: &[f64],
-    l_min: f64,
-    l_max: f64,
-) -> (Vec<PlateauNode>, Vec<SweepRow>) {
-    use crate::spaces::oklab::srgb_linear_to_oklab;
-    use crate::spaces::srgb::{hex_from_srgb, srgb_from_hex};
-    // Mirrors the `#[cfg(test)]` REFERENCE_NODES (owner reference ramp; pure
-    // #FFFFFF dropped as achromatic). Bound by the shared metric, not by name.
-    let nodes: [&str; 12] = [
-        "#101012", "#151518", "#212125", "#303136", "#44444B", "#5B5C64", "#787881", "#9698A2",
-        "#B3B5BF", "#CDD0D9", "#E4E7ED", "#F6F8FA",
-    ];
-    let vc = ViewingConditions::srgb();
-    let mut plateau: Vec<PlateauNode> = Vec::new();
-    for hex in nodes {
-        let Ok(rgb) = srgb_from_hex(hex) else {
-            continue;
-        };
-        let l = srgb_linear_to_oklab(rgb)[0];
-        if l < l_min || l > l_max {
-            continue;
-        }
-        let Ok(node) = crate::lcs::LcsColor::from_hex_with_vc(hex, &vc) else {
-            continue;
-        };
-        plateau.push((l, node.mp()));
-    }
-    let curve_mp = |l: f64, target: f64| -> Option<f64> {
-        let h = cusp_attracted_hue(l, NEUTRAL_HUE_DEG, TINT_HUE_STIFFNESS);
-        let r = ratio_for_target_mp(l, h, target, &vc);
-        let rgb = build_curve_color_with_cmax(l, h, r, crate::scale::max_chroma(l, h));
-        crate::lcs::LcsColor::from_hex_with_vc(&hex_from_srgb(rgb), &vc)
-            .ok()
-            .map(|c| c.mp())
-    };
-    let mut sweep: Vec<SweepRow> = Vec::with_capacity(targets.len());
-    for &t in targets {
-        let mut sumsq = 0.0_f64;
-        let mut maxabs = 0.0_f64;
-        let mut n = 0_usize;
-        for &(l, ref_mp) in &plateau {
-            if let Some(cm) = curve_mp(l, t) {
-                let d = (cm - ref_mp).abs();
-                sumsq += d * d;
-                if d > maxabs {
-                    maxabs = d;
-                }
-                n += 1;
-            }
-        }
-        let rms = if n > 0 {
-            (sumsq / n as f64).sqrt()
-        } else {
-            f64::NAN
-        };
-        sweep.push((t, rms, maxabs));
-    }
-    (plateau, sweep)
-}
-
 /// The default, overridable recipe set mapping every `Role` to a [`RoleSpec`].
 ///
 /// [`default`](RoleTable::default) is the calibrated v1 table; override any
@@ -1441,10 +1128,10 @@ impl RoleTable {
     /// any.
     ///
     /// This is the *legal floor* the solver can never drop below for `role` —
-    /// independent of the perceptual target and of the background. Anchored
+    /// independent of the Ys candidate-score target and of the background. Anchored
     /// (text / UI) roles carry their [`TextAnchor`]'s WCAG conformance
     /// ([`Floor::AaText`] → 4.5, [`Floor::AaUi`] → 3.0); every decorative /
-    /// JND / zero role has no legal floor and returns `None`.
+    /// decorative / zero role has no legal floor and returns `None`.
     ///
     /// A runtime that eases between resolved themes uses this to *hold the
     /// floor every frame* during the transition: an intermediate (interpolated)
@@ -1469,8 +1156,8 @@ impl RoleTable {
     /// The default table carries the v2 undertone curve ([`RoleChroma::Curve`]);
     /// this is the seam that overrides it completely — pass
     /// [`RoleChroma::Neutral`] for the achromatic pure-grey behaviour,
-    /// [`RoleChroma::flat_neutral_tint`] for the v1 flat-ratio undertone, or a
-    /// custom [`RoleChroma::Tinted`] / [`RoleChroma::Curve`] for another policy.
+    /// an explicit [`RoleChroma::Tinted`] or [`RoleChroma::Curve`] for another
+    /// test policy.
     /// The override is total: it replaces the policy for *every* role, including
     /// dropping the tint to zero.
     pub fn with_chroma(mut self, chroma: RoleChroma) -> Self {
@@ -1773,24 +1460,17 @@ pub enum Resolved {
     /// when the legal floor squeezed this role's target against its senior's so
     /// the exact hierarchy target could not hold. The role is either demoted to
     /// the smallest still-legal step, copied from a still-legal senior, or kept at
-    /// its own legal colour when hierarchy and floor conflict. No readability
-    /// floor is traded for ordering. See the module docs.
+    /// its own legal colour when hierarchy and floor conflict. No normative
+    /// WCAG floor is traded for ordering. See the module docs.
     ///
     /// `achieved_dj` — честный замер |ΔJ'| на отданном hex для dJ'-ролей
-    /// (симметрия честности с [`GlowResolved::achieved_dj`]); `None` у
-    /// контраст-ролей (их метрика — Lc, он в [`Solved::lc`]).
+    /// (как явно названные [`GlowResolved::halo_achieved_dj`] и
+    /// [`GlowResolved::core_achieved_dj`] для изолированных Glow-слоёв); `None` у
+    /// score-ролей (их переходная Ys candidate-координата — [`Solved::lc`]).
     Color {
         solved: Solved,
         compressed: bool,
         achieved_dj: Option<f64>,
-        /// Цветной лейбл (M1 ch5c) фактически ПОТЕРЯЛ цвет: на решённой
-        /// уровнем-контрактом светлоте красочность `M'` цвета упала ниже порога
-        /// воспринимаемости тинта (`TINT_PERCEPTIBLE_MP_FLOOR`) — у краёв
-        /// LCS-кривой семьи (почти-белый / почти-чёрный) хрома физически → 0.
-        /// Честный флаг, НЕ молчаливая деградация к серому/белому: потребитель
-        /// читает флаг и знает, что оттенок семьи здесь неразличим. `false` у
-        /// нейтральных лейблов и у цветных, сохранивших различимый цвет.
-        hue_vanished: bool,
     },
     /// Полупрозрачная роль лестницы/альфа-аналога: `rgba(tint, α)`, которую
     /// потребитель красит НАПРЯМУЮ (закон лестницы labui — композитит браузер).
@@ -1868,7 +1548,7 @@ pub struct TranslucentResolved {
     alpha: f64,
     /// Солид-композит `rgba(tint, α)` над фоном резолва, `#RRGGBB`.
     composite_hex: String,
-    /// Знаковый перцептивный контраст `Lc` композита против фона резолва.
+    /// Знаковая кандидатная оценка `Lc` по `Ys` для композита и фона резолва.
     composite_lc: f64,
     /// WCAG 2.1 контраст-отношение композита против фона резолва (1–21).
     composite_wcag: f64,
@@ -1895,9 +1575,9 @@ pub struct TranslucentResolved {
     /// Солидная семейная граница (`border-<family>-strong`, M2 ch5c) была
     /// притемнена по кривой семьи до юр. пола UI (3:1), потому что тинт-якорь
     /// семьи не держал 3:1 на этом фоне. Честный флаг минимального легального
-    /// сдвига — оттенок/насыщенность семьи сохранены, изменилась лишь светлота.
-    /// `false` у прямой лестницы и когда семейный солид уже легален (Figma-тинт
-    /// эмитирован без сдвига).
+    /// сдвига по объявленной кривой семьи. Флаг не утверждает перцептивную
+    /// сохранность hue/chroma: истиной представления остаются финальные байты.
+    /// `false` у прямой лестницы и когда семейный солид уже легален.
     floor_coerced: bool,
 }
 
@@ -1917,7 +1597,7 @@ impl TranslucentResolved {
         &self.composite_hex
     }
 
-    /// Знаковый `Lc` композита против фона резолва (метрика фазы 1 AA).
+    /// Знаковая кандидатная оценка `Lc` по `Ys` композита против фона резолва.
     pub fn composite_lc(&self) -> f64 {
         self.composite_lc
     }
@@ -2067,18 +1747,6 @@ impl GlowResolved {
     pub fn core_composite_certificate(&self) -> &crate::glow::GlowCompositeCertificateV1 {
         &self.core_composite_certificate
     }
-    /// Алиас совместимости: прежнее поле измеряло именно halo.
-    pub fn achieved_dj(&self) -> f64 {
-        self.halo_achieved_dj
-    }
-    /// Алиас совместимости: `true` для точного и legacy-исходов недостижимости.
-    pub fn degraded(&self) -> bool {
-        matches!(
-            self.target_status,
-            crate::glow::GlowTargetStatus::ExactNoopUnreachable
-                | crate::glow::GlowTargetStatus::LegacyUnreachable
-        )
-    }
 }
 
 /// Стабильный терминальный исход Glow при отсутствии sound-границы target/max.
@@ -2118,8 +1786,8 @@ impl GlowIndeterminateResolved {
     }
 }
 
-/// Резолв двухслойного материала: тон `T` (семейно-оттеночный опаковый цвет на
-/// целевой светлоте тира) + ВЫВЕДЕННАЯ альфа тинта.
+/// Резолв двухслойного материала: тон `T` на целевой светлоте тира +
+/// ВЫВЕДЕННАЯ альфа тинта.
 ///
 /// Потребитель красит `--lab-bg-material-<tier>-01: oklch(<tone> / α)`
 /// (полупрозрачный слой стекла) и `-02: <tone>` (опаковая база под солид-каноном).
@@ -2132,7 +1800,7 @@ impl GlowIndeterminateResolved {
 /// повторно проверенный верхний кандидат, при котором коммит-полюс поверхности
 /// ([`pole`](Self::pole)) держит [`floor`](Self::floor) по всему коридору
 /// `[чёрный, белый]` ([`crate::material`]). [`worst_contrast`](Self::worst_contrast)
-/// и [`guaranteed`](Self::guaranteed) пересчитываемы потребителем из эмитированных
+/// и [`alpha_status`](Self::alpha_status) пересчитываемы потребителем из эмитированных
 /// `01`/`02`: ядро и официальный `packages/colors/effective-bg.js::compositeOver`
 /// используют один byte-scale affine order `B + α·(T−B)`.
 #[derive(Debug, Clone, PartialEq)]
@@ -2146,7 +1814,6 @@ pub struct MaterialResolved {
     pole: crate::material::Pole,
     achieved_dj: f64,
     tone_compressed: bool,
-    hue_vanished: bool,
     distinct: bool,
 }
 
@@ -2197,11 +1864,6 @@ impl MaterialResolved {
         self.floor
     }
 
-    /// Предикат совместимости поверх [`Self::alpha_status`].
-    pub fn guaranteed(&self) -> bool {
-        self.alpha_status == crate::material::MaterialAlphaStatusV1::Satisfied
-    }
-
     /// Коммит-полюс поверхности: полюс максимального контраста на тоне (белый на
     /// тёмном, чёрный на светлом).
     pub fn pole(&self) -> crate::material::Pole {
@@ -2221,13 +1883,6 @@ impl MaterialResolved {
         self.tone_compressed
     }
 
-    /// Оттенок семьи физически выродился у края гамута (near-white/near-black):
-    /// красочность тона ниже порога воспринимаемости. Честный флаг — не
-    /// молчаливая деградация к серому. `false` у нейтрали и различимых оттенков.
-    pub fn hue_vanished(&self) -> bool {
-        self.hue_vanished
-    }
-
     /// Солид-канон (тон) отличим от фона резолва на 8-битной сетке дисплея. `false`
     /// — тон ≈ фон, поверхность является пиксельным no-op на этом фоне.
     pub fn distinct(&self) -> bool {
@@ -2243,7 +1898,6 @@ impl Resolved {
             solved,
             compressed: false,
             achieved_dj: Option::None,
-            hue_vanished: false,
         }
     }
 
@@ -2253,20 +1907,6 @@ impl Resolved {
             Resolved::Color { solved, .. } => Some(solved),
             _ => None,
         }
-    }
-
-    /// Цветной лейбл потерял различимый цвет на решённой светлоте (M1 ch5c):
-    /// `M'` цвета ниже `TINT_PERCEPTIBLE_MP_FLOOR`. `false` для нейтральных и
-    /// сохранивших цвет ролей, для zero и unreachable. Честный сигнал вырождения
-    /// оттенка — не молчаливая деградация.
-    pub fn hue_vanished(&self) -> bool {
-        matches!(
-            self,
-            Resolved::Color {
-                hue_vanished: true,
-                ..
-            }
-        )
     }
 
     /// Whether this role produced an explicitly non-exact outcome:
@@ -2289,8 +1929,8 @@ impl Resolved {
         )
     }
 
-    /// The signed perceptual contrast `Lc` of a resolved colour, if any. The
-    /// zero token reports `0.0`; an unreachable role reports `None`; a
+    /// The signed Ys candidate score `Lc` of a resolved colour, if any. This is not
+    /// an LPC/readability verdict. The zero token reports `0.0`; an unreachable role reports `None`; a
     /// [`Translucent`](Resolved::Translucent) role reports its **composite's** `Lc` (a
     /// semi-transparent role's contrast is that of its composite, not its tint).
     pub fn lc(&self) -> Option<f64> {
@@ -2496,9 +2136,9 @@ fn resolve_spec_in(
     let contract = match *spec {
         RoleSpec::Zero => return Ok(Resolved::None),
         RoleSpec::Anchor(anchor) => {
-            // Цветной лейбл (M1 ch5c): тот же контракт уровня, решённый в чистом
-            // оттенке семьи. Нейтральный (`hue == None`) идёт прежним путём
-            // байт-в-байт.
+            // Явный source-slot держит тот же контракт уровня; exact-gray остаётся
+            // нейтральным, остальные байты несут направление. `None` берёт policy
+            // таблицы.
             if let Some(hue_tint) = anchor.hue() {
                 return resolve_hued_anchor(bg, anchor, hue_tint, vc, ctx);
             }
@@ -2516,7 +2156,6 @@ fn resolve_spec_in(
                     solved: d.solved,
                     compressed: d.degraded,
                     achieved_dj: Some(d.achieved_dj),
-                    hue_vanished: false,
                 }
             });
         }
@@ -2681,52 +2320,43 @@ fn resolve_spec_in(
             return resolve_rgba_inverted(of.for_vc(vc), alpha, bg, vc);
         }
         RoleSpec::Material { hue, tone, floor } => {
-            // Материал (whitepaper §3.7): тон-база — семейно-оттеночная опаковая поверхность на
-            // целевом |ΔJ'| тира (dj-anchor-солвером), тинт — тот же тон с
-            // ВЫВЕДЕННОЙ альфой. Нейтральный материал (`hue == None`) держит подтон
-            // ТАБЛИЦЫ (тот же 286°, что остальные нейтральные эмиссии); семейный
-            // подставляет оттенок якоря в кривую подтона.
+            // Материал (whitepaper, «Точечные композиции»): тон-база — опаковая
+            // поверхность на целевом |ΔJ'| тира, тинт — тот же тон с выведенной
+            // альфой. `None` берёт policy таблицы; явный source классифицируется
+            // по точным sRGB8-байтам до вывода chroma-плана.
             let tone_chroma = match hue {
                 None => chroma,
                 Some(hue_tint) => {
-                    let hue_deg = crate::accent::oklab_hue_of(
-                        &crate::spaces::srgb::hex_from_srgb_encoded(hue_tint.for_vc(vc)),
-                    );
-                    // Оттенок семьи подставляется в НЕСУЩИЙ ОТТЕНОК подтон таблицы,
-                    // красочность (`target_mp`/`hue_stiffness` / `ratio`) — от неё же.
-                    match chroma {
-                        RoleChroma::Curve {
-                            target_mp,
-                            hue_stiffness,
-                            ..
-                        } => RoleChroma::Curve {
-                            canonical_hue_deg: hue_deg,
-                            target_mp,
-                            hue_stiffness,
-                        },
-                        RoleChroma::Tinted { ratio, .. } => RoleChroma::Tinted { hue_deg, ratio },
-                        // Ахроматичный (или будущий) подтон не несёт оттенка —
-                        // семейный материал на нём невыразим. Честный отказ, НЕ тихая
-                        // подмена нейтральным тоном при флаге `family_hued=true`.
-                        RoleChroma::Neutral => {
-                            return Err(SolveFailure::InvalidInput(
-                                "семейный материал требует хроматического подтона \
-                                 таблицы (curve/tinted), у таблицы — ахроматический"
-                                    .to_string(),
-                            ));
+                    match crate::spaces::oklab::hue_of_srgb8(hue_tint.srgb8_for_vc(vc)) {
+                        crate::spaces::oklab::OklabHue::Achromatic => RoleChroma::Neutral,
+                        crate::spaces::oklab::OklabHue::Chromatic { degrees: hue_deg } => {
+                            // Оттенок источника подставляется в несущий оттенок
+                            // подтона таблицы; его colorfulness-policy остаётся
+                            // общей для всех клиентских ID.
+                            match chroma {
+                                RoleChroma::Curve {
+                                    target_mp,
+                                    hue_stiffness,
+                                    ..
+                                } => RoleChroma::Curve {
+                                    canonical_hue_deg: hue_deg,
+                                    target_mp,
+                                    hue_stiffness,
+                                },
+                                RoleChroma::Tinted { ratio, .. } => {
+                                    RoleChroma::Tinted { hue_deg, ratio }
+                                }
+                                RoleChroma::Neutral => {
+                                    return Err(SolveFailure::InvalidInput(
+                                        RoleSpec::INCOMPATIBLE_CHROMA_REASON.to_owned(),
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
             };
-            return resolve_material(
-                bg,
-                tone.for_vc(vc),
-                floor,
-                ctx.polarity,
-                tone_chroma,
-                hue.is_some(),
-                vc,
-            );
+            return resolve_material(bg, tone.for_vc(vc), floor, ctx.polarity, tone_chroma, vc);
         }
     };
 
@@ -2753,6 +2383,27 @@ fn encoded_rgb_valid(encoded: [f64; 3]) -> bool {
     encoded
         .iter()
         .all(|channel| channel.is_finite() && (0.0..=1.0).contains(channel))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceHuePlan {
+    hue: Hue,
+    chroma: ChromaPolicy,
+}
+
+/// Build the maximal-chroma plan only after exact sRGB8 hue classification.
+/// Equal channel bytes remain neutral; Oklab matrix noise is never amplified.
+fn source_hue_plan(source: Srgb8) -> SourceHuePlan {
+    match crate::spaces::oklab::hue_of_srgb8(source) {
+        crate::spaces::oklab::OklabHue::Achromatic => SourceHuePlan {
+            hue: Hue::deg(0.0),
+            chroma: ChromaPolicy::Neutral,
+        },
+        crate::spaces::oklab::OklabHue::Chromatic { degrees } => SourceHuePlan {
+            hue: Hue::deg(degrees),
+            chroma: ChromaPolicy::Relative(1.0),
+        },
+    }
 }
 
 fn role_alpha_valid(alpha: f64) -> bool {
@@ -2808,28 +2459,23 @@ fn resolve_rgba_direct(
     finish_rgba(tint_q, alpha, bg_encoded, vc, false, false)
 }
 
-/// Резолв ЦВЕТНОГО текст/UI-лейбла (ратификация ch5c, M1).
+/// Резолв text/UI-якоря с явным источником цветовой идентичности.
 ///
-/// Цветной лейбл держит ТОТ ЖЕ Lc-контракт уровня, что нейтральный
+/// Якорь держит тот же Lc-контракт уровня, что путь без явного source
 /// ([`ResolveContext::anchored_contract`] — доля·max ахроматической полярности +
 /// тот же WCAG-пол): одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ, потому что
 /// цель — абсолютный Lc нейтральной ступени, а НЕ доля от максимума-в-оттенке
 /// (последнее снова оказалось бы слабее нейтрали). Отличие от нейтрального пути —
-/// физика цвета:
+/// физика источника:
 ///
-/// * оттенок = ИДЕНТИЧНОСТЬ семьи (Oklab-угол пер-темного тинта-якоря; Figma-
-///   оттенок сохранён, светлота выводится);
-/// * лексикографический порядок «красоты» — (1) контракт читаемости фиксирует
-///   светлоту на LCS-кривой семьи, (2) на ней берётся МАКСИМУМ чистого цвета
-///   (стена гамута, [`ChromaPolicy::Relative`]`(1.0)`): каждая точка кривой
-///   красива, хрома выведена, не оптимизируется отдельной метрикой.
+/// * равные эмитируемые sRGB8-каналы не несут hue и используют neutral plan;
+/// * неравные каналы задают Oklab-угол, а [`ChromaPolicy::Relative`]`(1.0)`
+///   выбирает физический максимум доступной хромы на решённой светлоте.
 ///
-/// Честные исходы (не молчаливая деградация):
-/// * `compressed` — юр. пол уровня перекрыл перцептивную цель
-///   ([`Solved::floor_override`]): контракт занят ближайшим легальным, не точным;
-/// * `hue_vanished` — на решённой светлоте красочность `M'` цвета упала ниже
-///   `TINT_PERCEPTIBLE_MP_FLOOR`: у краёв кривой (почти-белый/чёрный) хрома
-///   физически → 0, лейбл фактически потерял цвет — объявлено флагом.
+/// `compressed` сообщает, что юр. пол уровня перекрыл перцептивную цель
+/// ([`Solved::floor_override`]): контракт занят ближайшим легальным, не точным.
+/// Сохранность воспринимаемой hue-идентичности из одних выходных байтов не
+/// выводится; финальный hex остаётся единственной истиной представления.
 fn resolve_hued_anchor(
     bg: &BgInput,
     anchor: TextAnchor,
@@ -2837,10 +2483,10 @@ fn resolve_hued_anchor(
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> PendingResolution {
-    resolve_hued_anchor_from_encoded_source(bg, anchor, hue_tint.for_vc(vc), vc, ctx)
+    resolve_hued_anchor_from_srgb8(bg, anchor, hue_tint.srgb8_for_vc(vc), vc, ctx)
 }
 
-/// Тот же цветной резолв, но источник оттенка — уже выбранный (по теме)
+/// Тот же резолв, но источник идентичности уже выбран по теме как
 /// кодированный стимул, а не [`LadderTint`]-пейлоад.
 ///
 /// Отдельный вход нужен appearance-графу (#307): foreground occurrence несёт
@@ -2850,34 +2496,24 @@ fn resolve_hued_anchor(
 /// Для квантованного источника оба пути дают один hex по построению
 /// ([`crate::spaces::srgb::hex_from_srgb_encoded`] округляет так же, как
 /// квантизация эмиссии), что закреплено differential-тестами миграции.
-fn resolve_hued_anchor_from_encoded_source(
+fn resolve_hued_anchor_from_srgb8(
     bg: &BgInput,
     anchor: TextAnchor,
-    source_encoded: [f64; 3],
+    source: Srgb8,
     vc: &ViewingConditions,
     ctx: &ResolveContext,
 ) -> PendingResolution {
     let contract = ctx.anchored_contract(anchor)?;
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
-    let hue_deg =
-        crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(source_encoded));
-    match solve::solve_in(
-        bg,
-        contract,
-        Hue::deg(hue_deg),
-        ChromaPolicy::Relative(1.0),
-        vc,
-        interval,
-    ) {
+    let plan = source_hue_plan(source);
+    match solve::solve_in(bg, contract, plan.hue, plan.chroma, vc, interval) {
         Ok(solved) => {
-            let hue_vanished = solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR;
             // Тот же смысл, что у нейтрали: пол перекрыл перцептивную цель.
             let compressed = solved.floor_override();
             Ok(Resolved::Color {
                 solved,
                 compressed,
                 achieved_dj: Option::None,
-                hue_vanished,
             })
         }
         Err(reason) => Err(reason),
@@ -2888,11 +2524,11 @@ fn resolve_hued_anchor_from_encoded_source(
 /// (ратификация ch5c, M2).
 ///
 /// Солид семьи (α=1) обязан держать 3:1 (WCAG 1.4.11 для границ контролов). Если
-/// композит тинта уже чист (≥ пола) — эмитится ТОЧНЫЙ семейный солид (Figma-
-/// идентичность цела, диффа эмиссии нет). Иначе — МИНИМАЛЬНЫЙ ЛЕГАЛЬНЫЙ СДВИГ по
-/// кривой семьи: контракт целит естественный Lc тинта, а юр. пол притемняет цвет
-/// РОВНО до легальности; оттенок и насыщенность семьи сохранены (доля хромы
-/// якоря на решённой светлоте). Сдвиг объявлен флагом
+/// композит тинта уже держит пол — эмитится точный исходный солид. Иначе —
+/// минимальный легальный сдвиг по объявленной кривой семьи: контракт целит
+/// естественный Lc тинта, а пол меняет lightness-кандидат ровно до легальности.
+/// Гамут и квантование относятся к финальным байтам; перцептивная идентичность
+/// отсюда не выводится. Сдвиг объявлен флагом
 /// [`TranslucentResolved::floor_coerced`] — не молчаливая деградация. Эмиссия
 /// остаётся полупрозрачной формой (`rgba`, α=1), как у любой семейной границы,
 /// чтобы форма роли не расходилась между легальными и притемнёнными характерами.
@@ -2925,8 +2561,6 @@ fn resolve_solid_with_ui_floor(
     }
     // Нелегально: минимальный сдвиг по кривой семьи до пола.
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
-    let tint_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint_q);
-    let hue_deg = crate::accent::oklab_hue_of(&tint_hex);
     // Естественный знаковый Lc якоря и доля его хромы на собственной светлоте —
     // чтобы сдвиг сохранил насыщенность семьи, а не выехал на стену гамута.
     let tint_linear = [
@@ -2940,25 +2574,31 @@ fn resolve_solid_with_ui_floor(
         crate::spaces::srgb::srgb_gamma_inv(bg_encoded[2]),
     ];
     let (anchor_lc, _) = measure_contrast(bg_linear, tint_linear, vc);
-    let lab = crate::spaces::oklab::srgb_linear_to_oklab(tint_linear);
-    let anchor_chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
-    let c_max = scale::max_chroma(lab[0], hue_deg);
-    let chroma_ratio = if c_max > f64::EPSILON {
-        (anchor_chroma / c_max).clamp(0.0, 1.0)
-    } else {
-        0.0
+    let source = crate::alpha::encoded_to_srgb8(tint_q, "solid tint")
+        .map(Srgb8::new)
+        .map_err(|reason| {
+            SolveFailure::InternalInvariant(format!(
+                "validated solid hue source could not be quantised: {reason}"
+            ))
+        })?;
+    let (hue, chroma_policy) = match crate::spaces::oklab::hue_of_srgb8(source) {
+        crate::spaces::oklab::OklabHue::Achromatic => (Hue::deg(0.0), ChromaPolicy::Neutral),
+        crate::spaces::oklab::OklabHue::Chromatic { degrees } => {
+            let lab = crate::spaces::oklab::srgb_linear_to_oklab(tint_linear);
+            let anchor_chroma = lab[1].hypot(lab[2]);
+            let c_max = scale::max_chroma(lab[0], degrees);
+            let chroma_ratio = if c_max > f64::EPSILON {
+                (anchor_chroma / c_max).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (Hue::deg(degrees), ChromaPolicy::Relative(chroma_ratio))
+        }
     };
     // Контракт целит естественный Lc; пол уровня (`floor`) притемняет ровно до
     // легальности — минимальный сдвиг по построению solve.
     let contract = solve::Contract::text(anchor_lc).with_conformance(floor);
-    match solve::solve_in(
-        bg,
-        contract,
-        Hue::deg(hue_deg),
-        ChromaPolicy::Relative(chroma_ratio),
-        vc,
-        interval,
-    ) {
+    match solve::solve_in(bg, contract, hue, chroma_policy, vc, interval) {
         Ok(solved) => match crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) {
             Ok(shifted) => finish_rgba(shifted, 1.0, bg_encoded, vc, false, true),
             Err(reason) => Err(SolveFailure::InternalInvariant(format!(
@@ -3051,7 +2691,7 @@ fn pair_label_opacity_input_error(error: &str) -> PendingResolution {
 /// отдельно сдвинутая солид-эмиссия; никакого ребра `PairFill → PairLabel` нет.
 ///
 /// Оттеночный foreground решается текущим
-/// [`resolve_hued_anchor_from_encoded_source`] НА ЭТОЙ ПОВЕРХНОСТИ. Appearance-
+/// [`resolve_hued_anchor_from_srgb8`] НА ЭТОЙ ПОВЕРХНОСТИ. Appearance-
 /// граф не присваивает этому последующему решению доказательный статус: он
 /// возвращает только source/against/backdrop. Дифференциальный тест закрепляет
 /// подключение и результаты миграции на проверяемом домене, но оба пути
@@ -3154,8 +2794,13 @@ pub(crate) fn resolve_pair_label(
     // Identity-ребро occurrence: foreground решается из ВОЗВРАЩЁННОГО
     // источника (byte → byte/255 точно), а не повторного чтения `tint` —
     // иначе объявленное ребро идентичности было бы декоративным.
-    let source_encoded = occurrence.source.map(|channel| f64::from(channel) / 255.0);
-    resolve_hued_anchor_from_encoded_source(&surface_bg, anchor, source_encoded, vc, &surface_ctx)
+    resolve_hued_anchor_from_srgb8(
+        &surface_bg,
+        anchor,
+        Srgb8::new(occurrence.source),
+        vc,
+        &surface_ctx,
+    )
 }
 
 /// Замороженная ручная реализация `resolve_pair_label` ДО миграции #307 —
@@ -3234,7 +2879,7 @@ fn resolve_rgba_inverted(
             }
         };
     let (tint_srgb8, actual_alpha) = analog;
-    let tint_q = tint_srgb8.map(|channel| f64::from(channel) / 255.0);
+    let tint_q = Srgb8::new(tint_srgb8).encoded();
     // Резолвер возвращает тот же binary64 либо строго больший точный пол.
     let alpha_coerced = actual_alpha > requested_alpha;
     finish_rgba(tint_q, actual_alpha, bg_encoded, vc, alpha_coerced, false)
@@ -3243,8 +2888,8 @@ fn resolve_rgba_inverted(
 /// Собрать [`Resolved::Translucent`] из эмитируемых тинта и альфы: вывести их
 /// encoded-sRGB8 reference-композит и замерить его против фона резолва.
 ///
-/// Контраст меряется в тех же метриках, что и у солид-роли: перцептивный `Lc`
-/// на линейном свете ([`measure_contrast`]) и WCAG на кодированном дисплее — так
+/// Числа вычисляются в тех же координатах, что и у solid-роли: Ys candidate
+/// score ([`measure_contrast`]) и WCAG на кодированном дисплее — так
 /// полупрозрачная роль сопоставима с solved-ролью на фазе 1 AA.
 fn finish_rgba(
     tint_encoded: [f64; 3],
@@ -3275,7 +2920,7 @@ fn finish_rgba(
             )));
         }
     };
-    // Линейный свет из кодированного (per-channel gamma-декод) для перцептивного Lc.
+    // Линейный свет из кодированного (per-channel gamma-декод) для Ys candidate score.
     let decode = |e: [f64; 3]| {
         [
             srgb_gamma_inv(e[0]),
@@ -3303,22 +2948,20 @@ fn finish_rgba(
     }))
 }
 
-/// Резолв двухслойного материала (whitepaper §3.7): тон-база `02` на целевом |ΔJ'| в оттенке
-/// семьи + тинт `01` (тот же тон) с ВЫВЕДЕННОЙ альфой.
+/// Резолв двухслойного материала (whitepaper, «Точечные композиции»): тон-база
+/// `02` на целевом |ΔJ'| + тинт `01` (тот же тон) с ВЫВЕДЕННОЙ альфой.
 ///
 /// Тон строится тем же dj-anchor-солвером, что декоративные |ΔJ'|-роли
 /// ([`resolve_dj`]), поэтому различимость поверхности от фона наследуется его
 /// физикой. Альфа тинта выбирается [`crate::material::solve_material_alpha_hex`]
 /// как проходящий верхний кандидат, при котором композит тона над худшим фоном
-/// коридора `[чёрный, белый]` держит пол. `family_hued` — оттенок
-/// семьи присутствует (флаг вырождения оттенка применим); у нейтрали `false`.
+/// коридора `[чёрный, белый]` держит пол.
 fn resolve_material(
     bg: &BgInput,
     tone_dj: f64,
     floor: Floor,
     polarity: Polarity,
     chroma: RoleChroma,
-    family_hued: bool,
     vc: &ViewingConditions,
 ) -> PendingResolution {
     use crate::spaces::srgb::hex_from_srgb_encoded;
@@ -3332,12 +2975,9 @@ fn resolve_material(
             ));
         }
     };
-    // Тон-база 02: семейно-оттеночная опаковая поверхность на целевом |ΔJ'|.
+    // Тон-база 02: опаковая поверхность на целевом |ΔJ'|.
     let dj = resolve_dj(bg, tone_dj, polarity, chroma, vc)?;
     let tone_hex = dj.solved.hex().to_string();
-    // Вырождение оттенка семьи у края гамута — только у семейных материалов;
-    // нейтраль ахроматична намеренно, не «выродилась».
-    let hue_vanished = family_hued && dj.solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR;
     // α: повторно проверенный проходящий верхний кандидат над коридором
     // [чёрный, белый].
     let m = match crate::material::solve_material_alpha_hex(&tone_hex, floor_ratio) {
@@ -3362,7 +3002,6 @@ fn resolve_material(
         pole: m.pole(),
         achieved_dj: dj.achieved_dj,
         tone_compressed: dj.degraded,
-        hue_vanished,
         distinct,
     }))
 }
@@ -3500,7 +3139,7 @@ pub fn resolve_set(
     vc: &ViewingConditions,
 ) -> Vec<(Role, Resolved)> {
     // The former O(1) grey (`greyfast`) and chromatic-memo (`chromafast`) fast
-    // paths were deleted with ADR-0001 PR-c: they only ever accelerated this
+    // paths were deleted under ADR-0001: they only ever accelerated this
     // built-in `resolve_set`, which is no longer on any production path (the
     // agnostic engine ships only the string-keyed `resolve_named_set`). A cold
     // named grey resolve was measured at ~1.7 ms (resolve-only) / ~3.1 ms
@@ -3546,16 +3185,8 @@ pub(crate) fn resolve_set_live(
 /// each entry is the same [`RoleSpec`] the built-in path solves, and the same
 /// [`RoleChroma`] undertone applies to the whole table.
 ///
-/// Text ladders are compressed honestly by `enforce_named_text_hierarchy`, the
-/// string-keyed analogue of `enforce_text_hierarchy`: a ladder is read off the
-/// config (a declaration-order run of strictly-descending [`Anchor`](RoleSpec::Anchor)
-/// roles), not off role names, so an arbitrary consumer table degrades a squeezed
-/// mid-grey exactly as the built-in table does instead of silently collapsing two
-/// labels onto one colour. A junior floor always remains hard; when it conflicts
-/// with the requested order, the legal junior survives with `compressed = true`.
-/// The pass is a no-op wherever every rung is individually reachable — which is
-/// why the labui fixture stays byte-identical on the golden grid (see the
-/// byte-identity test).
+/// Entries are independent opaque nodes. Declaration order never implies a
+/// hierarchy or dependency; relations must arrive as explicit typed graph edges.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
@@ -3642,20 +3273,38 @@ impl RoleSpec {
         }
     }
 
-    /// Проверить меж-полевой контракт рецепта и общетабличной политики хромы.
-    /// Family-hued материал требует политику, способную нести hue: принять его
-    /// под ахроматической политикой значило бы отложить невалидный вход до
-    /// runtime-резолва.
-    fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
+    /// Каноническая причина единственного конфликта рецепта с chroma-policy.
+    pub(crate) const INCOMPATIBLE_CHROMA_REASON: &'static str =
+        "chromatic source needs curve/tinted policy";
+
+    /// Проверить и собственный домен рецепта, и его связь с chroma-policy.
+    ///
+    /// Публичный конструктор таблицы принимает сырые `RoleSpec`, поэтому обязан
+    /// выполнить оба слоя проверки до появления исполняемого состояния.
+    pub(crate) fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
         self.validate_domain()?;
-        if matches!(self, RoleSpec::Material { hue: Some(_), .. })
-            && matches!(chroma, RoleChroma::Neutral)
-        {
-            return Err(
-                "family-hued material requires a chromatic table policy (curve/tinted)".into(),
-            );
+        if !self.is_chroma_compatible(chroma) {
+            return Err(Self::INCOMPATIBLE_CHROMA_REASON.to_owned());
         }
         Ok(())
+    }
+
+    /// Проверить только меж-полевой контракт после отдельной domain-validation.
+    ///
+    /// Хроматический material-источник требует политики, способной сохранить
+    /// направление; ахроматический источник допустим и при neutral-policy.
+    /// Две validation-границы используют один предикат. Явный inline удерживает
+    /// его без отдельного тела в канонической WASM-сборке; backend-дрифт ловит
+    /// исполняемый size-ратчет, а не это пояснение.
+    #[inline(always)]
+    pub(crate) fn is_chroma_compatible(&self, chroma: RoleChroma) -> bool {
+        let material_has_chromatic_source = match self {
+            RoleSpec::Material {
+                hue: Some(source), ..
+            } => !source.all_modes_achromatic(),
+            _ => false,
+        };
+        !matches!(chroma, RoleChroma::Neutral) || !material_has_chromatic_source
     }
 
     /// WCAG-пол этой спеки — свойство контракта, не резолва: текст/UI-якорь
@@ -3779,9 +3428,8 @@ impl NamedRoleTable {
 /// `Ok` сохраняет порядок объявления и может нести только допущенные
 /// локальные `unreachable | unresolved`. Rejected-вход, неподдержанная capability
 /// or internal drift returns [`ResolveSetError`] for the entire call; no partial
-/// вектор не наблюдаем. Объявленные текстовые лестницы сжимаются на месте
-/// только после того, как их индивидуальные результаты прошли ту же границу
-/// допуска.
+/// вектор не наблюдаем. В отсутствие объявленных graph edges роли не влияют на
+/// физический результат соседних деклараций.
 pub fn resolve_named_set(
     bg: &BgInput,
     table: &NamedRoleTable,
@@ -3797,16 +3445,11 @@ pub fn resolve_named_set(
         let resolved = admit_resolution(resolve_spec_in(bg, spec, table.chroma, vc, &ctx))?;
         set.push((name.clone(), resolved));
     }
-    // Keep every declared text ladder non-strict-but-honest, the string-keyed
-    // analogue of the built-in path's hierarchy pass (see
-    // [`enforce_named_text_hierarchy`]). A no-op wherever each ladder is already
-    // individually reachable (the labui fixture on the golden grid).
-    enforce_named_text_hierarchy(&mut set, table, bg, vc, &ctx)?;
     Ok(set)
 }
 
-/// Measure the perceptual contrast (`Lc`) and WCAG 2.1 ratio a foreground colour
-/// achieves against a background — the cheap **recheck** primitive.
+/// Measure the frozen candidate `Lc` score and WCAG 2.1 ratio a foreground
+/// colour achieves against a background — the cheap **recheck** primitive.
 ///
 /// Both colours are **linear** sRGB; the result is `(lc, wcag_ratio)`. С
 /// активации ADR-0003 (глава #64) замер полностью display-доменный — ни
@@ -3825,8 +3468,8 @@ pub fn measure_contrast(
     fg_linear: [f64; 3],
     _vc: &ViewingConditions,
 ) -> (f64, f64) {
-    // Обе метрики — перцептивный `Lc` и легальный WCAG — читают ОДНУ люминансу
-    // квантованного display-цвета (ось читаемости в `Ys`, ADR-0003), exactly as
+    // Candidate `Lc` и легальный WCAG читают ОДНУ люминансу
+    // квантованного display-цвета (candidate score в `Ys`, ADR-0003), exactly as
     // the solver measures it (`finish` → `quantised_display`), so the recheck
     // reproduces the solver's reported `lc`/`wcag_ratio` bit-for-bit.
     let fg_disp = crate::solve::quantised_display(fg_linear);
@@ -3854,7 +3497,7 @@ pub fn measure_contrast(
 /// a freshly-resolved set re-checks to its own reported contrasts. Returns `Err`
 /// if any hex is invalid (only `#RRGGBB` or bare `RRGGBB` is accepted).
 /// One colour's recheck ingredient from its hex: the WCAG relative luminance
-/// `rl` of its display bytes — с активации ADR-0003 перцептивный `Lc` и
+/// `rl` of its display bytes — с активации ADR-0003 candidate `Lc` и
 /// легальный WCAG читают ОДНУ и ту же люминансу, бывшая пара `(y_hk, rl)`
 /// схлопнулась в один скаляр, а recheck стал VC-независимым (display-домен).
 ///
@@ -3896,7 +3539,7 @@ pub fn recheck_against(
 /// rechecks the SAME foreground set against N backdrop samples (a gradient /
 /// image); each foreground's `rl_fg` is computed ONCE and reused for every
 /// sample — с активации ADR-0003 форвард подешевел до одной
-/// `relative_luminance` display-байтов (CAM16 ушёл с оси читаемости), но
+/// `relative_luminance` display-байтов (CAM16 не входит в score), но
 /// хойстинг сохранён: он несёт контракт byte-identity двух входов, не только
 /// экономию.
 ///
@@ -3935,35 +3578,33 @@ pub fn recheck_against_multi(
 /// Copying the senior is valid only when that exact emitted colour also clears
 /// the junior's floor. Otherwise the junior's already-legal solve is retained and
 /// merely marked non-exact: hierarchy is a soft relation, readability is not.
-fn hierarchy_fallback(
-    senior: Option<(Solved, bool)>,
-    junior: &Resolved,
-    junior_floor: Floor,
-) -> Resolved {
-    let Some((senior_solved, senior_hue_vanished)) = senior else {
-        return junior.clone();
+#[cfg(test)]
+fn hierarchy_fallback(senior: Option<Solved>, junior: &Resolved, junior_floor: Floor) -> Resolved {
+    let retain_junior = || match junior {
+        Resolved::Color {
+            solved,
+            achieved_dj,
+            ..
+        } => Resolved::Color {
+            solved: solved.clone(),
+            compressed: true,
+            achieved_dj: *achieved_dj,
+        },
+        other => other.clone(),
+    };
+    let Some(senior_solved) = senior else {
+        return retain_junior();
     };
     let senior_is_legal = junior_floor
         .min_ratio()
         .is_none_or(|minimum| senior_solved.wcag_ratio() >= minimum);
 
     match junior {
-        Resolved::Color {
-            solved,
-            achieved_dj,
-            hue_vanished,
-            ..
-        } if !senior_is_legal => Resolved::Color {
-            solved: solved.clone(),
-            compressed: true,
-            achieved_dj: *achieved_dj,
-            hue_vanished: *hue_vanished,
-        },
+        Resolved::Color { .. } if !senior_is_legal => retain_junior(),
         Resolved::Color { .. } => Resolved::Color {
             solved: senior_solved,
             compressed: true,
             achieved_dj: Option::None,
-            hue_vanished: senior_hue_vanished,
         },
         other => other.clone(),
     }
@@ -4028,157 +3669,19 @@ fn enforce_text_hierarchy(
                 solved,
                 compressed: true,
                 achieved_dj: Option::None,
-                hue_vanished: false,
             },
             // No ordered step: copy a legal senior or preserve the legal junior.
-            (Ok(None), senior, junior) => {
-                hierarchy_fallback(senior.map(|solved| (solved, false)), junior, floor)
-            }
+            (Ok(None), senior, junior) => hierarchy_fallback(senior, junior, floor),
             (Err(reason), _, _) => admit_resolution(Err(reason))?,
         };
     }
     Ok(())
 }
 
-/// The string-keyed analogue of [`enforce_text_hierarchy`]: keep every declared
-/// text ladder in an arbitrary [`NamedRoleTable`] non-strict-but-honest, so the
-/// agnostic path degrades a squeezed hierarchy exactly as the built-in one does
-/// (V1 found the named path had *no* such pass — a general config on a near-AA
-/// mid-grey could silently collapse two labels onto one colour).
-///
-/// **Which roles form a ladder is read off the config, not off role names.** A
-/// ladder is a maximal run of *consecutive* [`Anchor`](RoleSpec::Anchor) roles, in
-/// declaration order, whose fractions strictly descend — the shape a text
-/// hierarchy has by construction (`primary > secondary > …`). A non-anchor role or
-/// a fraction that does not descend ends the run, so `icon` (a lone anchor whose
-/// fraction sits above the label below it) and `border-strong` are singleton runs
-/// the pass never touches — matching the built-in `TEXT_HIERARCHY` exactly for the
-/// labui fixture. Coloured (hued) ladders demote in their family hue
-/// ([`demote_below_hued`]); neutral ladders in the undertone ([`demote_below`]).
-///
-/// Помимо demote/copy/retain у прохода есть четвёртый честный исход: если сам
-/// демоушен-солв юниора завершился категорией Unresolved (bounded search не
-/// взял бюджет), юниор становится [`Resolved::Failure`] — громкий локальный
-/// отказ вместо тихого выбора одного из спорных цветов. Unreachable демоушена
-/// означает лишь «шаг вниз недоступен» и деградирует в copy/retain, а
-/// Rejected/Unsupported от валидированного core-запроса — контрактный дрейф
-/// ([`SolveFailure::InternalInvariant`]), закрывающий весь набор.
-fn enforce_named_text_hierarchy(
-    set: &mut [(String, Resolved)],
-    table: &NamedRoleTable,
-    bg: &BgInput,
-    vc: &ViewingConditions,
-    ctx: &ResolveContext,
-) -> Result<(), ResolveSetError> {
-    let entries = table.entries();
-    let chroma = table.chroma();
-
-    // Group declaration-order anchors into strictly-descending runs (the hierarchy
-    // shape). Runs of length < 2 have no senior/junior pair and are dropped.
-    let mut runs: Vec<Vec<usize>> = Vec::new();
-    let mut cur: Vec<usize> = Vec::new();
-    let mut prev_fraction = f64::INFINITY;
-    let flush = |cur: &mut Vec<usize>, runs: &mut Vec<Vec<usize>>| {
-        if cur.len() >= 2 {
-            runs.push(std::mem::take(cur));
-        } else {
-            cur.clear();
-        }
-    };
-    for (i, (_, spec)) in entries.iter().enumerate() {
-        match spec {
-            RoleSpec::Anchor(a) if a.fraction() < prev_fraction => {
-                cur.push(i);
-                prev_fraction = a.fraction();
-            }
-            RoleSpec::Anchor(a) => {
-                // An anchor that does not descend starts a fresh ladder at itself.
-                flush(&mut cur, &mut runs);
-                cur.push(i);
-                prev_fraction = a.fraction();
-            }
-            _ => {
-                flush(&mut cur, &mut runs);
-                prev_fraction = f64::INFINITY;
-            }
-        }
-    }
-    flush(&mut cur, &mut runs);
-
-    for run in &runs {
-        for pair in run.windows(2) {
-            let (senior_idx, junior_idx) = (pair[0], pair[1]);
-            let Some(senior_mag) = set[senior_idx].1.solved().map(|s| s.lc().abs()) else {
-                continue; // senior unreachable — nothing to compress against
-            };
-            let Some(junior_mag) = set[junior_idx].1.solved().map(|s| s.lc().abs()) else {
-                continue; // junior unreachable — surfaced honestly already
-            };
-            if junior_mag + STRICT_STEP <= senior_mag {
-                continue; // strictly weaker already — hierarchy holds here
-            }
-
-            // The junior's own conformance governs how far down it may still be legal.
-            let RoleSpec::Anchor(anchor) = entries[junior_idx].1 else {
-                continue;
-            };
-            let floor = anchor.conformance();
-            let demoted = match anchor.hue() {
-                Some(hue_tint) => demote_below_hued(senior_mag, hue_tint, floor, bg, vc, ctx),
-                None => demote_below(senior_mag, ctx, chroma, floor, bg, vc),
-            };
-            // A hued junior that keeps colour reports `hue_vanished` the same way
-            // `resolve_hued_anchor` does; a neutral junior never vanishes a hue.
-            let vanished = |solved: &Solved| {
-                anchor.hue().is_some() && solved.color().mp() < TINT_PERCEPTIBLE_MP_FLOOR
-            };
-            let senior_solved = set[senior_idx].1.solved().cloned().map(|solved| {
-                let hue_vanished = vanished(&solved);
-                (solved, hue_vanished)
-            });
-            set[junior_idx].1 = match (demoted, senior_solved, &set[junior_idx].1) {
-                // A distinguishable, still-legal step below the senior.
-                (Ok(Some(solved)), _, _) => {
-                    let hue_vanished = vanished(&solved);
-                    Resolved::Color {
-                        solved,
-                        compressed: true,
-                        achieved_dj: Option::None,
-                        hue_vanished,
-                    }
-                }
-                // No ordered step: copy a legal senior or preserve the legal junior.
-                (Ok(None), senior, junior) => hierarchy_fallback(senior, junior, floor),
-                (Err(reason), _, _) => admit_resolution(Err(reason))?,
-            };
-        }
-    }
-    Ok(())
-}
-
-/// The smallest separation in `|Lc|` that counts as "strictly weaker". Note:
-/// near the extremes a single quantisation step can be worth only ~0.2–0.3 Lc,
-/// so a demotion may need several grid steps to clear it — and when even the
-/// laxest legal target cannot, the junior is set equal to its senior instead.
-/// The 0.5 threshold separates real visual distinction from float noise.
-///
-/// Терминал **(e) DESIGN-CHOICE** (НЕ (c)): `STRICT_STEP` — прямое слагаемое
-/// цели демоции (`target = senior_mag − STRICT_STEP`), поэтому его точное
-/// значение НЕПРЕРЫВНО и напрямую сдвигает эмитируемый цвет junior-роли —
-/// доказательства интервал-нечувствительности нет. Лок
-/// `strict_step_sits_just_above_typical_grid_step` лишь характеризует, что
-/// 0.5 сидит чуть выше типичного (медианного ≈0.44) Lc-шага 8-бит серой
-/// сетки — обоснование ГРАНИЦЫ квантования, не доказательство immaterial-сти.
-///
-/// Легальный диапазон (Волна 2): `[~0.44, ~7.85)` — снизу типичный (медианный)
-/// Lc-шаг кванта серых (ниже него «строго слабее» = float-шум, лок), сверху
-/// обрыв loClip мягкого клампа APCA (жёсткий разрыв — единственный шаг такого
-/// размера). 0.5 сидит у нижней границы: минимальный шаг, надёжно превышающий
-/// шум сетки. Протокол «объективизации»: замерить перцептивный порог
-/// различимости соседних Lc-ступеней (JND по контрасту на серой рампе) — тогда
-/// `STRICT_STEP = max(этот JND, медианный шаг сетки)`; измерение стало бы
-/// кандидатом-выводом (замер → сравнение → решение), не обязательным экспериментом.
-// SSOT-TRACKED — minimum Lc separation for visual distinction vs float noise, терминал (e) design-choice (не interval-insensitive — прямо параметризует выход; диапазон [~0.44,~7.85)), см. docs/empirical-inventory.md.
+/// Frozen threshold of the test-only built-in `RoleTable` oracle. Production
+/// named roles do not infer hierarchy from declaration order; this value carries
+/// no product or perceptual claim and disappears with that legacy oracle.
+#[cfg(test)]
 const STRICT_STEP: f64 = 0.5;
 
 /// Try to solve a junior text role at the strongest target that is still
@@ -4186,6 +3689,7 @@ const STRICT_STEP: f64 = 0.5;
 /// clears `floor`. Returns the demoted colour, or `None` if even the laxest
 /// distinguishable target cannot stay legal — in which case the caller keeps the
 /// floored colour and only flags the compression.
+#[cfg(test)]
 fn demote_below(
     senior_mag: f64,
     ctx: &ResolveContext,
@@ -4210,40 +3714,9 @@ fn demote_below(
     )
 }
 
-/// Hue-preserving sibling of [`demote_below`] for a **coloured** label (M1): the
-/// junior is re-solved just under its senior *in the family hue*, not in the
-/// neutral undertone — a neutral demote would strip the family colour the whole
-/// point of a hued label is to carry. Mirrors [`resolve_hued_anchor`]'s solve
-/// (`Hue::deg(family)`, `ChromaPolicy::Relative(1.0)`) but at the reduced target.
-fn demote_below_hued(
-    senior_mag: f64,
-    hue_tint: crate::ladder::LadderTint,
-    floor: Floor,
-    bg: &BgInput,
-    vc: &ViewingConditions,
-    ctx: &ResolveContext,
-) -> Result<Option<Solved>, SolveFailure> {
-    let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
-    let contract = Contract::text(target).with_conformance(floor);
-    let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
-    let hue_deg = crate::accent::oklab_hue_of(&crate::spaces::srgb::hex_from_srgb_encoded(
-        hue_tint.for_vc(vc),
-    ));
-    demotion_outcome(
-        solve::solve_in(
-            bg,
-            contract,
-            Hue::deg(hue_deg),
-            ChromaPolicy::Relative(1.0),
-            vc,
-            interval,
-        ),
-        senior_mag,
-    )
-}
-
 /// Interpret one hierarchy-demotion solve without conflating proof, bounded
 /// uncertainty, invalid generated state, and internal drift.
+#[cfg(test)]
 fn demotion_outcome(
     outcome: Result<Solved, SolveFailure>,
     senior_mag: f64,
@@ -4615,56 +4088,6 @@ mod tests {
         };
         let contract = zero.anchored_contract(anchor).unwrap();
         assert_eq!(contract.floor(), 0.0, "zero is a valid physical ceiling");
-    }
-
-    #[test]
-    fn hierarchy_demotion_never_turns_an_internal_failure_into_a_colour() {
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let vc = ViewingConditions::srgb();
-        let solved = crate::solve::solve(
-            bg.clone(),
-            Contract::text(60.0).with_conformance(Floor::None),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            crate::solve::Gamut::Srgb,
-        )
-        .unwrap();
-        let table = NamedRoleTable::new(
-            vec![
-                (
-                    "senior".into(),
-                    RoleSpec::Anchor(TextAnchor::new(1.0, Floor::AaText).unwrap()),
-                ),
-                (
-                    "junior".into(),
-                    RoleSpec::Anchor(TextAnchor::new(0.5, Floor::AaText).unwrap()),
-                ),
-            ],
-            Vec::new(),
-            RoleChroma::Neutral,
-        )
-        .unwrap();
-        let mut set = vec![
-            ("senior".into(), Resolved::color(solved.clone())),
-            ("junior".into(), Resolved::color(solved)),
-        ];
-        let failure = SolveFailure::InternalInvariant("injected interval drift".into());
-        let ctx = ResolveContext {
-            polarity: Polarity::DarkOnLight,
-            max_contrast: Ok(100.0),
-            interval: Err(failure.clone()),
-            high_contrast: false,
-        };
-
-        let before = set.clone();
-        let error = enforce_named_text_hierarchy(&mut set, &table, &bg, &vc, &ctx)
-            .expect_err("internal hierarchy drift must close the whole set");
-
-        assert_eq!(error.kind(), ResolveSetErrorKind::Internal);
-        assert_eq!(error.code(), None);
-        assert_eq!(error.reason(), &failure);
-        assert_eq!(set, before, "failed hierarchy admission must be atomic");
     }
 
     #[test]
@@ -5503,6 +4926,14 @@ mod tests {
                 ratio: 0.5,
             },
             RoleChroma::Tinted {
+                hue_deg: -f64::EPSILON,
+                ratio: 0.5,
+            },
+            RoleChroma::Tinted {
+                hue_deg: 360.0,
+                ratio: 0.5,
+            },
+            RoleChroma::Tinted {
                 hue_deg: 0.0,
                 ratio: -f64::EPSILON,
             },
@@ -5512,6 +4943,21 @@ mod tests {
             },
             RoleChroma::Curve {
                 canonical_hue_deg: f64::INFINITY,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: -f64::EPSILON,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 360.0,
+                target_mp: 1.0,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: 1.0e308,
                 target_mp: 1.0,
                 hue_stiffness: 0.0,
             },
@@ -5556,9 +5002,18 @@ mod tests {
                 hue_deg: 359.999,
                 ratio: 1.0,
             },
+            RoleChroma::Tinted {
+                hue_deg: f64::from_bits(360.0_f64.to_bits() - 1),
+                ratio: 1.0,
+            },
             RoleChroma::Curve {
                 canonical_hue_deg: 0.0,
                 target_mp: f64::MIN_POSITIVE,
+                hue_stiffness: 0.0,
+            },
+            RoleChroma::Curve {
+                canonical_hue_deg: f64::from_bits(360.0_f64.to_bits() - 1),
+                target_mp: 1.0,
                 hue_stiffness: 0.0,
             },
         ] {
@@ -5586,10 +5041,8 @@ mod tests {
         //
         // TINT_TARGET_MP = 6.1 sits (essentially) at the constant that minimises the
         // root-mean-square residual of curve M' against the reference's plateau nodes.
-        // The reproducible sweep (`examples/tint_target_sweep.rs`, real engine) measures
-        // RMS-argmin t* = 6.01 and, at 6.1, RMS 0.358 / max per-node 0.649 M' on the
-        // current engine — a broad, flat minimum across 6.0-6.2. (An earlier note read
-        // "residual ≈ 0.90 M'"; that figure is superseded by this measurement.)
+        // The in-crate test deliberately owns both fixture and engine path: no
+        // public reproduction hook may leak these client nodes into Core.
         let vc = ViewingConditions::srgb();
         let mut max_resid = 0.0_f64;
         for hex in REFERENCE_NODES {
@@ -5704,11 +5157,9 @@ mod tests {
     }
 
     #[test]
-    fn hierarchy_never_trades_a_junior_readability_floor_for_order() {
-        // A stronger floor on the junior can make the hierarchy and readability
-        // constraints incompatible on a particular background. Hierarchy is a
-        // presentation preference; the declared readability floor is a hard
-        // constraint and must survive the compression pass.
+    fn declaration_order_does_not_override_an_independent_floor() {
+        // Adjacent opaque IDs carry no hierarchy relation. Each declared floor is
+        // solved independently until an explicit graph edge says otherwise.
         let table = NamedRoleTable::new(
             vec![
                 (
@@ -5738,7 +5189,10 @@ mod tests {
             panic!("junior must remain a typed colour outcome, got {junior:?}");
         };
 
-        assert!(*compressed, "the hierarchy conflict must be explicit");
+        assert!(
+            !compressed,
+            "declaration order must not invent a hierarchy or compression outcome"
+        );
         assert!(
             solved.wcag_ratio() >= crate::wcag::AA_TEXT_RATIO,
             "junior floor was lost: {} at {}",
@@ -6407,10 +5861,10 @@ mod tests {
         };
         let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), vc)
             .unwrap()
-            .jp;
+            .jp();
         let jp_bg = crate::lcs::LcsColor::from_hex_with_vc(bg_hex, vc)
             .unwrap()
-            .jp;
+            .jp();
         (jp_fg - jp_bg).abs()
     }
 
@@ -6452,9 +5906,8 @@ mod tests {
 
     #[test]
     fn dj_magnitude_selects_per_theme() {
-        // The same role under the dark-theme VC must hold a larger perceived
-        // separation than under the light VC — the per-VC anchor selection is real,
-        // not a constant. (The owner's dark anchors run ~2.2x the light ones.)
+        // The same role selects its independently authored dark offset under the
+        // dark VC, proving this is a per-VC pair rather than one shared constant.
         let table = RoleTable::default();
         let light = ViewingConditions::srgb();
         let dark = ViewingConditions::dim_surround();
@@ -6775,7 +6228,7 @@ mod tests {
                 let bg = BgInput::solid(&bg_hex).unwrap();
                 let jp_bg = crate::lcs::LcsColor::from_hex_with_vc(&bg_hex, &vc)
                     .unwrap()
-                    .jp;
+                    .jp();
                 let set = resolve_set(&bg, &table, &vc);
                 let no_silent_clip = set.iter().all(|(role, r)| match r {
                     // Свечение не участвует в dJ'-клип-инварианте (не контраст-роль).
@@ -6784,7 +6237,7 @@ mod tests {
                         if matches!(table.spec(*role), RoleSpec::DecorativeDj { .. }) {
                             let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
                                 .unwrap()
-                                .jp;
+                                .jp();
                             (jp_fg - jp_bg).abs() >= 1.0
                         } else {
                             solved.lc().abs() >= 1.0
@@ -6940,10 +6393,10 @@ mod tests {
             .unwrap_or_else(|| panic!("{} did not resolve to a colour", role.key()));
         let jp_fg = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), vc)
             .unwrap()
-            .jp;
+            .jp();
         let jp_bg = crate::lcs::LcsColor::from_hex_with_vc(bg_hex, vc)
             .unwrap()
-            .jp;
+            .jp();
         (jp_fg - jp_bg).abs()
     }
 
@@ -7498,18 +6951,18 @@ mod tests {
                     let mp = crate::lcs::LcsColor::from_hex_with_vc(solved.hex(), &vc)
                         .unwrap()
                         .mp();
+                    let emitted = Srgb8::new(
+                        crate::srgb8::hex_bytes(solved.hex())
+                            .expect("solver output is canonical sRGB8"),
+                    );
+                    assert!(
+                        !emitted.is_achromatic(),
+                        "{bg_hex} {}: curve emission collapsed to exact grey",
+                        r.key()
+                    );
                     (r, l, mp)
                 })
                 .collect();
-
-            // The tint is genuinely present — never a flat zero.
-            for (role, _l, mp) in &mps {
-                assert!(
-                    *mp > TINT_PERCEPTIBLE_MP_FLOOR - 1e-6,
-                    "{bg_hex} {}: M' {mp} fell below the perceptibility floor",
-                    role.key()
-                );
-            }
 
             // Constant colourfulness: every role whose lightness leaves the gamut
             // room to host the target sits within a tight band of it. Roles pinned
@@ -7573,14 +7026,14 @@ mod tests {
     }
 
     #[test]
-    fn v1_flat_tint_remains_a_valid_opt_in_policy() {
-        // The v1 flat-ratio undertone is a decision the owner can still opt into:
-        // `RoleChroma::Tinted { hue, ratio }` must keep resolving roles around its
-        // fixed hue at a flat fraction of the gamut maximum — lightness-independent,
-        // unchanged by the v2 curve default. This pins the additive-API promise: the
-        // existing variant stays valid even though the default moved to `Curve`.
+    fn explicit_client_tinted_policy_remains_supported() {
+        // These literals are a test client's declared policy, not a Core default.
+        // The generic variant must keep the supplied fixed hue and gamut ratio.
         let vc = ViewingConditions::srgb();
-        let flat = RoleTable::default().with_chroma(RoleChroma::flat_neutral_tint());
+        let flat = RoleTable::default().with_chroma(RoleChroma::Tinted {
+            hue_deg: 286.0,
+            ratio: 0.10,
+        });
         let bg = BgInput::solid("#FFFFFF").unwrap();
         // Secondary under the flat policy lands cool, around the canonical hue, and
         // carries a flat ratio of the gamut max — its chroma is `RATIO * max_chroma`.
@@ -7593,7 +7046,7 @@ mod tests {
         let l = crate::spaces::oklab::srgb_linear_to_oklab(
             crate::spaces::srgb::srgb_from_hex(solved.hex()).unwrap(),
         )[0];
-        let expected = NEUTRAL_TINT_RATIO * scale::max_chroma(l, NEUTRAL_HUE_DEG);
+        let expected = 0.10 * scale::max_chroma(l, 286.0);
         assert!(
             (chroma - expected).abs() <= 2e-3,
             "flat tint chroma {chroma:.4} should be ratio*max_chroma {expected:.4}"
@@ -7966,17 +7419,17 @@ mod tests {
                     Ok(Resolved::Color { solved, .. }) => solved,
                     other => panic!("{other:?}"),
                 };
-                // Where perception governs, the tinted and grey roles target the
+                // Both tinted and grey roles target the
                 // same Lc and must land within the 1-Lc quantisation budget. Where
                 // the WCAG floor drives the result (an AA-floored role), the legal
-                // gate — not the perceptual target — sets the colour, and the tint
+                // gate — not the candidate-score target — sets the colour, and the tint
                 // can land on a neighbouring on-grid point that still clears the
                 // floor; there the only honest invariant is that both clear it.
                 let floor_driven = t.floor_override() || g.floor_override();
                 if !floor_driven {
                     assert!(
                         (t.lc().abs() - g.lc().abs()).abs() <= 1.0,
-                        "{bg_hex} {}: tint moved a perceptual target (tinted {} vs grey {})",
+                        "{bg_hex} {}: tint moved a candidate-score target (tinted {} vs grey {})",
                         role.key(),
                         t.lc(),
                         g.lc()
@@ -8002,8 +7455,7 @@ mod tests {
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod derivator_locks {
-    use super::{CUSP_HALF_WINDOW_DEG, LIGHTNESS_SETTLE, STRICT_STEP, TINT_PERCEPTIBLE_MP_FLOOR};
-    use crate::lcs::LcsColor;
+    use super::{CUSP_HALF_WINDOW_DEG, LIGHTNESS_SETTLE, STRICT_STEP};
 
     fn grey(i: u8) -> String {
         format!("#{i:02X}{i:02X}{i:02X}")
@@ -8042,9 +7494,11 @@ mod derivator_locks {
     #[test]
     fn strict_step_sits_just_above_typical_grid_step() {
         let mut steps: Vec<f64> = Vec::new();
-        let mut prev = crate::lpc::lpc(&grey(0), "#FFFFFF");
+        let mut prev = crate::lpc::apparent_contrast_candidate_hex_for_test(&grey(0), "#FFFFFF")
+            .expect("generated grey is valid");
         for i in 1u8..=255 {
-            let lc = crate::lpc::lpc(&grey(i), "#FFFFFF");
+            let lc = crate::lpc::apparent_contrast_candidate_hex_for_test(&grey(i), "#FFFFFF")
+                .expect("generated grey is valid");
             steps.push((lc - prev).abs());
             prev = lc;
         }
@@ -8065,31 +7519,6 @@ mod derivator_locks {
         assert!(
             (7.0..8.7).contains(&max_step) && (max_step - 7.85).abs() < 0.5,
             "max Lc-шаг {max_step:.4} (обрыв loClip, не шаг сетки) вне замеренной полосы ~7.85"
-        );
-    }
-
-    /// Потолок ахроматического M'-шума CAM16 (серые #000..#FFF, дефолтный VC)
-    /// отслеживается порогом TINT_PERCEPTIBLE_MP_FLOOR (1.5). ЗАМЕР: максимум —
-    /// у белого, M'≈1.53; порог 1.5 стоит вплотную ПОД ним. Полоса характеризации
-    /// широкая, брекетит замер, без подгонки под 1.5.
-    #[test]
-    fn tint_floor_tracks_achromatic_mp_noise_ceiling() {
-        let mut max_mp = 0.0f64;
-        for i in 0u8..=255 {
-            let mp = LcsColor::from_hex(&grey(i)).expect("valid grey hex").mp();
-            max_mp = max_mp.max(mp);
-        }
-        assert!(
-            (1.4..1.7).contains(&max_mp),
-            "потолок M'-шума серых {max_mp:.4} вне замеренного диапазона [1.4, 1.7)"
-        );
-        // Направленный ассерт (не |Δ|): порог стоит вплотную ПОД потолком шума —
-        // floor < max_mp И зазор < 0.15. Инверсия направления (floor над потолком)
-        // ломает тест.
-        assert!(
-            TINT_PERCEPTIBLE_MP_FLOOR < max_mp && max_mp - TINT_PERCEPTIBLE_MP_FLOOR < 0.15,
-            "TINT_PERCEPTIBLE_MP_FLOOR={TINT_PERCEPTIBLE_MP_FLOOR} должен стоять чуть ПОД потолком \
-             M'-шума {max_mp:.4} (floor < max_mp и max_mp − floor < 0.15)"
         );
     }
 
@@ -8139,11 +7568,7 @@ mod derivator_locks {
 // решение. Продакшн НЕ трогается.
 #[cfg(test)]
 mod exposure_locks {
-    use super::{
-        DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, QUANT_GUARD, STRICT_STEP,
-        TINT_PERCEPTIBLE_MP_FLOOR,
-    };
-    use crate::exposure_support::{band_exposure, mp_srgb};
+    use super::{DECORATIVE_FLOOR_MIN, IC_DECORATIVE_FLOOR_MIN, QUANT_GUARD, STRICT_STEP};
 
     /// DERIVED-лок (issue #44): `DECORATIVE_FLOOR_MIN == MODEL_LC_FLOOR + QUANT_GUARD`,
     /// и модельный пол строго ниже декоративного (guard положителен). Рантайм-зеркало
@@ -8190,29 +7615,18 @@ mod exposure_locks {
         );
     }
 
-    /// EXPOSURE TINT_PERCEPTIBLE_MP_FLOOR: доля гаммы с M' в +-50% полосе вокруг
-    /// порога перцептируемости тинта — цвета, чья классификация «ощущаемый тон vs
-    /// мёртвая серость» зависит от точного значения.
-    #[test]
-    fn exposure_tint_perceptible_mp_floor() {
-        let (lo, hi) = (
-            0.5 * TINT_PERCEPTIBLE_MP_FLOOR,
-            1.5 * TINT_PERCEPTIBLE_MP_FLOOR,
-        );
-        let (grid_pct, labui) = band_exposure(|c| mp_srgb(c, false), lo, hi);
-        eprintln!(
-            "EXPOSURE TINT_PERCEPTIBLE_MP_FLOOR band=[{lo:.2},{hi:.2}] grid_flip={grid_pct:.2}% labui_in_zone={} {:?}",
-            labui.len(),
-            labui
-        );
-    }
-
     /// EXPOSURE STRICT_STEP: доля соседних Lc-шагов 8-бит серой сетки в +-20% полосе
     /// вокруг границы квантования — где точный STRICT_STEP решает «на сетке / нет».
     #[test]
     fn exposure_strict_step() {
         let greys: Vec<f64> = (0u16..=255)
-            .map(|i| crate::lpc::lpc(&format!("#{i:02X}{i:02X}{i:02X}", i = i as u8), "#FFFFFF"))
+            .map(|i| {
+                crate::lpc::apparent_contrast_candidate_hex_for_test(
+                    &format!("#{i:02X}{i:02X}{i:02X}", i = i as u8),
+                    "#FFFFFF",
+                )
+                .expect("generated grey is valid")
+            })
             .collect();
         let (lo, hi) = (0.8 * STRICT_STEP, 1.2 * STRICT_STEP);
         let (mut hits, mut tot) = (0usize, 0usize);
@@ -8263,10 +7677,7 @@ mod exposure_locks {
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod wave2_e_locks {
-    use super::{
-        NEUTRAL_HUE_DEG, NEUTRAL_TINT_RATIO, TINT_HUE_STIFFNESS, build_curve_color,
-        cusp_attracted_hue,
-    };
+    use super::{NEUTRAL_HUE_DEG, TINT_HUE_STIFFNESS, build_curve_color, cusp_attracted_hue};
     use crate::spaces::oklab::srgb_linear_to_oklab;
     use crate::spaces::srgb::quantise_srgb;
 
@@ -8343,17 +7754,18 @@ mod wave2_e_locks {
     #[test]
     fn neutral_hue_emits_byte_invariant_across_measured_family_spread() {
         assert_eq!(NEUTRAL_HUE_DEG, 286.0, "измеренный якорь нейтрали");
+        // Explicit test-client policy used only to make hue sensitivity visible.
+        let ratio = 0.10;
         let ls = [0.15_f64, 0.31, 0.48, 0.58, 0.68, 0.78, 0.86];
         let mut max_spread = 0.0_f64;
         let mut max_wide = 0.0_f64;
         for &l in &ls {
-            let base = build_curve_color(l, NEUTRAL_HUE_DEG, NEUTRAL_TINT_RATIO);
+            let base = build_curve_color(l, NEUTRAL_HUE_DEG, ratio);
             for h in [285.78_f64, 285.90, 286.01] {
-                max_spread =
-                    max_spread.max(de_ok(base, build_curve_color(l, h, NEUTRAL_TINT_RATIO)));
+                max_spread = max_spread.max(de_ok(base, build_curve_color(l, h, ratio)));
             }
             for h in [266.0_f64, 276.0, 296.0, 306.0] {
-                max_wide = max_wide.max(de_ok(base, build_curve_color(l, h, NEUTRAL_TINT_RATIO)));
+                max_wide = max_wide.max(de_ok(base, build_curve_color(l, h, ratio)));
             }
         }
         assert!(
@@ -8366,30 +7778,6 @@ mod wave2_e_locks {
         );
         eprintln!(
             "WAVE2 NEUTRAL_HUE_DEG (e): ΔE_ok[measured spread]={max_spread:.6} ΔE_ok[±20°]={max_wide:.4}"
-        );
-    }
-
-    /// (e) DESIGN-CHOICE sensitivity-лок для `NEUTRAL_TINT_RATIO`. Свип легальной
-    /// полосы [0, 0.20] по светлотам шкалы: непрерывный МАТЕРИАЛЬНЫЙ дрейф (ratio
-    /// прямо масштабирует хрому), значит (e), не (c). КУСАЕТСЯ: value-пин `== 0.10`
-    /// падает на любой мутации.
-    #[test]
-    fn neutral_tint_ratio_sensitivity_is_bounded() {
-        assert_eq!(NEUTRAL_TINT_RATIO, 0.10, "коэффициент подтона");
-        let ls = [0.15_f64, 0.31, 0.48, 0.58, 0.68, 0.78, 0.86];
-        let mut max_de = 0.0_f64;
-        for &l in &ls {
-            let base = build_curve_color(l, NEUTRAL_HUE_DEG, NEUTRAL_TINT_RATIO);
-            for r in [0.0_f64, 0.05, 0.08, 0.12, 0.15, 0.20] {
-                max_de = max_de.max(de_ok(base, build_curve_color(l, NEUTRAL_HUE_DEG, r)));
-            }
-        }
-        assert!(
-            (0.015..0.05).contains(&max_de),
-            "max ΔE_ok по [0,0.2] {max_de:.4} вне замеренного [0.015, 0.05) — ручка материальна (e)"
-        );
-        eprintln!(
-            "WAVE2 NEUTRAL_TINT_RATIO (e): max ΔE_ok[0,0.2]={max_de:.4} (материальна → (e), не (c))"
         );
     }
 }

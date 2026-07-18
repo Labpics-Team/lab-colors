@@ -8,12 +8,10 @@
 //!
 //! Sources:
 //! * W3C WCAG 2.1 §1.4.3 / §1.4.11 — relative luminance & contrast ratio.
-//! * Myndex APCA SAPC-8 `0.0.98G-4g` (`apca-w3`) — LPC curve endpoints.
 //! * Li et al. 2017, DOI 10.1002/col.22131 / CIE 248:2022 — CIECAM16 viewing
 //!   conditions derivation.
 //! * Björn Ottosson (2020) / W3C CSS Color 4 — Oklab white & primary hues.
 
-use labcolors_core::lpc::{lpc, lpc_with_vc};
 // `spaces` is `pub(crate)`; these transforms are re-exported at the crate root.
 use labcolors_core::{ViewingConditions, oklch_css_from_hex, oklch_from_hex, recheck_against};
 
@@ -77,42 +75,6 @@ fn wcag_luminance_coefficients_isolated() {
             "{hex} on black: ratio {ratio} isolates weight {k} (expected {want})"
         );
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LPC curve — Myndex APCA SAPC-8 published endpoints (via `apca-w3`).
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Black and white are the luminance endpoints (Y_hk = 0 and 1), where the H-K
-/// layer cannot shift the result, so LPC reproduces the published APCA extremes:
-/// BoW ≈ 106.04 and WoB ≈ −107.88 (`apca-w3` v0.1.9, SAPC-8 `0.0.98G-4g`).
-#[test]
-fn lpc_endpoints_match_apca_via_public_api() {
-    let bow = lpc("#000000", "#FFFFFF");
-    assert!(
-        (bow - 106.04).abs() < 0.1,
-        "BoW must be ≈106.04 (apca-w3), got {bow}"
-    );
-    let wob = lpc("#FFFFFF", "#000000");
-    assert!(
-        (wob + 107.88).abs() < 0.1,
-        "WoB must be ≈−107.88 (apca-w3), got {wob}"
-    );
-    // Sign contract: dark-on-light positive, light-on-dark negative.
-    assert!(bow > 0.0 && wob < 0.0, "polarity signs: {bow} / {wob}");
-}
-
-/// Helmholtz–Kohlrausch, observable end-to-end: a saturated blue's perceived
-/// lightness is lifted, so its LPC on white lands BELOW a same-luminance grey
-/// would (published H-K effect; here ≈68.7, well under the ~76 a grey of equal
-/// luminance reaches).
-#[test]
-fn hk_lifts_saturated_blue_via_public_lpc() {
-    let blue = lpc("#0000FF", "#FFFFFF");
-    assert!(
-        (60.0..75.0).contains(&blue),
-        "H-K-lifted blue-on-white LPC must sit in (60, 75), got {blue}"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,42 +179,34 @@ fn cam16_viewing_conditions_derivation() {
     let vc = ViewingConditions::srgb();
     // Independent transcription of the SAME published formulas: agreement is to
     // float round-off, so any real divergence in `vc.rs` is caught at 1e-9.
-    assert!((vc.fl - fl).abs() < 1e-9, "F_L: {} vs {fl}", vc.fl);
-    assert!((vc.n - n).abs() < 1e-12, "n: {} vs {n}", vc.n);
-    assert!((vc.z - z).abs() < 1e-12, "z: {} vs {z}", vc.z);
-    assert!((vc.nbb - nbb).abs() < 1e-9, "N_bb: {} vs {nbb}", vc.nbb);
-    assert!((vc.aw - aw).abs() < 1e-6, "A_w: {} vs {aw}", vc.aw);
-    for (i, (got, want)) in vc.rgb_d.iter().zip(rgb_d).enumerate() {
+    assert!((vc.fl() - fl).abs() < 1e-9, "F_L: {} vs {fl}", vc.fl());
+    assert!((vc.n() - n).abs() < 1e-12, "n: {} vs {n}", vc.n());
+    assert!((vc.z() - z).abs() < 1e-12, "z: {} vs {z}", vc.z());
+    assert!((vc.nbb() - nbb).abs() < 1e-9, "N_bb: {} vs {nbb}", vc.nbb());
+    assert!((vc.aw() - aw).abs() < 1e-6, "A_w: {} vs {aw}", vc.aw());
+    for (i, (got, want)) in vc.rgb_d().into_iter().zip(rgb_d).enumerate() {
         assert!((got - want).abs() < 1e-9, "RGB_D[{i}]: {got} vs {want}");
     }
 
     // Published surround triplet (average): F = 1.0, c = 0.69, N_c = 1.0
     // (CIE 159:2004 Table 1, carried into CIE 248:2022).
     assert!(
-        (vc.c - 0.69).abs() < 1e-12,
+        (vc.c() - 0.69).abs() < 1e-12,
         "average surround c must be 0.69"
     );
     assert!(
-        (vc.nc - 1.0).abs() < 1e-12,
+        (vc.nc() - 1.0).abs() < 1e-12,
         "average surround N_c must be 1.0"
     );
     // Dim surround (dark-theme) triplet: F = 0.9, c = 0.59, N_c = 0.9.
     let dim = ViewingConditions::dim_surround();
-    assert!((dim.c - 0.59).abs() < 1e-12, "dim surround c must be 0.59");
-    assert!((dim.nc - 0.9).abs() < 1e-12, "dim surround N_c must be 0.9");
-}
-
-/// LPC under dim surround differs from average surround for a chromatic pair —
-/// the Bartleson–Breneman compensation a dark theme must apply (CIE 248:2022
-/// surround triplet). Sanity that the published dim parameters actually change
-/// the perceptual result, not just the struct fields.
-#[test]
-fn dim_surround_shifts_lpc() {
-    let srgb = lpc_with_vc("#00FF00", "#FFFFFF", &ViewingConditions::srgb());
-    let dim = lpc_with_vc("#00FF00", "#FFFFFF", &ViewingConditions::dim_surround());
     assert!(
-        (srgb - dim).abs() > 1.0,
-        "dim VC must shift Lc: srgb={srgb} dim={dim}"
+        (dim.c() - 0.59).abs() < 1e-12,
+        "dim surround c must be 0.59"
+    );
+    assert!(
+        (dim.nc() - 0.9).abs() < 1e-12,
+        "dim surround N_c must be 0.9"
     );
 }
 

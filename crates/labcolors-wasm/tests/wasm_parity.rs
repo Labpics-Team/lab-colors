@@ -2,7 +2,7 @@
 //! `resolve_named_set` it wraps, role for role, внутри одного wasm runtime.
 //!
 //! Run with `wasm-pack test --headless --chrome` (D1 default from the chapter).
-//! The engine is agnostic (ADR-0001 PR-c): it has no built-in table, so parity
+//! The engine is agnostic (ADR-0001): it has no built-in table, so parity
 //! is proven against a LOADED config (the frozen labui passport). Expectations
 //! are GENERATED from the core's own `resolve_named_set` inside the same wasm
 //! runtime — never hand-typed — so this test cannot drift from the engine and
@@ -86,12 +86,6 @@ fn get_num(obj: &JsValue, key: &str) -> f64 {
     get_obj(obj, key)
         .as_f64()
         .unwrap_or_else(|| panic!("{key} must be a number"))
-}
-
-fn get_bool(obj: &JsValue, key: &str) -> bool {
-    get_obj(obj, key)
-        .as_bool()
-        .unwrap_or_else(|| panic!("{key} must be a boolean"))
 }
 
 /// Read the `message` of a rejected `JsError`. A `JsError` crosses as a JS
@@ -389,18 +383,8 @@ fn assert_parity(passport: &str, bg_hex: &str, theme: &str) {
                     get_num(&entry, "coreAchievedDj").to_bits(),
                     g.core_achieved_dj().to_bits()
                 );
-                assert_eq!(
-                    get_num(&entry, "achievedDj").to_bits(),
-                    g.halo_achieved_dj().to_bits()
-                );
-                assert_eq!(
-                    get_bool(&entry, "degraded"),
-                    matches!(
-                        g.target_status(),
-                        labcolors_core::GlowTargetStatus::ExactNoopUnreachable
-                            | labcolors_core::GlowTargetStatus::LegacyUnreachable
-                    )
-                );
+                assert!(!js_sys::Reflect::has(&entry, &JsValue::from_str("achievedDj")).unwrap());
+                assert!(!js_sys::Reflect::has(&entry, &JsValue::from_str("degraded")).unwrap());
             }
             // `Resolved` is `#[non_exhaustive]`: a future core variant must be
             // re-accounted here loudly, never masked.
@@ -744,10 +728,9 @@ fn config_boundary_two_configs_diverge() {
       "brand": {"light": "#7C3AED", "dark": "#8B5CF6", "light_ic": "#5B21B6", "dark_ic": "#A78BFA"},
       "neutral": {
         "anchors": {"light": "#FFFFFF", "mid": "#7A7A82", "dark": "#17171A"},
-        "tint": {"ratio": 0.1, "target_mp": 6.1, "hue_stiffness": 9.0}
+        "tint": {"target_mp": 6.1, "hue_stiffness": 9.0}
       },
       "palette": [],
-      "sentiments": {"categories": [], "hardness": 5.0, "chroma_fraction": 0.88},
       "themes": [{"name": "light", "preset": "srgb"}],
       "roles": [
         {"name": "accent-fill", "recipe": {"kind": "ladder", "source": {"kind": "brand"}, "position": "fill-primary"}},

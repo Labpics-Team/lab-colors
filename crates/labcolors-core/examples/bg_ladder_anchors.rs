@@ -38,7 +38,7 @@ fn main() {
     for (label, hex) in light {
         let jp = LcsColor::from_hex_with_vc(hex, &vc_light)
             .expect("hex-литерал константный и валиден")
-            .jp;
+            .jp();
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:48} {hex}  J' = {jp:7.3}  ΔJ' от пред. = {step:+.3}");
         prev = Some(jp);
@@ -49,7 +49,7 @@ fn main() {
     for (label, hex) in dark {
         let jp = LcsColor::from_hex_with_vc(hex, &vc_dark)
             .expect("hex-литерал константный и валиден")
-            .jp;
+            .jp();
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:48} {hex}  J' = {jp:7.3}  ΔJ' от пред. = {step:+.3}");
         prev = Some(jp);
@@ -59,18 +59,22 @@ fn main() {
         let (label, hex) = elevated;
         let jp = LcsColor::from_hex_with_vc(hex, &vc_dark)
             .expect("hex-литерал константный и валиден")
-            .jp;
+            .jp();
         println!("{label:48} {hex}  J' = {jp:7.3}");
     }
 
-    // Пары СОБСТВЕННОГО Figma-якоря labui (colors-stub/figma-reference.css) —
-    // по ADR-0001 конфиг labui меряет свои опоры, HIG выше — методологический референс.
+    // Клиентская фикстура из коммита `Labpics-Team/labui`
+    // `7cb2dc6de832c660bc3ff43472f2e6ab296d085b`,
+    // `packages/colors-stub/figma-reference.css`
+    // (blob `fda578b0b9dd52ac0c38927f7b47a803188fb012`).
+    // Литералы ниже характеризуют этот immutable snapshot, а не defaults Core.
+    // Значения HIG выше служат только методологическим ориентиром.
     println!("\n— labui-якоря, светлая —");
     let mut prev: Option<f64> = None;
     for (label, hex) in [("bg-primary", "#FFFFFF"), ("bg-secondary", "#F7F8FA")] {
         let jp = LcsColor::from_hex_with_vc(hex, &vc_light)
             .expect("hex-литерал константный и валиден")
-            .jp;
+            .jp();
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:12} {hex}  J' = {jp:7.3}  ΔJ' = {step:+.3}");
         prev = Some(jp);
@@ -84,14 +88,14 @@ fn main() {
     ] {
         let jp = LcsColor::from_hex_with_vc(hex, &vc_dark)
             .expect("hex-литерал константный и валиден")
-            .jp;
+            .jp();
         let step = prev.map(|p| jp - p).unwrap_or(0.0);
         println!("{label:12} {hex}  J' = {jp:7.3}  ΔJ' = {step:+.3}");
         prev = Some(jp);
     }
 
     // Прежний хвост печатал FILL_QUATERNARY_DJ через встроенную `RoleTable::default()`;
-    // та витрина вынесена из прод-API (ADR-0001 PR-c), а dJ'-контракты теперь живут
+    // та витрина вынесена из прод-API (ADR-0001), а dJ'-контракты теперь живут
     // в конфиге потребителя. Этот пример остаётся инструментом замера J'-якорей
     // (единственная физика, что ему нужна) — сам контракт dJ' инспектируется через
     // паспорт labui, не через встроенную таблицу.
