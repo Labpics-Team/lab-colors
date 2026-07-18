@@ -1773,13 +1773,14 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
   );
   const conformanceReadme = read("conformance", "README.md");
   assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `10\.0\.0`/u);
-  assert.match(conformanceReadme, /9\.0\.0 → 10\.0\.0/u);
-  assert.match(conformanceReadme, /8\.0\.0 → 9\.0\.0/u);
-  assert.match(conformanceReadme, /7\.0\.0 → 8\.0\.0/u);
-  assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
-  assert.match(conformanceReadme, /5\.0\.0 → 6\.0\.0/u);
-  assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
-  assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
+  assert.match(
+    conformanceReadme,
+    /crates\/labcolors-conformance\/tests\/pack_v10_contract\.rs/u,
+  );
+  assert.doesNotMatch(
+    conformanceReadme,
+    /Предыдущий bump|→ 10\.0\.0|→ 9\.0\.0/u,
+  );
   assert.match(conformanceReadme, /`wcag22\.json`/u);
   assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`|`wcag22-feasibility\.json`|`muddiness\.json`/u);
   assert.match(
