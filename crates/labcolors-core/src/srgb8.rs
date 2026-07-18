@@ -34,6 +34,11 @@ impl Srgb8 {
         self.0
     }
 
+    /// Проецировать байты в binary64-координаты `byte / 255` encoded-sRGB решётки.
+    pub(crate) fn encoded(self) -> [f64; 3] {
+        self.0.map(|byte| f64::from(byte) / 255.0)
+    }
+
     /// Encode the exact triplet as canonical uppercase `#RRGGBB`.
     pub fn to_hex(self) -> String {
         let [red, green, blue] = self.0;
@@ -107,6 +112,17 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn encoded_is_bit_exact_byte_over_255_for_every_channel() {
+        for byte in u8::MIN..=u8::MAX {
+            let bytes = [byte, byte.wrapping_add(1), byte.wrapping_sub(1)];
+            assert_eq!(
+                Srgb8::new(bytes).encoded().map(f64::to_bits),
+                bytes.map(|channel| (f64::from(channel) / 255.0).to_bits()),
+            );
         }
     }
 }

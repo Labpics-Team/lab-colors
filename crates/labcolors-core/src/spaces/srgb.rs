@@ -217,12 +217,7 @@ pub(crate) fn srgb8_from_linear(rgb: [f64; 3]) -> crate::Srgb8 {
 /// straight-alpha (см. [`crate::alpha`]); для колориметрии используй
 /// `srgb_from_hex` (линейный свет).
 pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
-    let [r, g, b] = hex_bytes(hex)?;
-    Ok([
-        f64::from(r) / 255.0,
-        f64::from(g) / 255.0,
-        f64::from(b) / 255.0,
-    ])
+    Ok(Srgb8::new(hex_bytes(hex)?).encoded())
 }
 
 /// Внутренняя сериализация конечного gamma-encoded sRGB в `#RRGGBB`.
@@ -232,7 +227,7 @@ pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
 /// публичной границе exact-представление сериализуется через [`Srgb8::to_hex`].
 pub(crate) fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
     let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02X}{:02X}{:02X}", q(rgb[0]), q(rgb[1]), q(rgb[2]))
+    Srgb8::new([q(rgb[0]), q(rgb[1]), q(rgb[2])]).to_hex()
 }
 
 /// Linear sRGB → CIE XYZ under D65.

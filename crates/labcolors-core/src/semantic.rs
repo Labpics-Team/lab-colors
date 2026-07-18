@@ -2348,9 +2348,7 @@ fn resolve_spec_in(
                                 }
                                 RoleChroma::Neutral => {
                                     return Err(SolveFailure::InvalidInput(
-                                        "хроматический material-источник требует \
-                                         table policy curve/tinted"
-                                            .to_string(),
+                                        RoleSpec::INCOMPATIBLE_CHROMA_REASON.to_owned(),
                                     ));
                                 }
                             }
@@ -2881,7 +2879,7 @@ fn resolve_rgba_inverted(
             }
         };
     let (tint_srgb8, actual_alpha) = analog;
-    let tint_q = tint_srgb8.map(|channel| f64::from(channel) / 255.0);
+    let tint_q = Srgb8::new(tint_srgb8).encoded();
     // Резолвер возвращает тот же binary64 либо строго больший точный пол.
     let alpha_coerced = actual_alpha > requested_alpha;
     finish_rgba(tint_q, actual_alpha, bg_encoded, vc, alpha_coerced, false)
@@ -3275,25 +3273,38 @@ impl RoleSpec {
         }
     }
 
-    /// Проверить меж-полевой контракт рецепта и общетабличной политики хромы.
-    /// A material with any chromatic source context requires a table policy that
-    /// can carry that direction. An all-achromatic source is lawful under a
-    /// neutral policy and must not be rejected merely because it occupies the
-    /// same structural source slot.
+    /// Каноническая причина единственного конфликта рецепта с chroma-policy.
+    pub(crate) const INCOMPATIBLE_CHROMA_REASON: &'static str =
+        "chromatic source needs curve/tinted policy";
+
+    /// Проверить и собственный домен рецепта, и его связь с chroma-policy.
+    ///
+    /// Публичный конструктор таблицы принимает сырые `RoleSpec`, поэтому обязан
+    /// выполнить оба слоя проверки до появления исполняемого состояния.
     pub(crate) fn validate_with_chroma(self, chroma: RoleChroma) -> Result<(), String> {
         self.validate_domain()?;
+        if !self.is_chroma_compatible(chroma) {
+            return Err(Self::INCOMPATIBLE_CHROMA_REASON.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Проверить только меж-полевой контракт после отдельной domain-validation.
+    ///
+    /// Хроматический material-источник требует политики, способной сохранить
+    /// направление; ахроматический источник допустим и при neutral-policy.
+    /// Две validation-границы используют один предикат. Явный inline удерживает
+    /// его без отдельного тела в канонической WASM-сборке; backend-дрифт ловит
+    /// исполняемый size-ратчет, а не это пояснение.
+    #[inline(always)]
+    pub(crate) fn is_chroma_compatible(&self, chroma: RoleChroma) -> bool {
         let material_has_chromatic_source = match self {
             RoleSpec::Material {
                 hue: Some(source), ..
             } => !source.all_modes_achromatic(),
             _ => false,
         };
-        if matches!(chroma, RoleChroma::Neutral) && material_has_chromatic_source {
-            return Err(
-                "a material with a chromatic source requires table policy curve/tinted".into(),
-            );
-        }
-        Ok(())
+        !matches!(chroma, RoleChroma::Neutral) || !material_has_chromatic_source
     }
 
     /// WCAG-пол этой спеки — свойство контракта, не резолва: текст/UI-якорь

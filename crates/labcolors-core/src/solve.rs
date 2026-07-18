@@ -1294,7 +1294,7 @@ fn finish(
     let encoded = srgb8_from_linear(rgb_ideal);
     let hex = encoded.to_hex();
     let color = LcsColor::from_srgb8_with_vc(encoded, vc);
-    let disp = encoded.bytes().map(|byte| f64::from(byte) / 255.0);
+    let disp = encoded.encoded();
     let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
     let wcag_ratio = wcag::contrast_ratio(disp, bg_disp);

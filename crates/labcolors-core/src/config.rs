@@ -194,7 +194,7 @@ pub enum ConfigError {
     /// Рецепт и общетабличная chroma-policy противоречат друг другу. Ошибка
     /// принадлежит preflight: executable-таблица не должна откладывать её до
     /// конкретной темы или первого runtime-resolve.
-    IncompatibleRolePolicy { role: String, reason: String },
+    IncompatibleRolePolicy { role: String },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -246,11 +246,9 @@ impl std::fmt::Display for ConfigError {
             ConfigError::InvalidLadderFloor { role, reason } => {
                 write!(f, "ladder-роль `{role}` несёт невалидный floor: {reason}")
             }
-            ConfigError::IncompatibleRolePolicy { role, reason } => {
-                write!(
-                    f,
-                    "роль `{role}` несовместима с chroma-policy таблицы: {reason}"
-                )
+            ConfigError::IncompatibleRolePolicy { role } => {
+                write!(f, "material `{role}`: ")?;
+                f.write_str(RoleSpec::INCOMPATIBLE_CHROMA_REASON)
             }
         }
     }
@@ -1087,12 +1085,9 @@ impl ThemeConfig {
         // `NamedRoleTable::new`: preflight не вправе создавать таблицу, которая
         // отвергнется только при первом runtime-resolve.
         for (role, spec) in &entries {
-            spec.validate_with_chroma(chroma).map_err(|reason| {
-                ConfigError::IncompatibleRolePolicy {
-                    role: role.clone(),
-                    reason,
-                }
-            })?;
+            if !spec.is_chroma_compatible(chroma) {
+                return Err(ConfigError::IncompatibleRolePolicy { role: role.clone() });
+            }
         }
 
         Ok(NamedRoleTable::from_validated_parts(

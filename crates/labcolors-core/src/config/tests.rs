@@ -1794,16 +1794,16 @@ fn validate_is_a_complete_preflight() {
         assert!(got.contains(want), "ждали {want}, получено {got}");
     };
 
-    // Exact-gray neutral without override is a lawful neutral policy when every
-    // material source is achromatic; validate and compile must agree on success.
+    // Точный серый без override законен, пока все material-источники ахроматичны;
+    // validate и compile обязаны одинаково принять такой контракт.
     let mut c = labui_reference();
     c.neutral.tint.hue_override_deg = None;
     c.neutral.anchors.dark = "#101010".to_string();
     assert!(c.validate().is_ok());
     assert!(c.compile_named_role_table().is_ok());
 
-    // A chromatic source cannot be deferred into that neutral executable
-    // policy: preflight must reject it before the first runtime resolve.
+    // Цветной источник нельзя отложить внутрь neutral-policy: preflight обязан
+    // отвергнуть конфликт до первого runtime-resolve.
     for (name, recipe) in &mut c.roles {
         if name == "fill-brand-secondary" {
             *recipe = RoleRecipe::Material {
@@ -1824,6 +1824,13 @@ fn validate_is_a_complete_preflight() {
         Err(ConfigError::IncompatibleRolePolicy { ref role, .. })
             if role == "fill-brand-secondary"
     ));
+    assert_eq!(
+        c.validate().unwrap_err().to_string(),
+        format!(
+            "material `fill-brand-secondary`: {}",
+            RoleSpec::INCOMPATIBLE_CHROMA_REASON
+        )
+    );
 
     // Edge-роль без четвёрки edge — деривационная ошибка края нейтрали.
     let mut c = labui_reference();

@@ -116,7 +116,7 @@ pub(crate) fn hue_of_srgb8(source: crate::Srgb8) -> OklabHue {
     if source.is_achromatic() {
         return OklabHue::Achromatic;
     }
-    let linear = source.bytes().map(super::srgb::decode_8bit);
+    let linear = super::srgb::srgb_linear_from_srgb8(source);
     OklabHue::Chromatic {
         degrees: oklab_hue(linear),
     }

@@ -57,7 +57,8 @@ use crate::numerics::{
 };
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::{
-    decode_8bit, hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_to_xyz,
+    hex_from_srgb, hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_linear_from_srgb8,
+    srgb_to_xyz,
 };
 use crate::spaces::vc::ViewingConditions;
 
@@ -441,7 +442,7 @@ fn validate_lcs_numerics(label: &str, color: &LcsColor) -> Result<(), String> {
 /// участвуют в целевой функции, поэтому полный `LcsColor` был бы лишней работой
 /// на каждом из сотен состояний sRGB8. Формула J′ остаётся тем же SSOT из `cam16`.
 fn jp_from_srgb8(bytes: [u8; 3], vc: &ViewingConditions) -> Result<f64, String> {
-    let rgb = bytes.map(decode_8bit);
+    let rgb = srgb_linear_from_srgb8(crate::Srgb8::new(bytes));
     let (j, _, _) = crate::spaces::cam16::forward(srgb_to_xyz(rgb), vc);
     let jp = crate::spaces::cam16::ucs_j(j);
     if jp.is_finite() {
@@ -651,7 +652,7 @@ fn encoded_bytes(rgb: [f64; 3]) -> [u8; 3] {
 }
 
 fn composite_hex(bytes: [u8; 3]) -> String {
-    format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2])
+    crate::Srgb8::new(bytes).to_hex()
 }
 
 /// Поток всех состояний, достижимых representable binary64-alpha в объявленном
