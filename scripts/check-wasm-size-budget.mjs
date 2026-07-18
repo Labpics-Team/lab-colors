@@ -21,10 +21,11 @@ const V10_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v10.
 const V11_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v11.json");
 const V12_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v12.json");
 const V13_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v13.json");
+const V14_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v14.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v14.json",
+  "packages/colors/bench/wasm-size-budget-v15.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -54,16 +55,18 @@ export const V12_FILE_SHA256 =
   "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95";
 // V*_FILE_SHA256 — SHA-256 канонических байтов версионных budget-файлов в
 // packages/colors/bench/. Версии v1..v(N−1) неизменяемы навсегда (история
-// ратчета); константа текущей версии (сейчас v14) ротируется ТОЛЬКО вместе с
+// ратчета); константа текущей версии (сейчас v15) ротируется ТОЛЬКО вместе с
 // принятием нового снапшота: следующий bump добавляет v(N+1)-пару, а v(N)
 // уходит в неизменяемый список. Дрейф любого файла к его пину = отказ чекера.
 export const V13_FILE_SHA256 =
   "3cc88303a0f43e8ca33ae70d723a3179c68b0cc2744310a791e8f43885482f34";
 export const V14_FILE_SHA256 =
   "20c5886e3edaa6eaf3e37b915d81982a3a13e30064fc7fa8eb702eda38a20fb6";
+export const V15_FILE_SHA256 =
+  "979dc7990742cc2daf163c64051ed6a22c939745a4b1767bc010d6faaaba5161";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V13_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v13.json";
+const V14_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v14.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
 const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
 const V7_BUDGET_ID = "labcolors-wasm-roles-issue-307-c7a-v7";
@@ -74,6 +77,7 @@ const V11_BUDGET_ID = "labcolors-wasm-runtime-c4cd-v11";
 const V12_BUDGET_ID = "labcolors-wasm-runtime-c5-theme-keys-v12";
 const V13_BUDGET_ID = "labcolors-wasm-runtime-c5-2-proxy-excision-v13";
 const V14_BUDGET_ID = "labcolors-wasm-runtime-c6-legacy-excision-v14";
+const V15_BUDGET_ID = "labcolors-wasm-runtime-c6-validation-srgb-ssot-v15";
 const ROLE_ORDER = ["runtime"];
 const ROLE_SPECS = {
   runtime: {
@@ -81,12 +85,12 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
-    // Pinned Linux run 29647236232 измерил C6 head точно (−26534B от v13: вырез
-    // legacy sentiment/recipe API). Любой дальнейший рост требует НОВОЙ
-    // версии снапшота, не headroom здесь.
-    basis: "accepted-c6-legacy-excision-snapshot",
-    measurementSource: "github-actions-run-29647236232",
-    acceptedCeiling: 428540,
+    // Pinned Linux run 29654779091 измерил validation + encoded-sRGB SSOT C6
+    // точно (−137B от v14). Любой дальнейший рост требует НОВОЙ версии
+    // снапшота, не headroom здесь.
+    basis: "accepted-c6-validation-srgb-ssot-snapshot",
+    measurementSource: "github-actions-run-29654779091",
+    acceptedCeiling: 428403,
   },
 };
 
@@ -219,7 +223,11 @@ function verifyImmutableHistory() {
   if (v13?.schemaVersion !== 8 || v13?.budgetId !== V13_BUDGET_ID) {
     fail("immutable v13 budget identity drifted");
   }
-  return { v1, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13 };
+  const v14 = readImmutableJson(V14_PATH, V14_FILE_SHA256, "v14");
+  if (v14?.schemaVersion !== 8 || v14?.budgetId !== V14_BUDGET_ID) {
+    fail("immutable v14 budget identity drifted");
+  }
+  return { v1, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14 };
 }
 
 function validateBudgetValue(budget) {
@@ -236,14 +244,14 @@ function validateBudgetValue(budget) {
     "budget",
   );
   if (budget.schemaVersion !== 8) fail("supported schemaVersion is exactly 8");
-  if (budget.budgetId !== V14_BUDGET_ID) fail(`budgetId must be ${V14_BUDGET_ID}`);
+  if (budget.budgetId !== V15_BUDGET_ID) fail(`budgetId must be ${V15_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V13_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V13_FILE_SHA256
+    budget.predecessor.path !== V14_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V14_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v13 document");
+    fail("predecessor must bind the immutable v14 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -326,10 +334,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V14_FILE_SHA256) {
+    if (actualFileSha256 !== V15_FILE_SHA256) {
       fail(
-        `current v14 file SHA-256 mismatch: ` +
-          `expected=${V14_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v15 file SHA-256 mismatch: ` +
+          `expected=${V15_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }
