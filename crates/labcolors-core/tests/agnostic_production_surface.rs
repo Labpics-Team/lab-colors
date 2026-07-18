@@ -1,4 +1,6 @@
-//! Agnostic-cleanliness gate (ADR-0001 PR-c).
+//! Agnostic-production-surface gate (ADR-0001 PR-c): поставляемый `src` не
+//! содержит клиентских брендовых значений и showcase-типов — ядро агностично
+//! к дизайн-системе, встроенные якоря живут только в `#[cfg(test)]`-оракулах.
 //!
 //! BUG CLASS this guards: a built-in BRAND value or SHOWCASE type silently
 //! re-enters the PRODUCTION surface of the agnostic core. PR-c made the engine

@@ -29,8 +29,8 @@ use std::path::PathBuf;
 
 use labcolors_conformance::{
     AlphaVector, ContrastVector, DRIFT_TOL, FAMILY_FILES, LadderVector, MANIFEST_FILE, Manifest,
-    MuddinessVector, Pack, SolveOutcome, SolveVector, Wcag22Vector, generate_alpha,
-    generate_contrasts, generate_ladders, generate_muddiness, generate_solve, generate_wcag22,
+    Pack, SolveOutcome, SolveVector, Wcag22Vector, generate_alpha, generate_contrasts,
+    generate_ladders, generate_solve, generate_wcag22,
 };
 use labcolors_core::fnv1a_32;
 
@@ -189,21 +189,6 @@ fn core_reproduces_committed_solve() {
             }
             (a, b) => panic!("исход резолва разошёлся на {}: {a:?} vs {b:?}", c.bg),
         }
-    }
-}
-
-#[test]
-fn core_reproduces_committed_muddiness() {
-    let committed: Vec<MuddinessVector> = parse("muddiness.json");
-    let fresh = generate_muddiness();
-    assert_eq!(
-        committed.len(),
-        fresh.len(),
-        "muddiness.json: изменился состав"
-    );
-    for (c, f) in committed.iter().zip(&fresh) {
-        assert_eq!(c.hex, f.hex, "legacy proxy key");
-        approx(c.score, f.score, &format!("muddiness {}", c.hex));
     }
 }
 

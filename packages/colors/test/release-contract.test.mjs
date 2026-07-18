@@ -944,16 +944,19 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 9 removes only the feasibility family", () => {
+test("conformance pack 10 removes only the muddiness family", () => {
   const immutableFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
     ["alpha.json", "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1"],
-    ["muddiness.json", "3c5497b251f04c089d33452b9bf0bfba7f4ef9a72dc496180ff42aad08377aa3"],
     ["wcag22.json", "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826"],
   ]);
-  assert.equal(immutableFamilies.size, 5, "anti-vacuum: unchanged family set changed");
-  for (const removed of ["wcag22-explicit-selection.json", "wcag22-feasibility.json"]) {
+  assert.equal(immutableFamilies.size, 4, "anti-vacuum: unchanged family set changed");
+  for (const removed of [
+    "wcag22-explicit-selection.json",
+    "wcag22-feasibility.json",
+    "muddiness.json",
+  ]) {
     assert.ok(
       !existsSync(join(root, "conformance", "vectors", removed)),
       `${removed} must be gone, not regenerated`,
@@ -972,7 +975,7 @@ test("conformance pack 9 removes only the feasibility family", () => {
   );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
-  assert.equal(manifest.packVersion, "9.0.0");
+  assert.equal(manifest.packVersion, "10.0.0");
   const solve = JSON.parse(read("conformance", "vectors", "solve.json"));
   const supersededKind = ["un", "reachable"].join("");
   const failures = solve.filter(({ outcome }) => outcome.kind === "failure");
@@ -1122,18 +1125,18 @@ test("release evidence carries no trace of the excised offline line", () => {
   const prepare = read("scripts", "prepare-npm-package.mjs");
   const verifier = read("scripts", "verify-package-release.mjs");
 
-  assert.doesNotMatch(prepare, /feasibility|labcolors-compiler|wcag22-explicit/iu);
+  assert.doesNotMatch(prepare, /feasibility|labcolors-compiler|wcag22-explicit|muddiness/iu);
   assert.doesNotMatch(
     verifier,
-    /feasibility|labcolors-compiler|wcag22-explicit|verifyPackedRoleIsolation/iu,
+    /feasibility|labcolors-compiler|wcag22-explicit|verifyPackedRoleIsolation|muddiness/iu,
   );
   assert.doesNotMatch(verifier, /from "@labpics\/colors\/compiler"/u);
-  assert.match(verifier, /conformance\.packVersion !== "9\.0\.0"/u);
+  assert.match(verifier, /conformance\.packVersion !== "10\.0\.0"/u);
   assert.match(verifier, /validateSolveFamily\(families\[3\]\)/u);
   assert.match(
     verifier,
-    /countKeys = \["contrasts", "ladders", "alpha", "solve", "muddiness", "wcag22"\]/u,
-    "release count projection must cover exactly the six surviving families",
+    /countKeys = \["contrasts", "ladders", "alpha", "solve", "wcag22"\]/u,
+    "release count projection must cover exactly the five surviving families",
   );
   assert.match(
     verifier,
@@ -1145,7 +1148,7 @@ test("release evidence carries no trace of the excised offline line", () => {
 test("WASM role size budgets are exact, append-only, and acyclic", async () => {
   const bench = join(root, "packages", "colors", "bench");
   const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((version) => [
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((version) => [
       `v${version}`,
       join(bench, `wasm-size-budget-v${version}.json`),
     ]),
@@ -1166,6 +1169,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     v10: "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6",
     v11: "fa11531ee390dd6dfdfadfadab99bbe8277f2b152b567951b17ef6093d42b1e4",
     v12: "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95",
+    v13: "3cc88303a0f43e8ca33ae70d723a3179c68b0cc2744310a791e8f43885482f34",
   };
   const documents = {};
   for (const version of Object.keys(paths)) {
@@ -1176,7 +1180,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
   }
 
-  const { v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12 } = documents;
+  const { v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13 } = documents;
   assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
   assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
   assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
@@ -1415,11 +1419,37 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     "C5.1 growth is the exact accepted dictionary-lookup delta",
   );
 
+  // V13 (C5.2): вырез legacy cleanliness-прокси (muddiness-метод и его кодовые
+  // пути) — принятое СНИЖЕНИЕ runtime −4691B (run 29613131229).
+  assert.equal(v13.schemaVersion, 8);
+  assert.equal(v13.budgetId, "labcolors-wasm-runtime-c5-2-proxy-excision-v13");
+  assert.deepEqual(v13.predecessor, {
+    path: "packages/colors/bench/wasm-size-budget-v12.json",
+    fileSha256: expectedHashes.v12,
+  });
+  assert.deepEqual(v13.toolchainSource, v12.toolchainSource);
+  assert.deepEqual(v13.buildRecipes, v12.buildRecipes);
+  assert.deepEqual(v13.roles.runtime.measurement, {
+    source: "github-actions-run-29613131229",
+    measurementPlatform: "linux-x64",
+    rawBytes: 455074,
+  });
+  assert.deepEqual(v13.roles.runtime.policy, {
+    maxRawBytes: 455074,
+    basis: "accepted-c5-2-proxy-excision-snapshot",
+    gzip: "diagnostic-only",
+  });
+  assert.equal(
+    v12.roles.runtime.policy.maxRawBytes - v13.roles.runtime.policy.maxRawBytes,
+    4691,
+    "C5.2 must shrink the runtime by the exact excision delta",
+  );
+
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v12);
-  for (const version of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
+  assert.equal(checker.DEFAULT_BUDGET, paths.v13);
+  for (const version of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) {
     assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
   }
   assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
@@ -1445,7 +1475,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
       return `"--remap-path-prefix=\$${mapping.slice(0, separator)}=${mapping.slice(separator + 1)}"`;
     })
     .join("$'\\x1f'")}`;
-  const runtimeCommand = v12.buildRecipes.runtime.command;
+  const runtimeCommand = v13.buildRecipes.runtime.command;
   assert.ok(runtimeCommand.startsWith(recipePrefix));
   const expectedBuild = runtimeCommand.slice(recipePrefix.length);
   const expectedDiffBlock = [
@@ -1528,7 +1558,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     const fixtureBudgetPath = join(temporary, "budget.json");
     const runtimeBytes = Buffer.alloc(16);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v12);
+    const fixture = structuredClone(v13);
     fixture.roles.runtime.measurement.rawBytes = runtimeBytes.length;
     fixture.roles.runtime.policy.maxRawBytes = runtimeBytes.length;
     writeFileSync(runtimePath, runtimeBytes);
@@ -1600,7 +1630,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         // acceptedCeiling-закона. Чекер обязан отклонить его всё равно:
         // рост сверх принятого снапшота требует НОВОЙ версии бюджета,
         // а не правки текущей.
-        const ceiling = v12.roles.runtime.policy.maxRawBytes;
+        const ceiling = v13.roles.runtime.policy.maxRawBytes;
         value.roles.runtime.measurement.rawBytes = ceiling + 1;
         value.roles.runtime.policy.maxRawBytes = ceiling + 1;
       }],
@@ -1674,8 +1704,8 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
     coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v12),
-      /current v12 file SHA-256 mismatch/u,
+      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v13),
+      /current v13 file SHA-256 mismatch/u,
       "coordinated artifact and document drift must still fail the default identity",
     );
   } finally {
@@ -1742,20 +1772,22 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
     "a replacement without interpolation must not use an f-string",
   );
   const conformanceReadme = read("conformance", "README.md");
-  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `9\.0\.0`/u);
-  assert.match(conformanceReadme, /8\.0\.0 → 9\.0\.0/u);
-  assert.match(conformanceReadme, /7\.0\.0 → 8\.0\.0/u);
-  assert.match(conformanceReadme, /6\.0\.0 → 7\.0\.0/u);
-  assert.match(conformanceReadme, /5\.0\.0 → 6\.0\.0/u);
-  assert.match(conformanceReadme, /4\.0\.0 → 5\.0\.0/u);
-  assert.match(conformanceReadme, /3\.0\.0 → 4\.0\.0/u);
-  assert.match(conformanceReadme, /`wcag22\.json`/u);
-  assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`|`wcag22-feasibility\.json`/u);
+  assert.match(conformanceReadme, /manifest\.packVersion`, сейчас `10\.0\.0`/u);
   assert.match(
     conformanceReadme,
-    /contrasts, ladders, alpha, solve, muddiness, wcag22/u,
+    /crates\/labcolors-conformance\/tests\/pack_v10_contract\.rs/u,
   );
-  assert.doesNotMatch(conformanceReadme, /сейчас `[3-8]\.0\.0`/u);
+  assert.doesNotMatch(
+    conformanceReadme,
+    /Предыдущий bump|→ 10\.0\.0|→ 9\.0\.0/u,
+  );
+  assert.match(conformanceReadme, /`wcag22\.json`/u);
+  assert.doesNotMatch(conformanceReadme, /`wcag22-explicit-selection\.json`|`wcag22-feasibility\.json`|`muddiness\.json`/u);
+  assert.match(
+    conformanceReadme,
+    /contrasts, ladders, alpha, solve, wcag22/u,
+  );
+  assert.doesNotMatch(conformanceReadme, /сейчас `[3-9]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
 });

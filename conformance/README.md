@@ -13,36 +13,19 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `9.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов. Bump 8.0.0 → 9.0.0 удалил ровно одно
-  семейство `wcag22-feasibility`: offline protocol/compiler линия вырезана из
-  всех проекций (exact-вычислитель, Q55-артефакт и независимый neutral-axis
-  оракул сохранены), байты остальных шести семейств не тронуты.
-  Предыдущий bump 7.0.0 → 8.0.0 удалил ровно одно
-  семейство `wcag22-explicit-selection`: параллельная атомарная операция
-  вырезана из всех проекций.
-  Предыдущий bump 6.0.0 → 7.0.0 изменил только семейство
-  `solve`: failure wire `{kind:"failure", category, code}` теперь атомарно
-  различает доказанную недостижимость, незавершённый bounded search, отклонённый
-  запрос и неподдерживаемую capability, а corpus добавил реальные
-  `below_contrast_floor` и `floor_unreachable` paths. Остальные семь семейств
-  сохранены байт-в-байт; прежний одноуровневый failure wire не поддерживается.
-  Предыдущий bump 5.0.0 → 6.0.0 добавлял семейство
-  `wcag22-explicit-selection` (удалено в 8.0.0).
-  Предыдущий bump 4.0.0 → 5.0.0 добавлял семейство
-  `wcag22-feasibility` (удалено в 9.0.0). Предыдущий bump 3.0.0 → 4.0.0 перевёл
-  `numericalCapabilities` на proof-capable schema V2 и добавил семейство
-  `wcag22`; поэтому состав семейств и `packDigest` изменились. Предыдущий bump
-  2.0.0 → 3.0.0 менял только схему манифеста
-  (`numericalSites` → `numericalCapabilities`), без изменения векторных
-  семейств.
+- **Версия пака** (`manifest.packVersion`, сейчас `10.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов: пять семейств (`contrasts`, `ladders`,
+  `alpha`, `solve`, `wcag22`), их байты запинены SHA-256 в
+  `crates/labcolors-conformance/tests/pack_v10_contract.rs`.
+  Удаление/изменение семейства = major-bump с
+  absence-законом на снятые файлы; история составов — в git.
 - **Версия ядра** (`manifest.coreVersion`, для этого пака `0.2.0`) — версия
   `labcolors-core`, из канона которой сгенерированы значения. Пак действителен
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
   сдвигается.
-- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами шести
-  семейств (в порядке `contrasts, ladders, alpha, solve, muddiness, wcag22`).
+- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами пяти
+  семейств (в порядке `contrasts, ladders, alpha, solve, wcag22`).
   Отпечаток КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы
   генерации (последний ULP f64 в сериализации) — не кросс-платформенный
   инвариант, а якорь целостности файлов.
@@ -55,7 +38,6 @@
 | `ladders.json` | альфы позиции лестницы | `{position, alphaLight, alphaDark}` |
 | `alpha.json` | подложка→α | `{tint, alpha, bg, composite, minAlpha}` |
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
-| `muddiness.json` | замороженная legacy-координата `muddiness` | `{hex, score}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
@@ -78,10 +60,6 @@
 adjacent bytes или нормативного отношения пересчитывает набор, а не сохраняет
 эти числа как константы.
 
-`muddiness.json` — это `experimental compatibility proxy`: corpus доказывает
-воспроизводимость исторического числового API, но не валидированный на
-наблюдателях человеческий вердикт clean/dirty и не пригодность для production
-decision. Legacy-идентификаторы сохранены только для совместимости.
 
 - `theme` — kebab-ключ ЛОКАЛЬНОГО fixture-словаря пака (совпадает со словарём
   labui-паспорта): `light` \| `dark` \| `light-ic` \| `dark-ic`. Канонический
@@ -136,7 +114,7 @@ labels (канон labui): роли `icon` в словаре нет.
 Биндинг conformant по версии пака `X`, если на КАЖДОМ векторе его выход
 совпадает с каноном по этим правилам:
 
-- **Числовые поля** (`lc`, `wcagRatio`, `score`, `alpha`, `minAlpha`, `alpha*`) —
+- **Числовые поля** (`lc`, `wcagRatio`, `alpha`, `minAlpha`, `alpha*`) —
   в пределах `DRIFT_TOL = 1e-6` (абсолютная). Для зависимых от libm путей
   (`powf`/`atan2`/`ln`) битовая идентичность f64 между платформами не
   гарантируется: реализации разных ОС/архитектур могут расходиться на несколько

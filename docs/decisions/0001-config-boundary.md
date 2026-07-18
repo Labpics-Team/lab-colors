@@ -143,7 +143,7 @@ load-bearing продакшн-hex движка — 10 якорей `Accent::anch
    параметры (`brand_hue`, `prototype_hue`, `chroma_hex`, `hue_floor`,
    `preferred_side`) — витринный энум из сигнатуры убран, честное разделение
    «оттенок vs хрома» сохранено. Публичная версия SDK — 0.6.0 (ломающая).
-   Grep-гейт чистоты — `tests/agnostic_cleanliness.rs`: продакшн-`src`
+   Grep-гейт чистоты — `tests/agnostic_production_surface.rs`: продакшн-`src`
    (после снятия `#[cfg(test)]` и комментариев) не несёт ни брендовых якорных hex,
    ни определений витринных типов; гейт с живым RED-proof.
 

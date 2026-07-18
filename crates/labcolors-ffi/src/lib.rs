@@ -22,7 +22,6 @@
 //! | [`solve_contrast`] | `solve` | `solve` |
 //! | [`ladder_alpha`] | `ladders` | `LadderPosition::alpha_pair` |
 //! | [`composite`] / [`min_alpha`] | `alpha` | `alpha::composite_hex` / `alpha::min_alpha_hex` |
-//! | [`muddiness`] | `muddiness` legacy compatibility vectors | `cleanliness::muddiness_from_hex` |
 //! | [`evaluate_wcag22`] | `wcag22` | exact final-sRGB8 WCAG 2.2 evaluator |
 //! | [`core_version`] | `manifest` | версия ядра |
 //!
@@ -45,7 +44,6 @@
 //! расширение.
 
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
-use labcolors_core::cleanliness::muddiness_from_hex;
 use labcolors_core::{
     BgInput, ChromaPolicy, Contract, Gamut, GlowCompositeGuaranteeV1, GlowCompositeProfileV1,
     GlowDecisionProfileV1, GlowDiagnosticProfileV1, GlowTargetStatus as CoreGlowTargetStatus, Hue,
@@ -872,21 +870,6 @@ pub fn solve_glow_point(
     }
 }
 
-/// Замороженная legacy-координата `muddiness` для цвета.
-///
-/// Это `experimental compatibility proxy`: функция воспроизводит исторический
-/// числовой API, но не является валидированным на наблюдателях человеческим
-/// вердиктом clean/dirty и не должна использоваться как production decision.
-/// Legacy-идентификатор сохранён только для совместимости.
-///
-/// # Errors
-///
-/// [`ColorError::InvalidColor`] на невалидном hex.
-#[uniffi::export]
-pub fn muddiness(hex: String) -> Result<f64, ColorError> {
-    muddiness_from_hex(&hex).map_err(|reason| ColorError::InvalidColor { reason })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1193,24 +1176,6 @@ mod tests {
         assert!(c.starts_with('#') && c.len() == 7);
         let m = min_alpha("#787880".into(), "#FFFFFF".into()).unwrap();
         assert!((0.0..=1.0).contains(&m));
-    }
-
-    #[test]
-    fn muddiness_boundary_matches_frozen_core_coordinate() {
-        for hex in ["#6B6B2E", "#808080", "#007AFF", "#8A7A50"] {
-            let boundary = muddiness(hex.into()).expect("valid public input");
-            let core = muddiness_from_hex(hex).expect("valid core input");
-            assert_eq!(
-                boundary.to_bits(),
-                core.to_bits(),
-                "FFI boundary drifted for {hex}"
-            );
-        }
-
-        assert!(matches!(
-            muddiness("not-a-colour".into()),
-            Err(ColorError::InvalidColor { .. })
-        ));
     }
 
     #[test]

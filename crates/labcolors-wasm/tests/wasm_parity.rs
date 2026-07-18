@@ -11,8 +11,8 @@
 #![cfg(target_arch = "wasm32")]
 
 use labcolors_conformance::{
-    AlphaVector, ContrastVector, DRIFT_TOL, LadderVector, Manifest, MuddinessVector, Pack,
-    SolveOutcome, SolveVector, Wcag22Vector,
+    AlphaVector, ContrastVector, DRIFT_TOL, LadderVector, Manifest, Pack, SolveOutcome,
+    SolveVector, Wcag22Vector,
 };
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
@@ -206,14 +206,6 @@ fn committed_conformance_pack_replays_in_wasm32() {
         }
     }
 
-    let muddiness: Vec<MuddinessVector> =
-        serde_json::from_str(include_str!("../../../conformance/vectors/muddiness.json")).unwrap();
-    assert_eq!(muddiness.len(), fresh.muddiness.len());
-    for (committed, actual) in muddiness.iter().zip(&fresh.muddiness) {
-        assert_eq!(actual.hex, committed.hex);
-        approx_pack_number(actual.score, committed.score, "muddiness");
-    }
-
     let wcag22: Vec<Wcag22Vector> =
         serde_json::from_str(include_str!("../../../conformance/vectors/wcag22.json")).unwrap();
     assert_eq!(wcag22.len(), fresh.wcag22.len());
@@ -231,48 +223,10 @@ fn committed_conformance_pack_replays_in_wasm32() {
         committed_manifest.numerical_capabilities,
         fresh_manifest.numerical_capabilities
     );
-    let replayed_total = contrasts.len()
-        + ladders.len()
-        + alpha.len()
-        + solve.len()
-        + muddiness.len()
-        + wcag22.len();
+    let replayed_total = contrasts.len() + ladders.len() + alpha.len() + solve.len() + wcag22.len();
     assert_eq!(
         committed_manifest.counts.total, replayed_total,
         "manifest total must equal every replayed committed family"
-    );
-}
-
-/// The public WASM compatibility proxy is wired to the same frozen vectors as
-/// every other delivery surface. The committed file is the oracle: this test
-/// intentionally carries no second hand-written semantic threshold or score.
-#[wasm_bindgen_test]
-fn public_muddiness_binding_matches_committed_conformance_vectors() {
-    let committed: Vec<MuddinessVector> =
-        serde_json::from_str(include_str!("../../../conformance/vectors/muddiness.json")).unwrap();
-    let manifest: Manifest =
-        serde_json::from_str(include_str!("../../../conformance/vectors/manifest.json")).unwrap();
-    assert!(
-        manifest.counts.muddiness > 0,
-        "compatibility corpus must be non-vacuous"
-    );
-    assert_eq!(committed.len(), manifest.counts.muddiness);
-
-    let colors = LabColors::new();
-    for vector in committed {
-        let actual = colors
-            .muddiness(&vector.hex)
-            .unwrap_or_else(|error| panic!("{} must remain accepted: {error:?}", vector.hex));
-        approx_pack_number(
-            actual,
-            vector.score,
-            &format!("public muddiness {}", vector.hex),
-        );
-    }
-
-    assert!(
-        colors.muddiness("not_a_hex").is_err(),
-        "invalid public input must reject rather than panic or fabricate a score"
     );
 }
 

@@ -30,14 +30,13 @@ const WCAG22_EVIDENCE_FILES = [
   "wcag22-srgb8-q55-v1.bin",
   "wcag22-srgb8-q55-proof-v1.json",
 ];
-// Полный состав пака 9.0.0. Верификатор читает байты из репозитория (не из
-// тарболла) и пересчитывает packDigest над всеми шестью семействами.
+// Полный состав пака 10.0.0. Верификатор читает байты из репозитория (не из
+// тарболла) и пересчитывает packDigest над всеми пятью семействами.
 const CONFORMANCE_FAMILY_FILES = [
   "contrasts.json",
   "ladders.json",
   "alpha.json",
   "solve.json",
-  "muddiness.json",
   "wcag22.json",
 ];
 const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
@@ -563,8 +562,8 @@ export function validateSolveFamily(family) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "9.0.0") {
-    fail(`release requires conformance pack 9.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "10.0.0") {
+    fail(`release requires conformance pack 10.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -594,7 +593,7 @@ async function validateConformance(conformance) {
       fail(`${CONFORMANCE_FAMILY_FILES[index]} is not valid JSON: ${error.message}`);
     }
   });
-  const countKeys = ["contrasts", "ladders", "alpha", "solve", "muddiness", "wcag22"];
+  const countKeys = ["contrasts", "ladders", "alpha", "solve", "wcag22"];
   let total = 0;
   for (const [index, key] of countKeys.entries()) {
     const actual = families[index].length;
@@ -613,7 +612,7 @@ async function validateConformance(conformance) {
   if (halfTie?.composite !== "#17161F") {
     fail("conformance pack lacks the exact source-over half-tie #C0B2FA@0.122 -> #17161F");
   }
-  const antiEpsilon = families[5].find(
+  const antiEpsilon = families[4].find(
     (entry) =>
       entry.foreground === "#89BB09" &&
       entry.background === "#8212DB" &&

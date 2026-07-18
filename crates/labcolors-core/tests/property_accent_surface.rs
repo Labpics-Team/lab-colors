@@ -17,7 +17,7 @@
 //! `red_proof_per_level_lightness_drift_breaks_the_gate` строит НАМЕРЕННО
 //! сломанную рампу (пер-уровневый дрейф светлоты) и утверждает, что детектор
 //! нарушений СРАБАТЫВАЕТ — тот же идиом, что `one_levelness_tests::red_proof_*`
-//! и `agnostic_cleanliness::red_proof_*`. Детектор кусается, значит зелёный на
+//! и `agnostic_production_surface::red_proof_*`. Детектор кусается, значит зелёный на
 //! реальной деривации — не театр.
 //!
 //! # Допуск (DECLARED)

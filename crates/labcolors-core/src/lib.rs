@@ -16,7 +16,6 @@ pub mod accent_balance;
 pub mod accent_surface;
 pub mod alpha;
 pub(crate) mod appearance;
-pub mod cleanliness;
 pub mod config;
 pub mod glow;
 pub mod hash;
@@ -94,9 +93,6 @@ pub use accent_surface::{
     AccentSurface, SurfaceMaterial, derive_accent_surface_ramp, render_surface,
 };
 pub use alpha::composite_over_encoded;
-pub use cleanliness::{
-    drab, muddiness_from_hex, muddiness_from_linear_srgb, muddiness_oklch, n_pure,
-};
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
     PaletteFamily, RoleRecipe, SentimentCategory, SentimentsConfig, ThemeConfig, ThemesConfig,
