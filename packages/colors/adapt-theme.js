@@ -13,7 +13,6 @@
 // frame. `strict: true` enables the characterized per-frame clamp, whose current
 // Oklab→clip→sRGB8 path is not globally monotone and is not a floor certificate.
 
-import { applyTheme } from "./apply-theme.js";
 import {
   effectiveBackground,
   parseCssColor,
@@ -23,6 +22,7 @@ import {
   lerpPairLuminance,
   wcagLuminanceCached,
 } from "./effective-bg.js";
+import { admitSnapshot, writeVars } from "./snapshot.js";
 
 /** Cubic ease-out: fast start, gentle settle, no overshoot. A non-finite `t`
  * (e.g. a NaN clock making `(now - easeStart) / easeMs` NaN) is treated as a
@@ -147,10 +147,9 @@ export function adaptTheme(element, options) {
    * no halo/core/alpha vars. */
   let stableGlows = [];
   /** Full canonical var set from the last solve — the `result.vars` of EVERY
-   * reachable role (color AND translucent), each an oklch string. Every apply is
-   * `applyTheme(target, {...baseVars, ...easedColorOverlay})`, so translucent
-   * roles are never dropped by `applyTheme`'s clear-then-write and always carry
-   * the current theme's value. Only `kind === "color"` roles (in `roles`) ease. */
+   * reachable role (color AND translucent), each an oklch string. Every write
+   * composes `{...baseVars, ...easedColorOverlay}`, so translucent roles are
+   * never dropped by clear-then-write. Only `kind === "color"` roles ease. */
   let baseVars = {};
   /** @type {Map<string,{from:string,to:string,held:number,pair:object|null}>} in-flight ease per cssVar */
   let easing = new Map();
@@ -158,6 +157,14 @@ export function adaptTheme(element, options) {
   let breachSince = null;
   let lastSolveAt = -Infinity;
   let lastKey = null;
+  // Владение цветовой операцией отдельно от владения rAF: любой более новый
+  // tick/setTheme (и stop до начала commit) делает старую подготовку
+  // недействительной. Уже начатая синхронная CSS-запись завершается целиком:
+  // у CSSOM нет rollback, а остановка посередине оставила бы hybrid snapshot.
+  let operationGeneration = 0;
+  let commitDepth = 0;
+  const beginOperation = () => ++operationGeneration;
+  const ownsOperation = (owner) => owner === operationGeneration;
 
   const readBackground = () => {
     const b = options.background;
@@ -350,22 +357,10 @@ export function adaptTheme(element, options) {
   // Сначала собрать неизменяемый кандидат: состояние контроллера и DOM не
   // меняются, пока каждый шаг транзакции (resolve/recheck/сертификат) не пройдёт.
   const resolvedCandidate = (result, now) => {
-    if (
-      !result ||
-      typeof result !== "object" ||
-      !result.vars ||
-      typeof result.vars !== "object" ||
-      !result.roles ||
-      typeof result.roles !== "object"
-    ) {
-      throw new TypeError(
-        "adaptTheme: resolveTheme обязан вернуть {vars, roles}; повреждённый " +
-          "результат нельзя подменять пустым снимком — это стёрло бы все --lab-*",
-      );
-    }
-    const nextStableGlows = validatedStableGlowsFrom(result);
-    const nextBaseVars = result.vars;
-    const nextRoles = Object.entries(result.roles)
+    const snapshot = admitSnapshot(result, "adaptTheme");
+    const nextStableGlows = validatedStableGlowsFrom(snapshot);
+    const nextBaseVars = snapshot.vars;
+    const nextRoles = Object.entries(snapshot.roles)
       .filter(([, r]) => r && r.kind === "color")
       .map(([key, r]) => ({
         cssVar: r.cssVar,
@@ -375,7 +370,7 @@ export function adaptTheme(element, options) {
         legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
       }));
     return {
-      result,
+      result: snapshot,
       baseVars: nextBaseVars,
       roles: nextRoles,
       stableGlows: nextStableGlows,
@@ -385,7 +380,8 @@ export function adaptTheme(element, options) {
     };
   };
 
-  const commitResolved = (candidate) => {
+  const commitResolved = (candidate, owner) => {
+    if (!ownsOperation(owner)) return false;
     baseVars = candidate.baseVars;
     roles = candidate.roles;
     stableGlows = candidate.stableGlows;
@@ -395,6 +391,7 @@ export function adaptTheme(element, options) {
     // Пере-решённый кандидат может сменить набор ключей: следующая запись
     // обязана идти полным clear-then-write, но лишь после коммита транзакции.
     written = null;
+    return true;
   };
 
   const solveCandidate = (bg, now, themeName) =>
@@ -430,7 +427,7 @@ export function adaptTheme(element, options) {
   // `overlay` carries only in-flight color roles as hex.
   //
   // WRITE STRATEGY — full vs diff. `written` holds the vars of the last write;
-  // `null` forces the next write through `applyTheme`'s full clear-then-write.
+  // `null` принуждает следующую запись пройти полный clear-then-write.
   // Between two adopts the composed key set is invariant (always `baseVars`'
   // keys), so mid-ease frames DIFF against `written`: only values that changed
   // this frame hit `setProperty` (≈ the roles actually easing), instead of
@@ -442,30 +439,49 @@ export function adaptTheme(element, options) {
   // guarantee the always-full-rewrite gave, which also wrote nothing between
   // eases while steady.
   let written = null;
-  const applyHexes = (overlay) => {
+  const loseWriteOwnership = (basis) => {
+    // Если более новая операция не успела опубликовать собственный полный
+    // снимок, частично записанная физическая база неизвестна и требует repair.
+    if (written === basis) written = null;
+    return false;
+  };
+  const applyHexes = (overlay, owner) => {
+    if (!ownsOperation(owner)) return false;
     const vars = { ...baseVars, ...overlay };
+    const basis = written;
+    commitDepth++;
     try {
-      if (written === null) {
-        applyTheme(target, { vars });
-      } else {
-        for (const k in vars) {
-          const v = vars[k];
-          if (written[k] !== v) target.style.setProperty(k, v);
+      try {
+        if (written === null) {
+          if (!writeVars(target, vars, "adaptTheme", () => ownsOperation(owner))) {
+            return loseWriteOwnership(basis);
+          }
+        } else {
+          for (const k in vars) {
+            if (!ownsOperation(owner)) return loseWriteOwnership(basis);
+            const v = vars[k];
+            if (basis[k] !== v) target.style.setProperty(k, v);
+            if (!ownsOperation(owner)) return loseWriteOwnership(basis);
+          }
         }
+      } catch (error) {
+        // У CSSOM нет транзакций/отката. Забываем diff-базу, чтобы следующий
+        // явный tick переписал весь канонический снимок, а не считал частично
+        // записанный DOM закоммиченным.
+        if (ownsOperation(owner)) written = null;
+        throw error;
       }
-    } catch (error) {
-      // У CSSOM нет транзакций/отката. Забываем diff-базу, чтобы следующий
-      // явный tick переписал весь канонический снимок, а не считал частично
-      // записанный DOM закоммиченным.
-      written = null;
-      throw error;
+      if (!ownsOperation(owner)) return loseWriteOwnership(basis);
+      written = vars;
+      return true;
+    } finally {
+      commitDepth--;
     }
-    written = vars;
   };
 
   // Apply the canonical set as-is (no ease in flight): color roles show their
   // oklch form, translucent roles their tint+alpha.
-  const applyRolesDirect = () => applyHexes({});
+  const applyRolesDirect = (owner) => applyHexes({}, owner);
 
   /**
    * Recheck the background-dependent stable Glow decision class. This is not a
@@ -502,7 +518,10 @@ export function adaptTheme(element, options) {
     // Re-resolve exactly once to refresh certificates/source metadata. Only
     // stable Glow satellites are adopted; color/translucent roles remain under
     // the existing adaptive contrast controller and do not snap.
-    const fresh = sample0Result ?? colors.resolveTheme(samples[0], themeName);
+    const fresh = admitSnapshot(
+      sample0Result ?? colors.resolveTheme(samples[0], themeName),
+      "adaptTheme",
+    );
     const freshStable = validatedStableGlowsFrom(fresh);
     const freshByKey = new Map(freshStable.map((role) => [role.key, role]));
     const nextVars = { ...state.baseVars };
@@ -547,8 +566,9 @@ export function adaptTheme(element, options) {
     return prepared === null ? candidate : { ...candidate, ...prepared };
   };
 
-  const commitStableGlowReconciliation = (prepared) => {
-    if (prepared === null) return false;
+  const commitStableGlowReconciliation = (prepared, owner) => {
+    if (!ownsOperation(owner)) return false;
+    if (prepared === null) return true;
     const previousVars = baseVars;
     baseVars = prepared.baseVars;
     stableGlows = prepared.stableGlows;
@@ -561,8 +581,10 @@ export function adaptTheme(element, options) {
       const stableKeys = new Set(
         stableGlows.flatMap((role) => stableVarKeys(role)),
       );
+      commitDepth++;
       try {
         for (const key of stableKeys) {
+          if (!ownsOperation(owner)) return false;
           if (typeof prepared.baseVars[key] === "string") {
             if (
               previousVars[key] !== prepared.baseVars[key] ||
@@ -575,11 +597,15 @@ export function adaptTheme(element, options) {
             target.style.removeProperty(key);
             delete nextWritten[key];
           }
+          if (!ownsOperation(owner)) return false;
         }
       } catch (error) {
-        written = null;
+        if (ownsOperation(owner)) written = null;
         throw error;
+      } finally {
+        commitDepth--;
       }
+      if (!ownsOperation(owner)) return false;
       written = nextWritten;
     }
     return true;
@@ -604,10 +630,11 @@ export function adaptTheme(element, options) {
     return { easing: nextEasing, easeStart: now };
   };
 
-  const commitEase = (prepared) => {
+  const commitEase = (prepared, owner) => {
+    if (!ownsOperation(owner)) return false;
     easing = prepared.easing;
     easeStart = prepared.easeStart;
-    if (easing.size === 0) applyRolesDirect();
+    return easing.size === 0 ? applyRolesDirect(owner) : true;
   };
 
   // Legacy strict clamp: fixed-step bisection from the natural ease value `e`
@@ -649,7 +676,8 @@ export function adaptTheme(element, options) {
     return lums;
   };
 
-  const stepEase = (now, samples, key) => {
+  const stepEase = (now, samples, key, owner) => {
+    if (!ownsOperation(owner)) return false;
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     // Terminate the ease when it is done (`t >= 1`) OR when the clock went
     // non-finite (a NaN/±∞ `now` making `t` non-finite): drop the segments and
@@ -662,8 +690,7 @@ export function adaptTheme(element, options) {
     // `#NANNANNAN`; this guards the controller's easing state.)
     if (t >= 1 || !Number.isFinite(t)) {
       easing = new Map();
-      applyRolesDirect();
-      return;
+      return applyRolesDirect(owner);
     }
     const e = easeOut(t);
     const bgLums = strict ? bgLumsFor(samples, key) : null;
@@ -689,7 +716,7 @@ export function adaptTheme(element, options) {
       }
       overlay[r.cssVar] = segHex(seg, blend);
     }
-    applyHexes(overlay);
+    return applyHexes(overlay, owner);
   };
 
   const easeCompletesAt = (now) => {
@@ -735,8 +762,10 @@ export function adaptTheme(element, options) {
     return vars;
   };
 
-  const tick = (nowArg) => {
+  const runTick = (nowArg) => {
+    const owner = beginOperation();
     const now = nowArg ?? clock();
+    if (!ownsOperation(owner)) return;
     if (!Number.isFinite(now)) {
       throw new RangeError(
         `adaptTheme: часы обязаны быть конечными, получено ${now} — ` +
@@ -744,6 +773,7 @@ export function adaptTheme(element, options) {
       );
     }
     const samples = readSamples();
+    if (!ownsOperation(owner)) return;
     const key = samples.join("|");
     const hasEase = easing.size > 0;
 
@@ -754,8 +784,8 @@ export function adaptTheme(element, options) {
       breachSince === null &&
       (!hasEase || easeCompletesAt(now))
     ) {
-      if (hasEase) stepEase(now, samples, key);
-      else if (written === null) applyRolesDirect();
+      if (hasEase) stepEase(now, samples, key, owner);
+      else if (written === null) applyRolesDirect(owner);
       return;
     }
 
@@ -770,16 +800,18 @@ export function adaptTheme(element, options) {
               { baseVars, stableGlows },
               theme,
             );
-      commitStableGlowReconciliation(preparedGlow);
+      if (!ownsOperation(owner)) return;
+      if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
       lastKey = key;
-      if (hasEase) stepEase(now, samples, key);
-      else if (written === null) applyRolesDirect();
+      if (hasEase) stepEase(now, samples, key, owner);
+      else if (written === null) applyRolesDirect(owner);
       return;
     }
 
     // Compare the current colours with every declared sample. `worstIdx` is the
     // lowest-metric sample, the one used for the next resolve.
     const { breached, worstIdx } = recheckSamples(samples);
+    if (!ownsOperation(owner)) return;
     let nextBreachSince = breachSince;
 
     if (!breached) {
@@ -802,14 +834,15 @@ export function adaptTheme(element, options) {
               { baseVars, stableGlows },
               theme,
             );
+      if (!ownsOperation(owner)) return;
       // Вся работа resolver/recheck/Glow-валидации успешна. Только теперь
       // публикуем сертификатный переход и учёт контроллера, затем двигаем
       // текущий ease по тому же снимку образцов.
-      commitStableGlowReconciliation(preparedGlow);
+      if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
       lastKey = key;
       breachSince = nextBreachSince;
-      if (hasEase) stepEase(now, samples, key);
-      else if (written === null) applyRolesDirect();
+      if (hasEase) stepEase(now, samples, key, owner);
+      else if (written === null) applyRolesDirect(owner);
       return;
     }
 
@@ -820,19 +853,21 @@ export function adaptTheme(element, options) {
     // reintroducing flicker when a re-solve overlaps a previous ease.
     const fromByVar = paintedNow(now, samples, key);
     let candidate = solveCandidate(samples[worstIdx], now, theme);
+    if (!ownsOperation(owner)) return;
     candidate = withStableGlowReconciliation(
       candidate,
       samples,
       theme,
       worstIdx === 0 ? candidate.result : null,
     );
+    if (!ownsOperation(owner)) return;
     const preparedEase = prepareEase(candidate.roles, fromByVar, now);
     // До этой точки ни состояние контроллера, ни DOM не менялись. Публикуем
     // решённого кандидата, ease и ключ образцов одной commit-фазой.
-    commitResolved(candidate);
-    commitEase(preparedEase);
+    if (!commitResolved(candidate, owner)) return;
+    if (!commitEase(preparedEase, owner)) return;
     lastKey = key;
-    stepEase(now, samples, key);
+    stepEase(now, samples, key, owner);
   };
 
   let rafId = null;
@@ -882,6 +917,7 @@ export function adaptTheme(element, options) {
 
   // Apply the initial set immediately (against the worst sample of the backdrop).
   {
+    const owner = beginOperation();
     const samples = readSamples();
     const nextKey = samples.join("|");
     const now = clock();
@@ -892,32 +928,105 @@ export function adaptTheme(element, options) {
       theme,
       prepared.sample0Result,
     );
-    commitResolved(candidate);
+    if (!commitResolved(candidate, owner)) {
+      throw new Error("adaptTheme: initial operation lost ownership");
+    }
     lastKey = nextKey;
-    applyRolesDirect();
+    applyRolesDirect(owner);
   }
+
+  const pendingOperations = [];
+  let drainingOperations = false;
+
+  const runSetTheme = (next) => {
+    const owner = beginOperation();
+    const samples = readSamples();
+    if (!ownsOperation(owner)) return;
+    const nextKey = samples.join("|");
+    const now = clock();
+    if (!ownsOperation(owner)) return;
+    const prepared = solveWorstCandidate(samples, now, next);
+    if (!ownsOperation(owner)) return;
+    const candidate = withStableGlowReconciliation(
+      prepared.candidate,
+      samples,
+      next,
+      prepared.sample0Result,
+    );
+    if (!ownsOperation(owner)) return;
+    // Вся до-записьная работа resolver/recheck/evidence завершена.
+    // Публикуем новую тему и решённое состояние, затем — фаза CSSOM-записи.
+    theme = next;
+    lastKey = nextKey;
+    easing = new Map();
+    if (!commitResolved(candidate, owner)) return;
+    applyRolesDirect(owner); // instant — a theme switch is intent, not drift
+  };
+
+  const drainOperations = () => {
+    if (drainingOperations || commitDepth > 0) return;
+    drainingOperations = true;
+    try {
+      while (pendingOperations.length > 0) {
+        const operation = pendingOperations.shift();
+        if (operation.kind === "tick") runTick(operation.now);
+        else runSetTheme(operation.theme);
+      }
+    } catch (error) {
+      // Одна внешняя операция и её reentrant FIFO — одна serial transaction.
+      // После первого отказа старый suffix не смеет пережить transaction и
+      // перезаписать более новое намерение при следующем публичном вызове.
+      pendingOperations.length = 0;
+      throw error;
+    } finally {
+      drainingOperations = false;
+    }
+  };
+
+  const runPublicOperation = (kind, value) => {
+    try {
+      if (kind === "tick") runTick(value);
+      else runSetTheme(value);
+    } catch (error) {
+      // Первичная ошибка важнее невыполненного queued suffix; drain из finally
+      // заменил бы её вторичным исключением и оставил бы хвост жить дальше.
+      pendingOperations.length = 0;
+      throw error;
+    }
+    drainOperations();
+  };
+
+  const tick = (nowArg) => {
+    if (commitDepth > 0) {
+      pendingOperations.push({ kind: "tick", now: nowArg });
+      return;
+    }
+    if (drainingOperations) {
+      // Prepare reentrancy is newer than the not-yet-run FIFO suffix. Enqueue
+      // chronologically and revoke the active uncommitted candidate now.
+      pendingOperations.push({ kind: "tick", now: nowArg });
+      operationGeneration++;
+      return;
+    }
+    runPublicOperation("tick", nowArg);
+  };
+
+  const setTheme = (next) => {
+    if (commitDepth > 0) {
+      pendingOperations.push({ kind: "theme", theme: next });
+      return;
+    }
+    if (drainingOperations) {
+      pendingOperations.push({ kind: "theme", theme: next });
+      operationGeneration++;
+      return;
+    }
+    runPublicOperation("theme", next);
+  };
 
   return {
     tick,
-    setTheme(next) {
-      const samples = readSamples();
-      const nextKey = samples.join("|");
-      const now = clock();
-      const prepared = solveWorstCandidate(samples, now, next);
-      let candidate = withStableGlowReconciliation(
-        prepared.candidate,
-        samples,
-        next,
-        prepared.sample0Result,
-      );
-      // Вся до-записьная работа resolver/recheck/evidence завершена.
-      // Публикуем новую тему и решённое состояние, затем — фаза CSSOM-записи.
-      theme = next;
-      lastKey = nextKey;
-      easing = new Map();
-      commitResolved(candidate);
-      applyRolesDirect(); // instant — a theme switch is intent, not drift
-    },
+    setTheme,
     start() {
       if (!running && win?.requestAnimationFrame) {
         running = true;
@@ -927,6 +1036,8 @@ export function adaptTheme(element, options) {
       }
     },
     stop() {
+      if (commitDepth === 0) operationGeneration++;
+      pendingOperations.length = 0;
       running = false;
       frameEpoch++;
       frameCallback = null;

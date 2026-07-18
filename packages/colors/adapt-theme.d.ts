@@ -67,7 +67,9 @@ export interface AdaptController {
   tick(now?: number): void;
   /**
    * Switch theme INSTANTLY (intent, not drift) — bypasses the hysteresis. A
-   * отклонённый кандидат оставляет прежние тему, цели и DOM.
+   * отклонённый кандидат оставляет прежние тему, цели и DOM. Если подготовка
+   * reentrant-но запускает более новый `setTheme`/`tick`, новый вызов владеет
+   * commit, а устаревший кандидат становится инертным.
    */
   setTheme(theme: ThemeName): void;
   /** Begin an internal `requestAnimationFrame` loop. */
@@ -87,6 +89,7 @@ export interface AdaptController {
  * metric evaluation is skipped while that set and the pending state are
  * unchanged. A changed/pending set is compared with the last resolved baseline,
  * and re-solve + ease starts only after a sustained relative drop. This does not
- * establish legibility outside the supplied samples or between them.
+ * establish legibility outside the supplied samples or between them. Output
+ * conflicts are rejected before DOM/controller mutation and remain retryable.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;

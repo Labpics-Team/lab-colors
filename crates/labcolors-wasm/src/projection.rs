@@ -26,7 +26,7 @@
 use std::fmt::Write as _;
 
 use crate::dto::{GlowColor, GlowIndeterminateColor, MaterialColor, ResolvedTheme, RoleOutcome};
-use crate::error::BindingError;
+use crate::error::{BindingError, OutputConflicts};
 
 /// Project the core-owned WCAG22 assessment without recomputing any math.
 pub fn wcag22_json(
@@ -114,6 +114,27 @@ pub fn wcag22_json(
         profile.profile_checksum,
         profile.source_sha256,
     ))
+}
+
+/// Сериализовать непустой ordered aggregate конфликта для оформления обычного
+/// JS `Error`. Тот же wide-JSON путь и тот же escaper, что у успешного
+/// результата, удерживают одну границу экранирования вместо набора FFI-записей.
+pub fn output_conflict_json(conflicts: &OutputConflicts) -> String {
+    let mut out = String::from(
+        "{\"name\":\"OutputConflictError\",\"code\":\"output_conflict\",\"conflicts\":[",
+    );
+    for (index, conflict) in conflicts.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"role\":");
+        push_str_lit(&mut out, conflict.role());
+        field_str(&mut out, "code", conflict.code());
+        field_str(&mut out, "message", conflict.message());
+        out.push('}');
+    }
+    out.push_str("]}");
+    out
 }
 
 /// Сериализовать [`ResolvedTheme`] в JSON, литерально повторяющий форму
@@ -302,13 +323,13 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
             RoleOutcome::None => {
                 field_str(&mut roles, "kind", "none");
             }
-            RoleOutcome::Failure {
-                category,
-                code,
-                message,
-            } => {
+            RoleOutcome::Unresolved { code, message } => {
                 field_str(&mut roles, "kind", "failure");
-                field_str(&mut roles, "category", category.as_str());
+                field_str(
+                    &mut roles,
+                    "category",
+                    labcolors_core::RoleFailureCategory::Unresolved.as_str(),
+                );
                 field_str(&mut roles, "code", code);
                 field_str(&mut roles, "message", message);
             }
@@ -906,8 +927,7 @@ mod tests {
                 },
                 RoleEntry {
                     role_key: "unresolved".to_string(),
-                    outcome: RoleOutcome::Failure {
-                        category: labcolors_core::RoleFailureCategory::Unresolved,
+                    outcome: RoleOutcome::Unresolved {
                         code: "bounded_search_exhausted",
                         message: "нет цвета: \"предел\"\nвторая строка".to_string(),
                     },
@@ -1518,6 +1538,32 @@ mod tests {
                 .unwrap(),
             "--lab-we\"ird\\key\n\t\u{0001}"
         );
+    }
+
+    #[test]
+    fn output_conflict_strings_escape_reversibly_and_keep_order() {
+        let first = crate::error::OutputConflict::new(
+            "role-\"\\\n\t\u{0001}\u{2028}".to_string(),
+            "code-\"\\\n\u{0002}",
+            "сообщение \"\\\n\r\t\u{0003}\u{2029}".to_string(),
+        );
+        let second = crate::error::OutputConflict::new(
+            "second".to_string(),
+            "exceeds_range",
+            "second message".to_string(),
+        );
+        let conflicts = OutputConflicts::new(first, vec![second]);
+
+        let json = output_conflict_json(&conflicts);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["name"], "OutputConflictError");
+        assert_eq!(value["code"], "output_conflict");
+        let items = value["conflicts"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["role"], "role-\"\\\n\t\u{0001}\u{2028}");
+        assert_eq!(items[0]["code"], "code-\"\\\n\u{0002}");
+        assert_eq!(items[0]["message"], "сообщение \"\\\n\r\t\u{0003}\u{2029}");
+        assert_eq!(items[1]["role"], "second");
     }
 
     #[test]

@@ -17,8 +17,8 @@
 // `background-color` chain (`effective-bg.js`). For images/gradients/blur, pass
 // an explicit reference hex; one sample does not represent the whole field.
 
-import { applyTheme } from "./apply-theme.js";
 import { effectiveBackground } from "./effective-bg.js";
+import { admitSnapshot, writeVars } from "./snapshot.js";
 
 /**
  * @typedef {object} WatchController
@@ -96,6 +96,10 @@ export function watchTheme(element, options) {
   let lastTheme = null;
   let lastResult = null;
   let dirty = false;
+  let commitDepth = 0;
+  let stopped = false;
+  const pendingOperations = [];
+  let drainingOperations = false;
 
   const readBackground = () => {
     const b = options.background;
@@ -116,16 +120,32 @@ export function watchTheme(element, options) {
       // императивную оболочку резолвером не нужно.
       return dirty ? { bg, candidateTheme, result: lastResult } : null;
     }
-    const result = options.colors.resolveTheme(bg, candidateTheme);
+    // Допуск принадлежит prepare-фазе: конфликт ещё не затронул DOM или
+    // controller state, поэтому то же observation можно повторить.
+    const result = admitSnapshot(
+      options.colors.resolveTheme(bg, candidateTheme),
+      "watchTheme",
+    );
     return { bg, candidateTheme, result };
   };
 
-  const commitPrepared = ({ bg, candidateTheme, result }) => {
+  const commitPrepared = ({ bg, candidateTheme, result }, owner) => {
+    commitDepth++;
     try {
-      applyTheme(target, result);
+      // `prepareFor` уже допустил полный снимок; повторно выдавать адаптивную
+      // внутреннюю запись за новый resolver-result не нужно.
+      const complete = writeVars(
+        target,
+        result.vars,
+        "watchTheme",
+        () => owner === generation,
+      );
+      if (!complete) return lastResult;
     } catch (error) {
-      dirty = true;
+      if (!stopped && owner === generation) dirty = true;
       throw error;
+    } finally {
+      commitDepth--;
     }
     // Публикуем запрошенную тему только после успеха и резолва, и записи в
     // DOM: отклонённый кандидат не может стать скрытым входом позднейшего
@@ -139,6 +159,7 @@ export function watchTheme(element, options) {
   };
 
   const refreshFor = (candidateTheme, force = false) => {
+    if (stopped) return lastResult;
     const gen = ++generation;
     const prepared = prepareFor(candidateTheme, force);
     if (stopped || gen !== generation) {
@@ -146,10 +167,81 @@ export function watchTheme(element, options) {
       // кандидат устарел — вернуть закоммиченное состояние без записи.
       return lastResult;
     }
-    return prepared === null ? lastResult : commitPrepared(prepared);
+    return prepared === null ? lastResult : commitPrepared(prepared, gen);
   };
 
-  const refresh = (force = false) => refreshFor(theme, force);
+  const drainOperations = () => {
+    if (drainingOperations || commitDepth > 0) return;
+    if (stopped) {
+      pendingOperations.length = 0;
+      return;
+    }
+    drainingOperations = true;
+    try {
+      while (pendingOperations.length > 0 && !stopped) {
+        const operation = pendingOperations.shift();
+        if (operation.kind === "theme") {
+          refreshFor(operation.theme);
+        } else {
+          // Refresh means "re-read the currently committed theme". Capturing
+          // it at enqueue time would let an older value undo a preceding
+          // queued setTheme after a reentrant CSS callback returns.
+          refreshFor(theme, operation.force);
+        }
+      }
+    } catch (error) {
+      // Внешний вызов и порождённый им FIFO-хвост — одна serial transaction.
+      // Первый отказ сохраняет уже выполненный префикс, но ни одна старая
+      // команда не должна пережить его и попасть в следующую transaction.
+      pendingOperations.length = 0;
+      throw error;
+    } finally {
+      drainingOperations = false;
+    }
+  };
+
+  const runPublicOperation = (kind, value) => {
+    try {
+      if (kind === "theme") refreshFor(value);
+      else refreshFor(theme, value);
+    } catch (error) {
+      // Не дренировать после первичной ошибки: queued callback не вправе
+      // подменить её своим исключением. Невыполненный suffix отменён целиком.
+      pendingOperations.length = 0;
+      throw error;
+    }
+    drainOperations();
+    return lastResult;
+  };
+
+  const refresh = (force = false) => {
+    if (commitDepth > 0) {
+      pendingOperations.push({ kind: "refresh", force });
+      return lastResult;
+    }
+    if (drainingOperations) {
+      // Вызов из prepare уже исполняемой queued-операции хронологически новее
+      // оставшегося FIFO. Ставим его в хвост и сразу отзываем ещё не
+      // закоммиченного кандидата; иначе старый хвост перезапишет новый intent.
+      pendingOperations.push({ kind: "refresh", force });
+      generation++;
+      return lastResult;
+    }
+    return runPublicOperation("refresh", force);
+  };
+
+  const setTheme = (next) => {
+    if (commitDepth > 0) {
+      pendingOperations.push({ kind: "theme", theme: next });
+      return;
+    }
+    if (drainingOperations) {
+      pendingOperations.push({ kind: "theme", theme: next });
+      generation++;
+      return;
+    }
+    runPublicOperation("theme", next);
+  };
 
   // Решаем первого кандидата до захвата долгоживущего host-ресурса,
   // но не применяем сразу: observer обязан быть активным во время первой
@@ -159,7 +251,6 @@ export function watchTheme(element, options) {
 
   // Coalesce a burst of mutations into a single refresh on the next microtask.
   let scheduled = false;
-  let stopped = false;
   const schedule = () => {
     if (scheduled || stopped) return;
     scheduled = true;
@@ -195,7 +286,7 @@ export function watchTheme(element, options) {
       }
     }
     if (!stopped && initialGen === generation) {
-      commitPrepared(initial);
+      commitPrepared(initial, initialGen);
     }
   } catch (error) {
     // Упавшая конструкция не смеет оставить недосягаемый observer или
@@ -219,15 +310,14 @@ export function watchTheme(element, options) {
 
   return {
     refresh,
-    setTheme(next) {
-      refreshFor(next);
-    },
+    setTheme,
     background() {
       return lastBg;
     },
     stop() {
       stopped = true;
-      generation++;
+      if (commitDepth === 0) generation++;
+      pendingOperations.length = 0;
       if (observer) observer.disconnect();
       observer = null;
     },

@@ -56,7 +56,9 @@ export interface WatchController {
  *
  * `style`/`class` attribute changes in the observed subtree schedule a refresh;
  * continuous inputs are driven by calling `refresh()` from a
- * `requestAnimationFrame` loop. Pixel/layout changes are not observed.
+ * `requestAnimationFrame` loop. Output conflicts are rejected before DOM or
+ * controller state changes, so the same observation remains retryable.
+ * Pixel/layout changes are not observed.
  */
 export declare function watchTheme(
   element: HTMLElement,

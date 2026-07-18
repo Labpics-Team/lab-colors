@@ -54,12 +54,11 @@ pub enum RoleOutcome {
     /// `oklch(<tone> / α)`, `--lab-<role>-02` и `--lab-<role>` — `oklch(<tone>)`
     /// (солид-канон/опаковая база); композит-гарантия читаемости — в полях.
     Material(MaterialColor),
-    /// Допущенный локальный отказ роли: доказанная недостижимость или
-    /// незавершённый bounded search. Rejected/unsupported/internal закрывают
-    /// весь резолв и в этом варианте жить не могут.
-    Failure {
-        /// Core-owned semantic category.
-        category: labcolors_core::RoleFailureCategory,
+    /// Допущенный локальный `Unresolved`: bounded search завершился без
+    /// доказательства. Ordinary `Unreachable` граница агрегирует в whole-call
+    /// `output_conflict` до создания DTO; rejected/unsupported/internal также
+    /// закрывают весь резолв и в этом варианте жить не могут.
+    Unresolved {
         /// Core-owned stable machine code.
         code: &'static str,
         /// A human-readable explanation (the core's `Display`).

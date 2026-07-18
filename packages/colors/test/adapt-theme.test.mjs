@@ -53,15 +53,23 @@ function fakeColors(initial) {
 
 function fakeElement() {
   const props = new Map();
+  const mutations = [];
   return {
     props,
+    mutations,
     style: {
       get length() {
         return props.size;
       },
       item: (i) => [...props.keys()][i] ?? null,
-      setProperty: (k, v) => props.set(k, v),
-      removeProperty: (k) => props.delete(k),
+      setProperty(k, v) {
+        mutations.push(["set", k, v]);
+        props.set(k, v);
+      },
+      removeProperty(k) {
+        mutations.push(["remove", k]);
+        props.delete(k);
+      },
     },
   };
 }
@@ -70,6 +78,44 @@ const oneRole = (hex, lc) => ({
   vars: { "--lab-label-primary": hex },
   roles: { "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc } },
 });
+
+function withUnreachable(result, role = "impossible") {
+  return {
+    ...result,
+    vars: { ...result.vars },
+    roles: {
+      ...result.roles,
+      [role]: {
+        kind: "failure",
+        cssVar: `--lab-${role}`,
+        category: "unreachable",
+        code: "floor_unreachable",
+        message: "contract has no solution",
+      },
+    },
+  };
+}
+
+function captureOutputConflict(fn, expectedRoles = ["impossible"]) {
+  let error = null;
+  try {
+    fn();
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error, "ordinary Unreachable must reject the whole adaptive operation");
+  assert.equal(error.name, "OutputConflictError");
+  assert.equal(error.code, "output_conflict");
+  assert.deepEqual(
+    error.conflicts,
+    expectedRoles.map((role) => ({
+      role,
+      code: "floor_unreachable",
+      message: "contract has no solution",
+    })),
+  );
+  return error;
+}
 
 // A role set that carries an explicit `legalFloor` (4.5 / 3.0 / null), the field
 // the strict floor-clamp reads.
@@ -143,14 +189,72 @@ test("current() reports the logical target, not the painted mid-ease value", () 
   assert.equal(h.ctrl.current()["--lab-label-primary"], "#FFFFFF");
 });
 
-test("a failed worst-sample resolve leaves DOM and logical state unchanged", () => {
+test("adaptTheme owns its admitted snapshot instead of resolver aliases", () => {
+  const source = oneRole("#111111", 100);
+  const el = fakeElement();
+  const ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme: () => source,
+      recheckContrast: () => [100, 1],
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  const committed = ctrl.current();
+
+  source.vars["--lab-label-primary"] = "#EEEEEE";
+  source.vars["--lab-injected"] = "#ABCDEF";
+  source.roles.late = {
+    kind: "failure",
+    category: "unreachable",
+    code: "floor_unreachable",
+    message: "injected after admission",
+  };
+
+  assert.deepEqual(ctrl.current(), committed);
+  assert.equal(el.props.has("--lab-injected"), false);
+});
+
+test("adaptTheme never invokes an accessor installed after admission", () => {
+  const source = oneRole("#111111", 100);
+  const el = fakeElement();
+  const ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme: () => source,
+      recheckContrast: () => [100, 1],
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  let getterCalls = 0;
+  Object.defineProperty(source.vars, "--lab-label-primary", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      getterCalls++;
+      return "#EEEEEE";
+    },
+  });
+
+  assert.equal(ctrl.current()["--lab-label-primary"], "#111111");
+  assert.equal(getterCalls, 0, "controller state must read only the owned data snapshot");
+});
+
+test("a second-sample output conflict leaves DOM/state unchanged and remains retryable", () => {
   const el = fakeElement();
   let samples = ["#FFFFFF", "#000000"];
+  let conflict = true;
   const recheckThemes = [];
   const colors = {
     resolveTheme(bg, theme) {
-      if (theme === "dark" && bg === "#000000") {
-        throw new Error("rejected: invalid_input");
+      if (theme === "dark" && bg === "#000000" && conflict) {
+        return withUnreachable(oneRole("#FFFFFF", 100));
       }
       return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100);
     },
@@ -169,8 +273,10 @@ test("a failed worst-sample resolve leaves DOM and logical state unchanged", () 
   });
   const beforeDom = new Map(el.props);
   const beforeCurrent = ctrl.current();
+  el.mutations.length = 0;
 
-  assert.throws(() => ctrl.setTheme("dark"), /rejected: invalid_input/);
+  captureOutputConflict(() => ctrl.setTheme("dark"));
+  assert.deepEqual(el.mutations, [], "the second solve must be admitted before DOM commit");
   assert.deepEqual(el.props, beforeDom, "failed resolve must not partially repaint");
   assert.deepEqual(
     ctrl.current(),
@@ -181,6 +287,10 @@ test("a failed worst-sample resolve leaves DOM and logical state unchanged", () 
   samples = ["#FEFEFE", "#000000"];
   ctrl.tick();
   assert.equal(recheckThemes.at(-1), "light", "failed setTheme must not publish hidden intent");
+
+  conflict = false;
+  ctrl.setTheme("dark");
+  assert.equal(el.props.get("--lab-label-primary"), "#FFFFFF");
 });
 
 test("a failed stable-Glow reconciliation does not publish its candidate", () => {
@@ -241,7 +351,7 @@ test("a failed stable-Glow reconciliation does not publish its candidate", () =>
   assert.deepEqual(ctrl.current(), beforeCurrent);
 });
 
-test("tick does not commit a Glow class change before a later set resolve succeeds", () => {
+test("a stable-Glow reconciliation conflict cannot commit its class transition", () => {
   const el = fakeElement();
   let samples = ["#FFFFFF"];
   let now = 0;
@@ -285,7 +395,7 @@ test("tick does not commit a Glow class change before a later set resolve succee
         blackResolves++;
         return determinate;
       }
-      if (blackResolves > 0) throw new Error("rejected: invalid_input");
+      if (blackResolves > 0) return withUnreachable(determinate);
       return determinate;
     },
     recheckContrast(background) {
@@ -308,11 +418,13 @@ test("tick does not commit a Glow class change before a later set resolve succee
   });
   const beforeDom = new Map(el.props);
   const beforeCurrent = ctrl.current();
+  el.mutations.length = 0;
 
   samples = ["#FFFFFF", "#000000"];
   now = 1;
-  assert.throws(() => ctrl.tick(), /rejected: invalid_input/);
+  captureOutputConflict(() => ctrl.tick());
   assert.equal(blackResolves, 1, "the worst-sample candidate is prepared before failure");
+  assert.deepEqual(el.mutations, [], "Glow satellites must not change before admission");
   assert.deepEqual(el.props, beforeDom);
   assert.deepEqual(ctrl.current(), beforeCurrent);
 });
@@ -356,6 +468,86 @@ test("an in-flight ease does not advance before the tick's fallible checks succe
   assert.throws(() => ctrl.tick(), /recheck failed/);
   assert.deepEqual(el.props, beforeDom);
   assert.deepEqual(ctrl.current(), beforeCurrent);
+});
+
+test("an output conflict mid-ease is inert and its retry matches a control run", () => {
+  const makeCase = (conflictOnce) => {
+    const el = fakeElement();
+    let bg = "#FFFFFF";
+    let now = 0;
+    let resolves = 0;
+    let breached = true;
+    const colors = {
+      resolveTheme() {
+        resolves++;
+        if (resolves === 1) return oneRole("#000000", 100);
+        if (resolves === 2) return oneRole("#FFFFFF", 100);
+        const next = oneRole("#202020", 100);
+        if (conflictOnce && resolves === 3) return withUnreachable(next);
+        return next;
+      },
+      recheckContrast() {
+        return [breached ? 0 : 100, 1];
+      },
+    };
+    const ctrl = adaptTheme(el, {
+      colors,
+      theme: "light",
+      background: () => bg,
+      target: el,
+      now: () => now,
+      win: {},
+      sustainMs: 0,
+      dwellMs: 0,
+      easeMs: 100,
+    });
+    return {
+      ctrl,
+      el,
+      setBg(value) {
+        bg = value;
+      },
+      setNow(value) {
+        now = value;
+      },
+      pass() {
+        breached = false;
+      },
+    };
+  };
+
+  const retried = makeCase(true);
+  const control = makeCase(false);
+  for (const run of [retried, control]) {
+    run.setBg("#101010");
+    run.setNow(1);
+    run.ctrl.tick(); // begin #000000 -> #FFFFFF
+  }
+
+  retried.setBg("#202020");
+  retried.setNow(51);
+  const beforeDom = new Map(retried.el.props);
+  const beforeCurrent = retried.ctrl.current();
+  retried.el.mutations.length = 0;
+  captureOutputConflict(() => retried.ctrl.tick());
+  assert.deepEqual(retried.el.mutations, [], "the failed tick must not advance the old ease");
+  assert.deepEqual(retried.el.props, beforeDom);
+  assert.deepEqual(retried.ctrl.current(), beforeCurrent);
+
+  control.setBg("#202020");
+  control.setNow(51);
+  control.ctrl.tick();
+  retried.ctrl.tick(); // retry the exact same sample/time after the conflict
+  assert.deepEqual(retried.el.props, control.el.props);
+  assert.deepEqual(retried.ctrl.current(), control.ctrl.current());
+
+  for (const run of [retried, control]) run.pass();
+  retried.setNow(76);
+  control.setNow(76);
+  retried.ctrl.tick();
+  control.ctrl.tick();
+  assert.deepEqual(retried.el.props, control.el.props, "later eased paint also matches control");
+  assert.deepEqual(retried.ctrl.current(), control.ctrl.current());
 });
 
 test("a transient recheck failure retries the same changed sample", () => {
@@ -535,6 +727,369 @@ test("a stale frame surviving a failed cancel cannot capture a restarted loop", 
   stale.callback();
   assert.equal(frames.length, 1, "a stale callback must not schedule beside the new epoch");
   ctrl.stop();
+});
+
+test("a nested setTheme owns the commit over its stale outer setTheme", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let reentered = false;
+  const colors = {
+    resolveTheme(_background, theme) {
+      if (theme === "outer" && !reentered) {
+        reentered = true;
+        ctrl.setTheme("inner");
+        return oneRole("#EEEEEE", 100);
+      }
+      return oneRole(theme === "inner" ? "#222222" : "#111111", 100);
+    },
+    recheckContrast() {
+      return [100, 1];
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  ctrl.setTheme("outer");
+  assert.equal(el.props.get("--lab-label-primary"), "#222222");
+  assert.equal(ctrl.current()["--lab-label-primary"], "#222222");
+});
+
+test("a nested setTheme during a full CSS write owns the whole adaptive snapshot", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const values = {
+    light: ["#111111", "#121212"],
+    outer: ["#EEEEEE", "#EDEDED"],
+    inner: ["#222222", "#232323"],
+  };
+  const resultFor = (theme) => {
+    const [a, b] = values[theme];
+    return {
+      theme,
+      background: "#FFFFFF",
+      vars: { "--lab-a": a, "--lab-b": b },
+      roles: {
+        a: { kind: "color", cssVar: "--lab-a", hex: a, lc: 100 },
+        b: { kind: "color", cssVar: "--lab-b", hex: b, lc: 100 },
+      },
+    };
+  };
+  const colors = {
+    resolveTheme(_background, theme) {
+      return resultFor(theme);
+    },
+    recheckContrast() {
+      return [100, 1, 100, 1];
+    },
+  };
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === values.outer[0]) {
+      armed = false;
+      ctrl.setTheme("inner");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+  ctrl.tick(2);
+
+  assert.deepEqual(
+    {
+      dom: Object.fromEntries(el.props),
+      current: ctrl.current(),
+    },
+    {
+      dom: resultFor("inner").vars,
+      current: resultFor("inner").vars,
+    },
+    "the stale writer must neither overwrite part of the newer commit nor mark the hybrid clean",
+  );
+});
+
+test("a before-forward CSS wrapper cannot let the stale adaptive writer follow a nested setTheme", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const values = {
+    light: "#111111",
+    outer: "#EEEEEE",
+    inner: "#222222",
+  };
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    if (armed && key === "--lab-label-primary" && value === values.outer) {
+      armed = false;
+      ctrl.setTheme("inner");
+    }
+    write(key, value);
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return oneRole(values[theme], 100);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+  ctrl.tick(2);
+
+  assert.deepEqual(
+    { dom: Object.fromEntries(el.props), current: ctrl.current() },
+    { dom: oneRole(values.inner, 100).vars, current: oneRole(values.inner, 100).vars },
+    "the newer nested commit must own the full snapshot even when the stale wrapper forwards later",
+  );
+});
+
+test("stop during a full CSS write cannot split the already-started adaptive commit", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const resultFor = (theme) => ({
+    theme,
+    background: "#FFFFFF",
+    vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+      b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer-a") {
+      armed = false;
+      ctrl.stop();
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1, 100, 1];
+      },
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+
+  assert.deepEqual(
+    {
+      dom: Object.fromEntries(el.props),
+      current: ctrl.current(),
+    },
+    {
+      dom: resultFor("outer").vars,
+      current: resultFor("outer").vars,
+    },
+    "stop cancels future work but cannot tear an in-progress synchronous commit",
+  );
+});
+
+test("a failed queued adaptive operation cannot leave an older tail to overwrite a later intent", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer") {
+      armed = false;
+      ctrl.setTheme("bad");
+      ctrl.setTheme("stale");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "bad") throw new Error("queued operation failed");
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  assert.throws(() => ctrl.setTheme("outer"), /queued operation failed/u);
+  ctrl.setTheme("newer");
+
+  assert.equal(el.props.get("--lab-a"), "newer");
+  assert.equal(ctrl.current()["--lab-a"], "newer");
+});
+
+test("the newest adaptive intent raised during queued prepare follows the older FIFO suffix", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  let reenter = true;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer") {
+      armed = false;
+      ctrl.setTheme("A");
+      ctrl.setTheme("C");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "A" && reenter) {
+          reenter = false;
+          ctrl.setTheme("B");
+        }
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
+test("a nested setTheme owns the commit over a stale outer tick", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let bg = "#FFFFFF";
+  let now = 0;
+  let reenterOnLightSolve = false;
+  const colors = {
+    resolveTheme(_background, theme) {
+      if (theme === "light" && reenterOnLightSolve) {
+        reenterOnLightSolve = false;
+        ctrl.setTheme("inner");
+        return oneRole("#EEEEEE", 100);
+      }
+      return oneRole(theme === "inner" ? "#222222" : "#111111", 100);
+    },
+    recheckContrast() {
+      return [0, 1];
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+  });
+
+  bg = "#101010";
+  now = 1;
+  reenterOnLightSolve = true;
+  ctrl.tick();
+  assert.equal(el.props.get("--lab-label-primary"), "#222222");
+  assert.equal(ctrl.current()["--lab-label-primary"], "#222222");
+});
+
+test("a reentrant stop during recheck leaves the same sample retryable", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let bg = "#FFFFFF";
+  let rechecks = 0;
+  let stopInsideRecheck = false;
+  const colors = {
+    resolveTheme() {
+      return oneRole("#111111", 100);
+    },
+    recheckContrast() {
+      rechecks++;
+      if (stopInsideRecheck) {
+        stopInsideRecheck = false;
+        ctrl.stop();
+      }
+      return [100, 1];
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+  el.mutations.length = 0;
+
+  bg = "#FEFEFE";
+  stopInsideRecheck = true;
+  ctrl.tick();
+  assert.deepEqual(el.mutations, []);
+  assert.deepEqual(el.props, beforeDom);
+  assert.deepEqual(ctrl.current(), beforeCurrent);
+
+  ctrl.tick();
+  assert.equal(rechecks, 2, "the stale outer tick must not mark its sample as processed");
 });
 
 test("stop and restart preserve an in-flight ease until its canonical target", () => {
@@ -1735,13 +2290,13 @@ test("batch engine still uses the per-sample path for a single-sample backdrop",
   );
 });
 
-// ── Пер-ролевой отказ сквозь рантайм-цикл (закон допуска на JS-стороне) ──────
+// ── Допущенный Unresolved сквозь рантайм-цикл ────────────────────────────────
 
-// Смешанный набор: живой цвет + допущенный пер-ролевой отказ (var НЕ эмитится,
-// по wasm-проекции) + полупрозрачная роль. Отказная роль обязана оставаться
-// структурно инертной на каждой фазе: ни выдуманного цвета, ни участия в
+// Смешанный набор: живой цвет + допущенный Unresolved (var НЕ эмитится,
+// по wasm-проекции) + полупрозрачная роль. Unresolved обязан оставаться
+// структурно инертным на каждой фазе: ни выдуманного цвета, ни участия в
 // recheck/ease, ни воскрешения после re-solve; выжившие роли живут как обычно.
-function mixedWithFailure(hex, lc) {
+function mixedWithUnresolved(hex, lc) {
   return {
     vars: {
       "--lab-label-primary": hex,
@@ -1758,9 +2313,9 @@ function mixedWithFailure(hex, lc) {
       impossible: {
         kind: "failure",
         cssVar: "--lab-impossible",
-        category: "unreachable",
-        code: "exceeds_range",
-        message: "target exceeds the most this background can supply",
+        category: "unresolved",
+        code: "bounded_search_exhausted",
+        message: "bounded search did not decide",
       },
       veil: {
         kind: "translucent",
@@ -1772,9 +2327,9 @@ function mixedWithFailure(hex, lc) {
   };
 }
 
-test("admitted per-role failure stays inert through init, breach re-solve and ease", () => {
+test("admitted Unresolved stays inert through init, breach re-solve and ease", () => {
   const h = harness();
-  h.colors.setResolve(mixedWithFailure("#000000", 100));
+  h.colors.setResolve(mixedWithUnresolved("#000000", 100));
   // Пересоздать контроллер поверх нового резолва: init-фаза.
   const el = fakeElement();
   let bg = "#FFFFFF";
@@ -1784,7 +2339,7 @@ test("admitted per-role failure stays inert through init, breach re-solve and ea
     resolveCount: 0,
     resolveTheme(b) {
       this.resolveCount++;
-      return mixedWithFailure(this.resolveCount === 1 ? "#000000" : "#111111", 100);
+      return mixedWithUnresolved(this.resolveCount === 1 ? "#000000" : "#111111", 100);
     },
     recheckContrast(b, fgs) {
       seenRecheckHex.push(...fgs);

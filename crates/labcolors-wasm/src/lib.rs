@@ -28,7 +28,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::dto::ResolvedTheme;
 use crate::engine::{Engine, hex_for_recheck};
-use crate::error::BindingError;
+use crate::error::{BindingError, OutputConflicts};
 
 /// TypeScript-формы значений `resolveTheme`. `wasm-bindgen` связывает с ними
 /// `LabColors.resolveTheme(...): ResolvedTheme`, поэтому потребителю не нужен
@@ -78,21 +78,38 @@ export interface NoneRole {
   readonly cssVar: string;
 }
 
-/** Допущенная локальная категория отказа. Только `unreachable` доказывает отсутствие решения в объявленном домене. */
+/** Единственная категория failure внутри успешного snapshot: bounded search не доказал исход. */
 export type FailureCategory =
-  | "unreachable"
   | "unresolved";
 
-/** Типизированный локальный отказ роли. Rejected, unsupported и internal вместо этого отклоняют весь вызов. */
+/** Типизированный локальный незавершённый поиск. Unreachable отклоняет whole resolve как OutputConflictError. */
 export interface FailureRole {
   readonly kind: "failure";
   readonly cssVar: string;
   /** Семантическая категория, которой владеет Core. */
   readonly category: FailureCategory;
-  /** Стабильный машинный код Core, например "floor_unreachable". */
+  /** Стабильный машинный код Core: "bounded_search_exhausted". */
   readonly code: string;
   /** Человекочитаемое объяснение. */
   readonly message: string;
+}
+
+/** Одна обычная роль, физически недостижимая в объявленном домене. */
+export interface OutputConflict {
+  /** Непрозрачный client-owned ID роли. */
+  readonly role: string;
+  /** Стабильный машинный код Core, например "exceeds_range". */
+  readonly code: string;
+  /** Человекочитаемая исходная диагностика Core. */
+  readonly message: string;
+}
+
+/** Whole-call ошибка: полный output snapshot не существует. */
+export interface OutputConflictError extends Error {
+  readonly name: "OutputConflictError";
+  readonly code: "output_conflict";
+  /** Непустой aggregate в порядке объявления ролей; aliases не дублируются. */
+  readonly conflicts: readonly [OutputConflict, ...OutputConflict[]];
 }
 
 /** Полупрозрачная эмиссия лестницы/альфа-аналога: CSS несёт oklch(L% C H / A), а браузер композитит её. */
@@ -492,9 +509,9 @@ export interface ResolvedTheme {
    * изменений. Покадровый easing adaptTheme пишет конкретные интерполированные
    * цвета и этой формой эмиссии не ограничен.
    */
-  readonly vars: Record<string, string>;
+  readonly vars: Readonly<Record<string, string>>;
   /** Все роли по стабильному ключу без префикса --lab-. */
-  readonly roles: Record<string, RoleResult>;
+  readonly roles: Readonly<Record<string, RoleResult>>;
 }
 "##;
 
@@ -509,6 +526,8 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
     pub type JsWcag22Assessment;
 
+    #[wasm_bindgen(catch, js_namespace = Object, js_name = assign)]
+    fn object_assign(target: &JsValue, source: &JsValue) -> Result<JsValue, JsValue>;
 }
 
 /// Единственный публичный манифест численных возможностей: V2 с доказательствами.
@@ -602,9 +621,10 @@ impl LabColors {
     /// `themes` загруженного конфига (канонический путь: ключ → `VcPreset` →
     /// viewing conditions). Ключ вне словаря — `unknown_theme`.
     ///
-    /// Возвращает полный `ResolvedTheme`. Локальный `unreachable`/`unresolved`
-    /// остаётся типизированными данными роли. Rejected/unsupported/internal
-    /// отказы набора отклоняются атомарно: частичной темы или CSS не бывает.
+    /// Возвращает полный `ResolvedTheme`. Локальный `unresolved` остаётся
+    /// типизированным исходом роли; ordinary `unreachable` отклоняет весь вызов
+    /// как `OutputConflictError`. Rejected/unsupported/internal также
+    /// отклоняются атомарно: частичной темы или CSS не бывает.
     /// Ошибки границы — структурная форма `"<code>: <message>"`, Rust-паника
     /// в JavaScript не разматывается.
     #[wasm_bindgen(js_name = resolveTheme)]
@@ -615,9 +635,9 @@ impl LabColors {
             .map_err(to_js_error)?;
         // Одна «широкая» FFI-строка + нативный JSON.parse вместо ~тысячи
         // Reflect::set (почему — в док-комменте модуля `projection`); мемо
-        // снимает с кэш-хита ещё и пересборку строки. Каждый вызов по-прежнему
-        // отдаёт СВЕЖИЙ объект — семантика для мутирующего потребителя не
-        // меняется.
+        // снимает с кэш-хита ещё и пересборку строки. Каждый вызов отдаёт свежий
+        // объект, поэтому внешняя runtime-мутация не меняет кэш или следующий
+        // resolve; публичный тип при этом объявляет снимок неизменяемым.
         let json: Rc<str> = {
             let mut memo = self.proj_memo.borrow_mut();
             match memo.as_ref() {
@@ -736,7 +756,28 @@ impl Default for LabColors {
 /// blanket-реализацию `From<E: Error> for JsError` через wasm-bindgen, и тот путь
 /// потерял бы стабильный код. Здесь код сохраняется в сообщении.
 fn to_js_error(err: BindingError) -> JsError {
-    JsError::new(&format!("{}: {}", err.code(), err))
+    let js_error = JsError::new(&format!("{}: {}", err.code(), err));
+    let BindingError::OutputConflict { conflicts } = &err else {
+        return js_error;
+    };
+    if decorate_output_conflict_error(&js_error, conflicts).is_ok() {
+        return js_error;
+    }
+    // JSON.parse/Object.assign target a fresh built-in Error; отказ означал бы
+    // adapter/platform drift. Не бросаем частично оформленную conflict-ошибку
+    // и не паникуем — сужаем её до честного internal_error.
+    JsError::new("internal_error: output conflict error projection failed")
+}
+
+/// Добавить к обычному JS `Error` типизированный conflict payload одним wide-JSON
+/// переходом — тем же способом, которым проецируется успешный результат.
+fn decorate_output_conflict_error(error: &JsError, conflicts: &OutputConflicts) -> Result<(), ()> {
+    let error_value: JsValue = error.clone().into();
+    let payload =
+        js_sys::JSON::parse(&crate::projection::output_conflict_json(conflicts)).map_err(|_| ())?;
+    object_assign(&error_value, &payload)
+        .map(|_| ())
+        .map_err(|_| ())
 }
 
 fn stable_glow_recheck_core_error(reason: String) -> BindingError {
@@ -800,13 +841,10 @@ mod native_contract_tests {
     }
 
     #[test]
-    fn generated_failure_category_equals_the_admitted_core_menu() {
+    fn generated_success_failure_category_excludes_whole_call_conflict() {
         let declared = string_union(custom_types(), "FailureCategory");
         let declared_set: std::collections::HashSet<&str> = declared.iter().copied().collect();
-        let expected = [
-            labcolors_core::RoleFailureCategory::Unreachable.as_str(),
-            labcolors_core::RoleFailureCategory::Unresolved.as_str(),
-        ];
+        let expected = [labcolors_core::RoleFailureCategory::Unresolved.as_str()];
         let expected_set: std::collections::HashSet<&str> = expected.into_iter().collect();
         assert_eq!(
             declared.len(),
@@ -815,7 +853,13 @@ mod native_contract_tests {
         );
         assert_eq!(
             declared_set, expected_set,
-            "TS role failure menu must equal core admission"
+            "successful TS role failure menu содержит только Unresolved"
+        );
+        let types = custom_types();
+        assert!(types.contains("readonly name: \"OutputConflictError\";"));
+        assert!(types.contains("readonly code: \"output_conflict\";"));
+        assert!(
+            types.contains("readonly conflicts: readonly [OutputConflict, ...OutputConflict[]];")
         );
     }
 

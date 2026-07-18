@@ -262,6 +262,13 @@ const DISCARDED_FAILURE_WIRE = [
   /\bpolarity_mismatch\b/u,
   /\bSolveFailure::PolarityMismatch\b/u,
 ];
+const ORDINARY_UNREACHABLE_OUTPUT_DRIFT = [
+  /локальн[а-яё]*\s+failure[^.!?\n]{0,160}доказанн[а-яё]*\s+недостижим[а-яё]*/iu,
+  /FailureRole[\s\S]{0,320}недостижим[а-яё]*\s+\(`"unreachable"`\)/iu,
+  /failure\s+отдельной\s+роли\s+—\s+\*\*часть\s+успешного\s+результата\*\*/iu,
+  /В\s+успешном\s+снимке\s+`failure`\s+может\s+быть\s+только\s+`unreachable`\s+или\s+`unresolved`/iu,
+  /недостижим[а-яё]*[^.!?\n]{0,100}часть\s+успешного\s+результата/iu,
+];
 
 function claimFiles(path, files = [], extensions = CLAIM_EXT) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -441,6 +448,15 @@ function discardedFailureWire(path, source) {
   );
 }
 
+function ordinaryUnreachableOutputDrift(path, source) {
+  return ORDINARY_UNREACHABLE_OUTPUT_DRIFT
+    .filter((pattern) => pattern.test(source))
+    .map(
+      () =>
+        `${path}: ordinary Unreachable was promoted to a successful local role outcome`,
+    );
+}
+
 test("production Rust path filter is separator-agnostic", () => {
   assert.equal(isProductionRustPath("/repo/crates/core/src/lib.rs"), true);
   assert.equal(isProductionRustPath(String.raw`C:\repo\crates\core\src\lib.rs`), true);
@@ -610,6 +626,42 @@ test("live repository has no discarded failure wire", () => {
   assert.deepEqual(failures, []);
 });
 
+test("ordinary Unreachable output detector bites without rejecting Glow target status", () => {
+  for (const sample of [
+    "локальный failure: доказанная недостижимость",
+    '`FailureRole`: category отделяет доказанную недостижимость (`"unreachable"`)',
+    "failure отдельной роли — **часть успешного результата**",
+    "В успешном снимке `failure` может быть только `unreachable` или `unresolved`",
+    "пер-ролевая недостижимость — часть успешного результата",
+  ]) {
+    assert.ok(
+      ordinaryUnreachableOutputDrift("x.md", sample).length >= 1,
+      `detector did not bite: ${sample}`,
+    );
+  }
+  for (const lawful of [
+    'targetStatus: "exact-noop-unreachable"',
+    'targetStatus: "legacy-unreachable"',
+    "ordinary Unreachable rejects the whole resolve as OutputConflictError",
+    "Unresolved remains a successful local bounded-search outcome",
+  ]) {
+    assert.deepEqual(ordinaryUnreachableOutputDrift("x.md", lawful), []);
+  }
+});
+
+test("public output docs do not admit ordinary Unreachable as partial success", () => {
+  const paths = [
+    "README.md",
+    ...RUNTIME_DOC_PATHS,
+    "crates/labcolors-wasm/src/engine.rs",
+    "crates/labcolors-wasm/src/lib.rs",
+  ];
+  const failures = paths.flatMap((path) =>
+    ordinaryUnreachableOutputDrift(path, readFileSync(join(ROOT, path), "utf8")),
+  );
+  assert.deepEqual(failures, []);
+});
+
 test("LCS/LPC drift detector bites on every rejected expansion or reduction", () => {
   for (const sample of [
     "LCS means Labpics Color Space",
@@ -697,6 +749,18 @@ test("runtime docs do not promote estimates, samples, or coordinates", () => {
     runtimeDocFalseClaims(path, readFileSync(join(ROOT, path), "utf8")),
   );
   assert.deepEqual(failures, []);
+});
+
+test("API reference mirrors the immutable ResolvedTheme declaration", () => {
+  const readme = readFileSync(join(ROOT, "packages/colors/README.md"), "utf8");
+  const [, block = ""] = readme.match(
+    /interface ResolvedTheme \{([\s\S]*?)\n\}/u,
+  ) ?? [];
+
+  assert.match(block, /readonly theme: ThemeName;/u);
+  assert.match(block, /readonly background: string;/u);
+  assert.match(block, /readonly vars: Readonly<Record<string, string>>;/u);
+  assert.match(block, /readonly roles: Readonly<Record<string, RoleResult>>;/u);
 });
 
 test("runtime docs scope background evidence to estimates and finite samples", () => {

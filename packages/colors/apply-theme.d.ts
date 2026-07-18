@@ -3,14 +3,14 @@ import type { ResolvedTheme } from "./index.js";
 /**
  * Apply a resolved theme's CSS variables to an element.
  *
- * Writes every selected value from `result.vars` onto `element.style` via
- * `setProperty`. Failure, indeterminate, and zero-token roles are absent from
- * `vars` and are not written, so the caller's CSS fallbacks stay in effect.
+ * Admits the complete snapshot before touching CSSOM. An ordinary Unreachable
+ * throws a structural `OutputConflictError`; explicit None, Unresolved, and
+ * numerical indeterminacy remain value-less metadata.
  *
  * @param element The target element (e.g. `document.documentElement`).
  * @param result A `LabColors.resolveTheme(...)` result.
  */
 export declare function applyTheme(
   element: HTMLElement,
-  result: Pick<ResolvedTheme, "vars">,
+  result: ResolvedTheme,
 ): void;
