@@ -8,17 +8,17 @@
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
 /**
- * Apply a resolved theme's CSS variables to an element.
+ * Применяет CSS-переменные решённой темы к элементу.
  *
- * The full result is admitted before the first CSSOM call. An ordinary
- * Unreachable rejects atomically as `OutputConflictError`; explicit None,
- * Unresolved, and numerical indeterminacy remain value-less metadata. After
- * admission, the writer clears prior inline `--lab-*` values and writes the
- * selected values from `result.vars`.
+ * Полный результат допускается до первого обращения к CSSOM. Обычный
+ * Unreachable атомарно отклоняется как `OutputConflictError`; явные None,
+ * Unresolved и численная неопределённость остаются метаданными без значения.
+ * Затем функция записи удаляет прежние встроенные переменные `--lab-*` и
+ * записывает выбранные значения из `result.vars`.
  *
- * @param {HTMLElement} element - The target element (e.g. `document.documentElement`).
+ * @param {HTMLElement} element - Целевой элемент, например `document.documentElement`.
  * @param {{ vars: Record<string, string>, roles: Record<string, object> }} result
- *   A complete `resolveTheme(...)` result.
+ *   Полный результат `resolveTheme(...)`.
  * @returns {void}
  */
 export function applyTheme(element, result) {

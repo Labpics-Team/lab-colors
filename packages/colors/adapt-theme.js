@@ -137,6 +137,18 @@ export function adaptTheme(element, options) {
   // Reduced motion → a gentle SHORT fade, never a hard snap.
   const easeMs = reducedMotion ? Math.min(options.easeMs ?? 280, 80) : (options.easeMs ?? 280);
   const clock = options.now ?? (() => (win?.performance?.now ? win.performance.now() : Date.now()));
+  const finiteTime = (value) => {
+    if (!Number.isFinite(value)) {
+      // Диагностика не должна неявно вызывать клиентские valueOf/toString:
+      // такой обратный вызов способен отозвать операцию уже после проверки владения.
+      const received = typeof value === "number" ? String(value) : typeof value;
+      throw new RangeError(
+        `adaptTheme: часы обязаны быть конечными, получено ${received} — ` +
+          "нефинитное время навсегда нарушило бы таймеры порога и перехода",
+      );
+    }
+    return value;
+  };
 
   let theme = options.theme;
   /** @type {{ cssVar: string, key: string, lc: number, hex: string, legalFloor: number|null }[]} stable role order */
@@ -764,14 +776,9 @@ export function adaptTheme(element, options) {
 
   const runTick = (nowArg) => {
     const owner = beginOperation();
-    const now = nowArg ?? clock();
+    const rawNow = nowArg ?? clock();
     if (!ownsOperation(owner)) return;
-    if (!Number.isFinite(now)) {
-      throw new RangeError(
-        `adaptTheme: часы обязаны быть конечными, получено ${now} — ` +
-          "нефинитное время отравило бы breach/ease-тайминг навсегда",
-      );
-    }
+    const now = finiteTime(rawNow);
     const samples = readSamples();
     if (!ownsOperation(owner)) return;
     const key = samples.join("|");
@@ -920,7 +927,7 @@ export function adaptTheme(element, options) {
     const owner = beginOperation();
     const samples = readSamples();
     const nextKey = samples.join("|");
-    const now = clock();
+    const now = finiteTime(clock());
     const prepared = solveWorstCandidate(samples, now, theme);
     let candidate = withStableGlowReconciliation(
       prepared.candidate,
@@ -943,8 +950,9 @@ export function adaptTheme(element, options) {
     const samples = readSamples();
     if (!ownsOperation(owner)) return;
     const nextKey = samples.join("|");
-    const now = clock();
+    const rawNow = clock();
     if (!ownsOperation(owner)) return;
+    const now = finiteTime(rawNow);
     const prepared = solveWorstCandidate(samples, now, next);
     if (!ownsOperation(owner)) return;
     const candidate = withStableGlowReconciliation(

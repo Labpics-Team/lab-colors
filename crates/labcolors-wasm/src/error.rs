@@ -78,7 +78,12 @@ impl fmt::Display for OutputConflicts {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "'{}' ({})", conflict.role(), conflict.code())?;
+            write!(
+                f,
+                "'{}' ({})",
+                conflict.role().escape_debug(),
+                conflict.code()
+            )?;
         }
         Ok(())
     }
@@ -243,6 +248,28 @@ mod tests {
         let roles: Vec<_> = conflicts.iter().map(OutputConflict::role).collect();
         assert_eq!(roles, ["conflict-z", "conflict-m", "conflict-a"]);
         assert_eq!(conflicts.iter().count(), 3);
+    }
+
+    #[test]
+    fn output_conflict_display_escapes_client_role_without_changing_payload() {
+        let raw = "роль\n\r\t\u{0001}\"\\";
+        let conflicts = OutputConflicts::new(
+            OutputConflict::new(
+                raw.to_string(),
+                "exceeds_range",
+                "physical limit".to_string(),
+            ),
+            Vec::new(),
+        );
+
+        let rendered = conflicts.to_string();
+        assert!(
+            !rendered.chars().any(char::is_control),
+            "human-readable errors must not admit client-controlled log lines",
+        );
+        assert!(rendered.contains("\\n"));
+        assert!(rendered.contains("роль"));
+        assert_eq!(conflicts.iter().next().unwrap().role(), raw);
     }
 
     #[test]

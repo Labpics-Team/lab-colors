@@ -1,14 +1,14 @@
 import type { ResolvedTheme } from "./index.js";
 
 /**
- * Apply a resolved theme's CSS variables to an element.
+ * Применяет CSS-переменные решённой темы к элементу.
  *
- * Admits the complete snapshot before touching CSSOM. An ordinary Unreachable
- * throws a structural `OutputConflictError`; explicit None, Unresolved, and
- * numerical indeterminacy remain value-less metadata.
+ * Полный снимок допускается до обращения к CSSOM. Обычный Unreachable вызывает
+ * структурный `OutputConflictError`; явные None, Unresolved и численная
+ * неопределённость остаются метаданными без значения.
  *
- * @param element The target element (e.g. `document.documentElement`).
- * @param result A `LabColors.resolveTheme(...)` result.
+ * @param element Целевой элемент, например `document.documentElement`.
+ * @param result Результат `LabColors.resolveTheme(...)`.
  */
 export declare function applyTheme(
   element: HTMLElement,

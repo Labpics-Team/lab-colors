@@ -1011,6 +1011,109 @@ test("the newest adaptive intent raised during queued prepare follows the older 
   assert.equal(ctrl.current()["--lab-a"], "B");
 });
 
+test("a revoked queued operation cannot reject or erase the newer intent with its invalid clock", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let enqueueA = false;
+  let reenterClock = false;
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (enqueueA && value === "outer") {
+      enqueueA = false;
+      reenterClock = true;
+      ctrl.setTheme("A");
+    }
+  };
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now() {
+      if (reenterClock) {
+        reenterClock = false;
+        ctrl.setTheme("B");
+        return Number.NaN;
+      }
+      return 1;
+    },
+    win: {},
+  });
+
+  enqueueA = true;
+  assert.doesNotThrow(() => ctrl.setTheme("outer"));
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
+test("invalid clock diagnostics never coerce a client-owned value", () => {
+  const h = harness();
+  let coercions = 0;
+  h.setNow({
+    [Symbol.toPrimitive]() {
+      coercions++;
+      return "hostile-time";
+    },
+  });
+
+  assert.throws(() => h.ctrl.setTheme("dark"), /получено object/u);
+  assert.equal(coercions, 0);
+  h.ctrl.stop();
+});
+
+test("a clock-revoked tick ignores its stale non-finite time", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let reenter = false;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now() {
+      if (reenter) {
+        reenter = false;
+        ctrl.setTheme("B");
+        return Number.NaN;
+      }
+      return 1;
+    },
+    win: {},
+  });
+
+  reenter = true;
+  assert.doesNotThrow(() => ctrl.tick());
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
 test("a nested setTheme owns the commit over a stale outer tick", () => {
   const el = fakeElement();
   let ctrl = null;
@@ -2448,6 +2551,47 @@ test("corrupted resolve result throws instead of wiping vars with an empty snaps
   assert.throws(() => ctrl.tick(), /vars, roles/u);
   assert.deepEqual(el.props, varsBefore, "painted vars survive a corrupted re-solve");
   ctrl.stop();
+});
+
+test("non-finite initial clock is rejected before resolve or DOM mutation", () => {
+  for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const colors = fakeColors(oneRole("#000000", 100));
+    const el = fakeElement();
+    assert.throws(
+      () => adaptTheme(el, {
+        colors,
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => now,
+        win: {},
+      }),
+      /конечными/u,
+    );
+    assert.equal(colors.resolveCount(), 0, "invalid time must fail before resolver state");
+    assert.deepEqual(el.mutations, [], "invalid time must fail before CSSOM");
+  }
+});
+
+test("non-finite setTheme clock preserves the committed state and remains retryable", () => {
+  const h = harness();
+  const committed = h.ctrl.current();
+  const painted = new Map(h.el.props);
+  h.colors.setResolve(oneRole("#FFFFFF", 100));
+
+  for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    h.setNow(now);
+    assert.throws(() => h.ctrl.setTheme("dark"), /конечными/u);
+    assert.equal(h.colors.resolveCount(), 1, "invalid time must fail before re-resolve");
+    assert.deepEqual(h.ctrl.current(), committed);
+    assert.deepEqual(h.el.props, painted);
+  }
+
+  h.setNow(1100);
+  h.ctrl.setTheme("dark");
+  assert.equal(h.colors.resolveCount(), 2, "the same intent remains retryable");
+  assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
+  h.ctrl.stop();
 });
 
 test("non-finite clock is rejected before it can poison breach timing", () => {

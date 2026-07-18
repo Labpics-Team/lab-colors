@@ -51,14 +51,14 @@ export interface WatchController {
 }
 
 /**
- * Keep an element's `--lab-*` variables aligned with an explicit background or
- * the supported ancestor-chain reference estimate.
+ * Согласует `--lab-*` элемента с явной подложкой или поддерживаемой оценкой по
+ * цепочке предков.
  *
- * `style`/`class` attribute changes in the observed subtree schedule a refresh;
- * continuous inputs are driven by calling `refresh()` from a
- * `requestAnimationFrame` loop. Output conflicts are rejected before DOM or
- * controller state changes, so the same observation remains retryable.
- * Pixel/layout changes are not observed.
+ * Изменения атрибутов `style`/`class` в наблюдаемом поддереве планируют refresh;
+ * непрерывные входы обновляются вызовом `refresh()` из цикла
+ * `requestAnimationFrame`. Конфликт отклоняется до изменения DOM или состояния
+ * контроллера, поэтому то же наблюдение можно повторить. Изменения пикселей и
+ * раскладки не отслеживаются.
  */
 export declare function watchTheme(
   element: HTMLElement,

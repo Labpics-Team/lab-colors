@@ -66,30 +66,30 @@ export interface AdaptController {
    */
   tick(now?: number): void;
   /**
-   * Switch theme INSTANTLY (intent, not drift) — bypasses the hysteresis. A
-   * отклонённый кандидат оставляет прежние тему, цели и DOM. Если подготовка
-   * reentrant-но запускает более новый `setTheme`/`tick`, новый вызов владеет
-   * commit, а устаревший кандидат становится инертным.
+   * Мгновенно переключить тему как новое намерение, минуя гистерезис.
+   * Отклонённый кандидат сохраняет прежние тему, цели и DOM. Если подготовка
+   * реентерабельно запускает более новый `setTheme`/`tick`, новый вызов владеет
+   * фиксацией, а устаревший кандидат становится инертным.
    */
   setTheme(theme: ThemeName): void;
-  /** Begin an internal `requestAnimationFrame` loop. */
+  /** Запустить внутренний цикл `requestAnimationFrame`. */
   start(): void;
   /**
-   * Остановить внутренний цикл, не выбрасывая незавершённый ease; поздние
+   * Остановить внутренний цикл, не отбрасывая незавершённый переход; поздние
    * `start()`/`tick()` продолжат его по текущим часам.
    */
   stop(): void;
-  /** Canonical logical targets; during an ease these differ from painted DOM values. */
+  /** Канонические логические цели; во время перехода они отличаются от значений в DOM. */
   current(): Record<string, string>;
 }
 
 /**
- * Keep an element's `--lab-*` variables adapting to its (changing) background
- * without re-solving every frame. Each tick reads the declared sample set;
- * metric evaluation is skipped while that set and the pending state are
- * unchanged. A changed/pending set is compared with the last resolved baseline,
- * and re-solve + ease starts only after a sustained relative drop. This does not
- * establish legibility outside the supplied samples or between them. Output
- * conflicts are rejected before DOM/controller mutation and remain retryable.
+ * Адаптирует `--lab-*` элемента к меняющейся подложке без пересчёта на каждом кадре.
+ * Каждый вызов `tick` читает объявленный набор образцов; при неизменных образцах
+ * и состоянии проверка метрик пропускается. Новый пересчёт и плавный переход
+ * могут начаться только после устойчивого относительного падения и выполнения
+ * остальных условий контроллера. Это не доказывает читаемость вне переданных
+ * образцов или между ними. Конфликт отклоняется до изменения DOM и контроллера,
+ * поэтому то же наблюдение можно повторить.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;
