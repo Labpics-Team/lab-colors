@@ -16,7 +16,8 @@
 - **Версия пака** (`manifest.packVersion`, сейчас `10.0.0`) — семантическая
   версия СХЕМЫ и состава векторов: пять семейств (`contrasts`, `ladders`,
   `alpha`, `solve`, `wcag22`), их байты запинены SHA-256 в
-  `tests/pack_v10_contract.rs`. Удаление/изменение семейства = major-bump с
+  `crates/labcolors-conformance/tests/pack_v10_contract.rs`.
+  Удаление/изменение семейства = major-bump с
   absence-законом на снятые файлы; история составов — в git.
 - **Версия ядра** (`manifest.coreVersion`, для этого пака `0.2.0`) — версия
   `labcolors-core`, из канона которой сгенерированы значения. Пак действителен
