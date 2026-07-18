@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 8,
+  "budgetId": "labcolors-wasm-runtime-c6-legacy-excision-v14",
+  "predecessor": {
+    "path": "packages/colors/bench/wasm-size-budget-v13.json",
+    "fileSha256": "3cc88303a0f43e8ca33ae70d723a3179c68b0cc2744310a791e8f43885482f34"
+  },
+  "toolchainSource": {
+    "path": "packages/colors/bench/wasm-size-budget-v1.json",
+    "fileSha256": "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1"
+  },
+  "buildRecipes": {
+    "runtime": {
+      "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+      "recipeSha256": "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4"
+    }
+  },
+  "roles": {
+    "runtime": {
+      "artifact": "packages/colors/pkg/labcolors_bg.wasm",
+      "measurement": {
+        "source": "github-actions-run-29647236232",
+        "measurementPlatform": "linux-x64",
+        "rawBytes": 428540
+      },
+      "policy": {
+        "maxRawBytes": 428540,
+        "basis": "accepted-c6-legacy-excision-snapshot",
+        "gzip": "diagnostic-only"
+      }
+    }
+  }
+}
