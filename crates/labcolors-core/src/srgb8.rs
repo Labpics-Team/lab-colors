@@ -15,21 +15,21 @@ pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
 }
 // END WCAG22_PARSER_CAPSULE_V1
 
-/// One exact final encoded-sRGB8 triplet.
+/// Одна точная финальная encoded-sRGB8 тройка.
 ///
-/// This is a physical value object, not a colour-role or client-semantic type.
-/// It is intentionally unversioned: versioned profiles describe how bytes are
-/// interpreted, while the bytes themselves remain exactly three octets.
+/// Это физический value object, а не цветовая роль или клиентская семантика.
+/// Он намеренно не версионируется: профили описывают интерпретацию байтов, сами
+/// байты всегда остаются ровно тремя октетами.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Srgb8([u8; 3]);
 
 impl Srgb8 {
-    /// Construct one exact byte triplet.
+    /// Создать одну точную байтовую тройку.
     pub const fn new(bytes: [u8; 3]) -> Self {
         Self(bytes)
     }
 
-    /// Return the exact three encoded bytes.
+    /// Вернуть три точных encoded-байта.
     pub const fn bytes(self) -> [u8; 3] {
         self.0
     }
@@ -39,17 +39,17 @@ impl Srgb8 {
         self.0.map(|byte| f64::from(byte) / 255.0)
     }
 
-    /// Encode the exact triplet as canonical uppercase `#RRGGBB`.
+    /// Сериализовать точную тройку как канонический uppercase `#RRGGBB`.
     pub fn to_hex(self) -> String {
         let [red, green, blue] = self.0;
         format!("#{red:02X}{green:02X}{blue:02X}")
     }
 
-    /// Whether the encoded stimulus lies exactly on the sRGB8 grey axis.
+    /// Лежит ли encoded-стимул точно на серой оси sRGB8.
     ///
-    /// This is a discrete representation fact, not a perceptual threshold:
-    /// equal channel bytes carry no chromatic direction for a hue-derived
-    /// operation, while any unequal triplet retains its authored direction.
+    /// Это дискретный факт представления, не перцептивный порог: равные байты
+    /// каналов не несут цветового направления для hue-производной операции, а
+    /// любая неравная тройка сохраняет заданное клиентом направление.
     pub(crate) const fn is_achromatic(self) -> bool {
         self.0[0] == self.0[1] && self.0[1] == self.0[2]
     }
