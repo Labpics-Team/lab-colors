@@ -78,12 +78,7 @@ impl fmt::Display for OutputConflicts {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            write!(
-                f,
-                "'{}' ({})",
-                conflict.role().escape_debug(),
-                conflict.code()
-            )?;
+            write!(f, "{:?} ({})", conflict.role(), conflict.code())?;
         }
         Ok(())
     }
@@ -252,7 +247,7 @@ mod tests {
 
     #[test]
     fn output_conflict_display_escapes_client_role_without_changing_payload() {
-        let raw = "роль\n\r\t\u{0001}\"\\";
+        let raw = "роль\n\r\t\u{0001}\u{007f}\u{0085}'\"\\";
         let conflicts = OutputConflicts::new(
             OutputConflict::new(
                 raw.to_string(),
@@ -268,6 +263,11 @@ mod tests {
             "human-readable errors must not admit client-controlled log lines",
         );
         assert!(rendered.contains("\\n"));
+        assert!(rendered.contains("\\u{1}"));
+        assert!(rendered.contains("\\u{7f}"));
+        assert!(rendered.contains("\\u{85}"));
+        assert!(rendered.contains("\\\""));
+        assert!(rendered.contains("\\\\"));
         assert!(rendered.contains("роль"));
         assert_eq!(conflicts.iter().next().unwrap().role(), raw);
     }
