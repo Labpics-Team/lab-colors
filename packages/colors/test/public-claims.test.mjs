@@ -595,8 +595,8 @@ test("public claim inventory includes the shipped Swift README", () => {
 });
 
 
-test("legacy cleanliness proxy is excised, not quarantined (C5.2)", () => {
-  // C5.2: карантин заменён вырезом. Ни модуль, ни векторное семейство не
+test("legacy cleanliness proxy is excised, not quarantined", () => {
+  // Инвариант: карантин заменён вырезом. Ни модуль, ни векторное семейство не
   // существуют; публичные поверхности не несут ни API, ни человеческих
   // вердиктов чистоты.
   assert.equal(
