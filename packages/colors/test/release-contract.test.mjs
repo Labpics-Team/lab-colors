@@ -1714,8 +1714,14 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
-      writeFileSync(fixtureBudgetPath, canonicalJson(result));
-      assert.throws(run, undefined, `${name} must fail the checker`);
+      assert.throws(
+        () => checker.parseBudgetDocument(
+          Buffer.from(canonicalJson(result)),
+          fixtureBudgetPath,
+        ),
+        undefined,
+        `${name} must fail schema validation before artifact evaluation`,
+      );
     }
 
     writeFileSync(fixtureBudgetPath, `${JSON.stringify(fixture)}\n`);

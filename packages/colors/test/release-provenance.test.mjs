@@ -103,7 +103,7 @@ edition = "2024"
 [workspace.metadata.release]
 version = "8.8.8"
 `),
-    /workspace core version is absent/u,
+    /\[workspace\.package\]\.version is absent/u,
   );
   assert.throws(
     () => workspaceVersion(`
@@ -142,7 +142,7 @@ edition = "2024"
 [[example]]
 version = "7.7.7"
 `),
-    /workspace core version is absent/u,
+    /\[workspace\.package\]\.version is absent/u,
   );
 });
 

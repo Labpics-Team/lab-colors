@@ -12,6 +12,8 @@
 
 use std::path::PathBuf;
 
+pub mod source;
+
 /// Корневая директория крейта (`crates/labcolors-core/`).
 /// Определяется через `CARGO_MANIFEST_DIR` — не зависит от рабочего каталога.
 pub fn crate_root() -> PathBuf {

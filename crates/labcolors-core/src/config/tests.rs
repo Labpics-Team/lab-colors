@@ -1963,9 +1963,8 @@ fn achromatic_hue_sources_are_handled_honestly() {
     );
 }
 
-/// `NeutralPick` is data, not a request to inherit the table undertone. An
-/// exact-gray selected anchor stays achromatic even when another neutral anchor
-/// makes the table-wide policy chromatic.
+/// `NeutralPick` — данные, а не запрос на общий подтон таблицы: выбранный точный
+/// серый якорь остаётся ахроматическим при цветной policy других нейтралей.
 #[test]
 fn material_uses_the_selected_neutral_source_before_chroma_classification() {
     let mut config = labui_reference();

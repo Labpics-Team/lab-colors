@@ -206,7 +206,8 @@ pub struct SolvedColor {
     /// кандидатов. Глобальный оптимум не заявляется.
     pub compressed: bool,
     /// Честный замер |ΔJ'| на отданном hex для dJ'-ролей (симметрия с glow);
-    /// `None` у contrast-score ролей (их переходная координата — `Lc`).
+    /// `None` у contrast-score ролей; для них доступна знаковая Ys
+    /// candidate-координата `lc`.
     pub achieved_dj: Option<f64>,
     /// `true` when the WCAG legal floor overrode the Ys candidate-score target.
     pub floor_override: bool,

@@ -344,10 +344,12 @@ function maskRustNonCode(source) {
   return masked.join("");
 }
 
+function isProductionRustPath(file) {
+  return /[\\/]src[\\/]/u.test(file);
+}
+
 function productionRustFiles() {
-  return claimFiles(join(ROOT, "crates"), [], /\.rs$/u).filter((file) =>
-    file.includes("/src/"),
-  );
+  return claimFiles(join(ROOT, "crates"), [], /\.rs$/u).filter(isProductionRustPath);
 }
 
 function productionPackageFiles() {
@@ -438,6 +440,12 @@ function discardedFailureWire(path, source) {
     () => `${path}: discarded unreachable/quantization-gap machine contract`,
   );
 }
+
+test("production Rust path filter is separator-agnostic", () => {
+  assert.equal(isProductionRustPath("/repo/crates/core/src/lib.rs"), true);
+  assert.equal(isProductionRustPath(String.raw`C:\repo\crates\core\src\lib.rs`), true);
+  assert.equal(isProductionRustPath("/repo/crates/core/tests/src_like.rs"), false);
+});
 
 test("false-claim detector bites without treating hex colours as Issue links", () => {
   assert.equal(knownFalseClaims("x.md", "см. #89").length, 1);

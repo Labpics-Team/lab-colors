@@ -39,7 +39,8 @@ function assertNoMultilineStrings(source) {
   }
 }
 
-/** Возвращает только тело TOML-таблицы `[workspace.package]`. */
+/** Изолирует workspace metadata от последующих TOML-таблиц.
+ * Инвариант: возвращённый диапазон не содержит другую таблицу. */
 export function workspacePackageTable(cargoSource) {
   assertNoMultilineStrings(cargoSource);
   const header = WORKSPACE_PACKAGE_HEADER.exec(cargoSource);
@@ -51,9 +52,10 @@ export function workspacePackageTable(cargoSource) {
   throw new Error("workspace.package table is absent");
 }
 
-/** Читает root version, не пересекая границу TOML-таблицы `[workspace.package]`. */
+/** Читает release-версию только из `[workspace.package]`.
+ * Инвариант: одноимённые ключи последующих таблиц не влияют на результат. */
 export function workspaceVersion(cargoSource) {
   const version = VERSION_ENTRY.exec(workspacePackageTable(cargoSource))?.[1];
   if (version) return version;
-  throw new Error("workspace core version is absent");
+  throw new Error("[workspace.package].version is absent");
 }

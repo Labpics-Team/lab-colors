@@ -11,7 +11,8 @@
 //! и превращает потерю агностичности в RED.
 //!
 //! Не считаются нарушением:
-//! * ссылки на удалённый якорь в комментариях: сканер отсекает текст после `//`;
+//! * ссылки на удалённый якорь в строковых и блок-комментариях: общий lexer
+//!   маскирует комментарии, не принимая `//` внутри строки за их начало;
 //! * блоки и файлы `#[cfg(test)] mod X;` с byte-identity-оракулами и фикстурами:
 //!   они исключаются до сканирования.
 //!
@@ -25,6 +26,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod common;
+use common::source::{production_code_lines, production_lines};
 use common::src_dir;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,69 +104,10 @@ const RETIRED_SENTIMENT_FRAGMENTS: &[&str] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// production_lines удаляет элементы под `#[cfg(test)]`, сохраняя нумерацию строк
-// с единицы. Как и гейт `empirical_inventory`, функция удаляет блоки по парным
-// фигурным скобкам, а объявления с `;` — до завершающей точки с запятой.
+// production_lines удаляет доказанно полные элементы под `#[cfg(test)]`, сохраняя
+// нумерацию строк с единицы. Неоднозначный синтаксис остаётся видимым: гейт
+// предпочитает ложный RED скрытому production-нарушению.
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn production_lines(source: &str) -> Vec<(usize, String)> {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        if lines[i].trim_start().starts_with("#[cfg(test)]") {
-            // Skip further attribute/blank lines to reach the guarded item.
-            let mut j = i + 1;
-            while j < lines.len() {
-                let tj = lines[j].trim_start();
-                if tj.starts_with('#') || tj.is_empty() {
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            if j < lines.len() && lines[j].contains('{') {
-                // Braced item: brace-match to its close.
-                let mut depth = 0i32;
-                let mut opened = false;
-                let mut k = j;
-                while k < lines.len() {
-                    depth += lines[k].matches('{').count() as i32;
-                    depth -= lines[k].matches('}').count() as i32;
-                    if lines[k].contains('{') {
-                        opened = true;
-                    }
-                    if opened && depth <= 0 {
-                        break;
-                    }
-                    k += 1;
-                }
-                i = k + 1;
-            } else {
-                // Non-braced item (`… ;`): skip through the terminating `;`.
-                let mut k = j;
-                while k < lines.len() && !lines[k].contains(';') {
-                    k += 1;
-                }
-                i = k + 1;
-            }
-            continue;
-        }
-        out.push((i + 1, lines[i].to_string()));
-        i += 1;
-    }
-    out
-}
-
-/// Cut a source line at the first `//` (line/inline/doc comment). No `/* */` block
-/// comments exist in the production `src` (verified), so this is sufficient to keep
-/// a cited anchor hex in a comment from tripping the gate.
-fn code_only(line: &str) -> &str {
-    match line.split_once("//") {
-        Some((before, _)) => before,
-        None => line,
-    }
-}
 
 /// True when `decl` (e.g. `enum Role`) appears in `code` bounded by non-identifier
 /// characters on both sides — so `enum Role` does NOT match `enum RoleChroma`, and
@@ -206,12 +149,12 @@ struct Site {
 }
 
 /// Every brand-anchor hex literal in the PRODUCTION code of `source`
-/// (`#[cfg(test)]` stripped, comments cut). Case-insensitive: `#3e87ff` and
-/// `#3E87FF` are the same anchor.
+/// (`#[cfg(test)]` удалён, комментарии лексически замаскированы). Регистр не
+/// различается: `#3e87ff` и `#3E87FF` — один якорь.
 fn forbidden_hex_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
-    for (line, text) in production_lines(source) {
-        let code = code_only(&text).to_ascii_uppercase();
+    for (line, text) in production_code_lines(source) {
+        let code = text.to_ascii_uppercase();
         for hex in CLIENT_ANCHOR_HEXES {
             if code.contains(&hex.to_ascii_uppercase()) {
                 out.push(Site {
@@ -228,10 +171,9 @@ fn forbidden_hex_sites(module: &str, source: &str) -> Vec<Site> {
 /// Все швы клиентской калибровки в production-коде.
 fn client_calibration_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
-    for (line, text) in production_lines(source) {
-        let code = code_only(&text);
+    for (line, code) in production_code_lines(source) {
         for identifier in CLIENT_CALIBRATION_IDENTIFIERS {
-            if contains_bounded(code, identifier) {
+            if contains_bounded(&code, identifier) {
                 out.push(Site {
                     module: module.to_string(),
                     line,
@@ -246,10 +188,9 @@ fn client_calibration_sites(module: &str, source: &str) -> Vec<Site> {
 /// Все определения showcase-типов в production-коде `source`.
 fn forbidden_definition_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
-    for (line, text) in production_lines(source) {
-        let code = code_only(&text);
+    for (line, code) in production_code_lines(source) {
         for decl in SHOWCASE_DEFINITIONS {
-            if defines(code, decl) {
+            if defines(&code, decl) {
                 out.push(Site {
                     module: module.to_string(),
                     line,
@@ -264,10 +205,9 @@ fn forbidden_definition_sites(module: &str, source: &str) -> Vec<Site> {
 /// Все точные остатки удалённых sentiment-физики и схемы.
 fn retired_sentiment_sites(module: &str, source: &str) -> Vec<Site> {
     let mut out = Vec::new();
-    for (line, text) in production_lines(source) {
-        let code = code_only(&text);
+    for (line, code) in production_code_lines(source) {
         for identifier in RETIRED_SENTIMENT_IDENTIFIERS {
-            if contains_bounded(code, identifier) {
+            if contains_bounded(&code, identifier) {
                 out.push(Site {
                     module: module.to_string(),
                     line,
@@ -509,6 +449,106 @@ fn red_proof_retired_sentiment_scanner_ignores_tests_comments_and_lookalikes() {
     assert!(retired_sentiment_sites("probe.rs", lookalikes).is_empty());
 }
 
+#[test]
+fn red_proof_cfg_test_stripper_ignores_non_code_braces_without_hiding_live_code() {
+    let opening_in_string = "#[cfg(test)]\nmod t {\n    const S: &str = \"{\";\n}\n\
+                             struct SentimentCurve;\n";
+    let hits = retired_sentiment_sites("probe.rs", opening_in_string);
+    assert_eq!(
+        hits.len(),
+        1,
+        "a brace in a test string must not hide a later production violation"
+    );
+
+    let closing_in_test_text = "#[cfg(test)]\nmod t {\n    const S: &str = \"}\";\n\
+                                /* } */\n    struct SentimentCurve;\n}\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", closing_in_test_text).is_empty(),
+        "a brace in test text must not end the guarded item early"
+    );
+
+    let non_braced_item = "#[cfg(test)]\nconst TEST_TEXT: &str = \"{\";\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", non_braced_item).len(),
+        1,
+        "a brace in a test constant must not turn it into a braced item"
+    );
+
+    let next_line_brace = "#[cfg(test)]\nmod t\n{\n    struct SentimentCurve;\n}\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", next_line_brace).is_empty(),
+        "a guarded braced item may open on a later line"
+    );
+
+    let other_non_code = r####"#[cfg(test)]
+mod t {
+    const RAW: &str = r##"{"##;
+    const CHAR: char = '{';
+    /* { /* } */ { */
+}
+struct SentimentCurve;
+"####;
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", other_non_code).len(),
+        1,
+        "raw strings, chars, and nested block comments must not hide live code"
+    );
+
+    let fake_attribute_in_comment = "/*\n#[cfg(test)]\nmod fake {\n*/\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", fake_attribute_in_comment).len(),
+        1,
+        "cfg-looking text inside a block comment is not an attribute"
+    );
+
+    let fake_attribute_in_raw = r####"const TEXT: &str = r##"
+#[cfg(test)]
+mod fake {
+"##;
+struct SentimentCurve;
+"####;
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", fake_attribute_in_raw).len(),
+        1,
+        "cfg-looking text inside a raw string is not an attribute"
+    );
+
+    let same_line_attribute = "#[cfg(test)] mod t {}\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", same_line_attribute).len(),
+        1,
+        "an unsupported same-line cfg item must fail closed instead of hiding later code"
+    );
+
+    let live_suffix = "#[cfg(test)]\nmod t {} struct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", live_suffix).len(),
+        1,
+        "production code after a guarded item on the same line must remain visible"
+    );
+
+    let same_line_followup_attribute =
+        "#[cfg(test)]\n#[allow(dead_code)] mod t {}\nstruct SentimentCurve;\n";
+    assert_eq!(
+        retired_sentiment_sites("probe.rs", same_line_followup_attribute).len(),
+        1,
+        "a same-line follow-up attribute must not make the next production item guarded"
+    );
+
+    let block_comment_suffix = "#[cfg(test)]\nmod t { struct SentimentCurve; } /* rationale */\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", block_comment_suffix).is_empty(),
+        "a closed block-comment suffix is not production code"
+    );
+
+    let block_comment_on_marker =
+        "#[cfg(test)] /* test fixture */\nmod t { struct SentimentCurve; }\n";
+    assert!(
+        retired_sentiment_sites("probe.rs", block_comment_on_marker).is_empty(),
+        "a closed block comment after cfg(test) must not make the marker ambiguous"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RED-proofs — prove the shared scanner BITES on a violation and is SILENT on the
 // two legitimate cases (cfg(test) block, comment). A mutation that neuters the
@@ -526,6 +566,21 @@ fn red_proof_hex_scanner_bites_on_injected_anchor_in_code() {
         "scanner must flag a brand hex in production code"
     );
     assert_eq!(hits[0].found, "#3E87FF");
+
+    let scheme_literal = "const URL: &str = \"scheme://palette/#3E87FF\";\n";
+    let hits = forbidden_hex_sites("probe.rs", scheme_literal);
+    assert_eq!(
+        hits.len(),
+        1,
+        "comment syntax inside a string must not hide a production anchor"
+    );
+    let raw_scheme_literal = r##"const URL: &str = r#"scheme://palette/#3E87FF"#;
+"##;
+    assert_eq!(
+        forbidden_hex_sites("probe.rs", raw_scheme_literal).len(),
+        1,
+        "comment syntax inside a raw string must remain production code"
+    );
 
     // Clean agnostic code has none.
     let clean = "    let set = resolve_named_set(bg, table, vc)?;\n";
@@ -562,7 +617,7 @@ fn red_proof_hex_scanner_is_silent_on_cfg_test_and_comments() {
     );
 
     // In a comment (line + doc): invisible (cut at `//`).
-    let commented = "// the retired anchor was #007AFF\n/// доки: было #FF9500\n";
+    let commented = "// the retired anchor was #007AFF\n/// доки: было #FF9500\n/* #3E87FF */\n";
     assert!(
         forbidden_hex_sites("probe.rs", commented).is_empty(),
         "a cited hex in a comment must NOT be flagged"

@@ -98,19 +98,17 @@ function clamp255(v) {
 }
 
 /**
- * Parse the inside of an `oklch(...)` (the part between the parens) into sRGB
- * `[r, g, b, a]`, or `null` on any malformed component.
+ * Преобразует содержимое `oklch(...)` в sRGB `[r, g, b, a]`; невалидный
+ * компонент даёт `null`.
  *
- * The engine emits `oklch(L% C H)` / `oklch(L% C H / A)`; a browser's computed
- * form is `oklch(<L 0..1> C H [/ A])`. Components are whitespace-separated with
- * an optional `/`-separated alpha, exactly like `rgb()`'s modern syntax.
- * oklch → Oklab is `a = C·cos(H)`, `b = C·sin(H)`; then the file's own
- * `oklabToLinearRgb` + `linearToSrgb` land it in sRGB — the SAME transform and
- * clamp-then-round law as the core's final sRGB8 emission. That preserves the
- * emitter's byte-exact round-trip, so an emitted string decodes to its source
- * bytes. Out-of-gamut channels clamp per channel, matching `oklabLerp`/`toHex`.
+ * Движок эмитирует `oklch(L% C H)` / `oklch(L% C H / A)`, а computed style
+ * браузера может вернуть `oklch(<L 0..1> C H [/ A])`. После oklch → Oklab
+ * используются те же `oklabToLinearRgb` и `linearToSrgb`, что в локальном
+ * sRGB-пути. Поканальный clamp перед округлением совпадает с законом финальной
+ * sRGB8-эмиссии Core и сохраняет побайтовый round-trip; out-of-gamut каналы
+ * ограничиваются независимо, как в `oklabLerp`/`toHex`.
  *
- * @param {string} inner  the text between `oklch(` and `)`
+ * @param {string} inner текст между `oklch(` и `)`
  * @returns {Rgba | null}
  */
 function parseOklch(inner) {
