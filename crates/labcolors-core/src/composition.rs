@@ -53,9 +53,10 @@ pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u
 }
 
 pub(crate) fn validate_alpha(alpha: f64) -> Result<(), String> {
-    AdmittedOpacityV1::new(alpha)
-        .map(|_| ())
-        .map_err(|_| format!("alpha вне конечного [0,1]: {alpha}"))
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
+    }
+    Ok(())
 }
 
 pub(crate) fn source_over_srgb8(

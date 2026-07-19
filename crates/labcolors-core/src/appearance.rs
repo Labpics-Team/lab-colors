@@ -895,11 +895,10 @@ impl PointOpacityOverSurfaceV1 {
         opacity: f64,
         backdrop: [u8; 3],
     ) -> Result<ResolvedOccurrence, PointOpacityError> {
-        let opacity =
-            crate::composition::AdmittedOpacityV1::new(opacity).map_err(|_| PointOpacityError {
-                message: format!("alpha вне конечного [0,1]: {opacity}"),
-            })?;
-        Ok(Self::evaluate_admitted(source, opacity, backdrop))
+        crate::composition::validate_alpha(opacity)
+            .map_err(|message| PointOpacityError { message })?;
+        let opacity = if opacity == 0.0 { 0.0 } else { opacity };
+        Ok(Self::evaluate_value(source, opacity, backdrop))
     }
 
     /// Исполнение после typed admission alpha. Этим входом final recheck
@@ -909,6 +908,10 @@ impl PointOpacityOverSurfaceV1 {
         opacity: crate::composition::AdmittedOpacityV1,
         backdrop: [u8; 3],
     ) -> ResolvedOccurrence {
+        Self::evaluate_value(source, opacity.value(), backdrop)
+    }
+
+    fn evaluate_value(source: [u8; 3], opacity: f64, backdrop: [u8; 3]) -> ResolvedOccurrence {
         let mut paints = [None; 2];
         let mut surfaces = [None; 2];
         let mut occurrences = [None; 1];
@@ -922,7 +925,7 @@ impl PointOpacityOverSurfaceV1 {
                 _ => unreachable!("sealed point program has one SurfaceInput port"),
             },
             |id| match id {
-                POINT_OPACITY => opacity.value(),
+                POINT_OPACITY => opacity,
                 _ => unreachable!("sealed point program has one OpacityInput port"),
             },
             &mut paints,
@@ -1062,12 +1065,10 @@ impl SourceOverCertificateV1 {
         self.subject_opacity_bits
     }
 
-    #[cfg(test)]
     pub(crate) fn backdrop_rgb(&self) -> [u8; 3] {
         self.backdrop_rgb
     }
 
-    #[cfg(test)]
     pub(crate) fn output_rgb(&self) -> [u8; 3] {
         self.output_rgb
     }
@@ -1101,6 +1102,7 @@ impl ResolvedOccurrence {
         self.against
     }
 
+    #[cfg(test)]
     pub(crate) fn backdrop(&self) -> [u8; 3] {
         self.backdrop
     }
@@ -1178,6 +1180,10 @@ impl VisiblePointBindingV1 {
 
     pub(crate) fn occurrence(self) -> SourceOverCertificateV1 {
         self.occurrence
+    }
+
+    pub(crate) const fn occurrence_ref(&self) -> &SourceOverCertificateV1 {
+        &self.occurrence
     }
 }
 

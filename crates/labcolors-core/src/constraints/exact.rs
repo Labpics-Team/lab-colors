@@ -23,20 +23,11 @@ pub(crate) enum ExactIdentityCapabilityV1 {
     FinalOccurrenceSrgb8IdentityV1,
 }
 
+/// PASS-marker без дублирования bytes: invocation хранит target, а physical
+/// binding — actual. Создать marker может только sealed evaluator после exact
+/// equality, поэтому несовпадающая success-пара непредставима и в памяти.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ExactIdentityAssessmentV1 {
-    matched: Srgb8,
-}
-
-impl ExactIdentityAssessmentV1 {
-    pub(crate) const fn target(self) -> Srgb8 {
-        self.matched
-    }
-
-    pub(crate) const fn actual(self) -> Srgb8 {
-        self.matched
-    }
-}
+pub(crate) struct ExactIdentityAssessmentV1(());
 
 /// Типизированный отказ exact-гейта. Он несёт только диагностическую пару и
 /// никогда не выдаёт частично «проверенный» occurrence/evidence.
@@ -97,6 +88,6 @@ impl Evaluator<ModeledSrgb8PointOccurrence> for ExactSrgb8IdentityV1 {
                 actual,
             });
         }
-        Ok(ExactIdentityAssessmentV1 { matched: actual })
+        Ok(ExactIdentityAssessmentV1(()))
     }
 }

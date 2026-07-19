@@ -336,11 +336,11 @@ impl ExactOccurrenceEvidenceV1 {
     }
 
     pub(crate) fn target(&self) -> Srgb8 {
-        self.assessment.outcome().target()
+        *self.assessment.invocation()
     }
 
     pub(crate) fn actual(&self) -> Srgb8 {
-        self.assessment.outcome().actual()
+        Srgb8::new(self.assessment.binding().occurrence().output_rgb())
     }
 
     pub(crate) fn physical_certificate(&self) -> SourceOverCertificateV1 {

@@ -317,12 +317,8 @@ fn wcag_adapter_contains_delegation_not_a_second_formula() {
 #[test]
 fn exact_success_type_cannot_represent_a_target_actual_mismatch() {
     let source = include_str!("constraints/exact.rs");
-    let (_, assessment_tail) = source
-        .split_once("pub(crate) struct ExactIdentityAssessmentV1 {")
-        .expect("exact assessment declaration");
-    let (assessment_fields, _) = assessment_tail
-        .split_once("}\n\nimpl ExactIdentityAssessmentV1")
-        .expect("exact assessment implementation");
-    assert_eq!(assessment_fields.matches("Srgb8").count(), 1);
-    assert!(assessment_fields.contains("matched: Srgb8"));
+    assert!(source.contains("pub(crate) struct ExactIdentityAssessmentV1(());"));
+    assert!(!source.contains("pub(crate) struct ExactIdentityAssessmentV1;"));
+    assert_eq!(source.matches("ExactIdentityAssessmentV1(())").count(), 2);
+    assert!(!source.contains("matched: Srgb8"));
 }

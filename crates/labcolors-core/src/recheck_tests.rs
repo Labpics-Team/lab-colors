@@ -426,7 +426,7 @@ fn singleton_recheck_is_differentially_equal_to_g1a_and_point_program() {
         crate::analog::AuthoredAlphaBindingIdV1::Standalone,
         target,
         source,
-        alpha,
+        crate::composition::AdmittedOpacityV1::new(alpha).unwrap(),
         backdrop,
     )
     .unwrap();
@@ -453,10 +453,7 @@ fn singleton_recheck_is_differentially_equal_to_g1a_and_point_program() {
         occurrence.program_occurrence_binding()
     );
     assert_eq!(evidence.physical_certificate(), *occurrence.certificate());
-    assert_eq!(
-        evidence.physical_certificate(),
-        *g1a.occurrence().certificate()
-    );
+    assert_eq!(evidence.physical_certificate(), *g1a.certificate());
 }
 
 #[test]

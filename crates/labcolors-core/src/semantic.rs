@@ -2792,10 +2792,10 @@ fn resolve_rgba_inverted_with_binding(
     let actual_alpha = verified.alpha();
     // Резолвер возвращает тот же binary64 либо строго больший точный пол.
     let alpha_coerced = actual_alpha > requested_alpha;
-    finish_rgba_from_occurrence(
+    finish_rgba_from_certificate(
         verified.tint(),
         actual_alpha,
-        verified.occurrence(),
+        verified.certificate(),
         vc,
         alpha_coerced,
         false,
@@ -2853,23 +2853,30 @@ fn finish_rgba(
                 error.message()
             ))
         })?;
-    finish_rgba_from_occurrence(tint, alpha, &occurrence, vc, alpha_coerced, floor_coerced)
+    finish_rgba_from_certificate(
+        tint,
+        alpha,
+        occurrence.certificate(),
+        vc,
+        alpha_coerced,
+        floor_coerced,
+    )
 }
 
 /// Финальная эмиссия читает байты уже исполненного occurrence. Ветка не умеет
 /// композитить повторно, поэтому exact gate и публичный compositeHex физически
 /// ссылаются на один результат.
-fn finish_rgba_from_occurrence(
+fn finish_rgba_from_certificate(
     tint: Srgb8,
     alpha: f64,
-    occurrence: &crate::appearance::ResolvedOccurrence,
+    occurrence: &crate::appearance::SourceOverCertificateV1,
     vc: &ViewingConditions,
     alpha_coerced: bool,
     floor_coerced: bool,
 ) -> PendingResolution {
     use crate::spaces::srgb::srgb_gamma_inv;
-    let composite = Srgb8::new(occurrence.visible());
-    let backdrop = Srgb8::new(occurrence.backdrop());
+    let composite = Srgb8::new(occurrence.output_rgb());
+    let backdrop = Srgb8::new(occurrence.backdrop_rgb());
     let composite_q = composite.encoded();
     let bg_encoded = backdrop.encoded();
     // Линейный свет из кодированного (per-channel gamma-декод) для Ys candidate score.

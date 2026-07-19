@@ -8,8 +8,9 @@
 use crate::Srgb8;
 use crate::appearance::{
     PhysicalProgramIdentityV1, PointOpacityOverSurfaceV1, ProgramOccurrenceBindingV1,
-    ResolvedOccurrence, SourceOverCertificateV1, VisiblePointBindingV1,
+    SourceOverCertificateV1, VisiblePointBindingV1,
 };
+use crate::composition::AdmittedOpacityV1;
 use crate::constraints::{
     BoundAssessment, BoundVerdict, ExactConstraintIdentityV1, ExactIdentityAssessmentV1,
     ExactIdentityCapabilityV1, ExactIdentityMismatchV1, ExactIdentityReleaseV1,
@@ -39,7 +40,6 @@ pub(crate) struct ExactIdentityEvidenceV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct VerifiedAlphaAnalogV1 {
-    occurrence: ResolvedOccurrence,
     authored: AuthoredAlphaBindingIdV1,
     assessment: BoundAssessment<
         VisiblePointBindingV1,
@@ -53,20 +53,20 @@ pub(crate) struct VerifiedAlphaAnalogV1 {
 
 impl VerifiedAlphaAnalogV1 {
     pub(crate) fn tint(&self) -> Srgb8 {
-        Srgb8::new(self.occurrence.certificate().subject_rgb())
+        Srgb8::new(self.certificate().subject_rgb())
     }
 
     pub(crate) fn alpha(&self) -> f64 {
-        f64::from_bits(self.occurrence.certificate().subject_opacity_bits())
+        f64::from_bits(self.certificate().subject_opacity_bits())
     }
 
-    pub(crate) const fn occurrence(&self) -> &ResolvedOccurrence {
-        &self.occurrence
+    pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
+        self.assessment.binding().occurrence_ref()
     }
 
     pub(crate) fn evidence(&self) -> ExactIdentityEvidenceV1 {
-        let assessment = *self.assessment.outcome();
         let binding = *self.assessment.binding();
+        let occurrence = binding.occurrence();
         ExactIdentityEvidenceV1 {
             physical: ExactAlphaProgramV1::physical_identity(),
             authored: self.authored,
@@ -74,9 +74,9 @@ impl VerifiedAlphaAnalogV1 {
             capability: *self.assessment.capability(),
             release: *self.assessment.release(),
             program_occurrence: binding.program_occurrence(),
-            occurrence: binding.occurrence(),
+            occurrence,
             target: *self.assessment.invocation(),
-            actual: assessment.actual(),
+            actual: Srgb8::new(occurrence.output_rgb()),
         }
     }
 }
@@ -198,19 +198,21 @@ pub(crate) fn tint_at_alpha(target: Srgb8, alpha: f64, backdrop: Srgb8) -> Optio
     (actual == target).then_some(Srgb8::new(tint))
 }
 
-fn propose(target: Srgb8, requested_alpha: f64, backdrop: Srgb8) -> Result<(Srgb8, f64), String> {
-    if !requested_alpha.is_finite() || !(0.0..=1.0).contains(&requested_alpha) {
-        return Err(format!(
-            "requested_alpha вне конечного [0,1]: {requested_alpha}"
-        ));
-    }
-    if let Some(tint) = tint_at_alpha(target, requested_alpha, backdrop) {
-        return Ok((tint, requested_alpha));
+fn propose(
+    target: Srgb8,
+    requested_alpha: f64,
+    backdrop: Srgb8,
+) -> Result<(Srgb8, AdmittedOpacityV1), String> {
+    let requested = AdmittedOpacityV1::new(requested_alpha)
+        .map_err(|_| format!("requested_alpha вне конечного [0,1]: {requested_alpha}"))?;
+    if let Some(tint) = tint_at_alpha(target, requested.value(), backdrop) {
+        return Ok((tint, requested));
     }
 
-    let alpha = first_alpha(target, backdrop);
-    debug_assert!(alpha > requested_alpha);
-    let tint = tint_at_alpha(target, alpha, backdrop)
+    let alpha = AdmittedOpacityV1::new(first_alpha(target, backdrop))
+        .map_err(|_| "выведенная alpha вышла из конечного [0,1]".to_owned())?;
+    debug_assert!(alpha.value() > requested.value());
+    let tint = tint_at_alpha(target, alpha.value(), backdrop)
         .ok_or_else(|| "первая sRGB8-alpha не дала допустимый byte-тинт".to_owned())?;
     Ok((tint, alpha))
 }
@@ -229,14 +231,12 @@ pub(crate) fn resolve_verified(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExactAlphaProgramErrorV1 {
-    InvalidOpacity(String),
     IdentityMismatch(ExactIdentityMismatchV1),
 }
 
 impl ExactAlphaProgramErrorV1 {
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::InvalidOpacity(message) => message.clone(),
             Self::IdentityMismatch(mismatch) => format!(
                 "alpha-analog не воспроизвёл sRGB8-цель: target={:?}, actual={:?}",
                 mismatch.target().bytes(),
@@ -259,13 +259,11 @@ impl ExactAlphaProgramV1 {
         authored: AuthoredAlphaBindingIdV1,
         target: Srgb8,
         tint: Srgb8,
-        alpha: f64,
+        alpha: AdmittedOpacityV1,
         backdrop: Srgb8,
     ) -> Result<VerifiedAlphaAnalogV1, ExactAlphaProgramErrorV1> {
-        let occurrence = PointOpacityOverSurfaceV1::evaluate(tint.bytes(), alpha, backdrop.bytes())
-            .map_err(|error| {
-                ExactAlphaProgramErrorV1::InvalidOpacity(error.message().to_owned())
-            })?;
+        let occurrence =
+            PointOpacityOverSurfaceV1::evaluate_admitted(tint.bytes(), alpha, backdrop.bytes());
         let assessment = match assess(&occurrence, &ExactSrgb8IdentityV1, target) {
             BoundVerdict::Pass(assessment) => assessment,
             BoundVerdict::Fail(failure) => {
@@ -274,15 +272,13 @@ impl ExactAlphaProgramV1 {
                 ));
             }
         };
-        debug_assert_eq!(assessment.outcome().target(), assessment.outcome().actual());
         let verified = VerifiedAlphaAnalogV1 {
-            occurrence,
             authored,
             assessment,
         };
         debug_assert_eq!(
             verified.evidence().actual,
-            verified.assessment.outcome().actual()
+            Srgb8::new(verified.certificate().output_rgb())
         );
         Ok(verified)
     }
@@ -291,6 +287,10 @@ impl ExactAlphaProgramV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn admitted(alpha: f64) -> AdmittedOpacityV1 {
+        AdmittedOpacityV1::new(alpha).expect("test alpha must be admitted")
+    }
 
     #[test]
     fn public_alpha_facade_owns_no_byte_grid_proposal_or_verified_coordinator() {
@@ -388,7 +388,7 @@ mod tests {
             AuthoredAlphaBindingIdV1::Standalone,
             target,
             Srgb8::new([255, 255, 255]),
-            0.5,
+            admitted(0.5),
             Srgb8::new([0, 0, 0]),
         )
         .expect_err("wrong final bytes must not mint VerifiedAlphaAnalogV1");
@@ -396,9 +396,7 @@ mod tests {
         assert!(message.contains("target=[0, 0, 0]"), "{message}");
         assert!(message.contains("actual=[128, 128, 128]"), "{message}");
 
-        let ExactAlphaProgramErrorV1::IdentityMismatch(mismatch) = error else {
-            panic!("unexpected exact-program error: {error:?}");
-        };
+        let ExactAlphaProgramErrorV1::IdentityMismatch(mismatch) = error;
         assert_eq!(mismatch.target(), target);
         assert_eq!(mismatch.actual(), Srgb8::new([128, 128, 128]));
         assert_eq!(crate::composition::source_over_evaluation_count(), 1);
@@ -412,7 +410,7 @@ mod tests {
             },
             Srgb8::new([128, 128, 128]),
             Srgb8::new([0, 0, 0]),
-            0.5,
+            admitted(0.5),
             Srgb8::new([255, 255, 255]),
         )
         .unwrap();
@@ -429,7 +427,7 @@ mod tests {
         assert_eq!(evidence.target, evidence.actual);
         assert_eq!(
             evidence.program_occurrence,
-            verified.occurrence().program_occurrence_binding()
+            verified.assessment.binding().program_occurrence()
         );
         assert_eq!(evidence.occurrence.output_rgb(), evidence.actual.bytes());
         assert_eq!(
@@ -449,7 +447,7 @@ mod tests {
                 },
                 Srgb8::new([128, 128, 128]),
                 Srgb8::new([0, 0, 0]),
-                0.5,
+                admitted(0.5),
                 Srgb8::new([255, 255, 255]),
             )
             .unwrap()
@@ -480,7 +478,7 @@ mod tests {
                 AuthoredAlphaBindingIdV1::Standalone,
                 target,
                 tint,
-                0.5,
+                admitted(0.5),
                 backdrop,
             )
         });
