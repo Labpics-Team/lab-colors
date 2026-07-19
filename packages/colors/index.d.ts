@@ -15,10 +15,10 @@ export {
 } from "./pkg/labcolors.js";
 
 /** Inputs accepted by the asynchronous WASM loader. */
-export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
+type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 /** Inputs accepted by the synchronous WASM loader. */
-export type SyncInitInput = BufferSource | WebAssembly.Module;
+type SyncInitInput = BufferSource | WebAssembly.Module;
 
 /** Initialise the runtime without exposing its raw WebAssembly exports. */
 export declare function init(

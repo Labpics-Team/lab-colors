@@ -1765,6 +1765,11 @@ test("runtime declarations expose one curated type surface", () => {
     [...generatedNames].sort(),
     "root types must equal the runtime generated surface exactly",
   );
+  assert.doesNotMatch(
+    rootDeclarations,
+    /^export (?:declare )?(?:type|interface|class|enum|namespace)\s+[A-Za-z]/mu,
+    "root declarations must not add local named types beside the curated re-export blocks",
+  );
   assert.doesNotMatch(rootDeclarations, /Feasibility|feasibility/u);
   assert.match(rootDeclarations, /export type \{ Wcag22CriterionV1 \} from "\.\/wcag22\.js"/u);
 
