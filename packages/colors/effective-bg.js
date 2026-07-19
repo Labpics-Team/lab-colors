@@ -153,8 +153,15 @@ function parseOklch(inner) {
 
   const hRad = (H * Math.PI) / 180;
   const lin = oklabToLinearRgb(L, C * Math.cos(hRad), C * Math.sin(hRad));
-  const byte = (i) => Math.round(clamp255(linearToSrgb(lin[i]) * 255));
-  return [byte(0), byte(1), byte(2), a];
+  if (lin.some((channel) => !Number.isFinite(channel))) return null;
+  const encoded = lin.map((channel) => linearToSrgb(channel) * 255);
+  if (encoded.some((channel) => !Number.isFinite(channel))) return null;
+  return [
+    Math.round(clamp255(encoded[0])),
+    Math.round(clamp255(encoded[1])),
+    Math.round(clamp255(encoded[2])),
+    a,
+  ];
 }
 
 /** Strict CSS `<number>` (no trailing junk, unlike `parseFloat`), else `null`. */

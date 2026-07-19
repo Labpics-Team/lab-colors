@@ -237,6 +237,8 @@ test("parseCssColor handles the forms computed style yields", () => {
     "rgb(1,, 2, 3)",
     "rgb(1 2 3 0.5)",
     "rgb(1 2 3 / 0.5 extra)",
+    "oklch(50% 1e308 0)",
+    "oklch(50% 0.1 1e308)",
   ]) {
     assert.equal(parseCssColor(malformed), null, malformed);
   }
@@ -407,14 +409,17 @@ test("effective background never reinterprets a translucent fallback as opaque",
     }),
     /fallback must be an opaque supported colour/u,
   );
-  assert.throws(
-    () => effectiveBackground(leaf, {
-      fallback: "#FZFFFF",
-      getStyle,
-      parentOf,
-    }),
-    /fallback must be an opaque supported colour/u,
-  );
+  for (const fallback of ["#FZFFFF", "oklch(50% 1e308 0)", "oklch(50% 0.1 1e308)"]) {
+    assert.throws(
+      () => effectiveBackground(leaf, {
+        fallback,
+        getStyle,
+        parentOf,
+      }),
+      /fallback must be an opaque supported colour/u,
+      fallback,
+    );
+  }
 });
 
 // A tiny fake element tree for effectiveBackground: each node carries a
