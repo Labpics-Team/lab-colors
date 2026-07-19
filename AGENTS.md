@@ -14,20 +14,20 @@ Lab Colors развивается как контекстный компилят
 вычисляет конечные значения; runtime повторно проверяет только зависимую часть
 графа.
 
-Special-recipe path не является extension point. Если изменение затрагивает
-ветвь, где продуктовая потребность выражена отдельным role kind, потребность
-переносится в общий graph/constraint contract с characterization/differential
-защитой, а заменённая физическая или solver-ветвь удаляется в том же завершённом
-срезе.
+Special-recipe path не является extension point. В изменяемом vertical slice
+физика, solver, evaluator и final-emission verification продуктовой потребности
+переносятся в общий graph/constraint contract, а заменённая исполняемая ветвь
+удаляется в том же срезе.
 
-До общего authoring cutover допускается ровно один существующий façade
-`RoleRecipe → RoleSpec → NamedRoleTable` как frozen входная грамматика. Он не
-получает новых полей или семантики. Для каждой уже перенесённой capability
-façade владеет только parse, validate и тотальным односторонним lowering:
-private compiled IR становится единственным executable SSOT для физики,
-solver-а, evaluator-а, emission и evidence, а прежняя match-ветвь удаляется в
-том же срезе. Это branch-by-abstraction, а не compatibility promise; после
-полного lowering inventory façade атомарно заменяется публичным graph contract.
+До атомарной замены публичной схемы единственный текущий
+`RoleRecipe/RoleSpec → NamedRoleTable` façade сохраняется только как frozen
+authoring grammar. Для уже мигрированного варианта он выполняет лишь parse,
+validation и total one-way lowering в общую IR. После lowering исполнение читает
+только compiled IR; façade не определяет физическую математику, constraints,
+evaluator selection, defaults, evidence, emission verification или независимо
+изменяемый derived state. Новые variants, fields и semantics запрещены. Lowering
+защищается characterization/differential tests. Это не обещание обратной
+совместимости; façade удаляется при атомарном public cutover.
 
 Клиент владеет именами и смыслом токенов, aliases, hierarchy, component states,
 design language и authored anchors. Core владеет colorimetry, compositing,
