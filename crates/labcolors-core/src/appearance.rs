@@ -895,9 +895,20 @@ impl PointOpacityOverSurfaceV1 {
         opacity: f64,
         backdrop: [u8; 3],
     ) -> Result<ResolvedOccurrence, PointOpacityError> {
-        crate::composition::validate_alpha(opacity)
-            .map_err(|message| PointOpacityError { message })?;
-        let opacity = if opacity == 0.0 { 0.0 } else { opacity };
+        let opacity =
+            crate::composition::AdmittedOpacityV1::new(opacity).map_err(|_| PointOpacityError {
+                message: format!("alpha вне конечного [0,1]: {opacity}"),
+            })?;
+        Ok(Self::evaluate_admitted(source, opacity, backdrop))
+    }
+
+    /// Исполнение после typed admission alpha. Этим входом final recheck
+    /// исключает невозможную повторную numeric validation и stringly error.
+    pub(crate) fn evaluate_admitted(
+        source: [u8; 3],
+        opacity: crate::composition::AdmittedOpacityV1,
+        backdrop: [u8; 3],
+    ) -> ResolvedOccurrence {
         let mut paints = [None; 2];
         let mut surfaces = [None; 2];
         let mut occurrences = [None; 1];
@@ -911,16 +922,16 @@ impl PointOpacityOverSurfaceV1 {
                 _ => unreachable!("sealed point program has one SurfaceInput port"),
             },
             |id| match id {
-                POINT_OPACITY => opacity,
+                POINT_OPACITY => opacity.value(),
                 _ => unreachable!("sealed point program has one OpacityInput port"),
             },
             &mut paints,
             &mut surfaces,
             &mut occurrences,
         );
-        Ok(occurrences[0].unwrap_or_else(|| {
+        occurrences[0].unwrap_or_else(|| {
             unreachable!("compiler-verified point program materializes its Occurrence")
-        }))
+        })
     }
 }
 
@@ -1098,7 +1109,6 @@ impl ResolvedOccurrence {
         self.visible
     }
 
-    #[cfg(test)]
     pub(crate) fn modeled_srgb8_point(&self) -> ModeledSrgb8PointOccurrence {
         ModeledSrgb8PointOccurrence {
             visible: self.visible,
@@ -1106,7 +1116,6 @@ impl ResolvedOccurrence {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn visible_point_binding(&self) -> VisiblePointBindingV1 {
         VisiblePointBindingV1 {
             program_occurrence: self.program_occurrence_binding(),
@@ -1131,18 +1140,23 @@ impl ResolvedOccurrence {
 /// Ссылки на occurrence/certificate здесь нет: evaluator структурно не может
 /// подменить скомпозитированный stimulus authored source-цветом.
 #[derive(Debug, Clone, Copy)]
-#[cfg(test)]
 pub(crate) struct ModeledSrgb8PointOccurrence {
     visible: [u8; 3],
     backdrop: [u8; 3],
 }
 
-#[cfg(test)]
 impl ModeledSrgb8PointOccurrence {
     pub(crate) fn visible(self) -> [u8; 3] {
         self.visible
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shipped exact evaluator reads visible; backdrop is consumed by the test-private WCAG adapter"
+        )
+    )]
     pub(crate) fn backdrop(self) -> [u8; 3] {
         self.backdrop
     }
@@ -1152,16 +1166,18 @@ impl ModeledSrgb8PointOccurrence {
 /// proof. Assessment не может пережить смену Paint/Surface/alpha лишь потому,
 /// что финальные байты случайно совпали.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
 pub(crate) struct VisiblePointBindingV1 {
     program_occurrence: ProgramOccurrenceBindingV1,
     occurrence: SourceOverCertificateV1,
 }
 
-#[cfg(test)]
 impl VisiblePointBindingV1 {
     pub(crate) fn program_occurrence(self) -> ProgramOccurrenceBindingV1 {
         self.program_occurrence
+    }
+
+    pub(crate) fn occurrence(self) -> SourceOverCertificateV1 {
+        self.occurrence
     }
 }
 

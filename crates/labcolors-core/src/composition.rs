@@ -2,7 +2,44 @@
 //!
 //! Модуль не знает solver, recipe, constraint или client ID. Он фиксирует
 //! единственную физическую операцию encoded-sRGB8 source-over, чтобы proposal,
-//! appearance runtime и final-emission gate не могли разойтись по арифметике.
+//! appearance runtime и revision-bound recheck не могли разойтись по арифметике.
+
+/// Typed отказ admission straight alpha. Диагностический transport-текст
+/// строится только legacy façade-ом; нижняя физика не хранит stringly error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpacityAdmissionErrorV1 {
+    NonFinite,
+    OutsideUnitInterval,
+}
+
+/// Канонический straight alpha внутри конечного `[0,1]`.
+///
+/// Значение хранится битами: `-0.0` понижается в единственный физический `+0.0`
+/// state, а все остальные binary64 значения сохраняются точно.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdmittedOpacityV1(u64);
+
+impl AdmittedOpacityV1 {
+    pub(crate) fn new(alpha: f64) -> Result<Self, OpacityAdmissionErrorV1> {
+        if !alpha.is_finite() {
+            return Err(OpacityAdmissionErrorV1::NonFinite);
+        }
+        if !(0.0..=1.0).contains(&alpha) {
+            return Err(OpacityAdmissionErrorV1::OutsideUnitInterval);
+        }
+        let canonical = if alpha == 0.0 { 0.0 } else { alpha };
+        Ok(Self(canonical.to_bits()))
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn bits(self) -> u64 {
+        self.0
+    }
+
+    pub(crate) const fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
 
 /// Порядок binary64-операций совпадает с официальным JS-потребителем на
 /// непрозрачной подложке. Expanded-форма запрещена: два округления нарушают
@@ -16,10 +53,9 @@ pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u
 }
 
 pub(crate) fn validate_alpha(alpha: f64) -> Result<(), String> {
-    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
-    }
-    Ok(())
+    AdmittedOpacityV1::new(alpha)
+        .map(|_| ())
+        .map_err(|_| format!("alpha вне конечного [0,1]: {alpha}"))
 }
 
 pub(crate) fn source_over_srgb8(

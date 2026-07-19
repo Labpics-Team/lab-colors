@@ -13,6 +13,7 @@ use crate::appearance::{
     CompositionProfileV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
     SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
+use crate::constraints::Evaluator;
 
 const SOURCE: ColorInputId = ColorInputId::new(0);
 const OTHER_SOURCE: ColorInputId = ColorInputId::new(2);
@@ -90,7 +91,7 @@ fn static_exact_program_is_declarative_topology_plus_typed_constraint() {
         crate::appearance::PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
     );
     assert_eq!(
-        crate::analog::ExactAlphaProgramV1::constraint_identity(),
+        crate::constraints::ExactSrgb8IdentityV1.identity(),
         crate::constraints::ExactConstraintIdentityV1::FinalSrgb8IdentityV1
     );
 }

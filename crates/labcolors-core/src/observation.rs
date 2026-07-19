@@ -194,6 +194,40 @@ pub(crate) enum Availability {
     Stale,
 }
 
+/// Один атомарный borrow текущей availability и всего evidence, которое ей
+/// соответствует. Consumer не может прочитать state двумя вызовами и случайно
+/// связать revision с другим payload после будущего interior-mutable adapter-а.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservationSnapshot<'a> {
+    Waiting {
+        stream: ObservationStreamId,
+        schema: &'a [SurfaceInputPortId],
+        revision: Option<Revision>,
+    },
+    Ready {
+        stream: ObservationStreamId,
+        schema: &'a [SurfaceInputPortId],
+        revision: Revision,
+        set: &'a ObservedScenarioSet,
+    },
+    Stale {
+        stream: ObservationStreamId,
+        schema: &'a [SurfaceInputPortId],
+        revision: Revision,
+        previous: &'a PriorObservation,
+    },
+}
+
+impl ObservationSnapshot<'_> {
+    pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
+        match self {
+            Self::Waiting { schema, .. }
+            | Self::Ready { schema, .. }
+            | Self::Stale { schema, .. } => schema,
+        }
+    }
+}
+
 /// Успешное обновление либо exact-idempotent replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpdateDisposition {
@@ -296,6 +330,44 @@ impl ObservationState {
             ObservationHead::Unknown {
                 previous: Some(_), ..
             } => Availability::Stale,
+        }
+    }
+
+    /// Возвращает согласованный stream/revision/payload snapshot одним
+    /// чтением единственного `head`; `PriorObservation` остаётся только stale
+    /// evidence и никогда не проецируется как `Ready`.
+    pub(crate) fn snapshot(&self) -> ObservationSnapshot<'_> {
+        match &self.head {
+            ObservationHead::Empty => ObservationSnapshot::Waiting {
+                stream: self.stream,
+                schema: &self.compiled_surface_input_schema,
+                revision: None,
+            },
+            ObservationHead::Unknown {
+                revision,
+                previous: None,
+                ..
+            } => ObservationSnapshot::Waiting {
+                stream: self.stream,
+                schema: &self.compiled_surface_input_schema,
+                revision: Some(*revision),
+            },
+            ObservationHead::Observed { revision, set } => ObservationSnapshot::Ready {
+                stream: self.stream,
+                schema: &self.compiled_surface_input_schema,
+                revision: *revision,
+                set,
+            },
+            ObservationHead::Unknown {
+                revision,
+                previous: Some(previous),
+                ..
+            } => ObservationSnapshot::Stale {
+                stream: self.stream,
+                schema: &self.compiled_surface_input_schema,
+                revision: *revision,
+                previous,
+            },
         }
     }
 

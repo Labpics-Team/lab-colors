@@ -8,21 +8,13 @@
 use crate::Srgb8;
 use crate::appearance::{
     PhysicalProgramIdentityV1, PointOpacityOverSurfaceV1, ProgramOccurrenceBindingV1,
-    ResolvedOccurrence, SourceOverCertificateV1,
+    ResolvedOccurrence, SourceOverCertificateV1, VisiblePointBindingV1,
 };
 use crate::constraints::{
-    ExactConstraintIdentityV1, ExactIdentityMismatchV1, ExactSrgb8IdentityV1,
+    BoundAssessment, BoundVerdict, ExactConstraintIdentityV1, ExactIdentityAssessmentV1,
+    ExactIdentityCapabilityV1, ExactIdentityMismatchV1, ExactIdentityReleaseV1,
+    ExactSrgb8IdentityV1, assess,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExactIdentityCapabilityV1 {
-    FinalOccurrenceSrgb8IdentityV1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExactIdentityReleaseV1 {
-    V1,
-}
 
 /// Opaque identity authored invocation-а. Standalone helper не притворяется
 /// client binding; named compiler назначает ordinal конкретной декларации.
@@ -49,7 +41,14 @@ pub(crate) struct ExactIdentityEvidenceV1 {
 pub(crate) struct VerifiedAlphaAnalogV1 {
     occurrence: ResolvedOccurrence,
     authored: AuthoredAlphaBindingIdV1,
-    target: Srgb8,
+    assessment: BoundAssessment<
+        VisiblePointBindingV1,
+        ExactConstraintIdentityV1,
+        ExactIdentityReleaseV1,
+        ExactIdentityCapabilityV1,
+        Srgb8,
+        ExactIdentityAssessmentV1,
+    >,
 }
 
 impl VerifiedAlphaAnalogV1 {
@@ -66,16 +65,18 @@ impl VerifiedAlphaAnalogV1 {
     }
 
     pub(crate) fn evidence(&self) -> ExactIdentityEvidenceV1 {
+        let assessment = *self.assessment.outcome();
+        let binding = *self.assessment.binding();
         ExactIdentityEvidenceV1 {
             physical: ExactAlphaProgramV1::physical_identity(),
             authored: self.authored,
-            constraint: ExactAlphaProgramV1::constraint_identity(),
-            capability: ExactIdentityCapabilityV1::FinalOccurrenceSrgb8IdentityV1,
-            release: ExactIdentityReleaseV1::V1,
-            program_occurrence: self.occurrence.program_occurrence_binding(),
-            occurrence: *self.occurrence.certificate(),
-            target: self.target,
-            actual: Srgb8::new(self.occurrence.visible()),
+            constraint: *self.assessment.identity(),
+            capability: *self.assessment.capability(),
+            release: *self.assessment.release(),
+            program_occurrence: binding.program_occurrence(),
+            occurrence: binding.occurrence(),
+            target: *self.assessment.invocation(),
+            actual: assessment.actual(),
         }
     }
 }
@@ -254,10 +255,6 @@ impl ExactAlphaProgramV1 {
         PointOpacityOverSurfaceV1::physical_identity()
     }
 
-    pub(crate) const fn constraint_identity() -> ExactConstraintIdentityV1 {
-        ExactSrgb8IdentityV1::IDENTITY
-    }
-
     pub(crate) fn evaluate(
         authored: AuthoredAlphaBindingIdV1,
         target: Srgb8,
@@ -269,15 +266,24 @@ impl ExactAlphaProgramV1 {
             .map_err(|error| {
                 ExactAlphaProgramErrorV1::InvalidOpacity(error.message().to_owned())
             })?;
-        let assessment = ExactSrgb8IdentityV1::evaluate(&occurrence, target)
-            .map_err(ExactAlphaProgramErrorV1::IdentityMismatch)?;
-        debug_assert_eq!(assessment.target(), assessment.actual());
+        let assessment = match assess(&occurrence, &ExactSrgb8IdentityV1, target) {
+            BoundVerdict::Pass(assessment) => assessment,
+            BoundVerdict::Fail(failure) => {
+                return Err(ExactAlphaProgramErrorV1::IdentityMismatch(
+                    failure.into_outcome(),
+                ));
+            }
+        };
+        debug_assert_eq!(assessment.outcome().target(), assessment.outcome().actual());
         let verified = VerifiedAlphaAnalogV1 {
             occurrence,
             authored,
-            target: assessment.target(),
+            assessment,
         };
-        debug_assert_eq!(verified.evidence().actual, assessment.actual());
+        debug_assert_eq!(
+            verified.evidence().actual,
+            verified.assessment.outcome().actual()
+        );
         Ok(verified)
     }
 }
