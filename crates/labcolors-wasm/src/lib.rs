@@ -392,9 +392,9 @@ export type LadderPositionV1 =
 
 /**
  * Рецепт роли из закрытого физического меню текущего resolver-а.
- * Это единственная frozen входная грамматика до общего graph cutover, не
- * target IR, не extension point и не обещание совместимости. Существующий
- * variant только односторонне лоуверится в private IR.
+ * Это текущая pre-cutover грамматика, не target IR и не extension point.
+ * Вариант считается мигрированным только после одностороннего lowering в общий
+ * compiled graph и удаления его прежней исполняемой ветви.
  */
 export type RoleRecipe =
   | {

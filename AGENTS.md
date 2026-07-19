@@ -19,15 +19,14 @@ Special-recipe path не является extension point. В изменяемо
 переносятся в общий graph/constraint contract, а заменённая исполняемая ветвь
 удаляется в том же срезе.
 
-До атомарной замены публичной схемы единственный текущий
-`RoleRecipe/RoleSpec → NamedRoleTable` façade сохраняется только как frozen
-authoring grammar. Для уже мигрированного варианта он выполняет лишь parse,
-validation и total one-way lowering в общую IR. После lowering исполнение читает
-только compiled IR; façade не определяет физическую математику, constraints,
-evaluator selection, defaults, evidence, emission verification или независимо
-изменяемый derived state. Новые variants, fields и semantics запрещены. Lowering
-защищается characterization/differential tests. Это не обещание обратной
-совместимости; façade удаляется при атомарном public cutover.
+Текущие `RoleRecipe`, публичные `RoleSpec`/`NamedRoleTable` и профильные
+селекторы ещё являются исполняемым pre-cutover долгом, а не target IR. Их нельзя
+расширять новыми variants, fields или semantics. Вариант считается
+мигрированным только когда все его публичные construction paths выполняют
+parse, validation и total one-way lowering, а исполнение читает исключительно
+compiled IR. Старый match/solver/evaluator/default/emission path удаляется в том
+же срезе. Lowering защищается characterization/differential tests; публичная
+замена выполняется атомарно, без второго авторитетного façade.
 
 Клиент владеет именами и смыслом токенов, aliases, hierarchy, component states,
 design language и authored anchors. Core владеет colorimetry, compositing,
