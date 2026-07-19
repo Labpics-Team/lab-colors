@@ -1184,483 +1184,38 @@ test("release evidence carries no trace of the excised offline line", () => {
   );
 });
 
-test("WASM role size budgets are exact, append-only, and acyclic", async () => {
+test("WASM runtime budget is one canonical self-contained exact contract", async () => {
   const bench = join(root, "packages", "colors", "bench");
-  const paths = Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map((version) => [
-      `v${version}`,
-      join(bench, `wasm-size-budget-v${version}.json`),
-    ]),
-  );
+  const budgetPath = join(bench, "wasm.json");
   const checkerPath = join(root, "scripts", "check-wasm-size-budget.mjs");
-  const sha256 = (value) => createHash("sha256").update(value).digest("hex");
   const canonicalJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
-  const expectedHashes = {
-    v1: "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1",
-    v2: "713ccc314b3e6f638d87a54716d665d52f77c86f34a2b6edefe0a354a499d8b1",
-    v3: "d7937612e4c33574a8af28845bb1dd30cca86fc39fc0206cac4c377de77fec15",
-    v4: "c34fc10404dc7057a53a28592d18342078b5cd0e5dcaa888db482abf3f5fb23c",
-    v5: "e4b53a2eb976a8c66827a559cb81232e359b734dbfb14725da215cb496ff5d59",
-    v6: "761af6050031169dac7eafdfadb2db9bbb2023b96ed5ba9d3c5dc966ffeafb32",
-    v7: "01d17c042b7dc36585e9657490048932fdf61d4715099b735aa3bf2d3dc5777e",
-    v8: "3590ffd2d158c2caf5cfbd26489e609b08d1cb640584456baa2166ccf50f5109",
-    v9: "e00fa0549d67ab027f589c053aeb4374f6437704a6277cc9784dcaa1d8015ad4",
-    v10: "6f3318c29c633860a146be5dcd29e4ce85a3a52296b9719b506aba16951a58e6",
-    v11: "fa11531ee390dd6dfdfadfadab99bbe8277f2b152b567951b17ef6093d42b1e4",
-    v12: "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95",
-    v13: "3cc88303a0f43e8ca33ae70d723a3179c68b0cc2744310a791e8f43885482f34",
-    v14: "20c5886e3edaa6eaf3e37b915d81982a3a13e30064fc7fa8eb702eda38a20fb6",
-    v15: "979dc7990742cc2daf163c64051ed6a22c939745a4b1767bc010d6faaaba5161",
-    v16: "9a9ab7050a3f6b103905a817b9d675650d04ddab3524a3fc5aa3d0f5d6cab9c3",
-    v17: "8da5e810394ee8fea8491bcd8aff7f3023c267bf31bb5ea4c4b843ef459e7906",
-    v18: "2ee1e5b4472aa393eb399e3839ab9ac3cfb832a69fa8b704c3fa4854bc1e11f8",
-    v19: "b96d65b06f9bcd7ec568be73bdf5aaea0ed5616f8c104ce6fa33cdf38e7290e2",
-  };
-  const documents = {};
-  for (const version of Object.keys(paths)) {
-    const bytes = readFileSync(paths[version]);
-    const value = JSON.parse(bytes);
-    documents[version] = value;
-    assert.equal(sha256(bytes), expectedHashes[version], `${version} byte identity drifted`);
-    if (version !== "v1") assert.equal(bytes.toString("utf8"), canonicalJson(value));
-  }
-
-  const {
-    v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18,
-    v19,
-  } = documents;
-  assert.equal(v1.budgetId, "labcolors-wasm-raw-issue-284-v1");
-  assert.equal(v2.budgetId, "labcolors-wasm-raw-issue-295-v2");
-  assert.equal(v3.budgetId, "labcolors-wasm-raw-issue-296-v3");
-  assert.equal(v4.budgetId, "labcolors-wasm-raw-issue-296-v4");
-  assert.deepEqual(Object.keys(v5), [
-    "schemaVersion",
-    "budgetId",
-    "predecessor",
-    "toolchainSource",
-    "buildRecipes",
-    "roles",
-  ]);
-  assert.equal(v5.schemaVersion, 4);
-  assert.equal(v5.budgetId, "labcolors-wasm-roles-issue-296-c1-v5");
-  assert.deepEqual(v5.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v4.json",
-    fileSha256: expectedHashes.v4,
-  });
-  assert.deepEqual(v5.toolchainSource, {
-    path: "packages/colors/bench/wasm-size-budget-v1.json",
-    fileSha256: expectedHashes.v1,
-  });
-  assert.deepEqual(Object.keys(v5.buildRecipes), ["runtime", "compiler"]);
-  assert.deepEqual(Object.keys(v5.roles), ["runtime", "compiler"]);
-  assert.equal(
-    v5.buildRecipes.runtime.recipeSha256,
-    "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4",
-  );
-  assert.equal(
-    v5.buildRecipes.compiler.recipeSha256,
-    "ce53cea5f579c512a6d2f0c3348f250ac0a5e03206de55e7979c8eae1403be8f",
-  );
-  assert.match(v5.buildRecipes.runtime.command, /crates\/labcolors-wasm/u);
-  assert.match(v5.buildRecipes.compiler.command, /crates\/labcolors-compiler/u);
-  assert.deepEqual(v5.roles.runtime.measurement, {
-    issue: 296,
-    slice: "C1",
-    measurementPlatform: "linux-x64",
-    rawBytes: 454385,
-    sha256: "8cd65f001d4bb4b8ddead9084e705a64bee14cd796c7bc6ebeb2f2687aa5fdba",
-  });
-  assert.deepEqual(v5.roles.compiler.measurement, {
-    issue: 296,
-    slice: "C1",
-    measurementPlatform: "linux-x64",
-    rawBytes: 175212,
-    sha256: "3a552ce43ada7d0b10e90a23b4a7e50a4ecad77a446374b98ca8ee6b5c6a2a45",
-  });
-  assert.equal(v5.roles.runtime.policy.maxRawBytes, v5.roles.runtime.measurement.rawBytes);
-  assert.equal(v5.roles.compiler.policy.maxRawBytes, v5.roles.compiler.measurement.rawBytes);
-  assert.ok(v5.roles.runtime.policy.maxRawBytes <= v1.policy.maxRawBytes);
-  assert.ok(v5.roles.runtime.policy.maxRawBytes <= v4.policy.maxRawBytes);
-
-  // V6 (#296-C3): compiler-роль публикует атомарную операцию — рост размера
-  // зафиксирован новым точным измерением; runtime-измерение байт-идентично C1.
-  assert.equal(v6.schemaVersion, 5);
-  assert.equal(v6.budgetId, "labcolors-wasm-roles-issue-296-c3-v6");
-  assert.deepEqual(v6.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v5.json",
-    fileSha256: expectedHashes.v5,
-  });
-  assert.deepEqual(v6.toolchainSource, v5.toolchainSource);
-  assert.deepEqual(v6.buildRecipes, v5.buildRecipes);
-  assert.deepEqual(v6.roles.runtime, v5.roles.runtime);
-  assert.deepEqual(v6.roles.compiler.measurement, {
-    issue: 296,
-    slice: "C3",
-    measurementPlatform: "linux-x64",
-    rawBytes: 229658,
-    sha256: "34e2a561862ee06d52d1104f8ba60ccf9967e2e4fd09803d4e75e1966074bc8d",
-  });
-  assert.equal(
-    v6.roles.compiler.policy.derivation,
-    "exact-accepted-issue-296-slice-c3-compiler-measurement",
-  );
-  assert.equal(v6.roles.runtime.policy.maxRawBytes, v6.roles.runtime.measurement.rawBytes);
-  assert.equal(v6.roles.compiler.policy.maxRawBytes, v6.roles.compiler.measurement.rawBytes);
-  assert.ok(v6.roles.runtime.policy.maxRawBytes <= v1.policy.maxRawBytes);
-  assert.ok(v6.roles.runtime.policy.maxRawBytes <= v4.policy.maxRawBytes);
-
-  // V7 (#307-C7a): size policy хранит только измеряемую величину. SHA каждого
-  // конкретного source-коммита принадлежит release provenance, не size budget.
-  assert.equal(v7.schemaVersion, 6);
-  assert.equal(v7.budgetId, "labcolors-wasm-roles-issue-307-c7a-v7");
-  assert.deepEqual(v7.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v6.json",
-    fileSha256: expectedHashes.v6,
-  });
-  assert.deepEqual(v7.toolchainSource, v6.toolchainSource);
-  assert.deepEqual(v7.buildRecipes, v6.buildRecipes);
-  assert.deepEqual(v7.roles.runtime.measurement, {
-    issue: 307,
-    slice: "C7a",
-    measurementPlatform: "linux-x64",
-    rawBytes: 454334,
-  });
-  assert.equal(
-    v7.roles.runtime.policy.derivation,
-    "exact-accepted-issue-307-slice-c7a-runtime-measurement",
-  );
-  assert.deepEqual(v7.roles.compiler.measurement, {
-    issue: 296,
-    slice: "C3",
-    measurementPlatform: "linux-x64",
-    rawBytes: 229658,
-  });
-  assert.deepEqual(v7.roles.compiler.policy, v6.roles.compiler.policy);
-  for (const role of ["runtime", "compiler"]) {
-    assert.equal(v7.roles[role].policy.maxRawBytes, v7.roles[role].measurement.rawBytes);
-    assert.ok(v7.roles[role].policy.maxRawBytes <= v6.roles[role].policy.maxRawBytes);
-  }
-
-  // V8 accepts the exact measured PR #338 runtime snapshot; it does not infer
-  // how many bytes belong to one capability. The unchanged role stays ratcheted.
-  assert.equal(v8.schemaVersion, 7);
-  assert.equal(v8.budgetId, "labcolors-wasm-roles-pr-338-v8");
-  assert.deepEqual(v8.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v7.json",
-    fileSha256: expectedHashes.v7,
-  });
-  assert.deepEqual(v8.toolchainSource, v7.toolchainSource);
-  assert.deepEqual(v8.buildRecipes, v7.buildRecipes);
-  assert.deepEqual(v8.roles.runtime.measurement, {
-    source: "github-actions-run-29548782379",
-    measurementPlatform: "linux-x64",
-    rawBytes: 456696,
-  });
-  assert.equal(
-    v8.roles.runtime.policy.basis,
-    "accepted-pr-338-runtime-snapshot",
-  );
-  assert.equal(v8.roles.runtime.policy.maxRawBytes, v8.roles.runtime.measurement.rawBytes);
-  assert.ok(v8.roles.runtime.policy.maxRawBytes > v7.roles.runtime.policy.maxRawBytes);
-  assert.equal(v8.roles.compiler.artifact, v7.roles.compiler.artifact);
-  assert.deepEqual(v8.roles.compiler.measurement, {
-    source: "github-actions-run-29548782379",
-    measurementPlatform: "linux-x64",
-    rawBytes: 229658,
-  });
-  assert.deepEqual(v8.roles.compiler.policy, {
-    maxRawBytes: v7.roles.compiler.policy.maxRawBytes,
-    basis: "unchanged-v7-compiler-ceiling",
-    gzip: "diagnostic-only",
-  });
-
-  // V9 (roadmap C4a): the atomic explicit-selection operation is excised, and
-  // the canonical compiler returns BYTE-IDENTICAL to its pre-atomic artifact
-  // (175212B — the C1-era compiler), which pins the excision as exact. The
-  // untouched runtime role keeps its accepted PR-338 snapshot.
-  assert.equal(v9.schemaVersion, 7);
-  assert.equal(v9.budgetId, "labcolors-wasm-roles-c4a-v9");
-  assert.deepEqual(v9.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v8.json",
-    fileSha256: expectedHashes.v8,
-  });
-  assert.deepEqual(v9.toolchainSource, v8.toolchainSource);
-  assert.deepEqual(v9.buildRecipes, v8.buildRecipes);
-  assert.deepEqual(v9.roles.runtime, v8.roles.runtime);
-  assert.deepEqual(v9.roles.compiler.measurement, {
-    source: "github-actions-run-29571640106",
-    measurementPlatform: "linux-x64",
-    rawBytes: 175212,
-  });
-  assert.deepEqual(v9.roles.compiler.policy, {
-    maxRawBytes: 175212,
-    basis: "accepted-c4a-excision-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.ok(
-    v9.roles.compiler.policy.maxRawBytes < v8.roles.compiler.policy.maxRawBytes,
-    "C4a must shrink the compiler role, never grow it",
+  const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+  assert.deepEqual(
+    readdirSync(bench).filter((name) => /^wasm-size-budget-v\d+\.json$/u.test(name)),
+    [],
+    "numbered WASM budget snapshots duplicate Git history",
   );
 
-  // V10 (failure admissibility): wire-строки ролевых отказов + жёсткий страж
-  // реентерабельности кэша стоят +2545B runtime над принятым PR-338 снапшотом;
-  // compiler не тронут и держит C4a pre-atomic ратчет.
-  assert.equal(v10.schemaVersion, 7);
-  assert.equal(v10.budgetId, "labcolors-wasm-roles-failure-admissibility-v10");
-  assert.deepEqual(v10.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v9.json",
-    fileSha256: expectedHashes.v9,
-  });
-  assert.deepEqual(v10.toolchainSource, v9.toolchainSource);
-  assert.deepEqual(v10.buildRecipes, v9.buildRecipes);
-  assert.deepEqual(v10.roles.runtime.measurement, {
-    source: "github-actions-run-29578036842",
-    measurementPlatform: "linux-x64",
-    rawBytes: 459241,
-  });
-  assert.equal(
-    v10.roles.runtime.policy.basis,
-    "accepted-failure-admissibility-runtime-snapshot",
-  );
-  assert.equal(v10.roles.runtime.policy.maxRawBytes, 459241);
-  assert.deepEqual(v10.roles.compiler, v9.roles.compiler);
-
-  // V11 (C4d): the offline compiler line is excised, so the budget collapses to
-  // the single runtime ratchet. The runtime crate is untouched by the excision:
-  // the carried measurement stays byte-identical to the immutable v10 snapshot.
-  assert.equal(v11.schemaVersion, 8);
-  assert.equal(v11.budgetId, "labcolors-wasm-runtime-c4cd-v11");
-  assert.deepEqual(v11.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v10.json",
-    fileSha256: expectedHashes.v10,
-  });
-  assert.deepEqual(v11.toolchainSource, v10.toolchainSource);
-  assert.deepEqual(Object.keys(v11.buildRecipes), ["runtime"]);
-  assert.deepEqual(Object.keys(v11.roles), ["runtime"]);
-  assert.deepEqual(v11.buildRecipes.runtime, v10.buildRecipes.runtime);
-  assert.deepEqual(v11.roles.runtime, v10.roles.runtime);
-
-  // V12 (C5.1): словарь клиентских theme-ключей вместо fixed enum + отказ
-  // EmptyThemes на загрузке — принятый рост runtime +524B, зафиксирован новым
-  // точным снапшотом (run 29609974767).
-  assert.equal(v12.schemaVersion, 8);
-  assert.equal(v12.budgetId, "labcolors-wasm-runtime-c5-theme-keys-v12");
-  assert.deepEqual(v12.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v11.json",
-    fileSha256: expectedHashes.v11,
-  });
-  assert.deepEqual(v12.toolchainSource, v11.toolchainSource);
-  assert.deepEqual(v12.buildRecipes, v11.buildRecipes);
-  assert.deepEqual(v12.roles.runtime.measurement, {
-    source: "github-actions-run-29609974767",
-    measurementPlatform: "linux-x64",
-    rawBytes: 459765,
-  });
-  assert.deepEqual(v12.roles.runtime.policy, {
-    maxRawBytes: 459765,
-    basis: "accepted-c5-theme-dictionary-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v12.roles.runtime.policy.maxRawBytes - v11.roles.runtime.policy.maxRawBytes,
-    524,
-    "C5.1 growth is the exact accepted dictionary-lookup delta",
-  );
-
-  // V13 (C5.2): вырез legacy cleanliness-прокси (muddiness-метод и его кодовые
-  // пути) — принятое СНИЖЕНИЕ runtime −4691B (run 29613131229).
-  assert.equal(v13.schemaVersion, 8);
-  assert.equal(v13.budgetId, "labcolors-wasm-runtime-c5-2-proxy-excision-v13");
-  assert.deepEqual(v13.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v12.json",
-    fileSha256: expectedHashes.v12,
-  });
-  assert.deepEqual(v13.toolchainSource, v12.toolchainSource);
-  assert.deepEqual(v13.buildRecipes, v12.buildRecipes);
-  assert.deepEqual(v13.roles.runtime.measurement, {
-    source: "github-actions-run-29613131229",
-    measurementPlatform: "linux-x64",
-    rawBytes: 455074,
-  });
-  assert.deepEqual(v13.roles.runtime.policy, {
-    maxRawBytes: 455074,
-    basis: "accepted-c5-2-proxy-excision-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v12.roles.runtime.policy.maxRawBytes - v13.roles.runtime.policy.maxRawBytes,
-    4691,
-    "C5.2 must shrink the runtime by the exact excision delta",
-  );
-
-  // V14 (C6): legacy sentiment/recipe API вырезан из Core и WASM — канонический
-  // Linux runtime уменьшился ещё на 26534B (run 29647236232).
-  assert.equal(v14.schemaVersion, 8);
-  assert.equal(v14.budgetId, "labcolors-wasm-runtime-c6-legacy-excision-v14");
-  assert.deepEqual(v14.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v13.json",
-    fileSha256: expectedHashes.v13,
-  });
-  assert.deepEqual(v14.toolchainSource, v13.toolchainSource);
-  assert.deepEqual(v14.buildRecipes, v13.buildRecipes);
-  assert.deepEqual(v14.roles.runtime.measurement, {
-    source: "github-actions-run-29647236232",
-    measurementPlatform: "linux-x64",
-    rawBytes: 428540,
-  });
-  assert.deepEqual(v14.roles.runtime.policy, {
-    maxRawBytes: 428540,
-    basis: "accepted-c6-legacy-excision-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v13.roles.runtime.policy.maxRawBytes - v14.roles.runtime.policy.maxRawBytes,
-    26534,
-    "C6 must shrink the runtime by the exact legacy-excision delta",
-  );
-
-  // V15 (C6): validation больше не повторяется, а encoded-sRGB boundary сведена
-  // к SSOT; Linux-ратчет ниже на 137B (run 29654779091).
-  assert.equal(v15.schemaVersion, 8);
-  assert.equal(v15.budgetId, "labcolors-wasm-runtime-c6-validation-srgb-ssot-v15");
-  assert.deepEqual(v15.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v14.json",
-    fileSha256: expectedHashes.v14,
-  });
-  assert.deepEqual(v15.toolchainSource, v14.toolchainSource);
-  assert.deepEqual(v15.buildRecipes, v14.buildRecipes);
-  assert.deepEqual(v15.roles.runtime.measurement, {
-    source: "github-actions-run-29654779091",
-    measurementPlatform: "linux-x64",
-    rawBytes: 428403,
-  });
-  assert.deepEqual(v15.roles.runtime.policy, {
-    maxRawBytes: 428403,
-    basis: "accepted-c6-validation-srgb-ssot-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v14.roles.runtime.policy.maxRawBytes - v15.roles.runtime.policy.maxRawBytes,
-    137,
-    "validation and encoded-sRGB SSOT must lower the exact runtime ratchet",
-  );
-
-  // V16 (Q0): WASM-часть атомарного OutputConflict принята одним точным
-  // Linux-снапшотом. +3709B — измеренная дельта артефакта к v15, а не
-  // причинная оценка стоимости отдельных частей полного Q0-среза.
-  assert.equal(v16.schemaVersion, 8);
-  assert.equal(v16.budgetId, "labcolors-wasm-runtime-q0-output-conflict-v16");
-  assert.deepEqual(v16.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v15.json",
-    fileSha256: expectedHashes.v15,
-  });
-  assert.deepEqual(v16.toolchainSource, v15.toolchainSource);
-  assert.deepEqual(v16.buildRecipes, v15.buildRecipes);
-  assert.deepEqual(v16.roles.runtime.measurement, {
-    source: "github-actions-run-29660556196",
-    measurementPlatform: "linux-x64",
-    rawBytes: 432112,
-  });
-  assert.deepEqual(v16.roles.runtime.policy, {
-    maxRawBytes: 432112,
-    basis: "accepted-q0-output-conflict-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v16.roles.runtime.policy.maxRawBytes - v15.roles.runtime.policy.maxRawBytes,
-    3709,
-    "Q0 accepted snapshot delta must equal the canonical Linux measurement",
-  );
-
-  // V17 (Q0 review): run 29663300158 измерил review-hardened snapshot на 5B
-  // меньше v16. Это наблюдаемая дельта целого артефакта, не причинная оценка;
-  // ратчет следует измерению без произвольного запаса.
-  assert.equal(v17.schemaVersion, 8);
-  assert.equal(v17.budgetId, "labcolors-wasm-runtime-q0-review-hardening-v17");
-  assert.deepEqual(v17.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v16.json",
-    fileSha256: expectedHashes.v16,
-  });
-  assert.deepEqual(v17.toolchainSource, v16.toolchainSource);
-  assert.deepEqual(v17.buildRecipes, v16.buildRecipes);
-  assert.deepEqual(v17.roles.runtime.measurement, {
-    source: "github-actions-run-29663300158",
-    measurementPlatform: "linux-x64",
-    rawBytes: 432107,
-  });
-  assert.deepEqual(v17.roles.runtime.policy, {
-    maxRawBytes: 432107,
-    basis: "accepted-q0-review-hardening-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v16.roles.runtime.policy.maxRawBytes - v17.roles.runtime.policy.maxRawBytes,
-    5,
-    "Q0 review hardening must lower the exact runtime ratchet",
-  );
-
-  // V18 (F0a): private point spine исполняет compiler-verified static IR без
-  // runtime compiler/dynamic bindings; run 29675926449 измерил весь артефакт
-  // на 46497B меньше v17. Это наблюдаемая дельта снапшота, не стоимость узла.
-  assert.equal(v18.schemaVersion, 8);
-  assert.equal(v18.budgetId, "labcolors-wasm-runtime-f0a-point-render-spine-v18");
-  assert.deepEqual(v18.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v17.json",
-    fileSha256: expectedHashes.v17,
-  });
-  assert.deepEqual(v18.toolchainSource, v17.toolchainSource);
-  assert.deepEqual(v18.buildRecipes, v17.buildRecipes);
-  assert.deepEqual(v18.roles.runtime.measurement, {
-    source: "github-actions-run-29675926449",
-    measurementPlatform: "linux-x64",
-    rawBytes: 385610,
-  });
-  assert.deepEqual(v18.roles.runtime.policy, {
-    maxRawBytes: 385610,
-    basis: "accepted-f0a-point-render-spine-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v17.roles.runtime.policy.maxRawBytes - v18.roles.runtime.policy.maxRawBytes,
-    46497,
-    "F0a must lower the exact runtime ratchet by the canonical Linux delta",
-  );
-
-  // V19 (F1a proof-precondition): production point-adapter сохраняет полный
-  // ResolvedOccurrence; run 29679743144 измерил весь Linux artifact на 21B
-  // меньше v18. Это дельта снапшота, не стоимость отдельного изменения.
-  assert.equal(v19.schemaVersion, 8);
-  assert.equal(v19.budgetId, "labcolors-wasm-runtime-f1a-visible-assessment-v19");
-  assert.deepEqual(v19.predecessor, {
-    path: "packages/colors/bench/wasm-size-budget-v18.json",
-    fileSha256: expectedHashes.v18,
-  });
-  assert.deepEqual(v19.toolchainSource, v18.toolchainSource);
-  assert.deepEqual(v19.buildRecipes, v18.buildRecipes);
-  assert.deepEqual(v19.roles.runtime.measurement, {
-    source: "github-actions-run-29679743144",
-    measurementPlatform: "linux-x64",
-    rawBytes: 385589,
-  });
-  assert.deepEqual(v19.roles.runtime.policy, {
-    maxRawBytes: 385589,
-    basis: "accepted-f1a-visible-assessment-snapshot",
-    gzip: "diagnostic-only",
-  });
-  assert.equal(
-    v18.roles.runtime.policy.maxRawBytes - v19.roles.runtime.policy.maxRawBytes,
-    21,
-    "F1a proof-precondition must lower the exact runtime ratchet",
+  const budgetBytes = readFileSync(budgetPath);
+  const budget = JSON.parse(budgetBytes);
+  assert.equal(budgetBytes.toString("utf8"), canonicalJson(budget));
+  assert.doesNotMatch(
+    budgetBytes.toString("utf8"),
+    /predecessor|toolchainSource|wasm-size-budget-v/u,
+    "the current contract must be self-contained instead of linking Git history",
   );
 
   const checker = await import(
     new URL("../../../scripts/check-wasm-size-budget.mjs", import.meta.url)
   );
-  assert.equal(checker.DEFAULT_BUDGET, paths.v19);
-  for (const version of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) {
-    assert.equal(checker[`V${version}_FILE_SHA256`], expectedHashes[`v${version}`]);
-  }
-  assert.equal(checker.V1_RECIPE_SHA256, v5.buildRecipes.runtime.recipeSha256);
+  assert.equal(checker.DEFAULT_BUDGET, budgetPath);
+  assert.equal(sha256(budgetBytes), checker.WASM_BUDGET_FILE_SHA256);
+  assert.deepEqual(
+    checker.parseBudgetDocument(budgetBytes, budgetPath),
+    budget,
+    "the pinned canonical document must parse",
+  );
+
   const ci = read(".github", "workflows", "ci.yml");
   assert.match(ci, /name: enforce measured WASM runtime budget/u);
   const exactBudgetCommand = "        run: node scripts/check-wasm-size-budget.mjs";
@@ -1670,7 +1225,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
         .split("\n")
         .filter((line) => line.includes("run: node scripts/check-wasm-size-budget.mjs")),
       [exactBudgetCommand],
-      "CI must execute the default budget and built artifact without CLI overrides",
+      "CI must execute the canonical budget and built artifact without overrides",
     );
   };
   assertExactBudgetCommand(ci);
@@ -1682,28 +1237,41 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     assert.notEqual(mutated, ci, "budget CLI mutation must bite the live workflow");
     assert.throws(() => assertExactBudgetCommand(mutated));
   }
+
   const wasmJob = ci.match(
     /\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n|\s*$)/u,
   )?.groups?.body;
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
   assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
-  assert.match(wasmJob, /GITHUB_WORKSPACE=\/workspace\/lab-colors/u);
-  assert.match(wasmJob, /CARGO_HOME=\/cargo-home/u);
+  assert.ok(
+    ci.includes(`  RUST_TOOLCHAIN: ${budget.toolchain.rust}`),
+    "the live Rust toolchain must equal the budget declaration",
+  );
+  assert.ok(
+    wasmJob.includes(
+      `cargo install wasm-pack --version ${budget.toolchain.wasmPack} --locked`,
+    ),
+    "the live wasm-pack toolchain must equal the budget declaration",
+  );
+  assert.ok(
+    wasmJob.includes(`targets: ${budget.toolchain.target}`),
+    "the live WASM target must equal the budget declaration",
+  );
+
   const repetition = workflowRunScript(
     ci,
     "name: repeat runtime WASM build in one toolchain-pinned CI job",
   );
   const recipePrefix = "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ";
-  const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${v1.measurement.rustPathRemap
+  const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${budget.recipe.rustPathRemap
     .map((mapping) => {
       const separator = mapping.indexOf("=");
       assert.ok(separator > 0, "path remap must name one environment source");
       return `"--remap-path-prefix=\$${mapping.slice(0, separator)}=${mapping.slice(separator + 1)}"`;
     })
     .join("$'\\x1f'")}`;
-  const runtimeCommand = v19.buildRecipes.runtime.command;
-  assert.ok(runtimeCommand.startsWith(recipePrefix));
-  const expectedBuild = runtimeCommand.slice(recipePrefix.length);
+  assert.ok(budget.recipe.command.startsWith(recipePrefix));
+  const expectedBuild = budget.recipe.command.slice(recipePrefix.length);
   const expectedDiffBlock = [
     'if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then',
     '  echo "runtime WASM output changed between builds" >&2',
@@ -1723,7 +1291,7 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     assert.deepEqual(
       script.split("\n").filter((line) => line.startsWith("export CARGO_ENCODED_RUSTFLAGS=")),
       [expectedRemapExport],
-      "the live path-remap command must equal the versioned budget declaration",
+      "the live path remap must equal the budget declaration",
     );
     const functionBody = script.match(
       /(?:^|\n)build_runtime\(\) \{\n(?<body>(?:  [^\n]+\n)+)\}/u,
@@ -1732,12 +1300,12 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     assert.deepEqual(
       functionBody.split("\n").map((line) => line.trim()).filter(Boolean),
       [expectedBuild],
-      "the CI build command must equal the versioned budget recipe command",
+      "the live build must equal the budget recipe",
     );
     assert.equal(
       script.match(/^build_runtime$/gmu)?.length,
       2,
-      "the same recipe must run exactly twice",
+      "the exact recipe must run twice",
     );
     assert.match(script, /^cargo clean$/mu);
     assert.match(script, /^cp -a packages\/colors\/pkg "\$first\/pkg"$/mu);
@@ -1745,133 +1313,108 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
       [...script.matchAll(/^if ! diff[^\n]+\n  echo [^\n]+\n  exit 1\nfi$/gmu)]
         .map((match) => match[0]),
       [expectedDiffBlock],
-      "the output directory must be compared by one fail-closed exact command",
+      "both generated directories must be compared fail-closed",
     );
     assert.equal(
       script.match(
         /^for root in "\$GITHUB_WORKSPACE" "\$CARGO_HOME" "\$RUSTUP_HOME"; do\n  if LC_ALL=C grep -a -F -q -- "\$root\/" "\$wasm"; then\n    echo "unmapped build path \$root in \$wasm" >&2\n    exit 1\n  fi\ndone$/mu,
       )?.[0],
       expectedPathGuard,
-      "host-path rejection must remain one fail-closed exact block",
+      "host paths must remain rejected fail-closed",
     );
   };
   assertRepeatabilityContract(repetition);
 
-  const recipeBypass = repetition.replace(
-    expectedBuild,
-    `${expectedBuild} --features unreviewed`,
-  );
-  assert.notEqual(recipeBypass, repetition, "recipe mutation must bite a real command");
-  assert.throws(() => assertRepeatabilityContract(recipeBypass));
+  for (const [name, mutated] of [
+    [
+      "recipe",
+      repetition.replace(expectedBuild, `${expectedBuild} --features unreviewed`),
+    ],
+    [
+      "rebuild comparison",
+      repetition.replace(expectedDiffBlock, expectedDiffBlock.replace("  exit 1", "  :")),
+    ],
+    [
+      "path guard",
+      repetition.replace(expectedPathGuard, expectedPathGuard.replace("    exit 1", "    :")),
+    ],
+  ]) {
+    assert.notEqual(mutated, repetition, `${name} mutation must bite live CI`);
+    assert.throws(() => assertRepeatabilityContract(mutated));
+  }
 
-  const diffBypass = repetition.replace(
-    expectedDiffBlock,
-    expectedDiffBlock.replace("  exit 1", "  :"),
-  );
-  assert.notEqual(diffBypass, repetition, "diff mutation must bite a real command");
-  assert.throws(() => assertRepeatabilityContract(diffBypass));
-
-  const pathBypass = repetition.replace(
-    expectedPathGuard,
-    expectedPathGuard.replace("    exit 1", "    :"),
-  );
-  assert.notEqual(pathBypass, repetition, "path mutation must bite the live guard");
-  assert.throws(() => assertRepeatabilityContract(pathBypass));
-
-  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-runtime-budget-v19-"));
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-wasm-runtime-budget-"));
   try {
     const runtimePath = join(temporary, "runtime.wasm");
     const fixtureBudgetPath = join(temporary, "budget.json");
     const runtimeBytes = Buffer.alloc(16);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
-    const fixture = structuredClone(v19);
-    fixture.roles.runtime.measurement.rawBytes = runtimeBytes.length;
-    fixture.roles.runtime.policy.maxRawBytes = runtimeBytes.length;
+    const fixture = structuredClone(budget);
+    fixture.measurement.rawBytes = runtimeBytes.length;
+    fixture.policy.maxRawBytes = runtimeBytes.length;
     writeFileSync(runtimePath, runtimeBytes);
     writeFileSync(fixtureBudgetPath, canonicalJson(fixture));
     assert.doesNotThrow(() =>
       checker.parseBudgetDocument(readFileSync(fixtureBudgetPath), fixtureBudgetPath)
     );
 
-    const runWith = (budgetPath, wasmPath) => execFileSync(
+    const runWith = (fixturePath, wasmPath) => execFileSync(
       process.execPath,
       [
         checkerPath,
         "--budget",
-        budgetPath,
+        fixturePath,
         "--runtime-wasm",
         wasmPath,
       ],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     const run = () => runWith(fixtureBudgetPath, runtimePath);
-    const output = run();
     assert.match(
-      output,
+      run(),
       /role=runtime raw=16B .*artifact-sha256=[0-9a-f]{64}/u,
-    );
-    assert.doesNotMatch(output, /role=compiler/u, "the compiler role must stay collapsed");
-    assert.doesNotMatch(
-      output,
-      /(?:recipe|artifact)-sha(?:256)?=match/u,
-      "the size checker cannot infer artifact provenance from arbitrary input bytes",
     );
 
     const schemaMutations = [
-      ["schema rollback", (value) => { value.schemaVersion = 7; }],
-      ["identity drift", (value) => { value.budgetId = "other"; }],
-      ["predecessor path", (value) => { value.predecessor.path = "other.json"; }],
-      ["predecessor hash", (value) => { value.predecessor.fileSha256 = "0".repeat(64); }],
-      ["toolchain path", (value) => { value.toolchainSource.path = "other.json"; }],
-      ["toolchain hash", (value) => { value.toolchainSource.fileSha256 = "0".repeat(64); }],
-      ["missing runtime recipe", (value) => { delete value.buildRecipes.runtime; }],
-      ["extra recipe", (value) => { value.buildRecipes.compiler = value.buildRecipes.runtime; }],
-      ["runtime command drift", (value) => {
-        value.buildRecipes.runtime.command += " --features unreviewed";
+      ["schema", (value) => { value.schemaVersion = 0; }],
+      ["artifact", (value) => { value.artifact = "packages/colors/pkg/other.wasm"; }],
+      ...Object.keys(budget.toolchain).map((key) => [
+        `toolchain.${key}`,
+        (value) => { value.toolchain[key] = ""; },
+      ]),
+      ["toolchain line", (value) => { value.toolchain.rust += "\nother"; }],
+      ["toolchain extra", (value) => { value.toolchain.extra = "forbidden"; }],
+      ["path remap syntax", (value) => { value.recipe.rustPathRemap[0] = "OTHER"; }],
+      ["path remap duplicate", (value) => {
+        value.recipe.rustPathRemap[1] = value.recipe.rustPathRemap[0];
       }],
-      ["runtime recipe digest", (value) => {
-        value.buildRecipes.runtime.recipeSha256 = "0".repeat(64);
-      }],
-      ["missing runtime role", (value) => { delete value.roles.runtime; }],
-      ["extra role", (value) => { value.roles.compiler = value.roles.runtime; }],
-      ["artifact drift", (value) => {
-        value.roles.runtime.artifact = "packages/colors/compiler/labcolors_compiler_bg.wasm";
-      }],
-      ["runtime measurement source", (value) => {
-        value.roles.runtime.measurement.source = "github-actions-run-other";
-      }],
-      ["measurement platform", (value) => {
-        value.roles.runtime.measurement.measurementPlatform = "darwin-arm64";
-      }],
-      ["zero bytes", (value) => { value.roles.runtime.measurement.rawBytes = 0; }],
-      ["fractional bytes", (value) => { value.roles.runtime.measurement.rawBytes = 1.5; }],
+      ["path remap empty", (value) => { value.recipe.rustPathRemap = []; }],
+      ["recipe command", (value) => { value.recipe.command = "wasm-pack build"; }],
+      ["recipe command line", (value) => { value.recipe.command += "\nother"; }],
+      ["recipe extra", (value) => { value.recipe.digest = "0".repeat(64); }],
+      ["measurement source", (value) => { value.measurement.source = "other"; }],
+      ["measurement platform", (value) => { value.measurement.platform = "darwin-arm64"; }],
+      ["zero bytes", (value) => { value.measurement.rawBytes = 0; }],
+      ["fractional bytes", (value) => { value.measurement.rawBytes = 1.5; }],
       ["artifact digest conflation", (value) => {
-        value.roles.runtime.measurement.sha256 = "0".repeat(64);
+        value.measurement.sha256 = "0".repeat(64);
       }],
-      ["ceiling mismatch", (value) => { value.roles.runtime.policy.maxRawBytes += 1; }],
-      ["basis drift", (value) => { value.roles.runtime.policy.basis = "guessed"; }],
-      ["gzip gate", (value) => { value.roles.runtime.policy.gzip = "gate"; }],
-      ["unscoped runtime growth", (value) => {
-        // Согласованный рост: одновременно поднимаем measurement и ceiling —
-        // именно так выглядел бы «честный» новый снапшот без принятого
-        // acceptedCeiling-закона. Чекер обязан отклонить его всё равно:
-        // рост сверх принятого снапшота требует НОВОЙ версии бюджета,
-        // а не правки текущей.
-        const ceiling = v19.roles.runtime.policy.maxRawBytes;
-        value.roles.runtime.measurement.rawBytes = ceiling + 1;
-        value.roles.runtime.policy.maxRawBytes = ceiling + 1;
-      }],
-      ["whole-call cycle", (value) => { value.wholeCallArtifact = "forbidden"; }],
-      ["top-level key reorder", (value) => ({
-        budgetId: value.budgetId,
+      ["headroom", (value) => { value.policy.maxRawBytes += 1; }],
+      ["basis", (value) => { value.policy.basis = ""; }],
+      ["basis line", (value) => { value.policy.basis += "\nother"; }],
+      ["gzip gate", (value) => { value.policy.gzip = "gate"; }],
+      ["missing policy", (value) => { delete value.policy; }],
+      ["history link", (value) => { value.predecessor = "forbidden"; }],
+      ["top-level reorder", (value) => ({
+        artifact: value.artifact,
         schemaVersion: value.schemaVersion,
-        predecessor: value.predecessor,
-        toolchainSource: value.toolchainSource,
-        buildRecipes: value.buildRecipes,
-        roles: value.roles,
+        toolchain: value.toolchain,
+        recipe: value.recipe,
+        measurement: value.measurement,
+        policy: value.policy,
       })],
     ];
-    assert.equal(schemaMutations.length, 24, "v19 schema mutation set changed");
+    assert.equal(schemaMutations.length, 30, "schema mutation matrix changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1881,17 +1424,17 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
           fixtureBudgetPath,
         ),
         /WASM size budget:/u,
-        `${name} must fail schema validation before artifact evaluation`,
+        `${name} must fail before artifact evaluation`,
       );
     }
 
     const schemaFirst = structuredClone(fixture);
-    schemaFirst.budgetId = "other";
+    schemaFirst.schemaVersion = 0;
     writeFileSync(fixtureBudgetPath, canonicalJson(schemaFirst));
     assert.throws(
       () => runWith(fixtureBudgetPath, join(temporary, "missing-runtime.wasm")),
-      /budgetId must be labcolors-wasm-runtime-f1a-visible-assessment-v19/u,
-      "CLI must reject the budget schema before reading a missing artifact",
+      /schemaVersion must be 1/u,
+      "schema must fail before a missing artifact is read",
     );
 
     writeFileSync(fixtureBudgetPath, `${JSON.stringify(fixture)}\n`);
@@ -1899,56 +1442,52 @@ test("WASM role size budgets are exact, append-only, and acyclic", async () => {
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 8,\n',
-        '  "schemaVersion": 8,\n  "schemaVersion": 8,\n',
+        '  "schemaVersion": 1,\n',
+        '  "schemaVersion": 1,\n  "schemaVersion": 1,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
 
-    const record = fixture.roles.runtime;
-    const canonical = checker.evaluateWasmBudget("runtime", record, runtimeBytes, "linux-x64");
+    const canonical = checker.evaluateWasmBudget(fixture, runtimeBytes, "linux-x64");
     assert.equal(canonical.status, "PASS");
     assert.equal(canonical.artifactSha256, sha256(runtimeBytes));
     const sameSizeMutation = Buffer.from(runtimeBytes);
     sameSizeMutation[sameSizeMutation.length - 1] = 1;
     const sameSize = checker.evaluateWasmBudget(
-      "runtime",
-      record,
+      fixture,
       sameSizeMutation,
       "linux-x64",
     );
     assert.equal(sameSize.status, "PASS");
     assert.notEqual(sameSize.artifactSha256, canonical.artifactSha256);
-    assert.throws(
-      () => checker.evaluateWasmBudget(
-        "runtime",
-        record,
-        Buffer.concat([runtimeBytes, Buffer.from([0])]),
-        "linux-x64",
-      ),
-      /length mismatch/u,
-    );
-    assert.throws(
-      () => checker.evaluateWasmBudget("runtime", record, runtimeBytes.subarray(0, -1), "linux-x64"),
-      /length mismatch/u,
-    );
+    for (const differentSize of [
+      Buffer.concat([runtimeBytes, Buffer.from([0])]),
+      runtimeBytes.subarray(0, -1),
+    ]) {
+      assert.throws(
+        () => checker.evaluateWasmBudget(fixture, differentSize, "linux-x64"),
+        /length mismatch/u,
+      );
+    }
     assert.equal(
-      checker.evaluateWasmBudget("runtime", record, sameSizeMutation, "darwin-arm64").status,
+      checker.evaluateWasmBudget(fixture, sameSizeMutation, "darwin-arm64").status,
       "DIAGNOSTIC",
     );
     assert.throws(
-      () => checker.evaluateWasmBudget("compiler", record, runtimeBytes, "linux-x64"),
-      /unknown execution role/u,
-      "the collapsed compiler role must stay rejected",
+      () => checker.evaluateWasmBudget(fixture, Buffer.alloc(16), "linux-x64"),
+      /not a WebAssembly binary/u,
     );
 
     const coordinatedMutation = structuredClone(fixture);
-    coordinatedMutation.roles.runtime.measurement.rawBytes -= 1;
-    coordinatedMutation.roles.runtime.policy.maxRawBytes -= 1;
+    coordinatedMutation.measurement.rawBytes -= 1;
+    coordinatedMutation.policy.maxRawBytes -= 1;
     assert.throws(
-      () => checker.parseBudgetDocument(Buffer.from(canonicalJson(coordinatedMutation)), paths.v19),
-      /current v19 file SHA-256 mismatch/u,
-      "coordinated artifact and document drift must still fail the default identity",
+      () => checker.parseBudgetDocument(
+        Buffer.from(canonicalJson(coordinatedMutation)),
+        budgetPath,
+      ),
+      /current budget file SHA-256 mismatch/u,
+      "coordinated contract drift must still fail the canonical file identity",
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });

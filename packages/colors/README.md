@@ -504,11 +504,12 @@ const bg2 = effectiveBackground(panel, { fallback: "#101012" });
 
 ## Размер бандла
 
-Raw-размер WASM — hard gate с append-only историей. SSOT текущего exact
-Linux-x64 size-бюджета `runtime` — `scripts/check-wasm-size-budget.mjs`: его
-`DEFAULT_BUDGET` указывает на текущий versioned artifact в
-`packages/colors/bench/` с нулевым headroom, а все предыдущие versioned-файлы
-остаются неизменяемой историей. Size policy не притворяется
+Raw-размер WASM — hard gate. SSOT текущего exact Linux-x64 size-бюджета
+`runtime` — self-contained `packages/colors/bench/wasm.json`: он закрепляет
+полный toolchain/recipe, источник измерения и потолок с нулевым headroom.
+Предыдущие состояния восстанавливаются из Git и не дублируются в live tree.
+`scripts/check-wasm-size-budget.mjs` закрепляет канонические байты этого
+контракта и отклоняет numbered snapshots. Size policy не притворяется
 идентификатором артефакта: фактический SHA артефакта вместе с source SHA
 записывается в `build-metadata.json` и повторно сверяется с точными байтами
 tarball при публикации. Release-equivalent CI требует точного размера и
