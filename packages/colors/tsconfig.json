@@ -14,7 +14,6 @@
     "apply-theme.d.ts",
     "watch-theme.d.ts",
     "adapt-theme.d.ts",
-    "effective-bg.d.ts",
     "smoke.consumer.ts"
   ]
 }

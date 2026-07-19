@@ -9,18 +9,14 @@
 // These are runtime mechanics, not a whole-field or human-readability proof.
 // `dropFraction`, `sustainMs`, `dwellMs`, `easeMs`, and the shorter transition
 // selected for the host motion preference are compatibility parameters, not
-// standard-derived thresholds. Default easing does not verify a floor on every
-// frame. `strict: true` enables the characterized per-frame clamp, whose current
-// Oklab→clip→sRGB8 path is not globally monotone and is not a floor certificate.
+// standard-derived thresholds. Coordinate interpolation is presentation only;
+// it does not verify a constraint on every intermediate frame.
 
 import {
   effectiveBackground,
-  parseCssColor,
   oklabLerp,
   compileLerpPair,
   lerpPairHex,
-  lerpPairLuminance,
-  wcagLuminanceCached,
 } from "./effective-bg.js";
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
@@ -36,25 +32,6 @@ function easeOut(t) {
   return 1 - u * u * u;
 }
 
-/** Relative luminance of `#RRGGBB` in the frozen original WCAG 2.1 (2018)
- * profile (0.03928 split, 2.4 exponent), so the strict floor-clamp agrees
- * byte-for-byte with the core's versioned `legalFloor` semantics. */
-function relativeLuminanceHex(hex) {
-  const rgb = parseCssColor(hex) ?? [0, 0, 0, 1];
-  const lin = (c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
-}
-
-/** WCAG contrast ratio from two relative luminances: `(L+0.05)/(L+0.05)`. */
-function wcagRatio(lumA, lumB) {
-  const hi = Math.max(lumA, lumB);
-  const lo = Math.min(lumA, lumB);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
 /** Linearly interpolate an ease segment's Oklab coordinates at `t ∈ [0,1]`.
  * Segments carry a compiled pair (`compileLerpPair`) when both endpoints
  * parse — the always-case in practice, both being engine-emitted `#RRGGBB` —
@@ -64,13 +41,6 @@ function wcagRatio(lumA, lumB) {
  * Byte-identical either way (locked by test/hotpath-parity.test.mjs). */
 function segHex(seg, t) {
   return seg.pair ? lerpPairHex(seg.pair, t) : oklabLerp(seg.from, seg.to, t);
-}
-
-/** WCAG relative luminance of `segHex(seg, t)` — numeric fast path on the
- * compiled pair (no `#RRGGBB` round-trip), string path otherwise. Strict
- * mode's `floorBlend` bisection calls this up to 14× per role per frame. */
-function segLum(seg, t) {
-  return seg.pair ? lerpPairLuminance(seg.pair, t) : relativeLuminanceHex(segHex(seg, t));
 }
 
 /**
@@ -110,9 +80,6 @@ function segLum(seg, t) {
  * @param {number} [options.sustainMs=120]  breach must persist this long
  * @param {number} [options.dwellMs=250]  minimum between re-solves
  * @param {number} [options.easeMs=280]  crossfade duration
- * @param {boolean} [options.strict=false]  enable the legacy characterized
- *   per-frame clamp; the current non-monotone interpolation path is not a
- *   universal floor certificate
  * @param {boolean} [options.reducedMotion]  override; default reads matchMedia
  * @param {() => number} [options.now]  clock (default performance.now/Date.now)
  * @param {*} [options.win=globalThis]
@@ -165,7 +132,6 @@ export function adaptTheme(element, options) {
   const dropFraction = options.dropFraction ?? 0.2;
   const sustainMs = options.sustainMs ?? 120;
   const dwellMs = options.dwellMs ?? 250;
-  const strict = options.strict ?? false;
   const win = options.win ?? (typeof globalThis !== "undefined" ? globalThis : undefined);
   const requestFrameCapability = win?.requestAnimationFrame;
   const requestFrame =
@@ -199,7 +165,7 @@ export function adaptTheme(element, options) {
   };
 
   let theme = options.theme;
-  /** @type {{ cssVar: string, key: string, lc: number, hex: string, legalFloor: number|null }[]} stable role order */
+  /** @type {{ cssVar: string, key: string, lc: number, hex: string }[]} stable role order */
   let roles = [];
   /** Stable Glow roles need an exact class recheck in addition to color
    * contrast rechecks. The only determinate stable state is the core-certified
@@ -211,7 +177,7 @@ export function adaptTheme(element, options) {
    * composes `{...baseVars, ...easedColorOverlay}`, so translucent roles are
    * never dropped by clear-then-write. Only `kind === "color"` roles ease. */
   let baseVars = {};
-  /** @type {Map<string,{from:string,to:string,held:number,pair:object|null}>} in-flight ease per cssVar */
+  /** @type {Map<string,{from:string,to:string,pair:object|null}>} in-flight ease per cssVar */
   let easing = new Map();
   let easeStart = 0;
   let breachSince = null;
@@ -481,7 +447,6 @@ export function adaptTheme(element, options) {
         key,
         lc: r.lc,
         hex: r.hex,
-        legalFloor: typeof r.legalFloor === "number" ? r.legalFloor : null,
       }));
     return {
       result: snapshot,
@@ -745,8 +710,6 @@ export function adaptTheme(element, options) {
   };
 
   // Begin an ease from the currently-applied colours toward the role colours.
-  // `held` latches the per-role displayed blend so it only ever advances toward
-  // the destination (strict mode) — see `stepEase`.
   const prepareEase = (roleSet, fromByVar, now) => {
     const nextEasing = new Map();
     for (const r of roleSet) {
@@ -755,7 +718,6 @@ export function adaptTheme(element, options) {
         nextEasing.set(r.cssVar, {
           from,
           to: r.hex,
-          held: 0,
           pair: compileLerpPair(from, r.hex),
         });
       }
@@ -770,46 +732,7 @@ export function adaptTheme(element, options) {
     return easing.size === 0 ? applyRolesDirect(owner) : true;
   };
 
-  // Legacy strict clamp: fixed-step bisection from the natural ease value `e`
-  // toward the freshly-solved destination. Oklab→clip→sRGB8 legality is not
-  // globally monotone, so this is a characterized compatibility selector, not
-  // a proof of the least or universally legal blend. If even `to` fails after
-  // background drift, the selector returns 1 and the recheck loop requests
-  // another solve.
-  const floorBlend = (seg, e, bgLums, floor) => {
-    const legalAt = (blend) => {
-      const lum = segLum(seg, blend);
-      for (let i = 0; i < bgLums.length; i++) {
-        if (wcagRatio(lum, bgLums[i]) < floor) return false;
-      }
-      return true;
-    };
-    if (legalAt(e)) return e;
-    let lo = e;
-    let hi = 1;
-    for (let k = 0; k < 14; k++) {
-      const mid = (lo + hi) / 2;
-      if (legalAt(mid)) hi = mid;
-      else lo = mid;
-    }
-    return hi; // upper search bound, or 1 when the destination also fails
-  };
-
-  // Per-key memo of the samples' WCAG luminances. Strict mode reads them in
-  // both `stepEase` and `paintedNow` within a tick, and across consecutive
-  // frames of a static backdrop mid-ease; the tick already computes the
-  // samples key, so this costs one map per DISTINCT backdrop, not per call.
-  let lumsKey = null;
-  let lums = null;
-  const bgLumsFor = (samples, key) => {
-    if (key !== lumsKey) {
-      lums = samples.map(wcagLuminanceCached);
-      lumsKey = key;
-    }
-    return lums;
-  };
-
-  const stepEase = (now, samples, key, owner) => {
+  const stepEase = (now, owner) => {
     if (!ownsOperation(owner)) return false;
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     // Terminate the ease when it is done (`t >= 1`) OR when the clock went
@@ -826,7 +749,6 @@ export function adaptTheme(element, options) {
       return applyRolesDirect(owner);
     }
     const e = easeOut(t);
-    const bgLums = strict ? bgLumsFor(samples, key) : null;
     // Overlay carries ONLY in-flight color roles (as interpolated hex); every
     // other role — non-eased color and all translucent — keeps its canonical
     // `baseVars` value under the merge in `applyHexes`.
@@ -834,20 +756,7 @@ export function adaptTheme(element, options) {
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
       if (!seg) continue;
-      let blend = e;
-      if (strict && r.legalFloor != null) {
-        // Hold the floor (against the worst sample), then LATCH: the displayed
-        // blend may only advance toward the destination, never retreat.
-        // `floorBlend` is stateless and depends on the live (drifting) samples,
-        // so on a frame where they drift favourably it could return a *lower*
-        // blend than last frame — a backwards step toward the old colour, the
-        // precise jarring reversal this mode exists to avoid. `held` clamps that
-        // out: the scalar blend parameter never retreats. This latch alone is
-        // not a proof that the quantized colour stays above every floor.
-        blend = Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held);
-        seg.held = blend;
-      }
-      overlay[r.cssVar] = segHex(seg, blend);
+      overlay[r.cssVar] = segHex(seg, e);
     }
     return applyHexes(overlay, owner);
   };
@@ -869,16 +778,11 @@ export function adaptTheme(element, options) {
   };
 
   // The colour each role is PAINTED right now — exactly what `stepEase` writes
-  // this frame: an in-flight segment sampled at `now` (with the SAME strict
-  // floor-hold + latch against the worst sample when `strict`), else the static
-  // hex. Mirrors `stepEase`'s blend math byte-for-byte so the begin-from value
-  // equals what is on screen, including the strict-mode `held` clamp — otherwise
-  // an overlapping re-solve in strict mode would start one frame BELOW the
-  // painted (floored) colour.
-  const paintedNow = (now, samples, key) => {
+  // this frame: an in-flight segment sampled at `now`, else the static hex.
+  // Matching the same blend keeps an overlapping re-solve continuous.
+  const paintedNow = (now) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
     const e = easeOut(t);
-    const bgLums = strict ? bgLumsFor(samples, key) : null;
     const vars = {};
     for (const r of roles) {
       const seg = easing.get(r.cssVar);
@@ -886,11 +790,7 @@ export function adaptTheme(element, options) {
         vars[r.cssVar] = r.hex;
         continue;
       }
-      const blend =
-        strict && r.legalFloor != null
-          ? Math.max(floorBlend(seg, e, bgLums, r.legalFloor), seg.held)
-          : e;
-      vars[r.cssVar] = segHex(seg, blend);
+      vars[r.cssVar] = segHex(seg, e);
     }
     return vars;
   };
@@ -912,7 +812,7 @@ export function adaptTheme(element, options) {
       breachSince === null &&
       (!hasEase || easeCompletesAt(now))
     ) {
-      if (hasEase) stepEase(now, samples, key, owner);
+      if (hasEase) stepEase(now, owner);
       else if (written === null) applyRolesDirect(owner);
       return;
     }
@@ -933,7 +833,7 @@ export function adaptTheme(element, options) {
       if (!ownsOperation(owner)) return;
       if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
       lastKey = key;
-      if (hasEase) stepEase(now, samples, key, owner);
+      if (hasEase) stepEase(now, owner);
       else if (written === null) applyRolesDirect(owner);
       return;
     }
@@ -979,7 +879,7 @@ export function adaptTheme(element, options) {
       if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
       lastKey = key;
       breachSince = nextBreachSince;
-      if (hasEase) stepEase(now, samples, key, owner);
+      if (hasEase) stepEase(now, owner);
       else if (written === null) applyRolesDirect(owner);
       return;
     }
@@ -989,7 +889,7 @@ export function adaptTheme(element, options) {
     // sampled at `now`) — never the in-flight TARGET. Starting from the target
     // would SNAP the element to the old target for one frame before easing,
     // reintroducing flicker when a re-solve overlaps a previous ease.
-    const fromByVar = paintedNow(now, samples, key);
+    const fromByVar = paintedNow(now);
     let candidate = solveCandidate(samples[worstIdx], now, theme, owner);
     if (!ownsOperation(owner)) return;
     candidate = withStableGlowReconciliation(
@@ -1006,7 +906,7 @@ export function adaptTheme(element, options) {
     if (!commitResolved(candidate, owner)) return;
     if (!commitEase(preparedEase, owner)) return;
     lastKey = key;
-    stepEase(now, samples, key, owner);
+    stepEase(now, owner);
   };
 
   const runTick = (nowArg) => {

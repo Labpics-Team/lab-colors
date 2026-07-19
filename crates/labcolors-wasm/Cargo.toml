@@ -15,8 +15,8 @@ description = "WASM bindings for the labcolors-core contrast engine, packaged as
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Runtime owns only point evaluation and the adaptive theme engine. Offline
-# compiler operations have a separate Cargo root and physical WASM artifact.
+# WASM-граница владеет JSON-конфигом и browser bindings для point-evaluator-ов;
+# `labcolors-core` остаётся без runtime-зависимостей.
 labcolors-core = { path = "../labcolors-core", default-features = false }
 wasm-bindgen = { workspace = true }
 # js-sys ships with the wasm-bindgen toolchain (no new third-party tree). It is
@@ -25,9 +25,8 @@ js-sys = "0.3"
 # Derive-only: thiserror is a proc-macro with no runtime code, so it adds
 # nothing to the WASM bundle while giving matchable, well-described errors.
 thiserror = "2"
-# Граница конфига: JSON живёт ТОЛЬКО в этом крейте (ядро — ноль
-# runtime-зависимостей). Размер бандла отслеживается CI-шагом report bundle
-# size (информационный до perf-bench).
+# JSON-декодирование принадлежит только WASM-границе; Core не получает serde.
+# Raw release-WASM закреплён exact size ratchet в `packages/colors/bench/wasm.json`.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

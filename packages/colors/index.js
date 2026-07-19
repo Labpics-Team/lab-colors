@@ -2,8 +2,8 @@
 //
 // Re-exports the wasm-bindgen surface (the default `init` loader, `initSync`,
 // and the `LabColors` engine class) plus the vanilla DOM runtime helpers:
-// `applyTheme` (one-shot apply), `watchTheme` (reactive sync), and the
-// effective-background resolver.
+// `applyTheme` (one-shot apply), `watchTheme` (reactive sync), and
+// `adaptTheme` (sample-driven adaptation).
 
 export {
   default,
@@ -17,11 +17,3 @@ export {
 export { applyTheme } from "./apply-theme.js";
 export { watchTheme } from "./watch-theme.js";
 export { adaptTheme } from "./adapt-theme.js";
-export {
-  effectiveBackground,
-  parseCssColor,
-  compositeOver,
-  compositeStackToHex,
-  toHex,
-  oklabLerp,
-} from "./effective-bg.js";

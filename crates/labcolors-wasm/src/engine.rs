@@ -210,9 +210,10 @@ impl Engine {
     /// still pass and re-solves only the rare role that stably fails.
     ///
     /// Returns a flat, interleaved buffer `[lc0, wcag0, lc1, wcag1, …]` (mapped to
-    /// a JS `Float64Array`) — no per-call object allocation on the hot path. The
-    /// values equal what the solver measured, so a freshly-resolved set rechecks
-    /// to its own reported contrasts.
+    /// a JS `Float64Array`) instead of a per-result object graph. The current
+    /// string ABI and implementation still allocate boundary and work buffers
+    /// per call. Values equal what the solver measured, so a freshly-resolved
+    /// set rechecks to its own reported contrasts.
     pub fn recheck(
         &self,
         bg_hex: &str,
@@ -223,10 +224,11 @@ impl Engine {
         // Accept the same hex forms as the background and `resolveTheme` (`#RGB`
         // shorthand, missing `#`, any case) — but on this per-frame primitive,
         // BORROW the input when it is already a valid 6-hex-digit colour so the
-        // common case (already-canonical `#RRGGBB` role hexes) allocates nothing.
-        // Only `#RGB` shorthand (or an otherwise-non-canonical form) allocates a
-        // normalised `String`. `srgb_from_hex` parses case- and `#`-insensitively,
-        // so a borrowed lower/upper/bare form yields the byte-identical colour.
+        // common case avoids a normalisation `String`. Boundary vectors,
+        // references, pairs and the flat output still allocate. `#RGB` shorthand
+        // (or another non-canonical form) additionally allocates a normalised
+        // `String`. `srgb_from_hex` parses case- and `#`-insensitively, so a
+        // borrowed lower/upper/bare form yields the byte-identical colour.
         let bg = hex_for_recheck(bg_hex)?;
         let fg_cows: Vec<Cow<'_, str>> = fg_hexes
             .iter()

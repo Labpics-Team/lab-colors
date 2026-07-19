@@ -1188,10 +1188,6 @@ test("runtime docs scope background evidence to estimates and finite samples", (
     join(ROOT, "packages/colors/adapt-theme.d.ts"),
     "utf8",
   );
-  const backgroundTypes = readFileSync(
-    join(ROOT, "packages/colors/effective-bg.d.ts"),
-    "utf8",
-  );
   const watchSource = readFileSync(
     join(ROOT, "packages/colors/watch-theme.js"),
     "utf8",
@@ -1205,11 +1201,6 @@ test("runtime docs scope background evidence to estimates and finite samples", (
   assert.match(readme, /только[^\n]*переданн[^\n]*точ/u);
   assert.match(adaptTypes, /finite, caller-supplied sample set/iu);
   assert.match(adaptTypes, /does not infer[^\n]*between samples/iu);
-  assert.match(backgroundTypes, /reference estimate/iu);
-  assert.match(backgroundTypes, /solid\/translucent ancestor/iu);
-  assert.match(backgroundTypes, /`background-color` chain/iu);
-  assert.match(backgroundTypes, /not[\s*]+a browser pixel observation/iu);
-  assert.match(backgroundTypes, /alpha[^\n]*discarded/iu);
   assert.match(adaptTypes, /Канонические логические цели/u);
   assert.match(watchSource, /reference estimate/iu);
   assert.match(readme, /изменения атрибутов `style`\/`class`/iu);

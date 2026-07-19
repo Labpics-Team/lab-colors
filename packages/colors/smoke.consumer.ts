@@ -7,8 +7,6 @@ import init, {
   applyTheme,
   watchTheme,
   adaptTheme,
-  effectiveBackground,
-  oklabLerp,
 } from "./index.js";
 import type {
   FailureCategory,
@@ -267,21 +265,12 @@ async function consume(clientConfigJson: string): Promise<void> {
 
   applyTheme(document.documentElement, result);
 
-  // Current effectiveBackground returns the legacy solid reference estimate,
-  // not evidence of the browser's actually rendered pixel.
-  const effBg: string = effectiveBackground(document.documentElement);
-  void effBg;
-
-  // The interpolation helper is an explicit Oklab construction primitive.
-  const blended: string = oklabLerp("#101012", effBg, 0.5);
-  void blended;
-
   // The reactive runtime keeps an element in sync; the controller is typed.
   const surface = document.querySelector(".surface") as HTMLElement;
   const controller = watchTheme(surface, {
     colors: engine,
     theme,
-    background: () => effectiveBackground(surface, { fallback: "#101012" }),
+    background: "#101012",
     onError(error: unknown) {
       void error;
     },
@@ -307,10 +296,9 @@ async function consume(clientConfigJson: string): Promise<void> {
   const adaptive = adaptTheme(surface, {
     colors: engine,
     theme,
-    background: () => effectiveBackground(surface, { fallback: "#101012" }),
+    background: "#101012",
     easeMs: 280,
     dropFraction: 0.2,
-    strict: true,
   });
   adaptive.start();
   adaptive.tick();
@@ -323,8 +311,7 @@ async function consume(clientConfigJson: string): Promise<void> {
   const adaptiveBackdrop = adaptTheme(surface, {
     colors: engine,
     theme,
-    background: (): string[] => ["#101012", effectiveBackground(surface), "#202024"],
-    strict: true,
+    background: (): string[] => ["#101012", "#202024"],
   });
   adaptiveBackdrop.stop();
 }

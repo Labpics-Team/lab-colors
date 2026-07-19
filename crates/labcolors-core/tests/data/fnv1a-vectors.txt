@@ -1,10 +1,11 @@
-# FNV-1a 32-bit shared vectors. Single source of truth for the JS<->Rust
-# differential test. Constants: offset_basis=2166136261 (0x811c9dc5),
+# FNV-1a 32-bit published anchors + frozen Rust characterization.
+# Constants: offset_basis=2166136261 (0x811c9dc5),
 # prime=16777619 (0x01000193). Spec + published vectors:
 # http://www.isthe.com/chongo/tech/comp/fnv/
 # columns: group<TAB>name<TAB>kind<TAB>payload<TAB>expected(decimal u32)
 # anchors carry the PUBLISHED reference expecteds (external ground truth);
-# adversarial/fuzz expecteds are the cross-runtime oracle.
+# adversarial/fuzz expecteds have no preserved independent provenance and are
+# regression fixtures, not an external oracle.
 anchor	empty	text		2166136261
 anchor	a	text	a	3826002220
 anchor	foobar	text	foobar	3214735720

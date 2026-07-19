@@ -291,16 +291,12 @@ export function oklabLerp(from, to, t) {
 
 // --- Compiled hot-path forms (package-internal) -----------------------------
 //
-// `adaptTheme` interpolates the SAME from/to pair on every frame of an ease,
-// and strict mode re-derives WCAG luminance from the interpolated colour up to
-// repeatedly per floored role (`floorBlend`'s bisection). The string API would
-// re-parse both endpoints and round-trip through `#RRGGBB` on every call. These
-// helpers compile a pair once and then produce results BYTE-IDENTICAL to their
-// string-path equivalents:
+// `adaptTheme` interpolates the SAME from/to pair on every frame of an ease.
+// The string API would re-parse both endpoints on every call. These helpers
+// compile a pair once and then produce results BYTE-IDENTICAL to the string
+// path:
 //
-//   · `lerpPairHex(pair, t)`       ≡ `oklabLerp(from, to, t)`
-//   · `lerpPairLuminance(pair, t)` ≡ WCAG luminance of `oklabLerp(from, to, t)`
-//   · `wcagLuminanceCached(css)`   ≡ luminance of `parseCssColor(css) ?? black`
+//   · `lerpPairHex(pair, t)` ≡ `oklabLerp(from, to, t)`
 //
 // (locked by test/hotpath-parity.test.mjs on randomised inputs). They are
 // consumed by `adapt-theme.js` and are NOT part of the public package surface
@@ -313,10 +309,10 @@ const parseCache = new Map();
  *  it recurring strings (computed-style values, backdrop samples, ease
  *  endpoints). The cap is a blunt bound, not an LRU: a full cache is simply
  *  cleared and refills within a frame — cheaper than eviction bookkeeping for
- *  a working set that is a handful of strings. The cached arrays are SHARED —
- *  package-internal callers must treat them as read-only. (The public
- *  `parseCssColor` stays unmemoized and returns a fresh array per call.) */
-export function parseCssColorCached(css) {
+ *  a working set that is a handful of strings. Запись кэша не покидает модуль:
+ *  `compileLerpPair` сразу преобразует её в новый объект с собственными
+ *  массивами, поэтому cache hit не требует защитной аллокации. */
+function parseCssColorCached(css) {
   let hit = parseCache.get(css);
   if (hit === undefined) {
     hit = parseCssColor(css);
@@ -324,42 +320,6 @@ export function parseCssColorCached(css) {
     parseCache.set(css, hit);
   }
   return hit;
-}
-
-/** Relative luminance of r,g,b channels (0..255) in the frozen original WCAG
- *  2.1 (2018) profile: 0.03928 / 12.92 / 2.4, matching `adapt-theme`. */
-function wcagLumChannels(r, g, b) {
-  const lin = (c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-const LUM_CACHE_CAP = 256;
-const lumCache = new Map();
-
-/** WCAG relative luminance of any colour string, memoised. Byte-equal to the
- *  string path `adapt-theme` uses for each sample during a performed metric
- *  recheck: luminance of
- *  `parseCssColor(css) ?? [0,0,0,1]` — i.e. unparseable input yields the
- *  luminance of black, preserving the historical fallback. */
-export function wcagLuminanceCached(css) {
-  let lum = lumCache.get(css);
-  if (lum === undefined) {
-    const c = parseCssColorCached(css) ?? [0, 0, 0, 1];
-    lum = wcagLumChannels(c[0], c[1], c[2]);
-    if (lumCache.size >= LUM_CACHE_CAP) lumCache.clear();
-    lumCache.set(css, lum);
-  }
-  return lum;
-}
-
-/** Round a channel to the exact byte `toHex` would emit (non-finite → 0,
- *  clamp, round) — keeps the numeric luminance path quantisation-identical to
- *  the `#RRGGBB` round-trip it replaces. */
-function hexByte(v) {
-  return Math.round(clamp255(Number.isFinite(v) ? v : 0));
 }
 
 /**
@@ -371,7 +331,7 @@ function hexByte(v) {
  *
  * @param {string} from  any colour string `parseCssColor` accepts
  * @param {string} to    any colour string `parseCssColor` accepts
- * @returns {{la:number[],lb:number[],aHex:string,bHex:string,aBytes:number[],bBytes:number[]} | null}
+ * @returns {{la:number[],lb:number[],aHex:string,bHex:string} | null}
  */
 export function compileLerpPair(from, to) {
   const a = parseCssColorCached(from);
@@ -382,8 +342,6 @@ export function compileLerpPair(from, to) {
     lb: linearRgbToOklab(srgbToLinear(b[0] / 255), srgbToLinear(b[1] / 255), srgbToLinear(b[2] / 255)),
     aHex: toHex(a),
     bHex: toHex(b),
-    aBytes: [hexByte(a[0]), hexByte(a[1]), hexByte(a[2])],
-    bBytes: [hexByte(b[0]), hexByte(b[1]), hexByte(b[2])],
   };
 }
 
@@ -403,31 +361,10 @@ export function lerpPairHex(pair, t) {
   return toHex([linearToSrgb(lin[0]) * 255, linearToSrgb(lin[1]) * 255, linearToSrgb(lin[2]) * 255]);
 }
 
-/** Relative luminance of `lerpPairHex(pair, t)` in the frozen legacy WCAG 2.1
- *  (2018) profile, WITHOUT the `#RRGGBB` round-trip: channels are quantised to
- *  the exact bytes `toHex` would emit, then fed to the same profile formula.
- *  This preserves value parity; it does not prove bisection monotonicity. */
-export function lerpPairLuminance(pair, t) {
-  if (t <= 0) return wcagLumChannels(pair.aBytes[0], pair.aBytes[1], pair.aBytes[2]);
-  if (t >= 1) return wcagLumChannels(pair.bBytes[0], pair.bBytes[1], pair.bBytes[2]);
-  const la = pair.la;
-  const lb = pair.lb;
-  const lin = oklabToLinearRgb(
-    la[0] + (lb[0] - la[0]) * t,
-    la[1] + (lb[1] - la[1]) * t,
-    la[2] + (lb[2] - la[2]) * t,
-  );
-  return wcagLumChannels(
-    hexByte(linearToSrgb(lin[0]) * 255),
-    hexByte(linearToSrgb(lin[1]) * 255),
-    hexByte(linearToSrgb(lin[2]) * 255),
-  );
-}
-
 /**
  * Compose an ordered stack of colour layers (front-to-back) over an opaque base
- * into a single opaque `#RRGGBB`. Pure — no DOM. Exposed for testing and for
- * callers that sample their own layers.
+ * into a single opaque `#RRGGBB`. Pure — no DOM; package-internal until the
+ * occurrence observer replaces this compatibility estimate.
  *
  * @param {Rgba[]} layersFrontToBack  index 0 is the topmost layer
  * @param {Rgba} opaqueBase  must have alpha 1

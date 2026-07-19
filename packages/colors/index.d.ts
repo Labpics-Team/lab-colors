@@ -81,12 +81,3 @@ export { watchTheme } from "./watch-theme.js";
 export type { WatchThemeOptions, WatchController } from "./watch-theme.js";
 export { adaptTheme } from "./adapt-theme.js";
 export type { AdaptThemeOptions, AdaptController } from "./adapt-theme.js";
-export {
-  effectiveBackground,
-  parseCssColor,
-  compositeOver,
-  compositeStackToHex,
-  toHex,
-  oklabLerp,
-} from "./effective-bg.js";
-export type { Rgba, EffectiveBackgroundOptions, StyleLike } from "./effective-bg.js";

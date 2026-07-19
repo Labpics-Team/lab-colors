@@ -65,6 +65,7 @@ applyTheme(document.documentElement, result);   // записать все --lab
 
 ```ts
 import init, { LabColors, watchTheme } from "@labpics/colors";
+import dsConfig from "./theme.config.json";
 
 await init();
 const colors = new LabColors();
@@ -95,35 +96,31 @@ watcher.stop();             // отключить наблюдателя
 отслеживаемых метрик.
 
 ```ts
-import init, { LabColors, adaptTheme, effectiveBackground } from "@labpics/colors";
+import init, { LabColors, adaptTheme } from "@labpics/colors";
+import dsConfig from "./theme.config.json";
 
 await init();
 const colors = new LabColors();
 colors.loadConfig(JSON.stringify(dsConfig));   // конфиг дизайн-системы (см. квик-старт)
 
 const surface = document.querySelector(".hero") as HTMLElement;
+let samples = ["#101012"];
 const adaptive = adaptTheme(surface, {
   colors,
   theme: "light",
-  background: () => effectiveBackground(surface, { fallback: "#101012" }),
+  background: () => samples,
 });
 
 adaptive.start();           // запустить внутренний requestAnimationFrame-цикл
+samples = ["#101012", "#202024"]; // интеграция обновила конечные образцы подложки
+adaptive.tick();            // явно обработать новое наблюдение
 adaptive.setTheme("dark");  // смена темы применяется мгновенно
 adaptive.stop();            // остановить цикл
 ```
 
-Для градиента, изображения или видео интеграция может передать конечный набор
-самостоятельно полученных образцов. Контроллер проверяет только переданные точки:
-он не наблюдает всё поле и не переносит результат на промежутки между образцами.
-
-```ts
-adaptTheme(hero, {
-  colors,
-  theme: "light",
-  background: () => sampleBackdrop(hero),  // например ["#0B0B0E", "#3A3A40"]
-});
-```
+Для градиента, изображения или видео интеграция может передать конечный набор образцов,
+полученных самостоятельно. Контроллер проверяет только переданные точки: он не
+наблюдает всё поле и не переносит результат на промежутки между образцами.
 
 ### Инициализация в Node
 
@@ -436,7 +433,6 @@ interface AdaptThemeOptions {
   sustainMs?: number;                // минимальное время удержания нарушения (по умолчанию 120)
   dwellMs?: number;                  // минимальный интервал между пересчётами (по умолчанию 250)
   easeMs?: number;                   // длительность перехода (по умолчанию 280; уменьшается при reduced-motion)
-  strict?: boolean;                  // legacy characterized clamp; не universal floor certificate (по умолчанию false)
   reducedMotion?: boolean;           // переопределить системную настройку
 }
 
@@ -448,11 +444,6 @@ interface AdaptController {
   current(): Record<string, string>; // logical targets; во время ease не painted DOM
 }
 ```
-
-`strict` сохраняет прежнее runtime-поведение, но не является доказательством
-минимального или проходящего состояния на каждом кадре: путь
-Oklab→gamut clip→sRGB8 немонотонен. Включайте его только явно для воспроизведения
-этого legacy clamp, а не как режим корректности или читаемости.
 
 Объявленный набор `background` обязан быть непустым и содержать только непустые
 строки. Невалидный явный образец отклоняется до resolver без coercion и без
@@ -471,34 +462,6 @@ Glow-свидетельств и подготовка перехода обра�
 нельзя откатить атомарно через inline-style API. В таком случае контроллер
 забывает базу дифференциальной записи, а следующий явный `tick()` повторяет полный
 канонический снимок. Это восстановление, а не атомарный откат уже записанных свойств.
-
----
-
-### `effectiveBackground(element, options?): string`
-
-Возвращает непрозрачную опорную оценку `#RRGGBB` для поддерживаемой цепочки
-сплошных и полупрозрачных DOM `background-color`. Это не browser pixel capture
-и не сертификат цвета, который реально видит наблюдатель. Helper обходит цепочку
-предков и композитит распознанные слои поверх `fallback` (по умолчанию белый).
-
-```ts
-const bg = effectiveBackground(panel);                        // например "#0F1014"
-const bg2 = effectiveBackground(panel, { fallback: "#101012" });
-```
-
-**Честное ограничение:** работает только с поддерживаемыми сплошными и
-полупрозрачными `background-color`; неподдерживаемый CSS, неполная прозрачная
-цепочка, `background-image`, градиент, blur и video не дают полного наблюдения.
-Текущий compatibility helper ещё может отбросить неподдерживаемый слой или
-использовать fallback. Если такой контент влияет на решение, интеграция должна
-передать собственный конечный набор образцов в `adaptTheme`; он расширяет только
-набор проверенных точек и не превращается в наблюдение всего поля.
-
-Дополнительно экспортируются вспомогательные функции для работы со слоями:
-`parseCssColor`, `compositeOver`, `compositeStackToHex`, `toHex` и `oklabLerp`
-(линейная интерполяция координат Oklab между двумя цветами с последующим
-преобразованием в непрозрачный `#RRGGBB`). Alpha входов при этом отбрасывается,
-а точность endpoints относится только к непрозрачным RGB-байтам.
 
 ---
 
@@ -522,7 +485,7 @@ release artifact.
 
 Будет ли runtime-загрузка критическим путём первого рендера, определяет
 интеграция: до первого `resolveTheme` инициализация обязана завершиться.
-JS-хелперы (`applyTheme`, `watchTheme`, `adaptTheme`, `effectiveBackground`)
+JS-хелперы (`applyTheme`, `watchTheme`, `adaptTheme`)
 имеют именованные экспорты и допускают tree-shaking, но их размер также следует
 мерить сборкой, а не описывать приблизительно.
 
