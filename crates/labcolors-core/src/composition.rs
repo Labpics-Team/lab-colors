@@ -125,3 +125,22 @@ pub(crate) fn reset_source_over_evaluation_count() {
 pub(crate) fn source_over_evaluation_count() -> usize {
     SOURCE_OVER_EVALUATIONS.with(std::cell::Cell::get)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AdmittedOpacityV1;
+
+    #[test]
+    fn admitted_opacity_multiplication_is_closed_at_boundaries_and_underflow() {
+        let zero = AdmittedOpacityV1::new(0.0).unwrap();
+        let one = AdmittedOpacityV1::new(1.0).unwrap();
+        assert_eq!(zero.multiply(zero).value(), 0.0);
+        assert_eq!(one.multiply(one).value(), 1.0);
+
+        let smallest_subnormal = AdmittedOpacityV1::new(f64::from_bits(1)).unwrap();
+        let half = AdmittedOpacityV1::new(0.5).unwrap();
+        let underflow = smallest_subnormal.multiply(half);
+        assert_eq!(underflow.value(), 0.0);
+        assert_eq!(underflow.bits(), 0.0_f64.to_bits());
+    }
+}

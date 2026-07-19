@@ -130,7 +130,7 @@ fn canonical_paint_occurrence_surface_chain_evaluates_exactly() {
             .unwrap()
             .certificate()
             .replay(),
-        Ok([0xFF, 0xF4, 0xE0])
+        [0xFF, 0xF4, 0xE0]
     );
 }
 
@@ -348,7 +348,7 @@ fn nested_opacity_materializes_once_by_multiplying_opacity() {
             .unwrap()
             .certificate()
             .replay(),
-        Ok(rendered.occurrence(FILL_OCCURRENCE).unwrap().visible())
+        rendered.occurrence(FILL_OCCURRENCE).unwrap().visible()
     );
 }
 
@@ -415,7 +415,7 @@ fn nested_opacity_preserves_subnormal_and_rounds_underflow_to_positive_zero() {
             expected_bits
         );
         assert_eq!(occurrence.visible(), [0; 3]);
-        assert_eq!(occurrence.certificate().replay(), Ok([0; 3]));
+        assert_eq!(occurrence.certificate().replay(), [0; 3]);
     }
 }
 
@@ -556,8 +556,8 @@ fn one_paint_is_surface_agnostic_across_two_occurrences() {
     assert_eq!(first.subject(), FILL_PAINT);
     assert_eq!(second.subject(), FILL_PAINT);
     assert_ne!(first.visible(), second.visible());
-    assert_eq!(first.certificate().replay(), Ok(first.visible()));
-    assert_eq!(second.certificate().replay(), Ok(second.visible()));
+    assert_eq!(first.certificate().replay(), first.visible());
+    assert_eq!(second.certificate().replay(), second.visible());
 }
 
 #[test]
@@ -666,11 +666,11 @@ fn surface_from_reuses_visible_result_without_recompositing() {
     assert_ne!(second_occurrence.visible(), [255, 128, 128]);
     assert_eq!(
         first_occurrence.certificate().replay(),
-        Ok(first_occurrence.visible())
+        first_occurrence.visible()
     );
     assert_eq!(
         second_occurrence.certificate().replay(),
-        Ok(second_occurrence.visible())
+        second_occurrence.visible()
     );
 }
 
@@ -718,7 +718,7 @@ proptest! {
         prop_assert_eq!(program_occurrence.backdrop_surface(), CONTEXT_SURFACE);
         prop_assert_eq!(certificate.backdrop_rgb(), context);
         prop_assert_eq!(certificate.output_rgb(), rendered.occurrence(FILL_OCCURRENCE).unwrap().visible());
-        prop_assert_eq!(certificate.replay(), Ok(certificate.output_rgb()));
+        prop_assert_eq!(certificate.replay(), certificate.output_rgb());
     }
 
     #[test]
@@ -778,7 +778,7 @@ proptest! {
         let oracle = crate::alpha::composite_over_srgb8(source, effective, context).unwrap();
         prop_assert_eq!(rendered.paint(subject).unwrap().opacity_bits(), effective.to_bits());
         prop_assert_eq!(occurrence.visible(), oracle);
-        prop_assert_eq!(occurrence.certificate().replay(), Ok(oracle));
+        prop_assert_eq!(occurrence.certificate().replay(), oracle);
     }
 
     #[test]

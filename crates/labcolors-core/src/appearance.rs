@@ -1028,25 +1028,16 @@ impl ResolvedPaint {
 pub(crate) struct SourceOverCertificateV1 {
     profile: CompositionProfileV1,
     subject_rgb: [u8; 3],
-    subject_opacity_bits: u64,
+    subject_opacity: crate::composition::AdmittedOpacityV1,
     backdrop_rgb: [u8; 3],
     output_rgb: [u8; 3],
 }
 
 impl SourceOverCertificateV1 {
     #[cfg(test)]
-    pub(crate) fn replay(&self) -> Result<[u8; 3], String> {
-        let alpha =
-            crate::composition::AdmittedOpacityV1::new(f64::from_bits(self.subject_opacity_bits))
-                .map_err(|_| {
-                format!(
-                    "alpha вне конечного [0,1]: {}",
-                    f64::from_bits(self.subject_opacity_bits)
-                )
-            })?;
-        Ok(self
-            .profile
-            .composite(self.subject_rgb, alpha, self.backdrop_rgb))
+    pub(crate) fn replay(&self) -> [u8; 3] {
+        self.profile
+            .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
     #[cfg(test)]
@@ -1059,7 +1050,7 @@ impl SourceOverCertificateV1 {
     }
 
     pub(crate) fn subject_opacity_bits(&self) -> u64 {
-        self.subject_opacity_bits
+        self.subject_opacity.bits()
     }
 
     pub(crate) fn backdrop_rgb(&self) -> [u8; 3] {
@@ -1452,7 +1443,7 @@ impl CompiledAppearanceProgram<'_> {
                     let certificate = SourceOverCertificateV1 {
                         profile: spec.profile,
                         subject_rgb: subject.rgb.bytes(),
-                        subject_opacity_bits: subject.opacity.bits(),
+                        subject_opacity: subject.opacity,
                         backdrop_rgb: backdrop.bytes(),
                         output_rgb: visible,
                     };
