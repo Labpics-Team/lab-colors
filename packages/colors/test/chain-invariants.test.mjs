@@ -3,8 +3,8 @@
 // потребителя (parseCssColor) → перепроверка легальности (recheckContrast).
 //
 // Почему здесь, а не в Rust: `vars[--lab-*]` — это ровно та строка, которую
-// прочитает браузер, а `parseCssColor` / `compositeOver` / `toHex` — тот самый
-// код пакета, что реконструирует цвет на странице (его же использует
+// прочитает браузер, а `parseCssColor` и скрытый exact point bridge — тот самый
+// путь пакета, что реконструирует цвет на странице (его же использует
 // effectiveBackground). Так тест меряет ПОТЕРИ НА СЕРИАЛИЗАЦИИ ВЫХОДА, а не
 // внутри солвера, и без параллельной копии физики контраста.
 //
@@ -25,9 +25,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { initSync, LabColors } from "../pkg/labcolors.js";
+import {
+  initSync,
+  LabColors,
+  __over,
+} from "../pkg/labcolors.js";
 import { applyTheme } from "../apply-theme.js";
-import { parseCssColor, compositeOver, toHex } from "../effective-bg.js";
+import { parseCssColor, toHex } from "../effective-bg.js";
 
 // Инициализация wasm в node: pkg собран под `--target web` (fetch по URL), а в
 // node грузим байты напрямую. Оборачиваем в WebAssembly.Module и передаём
@@ -57,6 +61,12 @@ function engine() {
 
 // [r,g,b] из parseCssColor-результата (отбрасываем α).
 const rgb = (parsed) => [parsed[0], parsed[1], parsed[2]];
+const packRgb24 = (parsed) =>
+  ((Math.round(parsed[0]) << 16) |
+    (Math.round(parsed[1]) << 8) |
+    Math.round(parsed[2])) >>> 0;
+const hexFromRgb24 = (packed) =>
+  `#${packed.toString(16).padStart(6, "0").toUpperCase()}`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ЛЕГАЛЬНОСТЬ НАСКВОЗЬ — сплошные роли
@@ -163,7 +173,13 @@ test("translucent serialization fidelity: emitted tint+alpha, reference composit
 
         // Reference-композит из эмитированных значений обязан совпасть с
         // сертификатом побайтно: допуск скрыл бы другой цвет и другие метрики.
-        const compHex = toHex(compositeOver(parsed, [bgParsed[0], bgParsed[1], bgParsed[2], 1]));
+        const packed = __over(
+          packRgb24(parsed),
+          alpha,
+          packRgb24(bgParsed),
+        );
+        assert.notEqual(packed, 0xFFFFFFFF, "admitted emitted layer must compose");
+        const compHex = hexFromRgb24(packed);
         assert.equal(
           compHex,
           role.compositeHex,

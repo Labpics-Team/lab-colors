@@ -126,8 +126,8 @@ pub fn composite_over_encoded(
 /// half-tie: `(250/255)·0.122·255` может стать `30.499…`, хотя эталонная
 /// byte-reference `250·0.122` равен `30.5` и по round-half-up даёт байт 31.
 /// Binary64-операции выполняются как монотонная affine-форма
-/// `bg + alpha*(tint-bg)` — ровно тот же порядок использует официальный JS-
-/// потребитель на непрозрачной подложке. Expanded-форма запрещена: на ULP-швах
+/// `bg + alpha*(tint-bg)` — официальный JS-runtime вызывает этот Core-профиль,
+/// а не воспроизводит формулу отдельно. Expanded-форма запрещена: на ULP-швах
 /// она способна дать последовательность PASS→FAIL→PASS при росте alpha.
 ///
 /// # Errors
@@ -135,6 +135,13 @@ pub fn composite_over_encoded(
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
 pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
     crate::composition::source_over_srgb8(tint, alpha, bg)
+}
+
+/// Allocation-free internal transport seam for bindings that own their error
+/// channel. It executes the same point profile as [`composite_over_srgb8`].
+#[doc(hidden)]
+pub fn try_composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Option<[u8; 3]> {
+    crate::composition::try_source_over_srgb8(tint, alpha, bg)
 }
 
 /// Квантизация кодированного цвета в эмитируемые sRGB8-байты с доменной

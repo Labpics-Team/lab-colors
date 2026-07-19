@@ -11,8 +11,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { parseCssColor, effectiveBackground, compositeOver, toHex } from "../effective-bg.js";
+import { initSync } from "../pkg/labcolors.js";
+import { parseCssColor, effectiveBackground } from "../effective-bg.js";
+
+initSync({
+  module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
+});
 
 // --- Live-emitted fixtures -------------------------------------------------
 //
@@ -93,13 +99,12 @@ test("Chrome computed form: L as a 0..1 number parses, and equals the percentage
 
 test("effectiveBackground composites oklch layers (translucent over opaque)", () => {
   // A translucent white oklch panel over an opaque near-black oklch base — the
-  // exact self-composed case the package produces. Oracle is independent of
-  // oklch parsing: compositeOver + toHex on the KNOWN source bytes.
+  // exact self-composed case the package produces. The known byte arithmetic
+  // is `26 + .5 × (255 - 26) = 140.5`, round-half-up → 141 (`#8D8D8D`).
   const leaf = "oklch(100.00000% 0.000000 89.876 / 0.5)"; // #FFFFFF @ 0.5
   const base = "oklch(21.77865% 0.000000 89.876)"; // #1A1A1A opaque
   const tree = fakeTree([leaf, base]);
-  const expected = toHex(compositeOver([255, 255, 255, 0.5], [26, 26, 26, 1]));
-  assert.equal(effectiveBackground(tree.leaf, tree), expected);
+  assert.equal(effectiveBackground(tree.leaf, tree), "#8D8D8D");
 });
 
 test("component forms: none = 0, chroma as a percentage (100% = 0.4), deg suffix on hue", () => {

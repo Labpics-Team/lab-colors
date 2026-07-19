@@ -10,12 +10,25 @@ import type { Wcag22AssessmentV1 } from "./pkg/labcolors.js";
 import type { Wcag22CriterionV1 } from "./wcag22.js";
 
 export {
-  default,
-  default as init,
-  initSync,
   LabColors,
   numericalCapabilityManifest,
 } from "./pkg/labcolors.js";
+
+/** Inputs accepted by the asynchronous WASM loader. */
+export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
+
+/** Inputs accepted by the synchronous WASM loader. */
+export type SyncInitInput = BufferSource | WebAssembly.Module;
+
+/** Initialise the runtime without exposing its raw WebAssembly exports. */
+export declare function init(
+  input?: { module_or_path: InitInput | Promise<InitInput> } | InitInput | Promise<InitInput>,
+): Promise<void>;
+
+/** Initialise the runtime synchronously without exposing raw WebAssembly exports. */
+export declare function initSync(input: { module: SyncInitInput } | SyncInitInput): void;
+
+export default init;
 
 /** Exact WCAG 2.2 assessment for one canonical final-sRGB8 occurrence. */
 export declare function evaluateWcag22(

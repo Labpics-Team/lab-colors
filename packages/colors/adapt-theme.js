@@ -75,7 +75,7 @@ function segHex(seg, t) {
  *   sample must be a non-empty string; invalid explicit evidence is rejected
  *   without coercion or fallback.
  * @param {*} [options.target=element]  element to write vars onto
- * @param {string} [options.fallback="#FFFFFF"]
+ * @param {string} [options.fallback="#FFFFFF"] Opaque supported base for a fully-translucent chain.
  * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
  * @param {number} [options.sustainMs=120]  breach must persist this long
  * @param {number} [options.dwellMs=250]  minimum between re-solves

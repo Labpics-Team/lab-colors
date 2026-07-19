@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
+import * as publicRoot from "../index.js";
+
 const ROOT = resolve(import.meta.dirname, "../../..");
 const read = (...parts) => readFileSync(join(ROOT, ...parts), "utf8");
 
@@ -10,6 +12,7 @@ test("effective-background math stays internal to the browser shell", () => {
   const manifest = JSON.parse(read("packages", "colors", "package.json"));
   const rootRuntime = read("packages", "colors", "index.js");
   const rootTypes = read("packages", "colors", "index.d.ts");
+  const backdropRuntime = read("packages", "colors", "effective-bg.js");
   const releaseVerifier = read("scripts", "verify-package-release.mjs");
 
   assert.equal(manifest.exports["./effective-bg"], undefined);
@@ -22,6 +25,7 @@ test("effective-background math stays internal to the browser shell", () => {
     "compositeStackToHex",
     "toHex",
     "oklabLerp",
+    "__over",
   ]) {
     assert.doesNotMatch(rootRuntime, new RegExp(`\\b${name}\\b`, "u"));
     assert.doesNotMatch(rootTypes, new RegExp(`\\b${name}\\b`, "u"));
@@ -30,6 +34,23 @@ test("effective-background math stays internal to the browser shell", () => {
     manifest.files.includes("effective-bg.js"),
     "watch/adapt still need the internal estimate until occurrence cutover",
   );
+  assert.equal(manifest.exports["./pkg/labcolors.js"], undefined);
+  assert.match(backdropRuntime, /__over/u);
+  assert.doesNotMatch(
+    backdropRuntime,
+    /export function compositeOver|function compositeOver|compositeStackToHex/u,
+  );
+});
+
+test("public initialisation cannot leak raw WASM exports", () => {
+  const result = publicRoot.initSync({
+    module: new WebAssembly.Module(
+      readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)),
+    ),
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(publicRoot.__over, undefined);
 });
 
 test("the parse memo never exposes its shared cache entry", async () => {

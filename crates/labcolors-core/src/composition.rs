@@ -12,6 +12,18 @@ pub(crate) enum OpacityAdmissionErrorV1 {
     OutsideUnitInterval,
 }
 
+/// Версионированная identity единственной point-операции композиции.
+///
+/// Профиль и исполняющий его закон живут вместе: graph executor, alpha-аналог
+/// и certificate replay не вправе независимо выбирать арифметику по тому же
+/// discriminant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompositionProfileV1 {
+    /// Straight-alpha source-over в encoded-sRGB8 с одним округлением каждого
+    /// финального канала occurrence. Это не модель произвольного renderer/HDR.
+    EncodedSrgb8SourceOverV1,
+}
+
 /// Канонический straight alpha внутри конечного `[0,1]`.
 ///
 /// Значение хранится битами: `-0.0` понижается в единственный физический `+0.0`
@@ -20,6 +32,8 @@ pub(crate) enum OpacityAdmissionErrorV1 {
 pub(crate) struct AdmittedOpacityV1(u64);
 
 impl AdmittedOpacityV1 {
+    pub(crate) const OPAQUE: Self = Self(1.0f64.to_bits());
+
     pub(crate) fn new(alpha: f64) -> Result<Self, OpacityAdmissionErrorV1> {
         if !alpha.is_finite() {
             return Err(OpacityAdmissionErrorV1::NonFinite);
@@ -31,7 +45,6 @@ impl AdmittedOpacityV1 {
         Ok(Self(canonical.to_bits()))
     }
 
-    #[cfg(test)]
     pub(crate) const fn bits(self) -> u64 {
         self.0
     }
@@ -39,11 +52,40 @@ impl AdmittedOpacityV1 {
     pub(crate) const fn value(self) -> f64 {
         f64::from_bits(self.0)
     }
+
+    /// Композиция opacity-конструкторов замкнута в admitted `[0,1]`: два
+    /// конечных неотрицательных множителя не могут создать новый invalid state.
+    pub(crate) fn multiply(self, rhs: Self) -> Self {
+        Self((self.value() * rhs.value()).to_bits())
+    }
 }
 
-/// Порядок binary64-операций совпадает с официальным JS-потребителем на
-/// непрозрачной подложке. Expanded-форма запрещена: два округления нарушают
-/// монотонность на отдельных ULP-швах.
+impl CompositionProfileV1 {
+    /// Исполняет ровно тот закон, identity которого несёт профиль.
+    pub(crate) fn composite(
+        self,
+        tint: [u8; 3],
+        alpha: AdmittedOpacityV1,
+        backdrop: [u8; 3],
+    ) -> [u8; 3] {
+        match self {
+            Self::EncodedSrgb8SourceOverV1 => {
+                #[cfg(test)]
+                SOURCE_OVER_EVALUATIONS.with(|count| count.set(count.get() + 1));
+                let alpha = alpha.value();
+                [
+                    source_over_channel_srgb8(tint[0], alpha, backdrop[0]),
+                    source_over_channel_srgb8(tint[1], alpha, backdrop[1]),
+                    source_over_channel_srgb8(tint[2], alpha, backdrop[2]),
+                ]
+            }
+        }
+    }
+}
+
+/// Это declared binary64 operation order официального runtime: JS вызывает
+/// Core, отдельной формулы у него нет. Expanded-форма запрещена: два округления
+/// нарушают монотонность на отдельных ULP-швах.
 pub(crate) fn source_over_channel_value(tint: u8, alpha: f64, backdrop: u8) -> f64 {
     f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))
 }
@@ -52,11 +94,11 @@ pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u
     source_over_channel_value(tint, alpha, backdrop).round() as u8
 }
 
+#[cfg(test)]
 pub(crate) fn validate_alpha(alpha: f64) -> Result<(), String> {
-    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
-    }
-    Ok(())
+    AdmittedOpacityV1::new(alpha)
+        .map(|_| ())
+        .map_err(|_| format!("alpha вне конечного [0,1]: {alpha}"))
 }
 
 pub(crate) fn source_over_srgb8(
@@ -64,19 +106,17 @@ pub(crate) fn source_over_srgb8(
     alpha: f64,
     backdrop: [u8; 3],
 ) -> Result<[u8; 3], String> {
-    validate_alpha(alpha)?;
-    Ok(source_over_srgb8_validated(tint, alpha, backdrop))
+    try_source_over_srgb8(tint, alpha, backdrop)
+        .ok_or_else(|| format!("alpha вне конечного [0,1]: {alpha}"))
 }
 
-pub(crate) fn source_over_srgb8_validated(tint: [u8; 3], alpha: f64, backdrop: [u8; 3]) -> [u8; 3] {
-    debug_assert!(validate_alpha(alpha).is_ok());
-    #[cfg(test)]
-    SOURCE_OVER_EVALUATIONS.with(|count| count.set(count.get() + 1));
-    [
-        source_over_channel_srgb8(tint[0], alpha, backdrop[0]),
-        source_over_channel_srgb8(tint[1], alpha, backdrop[1]),
-        source_over_channel_srgb8(tint[2], alpha, backdrop[2]),
-    ]
+pub(crate) fn try_source_over_srgb8(
+    tint: [u8; 3],
+    alpha: f64,
+    backdrop: [u8; 3],
+) -> Option<[u8; 3]> {
+    let alpha = AdmittedOpacityV1::new(alpha).ok()?;
+    Some(CompositionProfileV1::EncodedSrgb8SourceOverV1.composite(tint, alpha, backdrop))
 }
 
 #[cfg(test)]

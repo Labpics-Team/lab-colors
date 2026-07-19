@@ -5,18 +5,35 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
+import { initSync } from "../pkg/labcolors.js";
 import {
   parseCssColor,
-  compositeOver,
   toHex,
-  compositeStackToHex,
   effectiveBackground,
   oklabLerp,
 } from "../effective-bg.js";
 import { applyTheme } from "../apply-theme.js";
 import { watchTheme } from "../watch-theme.js";
+
+initSync({
+  module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
+});
+
+// Test-only continuous oracle for the legacy Material evidence below. Runtime
+// source-over lives exclusively in Core; this function is deliberately not
+// imported by production code and does not stand in for emitted sRGB8 bytes.
+function continuousSourceOverOracle(top, bottom) {
+  const alpha = bottom[3] + top[3] * (1 - bottom[3]);
+  if (alpha === 0) return [0, 0, 0, 0];
+  const channel = (index) => {
+    const premultipliedBottom = bottom[index] * bottom[3];
+    return (premultipliedBottom + top[3] * (top[index] - premultipliedBottom)) / alpha;
+  };
+  return [channel(0), channel(1), channel(2), alpha];
+}
 
 function captureOutputConflict(fn, expectedConflicts) {
   let error = null;
@@ -215,32 +232,6 @@ test("parseCssColor handles the forms computed style yields", () => {
   assert.equal(parseCssColor(42), null);
 });
 
-test("compositeOver is true source-over alpha", () => {
-  // Opaque over anything → the top colour.
-  assert.deepEqual(compositeOver([10, 20, 30, 1], [200, 200, 200, 1]), [10, 20, 30, 1]);
-  // 50% black over white → mid grey, opaque.
-  const r = compositeOver([0, 0, 0, 0.5], [255, 255, 255, 1]);
-  assert.equal(Math.round(r[0]), 128);
-  assert.equal(r[3], 1);
-  // Fully transparent top → bottom unchanged.
-  assert.deepEqual(compositeOver([9, 9, 9, 0], [40, 50, 60, 1]), [40, 50, 60, 1]);
-
-  // Half-seam из Rust-регрессора: фиксирует тот же порядок binary64-операций,
-  // чтобы reference-композит и официальный потребитель не разошлись на LSB.
-  assert.equal(toHex(compositeOver([0, 5, 5, 0.1], [5, 5, 5, 1])), "#050505");
-
-  // Expanded-форма на этих соседних alpha давала 208→207→208. Affine-
-  // reference фиксирует другой, объявленный operation order; этот конкретный
-  // seam характеризуется без утверждения глобальной монотонности.
-  const centre = 0.812992125984252;
-  const predecessor = centre - Number.EPSILON / 2;
-  const successor = centre + Number.EPSILON / 2;
-  const seam = [predecessor, centre, successor].map(
-    (alpha) => compositeOver([255, 0, 0, alpha], [1, 0, 0, 1])[0],
-  );
-  assert.ok(seam[0] <= seam[1] && seam[1] <= seam[2], String(seam));
-});
-
 test("material alpha rechecks in the declared byte-scale affine legacy-WCAG profile", () => {
   // Independent consumer oracle for the Rust material solver. The product's
   // versioned profile freezes the original WCAG 2.1 (2018) 0.03928 split; it is
@@ -275,9 +266,9 @@ test("material alpha rechecks in the declared byte-scale affine legacy-WCAG prof
     },
   ]) {
     const bottom = [255, 255, 255, 1];
-    const oldContrast = contrastAgainstWhite(compositeOver([...tint, oldAlpha], bottom));
+    const oldContrast = contrastAgainstWhite(continuousSourceOverOracle([...tint, oldAlpha], bottom));
     const selectedContrast = contrastAgainstWhite(
-      compositeOver([...tint, selectedAlpha], bottom),
+      continuousSourceOverOracle([...tint, selectedAlpha], bottom),
     );
     assert.ok(oldContrast < floor, `old ${oldContrast} must miss ${floor}`);
     assert.ok(selectedContrast >= floor, `selected ${selectedContrast} must hold ${floor}`);
@@ -293,10 +284,10 @@ test("material alpha rechecks in the declared byte-scale affine legacy-WCAG prof
   const interiorByte = 0.9997624803942831 * 255;
   const interior = [interiorByte, interiorByte, interiorByte, 1];
   const oldInteriorContrast = contrastAgainstWhite(
-    compositeOver([0, 0, 0, oldSeamAlpha], interior),
+    continuousSourceOverOracle([0, 0, 0, oldSeamAlpha], interior),
   );
   const selectedInteriorContrast = contrastAgainstWhite(
-    compositeOver([0, 0, 0, selectedSeamAlpha], interior),
+    continuousSourceOverOracle([0, 0, 0, selectedSeamAlpha], interior),
   );
   assert.ok(
     oldInteriorContrast < seamFloor,
@@ -316,7 +307,7 @@ test("toHex rounds and clamps", () => {
 
 test("toHex coerces non-finite channels to 0 (valid CSS, never #NAN…)", () => {
   // A malformed Rgba (NaN/Infinity channels) must still yield a valid #RRGGBB,
-  // not an invalid CSS string. Reachable via the public toHex/compositeStackToHex.
+  // not an invalid CSS string.
   assert.equal(toHex([NaN, 0, 0]), "#000000");
   assert.equal(toHex([Infinity, 128, -Infinity]), "#008000"); // any non-finite → 0 (not clamped)
   assert.equal(toHex([undefined, 255, 255]), "#00FFFF");
@@ -369,11 +360,43 @@ test("oklabLerp falls back to the valid endpoint on unparseable input", () => {
   assert.equal(oklabLerp("#123456", "garbage", 0.7), "#123456");
 });
 
-test("compositeStackToHex composites front-to-back over an opaque base", () => {
-  // 50% black panel over white base → #808080.
-  assert.equal(compositeStackToHex([[0, 0, 0, 0.5]], [255, 255, 255, 1]), "#808080");
-  // Empty stack → the base itself.
-  assert.equal(compositeStackToHex([], [18, 18, 22, 1]), "#121216");
+test("effective background rounds every declared point occurrence", () => {
+  const { leaf, getStyle, parentOf } = fakeTree([
+    "rgba(0, 0, 0, 0.5)",
+    "rgba(1, 0, 0, 0.5)",
+    "rgb(0, 0, 0)",
+  ]);
+  // Point-граф материализует нижний occurrence в байт 1, затем верхний снова
+  // в байт 1. Старый JS-stack сохранял дробный 0.5 между рёбрами и округлял
+  // только общий итог 0.25 до нуля — это была другая физическая программа.
+  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#010000");
+});
+
+test("effective background preserves front-to-back layer order", () => {
+  const { leaf, getStyle, parentOf } = fakeTree([
+    "rgba(255, 0, 0, 0.5)",
+    "rgba(0, 0, 255, 0.5)",
+    "rgb(0, 0, 0)",
+  ]);
+  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#800040");
+});
+
+test("effective background quantises fractional CSS channels by nearest byte", () => {
+  const { leaf, getStyle, parentOf } = fakeTree(["rgb(0.5 127.5 254.5)"]);
+  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#0180FF");
+});
+
+test("effective background never reinterprets a translucent fallback as opaque", () => {
+  const { leaf, getStyle, parentOf } = fakeTree(["rgba(0, 0, 0, 0.5)"]);
+
+  assert.throws(
+    () => effectiveBackground(leaf, {
+      fallback: "rgba(255, 0, 0, 0.5)",
+      getStyle,
+      parentOf,
+    }),
+    /fallback must be an opaque supported colour/u,
+  );
 });
 
 // A tiny fake element tree for effectiveBackground: each node carries a

@@ -585,6 +585,40 @@ pub fn evaluate_wcag22(
     Ok(parsed.unchecked_into())
 }
 
+const INVALID_RGB24: u32 = u32::MAX;
+
+fn unpack_rgb24(value: u32) -> [u8; 3] {
+    [
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        (value & 0xff) as u8,
+    ]
+}
+
+fn pack_rgb24([red, green, blue]: [u8; 3]) -> u32 {
+    (u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue)
+}
+
+/// Package-private scalar bridge for the canonical point compositor.
+///
+/// `0x00RRGGBB` keeps the hot successful boundary allocation-free. The
+/// unreachable RGB24 value `0xFFFFFFFF` is the opacity-rejection sentinel;
+/// `effective-bg.js` turns it into a loud internal failure instead of a colour.
+/// RGB24 words are package-constructed, not a second public parser boundary.
+/// The package root deliberately hides both this seam and raw init exports.
+#[wasm_bindgen(js_name = __over)]
+pub fn point_source_over_encoded_srgb8_v1(
+    source_rgb24: u32,
+    opacity: f64,
+    backdrop_rgb24: u32,
+) -> u32 {
+    let source = unpack_rgb24(source_rgb24);
+    let backdrop = unpack_rgb24(backdrop_rgb24);
+    labcolors_core::alpha::try_composite_over_srgb8(source, opacity, backdrop)
+        .map(pack_rgb24)
+        .unwrap_or(INVALID_RGB24)
+}
+
 /// Контрастный движок над дизайн-системой клиента. Создайте его через
 /// [`LabColors::new`], загрузите конфиг методом
 /// [`loadConfig`](LabColors::load_config), затем многократно вызывайте
@@ -910,5 +944,34 @@ mod native_contract_tests {
         let error = stable_glow_recheck_core_error("fixture drift".into());
         assert!(matches!(error, BindingError::Internal { .. }));
         assert_eq!(error.code(), "internal_error");
+    }
+
+    #[test]
+    fn packed_point_boundary_matches_the_independent_rational_oracle() {
+        for source in u8::MIN..=u8::MAX {
+            for backdrop in u8::MIN..=u8::MAX {
+                let source_rgb24 = u32::from(source) << 16;
+                let backdrop_rgb24 = u32::from(backdrop) << 16;
+                let actual =
+                    point_source_over_encoded_srgb8_v1(source_rgb24, 0.122, backdrop_rgb24);
+                let numerator = 122_u32 * u32::from(source) + 878_u32 * u32::from(backdrop);
+                let expected = ((numerator + 500) / 1_000) << 16;
+                assert_eq!(actual, expected, "source={source}, backdrop={backdrop}");
+            }
+        }
+    }
+
+    #[test]
+    fn packed_point_boundary_rejects_every_invalid_opacity() {
+        for opacity in [f64::NAN, f64::NEG_INFINITY, -0.1, 1.1, f64::INFINITY] {
+            assert_eq!(
+                point_source_over_encoded_srgb8_v1(0, opacity, 0),
+                INVALID_RGB24
+            );
+        }
+        assert_eq!(
+            point_source_over_encoded_srgb8_v1(0, -0.0, 0x12_34_56),
+            0x12_34_56
+        );
     }
 }

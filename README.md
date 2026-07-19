@@ -46,7 +46,9 @@ ThemeConfig клиента
   сертификат; Glow требует явный decision profile и может завершиться
   типизированным `Indeterminate` без CSS fallback.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
-- **Браузерное применение.** `applyTheme`, `watchTheme`, `adaptTheme` и `effectiveBackground` связывают результат WASM с локальной областью DOM.
+- **Браузерное применение.** Публичные `applyTheme`, `watchTheme` и `adaptTheme`
+  связывают результат WASM с локальной областью DOM; обход подложки остаётся
+  внутренней частью runtime и не является отдельным API.
 
 ## Что не следует приписывать текущей реализации
 

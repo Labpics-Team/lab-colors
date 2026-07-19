@@ -4,8 +4,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
+import { initSync } from "../pkg/labcolors.js";
 import { adaptTheme } from "../adapt-theme.js";
+
+initSync({
+  module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
+});
 
 // A fake LabColors engine. `resolveTheme` returns a controllable role set;
 // `recheckContrast` returns controllable signed Lc per role (interleaved with a
