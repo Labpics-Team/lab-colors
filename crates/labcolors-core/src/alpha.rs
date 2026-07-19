@@ -61,23 +61,21 @@
 
 use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 
+#[cfg(test)]
+pub(crate) fn reset_source_over_evaluation_count() {
+    crate::composition::reset_source_over_evaluation_count();
+}
+
+#[cfg(test)]
+pub(crate) fn source_over_evaluation_count() -> usize {
+    crate::composition::source_over_evaluation_count()
+}
+
 /// Валидный кодированный канал/цвет: конечный и в `[0,1]` — домен всех
 /// функций модуля (hex-обёртки гарантируют его по построению, byte/255).
 fn is_encoded_rgb(v: [f64; 3]) -> bool {
     v.into_iter()
         .all(|x| x.is_finite() && (0.0..=1.0).contains(&x))
-}
-
-/// Ровно тот же монотонный порядок binary64-операций, что у официального JS-
-/// потребителя на непрозрачной подложке: `bg + alpha * (tint - bg)`.
-/// Expanded-форма `tint*alpha + bg*(1-alpha)` немонотонна на отдельных ULP-
-/// швах из-за двух округлений, поэтому не годится для доказуемого lower-bound.
-fn source_over_channel_value(tint: u8, alpha: f64, bg: u8) -> f64 {
-    f64::from(bg) + alpha * (f64::from(tint) - f64::from(bg))
-}
-
-fn source_over_channel_srgb8(tint: u8, alpha: f64, bg: u8) -> u8 {
-    source_over_channel_value(tint, alpha, bg).round() as u8
 }
 
 /// Непрерывная алгебра straight-alpha до квантования. Она нужна инверсии и
@@ -136,31 +134,7 @@ pub fn composite_over_encoded(
 ///
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
 pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
-    validate_alpha(alpha)?;
-    Ok(composite_over_srgb8_validated(tint, alpha, bg))
-}
-
-/// Total-вариант для functional core после admission: вызывающий код обязан
-/// уже доказать `alpha ∈ [0,1]`. Произведение двух таких straight-alpha также
-/// остаётся в домене, поэтому appearance runtime не несёт недостижимую ветку
-/// повторной валидации после проверки всех scalar bindings.
-pub(crate) fn composite_over_srgb8_validated(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> [u8; 3] {
-    debug_assert!(validate_alpha(alpha).is_ok());
-    [
-        source_over_channel_srgb8(tint[0], alpha, bg[0]),
-        source_over_channel_srgb8(tint[1], alpha, bg[1]),
-        source_over_channel_srgb8(tint[2], alpha, bg[2]),
-    ]
-}
-
-/// SSOT-валидатор домена straight-alpha: конечная и в `[0,1]`. Единый и для
-/// композитора, и для графовых bindings — доменный отказ по альфе обязан
-/// звучать одинаково на всех путях (тексты отказов публично наблюдаемы).
-pub(crate) fn validate_alpha(alpha: f64) -> Result<(), String> {
-    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
-    }
-    Ok(())
+    crate::composition::source_over_srgb8(tint, alpha, bg)
 }
 
 /// Квантизация кодированного цвета в эмитируемые sRGB8-байты с доменной
@@ -461,190 +435,6 @@ pub fn resolve_alpha_analog(
     Some(AlphaAnalog { tint, alpha })
 }
 
-/// Существование byte-тинта при фиксированной alpha проверяется только по
-/// крайнему тинту нужного направления. Поканальный output монотонен по tint, а
-/// соседние тинты отличаются до round не больше чем на `alpha ≤ 1`, поэтому
-/// целевой байт нельзя «перепрыгнуть».
-fn srgb8_target_is_feasible(solid: [u8; 3], alpha: f64, bg: [u8; 3]) -> bool {
-    (0..3).all(|channel| match solid[channel].cmp(&bg[channel]) {
-        std::cmp::Ordering::Equal => true,
-        std::cmp::Ordering::Greater => {
-            source_over_channel_srgb8(u8::MAX, alpha, bg[channel]) >= solid[channel]
-        }
-        std::cmp::Ordering::Less => {
-            source_over_channel_srgb8(u8::MIN, alpha, bg[channel]) <= solid[channel]
-        }
-    })
-}
-
-/// Первый `binary64`, на котором фактический reference-предикат допускает
-/// byte-тинт. Положительные `f64` упорядочены своими битами, поэтому полный
-/// lower-bound по `[0, 1]` занимает фиксированные 62 шага и не зависит от
-/// эвристического epsilon или аналитического округления стенки.
-fn first_srgb8_alpha(solid: [u8; 3], bg: [u8; 3]) -> f64 {
-    if solid == bg {
-        return 0.0;
-    }
-    let mut failing = 0.0_f64.to_bits();
-    let mut passing = 1.0_f64.to_bits();
-    // При alpha=0 композит равен bg при любом тинте, а при alpha=1 выбор
-    // tint=solid всегда достигает цели. После раннего `solid == bg` это строгая
-    // пара FAIL/PASS, необходимая двоичному lower-bound.
-    debug_assert!(
-        !srgb8_target_is_feasible(solid, 0.0, bg),
-        "разные solid/bg не могут быть достижимы при alpha=0: solid={solid:?}, bg={bg:?}"
-    );
-    debug_assert!(
-        srgb8_target_is_feasible(solid, 1.0, bg),
-        "alpha=1 обязана достигать любой sRGB8-цели через tint=solid: solid={solid:?}, bg={bg:?}"
-    );
-
-    while passing - failing > 1 {
-        let middle = failing + (passing - failing) / 2;
-        if srgb8_target_is_feasible(solid, f64::from_bits(middle), bg) {
-            passing = middle;
-        } else {
-            failing = middle;
-        }
-    }
-    f64::from_bits(passing)
-}
-
-/// Канонический byte-тинт при фиксированной alpha.
-///
-/// Каналы независимы. Монотонным двоичным поиском находится весь непрерывный
-/// диапазон byte-тинтов, которые production-композитор округляет в цель. Из
-/// него выбирается байт с минимальной ошибкой до непрерывной инверсии; при
-/// точном равенстве — меньший байт. Затем тот же композитор проверяет ответ.
-fn srgb8_tint_at_alpha(solid: [u8; 3], alpha: f64, bg: [u8; 3]) -> Option<[u8; 3]> {
-    if !srgb8_target_is_feasible(solid, alpha, bg) {
-        return None;
-    }
-    let mut tint = [0_u8; 3];
-
-    for channel in 0..3 {
-        let solid_channel = solid[channel];
-        let bg_channel = bg[channel];
-        if solid_channel == bg_channel {
-            tint[channel] = bg_channel;
-            continue;
-        }
-        if alpha == 0.0 {
-            return None;
-        }
-
-        let output = |candidate: u8| source_over_channel_srgb8(candidate, alpha, bg_channel);
-        let mut lo = 0_u16;
-        let mut hi = 256_u16;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if output(mid as u8) < solid_channel {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        if lo == 256 || output(lo as u8) != solid_channel {
-            return None;
-        }
-        let first = lo as u8;
-
-        lo = u16::from(first);
-        hi = 256;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if output(mid as u8) <= solid_channel {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        let last = (lo - 1) as u8;
-
-        let ideal =
-            f64::from(bg_channel) + (f64::from(solid_channel) - f64::from(bg_channel)) / alpha;
-        let floor = ideal.floor().clamp(f64::from(first), f64::from(last)) as u8;
-        let ceil = ideal.ceil().clamp(f64::from(first), f64::from(last)) as u8;
-        let error = |candidate: u8| {
-            (source_over_channel_value(candidate, alpha, bg_channel) - f64::from(solid_channel))
-                .abs()
-        };
-        tint[channel] = if error(floor).total_cmp(&error(ceil)).is_le() {
-            floor
-        } else {
-            ceil
-        };
-    }
-
-    let composite = [
-        source_over_channel_srgb8(tint[0], alpha, bg[0]),
-        source_over_channel_srgb8(tint[1], alpha, bg[1]),
-        source_over_channel_srgb8(tint[2], alpha, bg[2]),
-    ];
-    (composite == solid).then_some(tint)
-}
-
-/// Эмиссионный sRGB8-путь альфа-аналога.
-///
-/// Входные цвета сначала квантуются до той же byte-сетки, в которой будет
-/// эмитирован тинт. Если запрошенная alpha допускает хотя бы один точный
-/// byte-тинт, она сохраняется буквально. Иначе alpha поднимается до первого
-/// `binary64`, который проходит тот же фиксированный Rust/JS reference-
-/// композитор; непосредственный predecessor не проходит. Это отдельный, более
-/// сильный контракт, чем continuous-инверсия [`resolve_alpha_analog`].
-///
-/// Недоменная запрошенная α и нарушение точного постусловия возвращаются как
-/// `Err`: такой результат нельзя отдавать наружу. Для любого валидного домена
-/// результат тотален — в худшем случае α=1 и byte-тинт равен цели.
-pub(crate) fn resolve_alpha_analog_srgb8(
-    solid: [f64; 3],
-    requested_alpha: f64,
-    bg: [f64; 3],
-) -> Result<([u8; 3], f64), String> {
-    if !requested_alpha.is_finite() || !(0.0..=1.0).contains(&requested_alpha) {
-        return Err(format!(
-            "requested_alpha вне конечного [0,1]: {requested_alpha}"
-        ));
-    }
-    let solid_srgb8 = encoded_to_srgb8(solid, "solid")?;
-    let bg_srgb8 = encoded_to_srgb8(bg, "bg")?;
-    if let Some(tint) = srgb8_tint_at_alpha(solid_srgb8, requested_alpha, bg_srgb8) {
-        verify_srgb8_alpha_analog(solid_srgb8, tint, requested_alpha, bg_srgb8)?;
-        return Ok((tint, requested_alpha));
-    }
-
-    let floor = first_srgb8_alpha(solid_srgb8, bg_srgb8);
-    // Запрошенная alpha уже не дала byte-тинт; тотальность канального поиска и
-    // монотонность reference-предиката означают, что первый PASS обязан быть
-    // строго правее неё. Равенство здесь выявляет рассогласование двух путей.
-    debug_assert!(
-        floor > requested_alpha,
-        "отвергнутая requested alpha обязана лежать ниже первого sRGB8 PASS: solid={solid_srgb8:?}, bg={bg_srgb8:?}, requested={requested_alpha}, floor={floor}"
-    );
-    let tint = srgb8_tint_at_alpha(solid_srgb8, floor, bg_srgb8)
-        .ok_or_else(|| "первая sRGB8-alpha не дала допустимый byte-тинт".to_string())?;
-    verify_srgb8_alpha_analog(solid_srgb8, tint, floor, bg_srgb8)?;
-    Ok((tint, floor))
-}
-
-/// Глубинная проверка постусловия именно в эмитируемой byte-арифметике.
-/// Отдельная функция нужна, чтобы тест мог доказать: неверная пара отвергается,
-/// а не только что текущий солвер обычно выдаёт верную.
-fn verify_srgb8_alpha_analog(
-    solid: [u8; 3],
-    tint: [u8; 3],
-    alpha: f64,
-    bg: [u8; 3],
-) -> Result<(), String> {
-    let composite = composite_over_srgb8(tint, alpha, bg)?;
-    if composite != solid {
-        return Err(format!(
-            "alpha-analog не воспроизвёл sRGB8-цель: solid={solid:?}, tint={tint:?}, alpha={alpha}, bg={bg:?}, composite={composite:?}"
-        ));
-    }
-    Ok(())
-}
-
 /// Hex-обёртка эмиссионного sRGB8-резолвера: `(tint_hex, фактическая α)`.
 /// Возвращённая пара побайтно воспроизводит
 /// `solid_hex` через [`composite_over_srgb8`]; постусловие проверено до возврата.
@@ -658,10 +448,15 @@ pub fn resolve_alpha_analog_hex(
     requested_alpha: f64,
     bg_hex: &str,
 ) -> Result<(String, f64), String> {
-    let solid = srgb_encoded_from_hex(solid_hex)?;
-    let bg = srgb_encoded_from_hex(bg_hex)?;
-    let (tint, alpha) = resolve_alpha_analog_srgb8(solid, requested_alpha, bg)?;
-    Ok((hex_from_srgb8(tint), alpha))
+    let target = crate::Srgb8::new(crate::srgb8::hex_bytes(solid_hex)?);
+    let backdrop = crate::Srgb8::new(crate::srgb8::hex_bytes(bg_hex)?);
+    let verified = crate::analog::resolve_verified(
+        crate::analog::AuthoredAlphaBindingIdV1::Standalone,
+        target,
+        requested_alpha,
+        backdrop,
+    )?;
+    Ok((verified.tint().to_hex(), verified.alpha()))
 }
 
 #[cfg(test)]
@@ -737,7 +532,8 @@ mod tests {
             centre,
             f64::from_bits(centre.to_bits() + 1),
         ];
-        let outputs = alphas.map(|alpha| source_over_channel_srgb8(255, alpha, 1));
+        let outputs =
+            alphas.map(|alpha| crate::composition::source_over_channel_srgb8(255, alpha, 1));
         assert!(
             outputs.windows(2).all(|pair| pair[0] <= pair[1]),
             "{outputs:?}"
@@ -771,17 +567,21 @@ mod tests {
         for requested_alpha in [0.0, 0.01, 0.122, 0.5, 0.9, near_one, 1.0] {
             for solid in u8::MIN..=u8::MAX {
                 for bg in u8::MIN..=u8::MAX {
-                    let solid_encoded = [f64::from(solid) / 255.0; 3];
-                    let bg_encoded = [f64::from(bg) / 255.0; 3];
+                    let target = crate::Srgb8::new([solid; 3]);
+                    let backdrop = crate::Srgb8::new([bg; 3]);
                     let requested_is_feasible =
-                        srgb8_tint_at_alpha([solid; 3], requested_alpha, [bg; 3]).is_some();
-                    let (tint, actual_alpha) =
-                        resolve_alpha_analog_srgb8(solid_encoded, requested_alpha, bg_encoded)
-                            .unwrap_or_else(|error| {
-                                panic!(
-                                    "solid={solid}, bg={bg}, requested={requested_alpha}: {error}"
-                                )
-                            });
+                        crate::analog::tint_at_alpha(target, requested_alpha, backdrop).is_some();
+                    let verified = crate::analog::resolve_verified(
+                        crate::analog::AuthoredAlphaBindingIdV1::Standalone,
+                        target,
+                        requested_alpha,
+                        backdrop,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("solid={solid}, bg={bg}, requested={requested_alpha}: {error}")
+                    });
+                    let tint = verified.tint().bytes();
+                    let actual_alpha = verified.alpha();
                     let got = composite_over_srgb8(tint, actual_alpha, [bg; 3])
                         .expect("резолвер возвращает α в [0,1]");
                     assert_eq!(
@@ -798,7 +598,7 @@ mod tests {
                         assert!(actual_alpha > requested_alpha);
                         let predecessor = f64::from_bits(actual_alpha.to_bits() - 1);
                         assert!(
-                            srgb8_tint_at_alpha([solid; 3], predecessor, [bg; 3]).is_none(),
+                            crate::analog::tint_at_alpha(target, predecessor, backdrop).is_none(),
                             "actual alpha не минимальна: solid={solid}, bg={bg}, actual={actual_alpha}"
                         );
                     }
@@ -837,7 +637,14 @@ mod tests {
             assert!(actual > requested);
             assert_eq!(composite_hex(&tint, actual, "#000000").unwrap(), "#010000");
             let predecessor = f64::from_bits(actual.to_bits() - 1);
-            assert!(srgb8_tint_at_alpha([1, 0, 0], predecessor, [0; 3]).is_none());
+            assert!(
+                crate::analog::tint_at_alpha(
+                    crate::Srgb8::new([1, 0, 0]),
+                    predecessor,
+                    crate::Srgb8::new([0; 3]),
+                )
+                .is_none()
+            );
         }
     }
 
@@ -849,9 +656,11 @@ mod tests {
             for bg in u8::MIN..=u8::MAX {
                 let target = [solid, bg, bg];
                 let background = [bg; 3];
-                let floor = first_srgb8_alpha(target, background);
+                let target = crate::Srgb8::new(target);
+                let background = crate::Srgb8::new(background);
+                let floor = crate::analog::first_alpha(target, background);
                 assert!(
-                    srgb8_tint_at_alpha(target, floor, background).is_some(),
+                    crate::analog::tint_at_alpha(target, floor, background).is_some(),
                     "solid={solid}, bg={bg}, floor={floor} не проходит"
                 );
                 if solid == bg {
@@ -859,7 +668,7 @@ mod tests {
                 } else {
                     let predecessor = f64::from_bits(floor.to_bits() - 1);
                     assert!(
-                        srgb8_tint_at_alpha(target, predecessor, background).is_none(),
+                        crate::analog::tint_at_alpha(target, predecessor, background).is_none(),
                         "solid={solid}, bg={bg}: predecessor={predecessor} тоже проходит"
                     );
                 }
@@ -874,16 +683,19 @@ mod tests {
     #[test]
     fn srgb8_resolver_quantises_target_before_inversion_and_guard_rejects_drift() {
         let off_grid_solid = [0.25 / 255.0; 3];
-        let resolved: Result<([u8; 3], f64), String> =
-            resolve_alpha_analog_srgb8(off_grid_solid, 0.5, [0.0; 3]);
-        let (tint, alpha) = resolved.expect("валидный домен всегда имеет конечный sRGB8-ответ");
+        let target = crate::Srgb8::new(encoded_to_srgb8(off_grid_solid, "solid").unwrap());
+        let backdrop = crate::Srgb8::new([0; 3]);
+        let verified = crate::analog::resolve_verified(
+            crate::analog::AuthoredAlphaBindingIdV1::Standalone,
+            target,
+            0.5,
+            backdrop,
+        )
+        .expect("валидный домен всегда имеет конечный sRGB8-ответ");
+        let tint = verified.tint().bytes();
+        let alpha = verified.alpha();
         assert_eq!(tint, [0; 3]);
         assert_eq!(composite_over_srgb8(tint, alpha, [0; 3]).unwrap(), [0; 3]);
-
-        assert!(
-            verify_srgb8_alpha_analog([0; 3], [1; 3], 0.5, [0; 3]).is_err(),
-            "пара из старого off-grid пути обязана быть отвергнута"
-        );
     }
 
     /// Обратный ход на живых парах: восстановленный тинт отклоняется от

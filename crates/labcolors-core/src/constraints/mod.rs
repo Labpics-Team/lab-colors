@@ -4,18 +4,26 @@
 //! сохраняет identity физического evidence и release реально вызванного
 //! evaluator-а.
 
+#[cfg(test)]
 use crate::appearance::{ModeledSrgb8PointOccurrence, ResolvedOccurrence, VisiblePointBindingV1};
 
+mod exact;
+pub(crate) use exact::{ExactConstraintIdentityV1, ExactIdentityMismatchV1, ExactSrgb8IdentityV1};
+
+#[cfg(test)]
 mod wcag22;
 
+#[cfg(test)]
 pub(crate) use wcag22::Wcag22Srgb8V1;
 
 /// Marker-ы недоступны внешним crate-ам: новые target/evaluator families
 /// добавляются только вместе с code-owned physical adapter-ом.
+#[cfg(test)]
 mod private {
     pub trait EvaluatorSealed {}
 }
 
+#[cfg(test)]
 pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
     type Invocation;
     type Release;
@@ -34,12 +42,14 @@ pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
 /// Assessment вместе с exact physical binding и evaluator release.
 /// Поля закрыты, чтобы genuine result нельзя было пересвязать вручную.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(test)]
 pub(crate) struct BoundAssessment<Binding, Release, Assessment> {
     binding: Binding,
     release: Release,
     assessment: Assessment,
 }
 
+#[cfg(test)]
 impl<Binding, Release, Assessment> BoundAssessment<Binding, Release, Assessment> {
     pub(crate) fn binding(&self) -> &Binding {
         &self.binding
@@ -54,6 +64,7 @@ impl<Binding, Release, Assessment> BoundAssessment<Binding, Release, Assessment>
     }
 }
 
+#[cfg(test)]
 pub(crate) type AssessmentResult<Evaluation> = Result<
     BoundAssessment<
         VisiblePointBindingV1,
@@ -63,6 +74,7 @@ pub(crate) type AssessmentResult<Evaluation> = Result<
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error,
 >;
 
+#[cfg(test)]
 pub(crate) fn assess<Evaluation>(
     source: &ResolvedOccurrence,
     evaluator: &Evaluation,

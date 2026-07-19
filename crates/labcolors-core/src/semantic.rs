@@ -542,9 +542,8 @@ pub enum RoleSpec {
         tint: crate::ladder::LadderTint,
         /// Контрактная ступень стека.
         step: crate::glow::GlowStep,
-        /// Typed execution mode compiled invocation (#292). Прежние
-        /// config/wire-ключи `stable-v1 | legacy-platform-dependent-v1` —
-        /// migration adapter на границе, не core-семантика.
+        /// Typed execution mode реально выбирает зарегистрированный numerical
+        /// path. Wire-ключ — его boundary-проекция, а не декоративный metadata.
         mode: crate::numerical_plan::NumericalExecutionModeV1,
     },
     /// Заливка пары (внутренний модуль `pair`): якорь источника, сдвинутый до победы
@@ -594,8 +593,8 @@ pub enum RoleSpec {
         /// поле должно отсутствовать; `Some(Floor::None)` тоже невалиден.
         floor: Option<Floor>,
     },
-    /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`],
-    /// #119): для солид-цвета `of` (по теме) на фоне резолва подбирается
+    /// Альфа-аналог солида источника через композит-инверсию ([`crate::alpha`]):
+    /// для солид-цвета `of` (по теме) на фоне резолва подбирается
     /// `(tint, α)`, чей композит равен солиду. Отличается от [`Ladder`](Self::Ladder)
     /// тем, что здесь солид-цель ФИКСИРОВАНА (тинт выводится инверсией), а не
     /// тинт-якорь эмитится напрямую. Даёт `-tinted`-роли labui (fill-*-tinted):
@@ -2218,7 +2217,7 @@ fn resolve_spec_in(
         RoleSpec::Glow { tint, step, mode } => {
             // Свечение: halo = якорь источника по теме; core — пересвет;
             // интенсивность решается под контрактную ступень на фоне резолва.
-            // Typed execution mode исполняется ПРЯМО из compiled spec (#292):
+            // Typed execution mode исполняется ПРЯМО из compiled spec:
             // никакого plan lookup или string policy selection в hot path.
             let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
             let bg_hex =
@@ -2315,10 +2314,13 @@ fn resolve_spec_in(
             };
         }
         RoleSpec::AlphaAnalog { of, alpha } => {
-            // Альфа-аналог: солид-цель фиксирована (тинт источника по теме),
-            // тинт выводится композит-инверсией (`crate::alpha`, #119). Фактическая
-            // α поднимается до α_min, если запрошенная неразрешима в гамуте.
-            return resolve_rgba_inverted(of.for_vc(vc), alpha, bg, vc);
+            let _ = (of, alpha);
+            // Named runtime обязан перехватить этот ordinal скомпилированной
+            // invocation до recipe-dispatch. Исполнение raw variant здесь
+            // создало бы второй источник физики.
+            return Err(SolveFailure::InternalInvariant(
+                "alpha-analog recipe bypassed its compiled invocation".into(),
+            ));
         }
         RoleSpec::Material { hue, tone, floor } => {
             // Материал (whitepaper, «Точечные композиции»): тон-база — опаковая
@@ -2742,7 +2744,8 @@ pub(crate) fn resolve_pair_label_manual_composite_oracle(
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
 /// инвертируется в `(tint, фактическая α)`. Перед инверсией цель квантуется до
 /// эмитируемой sRGB8-сетки; production-композитор обязан побайтно вернуть её.
-fn resolve_rgba_inverted(
+fn resolve_rgba_inverted_with_binding(
+    authored: crate::analog::AuthoredAlphaBindingIdV1,
     solid_encoded: [f64; 3],
     requested_alpha: f64,
     bg: &BgInput,
@@ -2761,22 +2764,58 @@ fn resolve_rgba_inverted(
             "alpha-analog alpha must be finite and inside (0, 1]".into(),
         ));
     }
-    let bg_encoded = bg.encoded_display();
-    let solid_q = quantise_encoded(solid_encoded);
-    let analog =
-        match crate::alpha::resolve_alpha_analog_srgb8(solid_q, requested_alpha, bg_encoded) {
-            Ok(analog) => analog,
+    let target = match crate::alpha::encoded_to_srgb8(solid_encoded, "solid") {
+        Ok(target) => Srgb8::new(target),
+        Err(error) => {
+            return Err(SolveFailure::InternalInvariant(format!(
+                "validated alpha-analog target left encoded sRGB domain: {error}"
+            )));
+        }
+    };
+    let backdrop = match crate::alpha::encoded_to_srgb8(bg.encoded_display(), "bg") {
+        Ok(backdrop) => Srgb8::new(backdrop),
+        Err(error) => {
+            return Err(SolveFailure::InternalInvariant(format!(
+                "validated alpha-analog backdrop left encoded sRGB domain: {error}"
+            )));
+        }
+    };
+    let verified =
+        match crate::analog::resolve_verified(authored, target, requested_alpha, backdrop) {
+            Ok(verified) => verified,
             Err(error) => {
                 return Err(SolveFailure::InternalInvariant(format!(
                     "validated alpha-analog resolver violated its total-domain contract: {error}"
                 )));
             }
         };
-    let (tint_srgb8, actual_alpha) = analog;
-    let tint_q = Srgb8::new(tint_srgb8).encoded();
+    let actual_alpha = verified.alpha();
     // Резолвер возвращает тот же binary64 либо строго больший точный пол.
     let alpha_coerced = actual_alpha > requested_alpha;
-    finish_rgba(tint_q, actual_alpha, bg_encoded, vc, alpha_coerced, false)
+    finish_rgba_from_occurrence(
+        verified.tint(),
+        actual_alpha,
+        verified.occurrence(),
+        vc,
+        alpha_coerced,
+        false,
+    )
+}
+
+#[cfg(test)]
+fn resolve_rgba_inverted(
+    solid_encoded: [f64; 3],
+    requested_alpha: f64,
+    bg: &BgInput,
+    vc: &ViewingConditions,
+) -> PendingResolution {
+    resolve_rgba_inverted_with_binding(
+        crate::analog::AuthoredAlphaBindingIdV1::Standalone,
+        solid_encoded,
+        requested_alpha,
+        bg,
+        vc,
+    )
 }
 
 /// Собрать [`Resolved::Translucent`] из эмитируемых тинта и альфы: вывести их
@@ -2793,27 +2832,46 @@ fn finish_rgba(
     alpha_coerced: bool,
     floor_coerced: bool,
 ) -> PendingResolution {
-    use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex, srgb_gamma_inv};
-    // Единый байтовый домен SSOT нужен и для hex, и для обеих метрик:
-    // нормализация `(byte/255)·255` способна изменить граничное значение
-    // половинного округления на один LSB.
-    let composite_hex =
-        match crate::alpha::composite_hex_from_encoded(tint_encoded, alpha, bg_encoded) {
-            Ok(hex) => hex,
-            Err(error) => {
-                return Err(SolveFailure::InternalInvariant(format!(
-                    "rgba-композит вне encoded-sRGB8 reference-домена: {error}"
-                )));
-            }
-        };
-    let composite_q = match srgb_encoded_from_hex(&composite_hex) {
-        Ok(value) => value,
-        Err(reason) => {
-            return Err(SolveFailure::InternalInvariant(format!(
-                "rgba formatter emitted an invalid sRGB hex: {reason}"
-            )));
-        }
-    };
+    let tint = crate::alpha::encoded_to_srgb8(tint_encoded, "tint")
+        .map(Srgb8::new)
+        .map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "rgba tint вне encoded-sRGB8 reference-домена: {error}"
+            ))
+        })?;
+    let backdrop = crate::alpha::encoded_to_srgb8(bg_encoded, "bg")
+        .map(Srgb8::new)
+        .map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "rgba backdrop вне encoded-sRGB8 reference-домена: {error}"
+            ))
+        })?;
+    let occurrence = PointOpacityOverSurfaceV1::evaluate(tint.bytes(), alpha, backdrop.bytes())
+        .map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "rgba-композит вне encoded-sRGB8 reference-домена: {}",
+                error.message()
+            ))
+        })?;
+    finish_rgba_from_occurrence(tint, alpha, &occurrence, vc, alpha_coerced, floor_coerced)
+}
+
+/// Финальная эмиссия читает байты уже исполненного occurrence. Ветка не умеет
+/// композитить повторно, поэтому exact gate и публичный compositeHex физически
+/// ссылаются на один результат.
+fn finish_rgba_from_occurrence(
+    tint: Srgb8,
+    alpha: f64,
+    occurrence: &crate::appearance::ResolvedOccurrence,
+    vc: &ViewingConditions,
+    alpha_coerced: bool,
+    floor_coerced: bool,
+) -> PendingResolution {
+    use crate::spaces::srgb::srgb_gamma_inv;
+    let composite = Srgb8::new(occurrence.visible());
+    let backdrop = Srgb8::new(occurrence.backdrop());
+    let composite_q = composite.encoded();
+    let bg_encoded = backdrop.encoded();
     // Линейный свет из кодированного (per-channel gamma-декод) для Ys candidate score.
     let decode = |e: [f64; 3]| {
         [
@@ -2828,12 +2886,12 @@ fn finish_rgba(
     let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
     // Отличимость в encoded-sRGB8 reference: сравнение по тем же
     // 8-битным hex, из которых строится сертификат. Фон квантуется тем же
-    // форматтером; применимость к рендереру проверяется отдельно (#241).
-    let composite_distinct = composite_hex != hex_from_srgb_encoded(bg_encoded);
+    // форматтером; этот вердикт не распространяется на иной renderer pipeline.
+    let composite_distinct = composite != backdrop;
     Ok(Resolved::Translucent(TranslucentResolved {
-        tint_hex: hex_from_srgb_encoded(tint_encoded),
+        tint_hex: tint.to_hex(),
         alpha,
-        composite_hex,
+        composite_hex: composite.to_hex(),
         composite_lc,
         composite_wcag,
         composite_distinct,
@@ -3081,11 +3139,98 @@ pub(crate) fn resolve_set_live(
 ///
 /// Entries are independent opaque nodes. Declaration order never implies a
 /// hierarchy or dependency; relations must arrive as explicit typed graph edges.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
     aliases: Vec<(String, String)>,
     chroma: RoleChroma,
+    alpha_analog_invocations: Box<[CompiledAlphaAnalogInvocationV1]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AdmittedRequestedAlphaV1(f64);
+
+impl AdmittedRequestedAlphaV1 {
+    fn parse(value: f64) -> Option<Self> {
+        role_alpha_valid(value).then_some(Self(value))
+    }
+
+    const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CompiledAlphaAnalogInvocationV1 {
+    declaration_ordinal: usize,
+    target: LadderTint,
+    requested_alpha: AdmittedRequestedAlphaV1,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ALPHA_BINDING_PLAN_COMPILATIONS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn reset_alpha_binding_plan_compilation_count() {
+    ALPHA_BINDING_PLAN_COMPILATIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn alpha_binding_plan_compilation_count() -> usize {
+    ALPHA_BINDING_PLAN_COMPILATIONS.with(std::cell::Cell::get)
+}
+
+impl CompiledAlphaAnalogInvocationV1 {
+    fn resolve(self, bg: &BgInput, vc: &ViewingConditions) -> PendingResolution {
+        resolve_rgba_inverted_with_binding(
+            crate::analog::AuthoredAlphaBindingIdV1::Named {
+                declaration_ordinal: self.declaration_ordinal,
+            },
+            self.target.for_vc(vc),
+            self.requested_alpha.get(),
+            bg,
+            vc,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AlphaAnalogCompileErrorV1 {
+    declaration_ordinal: usize,
+    value: f64,
+}
+
+impl AlphaAnalogCompileErrorV1 {
+    pub(crate) const fn declaration_ordinal(self) -> usize {
+        self.declaration_ordinal
+    }
+
+    pub(crate) const fn value(self) -> f64 {
+        self.value
+    }
+}
+
+impl core::fmt::Debug for NamedRoleTable {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NamedRoleTable")
+            .field("entries", &self.entries)
+            .field("aliases", &self.aliases)
+            .field("chroma", &self.chroma)
+            .finish()
+    }
+}
+
+impl PartialEq for NamedRoleTable {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+            && self.aliases == other.aliases
+            && self.chroma == other.chroma
+    }
 }
 
 impl RoleSpec {
@@ -3243,7 +3388,19 @@ impl NamedRoleTable {
             spec.validate_with_chroma(chroma)
                 .map_err(|message| SolveFailure::InvalidInput(format!("role {name}: {message}")))?;
         }
-        Ok(Self::from_validated_parts(entries, aliases, chroma))
+        let alpha_analog_invocations =
+            Self::compile_alpha_analog_invocations(&entries).map_err(|error| {
+                SolveFailure::InvalidInput(format!(
+                    "role {}: alpha-analog alpha must be finite and inside (0, 1], got {}",
+                    entries[error.declaration_ordinal].0, error.value
+                ))
+            })?;
+        Ok(Self::from_compiled_parts(
+            entries,
+            aliases,
+            chroma,
+            alpha_analog_invocations,
+        ))
     }
 
     /// Собирает таблицу из частей, уже проверенных [`ThemeConfig::validate`].
@@ -3254,12 +3411,62 @@ impl NamedRoleTable {
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
+    ) -> Result<Self, AlphaAnalogCompileErrorV1> {
+        let alpha_analog_invocations = Self::compile_alpha_analog_invocations(&entries)?;
+        Ok(Self::from_compiled_parts(
+            entries,
+            aliases,
+            chroma,
+            alpha_analog_invocations,
+        ))
+    }
+
+    fn from_compiled_parts(
+        entries: Vec<(String, RoleSpec)>,
+        aliases: Vec<(String, String)>,
+        chroma: RoleChroma,
+        alpha_analog_invocations: Box<[CompiledAlphaAnalogInvocationV1]>,
     ) -> Self {
         Self {
             entries,
             aliases,
             chroma,
+            alpha_analog_invocations,
         }
+    }
+
+    fn compile_alpha_analog_invocations(
+        entries: &[(String, RoleSpec)],
+    ) -> Result<Box<[CompiledAlphaAnalogInvocationV1]>, AlphaAnalogCompileErrorV1> {
+        #[cfg(test)]
+        ALPHA_BINDING_PLAN_COMPILATIONS.with(|count| count.set(count.get() + 1));
+        let mut invocations = Vec::new();
+        for (declaration_ordinal, (_, spec)) in entries.iter().enumerate() {
+            let RoleSpec::AlphaAnalog { of, alpha } = *spec else {
+                continue;
+            };
+            let requested_alpha =
+                AdmittedRequestedAlphaV1::parse(alpha).ok_or(AlphaAnalogCompileErrorV1 {
+                    declaration_ordinal,
+                    value: alpha,
+                })?;
+            invocations.push(CompiledAlphaAnalogInvocationV1 {
+                declaration_ordinal,
+                target: of,
+                requested_alpha,
+            });
+        }
+        debug_assert!(
+            invocations
+                .windows(2)
+                .all(|pair| pair[0].declaration_ordinal < pair[1].declaration_ordinal)
+        );
+        debug_assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.declaration_ordinal < entries.len())
+        );
+        Ok(invocations.into_boxed_slice())
     }
 
     /// Алиасы `(имя, цель)` сохраняются в скомпилированном контракте, чтобы
@@ -3335,9 +3542,31 @@ pub fn resolve_named_set(
     let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
     let mut set = Vec::with_capacity(table.entries.len());
-    for (name, spec) in &table.entries {
-        let resolved = admit_resolution(resolve_spec_in(bg, spec, table.chroma, vc, &ctx))?;
+    let mut alpha_invocations = table.alpha_analog_invocations.iter().copied().peekable();
+    for (declaration_ordinal, (name, spec)) in table.entries.iter().enumerate() {
+        let pending = match alpha_invocations.peek().copied() {
+            Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
+                return Err(ResolveSetError {
+                    state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
+                        "compiled alpha-analog invocation order drifted behind declarations".into(),
+                    )),
+                });
+            }
+            Some(invocation) if invocation.declaration_ordinal == declaration_ordinal => {
+                alpha_invocations.next();
+                invocation.resolve(bg, vc)
+            }
+            _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+        };
+        let resolved = admit_resolution(pending)?;
         set.push((name.clone(), resolved));
+    }
+    if alpha_invocations.next().is_some() {
+        return Err(ResolveSetError {
+            state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
+                "compiled alpha-analog invocation points outside declarations".into(),
+            )),
+        });
     }
     Ok(set)
 }
@@ -3793,6 +4022,7 @@ fn bg_display(bg: &BgInput) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn admission_preserves_every_failure_category_code_and_reason() {
@@ -3870,9 +4100,9 @@ mod tests {
     }
 
     #[test]
-    fn last_role_rejection_closes_named_set_without_partial_output() {
+    fn invalid_alpha_cannot_enter_a_compiled_named_table() {
         let source = crate::spaces::srgb::srgb_encoded_from_hex("#3478F6").unwrap();
-        let table = NamedRoleTable::from_validated_parts(
+        let error = NamedRoleTable::from_validated_parts(
             vec![
                 ("first".into(), RoleSpec::Zero),
                 (
@@ -3885,21 +4115,186 @@ mod tests {
             ],
             Vec::new(),
             RoleChroma::Neutral,
-        );
-        let error = resolve_named_set(
+        )
+        .expect_err("invalid requested alpha must fail before a table exists");
+        assert_eq!(error.declaration_ordinal(), 1);
+        assert!(error.value().is_nan());
+    }
+
+    #[test]
+    fn named_alpha_analog_uses_only_its_compiled_invocation_and_guards_plan_drift() {
+        let target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
+        let table = NamedRoleTable::new(
+            vec![
+                ("plain".into(), RoleSpec::Zero),
+                (
+                    "analog".into(),
+                    RoleSpec::AlphaAnalog {
+                        of: LadderTint::new([target; 4]).unwrap(),
+                        alpha: 0.5,
+                    },
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        assert_eq!(table.alpha_analog_invocations.len(), 1);
+        assert_eq!(table.alpha_analog_invocations[0].declaration_ordinal, 1);
+
+        crate::composition::reset_source_over_evaluation_count();
+        let set = resolve_named_set(
             &BgInput::solid("#FFFFFF").unwrap(),
             &table,
             &ViewingConditions::srgb(),
         )
-        .expect_err("late rejected input must not expose a partial set");
-        assert_eq!(error.kind(), ResolveSetErrorKind::Rejected);
-        assert_eq!(error.code(), Some("invalid_input"));
+        .expect("compiled invocation must intercept the raw recipe arm");
+        assert_eq!(set[1].1.translucent().unwrap().composite_hex(), "#787880");
+        assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+
+        let mut missing = table.clone();
+        missing.alpha_analog_invocations = Box::default();
         assert_eq!(
-            error.reason(),
-            &SolveFailure::InvalidInput(
-                "alpha-analog alpha must be finite and inside (0, 1]".into()
-            )
+            missing, table,
+            "derived execution state is outside public equality"
         );
+        assert_eq!(format!("{missing:?}"), format!("{table:?}"));
+        let error = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &missing,
+            &ViewingConditions::srgb(),
+        )
+        .expect_err("missing compiled invocation must not fall back to recipe execution");
+        assert_eq!(error.kind(), ResolveSetErrorKind::Internal);
+        assert!(matches!(error.reason(), SolveFailure::InternalInvariant(_)));
+    }
+
+    #[test]
+    fn named_alpha_dispatch_does_not_read_recipe_kind_after_lowering() {
+        let target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
+        let mut table = NamedRoleTable::new(
+            vec![(
+                "opaque-client-id".into(),
+                RoleSpec::AlphaAnalog {
+                    of: LadderTint::new([target; 4]).unwrap(),
+                    alpha: 0.5,
+                },
+            )],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        table.entries[0].1 = RoleSpec::Zero;
+
+        let set = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        )
+        .expect("compiled ordinal dispatch must not reopen the authored recipe");
+        assert_eq!(set[0].1.translucent().unwrap().composite_hex(), "#787880");
+    }
+
+    #[test]
+    fn alpha_binding_plan_is_sparse_compiled_once_and_reused() {
+        let first_target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
+        let second_target = crate::spaces::srgb::srgb_encoded_from_hex("#406080").unwrap();
+        reset_alpha_binding_plan_compilation_count();
+        let table = NamedRoleTable::new(
+            vec![
+                (
+                    "first".into(),
+                    RoleSpec::AlphaAnalog {
+                        of: LadderTint::new([first_target; 4]).unwrap(),
+                        alpha: 0.5,
+                    },
+                ),
+                ("unrelated".into(), RoleSpec::Zero),
+                (
+                    "second".into(),
+                    RoleSpec::AlphaAnalog {
+                        of: LadderTint::new([second_target; 4]).unwrap(),
+                        alpha: 0.75,
+                    },
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        assert_eq!(alpha_binding_plan_compilation_count(), 1);
+        assert_eq!(
+            table
+                .alpha_analog_invocations
+                .iter()
+                .map(|invocation| invocation.declaration_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+
+        let cloned = table.clone();
+        let backdrop = BgInput::solid("#FFFFFF").unwrap();
+        for current in [&table, &table, &cloned] {
+            let set = resolve_named_set(&backdrop, current, &ViewingConditions::srgb()).unwrap();
+            assert_eq!(set.len(), 3);
+        }
+        assert_eq!(alpha_binding_plan_compilation_count(), 1);
+
+        let without_analogs = NamedRoleTable::new(
+            vec![("unrelated".into(), RoleSpec::Zero)],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        assert!(without_analogs.alpha_analog_invocations.is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn public_helper_and_named_compiled_invocation_share_exact_bytes(
+            target_bytes in any::<[u8; 3]>(),
+            backdrop_bytes in any::<[u8; 3]>(),
+            alpha_step in 1_u16..=1024,
+        ) {
+            let target = Srgb8::new(target_bytes);
+            let backdrop = Srgb8::new(backdrop_bytes);
+            let requested_alpha = f64::from(alpha_step) / 1024.0;
+            let table = NamedRoleTable::new(
+                vec![(
+                    "opaque-client-id".into(),
+                    RoleSpec::AlphaAnalog {
+                        of: LadderTint::new([target.encoded(); 4]).unwrap(),
+                        alpha: requested_alpha,
+                    },
+                )],
+                Vec::new(),
+                RoleChroma::Neutral,
+            )
+            .unwrap();
+            let named = resolve_named_set(
+                &BgInput::solid(&backdrop.to_hex()).unwrap(),
+                &table,
+                &ViewingConditions::srgb(),
+            )
+            .unwrap();
+            let named = named[0].1.translucent().unwrap();
+            let (public_tint, public_alpha) = crate::alpha::resolve_alpha_analog_hex(
+                &target.to_hex(),
+                requested_alpha,
+                &backdrop.to_hex(),
+            )
+            .unwrap();
+
+            prop_assert_eq!(named.tint_hex(), public_tint.as_str());
+            prop_assert_eq!(named.alpha().to_bits(), public_alpha.to_bits());
+            prop_assert_eq!(named.composite_hex(), target.to_hex());
+            prop_assert_eq!(
+                crate::alpha::composite_hex(&public_tint, public_alpha, &backdrop.to_hex()).unwrap(),
+                target.to_hex()
+            );
+        }
     }
 
     #[test]
@@ -6542,6 +6937,24 @@ mod tests {
         assert!(
             !direct.translucent().unwrap().alpha_coerced(),
             "прямая rgba-лестница эмитит α как есть — флаг всегда false"
+        );
+    }
+
+    #[test]
+    fn alpha_analog_semantic_path_evaluates_final_source_over_once() {
+        let vc = ViewingConditions::srgb();
+        let background = BgInput::solid("#FFFFFF").unwrap();
+        let target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
+
+        crate::alpha::reset_source_over_evaluation_count();
+        let resolved = resolve_rgba_inverted(target, 0.5, &background, &vc)
+            .expect("valid alpha analog must resolve");
+
+        assert_eq!(resolved.translucent().unwrap().composite_hex(), "#787880");
+        assert_eq!(
+            crate::alpha::source_over_evaluation_count(),
+            1,
+            "proposal, exact gate and semantic emission must share one final occurrence"
         );
     }
 

@@ -7,7 +7,7 @@
 //! не входят.
 //!
 //! Единственная операция композиции — версионированный exact-композитор
-//! [`crate::alpha::composite_over_srgb8`]. `Opacity` только умножает straight
+//! [`crate::composition`]. `Opacity` только умножает straight
 //! alpha уже материализованного Paint и никогда не композитит промежуточный
 //! результат.
 //!
@@ -91,6 +91,39 @@ pub(crate) enum CompositionProfileV1 {
     /// финального канала. Это exact-профиль Lab Colors, не обещание о
     /// произвольном браузерном или HDR pipeline.
     EncodedSrgb8SourceOverV1,
+}
+
+/// Структурная identity статической физической программы. Она описывает
+/// topology/opcode/profile, а не числовые handles декларации или client ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PhysicalProgramIdentityV1 {
+    SolidOpacityOverSurfaceEncodedSrgb8V1,
+}
+
+/// Routing внутри одной compiled point-программы отделён от физического
+/// source-over proof. Эти code-owned handles не являются client-authored ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramOccurrenceBindingV1 {
+    occurrence: OccurrenceId,
+    subject: PaintId,
+    backdrop_surface: SurfaceId,
+}
+
+impl ProgramOccurrenceBindingV1 {
+    #[cfg(test)]
+    pub(crate) const fn occurrence(self) -> OccurrenceId {
+        self.occurrence
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn subject(self) -> PaintId {
+        self.subject
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn backdrop_surface(self) -> SurfaceId {
+        self.backdrop_surface
+    }
 }
 
 /// Paint-конструкторы point-домена. Ни один вариант не знает Surface.
@@ -258,7 +291,7 @@ pub(crate) enum BindingError {
 /// Единственный отказ sealed point-adapter-а: невалидная authored alpha.
 /// Topology/bindings не представлены во входном типе и потому не могут дать
 /// runtime-ошибку.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PointOpacityError {
     message: String,
 }
@@ -853,12 +886,17 @@ const POINT_OPACITY_OVER_SURFACE_V1: CompiledAppearanceProgram<'static> =
 pub(crate) struct PointOpacityOverSurfaceV1;
 
 impl PointOpacityOverSurfaceV1 {
+    pub(crate) const fn physical_identity() -> PhysicalProgramIdentityV1 {
+        PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
+    }
+
     pub(crate) fn evaluate(
         source: [u8; 3],
         opacity: f64,
         backdrop: [u8; 3],
     ) -> Result<ResolvedOccurrence, PointOpacityError> {
-        crate::alpha::validate_alpha(opacity).map_err(|message| PointOpacityError { message })?;
+        crate::composition::validate_alpha(opacity)
+            .map_err(|message| PointOpacityError { message })?;
         let opacity = if opacity == 0.0 { 0.0 } else { opacity };
         let mut paints = [None; 2];
         let mut surfaces = [None; 2];
@@ -980,11 +1018,8 @@ impl ResolvedPaint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceOverCertificateV1 {
     profile: CompositionProfileV1,
-    occurrence: OccurrenceId,
-    subject: PaintId,
     subject_rgb: [u8; 3],
     subject_opacity_bits: u64,
-    backdrop_surface: SurfaceId,
     backdrop_rgb: [u8; 3],
     output_rgb: [u8; 3],
 }
@@ -993,11 +1028,13 @@ impl SourceOverCertificateV1 {
     #[cfg(test)]
     pub(crate) fn replay(&self) -> Result<[u8; 3], String> {
         match self.profile {
-            CompositionProfileV1::EncodedSrgb8SourceOverV1 => crate::alpha::composite_over_srgb8(
-                self.subject_rgb,
-                f64::from_bits(self.subject_opacity_bits),
-                self.backdrop_rgb,
-            ),
+            CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
+                crate::composition::source_over_srgb8(
+                    self.subject_rgb,
+                    f64::from_bits(self.subject_opacity_bits),
+                    self.backdrop_rgb,
+                )
+            }
         }
     }
 
@@ -1006,29 +1043,12 @@ impl SourceOverCertificateV1 {
         self.profile
     }
 
-    #[cfg(test)]
-    pub(crate) fn occurrence(&self) -> OccurrenceId {
-        self.occurrence
-    }
-
-    #[cfg(test)]
-    pub(crate) fn subject(&self) -> PaintId {
-        self.subject
-    }
-
-    #[cfg(test)]
     pub(crate) fn subject_rgb(&self) -> [u8; 3] {
         self.subject_rgb
     }
 
-    #[cfg(test)]
     pub(crate) fn subject_opacity_bits(&self) -> u64 {
         self.subject_opacity_bits
-    }
-
-    #[cfg(test)]
-    pub(crate) fn backdrop_surface(&self) -> SurfaceId {
-        self.backdrop_surface
     }
 
     #[cfg(test)]
@@ -1070,7 +1090,6 @@ impl ResolvedOccurrence {
         self.against
     }
 
-    #[cfg(test)]
     pub(crate) fn backdrop(&self) -> [u8; 3] {
         self.backdrop
     }
@@ -1089,10 +1108,20 @@ impl ResolvedOccurrence {
 
     #[cfg(test)]
     pub(crate) fn visible_point_binding(&self) -> VisiblePointBindingV1 {
-        VisiblePointBindingV1(self.certificate)
+        VisiblePointBindingV1 {
+            program_occurrence: self.program_occurrence_binding(),
+            occurrence: self.certificate,
+        }
     }
 
-    #[cfg(test)]
+    pub(crate) const fn program_occurrence_binding(&self) -> ProgramOccurrenceBindingV1 {
+        ProgramOccurrenceBindingV1 {
+            occurrence: self.id,
+            subject: self.subject,
+            backdrop_surface: self.against,
+        }
+    }
+
     pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
         &self.certificate
     }
@@ -1124,12 +1153,15 @@ impl ModeledSrgb8PointOccurrence {
 /// что финальные байты случайно совпали.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
-pub(crate) struct VisiblePointBindingV1(SourceOverCertificateV1);
+pub(crate) struct VisiblePointBindingV1 {
+    program_occurrence: ProgramOccurrenceBindingV1,
+    occurrence: SourceOverCertificateV1,
+}
 
 #[cfg(test)]
 impl VisiblePointBindingV1 {
-    pub(crate) fn certificate(self) -> SourceOverCertificateV1 {
-        self.0
+    pub(crate) fn program_occurrence(self) -> ProgramOccurrenceBindingV1 {
+        self.program_occurrence
     }
 }
 
@@ -1262,7 +1294,7 @@ impl CompiledAppearanceProgram<'_> {
             }
         }
         for (input, alpha) in opacities {
-            if let Err(message) = crate::alpha::validate_alpha(*alpha) {
+            if let Err(message) = crate::composition::validate_alpha(*alpha) {
                 return Err(BindingError::OpacityOutOfDomain {
                     input: *input,
                     message,
@@ -1404,7 +1436,7 @@ impl CompiledAppearanceProgram<'_> {
                     });
                     let visible = match spec.profile {
                         CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
-                            crate::alpha::composite_over_srgb8_validated(
+                            crate::composition::source_over_srgb8_validated(
                                 subject.rgb.bytes(),
                                 f64::from_bits(subject.opacity_bits),
                                 backdrop.bytes(),
@@ -1413,11 +1445,8 @@ impl CompiledAppearanceProgram<'_> {
                     };
                     let certificate = SourceOverCertificateV1 {
                         profile: spec.profile,
-                        occurrence: spec.id,
-                        subject: spec.subject_id,
                         subject_rgb: subject.rgb.bytes(),
                         subject_opacity_bits: subject.opacity_bits,
-                        backdrop_surface: spec.against_id,
                         backdrop_rgb: backdrop.bytes(),
                         output_rgb: visible,
                     };
