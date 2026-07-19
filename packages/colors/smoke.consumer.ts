@@ -13,6 +13,8 @@ import init, {
 import type {
   FailureCategory,
   FailureRole,
+  OutputConflict,
+  OutputConflictError,
   GlowDiagnosticProfileV1,
   GlowDeterminateRole,
   GlowDeterminateRoleBase,
@@ -38,16 +40,17 @@ const requireFailure = (_role: FailureRole): void => {};
 requireFailure({
   kind: "failure",
   cssVar: "--lab-example",
-  category: "unreachable",
-  code: "exceeds_range",
-  message: "physical output range exhausted",
+  category: "unresolved",
+  code: "bounded_search_exhausted",
+  message: "bounded search exhausted",
 });
 requireFailure({
   kind: "failure",
   cssVar: "--lab-example",
-  category: "unresolved",
-  code: "bounded_search_exhausted",
-  message: "bounded search exhausted",
+  // @ts-expect-error Unreachable rejects the whole snapshot as OutputConflictError.
+  category: "unreachable",
+  code: "exceeds_range",
+  message: "physical output range exhausted",
 });
 requireFailure({
   kind: "failure",
@@ -74,8 +77,17 @@ requireFailure({
   message: "x",
 });
 
-const admittedFailureCategory: FailureCategory = "unreachable";
+const admittedFailureCategory: FailureCategory = "unresolved";
 void admittedFailureCategory;
+
+declare const outputConflict: OutputConflictError;
+const outputConflictName: "OutputConflictError" = outputConflict.name;
+const outputConflictCode: "output_conflict" = outputConflict.code;
+const firstOutputConflict: OutputConflict = outputConflict.conflicts[0];
+const opaqueRole: string = firstOutputConflict.role;
+void outputConflictName;
+void outputConflictCode;
+void opaqueRole;
 
 declare const glowDeterminateCommon: GlowDeterminateRoleBase;
 const requireGlowDeterminate = (_role: GlowDeterminateRole): void => {};
@@ -208,6 +220,10 @@ async function consume(clientConfigJson: string): Promise<void> {
 
   const theme: ThemeName = "light";
   const result: ResolvedTheme = engine.resolveTheme("#FFFFFF", theme);
+  // @ts-expect-error resolver snapshots are immutable values.
+  result.vars["--lab-injected"] = "#000000";
+  // @ts-expect-error role dictionaries are immutable values.
+  result.roles.injected = { kind: "none", cssVar: "--lab-injected" };
 
   // The discriminated union narrows on `kind`.
   const primary: RoleResult = result.roles["label-primary"];
@@ -271,6 +287,8 @@ async function consume(clientConfigJson: string): Promise<void> {
     },
   });
   const applied: ResolvedTheme = controller.refresh();
+  // @ts-expect-error the controller returns its immutable admitted snapshot.
+  applied.vars["--lab-injected"] = "#000000";
   void applied;
   controller.setTheme("dark");
   const bgHex: string = controller.background();

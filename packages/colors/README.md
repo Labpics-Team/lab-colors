@@ -183,10 +183,10 @@ await initRuntime({ module_or_path: runtimeWasm });
 
 ```ts
 interface ResolvedTheme {
-  theme: ThemeName;
-  background: string;                     // нормализованный #RRGGBB
-  vars: Record<string, string>;           // роли с выбранным CSS-значением: "--lab-<ключ>" → oklch
-  roles: Record<string, RoleResult>;      // все роли с деталями
+  readonly theme: ThemeName;
+  readonly background: string;                                  // нормализованный #RRGGBB
+  readonly vars: Readonly<Record<string, string>>;               // "--lab-<ключ>" → oklch
+  readonly roles: Readonly<Record<string, RoleResult>>;          // все роли с деталями
 }
 
 type RoleResult =
@@ -238,23 +238,28 @@ type RoleResult =
   это platform-characterization, а не двухугловая теорема, глобальная
   монотонность, первый passing state или точная минимальная alpha.
 - `NoneRole` — роль намеренно пустая по дизайну (`kind: "none"`), не ошибка.
-- `FailureRole` — типизированный терминальный исход без выбранного
-  цвета (`kind: "failure"`). `category` отделяет доказанную
-  недостижимость (`"unreachable"`) от исхода ограниченного поиска без
-  доказательства (`"unresolved"`). `code` уточняет причину.
+- `FailureRole` — типизированный `Unresolved` без выбранного цвета
+  (`kind: "failure"`, `category: "unresolved"`): ограниченный поиск завершился,
+  но не доказал ни решение, ни недостижимость. `code` уточняет причину.
 
-Ожидаемый failure отдельной роли — **часть успешного результата** и не
-попадает в `vars`. `rejected`, `unsupported` и `internal` не являются
-`RoleResult`: они атомарно отклоняют весь `resolveTheme`, поэтому частичного
-`ResolvedTheme`, `vars` или CSS не существует. После успешного preflight такой
-дрейф Core выходит через Engine как `internal_error` с исходной причиной в
-сообщении. Публичные ошибки вызова:
+`Unresolved` остаётся частью успешного результата и не попадает в `vars`.
+Доказанный ordinary `Unreachable` означает, что полный снимок не существует:
+`resolveTheme` отклоняется структурным `OutputConflictError` до aliases,
+проекции и кэша. Его `conflicts` — непустой список
+`{ role, code, message }` в порядке объявления ролей; client-owned ID остаются
+непрозрачными. Проверяйте `error.name === "OutputConflictError"` и
+`error.code === "output_conflict"`: отдельный runtime-конструктор для
+`instanceof` не экспортируется. `rejected`, `unsupported` и `internal` также не
+являются `RoleResult` и отклоняют весь вызов без частичного `ResolvedTheme`,
+`vars` или CSS. После успешного preflight дрейф Core выходит как `internal_error` с
+исходной причиной в сообщении. Основные ошибки resolve-пути:
 
 | Код ошибки | Причина |
 |------------|---------|
 | `config_required` | конфиг ещё не загружен (`loadConfig` не вызывался) |
 | `invalid_background` | `bgHex` не является `#RGB` или `#RRGGBB` |
 | `unknown_theme` | `theme` не входит в список допустимых |
+| `output_conflict` | ordinary-роль доказанно недостижима; полный снимок не создан |
 | `internal_error` | Core нарушил собственный инвариант; частичный CSS не возвращается |
 
 ---
@@ -355,14 +360,15 @@ Ys candidate score `lc` и диагностический `wcagRatio` не мо�
 
 ### `applyTheme(element, result): void`
 
-Записывает все выбранные CSS-значения из `result.vars` в `element.style` через
-`setProperty`. Устаревшие `--lab-*` от предыдущего вызова сбрасываются перед
-записью: роль, перешедшая в `failure`, `none` или `glow-indeterminate`, не оставляет
-устаревшее значение. Передавайте сюда полный успешный снимок `resolveTheme`:
-функция не знает клиентскую схему и сама не может доказать полноту вручную
-собранных `result.vars`. Если `resolveTheme` отклонён, нового снимка нет и вызывать
-`applyTheme` не с чем; DOM остаётся прежним. В успешном снимке `failure` может
-быть только `unreachable` или `unresolved`.
+Принимает полный снимок `ResolvedTheme` и до первой CSSOM-операции проверяет его
+структуру и отсутствие ordinary `Unreachable`. Затем удаляет прежние inline
+`--lab-*` и записывает выбранные значения из `result.vars` через `setProperty`.
+В штатном результате `resolveTheme` исходы `none`, `glow-indeterminate` и
+`Unresolved` не имеют CSS-значения, поэтому устаревший var не сохраняется.
+Ordinary-конфликт либо невалидный контейнер отклоняется до изменения DOM;
+передача одного вручную собранного `vars` не поддерживается. Проверка provenance
+и соответствия каждого var сертификату принадлежит полному output-контракту,
+а не этому DOM helper.
 
 ---
 
@@ -395,6 +401,8 @@ interface WatchController {
 Для поверхности над изображением, градиентом или размытым фоном — где helper не
 видит поле — передайте явный reference-образец `background` (hex-строку или
 функцию, возвращающую hex). Один образец не является доказательством всего поля.
+Явный вход обязан быть непустой строкой: невалидное значение отклоняется и не
+трактуется как отсутствие `background` с переходом на fallback.
 Явные `refresh()` и `setTheme()` бросают ошибку синхронно. Ошибка автоматического
 обновления один раз передаётся в `onError`; без обработчика она отправляется в
 стандартный канал ошибок среды через `reportError` или исключение микрозадачи.
@@ -445,6 +453,10 @@ interface AdaptController {
 минимального или проходящего состояния на каждом кадре: путь
 Oklab→gamut clip→sRGB8 немонотонен. Включайте его только явно для воспроизведения
 этого legacy clamp, а не как режим корректности или читаемости.
+
+Объявленный набор `background` обязан быть непустым и содержать только непустые
+строки. Невалидный явный образец отклоняется до resolver без coercion и без
+подмены fallback-цветом.
 
 Управляйте через `start()` (внутренний rAF-цикл) или вызывайте `tick()` из собственного цикла. Смена темы применяется мгновенно — это осознанное намерение, а не дрейф.
 Перед применением результата контроллер проверяет provenance как stable-, так и

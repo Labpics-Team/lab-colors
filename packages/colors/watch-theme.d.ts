@@ -10,7 +10,8 @@ export interface WatchThemeOptions {
   /**
    * Explicit reference background, overriding the ancestor estimate. A hex
    * sampled from image/gradient/blur content remains one declared point, not an
-   * observation of the whole field.
+   * observation of the whole field. Явное значение обязано быть непустой
+   * строкой; невалидное значение не подменяется fallback-оценкой.
    */
   background?: string | (() => string);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
@@ -51,12 +52,14 @@ export interface WatchController {
 }
 
 /**
- * Keep an element's `--lab-*` variables aligned with an explicit background or
- * the supported ancestor-chain reference estimate.
+ * Согласует `--lab-*` элемента с явной подложкой или поддерживаемой оценкой по
+ * цепочке предков.
  *
- * `style`/`class` attribute changes in the observed subtree schedule a refresh;
- * continuous inputs are driven by calling `refresh()` from a
- * `requestAnimationFrame` loop. Pixel/layout changes are not observed.
+ * Изменения атрибутов `style`/`class` в наблюдаемом поддереве планируют refresh;
+ * непрерывные входы обновляются вызовом `refresh()` из цикла
+ * `requestAnimationFrame`. Конфликт отклоняется до изменения DOM или состояния
+ * контроллера, поэтому то же наблюдение можно повторить. Изменения пикселей и
+ * раскладки не отслеживаются.
  */
 export declare function watchTheme(
   element: HTMLElement,

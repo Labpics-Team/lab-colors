@@ -47,6 +47,7 @@
     "wcag22.d.ts",
     "apply-theme.js",
     "apply-theme.d.ts",
+    "snapshot.js",
     "watch-theme.js",
     "watch-theme.d.ts",
     "adapt-theme.js",

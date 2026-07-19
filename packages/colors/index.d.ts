@@ -32,6 +32,8 @@ export type {
   NoneRole,
   FailureCategory,
   FailureRole,
+  OutputConflict,
+  OutputConflictError,
   TranslucentRole,
   GlowDecisionProfileV1,
   GlowLayerRecipeProfileV1,

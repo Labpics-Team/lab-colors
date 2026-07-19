@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const SELF = fileURLToPath(import.meta.url);
@@ -262,6 +263,13 @@ const DISCARDED_FAILURE_WIRE = [
   /\bpolarity_mismatch\b/u,
   /\bSolveFailure::PolarityMismatch\b/u,
 ];
+const ORDINARY_UNREACHABLE_OUTPUT_DRIFT = [
+  /локальн[а-яё]*\s+failure[^.!?\n]{0,160}доказанн[а-яё]*\s+недостижим[а-яё]*/iu,
+  /FailureRole[\s\S]{0,320}недостижим[а-яё]*\s+\(`"unreachable"`\)/iu,
+  /failure\s+отдельной\s+роли\s+—\s+\*\*часть\s+успешного\s+результата\*\*/iu,
+  /В\s+успешном\s+снимке\s+`failure`\s+может\s+быть\s+только\s+`unreachable`\s+или\s+`unresolved`/iu,
+  /недостижим[а-яё]*[^.!?\n]{0,100}часть\s+успешного\s+результата/iu,
+];
 
 function claimFiles(path, files = [], extensions = CLAIM_EXT) {
   if (!existsSync(path) || CLAIM_SKIP.test(path)) return files;
@@ -441,6 +449,15 @@ function discardedFailureWire(path, source) {
   );
 }
 
+function ordinaryUnreachableOutputDrift(path, source) {
+  return ORDINARY_UNREACHABLE_OUTPUT_DRIFT
+    .filter((pattern) => pattern.test(source))
+    .map(
+      () =>
+        `${path}: ordinary Unreachable was promoted to a successful local role outcome`,
+    );
+}
+
 test("production Rust path filter is separator-agnostic", () => {
   assert.equal(isProductionRustPath("/repo/crates/core/src/lib.rs"), true);
   assert.equal(isProductionRustPath(String.raw`C:\repo\crates\core\src\lib.rs`), true);
@@ -610,6 +627,42 @@ test("live repository has no discarded failure wire", () => {
   assert.deepEqual(failures, []);
 });
 
+test("ordinary Unreachable output detector bites without rejecting Glow target status", () => {
+  for (const sample of [
+    "локальный failure: доказанная недостижимость",
+    '`FailureRole`: category отделяет доказанную недостижимость (`"unreachable"`)',
+    "failure отдельной роли — **часть успешного результата**",
+    "В успешном снимке `failure` может быть только `unreachable` или `unresolved`",
+    "пер-ролевая недостижимость — часть успешного результата",
+  ]) {
+    assert.ok(
+      ordinaryUnreachableOutputDrift("x.md", sample).length >= 1,
+      `detector did not bite: ${sample}`,
+    );
+  }
+  for (const lawful of [
+    'targetStatus: "exact-noop-unreachable"',
+    'targetStatus: "legacy-unreachable"',
+    "ordinary Unreachable rejects the whole resolve as OutputConflictError",
+    "Unresolved remains a successful local bounded-search outcome",
+  ]) {
+    assert.deepEqual(ordinaryUnreachableOutputDrift("x.md", lawful), []);
+  }
+});
+
+test("public output docs do not admit ordinary Unreachable as partial success", () => {
+  const paths = [
+    "README.md",
+    ...RUNTIME_DOC_PATHS,
+    "crates/labcolors-wasm/src/engine.rs",
+    "crates/labcolors-wasm/src/lib.rs",
+  ];
+  const failures = paths.flatMap((path) =>
+    ordinaryUnreachableOutputDrift(path, readFileSync(join(ROOT, path), "utf8")),
+  );
+  assert.deepEqual(failures, []);
+});
+
 test("LCS/LPC drift detector bites on every rejected expansion or reduction", () => {
   for (const sample of [
     "LCS means Labpics Color Space",
@@ -699,6 +752,436 @@ test("runtime docs do not promote estimates, samples, or coordinates", () => {
   assert.deepEqual(failures, []);
 });
 
+const RESOLVED_THEME_FIELDS = new Map([
+  ["theme", "ThemeName"],
+  ["background", "string"],
+  ["vars", "Readonly<Record<string, string>>"],
+  ["roles", "Readonly<Record<string, RoleResult>>"],
+]);
+
+function parseTypes(source, fileName) {
+  return ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+}
+
+function namedTopLevelDeclarations(sourceFile, expectedName) {
+  return sourceFile.statements.flatMap((node) => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      if (clause === undefined) return [];
+      const bindings = clause.name === undefined ? [] : [clause.name];
+      if (clause.namedBindings !== undefined) {
+        if (ts.isNamespaceImport(clause.namedBindings)) {
+          bindings.push(clause.namedBindings.name);
+        } else {
+          bindings.push(...clause.namedBindings.elements.map((element) => element.name));
+        }
+      }
+      return bindings.filter((binding) => binding.text === expectedName);
+    }
+    if (node.name && ts.isIdentifier(node.name) && node.name.text === expectedName) {
+      return [node];
+    }
+    if (!ts.isVariableStatement(node)) return [];
+    return node.declarationList.declarations.filter(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === expectedName,
+    );
+  });
+}
+
+function namedResolvedThemeDeclarations(sourceFile) {
+  return namedTopLevelDeclarations(sourceFile, "ResolvedTheme");
+}
+
+function resolvedThemeShapeFailures(source, fileName, label, requireExport) {
+  const failures = [];
+  const sourceFile = parseTypes(source, fileName);
+  if (sourceFile.parseDiagnostics.length > 0) failures.push(`${label} syntax`);
+  for (const utility of ["Readonly", "Record"]) {
+    if (namedTopLevelDeclarations(sourceFile, utility).length > 0) {
+      failures.push(`${label} shadowed ${utility}`);
+    }
+  }
+  const declarations = sourceFile.statements.filter(
+    (node) => ts.isInterfaceDeclaration(node) && node.name.text === "ResolvedTheme",
+  );
+  if (declarations.length !== 1) return [`${label} interface`];
+  const declaration = declarations[0];
+  if (namedResolvedThemeDeclarations(sourceFile).length !== 1) {
+    failures.push(`${label} merged declaration`);
+  }
+  if (
+    requireExport &&
+    !declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+  ) {
+    failures.push(`${label} export`);
+  }
+  if (declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)) {
+    failures.push(`${label} default export`);
+  }
+  if ((declaration.heritageClauses?.length ?? 0) > 0) {
+    failures.push(`${label} heritage`);
+  }
+  if ((declaration.typeParameters?.length ?? 0) > 0) {
+    failures.push(`${label} type parameters`);
+  }
+
+  const members = new Map();
+  for (const member of declaration.members) {
+    const name = ts.isPropertySignature(member) && ts.isIdentifier(member.name)
+      ? member.name.text
+      : null;
+    if (name === null || members.has(name)) {
+      failures.push(`${label} unexpected member`);
+      continue;
+    }
+    members.set(name, member);
+  }
+  for (const [name, expectedType] of RESOLVED_THEME_FIELDS) {
+    const member = members.get(name);
+    const readonly = member?.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword,
+    );
+    if (
+      member === undefined ||
+      !readonly ||
+      member.questionToken !== undefined ||
+      member.type?.getText(sourceFile) !== expectedType
+    ) {
+      failures.push(`${label} ${name}`);
+    }
+    members.delete(name);
+  }
+  for (const name of members.keys()) {
+    failures.push(`${label} unexpected ${name}`);
+  }
+  return failures;
+}
+
+function resolvedThemeContractFailures(indexTypes, declarationTypes, readme) {
+  const failures = [];
+  const index = parseTypes(indexTypes, "index.d.ts");
+  const exported = index.statements.flatMap((node) => {
+    if (
+      !ts.isExportDeclaration(node) ||
+      !ts.isStringLiteral(node.moduleSpecifier) ||
+      node.moduleSpecifier.text !== "./pkg/labcolors.js" ||
+      !node.exportClause ||
+      !ts.isNamedExports(node.exportClause)
+    ) {
+      return [];
+    }
+    return node.exportClause.elements.flatMap((element) => {
+      const sourceName = element.propertyName?.text ?? element.name.text;
+      return sourceName === "ResolvedTheme" && element.name.text === "ResolvedTheme"
+        ? ["ResolvedTheme"]
+        : [];
+    });
+  });
+  if (exported.length !== 1) failures.push("index export");
+
+  failures.push(
+    ...resolvedThemeShapeFailures(
+      declarationTypes,
+      "labcolors.d.ts",
+      "declaration",
+      true,
+    ),
+  );
+  const readmeBlocks = [...readme.matchAll(/```ts\n([\s\S]*?)\n```/gu)]
+    .map((match, index) => ({
+      source: match[1],
+      fileName: `README-${index}.ts`,
+    }))
+    .filter(({ source, fileName }) =>
+      namedResolvedThemeDeclarations(parseTypes(source, fileName)).length > 0
+    );
+  if (readmeBlocks.length !== 1) failures.push("README code block count");
+  else {
+    failures.push(
+      ...resolvedThemeShapeFailures(
+        readmeBlocks[0].source,
+        readmeBlocks[0].fileName,
+        "README",
+        false,
+      ),
+    );
+  }
+  return failures;
+}
+
+function replaceResolvedThemeDeclarationField(source, field, replacement) {
+  const sourceFile = parseTypes(source, "labcolors.d.ts");
+  const declaration = sourceFile.statements.find(
+    (node) => ts.isInterfaceDeclaration(node) && node.name.text === "ResolvedTheme",
+  );
+  assert.ok(declaration, "fixture must contain the generated ResolvedTheme declaration");
+  const start = declaration.getStart(sourceFile);
+  const body = source.slice(start, declaration.end);
+  assert.ok(body.includes(field), `ResolvedTheme fixture field not found: ${field}`);
+  return source.slice(0, start) + body.replace(field, replacement) + source.slice(declaration.end);
+}
+
+function replaceResolvedThemeReadmeField(readme, field, replacement) {
+  const block = [...readme.matchAll(/```ts\n([\s\S]*?)\n```/gu)]
+    .map((match) => match[1])
+    .find((candidate) => candidate.includes("interface ResolvedTheme"));
+  assert.ok(block, "fixture must contain the README ResolvedTheme code block");
+  assert.ok(block.includes(field), `README fixture field not found: ${field}`);
+  return readme.replace(block, block.replace(field, replacement));
+}
+
+test("ResolvedTheme contract guard bites at every public SSOT boundary", () => {
+  const indexTypes = readFileSync(join(ROOT, "packages/colors/index.d.ts"), "utf8");
+  const declarationTypes = readFileSync(
+    join(ROOT, "packages/colors/pkg/labcolors.d.ts"),
+    "utf8",
+  );
+  const readme = readFileSync(join(ROOT, "packages/colors/README.md"), "utf8");
+  assert.deepEqual(resolvedThemeContractFailures(indexTypes, declarationTypes, readme), []);
+
+  assert.deepEqual(
+    resolvedThemeContractFailures(
+      indexTypes.replace("  ResolvedTheme,", "  // ResolvedTheme,"),
+      declarationTypes,
+      readme,
+    ),
+    ["index export"],
+  );
+  assert.deepEqual(
+    resolvedThemeContractFailures(
+      indexTypes.replace("  ResolvedTheme,", "  RoleResult as ResolvedTheme,"),
+      declarationTypes,
+      readme,
+    ),
+    ["index export"],
+  );
+  for (const [name, type] of RESOLVED_THEME_FIELDS) {
+    const field = `readonly ${name}: ${type};`;
+    assert.ok(
+      resolvedThemeContractFailures(
+        indexTypes,
+        replaceResolvedThemeDeclarationField(declarationTypes, field, `// ${field}`),
+        readme,
+      ).includes(`declaration ${name}`),
+      `generated declaration mutation must bite: ${name}`,
+    );
+    assert.ok(
+      resolvedThemeContractFailures(
+        indexTypes,
+        declarationTypes,
+        replaceResolvedThemeReadmeField(readme, field, `// ${field}`),
+      ).includes(`README ${name}`),
+      `README mutation must bite: ${name}`,
+    );
+  }
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      replaceResolvedThemeDeclarationField(
+        declarationTypes,
+        "readonly roles: Readonly<Record<string, RoleResult>>;",
+        "readonly roles: Readonly<Record<string, RoleResult>>;\n    readonly revision: string;",
+      ),
+      readme,
+    ).includes("declaration unexpected revision"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      replaceResolvedThemeReadmeField(
+        readme,
+        "readonly roles: Readonly<Record<string, RoleResult>>;",
+        "readonly roles: Readonly<Record<string, RoleResult>>;\n  readonly revision: string;",
+      ),
+    ).includes("README unexpected revision"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes.replace(
+        "export interface ResolvedTheme {",
+        "interface ExtraResolvedTheme { readonly revision: string; }\n" +
+          "export interface ResolvedTheme extends ExtraResolvedTheme {",
+      ),
+      readme,
+    ).includes("declaration heritage"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      readme.replace(
+        "interface ResolvedTheme {",
+        "interface ExtraResolvedTheme { readonly revision: string; }\n" +
+          "interface ResolvedTheme extends ExtraResolvedTheme {",
+      ),
+    ).includes("README heritage"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes.replace(
+        "export interface ResolvedTheme {",
+        "export declare class ResolvedTheme { readonly revision: string; }\n" +
+          "export interface ResolvedTheme {",
+      ),
+      readme,
+    ).includes("declaration merged declaration"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      readme.replace(
+        "interface ResolvedTheme {",
+        "declare class ResolvedTheme { readonly revision: string; }\n" +
+          "interface ResolvedTheme {",
+      ),
+    ).includes("README merged declaration"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes.replace(
+        "export interface ResolvedTheme {",
+        "export declare const ResolvedTheme: { readonly revision: string };\n" +
+          "export interface ResolvedTheme {",
+      ),
+      readme,
+    ).includes("declaration merged declaration"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      readme.replace(
+        "interface ResolvedTheme {",
+        "declare const ResolvedTheme: { readonly revision: string };\n" +
+          "interface ResolvedTheme {",
+      ),
+    ).includes("README merged declaration"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes.replace(
+        "export interface ResolvedTheme {",
+        "export default interface ResolvedTheme {",
+      ),
+      readme,
+    ).includes("declaration default export"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      readme.replace(
+        "interface ResolvedTheme {",
+        "export default interface ResolvedTheme {",
+      ),
+    ).includes("README default export"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes.replace(
+        "export interface ResolvedTheme {",
+        "type Readonly<T> = T;\nexport interface ResolvedTheme {",
+      ),
+      readme,
+    ).includes("declaration shadowed Readonly"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      readme.replace(
+        "interface ResolvedTheme {",
+        "type Readonly<T> = T;\ninterface ResolvedTheme {",
+      ),
+    ).includes("README shadowed Readonly"),
+  );
+  for (const utility of ["Readonly", "Record"]) {
+    const imports = [
+      `import ${utility} from "./hostile.js";`,
+      `import { Hostile as ${utility} } from "./hostile.js";`,
+      `import * as ${utility} from "./hostile.js";`,
+    ];
+    for (const hostileImport of imports) {
+      assert.ok(
+        resolvedThemeContractFailures(
+          indexTypes,
+          declarationTypes.replace(
+            "export interface ResolvedTheme {",
+            `${hostileImport}\nexport interface ResolvedTheme {`,
+          ),
+          readme,
+        ).includes(`declaration shadowed ${utility}`),
+        `generated declaration must reject ${hostileImport}`,
+      );
+      assert.ok(
+        resolvedThemeContractFailures(
+          indexTypes,
+          declarationTypes,
+          readme.replace(
+            "interface ResolvedTheme {",
+            `${hostileImport}\ninterface ResolvedTheme {`,
+          ),
+        ).includes(`README shadowed ${utility}`),
+        `README must reject ${hostileImport}`,
+      );
+    }
+  }
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes.replace(
+        "export interface ResolvedTheme {",
+        "export interface ResolvedTheme<T> {",
+      ),
+      readme,
+    ).includes("declaration type parameters"),
+  );
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      readme.replace("interface ResolvedTheme {", "interface ResolvedTheme<T> {"),
+    ).includes("README type parameters"),
+  );
+  const readmeResolvedThemeBlock = [...readme.matchAll(/```ts\n([\s\S]*?)\n```/gu)]
+    .map((match) => match[0])
+    .find((block) => block.includes("interface ResolvedTheme"));
+  assert.ok(readmeResolvedThemeBlock);
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      `${readmeResolvedThemeBlock}\n${readme}`,
+    ).includes("README code block count"),
+  );
+  const driftedReadme = replaceResolvedThemeReadmeField(
+    readme,
+    "readonly roles: Readonly<Record<string, RoleResult>>;",
+    "readonly roles: Readonly<Record<string, RoleResult>>;\n  readonly revision: string;",
+  ).replace("interface ResolvedTheme {", "interface /* hostile */ ResolvedTheme {");
+  assert.ok(
+    resolvedThemeContractFailures(
+      indexTypes,
+      declarationTypes,
+      `${readmeResolvedThemeBlock}\n${driftedReadme}`,
+    ).includes("README code block count"),
+  );
+});
+
 test("runtime docs scope background evidence to estimates and finite samples", () => {
   const readme = readFileSync(join(ROOT, "packages/colors/README.md"), "utf8");
   const adaptTypes = readFileSync(
@@ -727,7 +1210,7 @@ test("runtime docs scope background evidence to estimates and finite samples", (
   assert.match(backgroundTypes, /`background-color` chain/iu);
   assert.match(backgroundTypes, /not[\s*]+a browser pixel observation/iu);
   assert.match(backgroundTypes, /alpha[^\n]*discarded/iu);
-  assert.match(adaptTypes, /logical target/iu);
+  assert.match(adaptTypes, /Канонические логические цели/u);
   assert.match(watchSource, /reference estimate/iu);
   assert.match(readme, /изменения атрибутов `style`\/`class`/iu);
   for (const source of [watchSource, watchTypes]) {

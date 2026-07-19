@@ -53,15 +53,23 @@ function fakeColors(initial) {
 
 function fakeElement() {
   const props = new Map();
+  const mutations = [];
   return {
     props,
+    mutations,
     style: {
       get length() {
         return props.size;
       },
       item: (i) => [...props.keys()][i] ?? null,
-      setProperty: (k, v) => props.set(k, v),
-      removeProperty: (k) => props.delete(k),
+      setProperty(k, v) {
+        mutations.push(["set", k, v]);
+        props.set(k, v);
+      },
+      removeProperty(k) {
+        mutations.push(["remove", k]);
+        props.delete(k);
+      },
     },
   };
 }
@@ -70,6 +78,44 @@ const oneRole = (hex, lc) => ({
   vars: { "--lab-label-primary": hex },
   roles: { "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc } },
 });
+
+function withUnreachable(result, role = "impossible") {
+  return {
+    ...result,
+    vars: { ...result.vars },
+    roles: {
+      ...result.roles,
+      [role]: {
+        kind: "failure",
+        cssVar: `--lab-${role}`,
+        category: "unreachable",
+        code: "floor_unreachable",
+        message: "contract has no solution",
+      },
+    },
+  };
+}
+
+function captureOutputConflict(fn, expectedRoles = ["impossible"]) {
+  let error = null;
+  try {
+    fn();
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error, "ordinary Unreachable must reject the whole adaptive operation");
+  assert.equal(error.name, "OutputConflictError");
+  assert.equal(error.code, "output_conflict");
+  assert.deepEqual(
+    error.conflicts,
+    expectedRoles.map((role) => ({
+      role,
+      code: "floor_unreachable",
+      message: "contract has no solution",
+    })),
+  );
+  return error;
+}
 
 // A role set that carries an explicit `legalFloor` (4.5 / 3.0 / null), the field
 // the strict floor-clamp reads.
@@ -143,14 +189,72 @@ test("current() reports the logical target, not the painted mid-ease value", () 
   assert.equal(h.ctrl.current()["--lab-label-primary"], "#FFFFFF");
 });
 
-test("a failed worst-sample resolve leaves DOM and logical state unchanged", () => {
+test("adaptTheme owns its admitted snapshot instead of resolver aliases", () => {
+  const source = oneRole("#111111", 100);
+  const el = fakeElement();
+  const ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme: () => source,
+      recheckContrast: () => [100, 1],
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  const committed = ctrl.current();
+
+  source.vars["--lab-label-primary"] = "#EEEEEE";
+  source.vars["--lab-injected"] = "#ABCDEF";
+  source.roles.late = {
+    kind: "failure",
+    category: "unreachable",
+    code: "floor_unreachable",
+    message: "injected after admission",
+  };
+
+  assert.deepEqual(ctrl.current(), committed);
+  assert.equal(el.props.has("--lab-injected"), false);
+});
+
+test("adaptTheme never invokes an accessor installed after admission", () => {
+  const source = oneRole("#111111", 100);
+  const el = fakeElement();
+  const ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme: () => source,
+      recheckContrast: () => [100, 1],
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  let getterCalls = 0;
+  Object.defineProperty(source.vars, "--lab-label-primary", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      getterCalls++;
+      return "#EEEEEE";
+    },
+  });
+
+  assert.equal(ctrl.current()["--lab-label-primary"], "#111111");
+  assert.equal(getterCalls, 0, "controller state must read only the owned data snapshot");
+});
+
+test("a second-sample output conflict leaves DOM/state unchanged and remains retryable", () => {
   const el = fakeElement();
   let samples = ["#FFFFFF", "#000000"];
+  let conflict = true;
   const recheckThemes = [];
   const colors = {
     resolveTheme(bg, theme) {
-      if (theme === "dark" && bg === "#000000") {
-        throw new Error("rejected: invalid_input");
+      if (theme === "dark" && bg === "#000000" && conflict) {
+        return withUnreachable(oneRole("#FFFFFF", 100));
       }
       return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100);
     },
@@ -169,8 +273,10 @@ test("a failed worst-sample resolve leaves DOM and logical state unchanged", () 
   });
   const beforeDom = new Map(el.props);
   const beforeCurrent = ctrl.current();
+  el.mutations.length = 0;
 
-  assert.throws(() => ctrl.setTheme("dark"), /rejected: invalid_input/);
+  captureOutputConflict(() => ctrl.setTheme("dark"));
+  assert.deepEqual(el.mutations, [], "the second solve must be admitted before DOM commit");
   assert.deepEqual(el.props, beforeDom, "failed resolve must not partially repaint");
   assert.deepEqual(
     ctrl.current(),
@@ -181,6 +287,10 @@ test("a failed worst-sample resolve leaves DOM and logical state unchanged", () 
   samples = ["#FEFEFE", "#000000"];
   ctrl.tick();
   assert.equal(recheckThemes.at(-1), "light", "failed setTheme must not publish hidden intent");
+
+  conflict = false;
+  ctrl.setTheme("dark");
+  assert.equal(el.props.get("--lab-label-primary"), "#FFFFFF");
 });
 
 test("a failed stable-Glow reconciliation does not publish its candidate", () => {
@@ -241,7 +351,7 @@ test("a failed stable-Glow reconciliation does not publish its candidate", () =>
   assert.deepEqual(ctrl.current(), beforeCurrent);
 });
 
-test("tick does not commit a Glow class change before a later set resolve succeeds", () => {
+test("a stable-Glow reconciliation conflict cannot commit its class transition", () => {
   const el = fakeElement();
   let samples = ["#FFFFFF"];
   let now = 0;
@@ -285,7 +395,7 @@ test("tick does not commit a Glow class change before a later set resolve succee
         blackResolves++;
         return determinate;
       }
-      if (blackResolves > 0) throw new Error("rejected: invalid_input");
+      if (blackResolves > 0) return withUnreachable(determinate);
       return determinate;
     },
     recheckContrast(background) {
@@ -308,11 +418,13 @@ test("tick does not commit a Glow class change before a later set resolve succee
   });
   const beforeDom = new Map(el.props);
   const beforeCurrent = ctrl.current();
+  el.mutations.length = 0;
 
   samples = ["#FFFFFF", "#000000"];
   now = 1;
-  assert.throws(() => ctrl.tick(), /rejected: invalid_input/);
+  captureOutputConflict(() => ctrl.tick());
   assert.equal(blackResolves, 1, "the worst-sample candidate is prepared before failure");
+  assert.deepEqual(el.mutations, [], "Glow satellites must not change before admission");
   assert.deepEqual(el.props, beforeDom);
   assert.deepEqual(ctrl.current(), beforeCurrent);
 });
@@ -356,6 +468,86 @@ test("an in-flight ease does not advance before the tick's fallible checks succe
   assert.throws(() => ctrl.tick(), /recheck failed/);
   assert.deepEqual(el.props, beforeDom);
   assert.deepEqual(ctrl.current(), beforeCurrent);
+});
+
+test("an output conflict mid-ease is inert and its retry matches a control run", () => {
+  const makeCase = (conflictOnce) => {
+    const el = fakeElement();
+    let bg = "#FFFFFF";
+    let now = 0;
+    let resolves = 0;
+    let breached = true;
+    const colors = {
+      resolveTheme() {
+        resolves++;
+        if (resolves === 1) return oneRole("#000000", 100);
+        if (resolves === 2) return oneRole("#FFFFFF", 100);
+        const next = oneRole("#202020", 100);
+        if (conflictOnce && resolves === 3) return withUnreachable(next);
+        return next;
+      },
+      recheckContrast() {
+        return [breached ? 0 : 100, 1];
+      },
+    };
+    const ctrl = adaptTheme(el, {
+      colors,
+      theme: "light",
+      background: () => bg,
+      target: el,
+      now: () => now,
+      win: {},
+      sustainMs: 0,
+      dwellMs: 0,
+      easeMs: 100,
+    });
+    return {
+      ctrl,
+      el,
+      setBg(value) {
+        bg = value;
+      },
+      setNow(value) {
+        now = value;
+      },
+      pass() {
+        breached = false;
+      },
+    };
+  };
+
+  const retried = makeCase(true);
+  const control = makeCase(false);
+  for (const run of [retried, control]) {
+    run.setBg("#101010");
+    run.setNow(1);
+    run.ctrl.tick(); // begin #000000 -> #FFFFFF
+  }
+
+  retried.setBg("#202020");
+  retried.setNow(51);
+  const beforeDom = new Map(retried.el.props);
+  const beforeCurrent = retried.ctrl.current();
+  retried.el.mutations.length = 0;
+  captureOutputConflict(() => retried.ctrl.tick());
+  assert.deepEqual(retried.el.mutations, [], "the failed tick must not advance the old ease");
+  assert.deepEqual(retried.el.props, beforeDom);
+  assert.deepEqual(retried.ctrl.current(), beforeCurrent);
+
+  control.setBg("#202020");
+  control.setNow(51);
+  control.ctrl.tick();
+  retried.ctrl.tick(); // retry the exact same sample/time after the conflict
+  assert.deepEqual(retried.el.props, control.el.props);
+  assert.deepEqual(retried.ctrl.current(), control.ctrl.current());
+
+  for (const run of [retried, control]) run.pass();
+  retried.setNow(76);
+  control.setNow(76);
+  retried.ctrl.tick();
+  control.ctrl.tick();
+  assert.deepEqual(retried.el.props, control.el.props, "later eased paint also matches control");
+  assert.deepEqual(retried.ctrl.current(), control.ctrl.current());
 });
 
 test("a transient recheck failure retries the same changed sample", () => {
@@ -460,6 +652,134 @@ test("the internal frame loop can restart after the host rejects a requeue", () 
   ctrl.stop();
 });
 
+test("a failing frame acquisition cannot synchronously retry its reentrant start", () => {
+  const el = fakeElement();
+  const primaryFailure = new Error("primary CSSOM failure");
+  const requestFailure = new Error("frame acquisition failed");
+  let ctrl = null;
+  let armed = false;
+  let requests = 0;
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer") {
+      armed = false;
+      ctrl.start();
+      throw primaryFailure;
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return {
+          vars: { "--lab-a": theme },
+          roles: {
+            a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+          },
+        };
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        requests++;
+        if (requests === 1) {
+          ctrl.start();
+          throw requestFailure;
+        }
+        return requests;
+      },
+      cancelAnimationFrame() {},
+    },
+  });
+
+  armed = true;
+  assert.throws(
+    () => ctrl.setTheme("outer"),
+    (error) =>
+      error instanceof AggregateError &&
+      error.errors[0] === primaryFailure &&
+      error.errors[1] === requestFailure,
+  );
+  assert.equal(requests, 1, "one transaction gets one acquisition attempt");
+
+  ctrl.start();
+  assert.equal(requests, 2, "a later public start opens a fresh retry boundary");
+  ctrl.stop();
+});
+
+test("a frame handle returned after reentrant stop is cancelled before start returns", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let callback = null;
+  const cancellations = [];
+  ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame(next) {
+        callback = next;
+        ctrl.stop();
+        return 77;
+      },
+      cancelAnimationFrame(id) {
+        cancellations.push(id);
+      },
+    },
+  });
+
+  ctrl.start();
+  assert.deepEqual(cancellations, [77]);
+  callback();
+  ctrl.stop();
+  assert.deepEqual(cancellations, [77], "the inert stale callback owns no live handle");
+});
+
+test("alternating host control callbacks stop at the serial transaction boundary", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = true;
+  let requests = 0;
+  let cancellations = 0;
+  ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        requests++;
+        if (armed) ctrl.stop();
+        return requests;
+      },
+      cancelAnimationFrame() {
+        cancellations++;
+        if (armed) {
+          ctrl.start();
+          armed = false;
+        }
+      },
+    },
+  });
+
+  assert.throws(() => ctrl.start(), /did not stabilize in one transaction/u);
+  assert.deepEqual({ requests, cancellations }, { requests: 1, cancellations: 1 });
+
+  ctrl.start();
+  ctrl.stop();
+  assert.deepEqual({ requests, cancellations }, { requests: 2, cancellations: 2 });
+});
+
 test("a reentrant stop and start inside tick owns exactly one next frame", () => {
   const el = fakeElement();
   const frames = [];
@@ -535,6 +855,1365 @@ test("a stale frame surviving a failed cancel cannot capture a restarted loop", 
   stale.callback();
   assert.equal(frames.length, 1, "a stale callback must not schedule beside the new epoch");
   ctrl.stop();
+});
+
+test("a naturally fired stale frame retires its failed-cancellation record", () => {
+  const el = fakeElement();
+  const frames = [];
+  const cancellations = [];
+  let nextId = 1;
+  let failFirstCancellation = true;
+  const ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame(callback) {
+        const frame = { id: nextId++, callback };
+        frames.push(frame);
+        return frame.id;
+      },
+      cancelAnimationFrame(id) {
+        cancellations.push(id);
+        if (failFirstCancellation) {
+          failFirstCancellation = false;
+          throw new Error("transient cancellation failure");
+        }
+      },
+    },
+  });
+
+  ctrl.start();
+  assert.throws(() => ctrl.stop(), /transient cancellation failure/u);
+  frames.shift().callback();
+  ctrl.start();
+  ctrl.stop();
+
+  assert.deepEqual(cancellations, [1, 2]);
+});
+
+test("one stop transaction attempts each retained frame at most once", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let nextId = 1;
+  let retaining = true;
+  const attempts = [];
+  ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        return nextId++;
+      },
+      cancelAnimationFrame(id) {
+        attempts.push(id);
+        if (!retaining) ctrl.stop();
+        throw new Error(`cancel ${id}`);
+      },
+    },
+  });
+
+  ctrl.start();
+  assert.throws(() => ctrl.stop(), /cancel 1/u);
+  ctrl.start();
+  attempts.length = 0;
+  retaining = false;
+
+  assert.throws(() => ctrl.stop(), AggregateError);
+  assert.deepEqual(attempts, [1, 2]);
+});
+
+test("a nested setTheme owns the commit over its stale outer setTheme", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let reentered = false;
+  const colors = {
+    resolveTheme(_background, theme) {
+      if (theme === "outer" && !reentered) {
+        reentered = true;
+        ctrl.setTheme("inner");
+        return oneRole("#EEEEEE", 100);
+      }
+      return oneRole(theme === "inner" ? "#222222" : "#111111", 100);
+    },
+    recheckContrast() {
+      return [100, 1];
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  ctrl.setTheme("outer");
+  assert.equal(el.props.get("--lab-label-primary"), "#222222");
+  assert.equal(ctrl.current()["--lab-label-primary"], "#222222");
+});
+
+test("a nested setTheme during a full CSS write owns the whole adaptive snapshot", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const values = {
+    light: ["#111111", "#121212"],
+    outer: ["#EEEEEE", "#EDEDED"],
+    inner: ["#222222", "#232323"],
+  };
+  const resultFor = (theme) => {
+    const [a, b] = values[theme];
+    return {
+      theme,
+      background: "#FFFFFF",
+      vars: { "--lab-a": a, "--lab-b": b },
+      roles: {
+        a: { kind: "color", cssVar: "--lab-a", hex: a, lc: 100 },
+        b: { kind: "color", cssVar: "--lab-b", hex: b, lc: 100 },
+      },
+    };
+  };
+  const colors = {
+    resolveTheme(_background, theme) {
+      return resultFor(theme);
+    },
+    recheckContrast() {
+      return [100, 1, 100, 1];
+    },
+  };
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === values.outer[0]) {
+      armed = false;
+      ctrl.setTheme("inner");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+  ctrl.tick(2);
+
+  assert.deepEqual(
+    {
+      dom: Object.fromEntries(el.props),
+      current: ctrl.current(),
+    },
+    {
+      dom: resultFor("inner").vars,
+      current: resultFor("inner").vars,
+    },
+    "the stale writer must neither overwrite part of the newer commit nor mark the hybrid clean",
+  );
+});
+
+test("a before-forward CSS wrapper cannot let the stale adaptive writer follow a nested setTheme", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const values = {
+    light: "#111111",
+    outer: "#EEEEEE",
+    inner: "#222222",
+  };
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    if (armed && key === "--lab-label-primary" && value === values.outer) {
+      armed = false;
+      ctrl.setTheme("inner");
+    }
+    write(key, value);
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return oneRole(values[theme], 100);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+  ctrl.tick(2);
+
+  assert.deepEqual(
+    { dom: Object.fromEntries(el.props), current: ctrl.current() },
+    { dom: oneRole(values.inner, 100).vars, current: oneRole(values.inner, 100).vars },
+    "the newer nested commit must own the full snapshot even when the stale wrapper forwards later",
+  );
+});
+
+test("stop during a full CSS write cannot split the already-started adaptive commit", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const resultFor = (theme) => ({
+    theme,
+    background: "#FFFFFF",
+    vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+      b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer-a") {
+      armed = false;
+      ctrl.stop();
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1, 100, 1];
+      },
+    },
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+
+  assert.deepEqual(
+    {
+      dom: Object.fromEntries(el.props),
+      current: ctrl.current(),
+    },
+    {
+      dom: resultFor("outer").vars,
+      current: resultFor("outer").vars,
+    },
+    "stop cancels future work but cannot tear an in-progress synchronous commit",
+  );
+});
+
+test("a failing stop cleanup is reported only after the adaptive CSS snapshot completes", () => {
+  const el = fakeElement();
+  const cleanupFailure = new Error("cancel failed after commit");
+  let ctrl = null;
+  let armed = false;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+      b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer-a") {
+      armed = false;
+      ctrl.stop();
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1, 100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        return 1;
+      },
+      cancelAnimationFrame() {
+        throw cleanupFailure;
+      },
+    },
+  });
+  ctrl.start();
+
+  armed = true;
+  assert.throws(() => ctrl.setTheme("outer"), (error) => error === cleanupFailure);
+  assert.deepEqual(Object.fromEntries(el.props), resultFor("outer").vars);
+  assert.deepEqual(ctrl.current(), resultFor("outer").vars);
+});
+
+test("a CSS failure cannot discard stop cleanup accepted during the commit", () => {
+  const el = fakeElement();
+  const primaryFailure = new Error("primary CSSOM failure");
+  let ctrl = null;
+  let armed = false;
+  let requests = 0;
+  let cancellations = 0;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+      b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (!armed) return;
+    if (key === "--lab-a" && value === "outer-a") ctrl.stop();
+    if (key === "--lab-b" && value === "outer-b") {
+      armed = false;
+      throw primaryFailure;
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1, 100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        return ++requests;
+      },
+      cancelAnimationFrame() {
+        cancellations++;
+      },
+    },
+  });
+  ctrl.start();
+
+  armed = true;
+  assert.throws(() => ctrl.setTheme("outer"), (error) => error === primaryFailure);
+  assert.equal(cancellations, 1, "accepted stop must release the active frame");
+  ctrl.start();
+  assert.equal(requests, 2, "the completed stop leaves the loop restartable");
+  ctrl.stop();
+});
+
+test("a queued CSS failure cannot discard stop cleanup accepted during that commit", () => {
+  const el = fakeElement();
+  const primaryFailure = new Error("queued CSSOM failure");
+  let ctrl = null;
+  let armed = false;
+  let requests = 0;
+  let cancellations = 0;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+      b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (!armed) return;
+    if (key === "--lab-a" && value === "outer-a") ctrl.setTheme("bad");
+    if (key === "--lab-a" && value === "bad-a") ctrl.stop();
+    if (key === "--lab-b" && value === "bad-b") {
+      armed = false;
+      throw primaryFailure;
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1, 100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        return ++requests;
+      },
+      cancelAnimationFrame() {
+        cancellations++;
+      },
+    },
+  });
+  ctrl.start();
+
+  armed = true;
+  assert.throws(() => ctrl.setTheme("outer"), (error) => error === primaryFailure);
+  assert.equal(cancellations, 1, "the queued commit's accepted stop owns the frame");
+});
+
+test("a newer stop supersedes an older queued restart without recursive cleanup", () => {
+  const el = fakeElement();
+  const primaryFailure = new Error("primary CSSOM failure");
+  const cleanupFailure = new Error("animation-frame cleanup failure");
+  let ctrl = null;
+  let armed = false;
+  let cleanupReentered = false;
+  const requests = [];
+  const cancellations = [];
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (!armed || key !== "--lab-a" || value !== "outer") return;
+    armed = false;
+    ctrl.stop();
+    ctrl.start();
+    throw primaryFailure;
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame(callback) {
+        const id = requests.length + 1;
+        requests.push({ id, callback });
+        return id;
+      },
+      cancelAnimationFrame(id) {
+        cancellations.push(id);
+        if (!cleanupReentered) {
+          cleanupReentered = true;
+          ctrl.stop();
+          throw cleanupFailure;
+        }
+      },
+    },
+  });
+  ctrl.start();
+
+  armed = true;
+  assert.throws(
+    () => ctrl.setTheme("outer"),
+    (error) =>
+      error instanceof AggregateError &&
+      error.errors[0] === primaryFailure &&
+      error.errors[1] === cleanupFailure,
+  );
+
+  assert.deepEqual(cancellations, [1]);
+  assert.deepEqual(
+    requests.map(({ id }) => id),
+    [1],
+    "the latest stop must erase the older restart while cleanup is draining",
+  );
+  ctrl.stop();
+  assert.deepEqual(cancellations, [1, 1], "a later stop retries the retained handle");
+});
+
+test("a failed queued adaptive operation cannot leave an older tail to overwrite a later intent", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer") {
+      armed = false;
+      ctrl.setTheme("bad");
+      ctrl.setTheme("stale");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "bad") throw new Error("queued operation failed");
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  assert.throws(() => ctrl.setTheme("outer"), /queued operation failed/u);
+  ctrl.setTheme("newer");
+
+  assert.equal(el.props.get("--lab-a"), "newer");
+  assert.equal(ctrl.current()["--lab-a"], "newer");
+});
+
+test("the newest adaptive intent raised during queued prepare follows the older FIFO suffix", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  let reenter = true;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer") {
+      armed = false;
+      ctrl.setTheme("A");
+      ctrl.setTheme("C");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "A" && reenter) {
+          reenter = false;
+          ctrl.setTheme("B");
+        }
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  ctrl.setTheme("outer");
+
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
+test("a malformed revoked adaptive candidate cannot erase the newer queued intent", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  let reenter = true;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (armed && key === "--lab-a" && value === "outer") {
+      armed = false;
+      ctrl.setTheme("A");
+    }
+  };
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "A" && reenter) {
+          reenter = false;
+          ctrl.setTheme("B");
+          return {};
+        }
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  armed = true;
+  assert.doesNotThrow(() => ctrl.setTheme("outer"));
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
+test("a revoked adaptive candidate invokes no later prepare callback", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let reenter = true;
+  const calls = [];
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(background, theme) {
+        calls.push(`resolve:${theme}:${background}`);
+        if (theme === "A" && reenter) {
+          reenter = false;
+          ctrl.setTheme("B");
+        }
+        return resultFor(theme);
+      },
+      recheckContrast(background, _foregrounds, theme) {
+        calls.push(`recheck:${theme}:${background}`);
+        if (theme === "A") ctrl.setTheme("C");
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: ["#FFFFFF", "#EEEEEE"],
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  calls.length = 0;
+  assert.doesNotThrow(() => ctrl.setTheme("A"));
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+  assert.equal(
+    calls.some((call) => call.startsWith("recheck:A:")),
+    false,
+    "owner loss inside resolve(A) must cancel A before its recheck callback",
+  );
+});
+
+test("owner loss in one adaptive recheck cancels the remaining samples", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  const calls = [];
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast(background, _foregrounds, theme) {
+        calls.push(`${theme}:${background}`);
+        if (armed && theme === "A" && background === "#FFFFFF") {
+          ctrl.setTheme("B");
+        } else if (armed && theme === "A") {
+          ctrl.setTheme("C");
+        }
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: ["#FFFFFF", "#EEEEEE"],
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  calls.length = 0;
+  armed = true;
+  ctrl.setTheme("A");
+
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("A:")),
+    ["A:#FFFFFF"],
+    "the first revoked recheck must cancel the rest of A's sample loop",
+  );
+});
+
+test("an invalid batch result never falls through to per-sample callbacks", () => {
+  const el = fakeElement();
+  let invalidBatch = false;
+  let fallbackCalls = 0;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        fallbackCalls++;
+        return [100, 1];
+      },
+      recheckContrastMulti() {
+        return invalidBatch ? null : [100, 1, 100, 1];
+      },
+    },
+    theme: "initial",
+    background: ["#FFFFFF", "#EEEEEE"],
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  invalidBatch = true;
+  assert.throws(
+    () => ctrl.setTheme("A"),
+    /recheckContrastMulti.*length/u,
+  );
+  assert.equal(fallbackCalls, 0);
+  assert.equal(el.props.get("--lab-a"), "initial");
+  assert.equal(ctrl.current()["--lab-a"], "initial");
+});
+
+test("invalid adaptive samples are rejected without client coercion", () => {
+  const el = fakeElement();
+  let invalid = false;
+  let coerced = false;
+  const hostileSample = {
+    toString() {
+      coerced = true;
+      return "#FFFFFF";
+    },
+  };
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  const ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background() {
+      return invalid ? hostileSample : "#FFFFFF";
+    },
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  invalid = true;
+  assert.throws(() => ctrl.setTheme("A"), /background.*non-empty string/u);
+
+  assert.equal(coerced, false);
+  assert.equal(el.props.get("--lab-a"), "initial");
+  assert.equal(ctrl.current()["--lab-a"], "initial");
+
+  let fallbackReads = 0;
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        colors: {
+          resolveTheme: () => resultFor("never"),
+          recheckContrast: () => [100, 1],
+        },
+        theme: "initial",
+        background: 42,
+        now: () => 1,
+        win: {},
+        getStyle() {
+          fallbackReads++;
+          return { getPropertyValue: () => "#FFFFFF" };
+        },
+      }),
+    /background.*non-empty string/u,
+  );
+  assert.equal(fallbackReads, 0, "an invalid explicit input is not an omitted backdrop");
+
+  let coercedLength = false;
+  const hostileArray = new Proxy(["#FFFFFF"], {
+    get(target, key, receiver) {
+      if (key !== "length") return Reflect.get(target, key, receiver);
+      return {
+        valueOf() {
+          coercedLength = true;
+          return 1;
+        },
+      };
+    },
+  });
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        colors: {
+          resolveTheme: () => resultFor("never"),
+          recheckContrast: () => [100, 1],
+        },
+        theme: "initial",
+        background: hostileArray,
+        now: () => 1,
+        win: {},
+      }),
+    /background.*length/u,
+  );
+  assert.equal(coercedLength, false);
+});
+
+test("owner loss inside the implicit backdrop walk cancels its later seams", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let armed = false;
+  let staleWalk = false;
+  const calls = [];
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    target: el,
+    now: () => 1,
+    win: {},
+    getStyle() {
+      calls.push("style");
+      if (armed) {
+        armed = false;
+        staleWalk = true;
+        ctrl.setTheme("B");
+      } else {
+        staleWalk = false;
+      }
+      return { getPropertyValue: () => "transparent" };
+    },
+    parentOf() {
+      calls.push("parent");
+      if (staleWalk) ctrl.setTheme("C");
+      return null;
+    },
+  });
+
+  calls.length = 0;
+  armed = true;
+  ctrl.setTheme("A");
+
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+  assert.deepEqual(calls.slice(0, 2), ["style", "style"]);
+});
+
+test("owner loss in snapshot reflection cancels the remaining Proxy traps", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  const calls = [];
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme !== "A") return resultFor(theme);
+        return new Proxy(resultFor(theme), {
+          getPrototypeOf(target) {
+            calls.push("prototype");
+            ctrl.setTheme("B");
+            return Reflect.getPrototypeOf(target);
+          },
+          ownKeys(target) {
+            calls.push("keys");
+            ctrl.setTheme("C");
+            return Reflect.ownKeys(target);
+          },
+        });
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  ctrl.setTheme("A");
+
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+  assert.deepEqual(calls, ["prototype"]);
+});
+
+test("owner loss in one stable-appearance predicate cancels the remaining samples", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  const calls = [];
+  const haloByTheme = {
+    initial: "#100000",
+    A: "#A00000",
+    B: "#B00000",
+    C: "#C00000",
+  };
+  const resultFor = (theme) => ({
+    vars: {
+      "--lab-fx": theme,
+      "--lab-fx-core": "core",
+      "--lab-fx-alpha": "0.5",
+    },
+    roles: {
+      fx: {
+        kind: "glow",
+        cssVar: "--lab-fx",
+        coreHex: "#D8CEFF",
+        haloHex: haloByTheme[theme],
+        decisionProfile: "stable-v1",
+        decisionGuarantee: { kind: "bit-exact" },
+        compositeProfile: "encoded-srgb8-screen-v1",
+        compositeGuarantee: "bit-exact",
+        layerRecipeProfile: "cam16-jprime-oklab-cusp-v1",
+        appearanceDiagnosticProfile: "cam16-ucs-jprime-li2017-v1",
+        selectionDiagnosticProfile: null,
+        constraintLayer: "halo",
+        targetStatus: "exact-noop-unreachable",
+      },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [];
+      },
+      isStableGlowPointNoop(source, background) {
+        calls.push(`${source}:${background}`);
+        if (source === haloByTheme.A && background === "#FFFFFF") {
+          ctrl.setTheme("B");
+        } else if (source === haloByTheme.A) {
+          ctrl.setTheme("C");
+        }
+        return true;
+      },
+    },
+    theme: "initial",
+    background: ["#FFFFFF", "#EEEEEE"],
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  calls.length = 0;
+  ctrl.setTheme("A");
+
+  assert.equal(el.props.get("--lab-fx"), "B");
+  assert.equal(ctrl.current()["--lab-fx"], "B");
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith(`${haloByTheme.A}:`)),
+    [`${haloByTheme.A}:#FFFFFF`],
+  );
+});
+
+test("a newer adaptive failure stays visible after revoking a malformed candidate", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "A") {
+          ctrl.setTheme("B");
+          return {};
+        }
+        if (theme === "B") throw new Error("newer adaptive intent failed");
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  assert.throws(() => ctrl.setTheme("A"), /newer adaptive intent failed/u);
+  assert.equal(el.props.get("--lab-a"), "initial");
+  assert.equal(ctrl.current()["--lab-a"], "initial");
+});
+
+test("a reentrant stop cleanup failure is never mistaken for a stale adaptive error", () => {
+  const el = fakeElement();
+  const cleanupFailure = new Error("adaptive stop cleanup failed");
+  let ctrl = null;
+  let armed = false;
+  const win = {
+    requestAnimationFrame() {
+      return 1;
+    },
+    cancelAnimationFrame() {
+      throw cleanupFailure;
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background() {
+      if (armed) {
+        armed = false;
+        ctrl.stop();
+      }
+      return "#FFFFFF";
+    },
+    target: el,
+    now: () => 1,
+    win,
+  });
+  ctrl.start();
+
+  armed = true;
+  assert.throws(() => ctrl.setTheme("outer"), (error) => error === cleanupFailure);
+  assert.equal(ctrl.current()["--lab-label-primary"], "#111111");
+});
+
+test("stop retries the same animation-frame cleanup after a transient failure", () => {
+  const cleanupFailure = new Error("transient cancel failure");
+  let attempts = 0;
+  const ctrl = adaptTheme(fakeElement(), {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        return 7;
+      },
+      cancelAnimationFrame(id) {
+        assert.equal(id, 7);
+        attempts++;
+        if (attempts === 1) throw cleanupFailure;
+      },
+    },
+  });
+  ctrl.start();
+
+  assert.throws(() => ctrl.stop(), (error) => error === cleanupFailure);
+  assert.doesNotThrow(() => ctrl.stop());
+  assert.equal(attempts, 2);
+});
+
+test("restart cannot orphan a frame whose first cancellation failed", () => {
+  let nextId = 1;
+  let firstFailure = true;
+  const cancelled = [];
+  const ctrl = adaptTheme(fakeElement(), {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    now: () => 1,
+    win: {
+      requestAnimationFrame() {
+        return nextId++;
+      },
+      cancelAnimationFrame(id) {
+        if (firstFailure) {
+          firstFailure = false;
+          throw new Error("transient cancel failure");
+        }
+        cancelled.push(id);
+      },
+    },
+  });
+
+  ctrl.start();
+  assert.throws(() => ctrl.stop(), /transient cancel failure/u);
+  ctrl.start();
+  ctrl.stop();
+
+  assert.deepEqual(cancelled.sort((a, b) => a - b), [1, 2]);
+});
+
+test("a successful reentrant stop keeps its revoked malformed candidate inert", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        if (theme === "stop") {
+          ctrl.stop();
+          return {};
+        }
+        return oneRole("#111111", 100);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  assert.doesNotThrow(() => ctrl.setTheme("stop"));
+  assert.equal(ctrl.current()["--lab-label-primary"], "#111111");
+});
+
+test("a revoked queued operation cannot reject or erase the newer intent with its invalid clock", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let enqueueA = false;
+  let reenterClock = false;
+  const write = el.style.setProperty.bind(el.style);
+  el.style.setProperty = (key, value) => {
+    write(key, value);
+    if (enqueueA && value === "outer") {
+      enqueueA = false;
+      reenterClock = true;
+      ctrl.setTheme("A");
+    }
+  };
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now() {
+      if (reenterClock) {
+        reenterClock = false;
+        ctrl.setTheme("B");
+        return Number.NaN;
+      }
+      return 1;
+    },
+    win: {},
+  });
+
+  enqueueA = true;
+  assert.doesNotThrow(() => ctrl.setTheme("outer"));
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
+test("invalid clock diagnostics never coerce a client-owned value", () => {
+  const h = harness();
+  let coercions = 0;
+  h.setNow({
+    [Symbol.toPrimitive]() {
+      coercions++;
+      return "hostile-time";
+    },
+  });
+
+  assert.throws(() => h.ctrl.setTheme("dark"), /получено object/u);
+  assert.equal(coercions, 0);
+  h.ctrl.stop();
+});
+
+test("a clock-revoked tick ignores its stale non-finite time", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let reenter = false;
+  const resultFor = (theme) => ({
+    vars: { "--lab-a": theme },
+    roles: {
+      a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
+    },
+  });
+  ctrl = adaptTheme(el, {
+    colors: {
+      resolveTheme(_background, theme) {
+        return resultFor(theme);
+      },
+      recheckContrast() {
+        return [100, 1];
+      },
+    },
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now() {
+      if (reenter) {
+        reenter = false;
+        ctrl.setTheme("B");
+        return Number.NaN;
+      }
+      return 1;
+    },
+    win: {},
+  });
+
+  reenter = true;
+  assert.doesNotThrow(() => ctrl.tick());
+  assert.equal(el.props.get("--lab-a"), "B");
+  assert.equal(ctrl.current()["--lab-a"], "B");
+});
+
+test("a nested setTheme owns the commit over a stale outer tick", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let bg = "#FFFFFF";
+  let now = 0;
+  let reenterOnLightSolve = false;
+  const colors = {
+    resolveTheme(_background, theme) {
+      if (theme === "light" && reenterOnLightSolve) {
+        reenterOnLightSolve = false;
+        ctrl.setTheme("inner");
+        return oneRole("#EEEEEE", 100);
+      }
+      return oneRole(theme === "inner" ? "#222222" : "#111111", 100);
+    },
+    recheckContrast() {
+      return [0, 1];
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+  });
+
+  bg = "#101010";
+  now = 1;
+  reenterOnLightSolve = true;
+  ctrl.tick();
+  assert.equal(el.props.get("--lab-label-primary"), "#222222");
+  assert.equal(ctrl.current()["--lab-label-primary"], "#222222");
+});
+
+test("a reentrant stop during recheck leaves the same sample retryable", () => {
+  const el = fakeElement();
+  let ctrl = null;
+  let bg = "#FFFFFF";
+  let rechecks = 0;
+  let stopInsideRecheck = false;
+  const colors = {
+    resolveTheme() {
+      return oneRole("#111111", 100);
+    },
+    recheckContrast() {
+      rechecks++;
+      if (stopInsideRecheck) {
+        stopInsideRecheck = false;
+        ctrl.stop();
+      }
+      return [100, 1];
+    },
+  };
+  ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+  el.mutations.length = 0;
+
+  bg = "#FEFEFE";
+  stopInsideRecheck = true;
+  ctrl.tick();
+  assert.deepEqual(el.mutations, []);
+  assert.deepEqual(el.props, beforeDom);
+  assert.deepEqual(ctrl.current(), beforeCurrent);
+
+  ctrl.tick();
+  assert.equal(rechecks, 2, "the stale outer tick must not mark its sample as processed");
 });
 
 test("stop and restart preserve an in-flight ease until its canonical target", () => {
@@ -746,6 +2425,18 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
         colors: { resolveTheme: () => stable, recheckContrast: () => [] },
       }),
     /isStableGlowPointNoop/u,
+  );
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        ...options,
+        colors: {
+          resolveTheme: () => stable,
+          recheckContrast: () => [],
+          isStableGlowPointNoop: () => "false",
+        },
+      }),
+    /isStableGlowPointNoop must return a boolean/u,
   );
 
   const malformed = structuredClone(stable);
@@ -1613,6 +3304,26 @@ test("rejects a colours engine missing recheckContrast", () => {
   );
 });
 
+test("rejects malformed optional engine capabilities instead of hiding them", () => {
+  for (const capability of ["recheckContrastMulti", "isStableGlowPointNoop"]) {
+    assert.throws(
+      () =>
+        adaptTheme(fakeElement(), {
+          theme: "light",
+          background: "#FFFFFF",
+          now: () => 1,
+          win: {},
+          colors: {
+            resolveTheme: () => oneRole("#111111", 100),
+            recheckContrast: () => [100, 1],
+            [capability]: "broken",
+          },
+        }),
+      new RegExp(`${capability} must be a function`, "u"),
+    );
+  }
+});
+
 // ── batch recheck (recheckContrastMulti) wiring ──────────────────────────────
 // The controller collapses the multi-sample worst-case loop into ONE engine call
 // when the engine exposes `recheckContrastMulti`. These tests prove the batch
@@ -1735,13 +3446,13 @@ test("batch engine still uses the per-sample path for a single-sample backdrop",
   );
 });
 
-// ── Пер-ролевой отказ сквозь рантайм-цикл (закон допуска на JS-стороне) ──────
+// ── Допущенный Unresolved сквозь рантайм-цикл ────────────────────────────────
 
-// Смешанный набор: живой цвет + допущенный пер-ролевой отказ (var НЕ эмитится,
-// по wasm-проекции) + полупрозрачная роль. Отказная роль обязана оставаться
-// структурно инертной на каждой фазе: ни выдуманного цвета, ни участия в
+// Смешанный набор: живой цвет + допущенный Unresolved (var НЕ эмитится,
+// по wasm-проекции) + полупрозрачная роль. Unresolved обязан оставаться
+// структурно инертным на каждой фазе: ни выдуманного цвета, ни участия в
 // recheck/ease, ни воскрешения после re-solve; выжившие роли живут как обычно.
-function mixedWithFailure(hex, lc) {
+function mixedWithUnresolved(hex, lc) {
   return {
     vars: {
       "--lab-label-primary": hex,
@@ -1758,9 +3469,9 @@ function mixedWithFailure(hex, lc) {
       impossible: {
         kind: "failure",
         cssVar: "--lab-impossible",
-        category: "unreachable",
-        code: "exceeds_range",
-        message: "target exceeds the most this background can supply",
+        category: "unresolved",
+        code: "bounded_search_exhausted",
+        message: "bounded search did not decide",
       },
       veil: {
         kind: "translucent",
@@ -1772,9 +3483,9 @@ function mixedWithFailure(hex, lc) {
   };
 }
 
-test("admitted per-role failure stays inert through init, breach re-solve and ease", () => {
+test("admitted Unresolved stays inert through init, breach re-solve and ease", () => {
   const h = harness();
-  h.colors.setResolve(mixedWithFailure("#000000", 100));
+  h.colors.setResolve(mixedWithUnresolved("#000000", 100));
   // Пересоздать контроллер поверх нового резолва: init-фаза.
   const el = fakeElement();
   let bg = "#FFFFFF";
@@ -1784,7 +3495,7 @@ test("admitted per-role failure stays inert through init, breach re-solve and ea
     resolveCount: 0,
     resolveTheme(b) {
       this.resolveCount++;
-      return mixedWithFailure(this.resolveCount === 1 ? "#000000" : "#111111", 100);
+      return mixedWithUnresolved(this.resolveCount === 1 ? "#000000" : "#111111", 100);
     },
     recheckContrast(b, fgs) {
       seenRecheckHex.push(...fgs);
@@ -1893,6 +3604,47 @@ test("corrupted resolve result throws instead of wiping vars with an empty snaps
   assert.throws(() => ctrl.tick(), /vars, roles/u);
   assert.deepEqual(el.props, varsBefore, "painted vars survive a corrupted re-solve");
   ctrl.stop();
+});
+
+test("non-finite initial clock is rejected before resolve or DOM mutation", () => {
+  for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const colors = fakeColors(oneRole("#000000", 100));
+    const el = fakeElement();
+    assert.throws(
+      () => adaptTheme(el, {
+        colors,
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => now,
+        win: {},
+      }),
+      /конечными/u,
+    );
+    assert.equal(colors.resolveCount(), 0, "invalid time must fail before resolver state");
+    assert.deepEqual(el.mutations, [], "invalid time must fail before CSSOM");
+  }
+});
+
+test("non-finite setTheme clock preserves the committed state and remains retryable", () => {
+  const h = harness();
+  const committed = h.ctrl.current();
+  const painted = new Map(h.el.props);
+  h.colors.setResolve(oneRole("#FFFFFF", 100));
+
+  for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    h.setNow(now);
+    assert.throws(() => h.ctrl.setTheme("dark"), /конечными/u);
+    assert.equal(h.colors.resolveCount(), 1, "invalid time must fail before re-resolve");
+    assert.deepEqual(h.ctrl.current(), committed);
+    assert.deepEqual(h.el.props, painted);
+  }
+
+  h.setNow(1100);
+  h.ctrl.setTheme("dark");
+  assert.equal(h.colors.resolveCount(), 2, "the same intent remains retryable");
+  assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
+  h.ctrl.stop();
 });
 
 test("non-finite clock is rejected before it can poison breach timing", () => {

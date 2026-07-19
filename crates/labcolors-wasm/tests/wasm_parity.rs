@@ -19,7 +19,7 @@ use labcolors_core::semantic::NamedRoleTable;
 use labcolors_core::{BgInput, Resolved, ViewingConditions, resolve_named_set};
 use labcolors_wasm::LabColors;
 use labcolors_wasm::config_dto::ConfigDto;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -679,44 +679,129 @@ fn invalid_background_rejects() {
     );
 }
 
-/// A real core failure crosses as the single public role shape. The fixture is
-/// deliberately solvable as a request but impossible on this background, so
-/// the test cannot be satisfied by config validation or a synthetic DTO.
+/// Реальная ordinary-недостижимость отклоняет весь resolve структурированным
+/// output conflict. Fixture валиден как запрос, но физически недостижим на этом
+/// фоне, поэтому тест нельзя удовлетворить config-validation или forged DTO.
 #[wasm_bindgen_test]
-fn typed_role_failure_crosses_with_core_category_and_no_css_value() {
+fn ordinary_unreachable_is_structured_output_conflict() {
     let mut config: serde_json::Value =
         serde_json::from_str(LABUI_JSON).expect("canonical passport parses");
-    config["roles"]
-        .as_array_mut()
-        .expect("roles is an array")
-        .push(serde_json::json!({
-            "name": "failure-probe",
+    let roles = config["roles"].as_array_mut().expect("roles is an array");
+    roles.insert(
+        0,
+        serde_json::json!({
+            "name": "conflict-z",
             "recipe": {"kind": "decorative-lc", "magnitude": 50.0}
-        }));
+        }),
+    );
+    let middle = roles.len() / 2;
+    roles.insert(
+        middle,
+        serde_json::json!({
+            "name": "conflict-m",
+            "recipe": {"kind": "decorative-lc", "magnitude": 51.0}
+        }),
+    );
+    roles.push(serde_json::json!({
+        "name": "conflict-a",
+        "recipe": {"kind": "decorative-lc", "magnitude": 52.0}
+    }));
+    let aliases = config["aliases"]
+        .as_array_mut()
+        .expect("aliases is an array");
+    for (alias, target) in [
+        ("conflict-z-alias", "conflict-z"),
+        ("conflict-m-alias", "conflict-m"),
+        ("conflict-a-alias", "conflict-a"),
+    ] {
+        aliases.push(serde_json::json!({"alias": alias, "target": target}));
+    }
     let json = serde_json::to_string(&config).expect("extended passport serializes");
     let engine = boundary_with(&json);
-    let result: JsValue = engine
+    let error: JsValue = engine
         .resolve_theme("#808080", "light")
-        .expect("per-role physical failure is a successful resolve")
+        .map(|_| ())
+        .expect_err("ordinary Unreachable обязан отклонить whole resolve")
         .into();
-    let roles = get_obj(&result, "roles");
-    let vars = get_obj(&result, "vars");
-    let failure = get_obj(&roles, "failure-probe");
-
-    assert_eq!(get_str(&failure, "kind").as_deref(), Some("failure"));
-    assert_eq!(
-        get_str(&failure, "category").as_deref(),
-        Some("unreachable")
-    );
-    assert_eq!(get_str(&failure, "code").as_deref(), Some("exceeds_range"));
     assert!(
-        get_str(&failure, "message").is_some_and(|message| message.contains("target Lc 50.00"))
+        error.is_instance_of::<js_sys::Error>(),
+        "structured conflict остаётся ordinary built-in Error"
     );
+    let error_object: js_sys::Object = error.clone().unchecked_into();
+    let error_keys = js_sys::Object::keys(&error_object)
+        .iter()
+        .map(|value| value.as_string().expect("error key is a string"))
+        .collect::<Vec<_>>();
     assert_eq!(
-        get_str(&vars, "--lab-failure-probe"),
-        None,
-        "failure must not fabricate a CSS fallback"
+        error_keys,
+        ["name", "code", "conflicts"],
+        "Object.assign создаёт ровно own enumerable contract fields"
     );
+    for field in ["name", "code", "conflicts"] {
+        let descriptor =
+            js_sys::Object::get_own_property_descriptor(&error_object, &JsValue::from_str(field));
+        assert!(
+            !descriptor.is_undefined(),
+            "{field} обязан быть own property"
+        );
+        assert!(
+            get_obj(&descriptor, "get").is_undefined()
+                && get_obj(&descriptor, "set").is_undefined(),
+            "{field} обязан быть data property, не accessor"
+        );
+        for flag in ["writable", "enumerable", "configurable"] {
+            assert_eq!(
+                get_obj(&descriptor, flag).as_bool(),
+                Some(true),
+                "{field}.{flag} должен следовать ordinary assignment semantics"
+            );
+        }
+    }
+    assert_eq!(
+        get_str(&error, "name").as_deref(),
+        Some("OutputConflictError")
+    );
+    assert_eq!(get_str(&error, "code").as_deref(), Some("output_conflict"));
+    assert!(
+        get_str(&error, "message").is_some_and(|message| message.starts_with("output_conflict:"))
+    );
+
+    let conflicts = js_sys::Array::from(&get_obj(&error, "conflicts"));
+    assert_eq!(conflicts.length(), 3, "aggregate сохраняет каждый конфликт");
+    for (index, (role, target)) in [
+        ("conflict-z", "50.00"),
+        ("conflict-m", "51.00"),
+        ("conflict-a", "52.00"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let conflict = conflicts.get(index as u32);
+        assert_eq!(get_str(&conflict, "role").as_deref(), Some(role));
+        assert_eq!(get_str(&conflict, "code").as_deref(), Some("exceeds_range"));
+        assert!(
+            get_str(&conflict, "message")
+                .is_some_and(|message| message.contains(&format!("target Lc {target}")))
+        );
+        let mut fields = js_sys::Object::keys(&conflict.clone().into())
+            .iter()
+            .map(|value| value.as_string().expect("conflict key is a string"))
+            .collect::<Vec<_>>();
+        fields.sort_unstable();
+        assert_eq!(fields, ["code", "message", "role"]);
+        for forbidden in ["vars", "roles", "css", "candidate", "certificate"] {
+            assert!(
+                !js_sys::Reflect::has(&conflict, &JsValue::from_str(forbidden)).unwrap(),
+                "conflict payload не должен нести {forbidden}"
+            );
+        }
+    }
+    for forbidden in ["vars", "roles", "css", "candidate", "certificate"] {
+        assert!(
+            !js_sys::Reflect::has(&error, &JsValue::from_str(forbidden)).unwrap(),
+            "error не должен нести partial output field {forbidden}"
+        );
+    }
 }
 
 /// Смоук границы конфига в живом wasm-рантайме: два РАЗНЫХ конфига дают разные

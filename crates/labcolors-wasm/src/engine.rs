@@ -21,7 +21,7 @@ use labcolors_core::{BgInput, ResolveSetError, Resolved, Solved};
 use crate::cache::{CacheKey, ContractCache};
 use crate::config_dto::{ConfigDto, fingerprint};
 use crate::dto::{ResolvedTheme, RgbaColor, RoleEntry, RoleOutcome, SolvedColor};
-use crate::error::BindingError;
+use crate::error::{BindingError, OutputConflict, OutputConflicts};
 
 /// How many distinct `(bg, theme, table)` resolves the cache holds before a
 /// целиком. Фиксированная граница исключает неограниченный рост при
@@ -133,10 +133,10 @@ impl Engine {
     /// Resolve every role for `bg_hex` under `theme`, returning the shared
     /// result. Repeated identical calls hit the contract cache.
     ///
-    /// Ошибки возвращаются, не паникуют. Допущенная пер-ролевой
-    /// недостижимость или незавершённый поиск — часть успешного результата.
-    /// Rejected/unsupported/internal провенанс набора валит весь вызов до
-    /// появления какой-либо темы.
+    /// Ошибки возвращаются, не паникуют. `Unresolved` остаётся локальным
+    /// успешным исходом роли; ordinary `Unreachable` агрегируется и отклоняет
+    /// весь вызов. Rejected/unsupported/internal провенанс набора также не
+    /// допускает появления темы.
     pub fn resolve_theme(
         &self,
         bg_hex: &str,
@@ -165,6 +165,7 @@ impl Engine {
             let result = self.cache.get_or_try_insert_with(key, || {
                 let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc)
                     .map_err(resolve_set_error_to_binding)?;
+                admit_complete_output(&set)?;
                 let mut roles: Vec<RoleEntry> = set
                     .into_iter()
                     .map(|(name, resolved)| -> Result<RoleEntry, BindingError> {
@@ -287,8 +288,36 @@ impl Engine {
     }
 }
 
+/// Core сохраняет ordinary `Unreachable` как локальное физическое свидетельство,
+/// но текущий delivery snapshot умеет выразить отсутствие CSS только как remove.
+/// Поэтому граница собирает ВСЕ такие роли до mapping/aliases/cache и отклоняет
+/// whole resolve, не позволяя ambient CSS стать неявным fallback.
+fn admit_complete_output(set: &[(String, Resolved)]) -> Result<(), BindingError> {
+    let mut conflicts = set.iter().filter_map(|(role, resolved)| {
+        let Resolved::Failure(failure) = resolved else {
+            return None;
+        };
+        is_output_conflict_category(failure.category())
+            .then(|| OutputConflict::new(role.clone(), failure.code(), failure.to_string()))
+    });
+    let Some(first) = conflicts.next() else {
+        return Ok(());
+    };
+    Err(BindingError::OutputConflict {
+        conflicts: OutputConflicts::new(first, conflicts.collect()),
+    })
+}
+
+/// `Unresolved` остаётся честным локальным исходом bounded search, а доказанный
+/// `Unreachable` запрещает полный snapshot.
+const fn is_output_conflict_category(category: labcolors_core::RoleFailureCategory) -> bool {
+    matches!(category, labcolors_core::RoleFailureCategory::Unreachable)
+}
+
 /// Map one core [`Resolved`] into the boundary [`RoleOutcome`]. `legal_floor` is
 /// the role's WCAG clamp (from the role table), carried onto a solved colour.
+/// Ordinary `Unreachable` должен быть удалён [`admit_complete_output`] раньше;
+/// его появление здесь — внутренний дрейф, не второй одиночный conflict path.
 fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutcome, BindingError> {
     Ok(match resolved {
         Resolved::Color {
@@ -297,10 +326,16 @@ fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutc
             achieved_dj,
         } => RoleOutcome::Color(map_solved(solved, compressed, achieved_dj, legal_floor)),
         Resolved::None => RoleOutcome::None,
-        Resolved::Failure(failure) => RoleOutcome::Failure {
-            category: failure.category(),
-            code: failure.code(),
-            message: failure.to_string(),
+        Resolved::Failure(failure) => match failure.category() {
+            labcolors_core::RoleFailureCategory::Unreachable => {
+                return Err(BindingError::Internal {
+                    reason: "ordinary Unreachable escaped output admission".to_string(),
+                });
+            }
+            labcolors_core::RoleFailureCategory::Unresolved => RoleOutcome::Unresolved {
+                code: failure.code(),
+                message: failure.to_string(),
+            },
         },
         // Полупрозрачная эмиссия лестницы/альфа-аналога (конфиг-путь):
         // наружу уходит oklch(L% C H / α), браузер композитит; контраст —
@@ -579,8 +614,122 @@ mod tests {
         }
     }
 
+    /// Реальный mixed-набор с конфликтами в начале, середине и конце. На
+    /// `#808080` Core доказывает недостижимость всех трёх Lc-целей; на белом те
+    /// же декларации законно решаются. Имена намеренно не лексикографические,
+    /// чтобы сортировка вместо declaration order не прошла тест случайно.
+    fn output_conflict_json() -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&labui_json()).expect("паспорт labui — валидный JSON");
+        {
+            let roles = value["roles"].as_array_mut().expect("roles — массив");
+            roles.insert(
+                0,
+                serde_json::json!({
+                    "name": "conflict-z",
+                    "recipe": {"kind": "decorative-lc", "magnitude": 50.0}
+                }),
+            );
+            let middle = roles.len() / 2;
+            roles.insert(
+                middle,
+                serde_json::json!({
+                    "name": "conflict-m",
+                    "recipe": {"kind": "decorative-lc", "magnitude": 51.0}
+                }),
+            );
+            roles.push(serde_json::json!({
+                "name": "conflict-a",
+                "recipe": {"kind": "decorative-lc", "magnitude": 52.0}
+            }));
+        }
+        {
+            let aliases = value["aliases"].as_array_mut().expect("aliases — массив");
+            for (alias, target) in [
+                ("conflict-z-alias", "conflict-z"),
+                ("conflict-m-alias", "conflict-m"),
+                ("conflict-a-alias", "conflict-a"),
+            ] {
+                aliases.push(serde_json::json!({"alias": alias, "target": target}));
+            }
+        }
+        value.to_string()
+    }
+
     #[test]
-    fn admitted_role_failure_crosses_without_adapter_reclassification() {
+    fn ordinary_unreachable_aggregates_before_mapping_aliases_and_cache() {
+        let mut engine = Engine::new();
+        engine
+            .load_config(&output_conflict_json())
+            .expect("контрольный mixed-контракт валиден");
+
+        let assert_conflict = |error: &BindingError| {
+            let BindingError::OutputConflict { conflicts } = error else {
+                panic!("ordinary Unreachable обязан стать OutputConflict, получено {error:?}");
+            };
+            let actual: Vec<_> = conflicts
+                .iter()
+                .map(|conflict| (conflict.role(), conflict.code(), conflict.message()))
+                .collect();
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|(role, code, _)| (*role, *code))
+                    .collect::<Vec<_>>(),
+                [
+                    ("conflict-z", "exceeds_range"),
+                    ("conflict-m", "exceeds_range"),
+                    ("conflict-a", "exceeds_range"),
+                ],
+                "aggregate сохраняет declaration order и не дублирует aliases"
+            );
+            for (index, target) in [50.0, 51.0, 52.0].into_iter().enumerate() {
+                assert!(
+                    actual[index].2.contains(&format!("target Lc {target:.2}")),
+                    "конфликт обязан сохранить исходную диагностику Core"
+                );
+            }
+            assert!(
+                actual.iter().all(|(role, _, _)| !role.ends_with("-alias")),
+                "alias не является отдельным solve и не дублирует конфликт цели"
+            );
+        };
+
+        let first = engine
+            .resolve_theme("#808080", "light")
+            .expect_err("mixed Color/Unreachable-набор не публикует partial ResolvedTheme");
+        assert_conflict(&first);
+        assert_eq!(engine.cache.len(), 0, "ошибка не входит в contract cache");
+
+        let retry = engine
+            .resolve_theme("#808080", "light")
+            .expect_err("то же observation после конфликта можно повторить");
+        assert_conflict(&retry);
+        assert_eq!(retry, first, "retry детерминирован");
+        assert_eq!(engine.cache.len(), 0, "retry ошибки также не кэшируется");
+
+        let success = engine
+            .resolve_theme("#FFFFFF", "light")
+            .expect("те же роли достижимы на контрольном фоне");
+        let hit = engine
+            .resolve_theme("#FFFFFF", "light")
+            .expect("законный success остаётся кэшируемым");
+        assert!(Rc::ptr_eq(&success, &hit));
+        assert_eq!(engine.cache.len(), 1);
+    }
+
+    #[test]
+    fn only_ordinary_unreachable_category_is_an_output_conflict() {
+        assert!(is_output_conflict_category(
+            labcolors_core::RoleFailureCategory::Unreachable
+        ));
+        assert!(!is_output_conflict_category(
+            labcolors_core::RoleFailureCategory::Unresolved
+        ));
+    }
+
+    #[test]
+    fn ordinary_unreachable_leaking_past_set_admission_is_internal() {
         let table = labcolors_core::NamedRoleTable::new(
             vec![(
                 "opaque-client-id".into(),
@@ -595,19 +744,15 @@ mod tests {
             &table,
             &labcolors_core::ViewingConditions::srgb(),
         )
-        .expect("physical failure is an admitted set result");
+        .expect("fixture создаёт admitted core failure");
         let Resolved::Failure(failure) = set.remove(0).1 else {
-            panic!("fixture must exercise the admitted failure path");
+            panic!("fixture обязан упражнять ordinary Unreachable");
         };
-        let message = failure.to_string();
-        let outcome = map_resolved(Resolved::Failure(failure), None).unwrap();
+
         assert!(matches!(
-            outcome,
-            RoleOutcome::Failure {
-                category: labcolors_core::RoleFailureCategory::Unreachable,
-                code: "exceeds_range",
-                message: actual_message,
-            } if actual_message == message
+            map_resolved(Resolved::Failure(failure), None),
+            Err(BindingError::Internal { reason })
+                if reason == "ordinary Unreachable escaped output admission"
         ));
     }
 
@@ -799,7 +944,7 @@ mod tests {
                         );
                     }
                     RoleOutcome::None => {}
-                    RoleOutcome::Failure { .. } => {}
+                    RoleOutcome::Unresolved { .. } => {}
                 }
             }
             assert_eq!(
