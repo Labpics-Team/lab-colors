@@ -24,6 +24,9 @@ import {
 } from "./effective-bg.js";
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
+const CANCELLED = Symbol("adaptTheme.cancelled");
+const NO_FRAME = Symbol("adaptTheme.noFrame");
+
 /** Cubic ease-out: fast start, gentle settle, no overshoot. A non-finite `t`
  * (e.g. a NaN clock making `(now - easeStart) / easeMs` NaN) is treated as a
  * completed ease (1), so the crossfade can never emit `#NANNANNAN` CSS. */
@@ -98,7 +101,9 @@ function segLum(seg, t) {
  *   explicit background evidence. An ARRAY (or a function returning one) is a
  *   finite sample set for a varying backdrop (gradient / image). The caller owns
  *   sampling; the controller compares only those points and uses the lowest
- *   returned metric, without inferring the field between them.
+ *   returned metric, without inferring the field between them. Every declared
+ *   sample must be a non-empty string; invalid explicit evidence is rejected
+ *   without coercion or fallback.
  * @param {*} [options.target=element]  element to write vars onto
  * @param {string} [options.fallback="#FFFFFF"]
  * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
@@ -116,27 +121,70 @@ function segLum(seg, t) {
  * @returns {AdaptController}
  */
 export function adaptTheme(element, options) {
+  const colors = options?.colors;
+  const resolveThemeCapability = colors?.resolveTheme;
+  const recheckContrastCapability = colors?.recheckContrast;
   if (
-    !options ||
-    typeof options.colors?.resolveTheme !== "function" ||
-    typeof options.colors?.recheckContrast !== "function"
+    typeof resolveThemeCapability !== "function" ||
+    typeof recheckContrastCapability !== "function"
   ) {
     throw new TypeError("adaptTheme: options.colors needs resolveTheme + recheckContrast");
   }
-  const colors = options.colors;
+  // Capabilities are parsed once. Dynamic method lookup would itself be a
+  // client callback seam and could invoke a stale method after reentrant owner
+  // loss; engines mutate their data, not their public method table.
+  const resolveTheme = resolveThemeCapability.bind(colors);
+  const recheckContrast = recheckContrastCapability.bind(colors);
+  const recheckContrastMultiCapability = colors.recheckContrastMulti;
+  if (
+    recheckContrastMultiCapability !== undefined &&
+    typeof recheckContrastMultiCapability !== "function"
+  ) {
+    throw new TypeError("adaptTheme: recheckContrastMulti must be a function");
+  }
+  const recheckContrastMulti =
+    typeof recheckContrastMultiCapability === "function"
+      ? recheckContrastMultiCapability.bind(colors)
+      : null;
+  const stableGlowPointNoopCapability = colors.isStableGlowPointNoop;
+  if (
+    stableGlowPointNoopCapability !== undefined &&
+    typeof stableGlowPointNoopCapability !== "function"
+  ) {
+    throw new TypeError("adaptTheme: isStableGlowPointNoop must be a function");
+  }
+  const stableGlowPointNoop =
+    typeof stableGlowPointNoopCapability === "function"
+      ? stableGlowPointNoopCapability.bind(colors)
+      : null;
   const target = options.target ?? element;
   const fallback = options.fallback ?? "#FFFFFF";
+  const backgroundSource = options.background;
+  const getStyle = options.getStyle;
+  const parentOf = options.parentOf;
   const dropFraction = options.dropFraction ?? 0.2;
   const sustainMs = options.sustainMs ?? 120;
   const dwellMs = options.dwellMs ?? 250;
   const strict = options.strict ?? false;
   const win = options.win ?? (typeof globalThis !== "undefined" ? globalThis : undefined);
+  const requestFrameCapability = win?.requestAnimationFrame;
+  const requestFrame =
+    typeof requestFrameCapability === "function" ? requestFrameCapability.bind(win) : null;
+  const cancelFrameCapability = win?.cancelAnimationFrame;
+  const cancelFrame =
+    typeof cancelFrameCapability === "function" ? cancelFrameCapability.bind(win) : null;
+  const performanceHost = win?.performance;
+  const performanceNowCapability = performanceHost?.now;
+  const defaultClock =
+    typeof performanceNowCapability === "function"
+      ? performanceNowCapability.bind(performanceHost)
+      : Date.now;
   const reducedMotion =
     options.reducedMotion ??
     (win?.matchMedia ? win.matchMedia("(prefers-reduced-motion: reduce)").matches : false);
   // Reduced motion → a gentle SHORT fade, never a hard snap.
   const easeMs = reducedMotion ? Math.min(options.easeMs ?? 280, 80) : (options.easeMs ?? 280);
-  const clock = options.now ?? (() => (win?.performance?.now ? win.performance.now() : Date.now()));
+  const clock = options.now ?? defaultClock;
   const finiteTime = (value) => {
     if (!Number.isFinite(value)) {
       // Диагностика не должна неявно вызывать клиентские valueOf/toString:
@@ -177,16 +225,26 @@ export function adaptTheme(element, options) {
   let commitDepth = 0;
   const beginOperation = () => ++operationGeneration;
   const ownsOperation = (owner) => owner === operationGeneration;
+  const checkpoint = (owner) => {
+    if (!ownsOperation(owner)) throw CANCELLED;
+  };
 
-  const readBackground = () => {
-    const b = options.background;
-    if (typeof b === "function") return b();
-    if (typeof b === "string" || Array.isArray(b)) return b;
-    return effectiveBackground(element, {
+  const readBackground = (owner) => {
+    if (typeof backgroundSource === "function") {
+      const value = backgroundSource();
+      checkpoint(owner);
+      return value;
+    }
+    if (backgroundSource !== undefined) return backgroundSource;
+    const value = effectiveBackground(element, {
       fallback,
-      getStyle: options.getStyle,
-      parentOf: options.parentOf,
+      getStyle,
+      parentOf,
+      checkpoint,
+      checkpointToken: owner,
     });
+    checkpoint(owner);
+    return value;
   };
 
   // The background is a SET of samples. A solid surface is one sample; a varying
@@ -194,10 +252,36 @@ export function adaptTheme(element, options) {
   // decision is worst-case over the set: a role "passes" only if it passes
   // against EVERY sample, and we re-solve against the HARDEST sample. With one
   // sample this collapses to plain single-background behaviour, bit-for-bit.
-  const readSamples = () => {
-    const v = readBackground();
-    const arr = Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.length > 0) : [v];
-    return arr.length > 0 ? arr : [fallback];
+  const readSamples = (owner) => {
+    const value = readBackground(owner);
+    checkpoint(owner);
+    if (!Array.isArray(value)) {
+      if (typeof value !== "string" || value.length === 0) {
+        throw new TypeError("adaptTheme: background[0] must be a non-empty string");
+      }
+      return [value];
+    }
+    const source = value;
+    const length = source.length;
+    checkpoint(owner);
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new TypeError("adaptTheme: background array length must be a non-negative integer");
+    }
+    if (length === 0) {
+      throw new TypeError("adaptTheme: background must contain at least one non-empty string");
+    }
+    const samples = new Array(length);
+    for (let i = 0; i < length; i++) {
+      const sample = source[i];
+      checkpoint(owner);
+      if (typeof sample !== "string" || sample.length === 0) {
+        throw new TypeError(
+          `adaptTheme: background[${i}] must be a non-empty string`,
+        );
+      }
+      samples[i] = sample;
+    }
+    return samples;
   };
 
   // Recheck the current colours against every sample. A role breaches if its
@@ -216,32 +300,49 @@ export function adaptTheme(element, options) {
   // `flat[2 * i]`. Byte-identical to N `recheckContrast` calls (locked by the
   // wasm boundary parity test), so the worst-margin / breach / worstIdx decision
   // below is bit-for-bit the same as the fallback loop.
-  const canBatch =
-    typeof colors.recheckContrastMulti === "function";
+  const canBatch = typeof recheckContrastMulti === "function";
 
   const recheckSamples = (
     samples,
     roleSet = roles,
     foregrounds = fgsCache,
     themeName = theme,
+    owner,
   ) => {
     let breached = false;
     let worstIdx = 0;
     let worstMargin = Infinity;
     const stride = foregrounds.length;
-    const batch =
-      canBatch && samples.length > 1
-        ? colors.recheckContrastMulti(samples, foregrounds, themeName)
-        : null;
+    const useBatch = canBatch && samples.length > 1;
+    let batch = null;
+    if (useBatch) {
+      batch = recheckContrastMulti(samples, foregrounds, themeName);
+      checkpoint(owner);
+      const batchLength = batch?.length ?? -1;
+      checkpoint(owner);
+      const expectedLength = samples.length * stride * 2;
+      if (batchLength !== expectedLength) {
+        const received = typeof batchLength === "number" ? String(batchLength) : typeof batchLength;
+        throw new RangeError(
+          "adaptTheme: recheckContrastMulti returned a buffer with invalid length " +
+            `(${received} instead of ${expectedLength})`,
+        );
+      }
+    }
     for (let s = 0; s < samples.length; s++) {
       // Per-sample flat buffer, or a background-major window into the batch one.
-      const flat = batch
-        ? null
-        : colors.recheckContrast(samples[s], foregrounds, themeName);
-      if (!batch && (flat?.length ?? -1) !== roleSet.length * 2) {
+      let flat = null;
+      if (!useBatch) {
+        flat = recheckContrast(samples[s], foregrounds, themeName);
+        checkpoint(owner);
+      }
+      const flatLength = useBatch ? null : (flat?.length ?? -1);
+      checkpoint(owner);
+      if (!useBatch && flatLength !== roleSet.length * 2) {
+        const received = typeof flatLength === "number" ? String(flatLength) : typeof flatLength;
         throw new RangeError(
           "adaptTheme: recheckContrast вернул буфер неверной длины " +
-            `(${flat?.length} вместо ${roleSet.length * 2}) — ` +
+            `(${received} вместо ${roleSet.length * 2}) — ` +
             "битый результат нельзя молча принять за отсутствие пробоя",
         );
       }
@@ -249,10 +350,12 @@ export function adaptTheme(element, options) {
       let sampleMargin = Infinity;
       for (let i = 0; i < roleSet.length; i++) {
         const want = Math.abs(roleSet[i].lc) * (1 - dropFraction);
-        const lcRaw = batch ? batch[(base + i) * 2] : flat[2 * i];
+        const lcRaw = useBatch ? batch[(base + i) * 2] : flat[2 * i];
+        checkpoint(owner);
         if (!Number.isFinite(lcRaw)) {
+          const received = typeof lcRaw === "number" ? String(lcRaw) : typeof lcRaw;
           throw new RangeError(
-            `adaptTheme: recheckContrast отдал нефинитный Lc (${lcRaw}) — ` +
+            `adaptTheme: recheckContrast отдал нефинитный Lc (${received}) — ` +
               "NaN-сравнения молча заморозили бы устаревшие цвета",
           );
         }
@@ -368,8 +471,7 @@ export function adaptTheme(element, options) {
 
   // Сначала собрать неизменяемый кандидат: состояние контроллера и DOM не
   // меняются, пока каждый шаг транзакции (resolve/recheck/сертификат) не пройдёт.
-  const resolvedCandidate = (result, now) => {
-    const snapshot = admitSnapshot(result, "adaptTheme");
+  const resolvedCandidate = (snapshot, now) => {
     const nextStableGlows = validatedStableGlowsFrom(snapshot);
     const nextBaseVars = snapshot.vars;
     const nextRoles = Object.entries(snapshot.roles)
@@ -406,8 +508,16 @@ export function adaptTheme(element, options) {
     return true;
   };
 
-  const solveCandidate = (bg, now, themeName) =>
-    resolvedCandidate(colors.resolveTheme(bg, themeName), now);
+  const resolveSnapshot = (bg, themeName, owner) => {
+    const raw = resolveTheme(bg, themeName);
+    checkpoint(owner);
+    const snapshot = admitSnapshot(raw, "adaptTheme", checkpoint, owner);
+    checkpoint(owner);
+    return snapshot;
+  };
+
+  const solveCandidate = (bg, now, themeName, owner) =>
+    resolvedCandidate(resolveSnapshot(bg, themeName, owner), now);
 
   // Choose an initial result from `samples`. With one sample this is a single
   // solve. With several, solve against the first sample, evaluate that
@@ -416,8 +526,8 @@ export function adaptTheme(element, options) {
   // the set, so this is a bounded initialization heuristic, not a final
   // worst-sample certificate. The tick path instead starts from its own current
   // результата и пере-решает по худшему (минимальная метрика) из образцов.
-  const solveWorstCandidate = (samples, now, themeName) => {
-    const sample0 = solveCandidate(samples[0], now, themeName);
+  const solveWorstCandidate = (samples, now, themeName, owner) => {
+    const sample0 = solveCandidate(samples[0], now, themeName, owner);
     let candidate = sample0;
     if (samples.length > 1) {
       const { worstIdx } = recheckSamples(
@@ -425,9 +535,10 @@ export function adaptTheme(element, options) {
         candidate.roles,
         candidate.fgsCache,
         themeName,
+        owner,
       );
       if (worstIdx !== 0) {
-        candidate = solveCandidate(samples[worstIdx], now, themeName);
+        candidate = solveCandidate(samples[worstIdx], now, themeName, owner);
       }
     }
     return { candidate, sample0Result: sample0.result };
@@ -506,20 +617,30 @@ export function adaptTheme(element, options) {
     state,
     themeName,
     sample0Result = null,
+    owner,
   ) => {
     if (state.stableGlows.length === 0) return null;
 
-    if (typeof colors.isStableGlowPointNoop !== "function") {
+    if (typeof stableGlowPointNoop !== "function") {
       throw new TypeError(
         "adaptTheme: stable Glow requires colors.isStableGlowPointNoop",
       );
     }
     const desired = new Map();
     for (const role of state.stableGlows) {
-      desired.set(
-        role.key,
-        samples.some((bg) => !colors.isStableGlowPointNoop(role.sourceHex, bg)),
-      );
+      let indeterminate = false;
+      for (const bg of samples) {
+        const noop = stableGlowPointNoop(role.sourceHex, bg);
+        checkpoint(owner);
+        if (typeof noop !== "boolean") {
+          throw new TypeError("adaptTheme: isStableGlowPointNoop must return a boolean");
+        }
+        if (!noop) {
+          indeterminate = true;
+          break;
+        }
+      }
+      desired.set(role.key, indeterminate);
     }
 
     const changed = state.stableGlows.some(
@@ -530,10 +651,8 @@ export function adaptTheme(element, options) {
     // Re-resolve exactly once to refresh certificates/source metadata. Only
     // stable Glow satellites are adopted; color/translucent roles remain under
     // the existing adaptive contrast controller and do not snap.
-    const fresh = admitSnapshot(
-      sample0Result ?? colors.resolveTheme(samples[0], themeName),
-      "adaptTheme",
-    );
+    const fresh = sample0Result ?? resolveSnapshot(samples[0], themeName, owner);
+    checkpoint(owner);
     const freshStable = validatedStableGlowsFrom(fresh);
     const freshByKey = new Map(freshStable.map((role) => [role.key, role]));
     const nextVars = { ...state.baseVars };
@@ -568,12 +687,14 @@ export function adaptTheme(element, options) {
     samples,
     themeName,
     sample0Result = null,
+    owner,
   ) => {
     const prepared = prepareStableGlowReconciliation(
       samples,
       candidate,
       themeName,
       sample0Result,
+      owner,
     );
     return prepared === null ? candidate : { ...candidate, ...prepared };
   };
@@ -774,14 +895,14 @@ export function adaptTheme(element, options) {
     return vars;
   };
 
-  const runTick = (nowArg) => {
-    const owner = beginOperation();
+  const runTickOwned = (nowArg, owner) => {
     const rawNow = nowArg ?? clock();
     if (!ownsOperation(owner)) return;
     const now = finiteTime(rawNow);
-    const samples = readSamples();
+    const samples = readSamples(owner);
     if (!ownsOperation(owner)) return;
     const key = samples.join("|");
+    if (!ownsOperation(owner)) return;
     const hasEase = easing.size > 0;
 
     // Завершившийся ease на неизменном idle-образце не содержит fallible-
@@ -806,6 +927,8 @@ export function adaptTheme(element, options) {
               samples,
               { baseVars, stableGlows },
               theme,
+              null,
+              owner,
             );
       if (!ownsOperation(owner)) return;
       if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
@@ -817,7 +940,13 @@ export function adaptTheme(element, options) {
 
     // Compare the current colours with every declared sample. `worstIdx` is the
     // lowest-metric sample, the one used for the next resolve.
-    const { breached, worstIdx } = recheckSamples(samples);
+    const { breached, worstIdx } = recheckSamples(
+      samples,
+      roles,
+      fgsCache,
+      theme,
+      owner,
+    );
     if (!ownsOperation(owner)) return;
     let nextBreachSince = breachSince;
 
@@ -840,6 +969,8 @@ export function adaptTheme(element, options) {
               samples,
               { baseVars, stableGlows },
               theme,
+              null,
+              owner,
             );
       if (!ownsOperation(owner)) return;
       // Вся работа resolver/recheck/Glow-валидации успешна. Только теперь
@@ -859,13 +990,14 @@ export function adaptTheme(element, options) {
     // would SNAP the element to the old target for one frame before easing,
     // reintroducing flicker when a re-solve overlaps a previous ease.
     const fromByVar = paintedNow(now, samples, key);
-    let candidate = solveCandidate(samples[worstIdx], now, theme);
+    let candidate = solveCandidate(samples[worstIdx], now, theme, owner);
     if (!ownsOperation(owner)) return;
     candidate = withStableGlowReconciliation(
       candidate,
       samples,
       theme,
       worstIdx === 0 ? candidate.result : null,
+      owner,
     );
     if (!ownsOperation(owner)) return;
     const preparedEase = prepareEase(candidate.roles, fromByVar, now);
@@ -877,63 +1009,106 @@ export function adaptTheme(element, options) {
     stepEase(now, samples, key, owner);
   };
 
-  let rafId = null;
-  let running = false;
-  let frameEpoch = 0;
-  let frameCallback = null;
-  const queueNextFrame = (callback) => {
+  const runTick = (nowArg) => {
+    const owner = beginOperation();
     try {
-      rafId = win.requestAnimationFrame(callback);
+      return runTickOwned(nowArg, owner);
     } catch (error) {
-      running = false;
-      rafId = null;
-      frameCallback = null;
-      frameEpoch++;
+      // Callback мог поставить более новую операцию в FIFO и тем самым отозвать
+      // ещё не опубликованный кандидат. Его позднее значение и исключение —
+      // одинаково устаревшие: ни одно не вправе очистить новый intent.
+      if (!ownsOperation(owner)) return;
       throw error;
     }
   };
-  const runFrame = (epoch) => {
+
+  // One record belongs to one start/epoch and is reused across its frames. The
+  // record identity, not the host's numeric ID, stays unique when a hostile or
+  // overflowing host reuses IDs. No record is allocated on the steady frame loop.
+  let frameRecord = null;
+  const pendingFrameCancellations = new Set();
+  let running = false;
+  let frameEpoch = 0;
+  const queueNextFrame = (record) => {
+    if (lastFrameRequestTransaction === serialTransactionId) {
+      if (frameRecord === record) {
+        running = false;
+        frameRecord = null;
+        frameEpoch++;
+      }
+      throw new Error(
+        "adaptTheme: reentrant frame controls did not stabilize in one transaction",
+      );
+    }
+    lastFrameRequestTransaction = serialTransactionId;
+    let id;
+    try {
+      id = requestFrame(record.callback);
+    } catch (error) {
+      if (frameRecord === record) {
+        running = false;
+        frameRecord = null;
+        frameEpoch++;
+      }
+      throw error;
+    }
+    record.id = id;
+    if (!running || frameRecord !== record || record.epoch !== frameEpoch) {
+      if (cancelFrame) {
+        pendingFrameCancellations.add(record);
+        cancelPendingFrames();
+      }
+    }
+  };
+  const runFrame = (record) => {
+    // A callback that naturally fired no longer owns a cancellable handle —
+    // even if a previous cancel attempt failed and this epoch is now stale.
+    record.id = NO_FRAME;
+    pendingFrameCancellations.delete(record);
     // Callback может пережить враждебную/несработавшую отмену. Владение
     // эпохой держит его инертным и, главное, не даёт ему гасить или
     // продлевать цикл, запущенный позже.
-    if (!running || epoch !== frameEpoch) return;
-    rafId = null;
+    if (!running || frameRecord !== record || record.epoch !== frameEpoch) return;
     try {
       tick();
     } catch (error) {
       // Гасить можно только СВОЮ эпоху: если tick() внутри успел сделать
       // stop()/start(), новая эпоха уже владеет циклом, и падение старого
       // кадра не смеет её глушить.
-      if (epoch === frameEpoch) {
+      if (frameRecord === record && record.epoch === frameEpoch) {
         running = false;
-        frameCallback = null;
+        frameRecord = null;
         frameEpoch++;
       }
       throw error;
     }
     if (
       running &&
-      epoch === frameEpoch &&
-      rafId === null &&
-      frameCallback !== null &&
-      win?.requestAnimationFrame
+      frameRecord === record &&
+      record.epoch === frameEpoch &&
+      record.id === NO_FRAME &&
+      requestFrame
     ) {
-      queueNextFrame(frameCallback);
+      runPublicControl("frame", record);
     }
   };
 
   // Apply the initial set immediately (against the worst sample of the backdrop).
   {
     const owner = beginOperation();
-    const samples = readSamples();
+    const samples = readSamples(owner);
     const nextKey = samples.join("|");
-    const now = finiteTime(clock());
-    const prepared = solveWorstCandidate(samples, now, theme);
+    checkpoint(owner);
+    const rawNow = clock();
+    checkpoint(owner);
+    const now = finiteTime(rawNow);
+    const prepared = solveWorstCandidate(samples, now, theme, owner);
     let candidate = withStableGlowReconciliation(
       prepared.candidate,
       samples,
       theme,
       prepared.sample0Result,
+      owner,
     );
     if (!commitResolved(candidate, owner)) {
       throw new Error("adaptTheme: initial operation lost ownership");
@@ -944,22 +1119,103 @@ export function adaptTheme(element, options) {
 
   const pendingOperations = [];
   let drainingOperations = false;
+  let executingOperation = false;
+  let queuedStartActive = false;
+  let queuedStopActive = false;
+  let serialTransactionId = 0;
+  let lastFrameRequestTransaction = -1;
+  let stopPassSequence = 0;
+  let transactionStopPass = 0;
 
-  const runSetTheme = (next) => {
-    const owner = beginOperation();
-    const samples = readSamples();
+  const beginSerialTransaction = () => {
+    serialTransactionId++;
+    transactionStopPass = 0;
+  };
+
+  const cancelPendingFrames = () => {
+    if (!cancelFrame) return;
+    if (transactionStopPass === 0) transactionStopPass = ++stopPassSequence;
+    const failures = [];
+    for (const record of pendingFrameCancellations) {
+      // One top-level transaction gets one attempt per acquired record. A
+      // callback may re-enter stop, but it cannot multiply synchronous retries.
+      if (record.lastStopPass === transactionStopPass) continue;
+      record.lastStopPass = transactionStopPass;
+      try {
+        cancelFrame(record.id);
+        record.id = NO_FRAME;
+        pendingFrameCancellations.delete(record);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "adaptTheme: animation-frame cleanup failed");
+    }
+  };
+
+  const runStart = () => {
+    if (!running && requestFrame) {
+      running = true;
+      const record = {
+        epoch: ++frameEpoch,
+        id: NO_FRAME,
+        callback: null,
+        lastStopPass: 0,
+      };
+      record.callback = () => runFrame(record);
+      frameRecord = record;
+      queueNextFrame(record);
+    }
+  };
+
+  const runQueuedStart = () => {
+    queuedStartActive = true;
+    try {
+      runStart();
+    } finally {
+      queuedStartActive = false;
+    }
+  };
+
+  const runStop = (clearPending) => {
+    if (clearPending) pendingOperations.length = 0;
+    running = false;
+    frameEpoch++;
+    const active = frameRecord;
+    frameRecord = null;
+    if (active && active.id !== NO_FRAME && cancelFrame) {
+      pendingFrameCancellations.add(active);
+    }
+    cancelPendingFrames();
+  };
+
+  const runQueuedStop = () => {
+    queuedStopActive = true;
+    try {
+      runStop(false);
+    } finally {
+      queuedStopActive = false;
+    }
+  };
+
+  const runSetThemeOwned = (next, owner) => {
+    const samples = readSamples(owner);
     if (!ownsOperation(owner)) return;
     const nextKey = samples.join("|");
+    if (!ownsOperation(owner)) return;
     const rawNow = clock();
     if (!ownsOperation(owner)) return;
     const now = finiteTime(rawNow);
-    const prepared = solveWorstCandidate(samples, now, next);
+    const prepared = solveWorstCandidate(samples, now, next, owner);
     if (!ownsOperation(owner)) return;
     const candidate = withStableGlowReconciliation(
       prepared.candidate,
       samples,
       next,
       prepared.sample0Result,
+      owner,
     );
     if (!ownsOperation(owner)) return;
     // Вся до-записьная работа resolver/recheck/evidence завершена.
@@ -971,6 +1227,16 @@ export function adaptTheme(element, options) {
     applyRolesDirect(owner); // instant — a theme switch is intent, not drift
   };
 
+  const runSetTheme = (next) => {
+    const owner = beginOperation();
+    try {
+      return runSetThemeOwned(next, owner);
+    } catch (error) {
+      if (!ownsOperation(owner)) return;
+      throw error;
+    }
+  };
+
   const drainOperations = () => {
     if (drainingOperations || commitDepth > 0) return;
     drainingOperations = true;
@@ -978,30 +1244,106 @@ export function adaptTheme(element, options) {
       while (pendingOperations.length > 0) {
         const operation = pendingOperations.shift();
         if (operation.kind === "tick") runTick(operation.now);
-        else runSetTheme(operation.theme);
+        else if (operation.kind === "theme") runSetTheme(operation.theme);
+        else if (operation.kind === "start") runQueuedStart();
+        else runQueuedStop();
       }
     } catch (error) {
-      // Одна внешняя операция и её reentrant FIFO — одна serial transaction.
-      // После первого отказа старый suffix не смеет пережить transaction и
-      // перезаписать более новое намерение при следующем публичном вызове.
-      pendingOperations.length = 0;
-      throw error;
+      failOperation(error);
     } finally {
       drainingOperations = false;
     }
   };
 
+  const drainControlsAfterFailure = () => {
+    const failures = [];
+    const wasDraining = drainingOperations;
+    drainingOperations = true;
+    try {
+      while (pendingOperations.length > 0) {
+        const operation = pendingOperations.shift();
+        // A failed colour transaction cannot publish more colour work. Control
+        // intents still drain from the live queue: a newer stop issued by host
+        // cleanup must be able to erase an older, not-yet-run restart.
+        if (operation.kind !== "start" && operation.kind !== "stop") continue;
+        try {
+          if (operation.kind === "start") runQueuedStart();
+          else runQueuedStop();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    } finally {
+      // Host callbacks may enqueue colour work after the last control. The
+      // originating colour transaction failed, so none may escape this drain.
+      pendingOperations.length = 0;
+      drainingOperations = wasDraining;
+    }
+    return failures;
+  };
+
+  const failOperation = (primaryError) => {
+    const cleanupFailures = drainControlsAfterFailure();
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupFailures],
+        "adaptTheme: operation failed and control cleanup also failed",
+      );
+    }
+    throw primaryError;
+  };
+
   const runPublicOperation = (kind, value) => {
+    beginSerialTransaction();
+    let failed = false;
+    let primaryError;
+    executingOperation = true;
     try {
       if (kind === "tick") runTick(value);
       else runSetTheme(value);
     } catch (error) {
-      // Первичная ошибка важнее невыполненного queued suffix; drain из finally
-      // заменил бы её вторичным исключением и оставил бы хвост жить дальше.
-      pendingOperations.length = 0;
-      throw error;
+      failed = true;
+      primaryError = error;
+    } finally {
+      executingOperation = false;
     }
+    if (failed) failOperation(primaryError);
     drainOperations();
+  };
+
+  const runPublicControl = (kind, record = null) => {
+    beginSerialTransaction();
+    let failed = false;
+    let primaryError;
+    executingOperation = true;
+    try {
+      if (kind === "start") runQueuedStart();
+      else if (kind === "stop") runQueuedStop();
+      else queueNextFrame(record);
+    } catch (error) {
+      failed = true;
+      primaryError = error;
+    } finally {
+      executingOperation = false;
+    }
+    if (failed) failOperation(primaryError);
+    drainOperations();
+  };
+
+  const enqueueStart = () => {
+    let hasQueuedStop = false;
+    for (let i = pendingOperations.length - 1; i >= 0; i--) {
+      const kind = pendingOperations[i].kind;
+      if (kind === "start") return;
+      if (kind === "stop") {
+        hasQueuedStop = true;
+        break;
+      }
+    }
+    // The in-flight acquisition already satisfies a repeated start unless a
+    // newer queued stop has revoked it.
+    if ((queuedStartActive || running) && !hasQueuedStop) return;
+    pendingOperations.push({ kind: "start" });
   };
 
   const tick = (nowArg) => {
@@ -1009,7 +1351,7 @@ export function adaptTheme(element, options) {
       pendingOperations.push({ kind: "tick", now: nowArg });
       return;
     }
-    if (drainingOperations) {
+    if (executingOperation || drainingOperations) {
       // Prepare reentrancy is newer than the not-yet-run FIFO suffix. Enqueue
       // chronologically and revoke the active uncommitted candidate now.
       pendingOperations.push({ kind: "tick", now: nowArg });
@@ -1024,7 +1366,7 @@ export function adaptTheme(element, options) {
       pendingOperations.push({ kind: "theme", theme: next });
       return;
     }
-    if (drainingOperations) {
+    if (executingOperation || drainingOperations) {
       pendingOperations.push({ kind: "theme", theme: next });
       operationGeneration++;
       return;
@@ -1036,22 +1378,32 @@ export function adaptTheme(element, options) {
     tick,
     setTheme,
     start() {
-      if (!running && win?.requestAnimationFrame) {
-        running = true;
-        const epoch = ++frameEpoch;
-        frameCallback = () => runFrame(epoch);
-        queueNextFrame(frameCallback);
+      if (commitDepth > 0 || executingOperation || drainingOperations) {
+        enqueueStart();
+        return;
       }
+      runPublicControl("start");
     },
     stop() {
-      if (commitDepth === 0) operationGeneration++;
-      pendingOperations.length = 0;
-      running = false;
-      frameEpoch++;
-      frameCallback = null;
-      const pending = rafId;
-      rafId = null;
-      if (pending != null && win?.cancelAnimationFrame) win.cancelAnimationFrame(pending);
+      if (commitDepth > 0) {
+        // A begun CSS snapshot is synchronous and has no rollback. Serialize
+        // host cleanup after it; unlike prepare cancellation this does not revoke
+        // the writer midway through its already-published commit.
+        pendingOperations.length = 0;
+        pendingOperations.push({ kind: "stop" });
+        return;
+      }
+      if (executingOperation || drainingOperations) {
+        pendingOperations.length = 0;
+        // A stop already executing from this FIFO satisfies a nested stop. The
+        // nested call still erases an older restart, but cannot recurse forever
+        // when a hostile cancellation callback keeps throwing.
+        if (!queuedStopActive) pendingOperations.push({ kind: "stop" });
+        operationGeneration++;
+        return;
+      }
+      operationGeneration++;
+      runPublicControl("stop");
     },
     current: currentApplied,
   };

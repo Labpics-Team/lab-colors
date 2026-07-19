@@ -23,7 +23,8 @@ export interface AdaptThemeOptions {
    * image / video). The controller compares every supplied point and bases its
    * decision on the worst returned metric; it does not infer between samples
    * or observe the whole field. With one sample this is identical to plain
-   * single-background mode.
+   * single-background mode. Набор непуст и содержит только непустые строки;
+   * невалидный явный вход отклоняется без coercion или fallback.
    */
   background?: string | string[] | (() => string | string[]);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */

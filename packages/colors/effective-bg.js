@@ -468,6 +468,11 @@ export function effectiveBackground(element, opts = {}) {
     opts.getStyle ?? ((el) => (typeof getComputedStyle === "function" ? getComputedStyle(el) : { getPropertyValue: () => "" }));
   const parentOf = opts.parentOf ?? ((el) => el.parentElement);
   const maxDepth = opts.maxDepth ?? 64;
+  // Controller-internal cancellation seam. A host read can synchronously
+  // re-enter and revoke the current operation; checking between reads prevents
+  // the abandoned ancestor walk from invoking any later host callback.
+  const checkpoint = opts.checkpoint;
+  const checkpointToken = opts.checkpointToken;
 
   /** @type {Rgba[]} */
   const layers = [];
@@ -476,7 +481,16 @@ export function effectiveBackground(element, opts = {}) {
   let base = parseCssColor(fallback) ?? [255, 255, 255, 1];
 
   while (el && depth < maxDepth) {
-    const css = getStyle(el).getPropertyValue("background-color");
+    const style = getStyle(el);
+    if (checkpoint) checkpoint(checkpointToken);
+    const getPropertyValue = style.getPropertyValue;
+    if (checkpoint) checkpoint(checkpointToken);
+    const css = Function.prototype.call.call(
+      getPropertyValue,
+      style,
+      "background-color",
+    );
+    if (checkpoint) checkpoint(checkpointToken);
     const c = parseCssColor(css);
     if (c && c[3] > 0) {
       if (c[3] >= 1) {
@@ -486,6 +500,7 @@ export function effectiveBackground(element, opts = {}) {
       layers.push(c);
     }
     el = parentOf(el);
+    if (checkpoint) checkpoint(checkpointToken);
     depth++;
   }
 

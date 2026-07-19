@@ -10,7 +10,8 @@ export interface WatchThemeOptions {
   /**
    * Explicit reference background, overriding the ancestor estimate. A hex
    * sampled from image/gradient/blur content remains one declared point, not an
-   * observation of the whole field.
+   * observation of the whole field. Явное значение обязано быть непустой
+   * строкой; невалидное значение не подменяется fallback-оценкой.
    */
   background?: string | (() => string);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */

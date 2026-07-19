@@ -7,6 +7,7 @@
 
 const LAB_VAR_PREFIX = "--lab-";
 const admittedSnapshots = new WeakSet();
+const NO_CHECKPOINT = () => {};
 
 const isRecord = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -18,7 +19,7 @@ function malformed(context, detail) {
 /** Копирует только JSON-подобные data properties и замораживает результат.
  * Getter/setter не вызываются: иначе проверенный `roles` мог измениться между
  * допуском и чтением `vars` в DOM writer. */
-function materialize(value, context, path, active) {
+function materialize(value, context, path, active, checkpoint, token) {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;
   }
@@ -33,27 +34,58 @@ function materialize(value, context, path, active) {
 
   const array = Array.isArray(value);
   const prototype = Object.getPrototypeOf(value);
-  if (!array && prototype !== Object.prototype && prototype !== null) {
-    throw malformed(context, `${path} must be a plain data object`);
+  checkpoint(token);
+  if (!array && prototype !== null) {
+    // `Object.prototype` is realm-local, so identity would reject a valid
+    // iframe/worker payload. A plain object's direct prototype is itself a
+    // root prototype; the second reflection distinguishes it from class
+    // instances without invoking names, coercion, or inherited accessors.
+    const prototypeParent = Object.getPrototypeOf(prototype);
+    checkpoint(token);
+    if (prototypeParent !== null) {
+      throw malformed(context, `${path} must be a plain data object`);
+    }
   }
-  if (Object.getOwnPropertySymbols(value).length > 0) {
-    throw malformed(context, `${path} must not contain symbol properties`);
+  // Reflection is deliberately incremental. A Proxy trap can re-enter its
+  // controller and revoke this candidate; the checkpoint must run before the
+  // next trap instead of letting a stale object manufacture more intent.
+  const keys = Reflect.ownKeys(value);
+  checkpoint(token);
+  const descriptors = [];
+  for (const key of keys) {
+    if (typeof key === "symbol") {
+      throw malformed(context, `${path} must not contain symbol properties`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    checkpoint(token);
+    if (!descriptor) {
+      throw malformed(context, `${path}.${key} changed during admission`);
+    }
+    descriptors.push([key, descriptor]);
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const [key, descriptor] of Object.entries(descriptors)) {
+  for (const [key, descriptor] of descriptors) {
     if (array && key === "length") continue;
     if (!descriptor.enumerable || descriptor.get || descriptor.set) {
       throw malformed(context, `${path}.${key} must be an enumerable data property`);
     }
   }
 
-  const copy = array ? [] : Object.create(prototype);
+  // Never preserve a client prototype. Mandatory fields and role members must
+  // come from admitted own data, not inherited getters or prototype pollution.
+  const copy = array ? [] : Object.create(null);
   active.add(value);
   try {
-    for (const [key, descriptor] of Object.entries(descriptors)) {
+    for (const [key, descriptor] of descriptors) {
       if (array && key === "length") continue;
       Object.defineProperty(copy, key, {
-        value: materialize(descriptor.value, context, `${path}.${key}`, active),
+        value: materialize(
+          descriptor.value,
+          context,
+          `${path}.${key}`,
+          active,
+          checkpoint,
+          token,
+        ),
         enumerable: true,
         writable: false,
         configurable: false,
@@ -62,8 +94,11 @@ function materialize(value, context, path, active) {
   } finally {
     active.delete(value);
   }
-  if (array && copy.length !== descriptors.length.value) {
-    throw malformed(context, `${path} must be a dense data array`);
+  if (array) {
+    const length = descriptors.find(([key]) => key === "length")?.[1]?.value;
+    if (copy.length !== length) {
+      throw malformed(context, `${path} must be a dense data array`);
+    }
   }
   return Object.freeze(copy);
 }
@@ -87,11 +122,14 @@ function conflictError(conflicts) {
  *
  * @param {*} result
  * @param {string} context
+ * @param {(token: unknown) => void} [checkpoint] Internal cancellation seam;
+ *   controllers inject an owner assertion between client-owned Proxy traps.
+ * @param {*} [token]
  * @returns {*}
  */
-export function admitSnapshot(result, context) {
+export function admitSnapshot(result, context, checkpoint = NO_CHECKPOINT, token) {
   if (isRecord(result) && admittedSnapshots.has(result)) return result;
-  const snapshot = materialize(result, context, "result", new Set());
+  const snapshot = materialize(result, context, "result", new Set(), checkpoint, token);
   if (!isRecord(snapshot) || !isRecord(snapshot.vars) || !isRecord(snapshot.roles)) {
     throw malformed(context, "resolveTheme must return {vars, roles}");
   }
