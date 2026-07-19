@@ -158,6 +158,28 @@ test("applyTheme admits data-only snapshots from another JavaScript realm", () =
   assert.deepEqual([...element.props], [["--lab-safe", "#123456"]]);
 });
 
+test("applyTheme rejects sparse arrays before any DOM mutation", () => {
+  const element = observedElement([["--lab-old", "#111111"]]);
+  const evidence = ["first", , "third"];
+  evidence.extra = "does not fill the missing index";
+  const snapshot = {
+    vars: { "--lab-safe": "#123456" },
+    roles: {
+      safe: {
+        kind: "color",
+        cssVar: "--lab-safe",
+        hex: "#123456",
+        lc: 100,
+        evidence,
+      },
+    },
+  };
+
+  assert.throws(() => applyTheme(element, snapshot), /dense data array/u);
+  assert.deepEqual(element.mutations, []);
+  assert.deepEqual([...element.props], [["--lab-old", "#111111"]]);
+});
+
 test("applyTheme never manufactures required fields from Object.prototype", () => {
   const element = observedElement();
   let inheritedReads = 0;

@@ -24,7 +24,8 @@ export interface AdaptThemeOptions {
    * decision on the worst returned metric; it does not infer between samples
    * or observe the whole field. With one sample this is identical to plain
    * single-background mode. Набор непуст и содержит только непустые строки;
-   * невалидный явный вход отклоняется без coercion или fallback.
+   * невалидный явный вход отклоняется без неявного преобразования или
+   * резервного значения.
    */
   background?: string | string[] | (() => string | string[]);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */

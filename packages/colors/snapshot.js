@@ -63,8 +63,20 @@ function materialize(value, context, path, active, checkpoint, token) {
     }
     descriptors.push([key, descriptor]);
   }
+  let arrayElementCount = 0;
   for (const [key, descriptor] of descriptors) {
     if (array && key === "length") continue;
+    if (array) {
+      const index = Number(key);
+      if (
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < 0xffff_ffff &&
+        String(index) === key
+      ) {
+        arrayElementCount++;
+      }
+    }
     if (!descriptor.enumerable || descriptor.get || descriptor.set) {
       throw malformed(context, `${path}.${key} must be an enumerable data property`);
     }
@@ -96,7 +108,10 @@ function materialize(value, context, path, active, checkpoint, token) {
   }
   if (array) {
     const length = descriptors.find(([key]) => key === "length")?.[1]?.value;
-    if (copy.length !== length) {
+    // Считаем только канонические индексы: строковое свойство не должно
+    // маскировать дыру, а обход до `length` позволил бы разреженному hostile
+    // input с огромной длиной превратить admission в линейный DoS.
+    if (arrayElementCount !== length || copy.length !== length) {
       throw malformed(context, `${path} must be a dense data array`);
     }
   }
