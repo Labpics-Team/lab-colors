@@ -14,10 +14,19 @@ Lab Colors развивается как контекстный компилят
 вычисляет конечные значения; runtime повторно проверяет только зависимую часть
 графа.
 
-Special-recipe path не является extension point. Если изменение затрагивает
-ветвь, где продуктовая потребность выражена отдельным role kind, потребность
-переносится в общий graph/constraint contract с characterization/differential
-защитой, а заменённая ветвь удаляется в том же завершённом срезе.
+Special-recipe path не является extension point. В изменяемом vertical slice
+физика, solver, evaluator и final-emission verification продуктовой потребности
+переносятся в общий graph/constraint contract, а заменённая исполняемая ветвь
+удаляется в том же срезе.
+
+Текущие `RoleRecipe`, публичные `RoleSpec`/`NamedRoleTable` и профильные
+селекторы ещё являются исполняемым pre-cutover долгом, а не target IR. Их нельзя
+расширять новыми variants, fields или semantics. Вариант считается
+мигрированным только когда все его публичные construction paths выполняют
+parse, validation и total one-way lowering, а исполнение читает исключительно
+compiled IR. Старый match/solver/evaluator/default/emission path удаляется в том
+же срезе. Lowering защищается characterization/differential tests; публичная
+замена выполняется атомарно, без второго авторитетного façade.
 
 Клиент владеет именами и смыслом токенов, aliases, hierarchy, component states,
 design language и authored anchors. Core владеет colorimetry, compositing,

@@ -392,8 +392,9 @@ export type LadderPositionV1 =
 
 /**
  * Рецепт роли из закрытого физического меню текущего resolver-а.
- * Это переходная compatibility surface, не target IR и не extension point.
- * Новая физика не должна добавляться новым recipe variant.
+ * Это текущая pre-cutover грамматика, не target IR и не extension point.
+ * Вариант считается мигрированным только после одностороннего lowering в общий
+ * compiled graph и удаления его прежней исполняемой ветви.
  */
 export type RoleRecipe =
   | {

@@ -373,8 +373,10 @@ pub struct ThemesConfig {
 
 /// Рецепт роли из закрытого физического меню текущего resolver-а.
 ///
-/// Это переходная compatibility surface, не target IR и не extension point.
-/// Новая физика не должна добавляться новым recipe variant.
+/// Это текущая pre-cutover грамматика, не target IR и не extension point.
+/// Новая физика не добавляется новым recipe variant. Вариант считается
+/// мигрированным только после одностороннего lowering в общий compiled graph и
+/// удаления его прежней исполняемой ветви.
 ///
 /// Все рецепты компилируются в [`RoleSpec`]: текст/dJ'/Ys candidate score/zero — солвер-роли,
 /// [`Ladder`](Self::Ladder) / [`AlphaAnalog`](Self::AlphaAnalog) — полупрозрачная эмиссия.
@@ -1136,9 +1138,9 @@ impl ThemeConfig {
             } => Ok(RoleSpec::Glow {
                 tint: self.compile_ladder_tint(role, source)?,
                 step: *step,
-                // Migration adapter (#292): прежний клиентский wire-ключ
-                // (`stable-v1 | legacy-platform-dependent-v1`) лоуверится в
-                // generic typed execution mode compiled invocation.
+                // Wire-ключ пока компилируется в execution mode и тем самым
+                // явно выбирает одну из существующих численных ветвей. Это
+                // pre-cutover поведение, а не доказательство общей graph-модели.
                 mode: decision_profile.execution_mode(),
             }),
             RoleRecipe::Ladder {
