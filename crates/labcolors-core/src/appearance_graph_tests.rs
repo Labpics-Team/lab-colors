@@ -80,11 +80,19 @@ fn bindings(source: [u8; 3], opacity: f64, context: [u8; 3]) -> AppearanceBindin
 }
 
 #[test]
-fn static_runtime_program_is_exactly_the_compiler_output() {
+fn static_exact_program_is_declarative_topology_plus_typed_constraint() {
     let compiled = crate::appearance::point_opacity_over_surface_declarative_spec()
         .compile()
         .unwrap();
     assert!(crate::appearance::point_program_matches(&compiled));
+    assert_eq!(
+        crate::analog::ExactAlphaProgramV1::physical_identity(),
+        crate::appearance::PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
+    );
+    assert_eq!(
+        crate::analog::ExactAlphaProgramV1::constraint_identity(),
+        crate::constraints::ExactConstraintIdentityV1::FinalSrgb8IdentityV1
+    );
 }
 
 #[test]
@@ -210,6 +218,18 @@ fn complete_typed_id_renaming_does_not_change_physics() {
     assert_eq!(
         first.occurrence(FILL_OCCURRENCE).unwrap().visible(),
         second.occurrence(occurrence).unwrap().visible()
+    );
+    let first_occurrence = first.occurrence(FILL_OCCURRENCE).unwrap();
+    let second_occurrence = second.occurrence(occurrence).unwrap();
+    assert_eq!(
+        first_occurrence.certificate(),
+        second_occurrence.certificate(),
+        "typed-ID rename must not change the ID-free physical proof"
+    );
+    assert_ne!(
+        first_occurrence.program_occurrence_binding(),
+        second_occurrence.program_occurrence_binding(),
+        "program routing remains distinct provenance outside the physical proof"
     );
     assert_eq!(
         first.surface_rgb(DERIVED_SURFACE),
@@ -681,10 +701,12 @@ proptest! {
             .unwrap()
             .evaluate(&bindings(source, opacity, context))
             .unwrap();
-        let certificate = rendered.occurrence(FILL_OCCURRENCE).unwrap().certificate();
+        let occurrence = rendered.occurrence(FILL_OCCURRENCE).unwrap();
+        let certificate = occurrence.certificate();
+        let program_occurrence = occurrence.program_occurrence_binding();
         prop_assert_eq!(certificate.profile(), CompositionProfileV1::EncodedSrgb8SourceOverV1);
-        prop_assert_eq!(certificate.occurrence(), FILL_OCCURRENCE);
-        prop_assert_eq!(certificate.subject(), FILL_PAINT);
+        prop_assert_eq!(program_occurrence.occurrence(), FILL_OCCURRENCE);
+        prop_assert_eq!(program_occurrence.subject(), FILL_PAINT);
         prop_assert_eq!(certificate.subject_rgb(), source);
         let canonical_opacity_bits = if opacity == 0.0 {
             0.0f64.to_bits()
@@ -692,7 +714,7 @@ proptest! {
             opacity.to_bits()
         };
         prop_assert_eq!(certificate.subject_opacity_bits(), canonical_opacity_bits);
-        prop_assert_eq!(certificate.backdrop_surface(), CONTEXT_SURFACE);
+        prop_assert_eq!(program_occurrence.backdrop_surface(), CONTEXT_SURFACE);
         prop_assert_eq!(certificate.backdrop_rgb(), context);
         prop_assert_eq!(certificate.output_rgb(), rendered.occurrence(FILL_OCCURRENCE).unwrap().visible());
         prop_assert_eq!(certificate.replay(), Ok(certificate.output_rgb()));
@@ -804,7 +826,7 @@ proptest! {
         } else {
             (invalid, 0.5, OPACITY)
         };
-        let expected_message = crate::alpha::validate_alpha(invalid).unwrap_err();
+        let expected_message = crate::composition::validate_alpha(invalid).unwrap_err();
         prop_assert_eq!(
             graph.evaluate(&AppearanceBindings::new(
                 vec![(SOURCE, Srgb8::new([1, 2, 3]))],

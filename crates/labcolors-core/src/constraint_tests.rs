@@ -53,7 +53,7 @@ fn wcag_reads_final_visible_occurrence_in_measurement_order() {
     assert_eq!(measurement.background, [255, 255, 255]);
     assert_eq!(*decision, Wcag22ApplicableDecisionV1::Fail);
     assert_eq!(
-        report.binding().certificate().occurrence(),
+        report.binding().program_occurrence().occurrence(),
         OccurrenceId::new(0)
     );
 

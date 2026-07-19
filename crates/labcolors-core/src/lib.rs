@@ -7,15 +7,16 @@ pub mod wcag22;
 pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1
 
+pub(crate) mod composition;
 pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;
 
 pub(crate) mod accent_balance;
 pub mod alpha;
+pub(crate) mod analog;
 pub(crate) mod appearance;
 pub mod config;
-#[cfg(test)]
 pub(crate) mod constraints;
 pub mod glow;
 pub mod hash;

@@ -27,7 +27,7 @@
 //! компилируется в [`RoleSpec::Ladder`]: источник раскладывается в пер-темный
 //! тинт-якорь ([`crate::ladder::LadderTint`]), позиция несёт альфу Figma-рампы.
 //! [`RoleRecipe::AlphaAnalog`] компилируется в [`RoleSpec::AlphaAnalog`] (солид-
-//! цель источника + запрошенная альфа, композит-инверсия — [`crate::alpha`], #119).
+//! цель источника + запрошенная альфа, exact encoded-sRGB8 identity — [`crate::alpha`]).
 //! Резолв обоих — [`crate::semantic::Resolved::Translucent`] (тинт×альфа напрямую + солид-
 //! композит на фоне резолва для замера контраста). Исполняемый канон позиций и
 //! альф — [`LadderPosition::ALL`] и [`LadderPosition::alpha_pair`].
@@ -962,7 +962,7 @@ impl ThemeConfig {
                     *alpha,
                     ALPHA_MIN_EXCLUSIVE,
                     ALPHA_MAX_INCLUSIVE,
-                    "0 < alpha ≤ 1 (запрошенная альфа альфа-аналога)",
+                    "0 < alpha ≤ 1 (запрошенная непрозрачность альфа-аналога)",
                 )
             }
             RoleRecipe::Material {
@@ -1092,11 +1092,13 @@ impl ThemeConfig {
             }
         }
 
-        Ok(NamedRoleTable::from_validated_parts(
-            entries,
-            self.aliases.clone(),
-            chroma,
-        ))
+        NamedRoleTable::from_validated_parts(entries, self.aliases.clone(), chroma).map_err(
+            |error| ConfigError::OutOfBounds {
+                handle: format!("roles.{}.alpha", self.roles[error.declaration_ordinal()].0),
+                value: error.value(),
+                bound: "0 < alpha ≤ 1 (запрошенная непрозрачность альфа-аналога)",
+            },
+        )
     }
 
     /// Скомпилировать один рецепт в [`RoleSpec`]. Ladder/AlphaAnalog раскладывают
