@@ -151,8 +151,8 @@ pub use spaces::vc::ViewingConditions;
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-/// Временные акцентные рецепты — детали реализации, а не контракты клиента.
-/// Публичный API источников, целей и ограничений принадлежит occurrence-графу.
+/// Закрытая физическая топология и recipe-варианты — детали resolver-а, а не
+/// extension points. Публичный API не раскрывает client-authored topology.
 ///
 /// ```compile_fail
 /// use labcolors_core::accent_balance::accent_balanced;
@@ -254,8 +254,8 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// Полярность/fill пары — legacy-механика рецептов, а не extension point.
-/// Общий occurrence-граф заменяет её единым совместным solve.
+/// Полярность и pair-механика закрыты внутри resolver-а, а не образуют
+/// публичный extension point.
 ///
 /// ```compile_fail
 /// use labcolors_core::pair::pair_side;

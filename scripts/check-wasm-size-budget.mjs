@@ -24,10 +24,11 @@ const V13_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v13.
 const V14_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v14.json");
 const V15_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v15.json");
 const V16_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v16.json");
+const V17_PATH = resolve(REPO_ROOT, "packages/colors/bench/wasm-size-budget-v17.json");
 
 export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
-  "packages/colors/bench/wasm-size-budget-v17.json",
+  "packages/colors/bench/wasm-size-budget-v18.json",
 );
 export const V1_FILE_SHA256 =
   "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1";
@@ -57,7 +58,7 @@ export const V12_FILE_SHA256 =
   "925452113b18b63137b9dae4786e3a8f7ba098eb47a2631a97107fbd52aa9a95";
 // V*_FILE_SHA256 — SHA-256 канонических байтов версионных budget-файлов в
 // packages/colors/bench/. Версии v1..v(N−1) неизменяемы навсегда (история
-// ратчета); константа текущей версии (сейчас v17) ротируется ТОЛЬКО вместе с
+// ратчета); константа текущей версии (сейчас v18) ротируется ТОЛЬКО вместе с
 // принятием нового снапшота: следующий bump добавляет v(N+1)-пару, а v(N)
 // уходит в неизменяемый список. Дрейф любого файла к его пину = отказ чекера.
 export const V13_FILE_SHA256 =
@@ -70,9 +71,11 @@ export const V16_FILE_SHA256 =
   "9a9ab7050a3f6b103905a817b9d675650d04ddab3524a3fc5aa3d0f5d6cab9c3";
 export const V17_FILE_SHA256 =
   "8da5e810394ee8fea8491bcd8aff7f3023c267bf31bb5ea4c4b843ef459e7906";
+export const V18_FILE_SHA256 =
+  "2ee1e5b4472aa393eb399e3839ab9ac3cfb832a69fa8b704c3fa4854bc1e11f8";
 
 const V1_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v1.json";
-const V16_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v16.json";
+const V17_REPOSITORY_PATH = "packages/colors/bench/wasm-size-budget-v17.json";
 const V5_BUDGET_ID = "labcolors-wasm-roles-issue-296-c1-v5";
 const V6_BUDGET_ID = "labcolors-wasm-roles-issue-296-c3-v6";
 const V7_BUDGET_ID = "labcolors-wasm-roles-issue-307-c7a-v7";
@@ -86,6 +89,7 @@ const V14_BUDGET_ID = "labcolors-wasm-runtime-c6-legacy-excision-v14";
 const V15_BUDGET_ID = "labcolors-wasm-runtime-c6-validation-srgb-ssot-v15";
 const V16_BUDGET_ID = "labcolors-wasm-runtime-q0-output-conflict-v16";
 const V17_BUDGET_ID = "labcolors-wasm-runtime-q0-review-hardening-v17";
+const V18_BUDGET_ID = "labcolors-wasm-runtime-f0a-point-render-spine-v18";
 const ROLE_ORDER = ["runtime"];
 const ROLE_SPECS = {
   runtime: {
@@ -93,11 +97,11 @@ const ROLE_SPECS = {
     command:
       "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     recipeSha256: V1_RECIPE_SHA256,
-    // Pinned Linux run 29663300158 измерил review-hardened Q0 на 5B меньше v16.
-    // Это дельта целого артефакта, не причинная оценка; ратчет следует факту.
-    basis: "accepted-q0-review-hardening-snapshot",
-    measurementSource: "github-actions-run-29663300158",
-    acceptedCeiling: 432107,
+    // Pinned Linux run 29675926449 измерил весь F0a snapshot на 46497B меньше
+    // v17. Это дельта целого артефакта, не причинная оценка отдельных узлов.
+    basis: "accepted-f0a-point-render-spine-snapshot",
+    measurementSource: "github-actions-run-29675926449",
+    acceptedCeiling: 385610,
   },
 };
 
@@ -242,7 +246,11 @@ function verifyImmutableHistory() {
   if (v16?.schemaVersion !== 8 || v16?.budgetId !== V16_BUDGET_ID) {
     fail("immutable v16 budget identity drifted");
   }
-  return { v1, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16 };
+  const v17 = readImmutableJson(V17_PATH, V17_FILE_SHA256, "v17");
+  if (v17?.schemaVersion !== 8 || v17?.budgetId !== V17_BUDGET_ID) {
+    fail("immutable v17 budget identity drifted");
+  }
+  return { v1, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17 };
 }
 
 function validateBudgetValue(budget) {
@@ -259,14 +267,14 @@ function validateBudgetValue(budget) {
     "budget",
   );
   if (budget.schemaVersion !== 8) fail("supported schemaVersion is exactly 8");
-  if (budget.budgetId !== V17_BUDGET_ID) fail(`budgetId must be ${V17_BUDGET_ID}`);
+  if (budget.budgetId !== V18_BUDGET_ID) fail(`budgetId must be ${V18_BUDGET_ID}`);
 
   exactKeys(budget.predecessor, ["path", "fileSha256"], "predecessor");
   if (
-    budget.predecessor.path !== V16_REPOSITORY_PATH ||
-    budget.predecessor.fileSha256 !== V16_FILE_SHA256
+    budget.predecessor.path !== V17_REPOSITORY_PATH ||
+    budget.predecessor.fileSha256 !== V17_FILE_SHA256
   ) {
-    fail("predecessor must bind the immutable v16 document");
+    fail("predecessor must bind the immutable v17 document");
   }
 
   exactKeys(budget.toolchainSource, ["path", "fileSha256"], "toolchainSource");
@@ -349,10 +357,10 @@ export function parseBudgetDocument(bytes, budgetPath) {
   validateBudgetValue(budget);
   if (resolve(budgetPath) === DEFAULT_BUDGET) {
     const actualFileSha256 = sha256(document);
-    if (actualFileSha256 !== V17_FILE_SHA256) {
+    if (actualFileSha256 !== V18_FILE_SHA256) {
       fail(
-        `current v17 file SHA-256 mismatch: ` +
-          `expected=${V17_FILE_SHA256} actual=${actualFileSha256}`,
+        `current v18 file SHA-256 mismatch: ` +
+          `expected=${V18_FILE_SHA256} actual=${actualFileSha256}`,
       );
     }
   }

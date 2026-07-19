@@ -122,7 +122,7 @@ pub enum FloorDto {
 
 /// Рецепт роли из закрытого физического меню текущего resolver-а.
 ///
-/// Это переходная compatibility surface, не target IR и не extension point.
+/// Это граница сериализации совместимого API, не доменный IR и не extension point.
 /// Новая физика не должна добавляться новым recipe variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -663,9 +663,10 @@ mod tests {
             .expect("восстановленный конфиг компилируется");
     }
 
-    /// Рецепт `pair-label` (лейбл тинт-бейджа, task #29) гоняется через JSON без
+    /// Recipe-адаптер `pair-label` гоняется через JSON без
     /// потерь: kebab-тег `pair-label`, источник/доля/пол целы туда-обратно.
-    /// Закрывает класс «DTO-ветка компилируется, но круг-трип врёт».
+    /// Это только доказательство DTO round-trip, а не наличия pair-label
+    /// в целевом graph API.
     #[test]
     fn pair_label_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;

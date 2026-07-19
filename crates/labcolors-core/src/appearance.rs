@@ -1,312 +1,381 @@
-//! Приватный физический appearance-граф (#307): связный компонент
-//! «input-слои → derived-поверхности → foreground occurrences».
+//! Приватный point render-граф.
 //!
-//! Граф владеет render-топологией, НЕ клиентским словарём: здесь нет имён
-//! ролей, семейств и позиций лестницы — только непрозрачные typed handles и
-//! физические байты. Любое поведение выводится из объявленных рёбер, никогда —
-//! из значений ID (ID структурны и не участвуют в физике).
+//! Граф владеет только физической топологией. Paint материализуется без
+//! подложки; Occurrence — единственное место, где Paint применяется к Surface;
+//! `surfaceFrom` лишь даёт видимому результату occurrence новую Surface-
+//! идентичность. Клиентский словарь, recipe-роли и perception-утверждения сюда
+//! не входят.
 //!
-//! Единственная физическая операция модуля — версионированный exact-композитор
-//! [`crate::alpha::composite_over_srgb8`]
-//! ([`CompositionProfileV1::EncodedSrgb8SourceOverV1`]). Второй композитор
-//! запрещён: модуль связывает топологию с существующим SSOT, а не вводит новую
-//! численную политику (ни одного нового production-числа, порога или epsilon).
+//! Единственная операция композиции — версионированный exact-композитор
+//! [`crate::alpha::composite_over_srgb8`]. `Opacity` только умножает straight
+//! alpha уже материализованного Paint и никогда не композитит промежуточный
+//! результат.
 //!
-//! Жизненный цикл — две атомарные фазы:
-//!
-//! ```text
-//! AppearanceGraphSpec::compile()   — валидация + канонизация + topo (без I/O)
-//! CompiledAppearanceGraph::evaluate(bindings) — исполнение по topo, fail closed
-//! ```
-//!
-//! Compile детерминирован и атомарен: при любой ошибке граф не публикуется
-//! частично. Канонизация сортирует декларации по typed ID, поэтому физический
-//! результат компонента не зависит от порядка деклараций при тех же
-//! handles/рёбрах (инвариант закреплён тестом
-//! `compile_is_independent_of_declaration_order_for_the_same_handles`).
-//! Hash-map итерация как источник порядка не используется вовсе — все
-//! коллекции здесь отсортированные `Vec`.
+//! Code-owned adapter представлен sealed borrowed IR и исполняется тем же
+//! evaluator-ом, что результат декларативной компиляции. Структурное равенство
+//! статического IR результату compiler-а закреплено proof-тестом; production-
+//! артефакт не содержит admission/topology compiler.
 
+#[cfg(test)]
 use std::collections::BTreeSet;
 
-/// Непрозрачный handle цветового входа компонента. Значение — только
-/// идентичность (структурная ссылка), не позиция и не приоритет.
+/// Непрозрачный handle цветового входа. Число — только идентичность.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ColorInputId(u32);
 
 impl ColorInputId {
-    /// Собрать handle из сырого значения клиента графа.
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
 }
 
-/// Непрозрачный handle входа непрозрачности (straight alpha).
+/// Непрозрачный handle входа straight alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct OpacityInputId(u32);
 
 impl OpacityInputId {
-    /// Собрать handle из сырого значения клиента графа.
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
 }
 
-/// Непрозрачный handle поверхности (rendered surface node).
+/// Непрозрачный handle Paint-программы.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PaintId(u32);
+
+impl PaintId {
+    pub(crate) const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+/// Непрозрачный handle наблюдаемой поверхности.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SurfaceId(u32);
 
 impl SurfaceId {
-    /// Собрать handle из сырого значения клиента графа.
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
 }
 
-/// Непрозрачный handle foreground occurrence (наблюдение foreground против
-/// конкретной отрисованной поверхности).
+/// Непрозрачный handle применения Paint к Surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct OccurrenceId(u32);
 
 impl OccurrenceId {
-    /// Собрать handle из сырого значения клиента графа.
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
 }
 
-/// Версионированный профиль композиции ребра. Часть identity сертификата:
-/// exact-утверждение живёт только внутри объявленного профиля, а не
-/// «в браузерах вообще».
+/// Версионированная identity математической операции композиции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompositionProfileV1 {
-    /// Straight-alpha source-over в encoded-sRGB8 байтовом домене Lab Colors:
-    /// `bg + α·(src − bg)` на каждый канал, ОДНО финальное округление
-    /// ([`crate::alpha::composite_over_srgb8`]). Reference-exact внутри этого
-    /// профиля; универсальный browser/color-management pipeline не обещается.
+    /// Straight-alpha source-over в encoded-sRGB8: по одному округлению
+    /// финального канала. Это exact-профиль Lab Colors, не обещание о
+    /// произвольном браузерном или HDR pipeline.
     EncodedSrgb8SourceOverV1,
 }
 
-/// Декларация поверхности: input-слой (цвет из bindings как есть) либо
-/// source-over композит поверх другой поверхности.
+/// Paint-конструкторы point-домена. Ни один вариант не знает Surface.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SurfaceSpec {
-    /// Поверхность-вход: цвет берётся из bindings без преобразований.
-    Input {
-        /// Handle поверхности.
-        id: SurfaceId,
-        /// Цветовой вход, чьи байты становятся поверхностью.
-        color: ColorInputId,
-    },
-    /// Derived-поверхность: `source` при `opacity` поверх `backdrop`.
-    SourceOver {
-        /// Handle поверхности.
-        id: SurfaceId,
-        /// Цветовой вход верхнего слоя.
-        source: ColorInputId,
-        /// Вход непрозрачности верхнего слоя.
+pub(crate) enum PaintSpec {
+    /// Непрозрачный encoded-sRGB8 Paint из цветового входа.
+    Solid { id: PaintId, color: ColorInputId },
+    /// Модуляция straight alpha существующего Paint.
+    ///
+    /// Рёбра задают порядок операций: узел вычисляет одно binary64-произведение
+    /// alpha источника и связанного scalar. Перегруппировка создаёт другую
+    /// численную программу; алгебраическая ассоциативность f64 не заявляется.
+    /// Композиции на этом шаге нет.
+    Opacity {
+        id: PaintId,
+        source: PaintId,
         opacity: OpacityInputId,
-        /// Поверхность-подложка (ребро зависимости графа).
-        backdrop: SurfaceId,
-        /// Версионированный профиль композиции.
-        profile: CompositionProfileV1,
     },
 }
 
-impl SurfaceSpec {
-    /// Handle поверхности — ключ канонизации и зависимости.
-    fn id(&self) -> SurfaceId {
+#[cfg(test)]
+impl PaintSpec {
+    fn id(&self) -> PaintId {
         match self {
-            SurfaceSpec::Input { id, .. } | SurfaceSpec::SourceOver { id, .. } => *id,
+            Self::Solid { id, .. } | Self::Opacity { id, .. } => *id,
         }
     }
 }
 
-/// Декларация foreground occurrence: identity-источник foreground наблюдается
-/// против конкретной отрисованной поверхности. Именно топология (`against`)
-/// задаёт роль «foreground/фон», а не имя токена.
+/// Surface либо приходит извне как point-вход, либо является видимым
+/// результатом объявленного occurrence.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ForegroundOccurrenceSpec {
-    /// Handle occurrence.
-    pub(crate) id: OccurrenceId,
-    /// Цветовой вход — идентичность foreground (то, ЧТО наблюдается).
-    pub(crate) identity_source: ColorInputId,
-    /// Поверхность, против которой foreground реально стоит.
-    pub(crate) against: SurfaceId,
+pub(crate) enum SurfaceSpec {
+    Input {
+        id: SurfaceId,
+        color: ColorInputId,
+    },
+    FromOccurrence {
+        id: SurfaceId,
+        occurrence: OccurrenceId,
+    },
 }
 
-/// Типизированные ошибки compile/evaluate. Публичный (в пределах crate) вход
-/// не паникует: каждый отказ структурирован и различим без парсинга строк.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GraphError {
-    /// Один handle цветового входа объявлен дважды.
-    DuplicateColorInput { input: ColorInputId },
-    /// Один handle входа непрозрачности объявлен дважды.
-    DuplicateOpacityInput { input: OpacityInputId },
-    /// Один handle поверхности объявлен дважды.
-    DuplicateSurface { surface: SurfaceId },
-    /// Один handle occurrence объявлен дважды.
-    DuplicateOccurrence { occurrence: OccurrenceId },
-    /// Поверхность ссылается на необъявленный цветовой вход.
+#[cfg(test)]
+impl SurfaceSpec {
+    fn id(&self) -> SurfaceId {
+        match self {
+            Self::Input { id, .. } | Self::FromOccurrence { id, .. } => *id,
+        }
+    }
+}
+
+/// Единственная canonical application Paint к backdrop Surface.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OccurrenceSpec {
+    pub(crate) id: OccurrenceId,
+    pub(crate) subject: PaintId,
+    pub(crate) against: SurfaceId,
+    pub(crate) profile: CompositionProfileV1,
+}
+
+/// Ошибки AOT-компиляции декларации. Compiler принадлежит proof-поверхности и
+/// не входит в production-артефакт.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompileError {
+    DuplicateColorInput {
+        input: ColorInputId,
+    },
+    DuplicateOpacityInput {
+        input: OpacityInputId,
+    },
+    DuplicatePaint {
+        paint: PaintId,
+    },
+    DuplicateSurface {
+        surface: SurfaceId,
+    },
+    DuplicateOccurrence {
+        occurrence: OccurrenceId,
+    },
+    MissingPaintColorInput {
+        paint: PaintId,
+        input: ColorInputId,
+    },
+    MissingPaintSource {
+        paint: PaintId,
+        source: PaintId,
+    },
+    MissingPaintOpacityInput {
+        paint: PaintId,
+        input: OpacityInputId,
+    },
     MissingSurfaceColorInput {
         surface: SurfaceId,
         input: ColorInputId,
     },
-    /// Поверхность ссылается на необъявленный вход непрозрачности.
-    MissingSurfaceOpacityInput {
+    MissingSurfaceOccurrence {
         surface: SurfaceId,
-        input: OpacityInputId,
-    },
-    /// Композит ссылается на необъявленную поверхность-подложку.
-    MissingSurfaceBackdrop {
-        surface: SurfaceId,
-        backdrop: SurfaceId,
-    },
-    /// Occurrence ссылается на необъявленный identity-источник.
-    MissingOccurrenceSource {
         occurrence: OccurrenceId,
-        input: ColorInputId,
     },
-    /// Occurrence наблюдается против необъявленной поверхности.
+    MissingOccurrencePaint {
+        occurrence: OccurrenceId,
+        paint: PaintId,
+    },
     MissingOccurrenceBackdrop {
         occurrence: OccurrenceId,
         surface: SurfaceId,
     },
-    /// Поверхности образуют цикл зависимостей: перечислены (в каноническом
-    /// возрастающем порядке) все поверхности, не вошедшие в топологический
-    /// порядок — участники циклов и их потомки.
-    SurfaceCycle { surfaces: Vec<SurfaceId> },
-    /// Один цветовой вход связан значением дважды.
-    DuplicateColorBinding { input: ColorInputId },
-    /// Один вход непрозрачности связан значением дважды.
-    DuplicateOpacityBinding { input: OpacityInputId },
-    /// Объявленный цветовой вход не получил значения.
-    MissingColorBinding { input: ColorInputId },
-    /// Объявленный вход непрозрачности не получил значения.
-    MissingOpacityBinding { input: OpacityInputId },
-    /// Значение подано для необъявленного цветового входа.
-    UnexpectedColorBinding { input: ColorInputId },
-    /// Значение подано для необъявленного входа непрозрачности.
-    UnexpectedOpacityBinding { input: OpacityInputId },
-    /// Непрозрачность вне конечного `[0,1]` (NaN/±∞/за границами). `message` —
-    /// доменная ошибка SSOT-валидатора [`crate::alpha`] дословно, чтобы
-    /// потребитель мог сохранить прежний публичный текст отказа байт-в-байт.
+    /// Только реальные участники циклов, без зависимых от них узлов.
+    PaintCycle {
+        paints: Vec<PaintId>,
+    },
+    /// Только реальные участники циклов, разложенные по typed ID-пространствам.
+    RenderCycle {
+        surfaces: Vec<SurfaceId>,
+        occurrences: Vec<OccurrenceId>,
+    },
+}
+
+/// Ошибки admission runtime bindings. Исполнение начинается только после
+/// полной проверки, поэтому частичного результата нет.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BindingError {
+    DuplicateColorBinding {
+        input: ColorInputId,
+    },
+    DuplicateOpacityBinding {
+        input: OpacityInputId,
+    },
+    MissingColorBinding {
+        input: ColorInputId,
+    },
+    MissingOpacityBinding {
+        input: OpacityInputId,
+    },
+    UnexpectedColorBinding {
+        input: ColorInputId,
+    },
+    UnexpectedOpacityBinding {
+        input: OpacityInputId,
+    },
     OpacityOutOfDomain {
         input: OpacityInputId,
         message: String,
     },
-    /// Композитор отверг вход. После валидации bindings недостижимо (байты
-    /// корректны по типу, α проверена), но паника на публично достижимом пути
-    /// запрещена — отказ остаётся типизированным.
-    CompositionFailed { surface: SurfaceId, message: String },
 }
 
-/// Спека компонента до компиляции: плоские списки деклараций. Порядок
-/// деклараций НЕ несёт смысла — compile канонизирует его по typed ID.
+/// Единственный отказ sealed point-adapter-а: невалидная authored alpha.
+/// Topology/bindings не представлены во входном типе и потому не могут дать
+/// runtime-ошибку.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PointOpacityError {
+    message: String,
+}
+
+impl PointOpacityError {
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// Плоские декларации до атомарной компиляции. Порядок списков смысла не несёт.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppearanceGraphSpec {
     color_inputs: Vec<ColorInputId>,
     opacity_inputs: Vec<OpacityInputId>,
+    paints: Vec<PaintSpec>,
     surfaces: Vec<SurfaceSpec>,
-    occurrences: Vec<ForegroundOccurrenceSpec>,
+    occurrences: Vec<OccurrenceSpec>,
 }
 
+#[cfg(test)]
 impl AppearanceGraphSpec {
-    /// Собрать спеку из деклараций. Валидации здесь нет намеренно: единственная
-    /// точка отказа — атомарный [`compile`](Self::compile).
     pub(crate) fn new(
         color_inputs: Vec<ColorInputId>,
         opacity_inputs: Vec<OpacityInputId>,
+        paints: Vec<PaintSpec>,
         surfaces: Vec<SurfaceSpec>,
-        occurrences: Vec<ForegroundOccurrenceSpec>,
+        occurrences: Vec<OccurrenceSpec>,
     ) -> Self {
         Self {
             color_inputs,
             opacity_inputs,
+            paints,
             surfaces,
             occurrences,
         }
     }
 
-    /// Детерминированная атомарная компиляция: дубликаты → ссылки → циклы.
-    ///
-    /// Порядок проверок фиксирован и не зависит от порядка деклараций (все
-    /// проверки идут по канонически отсортированным копиям): при нескольких
-    /// дефектах сообщается дефект с наименьшим typed ID первого нарушенного
-    /// класса. Частичный граф при ошибке не публикуется.
-    ///
-    /// # Errors
-    ///
-    /// Типизированный [`GraphError`] соответствующего класса.
-    pub(crate) fn compile(&self) -> Result<CompiledAppearanceGraph, GraphError> {
-        // Канонизация: сортировка по typed ID. Дубликаты после сортировки
-        // смежны — детекция order-independent по построению.
-        let mut color_inputs = self.color_inputs.clone();
+    /// Канонизировать декларации, проверить каждое typed-ребро и построить два
+    /// детерминированных topo: Paint DAG и совместный Surface/Occurrence DAG.
+    pub(crate) fn compile(self) -> Result<CompiledAppearanceGraph, CompileError> {
+        let Self {
+            mut color_inputs,
+            mut opacity_inputs,
+            mut paints,
+            mut surfaces,
+            mut occurrences,
+        } = self;
+
         color_inputs.sort_unstable();
-        if let Some(w) = color_inputs.windows(2).find(|w| w[0] == w[1]) {
-            return Err(GraphError::DuplicateColorInput { input: w[0] });
+        if let Some(duplicate) = adjacent_duplicate(&color_inputs) {
+            return Err(CompileError::DuplicateColorInput { input: duplicate });
         }
 
-        let mut opacity_inputs = self.opacity_inputs.clone();
         opacity_inputs.sort_unstable();
-        if let Some(w) = opacity_inputs.windows(2).find(|w| w[0] == w[1]) {
-            return Err(GraphError::DuplicateOpacityInput { input: w[0] });
+        if let Some(duplicate) = adjacent_duplicate(&opacity_inputs) {
+            return Err(CompileError::DuplicateOpacityInput { input: duplicate });
         }
 
-        let mut surfaces = self.surfaces.clone();
-        surfaces.sort_unstable_by_key(SurfaceSpec::id);
-        if let Some(w) = surfaces.windows(2).find(|w| w[0].id() == w[1].id()) {
-            return Err(GraphError::DuplicateSurface { surface: w[0].id() });
-        }
-
-        let mut occurrences = self.occurrences.clone();
-        occurrences.sort_unstable_by_key(|o| o.id);
-        if let Some(w) = occurrences.windows(2).find(|w| w[0].id == w[1].id) {
-            return Err(GraphError::DuplicateOccurrence {
-                occurrence: w[0].id,
+        paints.sort_unstable_by_key(PaintSpec::id);
+        if let Some(duplicate) = paints
+            .windows(2)
+            .find(|window| window[0].id() == window[1].id())
+        {
+            return Err(CompileError::DuplicatePaint {
+                paint: duplicate[0].id(),
             });
         }
 
-        // Ссылочная целостность: каждое ребро указывает на объявленный узел.
-        // Отсутствие ссылки — ошибка структуры, не runtime-вопрос.
+        surfaces.sort_unstable_by_key(SurfaceSpec::id);
+        if let Some(duplicate) = surfaces
+            .windows(2)
+            .find(|window| window[0].id() == window[1].id())
+        {
+            return Err(CompileError::DuplicateSurface {
+                surface: duplicate[0].id(),
+            });
+        }
+
+        occurrences.sort_unstable_by_key(|occurrence| occurrence.id);
+        if let Some(duplicate) = occurrences
+            .windows(2)
+            .find(|window| window[0].id == window[1].id)
+        {
+            return Err(CompileError::DuplicateOccurrence {
+                occurrence: duplicate[0].id,
+            });
+        }
+
         let has_color = |id: ColorInputId| color_inputs.binary_search(&id).is_ok();
         let has_opacity = |id: OpacityInputId| opacity_inputs.binary_search(&id).is_ok();
+        let paint_index = |id: PaintId| paints.binary_search_by_key(&id, PaintSpec::id).ok();
         let surface_index =
             |id: SurfaceId| surfaces.binary_search_by_key(&id, SurfaceSpec::id).ok();
+        let occurrence_index = |id: OccurrenceId| {
+            occurrences
+                .binary_search_by_key(&id, |occurrence| occurrence.id)
+                .ok()
+        };
 
-        for spec in &surfaces {
-            match *spec {
+        for paint in &paints {
+            match *paint {
+                PaintSpec::Solid { id, color } => {
+                    if !has_color(color) {
+                        return Err(CompileError::MissingPaintColorInput {
+                            paint: id,
+                            input: color,
+                        });
+                    }
+                }
+                PaintSpec::Opacity {
+                    id,
+                    source,
+                    opacity,
+                } => {
+                    if paint_index(source).is_none() {
+                        return Err(CompileError::MissingPaintSource { paint: id, source });
+                    }
+                    if !has_opacity(opacity) {
+                        return Err(CompileError::MissingPaintOpacityInput {
+                            paint: id,
+                            input: opacity,
+                        });
+                    }
+                }
+            }
+        }
+
+        for surface in &surfaces {
+            match *surface {
                 SurfaceSpec::Input { id, color } => {
                     if !has_color(color) {
-                        return Err(GraphError::MissingSurfaceColorInput {
+                        return Err(CompileError::MissingSurfaceColorInput {
                             surface: id,
                             input: color,
                         });
                     }
                 }
-                SurfaceSpec::SourceOver {
-                    id,
-                    source,
-                    opacity,
-                    backdrop,
-                    profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
-                } => {
-                    if !has_color(source) {
-                        return Err(GraphError::MissingSurfaceColorInput {
+                SurfaceSpec::FromOccurrence { id, occurrence } => {
+                    if occurrence_index(occurrence).is_none() {
+                        return Err(CompileError::MissingSurfaceOccurrence {
                             surface: id,
-                            input: source,
-                        });
-                    }
-                    if !has_opacity(opacity) {
-                        return Err(GraphError::MissingSurfaceOpacityInput {
-                            surface: id,
-                            input: opacity,
-                        });
-                    }
-                    if surface_index(backdrop).is_none() {
-                        return Err(GraphError::MissingSurfaceBackdrop {
-                            surface: id,
-                            backdrop,
+                            occurrence,
                         });
                     }
                 }
@@ -314,205 +383,643 @@ impl AppearanceGraphSpec {
         }
 
         for occurrence in &occurrences {
-            if !has_color(occurrence.identity_source) {
-                return Err(GraphError::MissingOccurrenceSource {
+            if paint_index(occurrence.subject).is_none() {
+                return Err(CompileError::MissingOccurrencePaint {
                     occurrence: occurrence.id,
-                    input: occurrence.identity_source,
+                    paint: occurrence.subject,
                 });
             }
             if surface_index(occurrence.against).is_none() {
-                return Err(GraphError::MissingOccurrenceBackdrop {
+                return Err(CompileError::MissingOccurrenceBackdrop {
                     occurrence: occurrence.id,
                     surface: occurrence.against,
                 });
             }
         }
 
-        // Топологический порядок (Кан) с готовым множеством в BTreeSet:
-        // из готовых всегда берётся наименьший SurfaceId, поэтому порядок
-        // канонический без какого-либо произвольного iteration limit —
-        // алгоритм завершается на любом входе за |V| шагов.
-        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); surfaces.len()];
-        let mut pending_deps: Vec<usize> = vec![0; surfaces.len()];
-        for (index, spec) in surfaces.iter().enumerate() {
-            if let SurfaceSpec::SourceOver { backdrop, .. } = spec {
-                let backdrop_index = surface_index(*backdrop)
-                    .unwrap_or_else(|| unreachable!("ссылки проверены выше"));
-                dependents[backdrop_index].push(index);
-                pending_deps[index] += 1;
-            }
-        }
-        let mut ready: BTreeSet<SurfaceId> = surfaces
+        let paint_dependencies: Vec<Option<usize>> = paints
             .iter()
-            .enumerate()
-            .filter(|(index, _)| pending_deps[*index] == 0)
-            .map(|(_, spec)| spec.id())
+            .map(|paint| match *paint {
+                PaintSpec::Solid { .. } => None,
+                PaintSpec::Opacity { source, .. } => paint_index(source),
+            })
             .collect();
-        let mut topo: Vec<usize> = Vec::with_capacity(surfaces.len());
-        while let Some(id) = ready.pop_first() {
-            let index =
-                surface_index(id).unwrap_or_else(|| unreachable!("id из собственного множества"));
-            topo.push(index);
-            for &dependent in &dependents[index] {
-                pending_deps[dependent] -= 1;
-                if pending_deps[dependent] == 0 {
-                    ready.insert(surfaces[dependent].id());
+        let paint_keys: Vec<PaintId> = paints.iter().map(PaintSpec::id).collect();
+        let paint_topo =
+            canonical_functional_topology(&paint_keys, &paint_dependencies).map_err(|members| {
+                CompileError::PaintCycle {
+                    paints: members.into_iter().map(|index| paint_keys[index]).collect(),
                 }
-            }
-        }
-        if topo.len() != surfaces.len() {
-            let mut cycle: Vec<SurfaceId> = surfaces
+            })?;
+
+        let surface_count = surfaces.len();
+        let mut render_keys: Vec<RenderKey> = surfaces
+            .iter()
+            .map(|surface| RenderKey::Surface(surface.id()))
+            .collect();
+        render_keys.extend(
+            occurrences
                 .iter()
-                .enumerate()
-                .filter(|(index, _)| pending_deps[*index] > 0)
-                .map(|(_, spec)| spec.id())
-                .collect();
-            cycle.sort_unstable();
-            return Err(GraphError::SurfaceCycle { surfaces: cycle });
-        }
+                .map(|occurrence| RenderKey::Occurrence(occurrence.id)),
+        );
+        let mut render_dependencies: Vec<Option<usize>> = surfaces
+            .iter()
+            .map(|surface| match *surface {
+                SurfaceSpec::Input { .. } => None,
+                SurfaceSpec::FromOccurrence { occurrence, .. } => {
+                    occurrence_index(occurrence).map(|index| surface_count + index)
+                }
+            })
+            .collect();
+        render_dependencies.extend(
+            occurrences
+                .iter()
+                .map(|occurrence| surface_index(occurrence.against)),
+        );
+        let render_topo_indices = canonical_functional_topology(&render_keys, &render_dependencies)
+            .map_err(|members| {
+                let mut cyclic_surfaces = Vec::new();
+                let mut cyclic_occurrences = Vec::new();
+                for index in members {
+                    if index < surface_count {
+                        cyclic_surfaces.push(surfaces[index].id());
+                    } else {
+                        cyclic_occurrences.push(occurrences[index - surface_count].id);
+                    }
+                }
+                cyclic_surfaces.sort_unstable();
+                cyclic_occurrences.sort_unstable();
+                CompileError::RenderCycle {
+                    surfaces: cyclic_surfaces,
+                    occurrences: cyclic_occurrences,
+                }
+            })?;
+        let render_topo = render_topo_indices
+            .into_iter()
+            .map(|index| {
+                if index < surface_count {
+                    RenderNode::Surface(index)
+                } else {
+                    RenderNode::Occurrence(index - surface_count)
+                }
+            })
+            .collect();
+
+        let compiled_paints = paints
+            .iter()
+            .map(|paint| match *paint {
+                PaintSpec::Solid { id, color } => CompiledPaintSpec::Solid { id, color },
+                PaintSpec::Opacity {
+                    id,
+                    source,
+                    opacity,
+                } => CompiledPaintSpec::Opacity {
+                    id,
+                    source: paint_index(source)
+                        .unwrap_or_else(|| unreachable!("paint links were validated")),
+                    opacity,
+                },
+            })
+            .collect();
+        let compiled_surfaces = surfaces
+            .iter()
+            .map(|surface| match *surface {
+                SurfaceSpec::Input { id, color } => CompiledSurfaceSpec::Input { id, color },
+                SurfaceSpec::FromOccurrence { id, occurrence } => {
+                    CompiledSurfaceSpec::FromOccurrence {
+                        id,
+                        occurrence: occurrence_index(occurrence)
+                            .unwrap_or_else(|| unreachable!("occurrence links were validated")),
+                    }
+                }
+            })
+            .collect();
+        let compiled_occurrences = occurrences
+            .iter()
+            .map(|occurrence| CompiledOccurrenceSpec {
+                id: occurrence.id,
+                subject_id: occurrence.subject,
+                subject: paint_index(occurrence.subject)
+                    .unwrap_or_else(|| unreachable!("paint links were validated")),
+                against_id: occurrence.against,
+                against: surface_index(occurrence.against)
+                    .unwrap_or_else(|| unreachable!("surface links were validated")),
+                profile: occurrence.profile,
+            })
+            .collect();
 
         Ok(CompiledAppearanceGraph {
             color_inputs,
             opacity_inputs,
-            surfaces,
-            occurrences,
-            topo,
+            paints: compiled_paints,
+            surfaces: compiled_surfaces,
+            occurrences: compiled_occurrences,
+            paint_topo,
+            render_topo,
         })
     }
 }
 
-/// Скомпилированный граф: канонические декларации + детерминированный topo.
-/// Равенство скомпилированных графов означает равную физику: любые два
-/// объявления с теми же handles/рёбрами компилируются в идентичное значение.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CompiledAppearanceGraph {
-    /// Отсортированные объявленные цветовые входы.
-    color_inputs: Vec<ColorInputId>,
-    /// Отсортированные объявленные входы непрозрачности.
-    opacity_inputs: Vec<OpacityInputId>,
-    /// Поверхности в каноническом порядке (по id).
-    surfaces: Vec<SurfaceSpec>,
-    /// Occurrences в каноническом порядке (по id).
-    occurrences: Vec<ForegroundOccurrenceSpec>,
-    /// Индексы `surfaces` в порядке исполнения (канонический Кан).
-    topo: Vec<usize>,
+#[cfg(test)]
+fn adjacent_duplicate<T: Copy + Eq>(sorted: &[T]) -> Option<T> {
+    sorted
+        .windows(2)
+        .find(|window| window[0] == window[1])
+        .map(|window| window[0])
 }
 
-/// Значения входов на один evaluate: цвета — финальные sRGB8-байты, альфы —
-/// binary64. Дубликаты/пропуски/лишние значения отвергает `evaluate`
-/// (конструктор непадающий — единая точка отказа).
+/// Topo для functional dependency graph: каждый узел имеет не более одной
+/// зависимости. При цикле возвращает только его реальные узлы, а не весь
+/// заблокированный Kahn-остаток.
+#[cfg(test)]
+fn canonical_functional_topology<K: Copy + Ord>(
+    keys: &[K],
+    dependencies: &[Option<usize>],
+) -> Result<Vec<usize>, Vec<usize>> {
+    debug_assert_eq!(keys.len(), dependencies.len());
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); keys.len()];
+    let mut pending: Vec<usize> = vec![0; keys.len()];
+    for (node, dependency) in dependencies.iter().enumerate() {
+        if let Some(dependency) = dependency {
+            dependents[*dependency].push(node);
+            pending[node] = 1;
+        }
+    }
+    let mut ready: BTreeSet<(K, usize)> = keys
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(index, _)| pending[*index] == 0)
+        .map(|(index, key)| (key, index))
+        .collect();
+    let mut topo = Vec::with_capacity(keys.len());
+    while let Some((_, node)) = ready.pop_first() {
+        topo.push(node);
+        for &dependent in &dependents[node] {
+            pending[dependent] -= 1;
+            if pending[dependent] == 0 {
+                ready.insert((keys[dependent], dependent));
+            }
+        }
+    }
+    if topo.len() == keys.len() {
+        Ok(topo)
+    } else {
+        Err(functional_cycle_members(dependencies))
+    }
+}
+
+/// Итеративный functional-cycle detector: O(V), без риска переполнить стек на
+/// большом входе и без ложного включения деревьев, ведущих в цикл.
+#[cfg(test)]
+fn functional_cycle_members(dependencies: &[Option<usize>]) -> Vec<usize> {
+    const UNSEEN: u8 = 0;
+    const ACTIVE: u8 = 1;
+    const DONE: u8 = 2;
+
+    let mut state = vec![UNSEEN; dependencies.len()];
+    let mut position = vec![usize::MAX; dependencies.len()];
+    let mut cycles = Vec::new();
+    for start in 0..dependencies.len() {
+        if state[start] != UNSEEN {
+            continue;
+        }
+        let mut path = Vec::new();
+        let mut current = Some(start);
+        while let Some(node) = current {
+            match state[node] {
+                UNSEEN => {
+                    state[node] = ACTIVE;
+                    position[node] = path.len();
+                    path.push(node);
+                    current = dependencies[node];
+                }
+                ACTIVE => {
+                    let cycle_start = position[node];
+                    if cycle_start != usize::MAX {
+                        cycles.extend_from_slice(&path[cycle_start..]);
+                    }
+                    break;
+                }
+                DONE => break,
+                _ => unreachable!("cycle detector has a closed state set"),
+            }
+        }
+        for node in path {
+            state[node] = DONE;
+            position[node] = usize::MAX;
+        }
+    }
+    cycles.sort_unstable();
+    cycles.dedup();
+    cycles
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg(test)]
+enum RenderKey {
+    Surface(SurfaceId),
+    Occurrence(OccurrenceId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderNode {
+    Surface(usize),
+    Occurrence(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompiledPaintSpec {
+    Solid {
+        id: PaintId,
+        color: ColorInputId,
+    },
+    Opacity {
+        id: PaintId,
+        source: usize,
+        opacity: OpacityInputId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompiledSurfaceSpec {
+    Input { id: SurfaceId, color: ColorInputId },
+    FromOccurrence { id: SurfaceId, occurrence: usize },
+}
+
+#[cfg(test)]
+impl CompiledSurfaceSpec {
+    fn id(&self) -> SurfaceId {
+        match self {
+            Self::Input { id, .. } | Self::FromOccurrence { id, .. } => *id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompiledOccurrenceSpec {
+    id: OccurrenceId,
+    subject_id: PaintId,
+    subject: usize,
+    against_id: SurfaceId,
+    against: usize,
+    profile: CompositionProfileV1,
+}
+
+/// Канонический compiled IR с индексными ссылками: после проверки bindings
+/// исполнение самих Paint/Surface/Occurrence узлов линейно по их числу.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompiledAppearanceGraph {
+    color_inputs: Vec<ColorInputId>,
+    opacity_inputs: Vec<OpacityInputId>,
+    paints: Vec<CompiledPaintSpec>,
+    surfaces: Vec<CompiledSurfaceSpec>,
+    occurrences: Vec<CompiledOccurrenceSpec>,
+    paint_topo: Vec<usize>,
+    render_topo: Vec<RenderNode>,
+}
+
+/// Borrowed runtime-представление уже проверенного compiled IR. Оно отделяет
+/// исполнение от compiler-а и позволяет статическим внутренним adapter-ам не
+/// тащить admission/topology machinery в конечный binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledAppearanceProgram<'a> {
+    color_inputs: &'a [ColorInputId],
+    opacity_inputs: &'a [OpacityInputId],
+    paints: &'a [CompiledPaintSpec],
+    surfaces: &'a [CompiledSurfaceSpec],
+    occurrences: &'a [CompiledOccurrenceSpec],
+    paint_topo: &'a [usize],
+    render_topo: &'a [RenderNode],
+}
+
+impl<'a> CompiledAppearanceProgram<'a> {
+    /// Создаёт view только из IR, уже доказанно эквивалентного результату
+    /// `AppearanceGraphSpec::compile`. Static adapter обязан защищать это
+    /// равенство characterization-тестом.
+    const fn from_validated_parts(
+        color_inputs: &'a [ColorInputId],
+        opacity_inputs: &'a [OpacityInputId],
+        paints: &'a [CompiledPaintSpec],
+        surfaces: &'a [CompiledSurfaceSpec],
+        occurrences: &'a [CompiledOccurrenceSpec],
+        paint_topo: &'a [usize],
+        render_topo: &'a [RenderNode],
+    ) -> Self {
+        Self {
+            color_inputs,
+            opacity_inputs,
+            paints,
+            surfaces,
+            occurrences,
+            paint_topo,
+            render_topo,
+        }
+    }
+}
+
+const POINT_SOURCE: ColorInputId = ColorInputId::new(0);
+const POINT_CONTEXT: ColorInputId = ColorInputId::new(1);
+const POINT_OPACITY: OpacityInputId = OpacityInputId::new(0);
+const POINT_SOLID_PAINT: PaintId = PaintId::new(0);
+const POINT_OPACITY_PAINT: PaintId = PaintId::new(1);
+const POINT_CONTEXT_SURFACE: SurfaceId = SurfaceId::new(0);
+const POINT_DERIVED_SURFACE: SurfaceId = SurfaceId::new(1);
+const POINT_OCCURRENCE: OccurrenceId = OccurrenceId::new(0);
+
+const POINT_COLOR_INPUTS: [ColorInputId; 2] = [POINT_SOURCE, POINT_CONTEXT];
+const POINT_OPACITY_INPUTS: [OpacityInputId; 1] = [POINT_OPACITY];
+const POINT_PAINTS: [CompiledPaintSpec; 2] = [
+    CompiledPaintSpec::Solid {
+        id: POINT_SOLID_PAINT,
+        color: POINT_SOURCE,
+    },
+    CompiledPaintSpec::Opacity {
+        id: POINT_OPACITY_PAINT,
+        source: 0,
+        opacity: POINT_OPACITY,
+    },
+];
+const POINT_SURFACES: [CompiledSurfaceSpec; 2] = [
+    CompiledSurfaceSpec::Input {
+        id: POINT_CONTEXT_SURFACE,
+        color: POINT_CONTEXT,
+    },
+    CompiledSurfaceSpec::FromOccurrence {
+        id: POINT_DERIVED_SURFACE,
+        occurrence: 0,
+    },
+];
+const POINT_OCCURRENCES: [CompiledOccurrenceSpec; 1] = [CompiledOccurrenceSpec {
+    id: POINT_OCCURRENCE,
+    subject_id: POINT_OPACITY_PAINT,
+    subject: 1,
+    against_id: POINT_CONTEXT_SURFACE,
+    against: 0,
+    profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+}];
+const POINT_PAINT_TOPO: [usize; 2] = [0, 1];
+const POINT_RENDER_TOPO: [RenderNode; 3] = [
+    RenderNode::Surface(0),
+    RenderNode::Occurrence(0),
+    RenderNode::Surface(1),
+];
+const POINT_OPACITY_OVER_SURFACE_V1: CompiledAppearanceProgram<'static> =
+    CompiledAppearanceProgram::from_validated_parts(
+        &POINT_COLOR_INPUTS,
+        &POINT_OPACITY_INPUTS,
+        &POINT_PAINTS,
+        &POINT_SURFACES,
+        &POINT_OCCURRENCES,
+        &POINT_PAINT_TOPO,
+        &POINT_RENDER_TOPO,
+    );
+
+/// Sealed adapter минимального point-program. Он принимает только физические
+/// значения; topology и индексные ссылки нельзя собрать за пределами модуля.
+pub(crate) struct PointOpacityOverSurfaceV1;
+
+impl PointOpacityOverSurfaceV1 {
+    pub(crate) fn evaluate(
+        source: [u8; 3],
+        opacity: f64,
+        backdrop: [u8; 3],
+    ) -> Result<[u8; 3], PointOpacityError> {
+        crate::alpha::validate_alpha(opacity).map_err(|message| PointOpacityError { message })?;
+        let opacity = if opacity == 0.0 { 0.0 } else { opacity };
+        let mut paints = [None; 2];
+        let mut surfaces = [None; 2];
+        let mut occurrences = [None; 1];
+        POINT_OPACITY_OVER_SURFACE_V1.execute_into(
+            |id| match id {
+                POINT_SOURCE => source,
+                POINT_CONTEXT => backdrop,
+                _ => unreachable!("sealed point program has two ColorInput ports"),
+            },
+            |id| match id {
+                POINT_OPACITY => opacity,
+                _ => unreachable!("sealed point program has one OpacityInput port"),
+            },
+            &mut paints,
+            &mut surfaces,
+            &mut occurrences,
+        );
+        Ok(surfaces[1].unwrap_or_else(|| {
+            unreachable!("compiler-verified point program materializes its output Surface")
+        }))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn point_opacity_over_surface_declarative_spec() -> AppearanceGraphSpec {
+    AppearanceGraphSpec::new(
+        POINT_COLOR_INPUTS.to_vec(),
+        POINT_OPACITY_INPUTS.to_vec(),
+        vec![
+            PaintSpec::Solid {
+                id: POINT_SOLID_PAINT,
+                color: POINT_SOURCE,
+            },
+            PaintSpec::Opacity {
+                id: POINT_OPACITY_PAINT,
+                source: POINT_SOLID_PAINT,
+                opacity: POINT_OPACITY,
+            },
+        ],
+        vec![
+            SurfaceSpec::Input {
+                id: POINT_CONTEXT_SURFACE,
+                color: POINT_CONTEXT,
+            },
+            SurfaceSpec::FromOccurrence {
+                id: POINT_DERIVED_SURFACE,
+                occurrence: POINT_OCCURRENCE,
+            },
+        ],
+        vec![OccurrenceSpec {
+            id: POINT_OCCURRENCE,
+            subject: POINT_OPACITY_PAINT,
+            against: POINT_CONTEXT_SURFACE,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        }],
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn point_program_matches(compiled: &CompiledAppearanceGraph) -> bool {
+    compiled.matches_program(POINT_OPACITY_OVER_SURFACE_V1)
+}
+
+/// Runtime bindings одного атомарного evaluate.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppearanceBindings {
     colors: Vec<(ColorInputId, [u8; 3])>,
     opacities: Vec<(OpacityInputId, f64)>,
 }
 
+#[cfg(test)]
 impl AppearanceBindings {
-    /// Собрать значения входов. Валидация — в [`CompiledAppearanceGraph::evaluate`].
     pub(crate) fn new(
-        colors: Vec<(ColorInputId, [u8; 3])>,
-        opacities: Vec<(OpacityInputId, f64)>,
+        mut colors: Vec<(ColorInputId, [u8; 3])>,
+        mut opacities: Vec<(OpacityInputId, f64)>,
     ) -> Self {
+        colors.sort_unstable_by_key(|(id, _)| *id);
+        opacities.sort_unstable_by_key(|(id, _)| *id);
         Self { colors, opacities }
     }
 }
 
-/// Счётчики фактически исполненных узлов — доказательство исполнения рёбер
-/// (анти-вакуум: тест сверяет счётчики, а не только совпадение результата).
+/// Материализованный point Paint. Значение alpha хранится битами, чтобы
+/// equality/certificate не теряли binary64 representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ExecutionTrace {
-    /// Исполненных input-поверхностей.
-    pub(crate) input_surfaces: usize,
-    /// Исполненных source-over рёбер.
-    pub(crate) source_over_edges: usize,
-    /// Собранных foreground occurrences.
-    pub(crate) foreground_occurrences: usize,
+pub(crate) struct ResolvedPaint {
+    id: PaintId,
+    rgb: [u8; 3],
+    opacity_bits: u64,
 }
 
-/// Replayable-сертификат одной exact source-over операции: все входы и выход
-/// в точных представлениях (байты и `to_bits` альфы). Не содержит и не может
-/// содержать `Pass` про читаемость/восприятие — это сертификат композиции,
-/// а не perception-утверждение.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl ResolvedPaint {
+    #[cfg(test)]
+    pub(crate) fn rgb(&self) -> [u8; 3] {
+        self.rgb
+    }
+
+    #[cfg(test)]
+    pub(crate) fn opacity_bits(&self) -> u64 {
+        self.opacity_bits
+    }
+}
+
+/// Replayable exact point-composite certificate. Он доказывает только
+/// заявленную математическую операцию, не readability и не browser pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceOverCertificateV1 {
-    /// Identity версионированного профиля операции.
-    pub(crate) profile: CompositionProfileV1,
-    /// Поверхность, чей результат сертифицирован.
-    pub(crate) surface: SurfaceId,
-    /// Handle источника верхнего слоя.
-    pub(crate) source_input: ColorInputId,
-    /// Байты источника.
-    pub(crate) source_rgb: [u8; 3],
-    /// Handle поверхности-подложки.
-    pub(crate) backdrop_surface: SurfaceId,
-    /// Финальные байты подложки.
-    pub(crate) backdrop_rgb: [u8; 3],
-    /// Handle входа непрозрачности.
-    pub(crate) opacity_input: OpacityInputId,
-    /// Точные биты binary64-альфы (без потери представления).
-    pub(crate) opacity_bits: u64,
-    /// Финальные байты результата.
-    pub(crate) output_rgb: [u8; 3],
+    profile: CompositionProfileV1,
+    occurrence: OccurrenceId,
+    subject: PaintId,
+    subject_rgb: [u8; 3],
+    subject_opacity_bits: u64,
+    backdrop_surface: SurfaceId,
+    backdrop_rgb: [u8; 3],
+    output_rgb: [u8; 3],
 }
 
 impl SourceOverCertificateV1 {
-    /// Независимо повторить операцию из данных сертификата.
-    ///
-    /// Часть proof-контракта модуля (§6.3 ТЗ #307): потребляется
-    /// доказательствами (replay-тесты), production-путь один evaluate
-    /// не дублирует — отсюда allow вне test-сборки.
-    ///
-    /// # Errors
-    ///
-    /// Доменная ошибка SSOT-композитора, если сертификат собран из
-    /// невалидных данных (у честно выданного сертификата недостижимо).
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn replay(&self) -> Result<[u8; 3], String> {
         match self.profile {
             CompositionProfileV1::EncodedSrgb8SourceOverV1 => crate::alpha::composite_over_srgb8(
-                self.source_rgb,
-                f64::from_bits(self.opacity_bits),
+                self.subject_rgb,
+                f64::from_bits(self.subject_opacity_bits),
                 self.backdrop_rgb,
             ),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn profile(&self) -> CompositionProfileV1 {
+        self.profile
+    }
+
+    #[cfg(test)]
+    pub(crate) fn occurrence(&self) -> OccurrenceId {
+        self.occurrence
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subject(&self) -> PaintId {
+        self.subject
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subject_rgb(&self) -> [u8; 3] {
+        self.subject_rgb
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subject_opacity_bits(&self) -> u64 {
+        self.subject_opacity_bits
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backdrop_surface(&self) -> SurfaceId {
+        self.backdrop_surface
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backdrop_rgb(&self) -> [u8; 3] {
+        self.backdrop_rgb
+    }
+
+    #[cfg(test)]
+    pub(crate) fn output_rgb(&self) -> [u8; 3] {
+        self.output_rgb
+    }
 }
 
-/// Разрешённый foreground occurrence: identity-источник, его байты и финальные
-/// байты поверхности, против которой foreground реально стоит.
+/// Разрешённое применение Paint к Surface. Сертификат структурно принадлежит
+/// occurrence; `surfaceFrom` второго сертификата не создаёт.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedOccurrence {
-    /// Handle occurrence.
-    pub(crate) id: OccurrenceId,
-    /// Объявленный identity-источник (ребро идентичности, не копия байт).
-    pub(crate) identity_source: ColorInputId,
-    /// Байты identity-источника из bindings.
-    pub(crate) source: [u8; 3],
-    /// Поверхность наблюдения (объявленная топологией).
-    pub(crate) against: SurfaceId,
-    /// Финальные вычисленные байты этой поверхности.
-    pub(crate) backdrop: [u8; 3],
+    id: OccurrenceId,
+    subject: PaintId,
+    against: SurfaceId,
+    backdrop: [u8; 3],
+    visible: [u8; 3],
+    certificate: SourceOverCertificateV1,
 }
 
-/// Результат одного evaluate: байты каждой поверхности, occurrences,
-/// сертификаты exact-операций и счётчики исполнения. Все коллекции — в
-/// каноническом порядке, поэтому результат сравним значением.
-#[derive(Debug, Clone, PartialEq)]
+impl ResolvedOccurrence {
+    #[cfg(test)]
+    pub(crate) fn id(&self) -> OccurrenceId {
+        self.id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subject(&self) -> PaintId {
+        self.subject
+    }
+
+    #[cfg(test)]
+    pub(crate) fn against(&self) -> SurfaceId {
+        self.against
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backdrop(&self) -> [u8; 3] {
+        self.backdrop
+    }
+
+    pub(crate) fn visible(&self) -> [u8; 3] {
+        self.visible
+    }
+
+    #[cfg(test)]
+    pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
+        &self.certificate
+    }
+}
+
+/// Полный атомарный результат evaluate в каноническом typed-ID порядке.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppearanceEvaluation {
-    /// `(поверхность, финальные байты)` в каноническом порядке (по id).
+    paints: Vec<ResolvedPaint>,
     surfaces: Vec<(SurfaceId, [u8; 3])>,
-    /// Occurrences в каноническом порядке (по id).
     occurrences: Vec<ResolvedOccurrence>,
-    /// Сертификаты source-over рёбер в порядке исполнения (канонический topo).
-    certificates: Vec<SourceOverCertificateV1>,
-    /// Счётчики фактического исполнения.
-    trace: ExecutionTrace,
 }
 
+#[cfg(test)]
 impl AppearanceEvaluation {
-    /// Финальные байты поверхности, если она объявлена. Инспекционный API
-    /// (проверяется доказательствами; production читает occurrence).
-    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn paint(&self, id: PaintId) -> Option<&ResolvedPaint> {
+        self.paints
+            .binary_search_by_key(&id, |paint| paint.id)
+            .ok()
+            .map(|index| &self.paints[index])
+    }
+
     pub(crate) fn surface_rgb(&self, id: SurfaceId) -> Option<[u8; 3]> {
         self.surfaces
             .binary_search_by_key(&id, |(surface, _)| *surface)
@@ -520,88 +1027,89 @@ impl AppearanceEvaluation {
             .map(|index| self.surfaces[index].1)
     }
 
-    /// Разрешённый occurrence, если он объявлен.
     pub(crate) fn occurrence(&self, id: OccurrenceId) -> Option<&ResolvedOccurrence> {
         self.occurrences
             .binary_search_by_key(&id, |occurrence| occurrence.id)
             .ok()
             .map(|index| &self.occurrences[index])
     }
-
-    /// Сертификаты exact-операций этого evaluate (порядок исполнения).
-    /// Proof-контракт (§6.3 ТЗ #307) — потребляется replay-доказательствами.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn certificates(&self) -> &[SourceOverCertificateV1] {
-        &self.certificates
-    }
-
-    /// Счётчики фактического исполнения — анти-вакуумный proof-контракт.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn trace(&self) -> ExecutionTrace {
-        self.trace
-    }
 }
 
+#[cfg(test)]
 impl CompiledAppearanceGraph {
-    /// Исполнить граф на значениях входов: строго по compiled topo, только
-    /// через SSOT-композитор, fail closed на любом дефекте bindings.
-    ///
-    /// Порядок валидации детерминирован: дубликаты → пропуски → лишние →
-    /// домен α (везде наименьший typed ID первого нарушенного класса).
-    ///
-    /// # Errors
-    ///
-    /// Типизированный [`GraphError`]; частичный результат не публикуется.
+    fn program(&self) -> CompiledAppearanceProgram<'_> {
+        CompiledAppearanceProgram::from_validated_parts(
+            &self.color_inputs,
+            &self.opacity_inputs,
+            &self.paints,
+            &self.surfaces,
+            &self.occurrences,
+            &self.paint_topo,
+            &self.render_topo,
+        )
+    }
+
+    fn matches_program(&self, program: CompiledAppearanceProgram<'_>) -> bool {
+        self.program() == program
+    }
+
     pub(crate) fn evaluate(
         &self,
         bindings: &AppearanceBindings,
-    ) -> Result<AppearanceEvaluation, GraphError> {
-        // Канонизация значений: сортировка по handle, смежные дубликаты.
-        let mut colors = bindings.colors.clone();
-        colors.sort_unstable_by_key(|(id, _)| *id);
-        if let Some(w) = colors.windows(2).find(|w| w[0].0 == w[1].0) {
-            return Err(GraphError::DuplicateColorBinding { input: w[0].0 });
+    ) -> Result<AppearanceEvaluation, BindingError> {
+        self.program().evaluate(bindings)
+    }
+}
+
+impl CompiledAppearanceProgram<'_> {
+    /// Проверить bindings, материализовать Paint DAG один раз и исполнить
+    /// Surface/Occurrence DAG один раз. Частичный результат не возвращается.
+    #[cfg(test)]
+    pub(crate) fn evaluate(
+        &self,
+        bindings: &AppearanceBindings,
+    ) -> Result<AppearanceEvaluation, BindingError> {
+        let colors = &bindings.colors;
+        if let Some(window) = colors.windows(2).find(|window| window[0].0 == window[1].0) {
+            return Err(BindingError::DuplicateColorBinding { input: window[0].0 });
         }
-        let mut opacities = bindings.opacities.clone();
-        opacities.sort_unstable_by_key(|(id, _)| *id);
-        if let Some(w) = opacities.windows(2).find(|w| w[0].0 == w[1].0) {
-            return Err(GraphError::DuplicateOpacityBinding { input: w[0].0 });
+        let opacities = &bindings.opacities;
+        if let Some(window) = opacities
+            .windows(2)
+            .find(|window| window[0].0 == window[1].0)
+        {
+            return Err(BindingError::DuplicateOpacityBinding { input: window[0].0 });
         }
 
-        // Точное соответствие объявлениям: и пропуск, и лишнее значение —
-        // отказ (молчаливые дефолты запрещены контрактом продукта).
-        for declared in &self.color_inputs {
+        for declared in self.color_inputs {
             if colors
                 .binary_search_by_key(declared, |(id, _)| *id)
                 .is_err()
             {
-                return Err(GraphError::MissingColorBinding { input: *declared });
+                return Err(BindingError::MissingColorBinding { input: *declared });
             }
         }
-        for declared in &self.opacity_inputs {
+        for declared in self.opacity_inputs {
             if opacities
                 .binary_search_by_key(declared, |(id, _)| *id)
                 .is_err()
             {
-                return Err(GraphError::MissingOpacityBinding { input: *declared });
+                return Err(BindingError::MissingOpacityBinding { input: *declared });
             }
         }
-        for (bound, _) in &colors {
+        for (bound, _) in colors {
             if self.color_inputs.binary_search(bound).is_err() {
-                return Err(GraphError::UnexpectedColorBinding { input: *bound });
+                return Err(BindingError::UnexpectedColorBinding { input: *bound });
             }
         }
-        for (bound, _) in &opacities {
+        for (bound, _) in opacities {
             if self.opacity_inputs.binary_search(bound).is_err() {
-                return Err(GraphError::UnexpectedOpacityBinding { input: *bound });
+                return Err(BindingError::UnexpectedOpacityBinding { input: *bound });
             }
         }
-
-        // Домен α — SSOT-валидатор композитора, чтобы текст доменного отказа
-        // был единым во всём продукте (сообщение переносится дословно).
-        for (input, alpha) in &opacities {
+        for (input, alpha) in opacities {
             if let Err(message) = crate::alpha::validate_alpha(*alpha) {
-                return Err(GraphError::OpacityOutOfDomain {
+                return Err(BindingError::OpacityOutOfDomain {
                     input: *input,
                     message,
                 });
@@ -611,107 +1119,155 @@ impl CompiledAppearanceGraph {
         let color_value = |id: ColorInputId| -> [u8; 3] {
             let index = colors
                 .binary_search_by_key(&id, |(bound, _)| *bound)
-                .unwrap_or_else(|_| unreachable!("соответствие bindings проверено выше"));
+                .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
             colors[index].1
         };
         let opacity_value = |id: OpacityInputId| -> f64 {
             let index = opacities
                 .binary_search_by_key(&id, |(bound, _)| *bound)
-                .unwrap_or_else(|_| unreachable!("соответствие bindings проверено выше"));
-            opacities[index].1
+                .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
+            let alpha = opacities[index].1;
+            // Straight alpha — не signed quantity: ±0 описывают один
+            // физический state и не должны минтить разные certificate bits.
+            if alpha == 0.0 { 0.0 } else { alpha }
         };
 
-        // Исполнение строго по compiled topo: подложка каждого source-over
-        // вычислена раньше по построению порядка.
-        let mut resolved: Vec<Option<[u8; 3]>> = vec![None; self.surfaces.len()];
-        let mut certificates: Vec<SourceOverCertificateV1> = Vec::new();
-        let mut trace = ExecutionTrace {
-            input_surfaces: 0,
-            source_over_edges: 0,
-            foreground_occurrences: 0,
-        };
-        for &index in &self.topo {
-            match self.surfaces[index] {
-                SurfaceSpec::Input { color, .. } => {
-                    trace.input_surfaces += 1;
-                    resolved[index] = Some(color_value(color));
-                }
-                SurfaceSpec::SourceOver {
-                    id,
-                    source,
-                    opacity,
-                    backdrop,
-                    profile: profile @ CompositionProfileV1::EncodedSrgb8SourceOverV1,
-                } => {
-                    let backdrop_index = self
-                        .surfaces
-                        .binary_search_by_key(&backdrop, SurfaceSpec::id)
-                        .unwrap_or_else(|_| unreachable!("ссылки проверены компиляцией"));
-                    let backdrop_rgb = resolved[backdrop_index]
-                        .unwrap_or_else(|| unreachable!("подложка раньше в topo по построению"));
-                    let source_rgb = color_value(source);
-                    let alpha = opacity_value(opacity);
-                    // ЕДИНСТВЕННАЯ операция композиции модуля — SSOT-композитор.
-                    let output_rgb =
-                        crate::alpha::composite_over_srgb8(source_rgb, alpha, backdrop_rgb)
-                            .map_err(|message| GraphError::CompositionFailed {
-                                surface: id,
-                                message,
-                            })?;
-                    trace.source_over_edges += 1;
-                    certificates.push(SourceOverCertificateV1 {
-                        profile,
-                        surface: id,
-                        source_input: source,
-                        source_rgb,
-                        backdrop_surface: backdrop,
-                        backdrop_rgb,
-                        opacity_input: opacity,
-                        opacity_bits: alpha.to_bits(),
-                        output_rgb,
-                    });
-                    resolved[index] = Some(output_rgb);
-                }
-            }
-        }
+        let mut resolved_paints: Vec<Option<ResolvedPaint>> = vec![None; self.paints.len()];
+        let mut resolved_surfaces: Vec<Option<[u8; 3]>> = vec![None; self.surfaces.len()];
+        let mut resolved_occurrences: Vec<Option<ResolvedOccurrence>> =
+            vec![None; self.occurrences.len()];
+        self.execute_into(
+            color_value,
+            opacity_value,
+            &mut resolved_paints,
+            &mut resolved_surfaces,
+            &mut resolved_occurrences,
+        );
 
-        let surfaces: Vec<(SurfaceId, [u8; 3])> = self
+        let paints = resolved_paints
+            .into_iter()
+            .map(|paint| paint.unwrap_or_else(|| unreachable!("Paint topo covers every node")))
+            .collect();
+        let surfaces = self
             .surfaces
             .iter()
-            .zip(&resolved)
-            .map(|(spec, bytes)| {
-                let bytes =
-                    bytes.unwrap_or_else(|| unreachable!("topo покрывает каждую поверхность"));
-                (spec.id(), bytes)
+            .zip(resolved_surfaces)
+            .map(|(surface, value)| {
+                (
+                    surface.id(),
+                    value.unwrap_or_else(|| unreachable!("render topo covers every Surface")),
+                )
             })
             .collect();
-
-        let occurrences: Vec<ResolvedOccurrence> = self
-            .occurrences
-            .iter()
-            .map(|spec| {
-                let backdrop_index = self
-                    .surfaces
-                    .binary_search_by_key(&spec.against, SurfaceSpec::id)
-                    .unwrap_or_else(|_| unreachable!("ссылки проверены компиляцией"));
-                let backdrop = resolved[backdrop_index]
-                    .unwrap_or_else(|| unreachable!("topo покрывает каждую поверхность"));
-                trace.foreground_occurrences += 1;
-                ResolvedOccurrence {
-                    id: spec.id,
-                    identity_source: spec.identity_source,
-                    source: color_value(spec.identity_source),
-                    against: spec.against,
-                    backdrop,
-                }
+        let occurrences = resolved_occurrences
+            .into_iter()
+            .map(|occurrence| {
+                occurrence.unwrap_or_else(|| unreachable!("render topo covers every Occurrence"))
             })
             .collect();
 
         Ok(AppearanceEvaluation {
+            paints,
             surfaces,
             occurrences,
-            certificates,
-            trace,
         })
+    }
+
+    /// Единственное исполнение compiled IR. Scratch принадлежит caller-у:
+    /// static adapter использует stack arrays, test-only generic admission —
+    /// динамические buffers. Алгоритм и сертификат при этом общие.
+    fn execute_into<C, O>(
+        &self,
+        color_value: C,
+        opacity_value: O,
+        resolved_paints: &mut [Option<ResolvedPaint>],
+        resolved_surfaces: &mut [Option<[u8; 3]>],
+        resolved_occurrences: &mut [Option<ResolvedOccurrence>],
+    ) where
+        C: Fn(ColorInputId) -> [u8; 3],
+        O: Fn(OpacityInputId) -> f64,
+    {
+        debug_assert_eq!(resolved_paints.len(), self.paints.len());
+        debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
+        debug_assert_eq!(resolved_occurrences.len(), self.occurrences.len());
+
+        for &index in self.paint_topo {
+            let paint = match self.paints[index] {
+                CompiledPaintSpec::Solid { id, color } => ResolvedPaint {
+                    id,
+                    rgb: color_value(color),
+                    opacity_bits: 1.0f64.to_bits(),
+                },
+                CompiledPaintSpec::Opacity {
+                    id,
+                    source,
+                    opacity,
+                } => {
+                    let source = resolved_paints[source]
+                        .unwrap_or_else(|| unreachable!("Paint dependency precedes its consumer"));
+                    let effective_alpha =
+                        f64::from_bits(source.opacity_bits) * opacity_value(opacity);
+                    ResolvedPaint {
+                        id,
+                        rgb: source.rgb,
+                        opacity_bits: effective_alpha.to_bits(),
+                    }
+                }
+            };
+            resolved_paints[index] = Some(paint);
+        }
+
+        for node in self.render_topo {
+            match *node {
+                RenderNode::Surface(index) => {
+                    let value = match self.surfaces[index] {
+                        CompiledSurfaceSpec::Input { color, .. } => color_value(color),
+                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => {
+                            resolved_occurrences[occurrence]
+                                .unwrap_or_else(|| {
+                                    unreachable!("occurrence precedes surfaceFrom in render topo")
+                                })
+                                .visible()
+                        }
+                    };
+                    resolved_surfaces[index] = Some(value);
+                }
+                RenderNode::Occurrence(index) => {
+                    let spec = &self.occurrences[index];
+                    let subject = resolved_paints[spec.subject]
+                        .unwrap_or_else(|| unreachable!("Paint DAG is evaluated first"));
+                    let backdrop = resolved_surfaces[spec.against].unwrap_or_else(|| {
+                        unreachable!("backdrop precedes occurrence in render topo")
+                    });
+                    let visible = match spec.profile {
+                        CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
+                            crate::alpha::composite_over_srgb8_validated(
+                                subject.rgb,
+                                f64::from_bits(subject.opacity_bits),
+                                backdrop,
+                            )
+                        }
+                    };
+                    let certificate = SourceOverCertificateV1 {
+                        profile: spec.profile,
+                        occurrence: spec.id,
+                        subject: spec.subject_id,
+                        subject_rgb: subject.rgb,
+                        subject_opacity_bits: subject.opacity_bits,
+                        backdrop_surface: spec.against_id,
+                        backdrop_rgb: backdrop,
+                        output_rgb: visible,
+                    };
+                    resolved_occurrences[index] = Some(ResolvedOccurrence {
+                        id: spec.id,
+                        subject: spec.subject_id,
+                        against: spec.against_id,
+                        backdrop,
+                        visible,
+                        certificate,
+                    });
+                }
+            }
+        }
     }
 }
