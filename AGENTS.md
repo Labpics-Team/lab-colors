@@ -21,11 +21,13 @@ Special-recipe path не является extension point. Если измене
 срезе.
 
 До общего authoring cutover допускается ровно один существующий façade
-`RoleRecipe → NamedRoleTable` как frozen входная грамматика. Он не получает
-новых полей или семантики, односторонне лоуверится в private IR и не содержит
-параллельной физики. Это branch-by-abstraction, а не compatibility promise или
-второй источник истины: после полного lowering inventory façade атомарно
-заменяется публичным graph contract.
+`RoleRecipe → RoleSpec → NamedRoleTable` как frozen входная грамматика. Он не
+получает новых полей или семантики. Для каждой уже перенесённой capability
+façade владеет только parse, validate и тотальным односторонним lowering:
+private compiled IR становится единственным executable SSOT для физики,
+solver-а, evaluator-а, emission и evidence, а прежняя match-ветвь удаляется в
+том же срезе. Это branch-by-abstraction, а не compatibility promise; после
+полного lowering inventory façade атомарно заменяется публичным graph contract.
 
 Клиент владеет именами и смыслом токенов, aliases, hierarchy, component states,
 design language и authored anchors. Core владеет colorimetry, compositing,
