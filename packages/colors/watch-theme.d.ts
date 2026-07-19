@@ -21,9 +21,10 @@ export interface WatchThemeOptions {
   /** Auto-refresh on `style`/`class` attribute changes in the observed subtree. Default `true`. */
   observe?: boolean;
   /**
-   * Получает отказы observer-обновлений. Явные `refresh()` и `setTheme()`
-   * синхронны и бросают вызывающему. Без обработчика host сообщает об
-   * исключении через `reportError`/своё error-событие.
+   * Получает отказы observer-обновлений и startup-отказы после захвата
+   * observer. Явные `refresh()` и `setTheme()` синхронны и бросают вызывающему.
+   * Без обработчика host сообщает об исключении через `reportError`/своё
+   * error-событие.
    */
   onError?: (error: unknown) => void;
   /** Mutation-observer root. Defaults to the document element. */
@@ -40,13 +41,14 @@ export interface WatchController {
   /**
    * Re-resolve and re-apply if the background/reference input (or theme) changed;
    * `force` re-applies unconditionally. Returns the now-applied result, or the
-   * cached one when nothing changed.
+   * cached one when nothing changed. Returns `null` only when observer
+   * acquisition preceded a failed startup, so no snapshot exists yet.
    */
-  refresh(force?: boolean): ResolvedTheme;
+  refresh(force?: boolean): ResolvedTheme | null;
   /** Switch theme and re-apply; a rejected candidate keeps the committed theme. */
   setTheme(theme: ThemeName): void;
-  /** The background/reference hex last resolved. */
-  background(): string;
+  /** The background/reference hex last committed, or `null` before any commit. */
+  background(): string | null;
   /** Disconnect observers and stop watching. */
   stop(): void;
 }
@@ -59,7 +61,9 @@ export interface WatchController {
  * непрерывные входы обновляются вызовом `refresh()` из цикла
  * `requestAnimationFrame`. Конфликт отклоняется до изменения DOM или состояния
  * контроллера, поэтому то же наблюдение можно повторить. Изменения пикселей и
- * раскладки не отслеживаются.
+ * раскладки не отслеживаются. До захвата observer startup-ошибка синхронна;
+ * после захвата функция сначала возвращает владельца ресурса, затем сообщает
+ * ошибку через `onError`/host error channel.
  */
 export declare function watchTheme(
   element: HTMLElement,

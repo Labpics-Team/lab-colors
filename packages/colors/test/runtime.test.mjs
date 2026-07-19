@@ -809,13 +809,15 @@ test("watchTheme observes its own initial CSS mutation and catches up once", asy
   ctrl.stop();
 });
 
-test("watchTheme cleans an observer candidate when observe fails before any write", () => {
+test("watchTheme returns the observer owner before reporting an observe failure", async () => {
   let disconnects = 0;
   let writes = 0;
+  const reported = [];
+  const observeFailure = new Error("observe failed");
   const MutationObserver = function () {
     return {
       observe() {
-        throw new Error("observe failed");
+        throw observeFailure;
       },
       disconnect() {
         disconnects++;
@@ -826,20 +828,31 @@ test("watchTheme cleans an observer candidate when observe fails before any writ
   element.style.setProperty = () => {
     writes++;
   };
-  const win = { MutationObserver, document: { documentElement: {} } };
+  const win = {
+    MutationObserver,
+    document: { documentElement: {} },
+    reportError(error) {
+      reported.push(error);
+    },
+  };
 
-  assert.throws(
-    () => watchTheme(element, { colors: fakeEngine(), theme: "light", win }),
-    /observe failed/u,
-  );
+  const controller = watchTheme(element, { colors: fakeEngine(), theme: "light", win });
+  assert.deepEqual(reported, [], "reporting must happen after the controller is returned");
   assert.equal(disconnects, 1, "a partially-acquired observer must be released");
   assert.equal(writes, 0, "observe failure must precede the initial DOM commit");
+  assert.equal(controller.background(), null, "no background was committed");
+  assert.equal(controller.refresh(), null, "a stopped pre-commit controller has no result");
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reported, [observeFailure]);
 });
 
-test("watchTheme disconnects and cancels a queued refresh when initial apply fails", async () => {
+test("watchTheme returns the observer owner and cancels queued work when initial apply fails", async () => {
   let callback = null;
   let active = false;
   let disconnects = 0;
+  const errors = [];
+  const applyFailure = new Error("initial apply failed");
   const colors = fakeEngine();
   const MutationObserver = function (fn) {
     callback = fn;
@@ -856,19 +869,137 @@ test("watchTheme disconnects and cancels a queued refresh when initial apply fai
   const element = fakeElement("rgb(255,255,255)");
   element.style.setProperty = () => {
     if (active) queueMicrotask(callback);
-    throw new Error("initial apply failed");
+    throw applyFailure;
   };
   const win = { MutationObserver, document: { documentElement: {} } };
 
-  assert.throws(
-    () => watchTheme(element, { colors, theme: "light", win }),
-    /initial apply failed/u,
-  );
+  const controller = watchTheme(element, {
+    colors,
+    theme: "light",
+    onError: (error) => errors.push(error),
+    win,
+  });
+  assert.deepEqual(errors, [], "reporting must happen after the controller is returned");
+  assert.equal(controller.background(), null);
   await new Promise((resolve) => setImmediate(resolve));
 
+  assert.deepEqual(errors, [applyFailure]);
   assert.equal(active, false);
   assert.equal(disconnects, 1);
   assert.equal(colors.calls.length, 1, "the failed constructor must cancel its queued refresh");
+  assert.equal(controller.refresh(), null);
+});
+
+test("watchTheme retains an acquired observer when apply, disconnect and reporting fail", async () => {
+  let active = false;
+  let disconnects = 0;
+  const errors = [];
+  const hostErrors = [];
+  const applyFailure = new Error("initial apply failed");
+  const cleanupFailure = new Error("initial disconnect failed");
+  const reportingFailure = new Error("onError failed");
+  class RetriableObserver {
+    observe() {
+      active = true;
+    }
+    disconnect() {
+      disconnects++;
+      if (disconnects === 1) throw cleanupFailure;
+      active = false;
+    }
+  }
+  const element = fakeElement("rgb(255,255,255)");
+  element.style.setProperty = () => {
+    throw applyFailure;
+  };
+
+  const controller = watchTheme(element, {
+    colors: fakeEngine(),
+    theme: "light",
+    onError(error) {
+      errors.push(error);
+      throw reportingFailure;
+    },
+    win: {
+      MutationObserver: RetriableObserver,
+      document: { documentElement: {} },
+      reportError(error) {
+        hostErrors.push(error);
+      },
+    },
+  });
+
+  assert.deepEqual(errors, [], "reporting must happen after ownership is returned");
+  assert.equal(active, true, "the failed cleanup leaves a live handle owned by the controller");
+  assert.equal(controller.background(), null);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0] instanceof AggregateError);
+  assert.deepEqual(errors[0].errors, [applyFailure, cleanupFailure]);
+  assert.equal(hostErrors.length, 1);
+  assert.ok(hostErrors[0] instanceof AggregateError);
+  assert.deepEqual(hostErrors[0].errors, [errors[0], reportingFailure]);
+  assert.equal(active, true, "a hostile reporter cannot make the retained handle unreachable");
+
+  assert.doesNotThrow(() => controller.stop(), "the caller can retry the retained handle");
+  assert.equal(disconnects, 2);
+  assert.equal(active, false);
+});
+
+test("watchTheme never entrusts startup error reporting to the injected scheduler", async () => {
+  let active = false;
+  let disconnects = 0;
+  let controller;
+  let schedulerCalls = 0;
+  const reports = [];
+  const applyFailure = new Error("initial apply failed");
+  const cleanupFailure = new Error("initial disconnect failed");
+  const schedulingFailure = new Error("queueMicrotask failed");
+  class RetriableObserver {
+    observe() {
+      active = true;
+    }
+    disconnect() {
+      disconnects++;
+      if (disconnects === 1) throw cleanupFailure;
+      active = false;
+    }
+  }
+  const element = fakeElement("rgb(255,255,255)");
+  element.style.setProperty = () => {
+    throw applyFailure;
+  };
+
+  assert.doesNotThrow(() => {
+    controller = watchTheme(element, {
+      colors: fakeEngine(),
+      theme: "light",
+      onError: (error) => reports.push({ error, ownerReachable: controller !== undefined }),
+      win: {
+        MutationObserver: RetriableObserver,
+        document: { documentElement: {} },
+        queueMicrotask(callback) {
+          schedulerCalls++;
+          callback();
+          throw schedulingFailure;
+        },
+      },
+    });
+  });
+
+  assert.equal(active, true, "failed cleanup remains reachable through the controller");
+  assert.equal(controller.background(), null);
+  assert.equal(schedulerCalls, 0, "startup ownership must not depend on injected scheduling");
+  assert.deepEqual(reports, [], "reporting must happen after ownership is returned");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reports.length, 1, "startup failure is delivered exactly once");
+  assert.equal(reports[0].ownerReachable, true);
+  assert.ok(reports[0].error instanceof AggregateError);
+  assert.deepEqual(reports[0].error.errors, [applyFailure, cleanupFailure]);
+
+  assert.doesNotThrow(() => controller.stop());
+  assert.equal(disconnects, 2);
+  assert.equal(active, false);
 });
 
 test("watchTheme rejects an invalid async error handler before acquiring an observer", () => {
