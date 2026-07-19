@@ -275,12 +275,20 @@ async function consume(clientConfigJson: string): Promise<void> {
       void error;
     },
   });
-  const applied: ResolvedTheme = controller.refresh();
-  // @ts-expect-error the controller returns its immutable admitted snapshot.
-  applied.vars["--lab-injected"] = "#000000";
+  const applied: ResolvedTheme | null = controller.refresh();
+  // @ts-expect-error startup after observer acquisition can fail before the first commit.
+  const definitelyApplied: ResolvedTheme = controller.refresh();
+  if (applied) {
+    // @ts-expect-error the controller returns its immutable admitted snapshot.
+    applied.vars["--lab-injected"] = "#000000";
+  }
   void applied;
   controller.setTheme("dark");
-  const bgHex: string = controller.background();
+  const bgHex: string | null = controller.background();
+  // @ts-expect-error no reference background exists before the first successful commit.
+  const definitelyBgHex: string = controller.background();
+  void definitelyApplied;
+  void definitelyBgHex;
   void bgHex;
   controller.stop();
 

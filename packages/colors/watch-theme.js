@@ -21,14 +21,40 @@ import { effectiveBackground } from "./effective-bg.js";
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
 const CANCELLED = Symbol("watchTheme.cancelled");
+const BUILTIN_QUEUE_MICROTASK =
+  typeof globalThis.queueMicrotask === "function"
+    ? globalThis.queueMicrotask.bind(globalThis)
+    : null;
+const BUILTIN_SET_TIMEOUT = globalThis.setTimeout.bind(globalThis);
+
+const deferOutsideInjectedHost = (callback) => {
+  let delivered = false;
+  const deliverOnce = () => {
+    if (delivered) return;
+    delivered = true;
+    callback();
+  };
+  if (BUILTIN_QUEUE_MICROTASK) {
+    try {
+      BUILTIN_QUEUE_MICROTASK(deliverOnce);
+      return;
+    } catch {
+      // Task-fallback сохраняет обычное host-исключение вместо rejected
+      // Promise; one-shot не даёт очереди, поставившей callback перед своим
+      // исключением, продублировать доставку.
+    }
+  }
+  BUILTIN_SET_TIMEOUT(deliverOnce, 0);
+};
 
 /**
  * @typedef {object} WatchController
- * @property {(force?: boolean) => object} refresh  Re-resolve+apply if the
+ * @property {(force?: boolean) => (object | null)} refresh  Re-resolve+apply if the
  *   background (or theme) changed; `force` re-applies unconditionally. Returns the
- *   закоммиченный результат `resolveTheme` (кэшированный снимок, если ничего не менялось).
+ *   закоммиченный результат `resolveTheme` (кэшированный снимок, если ничего не менялось),
+ *   либо `null`, если первый commit не состоялся после захвата observer.
  * @property {(theme: string) => void} setTheme  Switch theme and re-apply.
- * @property {() => string} background  The background/reference hex last resolved.
+ * @property {() => (string | null)} background  The background/reference hex last committed.
  * @property {() => void} stop  Disconnect observers and stop watching.
  */
 
@@ -52,7 +78,8 @@ const CANCELLED = Symbol("watchTheme.cancelled");
  * @param {boolean} [options.observe=true]  Auto-refresh on `style`/`class`
  *   attribute changes in the observed subtree.
  * @param {(error: unknown) => void} [options.onError]  Receives failures from
- *   observer-обновлений. Явные `refresh`/`setTheme` по-прежнему бросают.
+ *   observer-обновлений и startup после захвата observer. Явные
+ *   `refresh`/`setTheme` по-прежнему бросают.
  * @param {*} [options.root]  Mutation-observer root (default: the document element).
  * @param {*} [options.win=globalThis]  Window-like host (for MutationObserver).
  * @param {(el:*)=>*} [options.getStyle]  Injection seam for `effectiveBackground`.
@@ -84,18 +111,42 @@ export function watchTheme(element, options) {
     typeof win?.queueMicrotask === "function"
       ? win.queueMicrotask.bind(win)
       : globalThis.queueMicrotask.bind(globalThis);
-  const reportAsyncError = (error) => {
+  const deliverAsyncError = (error) => {
     if (onError) {
-      onError(error);
+      try {
+        onError(error);
+      } catch (reportingError) {
+        const reported = new AggregateError(
+          [error, reportingError],
+          "watchTheme: asynchronous operation and its error handler both failed",
+        );
+        if (typeof win?.reportError === "function") {
+          win.reportError(reported);
+        } else {
+          throw reported;
+        }
+      }
     } else if (typeof win?.reportError === "function") {
       win.reportError(error);
     } else {
+      throw error;
+    }
+  };
+  const reportAsyncError = (error) => {
+    if (onError || typeof win?.reportError === "function") {
+      deliverAsyncError(error);
+    } else {
       // Сохранить видимое host-исключение, не создавая rejected Promise.
       enqueueMicrotask(() => {
-        throw error;
+        deliverAsyncError(error);
       });
     }
   };
+  // После захвата host-ресурса ownership сначала должен стать достижимым
+  // через возвращённый controller. Поэтому construction-failure нельзя
+  // сообщать callback-ом внутри текущего стека.
+  const deferAsyncError = (error) =>
+    deferOutsideInjectedHost(() => deliverAsyncError(error));
   let theme = options.theme;
   // Поколение операций: prepareFor исполняет пользовательский код
   // (background()/resolveTheme), который может reentrant-но вызвать
@@ -374,46 +425,7 @@ export function watchTheme(element, options) {
     });
   };
 
-  try {
-    if (options.observe !== false && win && typeof win.MutationObserver === "function") {
-      const root =
-        options.root ??
-        (typeof win.document !== "undefined" ? win.document.documentElement : null);
-      if (root) {
-        observer = new win.MutationObserver(schedule);
-        // Фон может смениться на самом элементе ИЛИ любом предке — через inline-стиль
-        // or a class swap — so watch attribute changes across the subtree.
-        observer.observe(root, {
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["style", "class"],
-        });
-      }
-    }
-    if (!stopped && initialGen === generation) {
-      commitPrepared(initial, initialGen);
-    }
-  } catch (error) {
-    // Упавшая конструкция не смеет оставить недосягаемый observer или
-    // поздний refresh. Помечаем stopped до disconnect, чтобы уже поставленный
-    // в очередь callback был инертен, даже если host-очистка сама упала.
-    stopped = true;
-    const acquired = observer;
-    observer = null;
-    if (acquired) {
-      try {
-        acquired.disconnect();
-      } catch (disconnectError) {
-        throw new AggregateError(
-          [error, disconnectError],
-          "watchTheme: construction failed and observer cleanup also failed",
-        );
-      }
-    }
-    throw error;
-  }
-
-  return {
+  const controller = {
     refresh,
     setTheme,
     background() {
@@ -437,4 +449,44 @@ export function watchTheme(element, options) {
       runStop();
     },
   };
+
+  let observerAcquired = false;
+  try {
+    if (options.observe !== false && win && typeof win.MutationObserver === "function") {
+      const root =
+        options.root ??
+        (typeof win.document !== "undefined" ? win.document.documentElement : null);
+      if (root) {
+        observer = new win.MutationObserver(schedule);
+        observerAcquired = true;
+        // Фон может смениться на самом элементе ИЛИ любом предке — через inline-стиль
+        // or a class swap — so watch attribute changes across the subtree.
+        observer.observe(root, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["style", "class"],
+        });
+      }
+    }
+    if (!stopped && initialGen === generation) {
+      commitPrepared(initial, initialGen);
+    }
+  } catch (error) {
+    // До acquisition исключение безопасно синхронно: долгоживущего ownership
+    // ещё нет. После acquisition controller обязан стать достижимым даже при
+    // отказе cleanup; `runStop` сохраняет неосвобождённый handle для retry.
+    if (!observerAcquired) throw error;
+    let reported = error;
+    try {
+      runStop();
+    } catch (disconnectError) {
+      reported = new AggregateError(
+        [error, disconnectError],
+        "watchTheme: construction failed and observer cleanup also failed",
+      );
+    }
+    deferAsyncError(reported);
+  }
+
+  return controller;
 }
