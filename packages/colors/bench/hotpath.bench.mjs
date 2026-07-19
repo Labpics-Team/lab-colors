@@ -2,9 +2,9 @@
 //
 // Measures the per-frame cost of `adaptTheme` (the rAF-driven controller) and
 // its supporting primitives (`oklabLerp`, `parseCssColor`,
-// `effectiveBackground`) on a manual clock with a stub engine, so numbers are
-// reproducible and independent of WASM/solver cost — this isolates exactly the
-// JS overhead a weak device pays every frame.
+// `effectiveBackground`) on a manual clock. Controller scenarios use a stub
+// engine and isolate JS overhead; the effective-background microbenchmark also
+// includes the allocation-free JS↔WASM point-compositor boundary it executes.
 //
 // Every scenario is fully deterministic: same schedule, same colours, same
 // breach timing. Besides timing, each scenario reports a BEHAVIOUR FINGERPRINT
@@ -16,9 +16,15 @@
 //
 // Run: node bench/hotpath.bench.mjs
 
+import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { initSync } from "../index.js";
 import { adaptTheme } from "../adapt-theme.js";
 import { oklabLerp, parseCssColor, effectiveBackground } from "../effective-bg.js";
+
+initSync({
+  module: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)),
+});
 
 const FRAME_MS = 1000 / 60;
 const WARMUP_FRAMES = 300;
@@ -213,17 +219,14 @@ const PARSE_FORMS = [
 function fakeChain(depth) {
   // depth translucent rgba layers over an opaque root — the worst honest case
   // for the ancestor walk.
-  const nodes = [];
-  let parent = null;
-  for (let i = 0; i < depth; i++) {
-    const css =
-      i === depth - 1 ? "rgb(240, 240, 240)" : `rgba(${20 + i * 7}, ${30 + i * 5}, ${40 + i * 3}, 0.35)`;
-    const node = { css, parent };
-    nodes.unshift(node);
-    parent = null;
+  let leaf = { css: "rgb(240, 240, 240)", parent: null };
+  for (let i = depth - 1; i >= 0; i--) {
+    leaf = {
+      css: `rgba(${20 + i * 7}, ${30 + i * 5}, ${40 + i * 3}, 0.35)`,
+      parent: leaf,
+    };
   }
-  for (let i = 0; i < nodes.length - 1; i++) nodes[i].parent = nodes[i + 1];
-  return nodes[0];
+  return leaf;
 }
 
 // ── run ─────────────────────────────────────────────────────────────────────
@@ -250,6 +253,17 @@ for (const s of scenarios) {
 console.log("");
 console.log("micro                     ns/op");
 const chain = fakeChain(8);
+let probeReads = 0;
+const probe = effectiveBackground(chain, {
+  getStyle: (el) => {
+    probeReads++;
+    return { getPropertyValue: () => el.css };
+  },
+  parentOf: (el) => el.parent,
+});
+if (probeReads !== 9 || probe === "#F0F0F0") {
+  throw new Error("effectiveBackground benchmark did not traverse its translucent stack");
+}
 const micros = [
   micro("oklabLerp hex→hex", 2e5, (i) => oklabLerp("#1A2B3C", "#F0E1D2", (i % 100) / 100)),
   micro("oklabLerp oklch→hex", 1e5, (i) => oklabLerp("oklch(62.8% 0.2577 29.2)", "#F0E1D2", (i % 100) / 100)),
