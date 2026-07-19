@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 8,
+  "budgetId": "labcolors-wasm-runtime-f0a-point-render-spine-v18",
+  "predecessor": {
+    "path": "packages/colors/bench/wasm-size-budget-v17.json",
+    "fileSha256": "8da5e810394ee8fea8491bcd8aff7f3023c267bf31bb5ea4c4b843ef459e7906"
+  },
+  "toolchainSource": {
+    "path": "packages/colors/bench/wasm-size-budget-v1.json",
+    "fileSha256": "4f7340fc8cfd0ccb97377c385f2f8d8e7a9ef2c5ba96177f518c5d07de2825e1"
+  },
+  "buildRecipes": {
+    "runtime": {
+      "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+      "recipeSha256": "0ea74cb070e0a5facb7280f6124930a0bb673ee4dcee9c99fff110db6c9389d4"
+    }
+  },
+  "roles": {
+    "runtime": {
+      "artifact": "packages/colors/pkg/labcolors_bg.wasm",
+      "measurement": {
+        "source": "github-actions-run-29675926449",
+        "measurementPlatform": "linux-x64",
+        "rawBytes": 385610
+      },
+      "policy": {
+        "maxRawBytes": 385610,
+        "basis": "accepted-f0a-point-render-spine-snapshot",
+        "gzip": "diagnostic-only"
+      }
+    }
+  }
+}
