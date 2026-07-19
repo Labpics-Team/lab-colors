@@ -120,10 +120,11 @@ pub enum FloorDto {
     None,
 }
 
-/// Рецепт роли из закрытого физического меню текущего resolver-а.
+/// JSON-зеркало закрытого физического меню, которое принимает текущий resolver.
 ///
-/// Это граница сериализации совместимого API, не доменный IR и не extension point.
-/// Новая физика не должна добавляться новым recipe variant.
+/// Меню фиксирует входную схему, но не является целевым IR или точкой расширения.
+/// Новая физика должна выражаться общим occurrence/constraint-графом, а не новым
+/// recipe variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RoleRecipeDto {
@@ -167,8 +168,8 @@ pub enum RoleRecipeDto {
         of: LadderSourceDto,
         alpha: f64,
     },
-    /// Переходная двухслойная point-композиция: base на заданном |ΔJ'| и tint
-    /// с вычисленной alpha. Не является моделью glass, blur или spatial field.
+    /// Двухслойная point-композиция: base на заданном |ΔJ'| и tint с
+    /// вычисленной alpha. Не является моделью glass, blur или spatial field.
     Material {
         source: LadderSourceDto,
         tone_light: f64,
@@ -306,8 +307,8 @@ fn position_from_key(key: &str) -> Result<LadderPosition, String> {
         })
 }
 
-/// [`Floor`] → сериализуемый [`FloorDto`] (kebab). Разделяемо `TextAnchor` и
-/// опциональным полом `Ladder` (M2 ch5c). `Floor` — `#[non_exhaustive]`:
+/// [`Floor`] → сериализуемый [`FloorDto`] (kebab). Используется в `TextAnchor`
+/// и в опциональном поле `Ladder`. `Floor` — `#[non_exhaustive]`:
 /// неизвестный вариант — честный `Err`, не тихий дефолт.
 fn floor_to_dto(f: Floor) -> Result<FloorDto, String> {
     Ok(match f {
@@ -614,27 +615,22 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
 mod tests {
     use super::*;
 
-    /// Паспорт labui как статический SSOT (`tests/data/labui.config.json`): дерево
-    /// Даниила вынесено из прод-API ядра (ADR-0001), граница читает паспорт.
+    /// Канонический fixture потребителя: клиентский словарь хранится в JSON, а
+    /// не в API ядра.
     fn labui_dto() -> ConfigDto {
         serde_json::from_str(include_str!("../tests/data/labui.config.json"))
             .expect("паспорт labui парсится")
     }
 
-    /// Снапшот ПРОДАКШН-паспорта labui (`labui/packages/colors/labui.config.json`):
-    /// ВОКАБУЛЯР синкнут со словарным каноном (labui#92 — роль `icon` снесена в
-    /// алиас на label-tertiary, `border-ghost`→`border-none`), но РЕЦЕПТЫ цветных
-    /// лейблов НАМЕРЕННО оставлены в ladder-стиле — ветки M1 text-anchor не
-    /// активируются. Этим `.prod.json` и отличается от канонического `.json`:
-    /// покрывает путь ladder-эпохи потребителя — класс «тестируем не тот стиль
-    /// рецептов, что в проде». Обновлять при изменении паспорта.
+    /// Отдельный fixture потребителя сохраняет проверку второй допустимой формы:
+    /// цветные labels описаны через `ladder`, а не через `text-anchor`.
     fn labui_prod_dto() -> ConfigDto {
         serde_json::from_str(include_str!("../tests/data/labui.config.prod.json"))
             .expect("прод-паспорт labui парсится")
     }
 
-    /// Прод-снапшот гоняется тем же путём без потерь и компилируется — паритет
-    /// гейта для обоих стилей паспорта (канонический M1 + прод-ladder).
+    /// Независимый fixture потребителя не даёт resolver-гейту проверять только один
+    /// допустимый стиль описания ролей.
     #[test]
     fn labui_prod_passport_round_trips_and_compiles() {
         let cfg = ThemeConfig::try_from(labui_prod_dto()).expect("прод-паспорт → ThemeConfig");
@@ -648,8 +644,6 @@ mod tests {
             .expect("прод-паспорт компилируется");
     }
 
-    /// Канонический конфиг гоняется через JSON туда-обратно без потерь:
-    /// паспорт → ядро → DTO → JSON → DTO → ядро даёт РАВНЫЙ конфиг (PartialEq ядра).
     #[test]
     fn labui_passport_round_trips_through_json() {
         let cfg = ThemeConfig::try_from(labui_dto()).expect("паспорт → ThemeConfig");
@@ -663,10 +657,8 @@ mod tests {
             .expect("восстановленный конфиг компилируется");
     }
 
-    /// Recipe-адаптер `pair-label` гоняется через JSON без
-    /// потерь: kebab-тег `pair-label`, источник/доля/пол целы туда-обратно.
-    /// Это только доказательство DTO round-trip, а не наличия pair-label
-    /// в целевом graph API.
+    /// Защита от дрейфа для пока принимаемого `pair-label`: тест закрепляет
+    /// текущую JSON-форму, а не рецепт как целевую архитектуру.
     #[test]
     fn pair_label_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;
@@ -688,8 +680,7 @@ mod tests {
         assert!(re.contains(r#""key":"warning""#), "источник цел: {re}");
     }
 
-    /// C6 RED: удалённая специальная sentiment-схема обязана стать неизвестной,
-    /// а не тихо игнорироваться serde после удаления поля/варианта.
+    /// Удалённая клиентская семантическая схема не должна тихо вернуться как no-op.
     #[test]
     fn retired_sentiment_schema_is_rejected() {
         let mut root: serde_json::Value =
@@ -775,10 +766,8 @@ mod tests {
         rejects!(AliasDto, r#"{"alias":"a","target":"b","retired":true}"#);
     }
 
-    /// Рецепт `material` (whitepaper, «Точечные композиции») гоняется через JSON без потерь: kebab-тег
-    /// `material`, источник/тон/пол целы туда-обратно (поля snake_case
-    /// `tone_light`/`tone_dark`, как остальная config-схема). Закрывает класс
-    /// «DTO-ветка компилируется, но круг-трип врёт».
+    /// `material` здесь означает только точечную двухслойную композицию;
+    /// круговое преобразование не расширяет её до glass, blur или spatial field.
     #[test]
     fn material_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;
@@ -840,37 +829,27 @@ mod tests {
         );
     }
 
-    /// Отпечаток: детерминирован для одного конфига (включая нормализацию
-    /// пробелов/порядка через парсинг) и различает разные конфиги.
     #[test]
     fn fingerprint_is_deterministic_and_discriminating() {
         let dto = labui_dto();
         let fp1 = fingerprint(&dto);
-        // Реконструкция из JSON — тот же отпечаток.
         let json = serde_json::to_string_pretty(&dto).unwrap();
         let re: ConfigDto = serde_json::from_str(&json).unwrap();
         assert_eq!(fp1, fingerprint(&re), "детерминизм через JSON-нормализацию");
 
-        // Минимальная мутация (один якорь бренда) — другой отпечаток.
         let mut other = labui_dto();
         other.brand.light = "#007AFE".to_string();
         assert_ne!(fp1, fingerprint(&other), "разные конфиги различимы");
     }
 
-    /// Неизвестная позиция лестницы — честная ошибка с перечнем меню.
     #[test]
     fn unknown_ladder_position_is_rejected_with_menu() {
         let err = position_from_key("label-quinary").unwrap_err();
         assert!(err.contains("label-quinary") && err.contains("label-primary"));
     }
 
-    // ── Слой 3: отпечаток полного паспорта закреплён (характеризационный пин) ──
-
     /// Характеризационный пин канонической JSON-формы текущего Lab UI-паспорта.
     /// Обновляется только вместе с проверенным изменением схемы или данных.
-    /// C6 удалил корневой sentiment-объект, заменил специальные source-теги
-    /// обычными family-ссылками и удалил неиспользуемый `neutral.tint.ratio`;
-    /// именно эти изменения канонического JSON объясняют смену отпечатка.
     #[test]
     fn full_labui_fingerprint_pin_current_main() {
         let full = labui_dto();
