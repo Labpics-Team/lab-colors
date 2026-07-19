@@ -21,6 +21,9 @@ export {
 export function init(input) {
   if (initState === "ready") return Promise.resolve();
   if (initState === "async") return initFlight;
+  if (initState === "starting") {
+    throw new Error("Lab Colors: initialization input admission is in progress");
+  }
   if (initState === "sync") {
     throw new Error("Lab Colors: synchronous initialization is in progress");
   }
@@ -32,7 +35,7 @@ export function init(input) {
     rejectFlight = reject;
   });
   const flight = initFlight;
-  initState = "async";
+  initState = "starting";
 
   // State is owned before wasm-bindgen reads caller-controlled input. A Proxy
   // getter therefore cannot re-enter and start a second instance.
@@ -45,6 +48,7 @@ export function init(input) {
     rejectFlight(error);
     return flight;
   }
+  initState = "async";
   Promise.resolve(pending).then(
     () => {
       initState = "ready";
@@ -63,6 +67,9 @@ export function initSync(input) {
   if (initState === "ready") return;
   if (initState === "async") {
     throw new Error("Lab Colors: asynchronous initialization is in progress");
+  }
+  if (initState === "starting") {
+    throw new Error("Lab Colors: initialization input admission is in progress");
   }
   if (initState === "sync") {
     throw new Error("Lab Colors: synchronous initialization is in progress");

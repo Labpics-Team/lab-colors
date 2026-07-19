@@ -230,6 +230,16 @@ test("parseCssColor handles the forms computed style yields", () => {
   assert.equal(parseCssColor("rebeccapurple"), null); // unknown keyword → no layer
   assert.equal(parseCssColor(""), null);
   assert.equal(parseCssColor(42), null);
+  for (const malformed of [
+    "#FZFFFF",
+    "rgb(1x 2 3)",
+    "rgb(1e999 2 3)",
+    "rgb(1,, 2, 3)",
+    "rgb(1 2 3 0.5)",
+    "rgb(1 2 3 / 0.5 extra)",
+  ]) {
+    assert.equal(parseCssColor(malformed), null, malformed);
+  }
 });
 
 test("material alpha rechecks in the declared byte-scale affine legacy-WCAG profile", () => {
@@ -392,6 +402,14 @@ test("effective background never reinterprets a translucent fallback as opaque",
   assert.throws(
     () => effectiveBackground(leaf, {
       fallback: "rgba(255, 0, 0, 0.5)",
+      getStyle,
+      parentOf,
+    }),
+    /fallback must be an opaque supported colour/u,
+  );
+  assert.throws(
+    () => effectiveBackground(leaf, {
+      fallback: "#FZFFFF",
       getStyle,
       parentOf,
     }),

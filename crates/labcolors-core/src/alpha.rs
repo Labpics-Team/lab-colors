@@ -137,13 +137,6 @@ pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u
     crate::composition::source_over_srgb8(tint, alpha, bg)
 }
 
-/// Allocation-free internal transport seam for bindings that own their error
-/// channel. It executes the same point profile as [`composite_over_srgb8`].
-#[doc(hidden)]
-pub fn try_composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Option<[u8; 3]> {
-    crate::composition::try_source_over_srgb8(tint, alpha, bg)
-}
-
 /// Квантизация кодированного цвета в эмитируемые sRGB8-байты с доменной
 /// проверкой — тот же контракт, которым композитор готовит свои входы.
 /// `label` попадает в текст доменного отказа (`tint`/`bg` исторические).

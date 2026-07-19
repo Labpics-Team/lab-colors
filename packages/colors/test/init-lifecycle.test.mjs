@@ -17,6 +17,24 @@ test("public initialization has one owner across async and sync routes", async (
     WebAssembly.CompileError,
   );
 
+  const reentrantInput = Object.create(Object.prototype, {
+    module_or_path: {
+      enumerable: true,
+      get() {
+        return init({ module_or_path: module });
+      },
+    },
+  });
+  const reentrantOutcome = await Promise.race([
+    init(reentrantInput).then(
+      () => "resolved",
+      (error) => error,
+    ),
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 25)),
+  ]);
+  assert.notEqual(reentrantOutcome, "still-pending");
+  assert.match(reentrantOutcome.message, /input admission is in progress/u);
+
   let release;
   const delayed = new Promise((resolve) => {
     release = resolve;

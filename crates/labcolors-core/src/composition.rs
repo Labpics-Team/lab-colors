@@ -106,17 +106,9 @@ pub(crate) fn source_over_srgb8(
     alpha: f64,
     backdrop: [u8; 3],
 ) -> Result<[u8; 3], String> {
-    try_source_over_srgb8(tint, alpha, backdrop)
-        .ok_or_else(|| format!("alpha вне конечного [0,1]: {alpha}"))
-}
-
-pub(crate) fn try_source_over_srgb8(
-    tint: [u8; 3],
-    alpha: f64,
-    backdrop: [u8; 3],
-) -> Option<[u8; 3]> {
-    let alpha = AdmittedOpacityV1::new(alpha).ok()?;
-    Some(CompositionProfileV1::EncodedSrgb8SourceOverV1.composite(tint, alpha, backdrop))
+    let alpha =
+        AdmittedOpacityV1::new(alpha).map_err(|_| format!("alpha вне конечного [0,1]: {alpha}"))?;
+    Ok(CompositionProfileV1::EncodedSrgb8SourceOverV1.composite(tint, alpha, backdrop))
 }
 
 #[cfg(test)]

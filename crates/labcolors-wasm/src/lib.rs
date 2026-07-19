@@ -614,7 +614,8 @@ pub fn point_source_over_encoded_srgb8_v1(
 ) -> u32 {
     let source = unpack_rgb24(source_rgb24);
     let backdrop = unpack_rgb24(backdrop_rgb24);
-    labcolors_core::alpha::try_composite_over_srgb8(source, opacity, backdrop)
+    labcolors_core::alpha::composite_over_srgb8(source, opacity, backdrop)
+        .ok()
         .map(pack_rgb24)
         .unwrap_or(INVALID_RGB24)
 }

@@ -65,6 +65,7 @@ export function parseCssColor(css) {
 
   if (s[0] === "#") {
     const h = s.slice(1);
+    if (!/^[0-9a-f]+$/u.test(h)) return null;
     if (h.length === 3 || h.length === 4) {
       const r = parseInt(h[0] + h[0], 16);
       const g = parseInt(h[1] + h[1], 16);
@@ -84,15 +85,38 @@ export function parseCssColor(css) {
 
   const m = s.match(/^rgba?\(([^)]+)\)$/);
   if (!m) return null;
-  // Split on commas or whitespace and an optional "/" alpha separator.
-  const parts = m[1].split(/[,\s/]+/).filter((p) => p.length > 0);
-  if (parts.length < 3) return null;
-  const chan = (p) => (p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p));
-  const r = chan(parts[0]);
-  const g = chan(parts[1]);
-  const b = chan(parts[2]);
-  const a = parts.length >= 4 ? (parts[3].endsWith("%") ? parseFloat(parts[3]) / 100 : parseFloat(parts[3])) : 1;
-  if ([r, g, b, a].some((v) => Number.isNaN(v))) return null;
+  const body = m[1].trim();
+  let channels;
+  let alphaToken = null;
+  if (body.includes(",")) {
+    if (body.includes("/")) return null;
+    const parts = body.split(",").map((part) => part.trim());
+    if (parts.some((part) => part.length === 0) || (parts.length !== 3 && parts.length !== 4)) {
+      return null;
+    }
+    channels = parts.slice(0, 3);
+    if (parts.length === 4) alphaToken = parts[3];
+  } else {
+    const slash = body.split("/").map((part) => part.trim());
+    if (slash.length > 2 || slash.some((part) => part.length === 0)) return null;
+    channels = slash[0].split(/\s+/u);
+    if (channels.length !== 3) return null;
+    if (slash.length === 2) {
+      const alphaParts = slash[1].split(/\s+/u);
+      if (alphaParts.length !== 1) return null;
+      alphaToken = alphaParts[0];
+    }
+  }
+  const chan = (p) => {
+    const pct = p.endsWith("%");
+    const value = cssNumber(pct ? p.slice(0, -1) : p);
+    return value === null ? null : pct ? (value / 100) * 255 : value;
+  };
+  const r = chan(channels[0]);
+  const g = chan(channels[1]);
+  const b = chan(channels[2]);
+  const a = alphaToken === null ? 1 : oklchAlpha(alphaToken);
+  if ([r, g, b, a].some((value) => value === null)) return null;
   return [clamp255(r), clamp255(g), clamp255(b), Math.min(1, Math.max(0, a))];
 }
 
@@ -135,7 +159,9 @@ function parseOklch(inner) {
 
 /** Strict CSS `<number>` (no trailing junk, unlike `parseFloat`), else `null`. */
 function cssNumber(tok) {
-  return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(tok) ? parseFloat(tok) : null;
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(tok)) return null;
+  const value = Number(tok);
+  return Number.isFinite(value) ? value : null;
 }
 
 /** L: a percentage → `/100` into `0..1`; a bare number is already `0..1`; `none`
