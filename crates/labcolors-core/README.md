@@ -1,17 +1,17 @@
 # labcolors-core
 
-Dependency-free compiler and runtime resolver for client-owned colour-token
-contracts.
+Компилятор и runtime-resolver контрактов цветовых токенов клиента без
+зависимостей.
 
-The client owns token identifiers, aliases, hierarchy, component states and
-design semantics. The core treats those identifiers as opaque and owns the
-mathematics: graph resolution, contrast, compositing, adaptation, finite output
-and numerical certificates. Physical colours are contextual results, not the
-source schema.
+Клиент владеет идентификаторами токенов, алиасами, иерархией, состояниями
+компонентов и семантикой дизайна. Core считает идентификаторы непрозрачными и
+владеет математикой: разрешением графа, контрастом, композитингом, адаптацией,
+конечным output и численными сертификатами. Физические цвета являются
+контекстными результатами, а не исходной схемой.
 
-## Exact encoded-sRGB8 example
+## Пример точной операции encoded-sRGB8
 
-The declared source-over reference rounds the exact half-tie upward:
+Объявленная эталонная операция source-over округляет точную половину вверх:
 
 ```rust
 use labcolors_core::alpha::composite_over_srgb8;
@@ -27,10 +27,10 @@ assert_eq!(composite, [0x17, 0x16, 0x1F]);
 # }
 ```
 
-Exact composite guarantees do not extend to an unknown renderer, display,
-spatial blur field or the explicit platform-dependent legacy Glow decision.
-See the conformance pack and commit-pinned release documentation for versioned
-boundary details.
+Гарантии точного композитинга не распространяются на неизвестный рендерер,
+дисплей, пространственное поле размытия или зависящий от платформы профиль Glow
+`legacy-platform-dependent-v1`. Версионированные границы описаны в
+conformance-пакете и закреплённой коммитом документации релиза.
 
 ## Точная оценка WCAG 2.2 и независимый оракул
 

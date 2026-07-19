@@ -5,7 +5,8 @@
 //! * the perceptual-contrast curve against the published reference math
 //!   on the achromatic axis (see [`contrast_core_matches_reference_on_grey_axis`]).
 //!
-//! Reference values generated 2026-06-10 with colour-science (Python):
+//! Reference values generated 2026-06-10 with `scripts/golden_ref.py` and
+//! colour-science (Python):
 //! `colour.appearance.XYZ_to_CIECAM16` at D65, `L_A = 64`, `Y_b = 20`,
 //! surround Average resp. Dim, `discount_illuminant = False`; inputs via
 //! `colour.sRGB_to_XYZ`, white point `xy = (0.3127, 0.3290)`.
