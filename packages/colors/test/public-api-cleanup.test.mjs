@@ -32,6 +32,11 @@ test("effective-background math stays internal to the browser shell", () => {
   );
 });
 
+test("the parse memo never exposes its shared cache entry", async () => {
+  const backdrop = await import("../effective-bg.js");
+  assert.equal(backdrop.parseCssColorCached, undefined);
+});
+
 test("the unsupported strict transition recipe cannot re-enter source or shipped declarations", () => {
   const runtime = read("packages", "colors", "adapt-theme.js");
   const declarations = read("packages", "colors", "adapt-theme.d.ts");

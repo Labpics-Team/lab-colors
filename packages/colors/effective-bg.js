@@ -309,10 +309,10 @@ const parseCache = new Map();
  *  it recurring strings (computed-style values, backdrop samples, ease
  *  endpoints). The cap is a blunt bound, not an LRU: a full cache is simply
  *  cleared and refills within a frame — cheaper than eviction bookkeeping for
- *  a working set that is a handful of strings. The cached arrays are SHARED —
- *  package-internal callers must treat them as read-only. The unmemoized
- *  parser continues to return a fresh array per call. */
-export function parseCssColorCached(css) {
+ *  a working set that is a handful of strings. Запись кэша не покидает модуль:
+ *  `compileLerpPair` сразу преобразует её в новый объект с собственными
+ *  массивами, поэтому cache hit не требует защитной аллокации. */
+function parseCssColorCached(css) {
   let hit = parseCache.get(css);
   if (hit === undefined) {
     hit = parseCssColor(css);
