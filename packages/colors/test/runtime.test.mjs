@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
@@ -1000,6 +1001,84 @@ test("watchTheme never entrusts startup error reporting to the injected schedule
   assert.doesNotThrow(() => controller.stop());
   assert.equal(disconnects, 2);
   assert.equal(active, false);
+});
+
+test("watchTheme fallback reports a throwing startup handler as a host exception", () => {
+  const watchThemeUrl = new URL("../watch-theme.js", import.meta.url).href;
+  const script = `
+    globalThis.queueMicrotask = () => {
+      throw new Error("captured queueMicrotask failed before scheduling");
+    };
+
+    const uncaught = [];
+    const unhandled = [];
+    process.on("uncaughtException", (error) => uncaught.push(error));
+    process.on("unhandledRejection", (error) => unhandled.push(error));
+
+    const { watchTheme } = await import(${JSON.stringify(watchThemeUrl)});
+    const startupFailure = new Error("observe failed after acquisition");
+    const reportingFailure = new Error("onError failed");
+    let controller;
+    let returned = false;
+    let deliveries = 0;
+    let ownerReachable = false;
+
+    class Observer {
+      observe() {
+        throw startupFailure;
+      }
+      disconnect() {}
+    }
+    const element = {
+      style: {
+        length: 0,
+        item: () => null,
+        setProperty() {},
+        removeProperty() {},
+      },
+    };
+
+    controller = watchTheme(element, {
+      colors: {
+        resolveTheme() {
+          return { vars: {}, roles: {} };
+        },
+      },
+      theme: "light",
+      background: "#FFFFFF",
+      onError() {
+        deliveries++;
+        ownerReachable = returned && controller !== undefined;
+        throw reportingFailure;
+      },
+      win: { MutationObserver: Observer, document: { documentElement: {} } },
+    });
+    returned = true;
+
+    setTimeout(() => {
+      console.log(JSON.stringify({
+        background: controller.background(),
+        deliveries,
+        ownerReachable,
+        uncaught: uncaught.map((error) => error.name),
+        unhandled: unhandled.map((error) => error.name),
+      }));
+    }, 25);
+  `;
+
+  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout.trim());
+  assert.deepEqual(result, {
+    background: null,
+    deliveries: 1,
+    ownerReachable: true,
+    uncaught: ["AggregateError"],
+    unhandled: [],
+  });
 });
 
 test("watchTheme rejects an invalid async error handler before acquiring an observer", () => {

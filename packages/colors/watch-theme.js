@@ -25,8 +25,7 @@ const BUILTIN_QUEUE_MICROTASK =
   typeof globalThis.queueMicrotask === "function"
     ? globalThis.queueMicrotask.bind(globalThis)
     : null;
-const BUILTIN_PROMISE_TURN = Promise.resolve();
-const BUILTIN_PROMISE_THEN = Promise.prototype.then;
+const BUILTIN_SET_TIMEOUT = globalThis.setTimeout.bind(globalThis);
 
 const deferOutsideInjectedHost = (callback) => {
   let delivered = false;
@@ -40,13 +39,12 @@ const deferOutsideInjectedHost = (callback) => {
       BUILTIN_QUEUE_MICROTASK(deliverOnce);
       return;
     } catch {
-      // Захваченная стандартная очередь — первый независимый маршрут. Очередь
-      // заданий языка сохраняет ownership достижимым, а `deliverOnce` не даёт
-      // планировщику, который поставил callback и затем бросил, продублировать
-      // отказ.
+      // Task-fallback сохраняет обычное host-исключение вместо rejected
+      // Promise; one-shot не даёт очереди, поставившей callback перед своим
+      // исключением, продублировать доставку.
     }
   }
-  void BUILTIN_PROMISE_THEN.call(BUILTIN_PROMISE_TURN, deliverOnce);
+  BUILTIN_SET_TIMEOUT(deliverOnce, 0);
 };
 
 /**
