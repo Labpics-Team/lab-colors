@@ -715,11 +715,28 @@ import { createRequire } from "node:module";
 
 import init, {
   LabColors,
+  adaptTheme,
   evaluateWcag22,
   numericalCapabilityManifest,
+  watchTheme,
 } from "@labpics/colors";
+import * as colorsApi from "@labpics/colors";
 
 const require = createRequire(import.meta.url);
+for (const name of [
+  "effectiveBackground",
+  "parseCssColor",
+  "compositeOver",
+  "compositeStackToHex",
+  "toHex",
+  "oklabLerp",
+]) {
+  assert.equal(name in colorsApi, false, name + " must not be a root export");
+}
+await assert.rejects(
+  import("@labpics/colors/effective-bg"),
+  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+);
 const wasmPath = require.resolve("@labpics/colors/pkg/labcolors_bg.wasm");
 const metadataPath = require.resolve("@labpics/colors/build-metadata.json");
 const packagePath = require.resolve("@labpics/colors/package.json");
@@ -823,6 +840,52 @@ assert.match(fingerprint, /^[0-9a-f]{16}$/u);
 const background = "#000000";
 const resolved = engine.resolveTheme(background, "light");
 assert.deepEqual(Object.keys(resolved.roles).sort(), ["token-7f3a", "token-92be", "token-a11c"]);
+
+const runtimeTarget = () => {
+  const names = [];
+  const values = new Map();
+  return {
+    values,
+    style: {
+      setProperty(name, value) {
+        if (!values.has(name)) names.push(name);
+        values.set(name, value);
+      },
+      removeProperty(name) {
+        values.delete(name);
+        const index = names.indexOf(name);
+        if (index >= 0) names.splice(index, 1);
+      },
+      item(index) { return names[index] ?? ""; },
+      get length() { return names.length; },
+    },
+  };
+};
+const watchedTarget = runtimeTarget();
+const watcher = watchTheme(watchedTarget, {
+  colors: engine,
+  theme: "light",
+  background,
+  observe: false,
+  win: {},
+});
+assert.equal(watcher.background(), background);
+assert.equal(typeof watchedTarget.values.get("--lab-token-7f3a"), "string");
+watcher.refresh();
+watcher.stop();
+
+const adaptedTarget = runtimeTarget();
+const adaptive = adaptTheme(adaptedTarget, {
+  colors: engine,
+  theme: "light",
+  background,
+  target: adaptedTarget,
+  now: () => 0,
+  win: {},
+});
+adaptive.tick(0);
+assert.equal(typeof adaptive.current()["--lab-token-7f3a"], "string");
+adaptive.stop();
 
 const alpha = resolved.roles["token-7f3a"];
 assert.equal(alpha.kind, "translucent");
@@ -947,27 +1010,31 @@ import {
   type AdaptController,
   type AdaptThemeOptions,
 } from "@labpics/colors/adapt-theme";
-import {
-  effectiveBackground,
-  type EffectiveBackgroundOptions,
-  type Rgba,
-} from "@labpics/colors/effective-bg";
 
 const initialise: typeof init = init;
 const apply: typeof applyTheme = applyTheme;
 const watch: typeof watchTheme = watchTheme;
 const adapt: typeof adaptTheme = adaptTheme;
-const effective: typeof effectiveBackground = effectiveBackground;
 type PublicSubpathTypes =
   | WatchController
   | WatchThemeOptions
   | AdaptController
-  | AdaptThemeOptions
-  | EffectiveBackgroundOptions
-  | Rgba;
+  | AdaptThemeOptions;
 declare const publicSubpathType: PublicSubpathTypes;
-void [apply, watch, adapt, effective, publicSubpathType];
+void [apply, watch, adapt, publicSubpathType];
+declare const rootApi: typeof import("@labpics/colors");
+// @ts-expect-error low-level browser-shell colour math is not public API.
+rootApi.parseCssColor;
+// @ts-expect-error the compatibility background estimate is package-internal.
+rootApi.effectiveBackground;
 const engine = new LabColors();
+const removedStrict: AdaptThemeOptions = {
+  colors: engine,
+  theme: "light",
+  // @ts-expect-error the unverified legacy transition clamp was removed.
+  strict: true,
+};
+void removedStrict;
 const fingerprint: string = engine.loadConfig("{}");
 const resolved: ResolvedTheme = engine.resolveTheme("#000000", "light");
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();

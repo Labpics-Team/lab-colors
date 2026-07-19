@@ -1,17 +1,15 @@
-//! Differential + anchor test for the portable FNV-1a 32-bit core primitive.
+//! Published anchors and frozen characterization for the FNV-1a 32-bit core primitive.
 //!
-//! One source of truth for vectors: `tests/data/fnv1a-vectors.txt` (LF-pinned
-//! TSV), shared byte-for-byte with the JS mirror test
-//! (`packages/colors/test/fnv1a-differential.test.mjs`). Both sides recompute
-//! every vector and assert equality against the committed expected (unsigned
-//! decimal u32). Green on both = byte-identical JS==Rust output on every vector:
-//! empty string, Cyrillic, emoji, high-bit bytes, an overflow-length key, and a
-//! 500-vector randomized fuzz corpus.
+//! `tests/data/fnv1a-vectors.txt` is an LF-pinned TSV. Every row is recomputed
+//! against its committed unsigned `u32`: empty string, Cyrillic, emoji,
+//! high-bit bytes, an overflow-length key, and a 500-vector randomized corpus.
 //!
 //! `anchor` rows carry the CANONICAL published FNV-1a values (external ground
 //! truth, <http://www.isthe.com/chongo/tech/comp/fnv/>) so correctness is
-//! grounded in the spec, not self-blessed. `text` rows are stored as literal
-//! strings so this runtime exercises its OWN UTF-8 encoding path.
+//! grounded in the spec, not self-blessed. The remaining committed expected
+//! values have no preserved independent provenance and therefore protect only
+//! frozen behaviour. `text` rows are literal strings so Rust exercises its own
+//! UTF-8 encoding path.
 
 use labcolors_core::fnv1a_32;
 
@@ -73,7 +71,7 @@ fn anchors_match_canonical_published_vectors() {
 }
 
 #[test]
-fn adversarial_emoji_cyrillic_highbit_overflow_match_oracle() {
+fn adversarial_emoji_cyrillic_highbit_overflow_match_frozen_characterization() {
     let adv: Vec<_> = load()
         .into_iter()
         .filter(|v| v.group == "adversarial")
@@ -90,7 +88,7 @@ fn adversarial_emoji_cyrillic_highbit_overflow_match_oracle() {
 }
 
 #[test]
-fn fuzz_500_frozen_vectors_match_oracle_cross_runtime() {
+fn fuzz_500_vectors_match_frozen_characterization() {
     let fuzz: Vec<_> = load().into_iter().filter(|v| v.group == "fuzz").collect();
     assert!(
         fuzz.len() >= 500,

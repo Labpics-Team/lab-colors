@@ -121,10 +121,9 @@ function makeStubEngine() {
 /**
  * @param {string} name
  * @param {(frame:number)=>string|string[]} bgAt  deterministic background schedule
- * @param {boolean} strict
  * @param {{fingerprint?: boolean}} [mode]
  */
-function runScenario(name, bgAt, strict, mode = {}) {
+function runScenario(name, bgAt, mode = {}) {
   const el = makeElement();
   const stub = makeStubEngine();
   let now = 0;
@@ -134,7 +133,6 @@ function runScenario(name, bgAt, strict, mode = {}) {
     theme: "light",
     background: () => bgAt(frame),
     now: () => now,
-    strict,
     win: undefined,
   });
 
@@ -182,7 +180,7 @@ const driftBg = (f) => toneHex(SOLVED0 + Math.round(32 * Math.sin((2 * Math.PI *
 // re-solve → 280ms ease, then back near the new tone (no breach) — a steady
 // mix of recheck / solve / ease frames.
 const breachBg = (f) => toneHex(SOLVED0 + (Math.floor(f / 90) % 2 === 1 ? 96 : 0) + (f % 3));
-// Strict mode over a 3-sample varying backdrop with the same breach schedule.
+// Three-sample varying backdrop with the same breach schedule.
 const breachBg3 = (f) => {
   const base = breachBg(f);
   const t = bgTone(base);
@@ -238,10 +236,10 @@ console.log("");
 console.log("scenario            µs/frame   styleSet  styleRem  solves  rechecks  fingerprint");
 
 const scenarios = [
-  runScenario("steady", steadyBg, false, { fingerprint }),
-  runScenario("drift-nobreach", driftBg, false, { fingerprint }),
-  runScenario("ease-default", breachBg, false, { fingerprint }),
-  runScenario("ease-strict-3bg", breachBg3, true, { fingerprint }),
+  runScenario("steady", steadyBg, { fingerprint }),
+  runScenario("drift-nobreach", driftBg, { fingerprint }),
+  runScenario("ease-default", breachBg, { fingerprint }),
+  runScenario("ease-3bg", breachBg3, { fingerprint }),
 ];
 for (const s of scenarios) {
   console.log(

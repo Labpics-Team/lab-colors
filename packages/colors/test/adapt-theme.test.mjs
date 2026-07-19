@@ -117,8 +117,7 @@ function captureOutputConflict(fn, expectedRoles = ["impossible"]) {
   return error;
 }
 
-// A role set that carries an explicit `legalFloor` (4.5 / 3.0 / null), the field
-// the strict floor-clamp reads.
+// A role set that carries the resolver's endpoint `legalFloor` evidence.
 const floorRole = (hex, lc, legalFloor) => ({
   vars: { "--lab-label-primary": hex },
   roles: {
@@ -3001,8 +3000,8 @@ test("a background that changes once to a failing value still re-solves (stable-
 // Drive a dark-background breach that re-solves a black role to white, then ease
 // across the (polarity-crossing) blend, sampling the applied colour each frame.
 // Returns the contrast each frame achieved against the dark background.
-function easeContrasts({ strict }) {
-  const h = harness({ strict, easeMs: 100 });
+function easeContrasts() {
+  const h = harness({ easeMs: 100 });
   h.colors.setRecheckLc([10]); // current #000000 fails on the dark bg
   h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5)); // re-solve → legal white
   h.setBg("#101010");
@@ -3023,79 +3022,12 @@ function easeContrasts({ strict }) {
   return { h, out };
 }
 
-test("legacy strict clamp holds the floor on the canonical polarity-crossing fixture", () => {
-  const { h, out } = easeContrasts({ strict: true });
-  assert.equal(h.colors.resolveCount(), 2);
-  for (const c of out) {
-    assert.ok(c >= 4.5 - 0.05, `every eased frame must clear 4.5:1, saw ${c.toFixed(2)}`);
-  }
-  // And it still arrives exactly at the freshly-solved destination.
-  assert.equal(h.el.props.get("--lab-label-primary"), "#FFFFFF");
-});
-
-test("legacy strict fixture has non-regressing sampled contrast", () => {
-  const { out } = easeContrasts({ strict: true });
-  for (let i = 1; i < out.length; i++) {
-    assert.ok(
-      out[i] >= out[i - 1] - 0.05,
-      `contrast must not regress mid-ease: ${out[i - 1].toFixed(2)} → ${out[i].toFixed(2)}`,
-    );
-  }
-});
-
-test("held latch never reverses the scalar blend when the background drifts favourably", () => {
-  // The structural guarantee is only on the scalar blend parameter: it advances
-  // from→to even when a favourably-drifting (darkening) background would
-  // let the stateless floor solver pick a LOWER blend frame to frame. Without the
-  // `held` latch the grey value would step back down; with it, it is monotone.
-  const h = harness({ strict: true, easeMs: 400 }); // long ease so bg drift dominates
-  h.colors.setRecheckLc([10]);
-  h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5));
-  h.setBg("#303030"); // moderate dark at re-solve → forces a mid blend up front
-  h.setNow(2000);
-  h.ctrl.tick(); // arm breach
-  const t0 = 2130;
-  h.setNow(t0);
-  h.setBg("#2F2F2F");
-  h.ctrl.tick(); // re-solve + begin ease (first eased frame on a dark bg)
-  h.colors.setRecheckLc([100]);
-  const grey = () => parseInt(h.el.props.get("--lab-label-primary").slice(1, 3), 16);
-  let prev = grey();
-  // Drift the background DARKER mid-ease: the legal floor gets *easier*, so the
-  // stateless solver would choose a smaller blend — the latch must hold the line.
-  const bgs = ["#202020", "#141414", "#0C0C0C", "#060606", "#000000"];
-  for (let i = 0; i < bgs.length; i++) {
-    h.setNow(t0 + 20 + i * 20);
-    h.setBg(bgs[i]);
-    h.ctrl.tick();
-    const g = grey();
-    assert.ok(g >= prev - 1, `colour must not retreat toward the origin: ${prev} → ${g}`);
-    prev = g;
-  }
-});
-
-test("the default ease dips below the floor on the canonical strict comparison fixture", () => {
-  const { out } = easeContrasts({ strict: false });
+test("coordinate easing does not claim a constraint for intermediate frames", () => {
+  const { out } = easeContrasts();
   assert.ok(
     out.some((c) => c < 4.5),
-    "without strict, an early polarity-crossing frame is expected below 4.5:1",
+    "an early polarity-crossing frame is presentation, not certified output",
   );
-});
-
-test("strict mode leaves floorless (decorative) roles to ease freely", () => {
-  // legalFloor null → the clamp is a no-op; the role crosses low contrast freely.
-  const h = harness({ strict: true, easeMs: 100 });
-  h.colors.setRecheckLc([10]);
-  h.colors.setResolve(floorRole("#FFFFFF", 100, null)); // no legal floor
-  h.setBg("#101010");
-  h.setNow(2000);
-  h.ctrl.tick(); // arm breach
-  h.setNow(2130);
-  h.setBg("#101011");
-  h.ctrl.tick(); // re-solve + begin ease (first eased frame at t=0 → #000000 end)
-  h.colors.setRecheckLc([100]);
-  const c0 = wcagContrast(h.el.props.get("--lab-label-primary"), "#101011");
-  assert.ok(c0 < 4.5, `a floorless role must ease freely (low contrast allowed), saw ${c0.toFixed(2)}`);
 });
 
 test("worst-case recheck breaches when any sample fails (even if another passes)", () => {
@@ -3149,27 +3081,6 @@ test("initial apply re-solves against the worst sample of a varying backdrop", (
   // Provisional solve (#FFFFFF), then worst-case recheck picks #202020 and re-solves.
   assert.equal(colors.resolveCount(), 2, "init adopts against the worst sample");
   assert.equal(colors.lastResolveBg(), "#202020");
-});
-
-test("legacy strict clamp holds the canonical hardest-sample fixture", () => {
-  let samples = ["#0A0A0A"]; // passing at construction
-  const h = harness({ strict: true, easeMs: 100, background: () => samples });
-  h.colors.setResolve(floorRole("#FFFFFF", 100, 4.5));
-  h.colors.setRecheckByBg({ "#0A0A0A": [100], "#1A1A1A": [10], "#101010": [10] });
-  samples = ["#1A1A1A", "#101010"]; // dark backdrop; #1A1A1A is the hardest (lightest)
-  h.ctrl.tick(); // arm breach
-  h.setNow(1300);
-  h.ctrl.tick(); // re-solve against the worst sample + begin ease
-  assert.equal(h.colors.lastResolveBg(), "#1A1A1A");
-  for (const dt of [0, 25, 50, 75, 100]) {
-    h.setNow(1300 + dt);
-    h.ctrl.tick();
-    const hex = h.el.props.get("--lab-label-primary");
-    assert.ok(
-      wcagContrast(hex, "#1A1A1A") >= 4.5 - 0.05,
-      `frame ${dt}: ${hex} below the floor against the worst sample`,
-    );
-  }
 });
 
 test("a single-sample array behaves like a solid background (holds, no churn)", () => {
@@ -3515,7 +3426,6 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
     sustainMs: 0,
     dwellMs: 0,
     easeMs: 100,
-    strict: true,
   });
 
   // 1. Init: отказная роль не окрашена и не выдумана.

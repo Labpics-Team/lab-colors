@@ -31,10 +31,6 @@
       "types": "./adapt-theme.d.ts",
       "default": "./adapt-theme.js"
     },
-    "./effective-bg": {
-      "types": "./effective-bg.d.ts",
-      "default": "./effective-bg.js"
-    },
     "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
     "./build-metadata.json": "./build-metadata.json",
     "./package.json": "./package.json"
@@ -53,7 +49,6 @@
     "adapt-theme.js",
     "adapt-theme.d.ts",
     "effective-bg.js",
-    "effective-bg.d.ts",
     "evidence/wcag22-srgb8-v1.json",
     "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",

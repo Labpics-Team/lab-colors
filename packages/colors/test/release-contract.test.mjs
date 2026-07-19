@@ -1736,13 +1736,22 @@ test("runtime declarations expose one curated type surface", () => {
   }
 
   const verifier = read("scripts", "verify-package-release.mjs");
-  for (const subpath of ["apply-theme", "watch-theme", "adapt-theme", "effective-bg"]) {
+  for (const subpath of ["apply-theme", "watch-theme", "adapt-theme"]) {
     assert.match(
       verifier,
       new RegExp(`@labpics/colors/${subpath}`, "u"),
       `clean-consumer type smoke must compile the ${subpath} public subpath`,
     );
   }
+  assert.doesNotMatch(verifier, /from "@labpics\/colors\/effective-bg"/u);
+  assert.match(verifier, /ERR_PACKAGE_PATH_NOT_EXPORTED/u);
+
+  const packageJson = JSON.parse(read("packages", "colors", "package.json"));
+  assert.equal(
+    packageJson.exports["./effective-bg"],
+    undefined,
+    "low-level effective-background math must not be a package subpath",
+  );
 
   const rootTypes = rootDeclarations.match(
     /export type \{([\s\S]*?)\} from "\.\/pkg\/labcolors\.js";/u,
@@ -1802,7 +1811,6 @@ test("public declarations compile at the documented minimum TypeScript version",
     "apply-theme.d.ts",
     "watch-theme.d.ts",
     "adapt-theme.d.ts",
-    "effective-bg.d.ts",
   ], {
     cwd: join(root, "packages", "colors"),
     stdio: ["ignore", "pipe", "pipe"],

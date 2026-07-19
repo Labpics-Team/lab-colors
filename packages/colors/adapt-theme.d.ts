@@ -40,14 +40,6 @@ export interface AdaptThemeOptions {
   dwellMs?: number;
   /** Crossfade duration in ms. Default `280` (capped to a short fade under reduced motion). */
   easeMs?: number;
-  /**
-   * Enable the legacy characterized per-frame clamp. The current
-   * Oklab→clip→sRGB8 path is not globally monotone, so this option is not a
-   * universal floor/least-blend or legibility certificate. Use it only when an
-   * integration explicitly needs the characterized legacy clamp. Default
-   * `false`.
-   */
-  strict?: boolean;
   /** Override reduced-motion detection (default reads `matchMedia`). */
   reducedMotion?: boolean;
   /** Clock injection (default `performance.now`/`Date.now`). */

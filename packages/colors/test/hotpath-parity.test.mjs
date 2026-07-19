@@ -1,7 +1,7 @@
 // Hot-path parity locks for the adapt-theme runtime.
 //
 // The perf pass (perf/js-runtime-hotpath) rewrites the per-frame internals —
-// compiled lerp pairs, numeric luminance, diff-writes — under one invariant:
+// compiled lerp pairs and diff-writes — under one invariant:
 // the APPLIED VARIABLE STATE of every frame is byte-identical to the original
 // parse-per-frame implementation. This file locks that invariant two ways:
 //
@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
 
-const { oklabLerp, parseCssColor } = ebg;
+const { oklabLerp } = ebg;
 
 // ── deterministic mini-harness (mirrors bench/hotpath.bench.mjs, smaller) ────
 
@@ -107,7 +107,7 @@ function makeStubEngine() {
   return stub;
 }
 
-function runFingerprint(bgAt, strict) {
+function runFingerprint(bgAt) {
   const el = makeElement();
   let now = 0;
   let frame = 0;
@@ -116,7 +116,6 @@ function runFingerprint(bgAt, strict) {
     theme: "light",
     background: () => bgAt(frame),
     now: () => now,
-    strict,
     win: undefined,
   });
   let fp = 0x811c9dc5;
@@ -133,12 +132,6 @@ const SOLVED0 = 0x80;
 const steadyBg = () => toneHex(SOLVED0);
 const driftBg = (f) => toneHex(SOLVED0 + Math.round(32 * Math.sin((2 * Math.PI * f) / 240)));
 const breachBg = (f) => toneHex(SOLVED0 + (Math.floor(f / 90) % 2 === 1 ? 96 : 0) + (f % 3));
-const breachBg3 = (f) => {
-  const base = breachBg(f);
-  const t = bgTone(base);
-  return [base, toneHex(t + 8), toneHex(t + 16)];
-};
-
 // Captured on the pre-optimisation implementation — see header for the rules.
 // (steady === drift is expected: while rechecks pass, the applied state never
 // changes, so both hash the same repeated post-solve snapshot.)
@@ -146,26 +139,24 @@ const GOLDEN = {
   steady: "99d7af7d",
   drift: "99d7af7d",
   ease: "c996bd0b",
-  easeStrict3: "a04804c5",
 };
 
 const CASES = [
-  ["steady", steadyBg, false],
-  ["drift", driftBg, false],
-  ["ease", breachBg, false],
-  ["easeStrict3", breachBg3, true],
+  ["steady", steadyBg],
+  ["drift", driftBg],
+  ["ease", breachBg],
 ];
 
 if (process.env.PRINT_FP) {
   test("print golden fingerprints (capture mode)", () => {
-    for (const [name, bg, strict] of CASES) {
-      console.log(`GOLDEN ${name}: "${runFingerprint(bg, strict)}"`);
+    for (const [name, bg] of CASES) {
+      console.log(`GOLDEN ${name}: "${runFingerprint(bg)}"`);
     }
   });
 } else {
-  for (const [name, bg, strict] of CASES) {
+  for (const [name, bg] of CASES) {
     test(`golden fingerprint: ${name}`, () => {
-      assert.equal(runFingerprint(bg, strict), GOLDEN[name]);
+      assert.equal(runFingerprint(bg), GOLDEN[name]);
     });
   }
 }
@@ -174,20 +165,7 @@ if (process.env.PRINT_FP) {
 
 const hasCompiled =
   typeof ebg.compileLerpPair === "function" &&
-  typeof ebg.lerpPairHex === "function" &&
-  typeof ebg.lerpPairLuminance === "function";
-
-/** Reference relative luminance — a verbatim copy of the string path the
- *  runtime used pre-optimisation (frozen WCAG 2.1 2018 profile:
- *  0.03928/12.92/2.4). */
-function refLuminance(css) {
-  const rgb = parseCssColor(css) ?? [0, 0, 0, 1];
-  const lin = (c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
-}
+  typeof ebg.lerpPairHex === "function";
 
 // Mulberry32 — tiny seeded PRNG, reproducible across runs.
 function mulberry32(seed) {
@@ -213,7 +191,7 @@ function randColor(rnd) {
 
 const T_EDGES = [-0.5, 0, 1e-9, 0.25, 0.5, 0.75, 1 - 1e-9, 1, 1.5];
 
-test("compiled pair ≡ string path (lerp + luminance), 500 random pairs", { skip: !hasCompiled }, () => {
+test("compiled pair ≡ string path, 500 random pairs", { skip: !hasCompiled }, () => {
   const rnd = mulberry32(0xc0ffee);
   for (let i = 0; i < 500; i++) {
     const from = randColor(rnd);
@@ -223,11 +201,6 @@ test("compiled pair ≡ string path (lerp + luminance), 500 random pairs", { ski
     for (const t of T_EDGES.concat(rnd(), rnd())) {
       const viaString = oklabLerp(from, to, t);
       assert.equal(ebg.lerpPairHex(pair, t), viaString, `lerp mismatch @t=${t}: ${from} → ${to}`);
-      assert.equal(
-        ebg.lerpPairLuminance(pair, t),
-        refLuminance(viaString),
-        `luminance mismatch @t=${t}: ${from} → ${to}`,
-      );
     }
   }
 });
@@ -235,16 +208,4 @@ test("compiled pair ≡ string path (lerp + luminance), 500 random pairs", { ski
 test("compileLerpPair falls back (null) on unparseable endpoints", { skip: !hasCompiled }, () => {
   assert.equal(ebg.compileLerpPair("blah", "#112233"), null);
   assert.equal(ebg.compileLerpPair("#112233", "hsl(1,2%,3%)"), null);
-});
-
-test("wcagLuminanceCached ≡ reference (incl. unparseable → black)", { skip: !hasCompiled || typeof ebg.wcagLuminanceCached !== "function" }, () => {
-  const rnd = mulberry32(0xbadc0de);
-  const inputs = [];
-  for (let i = 0; i < 200; i++) inputs.push(randColor(rnd));
-  inputs.push("transparent", "blah", "color-mix(in srgb, red, blue)");
-  for (const css of inputs) {
-    assert.equal(ebg.wcagLuminanceCached(css), refLuminance(css), `luminance cache mismatch: ${css}`);
-    // second read exercises the cache hit path
-    assert.equal(ebg.wcagLuminanceCached(css), refLuminance(css));
-  }
 });
