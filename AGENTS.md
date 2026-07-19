@@ -17,7 +17,15 @@ Lab Colors развивается как контекстный компилят
 Special-recipe path не является extension point. Если изменение затрагивает
 ветвь, где продуктовая потребность выражена отдельным role kind, потребность
 переносится в общий graph/constraint contract с characterization/differential
-защитой, а заменённая ветвь удаляется в том же завершённом срезе.
+защитой, а заменённая физическая или solver-ветвь удаляется в том же завершённом
+срезе.
+
+До общего authoring cutover допускается ровно один существующий façade
+`RoleRecipe → NamedRoleTable` как frozen входная грамматика. Он не получает
+новых полей или семантики, односторонне лоуверится в private IR и не содержит
+параллельной физики. Это branch-by-abstraction, а не compatibility promise или
+второй источник истины: после полного lowering inventory façade атомарно
+заменяется публичным graph contract.
 
 Клиент владеет именами и смыслом токенов, aliases, hierarchy, component states,
 design language и authored anchors. Core владеет colorimetry, compositing,
