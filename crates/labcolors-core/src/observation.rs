@@ -1,8 +1,9 @@
 //! Admission коррелированных point sRGB8 observations.
 //!
-//! Модуль пока существует только в proof-сборке. Он отделяет изменяемые
-//! runtime-поверхности от authored color inputs и замораживает атомарную
-//! revision algebra до появления настоящего Session consumer-а.
+//! Authored color inputs не могут удовлетворить runtime surface ports. Один
+//! stream атомарно принимает полный коррелированный ScenarioSet и хранит один
+//! revision-ordered head: отклонённый update сохраняет прежнее состояние, а
+//! Unknown никогда не изобретает поверхность.
 
 use std::collections::BTreeMap;
 
