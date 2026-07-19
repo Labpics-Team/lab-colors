@@ -32,6 +32,7 @@
 //! без добавления семантических recipe-кейсов в Core.
 
 use crate::Srgb8;
+use crate::appearance::PointOpacityOverSurfaceV1;
 use crate::ladder::LadderTint;
 use crate::scale;
 use crate::solve::{
@@ -558,12 +559,12 @@ pub enum RoleSpec {
     /// позиции `fill-*-primary` над фоном резолва), а НЕ против фона страницы
     /// и НЕ против эмитированного [`PairFill`](Self::PairFill) — у того своя,
     /// отдельно сдвинутая солид-эмиссия; ребра `PairFill → PairLabel` не
-    /// существует. Резолв использует один generic-компонент appearance-графа:
-    /// скомпилированный граф собирает поверхность и возвращает физические факты
-    /// foreground occurrence против неё. Доказательный статус последующего
-    /// резолвера граф не назначает. Дифференциальный тест закрепляет
-    /// эквивалентность миграционного подключения и результатов на проверяемом
-    /// домене, но не является независимым эталоном математики самого резолвера.
+    /// существует. Приватный appearance-граф материализует tint Paint, применяет
+    /// его к локальной поверхности ровно в одном fill occurrence и отдаёт
+    /// `surfaceFrom` как фактический фон. Последующий label solve находится вне
+    /// графа: этот recipe не создаёт итоговые label Paint/occurrence или их
+    /// доказательный статус. Дифференциальный тест доказывает только точность
+    /// границы подложки, а не математику label-resolver-а.
     /// Тон клампится (флаг `compressed`) при недостижимости на кривой семьи.
     PairLabel {
         /// Пер-темный кодированный тинт-якорь семьи (как у лестницы).
@@ -2486,16 +2487,9 @@ fn resolve_hued_anchor(
     resolve_hued_anchor_from_srgb8(bg, anchor, hue_tint.srgb8_for_vc(vc), vc, ctx)
 }
 
-/// Тот же резолв, но источник идентичности уже выбран по теме как
-/// кодированный стимул, а не [`LadderTint`]-пейлоад.
-///
-/// Отдельный вход нужен appearance-графу (#307): foreground occurrence несёт
-/// identity-ребро «что наблюдается», и потребитель обязан решать foreground из
-/// ВОЗВРАЩЁННОГО occurrence-источника (байты → byte/255 точно), а не повторно
-/// читать исходный пейлоад — иначе ребро идентичности было бы декоративным.
-/// Для квантованного источника оба пути дают один hex по построению
-/// ([`crate::spaces::srgb::hex_from_srgb_encoded`] округляет так же, как
-/// квантизация эмиссии), что закреплено differential-тестами миграции.
+/// Тот же резолв, но выбранный по теме источник уже представлен точными
+/// sRGB8-байтами. Для квантованного источника этот путь даёт тот же hex, что и
+/// [`resolve_hued_anchor`], потому emission использует тот же byte-grid.
 fn resolve_hued_anchor_from_srgb8(
     bg: &BgInput,
     anchor: TextAnchor,
@@ -2609,68 +2603,6 @@ fn resolve_solid_with_ui_floor(
     }
 }
 
-/// Непрозрачные структурные handles компонента «derived source-over
-/// поверхность и foreground occurrence против неё» ([`crate::appearance`]).
-/// Значения произвольны и не участвуют в физике (инвариант закреплён
-/// graph-тестами); граф не знает ни одного клиентского имени — привязку к
-/// рецепту делает только этот модуль.
-const NESTED_SOURCE: crate::appearance::ColorInputId = crate::appearance::ColorInputId::new(0);
-const NESTED_CONTEXT: crate::appearance::ColorInputId = crate::appearance::ColorInputId::new(1);
-const NESTED_OPACITY: crate::appearance::OpacityInputId = crate::appearance::OpacityInputId::new(0);
-const NESTED_CONTEXT_SURFACE: crate::appearance::SurfaceId = crate::appearance::SurfaceId::new(0);
-const NESTED_DERIVED_SURFACE: crate::appearance::SurfaceId = crate::appearance::SurfaceId::new(1);
-const NESTED_FOREGROUND: crate::appearance::OccurrenceId = crate::appearance::OccurrenceId::new(0);
-
-/// Один статически скомпилированный generic-компонент вложенного foreground:
-///
-/// ```text
-/// context input → context surface
-/// source + opacity + context surface → exact source-over derived surface
-/// foreground occurrence(identity = source) против derived surface
-/// ```
-///
-/// Компилируется один раз ([`OnceLock`](std::sync::OnceLock)); спека статична,
-/// поэтому ошибка компиляции недостижима по построению, но путь остаётся
-/// типизированным (RoleSpec публичен, паника на публичном входе запрещена).
-fn nested_foreground_component() -> Result<
-    &'static crate::appearance::CompiledAppearanceGraph,
-    &'static crate::appearance::GraphError,
-> {
-    use crate::appearance::{
-        AppearanceGraphSpec, CompiledAppearanceGraph, CompositionProfileV1,
-        ForegroundOccurrenceSpec, GraphError, SurfaceSpec,
-    };
-    static COMPONENT: std::sync::OnceLock<Result<CompiledAppearanceGraph, GraphError>> =
-        std::sync::OnceLock::new();
-    COMPONENT
-        .get_or_init(|| {
-            AppearanceGraphSpec::new(
-                vec![NESTED_SOURCE, NESTED_CONTEXT],
-                vec![NESTED_OPACITY],
-                vec![
-                    SurfaceSpec::Input {
-                        id: NESTED_CONTEXT_SURFACE,
-                        color: NESTED_CONTEXT,
-                    },
-                    SurfaceSpec::SourceOver {
-                        id: NESTED_DERIVED_SURFACE,
-                        source: NESTED_SOURCE,
-                        opacity: NESTED_OPACITY,
-                        backdrop: NESTED_CONTEXT_SURFACE,
-                        profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
-                    },
-                ],
-                vec![ForegroundOccurrenceSpec {
-                    id: NESTED_FOREGROUND,
-                    identity_source: NESTED_SOURCE,
-                    against: NESTED_DERIVED_SURFACE,
-                }],
-            )
-            .compile()
-        })
-        .as_ref()
-}
-
 /// Public PairLabel opacity rejected by the graph's SSOT validator.
 fn pair_label_opacity_input_error(error: &str) -> PendingResolution {
     Err(SolveFailure::InvalidInput(format!(
@@ -2682,21 +2614,15 @@ fn pair_label_opacity_input_error(error: &str) -> PendingResolution {
 /// ([`crate::pair`], лейбл-сторона; родственен [`resolve_solid_with_ui_floor`],
 /// но пол энфорсится против ВЫВОДИМОЙ подложки, а не против фона страницы).
 ///
-/// С миграции #307 это compatibility-адаптер над одним generic-компонентом
-/// appearance-графа ([`nested_foreground_component`]): скомпилированный граф
-/// точно собирает derived-поверхность (объявленный тинт при compatibility-альфе
-/// позиции `fill-*-primary` над локальным фоном резолва — exact source-over в
-/// encoded-sRGB8 профиле) и возвращает foreground occurrence именно против неё.
+/// Sealed [`PointOpacityOverSurfaceV1`] материализует tint Paint, применяет его
+/// к локальному фону в единственном exact source-over occurrence и проецирует
+/// видимый результат в derived Surface.
 /// Поверхность НЕ является эмитированным [`RoleSpec::PairFill`] — у того своя,
 /// отдельно сдвинутая солид-эмиссия; никакого ребра `PairFill → PairLabel` нет.
 ///
-/// Оттеночный foreground решается текущим
-/// [`resolve_hued_anchor_from_srgb8`] НА ЭТОЙ ПОВЕРХНОСТИ. Appearance-
-/// граф не присваивает этому последующему решению доказательный статус: он
-/// возвращает только source/against/backdrop. Дифференциальный тест закрепляет
-/// подключение и результаты миграции на проверяемом домене, но оба пути
-/// используют один резолвер и потому не образуют независимый эталон его
-/// математики. Собственный [`ResolveContext`] поверхности задаёт
+/// Затем [`resolve_hued_anchor_from_srgb8`] решает label НА ЭТОЙ ПОВЕРХНОСТИ,
+/// вне point-графа. Этот контракт не создаёт label Paint/occurrence или
+/// constraint evidence. Собственный [`ResolveContext`] поверхности задаёт
 /// полярность/макс-контраст, поэтому
 /// WCAG-пол лейбла
 /// гарантирован против той подложки, на которой foreground реально стоит
@@ -2722,10 +2648,8 @@ pub(crate) fn resolve_pair_label(
         surface_alpha_light
     };
     // Тинт квантуется ДО композита: подложка обязана считаться из отдаваемого
-    // значения в едином encoded-sRGB8 reference-домене (контракт не изменён
-    // миграцией). Байты источника и локального фона готовятся ТЕМ ЖЕ
-    // квантизационным контрактом alpha-SSOT, что и внутри старого пути, —
-    // порядок доменных проверок (tint → bg → α) сохранён дословно.
+    // значения в едином encoded-sRGB8 reference-домене. Источник и локальный
+    // фон проходят один quantization SSOT; порядок проверок — tint → bg → α.
     let tint_q = quantise_encoded(tint.for_vc(vc));
     let source_rgb = match crate::alpha::encoded_to_srgb8(tint_q, "tint") {
         Ok(bytes) => bytes,
@@ -2743,43 +2667,14 @@ pub(crate) fn resolve_pair_label(
             )));
         }
     };
-    let graph = match nested_foreground_component() {
-        Ok(graph) => graph,
-        // Статическая спека не компилируется только при внутреннем дефекте —
-        // типизированный отказ честнее паники (RoleSpec публичен).
-        Err(defect) => {
-            return Err(SolveFailure::InternalInvariant(format!(
-                "внутренний дефект компиляции компонента тинт-поверхности: {defect:?}"
-            )));
+    let surface_rgb = match PointOpacityOverSurfaceV1::evaluate(source_rgb, alpha, context_rgb) {
+        Ok(surface) => surface,
+        Err(error) => {
+            return pair_label_opacity_input_error(error.message());
         }
     };
-    let bindings = crate::appearance::AppearanceBindings::new(
-        vec![(NESTED_SOURCE, source_rgb), (NESTED_CONTEXT, context_rgb)],
-        vec![(NESTED_OPACITY, alpha)],
-    );
-    let evaluation = match graph.evaluate(&bindings) {
-        Ok(evaluation) => evaluation,
-        // Доменный отказ по α несёт сообщение SSOT-валидатора дословно —
-        // публичный текст отказа совпадает со старым путём байт-в-байт.
-        Err(crate::appearance::GraphError::OpacityOutOfDomain { message, .. }) => {
-            return pair_label_opacity_input_error(&message);
-        }
-        // Прочие ошибки исполнения статического компонента структурно
-        // недостижимы (bindings собраны из объявленных handles); отказ
-        // остаётся типизированным вместо паники.
-        Err(defect) => {
-            return Err(SolveFailure::InternalInvariant(format!(
-                "внутренний дефект исполнения компонента тинт-поверхности: {defect:?}"
-            )));
-        }
-    };
-    let Some(occurrence) = evaluation.occurrence(NESTED_FOREGROUND) else {
-        return Err(SolveFailure::InternalInvariant(
-            "внутренний дефект компонента тинт-поверхности: occurrence отсутствует".into(),
-        ));
-    };
-    // Финальные байты РЕАЛЬНО собранной поверхности → прежний контекст резолва.
-    let surface_hex = crate::alpha::hex_from_srgb8(occurrence.backdrop);
+    // Финальные байты реально собранной surface становятся контекстом solve.
+    let surface_hex = crate::alpha::hex_from_srgb8(surface_rgb);
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
         // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
         // отказ, чем правдоподобный мусор (RoleSpec публичен).
@@ -2791,27 +2686,24 @@ pub(crate) fn resolve_pair_label(
     // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
     let anchor = TextAnchor::new(fraction, floor)?;
-    // Identity-ребро occurrence: foreground решается из ВОЗВРАЩЁННОГО
-    // источника (byte → byte/255 точно), а не повторного чтения `tint` —
-    // иначе объявленное ребро идентичности было бы декоративным.
+    // Hue anchor остаётся отдельным входом label-solver. Fill occurrence
+    // вычисляет только surface и не притворяется зависимостью финального label.
     resolve_hued_anchor_from_srgb8(
         &surface_bg,
         anchor,
-        Srgb8::new(occurrence.source),
+        Srgb8::new(source_rgb),
         vc,
         &surface_ctx,
     )
 }
 
-/// Замороженная ручная реализация `resolve_pair_label` ДО миграции #307 —
-/// независимый differential-oracle графового пути, НЕ production-дубликат.
-/// Композиция здесь идёт прежним `composite_hex_from_encoded`-маршрутом, а
-/// foreground — через [`resolve_hued_anchor`] по исходному пейлоаду тинта.
-/// Любой байтовый/статусный дрейф production-пути от этого оракула — дефект
-/// миграции (см. differential-матрицу в тестах PairLabel).
+/// Ручной differential oracle: композит tint-surface идёт независимым от графа
+/// `composite_hex_from_encoded`-маршрутом, а label — через
+/// [`resolve_hued_anchor`] по исходному tint. Он изолирует корректность
+/// физической композиции, но не является независимым эталоном solver-а.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_pair_label_legacy_oracle(
+pub(crate) fn resolve_pair_label_manual_composite_oracle(
     bg: &BgInput,
     tint: crate::ladder::LadderTint,
     fraction: f64,

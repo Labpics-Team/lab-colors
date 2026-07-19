@@ -1,4 +1,4 @@
-//! Жёсткий контраст-констрейнт ТИНТ-бейджа (`RoleSpec::PairLabel`, task #29).
+//! Характеризация boundary-адаптера `RoleSpec::PairLabel`.
 //!
 //! Класс, который закрывают эти тесты: контраст `label ↔ tinted-fill` у бейджа
 //! на тинт-фоне был ЭМЕРДЖЕНТНЫМ, не гарантированным. Обычные `label-*` роли
@@ -9,6 +9,13 @@
 //! `PairLabel` решает оттеночный лейбл ПРОТИВ тинт-поверхности, поэтому пол
 //! гарантирован по построению; при недостижимости тон клампится (флаг
 //! `compressed`), а не молча выдаётся за точное выполнение контракта.
+//!
+//! Appearance-граф описывает только физическую цепочку заливки:
+//! solid paint → opacity paint → occurrence на контексте → derived surface.
+//! Downstream-солвер
+//! лейбла получает эту подложку без изменения своей математики. Тесты
+//! доказывают точность этой границы подложки, но не заявляют наличие
+//! финального label paint/occurrence или публичного recipe-контракта.
 //!
 //! Четыре группы:
 //!  1. `shipped_*` — реальный контракт labui (`label-<fam>-primary` на
@@ -21,16 +28,16 @@
 //!     (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success,
 //!     а `PairLabel` (против поверхности) — держит. Разница ТОЛЬКО в подложке
 //!     резолва: если бы `resolve_pair_label` целил фон страницы, тест бы упал.
-//!  4. `migration_*` / `emitted_pair_fill_*` — differential миграции #307:
-//!     production-путь через appearance-граф байт-идентичен замороженному
-//!     legacy oracle (матрица 5 семей × 4 режима × 6 фонов + property), включая
-//!     публичные типизированные отказы; поверхность PairLabel НЕ является
-//!     эмитированным PairFill (санитарный witness против ложного ребра, #305).
+//!  4. `fill_occurrence_backdrop_*` / `pair_fill_output_*` — appearance-путь
+//!     подложки байт-идентичен замороженному
+//!     ручному composite-oracle (матрица 5 семей × 4 режима × 6 фонов + property), включая
+//!     типизированный отказ выбранной alpha-ветви; поверхность PairLabel НЕ является
+//!     эмитированным PairFill (санитарный witness против ложного ребра).
 
 use proptest::prelude::*;
 
 use crate::config::fixture::labui_reference;
-use crate::semantic::{resolve_pair_label, resolve_pair_label_legacy_oracle};
+use crate::semantic::{resolve_pair_label, resolve_pair_label_manual_composite_oracle};
 use crate::solve::Floor;
 use crate::{
     BgInput, LadderSource, LadderTint, Resolved, RoleRecipe, RoleSpec, SolveFailure,
@@ -68,12 +75,9 @@ fn themes() -> [(&'static str, &'static str, ViewingConditions); 4] {
     ]
 }
 
-/// Юр. пол UI (WCAG 1.4.11, 3:1) из SSOT контракта [`Floor::AaUi`] — локальная
-/// копия числа запрещена (#307): тест обязан проверять тот же пол, который
-/// энфорсит резолвер. Консервативный дефолт порога тинт-бейджа (короткая
-/// пилюля-индикатор — UI-объект, не длинный текст; 4.5:1 на светлом тинте
-/// вынудил бы near-black и убил бы «цветной» вид). Порог 3:1 vs 4.5:1 —
-/// открытый вопрос владельцу (см. отчёт task #29).
+/// Объявленный UI-пол из SSOT-контракта [`Floor::AaUi`]. Локальная
+/// копия числа запрещена: тест проверяет тот же пол, который энфорсит
+/// резолвер, и не дублирует его политику в фикстуре.
 fn ui_floor() -> f64 {
     Floor::AaUi
         .min_ratio()
@@ -210,8 +214,8 @@ fn pair_label_beats_page_resolved_label_on_failing_families() {
     let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
         .expect("валидный PairLabel-контракт обязан резолвиться");
 
-    // warning/success — семьи, где страничный `label-*-tertiary` проваливает 3:1
-    // на собственном тинте (замер task #29: warning 2.76, success 2.88).
+    // warning/success — семьи, где предпосылку о провале страничного
+    // `label-*-tertiary` на собственном тинте проверяет первый assert ниже.
     for fam in ["warning", "success"] {
         let before = ratio_on_tint(&set, &format!("label-{fam}-tertiary"), fam);
         let after = ratio_on_tint(&set, &format!("badge-label-{fam}"), fam);
@@ -233,10 +237,10 @@ fn pair_label_beats_page_resolved_label_on_failing_families() {
     }
 }
 
-// ── 4. Differential-матрица миграции #307: граф == замороженный legacy oracle ──
+// ── 4. Fill occurrence-derived backdrop == замороженный oracle ──
 
 /// Скомпилированные параметры `RoleSpec::PairLabel` конкретной роли таблицы —
-/// вход обоих путей differential-а (production-граф и legacy oracle получают
+/// вход обоих путей differential-а (appearance-путь и ручной oracle получают
 /// РОВНО одни аргументы, различие только в реализации).
 fn pair_label_spec(
     table: &crate::NamedRoleTable,
@@ -279,24 +283,27 @@ fn pair_label_spec(
 /// * `#FFF4E0` — хроматический светлый witness: точная warning-поверхность
 ///   из graph-тестов (`appearance_graph_tests`);
 /// * `#0000FF` — насыщенный хроматический угол куба (sRGB primary).
-fn migration_backgrounds() -> [&'static str; 6] {
+fn differential_backgrounds() -> [&'static str; 6] {
     [
         "#000000", "#101012", "#767676", "#FFF4E0", "#0000FF", "#FFFFFF",
     ]
 }
 
-/// Полный differential §8.3 ТЗ #307: production-путь (appearance-граф) обязан
-/// быть РАВЕН замороженному legacy oracle по всем полям `Resolved` — вариант,
+/// Appearance-путь вычисляет fill occurrence и derived backdrop, после чего
+/// неизменённый downstream-солвер обязан дать тот же `Resolved`, что и
+/// замороженный oracle: вариант,
 /// финальные байты, флаги, unreachable-причины. Никакого approximate equality:
 /// `assert_eq!` по `PartialEq` сравнивает и все числовые поля (одинаковые биты
 /// по построению одного downstream-солвера), а hex сверяется отдельно, чтобы
 /// байтовая эмиссия оставалась закреплённой даже при эволюции `PartialEq`.
+/// Это differential-доказательство границы подложки, а не наличия финального
+/// label occurrence в appearance-графе.
 #[test]
-fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
+fn fill_occurrence_backdrop_matrix_matches_frozen_pair_label_oracle_exactly() {
     let table = labui_with_badge_labels();
     let mut resolved_hits = 0usize;
     for (tname, _, vc) in themes() {
-        for bg_hex in migration_backgrounds() {
+        for bg_hex in differential_backgrounds() {
             let bg = BgInput::solid(bg_hex).unwrap();
             for (fam, _) in families() {
                 let role = format!("badge-label-{fam}");
@@ -304,7 +311,7 @@ fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
                     pair_label_spec(&table, &role);
                 let production =
                     resolve_pair_label(&bg, tint, fraction, floor, alpha_light, alpha_dark, &vc);
-                let oracle = resolve_pair_label_legacy_oracle(
+                let oracle = resolve_pair_label_manual_composite_oracle(
                     &bg,
                     tint,
                     fraction,
@@ -316,7 +323,7 @@ fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
                 assert_eq!(
                     production, oracle,
                     "[{tname}/{bg_hex}] `{role}`: production-граф обязан быть \
-                     идентичен замороженному legacy oracle по всем полям"
+                     идентичен замороженному ручному composite-oracle по всем полям"
                 );
                 for outcome in [&production, &oracle] {
                     assert!(
@@ -350,38 +357,45 @@ fn migration_differential_matrix_matches_frozen_legacy_oracle_exactly() {
     );
 }
 
-/// Публичные исходы невалидной альфы (RoleSpec публичен — спека, собранная в
-/// обход валидатора конфига, обязана давать ПРЕЖНИЙ типизированный отказ):
-/// вариант, причина и точный текст заморожены миграцией байт-в-байт.
+/// Внутренний resolver обязан типизированно отклонять невалидную выбранную
+/// альфу до начала физического поиска. Публичный `NamedRoleTable` дополнительно
+/// валидирует обе theme-ветви при компиляции конфига.
 #[test]
-fn migration_preserves_public_invalid_alpha_outcomes_exactly() {
+fn fill_occurrence_backdrop_path_rejects_selected_invalid_alpha_exactly() {
     let table = labui_with_badge_labels();
     let (tint, fraction, floor, _, _) = pair_label_spec(&table, "badge-label-warning");
-    let bg = BgInput::solid("#FFFFFF").unwrap();
-    let vc = ViewingConditions::srgb();
     for bad_alpha in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.5] {
-        let production = resolve_pair_label(&bg, tint, fraction, floor, bad_alpha, bad_alpha, &vc);
-        let oracle =
-            resolve_pair_label_legacy_oracle(&bg, tint, fraction, floor, bad_alpha, bad_alpha, &vc);
-        assert_eq!(
-            production, oracle,
-            "публичный тип/текст отказа по α={bad_alpha} обязан быть заморожен"
-        );
-        assert!(
-            matches!(production, Err(SolveFailure::InvalidInput(_))),
-            "невалидная α обязана давать типизированный InvalidInput, не панику/кламп"
-        );
+        for (bg_hex, vc, light, dark) in [
+            ("#FFFFFF", ViewingConditions::srgb(), bad_alpha, 0.122),
+            (
+                "#101012",
+                ViewingConditions::dim_surround(),
+                0.122,
+                bad_alpha,
+            ),
+        ] {
+            let bg = BgInput::solid(bg_hex).unwrap();
+            let production = resolve_pair_label(&bg, tint, fraction, floor, light, dark, &vc);
+            let oracle = resolve_pair_label_manual_composite_oracle(
+                &bg, tint, fraction, floor, light, dark, &vc,
+            );
+            assert_eq!(
+                production, oracle,
+                "theme-selected alpha branch must stay exact for alpha={bad_alpha}"
+            );
+            assert!(matches!(production, Err(SolveFailure::InvalidInput(_))));
+        }
     }
 }
 
-/// Санитарный witness против ложного ребра `PairFill → PairLabel` (regression
-/// witness #305 остаётся честным): эмитированный `PairFill` — отдельно
+/// Санитарный witness против ложного ребра `PairFill → PairLabel`: эмитированный
+/// `PairFill` — отдельно
 /// сдвинутый солид, он НЕ равен тинт-поверхности (композиту `fill-*-primary`),
-/// против которой решается `PairLabel`. Если миграция когда-либо подменит
-/// derived backdrop эмитированным PairFill, differential-матрица разойдётся
-/// именно потому, что эти значения различны — что и закрепляет этот тест.
+/// против которой решается `PairLabel`. Подмена derived backdrop эмитированным
+/// PairFill разойдётся с differential-матрицей именно потому, что эти значения
+/// различны.
 #[test]
-fn emitted_pair_fill_differs_from_the_pair_label_surface() {
+fn pair_fill_output_differs_from_fill_occurrence_derived_backdrop() {
     let mut cfg = labui_reference();
     for (fam, source) in families() {
         cfg.roles
@@ -408,12 +422,12 @@ fn emitted_pair_fill_differs_from_the_pair_label_surface() {
     }
 }
 
-// Property-differential: произвольные источник/контекст/альфы/доля/пол/режим.
-// Единственный источник различий между путями — сама миграция; любые входы в
-// объявленном домене обязаны давать идентичный Resolved.
+// Property-differential: произвольные источник/контекст/альфы/доля/пол/режим
+// проверяют точную замену пути подложки. Downstream-солвер в обоих путях
+// один и тот же.
 proptest! {
     #[test]
-    fn migration_differential_property_holds_on_arbitrary_inputs(
+    fn fill_occurrence_backdrop_property_matches_frozen_pair_label_oracle(
         source in any::<[u8; 3]>(),
         context in any::<[u8; 3]>(),
         alpha_light in 0.0f64..=1.0,
@@ -434,7 +448,7 @@ proptest! {
         let production = resolve_pair_label(
             &bg, tint, fraction, floor, alpha_light, alpha_dark, &vc,
         );
-        let oracle = resolve_pair_label_legacy_oracle(
+        let oracle = resolve_pair_label_manual_composite_oracle(
             &bg, tint, fraction, floor, alpha_light, alpha_dark, &vc,
         );
         prop_assert_eq!(production, oracle);

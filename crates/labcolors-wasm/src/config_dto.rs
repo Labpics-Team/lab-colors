@@ -122,7 +122,7 @@ pub enum FloorDto {
 
 /// Рецепт роли из закрытого физического меню текущего resolver-а.
 ///
-/// Это переходная compatibility surface, не target IR и не extension point.
+/// Это граница сериализации совместимого API, не доменный IR и не extension point.
 /// Новая физика не должна добавляться новым recipe variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -307,7 +307,7 @@ fn position_from_key(key: &str) -> Result<LadderPosition, String> {
 }
 
 /// [`Floor`] → сериализуемый [`FloorDto`] (kebab). Разделяемо `TextAnchor` и
-/// опциональным полом `Ladder` (M2 ch5c). `Floor` — `#[non_exhaustive]`:
+/// опциональным полом `Ladder`. `Floor` — `#[non_exhaustive]`:
 /// неизвестный вариант — честный `Err`, не тихий дефолт.
 fn floor_to_dto(f: Floor) -> Result<FloorDto, String> {
     Ok(match f {
@@ -614,18 +614,18 @@ impl TryFrom<&ThemeConfig> for ConfigDto {
 mod tests {
     use super::*;
 
-    /// Паспорт labui как статический SSOT (`tests/data/labui.config.json`): дерево
-    /// Даниила вынесено из прод-API ядра (ADR-0001), граница читает паспорт.
+    /// Паспорт labui как статический SSOT (`tests/data/labui.config.json`): клиентское
+    /// дерево не встроено в продуктовый API ядра, граница читает паспорт.
     fn labui_dto() -> ConfigDto {
         serde_json::from_str(include_str!("../tests/data/labui.config.json"))
             .expect("паспорт labui парсится")
     }
 
-    /// Снапшот ПРОДАКШН-паспорта labui (`labui/packages/colors/labui.config.json`):
-    /// ВОКАБУЛЯР синкнут со словарным каноном (labui#92 — роль `icon` снесена в
-    /// алиас на label-tertiary, `border-ghost`→`border-none`), но РЕЦЕПТЫ цветных
-    /// лейблов НАМЕРЕННО оставлены в ladder-стиле — ветки M1 text-anchor не
-    /// активируются. Этим `.prod.json` и отличается от канонического `.json`:
+    /// Снапшот продуктового паспорта labui
+    /// (`labui/packages/colors/labui.config.json`):
+    /// словарь совпадает с каноном, а цветные лейблы остаются в ladder-форме,
+    /// так что ветвь text-anchor не активируется. Этим `.prod.json` и отличается от
+    /// канонического `.json`:
     /// покрывает путь ladder-эпохи потребителя — класс «тестируем не тот стиль
     /// рецептов, что в проде». Обновлять при изменении паспорта.
     fn labui_prod_dto() -> ConfigDto {
@@ -634,7 +634,7 @@ mod tests {
     }
 
     /// Прод-снапшот гоняется тем же путём без потерь и компилируется — паритет
-    /// гейта для обоих стилей паспорта (канонический M1 + прод-ladder).
+    /// гейта для обоих стилей паспорта (text-anchor + прод-ladder).
     #[test]
     fn labui_prod_passport_round_trips_and_compiles() {
         let cfg = ThemeConfig::try_from(labui_prod_dto()).expect("прод-паспорт → ThemeConfig");
@@ -663,9 +663,10 @@ mod tests {
             .expect("восстановленный конфиг компилируется");
     }
 
-    /// Рецепт `pair-label` (лейбл тинт-бейджа, task #29) гоняется через JSON без
+    /// Recipe-адаптер `pair-label` гоняется через JSON без
     /// потерь: kebab-тег `pair-label`, источник/доля/пол целы туда-обратно.
-    /// Закрывает класс «DTO-ветка компилируется, но круг-трип врёт».
+    /// Это только доказательство DTO round-trip, а не наличия pair-label
+    /// в целевом graph API.
     #[test]
     fn pair_label_recipe_round_trips_through_json() {
         use labcolors_core::solve::Floor;
@@ -687,7 +688,7 @@ mod tests {
         assert!(re.contains(r#""key":"warning""#), "источник цел: {re}");
     }
 
-    /// C6 RED: удалённая специальная sentiment-схема обязана стать неизвестной,
+    /// Удалённая специальная sentiment-схема обязана стать неизвестной,
     /// а не тихо игнорироваться serde после удаления поля/варианта.
     #[test]
     fn retired_sentiment_schema_is_rejected() {
@@ -867,8 +868,8 @@ mod tests {
 
     /// Характеризационный пин канонической JSON-формы текущего Lab UI-паспорта.
     /// Обновляется только вместе с проверенным изменением схемы или данных.
-    /// C6 удалил корневой sentiment-объект, заменил специальные source-теги
-    /// обычными family-ссылками и удалил неиспользуемый `neutral.tint.ratio`;
+    /// Текущая схема не содержит корневой sentiment-объект, использует
+    /// обычные family-ссылки и не содержит неиспользуемый `neutral.tint.ratio`;
     /// именно эти изменения канонического JSON объясняют смену отпечатка.
     #[test]
     fn full_labui_fingerprint_pin_current_main() {

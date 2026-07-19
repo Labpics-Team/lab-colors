@@ -137,11 +137,20 @@ pub fn composite_over_encoded(
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
 pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
     validate_alpha(alpha)?;
-    Ok([
+    Ok(composite_over_srgb8_validated(tint, alpha, bg))
+}
+
+/// Total-вариант для functional core после admission: вызывающий код обязан
+/// уже доказать `alpha ∈ [0,1]`. Произведение двух таких straight-alpha также
+/// остаётся в домене, поэтому appearance runtime не несёт недостижимую ветку
+/// повторной валидации после проверки всех scalar bindings.
+pub(crate) fn composite_over_srgb8_validated(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> [u8; 3] {
+    debug_assert!(validate_alpha(alpha).is_ok());
+    [
         source_over_channel_srgb8(tint[0], alpha, bg[0]),
         source_over_channel_srgb8(tint[1], alpha, bg[1]),
         source_over_channel_srgb8(tint[2], alpha, bg[2]),
-    ])
+    ]
 }
 
 /// SSOT-валидатор домена straight-alpha: конечная и в `[0,1]`. Единый и для
