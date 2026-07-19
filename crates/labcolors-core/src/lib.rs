@@ -49,6 +49,12 @@ mod agnostic_gates;
 mod appearance_graph_tests;
 
 #[cfg(test)]
+pub(crate) mod observation;
+
+#[cfg(test)]
+mod observation_tests;
+
+#[cfg(test)]
 mod constraint_tests;
 
 #[cfg(test)]

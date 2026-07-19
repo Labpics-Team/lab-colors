@@ -7,15 +7,17 @@
 
 use proptest::prelude::*;
 
+use crate::Srgb8;
 use crate::appearance::{
     AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError,
     CompositionProfileV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    SurfaceId, SurfaceSpec,
+    SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 
 const SOURCE: ColorInputId = ColorInputId::new(0);
-const CONTEXT: ColorInputId = ColorInputId::new(1);
 const OTHER_SOURCE: ColorInputId = ColorInputId::new(2);
+const CONTEXT: SurfaceInputPortId = SurfaceInputPortId::new(1);
+const OTHER_CONTEXT: SurfaceInputPortId = SurfaceInputPortId::new(2);
 const OPACITY: OpacityInputId = OpacityInputId::new(0);
 const OTHER_OPACITY: OpacityInputId = OpacityInputId::new(1);
 const SOLID_PAINT: PaintId = PaintId::new(70);
@@ -40,7 +42,7 @@ fn point_component(reverse_paints: bool, reverse_surfaces: bool) -> AppearanceGr
     let mut surfaces = vec![
         SurfaceSpec::Input {
             id: CONTEXT_SURFACE,
-            color: CONTEXT,
+            port: CONTEXT,
         },
         SurfaceSpec::FromOccurrence {
             id: DERIVED_SURFACE,
@@ -55,7 +57,8 @@ fn point_component(reverse_paints: bool, reverse_surfaces: bool) -> AppearanceGr
     }
 
     AppearanceGraphSpec::new(
-        vec![SOURCE, CONTEXT],
+        vec![SOURCE],
+        vec![CONTEXT],
         vec![OPACITY],
         paints,
         surfaces,
@@ -70,7 +73,8 @@ fn point_component(reverse_paints: bool, reverse_surfaces: bool) -> AppearanceGr
 
 fn bindings(source: [u8; 3], opacity: f64, context: [u8; 3]) -> AppearanceBindings {
     AppearanceBindings::new(
-        vec![(SOURCE, source), (CONTEXT, context)],
+        vec![(SOURCE, Srgb8::new(source))],
+        vec![(CONTEXT, Srgb8::new(context))],
         vec![(OPACITY, opacity)],
     )
 }
@@ -137,7 +141,7 @@ fn compile_and_evaluate_ignore_declaration_order() {
 #[test]
 fn complete_typed_id_renaming_does_not_change_physics() {
     let source = ColorInputId::new(700);
-    let context = ColorInputId::new(42);
+    let context = SurfaceInputPortId::new(42);
     let opacity = OpacityInputId::new(91);
     let solid = PaintId::new(901);
     let fill = PaintId::new(11);
@@ -145,7 +149,8 @@ fn complete_typed_id_renaming_does_not_change_physics() {
     let derived_surface = SurfaceId::new(12);
     let occurrence = OccurrenceId::new(501);
     let renamed = AppearanceGraphSpec::new(
-        vec![source, context],
+        vec![source],
+        vec![context],
         vec![opacity],
         vec![
             PaintSpec::Opacity {
@@ -165,7 +170,7 @@ fn complete_typed_id_renaming_does_not_change_physics() {
             },
             SurfaceSpec::Input {
                 id: context_surface,
-                color: context,
+                port: context,
             },
         ],
         vec![OccurrenceSpec {
@@ -188,7 +193,8 @@ fn complete_typed_id_renaming_does_not_change_physics() {
         .unwrap();
     let second = renamed
         .evaluate(&AppearanceBindings::new(
-            vec![(source, source_rgb), (context, context_rgb)],
+            vec![(source, Srgb8::new(source_rgb))],
+            vec![(context, Srgb8::new(context_rgb))],
             vec![(opacity, alpha)],
         ))
         .unwrap();
@@ -214,7 +220,8 @@ fn complete_typed_id_renaming_does_not_change_physics() {
 #[test]
 fn occurrence_uses_the_declared_paint_not_an_unrelated_color_input() {
     let graph = AppearanceGraphSpec::new(
-        vec![SOURCE, CONTEXT, OTHER_SOURCE],
+        vec![SOURCE, OTHER_SOURCE],
+        vec![CONTEXT],
         vec![OPACITY],
         vec![
             PaintSpec::Solid {
@@ -233,7 +240,7 @@ fn occurrence_uses_the_declared_paint_not_an_unrelated_color_input() {
         ],
         vec![SurfaceSpec::Input {
             id: CONTEXT_SURFACE,
-            color: CONTEXT,
+            port: CONTEXT,
         }],
         vec![OccurrenceSpec {
             id: FILL_OCCURRENCE,
@@ -247,10 +254,10 @@ fn occurrence_uses_the_declared_paint_not_an_unrelated_color_input() {
     let rendered = graph
         .evaluate(&AppearanceBindings::new(
             vec![
-                (SOURCE, [10, 20, 30]),
-                (CONTEXT, [200, 200, 200]),
-                (OTHER_SOURCE, [111, 112, 113]),
+                (SOURCE, Srgb8::new([10, 20, 30])),
+                (OTHER_SOURCE, Srgb8::new([111, 112, 113])),
             ],
+            vec![(CONTEXT, Srgb8::new([200, 200, 200]))],
             vec![(OPACITY, 0.25)],
         ))
         .unwrap();
@@ -267,7 +274,8 @@ fn occurrence_uses_the_declared_paint_not_an_unrelated_color_input() {
 fn nested_opacity_materializes_once_by_multiplying_opacity() {
     let nested = PaintId::new(99);
     let graph = AppearanceGraphSpec::new(
-        vec![SOURCE, CONTEXT],
+        vec![SOURCE],
+        vec![CONTEXT],
         vec![OTHER_OPACITY, OPACITY],
         vec![
             PaintSpec::Opacity {
@@ -287,7 +295,7 @@ fn nested_opacity_materializes_once_by_multiplying_opacity() {
         ],
         vec![SurfaceSpec::Input {
             id: CONTEXT_SURFACE,
-            color: CONTEXT,
+            port: CONTEXT,
         }],
         vec![OccurrenceSpec {
             id: FILL_OCCURRENCE,
@@ -300,7 +308,8 @@ fn nested_opacity_materializes_once_by_multiplying_opacity() {
     .unwrap();
     let rendered = graph
         .evaluate(&AppearanceBindings::new(
-            vec![(SOURCE, [0; 3]), (CONTEXT, [255; 3])],
+            vec![(SOURCE, Srgb8::new([0; 3]))],
+            vec![(CONTEXT, Srgb8::new([255; 3]))],
             vec![(OTHER_OPACITY, 0.5), (OPACITY, 0.5)],
         ))
         .unwrap();
@@ -326,7 +335,8 @@ fn nested_opacity_materializes_once_by_multiplying_opacity() {
 fn nested_opacity_preserves_subnormal_and_rounds_underflow_to_positive_zero() {
     let nested = PaintId::new(99);
     let graph = AppearanceGraphSpec::new(
-        vec![SOURCE, CONTEXT],
+        vec![SOURCE],
+        vec![CONTEXT],
         vec![OPACITY, OTHER_OPACITY],
         vec![
             PaintSpec::Solid {
@@ -346,7 +356,7 @@ fn nested_opacity_preserves_subnormal_and_rounds_underflow_to_positive_zero() {
         ],
         vec![SurfaceSpec::Input {
             id: CONTEXT_SURFACE,
-            color: CONTEXT,
+            port: CONTEXT,
         }],
         vec![OccurrenceSpec {
             id: FILL_OCCURRENCE,
@@ -368,7 +378,8 @@ fn nested_opacity_preserves_subnormal_and_rounds_underflow_to_positive_zero() {
     for (inner, expected_bits) in cases {
         let rendered = graph
             .evaluate(&AppearanceBindings::new(
-                vec![(SOURCE, [255, 0, 0]), (CONTEXT, [0; 3])],
+                vec![(SOURCE, Srgb8::new([255, 0, 0]))],
+                vec![(CONTEXT, Srgb8::new([0; 3]))],
                 vec![(OPACITY, inner), (OTHER_OPACITY, 0.5)],
             ))
             .unwrap();
@@ -406,7 +417,8 @@ fn opacity_constructor_edges_define_binary64_operation_order() {
         let second = PaintId::new(102);
         let third = PaintId::new(103);
         AppearanceGraphSpec::new(
-            vec![SOURCE, CONTEXT],
+            vec![SOURCE],
+            vec![CONTEXT],
             vec![alpha_a, alpha_b, alpha_c],
             vec![
                 PaintSpec::Solid {
@@ -431,7 +443,7 @@ fn opacity_constructor_edges_define_binary64_operation_order() {
             ],
             vec![SurfaceSpec::Input {
                 id: CONTEXT_SURFACE,
-                color: CONTEXT,
+                port: CONTEXT,
             }],
             vec![OccurrenceSpec {
                 id: FILL_OCCURRENCE,
@@ -443,7 +455,8 @@ fn opacity_constructor_edges_define_binary64_operation_order() {
         .compile()
         .unwrap()
         .evaluate(&AppearanceBindings::new(
-            vec![(SOURCE, [255, 0, 0]), (CONTEXT, [0; 3])],
+            vec![(SOURCE, Srgb8::new([255, 0, 0]))],
+            vec![(CONTEXT, Srgb8::new([0; 3]))],
             values.to_vec(),
         ))
         .unwrap()
@@ -466,7 +479,8 @@ fn one_paint_is_surface_agnostic_across_two_occurrences() {
     let on_black = OccurrenceId::new(10);
     let on_white = OccurrenceId::new(11);
     let graph = AppearanceGraphSpec::new(
-        vec![SOURCE, CONTEXT, OTHER_SOURCE],
+        vec![SOURCE],
+        vec![CONTEXT, OTHER_CONTEXT],
         vec![OPACITY],
         vec![
             PaintSpec::Solid {
@@ -482,11 +496,11 @@ fn one_paint_is_surface_agnostic_across_two_occurrences() {
         vec![
             SurfaceSpec::Input {
                 id: black,
-                color: CONTEXT,
+                port: CONTEXT,
             },
             SurfaceSpec::Input {
                 id: white,
-                color: OTHER_SOURCE,
+                port: OTHER_CONTEXT,
             },
         ],
         vec![
@@ -508,10 +522,10 @@ fn one_paint_is_surface_agnostic_across_two_occurrences() {
     .unwrap();
     let rendered = graph
         .evaluate(&AppearanceBindings::new(
+            vec![(SOURCE, Srgb8::new([240, 60, 20]))],
             vec![
-                (SOURCE, [240, 60, 20]),
-                (CONTEXT, [0; 3]),
-                (OTHER_SOURCE, [255; 3]),
+                (CONTEXT, Srgb8::new([0; 3])),
+                (OTHER_CONTEXT, Srgb8::new([255; 3])),
             ],
             vec![(OPACITY, 0.5)],
         ))
@@ -528,8 +542,8 @@ fn one_paint_is_surface_agnostic_across_two_occurrences() {
 #[test]
 fn surface_from_reuses_visible_result_without_recompositing() {
     let black_color = ColorInputId::new(10);
-    let white_color = ColorInputId::new(11);
     let red_color = ColorInputId::new(12);
+    let page_port = SurfaceInputPortId::new(11);
     let black_solid = PaintId::new(10);
     let black_tint = PaintId::new(11);
     let red_solid = PaintId::new(12);
@@ -540,7 +554,8 @@ fn surface_from_reuses_visible_result_without_recompositing() {
     let first_surface = SurfaceId::new(11);
     let first = OccurrenceId::new(10);
     let second = OccurrenceId::new(11);
-    let colors = vec![black_color, white_color, red_color];
+    let colors = vec![black_color, red_color];
+    let surface_inputs = vec![page_port];
     let opacities = vec![black_alpha, red_alpha];
     let paints = vec![
         PaintSpec::Solid {
@@ -565,7 +580,7 @@ fn surface_from_reuses_visible_result_without_recompositing() {
     let surfaces = vec![
         SurfaceSpec::Input {
             id: page,
-            color: white_color,
+            port: page_port,
         },
         SurfaceSpec::FromOccurrence {
             id: first_surface,
@@ -588,6 +603,7 @@ fn surface_from_reuses_visible_result_without_recompositing() {
     ];
     let graph = AppearanceGraphSpec::new(
         colors.clone(),
+        surface_inputs.clone(),
         opacities.clone(),
         paints.clone(),
         surfaces.clone(),
@@ -597,16 +613,22 @@ fn surface_from_reuses_visible_result_without_recompositing() {
     .unwrap();
     let mut reversed_occurrences = occurrences;
     reversed_occurrences.reverse();
-    let reordered =
-        AppearanceGraphSpec::new(colors, opacities, paints, surfaces, reversed_occurrences)
-            .compile()
-            .unwrap();
+    let reordered = AppearanceGraphSpec::new(
+        colors,
+        surface_inputs,
+        opacities,
+        paints,
+        surfaces,
+        reversed_occurrences,
+    )
+    .compile()
+    .unwrap();
     let bindings = AppearanceBindings::new(
         vec![
-            (black_color, [0; 3]),
-            (white_color, [255; 3]),
-            (red_color, [255, 0, 0]),
+            (black_color, Srgb8::new([0; 3])),
+            (red_color, Srgb8::new([255, 0, 0])),
         ],
+        vec![(page_port, Srgb8::new([255; 3]))],
         vec![(black_alpha, 0.25), (red_alpha, 0.5)],
     );
     let rendered = graph.evaluate(&bindings).unwrap();
@@ -700,12 +722,13 @@ proptest! {
             subject = next;
         }
         let graph = AppearanceGraphSpec::new(
-            vec![SOURCE, CONTEXT],
+            vec![SOURCE],
+            vec![CONTEXT],
             opacity_inputs.clone(),
             paints,
             vec![SurfaceSpec::Input {
                 id: CONTEXT_SURFACE,
-                color: CONTEXT,
+                port: CONTEXT,
             }],
             vec![OccurrenceSpec {
                 id: FILL_OCCURRENCE,
@@ -719,7 +742,8 @@ proptest! {
         let effective = alphas.iter().copied().fold(1.0, |product, alpha| product * alpha);
         let rendered = graph
             .evaluate(&AppearanceBindings::new(
-                vec![(SOURCE, source), (CONTEXT, context)],
+                vec![(SOURCE, Srgb8::new(source))],
+                vec![(CONTEXT, Srgb8::new(context))],
                 opacity_inputs
                     .iter()
                     .copied()
@@ -743,7 +767,8 @@ proptest! {
         prop_assume!(!invalid.is_finite() || !(0.0..=1.0).contains(&invalid));
         let outer_paint = PaintId::new(99);
         let graph = AppearanceGraphSpec::new(
-            vec![SOURCE, CONTEXT],
+            vec![SOURCE],
+            vec![CONTEXT],
             vec![OPACITY, OTHER_OPACITY],
             vec![
                 PaintSpec::Solid {
@@ -763,7 +788,7 @@ proptest! {
             ],
             vec![SurfaceSpec::Input {
                 id: CONTEXT_SURFACE,
-                color: CONTEXT,
+                port: CONTEXT,
             }],
             vec![OccurrenceSpec {
                 id: FILL_OCCURRENCE,
@@ -782,7 +807,8 @@ proptest! {
         let expected_message = crate::alpha::validate_alpha(invalid).unwrap_err();
         prop_assert_eq!(
             graph.evaluate(&AppearanceBindings::new(
-                vec![(SOURCE, [1, 2, 3]), (CONTEXT, [4, 5, 6])],
+                vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+                vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
                 vec![(OPACITY, inner), (OTHER_OPACITY, outer)],
             )),
             Err(BindingError::OpacityOutOfDomain {
@@ -796,16 +822,38 @@ proptest! {
 #[test]
 fn compile_rejects_duplicate_declarations_with_typed_errors() {
     assert_eq!(
-        AppearanceGraphSpec::new(vec![SOURCE, SOURCE], vec![], vec![], vec![], vec![]).compile(),
+        AppearanceGraphSpec::new(vec![SOURCE, SOURCE], vec![], vec![], vec![], vec![], vec![])
+            .compile(),
         Err(CompileError::DuplicateColorInput { input: SOURCE })
     );
     assert_eq!(
-        AppearanceGraphSpec::new(vec![], vec![OPACITY, OPACITY], vec![], vec![], vec![]).compile(),
+        AppearanceGraphSpec::new(
+            vec![],
+            vec![],
+            vec![OPACITY, OPACITY],
+            vec![],
+            vec![],
+            vec![]
+        )
+        .compile(),
         Err(CompileError::DuplicateOpacityInput { input: OPACITY })
     );
     assert_eq!(
         AppearanceGraphSpec::new(
-            vec![SOURCE, CONTEXT],
+            vec![],
+            vec![CONTEXT, CONTEXT],
+            vec![],
+            vec![],
+            vec![],
+            vec![]
+        )
+        .compile(),
+        Err(CompileError::DuplicateSurfaceInputPort { input: CONTEXT })
+    );
+    assert_eq!(
+        AppearanceGraphSpec::new(
+            vec![SOURCE, OTHER_SOURCE],
+            vec![],
             vec![],
             vec![
                 PaintSpec::Solid {
@@ -814,7 +862,7 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
                 },
                 PaintSpec::Solid {
                     id: SOLID_PAINT,
-                    color: CONTEXT,
+                    color: OTHER_SOURCE,
                 },
             ],
             vec![],
@@ -825,17 +873,18 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
     );
     assert_eq!(
         AppearanceGraphSpec::new(
-            vec![SOURCE, CONTEXT],
+            vec![],
+            vec![CONTEXT, OTHER_CONTEXT],
             vec![],
             vec![],
             vec![
                 SurfaceSpec::Input {
                     id: CONTEXT_SURFACE,
-                    color: SOURCE,
+                    port: CONTEXT,
                 },
                 SurfaceSpec::Input {
                     id: CONTEXT_SURFACE,
-                    color: CONTEXT,
+                    port: OTHER_CONTEXT,
                 },
             ],
             vec![]
@@ -847,6 +896,7 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
     );
     assert_eq!(
         AppearanceGraphSpec::new(
+            vec![],
             vec![],
             vec![],
             vec![],
@@ -878,6 +928,7 @@ fn compile_rejects_every_dangling_canonical_edge() {
     let missing_color = AppearanceGraphSpec::new(
         vec![],
         vec![],
+        vec![],
         vec![PaintSpec::Solid {
             id: SOLID_PAINT,
             color: SOURCE,
@@ -895,6 +946,7 @@ fn compile_rejects_every_dangling_canonical_edge() {
     );
 
     let missing_paint = AppearanceGraphSpec::new(
+        vec![],
         vec![],
         vec![OPACITY],
         vec![PaintSpec::Opacity {
@@ -916,6 +968,7 @@ fn compile_rejects_every_dangling_canonical_edge() {
 
     let missing_opacity = AppearanceGraphSpec::new(
         vec![SOURCE],
+        vec![],
         vec![],
         vec![
             PaintSpec::Solid {
@@ -940,26 +993,28 @@ fn compile_rejects_every_dangling_canonical_edge() {
         })
     );
 
-    let missing_surface_color = AppearanceGraphSpec::new(
+    let missing_surface_input = AppearanceGraphSpec::new(
+        vec![],
         vec![],
         vec![],
         vec![],
         vec![SurfaceSpec::Input {
             id: CONTEXT_SURFACE,
-            color: CONTEXT,
+            port: CONTEXT,
         }],
         vec![],
     )
     .compile();
     assert_eq!(
-        missing_surface_color,
-        Err(CompileError::MissingSurfaceColorInput {
+        missing_surface_input,
+        Err(CompileError::MissingSurfaceInputPort {
             surface: CONTEXT_SURFACE,
             input: CONTEXT,
         })
     );
 
     let missing_surface_occurrence = AppearanceGraphSpec::new(
+        vec![],
         vec![],
         vec![],
         vec![],
@@ -979,12 +1034,13 @@ fn compile_rejects_every_dangling_canonical_edge() {
     );
 
     let missing_occurrence_paint = AppearanceGraphSpec::new(
+        vec![],
         vec![CONTEXT],
         vec![],
         vec![],
         vec![SurfaceSpec::Input {
             id: CONTEXT_SURFACE,
-            color: CONTEXT,
+            port: CONTEXT,
         }],
         vec![OccurrenceSpec {
             id: FILL_OCCURRENCE,
@@ -1004,6 +1060,7 @@ fn compile_rejects_every_dangling_canonical_edge() {
 
     let missing_occurrence_backdrop = AppearanceGraphSpec::new(
         vec![SOURCE],
+        vec![],
         vec![],
         vec![PaintSpec::Solid {
             id: SOLID_PAINT,
@@ -1033,6 +1090,7 @@ fn cycle_errors_contain_only_actual_cycle_members() {
     let cycle_b = PaintId::new(20);
     let dependent = PaintId::new(1);
     let paint_cycle = AppearanceGraphSpec::new(
+        vec![],
         vec![],
         vec![OPACITY],
         vec![
@@ -1069,6 +1127,7 @@ fn cycle_errors_contain_only_actual_cycle_members() {
     let dependent_occurrence = OccurrenceId::new(1);
     let render_cycle = AppearanceGraphSpec::new(
         vec![SOURCE],
+        vec![],
         vec![],
         vec![PaintSpec::Solid {
             id: SOLID_PAINT,
@@ -1115,31 +1174,42 @@ fn evaluate_rejects_duplicate_missing_and_unexpected_bindings() {
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
             vec![
-                (SOURCE, [1, 2, 3]),
-                (CONTEXT, [4, 5, 6]),
-                (SOURCE, [7, 8, 9]),
+                (SOURCE, Srgb8::new([1, 2, 3])),
+                (SOURCE, Srgb8::new([7, 8, 9])),
             ],
+            vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
             vec![(OPACITY, 0.5)],
         )),
         Err(BindingError::DuplicateColorBinding { input: SOURCE })
     );
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
-            vec![(SOURCE, [1, 2, 3]), (CONTEXT, [4, 5, 6])],
+            vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+            vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
             vec![(OPACITY, 0.5), (OPACITY, 0.6)],
         )),
         Err(BindingError::DuplicateOpacityBinding { input: OPACITY })
     );
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
-            vec![(SOURCE, [1, 2, 3])],
+            vec![],
+            vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
             vec![(OPACITY, 0.5)],
         )),
-        Err(BindingError::MissingColorBinding { input: CONTEXT })
+        Err(BindingError::MissingColorBinding { input: SOURCE })
     );
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
-            vec![(SOURCE, [1, 2, 3]), (CONTEXT, [4, 5, 6])],
+            vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+            vec![],
+            vec![(OPACITY, 0.5)],
+        )),
+        Err(BindingError::MissingSurfaceInputBinding { input: CONTEXT })
+    );
+    assert_eq!(
+        graph.evaluate(&AppearanceBindings::new(
+            vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+            vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
             vec![],
         )),
         Err(BindingError::MissingOpacityBinding { input: OPACITY })
@@ -1147,10 +1217,10 @@ fn evaluate_rejects_duplicate_missing_and_unexpected_bindings() {
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
             vec![
-                (SOURCE, [1, 2, 3]),
-                (CONTEXT, [4, 5, 6]),
-                (ColorInputId::new(9), [7, 8, 9]),
+                (SOURCE, Srgb8::new([1, 2, 3])),
+                (ColorInputId::new(9), Srgb8::new([7, 8, 9])),
             ],
+            vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
             vec![(OPACITY, 0.5)],
         )),
         Err(BindingError::UnexpectedColorBinding {
@@ -1159,11 +1229,25 @@ fn evaluate_rejects_duplicate_missing_and_unexpected_bindings() {
     );
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
-            vec![(SOURCE, [1, 2, 3]), (CONTEXT, [4, 5, 6])],
+            vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+            vec![(CONTEXT, Srgb8::new([4, 5, 6]))],
             vec![(OPACITY, 0.5), (OpacityInputId::new(9), 0.5)],
         )),
         Err(BindingError::UnexpectedOpacityBinding {
             input: OpacityInputId::new(9),
+        })
+    );
+    assert_eq!(
+        graph.evaluate(&AppearanceBindings::new(
+            vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+            vec![
+                (CONTEXT, Srgb8::new([4, 5, 6])),
+                (SurfaceInputPortId::new(9), Srgb8::new([7, 8, 9])),
+            ],
+            vec![(OPACITY, 0.5)],
+        )),
+        Err(BindingError::UnexpectedSurfaceInputBinding {
+            input: SurfaceInputPortId::new(9),
         })
     );
 }

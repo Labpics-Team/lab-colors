@@ -3,7 +3,7 @@ use proptest::prelude::*;
 use crate::appearance::{
     AppearanceBindings, AppearanceGraphSpec, ColorInputId, CompositionProfileV1, OccurrenceId,
     OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, PointOpacityOverSurfaceV1, SurfaceId,
-    SurfaceSpec,
+    SurfaceInputPortId, SurfaceSpec,
 };
 use crate::constraints::{BoundAssessment, Wcag22Srgb8V1, assess};
 use crate::wcag22::{
@@ -107,7 +107,7 @@ fn modeled_target_has_no_binding_or_source_capability() {
 
 fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2] {
     let source = ColorInputId::new(0);
-    let backdrop = ColorInputId::new(1);
+    let backdrop = SurfaceInputPortId::new(1);
     let opacity = OpacityInputId::new(0);
     let solid = PaintId::new(0);
     let translucent = PaintId::new(1);
@@ -117,7 +117,8 @@ fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2
     let first = OccurrenceId::new(0);
     let second = OccurrenceId::new(1);
     let graph = AppearanceGraphSpec::new(
-        vec![source, backdrop],
+        vec![source],
+        vec![backdrop],
         vec![opacity],
         vec![
             PaintSpec::Solid {
@@ -133,7 +134,7 @@ fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2
         vec![
             SurfaceSpec::Input {
                 id: backdrop_surface,
-                color: backdrop,
+                port: backdrop,
             },
             SurfaceSpec::FromOccurrence {
                 id: first_surface,
@@ -163,7 +164,8 @@ fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2
     .expect("acyclic typed graph must compile");
     let evaluation = graph
         .evaluate(&AppearanceBindings::new(
-            vec![(source, [0, 64, 255]), (backdrop, [255, 255, 255])],
+            vec![(source, crate::Srgb8::new([0, 64, 255]))],
+            vec![(backdrop, crate::Srgb8::new([255, 255, 255]))],
             vec![(opacity, 0.5)],
         ))
         .expect("complete bindings must evaluate");
