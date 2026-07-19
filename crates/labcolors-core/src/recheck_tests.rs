@@ -717,6 +717,20 @@ fn evidence_capacity_overflow_is_rejected_before_compositing() {
 }
 
 #[test]
+fn ready_recheck_binds_surface_indices_before_the_case_product() {
+    let source = include_str!("recheck.rs");
+    let (_, ready_tail) = source
+        .split_once("    fn recheck_ready(")
+        .expect("ready recheck function");
+    let (ready_body, _) = ready_tail
+        .split_once("\n    }\n}\n\n/// Вычисляет")
+        .expect("ready recheck body");
+
+    assert!(ready_body.contains("surface_indices"));
+    assert!(!ready_body.contains("binary_search"));
+}
+
+#[test]
 fn candidate_and_requirement_errors_are_rejected_before_compositing() {
     assert!(CompiledFixedRecheckV1::new(PAINT, vec![]).is_err());
     assert!(

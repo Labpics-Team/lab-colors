@@ -218,16 +218,6 @@ pub(crate) enum ObservationSnapshot<'a> {
     },
 }
 
-impl ObservationSnapshot<'_> {
-    pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
-        match self {
-            Self::Waiting { schema, .. }
-            | Self::Ready { schema, .. }
-            | Self::Stale { schema, .. } => schema,
-        }
-    }
-}
-
 /// Успешное обновление либо exact-idempotent replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpdateDisposition {

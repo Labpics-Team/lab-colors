@@ -117,42 +117,78 @@ impl CompiledFixedRecheckV1 {
             });
         }
         let snapshot = observation.snapshot();
-        let schema = snapshot.schema();
-        for requirement in &self.occurrences {
-            if schema.binary_search(&requirement.surface).is_err() {
-                return Err(RecheckProtocolErrorV1::MissingSurfacePort(
-                    requirement.surface,
-                ));
-            }
-        }
 
         match snapshot {
             ObservationSnapshot::Waiting {
-                stream, revision, ..
-            } => Ok(FinalRecheckOutcomeV1::Waiting(WaitingRecheckV1 {
                 stream,
                 revision,
-            })),
+                schema,
+            } => {
+                self.validate_surface_schema(schema)?;
+                Ok(FinalRecheckOutcomeV1::Waiting(WaitingRecheckV1 {
+                    stream,
+                    revision,
+                }))
+            }
             ObservationSnapshot::Stale {
                 stream,
                 revision,
                 previous,
                 schema,
-            } => Ok(FinalRecheckOutcomeV1::Stale(StaleRecheckV1 {
-                requirement: self.clone(),
-                paint,
-                stream,
-                schema: schema.to_vec().into_boxed_slice(),
-                current_revision: revision,
-                previous: previous.clone(),
-            })),
+            } => {
+                self.validate_surface_schema(schema)?;
+                Ok(FinalRecheckOutcomeV1::Stale(StaleRecheckV1 {
+                    requirement: self.clone(),
+                    paint,
+                    stream,
+                    schema: schema.to_vec().into_boxed_slice(),
+                    current_revision: revision,
+                    previous: previous.clone(),
+                }))
+            }
             ObservationSnapshot::Ready {
                 stream,
                 revision,
                 set,
                 schema,
-            } => self.recheck_ready(stream, revision, set, schema, paint),
+            } => {
+                let surface_indices = self.bind_surface_indices(schema)?;
+                self.recheck_ready(stream, revision, set, schema, &surface_indices, paint)
+            }
         }
+    }
+
+    fn surface_index(
+        schema: &[SurfaceInputPortId],
+        requirement: &ExactOccurrenceRequirementV1,
+    ) -> Result<usize, RecheckProtocolErrorV1> {
+        schema
+            .binary_search(&requirement.surface)
+            .map_err(|_| RecheckProtocolErrorV1::MissingSurfacePort(requirement.surface))
+    }
+
+    fn validate_surface_schema(
+        &self,
+        schema: &[SurfaceInputPortId],
+    ) -> Result<(), RecheckProtocolErrorV1> {
+        for requirement in &self.occurrences {
+            Self::surface_index(schema, requirement)?;
+        }
+        Ok(())
+    }
+
+    fn bind_surface_indices(
+        &self,
+        schema: &[SurfaceInputPortId],
+    ) -> Result<Vec<usize>, RecheckProtocolErrorV1> {
+        let mut surface_indices = Vec::new();
+        surface_indices
+            .try_reserve_exact(self.occurrences.len())
+            .map_err(|_| RecheckProtocolErrorV1::ResourceExhausted)?;
+        for requirement in &self.occurrences {
+            surface_indices.push(Self::surface_index(schema, requirement)?);
+        }
+        Ok(surface_indices)
     }
 
     fn recheck_ready(
@@ -161,6 +197,7 @@ impl CompiledFixedRecheckV1 {
         revision: Revision,
         set: &ObservedScenarioSet,
         schema: &[SurfaceInputPortId],
+        surface_indices: &[usize],
         paint: EncodedPaintCandidateV1,
     ) -> Result<FinalRecheckOutcomeV1, RecheckProtocolErrorV1> {
         let mut occurrences = Vec::new();
@@ -169,10 +206,7 @@ impl CompiledFixedRecheckV1 {
             .try_reserve_exact(evidence_count)
             .map_err(|_| RecheckProtocolErrorV1::ResourceExhausted)?;
         for (case_index, case) in set.cases().iter().enumerate() {
-            for requirement in &self.occurrences {
-                let surface_index = schema
-                    .binary_search(&requirement.surface)
-                    .unwrap_or_else(|_| unreachable!("surface schema was checked before recheck"));
+            for (requirement, &surface_index) in self.occurrences.iter().zip(surface_indices) {
                 let backdrop = case.bindings()[surface_index];
                 let occurrence = PointOpacityOverSurfaceV1::evaluate_admitted(
                     paint.source.bytes(),
