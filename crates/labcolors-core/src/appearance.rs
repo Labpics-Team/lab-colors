@@ -785,7 +785,7 @@ impl PointOpacityOverSurfaceV1 {
         source: [u8; 3],
         opacity: f64,
         backdrop: [u8; 3],
-    ) -> Result<[u8; 3], PointOpacityError> {
+    ) -> Result<ResolvedOccurrence, PointOpacityError> {
         crate::alpha::validate_alpha(opacity).map_err(|message| PointOpacityError { message })?;
         let opacity = if opacity == 0.0 { 0.0 } else { opacity };
         let mut paints = [None; 2];
@@ -805,8 +805,8 @@ impl PointOpacityOverSurfaceV1 {
             &mut surfaces,
             &mut occurrences,
         );
-        Ok(surfaces[1].unwrap_or_else(|| {
-            unreachable!("compiler-verified point program materializes its output Surface")
+        Ok(occurrences[0].unwrap_or_else(|| {
+            unreachable!("compiler-verified point program materializes its Occurrence")
         }))
     }
 }
@@ -997,8 +997,56 @@ impl ResolvedOccurrence {
     }
 
     #[cfg(test)]
+    pub(crate) fn modeled_srgb8_point(&self) -> ModeledSrgb8PointOccurrence {
+        ModeledSrgb8PointOccurrence {
+            visible: self.visible,
+            backdrop: self.backdrop,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visible_point_binding(&self) -> VisiblePointBindingV1 {
+        VisiblePointBindingV1(self.certificate)
+    }
+
+    #[cfg(test)]
     pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
         &self.certificate
+    }
+}
+
+/// Owned point-target для evaluator-ов финального видимого результата.
+/// Ссылки на occurrence/certificate здесь нет: evaluator структурно не может
+/// подменить скомпозитированный stimulus authored source-цветом.
+#[derive(Debug, Clone, Copy)]
+#[cfg(test)]
+pub(crate) struct ModeledSrgb8PointOccurrence {
+    visible: [u8; 3],
+    backdrop: [u8; 3],
+}
+
+#[cfg(test)]
+impl ModeledSrgb8PointOccurrence {
+    pub(crate) fn visible(self) -> [u8; 3] {
+        self.visible
+    }
+
+    pub(crate) fn backdrop(self) -> [u8; 3] {
+        self.backdrop
+    }
+}
+
+/// Physical identity modeled point-occurrence, связанная с exact source-over
+/// proof. Assessment не может пережить смену Paint/Surface/alpha лишь потому,
+/// что финальные байты случайно совпали.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) struct VisiblePointBindingV1(SourceOverCertificateV1);
+
+#[cfg(test)]
+impl VisiblePointBindingV1 {
+    pub(crate) fn certificate(self) -> SourceOverCertificateV1 {
+        self.0
     }
 }
 

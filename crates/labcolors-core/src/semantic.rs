@@ -2667,13 +2667,15 @@ pub(crate) fn resolve_pair_label(
             )));
         }
     };
-    let surface_rgb = match PointOpacityOverSurfaceV1::evaluate(source_rgb, alpha, context_rgb) {
-        Ok(surface) => surface,
-        Err(error) => {
-            return pair_label_opacity_input_error(error.message());
-        }
-    };
+    let surface_occurrence =
+        match PointOpacityOverSurfaceV1::evaluate(source_rgb, alpha, context_rgb) {
+            Ok(occurrence) => occurrence,
+            Err(error) => {
+                return pair_label_opacity_input_error(error.message());
+            }
+        };
     // Финальные байты реально собранной surface становятся контекстом solve.
+    let surface_rgb = surface_occurrence.visible();
     let surface_hex = crate::alpha::hex_from_srgb8(surface_rgb);
     let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
         // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее

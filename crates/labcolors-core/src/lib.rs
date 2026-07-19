@@ -15,6 +15,8 @@ pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
 pub mod config;
+#[cfg(test)]
+pub(crate) mod constraints;
 pub mod glow;
 pub mod hash;
 pub mod ladder;
@@ -45,6 +47,9 @@ mod agnostic_gates;
 
 #[cfg(test)]
 mod appearance_graph_tests;
+
+#[cfg(test)]
+mod constraint_tests;
 
 #[cfg(test)]
 mod wcag22_tests;
