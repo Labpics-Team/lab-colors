@@ -20,6 +20,7 @@
 use std::collections::BTreeSet;
 
 use crate::Srgb8;
+pub(crate) use crate::composition::CompositionProfileV1;
 
 /// Непрозрачный handle цветового входа. Число — только идентичность.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -82,15 +83,6 @@ impl OccurrenceId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
-}
-
-/// Версионированная identity математической операции композиции.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompositionProfileV1 {
-    /// Straight-alpha source-over в encoded-sRGB8: по одному округлению
-    /// финального канала. Это exact-профиль Lab Colors, не обещание о
-    /// произвольном браузерном или HDR pipeline.
-    EncodedSrgb8SourceOverV1,
 }
 
 /// Структурная identity статической физической программы. Она описывает
@@ -895,9 +887,10 @@ impl PointOpacityOverSurfaceV1 {
         opacity: f64,
         backdrop: [u8; 3],
     ) -> Result<ResolvedOccurrence, PointOpacityError> {
-        crate::composition::validate_alpha(opacity)
-            .map_err(|message| PointOpacityError { message })?;
-        let opacity = if opacity == 0.0 { 0.0 } else { opacity };
+        let opacity =
+            crate::composition::AdmittedOpacityV1::new(opacity).map_err(|_| PointOpacityError {
+                message: format!("alpha вне конечного [0,1]: {opacity}"),
+            })?;
         Ok(Self::evaluate_value(source, opacity, backdrop))
     }
 
@@ -908,33 +901,35 @@ impl PointOpacityOverSurfaceV1 {
         opacity: crate::composition::AdmittedOpacityV1,
         backdrop: [u8; 3],
     ) -> ResolvedOccurrence {
-        Self::evaluate_value(source, opacity.value(), backdrop)
+        Self::evaluate_value(source, opacity, backdrop)
     }
 
-    fn evaluate_value(source: [u8; 3], opacity: f64, backdrop: [u8; 3]) -> ResolvedOccurrence {
+    fn evaluate_value(
+        source: [u8; 3],
+        opacity: crate::composition::AdmittedOpacityV1,
+        backdrop: [u8; 3],
+    ) -> ResolvedOccurrence {
         let mut paints = [None; 2];
         let mut surfaces = [None; 2];
         let mut occurrences = [None; 1];
         POINT_OPACITY_OVER_SURFACE_V1.execute_into(
-            |id| match id {
-                POINT_SOURCE => Srgb8::new(source),
-                _ => unreachable!("sealed point program has one ColorInput port"),
+            |id| {
+                debug_assert_eq!(id, POINT_SOURCE);
+                Srgb8::new(source)
             },
-            |id| match id {
-                POINT_CONTEXT => Srgb8::new(backdrop),
-                _ => unreachable!("sealed point program has one SurfaceInput port"),
+            |id| {
+                debug_assert_eq!(id, POINT_CONTEXT);
+                Srgb8::new(backdrop)
             },
-            |id| match id {
-                POINT_OPACITY => opacity,
-                _ => unreachable!("sealed point program has one OpacityInput port"),
+            |id| {
+                debug_assert_eq!(id, POINT_OPACITY);
+                opacity
             },
             &mut paints,
             &mut surfaces,
             &mut occurrences,
         );
-        occurrences[0].unwrap_or_else(|| {
-            unreachable!("compiler-verified point program materializes its Occurrence")
-        })
+        occurrences[0].unwrap_or_else(|| unreachable!())
     }
 }
 
@@ -1006,13 +1001,13 @@ impl AppearanceBindings {
     }
 }
 
-/// Материализованный point Paint. Значение alpha хранится битами, чтобы
-/// equality/certificate не теряли binary64 representation.
+/// Материализованный point Paint. Тип alpha делает повторную admission перед
+/// каждым occurrence невозможной; его биты без потерь переходят в certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedPaint {
     id: PaintId,
     rgb: Srgb8,
-    opacity_bits: u64,
+    opacity: crate::composition::AdmittedOpacityV1,
 }
 
 impl ResolvedPaint {
@@ -1023,7 +1018,7 @@ impl ResolvedPaint {
 
     #[cfg(test)]
     pub(crate) fn opacity_bits(&self) -> u64 {
-        self.opacity_bits
+        self.opacity.bits()
     }
 }
 
@@ -1033,23 +1028,16 @@ impl ResolvedPaint {
 pub(crate) struct SourceOverCertificateV1 {
     profile: CompositionProfileV1,
     subject_rgb: [u8; 3],
-    subject_opacity_bits: u64,
+    subject_opacity: crate::composition::AdmittedOpacityV1,
     backdrop_rgb: [u8; 3],
     output_rgb: [u8; 3],
 }
 
 impl SourceOverCertificateV1 {
     #[cfg(test)]
-    pub(crate) fn replay(&self) -> Result<[u8; 3], String> {
-        match self.profile {
-            CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
-                crate::composition::source_over_srgb8(
-                    self.subject_rgb,
-                    f64::from_bits(self.subject_opacity_bits),
-                    self.backdrop_rgb,
-                )
-            }
-        }
+    pub(crate) fn replay(&self) -> [u8; 3] {
+        self.profile
+            .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
     #[cfg(test)]
@@ -1062,7 +1050,7 @@ impl SourceOverCertificateV1 {
     }
 
     pub(crate) fn subject_opacity_bits(&self) -> u64 {
-        self.subject_opacity_bits
+        self.subject_opacity.bits()
     }
 
     pub(crate) fn backdrop_rgb(&self) -> [u8; 3] {
@@ -1336,14 +1324,12 @@ impl CompiledAppearanceProgram<'_> {
                 .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
             surfaces[index].1
         };
-        let opacity_value = |id: OpacityInputId| -> f64 {
+        let opacity_value = |id: OpacityInputId| -> crate::composition::AdmittedOpacityV1 {
             let index = opacities
                 .binary_search_by_key(&id, |(bound, _)| *bound)
                 .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
-            let alpha = opacities[index].1;
-            // Straight alpha — не signed quantity: ±0 описывают один
-            // физический state и не должны минтить разные certificate bits.
-            if alpha == 0.0 { 0.0 } else { alpha }
+            crate::composition::AdmittedOpacityV1::new(opacities[index].1)
+                .unwrap_or_else(|_| unreachable!("opacity bindings were admitted before execution"))
         };
 
         let mut resolved_paints: Vec<Option<ResolvedPaint>> = vec![None; self.paints.len()];
@@ -1402,7 +1388,7 @@ impl CompiledAppearanceProgram<'_> {
     ) where
         C: Fn(ColorInputId) -> Srgb8,
         S: Fn(SurfaceInputPortId) -> Srgb8,
-        O: Fn(OpacityInputId) -> f64,
+        O: Fn(OpacityInputId) -> crate::composition::AdmittedOpacityV1,
     {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
         debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
@@ -1413,21 +1399,18 @@ impl CompiledAppearanceProgram<'_> {
                 CompiledPaintSpec::Solid { id, color } => ResolvedPaint {
                     id,
                     rgb: color_value(color),
-                    opacity_bits: 1.0f64.to_bits(),
+                    opacity: crate::composition::AdmittedOpacityV1::OPAQUE,
                 },
                 CompiledPaintSpec::Opacity {
                     id,
                     source,
                     opacity,
                 } => {
-                    let source = resolved_paints[source]
-                        .unwrap_or_else(|| unreachable!("Paint dependency precedes its consumer"));
-                    let effective_alpha =
-                        f64::from_bits(source.opacity_bits) * opacity_value(opacity);
+                    let source = resolved_paints[source].unwrap_or_else(|| unreachable!());
                     ResolvedPaint {
                         id,
                         rgb: source.rgb,
-                        opacity_bits: effective_alpha.to_bits(),
+                        opacity: source.opacity.multiply(opacity_value(opacity)),
                     }
                 }
             };
@@ -1441,9 +1424,7 @@ impl CompiledAppearanceProgram<'_> {
                         CompiledSurfaceSpec::Input { port, .. } => surface_value(port),
                         CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => Srgb8::new(
                             resolved_occurrences[occurrence]
-                                .unwrap_or_else(|| {
-                                    unreachable!("occurrence precedes surfaceFrom in render topo")
-                                })
+                                .unwrap_or_else(|| unreachable!())
                                 .visible(),
                         ),
                     };
@@ -1451,24 +1432,18 @@ impl CompiledAppearanceProgram<'_> {
                 }
                 RenderNode::Occurrence(index) => {
                     let spec = &self.occurrences[index];
-                    let subject = resolved_paints[spec.subject]
-                        .unwrap_or_else(|| unreachable!("Paint DAG is evaluated first"));
-                    let backdrop = resolved_surfaces[spec.against].unwrap_or_else(|| {
-                        unreachable!("backdrop precedes occurrence in render topo")
-                    });
-                    let visible = match spec.profile {
-                        CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
-                            crate::composition::source_over_srgb8_validated(
-                                subject.rgb.bytes(),
-                                f64::from_bits(subject.opacity_bits),
-                                backdrop.bytes(),
-                            )
-                        }
-                    };
+                    let subject = resolved_paints[spec.subject].unwrap_or_else(|| unreachable!());
+                    let backdrop =
+                        resolved_surfaces[spec.against].unwrap_or_else(|| unreachable!());
+                    let visible = spec.profile.composite(
+                        subject.rgb.bytes(),
+                        subject.opacity,
+                        backdrop.bytes(),
+                    );
                     let certificate = SourceOverCertificateV1 {
                         profile: spec.profile,
                         subject_rgb: subject.rgb.bytes(),
-                        subject_opacity_bits: subject.opacity_bits,
+                        subject_opacity: subject.opacity,
                         backdrop_rgb: backdrop.bytes(),
                         output_rgb: visible,
                     };

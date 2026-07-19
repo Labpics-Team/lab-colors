@@ -1801,8 +1801,9 @@ impl GlowIndeterminateResolved {
 /// ([`pole`](Self::pole)) держит [`floor`](Self::floor) по всему коридору
 /// `[чёрный, белый]` ([`crate::material`]). [`worst_contrast`](Self::worst_contrast)
 /// и [`alpha_status`](Self::alpha_status) пересчитываемы потребителем из эмитированных
-/// `01`/`02`: ядро и официальный `packages/colors/effective-bg.js::compositeOver`
-/// используют один byte-scale affine order `B + α·(T−B)`.
+/// `01`/`02` только по зафиксированному continuous interval profile
+/// [`crate::material`]: byte-scale affine order `B + α·(T−B)` исполняется без
+/// промежуточного округления в sRGB8, затем расширяется conservative envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialResolved {
     tone_hex: String,

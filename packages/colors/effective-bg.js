@@ -1,4 +1,5 @@
-// Effective background resolution — zero dependencies.
+// Package-internal effective background traversal. Point composition belongs
+// to the WASM Core; this shell only parses CSS, walks host state and packs RGB.
 //
 // `labcolors` resolves roles against a *solid* background. A real UI surface is
 // often translucent (a panel at `rgba(…, .8)` over its parents) or has no
@@ -28,6 +29,8 @@
 // named colours beyond `transparent` — are NOT parsed and currently become a
 // dropped layer for compatibility. That is not safe evidence: pass the
 // background explicitly when any unsupported layer affects the decision.
+
+import { __over } from "./pkg/labcolors.js";
 
 /** @typedef {[number, number, number, number]} Rgba  r,g,b in 0..255, a in 0..1 */
 
@@ -62,6 +65,7 @@ export function parseCssColor(css) {
 
   if (s[0] === "#") {
     const h = s.slice(1);
+    if (!/^[0-9a-f]+$/u.test(h)) return null;
     if (h.length === 3 || h.length === 4) {
       const r = parseInt(h[0] + h[0], 16);
       const g = parseInt(h[1] + h[1], 16);
@@ -81,15 +85,38 @@ export function parseCssColor(css) {
 
   const m = s.match(/^rgba?\(([^)]+)\)$/);
   if (!m) return null;
-  // Split on commas or whitespace and an optional "/" alpha separator.
-  const parts = m[1].split(/[,\s/]+/).filter((p) => p.length > 0);
-  if (parts.length < 3) return null;
-  const chan = (p) => (p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p));
-  const r = chan(parts[0]);
-  const g = chan(parts[1]);
-  const b = chan(parts[2]);
-  const a = parts.length >= 4 ? (parts[3].endsWith("%") ? parseFloat(parts[3]) / 100 : parseFloat(parts[3])) : 1;
-  if ([r, g, b, a].some((v) => Number.isNaN(v))) return null;
+  const body = m[1].trim();
+  let channels;
+  let alphaToken = null;
+  if (body.includes(",")) {
+    if (body.includes("/")) return null;
+    const parts = body.split(",").map((part) => part.trim());
+    if (parts.some((part) => part.length === 0) || (parts.length !== 3 && parts.length !== 4)) {
+      return null;
+    }
+    channels = parts.slice(0, 3);
+    if (parts.length === 4) alphaToken = parts[3];
+  } else {
+    const slash = body.split("/").map((part) => part.trim());
+    if (slash.length > 2 || slash.some((part) => part.length === 0)) return null;
+    channels = slash[0].split(/\s+/u);
+    if (channels.length !== 3) return null;
+    if (slash.length === 2) {
+      const alphaParts = slash[1].split(/\s+/u);
+      if (alphaParts.length !== 1) return null;
+      alphaToken = alphaParts[0];
+    }
+  }
+  const chan = (p) => {
+    const pct = p.endsWith("%");
+    const value = cssNumber(pct ? p.slice(0, -1) : p);
+    return value === null ? null : pct ? (value / 100) * 255 : value;
+  };
+  const r = chan(channels[0]);
+  const g = chan(channels[1]);
+  const b = chan(channels[2]);
+  const a = alphaToken === null ? 1 : oklchAlpha(alphaToken);
+  if ([r, g, b, a].some((value) => value === null)) return null;
   return [clamp255(r), clamp255(g), clamp255(b), Math.min(1, Math.max(0, a))];
 }
 
@@ -126,13 +153,22 @@ function parseOklch(inner) {
 
   const hRad = (H * Math.PI) / 180;
   const lin = oklabToLinearRgb(L, C * Math.cos(hRad), C * Math.sin(hRad));
-  const byte = (i) => Math.round(clamp255(linearToSrgb(lin[i]) * 255));
-  return [byte(0), byte(1), byte(2), a];
+  if (lin.some((channel) => !Number.isFinite(channel))) return null;
+  const encoded = lin.map((channel) => linearToSrgb(channel) * 255);
+  if (encoded.some((channel) => !Number.isFinite(channel))) return null;
+  return [
+    Math.round(clamp255(encoded[0])),
+    Math.round(clamp255(encoded[1])),
+    Math.round(clamp255(encoded[2])),
+    a,
+  ];
 }
 
 /** Strict CSS `<number>` (no trailing junk, unlike `parseFloat`), else `null`. */
 function cssNumber(tok) {
-  return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(tok) ? parseFloat(tok) : null;
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(tok)) return null;
+  const value = Number(tok);
+  return Number.isFinite(value) ? value : null;
 }
 
 /** L: a percentage → `/100` into `0..1`; a bare number is already `0..1`; `none`
@@ -170,29 +206,6 @@ function oklchAlpha(tok) {
   const n = cssNumber(pct ? tok.slice(0, -1) : tok);
   if (n === null) return null;
   return Math.min(1, Math.max(0, pct ? n / 100 : n));
-}
-
-/**
- * Source-over composite of `top` onto `bottom` (Porter-Duff "over").
- *
- * @param {Rgba} top
- * @param {Rgba} bottom
- * @returns {Rgba}
- */
-export function compositeOver(top, bottom) {
-  const at = top[3];
-  const ab = bottom[3];
-  // Affine-форма математически равна expanded source-over и фиксирует
-  // объявленный byte-scale binary64 operation order. Это numerical profile,
-  // не утверждение глобальной монотонности: округление может менять локальный
-  // порядок соседних значений, а legacy WCAG EOTF дополнительно имеет seam.
-  const a = ab + at * (1 - ab);
-  if (a === 0) return [0, 0, 0, 0];
-  const c = (i) => {
-    const bottomPremultiplied = bottom[i] * ab;
-    return (bottomPremultiplied + at * (top[i] - bottomPremultiplied)) / a;
-  };
-  return [c(0), c(1), c(2), a];
 }
 
 /**
@@ -361,22 +374,37 @@ export function lerpPairHex(pair, t) {
   return toHex([linearToSrgb(lin[0]) * 255, linearToSrgb(lin[1]) * 255, linearToSrgb(lin[2]) * 255]);
 }
 
+const INVALID_RGB24 = 0xFFFFFFFF;
+
+/** Квантует допустимый CSS parser-result в identity encoded-sRGB8. Это только
+ * boundary packing; source-over и его округление принадлежат Core. */
+function packRgb24(rgb) {
+  const byte = (value) => Math.round(clamp255(Number.isFinite(value) ? value : 0));
+  return ((byte(rgb[0]) << 16) | (byte(rgb[1]) << 8) | byte(rgb[2])) >>> 0;
+}
+
+function hexFromRgb24(rgb24) {
+  return `#${rgb24.toString(16).padStart(6, "0").toUpperCase()}`;
+}
+
 /**
- * Compose an ordered stack of colour layers (front-to-back) over an opaque base
- * into a single opaque `#RRGGBB`. Pure — no DOM; package-internal until the
- * occurrence observer replaces this compatibility estimate.
+ * Канонический point-stack: каждый слой материализуется отдельным occurrence,
+ * поэтому Core округляет каждый edge, а не только итог всей цепочки.
  *
- * @param {Rgba[]} layersFrontToBack  index 0 is the topmost layer
- * @param {Rgba} opaqueBase  must have alpha 1
+ * @param {Rgba[]} layersFrontToBack index 0 is the topmost layer
+ * @param {Rgba} opaqueBase must have alpha 1
  * @returns {string}
  */
-export function compositeStackToHex(layersFrontToBack, opaqueBase) {
-  let result = opaqueBase;
-  // Apply from the back (closest to base) forward, so index 0 lands on top.
+function compositePointStack(layersFrontToBack, opaqueBase) {
+  let result = packRgb24(opaqueBase);
   for (let i = layersFrontToBack.length - 1; i >= 0; i--) {
-    result = compositeOver(layersFrontToBack[i], result);
+    const layer = layersFrontToBack[i];
+    result = __over(packRgb24(layer), layer[3], result);
+    if (result === INVALID_RGB24) {
+      throw new RangeError("effectiveBackground: Core rejected an admitted point layer");
+    }
   }
-  return toHex(result);
+  return hexFromRgb24(result);
 }
 
 /**
@@ -393,7 +421,7 @@ export function compositeStackToHex(layersFrontToBack, opaqueBase) {
  *
  * @param {*} element
  * @param {object} [opts]
- * @param {string} [opts.fallback="#FFFFFF"]  base when the chain is fully translucent
+ * @param {string} [opts.fallback="#FFFFFF"] opaque supported base when the chain is fully translucent
  * @param {(el: *) => { getPropertyValue: (p: string) => string }} [opts.getStyle]
  * @param {(el: *) => *} [opts.parentOf]
  * @param {number} [opts.maxDepth=64]  guard against detached/cyclic chains
@@ -401,6 +429,12 @@ export function compositeStackToHex(layersFrontToBack, opaqueBase) {
  */
 export function effectiveBackground(element, opts = {}) {
   const fallback = opts.fallback ?? "#FFFFFF";
+  const admittedFallback = parseCssColor(fallback);
+  if (!admittedFallback || admittedFallback[3] !== 1) {
+    throw new RangeError(
+      "effectiveBackground: fallback must be an opaque supported colour",
+    );
+  }
   const getStyle =
     opts.getStyle ?? ((el) => (typeof getComputedStyle === "function" ? getComputedStyle(el) : { getPropertyValue: () => "" }));
   const parentOf = opts.parentOf ?? ((el) => el.parentElement);
@@ -415,7 +449,7 @@ export function effectiveBackground(element, opts = {}) {
   const layers = [];
   let el = element;
   let depth = 0;
-  let base = parseCssColor(fallback) ?? [255, 255, 255, 1];
+  let base = admittedFallback;
 
   while (el && depth < maxDepth) {
     const style = getStyle(el);
@@ -441,5 +475,5 @@ export function effectiveBackground(element, opts = {}) {
     depth++;
   }
 
-  return compositeStackToHex(layers, base);
+  return compositePointStack(layers, base);
 }

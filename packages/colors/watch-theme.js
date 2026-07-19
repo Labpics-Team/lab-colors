@@ -48,7 +48,7 @@ const CANCELLED = Symbol("watchTheme.cancelled");
  *   When supplied, it must be a non-empty string; invalid explicit evidence is
  *   rejected instead of being reinterpreted as the omitted-input fallback.
  * @param {*} [options.target=element]  Element to write the variables onto.
- * @param {string} [options.fallback="#FFFFFF"]  Base for a fully-translucent chain.
+ * @param {string} [options.fallback="#FFFFFF"]  Opaque supported base for a fully-translucent chain.
  * @param {boolean} [options.observe=true]  Auto-refresh on `style`/`class`
  *   attribute changes in the observed subtree.
  * @param {(error: unknown) => void} [options.onError]  Receives failures from

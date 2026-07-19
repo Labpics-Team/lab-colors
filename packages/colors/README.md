@@ -58,10 +58,17 @@ const result = engine.resolveTheme("#FFFFFF", "light");
 applyTheme(document.documentElement, result);   // записать все --lab-* в элемент
 ```
 
+Параллельные `init()` разделяют одну загрузку; повторный вызов после успеха —
+no-op. `initSync()` нельзя смешивать с ещё не завершившимся `init()`: фасад
+отклонит гонку до создания второго WASM-инстанса. `init()` разрешается в
+`void`, `initSync()` возвращает `void`; raw WebAssembly exports они не раскрывают.
+
 ### Реактивное отслеживание
 
 `watchTheme` синхронизирует переменные с явно переданным фоном или опорной
-оценкой поддерживаемой цепочки `background-color`.
+оценкой поддерживаемой цепочки `background-color`. Каждый поддерживаемый слой
+этой цепочки проходит тот же exact encoded-sRGB8 point-композитор Core, что и
+occurrence-граф; отдельной JS-формулы и публичного compositor API нет.
 
 ```ts
 import init, { LabColors, watchTheme } from "@labpics/colors";
@@ -381,7 +388,7 @@ interface WatchThemeOptions {
   theme: ThemeName;
   background?: string | (() => string);  // явный фон (если автоматический невозможен)
   target?: HTMLElement;                  // куда писать переменные (по умолчанию: element)
-  fallback?: string;                     // фон при полностью прозрачной цепочке (по умолчанию "#FFFFFF")
+  fallback?: string;                     // непрозрачная поддерживаемая база (по умолчанию "#FFFFFF")
   observe?: boolean;                     // авто-обновление при style/class в поддереве (по умолчанию true)
   onError?: (error: unknown) => void;     // ошибки автоматического observer-refresh
   root?: Node;                           // корень MutationObserver (по умолчанию: documentElement)
@@ -428,7 +435,7 @@ interface AdaptThemeOptions {
   background?: string | string[] | (() => string | string[]);
                                      // один hex или несколько образцов фона (наихудший учитывается)
   target?: HTMLElement;              // куда писать переменные (по умолчанию: element)
-  fallback?: string;                 // фон при прозрачной цепочке (по умолчанию "#FFFFFF")
+  fallback?: string;                 // непрозрачная поддерживаемая база (по умолчанию "#FFFFFF")
   dropFraction?: number;             // запас контраста до пересчёта (по умолчанию 0.2)
   sustainMs?: number;                // минимальное время удержания нарушения (по умолчанию 120)
   dwellMs?: number;                  // минимальный интервал между пересчётами (по умолчанию 250)
