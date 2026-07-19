@@ -49,11 +49,29 @@ mod agnostic_gates;
 #[cfg(test)]
 mod appearance_graph_tests;
 
-#[cfg(test)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private F2 admission is production-compiled before its future session façade exists"
+    )
+)]
 pub(crate) mod observation;
 
 #[cfg(test)]
 mod observation_tests;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private V1a is production-compiled before a real terminal consumer can own it"
+    )
+)]
+pub(crate) mod recheck;
+
+#[cfg(test)]
+mod recheck_tests;
 
 #[cfg(test)]
 mod constraint_tests;

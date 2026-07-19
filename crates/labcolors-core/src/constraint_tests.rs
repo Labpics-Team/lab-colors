@@ -5,7 +5,10 @@ use crate::appearance::{
     OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, PointOpacityOverSurfaceV1, SurfaceId,
     SurfaceInputPortId, SurfaceSpec,
 };
-use crate::constraints::{BoundAssessment, Wcag22Srgb8V1, assess};
+use crate::constraints::{
+    BoundAssessment, BoundVerdict, Wcag22Srgb8CapabilityV1, Wcag22Srgb8EvaluatorIdentityV1,
+    Wcag22Srgb8V1, assess,
+};
 use crate::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, Wcag22ProfileIdV1,
     evaluate_wcag22_srgb8, wcag22_profile_v1,
@@ -25,11 +28,19 @@ fn wcag_assessment(
     opacity: f64,
     backdrop: [u8; 3],
     criterion: Wcag22CriterionV1,
-) -> BoundAssessment<crate::appearance::VisiblePointBindingV1, Wcag22ProfileIdV1, Wcag22AssessmentV1>
-{
+) -> BoundAssessment<
+    crate::appearance::VisiblePointBindingV1,
+    Wcag22Srgb8EvaluatorIdentityV1,
+    Wcag22ProfileIdV1,
+    Wcag22Srgb8CapabilityV1,
+    Wcag22CriterionV1,
+    Wcag22AssessmentV1,
+> {
     let occurrence = point_occurrence(source, opacity, backdrop);
-    assess(&occurrence, &Wcag22Srgb8V1, criterion)
-        .expect("proof-bound WCAG evaluator must decide every admitted sRGB8 pair")
+    let BoundVerdict::Pass(assessment) = assess(&occurrence, &Wcag22Srgb8V1, criterion) else {
+        panic!("proof-bound WCAG evaluator must decide every admitted sRGB8 pair");
+    };
+    assessment
 }
 
 #[test]
@@ -45,13 +56,14 @@ fn wcag_reads_final_visible_occurrence_in_measurement_order() {
         measurement,
         decision,
         ..
-    } = report.assessment()
+    } = report.outcome()
     else {
         panic!("required invocation cannot become NotEvaluated");
     };
     assert_eq!(measurement.foreground, [128, 128, 128]);
     assert_eq!(measurement.background, [255, 255, 255]);
     assert_eq!(*decision, Wcag22ApplicableDecisionV1::Fail);
+    assert_eq!(report.invocation(), &Wcag22CriterionV1::Sc143TextDefault);
     assert_eq!(
         report.binding().program_occurrence().occurrence(),
         OccurrenceId::new(0)
@@ -178,20 +190,22 @@ fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2
 #[test]
 fn equal_physics_under_distinct_occurrence_ids_keeps_distinct_bindings() {
     let [first, second] = two_equal_physical_occurrences();
-    let first_report = assess(
+    let BoundVerdict::Pass(first_report) = assess(
         &first,
         &Wcag22Srgb8V1,
         Wcag22CriterionV1::Sc1411UiComponentOrState,
-    )
-    .expect("first assessment");
-    let second_report = assess(
+    ) else {
+        panic!("first assessment failed");
+    };
+    let BoundVerdict::Pass(second_report) = assess(
         &second,
         &Wcag22Srgb8V1,
         Wcag22CriterionV1::Sc1411UiComponentOrState,
-    )
-    .expect("second assessment");
+    ) else {
+        panic!("second assessment failed");
+    };
 
-    assert_eq!(first_report.assessment(), second_report.assessment());
+    assert_eq!(first_report.outcome(), second_report.outcome());
     assert_ne!(first_report.binding(), second_report.binding());
 }
 
@@ -210,7 +224,7 @@ fn same_ids_and_final_pair_do_not_erase_subject_or_alpha_provenance() {
         Wcag22CriterionV1::Sc143TextDefault,
     );
 
-    assert_eq!(transparent_black.assessment(), opaque_white.assessment());
+    assert_eq!(transparent_black.outcome(), opaque_white.outcome());
     assert_ne!(transparent_black.binding(), opaque_white.binding());
 }
 
@@ -227,14 +241,15 @@ proptest! {
         let final_backdrop = occurrence.backdrop();
         let target = occurrence.modeled_srgb8_point();
         for criterion in Wcag22CriterionV1::ALL {
-            let report = assess(&occurrence, &Wcag22Srgb8V1, criterion)
-                .expect("finite WCAG table must decide every admitted pair");
+            let BoundVerdict::Pass(report) = assess(&occurrence, &Wcag22Srgb8V1, criterion) else {
+                return Err(TestCaseError::fail("finite WCAG table rejected an admitted pair"));
+            };
             let standalone = evaluate_wcag22_srgb8(final_visible, final_backdrop, criterion)
                 .expect("same admitted pair must be decided by standalone evaluator");
 
             prop_assert_eq!(target.visible(), final_visible);
             prop_assert_eq!(target.backdrop(), final_backdrop);
-            prop_assert_eq!(report.assessment(), &standalone);
+            prop_assert_eq!(report.outcome(), &standalone);
             prop_assert_eq!(report.binding(), &occurrence.visible_point_binding());
         }
     }
@@ -256,14 +271,14 @@ fn required_criterion_is_not_replaced_by_one_hardcoded_threshold() {
     );
 
     assert!(matches!(
-        text.assessment(),
+        text.outcome(),
         Wcag22AssessmentV1::Evaluated {
             decision: Wcag22ApplicableDecisionV1::Fail,
             ..
         }
     ));
     assert!(matches!(
-        large_text.assessment(),
+        large_text.outcome(),
         Wcag22AssessmentV1::Evaluated {
             decision: Wcag22ApplicableDecisionV1::Pass,
             ..
@@ -279,7 +294,7 @@ fn bound_report_release_matches_assessment_and_registry() {
         [255, 255, 255],
         Wcag22CriterionV1::Sc143TextDefault,
     );
-    let Wcag22AssessmentV1::Evaluated { profile_id, .. } = report.assessment() else {
+    let Wcag22AssessmentV1::Evaluated { profile_id, .. } = report.outcome() else {
         panic!("required invocation cannot become NotEvaluated");
     };
 
@@ -297,4 +312,13 @@ fn wcag_adapter_contains_delegation_not_a_second_formula() {
             "adapter duplicated WCAG math marker {duplicated_math}"
         );
     }
+}
+
+#[test]
+fn exact_success_type_cannot_represent_a_target_actual_mismatch() {
+    let source = include_str!("constraints/exact.rs");
+    assert!(source.contains("pub(crate) struct ExactIdentityAssessmentV1(());"));
+    assert!(!source.contains("pub(crate) struct ExactIdentityAssessmentV1;"));
+    assert_eq!(source.matches("ExactIdentityAssessmentV1(())").count(), 2);
+    assert!(!source.contains("matched: Srgb8"));
 }
