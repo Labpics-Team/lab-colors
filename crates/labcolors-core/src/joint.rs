@@ -11,10 +11,12 @@ use crate::appearance::{
     EncodedPointPaintV1, PaintId, PointOpacityOverSurfaceV1, ResolvedOccurrence, SurfaceInputPortId,
 };
 use crate::constraints::{
-    ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
-    assess_visible_point_hard,
+    ApplicableWcag22EvaluationErrorV1, ExactPassEvidenceV1, ExactSrgb8IdentityV1,
+    ExactViolationEvidenceV1, HardDecision, Wcag22PassEvidenceV1, Wcag22Srgb8V1,
+    Wcag22ViolationEvidenceV1, assess_visible_point_hard,
 };
 use crate::observation::{RevisionBoundObservationV1, ScenarioId};
+use crate::wcag22::Wcag22CriterionV1;
 
 /// Canonical identity одного joint candidate. Число не является declaration
 /// order, расстоянием или скрытым приоритетом.
@@ -116,10 +118,17 @@ pub(crate) enum JointVisibleTargetV1 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JointHardConstraintV1 {
-    id: JointConstraintIdV1,
-    target: JointVisibleTargetV1,
-    invocation: Srgb8,
+pub(crate) enum JointHardConstraintV1 {
+    Exact {
+        id: JointConstraintIdV1,
+        target: JointVisibleTargetV1,
+        invocation: Srgb8,
+    },
+    Wcag22 {
+        id: JointConstraintIdV1,
+        target: JointVisibleTargetV1,
+        criterion: Wcag22CriterionV1,
+    },
 }
 
 impl JointHardConstraintV1 {
@@ -128,10 +137,34 @@ impl JointHardConstraintV1 {
         target: JointVisibleTargetV1,
         invocation: Srgb8,
     ) -> Self {
-        Self {
+        Self::Exact {
             id,
             target,
             invocation,
+        }
+    }
+
+    pub(crate) const fn wcag22(
+        id: JointConstraintIdV1,
+        target: JointVisibleTargetV1,
+        criterion: Wcag22CriterionV1,
+    ) -> Self {
+        Self::Wcag22 {
+            id,
+            target,
+            criterion,
+        }
+    }
+
+    const fn id(self) -> JointConstraintIdV1 {
+        match self {
+            Self::Exact { id, .. } | Self::Wcag22 { id, .. } => id,
+        }
+    }
+
+    const fn target(self) -> JointVisibleTargetV1 {
+        match self {
+            Self::Exact { target, .. } | Self::Wcag22 { target, .. } => target,
         }
     }
 }
@@ -139,7 +172,7 @@ impl JointHardConstraintV1 {
 /// Identity первой private joint topology. Она не является public Program ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointPointProgramIdentityV1 {
-    TwoPaintDerivedSurfaceExactPointV1,
+    TwoPaintDerivedSurfacePointV1,
 }
 
 /// Две связанные occurrences над одним observed root backdrop.
@@ -171,10 +204,10 @@ impl JointPointProgramV1 {
         if constraints.is_empty() {
             return Err(JointProgramErrorV1::EmptyHardConstraintSet);
         }
-        constraints.sort_unstable_by_key(|constraint| constraint.id);
+        constraints.sort_unstable_by_key(|constraint| constraint.id());
         for pair in constraints.windows(2) {
-            if pair[0].id == pair[1].id {
-                return Err(JointProgramErrorV1::DuplicateConstraint(pair[0].id));
+            if pair[0].id() == pair[1].id() {
+                return Err(JointProgramErrorV1::DuplicateConstraint(pair[0].id()));
             }
         }
         Ok(Self {
@@ -186,7 +219,7 @@ impl JointPointProgramV1 {
     }
 
     const fn identity(&self) -> JointPointProgramIdentityV1 {
-        JointPointProgramIdentityV1::TwoPaintDerivedSurfaceExactPointV1
+        JointPointProgramIdentityV1::TwoPaintDerivedSurfacePointV1
     }
 
     pub(crate) fn evaluate(
@@ -288,27 +321,44 @@ impl JointPointProgramV1 {
                 });
 
                 for constraint in self.constraints.iter().copied() {
-                    let occurrence = match constraint.target {
+                    let target = constraint.target();
+                    let occurrence = match target {
                         JointVisibleTargetV1::Lower => &lower,
                         JointVisibleTargetV1::Upper => &upper,
                     };
-                    let decision = match assess_visible_point_hard(
-                        occurrence,
-                        &ExactSrgb8IdentityV1,
-                        constraint.invocation,
-                    ) {
-                        Ok(HardDecision::Pass(evidence)) => {
-                            JointConstraintDecisionV1::Pass(evidence)
+                    let decision = match constraint {
+                        JointHardConstraintV1::Exact { invocation, .. } => {
+                            match assess_visible_point_hard(
+                                occurrence,
+                                &ExactSrgb8IdentityV1,
+                                invocation,
+                            ) {
+                                Ok(HardDecision::Pass(evidence)) => {
+                                    JointConstraintDecisionV1::Pass(evidence)
+                                }
+                                Ok(HardDecision::Violation(evidence)) => {
+                                    JointConstraintDecisionV1::Violation(evidence)
+                                }
+                                Err(error) => match error {},
+                            }
                         }
-                        Ok(HardDecision::Violation(evidence)) => {
-                            JointConstraintDecisionV1::Violation(evidence)
+                        JointHardConstraintV1::Wcag22 { criterion, .. } => {
+                            match assess_visible_point_hard(occurrence, &Wcag22Srgb8V1, criterion)
+                                .map_err(JointReportErrorV1::Evaluator)?
+                            {
+                                HardDecision::Pass(evidence) => {
+                                    JointConstraintDecisionV1::Wcag22Pass(evidence)
+                                }
+                                HardDecision::Violation(evidence) => {
+                                    JointConstraintDecisionV1::Wcag22Violation(evidence)
+                                }
+                            }
                         }
-                        Err(error) => match error {},
                     };
                     cells.push(JointConstraintCellV1 {
                         ordinal: candidate.ordinal,
-                        constraint: constraint.id,
-                        target: constraint.target,
+                        constraint: constraint.id(),
+                        target,
                         case_index,
                         decision,
                     });
@@ -325,7 +375,7 @@ impl JointPointProgramV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum JointReportErrorV1 {
     MissingRootSurface(SurfaceInputPortId),
     CandidatePaintMismatch {
@@ -334,6 +384,7 @@ pub(crate) enum JointReportErrorV1 {
         expected: PaintId,
         actual: PaintId,
     },
+    Evaluator(ApplicableWcag22EvaluationErrorV1),
     ResourceExhausted,
 }
 
@@ -351,7 +402,7 @@ pub(crate) fn checked_joint_cardinality(
     Ok((executions, cells))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct JointEvaluationMatricesV1 {
     executions: Box<[JointExecutionRecordV1]>,
     cells: Box<[JointConstraintCellV1]>,
@@ -399,21 +450,29 @@ impl JointExecutionRecordV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum JointConstraintDecisionV1 {
     Pass(ExactPassEvidenceV1),
     Violation(ExactViolationEvidenceV1),
+    Wcag22Pass(Wcag22PassEvidenceV1),
+    Wcag22Violation(Wcag22ViolationEvidenceV1),
 }
 
 impl JointConstraintDecisionV1 {
     pub(crate) const fn is_pass(&self) -> bool {
-        matches!(self, Self::Pass(_))
+        matches!(self, Self::Pass(_) | Self::Wcag22Pass(_))
     }
 
     pub(crate) fn actual(&self) -> Srgb8 {
         match self {
             Self::Pass(evidence) => evidence.actual(),
             Self::Violation(evidence) => evidence.actual(),
+            Self::Wcag22Pass(evidence) => {
+                Srgb8::new(evidence.measurement().value().measurement().foreground)
+            }
+            Self::Wcag22Violation(evidence) => {
+                Srgb8::new(evidence.measurement().value().measurement().foreground)
+            }
         }
     }
 
@@ -421,11 +480,17 @@ impl JointConstraintDecisionV1 {
         match self {
             Self::Pass(evidence) => evidence.target(),
             Self::Violation(evidence) => evidence.target(),
+            Self::Wcag22Pass(evidence) => {
+                Srgb8::new(evidence.measurement().value().measurement().background)
+            }
+            Self::Wcag22Violation(evidence) => {
+                Srgb8::new(evidence.measurement().value().measurement().background)
+            }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct JointConstraintCellV1 {
     ordinal: CandidateOrdinalV1,
     constraint: JointConstraintIdV1,
@@ -458,7 +523,7 @@ impl JointConstraintCellV1 {
 
 /// Полная матрица candidate x constraint x unique physical case плюс отдельная
 /// joint execution matrix candidate x case. Report не знает selection policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FullHardReportV1 {
     program_identity: JointPointProgramIdentityV1,
     program: JointPointProgramV1,
@@ -520,13 +585,13 @@ impl FullHardReportV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HardFeasibilityV1 {
     Infeasible(FullHardReportV1),
     NonEmpty(NonEmptyFeasibleJointTuplesV1),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NonEmptyFeasibleJointTuplesV1 {
     report: FullHardReportV1,
     feasible: Box<[CandidateOrdinalV1]>,
@@ -603,7 +668,7 @@ pub(crate) enum SelectionPolicyErrorV1 {
     NotATotalOrder,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SelectedJointTupleV1 {
     report: FullHardReportV1,
     policy: DeclaredTotalOrderV1,
@@ -644,6 +709,7 @@ impl SelectedJointTupleV1 {
                 | JointReportErrorV1::CandidatePaintMismatch { .. } => {
                     SelectedRecheckErrorV1::InvariantDrift
                 }
+                JointReportErrorV1::Evaluator(error) => SelectedRecheckErrorV1::Evaluator(error),
             })?;
         if let Some(violation) = matrices
             .cells
@@ -651,7 +717,7 @@ impl SelectedJointTupleV1 {
             .copied()
             .find(|cell| !cell.decision.is_pass())
         {
-            return Err(SelectedRecheckErrorV1::Violation(violation));
+            return Err(SelectedRecheckErrorV1::Violation(Box::new(violation)));
         }
         Ok(RevisionBoundVerifiedSelectionV1 {
             selected: self,
@@ -663,20 +729,21 @@ impl SelectedJointTupleV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SelectedRecheckErrorV1 {
     ResourceExhausted,
     InvariantDrift,
-    Violation(JointConstraintCellV1),
+    Evaluator(ApplicableWcag22EvaluationErrorV1),
+    Violation(Box<JointConstraintCellV1>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FreshJointRecheckV1 {
     executions: Box<[JointExecutionRecordV1]>,
     cells: Box<[JointConstraintCellV1]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RevisionBoundVerifiedSelectionV1 {
     selected: SelectedJointTupleV1,
     recheck: FreshJointRecheckV1,

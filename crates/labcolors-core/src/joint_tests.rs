@@ -12,6 +12,7 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
     SurfaceInputBinding,
 };
+use crate::wcag22::Wcag22CriterionV1;
 
 const ROOT: SurfaceInputPortId = SurfaceInputPortId::new(7);
 const LOWER: PaintId = PaintId::new(11);
@@ -58,6 +59,14 @@ fn exact_lower(id: u32, target: [u8; 3]) -> JointHardConstraintV1 {
     )
 }
 
+fn wcag_upper(id: u32, criterion: Wcag22CriterionV1) -> JointHardConstraintV1 {
+    JointHardConstraintV1::wcag22(
+        JointConstraintIdV1::new(id),
+        JointVisibleTargetV1::Upper,
+        criterion,
+    )
+}
+
 fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObservationV1 {
     let mut state = ObservationState::new(STREAM, vec![ROOT]).unwrap();
     state
@@ -96,7 +105,7 @@ fn linked_candidate_is_selected_only_after_upper_sees_lower_visible_surface() {
 
     assert_eq!(
         report.program_identity(),
-        JointPointProgramIdentityV1::TwoPaintDerivedSurfaceExactPointV1
+        JointPointProgramIdentityV1::TwoPaintDerivedSurfacePointV1
     );
     assert_eq!(report.executions().len(), 2);
     assert!(
@@ -141,6 +150,42 @@ fn linked_candidate_is_selected_only_after_upper_sees_lower_visible_surface() {
     assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(1));
     assert_eq!(verified.fresh_executions().len(), 1);
     assert_eq!(verified.fresh_cells().len(), 1);
+}
+
+#[test]
+fn production_wcag_constraint_classifies_real_upper_on_derived_surface() {
+    let report = program(vec![wcag_upper(1, Wcag22CriterionV1::Sc143TextDefault)])
+        .evaluate(
+            candidates(vec![
+                candidate(0, ([0x20; 3], 1.0), ([0x20; 3], 1.0)),
+                candidate(1, ([0x20; 3], 1.0), ([0xFF; 3], 1.0)),
+            ]),
+            observation(20, vec![(1, [0; 3])]),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        report.cells()[0].decision(),
+        JointConstraintDecisionV1::Wcag22Violation(_)
+    ));
+    assert!(matches!(
+        report.cells()[1].decision(),
+        JointConstraintDecisionV1::Wcag22Pass(_)
+    ));
+    assert_eq!(report.cells()[1].decision().actual(), Srgb8::new([0xFF; 3]));
+    assert_eq!(report.cells()[1].decision().target(), Srgb8::new([0x20; 3]));
+
+    let HardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+        panic!("white label must be feasible on the emitted dark fill");
+    };
+    let policy = DeclaredTotalOrderV1::new(
+        feasible.candidate_set(),
+        vec![CandidateOrdinalV1::new(0), CandidateOrdinalV1::new(1)],
+    )
+    .unwrap();
+    let verified = feasible.select(policy).recheck().unwrap();
+    assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(1));
+    assert!(verified.fresh_executions()[0].derived_surface_is_exact());
 }
 
 #[test]
