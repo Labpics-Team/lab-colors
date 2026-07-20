@@ -53,7 +53,7 @@ mod appearance_graph_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private F2 admission is production-compiled before its future session façade exists"
+        reason = "private F2 raw admission is production-compiled before its package bridge exists"
     )
 )]
 pub(crate) mod observation;
@@ -65,13 +65,25 @@ mod observation_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private V1a is production-compiled before a real terminal consumer can own it"
+        reason = "private F2 exact recheck is production-compiled before its package bridge exists"
     )
 )]
 pub(crate) mod recheck;
 
 #[cfg(test)]
 mod recheck_tests;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private F2 Session is production-compiled before C8c package integration exists"
+    )
+)]
+pub(crate) mod session;
+
+#[cfg(test)]
+mod session_tests;
 
 #[cfg_attr(
     not(test),

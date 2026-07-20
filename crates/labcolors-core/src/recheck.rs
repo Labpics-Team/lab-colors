@@ -1,12 +1,9 @@
-//! Revision-bound proof recheck одного уже заданного point Paint.
+//! Narrow revision-bound recheck одного уже заданного point Paint.
 //!
-//! Этот private-first срез не выбирает значение и не притворяется terminal
-//! consumer-ом. Он связывает только уже существующие identity: статическую
-//! физическую программу, authored Paint/Occurrence routing, реально вызванный
-//! exact evaluator и атомарный observation snapshot. Session, output codec,
-//! renderer capability и output ownership появятся только вместе с их
-//! настоящим владельцем; поэтому данный модуль выпускает evidence recheck-а,
-//! а не terminal-сертификат.
+//! Модуль не владеет raw admission или lifecycle. Construction один раз связывает
+//! compiled requirements с immutable surface schema и fixed Paint; recheck принимает
+//! только admitted [`RevisionBoundObservationV1`] и возвращает `Verified | Violation`.
+//! `Waiting | Ready | Stale | Failed` принадлежат Session.
 
 use crate::Srgb8;
 use crate::appearance::{
@@ -18,14 +15,9 @@ use crate::constraints::{
     ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
     assess_visible_point_hard,
 };
-use crate::observation::{
-    ObservationSnapshot, ObservationState, ObservationStreamId, PriorObservation, Revision,
-    RevisionBoundObservationV1, ScenarioId,
-};
+use crate::observation::{RevisionBoundObservationV1, ScenarioId};
 
 /// Один immutable exact evaluator invocation, связанный с authored occurrence.
-/// Identity/release/capability не дублируются здесь: proof получает их только
-/// из binder-а действительно вызванного evaluator-а.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExactOccurrenceRequirementV1 {
     occurrence: OccurrenceId,
@@ -34,7 +26,7 @@ pub(crate) struct ExactOccurrenceRequirementV1 {
 }
 
 impl ExactOccurrenceRequirementV1 {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         occurrence: OccurrenceId,
         surface: SurfaceInputPortId,
         invocation: Srgb8,
@@ -86,105 +78,86 @@ impl CompiledFixedRecheckV1 {
         })
     }
 
-    pub(crate) fn recheck(
-        &self,
-        observation: &ObservationState,
+    /// Construction-time binding. После него update не ищет IDs и не принимает
+    /// candidate/schema заново.
+    pub(crate) fn bind(
+        self,
+        schema: &[SurfaceInputPortId],
         paint: EncodedPointPaintV1,
-    ) -> Result<FinalRecheckOutcomeV1, RecheckProtocolErrorV1> {
+    ) -> Result<BoundFixedRecheckV1, FixedRecheckBindErrorV1> {
         if paint.id() != self.paint {
-            return Err(RecheckProtocolErrorV1::PaintMismatch {
+            return Err(FixedRecheckBindErrorV1::PaintMismatch {
                 expected: self.paint,
                 actual: paint.id(),
             });
         }
-        let snapshot = observation.snapshot();
-
-        match snapshot {
-            ObservationSnapshot::Waiting {
-                stream,
-                revision,
-                schema,
-            } => {
-                self.validate_surface_schema(schema)?;
-                Ok(FinalRecheckOutcomeV1::Waiting(WaitingRecheckV1 {
-                    stream,
-                    revision,
-                }))
-            }
-            ObservationSnapshot::Stale {
-                stream,
-                revision,
-                previous,
-                schema,
-            } => {
-                self.validate_surface_schema(schema)?;
-                Ok(FinalRecheckOutcomeV1::Stale(StaleRecheckV1 {
-                    requirement: self.clone(),
-                    paint,
-                    stream,
-                    schema: schema.to_vec().into_boxed_slice(),
-                    current_revision: revision,
-                    previous: previous.clone(),
-                }))
-            }
-            ObservationSnapshot::Ready { observation } => {
-                let surface_indices = self.bind_surface_indices(observation.schema())?;
-                self.recheck_ready(observation, &surface_indices, paint)
-            }
-        }
-    }
-
-    fn surface_index(
-        schema: &[SurfaceInputPortId],
-        requirement: &ExactOccurrenceRequirementV1,
-    ) -> Result<usize, RecheckProtocolErrorV1> {
-        schema
-            .binary_search(&requirement.surface)
-            .map_err(|_| RecheckProtocolErrorV1::MissingSurfacePort(requirement.surface))
-    }
-
-    fn validate_surface_schema(
-        &self,
-        schema: &[SurfaceInputPortId],
-    ) -> Result<(), RecheckProtocolErrorV1> {
-        for requirement in &self.occurrences {
-            Self::surface_index(schema, requirement)?;
-        }
-        Ok(())
-    }
-
-    fn bind_surface_indices(
-        &self,
-        schema: &[SurfaceInputPortId],
-    ) -> Result<Vec<usize>, RecheckProtocolErrorV1> {
         let mut surface_indices = Vec::new();
         surface_indices
             .try_reserve_exact(self.occurrences.len())
-            .map_err(|_| RecheckProtocolErrorV1::ResourceExhausted)?;
+            .map_err(|_| FixedRecheckBindErrorV1::ResourceExhausted)?;
         for requirement in &self.occurrences {
-            surface_indices.push(Self::surface_index(schema, requirement)?);
+            let index = schema
+                .binary_search(&requirement.surface)
+                .map_err(|_| FixedRecheckBindErrorV1::MissingSurfacePort(requirement.surface))?;
+            surface_indices.push(index);
         }
-        Ok(surface_indices)
+        Ok(BoundFixedRecheckV1 {
+            requirement: self,
+            paint,
+            schema: schema.to_vec().into_boxed_slice(),
+            surface_indices: surface_indices.into_boxed_slice(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixedRecheckBindErrorV1 {
+    PaintMismatch { expected: PaintId, actual: PaintId },
+    MissingSurfacePort(SurfaceInputPortId),
+    ResourceExhausted,
+}
+
+/// Prebound fixed-candidate execution plan. Его constructors принадлежат только
+/// validated compiled requirement + Session schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoundFixedRecheckV1 {
+    requirement: CompiledFixedRecheckV1,
+    paint: EncodedPointPaintV1,
+    schema: Box<[SurfaceInputPortId]>,
+    surface_indices: Box<[usize]>,
+}
+
+impl BoundFixedRecheckV1 {
+    pub(crate) const fn paint(&self) -> EncodedPointPaintV1 {
+        self.paint
     }
 
-    fn recheck_ready(
+    pub(crate) fn recheck(
         &self,
         observation: RevisionBoundObservationV1,
-        surface_indices: &[usize],
-        paint: EncodedPointPaintV1,
-    ) -> Result<FinalRecheckOutcomeV1, RecheckProtocolErrorV1> {
+    ) -> Result<FixedRecheckDecisionV1, RecheckProtocolErrorV1> {
+        if observation.schema() != self.schema.as_ref() {
+            return Err(RecheckProtocolErrorV1::ObservationSchemaMismatch);
+        }
         let set = observation.set();
+        let evidence_count =
+            checked_evidence_count(set.cases().len(), self.requirement.occurrences.len())?;
         let mut occurrences = Vec::new();
-        let evidence_count = checked_evidence_count(set.cases().len(), self.occurrences.len())?;
         occurrences
             .try_reserve_exact(evidence_count)
             .map_err(|_| RecheckProtocolErrorV1::ResourceExhausted)?;
+
         for (case_index, case) in set.cases().iter().enumerate() {
-            for (requirement, &surface_index) in self.occurrences.iter().zip(surface_indices) {
+            for (requirement, &surface_index) in self
+                .requirement
+                .occurrences
+                .iter()
+                .zip(self.surface_indices.iter())
+            {
                 let backdrop = case.bindings()[surface_index];
                 let occurrence = PointOpacityOverSurfaceV1::evaluate_admitted(
-                    paint.source().bytes(),
-                    paint.opacity(),
+                    self.paint.source().bytes(),
+                    self.paint.opacity(),
                     backdrop.bytes(),
                 );
                 let evidence = match assess_visible_point_hard(
@@ -194,11 +167,11 @@ impl CompiledFixedRecheckV1 {
                 ) {
                     Ok(HardDecision::Pass(evidence)) => evidence,
                     Ok(HardDecision::Violation(evidence)) => {
-                        return Ok(FinalRecheckOutcomeV1::Violation(ExactViolationRecheckV1 {
+                        return Ok(FixedRecheckDecisionV1::Violation(ExactViolationRecheckV1 {
                             occurrence: requirement.occurrence,
                             surface: requirement.surface,
-                            physical_program: self.physical_program,
-                            paint,
+                            physical_program: self.requirement.physical_program,
+                            paint: self.paint,
                             observation: observation.clone(),
                             case_index,
                             evidence,
@@ -207,7 +180,7 @@ impl CompiledFixedRecheckV1 {
                     Err(error) => match error {},
                 };
                 occurrences.push(ExactOccurrenceEvidenceV1 {
-                    physical_program: self.physical_program,
+                    physical_program: self.requirement.physical_program,
                     occurrence: requirement.occurrence,
                     surface: requirement.surface,
                     case_index,
@@ -216,9 +189,9 @@ impl CompiledFixedRecheckV1 {
             }
         }
 
-        Ok(FinalRecheckOutcomeV1::Verified(RevisionBoundRecheckV1 {
-            requirement: self.clone(),
-            paint,
+        Ok(FixedRecheckDecisionV1::Verified(RevisionBoundRecheckV1 {
+            requirement: self.requirement.clone(),
+            paint: self.paint,
             observation,
             occurrences: occurrences.into_boxed_slice(),
         }))
@@ -260,12 +233,6 @@ impl ExactOccurrenceEvidenceV1 {
         self.physical_program
     }
 
-    pub(crate) fn program_occurrence_binding(
-        &self,
-    ) -> crate::appearance::ProgramOccurrenceBindingV1 {
-        self.evidence.binding().program_occurrence()
-    }
-
     pub(crate) fn constraint(&self) -> ExactConstraintIdentityV1 {
         *self.evidence.identity()
     }
@@ -293,12 +260,6 @@ impl ExactOccurrenceEvidenceV1 {
     pub(crate) fn physical_certificate(&self) -> SourceOverCertificateV1 {
         self.evidence.binding().occurrence()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WaitingRecheckV1 {
-    stream: ObservationStreamId,
-    revision: Option<Revision>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +294,10 @@ impl ExactViolationRecheckV1 {
         self.paint
     }
 
+    pub(crate) const fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+
     pub(crate) fn physical_certificate(&self) -> SourceOverCertificateV1 {
         self.evidence.binding().occurrence()
     }
@@ -362,64 +327,8 @@ impl ExactViolationRecheckV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StaleRecheckV1 {
-    requirement: CompiledFixedRecheckV1,
-    paint: EncodedPointPaintV1,
-    stream: ObservationStreamId,
-    schema: Box<[SurfaceInputPortId]>,
-    current_revision: Revision,
-    previous: PriorObservation,
-}
-
-impl StaleRecheckV1 {
-    /// Presentation может сохранить только прежнее verified evidence. Метод не
-    /// вызывает evaluator, не читает `PriorObservation` как Ready и не создаёт
-    /// current claim.
-    pub(crate) fn hold(
-        &self,
-        previous: &RevisionBoundRecheckV1,
-    ) -> Result<PresentationHoldV1, HoldErrorV1> {
-        if previous.requirement != self.requirement
-            || previous.paint != self.paint
-            || previous.observation.stream() != self.stream
-            || previous.observation.schema() != self.schema.as_ref()
-            || previous.observation.revision() != self.previous.revision()
-            || previous.observation.set() != self.previous.set()
-        {
-            return Err(HoldErrorV1::PreviousEvidenceMismatch);
-        }
-        Ok(PresentationHoldV1 {
-            previous: previous.clone(),
-            current_revision: self.current_revision,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PresentationHoldV1 {
-    previous: RevisionBoundRecheckV1,
-    current_revision: Revision,
-}
-
-impl PresentationHoldV1 {
-    pub(crate) fn previous(&self) -> &RevisionBoundRecheckV1 {
-        &self.previous
-    }
-
-    pub(crate) const fn current_revision(&self) -> Revision {
-        self.current_revision
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HoldErrorV1 {
-    PreviousEvidenceMismatch,
-}
-
-/// Максимальный честный результат V1a: fixed Paint и все его exact final
-/// occurrences связаны с одной неизменяемой stream revision. Терминальные
-/// consumer-owned identities намеренно отсутствуют.
+/// Максимальный честный fixed-candidate результат: Paint и все exact final
+/// occurrences связаны с одной immutable stream revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevisionBoundRecheckV1 {
     requirement: CompiledFixedRecheckV1,
@@ -449,48 +358,16 @@ impl RevisionBoundRecheckV1 {
             .get(case_index)
             .map(|case| case.provenance())
     }
-
-    pub(crate) fn reuse_for(
-        &self,
-        requirement: &CompiledFixedRecheckV1,
-        observation: &ObservationState,
-        paint: EncodedPointPaintV1,
-    ) -> Result<(), ReuseErrorV1> {
-        if &self.requirement != requirement {
-            return Err(ReuseErrorV1::RequirementMismatch);
-        }
-        if self.paint != paint {
-            return Err(ReuseErrorV1::PaintMismatch);
-        }
-        match observation.snapshot() {
-            ObservationSnapshot::Ready { observation } if observation == self.observation => Ok(()),
-            ObservationSnapshot::Ready { .. } => Err(ReuseErrorV1::ObservationMismatch),
-            ObservationSnapshot::Waiting { .. } | ObservationSnapshot::Stale { .. } => {
-                Err(ReuseErrorV1::ObservationUnavailable)
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FinalRecheckOutcomeV1 {
-    Waiting(WaitingRecheckV1),
-    Stale(StaleRecheckV1),
+pub(crate) enum FixedRecheckDecisionV1 {
     Violation(ExactViolationRecheckV1),
     Verified(RevisionBoundRecheckV1),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RecheckProtocolErrorV1 {
-    PaintMismatch { expected: PaintId, actual: PaintId },
-    MissingSurfacePort(SurfaceInputPortId),
-    ResourceExhausted,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReuseErrorV1 {
-    RequirementMismatch,
-    PaintMismatch,
-    ObservationMismatch,
-    ObservationUnavailable,
+pub(crate) enum RecheckProtocolErrorV1 {
+    ObservationSchemaMismatch,
+    ResourceExhausted,
 }

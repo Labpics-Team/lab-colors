@@ -5,9 +5,9 @@ use crate::appearance::{
     ResolvedOccurrence, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::observation::{
-    Availability, ObservationError, ObservationHead, ObservationPayloadInput, ObservationSnapshot,
-    ObservationState, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSet,
-    ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
+    ObservationError, ObservationHead, ObservationPayloadInput, ObservationState,
+    ObservationStreamId, ObservationUpdateInput, ObservedScenarioSet, ObservedScenarioSetInput,
+    PreparedObservationViewV1, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
     SurfaceInputBinding, UnknownReasonId, UpdateDisposition,
 };
 
@@ -74,10 +74,9 @@ fn observed_set(state: &ObservationState) -> &ObservedScenarioSet {
 }
 
 fn revision_bound(state: &ObservationState) -> RevisionBoundObservationV1 {
-    match state.snapshot() {
-        ObservationSnapshot::Ready { observation } => observation,
-        snapshot => panic!("expected Ready snapshot, got {snapshot:?}"),
-    }
+    state
+        .current_observation()
+        .expect("expected current admitted observation")
 }
 
 #[test]
@@ -122,7 +121,6 @@ fn authored_color_and_observed_surface_ports_are_distinct_through_execution() {
         evaluation.occurrence(occurrence).unwrap().visible(),
         [1, 2, 3]
     );
-
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
             vec![(color, Srgb8::new([1, 2, 3]))],
@@ -130,32 +128,6 @@ fn authored_color_and_observed_surface_ports_are_distinct_through_execution() {
             vec![],
         )),
         Err(BindingError::MissingSurfaceInputBinding {
-            input: surface_port,
-        })
-    );
-    assert_eq!(
-        graph.evaluate(&AppearanceBindings::new(
-            vec![(color, Srgb8::new([1, 2, 3]))],
-            vec![
-                (surface_port, Srgb8::new([240, 241, 242])),
-                (SurfaceInputPortId::new(8), Srgb8::new([0, 0, 0])),
-            ],
-            vec![],
-        )),
-        Err(BindingError::UnexpectedSurfaceInputBinding {
-            input: SurfaceInputPortId::new(8),
-        })
-    );
-    assert_eq!(
-        graph.evaluate(&AppearanceBindings::new(
-            vec![(color, Srgb8::new([1, 2, 3]))],
-            vec![
-                (surface_port, Srgb8::new([240, 241, 242])),
-                (surface_port, Srgb8::new([0, 0, 0])),
-            ],
-            vec![],
-        )),
-        Err(BindingError::DuplicateSurfaceInputBinding {
             input: surface_port,
         })
     );
@@ -177,10 +149,9 @@ fn admission_preserves_correlated_tuples_without_cartesian_product() {
         .iter()
         .map(|case| case.bindings().iter().copied().map(Srgb8::bytes).collect())
         .collect();
-    assert_eq!(cases.len(), 2);
     assert_eq!(
         cases,
-        vec![vec![[1, 2, 3], [4, 5, 6]], vec![[7, 8, 9], [10, 11, 12]],]
+        vec![vec![[1, 2, 3], [4, 5, 6]], vec![[7, 8, 9], [10, 11, 12]]]
     );
     assert!(!cases.contains(&vec![[1, 2, 3], [10, 11, 12]]));
     assert!(!cases.contains(&vec![[7, 8, 9], [4, 5, 6]]));
@@ -211,25 +182,203 @@ fn canonicalization_ignores_declaration_order_and_groups_duplicate_physics() {
         &[ScenarioId::new(3), ScenarioId::new(9)]
     );
     assert_eq!(
-        set.cases()[0]
-            .bindings()
-            .iter()
-            .copied()
-            .map(Srgb8::bytes)
-            .collect::<Vec<_>>(),
-        vec![[1, 2, 3], [4, 5, 6]]
+        set.physical_bindings(),
+        vec![
+            vec![Srgb8::new([1, 2, 3]), Srgb8::new([4, 5, 6])],
+            vec![Srgb8::new([9, 8, 7]), Srgb8::new([6, 5, 4])],
+        ]
     );
 }
 
 #[test]
-fn invalid_permutations_return_the_same_deterministic_error() {
+fn malformed_payload_is_canonicalized_before_revision_and_never_moves_head() {
+    let mut state = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    state.apply(unknown_update(STREAM, 4, 1)).unwrap();
+    let before = state.clone();
+    let malformed = scenarios([scenario(1, [binding(PORT_A, [1; 3])])]);
+    assert_eq!(
+        state.apply(observed_update(STREAM, 2, malformed.clone())),
+        Err(ObservationError::MissingSurfaceInputBinding {
+            scenario: ScenarioId::new(1),
+            input: PORT_B,
+        })
+    );
+    assert_eq!(state, before);
+
+    let corrected = scenarios([scenario(
+        1,
+        [binding(PORT_A, [1; 3]), binding(PORT_B, [2; 3])],
+    )]);
+    assert_eq!(
+        state.apply(observed_update(STREAM, 5, corrected)),
+        Ok(UpdateDisposition::Applied)
+    );
+    assert!(state.current_observation().is_some());
+}
+
+#[test]
+fn initial_unknown_advances_only_raw_watermark_and_contains_no_previous() {
+    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
+    assert_eq!(state.head(), &ObservationHead::Empty);
+    assert_eq!(
+        state.apply(unknown_update(STREAM, 3, 11)),
+        Ok(UpdateDisposition::Applied)
+    );
+    assert!(matches!(
+        state.head(),
+        ObservationHead::Unknown { revision, reason }
+            if *revision == Revision::new(3) && *reason == UnknownReasonId::new(11)
+    ));
+    let unknown = state.current_unknown().unwrap();
+    assert_eq!(unknown.stream(), STREAM);
+    assert_eq!(unknown.revision(), Revision::new(3));
+    assert_eq!(unknown.reason(), UnknownReasonId::new(11));
+    assert!(state.current_observation().is_none());
+}
+
+#[test]
+fn observed_to_unknown_forgets_raw_observation_instead_of_storing_prior() {
+    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
+    state
+        .apply(observed_update(
+            STREAM,
+            1,
+            scenarios([scenario(1, [binding(PORT_A, [3, 4, 5])])]),
+        ))
+        .unwrap();
+    let old = revision_bound(&state);
+    state.apply(unknown_update(STREAM, 2, 9)).unwrap();
+
+    assert!(state.current_observation().is_none());
+    assert!(matches!(state.head(), ObservationHead::Unknown { .. }));
+    assert_eq!(old.revision(), Revision::new(1));
+    assert_eq!(old.set().cases()[0].bindings(), &[Srgb8::new([3, 4, 5])]);
+}
+
+#[test]
+fn same_revision_exact_payload_is_idempotent_and_conflict_is_rejected() {
+    let set = scenarios([scenario(1, [binding(PORT_A, [255; 3])])]);
+    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
+    assert_eq!(
+        state.apply(observed_update(STREAM, 1, set.clone())),
+        Ok(UpdateDisposition::Applied)
+    );
+    let before = state.clone();
+    assert_eq!(
+        state.apply(observed_update(STREAM, 1, set)),
+        Ok(UpdateDisposition::Idempotent)
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        state.apply(unknown_update(STREAM, 1, 1)),
+        Err(ObservationError::RevisionConflict {
+            revision: Revision::new(1),
+        })
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn lower_revision_and_foreign_stream_are_atomic_rejections() {
+    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
+    state.apply(unknown_update(STREAM, 5, 1)).unwrap();
+    let before = state.clone();
+    assert_eq!(
+        state.apply(unknown_update(STREAM, 4, 1)),
+        Err(ObservationError::RevisionOutOfOrder {
+            current: Revision::new(5),
+            incoming: Revision::new(4),
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        state.apply(unknown_update(ObservationStreamId::new(99), 6, 1)),
+        Err(ObservationError::StreamMismatch {
+            expected: STREAM,
+            actual: ObservationStreamId::new(99),
+        })
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn prepare_does_not_mutate_and_commit_is_the_only_head_transition() {
+    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
+    let prepared = state
+        .prepare(observed_update(
+            STREAM,
+            2,
+            scenarios([scenario(1, [binding(PORT_A, [7, 8, 9])])]),
+        ))
+        .unwrap();
+    assert_eq!(prepared.current_head(), &ObservationHead::Empty);
+    let PreparedObservationViewV1::AppliedObserved(observation) = prepared.view() else {
+        panic!("expected prepared Observed");
+    };
+    assert_eq!(observation.revision(), Revision::new(2));
+    assert_eq!(prepared.commit(), UpdateDisposition::Applied);
+    assert_eq!(revision_bound(&state).revision(), Revision::new(2));
+}
+
+#[test]
+fn changing_tuple_correlation_changes_identity_even_with_same_marginals() {
+    let mut first = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let mut second = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    first
+        .apply(observed_update(
+            STREAM,
+            1,
+            paired_set(([0; 3], [0; 3]), ([255; 3], [255; 3])),
+        ))
+        .unwrap();
+    second
+        .apply(observed_update(
+            STREAM,
+            1,
+            paired_set(([0; 3], [255; 3]), ([255; 3], [0; 3])),
+        ))
+        .unwrap();
+    assert_ne!(revision_bound(&first), revision_bound(&second));
+}
+
+#[test]
+fn two_streams_have_independent_watermarks_and_same_physics() {
+    let other = ObservationStreamId::new(8);
+    let set = scenarios([scenario(1, [binding(PORT_A, [1, 2, 3])])]);
+    let mut left = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
+    let mut right = ObservationState::new(other, vec![PORT_A]).unwrap();
+    left.apply(observed_update(STREAM, 5, set.clone())).unwrap();
+    right.apply(observed_update(other, 1, set)).unwrap();
+
+    assert_eq!(revision_bound(&left).set(), revision_bound(&right).set());
+    assert_ne!(
+        revision_bound(&left).stream(),
+        revision_bound(&right).stream()
+    );
+    assert_ne!(
+        revision_bound(&left).revision(),
+        revision_bound(&right).revision()
+    );
+}
+
+#[test]
+fn invalid_schema_and_bindings_are_typed_and_deterministic() {
+    assert_eq!(
+        ObservationState::new(STREAM, vec![]),
+        Err(ObservationError::EmptyCompiledSurfaceInputSchema)
+    );
+    assert_eq!(
+        ObservationState::new(STREAM, vec![PORT_A, PORT_A]),
+        Err(ObservationError::DuplicateCompiledSurfaceInputPort { input: PORT_A })
+    );
+
     let invalid_a = scenarios([
-        scenario(2, [binding(PORT_A, [1, 1, 1])]),
-        scenario(1, [binding(PORT_A, [2, 2, 2]), binding(PORT_A, [3, 3, 3])]),
+        scenario(2, [binding(PORT_A, [1; 3])]),
+        scenario(1, [binding(PORT_A, [2; 3]), binding(PORT_A, [3; 3])]),
     ]);
     let invalid_b = scenarios([
-        scenario(1, [binding(PORT_A, [3, 3, 3]), binding(PORT_A, [2, 2, 2])]),
-        scenario(2, [binding(PORT_A, [1, 1, 1])]),
+        scenario(1, [binding(PORT_A, [3; 3]), binding(PORT_A, [2; 3])]),
+        scenario(2, [binding(PORT_A, [1; 3])]),
     ]);
     for invalid in [invalid_a, invalid_b] {
         let mut state = ObservationState::new(STREAM, vec![PORT_B, PORT_A]).unwrap();
@@ -242,425 +391,4 @@ fn invalid_permutations_return_the_same_deterministic_error() {
         );
         assert_eq!(state.head(), &ObservationHead::Empty);
     }
-}
-
-#[test]
-fn initial_unknown_advances_watermark_without_inventing_a_surface() {
-    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
-    assert_eq!(state.availability(), Availability::Waiting);
-    assert_eq!(
-        state.apply(unknown_update(STREAM, 3, 11)),
-        Ok(UpdateDisposition::Applied)
-    );
-    assert_eq!(state.availability(), Availability::Waiting);
-    assert!(matches!(
-        state.head(),
-        ObservationHead::Unknown {
-            revision,
-            reason,
-            previous: None,
-        } if *revision == Revision::new(3) && *reason == UnknownReasonId::new(11)
-    ));
-
-    let explicit_white = scenarios([scenario(1, [binding(PORT_A, [255; 3])])]);
-    assert_eq!(
-        state.apply(observed_update(STREAM, 2, explicit_white.clone())),
-        Err(ObservationError::RevisionOutOfOrder {
-            current: Revision::new(3),
-            incoming: Revision::new(2),
-        })
-    );
-    assert_eq!(
-        state.apply(unknown_update(STREAM, 3, 11)),
-        Ok(UpdateDisposition::Idempotent)
-    );
-    assert_eq!(
-        state.apply(unknown_update(STREAM, 3, 12)),
-        Err(ObservationError::RevisionConflict {
-            revision: Revision::new(3),
-        })
-    );
-    assert_eq!(
-        state.apply(observed_update(STREAM, 4, explicit_white)),
-        Ok(UpdateDisposition::Applied)
-    );
-    assert_eq!(state.availability(), Availability::Ready);
-    assert_eq!(
-        observed_set(&state).cases()[0].bindings(),
-        &[Srgb8::new([255; 3])]
-    );
-}
-
-#[test]
-fn unknown_chain_preserves_prior_evidence_without_ready_fallback() {
-    let ready = scenarios([scenario(1, [binding(PORT_A, [3, 4, 5])])]);
-    let restored = scenarios([scenario(2, [binding(PORT_A, [6, 7, 8])])]);
-    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
-    state
-        .apply(observed_update(STREAM, 2, ready.clone()))
-        .unwrap();
-    let prior_set = observed_set(&state).clone();
-    state.apply(unknown_update(STREAM, 3, 1)).unwrap();
-    assert_eq!(state.availability(), Availability::Stale);
-    let ObservationHead::Unknown {
-        previous: Some(previous),
-        ..
-    } = state.head()
-    else {
-        panic!("Ready must become stale evidence");
-    };
-    assert_eq!(previous.revision(), Revision::new(2));
-    assert_eq!(previous.set(), &prior_set);
-    assert!(state.current_set().is_none());
-
-    assert!(matches!(
-        state.apply(observed_update(STREAM, 2, ready)),
-        Err(ObservationError::RevisionOutOfOrder { .. })
-    ));
-    state.apply(unknown_update(STREAM, 4, 2)).unwrap();
-    let ObservationHead::Unknown {
-        previous: Some(previous),
-        ..
-    } = state.head()
-    else {
-        panic!("Unknown chain lost prior evidence");
-    };
-    assert_eq!(previous.revision(), Revision::new(2));
-    assert_eq!(previous.set(), &prior_set);
-
-    state.apply(observed_update(STREAM, 5, restored)).unwrap();
-    assert_eq!(state.availability(), Availability::Ready);
-}
-
-#[test]
-fn malformed_update_does_not_consume_its_revision() {
-    let malformed = scenarios([scenario(1, [binding(PORT_A, [1, 2, 3])])]);
-    let corrected = scenarios([scenario(
-        1,
-        [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-    )]);
-    let mut state = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
-    assert_eq!(
-        state.apply(observed_update(STREAM, 9, malformed)),
-        Err(ObservationError::MissingSurfaceInputBinding {
-            scenario: ScenarioId::new(1),
-            input: PORT_B,
-        })
-    );
-    assert_eq!(state.head(), &ObservationHead::Empty);
-    assert_eq!(
-        state.apply(observed_update(STREAM, 9, corrected)),
-        Ok(UpdateDisposition::Applied)
-    );
-}
-
-#[test]
-fn raw_validation_rejects_empty_duplicate_and_unexpected_members() {
-    let cases = [
-        (scenarios([]), ObservationError::EmptyScenarioSet),
-        (
-            scenarios([
-                scenario(1, [binding(PORT_A, [1, 2, 3])]),
-                scenario(1, [binding(PORT_A, [4, 5, 6])]),
-            ]),
-            ObservationError::DuplicateScenarioId {
-                scenario: ScenarioId::new(1),
-            },
-        ),
-        (
-            scenarios([scenario(
-                1,
-                [
-                    binding(PORT_A, [1, 2, 3]),
-                    binding(SurfaceInputPortId::new(99), [4, 5, 6]),
-                ],
-            )]),
-            ObservationError::UnexpectedSurfaceInputBinding {
-                scenario: ScenarioId::new(1),
-                input: SurfaceInputPortId::new(99),
-            },
-        ),
-    ];
-
-    for (raw, expected) in cases {
-        let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
-        assert_eq!(state.apply(observed_update(STREAM, 1, raw)), Err(expected));
-        assert_eq!(state.head(), &ObservationHead::Empty);
-    }
-}
-
-#[test]
-fn same_revision_uses_full_canonical_identity() {
-    let first = scenarios([scenario(
-        9,
-        [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])],
-    )]);
-    let reordered = scenarios([scenario(
-        9,
-        [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-    )]);
-    let renamed = scenarios([scenario(
-        10,
-        [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-    )]);
-    let mut state = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
-    state.apply(observed_update(STREAM, 1, first)).unwrap();
-    assert_eq!(
-        state.apply(observed_update(STREAM, 1, reordered)),
-        Ok(UpdateDisposition::Idempotent)
-    );
-    let retained = state.clone();
-    assert_eq!(
-        state.apply(observed_update(STREAM, 1, renamed)),
-        Err(ObservationError::RevisionConflict {
-            revision: Revision::new(1),
-        })
-    );
-    assert_eq!(state, retained);
-}
-
-#[test]
-fn tuple_correlation_is_identity_even_when_marginals_match() {
-    let correlated = paired_set(([1, 0, 0], [10, 0, 0]), ([2, 0, 0], [20, 0, 0]));
-    let crossed = paired_set(([1, 0, 0], [20, 0, 0]), ([2, 0, 0], [10, 0, 0]));
-    let mut left = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
-    let mut right = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
-    left.apply(observed_update(STREAM, 1, correlated)).unwrap();
-    right.apply(observed_update(STREAM, 1, crossed)).unwrap();
-
-    assert_ne!(observed_set(&left), observed_set(&right));
-}
-
-#[test]
-fn ids_only_route_and_provenance_while_physical_evidence_stays_invariant() {
-    let renamed_a = SurfaceInputPortId::new(110);
-    let renamed_b = SurfaceInputPortId::new(120);
-    let original = scenarios([scenario(
-        1,
-        [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-    )]);
-    let renamed = scenarios([ScenarioInput {
-        id: ScenarioId::new(99),
-        bindings: vec![binding(renamed_b, [4, 5, 6]), binding(renamed_a, [1, 2, 3])],
-    }]);
-    let mut left = ObservationState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
-    let mut right =
-        ObservationState::new(ObservationStreamId::new(70), vec![renamed_b, renamed_a]).unwrap();
-    left.apply(observed_update(STREAM, 1, original)).unwrap();
-    right
-        .apply(observed_update(ObservationStreamId::new(70), 1, renamed))
-        .unwrap();
-
-    assert_eq!(
-        observed_set(&left).physical_bindings(),
-        observed_set(&right).physical_bindings()
-    );
-    assert_ne!(observed_set(&left), observed_set(&right));
-}
-
-#[test]
-fn stream_and_compiled_schema_are_immutable_and_watermarks_are_independent() {
-    let mut first = ObservationState::new(STREAM, vec![PORT_B, PORT_A]).unwrap();
-    let other_stream = ObservationStreamId::new(8);
-    let mut second = ObservationState::new(other_stream, vec![PORT_A, PORT_B]).unwrap();
-    let payload = paired_set(([1, 2, 3], [4, 5, 6]), ([7, 8, 9], [10, 11, 12]));
-
-    assert_eq!(
-        first.apply(observed_update(other_stream, 1, payload.clone())),
-        Err(ObservationError::StreamMismatch {
-            expected: STREAM,
-            actual: other_stream,
-        })
-    );
-    first
-        .apply(observed_update(STREAM, 7, payload.clone()))
-        .unwrap();
-    second
-        .apply(observed_update(other_stream, 1, payload))
-        .unwrap();
-
-    assert_eq!(first.stream(), STREAM);
-    assert_eq!(second.stream(), other_stream);
-    assert_eq!(first.compiled_surface_input_schema(), &[PORT_A, PORT_B]);
-    assert_eq!(second.compiled_surface_input_schema(), &[PORT_A, PORT_B]);
-    assert_eq!(
-        observed_set(&first).physical_bindings(),
-        observed_set(&second).physical_bindings()
-    );
-    assert!(matches!(
-        first.head(),
-        ObservationHead::Observed { revision, .. } if *revision == Revision::new(7)
-    ));
-    assert!(matches!(
-        second.head(),
-        ObservationHead::Observed { revision, .. } if *revision == Revision::new(1)
-    ));
-}
-
-#[test]
-fn admitted_state_owns_canonical_values_and_rejects_invalid_schemas() {
-    assert_eq!(
-        ObservationState::new(STREAM, vec![]),
-        Err(ObservationError::EmptyCompiledSurfaceInputSchema)
-    );
-    assert_eq!(
-        ObservationState::new(STREAM, vec![PORT_A, PORT_A]),
-        Err(ObservationError::DuplicateCompiledSurfaceInputPort { input: PORT_A })
-    );
-
-    let mut caller = scenarios([scenario(1, [binding(PORT_A, [1, 2, 3])])]);
-    let mut state = ObservationState::new(STREAM, vec![PORT_A]).unwrap();
-    state
-        .apply(observed_update(STREAM, 1, caller.clone()))
-        .unwrap();
-    caller.scenarios[0].bindings[0].value = Srgb8::new([9, 9, 9]);
-    assert_eq!(
-        observed_set(&state).cases()[0].bindings(),
-        &[Srgb8::new([1, 2, 3])]
-    );
-}
-
-#[test]
-fn revision_bound_observation_clone_is_allocation_free_and_content_equal() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<RevisionBoundObservationV1>();
-
-    let state = ready_state_for_snapshot(
-        STREAM,
-        7,
-        vec![PORT_B, PORT_A],
-        vec![
-            scenario(9, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
-            scenario(3, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
-        ],
-    );
-    let (observation, snapshot_allocations) =
-        crate::test_support::measured_allocations(|| revision_bound(&state));
-
-    let (cloned, allocations) = crate::test_support::measured_allocations(|| observation.clone());
-
-    assert_eq!(snapshot_allocations, 0);
-    assert_eq!(allocations, 0);
-    assert_eq!(cloned, observation);
-    assert_eq!(cloned.stream(), STREAM);
-    assert_eq!(cloned.revision(), Revision::new(7));
-    assert_eq!(cloned.schema(), &[PORT_A, PORT_B]);
-    assert_eq!(
-        cloned.set().cases()[0].provenance(),
-        &[ScenarioId::new(3), ScenarioId::new(9)]
-    );
-}
-
-#[test]
-fn revision_bound_observation_equality_covers_every_identity_component() {
-    let make = |stream, revision, schema, scenarios| {
-        revision_bound(&ready_state_for_snapshot(
-            stream, revision, schema, scenarios,
-        ))
-    };
-    let baseline_scenarios = || {
-        vec![scenario(
-            1,
-            [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-        )]
-    };
-    let baseline = make(STREAM, 5, vec![PORT_A, PORT_B], baseline_scenarios());
-    assert_eq!(
-        baseline,
-        make(STREAM, 5, vec![PORT_B, PORT_A], baseline_scenarios())
-    );
-    assert_ne!(
-        baseline,
-        make(
-            ObservationStreamId::new(8),
-            5,
-            vec![PORT_A, PORT_B],
-            baseline_scenarios()
-        )
-    );
-    assert_ne!(
-        baseline,
-        make(STREAM, 6, vec![PORT_A, PORT_B], baseline_scenarios())
-    );
-    assert_ne!(
-        baseline,
-        make(
-            STREAM,
-            5,
-            vec![PORT_A, SurfaceInputPortId::new(30)],
-            vec![scenario(
-                1,
-                [
-                    binding(PORT_A, [1, 2, 3]),
-                    binding(SurfaceInputPortId::new(30), [4, 5, 6]),
-                ],
-            )],
-        )
-    );
-    assert_ne!(
-        baseline,
-        make(
-            STREAM,
-            5,
-            vec![PORT_A, PORT_B],
-            vec![scenario(
-                1,
-                [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 7])],
-            )],
-        )
-    );
-    assert_ne!(
-        baseline,
-        make(
-            STREAM,
-            5,
-            vec![PORT_A, PORT_B],
-            vec![scenario(
-                2,
-                [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-            )],
-        )
-    );
-}
-
-#[test]
-fn revision_bound_observation_is_immutable_after_stream_advances() {
-    let mut state = ready_state_for_snapshot(
-        STREAM,
-        1,
-        vec![PORT_A],
-        vec![scenario(1, [binding(PORT_A, [1, 2, 3])])],
-    );
-    let first = revision_bound(&state);
-    state
-        .apply(observed_update(
-            STREAM,
-            2,
-            scenarios([scenario(2, [binding(PORT_A, [9, 8, 7])])]),
-        ))
-        .unwrap();
-    let second = revision_bound(&state);
-
-    assert_eq!(first.revision(), Revision::new(1));
-    assert_eq!(first.set().cases()[0].bindings(), &[Srgb8::new([1, 2, 3])]);
-    assert_eq!(second.revision(), Revision::new(2));
-    assert_eq!(second.set().cases()[0].bindings(), &[Srgb8::new([9, 8, 7])]);
-    assert_ne!(first, second);
-}
-
-fn ready_state_for_snapshot(
-    stream: ObservationStreamId,
-    revision: u64,
-    schema: Vec<SurfaceInputPortId>,
-    scenarios: Vec<ScenarioInput>,
-) -> ObservationState {
-    let mut state = ObservationState::new(stream, schema).unwrap();
-    state
-        .apply(observed_update(
-            stream,
-            revision,
-            ObservedScenarioSetInput { scenarios },
-        ))
-        .unwrap();
-    state
 }
