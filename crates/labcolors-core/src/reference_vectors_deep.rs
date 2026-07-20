@@ -196,7 +196,7 @@ fn oklab_matches_ottosson_xyz_table() {
         for i in 0..3 {
             assert!(
                 (got[i] - want[i]).abs() < TOL,
-                "Ottosson XYZ {xyz:?} Lab[{i}]: got {}, published {}, delta {}",
+                "Ottosson XYZ {xyz:?} Oklab[{i}]: got {}, published {}, delta {}",
                 got[i],
                 want[i],
                 (got[i] - want[i]).abs()
