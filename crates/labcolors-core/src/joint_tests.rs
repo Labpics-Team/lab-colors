@@ -8,9 +8,9 @@ use crate::joint::{
     JointReportErrorV1, JointVisibleTargetV1, SelectionPolicyErrorV1, checked_joint_cardinality,
 };
 use crate::observation::{
-    ObservationPayloadInput, ObservationSnapshot, ObservationState, ObservationStreamId,
-    ObservationUpdateInput, ObservedScenarioSetInput, Revision, RevisionBoundObservationV1,
-    ScenarioId, ScenarioInput, SurfaceInputBinding,
+    ObservationPayloadInput, ObservationState, ObservationStreamId, ObservationUpdateInput,
+    ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
+    SurfaceInputBinding,
 };
 
 const ROOT: SurfaceInputPortId = SurfaceInputPortId::new(7);
@@ -78,10 +78,9 @@ fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObserv
             }),
         })
         .unwrap();
-    match state.snapshot() {
-        ObservationSnapshot::Ready { observation } => observation,
-        snapshot => panic!("expected Ready, got {snapshot:?}"),
-    }
+    state
+        .current_observation()
+        .expect("expected current admitted observation")
 }
 
 #[test]

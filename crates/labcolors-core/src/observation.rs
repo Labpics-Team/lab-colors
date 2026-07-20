@@ -1,9 +1,9 @@
 //! Admission коррелированных point sRGB8 observations.
 //!
-//! Authored color inputs не могут удовлетворить runtime surface ports. Один
-//! stream атомарно принимает полный коррелированный ScenarioSet и хранит один
-//! revision-ordered head: отклонённый update сохраняет прежнее состояние, а
-//! Unknown никогда не изобретает поверхность.
+//! Raw store владеет только immutable schema, stream watermark и последним
+//! payload `Empty | Unknown | Observed`. Он не хранит previous verified evidence
+//! и не выводит lifecycle-состояния: `Waiting | Ready | Stale | Failed` принадлежат
+//! единственному Session owner.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -122,11 +122,9 @@ impl ObservedScenarioSet {
     }
 }
 
-/// Sealed revision-bound evidence только для текущего `Observed` head.
-///
-/// Schema и полный canonical set разделяют immutable backing с admission-state:
-/// snapshot и его clone не копируют tuples или provenance. Производный `Eq`
-/// при этом сравнивает содержимое, а не адреса shared backing.
+/// Sealed revision-bound evidence только для admitted `Observed` payload.
+/// Schema и canonical set используют immutable shared backing: clone не копирует
+/// tuples/provenance, но equality остаётся content-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
@@ -153,34 +151,36 @@ impl RevisionBoundObservationV1 {
     }
 }
 
-/// Последний admitted observation до явного `Unknown`.
-///
-/// Значение является только evidence для presentation hold; current set из
-/// него не восстанавливается.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PriorObservation {
+/// Revision-bound факт отсутствия текущего observation. Он не содержит previous
+/// payload или verified evidence и сам по себе не является lifecycle state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RevisionBoundUnknownV1 {
+    stream: ObservationStreamId,
     revision: Revision,
-    set: ObservedScenarioSet,
+    reason: UnknownReasonId,
 }
 
-impl PriorObservation {
-    pub(crate) fn revision(&self) -> Revision {
+impl RevisionBoundUnknownV1 {
+    pub(crate) const fn stream(self) -> ObservationStreamId {
+        self.stream
+    }
+
+    pub(crate) const fn revision(self) -> Revision {
         self.revision
     }
 
-    pub(crate) fn set(&self) -> &ObservedScenarioSet {
-        &self.set
+    pub(crate) const fn reason(self) -> UnknownReasonId {
+        self.reason
     }
 }
 
-/// Единственный SSOT watermark и последнего payload.
+/// Единственный SSOT watermark и текущего raw payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObservationHead {
     Empty,
     Unknown {
         revision: Revision,
         reason: UnknownReasonId,
-        previous: Option<PriorObservation>,
     },
     Observed {
         revision: Revision,
@@ -205,56 +205,16 @@ impl ObservationHead {
             _ => false,
         }
     }
-
-    fn prior_observation(&self) -> Option<PriorObservation> {
-        match self {
-            Self::Empty => None,
-            Self::Unknown { previous, .. } => previous.clone(),
-            Self::Observed { revision, set } => Some(PriorObservation {
-                revision: *revision,
-                set: set.clone(),
-            }),
-        }
-    }
 }
 
-/// Availability полностью выводится из [`ObservationHead`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Availability {
-    Waiting,
-    Ready,
-    Stale,
-}
-
-/// Один атомарный borrow текущей availability и всего evidence, которое ей
-/// соответствует. Consumer не может прочитать state двумя вызовами и случайно
-/// связать revision с другим payload после будущего interior-mutable adapter-а.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ObservationSnapshot<'a> {
-    Waiting {
-        stream: ObservationStreamId,
-        schema: &'a [SurfaceInputPortId],
-        revision: Option<Revision>,
-    },
-    Ready {
-        observation: RevisionBoundObservationV1,
-    },
-    Stale {
-        stream: ObservationStreamId,
-        schema: &'a [SurfaceInputPortId],
-        revision: Revision,
-        previous: &'a PriorObservation,
-    },
-}
-
-/// Успешное обновление либо exact-idempotent replay.
+/// Успешный commit либо exact-idempotent replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpdateDisposition {
     Applied,
     Idempotent,
 }
 
-/// Typed admission failures; при любом варианте state побайтно сохраняется.
+/// Typed admission failures; prepare не меняет raw head.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObservationError {
     EmptyCompiledSurfaceInputSchema,
@@ -296,6 +256,71 @@ enum CanonicalPayload {
     Unknown(UnknownReasonId),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PreparedObservationPayloadV1 {
+    Idempotent,
+    AppliedUnknown(RevisionBoundUnknownV1),
+    AppliedObserved(RevisionBoundObservationV1),
+}
+
+/// Read-only projection prepared transaction. Она не содержит authority и не
+/// может быть передана commit-у.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PreparedObservationViewV1 {
+    Idempotent,
+    AppliedUnknown(RevisionBoundUnknownV1),
+    AppliedObserved(RevisionBoundObservationV1),
+}
+
+/// Linear transaction, привязанная mutable-borrow к конкретному raw store.
+/// Её нельзя сконструировать, клонировать или commit-нуть в другой stream/state.
+#[derive(Debug)]
+pub(crate) struct PreparedObservationUpdateV1<'a> {
+    state: &'a mut ObservationState,
+    payload: PreparedObservationPayloadV1,
+}
+
+impl PreparedObservationUpdateV1<'_> {
+    pub(crate) fn view(&self) -> PreparedObservationViewV1 {
+        match &self.payload {
+            PreparedObservationPayloadV1::Idempotent => PreparedObservationViewV1::Idempotent,
+            PreparedObservationPayloadV1::AppliedUnknown(unknown) => {
+                PreparedObservationViewV1::AppliedUnknown(*unknown)
+            }
+            PreparedObservationPayloadV1::AppliedObserved(observation) => {
+                PreparedObservationViewV1::AppliedObserved(observation.clone())
+            }
+        }
+    }
+
+    pub(crate) const fn current_head(&self) -> &ObservationHead {
+        &self.state.head
+    }
+
+    /// Consumes the only authority and commits into the exact state borrowed by
+    /// `prepare`; cross-state commit is structurally unrepresentable.
+    pub(crate) fn commit(self) -> UpdateDisposition {
+        let Self { state, payload } = self;
+        match payload {
+            PreparedObservationPayloadV1::Idempotent => UpdateDisposition::Idempotent,
+            PreparedObservationPayloadV1::AppliedUnknown(unknown) => {
+                state.head = ObservationHead::Unknown {
+                    revision: unknown.revision,
+                    reason: unknown.reason,
+                };
+                UpdateDisposition::Applied
+            }
+            PreparedObservationPayloadV1::AppliedObserved(observation) => {
+                state.head = ObservationHead::Observed {
+                    revision: observation.revision,
+                    set: observation.set,
+                };
+                UpdateDisposition::Applied
+            }
+        }
+    }
+}
+
 /// Stream-affine admission-state с immutable canonical schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObservationState {
@@ -330,85 +355,43 @@ impl ObservationState {
         })
     }
 
-    pub(crate) fn stream(&self) -> ObservationStreamId {
-        self.stream
-    }
-
     pub(crate) fn compiled_surface_input_schema(&self) -> &[SurfaceInputPortId] {
         &self.compiled_surface_input_schema
     }
 
-    pub(crate) fn head(&self) -> &ObservationHead {
+    pub(crate) const fn head(&self) -> &ObservationHead {
         &self.head
     }
 
-    pub(crate) fn availability(&self) -> Availability {
+    pub(crate) fn current_observation(&self) -> Option<RevisionBoundObservationV1> {
         match &self.head {
-            ObservationHead::Empty | ObservationHead::Unknown { previous: None, .. } => {
-                Availability::Waiting
-            }
-            ObservationHead::Observed { .. } => Availability::Ready,
-            ObservationHead::Unknown {
-                previous: Some(_), ..
-            } => Availability::Stale,
-        }
-    }
-
-    /// Возвращает согласованный stream/revision/payload snapshot одним
-    /// чтением единственного `head`; `PriorObservation` остаётся только stale
-    /// evidence и никогда не проецируется как `Ready`.
-    pub(crate) fn snapshot(&self) -> ObservationSnapshot<'_> {
-        match &self.head {
-            ObservationHead::Empty => ObservationSnapshot::Waiting {
+            ObservationHead::Observed { revision, set } => Some(RevisionBoundObservationV1 {
                 stream: self.stream,
-                schema: &self.compiled_surface_input_schema,
-                revision: None,
-            },
-            ObservationHead::Unknown {
-                revision,
-                previous: None,
-                ..
-            } => ObservationSnapshot::Waiting {
-                stream: self.stream,
-                schema: &self.compiled_surface_input_schema,
-                revision: Some(*revision),
-            },
-            ObservationHead::Observed { revision, set } => ObservationSnapshot::Ready {
-                observation: RevisionBoundObservationV1 {
-                    stream: self.stream,
-                    schema: Arc::clone(&self.compiled_surface_input_schema),
-                    revision: *revision,
-                    set: set.clone(),
-                },
-            },
-            ObservationHead::Unknown {
-                revision,
-                previous: Some(previous),
-                ..
-            } => ObservationSnapshot::Stale {
-                stream: self.stream,
-                schema: &self.compiled_surface_input_schema,
+                schema: Arc::clone(&self.compiled_surface_input_schema),
                 revision: *revision,
-                previous,
-            },
-        }
-    }
-
-    /// Только текущий `Observed` предоставляет set. Prior evidence не является
-    /// неявным fallback-ом.
-    pub(crate) fn current_set(&self) -> Option<&ObservedScenarioSet> {
-        match &self.head {
-            ObservationHead::Observed { set, .. } => Some(set),
+                set: set.clone(),
+            }),
             ObservationHead::Empty | ObservationHead::Unknown { .. } => None,
         }
     }
 
-    /// Полностью канонизирует raw payload до сравнения revision, затем меняет
-    /// один `head`. Поэтому malformed update не потребляет watermark.
-    pub(crate) fn apply(
+    pub(crate) fn current_unknown(&self) -> Option<RevisionBoundUnknownV1> {
+        match self.head {
+            ObservationHead::Unknown { revision, reason } => Some(RevisionBoundUnknownV1 {
+                stream: self.stream,
+                revision,
+                reason,
+            }),
+            ObservationHead::Empty | ObservationHead::Observed { .. } => None,
+        }
+    }
+
+    /// Полностью канонизирует raw payload до сравнения revision и ничего не
+    /// мутирует. Успешный результат линейно занимает store до commit/drop.
+    pub(crate) fn prepare(
         &mut self,
         update: ObservationUpdateInput,
-    ) -> Result<UpdateDisposition, ObservationError> {
+    ) -> Result<PreparedObservationUpdateV1<'_>, ObservationError> {
         if update.stream != self.stream {
             return Err(ObservationError::StreamMismatch {
                 expected: self.stream,
@@ -433,25 +416,45 @@ impl ObservationState {
             }
             if update.revision == current {
                 return if self.head.matches(&payload) {
-                    Ok(UpdateDisposition::Idempotent)
+                    Ok(PreparedObservationUpdateV1 {
+                        state: self,
+                        payload: PreparedObservationPayloadV1::Idempotent,
+                    })
                 } else {
                     Err(ObservationError::RevisionConflict { revision: current })
                 };
             }
         }
 
-        self.head = match payload {
-            CanonicalPayload::Observed(set) => ObservationHead::Observed {
-                revision: update.revision,
-                set,
-            },
-            CanonicalPayload::Unknown(reason) => ObservationHead::Unknown {
-                revision: update.revision,
-                reason,
-                previous: self.head.prior_observation(),
-            },
+        let payload = match payload {
+            CanonicalPayload::Observed(set) => {
+                PreparedObservationPayloadV1::AppliedObserved(RevisionBoundObservationV1 {
+                    stream: self.stream,
+                    schema: Arc::clone(&self.compiled_surface_input_schema),
+                    revision: update.revision,
+                    set,
+                })
+            }
+            CanonicalPayload::Unknown(reason) => {
+                PreparedObservationPayloadV1::AppliedUnknown(RevisionBoundUnknownV1 {
+                    stream: self.stream,
+                    revision: update.revision,
+                    reason,
+                })
+            }
         };
-        Ok(UpdateDisposition::Applied)
+        Ok(PreparedObservationUpdateV1 {
+            state: self,
+            payload,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply(
+        &mut self,
+        update: ObservationUpdateInput,
+    ) -> Result<UpdateDisposition, ObservationError> {
+        Ok(self.prepare(update)?.commit())
     }
 }
 
