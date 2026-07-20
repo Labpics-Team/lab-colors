@@ -2784,10 +2784,13 @@ fn resolve_rgba_inverted_with_binding(
     let verified =
         match crate::analog::resolve_verified(authored, target, requested_alpha, backdrop) {
             Ok(verified) => verified,
-            Err(error) => {
-                return Err(SolveFailure::InternalInvariant(format!(
-                    "validated alpha-analog resolver violated its total-domain contract: {error}"
-                )));
+            Err(_error) => {
+                // Здесь вход уже прошёл admission; typed witness остаётся в
+                // analog boundary, а публичная semantic-ошибка не сериализует
+                // authored routing или внутреннюю структуру evidence.
+                return Err(SolveFailure::InternalInvariant(
+                    "validated alpha-analog resolver violated its total-domain contract".into(),
+                ));
             }
         };
     let actual_alpha = verified.alpha();

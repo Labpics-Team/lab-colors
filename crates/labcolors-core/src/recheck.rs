@@ -11,36 +11,18 @@
 use crate::Srgb8;
 use crate::appearance::{
     OccurrenceId, PaintId, PhysicalProgramIdentityV1, PointOpacityOverSurfaceV1,
-    SourceOverCertificateV1, SurfaceInputPortId, VisiblePointBindingV1,
+    SourceOverCertificateV1, SurfaceInputPortId,
 };
 use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::constraints::{
-    BoundAssessment, BoundFailure, BoundVerdict, ExactConstraintIdentityV1,
-    ExactIdentityAssessmentV1, ExactIdentityCapabilityV1, ExactIdentityMismatchV1,
-    ExactIdentityReleaseV1, ExactSrgb8IdentityV1, assess,
+    ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
+    ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
+    assess_visible_point_hard,
 };
 use crate::observation::{
     ObservationSnapshot, ObservationState, ObservationStreamId, ObservedScenarioSet,
     PriorObservation, Revision, ScenarioId,
 };
-
-type ExactBoundAssessmentV1 = BoundAssessment<
-    VisiblePointBindingV1,
-    ExactConstraintIdentityV1,
-    ExactIdentityReleaseV1,
-    ExactIdentityCapabilityV1,
-    Srgb8,
-    ExactIdentityAssessmentV1,
->;
-
-type ExactBoundFailureV1 = BoundFailure<
-    VisiblePointBindingV1,
-    ExactConstraintIdentityV1,
-    ExactIdentityReleaseV1,
-    ExactIdentityCapabilityV1,
-    Srgb8,
-    ExactIdentityMismatchV1,
->;
 
 /// Один immutable exact evaluator invocation, связанный с authored occurrence.
 /// Identity/release/capability не дублируются здесь: proof получает их только
@@ -213,32 +195,36 @@ impl CompiledFixedRecheckV1 {
                     paint.opacity,
                     backdrop.bytes(),
                 );
-                let assessment =
-                    match assess(&occurrence, &ExactSrgb8IdentityV1, requirement.invocation) {
-                        BoundVerdict::Pass(assessment) => assessment,
-                        BoundVerdict::Fail(verdict) => {
-                            return Ok(FinalRecheckOutcomeV1::Infeasible(InfeasibleRecheckV1 {
-                                occurrence: requirement.occurrence,
-                                surface: requirement.surface,
-                                physical_program: self.physical_program,
-                                paint,
-                                observation: FrozenObservationV1 {
-                                    stream,
-                                    revision,
-                                    schema: schema.to_vec().into_boxed_slice(),
-                                    set: set.clone(),
-                                },
-                                case_index,
-                                verdict,
-                            }));
-                        }
-                    };
+                let evidence = match assess_visible_point_hard(
+                    &occurrence,
+                    &ExactSrgb8IdentityV1,
+                    requirement.invocation,
+                ) {
+                    Ok(HardDecision::Pass(evidence)) => evidence,
+                    Ok(HardDecision::Violation(evidence)) => {
+                        return Ok(FinalRecheckOutcomeV1::Violation(ExactViolationRecheckV1 {
+                            occurrence: requirement.occurrence,
+                            surface: requirement.surface,
+                            physical_program: self.physical_program,
+                            paint,
+                            observation: FrozenObservationV1 {
+                                stream,
+                                revision,
+                                schema: schema.to_vec().into_boxed_slice(),
+                                set: set.clone(),
+                            },
+                            case_index,
+                            evidence,
+                        }));
+                    }
+                    Err(error) => match error {},
+                };
                 occurrences.push(ExactOccurrenceEvidenceV1 {
                     physical_program: self.physical_program,
                     occurrence: requirement.occurrence,
                     surface: requirement.surface,
                     case_index,
-                    assessment,
+                    evidence,
                 });
             }
         }
@@ -331,7 +317,7 @@ pub(crate) struct ExactOccurrenceEvidenceV1 {
     occurrence: OccurrenceId,
     surface: SurfaceInputPortId,
     case_index: usize,
-    assessment: ExactBoundAssessmentV1,
+    evidence: ExactPassEvidenceV1,
 }
 
 impl ExactOccurrenceEvidenceV1 {
@@ -350,35 +336,35 @@ impl ExactOccurrenceEvidenceV1 {
     pub(crate) fn program_occurrence_binding(
         &self,
     ) -> crate::appearance::ProgramOccurrenceBindingV1 {
-        self.assessment.binding().program_occurrence()
+        self.evidence.binding().program_occurrence()
     }
 
     pub(crate) fn constraint(&self) -> ExactConstraintIdentityV1 {
-        *self.assessment.identity()
+        *self.evidence.identity()
     }
 
     pub(crate) fn release(&self) -> ExactIdentityReleaseV1 {
-        *self.assessment.release()
+        *self.evidence.release()
     }
 
     pub(crate) fn capability(&self) -> ExactIdentityCapabilityV1 {
-        *self.assessment.capability()
+        *self.evidence.capability()
     }
 
     pub(crate) fn invocation(&self) -> Srgb8 {
-        *self.assessment.invocation()
+        *self.evidence.invocation()
     }
 
     pub(crate) fn target(&self) -> Srgb8 {
-        *self.assessment.invocation()
+        self.evidence.target()
     }
 
     pub(crate) fn actual(&self) -> Srgb8 {
-        Srgb8::new(self.assessment.binding().occurrence().output_rgb())
+        self.evidence.actual()
     }
 
     pub(crate) fn physical_certificate(&self) -> SourceOverCertificateV1 {
-        self.assessment.binding().occurrence()
+        self.evidence.binding().occurrence()
     }
 }
 
@@ -389,17 +375,17 @@ pub(crate) struct WaitingRecheckV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InfeasibleRecheckV1 {
+pub(crate) struct ExactViolationRecheckV1 {
     occurrence: OccurrenceId,
     surface: SurfaceInputPortId,
     physical_program: PhysicalProgramIdentityV1,
     paint: EncodedPaintCandidateV1,
     observation: FrozenObservationV1,
     case_index: usize,
-    verdict: ExactBoundFailureV1,
+    evidence: ExactViolationEvidenceV1,
 }
 
-impl InfeasibleRecheckV1 {
+impl ExactViolationRecheckV1 {
     pub(crate) const fn occurrence(&self) -> OccurrenceId {
         self.occurrence
     }
@@ -421,31 +407,31 @@ impl InfeasibleRecheckV1 {
     }
 
     pub(crate) fn physical_certificate(&self) -> SourceOverCertificateV1 {
-        self.verdict.binding().occurrence()
+        self.evidence.binding().occurrence()
     }
 
     pub(crate) fn invocation(&self) -> Srgb8 {
-        *self.verdict.invocation()
+        *self.evidence.invocation()
     }
 
     pub(crate) fn constraint(&self) -> ExactConstraintIdentityV1 {
-        *self.verdict.identity()
+        *self.evidence.identity()
     }
 
     pub(crate) fn release(&self) -> ExactIdentityReleaseV1 {
-        *self.verdict.release()
+        *self.evidence.release()
     }
 
     pub(crate) fn capability(&self) -> ExactIdentityCapabilityV1 {
-        *self.verdict.capability()
+        *self.evidence.capability()
     }
 
     pub(crate) fn target(&self) -> Srgb8 {
-        self.verdict.outcome().target()
+        self.evidence.target()
     }
 
     pub(crate) fn actual(&self) -> Srgb8 {
-        self.verdict.outcome().actual()
+        self.evidence.actual()
     }
 }
 
@@ -574,7 +560,7 @@ impl RevisionBoundRecheckV1 {
 pub(crate) enum FinalRecheckOutcomeV1 {
     Waiting(WaitingRecheckV1),
     Stale(StaleRecheckV1),
-    Infeasible(InfeasibleRecheckV1),
+    Violation(ExactViolationRecheckV1),
     Verified(RevisionBoundRecheckV1),
 }
 

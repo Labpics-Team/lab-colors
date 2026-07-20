@@ -1,0 +1,62 @@
+name: Temporary WASM measurement
+
+on:
+  push:
+    branches:
+      - agent/v1b-evaluator-classifier
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  measure:
+    name: Measure canonical WASM
+    runs-on: [self-hosted, Linux, X64]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Isolate toolchain state
+        run: |
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install wasm-pack
+        run: |
+          cargo install wasm-pack --version 0.13.1 --locked >"$RUNNER_TEMP/wasm-pack-install.log" 2>&1
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      - name: Build and record exact artifact
+        run: |
+          set -euo pipefail
+          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          rm -rf packages/colors/pkg
+          wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked >"$RUNNER_TEMP/wasm-build.log" 2>&1
+          wasm=packages/colors/pkg/labcolors_bg.wasm
+          {
+            printf 'rawBytes='
+            wc -c < "$wasm" | tr -d '[:space:]'
+            printf '\nsha256='
+            sha256sum "$wasm" | cut -d' ' -f1
+            printf '\n'
+          } | tee "$RUNNER_TEMP/wasm-measurement.txt"
+      - name: Upload exact measurement
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wasm-measurement-${{ github.sha }}
+          path: ${{ runner.temp }}/wasm-measurement.txt
+          if-no-files-found: error
+          retention-days: 1
