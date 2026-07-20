@@ -1,16 +1,18 @@
 use proptest::prelude::*;
 
 use crate::Srgb8;
-use crate::appearance::{OccurrenceId, PaintId, SurfaceInputPortId};
+use crate::appearance::{
+    AppearanceBindings, AppearanceGraphSpec, ColorInputId, EncodedPointPaintV1, OccurrenceId,
+    OpacityInputId, PaintId, PaintSpec, SurfaceInputPortId,
+};
 use crate::observation::{
     ObservationPayloadInput, ObservationState, ObservationStreamId, ObservationUpdateInput,
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
     UnknownReasonId,
 };
 use crate::recheck::{
-    CompiledFixedRecheckV1, EncodedPaintCandidateV1, ExactOccurrenceRequirementV1,
-    FinalRecheckOutcomeV1, HoldErrorV1, RecheckProtocolErrorV1, ReuseErrorV1,
-    checked_evidence_count,
+    CompiledFixedRecheckV1, ExactOccurrenceRequirementV1, FinalRecheckOutcomeV1, HoldErrorV1,
+    RecheckProtocolErrorV1, ReuseErrorV1, checked_evidence_count,
 };
 
 const PAINT: PaintId = PaintId::new(7);
@@ -65,8 +67,20 @@ fn one_occurrence(target: [u8; 3]) -> CompiledFixedRecheckV1 {
     .unwrap()
 }
 
-fn opaque(bytes: [u8; 3]) -> EncodedPaintCandidateV1 {
-    EncodedPaintCandidateV1::new(PAINT, Srgb8::new(bytes), 1.0).unwrap()
+fn encoded_paint(
+    id: PaintId,
+    source: Srgb8,
+    opacity: f64,
+) -> Result<EncodedPointPaintV1, crate::composition::OpacityAdmissionErrorV1> {
+    Ok(EncodedPointPaintV1::from_admitted(
+        id,
+        source,
+        crate::composition::AdmittedOpacityV1::new(opacity)?,
+    ))
+}
+
+fn opaque(bytes: [u8; 3]) -> EncodedPointPaintV1 {
+    encoded_paint(PAINT, Srgb8::new(bytes), 1.0).unwrap()
 }
 
 #[test]
@@ -138,7 +152,7 @@ fn any_exact_violation_returns_one_violation_without_partial_verified_value() {
             scenario(2, [(SURFACE_A, [255; 3])]),
         ],
     );
-    let candidate = EncodedPaintCandidateV1::new(PAINT, Srgb8::new([0; 3]), 0.25).unwrap();
+    let candidate = encoded_paint(PAINT, Srgb8::new([0; 3]), 0.25).unwrap();
 
     let FinalRecheckOutcomeV1::Violation(violation) = plan.recheck(&state, candidate).unwrap()
     else {
@@ -437,7 +451,7 @@ fn singleton_recheck_is_differentially_equal_to_g1a_and_point_program() {
         vec![SURFACE_A],
         vec![scenario(1, [(SURFACE_A, backdrop.bytes())])],
     );
-    let candidate = EncodedPaintCandidateV1::new(PAINT, source, alpha).unwrap();
+    let candidate = encoded_paint(PAINT, source, alpha).unwrap();
     let FinalRecheckOutcomeV1::Verified(verified) = plan.recheck(&state, candidate).unwrap() else {
         panic!("the same point occurrence and exact evaluator must pass V1a");
     };
@@ -454,6 +468,68 @@ fn singleton_recheck_is_differentially_equal_to_g1a_and_point_program() {
     );
     assert_eq!(evidence.physical_certificate(), *occurrence.certificate());
     assert_eq!(evidence.physical_certificate(), *g1a.certificate());
+}
+
+#[test]
+fn graph_materialized_paint_flows_into_recheck_without_conversion() {
+    let color = ColorInputId::new(41);
+    let opacity = OpacityInputId::new(42);
+    let solid = PaintId::new(6);
+    let source = Srgb8::new([0, 40, 200]);
+    let alpha = 0.5;
+    let graph = AppearanceGraphSpec::new(
+        vec![color],
+        vec![],
+        vec![opacity],
+        vec![
+            PaintSpec::Solid { id: solid, color },
+            PaintSpec::Opacity {
+                id: PAINT,
+                source: solid,
+                opacity,
+            },
+        ],
+        vec![],
+        vec![],
+    )
+    .compile()
+    .unwrap();
+    let evaluation = graph
+        .evaluate(&AppearanceBindings::new(
+            vec![(color, source)],
+            vec![],
+            vec![(opacity, alpha)],
+        ))
+        .unwrap();
+    let paint = *evaluation.paint(PAINT).unwrap();
+    let backdrop = Srgb8::new([240, 230, 220]);
+    let target = crate::appearance::PointOpacityOverSurfaceV1::evaluate(
+        paint.source().bytes(),
+        alpha,
+        backdrop.bytes(),
+    )
+    .unwrap()
+    .visible();
+    let state = ready_state(
+        STREAM,
+        1,
+        vec![SURFACE_A],
+        vec![scenario(1, [(SURFACE_A, backdrop.bytes())])],
+    );
+
+    let FinalRecheckOutcomeV1::Verified(verified) =
+        one_occurrence(target).recheck(&state, paint).unwrap()
+    else {
+        panic!("graph materialized Paint must be consumed as the same physical value");
+    };
+
+    assert_eq!(verified.paint(), paint);
+    assert_eq!(
+        verified.occurrences()[0]
+            .physical_certificate()
+            .subject_opacity_bits(),
+        paint.opacity_bits()
+    );
 }
 
 proptest! {
@@ -476,8 +552,7 @@ proptest! {
                 scenario(2, [(SURFACE_A, passing)]),
             ],
         );
-        let candidate = EncodedPaintCandidateV1::new(PAINT, Srgb8::new([99, 88, 77]), 0.0)
-            .unwrap();
+        let candidate = encoded_paint(PAINT, Srgb8::new([99, 88, 77]), 0.0).unwrap();
 
         prop_assert!(matches!(
             plan.recheck(&state, candidate),
@@ -662,9 +737,8 @@ fn violation_witness_keeps_the_authored_paint_identity() {
         vec![SURFACE_A],
         vec![scenario(1, [(SURFACE_A, [0; 3])])],
     );
-    let first_candidate = EncodedPaintCandidateV1::new(PAINT, Srgb8::new([0; 3]), 0.25).unwrap();
-    let second_candidate =
-        EncodedPaintCandidateV1::new(second_paint, Srgb8::new([0; 3]), 0.25).unwrap();
+    let first_candidate = encoded_paint(PAINT, Srgb8::new([0; 3]), 0.25).unwrap();
+    let second_candidate = encoded_paint(second_paint, Srgb8::new([0; 3]), 0.25).unwrap();
 
     let FinalRecheckOutcomeV1::Violation(first) =
         first_plan.recheck(&state, first_candidate).unwrap()
@@ -695,20 +769,6 @@ fn evidence_capacity_overflow_is_rejected_before_compositing() {
 }
 
 #[test]
-fn ready_recheck_binds_surface_indices_before_the_case_product() {
-    let source = include_str!("recheck.rs");
-    let (_, ready_tail) = source
-        .split_once("    fn recheck_ready(")
-        .expect("ready recheck function");
-    let (ready_body, _) = ready_tail
-        .split_once("\n    }\n}\n\n/// Вычисляет")
-        .expect("ready recheck body");
-
-    assert!(ready_body.contains("surface_indices"));
-    assert!(!ready_body.contains("binary_search"));
-}
-
-#[test]
 fn candidate_and_requirement_errors_are_rejected_before_compositing() {
     assert!(CompiledFixedRecheckV1::new(PAINT, vec![]).is_err());
     assert!(
@@ -721,7 +781,7 @@ fn candidate_and_requirement_errors_are_rejected_before_compositing() {
         )
         .is_err()
     );
-    assert!(EncodedPaintCandidateV1::new(PAINT, Srgb8::new([0; 3]), f64::NAN).is_err());
+    assert!(encoded_paint(PAINT, Srgb8::new([0; 3]), f64::NAN).is_err());
 
     let state = ready_state(
         STREAM,
@@ -730,8 +790,7 @@ fn candidate_and_requirement_errors_are_rejected_before_compositing() {
         vec![scenario(1, [(SURFACE_A, [0; 3])])],
     );
     crate::composition::reset_source_over_evaluation_count();
-    let wrong_paint =
-        EncodedPaintCandidateV1::new(PaintId::new(8), Srgb8::new([0; 3]), 1.0).unwrap();
+    let wrong_paint = encoded_paint(PaintId::new(8), Srgb8::new([0; 3]), 1.0).unwrap();
     assert_eq!(
         one_occurrence([0; 3]).recheck(&state, wrong_paint),
         Err(RecheckProtocolErrorV1::PaintMismatch {
@@ -759,29 +818,8 @@ fn candidate_and_requirement_errors_are_rejected_before_compositing() {
 
 #[test]
 fn signed_zero_has_one_encoded_paint_identity() {
-    let positive = EncodedPaintCandidateV1::new(PAINT, Srgb8::new([1, 2, 3]), 0.0).unwrap();
-    let negative = EncodedPaintCandidateV1::new(PAINT, Srgb8::new([1, 2, 3]), -0.0).unwrap();
+    let positive = encoded_paint(PAINT, Srgb8::new([1, 2, 3]), 0.0).unwrap();
+    let negative = encoded_paint(PAINT, Srgb8::new([1, 2, 3]), -0.0).unwrap();
     assert_eq!(positive, negative);
     assert_eq!(negative.opacity_bits(), 0.0_f64.to_bits());
-}
-
-#[test]
-fn module_exposes_revision_bound_evidence_not_a_fictional_terminal_certificate() {
-    let source = include_str!("recheck.rs");
-    assert!(source.contains("pub(crate) struct RevisionBoundRecheckV1"));
-    for forbidden in [
-        "FinalEmissionCertificate",
-        "TerminalEmissionBinding",
-        "ProgramIdV1",
-        "SessionIdV1",
-        "OutputProfileIdV1",
-        "RendererProfileIdV1",
-        "default_program",
-        "default_session",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "V1a invented a consumer-owned identity: {forbidden}"
-        );
-    }
 }

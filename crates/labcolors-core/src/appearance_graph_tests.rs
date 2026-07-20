@@ -10,8 +10,8 @@ use proptest::prelude::*;
 use crate::Srgb8;
 use crate::appearance::{
     AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError,
-    CompositionProfileV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    CompositionProfileV1, EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId,
+    PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::constraints::Evaluator;
 
@@ -105,10 +105,11 @@ fn canonical_paint_occurrence_surface_chain_evaluates_exactly() {
         .unwrap();
 
     let solid = rendered.paint(SOLID_PAINT).unwrap();
-    assert_eq!(solid.rgb(), [0xFF, 0xA1, 0x00]);
+    let _: &EncodedPointPaintV1 = solid;
+    assert_eq!(solid.source().bytes(), [0xFF, 0xA1, 0x00]);
     assert_eq!(solid.opacity_bits(), 1.0f64.to_bits());
     let fill = rendered.paint(FILL_PAINT).unwrap();
-    assert_eq!(fill.rgb(), [0xFF, 0xA1, 0x00]);
+    assert_eq!(fill.source().bytes(), [0xFF, 0xA1, 0x00]);
     assert_eq!(fill.opacity_bits(), 0.122f64.to_bits());
     let occurrence = rendered.occurrence(FILL_OCCURRENCE).unwrap();
     assert_eq!(occurrence.id(), FILL_OCCURRENCE);
@@ -209,8 +210,8 @@ fn complete_typed_id_renaming_does_not_change_physics() {
         .unwrap();
 
     assert_eq!(
-        first.paint(FILL_PAINT).unwrap().rgb(),
-        second.paint(fill).unwrap().rgb()
+        first.paint(FILL_PAINT).unwrap().source(),
+        second.paint(fill).unwrap().source()
     );
     assert_eq!(
         first.paint(FILL_PAINT).unwrap().opacity_bits(),
@@ -722,6 +723,26 @@ proptest! {
     }
 
     #[test]
+    fn direct_encoded_paint_equals_graph_materialization(
+        source in any::<[u8; 3]>(),
+        context in any::<[u8; 3]>(),
+        opacity in 0.0f64..=1.0f64,
+    ) {
+        let rendered = point_component(false, false)
+            .compile()
+            .unwrap()
+            .evaluate(&bindings(source, opacity, context))
+            .unwrap();
+        let direct = EncodedPointPaintV1::from_admitted(
+            FILL_PAINT,
+            Srgb8::new(source),
+            crate::composition::AdmittedOpacityV1::new(opacity).unwrap(),
+        );
+
+        prop_assert_eq!(*rendered.paint(FILL_PAINT).unwrap(), direct);
+    }
+
+    #[test]
     fn arbitrary_opacity_chain_is_one_paint_and_one_occurrence_composite(
         source in any::<[u8; 3]>(),
         context in any::<[u8; 3]>(),
@@ -786,8 +807,12 @@ proptest! {
         bits in any::<u64>(),
         invalid_is_outer in any::<bool>(),
     ) {
-        let invalid = f64::from_bits(bits);
-        prop_assume!(!invalid.is_finite() || !(0.0..=1.0).contains(&invalid));
+        let sampled = f64::from_bits(bits);
+        let invalid = if !sampled.is_finite() || !(0.0..=1.0).contains(&sampled) {
+            sampled
+        } else {
+            2.0 + sampled
+        };
         let outer_paint = PaintId::new(99);
         let graph = AppearanceGraphSpec::new(
             vec![SOURCE],
@@ -839,6 +864,38 @@ proptest! {
                 message: expected_message,
             })
         );
+    }
+
+    #[test]
+    fn encoded_point_paint_totally_classifies_every_binary64_alpha(bits in any::<u64>()) {
+        let alpha = f64::from_bits(bits);
+        let admission = crate::composition::AdmittedOpacityV1::new(alpha);
+
+        if !alpha.is_finite() {
+            prop_assert_eq!(
+                admission,
+                Err(crate::composition::OpacityAdmissionErrorV1::NonFinite)
+            );
+        } else if !(0.0..=1.0).contains(&alpha) {
+            prop_assert_eq!(
+                admission,
+                Err(crate::composition::OpacityAdmissionErrorV1::OutsideUnitInterval)
+            );
+        } else {
+            let paint = EncodedPointPaintV1::from_admitted(
+                FILL_PAINT,
+                Srgb8::new([1, 2, 3]),
+                admission.unwrap(),
+            );
+            let expected_bits = if alpha == 0.0 {
+                0.0f64.to_bits()
+            } else {
+                bits
+            };
+            prop_assert_eq!(paint.id(), FILL_PAINT);
+            prop_assert_eq!(paint.source(), Srgb8::new([1, 2, 3]));
+            prop_assert_eq!(paint.opacity_bits(), expected_bits);
+        }
     }
 }
 

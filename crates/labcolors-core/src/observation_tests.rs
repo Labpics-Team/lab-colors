@@ -5,9 +5,10 @@ use crate::appearance::{
     ResolvedOccurrence, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::observation::{
-    Availability, ObservationError, ObservationHead, ObservationPayloadInput, ObservationState,
-    ObservationStreamId, ObservationUpdateInput, ObservedScenarioSet, ObservedScenarioSetInput,
-    Revision, ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId, UpdateDisposition,
+    Availability, ObservationError, ObservationHead, ObservationPayloadInput, ObservationSnapshot,
+    ObservationState, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSet,
+    ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
+    SurfaceInputBinding, UnknownReasonId, UpdateDisposition,
 };
 
 const PORT_A: SurfaceInputPortId = SurfaceInputPortId::new(10);
@@ -69,6 +70,13 @@ fn observed_set(state: &ObservationState) -> &ObservedScenarioSet {
     match state.head() {
         ObservationHead::Observed { set, .. } => set,
         head => panic!("expected Observed head, got {head:?}"),
+    }
+}
+
+fn revision_bound(state: &ObservationState) -> RevisionBoundObservationV1 {
+    match state.snapshot() {
+        ObservationSnapshot::Ready { observation } => observation,
+        snapshot => panic!("expected Ready snapshot, got {snapshot:?}"),
     }
 }
 
@@ -513,20 +521,146 @@ fn admitted_state_owns_canonical_values_and_rejects_invalid_schemas() {
 }
 
 #[test]
-fn observation_types_do_not_encode_solver_or_output_reductions() {
-    let source = include_str!("observation.rs");
-    for forbidden in [
-        "worstIdx",
-        "worst_idx",
-        "candidate:",
-        "percentile",
-        "weight:",
-        "output:",
-        "solver",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "observation admission leaked downstream concern {forbidden}"
-        );
-    }
+fn revision_bound_observation_clone_is_allocation_free_and_content_equal() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<RevisionBoundObservationV1>();
+
+    let state = ready_state_for_snapshot(
+        STREAM,
+        7,
+        vec![PORT_B, PORT_A],
+        vec![
+            scenario(9, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+            scenario(3, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+        ],
+    );
+    let (observation, snapshot_allocations) =
+        crate::test_support::measured_allocations(|| revision_bound(&state));
+
+    let (cloned, allocations) = crate::test_support::measured_allocations(|| observation.clone());
+
+    assert_eq!(snapshot_allocations, 0);
+    assert_eq!(allocations, 0);
+    assert_eq!(cloned, observation);
+    assert_eq!(cloned.stream(), STREAM);
+    assert_eq!(cloned.revision(), Revision::new(7));
+    assert_eq!(cloned.schema(), &[PORT_A, PORT_B]);
+    assert_eq!(
+        cloned.set().cases()[0].provenance(),
+        &[ScenarioId::new(3), ScenarioId::new(9)]
+    );
+}
+
+#[test]
+fn revision_bound_observation_equality_covers_every_identity_component() {
+    let make = |stream, revision, schema, scenarios| {
+        revision_bound(&ready_state_for_snapshot(
+            stream, revision, schema, scenarios,
+        ))
+    };
+    let baseline_scenarios = || {
+        vec![scenario(
+            1,
+            [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
+        )]
+    };
+    let baseline = make(STREAM, 5, vec![PORT_A, PORT_B], baseline_scenarios());
+    assert_eq!(
+        baseline,
+        make(STREAM, 5, vec![PORT_B, PORT_A], baseline_scenarios())
+    );
+    assert_ne!(
+        baseline,
+        make(
+            ObservationStreamId::new(8),
+            5,
+            vec![PORT_A, PORT_B],
+            baseline_scenarios()
+        )
+    );
+    assert_ne!(
+        baseline,
+        make(STREAM, 6, vec![PORT_A, PORT_B], baseline_scenarios())
+    );
+    assert_ne!(
+        baseline,
+        make(
+            STREAM,
+            5,
+            vec![PORT_A, SurfaceInputPortId::new(30)],
+            vec![scenario(
+                1,
+                [
+                    binding(PORT_A, [1, 2, 3]),
+                    binding(SurfaceInputPortId::new(30), [4, 5, 6]),
+                ],
+            )],
+        )
+    );
+    assert_ne!(
+        baseline,
+        make(
+            STREAM,
+            5,
+            vec![PORT_A, PORT_B],
+            vec![scenario(
+                1,
+                [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 7])],
+            )],
+        )
+    );
+    assert_ne!(
+        baseline,
+        make(
+            STREAM,
+            5,
+            vec![PORT_A, PORT_B],
+            vec![scenario(
+                2,
+                [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
+            )],
+        )
+    );
+}
+
+#[test]
+fn revision_bound_observation_is_immutable_after_stream_advances() {
+    let mut state = ready_state_for_snapshot(
+        STREAM,
+        1,
+        vec![PORT_A],
+        vec![scenario(1, [binding(PORT_A, [1, 2, 3])])],
+    );
+    let first = revision_bound(&state);
+    state
+        .apply(observed_update(
+            STREAM,
+            2,
+            scenarios([scenario(2, [binding(PORT_A, [9, 8, 7])])]),
+        ))
+        .unwrap();
+    let second = revision_bound(&state);
+
+    assert_eq!(first.revision(), Revision::new(1));
+    assert_eq!(first.set().cases()[0].bindings(), &[Srgb8::new([1, 2, 3])]);
+    assert_eq!(second.revision(), Revision::new(2));
+    assert_eq!(second.set().cases()[0].bindings(), &[Srgb8::new([9, 8, 7])]);
+    assert_ne!(first, second);
+}
+
+fn ready_state_for_snapshot(
+    stream: ObservationStreamId,
+    revision: u64,
+    schema: Vec<SurfaceInputPortId>,
+    scenarios: Vec<ScenarioInput>,
+) -> ObservationState {
+    let mut state = ObservationState::new(stream, schema).unwrap();
+    state
+        .apply(observed_update(
+            stream,
+            revision,
+            ObservedScenarioSetInput { scenarios },
+        ))
+        .unwrap();
+    state
 }

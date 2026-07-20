@@ -10,18 +10,17 @@
 
 use crate::Srgb8;
 use crate::appearance::{
-    OccurrenceId, PaintId, PhysicalProgramIdentityV1, PointOpacityOverSurfaceV1,
-    SourceOverCertificateV1, SurfaceInputPortId,
+    EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1,
+    PointOpacityOverSurfaceV1, SourceOverCertificateV1, SurfaceInputPortId,
 };
-use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::constraints::{
     ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
     ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
     assess_visible_point_hard,
 };
 use crate::observation::{
-    ObservationSnapshot, ObservationState, ObservationStreamId, ObservedScenarioSet,
-    PriorObservation, Revision, ScenarioId,
+    ObservationSnapshot, ObservationState, ObservationStreamId, PriorObservation, Revision,
+    RevisionBoundObservationV1, ScenarioId,
 };
 
 /// Один immutable exact evaluator invocation, связанный с authored occurrence.
@@ -90,12 +89,12 @@ impl CompiledFixedRecheckV1 {
     pub(crate) fn recheck(
         &self,
         observation: &ObservationState,
-        paint: EncodedPaintCandidateV1,
+        paint: EncodedPointPaintV1,
     ) -> Result<FinalRecheckOutcomeV1, RecheckProtocolErrorV1> {
-        if paint.id != self.paint {
+        if paint.id() != self.paint {
             return Err(RecheckProtocolErrorV1::PaintMismatch {
                 expected: self.paint,
-                actual: paint.id,
+                actual: paint.id(),
             });
         }
         let snapshot = observation.snapshot();
@@ -128,14 +127,9 @@ impl CompiledFixedRecheckV1 {
                     previous: previous.clone(),
                 }))
             }
-            ObservationSnapshot::Ready {
-                stream,
-                revision,
-                set,
-                schema,
-            } => {
-                let surface_indices = self.bind_surface_indices(schema)?;
-                self.recheck_ready(stream, revision, set, schema, &surface_indices, paint)
+            ObservationSnapshot::Ready { observation } => {
+                let surface_indices = self.bind_surface_indices(observation.schema())?;
+                self.recheck_ready(observation, &surface_indices, paint)
             }
         }
     }
@@ -175,13 +169,11 @@ impl CompiledFixedRecheckV1 {
 
     fn recheck_ready(
         &self,
-        stream: ObservationStreamId,
-        revision: Revision,
-        set: &ObservedScenarioSet,
-        schema: &[SurfaceInputPortId],
+        observation: RevisionBoundObservationV1,
         surface_indices: &[usize],
-        paint: EncodedPaintCandidateV1,
+        paint: EncodedPointPaintV1,
     ) -> Result<FinalRecheckOutcomeV1, RecheckProtocolErrorV1> {
+        let set = observation.set();
         let mut occurrences = Vec::new();
         let evidence_count = checked_evidence_count(set.cases().len(), self.occurrences.len())?;
         occurrences
@@ -191,8 +183,8 @@ impl CompiledFixedRecheckV1 {
             for (requirement, &surface_index) in self.occurrences.iter().zip(surface_indices) {
                 let backdrop = case.bindings()[surface_index];
                 let occurrence = PointOpacityOverSurfaceV1::evaluate_admitted(
-                    paint.source.bytes(),
-                    paint.opacity,
+                    paint.source().bytes(),
+                    paint.opacity(),
                     backdrop.bytes(),
                 );
                 let evidence = match assess_visible_point_hard(
@@ -207,12 +199,7 @@ impl CompiledFixedRecheckV1 {
                             surface: requirement.surface,
                             physical_program: self.physical_program,
                             paint,
-                            observation: FrozenObservationV1 {
-                                stream,
-                                revision,
-                                schema: schema.to_vec().into_boxed_slice(),
-                                set: set.clone(),
-                            },
+                            observation: observation.clone(),
                             case_index,
                             evidence,
                         }));
@@ -232,12 +219,7 @@ impl CompiledFixedRecheckV1 {
         Ok(FinalRecheckOutcomeV1::Verified(RevisionBoundRecheckV1 {
             requirement: self.clone(),
             paint,
-            observation: FrozenObservationV1 {
-                stream,
-                revision,
-                schema: schema.to_vec().into_boxed_slice(),
-                set: set.clone(),
-            },
+            observation,
             occurrences: occurrences.into_boxed_slice(),
         }))
     }
@@ -252,61 +234,6 @@ pub(crate) fn checked_evidence_count(
     physical_cases
         .checked_mul(requirements)
         .ok_or(RecheckProtocolErrorV1::ResourceExhausted)
-}
-
-/// Уже заданный encoded-sRGB8 Paint. Он не является selected/admitted output;
-/// право на revision-bound verified evidence появляется только после recheck.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EncodedPaintCandidateV1 {
-    id: PaintId,
-    source: Srgb8,
-    opacity: AdmittedOpacityV1,
-}
-
-impl EncodedPaintCandidateV1 {
-    pub(crate) fn new(
-        id: PaintId,
-        source: Srgb8,
-        opacity: f64,
-    ) -> Result<Self, OpacityAdmissionErrorV1> {
-        let opacity = AdmittedOpacityV1::new(opacity)?;
-        Ok(Self {
-            id,
-            source,
-            opacity,
-        })
-    }
-
-    pub(crate) const fn id(self) -> PaintId {
-        self.id
-    }
-
-    pub(crate) const fn source(self) -> Srgb8 {
-        self.source
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn opacity_bits(self) -> u64 {
-        self.opacity.bits()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FrozenObservationV1 {
-    stream: ObservationStreamId,
-    revision: Revision,
-    schema: Box<[SurfaceInputPortId]>,
-    set: ObservedScenarioSet,
-}
-
-impl FrozenObservationV1 {
-    pub(crate) const fn stream(&self) -> ObservationStreamId {
-        self.stream
-    }
-
-    pub(crate) const fn revision(&self) -> Revision {
-        self.revision
-    }
 }
 
 /// Evidence одного действительно вызванного evaluator-а над одним финальным
@@ -379,8 +306,8 @@ pub(crate) struct ExactViolationRecheckV1 {
     occurrence: OccurrenceId,
     surface: SurfaceInputPortId,
     physical_program: PhysicalProgramIdentityV1,
-    paint: EncodedPaintCandidateV1,
-    observation: FrozenObservationV1,
+    paint: EncodedPointPaintV1,
+    observation: RevisionBoundObservationV1,
     case_index: usize,
     evidence: ExactViolationEvidenceV1,
 }
@@ -395,14 +322,14 @@ impl ExactViolationRecheckV1 {
     }
 
     pub(crate) fn provenance(&self) -> &[ScenarioId] {
-        self.observation.set.cases()[self.case_index].provenance()
+        self.observation.set().cases()[self.case_index].provenance()
     }
 
     pub(crate) const fn physical_program(&self) -> PhysicalProgramIdentityV1 {
         self.physical_program
     }
 
-    pub(crate) const fn paint(&self) -> EncodedPaintCandidateV1 {
+    pub(crate) const fn paint(&self) -> EncodedPointPaintV1 {
         self.paint
     }
 
@@ -438,7 +365,7 @@ impl ExactViolationRecheckV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StaleRecheckV1 {
     requirement: CompiledFixedRecheckV1,
-    paint: EncodedPaintCandidateV1,
+    paint: EncodedPointPaintV1,
     stream: ObservationStreamId,
     schema: Box<[SurfaceInputPortId]>,
     current_revision: Revision,
@@ -455,10 +382,10 @@ impl StaleRecheckV1 {
     ) -> Result<PresentationHoldV1, HoldErrorV1> {
         if previous.requirement != self.requirement
             || previous.paint != self.paint
-            || previous.observation.stream != self.stream
-            || previous.observation.schema != self.schema
-            || previous.observation.revision != self.previous.revision()
-            || &previous.observation.set != self.previous.set()
+            || previous.observation.stream() != self.stream
+            || previous.observation.schema() != self.schema.as_ref()
+            || previous.observation.revision() != self.previous.revision()
+            || previous.observation.set() != self.previous.set()
         {
             return Err(HoldErrorV1::PreviousEvidenceMismatch);
         }
@@ -496,17 +423,17 @@ pub(crate) enum HoldErrorV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevisionBoundRecheckV1 {
     requirement: CompiledFixedRecheckV1,
-    paint: EncodedPaintCandidateV1,
-    observation: FrozenObservationV1,
+    paint: EncodedPointPaintV1,
+    observation: RevisionBoundObservationV1,
     occurrences: Box<[ExactOccurrenceEvidenceV1]>,
 }
 
 impl RevisionBoundRecheckV1 {
-    pub(crate) const fn paint(&self) -> EncodedPaintCandidateV1 {
+    pub(crate) const fn paint(&self) -> EncodedPointPaintV1 {
         self.paint
     }
 
-    pub(crate) const fn observation(&self) -> &FrozenObservationV1 {
+    pub(crate) const fn observation(&self) -> &RevisionBoundObservationV1 {
         &self.observation
     }
 
@@ -517,7 +444,7 @@ impl RevisionBoundRecheckV1 {
     pub(crate) fn provenance(&self, evidence_index: usize) -> Option<&[ScenarioId]> {
         let case_index = self.occurrences.get(evidence_index)?.case_index;
         self.observation
-            .set
+            .set()
             .cases()
             .get(case_index)
             .map(|case| case.provenance())
@@ -527,7 +454,7 @@ impl RevisionBoundRecheckV1 {
         &self,
         requirement: &CompiledFixedRecheckV1,
         observation: &ObservationState,
-        paint: EncodedPaintCandidateV1,
+        paint: EncodedPointPaintV1,
     ) -> Result<(), ReuseErrorV1> {
         if &self.requirement != requirement {
             return Err(ReuseErrorV1::RequirementMismatch);
@@ -536,18 +463,7 @@ impl RevisionBoundRecheckV1 {
             return Err(ReuseErrorV1::PaintMismatch);
         }
         match observation.snapshot() {
-            ObservationSnapshot::Ready {
-                stream,
-                schema,
-                revision,
-                set,
-            } if stream == self.observation.stream
-                && schema == self.observation.schema.as_ref()
-                && revision == self.observation.revision
-                && set == &self.observation.set =>
-            {
-                Ok(())
-            }
+            ObservationSnapshot::Ready { observation } if observation == self.observation => Ok(()),
             ObservationSnapshot::Ready { .. } => Err(ReuseErrorV1::ObservationMismatch),
             ObservationSnapshot::Waiting { .. } | ObservationSnapshot::Stale { .. } => {
                 Err(ReuseErrorV1::ObservationUnavailable)
